@@ -8,6 +8,10 @@ import {
   resolveRepo,
   resolveRepoState,
   readGitContext,
+  serialProbeIo,
+  REMOTE_POLL_MS,
+  REMOTE_RESOLVE_TIMEOUT_MS,
+  type ProbeIo,
   type GitWatchFactory,
   type GitWatchListener,
 } from '../gitContextWatch';
@@ -536,5 +540,235 @@ describe('GitContextWatcher', () => {
     expect(watcher.size).toBe(0);
     expect(fake.arms.every((a2) => a2.closed)).toBe(true);
     expect(events).toHaveLength(2);
+  });
+});
+
+describe('GitContextWatcher on a WSL share (#2407)', () => {
+  /** Answers probes from the local fs, as the real ProbeIo would over 9P. */
+  const localIo: ProbeIo = async ({ op, path: p }) => {
+    try {
+      if (op === 'read') return fs.readFileSync(p, 'utf8');
+      if (op === 'realpath') return fs.realpathSync.native(p);
+      const st = fs.statSync(p);
+      return st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other';
+    } catch (err) {
+      if (op !== 'stat') return null;
+      const code = (err as NodeJS.ErrnoException).code;
+      return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'error';
+    }
+  };
+
+  /** A ProbeIo that can be held, like a distro that is booting or wedged. */
+  function holdableIo() {
+    const waiting: Array<() => void> = [];
+    let held = false;
+    let probes = 0;
+    const io: ProbeIo = (probe) => {
+      probes++;
+      if (!held) return localIo(probe);
+      return new Promise((resolve) => waiting.push(() => resolve(localIo(probe))));
+    };
+    return {
+      io,
+      get probes() { return probes; },
+      hold() { held = true; },
+      release() { held = false; for (const run of waiting.splice(0)) run(); },
+    };
+  }
+
+  /** Let every queued probe (a few dozen awaits per walk) settle. */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 500; i++) await Promise.resolve();
+  }
+
+  let fake: ReturnType<typeof fakeWatchFactory>;
+  let events: Array<{ sessionId: string; branch: string | null; isWorktree: boolean; absent?: true }>;
+
+  function makeRemoteWatcher(io: ProbeIo = localIo): GitContextWatcher {
+    // Every cwd takes the WSL-share path; tmp dirs stand in for `\\wsl$\…`.
+    const w = new GitContextWatcher(fake.factory, { isRemote: () => true, io });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    return w;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fake = fakeWatchFactory();
+    events = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves off the event loop and never arms fs.watch', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    makeRemoteWatcher().update('s1', root);
+    expect(events).toEqual([]);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
+    expect(fake.arms).toHaveLength(0);
+  });
+
+  it('takes the WSL-share path only for a WSL share by default', () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const w = new GitContextWatcher(fake.factory);
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', root);
+    expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
+    expect(fake.arms).toHaveLength(1);
+  });
+
+  it('polls HEAD and emits a branch switch without a cd', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    makeRemoteWatcher().update('s1', root);
+    await settle();
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events).toHaveLength(1); // unchanged HEAD, no re-emit
+
+    fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/other\n');
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS - 1);
+    await settle();
+    expect(events).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'other', isWorktree: false });
+  });
+
+  it('polls a non-repo cwd for a .git appearing, and is known absent meanwhile', async () => {
+    const root = tmp();
+    makeRemoteWatcher().update('s1', root);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false, absent: true }]);
+
+    initFakeRepo(root, 'fresh');
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'fresh', isWorktree: false });
+
+    // Now polling the new repo's HEAD.
+    fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/next\n');
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)?.branch).toBe('next');
+  });
+
+  it('stops polling once the session is removed', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    watcher.update('s1', root);
+    await settle();
+    watcher.remove('s1');
+    const before = io.probes;
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS * 4);
+    await settle();
+    expect(io.probes).toBe(before);
+  });
+
+  it('drops a resolve that lands after the session moved to another cwd', async () => {
+    const a = tmp();
+    const b = tmp();
+    initFakeRepo(a, 'stale');
+    initFakeRepo(b, 'fresh');
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    io.hold();
+    watcher.update('s1', a);
+    watcher.update('s1', b);
+    io.release();
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: 'fresh', isWorktree: false }]);
+  });
+
+  it('drops a resolve that lands after the session was removed', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    io.hold();
+    watcher.update('s1', root);
+    watcher.remove('s1');
+    io.release();
+    await settle();
+    expect(events).toEqual([]);
+    expect(watcher.size).toBe(0);
+  });
+
+  it('a local cwd supersedes a WSL-share resolve still in flight', async () => {
+    const remoteDir = tmp();
+    const localDir = tmp();
+    initFakeRepo(remoteDir, 'remote');
+    initFakeRepo(localDir, 'local');
+    const io = holdableIo();
+    const w = new GitContextWatcher(fake.factory, { isRemote: (cwd) => cwd === remoteDir, io: io.io });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    io.hold();
+    w.update('s1', remoteDir);
+    w.update('s1', localDir);
+    io.release();
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: 'local', isWorktree: false }]);
+  });
+
+  it('reads as unknown when the share does not answer in time, then applies the late answer', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    io.hold();
+    watcher.update('s1', root);
+    await vi.advanceTimersByTimeAsync(REMOTE_RESOLVE_TIMEOUT_MS - 1);
+    expect(events).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+
+    io.release();
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'main', isWorktree: false });
+  });
+
+  it('a slow re-resolve of the same cwd keeps its live answer', async () => {
+    const root = tmp();
+    const io = holdableIo();
+    const watcher = makeRemoteWatcher(io.io);
+    watcher.update('s1', root);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false, absent: true }]);
+    io.hold();
+    watcher.resync(); // re-resolves a non-repo session
+    await vi.advanceTimersByTimeAsync(REMOTE_RESOLVE_TIMEOUT_MS);
+    expect(events.every((e) => e.absent)).toBe(true);
+    io.release();
+    await settle();
+    expect(events.at(-1)?.absent).toBe(true);
+  });
+
+  it('serialProbeIo runs one probe at a time', async () => {
+    const order: string[] = [];
+    let finishFirst: (() => void) | undefined;
+    const io = serialProbeIo((probe) => {
+      order.push(`start ${probe.path}`);
+      if (probe.path === 'a') {
+        return new Promise((resolve) => { finishFirst = () => { order.push('end a'); resolve('missing'); }; });
+      }
+      order.push(`end ${probe.path}`);
+      return Promise.resolve('missing');
+    });
+    const first = io({ op: 'stat', path: 'a' });
+    const second = io({ op: 'stat', path: 'b' });
+    await settle();
+    expect(order).toEqual(['start a']);
+    finishFirst?.();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['start a', 'end a', 'start b', 'end b']);
   });
 });

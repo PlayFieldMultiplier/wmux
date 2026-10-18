@@ -9,7 +9,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { gitWatchArgs } from '../gitWatchPath';
-import { GitContextWatcher, readGitContext, resolveRepoState } from '../../main/pty/gitContextWatch';
+import { GitContextWatcher, REMOTE_POLL_MS, readGitContext, resolveRepoState } from '../../main/pty/gitContextWatch';
 
 const enabled = process.platform === 'win32' && process.env.WMUX_TEST_WSL === '1';
 
@@ -32,7 +32,7 @@ describe.runIf(enabled)('daemon git watcher over a WSL pane cwd (#2407)', () => 
     encoding: 'utf8', timeout: 30_000, windowsHide: true,
   });
 
-  it('reads the branch of a distro-internal repo and its linked worktree', () => {
+  it('reads the branch of a distro-internal repo and its linked worktree', async () => {
     const [distribution, user, dir] = execute(['/bin/sh', '-c', SETUP]).split('\0');
     const wslTarget = { distribution, user };
     const watcher = new GitContextWatcher();
@@ -48,11 +48,24 @@ describe.runIf(enabled)('daemon git watcher over a WSL pane cwd (#2407)', () => 
       const wt = resolveRepoState(wtCwd, mapGitDir);
       expect(readGitContext(wt.repo!)).toEqual({ branch: 'feat', isWorktree: true });
 
-      // The daemon's own path: update() emits the branch.
+      // The daemon's own path: update() resolves off the event loop and
+      // emits the branch, then the poll sees a checkout made without a cd.
       const events: Array<{ branch: string | null }> = [];
+      // Bounded below the test timeout, so `finally` still removes the repo.
+      const branch = (name: string) => new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no ${name} branch within 20s`)), 20_000);
+        const check = () => { if (events.some((e) => e.branch === name)) { clearTimeout(timer); resolve(); } };
+        watcher.on('git', check);
+        check();
+      });
       watcher.on('git', (e) => events.push(e));
       watcher.update(...gitWatchArgs('s', { cwd: `${dir}/wt`, wslTarget }));
+      await branch('feat');
       expect(events).toEqual([{ sessionId: 's', branch: 'feat', isWorktree: true }]);
+      execute(['git', '-C', `${dir}/wt`, 'checkout', '-q', '-b', 'switched']);
+      const started = Date.now();
+      await branch('switched');
+      expect(Date.now() - started).toBeLessThan(REMOTE_POLL_MS * 2 + 1_000);
     } finally {
       watcher.dispose();
       if (dir.startsWith('/tmp/wmux-2407.')) execute(['rm', '-rf', '--', dir]);

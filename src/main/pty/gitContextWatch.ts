@@ -52,6 +52,23 @@ export type GitDirMapper = (gitdir: string) => string;
 const MAX_WALK_UP = 24;
 /** Re-read debounce after an fs.watch event (HEAD is rewritten via rename). */
 const REREAD_DEBOUNCE_MS = 50;
+/**
+ * #2407 — a WSL distro's share (`\\wsl$\…`, `\\wsl.localhost\…`). Its 9P
+ * filesystem raises no change notifications (fs.watch throws EISDIR on every
+ * spelling) and every open waits on the distro, so the watcher never touches
+ * it synchronously: it resolves asynchronously and polls.
+ */
+const WSL_SHARE = /^[\\/]{2}(wsl\.localhost|wsl\$)[\\/]/i;
+/** How often a WSL-share watch re-reads HEAD, or looks for a `.git` appearing. */
+export const REMOTE_POLL_MS = 2_500;
+/**
+ * How long a WSL-share resolve may take before the session reads as unknown.
+ * Sized for a cold start, where every recovered pane resolves at once, one
+ * probe at a time: measured on a running distro, a non-repo cwd five levels
+ * deep is 13 probes in ~12 ms, so 25 panes take ~0.3 s, and ~1.5 s at the
+ * MAX_WALK_UP ceiling. A late answer still applies.
+ */
+export const REMOTE_RESOLVE_TIMEOUT_MS = 5_000;
 
 /**
  * Resolve the git dir owning `startDir`, following the linked-worktree
@@ -71,64 +88,131 @@ export function resolveRepo(startDir: string): ResolvedRepo | null {
  * `gitdir:` line, a directory holding a `HEAD` (a bare repository), or a cwd
  * whose real path cannot be read is inconclusive — git may still find a repo.
  */
-export function resolveRepoState(
+export function resolveRepoState(startDir: string, mapGitDir?: GitDirMapper): RepoState {
+  const walk = resolveSteps(startDir, mapGitDir);
+  let step = walk.next();
+  while (!step.done) step = walk.next(answerSync(step.value));
+  return step.value;
+}
+
+/** resolveRepoState off the event loop, every probe answered by `io` (#2407). */
+export async function resolveRepoStateAsync(
   startDir: string,
+  io: ProbeIo,
   mapGitDir?: GitDirMapper,
-): { repo: ResolvedRepo | null; conclusive: boolean } {
-  const lexical = walkUp(startDir, mapGitDir);
+): Promise<RepoState> {
+  const walk = resolveSteps(startDir, mapGitDir);
+  let step = walk.next();
+  while (!step.done) step = walk.next(await io(step.value));
+  return step.value;
+}
+
+type RepoState = { repo: ResolvedRepo | null; conclusive: boolean };
+
+/**
+ * One filesystem question the walk asks. The walk is written once and the
+ * caller answers it, synchronously for a local path or through a ProbeIo for
+ * a WSL share (#2407):
+ *   stat     → 'dir' | 'file' | 'other', 'missing' (ENOENT, ENOTDIR), 'error'
+ *   read     → the file's text, or null when it cannot be read
+ *   realpath → the physical path, or null when it cannot be resolved
+ */
+export interface Probe { op: 'stat' | 'read' | 'realpath'; path: string }
+export type ProbeAnswer = 'dir' | 'file' | 'other' | 'missing' | 'error' | string | null;
+export type ProbeIo = (probe: Probe) => Promise<ProbeAnswer>;
+type Walk = Generator<Probe, RepoState, ProbeAnswer>;
+
+function* resolveSteps(startDir: string, mapGitDir?: GitDirMapper): Walk {
+  const lexical = yield* walkUp(startDir, mapGitDir);
   if (lexical.repo || !lexical.conclusive) return lexical;
   // The shell reports its logical $PWD; git walks the physical one. Through
   // a symlink (`~/link` → `/repo/src`) only the latter passes `/repo/.git`.
-  let real: string;
-  try { real = fs.realpathSync.native(startDir); } catch { return { repo: null, conclusive: false }; }
-  return real === startDir ? lexical : walkUp(real, mapGitDir);
+  const real = yield { op: 'realpath', path: startDir };
+  if (real === null) return { repo: null, conclusive: false };
+  return real === startDir ? lexical : yield* walkUp(real, mapGitDir);
 }
 
-function walkUp(startDir: string, mapGitDir?: GitDirMapper): { repo: ResolvedRepo | null; conclusive: boolean } {
+function* walkUp(startDir: string, mapGitDir?: GitDirMapper): Walk {
   let dir = startDir;
   let conclusive = true;
   for (let i = 0; i < MAX_WALK_UP; i++) {
     const dotGit = path.join(dir, '.git');
-    try {
-      const st = fs.statSync(dotGit);
-      if (st.isDirectory()) {
-        return { repo: { gitDir: dotGit, isWorktree: false }, conclusive: true };
-      }
-      if (st.isFile()) {
-        // Linked worktree: `.git` is a file `gitdir: <abs-or-rel path>`
-        const content = fs.readFileSync(dotGit, 'utf8');
-        const m = content.match(/^gitdir:\s*(.+)\s*$/m);
-        if (m) {
-          const gitdir = m[1].trim();
-          const target = path.resolve(dir, mapGitDir && gitdir.startsWith('/') ? mapGitDir(gitdir) : gitdir);
-          // A submodule also uses the gitdir file (…/.git/modules/…); only
-          // `…/worktrees/<name>` is a linked worktree. Either way the HEAD
-          // at the target describes this checkout.
-          const isWorktree = /[\\/]worktrees[\\/]/.test(target);
-          return { repo: { gitDir: target, isWorktree }, conclusive: true };
-        }
-        return { repo: null, conclusive: false };
-      }
-    } catch (err) {
-      // ENOENT and friends — keep walking up. Only "no such file" is an
-      // answer; anything else (EACCES, EPERM) might be hiding a repo.
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') conclusive = false;
+    const st = yield { op: 'stat', path: dotGit };
+    if (st === 'dir') {
+      return { repo: { gitDir: dotGit, isWorktree: false }, conclusive: true };
     }
+    if (st === 'file') {
+      // Linked worktree: `.git` is a file `gitdir: <abs-or-rel path>`
+      const content = yield { op: 'read', path: dotGit };
+      const m = content?.match(/^gitdir:\s*(.+)\s*$/m);
+      if (m) {
+        const gitdir = m[1].trim();
+        const target = path.resolve(dir, mapGitDir && gitdir.startsWith('/') ? mapGitDir(gitdir) : gitdir);
+        // A submodule also uses the gitdir file (…/.git/modules/…); only
+        // `…/worktrees/<name>` is a linked worktree. Either way the HEAD
+        // at the target describes this checkout.
+        const isWorktree = /[\\/]worktrees[\\/]/.test(target);
+        return { repo: { gitDir: target, isWorktree }, conclusive: true };
+      }
+      if (content !== null) return { repo: null, conclusive: false };
+      // Unreadable: might be hiding a repo.
+      conclusive = false;
+    }
+    // ENOENT and friends — keep walking up. Only "no such file" is an
+    // answer; anything else (EACCES, EPERM) might be hiding a repo.
+    if (st === 'error') conclusive = false;
     // A bare repository has no `.git`, only `HEAD` and friends at its top:
     // git finds it, this walk does not, so a `HEAD` here makes it no answer.
-    if (conclusive) {
-      try {
-        if (fs.statSync(path.join(dir, 'HEAD'), { throwIfNoEntry: false })) conclusive = false;
-      } catch {
-        conclusive = false;
-      }
-    }
+    if (conclusive && (yield { op: 'stat', path: path.join(dir, 'HEAD') }) !== 'missing') conclusive = false;
     const parent = path.dirname(dir);
     if (parent === dir) return { repo: null, conclusive };
     dir = parent;
   }
   return { repo: null, conclusive: false };
+}
+
+function answerSync(probe: Probe): ProbeAnswer {
+  try {
+    if (probe.op === 'read') return fs.readFileSync(probe.path, 'utf8');
+    if (probe.op === 'realpath') return fs.realpathSync.native(probe.path);
+    return statKind(fs.statSync(probe.path));
+  } catch (err) {
+    return probe.op === 'stat' ? statFailure(err) : null;
+  }
+}
+
+async function answerAsync(probe: Probe): Promise<ProbeAnswer> {
+  try {
+    if (probe.op === 'read') return await fs.promises.readFile(probe.path, 'utf8');
+    if (probe.op === 'realpath') return await fs.promises.realpath(probe.path);
+    return statKind(await fs.promises.stat(probe.path));
+  } catch (err) {
+    return probe.op === 'stat' ? statFailure(err) : null;
+  }
+}
+
+function statKind(st: fs.Stats): ProbeAnswer {
+  return st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other';
+}
+
+function statFailure(err: unknown): ProbeAnswer {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'error';
+}
+
+/**
+ * The default ProbeIo for a WSL share: fs.promises, one probe at a time. A
+ * probe there waits on the distro's 9P server, which can be booting or
+ * wedged; serialised, a stuck probe parks one libuv threadpool thread (of
+ * four) instead of every one the daemon's own fs work needs.
+ */
+export function serialProbeIo(answer: ProbeIo = answerAsync): ProbeIo {
+  let tail: Promise<unknown> = Promise.resolve();
+  return (probe) => {
+    const run = tail.then(() => answer(probe));
+    tail = run.catch(() => undefined);
+    return run;
+  };
 }
 
 /** Whether `dir` holds a `.git` or a `HEAD` entry; true when it cannot tell. */
@@ -165,6 +249,11 @@ export function readGitContext(repo: ResolvedRepo): GitContext {
   }
 }
 
+async function readGitContextAsync(repo: ResolvedRepo, io: ProbeIo): Promise<GitContext> {
+  const content = await io({ op: 'read', path: path.join(repo.gitDir, 'HEAD') });
+  return { branch: content === null ? null : parseHead(content), isWorktree: repo.isWorktree };
+}
+
 /** Listener shape `fs.watch` invokes: `(eventType, filename)`. */
 export type GitWatchListener = (eventType: string, filename: string | Buffer | null) => void;
 
@@ -189,6 +278,8 @@ interface SessionWatch {
   repo: ResolvedRepo | null;
   /** With `repo` null: the search reached the root (see resolveRepoState). */
   conclusive: boolean;
+  /** On a WSL share: resolved asynchronously, `watcher` is a poll (#2407). */
+  remote: boolean;
   watcher: GitWatchHandle | null;
   debounce: NodeJS.Timeout | null;
   /** Last emitted value, JSON-encoded, to suppress no-op re-emits. */
@@ -204,28 +295,96 @@ interface SessionWatch {
  * `update(sessionId, cwd)` is called on session create and on every cwd
  * change (OSC 7 / prompt scrape). When the cwd is outside any repository the
  * watcher arms on the cwd itself so a later `git init` is picked up without
- * polling.
+ * polling. A cwd on a WSL share is the exception (see WSL_SHARE): it is
+ * resolved asynchronously and polled every REMOTE_POLL_MS.
  */
 export class GitContextWatcher extends EventEmitter {
   private sessions = new Map<string, SessionWatch>();
   private readonly watchFactory: GitWatchFactory;
+  private readonly isRemote: (cwd: string) => boolean;
+  private readonly io: ProbeIo;
+  /** The WSL-share resolve each session is waiting for; a stale one is dropped. */
+  private pending = new Map<string, number>();
+  private resolveSeq = 0;
 
   /**
    * @param watchFactory Test seam only. Omitted in production, where the
    *   watcher arms `fs.watch` exactly as before.
+   * @param remote Test seam only: which cwds take the WSL-share path, and
+   *   the ProbeIo that answers them.
    */
-  constructor(watchFactory: GitWatchFactory = defaultWatchFactory) {
+  constructor(
+    watchFactory: GitWatchFactory = defaultWatchFactory,
+    remote: { isRemote?: (cwd: string) => boolean; io?: ProbeIo } = {},
+  ) {
     super();
     this.watchFactory = watchFactory;
+    this.isRemote = remote.isRemote ?? ((cwd) => WSL_SHARE.test(cwd));
+    this.io = remote.io ?? serialProbeIo();
   }
 
   /** @param mapGitDir See GitDirMapper; kept for every later re-resolve. */
   update(sessionId: string, cwd: string, mapGitDir?: GitDirMapper): void {
-    const existing = this.sessions.get(sessionId);
-    const { repo, conclusive } = resolveRepoState(cwd, mapGitDir);
+    if (this.isRemote(cwd)) {
+      this.updateRemote(sessionId, cwd, mapGitDir);
+      return;
+    }
+    // A local answer supersedes a WSL-share resolve still in flight.
+    this.pending.delete(sessionId);
+    this.apply(sessionId, cwd, mapGitDir, resolveRepoState(cwd, mapGitDir), 'local');
+  }
 
+  /**
+   * Resolve a WSL-share cwd off the event loop, then apply it unless the
+   * session moved on (another update, remove, dispose) meanwhile. A resolve
+   * slower than REMOTE_RESOLVE_TIMEOUT_MS reads as unknown until it lands.
+   */
+  private updateRemote(sessionId: string, cwd: string, mapGitDir?: GitDirMapper): void {
+    const seq = ++this.resolveSeq;
+    this.pending.set(sessionId, seq);
+    const current = () => this.pending.get(sessionId) === seq;
+    // Another directory: stop the old poll now, so it cannot re-resolve the
+    // old cwd over this one.
+    const existing = this.sessions.get(sessionId);
+    if (existing && existing.cwd !== cwd) this.teardown(existing);
+    const timer = setTimeout(() => {
+      // A live poll on this same cwd (a resync or `git init` re-resolve) is
+      // still the best answer there is; keep it.
+      const live = this.sessions.get(sessionId);
+      if (live && live.cwd === cwd && live.watcher) return;
+      if (current()) this.apply(sessionId, cwd, mapGitDir, { repo: null, conclusive: false }, 'timeout');
+    }, REMOTE_RESOLVE_TIMEOUT_MS);
+    timer.unref?.();
+    void (async () => {
+      let state: RepoState = { repo: null, conclusive: false };
+      let head: GitContext | undefined;
+      try {
+        state = await resolveRepoStateAsync(cwd, this.io, mapGitDir);
+        if (state.repo) head = await readGitContextAsync(state.repo, this.io);
+      } catch { /* an io that throws reads as unknown */ }
+      clearTimeout(timer);
+      if (!current()) return;
+      this.pending.delete(sessionId);
+      this.apply(sessionId, cwd, mapGitDir, state, 'remote', head);
+    })();
+  }
+
+  /**
+   * Make `state` the session's watch and emit its answer. `mode`: 'local'
+   * arms fs.watch, 'remote' a poll, 'timeout' nothing (the late answer
+   * replaces it). `head` is HEAD already read for a remote repo.
+   */
+  private apply(
+    sessionId: string,
+    cwd: string,
+    mapGitDir: GitDirMapper | undefined,
+    { repo, conclusive }: RepoState,
+    mode: 'local' | 'remote' | 'timeout',
+    head?: GitContext,
+  ): void {
+    const existing = this.sessions.get(sessionId);
     if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir
-      && existing.conclusive === conclusive) {
+      && existing.conclusive === conclusive && (!existing.remote || existing.watcher)) {
       return; // same checkout — keep the live watcher.
     }
     if (existing) this.teardown(existing);
@@ -235,16 +394,21 @@ export class GitContextWatcher extends EventEmitter {
       mapGitDir,
       repo,
       conclusive,
+      remote: mode !== 'local',
       watcher: null,
       debounce: null,
       lastEmitted: existing?.lastEmitted ?? null,
     };
     this.sessions.set(sessionId, watch);
-    this.arm(sessionId, watch);
-    // A `.git` (or bare `HEAD`) created between the walk and the watch going
-    // live raised no event: look once more before calling the cwd absent.
-    if (!repo && watch.watcher && watch.conclusive && hasGitEntry(cwd)) watch.conclusive = false;
-    this.readAndEmit(sessionId, watch);
+    if (mode === 'local') {
+      this.arm(sessionId, watch);
+      // A `.git` (or bare `HEAD`) created between the walk and the watch going
+      // live raised no event: look once more before calling the cwd absent.
+      if (!repo && watch.watcher && watch.conclusive && hasGitEntry(cwd)) watch.conclusive = false;
+    } else if (mode === 'remote') {
+      watch.watcher = this.poll(sessionId, watch);
+    }
+    this.readAndEmit(sessionId, watch, head);
   }
 
   /**
@@ -268,6 +432,7 @@ export class GitContextWatcher extends EventEmitter {
   }
 
   remove(sessionId: string): void {
+    this.pending.delete(sessionId);
     const watch = this.sessions.get(sessionId);
     if (!watch) return;
     this.teardown(watch);
@@ -275,6 +440,7 @@ export class GitContextWatcher extends EventEmitter {
   }
 
   dispose(): void {
+    this.pending.clear();
     for (const watch of this.sessions.values()) this.teardown(watch);
     this.sessions.clear();
     this.removeAllListeners();
@@ -337,9 +503,57 @@ export class GitContextWatcher extends EventEmitter {
     }
   }
 
-  private readAndEmit(sessionId: string, watch: SessionWatch): void {
+  /**
+   * The watch for a WSL share: one async probe round every REMOTE_POLL_MS.
+   * Inside a repo, re-read HEAD; outside, look at the cwd's `.git` and `HEAD`
+   * and re-resolve when either changes (a `git init` or clone). Each tick is
+   * scheduled only once the last one's probes settled, so a wedged distro
+   * queues at most one round per session. No git process is spawned.
+   */
+  private poll(sessionId: string, watch: SessionWatch): GitWatchHandle {
+    let timer: NodeJS.Timeout | null = null;
+    let closed = false;
+    // A conclusive walk saw neither entry in the cwd; otherwise the first
+    // round only records what is there.
+    let entries: string | null = watch.conclusive ? 'missing missing' : null;
+    const tick = async () => {
+      timer = null;
+      if (watch.repo) {
+        const head = await readGitContextAsync(watch.repo, this.io);
+        if (closed) return;
+        this.readAndEmit(sessionId, watch, head);
+      } else {
+        const gitEntry = await this.io({ op: 'stat', path: path.join(watch.cwd, '.git') });
+        const headEntry = await this.io({ op: 'stat', path: path.join(watch.cwd, 'HEAD') });
+        if (closed) return;
+        const seen = `${gitEntry} ${headEntry}`;
+        const changed = entries !== null && seen !== entries;
+        entries = seen;
+        if (changed) this.update(sessionId, watch.cwd, watch.mapGitDir);
+      }
+      if (!closed) schedule();
+    };
+    const schedule = () => {
+      timer = setTimeout(() => { void tick().catch(() => { if (!closed) schedule(); }); }, REMOTE_POLL_MS);
+      timer.unref?.();
+    };
+    schedule();
+    return {
+      close() { closed = true; if (timer) clearTimeout(timer); timer = null; },
+      on() { return this; },
+    };
+  }
+
+  /** `head`: HEAD already read for a remote repo; one is read if missing. */
+  private readAndEmit(sessionId: string, watch: SessionWatch, head?: GitContext): void {
+    if (watch.remote && watch.repo && !head) {
+      void readGitContextAsync(watch.repo, this.io).then((ctx) => {
+        if (this.sessions.get(sessionId) === watch && watch.watcher) this.readAndEmit(sessionId, watch, ctx);
+      }, () => undefined);
+      return;
+    }
     const ctx: GitContext = watch.repo
-      ? readGitContext(watch.repo)
+      ? head ?? readGitContext(watch.repo)
       : watch.watcher && watch.conclusive
         ? { branch: null, isWorktree: false, absent: true }
         : { branch: null, isWorktree: false };
