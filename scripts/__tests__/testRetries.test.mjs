@@ -19,13 +19,16 @@ import {
   renderAnnotations,
   renderSummary,
 } from '../lib/test-retries.mjs';
+import RetryReporter from '../vitest-retry-reporter.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'flaky-report.mjs');
 
-// The slice of vitest's reporter API (TestModule / TestCase) the collector reads.
-function fakeModule(relativeModuleId, tests) {
+// The slice of vitest's reporter API (TestModule / TestCase) the collector
+// reads. `project` is the TestProject.name: '' for a config without projects.
+function fakeModule(relativeModuleId, tests, project = 'unit') {
   return {
     relativeModuleId,
+    project: { name: project },
     children: {
       allTests: () =>
         tests.map((t) => ({
@@ -48,7 +51,7 @@ function tmpDir() {
 
 describe('collectRetriedTests', () => {
   it('keeps only tests that were retried, with their outcome', () => {
-    const tests = collectRetriedTests([
+    const byProject = collectRetriedTests([
       fakeModule('src\\a\\__tests__\\a.test.ts', [
         { name: 'a > flaky', state: 'passed', retryCount: 1, line: 7 },
         { name: 'a > steady', state: 'passed', retryCount: 0 },
@@ -57,10 +60,20 @@ describe('collectRetriedTests', () => {
         { name: 'a > never finished', state: 'pending', pending: true },
       ]),
     ]);
-    expect(tests).toEqual([
+    expect([...byProject.keys()]).toEqual(['unit']);
+    expect(byProject.get('unit')).toEqual([
       { file: 'src/a/__tests__/a.test.ts', name: 'a > broken', line: null, state: 'failed', retryCount: 1 },
       { file: 'src/a/__tests__/a.test.ts', name: 'a > flaky', line: 7, state: 'passed', retryCount: 1 },
     ]);
+  });
+
+  it('groups by project, a project with no retry included', () => {
+    const byProject = collectRetriedTests([
+      fakeModule('src/a.test.ts', [{ name: 'a > steady', state: 'passed', retryCount: 0 }], 'unit'),
+      fakeModule('src/b.test.ts', [{ name: 'b > flaky', state: 'passed', retryCount: 1 }], 'integration'),
+    ]);
+    expect(byProject.get('unit')).toEqual([]);
+    expect(byProject.get('integration').map((t) => t.name)).toEqual(['b > flaky']);
   });
 
   it('records the shard so two shards of one run stay apart', () => {
@@ -140,6 +153,70 @@ describe('report files', () => {
     ]);
     expect(readReport(files[1]).suite).toBe('unit');
     expect(() => readReport(files[0])).toThrow(/not a version 1 retry report/);
+  });
+});
+
+describe('vitest-retry-reporter.mjs', () => {
+  // Drives the reporter as vitest does: onInit, then onTestRunEnd, and reads
+  // what it wrote under the config root.
+  function run(options, modules, shard) {
+    const root = tmpDir();
+    const warnings = [];
+    const reporter = new RetryReporter(options);
+    reporter.onInit({ config: { root, retry: 1, shard }, logger: { warn: (m) => warnings.push(m) } });
+    reporter.onTestRunEnd(modules);
+    const dir = path.join(root, 'test-results');
+    const files = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+    return { root, files, warnings, read: (name) => readReport(path.join(dir, name)) };
+  }
+
+  const flaky = { name: 'b > flaky', state: 'passed', retryCount: 1 };
+  const steady = { name: 'a > steady', state: 'passed', retryCount: 0 };
+
+  it('writes one report per project, named and labelled after it', () => {
+    const out = run({}, [
+      fakeModule('src/a.test.ts', [steady], 'unit'),
+      fakeModule('src/b.test.ts', [flaky], 'integration'),
+    ], { index: 2, count: 2 });
+    expect(out.files).toEqual(['retries-integration.json', 'retries-unit.json']);
+    const unit = out.read('retries-unit.json');
+    const integration = out.read('retries-integration.json');
+    expect([unit.suite, unit.shard, unit.tests]).toEqual(['unit', '2/2', []]);
+    expect(integration.suite).toBe('integration');
+    expect(integration.tests.map((t) => t.name)).toEqual(['b > flaky']);
+    expect(out.warnings).toEqual([]);
+  });
+
+  it('falls back to the suite option for an unnamed project', () => {
+    const out = run({ suite: 'runtime' }, [fakeModule('src/r.runtime.test.ts', [flaky], '')]);
+    expect(out.files).toEqual(['retries-runtime.json']);
+    expect(out.read('retries-runtime.json').suite).toBe('runtime');
+  });
+
+  it('still writes an empty report when no module ran', () => {
+    const out = run({ suite: 'runtime' }, []);
+    expect(out.files).toEqual(['retries-runtime.json']);
+    expect(out.read('retries-runtime.json').tests).toEqual([]);
+  });
+
+  it('keeps an explicit outputFile to one report, every project in it', () => {
+    const out = run({ suite: 'all', outputFile: 'out/retries.json' }, [
+      fakeModule('src/b.test.ts', [flaky], 'integration'),
+      fakeModule('src/a.test.ts', [{ ...flaky, name: 'a > flaky' }], 'unit'),
+    ]);
+    expect(out.files).toEqual([]);
+    const merged = readReport(path.join(out.root, 'out', 'retries.json'));
+    expect(merged.suite).toBe('all');
+    expect(merged.tests.map((t) => t.name)).toEqual(['a > flaky', 'b > flaky']);
+  });
+
+  it('merges with a report written before projects were named', () => {
+    const t = { file: 'src/x.test.ts', name: 'x > races', line: null, state: 'passed', retryCount: 1 };
+    const old = report([t]);
+    const fresh = run({}, [fakeModule('src/x.test.ts', [{ ...t }], 'integration')]).read('retries-integration.json');
+    const merged = mergeReports([old, fresh]);
+    expect(merged.flaky.map((r) => [r.name, r.seen])).toEqual([['x > races', 2]]);
+    expect(merged.flaky[0].where).toEqual(['unit, shard 1/2, win32', `integration, ${process.platform}`]);
   });
 });
 
