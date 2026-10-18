@@ -8,7 +8,7 @@ import { destroyRemoteSessions, destroySurfaceRemoteSession } from '../../utils/
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { MAX_PANES_PER_WORKSPACE } from '../../stores/slices/paneSlice';
 import { useIpc } from '../../hooks/useIpc';
-import { ptyLifecycle } from '../../hooks/ptyLifecycle';
+import { ptyLifecycle, useClearRefusalWhenFilled } from '../../hooks/ptyLifecycle';
 import { driveFocusToTerminal } from '../../hooks/useActivePaneFocus';
 import { onTerminalRegistered, terminalRegistry } from '../../hooks/useTerminal';
 import { useStore } from '../../stores';
@@ -1621,6 +1621,7 @@ function SplitSurfaceView({
   const t = useT();
   // #2398 — the empty-leaf funnel's create for this leaf, keyed by leaf id.
   const leafCreate = useStore((s) => s.ptyCreateByKey?.[pane.id]);
+  useClearRefusalWhenFilled(pane.id, pane.surfaces.length > 0, leafCreate?.state === 'createFailed');
 
   if (pane.surfaces.length === 0) {
     if (leafCreate?.state === 'createFailed') {

@@ -20,6 +20,7 @@ import {
 } from '../../../shared/ptyRecovery';
 import type { Surface } from '../../../shared/types';
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
+import { saveSessionNow } from '../../utils/sessionSaveBridge';
 
 export interface ResumeSlice {
   /**
@@ -163,21 +164,30 @@ export const createResumeSlice: StateCreator<
     }
   }),
 
-  completeDeadPaneRecovery: (surfaceId, ptyId) => set((draft: StoreState) => {
-    if (!surfaceId || !ptyId) return;
-    const surface = findSurfaceDraft(draft, surfaceId);
-    const recovery = surface?.pendingRecovery;
-    if (!surface || !recovery) return;
-    delete surface.pendingRecovery;
+  completeDeadPaneRecovery: (surfaceId, ptyId) => {
+    let completed = false;
+    set((draft: StoreState) => {
+      if (!surfaceId || !ptyId) return;
+      const surface = findSurfaceDraft(draft, surfaceId);
+      const recovery = surface?.pendingRecovery;
+      if (!surface || !recovery) return;
+      delete surface.pendingRecovery;
+      completed = true;
 
-    const agent = recovery.resumeAgent ?? asRecoveryAgentSlug(recovery.resumeBinding?.agent);
-    if (!agent) return;
-    draft.deadPaneRecoveryOfferByPtyId[ptyId] = recovery;
-    draft.resumeHintByPtyId[ptyId] = agent;
-    if (recovery.resumeBinding) {
-      draft.resumeBindingByPtyId[ptyId] = recovery.resumeBinding;
-    }
-  }),
+      const agent = recovery.resumeAgent ?? asRecoveryAgentSlug(recovery.resumeBinding?.agent);
+      if (!agent) return;
+      draft.deadPaneRecoveryOfferByPtyId[ptyId] = recovery;
+      draft.resumeHintByPtyId[ptyId] = agent;
+      if (recovery.resumeBinding) {
+        draft.resumeBindingByPtyId[ptyId] = recovery.resumeBinding;
+      }
+    });
+    // The binding was saved the moment it landed (updateSurfacePtyId), with
+    // the descriptor still on the surface. Save again so a restart before the
+    // next save cannot bring the old session's recovery back beside the live
+    // replacement (#2398). Gated like persistBindingNow.
+    if (completed && get().paneGate === 'ready') saveSessionNow();
+  },
 
   markPtyReady: (ptyId) => {
     // Hot path (fed per output-adjacent event from useTerminal): bail before

@@ -21,6 +21,7 @@
  * factory with injected deps, so the policy is unit-testable without a store
  * or Electron (as reconnectPtyWithRetry.ts).
  */
+import { useEffect } from 'react';
 import type { IpcResult } from './useIpc';
 import type { PtyCreateAttempt } from '../stores/slices/ptyLifecycleSlice';
 import { useStore } from '../stores';
@@ -204,3 +205,15 @@ export const ptyLifecycle: PtyLifecycle = createPtyLifecycle({
     if (typeof window.electronAPI.pty.cancelCreate === 'function') void window.electronAPI.pty.cancelCreate(surfaceId);
   },
 });
+
+/**
+ * A key refused before, whose owner another path has since filled (a leaf
+ * that got a tab through Ctrl+T, say), is no longer refused: when it empties
+ * again it must create, not show the old failure. Runs where the owner is
+ * drawn (the empty-leaf funnel only sees empty leaves).
+ */
+export function useClearRefusalWhenFilled(key: string, filled: boolean, refused: boolean): void {
+  useEffect(() => {
+    if (filled && refused) ptyLifecycle.clearRefusal(key);
+  }, [key, filled, refused]);
+}

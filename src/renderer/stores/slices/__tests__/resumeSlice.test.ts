@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { registerSessionSaver } from '../../../utils/sessionSaveBridge';
 import { useStore } from '../../index';
 import { createWorkspace } from '../../../../shared/types';
 
@@ -172,6 +173,23 @@ describe('resumeSlice', () => {
       useStore.getState().hydrateResumeBindings({});
       expect(useStore.getState().resumeHintByPtyId['pty-new']).toBeUndefined();
       expect(useStore.getState().resumeBindingByPtyId['pty-new']).toBeUndefined();
+    });
+
+    it('saves the session again once the descriptor is consumed (Codex P2)', () => {
+      const saver = vi.fn();
+      registerSessionSaver(saver);
+      useStore.setState({ paneGate: 'ready' });
+      try {
+        useStore.getState().stageDeadPaneRecovery('surface-a', { spawnCwd: 'D:/wmux' });
+        saver.mockClear();
+        useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-new');
+        expect(saver).toHaveBeenCalledTimes(1);
+        // Nothing to consume: no extra save.
+        useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-new');
+        expect(saver).toHaveBeenCalledTimes(1);
+      } finally {
+        registerSessionSaver(null);
+      }
     });
 
     it('consumes cwd-only recovery without inventing a resume offer', () => {
