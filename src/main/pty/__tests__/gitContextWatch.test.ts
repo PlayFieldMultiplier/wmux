@@ -778,6 +778,32 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events.at(-1)?.branch).toBe('moved');
   });
 
+  it('a host-drive worktree whose share HEAD does not answer reads as unknown in time', async () => {
+    const share = tmp();
+    initFakeRepo(share);
+    const wtGitDir = path.join(share, '.git', 'worktrees', 'wt');
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitDir, 'HEAD'), 'ref: refs/heads/linked\n');
+    const before = tmp();
+    initFakeRepo(before, 'previous');
+    const wt = tmp();
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /home/me/repo/.git/worktrees/wt\n');
+    const io = holdableIo();
+    const w = new GitContextWatcher(fake.factory, { isRemote: (p) => p.startsWith(share), io: io.io });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', before);
+    expect(events.at(-1)?.branch).toBe('previous');
+
+    io.hold();
+    w.update('s1', wt, (gitdir) => gitdir.replace('/home/me/repo', share));
+    await vi.advanceTimersByTimeAsync(REMOTE_RESOLVE_TIMEOUT_MS);
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
+    io.release();
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'linked', isWorktree: true });
+  });
+
   it('a move to the share cancelled by a cd back re-arms the local watch', async () => {
     const local = tmp();
     const share = tmp();

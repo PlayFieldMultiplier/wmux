@@ -332,9 +332,14 @@ export class GitContextWatcher extends EventEmitter {
     // A local answer supersedes a WSL-share resolve still in flight.
     this.pending.delete(sessionId);
     const state = resolveRepoState(cwd, mapGitDir);
-    // A worktree on a host drive whose repository lives in a distro: the
-    // walk was local, but its HEAD is on the share.
-    this.apply(sessionId, cwd, mapGitDir, state, state.repo && this.isRemote(state.repo.gitDir) ? 'remote' : 'local');
+    if (state.repo && this.isRemote(state.repo.gitDir)) {
+      // A worktree on a host drive whose repository lives in a distro: the
+      // walk was local, but its HEAD is on the share. Read it the share's
+      // way, timeout and stale guard included.
+      this.updateRemote(sessionId, cwd, mapGitDir);
+      return;
+    }
+    this.apply(sessionId, cwd, mapGitDir, state, 'local');
   }
 
   /**
