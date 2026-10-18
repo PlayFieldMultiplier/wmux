@@ -38,6 +38,7 @@ import {
   type WorkerSessionInfo,
 } from '../workerReclaim';
 import { STOPPED_BY_OWNER } from '../factoryStop';
+import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import { taskFolderFromMissions } from '../verifyPreset';
 import { RESEARCH_PRESET } from '../../../shared/ledger';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
@@ -133,6 +134,21 @@ describe('reclaimWorker', () => {
     // The card names its task, so cards for tasks that ended together differ.
     expect(note.mock.calls[0][2]).toBe('Worker done (resumable): perf-A');
     expect(note.mock.calls[0][4]).toEqual({ code: 'worker.doneResumable', args: { status: 'completed', title: 'perf-A' } });
+  });
+
+  it('a task the bot cancelled says its worker stopped because the task ended, not to free memory', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const { ports, note } = reclaimPorts(store, [session()]);
+    // The bot's own ledger_update: cancelled, with its reason as the summary.
+    await reclaimWorker(ports, row('cancelled', { summary: 'PR merged meanwhile; cancelled to free the slot.' }), 'cancelled');
+    const body = String(note.mock.calls[0][3]);
+    expect(body).toBe('Task cancelled: its Claude stopped because the task ended. Its pane closes. The worktree and the conversation are kept; Resume continues the same conversation.');
+    expect(body).not.toContain('free memory');
+    expect(note.mock.calls[0][4]).toEqual({ code: 'worker.doneResumable', args: { status: 'cancelled', title: 'perf-A' } });
+    // With no conversation recorded, the same cause.
+    const bare = reclaimPorts(ReclaimedWorkers.at(path.join(dir, 'bare')), [session({ resumeBinding: undefined })]);
+    await reclaimWorker(bare.ports, row('cancelled'), 'cancelled');
+    expect(bare.note.mock.calls[0][3]).toBe('Task cancelled: its Claude stopped because the task ended. Its pane closes. The worktree is kept; no conversation was recorded to resume.');
   });
 
   it('records nothing (and the worker keeps running) without a worktree or when every stop is refused; no pane left is recorded as nothing to stop', async () => {
@@ -617,6 +633,24 @@ describe('resumeWorker', () => {
     expect(reclaimedWorkerState(store.get('wtask-abc-12345678'))).toBe('resumable');
   });
 
+  it('a resume in the pane is the task\'s next launch generation, recorded before the line is typed (#2393)', async () => {
+    const store = await reclaimed();
+    const launches = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    launches.load();
+    launches.beginLaunch({ taskId: 'wtask-abc-12345678', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' });
+    const { ports } = resumePorts(store, [session({ agentProcessAlive: false })], { launches });
+    expect(await resumeWorker(ports, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: true });
+    expect(launches.launchOf('wtask-abc-12345678')).toMatchObject({ gen: 2, state: 'launched' });
+    expect(launches.paneOf('daemon-1')).toMatchObject({ taskId: 'wtask-abc-12345678', gen: 2 });
+    // Not recorded, not typed.
+    const store2 = await reclaimed();
+    const refusing = resumePorts(store2, [session({ agentProcessAlive: false })], {
+      launches: { beginLaunch: () => { throw new Error('the task\'s launch could not be recorded: disk full'); }, launched: () => true, released: () => true },
+    });
+    expect(await resumeWorker(refusing.ports, 'wtask-abc-12345678', { kind: 'owner' })).toMatchObject({ ok: false, code: 'not_typed' });
+    expect(refusing.typeLine).not.toHaveBeenCalled();
+  });
+
   it('refuses another bot, a closed or moved pane, a running agent, and a line the guard did not type', async () => {
     const store = await reclaimed();
     const dead = session({ agentProcessAlive: false });
@@ -781,6 +815,12 @@ describe('unreclaimedEndedWorkers', () => {
     await reclaimWorker(reclaimPorts(store, [session()]).ports, rows[0], 'failed');
     expect(store.get('wtask-f-00000001')?.ended).toBe('failed');
     expect(unreclaimedEndedWorkers(rows, store, 5_000)).toBe(1);
+  });
+
+  it('an ended bot task whose agent is known gone holds no slot, reclaimed or not (#2393)', () => {
+    const store = ReclaimedWorkers.at(dir);
+    const rows = [row('failed', { id: 'wtask-f-00000001', updatedAt: 4_000 }), row('completed', { id: 'wtask-c-00000001', updatedAt: 4_000 })];
+    expect(unreclaimedEndedWorkers(rows, store, 5_000, new Set(['wtask-c-00000001']))).toBe(1);
   });
 });
 

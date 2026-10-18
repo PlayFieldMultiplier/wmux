@@ -173,8 +173,11 @@ function sanitizeFile(raw: unknown, knownWorkspaceIds?: ReadonlySet<string>): Ac
  * build rebuilds accounts.json rows from a fixed field list on each write:
  * a group kept there would be dropped silently by one account change on an
  * older wmux, and rotation would cross groups again. Older builds never read
- * or write this file. An entry whose account is gone matches nothing (ids are
- * random UUIDs) and is pruned on the next group write.
+ * or write this file. Every accounts.json write on this build drops the
+ * entries of accounts it no longer holds (see writeGroups), so removing an
+ * account removes its group entry in the same mutation. A group is only the
+ * name its accounts share: no account left, no group (the UI lists groups
+ * from the accounts, so it never shows an empty one).
  */
 interface GroupsFile { version: 1; groups: Record<string, unknown> }
 
@@ -197,6 +200,14 @@ function readGroups(filePath: string): Map<string, string> {
     if (!isUnsafeKey(id) && group) groups.set(id, group);
   }
   return groups;
+}
+
+/** Persist `groups` restricted to the accounts `file` holds. */
+async function writeGroups(filePath: string, file: AccountsFile, groups: ReadonlyMap<string, string>): Promise<void> {
+  const known = new Set(file.accounts.map((a) => a.id));
+  const out: Record<string, string> = {};
+  for (const [accountId, name] of groups) if (known.has(accountId)) out[accountId] = name;
+  await atomicWriteJSON(filePath, { version: 1, groups: out }, { durable: true, validate: isGroupsFile });
 }
 
 function applyGroups(file: AccountsFile, groups: ReadonlyMap<string, string>): AccountsFile {
@@ -337,7 +348,23 @@ export class AccountStore {
       const result = fn(file);
       // Written before the groups are merged in: accounts.json never holds one.
       await atomicWriteJSON(this.filePath, file, { durable: true });
-      this.cache = applyGroups(file, readGroups(this.groupsPath));
+      const groups = readGroups(this.groupsPath);
+      // An account this write dropped (removeAccount, or an older build's
+      // removal) leaves its group entry behind: drop it now, after
+      // accounts.json is durable, so a failed write here can only leave an
+      // orphan, never ungroup a live account.
+      const held = new Set(file.accounts.map((a) => a.id));
+      if ([...groups.keys()].some((accountId) => !held.has(accountId))) {
+        try {
+          await writeGroups(this.groupsPath, file, groups);
+        } catch (err) {
+          // Second layer: accounts.json is already committed, so the mutation
+          // still succeeds; the orphan matches nothing (ids are random UUIDs)
+          // and the next accounts write retries the prune.
+          console.warn(`[account] could not prune account-groups.json: ${String(err)}`);
+        }
+      }
+      this.cache = applyGroups(file, groups);
       return result;
     });
     // Keep the chain alive even if this mutation rejected.
@@ -404,10 +431,7 @@ export class AccountStore {
       const groups = readGroups(this.groupsPath);
       if (normalized) groups.set(id, normalized);
       else groups.delete(id);
-      const known = new Set(file.accounts.map((a) => a.id));
-      const out: Record<string, string> = {};
-      for (const [accountId, name] of groups) if (known.has(accountId)) out[accountId] = name;
-      await atomicWriteJSON(this.groupsPath, { version: 1, groups: out }, { durable: true, validate: isGroupsFile });
+      await writeGroups(this.groupsPath, file, groups);
       this.cache = applyGroups(file, groups);
     });
     this.writeChain = run.catch(() => undefined);
@@ -418,7 +442,8 @@ export class AccountStore {
    * Unregister an account (NEVER deletes the directory on disk). Returns the
    * list of workspaceIds whose bindings referenced it — the caller surfaces the
    * "these workspaces fall back to default" warning. Their bindings are cleared
-   * so no dangling accountId is ever left behind.
+   * so no dangling accountId is ever left behind, and its group entry goes
+   * with it (mutate prunes account-groups.json).
    */
   async removeAccount(id: string): Promise<string[]> {
     return this.mutate((file) => {

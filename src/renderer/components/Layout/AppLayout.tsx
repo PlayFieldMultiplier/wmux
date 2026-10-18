@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useSyncExternalStore, lazy, Suspense } from 'react';
 import { isBrowserBackend } from '../../../shared/browserBackend';
 import { deliverChatDrop } from '../Chat/chatAttachments';
+import { deliverBotsDrop } from '../Bots/BotsPhotos';
 import type { AgentSlug } from '../../../shared/events';
 import type { ResumeBinding } from '../../../shared/agentResume';
 import { useStore } from '../../stores';
@@ -1088,6 +1089,12 @@ export default function AppLayout() {
       dragCounterRef.current = 0;
 
       const state = useStore.getState();
+      // The Bots page: a drop is photos for its open composer, never a path
+      // typed into a pane the page covers.
+      if (state.appRoute === 'bots') {
+        deliverBotsDrop(paths);
+        return;
+      }
       const ws = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
       if (!ws) return;
 
@@ -1824,9 +1831,12 @@ export default function AppLayout() {
         const commandRunningSnapshot: Record<string, boolean> = {};
         // Process-truth agent liveness — the chip's edge-trigger gate.
         const agentAliveSnapshot: Record<string, boolean> = {};
+        // #2408: an agent sighted on a recovered pane; on screen hides its pill.
+        const onScreenSnapshot: Record<string, boolean> = {};
         for (const s of sessions) {
           if (s.supervision) snapshot[s.id] = s.supervision;
           if (s.resumeAgent) resumeSnapshot[s.id] = s.resumeAgent as AgentSlug;
+          if (s.resumeAgentOnScreen !== undefined) onScreenSnapshot[s.id] = s.resumeAgentOnScreen;
           if (s.resumeBinding) resumeBindingSnapshot[s.id] = s.resumeBinding;
           if (s.commandRunning !== undefined) commandRunningSnapshot[s.id] = s.commandRunning;
           if (s.agentProcessAlive !== undefined) agentAliveSnapshot[s.id] = s.agentProcessAlive;
@@ -1836,6 +1846,7 @@ export default function AppLayout() {
         useStore.getState().hydrateResumeBindings(resumeBindingSnapshot);
         useStore.getState().hydrateCommandRunning(commandRunningSnapshot);
         useStore.getState().hydrateAgentAlive(agentAliveSnapshot);
+        useStore.getState().hydrateResumeAgentOnScreen(onScreenSnapshot);
         // #1210: the slug is stamped on detect and was never cleared on
         // agent exit. Process-truth `false` and OSC 133 "back at a prompt"
         // are the two signals that the TUI is gone — drop the identity so
@@ -1911,14 +1922,20 @@ export default function AppLayout() {
         // Agent process liveness rides along too — it is the edge (alive→dead)
         // that lets the chip appear on panes without shell integration.
         const agentAliveSnapshot: Record<string, boolean> = {};
+        // #2408: the on-screen sighting rides along, so a hidden pill comes
+        // back once the agent leaves the screen. Not a hint: a consumed pill
+        // stays consumed.
+        const onScreenSnapshot: Record<string, boolean> = {};
         for (const s of sessions) {
           if (s.resumeBinding) snapshot[s.id] = s.resumeBinding;
           if (s.commandRunning !== undefined) cmdSnapshot[s.id] = s.commandRunning;
           if (s.agentProcessAlive !== undefined) agentAliveSnapshot[s.id] = s.agentProcessAlive;
+          if (s.resumeAgentOnScreen !== undefined) onScreenSnapshot[s.id] = s.resumeAgentOnScreen;
         }
         useStore.getState().hydrateResumeBindings(snapshot);
         useStore.getState().hydrateCommandRunning(cmdSnapshot);
         useStore.getState().hydrateAgentAlive(agentAliveSnapshot);
+        useStore.getState().hydrateResumeAgentOnScreen(onScreenSnapshot);
         clearSurfaceAgentsKnownGone(agentAliveSnapshot, cmdSnapshot, requestedAt);
         // An agent relaunched after boot (the Resume pill) is attributed by
         // the daemon seconds later; this tick is what brings its row back.

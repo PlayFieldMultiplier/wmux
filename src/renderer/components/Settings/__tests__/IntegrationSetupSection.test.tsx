@@ -438,6 +438,107 @@ describe('IntegrationSetupSection', () => {
   });
 });
 
+// ─── #2404 — an install older than this build's hook set ─────────────────────
+
+describe('IntegrationSetupSection — hook set update', () => {
+  /** A hooks api whose probe reports a pre-#2390 install until Update runs. */
+  function driftedApi(withUpdate = true) {
+    const calls: string[] = [];
+    const flags = { current: false };
+    const api = fakeApi({
+      hooksInstalled: true,
+      hooksInstall: async () => { calls.push('install'); return { ok: true, error: null }; },
+    });
+    api.hooks!.status = async () => ({
+      installed: true,
+      updateAvailable: !flags.current,
+      outcome: {
+        pluginAlsoInstalled: false,
+        hooks: [
+          { label: 'Stop', state: 'ok' },
+          { label: 'Notification:permission_prompt', state: flags.current ? 'ok' : 'missing' },
+        ],
+      },
+    });
+    if (withUpdate) {
+      api.hooks!.update = async () => { calls.push('update'); flags.current = true; return { ok: true, error: null }; };
+    }
+    return { api, calls };
+  }
+
+  it('offers Update, naming the missing hook, for an install from before #2390', async () => {
+    const { api, calls } = driftedApi();
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+
+    expect(state(container, 'hooks')).toBe('outdated');
+    expect(action(container, 'hooks')!.textContent).toBe('Update');
+    const note = row(container, 'hooks').querySelector('[data-setup-row-note]')!.textContent!;
+    expect(note).toContain('Notification:permission_prompt');
+    expect(note).not.toContain('Stop');
+
+    await act(async () => { action(container, 'hooks')!.click(); await Promise.resolve(); });
+    await flush();
+    // The update path, never the clear-then-add install.
+    expect(calls).toEqual(['update']);
+    expect(state(container, 'hooks')).toBe('installed');
+    expect(action(container, 'hooks')).toBeNull();
+  });
+
+  it('shows a current install as installed, with nothing to click', async () => {
+    const { api, calls } = driftedApi();
+    await api.hooks!.update!();
+    calls.length = 0;
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+    expect(state(container, 'hooks')).toBe('installed');
+    expect(action(container, 'hooks')).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('writes nothing until the click', async () => {
+    const { api, calls } = driftedApi();
+    const { cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+    await flush();
+    expect(calls).toEqual([]);
+  });
+
+  it('keeps an older preload without Update on the installed row', async () => {
+    const { api } = driftedApi(false);
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+    expect(state(container, 'hooks')).toBe('installed');
+  });
+
+  it('retries a failed Update as an Update', async () => {
+    const { api, calls } = driftedApi();
+    let fail = true;
+    const update = api.hooks!.update!;
+    api.hooks!.update = async () => {
+      if (fail) { calls.push('update'); fail = false; return { ok: false, error: 'EACCES' }; }
+      return update();
+    };
+    const { container, cleanup } = render(<IntegrationSetupSection api={api} />);
+    cleanups.push(cleanup);
+    await flush();
+
+    await act(async () => { action(container, 'hooks')!.click(); await Promise.resolve(); });
+    await flush();
+    expect(state(container, 'hooks')).toBe('error');
+    expect(action(container, 'hooks')!.textContent).toBe('Update');
+
+    await act(async () => { action(container, 'hooks')!.click(); await Promise.resolve(); });
+    await flush();
+    expect(calls).toEqual(['update', 'update']);
+    expect(state(container, 'hooks')).toBe('installed');
+  });
+});
+
 // ─── The install prompt's durable refusal, surfaced here so it is reversible ──
 
 describe('IntegrationSetupSection — hook prompt refusal', () => {

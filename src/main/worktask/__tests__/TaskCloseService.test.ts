@@ -187,6 +187,22 @@ describe('J3 §1 close 순서 계약', () => {
     fs.rmSync(remoteDir, { recursive: true, force: true });
   });
 
+  it('the relay removal is queued, not awaited: a removal stuck behind a relay call does not delay the close', async () => {
+    const { port } = makeDaemon();
+    let timer: NodeJS.Timeout | undefined;
+    const removeRelay = vi.fn(() => new Promise<void>((resolve) => { timer = setTimeout(resolve, 3000); }));
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager(), removeRelay });
+    const started = Date.now();
+    try {
+      const res = await svc.closeTask({ taskId: 'wtask-slow', verifiedWorkspaceId: 'ws-owner' });
+      expect(res.ok).toBe(true);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(removeRelay).toHaveBeenCalledWith('wtask-slow');
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
   it('미물질화(worktreePath 부재): worktree 단계 건너뛰고 close만', async () => {
     const { port, calls } = makeDaemon();
     const mgr = new TaskWorktreeManager();
@@ -196,6 +212,21 @@ describe('J3 §1 close 순서 계약', () => {
     if (!res.ok) throw new Error('unreachable');
     expect(res.unmaterialized).toBe(true);
     expect(calls).toHaveLength(1);
+  });
+
+  it('a close that stopped the worktree\'s panes reports them; a close-only task, whose panes nothing stopped, reports none (#2393)', async () => {
+    const { mgr, worktreePath, metaDir } = await makeWorktree('stopped-task');
+    const { port } = makeDaemon();
+    const panesStopped = vi.fn();
+    const svc = new TaskCloseService({ daemon: port, worktrees: mgr, stopPanesIn: async () => ['p-1', 'p-2'], panesStopped });
+    const res = await svc.closeTask({ taskId: 'wtask-6', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath, metaDir });
+    expect(res.ok).toBe(true);
+    expect(panesStopped).toHaveBeenCalledWith('wtask-6', ['p-1', 'p-2']);
+
+    panesStopped.mockClear();
+    const res2 = await svc.closeTask({ taskId: 'wtask-7', verifiedWorkspaceId: 'ws-owner' });
+    expect(res2.ok).toBe(true);
+    expect(panesStopped).not.toHaveBeenCalled();
   });
 
   it('archivePending: 데몬 응답의 archive 미확정이 결과에 전달된다(CX2)', async () => {

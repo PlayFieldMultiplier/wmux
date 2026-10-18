@@ -389,6 +389,7 @@ export function wslClaudeHooks(): Record<string, Array<{ matcher: string; hooks:
     SubagentStop: [hook('SubagentStop')],
     UserPromptSubmit: [hook('UserPromptSubmit')],
     PermissionRequest: [hook('PermissionRequest')],
+    Notification: [hook('Notification', 'permission_prompt')],
     PostToolUse: [hook('PostToolUse', 'AskUserQuestion')],
     PreToolUse: [
       hook('PreToolUse', 'AskUserQuestion'),

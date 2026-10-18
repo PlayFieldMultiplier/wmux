@@ -614,7 +614,8 @@ export function withLaunchSessionId(command: string, sessionId: string): string 
  * bring it back). Excluded:
  *   - exec/supervised units — they already auto-resume via execLaunchCommand
  *     (Feature ①); a pill would be a redundant second resume.
- *   - panes that never ran a detectable agent (no lastDetectedAgent).
+ *   - panes that never ran a detectable agent (no lastDetectedAgent and no
+ *     saved conversation).
  *   - agents wmux cannot actually resume (absent from RESUME_BY_LAUNCHER, e.g.
  *     gemini/aider) — offering one would surface a pill that types a broken
  *     command (the generalized form of the codex `--continue` bug).
@@ -627,9 +628,35 @@ export function resumeOfferForRecovered(session: {
   exec?: { command: string };
   supervision?: unknown;
   lastDetectedAgent?: string;
+  lastDetectedAgentEvidence?: { source?: string; at?: number };
+  resumeBinding?: unknown;
 }): string | undefined {
   if (session.exec || session.supervision) return undefined;
-  const agent = session.lastDetectedAgent;
-  if (!agent || !RESUME_BY_LAUNCHER.has(agent)) return undefined;
-  return agent;
+  const named = session.lastDetectedAgent;
+  const detected = named && RESUME_BY_LAUNCHER.has(named) ? named : undefined;
+  const binding = isUsableResumeBinding(session.resumeBinding) ? session.resumeBinding : undefined;
+  const bound = binding && RESUME_BY_LAUNCHER.has(binding.agent) ? binding.agent : undefined;
+  // An agent wmux cannot resume (Gemini, Aider) that a hook or a live process
+  // proved ran after the saved conversation was the pane's last agent: there
+  // is nothing to offer, and the older conversation must not be reopened.
+  if (bound && named && named !== bound && !detected && provenAfter(session.lastDetectedAgentEvidence, binding?.ts)) {
+    return undefined;
+  }
+  if (!bound || !detected || bound === detected) return detected ?? bound;
+  // The name and the saved conversation disagree. The binding is the agent's
+  // own word (its hook, its command line), the name may be the screen
+  // detector's guess: a Claude reply quoting Codex's banner persisted as
+  // "codex", after which the pill typed Codex's picker on a Claude-only pane
+  // and the Claude conversation was never offered. The name wins only when
+  // it is proven newer: a hook or a live process decided it after the
+  // binding was captured (a Codex run after Claude, with no Codex binding).
+  // A name with no evidence — a screen guess, or one persisted before the
+  // evidence was recorded — loses, which also repairs names already wrong.
+  return provenAfter(session.lastDetectedAgentEvidence, binding?.ts) ? detected : bound;
+}
+
+function provenAfter(evidence: { source?: string; at?: number } | undefined, bindingTs: unknown): boolean {
+  if (evidence?.source !== 'hook' && evidence?.source !== 'process') return false;
+  if (typeof evidence.at !== 'number' || !Number.isFinite(evidence.at)) return false;
+  return typeof bindingTs !== 'number' || evidence.at > bindingTs;
 }

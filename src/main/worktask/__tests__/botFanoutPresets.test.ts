@@ -55,7 +55,7 @@ describe('bot fan-out presets', () => {
     expect(p.startsWith('# Verify worker')).toBe(true);
     expect(p).toContain(SHA);
     expect(p.endsWith('## Your task\n\nlook at the IPC change')).toBe(true);
-    expect(composeBotWorkerPrompt('repro', '')).toMatch(/^# Repro worker[\s\S]*DRAFT pull request/);
+    expect(composeBotWorkerPrompt('repro', '')).toMatch(/^# Repro worker[\s\S]*DRAFT pull request[\s\S]*`gh pr ready <number>`/);
     expect(composeBotWorkerPrompt('nope', 'x')).toBe('x');
   });
 

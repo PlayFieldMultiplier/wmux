@@ -270,6 +270,7 @@ function copyDispatch(d: LedgerDispatch): LedgerDispatch {
     ...(Array.isArray(d.connectors) && d.connectors.length > 0 && d.connectors.length <= 8 && d.connectors.every((n) => typeof n === 'string' && /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(n))
       ? { connectors: [...d.connectors] }
       : {}),
+    ...(d.reconciled === true ? { reconciled: true as const } : {}),
   };
 }
 
@@ -379,8 +380,9 @@ export class TaskLedger {
       const existing = this.entries.get(input.id);
       if (existing) {
         // A row mirrored before its fan-out registered it (the reconciler)
-        // gets the dispatch once; a recorded dispatch is never replaced.
-        if (input.dispatch && !existing.dispatch) {
+        // gets the dispatch once; a recorded dispatch is never replaced,
+        // except the reconciler's own (origin only) by the full one.
+        if (input.dispatch && (!existing.dispatch || (existing.dispatch.reconciled === true && input.dispatch.reconciled !== true))) {
           const entry: LedgerEntry = this.redact({ ...existing, dispatch: copyDispatch(input.dispatch) });
           await this.append({ op: 'entry', entry });
           this.entries.set(entry.id, entry);

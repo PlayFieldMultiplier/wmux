@@ -674,3 +674,51 @@ describe('T3 worktree base — origin default branch pinned to an OID, --no-trac
     }
   });
 });
+
+describe('rollback of a spawn that never launched (#2349)', () => {
+  it('real git: a forced removal takes a dirty worktree; the branch goes only while it is still at its base', { timeout: 30_000 }, async () => {
+    const { TaskWorktreeManager } = await loadModule();
+    const { execFileSync } = await import('node:child_process');
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'init.defaultBranch=main', ...args], {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-twm-rollback-'));
+    try {
+      const repo = path.join(root, 'repo');
+      fs.mkdirSync(repo);
+      git(repo, 'init');
+      git(repo, 'commit', '--allow-empty', '-m', 'one');
+      const base = git(repo, 'rev-parse', 'HEAD');
+      const mgr = new TaskWorktreeManager();
+      const plan = (slug: string) => ({
+        repoRoot: repo, repoHash: 'real', taskSlug: slug, metaDir: path.join(root, 'm', slug),
+        worktreePath: path.join(root, 'wt', slug), branch: `wtask/${slug}`,
+      });
+
+      // Unchanged: a setup step left an untracked file. Forced removal takes
+      // it, and the branch (still at its base) goes too.
+      const a = plan('a');
+      expect((await mgr.createWorktree(a, base)).ok).toBe(true);
+      fs.writeFileSync(path.join(a.worktreePath, 'generated.txt'), 'setup output');
+      expect(await mgr.removeWorktree(repo, 'real', a.worktreePath)).toMatchObject({ ok: false, dirty: true });
+      expect(await mgr.removeWorktree(repo, 'real', a.worktreePath, undefined, { force: true })).toEqual({ ok: true });
+      expect(fs.existsSync(a.worktreePath)).toBe(false);
+      expect(await mgr.deleteBranchIfAt(repo, 'real', a.branch, base)).toEqual({ ok: true });
+      expect(() => git(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${a.branch}`)).toThrow();
+
+      // Moved: a commit on the branch is never lost.
+      const b = plan('b');
+      expect((await mgr.createWorktree(b, base)).ok).toBe(true);
+      git(b.worktreePath, 'commit', '--allow-empty', '-m', 'work');
+      const tip = git(b.worktreePath, 'rev-parse', 'HEAD');
+      expect(await mgr.removeWorktree(repo, 'real', b.worktreePath, undefined, { force: true })).toEqual({ ok: true });
+      expect(await mgr.deleteBranchIfAt(repo, 'real', b.branch, base)).toMatchObject({ ok: false });
+      expect(git(repo, 'rev-parse', `refs/heads/${b.branch}`)).toBe(tip);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -51,6 +51,13 @@ test:integration` one each. CI runs the unit lane in `validate (1/2)` and
 `validate (2/2)` (Linux) and the integration lane in jobs of its own,
 `integration (1/2)` and `integration (2/2)` (Windows).
 
+`--shard` splits each lane by recorded file duration, not by file count
+(`scripts/lib/duration-sequencer.mjs`, reading `vitest.durations.json`). A new
+test file needs no entry: it counts as its lane's median. To refresh the
+numbers, download a few runs' `test-report-*` artifacts (CI writes
+`durations-<lane>.json` into them) and run
+`node scripts/test-durations.mjs --write <dir>`.
+
 Use `*.runtime.test.ts`, `*.runtime.test.tsx`, or `*.runtime.test.mjs` for
 tests that spawn real OS resources, such as ConPTY shells or Windows process
 probes. `npm test` runs these runtime tests serially after the regular parallel

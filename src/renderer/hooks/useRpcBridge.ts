@@ -1550,6 +1550,12 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // A bot worker's single-use secret grant: passed to pty.create unchanged
     // (main resolves it there; it names no secret and holds no value).
     const secretGrant = fanoutTaskOf && typeof params.secretGrant === 'string' ? params.secretGrant : '';
+    // The task launch this pane is for: passed to pty.create unchanged (main
+    // records the pane as that launch's there).
+    const rawLaunch = fanoutTaskOf ? params.fanoutLaunch as { taskId?: unknown; gen?: unknown } | undefined : undefined;
+    const fanoutLaunch = rawLaunch && typeof rawLaunch.taskId === 'string' && typeof rawLaunch.gen === 'number'
+      ? { taskId: rawLaunch.taskId, gen: rawLaunch.gen }
+      : null;
     // Quick launch in the person's own checkout: nested in the sidebar under
     // the workspace it was started from, but NOT stamped as a fan-out task —
     // it must not count toward the fan-out cap or the depth rule.
@@ -1624,7 +1630,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     let ptyId: string;
     try {
       const created = await window.electronAPI.pty.create(
-        fanoutTaskOf ? { ...createOptions, fanoutTaskOf, ...(fanoutOrigin ? { fanoutOrigin } : {}), ...(secretGrant ? { secretGrant } : {}) } : createOptions,
+        fanoutTaskOf ? { ...createOptions, fanoutTaskOf, ...(fanoutOrigin ? { fanoutOrigin } : {}), ...(secretGrant ? { secretGrant } : {}), ...(fanoutLaunch ? { fanoutLaunch } : {}) } : createOptions,
       );
       ptyId = created.id;
     } catch (err) {
