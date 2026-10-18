@@ -140,7 +140,7 @@ describe('stopSessionsInDir', () => {
       captured: [{ pid: 7, startTime: 't7' }, { pid: 70, startTime: 't70' }],
     };
     const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: unverified } });
-    const err = await stopSessionsInDir('/w/t', first.p).catch((e: unknown) => e as Error);
+    const err = (await stopSessionsInDir('/w/t', first.p).then(() => new Error('resolved'), (e: unknown) => e)) as Error;
     expect(err.message).toContain('could not verify all processes exited: the process table could not be read');
     expect(err.message).toContain('Close and keep folder');
 
