@@ -157,6 +157,7 @@ import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonState } from './types';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
+import { gitWatchCwdFor } from './gitWatchCwd';
 import { randomUUID } from 'node:crypto';
 import { monitorEventLoopDelay, performance as nodePerformance } from 'node:perf_hooks';
 import { DAEMON_EXIT_ALREADY_RUNNING, ENV_KEYS, isBrainPty } from '../shared/constants';
@@ -7288,11 +7289,14 @@ function wireContextWatchers(
     }
   });
 
-  const onCreated = (payload: { session: { id: string; cwd: string } }) => {
-    gitWatcher.update(payload.session.id, payload.session.cwd);
+  // #2407: a WSL pane reports a Linux cwd; the watcher reads with Windows fs,
+  // so it is handed the Windows name of that directory (gitWatchCwdFor).
+  const onCreated = (payload: { session: { id: string; cwd: string; cmd?: string; wslTarget?: { distribution?: unknown } } }) => {
+    gitWatcher.update(payload.session.id, gitWatchCwdFor(payload.session));
   };
   const onCwd = (payload: { sessionId: string; cwd: string }) => {
-    gitWatcher.update(payload.sessionId, payload.cwd);
+    const meta = sessionManager.getSession(payload.sessionId)?.meta;
+    gitWatcher.update(payload.sessionId, gitWatchCwdFor({ cwd: payload.cwd, cmd: meta?.cmd, wslTarget: meta?.wslTarget }));
   };
   const onGone = (payload: { id: string }) => {
     gitWatcher.remove(payload.id);
@@ -7306,7 +7310,7 @@ function wireContextWatchers(
 
   // Seed git context for sessions recovered before this wiring ran.
   for (const s of sessionManager.listLiveSessions()) {
-    gitWatcher.update(s.id, s.cwd);
+    gitWatcher.update(s.id, gitWatchCwdFor(s));
   }
 
   resyncContextWatchers = () => { portWatcher.resync(); gitWatcher.resync(); };
