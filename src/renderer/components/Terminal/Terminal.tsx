@@ -18,7 +18,8 @@ import BookmarkIndicator from './BookmarkIndicator';
 import ContextMenu from './ContextMenu';
 import ScrollToBottomButton from './ScrollToBottomButton';
 import { paneTagDropText } from '../../utils/paneTagDrag';
-import { dismissPaneLinkNotice, getPaneLinkNotice, notePaneUserInput, subscribeDaemonLinkNotice } from '../../daemon/daemonLinkNotice';
+import { getPaneLinkNotice, notePaneUserInput, subscribeDaemonLinkNotice } from '../../daemon/daemonLinkNotice';
+import DaemonLinkNotice from './DaemonLinkNotice';
 import '@xterm/xterm/css/xterm.css';
 
 const ChatView = lazy(() => import('../Chat/ChatView'));
@@ -534,39 +535,9 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
           </div>
         </div>
       )}
-      {/* Daemon link notice. Same neutral banner as the recovery alert above,
-          which wins when both apply (it carries the actions). Colour sits on
-          the state words only: muted while reconnecting, red once wmux gave
-          up, attention for input that may not have reached the shell. */}
-      {!recoveryError && linkNotice && ownerSurfaceId && (
-        <div role={linkNotice.state === 'reconnecting' ? 'status' : 'alert'} aria-live={linkNotice.state === 'reconnecting' ? 'polite' : undefined}
-          className="absolute inset-x-2 top-2 z-20 flex max-h-[calc(100%-1rem)] flex-wrap items-start gap-3 overflow-y-auto rounded border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-primary)]">
-          {/* The text keeps at least ~14rem and never shrinks below its
-              longest word, so a narrow pane wraps Dismiss onto its own row
-              instead of squeezing the text into a column that breaks words. */}
-          <div className="flex-1 basis-56">
-            <p className={`break-words ${linkNotice.state === 'reconnecting' ? 'text-[var(--text-muted)]' : linkNotice.state === 'gave-up' ? 'text-[var(--accent-red)]' : ''}`}>
-              {linkNotice.state === 'reconnecting'
-                ? (linkNotice.attempt > 0 ? t('daemon.linkReconnectingAttempt', { attempt: linkNotice.attempt }) : t('daemon.linkReconnecting'))
-                : linkNotice.state === 'reconnected' ? t('daemon.linkReconnected') : t('daemon.linkGaveUp')}
-            </p>
-            {linkNotice.state === 'gave-up' && (
-              <p className="mt-1 text-[var(--text-muted)]">{t('daemon.linkGaveUpHint')}</p>
-            )}
-            {linkNotice.inputLost && (
-              <p className="mt-1 text-[var(--attention-text)]">
-                {linkNotice.state === 'reconnected' ? t('daemon.linkInputLost') : t('daemon.linkInputLostWhileDown')}
-              </p>
-            )}
-          </div>
-          {linkNotice.state !== 'reconnecting' && (
-            <button type="button" onClick={() => dismissPaneLinkNotice(ownerSurfaceId)}
-              className="shrink-0 rounded border border-[var(--border)] px-3 py-1 text-[var(--text-muted)]">
-              {t('daemon.linkDismiss')}
-            </button>
-          )}
-        </div>
-      )}
+      {/* Daemon link notice; the recovery alert above wins when both apply
+          (it carries the actions). */}
+      {!recoveryError && linkNotice && ownerSurfaceId && <DaemonLinkNotice notice={linkNotice} surfaceId={ownerSurfaceId} />}
       {/* Session restore overlay */}
       {restoring && (
         <div className="absolute inset-0 flex items-center justify-center text-[var(--text-muted)] text-sm font-mono z-10 pointer-events-none">
