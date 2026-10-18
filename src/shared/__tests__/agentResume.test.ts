@@ -471,10 +471,28 @@ describe('toResumeCommand (X6)', () => {
       expect(resumeOfferForRecovered({ lastDetectedAgent: 'aider', resumeBinding })).toBe('claude');
       expect(resumeOfferForRecovered({ resumeBinding })).toBe('claude');
     });
-    it('a resumable detection is newer evidence and still wins over the binding', () => {
+    it('a usable binding beats a conflicting name that has no proof of a later launch', () => {
+      // A Claude-only pane whose name was persisted as "codex" from a quoted
+      // banner row (or before the evidence stamp existed): the pill must offer
+      // the Claude conversation, not Codex's picker.
+      const resumeBinding = { agent: 'claude', sessionId: 'abc', cwd: '/w', ts: 2_000 };
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding })).toBe('claude');
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', lastDetectedAgentEvidence: { source: 'screen', at: 3_000 }, resumeBinding })).toBe('claude');
+      // Proven, but before the binding was captured: Claude ran after it.
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', lastDetectedAgentEvidence: { source: 'process', at: 1_000 }, resumeBinding })).toBe('claude');
+      // A malformed stamp proves nothing.
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', lastDetectedAgentEvidence: { source: 'hook' }, resumeBinding })).toBe('claude');
+    });
+    it('a name a hook or a live process proved after the binding wins', () => {
       // Claude ran (binding), then Codex with no Codex binding captured: the
       // pill must offer Codex's picker, not the older Claude conversation.
-      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', resumeBinding: { agent: 'claude', sessionId: 'abc', cwd: '/w' } })).toBe('codex');
+      const resumeBinding = { agent: 'claude', sessionId: 'abc', cwd: '/w', ts: 2_000 };
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', lastDetectedAgentEvidence: { source: 'process', at: 3_000 }, resumeBinding })).toBe('codex');
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex', lastDetectedAgentEvidence: { source: 'hook', at: 3_000 }, resumeBinding })).toBe('codex');
+    });
+    it('a name that agrees with the binding is offered as is', () => {
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'claude', resumeBinding: { agent: 'claude', sessionId: 'abc', cwd: '/w', ts: 1 } })).toBe('claude');
+      expect(resumeOfferForRecovered({ lastDetectedAgent: 'codex' })).toBe('codex');
     });
     it('an unusable or unresumable binding offers nothing', () => {
       expect(resumeOfferForRecovered({ lastDetectedAgent: 'gemini', resumeBinding: { agent: 'claude', sessionId: '', cwd: '/w' } })).toBeUndefined();

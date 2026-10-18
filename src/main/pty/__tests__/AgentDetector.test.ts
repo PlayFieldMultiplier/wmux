@@ -519,11 +519,24 @@ describe('AgentDetector', () => {
         '~/code/gemini-cli 45% | Opus\n',
         '\u2502 gemini-2.5-pro \u2502 63% \u2502 fast \u2502\n',
         'added @google/gemini-cli 100% done\n',
+        // Comparison tables: the column rules must not be read as footer gaps.
+        '\u2502 gemini-2.5-pro \u2502 63% \u2502\n',
+        '\u2502 Gemini \u2502 gemini-2.5-pro \u2502 63% \u2502\n',
+        '| gemini-2.5-pro | 63% |\n',
+        '| gemini-2.5-pro | 63%\n',
+        // An aligned two-column table has no column before the model.
+        'gemini-2.5-pro      63%\n',
       ]) {
         const det = new AgentDetector();
         det.feed(row);
         expect(det.getLastAgent(), row).toBeNull();
       }
+    });
+
+    it('opens the gate on a footer row whose column gaps are cursor moves', () => {
+      const det = new AgentDetector();
+      det.feed('~/repo\u001b[3Cno sandbox\u001b[3Cgemini-2.5-pro\u001b[3C12% used\n');
+      expect(det.getLastAgent()).toBe('Gemini CLI');
     });
 
     it('opens the gate on a composer row drawn with cursor moves (no literal spaces)', () => {

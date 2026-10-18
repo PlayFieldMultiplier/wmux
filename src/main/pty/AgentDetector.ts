@@ -787,14 +787,34 @@ function isGeminiChrome(line: string): boolean {
   // `\s*` between the words: a cursor-drawn row loses its spaces after the
   // strip (the same reason CLAUDE_PROMPT_RE and the Kiro check allow it).
   return /^[>!*]?\s*Type\s*your\s*message\s*or\s*(?:@path\/to\/file|(?:hold\s*)?space\s*to\s*talk)/.test(v)
-    // The footer's model column is a real model name (`gemini-2.5-pro`,
-    // `gemini-3-flash-preview`) and the context display ENDS the row:
-    // `… gemini-2.5-pro 12% used`, `… gemini-2.5-pro 12%`, or the older
-    // `… gemini-2.5-pro (88% context left)`. Anchored at the end so a Claude
-    // reply (`ran with gemini-2.5-pro 95% of the time`), a statusline
-    // (`~/gemini-cli 45% | Opus`) or a table cell cannot pass.
-    || /(?:^|\s)gemini-\d[\w.-]*\s+(?:\d+%(?:\s+used)?|\(\d+%\s*context\s*left\))$/i.test(v)
+    || isGeminiFooterRow(line)
     || /^Gemini CLI update available/.test(v);
+}
+
+/**
+ * The Gemini footer row, read as the whole row rather than through
+ * `visibleChrome()`, which turns a table's column rules into spaces: a
+ * Claude reply's `│ gemini-2.5-pro │ 63% │` then reads exactly like the
+ * footer. Upstream (Footer.tsx, read 2026-10-18) draws one unframed row of
+ * columns separated by padding or ` · ` — workspace, branch, sandbox, then
+ * the model column with the context display beside it — and never a
+ * vertical rule. So the row must:
+ *   - hold no vertical rule anywhere (`│ ┃ ║ |`): a table row is not a footer;
+ *   - have a column before the model, set off by a column gap (two or more
+ *     spaces, or ` · `), not a word of prose (`ran with gemini-2.5-pro 95%`);
+ *   - end with the context display right after the model:
+ *     `gemini-2.5-pro   12% used`, `gemini-2.5-pro · 12%`, or the older
+ *     `gemini-2.5-pro (88% context left)`.
+ * A cursor-forward move counts as the spaces it skips, so a row drawn with
+ * cursor moves keeps its gaps.
+ */
+function isGeminiFooterRow(line: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  const row = stripAnsi(line.replace(/\u001b\[(\d*)C/g, (_m, n: string) => ' '.repeat(Math.min(Number(n || '1'), 8))))
+    .replace(/[\r\n]/g, '')
+    .trimEnd();
+  if (/[│┃║|]/.test(row)) return false;
+  return /\S(?: {2,}| · )gemini-\d[\w.-]*(?: +·)? +(?:\d+%(?: +used)?|\(\d+% *context *left\))$/i.test(row);
 }
 
 /**

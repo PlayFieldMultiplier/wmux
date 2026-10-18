@@ -6815,10 +6815,7 @@ function wireEvents(
     // A banner names Codex before (or without) the process probe: try the cwd bind.
     if (slug === 'codex') codexCwdBinder?.arm(payload.sessionId);
     if (slug) {
-      // The agent is live again → this pane is no longer a "resume me" shell.
-      recoveredAgentShellIds.delete(payload.sessionId);
       sessionManager.confirmAgent(payload.sessionId);
-      recoveredResumeBindings.delete(payload.sessionId);
       // Resume-chip edge trigger: a live banner PROVES the agent is running
       // right now — attach the process watch so the chip can hide on process
       // truth and reappear exactly on the agent's exit edge. Covers codex,
@@ -6861,6 +6858,18 @@ function wireEvents(
       // transition (effectively once per idle agent pane), so the cost is
       // negligible vs. the durability it buys.
       stateWriter.saveImmediate(buildState(sessionManager));
+    }
+    // The agent is live again → this pane is no longer a "resume me" shell.
+    // Only a hook or a live process proves that. A screen-tier read is a row
+    // that looks like an agent's chrome: output quoting a banner on a
+    // recovered shell would otherwise consume the recovery offer and its
+    // exact binding, and the pill would be gone after the next reconnect.
+    // A real relaunch reaches process truth on the tracker's launch edge,
+    // where liveRecoveryHint drops the pair on its next read; until then the
+    // renderer hides the pill on its own live-agent and running-command state.
+    if (slug && canonical && canonical.source !== 'screen') {
+      recoveredAgentShellIds.delete(payload.sessionId);
+      recoveredResumeBindings.delete(payload.sessionId);
     }
     // M1: the daemon owns hook-vs-detector arbitration now — the hook lands
     // here, not in main, so main can no longer run it and reads the outcome

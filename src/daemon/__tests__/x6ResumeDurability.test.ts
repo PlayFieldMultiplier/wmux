@@ -112,6 +112,22 @@ describe('X6 ② reboot-survival durability', () => {
     expect(body).not.toMatch(/setImmediate\([^)]*saveImmediate/);
   });
 
+  it('session:agent consumes the recovery offer only on hook or process evidence', () => {
+    // A screen-tier read is a row that looks like an agent's chrome. Output
+    // quoting a banner on a recovered shell used to delete the recovery offer
+    // and its exact binding, so the pill was gone after the next reconnect.
+    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const body = extractEventHandlerBody(src, 'session:agent');
+    const guard = body.indexOf("if (slug && canonical && canonical.source !== 'screen') {");
+    expect(guard).toBeGreaterThan(body.indexOf('const canonical = canonicalIdentityFor('));
+    const deletes = [...body.matchAll(/recovered(?:AgentShellIds|ResumeBindings)\.delete\(payload\.sessionId\)/g)];
+    expect(deletes).toHaveLength(2);
+    for (const d of deletes) {
+      expect(d.index).toBeGreaterThan(guard);
+      expect(d.index).toBeLessThan(guard + 300);
+    }
+  });
+
   it('session:cwd handler persists via saveAsap (immediate persist, async write)', () => {
     // 30-session scaling: the cwd persist moved from saveImmediate (sync
     // write on the event loop — stalls daemon.ping under fleet-wide `cd`

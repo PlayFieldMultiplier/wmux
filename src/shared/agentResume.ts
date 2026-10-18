@@ -614,7 +614,8 @@ export function withLaunchSessionId(command: string, sessionId: string): string 
  * bring it back). Excluded:
  *   - exec/supervised units — they already auto-resume via execLaunchCommand
  *     (Feature ①); a pill would be a redundant second resume.
- *   - panes that never ran a detectable agent (no lastDetectedAgent).
+ *   - panes that never ran a detectable agent (no lastDetectedAgent and no
+ *     saved conversation).
  *   - agents wmux cannot actually resume (absent from RESUME_BY_LAUNCHER, e.g.
  *     gemini/aider) — offering one would surface a pill that types a broken
  *     command (the generalized form of the codex `--continue` bug).
@@ -627,19 +628,30 @@ export function resumeOfferForRecovered(session: {
   exec?: { command: string };
   supervision?: unknown;
   lastDetectedAgent?: string;
+  lastDetectedAgentEvidence?: { source?: string; at?: number };
   resumeBinding?: unknown;
 }): string | undefined {
   if (session.exec || session.supervision) return undefined;
-  const detected = session.lastDetectedAgent;
-  if (detected && RESUME_BY_LAUNCHER.has(detected)) return detected;
-  // No resumable detection — nothing was detected, or the screen detector's
-  // last guess is an agent wmux cannot resume. The latter is how a row that
-  // merely named Gemini (a Claude reply comparing models, `cd ~/gemini`) on a
-  // pane whose Claude gate was unconfirmed cost the pane its pill: the guess
-  // was persisted as lastDetectedAgent and this returned undefined. The saved
-  // conversation is the agent's own hook's word, so it stands in. A resumable
-  // detection still wins above: it is newer evidence, and a later Codex run
-  // on a Claude pane must not be offered the older Claude conversation.
-  const bound = isUsableResumeBinding(session.resumeBinding) ? session.resumeBinding.agent : undefined;
-  return bound && RESUME_BY_LAUNCHER.has(bound) ? bound : undefined;
+  const detected = session.lastDetectedAgent && RESUME_BY_LAUNCHER.has(session.lastDetectedAgent)
+    ? session.lastDetectedAgent
+    : undefined;
+  const binding = isUsableResumeBinding(session.resumeBinding) ? session.resumeBinding : undefined;
+  const bound = binding && RESUME_BY_LAUNCHER.has(binding.agent) ? binding.agent : undefined;
+  if (!bound || !detected || bound === detected) return detected ?? bound;
+  // The name and the saved conversation disagree. The binding is the agent's
+  // own word (its hook, its command line), the name may be the screen
+  // detector's guess: a Claude reply quoting Codex's banner persisted as
+  // "codex", after which the pill typed Codex's picker on a Claude-only pane
+  // and the Claude conversation was never offered. The name wins only when
+  // it is proven newer: a hook or a live process decided it after the
+  // binding was captured (a Codex run after Claude, with no Codex binding).
+  // A name with no evidence — a screen guess, or one persisted before the
+  // evidence was recorded — loses, which also repairs names already wrong.
+  return provenAfter(session.lastDetectedAgentEvidence, binding?.ts) ? detected : bound;
+}
+
+function provenAfter(evidence: { source?: string; at?: number } | undefined, bindingTs: unknown): boolean {
+  if (evidence?.source !== 'hook' && evidence?.source !== 'process') return false;
+  if (typeof evidence.at !== 'number' || !Number.isFinite(evidence.at)) return false;
+  return typeof bindingTs !== 'number' || evidence.at > bindingTs;
 }
