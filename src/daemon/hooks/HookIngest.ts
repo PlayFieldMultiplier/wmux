@@ -734,6 +734,16 @@ function eventShapeFor(
   }
 }
 
+/**
+ * What a lead turn end says: its kind, Claude's error code and its last
+ * message (trimmed and bounded as the transcript stand-in bounds it, see
+ * daemon/transcript/apiErrorTurnEnd). Two ends of one turn say the same.
+ */
+function turnEndSignature(signal: AgentSignal): string {
+  const error = typeof signal.payload?.['error'] === 'string' ? signal.payload['error'] : '';
+  const message = typeof signal.payload?.['last_assistant_message'] === 'string' ? signal.payload['last_assistant_message'] : '';
+  return `${signal.kind}|${error}|${message.trim().slice(0, 2000)}`;
+}
 /** OpenCode's request id on a bridge 0.3.0 signal (`payload.permId`), when well-formed. */
 function openCodeRequestId(signal: AgentSignal): string | undefined {
   const raw = signal.payload?.['permId'];
@@ -766,10 +776,13 @@ export class HookIngest {
    * StopFailure after the transcript's stand-in for it
    * (daemon/transcript/apiErrorTurnEnd), the stand-in after the real hook, or
    * any repeat. Keyed on the episode id, never on time: no hook timestamp is
-   * read, so a hook clock off the daemon's cannot misplace an end. An end that
-   * arrives after a newer episode opened is not caught; it never was.
+   * read, so a hook clock off the daemon's cannot misplace an end. The end
+   * must also say the same thing (`turnEndSignature`): a turn that opened no
+   * episode (an autonomous turn with no hook before its end) ends with its
+   * own reply and is not taken for a repeat. An end that arrives after a
+   * newer episode opened is not caught; it never was.
    */
-  private readonly endedTurn = new Map<string, string>();
+  private readonly endedTurn = new Map<string, { turn: string; signature: string }>();
   /**
    * When each session's latest UserPromptSubmit landed. An interrupted-turn
    * Stop from the Claude Code mod (integrations/claude-mod) is sent a second
@@ -1743,7 +1756,7 @@ export class HookIngest {
     if ((data.hookKind === 'agent.stop' || data.hookKind === 'agent.stop_failure') && data.status !== 'running'
       && !['internal', 'veto', 'pending'].includes(data.decision ?? '')) {
       const ended = this.deps.latestEndedTurn?.(sessionId) ?? null;
-      if (ended !== null) this.endedTurn.set(sessionId, ended);
+      if (ended !== null) this.endedTurn.set(sessionId, { turn: ended, signature: turnEndSignature(data.signal) });
     }
     return { ok: true };
   }
@@ -2176,7 +2189,8 @@ export class HookIngest {
     const cue = normalizeHookCue(signal);
     if (signal.kind === 'agent.stop' && (cue.child || cue.leftoverWork !== 0)) return false;
     const ended = this.deps.latestEndedTurn?.(sessionId) ?? null;
-    if (ended === null || this.endedTurn.get(sessionId) !== ended) return false;
+    const last = this.endedTurn.get(sessionId);
+    if (ended === null || last?.turn !== ended || last.signature !== turnEndSignature(signal)) return false;
     this.deps.log?.('info', `[hooks] ${signal.kind} for ${sessionId} dropped: turn ${ended} already ended`);
     return true;
   }

@@ -110,6 +110,18 @@ describe('HookIngest — one turn, one end', () => {
     expect(ends()).toHaveLength(2);
   });
 
+  it('a turn that opened no episode still ends: its end says something else', () => {
+    ingest.handle(signal('agent.user_prompt_submit'));
+    vi.advanceTimersByTime(500);
+    ingest.handle(signal('agent.stop', Date.now(), { last_assistant_message: 'done A' }));
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    // An autonomous turn with no hook before its own end.
+    vi.advanceTimersByTime(2_000);
+    ingest.handle(signal('agent.stop_failure', Date.now(), { error: 'rate_limit', last_assistant_message: 'limit' }));
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(ends()).toHaveLength(2);
+  });
+
   it('lets the next turn end through: the key is the turn, not a time window', () => {
     ingest.handle(signal('agent.user_prompt_submit'));
     vi.advanceTimersByTime(500);
