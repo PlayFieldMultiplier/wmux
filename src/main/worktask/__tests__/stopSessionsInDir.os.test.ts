@@ -163,6 +163,25 @@ describe('stopSessionsInDir', () => {
     await expect(assertNothingRunsIn('/w/t', empty.p)).resolves.toBeUndefined();
   });
 
+  it('a stop of a folder another stop is still working on waits for it, and sees what it left', async () => {
+    const survivor = { pid: 70, reason: 'access denied', startTime: '1' };
+    let answer: (tree: DaemonDestroySessionTree) => void = () => undefined;
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux');
+    first.p.destroySession = () => new Promise((resolve) => { answer = resolve; });
+    const firstStop = stopSessionsInDir('/w/t', first.p).catch((e: unknown) => e);
+
+    // The session is gone from the daemon's list while the first kill runs.
+    const second = port([], 'linux');
+    second.p.stillRunning = async (list) => [...list];
+    let settled = false;
+    const secondStop = stopSessionsInDir('/w/t', second.p).then(() => { settled = true; }, (e: unknown) => { settled = true; throw e; });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+    answer({ ok: false, killed: [7], survivors: [survivor] });
+    expect(await firstStop).toBeInstanceOf(PanesStillRunningError);
+    await expect(secondStop).rejects.toBeInstanceOf(PanesStillRunningError);
+  });
+
   it("takes the daemon's word for a tree it checked: no wait on the shell's pid", async () => {
     const isAlive = vi.fn(() => true);
     const { p } = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: true, killed: [7, 70] } } });

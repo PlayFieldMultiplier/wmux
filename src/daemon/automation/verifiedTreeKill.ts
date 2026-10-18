@@ -607,7 +607,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
             return row && row.start === start && !row.stat.startsWith('Z') ? [{ pid, reason: 'still running', startTime: start }] : [];
           });
         } catch (err) {
-          alive = [...targets.keys()].map((pid) => ({ pid, reason: `the process table could not be read: ${err instanceof Error ? err.message : String(err)}` }));
+          alive = [...targets].map(([pid, start]) => ({ pid, reason: `the process table could not be read: ${err instanceof Error ? err.message : String(err)}`, startTime: start }));
         }
         if (alive.length === 0 || Date.now() >= deadline) break;
         await sleep(POLL_MS);

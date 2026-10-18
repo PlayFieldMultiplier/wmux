@@ -46,6 +46,22 @@ export interface SessionsInDirPort {
  */
 const lingering = new Map<string, TreeKillSurvivor[]>();
 
+/**
+ * Stops under way, by folder. A stop destroys its sessions before it knows
+ * whether their trees exited, so another stop of the same folder (a bot
+ * worker stop and a task close at once) would find no session and go ahead:
+ * it waits for these first, and then sees what they left in `lingering`.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
+
+/** The stops under way in `key`, in a folder inside it, or in one holding
+ *  it, as one promise that settles when they all have. Taken synchronously,
+ *  so a stop that registers right after is never missed. */
+function stopsAround(key: string): Promise<void> {
+  const overlapping = [...inFlight].filter(([k]) => k === key || k.startsWith(key + '/') || key.startsWith(k + '/')).map(([, p]) => p);
+  return Promise.all(overlapping.map((p) => p.catch(() => undefined))).then(() => undefined);
+}
+
 /** The survivors worth checking again later: identified processes only. */
 function identified(survivors: readonly TreeKillSurvivor[]): TreeKillSurvivor[] {
   return survivors.filter((x) => !x.unverified && x.startTime !== undefined);
@@ -140,6 +156,7 @@ export async function assertNothingRunsIn(dir: string, port: Pick<SessionsInDirP
   const started = await sessionsStartedIn([dir], port);
   if (started.length > 0) throw new Error(`${started.length} pane(s) were started in the folder`);
   const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
+  await stopsAround(key);
   const earlier = lingering.get(key);
   if (!earlier) return;
   const still = identified(await (port.stillRunning ?? survivorsStillRunning)(earlier));
@@ -159,6 +176,17 @@ export async function assertNothingRunsIn(dir: string, port: Pick<SessionsInDirP
 export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): Promise<string[]> {
   const platform = port.platform ?? process.platform;
   const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
+  const before = stopsAround(key);
+  const run = before.then(() => stopNow(dir, key, platform, port));
+  inFlight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (inFlight.get(key) === run) inFlight.delete(key);
+  }
+}
+
+async function stopNow(dir: string, key: string, platform: NodeJS.Platform, port: SessionsInDirPort): Promise<string[]> {
   const sessions = await port.listSessions();
   const earlier = lingering.get(key);
   if (earlier) {

@@ -349,10 +349,11 @@ describe('captureTreePosix', () => {
     if (!r.ok) expect(r.survivors.map((x) => x.reason).join()).toMatch(/still growing/);
   });
 
-  it('fails closed when the table cannot be read to verify', async () => {
+  it('fails closed when the table cannot be read to verify, naming each process by its start time', async () => {
     const f = fakePosix([row(1, 0), row(100, 1)], { failAfter: 2 });
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
     expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors).toContainEqual(expect.objectContaining({ pid: 100, startTime: 't100' }));
   });
 
   it('has no tree when the root is gone, a zombie, or not the caller\'s process', async () => {
