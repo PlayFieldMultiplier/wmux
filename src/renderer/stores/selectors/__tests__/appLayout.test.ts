@@ -5,7 +5,9 @@
 // only on the structural events AppLayout actually cares about.
 
 import { describe, it, expect } from 'vitest';
-import { selectActiveEmptyLeafIdsKey, selectProjectCwdSignature } from '../appLayout';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { selectActiveEmptyLeafIdsKey, selectActiveRefusedEmptyLeafIdsKey, selectProjectCwdSignature } from '../appLayout';
 import type { StoreState } from '../../index';
 import type { Pane, PaneLeaf, Surface, Workspace } from '../../../../shared/types';
 
@@ -74,5 +76,29 @@ describe('selectProjectCwdSignature', () => {
     const after = ws('a', leaf('l', [surface('x')]), { metadata: { cwd: 'C:/proj' } });
     expect(selectProjectCwdSignature(state([after], 'a')))
       .not.toBe(selectProjectCwdSignature(state([before], 'a')));
+  });
+});
+
+describe('selectActiveRefusedEmptyLeafIdsKey (#2398 review P3)', () => {
+  const refusedState = (workspaces: Workspace[], active: string, refused: string[]): StoreState => ({
+    workspaces,
+    activeWorkspaceId: active,
+    ptyCreateByKey: Object.fromEntries(refused.map((k) => [k, { state: 'createFailed', error: 'cap' }])),
+  }) as unknown as StoreState;
+  const a = ws('a', split('s', [leaf('a-empty', []), leaf('a-full', [surface('a-surf')])]));
+  const b = ws('b', leaf('b-empty', []));
+
+  it('lists the active workspace’s refused empty leaves', () => {
+    expect(selectActiveRefusedEmptyLeafIdsKey(refusedState([a, b], 'a', ['a-empty']))).toBe('a-empty');
+  });
+
+  it('a refusal in another workspace, or of a surface’s own create, does not change it', () => {
+    const before = selectActiveRefusedEmptyLeafIdsKey(refusedState([a, b], 'a', []));
+    expect(selectActiveRefusedEmptyLeafIdsKey(refusedState([a, b], 'a', ['b-empty', 'a-surf']))).toBe(before);
+  });
+
+  it('is what the empty-leaf funnel re-runs on', () => {
+    const funnel = readFileSync(path.resolve(process.cwd(), 'src/renderer/components/Layout/EmptyLeafFunnel.tsx'), 'utf8');
+    expect(funnel).toMatch(/const refusedKey = useStore\(selectActiveRefusedEmptyLeafIdsKey\);/);
   });
 });

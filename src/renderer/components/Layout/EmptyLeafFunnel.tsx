@@ -18,7 +18,7 @@ import { useEffect } from 'react';
 import { useStore } from '../../stores';
 import { useIpc } from '../../hooks/useIpc';
 import { maybeDelegateExternalBrowser } from '../../utils/browserPaneActions';
-import { selectActiveEmptyLeafIdsKey } from '../../stores/selectors/appLayout';
+import { selectActiveEmptyLeafIdsKey, selectActiveRefusedEmptyLeafIdsKey } from '../../stores/selectors/appLayout';
 import {
   resolveStartupCwd,
   shellDisplayName,
@@ -36,10 +36,6 @@ import { isLeafReserved, useReservedLeavesVersion } from '../../utils/reservedLe
 import { ptyLifecycle, useReleaseOrphanedRefusals } from '../../hooks/ptyLifecycle';
 
 type LeafPane = PaneLeaf;
-
-/** The keys whose create was refused, as one comparable string. */
-const selectRefusedCreateKeys = (s: { ptyCreateByKey?: Record<string, { state: string }> }): string =>
-  Object.keys(s.ptyCreateByKey ?? {}).filter((k) => s.ptyCreateByKey?.[k].state === 'createFailed').sort().join('|');
 
 const collectEmptyLeaves = (pane: Pane): LeafPane[] => {
   if (pane.type === 'leaf') {
@@ -62,9 +58,10 @@ export function EmptyLeafFunnel() {
   const addSurface = useStore((s) => s.addSurface);
   // A released reservation re-runs the effect (reservedLeaves.ts).
   const reservedVersion = useReservedLeavesVersion();
-  // #2398 — the leaves whose create was refused. A refusal never re-fires by
-  // itself; the pane's Retry clears it, and that change re-runs the effect.
-  const refusedKey = useStore(selectRefusedCreateKeys);
+  // #2398 — this workspace's empty leaves whose create was refused. A refusal
+  // never re-fires by itself; the pane's Retry clears it, and that change
+  // re-runs the effect.
+  const refusedKey = useStore(selectActiveRefusedEmptyLeafIdsKey);
   // A leaf's refusal is keyed by its id; nothing else forgets it when the
   // leaf closes.
   useReleaseOrphanedRefusals();
