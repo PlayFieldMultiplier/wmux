@@ -52,8 +52,10 @@ interface FakeGitOpts {
   /** Status lines of the worktree before / after the panes stopped. */
   statusBefore?: string;
   statusAfter?: string;
-  /** Status lines of the leftover against the recorded commit. */
-  leftoverStatus?: string;
+  /** The leftover against the recorded commit: `diff-files --name-status`
+   *  and the untracked files. */
+  leftoverDiff?: string;
+  leftoverUntracked?: string;
   /** `worktree remove` fails and drops the record. */
   removeFails?: boolean;
 }
@@ -65,7 +67,8 @@ function fakeGit(o: FakeGitOpts = {}) {
     calls.push(args);
     const out = (stdout: string) => ({ stdout, stderr: '' });
     if (args.includes('read-tree')) return out('');
-    if (args.some((a) => a.startsWith('--work-tree=')) && args.includes('status')) return out(o.leftoverStatus ?? ' D src/b.ts\n');
+    if (args.some((a) => a.startsWith('--work-tree=')) && args.includes('diff-files')) return out(o.leftoverDiff ?? 'D\tsrc/b.ts\n');
+    if (args.some((a) => a.startsWith('--work-tree=')) && args.includes('ls-files')) return out(o.leftoverUntracked ?? '');
     if (args[0] === 'rev-parse' && args.includes('HEAD')) return out(`${HEAD}\n`);
     if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return out(`${path.join(repo, '.git')}\n`);
     if (args[0] === 'status') return out((stopped ? o.statusAfter : o.statusBefore) ?? '');
@@ -224,7 +227,15 @@ describe('second layer: a folder git left after dropping the worktree', () => {
 
   it('never when the leftover holds anything git did not leave (kept as dirty)', async () => {
     const dir = leftover();
-    const g = fakeGit({ removeFails: true, leftoverStatus: ' D src/b.ts\n M src/a.ts\n?? new.txt\n' });
+    const g = fakeGit({ removeFails: true, leftoverDiff: 'D\tsrc/b.ts\nM\tsrc/a.ts\n' });
+    const { mgr, removeTree } = manager(g.git);
+    expect(await mgr.removeWorktree(repo, 'hash1', dir, async () => undefined)).toMatchObject({ ok: false, preserved: true, dirty: true });
+    expect(removeTree).not.toHaveBeenCalled();
+  });
+
+  it('never when the leftover holds a file git does not track', async () => {
+    const dir = leftover();
+    const g = fakeGit({ removeFails: true, leftoverUntracked: 'notes.md\n' });
     const { mgr, removeTree } = manager(g.git);
     expect(await mgr.removeWorktree(repo, 'hash1', dir, async () => undefined)).toMatchObject({ ok: false, preserved: true, dirty: true });
     expect(removeTree).not.toHaveBeenCalled();
@@ -287,6 +298,63 @@ describe('a removal that could not finish is recorded for a later close', () => 
     const { mgr } = manager(fakeGit().git, { pendingRemovals: store });
     expect(await mgr.removeWorktree(repo, 'hash1', dir, async () => undefined)).toEqual({ ok: true });
     expect(store.all()).toEqual([]);
+  });
+});
+
+// Real git, any platform: a leftover of a task whose branch moved past the
+// repository's own HEAD is compared with the task's commit, not with that HEAD.
+describe("real git: the leftover is compared with the task's own commit", () => {
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'init.defaultBranch=main', ...args], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+
+  /** A task worktree with a commit of its own, then dropped by git with
+   *  part of it left in the folder (what a failed `git worktree remove` leaves). */
+  function droppedWorktree(slug: string): { dir: string; head: string } {
+    if (!fs.existsSync(path.join(repo, '.git'))) {
+      fs.writeFileSync(path.join(repo, 'a.txt'), 'a');
+      run(repo, 'init');
+      run(repo, 'add', '.');
+      run(repo, 'commit', '-m', 'one');
+    }
+    const dir = path.join(root, 'hash1', slug);
+    run(repo, 'worktree', 'add', dir, '-b', `wtask/${slug}`);
+    fs.mkdirSync(path.join(dir, 'kept'));
+    fs.writeFileSync(path.join(dir, 'kept', 'task.ts'), 'task work');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'changed by the task');
+    run(dir, 'add', '.');
+    run(dir, 'commit', '-m', 'task');
+    const head = run(dir, 'rev-parse', 'HEAD');
+    // git drops the record (its admin folder) and deletes part of the folder.
+    fs.rmSync(path.join(repo, '.git', 'worktrees', slug), { recursive: true, force: true });
+    fs.rmSync(path.join(dir, '.git'));
+    fs.rmSync(path.join(dir, 'a.txt'));
+    return { dir, head };
+  }
+
+  async function finish(dir: string, head: string): Promise<unknown> {
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', `${path.basename(dir)}.json`));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head, at: 1 });
+    return new TaskWorktreeManager({ worktreesRoot: root, pendingRemovals: store }).finishPendingRemoval(dir);
+  }
+
+  it('a clean leftover is removed, the branch kept', { timeout: 60_000 }, async () => {
+    const { dir, head } = droppedWorktree('task-d');
+    expect(await finish(dir, head)).toEqual({ ok: true });
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(run(repo, 'rev-parse', 'refs/heads/wtask/task-d')).toBe(head);
+  });
+
+  it('a leftover with a changed or a new file is kept as dirty', { timeout: 60_000 }, async () => {
+    for (const [slug, change] of [['task-e', 'kept/task.ts'], ['task-f', 'kept/new.ts']] as const) {
+      const { dir, head } = droppedWorktree(slug);
+      fs.writeFileSync(path.join(dir, change), 'written after git dropped it');
+      expect(await finish(dir, head)).toMatchObject({ ok: false, dirty: true });
+      expect(fs.readFileSync(path.join(dir, change), 'utf8')).toBe('written after git dropped it');
+    }
   });
 });
 

@@ -20,7 +20,8 @@ interface FakeProc {
 }
 
 /** A Windows process table behind the ProcessHandleApi surface. */
-function fakeWin(procs: FakeProc[], opts: { now?: bigint; tableFails?: boolean } = {}) {
+function fakeWin(procs: FakeProc[], opts: { now?: bigint | (() => bigint); tableFails?: boolean; tables?: Array<Array<{ pid: number; ppid: number }>> } = {}) {
+  let tableReads = 0;
   const table = new Map(procs.map((p) => [p.pid, p]));
   const handles = new Map<ProcessHandle, FakeProc>();
   const opened: number[] = [];
@@ -29,6 +30,8 @@ function fakeWin(procs: FakeProc[], opts: { now?: bigint; tableFails?: boolean }
   const api: ProcessHandleApi = {
     processTable: () => {
       if (opts.tableFails) throw new Error('snapshot failed');
+      const scripted = opts.tables?.[tableReads++];
+      if (scripted) return scripted;
       return [...table.values()].filter((p) => !p.exited).map(({ pid, ppid }) => ({ pid, ppid }));
     },
     open: (pid): ProcessOpenResult => {
@@ -51,7 +54,7 @@ function fakeWin(procs: FakeProc[], opts: { now?: bigint; tableFails?: boolean }
     },
     hasExited: (h) => handles.get(h)!.exited === true,
     close: () => { open--; },
-    now: () => opts.now ?? 1_000n,
+    now: () => (typeof opts.now === 'function' ? opts.now() : opts.now ?? 1_000n),
   };
   return { api, opened, terminated, openHandles: () => open };
 }
@@ -96,6 +99,22 @@ describe('captureTreeWin32', () => {
     expect(r.killed).toEqual([10]);
   });
 
+  it('never takes a process that took a listed child\'s pid while the table was read', async () => {
+    // The table lists 11 under 10 (its first owner, gone since); the process
+    // now on 11 was created after the table was asked for, under another parent.
+    let clock = 1_000n;
+    const f = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 99, createdAt: 1_500n },
+    ], {
+      now: () => (clock += 1_000n) - 1_000n,
+      tables: [[{ pid: 10, ppid: 1 }, { pid: 11, ppid: 10 }]],
+    });
+    const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 100 });
+    expect(f.terminated).not.toContain(11);
+    expect(r).toEqual({ ok: true, killed: [10] });
+  });
+
   it('finds and kills a child a captured process started during the kill', async () => {
     const late: FakeProc = { pid: 13, ppid: 11, createdAt: 130n };
     const f = fakeWin([
@@ -105,6 +124,16 @@ describe('captureTreeWin32', () => {
     const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 100 });
     expect(r).toEqual({ ok: true, killed: [10, 11, 13] });
     expect(f.terminated).toContain(13);
+  });
+
+  it('fails closed when the tree is still starting processes at the deadline', async () => {
+    const f = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 10, createdAt: 110n, spawnsOnTerminate: { pid: 13, ppid: 11, createdAt: 130n } },
+    ]);
+    const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors[0].reason).toMatch(/kept starting processes/);
   });
 
   it('fails closed when a descendant does not exit', async () => {
@@ -205,6 +234,26 @@ describe('captureTreePosix', () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)], { stuck: [101] });
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
     expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running' }] });
+  });
+
+  it('fails closed when the tree is still growing after every capture round', async () => {
+    let next = 101;
+    const rows = [row(1, 0), row(100, 1)];
+    const deps: PosixTreeDeps = {
+      // Every read shows one more descendant: the capture never settles.
+      listProcesses: async () => {
+        rows.push(row(next, next - 1));
+        next++;
+        return rows.map((r) => ({ ...r }));
+      },
+      signal: (pid, sig) => {
+        const r = rows.find((x) => x.pid === pid);
+        if (sig === 'SIGKILL' && r) r.stat = 'Z';
+      },
+    };
+    const r = await (await captureTreePosix(100, deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors.map((x) => x.reason).join()).toMatch(/still growing/);
   });
 
   it('fails closed when the table cannot be read to verify', async () => {

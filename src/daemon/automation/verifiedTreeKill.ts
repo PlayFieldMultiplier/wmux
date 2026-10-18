@@ -19,7 +19,8 @@
 // never re-parents an orphan, so a process whose ppid names one of ours
 // is ours only if it was created no earlier than that process (the rule
 // collectTreeCpuTimes in winSnapshotNative.ts applies) and no later than the
-// table it was read from.
+// moment the table was asked for: a process on a pid the table had for one
+// that exited since was created after that.
 //
 // POSIX: the tree is frozen (SIGSTOP, rescanning until no new descendant
 // appears, as killProcessTreePosix does), so nothing in it can fork or exit
@@ -154,9 +155,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
   /** One rescan: adds every new process of the tree. Returns how many were
    *  added; throws when the table cannot be read. */
   const scan = (): number => {
+    // Taken before the table: every process the table lists was created by
+    // then, unless it is a later process on a pid the table had for another.
+    const askedAt = api.now();
     const table = api.processTable();
-    // Every process in the table was created by the time it was read.
-    const readAt = api.now();
     const children = new Map<number, number[]>();
     for (const { pid, ppid } of table) {
       if (pid === ppid) continue;
@@ -179,8 +181,9 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
         }
         // Older than its "parent": an orphan whose dead parent's pid went to
         // one of ours. Newer than the table: a later process on a pid the
-        // table had for an exited one.
-        if (opened.createdAt < parent.createdAt || opened.createdAt > readAt) {
+        // table had for an exited one (a real child that new is taken by the
+        // next scan, whose table lists it).
+        if (opened.createdAt < parent.createdAt || opened.createdAt > askedAt) {
           api.close(opened.handle);
           continue;
         }
@@ -232,6 +235,7 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
           }
         };
         terminateAll();
+        let settled = false;
         for (;;) {
           // Settled when every captured process has exited and a table read
           // after that shows no child of theirs: an exited process starts
@@ -239,17 +243,29 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
           const allExited = [...tracked.values()].every(exited);
           const added = tryScan();
           if (added > 0) terminateAll();
+          if (added === 0 && allExited) {
+            settled = true;
+            break;
+          }
           if (Date.now() >= deadline) break;
-          if (added > 0) continue;
-          if (allExited) break;
-          await sleep(POLL_MS);
+          if (added === 0) await sleep(POLL_MS);
         }
         const survivors: TreeKillSurvivor[] = [];
         for (const t of tracked.values()) {
           if (exited(t)) continue;
           survivors.push({ pid: t.pid, reason: refused.get(t.pid) ?? 'still running' });
         }
-        for (const [pid, reason] of unidentified) survivors.push({ pid, reason });
+        // Still there and still not identified (one that exited meanwhile is
+        // no longer a question).
+        for (const [pid, reason] of unidentified) {
+          const now = api.open(pid);
+          if ('gone' in now) continue;
+          if ('handle' in now) api.close(now.handle);
+          survivors.push({ pid, reason });
+        }
+        // The tree was still growing at the deadline: a child started last may
+        // not have been seen.
+        if (!settled && survivors.length === 0) survivors.push({ pid: rootPid, reason: 'the tree kept starting processes until the deadline' });
         const killed = [...tracked.values()].filter(exited).map((t) => t.pid);
         if (scanError !== null) survivors.push({ pid: rootPid, reason: `the process table could not be read: ${scanError}` });
         return survivors.length === 0 ? { ok: true, killed } : { ok: false, killed, survivors };
@@ -322,6 +338,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   /** pid → start time, in discovery order (parents before children). */
   const targets = new Map<number, string>();
   let scanError: string | null = null;
+  let complete = false;
   for (let round = 0; round < CAPTURE_ROUNDS; round++) {
     if (round > 0) {
       try {
@@ -341,8 +358,14 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       send(pid, 'SIGSTOP');
       added++;
     }
-    if (added === 0) break;
+    if (added === 0) {
+      complete = true;
+      break;
+    }
   }
+  // Still finding new processes in the last round: one of them may have
+  // forked before it was frozen, into a process group the kill misses.
+  if (!complete && scanError === null) scanError = `the tree was still growing after ${CAPTURE_ROUNDS} scans`;
   let released = false;
   return {
     rootPid,
@@ -376,7 +399,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
         await sleep(POLL_MS);
       }
       const survivors = [...alive];
-      if (scanError !== null) survivors.push({ pid: rootPid, reason: `the process table could not be read: ${scanError}` });
+      if (scanError !== null) survivors.push({ pid: rootPid, reason: `the tree could not be taken whole: ${scanError}` });
       const killed = [...targets.keys()].filter((pid) => !alive.some((s) => s.pid === pid));
       return survivors.length === 0 ? { ok: true, killed } : { ok: false, killed, survivors };
     },

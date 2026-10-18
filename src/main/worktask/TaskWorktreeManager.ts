@@ -937,8 +937,11 @@ export class TaskWorktreeManager {
   }
 
   /** How many entries of `folder` differ from `head` other than files that
-   *  are missing (git deleted them), through a temporary index; ignored
-   *  files do not count, as in `git status`. An error when git cannot say. */
+   *  are missing (git deleted them), through a temporary index seeded from
+   *  `head`: the files compared with that index (not with the repository's
+   *  own HEAD, which the task's commits are not on), and untracked files
+   *  listed; ignored files do not count, as in `git status`. An error when
+   *  git cannot say. */
   private async leftoverChanges(repoRoot: string, folder: string, head: string): Promise<number | { error: string }> {
     let tmp: string | null = null;
     try {
@@ -947,9 +950,15 @@ export class TaskWorktreeManager {
       tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-leftover-'));
       const env = { GIT_INDEX_FILE: path.join(tmp, 'index') };
       const base = ['-c', 'core.fsmonitor=false', `--git-dir=${commonDir}`, `--work-tree=${folder}`];
-      await this.runGit([...base, 'read-tree', head], repoRoot, { env });
-      const status = await this.runGit([...base, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], repoRoot, { env });
-      return status.stdout.split(/\r?\n/).filter((l) => l.length > 0 && !l.startsWith(' D ')).length;
+      await this.runGit([...base, 'read-tree', head], folder, { env });
+      // read-tree leaves no file stats in the index: refresh hashes each file
+      // once, so an unchanged one compares equal. It exits non-zero when some
+      // file differs, which the comparison below reports.
+      await this.runGit([...base, 'update-index', '-q', '--refresh'], folder, { env }).catch(() => undefined);
+      const changed = await this.runGit([...base, 'diff-files', '--name-status', '--ignore-submodules=none'], folder, { env });
+      const untracked = await this.runGit([...base, 'ls-files', '--others', '--exclude-standard'], folder, { env });
+      const lines = (s: string): string[] => s.split(/\r?\n/).filter((l) => l.length > 0);
+      return lines(changed.stdout).filter((l) => !l.startsWith('D\t')).length + lines(untracked.stdout).length;
     } catch (err) {
       return { error: (err as Error).message };
     } finally {
