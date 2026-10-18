@@ -27,6 +27,9 @@ export interface GitContext {
    * it (HEAD unreadable or unparseable, or no live watch) is unknown, and
    * main may still ask git. Additive: a sender that predates it reads as
    * unknown, which is the old behaviour.
+   * Known for the cwd itself only: a `.git` appearing in an ANCESTOR of the
+   * cwd (`git init ..`) is not observed (watching every ancestor up to `/`
+   * is not affordable), so the branch shows at the next cd or resync().
    */
   absent?: true;
 }
@@ -158,15 +161,6 @@ export class GitContextWatcher extends EventEmitter {
 
   update(sessionId: string, cwd: string): void {
     const existing = this.sessions.get(sessionId);
-    // Same cwd and its watch is live: the watch itself reports HEAD moves and
-    // a `.git` appearing, so skip the synchronous walk up (up to 24 stats, each
-    // a round trip on a network share or a `\\wsl$` path). Local mode calls
-    // this on every prompt (OSC 7); the daemon already drops repeated cwds.
-    if (existing && existing.cwd === cwd && existing.watcher) return;
-    this.resolve(sessionId, cwd, existing);
-  }
-
-  private resolve(sessionId: string, cwd: string, existing: SessionWatch | undefined): void {
     const repo = resolveRepo(cwd);
 
     if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir) {
@@ -184,6 +178,19 @@ export class GitContextWatcher extends EventEmitter {
     this.sessions.set(sessionId, watch);
     this.arm(sessionId, watch);
     this.readAndEmit(sessionId, watch);
+  }
+
+  /**
+   * Re-emit every session's current answer, unchanged or not. The daemon
+   * outlives the app, so a subscribing app starts with no git state, and one
+   * that lost its subscription missed whatever changed meanwhile; without
+   * this its poll would keep a stale "no branch". Re-reads HEAD only, no walk.
+   */
+  resync(): void {
+    for (const [sessionId, watch] of this.sessions) {
+      watch.lastEmitted = null;
+      this.readAndEmit(sessionId, watch);
+    }
   }
 
   remove(sessionId: string): void {
@@ -232,9 +239,8 @@ export class GitContextWatcher extends EventEmitter {
         watch.debounce = setTimeout(() => {
           watch.debounce = null;
           if (!watch.repo) {
-            // `.git` may have just appeared — re-resolve and re-arm. Not
-            // update(): its guard would keep this same-cwd watch.
-            this.resolve(sessionId, watch.cwd, this.sessions.get(sessionId));
+            // `.git` may have just appeared — re-resolve and re-arm.
+            this.update(sessionId, watch.cwd);
             return;
           }
           this.readAndEmit(sessionId, watch);

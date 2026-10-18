@@ -7155,7 +7155,7 @@ function wireContextWatchers(
     gitWatcher.update(s.id, s.cwd);
   }
 
-  resyncContextWatchers = () => { portWatcher.resync(); };
+  resyncContextWatchers = () => { portWatcher.resync(); gitWatcher.resync(); };
 
   return () => {
     sessionManager.off('session:created', onCreated);
@@ -7169,7 +7169,7 @@ function wireContextWatchers(
 }
 
 /**
- * #1135 — re-emit the current per-session port sets. Set by
+ * #1135 — re-emit the current per-session port sets and git answers. Set by
  * wireContextWatchers, called when an app subscribes to the event stream: the
  * daemon survives app restarts, so a new app's empty port map has to be
  * refilled from the watcher rather than from whatever the last app persisted.

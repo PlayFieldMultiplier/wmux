@@ -327,36 +327,19 @@ describe('GitContextWatcher', () => {
     expect(events[1]).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
   });
 
-  it('a repeated same-cwd update with a live watch skips the synchronous walk up', () => {
-    const root = tmp();
-    const nested = path.join(root, 'a', 'b');
-    fs.mkdirSync(nested, { recursive: true });
-    initFakeRepo(root, 'main');
+  it('resync() re-emits every session\'s current answer, unchanged or not', () => {
+    const repo = tmp();
+    initFakeRepo(repo, 'main');
+    const plain = tmp();
     const watcher = makeWatcher();
-    watcher.update('s1', nested);
-    const stat = vi.spyOn(fs, 'statSync');
-    try {
-      for (let i = 0; i < 5; i++) watcher.update('s1', nested);
-      expect(stat).not.toHaveBeenCalled();
-    } finally {
-      stat.mockRestore();
-    }
-    expect(events).toHaveLength(1);
-  });
-
-  it('a same-cwd update re-resolves when there is no live watch', () => {
-    const w = new GitContextWatcher(() => { throw new Error('EPERM'); });
-    watchers.push(w);
-    w.on('git', (e) => events.push(e));
-    const root = tmp();
-    w.update('s1', root);
-    const stat = vi.spyOn(fs, 'statSync');
-    try {
-      w.update('s1', root);
-      expect(stat).toHaveBeenCalled();
-    } finally {
-      stat.mockRestore();
-    }
+    watcher.update('s1', repo);
+    watcher.update('s2', plain);
+    expect(events).toHaveLength(2);
+    watcher.resync();
+    expect(events.slice(2)).toEqual([
+      { sessionId: 's1', branch: 'main', isWorktree: false },
+      { sessionId: 's2', branch: null, isWorktree: false, absent: true },
+    ]);
   });
 
   it('picks up a git init in a previously non-repo cwd without polling', () => {
