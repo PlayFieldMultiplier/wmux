@@ -728,8 +728,11 @@ export class HookIngest {
    */
   private readonly answeredRequests = new Set<string>();
   /**
-   * Per pane, bumped by every cue that settles or supersedes a dialog
-   * (answered, stop, session boundary, a new prompt). A deferred
+   * Per pane, bumped ONLY by cues that settle or supersede a dialog: the
+   * answered kinds, a lead Stop / StopFailure, SessionStart and a new
+   * prompt. Never by working evidence — a subagent's PostToolUse behind a
+   * real dialog is not an answer (the same asymmetry CompletionAlarm keeps
+   * for firm attention). A deferred
    * PermissionRequest confirmation compares the value it captured before its
    * screen read with the current one and stands down if they differ: the
    * read can outlast an answer or a turn end, and the alarm's own `pending`
@@ -1144,7 +1147,7 @@ export class HookIngest {
     // User answered a pending approval locally — no turn boundary, just expire the request.
     // The alarm is fed FIRST: an `answered` cue cancels a pending ATTENTION
     // window, and these kinds return before any other cue-feeding site below.
-    this.bumpDialogEpoch(sessionId);
+    if (signal.kind === 'agent.input_answered' || signal.kind === 'agent.permission_answered') this.bumpDialogEpoch(sessionId);
     this.alarm.observe(sessionId, signal.agent, normalizeHookCue(signal));
     if (signal.kind === 'agent.input_answered') {
       const permId = openCodeRequestId(signal);
@@ -1799,8 +1802,19 @@ export class HookIngest {
    * accumulate dead-id entries, and so a reused id starts from the detector
    * backstop rather than an inherited hook veto.
    */
+  /** Monotonic across panes, so a disposed pane's id can never read as current again. */
+  private dialogEpochClock = 0;
+
   private bumpDialogEpoch(sessionId: string): void {
-    this.dialogEpoch.set(sessionId, (this.dialogEpoch.get(sessionId) ?? 0) + 1);
+    this.dialogEpoch.set(sessionId, ++this.dialogEpochClock);
+  }
+
+  /** The pane's current epoch, minted on first use so a fresh pane is never 0. */
+  private dialogEpochOf(sessionId: string): number {
+    const current = this.dialogEpoch.get(sessionId);
+    if (current !== undefined) return current;
+    this.bumpDialogEpoch(sessionId);
+    return this.dialogEpoch.get(sessionId) as number;
   }
 
   /**
@@ -1825,8 +1839,9 @@ export class HookIngest {
     verifyOnScreen: NonNullable<HookIngestDeps['dialogOnScreen']>,
     fanOut: () => unknown,
   ): void {
-    const epoch = this.dialogEpoch.get(sessionId) ?? 0;
-    const stale = (): boolean => (this.dialogEpoch.get(sessionId) ?? 0) !== epoch;
+    const epoch = this.dialogEpochOf(sessionId);
+    // A pane dropped meanwhile has no entry: stale, never a broadcast.
+    const stale = (): boolean => this.dialogEpoch.get(sessionId) !== epoch;
     const send = (): void => {
       if (stale()) {
         this.deps.log?.('info', `[hooks] awaiting_input for ${sessionId} stood down: answered or superseded during the screen read`);

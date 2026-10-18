@@ -128,6 +128,55 @@ describe('HookIngest — PermissionRequest alarm checks the screen', () => {
     }
   });
 
+  it('working evidence (a subagent\'s PostToolUse, SubagentStop, another PermissionRequest) does NOT stand the alert down', async () => {
+    for (const other of [
+      makeSignal({ kind: 'agent.activity', payload: {}, ts: 2_000 }),
+      makeSignal({ kind: 'agent.subagent_stop', payload: {}, ts: 2_000 }),
+      makeSignal({ kind: 'agent.tool_started', payload: {}, ts: 2_000 }),
+    ]) {
+      let resolve: (up: boolean | null) => void = () => undefined;
+      const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
+      f.ingest.handle(makeSignal());
+      f.advance(DEFAULT_ALARM_WINDOW_MS);
+      await settle();
+      f.ingest.handle(other);
+      resolve(true);
+      await settle();
+      expect(f.awaiting(), other.kind).toHaveLength(1);
+    }
+  });
+
+  it('a pane dropped during the read never gets a broadcast (fresh pane, first ever hook)', async () => {
+    let resolve: (up: boolean | null) => void = () => undefined;
+    const f = makeIngest(() => new Promise<boolean | null>((r) => { resolve = r; }));
+    f.ingest.handle(makeSignal());
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    f.ingest.dropPty('pty-a');
+    resolve(true);
+    await settle();
+    expect(f.awaiting()).toEqual([]);
+  });
+
+  it('a reader that resolves on a timer (the snapshot queue) still honours an answer that arrived first', async () => {
+    const f = makeIngest(() => new Promise<boolean | null>((r) => { setTimeout(() => r(true), 400); }));
+    f.ingest.handle(makeSignal());
+    f.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    f.ingest.handle(makeSignal({ kind: 'agent.permission_answered', payload: {}, ts: 2_000 }));
+    f.advance(400);
+    await settle();
+    expect(f.awaiting()).toEqual([]);
+
+    const g = makeIngest(() => new Promise<boolean | null>((r) => { setTimeout(() => r(true), 400); }));
+    g.ingest.handle(makeSignal());
+    g.advance(DEFAULT_ALARM_WINDOW_MS);
+    await settle();
+    g.advance(400);
+    await settle();
+    expect(g.awaiting()).toHaveLength(1);
+  });
+
   it('a stale re-read never fires after the dialog was settled', async () => {
     const screen = vi.fn(async () => true);
     let first = true;
