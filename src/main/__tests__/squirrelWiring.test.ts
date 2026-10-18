@@ -83,7 +83,7 @@ describe('Squirrel firstrun fix — index.ts wiring invariants', () => {
   // the invariants above: the behavior lives in index.ts's module-load-time
   // squirrel branch, which cannot be imported in tests, so pin the wiring at
   // source level. The kill semantics themselves are unit-tested in
-  // squirrelTeardown.test.ts.
+  // squirrelTeardown.os.test.ts.
   it('#502: terminates running app instances inside the squirrel branch, before any Update.exe work', () => {
     const gatePos = indexSrc.indexOf('if (isSquirrelInstallerEvent(squirrelCmd))');
     const killPos = indexSrc.indexOf('terminateRunningAppInstances()');

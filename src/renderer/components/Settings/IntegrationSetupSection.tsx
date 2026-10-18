@@ -38,8 +38,16 @@ export interface IntegrationSetupApi {
      *  owns the same four hook events when it is present, and then an install
      *  deliberately writes nothing — so a row that read `installed` alone would
      *  sit at "not installed" forever while the signals actually flow. */
-    status: () => Promise<{ installed: boolean; outcome?: { pluginAlsoInstalled?: boolean } }>;
+    status: () => Promise<{
+      installed: boolean;
+      /** #2404 — installed, but older than the hook set this build expects. */
+      updateAvailable?: boolean;
+      outcome?: { pluginAlsoInstalled?: boolean; hooks?: Array<{ label: string; state: string }> };
+    }>;
     install: () => Promise<{ ok: boolean; error: string | null }>;
+    /** #2404 — adds only the hooks a newer build expects. Optional: without
+     *  it an older preload never shows the Update state. */
+    update?: () => Promise<{ ok: boolean; error: string | null }>;
     /** The install prompt's durable "Don't ask again". Optional: an older
      *  preload simply never shows the re-enable line. */
     getPromptPreference?: () => Promise<{ suppressed: boolean }>;
@@ -158,6 +166,7 @@ export function foreignCommandSuffix(targets?: StatuslineTargetProbe[]): string 
 export type RowState =
   | 'unknown'      // pre-probe; never rendered as "not installed"
   | 'installed'
+  | 'outdated'     // #2404 — installed, but older than this build's hook set
   | 'missing'
   | 'working'
   | 'error'
@@ -173,6 +182,8 @@ interface RowModel {
   /** Configs another tool owns, from the last probe. Present even on an
    *  `installed` row: that is the partially-foreign case. */
   foreign?: StatuslineTargetProbe[];
+  /** #2404 — the hooks an Update would write, by label, from the last probe. */
+  stale?: string[];
 }
 
 const INITIAL: RowModel = { state: 'unknown', error: null };
@@ -269,13 +280,19 @@ export function IntegrationSetupSection({
     else api.hooks
       .status()
       .then((s) =>
-        commit(setHooks, {
-          // Plugin-owned hooks fire the same signals, and an install against
-          // them writes nothing — without this the row sits at "not installed"
-          // forever while an Install click reports success and changes nothing.
-          state: rowStateFromProbe(s.installed || s.outcome?.pluginAlsoInstalled === true),
-          error: null,
-        }, gen),
+        commit(setHooks, s.updateAvailable === true && api.hooks?.update
+          ? {
+              state: 'outdated',
+              error: null,
+              stale: (s.outcome?.hooks ?? []).filter((h) => h.state !== 'ok').map((h) => h.label),
+            }
+          : {
+              // Plugin-owned hooks fire the same signals, and an install against
+              // them writes nothing — without this the row sits at "not installed"
+              // forever while an Install click reports success and changes nothing.
+              state: rowStateFromProbe(s.installed || s.outcome?.pluginAlsoInstalled === true),
+              error: null,
+            }, gen),
       )
       .catch(() => commit(setHooks, INITIAL, gen));
     // Probed with the rows but kept OUT of RowModel: it is not an install
@@ -333,7 +350,7 @@ export function IntegrationSetupSection({
       // Carry the probe's foreign detail across the in-flight state: a flat
       // model here dropped it, and the skip message that follows then had no
       // command to name.
-      commit(set, (prev) => ({ state: 'working', error: null, foreign: prev.foreign }), gen);
+      commit(set, (prev) => ({ state: 'working', error: null, foreign: prev.foreign, stale: prev.stale }), gen);
       try {
         const outcome = await install();
         // When the install reports per-target outcomes, `ok` alone is not
@@ -356,6 +373,8 @@ export function IntegrationSetupSection({
             error: outcome.error ?? skippedReason(outcome.targets),
             skip: skipReasonOf(outcome.targets),
             foreign: prev.foreign,
+            // A failed Update stays an Update on retry.
+            stale: prev.stale,
           }),
           gen,
         );
@@ -421,7 +440,8 @@ export function IntegrationSetupSection({
   // carries the warm primary; every other action on the card is secondary.
   // A row mid-install keeps the slot (drawn secondary while it runs), so the
   // emphasis does not jump to the next row until that install settles.
-  const needsAction = (m: RowModel) => m.state === 'missing' || m.state === 'error' || m.state === 'working';
+  const needsAction = (m: RowModel) =>
+    m.state === 'missing' || m.state === 'outdated' || m.state === 'error' || m.state === 'working';
   const primaryRow = needsAction(hooks) ? 'hooks' : needsAction(mcp) ? 'mcp' : needsAction(statusline) ? 'statusline' : null;
 
   return (
@@ -443,8 +463,17 @@ export function IntegrationSetupSection({
           title={t('integrationSetup.hooks.title')}
           description={t('integrationSetup.hooks.description')}
           model={hooks}
-          actionLabel={t('integrationSetup.installButton')}
-          onAction={() => { if (api.hooks) void runInstall(setHooks, api.hooks.install); }}
+          actionLabel={t(hooks.stale ? 'integrationSetup.updateButton' : 'integrationSetup.installButton')}
+          onAction={() => {
+            const h = api.hooks;
+            if (!h) return;
+            // Update only from the probe that offered it (or a retry of that
+            // Update); every other state is a fresh install.
+            void runInstall(setHooks, hooks.stale && h.update ? h.update : h.install);
+          }}
+          note={hooks.state === 'outdated' && (hooks.stale?.length ?? 0) > 0
+            ? t('integrationSetup.hooks.updateNote', { hooks: (hooks.stale ?? []).join(', ') })
+            : null}
         />
         {promptSuppressed === true && (
           <div className="ui-row" data-hooks-prompt-suppressed>
@@ -622,6 +651,7 @@ function StateChip({ state }: { state: RowState }): React.ReactElement {
   const t = useT();
   const label =
     state === 'installed' ? t('integrationSetup.state.installed')
+    : state === 'outdated' ? t('integrationSetup.state.outdated')
     : state === 'working' ? t('integrationSetup.state.working')
     : state === 'unknown' ? t('integrationSetup.state.unknown')
     : state === 'error' ? t('integrationSetup.state.error')

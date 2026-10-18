@@ -63,6 +63,7 @@ import { sessionHostDir, sessionsStartedIn } from '../worktask/stopSessionsInDir
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { STOPPED_BY_OWNER } from './factoryStop';
 import { fanoutTaskShortId } from '../../shared/fanoutCallerNudge';
+import type { WorkerSlots } from './workerSlots';
 
 export const RECLAIMED_WORKERS_FILENAME = 'reclaimed-workers.json';
 export const RECLAIMED_WORKERS_VERSION = 1 as const;
@@ -1375,6 +1376,10 @@ export interface WorkerResumePorts {
   /** Type the launch line + Enter into the pane through the bot worker
    *  launch guard; false when nothing was typed. */
   typeLine: (sessionId: string, line: string) => boolean;
+  /** Each task's launch generation on disk (workerSlots.ts): a resume typed
+   *  into the worker's pane is a new launch, recorded before the line is
+   *  typed. Absent: not recorded. */
+  launches?: Pick<WorkerSlots, 'beginLaunch' | 'launched' | 'released'>;
   /** Whether the pane's agent runs (process truth), for a message. */
   agentAlive?: (sessionId: string) => Promise<boolean>;
   /** Deliver a message to the relaunched agent (waits while someone types). */
@@ -1591,11 +1596,25 @@ async function resumeOnce(
     return refuse('not_reopened', 'the task could not be moved to the worker\'s pane; try again');
   }
   if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
+  // A new launch of the task, on disk before the line is typed.
+  let gen: number | null = null;
+  try {
+    gen = ports.launches?.beginLaunch({
+      taskId: rec.taskId, origin: 'bot', botId: rec.botId, ownerWorkspaceId: rec.ownerWorkspaceId,
+      pane: { sessionId: pane.sessionId, workspaceId: workerWorkspaceOf(rec) },
+    }).gen ?? null;
+  } catch (err) {
+    return refuse('not_typed', `the resume was not typed: ${(err as Error).message}`);
+  }
   let typed = false;
   try {
     typed = ports.typeLine(pane.sessionId, line);
   } catch {
     typed = false;
+  }
+  if (gen !== null) {
+    if (typed) ports.launches?.launched(rec.taskId, gen, workerWorkspaceOf(rec), pane.sessionId);
+    else ports.launches?.released(rec.taskId, gen);
   }
   if (!typed) return refuse('not_typed', 'the resume line could not be typed into the worker\'s pane');
   return launched(ports, rec, pane.sessionId, pane.resumeSessionId, workerWorkspaceOf(rec), by, message, onLaunched, 'folder');
@@ -1749,10 +1768,11 @@ async function launched(
 }
 
 /** Ended bot tasks (in the catch-up window) whose worker was not reclaimed
- *  yet: still live for the agent budget. Pure over its inputs. */
-export function unreclaimedEndedWorkers(rows: readonly LedgerEntry[], store: Pick<ReclaimedWorkers, 'get'>, now: number): number {
+ *  yet: still live for the agent budget, unless their agent is known gone
+ *  (`gone`: task ids, taskWorkspaceLiveness.ts). Pure over its inputs. */
+export function unreclaimedEndedWorkers(rows: readonly LedgerEntry[], store: Pick<ReclaimedWorkers, 'get'>, now: number, gone: ReadonlySet<string> = new Set()): number {
   const since = now - RECLAIM_CATCHUP_MS;
-  return rows.filter((e) => e.updatedAt >= since && isReclaimableEnd(e, e.status) && !isReclaimedSince(store.get(e.id), e)).length;
+  return rows.filter((e) => e.updatedAt >= since && isReclaimableEnd(e, e.status) && !isReclaimedSince(store.get(e.id), e) && !gone.has(e.id)).length;
 }
 
 /** How the Bots page shows a reclaimed worker (BotTaskView.worker). Pure. */

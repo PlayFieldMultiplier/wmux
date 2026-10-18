@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { watchTarget } from '../../shared/watchTarget';
+import { wslPathToHost } from '../../mcp/wslPaths';
 
 /**
  * X1 workspace-context sidebar — git branch tracking via fs.watch.
@@ -10,7 +11,7 @@ import { watchTarget } from '../../shared/watchTarget';
  *   - `gitBranch`/`gitIsWorktree` come from an fs.watch on `<cwd>/.git/HEAD`
  *     (with linked-worktree `gitdir:` indirection). **No polling.**
  *   - Daemon broadcasts `{ type: 'context.git', sessionId,
- *     data: { branch: string | null, isWorktree: boolean } }`.
+ *     data: { branch: string | null, isWorktree: boolean, absent?: true } }`.
  *
  * Shared between the daemon (DaemonSessionManager wiring in daemon/index.ts)
  * and local-mode main (localContextWatch) exactly like cwdDetect — both PTY
@@ -20,6 +21,19 @@ import { watchTarget } from '../../shared/watchTarget';
 export interface GitContext {
   branch: string | null;
   isWorktree: boolean;
+  /**
+   * Set only when `branch` is null because the cwd is outside any repository
+   * (the walk up reached the root) and a live watch on the cwd will report a
+   * `.git` appearing: a known "no branch", which main answers without
+   * spawning git. A null branch without it (HEAD unreadable or unparseable,
+   * an inconclusive walk, no live watch) is unknown, and main may ask git. Additive: a sender that predates it reads as
+   * unknown, which is the old behaviour.
+   * Known for the cwd itself only: a `.git` appearing in an ANCESTOR of the
+   * cwd (`git init ..`) is not observed (watching every ancestor up to `/`
+   * is not affordable), so the branch shows at the next cd or resync()
+   * (an app subscribing to the daemon).
+   */
+  absent?: true;
 }
 
 interface ResolvedRepo {
@@ -40,36 +54,95 @@ const REREAD_DEBOUNCE_MS = 50;
  * a permission error must never break PTY bookkeeping).
  */
 export function resolveRepo(startDir: string): ResolvedRepo | null {
+  return resolveRepoState(startDir).repo;
+}
+
+/**
+ * resolveRepo, also telling whether a null answer is conclusive: the walk
+ * reached the filesystem root and every `.git` probe on the way said "no
+ * such file", along the cwd as given and along its physical path. A walk
+ * that hit MAX_WALK_UP, an unreadable `.git`, a `.git` file without a
+ * `gitdir:` line, a directory holding a `HEAD` (a bare repository), or a cwd
+ * whose real path cannot be read is inconclusive — git may still find a repo.
+ */
+export function resolveRepoState(startDir: string): { repo: ResolvedRepo | null; conclusive: boolean } {
+  const lexical = walkUp(startDir);
+  if (lexical.repo || !lexical.conclusive) return lexical;
+  // The shell reports its logical $PWD; git walks the physical one. Through
+  // a symlink (`~/link` → `/repo/src`) only the latter passes `/repo/.git`.
+  let real: string;
+  try { real = fs.realpathSync.native(startDir); } catch { return { repo: null, conclusive: false }; }
+  return real === startDir ? lexical : walkUp(real);
+}
+
+/**
+ * A `gitdir:` value as this process can open it (#2407). A worktree added by
+ * Linux git on a Windows drive (`/mnt/d/repo` from WSL) records its gitdir
+ * as `/mnt/d/repo/.git/worktrees/x`; on win32 `path.resolve` would read that
+ * as rooted on the current drive (`D:\mnt\d\…`), a directory that does not
+ * exist, so HEAD could not be read. The drive mount is the host folder it
+ * names (`D:\repo\.git\worktrees\x`); any other value is kept as given.
+ */
+function gitdirAsHostPath(value: string): string {
+  if (process.platform !== 'win32' || !value.startsWith('/') || value.startsWith('//')) return value;
+  const host = wslPathToHost(value, undefined);
+  return 'path' in host ? host.path : value;
+}
+
+function walkUp(startDir: string): { repo: ResolvedRepo | null; conclusive: boolean } {
   let dir = startDir;
+  let conclusive = true;
   for (let i = 0; i < MAX_WALK_UP; i++) {
     const dotGit = path.join(dir, '.git');
     try {
       const st = fs.statSync(dotGit);
       if (st.isDirectory()) {
-        return { gitDir: dotGit, isWorktree: false };
+        return { repo: { gitDir: dotGit, isWorktree: false }, conclusive: true };
       }
       if (st.isFile()) {
         // Linked worktree: `.git` is a file `gitdir: <abs-or-rel path>`
         const content = fs.readFileSync(dotGit, 'utf8');
         const m = content.match(/^gitdir:\s*(.+)\s*$/m);
         if (m) {
-          const target = path.resolve(dir, m[1].trim());
+          const target = path.resolve(dir, gitdirAsHostPath(m[1].trim()));
           // A submodule also uses the gitdir file (…/.git/modules/…); only
           // `…/worktrees/<name>` is a linked worktree. Either way the HEAD
           // at the target describes this checkout.
           const isWorktree = /[\\/]worktrees[\\/]/.test(target);
-          return { gitDir: target, isWorktree };
+          return { repo: { gitDir: target, isWorktree }, conclusive: true };
         }
-        return null;
+        return { repo: null, conclusive: false };
       }
-    } catch {
-      // ENOENT and friends — keep walking up.
+    } catch (err) {
+      // ENOENT and friends — keep walking up. Only "no such file" is an
+      // answer; anything else (EACCES, EPERM) might be hiding a repo.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') conclusive = false;
+    }
+    // A bare repository has no `.git`, only `HEAD` and friends at its top:
+    // git finds it, this walk does not, so a `HEAD` here makes it no answer.
+    if (conclusive) {
+      try {
+        if (fs.statSync(path.join(dir, 'HEAD'), { throwIfNoEntry: false })) conclusive = false;
+      } catch {
+        conclusive = false;
+      }
     }
     const parent = path.dirname(dir);
-    if (parent === dir) break;
+    if (parent === dir) return { repo: null, conclusive };
     dir = parent;
   }
-  return null;
+  return { repo: null, conclusive: false };
+}
+
+/** Whether `dir` holds a `.git` or a `HEAD` entry; true when it cannot tell. */
+function hasGitEntry(dir: string): boolean {
+  try {
+    return !!fs.statSync(path.join(dir, '.git'), { throwIfNoEntry: false })
+      || !!fs.statSync(path.join(dir, 'HEAD'), { throwIfNoEntry: false });
+  } catch {
+    return true;
+  }
 }
 
 /** Parse a HEAD file's content into a branch label (short SHA when detached). */
@@ -117,6 +190,8 @@ const defaultWatchFactory: GitWatchFactory = (target, listener) => fs.watch(targ
 interface SessionWatch {
   cwd: string;
   repo: ResolvedRepo | null;
+  /** With `repo` null: the search reached the root (see resolveRepoState). */
+  conclusive: boolean;
   watcher: GitWatchHandle | null;
   debounce: NodeJS.Timeout | null;
   /** Last emitted value, JSON-encoded, to suppress no-op re-emits. */
@@ -127,7 +202,7 @@ interface SessionWatch {
  * Tracks the git branch per PTY session with fs.watch (no polling).
  *
  * Events:
- *  - 'git' → { sessionId: string, branch: string | null, isWorktree: boolean }
+ *  - 'git' → { sessionId: string, branch: string | null, isWorktree: boolean, absent?: true }
  *
  * `update(sessionId, cwd)` is called on session create and on every cwd
  * change (OSC 7 / prompt scrape). When the cwd is outside any repository the
@@ -149,9 +224,10 @@ export class GitContextWatcher extends EventEmitter {
 
   update(sessionId: string, cwd: string): void {
     const existing = this.sessions.get(sessionId);
-    const repo = resolveRepo(cwd);
+    const { repo, conclusive } = resolveRepoState(cwd);
 
-    if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir) {
+    if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir
+      && existing.conclusive === conclusive) {
       return; // same checkout — keep the live watcher.
     }
     if (existing) this.teardown(existing);
@@ -159,13 +235,37 @@ export class GitContextWatcher extends EventEmitter {
     const watch: SessionWatch = {
       cwd,
       repo,
+      conclusive,
       watcher: null,
       debounce: null,
       lastEmitted: existing?.lastEmitted ?? null,
     };
     this.sessions.set(sessionId, watch);
     this.arm(sessionId, watch);
+    // A `.git` (or bare `HEAD`) created between the walk and the watch going
+    // live raised no event: look once more before calling the cwd absent.
+    if (!repo && watch.watcher && watch.conclusive && hasGitEntry(cwd)) watch.conclusive = false;
     this.readAndEmit(sessionId, watch);
+  }
+
+  /**
+   * Re-emit every session's current answer, unchanged or not. The daemon
+   * outlives the app, so a subscribing app starts with no git state, and one
+   * that lost its subscription missed whatever changed meanwhile; without
+   * this its poll would keep a stale "no branch". A session outside a repo
+   * is resolved again (an ancestor's `.git` is not watched); one inside a
+   * repo only has its HEAD re-read.
+   */
+  resync(): void {
+    for (const sessionId of [...this.sessions.keys()]) {
+      const watch = this.sessions.get(sessionId);
+      if (!watch) continue;
+      watch.lastEmitted = null;
+      if (!watch.repo) this.update(sessionId, watch.cwd);
+      // update() emitted already if it found a repo; otherwise emit here.
+      const current = this.sessions.get(sessionId);
+      if (current && current.lastEmitted === null) this.readAndEmit(sessionId, current);
+    }
   }
 
   remove(sessionId: string): void {
@@ -207,7 +307,9 @@ export class GitContextWatcher extends EventEmitter {
         if (watch.repo) {
           // Only HEAD transitions matter (HEAD.lock → HEAD rename included).
           if (filename && !/^HEAD(\.lock)?$/i.test(String(filename))) return;
-        } else if (filename && String(filename) !== '.git') {
+        } else if (filename && !/^(\.git|HEAD)$/.test(String(filename))) {
+          // `.git` for init/clone; `HEAD` for a bare clone into the cwd,
+          // which turns a known "not a repo" into unknown.
           return;
         }
         if (watch.debounce) clearTimeout(watch.debounce);
@@ -226,6 +328,9 @@ export class GitContextWatcher extends EventEmitter {
         // Directory vanished (worktree pruned, repo deleted) — drop the
         // watcher; the next cwd update re-arms.
         this.teardown(watch);
+        // Outside a repo, "no branch" was known only while the watch could
+        // see a `.git` appear; without it the answer is unknown again.
+        if (!watch.repo && this.sessions.get(sessionId) === watch) this.readAndEmit(sessionId, watch);
       });
     } catch {
       // Watch target unreadable — degrade to "value at update time" only.
@@ -236,7 +341,9 @@ export class GitContextWatcher extends EventEmitter {
   private readAndEmit(sessionId: string, watch: SessionWatch): void {
     const ctx: GitContext = watch.repo
       ? readGitContext(watch.repo)
-      : { branch: null, isWorktree: false };
+      : watch.watcher && watch.conclusive
+        ? { branch: null, isWorktree: false, absent: true }
+        : { branch: null, isWorktree: false };
     const encoded = JSON.stringify(ctx);
     if (encoded === watch.lastEmitted) return;
     watch.lastEmitted = encoded;

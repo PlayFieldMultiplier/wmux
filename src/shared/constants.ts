@@ -213,6 +213,10 @@ export const IPC = {
   //   2026-07-17). Renderer-only trust boundary.
   HOOKS_BRIDGE_STATUS: 'hooks:bridge:status',
   HOOKS_BRIDGE_INSTALL: 'hooks:bridge:install',
+  //   UPDATE — #2404, the Settings card's Update button: adds the hooks a newer
+  //   build expects to an existing install and rewrites only outdated wmux
+  //   entries. User-clicked, like INSTALL.
+  HOOKS_BRIDGE_UPDATE: 'hooks:bridge:update',
   //   ALLOW_WORKER_TOOLS — the Settings button that adds the minimal fan-out
   //   worker tool list to permissions.allow. User-clicked, like INSTALL.
   HOOKS_BRIDGE_ALLOW_WORKER_TOOLS: 'hooks:bridge:allow-worker-tools',
