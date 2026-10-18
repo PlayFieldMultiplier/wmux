@@ -101,6 +101,21 @@ describe('captureTreeWin32', () => {
     expect(r.killed).toEqual([10]);
   });
 
+  it('reports the tree unverified when a listed child with children of its own lost its pid to a later process', async () => {
+    const f = fakeWin([
+      { pid: 10, ppid: 1, createdAt: 100n },
+      { pid: 11, ppid: 99, createdAt: 1_500n },
+      { pid: 12, ppid: 11, createdAt: 900n },
+    ], {
+      now: (tableReads) => (tableReads === 0 ? 1_000n : 2_000n),
+      tables: [[{ pid: 10, ppid: 1 }, { pid: 11, ppid: 10 }, { pid: 12, ppid: 11 }]],
+    });
+    const r = await captureTreeWin32(10, f.api, { sleep: noWait })!.kill({ timeoutMs: 100 });
+    expect(f.terminated).not.toContain(11);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors).toEqual([expect.objectContaining({ pid: 11, unverified: true })]);
+  });
+
   it('never takes a process that took a listed child\'s pid while the table was read', async () => {
     // The table lists 11 under 10 (its first owner, gone since); the process
     // now on 11 was created after the table was asked for, under another parent.
@@ -377,7 +392,12 @@ describe('survivorsStillRunning', () => {
     // A pid far above any this machine hands out: gone.
     const gone = { pid: 0x7ffffff0, reason: 'still running', startTime: '1' };
     const unchecked = { pid: 0x7ffffff0, reason: 'the process table could not be read', unverified: true as const };
-    expect(await survivorsStillRunning([gone, unchecked])).toEqual([unchecked]);
+    const still = await survivorsStillRunning([gone, unchecked]);
+    expect(still[0]).toEqual(unchecked);
+    // POSIX cannot find what an exited survivor started (its children go to
+    // init), so there it stays, unverified.
+    if (process.platform === 'win32') expect(still).toEqual([unchecked]);
+    else expect(still).toEqual([unchecked, expect.objectContaining({ pid: gone.pid, unverified: true })]);
   });
 });
 

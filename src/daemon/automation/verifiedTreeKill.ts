@@ -336,6 +336,9 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
         // next scan, whose table lists it).
         if (opened.createdAt < parent.createdAt || opened.createdAt > askedAt) {
           api.close(opened.handle);
+          // Newer than the table: the child the table listed exited and its
+          // pid went to this one, so its own children in the table are lost.
+          if (opened.createdAt > askedAt && (children.get(pid) ?? []).some((c) => !tracked.has(c))) lostParents.add(pid);
           continue;
         }
         unidentified.delete(pid);
