@@ -683,3 +683,9 @@
 .wmux-bots-worker-panes .pane-flash::after { display: none; }
 .wmux-bots-worker-panes .pane-ring-flash,
 .wmux-bots-worker-panes .pane-ring-glow { box-shadow: none; opacity: 1; border-color: transparent !important; border-style: none !important; }
+
+/* A photo of an owner card, full size: fitted, never above 100%. */
+.wmux-bots-photo-viewer { display: flex; justify-content: center; }
+.wmux-bots-photo-viewer img { display: block; max-width: 100%; max-height: calc(100vh - 160px); object-fit: contain; border-radius: 8px; }
+/* The composer's staged photos sit above the pill, end-aligned with it. */
+[data-bots-composer-photos] .wmux-chat-attachments { padding: 0 4px; }
