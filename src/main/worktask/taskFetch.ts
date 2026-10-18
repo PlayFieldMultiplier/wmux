@@ -47,9 +47,11 @@ export type TaskFetchResult =
     ok: true; remote: 'origin'; defaultBranch: string;
     /** The line the worker runs in its own shell (the repository's platform). */
     fetchCommand: string;
-    /** Only for a repository inside a WSL distro: the line for a WSL shell
-     *  (the same as fetchCommand). Never for a Windows-host repository: its
-     *  relay borrows objects by a Windows path, which WSL git cannot read. */
+    /** The line for a WSL shell. A repository inside a WSL distro: the same
+     *  as fetchCommand. A Windows-host repository: the same fetch run by
+     *  Windows git through interop (`git.exe`, the relay by its Windows path,
+     *  quoted for bash), since its relay borrows objects by a Windows path
+     *  that Linux git cannot read. */
     fetchCommandWsl?: string;
     fetched: TaskFetchedRef[]; missing: string[];
   }
@@ -191,9 +193,15 @@ export async function fetchTaskRefs(input: TaskFetchInput, git: TaskPushGit = de
     const bad = [repo.relayShellPath, ...refspecs].find((w) => shellQuote(w, repo.workerShellPlatform) === null) ?? repo.relayShellPath;
     return { ok: false, reason: 'git-failed', error: `${bad} cannot be written as a shell word in the fetch line` };
   }
+  // A WSL shell on a Windows-host repository runs Windows git through interop:
+  // Linux git reads `C:\…` as an ssh host and cannot read the relay's
+  // Windows-path alternates.
+  const fetchCommandWsl = repo.inWslDistro
+    ? fetchCommand
+    : repo.workerShellPlatform === 'win32' ? fetchCommandFor(repo.relayShellPath, refspecs, 'linux', 'git.exe') : null;
   return {
     ok: true, remote: 'origin', defaultBranch, fetchCommand,
-    ...(repo.inWslDistro ? { fetchCommandWsl: fetchCommand } : {}),
+    ...(fetchCommandWsl ? { fetchCommandWsl } : {}),
     fetched, missing: wanted.filter((b) => !there.has(b)).map((b) => `origin/${b}`),
   };
 }

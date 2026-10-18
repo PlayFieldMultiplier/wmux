@@ -65,7 +65,7 @@ export function registerTaskFetchTool(server: McpServer, deps: TaskPushToolDeps)
   const resolveSenderPtyId = deps.getSenderPtyId ?? (() => '');
   server.tool(
     'task_fetch',
-    'Fetch origin\'s default branch and YOUR task branch with wmux\'s credentials. It returns a `git fetch` line: run that line in your shell to bring them into origin/<name>, then git merge origin/<default>.',
+    'Fetch origin\'s default branch and YOUR task branch with wmux\'s credentials. It returns a `git fetch` line: run that line in your shell to bring them into origin/<name>, then git merge origin/<default>. When it returns two lines, run the one labelled for your shell (a WSL shell runs the "WSL shell:" line).',
     {},
     async () => {
       if (deps.resolveWorkspaceId) {
@@ -81,8 +81,12 @@ export function registerTaskFetchTool(server: McpServer, deps: TaskPushToolDeps)
       try {
         const result = (await sendRpc('task.fetch' as RpcMethod, params, TASK_FETCH_RPC_TIMEOUT_MS)) as { ok?: boolean; fetchCommand?: unknown; fetchCommandWsl?: unknown } | undefined;
         // The fetch line first, verbatim, so the worker runs exactly it.
-        const wsl = result && typeof result.fetchCommandWsl === 'string' && result.fetchCommandWsl !== result.fetchCommand ? `In a WSL shell, run this instead:\n${result.fetchCommandWsl}\n` : '';
-        const line = result && typeof result.fetchCommand === 'string' ? `Run this in your shell, then \`git merge origin/<default>\`:\n${result.fetchCommand}\n${wsl}\n` : '';
+        // Two lines, labelled, when a WSL shell runs a different one.
+        const cmd = result && typeof result.fetchCommand === 'string' ? result.fetchCommand : null;
+        const wslCmd = result && typeof result.fetchCommandWsl === 'string' ? result.fetchCommandWsl : null;
+        const lines = cmd === null ? ''
+          : wslCmd !== null && wslCmd !== cmd ? `Windows shell:\n${cmd}\nWSL shell:\n${wslCmd}\n` : `${cmd}\n`;
+        const line = lines ? `Run this in your shell, then \`git merge origin/<default>\`:\n${lines}\n` : '';
         return {
           content: [{ type: 'text' as const, text: `${line}${JSON.stringify(result ?? {}, null, 2)}` }],
           ...(result && result.ok === false ? { isError: true as const } : {}),

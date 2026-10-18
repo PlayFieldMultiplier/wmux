@@ -111,6 +111,10 @@ describe('relay git: argv, env and config replay', () => {
     expect(shellQuote('a b', 'win32')).toBe('"a b"');
     for (const w of ['a$b', 'a%b', 'a"b', 'a!b', 'a`b']) expect(shellQuote(w, 'win32'), w).toBeNull();
     expect(fetchCommandFor('C:\\data%x\\relay', ['+refs/heads/main:refs/remotes/origin/main'], 'win32')).toBeNull();
+    // A WSL shell on a Windows-host repository: git.exe, the Windows path kept
+    // as-is inside bash single quotes.
+    expect(fetchCommandFor("C:\\Users\\me's\\git-relay\\wtask-1", ['+refs/heads/main:refs/remotes/origin/main'], 'linux', 'git.exe'))
+      .toBe("git.exe fetch --no-tags --no-write-fetch-head 'C:\\Users\\me'\\''s\\git-relay\\wtask-1' '+refs/heads/main:refs/remotes/origin/main'");
     expect(fetchCommandFor('/r e/relay', ['+refs/heads/main:refs/remotes/origin/main'], 'linux'))
       .toBe("git fetch --no-tags --no-write-fetch-head '/r e/relay' '+refs/heads/main:refs/remotes/origin/main'");
   });
