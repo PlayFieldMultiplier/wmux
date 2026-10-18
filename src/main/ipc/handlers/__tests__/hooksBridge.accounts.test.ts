@@ -120,4 +120,20 @@ describe('account folders in the hook-set check', () => {
     await expect(update({}, 'x')).rejects.toThrow();
     await expect(update({}, 42)).rejects.toThrow();
   });
+
+  it('refuses an account the status does not list: an alias of another account\'s settings, or one already current', async () => {
+    const real = path.join(tmp, 'acct-a');
+    staleCopy(real, 'StopFailure');
+    const alias = path.join(tmp, 'acct-alias');
+    fs.symlinkSync(real, alias);
+    const current = path.join(tmp, 'acct-b');
+    fs.mkdirSync(current);
+    fs.copyFileSync(base.settingsPath, path.join(current, 'settings.json'));
+    accounts.list = [account('a', real), account('alias', alias), account('b', current)];
+    const before = fs.readFileSync(path.join(real, 'settings.json'), 'utf8');
+    const update = handlerFor(IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT);
+    await expect(update({}, 'alias')).rejects.toThrow(/not listed/);
+    await expect(update({}, 'b')).rejects.toThrow(/not listed/);
+    expect(fs.readFileSync(path.join(real, 'settings.json'), 'utf8')).toBe(before);
+  });
 });

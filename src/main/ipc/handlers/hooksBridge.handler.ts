@@ -160,11 +160,16 @@ export function registerHooksBridgeHandlers(): void {
   ipcMain.handle(
     IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT,
     wrapHandler(IPC.HOOKS_BRIDGE_UPDATE_ACCOUNT, async (_event, accountId: unknown): Promise<UpdateOutcome> => {
-      const account = typeof accountId === 'string'
-        ? getAccountStore().listAccounts().find((a) => a.id === accountId)
-        : undefined;
-      const paths = account ? ownAccountSettings(account, defaultPaths()) : null;
+      const base = defaultPaths();
+      const accounts = getAccountStore().listAccounts();
+      const account = typeof accountId === 'string' ? accounts.find((a) => a.id === accountId) : undefined;
+      const paths = account ? ownAccountSettings(account, base) : null;
       if (!paths) throw new Error('HOOKS_BRIDGE_UPDATE_ACCOUNT: no Claude account with its own local settings');
+      // Only an account the status lists: one that shares another's settings
+      // file (an alias the listing folds into the other's row) is refused too.
+      if (!accountHookDrift(accounts, base).some((d) => d.accountId === account?.id)) {
+        throw new Error('HOOKS_BRIDGE_UPDATE_ACCOUNT: that account is not listed for an update');
+      }
       // An Update, never an install: only a folder the status lists (a wmux
       // install there already) is written.
       if (!computeInstalled(statusHooks(paths))) throw new Error('HOOKS_BRIDGE_UPDATE_ACCOUNT: no wmux hooks in that account to update');
