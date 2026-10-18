@@ -65,6 +65,7 @@
     "src/daemon/__tests__/continueOnAccount.test.ts",
     "src/daemon/__tests__/daemonLogging.test.ts",
     "src/daemon/__tests__/dumpToFile.retry.test.ts",
+    "src/daemon/__tests__/gitWatchCwd.test.ts",
     "src/daemon/__tests__/sessionSocketPath.fits.test.ts",
     "src/daemon/__tests__/shellIntegration.codexSeedGuard.test.ts",
     "src/daemon/__tests__/shellIntegration.test.ts",

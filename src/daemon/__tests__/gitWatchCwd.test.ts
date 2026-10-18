@@ -1,6 +1,3 @@
-// @wmux-lane unit
-// Pure string translation: the platform is an explicit argument and no fs or
-// process call is made, so Windows cannot change its result.
 import { describe, expect, it } from 'vitest';
 import { gitWatchCwdFor } from '../gitWatchCwd';
 
