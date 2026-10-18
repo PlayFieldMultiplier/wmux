@@ -4561,6 +4561,12 @@ function registerRpcHandlers(
         if (recordPaneIdentity(managed.meta, canonical, Date.now())) {
           stateWriter.saveImmediate(buildState(sessionManager));
         }
+        // A hook that resolves to a live agent (hook or process tier) is the
+        // other evidence that consumes a recovered pane's resume offer.
+        if (canonical && canonical.source !== 'screen') {
+          recoveredAgentShellIds.delete(sessionId);
+          recoveredResumeBindings.delete(sessionId);
+        }
         const wslTarget = managed.meta.wslTarget;
         if (!wslTarget) {
           agentProcessTracker.arm(sessionId, managed.meta.pid);
@@ -8548,6 +8554,15 @@ async function main(): Promise<void> {
         sessionId,
         data: { slug: state.slug ?? null },
       });
+    }
+    // A named agent's launch edge is the process evidence that consumes a
+    // recovered pane's resume offer (the banner path leaves it to the process
+    // or hook tier). Done here, not left to liveRecoveryHint's next read: an
+    // agent launched and exited between two reads would leave the old offer
+    // and binding standing for the next reconnect.
+    if (state.alive && state.slug) {
+      recoveredAgentShellIds.delete(sessionId);
+      recoveredResumeBindings.delete(sessionId);
     }
     const managed = sessionManager.getSession(sessionId);
     if (!managed) return;

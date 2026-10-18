@@ -128,6 +128,27 @@ describe('X6 ② reboot-survival durability', () => {
     }
   });
 
+  it('a named agent\'s launch edge consumes the recovery offer at once', () => {
+    // liveRecoveryHint drops the pair only when a session list is read while
+    // the agent is alive; an agent launched and exited between two reads
+    // would otherwise leave the old offer for the next reconnect.
+    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const idx = src.indexOf('agentProcessTracker.setStateChangeListener(');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 6000);
+    const guard = body.indexOf('if (state.alive && state.slug) {');
+    expect(guard).toBeGreaterThan(-1);
+    expect(body.slice(guard, guard + 160)).toMatch(/recoveredAgentShellIds\.delete\(sessionId\);\s*recoveredResumeBindings\.delete\(sessionId\);/);
+  });
+
+  it('a hook that resolves to a live agent consumes the recovery offer', () => {
+    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const idx = src.indexOf('onAuthorityTouched: (sessionId, signal) =>');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 2500);
+    expect(body).toMatch(/if \(canonical && canonical\.source !== 'screen'\) \{\s*recoveredAgentShellIds\.delete\(sessionId\);\s*recoveredResumeBindings\.delete\(sessionId\);/);
+  });
+
   it('session:cwd handler persists via saveAsap (immediate persist, async write)', () => {
     // 30-session scaling: the cwd persist moved from saveImmediate (sync
     // write on the event loop — stalls daemon.ping under fleet-wide `cd`
