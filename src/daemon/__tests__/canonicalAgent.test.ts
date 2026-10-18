@@ -30,7 +30,7 @@ describe('resolveCanonicalAgentIdentity (#919 tier rule)', () => {
   it('an unarmed tracker + fresh exact-routed hook → hook wins', () => {
     expect(
       resolveCanonicalAgentIdentity({ auth: auth('claude', 30_000), screenSlug: 'grok' }),
-    ).toEqual({ slug: 'claude', source: 'hook' });
+    ).toEqual({ slug: 'claude', source: 'hook', observedAgoMs: 30_000 });
   });
 
   it('corroboration bypasses age and routing: a 25-min-old cwd-routed hook with a live same-slug process wins', () => {
@@ -102,7 +102,7 @@ describe('resolveCanonicalAgentIdentity (#919 tier rule)', () => {
         auth: auth('claude', 5_000),
         screenSlug: 'claude',
       }),
-    ).toEqual({ slug: 'claude', source: 'hook' });
+    ).toEqual({ slug: 'claude', source: 'hook', observedAgoMs: 5_000 });
     // Past IDENTITY_TTL the hook can no longer vouch: residue again.
     expect(
       resolveCanonicalAgentIdentity({
