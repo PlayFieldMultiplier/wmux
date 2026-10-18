@@ -98,7 +98,7 @@ import { probeProjectConfig, maybeAutoApplyProjectLayout, workspaceProbeCwd } fr
 import { serializeTerminalBuffer } from '../../utils/scrollbackDump';
 import { pastePtyChunked } from '../../utils/clipboardChunk';
 import { isDaemonModeActive, setDaemonModeActive } from '../../daemon/daemonMode';
-import { hasPendingReattach, noteDaemonConnected, noteDaemonDisconnected, noteDaemonGaveUp, noteDaemonReconnecting, notePaneReattached, type DaemonPaneRef } from '../../daemon/daemonLinkNotice';
+import { hasPendingReattach, noteDaemonConnected, noteDaemonDisconnected, noteDaemonGaveUp, noteDaemonReconnecting, notePaneReattached, setDaemonLinkSurfaceResolver, type DaemonPaneRef } from '../../daemon/daemonLinkNotice';
 import { planAgentCandidateSeed, planLiveAgentSeed, asAgentSlug, markSeedAttempted } from '../../channels/agentCandidateSeed';
 import { agentSlugToDisplay } from '../../../shared/agentIdentity';
 import { RECONCILE_TIMEOUT_MS } from '../../../shared/timeouts';
@@ -1748,9 +1748,11 @@ export default function AppLayout() {
     });
     // A pane is back once its own session pipe has replayed; the surface
     // lookup covers a reconcile that rebound it to a new session.
+    const surfaceForPty = (ptyId: string): string | null => boundSurfaces().find((p) => p.ptyId === ptyId)?.surfaceId ?? null;
+    setDaemonLinkSurfaceResolver(surfaceForPty);
     const offFlushComplete = window.electronAPI.pty.onFlushComplete((ptyId) => {
       if (!hasPendingReattach()) return;
-      notePaneReattached(ptyId, () => boundSurfaces().find((p) => p.ptyId === ptyId)?.surfaceId ?? null);
+      notePaneReattached(ptyId, () => surfaceForPty(ptyId));
     });
     const offReconnecting = window.electronAPI.daemon.onReconnecting(({ attempt }) => {
       noteDaemonReconnecting(attempt);

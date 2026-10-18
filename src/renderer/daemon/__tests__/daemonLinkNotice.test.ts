@@ -10,6 +10,7 @@ import {
   notePaneInput,
   notePaneReattached,
   resetDaemonLinkNoticeForTests,
+  setDaemonLinkSurfaceResolver,
 } from '../daemonLinkNotice';
 
 const PANES = [{ surfaceId: 'sA', ptyId: 'a' }, { surfaceId: 'sB', ptyId: 'b' }];
@@ -56,6 +57,21 @@ describe('daemon link notice', () => {
     vi.advanceTimersByTime(RECONNECTED_NOTICE_MS);
     expect(getPaneLinkNotice('sA')).toBeNull();
     expect(getPaneLinkNotice('sB')?.state).toBe('reconnecting');
+  });
+
+  it('flags input sent to a rebound session before its replay finished', () => {
+    noteDaemonDisconnected(PANES);
+    noteDaemonConnected();
+    setDaemonLinkSurfaceResolver((ptyId) => (ptyId === 'a-new' ? 'sA' : ptyId === 'local' ? 'sLocal' : null));
+    // Reconcile rebound sA to a-new; its pipe has not replayed yet.
+    notePaneInput('a-new');
+    // A pane opened during the gap has no notice and stays unflagged.
+    notePaneInput('local');
+    expect(getPaneLinkNotice('sA')).toEqual({ state: 'reconnecting', attempt: 0, inputLost: true });
+    expect(getPaneLinkNotice('sLocal')).toBeNull();
+    notePaneReattached('a-new', none);
+    vi.advanceTimersByTime(RECONNECTED_NOTICE_MS);
+    expect(getPaneLinkNotice('sA')).toEqual({ state: 'reconnected', attempt: 0, inputLost: true });
   });
 
   it('stays after the respawn budget runs out, until dismissed', () => {

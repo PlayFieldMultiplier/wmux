@@ -40,6 +40,8 @@ const surfaceByPty = new Map<string, string>();
 const clearTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let down = false;
 const listeners = new Set<() => void>();
+/** Store lookup for a ptyId the drop did not see (set once by AppLayout). */
+let resolveSurfaceForPty: (ptyId: string) => string | null = () => null;
 
 function notify(): void {
   for (const listener of listeners) listener();
@@ -132,6 +134,15 @@ export function notePaneReattached(ptyId: string, resolveSurfaceId: () => string
   notify();
 }
 
+/**
+ * How notePaneInput finds the surface of a ptyId it has not mapped: a
+ * reconcile may rebind a cut-off surface to a new session before that
+ * session's flush-complete, and input sent to it then is still lost.
+ */
+export function setDaemonLinkSurfaceResolver(resolve: (ptyId: string) => string | null): void {
+  resolveSurfaceForPty = resolve;
+}
+
 /** daemon:respawn-exhausted — no more attempts this session. */
 export function noteDaemonGaveUp(): void {
   if (!down) return;
@@ -147,9 +158,19 @@ export function noteDaemonGaveUp(): void {
  * user has moved on, so the notice goes.
  */
 export function notePaneInput(ptyId: string): void {
-  const surfaceId = surfaceByPty.get(ptyId);
-  const n = surfaceId ? notices.get(surfaceId) : undefined;
-  if (!surfaceId || !n) return;
+  // Every keystroke lands here; with no notice there is nothing to look up.
+  if (notices.size === 0) return;
+  let surfaceId = surfaceByPty.get(ptyId);
+  if (!surfaceId) {
+    // A surface rebound to a new session keeps its notice; a pane opened
+    // during the gap has none, so it stays unmapped.
+    const resolved = resolveSurfaceForPty(ptyId);
+    if (!resolved || !notices.has(resolved)) return;
+    surfaceByPty.set(ptyId, resolved);
+    surfaceId = resolved;
+  }
+  const n = notices.get(surfaceId);
+  if (!n) return;
   if (n.state === 'reconnected') {
     drop(surfaceId);
   } else if (!n.inputLost) {
@@ -171,6 +192,7 @@ export function dismissPaneLinkNotice(surfaceId: string): void {
 export function resetDaemonLinkNoticeForTests(): void {
   for (const surfaceId of [...notices.keys()]) drop(surfaceId);
   surfaceByPty.clear();
+  resolveSurfaceForPty = () => null;
   down = false;
   notify();
 }
