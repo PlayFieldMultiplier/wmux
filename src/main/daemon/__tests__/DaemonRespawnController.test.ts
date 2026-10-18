@@ -1175,3 +1175,56 @@ describe('DaemonRespawnController hands its exit watch over for a full shutdown'
     expect(ew.watches[0].reports).toEqual(['full shutdown']);
   });
 });
+
+/**
+ * #2398 — the local pty:reconnect handler answers "session gone" for an id it
+ * does not own only once no daemon is coming back. While a respawn is pending
+ * the id may be the daemon's, so the answer stays transient.
+ */
+describe('DaemonRespawnController.daemonMayReturn (#2398)', () => {
+  it('is true while the first launch is in flight, false once it failed', async () => {
+    const h = makeHarness();
+    let release!: () => void;
+    (h.deps as { ensureDaemon: () => Promise<DaemonInfo> }).ensureDaemon = () =>
+      new Promise((resolve) => { release = () => resolve({ pid: 1, authToken: 't', pipeName: 'p', spawned: true }); });
+    const c1 = new FakeDaemonClient();
+    c1.connectImpl = async () => false;
+    h.clientQueue.push(c1);
+
+    const booting = h.controller.bootstrap();
+    expect(h.controller.daemonMayReturn).toBe(true);
+    release();
+    await booting;
+    // bootstrap has no retry of its own: the local fallback is final.
+    expect(h.controller.daemonMayReturn).toBe(false);
+  });
+
+  it('is true while a respawn is pending, false once the budget is exhausted', async () => {
+    const h = makeHarness({ config: { baseBackoffMs: 100, maxBackoffMs: 100, budget: 2, healthIntervalMs: 0 } });
+    const c1 = new FakeDaemonClient();
+    h.clientQueue.push(c1);
+    await h.controller.bootstrap();
+
+    (h.deps as { ensureDaemon: () => Promise<DaemonInfo> }).ensureDaemon = async () => { throw new Error('spawn failed'); };
+    c1.fireDisconnect();
+    expect(h.controller.daemonMayReturn).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.controller.daemonMayReturn).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.events.some((e) => e.type === 'respawn-exhausted')).toBe(true);
+    expect(h.controller.daemonMayReturn).toBe(false);
+  });
+
+  it('is false again once a respawn installs a client', async () => {
+    const h = makeHarness({ config: { baseBackoffMs: 100, maxBackoffMs: 100, budget: 5, healthIntervalMs: 0 } });
+    const c1 = new FakeDaemonClient();
+    const c2 = new FakeDaemonClient();
+    h.clientQueue.push(c1, c2);
+    await h.controller.bootstrap();
+    c1.fireDisconnect();
+    expect(h.controller.daemonMayReturn).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.controller.isHealthy).toBe(true);
+    expect(h.controller.daemonMayReturn).toBe(false);
+  });
+});

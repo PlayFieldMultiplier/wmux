@@ -179,6 +179,8 @@ export class DaemonRespawnController {
    *  re-entrant respawn schedules from a health probe that races a real
    *  socket close. */
   private respawning = false;
+  /** True while `bootstrap()` is launching the first daemon. */
+  private bootstrapping = false;
   /**
    * Latest error captured by the respawn loop — set on bootstrap throw,
    * spawnAndConnect null returns inside attemptRespawn, and any other
@@ -221,6 +223,19 @@ export class DaemonRespawnController {
     return this.client !== null && this.client.isConnected;
   }
 
+  /**
+   * #2398 — whether a daemon may still come (back) without an app restart:
+   * the first launch is in flight, or a respawn is scheduled or running.
+   * False once the launch failed (bootstrap has no retry of its own) or the
+   * respawn budget ran out: the local-PTY fallback is then final, and a
+   * session only the daemon held is gone for this run. Read while no client
+   * is installed (the local handlers).
+   */
+  get daemonMayReturn(): boolean {
+    if (this.disposed || this.exhausted) return false;
+    return this.bootstrapping || this.respawning;
+  }
+
   /** Current active client, or null when in local-only fallback. */
   getClient(): DaemonClient | null {
     return this.client;
@@ -234,6 +249,7 @@ export class DaemonRespawnController {
   async bootstrap(): Promise<DaemonClient | null> {
     if (this.disposed) throw new Error('DaemonRespawnController already disposed');
     if (this.client) return this.client;
+    this.bootstrapping = true;
     try {
       const client = await this.spawnAndConnect();
       if (!client) {
@@ -259,6 +275,8 @@ export class DaemonRespawnController {
       this.lastError = this.stringifyError(err);
       this.deps.logger.warn(`bootstrap failed: ${this.lastError}`);
       return null;
+    } finally {
+      this.bootstrapping = false;
     }
   }
 

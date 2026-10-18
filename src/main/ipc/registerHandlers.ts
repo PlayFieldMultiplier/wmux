@@ -167,6 +167,11 @@ export interface RegisterHandlersOptions {
    * router's own PermissionEnforcer applies per-method.
    */
   invokeRendererRpc?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * #2398 — whether a daemon may still come (back) while the handlers are
+   * local; the local pty:reconnect answers "session gone" only once it may not.
+   */
+  daemonMayReturn?: () => boolean;
 }
 
 export function registerAllHandlers(
@@ -176,7 +181,7 @@ export function registerAllHandlers(
   daemonClient?: DaemonClient,
   options: RegisterHandlersOptions = {},
 ): () => void {
-  const cleanupPty = registerPTYHandlers(ptyManager, ptyBridge, daemonClient, getWindow);
+  const cleanupPty = registerPTYHandlers(ptyManager, ptyBridge, daemonClient, getWindow, { daemonMayReturn: options.daemonMayReturn });
   const cleanupUsageLimit = registerUsageLimitHandlers(daemonClient, getWindow);
   const cleanupContinueOnAccount = registerContinueOnAccountHandler(daemonClient);
   const cleanupWorkspaceSettle = registerWorkspaceSettle(getWindow, { daemonClient, ptyManager });
