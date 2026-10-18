@@ -86,6 +86,12 @@ describe('Bots profile model pickers', () => {
     expect(q('[role="alert"]')).toBeNull();
   });
 
+  it('a stored model id with padding opens the editor trimmed', async () => {
+    act(() => root.render(<BrainModelLine row={row({ engine: { kind: 'claude-sdk', model: '  haiku  ' } })} t={t} port={{ update: vi.fn(async () => ({ ok: true })) }} />));
+    await click(q('[data-testid="bots-profile-brain-edit"]'));
+    expect(q<HTMLInputElement>('[data-testid="bots-profile-brain"] input[role="combobox"]')!.value).toBe('haiku');
+  });
+
   it('the workers\' model: a model alone pins Claude workers on it; main\'s refusal is shown', async () => {
     const update = vi.fn(async () => ({ ok: false, message: 'workerAgent: refused by main' }));
     act(() => root.render(<WorkerModelLine row={row({ engine: { kind: 'claude-sdk' } })} t={t} port={{ update }} />));

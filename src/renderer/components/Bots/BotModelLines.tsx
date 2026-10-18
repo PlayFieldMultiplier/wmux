@@ -156,7 +156,7 @@ export function BrainModelLine({ row, t, port }: { row: FactoryBotRow; t: T; por
       testId="bots-profile-brain"
       shown={shownModel(DEFAULT_BOT_WORKER_AGENT, unusable === null ? engine.model : undefined, engine.effort, t)}
       {...(unusable !== null ? { warning: t('botsPage.models.storedInvalid', { model: unusable }) } : {})}
-      model0={unusable === null ? engine.model ?? '' : ''}
+      model0={unusable === null ? engine.model?.trim() ?? '' : ''}
       effort0={engine.effort ?? ''}
       models={models}
       efforts={CLAUDE_EFFORTS}
