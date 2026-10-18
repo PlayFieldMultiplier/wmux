@@ -21,6 +21,11 @@ describe('describeExitCode', () => {
     expect(describeExitCode(0)).toBe('0x00000000 (clean exit)');
   });
 
+  it('names the code Electron’s Crashpad client ends a crashed daemon with', () => {
+    // What the packaged daemon exited with when node-pty faulted (#2398).
+    expect(describeExitCode(0xffff7003)).toBe('0xFFFF7003 (native crash; Crashpad had no handler, the fault code is lost)');
+  });
+
   it('gives an unknown code its decimal value', () => {
     expect(describeExitCode(77)).toBe('0x0000004D (code 77)');
     expect(hexExitCode(0xdeadbeef)).toBe('0xDEADBEEF');
