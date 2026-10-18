@@ -29,6 +29,7 @@ import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
 import { killProcessTree } from './automation/treeKill';
+import { captureProcessTree, matchesRecordedStart, type CapturedTree } from './automation/verifiedTreeKill';
 import { recordedRunPtyIds } from './automation/store';
 import { AUTOMATION_EVENT } from '../shared/automation';
 import { InputReceiptStore } from './web/InputReceiptStore';
@@ -157,7 +158,7 @@ import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
 import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonState } from './types';
-import type { DaemonEvent, DaemonCreateSessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
+import type { DaemonEvent, DaemonCreateSessionParams, DaemonDestroySessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
 import { gitWatchCwdFor } from './gitWatchCwd';
 import { randomUUID } from 'node:crypto';
@@ -2587,11 +2588,18 @@ function registerRpcHandlers(
   // Named for the same reason as createSessionRpc:
   // DELETE /api/sessions/:id must reap a pane exactly as a pane close does,
   // including the pipe stop, the listener removal and the buffer-dump cleanup.
+  //
+  // `killTree` (#2388): the pane's whole process tree is killed and checked
+  // gone, not just its shell. The tree is captured right before the PTY is
+  // destroyed, while the shell still runs (the destroy would orphan it), and
+  // killed after; the reply's `tree` says whether every process exited. A
+  // caller about to delete the folder the pane ran in keeps it when one did
+  // not.
   const destroySessionRpc = async (params: Record<string, unknown>): Promise<unknown> => {
-    const p = params as unknown as DaemonSessionIdParams;
+    const p = params as unknown as DaemonDestroySessionParams;
     // OBSERVABILITY: log wmux-initiated kills (pane/workspace close, reset) so
     // they can be told apart from a process self-exit in the session:died log.
-    log('info', `[lifecycle] destroySession id=${p.id} reason=rpc`);
+    log('info', `[lifecycle] destroySession id=${p.id} reason=rpc${p.killTree === true ? ' killTree' : ''}`);
 
     // Remove data listener to prevent leak
     const tracked = sessionDataListeners.get(p.id);
@@ -2617,7 +2625,19 @@ function registerRpcHandlers(
     paneSupervisor.disarm(p.id);
 
     await codexPaneRelays.retire(p.id);
-    sessionManager.destroySession(p.id);
+    let captured: CapturedTree | null = null;
+    const live = p.killTree === true ? sessionManager.getSession(p.id)?.meta : undefined;
+    if (live && (live.state === 'attached' || live.state === 'detached') && live.pid > 0) {
+      captured = await captureProcessTree(live.pid, { rootIsOurs: (start) => matchesRecordedStart(live.pidStartTime, start) });
+    }
+    try {
+      sessionManager.destroySession(p.id);
+    } catch (err) {
+      // Nothing killed: the captured tree runs on (POSIX: thawed).
+      captured?.release();
+      throw err;
+    }
+    const tree = p.killTree === true ? (captured ? await captured.kill() : { ok: true as const, killed: [] }) : undefined;
 
     // Clean up buffer dump file if exists
     const bufPath = stateWriter.getBufferDumpPath(p.id);
@@ -2626,7 +2646,9 @@ function registerRpcHandlers(
     const state = buildState(sessionManager);
     stateWriter.saveImmediate(state);
 
-    return { ok: true };
+    if (!tree) return { ok: true };
+    if (!tree.ok) log('warn', `[lifecycle] destroySession id=${p.id}: ${tree.survivors.length} process(es) of the pane did not exit: ${tree.survivors.map((s) => `${s.pid} (${s.reason})`).join(', ')}`);
+    return { ok: true, tree };
   };
   pipeServer.onRpc('daemon.destroySession', destroySessionRpc);
 

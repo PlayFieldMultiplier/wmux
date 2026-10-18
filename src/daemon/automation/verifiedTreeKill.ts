@@ -1,0 +1,384 @@
+// Kill a process tree and KNOW it is gone (#2388).
+//
+// treeKill.ts sends the signals and returns; nothing says whether every
+// process in the tree exited. A caller that removes a folder afterwards (a
+// task worktree) needs that answer: on Windows a process still running in the
+// folder, or holding a file there, makes the delete fail part way. So this
+// helper takes the tree in two steps:
+//   1. capture, while the root is still alive (before the PTY is destroyed,
+//      which would orphan the tree): every descendant found and pinned;
+//   2. kill: everything captured, plus any child a captured process started
+//      since, and then wait until each one has exited. Whatever has not by
+//      the deadline is reported as a survivor; the caller fails closed.
+//
+// Windows: a handle is opened on every process in the tree. A held handle
+// keeps Windows from handing the pid to another process, so the ppid walk
+// in later rounds cannot reach an unrelated process through a reused pid,
+// and "exited" is read from the handle (signaled), not from the pid: an
+// exited process whose handle someone still holds keeps its pid. Windows
+// never re-parents an orphan, so a process whose ppid names one of ours
+// is ours only if it was created no earlier than that process (the rule
+// collectTreeCpuTimes in winSnapshotNative.ts applies) and no later than the
+// table it was read from.
+//
+// POSIX: the tree is frozen (SIGSTOP, rescanning until no new descendant
+// appears, as killProcessTreePosix does), so nothing in it can fork or exit
+// before the kill; a frozen process keeps its pid. After SIGKILL, each pid
+// is polled until it is gone or a zombie (which holds no files), its start
+// time compared so a reused pid is not mistaken for a survivor's absence.
+//
+// Not covered, by construction: a process that left the tree before the
+// capture (a POSIX daemon re-parented to init, a Windows process whose
+// parent had already exited and been released), and the Linux side of a WSL
+// pane, which the Windows process table does not show. Kept independent of
+// any caller (the worktree removal, a future Job Object, #2398).
+
+import { execFile } from 'node:child_process';
+import { collectDescendants } from './treeKill';
+import { tryProcessHandleApi, type ProcessHandle, type ProcessHandleApi } from '../../main/pty/winSnapshotNative';
+
+/** A process of the tree that did not exit, and why. */
+export interface TreeKillSurvivor {
+  pid: number;
+  reason: string;
+}
+
+export type VerifiedTreeKillResult =
+  | { ok: true; killed: number[] }
+  | { ok: false; killed: number[]; survivors: TreeKillSurvivor[] };
+
+/** A process tree captured while its root was alive. */
+export interface CapturedTree {
+  readonly rootPid: number;
+  /** The pids captured so far, root first. */
+  pids(): number[];
+  /** Kill everything captured and every child a captured process started
+   *  since, then wait (up to `timeoutMs`) until each has exited. Releases
+   *  what the capture held; call once. */
+  kill(opts?: { timeoutMs?: number }): Promise<VerifiedTreeKillResult>;
+  /** Release what the capture held without killing anything. */
+  release(): void;
+}
+
+/** How long kill() waits for the tree to exit. */
+export const VERIFIED_TREE_KILL_TIMEOUT_MS = 5000;
+const POLL_MS = 50;
+/** Capture rounds (rescans of the process table) before giving up on a tree
+ *  that keeps growing. */
+export const CAPTURE_ROUNDS = 8;
+
+export interface CaptureOptions {
+  /** Whether the root found at the pid is the process the caller means:
+   *  given the root's creation time (Windows: FILETIME; POSIX: `ps -o
+   *  lstart=`), false when it is another one (the pid was reused). Null or
+   *  absent: not known, taken as the caller's. */
+  rootIsOurs?: (startTime: string) => boolean | null;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A {@link CaptureOptions.rootIsOurs} from a start time recorded at spawn
+ * (a session's `pidStartTime`): equal readings name the same process. Null
+ * (unknown) when nothing was recorded or the recorded value is in another
+ * format than the one read now (a Windows record in CIM's DMTF format, from
+ * before start times were read natively as a FILETIME). POSIX `lstart` pads
+ * a one-digit day with a second space, so runs of spaces compare as one.
+ */
+export function matchesRecordedStart(recorded: string | undefined, current: string): boolean | null {
+  if (!recorded) return null;
+  if (process.platform === 'win32') return /^\d+$/.test(recorded) ? recorded === current : null;
+  return recorded.trim().replace(/\s+/g, ' ') === current.trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * Capture the tree rooted at `rootPid`. Null when the root is gone already
+ * (or is not the caller's process): there is no tree to take. Never throws.
+ */
+export async function captureProcessTree(rootPid: number, opts: CaptureOptions = {}): Promise<CapturedTree | null> {
+  if (!Number.isInteger(rootPid) || rootPid <= 1) return null;
+  if (process.platform === 'win32') {
+    const api = tryProcessHandleApi();
+    // Without the native path nothing can be pinned or verified: fail closed.
+    if (!api) return failedCapture(rootPid, 'native process access is unavailable');
+    return captureTreeWin32(rootPid, api, opts);
+  }
+  return captureTreePosix(rootPid, defaultPosixDeps, opts);
+}
+
+/** Capture and kill in one step (the root must still be alive). */
+export async function killProcessTreeVerified(
+  rootPid: number,
+  opts: CaptureOptions & { timeoutMs?: number } = {},
+): Promise<VerifiedTreeKillResult> {
+  const tree = await captureProcessTree(rootPid, opts);
+  return tree ? tree.kill({ timeoutMs: opts.timeoutMs }) : { ok: true, killed: [] };
+}
+
+/** A capture that could not see the tree: its kill reports the root as a
+ *  survivor, so the caller keeps whatever it guards. */
+function failedCapture(rootPid: number, reason: string): CapturedTree {
+  return {
+    rootPid,
+    pids: () => [rootPid],
+    kill: async () => ({ ok: false, killed: [], survivors: [{ pid: rootPid, reason }] }),
+    release: () => undefined,
+  };
+}
+
+// ─── Windows ────────────────────────────────────────────────────────────────
+
+interface WinTracked {
+  pid: number;
+  handle: ProcessHandle;
+  createdAt: bigint;
+  canTerminate: boolean;
+}
+
+/** Exported for tests, with a fake {@link ProcessHandleApi}. */
+export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: CaptureOptions = {}): CapturedTree | null {
+  const sleep = opts.sleep ?? defaultSleep;
+  const root = api.open(rootPid);
+  if ('gone' in root) return null;
+  if ('failure' in root) return failedCapture(rootPid, `the root could not be opened: ${root.failure}`);
+  if (opts.rootIsOurs?.(root.createdAt.toString()) === false) {
+    api.close(root.handle);
+    return null;
+  }
+  const tracked = new Map<number, WinTracked>([[rootPid, { pid: rootPid, ...root }]]);
+  /** Processes whose ppid names one of ours but that could not be identified. */
+  const unidentified = new Map<number, string>();
+  let released = false;
+
+  /** One rescan: adds every new process of the tree. Returns how many were
+   *  added; throws when the table cannot be read. */
+  const scan = (): number => {
+    const table = api.processTable();
+    // Every process in the table was created by the time it was read.
+    const readAt = api.now();
+    const children = new Map<number, number[]>();
+    for (const { pid, ppid } of table) {
+      if (pid === ppid) continue;
+      const list = children.get(ppid);
+      if (list) list.push(pid);
+      else children.set(ppid, [pid]);
+    }
+    let added = 0;
+    const queue = [...tracked.values()];
+    for (let parent = queue.shift(); parent !== undefined; parent = queue.shift()) {
+      for (const pid of children.get(parent.pid) ?? []) {
+        if (tracked.has(pid)) continue;
+        const opened = api.open(pid);
+        if ('gone' in opened) continue;
+        if ('failure' in opened) {
+          // Its ppid names one of ours, pinned, so it is ours or an orphan
+          // older than the process now holding that pid: unknown either way.
+          unidentified.set(pid, `could not be identified: ${opened.failure}`);
+          continue;
+        }
+        // Older than its "parent": an orphan whose dead parent's pid went to
+        // one of ours. Newer than the table: a later process on a pid the
+        // table had for an exited one.
+        if (opened.createdAt < parent.createdAt || opened.createdAt > readAt) {
+          api.close(opened.handle);
+          continue;
+        }
+        unidentified.delete(pid);
+        const t: WinTracked = { pid, ...opened };
+        tracked.set(pid, t);
+        queue.push(t);
+        added++;
+      }
+    }
+    return added;
+  };
+
+  let scanError: string | null = null;
+  const tryScan = (): number => {
+    try {
+      return scan();
+    } catch (err) {
+      scanError = err instanceof Error ? err.message : String(err);
+      return 0;
+    }
+  };
+  for (let round = 0; round < CAPTURE_ROUNDS && tryScan() > 0; round++) { /* grow until stable */ }
+
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    for (const t of tracked.values()) api.close(t.handle);
+  };
+
+  const exited = (t: WinTracked): boolean => api.hasExited(t.handle) === true;
+
+  return {
+    rootPid,
+    pids: () => [...tracked.keys()],
+    release,
+    kill: async ({ timeoutMs = VERIFIED_TREE_KILL_TIMEOUT_MS } = {}) => {
+      if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released' }] };
+      const deadline = Date.now() + timeoutMs;
+      const refused = new Map<number, string>();
+      try {
+        // Parents first, so a parent stops starting children as early as
+        // possible; a child it started meanwhile is found by the rescan.
+        const terminateAll = (): void => {
+          for (const t of tracked.values()) {
+            if (exited(t) || refused.has(t.pid)) continue;
+            if (!t.canTerminate) refused.set(t.pid, 'access denied (another user\'s or an elevated process)');
+            else if (!api.terminate(t.handle) && !exited(t)) refused.set(t.pid, 'TerminateProcess failed');
+          }
+        };
+        terminateAll();
+        for (;;) {
+          // Settled when every captured process has exited and a table read
+          // after that shows no child of theirs: an exited process starts
+          // nothing, so none can appear later.
+          const allExited = [...tracked.values()].every(exited);
+          const added = tryScan();
+          if (added > 0) terminateAll();
+          if (Date.now() >= deadline) break;
+          if (added > 0) continue;
+          if (allExited) break;
+          await sleep(POLL_MS);
+        }
+        const survivors: TreeKillSurvivor[] = [];
+        for (const t of tracked.values()) {
+          if (exited(t)) continue;
+          survivors.push({ pid: t.pid, reason: refused.get(t.pid) ?? 'still running' });
+        }
+        for (const [pid, reason] of unidentified) survivors.push({ pid, reason });
+        const killed = [...tracked.values()].filter(exited).map((t) => t.pid);
+        if (scanError !== null) survivors.push({ pid: rootPid, reason: `the process table could not be read: ${scanError}` });
+        return survivors.length === 0 ? { ok: true, killed } : { ok: false, killed, survivors };
+      } finally {
+        release();
+      }
+    },
+  };
+}
+
+// ─── POSIX ──────────────────────────────────────────────────────────────────
+
+/** One row of `ps -axo pid=,ppid=,stat=,lstart=`. */
+export interface PosixProcRow {
+  pid: number;
+  ppid: number;
+  /** Process state; a zombie starts with `Z`. */
+  stat: string;
+  /** `lstart`: the start time, as the daemon records a session's pid. */
+  start: string;
+}
+
+export interface PosixTreeDeps {
+  /** The process table; throws when it cannot be read. */
+  listProcesses(): Promise<PosixProcRow[]>;
+  signal(pid: number, sig: NodeJS.Signals): void;
+}
+
+export function parsePsIdentityRows(output: string): PosixProcRow[] {
+  const rows: PosixProcRow[] = [];
+  for (const line of output.split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), stat: m[3], start: m[4].replace(/\s+/g, ' ') });
+  }
+  return rows;
+}
+
+const defaultPosixDeps: PosixTreeDeps = {
+  listProcesses: () =>
+    new Promise((resolve, reject) => {
+      // The daemon's own environment, as getProcessStartTime reads a
+      // session's `lstart`: the same locale gives the same words.
+      execFile('/bin/ps', ['-axo', 'pid=,ppid=,stat=,lstart='], { timeout: 2000, maxBuffer: 8 * 1024 * 1024 }, (error, output) => {
+        if (error) reject(error);
+        else resolve(parsePsIdentityRows(output ?? ''));
+      });
+    }),
+  signal: (pid, sig) => process.kill(pid, sig),
+};
+
+/** Exported for tests, with fake {@link PosixTreeDeps}. */
+export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opts: CaptureOptions = {}): Promise<CapturedTree | null> {
+  const sleep = opts.sleep ?? defaultSleep;
+  const send = (pid: number, sig: NodeJS.Signals): void => {
+    try {
+      deps.signal(pid, sig);
+    } catch {
+      /* already gone */
+    }
+  };
+  let rows: PosixProcRow[];
+  try {
+    rows = await deps.listProcesses();
+  } catch (err) {
+    return failedCapture(rootPid, `the process table could not be read: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const rootRow = rows.find((r) => r.pid === rootPid);
+  if (!rootRow || rootRow.stat.startsWith('Z')) return null;
+  if (opts.rootIsOurs?.(rootRow.start) === false) return null;
+  /** pid → start time, in discovery order (parents before children). */
+  const targets = new Map<number, string>();
+  let scanError: string | null = null;
+  for (let round = 0; round < CAPTURE_ROUNDS; round++) {
+    if (round > 0) {
+      try {
+        rows = await deps.listProcesses();
+      } catch (err) {
+        scanError = err instanceof Error ? err.message : String(err);
+        break;
+      }
+    }
+    const byPid = new Map(rows.map((r) => [r.pid, r]));
+    let added = 0;
+    for (const pid of collectDescendants(rows.map((r) => [r.pid, r.ppid] as const), rootPid)) {
+      if (targets.has(pid)) continue;
+      const row = byPid.get(pid);
+      if (!row) continue;
+      targets.set(pid, row.start);
+      send(pid, 'SIGSTOP');
+      added++;
+    }
+    if (added === 0) break;
+  }
+  let released = false;
+  return {
+    rootPid,
+    pids: () => [...targets.keys()],
+    release: () => {
+      if (released) return;
+      released = true;
+      for (const pid of targets.keys()) send(pid, 'SIGCONT');
+    },
+    kill: async ({ timeoutMs = VERIFIED_TREE_KILL_TIMEOUT_MS } = {}) => {
+      if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released' }] };
+      released = true;
+      // Leaves first (discovery order is parent-before-child), then the PTY's
+      // process group (the root is a session leader) and the root.
+      for (const pid of [...targets.keys()].reverse()) send(pid, 'SIGKILL');
+      send(-rootPid, 'SIGKILL');
+      send(rootPid, 'SIGKILL');
+      const deadline = Date.now() + timeoutMs;
+      let alive: TreeKillSurvivor[] = [];
+      for (;;) {
+        try {
+          const byPid = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
+          alive = [...targets].flatMap(([pid, start]) => {
+            const row = byPid.get(pid);
+            return row && row.start === start && !row.stat.startsWith('Z') ? [{ pid, reason: 'still running' }] : [];
+          });
+        } catch (err) {
+          alive = [...targets.keys()].map((pid) => ({ pid, reason: `the process table could not be read: ${err instanceof Error ? err.message : String(err)}` }));
+        }
+        if (alive.length === 0 || Date.now() >= deadline) break;
+        await sleep(POLL_MS);
+      }
+      const survivors = [...alive];
+      if (scanError !== null) survivors.push({ pid: rootPid, reason: `the process table could not be read: ${scanError}` });
+      const killed = [...targets.keys()].filter((pid) => !alive.some((s) => s.pid === pid));
+      return survivors.length === 0 ? { ok: true, killed } : { ok: false, killed, survivors };
+    },
+  };
+}

@@ -30,7 +30,7 @@ import { TaskCloseService } from '../../worktask/TaskCloseService';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
 import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
-import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
+import { destroyedTreeOf, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
 import { TaskPrService } from '../../worktask/TaskPrService';
 import { WorktaskScanService, type ScanOpenTask } from '../../worktask/WorktaskScanService';
 import { deletePhoneBranch, removePhoneWorktree } from '../../worktask/PhoneWorktreeRemoval';
@@ -105,7 +105,7 @@ export function registerWorktaskHandlers(
           const sessions = await dc.rpc('daemon.listSessions', {});
           return Array.isArray(sessions) ? sessions : [];
         },
-        destroySession: async (id) => { await dc.rpc('daemon.destroySession', { id }); },
+        destroySession: async (id) => destroyedTreeOf(await dc.rpc('daemon.destroySession', { id, killTree: true })),
         isAlive: isPidAlive,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         log: (message) => console.warn(message),

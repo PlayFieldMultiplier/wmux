@@ -86,7 +86,7 @@ import { BOT_EVENT } from '../../shared/bot';
 import type { LedgerEntry } from '../../shared/ledger';
 import { git } from '../git/git';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
-import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../worktask/stopSessionsInDir';
+import { destroyedTreeOf, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../worktask/stopSessionsInDir';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { originDefaultRef, taskFolderFromMissions, worktreeFromMissions } from './verifyPreset';
 import { completeCheckedTask, completeMergedTask, completeResearchTask, gateCardNoted, installTaskGate, recordNoChangesGate, worktreeHeadMerged } from './taskGate';
@@ -663,9 +663,7 @@ export async function stopTaskWorker(
     listSessions: agentsOnly
       ? async () => (await listSessions()).filter((x) => agentLive.has(x.id) && !stoppedAgents.has(x.id))
       : listSessions,
-    destroySession: async (id) => {
-      await rpc('daemon.destroySession', { id });
-    },
+    destroySession: async (id) => destroyedTreeOf(await rpc('daemon.destroySession', { id, killTree: true })),
     isAlive: isPidAlive,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     log: (message) => console.warn(message),

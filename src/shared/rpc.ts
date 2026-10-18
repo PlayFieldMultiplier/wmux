@@ -1268,6 +1268,19 @@ export interface DaemonSessionIdParams {
   id: string;
 }
 
+/** `daemon.destroySession`. `killTree`: also kill every process the pane's
+ *  shell started and check each one exited; the reply then carries `tree`
+ *  ({@link DaemonDestroySessionTree}). */
+export interface DaemonDestroySessionParams extends DaemonSessionIdParams {
+  killTree?: boolean;
+}
+
+/** `daemon.destroySession`'s `tree`: whether every process of the pane's
+ *  tree exited, and which did not. */
+export type DaemonDestroySessionTree =
+  | { ok: true; killed: number[] }
+  | { ok: false; killed: number[]; survivors: Array<{ pid: number; reason: string }> };
+
 /**
  * X6 ③: persist a resume binding on a session (daemon-side, saveImmediate).
  * `id` is the daemon session id (== ptyId); `resumeBinding.sessionId` is the

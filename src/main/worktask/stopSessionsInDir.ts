@@ -3,7 +3,9 @@
 // A shell or agent running in the worktree holds file handles, and on Windows
 // `git worktree remove` then deregisters the worktree but leaves part of the
 // folder behind. Task panes live in the daemon, so the sessions are found and
-// destroyed there, and the removal waits until their processes are gone.
+// destroyed there, each with its whole process tree (`killTree`, #2388: the
+// shell's children, an agent and its tools, would otherwise outlive it), and
+// the removal goes ahead only once the daemon has checked every one exited.
 //
 // Only `spawnCwd` decides: `cwd` comes from OSC 7, i.e. whatever a program in
 // the pane printed, and must never pick what gets killed (daemon/types.ts).
@@ -11,11 +13,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { normalizeWorktreePath } from '../../shared/workTask';
+import type { DaemonDestroySessionTree } from '../../shared/rpc';
 import { wslPathToHost } from '../../mcp/wslPaths';
 
 export interface SessionsInDirPort {
   listSessions(): Promise<Array<{ id: string; pid?: number; spawnCwd?: string; wslTarget?: { distribution?: unknown } }>>;
-  destroySession(id: string): Promise<void>;
+  /** Destroy the session and its whole process tree (`daemon.destroySession`
+   *  with `killTree`): answers whether every process of the tree exited. No
+   *  answer (a daemon from before `killTree`): only its shell is waited for. */
+  destroySession(id: string): Promise<DaemonDestroySessionTree | void>;
   /** Whether `pid` is still running. */
   isAlive(pid: number): boolean;
   sleep(ms: number): Promise<void>;
@@ -29,10 +35,18 @@ const EXIT_WAIT_MS = 5000;
 const EXIT_POLL_MS = 100;
 
 export class PanesStillRunningError extends Error {
-  constructor(readonly pids: number[]) {
-    super(`${pids.length} process(es) started in the worktree are still running`);
+  constructor(readonly pids: number[], reasons: string[] = []) {
+    super(`${pids.length} process(es) started in the worktree are still running${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`);
     this.name = 'PanesStillRunningError';
   }
+}
+
+/** The tree in a `daemon.destroySession` reply, when the daemon sent one. */
+export function destroyedTreeOf(reply: unknown): DaemonDestroySessionTree | undefined {
+  const tree = (reply as { tree?: unknown } | null)?.tree as { ok?: unknown; survivors?: unknown } | undefined;
+  if (!tree || typeof tree.ok !== 'boolean') return undefined;
+  if (tree.ok === false && !Array.isArray(tree.survivors)) return undefined;
+  return tree as DaemonDestroySessionTree;
 }
 
 function defaultRealpath(p: string): string {
@@ -76,10 +90,12 @@ export async function sessionsStartedIn(dirs: readonly string[], port: Pick<Sess
 }
 
 /**
- * Destroy every daemon session that was started in `dir` or below it, then wait
- * (up to 5 s) for their processes to exit. Returns the ids it destroyed. Throws
- * when a session cannot be destroyed or a process is still running, so the
- * caller keeps the worktree instead of removing it half-way.
+ * Destroy every daemon session that was started in `dir` or below it, each
+ * with its process tree, and confirm every process exited (the daemon checks
+ * the tree; a shell the daemon did not report on is waited for, up to 5 s).
+ * Returns the ids it destroyed. Throws when a session cannot be destroyed or
+ * a process is still running, so the caller keeps the worktree instead of
+ * removing it half-way.
  */
 export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): Promise<string[]> {
   const platform = port.platform ?? process.platform;
@@ -89,14 +105,23 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
   const unknown = sessions.filter((s) => !s.spawnCwd).length;
   if (unknown > 0) port.log?.(`[worktask] ${unknown} session(s) have no spawn directory recorded; left running`);
 
-  for (const s of inside) await port.destroySession(s.id);
+  const treeSurvivors: Array<{ pid: number; reason: string }> = [];
+  const unreported: number[] = [];
+  for (const s of inside) {
+    const tree = await port.destroySession(s.id);
+    if (tree) {
+      if (!tree.ok) treeSurvivors.push(...tree.survivors);
+    } else if (typeof s.pid === 'number' && s.pid > 0) {
+      unreported.push(s.pid);
+    }
+  }
+  if (unreported.length > 0) port.log?.(`[worktask] the daemon did not report on ${unreported.length} pane process tree(s); only their shells are waited for`);
 
-  const pids = inside.map((s) => s.pid).filter((p): p is number => typeof p === 'number' && p > 0);
-  for (let waited = 0; waited < EXIT_WAIT_MS && pids.some((p) => port.isAlive(p)); waited += EXIT_POLL_MS) {
+  for (let waited = 0; waited < EXIT_WAIT_MS && unreported.some((p) => port.isAlive(p)); waited += EXIT_POLL_MS) {
     await port.sleep(EXIT_POLL_MS);
   }
-  const survivors = pids.filter((p) => port.isAlive(p));
-  if (survivors.length > 0) throw new PanesStillRunningError(survivors);
+  const survivors = [...treeSurvivors, ...unreported.filter((p) => port.isAlive(p)).map((pid) => ({ pid, reason: 'still running' }))];
+  if (survivors.length > 0) throw new PanesStillRunningError(survivors.map((x) => x.pid), survivors.map((x) => `${x.pid}: ${x.reason}`));
   return inside.map((s) => s.id);
 }
 
