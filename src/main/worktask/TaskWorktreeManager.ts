@@ -839,6 +839,11 @@ export class TaskWorktreeManager {
         await this.forgetPending(rec.path);
         return { ok: true };
       }
+      // Every check first, stopping nothing: a folder that is kept anyway
+      // (work written into it since, git listing it again) never costs the
+      // panes running in it. The checks run again after the stop.
+      const eligible = await this.removeDeregisteredLeftover(rec, { checkOnly: true });
+      if (!eligible.ok) return this.leftoverKept(rec, eligible);
       if (beforeRemove) {
         try {
           await beforeRemove(rec.path);
@@ -851,15 +856,24 @@ export class TaskWorktreeManager {
         }
       }
       const leftover = await this.removeDeregisteredLeftover(rec);
-      if (leftover.ok || leftover.registered) await this.forgetPending(rec.path);
-      if (leftover.ok) return { ok: true };
-      return {
-        ok: false,
-        error: leftover.registered ? 'removeWorktree: the folder is a worktree of its repository again; it was kept' : `removeWorktree: ${leftover.error}`,
-        preserved: true,
-        ...(leftover.dirty ? { dirty: true } : {}),
-      };
+      if (leftover.ok) {
+        await this.forgetPending(rec.path);
+        return { ok: true };
+      }
+      return this.leftoverKept(rec, leftover);
     });
+  }
+
+  /** The result of a pending removal the second layer refused; a folder git
+   *  lists again ends its record (the next close takes the usual route). */
+  private async leftoverKept(rec: PendingWorktreeRemoval, leftover: Exclude<LeftoverResult, { ok: true }>): Promise<RemoveResult> {
+    if (leftover.registered) await this.forgetPending(rec.path);
+    return {
+      ok: false,
+      error: leftover.registered ? 'removeWorktree: the folder is a worktree of its repository again; it was kept' : `removeWorktree: ${leftover.error}`,
+      preserved: true,
+      ...(leftover.dirty ? { dirty: true } : {}),
+    };
   }
 
   /** The removals the pending store holds (the sweep at start). */
@@ -886,7 +900,7 @@ export class TaskWorktreeManager {
    *   - it is deleted by removeTreeNoFollow from the trusted root, which
    *     never follows a link and checks each folder is where it was.
    */
-  private async removeDeregisteredLeftover(rec: PendingWorktreeRemoval): Promise<LeftoverResult> {
+  private async removeDeregisteredLeftover(rec: PendingWorktreeRemoval, opts: { checkOnly?: boolean } = {}): Promise<LeftoverResult> {
     let real: string;
     let rootReal: string;
     let repoReal: string;
@@ -912,6 +926,7 @@ export class TaskWorktreeManager {
     const changed = await this.leftoverChanges(rec.repoRoot, real, rec.head);
     if (typeof changed !== 'number') return { ok: false, error: `the leftover folder was kept: its contents could not be compared with ${rec.head}: ${changed.error}` };
     if (changed > 0) return { ok: false, dirty: true, error: `the leftover folder was kept: ${changed} file(s) in it are not what git left` };
+    if (opts.checkOnly) return { ok: true };
 
     try {
       await this.removeTree(real, rootReal);

@@ -53,6 +53,9 @@ const lingering = new Map<string, TreeKillSurvivor[]>();
  * it waits for these first, and then sees what they left in `lingering`.
  */
 const inFlight = new Map<string, Promise<unknown>>();
+/** Counts registrations in `inFlight`, so a check can tell whether a stop
+ *  started while it was listing. */
+let stopsStarted = 0;
 
 /** The stops under way in `key`, in a folder inside it, or in one holding
  *  it, as one promise that settles when they all have. Taken synchronously,
@@ -155,10 +158,16 @@ export async function assertNothingRunsIn(dir: string, port: Pick<SessionsInDirP
   const platform = port.platform ?? process.platform;
   const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
   // A stop under way has taken its sessions off the list already: wait for
-  // it, then list, so a pane opened meanwhile is seen too.
-  await stopsAround(key);
-  const started = await sessionsStartedIn([dir], port);
-  if (started.length > 0) throw new Error(`${started.length} pane(s) were started in the folder`);
+  // it, then list, so a pane opened meanwhile is seen too. A stop that starts
+  // while the list is read takes its sessions off it: list again after it.
+  for (let attempt = 0; ; attempt++) {
+    const seen = stopsStarted;
+    await stopsAround(key);
+    const started = await sessionsStartedIn([dir], port);
+    if (started.length > 0) throw new Error(`${started.length} pane(s) were started in the folder`);
+    if (stopsStarted === seen) break;
+    if (attempt >= 4) throw new Error('stops of the folder keep starting');
+  }
   const earlier = lingering.get(key);
   if (!earlier) return;
   const still = identified(await (port.stillRunning ?? survivorsStillRunning)(earlier));
@@ -181,6 +190,7 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
   const before = stopsAround(key);
   const run = before.then(() => stopNow(dir, key, platform, port));
   inFlight.set(key, run);
+  stopsStarted++;
   try {
     return await run;
   } finally {

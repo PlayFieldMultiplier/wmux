@@ -198,6 +198,26 @@ describe('stopSessionsInDir', () => {
     await expect(check).rejects.toThrow(/started in the folder/);
   });
 
+  it('the sweep\'s check lists again when a stop starts while it lists', async () => {
+    let answer: (tree: DaemonDestroySessionTree) => void = () => undefined;
+    const checker = port([], 'linux');
+    let lists = 0;
+    checker.p.listSessions = async () => {
+      lists++;
+      if (lists === 1) {
+        // A stop of the folder starts while the list is read.
+        const stopping = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux');
+        stopping.p.destroySession = () => new Promise((resolve) => { answer = resolve; });
+        void stopSessionsInDir('/w/t', stopping.p).catch(() => undefined);
+        setTimeout(() => answer({ ok: false, killed: [7], survivors: [{ pid: 70, reason: 'access denied', startTime: '1' }] }), 0);
+      }
+      return [];
+    };
+    checker.p.stillRunning = async (list) => [...list];
+    await expect(assertNothingRunsIn('/w/t', checker.p)).rejects.toBeInstanceOf(PanesStillRunningError);
+    expect(lists).toBe(2);
+  });
+
   it("takes the daemon's word for a tree it checked: no wait on the shell's pid", async () => {
     const isAlive = vi.fn(() => true);
     const { p } = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: true, killed: [7, 70] } } });

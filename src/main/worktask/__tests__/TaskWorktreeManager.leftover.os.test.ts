@@ -318,6 +318,17 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).removals).toEqual([]);
   });
 
+  it('a leftover that is kept anyway is never stopped: the checks run before the panes are', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr, removeTree } = manager(fakeGit({ leftoverUntracked: 'notes.md\n' }).git, { pendingRemovals: store });
+    const stop = vi.fn(async () => undefined);
+    expect(await mgr.finishPendingRemoval(dir, stop)).toMatchObject({ ok: false, dirty: true });
+    expect(stop).not.toHaveBeenCalled();
+    expect(removeTree).not.toHaveBeenCalled();
+  });
+
   it('a stop that refuses (a process of an earlier stop still runs) keeps the leftover', async () => {
     const dir = leftover();
     const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
