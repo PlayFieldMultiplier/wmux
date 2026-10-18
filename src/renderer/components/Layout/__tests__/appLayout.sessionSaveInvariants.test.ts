@@ -63,13 +63,14 @@ describe('AppLayout — axis A session-save invariants', () => {
 
     const helper = reconcile.slice(helperStart, firstStageStart);
     expect(helper).toMatch(
-      /const result = await ipcInvoke<T>\(call\);\s*reportProgress\?\.\(\);\s*return result;/,
+      // #2398 — through the reconcile's own non-toasting invoker.
+      /const result = await reconcileInvoke<T>\(call\);\s*reportProgress\?\.\(\);\s*return result;/,
     );
 
     // Keep the invariant extensible: every current or future reconcile IPC
     // stage must use the progress-aware helper, without pinning an exact count.
     const stages = reconcile.slice(firstStageStart);
-    expect(stages).not.toMatch(/await ipcInvoke</);
+    expect(stages).not.toMatch(/await (ipcInvoke|reconcileInvoke)</);
     expect(stages).toMatch(/await invokeReconcile</);
   });
 
