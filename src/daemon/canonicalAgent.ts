@@ -177,19 +177,26 @@ export function recordPaneIdentity(
   now: number,
 ): boolean {
   if (!canonical) return false;
+  // A conflicting binding already on the meta was captured before this
+  // event, so a live agent seen now is later than it whatever the clocks
+  // say: a hook's own timestamp or a clock step can put the binding ahead of
+  // `now`. The stamp is placed after it, so one write settles the order and
+  // the next event finds nothing to refresh.
+  const binding = meta.resumeBinding;
+  const bindingTs = binding !== undefined && binding.agent !== canonical.slug
+    && typeof binding.ts === 'number' && Number.isFinite(binding.ts) ? binding.ts : undefined;
   if (meta.lastDetectedAgent === canonical.slug) {
     if (canonical.source === 'screen') return false;
     const stamp = meta.lastDetectedAgentEvidence;
     const proven = stamp?.source === 'hook' || stamp?.source === 'process';
-    const binding = meta.resumeBinding;
-    const outdatedByBinding = proven && binding !== undefined && binding.agent !== canonical.slug
-      && typeof binding.ts === 'number' && binding.ts >= (stamp?.at ?? Infinity);
+    const outdatedByBinding = proven && bindingTs !== undefined && bindingTs >= (stamp?.at ?? Infinity);
     if (proven && !outdatedByBinding) return false;
   } else if (!mayPersistIdentity(meta.lastDetectedAgent, canonical)) {
     return false;
   }
+  const at = canonical.source !== 'screen' && bindingTs !== undefined ? Math.max(now, bindingTs + 1) : now;
   meta.lastDetectedAgent = canonical.slug;
-  meta.lastDetectedAgentEvidence = { source: canonical.source, at: now };
+  meta.lastDetectedAgentEvidence = { source: canonical.source, at };
   return true;
 }
 
