@@ -10,6 +10,7 @@ import {
   getWin32BootId,
   getWin32BootIdSync,
   isWin32ShellProcess,
+  readProcessCreatedAtFt,
   resetWin32BootIdCache,
 } from '../phantomExit';
 
@@ -104,5 +105,7 @@ describe.skipIf(!onWindows)('win32 probes (live)', () => {
   it('a pid that does not exist reads as unknown', async () => {
     expect(await getProcessStartTime(99_999_996)).toBeNull();
     expect(await isWin32ShellProcess(99_999_996, 'cmd.exe')).toBe(false);
+    // ...and the native read tells the reaper it is gone, not unreadable.
+    expect(readProcessCreatedAtFt(99_999_996)).toEqual({ value: null, gone: true });
   }, 20_000);
 });

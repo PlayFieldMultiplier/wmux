@@ -112,19 +112,39 @@ export function isPhantomExit(
  * match, since the whole point is to withhold the kill when unsure.
  */
 export async function getProcessStartTime(pid: number): Promise<string | null> {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
   if (process.platform === 'win32') {
     return getProcessCreatedAtFt(pid)?.toString() ?? null;
   }
+  return (await readPosixStartTime(pid)).value;
+}
+
+/**
+ * One start-time reading. `gone` is set when the OS answered that the pid does
+ * not exist — an answer, unlike a failed read, which leaves both empty.
+ */
+export interface ProcessStartRead<T> {
+  value: T | null;
+  gone: boolean;
+}
+
+/**
+ * `ps -o lstart= -p <pid>` (posix). `ps` exits 1 with no output when no
+ * process matched the pid, which is the one failure that means gone; a
+ * timeout, a missing `ps` or anything it printed is a failed read.
+ */
+export async function readPosixStartTime(pid: number): Promise<ProcessStartRead<string>> {
+  if (!Number.isInteger(pid) || pid <= 0) return { value: null, gone: false };
   try {
     const { stdout } = await promisify(execFile)('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf-8',
       timeout: 3000,
     });
     const value = String(stdout).trim();
-    return value ? value : null;
-  } catch {
-    return null;
+    return { value: value ? value : null, gone: false };
+  } catch (err) {
+    const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown };
+    const silent = !String(e.stdout ?? '').trim() && !String(e.stderr ?? '').trim();
+    return { value: null, gone: e.code === 1 && silent };
   }
 }
 
@@ -246,11 +266,11 @@ export function resetNativeProcessReadWarn(): void {
   nativeReadFailuresSinceWarn = 0;
 }
 
-function readWin32Process(pid: number): { createdAt: bigint; imagePath: string | null } | null {
+function readWin32Process(pid: number): { createdAt: bigint; imagePath: string | null } | 'gone' | null {
   const read = tryProcessIdentity(pid);
   if (!('failure' in read)) return read;
   // A pid that is gone is an answer, not a failed read.
-  if (read.gone) return null;
+  if (read.gone) return 'gone';
   nativeReadFailuresSinceWarn++;
   const now = Date.now();
   if (now - nativeReadWarnedAt >= NATIVE_READ_WARN_INTERVAL_MS) {
@@ -271,8 +291,15 @@ function readWin32Process(pid: number): { createdAt: bigint; imagePath: string |
  * cheap (one OpenProcess), so the spawn path stamps it inline.
  */
 export function getProcessCreatedAtFt(pid: number): bigint | null {
-  if (process.platform !== 'win32') return null;
-  return readWin32Process(pid)?.createdAt ?? null;
+  return readProcessCreatedAtFt(pid).value;
+}
+
+/** {@link getProcessCreatedAtFt}, also saying whether the pid is gone. */
+export function readProcessCreatedAtFt(pid: number): ProcessStartRead<bigint> {
+  if (process.platform !== 'win32') return { value: null, gone: false };
+  const read = readWin32Process(pid);
+  if (read === 'gone') return { value: null, gone: true };
+  return { value: read?.createdAt ?? null, gone: false };
 }
 
 /**
@@ -280,7 +307,8 @@ export function getProcessCreatedAtFt(pid: number): bigint | null {
  * basename or the full path, as the wmic-era check did. False when unsure.
  */
 export async function isWin32ShellProcess(pid: number, expectedCmd: string): Promise<boolean> {
-  const actualExe = readWin32Process(pid)?.imagePath?.toLowerCase();
+  const read = readWin32Process(pid);
+  const actualExe = read === 'gone' ? undefined : read?.imagePath?.toLowerCase();
   if (!actualExe) return false;
   const expectedExe = expectedCmd.toLowerCase();
   const expectedBase = expectedExe.split(/[\\/]/).pop() ?? expectedExe;
@@ -299,6 +327,10 @@ export async function isWin32ShellProcess(pid: number, expectedCmd: string): Pro
  *  - `unconfirmed`  — a creation time was recorded and does NOT match (the pid
  *                     belongs to something else now), or nothing corroborates
  *                     the pid at all. Never kill on this.
+ *  - `gone`         — the OS answered that the pid no longer exists, so there
+ *                     is nothing to kill. Not a refusal: the old probe read an
+ *                     exited pid as "unknown", and those exits were logged as
+ *                     unconfirmed identities.
  *
  * A recorded start time is authoritative when present: if it disagrees, the
  * executable-name heuristic must not be allowed to override it — that is
@@ -314,7 +346,7 @@ export async function isWin32ShellProcess(pid: number, expectedCmd: string): Pro
  *  - `storedStartTime` on posix: `ps -o lstart=`, compared as a string with
  *    `currentStartTime`.
  */
-export type ReapIdentity = 'start-time' | 'heuristic' | 'unconfirmed';
+export type ReapIdentity = 'start-time' | 'heuristic' | 'unconfirmed' | 'gone';
 
 export function classifyReapIdentity(opts: {
   storedCreatedAtFt?: string | null;
@@ -323,8 +355,11 @@ export function classifyReapIdentity(opts: {
   currentCreatedAtFt?: bigint | null;
   /** Posix: `ps -o lstart=` read now. */
   currentStartTime?: string | null;
+  /** The current read found no process with this pid. */
+  currentGone?: boolean;
   looksLikeOurShell: boolean;
 }): ReapIdentity {
+  if (opts.currentGone) return 'gone';
   const currentFt = opts.currentCreatedAtFt ?? null;
   if (opts.storedCreatedAtFt) {
     return currentFt !== null && currentFt.toString() === opts.storedCreatedAtFt ? 'start-time' : 'unconfirmed';
@@ -380,7 +415,7 @@ export function dmtfToUtcMicros(value: string): bigint | null {
 
 /** Is this identity level strong enough to authorize killing the tree? */
 export function mayReap(identity: ReapIdentity): boolean {
-  return identity !== 'unconfirmed';
+  return identity === 'start-time' || identity === 'heuristic';
 }
 
 /**

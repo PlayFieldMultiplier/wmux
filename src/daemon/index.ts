@@ -137,7 +137,6 @@ import { selectRecoverableSessions, startLeftoverShellReaps } from './recoverySe
 import { isShutdownKillExit, SHUTDOWN_KILL_RECLASSIFY_MS } from './shutdownKill';
 import {
   classifyReapIdentity,
-  getProcessCreatedAtFt,
   getProcessStartTime,
   getWin32BootId,
   getWin32BootIdSync,
@@ -145,6 +144,8 @@ import {
   isWin32ShellProcess,
   isSameBootProven,
   mayReap,
+  readPosixStartTime,
+  readProcessCreatedAtFt,
   setNativeProcessReadWarn,
   shouldReconcileTombstone,
 } from './phantomExit';
@@ -1638,20 +1639,29 @@ async function reapIfIdentityConfirmed(opts: {
 }): Promise<boolean> {
   // Windows reads the FILETIME natively (#2398); posix keeps `ps -o lstart=`.
   const win32 = process.platform === 'win32';
-  const currentCreatedAtFt = win32 ? getProcessCreatedAtFt(opts.pid) : null;
-  const [currentStartTime, looksLikeOurShell] = await Promise.all([
-    win32 ? null : getProcessStartTime(opts.pid),
+  const ftRead = win32 ? readProcessCreatedAtFt(opts.pid) : null;
+  const [startRead, looksLikeOurShell] = await Promise.all([
+    win32 ? null : readPosixStartTime(opts.pid),
     // Only consulted when no creation time was recorded, but probing both in
     // parallel keeps the slow path off the critical path of the common case.
     isOurShellProcess(opts.pid, opts.cmd),
   ]);
+  const currentCreatedAtFt = ftRead?.value ?? null;
+  const currentStartTime = startRead?.value ?? null;
   const identity = classifyReapIdentity({
     storedCreatedAtFt: opts.storedCreatedAtFt,
     storedStartTime: opts.storedStartTime,
     currentCreatedAtFt,
     currentStartTime,
+    currentGone: (ftRead ?? startRead)?.gone ?? false,
     looksLikeOurShell,
   });
+  if (identity === 'gone') {
+    // Nothing to kill, and not a refusal: counting these as unconfirmed
+    // identities is what made the refusal counts unreadable.
+    log('info', `[reap] pid ${opts.pid} already exited (${opts.reason})`);
+    return false;
+  }
   if (!mayReap(identity)) {
     const current = win32 ? currentCreatedAtFt?.toString() : currentStartTime;
     log(

@@ -24,6 +24,8 @@ import {
   getWin32BootIdSync,
   isWin32ShellProcess,
   parseWin32BootId,
+  readPosixStartTime,
+  readProcessCreatedAtFt,
   resetNativeProcessReadWarn,
   resetWin32BootIdCache,
   setNativeProcessReadWarn,
@@ -141,10 +143,48 @@ describe('process start time', () => {
     expect(withPlatform('win32', () => getProcessCreatedAtFt(4321))).toBeNull();
   });
 
+  it('says when the pid is gone, and only then', () => {
+    tryProcessIdentityMock.mockReturnValue({ failure: 'OpenProcess failed (error 87)', gone: true });
+    expect(withPlatform('win32', () => readProcessCreatedAtFt(4321))).toEqual({ value: null, gone: true });
+    tryProcessIdentityMock.mockReturnValue({ failure: 'OpenProcess failed (error 5)', gone: false });
+    expect(withPlatform('win32', () => readProcessCreatedAtFt(4321))).toEqual({ value: null, gone: false });
+    identityReturns('C:\\x\\cmd.exe');
+    expect(withPlatform('win32', () => readProcessCreatedAtFt(4321))).toEqual({ value: FT, gone: false });
+  });
+
   it('is never read natively off Windows', () => {
     identityReturns('/bin/bash');
     expect(withPlatform('linux', () => getProcessCreatedAtFt(4321))).toBeNull();
     expect(tryProcessIdentityMock).not.toHaveBeenCalled();
+  });
+});
+
+// `ps -o lstart= -p <pid>` exits 1 and prints nothing when no process has the pid.
+describe('posix start time', () => {
+  function psFails(error: { code?: unknown; stdout?: string; stderr?: string }): void {
+    execFileMock.mockImplementation((_file: string, _args: string[], _opts: unknown, cb: Callback) => {
+      cb(Object.assign(new Error('Command failed'), error));
+    });
+  }
+
+  it('reads lstart', async () => {
+    execFileReturns('Mon Jul 27 14:28:00 2026\n');
+    await expect(readPosixStartTime(4321)).resolves.toEqual({ value: 'Mon Jul 27 14:28:00 2026', gone: false });
+    expect(execFileMock.mock.calls[0][0]).toBe('ps');
+  });
+
+  it('a silent exit 1 means the pid is gone', async () => {
+    psFails({ code: 1, stdout: '', stderr: '' });
+    await expect(readPosixStartTime(4321)).resolves.toEqual({ value: null, gone: true });
+  });
+
+  it('any other failure is a failed read, not gone', async () => {
+    psFails({ code: 'ENOENT' });
+    await expect(readPosixStartTime(4321)).resolves.toEqual({ value: null, gone: false });
+    psFails({ code: null, stdout: '', stderr: '' }); // killed by the timeout
+    await expect(readPosixStartTime(4321)).resolves.toEqual({ value: null, gone: false });
+    psFails({ code: 1, stdout: '', stderr: 'ps: error: unsupported option' });
+    await expect(readPosixStartTime(4321)).resolves.toEqual({ value: null, gone: false });
   });
 });
 

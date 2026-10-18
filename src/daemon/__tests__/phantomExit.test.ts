@@ -125,6 +125,19 @@ describe('classifyReapIdentity', () => {
     expect(mayReap('heuristic')).toBe(true);
     expect(mayReap('unconfirmed')).toBe(false);
   });
+
+  it('a pid the OS reports gone is neither a kill nor a refusal', () => {
+    // An exited pid used to read as "unknown" and was logged as an
+    // unconfirmed identity, inflating the refusal count.
+    expect(
+      classifyReapIdentity({ storedCreatedAtFt: '134296036801234567', currentCreatedAtFt: null, currentGone: true, looksLikeOurShell: false }),
+    ).toBe('gone');
+    expect(
+      classifyReapIdentity({ storedStartTime: T1, currentStartTime: null, currentGone: true, looksLikeOurShell: false }),
+    ).toBe('gone');
+    expect(classifyReapIdentity({ currentGone: true, looksLikeOurShell: false })).toBe('gone');
+    expect(mayReap('gone')).toBe(false);
+  });
 });
 
 // #2398: Windows records the FILETIME read natively. Records written before
