@@ -1208,6 +1208,9 @@ export default function AppLayout() {
           reportProgress?.();
           return result;
         };
+        // #2398 — the unconfirmed marks this pass can settle are the ones
+        // already made when it starts (see the end of the pass).
+        const markSeqAtStart = useStore.getState().ptyUnconfirmedSeq;
         const listResult = await invokeReconcile<ReconcilePtySession[]>(() =>
           window.electronAPI.pty.list({ includeDead: true })
         );
@@ -1458,9 +1461,16 @@ export default function AppLayout() {
         // pane whose reattach then finds its id gone clears it and creates,
         // instead of asking for yet another pass. Without this, a daemon that
         // lists nothing (the empty-list guard above preserves every id) would
-        // leave such a pane waiting on reconciles forever.
+        // leave such a pane waiting on reconciles forever. Only marks made
+        // before the pass started: one made while it awaited its RPCs (a
+        // reattach that ran out mid-pass) rests on evidence the pass never
+        // saw, and confirming it would let that pane clear and self-create.
         if (!signal?.aborted) {
-          useStore.getState().setPtysUnconfirmed(examinedPtyIds.filter((id) => !unsettledPtyIds.has(id)), false);
+          useStore.getState().setPtysUnconfirmed(
+            examinedPtyIds.filter((id) => !unsettledPtyIds.has(id)),
+            false,
+            { markedAtOrBefore: markSeqAtStart },
+          );
         }
         console.log(`[AppLayout] Reconcile cycle #${reconcileCycleRef.current} complete (${absentCandidates.length} absent candidate(s))`);
       } finally {

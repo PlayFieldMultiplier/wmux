@@ -70,10 +70,10 @@ describe('applyStartupReconcileFallback', () => {
     });
     const leaf = useStore.getState().workspaces[0].rootPane as PaneLeaf;
     expect(leaf.surfaces.map((s) => s.ptyId)).toEqual(['pty-live-1', 'pty-live-2']);
-    expect(useStore.getState().ptyUnconfirmedById).toEqual({ 'pty-live-1': true, 'pty-live-2': true });
+    expect(useStore.getState().ptyUnconfirmedById).toEqual({ 'pty-live-1': expect.any(Number), 'pty-live-2': expect.any(Number) });
     // A reconcile that later lists them live confirms them.
     useStore.getState().setPtysUnconfirmed(new Set(['pty-live-1']), false);
-    expect(useStore.getState().ptyUnconfirmedById).toEqual({ 'pty-live-2': true });
+    expect(useStore.getState().ptyUnconfirmedById).toEqual({ 'pty-live-2': expect.any(Number) });
     // An authoritative clear drops the mark with the binding.
     useStore.getState().clearSurfacePtyIdByPty('pty-live-2');
     expect(useStore.getState().ptyUnconfirmedById).toEqual({});

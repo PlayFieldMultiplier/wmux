@@ -39,7 +39,7 @@ export function requestReconcile(reason: string): boolean {
  * would wait on passes that never look at it, and clears at once instead.
  */
 export function awaitsReconcile(
-  state: { ptyUnconfirmedById?: Record<string, true>; workspaces: readonly Workspace[] },
+  state: { ptyUnconfirmedById?: Record<string, number>; workspaces: readonly Workspace[] },
   ptyId: string,
 ): boolean {
   if (!state.ptyUnconfirmedById?.[ptyId]) return false;

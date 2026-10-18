@@ -30,12 +30,23 @@ export type SurfacePtyLifecycle = 'bound' | 'unconfirmed' | 'deferred' | 'creati
 export interface PtyLifecycleSlice {
   /** Per key (surface id, or leaf id for the funnel): a create in flight or refused. */
   ptyCreateByKey: Record<string, PtyCreateAttempt>;
-  /** Bound ptys whose binding is kept but unconfirmed. Absent = confirmed. */
-  ptyUnconfirmedById: Record<string, true>;
+  /**
+   * Bound ptys whose binding is kept but unconfirmed, each with the sequence
+   * number of its latest mark. Absent = confirmed.
+   */
+  ptyUnconfirmedById: Record<string, number>;
+  /** The sequence number the latest mark took (0 before any). */
+  ptyUnconfirmedSeq: number;
   /** Set or clear (null) one key's create attempt. */
   setPtyCreateAttempt: (key: string, attempt: PtyCreateAttempt | null) => void;
-  /** Mark bound ptys unconfirmed, or confirmed again. */
-  setPtysUnconfirmed: (ptyIds: Iterable<string>, unconfirmed: boolean) => void;
+  /**
+   * Mark bound ptys unconfirmed (each mark takes a new sequence number, a
+   * re-mark included), or confirmed again. `markedAtOrBefore` confirms only
+   * marks no newer than that number: a reconcile pass confirms what it found
+   * marked when it started, and a mark made while it ran — on evidence it
+   * never saw — wins.
+   */
+  setPtysUnconfirmed: (ptyIds: Iterable<string>, unconfirmed: boolean, opts?: { markedAtOrBefore?: number }) => void;
 }
 
 /** One surface's lifecycle state, from its create key and its bound ptyId. */
@@ -56,6 +67,7 @@ export const createPtyLifecycleSlice: StateCreator<
 > = (set, get) => ({
   ptyCreateByKey: {},
   ptyUnconfirmedById: {},
+  ptyUnconfirmedSeq: 0,
 
   setPtyCreateAttempt: (key, attempt) => {
     const current = get().ptyCreateByKey[key];
@@ -66,13 +78,15 @@ export const createPtyLifecycleSlice: StateCreator<
     });
   },
 
-  setPtysUnconfirmed: (ptyIds, unconfirmed) => {
+  setPtysUnconfirmed: (ptyIds, unconfirmed, opts) => {
     const map = get().ptyUnconfirmedById;
-    const changed = [...ptyIds].filter((id) => id && Boolean(map[id]) !== unconfirmed);
+    const limit = opts?.markedAtOrBefore;
+    const changed = [...ptyIds].filter((id) => id && (unconfirmed
+      || (map[id] !== undefined && (limit === undefined || map[id] <= limit))));
     if (changed.length === 0) return;
     set((draft: StoreState) => {
       for (const id of changed) {
-        if (unconfirmed) draft.ptyUnconfirmedById[id] = true;
+        if (unconfirmed) draft.ptyUnconfirmedById[id] = ++draft.ptyUnconfirmedSeq;
         else delete draft.ptyUnconfirmedById[id];
       }
     });

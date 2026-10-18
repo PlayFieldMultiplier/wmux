@@ -85,7 +85,7 @@ describe('AppLayout startup reconcile failure (#2398)', () => {
     expect(reconcile).toMatch(/examinedPtyIds\.push\(surface\.ptyId\);\s*if \(activeIds\.has\(surface\.ptyId\)\)/);
     // …and unmarked once the pass completes (not when it was aborted).
     const completeAt = reconcile.indexOf('Reconcile cycle #${reconcileCycleRef.current} complete');
-    const unmarkAt = reconcile.search(/if \(!signal\?\.aborted\) \{\s*useStore\.getState\(\)\.setPtysUnconfirmed\(examinedPtyIds/);
+    const unmarkAt = reconcile.search(/if \(!signal\?\.aborted\) \{\s*useStore\.getState\(\)\.setPtysUnconfirmed\(\s*examinedPtyIds/);
     expect(unmarkAt).toBeGreaterThan(reconcile.indexOf('resolveReconcileRebind('));
     expect(unmarkAt).toBeLessThan(completeAt);
   });
@@ -96,6 +96,19 @@ describe('AppLayout startup reconcile failure (#2398)', () => {
     const resolveAt = reconcile.indexOf('const toClear = await resolvePtyIdsToClear(firstAbsent');
     const keepAt = reconcile.indexOf('if (secondSnapshot === null) for (const id of firstAbsent) unsettledPtyIds.add(id);');
     expect(keepAt).toBeGreaterThan(resolveAt);
-    expect(reconcile).toMatch(/setPtysUnconfirmed\(examinedPtyIds\.filter\(\(id\) => !unsettledPtyIds\.has\(id\)\), false\)/);
+    expect(reconcile).toMatch(/setPtysUnconfirmed\(\s*examinedPtyIds\.filter\(\(id\) => !unsettledPtyIds\.has\(id\)\),\s*false,/);
+  });
+
+  it('the end of a pass confirms only marks made before it started (GLM P2)', () => {
+    // A reattach that ran out while the pass awaited its RPCs marks its id
+    // again; un-marking it here let that pane clear and self-create a second
+    // shell beside a session whose id the pass never saw change.
+    const start = source.indexOf('const reconcilePtys = useCallback');
+    const reconcile = source.slice(start, source.indexOf('// 앱 시작 시 세션 복원', start));
+    const seqAt = reconcile.indexOf('const markSeqAtStart = useStore.getState().ptyUnconfirmedSeq;');
+    const listAt = reconcile.indexOf('window.electronAPI.pty.list({ includeDead: true })');
+    expect(seqAt).toBeGreaterThan(-1);
+    expect(seqAt).toBeLessThan(listAt);
+    expect(reconcile).toMatch(/examinedPtyIds\.filter\(\(id\) => !unsettledPtyIds\.has\(id\)\),\s*false,\s*\{ markedAtOrBefore: markSeqAtStart \},/);
   });
 });
