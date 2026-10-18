@@ -271,6 +271,37 @@ describe('photos on POST /api/rooms/:workspaceId/messages and GET …/attachment
     }
   });
 
+  it('a replay answers whatever the grants and the desktop are now; a new photo message needs the upload grant', async () => {
+    let s = await start();
+    const uploadId = await s.upload(JPEG);
+    const body = { clientMessageId: freshId(), text: 'kept', threadId: `dm:${LEAD.id}`, attachments: [{ uploadId }] };
+    expect(await s.send(body)).toMatchObject({ status: 202, body: { replayed: false } });
+    await server!.stop();
+    // Uploads switched off: the sent message still replays; a new one is refused.
+    s = await start({ allowUpload: false });
+    expect(await s.send(body)).toMatchObject({ status: 202, body: { replayed: true } });
+    expect(await s.send({ ...body, clientMessageId: freshId() })).toMatchObject({ status: 403, body: { effect: 'none' } });
+    expect(((await s.send({ ...body, clientMessageId: freshId() })).body.error as string).startsWith('uploads-disabled:')).toBe(true);
+    await server!.stop();
+    // A desktop that no longer takes photos: the replay is still the answer.
+    s = await start({ announce: ['moa.wake', 'factory.message', 'factory.threadMessage'] });
+    expect(await s.send(body)).toMatchObject({ status: 202, body: { replayed: true } });
+  });
+
+  it('a retry after a full queue needs no upload file: the card keeps its photos', async () => {
+    const s = await start();
+    const uploadId = await s.upload(JPEG);
+    queueFull = true;
+    const body = { clientMessageId: freshId(), text: 'after prune', threadId: `dm:${LEAD.id}`, attachments: [{ uploadId }] };
+    expect(await s.send(body)).toMatchObject({ status: 409, body: { error: 'moa-busy' } });
+    const before = stored();
+    fs.rmSync(path.join(uploadsDir(), uploadId));
+    queueFull = false;
+    expect(await s.send(body)).toMatchObject({ status: 202, body: { state: 'queued' } });
+    expect(stored()).toEqual(before);
+    expect(cards().filter((c) => c.title === 'after prune')).toHaveLength(1);
+  });
+
   it('the photo route needs the transcript grant', async () => {
     const s = await start({ allowTranscript: false });
     expect((await s.photo('ws-1', 'a'.repeat(32))).status).toBe(403);

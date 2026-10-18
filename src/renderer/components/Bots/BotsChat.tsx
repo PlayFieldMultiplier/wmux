@@ -1227,8 +1227,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     if (inFlight || refusal) return;
     const bridge = api === undefined ? roomsApi() : api;
     const submitted = text;
-    const sentPhotos = photos;
-    const paths = sentPhotos.map((p) => p.path);
+    const paths = photos.map((p) => p.path);
     const key = JSON.stringify([workspaceId, threadId, text, mentions, paths]);
     const clientPostId = failedPost.current?.key === key ? failedPost.current.clientPostId : newClientPostId();
     const params = paths.length > 0
@@ -1250,7 +1249,9 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
           setText('');
           picks.reset();
         }
-        setPhotos((current) => (current === sentPhotos ? [] : current));
+        // The photos this message took leave the draft; one added while it
+        // was sending stays for the next message.
+        setPhotos((current) => current.filter((p) => !paths.includes(p.path)));
         onSent(r.card.id, sentFrom(r));
       } else if (r.code === 'attachment' && 'reason' in r) {
         setError(t(`room.attach.${r.reason}`, { count: ROOM_PHOTO_LIMIT }));

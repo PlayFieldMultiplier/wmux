@@ -135,6 +135,25 @@ describe('RoomAttachmentStore', () => {
     expect(fs.readdirSync(path.join(root(), 'ws-1'))).toEqual(['notes.txt']);
   });
 
+  it('a linked room folder is never read, written or swept', () => {
+    if (process.platform === 'win32') return;
+    const outside = path.join(dir, 'elsewhere');
+    fs.mkdirSync(outside, { recursive: true });
+    const victim = path.join(outside, `${'d'.repeat(32)}.jpg`);
+    fs.writeFileSync(victim, JPEG);
+    const old = new Date(now - ROOM_ATTACHMENT_RETAIN_MS - 1000);
+    fs.utimesSync(victim, old, old);
+    fs.mkdirSync(root(), { recursive: true });
+    fs.symlinkSync(outside, path.join(root(), 'ws-link'));
+    store.sweep();
+    expect(fs.existsSync(victim)).toBe(true);
+    expect(store.read('ws-link', 'd'.repeat(32))).toBeNull();
+    const file = path.join(dir, 'a.jpg');
+    fs.writeFileSync(file, JPEG);
+    expect(store.importFile('ws-link', file)).toEqual({ ok: false, reason: 'missing' });
+    expect(fs.readdirSync(outside)).toEqual([path.basename(victim)]);
+  });
+
   it('cardImages: base64 of each stored copy, and how many are gone', () => {
     const file = path.join(dir, 'a.jpg');
     fs.writeFileSync(file, JPEG);

@@ -4647,8 +4647,10 @@ POST /api/rooms/ws-1/messages
   message). Without photos the text rules are unchanged.
 - A `clientMessageId` stands for its text, its thread and its photos (their
   upload names, in order) together. The same id with the same photos replays
-  its answer, even after the uploads expired; with other photos it is
-  `409 message-id-reused`.
+  its answer, even after the uploads expired, after uploads were switched
+  off, or with a desktop that no longer takes photos; with other photos it
+  is `409 message-id-reused`. A retry of a message whose card is already up
+  (after `moa-busy`) needs no upload file either: the card keeps its photos.
 - The desktop copies each photo into the room before it posts the card, as
   one JPEG at most 1568 px on its long edge. That copy is what the card
   shows, what you fetch and what the bot sees. It is kept by wmux as long as
@@ -4667,6 +4669,7 @@ id is not spent:
 | `400 {error:"attachment-not-found", index}` | The upload at `index` is not there: it expired (24 h), or was never uploaded here. | upload again, same id |
 | `413 {error:"attachment-too-large", index, limit}` | Over 10 MiB. | — |
 | `415 {error:"attachment-unsupported", index}` | Not PNG or JPEG. | — |
+| `403 {error:"uploads-disabled: …"}` | The server runs without `--allow-upload` (match the prefix). | send without photos |
 | `409 {error:"attachments-unsupported"}` | The desktop takes no photos (too old). | send without photos |
 | `409 {error:"attachment-refused", reason, state:"failed"}` | The desktop could not take a photo: `missing`, `type`, `size`, or `changed` (the file was replaced after the daemon read it). Nothing was posted; the id is released. | same id, after uploading again |
 | `507 {error:"attachments-full", state:"failed"}` | The room's photo store is full (2000 photos or 1 GiB). Nothing was posted; the id is released. | see below |

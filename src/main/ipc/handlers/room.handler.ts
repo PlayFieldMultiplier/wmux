@@ -238,12 +238,6 @@ export async function postWithPhotos(raw: unknown, deps: PostWithPhotosDeps): Pr
   if (attachmentPaths.length > ROOM_ATTACHMENT_LIMITS.PER_MESSAGE) return photoRefusal('count');
   const workspaceId = params.workspaceId;
   if (!isRoomWorkspaceId(workspaceId)) return deps.post(params);
-  const resolved: string[] = [];
-  for (const [index, file] of (attachmentPaths as string[]).entries()) {
-    const real = await deps.resolvePath(file).catch(() => null);
-    if (!real) return photoRefusal('missing', index);
-    resolved.push(real);
-  }
   const clientPostId = typeof params.clientPostId === 'string' ? params.clientPostId : null;
   const key = clientPostId ? `${workspaceId}\u0000${clientPostId}` : null;
   const run = async (): Promise<unknown> => {
@@ -253,6 +247,14 @@ export async function postWithPhotos(raw: unknown, deps: PostWithPhotosDeps): Pr
     let records: RoomAttachment[] = prior?.attachments ?? [];
     const imported: string[] = [];
     if (!prior) {
+      // Only a new post reads the files: a retry whose card is up needs none
+      // (the owner may have moved them since).
+      const resolved: string[] = [];
+      for (const [index, file] of (attachmentPaths as string[]).entries()) {
+        const real = await deps.resolvePath(file).catch(() => null);
+        if (!real) return photoRefusal('missing', index);
+        resolved.push(real);
+      }
       for (const [index, file] of resolved.entries()) {
         const r = store.importFile(workspaceId, file);
         if (!r.ok) {

@@ -68,6 +68,11 @@ function parseWakeAttachments(value: unknown): MoaWakeAttachment[] | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const a = raw as Record<string, unknown>;
     if (typeof a.uploadId !== 'string' || !UPLOAD_NAME_RE.test(a.uploadId) || out.some((o) => o.uploadId === a.uploadId)) return null;
+    // Size and hash both, or neither (the daemon found the file gone).
+    if (a.bytes === undefined && a.sha256 === undefined) {
+      out.push({ uploadId: a.uploadId });
+      continue;
+    }
     if (typeof a.bytes !== 'number' || !Number.isSafeInteger(a.bytes) || a.bytes <= 0 || a.bytes > ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES) return null;
     if (typeof a.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(a.sha256)) return null;
     out.push({ uploadId: a.uploadId, bytes: a.bytes, sha256: a.sha256 });

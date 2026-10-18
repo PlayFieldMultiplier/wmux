@@ -86,11 +86,13 @@ export interface MoaWakePayload {
 }
 
 /** One phone upload on a message: its file name in the uploads folder (the
- *  daemon's name rule), and the size and SHA-256 the daemon read. */
+ *  daemon's name rule), and the size and SHA-256 the daemon read — both
+ *  absent when the file is gone (a retry whose card already has its photos
+ *  needs none; main refuses a new message with one). */
 export interface MoaWakeAttachment {
   uploadId: string;
-  bytes: number;
-  sha256: string;
+  bytes?: number;
+  sha256?: string;
 }
 
 const REFUSAL_CODES: ReadonlySet<string> = new Set<MoaWakeRefusalCode>([

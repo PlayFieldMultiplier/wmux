@@ -107,7 +107,7 @@ function wakeHash(text: string, target?: MoaWakeTarget, uploads: readonly string
 }
 
 /** Read the photos a new message names, once its receipt is begun. */
-export type MoaWakeAttachmentReader = () => Promise<{ ok: true; attachments: MoaWakeAttachment[] } | { ok: false; wire: MoaWakeWire }>;
+export type MoaWakeAttachmentReader = () => Promise<{ ok: true; attachments: MoaWakeAttachment[]; missing?: number[] } | { ok: false; wire: MoaWakeWire }>;
 
 function failureResponse(failure: MoaWakeFailure, clientMessageId: string): AnswerReceiptResponse {
   return { status: 409, body: { state: 'failed', error: 'moa-wake-failed', code: failure, clientMessageId } };
@@ -225,6 +225,8 @@ export class MoaWakeService {
 
     // The photos are read only for a new id: a replay never needs the files.
     let attachments: MoaWakeAttachment[] | undefined;
+    // The first upload the daemon found gone, for main's `missing` refusal.
+    let missingAt: number | undefined;
     if (photos) {
       if (!target || !desktop.supports(FACTORY_THREAD_ATTACHMENTS_CAPABILITY) || !photos.read) {
         await store.release(owner, clientMessageId);
@@ -241,6 +243,7 @@ export class MoaWakeService {
         return read.wire;
       }
       attachments = read.attachments;
+      missingAt = read.missing?.[0];
     }
 
     const payload: MoaWakePayload = {
@@ -295,6 +298,12 @@ export class MoaWakeService {
       this.delivered.push({ owner, clientMessageId, text, at: this.now() });
       if (this.delivered.length > DELIVERED_MAX) this.delivered.splice(0, this.delivered.length - DELIVERED_MAX);
       return this.finish(store, owner, clientMessageId, 'done', { status: 202, body: { state: 'accepted', clientMessageId } });
+    }
+    // A new message naming an upload that is gone: the phone's own answer
+    // for it, as the daemon would have given had the file been needed.
+    if (!result.ok && result.code === 'attachment_refused' && result.reason === 'missing' && missingAt !== undefined) {
+      await store.release(owner, clientMessageId);
+      return { status: 400, body: { error: 'attachment-not-found', index: missingAt, effect: 'none', clientMessageId } };
     }
     const { wire, release } = refusalWire(result.code, clientMessageId, result.reason);
     if (release) {

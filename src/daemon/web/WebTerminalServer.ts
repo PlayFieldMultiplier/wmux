@@ -5559,39 +5559,50 @@ export class WebTerminalServer {
 
   /**
    * The uploads a new room message names, read once its receipt is begun:
-   * each must be a regular file of this server's uploads folder (never a
-   * link), at most the upload cap, PNG or JPEG by its bytes. Main copies
-   * each again from its own path and checks it is these bytes.
+   * each a regular file of this server's uploads folder (never a link), at
+   * most the upload cap, PNG or JPEG by its bytes; main copies it again from
+   * its own path and checks it is these bytes. One that is gone is sent by
+   * name alone (`missing`): a retry of a message whose card is already up
+   * needs no file (main reuses the card's photos), and main refuses a new
+   * one, which then answers `attachment-not-found`.
    */
-  private async readRoomMessageUploads(uploads: readonly string[], clientMessageId: string): Promise<{ ok: true; attachments: MoaWakeAttachment[] } | { ok: false; wire: { status: number; body: Record<string, unknown> } }> {
+  private async readRoomMessageUploads(uploads: readonly string[], clientMessageId: string): Promise<{ ok: true; attachments: MoaWakeAttachment[]; missing: number[] } | { ok: false; wire: { status: number; body: Record<string, unknown> } }> {
     const dir = this.deps.uploadsDir;
     const refuse = (status: number, error: string, index: number, extra: Record<string, unknown> = {}) =>
       ({ ok: false as const, wire: { status, body: { error, index, ...extra, effect: 'none', clientMessageId } } });
+    const tooLarge = (index: number) => refuse(413, 'attachment-too-large', index, { limit: ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES });
     const out: MoaWakeAttachment[] = [];
+    const missing: number[] = [];
     for (const [index, name] of uploads.entries()) {
-      if (!dir) return refuse(400, 'attachment-not-found', index);
-      const file = path.join(dir, name);
-      let data: Buffer;
-      try {
-        const st = await fs.promises.lstat(file);
-        if (!st.isFile() || st.isSymbolicLink()) return refuse(400, 'attachment-not-found', index);
-        if (st.size > ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES) return refuse(413, 'attachment-too-large', index, { limit: ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES });
-        const handle = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+      let data: Buffer | null = null;
+      if (dir) {
+        const file = path.join(dir, name);
         try {
-          const fst = await handle.stat();
-          if (!fst.isFile()) return refuse(400, 'attachment-not-found', index);
-          if (fst.size > ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES) return refuse(413, 'attachment-too-large', index, { limit: ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES });
-          data = await handle.readFile();
-        } finally {
-          await handle.close().catch(() => undefined);
+          const st = await fs.promises.lstat(file);
+          if (st.isFile() && !st.isSymbolicLink()) {
+            if (st.size > ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES) return tooLarge(index);
+            const handle = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+            try {
+              const fst = await handle.stat();
+              if (fst.size > ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES) return tooLarge(index);
+              if (fst.isFile()) data = await handle.readFile();
+            } finally {
+              await handle.close().catch(() => undefined);
+            }
+          }
+        } catch {
+          data = null;
         }
-      } catch {
-        return refuse(400, 'attachment-not-found', index);
+      }
+      if (!data) {
+        missing.push(index);
+        out.push({ uploadId: name });
+        continue;
       }
       if (!sniffImageExt(data)) return refuse(415, 'attachment-unsupported', index);
       out.push({ uploadId: name, bytes: data.length, sha256: crypto.createHash('sha256').update(data).digest('hex') });
     }
-    return { ok: true, attachments: out };
+    return { ok: true, attachments: out, missing };
   }
 
   /**
@@ -5632,9 +5643,6 @@ export class WebTerminalServer {
         }
         const uploads = parsed.fields.attachments === undefined ? [] : roomMessageUploads(parsed.fields.attachments);
         if (uploads === null) return this.json(res, 400, { error: 'invalid-chat-request', detail: 'attachments', effect: 'none', clientMessageId: cmid });
-        if (uploads.length > 0 && this.availableDesktop()?.supports(FACTORY_THREAD_ATTACHMENTS_CAPABILITY) !== true) {
-          return this.json(res, 409, { error: 'attachments-unsupported', effect: 'none', clientMessageId: cmid });
-        }
         const target = { workspaceId, threadId };
         const owner = chatOwner(caller);
         const wake = this.deps.moaWake?.() ?? null;
@@ -5644,6 +5652,17 @@ export class WebTerminalServer {
         // The chat path never carries a room message: an id it spent is reused.
         const prior = this.deps.chat?.()?.priorSend?.(owner, cmid);
         if (prior && prior.view.state !== 'unknown') return this.json(res, 409, { error: 'message-id-reused', clientMessageId: cmid });
+        // A new message with photos (a replay answered above, whatever the
+        // grants and the desktop are now): the upload grant, and a desktop
+        // that takes photos.
+        if (uploads.length > 0) {
+          if (this.opts?.allowUpload !== true) {
+            return this.json(res, 403, { error: 'uploads-disabled: server started without --allow-upload', effect: 'none', clientMessageId: cmid });
+          }
+          if (this.availableDesktop()?.supports(FACTORY_THREAD_ATTACHMENTS_CAPABILITY) !== true) {
+            return this.json(res, 409, { error: 'attachments-unsupported', effect: 'none', clientMessageId: cmid });
+          }
+        }
         if (caller.kind === 'device') {
           try { this.deps.auditMoaSend?.({ deviceId: caller.deviceId, sessionId: `room:${workspaceId}`, route: 'wake' }); } catch { /* best-effort */ }
         } else {

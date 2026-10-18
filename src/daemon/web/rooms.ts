@@ -169,9 +169,16 @@ export async function roomAttachmentResponse(
   if (reply.unavailable === true) return { status: 503, body: { error: 'rooms-unavailable' } };
   const meta = reply.attachment !== null && typeof reply.attachment === 'object' ? reply.attachment as Record<string, unknown> : null;
   if (!meta || meta.mediaType !== ROOM_ATTACHMENT_MEDIA_TYPE || typeof meta.bytes !== 'number') return ATTACHMENT_NOT_FOUND;
-  const file = path.join(opts.roomAttachmentsDir, workspaceId, `${rawAttachmentId}.jpg`);
+  const folder = path.join(opts.roomAttachmentsDir, workspaceId);
+  const file = path.join(folder, `${rawAttachmentId}.jpg`);
   let bytes: Buffer;
   try {
+    // Neither the store nor the room's folder may be a link: the file must
+    // be inside the store, not wherever a link points.
+    for (const dir of [opts.roomAttachmentsDir, folder]) {
+      const d = await fs.promises.lstat(dir);
+      if (!d.isDirectory() || d.isSymbolicLink()) return ATTACHMENT_NOT_FOUND;
+    }
     const st = await fs.promises.lstat(file);
     if (!st.isFile() || st.isSymbolicLink() || st.size !== meta.bytes || st.size > ROOM_ATTACHMENT_LIMITS.STORED_MAX_BYTES) return ATTACHMENT_NOT_FOUND;
     const handle = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));

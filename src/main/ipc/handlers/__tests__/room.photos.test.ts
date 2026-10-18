@@ -87,6 +87,9 @@ describe('the desktop composer photos', () => {
     expect(s.files()).toHaveLength(1);
     await s.call(IPC.ROOM_POST, params);
     expect(s.files()).toHaveLength(1);
+    // The owner moved the file since: the retry still answers with the card.
+    fs.rmSync(params.attachmentPaths[0]);
+    expect(await s.call(IPC.ROOM_POST, params)).toMatchObject({ ok: true, card: { id: a.card.id } });
   });
 
   it('a refused photo or a post with no card leaves no copy', async () => {

@@ -105,6 +105,26 @@ function readRegularFile(file: string, max: number): { ok: true; data: Buffer } 
   }
 }
 
+/** A directory that is not a link. */
+function isRealDir(dir: string): boolean {
+  try {
+    const st = fs.lstatSync(dir);
+    return st.isDirectory() && !st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** A directory that is not a link, or nothing there yet. */
+function realDirOrAbsent(dir: string): boolean {
+  try {
+    const st = fs.lstatSync(dir);
+    return st.isDirectory() && !st.isSymbolicLink();
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'ENOENT';
+  }
+}
+
 export class RoomAttachmentStore {
   private readonly normalize: RoomImageNormalizer;
   private readonly now: () => number;
@@ -117,8 +137,13 @@ export class RoomAttachmentStore {
     this.log = opts.log ?? ((m, e) => console.warn(`[factory] room photos: ${m}`, e ?? ''));
   }
 
+  /** A workspace's folder, or null for an id that is not one, or when the
+   *  store or the folder is not a real directory (a link is never followed:
+   *  a read, a write or the sweep would otherwise reach outside the store). */
   private dir(workspaceId: string): string | null {
-    return WORKSPACE_ID_RE.test(workspaceId) && workspaceId !== '.' && workspaceId !== '..' ? path.join(this.opts.root, workspaceId) : null;
+    if (!WORKSPACE_ID_RE.test(workspaceId) || workspaceId === '.' || workspaceId === '..') return null;
+    const dir = path.join(this.opts.root, workspaceId);
+    return realDirOrAbsent(this.opts.root) && realDirOrAbsent(dir) ? dir : null;
   }
 
   /** Where a stored photo is, or null for an id or workspace that is not one. */
@@ -149,7 +174,10 @@ export class RoomAttachmentStore {
 
   /** A phone upload, by its name in the uploads folder. */
   importUpload(workspaceId: string, upload: MoaWakeAttachment): RoomAttachmentImport {
-    if (typeof upload.uploadId !== 'string' || !UPLOAD_NAME_RE.test(upload.uploadId)) return { ok: false, reason: 'missing' };
+    // A name alone (the daemon found no file) is never copied unchecked.
+    if (typeof upload.uploadId !== 'string' || !UPLOAD_NAME_RE.test(upload.uploadId) || upload.bytes === undefined || upload.sha256 === undefined) {
+      return { ok: false, reason: 'missing' };
+    }
     const read = readRegularFile(path.join(this.opts.uploadsDir, upload.uploadId), ROOM_ATTACHMENT_LIMITS.SOURCE_MAX_BYTES);
     if (!read.ok) return read;
     // The daemon checked these bytes; a file changed since is not the one sent.
@@ -190,6 +218,8 @@ export class RoomAttachmentStore {
     const temp = `${final}.tmp`;
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      // Made just now or before: still a real folder of the store.
+      if (!isRealDir(this.opts.root) || !isRealDir(dir)) throw new Error('the photo folder is not a directory');
       fs.writeFileSync(temp, normal.data, { mode: 0o600, flag: 'wx' });
       fs.renameSync(temp, final);
     } catch (err) {
@@ -246,6 +276,7 @@ export class RoomAttachmentStore {
     const now = this.now();
     this.lastSweep = now;
     let workspaces: string[] = [];
+    if (!isRealDir(this.opts.root)) return;
     try {
       workspaces = fs.readdirSync(this.opts.root);
     } catch {
@@ -253,7 +284,7 @@ export class RoomAttachmentStore {
     }
     for (const ws of workspaces) {
       const dir = this.dir(ws);
-      if (!dir) continue;
+      if (!dir || !isRealDir(dir)) continue;
       let names: string[] = [];
       try {
         names = fs.readdirSync(dir);
