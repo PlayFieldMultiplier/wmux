@@ -383,6 +383,17 @@ describe('GitContextWatcher', () => {
     expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
   });
 
+  it('a bare clone into a watched non-repo cwd drops the known absent', () => {
+    const root = tmp();
+    const watcher = makeWatcher();
+    watcher.update('s1', root);
+    expect(events.at(-1)?.absent).toBe(true);
+    fs.writeFileSync(path.join(root, 'HEAD'), 'ref: refs/heads/main\n');
+    fake.last().listener('rename', 'HEAD');
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
+  });
+
   it('a non-repo cwd that cannot be resolved to a real path is unknown', () => {
     const gone = path.join(tmp(), 'gone');
     expect(resolveRepoState(gone)).toEqual({ repo: null, conclusive: false });

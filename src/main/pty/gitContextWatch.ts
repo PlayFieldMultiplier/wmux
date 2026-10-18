@@ -279,7 +279,9 @@ export class GitContextWatcher extends EventEmitter {
         if (watch.repo) {
           // Only HEAD transitions matter (HEAD.lock → HEAD rename included).
           if (filename && !/^HEAD(\.lock)?$/i.test(String(filename))) return;
-        } else if (filename && String(filename) !== '.git') {
+        } else if (filename && !/^(\.git|HEAD)$/.test(String(filename))) {
+          // `.git` for init/clone; `HEAD` for a bare clone into the cwd,
+          // which turns a known "not a repo" into unknown.
           return;
         }
         if (watch.debounce) clearTimeout(watch.debounce);
