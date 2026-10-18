@@ -123,7 +123,7 @@ import { WorkTaskService } from './worktask/WorkTaskService';
 import { isTaskState, type AgentStatus, type Task } from '../shared/types';
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
-import { liveRecoveryHint } from './recoveryHint';
+import { liveRecoveryHint, namedAgentAlive } from './recoveryHint';
 import { checkWslAgentRunning, reportedAgentForPane, stopWslAgent, WslPidWatcher } from './wslAgentProcess';
 import { GateFlagFile } from './gateFlagFile';
 import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
@@ -3027,7 +3027,7 @@ function registerRpcHandlers(
     const activeSessions = sessionManager.listSessions().map((s) => {
       // The slug is held in the map (captured from the persisted session at
       // recovery) — NOT read off the live meta, which is a fresh shell here.
-      const resumeAgent = liveRecoveryHint(s.id, (id) => agentProcessTracker.statusFor(id), recoveredAgentShellIds, recoveredResumeBindings);
+      const resumeAgent = liveRecoveryHint(s.id, (id) => namedAgentAlive(agentProcessTracker.identityFor(id)), recoveredAgentShellIds, recoveredResumeBindings);
       // X6 ③: the captured binding for the EXACT-session resume, also recovery-
       // only (same transient-map reasoning as resumeAgent) and guarded by the
       // cwd-match + transcript existence-probe at recovery time.
@@ -4930,7 +4930,7 @@ function registerRpcHandlers(
     // for a pane recovered this boot whose agent has not been re-detected. The
     // web stream stamps it on the snapshot meta so its stale-replay gate reads
     // exactly the desktop's inputs.
-    const resumeAgent = liveRecoveryHint(id, (pid) => agentProcessTracker.statusFor(pid), recoveredAgentShellIds, recoveredResumeBindings);
+    const resumeAgent = liveRecoveryHint(id, (pid) => namedAgentAlive(agentProcessTracker.identityFor(pid)), recoveredAgentShellIds, recoveredResumeBindings);
     return {
       ...(binding ? { binding } : {}),
       ...(commandRunning !== undefined ? { commandRunning } : {}),

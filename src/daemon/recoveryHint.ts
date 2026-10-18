@@ -23,3 +23,15 @@ export function liveRecoveryHint<S, B>(
   }
   return slug;
 }
+
+/**
+ * The liveness `liveRecoveryHint` may consume a hint on: a live process the
+ * tracker attributed to a named agent. A slugless pick (an unknown wrapper,
+ * or any direct child the probe found) is not evidence of an agent: a
+ * `tail -f` printing a quoted banner arms the tracker and is picked as alive,
+ * and consuming on it would drop the offer and its binding for good.
+ */
+export function namedAgentAlive(identity: { slug?: string; alive: boolean } | undefined): boolean | undefined {
+  if (identity?.slug === undefined) return undefined;
+  return identity.alive;
+}
