@@ -126,6 +126,9 @@ export class ApiErrorTurnEnds {
   private readonly promptAt = new Map<string, number>();
   /** The `promptId` of the latest lead entry that carried one, per pane. */
   private readonly lastPromptId = new Map<string, string>();
+  /** The `prompt_id` of the pane's last prompt hook: the same id, for a turn
+   *  whose user entry the watcher never read (it was before a replay window). */
+  private readonly hookPromptId = new Map<string, string>();
   private readonly now: () => number;
 
   constructor(private readonly deps: ApiErrorTurnEndDeps) {
@@ -138,7 +141,7 @@ export class ApiErrorTurnEnds {
     if (promptId && !line.includes('"isSidechain":true')) this.lastPromptId.set(sessionId, promptId);
     const end = apiErrorFromTranscriptLine(line);
     if (end && end.at < (this.promptAt.get(sessionId) ?? -Infinity)) return;
-    const turnPrompt = this.lastPromptId.get(sessionId);
+    const turnPrompt = this.lastPromptId.get(sessionId) ?? this.hookPromptId.get(sessionId);
     if (end) this.pending.set(sessionId, { end: turnPrompt ? { ...end, promptId: turnPrompt } : end, path, seenAt: this.now() });
     else if (this.pending.has(sessionId) && isTurnProgress(line)) this.pending.delete(sessionId);
   }
@@ -152,8 +155,9 @@ export class ApiErrorTurnEnds {
     this.lastPromptId.delete(sessionId);
   }
 
-  /** Every resolved hook signal for the session; `ts` is when the hook fired. */
-  noteHookSignal(sessionId: string, kind: string, ts?: number): void {
+  /** Every resolved hook signal for the session; `ts` is when the hook fired,
+   *  `promptId` its Claude Code `prompt_id`. */
+  noteHookSignal(sessionId: string, kind: string, ts?: number, promptId?: string): void {
     // Compared with the entry's own time, so the hook's firing time, not its
     // arrival: a Stop delayed past a later error does not speak for it.
     const at = typeof ts === 'number' && Number.isFinite(ts) ? ts : this.now();
@@ -166,12 +170,15 @@ export class ApiErrorTurnEnds {
       const p = this.pending.get(sessionId);
       if (p && p.end.at < at) this.pending.delete(sessionId);
       this.promptAt.set(sessionId, at);
+      if (promptId) this.hookPromptId.set(sessionId, promptId);
+      else this.hookPromptId.delete(sessionId);
     }
     // A new session: whatever the old one wrote is not this pane's turn now.
     else if (kind === 'agent.session_start') {
       this.pending.delete(sessionId);
       this.turnEndHookAt.delete(sessionId);
       this.lastPromptId.delete(sessionId);
+      this.hookPromptId.delete(sessionId);
     }
   }
 
@@ -181,6 +188,7 @@ export class ApiErrorTurnEnds {
     this.turnEndHookAt.delete(sessionId);
     this.promptAt.delete(sessionId);
     this.lastPromptId.delete(sessionId);
+    this.hookPromptId.delete(sessionId);
   }
 
   /** Decide every entry whose grace ran out. */
