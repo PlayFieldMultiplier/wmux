@@ -1235,8 +1235,10 @@ export default function AppLayout() {
         );
         const activeIds = new Set(activePtys.map((p: { id: string }) => p.id));
         // #2398 — a binding kept unconfirmed (failed startup reconcile,
-        // exhausted reattach) is confirmed by the daemon listing it live.
-        useStore.getState().setPtysUnconfirmed(activeIds, false);
+        // exhausted reattach) is confirmed by the daemon listing it live —
+        // unless it was marked while this list was in flight, after evidence
+        // the snapshot may predate.
+        useStore.getState().setPtysUnconfirmed(activeIds, false, { markedAtOrBefore: markSeqAtStart });
         // #582: include workspace count so "Reconciling workspace: X" logs that
         // follow are unambiguously a single cycle walking N workspaces, not N
         // separate cycles. The monotonic cycle number helps correlate across

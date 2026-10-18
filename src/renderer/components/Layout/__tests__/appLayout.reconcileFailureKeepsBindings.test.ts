@@ -55,7 +55,10 @@ describe('AppLayout startup reconcile failure (#2398)', () => {
     const reconcile = source.slice(start, source.indexOf('// 앱 시작 시 세션 복원', start));
     const activeAt = reconcile.indexOf('const activeIds = new Set(');
     expect(activeAt).toBeGreaterThanOrEqual(0);
-    expect(reconcile.slice(activeAt, activeAt + 400)).toMatch(/setPtysUnconfirmed\(activeIds, false\)/);
+    // Only marks made before the pass began: a reattach that ran out while
+    // the list was in flight marked its id after evidence the list may
+    // predate (Codex P2).
+    expect(reconcile.slice(activeAt, activeAt + 600)).toMatch(/setPtysUnconfirmed\(activeIds, false, \{ markedAtOrBefore: markSeqAtStart \}\)/);
   });
 
   it('the restore-off path still clears, and invalidates creates in flight', () => {
