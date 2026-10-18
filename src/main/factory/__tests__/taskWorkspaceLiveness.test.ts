@@ -4,7 +4,7 @@ import * as nodePath from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WorkspaceListEntry } from '../../../shared/workspaceMirror';
-import { AGENT_GONE_FILENAME, AGENT_GONE_MAX, AgentGoneFacts, noteTaskPanesStopped, noteTaskWorkerLaunched, setAgentGoneFacts } from '../agentGoneFacts';
+import { AGENT_GONE_FILENAME, AGENT_GONE_MAX, AgentGoneFacts, LAUNCH_SETTLE_MS, noteTaskPanesStopped, noteTaskWorkerLaunched, setAgentGoneFacts } from '../agentGoneFacts';
 import { createTaskWorkspaceLiveness, parseSessionRead, type TaskWorkspaceLivenessPorts } from '../taskWorkspaceLiveness';
 import type { ReclaimedWorker, WorkerSessionInfo } from '../workerReclaim';
 import { FanOutGuards, refreshDormantTaskWorkspaces, setDormantRefresh, setDormantTaskWorkspaces } from '../../worktask/fanoutGuards';
@@ -352,6 +352,59 @@ describe('durable "agent seen gone" facts (#2393)', () => {
     await reading;
     expect(w.facts.get('t-x')).toBeNull();
     expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+  });
+
+  it('after a launch in the pane, a read that still says its old agent exited adds no fact until the new one is seen or the launch settles', async () => {
+    const w = world({ 'ws-x': { id: 't-x', status: 'completed', pty: 'p-x' } });
+    w.open();
+    w.facts.sessionLaunched('p-x');
+    w.t.now += 1;
+    // The daemon still reports the previous agent's exit.
+    w.state.sessions = [{ id: 'p-x', agentProcessAlive: false, commandRunning: true }];
+    await w.liveness.refresh();
+    expect(w.facts.get('t-x')).toBeNull();
+    // The new agent is seen, then exits: that exit is a real one.
+    w.t.now += REFRESH_MS + 1;
+    w.state.sessions = [running('p-x')];
+    await w.liveness.refresh();
+    w.t.now += REFRESH_MS + 1;
+    w.state.sessions = [exited('p-x')];
+    await w.liveness.refresh();
+    expect(w.facts.get('t-x')).not.toBeNull();
+    // A launch that never shows an agent settles after LAUNCH_SETTLE_MS.
+    w.facts.sessionLaunched('p-x');
+    w.t.now += REFRESH_MS + 1;
+    await w.liveness.refresh();
+    expect(w.facts.get('t-x')).toBeNull();
+    w.t.now += LAUNCH_SETTLE_MS;
+    await w.liveness.refresh();
+    expect(w.facts.get('t-x')).not.toBeNull();
+  });
+
+  it('a read that saw the agent running before a close stopped the panes leaves the close\'s fact', async () => {
+    const w = world({ 'ws-x': { id: 't-x', status: 'completed', pty: 'p-x' } });
+    w.open();
+    w.state.sessions = [running('p-x')];
+    const reading = w.liveness.refresh();
+    // The close lands while the read is answered.
+    w.t.now += 1;
+    w.facts.note({ taskId: 't-x', taskWorkspaceId: 'ws-x', sessions: ['p-x'], at: w.t.now });
+    await reading;
+    expect(w.facts.get('t-x')).not.toBeNull();
+    expect(w.guards.liveTaskWorkspaces()).toEqual([]);
+  });
+
+  it('a close that stopped only some of the workspace\'s panes does not outweigh a sighting of the agent', async () => {
+    const w = world({ 'ws-x': { id: 't-x', status: 'completed', pty: 'p-x' } });
+    w.open();
+    w.state.entries = (w.state.entries ?? []).map((e) => ({ ...e, ptyIds: ['p-x', 'p-split'] }));
+    w.state.sessions = [exited('p-x'), running('p-split')];
+    await w.liveness.refresh();
+    w.t.now += 1;
+    w.facts.note({ taskId: 't-x', taskWorkspaceId: 'ws-x', sessions: ['p-x'], at: w.t.now });
+    w.state.sessions = 'down';
+    expect(w.guards.liveTaskWorkspaces()).toEqual(['ws-x']);
+    expect(w.liveness.goneTasks().size).toBe(0);
   });
 
   it('a close that stopped the panes after the last read outweighs that read\'s sighting of the agent', async () => {

@@ -103,6 +103,7 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     // writes nothing. Once recovery is done, an empty list is the truth.
     if (!reply.recoveryDone) throw new Error('the daemon is still restoring its sessions');
     const byId = new Map(reply.sessions.map((x) => [x.id, x]));
+    for (const x of reply.sessions) if (x.agentProcessAlive === true) ports.facts?.sessionAgentSeen(x.id);
     const next = new Set<string>();
     const busy = new Set<string>();
     const endedNoAgent = new Set<string>();
@@ -119,7 +120,7 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
         withAgent.add(e.id);
         // Seen running again: the task holds its slot from now on, across a
         // restart too, until a read sees it exit.
-        if (row) ports.facts?.clear(row.id, 'an agent was seen running in its workspace', at);
+        if (row) ports.facts?.seenRunning(row.id, at);
       } else if (row && isEndedStatus(row.status) && !endedTaskAgentRuns(ptys, row.id, recorded, byId, ports.sessionRecordOf)) {
         endedNoAgent.add(e.id);
         if (!resumed(row.id)) ports.facts?.note({ taskId: row.id, taskWorkspaceId: e.id, sessions: [...ptys], at });
@@ -162,7 +163,8 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
    *  written after that read says are gone (a close that stopped the panes):
    *  an older sighting never outweighs a newer stop. */
   const seenRunning = (): ReadonlySet<string> => {
-    const newer = new Set((ports.facts?.all() ?? []).filter((f) => f.at > readAt).map((f) => f.taskWorkspaceId));
+    const entries = ports.entries();
+    const newer = new Set((ports.facts?.all() ?? []).filter((f) => f.at > readAt && holds(f, entries)).map((f) => f.taskWorkspaceId));
     return newer.size === 0 ? agentWorkspaces : new Set([...agentWorkspaces].filter((ws) => !newer.has(ws)));
   };
   const factWorkspaces = (): string[] => {

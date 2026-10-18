@@ -29,6 +29,10 @@ export const AGENT_GONE_FILENAME = 'agent-gone.json';
 export const AGENT_GONE_VERSION = 1 as const;
 /** Facts kept (oldest dropped first). */
 export const AGENT_GONE_MAX = 2000;
+/** After an agent launch line is submitted in a pane, what the daemon says of
+ *  that pane's agent may still be the previous one's: no fact names the pane
+ *  until its new agent is seen running, or this long has passed. */
+export const LAUNCH_SETTLE_MS = 2 * 60_000;
 
 export interface AgentGoneFact {
   taskId: string;
@@ -53,10 +57,12 @@ export class AgentGoneFacts {
   /** False once the file could not be read: facts then live in memory only. */
   private writable = true;
   private lastWrite: Promise<void> = Promise.resolve();
-  /** When each task, and each session, was last seen to run again (in
-   *  memory): an observation made before that is stale and adds no fact. */
+  /** When each task was last seen to run again (in memory): an observation
+   *  started before that is stale and adds no fact. */
   private readonly taskRanAt = new Map<string, number>();
-  private readonly sessionRanAt = new Map<string, number>();
+  /** Sessions an agent launch was submitted in, and when, until their new
+   *  agent is seen running (in memory). */
+  private readonly launchedAt = new Map<string, number>();
 
   constructor(
     private readonly file: string,
@@ -100,7 +106,7 @@ export class AgentGoneFacts {
    *  held for the same workspace and sessions is kept as it is (no write). */
   note(fact: AgentGoneFact): void {
     if ((this.taskRanAt.get(fact.taskId) ?? -Infinity) >= fact.at) return;
-    if (fact.sessions.some((s) => (this.sessionRanAt.get(s) ?? -Infinity) >= fact.at)) return;
+    if (fact.sessions.some((s) => fact.at <= (this.launchedAt.get(s) ?? -Infinity) + LAUNCH_SETTLE_MS)) return;
     const prior = this.facts.get(fact.taskId);
     const sessions = [...new Set(fact.sessions)].sort();
     if (prior && prior.taskWorkspaceId === fact.taskWorkspaceId && prior.sessions.length === sessions.length
@@ -124,14 +130,30 @@ export class AgentGoneFacts {
     this.persist();
   }
 
+  /** A read that started at `at` saw the task's agent running. A fact
+   *  recorded after that read started (a close that stopped the panes while
+   *  it was answered) is newer and stays. */
+  seenRunning(taskId: string, at: number): void {
+    const f = this.facts.get(taskId);
+    if (f && f.at > at) return;
+    this.clear(taskId, 'an agent was seen running in its workspace', at);
+  }
+
   /** An agent launch line was submitted in a session (a resume typed into
-   *  the pane): a fact naming that session goes, and a read that started
-   *  before now adds none for it. */
+   *  the pane): a fact naming that session goes, and none names it again
+   *  until its new agent is seen running (sessionAgentSeen) or
+   *  LAUNCH_SETTLE_MS has passed. */
   sessionLaunched(sessionId: string, at: number = this.now()): void {
-    remember(this.sessionRanAt, sessionId, at);
+    remember(this.launchedAt, sessionId, at);
     for (const f of [...this.facts.values()]) {
       if (f.sessions.includes(sessionId)) this.clear(f.taskId, `an agent was launched in ${sessionId}`, at);
     }
+  }
+
+  /** A read saw an agent running in the session: a launch there is settled,
+   *  and a later exit is a real one. */
+  sessionAgentSeen(sessionId: string): void {
+    this.launchedAt.delete(sessionId);
   }
 
   /** Resolves once the writes scheduled so far are on disk (or failed). */
@@ -145,10 +167,11 @@ export class AgentGoneFacts {
   }
 }
 
-/** Bounded like the facts: the oldest entry goes first. */
+/** Never moves back; bounded like the facts, the oldest entry going first. */
 function remember(map: Map<string, number>, key: string, at: number): void {
+  const prior = map.get(key);
   map.delete(key);
-  map.set(key, at);
+  map.set(key, prior !== undefined && prior > at ? prior : at);
   while (map.size > AGENT_GONE_MAX) {
     const oldest = map.keys().next();
     if (oldest.done) break;
