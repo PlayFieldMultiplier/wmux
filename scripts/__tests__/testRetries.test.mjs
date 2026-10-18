@@ -19,16 +19,27 @@ import {
   renderAnnotations,
   renderSummary,
 } from '../lib/test-retries.mjs';
+import { collectDurations, readDurationsReport } from '../lib/test-durations.mjs';
 import RetryReporter from '../vitest-retry-reporter.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'flaky-report.mjs');
 
-// The slice of vitest's reporter API (TestModule / TestCase) the collector
-// reads. `project` is the TestProject.name: '' for a config without projects.
-function fakeModule(relativeModuleId, tests, project = 'unit') {
+// The slice of vitest's reporter API (TestModule / TestCase) the collectors
+// read. `project` is the TestProject.name: '' for a config without projects.
+function fakeModule(relativeModuleId, tests, project = 'unit', { duration = 0, state = 'passed', diagnostic = {} } = {}) {
   return {
     relativeModuleId,
     project: { name: project },
+    state: () => state,
+    diagnostic: () => ({
+      environmentSetupDuration: 0,
+      prepareDuration: 0,
+      collectDuration: 0,
+      setupDuration: 0,
+      duration,
+      heap: undefined,
+      ...diagnostic,
+    }),
     children: {
       allTests: () =>
         tests.map((t) => ({
@@ -166,8 +177,15 @@ describe('vitest-retry-reporter.mjs', () => {
     reporter.onInit({ config: { root, retry: 1, shard }, logger: { warn: (m) => warnings.push(m) } });
     reporter.onTestRunEnd(modules);
     const dir = path.join(root, 'test-results');
-    const files = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
-    return { root, files, warnings, read: (name) => readReport(path.join(dir, name)) };
+    const all = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+    return {
+      root,
+      files: all.filter((f) => f.startsWith('retries-')),
+      durationFiles: all.filter((f) => f.startsWith('durations-')),
+      warnings,
+      read: (name) => readReport(path.join(dir, name)),
+      readDurations: (name) => readDurationsReport(path.join(dir, name)),
+    };
   }
 
   const flaky = { name: 'b > flaky', state: 'passed', retryCount: 1 };
@@ -218,6 +236,57 @@ describe('vitest-retry-reporter.mjs', () => {
     expect(merged.flaky.map((r) => [r.name, r.seen])).toEqual([['x > races', 2]]);
     expect(merged.flaky[0].where).toEqual(['unit, shard 1/2, win32', `integration, ${process.platform}`]);
   });
+
+  it('writes each project\'s file durations next to its retry report', () => {
+    const out = run({}, [
+      fakeModule('src\\b\\__tests__\\b.test.ts', [flaky], 'integration', { duration: 1234.5 }),
+      fakeModule('src/a.test.ts', [steady], 'unit', { duration: 20 }),
+      fakeModule('src/c.test.ts', [steady], 'unit', { duration: 300, state: 'failed' }),
+    ], { index: 1, count: 2 });
+    expect(out.durationFiles).toEqual(['durations-integration.json', 'durations-unit.json']);
+    expect(out.readDurations('durations-integration.json')).toEqual({
+      version: 1,
+      project: 'integration',
+      shard: '1/2',
+      platform: process.platform,
+      files: { 'src/b/__tests__/b.test.ts': 1234.5 },
+    });
+    expect(out.readDurations('durations-unit.json').files).toEqual({ 'src/a.test.ts': 20, 'src/c.test.ts': 300 });
+    expect(out.warnings).toEqual([]);
+  });
+
+  it('labels an unnamed project\'s durations with the suite option, outputFile or not', () => {
+    const modules = [fakeModule('src/r.runtime.test.ts', [steady], '', { duration: 5 })];
+    const plain = run({ suite: 'runtime' }, modules);
+    expect(plain.durationFiles).toEqual(['durations-runtime.json']);
+    expect(plain.readDurations('durations-runtime.json').project).toBe('runtime');
+    const explicit = run({ suite: 'runtime', outputFile: 'out/retries.json' }, modules);
+    expect(explicit.durationFiles).toEqual(['durations-runtime.json']);
+  });
+});
+
+describe('collectDurations', () => {
+  it('records a file\'s full cost: environment, prepare, import, setup files, tests', () => {
+    const byProject = collectDurations([
+      fakeModule('src/a.test.ts', [], 'unit', {
+        duration: 30,
+        diagnostic: { environmentSetupDuration: 400, prepareDuration: 20, collectDuration: 1_500, setupDuration: 50 },
+      }),
+      // A field vitest left out counts as 0; a broken one drops the file.
+      fakeModule('src/b.test.ts', [], 'unit', { duration: 10, diagnostic: { prepareDuration: undefined } }),
+      fakeModule('src/c.test.ts', [], 'unit', { duration: 10, diagnostic: { collectDuration: Number.NaN } }),
+    ]);
+    expect(byProject.get('unit')).toEqual({ 'src/a.test.ts': 2_000, 'src/b.test.ts': 10 });
+  });
+
+  it('records finished modules only, every project that ran included', () => {
+    const byProject = collectDurations([
+      fakeModule('src/a.test.ts', [], 'unit', { duration: 10 }),
+      fakeModule('src/skipped.test.ts', [], 'unit', { duration: 0, state: 'skipped' }),
+      fakeModule('src/queued.test.ts', [], 'integration', { duration: 0, state: 'queued' }),
+    ]);
+    expect(Object.fromEntries(byProject)).toEqual({ unit: { 'src/a.test.ts': 10 }, integration: {} });
+  });
 });
 
 describe('flaky-report.mjs', () => {
@@ -231,7 +300,7 @@ describe('flaky-report.mjs', () => {
     fs.writeFileSync(summary, '## Earlier step\n');
     const run = spawnSync(process.execPath, [SCRIPT, dir], {
       encoding: 'utf8',
-      env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
+      env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: '' },
     });
     expect(run.status).toBe(0);
     expect(run.stdout).toContain('::warning file=src/x.test.ts,title=Flaky (passed on retry)::x > races');
@@ -241,10 +310,33 @@ describe('flaky-report.mjs', () => {
     expect(written).toContain('| x > races | `src/x.test.ts` |');
   });
 
+  it('sets the `retried` step output only when a report lists a retried test', () => {
+    const runWith = (tests) => {
+      const dir = tmpDir();
+      fs.writeFileSync(path.join(dir, 'retries-unit.json'), JSON.stringify(report(tests)));
+      const output = path.join(dir, 'output.txt');
+      fs.writeFileSync(output, 'earlier=1\n');
+      const run = spawnSync(process.execPath, [SCRIPT, dir], {
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_ACTIONS: '', GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: output },
+      });
+      expect(run.status).toBe(0);
+      return fs.readFileSync(output, 'utf8');
+    };
+    expect(runWith([])).toBe('earlier=1\nretried=false\n');
+    expect(runWith([{ file: 'a.test.ts', name: 'a', line: 1, state: 'passed', retryCount: 1 }])).toBe(
+      'earlier=1\nretried=true\n',
+    );
+    // Failed every attempt is still a retried test, and still worth keeping.
+    expect(runWith([{ file: 'a.test.ts', name: 'a', line: 1, state: 'failed', retryCount: 1 }])).toBe(
+      'earlier=1\nretried=true\n',
+    );
+  });
+
   it('exits 0 with no report at all', () => {
     const run = spawnSync(process.execPath, [SCRIPT, path.join(tmpDir(), 'none')], {
       encoding: 'utf8',
-      env: { ...process.env, GITHUB_ACTIONS: '', GITHUB_STEP_SUMMARY: '' },
+      env: { ...process.env, GITHUB_ACTIONS: '', GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: '' },
     });
     expect(run.status).toBe(0);
     expect(run.stdout).toContain('No retry report was written');

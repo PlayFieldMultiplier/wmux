@@ -135,6 +135,21 @@ describe('reclaimWorker', () => {
     expect(note.mock.calls[0][4]).toEqual({ code: 'worker.doneResumable', args: { status: 'completed', title: 'perf-A' } });
   });
 
+  it('a task the bot cancelled says its worker stopped because the task ended, not to free memory', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const { ports, note } = reclaimPorts(store, [session()]);
+    // The bot's own ledger_update: cancelled, with its reason as the summary.
+    await reclaimWorker(ports, row('cancelled', { summary: 'PR merged meanwhile; cancelled to free the slot.' }), 'cancelled');
+    const body = String(note.mock.calls[0][3]);
+    expect(body).toBe('Task cancelled: its Claude stopped because the task ended. Its pane closes. The worktree and the conversation are kept; Resume continues the same conversation.');
+    expect(body).not.toContain('free memory');
+    expect(note.mock.calls[0][4]).toEqual({ code: 'worker.doneResumable', args: { status: 'cancelled', title: 'perf-A' } });
+    // With no conversation recorded, the same cause.
+    const bare = reclaimPorts(ReclaimedWorkers.at(path.join(dir, 'bare')), [session({ resumeBinding: undefined })]);
+    await reclaimWorker(bare.ports, row('cancelled'), 'cancelled');
+    expect(bare.note.mock.calls[0][3]).toBe('Task cancelled: its Claude stopped because the task ended. Its pane closes. The worktree is kept; no conversation was recorded to resume.');
+  });
+
   it('records nothing (and the worker keeps running) without a worktree or when every stop is refused; no pane left is recorded as nothing to stop', async () => {
     const store = ReclaimedWorkers.at(dir);
     expect(await reclaimWorker(reclaimPorts(store, [session()], { worktreeOf: async () => null }).ports, row('completed'), 'completed')).toBeNull();
@@ -781,6 +796,12 @@ describe('unreclaimedEndedWorkers', () => {
     await reclaimWorker(reclaimPorts(store, [session()]).ports, rows[0], 'failed');
     expect(store.get('wtask-f-00000001')?.ended).toBe('failed');
     expect(unreclaimedEndedWorkers(rows, store, 5_000)).toBe(1);
+  });
+
+  it('an ended bot task whose agent is known gone holds no slot, reclaimed or not (#2393)', () => {
+    const store = ReclaimedWorkers.at(dir);
+    const rows = [row('failed', { id: 'wtask-f-00000001', updatedAt: 4_000 }), row('completed', { id: 'wtask-c-00000001', updatedAt: 4_000 })];
+    expect(unreclaimedEndedWorkers(rows, store, 5_000, new Set(['wtask-c-00000001']))).toBe(1);
   });
 });
 

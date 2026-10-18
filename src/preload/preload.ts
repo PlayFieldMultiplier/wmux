@@ -177,6 +177,7 @@ const chat: ChatBridgeApi = {
   codeBlock: (args) => ipcRenderer.invoke(CHAT_IPC.codeBlock, args),
   send: (args) => ipcRenderer.invoke(CHAT_IPC.send, args),
   interrupt: (args) => ipcRenderer.invoke(CHAT_IPC.interrupt, args),
+  rewind: (args) => ipcRenderer.invoke(CHAT_IPC.rewind, args),
   attachment: (args) => ipcRenderer.invoke(CHAT_IPC.attachment, args),
   openGates: () => ipcRenderer.invoke(CHAT_IPC.openGates),
   onAppend: (callback) => {
@@ -978,6 +979,10 @@ const electronAPI = {
   browser: {
     registerWebview: (surfaceId: string, webContentsId: number, workspaceId?: string) =>
       ipcRenderer.invoke('browser:register-webview', surfaceId, webContentsId, workspaceId),
+    /** Save the inspector-picked element's on-screen box as a PNG; resolves to
+     *  its path as `ptyId`'s shell sees it, or null when it could not be taken. */
+    captureElement: (webContentsId: number, rect: unknown, ptyId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('browser:capture-element', webContentsId, rect, ptyId),
     // #517 lightweight mode signals
     setVisibility: (surfaceId: string, visible: boolean) =>
       ipcRenderer.invoke('browser:set-visibility', surfaceId, visible),
@@ -1325,6 +1330,17 @@ const electronAPI = {
       const listener = (_event: Electron.IpcRendererEvent, ids: string[]) => callback(ids);
       ipcRenderer.on(IPC.WORK_LINK_CHANGED, listener);
       return () => { ipcRenderer.removeListener(IPC.WORK_LINK_CHANGED, listener); };
+    },
+  },
+  // Fleet's Plan card: Claude's plan dialogs and the answer to one (main window only).
+  planApprovals: {
+    list: () => ipcRenderer.invoke(IPC.PLAN_APPROVALS_LIST) as Promise<import('../shared/planApproval').PlanApprovalView[]>,
+    answer: (request: import('../shared/planApproval').PlanApprovalAnswerRequest) =>
+      ipcRenderer.invoke(IPC.PLAN_APPROVALS_ANSWER, request) as Promise<import('../shared/planApproval').PlanApprovalAnswerResult>,
+    onChanged: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on(IPC.PLAN_APPROVALS_CHANGED, listener);
+      return () => { ipcRenderer.removeListener(IPC.PLAN_APPROVALS_CHANGED, listener); };
     },
   },
   // Moa's track record: the weekly retro card and its settings.

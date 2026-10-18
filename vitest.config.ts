@@ -1,4 +1,5 @@
 import { configDefaults, defineConfig } from 'vitest/config';
+import { DurationSequencer } from './scripts/lib/duration-sequencer.mjs';
 import lanes from './vitest.lanes.json';
 
 const include = [
@@ -61,6 +62,11 @@ export default defineConfig({
         },
       },
     ],
+    // `--shard` splits by the durations in vitest.durations.json, not by file
+    // count: vitest's own split gave the integration shards 447 s and 235 s.
+    // Root-only in vitest; it balances each project on its own
+    // (scripts/lib/duration-sequencer.mjs).
+    sequence: { sequencer: DurationSequencer },
     // CI only: retry a failed test once, so one flake no longer costs a full
     // rerun. Vitest's github-actions reporter (on by default in Actions) lists
     // every test that passed only on retry in the job summary.

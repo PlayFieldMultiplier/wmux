@@ -27,6 +27,8 @@ import { removeTaskRelay } from '../../worktask/taskPush';
 import { getWmuxDir } from '../../../daemon/config';
 import { taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { TaskCloseService } from '../../worktask/TaskCloseService';
+import { getTaskLedger } from '../../deck/taskLedgerHost';
+import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
 import { isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
 import { TaskPrService } from '../../worktask/TaskPrService';
 import { WorktaskScanService, type ScanOpenTask } from '../../worktask/WorktaskScanService';
@@ -108,6 +110,11 @@ export function registerWorktaskHandlers(
         log: (message) => console.warn(message),
       });
       if (stopped.length > 0) console.log(`[worktask] stopped ${stopped.length} pane(s) inside ${worktreePath} before removing it`);
+      return stopped;
+    },
+    panesStopped: (taskId, sessionIds) => {
+      const row = getTaskLedger().get(taskId);
+      if (row) noteTaskPanesStopped(taskId, row.taskWorkspaceId, sessionIds);
     },
   });
   const prService = new TaskPrService({ daemon: daemonPort, cache: prStatusCache });

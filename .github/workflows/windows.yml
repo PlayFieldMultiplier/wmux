@@ -16,7 +16,9 @@ name: Windows full suite
 # - on demand: `gh workflow run windows.yml --ref <branch>` for a pull request
 #   that touches platform code without saying win32.
 #
-# Nothing requires this workflow to pass. A red run is the notification.
+# Nothing requires this workflow to pass. A red run on main opens a
+# `Nightly red: <workflow>` issue (scripts/ci-failure-issue.mjs), which the
+# triage bot picks up; the next green run closes it.
 on:
   schedule:
     # 17:53 UTC = 02:53 KST. Off the hour: scheduled runs on :00 queue longest.
@@ -79,6 +81,7 @@ jobs:
       # retries-integration.json) and keep them, so a unit test that is flaky
       # only on Windows shows up here rather than nowhere.
       - name: Flaky test report
+        id: flaky
         if: ${{ !cancelled() }}
         run: node scripts/flaky-report.mjs test-results
 
@@ -89,3 +92,47 @@ jobs:
           name: test-report-windows-${{ matrix.shard }}
           path: test-results/
           if-no-files-found: ignore
+
+      # The retry reports on their own, only when one lists a retried test,
+      # for the weekly rollup (scripts/flaky-weekly.mjs): it downloads these
+      # and nothing else, so a run without a retry costs it no API call.
+      - name: Upload retry report
+        if: ${{ !cancelled() && steps.flaky.outputs.retried == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-report-retries-windows-${{ matrix.shard }}
+          path: test-results/retries-*.json
+          if-no-files-found: ignore
+
+  # After the test jobs, whatever happened to them (a timeout included),
+  # on main: one red run opens (or comments on) the `Nightly red: <workflow>`
+  # issue so the triage bot sees it, and a green one closes it. A job of its
+  # own, not a last step in the test job, because a timed-out job never runs
+  # its own `if: failure()` step, and the two shards would race to report.
+  # scripts/lib/ci-failure-issue.mjs has the rules.
+  report:
+    name: Report to issue
+    needs: windows
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Files and closes the issue (issues), reads the run's jobs and recent
+    # runs (actions) and a cancelled job's annotations (checks: a timeout).
+    # The workflow default stays read-only.
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+      checks: read
+    steps:
+      # Same pins as validate in ci.yml. Node built-ins and gh only: no npm ci.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '>=24.21.0 <25'
+
+      - name: Open, update or close the nightly issue
+        run: node scripts/ci-failure-issue.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}

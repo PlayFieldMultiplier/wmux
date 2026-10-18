@@ -1097,7 +1097,8 @@ export interface DaemonEvent {
     | 'title.changed'
     // X1 workspace-context sidebar (schema-freeze §2). Per-session live
     // context detected where the PTY lives:
-    //   context.git   → { branch: string | null, isWorktree: boolean }
+    //   context.git   → { branch: string | null, isWorktree: boolean, absent?: true }
+    //                   (absent: null branch is a known "not a repo", see GitContext)
     //   context.ports → { ports: Array<{ port: number, pid: number }> }
     | 'context.git'
     | 'context.ports'

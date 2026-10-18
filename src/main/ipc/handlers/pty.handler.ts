@@ -19,12 +19,13 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, botWorkerLaunchTask, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, withBotWorkerMergeGuard, type BotWorkerCreate } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, botWorkerLaunchTask, botWorkerSessionRecord, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, withBotWorkerMergeGuard, type BotWorkerCreate } from '../../agents/botWorkerMergeGuard';
 import { isPlainCmdLaunchLine, namesClaude } from '../../../shared/botWorkerGuard';
 import { namesCodex } from '../../../shared/codexWorkerGuard';
 import { getMcpTarget } from '../../../shared/mcpTargets';
 import { readTargetStatus } from '../../../shared/mcpRegistration';
 import { revokeSecretGrant, secretEnvForCreate } from '../../factory/secretGrants';
+import { noteSessionAgentLaunched, noteSessionInput, noteTaskWorkerLaunched } from '../../factory/agentGoneFacts';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
@@ -566,7 +567,12 @@ export function registerPTYHandlers(
       const sessionId = `daemon-${crypto.randomUUID().slice(0, 8)}`;
       logCwdResolution(sessionId, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       // Recorded before the session exists, so a restart always knows it.
-      if (botWorker) noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...botWorkerLaunchTask(botWorker) });
+      if (botWorker) {
+        const launchTask = botWorkerLaunchTask(botWorker);
+        noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...launchTask });
+        // A new worker session for the task (a respawn or a resume): its agent runs again.
+        if (launchTask.taskId) noteTaskWorkerLaunched(launchTask.taskId);
+      }
 
       // Identity env vars for the spawned shell. The daemon's
       // `buildSafeChildEnv` passes WMUX_WORKSPACE_ID / WMUX_SURFACE_ID
@@ -886,12 +892,14 @@ export function registerPTYHandlers(
       const instance = await ptyManager.createAsync({ shell, ...(wslArgs ? { shellArgs: wslArgs } : {}), cols, rows, workspaceId, surfaceId, env, cwd: effectiveCwd, spawnKind, wslAccountLoginEnvKey, ...(wslTaskGit ? { wslTaskGit } : {}) });
       logCwdResolution(instance.id, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       if (botWorker) {
+        const launchTask = botWorkerLaunchTask(botWorker);
         try {
-          noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, { ...staged.launch, ...botWorkerLaunchTask(botWorker) });
+          noteBotWorkerSession(instance.id, botWorker.workspaceId, undefined, { ...staged.launch, ...launchTask });
         } catch (err) {
           ptyManager.dispose(instance.id);
           throw err;
         }
+        if (launchTask.taskId) noteTaskWorkerLaunched(launchTask.taskId);
       }
       ptyBridge.setupDataForwarding(instance.id);
       const actualCwd = instance.cwd || effectiveCwd || homedir();
@@ -965,6 +973,8 @@ export function registerPTYHandlers(
       // agent prints its "Interrupted" row. Runs before the write so the settle is not gated on
       // delivery — the operator's intent is the same either way.
       ptyBridge.noteInterruptInput(id, data);
+      // The Enter that submits a staged launch line (agentGoneFacts.ts).
+      noteSessionInput(id, data);
       const segments = segmentOversize(data);
       let allDelivered = true;
       for (const segment of segments) {
@@ -997,6 +1007,7 @@ export function registerPTYHandlers(
       }
       // Interrupt edge — same reasoning as the daemon branch above.
       ptyBridge.noteInterruptInput(id, data);
+      noteSessionInput(id, data);
       const segments = segmentOversize(data);
       for (const segment of segments) {
         ptyManager.write(id, sanitizePtyText(segment));
@@ -1038,6 +1049,9 @@ export function registerPTYHandlers(
       if (!ptyManager.get(id)) throw new Error('PTY_WRITE_LAUNCH: no such session');
       ptyManager.write(id, line);
     }
+    // An agent starts again in this pane, now or at the owner's Enter: an
+    // ended task it belongs to is not known gone any more (agentGoneFacts.ts).
+    noteSessionAgentLaunched(id, submit === true, botPane ? botWorkerSessionRecord(id)?.taskId : undefined);
   }));
 
   // Per-session scheduled prompts. Unlike Command Deck schedules, these

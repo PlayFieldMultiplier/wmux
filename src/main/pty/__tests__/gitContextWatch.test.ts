@@ -6,6 +6,7 @@ import {
   GitContextWatcher,
   parseHead,
   resolveRepo,
+  resolveRepoState,
   readGitContext,
   type GitWatchFactory,
   type GitWatchListener,
@@ -139,7 +140,7 @@ describe('GitContextWatcher', () => {
   const DEBOUNCE_MS = 50;
 
   let fake: ReturnType<typeof fakeWatchFactory>;
-  let events: Array<{ sessionId: string; branch: string | null; isWorktree: boolean }>;
+  let events: Array<{ sessionId: string; branch: string | null; isWorktree: boolean; absent?: true }>;
 
   /** Build a watcher wired to the fake factory, with events collected. */
   function makeWatcher(): GitContextWatcher {
@@ -277,6 +278,157 @@ describe('GitContextWatcher', () => {
     expect(events).toHaveLength(2);
     expect(events[1].branch).toBeNull();
     expect(events[1].isWorktree).toBe(false);
+    expect(events[1].absent).toBe(true);
+  });
+
+  it('repo → non-repo → repo: known absent only while outside a repo', () => {
+    const a = tmp();
+    initFakeRepo(a, 'main');
+    const plain = tmp();
+    const b = tmp();
+    initFakeRepo(b, 'feat');
+    const watcher = makeWatcher();
+    watcher.update('s1', a);
+    watcher.update('s1', plain);
+    watcher.update('s1', b);
+    expect(events).toEqual([
+      { sessionId: 's1', branch: 'main', isWorktree: false },
+      { sessionId: 's1', branch: null, isWorktree: false, absent: true },
+      { sessionId: 's1', branch: 'feat', isWorktree: false },
+    ]);
+  });
+
+  it('an unreadable HEAD inside a repo is unknown, not absent', () => {
+    const root = tmp();
+    fs.mkdirSync(path.join(root, '.git')); // no HEAD file
+    makeWatcher().update('s1', root);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('outside a repo with no live watch, "no branch" is unknown', () => {
+    const w = new GitContextWatcher(() => { throw new Error('EPERM'); });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', tmp());
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('a non-repo watch that errors turns known absent back into unknown', () => {
+    let onError: (() => void) | undefined;
+    const w = new GitContextWatcher(() => ({
+      close() { /* nothing armed */ },
+      on(_event: 'error', listener: () => void) { onError = listener; return this; },
+    }));
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', tmp());
+    expect(events.at(-1)?.absent).toBe(true);
+    onError?.();
+    expect(events).toHaveLength(2);
+    expect(events[1]).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
+  });
+
+  it('resync() re-emits every session\'s current answer, unchanged or not', () => {
+    const repo = tmp();
+    initFakeRepo(repo, 'main');
+    const plain = tmp();
+    const watcher = makeWatcher();
+    watcher.update('s1', repo);
+    watcher.update('s2', plain);
+    expect(events).toHaveLength(2);
+    watcher.resync();
+    expect(events.slice(2)).toEqual([
+      { sessionId: 's1', branch: 'main', isWorktree: false },
+      { sessionId: 's2', branch: null, isWorktree: false, absent: true },
+    ]);
+  });
+
+  it('a walk that gives up before the root is unknown, not absent', () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    // 30 levels below the repo: past the 24-level walk limit.
+    const deep = path.join(root, ...Array.from({ length: 30 }, (_, i) => `d${i}`));
+    fs.mkdirSync(deep, { recursive: true });
+    expect(resolveRepoState(deep)).toEqual({ repo: null, conclusive: false });
+    makeWatcher().update('s1', deep);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('a cwd reached through a symlink into a repo is not absent', () => {
+    const repo = tmp();
+    initFakeRepo(repo, 'main');
+    const src = path.join(repo, 'src');
+    fs.mkdirSync(src);
+    const alias = path.join(tmp(), 'alias');
+    try {
+      fs.symlinkSync(src, alias, 'junction');
+    } catch {
+      return; // no symlink permission (Windows without developer mode)
+    }
+    const state = resolveRepoState(alias);
+    expect(state.repo?.gitDir).toBe(path.join(fs.realpathSync.native(repo), '.git'));
+    makeWatcher().update('s1', alias);
+    expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
+  });
+
+  it('a bare repository (no .git, HEAD at the top) is unknown, not absent', () => {
+    const bare = tmp();
+    fs.writeFileSync(path.join(bare, 'HEAD'), 'ref: refs/heads/main\n');
+    fs.mkdirSync(path.join(bare, 'objects'));
+    fs.mkdirSync(path.join(bare, 'refs'));
+    const sub = path.join(bare, 'objects');
+    expect(resolveRepoState(bare).conclusive).toBe(false);
+    expect(resolveRepoState(sub).conclusive).toBe(false);
+    makeWatcher().update('s1', bare);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('a bare clone into a watched non-repo cwd drops the known absent', () => {
+    const root = tmp();
+    const watcher = makeWatcher();
+    watcher.update('s1', root);
+    expect(events.at(-1)?.absent).toBe(true);
+    fs.writeFileSync(path.join(root, 'HEAD'), 'ref: refs/heads/main\n');
+    fake.last().listener('rename', 'HEAD');
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
+  });
+
+  it('a .git created while the cwd watch is being armed is not missed as absent', () => {
+    const root = tmp();
+    const w = new GitContextWatcher((target, listener) => {
+      initFakeRepo(root, 'raced'); // appears before the watch is live
+      return fake.factory(target, listener);
+    });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', root);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('a non-repo cwd that cannot be resolved to a real path is unknown', () => {
+    const gone = path.join(tmp(), 'gone');
+    expect(resolveRepoState(gone)).toEqual({ repo: null, conclusive: false });
+  });
+
+  it('a .git file without a gitdir line is unknown, not absent', () => {
+    const root = tmp();
+    fs.writeFileSync(path.join(root, '.git'), 'garbage\n');
+    makeWatcher().update('s1', root);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+  });
+
+  it('resync() resolves a non-repo session again (an ancestor git init)', () => {
+    const parent = tmp();
+    const sub = path.join(parent, 'sub');
+    fs.mkdirSync(sub);
+    const watcher = makeWatcher();
+    watcher.update('s1', sub);
+    expect(events.at(-1)?.absent).toBe(true);
+    initFakeRepo(parent, 'late');
+    watcher.resync();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'late', isWorktree: false });
+    expect(events).toHaveLength(2);
   });
 
   it('picks up a git init in a previously non-repo cwd without polling', () => {

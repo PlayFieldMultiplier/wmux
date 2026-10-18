@@ -3,6 +3,7 @@ import '../shared/exeSearchGuard';
 import { isInternalForkPayload } from '../shared/hooks/internalFork';
 import { terminalCoreRuntime, terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
+import { createStartupRecovery } from './startupRecovery';
 import { loadChatSkills } from './transcript/chatSkills';
 import { TerminalChatService } from './transcript/TerminalChatService';
 import { OpenCodeIdleSettler } from './transcript/openCodeIdleSettle';
@@ -199,7 +200,7 @@ import { ApprovalRegistry } from './approvals/ApprovalRegistry';
 import { WorkspaceFactStore, type WorkspaceFactRowInput } from './approvals/workspaceFacts';
 import { MoaPaneRpc, resolveMoaPane } from './web/moaPane';
 import { MoaPromptSync } from './web/moaPrompt';
-import { parseApprovalResolveRequest } from './approvals/resolveRequest';
+import { parseApprovalResolveRequest, parsePlanAnswerRequest, planDetailOnly } from './approvals/resolveRequest';
 import { GateBroker } from './approvals/GateBroker';
 import { coerceGate } from './approvals/gateConfig';
 import { DeviceStore, type DeviceBatchRevocationCause } from './web/DeviceStore';
@@ -3019,6 +3020,13 @@ function registerRpcHandlers(
   pipeServer.onRpc('daemon.listSessions', async (rawParams) => {
     const params = (rawParams ?? {}) as Record<string, unknown>;
     const includeSuspended = params['includeSuspended'] === true;
+    // #2393: asked with `withRecovery`, the list comes as `{sessions,
+    // recoveryDone}`, so a client can tell "still restoring" from "no
+    // sessions". Additive: without it the reply stays the bare list, and a
+    // client that gets a bare list back (an older daemon) takes it as
+    // recovered, as every read was taken before.
+    const withRecovery = params['withRecovery'] === true;
+    const reply = (sessions: unknown[]): unknown => (withRecovery ? { sessions, recoveryDone: startupRecovery.done() } : sessions);
     // X8: join the supervisor's volatile runtime (restart counts, pending
     // backoff) onto supervised sessions — additive field consumed by
     // `wmux list --json` and the sidebar badge.
@@ -3126,9 +3134,9 @@ function registerRpcHandlers(
           createdAt: s.createdAt,
           lastActivity: s.lastActivity,
         }));
-      return [...activeSessions, ...suspendedEntries];
+      return reply([...activeSessions, ...suspendedEntries]);
     }
-    return activeSessions;
+    return reply(activeSessions);
   });
 
   // daemon.promoteSession — on-demand recovery of a cap-skipped suspended
@@ -3314,10 +3322,19 @@ function registerRpcHandlers(
   // in-flight promotion. Exec units also resume when no GUI is attached.
   setImmediate(() => {
     if (shuttingDown) return;
-    const pending = sessionManager.listSessions().filter(s => sessionManager.getPendingRecovery(s.id));
-    const selected = selectRecoverableSessions(pending, Math.min(loadConfig().session.maxSessions, MAX_RECOVER_SESSIONS));
-    for (const session of pending.filter(s => selected.recoverableIds.has(s.id))) {
-      void promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err));
+    const promotions: Array<Promise<unknown>> = [];
+    try {
+      const pending = sessionManager.listSessions().filter(s => sessionManager.getPendingRecovery(s.id));
+      const selected = selectRecoverableSessions(pending, Math.min(loadConfig().session.maxSessions, MAX_RECOVER_SESSIONS));
+      for (const session of pending.filter(s => selected.recoverableIds.has(s.id))) {
+        promotions.push(promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err)));
+      }
+    } catch (err) {
+      log('error', 'WSL background recovery could not start:', err);
+    } finally {
+      // Recovery is done for daemon.listSessions once these settle. Always
+      // tracked: a pass that threw must not leave it "not done" for good.
+      startupRecovery.track(promotions);
     }
   });
 
@@ -4726,6 +4743,23 @@ function registerRpcHandlers(
     return approvalRegistry.resolve(request);
   });
 
+  // The desktop's answer to Claude's plan dialog and the plan it shows: the
+  // first-party client only (see parsePlanAnswerRequest). Every other client
+  // keeps answering it in the terminal or from a paired phone.
+  pipeServer.onRpc('daemon.approvals.answerPlan', async (params, ctx) => {
+    const request = parsePlanAnswerRequest(params as Record<string, unknown>, {
+      isFirstParty: firstPartyOnly(ctx.clientId, 'daemon.approvals.answerPlan'),
+    });
+    if ('ok' in request) return request;
+    if (!approvalRegistry) return { ok: false, reason: 'not-found' };
+    return approvalRegistry.answerPlanFromDesktop(request);
+  });
+  pipeServer.onRpc('daemon.approvals.detail', async (params, ctx) => {
+    if (!firstPartyOnly(ctx.clientId, 'daemon.approvals.detail')) return null;
+    const id = typeof (params as { id?: unknown }).id === 'string' ? (params as { id: string }).id : '';
+    return planDetailOnly(id ? approvalRegistry?.terminalPromptDetail(id) ?? null : null);
+  });
+
   // ── Main → daemon workspace facts (approval press scope) ─────────────────
   // The two facts `decideApprovalPress` needs about a pane's workspace — is it
   // a WorkTask task workspace, and what is its deck autonomy mode — live in
@@ -5292,6 +5326,14 @@ function registerRpcHandlers(
     const id = typeof params['id'] === 'string' ? params['id'] : '';
     const agentSessionId = typeof params['agentSessionId'] === 'string' ? params['agentSessionId'] : '';
     return { result: await bridge.desktopInterrupt(id, agentSessionId) };
+  });
+
+  // Pane menu "Rewind" for a terminal Claude: its own double ESC, only at rest
+  // with an empty composer (see openClaudeRewind), under the bridge's send lock.
+  pipeServer.onRpc('daemon.transcript.rewind', async (params, ctx) => {
+    if (!firstPartyOnly(ctx.clientId, 'rewind')) return { result: 'unavailable' };
+    const id = typeof params['id'] === 'string' ? params['id'] : '';
+    return { result: await bridge.desktopRewind(id, { kitty: params['kitty'] === true }) };
   });
 
   // F26 — type into a session only if it has not moved since main looked at
@@ -7142,12 +7184,14 @@ function wireContextWatchers(
     sessionManager.listLiveSessions().map((s) => ({ sessionId: s.id, pid: s.pid })),
   );
 
-  gitWatcher.on('git', (payload: { sessionId: string; branch: string | null; isWorktree: boolean }) => {
+  gitWatcher.on('git', (payload: { sessionId: string; branch: string | null; isWorktree: boolean; absent?: true }) => {
     try {
       const event: DaemonEvent = {
         type: 'context.git',
         sessionId: payload.sessionId,
-        data: { branch: payload.branch, isWorktree: payload.isWorktree },
+        data: payload.absent
+          ? { branch: payload.branch, isWorktree: payload.isWorktree, absent: true }
+          : { branch: payload.branch, isWorktree: payload.isWorktree },
       };
       pipeServer.broadcast(event);
     } catch (err) {
@@ -7189,7 +7233,7 @@ function wireContextWatchers(
     gitWatcher.update(s.id, s.cwd);
   }
 
-  resyncContextWatchers = () => { portWatcher.resync(); };
+  resyncContextWatchers = () => { portWatcher.resync(); gitWatcher.resync(); };
 
   return () => {
     sessionManager.off('session:created', onCreated);
@@ -7203,7 +7247,7 @@ function wireContextWatchers(
 }
 
 /**
- * #1135 — re-emit the current per-session port sets. Set by
+ * #1135 — re-emit the current per-session port sets and git answers. Set by
  * wireContextWatchers, called when an app subscribes to the event stream: the
  * daemon survives app restarts, so a new app's empty port map has to be
  * refilled from the watcher rather than from whatever the last app persisted.
@@ -7215,6 +7259,9 @@ let disposeContextWatchers: (() => void) | null = null;
 
 /** X8: set in main(); shutdown() cancels pending supervised restarts through it. */
 let paneSupervisorRef: PaneSupervisor | null = null;
+// Whether the background recovery pass after boot has settled
+// (startupRecovery.ts); `daemon.listSessions` says it when asked.
+const startupRecovery = createStartupRecovery({ log: (line) => log('info', line) });
 // Module-level so the standalone shutdown() can dispose the LanLink listener
 // (close the net.Server, drop live connections, remove the firewall rules).
 let lanLinkServerRef: LanLinkServer | null = null;

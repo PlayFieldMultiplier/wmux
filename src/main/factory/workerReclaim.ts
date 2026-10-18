@@ -1137,13 +1137,17 @@ export async function reclaimWorker(
           entry.id,
         );
       } else {
+        // The stop's cause is the task's end, whoever ended it (the bot's
+        // ledger_update, its gate, a merge, a close). Freeing memory is the
+        // idle sweeps' cause (the cards above and createResumedIdleSweep's),
+        // not this one's.
         ports.note?.(
           entry.ownerWorkspaceId,
           taskThreadOf(entry),
           `${resumable ? 'Worker done (resumable)' : 'Worker done'}: ${task}`,
           resumable
-            ? `Task ${ended}: its Claude stopped to free memory. ${pane} The ${keptText}; Resume continues the same conversation.`
-            : `Task ${ended}: its Claude stopped to free memory. ${pane} The worktree is kept; no conversation was recorded to resume.`,
+            ? `Task ${ended}: its Claude stopped because the task ended. ${pane} The ${keptText}; Resume continues the same conversation.`
+            : `Task ${ended}: its Claude stopped because the task ended. ${pane} The worktree is kept; no conversation was recorded to resume.`,
           { code: resumable ? 'worker.doneResumable' : 'worker.done', args: { status: ended, title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
           entry.id,
         );
@@ -1745,10 +1749,11 @@ async function launched(
 }
 
 /** Ended bot tasks (in the catch-up window) whose worker was not reclaimed
- *  yet: still live for the agent budget. Pure over its inputs. */
-export function unreclaimedEndedWorkers(rows: readonly LedgerEntry[], store: Pick<ReclaimedWorkers, 'get'>, now: number): number {
+ *  yet: still live for the agent budget, unless their agent is known gone
+ *  (`gone`: task ids, taskWorkspaceLiveness.ts). Pure over its inputs. */
+export function unreclaimedEndedWorkers(rows: readonly LedgerEntry[], store: Pick<ReclaimedWorkers, 'get'>, now: number, gone: ReadonlySet<string> = new Set()): number {
   const since = now - RECLAIM_CATCHUP_MS;
-  return rows.filter((e) => e.updatedAt >= since && isReclaimableEnd(e, e.status) && !isReclaimedSince(store.get(e.id), e)).length;
+  return rows.filter((e) => e.updatedAt >= since && isReclaimableEnd(e, e.status) && !isReclaimedSince(store.get(e.id), e) && !gone.has(e.id)).length;
 }
 
 /** How the Bots page shows a reclaimed worker (BotTaskView.worker). Pure. */
