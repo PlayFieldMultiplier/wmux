@@ -3075,8 +3075,8 @@ function registerRpcHandlers(
     const withRecovery = params['withRecovery'] === true;
     // Taken before the sighting wait below, so `recoveryDone` never describes
     // a later state than the sessions listed after it.
-    const recoveryDone = startupRecovery.done();
-    const reply = (sessions: unknown[]): unknown => (withRecovery ? { sessions, recoveryDone } : sessions);
+    const doneBeforeList = startupRecovery.done();
+    const reply = (sessions: unknown[]): unknown => (withRecovery ? { sessions, recoveryDone: doneBeforeList } : sessions);
     // #2408: a sighted recovered pane whose screen changed since its last
     // read is read now, waited on only briefly: the snapshot queue is shared,
     // and a read that takes longer lands on a later list.

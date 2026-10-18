@@ -1,4 +1,4 @@
-import { agentDisplayToSlug } from '../shared/agentIdentity';
+import { agentDisplayToSlug, type AgentSlug } from '../shared/agentIdentity';
 import { screenShowsActiveDialog, screenShowsAgentDialog } from './transcript/chatScreenGate';
 
 /**
@@ -49,9 +49,9 @@ export function namedAgentAlive(identity: { slug?: string; alive: boolean } | un
  * A sighting only hides the recovery pill. It never consumes the offer: that
  * takes a hook or a live process (see the `session:agent` handler).
  */
-export function sightedRecoveredAgent(screenAgent: string | null | undefined): 'claude' | 'codex' | undefined {
+export function sightedRecoveredAgent(screenAgent: string | null | undefined): ScreenReadAgent | undefined {
   const slug = agentDisplayToSlug(screenAgent ?? '');
-  return slug === 'claude' || slug === 'codex' ? slug : undefined;
+  return slug && Object.hasOwn(COMPOSER_AT_BOTTOM, slug) ? slug as ScreenReadAgent : undefined;
 }
 
 /** A rule Claude draws above and below its prompt row (labeled or not). */
@@ -98,20 +98,37 @@ function dialogAtBottom(rows: readonly string[]): boolean {
  * those refuse a whole screen that mentions `Esc to cancel` anywhere, which
  * here would show the pill over a live agent.
  */
-export function screenShowsLiveAgent(rows: readonly string[], slug: 'claude' | 'codex'): boolean {
-  if (dialogAtBottom(rows)) return true;
-  const isPrompt = slug === 'claude'
-    ? (row: string) => /^❯(?:\s|$)/.test(row)
-    : (row: string) => /^\s*›(?:\s|$)/.test(row);
-  let at = rows.length - 1;
-  while (at >= 0 && !isPrompt(rows[at])) at--;
-  if (at < 0) return false;
-  const below = rows.slice(at + 1).filter((row) => row.trim().length > 0);
-  if (slug === 'claude') {
-    // The prompt row between two rules, and only indented rows under them.
-    const close = below.findIndex((row) => CLAUDE_RULE_ROW.test(row));
-    return at > 0 && CLAUDE_RULE_ROW.test(rows[at - 1].trim()) && close >= 0
-      && below.every((row, i) => i === close || /^\s/.test(row));
-  }
-  return below.some((row) => CODEX_FOOTER_ROW.test(row)) && below.every((row) => /^\s/.test(row));
+export function screenShowsLiveAgent(rows: readonly string[], slug: ScreenReadAgent): boolean {
+  return dialogAtBottom(rows) || COMPOSER_AT_BOTTOM[slug](rows);
 }
+
+/** The last row matching `isPrompt`, and the non-blank rows under it. */
+function lastPromptRow(rows: readonly string[], isPrompt: RegExp): { at: number; below: string[] } | undefined {
+  let at = rows.length - 1;
+  while (at >= 0 && !isPrompt.test(rows[at])) at--;
+  return at < 0 ? undefined : { at, below: rows.slice(at + 1).filter((row) => row.trim().length > 0) };
+}
+
+/**
+ * Per agent, its composer at the bottom of the grid: the agents whose live
+ * chrome a recovered pane's screen read knows. An adapter table, like the
+ * chat-send composer checks in deliverChatPrompt.ts.
+ */
+const COMPOSER_AT_BOTTOM = {
+  // The prompt row between two rules, and only indented rows under them.
+  claude: (rows: readonly string[]): boolean => {
+    const prompt = lastPromptRow(rows, /^❯(?:\s|$)/);
+    if (!prompt || prompt.at === 0) return false;
+    const close = prompt.below.findIndex((row) => CLAUDE_RULE_ROW.test(row));
+    return CLAUDE_RULE_ROW.test(rows[prompt.at - 1].trim()) && close >= 0
+      && prompt.below.every((row, i) => i === close || /^\s/.test(row));
+  },
+  // The prompt row over its footer, and only indented rows under it.
+  codex: (rows: readonly string[]): boolean => {
+    const prompt = lastPromptRow(rows, /^\s*›(?:\s|$)/);
+    return !!prompt && prompt.below.some((row) => CODEX_FOOTER_ROW.test(row)) && prompt.below.every((row) => /^\s/.test(row));
+  },
+} satisfies Partial<Record<AgentSlug, (rows: readonly string[]) => boolean>>;
+
+/** An agent whose live chrome the recovered-pane screen read knows. */
+export type ScreenReadAgent = keyof typeof COMPOSER_AT_BOTTOM;
