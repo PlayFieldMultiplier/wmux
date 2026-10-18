@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { access as fsAccess } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { getExecEnv } from '../../shared/execEnv';
 
@@ -97,22 +98,42 @@ export class MetadataCollector {
   }
 
   /**
-   * `rev-parse` exits 128 with "not a git repository" outside a repo; that is
-   * the one failure that is an answer. Anything else — timeout, ENOENT for
-   * git itself, a transient lock — is a failed lookup (null).
+   * The failures that are an ANSWER about the directory (held for the miss
+   * TTL), told apart from a lookup that merely failed (held briefly):
+   *   - "not a git repository" — outside a repo;
+   *   - "dubious ownership" — git refuses the repo (common on Windows
+   *     external drives and WSL paths), and will keep refusing;
+   *   - ENOENT on the cwd itself — the directory is gone.
+   * `git symbolic-ref` rather than `rev-parse --abbrev-ref`: a repo on an
+   * unborn branch (fresh `git init`) answers with its branch name instead of
+   * `ambiguous argument 'HEAD'`.
+   * `LC_ALL=C` because git translates these messages (ko: "깃 저장소가
+   * 아닙니다", and de/zh_CN among others); matched in another locale, every
+   * non-repo pane would read as a failed lookup and be polled again in 5 s —
+   * the very spawn this cache removes.
    */
   private static async execGitBranch(cwd: string): Promise<GitBranchLookup> {
     try {
-      const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      const { stdout } = await execFileAsync('git', ['symbolic-ref', '--short', '-q', 'HEAD'], {
         cwd,
         timeout: 3000,
-        env: getExecEnv(),
+        env: { ...getExecEnv(), LC_ALL: 'C' },
       });
       const branch = stdout.trim();
       return branch || undefined;
     } catch (err) {
-      const stderr = (err as { stderr?: unknown })?.stderr;
-      return typeof stderr === 'string' && /not a git repository/i.test(stderr) ? undefined : null;
+      const e = err as { stderr?: unknown; code?: unknown };
+      // `-q` on a detached HEAD: exit 1, no message. Not a branch, but a repo;
+      // the header shows nothing, as before.
+      if (e.code === 1) return undefined;
+      if (e.code === 'ENOENT' && !(typeof e.stderr === 'string' && e.stderr.length > 0)) {
+        // Node reports ENOENT both for a missing cwd and a missing git binary;
+        // only the former is an answer about the directory.
+        try { await fsAccess(cwd); } catch { return undefined; }
+        return null;
+      }
+      const stderr = typeof e.stderr === 'string' ? e.stderr : '';
+      return /not a git repository|dubious ownership/i.test(stderr) ? undefined : null;
     }
   }
 }
