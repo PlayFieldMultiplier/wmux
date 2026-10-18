@@ -769,6 +769,8 @@ export function registerPTYHandlers(
               // The same bytes the first write sent, compared and written in one
               // daemon step (daemon/writeIfUnchanged.ts).
               resendIfUnchanged: async (expect) => {
+                // Not for a task launch abandoned or replaced since the first write.
+                if (!launchStillCurrent(options?.fanoutLaunch)) return false;
                 const res = (await daemonClient.rpc('daemon.writeIfUnchanged', { sessionId, data: sanitizePtyText(cmd) + '\r', expect }, { timeoutMs: 5_000 })) as { written?: unknown } | null;
                 const written = res?.written === true;
                 if (written) console.warn(`[pty:create] ${sessionId}: the shell never read the launch line; wrote it once more`);

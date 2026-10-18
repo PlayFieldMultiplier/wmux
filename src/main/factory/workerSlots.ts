@@ -139,18 +139,19 @@ export class WorkerSlots {
       this.mode = 'disk';
     } catch (err) {
       if (this.newerVersionOnDisk()) {
+        // Memory only, seeded from the ledger below; the file is never written.
         this.mode = 'memory';
         this.warn(`[factory] worker slots not read, kept in memory only: ${String(err)}`);
-        return;
-      }
-      try {
-        fs.renameSync(this.file, `${this.file}.unreadable-${this.now()}`);
-        this.mode = 'disk';
-        this.warn(`[factory] worker slots unreadable, moved aside and rebuilt from the task ledger: ${String(err)}`);
-      } catch (moveErr) {
-        this.mode = 'broken';
-        this.warn(`[factory] worker slots unreadable and not moved aside; no worker is launched until it is fixed: ${String(err)}; ${String(moveErr)}`);
-        return;
+      } else {
+        try {
+          fs.renameSync(this.file, `${this.file}.unreadable-${this.now()}`);
+          this.mode = 'disk';
+          this.warn(`[factory] worker slots unreadable, moved aside and rebuilt from the task ledger: ${String(err)}`);
+        } catch (moveErr) {
+          this.mode = 'broken';
+          this.warn(`[factory] worker slots unreadable and not moved aside; no worker is launched until it is fixed: ${String(err)}; ${String(moveErr)}`);
+          return;
+        }
       }
       raw = null;
     }

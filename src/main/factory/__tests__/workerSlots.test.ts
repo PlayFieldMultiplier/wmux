@@ -111,6 +111,9 @@ describe('WorkerSlots', () => {
     expect(warn.join('\n')).toMatch(/kept in memory only/);
     expect(s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' }).gen).toBe(1);
     expect(fs.readFileSync(file, 'utf8')).toBe(newer);
+    // Seeded from the ledger in memory: its tasks' workspaces are known.
+    expect(s.workspaceOf('ws-x')).toEqual({ taskId: 'x', gen: 1 });
+    expect(fs.readFileSync(file, 'utf8')).toBe(newer);
   });
 
   it('a file no version can read is moved aside, and the entries are rebuilt', () => {
