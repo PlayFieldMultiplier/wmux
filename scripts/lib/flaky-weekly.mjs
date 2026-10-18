@@ -109,7 +109,7 @@ export function listRuns(gh, { workflows = WORKFLOWS, window, repo, warn = ignor
 /**
  * Run ids that have an unexpired `test-report-*` artifact created inside the
  * window, from the repository's artifact listing (newest first, so paging
- * stops at the first page that reaches past the window's start).
+ * stops once a page has nothing inside the window).
  */
 export function runsWithReports(gh, { window, repo }) {
   const base = repo ? `repos/${repo}` : 'repos/{owner}/{repo}';
@@ -121,17 +121,18 @@ export function runsWithReports(gh, { window, repo }) {
       'listing artifacts',
     );
     const artifacts = body?.artifacts ?? [];
-    let older = false;
+    let inWindow = 0;
     for (const a of artifacts) {
-      if (new Date(a.created_at) < window.since) {
-        older = true;
-        continue;
-      }
+      if (new Date(a.created_at) < window.since) continue;
+      inWindow += 1;
       if (a.expired || !a.name?.startsWith(ARTIFACT_PREFIX)) continue;
       const runId = a.workflow_run?.id;
       if (runId != null) ids.add(String(runId));
     }
-    if (older || artifacts.length < 100) return ids;
+    // The listing is newest id first, and created_at only roughly follows the
+    // id, so stop at the first page with nothing inside the window rather
+    // than at the first artifact outside it.
+    if (inWindow === 0 || artifacts.length < 100) return ids;
   }
 }
 

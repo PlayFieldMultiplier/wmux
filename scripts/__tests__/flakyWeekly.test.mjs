@@ -231,6 +231,32 @@ describe('weekly rollup', () => {
     expect(body).not.toContain('HTTP 403');
   });
 
+  it('pages the artifact listing until a page has nothing inside the window', () => {
+    const artifact = (id, runId, createdAt, name = 'test-report-validate-1') => ({
+      id,
+      name,
+      expired: false,
+      created_at: createdAt,
+      workflow_run: { id: runId },
+    });
+    const filler = (n, createdAt) => Array.from({ length: n }, (_, i) => artifact(1000 + i, 9000 + i, createdAt, 'build-output'));
+    const pages = [
+      // An older artifact among newer ones does not end the listing.
+      [artifact(1, 1, '2026-10-18T00:00:00Z'), artifact(2, 2, '2026-10-01T00:00:00Z'), ...filler(98, '2026-10-17T00:00:00Z')],
+      [artifact(3, 3, '2026-10-13T00:00:00Z'), artifact(4, 4, '2026-10-13T00:00:00Z', 'test-report-x'), ...filler(98, '2026-10-01T00:00:00Z')],
+      filler(100, '2026-10-01T00:00:00Z'),
+      [artifact(5, 5, '2026-10-18T00:00:00Z')], // never reached
+    ];
+    const calls = [];
+    const gh = (args) => {
+      calls.push(args);
+      const page = Number(/[?&]page=(\d+)/.exec(args[1])[1]);
+      return { status: 0, stdout: JSON.stringify({ artifacts: pages[page - 1] ?? [] }), stderr: '' };
+    };
+    expect([...runsWithReports(gh, { window: WINDOW })].sort()).toEqual(['1', '3', '4']);
+    expect(calls).toHaveLength(3);
+  });
+
   it('lists runs one day at a time and drops runs outside the window', () => {
     const fake = fakeGh({
       runs: { 'runtime.yml': [run(1, '2026-10-12T00:10:00Z'), run(2, '2026-10-12T00:20:00Z')] },

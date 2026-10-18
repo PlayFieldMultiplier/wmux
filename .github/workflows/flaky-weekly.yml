@@ -13,7 +13,10 @@ name: Flaky tests weekly
 #
 # - every Monday, for the week that just ended;
 # - on demand: `gh workflow run flaky-weekly.yml` (or "Run workflow" in the
-#   Actions tab), which rewrites that week's issue if it is still open.
+#   Actions tab). It covers the seven days before the dispatch and names the
+#   issue after the Monday that window starts in, so a mid-week dispatch
+#   rewrites last Monday's issue (if still open) with a shifted window; the
+#   body states the window it covers.
 #
 # It only reads report JSON and runs on node built-ins and gh: no `npm ci`.
 on:
