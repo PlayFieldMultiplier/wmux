@@ -245,6 +245,16 @@ describe('TranscriptActivityWatcher → Claude lines', () => {
     g.advance(GRACE_MS);
     watcher.tick();
     expect(g.sent).toEqual([]);
+
+    // The same through a replacement whose replay window misses the reply.
+    fs.appendFileSync(file, `${apiError('server_error', 'overloaded')}\n`);
+    watcher.tick();
+    const next = `${file}.next`;
+    fs.writeFileSync(next, `${apiError('server_error', 'overloaded')}\n${reply}\n${JSON.stringify({ type: 'system', subtype: 'blob', data: 'y'.repeat(100 * 1024) })}\n`);
+    fs.renameSync(next, file);
+    g.advance(GRACE_MS);
+    watcher.tick();
+    expect(g.sent).toEqual([]);
   });
 
   it('replays a transcript two panes share once, for the pane that keeps it', () => {

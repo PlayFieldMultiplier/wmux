@@ -391,7 +391,9 @@ export class TranscriptActivityWatcher {
       watch.offset = stat.size;
       watch.pending = undefined;
       // In this tick, before afterTick settles a pending error the new file
-      // may already have moved past.
+      // may already have moved past. The replay reads only its last window,
+      // so what came before it is a gap.
+      if (watch.lines) this.deps.onClaudeGap?.(id);
       watch.replay = watch.lines;
       this.replayLines(id, watch);
     } else if (stat.size - watch.offset > READ_CAP_BYTES) {
