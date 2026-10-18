@@ -51,6 +51,7 @@
     "src/daemon/__tests__/DaemonPTYBridge.answerRelease.test.ts",
     "src/daemon/__tests__/DaemonPTYBridge.turnId.test.ts",
     "src/daemon/__tests__/DaemonPipeServer.eventOptIn.test.ts",
+    "src/daemon/__tests__/DaemonPipeServer.rateLimit.test.ts",
     "src/daemon/__tests__/DaemonPipeServer.subscriberGuards.test.ts",
     "src/daemon/__tests__/DaemonPipeServer.test.ts",
     "src/daemon/__tests__/DaemonSessionManager.test.ts",

@@ -231,7 +231,7 @@ describe('flaky-report.mjs', () => {
     fs.writeFileSync(summary, '## Earlier step\n');
     const run = spawnSync(process.execPath, [SCRIPT, dir], {
       encoding: 'utf8',
-      env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
+      env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: '' },
     });
     expect(run.status).toBe(0);
     expect(run.stdout).toContain('::warning file=src/x.test.ts,title=Flaky (passed on retry)::x > races');
@@ -241,10 +241,33 @@ describe('flaky-report.mjs', () => {
     expect(written).toContain('| x > races | `src/x.test.ts` |');
   });
 
+  it('sets the `retried` step output only when a report lists a retried test', () => {
+    const runWith = (tests) => {
+      const dir = tmpDir();
+      fs.writeFileSync(path.join(dir, 'retries-unit.json'), JSON.stringify(report(tests)));
+      const output = path.join(dir, 'output.txt');
+      fs.writeFileSync(output, 'earlier=1\n');
+      const run = spawnSync(process.execPath, [SCRIPT, dir], {
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_ACTIONS: '', GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: output },
+      });
+      expect(run.status).toBe(0);
+      return fs.readFileSync(output, 'utf8');
+    };
+    expect(runWith([])).toBe('earlier=1\nretried=false\n');
+    expect(runWith([{ file: 'a.test.ts', name: 'a', line: 1, state: 'passed', retryCount: 1 }])).toBe(
+      'earlier=1\nretried=true\n',
+    );
+    // Failed every attempt is still a retried test, and still worth keeping.
+    expect(runWith([{ file: 'a.test.ts', name: 'a', line: 1, state: 'failed', retryCount: 1 }])).toBe(
+      'earlier=1\nretried=true\n',
+    );
+  });
+
   it('exits 0 with no report at all', () => {
     const run = spawnSync(process.execPath, [SCRIPT, path.join(tmpDir(), 'none')], {
       encoding: 'utf8',
-      env: { ...process.env, GITHUB_ACTIONS: '', GITHUB_STEP_SUMMARY: '' },
+      env: { ...process.env, GITHUB_ACTIONS: '', GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: '' },
     });
     expect(run.status).toBe(0);
     expect(run.stdout).toContain('No retry report was written');
