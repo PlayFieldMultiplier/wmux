@@ -318,6 +318,17 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).removals).toEqual([]);
   });
 
+  it('a stop that refuses (a process of an earlier stop still runs) keeps the leftover', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr, removeTree } = manager(fakeGit().git, { pendingRemovals: store });
+    const res = await mgr.finishPendingRemoval(dir, async () => { throw new Error('1 process(es) started in the worktree are still running'); });
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    expect(removeTree).not.toHaveBeenCalled();
+    expect(store.get(dir)).not.toBeNull();
+  });
+
   it('the sweep at start finishes it, but not while a session was started in it or recovery runs', async () => {
     const dir = leftover();
     const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));

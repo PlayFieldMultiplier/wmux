@@ -31,7 +31,7 @@ import { PendingWorktreeRemovals, sweepPendingRemovals } from '../../worktask/pe
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
 import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
-import { destroyedTreeOf, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
+import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../../worktask/stopSessionsInDir';
 import { TaskPrService } from '../../worktask/TaskPrService';
 import { WorktaskScanService, type ScanOpenTask } from '../../worktask/WorktaskScanService';
 import { deletePhoneBranch, removePhoneWorktree } from '../../worktask/PhoneWorktreeRemoval';
@@ -89,6 +89,22 @@ export function registerWorktaskHandlers(
   // 유지해야 하므로(index.lock 경합 차단) 재사용한다. fan-out과는 별도 인스턴스지만
   // 크로스 인스턴스 worktree add/remove 경합은 git 자체의 index.lock이 backstop.
   const worktrees = new TaskWorktreeManager({ onCreated: ensureSecretHook, pendingRemovals: loadPendingRemovals() });
+  const stopPanesIn = async (worktreePath: string): Promise<string[]> => {
+    const dc = getDaemonClient();
+    if (!dc) throw new Error('Daemon not connected');
+    const stopped = await stopSessionsInDir(worktreePath, {
+      listSessions: async () => {
+        const sessions = await dc.rpc('daemon.listSessions', {});
+        return Array.isArray(sessions) ? sessions : [];
+      },
+      destroySession: async (id) => destroyedTreeOf(await dc.rpc('daemon.destroySession', { id, killTree: true }, { timeoutMs: TREE_DESTROY_TIMEOUT_MS })),
+      isAlive: isPidAlive,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (message) => console.warn(message),
+    });
+    if (stopped.length > 0) console.log(`[worktask] stopped ${stopped.length} pane(s) inside ${worktreePath} before removing it`);
+    return stopped;
+  };
   const closeService = new TaskCloseService({
     daemon: daemonPort,
     worktrees,
@@ -98,22 +114,7 @@ export function registerWorktaskHandlers(
       return typeof v === 'string' && v !== 'unknown' ? v : null;
     },
     // A pane still running inside the worktree holds files that make the removal partial on Windows.
-    stopPanesIn: async (worktreePath) => {
-      const dc = getDaemonClient();
-      if (!dc) throw new Error('Daemon not connected');
-      const stopped = await stopSessionsInDir(worktreePath, {
-        listSessions: async () => {
-          const sessions = await dc.rpc('daemon.listSessions', {});
-          return Array.isArray(sessions) ? sessions : [];
-        },
-        destroySession: async (id) => destroyedTreeOf(await dc.rpc('daemon.destroySession', { id, killTree: true })),
-        isAlive: isPidAlive,
-        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        log: (message) => console.warn(message),
-      });
-      if (stopped.length > 0) console.log(`[worktask] stopped ${stopped.length} pane(s) inside ${worktreePath} before removing it`);
-      return stopped;
-    },
+    stopPanesIn,
     panesStopped: (taskId, sessionIds) => {
       const row = getTaskLedger().get(taskId);
       if (row) noteTaskPanesStopped(taskId, row.taskWorkspaceId, sessionIds);
@@ -140,7 +141,9 @@ export function registerWorktaskHandlers(
           return Array.isArray(r?.sessions) ? { sessions: r.sessions, recoveryDone: r.recoveryDone === true } : null;
         },
         startedIn: (folder, sessions) => sessionsStartedIn([folder], { listSessions: async () => sessions }),
-        finish: (folder) => worktrees.finishPendingRemoval(folder),
+        // The same stop as a close: it also refuses while a process an
+        // earlier stop left is still running.
+        finish: (folder) => worktrees.finishPendingRemoval(folder, async (f) => { await stopPanesIn(f); }),
         log: (message) => console.warn(message),
       }).then((done) => {
         if (!done && attempt < PENDING_SWEEP_ATTEMPTS) sweep(attempt + 1);

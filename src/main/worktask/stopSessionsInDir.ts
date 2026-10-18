@@ -35,18 +35,28 @@ export interface SessionsInDirPort {
   stillRunning?(survivors: readonly TreeKillSurvivor[]): Promise<TreeKillSurvivor[]>;
 }
 
+/** A survivor of an earlier stop, or (`sessionId`) a pane whose destroy
+ *  failed or timed out: what became of its tree is not known. */
+type Lingering = TreeKillSurvivor & { sessionId?: string };
+
 /**
  * Processes of a folder's panes that outlived an earlier stop, by folder.
  * Their sessions are gone by then, so a later stop of the same folder finds
  * no session to report them: it checks these instead, and keeps the folder
- * while one still runs. Held for the life of the app.
+ * while one still runs. A pane whose destroy did not answer counts until a
+ * later stop finds its session still there to destroy again. Held for the
+ * life of the app.
  */
-const lingering = new Map<string, TreeKillSurvivor[]>();
+const lingering = new Map<string, Lingering[]>();
 
 /** Test seam: forget every earlier stop's survivors. */
 export function resetLingeringSurvivors(): void {
   lingering.clear();
 }
+
+/** A destroy that kills and checks a pane's whole tree (the daemon's capture,
+ *  kill and exit wait) is given this long before the RPC gives up. */
+export const TREE_DESTROY_TIMEOUT_MS = 60_000;
 
 const EXIT_WAIT_MS = 5000;
 const EXIT_POLL_MS = 100;
@@ -117,25 +127,38 @@ export async function sessionsStartedIn(dirs: readonly string[], port: Pick<Sess
 export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): Promise<string[]> {
   const platform = port.platform ?? process.platform;
   const key = normalizeWorktreePath((port.realpath ?? defaultRealpath)(dir), platform);
+  const sessions = await port.listSessions();
   const earlier = lingering.get(key);
   if (earlier) {
-    const still = await (port.stillRunning ?? survivorsStillRunning)(earlier);
+    // A pane whose destroy did not answer and that is still there is
+    // destroyed again below, and answers then.
+    const listed = new Set(sessions.map((s) => s.id));
+    const open = earlier.filter((x) => !(x.sessionId && listed.has(x.sessionId)));
+    // Both checks hand back entries of the list they were given.
+    const still = (await (port.stillRunning ?? survivorsStillRunning)(open)) as Lingering[];
     if (still.length > 0) {
       lingering.set(key, still);
-      throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: still running since an earlier stop`));
+      throw new PanesStillRunningError(still.map((x) => x.pid), still.map((x) => `${x.pid}: ${x.sessionId ? x.reason : 'still running since an earlier stop'}`));
     }
     lingering.delete(key);
   }
-  const sessions = await port.listSessions();
   const inside = sessions.filter((s) => typeof s.spawnCwd === 'string' && s.spawnCwd.length > 0
     && isInside(sessionHostDir(s.spawnCwd, s, platform), dir, port, platform));
   const unknown = sessions.filter((s) => !s.spawnCwd).length;
   if (unknown > 0) port.log?.(`[worktask] ${unknown} session(s) have no spawn directory recorded; left running`);
 
-  const treeSurvivors: Array<{ pid: number; reason: string }> = [];
+  const treeSurvivors: Lingering[] = [];
   const unreported: number[] = [];
   for (const s of inside) {
-    const tree = await port.destroySession(s.id);
+    let tree: DaemonDestroySessionTree | void;
+    try {
+      tree = await port.destroySession(s.id);
+    } catch (err) {
+      // The daemon may have destroyed the pane and still be killing its
+      // tree: until a later stop sees the session again, it counts.
+      lingering.set(key, [...treeSurvivors, { pid: s.pid ?? 0, sessionId: s.id, unverified: true, reason: `the stop of pane ${s.id} did not finish (${(err as Error).message})` }]);
+      throw err;
+    }
     if (tree) {
       if (!tree.ok) {
         treeSurvivors.push(...tree.survivors);

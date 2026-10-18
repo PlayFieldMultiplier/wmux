@@ -128,6 +128,20 @@ describe('stopSessionsInDir', () => {
     await expect(stopSessionsInDir('/w/t', later.p)).rejects.toBeInstanceOf(PanesStillRunningError);
   });
 
+  it('a pane whose destroy did not answer counts until a later stop finds it again', async () => {
+    const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux');
+    first.p.destroySession = async () => { throw new Error('RPC timeout: daemon.destroySession (60000ms)'); };
+    await expect(stopSessionsInDir('/w/t', first.p)).rejects.toThrow('RPC timeout');
+
+    // Gone from the daemon: what became of its tree is not known.
+    await expect(stopSessionsInDir('/w/t', port([], 'linux').p)).rejects.toThrow(/did not finish/);
+
+    // Still listed: destroyed again, and this time it answers.
+    const again = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: true, killed: [7] } } });
+    expect(await stopSessionsInDir('/w/t', again.p)).toEqual(['s']);
+    expect(await stopSessionsInDir('/w/t', port([], 'linux').p)).toEqual([]);
+  });
+
   it("takes the daemon's word for a tree it checked: no wait on the shell's pid", async () => {
     const isAlive = vi.fn(() => true);
     const { p } = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: { ok: true, killed: [7, 70] } } });
