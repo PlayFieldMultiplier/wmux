@@ -135,6 +135,17 @@ describe('reclaimWorker', () => {
     expect(note.mock.calls[0][4]).toEqual({ code: 'worker.doneResumable', args: { status: 'completed', title: 'perf-A' } });
   });
 
+  it('a task the bot cancelled says its worker stopped because the task ended, not to free memory', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const { ports, note } = reclaimPorts(store, [session()]);
+    // The bot's own ledger_update: cancelled, with its reason as the summary.
+    await reclaimWorker(ports, row('cancelled', { summary: 'PR merged meanwhile; cancelled to free the slot.' }), 'cancelled');
+    const body = String(note.mock.calls[0][3]);
+    expect(body).toBe('Task cancelled: its Claude stopped because the task ended. Its pane closes. The worktree and the conversation are kept; Resume continues the same conversation.');
+    expect(body).not.toContain('free memory');
+    expect(note.mock.calls[0][4]).toEqual({ code: 'worker.doneResumable', args: { status: 'cancelled', title: 'perf-A' } });
+  });
+
   it('records nothing (and the worker keeps running) without a worktree or when every stop is refused; no pane left is recorded as nothing to stop', async () => {
     const store = ReclaimedWorkers.at(dir);
     expect(await reclaimWorker(reclaimPorts(store, [session()], { worktreeOf: async () => null }).ports, row('completed'), 'completed')).toBeNull();

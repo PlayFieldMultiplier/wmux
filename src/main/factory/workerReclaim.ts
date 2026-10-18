@@ -1137,13 +1137,17 @@ export async function reclaimWorker(
           entry.id,
         );
       } else {
+        // The stop's cause is the task's end, whoever ended it (the bot's
+        // ledger_update, its gate, a merge, a close). Freeing memory is the
+        // idle sweeps' cause (the cards above and createResumedIdleSweep's),
+        // not this one's.
         ports.note?.(
           entry.ownerWorkspaceId,
           taskThreadOf(entry),
           `${resumable ? 'Worker done (resumable)' : 'Worker done'}: ${task}`,
           resumable
-            ? `Task ${ended}: its Claude stopped to free memory. ${pane} The ${keptText}; Resume continues the same conversation.`
-            : `Task ${ended}: its Claude stopped to free memory. ${pane} The worktree is kept; no conversation was recorded to resume.`,
+            ? `Task ${ended}: its Claude stopped because the task ended. ${pane} The ${keptText}; Resume continues the same conversation.`
+            : `Task ${ended}: its Claude stopped because the task ended. ${pane} The worktree is kept; no conversation was recorded to resume.`,
           { code: resumable ? 'worker.doneResumable' : 'worker.done', args: { status: ended, title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
           entry.id,
         );
