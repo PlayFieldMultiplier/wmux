@@ -208,7 +208,16 @@ export interface FanOutRendererPort {
          *  is that version a re-fire must replay. */
         initialCommand?: string;
       }
-    | { error: string }
+    | {
+        error: string;
+        /** No PTY was ever created for this spawn (it failed before
+         *  pty.create, or pty.create itself was refused), so no agent can be
+         *  running in its folder. Absent = not known (an older renderer, or a
+         *  failure after the PTY existed). */
+        noPty?: true;
+        /** The PTY this spawn did create before it failed. */
+        ptyId?: string;
+      }
   >;
 }
 
@@ -1586,14 +1595,20 @@ export class FanOutService {
         workerPermissionMode: ctx.workerMode,
       });
       if ('error' in spawned) {
-        // The renderer answers with an error only after it rolled its
-        // workspace back (a refused pty:create included), so no pane will
-        // ever work in this worktree. The temp dir still goes to the sweep:
-        // main's own create rollback can fail to destroy a daemon session.
+        // The renderer rolls its workspace back before it answers with an
+        // error, but that alone does not prove no agent runs in the folder: a
+        // PTY created before the failure can outlive its dispose. The folder
+        // goes back only on proof (paneAbsence), and forced only when no PTY
+        // ever existed; anything less keeps it, with the row, for the cleanup.
+        // The temp dir still goes to the sweep: main's own create rollback can
+        // fail to destroy a daemon session.
         releaseSlot();
         handOverTempDir(`task:${taskId}`);
         const error = `renderer spawn failed: ${spawned.error}`;
-        const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+        const absence = await this.paneAbsence(spawned);
+        const rolledBack = absence
+          ? await this.rollbackTaskWorktree(plan, ctx, { force: absence === 'never-created' })
+          : { removed: false, ...(plan ? { outcome: `; worktree kept at ${plan.worktreePath} (a pane may still be using it)` } : {}) };
         await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
         return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
       }
@@ -2132,10 +2147,32 @@ export class FanOutService {
   }
 
   /**
+   * #2349 — proof that no pane of a failed spawn can still run in its folder:
+   * 'never-created' when no PTY ever existed, 'gone' when the daemon reports
+   * the PTY it did create absent or dead. null when that is not known: no
+   * signal (an older renderer), the session still lives, or the check failed.
+   */
+  private async paneAbsence(spawned: { noPty?: true; ptyId?: string }): Promise<'never-created' | 'gone' | null> {
+    if (spawned.noPty === true) return 'never-created';
+    if (!spawned.ptyId) return null;
+    try {
+      const sessions = await this.daemon.rpc('daemon.listSessions', { includeSuspended: true });
+      if (!Array.isArray(sessions)) return null;
+      const session = (sessions as Array<{ id?: unknown; state?: unknown } | null>).find((s) => s?.id === spawned.ptyId);
+      return !session || session.state === 'dead' ? 'gone' : null;
+    } catch (err) {
+      console.warn(`[fanout] could not check whether pane ${spawned.ptyId} is gone: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  /**
    * #2349 — take back the worktree of a spawn that was refused before any pane
-   * could exist (no launch slot, the launch check, a missing secret, or the renderer reporting
-   * that pty:create failed: it rolls its workspace back in that case). Nothing
-   * but wmux's own setup ever wrote there, so the removal is forced. The branch
+   * could exist (no launch slot, the launch check, a missing secret, or the
+   * renderer reporting that no PTY was ever created). Nothing but wmux's own
+   * setup ever wrote there, so the removal is forced. `force: false` is for a
+   * spawn whose PTY existed and is confirmed gone (paneAbsence): uncommitted
+   * changes then keep the folder. The branch
    * goes only while it still points at the commit it was created from; a
    * detached checkout has none. Never throws. `removed: false` keeps the
    * folder, and `outcome` (the ledger summary's tail) says where and why.
@@ -2143,10 +2180,11 @@ export class FanOutService {
   private async rollbackTaskWorktree(
     plan: TaskWorktreePlan | undefined,
     ctx: { baseOid?: string; checkout?: { sha: string } },
+    opts: { force: boolean } = { force: true },
   ): Promise<{ removed: boolean; outcome?: string }> {
     if (!plan) return { removed: false };
     try {
-      const removed = await this.worktrees.removeWorktree(plan.repoRoot, plan.repoHash, plan.worktreePath, undefined, { force: true });
+      const removed = await this.worktrees.removeWorktree(plan.repoRoot, plan.repoHash, plan.worktreePath, undefined, { force: opts.force });
       if (!removed.ok) {
         console.warn(`[fanout] worktree of a spawn that did not launch kept at ${plan.worktreePath}: ${removed.error}`);
         return { removed: false, outcome: `; worktree kept at ${plan.worktreePath} (${removed.error})` };

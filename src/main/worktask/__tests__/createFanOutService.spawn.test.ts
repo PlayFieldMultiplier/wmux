@@ -86,3 +86,20 @@ describe('spawnTaskWorkspace', () => {
     await expect(p).rejects.toThrow('BrowserWindow is not available');
   });
 });
+
+describe('createFanOutService renderer port — what a failed spawn says of its pane (#2349)', () => {
+  it('passes noPty and the created ptyId through, and nothing that is not in its shape', async () => {
+    const { sendToRenderer } = await import('../../pipe/handlers/_bridge');
+    const { createFanOutService } = await import('../createFanOutService');
+    const port = (createFanOutService(() => null, () => null) as unknown as {
+      renderer: { spawnWorkspace: (p: Record<string, unknown>) => Promise<unknown> };
+    }).renderer;
+    const reply = (r: unknown) => vi.mocked(sendToRenderer).mockResolvedValueOnce(r as never);
+    reply({ error: 'refused', noPty: true });
+    expect(await port.spawnWorkspace({})).toEqual({ error: 'refused', noPty: true });
+    reply({ error: 'pane disappeared', ptyId: 'daemon-1' });
+    expect(await port.spawnWorkspace({})).toEqual({ error: 'pane disappeared', ptyId: 'daemon-1' });
+    reply({ error: 'odd', noPty: 'yes', ptyId: 7 });
+    expect(await port.spawnWorkspace({})).toEqual({ error: 'odd' });
+  });
+});

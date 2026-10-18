@@ -123,6 +123,8 @@ function makeDaemonFake(opts?: {
  *  기록해 FanOutService가 그 id를 결과에 무변형 전달하는지 검증 가능케 한다(F11). */
 function makeRendererFake(opts?: {
   spawnFailOn?: (name: string) => boolean;
+  /** What a failed spawn says of its pane (#2349); absent = the bare `{ error }`. */
+  failWith?: { noPty?: true; ptyId?: string };
   /** Stand in for the renderer's role-binding rewrite: what it ACTUALLY launched. */
   rewriteCommand?: (p: { initialCommand: string; role?: string }) => string;
 }) {
@@ -141,7 +143,7 @@ function makeRendererFake(opts?: {
     spawnWorkspace: vi.fn(async (p) => {
       if (opts?.spawnFailOn && opts.spawnFailOn(p.name)) {
         spawned.push({ ...p });
-        return { error: 'spawn fail' };
+        return { error: 'spawn fail', ...opts.failWith };
       }
       seq++;
       const ptyId = `pty-${seq}`;
@@ -1465,7 +1467,7 @@ describe('a spawn that did not launch (#2349)', () => {
     try {
       const svc = new FanOutService({
         daemon: daemon.port,
-        renderer: makeRendererFake({ spawnFailOn: () => true }).port,
+        renderer: makeRendererFake({ spawnFailOn: () => true, failWith: { noPty: true } }).port,
         worktrees,
       });
       const res = await svc.start(baseReq({ idempotencyKey: 'k-2349-error', titles: ['Task A'] }));
@@ -1496,7 +1498,7 @@ describe('a spawn that did not launch (#2349)', () => {
     worktrees.deleteBranchIfAt = vi.fn(async () => ({ ok: false as const, error: 'cannot lock ref: is at another commit' }));
     const svc = new FanOutService({
       daemon: makeDaemonFake().port,
-      renderer: makeRendererFake({ spawnFailOn: () => true }).port,
+      renderer: makeRendererFake({ spawnFailOn: () => true, failWith: { noPty: true } }).port,
       worktrees,
     });
     const moved = await svc.start(baseReq({ idempotencyKey: 'k-2349-moved', titles: ['Task A'] }));
@@ -1512,6 +1514,79 @@ describe('a spawn that did not launch (#2349)', () => {
     const row = ledger.get(task.taskId!);
     expect(row).toMatchObject({ status: 'cancelled' });
     expect(row!.summary).toContain(`worktree kept at ${task.preservedWorktree}`);
+  });
+
+  /** The daemon fake, answering daemon.listSessions with `sessions`. */
+  function sessionsDaemon(sessions: Array<{ id: string; state: string }> | Error) {
+    const daemon = makeDaemonFake();
+    const inner = daemon.port.rpc;
+    daemon.port.rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'daemon.listSessions') {
+        await inner(method, params);
+        if (sessions instanceof Error) throw sessions;
+        return sessions;
+      }
+      return inner(method, params);
+    });
+    return daemon;
+  }
+
+  it('keeps the folder (and writes the row) when the PTY was created and its session still lives', async () => {
+    const worktrees = makeWorktreesFake();
+    const daemon = sessionsDaemon([{ id: 'pty-survivor', state: 'running' }]);
+    const svc = new FanOutService({
+      daemon: daemon.port,
+      renderer: makeRendererFake({ spawnFailOn: () => true, failWith: { ptyId: 'pty-survivor' } }).port,
+      worktrees,
+    });
+    const res = await svc.start(baseReq({ idempotencyKey: 'k-2349-alive', titles: ['Task A'] }));
+    const task = res.tasks[0];
+    expect(daemon.calls.some((c) => c.method === 'daemon.listSessions')).toBe(true);
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled();
+    expect(worktrees.deleteBranchIfAt).not.toHaveBeenCalled();
+    expect(task.preservedWorktree).toEqual(expect.any(String));
+    const row = ledger.get(task.taskId!);
+    expect(row).toMatchObject({ status: 'cancelled' });
+    expect(row!.summary).toContain(`worktree kept at ${task.preservedWorktree} (a pane may still be using it)`);
+  });
+
+  it('keeps the folder when nothing says whether a PTY exists, or the daemon cannot be asked', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // An older renderer: a bare `{ error }`.
+      const legacy = makeWorktreesFake();
+      const a = await new FanOutService({
+        daemon: makeDaemonFake().port,
+        renderer: makeRendererFake({ spawnFailOn: () => true }).port,
+        worktrees: legacy,
+      }).start(baseReq({ idempotencyKey: 'k-2349-legacy', titles: ['Task A'] }));
+      expect(legacy.removeWorktree).not.toHaveBeenCalled();
+      expect(a.tasks[0].preservedWorktree).toEqual(expect.any(String));
+      // A PTY, and the session check refused in the storm.
+      const unknown = makeWorktreesFake();
+      const b = await new FanOutService({
+        daemon: sessionsDaemon(new Error('rate limited (global)')).port,
+        renderer: makeRendererFake({ spawnFailOn: () => true, failWith: { ptyId: 'pty-x' } }).port,
+        worktrees: unknown,
+      }).start(baseReq({ idempotencyKey: 'k-2349-unknown', titles: ['Task A'] }));
+      expect(unknown.removeWorktree).not.toHaveBeenCalled();
+      expect(ledger.get(b.tasks[0].taskId!)).toMatchObject({ status: 'cancelled' });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('rolls back without force when the PTY was created but the daemon confirms its session is gone', async () => {
+    const worktrees = makeWorktreesFake();
+    const svc = new FanOutService({
+      daemon: sessionsDaemon([{ id: 'pty-other', state: 'running' }, { id: 'pty-dead', state: 'dead' }]).port,
+      renderer: makeRendererFake({ spawnFailOn: () => true, failWith: { ptyId: 'pty-dead' } }).port,
+      worktrees,
+    });
+    const res = await svc.start(baseReq({ idempotencyKey: 'k-2349-gone', titles: ['Task A'] }));
+    const plan = worktrees.createWorktree.mock.calls[0][0] as TaskWorktreePlan;
+    expect(worktrees.removeWorktree).toHaveBeenCalledWith(plan.repoRoot, plan.repoHash, plan.worktreePath, undefined, { force: false });
+    expect(res.tasks[0].preservedWorktree).toBeUndefined();
   });
 
   it('a spawn that threw (a late pane may still come) keeps its worktree but records the row', async () => {

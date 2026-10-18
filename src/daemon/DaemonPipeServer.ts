@@ -119,6 +119,8 @@ export class DaemonPipeServer {
   private globalRate = { count: 0, resetAt: 0 };
   // Aggregate budget for INTERACTIVE_METHODS across every socket.
   private interactiveGlobalRate = { count: 0, resetAt: 0 };
+  // Session ids each socket asked to create, with when (see isInteractive).
+  private readonly recentCreates = new Map<net.Socket, Map<string, number>>();
   private connectionRate = { count: 0, resetAt: 0 };
 
   private static readonly MAX_CONNECTIONS = 20;
@@ -140,12 +142,8 @@ export class DaemonPipeServer {
   // in nor refused by the global and per-socket counters above, so background
   // traffic is still capped exactly as before and cannot starve them. The calls
   // that open a pane are here: `pty:create` runs createSession then
-  // attachSession, and `pty:reconnect` ends in attachSession. So is
-  // destroySession: pty:create's rollback (withDaemonCreateRollback) destroys a
-  // session whose attach or pipe connect failed, and a destroy refused in the
-  // same storm (its one retry included) leaks that attached session for the
-  // daemon's lifetime. So are a fan-out task's own lifecycle writes, each sent
-  // once per task and never polled: task.mission.start (before the worktree,
+  // attachSession, and `pty:reconnect` ends in attachSession. So are a fan-out
+  // task's own lifecycle writes, each sent once per task and never polled: task.mission.start (before the worktree,
   // with an idempotency key), task.mission.update (after the spawn) and
   // task.mission.close (its compensation). A fan-out started during a restore
   // storm had every task.mission.start refused before any pane was asked for.
@@ -155,13 +153,23 @@ export class DaemonPipeServer {
   private static readonly INTERACTIVE_METHODS: ReadonlySet<string> = new Set([
     'daemon.createSession',
     'daemon.attachSession',
-    'daemon.destroySession',
     'task.mission.start',
     'task.mission.update',
     'task.mission.close',
   ]);
   private static readonly INTERACTIVE_PER_SOCKET_RATE_LIMIT = 100;
   private static readonly INTERACTIVE_GLOBAL_RATE_LIMIT = 200;
+  // pty:create's rollback (withDaemonCreateRollback) destroys a session whose
+  // attach or pipe connect failed; a destroy refused in the same storm (its one
+  // retry included) leaks that attached session for the daemon's lifetime. So
+  // that one destroy is interactive too, but only it: every other
+  // destroySession (the factory's 60 s sweep tears down many at once) stays
+  // background, or a cleanup burst could use up the reserved budget. The
+  // daemon tells them apart on its own, with nothing a client can claim: a
+  // destroy is the rollback's when it names a session the SAME socket asked
+  // to create within this window. It covers pty:create's longest create (a
+  // WSL one, WSL_RPC_TIMEOUT_MS = 75 s) plus attach, connect and the retry.
+  private static readonly ROLLBACK_DESTROY_WINDOW_MS = 120_000;
   private static readonly MAX_NEW_CONNECTIONS_PER_SEC = 20;
 
   private activePipeName: string;
@@ -381,6 +389,7 @@ export class DaemonPipeServer {
           this.preSubscribeBacklogs.delete(socket);
           this.rateLimits.delete(socket);
           this.interactiveRateLimits.delete(socket);
+          this.recentCreates.delete(socket);
           this.clientIds.delete(socket);
           this.socketsByClientId.delete(clientId);
           this.firstPartyClients.delete(clientId);
@@ -497,6 +506,7 @@ export class DaemonPipeServer {
     this.firstPartyClients.clear();
     this.rateLimits.clear();
     this.interactiveRateLimits.clear();
+    this.recentCreates.clear();
     // Forced drop-to-zero — keep idle-window accounting consistent.
     this.lastDisconnectAt = Date.now();
     return newToken;
@@ -672,28 +682,30 @@ export class DaemonPipeServer {
       }
     }
 
-    if (DaemonPipeServer.INTERACTIVE_METHODS.has(method)) {
-      if (now > this.interactiveGlobalRate.resetAt) {
-        this.interactiveGlobalRate = { count: 0, resetAt: now + 1000 };
-      }
-      this.interactiveGlobalRate.count++;
-      if (this.interactiveGlobalRate.count > DaemonPipeServer.INTERACTIVE_GLOBAL_RATE_LIMIT) {
-        const res = JSON.stringify({ id: request.id, ok: false, error: 'rate limited (interactive)' });
-        socket.write(res + '\n');
-        return;
-      }
+    if (this.isInteractive(socket, method, request.params, now)) {
       let interactive = this.interactiveRateLimits.get(socket);
       if (!interactive || now > interactive.resetAt) {
         interactive = { count: 0, resetAt: now + 1000 };
         this.interactiveRateLimits.set(socket, interactive);
       }
-      interactive.count++;
-      if (interactive.count > DaemonPipeServer.INTERACTIVE_PER_SOCKET_RATE_LIMIT) {
+      if (now > this.interactiveGlobalRate.resetAt) {
+        this.interactiveGlobalRate = { count: 0, resetAt: now + 1000 };
+      }
+      // The socket's own allowance first, and both counters charged only for a
+      // call that is dispatched: one client's refused excess must not use up
+      // the aggregate allowance of the others.
+      if (
+        interactive.count >= DaemonPipeServer.INTERACTIVE_PER_SOCKET_RATE_LIMIT ||
+        this.interactiveGlobalRate.count >= DaemonPipeServer.INTERACTIVE_GLOBAL_RATE_LIMIT
+      ) {
         // Keeps the `rate limited` prefix the pty:create rollback retries on.
         const res = JSON.stringify({ id: request.id, ok: false, error: 'rate limited (interactive)' });
         socket.write(res + '\n');
         return;
       }
+      interactive.count++;
+      this.interactiveGlobalRate.count++;
+      this.noteSessionCall(socket, method, request.params, now);
       this.dispatchAndReply(socket, request);
       return;
     }
@@ -723,6 +735,38 @@ export class DaemonPipeServer {
     }
 
     this.dispatchAndReply(socket, request);
+  }
+
+  /** Whether a call takes the interactive budget: INTERACTIVE_METHODS, or the
+   *  pty:create rollback's destroy (see ROLLBACK_DESTROY_WINDOW_MS). */
+  private isInteractive(socket: net.Socket, method: string, params: unknown, now: number): boolean {
+    if (DaemonPipeServer.INTERACTIVE_METHODS.has(method)) return true;
+    if (method !== 'daemon.destroySession') return false;
+    const id = (params as { id?: unknown } | undefined)?.id;
+    const createdAt = typeof id === 'string' ? this.recentCreates.get(socket)?.get(id) : undefined;
+    return createdAt !== undefined && now - createdAt <= DaemonPipeServer.ROLLBACK_DESTROY_WINDOW_MS;
+  }
+
+  /** Remember a dispatched createSession's id for its rollback destroy, and
+   *  forget it once that destroy is dispatched. */
+  private noteSessionCall(socket: net.Socket, method: string, params: unknown, now: number): void {
+    const id = (params as { id?: unknown } | undefined)?.id;
+    if (typeof id !== 'string') return;
+    if (method === 'daemon.destroySession') {
+      this.recentCreates.get(socket)?.delete(id);
+      return;
+    }
+    if (method !== 'daemon.createSession') return;
+    let created = this.recentCreates.get(socket);
+    if (!created) {
+      created = new Map();
+      this.recentCreates.set(socket, created);
+    }
+    // Bounded by the window: at most 100 creates a second per socket.
+    for (const [old, at] of created) {
+      if (now - at > DaemonPipeServer.ROLLBACK_DESTROY_WINDOW_MS) created.delete(old);
+    }
+    created.set(id, now);
   }
 
   private dispatchAndReply(socket: net.Socket, request: RpcRequest): void {

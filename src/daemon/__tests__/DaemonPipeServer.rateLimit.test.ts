@@ -22,11 +22,16 @@ type Reply = { id: string; ok: boolean; result?: unknown; error?: string };
 
 // Every request on ONE socket, the way the app multiplexes its RPCs (a socket
 // per request would hit the per-second connection cap instead).
-function sendBatch(pipeName: string, methods: string[]): Promise<Map<string, Reply>> {
+type Call = string | { method: string; params: Record<string, unknown> };
+
+function sendBatch(pipeName: string, methods: Call[]): Promise<Map<string, Reply>> {
   return new Promise((resolve, reject) => {
     const replies = new Map<string, Reply>();
     const client = net.createConnection(pipeName, () => {
-      const lines = methods.map((method, i) => JSON.stringify({ id: String(i), method, params: {}, token: TOKEN }));
+      const lines = methods.map((call, i) => {
+        const { method, params } = typeof call === 'string' ? { method: call, params: {} } : call;
+        return JSON.stringify({ id: String(i), method, params, token: TOKEN });
+      });
       client.write(lines.join('\n') + '\n');
     });
     let buf = '';
@@ -85,11 +90,33 @@ describe('DaemonPipeServer interactive RPC budget (#2349)', () => {
     expect(replies.get('251')).toMatchObject({ ok: true, result: { attached: true } });
   });
 
-  it('dispatches destroySession (the pty:create rollback) after a background flood used up the global budget', async () => {
-    const methods = [...Array.from({ length: 250 }, () => 'task.mission.list'), 'daemon.destroySession'];
+  it('dispatches the pty:create rollback destroy (a session this socket just created) after a background flood used up the global budget', async () => {
+    const methods: Call[] = [
+      { method: 'daemon.createSession', params: { id: 'daemon-new1' } },
+      ...Array.from({ length: 250 }, () => 'task.mission.list'),
+      { method: 'daemon.destroySession', params: { id: 'daemon-new1' } },
+    ];
     const replies = await sendBatch(pipeName, methods);
-    expect(replies.get('249')).toMatchObject({ ok: false, error: 'rate limited (global)' });
-    expect(replies.get('250')).toMatchObject({ ok: true, result: { destroyed: true } });
+    expect(replies.get('250')).toMatchObject({ ok: false, error: 'rate limited (global)' });
+    expect(replies.get('251')).toMatchObject({ ok: true, result: { destroyed: true } });
+  });
+
+  it('keeps every other destroySession (a cleanup sweep) background: 150 of them do not block a create', async () => {
+    const methods: Call[] = [
+      ...Array.from({ length: 150 }, (_, i) => ({ method: 'daemon.destroySession', params: { id: `daemon-old${i}` } })),
+      ...Array.from({ length: 100 }, (_, i) => ({ method: 'daemon.createSession', params: { id: `daemon-c${i}` } })),
+      ...Array.from({ length: 60 }, () => 'daemon.ping'),
+    ];
+    const replies = await sendBatch(pipeName, methods);
+    const at = (from: number, to: number) => Array.from({ length: to - from }, (_, k) => replies.get(String(from + k))!);
+    // The sweep is served from the background budget...
+    expect(at(0, 150).every((r) => r.ok)).toBe(true);
+    // ...so the reserved one still has room for every create...
+    expect(at(150, 250).every((r) => r.ok)).toBe(true);
+    // ...and the sweep counted against the global limit: 50 more pings pass.
+    const pings = at(250, 310);
+    expect(pings.filter((r) => r.ok)).toHaveLength(50);
+    expect(pings.filter((r) => !r.ok).every((r) => r.error === 'rate limited (global)')).toBe(true);
   });
 
   it('dispatches task.mission.start (the first write of a fan-out task) after a background flood used up the global budget', async () => {
@@ -97,6 +124,21 @@ describe('DaemonPipeServer interactive RPC budget (#2349)', () => {
     const replies = await sendBatch(pipeName, methods);
     expect(replies.get('249')).toMatchObject({ ok: false, error: 'rate limited (global)' });
     expect(replies.get('250')).toMatchObject({ ok: true, result: { ok: true, taskId: 't1' } });
+  });
+
+  it('charges the aggregate cap only for dispatched calls: the refused excess of one socket leaves the others their share', async () => {
+    const creates = (n: number, tag: string): Call[] =>
+      Array.from({ length: n }, (_, i) => ({ method: 'daemon.createSession', params: { id: `daemon-${tag}${i}` } }));
+    // A asks for 200: its own cap dispatches 100 and refuses the rest.
+    const a = [...(await sendBatch(pipeName, creates(200, 'a'))).values()];
+    expect(a.filter((r) => r.ok)).toHaveLength(100);
+    // B still gets the other 100 of the aggregate, its first call included.
+    const b = await sendBatch(pipeName, creates(100, 'b'));
+    expect(b.get('0')).toMatchObject({ ok: true });
+    expect([...b.values()].every((r) => r.ok)).toBe(true);
+    // The aggregate is now spent.
+    const c = await sendBatch(pipeName, creates(1, 'c'));
+    expect(c.get('0')).toMatchObject({ ok: false, error: 'rate limited (interactive)' });
   });
 
   it('bounds interactive calls across all sockets by the aggregate cap, apart from background traffic', async () => {

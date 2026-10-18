@@ -1461,7 +1461,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       const normalized = checked.ok ? normalizeRoleBinding(fanoutChoiceBinding(checked.choice)) : undefined;
       if (!checked.ok || !normalized || normalized.agent !== checked.choice.agent || normalized.model !== checked.choice.model ||
         normalized.effort !== checked.choice.effort) {
-        return { error: `fanout.spawnWorkspace: invalid agent choice — ${checked.ok ? 'normalization changed it' : checked.error}` };
+        return { error: `fanout.spawnWorkspace: invalid agent choice — ${checked.ok ? 'normalization changed it' : checked.error}`, noPty: true };
       }
       agentChoice = checked.choice;
     }
@@ -1494,6 +1494,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     if (agentChoice && !swap.changed && commandLauncherStem(swap.command) !== agentChoice.agent) {
       return {
         error: `fanout.spawnWorkspace: could not launch ${agentChoice.agent} for this task${swap.note ? ` — ${swap.note}` : ''}`,
+        noPty: true,
       };
     }
     if (swap.note) {
@@ -1536,7 +1537,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     const afterAdd = useStore.getState();
     const newWs = afterAdd.workspaces.find((w) => w.id === afterAdd.activeWorkspaceId);
     if (!newWs) {
-      return { error: 'fanout.spawnWorkspace: workspace creation failed' };
+      return { error: 'fanout.spawnWorkspace: workspace creation failed', noPty: true };
     }
     const newWsId = newWs.id;
     const paneId = newWs.activePaneId;
@@ -1632,7 +1633,10 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       rollback.removeWorkspace(newWsId);
       rollback.setActiveWorkspace(previousActiveId);
       releaseLeaf();
-      return { error: `fanout.spawnWorkspace: PTY create failed — ${err instanceof Error ? err.message : String(err)}` };
+      // `noPty`: pty.create was refused, so no pane exists to run the agent
+      // (main rolls back the daemon session itself), and main may take the
+      // task's folder back. Every other failure leaves that to the cleanup.
+      return { error: `fanout.spawnWorkspace: PTY create failed — ${err instanceof Error ? err.message : String(err)}`, noPty: true };
     }
 
     const afterPty = useStore.getState();
@@ -1642,7 +1646,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       afterPty.removeWorkspace(newWsId);
       afterPty.setActiveWorkspace(previousActiveId);
       releaseLeaf();
-      return { error: 'fanout.spawnWorkspace: pane disappeared during PTY creation' };
+      // The PTY was created and its dispose may have failed: name it, so main
+      // asks the daemon whether it is gone before touching the folder.
+      return { error: 'fanout.spawnWorkspace: pane disappeared during PTY creation', ptyId };
     }
     afterPty.addSurface(paneId, ptyId, '', cwd, newWsId);
     releaseLeaf();
