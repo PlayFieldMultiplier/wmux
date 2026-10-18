@@ -41,7 +41,7 @@ const GREEN = job('validate-runtime', 'completed', 'success');
 
 function fakeGh({
   issues = [], jobs = [], issue = { body: '', comments: [] }, annotations = {}, greenRuns = [],
-  issuesAfterCreate = null, createdUrl = 'https://github.com/acme/app/issues/30\n',
+  issuesAfterCreate = null, createdUrl = 'https://github.com/acme/app/issues/30\n', issueAfterClose = null,
 } = {}) {
   const calls = [];
   const gh = (args, options = {}) => {
@@ -59,7 +59,11 @@ function fakeGh({
       return JSON.stringify(listed > 1 && issuesAfterCreate ? issuesAfterCreate : issues);
     }
     if (args[0] === 'issue' && args[1] === 'create') return createdUrl;
-    if (args[0] === 'issue' && args[1] === 'view') return JSON.stringify(issue);
+    if (args[0] === 'issue' && args[1] === 'view') {
+      // The second view (after a close) sees what other jobs wrote meanwhile.
+      const viewed = calls.filter((c) => c.args[0] === 'issue' && c.args[1] === 'view').length;
+      return JSON.stringify(viewed > 1 && issueAfterClose ? issueAfterClose : issue);
+    }
     if (args[0] === 'run' && args[1] === 'view') return JSON.stringify({ jobs });
     return '';
   };
@@ -273,6 +277,20 @@ describe('report --state auto (the report job)', () => {
   it('reports a red run newer than the last green one', () => {
     const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [40] });
     expect(report({ env: ENV, gh: fake.gh })).toBe('created');
+  });
+
+  it('reopens the issue when a newer red run reported while it was closing', () => {
+    const fake = fakeGh({
+      issues: [{ number: 12, title: 'Nightly red: Runtime suite' }],
+      jobs: [GREEN, REPORT],
+      issue: { body: 'Run: https://github.com/acme/app/actions/runs/40', comments: [] },
+      issueAfterClose: { body: 'Run: https://github.com/acme/app/actions/runs/40', comments: [{ body: 'Run: https://github.com/acme/app/actions/runs/70' }] },
+    });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('none');
+    expect(fake.writes().map((c) => c.args.slice(0, 3))).toEqual([
+      ['issue', 'close', '12'],
+      ['issue', 'reopen', '12'],
+    ]);
   });
 
   it('converges when another report job opened the same issue meanwhile: the older one stays', () => {

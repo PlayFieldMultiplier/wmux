@@ -202,6 +202,14 @@ export function report({ state = 'auto', env, gh, log = () => undefined }) {
       return 'none';
     }
     gh(['issue', 'close', String(existing), '-R', repo, '--comment', renderGreenComment(url)]);
+    // A newer red run may have commented between the read above and the
+    // close; with no lock, check again and undo the close if one did.
+    const newerRed = newestReportedRun(readIssue(gh, { repo, number: existing }));
+    if (newerRed > Number(env.GITHUB_RUN_ID)) {
+      gh(['issue', 'reopen', String(existing), '-R', repo, '--comment', `Reopened: red run ${newerRed} reported while run ${env.GITHUB_RUN_ID} was closing this.`]);
+      log(`red run ${newerRed} reported meanwhile; reopened #${existing}`);
+      return 'none';
+    }
     log(`closed #${existing}`);
     return 'closed';
   }
