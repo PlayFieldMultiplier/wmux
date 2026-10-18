@@ -25,6 +25,7 @@ import * as crypto from 'node:crypto';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { getExecEnv } from '../../shared/execEnv';
 import { originPinFromConfigList } from './workerGit';
+import { normalizeWorktreePath } from '../../shared/workTask';
 
 const execFileAsync = promisify(execFile);
 
@@ -194,7 +195,7 @@ export type RemoveResult =
 
 /**
  * Waits between the attempts of a removal refused by a lock (#2388): about
- * 4 s in all, which is the exit wait given to the stopped panes' shells.
+ * 4 s in all, on the order of the 5 s exit wait the stopped panes' shells get.
  */
 export const REMOVE_RETRY_DELAYS_MS: readonly number[] = [250, 500, 750, 1000, 1500];
 
@@ -719,16 +720,25 @@ export class TaskWorktreeManager {
       // #2388: stopping the panes waits for their shells, not for everything
       // the shells started. On Windows an agent process still winding down
       // inside the folder (or one whose handles the OS has not released yet)
-      // makes the delete fail with "Permission denied" for a moment, so a
-      // removal refused that way is tried again a few times before the
-      // worktree is kept.
+      // makes the delete fail with "Permission denied" for a moment. git has
+      // by then already dropped the worktree's record (`remove_worktree`
+      // deletes the admin dir even when the folder could not be deleted), so
+      // running `git worktree remove` again only answers "not a working
+      // tree": what is left is a plain folder of committed files, which is
+      // deleted here once the process has let go. A removal refused while
+      // the record still exists is simply tried again.
       const removeArgs = ['worktree', 'remove', ...(force ? ['--force'] : []), safePath];
+      let leftover = false;
       for (let attempt = 0; ; attempt++) {
         try {
           await this.runGit(removeArgs, repoRoot);
           break;
         } catch (err) {
           const message = (err as Error).message;
+          if (isTransientRemoveFailure(message) && !(await this.worktreeRegistered(repoRoot, safePath))) {
+            leftover = true;
+            break;
+          }
           if (attempt < REMOVE_RETRY_DELAYS_MS.length && isTransientRemoveFailure(message)) {
             await this.sleep(REMOVE_RETRY_DELAYS_MS[attempt]);
             continue;
@@ -737,11 +747,54 @@ export class TaskWorktreeManager {
           return { ok: false, error: `removeWorktree: git worktree remove failed: ${message}`, preserved: true };
         }
       }
+      if (leftover) {
+        const err = await this.removeLeftoverFolder(safePath);
+        if (err) {
+          return { ok: false, error: `removeWorktree: git dropped the worktree, but its folder could not be deleted: ${err}`, preserved: true };
+        }
+        try {
+          await this.runGit(['worktree', 'prune'], repoRoot);
+        } catch {
+          /* the record is already gone; prune only tidies */
+        }
+      }
       if (fs.existsSync(safePath)) {
         return { ok: false, error: 'removeWorktree: files were left behind in the worktree folder', preserved: true };
       }
       return { ok: true };
     });
+  }
+
+  /** Whether git still lists `worktreePath` as a worktree of `repoRoot`. Read
+   *  failures count as "still registered", so the removal is retried rather
+   *  than a folder deleted on a guess. */
+  private async worktreeRegistered(repoRoot: string, worktreePath: string): Promise<boolean> {
+    try {
+      const { stdout } = await this.runGit(['worktree', 'list', '--porcelain'], repoRoot);
+      const want = normalizeWorktreePath(worktreePath);
+      return stdout.split(/\r?\n/).some((line) => line.startsWith('worktree ') && normalizeWorktreePath(line.slice('worktree '.length)) === want);
+    } catch {
+      return true;
+    }
+  }
+
+  /** Delete what `git worktree remove` left behind after it dropped the
+   *  worktree's record (#2388): the folder is clean (the dirty check passed and
+   *  git deleted the rest), so nothing committed is at stake. Tried over the
+   *  same waits as the removal itself. Returns the last error message, or null. */
+  private async removeLeftoverFolder(worktreePath: string): Promise<string | null> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.promises.rm(worktreePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        return null;
+      } catch (err) {
+        if (attempt < REMOVE_RETRY_DELAYS_MS.length) {
+          await this.sleep(REMOVE_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+        return (err as Error).message;
+      }
+    }
   }
 
   /**

@@ -356,41 +356,79 @@ describe('removeWorktree — beforeRemove runs only once removal is decided', ()
 
 describe('removeWorktree — a failed removal keeps the worktree', () => {
   const noWait = async () => undefined;
-
-  it('reports preserved when git worktree remove keeps failing after the panes were stopped', async () => {
-    const { TaskWorktreeManager, REMOVE_RETRY_DELAYS_MS } = await loadModule();
+  /** git fake with the worktree record: `worktree remove` drops it before failing to
+   *  delete the folder, as git does (#2388); `worktree list` reports it. */
+  function lockedRepoGit(opts: { failures: number; registeredDir: string; dropRecordOnFailure: boolean }) {
+    let registered = true;
     let removes = 0;
     const git = makeGitFake((args) => {
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return { stdout: registered ? `worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree ${opts.registeredDir}\nHEAD abc\nbranch refs/heads/x\n` : 'worktree /repo\nHEAD abc\nbranch refs/heads/main\n' };
+      }
       if (args[0] === 'worktree' && args[1] === 'remove') {
         removes++;
-        throw new Error("error: failed to delete 'C:/wt/some': Permission denied");
+        if (!registered) throw new Error(`fatal: '${args[2]}' is not a working tree`);
+        if (removes <= opts.failures) {
+          if (opts.dropRecordOnFailure) registered = false;
+          throw new Error(`error: failed to delete '${args[2]}': Permission denied`);
+        }
+        registered = false;
+        fs.rmSync(args[2], { recursive: true, force: true }); // a real remove deletes the folder
       }
       return { stdout: '' };
     });
-    const mgr = new TaskWorktreeManager({ runGit: git, sleep: noWait });
+    return { git, removes: () => removes, registered: () => registered };
+  }
+
+  it('reports preserved when git worktree remove keeps failing with the record intact', async () => {
+    const { TaskWorktreeManager, REMOVE_RETRY_DELAYS_MS } = await loadModule();
+    const repo = lockedRepoGit({ failures: Infinity, registeredDir: '/wt/some', dropRecordOnFailure: false });
+    const mgr = new TaskWorktreeManager({ runGit: repo.git, sleep: noWait });
     const res = await mgr.removeWorktree('/repo', 'hash1', '/wt/some', async () => undefined);
     expect(res).toMatchObject({ ok: false, preserved: true });
     if (!res.ok) expect(res.error).toMatch(/Permission denied/);
-    expect(removes).toBe(REMOVE_RETRY_DELAYS_MS.length + 1);
+    expect(repo.removes()).toBe(REMOVE_RETRY_DELAYS_MS.length + 1);
   });
 
-  // #2388: the stopped pane's process may still hold the folder for a moment.
-  it('a removal refused with Permission denied is tried again and succeeds once the folder is free', async () => {
+  it('a removal refused while the record still exists is tried again and succeeds', async () => {
     const { TaskWorktreeManager } = await loadModule();
     const waits: number[] = [];
-    let removes = 0;
-    const git = makeGitFake((args) => {
-      if (args[0] === 'worktree' && args[1] === 'remove') {
-        removes++;
-        if (removes < 3) throw new Error("error: failed to delete 'C:/wt/some': Permission denied");
-      }
-      return { stdout: '' };
-    });
-    const mgr = new TaskWorktreeManager({ runGit: git, sleep: async (ms) => { waits.push(ms); } });
+    const repo = lockedRepoGit({ failures: 2, registeredDir: '/wt/some', dropRecordOnFailure: false });
+    const mgr = new TaskWorktreeManager({ runGit: repo.git, sleep: async (ms) => { waits.push(ms); } });
     const res = await mgr.removeWorktree('/repo', 'hash1', '/wt/some', async () => undefined);
     expect(res).toEqual({ ok: true });
-    expect(removes).toBe(3);
+    expect(repo.removes()).toBe(3);
     expect(waits).toEqual([250, 500]);
+  });
+
+  // #2388 as git really behaves: the first failure already drops the record, so a
+  // second `git worktree remove` can only say "not a working tree". The folder git
+  // left behind is deleted instead.
+  it('once git has dropped the record, the leftover folder is deleted and the close succeeds', async () => {
+    const { TaskWorktreeManager } = await loadModule();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-wt-leftover-'));
+    fs.mkdirSync(path.join(dir, 'src'));
+    fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'x');
+    const repo = lockedRepoGit({ failures: 1, registeredDir: dir, dropRecordOnFailure: true });
+    const mgr = new TaskWorktreeManager({ runGit: repo.git, sleep: noWait });
+    const res = await mgr.removeWorktree('/repo', 'hash1', dir, async () => undefined);
+    expect(res).toEqual({ ok: true });
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(repo.removes()).toBe(1); // no second remove: it could only fail
+    const pruned = repo.git.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'prune');
+    expect(pruned).toBe(true);
+  });
+
+  it('a dropped record is matched by normalized path (git prints forward slashes)', async () => {
+    const { TaskWorktreeManager } = await loadModule();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-wt-leftover-'));
+    // The record is gone, but `list` prints a different spelling of what IS still there.
+    const repo = lockedRepoGit({ failures: 1, registeredDir: dir.replace(/\\/g, '/') + '/', dropRecordOnFailure: false });
+    const mgr = new TaskWorktreeManager({ runGit: repo.git, sleep: noWait });
+    const res = await mgr.removeWorktree('/repo', 'hash1', dir, async () => undefined);
+    expect(res).toEqual({ ok: true });
+    expect(repo.removes()).toBe(2); // still registered → retried, not deleted by hand
+    expect(fs.existsSync(dir)).toBe(false);
   });
 
   it('any other removal failure is final: no retry', async () => {
