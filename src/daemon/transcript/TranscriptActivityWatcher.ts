@@ -249,6 +249,12 @@ export class TranscriptActivityWatcher {
     }
   }
 
+  /** This pane's watch reads `path` and hands its lines to `onClaudeLine`. */
+  readsLines(sessionId: string, path: string): boolean {
+    const watch = this.watches.get(sessionId);
+    return !!watch && watch.lines && watch.path === path;
+  }
+
   /** The pane closed or its PTY died. */
   dropSession(sessionId: string): void {
     this.watches.delete(sessionId);

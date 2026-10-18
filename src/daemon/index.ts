@@ -3978,6 +3978,7 @@ function registerRpcHandlers(
         const bridge = sessionManager.getSession(id)?.bridge;
         return !!bridge && bridge.isTurnOpen() && bridge.turnAt(at)?.current === true;
       },
+      isReader: (id, path) => transcriptActivity?.readsLines(id, path) === true,
       // Only the pane's own session, read from the file its binding names and
       // that file still passing the same check the hook's path had to.
       signalFor: (id, path, end) => {

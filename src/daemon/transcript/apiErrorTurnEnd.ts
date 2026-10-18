@@ -23,6 +23,9 @@
 //     does not count.
 //   - Only a turn end. A later assistant or user entry before the grace runs
 //     out means the turn went on, so the entry was not its end.
+//   - Only the pane that still reads the file. Two panes bound to one
+//     transcript (a resumed session) read it one at a time; an entry the
+//     losing pane read before the handover is not its turn end.
 //   - Only the pane's current open turn. The entry's own timestamp must fall
 //     in the turn that is open now (`isCurrentOpenTurn`), so an error from an
 //     earlier turn, or one a new prompt has already moved past, closes nothing.
@@ -78,14 +81,22 @@ export function apiErrorFromTranscriptLine(line: string): ApiErrorTurnEnd | null
   return { error, message: message.trim().slice(0, MAX_MESSAGE_CHARS), at };
 }
 
-/** A conversation entry that is not an API error: the turn is still going. */
+/** A conversation entry of the pane's own turn that is not an API error: the
+ *  turn is still going. A subagent's entry is not: a background subagent can
+ *  write after the lead turn already died. */
 function isTurnProgress(line: string): boolean {
-  return /"type":"(assistant|user)"/.test(line) && !line.includes('"isApiErrorMessage":true');
+  return /"type":"(assistant|user)"/.test(line)
+    && !line.includes('"isApiErrorMessage":true')
+    && !line.includes('"isSidechain":true');
 }
 
 export interface ApiErrorTurnEndDeps {
   /** The daemon's turn bookkeeping: a turn is open on the pane and `at` falls in it. */
   isCurrentOpenTurn: (sessionId: string, at: number) => boolean;
+  /** The pane still reads `path`. A pane that lost a transcript it shared with
+   *  another pane no longer speaks for what it read there; the pane that kept
+   *  it has replayed the same entry for itself. */
+  isReader: (sessionId: string, path: string) => boolean;
   /** Feed the synthesized signal into the hook ingest. Null: the pane's binding no longer vouches for `path`. */
   signalFor: (sessionId: string, path: string, end: ApiErrorTurnEnd) => AgentSignal | null;
   emit: (signal: AgentSignal) => void;
@@ -143,6 +154,7 @@ export class ApiErrorTurnEnds {
       // hook speaking for it (the hook fires right after the write).
       const hookEnd = this.turnEndHookAt.get(id);
       if (hookEnd !== undefined && hookEnd >= p.end.at) continue;
+      if (!this.deps.isReader(id, p.path)) continue;
       if (!this.deps.isCurrentOpenTurn(id, p.end.at)) continue;
       const signal = this.deps.signalFor(id, p.path, p.end);
       if (signal) this.deps.emit(signal);

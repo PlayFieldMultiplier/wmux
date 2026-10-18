@@ -17,13 +17,14 @@ const apiError = (error: string, text: string, timestamp = '2026-10-17T02:31:37.
 const turnDuration = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 458, timestamp: '2026-10-17T02:31:37.653Z' });
 const reply = JSON.stringify({ type: 'assistant', uuid: 'a2', timestamp: '2026-10-17T02:31:39.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'retried fine' }] } });
 
-function gate(opts: { turnOpen?: boolean } = {}) {
+function gate(opts: { turnOpen?: boolean; isReader?: (id: string, path: string) => boolean } = {}) {
   // The daemon clock, just after Claude Code wrote the entry.
   let now = Date.parse('2026-10-17T02:31:37.700Z');
   const sent: AgentSignal[] = [];
   const turnEnds = new ApiErrorTurnEnds({
     // The pane's open turn started at TURN_OPENED_AT.
     isCurrentOpenTurn: (_id, at) => (opts.turnOpen ?? true) && at >= TURN_OPENED_AT,
+    isReader: opts.isReader ?? (() => true),
     signalFor: (id, _path, end) => stopFailureSignal(id, { agent: 'claude', sessionId: 's', cwd: '/w' }, end, now),
     emit: (signal) => sent.push(signal),
     now: () => now,
@@ -92,6 +93,15 @@ describe('ApiErrorTurnEnds', () => {
     closed.turnEnds.settle();
     expect(closed.sent).toEqual([]);
   });
+
+  it('still closes the turn when a background subagent writes after the lead turn died', () => {
+    const g = gate();
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('oauth_org_not_allowed', NOTICE));
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', reply.replace('"type":"assistant"', '"type":"assistant","isSidechain":true'));
+    g.advance(GRACE_MS);
+    g.turnEnds.settle();
+    expect(g.sent.map((s) => s.ptyId)).toEqual(['pty-1']);
+  });
 });
 
 describe('TranscriptActivityWatcher → Claude lines', () => {
@@ -146,5 +156,33 @@ describe('TranscriptActivityWatcher → Claude lines', () => {
     for (let i = 0; i < 5; i++) watcher.tick();
     expect(watcher.watchedSessions()).toEqual(['pty-new']);
     expect(counts).toEqual({ 'pty-new': 2 });
+  });
+
+  it('closes only the pane that kept a shared transcript, not the one it was handed over from', () => {
+    const file = path.join(dir, 's.jsonl');
+    fs.writeFileSync(file, `${apiError('oauth_org_not_allowed', NOTICE)}\n${turnDuration}\n`);
+    const binding: ResumeBinding = { agent: 'claude', sessionId: 's', cwd: dir, transcriptPath: file, ts: 0 };
+    let watcher: TranscriptActivityWatcher | null = null;
+    const g = gate({ isReader: (id, p) => watcher?.readsLines(id, p) === true });
+    watcher = new TranscriptActivityWatcher({
+      listSessionIds: () => ['pty-old', 'pty-new'],
+      getBinding: () => binding,
+      isAgentAlive: () => true,
+      emit: () => undefined,
+      onClaudeLine: (id, p, line) => g.turnEnds.noteLine(id, p, line),
+      afterTick: () => g.turnEnds.settle(),
+      minGapMs: 0,
+    });
+    // pty-old reads the error first; then pty-new's agent speaks and takes the file.
+    watcher.noteHookSignal('pty-old', 'agent.session_start');
+    watcher.tick();
+    expect(watcher.watchedSessions()).toEqual(['pty-old']);
+    g.advance(1);
+    watcher.noteHookSignal('pty-new', 'agent.session_start');
+    watcher.tick();
+    expect(watcher.watchedSessions()).toEqual(['pty-new']);
+    g.advance(GRACE_MS);
+    watcher.tick();
+    expect(g.sent.map((s) => s.ptyId)).toEqual(['pty-new']);
   });
 });
