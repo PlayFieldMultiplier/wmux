@@ -170,10 +170,14 @@ describe('DurationSequencer', () => {
 });
 
 describe('vitest.durations.json', () => {
-  it('renders sorted, rounded to 100 ms, with a trailing newline', () => {
-    const text = renderDurationsFile({ unit: { 'b.test.ts': 149.9, 'a.test.ts': 2_050 }, integration: { 'z.test.ts': 49 } });
+  it('renders sorted, rounded up to 100 ms, with a trailing newline', () => {
+    const text = renderDurationsFile({
+      unit: { 'b.test.ts': 149.9, 'a.test.ts': 2_000, 'c.test.ts': 0 },
+      integration: { 'z.test.ts': 4.2 },
+    });
+    // A file that cost anything is never written down as 0 ms.
     expect(text).toBe(
-      '{\n  "integration": {\n    "z.test.ts": 0\n  },\n  "unit": {\n    "a.test.ts": 2100,\n    "b.test.ts": 100\n  }\n}\n',
+      '{\n  "integration": {\n    "z.test.ts": 100\n  },\n  "unit": {\n    "a.test.ts": 2000,\n    "b.test.ts": 200,\n    "c.test.ts": 0\n  }\n}\n',
     );
   });
 

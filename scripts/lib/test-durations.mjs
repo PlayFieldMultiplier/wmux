@@ -29,7 +29,7 @@
 //   }
 //
 // vitest.durations.json: { "integration": { "<path>": ms }, "unit": { ... } },
-// keys sorted, values rounded to 100 ms, so a refresh diffs cleanly.
+// keys sorted, values rounded up to 100 ms, so a refresh diffs cleanly.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -188,13 +188,18 @@ export function updateDurations(current, fresh, lanes) {
   return out;
 }
 
-/** vitest.durations.json's text: projects and paths sorted, ms rounded to 100. */
+/**
+ * vitest.durations.json's text: projects and paths sorted, ms rounded up to
+ * the next 100. Up, not to nearest: a file that cost its worker anything must
+ * not be written down as free, or the balancer stacks every such file on
+ * whichever shard is lighter at the end.
+ */
 export function renderDurationsFile(durations) {
   const out = {};
   for (const project of Object.keys(durations).sort()) {
     out[project] = {};
     for (const file of Object.keys(durations[project]).sort()) {
-      out[project][file] = Math.round(durations[project][file] / 100) * 100;
+      out[project][file] = Math.max(0, Math.ceil(durations[project][file] / 100) * 100);
     }
   }
   return `${JSON.stringify(out, null, 2)}\n`;
