@@ -1,5 +1,6 @@
-// One turn has one end. A turn end that arrives after its turn already ended
-// is dropped at intake, keyed on the daemon's own episode id, never on time:
+// One turn has one end. A turn end that arrives while the pane's latest
+// episode already had its end is dropped at intake, keyed on the daemon's own
+// episode id, never on time:
 // the real StopFailure after the transcript's stand-in for it
 // (daemon/transcript/apiErrorTurnEnd), and the stand-in after the real hook.
 // HookIngest is wired to a real DaemonPTYBridge the way the daemon wires them:
@@ -40,12 +41,12 @@ describe('HookIngest — one turn, one end', () => {
       emitAgentEvent: (_id, data) => {
         emitted.push(data);
         if (data.status === 'running' || data.status === 'complete' || data.status === 'error' || data.status === 'awaiting_input') {
-          bridge.noteAgentStatus(data.status, true, undefined, false, data.signal.ts);
+          // `provisional` stands for the daemon's unconfirmed Codex stop (a soft close).
+          bridge.noteAgentStatus(data.status, true, undefined, data.signal.payload?.['provisional'] === true, data.signal.ts);
         }
       },
       log: () => undefined,
-      endedTurnAt: (_id, ts) => bridge.endedTurnAt(ts),
-      turnIdAt: (_id, ts) => bridge.turnAt(ts)?.turnId,
+      latestEndedTurn: () => bridge.endedTurnId(),
     });
   });
 
@@ -81,44 +82,30 @@ describe('HookIngest — one turn, one end', () => {
     expect(ends()).toHaveLength(1);
   });
 
-  it('still drops a late end after a later turn also ended', () => {
+  it('a soft close is not an end: the confirmed end of a resumed episode goes through', () => {
     ingest.handle(signal('agent.user_prompt_submit'));
-    const firedA = Date.now() + 500;
-    vi.advanceTimersByTime(5_500);
-    ingest.handle(failure()); // A's stand-in
+    vi.advanceTimersByTime(500);
+    // Delivered, but applied as a soft close; the episode resumes under its id.
+    ingest.handle({ ...failure(), payload: { error: 'x', provisional: true } });
     vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
-    ingest.handle(signal('agent.user_prompt_submit')); // retry B
-    vi.advanceTimersByTime(300);
-    ingest.handle(failure()); // B's own end
-    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
-    ingest.handle(failure(firedA)); // A's real hook, very late
+    const id = bridge.turnAt(Date.now())?.turnId;
+    ingest.handle(signal('agent.tool_started'));
+    vi.advanceTimersByTime(500);
+    expect(bridge.turnAt(Date.now())?.turnId).toBe(id);
+    ingest.handle(failure());
     vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
     expect(ends()).toHaveLength(2);
   });
 
-  it('a dropped duplicate leaves the next turn\'s question window alone', () => {
-    ingest.handle(signal('agent.user_prompt_submit'));
-    const firedA = Date.now() + 500;
-    vi.advanceTimersByTime(5_500);
-    ingest.handle(failure());
-    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
-    ingest.handle(signal('agent.user_prompt_submit'));
-    vi.advanceTimersByTime(200);
-    ingest.handle(signal('agent.awaiting_input', Date.now(), { tool_name: 'AskUserQuestion', hook_event_name: 'PreToolUse' }));
-    ingest.handle(failure(firedA));
-    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
-    expect(emitted.filter((e) => e.signal.kind === 'agent.awaiting_input' && e.decision === 'emit')).toHaveLength(1);
-    expect(ends()).toHaveLength(1);
-  });
-
-  it('a hook clock far behind the daemon maps by arrival, so the next turn still ends', () => {
-    ingest.handle(signal('agent.user_prompt_submit'));
+  it('reads no hook timestamp: a hook clock behind the daemon cannot drop the next turn\'s end', () => {
+    ingest.handle(signal('agent.user_prompt_submit', Date.now() - 2_000));
     vi.advanceTimersByTime(500);
-    ingest.handle(failure(Date.now() - 20_000));
+    ingest.handle(failure(Date.now() - 2_000));
     vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
-    ingest.handle(signal('agent.user_prompt_submit', Date.now() - 20_000));
+    // The next turn opens from typed input, on the daemon's clock.
+    bridge.noteInput('again\r');
     vi.advanceTimersByTime(500);
-    ingest.handle(failure(Date.now() - 20_000));
+    ingest.handle(failure(Date.now() - 2_000));
     vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
     expect(ends()).toHaveLength(2);
   });

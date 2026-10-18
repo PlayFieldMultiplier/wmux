@@ -1039,16 +1039,13 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   /**
-   * The id of the episode `ts` falls in, when that episode is over for good: a
-   * later one has opened, or it was closed by a settle that is not soft (a
-   * soft close resumes under the same id). Null while it can still go on, or
-   * when `ts` maps to no episode with an id.
+   * The id of the latest episode when it is over for good: closed by a settle
+   * that is not soft (a soft close resumes under the same id). Null while it
+   * is open or soft-closed, or before the first episode.
    */
-  endedTurnAt(ts: number): string | null {
-    const turn = this.turnAt(ts);
-    if (!turn?.turnId) return null;
-    if (!turn.current) return turn.turnId;
-    return !this.turnOpen && !this.turnSoftClosed ? turn.turnId : null;
+  endedTurnId(): string | null {
+    if (this.turnSeq === 0 || this.turnOpen || this.turnSoftClosed) return null;
+    return `t1:${this.turnNonce}.${this.turnSeq}`;
   }
 
   /**

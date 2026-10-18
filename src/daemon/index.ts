@@ -4616,8 +4616,7 @@ function registerRpcHandlers(
       },
       log: (level, message) => log(level, message),
       isAutomationPane: (id) => automationEngine?.ownsPane(id) === true,
-      endedTurnAt: (id, ts) => sessionManager.getSession(id)?.bridge.endedTurnAt(ts) ?? null,
-      turnIdAt: (id, ts) => sessionManager.getSession(id)?.bridge.turnAt(ts)?.turnId,
+      latestEndedTurn: (id) => sessionManager.getSession(id)?.bridge.endedTurnId() ?? null,
       // M2 — hook-sourced awaiting_input is the ONLY thing that mints an
       // approval request. Wired here, on the daemon-internal path, because this
       // is where provenance and the dedup decision are both already known.
