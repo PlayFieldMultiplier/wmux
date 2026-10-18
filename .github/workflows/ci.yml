@@ -276,8 +276,8 @@ jobs:
 
   # The integration lane, on Windows: the test files that spawn processes
   # (git, node, PowerShell), open sockets or pipes, run such code in a real
-  # temp dir, or mention win32 at all (scripts/lib/test-lanes.mjs decides,
-  # vitest.lanes.json lists them). They used to share validate's shards and
+  # temp dir, or mention win32 at all (scripts/lib/test-lanes.mjs decides;
+  # their names end in .os.test.*). They used to share validate's shards and
   # runners with ~1,700 pure unit files, one worker per core, and every flake
   # of a week was one of them waiting on that crowded OS. Here they run on
   # Windows runners of their own, two files at a time per runner (the

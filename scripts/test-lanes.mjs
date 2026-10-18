@@ -2,30 +2,28 @@
 // Sort the test files into lanes: `integration` (touches the OS) or `unit`.
 //
 //   node scripts/test-lanes.mjs              counts, then every integration file and why
-//   node scripts/test-lanes.mjs --write      regenerate vitest.lanes.json
-//   node scripts/test-lanes.mjs --check      exit 1 when vitest.lanes.json is stale
+//   node scripts/test-lanes.mjs --check      exit 1 when a file's name puts it in another
+//                                            lane than the rule does, printing the `git mv`s
 //   node scripts/test-lanes.mjs --why <file> the lane of one test file, and why
 //
 // The rule (and why a file counts as touching the OS) is in
-// scripts/lib/test-lanes.mjs. vitest.config.ts reads vitest.lanes.json: the
-// files listed there are the `integration` project, everything else it
-// includes is `unit`. The list is checked in rather than computed when vitest
-// starts because classifying ~2,000 files costs ~0.5 s of CPU, and vitest
-// loads its config on every run, `vitest run one.test.ts` included.
-// scripts/__tests__/testLanes.os.test.mjs runs --check's comparison, so a stale
-// list fails the suite with the command that fixes it.
+// scripts/lib/test-lanes.mjs. The lane itself is in the file's name:
+// vitest.config.ts runs `*.os.test.*` files in the `integration` project and
+// every other file it includes in `unit`. scripts/__tests__/testLanes.os.test.mjs
+// runs --check's comparison, so a misnamed file fails the suite with the
+// command that fixes it.
 //
-// Exit codes: 0 ok, 1 stale (--check) or unknown file (--why), 2 bad usage.
+// Exit codes: 0 ok, 1 misnamed files (--check) or unknown file (--why), 2 bad usage.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { LANES_FILE, ROOT, classifyAll, classifyTestFile, laneDrift, readLanesFile, renderLanesFile } from './lib/test-lanes.mjs';
+import { ROOT, classifyAll, classifyTestFile, laneMismatches } from './lib/test-lanes.mjs';
 
-const USAGE = 'usage: node scripts/test-lanes.mjs [--write | --check | --why <file>]';
+const USAGE = 'usage: node scripts/test-lanes.mjs [--check | --why <file>]';
 
 function main(argv) {
   const [flag, arg, ...rest] = argv;
-  if (rest.length > 0 || (flag && !['--write', '--check', '--why'].includes(flag)) || (flag === '--why') !== Boolean(arg)) {
+  if (rest.length > 0 || (flag && !['--check', '--why'].includes(flag)) || (flag === '--why') !== Boolean(arg)) {
     console.error(USAGE);
     return 2;
   }
@@ -50,20 +48,15 @@ function main(argv) {
 
   const lanes = classifyAll();
 
-  if (flag === '--write') {
-    fs.writeFileSync(LANES_FILE, renderLanesFile(lanes.integration));
-    console.log(`test-lanes: wrote ${path.relative(ROOT, LANES_FILE)} (${lanes.integration.length} integration, ${lanes.unit.length} unit)`);
-    return 0;
-  }
-
   if (flag === '--check') {
-    const drift = laneDrift(readLanesFile(), lanes);
-    if (drift.length === 0) {
-      console.log(`test-lanes: ${path.relative(ROOT, LANES_FILE)} is current (${lanes.integration.length} integration, ${lanes.unit.length} unit)`);
+    const mismatches = laneMismatches(lanes);
+    if (mismatches.length === 0) {
+      console.log(`test-lanes: every name matches its lane (${lanes.integration.length} integration, ${lanes.unit.length} unit)`);
       return 0;
     }
-    for (const line of drift) console.error(line);
-    console.error('\nRun `node scripts/test-lanes.mjs --write` and commit vitest.lanes.json.');
+    for (const { message } of mismatches) console.error(message);
+    console.error('\nTo rename them all (a file that should keep its lane takes a pragma instead):');
+    for (const { file, to } of mismatches) console.error(`  git mv ${file} ${to}`);
     return 1;
   }
 

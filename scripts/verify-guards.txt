@@ -25,3 +25,10 @@ src/renderer/i18n/__tests__/plLocaleCoverage.test.ts
 
 # docs/api/reference.md is regenerated after an RPC, event or capability change.
 scripts/__tests__/genApiReference.os.test.mjs
+
+# Every test file is named for its lane (`*.os.test.*` is integration) and
+# runs in it; the guard reads the whole tree, so no change imports it.
+scripts/__tests__/testLanes.os.test.mjs
+
+# Every test path a workflow or package.json script names exists.
+scripts/__tests__/workflowTestPaths.test.mjs

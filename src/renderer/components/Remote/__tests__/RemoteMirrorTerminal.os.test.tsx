@@ -135,7 +135,7 @@ class FakeTerminal {
     csiHandlers: [] as { id: { prefix?: string; final: string } }[],
     registerCsiHandler(id: { prefix?: string; final: string }) {
       this.csiHandlers.push({ id });
-      return { dispose: () => {} };
+      return { dispose: () => { /* no-op */ } };
     },
   };
 
@@ -693,8 +693,8 @@ describe('RemoteMirrorTerminal', () => {
       const roCallbacks: Array<() => void> = [];
       vi.stubGlobal('ResizeObserver', class {
         constructor(cb: () => void) { roCallbacks.push(cb); }
-        observe() {}
-        disconnect() {}
+        observe() { /* no-op */ }
+        disconnect() { /* no-op */ }
       });
       try {
         const box = { w: 448, h: 726 };
