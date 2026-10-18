@@ -257,6 +257,9 @@ export interface TaskGitRepo {
   relayShellPath: string;
   /** The platform whose shell runs the fetch line (a WSL distro is 'linux'). */
   workerShellPlatform: NodeJS.Platform;
+  /** The recorded repository lives in a WSL distro (its relay borrows objects
+   *  by a Linux path). */
+  inWslDistro: boolean;
 }
 
 const TASK_ID_RE = /^[A-Za-z0-9_.-]+$/;
@@ -665,7 +668,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   });
 
   const workerShellPlatform: NodeJS.Platform = target.kind === 'wsl' ? 'linux' : platform;
-  return { ok: true, repo: { entries: pre.entries, local, headOid, inRelay, relayShellPath, workerShellPlatform } };
+  return { ok: true, repo: { entries: pre.entries, local, headOid, inRelay, relayShellPath, workerShellPlatform, inWslDistro: target.kind === 'wsl' } };
 }
 
 /** Removes the relay of a task that has closed, after any call on it ends. */

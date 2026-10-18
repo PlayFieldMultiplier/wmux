@@ -176,6 +176,38 @@ describe('relay git: inside WSL', () => {
   });
 });
 
+describe('task.fetch: a repository inside a WSL distro', () => {
+  it('returns the WSL line, the relay by its Linux path (the same line as fetchCommand)', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-relay-wsl-fetch-')));
+    const sha = 'a'.repeat(40);
+    const exec: TaskPushExec = async (_file, args) => {
+      const prog = args[5];
+      if (prog === 'test') return { code: args.includes('-e') ? 1 : 0, stdout: '', stderr: '' };
+      if (prog === 'wslpath') return { code: 0, stdout: `/mnt/c/wmux${String(args[args.length - 1]).slice(root.length).replace(/\\/g, '/')}\n`, stderr: '' };
+      if (args.includes('--version')) return { code: 0, stdout: 'git version 2.50.0\n', stderr: '' };
+      if (args.includes('--list')) return { code: 0, stdout: 'local\0remote.origin.url\nssh://git@github.com/acme/app.git\0', stderr: '' };
+      if (args.includes('--is-shallow-repository')) return { code: 0, stdout: 'false\n', stderr: '' };
+      if (args.includes('--symref')) return { code: 0, stdout: `ref: refs/heads/main\tHEAD\n${sha}\tHEAD\n`, stderr: '' };
+      if (args.includes('--heads')) return { code: 0, stdout: `${sha}\trefs/heads/main\n`, stderr: '' };
+      if (args.includes('rev-parse')) return { code: 0, stdout: `${sha}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    try {
+      const r = await fetchTaskRefs(
+        { worktreePath: 'C:\\w', branch: 'wtask/one', noHooksDir: 'C:\\nh', gitCommonDir: '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo\\.git', relayRoot: path.join(root, 'relay'), taskId: 'wtask-1' },
+        async () => ({ code: 1, stdout: '', stderr: 'host git' }),
+        { platform: 'win32', wslExec: exec },
+      );
+      expect(r).toMatchObject({ ok: true, defaultBranch: 'main', fetched: [{ ref: 'origin/main', sha }], missing: ['origin/wtask/one'] });
+      const { fetchCommand, fetchCommandWsl } = r as { fetchCommand: string; fetchCommandWsl?: string };
+      expect(fetchCommand).toBe("git fetch --no-tags --no-write-fetch-head '/mnt/c/wmux/relay/wtask-1' '+refs/heads/main:refs/remotes/origin/main'");
+      expect(fetchCommandWsl).toBe(fetchCommand);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('relay git: the capability check inside WSL', () => {
   const PROBE = '/tmp/wmux-git-probe.AbCd1234';
   // The argv after `wsl.exe -d <distro> --cd / --exec`, and after a

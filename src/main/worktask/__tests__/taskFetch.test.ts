@@ -128,6 +128,24 @@ describe('fetchTaskRefs', () => {
     expect(taskFetchConfigRefusal([{ scope: 'global', key: `remote.${origin.toLowerCase()}.url`, value: 'x' }], origin)).toBeNull();
   });
 
+  it('a Windows-host repository gets the Windows fetch line only, never a WSL one (its relay borrows objects by a Windows path)', async () => {
+    // Even when the relay folder has a drvfs path, WSL git cannot read the
+    // relay's alternates or open a worktree Windows git created.
+    vi.resetModules();
+    vi.doMock('../../../shared/imagePaste', async (orig) => ({ ...(await orig<object>()), toWslPath: () => '/mnt/c/relay/wtask-1' }));
+    try {
+      const { fetchTaskRefs: fresh } = await import('../taskFetch');
+      const r = await fresh(input(), undefined, { protocols: ['https', 'ssh', 'file'], platform: 'win32' });
+      expect(r).toMatchObject({ ok: true });
+      expect(r).not.toHaveProperty('fetchCommandWsl');
+      runFetchLine((r as { fetchCommand: string }).fetchCommand);
+      expect(git(work, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(other, 'rev-parse', 'HEAD'));
+    } finally {
+      vi.doUnmock('../../../shared/imagePaste');
+      vi.resetModules();
+    }
+  });
+
   it('fetches each branch into the relay\'s own refs/heads, at origin\'s URL, with no tags, submodules or FETCH_HEAD', () => {
     expect(taskFetchArgs('https://github.com/o/r.git', ['main', 'wtask/one'])).toEqual([
       'fetch', '--no-tags', '--recurse-submodules=no', '--no-write-fetch-head', '--no-auto-maintenance', '--no-write-commit-graph',
