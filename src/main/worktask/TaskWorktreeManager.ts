@@ -831,7 +831,11 @@ export class TaskWorktreeManager {
    * (removeDeregisteredLeftover). Null when no removal of `worktreePath` is
    * recorded; a folder already gone ends the record.
    */
-  async finishPendingRemoval(worktreePath: string, beforeRemove?: (worktreePath: string) => Promise<void>): Promise<RemoveResult | null> {
+  async finishPendingRemoval(
+    worktreePath: string,
+    beforeRemove?: (worktreePath: string) => Promise<void>,
+    opts: { beforeDelete?: (worktreePath: string) => Promise<void> } = {},
+  ): Promise<RemoveResult | null> {
     const rec = this.pendingRemovals?.get(worktreePath);
     if (!rec) return null;
     return this.withRepoLock(rec.repoHash, async () => {
@@ -855,7 +859,7 @@ export class TaskWorktreeManager {
           };
         }
       }
-      const leftover = await this.removeDeregisteredLeftover(rec);
+      const leftover = await this.removeDeregisteredLeftover(rec, { beforeDelete: opts.beforeDelete });
       if (leftover.ok) {
         await this.forgetPending(rec.path);
         return { ok: true };
@@ -900,7 +904,10 @@ export class TaskWorktreeManager {
    *   - it is deleted by removeTreeNoFollow from the trusted root, which
    *     never follows a link and checks each folder is where it was.
    */
-  private async removeDeregisteredLeftover(rec: PendingWorktreeRemoval, opts: { checkOnly?: boolean } = {}): Promise<LeftoverResult> {
+  private async removeDeregisteredLeftover(
+    rec: PendingWorktreeRemoval,
+    opts: { checkOnly?: boolean; beforeDelete?: (worktreePath: string) => Promise<void> } = {},
+  ): Promise<LeftoverResult> {
     let real: string;
     let rootReal: string;
     let repoReal: string;
@@ -927,6 +934,15 @@ export class TaskWorktreeManager {
     if (typeof changed !== 'number') return { ok: false, error: `the leftover folder was kept: its contents could not be compared with ${rec.head}: ${changed.error}` };
     if (changed > 0) return { ok: false, dirty: true, error: `the leftover folder was kept: ${changed} file(s) in it are not what git left` };
     if (opts.checkOnly) return { ok: true };
+    // The last look before anything is deleted: the checks above take a
+    // while (git), and a pane may have opened in the folder meanwhile.
+    if (opts.beforeDelete) {
+      try {
+        await opts.beforeDelete(real);
+      } catch (err) {
+        return { ok: false, error: `the leftover folder was kept: ${(err as Error).message}` };
+      }
+    }
 
     try {
       await this.removeTree(real, rootReal);

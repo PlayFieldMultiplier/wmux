@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createFilePersister, readVersionedFile, type FilePersister } from '../factory/versionedFile';
+import { sessionHostDir } from './stopSessionsInDir';
 
 export const PENDING_REMOVALS_FILENAME = 'pending-removals.json';
 export const PENDING_REMOVALS_VERSION = 1 as const;
@@ -101,6 +102,32 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
     await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
     await this.persister.schedule();
   }
+}
+
+/** The store the app's task close uses: a record in it locks its folder
+ *  against new panes (pendingRemovalRefusal). */
+let active: PendingRemovalStore | null = null;
+
+export function setActivePendingRemovals(store: PendingRemovalStore | null): void {
+  active = store;
+}
+
+/**
+ * Why a pane may not start in `cwd`, or null: a folder whose removal is
+ * pending is half deleted, and what a pane wrote there would be checked
+ * against it, or deleted with it. A WSL pane's Linux path is read as the
+ * Windows folder it is.
+ */
+export function pendingRemovalRefusal(cwd: string | null | undefined, platform: NodeJS.Platform = process.platform): string | null {
+  if (!cwd || !active) return null;
+  const want = pendingRemovalKey(sessionHostDir(cwd, {}, platform));
+  for (const rec of active.all()) {
+    const held = pendingRemovalKey(rec.path);
+    if (want === held || want.startsWith(held + path.sep)) {
+      return `${cwd} is inside ${rec.path}, a task folder whose removal did not finish; open the pane in another folder, or use Close and keep folder on its task`;
+    }
+  }
+  return null;
 }
 
 /** What the sweep at start needs (TaskWorktreeManager and the daemon). */

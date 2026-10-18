@@ -14,7 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { TaskWorktreeManager, type RunGitOptions } from '../TaskWorktreeManager';
-import { PendingWorktreeRemovals, sweepPendingRemovals } from '../pendingWorktreeRemovals';
+import { PendingWorktreeRemovals, pendingRemovalRefusal, setActivePendingRemovals, sweepPendingRemovals } from '../pendingWorktreeRemovals';
 
 const HEAD = 'a'.repeat(40);
 const onWindows = process.platform === 'win32';
@@ -418,6 +418,64 @@ describe('a removal that could not finish is recorded for a later close', () => 
         if (c.git?.listed) expect(store.get(dir)).toBeNull();
         else expect(store.get(dir)).not.toBeNull();
       });
+    }
+  });
+
+  it('looks for panes once more right before deleting: one opened during the git checks keeps the folder', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const order: string[] = [];
+    const g = fakeGit();
+    const git = vi.fn(async (args: string[], cwd: string, opts?: RunGitOptions) => {
+      if (args.includes('diff-files')) order.push('git checks');
+      return g.git(args, cwd, opts);
+    });
+    const { mgr, removeTree } = manager(git as unknown as ReturnType<typeof fakeGit>['git'], { pendingRemovals: store });
+    let opened = false;
+    const nothingRunsIn = vi.fn(async () => {
+      order.push('sessions');
+      if (opened) throw new Error('1 pane(s) were started in the folder');
+    });
+    const before = vi.fn(async () => { order.push('stop'); opened = true; });
+    const res = await mgr.finishPendingRemoval(dir, before, { beforeDelete: nothingRunsIn });
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    if (res && !res.ok) expect(res.error).toMatch(/started in the folder/);
+    expect(order.slice(-2)).toEqual(['git checks', 'sessions']);
+    expect(removeTree).not.toHaveBeenCalled();
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(store.get(dir)).not.toBeNull();
+  });
+
+  it('a folder whose removal is pending is locked against new panes', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    expect(pendingRemovalRefusal(dir)).toBeNull();
+    setActivePendingRemovals(store);
+    try {
+      expect(pendingRemovalRefusal(dir)).toMatch(/removal did not finish.*Close and keep folder/);
+      expect(pendingRemovalRefusal(path.join(dir, 'src'))).not.toBeNull();
+      expect(pendingRemovalRefusal(`${dir}-sibling`)).toBeNull();
+      expect(pendingRemovalRefusal(path.join(tmp, 'elsewhere'))).toBeNull();
+      expect(pendingRemovalRefusal(undefined)).toBeNull();
+      await store.delete(dir);
+      expect(pendingRemovalRefusal(dir)).toBeNull();
+    } finally {
+      setActivePendingRemovals(null);
+    }
+  });
+
+  it.skipIf(!onWindows)('the lock reads a WSL pane\'s Linux path as the Windows folder it is', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    setActivePendingRemovals(store);
+    try {
+      const linux = `/mnt/${dir[0].toLowerCase()}${dir.slice(2).replace(/\\/g, '/')}/src`;
+      expect(pendingRemovalRefusal(linux, 'win32')).not.toBeNull();
+    } finally {
+      setActivePendingRemovals(null);
     }
   });
 

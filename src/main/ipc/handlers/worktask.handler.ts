@@ -27,7 +27,7 @@ import { removeTaskRelay } from '../../worktask/taskPush';
 import { getWmuxDir } from '../../../daemon/config';
 import { taskPushRecordOf } from '../../worktask/taskPushRecord';
 import { TaskCloseService } from '../../worktask/TaskCloseService';
-import { PendingWorktreeRemovals, sweepPendingRemovals } from '../../worktask/pendingWorktreeRemovals';
+import { PendingWorktreeRemovals, setActivePendingRemovals, sweepPendingRemovals } from '../../worktask/pendingWorktreeRemovals';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { noteTaskPanesStopped } from '../../factory/agentGoneFacts';
 import { beginPaneRelaunch, startsAgent } from '../../factory/workerSlots';
@@ -88,7 +88,10 @@ export function registerWorktaskHandlers(
   // 프로세스 수명 단일 인스턴스: TaskWorktreeManager는 repoHash 단위 뮤텍스 체인을
   // 유지해야 하므로(index.lock 경합 차단) 재사용한다. fan-out과는 별도 인스턴스지만
   // 크로스 인스턴스 worktree add/remove 경합은 git 자체의 index.lock이 backstop.
-  const worktrees = new TaskWorktreeManager({ onCreated: ensureSecretHook, pendingRemovals: loadPendingRemovals() });
+  const pendingRemovals = loadPendingRemovals();
+  // A folder whose removal is pending is locked against new panes.
+  setActivePendingRemovals(pendingRemovals ?? null);
+  const worktrees = new TaskWorktreeManager({ onCreated: ensureSecretHook, pendingRemovals });
   const stopPanesIn = async (worktreePath: string): Promise<string[]> => {
     const dc = getDaemonClient();
     if (!dc) throw new Error('Daemon not connected');
@@ -124,6 +127,21 @@ export function registerWorktaskHandlers(
   const scanService = new WorktaskScanService();
   onServices?.({ close: closeService, pr: prService });
 
+  /** The sweep's check, stopping nothing: no pane in the folder (started
+   *  there, or working there now: OSC 7) and no process an earlier stop
+   *  left. */
+  const nothingRunsIn = async (folder: string): Promise<void> => {
+    const dc = getDaemonClient();
+    if (!dc) throw new Error('Daemon not connected');
+    await assertNothingRunsIn(folder, {
+      listSessions: async () => {
+        const reply = await dc.rpc('daemon.listSessions', {});
+        const sessions = (Array.isArray(reply) ? reply : []) as Array<{ id: string; spawnCwd?: string; cwd?: string }>;
+        return sessions.flatMap((s) => (typeof s.cwd === 'string' && s.cwd ? [s, { ...s, spawnCwd: s.cwd }] : [s]));
+      },
+    });
+  };
+
   // #2388: removals a close left part way (a folder git no longer has as a
   // worktree) are finished once the daemon has recovered its sessions.
   let sweepTimer: ReturnType<typeof setTimeout> | null = null;
@@ -147,18 +165,8 @@ export function registerWorktaskHandlers(
         // Checked again under the repository lock, right before the removal,
         // and without stopping anything: a pane opened in the folder since,
         // or a process an earlier stop left, keeps it.
-        finish: (folder) => worktrees.finishPendingRemoval(folder, async (f) => {
-          const dc = getDaemonClient();
-          if (!dc) throw new Error('Daemon not connected');
-          await assertNothingRunsIn(f, {
-            listSessions: async () => {
-              const reply = await dc.rpc('daemon.listSessions', {});
-              const sessions = (Array.isArray(reply) ? reply : []) as Array<{ id: string; spawnCwd?: string; cwd?: string }>;
-              // Started there, or working there now (OSC 7).
-              return sessions.flatMap((s) => (typeof s.cwd === 'string' && s.cwd ? [s, { ...s, spawnCwd: s.cwd }] : [s]));
-            },
-          });
-        }),
+        // Run again right before the folder is deleted, after git's checks.
+        finish: (folder) => worktrees.finishPendingRemoval(folder, nothingRunsIn, { beforeDelete: nothingRunsIn }),
         log: (message) => console.warn(message),
       }).then((done) => {
         if (!done && attempt < PENDING_SWEEP_ATTEMPTS) sweep(attempt + 1);
@@ -398,6 +406,7 @@ export function registerWorktaskHandlers(
 
   return () => {
     if (sweepTimer) clearTimeout(sweepTimer);
+    setActivePendingRemovals(null);
     ipcMain.removeHandler(IPC.TASK_CLOSE);
     ipcMain.removeHandler(IPC.TASK_CREATE_PR);
     ipcMain.removeHandler(IPC.WORKTASK_SCAN);
