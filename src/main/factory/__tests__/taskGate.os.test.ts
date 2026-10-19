@@ -538,7 +538,9 @@ describe('a research task (no repository, no code)', () => {
     expect(row.status).toBe('completed');
     expect(row.updatedBy).toEqual({ kind: 'brain', workspaceId: 'ws-lead' });
     expect(row.summary).toBe('done'); // no [forced: …]
-    expect(r.note.mock.calls.map((c) => c[2])).toEqual(['Research reported: task completed']);
+    // No evidence on the report → Not verified (never claims verified without it).
+    expect(row.verifiedItemCount ?? 0).toBe(0);
+    expect(r.note.mock.calls.map((c) => c[2])).toEqual(['Research reported: Not verified']);
     expect(r.wake).toHaveBeenCalledTimes(1);
     expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', row.rev)]);
   });

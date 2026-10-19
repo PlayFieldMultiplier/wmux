@@ -78,7 +78,8 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
   'gate.notRunNoBot': bodied('gate.notRunNoBot'),
   'gate.notRunNoWorktree': bodied('gate.notRunNoWorktree'),
   'gate.notRunNoBaseRef': bodied('gate.notRunNoBaseRef'),
-  'research.completed': bodied('research.completed'),
+  'research.completed': bodied('research.completed', { verified: 'number', total: 'number' }),
+  'research.unverified': bodied('research.unverified', { verified: 'number', total: 'number' }),
   'research.notCompleted': titled('research.notCompleted'),
   // A task its merged pull request ended (taskGate.ts).
   'task.merged': bodied('task.merged', { pr: 'number' }),
