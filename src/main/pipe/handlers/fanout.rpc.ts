@@ -136,7 +136,7 @@ import { originUrlRepoKey, readRawOriginUrl } from '../../worktask/workerGit';
 import { getFactorySettings } from '../../factory/factorySettings';
 import { getBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { noticeWorkerStarts, plainStartFailure, type BotWorkerStartOutcome } from '../../factory/botNotices';
-import { runningWakeTainted } from '../../factory/wakeTaint';
+import { getWakeTaint, runningWakeTainted } from '../../factory/wakeTaint';
 import { botThreadRefusal, resolveRoomPorts, runningWake } from '../../factory/roomWriter';
 import { getHandoffRouter } from '../../factory/handoffRouter';
 import { emitBotHook } from '../../factory/botHooks';
@@ -722,6 +722,10 @@ export interface FanOutBotPort {
   /** Whether that running wake carried outside text (factory/wakeTaint.ts);
    *  true when it cannot be told. Its tasks' dispatch carries the mark. */
   currentWakeTainted(botId: string): boolean;
+  /** Whether the bot's running wake `wakeId` is an external guest's message
+   *  or its turn read one (factory/wakeTaint.ts); true when that wake cannot
+   *  be read. Such a turn starts no workers. */
+  wakeGuestSourced(botId: string, wakeId: string): boolean;
   /** Open fan-out tasks started by this bot, and by any bot, the bot
    *  fan-outs still being started included (`botStarting`: this bot's).
    *  `live`: every live fan-out task across wmux, the owner's included, as
@@ -856,6 +860,10 @@ function defaultBotPort(): FanOutBotPort | null {
     currentWakeId: (botId) => runtime.currentTurn(botId)?.wakeId ?? null,
     currentWakeThread: (botId) => runtime.currentTurn(botId)?.threadId ?? null,
     currentWakeTainted: (botId) => runningWakeTainted(botId),
+    wakeGuestSourced: (botId, wakeId) => {
+      const item = currentWakeItem(botId);
+      return !item || item.id !== wakeId || item.reason.kind === 'guest' || getWakeTaint()?.turnReadGuestText(wakeId) === true;
+    },
     // The same wake as the turn's: a wake that ended between the two reads has no handoff.
     currentWakeHandoff: (botId) => {
       const wake = runningWake(resolveRoomPorts(), botId);
@@ -1276,6 +1284,11 @@ export function registerFanOutRpc(
       if (!wakeId) return deny('FAILED_PRECONDITION', 'task.fanout.start: a bot fans out only during a wake');
       const refusal = botPort.launchRefusal(bot.botId, wakeId);
       if (refusal) return deny('FAILED_PRECONDITION', `task.fanout.start: ${refusal}`);
+      // Workers run unattended (botFanoutPresets.ts): a turn an external
+      // guest's message started, or one that read one, starts none.
+      if (botPort.wakeGuestSourced(bot.botId, wakeId)) {
+        return deny('FAILED_PRECONDITION', 'task.fanout.start: this turn started from or read an external guest\'s message, and such a turn starts no workers; tell the owner what you would start');
+      }
       botWakeId = wakeId;
       // Read in the same tick as the wake id, before any await: the wake can
       // end while the worktrees are being made.

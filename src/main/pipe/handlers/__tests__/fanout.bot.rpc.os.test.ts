@@ -74,6 +74,7 @@ interface Rig {
   setOpen: (o: { bot: number; factory: number }) => void;
   setLiveTasks: (n: number) => void;
   setTainted: (t: boolean) => void;
+  setGuestSourced: (g: boolean) => void;
   flush: () => Promise<void>;
   /** Repositories whose default branch was read, with how many fan-outs had started then. */
   defaultBranchReads: Array<{ root: string; startedBefore: number }>;
@@ -116,6 +117,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
    *  (the owner's, mostly): the guards' live cap counts them. */
   let liveTasks = 0;
   let tainted = false;
+  let guestSourced = false;
   const defaultBranchReads: Rig['defaultBranchReads'] = [];
   let defaultBranchNote: { name: string | null; recorded: boolean } = { name: 'develop', recorded: true };
   const p = profile(role, over);
@@ -142,6 +144,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     currentWakeId: () => wake,
     currentWakeThread: () => thread as ThreadId | null,
     currentWakeTainted: () => tainted,
+    wakeGuestSourced: () => guestSourced,
     currentWakeHandoff: () => (wake ? 'h-dispatch' : null),
     openWorkers: (botId) => ({ bot: open.bot + booked(botId), factory: open.factory + booked(), botStarting: booked(botId), live: liveTasks + guards.reservedTasks().length }),
     usage: () => emptyUsage(),
@@ -199,6 +202,9 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     setTainted: (t) => {
       tainted = t;
     },
+    setGuestSourced: (g) => {
+      guestSourced = g;
+    },
     flush: async () => {
       for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r));
     },
@@ -226,6 +232,20 @@ describe('task.fanout.start — bot origin', () => {
     expect(await r.call({ idempotencyKey: 'wake:w-2:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
     await r.flush();
     expect((r.start.mock.calls[1][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false });
+  });
+
+  it('a turn an external guest\'s message started, or one that read one, starts no workers', async () => {
+    const r = rig('lead');
+    r.setGuestSourced(true);
+    const refused = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead')));
+    expect(refused).toMatchObject({ code: 'FAILED_PRECONDITION' });
+    expect(refused.message).toContain('external guest');
+    await r.flush();
+    expect(r.start).not.toHaveBeenCalled();
+    expect(r.port.full).toHaveLength(0);
+    r.setGuestSourced(false);
+    r.setWake('w-2');
+    expect(await r.call({ idempotencyKey: 'wake:w-2:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
   });
 
   it('a connection\'s key is refused as a plain secretNames entry, before anything starts', async () => {
