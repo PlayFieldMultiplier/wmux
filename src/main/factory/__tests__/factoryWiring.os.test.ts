@@ -443,11 +443,15 @@ describe('lookups the runtime and rooms read', () => {
     expect(tail?.truncated).toBe(true);
     expect(threadTail(writer, 'ws-1', 'task:t', 12)?.truncated).toBe(false);
     expect(threadTail(null, 'ws-1', 'task:t', 3)).toBeNull();
-    // A guest's card is left out of a clean wake's tail and is no reason to call it truncated.
+    // A guest's card is left out of a clean wake's tail (counted, not shown)
+    // and is no reason to call it truncated.
     writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'guest', actor: { kind: 'system' }, title: 'External guest: G', guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'G' } });
     writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'human', actor: { kind: 'human' }, title: 'hi' });
-    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1)).toEqual({ cards: [expect.objectContaining({ title: 'hi' })], truncated: false });
-    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1, { guests: true })?.truncated).toBe(true);
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1)).toEqual({ cards: [expect.objectContaining({ title: 'hi' })], truncated: false, hiddenGuestCards: 1 });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1, { guests: true })).toMatchObject({ truncated: true, hiddenGuestCards: 0 });
+    // A truncated tail counts only the guest cards inside its window.
+    writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'human', actor: { kind: 'human' }, title: 'again' });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1)).toMatchObject({ truncated: true, hiddenGuestCards: 0 });
   });
 
   it('the running wake: id, a 1-based attempt that is the same for the whole turn, and its handoff', () => {

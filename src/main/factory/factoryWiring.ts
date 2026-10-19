@@ -323,7 +323,7 @@ export function resolveFactsWhere(log: unknown, match: (f: Fact) => boolean, lim
 }
 
 /** The newest `n` cards of a thread, oldest first, and whether older ones exist. */
-export function threadTail(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId, n: number, opts: { guests?: boolean } = {}): { cards: RoomCard[]; truncated: boolean } | null {
+export function threadTail(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId, n: number, opts: { guests?: boolean } = {}): { cards: RoomCard[]; truncated: boolean; hiddenGuestCards: number } | null {
   if (!writer) return null;
   // An external guest's cards only for the guest's own wake (RoomWriter.read).
   const guests = opts.guests === true;
@@ -333,7 +333,11 @@ export function threadTail(writer: RoomWriter | null, workspaceId: string, threa
   const first = page.cards[0];
   const truncated = page.cards.length >= n && !!first
     && writer.find(workspaceId, (c) => c.threadId === threadId && c.seq < first.seq, { guests }) !== null;
-  return { cards: page.cards, truncated };
+  // The guest cards a clean wake leaves out of that window, counted so its
+  // prompt can say they exist (their words stay out).
+  const hiddenGuestCards = guests ? 0
+    : writer.read(workspaceId, { threadId, sinceSeq: truncated ? first.seq - 1 : 0, guests: true }).cards.filter((c) => c.kind === 'guest').length;
+  return { cards: page.cards, truncated, hiddenGuestCards };
 }
 
 /** The handoff a task wake answers: the one every task of the wake was

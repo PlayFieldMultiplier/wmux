@@ -78,6 +78,8 @@ export interface WakePromptThread {
   cards: readonly RoomCard[];
   /** Older cards exist that are not included. */
   truncated: boolean;
+  /** Guest cards the tail left out of this window (factoryWiring threadTail). */
+  hiddenGuestCards?: number;
 }
 
 export interface WakePromptInput {
@@ -306,7 +308,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
   // which taints its turn (wakeTaint.ts).
   const guestWake = item.reason.kind === 'guest';
   const shownCards = thread ? thread.cards.filter((c) => guestWake || c.kind !== 'guest') : [];
-  const hiddenGuestCards = thread ? thread.cards.length - shownCards.length : 0;
+  const hiddenGuestCards = thread && !guestWake ? thread.cards.length - shownCards.length + (thread.hiddenGuestCards ?? 0) : 0;
   if (thread && shownCards.length > 0) {
     const cards = shownCards.map((c) => ({
       at: new Date(c.at).toISOString(),

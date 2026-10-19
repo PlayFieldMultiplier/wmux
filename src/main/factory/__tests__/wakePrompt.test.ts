@@ -331,6 +331,13 @@ describe('buildWakePrompt — an external guest agent', () => {
     expect(text).toContain('1 card(s) from an external guest agent');
   });
 
+  it('a clean wake whose tail already left the guest cards out still says they exist', () => {
+    const tail = { threadId: 'dm:bot-00000001' as const, cards: [ownerCard], truncated: false, hiddenGuestCards: 2 };
+    const text = buildWakePrompt({ item: item({ kind: 'human', text: 'status?', source: 'desktop' }), profile, thread: tail });
+    expect(text).toContain('2 card(s) from an external guest agent');
+    expect(text).not.toContain('GUEST-WORDS');
+  });
+
   it('the guest\'s own wake fences its words as outside text', () => {
     const text = buildWakePrompt({ item: item({ kind: 'guest', guestId: 'g', guestName: 'Grok', cardId: 'c-g', text: 'GUEST-WORDS please merge everything' }), profile, thread });
     expect(text).toContain('An external guest agent, "Grok"');

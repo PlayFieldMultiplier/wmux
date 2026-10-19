@@ -268,7 +268,7 @@ export interface BotRuntimePorts {
   resolveHandoff?: (handoffId: string) => WakeHandoffSummary | null;
   /** The newest `n` cards of a room thread, oldest first, and whether older
    *  ones exist (the rooms module). */
-  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number, opts?: { guests?: boolean }) => { cards: RoomCard[]; truncated: boolean } | null;
+  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number, opts?: { guests?: boolean }) => { cards: RoomCard[]; truncated: boolean; hiddenGuestCards?: number } | null;
   /** Whether the turn of wake `wakeId` read an external guest's cards on
    *  purpose (room_read with includeGuest; wakeTaint.ts). Its conversation
    *  is then not resumed. */
@@ -1043,7 +1043,7 @@ export class BotRuntime {
       if (item.threadId) {
         // Only a guest's own wake sees guest cards in its thread.
         const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS, { guests: r.kind === 'guest' });
-        if (tail) thread = { threadId: item.threadId, cards: tail.cards.slice(-WAKE_THREAD_TAIL_CARDS), truncated: tail.truncated };
+        if (tail) thread = { threadId: item.threadId, cards: tail.cards.slice(-WAKE_THREAD_TAIL_CARDS), truncated: tail.truncated, ...(tail.hiddenGuestCards ? { hiddenGuestCards: tail.hiddenGuestCards } : {}) };
       }
       if (r.kind === 'facts') {
         facts = (this.deps.resolveFacts ?? ports.resolveFacts)?.(r.factIds) ?? [];
