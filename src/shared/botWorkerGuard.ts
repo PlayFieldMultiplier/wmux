@@ -131,10 +131,11 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
   // branch and `--create-source-branch` creates one, a stack sync pushes the
   // stack, `mr rebase` rewrites the source branch on the server and `mr for`
   // creates one there. A plain `glab mr create --source-branch <branch>`
-  // opens the request for the branch main pushed.
+  // opens the request for the branch main pushed. `--attach` uploads a file
+  // to the project, a public act like the ones below.
   // `-f` also in a bundle with create's other switches (`-yf`, `-wf`).
   ...['create', 'new'].flatMap((v) => [
-    '*--fill*', '*--push*', '*--create-source-branch*',
+    '*--fill*', '*--push*', '*--create-source-branch*', '*--attach*',
     ...['f', 'yf', 'wf', 'ywf', 'wyf'].flatMap((b) => [`-${b}*`, `* -${b}*`]),
   ].flatMap((rest) => glabCommandWithDeny('mr', v, rest))),
   ...['rebase', 'for', 'new-for', 'create-for'].flatMap((v) => glabSubcommandDeny('mr', v)), ...glabSubcommandDeny('stack', 'sync'),

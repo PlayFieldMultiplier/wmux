@@ -295,6 +295,7 @@ describe('the codex worker rules', () => {
         ['glab', 'repo', 'members', 'add', '--username=a'], ['glab', 'repo', '-R', 'g/p', 'members', 'add'], ['glab', 'issue', 'board', 'create'],
         ['glab', 'api', 'projects/1/merge_requests/3/merge', '-X', 'PUT'], ['glab', 'alias', 'set', 'm', 'mr merge'],
         ['glab', 'mr', 'create', '--push=true'], ['glab', 'mr', 'create', '--auto-merge=true'], ['glab', 'mr', 'new-for', '34'], ['glab', 'mr', 'create-for', '34'],
+        ['glab', 'mr', 'create', '--attach', './file.png'],
       ]) expect(decide(cmd), cmd.join(' ')).toBe('forbidden');
       for (const cmd of [
         ['gh', 'pr', 'view', '3'], ['gh', 'pr', 'create', '--fill'], ['git', 'commit', '-m', 'push it'], ['git', 'status'], ['git', 'remote', '-v'],

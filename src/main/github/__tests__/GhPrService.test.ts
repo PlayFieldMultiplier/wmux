@@ -326,6 +326,19 @@ describe('parseRemoteHost / isGithubHost — provider 라우팅 재료', () => {
     expect(isGithubHost('gitlab.com')).toBe(false);
     expect(isGithubHost('gitlab.company.io')).toBe(false);
   });
+
+  // An SSH host alias, GitHub Enterprise Cloud and GHES are GitHub too.
+  it.each([
+    ['git@github-work:o/r.git', true],
+    ['https://octocorp.ghe.com/o/r.git', true],
+    ['https://github.acme.com/o/r.git', true],
+    ['https://api.github.com/o/r.git', true],
+    ['git@gitlab.com:g/p.git', false],
+    ['https://git.corp.example/g/sub/p.git', false],
+    ['https://mygithub.example/o/r.git', false],
+  ])('%s is a GitHub host: %s', (url, expected) => {
+    expect(isGithubHost(parseRemoteHost(url) as string)).toBe(expected);
+  });
 });
 
 describe('parseRemoteKey', () => {

@@ -40,9 +40,9 @@ describe('bot worker deny rules', () => {
   });
 
   it('the rule set is pinned: any change to a rule is a deliberate change to this test', () => {
-    expect(BOT_WORKER_DENY.length).toBe(879);
+    expect(BOT_WORKER_DENY.length).toBe(887);
     expect(createHash('sha256').update(JSON.stringify(BOT_WORKER_DENY)).digest('hex'))
-      .toBe('5ff364c62e783bb37296381bde30460ebf074f0f85c0321e4acd963661c67010');
+      .toBe('1221b60d342929d6d521c88ad5e71f35a78fd473764b4635e795d5cb8951e281');
   });
 
   it('no rule holds a `:*` that does not end it (Claude Code reads such a rule with a notice)', () => {
@@ -201,6 +201,7 @@ describe('bot worker deny rules', () => {
     'glab mr create --push=true',
     'glab mr new-for 34',
     'glab mr create-for 34',
+    'glab mr create --source-branch wtask/a --yes --attach ./file.png',
   ])('refuses %s', (cmd) => {
     expect(denied(cmd)).toBe(true);
   });

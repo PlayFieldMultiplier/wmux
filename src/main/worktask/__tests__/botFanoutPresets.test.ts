@@ -92,7 +92,14 @@ describe('bot fan-out presets', () => {
     expect(repro).toContain('open a DRAFT merge request (`glab mr create --draft --source-branch <your branch> --yes`)');
     expect(repro).toContain('the merge request stays a draft for the owner to mark ready');
     expect(repro).not.toMatch(/glab mr update/);
-    expect(composeBotWorkerPrompt('maintain', '', undefined, 'gitlab.com/g/p')).toContain('open a merge request (`glab mr create --source-branch <your branch> --yes`)');
+    const maintain = composeBotWorkerPrompt('maintain', '', undefined, 'gitlab.com/g/p');
+    expect(maintain).toContain('open a merge request (`glab mr create --source-branch <your branch> --yes`)');
+    expect(maintain).toContain('`glab mr view <n> --output json` and `glab mr diff <n>`');
+    expect(maintain).not.toMatch(/gh pr/);
+    // A GitHub SSH host alias, GitHub Enterprise Cloud and GHES keep gh.
+    for (const key of ['github-work/o/r', 'octocorp.ghe.com/o/r', 'github.acme.com/o/r']) {
+      expect(botReviewHost(key), key).toBe('github');
+    }
     // No host to read: the GitHub lines, as before the host was read.
     for (const name of ['repro', 'maintain', 'default']) {
       expect(composeBotWorkerPrompt(name, 'x')).toBe(composeBotWorkerPrompt(name, 'x', undefined, 'github.com/o/r'));

@@ -90,10 +90,10 @@ const GLAB_NESTED_WRITE_VERBS: readonly (readonly [string, string, readonly stri
   ['repo', 'members', ['add', 'remove']],
   ['issue', 'board', ['create', 'new']],
 ];
-/** `glab mr create` options that push the branch or merge it later (as the
- *  first word after the verb: Codex rules match leading words). */
+/** `glab mr create` options that push the branch, upload a file or merge it
+ *  later (as the first word after the verb: Codex rules match leading words). */
 const GLAB_CREATE_PUSH_OPTIONS = [
-  '-f', '-yf', '-wf', '-ywf', '-wyf',
+  '-f', '-yf', '-wf', '-ywf', '-wyf', '--attach',
   ...['--fill', '--push', '--auto-merge', '--create-source-branch'].flatMap((o) => [o, `${o}=true`]),
 ];
 /** glab options that take a value, spelled as their own word. */

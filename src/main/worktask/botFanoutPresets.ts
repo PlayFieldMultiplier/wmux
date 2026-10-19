@@ -96,6 +96,8 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 /** The review request's words and commands for one host. */
 interface ReviewRequestLines {
   noun: string;
+  /** How a worker reads a merged request's title and changed files. */
+  read: string;
   link: string;
   create: string;
   draft: string;
@@ -105,6 +107,7 @@ interface ReviewRequestLines {
 const REVIEW_REQUEST: Readonly<Record<BotReviewHost, ReviewRequestLines>> = {
   github: {
     noun: 'pull request',
+    read: 'the merged pull requests the task names (`gh pr view <n> --json files,title`)',
     link: 'the PR link',
     create: '`gh pr create --head <your branch>`',
     draft: '`gh pr create --draft --head <your branch>`',
@@ -112,6 +115,7 @@ const REVIEW_REQUEST: Readonly<Record<BotReviewHost, ReviewRequestLines>> = {
   },
   gitlab: {
     noun: 'merge request',
+    read: 'the merged merge requests the task names (`glab mr view <n> --output json` and `glab mr diff <n>`)',
     link: 'the merge request link',
     create: '`glab mr create --source-branch <your branch> --yes`',
     draft: '`glab mr create --draft --source-branch <your branch> --yes`',
@@ -166,7 +170,7 @@ const MAINTAIN_PROMPT = (ctx: BotPresetPromptContext): string => [
   'You are a maintain worker. Your worktree is a fresh branch from origin\'s default branch. You keep the verify-wmux feature map (`.claude/skills/verify-wmux/references/features/*.md`) true to the code.',
   '',
   'What you can do here:',
-  '- Read the merged pull requests the task names (`gh pr view <n> --json files,title`) and the renderer handles they touched.',
+  `- Read ${review(ctx).read} and the renderer handles they touched.`,
   '- Update the matching feature entries, keeping each entry\'s four-section shape.',
   '- Run each affected verify-wmux recipe once when it can run here, and note the ones that cannot.',
   `- Commit, push with the \`task_push\` tool, and open a ${review(ctx).noun} (${review(ctx).create}) with what changed and why.`,
