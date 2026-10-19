@@ -37,10 +37,10 @@ async function world(opts: { restart?: boolean; extraPane?: boolean } = {}) {
   }
   const state = { recoveryDone: true, sessions: [{ id: ptyId, agentProcessAlive: false, commandRunning: false }] as WorkerSessionInfo[],
     presence: 'absent' as 'running' | 'absent' | 'unknown', reason: 'idle-shell',
-    incarnationId: 'incarnation-one', inputRevision: 0, outputBytes: 100, down: false };
+    incarnationId: 'incarnation-one', inputRevision: 0, outputBytes: 100, recoveredAgentUnconfirmed: false, down: false };
   const reading = (probeProcess = true) => ({ presence: probeProcess ? state.presence : 'unknown',
     reason: probeProcess ? state.reason : 'not-probed', incarnationId: state.incarnationId,
-    inputRevision: state.inputRevision, outputBytes: state.outputBytes });
+    inputRevision: state.inputRevision, outputBytes: state.outputBytes, recoveredAgentUnconfirmed: state.recoveredAgentUnconfirmed });
   const rpc = vi.fn(async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
     if (state.down) throw new Error('daemon unavailable');
     return method === 'daemon.listSessions' ? { recoveryDone: state.recoveryDone, sessions: state.sessions } : reading(params?.probeProcess === true);
@@ -84,6 +84,33 @@ describe('interrupted fan-out startup recovery', () => {
     expect(await w.recovery.pass()).toBe(0);
     expect(w.readSessions).not.toHaveBeenCalled();
     expect(w.ledger.get(taskId)?.status).toBe('working');
+    await w.dispose();
+  });
+
+  it('leaves a cold-respawned shell to Resume even with the same incarnation and a reset zero input counter', async () => {
+    const w = await world();
+    w.state.sessions[0].recoveredAgentUnconfirmed = true;
+    expect(w.state.inputRevision).toBe(0);
+    expect(await w.recovery.pass()).toBe(0);
+    expect(w.readPresence).not.toHaveBeenCalled();
+    expect(w.ledger.get(taskId)).toMatchObject({ status: 'working', rev: 1 });
+    expect(w.queue.list()).toHaveLength(0);
+    await w.dispose();
+  });
+
+  it.each(['before process read', 'before final witness'])('keeps a cold restart unknown when it occurs after the session list, %s', async (timing) => {
+    const w = await world();
+    const original = w.readPresence.getMockImplementation();
+    if (!original) throw new Error('presence reader is missing');
+    w.readPresence.mockImplementationOnce(async (id, probeProcess) => {
+      if (timing === 'before process read') w.state.recoveredAgentUnconfirmed = true;
+      const before = await original(id, probeProcess);
+      w.state.recoveredAgentUnconfirmed = true;
+      return before;
+    });
+    expect(await w.recovery.pass()).toBe(0);
+    expect(w.ledger.get(taskId)).toMatchObject({ status: 'working', rev: 1 });
+    expect(w.queue.list()).toHaveLength(0);
     await w.dispose();
   });
 
@@ -143,9 +170,10 @@ describe('interrupted fan-out startup recovery', () => {
     await w.dispose();
   });
 
-  it.each(['wsl-line-never-read', 'wsl-launch-failed', 'missing witness'])('does not fail on unsupported process evidence: %s', async (reason) => {
+  it.each(['wsl-line-never-read', 'wsl-launch-failed', 'missing witness', 'missing recovery flag'])('does not fail on unsupported process evidence: %s', async (reason) => {
     const w = await world();
     if (reason === 'missing witness') w.readPresence.mockResolvedValueOnce({ presence: 'absent', reason: 'idle-shell', incarnationId: 'old-daemon' });
+    else if (reason === 'missing recovery flag') w.readPresence.mockResolvedValueOnce({ presence: 'absent', reason: 'idle-shell', incarnationId: 'old-daemon', inputRevision: 0, outputBytes: 100 });
     else w.state.reason = reason;
     expect(await w.recovery.pass()).toBe(0);
     expect(w.ledger.get(taskId)?.status).toBe('working');
@@ -161,7 +189,7 @@ describe('interrupted fan-out startup recovery', () => {
     await w.dispose();
   });
 
-  it.each(['input', 'output', 'incarnation', 'agent'])('rechecks the final pane witness inside the ledger queue after %s changes', async (change) => {
+  it.each(['input', 'output', 'incarnation', 'agent'])('rechecks the final pane witness before idle-only ledger admission after %s changes', async (change) => {
     const w = await world();
     const original = w.readPresence.getMockImplementation();
     if (!original) throw new Error('presence reader is missing');
@@ -178,7 +206,52 @@ describe('interrupted fan-out startup recovery', () => {
     await w.dispose();
   });
 
-  it('rechecks the generation when an earlier real ledger append delayed the queued failure', async () => {
+  it('does not block an unrelated ledger append while the final daemon witness is pending', async () => {
+    const w = await world();
+    let finishWitness!: (value: unknown) => void;
+    const original = w.readPresence.getMockImplementation();
+    if (!original) throw new Error('presence reader is missing');
+    w.readPresence.mockImplementation((id, probeProcess) => probeProcess ? original(id, true)
+      : new Promise<unknown>((resolve) => { finishWitness = resolve; }));
+    const pass = w.recovery.pass();
+    try {
+      await vi.waitFor(() => expect(w.readPresence).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+      let appended = false;
+      const unrelated = w.ledger.recordOrphanedEvent({ ownerWorkspaceId, seq: 1, payload: {} }).then(() => { appended = true; });
+      await vi.waitFor(() => expect(appended).toBe(true), { timeout: 5_000 });
+      finishWitness(w.reading(false));
+      expect(await pass).toBe(1);
+      await unrelated;
+    } finally { finishWitness?.(w.reading(false)); await pass; await w.dispose(); }
+  });
+
+  it.each(['success', 'error'])('skips a busy ledger instead of queuing old proof, and retries after the preceding append ends with %s', async (outcome) => {
+    const w = await world();
+    let unblock!: () => void;
+    const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+    let entered = false;
+    const append = fs.promises.appendFile;
+    const spy = vi.spyOn(fs.promises, 'appendFile').mockImplementation(async (file, data, options) => {
+      if (String(data).includes('"op":"orphaned_event"')) {
+        entered = true; await blocked;
+        if (outcome === 'error') throw new Error('unrelated append failed');
+      }
+      return append(file, data, options);
+    });
+    try {
+      const earlier = w.ledger.recordOrphanedEvent({ ownerWorkspaceId, seq: 1, payload: {} }).catch(() => undefined);
+      await vi.waitFor(() => expect(entered).toBe(true), { timeout: 5_000 });
+      expect(await w.recovery.pass()).toBe(0);
+      expect(w.ledger.get(taskId)?.status).toBe('working');
+      expect(w.readPresence).toHaveBeenCalledTimes(2);
+      unblock(); await earlier;
+      spy.mockRestore();
+      expect(await w.recovery.pass()).toBe(1);
+      expect(w.readPresence).toHaveBeenCalledTimes(4);
+    } finally { unblock(); spy.mockRestore(); await w.dispose(); }
+  });
+
+  it('never applies proof skipped during a busy append to a newer launch generation', async () => {
     const w = await world();
     let unblock!: () => void;
     const blocked = new Promise<void>((resolve) => { unblock = resolve; });
@@ -190,7 +263,7 @@ describe('interrupted fan-out startup recovery', () => {
     try {
       const earlier = w.ledger.recordOrphanedEvent({ ownerWorkspaceId, seq: 1, payload: {} });
       const pass = w.recovery.pass();
-      await vi.waitFor(() => expect(w.readPresence).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      await vi.waitFor(() => expect(w.readPresence).toHaveBeenCalledTimes(2), { timeout: 5_000 });
       w.launches.beginLaunch(w.req);
       unblock(); await earlier;
       expect(await pass).toBe(0);

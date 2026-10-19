@@ -5166,6 +5166,7 @@ function registerRpcHandlers(
       return { session: session ?? null, incarnationId: session?.meta.incarnationId ?? null,
         inputRevision: session?.bridge.getInputRevision() ?? 0,
         outputBytes: session?.ringBuffer.totalBytesWritten ?? 0,
+        recoveredAgentUnconfirmed: session?.recoveredAgentUnconfirmed === true,
         inputs: {
           sessionExists: !!session,
           agentName: readDaemonAgentState(id).agentName ?? null,

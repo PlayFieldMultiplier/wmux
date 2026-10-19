@@ -161,7 +161,6 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   });
   const recoverLaunches = (): void => { void launchRecovery.pass(); };
   offs.push(() => launchRecovery.dispose());
-  offs.push(getWorkspaceMirror().onSnapshot(recoverLaunches));
   const recoverySweep = setInterval(recoverLaunches, LIVENESS_REFRESH_MS);
   recoverySweep.unref?.();
   offs.push(() => clearInterval(recoverySweep));

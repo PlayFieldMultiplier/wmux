@@ -150,22 +150,23 @@ describe('decideLaunchPresence', () => {
 
 describe('a launch-presence process read is fenced to its pane', () => {
   const snapshot = (): LaunchPresenceSnapshot => ({ session: {}, inputs: { ...base },
-    incarnationId: 'incarnation-one', inputRevision: 1, outputBytes: 100 });
+    incarnationId: 'incarnation-one', inputRevision: 1, outputBytes: 100, recoveredAgentUnconfirmed: false });
 
   it('returns an idle-shell witness only when input, output and session lifetime did not change', async () => {
     const state = snapshot();
     expect(await inspectLaunchPresence(() => ({ ...state }), true, async () => ({ ok: true }))).toEqual({
-      presence: 'absent', reason: 'idle-shell', incarnationId: state.incarnationId, inputRevision: 1, outputBytes: 100,
+      presence: 'absent', reason: 'idle-shell', incarnationId: state.incarnationId, inputRevision: 1, outputBytes: 100, recoveredAgentUnconfirmed: false,
     });
   });
 
-  it.each(['input', 'output', 'incarnation', 'replacement', 'gone'])('refuses a process result after %s changed during its await', async (change) => {
+  it.each(['input', 'output', 'incarnation', 'replacement', 'gone', 'cold recovery'])('refuses a process result after %s changed during its await', async (change) => {
     const state = snapshot();
     const result = await inspectLaunchPresence(() => ({ ...state }), true, async () => {
       if (change === 'input') state.inputRevision++;
       else if (change === 'output') state.outputBytes++;
       else if (change === 'incarnation') state.incarnationId = 'incarnation-two';
       else if (change === 'replacement') state.session = {};
+      else if (change === 'cold recovery') state.recoveredAgentUnconfirmed = true;
       else { state.session = null; state.inputs = { ...base, sessionExists: false }; }
       return { ok: true };
     });
@@ -218,5 +219,6 @@ describe('daemon.getLaunchPresence wiring', () => {
     expect(body).toContain('agentProcessTracker.idleShellState(original.meta.pid, original.meta.env, true, { fresh: true })');
     expect(body).toContain('inputRevision: session?.bridge.getInputRevision()');
     expect(body).toContain('outputBytes: session?.ringBuffer.totalBytesWritten');
+    expect(body).toContain('recoveredAgentUnconfirmed: session?.recoveredAgentUnconfirmed === true');
   });
 });

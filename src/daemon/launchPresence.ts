@@ -98,12 +98,14 @@ export interface LaunchPresenceSnapshot {
   incarnationId: string | null;
   inputRevision: number;
   outputBytes: number;
+  recoveredAgentUnconfirmed: boolean;
 }
 
 export interface LaunchPresenceReading extends LaunchPresenceVerdict {
   incarnationId: string | null;
   inputRevision: number;
   outputBytes: number;
+  recoveredAgentUnconfirmed: boolean;
 }
 
 /** A process read is evidence only while the pane and its input/output stay
@@ -120,13 +122,14 @@ export async function inspectLaunchPresence(
     try { idleShell = await idleShellState(); } catch { idleShell = 'error'; }
     after = read();
     if (after.session !== before.session || after.incarnationId !== before.incarnationId
-      || after.inputRevision !== before.inputRevision || after.outputBytes !== before.outputBytes) {
+      || after.inputRevision !== before.inputRevision || after.outputBytes !== before.outputBytes
+      || after.recoveredAgentUnconfirmed !== before.recoveredAgentUnconfirmed) {
       return { presence: 'unknown', reason: 'pane-changed', incarnationId: after.incarnationId,
-        inputRevision: after.inputRevision, outputBytes: after.outputBytes };
+        inputRevision: after.inputRevision, outputBytes: after.outputBytes, recoveredAgentUnconfirmed: after.recoveredAgentUnconfirmed };
     }
   }
   return { ...decideLaunchPresence({ ...after.inputs, idleShell }), incarnationId: after.incarnationId,
-    inputRevision: after.inputRevision, outputBytes: after.outputBytes };
+    inputRevision: after.inputRevision, outputBytes: after.outputBytes, recoveredAgentUnconfirmed: after.recoveredAgentUnconfirmed };
 }
 
 /**

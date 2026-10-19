@@ -7,10 +7,10 @@ import type { LaunchPresenceReading } from '../../daemon/launchPresence';
 import type { WorkerSessionInfo } from './workerReclaim';
 import type { WorkerSlots } from './workerSlots';
 
-export const INTERRUPTED_WORKER_STARTUP = 'Startup was interrupted and no worker is running. Inspect the task pane before retrying; it was not restarted automatically.';
+export const INTERRUPTED_WORKER_STARTUP = 'Startup was interrupted and no worker is running. This task was not restarted automatically.';
 
 export interface WorkerLaunchRecoveryPorts {
-  ledger: Pick<TaskLedger, 'list' | 'get' | 'update'>;
+  ledger: Pick<TaskLedger, 'list' | 'get' | 'updateIfIdle'>;
   launches: Pick<WorkerSlots, 'launchOf' | 'panesOf' | 'beganInThisRun' | 'leaseRecovery'>;
   /** daemon.listSessions with withRecovery:true; old/unknown replies are not evidence. */
   readSessions(): Promise<unknown>;
@@ -23,6 +23,7 @@ function presenceReading(value: unknown): LaunchPresenceReading | null {
   if (!value || typeof value !== 'object') return null;
   const r = value as Record<string, unknown>;
   return typeof r.incarnationId === 'string' && r.incarnationId.length > 0
+    && typeof r.recoveredAgentUnconfirmed === 'boolean'
     && Number.isSafeInteger(r.inputRevision) && Number(r.inputRevision) >= 0
     && Number.isSafeInteger(r.outputBytes) && Number(r.outputBytes) >= 0
     ? value as LaunchPresenceReading : null;
@@ -72,6 +73,9 @@ export function createWorkerLaunchRecovery(ports: WorkerLaunchRecoveryPorts): { 
           // Multiple panes need one atomic observation across them. Until
           // that exists, do not retain an early absence across another probe.
           if (panes.length !== 1 || !sessions.has(panes[0])) continue;
+          // A daemon cold restart respawns a fresh bridge whose input counter
+          // is zero even when this worker ran before. Its Resume path owns it.
+          if (sessions.get(panes[0])?.recoveredAgentUnconfirmed === true) continue;
           if (panes.some((ptyId) => sessions.get(ptyId)?.agentProcessAlive === true)) {
             candidates.delete(id);
             continue;
@@ -85,23 +89,23 @@ export function createWorkerLaunchRecovery(ports: WorkerLaunchRecoveryPorts): { 
           // A delivered line may still be queued while shell startup runs
           // builtins with no child process. Only zero input proves that this
           // incarnation cannot execute an already-delivered launch later.
-          if (!active || before?.presence !== 'absent' || before.reason !== 'idle-shell' || before.inputRevision !== 0) continue;
+          if (!active || before?.presence !== 'absent' || before.reason !== 'idle-shell'
+            || before.inputRevision !== 0 || before.recoveredAgentUnconfirmed) continue;
           let release: (() => void) | undefined;
           try {
-            const result = await ports.ledger.update({ id, status: 'failed', expectedRev: candidate.rev,
-              actor: { kind: 'system', workspaceId: candidate.ownerWorkspaceId }, summary: INTERRUPTED_WORKER_STARTUP }, async () => {
-              // This runs inside the ledger queue, after any earlier write.
-              // Re-read the witness now, then lease the exact generation so a
-              // relaunch cannot begin while the ledger append is in flight.
-              const after = presenceReading(await ports.readPresence(ptyId, false).catch(() => null));
+            // No daemon call holds the global ledger queue. Busy admission
+            // discards this proof; the next periodic pass takes fresh evidence.
+            const after = presenceReading(await ports.readPresence(ptyId, false).catch(() => null));
+            const result = await ports.ledger.updateIfIdle({ id, status: 'failed', expectedRev: candidate.rev,
+              actor: { kind: 'system', workspaceId: candidate.ownerWorkspaceId }, summary: INTERRUPTED_WORKER_STARTUP }, () => {
               const nowPanes = ports.launches.panesOf(id, candidate.gen);
-              if (!active || !after || after.presence !== 'unknown' || after.reason !== 'not-probed'
+              if (!active || !after || after.presence !== 'unknown' || after.reason !== 'not-probed' || after.recoveredAgentUnconfirmed
                 || after.incarnationId !== before.incarnationId || after.inputRevision !== before.inputRevision || after.outputBytes !== before.outputBytes
                 || !current(id, candidate) || nowPanes.length !== 1 || nowPanes[0] !== ptyId) return false;
               release = ports.launches.leaseRecovery(id, candidate.gen) ?? undefined;
               return release !== undefined;
             });
-            if (result.ok && !result.noop) {
+            if (result?.ok && !result.noop) {
               candidates.delete(id);
               failed++;
               ports.changed?.();
