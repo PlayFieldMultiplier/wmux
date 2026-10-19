@@ -15,7 +15,7 @@ vi.mock('../wmux-client', () => ({
 }));
 
 import { sendRpc } from '../wmux-client';
-import { GATE_RUN_RPC_TIMEOUT_MS, registerWorktaskTools } from '../worktask';
+import { GATE_RUN_RPC_TIMEOUT_MS, TASK_CLOSE_RPC_TIMEOUT_MS, registerWorktaskTools } from '../worktask';
 
 const mockSendRpc = sendRpc as unknown as ReturnType<typeof vi.fn>;
 
@@ -67,7 +67,7 @@ describe('tool surface', () => {
 });
 
 describe('the wire call', () => {
-  // task_gate_run also passes its own deadline (the test after this one).
+  // task_gate_run and task_close also pass their own deadline (the test after this one).
   it.each([
     ['task_gate_cancel', 'task.gate.cancel'],
     ['task_adopt', 'task.adopt'],
@@ -75,13 +75,15 @@ describe('the wire call', () => {
     ['task_pr', 'task.pr'],
   ])('%s sends %s with the verified ptyId and camelCase taskId', async (tool, method) => {
     await tools.get(tool)?.({ task_id: 'wtask-1' });
-    expect(mockSendRpc).toHaveBeenCalledWith(method, { taskId: 'wtask-1', senderPtyId: 'pty-mine' });
+    expect(mockSendRpc.mock.calls.at(-1)?.slice(0, 2)).toEqual([method, { taskId: 'wtask-1', senderPtyId: 'pty-mine' }]);
   });
 
-  it('task_gate_run waits long enough for a queued gate and its steps; the others keep the default deadline', async () => {
+  it('task_gate_run waits long enough for a queued gate and its steps, task_close for an approval and a verified stop of its panes; the others keep the default deadline', async () => {
     await tools.get('task_gate_run')?.({ task_id: 'wtask-1' });
     expect(mockSendRpc).toHaveBeenLastCalledWith('task.gate.run', { taskId: 'wtask-1', senderPtyId: 'pty-mine' }, GATE_RUN_RPC_TIMEOUT_MS);
     await tools.get('task_close')?.({ task_id: 'wtask-1' });
+    expect(mockSendRpc).toHaveBeenLastCalledWith('task.close', { taskId: 'wtask-1', senderPtyId: 'pty-mine' }, TASK_CLOSE_RPC_TIMEOUT_MS);
+    await tools.get('task_adopt')?.({ task_id: 'wtask-1' });
     expect(mockSendRpc.mock.calls.at(-1)).toHaveLength(2);
   });
 
@@ -92,9 +94,9 @@ describe('the wire call', () => {
 
   it('task_close passes keep_folder as keepFolder only when it is true (#2388)', async () => {
     await tools.get('task_close')?.({ task_id: 'wtask-1', keep_folder: true });
-    expect(mockSendRpc).toHaveBeenLastCalledWith('task.close', { taskId: 'wtask-1', keepFolder: true, senderPtyId: 'pty-mine' });
+    expect(mockSendRpc).toHaveBeenLastCalledWith('task.close', { taskId: 'wtask-1', keepFolder: true, senderPtyId: 'pty-mine' }, TASK_CLOSE_RPC_TIMEOUT_MS);
     await tools.get('task_close')?.({ task_id: 'wtask-1', keep_folder: false });
-    expect(mockSendRpc).toHaveBeenLastCalledWith('task.close', { taskId: 'wtask-1', senderPtyId: 'pty-mine' });
+    expect(mockSendRpc).toHaveBeenLastCalledWith('task.close', { taskId: 'wtask-1', senderPtyId: 'pty-mine' }, TASK_CLOSE_RPC_TIMEOUT_MS);
     expect(Object.keys(shapes.get('task_close') ?? {})).toEqual(['task_id', 'keep_folder']);
   });
 

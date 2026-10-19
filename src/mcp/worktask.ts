@@ -138,6 +138,14 @@ function refusalHeader(result: unknown, copy: RefusalCopy): string | null {
  *  error while the gate went on running. */
 export const GATE_RUN_RPC_TIMEOUT_MS = 60 * 60_000;
 
+/** How long task_close waits for main's answer (#2388): a close may wait
+ *  for the person's approval (up to 45 s), and stops each pane started in the
+ *  task's folder with its whole process tree, one after another, each
+ *  checked gone (up to a minute a pane). The default deadline (10 s) answered
+ *  a transport error while the close went on, so the caller never saw its
+ *  refusal. */
+export const TASK_CLOSE_RPC_TIMEOUT_MS = 10 * 60_000;
+
 async function callTask(
   method: string,
   params: Record<string, unknown>,
@@ -234,7 +242,7 @@ export function registerWorktaskTools(server: McpServer, deps: WorktaskToolDeps)
         .optional()
         .describe('Close the task without removing anything: its folder stays on disk. Default false.'),
     },
-    async ({ task_id, keep_folder }) => callTask('task.close', { taskId: task_id, ...(keep_folder === true ? { keepFolder: true } : {}) }, deps, CLOSE_REFUSAL),
+    async ({ task_id, keep_folder }) => callTask('task.close', { taskId: task_id, ...(keep_folder === true ? { keepFolder: true } : {}) }, deps, CLOSE_REFUSAL, TASK_CLOSE_RPC_TIMEOUT_MS),
   );
 
   server.tool(
