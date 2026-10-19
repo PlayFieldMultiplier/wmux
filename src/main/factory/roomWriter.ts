@@ -1229,7 +1229,7 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
         title: scope === 'bot'
           ? `${name} is waiting for a worker slot: ${running} of its ${limit} are in use`
           : scope === 'wmux'
-            ? `${name} is waiting for a worker slot: ${running} of wmux's ${limit} live fan-out tasks are running`
+            ? `${name} is waiting: all ${limit} tasks that can run at once are in use (including yours). It will start automatically when one finishes.`
             : `${name} is waiting for a worker slot: the bots use ${running} of ${limit}`,
         body: 'This is not a budget limit: a slot frees when a running worker ends.',
         refs: baseRefs,

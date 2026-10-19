@@ -417,7 +417,7 @@ describe('facts → system cards', () => {
     const [factory] = writeFactCards(w, fact('bot.workers_full', { id: 'f-s2', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'factory', running: 3, limit: 3, held: true } }), bots);
     expect(factory.title).toMatch(/ is waiting for a worker slot: the bots use 3 of 3$/);
     const [wmux] = writeFactCards(w, fact('bot.workers_full', { id: 'f-s4', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'wmux', running: 8, limit: 8, held: true } }), bots);
-    expect(wmux.title).toMatch(/ is waiting for a worker slot: 8 of wmux's 8 live fan-out tasks are running$/);
+    expect(wmux.title).toMatch(/ is waiting: all 8 tasks that can run at once are in use \(including yours\)\. It will start automatically when one finishes\.$/);
     expect(wmux.notice).toEqual({ code: 'workers.full', args: { bot: expect.any(String), scope: 'wmux', inUse: 8, cap: 8 } });
     expect(writeFactCards(w, fact('bot.workers_full', { id: 'f-s3', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'elsewhere', running: 1, limit: 1 } }), bots)).toEqual([]);
   });

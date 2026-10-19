@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentSlots } from '../agentSlots';
-import { HELD_PER_BOT_MAX, HeldFanouts, heldWakeIsFor, releaseHeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../heldFanouts';
+import { HELD_PER_BOT_MAX, HeldFanouts, heldWakeIsFor, installHeldFanoutReleases, releaseHeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../heldFanouts';
 import { holderInputsChanged } from '../holderInputs';
 import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../secretRedaction';
 import { WakeQueue, dropQueuedHeldFanoutWakes, setWakeQueue, wakeQueuePath } from '../wakeQueue';
@@ -99,6 +99,50 @@ describe('HeldFanouts', () => {
     live = 7;
     expect((await r.held.releaseNow()).map((h) => h.titles)).toEqual([['verify #7']]);
     expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
+  });
+
+  it('the owner\'s own task ending, or its workspace closing, wakes a bot held at the wmux-wide live cap (no bot record moves)', async () => {
+    const r = rig(dir);
+    // Seven of the owner's tasks and one bot worker fill wmux's 8.
+    const ownerLive = new Set(['o1', 'o2', 'o3', 'o4', 'o5', 'o6', 'o7']);
+    r.ports.openWorkers = () => ({ bot: 0, factory: 1, live: ownerLive.size + 1 });
+    r.ports.liveLimit = () => 8;
+    const transitions = new Set<() => void>();
+    const snapshots = new Set<() => void>();
+    let workspaces = ['ws-o1', 'ws-o2'];
+    const off = installHeldFanoutReleases({
+      onTransition: (fn) => { transitions.add(fn); return () => transitions.delete(fn); },
+      onWorkspaces: (fn) => { snapshots.add(fn); return () => snapshots.delete(fn); },
+      openWorkspaces: () => workspaces,
+    });
+    expect(r.held.hold(request(BOT_A, 'verify #7'))).not.toBeNull();
+    // A transition while wmux is still full wakes nobody.
+    for (const fn of transitions) fn();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(r.queue.list({ botId: BOT_A })).toEqual([]);
+    // The owner's task o1 ends and its agent is gone: its row's transition
+    // checks again, well before the 60-second recheck.
+    ownerLive.delete('o1');
+    for (const fn of transitions) fn();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
+    expect(r.held.list()).toEqual([]);
+
+    // Held again; this time the owner closes a task workspace (no row moves).
+    r.ports.openWorkers = () => ({ bot: 0, factory: 1, live: 8 });
+    r.held.hold(request(BOT_A, 'verify #8'));
+    // A tree push that changes no open workspace (a focus) checks nothing.
+    for (const fn of snapshots) fn();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(r.held.list()).toHaveLength(1);
+    r.ports.openWorkers = () => ({ bot: 0, factory: 1, live: 7 });
+    workspaces = ['ws-o2'];
+    for (const fn of snapshots) fn();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(r.held.list()).toEqual([]);
+    expect(r.queue.list({ botId: BOT_A })).toHaveLength(2);
+    off();
+    expect(transitions.size + snapshots.size).toBe(0);
   });
 
   it('one free live slot wakes one held request, not two', async () => {

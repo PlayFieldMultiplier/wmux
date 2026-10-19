@@ -486,3 +486,42 @@ export function releaseHeldFanouts(): void {
     /* the next free slot checks again */
   }
 }
+
+/**
+ * The release points no holder record moves for, wired by the worker
+ * lifecycle host. A slot of the wmux-wide live cap is also freed by the
+ * owner's own fan-out tasks, which move no bot record: a task row that
+ * ends (any task's, the owner's too) and a task workspace that closes (the
+ * open workspaces change) check the held requests again. A pane whose agent
+ * exits in a workspace left open moves neither; the recheck timer covers it.
+ * Returns the unsubscribe.
+ */
+export function installHeldFanoutReleases(ports: {
+  onTransition: (fn: () => void) => () => void;
+  onWorkspaces: (fn: () => void) => () => void;
+  /** The open workspace ids now, or null before the renderer pushed its tree. */
+  openWorkspaces: () => readonly string[] | null;
+  release?: () => void;
+}): () => void {
+  const release = ports.release ?? releaseHeldFanouts;
+  const key = (): string | null => {
+    try {
+      const ids = ports.openWorkspaces();
+      return ids ? [...ids].sort().join('\n') : null;
+    } catch {
+      return null;
+    }
+  };
+  let last = key();
+  const offTransition = ports.onTransition(() => release());
+  const offWorkspaces = ports.onWorkspaces(() => {
+    const now = key();
+    if (now === last) return;
+    last = now;
+    release();
+  });
+  return () => {
+    offTransition();
+    offWorkspaces();
+  };
+}

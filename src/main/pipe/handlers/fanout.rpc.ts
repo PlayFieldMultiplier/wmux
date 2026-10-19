@@ -786,7 +786,7 @@ export function workersFullText(full: WorkerSlotsFull, held: boolean, heldNote =
   const whose = full.scope === 'factory'
     ? `the factory's bot worker slots are all in use (${full.running} of ${full.limit}, every bot's workers counted)`
     : full.scope === 'wmux'
-      ? `every live fan-out slot across wmux is in use (${full.running} of ${full.limit}, the owner's fan-outs counted)`
+      ? `all ${full.limit} tasks that can run at once across wmux are in use (${full.running} of ${full.limit}, the owner's own tasks included)`
       : `all of this bot's worker slots are in use (${full.running} of ${full.limit})${heldNote}`;
   return `${whose}. This is not a budget limit: ${held
     ? 'wmux holds this fan-out and wakes you with its arguments when a slot frees, to start it then'

@@ -691,7 +691,7 @@ describe('task.fanout.start — bot origin', () => {
     r.setLiveTasks(FANOUT_LIVE_TASK_CAP);
     const e = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier')));
     expect(e.code).toBe('RESOURCE_EXHAUSTED');
-    expect(e.message).toMatch(/every live fan-out slot across wmux is in use \(8 of 8/);
+    expect(e.message).toMatch(/all 8 tasks that can run at once across wmux are in use \(8 of 8/);
     expect(e.message).toMatch(/wakes you/);
     expect(r.port.full.map(({ scope, running, limit }) => ({ scope, running, limit }))).toEqual([{ scope: 'wmux', running: 8, limit: 8 }]);
     expect(r.port.full[0].request).toMatchObject({ args: { titles: ['x'], preset: 'verify' } });

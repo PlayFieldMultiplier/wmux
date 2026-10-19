@@ -1967,7 +1967,7 @@ export const pl = {
   'room.notice.budget.exhausted.workers': "Nowy worker wystartuje, gdy jeden z działających się zakończy.",
   'room.notice.workers.full.bot': "{bot} czeka na wolne miejsce dla workera: zajęte {inUse} z {cap}",
   'room.notice.workers.full.factory': "{bot} czeka na wolne miejsce dla workera: boty zajmują {inUse} z {cap}",
-  'room.notice.workers.full.wmux': "{bot} czeka na wolne miejsce dla workera: w wmux działa {inUse} z {cap} zadań fan-out",
+  'room.notice.workers.full.wmux': "{bot} czeka: wszystkie {cap} zadań, które mogą działać jednocześnie, są zajęte (także Twoje). Zacznie się automatycznie, gdy jedno się zakończy.",
   'room.notice.workers.full.body': "To nie jest limit budżetu: miejsce zwolni się, gdy jeden z działających workerów się zakończy.",
   'room.notice.bot.usageLimit': "{bot} osiągnął limit użycia; wznowi pracę o {time}",
   'room.notice.budget.held': "W kolejce: {bot} nie ma już tur",
