@@ -112,15 +112,25 @@ describe('diff:scanRepos', () => {
     expect(new Set(reads).size).toBe(reads.length);
   });
 
+  it('keeps one read budget across both levels', async () => {
+    for (let i = 0; i < 25; i++) for (let j = 0; j < 25; j++) mkdirSync(join(root, `p${i}`, `c${j}`), { recursive: true });
+    expect(await scanRepos(root, async (d) => d)).toEqual([]);
+    const reads = vi.mocked(readdir).mock.calls.map((c) => String(c[0]));
+    expect(reads.length).toBe(SCAN_MAX_DIRS);
+    expect(new Set(reads).size).toBe(reads.length);
+  });
+
   it('neither lists nor probes a folder the access check refuses below an allowed root', async () => {
     initRepo(join(root, 'app'));
     initRepo(join(root, 'secret'));
     initRepo(join(root, 'secret-group', 'inner'));
-    const refused = (p: unknown) => String(p).startsWith(join(root, 'secret'));
+    initRepo(join(root, 'group', 'ok'));
+    initRepo(join(root, 'group', 'secret'));
+    const refused = (p: unknown) => [join(root, 'secret'), join(root, 'group', 'secret')].some((r) => String(p).startsWith(r));
     const actual = (await vi.importActual<typeof import('../../ipc/handlers/fs.handler')>('../../ipc/handlers/fs.handler')).resolveAccessiblePath;
     vi.mocked(resolveAccessiblePath).mockImplementation(async (p) => (refused(p) ? null : actual(p)));
     try {
-      expect(await scan(root)).toEqual({ ok: true, repoPaths: [top(join(root, 'app'))] });
+      expect(await scan(root)).toEqual({ ok: true, repoPaths: [top(join(root, 'app')), top(join(root, 'group', 'ok'))].sort((a, b) => a.localeCompare(b)) });
       expect(vi.mocked(resolveAccessiblePath).mock.calls.some(([p]) => refused(p))).toBe(true);
       expect(vi.mocked(readdir).mock.calls.some(([p]) => refused(p))).toBe(false);
       expect(vi.mocked(git).mock.calls.some(([, cwd]) => refused(cwd))).toBe(false);
