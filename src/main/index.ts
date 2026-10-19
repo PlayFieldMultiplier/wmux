@@ -263,7 +263,9 @@ if (process.platform === 'win32') {
   const squirrelCmd = process.argv[1];
   if (isSquirrelInstallerEvent(squirrelCmd)) {
     isSquirrelEvent = true;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- Preserve installer-only module loading.
     const path = require('path');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- Preserve installer-only module loading.
     const { spawn } = require('child_process');
     const updateExe = path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
     const target = path.basename(process.execPath);
@@ -402,6 +404,7 @@ if (!app.isPackaged && !process.env.WMUX_DATA_SUFFIX) {
 let portableDataForced = false;
 if (process.platform === 'darwin' && app.isPackaged && !process.env.WMUX_DATA_SUFFIX) {
   let realExecPath = process.execPath;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires -- Keep this early portable-data check's loading order.
   try { realExecPath = require('fs').realpathSync(process.execPath); } catch { /* keep execPath */ }
   if (shouldUsePortableData(realExecPath, os.homedir(), process.env)) {
     portableDataForced = true;
@@ -885,6 +888,7 @@ function attachWindowRecovery(win: BrowserWindow): void {
     }
     lastCrashTime = now;
     if (crashCount >= 3) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- Preserve the existing crash-only dialog lookup.
       require('electron').dialog.showErrorBox('wmux', 'Renderer crashed repeatedly. Please restart.');
       app.quit();
       return;
@@ -1416,7 +1420,11 @@ const onClaudeTurnEnd = (workspaceId: string): void => {
   }
 };
 getAccountRotationService().setClaudeUsage(accountUsageService);
-const disposeHooksRpc = registerHooksRpc(rpcRouter, () => mainWindow, hookSignalRouter, () => daemonClient, onClaudeTurnEnd, getWorkspaceMirror, localCompletionAlarm);
+const disposeHooksRpc = registerHooksRpc(
+  rpcRouter, () => mainWindow, hookSignalRouter, () => daemonClient, onClaudeTurnEnd,
+  getWorkspaceMirror, localCompletionAlarm,
+  (ptyId, signal) => ptyBridge.noteAcceptedHook(ptyId, signal),
+);
 
 // ─── Phase 2 — Anthropic 5h/7d usage meter ──────────────────────────────────
 // Opt-in. Stays idle until the renderer sends IPC.USAGE_TOGGLE with `true`.
@@ -1844,6 +1852,7 @@ app.on('ready', async () => {
   if (process.platform === 'darwin' && app.isPackaged && process.env.WMUX_DATA_SUFFIX !== PORTABLE_DATA_SUFFIX) {
     const shimTimer = setTimeout(() => {
       try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires -- Preserve deferred CLI-shim module loading.
         const fs = require('fs') as typeof import('fs');
         const markerPath = `${getWmuxHomeDir()}/cli-shim-darwin-attempted`;
         if (fs.existsSync(markerPath) && !cliShim.darwinShimNeedsRepair(process.execPath)) return;

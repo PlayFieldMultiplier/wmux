@@ -59,6 +59,7 @@ import { readLastAssistantMessage } from '../../claude/lastAssistantMessage';
 import { deliverBrainPtyHookSignal } from '../../deck/brainPtyHookBus';
 import { getWorkspaceMirror, type WorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { isStaleInterruptedStop, normalizeHookCue, type CompletionAlarm } from '../../../shared/hooks/CompletionAlarm';
+import { isHookIdentityCandidate } from '../../../shared/hooks/detectorIdentity';
 import type { AgentLastMessage } from '../../../shared/events';
 import type { NotificationCategory } from '../../../shared/types';
 import os from 'node:os';
@@ -482,6 +483,9 @@ export function registerHooksRpc(
   // this daemon-UNREACHABLE fallback path. Optional: an absent alarm keeps the
   // pre-gate immediate-emit behavior (tests, or a boot ordering gap).
   alarm?: CompletionAlarm,
+  // One accepted local, exact-pane liveness signal. Identity only: the
+  // receiving PTYBridge rechecks freshness against the detector's boundary.
+  onAcceptedHook?: (ptyId: string, signal: AgentSignal) => void,
 ): () => void {
   const meter = hookRouter.getLatencyMeter();
   // Short-TTL, coalescing cache so a burst of hooks in one turn collapses to
@@ -672,6 +676,15 @@ export function registerHooksRpc(
     // alert. The permission_prompt Notification the daemon raises on instead
     // (#2390) would be a second alert for the same dialog here.
     if (signal.kind === 'agent.awaiting_input' && signal.payload?.['hook_event_name'] === 'Notification') return { ok: true };
+
+    if (signal.ptyId === ptyId && isHookIdentityCandidate(signal)) {
+      try {
+        onAcceptedHook?.(ptyId, signal);
+      } catch (err) {
+        // Identity enrichment cannot fail the canonical hook processing.
+        console.warn(`[hooks.signal] detector identity update failed: ${String(err)}`);
+      }
+    }
 
     // X6 ③: persist the resume binding for session-LIFECYCLE kinds. This runs
     // BEFORE the isEmitKind gate below, which drops SessionStart for the
@@ -1566,6 +1579,7 @@ function normalizeCwd(p: string): string {
   }
   // Canonicalize: collapse `./`, `../`, and duplicate separators.
   // Lazy require to keep this module testable without a Node mock.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const posix = require('path').posix as { normalize(s: string): string };
   out = posix.normalize(out);
   // Strip trailing slash to make prefix logic uniform.
@@ -1620,6 +1634,7 @@ function categoryFor(signal: AgentSignal): NotificationCategory {
     case 'agent.awaiting_input':
     // A gated tool call blocks the agent exactly like a question does, so it
     // rides the same mute category as an approval.
+    // falls through
     case 'agent.awaiting_permission':
       return 'approval';
     // `agent.stop_failure` below is a turn END, not a blocked tool call: it
