@@ -4,10 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_MAX, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
+import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_MAX, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, resolvePaneOwner, setReclaimedPaneSource, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
 import { __resetWorkspaceMirrorForTest, getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
+import { noteBotWorkerSession } from '../../agents/botWorkerMergeGuard';
 import { MODEL_ENV_MARKER } from '../../../shared/workerLaunch';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
@@ -436,5 +437,62 @@ describe('readers of the recorded launch', () => {
     const back = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner', pane: { sessionId: 'p-t', workspaceId: 'ws-t' } });
     s.launched('t', back.gen, 'ws-t', 'p-t');
     expect(s.workspaceOf('ws-t')).toEqual({ taskId: 't', gen: back.gen });
+  });
+});
+
+describe('resolvePaneOwner: one answer to which task a pane is the worker of', () => {
+  afterEach(() => setReclaimedPaneSource(null));
+
+  it('reads the launch record, then the pane\'s own session record, then a reclaim record; a source that throws is skipped', () => {
+    const launch = (id: string) => (id === 'p1' ? { taskId: 'a', gen: 2, botId: 'bot-0000000a' } : null);
+    const sessionRecord = (id: string) => (id === 'p1' || id === 'p2' ? { taskId: 'b', botId: 'bot-0000000b' } : null);
+    const reclaimed = (id: string) => (id === 'p2' || id === 'p3' ? { taskId: 'c', botId: 'bot-0000000c' } : null);
+    expect(resolvePaneOwner('p1', { launch, reclaimed, sessionRecord })).toEqual({ taskId: 'a', gen: 2, botId: 'bot-0000000a' });
+    // The pane's own session record and a reclaim record disagree: its own decides.
+    expect(resolvePaneOwner('p2', { launch, reclaimed, sessionRecord })).toEqual({ taskId: 'b', botId: 'bot-0000000b' });
+    expect(resolvePaneOwner('p3', { launch, reclaimed, sessionRecord })).toEqual({ taskId: 'c', botId: 'bot-0000000c' });
+    expect(resolvePaneOwner('p4', { launch, reclaimed, sessionRecord })).toBeNull();
+    const boom = (): never => {
+      throw new Error('unreadable');
+    };
+    expect(resolvePaneOwner('p3', { launch: boom, sessionRecord: boom, reclaimed })).toEqual({ taskId: 'c', botId: 'bot-0000000c' });
+    // A session record with no task (another pane of the workspace) names none.
+    expect(resolvePaneOwner('p3', { sessionRecord: () => ({ taskId: '' }) })).toBeNull();
+  });
+
+  it('a relaunch in a pane whose session record and a reclaim record name different tasks is the session record\'s task\'s', () => {
+    const s = store(tmp());
+    setWorkerSlotsForTests(s);
+    noteBotWorkerSession('pty-x', 'ws-own', undefined, { taskId: 'own' });
+    setReclaimedPaneSource((id) => (id === 'pty-x' ? { taskId: 'listed', botId: BOT } : null));
+    const settle = beginPaneRelaunch('pty-x');
+    settle?.(true);
+    expect(s.launchOf('own')).toMatchObject({ gen: 1, state: 'launched', origin: 'bot' });
+    expect(s.launchOf('listed')).toBeNull();
+    expect(s.paneOf('pty-x')).toEqual({ taskId: 'own', gen: 1, workspaceId: 'ws-own' });
+  });
+
+  it('a relaunch in a pane only a reclaim record lists is that task\'s, a bot\'s', () => {
+    const s = store(tmp());
+    setWorkerSlotsForTests(s);
+    setReclaimedPaneSource((id) => (id === 'pty-r' ? { taskId: 'r', botId: BOT } : null));
+    beginPaneRelaunch('pty-r')?.(true);
+    expect(s.launchOf('r')).toMatchObject({ gen: 1, state: 'launched', origin: 'bot', botId: BOT });
+  });
+
+  it('another pane of a task\'s workspace (a session record with no task) is still the workspace\'s task\'s where the record and the ledger agree', async () => {
+    const dir = tmp();
+    const ledger = new TaskLedger({ dir });
+    setTaskLedgerForTests(ledger);
+    await ledger.register({ id: 'w', taskWorkspaceId: 'ws-w', ownerWorkspaceId: 'ws-owner', title: 'w' });
+    const s = store(dir, { rows: ledger.list({}) });
+    setWorkerSlotsForTests(s);
+    noteBotWorkerSession('pty-second', 'ws-w');
+    getWorkspaceMirror().setSnapshot({ ts: 0, entries: [{ id: 'ws-w', name: 'ws-w', ptyIds: ['pty-second'] }], fleets: [] });
+    const settle = beginPaneRelaunch('pty-second');
+    expect(settle).not.toBeNull();
+    settle?.(true);
+    expect(s.paneOf('pty-second')).toEqual({ taskId: 'w', gen: 2, workspaceId: 'ws-w' });
+    setTaskLedgerForTests(null);
   });
 });
