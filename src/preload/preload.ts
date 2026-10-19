@@ -1203,6 +1203,12 @@ const electronAPI = {
     /** A photo of an owner card, as a data URL. */
     attachment: (params: { workspaceId: string; attachmentId: string }) =>
       ipcRenderer.invoke(IPC.ROOM_ATTACHMENT, params) as Promise<{ ok: true; dataUrl: string; width?: number; height?: number } | { ok: false }>,
+    /** A file a bot attached to its card: text, or a data URL. */
+    fileRead: (params: import('../shared/roomFiles').RoomFileReadParams) =>
+      ipcRenderer.invoke(IPC.ROOM_FILE_READ, params) as Promise<import('../shared/roomFiles').RoomFileReadResult>,
+    /** Save a copy of a bot's file where the owner picks. */
+    fileSave: (params: import('../shared/roomFiles').RoomFileSaveParams) =>
+      ipcRenderer.invoke(IPC.ROOM_FILE_SAVE, params) as Promise<import('../shared/roomFiles').RoomFileSaveResult>,
     /** The composer's photo picker: absolute paths, empty when cancelled. */
     pickAttachments: () => ipcRenderer.invoke(IPC.ROOM_PICK_ATTACHMENTS) as Promise<string[] | { ok: false }>,
     resolve: (params: import('../shared/room').RoomResolveParams) =>
