@@ -13,7 +13,7 @@ import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { WorkerStopPendingError } from '../factoryWiring';
-import { UNKNOWN_ROOT_REFUSAL } from '../../../daemon/automation/verifiedTreeKill';
+import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 import { STOPPED_BY_OWNER, STOPPED_WAKE_KEEP_MS, WORKSPACES_LOADING_MESSAGE, __lateStopCountForTesting, __resetFactoryStopForTesting, installLateStopSweep, isOpenBotTask, isStoppedByOwnerRow, isWakeStoppedByOwner, stopFactoryTask, stopFactoryWork, type FactoryStopPorts } from '../factoryStop';
 import { factorySettingsSetHandler, factoryStopHandler } from '../../ipc/handlers/factory.handler';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings, type FactorySettingsStore } from '../factorySettings';

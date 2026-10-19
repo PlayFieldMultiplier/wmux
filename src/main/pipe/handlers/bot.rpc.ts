@@ -53,7 +53,7 @@ import type { Handoff } from '../../../shared/handoff';
 import type { WakeItem } from '../../../shared/wake';
 import { getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread, wakeReplyTo } from '../../factory/roomWriter';
 import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
-import { UNKNOWN_ROOT_REFUSAL } from '../../../daemon/automation/verifiedTreeKill';
+import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 
 type Refusal = FactoryRefusal<'not_authorized' | 'not_started' | 'invalid_argument' | 'not_found' | 'not_running' | 'too_many_bots' | 'dropped' | 'not_owner_words' | 'not_a_repo' | 'repo_untrusted' | 'no_remote' | 'repo_mismatch' | 'stop_failed'>;
 

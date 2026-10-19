@@ -34,7 +34,7 @@ import {
 } from '../taskFolderCleanup';
 import { ReclaimedWorkers, resumeWorker, type ReclaimedWorker, type WorkerResumePorts } from '../workerReclaim';
 import { deliberateSleep } from '../../../test-utils/waitFor';
-import { UNKNOWN_ROOT_REFUSAL } from '../../../daemon/automation/verifiedTreeKill';
+import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 
 // Every test here runs real git over real worktrees, several spawns in a
 // row; on a loaded CI runner (the Windows shard) one spawn can take a few

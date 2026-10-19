@@ -49,7 +49,7 @@ import { markStoppedByOwner, unmarkStoppedByOwner } from '../deck/fanoutCallerNo
 import { getAgentSlots } from './agentSlots';
 import { forgetHeldFanouts } from './heldFanouts';
 import { dropQueuedHeldFanoutWakes } from './wakeQueue';
-import { UNKNOWN_ROOT_REFUSAL } from '../../daemon/automation/verifiedTreeKill';
+import { UNKNOWN_ROOT_REFUSAL } from '../../shared/rpc';
 
 /** The ledger summary of a task the owner stopped. */
 export const STOPPED_BY_OWNER = 'stopped by owner';

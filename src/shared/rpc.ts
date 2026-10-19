@@ -1291,6 +1291,13 @@ export type DaemonDestroySessionTree =
   | { ok: true; killed: number[] }
   | { ok: false; killed: number[]; survivors: Array<{ pid: number; reason: string; startTime?: string; unverified?: true }> };
 
+/** Why `daemon.destroySession` refuses a `killTree` destroy (#2388): the
+ *  pane's process identity is unknown, so its tree cannot be taken and the
+ *  pane is left as it is. The error's message; main matches it to tell the
+ *  owner why (factoryStop.ts). Bots read it too, and Close and keep folder
+ *  is the owner's control only: named as theirs. */
+export const UNKNOWN_ROOT_REFUSAL = "this pane's process identity isn't known yet, so it was left running and its folder is kept; the owner can close the task with Close and keep folder, which keeps the folder";
+
 /**
  * X6 ③: persist a resume binding on a session (daemon-side, saveImmediate).
  * `id` is the daemon session id (== ptyId); `resumeBinding.sessionId` is the
