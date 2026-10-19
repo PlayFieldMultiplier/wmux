@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readVersionedFile } from '../versionedFile';
+import { createFilePersister, readVersionedFile } from '../versionedFile';
 import { BotFanoutReceipts, RECEIPT_RETAIN_MS } from '../botFanoutReceipts';
 
 let dir = '';
@@ -30,6 +30,24 @@ describe('readVersionedFile', () => {
     const f = path.join(dir, 'x.json');
     fs.writeFileSync(`${f}.bak`, JSON.stringify({ version: 1, items: [1] }));
     expect(readVersionedFile(f, 1)).toEqual({ version: 1, items: [1] });
+  });
+});
+
+describe('createFilePersister.settled', () => {
+  it('waits for every write scheduled so far, the newest snapshot included, and never rejects', async () => {
+    const f = path.join(dir, 'p.json');
+    let n = 0;
+    const p = createFilePersister(f, () => ({ version: 1, n }));
+    n = 1;
+    void p.schedule();
+    n = 2;
+    void p.schedule();
+    await p.settled();
+    expect(readVersionedFile(f, 1)).toEqual({ version: 1, n: 2 });
+    // A write that fails (its folder is a file) settles too.
+    const bad = createFilePersister(path.join(f, 'under-a-file.json'), () => ({ version: 1 }));
+    void bad.schedule().catch(() => undefined);
+    await expect(bad.settled()).resolves.toBeUndefined();
   });
 });
 

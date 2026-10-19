@@ -39,10 +39,23 @@ function row(status: LedgerEntry['status'], over: Partial<LedgerEntry> = {}): Le
 }
 
 let dir: string;
+let stores: ReclaimedWorkers[] = [];
+/** A store whose unawaited writes (setState after a stop) are waited for
+ *  before its folder is removed: a write still running when the folder goes
+ *  fails, or recreates part of it and leaves the removal ENOTEMPTY (#2434). */
+const storeAt = (d: string): ReclaimedWorkers => {
+  const s = ReclaimedWorkers.at(d);
+  stores.push(s);
+  return s;
+};
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-idle-'));
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
+afterEach(async () => {
+  await Promise.all(stores.map((s) => s.settled()));
+  stores = [];
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+});
 
 describe('workerPanesIdle', () => {
   const ended = (over: Partial<PaneActivity> = {}): PaneActivity => ({ status: 'complete', turnStartAt: 0, turnEndAt: 0, ...over });
@@ -75,6 +88,21 @@ describe('workerPanesIdle', () => {
   });
 });
 
+describe('ReclaimedWorkers.settled', () => {
+  it('resolves only once the write a state change did not wait for is on disk', async () => {
+    const store = storeAt(dir);
+    await store.put({
+      taskId: TASK, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${TASK}` as never,
+      ended: 'completed', state: 'resumed', at: 0, endRev: 3, sessions: [{ sessionId: 'daemon-1', cwd: dir, resumeSessionId: UUID }],
+    });
+    expect(store.setState(TASK, 'stopped', 5)).toBe(true);
+    await store.settled();
+    const again = ReclaimedWorkers.at(dir);
+    again.load();
+    expect(again.get(TASK)?.state).toBe('stopped');
+  });
+});
+
 describe('resumedAgentAlive', () => {
   it('counts a live WSL worker (agent not attributed, its launch line running) as alive', () => {
     const rec = { sessions: [{ sessionId: 'daemon-1', cwd: '/mnt/c/x' }] };
@@ -94,7 +122,7 @@ describe('the reported-task stop counts idle from the pane, not the row', () => 
     const pane: PaneActivity = { status: 'complete', turnStartAt: T - MIN, turnEndAt: T };
     let viewing = false;
     const current = row('review_requested', { updatedAt: T });
-    const store = ReclaimedWorkers.at(dir);
+    const store = storeAt(dir);
     const stopAgent = vi.fn(async () => ({ ok: true, stopped: true }));
     const sessions: WorkerSessionInfo[] = [{ id: 'daemon-1', spawnCwd: dir, agentProcessAlive: true, resumeBinding: { agent: 'claude', sessionId: UUID, cwd: dir } }];
     const install = () => installWorkerReclaim({
@@ -141,7 +169,7 @@ describe('the reported-task stop counts idle from the pane, not the row', () => 
 describe('the idle stop of resumed workers', () => {
   let store: ReclaimedWorkers;
   beforeEach(async () => {
-    store = ReclaimedWorkers.at(dir);
+    store = storeAt(dir);
     await store.put({
       taskId: TASK, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${TASK}` as never,
       ended: 'completed', state: 'resumed', at: 0, endRev: 3, sessions: [{ sessionId: 'daemon-1', cwd: dir, resumeSessionId: UUID }],
@@ -268,7 +296,7 @@ describe('a shown worker is protected only for 30 minutes after the owner\'s las
   describe('the idle stop of a resumed worker shown in the Bots panel', () => {
     let store: ReclaimedWorkers;
     beforeEach(async () => {
-      store = ReclaimedWorkers.at(dir);
+      store = storeAt(dir);
       await store.put({
         taskId: TASK, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${TASK}` as never,
         ended: 'completed', state: 'resumed', at: 0, endRev: 3, sessions: [{ sessionId: 'daemon-1', cwd: dir, resumeSessionId: UUID }],
