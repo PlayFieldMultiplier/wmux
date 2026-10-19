@@ -4312,6 +4312,16 @@ arrival order (`seq`, increasing; never sort by `at`).
   approval, and any action the app does not know (any lower-case name may
   come), is approved on the desktop only: show "Approve on the desktop" with
   no buttons. Absent when the desktop no longer has the request.
+- `resumable: true` — on a system card whose `notice.code` is one of
+  `worker.pausedResumable`, `worker.idlePausedResumable`,
+  `worker.openIdlePausedResumable` or `worker.doneResumable`, and whose
+  task's worker can resume **now** (the desktop's own rule for its card's
+  Resume button). Omitted otherwise: an older card for a worker resumed since
+  has none, and a worker stopped again after a resume brings it back without
+  a new card. Show Resume only when it is present, and send its
+  `refs.taskId` to [Resuming a bot worker](#resuming-a-bot-worker-apibot-tasks).
+  It is worked out at read time: a page you kept from an earlier read can be
+  stale, so read the thread again after a resume.
 - `state` — `open` or `resolved` on `question`, `proposal` and `plan` cards.
   `closes: true` — the card records the end of its thread's subject.
 - `replyTo` — the id of a card of the same thread this one answers. A card a
@@ -4773,6 +4783,84 @@ and repository, merges only (`canAlwaysAllow`).
 | `409 {error:"approval-refused", code, message}` | The decision does not apply now: `not_pending`, `too_late` (the merge started), `not_ruleable`, `too_many`, `write_failed`. |
 | `503 {error:"desktop-unavailable"}` / `503 {error:"approvals-unavailable"}` | No desktop, or one that cannot answer approvals (too old, factory not started). |
 | `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. |
+
+#### Resuming a bot worker (`/api/bot-tasks`)
+
+When an idle or finished worker is stopped to free its agent slot, wmux keeps
+its folder and conversation, and its room card offers Resume (`resumable`
+above). This route is that button: main runs the resume the desktop's button
+runs, with the same checks and the same agent slot.
+
+- **Who**: the rule of a bot approval's decision. The operator token, or a
+  paired device whose input grant is on **and was set explicitly**, on a
+  server started with `--allow-input`. Checked before the body is read and
+  again once it is in, on the credential the request carries (same caller,
+  not revoked, still granted). Any caller that authenticates is the owner's
+  token or one of the owner's devices: there is no other "not the owner"
+  answer than the `401`s and `403`s below. A resume that has to open a new
+  workspace in the task's worktree (its pane was closed) needs no other
+  grant.
+- **Discovery**: `/api/config` carries `workerResume: true` for every caller
+  when the attached desktop answers the route (omitted otherwise). It does not
+  say whether this caller may resume; a refused one answers `403`.
+
+**`POST /api/bot-tasks/:taskId/resume`** — body
+`{"clientRequestId": "<13-digit ms>-<lowercase uuid>"}` (the chat send id
+format; any other field is `400`). `taskId` is the card's `refs.taskId`.
+
+```json
+{ "state": "resumed", "taskId": "wtask-…", "workspaceId": "ws-…", "sessionId": "…",
+  "clientRequestId": "1760900000000-0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", "replayed": false }
+```
+
+- `workspaceId` — the workspace the worker runs in: a new one when its pane
+  had been closed. `sessionId` — the worker's pane (`/api/stream?session=`).
+- Then a `worker.resumed` card (`notice.args.by: "owner"`) lands in the task's
+  thread with the same `refs.taskId`. It has no `closes`: the task goes on.
+  The earlier card loses `resumable` on the next read. No `/api/events` event
+  is sent for room cards; read the thread again after the reply.
+
+**Request ids.** One id per tap; send the same id again only to retry that
+tap. The desktop keeps a receipt per caller (the device, or the operator
+token) and id for 10 minutes, the id's own window from its time prefix (an id
+outside it is `400`, so a forgotten receipt never resumes twice):
+
+- The same id while the first request runs waits for it and answers with its
+  outcome. The same id after a success answers that `200` again with
+  `replayed: true`. Nothing starts a second time.
+- A refusal is not kept (nothing started): the same id checks again.
+- After `504 desktop-timeout` the resume may still finish: send the same id
+  again. After a desktop restart the receipt is gone, and a repeat answers
+  `409` `already_running`: for your own retried id, read that as done and
+  read the thread.
+- The same id for another task is `409 request-id-reused`.
+
+| Answer | Meaning |
+|---|---|
+| `200 {state:"resumed", …}` | Resumed (or `replayed: true`: this id's earlier success). |
+| `400 {error:"invalid-resume-request", detail?}` | A malformed body, or a `clientRequestId` that is malformed or outside its window. |
+| `401 {error:"unauthorized", reason?}` | The credential does not authenticate (unknown, or `reason:"revoked"`). |
+| `401 {error:"authorization-expired"}` | The credential no longer authenticates as the same caller once the body was read. Nothing ran. |
+| `403 {error:"read-only"}` | A server started without `--allow-input`. |
+| `403 {error:"read-only: this device was paired without permission to type", detail}` | A device without the input grant. |
+| `403 {error:"read-only: this device has no explicit input grant", detail}` | A device whose grant was never set explicitly. The desktop has to set it first. |
+| `404 {error:"task-not-found"}` | Not a task id, or no such task. |
+| `409 {error:"resume-refused", code, message, cap?}` | The resume does not apply now; see `code` below. |
+| `409 {error:"request-id-reused"}` | This caller used this id for another task. |
+| `429 {error:"resume-busy"}` | Too many receipts held; try again later. |
+| `503 {error:"desktop-unavailable"}` / `503 {error:"resume-unavailable"}` | No desktop, or one that cannot resume (too old, factory not started). |
+| `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer in time (the outcome is unknown: retry with the same id), or answered badly. |
+
+`resume-refused` codes (show an unknown one from its `message`):
+
+| `code` | Meaning |
+|---|---|
+| `already_running` | The worker was resumed already, or an agent or another command runs in its pane or worktree. |
+| `not_reclaimed`, `no_conversation` | Nothing to resume: wmux did not stop this worker, or recorded no conversation for it. |
+| `pane_gone`, `worktree_gone`, `moved`, `unknown_state` | Not resumable from here: the pane is closed with no way to reopen it, the worktree is gone, the pane left the task folder, or what runs in the pane cannot be told (resume on the desktop). |
+| `no_slot` | Every agent slot is in use; `cap` is the limit. A slot frees when a worker ends. |
+| `busy` | Another resume of this task, or a close of its panes, is under way. `Retry-After: 5`. |
+| `not_typed`, `not_reopened`, `not_now` | The resume began but could not finish, and nothing runs. Try again. |
 
 #### Workspace layout tree
 

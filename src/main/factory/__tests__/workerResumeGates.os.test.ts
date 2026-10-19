@@ -12,13 +12,14 @@ import type { LedgerEntry } from '../../../shared/ledger';
 import type { RpcContext } from '../../../shared/rpc';
 import { BOT_RPC } from '../../../shared/bot';
 import { DEFAULT_FACTORY_SETTINGS } from '../../../shared/factorySettings';
-import { ReclaimedWorkers, type WorkerResumePorts } from '../workerReclaim';
+import { ReclaimedWorkers, ownerResumeWorker, type WorkerResumePorts } from '../workerReclaim';
 import { AgentSlots } from '../agentSlots';
 import { registerWorkerResumeRpc } from '../../pipe/handlers/workerResume.rpc';
 import { factoryTaskFoldersCleanHandler, factoryTaskFoldersUsageHandler, factoryWorkerResumeHandler } from '../../ipc/handlers/factory.handler';
 import { TaskFolders } from '../taskFolderCleanup';
 import { botTaskViews } from '../botTasks';
 import { mergeFactorySettings } from '../factorySettings';
+import { clearPhoneWorkerResumeReceipts, handlePhoneWorkerResumeCommand } from '../../phone/PhoneWorkerResume';
 
 /** The slots granted and held by `s`: live workers include them, as the
  *  holder set's count does. */
@@ -117,6 +118,42 @@ describe('FACTORY_WORKER_RESUME (IPC guard)', () => {
     expect(await handler(ok, { taskId: TASK })).toMatchObject({ ok: false, code: 'already_running' });
     expect(p.typeLine).toHaveBeenCalledTimes(1);
     expect(free.inUse()).toBe(1);
+  });
+});
+
+describe('the phone\'s Resume (workspaces.workerResume)', () => {
+  it('runs the owner\'s resume the desktop button runs: the same slot, once per request id', async () => {
+    clearPhoneWorkerResumeReceipts();
+    const now = Date.now();
+    const rid = (n: number): string => `${now}-0a9b8c7d-6e5f-4a3b-8c2d-${String(n).padStart(12, '0')}`;
+    const p = ports();
+    const free: AgentSlots = new AgentSlots({ cap: () => 3, runningBots: () => 1, liveWorkers: () => ownSlots(free), pollMs: 60_000 });
+    const acquire = vi.spyOn(free, 'tryAcquire');
+    const deps = { resume: (taskId: string) => ownerResumeWorker(taskId, () => p, () => free), taskKnown: () => true, now: () => now, log: () => undefined };
+    const phone = (n: number) => handlePhoneWorkerResumeCommand('workspaces.workerResume', { taskId: TASK, clientRequestId: rid(n), deviceId: 'd1' }, deps);
+    expect(await phone(1)).toEqual({ resumed: { taskId: TASK, workspaceId: 'ws-task', sessionId: 'daemon-1' } });
+    expect(acquire).toHaveBeenCalledWith({ taskId: TASK, botId: BOT, byOwner: true });
+    expect(free.inUse()).toBe(1);
+    expect(store.get(TASK)?.state).toBe('resumed');
+    // The same request again: replayed, nothing typed again.
+    expect(await phone(1)).toMatchObject({ replayed: true });
+    // Another request for the resumed worker: refused as the desktop's second click is.
+    expect(await phone(2)).toEqual({ refused: { code: 'already_running', message: 'this worker was resumed already' } });
+    expect(p.typeLine).toHaveBeenCalledTimes(1);
+    expect(free.inUse()).toBe(1);
+  });
+
+  it('refuses with the cap when no slot is free, and starts nothing', async () => {
+    clearPhoneWorkerResumeReceipts();
+    const now = Date.now();
+    const p = ports();
+    const busy: AgentSlots = new AgentSlots({ cap: () => 3, runningBots: () => 3, liveWorkers: () => ownSlots(busy), pollMs: 60_000 });
+    const r = await handlePhoneWorkerResumeCommand('workspaces.workerResume', { taskId: TASK, clientRequestId: `${now}-0a9b8c7d-6e5f-4a3b-8c2d-000000000009` }, {
+      resume: (taskId) => ownerResumeWorker(taskId, () => p, () => busy), taskKnown: () => true, now: () => now, log: () => undefined,
+    });
+    expect(r).toMatchObject({ refused: { code: 'no_slot', cap: 3 } });
+    expect(p.typeLine).not.toHaveBeenCalled();
+    expect(store.get(TASK)?.state).toBe('stopped');
   });
 });
 

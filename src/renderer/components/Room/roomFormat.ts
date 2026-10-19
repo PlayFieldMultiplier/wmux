@@ -6,6 +6,7 @@ import type { CardKind, RoomCard, ThreadId, ThreadSummary } from '../../../share
 import type { FactoryBotRow } from './factoryPorts';
 import { getLocale } from '../../i18n';
 import { closesFence, fenceOpenLength } from '../../../shared/markdownFence';
+import { RESUMABLE_NOTICE_CODES } from '../../../shared/phoneRoomNotices';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -197,8 +198,7 @@ const UNTITLED_NOTICE_CODES: ReadonlySet<string> = new Set([
   'worker.done', 'worker.doneResumable', 'worker.resumed',
 ]);
 
-/** The notice codes that tell the owner a stopped worker can resume. */
-export const RESUMABLE_NOTICE_CODES: ReadonlySet<string> = new Set(['worker.pausedResumable', 'worker.idlePausedResumable', 'worker.openIdlePausedResumable', 'worker.doneResumable']);
+export { RESUMABLE_NOTICE_CODES };
 
 /** The task a system card offers Resume for: a card saying a stopped
  *  worker can resume (by its notice code), whose task's worker is still

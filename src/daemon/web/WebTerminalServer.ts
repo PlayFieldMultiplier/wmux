@@ -189,6 +189,7 @@ import { factoryOn, moaConfigFields } from './factoryConfig';
 import { ROOMS_ROUTE, ROOM_ATTACHMENT_ROUTE, ROOM_MESSAGES_ROUTE, roomAttachmentResponse, roomsResponse, roomsSupported } from './rooms';
 import { BOTS_ROUTE, botsResponse, botsSupported } from './bots';
 import { BOT_APPROVALS_ROUTE, botApprovalDecisionRefusal, botApprovalsResponse, botApprovalsSupported, type BotApprovalsCaller } from './botApprovals';
+import { WORKER_RESUME_ROUTE, workerResumeRefusal, workerResumeResponse, workerResumeSupported } from './workerResume';
 import type { ChatV2Binding } from '../../shared/chatv2/ipc';
 import { buildWebCsp, WEB_APP_FONT_FILE } from './webCsp';
 // Type only — the channel service implementation stays out of this module.
@@ -2830,6 +2831,9 @@ export class WebTerminalServer {
         // `/api/bot-approvals/*` answer here: a desktop that announced both
         // commands. OMITTED otherwise. A decision still needs the grant.
         ...(botApprovalsSupported(this.availableDesktop()) ? { botApprovals: true } : {}),
+        // `POST /api/bot-tasks/:taskId/resume` answers here: a desktop that
+        // announced the command. OMITTED otherwise. A resume still needs the grant.
+        ...(workerResumeSupported(this.availableDesktop()) ? { workerResume: true } : {}),
         // Whether `/api/devices` answers here, and how much of the roster this
         // caller may see and act on (see handleDeviceList). OMITTED, not
         // false, when the device store cannot list, revoke and set grants —
@@ -3075,6 +3079,23 @@ export class WebTerminalServer {
       const refused = botApprovalDecisionRefusal(caller, readOnly);
       if (refused) this.json(res,refused.status,refused.body,{'Cache-Control':'no-store'});
       else this.readJsonBody(req,res,answer);
+      return;
+    }
+    // A stopped bot worker's Resume: the operator, or a device with an
+    // explicit input grant, as for a bot approval's decision (workerResume.ts).
+    const workerResumeRoute = req.method === 'POST' ? WORKER_RESUME_ROUTE.exec(p) : null;
+    if (workerResumeRoute) {
+      const caller = this.botApprovalsCaller(principal);
+      const readOnly = this.opts?.allowInput !== true;
+      const reauthorize = async () => {
+        const fresh = await this.authenticate(req,url,false).catch(() => ({ok:false as const}));
+        return fresh.ok && sameCaller(principal, fresh.principal) ? this.botApprovalsCaller(fresh.principal) : null;
+      };
+      // Refused before the body is read; checked again once it is in.
+      const refused = workerResumeRefusal(caller, readOnly);
+      if (refused) this.json(res,refused.status,refused.body,{'Cache-Control':'no-store'});
+      else this.readJsonBody(req,res,(body: unknown) => void workerResumeResponse(workerResumeRoute[1], body, { caller, desktop: this.availableDesktop(), readOnly, reauthorize })
+        .then(r => this.json(res,r.status,r.body,{'Cache-Control':'no-store',...r.headers})));
       return;
     }
     if ((req.method === 'GET' && p === '/api/desktop-workspaces') || (req.method === 'POST' && p === '/api/workspaces')) return this.handlePhoneWorkspaces(req,res,url,principal);

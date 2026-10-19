@@ -23,6 +23,10 @@ export interface PhoneNoticeCode {
   more?: readonly string[];
 }
 
+/** The notice codes that tell the owner a stopped worker can resume (the
+ *  desktop's card Resume, and the phone card's `resumable`). */
+export const RESUMABLE_NOTICE_CODES: ReadonlySet<string> = new Set(['worker.pausedResumable', 'worker.idlePausedResumable', 'worker.openIdlePausedResumable', 'worker.doneResumable']);
+
 /** The longest string arg the phone receives (a task title, a gate's error,
  *  the slot holders). */
 export const PHONE_NOTICE_ARG_MAX = 500;
