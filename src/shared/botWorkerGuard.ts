@@ -45,7 +45,8 @@ export function ghApiDeny(rest: string): string[] {
 /** `glab <group> <verb>` in every spelling glab runs it: with options
  *  (`-R g/p`) between the group and the verb. glab takes no options before
  *  the group (`glab -R g/p mr list` is refused by glab itself), so there is
- *  no spelling for that. Pure. */
+ *  no spelling for that. Callers name each of a verb's aliases too
+ *  (`mr accept` is `mr merge`). Pure. */
 export function glabSubcommandDeny(group: string, verb: string): string[] {
   return [`Bash(glab ${group} ${verb}*)`, `Bash(glab ${group} -* ${verb})`, `Bash(glab ${group} -* ${verb} *)`];
 }
@@ -60,7 +61,9 @@ export function glabApiDeny(rest: string): string[] {
  *  approval are writes, refused with the other `glab api` writes below). */
 export const BOT_WORKER_MERGE_DENY: readonly string[] = [
   ...ghSubcommandDeny('pr', 'merge'), ...ghApiDeny('*merge*'),
-  ...glabSubcommandDeny('mr', 'merge'), ...glabSubcommandDeny('mr', 'approve'),
+  ...['merge', 'accept', 'approve'].flatMap((v) => glabSubcommandDeny('mr', v)),
+  // A new merge request set to merge itself once its checks pass.
+  ...['create', 'new'].flatMap((v) => ['', '-* '].map((pre) => `Bash(glab mr ${pre}${v} *--auto-merge*)`)),
 ];
 
 /** The default branch names main always treats as a repository's default
@@ -108,7 +111,11 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
   // stack, `mr rebase` rewrites the source branch on the server and `mr for`
   // creates one there. A plain `glab mr create --source-branch <branch>`
   // opens the request for the branch main pushed.
-  ...['', '-* '].flatMap((pre) => ['*--fill*', '*--push*', '*--create-source-branch*', '-f*', '* -f*'].map((rest) => `Bash(glab mr ${pre}create ${rest})`)),
+  // `-f` also in a bundle with create's other switches (`-yf`, `-wf`).
+  ...['create', 'new'].flatMap((v) => ['', '-* '].flatMap((pre) => [
+    '*--fill*', '*--push*', '*--create-source-branch*',
+    ...['f', 'yf', 'wf', 'ywf', 'wyf'].flatMap((b) => [`-${b}*`, `* -${b}*`]),
+  ].map((rest) => `Bash(glab mr ${pre}${v} ${rest})`))),
   ...glabSubcommandDeny('mr', 'rebase'), ...glabSubcommandDeny('mr', 'for'), ...glabSubcommandDeny('stack', 'sync'),
 ];
 
@@ -130,11 +137,13 @@ export const BOT_WORKER_PUBLIC_DENY: readonly string[] = [
   // The same acts through glab, under the owner's GitLab identity, and every
   // `glab api` write. Editing a merge request (`mr update`, which also marks
   // one ready) is the owner's.
-  ...['create', 'close', 'note', 'delete', 'reopen', 'update'].flatMap((v) => glabSubcommandDeny('issue', v)),
-  ...['note', 'revoke', 'close', 'reopen', 'delete', 'update'].flatMap((v) => glabSubcommandDeny('mr', v)),
+  // Each verb with its aliases (`issue new`, `mr comment`, `variable remove`).
+  ...['create', 'new', 'close', 'note', 'comment', 'delete', 'del', 'reopen', 'update'].flatMap((v) => glabSubcommandDeny('issue', v)),
+  ...['note', 'comment', 'revoke', 'unapprove', 'close', 'reopen', 'delete', 'del', 'update'].flatMap((v) => glabSubcommandDeny('mr', v)),
   ...['create', 'delete', 'upload'].flatMap((v) => glabSubcommandDeny('release', v)),
-  ...['create', 'update', 'delete', 'transfer', 'archive', 'mirror', 'publish'].flatMap((v) => glabSubcommandDeny('repo', v)),
-  ...['set', 'update', 'delete'].flatMap((v) => glabSubcommandDeny('variable', v)),
+  ...['create', 'fork', 'update', 'delete', 'transfer', 'archive', 'mirror', 'publish'].flatMap((v) => glabSubcommandDeny('repo', v)),
+  ...['add', 'remove'].flatMap((v) => glabSubcommandDeny('repo members', v)),
+  ...['set', 'new', 'create', 'update', 'delete', 'remove'].flatMap((v) => glabSubcommandDeny('variable', v)),
   ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [...glabApiDeny(`*-X*${x}*`), ...glabApiDeny(`*--method*${x}*`)])),
   ...['* -f*', '* -F*', '*--field*', '*--raw-field*', '*--form*', '*--input*'].flatMap(glabApiDeny),
   ...glabSubcommandDeny('alias', 'set'),
