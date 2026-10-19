@@ -13,13 +13,18 @@ import { broadcastSettledIdle, settleHookTurnToIdle } from './turnSettle';
  * the socket, and the health ping subscribes again (#2244). Everything pushed
  * in between is gone: an `activity.active` that started a turn (it fires once
  * per output cycle), the hook signals that open and close a turn (they ride
- * the same subscription as `agent.event`), detector statuses, and titles. The
- * panes then show what they showed before the gap until their next event.
+ * the same subscription as `agent.event`), detector statuses, titles, cwd
+ * changes, and `session.died`. The panes then show what they showed before the
+ * gap until their next event, and a pane whose shell exited has no next event:
+ * the daemon also closes its session pipe, which main does not read as a death.
  *
  * This reads each pane's state from the daemon once and corrects only where
- * the pane shows something else. It notifies nobody: a completion or a
- * question from the gap is shown as the pane's status, not replayed as a toast.
- * A second pass right after the first changes nothing.
+ * the pane shows something else. A session the daemon lists dead that main
+ * still tracks gets the `session:died` it missed, from the tombstone's exit
+ * code and signal, so every listener ends it as it would have live. It
+ * notifies nobody: a completion or a question from the gap is shown as the
+ * pane's status, not replayed as a toast. A second pass right after the first
+ * changes nothing.
  */
 
 /** One pane's daemon-side state, as `DaemonClient.getAgentState` reads it. */
@@ -34,11 +39,29 @@ export interface DaemonPaneState {
   hookReports?: boolean;
 }
 
+/** The `daemon.listSessions` fields the resync reads; raw off the RPC. */
+export interface DaemonSessionRow {
+  id?: unknown;
+  state?: unknown;
+  cwd?: unknown;
+  exitCode?: unknown;
+  exitSignal?: unknown;
+}
+
 export interface ResubscribeResyncDeps {
-  /** The daemon's session ids. */
-  listSessionIds: () => Promise<string[]>;
+  /** The daemon's sessions, dead ones included (`daemon.listSessions`). */
+  listSessions: () => Promise<DaemonSessionRow[]>;
+  /**
+   * Main's cwd for a session it still tracks; undefined once it heard the
+   * session end (or never attached it).
+   */
+  trackedCwd: (id: string) => string | undefined;
   /** One pane's state, or null when it could not be read. */
   readState: (id: string) => Promise<DaemonPaneState | null>;
+  /** Ends a session the way a live `session.died` does. */
+  emitDied: (id: string, exitCode: number | null, signal?: number) => void;
+  /** Sends a cwd the way a live `cwd.changed` does. */
+  emitCwd: (id: string, cwd: string) => void;
   /** Sends a title to the renderer the way a live `title.changed` does. */
   emitTitle: (id: string, title: string) => void;
   hookRouter: HookSignalRouter | null;
@@ -50,15 +73,38 @@ export interface ResubscribeResyncResult {
   panes: number;
   statusesCorrected: number;
   titles: number;
+  deaths: number;
+  cwds: number;
 }
 
 export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promise<ResubscribeResyncResult> {
-  const result: ResubscribeResyncResult = { panes: 0, statusesCorrected: 0, titles: 0 };
-  let ids: string[];
+  const result: ResubscribeResyncResult = { panes: 0, statusesCorrected: 0, titles: 0, deaths: 0, cwds: 0 };
+  let rows: DaemonSessionRow[];
   try {
-    ids = await deps.listSessionIds();
+    rows = await deps.listSessions();
   } catch {
     return result;
+  }
+  const ids: string[] = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = row?.id;
+    if (typeof id !== 'string' || id.length === 0) continue;
+    const tracked = deps.trackedCwd(id);
+    if (row.state === 'dead') {
+      // A tombstone's agent state is what it held when the shell went, so it
+      // is never read as the pane's status.
+      if (tracked === undefined) continue;
+      const exitCode = typeof row.exitCode === 'number' ? row.exitCode : null;
+      const signal = typeof row.exitSignal === 'number' ? row.exitSignal : undefined;
+      deps.emitDied(id, exitCode, signal);
+      result.deaths += 1;
+      continue;
+    }
+    if (tracked !== undefined && typeof row.cwd === 'string' && row.cwd.length > 0 && row.cwd !== tracked) {
+      deps.emitCwd(id, row.cwd);
+      result.cwds += 1;
+    }
+    ids.push(id);
   }
   const states = await Promise.all(ids.map(async (id) => {
     try {

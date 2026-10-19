@@ -19,20 +19,32 @@ vi.mock('../../ipc/handlers/metadata.handler', () => ({
   hasOutstandingRunningClaim: () => false,
 }));
 
-import { resyncAfterResubscribe, type DaemonPaneState } from '../resubscribeResync';
+import { resyncAfterResubscribe, type DaemonPaneState, type DaemonSessionRow } from '../resubscribeResync';
 import { HookSignalRouter } from '../../hooks/HookSignalRouter';
 import { SignalLatencyMeter } from '../../../shared/hooks/SignalLatencyMeter';
 
-function run(states: Record<string, DaemonPaneState | null>, router: HookSignalRouter | null = null) {
+function run(
+  states: Record<string, DaemonPaneState | null>,
+  router: HookSignalRouter | null = null,
+  opts: { rows?: DaemonSessionRow[]; tracked?: Map<string, string> } = {},
+) {
   const titles: Array<[string, string]> = [];
+  const died: Array<[string, number | null, number | undefined]> = [];
+  const cwds: Array<[string, string]> = [];
+  const read: string[] = [];
+  const tracked = opts.tracked ?? new Map<string, string>();
   const result = resyncAfterResubscribe({
-    listSessionIds: async () => Object.keys(states),
-    readState: async (id) => states[id] ?? null,
+    listSessions: async () => opts.rows ?? Object.keys(states).map((id) => ({ id, state: 'attached' })),
+    trackedCwd: (id) => tracked.get(id),
+    readState: async (id) => { read.push(id); return states[id] ?? null; },
+    // As live: the died listeners drop main's record of the session.
+    emitDied: (id, exitCode, signal) => { died.push([id, exitCode, signal]); tracked.delete(id); },
+    emitCwd: (id, cwd) => { cwds.push([id, cwd]); tracked.set(id, cwd); },
     emitTitle: (id, title) => { titles.push([id, title]); },
     hookRouter: router,
     win: null,
   });
-  return { result, titles };
+  return { result, titles, died, cwds, read };
 }
 
 function statuses(): Array<{ ptyId?: string; agentStatus?: string; settled?: boolean }> {
@@ -134,5 +146,52 @@ describe('resyncAfterResubscribe (#2263)', () => {
     mocks.broadcastMetadataUpdate.mockClear();
     expect((await run(states, router).result).statusesCorrected).toBe(0);
     expect(mocks.broadcastMetadataUpdate).not.toHaveBeenCalled();
+  });
+
+  it('ends a session that exited in the gap, with its code and signal, and reads no status off the tombstone', async () => {
+    mocks.last.set('dead', 'running');
+    const tracked = new Map([['dead', '/repo'], ['live', '/repo']]);
+    const rows = [
+      { id: 'dead', state: 'dead', cwd: '/repo', exitCode: 0, exitSignal: 15 },
+      { id: 'live', state: 'attached', cwd: '/repo' },
+    ];
+    const states = {
+      dead: { agentStatus: 'running' as const, agentName: 'Claude Code', title: 'stale', turnOpen: true },
+      live: { agentStatus: 'idle' as const, agentName: null, turnOpen: false },
+    };
+    const first = run(states, router, { rows, tracked });
+    const r = await first.result;
+    expect(first.died).toEqual([['dead', 0, 15]]);
+    expect(r.deaths).toBe(1);
+    expect(first.read).toEqual(['live']);
+    expect(first.titles).toEqual([]);
+    expect(statuses()).toEqual([]);
+
+    // Its died listeners dropped it: the next pass leaves it alone.
+    const second = run(states, router, { rows, tracked });
+    expect((await second.result).deaths).toBe(0);
+    expect(second.died).toEqual([]);
+  });
+
+  it('leaves a tombstone main no longer tracks alone', async () => {
+    const { result, died } = run({}, router, {
+      rows: [{ id: 'old', state: 'dead', exitCode: 1 }],
+    });
+    expect((await result).deaths).toBe(0);
+    expect(died).toEqual([]);
+  });
+
+  it('sends a tracked pane\'s cwd that changed in the gap, once', async () => {
+    const tracked = new Map([['d1', '/old'], ['d2', '/same']]);
+    const rows = [
+      { id: 'd1', state: 'attached', cwd: '/new' },
+      { id: 'd2', state: 'attached', cwd: '/same' },
+      { id: 'untracked', state: 'attached', cwd: '/elsewhere' },
+    ];
+    const first = run({}, null, { rows, tracked });
+    expect((await first.result).cwds).toBe(1);
+    expect(first.cwds).toEqual([['d1', '/new']]);
+    const second = run({}, null, { rows, tracked });
+    expect((await second.result).cwds).toBe(0);
   });
 });

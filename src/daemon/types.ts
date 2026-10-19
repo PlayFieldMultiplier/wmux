@@ -120,7 +120,7 @@ export interface DaemonSession {
     displayName: string;
   };
   exitCode?: number | null;
-  exitSignal?: string | null;
+  exitSignal?: number | null;
   deadTtlHours: number;
   bufferDumpPath?: string;
   /**

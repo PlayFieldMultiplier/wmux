@@ -184,7 +184,7 @@ import { DaemonClient, getDaemonPipeName, readDaemonAuthToken } from './DaemonCl
 import { raceDaemonShutdown } from './daemonShutdownRace';
 import { migrateScrollbackOnce } from './scrollback/legacyMigration';
 import { DaemonNotificationRouter } from './notification/DaemonNotificationRouter';
-import { resyncAfterResubscribe } from './notification/resubscribeResync';
+import { resyncAfterResubscribe, type DaemonSessionRow } from './notification/resubscribeResync';
 import { markRendererNotificationListenerNotReady } from './notification/rendererNotificationReadiness';
 import { RemoteInboxBridge } from './lanlink/RemoteInboxBridge';
 import { RemoteA2aBridge } from './a2a/RemoteA2aBridge';
@@ -230,7 +230,7 @@ import { metadataStore } from './metadata/MetadataStore';
 import { collectLegacyMetadata } from './metadata/legacyMigration';
 import { sessionManager, registerSessionHandlers } from './ipc/handlers/session.handler';
 import { eventBus } from './events/EventBus';
-import { broadcastMetadataUpdate, currentPrOfPty, resetPollCacheOnRendererLoad } from './ipc/handlers/metadata.handler';
+import { broadcastMetadataUpdate, currentPrOfPty, getCwd, resetPollCacheOnRendererLoad } from './ipc/handlers/metadata.handler';
 import { broadcastSettledIdle } from './notification/turnSettle';
 import { readOrchRole } from '../shared/orchestratorRole';
 import { initLogSink, isBrokenPipeError, logLine, stdioErrorsConsumed } from './util/logSink';
@@ -2374,18 +2374,23 @@ app.on('ready', async () => {
     },
     // #2263 — the daemon dropped our event subscription and the health probe
     // subscribed again; correct the panes from a fresh read of their state.
+    // main's cwd cache doubles as its record of which sessions it still
+    // tracks: pty create and reattach seed it, and session:died /
+    // session:destroyed drop it (WorkspaceContextRouter).
     onEventsResubscribed: (client) => {
       void resyncAfterResubscribe({
-        listSessionIds: async () => {
-          const sessions = (await client.rpc('daemon.listSessions', {})) as Array<{ id?: unknown }>;
-          return sessions.map((s) => s.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
-        },
+        listSessions: async () => (await client.rpc('daemon.listSessions', {})) as DaemonSessionRow[],
+        trackedCwd: (id) => getCwd(id),
         readState: (id) => client.getAgentState(id),
+        emitDied: (id, exitCode, signal) => {
+          client.emit('session:died', { sessionId: id, exitCode, ...(signal !== undefined ? { signal } : {}) });
+        },
+        emitCwd: (id, cwd) => { client.emit('session:cwd', { sessionId: id, cwd }); },
         emitTitle: (id, title) => { client.emit('session:title', { sessionId: id, title }); },
         hookRouter: hookSignalRouter,
         win: mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
       }).then((r) => {
-        logLine('info', 'daemon-respawn', `resync after resubscribe: ${r.panes} panes, ${r.statusesCorrected} statuses corrected, ${r.titles} titles`);
+        logLine('info', 'daemon-respawn', `resync after resubscribe: ${r.panes} panes, ${r.statusesCorrected} statuses corrected, ${r.titles} titles, ${r.deaths} deaths, ${r.cwds} cwds`);
       }, (err: unknown) => {
         logLine('warn', 'daemon-respawn', `resync after resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
       });

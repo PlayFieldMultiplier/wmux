@@ -1047,6 +1047,10 @@ export class DaemonSessionManager extends EventEmitter {
       }
       meta.state = involuntary ? 'suspended' : 'dead';
       meta.exitCode = payload.exitCode;
+      // Kept beside the code: a killed shell reports exit code 0, and a client
+      // that reads the tombstone instead of the live event needs the signal to
+      // tell it from `exit`.
+      meta.exitSignal = typeof payload.signal === 'number' ? payload.signal : null;
       // Clean up bridge timers/listeners to prevent leaks when sessions die naturally
       managed.bridge.cleanup();
       // Enrich the death event with forensics so the daemon can log WHY a PTY
