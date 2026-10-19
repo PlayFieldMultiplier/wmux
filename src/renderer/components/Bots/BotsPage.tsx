@@ -52,7 +52,7 @@ import { confirmBotsAlreadyOn, useBotsPlanConsent } from './BotsPlanConsent';
 import { showWorkspaces } from '../../utils/showWorkspaces';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine'
-import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';;
+import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';
 import { BOT_NAME_MAX, normalizeBotName, type BotProfile } from '../../../shared/bot';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
 import { allRoomCards, botConversationId, conversationCards, groupConversationId, groupViewCards, roomCardsByWorkspace, type Conversation } from './botsModel';

@@ -22,6 +22,7 @@
 
 import type { FactoryEngineReadiness } from '../../shared/factoryEngine';
 import { probeClaudeExecutable, type ClaudeProbeDeps } from './claudeProbe';
+import { redactSecrets } from '../../shared/redactSecrets';
 
 export interface EngineReadinessDeps {
   claudeExecutable: () => string | null;
@@ -70,7 +71,7 @@ export async function engineReadiness(deps: EngineReadinessDeps): Promise<Factor
     return {
       ready: false,
       reason: 'claude-unusable',
-      message: `Claude is installed but could not run (${err instanceof Error ? err.message : String(err)}).`,
+      message: `Claude is installed but could not run (${redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200)}).`,
     };
   }
   return { ready: true };
