@@ -1137,7 +1137,13 @@ export async function reclaimWorker(
           && isWslWorkerPane(sessions.find((x) => x.id === p.sessionId))
           && isTaskOwnWorkerPane({ id: p.sessionId }, entry.id, recorded, ports.sessionRecordOf);
         reclaimStops.set(p.sessionId, now());
-        const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined);
+        const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined)
+          .catch((err: unknown) => {
+            reclaimStops.delete(p.sessionId);
+            throw err;
+          });
+        // Refused or held back: nothing was stopped, so a later exit is the worker's own.
+        if (r.ok !== true || r.code === 'turn_open') reclaimStops.delete(p.sessionId);
         // The daemon found the turn open at the stop itself: nothing was
         // signalled, and it is no failed stop.
         if (r.code === 'turn_open') {
