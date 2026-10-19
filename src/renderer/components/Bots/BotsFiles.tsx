@@ -19,7 +19,8 @@ import { FOCUS_RING } from '../focusRing';
 import { IconFile, IconImage, IconX } from '../icons';
 import Button from '../ui/Button';
 import { renderBrainMarkdownWhole, type MarkdownOptions } from '../shared/BrainMarkdown';
-import { FILE_MARKDOWN_SHOWN_MAX, fileGlyph, fileViewKind, shownText, svgDrawsTooMuch, svgImageSource } from './botsFileView';
+import { FILE_MARKDOWN_SHOWN_MAX, fileGlyph, fileViewKind, shownText, svgImageSource } from './botsFileView';
+import { svgDrawsTooMuch } from '../../utils/svgDrawing';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 

@@ -895,8 +895,9 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
   // in (`claudeResumeOnStart`, off by default; off keeps the pill). The setting
   // is read when the pane becomes ready, not subscribed to: turning it on must
   // not type into panes already showing the pill. A pane recovered this
-  // boot that was running Claude gets its resume line typed and submitted once
-  // its shell is interactive, instead of waiting for the pill's click + Enter.
+  // boot that was running Claude Code or Codex gets its resume line typed and
+  // submitted once its shell is interactive, instead of waiting for the pill's
+  // click + Enter.
   const autoResumeCwds = [
     pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.cwd,
     workspace.metadata?.cwd,
