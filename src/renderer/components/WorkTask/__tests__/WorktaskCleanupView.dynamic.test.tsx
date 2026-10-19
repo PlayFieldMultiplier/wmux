@@ -110,6 +110,18 @@ describe('WorktaskCleanupView', () => {
     expect(useStore.getState().worktaskCleanupVisible).toBe(false);
   });
 
+  // #2388: a half-removed folder whose repository is gone is kept: the close
+  // says where it stays.
+  it('a close that kept the folder says where it stays', async () => {
+    act(() => root.render(createElement(WorktaskCleanupView)));
+    await flush();
+    act(() => button('Close').click());
+    await flush();
+    await act(async () => { finishClose({ ok: true, taskId: 'task-1', archivePending: false, unmaterialized: true, keptFolder: '/wt/fix-parser' }); });
+    await flush();
+    expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/fix-parser.')).toBe(true);
+  });
+
   it('says why a phone worktree was not removed: a shell inside it, or a Windows hold', async () => {
     const api = (window as unknown as { electronAPI: { workTask: Record<string, unknown> } }).electronAPI.workTask;
     api.scan = vi.fn(async () => ({

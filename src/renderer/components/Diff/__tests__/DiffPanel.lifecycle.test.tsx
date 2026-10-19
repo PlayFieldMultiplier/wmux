@@ -184,6 +184,20 @@ describe('DiffPanel — adopt and close lifecycle (#1461)', () => {
     expect(adoptButton(c)).toBeNull();
   });
 
+  // #2388: a half-removed folder whose repository is gone is kept: the close
+  // says where, not that the task had no worktree.
+  it('a close that kept the folder says where it stays', async () => {
+    const c = render();
+    await flush();
+    close.mockResolvedValueOnce({ ok: true, taskId: TASK_ID, archivePending: false, unmaterialized: true, keptFolder: '/wt' });
+    click(closeButton(c));
+    await flush();
+    expect(c.textContent).toContain('This task is closed');
+    const toasts = useStore.getState().toasts.map((x) => x.message);
+    expect(toasts).toContain('Task closed. Its folder was kept at /wt.');
+    expect(toasts.some((m) => /unmaterialized/i.test(m))).toBe(false);
+  });
+
   it('re-lists the owner\'s tasks once Close succeeds, so the sidebar stops showing the task as open', async () => {
     // The mission bridge useRpcBridge installs; it answers with the daemon's
     // post-close row (the daemon commits the close before task:close returns).

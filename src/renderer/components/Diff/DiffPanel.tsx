@@ -18,6 +18,7 @@ import { commentAnchor, numberHunkLines, type DiffLine } from '../../../shared/p
 import { sanitizeRemoteText } from '../../../shared/a2aRemoteDelivery';
 import { findLeaf } from '../../../shared/paneUtils';
 import { useStore } from '../../stores';
+import { keptFolderMessage } from '../WorkTask/closeKeepFolder';
 import { useT } from '../../hooks/useT';
 import { unwrapRpc } from '../../utils/unwrapRpc';
 import { findWorkspaceSurfaceById } from '../../utils/paneTraversal';
@@ -984,11 +985,11 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
         void useStore.getState().refreshMissions(verifiedWorkspaceId);
         pushToast({
           level: res.archivePending ? 'warn' : 'info',
-          message: res.unmaterialized
+          message: keptFolderMessage(res, t) ?? (res.unmaterialized
             ? t('diff.closedUnmaterialized')
             : res.archivePending
               ? t('diff.closedArchiveDeferred')
-              : t('diff.closedFull'),
+              : t('diff.closedFull')),
         });
       } else if (res.reason === 'dirty') {
         pushToast({
