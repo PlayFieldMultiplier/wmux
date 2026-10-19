@@ -24,6 +24,7 @@ import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
 import { taskFolderFromMissions } from './verifyPreset';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
+import { releaseHeldFanouts } from './heldFanouts';
 import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
@@ -708,6 +709,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       );
     },
     changed,
+    onKick: releaseHeldFanouts,
   });
   setAgentSlots(slots);
   // What moves between looks: a look is reused only within one turn and

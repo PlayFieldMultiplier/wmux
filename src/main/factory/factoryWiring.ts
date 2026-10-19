@@ -258,7 +258,7 @@ export function factFromBotHook(ev: BotHookEvent): FactDraft | null {
     return { kind: 'bot.budget_exhausted', ...base, payload: { reason: ev.reason, ...(ev.wakeId ? { wakeId: ev.wakeId } : {}), ...(ev.until !== undefined ? { until: ev.until } : {}), ...(ev.parkedAt !== undefined ? { parkedAt: ev.parkedAt } : {}) } };
   }
   if (ev.type === 'bot.workers_full') {
-    return { kind: 'bot.workers_full', ...base, payload: { scope: ev.scope, running: ev.running, limit: ev.limit } };
+    return { kind: 'bot.workers_full', ...base, payload: { scope: ev.scope, running: ev.running, limit: ev.limit, held: ev.held } };
   }
   if (ev.type === 'bot.error') {
     return { kind: 'bot.error', ...base, payload: { message: ev.message.slice(0, 500), ...(ev.wakeId ? { wakeId: ev.wakeId } : {}), ...(ev.until !== undefined ? { until: ev.until } : {}) } };
@@ -361,7 +361,8 @@ export function runningWakeOf(botId: string): RunningWake | null {
   return {
     wakeId: item.id,
     attempt: Math.max(1, item.attempts),
-    ...(r.kind === 'handoff' || r.kind === 'mention' ? { handoffId: r.handoffId } : taskHandoff ? { handoffId: taskHandoff } : {}),
+    // A held fan-out's wake leads back to the handoff its asking wake delivered.
+    ...(r.kind === 'handoff' || r.kind === 'mention' || (r.kind === 'held_fanout' && r.handoffId) ? { handoffId: r.handoffId } : taskHandoff ? { handoffId: taskHandoff } : {}),
     ...(r.kind === 'human' && r.runId ? { runId: r.runId } : {}),
     reasonKind: r.kind,
     ...(taskIds.size === 1 ? { taskId: [...taskIds][0] } : {}),

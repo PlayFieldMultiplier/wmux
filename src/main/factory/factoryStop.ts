@@ -46,6 +46,8 @@ import type { LedgerEntry } from '../../shared/ledger';
 import type { LedgerListFilter, LedgerUpdateInput, LedgerUpdateResult } from '../../daemon/ledger/TaskLedger';
 import { markStoppedByOwner, unmarkStoppedByOwner } from '../deck/fanoutCallerNotify';
 import { getAgentSlots } from './agentSlots';
+import { forgetHeldFanouts } from './heldFanouts';
+import { dropQueuedHeldFanoutWakes } from './wakeQueue';
 
 /** The ledger summary of a task the owner stopped. */
 export const STOPPED_BY_OWNER = 'stopped by owner';
@@ -319,6 +321,14 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
   pruneLateStops(now);
   const inFlight = ports.launchesInFlight ?? ((botId: string) => getAgentSlots()?.inFlight(botId) ?? null);
   for (const botId of ids) {
+    // A fan-out the bot had held for a worker slot does not start once a
+    // stopped worker frees one.
+    forgetHeldFanouts(botId);
+    try {
+      dropQueuedHeldFanoutWakes(botId);
+    } catch (err) {
+      log(`[factory] stop: the held fan-out wakes of ${botId} were not dropped: ${String(err)}`);
+    }
     if (scope.keepTurn !== true) {
       let taskIds: string[] | null = null;
       try {

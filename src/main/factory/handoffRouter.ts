@@ -809,10 +809,10 @@ export class HandoffRouter {
     // the hop count; a result or refusal without a replyTo answers that
     // handoff.
     const ownWoken = spec.replyTo ? null : this.wokenHop(sender.botId, wake?.handoffId);
-    // A hop the wake only leads back to (a task wake's dispatch, the hop an
-    // answered question was asked on) that already has its result is not
+    // A hop the wake only leads back to (a task wake's dispatch, a held
+    // fan-out's, the hop an answered question was asked on) that already has its result is not
     // answered again: such a result goes to the lead, in the same chain.
-    const derived = !!ownWoken && (wake?.reasonKind === 'facts' || ownWoken.id !== wake?.handoffId);
+    const derived = !!ownWoken && (wake?.reasonKind === 'facts' || wake?.reasonKind === 'held_fanout' || ownWoken.id !== wake?.handoffId);
     const answersWoken = (kind === 'result' || kind === 'refusal') && !!ownWoken && !(derived && this.answered(ownWoken.id));
     const parent = spec.replyTo ? this.records.get(spec.replyTo) ?? null : answersWoken ? ownWoken : null;
     const chainParent = parent ?? ownWoken;

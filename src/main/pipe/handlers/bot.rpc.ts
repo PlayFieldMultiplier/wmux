@@ -38,7 +38,8 @@ import { createDefaultBotEngineFactory, runnableDefaultEngine, type BotEngineFac
 import { recordWorkerEnd } from '../../factory/budget';
 import { botAccountQuota, type ClaudeUsageCache } from '../../factory/botQuota';
 import { openBotWorkers } from '../../factory/openBotWorkers';
-import { getAgentSlots } from '../../factory/agentSlots';
+import { getAgentSlots, refreshSlotLiveness } from '../../factory/agentSlots';
+import { HeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../../factory/heldFanouts';
 import { BotFanoutReceipts, botFanoutReceiptsPath, setBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { isVerifyReport } from '../../factory/verifyPreset';
@@ -494,6 +495,25 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       // (a reviewer moved to on-request verification). Checked on every
       // start, so a start that failed after the move still gets it done.
       for (const bot of store.list()) queue.dropPrEventWakes(bot.id, new Set(bot.triggers.map((t) => t.kind)));
+      // Fan-outs refused only for a worker slot, woken when one frees.
+      const heldPorts: HeldFanoutPorts = {
+        budget: (botId) => {
+          const bot = store.get(botId);
+          return bot?.enabled ? bot.budget : null;
+        },
+        openWorkers: openBotWorkers,
+        refreshLiveness: refreshSlotLiveness,
+        wakes: () => queue,
+      };
+      let held: HeldFanouts;
+      try {
+        held = HeldFanouts.at(wmuxDir, heldPorts);
+        held.load();
+      } catch (err) {
+        console.warn(`[factory] held fan-outs are kept in memory only: ${String(err)}`);
+        held = new HeldFanouts(heldPorts);
+      }
+      setHeldFanouts(held);
       runtime = new BotRuntime({
         store,
         queue,
@@ -520,7 +540,14 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       setWakeQueue(queue);
       setBotRuntime(runtime);
       setBotFanoutReceipts(receipts);
-      offStore = store.onChange(() => send({ type: 'bots-changed' }));
+      offStore = store.onChange(() => {
+        // A bot disabled or removed drops what it had held: turning it on
+        // again starts from its queue, as its wakes do.
+        for (const botId of new Set(held.list().map((h) => h.botId))) {
+          if (!store.get(botId)?.enabled) held.dropFor(botId);
+        }
+        send({ type: 'bots-changed' });
+      });
       // Every settings write reschedules: switching the factory off, from any
       // caller, cancels the running turns at once.
       offSettings = onFactorySettingsChanged(() => {
@@ -575,6 +602,7 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       l?.runtime.dispose();
       setBotRuntime(null);
       setBotFanoutReceipts(null);
+      setHeldFanouts(null);
       setWakeQueue(null);
       setBotStore(null);
       setFactorySettingsStore(null);

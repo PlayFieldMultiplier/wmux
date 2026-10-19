@@ -125,6 +125,9 @@ export interface AgentSlotPorts {
   onWaiting?: (w: WaitingWorker, inUse: number, cap: number) => void;
   /** The waiting list changed. */
   changed?: () => void;
+  /** Every kick, waiters or not: a slot may have freed for something else
+   *  that waits on one (heldFanouts.ts releaseHeldFanouts). */
+  onKick?: () => void;
   log?: (msg: string) => void;
   now?: () => number;
   maxWaitMs?: number;
@@ -258,9 +261,16 @@ export class AgentSlots {
     return this.cap();
   }
 
-  /** Re-check the queue now (a task ended, a turn ended). */
+  /** Re-check the queue now (a task ended, a turn ended, a worker was
+   *  stopped): the call every path that frees a slot makes. */
   kick(): void {
-    if (this.disposed || this.queue.length === 0) return;
+    if (this.disposed) return;
+    try {
+      this.ports.onKick?.();
+    } catch {
+      /* the waiters below are checked whatever it does */
+    }
+    if (this.queue.length === 0) return;
     const now = (this.ports.now ?? Date.now)();
     const maxWait = this.ports.maxWaitMs ?? SLOT_WAIT_MAX_MS;
     let changed = false;

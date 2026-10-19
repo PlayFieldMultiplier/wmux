@@ -201,9 +201,11 @@ const DATA_MAX_CHARS = 4_000;
 /** The skill index's lines, leaving fenceData room for its "more" line. */
 export const SKILL_INDEX_MAX_CHARS = DATA_MAX_CHARS - 200;
 
-/** Fence `text` as data: a backtick fence longer than any run inside it. */
-export function fenceData(text: string, label = 'data'): string {
-  const body = text.length > DATA_MAX_CHARS ? `${text.slice(0, DATA_MAX_CHARS)}\n…(truncated)` : text;
+/** Fence `text` as data: a backtick fence longer than any run inside it.
+ *  Cut at `max` characters (a held fan-out's arguments, bounded where they
+ *  are kept, are fenced whole). */
+export function fenceData(text: string, label = 'data', max: number = DATA_MAX_CHARS): string {
+  const body = text.length > max ? `${text.slice(0, max)}\n…(truncated)` : text;
   const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((r) => r.length));
   const fence = '`'.repeat(Math.max(3, longest + 1));
   return `${fence}${label}\n${body}\n${fence}`;
@@ -372,6 +374,24 @@ export function buildWakePrompt(input: WakePromptInput): string {
     case 'schedule':
       lines.push('', `Scheduled wake (${r.scheduleId}).`);
       break;
+    case 'held_fanout': {
+      const key = botFanoutIdempotencyKey(item.id, 1);
+      lines.push(
+        '',
+        `A worker slot is free for the fan-out you asked for at ${new Date(r.heldAt).toISOString()}, when every worker slot was in use (a full slot is not a budget limit; wmux held the request): `
+          + `${r.titles.map((t) => `"${oneLineName(t)}"`).join(', ')}.`,
+      );
+      if (r.args) {
+        lines.push(
+          'Its fanout_start arguments as you sent them:',
+          fenceData(JSON.stringify(r.args, null, 2), 'held-fanout', Number.MAX_SAFE_INTEGER),
+          `When the work is still wanted, start it now with fanout_start, these arguments and idempotency_key "${key}". When it was done or overtaken meanwhile, end the turn without starting it.`,
+        );
+      } else {
+        lines.push(`Its arguments were too long to keep: rebuild them from this thread, and start it with fanout_start and idempotency_key "${key}" when the work is still wanted.`);
+      }
+      break;
+    }
     case 'handoff': {
       const h = input.handoff;
       if (h) {

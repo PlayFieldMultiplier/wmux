@@ -471,6 +471,10 @@ describe('lookups the runtime and rooms read', () => {
     const two = queue.enqueue({ botId: 'bot-5', workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['task.done:wtask-1@2', 'task.done:wtask-2@2'], trigger: { kind: 'task.done' } }, priority: 1 });
     queue.start(two?.id ?? '');
     expect(runningWakeOf('bot-5')?.taskId).toBeUndefined();
+    // A held fan-out's wake leads back to the handoff its asking wake delivered.
+    const held = queue.enqueue({ botId: 'bot-6', workspaceId: 'ws-1', reason: { kind: 'held_fanout', heldId: 'held-1', heldAt: 1, titles: ['x'], tainted: false, handoffId: 'h-6' }, priority: 1 });
+    queue.start(held?.id ?? '');
+    expect(runningWakeOf('bot-6')).toEqual({ wakeId: held?.id, attempt: 1, handoffId: 'h-6', reasonKind: 'held_fanout' });
   });
 
   it('a task wake answers the handoff all its tasks were started for; mixed or missing ones answer none', () => {

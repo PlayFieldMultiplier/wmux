@@ -37,6 +37,8 @@ import { emitBotHook } from './botHooks';
 import { sanitizeTriggers } from './botStore';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { redactStoredSecretsDeep } from './secretRedaction';
+import { sanitizeHeldFanoutArgs } from './heldFanouts';
+import { FANOUT_MAX_TASKS } from '../../shared/workTask';
 
 export const WAKE_QUEUE_VERSION = 1 as const;
 
@@ -134,6 +136,19 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
         : null;
     case 'intro':
       return { kind: 'intro' };
+    case 'held_fanout': {
+      if (!boundedId(r.heldId) || !Number.isSafeInteger(r.heldAt) || typeof r.tainted !== 'boolean') return null;
+      if (!Array.isArray(r.titles) || r.titles.length === 0 || r.titles.length > FANOUT_MAX_TASKS || !r.titles.every((t) => typeof t === 'string' && t.length <= 256)) return null;
+      const args = r.args === undefined ? undefined : sanitizeHeldFanoutArgs(r.args);
+      if (args === null) return null;
+      if (r.handoffId !== undefined && !boundedId(r.handoffId)) return null;
+      if (r.fingerprint !== undefined && (typeof r.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(r.fingerprint))) return null;
+      return {
+        kind: 'held_fanout', heldId: r.heldId, heldAt: r.heldAt as number, titles: [...(r.titles as string[])],
+        ...(args ? { args } : {}), ...(r.fingerprint !== undefined ? { fingerprint: r.fingerprint as string } : {}), tainted: r.tainted,
+        ...(r.handoffId !== undefined ? { handoffId: r.handoffId as string } : {}),
+      };
+    }
     default:
       return null;
   }
@@ -366,7 +381,7 @@ export class WakeQueue implements WakeSinkApi {
   }
 
   private expired(i: WakeItem, now: number): boolean {
-    if (i.reason.kind !== 'facts' && i.reason.kind !== 'schedule' && i.reason.kind !== 'routine') return false;
+    if (i.reason.kind !== 'facts' && i.reason.kind !== 'schedule' && i.reason.kind !== 'routine' && i.reason.kind !== 'held_fanout') return false;
     return now - i.enqueuedAt > WAKE_LIMITS.FACT_TTL_MS;
   }
 
@@ -547,6 +562,20 @@ export function getWakeQueue(): WakeSinkApi | null {
  *  such as `wake:<wakeId>:<n>` from it), or null. */
 export function currentWakeId(botId: string): string | null {
   return current?.running(botId)?.id ?? null;
+}
+
+/** Drop the bot's held fan-out wakes that have not run, queued or parked
+ *  (the owner stopped its work): what the bot had held does not start
+ *  later; `only`: those it says yes to. Returns how many. */
+export function dropQueuedHeldFanoutWakes(botId: string, only?: (wake: WakeItem) => boolean): number {
+  if (!current) return 0;
+  let n = 0;
+  for (const i of current.list({ botId, states: ['queued', 'parked'] })) {
+    if (i.reason.kind !== 'held_fanout') continue;
+    if (only && !only(i)) continue;
+    if (current.drop(i.id, 'expired')) n++;
+  }
+  return n;
 }
 
 /** The wake the bot is running now (a copy), or null. */

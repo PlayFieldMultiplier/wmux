@@ -21,7 +21,7 @@ vi.mock('../../../deck/deckDecisionStore', async (actual) => ({
 
 import { sendToRenderer } from '../_bridge';
 import { git } from '../../../git/git';
-import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, registerFanOutRpc, verdictedTaskIds, workersHeldNote, type FanOutBotPort } from '../fanout.rpc';
+import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, registerFanOutRpc, verdictedTaskIds, workersHeldNote, type FanOutBotPort, type HeldFanoutRequest } from '../fanout.rpc';
 import type { FanOutRequest, FanOutResult, FanOutService, FanOutStatus } from '../../../worktask/FanOutService';
 import type { RpcRouter } from '../../RpcRouter';
 import { FanOutGuards } from '../../../worktask/fanoutGuards';
@@ -64,7 +64,7 @@ function botCtx(role: BotRole): RpcContext {
 interface Rig {
   call: (params: Record<string, unknown>, ctx: RpcContext) => Promise<Record<string, unknown>>;
   start: ReturnType<typeof vi.fn>;
-  port: FanOutBotPort & { started: string[][]; exhausted: string[]; full: Array<{ scope: string; running: number; limit: number }>; seen: Set<string>; refusal: string | null; outcomes: BotWorkerStartOutcome[] };
+  port: FanOutBotPort & { started: string[][]; exhausted: string[]; full: Array<{ scope: string; running: number; limit: number; request?: HeldFanoutRequest }>; seen: Set<string>; refusal: string | null; outcomes: BotWorkerStartOutcome[] };
   approve: () => void;
   setWake: (id: string | null) => void;
   setThread: (t: string | null) => void;
@@ -144,8 +144,9 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     budgetExhausted: (_b, reason) => {
       port.exhausted.push(reason);
     },
-    workersFull: (_b, full) => {
-      port.full.push({ ...full });
+    workersFull: (_b, full, request) => {
+      port.full.push({ ...full, request });
+      return true;
     },
   };
   registerFanOutRpc(router, service, () => null, {
@@ -537,19 +538,26 @@ describe('task.fanout.start — bot origin', () => {
     expect(pane.ok).toBe(false);
   });
 
-  it('a full worker slot (the bot\'s or the factory\'s) is reported as workers_full, not as an exhausted budget', async () => {
+  it('a full worker slot (the bot\'s or the factory\'s) is reported as workers_full and held, not as an exhausted budget', async () => {
     const r = rig('verifier'); // maxConcurrentWorkers 1
     r.setOpen({ bot: 1, factory: 1 });
     const own = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier')));
     expect(own.code).toBe('RESOURCE_EXHAUSTED');
-    expect(own.message).toMatch(/not a budget limit: start it again once one of the running workers ends/);
+    expect(own.message).toMatch(/not a budget limit/);
+    expect(own.message).toMatch(/wakes you/);
     r.setOpen({ bot: 0, factory: 3 });
     expect(errorOf(await r.call({ idempotencyKey: 'wake:w-1:2', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier'))).code).toBe('RESOURCE_EXHAUSTED');
     expect(r.port.exhausted).toEqual([]);
-    expect(r.port.full).toEqual([
+    expect(r.port.full.map(({ scope, running, limit }) => ({ scope, running, limit }))).toEqual([
       { scope: 'bot', running: 1, limit: 1 },
       { scope: 'factory', running: 3, limit: 3 },
     ]);
+    // The request is held as the bot's tool arguments, with the wake's handoff.
+    expect(r.port.full[0].request).toMatchObject({
+      args: { titles: ['x'], preset: 'verify', checkout: { sha: SHA } },
+      tainted: false,
+      handoffId: 'h-dispatch',
+    });
     expect(r.start).not.toHaveBeenCalled();
   });
 
@@ -564,7 +572,7 @@ describe('task.fanout.start — bot origin', () => {
     expect(r.port.exhausted).toEqual([]);
   });
 
-  it('worker hours used up stay a budget refusal', async () => {
+  it('worker hours used up stay a budget refusal, and nothing is held', async () => {
     const r = rig('verifier', { budget: { ...DEFAULT_BOT_BUDGETS.verifier, maxWorkerHoursPerDay: 0 } });
     expect(errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier'))).code).toBe('RESOURCE_EXHAUSTED');
     expect(r.port.exhausted).toEqual(['worker_hours_day']);

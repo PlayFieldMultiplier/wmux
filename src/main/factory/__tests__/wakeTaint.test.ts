@@ -43,6 +43,9 @@ describe('WakeTaint', () => {
     expect(t.reasonTainted({ kind: 'schedule', scheduleId: 's' })).toBe(false);
     expect(t.reasonTainted({ kind: 'routine', routineId: 'r', dueAt: 1 })).toBe(false);
     expect(t.reasonTainted({ kind: 'intro' })).toBe(false);
+    // A held fan-out's wake: as its asking wake was marked.
+    expect(t.reasonTainted({ kind: 'held_fanout', heldId: 'held-1', heldAt: 1, titles: ['x'], tainted: false })).toBe(false);
+    expect(t.reasonTainted({ kind: 'held_fanout', heldId: 'held-2', heldAt: 1, titles: ['x'], tainted: true })).toBe(true);
     expect(t.reasonTainted({ kind: 'mystery' } as unknown as WakeItem['reason'])).toBe(true);
   });
 

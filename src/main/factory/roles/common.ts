@@ -104,7 +104,7 @@ export const TEAM_CONVENTIONS: readonly string[] = [
 /** For every bot (every bot fans out). */
 export const FANOUT_CONVENTION =
   'Fan-out keys come from the wake block: the first fanout_start of a wake uses its first key, the second the next one. Re-sending a key reads that fan-out\'s state. '
-  + 'A fan-out refused because every worker slot is in use is waiting for a slot, which is not a budget limit: start it again once one of the running workers ends.';
+  + 'A fan-out refused because every worker slot is in use is waiting for a slot, which is not a budget limit: wmux holds it and wakes you with its arguments once a slot frees.';
 
 /** How the wakes every bot has go. */
 export const COMMON_WAKES: readonly string[] = [

@@ -120,6 +120,9 @@ export class WakeTaint {
         return this.handoffTainted(reason.handoffId);
       case 'mention':
         return this.handoffTainted(reason.handoffId);
+      // The wake that asked for the held fan-out, as it was marked then.
+      case 'held_fanout':
+        return reason.tainted !== false;
       case 'facts': {
         const ids = Array.isArray(reason.factIds) ? reason.factIds : [];
         let found: Fact[];
