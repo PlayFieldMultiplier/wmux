@@ -10,13 +10,15 @@
 // order of the checks below is the contract:
 //
 //   1. a browser (`Origin` present) is refused: guests are server-to-server
-//   2. the owner's switch is off → 403 guest-bots-disabled
-//   3. the listener is plain HTTP on a non-loopback bind → 403 insecure-transport
-//   4. the credential: malformed / unknown / revoked → 401
+//   2. the owner's switch is off → 403 forbidden
+//   3. the listener is plain HTTP on a non-loopback bind → 403 forbidden
+//   4. the credential: malformed / unknown / revoked → 401 unauthorized
 //   5. the server's grants: "Conversation access" to read or post, and
-//      "Allow input" as well to post → 403. Each refusal of steps 2, 3 and
-//      5 carries a `message` naming the setting the owner turns on, by the
-//      name the wmux window shows (GUEST_GATE_MESSAGES).
+//      "Allow input" as well to post → 403. A refusal of this step carries
+//      a `message` naming the setting the owner turns on, by the name the
+//      wmux window shows (GUEST_GATE_MESSAGES). Steps 1 to 4 answer before
+//      the credential is verified and say no more than their code; the
+//      owner sees steps 2 and 3 in the guest bots dialog.
 //   6. the guest's rate budget → 429 with Retry-After
 //   7. the route
 //
@@ -86,8 +88,6 @@ const refuse = (status: number, error: string, extra: Record<string, unknown> = 
  *  turn on, named as the wmux window names it (the "web" button in the
  *  sidebar; the Bots page), never by a command-line flag. */
 export const GUEST_GATE_MESSAGES = {
-  'guest-bots-disabled': 'Guest bots are off on this wmux. The owner turns them on in Bots → "…" → Guest bots ("Let guest bots connect").',
-  'insecure-transport': 'This wmux serves plain HTTP on the network, so guest tokens are refused. The owner opens the "web" button in the sidebar, stops it, turns on "Serve over HTTPS (needs Tailscale)" or turns off "Expose to network", and starts it again.',
   'transcript-disabled': 'Reading conversations is off on this wmux. The owner opens the "web" button in the sidebar and turns on "Conversation access".',
   'input-disabled': 'Posting is off on this wmux: a guest can read but not post. The owner opens the "web" button in the sidebar and turns on "Allow input".',
 } as const;
@@ -207,9 +207,9 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
   } catch {
     on = false;
   }
-  if (!ctx.guests || !on) return gate('guest-bots-disabled');
+  if (!ctx.guests || !on) return refuse(403, 'forbidden');
   // 3. A durable token never crosses a network in clear.
-  if (ctx.gates.transportRefusal) return gate('insecure-transport');
+  if (ctx.gates.transportRefusal) return refuse(403, 'forbidden');
   // 4. The credential.
   const cred = parseGuestCredential(ctx.bearer);
   if (!cred) return refuse(401, 'unauthorized');
@@ -220,7 +220,7 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
     ctx.log('warn', `[web] guest auth failed: ${err instanceof Error ? err.message : String(err)}`);
     return refuse(401, 'unauthorized');
   }
-  if (!who.ok) return refuse(401, 'unauthorized', { reason: who.reason });
+  if (!who.ok) return refuse(401, 'unauthorized');
   const route = ctx.pathname === GUEST_ROUTES.me ? 'me' : ctx.pathname === GUEST_ROUTES.messages ? 'messages' : null;
   if (!route) return refuse(404, 'not-found');
   const posting = route === 'messages' && ctx.method === 'POST';
@@ -271,7 +271,7 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
   return posting ? post(ctx, who, scope, stillAllowed) : read(ctx, scope, who.createdAt, who.joinSeq, stillAllowed);
 }
 
-const revokedMidRequest = (): GuestRouteResponse => refuse(401, 'unauthorized', { reason: 'revoked' });
+const revokedMidRequest = (): GuestRouteResponse => refuse(401, 'unauthorized');
 
 /** The guest's conversation from the moment it was added, messages only
  *  (guestSeesCard): what the owner and the bots said before, and wmux's own

@@ -114,7 +114,7 @@ describe('guest bot gate', () => {
     expect(await call(s, GUEST_ROUTES.me, { headers: { ...bearer(GUEST), Origin: 'https://evil.example' } }))
       .toMatchObject({ status: 403, body: { error: 'forbidden' } });
     guests.enabled.mockReturnValue(false);
-    expect(await call(s, GUEST_ROUTES.me, { headers: bearer(GUEST) })).toMatchObject({ status: 403, body: { error: 'guest-bots-disabled' } });
+    expect(await call(s, GUEST_ROUTES.me, { headers: bearer(GUEST) })).toMatchObject({ status: 403, body: { error: 'forbidden' } });
     expect(guests.resolve).not.toHaveBeenCalled();
   });
 

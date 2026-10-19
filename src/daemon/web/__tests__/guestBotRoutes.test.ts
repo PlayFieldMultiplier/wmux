@@ -67,15 +67,16 @@ describe('guest routes: the gate order', () => {
 
   it('is off until the owner switches it on, and without a store', async () => {
     const guests = resolver({ enabled: () => false });
-    expect(await guestRouteResponse(ctx({ guests }))).toMatchObject({ status: 403, body: { error: 'guest-bots-disabled' } });
+    // Before the credential is verified, the refusal says no more than its code.
+    expect(await guestRouteResponse(ctx({ guests }))).toEqual({ status: 403, body: { ok: false, error: 'forbidden' } });
     expect(guests.resolve).not.toHaveBeenCalled();
-    expect(await guestRouteResponse(ctx({ guests: undefined }))).toMatchObject({ status: 403, body: { error: 'guest-bots-disabled' } });
+    expect(await guestRouteResponse(ctx({ guests: undefined }))).toEqual({ status: 403, body: { ok: false, error: 'forbidden' } });
   });
 
   it('refuses a plain-HTTP network listener before reading the token', async () => {
     const guests = resolver();
     const r = await guestRouteResponse(ctx({ guests, gates: { transcript: true, input: true, transportRefusal: 'plain http' } }));
-    expect(r).toMatchObject({ status: 403, body: { error: 'insecure-transport' } });
+    expect(r).toEqual({ status: 403, body: { ok: false, error: 'forbidden' } });
     expect(guests.resolve).not.toHaveBeenCalled();
   });
 
@@ -84,7 +85,7 @@ describe('guest routes: the gate order', () => {
     expect((await guestRouteResponse(ctx({ bearer: 'dev-1.secret' }))).status).toBe(401);
     expect((await guestRouteResponse(ctx({ bearer: formatGuestCredential({ guestId: GUEST_ID, secret: 'B'.repeat(43) }) }))).status).toBe(401);
     const revoked = resolver({ resolve: vi.fn(async () => ({ ok: false as const, reason: 'revoked' as const })) });
-    expect(await guestRouteResponse(ctx({ guests: revoked }))).toMatchObject({ status: 401, body: { reason: 'revoked' } });
+    expect(await guestRouteResponse(ctx({ guests: revoked }))).toEqual({ status: 401, body: { ok: false, error: 'unauthorized' } });
   });
 
   it('needs the transcript grant to read and the input grant too to post', async () => {
@@ -182,27 +183,23 @@ describe('guest routes: reading', () => {
     });
     const d = desktop((_c, p) => { live = false; return cardsReply(p); });
     expect(await guestRouteResponse(ctx({ pathname: GUEST_ROUTES.messages, desktop: d, guests })))
-      .toMatchObject({ status: 401, body: { reason: 'revoked' } });
+      .toEqual({ status: 401, body: { ok: false, error: 'unauthorized' } });
     live = true;
     const sent = desktop(() => ({ ok: true, cardId: 'card-9', seq: 9, woke: [] }));
     const r = await post({ clientMessageId: 'm1', text: 'hi' }, {
       guests, desktop: sent,
       readBody: async () => { live = false; return { ok: true, value: { clientMessageId: 'm1', text: 'hi' } }; },
     });
-    expect(r).toMatchObject({ status: 401, body: { reason: 'revoked' } });
+    expect(r).toEqual({ status: 401, body: { ok: false, error: 'unauthorized' } });
     expect(sent.request).not.toHaveBeenCalled();
   });
 
-  it('a gate refusal says which setting to turn on, by its name in wmux, never a flag', async () => {
-    const off = await guestRouteResponse(ctx({ guests: resolver({ enabled: () => false }) }));
-    const http = await guestRouteResponse(ctx({ gates: { transcript: true, input: true, transportRefusal: 'plain http' } }));
+  it('a grant refusal to a verified guest says which setting to turn on, by its name in wmux, never a flag', async () => {
     const read = await guestRouteResponse(ctx({ gates: { transcript: false, input: true, transportRefusal: null } }));
     const write = await post({ clientMessageId: 'm1', text: 'hi' }, { gates: { transcript: true, input: false, transportRefusal: null } });
-    expect(off.body.message).toContain('Guest bots');
-    expect(http.body.message).toContain('Serve over HTTPS (needs Tailscale)');
     expect(read.body.message).toContain('Conversation access');
     expect(write.body.message).toContain('Allow input');
-    for (const r of [off, http, read, write]) expect(String(r.body.message)).not.toMatch(/--allow|TLS|tunnel/);
+    for (const r of [read, write]) expect(String(r.body.message)).not.toMatch(/--allow|TLS|tunnel/);
   });
 
   it('caps the page size', async () => {
