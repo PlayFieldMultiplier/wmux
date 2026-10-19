@@ -392,7 +392,7 @@ describe('captureTreePosix', () => {
     expect(signals.filter(([p, s]) => p === 101 && s !== 'SIGCONT')).toEqual([]);
   });
 
-  it('runs on a stranger the stop reached: the kill and the release send it SIGCONT, never SIGKILL', async () => {
+  it('runs on a stranger the stop reached, at once: the capture is unverified, and the kill and the release never signal it again', async () => {
     for (const end of ['kill', 'release'] as const) {
       const rows = [row(1, 0), row(100, 1), row(101, 100)];
       const signals: Array<[number, NodeJS.Signals]> = [];
@@ -405,11 +405,41 @@ describe('captureTreePosix', () => {
         },
       };
       const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+      expect(signals.filter(([p]) => p === 101).map(([, s]) => s)).toEqual(['SIGSTOP', 'SIGCONT']);
+      if (end === 'kill') {
+        const r = await tree.kill({ timeoutMs: 0 });
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect(r.survivors.some((s) => s.unverified && /changed hands around their stop/.test(s.reason))).toBe(true);
+      } else {
+        tree.release();
+        await vi.waitFor(() => expect(signals.filter(([p, s]) => p === 100 && s === 'SIGCONT')).toHaveLength(1), { timeout: 5_000 });
+      }
+      expect(signals.filter(([p]) => p === 101).map(([, s]) => s)).toEqual(['SIGSTOP', 'SIGCONT']);
+    }
+  });
+
+  // A frozen process killed by someone else, its pid taken by an unrelated
+  // job stopped on its own (a shell's Ctrl+Z): that job never took this
+  // capture's stop, so neither the kill nor the release resumes it.
+  it('never resumes a stopped stranger that took a frozen process\'s pid after its stop', async () => {
+    for (const end of ['kill', 'release'] as const) {
+      const rows = [row(1, 0), row(100, 1), row(101, 100)];
+      const signals: Array<[number, NodeJS.Signals]> = [];
+      const deps: PosixTreeDeps = {
+        listProcesses: async () => rows.map((r) => ({ ...r })),
+        signal: (pid, sig) => {
+          signals.push([pid, sig]);
+          if (sig === 'SIGKILL' && pid > 0) rows.splice(rows.findIndex((r) => r.pid === pid), 1);
+        },
+      };
+      const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+      rows[2] = { pid: 101, ppid: 1, stat: 'T', start: 'stopped-job' };
       if (end === 'kill') await tree.kill({ timeoutMs: 0 });
-      else tree.release();
-      const to101 = signals.filter(([p]) => p === 101).map(([, s]) => s);
-      expect(to101).toContain('SIGCONT');
-      expect(to101).not.toContain('SIGKILL');
+      else {
+        tree.release();
+        await vi.waitFor(() => expect(signals.filter(([p, s]) => p === 100 && s === 'SIGCONT')).toHaveLength(1), { timeout: 5_000 });
+      }
+      expect(signals.filter(([p]) => p === 101).map(([, s]) => s)).toEqual(['SIGSTOP']);
     }
   });
 
@@ -431,11 +461,11 @@ describe('captureTreePosix', () => {
     const deps: PosixTreeDeps = {
       listProcesses: async () => {
         reads++;
-        // Reads 1-2 (the scan and the read before the stop): 100 -> 101.
-        // Then 101 was killed by someone else and
+        // Reads 1-3 (the scan, the read before the stop and the one after):
+        // 100 -> 101. Then 101 was killed by someone else and
         // another process got its pid, with a child of its own (102), and
         // 100 also started 103 before it was frozen.
-        if (reads <= 2) return [row(1, 0), row(100, 1), row(101, 100)];
+        if (reads <= 3) return [row(1, 0), row(100, 1), row(101, 100)];
         return [row(1, 0), row(100, 1), { pid: 101, ppid: 100, stat: 'S', start: 'other' }, row(102, 101), row(103, 100)];
       },
       signal: (pid, sig) => { signals.push([pid, sig]); },

@@ -581,7 +581,7 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       scanError = err instanceof Error ? err.message : String(err);
       break;
     }
-    let added = 0;
+    const stopped: number[] = [];
     for (const pid of found) {
       const start = (byPid.get(pid) as PosixProcRow).start;
       if (fresh.get(pid)?.start !== start) {
@@ -591,11 +591,38 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       targets.set(pid, start);
       // One that cannot be frozen (another user's, a setuid program) can
       // still fork and exit, leaving a child the tree no longer leads to.
-      if (!send(pid, 'SIGSTOP')) unfrozen.push(pid);
-      added++;
+      if (send(pid, 'SIGSTOP')) stopped.push(pid);
+      else unfrozen.push(pid);
     }
-    // Every one found had ended or changed hands: scan again.
-    void added;
+    if (stopped.length === 0) continue;
+    // Read once more after the stops. A pid still held by the process read
+    // before its stop was stopped as that process (a pid cannot change hands
+    // and come back). One that changed hands may have taken the stop as its
+    // new owner: that one runs again now, while its identity is known, and
+    // is not ours. Later, only a process whose identity is unchanged since
+    // its stop is ever resumed (release, kill): a pid that changes hands
+    // after it is a stranger's, which this capture never stopped.
+    let after: Map<number, PosixProcRow>;
+    try {
+      after = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
+    } catch (err) {
+      scanError = err instanceof Error ? err.message : String(err);
+      break;
+    }
+    const changed: number[] = [];
+    for (const pid of stopped) {
+      const now = after.get(pid);
+      if (now?.start === targets.get(pid)) continue;
+      targets.delete(pid);
+      changed.push(pid);
+      if (now?.stat.startsWith('T')) send(pid, 'SIGCONT');
+    }
+    // What such a process forked before it went is under no captured pid,
+    // and its pid now leads to another process's children.
+    if (changed.length > 0) {
+      scanError = `process(es) ${changed.join(', ')} of the tree ended or changed hands around their stop`;
+      break;
+    }
   }
   // Still finding new processes in the last round: one of them may have
   // forked before it was frozen, into a process group the kill misses.
@@ -623,18 +650,17 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
     release: () => {
       if (released) return;
       released = true;
-      // Every pid this capture stopped runs again: ours, and a stranger the
-      // stop reached because the pid changed hands between the read and the
-      // signal.
-      for (const pid of targets.keys()) send(pid, 'SIGCONT');
+      // What this capture stopped runs again: each pid still held by the
+      // process it stopped. One whose pid went to another process since is
+      // not signalled (that one never took this stop).
+      void stillCaptured().then((pids) => {
+        for (const pid of pids) send(pid, 'SIGCONT');
+      });
     },
     kill: async ({ timeoutMs = VERIFIED_TREE_KILL_TIMEOUT_MS } = {}) => {
       if (released) return { ok: false, killed: [], survivors: [{ pid: rootPid, reason: 'the capture was released', unverified: true }] };
       released = true;
       const ours = await stillCaptured();
-      // A pid that changed hands between the read and the stop: the stop may
-      // have reached the new owner, which must run on.
-      for (const pid of targets.keys()) if (!ours.includes(pid)) send(pid, 'SIGCONT');
       // Leaves first (discovery order is parent-before-child), then the PTY's
       // process group (the root is a session leader) and the root, while the
       // root is still the one captured (its group is then still its own).
