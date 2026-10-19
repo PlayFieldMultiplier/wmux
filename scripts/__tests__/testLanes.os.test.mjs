@@ -58,8 +58,10 @@ describe('the named lanes', () => {
   });
 
   it('every test file that mentions win32 runs in the integration lane, on Windows', () => {
+    // Through the classifier, like the child_process case above, so a
+    // `// @wmux-lane unit` pragma (which this message offers) is honoured.
     const offenders = listTestFiles()
-      .filter((file) => /win32/.test(fs.readFileSync(path.join(ROOT, file), 'utf8')))
+      .filter((file) => lanes.byFile.get(file).reasons.includes('mentions win32'))
       .filter((file) => laneOfName(file) !== 'integration')
       .map(
         (file) =>
