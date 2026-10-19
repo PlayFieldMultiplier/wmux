@@ -349,7 +349,13 @@ export function registerA2aChannelRpc(
   // (J0 3-model review — Codex, conf 10: capability map + FIRST_PARTY had the
   // methods but the router forward was the missing link).
   router.register('task.mission.start', (p, ctx) => forward('task.mission.start', p, true, ctx));
-  router.register('task.mission.close', (p, ctx) => forward('task.mission.close', p, true, ctx));
+  // A detach keeps the task's folder, and only task.close keepFolder records
+  // that first (#2388): a bare detach would leave a removal pending for a
+  // folder it promised to leave.
+  router.register('task.mission.close', (p, ctx) =>
+    (p as { detach?: unknown } | undefined)?.detach !== undefined
+      ? Promise.resolve({ ok: false, error: { code: 'INVALID_ARGUMENT', message: 'task.mission.close does not detach a task: use task.close with keepFolder' } })
+      : forward('task.mission.close', p, true, ctx));
   // `list` is a read, but an OWNER-scoped one: it was registered as an ordinary
   // read, which left a caller-supplied verifiedWorkspaceId in place whenever no
   // senderPtyId resolved — so a wire caller could read another workspace's

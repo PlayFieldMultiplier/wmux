@@ -152,6 +152,12 @@ export function registerChannelLocalHandlers(getDaemonClient: () => DaemonClient
         return reject('channels:mutate-local requires a renderer-supplied verifiedWorkspaceId');
       }
       p.verifiedWorkspaceId = ws;
+      // A detach keeps the task's folder, and only task:close keepFolder
+      // records that first (#2388); a bare detach here would leave a removal
+      // pending for a folder the detach promised to leave.
+      if (method === 'task.mission.close' && p.detach !== undefined) {
+        return reject('channels:mutate-local does not detach a task: use task:close with keepFolder');
+      }
       // The pipe handler also strips senderPtyId before forwarding; a renderer
       // post never has one, but drop any stray value so the daemon never sees a
       // forged anchor on this path.

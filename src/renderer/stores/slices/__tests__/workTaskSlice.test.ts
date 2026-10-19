@@ -35,6 +35,25 @@ describe('workTaskSlice', () => {
     store = createTestStore();
   });
 
+  it('a detach is Close and keep folder: task:close with keepFolder, under the owner (#2388)', async () => {
+    const close = vi.fn(async () => ({ ok: true }));
+    // A node test: the slice reads window.electronAPI, so a window is lent.
+    const g = globalThis as unknown as { window?: unknown };
+    const hadWindow = 'window' in g;
+    const prev = g.window;
+    g.window = { electronAPI: { workTask: { close } } };
+    try {
+      store.getState().setMissions('parent-a', [mission({ id: 'wtask-1', title: 'A', paneGroupId: 'child-1' })]);
+      expect(await store.getState().detachMissionForPaneGroup('child-1')).toBe(true);
+      expect(close).toHaveBeenCalledWith('wtask-1', 'parent-a', { keepFolder: true });
+      close.mockResolvedValueOnce({ ok: false });
+      expect(await store.getState().detachMissionForPaneGroup('child-1')).toBe(false);
+    } finally {
+      if (hadWindow) g.window = prev;
+      else delete g.window;
+    }
+  });
+
   it('setMissions가 부모별로 캐싱하고 paneGroupId 역인덱스를 만든다', () => {
     store.getState().setMissions('parent-a', [
       mission({ id: 'wtask-1', title: 'A', paneGroupId: 'child-1' }),

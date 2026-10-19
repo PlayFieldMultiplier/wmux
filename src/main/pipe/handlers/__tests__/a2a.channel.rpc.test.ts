@@ -366,6 +366,16 @@ describe('a2a.channel.rpc — mutating routing (capability a2a.channel.send)', (
     if (res.ok) expect(res.result).toBe(expected);
   });
 
+  it('task.mission.close refuses a detach: task.close keepFolder records the folder kept first (#2388)', async () => {
+    const daemon = makeFakeDaemon(() => ({ ok: true, value: null }));
+    const router = setupHandlerRouter(daemon);
+    const rpcSpy = (daemon as unknown as { rpc: ReturnType<typeof vi.fn> }).rpc;
+    const res = await router.dispatch({ id: 'detach', method: 'task.mission.close', params: { taskId: 'wtask-x', senderPtyId: 'pty-S', detach: true } });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.result).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
+    expect(rpcSpy).not.toHaveBeenCalled();
+  });
+
   it('task.mission.start/close fail closed without a resolvable senderPtyId', async () => {
     const daemon = makeFakeDaemon(() => ({ ok: true, value: null }));
     const router = setupHandlerRouter(daemon);

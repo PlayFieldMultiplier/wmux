@@ -141,6 +141,14 @@ describe('channelLocal.handler — CHANNEL_MUTATE_LOCAL', () => {
     }
   });
 
+  it('REJECTS a mission detach: it goes through task:close keepFolder, which records the folder kept first (#2388)', async () => {
+    installHandler();
+    const handler = getHandler(IPC.CHANNEL_MUTATE_LOCAL);
+    const r = await handler(fakeEvent, 'task.mission.close', { verifiedWorkspaceId: 'ws-ceo', taskId: 'wtask-x', detach: true });
+    expect(r).toMatchObject({ ok: false, error: { code: 'NOT_AUTHORIZED' } });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it('REJECTS a non-channel RPC (cannot become a general daemon bypass)', async () => {
     installHandler();
     const handler = getHandler(IPC.CHANNEL_MUTATE_LOCAL);

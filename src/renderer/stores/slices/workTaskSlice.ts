@@ -401,27 +401,24 @@ export const createWorkTaskSlice: StateCreator<
     if (task.status === 'closed') return task.detachedAt !== undefined;
     // Only an open, still-dependent child can be detached.
     if (task.status !== 'open') return false;
-    const bridge = readMissionRpc();
-    if (!bridge?.close) return false;
-    let res: unknown;
+    const workTask = (window as unknown as { electronAPI?: { workTask?: { close?: (taskId: string, ws: string, opts?: { keepFolder?: boolean }) => Promise<{ ok: boolean }> } } }).electronAPI?.workTask;
+    if (!workTask?.close) return false;
+    let res: { ok: boolean };
     try {
       // Same authz anchor as a lifetime close: the daemon gate is owner-OR-CEO and
       // the owner is the PARENT, so pass the task owner (not the child) as the
-      // verified workspace. `detach: true` rides the same close RPC — the daemon
-      // stamps a workspace-detached marker and archives the channel, and the
-      // renderer/main path deliberately touches nothing else (worktree/branch/PTY).
-      res = await bridge.close({
-        taskId: task.id,
-        verifiedWorkspaceId: task.owner.verifiedWorkspaceId,
-        detach: true,
-      });
+      // verified workspace. A detach is Close and keep folder (#2388): the
+      // mission closes detached, and main records the folder kept first, so
+      // nothing that finishes a removal or cleans up after closed tasks takes
+      // it. The worktree, branch and PTY are left as they are.
+      res = await workTask.close(task.id, task.owner.verifiedWorkspaceId, { keepFolder: true });
     } catch {
       // Daemon not connected / transient failure — the child keeps running; the
       // user can retry. Boot reconcile does NOT auto-detach (detach is an explicit
       // user action), so a failure simply leaves the dependency in place.
       return false;
     }
-    if (!isOkObject(unwrapRpc(res))) {
+    if (!res?.ok) {
       console.warn('[workTaskSlice] mission detach rejected for task', task.id, res);
       return false;
     }
