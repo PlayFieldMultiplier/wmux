@@ -1246,17 +1246,6 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
             'Check that this is the workspace you mean, then re-run with --force.',
         };
       }
-      // #2388: nor one whose shell runs a command (OSC 133). A bot task's
-      // workspace is closed through here right after its panes' trees were
-      // stopped; a command started since must not be ended by the close.
-      const busy = getWorkspacePtyIds(ws).filter((ptyId) => store.commandRunningByPtyId[ptyId] === true).length;
-      if (busy > 0) {
-        return {
-          error:
-            `workspace.close: refusing to close "${ws.name}" (${id}) — a command is still running in ${busy} pane(s). ` +
-            'Check that this is the workspace you mean, then re-run with --force.',
-        };
-      }
       // A remote-terminal surface has no local pty, so no agent is detected
       // in it here — yet the close ends its session on the remote host. Treat
       // every session the workspace owns there as possibly holding one.
