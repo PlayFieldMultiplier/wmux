@@ -16,7 +16,7 @@
 //
 // Rebuttal cues for a pending completion window: `working` (any tool
 // activity, byte activity, prompt arrival) and `attention`. `answered`
-// cancels a pending ATTENTION window. The HookSignalRouter dedup ledger is
+// cancels a pending dialog ATTENTION window, but not a failure. The HookSignalRouter dedup ledger is
 // INDEPENDENT of this machine: with the wiring from the eng review, ledger
 // writes for gated cue classes happen at CONFIRMATION, never at arrival, so
 // a held-then-rebutted candidate leaves no ghost 'emit' behind and a
@@ -42,10 +42,12 @@ const noop = (): void => undefined;
  *
  * - `working`    — evidence the turn is alive (tool activity, byte activity,
  *                  prompt arrival). Rebuts any pending window.
- * - `attention`  — the agent is blocked waiting for a human (approval
- *                  prompt, question). Gets its own symmetric hold. `firm`
+ * - `attention`  — the agent needs attention (approval prompt, question,
+ *                  or a failed turn). Gets its own symmetric hold. `firm`
  *                  marks one the agent's own hook reported: a real dialog,
- *                  which working cues do not rebut (see observe).
+ *                  which working cues do not rebut (see observe). `failure`
+ *                  marks an unsuccessful turn end: a later stop or dialog
+ *                  answer cannot replace it; new work or a session can.
  * - `stop`       — a turn-end candidate. `child` marks subagent stops (never
  *                  a lead-turn end). `leftoverWork` is the count of
  *                  background tasks still running at stop time, mined from
@@ -56,11 +58,11 @@ const noop = (): void => undefined;
  *                  window.
  * - `session`    — session boundary. Resets the turn gate.
  * - `answered`   — a pending question/approval was resolved. Cancels a
- *                  pending attention window.
+ *                  pending dialog attention window, never a failure.
  */
 export type AlarmCue =
   | { class: 'working' }
-  | { class: 'attention'; firm?: boolean }
+  | { class: 'attention'; firm?: boolean; failure?: boolean }
   | { class: 'stop'; child: boolean; leftoverWork: number; interrupted?: boolean }
   | { class: 'session' }
   | { class: 'answered' };
@@ -109,6 +111,8 @@ interface PaneState {
 
 interface PendingWindow {
   cls: AlarmClass;
+  /** A failed turn's outcome, not an unanswered question. */
+  failure: boolean;
   /** A hook-reported attention: only an answer, a stop or a session boundary
    *  closes it — never a working cue. */
   firm: boolean;
@@ -159,14 +163,17 @@ export class CompletionAlarm {
    *
    *   cue              | pending        | result
    *   -----------------+----------------+-------------------------------
+   *   stop/answered/   | failure        | kept → drop (new work or session
+   *   dialog attention |                | can still rebut the failure)
    *   working          | firm attention | kept (not rebutted), seenWorking=true → drop
    *   working          | other          | cancel (rebut), announced=false,
    *   working          |                | seenWorking=true → drop
-   *   answered         | attention      | cancel → drop
+   *   answered         | dialog         | cancel → drop
    *   answered         | other/none     | no-op → drop
    *   attention        | done/attention | cancel, open attention window → hold
    *                    |                | (firm if the cue or the replaced
-   *                    |                | attention window was firm)
+   *                    |                | attention window was firm;
+   *                    |                | failures never inherit firmness)
    *   stop.child       | any            | NO-OP, never a toast → drop
    *   stop.leftover>0  | firm attention | kept, treated as working → drop
    *   stop.leftover>0  | other          | cancel, treated as working → drop
@@ -199,17 +206,20 @@ export class CompletionAlarm {
         return 'drop';
 
       case 'answered':
-        if (state.pending?.cls === 'attention') {
+        if (state.pending?.cls === 'attention' && !state.pending.failure) {
           this.cancelPending(state, key, 'answered');
         }
         return 'drop';
 
       case 'attention': {
+        // A delayed dialog report cannot erase a known failure. The next
+        // real working/session cue can rebut it (for example, an API retry).
+        if (state.pending?.failure && !cue.failure) return 'drop';
         // The hook and the screen detector both report the same dialog; one
         // window carries it, and it stays firm whichever report came second.
-        const firm = cue.firm === true || (state.pending?.cls === 'attention' && state.pending.firm);
+        const firm = !cue.failure && (cue.firm === true || (state.pending?.cls === 'attention' && state.pending.firm));
         this.cancelPending(state, key, 'superseded by attention');
-        return this.openWindow(state, key, pane, slug, 'attention', resume, firm);
+        return this.openWindow(state, key, pane, slug, 'attention', resume, firm, cue.failure === true);
       }
 
       case 'stop': {
@@ -236,6 +246,10 @@ export class CompletionAlarm {
           // to make.
           return 'drop';
         }
+        // A generic Stop arriving during an API failure's hold used to
+        // cancel the error and announce "finished" instead. It supplies no
+        // new work or successful outcome, so preserve the failure window.
+        if (state.pending?.failure) return 'drop';
         if (cue.leftoverWork > 0 && state.pending?.cls === 'attention' && state.pending.firm) {
           // Background work still running is working evidence, and working
           // evidence never closes a hook-reported dialog: a background agent's
@@ -303,13 +317,16 @@ export class CompletionAlarm {
     cls: AlarmClass,
     resume: (confirmed?: ConfirmedWindow) => void,
     firm = false,
+    failure = false,
   ): AlarmOutcome {
     const t0 = this.now();
-    const cancel = this.schedule(() => {
+    const pending: PendingWindow = { cls, cancel: noop, resume, firm, failure };
+    state.pending = pending;
+    pending.cancel = this.schedule(() => {
       const current = this.states.get(key);
       // Only confirm if THIS window is still the open one — a replaced or
       // cancelled window's timer must be inert even if the cancel raced.
-      if (current !== state || current.pending === null) return;
+      if (current !== state || current.pending !== pending) return;
       current.pending = null;
       current.announced = true;
       current.seenWorking = false;
@@ -339,7 +356,6 @@ export class CompletionAlarm {
         else console.warn(line);
       }
     }, this.windowMs);
-    state.pending = { cls, cancel, resume, firm };
     return 'hold';
   }
 
@@ -406,9 +422,10 @@ export function normalizeHookCue(signal: AgentSignal): AlarmCue {
       // needs-a-human one instead of the done one, and at confirmation sets
       // announced=true / seenWorking=false — closing the turn gate exactly as a
       // stop confirmation would, so a stray later Stop for the same turn cannot
-      // announce a completion behind it. A separate `failure` class would be
-      // this behaviour byte-for-byte under a second name.
-      return { class: 'attention' };
+      // announce a completion behind it. Keep the failure flag while the
+      // window is pending too: a generic Stop must not replace it with done,
+      // and a late answer to an earlier dialog does not resolve this error.
+      return { class: 'attention', failure: true };
     case 'agent.input_answered':
     case 'agent.permission_answered':
       return { class: 'answered' };
