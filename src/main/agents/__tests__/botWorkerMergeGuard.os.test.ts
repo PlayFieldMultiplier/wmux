@@ -273,14 +273,14 @@ describe('which creates are a bot\'s workers: main\'s records, never the rendere
     expect(() => withBotWorkerMergeGuard({}, strict, { dir, ...mcp() })).toThrow(/no launch line/);
     expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, exec: 'claude', cwd: dir }, strict, { dir, ...mcp() })).toThrow(/exec unit/);
     // #2268: a data folder no shell can quote is named as the cause (below), not as a line the guard cannot carry.
-    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, strict, { dir: path.join(dir, 'a$b'), ...mcp() })).toThrow(/^PTY_CREATE: Command Prompt cannot pass the wmux data folder \(its path contains "\$"\), and no other shell can either; move the folder$/);
+    expect(() => withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, strict, { dir: path.join(dir, 'a$b'), ...mcp() })).toThrow(/^PTY_CREATE: No shell can pass the wmux data folder to a worker \(its path contains "\$"\); move the folder$/);
     // An unreadable ledger is not read as "not a bot".
     expect(() => botWorkerForCreate({ workspaceId: 'ws-task' }, { dir, isBotTaskWorkspace: () => { throw new Error('torn'); } })).toThrow(/ledger could not be read/);
   });
 });
 
 describe('#2268: a data folder no shell can pass refuses a worker by that cause, in every shell', () => {
-  const stuck = `Command Prompt cannot pass the wmux data folder (its path contains "!"), and no other shell can either; move the folder`;
+  const stuck = `No shell can pass the wmux data folder to a worker (its path contains "!"); move the folder`;
   const strict = { workspaceId: 'ws-task', strict: true };
   const winLine = `claude --dangerously-skip-permissions ${promptFileArgument('C:\\Users\\me\\.wmux-wE9!\\worktrees\\.meta\\t-1\\prompt.md', 'win32')}`;
 
@@ -297,6 +297,8 @@ describe('#2268: a data folder no shell can pass refuses a worker by that cause,
     expect(refused).toBe(`PTY_CREATE: ${stuck}`);
     expect(refused).toBe(`PTY_CREATE: ${cmdLaunchPathRefusal(winLine, 'C:\\Users\\me\\.wmux-wE9!', true)}`);
     expect(refused).not.toMatch(/merge-lane guard/);
+    // The worker was refused in a PowerShell pane: the words name no shell.
+    expect(refused).not.toMatch(/Command Prompt|PowerShell/);
     // Nothing is written for a launch that cannot start.
     expect(fs.existsSync(path.join(bad, 'factory'))).toBe(false);
   });

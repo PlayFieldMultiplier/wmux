@@ -99,7 +99,7 @@ describe('bot notices', () => {
 
   it('#2256: a Command Prompt path refusal reaches the card with its cause and remedy, not as an unopened pane', () => {
     const why = cmdLaunchPathRefusal(`claude ${promptFileArgument('C:\\Users\\me\\.wmux-wE9!\\worktrees\\.meta\\t-1\\prompt.md', 'win32')}`, 'C:\\Users\\me\\.wmux-wE9!', true) ?? '';
-    expect(why).toBe('Command Prompt cannot pass the wmux data folder (its path contains "!"), and no other shell can either; move the folder');
+    expect(why).toBe('No shell can pass the wmux data folder to a worker (its path contains "!"); move the folder');
     // As fan-out reports it: the renderer's spawn, the IPC wrapper, then pty:create's refusal.
     const wrap = (reason: string) => `renderer spawn failed: fanout.spawnWorkspace: PTY create failed — Error invoking remote method 'pty:create': Error: PTY_CREATE: ${reason}`;
     expect(plainStartFailure(wrap(why))).toBe(why);
@@ -121,7 +121,7 @@ describe('bot notices', () => {
       } catch (err) {
         thrown = (err as Error).message;
       }
-      const why = 'Command Prompt cannot pass the wmux data folder (its path contains "!"), and no other shell can either; move the folder';
+      const why = 'No shell can pass the wmux data folder to a worker (its path contains "!"); move the folder';
       expect(thrown).toBe(`PTY_CREATE: ${why}`);
       // As fan-out reports it: the renderer's spawn, the IPC wrapper, then the guard's refusal.
       const wrapped = `renderer spawn failed: fanout.spawnWorkspace: PTY create failed — Error invoking remote method 'pty:create': Error: ${thrown}`;
