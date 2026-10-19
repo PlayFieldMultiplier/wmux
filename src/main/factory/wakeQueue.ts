@@ -275,12 +275,13 @@ export class WakeQueue implements WakeSinkApi {
     const now = this.now();
     const finished = this.items.filter((i) => !LIVE.has(i.state) && i.state !== 'parked');
     let drop = new Set(finished.filter((i) => i.enqueuedAt < now - WAKE_RECORD_RETAIN_MS).map((i) => i.id));
-    // An owner's message that was taken keeps its record, whatever the
-    // count, for HUMAN_RETRY_WINDOW_MS: a retry of it within that time must
-    // find it (humanMessage.ts). Past that it counts like any other record
-    // (a group room makes one message a wake per bot).
+    // An owner's or a guest's message that was taken keeps its record,
+    // whatever the count, for HUMAN_RETRY_WINDOW_MS: a retry of it within
+    // that time must find it (humanMessage.ts, guestMessage.ts). Past that it
+    // counts like any other record (a group room makes one message a wake
+    // per bot).
     const countable = finished.filter((i) => !drop.has(i.id)
-      && !(i.state !== 'dropped' && keyOf(i.reason)?.startsWith('human:') && i.enqueuedAt >= now - HUMAN_RETRY_WINDOW_MS));
+      && !(i.state !== 'dropped' && (i.reason.kind === 'human' || i.reason.kind === 'guest') && keyOf(i.reason) !== null && i.enqueuedAt >= now - HUMAN_RETRY_WINDOW_MS));
     if (countable.length > WAKE_RECORD_MAX) {
       const oldest = [...countable].sort((a, b) => a.enqueuedAt - b.enqueuedAt).slice(0, countable.length - WAKE_RECORD_MAX);
       drop = new Set([...drop, ...oldest.map((i) => i.id)]);

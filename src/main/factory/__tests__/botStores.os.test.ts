@@ -816,9 +816,12 @@ describe('WakeQueue', () => {
     }
   });
 
-  it('a taken human message keeps its record past the count cap for the retry window, so a retry finds it; then it counts', () => {
+  it.each([
+    ['human', { kind: 'human' as const, text: 'hi', source: 'phone' as const, clientMessageId: 'cm-old' }],
+    ['guest', { kind: 'guest' as const, guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c-old', text: 'hi' }],
+  ])('a taken %s message keeps its record past the count cap for the retry window, so a retry finds it; then it counts', (_kind, reason) => {
     const q = newQueue();
-    const human = { botId: 'bot-h', workspaceId: 'ws', reason: { kind: 'human' as const, text: 'hi', source: 'phone' as const, clientMessageId: 'cm-old' }, priority: 0 as const };
+    const human = { botId: 'bot-h', workspaceId: 'ws', reason, priority: 0 as const };
     const first = q.enqueue(human)!;
     q.start(first.id);
     q.finish(first.id);

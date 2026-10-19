@@ -31,9 +31,9 @@ const A = 'bot-0000aaaa';
 const B = 'bot-0000bbbb';
 const OTHER = 'bot-0000cccc';
 
-function setup(groups: Record<string, string[]> = {}) {
+function setup(groups: Record<string, string[]> = {}, now: () => number = () => 1_000) {
   const bots = [bot(A, 'ws-1'), bot(B, 'ws-1'), bot(OTHER, 'ws-2')];
-  const writer = new RoomWriter({ dir, now: () => 1_000, log: () => undefined });
+  const writer = new RoomWriter({ dir, now, log: () => undefined });
   const enqueue = vi.fn((item: Record<string, unknown>) => ({ id: `w-${String(item.botId)}`, ...item }));
   const ports = {
     bots: { listEnabled: () => bots.filter((b) => b.enabled), get: (id: string) => bots.find((b) => b.id === id) ?? null },
@@ -95,13 +95,29 @@ describe('postGuestMessage', () => {
   });
 
   it('is idempotent per message id, and a reused id with other words is refused', () => {
-    const { enqueue, deps } = setup();
+    const { enqueue, deps } = setup({}, () => Date.now());
     const first = postGuestMessage(base, deps);
     const again = postGuestMessage(base, deps);
     expect(again).toMatchObject({ ok: true, duplicate: true, woke: [A] });
     expect(first.ok && again.ok && again.cardId === first.cardId).toBe(true);
-    expect(enqueue).toHaveBeenCalledTimes(1);
+    // The repeat asks again for the same card's wake (the queue dedupes it).
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(enqueue.mock.calls[1][0]).toMatchObject({ botId: A, reason: { kind: 'guest', cardId: first.ok ? first.cardId : '' } });
     expect(postGuestMessage({ ...base, text: 'other words' }, deps)).toEqual({ ok: false, code: 'id_reused' });
+  });
+
+  it('a repeat queues the wake the first post could not', () => {
+    const { enqueue, deps } = setup({}, () => Date.now());
+    enqueue.mockReturnValueOnce(null as never);
+    expect(postGuestMessage(base, deps)).toMatchObject({ ok: true, woke: [] });
+    expect(postGuestMessage(base, deps)).toMatchObject({ ok: true, duplicate: true, woke: [A] });
+  });
+
+  it('a repeat past the retry window queues nothing', () => {
+    const old = setup();
+    postGuestMessage(base, old.deps);
+    expect(postGuestMessage(base, old.deps)).toMatchObject({ ok: true, duplicate: true, woke: [] });
+    expect(old.enqueue).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a malformed payload and answers factory_off when off', () => {

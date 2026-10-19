@@ -12,17 +12,18 @@
 //
 // A guest writes no human card, no fact, no handoff and no approval; it
 // starts no worker and uses no connector. Idempotent per (guest, message
-// id): a repeat returns the first card and queues nothing again (the queue
-// dedupes `guest:<cardId>` per bot).
+// id): a repeat returns the first card and queues only the wakes the first
+// post could not (the queue dedupes `guest:<cardId>` per bot).
 
 import { BOT_ID_RE, type BotProfile } from '../../shared/bot';
 import {
   GUEST_LIMITS, GUEST_MESSAGE_ID_RE, guestCardTitle, isGuestId, parseGuestScope, sanitizeGuestName,
   type GuestPostResult,
 } from '../../shared/guestBots';
-import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, type RoomCard, type ThreadId } from '../../shared/room';
 import { capBody, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
 import { redactStoredSecrets } from './secretRedaction';
+import { HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
 
 export type GuestPostHandler = (payload: Record<string, unknown>) => Promise<GuestPostResult>;
 
@@ -132,7 +133,12 @@ export function postGuestMessage(raw: Record<string, unknown>, deps: GuestPostDe
   if (prior) {
     // A repeat is the same words in the same thread, or a reused id.
     if (prior.kind !== 'guest' || prior.threadId !== p.threadId || (prior.body ?? '') !== body) return { ok: false, code: 'id_reused' };
-    return { ok: true, cardId: prior.id, seq: prior.seq, duplicate: true, woke: prior.refs?.botIds ?? [] };
+    // The card's own names, still of this conversation, queued again where
+    // the first post could not (a taken wake is found by its dedupe key).
+    // Past the queue's retry window that record may be gone, so an older
+    // card queues nothing.
+    const named = Date.now() - prior.at < HUMAN_RETRY_WINDOW_MS ? (prior.refs?.botIds ?? []).filter((id) => byId.has(id)) : [];
+    return { ok: true, cardId: prior.id, seq: prior.seq, duplicate: true, woke: enqueueGuestWakes(ports, named.map((id) => byId.get(id)!), p, prior) };
   }
   const r = writer.post({
     workspaceId: p.workspaceId,
@@ -147,14 +153,19 @@ export function postGuestMessage(raw: Record<string, unknown>, deps: GuestPostDe
   });
   if (!r.ok) return { ok: false, code: 'invalid' };
   const card = r.card;
+  const woke = enqueueGuestWakes(ports, p.mentions.map((id) => byId.get(id)!), p, card);
+  return { ok: true, cardId: card.id, seq: card.seq, ...(r.duplicate ? { duplicate: true as const } : {}), woke };
+}
+
+/** One `guest` wake per bot for `card`; the ids whose wake is queued. */
+function enqueueGuestWakes(ports: Partial<FactoryRoomPorts>, bots: BotProfile[], p: ParsedPost, card: RoomCard): string[] {
   const woke: string[] = [];
-  for (const id of p.mentions) {
-    const bot = byId.get(id)!;
+  for (const bot of bots) {
     try {
       const item = ports.wakes?.enqueue({
         botId: bot.id,
         workspaceId: bot.workspaceId,
-        reason: { kind: 'guest', guestId: p.guestId, guestName: p.guestName, cardId: card.id, text: body },
+        reason: { kind: 'guest', guestId: p.guestId, guestName: p.guestName, cardId: card.id, text: card.body ?? '' },
         // Below the owner's and the factory's own work, and within the cap.
         priority: 2,
         threadId: card.threadId,
@@ -164,5 +175,5 @@ export function postGuestMessage(raw: Record<string, unknown>, deps: GuestPostDe
       console.warn('[factory] rooms: guest wake not enqueued', err);
     }
   }
-  return { ok: true, cardId: card.id, seq: card.seq, ...(r.duplicate ? { duplicate: true as const } : {}), woke };
+  return woke;
 }
