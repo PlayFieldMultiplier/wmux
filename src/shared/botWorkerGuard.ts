@@ -45,11 +45,17 @@ export function ghApiDeny(rest: string): string[] {
 /** `glab <group> <verb>` in every spelling glab runs it: with options
  *  (`-R g/p`) between the group and the verb. glab takes no options before
  *  the group (`glab -R g/p mr list` is refused by glab itself), so there is
- *  no spelling for that. Callers name each of a verb's aliases too
- *  (`mr accept` is `mr merge`). Pure. */
+ *  no spelling for that. The group is also read under its aliases
+ *  (`project` is `repo`); callers name each of a verb's aliases (`mr accept`
+ *  is `mr merge`). Pure. */
 export function glabSubcommandDeny(group: string, verb: string): string[] {
-  return [`Bash(glab ${group} ${verb}*)`, `Bash(glab ${group} -* ${verb})`, `Bash(glab ${group} -* ${verb} *)`];
+  const [head, ...rest] = group.split(' ');
+  const groups = [head, ...(GLAB_GROUP_ALIASES[head] ?? [])].map((g) => [g, ...rest].join(' '));
+  return groups.flatMap((g) => [`Bash(glab ${g} ${verb}*)`, `Bash(glab ${g} -* ${verb})`, `Bash(glab ${g} -* ${verb} *)`]);
 }
+
+/** glab's built-in aliases for a command group. */
+const GLAB_GROUP_ALIASES: Readonly<Record<string, readonly string[]>> = { repo: ['project'], variable: ['var'], stack: ['stacks'] };
 
 /** `glab api<rest>`. Pure. */
 export function glabApiDeny(rest: string): string[] {
@@ -141,11 +147,13 @@ export const BOT_WORKER_PUBLIC_DENY: readonly string[] = [
   ...['create', 'new', 'close', 'note', 'comment', 'delete', 'del', 'reopen', 'update'].flatMap((v) => glabSubcommandDeny('issue', v)),
   ...['note', 'comment', 'revoke', 'unapprove', 'close', 'reopen', 'delete', 'del', 'update'].flatMap((v) => glabSubcommandDeny('mr', v)),
   ...['create', 'delete', 'upload'].flatMap((v) => glabSubcommandDeny('release', v)),
-  ...['create', 'fork', 'update', 'delete', 'transfer', 'archive', 'mirror', 'publish'].flatMap((v) => glabSubcommandDeny('repo', v)),
+  ...['create', 'new'].flatMap((v) => glabSubcommandDeny('issue board', v)),
+  ...['create', 'fork', 'update', 'delete', 'transfer', 'mirror', 'publish'].flatMap((v) => glabSubcommandDeny('repo', v)),
   ...['add', 'remove'].flatMap((v) => glabSubcommandDeny('repo members', v)),
   ...['set', 'new', 'create', 'update', 'delete', 'remove'].flatMap((v) => glabSubcommandDeny('variable', v)),
-  ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [...glabApiDeny(`*-X*${x}*`), ...glabApiDeny(`*--method*${x}*`)])),
-  ...['* -f*', '* -F*', '*--field*', '*--raw-field*', '*--form*', '*--input*'].flatMap(glabApiDeny),
+  // Also bundled after api's one other switch, `-i` (`-iX PUT`, `-if`).
+  ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [`*-X*${x}*`, `*-iX*${x}*`, `*--method*${x}*`].flatMap(glabApiDeny))),
+  ...['* -f*', '* -F*', '* -if*', '* -iF*', '*--field*', '*--raw-field*', '*--form*', '*--input*'].flatMap(glabApiDeny),
   ...glabSubcommandDeny('alias', 'set'),
 ];
 
