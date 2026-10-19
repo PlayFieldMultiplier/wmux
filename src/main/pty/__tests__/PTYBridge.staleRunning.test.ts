@@ -184,7 +184,7 @@ describe('PTYBridge stale "running" after turn end (#935 direction 3)', () => {
     // The precise 'complete' lands after the burst and is the last thing
     // broadcast — the suppression window is armed and the tracked status is
     // no longer 'running'.
-    proc.emitData('aider v1.2.3\n');
+    proc.emitData('\naider v1.2.3\n');
     proc.emitData('Applied edit to foo.py\n');
     flushMicroBatch();
     expect(lastStatus()).toBe('complete');

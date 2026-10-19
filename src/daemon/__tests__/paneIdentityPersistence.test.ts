@@ -160,6 +160,9 @@ describe('pane identity persistence (event to lastDetectedAgent)', () => {
     expect(p.meta.lastDetectedAgent).toBe('codex');
     expect(p.meta.lastDetectedAgentEvidence?.source).toBe('screen');
     p.output(SHELL_PROMPT_BACK + 'opencode\r\n');
+    expect(p.screen()).toBe('codex');
+    // A command echo is not provider identity; the native title is.
+    p.output('\u001b]0;OpenCode\u0007');
     expect(p.screen()).toBe('opencode');
     expect(p.meta.lastDetectedAgent).toBe('codex');
   });

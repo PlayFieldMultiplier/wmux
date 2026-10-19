@@ -269,6 +269,43 @@ describe('AgentDetector', () => {
     });
   });
 
+  describe('shell return clears launch-owned screen evidence', () => {
+    it('does not attach an old Claude question to a new launch option row', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed('Claude Code\nbypass permissions on\nDo you want to proceed?\n');
+      det.feed('\u001b]133;D;0\u0007');
+      det.feed('Claude Code\nbypass permissions on\n');
+      cb.mockClear();
+      det.feed('❯ 1. Yes\n');
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it('does not report Codex quota text after the owner returned to the shell', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onUsageLimit(cb);
+      det.feed('>_ OpenAI Codex (v0.149.1)\n');
+      det.feed('\u001b]133;A\u0007');
+      det.feed("■ You've hit your usage limit. Try again in 2 hours.\n");
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it('does not carry a wrapped quota message into a fresh Codex launch', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onUsageLimit(cb);
+      det.feed('>_ OpenAI Codex (v0.149.1)\n');
+      det.feed("■ You've hit your usage limit. Upgrade to Pro or\n");
+      expect(cb).toHaveBeenCalledTimes(1);
+      det.feed('\u001b]133;A\u0007>_ OpenAI Codex (v0.149.1)\n');
+      cb.mockClear();
+      det.feed('try again in 2 hours.\n');
+      expect(cb).not.toHaveBeenCalled();
+    });
+  });
+
   describe('interrupted-turn row', () => {
     const ROW = '  \x1b[2m⎿\x1b[0m  Interrupted · What should Claude do instead?\n';
 
@@ -386,13 +423,13 @@ describe('AgentDetector', () => {
   describe('REGRESSION (R1): subscribe/unsubscribe lifecycle', () => {
     it('onEvent returns an unsubscribe function', () => {
       const det = new AgentDetector();
-      const unsub = det.onEvent(() => {});
+      const unsub = det.onEvent(() => undefined);
       expect(typeof unsub).toBe('function');
     });
 
     it('onCritical returns an unsubscribe function', () => {
       const det = new AgentDetector();
-      const unsub = det.onCritical(() => {});
+      const unsub = det.onCritical(() => undefined);
       expect(typeof unsub).toBe('function');
     });
 
@@ -628,6 +665,75 @@ describe('AgentDetector', () => {
     });
   });
 
+  describe('screen identity requires provider chrome', () => {
+    const mentions = [
+      'Documentation: compare opencode with other tools.\n',
+      'Try gh copilot for this example.\n',
+      'Installation guide: aider --help\n',
+      'README: Antigravity CLI is another tool.\n',
+      '% opencode --help\n',
+      '$ gh copilot suggest\n',
+      '$ aider --help\n',
+      'opencode\n',
+      'copilot-cli\n',
+      'OC | a title printed as plain text\n',
+      '"Welcome to GitHub Copilot CLI!"\n',
+      'aider v0.86.1 is mentioned in docs\n',
+      'Antigravity CLI 1.2.13 is mentioned in docs\n',
+      'Welcome to the Antigravity CLI. is the welcome message\n',
+      'Welcome to GitHub Copilot CLI! is the welcome message\n',
+      'Do you trust the contents of this project?\n',
+    ];
+
+    it.each(mentions)('does not start an agent from shell output, at any split: %j', (output) => {
+      // An anchored regex must not match the banner-shaped prefix before the
+      // rest of the row arrives. All partitions include the unsplit baseline.
+      for (let split = 0; split <= output.length; split++) {
+        const det = new AgentDetector();
+        const cb = vi.fn();
+        det.onEvent(cb);
+        det.feed(output.slice(0, split));
+        det.feed(output.slice(split));
+        expect(cb).not.toHaveBeenCalled();
+        expect(det.getLastAgent()).toBeNull();
+        expect(det.getActiveAgents()).toEqual([]);
+      }
+    });
+
+    it.each([
+      ['Aider', 'aider v0.86.1\n'],
+      ['Antigravity CLI', '  ▄▀▀▄        Antigravity CLI 1.2.13\r\n'],
+      ['Antigravity CLI', 'Welcome to the Antigravity CLI. You are currently not signed in.\n'],
+      ['GitHub Copilot CLI', 'Welcome to GitHub Copilot CLI!\n'],
+      ['GitHub Copilot CLI', 'Welcome to GitHub Copilot in the CLI!\n'],
+      ['GitHub Copilot CLI', '\u001b[2;1H│ Welcome to GitHub Copilot CLI! │\u001b[3;1H'],
+      // Live local opencode 1.18.30 startup capture, 2026-10-19, --pure,
+      // empty temporary XDG directories, no prompt sent: OSC 0 / BEL.
+      ['OpenCode', '\u001b]0;OpenCode\u0007'],
+      // The session title form is source-verified in upstream tui/app.tsx.
+      ['OpenCode', '\u001b]2;OC | New session\u001b\\'],
+    ])('keeps %s provider chrome detection independent of chunk splits (%j)', (agent, output) => {
+      for (let split = 0; split <= output.length; split++) {
+        const det = new AgentDetector();
+        const cb = vi.fn();
+        det.onEvent(cb);
+        det.feed(output.slice(0, split));
+        det.feed(output.slice(split));
+        expect(det.getLastAgent()).toBe(agent);
+        expect(cb.mock.calls.map((c) => c[0]).filter((event) => event.message === 'Agent started'))
+          .toEqual([{ agent, status: 'running', message: 'Agent started' }]);
+      }
+    });
+
+    it('does not accept an incomplete or unrelated OSC title', () => {
+      const det = new AgentDetector();
+      det.feed('\u001b]0;OpenCode');
+      expect(det.getLastAgent()).toBeNull();
+      det.feed(' documentation\u0007\n');
+      expect(det.getLastAgent()).toBeNull();
+    });
+  });
+
   describe('Antigravity CLI (agy 1.2.13, live capture 2026-09-29)', () => {
     const FOOTER_TAIL = '                                                                     accept-edits · Gemini 3.8 Flash · high';
 
@@ -660,13 +766,13 @@ describe('AgentDetector', () => {
       expect(cb.mock.calls.map((c) => c[0].status)).toContain('awaiting_input');
     });
 
-    it('reports a trust screen that arrives before any banner', () => {
+    it('does not infer agy identity from a generic trust question before any banner', () => {
       const det = new AgentDetector();
       const cb = vi.fn();
       det.onEvent(cb);
       det.feed('Do you trust the contents of this project?\n');
-      expect(det.getLastAgent()).toBe('Antigravity CLI');
-      expect(cb.mock.calls.map((c) => c[0].status)).toContain('awaiting_input');
+      expect(det.getLastAgent()).toBeNull();
+      expect(cb).not.toHaveBeenCalled();
     });
 
     it('does not open on the trust question quoted inside another line', () => {
@@ -1247,12 +1353,102 @@ describe('AgentDetector', () => {
       expect(det.getLastAgent()).toBe('Codex CLI');
     });
 
-    it('a substring gate takes the pane once the shell prompt is back (OSC 133)', () => {
+    it('native OpenCode chrome takes the pane after the shell returns (OSC 133)', () => {
       // The owner exited: the shell draws its prompt, and the user starts
       // another agent in the same pane.
       const { det } = claudeGated();
       det.feed('\u001b]133;D;0\u0007\u001b]133;A\u0007% opencode\r\n');
+      expect(det.getLastAgent()).toBe('Claude Code');
+      det.feed('\u001b]0;OpenCode\u0007');
       expect(det.getLastAgent()).toBe('OpenCode');
+    });
+
+    it('detects Claude again after switching to Codex and returning in the same PTY', () => {
+      const { det, cb } = claudeGated();
+      det.feed('\u001b]133;A\u0007% codex\r\n');
+      det.feed('>_ OpenAI Codex (v0.149.1)\r\n');
+      expect(det.getLastAgent()).toBe('Codex CLI');
+      det.feed('\u001b]133;A\u0007% claude\r\n');
+      cb.mockClear();
+      det.feed('Claude Code v2.1.172\r\n  bypass permissions on\r\n');
+      expect(det.getLastAgent()).toBe('Claude Code');
+      det.feed(PROCEED_CURSOR_DRAWN);
+      expect(cb.mock.calls.map((c) => c[0].status)).toContain('awaiting_input');
+    });
+
+    it('detects a previously seen Codex again after a different agent exits', () => {
+      const det = new AgentDetector();
+      det.feed('>_ OpenAI Codex (v0.149.1)\r\n');
+      det.feed('\u001b]133;A\u0007% aider\r\n');
+      det.feed('aider v0.50.0\r\n');
+      expect(det.getLastAgent()).toBe('Aider');
+      det.feed('\u001b]133;A\u0007% codex\r\n');
+      det.feed('>_ OpenAI Codex (v0.149.1)\r\n');
+      expect(det.getLastAgent()).toBe('Codex CLI');
+    });
+
+    it('requires fresh compound evidence after a shell return, not the old Claude banner', () => {
+      const { det, cb } = claudeGated();
+      det.feed('\u001b]133;A\u0007% cat notes\r\n');
+      cb.mockClear();
+      det.feed('bypass permissions on\r\n');
+      det.feed(PROCEED_CURSOR_DRAWN);
+      expect(cb).not.toHaveBeenCalled();
+      det.feed('Claude Code v2.1.172\r\n');
+      expect(cb.mock.calls.map((c) => c[0].status)).toContain('running');
+    });
+
+    it('a same-agent relaunch can report an identical prompt again', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed('Claude Code v2.1.172\n  bypass permissions on\n');
+      cb.mockClear();
+      det.feed('\u001b]133;A\u0007Claude Code v2.1.172\n  bypass permissions on\n');
+      expect(cb.mock.calls.map((c) => c[0].status)).toEqual(['running', 'waiting']);
+    });
+
+    it('reopens the Kiro compound gate after another agent has owned the pane', () => {
+      const det = new AgentDetector();
+      det.feed('Kiro CLI\nask a question or describe a task\n');
+      det.feed('\u001b]133;A\u0007>_ OpenAI Codex (v0.149.1)\n');
+      expect(det.getLastAgent()).toBe('Codex CLI');
+      det.feed('\u001b]133;A\u0007Kiro CLI\n');
+      expect(det.getLastAgent()).toBe('Codex CLI');
+      det.feed('ask a question or describe a task\n');
+      expect(det.getLastAgent()).toBe('Kiro CLI');
+    });
+
+    it('an incomplete shell marker does not release the current owner', () => {
+      const { det, cb } = claudeGated();
+      det.feed('\u001b]133;A');
+      expect(det.getLastAgent()).toBe('Claude Code');
+      expect(cb).not.toHaveBeenCalled();
+      det.feed('\u0007>_ OpenAI Codex (v0.149.1)\n');
+      expect(det.getLastAgent()).toBe('Codex CLI');
+    });
+
+    it.each(['\u0007', '\u001b\\'])('relaunch detection is independent of PTY chunk boundaries (terminator %j)', (end) => {
+      const output = 'Claude Code v2.1.172\r\n  bypass permissions on\r\n'
+        + `\u001b]133;D;0${end}\u001b]133;A${end}% codex\r\n`
+        + '>_ OpenAI Codex (v0.149.1)\r\n'
+        + `\u001b]133;D;0${end}\u001b]133;A${end}% claude\r\n`
+        + 'Claude Code v2.1.172\r\n  bypass permissions on\r\n';
+      // Every two-chunk split, plus the two extremes (one chunk and one
+      // character at a time), must identify the same three launches.
+      const partitions = [
+        [output],
+        [...output],
+        ...Array.from({ length: output.length - 1 }, (_, i) => [output.slice(0, i + 1), output.slice(i + 1)]),
+      ];
+      for (const chunks of partitions) {
+        const det = new AgentDetector();
+        const cb = vi.fn();
+        det.onEvent(cb);
+        for (const chunk of chunks) det.feed(chunk);
+        expect(cb.mock.calls.map((c) => c[0]).filter((e) => e.message === 'Agent started').map((e) => e.agent))
+          .toEqual(['Claude Code', 'Codex CLI', 'Claude Code']);
+      }
     });
 
     it('the real Codex banner row still opens the Codex gate', () => {

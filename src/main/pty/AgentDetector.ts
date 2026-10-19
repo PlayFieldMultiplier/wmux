@@ -121,6 +121,8 @@ interface AgentPattern {
    * not a per-slug branch in checkGates.
    */
   chrome?: (line: string) => boolean;
+  /** This visible banner can be a prose prefix until its visual row ends. */
+  completeChromeRow?: boolean;
   patterns: { regex: RegExp; status: AgentEvent['status']; message: string }[];
 }
 
@@ -336,7 +338,9 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Aider',
     slug: 'aider',
-    gate: /aider v|aider --/,
+    gate: /aider v/,
+    chrome: isAiderChrome,
+    completeChromeRow: true,
     patterns: [
       { regex: /^aider>\s*$/,                    status: 'waiting',   message: 'Waiting for input' },
       { regex: /Applied edit to/,                status: 'complete',  message: 'Edit applied' },
@@ -420,14 +424,16 @@ const AGENT_PATTERNS: AgentPattern[] = [
   // `esc to cancel` while a turn runs, `? for shortcuts` once the composer is
   // idle, both followed on the same row by `<mode> · <model> · <effort>`.
   // The trust screen shows before the banner in an untrusted folder.
-  // As with Codex, the trust phrase is part of the gate: when it arrives
-  // before any banner, the same line opens the gate and emits awaiting_input.
-  // Only as a whole row (anchored both ends), so prose or source that quotes
-  // the question mid-line cannot claim the pane for agy.
+  // The trust question is not an identity signal: other tools and documents
+  // can show it too. It reports awaiting_input only after provider chrome has
+  // identified agy. A trust-only first run needs process/hook identity, which
+  // this screen-only detector does not receive.
   {
     agent: 'Antigravity CLI',
     slug: 'agy',
-    gate: /Antigravity\s*CLI|^\s*Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*project\?\s*$/,
+    gate: /Antigravity\s*CLI/,
+    chrome: isAntigravityChrome,
+    completeChromeRow: true,
     patterns: [
       { regex: /^\s*Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*project\?/, status: 'awaiting_input', message: 'Project trust prompt' },
       { regex: /^\s*esc\s*to\s*cancel/,                                        status: 'running',        message: 'Working' },
@@ -455,7 +461,8 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'OpenCode',
     slug: 'opencode',
-    gate: /opencode/,
+    gate: /OpenCode|OC \|/,
+    chrome: isOpenCodeChrome,
     patterns: [
       { regex: /^opencode>\s*$/,                 status: 'waiting',   message: 'Waiting for input' },
     ],
@@ -465,7 +472,9 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'GitHub Copilot CLI',
     slug: 'copilot',
-    gate: /gh copilot|copilot-cli/,
+    gate: /GitHub\s*Copilot/,
+    chrome: isCopilotChrome,
+    completeChromeRow: true,
     patterns: [
       { regex: /^copilot>\s*$/,                  status: 'waiting',   message: 'Waiting for input' },
     ],
@@ -705,6 +714,8 @@ function visibleChrome(line: string): string {
 
 /** OSC title, or a line whose visible text *starts* with `Claude Code`. */
 function isClaudeBannerChrome(line: string): boolean {
+  // OSC titles intentionally contain ESC and BEL delimiters.
+  // eslint-disable-next-line no-control-regex
   if (/\x1b\]0;[^\x07]*(?<!Open)(?<!Open\s)Claude/.test(line)) return true;
   const stripped = stripAnsi(line);
   if (SOURCE_LINE_RE.test(stripped)) return false;
@@ -817,6 +828,40 @@ function isGeminiFooterRow(line: string): boolean {
   return /\S(?: {2,}| · )gemini-\d[\w.-]*(?: +·)? +(?:\d+%(?: +used)?|\(\d+% *context *left\))$/i.test(row);
 }
 
+/** Existing Aider startup fixtures carry its version on a row of its own. */
+function isAiderChrome(line: string): boolean {
+  return /^aider v\d+\.\d+\.\d+(?:[\w.+-]*)?$/.test(visibleChrome(line));
+}
+
+/** agy 1.2.13 live-capture shapes, including the block-glyph version logo. */
+function isAntigravityChrome(line: string): boolean {
+  const v = visibleChrome(line);
+  return /^Antigravity\s*CLI\s+\d+\.\d+\.\d+(?:[\w.+-]*)?$/.test(v)
+    || /^Welcome\s+to\s+the\s+Antigravity\s*CLI\.(?:\s+You\s+are\s+currently\s+not\s+signed\s+in\.)?$/.test(v);
+}
+
+/**
+ * Native titles, not a visible product-name mention. Source shape verified in
+ * anomalyco/opencode packages/tui/src/app.tsx (2026-10-19): home uses OpenCode,
+ * a named session uses OC | <title>. Both OSC title selectors/terminators are
+ * accepted; local 1.18.30 --pure startup emitted OSC 0 / BEL with OpenCode.
+ * An unfinished OSC is not evidence. Title-disabled sessions need
+ * hook/process identity instead of guessing from documentation on screen.
+ */
+function isOpenCodeChrome(line: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /\x1b\][02];(?:OpenCode|OC \| [^\x07\x1b\r\n]{1,160})(?:\x07|\x1b\\)/.test(line);
+}
+
+/**
+ * Welcome rows documented by github/gh-copilot's README and
+ * github/copilot-cli's changelog. Command echoes (`gh copilot`, `copilot-cli`)
+ * are not provider output. Keep the optional historical `in the` spelling.
+ */
+function isCopilotChrome(line: string): boolean {
+  return /^Welcome\s+to\s+GitHub\s+Copilot\s+(?:in\s+the\s+)?CLI!?$/.test(visibleChrome(line));
+}
+
 /**
  * #1610 — whether an output chunk draws the Codex banner row
  * (`│ >_ OpenAI Codex (v…) │`). Codex prints it once per session boot (launch,
@@ -864,8 +909,10 @@ export class AgentDetector {
   // must precede it (idleSuppression.recentlyEscaped). A dedup here would let a
   // redrawn old row use up the report the real interrupt needs.
   private interruptedCallbacks: InterruptedCallback[] = [];
-  private readonly codexLimitScanner = new CodexUsageLimitLineScanner();
+  private codexLimitScanner = new CodexUsageLimitLineScanner();
   private lineBuffer = '';
+  /** Incomplete OSC 133 boundary, bounded to a short shell payload. */
+  private shellBoundaryBuffer = '';
   // Per (agent:status) dedup: stores the last matched string for each key.
   // Same key + same match = skip emit. New active cycle calls
   // resetEmissionState() to clear, so turn N+1 can emit again even when the
@@ -1005,8 +1052,53 @@ export class AgentDetector {
   }
 
   feed(data: string): void {
+    const text = this.shellBoundaryBuffer + data;
+    this.shellBoundaryBuffer = '';
+    // Process each launch in wire order, even when a PTY read contains both
+    // the old agent's last frame and the new agent's banner. OSC may itself
+    // span reads; neither a chunk boundary nor an unterminated marker is a
+    // shell return. Support both OSC terminators.
     // eslint-disable-next-line no-control-regex
-    if (this.lastAgent !== null && /\u001b\]133;[AD]/.test(data)) this.shellPromptSinceOwner = true;
+    const boundary = /\u001b\]133;[AD](?:;[^\u0007\u001b]{0,256})?(?:\u0007|\u001b\\)/g;
+    let start = 0;
+    for (let match = boundary.exec(text); match; match = boundary.exec(text)) {
+      this.feedOutput(text.slice(start, match.index));
+      this.noteShellReturn();
+      start = match.index + match[0].length;
+    }
+    const rest = text.slice(start);
+    const oscAt = rest.lastIndexOf('\u001b]');
+    const candidate = oscAt < 0 ? '' : rest.slice(oscAt);
+    // Only hold a prefix that can still become our marker. Other escapes
+    // (including agent titles) remain available to the detector immediately.
+    // eslint-disable-next-line no-control-regex
+    const partialBoundary = /^\u001b\]133;(?:[AD](?:;[^\u0007\u001b]{0,256})?)?(?:\u001b)?$/;
+    const holdAt = candidate && ('\u001b]133;'.startsWith(candidate) || partialBoundary.test(candidate))
+      ? oscAt : rest.endsWith('\u001b') ? rest.length - 1 : rest.length;
+    this.shellBoundaryBuffer = rest.slice(holdAt);
+    this.feedOutput(rest.slice(0, holdAt));
+  }
+
+  private noteShellReturn(): void {
+    if (this.lastAgent !== null) this.shellPromptSinceOwner = true;
+    // activeAgents is detection history, not evidence that an earlier
+    // launch owns the pane. Compound gates and unfinished dialogs must be
+    // established again, including when the same agent starts again.
+    this.claudeBannerSeen = false;
+    this.claudePromptSeen = false;
+    this.claudePromptEvidence = null;
+    this.kiroChromeSeen = false;
+    this.kiroPromptSeen = false;
+    this.kiroPromptEvidence = null;
+    this.lineBuffer = '';
+    this.dialogRow = '';
+    this.dialogQuestion = null;
+    this.approvalEmittedInFeed = false;
+    this.codexLimitScanner = new CodexUsageLimitLineScanner();
+  }
+
+  private feedOutput(data: string): void {
+    if (!data) return;
     this.lineBuffer += data;
     if (this.lineBuffer.length > MAX_BUFFER) {
       this.lineBuffer = this.lineBuffer.slice(-MAX_BUFFER);
@@ -1025,9 +1117,9 @@ export class AgentDetector {
     // 미완성 라인(아직 개행이 안 온 redraw)의 gate도 미리 검사한다. claude처럼
     // 시작 배너를 개행 없이 커서 이동으로 그리는 TUI는 "Claude Code vX"가
     // lineBuffer에 갇혀 라인 완성이 영영 안 될 수 있고, 그러면 gate가 chunk
-    // 타이밍에 따라 가끔만 매칭돼 agentName 감지가 불안정해진다. patterns는
-    // 라인 완성 후에만 검사하지만(부분 매칭 오탐 방지), gate는 활성화 신호일
-    // 뿐이라 미완성 라인에서 미리 봐도 안전하다.
+    // 타이밍에 따라 가끔만 매칭돼 agentName 감지가 불안정해진다.
+    // Visible-row chrome profiles still require a completed visual row:
+    // a chunk ending at a banner-shaped prefix is not an identity signal.
     const tail = this.lineBuffer.replace(ANSI_STRIP, '').trim();
     if (tail) this.checkGates(tail);
     // Raw-tail gate check — see processLine: current Claude Code only carries
@@ -1047,7 +1139,7 @@ export class AgentDetector {
   private scanDialog(data: string): void {
     const approvalEmitted = this.approvalEmittedInFeed;
     this.approvalEmittedInFeed = false;
-    if (this.lastAgent !== 'Claude Code' || !this.activeAgents.has('Claude Code')) {
+    if (this.shellPromptSinceOwner || this.lastAgent !== 'Claude Code' || !this.activeAgents.has('Claude Code')) {
       this.dialogRow = '';
       this.dialogQuestion = null;
       return;
@@ -1131,13 +1223,13 @@ export class AgentDetector {
    * 설정. 라인 완성 여부와 무관하게 호출할 수 있도록 분리(feed의 미완성 라인
    * 검사와 processLine 양쪽에서 사용). activeAgents 가드로 세션당 1회만 발화.
    */
-  private checkGates(clean: string): void {
+  private checkGates(clean: string, completeRow = false): void {
     // Kiro has no hook fallback, so identify its live TUI from two independent
     // pieces of chrome. Newer v3 builds show the docs URL instead of a "Kiro
     // CLI" banner; their cursor-drawn composer can also collapse whitespace in
     // the raw PTY stream. Probe only a bounded tail and only when a cheap
     // literal hint is present. Once Kiro is active this entire path is skipped.
-    const kiroIsActive = this.activeAgents.has('Kiro CLI');
+    const kiroIsActive = this.activeAgents.has('Kiro CLI') && !this.shellPromptSinceOwner;
     if (!kiroIsActive && (!this.kiroChromeSeen || !this.kiroPromptSeen)) {
       const probe = clean.length > 4096 ? clean.slice(-4096) : clean;
       const mayContainChrome = !this.kiroChromeSeen && (
@@ -1190,7 +1282,7 @@ export class AgentDetector {
 
     // #850: Claude compound gate — same model as Kiro. Collect banner and
     // prompt evidence independently; gate opens only when both are present.
-    const claudeIsActive = this.activeAgents.has('Claude Code');
+    const claudeIsActive = this.activeAgents.has('Claude Code') && !this.shellPromptSinceOwner;
     if (!claudeIsActive && (!this.claudeBannerSeen || !this.claudePromptSeen)) {
       // Bound the probe and gate it behind a cheap literal, then walk lines.
       // A blob-level `╭.*Claude` used to backtrack the whole 4 KB probe on
@@ -1252,10 +1344,9 @@ export class AgentDetector {
     }
 
     for (const ap of AGENT_PATTERNS) {
-      // Gate checks run on every PTY output chunk. Never re-run regexes for an
-      // already-active agent; this keeps full-screen repaint traffic O(inactive
-      // agents) and makes the Kiro additions cheaper than the previous loop.
-      if (!ap.gate || this.activeAgents.has(ap.agent)) continue;
+      // Skip an already-seen gate within a launch, but reconsider it after
+      // the shell returns: Claude -> Codex -> Claude must reclaim the pane.
+      if (!ap.gate || (this.activeAgents.has(ap.agent) && !this.shellPromptSinceOwner)) continue;
       // Opening a gate makes its agent the lastAgent, and processLine then
       // skips every other agent's patterns for the rest of the session. The
       // compound gates (Claude, Kiro) and Grok's chrome may take a pane at any
@@ -1276,11 +1367,18 @@ export class AgentDetector {
             ? candidateLines(clean).some(isGrokChrome)
             : ap.slug === 'codex'
               ? !blockedTakeover && ap.gate.test(clean) && candidateLines(clean).some(isCodexChrome)
-              : ap.chrome
-                ? !blockedTakeover && ap.gate.test(clean) && candidateLines(clean).some(ap.chrome)
-                : !blockedTakeover && ap.gate.test(clean);
+              : !blockedTakeover && ap.gate.test(clean)
+                && (!ap.chrome || (
+                  // A version/welcome prefix can still grow into prose.
+                  // Only judge these rows after LF/CR/CUP, never a PTY-read
+                  // boundary. Native OSC chrome has its own terminator.
+                  completeRow || !ap.completeChromeRow
+                    ? candidateLines(clean)
+                    : clean.split(new RegExp(ROW_BREAK_RE.source, 'g')).slice(0, -1)
+                ).some(ap.chrome));
       if (!gateMatched) continue;
 
+      if (this.shellPromptSinceOwner) this.resetEmissionState();
       this.activeAgents.add(ap.agent);
       this.lastAgent = ap.agent;
       this.shellPromptSinceOwner = false;
@@ -1325,7 +1423,7 @@ export class AgentDetector {
     // Claude pattern (including approval awaiting_input) dead. Gates are
     // activation-only signals, so matching inside escape payloads is safe;
     // status patterns still run on cleaned lines only.
-    this.checkGates(line);
+    this.checkGates(line, true);
 
     const clean = line.replace(ANSI_STRIP, '').trim();
     if (!clean) return;
@@ -1333,7 +1431,7 @@ export class AgentDetector {
     // Only on a pane Codex owns: another agent quoting the message (a review
     // of this very detector) must not hold its pane. The row regex is also
     // anchored at the line start.
-    if (this.usageLimitCallbacks.length > 0 &&
+    if (!this.shellPromptSinceOwner && this.usageLimitCallbacks.length > 0 &&
       (this.lastAgent === 'Codex CLI' || (this.lastAgent === null && this.activeAgents.has('Codex CLI')))) {
       const hit = this.codexLimitScanner.feed(clean);
       if (hit) for (const cb of this.usageLimitCallbacks) cb({ provider: 'codex', ...hit });
@@ -1371,7 +1469,11 @@ export class AgentDetector {
     // prompt 패턴(Claude의 "bypass permissions on" 등)이 버전에 따라 사라져도
     // (Claude Code v2.1.x는 입력대기 hint가 "❯"만 남음) 시작 배너(gate)만으로
     // agentName이 확정된다.
-    this.checkGates(clean);
+    this.checkGates(clean, true);
+
+    // Remember the last identity for callers, but no old launch's prompt
+    // patterns may emit until fresh chrome has reclaimed the pane.
+    if (this.shellPromptSinceOwner) return;
 
     // Only check patterns for the agent that currently owns this PTY.
     // Multiple gates can be in activeAgents (Grok reading this file will
