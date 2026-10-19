@@ -202,6 +202,18 @@ describe('room_post files', () => {
     expect(stored()).toHaveLength(2);
   });
 
+  it.skipIf(process.platform === 'win32')('a task folder turned into a link after it was listed is no root at the copy', async () => {
+    const task = path.join(dir, 'worktrees', 'h1', 'task-1');
+    fs.mkdirSync(task, { recursive: true });
+    write(path.join(outside(), 'x.md'));
+    const s = postSetup({ roots: [], owned: [{ dir: task, parent: path.join(dir, 'worktrees') }] });
+    write(path.join(task, 'ok.md'));
+    expect(await handleRoomPost({ kind: 'status', title: 'A', files: [path.join(task, 'ok.md')] }, AS_BOT, s.deps)).toMatchObject({ ok: true });
+    fs.rmSync(task, { recursive: true });
+    fs.symlinkSync(outside(), task);
+    expect(await handleRoomPost({ kind: 'status', title: 'B', files: [path.join(task, 'x.md')] }, AS_BOT, s.deps)).toMatchObject({ ok: false, code: 'file' });
+  });
+
   it('one file that cannot be taken refuses the whole post, naming it, and leaves no copy', async () => {
     const s = postSetup();
     write(path.join(repo(), 'good.md'));
@@ -224,6 +236,15 @@ describe('room_post files', () => {
     expect(rel).toMatchObject({ ok: false, code: 'file' });
     expect(rel.message).toContain('absolute path');
     expect(stored()).toEqual([]);
+  });
+
+  it("lists a room's card files for the sweep, and none at all when the room's file cannot be read", async () => {
+    const s = postSetup();
+    write(path.join(repo(), 'a.md'));
+    const r = await handleRoomPost({ kind: 'status', title: 'A', files: ['a.md'] }, AS_BOT, s.deps) as { ok: true; card: RoomCard };
+    expect([...(s.writer.fileIds(WS) ?? [])]).toEqual([r.card.files![0].id]);
+    fs.mkdirSync(path.join(s.roomsDir, 'ws-unreadable.jsonl'), { recursive: true });
+    expect(s.writer.fileIds('ws-unreadable')).toBeNull();
   });
 
   it('the owner may not attach files, and a card written with files by anyone but a bot keeps none', async () => {
@@ -267,7 +288,8 @@ describe('botFileRoots', () => {
       new Map([['task-mine', { folder: mine }], ['task-theirs', { folder: theirs }], ['task-detached', { folder: detached, detached: true }]]),
     );
     const r = await botFileRoots(binding, deps(repo()));
-    expect(r.roots.sort()).toEqual([path.join(dir, 'factory', 'bots', BOT_ID), mine, repo()].sort());
+    expect(r.roots).toEqual([repo()]);
+    expect(r.owned?.map((o) => o.dir).sort()).toEqual([path.join(dir, 'factory', 'bots', BOT_ID), mine].sort());
     expect(r.base).toBe(repo());
     expect(r.tasksUnread).toBeUndefined();
   });
@@ -279,7 +301,7 @@ describe('botFileRoots', () => {
     fs.mkdirSync(path.join(dir, 'factory', 'bots'), { recursive: true });
     fs.symlinkSync(outside(), path.join(dir, 'factory', 'bots', BOT_ID));
     ports([row('task-link', BOT_ID)], new Map([['task-link', { folder: linked }]]));
-    expect((await botFileRoots(binding, deps())).roots).toEqual([]);
+    expect(await botFileRoots(binding, deps())).toEqual({ roots: [] });
     ports([row('task-link', BOT_ID)], null);
     expect(await botFileRoots(binding, deps())).toEqual({ roots: [], tasksUnread: true });
   });

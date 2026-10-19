@@ -547,6 +547,8 @@ interface RoomState {
   byClientId: Map<string, string>;
   /** threadId → the owner's read position (seq). */
   readThrough: Record<string, number>;
+  /** The room's file was there but could not be read: it started empty. */
+  unreadable?: true;
 }
 
 export interface RoomWriterOptions {
@@ -626,10 +628,14 @@ export class RoomWriter {
     const byId = new Map<string, RoomCard>();
     let lines = 0;
     let text = '';
+    let unreadable = false;
     try {
       text = fs.readFileSync(this.file(workspaceId), 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') this.log(`room ${workspaceId} unreadable; starting empty`, err);
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        unreadable = true;
+        this.log(`room ${workspaceId} unreadable; starting empty`, err);
+      }
     }
     let highWater = 0;
     for (const line of text.split('\n')) {
@@ -661,6 +667,7 @@ export class RoomWriter {
       seenFacts: new Set(cards.filter((c) => c.refs?.factId).map(factCardKey).slice(-ROOM_STORE_LIMITS.SEEN_FACTS)),
       byClientId: new Map(cards.filter((c) => c.clientPostId).map((c) => [c.clientPostId as string, c.id])),
       readThrough: this.loadReadThrough(workspaceId),
+      ...(unreadable ? { unreadable: true as const } : {}),
     };
     if (state.lines - state.cards.length >= this.compactSlack || state.cards.length < byId.size) {
       this.compact(workspaceId, state);
@@ -833,6 +840,17 @@ export class RoomWriter {
   get(workspaceId: string, id: string): RoomCard | null {
     const card = this.room(workspaceId)?.byId.get(id) ?? null;
     return card ? redactStoredSecretsDeep(card) : null;
+  }
+
+  /** The file ids the kept bot cards of a room list (the room file store's
+   *  sweep); null when the room's file could not be read, so its cards are
+   *  not known. */
+  fileIds(workspaceId: string): ReadonlySet<string> | null {
+    const state = this.room(workspaceId);
+    if (!state || state.unreadable) return null;
+    const ids = new Set<string>();
+    for (const c of state.cards) for (const f of c.files ?? []) ids.add(f.id);
+    return ids;
   }
 
   /** The first card of the room that matches, newest first. */

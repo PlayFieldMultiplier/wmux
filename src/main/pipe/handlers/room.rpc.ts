@@ -139,8 +139,12 @@ export interface RoomHandlerDeps {
 
 /** Where a bot's `files` may come from, and what a relative path means. */
 export interface BotFileRoots {
-  /** Absolute folders: the bot's repository, its own folder, its tasks'. */
+  /** Absolute folders taken as they are: the bot's repository (the owner's pick). */
   roots: string[];
+  /** Folders main made for the bot (its own folder, its tasks' worktrees),
+   *  each checked again right before a copy (ownedDir): one turned into a
+   *  link while the task folders were listed is no root then. */
+  owned?: Array<{ dir: string; parent: string }>;
   /** The repository a relative path is read from, when the bot has one. */
   base?: string;
   /** Some of its task folders could not be listed (the daemon did not answer). */
@@ -177,7 +181,7 @@ export async function botFileRoots(bot: BotBinding, deps: Pick<RoomHandlerDeps, 
   }
   const repo = profile?.repo?.repoPath && path.isAbsolute(profile.repo.repoPath) ? profile.repo.repoPath : undefined;
   const own = botCwd(deps.wmuxDir(), bot.botId);
-  const roots = [...(ownedDir(own, path.dirname(own)) ? [own] : []), ...(repo ? [repo] : [])];
+  const owned: Array<{ dir: string; parent: string }> = ownedDir(own, path.dirname(own)) ? [{ dir: own, parent: path.dirname(own) }] : [];
   let tasksUnread = false;
   const folders = getTaskFolderPorts();
   if (folders) {
@@ -190,11 +194,16 @@ export async function botFileRoots(bot: BotBinding, deps: Pick<RoomHandlerDeps, 
         if (row.ownerWorkspaceId !== owner) continue;
         const m = missions.get(row.id);
         if (m && m.detached !== true && taskFolderKind(m.folder, m.branch, bot.botId, folders.roots) === 'worktree'
-          && ownedDir(m.folder, folders.roots.worktrees)) roots.push(m.folder);
+          && ownedDir(m.folder, folders.roots.worktrees)) owned.push({ dir: m.folder, parent: folders.roots.worktrees });
       }
     }
   }
-  return { roots: [...new Set(roots)], ...(repo ? { base: repo } : {}), ...(tasksUnread ? { tasksUnread: true as const } : {}) };
+  return {
+    roots: repo ? [repo] : [],
+    ...(owned.length > 0 ? { owned } : {}),
+    ...(repo ? { base: repo } : {}),
+    ...(tasksUnread ? { tasksUnread: true as const } : {}),
+  };
 }
 
 /** One path of a bot's `files` as the refusal names it. */
@@ -219,7 +228,9 @@ async function copyBotFiles(
       return refusal('file', `${fileLabel(index, given)}: a relative path is read from your repository, and you have none; give an absolute path`);
     }
     source = path.normalize(source);
-    const r = store.copyIn(bot.workspaceId, source, where.roots);
+    // Checked again here, with nothing awaited before the copy.
+    const roots = [...where.roots, ...(where.owned ?? []).filter((o) => ownedDir(o.dir, o.parent)).map((o) => o.dir)];
+    const r = store.copyIn(bot.workspaceId, source, roots);
     if (!r.ok) {
       store.remove(bot.workspaceId, files.map((f) => f.id));
       const unread = r.reason === 'outside' && where.tasksUnread ? ' (your task folders could not be listed just now; try again)' : '';

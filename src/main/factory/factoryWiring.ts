@@ -810,16 +810,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   const roomFiles = new RoomFileStore({
     root: path.join(deps.wmuxDir(), 'factory', ROOM_FILES_DIRNAME),
     // An old file stays while a kept card (an open one) still lists it.
-    referenced: (workspaceId) => {
-      const writer = getRoomWriter();
-      if (!writer) return null;
-      const ids = new Set<string>();
-      writer.find(workspaceId, (c) => {
-        for (const f of c.files ?? []) ids.add(f.id);
-        return false;
-      });
-      return ids;
-    },
+    referenced: (workspaceId) => getRoomWriter()?.fileIds(workspaceId) ?? null,
   });
   roomFiles.sweep();
   setRoomFileStore(roomFiles);
