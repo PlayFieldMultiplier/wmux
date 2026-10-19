@@ -62,6 +62,8 @@ export interface ResubscribeResyncDeps {
   emitDied: (id: string, exitCode: number | null, signal?: number) => void;
   /** Sends a cwd the way a live `cwd.changed` does. */
   emitCwd: (id: string, cwd: string) => void;
+  /** Calls back on each live `cwd.changed`; returns the unsubscribe. */
+  onLiveCwd: (listener: (id: string) => void) => () => void;
   /** Sends a title to the renderer the way a live `title.changed` does. */
   emitTitle: (id: string, title: string) => void;
   hookRouter: HookSignalRouter | null;
@@ -79,11 +81,18 @@ export interface ResubscribeResyncResult {
 
 export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promise<ResubscribeResyncResult> {
   const result: ResubscribeResyncResult = { panes: 0, statusesCorrected: 0, titles: 0, deaths: 0, cwds: 0 };
+  // A live cwd that lands after the daemon took its list, but before this
+  // continuation runs (both can arrive in one socket read), is newer than the
+  // listed one.
+  const liveCwd = new Set<string>();
+  const offLiveCwd = deps.onLiveCwd((id) => { liveCwd.add(id); });
   let rows: DaemonSessionRow[];
   try {
     rows = await deps.listSessions();
   } catch {
     return result;
+  } finally {
+    offLiveCwd();
   }
   const ids: string[] = [];
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -94,13 +103,16 @@ export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promi
       // A tombstone's agent state is what it held when the shell went, so it
       // is never read as the pane's status.
       if (tracked === undefined) continue;
-      const exitCode = typeof row.exitCode === 'number' ? row.exitCode : null;
       const signal = typeof row.exitSignal === 'number' ? row.exitSignal : undefined;
+      let exitCode = typeof row.exitCode === 'number' ? row.exitCode : null;
+      // An older daemon keeps no signal, and a killed shell reports code 0:
+      // read as a clean exit, that would close the tab. Unknown keeps it.
+      if (exitCode === 0 && !('exitSignal' in row)) exitCode = null;
       deps.emitDied(id, exitCode, signal);
       result.deaths += 1;
       continue;
     }
-    if (tracked !== undefined && typeof row.cwd === 'string' && row.cwd.length > 0 && row.cwd !== tracked) {
+    if (tracked !== undefined && !liveCwd.has(id) && typeof row.cwd === 'string' && row.cwd.length > 0 && row.cwd !== tracked) {
       deps.emitCwd(id, row.cwd);
       result.cwds += 1;
     }

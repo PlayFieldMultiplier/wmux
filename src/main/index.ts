@@ -2386,6 +2386,11 @@ app.on('ready', async () => {
           client.emit('session:died', { sessionId: id, exitCode, ...(signal !== undefined ? { signal } : {}) });
         },
         emitCwd: (id, cwd) => { client.emit('session:cwd', { sessionId: id, cwd }); },
+        onLiveCwd: (listener) => {
+          const onCwd = (payload: { sessionId: string }) => { listener(payload.sessionId); };
+          client.on('session:cwd', onCwd);
+          return () => { client.off('session:cwd', onCwd); };
+        },
         emitTitle: (id, title) => { client.emit('session:title', { sessionId: id, title }); },
         hookRouter: hookSignalRouter,
         win: mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,

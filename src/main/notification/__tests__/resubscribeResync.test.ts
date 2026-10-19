@@ -26,20 +26,30 @@ import { SignalLatencyMeter } from '../../../shared/hooks/SignalLatencyMeter';
 function run(
   states: Record<string, DaemonPaneState | null>,
   router: HookSignalRouter | null = null,
-  opts: { rows?: DaemonSessionRow[]; tracked?: Map<string, string> } = {},
+  opts: { rows?: DaemonSessionRow[]; tracked?: Map<string, string>; liveCwdDuringList?: [string, string] } = {},
 ) {
   const titles: Array<[string, string]> = [];
   const died: Array<[string, number | null, number | undefined]> = [];
   const cwds: Array<[string, string]> = [];
   const read: string[] = [];
   const tracked = opts.tracked ?? new Map<string, string>();
+  let liveCwd: ((id: string) => void) | null = null;
   const result = resyncAfterResubscribe({
-    listSessions: async () => opts.rows ?? Object.keys(states).map((id) => ({ id, state: 'attached' })),
+    listSessions: async () => {
+      // A live cwd event processed before the resync reads the reply.
+      if (opts.liveCwdDuringList) {
+        const [id, cwd] = opts.liveCwdDuringList;
+        tracked.set(id, cwd);
+        liveCwd?.(id);
+      }
+      return opts.rows ?? Object.keys(states).map((id) => ({ id, state: 'attached' }));
+    },
     trackedCwd: (id) => tracked.get(id),
     readState: async (id) => { read.push(id); return states[id] ?? null; },
     // As live: the died listeners drop main's record of the session.
     emitDied: (id, exitCode, signal) => { died.push([id, exitCode, signal]); tracked.delete(id); },
     emitCwd: (id, cwd) => { cwds.push([id, cwd]); tracked.set(id, cwd); },
+    onLiveCwd: (listener) => { liveCwd = listener; return () => { liveCwd = null; }; },
     emitTitle: (id, title) => { titles.push([id, title]); },
     hookRouter: router,
     win: null,
@@ -193,5 +203,29 @@ describe('resyncAfterResubscribe (#2263)', () => {
     expect(first.cwds).toEqual([['d1', '/new']]);
     const second = run({}, null, { rows, tracked });
     expect((await second.result).cwds).toBe(0);
+  });
+
+  it('keeps a live cwd that arrived while the list was in flight', async () => {
+    const tracked = new Map([['d1', '/old']]);
+    const { result, cwds } = run({}, null, {
+      rows: [{ id: 'd1', state: 'attached', cwd: '/listed' }],
+      tracked,
+      liveCwdDuringList: ['d1', '/newer'],
+    });
+    expect((await result).cwds).toBe(0);
+    expect(cwds).toEqual([]);
+    expect(tracked.get('d1')).toBe('/newer');
+  });
+
+  it('does not read a code-0 exit from an older daemon, which keeps no signal, as a clean exit', async () => {
+    const { result, died } = run({}, null, {
+      rows: [
+        { id: 'old-daemon', state: 'dead', exitCode: 0 },
+        { id: 'new-daemon', state: 'dead', exitCode: 0, exitSignal: null },
+      ],
+      tracked: new Map([['old-daemon', '/'], ['new-daemon', '/']]),
+    });
+    await result;
+    expect(died).toEqual([['old-daemon', null, undefined], ['new-daemon', 0, undefined]]);
   });
 });
