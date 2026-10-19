@@ -10,6 +10,7 @@ import {
   botFanoutPreset,
   botFanoutPresetList,
   botPresetCheckoutRefusal,
+  botReviewHost,
   composeBotWorkerPrompt,
 } from '../botFanoutPresets';
 
@@ -61,9 +62,40 @@ describe('bot fan-out presets', () => {
 
   it('worker prompts state powers and outputs, without prohibitions', () => {
     for (const name of BOT_FANOUT_PRESET_NAMES) {
-      const text = BOT_FANOUT_PRESETS[name].workerPrompt({ checkout: { sha: SHA, detached: true } });
-      expect(text).toMatch(/What you hand back/);
-      expect(text.split('\n').filter((l) => /\b(never|don't|do not|must not)\b/i.test(l))).toEqual([]);
+      for (const reviewHost of ['github', 'gitlab'] as const) {
+        const text = BOT_FANOUT_PRESETS[name].workerPrompt({ checkout: { sha: SHA, detached: true }, reviewHost });
+        expect(text).toMatch(/What you hand back/);
+        expect(text.split('\n').filter((l) => /\b(never|don't|do not|must not)\b/i.test(l))).toEqual([]);
+      }
     }
+  });
+
+  it('the review request follows the repository host the way the Git page picks gh or glab', () => {
+    expect(botReviewHost('github.com/o/r')).toBe('github');
+    expect(botReviewHost('o/r')).toBe('github');
+    expect(botReviewHost('gitlab.com/g/p')).toBe('gitlab');
+    expect(botReviewHost('git.corp.example/g/sub/p')).toBe('gitlab');
+    expect(botReviewHost(undefined)).toBeUndefined();
+    expect(botReviewHost('not a key')).toBeUndefined();
+
+    const github = composeBotWorkerPrompt('default', 'fix it', undefined, 'github.com/o/r');
+    expect(github).toContain('open a pull request (`gh pr create --head <your branch>`).');
+    expect(github).toContain('and the PR link');
+    expect(github).not.toMatch(/glab|merge request/);
+    for (const key of ['gitlab.com/g/p', 'git.corp.example/g/sub/p']) {
+      const gitlab = composeBotWorkerPrompt('default', 'fix it', undefined, key);
+      expect(gitlab).toContain('open a merge request (`glab mr create --source-branch <your branch> --yes`).');
+      expect(gitlab).toContain('and the merge request link');
+      expect(gitlab).not.toMatch(/gh pr|pull request/);
+    }
+    const repro = composeBotWorkerPrompt('repro', '', undefined, 'gitlab.com/g/p');
+    expect(repro).toContain('open a DRAFT merge request (`glab mr create --draft --source-branch <your branch> --yes`)');
+    expect(repro).toContain('`glab mr update <number> --ready`');
+    expect(composeBotWorkerPrompt('maintain', '', undefined, 'gitlab.com/g/p')).toContain('open a merge request (`glab mr create --source-branch <your branch> --yes`)');
+    // No host to read: the GitHub lines, as before the host was read.
+    for (const name of ['repro', 'maintain', 'default']) {
+      expect(composeBotWorkerPrompt(name, 'x')).toBe(composeBotWorkerPrompt(name, 'x', undefined, 'github.com/o/r'));
+    }
+    expect(composeBotWorkerPrompt('repro', '')).toContain('open a DRAFT pull request (`gh pr create --draft --head <your branch>`)');
   });
 });
