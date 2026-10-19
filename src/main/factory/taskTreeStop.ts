@@ -9,7 +9,8 @@ import type { DaemonDestroySessionTree } from '../../shared/rpc';
 import type { WorkerSessionInfo } from './workerReclaim';
 
 export interface TaskTreeStopPorts {
-  /** The task's folder (its mission), null when not known. */
+  /** The task's folder (its mission); null when it records none. Throws
+   *  when it could not be read. */
   folderOf: (taskId: string) => Promise<string | null>;
   listSessions: () => Promise<WorkerSessionInfo[]>;
   /** `daemon.destroySession` with `killTree`: the tree it reports on. */
@@ -29,9 +30,11 @@ function busy(x: WorkerSessionInfo): boolean {
 }
 
 /**
- * Stop the trees of the task folder's sessions among `ptyIds`. Throws, with
- * nothing stopped, when the folder is not known (survivors could not be
- * recorded against it), when the close is no longer due (`stillDue`), or
+ * Stop the trees of the task folder's sessions among `ptyIds`. A task that
+ * records no folder has nothing inside one to stop: only the checks below
+ * run. Throws, with nothing stopped, when the folder could not be read
+ * (survivors could not be recorded against it; the caller retries), when the
+ * close is no longer due (`stillDue`), or
  * when any of `ptyIds` runs an agent or a command again, inside the folder
  * or not: the close that follows ends them all. Both are asked again right
  * before each kill (the kills are one at a time), and once more after the
@@ -40,13 +43,16 @@ function busy(x: WorkerSessionInfo): boolean {
 export async function stopTaskPaneTrees(ports: TaskTreeStopPorts, taskId: string, ptyIds: readonly string[], stillDue: () => boolean): Promise<void> {
   if (ptyIds.length === 0) return;
   const dir = await ports.folderOf(taskId);
-  if (!dir) throw new Error(`the folder of task ${taskId} is not known`);
   const check = (sessions: readonly WorkerSessionInfo[]): void => {
     if (!stillDue()) throw new Error(`the close of task ${taskId}'s panes is no longer due`);
     const running = sessions.filter(busy);
     if (running.length > 0) throw new Error(`${running.map((x) => x.id).join(', ')} of task ${taskId} run(s) again`);
   };
   const targets = async (): Promise<WorkerSessionInfo[]> => (await ports.listSessions()).filter((x) => ptyIds.includes(x.id));
+  if (dir === null) {
+    check(await targets());
+    return;
+  }
   await stopSessionsInDir(dir, {
     listSessions: async () => {
       const list = await targets();

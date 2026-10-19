@@ -22,7 +22,7 @@ import { getBotRuntime } from './BotRuntime';
 import { getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
-import { taskFolderFromMissions } from './verifyPreset';
+import { readTaskFolder, taskFolderFromMissions } from './verifyPreset';
 import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive } from '../worktask/stopSessionsInDir';
 import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
@@ -244,9 +244,14 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     // #2388: an ended task's panes go with their whole process trees before
     // the renderer closes them (taskTreeStop.ts).
     const stopTrees = (taskId: string, ptyIds: readonly string[], stillDue: () => boolean): Promise<void> => stopTaskPaneTrees({
+      // A row the ledger pruned names no folder; a mission list that could
+      // not be read is retried by the caller.
       folderOf: async (id) => {
         const entry = ledger.get(id);
-        return entry ? taskFolderFromMissions((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry) : null;
+        if (!entry) return null;
+        const read = await readTaskFolder((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry);
+        if (!read) throw new Error(`the folder of task ${id} could not be read`);
+        return read.folder;
       },
       listSessions,
       destroyTree: async (id) => {

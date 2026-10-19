@@ -77,10 +77,20 @@ describe('stopTaskPaneTrees', () => {
     expect(destroyTree.mock.calls.map((c) => c[0])).toEqual(['a']);
   });
 
-  it('never counts a dead session as busy, and refuses a folder that is not known', async () => {
+  it('never counts a dead session as busy', async () => {
     const { ports, destroyTree } = rig([{ id: 'a', spawnCwd: DIR, commandRunning: true, state: 'dead' } as WorkerSessionInfo]);
     await stopTaskPaneTrees(ports, TASK, ['a'], () => true);
     expect(destroyTree).toHaveBeenCalledWith('a');
-    await expect(stopTaskPaneTrees({ ...ports, folderOf: async () => null }, TASK, ['a'], () => true)).rejects.toThrow(/not known/);
+  });
+
+  // A task that records no folder (none in its mission, or not listed) has
+  // nothing inside one to stop: refusing kept its workspace open for good.
+  it('lets the close go ahead for a task with no folder, still checking its panes, and retries a read that failed', async () => {
+    const { ports, destroyTree } = rig([{ id: 'a', spawnCwd: DIR, commandRunning: false }]);
+    await stopTaskPaneTrees({ ...ports, folderOf: async () => null }, TASK, ['a'], () => true);
+    expect(destroyTree).not.toHaveBeenCalled();
+    await expect(stopTaskPaneTrees({ ...ports, folderOf: async () => null }, TASK, ['a'], () => false)).rejects.toThrow(/no longer due/);
+    await expect(stopTaskPaneTrees({ ...ports, folderOf: async () => { throw new Error('the folder of task x could not be read'); } }, TASK, ['a'], () => true)).rejects.toThrow(/could not be read/);
+    expect(destroyTree).not.toHaveBeenCalled();
   });
 });
