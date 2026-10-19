@@ -121,7 +121,7 @@ export interface LedgerUpdateInput {
   reason?: string;
   /** On a move to `completed` only: what ended it (LedgerEntry.completion).
    *  Main's own in-process write; no RPC forwards it. */
-  completion?: LedgerCompletion;
+  completion?: Extract<LedgerCompletion, { source: 'merge' }>;
 }
 
 export type LedgerUpdateError =
@@ -256,6 +256,7 @@ function isRecordedGitDir(v: unknown): v is string {
 
 function copyDispatch(d: LedgerDispatch): LedgerDispatch {
   return {
+    ...(d.workflow && /^wf-[a-f0-9]{24}$/.test(d.workflow.id) && Number.isInteger(d.workflow.step) && d.workflow.step >= 0 && d.workflow.step < 8 ? { workflow: { ...d.workflow } } : {}),
     origin: { kind: d.origin.kind, ...(d.origin.botId ? { botId: d.origin.botId } : {}), ...(typeof d.origin.tainted === 'boolean' ? { tainted: d.origin.tainted } : {}) },
     ...(d.preset ? { preset: d.preset } : {}),
     // Only the factory's own spelling of a repository (shared/repoKey.ts).
@@ -534,7 +535,12 @@ export class TaskLedger {
       ...(next === 'review_requested' ? { reportedAtRev: entry.rev + 1 } : {}),
       ...(next === 'completed' && input.completion?.source === 'merge' && Number.isInteger(input.completion.pr) && input.completion.pr > 0
         ? { completion: { source: 'merge' as const, pr: input.completion.pr } }
-        : {}),
+        : next === 'completed' && input.force !== true && entry.status === 'review_requested'
+          && entry.updatedBy.kind === 'system' && entry.gate?.recordedBy === 'system'
+          && entry.gate.exitCode === 0 && !entry.gate.skipped && entry.gate.headSha
+          && entry.reportedAtRev !== undefined && entry.gate.reportRev === entry.reportedAtRev
+          ? { completion: { source: 'gate' as const, headSha: entry.gate.headSha, reportRev: entry.reportedAtRev } }
+          : { completion: undefined }),
     });
     if (guard && !guard()) return { ok: true, entry, noop: true };
     try {
@@ -607,7 +613,7 @@ export class TaskLedger {
       const bounded = boundGate(this.redact(gate));
       const updated: LedgerEntry = this.redact({
         ...entry,
-        gate: noChanges ? { ...bounded, reportRev: entry.reportedAtRev ?? entry.rev } : bounded,
+        gate: entry.status === 'review_requested' ? { ...bounded, reportRev: entry.reportedAtRev ?? entry.rev } : bounded,
         rev: entry.rev + 1,
         updatedAt: this.now(),
         updatedBy: actor,

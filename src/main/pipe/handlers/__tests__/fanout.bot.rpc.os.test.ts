@@ -1,3 +1,4 @@
+import { getWorkflowFanout } from '../../../factory/workflowFanout';
 // task.fanout.start from a factory bot (§4, §13 rule 3, R8): the repository
 // comes from the bot's profile (no anchor pane), only the role's presets and
 // only worktrees are allowed, a detached checkout is the verify preset's, the
@@ -148,7 +149,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     },
     workersFull: (_b, full, request) => {
       port.full.push({ ...full, request });
-      return true;
+      return request !== undefined;
     },
   };
   registerFanOutRpc(router, service, () => null, {
@@ -391,6 +392,75 @@ describe('task.fanout.start — bot origin', () => {
       setHeldFanouts(null);
       setWakeQueue(null);
       await queue.flush();
+    }
+  });
+
+  it('only the internal workflow port stamps binding/base and retains the existing wake gates', async () => {
+    const r = rig('maintainer', {}, { builtinPresets: true });
+    const workflow = { id: 'wf-' + 'a'.repeat(24), step: 1 };
+    const params = { idempotencyKey: 'wake:w-1:1', titles: ['step'], prompt: 'implement', preset: 'default', workflow, workflowBaseSha: SHA };
+    expect((await r.call(params, botCtx('maintainer'))).ok).toBe(true);
+    await r.flush();
+    expect(r.start.mock.calls[0][0]).not.toHaveProperty('workflow');
+    expect(r.start.mock.calls[0][0]).not.toHaveProperty('workflowBaseSha');
+    const binding = { ...workflow, baseSha: SHA, repoKey: 'o/r', tainted: true, onStartFailed: vi.fn() };
+    expect(await getWorkflowFanout()!({ ...params, idempotencyKey: 'wake:w-1:2' }, botCtx('maintainer'), { ...binding, repoKey: 'other/repo' })).toMatchObject({ ok: false });
+    expect(await getWorkflowFanout()!({ ...params, idempotencyKey: 'wake:old:1' }, botCtx('maintainer'), binding)).toMatchObject({ ok: false });
+    expect(await getWorkflowFanout()!({ ...params, idempotencyKey: 'wake:w-1:2' }, botCtx('maintainer'), binding)).toMatchObject({ ok: true });
+    await r.flush();
+    expect(r.start.mock.calls[1][0]).toMatchObject({ workflow, workflowBaseSha: SHA, caller: { tainted: true } });
+  });
+
+  it.each(['awaiting approval', 'completed'])('an ordinary fan-out key cannot poll as an accepted workflow while %s', async (phase) => {
+    const r = rig('maintainer', {}, { builtinPresets: true });
+    if (phase === 'awaiting approval') r.approve();
+    const params = { idempotencyKey: 'wake:w-1:1', titles: ['ordinary'], preset: 'default' };
+    expect(await r.call(params, botCtx('maintainer'))).toMatchObject({ ok: true, status: 'accepted' });
+    if (phase === 'completed') await r.flush();
+    const binding = { id: 'wf-' + 'a'.repeat(24), step: 0, repoKey: 'o/r', tainted: false, onStartFailed: vi.fn() };
+    expect(await getWorkflowFanout()!(params, botCtx('maintainer'), binding)).toMatchObject({ ok: false });
+    if (phase === 'awaiting approval') { r.approve(); await r.flush(); }
+    expect(r.start).toHaveBeenCalledTimes(1);
+    expect(r.start.mock.calls[0][0]).not.toHaveProperty('workflow');
+  });
+
+  it('blocks an accepted workflow when its owner stops during approval without launching a worker', async () => {
+    const r = rig('maintainer', {}, { builtinPresets: true });
+    r.approve();
+    const failed = vi.fn();
+    const binding = { id: 'wf-' + 'a'.repeat(24), step: 0, repoKey: 'o/r', tainted: false, onStartFailed: failed };
+    expect(await getWorkflowFanout()!({ idempotencyKey: 'wake:w-1:1', titles: ['step'], preset: 'default' }, botCtx('maintainer'), binding)).toMatchObject({ ok: true });
+    r.port.refusal = 'the owner stopped this bot'; r.approve(); await r.flush();
+    expect(r.start).not.toHaveBeenCalled(); expect(failed).toHaveBeenCalledWith('the owner stopped this bot');
+  });
+
+  it('refuses a workflow at capacity without holding an unbound retry', async () => {
+    const r = rig('maintainer', { budget: { ...DEFAULT_BOT_BUDGETS.maintainer, maxConcurrentWorkers: 1 } }, { builtinPresets: true });
+    r.setOpen({ bot: 1, factory: 1 });
+    const binding = { id: 'wf-' + 'a'.repeat(24), step: 1, repoKey: 'o/r', baseSha: SHA, tainted: true, onStartFailed: vi.fn() };
+    const result = await getWorkflowFanout()!({ idempotencyKey: 'wake:w-1:1', titles: ['step'], preset: 'default' }, botCtx('maintainer'), binding);
+    expect(result).toMatchObject({ ok: false });
+    expect(JSON.stringify(result)).not.toContain('holds this fan-out');
+    expect(r.port.full).toHaveLength(1);
+    expect(r.port.full[0].request).toBeUndefined();
+    expect(r.start).not.toHaveBeenCalled();
+    expect(r.port.seen.size).toBe(0);
+  });
+
+  it('a workflow launch does not retire an ordinary held fan-out with the same wire arguments', async () => {
+    const held = new HeldFanouts({ budget: () => ({ maxConcurrentWorkers: 1 }), openWorkers: () => ({ bot: 1, factory: 1 }), wakes: () => null });
+    setHeldFanouts(held);
+    try {
+      const params = { titles: ['step'], prompt: 'implement', preset: 'default' };
+      held.hold({ botId: BOT_ID, workspaceId: 'ws-bot', args: params, threadId: 'general', handoffId: 'h-dispatch', tainted: false });
+      const r = rig('maintainer', {}, { builtinPresets: true });
+      const binding = { id: 'wf-' + 'a'.repeat(24), step: 0, repoKey: 'o/r', tainted: false, onStartFailed: vi.fn() };
+      expect(await getWorkflowFanout()!({ ...params, idempotencyKey: 'wake:w-1:1' }, botCtx('maintainer'), binding)).toMatchObject({ ok: true });
+      await r.flush();
+      expect(r.start).toHaveBeenCalledTimes(1);
+      expect(held.list(BOT_ID)).toHaveLength(1);
+    } finally {
+      setHeldFanouts(null);
     }
   });
 

@@ -79,6 +79,32 @@ const base = {
 };
 
 describe('FanOutService — detached checkout + dispatch record', () => {
+  it('branches a workflow successor from its exact verified predecessor and persists the main binding', async () => {
+    const r = rig();
+    const workflow = { id: 'wf-' + 'a'.repeat(24), step: 1 };
+    const res = await r.svc.start({ ...base, preset: 'default', workflow, workflowBaseSha: SHA });
+    expect(res.ok).toBe(true);
+    expect(r.worktrees.resolveCheckout).toHaveBeenCalledWith('/repo', SHA);
+    expect(r.worktrees.resolveBase).not.toHaveBeenCalled();
+    expect(r.worktrees.createWorktree).toHaveBeenCalledWith(expect.anything(), SHA);
+    expect(r.worktrees.createDetachedWorktree).not.toHaveBeenCalled();
+    const row = ledger.list()[0];
+    expect(row.dispatch).toMatchObject({ workflow, baseOid: SHA });
+    await ledger.flush();
+    expect(new TaskLedger({ dir: path.join(root, 'ledger') }).get(row.id)?.dispatch?.workflow).toEqual(workflow);
+  });
+
+  it('never falls back to HEAD when a workflow predecessor commit or merged base is unavailable', async () => {
+    const workflow = { id: 'wf-' + 'a'.repeat(24), step: 1 };
+    const absent = rig({ error: 'predecessor unavailable' });
+    expect((await absent.svc.start({ ...base, preset: 'default', workflow, workflowBaseSha: SHA })).ok).toBe(false);
+    expect(absent.worktrees.createWorktree).not.toHaveBeenCalled();
+    const merged = rig();
+    merged.worktrees.resolveBase.mockResolvedValue({ oid: 'd'.repeat(40), warning: 'fetch failed; stale origin' } as unknown as Awaited<ReturnType<typeof merged.worktrees.resolveBase>>);
+    expect((await merged.svc.start({ ...base, preset: 'default', workflow })).ok).toBe(false);
+    expect(merged.worktrees.createWorktree).not.toHaveBeenCalled();
+  });
+
   it('checks out detached at the SHA, never branches, and records origin/preset/checkout on the ledger row', async () => {
     const r = rig();
     const res = await r.svc.start({ ...base, checkout: { sha: SHA, detached: true, fetchRef: 'pull/12/head' } });

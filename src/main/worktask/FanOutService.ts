@@ -358,6 +358,9 @@ export interface FanOutRequest {
    *  Recorded on each task's ledger row; see
    *  LedgerDispatch.handoffId. */
   handoffId?: string;
+  workflow?: { id: string; step: number };
+  /** Main-only verified predecessor commit; code tasks still get a branch. */
+  workflowBaseSha?: string;
   /** A code fan-out: the repository it runs in (normalized repo key, main
    *  settles it: a bot's profile, else the caller repository's origin).
    *  Recorded on each task's ledger row; see LedgerDispatch.repoKey. */
@@ -787,11 +790,17 @@ export class FanOutService {
     // the owner happens to have checked out. A failure is a warning, not a
     // refusal: the tasks then branch from HEAD, as they did before.
     let base: { oid?: string; warning?: string; error?: string };
-    if (req.checkout) {
+    if (req.workflowBaseSha) {
+      const at = await this.worktrees.resolveCheckout(repoRoot, req.workflowBaseSha);
+      base = 'error' in at ? { error: at.error } : { oid: at.oid };
+    } else if (req.checkout) {
       const at = await this.worktrees.resolveCheckout(repoRoot, req.checkout.sha, req.checkout.fetchRef);
       base = 'error' in at ? { error: at.error } : { oid: at.oid };
     } else {
       base = await this.worktrees.resolveBase(repoRoot);
+    }
+    if (req.workflow && req.workflow.step > 0 && (!base.oid || (!req.workflowBaseSha && base.warning))) {
+      base.error = base.error ?? 'workflow predecessor requires a freshly resolved base commit';
     }
     if (base.error) {
       return { ok: false, error: `fanout preflight failed: ${base.error}`, tasks: [] };
@@ -825,6 +834,7 @@ export class FanOutService {
       ...(req.checkout ? { checkout: { sha: req.checkout.sha } } : {}),
       ...(req.threadId ? { threadId: req.threadId } : {}),
       ...(req.handoffId ? { handoffId: req.handoffId } : {}),
+      ...(req.workflow ? { workflow: req.workflow } : {}),
       ...(req.repoKey ? { repoKey: req.repoKey } : {}),
       ...(req.originPin ? { originPin: req.originPin } : {}),
       ...(req.mayLaunch ? { mayLaunch: req.mayLaunch } : {}),
@@ -1119,6 +1129,7 @@ export class FanOutService {
         ...(req.preset ? { preset: req.preset } : {}),
         ...(req.threadId ? { threadId: req.threadId } : {}),
         ...(req.handoffId ? { handoffId: req.handoffId } : {}),
+      ...(req.workflow ? { workflow: req.workflow } : {}),
         ...(req.mayLaunch ? { mayLaunch: req.mayLaunch } : {}),
         ...(req.awaitLaunchSlot ? { awaitLaunchSlot: req.awaitLaunchSlot } : {}),
         ...(req.secretNames && req.secretNames.length > 0 ? { secretNames: req.secretNames } : {}),
@@ -1253,6 +1264,7 @@ export class FanOutService {
     threadId?: string;
     /** See FanOutRequest.handoffId. */
     handoffId?: string;
+  workflow?: { id: string; step: number };
     /** See FanOutRequest.repoKey. */
     repoKey?: string;
     /** See FanOutRequest.originPin. */
@@ -1757,6 +1769,7 @@ export class FanOutService {
                 ...(plan && !ctx.checkout && ctx.baseOid ? { baseOid: ctx.baseOid } : {}),
                 ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
                 ...(ctx.handoffId ? { handoffId: ctx.handoffId } : {}),
+                ...(ctx.workflow ? { workflow: ctx.workflow } : {}),
                 ...(connectors.length > 0 ? { connectors: connectors.map((c) => c.name) } : {}),
               },
             }

@@ -1,3 +1,5 @@
+import { setWorkflowFanout } from '../../factory/workflowFanout';
+import type { WorkflowDispatchBinding } from '../../factory/workflowFanout';
 // ─── task.fanout.start — fan-out on the pipe / MCP surface ─────────────────
 //
 // J1 fan-out (one prompt → N isolated worktree tasks) was renderer-only: the
@@ -1029,7 +1031,7 @@ export function registerFanOutRpc(
     }
   };
 
-  router.register('task.fanout.start', async (params, ctx?: RpcContext) => {
+  const start = async (params: Record<string, unknown>, ctx?: RpcContext, workflow?: WorkflowDispatchBinding) => {
     // ── R4: origin allowlist, fail-closed ────────────────────────────────
     // local + nothing else. `origin` is a REQUIRED RpcContext field, so a
     // future remote transport cannot silently inherit fan-out by forgetting to
@@ -1184,6 +1186,9 @@ export function registerFanOutRpc(
       return { ok: true as const, status: 'pending_cancelled' as const, idempotencyKey: callerKey, dropped };
     }
     const known = service.statusOf(key);
+    if (workflow && (known.state !== 'unknown' || pending.has(key) || terminal.has(key))) {
+      return deny('FAILED_PRECONDITION', 'this fan-out key already names a dispatch; use a fresh current-wake ordinal for a workflow step');
+    }
     if (known.state === 'running') {
       return { ok: true as const, status: 'running' as const, idempotencyKey: callerKey };
     }
@@ -1252,6 +1257,7 @@ export function registerFanOutRpc(
       if (!botPort || !botProfile || !botProfile.enabled) {
         return deny('FAILED_PRECONDITION', 'task.fanout.start: this bot is not running in the factory');
       }
+      if (workflow && workflow.repoKey !== botProfile.repo?.repoKey) return deny('FAILED_PRECONDITION', 'the workflow repository no longer matches this bot');
       // Accepted before this process started (the in-memory poll above did
       // not know it): it ran, and must never run twice.
       if (botPort.fanoutKeySeen(key)) {
@@ -1282,7 +1288,7 @@ export function registerFanOutRpc(
         botNamedThread = named;
       }
       // A researcher's tasks read outside text whatever woke it.
-      botWakeTainted = botPort.currentWakeTainted(bot.botId) !== false || botTemplate(botProfile) === 'researcher';
+      botWakeTainted = botPort.currentWakeTainted(bot.botId) !== false || botTemplate(botProfile) === 'researcher' || workflow?.tainted === true;
       botWakeHandoff = botPort.currentWakeHandoff?.(bot.botId) ?? undefined;
       const ordinal = /^wake:.+:([1-9][0-9]*)$/.exec(callerKey)?.[1];
       if (!ordinal || Number(ordinal) > BOT_FANOUTS_PER_WAKE_MAX || callerKey !== botFanoutIdempotencyKey(wakeId, Number(ordinal))) {
@@ -1553,7 +1559,9 @@ export function registerFanOutRpc(
         return deny('RESOURCE_EXHAUSTED', `this bot runs at most ${most} worker${most === 1 ? '' : 's'} at once: start at most ${most} task${most === 1 ? '' : 's'} per fan-out`);
       }
       if (full) {
-        const held = botPort.workersFull(bot, full, {
+        // A workflow's durable intent owns its dispatch. A plain held retry
+        // cannot carry that internal binding or its verified predecessor SHA.
+        const held = botPort.workersFull(bot, full, workflow ? undefined : {
           args: heldFanoutArgs(params),
           threadId: botNoticeThread,
           tainted: botWakeTainted,
@@ -1572,7 +1580,7 @@ export function registerFanOutRpc(
     if (bot) botPort?.recordFanoutKey(key);
     // The request as a hold would name it (read here: params is not read
     // after the approval): a hold of it retires once a worker of it started.
-    const heldArgs = bot ? heldFanoutArgs(params) : null;
+    const heldArgs = bot && !workflow ? heldFanoutArgs(params) : null;
     const heldContext = { threadId: botNoticeThread, ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}) };
 
     // ── Claim the key ────────────────────────────────────────────────────
@@ -1697,6 +1705,7 @@ export function registerFanOutRpc(
       ...(checkout ? { checkout } : {}),
       ...(bot && botWakeThread ? { threadId: botWakeThread } : {}),
       ...(bot && botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
+      ...(bot && workflow ? { workflow: { id: workflow.id, step: workflow.step }, ...(workflow.baseSha ? { workflowBaseSha: workflow.baseSha } : {}) } : {}),
       // The repository a bot's code task runs in: a merged PR ends only a task
       // of its own repository (factory/taskGate.ts), whatever the bot's
       // profile names later.
@@ -1727,6 +1736,9 @@ export function registerFanOutRpc(
     // A bot is told how its accepted fan-out's start went, once per task,
     // unless it may not act on it now (stopped, parked, disabled, factory off).
     const tellBot = (tasks: BotWorkerStartOutcome['tasks']): void => {
+      if (workflow && tasks.length > 0 && tasks.every((task) => !task.started)) {
+        workflow.onStartFailed('The existing fan-out executor did not start the workflow worker.');
+      }
       if (!bot || !botPort?.workerStartOutcome || tasks.length === 0) return;
       try {
         if (botPort.launchRefusal(bot.botId, botWakeId)) return;
@@ -1803,6 +1815,7 @@ export function registerFanOutRpc(
           settle(key, { phase: 'denied', reason: 'unavailable' });
           guards.release(key);
           console.warn(`[fanout.rpc] bot fan-out ${key} not launched: ${botRefusal}`);
+          workflow?.onStartFailed(botRefusal);
           return;
         }
         if (!('root' in atApproval) || atApproval.root !== callerRepoRoot) {
@@ -2016,5 +2029,7 @@ export function registerFanOutRpc(
       // started or could not start.
       ...(bot ? { starting: true as const, note: BOT_FANOUT_STARTING_NOTE } : {}),
     };
-  });
+  };
+  router.register('task.fanout.start', (params, ctx) => start(params, ctx));
+  setWorkflowFanout(start);
 }

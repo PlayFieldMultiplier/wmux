@@ -107,11 +107,9 @@ export interface LedgerEntry {
    *  which preset, and on what checkout. Absent on rows registered before it
    *  existed. */
   dispatch?: LedgerDispatch;
-  /** What ended a `completed` row when it was not a gate: `merge` = main
-   *  completed it because the pull request from its branch was merged
-   *  (factory/taskGate.ts). Set only by main's own in-process ledger write
-   *  (LedgerUpdateInput.completion; the ledger RPC never forwards it), never
-   *  by a worker or a brain. Absent otherwise. */
+  /** Durable completion proof. Main may supply a verified merge; the ledger
+   *  itself stamps an unforced completion of the latest system-gated report.
+   *  RPC callers cannot supply either stamp. Legacy/manual rows have none. */
   completion?: LedgerCompletion;
   /** The rev of the row's latest move to review_requested (its current
    *  report), written by the ledger on that move. Absent on rows not
@@ -120,14 +118,14 @@ export interface LedgerEntry {
 }
 
 /** See LedgerEntry.completion. */
-export interface LedgerCompletion {
-  source: 'merge';
-  /** The merged pull request's number. */
-  pr: number;
-}
+export type LedgerCompletion =
+  | { source: 'merge'; pr: number }
+  | { source: 'gate'; headSha: string; reportRev: number };
 
 /** See LedgerEntry.dispatch. */
 export interface LedgerDispatch {
+  /** Main-only durable workflow binding; never accepted from fan-out parameters. */
+  workflow?: { id: string; step: number };
   /** `tainted`: whether the bot's wake that started it carried outside text
    *  (issue or PR facts, a handoff from such a wake), set by main on every
    *  bot task; the merge lane and remembered rules never merge what such a

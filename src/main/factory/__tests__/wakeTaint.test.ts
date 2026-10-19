@@ -91,6 +91,37 @@ describe('WakeTaint', () => {
     expect(t2.handoffTainted('h-1')).toBe(false);
   });
 
+  it('workflow ready facts use current persisted taint, including when an older wake is delivered', () => {
+    const id = 'wf-' + 'a'.repeat(24);
+    const saved = { revision: 3, tainted: false };
+    const t = make({ workflow: (workflowId) => workflowId === id ? saved : null });
+    const facts = (revision: number) => ({ kind: 'facts' as const, factIds: [`workflow.ready:${id}@${revision}`], trigger: { kind: 'task.done' } as never });
+    expect(t.reasonTainted(facts(3))).toBe(false);
+    expect(t.reasonTainted(facts(1))).toBe(false);
+    saved.tainted = true;
+    expect(t.reasonTainted(facts(3))).toBe(true);
+    expect(t.reasonTainted(facts(1))).toBe(true);
+    // A clean workflow fact cannot clear outside text delivered in the same wake.
+    saved.tainted = false;
+    const mixed = make({ workflow: () => saved }, [fact('outside', 'issue.opened')]);
+    expect(mixed.reasonTainted({ ...facts(3), factIds: [...facts(3).factIds, 'outside'] })).toBe(true);
+  });
+
+  it('unknown, malformed and future workflow ready facts fail closed, as does an unavailable store', () => {
+    const id = 'wf-' + 'a'.repeat(24);
+    const facts = (factId: string) => ({ kind: 'facts' as const, factIds: [factId], trigger: { kind: 'task.done' } as never });
+    const t = make({ workflow: (workflowId) => workflowId === id ? { revision: 3, tainted: false } : null });
+    for (const factId of [
+      `workflow.ready:${id}@4`, `workflow.ready:wf-${'b'.repeat(24)}@1`,
+      `workflow.ready:${id}@0`, `workflow.ready:${id}@01`, `workflow.ready:${id}@-1`,
+      `workflow.ready:${id}@9007199254740992`, `workflow.ready:${id}@3trailing`,
+      'workflow.ready:invalid@1',
+    ]) expect(t.reasonTainted(facts(factId))).toBe(true);
+    expect(make().reasonTainted(facts(`workflow.ready:${id}@1`))).toBe(true);
+    expect(make({ workflow: () => null }).reasonTainted(facts(`workflow.ready:${id}@1`))).toBe(true);
+    expect(make({ workflow: () => { throw new Error('unavailable'); } }).reasonTainted(facts(`workflow.ready:${id}@1`))).toBe(true);
+  });
+
   it('a handoff takes its sender wake\'s mark at delivery, and keeps it across a restart', () => {
     const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
     const hs = [handoff('h-clean', fromBot), handoff('h-dirty', fromBot)];

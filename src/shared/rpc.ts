@@ -715,6 +715,9 @@ export type RpcMethod =
   | 'routine.set'
   | 'routine.list'
   | 'routine.pause'
+  | 'workflow.create'
+  | 'workflow.read'
+  | 'workflow.advance'
   | 'botApproval.request'
   | 'botApproval.list'
   | 'botSecret.request'
@@ -1009,6 +1012,9 @@ export const ALL_RPC_METHODS = [
   'routine.set',
   'routine.list',
   'routine.pause',
+  'workflow.create',
+  'workflow.read',
+  'workflow.advance',
   'botApproval.request',
   'botApproval.list',
   'botSecret.request',
