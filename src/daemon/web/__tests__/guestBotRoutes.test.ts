@@ -160,6 +160,26 @@ describe('guest routes: reading', () => {
     expect(await guestRouteResponse(ctx({ guests }))).toMatchObject({ body: { readsFrom: new Date(100).toISOString() } });
   });
 
+  it('a guest revoked while its request waits gets nothing: no cards back, no post sent', async () => {
+    let live = true;
+    const guests = resolver({
+      resolve: vi.fn(async () => (live
+        ? { ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 0 }
+        : { ok: false as const, reason: 'revoked' as const })),
+    });
+    const d = desktop((_c, p) => { live = false; return cardsReply(p); });
+    expect(await guestRouteResponse(ctx({ pathname: GUEST_ROUTES.messages, desktop: d, guests })))
+      .toMatchObject({ status: 401, body: { reason: 'revoked' } });
+    live = true;
+    const sent = desktop(() => ({ ok: true, cardId: 'card-9', seq: 9, woke: [] }));
+    const r = await post({ clientMessageId: 'm1', text: 'hi' }, {
+      guests, desktop: sent,
+      readBody: async () => { live = false; return { ok: true, value: { clientMessageId: 'm1', text: 'hi' } }; },
+    });
+    expect(r).toMatchObject({ status: 401, body: { reason: 'revoked' } });
+    expect(sent.request).not.toHaveBeenCalled();
+  });
+
   it('a gate refusal says which setting to turn on, by its name in wmux, never a flag', async () => {
     const off = await guestRouteResponse(ctx({ guests: resolver({ enabled: () => false }) }));
     const http = await guestRouteResponse(ctx({ gates: { transcript: true, input: true, transportRefusal: 'plain http' } }));

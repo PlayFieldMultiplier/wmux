@@ -326,8 +326,14 @@ export function resolveFactsWhere(log: unknown, match: (f: Fact) => boolean, lim
 export function threadTail(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId, n: number, opts: { guests?: boolean } = {}): { cards: RoomCard[]; truncated: boolean } | null {
   if (!writer) return null;
   // An external guest's cards only for the guest's own wake (RoomWriter.read).
-  const page = writer.read(workspaceId, { threadId, limit: n, guests: opts.guests === true });
-  return { cards: page.cards, truncated: writer.summary(workspaceId, threadId).cardCount > page.cards.length };
+  const guests = opts.guests === true;
+  const page = writer.read(workspaceId, { threadId, limit: n, guests });
+  // Older cards exist when the page is full and one came before it (guest
+  // cards left out count as none: the summary's count includes them).
+  const first = page.cards[0];
+  const truncated = page.cards.length >= n && !!first
+    && writer.find(workspaceId, (c) => c.threadId === threadId && c.seq < first.seq, { guests }) !== null;
+  return { cards: page.cards, truncated };
 }
 
 /** The handoff a task wake answers: the one every task of the wake was

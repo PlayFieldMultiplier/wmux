@@ -250,14 +250,30 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
       },
     };
   }
-  return posting ? post(ctx, who, scope) : read(ctx, scope, who.createdAt);
+  // Revoke (or the owner's switch) is instant: an authorization is checked
+  // again after every wait, right before a post leaves for main and before
+  // a read's cards are returned. A verified secret is cached, so this costs
+  // no key derivation.
+  const guests = ctx.guests;
+  const stillAllowed = async (): Promise<boolean> => {
+    try {
+      if (guests.enabled() !== true) return false;
+      const again = await guests.resolve(cred.guestId, cred.secret);
+      return again.ok && again.guestId === who.guestId;
+    } catch {
+      return false;
+    }
+  };
+  return posting ? post(ctx, who, scope, stillAllowed) : read(ctx, scope, who.createdAt, stillAllowed);
 }
+
+const revokedMidRequest = (): GuestRouteResponse => refuse(401, 'unauthorized', { reason: 'revoked' });
 
 /** The guest's conversation from the moment it was added, messages only
  *  (guestSeesCard): what the owner and the bots said before, and wmux's own
  *  lines, are never a guest's. A page may come back with fewer cards than
  *  `limit` (even none) while `hasMore`; keep paging with `nextSinceSeq`. */
-async function read(ctx: GuestRouteContext, scope: GuestScope, since: number): Promise<GuestRouteResponse> {
+async function read(ctx: GuestRouteContext, scope: GuestScope, since: number, stillAllowed: () => Promise<boolean>): Promise<GuestRouteResponse> {
   const sinceSeq = queryInt(ctx.query.get('sinceSeq'), 0, Number.MAX_SAFE_INTEGER);
   if (sinceSeq === null) return refuse(400, 'invalid-request', { detail: 'sinceSeq' });
   const limit = queryInt(ctx.query.get('limit'), 1, GUEST_LIMITS.pageMax);
@@ -278,13 +294,14 @@ async function read(ctx: GuestRouteContext, scope: GuestScope, since: number): P
   if (r.invalid === true) return refuse(400, 'invalid-request');
   const page = parsePhoneRoomCardsReply(answered.reply, scope.workspaceId, scope.threadId);
   if (!page) return refuse(502, 'desktop-bad-reply');
+  if (!(await stillAllowed())) return revokedMidRequest();
   return {
     status: 200,
     body: { ok: true, cards: page.cards.filter((c) => guestSeesCard(c, since)).map(guestCardView), nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore },
   };
 }
 
-async function post(ctx: GuestRouteContext, who: Extract<GuestAuthResult, { ok: true }>, scope: GuestScope): Promise<GuestRouteResponse> {
+async function post(ctx: GuestRouteContext, who: Extract<GuestAuthResult, { ok: true }>, scope: GuestScope, stillAllowed: () => Promise<boolean>): Promise<GuestRouteResponse> {
   const body = await ctx.readBody();
   if (!body.ok) return refuse(body.status, body.error);
   const parsed = parsePostBody(body.value);
@@ -304,6 +321,7 @@ async function post(ctx: GuestRouteContext, who: Extract<GuestAuthResult, { ok: 
     text,
     mentions: parsed.mentions,
   };
+  if (!(await stillAllowed())) return revokedMidRequest();
   const answered = await ask(desktop, GUEST_ROOM_POST_COMMAND, { ...payload });
   if (!('reply' in answered)) {
     // Sent with no answer: main may have written the card. The same
