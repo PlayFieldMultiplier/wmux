@@ -24,6 +24,7 @@
 //                 or closes a proposal / plan card.
 // Any other caller — no bot binding and not the operator — is refused.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { isBotRole, isCoordinatorBot } from '../../../shared/bot';
@@ -146,12 +147,27 @@ export interface BotFileRoots {
   tasksUnread?: true;
 }
 
-/** The folders a bot's files may come from: its profile's repository, its
- *  own folder (`factory/bots/<id>`, which holds its research tasks'
- *  folders), and the worktrees of the bot's own tasks (the ledger rows it
- *  started, by the folder the daemon's mission names, and the folders a
- *  stop kept). Another bot's or the owner's worktrees are never included,
- *  nor a worktree detached to the owner. */
+/** A folder main made for a bot (its own folder, a task worktree) as a
+ *  root: a real directory, not a link, whose real path is still inside the
+ *  folder all such folders live in. A link put in its place points at
+ *  someone else's files. */
+function ownedDir(dir: string, parent: string): boolean {
+  try {
+    const st = fs.lstatSync(dir);
+    if (!st.isDirectory() || st.isSymbolicLink()) return false;
+    const rel = path.relative(fs.realpathSync.native(parent), fs.realpathSync.native(dir));
+    return !!rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+  } catch {
+    return false;
+  }
+}
+
+/** The folders a bot's files may come from: its profile's repository (the
+ *  owner's pick, taken as it is), its own folder (`factory/bots/<id>`, which
+ *  holds its research tasks' folders), and the worktrees of the bot's own
+ *  tasks (the ledger rows it started, by the folder the daemon's mission
+ *  names). Another bot's or the owner's worktrees are never included, nor a
+ *  worktree detached to the owner, nor a task whose row the ledger pruned. */
 export async function botFileRoots(bot: BotBinding, deps: Pick<RoomHandlerDeps, 'ports' | 'wmuxDir'>): Promise<BotFileRoots> {
   let profile: BotProfile | null = null;
   try {
@@ -160,24 +176,22 @@ export async function botFileRoots(bot: BotBinding, deps: Pick<RoomHandlerDeps, 
     profile = null;
   }
   const repo = profile?.repo?.repoPath && path.isAbsolute(profile.repo.repoPath) ? profile.repo.repoPath : undefined;
-  const roots = [botCwd(deps.wmuxDir(), bot.botId), ...(repo ? [repo] : [])];
+  const own = botCwd(deps.wmuxDir(), bot.botId);
+  const roots = [...(ownedDir(own, path.dirname(own)) ? [own] : []), ...(repo ? [repo] : [])];
   let tasksUnread = false;
   const folders = getTaskFolderPorts();
   if (folders) {
-    const own = folders.allRows().filter((r) => r.dispatch?.origin.kind === 'bot' && r.dispatch.origin.botId === bot.botId);
-    const owners = [...new Set(own.map((r) => r.ownerWorkspaceId))];
+    const rows = folders.allRows().filter((r) => r.dispatch?.origin.kind === 'bot' && r.dispatch.origin.botId === bot.botId);
+    const owners = [...new Set(rows.map((r) => r.ownerWorkspaceId))];
     for (const owner of owners) {
       const missions = await folders.missions(owner).catch(() => null);
       if (!missions) { tasksUnread = true; continue; }
-      for (const row of own) {
+      for (const row of rows) {
         if (row.ownerWorkspaceId !== owner) continue;
         const m = missions.get(row.id);
-        if (m && m.detached !== true && taskFolderKind(m.folder, m.branch, bot.botId, folders.roots) === 'worktree') roots.push(m.folder);
+        if (m && m.detached !== true && taskFolderKind(m.folder, m.branch, bot.botId, folders.roots) === 'worktree'
+          && ownedDir(m.folder, folders.roots.worktrees)) roots.push(m.folder);
       }
-    }
-    for (const rec of folders.store.all()) {
-      if (rec.stopped?.botId === bot.botId && rec.kind === 'worktree' && rec.state !== 'removed'
-        && taskFolderKind(rec.path, rec.branch, bot.botId, folders.roots) === 'worktree') roots.push(rec.path);
     }
   }
   return { roots: [...new Set(roots)], ...(repo ? { base: repo } : {}), ...(tasksUnread ? { tasksUnread: true as const } : {}) };

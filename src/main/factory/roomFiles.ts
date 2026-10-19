@@ -21,8 +21,16 @@
 //     never evicts).
 //
 // All IO is synchronous, as in the photo store (roomAttachments.ts).
-// Retention is by age, as for photos: a stored file older than the room's
-// retention plus a day is swept, on start and at most hourly on a copy.
+// Retention: a stored file older than the room's retention plus a day that
+// no kept card lists is swept (an open card outlives the retention), on
+// start and at most hourly on a copy; while the cards cannot be read, none.
+//
+// The checks are path based (Node has no openat): a process that swaps a
+// folder above the file for a link between the checks and the open, and
+// back before the checks after the read, is caught on Linux by the opened
+// descriptor's own path and elsewhere only by the identity checks around
+// the open. That process already runs as the owner's user inside the bot's
+// own folders, and a file it gets onto a card is shown only to the owner.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -46,7 +54,7 @@ const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 const OCTET = 'application/octet-stream';
 const TEXT = 'text/plain';
 /** Media types by lower-case extension; anything else is octet-stream. */
-const MEDIA_TYPES: Readonly<Record<string, string>> = {
+const MEDIA_TYPES = new Map<string, string>(Object.entries({
   md: 'text/markdown', markdown: 'text/markdown',
   txt: TEXT, log: TEXT, text: TEXT,
   json: 'application/json',
@@ -61,14 +69,14 @@ const MEDIA_TYPES: Readonly<Record<string, string>> = {
   java: TEXT, kt: TEXT, swift: TEXT, rb: TEXT, php: TEXT, c: TEXT, h: TEXT, cc: TEXT, cpp: TEXT,
   hpp: TEXT, cs: TEXT, sh: TEXT, bash: TEXT, zsh: TEXT, ps1: TEXT, sql: TEXT, css: TEXT, scss: TEXT,
   xml: TEXT, yml: TEXT, yaml: TEXT, toml: TEXT, ini: TEXT, cfg: TEXT,
-};
-const KNOWN_MEDIA_TYPES = new Set([OCTET, ...Object.values(MEDIA_TYPES)]);
+}));
+const KNOWN_MEDIA_TYPES = new Set([OCTET, ...MEDIA_TYPES.values()]);
 
 /** A file name's media type, by its extension. Pure. */
 export function roomFileMediaType(name: string): string {
   const dot = name.lastIndexOf('.');
   if (dot <= 0 || dot === name.length - 1) return OCTET;
-  return MEDIA_TYPES[name.slice(dot + 1).toLowerCase()] ?? OCTET;
+  return MEDIA_TYPES.get(name.slice(dot + 1).toLowerCase()) ?? OCTET;
 }
 
 /** Whether a stored file of this type is read back as UTF-8 text. Pure. */
@@ -130,6 +138,22 @@ function refuse(reason: RoomFileRefusalReason): { ok: false; reason: RoomFileRef
   return { ok: false, reason, message: REFUSAL_TEXT[reason] };
 }
 
+/** Read an open descriptor to its end, or null once it passes `max` bytes
+ *  (a file that grows after its fstat is never read whole). */
+function readBounded(fd: number, max: number): Buffer | null {
+  const chunks: Buffer[] = [];
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  let total = 0;
+  for (;;) {
+    const n = fs.readSync(fd, chunk, 0, chunk.length, null);
+    if (n === 0) break;
+    total += n;
+    if (total > max) return null;
+    chunks.push(Buffer.from(chunk.subarray(0, n)));
+  }
+  return Buffer.concat(chunks, total);
+}
+
 /** A directory that is not a link. */
 function isRealDir(dir: string): boolean {
   try {
@@ -177,6 +201,10 @@ function containingRoot(realRoots: readonly string[], real: string): { root: str
 export interface RoomFileStoreOptions {
   /** `<wmuxDir>/factory/room-files` */
   root: string;
+  /** The file ids the kept cards of a room list; null while the rooms are
+   *  not readable (the sweep then deletes no stored file). An open card can
+   *  outlive the room's retention, and its files stay with it. */
+  referenced?: (workspaceId: string) => ReadonlySet<string> | null;
   now?: () => number;
   log?: (msg: string, err?: unknown) => void;
 }
@@ -220,7 +248,7 @@ export class RoomFileStore {
     try {
       const fst = fs.fstatSync(fd);
       if (!fst.isFile() || fst.size > ROOM_FILE_LIMITS.MAX_BYTES) return null;
-      return fs.readFileSync(fd);
+      return readBounded(fd, ROOM_FILE_LIMITS.MAX_BYTES);
     } catch {
       return null;
     } finally {
@@ -253,7 +281,8 @@ export class RoomFileStore {
     if (!lst.isFile() || lst.isSymbolicLink()) return refuse('not_file');
     if (lst.size > ROOM_FILE_LIMITS.MAX_BYTES) return refuse('size');
     if (lst.size === 0) return refuse('empty');
-    let data: Buffer;
+    let data: Buffer | null;
+    let fst: fs.Stats;
     let fd: number;
     try {
       fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
@@ -261,20 +290,32 @@ export class RoomFileStore {
       return refuse('changed');
     }
     try {
-      const fst = fs.fstatSync(fd);
+      fst = fs.fstatSync(fd);
       if (!fst.isFile() || fst.dev !== lst.dev || fst.ino !== lst.ino) return refuse('changed');
       if (fst.size > ROOM_FILE_LIMITS.MAX_BYTES) return refuse('size');
-      data = fs.readFileSync(fd);
+      // Linux names the opened file itself: that path must be inside a root.
+      if (process.platform === 'linux') {
+        const opened = fs.readlinkSync(`/proc/self/fd/${fd}`);
+        if (!containingRoot(realRoots, opened)) return refuse('changed');
+      }
+      data = readBounded(fd, ROOM_FILE_LIMITS.MAX_BYTES);
     } catch {
       return refuse('changed');
     } finally {
       try { fs.closeSync(fd); } catch { /* closed */ }
     }
-    if (data.length > ROOM_FILE_LIMITS.MAX_BYTES) return refuse('size');
+    if (!data) return refuse('size');
     if (data.length === 0) return refuse('empty');
-    // A folder above the file swapped for a link during the read is caught here.
+    // A folder above the file swapped for a link around the open is caught
+    // here: the path must still resolve, inside a root, to the file read.
     const after = realpathOrNull(source);
     if (after !== real || !containingRoot(realRoots, after)) return refuse('changed');
+    try {
+      const now = fs.lstatSync(after);
+      if (now.dev !== fst.dev || now.ino !== fst.ino) return refuse('changed');
+    } catch {
+      return refuse('changed');
+    }
     const name = roomFileName(source);
     if (!name) return refuse('missing');
     return this.store(workspaceId, data, name);
@@ -331,13 +372,23 @@ export class RoomFileStore {
     return { files, bytes };
   }
 
+  private referencedIn(workspaceId: string): ReadonlySet<string> | null {
+    try {
+      return this.opts.referenced ? this.opts.referenced(workspaceId) : null;
+    } catch (err) {
+      this.log('the cards could not be read for the sweep', err);
+      return null;
+    }
+  }
+
   private maybeSweep(): void {
     if (this.now() - this.lastSweep < SWEEP_EVERY_MS) return;
     this.sweep();
   }
 
-  /** Delete stored files older than the room keeps a card, and stray
-   *  temporary files. Only names this store writes are touched. */
+  /** Delete stored files older than the room keeps a card that no kept card
+   *  lists, and stray temporary files. Only names this store writes are
+   *  touched. */
   sweep(): void {
     const now = this.now();
     this.lastSweep = now;
@@ -357,6 +408,7 @@ export class RoomFileStore {
       } catch {
         continue;
       }
+      let kept: ReadonlySet<string> | null | undefined;
       for (const name of names) {
         const stored = STORED_RE.test(name);
         if (!stored && !TEMP_RE.test(name)) continue;
@@ -364,7 +416,13 @@ export class RoomFileStore {
         try {
           const st = fs.lstatSync(file);
           const age = now - st.mtimeMs;
-          if (stored ? age > ROOM_FILE_RETAIN_MS : age > SWEEP_EVERY_MS) fs.unlinkSync(file);
+          if (!stored) {
+            if (age > SWEEP_EVERY_MS) fs.unlinkSync(file);
+            continue;
+          }
+          if (age <= ROOM_FILE_RETAIN_MS) continue;
+          if (kept === undefined) kept = this.referencedIn(ws);
+          if (kept && !kept.has(name)) fs.unlinkSync(file);
         } catch { /* vanished */ }
       }
     }

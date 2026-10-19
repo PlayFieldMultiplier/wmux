@@ -4,7 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { ROOM_FILE_RETAIN_MS, RoomFileStore, parseRoomFiles, roomFileMediaType, roomFileName } from '../roomFiles';
 import { RoomWriter } from '../roomWriter';
-import { handleRoomPost, type BotFileRoots, type RoomHandlerDeps } from '../../pipe/handlers/room.rpc';
+import { botFileRoots, handleRoomPost, type BotFileRoots, type RoomHandlerDeps } from '../../pipe/handlers/room.rpc';
+import { TaskFolders, setTaskFolderPorts, type TaskFolderPorts, type TaskMission } from '../taskFolderCleanup';
+import type { LedgerEntry } from '../../../shared/ledger';
 import { ROOM_FILE_LIMITS, type RoomFile } from '../../../shared/roomFiles';
 import type { BotBinding, BotProfile } from '../../../shared/bot';
 import type { RoomCard } from '../../../shared/room';
@@ -136,20 +138,28 @@ describe('RoomFileStore.copyIn', () => {
     expect(other.copyIn('ws-files-2', src, [repo()])).toMatchObject({ ok: false, reason: 'full' });
   });
 
-  it('sweeps stored files older than the room keeps a card, and stray temporary files', () => {
-    const keep = store.copyIn(WS, write(path.join(repo(), 'keep.txt')), [repo()]);
-    const old = store.copyIn(WS, write(path.join(repo(), 'old.txt')), [repo()]);
-    if (!keep.ok || !old.ok) throw new Error('copy failed');
+  it('sweeps old stored files no kept card lists, and stray temporary files; none while the cards are unreadable', () => {
+    let referenced: ReadonlySet<string> | null = null;
+    const swept = new RoomFileStore({ root: storeRoot(), now: () => now, log: () => undefined, referenced: () => referenced });
+    const fresh = swept.copyIn(WS, write(path.join(repo(), 'fresh.txt')), [repo()]);
+    const old = swept.copyIn(WS, write(path.join(repo(), 'old.txt')), [repo()]);
+    const openCard = swept.copyIn(WS, write(path.join(repo(), 'open.txt')), [repo()]);
+    if (!fresh.ok || !old.ok || !openCard.ok) throw new Error('copy failed');
     const wsDir = path.join(storeRoot(), WS);
     const past = (ms: number) => new Date(now - ms);
-    fs.utimesSync(path.join(wsDir, old.file.id), past(ROOM_FILE_RETAIN_MS + 1000), past(ROOM_FILE_RETAIN_MS + 1000));
+    for (const id of [old.file.id, openCard.file.id]) fs.utimesSync(path.join(wsDir, id), past(ROOM_FILE_RETAIN_MS + 1000), past(ROOM_FILE_RETAIN_MS + 1000));
     const temp = path.join(wsDir, `${'c'.repeat(32)}.tmp`);
     fs.writeFileSync(temp, 'x');
     fs.utimesSync(temp, past(2 * 3600_000), past(2 * 3600_000));
     fs.writeFileSync(path.join(wsDir, 'not-ours'), 'x');
     fs.utimesSync(path.join(wsDir, 'not-ours'), past(ROOM_FILE_RETAIN_MS + 1000), past(ROOM_FILE_RETAIN_MS + 1000));
-    store.sweep();
-    expect(stored().sort()).toEqual([keep.file.id, 'not-ours'].sort());
+    // The rooms are not readable: only the temporary file goes.
+    swept.sweep();
+    expect(stored().sort()).toEqual([fresh.file.id, old.file.id, openCard.file.id, 'not-ours'].sort());
+    // An open card still lists one old file: it stays.
+    referenced = new Set([openCard.file.id]);
+    swept.sweep();
+    expect(stored().sort()).toEqual([fresh.file.id, openCard.file.id, 'not-ours'].sort());
   });
 });
 
@@ -224,5 +234,53 @@ describe('room_post files', () => {
     const human = s.writer.post({ workspaceId: WS, kind: 'human', actor: { kind: 'human' }, title: 'hi', files: forged });
     expect(human.ok && human.card.files).toBeFalsy();
     expect(stored()).toEqual([]);
+  });
+});
+
+// ── Where a bot's files may come from ──────────────────────────────────────
+
+describe('botFileRoots', () => {
+  afterEach(() => setTaskFolderPorts(null));
+
+  const worktrees = () => path.join(dir, 'worktrees');
+  const row = (id: string, botId: string, owner = 'ws-owner'): LedgerEntry => ({ id, ownerWorkspaceId: owner, dispatch: { origin: { kind: 'bot', botId } } } as unknown as LedgerEntry);
+  function ports(rows: LedgerEntry[], missions: Map<string, TaskMission> | null) {
+    setTaskFolderPorts({
+      store: new TaskFolders(path.join(dir, 'task-folders.json')),
+      roots: { worktrees: worktrees(), wmuxDir: dir },
+      missions: async () => missions,
+      allRows: () => rows,
+    } as unknown as TaskFolderPorts & { allRows: () => LedgerEntry[] });
+  }
+  const deps = (repoPath?: string) => ({
+    ports: () => ({ bots: { get: () => ({ id: BOT_ID, repo: repoPath ? { repoKey: 'h/o/r', repoPath } : undefined } as unknown as BotProfile), listEnabled: () => [] } }),
+    wmuxDir: () => dir,
+  });
+
+  it("holds the bot's repository, its own folder and its own tasks' worktrees, and no one else's", async () => {
+    const mine = path.join(worktrees(), 'h1', 'task-mine');
+    const theirs = path.join(worktrees(), 'h1', 'task-theirs');
+    const detached = path.join(worktrees(), 'h1', 'task-detached');
+    for (const d of [mine, theirs, detached, path.join(dir, 'factory', 'bots', BOT_ID)]) fs.mkdirSync(d, { recursive: true });
+    ports(
+      [row('task-mine', BOT_ID), row('task-theirs', 'bot-99999999'), row('task-detached', BOT_ID)],
+      new Map([['task-mine', { folder: mine }], ['task-theirs', { folder: theirs }], ['task-detached', { folder: detached, detached: true }]]),
+    );
+    const r = await botFileRoots(binding, deps(repo()));
+    expect(r.roots.sort()).toEqual([path.join(dir, 'factory', 'bots', BOT_ID), mine, repo()].sort());
+    expect(r.base).toBe(repo());
+    expect(r.tasksUnread).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === 'win32')('leaves out a task folder or bot folder that is a link, and says when the tasks could not be listed', async () => {
+    const linked = path.join(worktrees(), 'h1', 'task-link');
+    fs.mkdirSync(path.dirname(linked), { recursive: true });
+    fs.symlinkSync(outside(), linked);
+    fs.mkdirSync(path.join(dir, 'factory', 'bots'), { recursive: true });
+    fs.symlinkSync(outside(), path.join(dir, 'factory', 'bots', BOT_ID));
+    ports([row('task-link', BOT_ID)], new Map([['task-link', { folder: linked }]]));
+    expect((await botFileRoots(binding, deps())).roots).toEqual([]);
+    ports([row('task-link', BOT_ID)], null);
+    expect(await botFileRoots(binding, deps())).toEqual({ roots: [], tasksUnread: true });
   });
 });
