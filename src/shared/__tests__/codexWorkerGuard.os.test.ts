@@ -296,10 +296,12 @@ describe('the codex worker rules', () => {
         ['glab', 'api', 'projects/1/merge_requests/3/merge', '-X', 'PUT'], ['glab', 'alias', 'set', 'm', 'mr merge'],
         ['glab', 'mr', 'create', '--push=true'], ['glab', 'mr', 'create', '--auto-merge=true'], ['glab', 'mr', 'new-for', '34'], ['glab', 'mr', 'create-for', '34'],
         ['glab', 'mr', 'create', '--attach', './file.png'],
+        ['glab', 'ci', 'run', '-b', 'main'], ['glab', 'pipeline', 'create'], ['glab', 'variable', 'import'], ['glab', 'var', 'im'],
       ]) expect(decide(cmd), cmd.join(' ')).toBe('forbidden');
       for (const cmd of [
         ['gh', 'pr', 'view', '3'], ['gh', 'pr', 'create', '--fill'], ['git', 'commit', '-m', 'push it'], ['git', 'status'], ['git', 'remote', '-v'],
         ['glab', 'mr', 'create', '--source-branch', 'wtask/a', '--yes'], ['glab', 'mr', 'view', '3'], ['glab', 'mr', 'list'], ['glab', 'repo', 'members', 'list'],
+        ['glab', 'mr', 'create', '--source-branch', 'wtask/a', '--title', 'x', '--description', 'y', '--yes'], ['glab', 'ci', 'status'], ['glab', 'pipe', 'list'],
       ]) {
         expect(decide(cmd), cmd.join(' ')).toBe('none');
       }

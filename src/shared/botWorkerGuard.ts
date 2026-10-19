@@ -43,7 +43,7 @@ export function ghApiDeny(rest: string): string[] {
 }
 
 /** glab's built-in aliases for a command group. */
-export const GLAB_GROUP_ALIASES: Readonly<Record<string, readonly string[]>> = { repo: ['project'], variable: ['var'], stack: ['stacks'] };
+export const GLAB_GROUP_ALIASES: Readonly<Record<string, readonly string[]>> = { repo: ['project'], variable: ['var'], stack: ['stacks'], ci: ['pipe', 'pipeline'] };
 
 /** `glab <group…> <verb>` up to the verb, in every option placement glab
  *  takes (`-R g/p` before the group, between the group's words, before the
@@ -166,7 +166,9 @@ export const BOT_WORKER_PUBLIC_DENY: readonly string[] = [
   ...['create', 'new'].flatMap((v) => glabSubcommandDeny('issue board', v)),
   ...['create', 'fork', 'update', 'delete', 'transfer', 'mirror', 'publish'].flatMap((v) => glabSubcommandDeny('repo', v)),
   ...['add', 'remove'].flatMap((v) => glabSubcommandDeny('repo members', v)),
-  ...['set', 'new', 'create', 'update', 'delete', 'remove'].flatMap((v) => glabSubcommandDeny('variable', v)),
+  ...['set', 'new', 'create', 'update', 'delete', 'remove', 'import', 'im'].flatMap((v) => glabSubcommandDeny('variable', v)),
+  // A new pipeline runs under the owner's GitLab identity.
+  ...['run', 'create'].flatMap((v) => glabSubcommandDeny('ci', v)),
   // Also bundled after api's one other switch, `-i` (`-iX PUT`, `-if`).
   ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [`*-X*${x}*`, `*-iX*${x}*`, `*--method*${x}*`].flatMap(glabApiDeny))),
   ...['* -f*', '* -F*', '* -if*', '* -iF*', '*--field*', '*--raw-field*', '*--form*', '*--input*'].flatMap(glabApiDeny),

@@ -84,16 +84,16 @@ describe('bot fan-out presets', () => {
     expect(github).not.toMatch(/glab|merge request/);
     for (const key of ['gitlab.com/g/p', 'git.corp.example/g/sub/p']) {
       const gitlab = composeBotWorkerPrompt('default', 'fix it', undefined, key);
-      expect(gitlab).toContain('open a merge request (`glab mr create --source-branch <your branch> --yes`).');
+      expect(gitlab).toContain('open a merge request (`glab mr create --source-branch <your branch> --title "<title>" --description "<what and why>" --yes`).');
       expect(gitlab).toContain('and the merge request link');
       expect(gitlab).not.toMatch(/gh pr|pull request/);
     }
     const repro = composeBotWorkerPrompt('repro', '', undefined, 'gitlab.com/g/p');
-    expect(repro).toContain('open a DRAFT merge request (`glab mr create --draft --source-branch <your branch> --yes`)');
+    expect(repro).toContain('open a DRAFT merge request (`glab mr create --draft --source-branch <your branch> --title "<title>" --description "<repro steps and the test>" --yes`)');
     expect(repro).toContain('the merge request stays a draft for the owner to mark ready');
     expect(repro).not.toMatch(/glab mr update/);
     const maintain = composeBotWorkerPrompt('maintain', '', undefined, 'gitlab.com/g/p');
-    expect(maintain).toContain('open a merge request (`glab mr create --source-branch <your branch> --yes`)');
+    expect(maintain).toContain('open a merge request (`glab mr create --source-branch <your branch> --title "<title>" --description "<what and why>" --yes`)');
     expect(maintain).toContain('`glab mr view <n> --output json` and `glab mr diff <n>`');
     expect(maintain).not.toMatch(/gh pr/);
     // A GitHub SSH host alias, GitHub Enterprise Cloud and GHES keep gh.

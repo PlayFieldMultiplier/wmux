@@ -40,9 +40,9 @@ describe('bot worker deny rules', () => {
   });
 
   it('the rule set is pinned: any change to a rule is a deliberate change to this test', () => {
-    expect(BOT_WORKER_DENY.length).toBe(887);
+    expect(BOT_WORKER_DENY.length).toBe(947);
     expect(createHash('sha256').update(JSON.stringify(BOT_WORKER_DENY)).digest('hex'))
-      .toBe('1221b60d342929d6d521c88ad5e71f35a78fd473764b4635e795d5cb8951e281');
+      .toBe('794093b6d27ea2378e4a1fca333213624099d2e18a7a9fae866b2cdfdd222f09');
   });
 
   it('no rule holds a `:*` that does not end it (Claude Code reads such a rule with a notice)', () => {
@@ -202,6 +202,13 @@ describe('bot worker deny rules', () => {
     'glab mr new-for 34',
     'glab mr create-for 34',
     'glab mr create --source-branch wtask/a --yes --attach ./file.png',
+    'glab ci run -b main',
+    'glab ci create -b main',
+    'glab pipeline run',
+    'glab ci -R g/p run',
+    'glab -R g/p pipe create',
+    'glab variable import --input-file vars.json',
+    'glab var im --input-file vars.json',
   ])('refuses %s', (cmd) => {
     expect(denied(cmd)).toBe(true);
   });
@@ -210,6 +217,11 @@ describe('bot worker deny rules', () => {
     'gh pr create --title x --body y',
     'glab mr create --source-branch x --yes',
     'glab mr new --source-branch wtask/a --yes',
+    'glab mr create --source-branch wtask/a --title "Fix the parser" --description "What and why" --yes',
+    'glab mr create --draft --source-branch wtask/a --title "Repro" --description "Steps and the test" --yes',
+    'glab ci list',
+    'glab pipeline status',
+    'glab variable export',
     'glab repo members list',
     'glab repo archive g/p',
     'glab project view g/p',

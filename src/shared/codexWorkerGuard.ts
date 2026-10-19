@@ -81,7 +81,8 @@ const GLAB_WRITE_VERBS: Readonly<Record<string, readonly string[]>> = {
   issue: ['create', 'new', 'close', 'note', 'comment', 'delete', 'del', 'reopen', 'update'],
   release: ['create', 'delete', 'upload'],
   repo: ['create', 'fork', 'update', 'delete', 'transfer', 'mirror', 'publish'],
-  variable: ['set', 'new', 'create', 'update', 'delete', 'remove'],
+  variable: ['set', 'new', 'create', 'update', 'delete', 'remove', 'import', 'im'],
+  ci: ['run', 'create'],
   alias: ['set'],
   stack: ['sync'],
 };

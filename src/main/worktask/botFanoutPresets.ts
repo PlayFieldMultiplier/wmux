@@ -117,8 +117,8 @@ const REVIEW_REQUEST: Readonly<Record<BotReviewHost, ReviewRequestLines>> = {
     noun: 'merge request',
     read: 'the merged merge requests the task names (`glab mr view <n> --output json` and `glab mr diff <n>`)',
     link: 'the merge request link',
-    create: '`glab mr create --source-branch <your branch> --yes`',
-    draft: '`glab mr create --draft --source-branch <your branch> --yes`',
+    create: '`glab mr create --source-branch <your branch> --title "<title>" --description "<what and why>" --yes`',
+    draft: '`glab mr create --draft --source-branch <your branch> --title "<title>" --description "<repro steps and the test>" --yes`',
     ready: 'the merge request stays a draft for the owner to mark ready: GitLab runs its pipeline on a draft too.',
   },
 };
