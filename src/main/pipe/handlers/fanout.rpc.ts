@@ -1946,9 +1946,12 @@ export function registerFanOutRpc(
             }
             // Started after all (a retry found a free slot): the same request
             // is no longer held, nor is a wake already queued for it (a slot
-            // freed while this ran). A refusal or a start that launched
-            // nothing keeps both.
-            if (started.length > 0 && heldArgs) {
+            // freed while this ran). A refusal, or a start that launched no
+            // worker, keeps both.
+            // A pane whose agent never came up, or whose setup failed, is no
+            // started worker (as tellBot counts them above).
+            const launched = result.tasks.some((t) => !!(t.workspaceId && t.taskId) && !t.launchFailed && !t.setupFailed);
+            if (launched && heldArgs) {
               heldFanoutStarted(bot.botId, heldArgs, heldContext);
               try {
                 dropQueuedHeldFanoutWakes(bot.botId, (w) => heldWakeIsFor(w, heldArgs, heldContext));

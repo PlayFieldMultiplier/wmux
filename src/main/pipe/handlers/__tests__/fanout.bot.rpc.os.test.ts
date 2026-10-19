@@ -31,7 +31,8 @@ import { emptyUsage } from '../../../factory/budget';
 import type { ThreadId } from '../../../../shared/room';
 import type { BotGroup } from '../../../../shared/botGroup';
 import { setFactoryRoomPorts } from '../../../factory/roomWriter';
-import { HeldFanouts, setHeldFanouts } from '../../../factory/heldFanouts';
+import { HeldFanouts, heldFanoutFingerprint, setHeldFanouts } from '../../../factory/heldFanouts';
+import { WakeQueue, setWakeQueue, wakeQueuePath } from '../../../factory/wakeQueue';
 import type { BotWorkerStartOutcome } from '../../../factory/botNotices';
 import { SecretStore, setSecretStore } from '../../../factory/secretStore';
 import { ConnectorStore } from '../../../factory/connectorStore';
@@ -347,25 +348,49 @@ describe('task.fanout.start — bot origin', () => {
     expect(r.start).toHaveBeenCalledTimes(1);
   });
 
-  it('a held request is retired only once its retry launched a worker: a refusal at the repository checks keeps it', async () => {
+  it('a held request and its queued wake retire only once a retry launched a worker: a refusal or a failed launch keeps them', async () => {
     const held = new HeldFanouts({ budget: () => ({ maxConcurrentWorkers: 2 }), openWorkers: () => ({ bot: 2, factory: 2 }), wakes: () => null });
     setHeldFanouts(held);
+    const queue = new WakeQueue(wakeQueuePath(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-held-wake-'))));
+    queue.load();
+    setWakeQueue(queue);
     try {
       const params = { titles: ['fix it'], prompt: 'fix', preset: 'repro' };
       held.hold({ botId: BOT_ID, workspaceId: 'ws-bot', args: params, threadId: 'general', handoffId: 'h-dispatch', tainted: false });
+      const wake = queue.enqueue({
+        botId: BOT_ID, workspaceId: 'ws-bot', priority: 1, threadId: 'general',
+        reason: { kind: 'held_fanout', heldId: 'held-q', heldAt: 1, titles: ['fix it'], args: params, fingerprint: heldFanoutFingerprint(params), tainted: false, handoffId: 'h-dispatch' },
+      });
+      const kept = (): void => {
+        expect(held.list(BOT_ID)).toHaveLength(1);
+        expect(queue.get(wake?.id ?? '')?.state).toBe('queued');
+      };
       const r = rig('lead');
+      // Refused at the default-branch check: nothing launched.
       r.setDefaultBranchNote({ name: 'odd name', recorded: false });
       expect(JSON.stringify(await r.call({ idempotencyKey: 'wake:w-1:1', ...params }, botCtx('lead')))).toContain('cannot be kept from its workers');
       await r.flush();
-      expect(held.list(BOT_ID)).toHaveLength(1);
+      kept();
+      // Started, but its agent never came up: no worker launched.
       r.setDefaultBranchNote({ name: null, recorded: false });
+      r.start.mockImplementationOnce(async (req: FanOutRequest) => ({
+        ok: true,
+        tasks: req.titles.map((title, index) => ({ index, title, ok: false, taskId: `task-${index}`, workspaceId: `ws-task-${index}`, launchFailed: true })),
+      }));
       r.setWake('w-2');
       expect(await r.call({ idempotencyKey: 'wake:w-2:1', ...params }, botCtx('lead'))).toMatchObject({ ok: true });
       await r.flush();
-      expect(r.start).toHaveBeenCalledTimes(1);
+      kept();
+      // A worker launched: the hold and its queued wake retire.
+      r.setWake('w-3');
+      expect(await r.call({ idempotencyKey: 'wake:w-3:1', ...params }, botCtx('lead'))).toMatchObject({ ok: true });
+      await r.flush();
       expect(held.list(BOT_ID)).toEqual([]);
+      expect(queue.get(wake?.id ?? '')?.state).toBe('dropped');
     } finally {
       setHeldFanouts(null);
+      setWakeQueue(null);
+      await queue.flush();
     }
   });
 
