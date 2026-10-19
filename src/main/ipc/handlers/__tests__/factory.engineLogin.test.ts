@@ -28,7 +28,8 @@ describe('botLoginConfigDir', () => {
       expect(botLoginConfigDir(BOT, ports('ws-plain', undefined))).toBe('/main/claude');
       // A conversation on the default sign-in stays there, whatever the binding.
       expect(botLoginConfigDir(BOT, ports('ws-bound', null))).toBe('/main/claude');
-      expect(botLoginConfigDir(BOT, ports(null, 'acc-1'))).toBe('/main/claude');
+      // A bot that is gone opens no sign-in.
+      expect(() => botLoginConfigDir(BOT, ports(null, 'acc-1'))).toThrow(/gone/);
     } finally {
       if (prior === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = prior;

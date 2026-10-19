@@ -230,7 +230,8 @@ export function factoryTaskFoldersCleanHandler(
 
 /** The Claude config folder a bot's turns sign in with: the account its
  *  conversation runs on, else its workspace's binding, else main's own
- *  (botClaudeConfigDir). Undefined: Claude's default folder. */
+ *  (botClaudeConfigDir). Undefined: Claude's default folder. Throws for a
+ *  bot that is gone. */
 export function botLoginConfigDir(
   botId: string,
   ports: {
@@ -243,7 +244,7 @@ export function botLoginConfigDir(
   },
 ): string | undefined {
   const workspaceId = ports.workspaceOf(botId);
-  if (!workspaceId) return botClaudeConfigDir();
+  if (!workspaceId) throw new Error('that bot is gone');
   const { run } = (ports.resolve ?? resolveConversationAccount)(workspaceId, 'claude', ports.accountOf(botId));
   return run.env[VENDOR_ENV_KEYS.claude] ?? botClaudeConfigDir();
 }
