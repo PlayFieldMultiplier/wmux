@@ -309,6 +309,29 @@ describe('serialResync (#2469)', () => {
     expect(runs).toEqual(['a', 'c']);
   });
 
+  // The gap between the last pass ending and the serializer becoming idle:
+  // an ask landing there must still get a pass. Asked a few microtasks after
+  // the pass settles, so one of the delays falls in whatever gap there is.
+  it('an ask that arrives just as the last pass ends still runs', async () => {
+    const ticks = async (n: number) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
+    for (let delay = 0; delay <= 8; delay++) {
+      const runs: string[] = [];
+      let release: () => void = () => undefined;
+      const serial = serialResync(async (arg: string) => {
+        runs.push(arg);
+        if (arg === 'a') await new Promise<void>((resolve) => { release = resolve; });
+      });
+      const first = serial('a');
+      await Promise.resolve();
+      release();
+      await ticks(delay);
+      const late = serial('b');
+      await first;
+      await late;
+      expect({ delay, runs }).toEqual({ delay, runs: ['a', 'b'] });
+    }
+  });
+
   it('keeps going after a failed pass', async () => {
     const runs: number[] = [];
     const serial = serialResync(async (n: number) => {

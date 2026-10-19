@@ -218,6 +218,10 @@ export function serialResync<T>(run: (arg: T) => Promise<unknown>): (arg: T) => 
         /* the caller's run reports its own failure */
       }
       next = pending;
+      // Idle in the same step that finds nothing pending: clearing it later
+      // (a `.finally`) leaves a microtask gap where an ask only sets
+      // `pending`, which no pass then reads.
+      if (!next) running = null;
     }
   };
   return (arg: T) => {
@@ -225,7 +229,9 @@ export function serialResync<T>(run: (arg: T) => Promise<unknown>): (arg: T) => 
       pending = { arg };
       return running;
     }
-    running = loop(arg).finally(() => { running = null; });
+    // `loop` awaits a pass before it can clear `running`, so this assignment
+    // always comes first.
+    running = loop(arg);
     return running;
   };
 }
