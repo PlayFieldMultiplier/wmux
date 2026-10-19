@@ -61,6 +61,7 @@ import { IconFanOut, IconImage, IconPlus } from '../icons';
 import { ChatAttachmentChips } from '../Chat/ChatAttachmentViews';
 import type { ChatAttachment } from '../Chat/chatAttachments';
 import { CardPhotos, ROOM_PHOTO_LIMIT, isRoomPhotoPath, photoOnlyCard, registerBotsDropTarget } from './BotsPhotos';
+import BotsFilePanel, { CardFiles, type OpenRoomFile } from './BotsFiles';
 import { renderBrainMarkdown, type MarkdownOptions } from '../shared/BrainMarkdown';
 import { getLocale } from '../../i18n';
 import { normalizeRepoKey } from '../../../shared/repoKey';
@@ -365,6 +366,10 @@ interface RowCtx {
   /** What a work card reads (absent: no work cards): which cards wait on
    *  the owner, the bots' tasks, and the pull request a task opened. */
   work?: { waits: (card: RoomCardData) => boolean; tasks: readonly BotTaskView[]; prUrl: (taskId: string) => string | null };
+  /** Opens a file a bot attached to its card in the side panel. */
+  onOpenFile?: (open: OpenRoomFile) => void;
+  /** The file the side panel shows now. */
+  shownFileId?: string | null;
 }
 
 /** A bot message's prose: the title and the body as one text in one colour,
@@ -519,6 +524,9 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
             <BotProse card={card} answers={answers} waiting={waiting} ctx={ctx} />
           </div>
         )}
+        {/* Its files sit under the bubble, outside it (a chip's fill never
+            sits on the bubble's). */}
+        {ctx.onOpenFile && <CardFiles card={card} t={t} shownId={ctx.shownFileId} onOpen={ctx.onOpenFile} />}
         {chips}
         {thread && thread.replies > 0 && <ThreadSummaryLine thread={thread} ctx={ctx} />}
       </div>
@@ -2141,6 +2149,8 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     if (taken.length > 0) setStarted((cur) => new Set([...cur, ...taken]));
   }, [sent, bots, started]);
   const [openThread, setOpenThread] = useState<{ workspaceId: string; threadId: ThreadId } | null>(null);
+  // The file a bot attached that the side panel shows.
+  const [openFile, setOpenFile] = useState<OpenRoomFile | null>(null);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | undefined>(undefined);
   const actors = useStore((s) => s.roomActors);
   const roomThreads = useStore((s) => s.roomThreads);
@@ -2295,9 +2305,10 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   }, [profileOpen]);
   const presence = conversation.kind === 'bot' && !removedBot ? botPresence(conversation.row) : null;
   const group = conversation.kind === 'room';
-  // One side panel at a time: a worker's terminal or a thread. The worker
-  // panel belongs to the conversation it was opened from: another
-  // conversation closes it.
+  // One side panel at a time: a worker's terminal, a thread or a file a bot
+  // attached. The worker panel belongs to the conversation it was opened
+  // from: another conversation closes it (the thread and the file are this
+  // chat's own state: BotsChat is keyed by its conversation).
   const panel = useStore((s) => s.botsWorkerPanel);
   const shownId = panel && panel.conversationId === conversationId ? panel.workspaceId : null;
   const hostedId = useStore(selectWorkerPanelHost);
@@ -2307,11 +2318,19 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   }, [conversationId]);
   const openWorker = useCallback((workspaceId: string) => {
     setOpenThread(null);
+    setOpenFile(null);
     useStore.getState().setBotsWorkerPanel({ workspaceId, conversationId });
   }, [conversationId]);
   const onThread = useCallback((workspaceId: string, threadId: ThreadId) => {
     useStore.getState().setBotsWorkerPanel(null);
+    setOpenFile(null);
     setOpenThread({ workspaceId, threadId });
+  }, []);
+  // Another file replaces the one shown.
+  const onOpenFile = useCallback((open: OpenRoomFile) => {
+    useStore.getState().setBotsWorkerPanel(null);
+    setOpenThread(null);
+    setOpenFile(open);
   }, []);
   // The chat and its side panel share the width by the splitter.
   const areaRef = useRef<HTMLDivElement>(null);
@@ -2349,10 +2368,14 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     if (threadAsk) onThread(threadAsk.workspaceId, threadAsk.threadId);
     // Only a new ask opens it: closing the panel is not undone on re-render.
   }, [askedNonce]);
-  // A worker picked in the list while a thread is open takes the side.
-  useEffect(() => { if (shownId) setOpenThread(null); }, [shownId]);
+  // A worker picked in the list while a thread or a file is open takes the side.
+  useEffect(() => {
+    if (!shownId) return;
+    setOpenThread(null);
+    setOpenFile(null);
+  }, [shownId]);
   const tree = conversation.kind === 'bot' ? conversation.tree : EMPTY_TREE;
-  const shown = shownId && !openThread ? workerPanelView(shownId, workers, tree, tasks, t) : null;
+  const shown = shownId && !openThread && !openFile ? workerPanelView(shownId, workers, tree, tasks, t) : null;
   // A Stop worker under way, or one main answered partial, keeps the item
   // offered once its task is cancelled, so the owner can stop again.
   const stopUnfinished = useWorkerStopUnfinished(shown?.taskId);
@@ -2409,7 +2432,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     resumable: (taskId) => taskRows.some((row) => (row.tasks ?? []).some((task) => task.taskId === taskId && task.worker === 'resumable')),
     run: resumeShown,
   }), [readOnly, resumePort, taskRows, resumeShown]);
-  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown, ...(conversation.kind === 'bot' ? { selfBot: conversation.row.bot.id } : {}), ...(cardResume ? { resume: cardResume } : {}), work: workCtx };
+  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown, ...(conversation.kind === 'bot' ? { selfBot: conversation.row.bot.id } : {}), ...(cardResume ? { resume: cardResume } : {}), work: workCtx, onOpenFile, shownFileId: openFile?.file.id ?? null };
   // The open thread is read whole, from its first card (the cached room
   // timeline holds only its newest page), and shown from every card read
   // for the room — not only this conversation's.
@@ -2420,7 +2443,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   const empty = items.length === 0;
 
   return (
-    <div ref={areaRef} className="wmux-bots-chat-area" data-worker-open={shownId || openThread ? 'true' : undefined}>
+    <div ref={areaRef} className="wmux-bots-chat-area" data-worker-open={shownId || openThread || openFile ? 'true' : undefined}>
     <section className="wmux-bots-chat" data-bots-chat={conversation.id} aria-label={title}>
       <div className="wmux-bots-chat-head">
         <button type="button" data-bots-back onClick={onBack} aria-label={t('botsPage.back')} title={t('botsPage.back')} className={`wmux-bots-back ${FOCUS_RING}`}>
@@ -2504,7 +2527,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         )}
       </div>
     </section>
-    {((openThread && threadShown) || (shownId && shown)) && <SideSplitter areaRef={areaRef} split={split} t={t} onChange={onSplit} />}
+    {((openThread && threadShown) || (shownId && shown) || openFile) && <SideSplitter areaRef={areaRef} split={split} t={t} onChange={onSplit} />}
     {openThread && threadShown && (
       <BotsThreadPanel
         key={`${openThread.workspaceId}:${openThread.threadId}`}
@@ -2519,6 +2542,16 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
         readOnly={readOnly}
         onClose={() => setOpenThread(null)}
         onSent={onSent}
+        style={sideStyle}
+      />
+    )}
+    {openFile && (
+      <BotsFilePanel
+        key={`${openFile.workspaceId}:${openFile.file.id}`}
+        open={openFile}
+        api={api}
+        t={t}
+        onClose={() => setOpenFile(null)}
         style={sideStyle}
       />
     )}
