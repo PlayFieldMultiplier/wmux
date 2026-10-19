@@ -40,6 +40,15 @@ describe('redactSecrets', () => {
     expect(redactSecrets(`log ${token} end`)).toBe(`log ${REDACTED} end`);
   });
 
+  it('masks wmux\'s own guest and peer bearer credentials, whole', () => {
+    // Built at run time: no credential-shaped literal in the source.
+    for (const prefix of ['wmuxguest', 'wmuxpeer']) {
+      const cred = [prefix, '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', 'abc_DEF-12'].join('~');
+      expect(redactSecrets(`Authorization: Bearer ${cred} ok`)).toBe(`Authorization: Bearer ${REDACTED} ok`);
+    }
+    expect(redactSecrets('the wmuxguest prefix')).toBe('the wmuxguest prefix');
+  });
+
   it('keeps the inline URL credential masking the IPC log uses', () => {
     expect(maskInlineCredentials('http://h/x?token=abc&y=1')).toBe('http://h/x?token=[redacted]&y=1');
     expect(redactSecrets('open http://h/#wmux-desktop-code=zzz')).toContain('wmux-desktop-code=[redacted]');
