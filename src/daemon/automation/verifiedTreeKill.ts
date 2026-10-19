@@ -103,12 +103,35 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => set
  * (unknown) when nothing was recorded or the record is in neither format.
  */
 export function matchesRecordedStart(recorded: string | undefined, current: string): boolean | null {
-  if (!recorded) return null;
-  if (process.platform === 'win32') {
-    if (!/^\d+$/.test(recorded) && dmtfToUtcMicros(recorded) === null) return null;
-    return sameProcessStartTime(recorded, current);
-  }
+  if (!recordedStartUsable(recorded)) return null;
+  if (process.platform === 'win32') return sameProcessStartTime(recorded, current);
   return recorded.trim().replace(/\s+/g, ' ') === current.trim().replace(/\s+/g, ' ');
+}
+
+/** Whether a recorded start time can be compared at all (matchesRecordedStart). */
+function recordedStartUsable(recorded: string | undefined, platform: NodeJS.Platform = process.platform): recorded is string {
+  if (!recorded) return false;
+  return platform !== 'win32' || /^\d+$/.test(recorded) || dmtfToUtcMicros(recorded) !== null;
+}
+
+/** Why a pane's tree kill is refused now. */
+export const UNKNOWN_ROOT_REFUSAL = "this pane's process identity isn't known yet, so it was left running; try again in a moment";
+
+/**
+ * Why a running pane's tree may not be killed now (#2388), or null: no start
+ * time of its shell is recorded yet (POSIX reads it after the spawn), so
+ * nothing confirms its pid still leads to the shell and the tree cannot be
+ * taken. Destroying the session then would end the pane but orphan its
+ * tree, unkilled, and a later close would find nothing left to stop. The
+ * session is left as it is instead; a later close retries once the start
+ * time is recorded.
+ */
+export function treeKillRefusal(
+  meta: { pid: number; state: string; pidCreatedAtFt?: string; pidStartTime?: string },
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if ((meta.state !== 'attached' && meta.state !== 'detached') || !(meta.pid > 0)) return null;
+  return recordedStartUsable(recordedStartOf(meta, platform), platform) ? null : UNKNOWN_ROOT_REFUSAL;
 }
 
 /**
@@ -597,11 +620,10 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
     if (stopped.length === 0) continue;
     // Read once more after the stops. A pid still held by the process read
     // before its stop was stopped as that process (a pid cannot change hands
-    // and come back). One that changed hands may have taken the stop as its
-    // new owner: that one runs again now, while its identity is known, and
-    // is not ours. Later, only a process whose identity is unchanged since
-    // its stop is ever resumed (release, kill): a pid that changes hands
-    // after it is a stranger's, which this capture never stopped.
+    // and come back). One that changed hands is not ours, and nothing shows
+    // whether it took the stop (it may be a job stopped on its own): it is
+    // never signalled again. Only a process whose identity is unchanged
+    // since its stop is ever resumed or killed (release, kill).
     let after: Map<number, PosixProcRow>;
     try {
       after = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
@@ -611,11 +633,9 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
     }
     const changed: number[] = [];
     for (const pid of stopped) {
-      const now = after.get(pid);
-      if (now?.start === targets.get(pid)) continue;
+      if (after.get(pid)?.start === targets.get(pid)) continue;
       targets.delete(pid);
       changed.push(pid);
-      if (now?.stat.startsWith('T')) send(pid, 'SIGCONT');
     }
     // What such a process forked before it went is under no captured pid,
     // and its pid now leads to another process's children.

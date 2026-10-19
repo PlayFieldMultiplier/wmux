@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { captureTreePosix, captureTreeWin32, matchesRecordedStart, parsePsIdentityRows, recordedStartOf, survivorsStillRunning, survivorsStillRunningWin32, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { UNKNOWN_ROOT_REFUSAL, captureTreePosix, captureTreeWin32, matchesRecordedStart, parsePsIdentityRows, recordedStartOf, survivorsStillRunning, survivorsStillRunningWin32, treeKillRefusal, type PosixProcRow, type PosixTreeDeps } from '../verifiedTreeKill';
 import type { ProcessHandle, ProcessHandleApi, ProcessOpenResult } from '../../../main/pty/winSnapshotNative';
 
 const noWait = async (): Promise<void> => undefined;
@@ -392,7 +394,7 @@ describe('captureTreePosix', () => {
     expect(signals.filter(([p, s]) => p === 101 && s !== 'SIGCONT')).toEqual([]);
   });
 
-  it('runs on a stranger the stop reached, at once: the capture is unverified, and the kill and the release never signal it again', async () => {
+  it('never signals again a pid that changed hands around its stop: the capture is unverified', async () => {
     for (const end of ['kill', 'release'] as const) {
       const rows = [row(1, 0), row(100, 1), row(101, 100)];
       const signals: Array<[number, NodeJS.Signals]> = [];
@@ -405,7 +407,7 @@ describe('captureTreePosix', () => {
         },
       };
       const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
-      expect(signals.filter(([p]) => p === 101).map(([, s]) => s)).toEqual(['SIGSTOP', 'SIGCONT']);
+      expect(signals.filter(([p]) => p === 101).map(([, s]) => s)).toEqual(['SIGSTOP']);
       if (end === 'kill') {
         const r = await tree.kill({ timeoutMs: 0 });
         expect(r.ok).toBe(false);
@@ -414,7 +416,9 @@ describe('captureTreePosix', () => {
         tree.release();
         await vi.waitFor(() => expect(signals.filter(([p, s]) => p === 100 && s === 'SIGCONT')).toHaveLength(1), { timeout: 5_000 });
       }
-      expect(signals.filter(([p]) => p === 101).map(([, s]) => s)).toEqual(['SIGSTOP', 'SIGCONT']);
+      // Nothing shows whether the new owner took the stop (it may be a job
+      // stopped on its own): it is not ours to resume, nor to kill.
+      expect(signals.filter(([p]) => p === 101).map(([, s]) => s)).toEqual(['SIGSTOP']);
     }
   });
 
@@ -659,5 +663,35 @@ describe('parsePsIdentityRows', () => {
       { pid: 100, ppid: 1, stat: 'Ss', start: 'Sat Oct 18 10:00:00 2026' },
       { pid: 101, ppid: 100, stat: 'R+', start: 'Sat Oct 18 10:00:01 2026' },
     ]);
+  });
+});
+
+describe('treeKillRefusal (#2388)', () => {
+  it('refuses a running pane whose shell has no usable recorded start time', () => {
+    expect(treeKillRefusal({ pid: 7, state: 'attached' }, 'linux')).toBe(UNKNOWN_ROOT_REFUSAL);
+    expect(treeKillRefusal({ pid: 7, state: 'detached', pidStartTime: '' }, 'linux')).toBe(UNKNOWN_ROOT_REFUSAL);
+    expect(treeKillRefusal({ pid: 7, state: 'attached', pidStartTime: 'not a time' }, 'win32')).toBe(UNKNOWN_ROOT_REFUSAL);
+  });
+
+  it('lets a known shell, or a pane with no running shell, through', () => {
+    expect(treeKillRefusal({ pid: 7, state: 'attached', pidStartTime: 'Mon Oct 19 10:00:00 2026' }, 'linux')).toBeNull();
+    expect(treeKillRefusal({ pid: 7, state: 'attached', pidCreatedAtFt: '134000000000000000' }, 'win32')).toBeNull();
+    expect(treeKillRefusal({ pid: 7, state: 'dead' }, 'linux')).toBeNull();
+    expect(treeKillRefusal({ pid: 0, state: 'attached' }, 'linux')).toBeNull();
+  });
+
+  // The refusal must come before the session is touched: the data listener,
+  // the pipe, the monitors and the relays are all the live pane's.
+  it('the daemon refuses before it touches the session', () => {
+    const src = readFileSync(path.resolve(process.cwd(), 'src/daemon/index.ts'), 'utf8');
+    const start = src.indexOf('const destroySessionNow = async');
+    const refusal = src.indexOf('treeKillRefusal(meta)', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(refusal).toBeGreaterThan(start);
+    for (const effect of ['sessionDataListeners.get(p.id)', 'sessionPipes.get(p.id)', 'processMonitor.unwatch(p.id)', 'sessionManager.destroySession(p.id)']) {
+      const at = src.indexOf(effect, start);
+      expect(at, effect).toBeGreaterThan(refusal);
+    }
+    expect(src.slice(refusal, src.indexOf('sessionDataListeners.get(p.id)', start))).toContain('throw new Error(refusal)');
   });
 });

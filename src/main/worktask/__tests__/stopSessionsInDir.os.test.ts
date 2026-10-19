@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
 import { PanesStillRunningError, assertNothingRunsIn, destroyedTreeOf, resetLingeringSurvivors, sessionHostDir, sessionsStartedIn, stopSessionsInDir, type SessionsInDirPort } from '../stopSessionsInDir';
 import type { DaemonDestroySessionTree } from '../../../shared/rpc';
+import { treeKillRefusal } from '../../../daemon/automation/verifiedTreeKill';
 
 type Session = { id: string; pid?: number; cwd?: string; spawnCwd?: string; wslTarget?: { distribution: string } };
 
@@ -232,6 +233,41 @@ describe('stopSessionsInDir', () => {
     expect(destroyedTreeOf({ ok: true })).toBeUndefined();
     expect(destroyedTreeOf({ ok: true, tree: { ok: false } })).toBeUndefined();
     expect(destroyedTreeOf(null)).toBeUndefined();
+  });
+
+  // A pane whose shell has no recorded start time: the daemon cannot take its
+  // tree. Ending the pane anyway orphaned the tree and the next close found
+  // nothing to stop, so the folder went while the child ran on. The daemon's
+  // refusal (treeKillRefusal) leaves the pane: every retry is refused until
+  // the start time is recorded, and then the tree is taken.
+  it('a pane whose identity is not known yet is left running, and every retry keeps the folder until it is', async () => {
+    const meta = { pid: 7, state: 'attached', pidStartTime: undefined as string | undefined };
+    const sessions = [{ id: 's', pid: 7, spawnCwd: '/w/t' }];
+    const child = { alive: true };
+    const destroySession = vi.fn(async (id: string) => {
+      // What the daemon's destroySessionNow does first.
+      const refusal = treeKillRefusal(meta, 'linux');
+      if (refusal) throw new Error(refusal);
+      sessions.splice(sessions.findIndex((s) => s.id === id), 1);
+      child.alive = false;
+      return { ok: true, killed: [7, 70] } as DaemonDestroySessionTree;
+    });
+    const p: SessionsInDirPort = {
+      platform: 'linux',
+      realpath: (x) => path.posix.resolve(x),
+      listSessions: async () => sessions,
+      destroySession,
+      isAlive: () => false,
+      sleep: async () => undefined,
+    };
+    await expect(stopSessionsInDir('/w/t', p)).rejects.toThrow(/identity isn't known yet/);
+    await expect(stopSessionsInDir('/w/t', p)).rejects.toThrow(/identity isn't known yet/);
+    expect(sessions).toHaveLength(1);
+    expect(child.alive).toBe(true);
+    // The start time is recorded: the next close takes the tree.
+    meta.pidStartTime = 'Mon Oct 19 10:00:00 2026';
+    expect(await stopSessionsInDir('/w/t', p)).toEqual(['s']);
+    expect(child.alive).toBe(false);
   });
 
   it('fails when a session cannot be destroyed', async () => {
