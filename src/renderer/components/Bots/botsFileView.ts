@@ -53,9 +53,8 @@ export function shownText(text: string): { text: string; cut: boolean; shownByte
   return { text: shown, cut: true, shownBytes: new TextEncoder().encode(shown).length };
 }
 
-/** An SVG as an <img> source (main sends it as text). */
-export function svgImageSource(read: { text?: string; dataUrl?: string }): string | null {
-  if (read.dataUrl?.startsWith('data:image/svg+xml')) return read.dataUrl;
-  if (read.text !== undefined) return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(read.text)}`;
-  return null;
+/** An SVG as an <img> source, built from its text (main sends it as
+ *  text); null without one. */
+export function svgImageSource(read: { text?: string }): string | null {
+  return read.text === undefined ? null : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(read.text)}`;
 }

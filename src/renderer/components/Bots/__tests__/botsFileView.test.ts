@@ -33,7 +33,6 @@ describe('the panel text', () => {
 
   it('an SVG becomes an image source, never markup in the page', () => {
     expect(svgImageSource({ text: '<svg onload="x()"/>' })).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg onload="x()"/>')}`);
-    expect(svgImageSource({ dataUrl: 'data:image/svg+xml;base64,PHN2Zy8+' })).toBe('data:image/svg+xml;base64,PHN2Zy8+');
     expect(svgImageSource({})).toBeNull();
   });
 

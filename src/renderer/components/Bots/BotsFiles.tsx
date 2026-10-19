@@ -73,8 +73,8 @@ export function CardFiles({ card, t, shownId, onOpen }: {
 /** Markdown in the panel reads as the chat does (links, rich code). */
 const PANEL_MARKDOWN: MarkdownOptions = { links: true, richCode: true, strictEmphasis: true };
 
-function FileNote({ children, testId }: { children: React.ReactNode; testId: string }) {
-  return <p className="wmux-bots-file-note" data-bots-file-note={testId}>{children}</p>;
+function FileNote({ children, testId, status }: { children: React.ReactNode; testId: string; status?: boolean }) {
+  return <p className="wmux-bots-file-note" data-bots-file-note={testId} role={status ? 'status' : undefined}>{children}</p>;
 }
 
 function TextView({ text, t, total }: { text: string; t: T; total: number }) {
@@ -227,11 +227,11 @@ export default function BotsFilePanel({ open, api, t, onClose, style }: {
           <IconX size={14} />
         </button>
       </div>
-      <div className="wmux-bots-file-body" data-bots-file-state={read === null ? 'loading' : read.ok ? 'ready' : 'error'}>
+      <div className="wmux-bots-file-body" data-bots-file-state={read === null ? 'loading' : read.ok ? 'ready' : 'error'} aria-busy={read === null}>
         {read === null ? (
-          <FileNote testId="loading">{t('botsPage.file.loading')}</FileNote>
+          <FileNote testId="loading" status>{t('botsPage.file.loading')}</FileNote>
         ) : !read.ok ? (
-          <FileNote testId="error">{t('botsPage.file.error', { error: read.error })}</FileNote>
+          <FileNote testId="error" status>{t('botsPage.file.error', { error: read.error })}</FileNote>
         ) : (
           <FileBody read={read} t={t} />
         )}
