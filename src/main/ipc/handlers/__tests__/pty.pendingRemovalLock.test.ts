@@ -28,7 +28,8 @@ describe('the pending-removal lock on pane creation', () => {
 
   it('the daemon\'s createSession checks it before the session is created', () => {
     const src = read('src/daemon/index.ts');
-    const check = src.indexOf('pendingRemovalRefusalAt(getWmuxDir(), p.cwd');
+    // In the form the spawn uses: `~/` expanded as prepareSpawn does.
+    const check = src.indexOf('pendingRemovalRefusalAt(getWmuxDir(), p.cwd ? expandTilde(p.cwd) : p.cwd');
     expect(check).toBeGreaterThan(-1);
     const create = src.indexOf('sessionManager.createSessionAsync({', check);
     expect(create).toBeGreaterThan(check);
