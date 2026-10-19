@@ -51,7 +51,8 @@ import { createBot, openFactorySettings, turnBotsOn } from './botsAddBot';
 import { confirmBotsAlreadyOn, useBotsPlanConsent } from './BotsPlanConsent';
 import { showWorkspaces } from '../../utils/showWorkspaces';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
-import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine';
+import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine'
+import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';;
 import { BOT_NAME_MAX, normalizeBotName, type BotProfile } from '../../../shared/bot';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
 import { allRoomCards, botConversationId, conversationCards, groupConversationId, groupViewCards, roomCardsByWorkspace, type Conversation } from './botsModel';
@@ -208,7 +209,13 @@ function PausedBanner({ t, settings, confirmOn }: { t: T; settings: FactorySetti
  *  not hold Start back. */
 function engineLine(r: ReturnType<typeof useEngineReadiness>['readiness'], t: T): string | null {
   if (!blocksStart(r)) return null;
-  return t(r?.reason === 'claude-not-installed' ? 'botsPage.onboarding.notInstalled' : 'botsPage.onboarding.notLoggedIn');
+  if (r?.reason === 'claude-not-installed') return t('botsPage.onboarding.notInstalled');
+  if (r?.reason === 'claude-unusable') return t('botsPage.onboarding.unusable');
+  return t('botsPage.onboarding.notLoggedIn');
+}
+
+function openClaudeInstallPage(): void {
+  void window.electronAPI?.shell?.openExternal?.(CLAUDE_CODE_INSTALL_URL)?.catch?.(() => undefined);
 }
 
 /** The first screen, with no bot yet: name a bot and Start (DESIGN.md ›
@@ -349,6 +356,9 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
         {engineText && (
           <div data-bots-engine={readiness?.reason} role="status" className="flex flex-wrap items-center gap-2 rounded-[10px] bg-[var(--selection-subtle)] px-3 py-2">
             <p className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--text-sub)]">{engineText}</p>
+            {readiness?.reason === 'claude-not-installed' && (
+              <Button size="sm" variant="primary" data-bots-engine-install onClick={openClaudeInstallPage}>{t('botsPage.onboarding.install')}</Button>
+            )}
             {canLogin && (
               <Button size="sm" variant="primary" data-bots-engine-login onClick={() => void loginNow()}>{t('botsPage.onboarding.login')}</Button>
             )}

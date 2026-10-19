@@ -11,8 +11,34 @@ describe('engineReadiness', () => {
     expect(credential).not.toHaveBeenCalled();
   });
 
-  it('installed and signed in: ready', async () => {
-    expect(await engineReadiness({ claudeExecutable: () => '/bin/claude', credential: async () => ({ ok: true }) })).toEqual({ ready: true });
+  it('installed and signed in: ready when the version probe succeeds', async () => {
+    expect(await engineReadiness({
+      claudeExecutable: () => '/bin/claude',
+      credential: async () => ({ ok: true }),
+      probe: async () => ({ ok: true as const, version: '2.0.0 (Claude Code)' }),
+    })).toEqual({ ready: true });
+  });
+
+  it('installed and signed in but the version probe fails: unusable', async () => {
+    const r = await engineReadiness({
+      claudeExecutable: () => '/bin/claude',
+      credential: async () => ({ ok: true }),
+      probe: async () => ({ ok: false as const, detail: 'claude --version exited 127' }),
+    });
+    expect(r).toMatchObject({ ready: false, reason: 'claude-unusable' });
+    expect(r.message).toContain('could not run');
+  });
+
+  it('the version probe is never asked when Claude is missing or not signed in', async () => {
+    const probe = vi.fn(async () => ({ ok: true as const, version: 'x' }));
+    await engineReadiness({ claudeExecutable: () => null, credential: async () => ({ ok: true }), probe });
+    expect(probe).not.toHaveBeenCalled();
+    await engineReadiness({
+      claudeExecutable: () => '/bin/claude',
+      credential: async () => ({ ok: false, reason: 'not-found' }),
+      probe,
+    });
+    expect(probe).not.toHaveBeenCalled();
   });
 
   it('no stored sign-in: not logged in; an unreadable one: unknown with the sanitized detail', async () => {

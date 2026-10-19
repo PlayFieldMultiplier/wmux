@@ -54,6 +54,7 @@ import type { BrainAdapter, BrainEvent, BrainImage } from '../deck/BrainAdapter'
 import { USAGE_LIMIT_UNKNOWN_HOLD_MS, findClaudeUsageLimitNotice, parseUsageLimitReset, usageLimitHoldEndsAt } from '../../shared/usageLimit';
 import { emitBotHook } from './botHooks';
 import type { BotEngineFactory } from './botEngines';
+import { classifyEngineError, type EngineErrorCode } from './engineError';
 import type { BotStore } from './botStore';
 import {
   budgetLeft, checkTurn, costUsdDay, hourlyCap, nextTurnAllowedAt, recordCost, recordTurn, runningWorkers, turnsUsedDay, turnsUsedHour, unrecordTurn,
@@ -378,7 +379,7 @@ export function botCwd(wmuxDir: string, botId: string): string {
 export class BotRuntime {
   private readonly live = new Map<string, LiveSession>();
   private readonly running = new Map<string, RunningTurn>();
-  private readonly lastError = new Map<string, { message: string; at: number }>();
+  private readonly lastError = new Map<string, { message: string; at: number; code?: EngineErrorCode }>();
   private readonly now: () => number;
   private readonly defer: (fn: () => void) => void;
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
@@ -1244,7 +1245,8 @@ export class BotRuntime {
       // Nor is the turn charged to the bot's budget: it never reached the model.
       if (startedAt !== undefined && this.deps.store.get(botId)) this.deps.store.mutateUsage(botId, (u) => { unrecordTurn(u, startedAt); });
     } else {
-      this.lastError.set(botId, { message: message.slice(0, 500), at });
+      const code = outcome === 'engine' ? classifyEngineError(message) : undefined;
+      this.lastError.set(botId, { message: message.slice(0, 500), at, ...(code ? { code } : {}) });
       const giveUp = outcome === 'engine' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
       if (!giveUp) {
         this.deps.queue.retry(item.id);

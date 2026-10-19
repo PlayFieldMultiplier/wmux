@@ -8,7 +8,7 @@
 // never blocks Start: the bot's own first turn then says what is wrong.
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export type EngineNotReadyReason = 'claude-not-installed' | 'claude-not-logged-in' | 'unknown';
+export type EngineNotReadyReason = 'claude-not-installed' | 'claude-not-logged-in' | 'claude-unusable' | 'unknown';
 
 export interface EngineReadiness {
   ready: boolean;
@@ -28,7 +28,7 @@ interface EngineBridge {
   factoryEngineLogin?: () => Promise<void>;
 }
 
-const REASONS: ReadonlySet<string> = new Set<EngineNotReadyReason>(['claude-not-installed', 'claude-not-logged-in', 'unknown']);
+const REASONS: ReadonlySet<string> = new Set<EngineNotReadyReason>(['claude-not-installed', 'claude-not-logged-in', 'claude-unusable', 'unknown']);
 
 /** main's answer, checked (anything unreadable is "unknown"). Pure. */
 export function readReadiness(raw: unknown): EngineReadiness {
@@ -56,7 +56,7 @@ export function bridgeEnginePort(): EnginePort {
 /** Whether the answer holds Start back: only a known reason does (an
  *  unknown answer lets the bot's first turn say what is wrong). Pure. */
 export function blocksStart(r: EngineReadiness | null): boolean {
-  return !!r && !r.ready && (r.reason === 'claude-not-installed' || r.reason === 'claude-not-logged-in');
+  return !!r && !r.ready && (r.reason === 'claude-not-installed' || r.reason === 'claude-not-logged-in' || r.reason === 'claude-unusable');
 }
 
 /** After a login opens, how often and how long the page asks again (the

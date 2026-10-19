@@ -2,10 +2,11 @@
 //
 // FACTORY_ENGINE_READINESS answers whether a bot on the default engine
 // (claude-sdk) can run here, without spending a model turn: the claude
-// executable resolves (the same lookup botEngines.ts refuses a spawn on) and
+// executable resolves (the same lookup botEngines.ts refuses a spawn on),
 // a Claude sign-in is stored (the same credential check a bot's Claude
-// login_request is settled on, botSecret.rpc.ts). The credential is read only
-// to learn that it exists; nothing of it leaves this module.
+// login_request is settled on, botSecret.rpc.ts), and a short `claude
+// --version` probe succeeds (no billing). The credential is read only to
+// learn that it exists; nothing of it leaves this module.
 //
 // FACTORY_ENGINE_LOGIN starts the sign-in the app already uses for accounts:
 // `claude auth login` in a new terminal tab of the active workspace, as the
@@ -20,11 +21,16 @@
 // close. One at a time. The renderer polls readiness to see the sign-in land.
 
 import type { FactoryEngineReadiness } from '../../shared/factoryEngine';
+import { probeClaudeExecutable, type ClaudeProbeDeps } from './claudeProbe';
 
 export interface EngineReadinessDeps {
   claudeExecutable: () => string | null;
   /** loadClaudeCredential's outcome, without the credential. */
   credential: () => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
+  /** Optional: override the version probe (tests). Absent: live probe. */
+  probe?: (exe: string) => Promise<{ ok: true; version: string } | { ok: false; detail: string }>;
+  /** Forwarded to the live probe when `probe` is absent. */
+  probeOpts?: ClaudeProbeDeps;
 }
 
 /** The readiness of the default engine. Never throws. */
@@ -40,14 +46,34 @@ export async function engineReadiness(deps: EngineReadinessDeps): Promise<Factor
   }
   try {
     const r = await deps.credential();
-    if (r.ok) return { ready: true };
-    if (r.reason === 'not-found') {
-      return { ready: false, reason: 'claude-not-logged-in', message: 'Claude Code is not signed in.' };
+    if (!r.ok) {
+      if (r.reason === 'not-found') {
+        return { ready: false, reason: 'claude-not-logged-in', message: 'Claude Code is not signed in.' };
+      }
+      return { ready: false, reason: 'unknown', message: r.detail ? `The Claude sign-in could not be read (${r.detail}).` : 'The Claude sign-in could not be read.' };
     }
-    return { ready: false, reason: 'unknown', message: r.detail ? `The Claude sign-in could not be read (${r.detail}).` : 'The Claude sign-in could not be read.' };
   } catch {
     return { ready: false, reason: 'unknown', message: 'The Claude sign-in could not be read.' };
   }
+  // Path + sign-in are not enough: a broken binary still fails the first turn.
+  try {
+    const probe = deps.probe ?? ((path: string) => probeClaudeExecutable(path, deps.probeOpts));
+    const p = await probe(exe);
+    if (!p.ok) {
+      return {
+        ready: false,
+        reason: 'claude-unusable',
+        message: `Claude is installed but could not run (${p.detail}).`,
+      };
+    }
+  } catch (err) {
+    return {
+      ready: false,
+      reason: 'claude-unusable',
+      message: `Claude is installed but could not run (${err instanceof Error ? err.message : String(err)}).`,
+    };
+  }
+  return { ready: true };
 }
 
 export const CLAUDE_LOGIN_COMMAND = 'claude auth login';

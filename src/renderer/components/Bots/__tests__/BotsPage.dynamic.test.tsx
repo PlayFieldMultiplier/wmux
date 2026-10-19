@@ -425,6 +425,29 @@ describe('Bots page', () => {
     expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
   });
 
+  it('first screen: Claude not installed offers Install Claude Code and Check again', async () => {
+    bots = [];
+    seedRooms();
+    setFactoryBotPort({ ...port, create: vi.fn() } as unknown as FactoryBotPort);
+    const openExternal = vi.fn(async () => undefined);
+    (window as unknown as { electronAPI: { shell: { openExternal: typeof openExternal } } }).electronAPI = {
+      ...(window as unknown as { electronAPI?: object }).electronAPI,
+      shell: { openExternal },
+    };
+    const engine: EnginePort = {
+      readiness: vi.fn(async () => ({ ready: false, reason: 'claude-not-installed' as const })),
+    };
+    await render(<BotsPage engine={engine} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-engine="claude-not-installed"]')?.textContent).toContain('isn\'t installed');
+    expect(q('[data-bots-engine-install]')?.className).toContain('ui-btn-primary');
+    expect(q('[data-bots-engine-login]')).toBeNull();
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(true);
+    await act(async () => { q('[data-bots-engine-install]')!.click(); });
+    expect(openExternal).toHaveBeenCalledWith(expect.stringContaining('claude-code'));
+    expect(q('[data-bots-engine-recheck]')).not.toBeNull();
+  });
+
   it('first screen: Start waits for the engine\'s first answer', async () => {
     bots = [];
     seedRooms();
