@@ -167,6 +167,17 @@ describe('createWorkerClear', () => {
       expect(await r.clear.reconcile()).toBe(1);
       expect(order).toEqual([`stop ${TASK} daemon-1`, 'close ws-task']);
     }
+    // Asked again right before the stop: the owner opened the workspace.
+    {
+      const store = await reclaimed('cancelled');
+      let due: (() => boolean) | null = null;
+      const r = clearRig(store, { stopTrees: async (_t, _p, stillDue) => { due = stillDue; } });
+      await r.clear.reconcile();
+      expect(due).not.toBeNull();
+      expect(due!()).toBe(true);
+      r.state.viewed = 'ws-task';
+      expect(due!()).toBe(false);
+    }
     const store = await reclaimed('cancelled');
     const r = clearRig(store, { stopTrees: async () => { throw new Error("this pane's process identity isn't known yet"); } });
     expect(await r.clear.reconcile()).toBe(0);

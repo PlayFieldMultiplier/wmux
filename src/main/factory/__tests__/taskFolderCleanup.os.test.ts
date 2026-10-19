@@ -278,6 +278,17 @@ describe('review safeguards', () => {
     expect(fs.existsSync(wt)).toBe(true);
   });
 
+  // #2388: a tree kill that left processes running has removed their
+  // session already; only the stop's own record still names them.
+  it('waits while processes an earlier stop of the folder left still run, with no session left', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager());
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    const nothingRunsIn = vi.fn(async () => { throw new Error('1 process(es) started in the worktree are still running'); });
+    expect(await cleanTaskFolder(ports({ nothingRunsIn }), row('cancelled'), mission, [])).toBe('busy');
+    expect(nothingRunsIn).toHaveBeenCalledWith(wt, []);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
   it('never removes through a link: a research batch replaced by a link to elsewhere is left alone', async () => {
     const outside = path.join(dir, 'outside', 'task-1');
     fs.mkdirSync(outside, { recursive: true });

@@ -66,7 +66,7 @@ import type { LedgerEntry } from '../../shared/ledger';
 import { BOT_ID_RE } from '../../shared/bot';
 import { getExecEnv } from '../../shared/execEnv';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
-import { sessionHostDir } from '../worktask/stopSessionsInDir';
+import { assertNothingRunsIn, sessionHostDir } from '../worktask/stopSessionsInDir';
 import { STOPPED_BY_OWNER, STOP_SYSTEM_WORKSPACE, isStoppedByOwnerRow } from './factoryStop';
 
 export const TASK_FOLDERS_FILENAME = 'task-folders.json';
@@ -267,6 +267,11 @@ export interface TaskFolderPorts {
   /** Whether a task gate's process runs for this task now (its own spawn,
    *  not a daemon session). Absent: none. */
   gateRunning?: (taskId: string) => boolean;
+  /** #2388: throws while something an earlier stop of the folder's panes
+   *  left runs, or such a stop is under way (their sessions are gone from
+   *  the daemon's list by then). Default: assertNothingRunsIn, given the
+   *  sessions this pass read. */
+  nothingRunsIn?: (folder: string, sessions: readonly TaskFolderSession[]) => Promise<void>;
   /** Default: removeTreeNoFollow. */
   removeDir?: (dir: string) => Promise<void>;
   /** Default: gitWorktreeRegistered. */
@@ -675,6 +680,11 @@ async function cleanTaskFolderNow(
   }
   if (folderInUse(mission.folder, sessions)) return 'busy';
   if (ports.gateRunning?.(entry.id) === true) return 'busy';
+  try {
+    await (ports.nothingRunsIn ?? ((d, list) => assertNothingRunsIn(d, { listSessions: async () => [...list] })))(mission.folder, sessions);
+  } catch {
+    return 'busy';
+  }
   const root = kind === 'research' ? path.join(ports.roots.wmuxDir, 'factory', 'bots', botId, 'research') : ports.roots.worktrees;
   if (!throughNoLink(mission.folder, root)) {
     log(`[factory] folder of ${entry.id} left alone: it is not where its root says (a link)`);

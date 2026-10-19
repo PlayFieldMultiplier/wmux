@@ -245,14 +245,22 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     // stop as the owner's (stopTaskWorker): the task folder's sessions among
     // `ptyIds`, killTree, survivors recorded against the folder so its
     // cleanup keeps it while one runs. A folder that is not known closes
-    // nothing: survivors could not be recorded against it.
-    const stopTrees = async (taskId: string, ptyIds: readonly string[]): Promise<void> => {
+    // nothing: survivors could not be recorded against it. Checked again
+    // on the sessions read for the stop, after the folder lookup: the close
+    // still due, and none of them running an agent or a command again.
+    const stopTrees = async (taskId: string, ptyIds: readonly string[], stillDue: () => boolean): Promise<void> => {
       if (ptyIds.length === 0) return;
       const entry = ledger.get(taskId);
       const dir = entry ? await taskFolderFromMissions((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry) : null;
       if (!dir) throw new Error(`the folder of task ${taskId} is not known`);
       await stopSessionsInDir(dir, {
-        listSessions: async () => (await listSessions()).filter((x) => ptyIds.includes(x.id)),
+        listSessions: async () => {
+          const targets = (await listSessions()).filter((x) => ptyIds.includes(x.id));
+          if (!stillDue()) throw new Error(`the close of task ${taskId}'s panes is no longer due`);
+          const busy = targets.filter((x) => x.agentProcessAlive === true || x.commandRunning === true);
+          if (busy.length > 0) throw new Error(`${busy.map((x) => x.id).join(', ')} of task ${taskId} run(s) again`);
+          return targets;
+        },
         destroySession: async (id) => {
           const c = daemon();
           if (!c) throw new Error('the daemon is not connected');

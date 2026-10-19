@@ -207,7 +207,7 @@ describe('ended bot tasks', () => {
   // #2388: a close ends each pane only; what the worker started outlived it.
   it('ends the task\'s panes with their trees before each close, and a refused stop closes nothing', async () => {
     const order: string[] = [];
-    const stopTrees = vi.fn(async (taskId: string, ids: readonly string[]) => { order.push(`stop ${taskId} ${ids.join(',')}`); });
+    const stopTrees = vi.fn(async (taskId: string, ids: readonly string[], _stillDue: () => boolean) => { order.push(`stop ${taskId} ${ids.join(',')}`); });
     const r = await rig([row('cancelled')], [respawned()], { stopTrees });
     r.closeWorkspace.mockImplementation(async (ws: string) => {
       order.push(`close ${ws}`);
@@ -217,12 +217,17 @@ describe('ended bot tasks', () => {
     });
     expect((await createDeadPaneSweep(r.ports).pass()).closed).toBe(1);
     expect(order).toEqual(['stop wtask-abc-12345678 daemon-1', 'close ws-task']);
+    // Asked again right before the stop: still due until the owner views it.
+    const stillDue = stopTrees.mock.calls[0][2] as () => boolean;
+    expect(stillDue()).toBe(true);
+    r.ports.viewed = (ws) => ws === 'ws-task';
+    expect(stillDue()).toBe(false);
 
     // One layout pane of several: only its sessions.
     const p = await rig([row('failed')], [respawned(), respawned({ id: 'daemon-2', resumeBinding: undefined })], { stopTrees: vi.fn(async () => undefined) });
     p.input.set('daemon-2', { keyInputRevision: 1, keyInputIdleMs: 1_000 });
     expect((await createDeadPaneSweep(p.ports).pass()).closed).toBe(1);
-    expect(p.ports.stopTrees).toHaveBeenCalledWith('wtask-abc-12345678', ['daemon-1']);
+    expect(p.ports.stopTrees).toHaveBeenCalledWith('wtask-abc-12345678', ['daemon-1'], expect.any(Function));
     expect(p.closePane).toHaveBeenCalledWith('pane-daemon-1');
 
     const refused = await rig([row('cancelled')], [respawned()], { stopTrees: async () => { throw new Error("this pane's process identity isn't known yet"); } });
