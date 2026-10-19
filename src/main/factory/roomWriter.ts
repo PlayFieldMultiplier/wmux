@@ -1217,7 +1217,7 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
     }
     case 'bot.workers_full': {
       // Not a budget limit: the bot waits for a worker slot, its own or the
-      // factory's, which frees when a running worker ends.
+      // factory's, and is woken with its held request when one frees.
       const name = botLabel(bots, fact.ref?.botId);
       const scope = p.scope === 'factory' ? 'factory' : p.scope === 'bot' ? 'bot' : null;
       const running = typeof p.running === 'number' && Number.isSafeInteger(p.running) ? p.running : null;

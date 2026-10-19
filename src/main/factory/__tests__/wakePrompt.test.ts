@@ -87,6 +87,20 @@ describe('buildWakePrompt — group rooms and routines', () => {
     expect(buildWakePrompt({ item: routine, profile: { ...profile, template: 'coordinator', role: 'moa' }, roster: team })).toContain('Other bots in this room');
   });
 
+  it('a held fan-out\'s wake carries its arguments, fenced, and the key to start it with', () => {
+    const args = { titles: ['verify #7'], preset: 'verify', prompt: 'look ``` here', checkout: { sha: 'a'.repeat(40), fetch_ref: 'pull/7/head' } };
+    const text = buildWakePrompt({ item: item({ kind: 'held_fanout', heldId: 'held-1', heldAt: Date.UTC(2026, 9, 19, 9), titles: ['verify #7'], args, tainted: false }), profile });
+    expect(text).toContain('A worker slot is free for the fan-out you asked for at 2026-10-19T09:00:00.000Z, when every worker slot was in use (a full slot is not a budget limit; wmux held the request): "verify #7".');
+    expect(text).toContain('````held-fanout\n');
+    expect(text).toContain('idempotency_key "wake:w-1:1"');
+    // Fenced whole: the bot replays them (their size is bounded where they are kept).
+    const long = buildWakePrompt({ item: item({ kind: 'held_fanout', heldId: 'held-3', heldAt: 1, titles: ['x'], args: { titles: ['x'], prompt: `${'p'.repeat(6_000)}END` }, tainted: false }), profile });
+    expect(long).toContain('END"');
+    expect(long).not.toContain('…(truncated)');
+    const bare = buildWakePrompt({ item: item({ kind: 'held_fanout', heldId: 'held-2', heldAt: 1, titles: ['x'], tainted: false }), profile });
+    expect(bare).toMatch(/Its arguments were too long to keep/);
+  });
+
   it('a mention shows who said what, fenced as data; an unreadable one points to room_read', () => {
     const r = { kind: 'mention' as const, cardId: 'c-9', handoffId: 'h-9', fromBotId: 'bot-00000002' };
     const text = buildWakePrompt({ item: item(r), profile, handoff: { handoffId: 'h-9', kind: 'message', from: 'Wmux Dev (lead)', title: 'Can you check #12?', body: 'CI is red ```' }, roster });

@@ -21,7 +21,7 @@ vi.mock('../../../deck/deckDecisionStore', async (actual) => ({
 
 import { sendToRenderer } from '../_bridge';
 import { git } from '../../../git/git';
-import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, registerFanOutRpc, verdictedTaskIds, workersHeldNote, type FanOutBotPort } from '../fanout.rpc';
+import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, registerFanOutRpc, verdictedTaskIds, workersHeldNote, type FanOutBotPort, type HeldFanoutRequest } from '../fanout.rpc';
 import type { FanOutRequest, FanOutResult, FanOutService, FanOutStatus } from '../../../worktask/FanOutService';
 import type { RpcRouter } from '../../RpcRouter';
 import { FanOutGuards } from '../../../worktask/fanoutGuards';
@@ -31,6 +31,8 @@ import { emptyUsage } from '../../../factory/budget';
 import type { ThreadId } from '../../../../shared/room';
 import type { BotGroup } from '../../../../shared/botGroup';
 import { setFactoryRoomPorts } from '../../../factory/roomWriter';
+import { HeldFanouts, heldFanoutFingerprint, setHeldFanouts } from '../../../factory/heldFanouts';
+import { WakeQueue, setWakeQueue, wakeQueuePath } from '../../../factory/wakeQueue';
 import type { BotWorkerStartOutcome } from '../../../factory/botNotices';
 import { SecretStore, setSecretStore } from '../../../factory/secretStore';
 import { ConnectorStore } from '../../../factory/connectorStore';
@@ -64,7 +66,7 @@ function botCtx(role: BotRole): RpcContext {
 interface Rig {
   call: (params: Record<string, unknown>, ctx: RpcContext) => Promise<Record<string, unknown>>;
   start: ReturnType<typeof vi.fn>;
-  port: FanOutBotPort & { started: string[][]; exhausted: string[]; full: Array<{ scope: string; running: number; limit: number }>; seen: Set<string>; refusal: string | null; outcomes: BotWorkerStartOutcome[] };
+  port: FanOutBotPort & { started: string[][]; exhausted: string[]; full: Array<{ scope: string; running: number; limit: number; request?: HeldFanoutRequest }>; seen: Set<string>; refusal: string | null; outcomes: BotWorkerStartOutcome[] };
   approve: () => void;
   setWake: (id: string | null) => void;
   setThread: (t: string | null) => void;
@@ -144,8 +146,9 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     budgetExhausted: (_b, reason) => {
       port.exhausted.push(reason);
     },
-    workersFull: (_b, full) => {
-      port.full.push({ ...full });
+    workersFull: (_b, full, request) => {
+      port.full.push({ ...full, request });
+      return true;
     },
   };
   registerFanOutRpc(router, service, () => null, {
@@ -345,6 +348,52 @@ describe('task.fanout.start — bot origin', () => {
     expect(r.start).toHaveBeenCalledTimes(1);
   });
 
+  it('a held request and its queued wake retire only once a retry launched a worker: a refusal or a failed launch keeps them', async () => {
+    const held = new HeldFanouts({ budget: () => ({ maxConcurrentWorkers: 2 }), openWorkers: () => ({ bot: 2, factory: 2 }), wakes: () => null });
+    setHeldFanouts(held);
+    const queue = new WakeQueue(wakeQueuePath(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-held-wake-'))));
+    queue.load();
+    setWakeQueue(queue);
+    try {
+      const params = { titles: ['fix it'], prompt: 'fix', preset: 'repro' };
+      held.hold({ botId: BOT_ID, workspaceId: 'ws-bot', args: params, threadId: 'general', handoffId: 'h-dispatch', tainted: false });
+      const wake = queue.enqueue({
+        botId: BOT_ID, workspaceId: 'ws-bot', priority: 1, threadId: 'general',
+        reason: { kind: 'held_fanout', heldId: 'held-q', heldAt: 1, titles: ['fix it'], args: params, fingerprint: heldFanoutFingerprint(params), tainted: false, handoffId: 'h-dispatch' },
+      });
+      const kept = (): void => {
+        expect(held.list(BOT_ID)).toHaveLength(1);
+        expect(queue.get(wake?.id ?? '')?.state).toBe('queued');
+      };
+      const r = rig('lead');
+      // Refused at the default-branch check: nothing launched.
+      r.setDefaultBranchNote({ name: 'odd name', recorded: false });
+      expect(JSON.stringify(await r.call({ idempotencyKey: 'wake:w-1:1', ...params }, botCtx('lead')))).toContain('cannot be kept from its workers');
+      await r.flush();
+      kept();
+      // Started, but its agent never came up: no worker launched.
+      r.setDefaultBranchNote({ name: null, recorded: false });
+      r.start.mockImplementationOnce(async (req: FanOutRequest) => ({
+        ok: true,
+        tasks: req.titles.map((title, index) => ({ index, title, ok: false, taskId: `task-${index}`, workspaceId: `ws-task-${index}`, launchFailed: true })),
+      }));
+      r.setWake('w-2');
+      expect(await r.call({ idempotencyKey: 'wake:w-2:1', ...params }, botCtx('lead'))).toMatchObject({ ok: true });
+      await r.flush();
+      kept();
+      // A worker launched: the hold and its queued wake retire.
+      r.setWake('w-3');
+      expect(await r.call({ idempotencyKey: 'wake:w-3:1', ...params }, botCtx('lead'))).toMatchObject({ ok: true });
+      await r.flush();
+      expect(held.list(BOT_ID)).toEqual([]);
+      expect(queue.get(wake?.id ?? '')?.state).toBe('dropped');
+    } finally {
+      setHeldFanouts(null);
+      setWakeQueue(null);
+      await queue.flush();
+    }
+  });
+
   it('verify preset at a detached SHA: repo from the profile, bot origin, preset and checkout on the request', async () => {
     const r = rig('verifier');
     const res = await r.call(
@@ -537,19 +586,26 @@ describe('task.fanout.start — bot origin', () => {
     expect(pane.ok).toBe(false);
   });
 
-  it('a full worker slot (the bot\'s or the factory\'s) is reported as workers_full, not as an exhausted budget', async () => {
+  it('a full worker slot (the bot\'s or the factory\'s) is reported as workers_full and held, not as an exhausted budget', async () => {
     const r = rig('verifier'); // maxConcurrentWorkers 1
     r.setOpen({ bot: 1, factory: 1 });
     const own = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier')));
     expect(own.code).toBe('RESOURCE_EXHAUSTED');
-    expect(own.message).toMatch(/not a budget limit: start it again once one of the running workers ends/);
+    expect(own.message).toMatch(/not a budget limit/);
+    expect(own.message).toMatch(/wakes you/);
     r.setOpen({ bot: 0, factory: 3 });
     expect(errorOf(await r.call({ idempotencyKey: 'wake:w-1:2', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier'))).code).toBe('RESOURCE_EXHAUSTED');
     expect(r.port.exhausted).toEqual([]);
-    expect(r.port.full).toEqual([
+    expect(r.port.full.map(({ scope, running, limit }) => ({ scope, running, limit }))).toEqual([
       { scope: 'bot', running: 1, limit: 1 },
       { scope: 'factory', running: 3, limit: 3 },
     ]);
+    // The request is held as the bot's tool arguments, with the wake's handoff.
+    expect(r.port.full[0].request).toMatchObject({
+      args: { titles: ['x'], preset: 'verify', checkout: { sha: SHA } },
+      tainted: false,
+      handoffId: 'h-dispatch',
+    });
     expect(r.start).not.toHaveBeenCalled();
   });
 
@@ -564,7 +620,7 @@ describe('task.fanout.start — bot origin', () => {
     expect(r.port.exhausted).toEqual([]);
   });
 
-  it('worker hours used up stay a budget refusal', async () => {
+  it('worker hours used up stay a budget refusal, and nothing is held', async () => {
     const r = rig('verifier', { budget: { ...DEFAULT_BOT_BUDGETS.verifier, maxWorkerHoursPerDay: 0 } });
     expect(errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier'))).code).toBe('RESOURCE_EXHAUSTED');
     expect(r.port.exhausted).toEqual(['worker_hours_day']);

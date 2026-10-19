@@ -16,6 +16,8 @@ import { WorkerStopPendingError } from '../factoryWiring';
 import { STOPPED_BY_OWNER, STOPPED_WAKE_KEEP_MS, WORKSPACES_LOADING_MESSAGE, __lateStopCountForTesting, __resetFactoryStopForTesting, installLateStopSweep, isOpenBotTask, isStoppedByOwnerRow, isWakeStoppedByOwner, stopFactoryTask, stopFactoryWork, type FactoryStopPorts } from '../factoryStop';
 import { factorySettingsSetHandler, factoryStopHandler } from '../../ipc/handlers/factory.handler';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings, type FactorySettingsStore } from '../factorySettings';
+import { HeldFanouts, setHeldFanouts } from '../heldFanouts';
+import { WakeQueue, setWakeQueue, wakeQueuePath } from '../wakeQueue';
 
 const LEAD = 'bot-0000000a';
 const TRIAGE = 'bot-0000000b';
@@ -86,6 +88,32 @@ function ports(over: Partial<FactoryStopPorts> = {}) {
 }
 
 describe('stopFactoryWork', () => {
+  it('forgets the fan-outs the stopped bot had held for a worker slot, and their queued wakes', async () => {
+    const queue = new WakeQueue(wakeQueuePath(dir));
+    queue.load();
+    setWakeQueue(queue);
+    const held = new HeldFanouts({ budget: () => ({ maxConcurrentWorkers: 1 }), openWorkers: () => ({ bot: 1, factory: 1 }), wakes: () => queue });
+    setHeldFanouts(held);
+    try {
+      held.hold({ botId: LEAD, workspaceId: 'ws-1', tainted: false, args: { titles: ['later'] } });
+      held.hold({ botId: TRIAGE, workspaceId: 'ws-1', tainted: false, args: { titles: ['other'] } });
+      const wake = queue.enqueue({ botId: LEAD, workspaceId: 'ws-1', priority: 1, reason: { kind: 'held_fanout', heldId: 'held-0', heldAt: 1, titles: ['earlier'], tainted: false } });
+      // One that failed and was parked with the bot does not run on resume either.
+      const parked = queue.enqueue({ botId: LEAD, workspaceId: 'ws-1', priority: 1, reason: { kind: 'held_fanout', heldId: 'held-p', heldAt: 1, titles: ['parked'], tainted: false } });
+      queue.start(parked?.id ?? '');
+      queue.park(parked?.id ?? '');
+      expect(queue.get(parked?.id ?? '')?.state).toBe('parked');
+      await stopFactoryWork(ports().p, { botId: LEAD });
+      expect(held.list().map((h) => h.botId)).toEqual([TRIAGE]);
+      expect(queue.get(wake?.id ?? '')?.state).toBe('dropped');
+      expect(queue.get(parked?.id ?? '')?.state).toBe('dropped');
+    } finally {
+      setHeldFanouts(null);
+      setWakeQueue(null);
+      await queue.flush();
+    }
+  });
+
   it('interrupts running turns, cancels every open bot task as "stopped by owner", cancels its gate and stops its worker', async () => {
     await task('t-work', LEAD);
     await task('t-ask', TRIAGE, 'input_required');

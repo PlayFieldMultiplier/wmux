@@ -115,7 +115,7 @@ import {
 import { validateFanoutTaskGraph, type FanoutTaskGraph } from '../../../shared/fanoutTaskGraph';
 import { botTemplate, type BotBinding, type BotProfile } from '../../../shared/bot';
 import { SHARED_SURFACE } from '../../../shared/botSurface';
-import { WAKE_LIMITS, botFanoutIdempotencyKey, type WakeItem } from '../../../shared/wake';
+import { WAKE_LIMITS, botFanoutIdempotencyKey, type HeldFanoutArgs, type WakeItem } from '../../../shared/wake';
 import { getBotStore } from '../../factory/botStore';
 import { withBotWorkerAgent } from '../../../shared/botWorkerAgent';
 import { parseSecretNames, secretNamesRefusal } from '../../factory/secretGrants';
@@ -139,9 +139,10 @@ import { botThreadRefusal, resolveRoomPorts, runningWake } from '../../factory/r
 import { getHandoffRouter } from '../../factory/handoffRouter';
 import { emitBotHook } from '../../factory/botHooks';
 import { checkWorkerHours, recordWorkerStart, workerSlotsFull, type BotUsage, type WorkerSlotsFull } from '../../factory/budget';
+import { getHeldFanouts, heldFanoutStarted, heldWakeIsFor } from '../../factory/heldFanouts';
 import { botFanoutPreset, botFanoutPresetList, botPresetCheckoutRefusal, composeBotWorkerPrompt } from '../../worktask/botFanoutPresets';
 import { getFactLog } from '../../factory/factLog';
-import { getWakeQueue } from '../../factory/wakeQueue';
+import { dropQueuedHeldFanoutWakes, getWakeQueue } from '../../factory/wakeQueue';
 import { isWakeStoppedByOwner } from '../../factory/factoryStop';
 import { getAgentSlots, refreshSlotLiveness } from '../../factory/agentSlots';
 import { countOpenBotWorkers, openBotWorkers, verdictedTaskIds } from '../../factory/openBotWorkers';
@@ -729,8 +730,10 @@ export interface FanOutBotPort {
   workersStarted(botId: string, taskIds: readonly string[]): void;
   /** The bot's worker hours for today are used: a budget limit. */
   budgetExhausted(bot: BotBinding, reason: 'worker_hours_day'): void;
-  /** Every worker slot the fan-out needs is in use: not a budget limit. */
-  workersFull(bot: BotBinding, full: WorkerSlotsFull): void;
+  /** Every worker slot the fan-out needs is in use (not a budget limit):
+   *  report it, and hold `request` so the bot is woken with it when a slot
+   *  frees (factory/heldFanouts.ts). Returns whether it was held. */
+  workersFull(bot: BotBinding, full: WorkerSlotsFull, request?: HeldFanoutRequest): boolean;
   /** Whether this fan-out key was accepted before (durable across restarts). */
   fanoutKeySeen(key: string): boolean;
   recordFanoutKey(key: string): void;
@@ -745,13 +748,43 @@ export interface FanOutBotPort {
   workerStartOutcome?(botId: string, outcome: BotWorkerStartOutcome): void;
 }
 
-/** What a slot refusal tells the bot: whose slots are full, and that it
- *  can start the fan-out again once a worker ends. Pure. */
-export function workersFullText(full: WorkerSlotsFull, heldNote = ''): string {
+/** A fan-out held for a worker slot: the bot's arguments, and where its
+ *  wake runs. */
+export interface HeldFanoutRequest {
+  args: HeldFanoutArgs;
+  threadId?: ThreadId;
+  tainted: boolean;
+  handoffId?: string;
+}
+
+/** The fanout_start arguments a bot sent, as its tool names them (the RPC
+ *  params, already validated). Pure. */
+export function heldFanoutArgs(params: Record<string, unknown>): HeldFanoutArgs {
+  const checkout = params['checkout'] as { sha?: unknown; fetchRef?: unknown } | undefined;
+  return {
+    titles: Array.isArray(params['titles']) ? (params['titles'] as unknown[]).filter((t): t is string => typeof t === 'string') : [],
+    ...(typeof params['prompt'] === 'string' ? { prompt: params['prompt'] } : {}),
+    ...(Array.isArray(params['taskPrompts']) ? { task_prompts: params['taskPrompts'] as string[] } : {}),
+    ...(typeof params['preset'] === 'string' ? { preset: params['preset'] } : {}),
+    ...(Array.isArray(params['files']) ? { files: params['files'] as string[][] } : {}),
+    ...(checkout && typeof checkout.sha === 'string'
+      ? { checkout: { sha: checkout.sha, ...(typeof checkout.fetchRef === 'string' ? { fetch_ref: checkout.fetchRef } : {}) } }
+      : {}),
+    ...(Array.isArray(params['secretNames']) ? { secret_names: params['secretNames'] as string[] } : {}),
+    ...(Array.isArray(params['connectors']) ? { connectors: params['connectors'] as string[] } : {}),
+    ...(typeof params['threadId'] === 'string' ? { thread_id: params['threadId'] } : {}),
+  };
+}
+
+/** What a slot refusal tells the bot: whose slots are full, and that the
+ *  request waits for one (or, not held, to start it again later). Pure. */
+export function workersFullText(full: WorkerSlotsFull, held: boolean, heldNote = ''): string {
   const whose = full.scope === 'factory'
     ? `the factory's bot worker slots are all in use (${full.running} of ${full.limit}, every bot's workers counted)`
     : `all of this bot's worker slots are in use (${full.running} of ${full.limit})${heldNote}`;
-  return `${whose}. This is not a budget limit: start it again once one of the running workers ends.`;
+  return `${whose}. This is not a budget limit: ${held
+    ? 'wmux holds this fan-out and wakes you with its arguments when a slot frees, to start it then'
+    : 'start it again once one of the running workers ends'}.`;
 }
 
 /** What an accepted bot fan-out answers: the workers are not up yet. */
@@ -840,8 +873,15 @@ function defaultBotPort(): FanOutBotPort | null {
     budgetExhausted: (bot, reason) => {
       emitBotHook({ type: 'bot.budget_exhausted', botId: bot.botId, workspaceId: bot.workspaceId, reason, at: Date.now() });
     },
-    workersFull: (bot, full) => {
-      emitBotHook({ type: 'bot.workers_full', botId: bot.botId, workspaceId: bot.workspaceId, ...full, at: Date.now() });
+    workersFull: (bot, full, request) => {
+      let held = false;
+      try {
+        held = !!request && getHeldFanouts()?.hold({ botId: bot.botId, workspaceId: bot.workspaceId, ...request }) != null;
+      } catch (err) {
+        console.warn(`[factory] a fan-out of bot ${bot.botId} could not be held: ${String(err)}`);
+      }
+      emitBotHook({ type: 'bot.workers_full', botId: bot.botId, workspaceId: bot.workspaceId, ...full, held, at: Date.now() });
+      return held;
     },
     workerStartOutcome: (botId, outcome) => {
       noticeWorkerStarts({ factLog: getFactLog, wakes: getWakeQueue }, botId, outcome);
@@ -1489,9 +1529,10 @@ export function registerFanOutRpc(
     // default there is nobody to drain a queue, and with it on a loop would
     // bury the operator in dialogs.
     // A bot's worker hours are its budget. Its worker slots, and the
-    // factory-wide ones, are not (bot.workers_full): counted over open bot
-    // tasks plus bot fan-outs still being started (booked in this same
-    // tick, so two concurrent starts cannot both pass).
+    // factory-wide ones, are not: counted over open bot tasks plus bot
+    // fan-outs still being started (booked in this same tick, so two
+    // concurrent starts cannot both pass), a full one holds the request and
+    // the bot is woken with it when a slot frees (factory/heldFanouts.ts).
     // The bot holders (factory/workerHolders.ts) count the fan-outs still
     // being started: each is booked under the live cap below in this tick.
     if (bot && botPort && botProfile) {
@@ -1512,11 +1553,16 @@ export function registerFanOutRpc(
         return deny('RESOURCE_EXHAUSTED', `this bot runs at most ${most} worker${most === 1 ? '' : 's'} at once: start at most ${most} task${most === 1 ? '' : 's'} per fan-out`);
       }
       if (full) {
-        botPort.workersFull(bot, full);
+        const held = botPort.workersFull(bot, full, {
+          args: heldFanoutArgs(params),
+          threadId: botNoticeThread,
+          tainted: botWakeTainted,
+          ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
+        });
         const note = full.scope === 'bot'
           ? workersHeldNote(open.bot - bookedBot, bookedBot, getAgentSlots()?.waiting().filter((w) => w.botId === bot.botId).length ?? 0)
           : '';
-        return deny('RESOURCE_EXHAUSTED', workersFullText(full, note));
+        return deny('RESOURCE_EXHAUSTED', workersFullText(full, held, note));
       }
     }
 
@@ -1524,6 +1570,10 @@ export function registerFanOutRpc(
     const reservation = guards.reserve(key, parsed.titles.length, { ownerWorkspaceId: callerWorkspaceId, ...(bot ? { botId: bot.botId } : {}) });
     if (!reservation.ok) return deny('RESOURCE_EXHAUSTED', reservation.message);
     if (bot) botPort?.recordFanoutKey(key);
+    // The request as a hold would name it (read here: params is not read
+    // after the approval): a hold of it retires once a worker of it started.
+    const heldArgs = bot ? heldFanoutArgs(params) : null;
+    const heldContext = { threadId: botNoticeThread, ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}) };
 
     // ── Claim the key ────────────────────────────────────────────────────
     // Last synchronous statement of the tick that read the gate above: from
@@ -1893,6 +1943,21 @@ export function registerFanOutRpc(
               if (started.length > 0) botPort.workersStarted(bot.botId, started);
             } catch {
               /* worker-hours are best effort; the open ledger rows still count */
+            }
+            // Started after all (a retry found a free slot): the same request
+            // is no longer held, nor is a wake already queued for it (a slot
+            // freed while this ran). A refusal, or a start that launched no
+            // worker, keeps both.
+            // A pane whose agent never came up, or whose setup failed, is no
+            // started worker (as tellBot counts them above).
+            const launched = result.tasks.some((t) => !!(t.workspaceId && t.taskId) && !t.launchFailed && !t.setupFailed);
+            if (launched && heldArgs) {
+              heldFanoutStarted(bot.botId, heldArgs, heldContext);
+              try {
+                dropQueuedHeldFanoutWakes(bot.botId, (w) => heldWakeIsFor(w, heldArgs, heldContext));
+              } catch {
+                /* that wake says to end the turn when the work is done */
+              }
             }
           }
           // Tasks that never got a workspace (the output folder could not be

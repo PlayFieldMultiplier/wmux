@@ -30,7 +30,28 @@ export type WakeReason =
   | { kind: 'mention'; cardId: string; handoffId: string; fromBotId: string }
   /** The first wake of a bot the owner just added: greet and ask what
    *  to do, with choices (ask_person options). Enqueued once, by main. */
-  | { kind: 'intro' };
+  | { kind: 'intro' }
+  /** A worker slot freed for a fan-out the bot started while every slot was
+   *  in use (main/factory/heldFanouts.ts): `args` are the fanout_start
+   *  arguments it sent (absent when they were too long to keep), for the bot
+   *  to start it again from this turn. `tainted`: the wake that asked for it
+   *  carried outside text. `handoffId`: the handoff that wake delivered, so
+   *  the tasks still answer it. `fingerprint`: of the arguments (a retry
+   *  that started them retires this wake too). */
+  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; handoffId?: string };
+
+/** A held fan-out's fanout_start arguments, as the bot's tool takes them. */
+export interface HeldFanoutArgs {
+  titles: string[];
+  prompt?: string;
+  task_prompts?: string[];
+  preset?: string;
+  files?: string[][];
+  checkout?: { sha: string; fetch_ref?: string };
+  secret_names?: string[];
+  connectors?: string[];
+  thread_id?: string;
+}
 
 /** A reason's dedupe key: enqueueing a reason whose key matches a kept,
  *  not-dropped item of the same bot returns that item instead. Null = never
@@ -43,6 +64,7 @@ export function wakeReasonDedupeKey(r: WakeReason): string | null {
     case 'routine': return `routine:${r.routineId}:${r.dueAt}`;
     case 'mention': return `mention:${r.cardId}`;
     case 'intro': return 'intro';
+    case 'held_fanout': return `held_fanout:${r.heldId}`;
     default: return null;
   }
 }
