@@ -19,7 +19,7 @@ vi.mock('../../ipc/handlers/metadata.handler', () => ({
   hasOutstandingRunningClaim: () => false,
 }));
 
-import { resyncAfterResubscribe, type DaemonPaneState, type DaemonSessionRow } from '../resubscribeResync';
+import { resyncAfterResubscribe, serialResync, type DaemonPaneState, type DaemonSessionRow } from '../resubscribeResync';
 import { HookSignalRouter } from '../../hooks/HookSignalRouter';
 import { SignalLatencyMeter } from '../../../shared/hooks/SignalLatencyMeter';
 
@@ -280,5 +280,59 @@ describe('resyncAfterResubscribe (#2263)', () => {
     });
     expect((await restarted.result).deaths).toBe(0);
     expect(restarted.died).toEqual([]);
+  });
+});
+
+describe('serialResync (#2469)', () => {
+  it('runs one pass at a time and folds every ask during a pass into one rerun with the latest argument', async () => {
+    const runs: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const gates: Array<() => void> = [];
+    const serial = serialResync(async (arg: string) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      runs.push(arg);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      active -= 1;
+    });
+    const first = serial('a');
+    void serial('b');
+    void serial('c');
+    await Promise.resolve();
+    expect(runs).toEqual(['a']);
+    gates.shift()?.();
+    await vi.waitFor(() => expect(runs).toEqual(['a', 'c']), { timeout: 5_000 });
+    gates.shift()?.();
+    await first;
+    expect(maxActive).toBe(1);
+    expect(runs).toEqual(['a', 'c']);
+  });
+
+  it('keeps going after a failed pass', async () => {
+    const runs: number[] = [];
+    const serial = serialResync(async (n: number) => {
+      runs.push(n);
+      if (n === 1) throw new Error('read failed');
+    });
+    await serial(1);
+    await serial(2);
+    expect(runs).toEqual([1, 2]);
+  });
+
+  it('two passes over one daemon state end a session and send a cwd once (idempotent)', async () => {
+    const tracked = new Map([['s1', '/old'], ['s2', '/a']]);
+    const rows: DaemonSessionRow[] = [
+      { id: 's1', state: 'dead', exitCode: 1, exitSignal: null },
+      { id: 's2', state: 'attached', cwd: '/b' },
+    ];
+    const first = run({ s2: null }, null, { rows, tracked });
+    await first.result;
+    const second = run({ s2: null }, null, { rows, tracked });
+    await second.result;
+    expect(first.died).toEqual([['s1', 1, undefined]]);
+    expect(first.cwds).toEqual([['s2', '/b']]);
+    expect(second.died).toEqual([]);
+    expect(second.cwds).toEqual([]);
   });
 });

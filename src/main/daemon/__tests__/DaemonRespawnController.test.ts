@@ -27,9 +27,12 @@ class FakeDaemonClient extends EventEmitter {
   disconnectCalls = 0;
   disconnectSyncCalls = 0;
   resubscribeCalls = 0;
+  /** What the daemon answers a resubscribe: accepted (default) or refused. */
+  resubscribeImpl: () => Promise<boolean> = async () => true;
 
-  async resubscribeEvents(): Promise<void> {
+  async resubscribeEvents(): Promise<boolean> {
     this.resubscribeCalls++;
+    return this.resubscribeImpl();
   }
 
   get isConnected(): boolean {
@@ -525,6 +528,70 @@ describe('DaemonRespawnController health probe', () => {
 
     subscribed = true;
     await vi.advanceTimersByTimeAsync(1000);
+    expect(onEventsResubscribed).toHaveBeenCalledTimes(1);
+  });
+
+  it('resyncs only after a refused resubscribe is retried and accepted (#2469)', async () => {
+    const h = makeHarness({
+      config: { healthIntervalMs: 1000, healthTimeoutMs: 5000, baseBackoffMs: 50, budget: 5 },
+    });
+    const onEventsResubscribed = vi.fn();
+    h.deps.onEventsResubscribed = onEventsResubscribed;
+    const c1 = new FakeDaemonClient();
+    h.clientQueue.push(c1);
+    let subscribed = true;
+    c1.rpcImpl = async (method) =>
+      method === 'daemon.ping' ? { status: 'ok', eventsSubscribed: subscribed } : {};
+    // The daemon refuses while the socket is still backed up, then accepts.
+    const answers = [false, true];
+    c1.resubscribeImpl = async () => {
+      const ok = answers.shift() ?? true;
+      if (ok) subscribed = true;
+      return ok;
+    };
+
+    await h.controller.bootstrap();
+    subscribed = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(c1.resubscribeCalls).toBe(1);
+    expect(onEventsResubscribed).not.toHaveBeenCalled();
+    expect(h.logs.some((l) => l.msg.includes('refused our event subscribe'))).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(c1.resubscribeCalls).toBe(2);
+    expect(onEventsResubscribed).toHaveBeenCalledTimes(1);
+    expect(onEventsResubscribed).toHaveBeenCalledWith(c1);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(c1.resubscribeCalls).toBe(2);
+    expect(onEventsResubscribed).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs one resubscribe at a time: a ping during one in flight starts no second', async () => {
+    const h = makeHarness({
+      config: { healthIntervalMs: 1000, healthTimeoutMs: 5000, baseBackoffMs: 50, budget: 5 },
+    });
+    const onEventsResubscribed = vi.fn();
+    h.deps.onEventsResubscribed = onEventsResubscribed;
+    const c1 = new FakeDaemonClient();
+    h.clientQueue.push(c1);
+    let subscribed = true;
+    c1.rpcImpl = async (method) =>
+      method === 'daemon.ping' ? { status: 'ok', eventsSubscribed: subscribed } : {};
+    let accept: (ok: boolean) => void = () => undefined;
+    c1.resubscribeImpl = () => new Promise<boolean>((resolve) => { accept = resolve; });
+
+    await h.controller.bootstrap();
+    subscribed = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(c1.resubscribeCalls).toBe(1);
+    expect(onEventsResubscribed).not.toHaveBeenCalled();
+
+    subscribed = true;
+    accept(true);
+    await vi.advanceTimersByTimeAsync(0);
     expect(onEventsResubscribed).toHaveBeenCalledTimes(1);
   });
 
