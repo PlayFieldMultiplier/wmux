@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { handlePhoneBotsCommand, handlePhoneRoomCommand, phoneBotsReply, withPhoneFactory, type PhoneBotsPorts, type PhoneFactoryPorts } from '../PhoneFactory';
 import { RoomWriter } from '../../factory/roomWriter';
+import { setRedactedSecrets } from '../../factory/secretRedaction';
 import type { BotProfile } from '../../../shared/bot';
 import type { BotTaskView } from '../../../shared/botTask';
 import type { PhoneBotsReply } from '../../../shared/phoneBots';
@@ -186,5 +187,19 @@ describe('the phone wire — work cards and approval actions over a real room', 
     // The daemon's parse keeps it only on a Resume card that names its task.
     expect(parsePhoneRoomCard({ ...cards.find((c) => c.id === resumed.id), resumable: true })).not.toHaveProperty('resumable');
     expect(parsePhoneRoomCard(cards.find((c) => c.id === paused.id))?.resumable).toBe(true);
+  });
+
+  it('masks a stored key value in a bot\'s name as it masks card text', () => {
+    const { writer, reply } = room();
+    setRedactedSecrets([{ name: 'K', value: 'orchid orchard' }]);
+    try {
+      const named = { ...LEAD, name: 'Lead orchid orchard' };
+      const page = handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', threadId: DM, limit: 50 }, botsPorts(writer, { bots: () => [named, DEV] })) as PhoneRoomCardsReply;
+      const actor = page.cards.find((c) => c.id === reply.id)?.actor;
+      expect(JSON.stringify(actor)).not.toContain('orchid orchard');
+      expect(JSON.stringify(actor)).toContain('Lead');
+    } finally {
+      setRedactedSecrets([]);
+    }
   });
 });

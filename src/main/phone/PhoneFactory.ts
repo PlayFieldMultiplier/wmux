@@ -61,6 +61,7 @@ import { getBotRuntime } from '../factory/BotRuntime';
 import { getFactorySettings } from '../factory/factorySettings';
 import { getHandoffRouter, HANDOFF_STORE_LIMITS } from '../factory/handoffRouter';
 import { getRoomWriter, ROOMS_DIRNAME } from '../factory/roomWriter';
+import { redactStoredSecrets } from '../factory/secretRedaction';
 import { ROOM_ATTACHMENT_ID_RE } from '../../shared/roomAttachments';
 import { phoneBot } from '../factory/phoneBot';
 import { getGroupStore } from '../factory/groupStore';
@@ -233,7 +234,8 @@ function botInfo(bots: readonly BotProfile[]): (botId: string) => { role: BotPro
   const byId = new Map(bots.map((b) => [b.id, b]));
   return (botId) => {
     const b = byId.get(botId);
-    return b ? { role: b.role, name: b.name } : null;
+    // A name is stored text like a card's: masked the same way (RoomWriter.read).
+    return b ? { role: b.role, name: redactStoredSecrets(b.name) } : null;
   };
 }
 
