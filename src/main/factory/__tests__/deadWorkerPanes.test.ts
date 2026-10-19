@@ -204,6 +204,33 @@ describe('ended bot tasks', () => {
     expect(r.closePane).not.toHaveBeenCalled();
   });
 
+  // #2388: a close ends each pane only; what the worker started outlived it.
+  it('ends the task\'s panes with their trees before each close, and a refused stop closes nothing', async () => {
+    const order: string[] = [];
+    const stopTrees = vi.fn(async (taskId: string, ids: readonly string[]) => { order.push(`stop ${taskId} ${ids.join(',')}`); });
+    const r = await rig([row('cancelled')], [respawned()], { stopTrees });
+    r.closeWorkspace.mockImplementation(async (ws: string) => {
+      order.push(`close ${ws}`);
+      r.sessions.splice(0);
+      r.ptys.delete(ws);
+      return true;
+    });
+    expect((await createDeadPaneSweep(r.ports).pass()).closed).toBe(1);
+    expect(order).toEqual(['stop wtask-abc-12345678 daemon-1', 'close ws-task']);
+
+    // One layout pane of several: only its sessions.
+    const p = await rig([row('failed')], [respawned(), respawned({ id: 'daemon-2', resumeBinding: undefined })], { stopTrees: vi.fn(async () => undefined) });
+    p.input.set('daemon-2', { keyInputRevision: 1, keyInputIdleMs: 1_000 });
+    expect((await createDeadPaneSweep(p.ports).pass()).closed).toBe(1);
+    expect(p.ports.stopTrees).toHaveBeenCalledWith('wtask-abc-12345678', ['daemon-1']);
+    expect(p.closePane).toHaveBeenCalledWith('pane-daemon-1');
+
+    const refused = await rig([row('cancelled')], [respawned()], { stopTrees: async () => { throw new Error("this pane's process identity isn't known yet"); } });
+    expect((await createDeadPaneSweep(refused.ports).pass()).closed).toBe(0);
+    expect(refused.closeWorkspace).not.toHaveBeenCalled();
+    expect(refused.sessions).toHaveLength(1);
+  });
+
   it('destroys a session a close left behind once its pane is gone, after the backoff', async () => {
     const r = await rig([row('completed')], [respawned()]);
     // The renderer drops the workspace but its session's disposal fails.

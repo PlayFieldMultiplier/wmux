@@ -2136,6 +2136,11 @@ export interface WorkerClearPorts {
   /** Close one workspace through the renderer's workspace.close (its guards
    *  apply); true only when it closed. */
   closeWorkspace: (workspaceId: string) => Promise<boolean>;
+  /** #2388: end the task's panes among `ptyIds` with their whole process
+   *  trees, before the close (whose own pane teardown ends only the pane).
+   *  Throws when one could not be: the workspace then stays, and is looked
+   *  at again later. Absent: the close alone ends them. */
+  stopTrees?: (taskId: string, ptyIds: readonly string[]) => Promise<void>;
   changed?: () => void;
   now?: () => number;
   log?: (msg: string) => void;
@@ -2240,6 +2245,7 @@ export function createWorkerClear(ports: WorkerClearPorts): WorkerClear {
         if (reopenedNow) continue;
         let ok = false;
         try {
+          await ports.stopTrees?.(cur.taskId, ports.workspacePtys(ws) ?? []);
           ok = await ports.closeWorkspace(ws);
         } catch (err) {
           log(`[factory] clear: ${ws} (task ${cur.taskId}) was not closed: ${String(err)}`);

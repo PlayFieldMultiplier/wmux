@@ -143,6 +143,11 @@ export interface DeadPaneSweepPorts {
   /** daemon.destroySession: a task's own dead session a close left behind
    *  with no pane any more. */
   destroySession: (ptyId: string) => Promise<void>;
+  /** #2388: end the task's panes among `ptyIds` with their whole process
+   *  trees, before each close or destroy above (which end only the pane).
+   *  Throws when one could not be: nothing is closed then, and it is looked
+   *  at again later. Absent: the close alone ends them. */
+  stopTrees?: (taskId: string, ptyIds: readonly string[]) => Promise<void>;
   /** How long a close is waited for to show (its sessions gone from the
    *  daemon, its panes from the tree) before it counts as not done. */
   confirmMs?: number;
@@ -243,6 +248,7 @@ export function createDeadPaneSweep(ports: DeadPaneSweepPorts): DeadPaneSweep {
         continue;
       }
       try {
+        await ports.stopTrees?.(p.taskId, [id]);
         await ports.destroySession(id);
       } catch {
         /* read again below */
@@ -318,6 +324,7 @@ export function createDeadPaneSweep(ports: DeadPaneSweepPorts): DeadPaneSweep {
       if (nowPtys.every(dead) && layout.length > 0 && layout.every(paneDead)) {
         let ok = false;
         try {
+          await ports.stopTrees?.(row.id, nowPtys);
           ok = await ports.closeWorkspace(ws);
         } catch (err) {
           log(`[factory] dead panes: ${ws} (task ${row.id}) was not closed: ${String(err)}`);
@@ -345,6 +352,7 @@ export function createDeadPaneSweep(ports: DeadPaneSweepPorts): DeadPaneSweep {
         const ids = [...p.surfacePtyIds];
         let ok = false;
         try {
+          await ports.stopTrees?.(row.id, ids);
           ok = await ports.closePane(p.id);
         } catch {
           ok = false;

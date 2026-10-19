@@ -23,6 +23,7 @@ import { getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
 import { taskFolderFromMissions } from './verifyPreset';
+import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive, stopSessionsInDir } from '../worktask/stopSessionsInDir';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { releaseHeldFanouts } from './heldFanouts';
 import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
@@ -239,6 +240,29 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       (ws) => ledger.findByTaskWorkspace(ws)?.id ?? null,
       (ws) => getFanOutGuards().lineageFor([ws])[ws] ?? null,
     );
+    // #2388: an ended task's panes go with their whole process trees before
+    // the renderer closes them (its close ends only each pane), the same
+    // stop as the owner's (stopTaskWorker): the task folder's sessions among
+    // `ptyIds`, killTree, survivors recorded against the folder so its
+    // cleanup keeps it while one runs. A folder that is not known closes
+    // nothing: survivors could not be recorded against it.
+    const stopTrees = async (taskId: string, ptyIds: readonly string[]): Promise<void> => {
+      if (ptyIds.length === 0) return;
+      const entry = ledger.get(taskId);
+      const dir = entry ? await taskFolderFromMissions((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry) : null;
+      if (!dir) throw new Error(`the folder of task ${taskId} is not known`);
+      await stopSessionsInDir(dir, {
+        listSessions: async () => (await listSessions()).filter((x) => ptyIds.includes(x.id)),
+        destroySession: async (id) => {
+          const c = daemon();
+          if (!c) throw new Error('the daemon is not connected');
+          return destroyedTreeOf(await c.rpc('daemon.destroySession' as never, { id, killTree: true }, { timeoutMs: TREE_DESTROY_TIMEOUT_MS }));
+        },
+        isAlive: isPidAlive,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        log: (message) => console.warn(message),
+      });
+    };
     const closeWorkspace = async (workspaceId: string): Promise<boolean> => {
       const res = await sendToRenderer(() => deps.getMainWindow?.() ?? null, 'workspace.close', { id: workspaceId }, { timeoutMs: CLOSE_TIMEOUT_MS });
       return !!res && typeof res === 'object' && (res as { ok?: unknown }).ok === true;
@@ -258,6 +282,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       taskOpen,
       isTaskWorkspace,
       closeWorkspace,
+      stopTrees,
       changed,
     });
     const reconcile = (): void => {
@@ -616,6 +641,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       destroySession: async (ptyId) => {
         await rpc('daemon.destroySession', { id: ptyId });
       },
+      stopTrees,
       closePane: async (paneId) => {
         const res = await sendToRenderer(() => deps.getMainWindow?.() ?? null, 'pane.close', { id: paneId }, { timeoutMs: CLOSE_TIMEOUT_MS });
         return !!res && typeof res === 'object' && (res as { ok?: unknown }).ok === true;

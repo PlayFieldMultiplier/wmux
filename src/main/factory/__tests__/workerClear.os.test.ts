@@ -148,6 +148,35 @@ describe('createWorkerClear', () => {
     }
   });
 
+  // #2388: the renderer's close ends each pane only; what the task's worker
+  // started outlived it, and the folder cleanup later found no session.
+  it('ends the task\'s panes with their trees before the close, and a refused stop keeps the workspace', async () => {
+    for (const ended of ['cancelled', 'failed'] as const) {
+      const store = await reclaimed(ended);
+      if (ended === 'failed') store.markSeen(TASK, 6_000);
+      const order: string[] = [];
+      const stopTrees = vi.fn(async (taskId: string, ptys: readonly string[]) => {
+        order.push(`stop ${taskId} ${ptys.join(',')}`);
+      });
+      const r = clearRig(store, { stopTrees });
+      r.closeWorkspace.mockImplementation(async (id: string) => {
+        order.push(`close ${id}`);
+        r.state.open?.delete(id);
+        return true;
+      });
+      expect(await r.clear.reconcile()).toBe(1);
+      expect(order).toEqual([`stop ${TASK} daemon-1`, 'close ws-task']);
+    }
+    const store = await reclaimed('cancelled');
+    const r = clearRig(store, { stopTrees: async () => { throw new Error("this pane's process identity isn't known yet"); } });
+    expect(await r.clear.reconcile()).toBe(0);
+    expect(r.closeWorkspace).not.toHaveBeenCalled();
+    // Looked at again once the retry is due.
+    r.state.now += CLEAR_RETRY_MS + 1;
+    expect(await r.clear.reconcile()).toBe(0);
+    expect(r.closeWorkspace).not.toHaveBeenCalled();
+  });
+
   it('keeps a failed task\'s workspace until the owner has looked at it, then closes it once they leave', async () => {
     const store = await reclaimed('failed');
     const r = clearRig(store);
