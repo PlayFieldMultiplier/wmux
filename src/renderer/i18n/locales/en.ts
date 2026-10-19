@@ -4766,6 +4766,7 @@ export const en = {
   'botsPage.onboarding.unusable': "Claude Code is installed, but it did not start. Check the install, then check again.",
   'botsPage.engineError.notInstalled': "Stopped: Claude Code is not installed on this computer.",
   'botsPage.engineError.notLoggedIn': "Stopped: Claude is not signed in on this computer.",
+  'botsPage.engineError.notLoggedInAccount': "Stopped: Claude is not signed in for the account {account}.",
   'botsPage.engineError.mcpMissing': "Stopped: the bot tools bundle is missing from this build.",
   'botsPage.engineError.acpTestOnly': "Stopped: this engine runs only in a test build. Switch the bot to Claude (SDK).",
   'botsPage.engineError.unusable': "Stopped: Claude Code is installed but could not run.",

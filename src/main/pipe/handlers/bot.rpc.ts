@@ -36,7 +36,7 @@ import { FactorySettingsStore, factorySettingsPath, onFactorySettingsChanged, se
 import { BotRuntime, BotSessionStore, botSessionsPath, setBotRuntime } from '../../factory/BotRuntime';
 import { createDefaultBotEngineFactory, runnableDefaultEngine, type BotEngineFactory } from '../../factory/botEngines';
 import { recordWorkerEnd } from '../../factory/budget';
-import { botAccountQuota, type ClaudeUsageCache } from '../../factory/botQuota';
+import { botAccountName, botAccountQuota, type ClaudeUsageCache } from '../../factory/botQuota';
 import { openBotWorkers } from '../../factory/openBotWorkers';
 import { getAgentSlots, refreshSlotLiveness } from '../../factory/agentSlots';
 import { HeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../../factory/heldFanouts';
@@ -534,6 +534,7 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
           };
         },
         ...(usage ? { claudeQuota: (workspaceId: string, accountId: string | null | undefined) => botAccountQuota(usage, workspaceId, accountId) } : {}),
+        claudeAccountName: botAccountName,
       });
       setFactorySettingsStore(settings);
       setBotStore(store);

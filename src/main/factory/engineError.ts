@@ -13,14 +13,28 @@ export type EngineErrorCode =
   | 'unusable'
   | 'other';
 
+/** How the Claude brain adapters (ClaudeSdkAdapter, ClaudePtyBrainAdapter)
+ *  start their error when no claude resolves; matched below. */
+export const CLAUDE_NOT_FOUND_LEAD = 'Claude Code not found —';
+
+/** That error, for the brain named. */
+export function claudeNotFoundMessage(brain: string): string {
+  return `${CLAUDE_NOT_FOUND_LEAD} the ${brain} needs a claude install (native installer or npm global). Install it, then retry.`;
+}
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const RULES: readonly { code: EngineErrorCode; re: RegExp }[] = [
-  { code: 'not_installed', re: /claude code is not installed|no claude executable|claude code (native binary|executable) not found/i },
+  {
+    code: 'not_installed',
+    re: new RegExp(`claude code is not installed|no claude executable|claude code (native binary|executable) not found|${escapeRe(CLAUDE_NOT_FOUND_LEAD)}`, 'i'),
+  },
   { code: 'not_logged_in', re: /not signed in|not logged in|sign-?in could not be read|claude auth login/i },
   { code: 'mcp_missing', re: /mcp bundle was not found|would have no tools/i },
   { code: 'acp_test_only', re: /acp engines run bots only in a test build|acp stub is not available/i },
-  // The SDK's own launch failures: the process did not spawn, or the
-  // native binary is there and fails to start.
-  { code: 'unusable', re: /claude --version|could not run claude|claude is installed but|failed to spawn claude code process|exists but failed to launch/i },
+  // The SDK's own launch failures: the process did not spawn, the native
+  // binary is there and fails to start, or claude exited with an error code.
+  { code: 'unusable', re: /claude --version|could not run claude|claude is installed but|failed to spawn claude code process|exists but failed to launch|claude code process exited with code [1-9]/i },
 ];
 
 /** Map a raw engine_unavailable (or similar) message to a stable code. Pure. */

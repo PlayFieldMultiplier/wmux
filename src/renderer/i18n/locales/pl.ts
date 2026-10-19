@@ -4727,6 +4727,7 @@ export const pl = {
   'botsPage.onboarding.unusable': "Claude Code jest zainstalowany, ale nie uruchomił się. Sprawdź instalację, a potem sprawdź ponownie.",
   'botsPage.engineError.notInstalled': "Zatrzymany: Claude Code nie jest zainstalowany na tym komputerze.",
   'botsPage.engineError.notLoggedIn': "Zatrzymany: Claude nie jest zalogowany na tym komputerze.",
+  'botsPage.engineError.notLoggedInAccount': "Zatrzymany: Claude nie jest zalogowany na koncie {account}.",
   'botsPage.engineError.mcpMissing': "Zatrzymany: w tej kompilacji brakuje pakietu narzędzi bota.",
   'botsPage.engineError.acpTestOnly': "Zatrzymany: ten silnik działa tylko w kompilacji testowej. Przełącz bota na Claude (SDK).",
   'botsPage.engineError.unusable': "Zatrzymany: Claude Code jest zainstalowany, ale nie mógł się uruchomić.",

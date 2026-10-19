@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyEngineError } from '../engineError';
+import { classifyEngineError, claudeNotFoundMessage } from '../engineError';
 
 describe('classifyEngineError', () => {
   it('maps known engine_unavailable messages', () => {
@@ -15,6 +15,13 @@ describe('classifyEngineError', () => {
     expect(classifyEngineError('Failed to spawn Claude Code process: spawn EACCES')).toBe('unusable');
     expect(classifyEngineError('Claude Code native binary at /opt/claude exists but failed to launch. This usually means the binary does not match this system')).toBe('unusable');
     expect(classifyEngineError('Claude Code executable not found at /usr/local/bin/claude. Is options.pathToClaudeCodeExecutable set?')).toBe('not_installed');
+  });
+
+  it('a broken claude at turn time is unusable; claude removed while wmux runs (the adapters\' own words) is not installed', () => {
+    expect(classifyEngineError('Claude Code process exited with code 1')).toBe('unusable');
+    expect(classifyEngineError(claudeNotFoundMessage('commander'))).toBe('not_installed');
+    expect(classifyEngineError(claudeNotFoundMessage('terminal brain'))).toBe('not_installed');
+    expect(classifyEngineError('Claude Code process exited with code 0')).toBe('other');
   });
 
   it('unknown text is other', () => {

@@ -43,6 +43,7 @@ import { installBrainSkills, syncBrainContractFile } from './brainSkills';
 import type { StopGateVerdict } from './stopGate';
 import { readLastAssistantMessage } from '../claude/lastAssistantMessage';
 import { resolveClaudeExecutable, resolveMcpBundlePath, DISALLOWED_TOOLS } from './ClaudeSdkAdapter';
+import { claudeNotFoundMessage } from '../factory/engineError';
 import type { AgentSignal } from '../../shared/hooks/signal-types';
 import type {
   BrainAdapter,
@@ -1428,8 +1429,7 @@ export class ClaudePtyBrainAdapter implements BrainAdapter {
         : resolveClaudeExecutable();
     if (!executable) {
       return {
-        error:
-          'Claude Code not found — the terminal brain needs a claude install (native installer or npm global). Install it, then retry.',
+        error: claudeNotFoundMessage('terminal brain'),
       };
     }
     if (!this.deps.bridgePath) {

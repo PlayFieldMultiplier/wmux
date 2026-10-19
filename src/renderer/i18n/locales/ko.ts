@@ -4268,6 +4268,7 @@ export const ko = {
   'botsPage.onboarding.unusable': "Claude Code는 설치되어 있지만 실행되지 않았어요. 설치를 확인한 뒤 다시 확인하세요.",
   'botsPage.engineError.notInstalled': "중지됨: 이 컴퓨터에 Claude Code가 설치되어 있지 않아요.",
   'botsPage.engineError.notLoggedIn': "중지됨: 이 컴퓨터에서 Claude에 로그인되어 있지 않아요.",
+  'botsPage.engineError.notLoggedInAccount': "중지됨: {account} 계정으로 Claude에 로그인되어 있지 않아요.",
   'botsPage.engineError.mcpMissing': "중지됨: 이 빌드에 봇 도구 번들이 없어요.",
   'botsPage.engineError.acpTestOnly': "중지됨: 이 엔진은 테스트 빌드에서만 동작해요. 봇을 Claude(SDK)로 바꾸세요.",
   'botsPage.engineError.unusable': "중지됨: Claude Code는 설치되어 있지만 실행되지 않았어요.",

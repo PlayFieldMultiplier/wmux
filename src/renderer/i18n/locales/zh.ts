@@ -3933,6 +3933,7 @@ export const zh = {
   'botsPage.onboarding.unusable': "已安装 Claude Code，但未能启动。请检查安装后再试一次。",
   'botsPage.engineError.notInstalled': "已停止：这台电脑未安装 Claude Code。",
   'botsPage.engineError.notLoggedIn': "已停止：这台电脑尚未登录 Claude。",
+  'botsPage.engineError.notLoggedInAccount': "已停止：账号 {account} 尚未登录 Claude。",
   'botsPage.engineError.mcpMissing': "已停止：此构建缺少机器人工具包。",
   'botsPage.engineError.acpTestOnly': "已停止：此引擎仅在测试构建中可用。请将机器人切换到 Claude（SDK）。",
   'botsPage.engineError.unusable': "已停止：已安装 Claude Code，但无法运行。",

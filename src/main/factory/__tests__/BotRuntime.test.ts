@@ -91,7 +91,7 @@ interface Rig {
   spawns: BotEngineSpawnInput[];
 }
 
-function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; load?: boolean; timers?: Array<{ fn: () => void; at: number }>; claudeQuota?: BotRuntimeDeps['claudeQuota']; workerLoad?: BotRuntimeDeps['workerLoad'] } = {}): Rig {
+function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; load?: boolean; timers?: Array<{ fn: () => void; at: number }>; claudeQuota?: BotRuntimeDeps['claudeQuota']; workerLoad?: BotRuntimeDeps['workerLoad']; claudeAccountName?: BotRuntimeDeps['claudeAccountName'] } = {}): Rig {
   const store = new BotStore(botsFilePath(dir), { now: () => clock });
   const sessions = new BotSessionStore(botSessionsPath(dir));
   let runtime: BotRuntime | null = null;
@@ -117,6 +117,7 @@ function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; loa
     now: () => clock,
     ...(opts.claudeQuota ? { claudeQuota: opts.claudeQuota } : {}),
     ...(opts.workerLoad ? { workerLoad: opts.workerLoad } : {}),
+    ...(opts.claudeAccountName ? { claudeAccountName: opts.claudeAccountName } : {}),
     ...(timers ? {
       setTimer: (fn: () => void, ms: number) => { timers.push({ fn, at: clock + ms }); return timers.length; },
       clearTimer: () => undefined,
@@ -622,6 +623,12 @@ describe('BotRuntime', () => {
     await settle(10);
     expect(r.queue.get(item!.id)?.state).toBe('parked');
     expect(r.runtime.status(id)).toMatchObject({ presence: 'parked', lastError: { message: 'Not logged in · Please run /login', code: 'not_logged_in' } });
+    // On a registered account, the error names it (main's sign-in may be fine).
+    const named = rig({ engines: () => ({ ok: false, code: 'engine_unavailable', message: 'Claude Code is not signed in.' }), claudeAccountName: () => 'Work' });
+    const onAccount = createBot(named);
+    named.runtime.wake(onAccount);
+    await settle(10);
+    expect(named.runtime.status(onAccount)?.lastError).toMatchObject({ code: 'not_logged_in', account: 'Work' });
     const plain = rig({ mode: 'error' });
     const other = createBot(plain);
     plain.runtime.wake(other);

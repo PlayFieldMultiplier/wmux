@@ -708,14 +708,19 @@ describe('Bots page', () => {
     bots[2] = {
       ...bots[2],
       bot: { ...bots[2].bot, parked: { reason: 'error', at: 1 } },
-      status: { ...bots[2].status!, presence: 'parked', lastError: { message: 'Not logged in · Please run /login', at: 1, code: 'not_logged_in' } },
+      status: { ...bots[2].status!, presence: 'parked', lastError: { message: 'Not logged in · Please run /login', at: 1, code: 'not_logged_in', account: 'Work' } },
     };
     seedRooms();
     await render(<BotsPage />);
     act(() => useStore.getState().setAppRoute('bots'));
     act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
     act(() => q('[data-bots-pill]')!.click());
-    expect(q('[data-bots-engine-error="not_logged_in"]')).not.toBeNull();
+    expect(q('[data-bots-engine-error="not_logged_in"]')?.textContent).toContain('not signed in for the account Work');
+    // In the narrow profile popover the buttons wrap below the text, which
+    // keeps a readable width instead of shrinking to nothing.
+    const row = q('[data-bots-engine-error-row]')!;
+    expect(row.className).toContain('flex-wrap');
+    expect(row.firstElementChild?.className).toMatch(/min-w-\[10rem\]/);
     await act(async () => { q<HTMLButtonElement>('[data-bots-engine-error-fix]')!.click(); });
     expect(factoryEngineLogin).toHaveBeenCalledWith({ botId: VERIFIER });
     expect(useStore.getState().appRoute).toBe('workspaces');

@@ -33,6 +33,7 @@ import { mintBotToken, mintCommanderToken, revokeCommanderToken } from './comman
 import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenHandoff';
 import { BOT_REPO_READ_TOOLS, botRepoReadDenyRules, evaluateBotRepoRead, grepOutputNamesProtected } from '../factory/botRepoRead';
 import { redactStoredSecretsDeep } from '../factory/secretRedaction';
+import { claudeNotFoundMessage } from '../factory/engineError';
 import type { BotBinding } from '../../shared/bot';
 import { SHARED_SURFACE } from '../../shared/botSurface';
 import { evaluateCommanderToolPermission } from './commanderToolSandbox';
@@ -1216,8 +1217,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
             this.disposeHandoff();
             yield {
               type: 'error',
-              message:
-                'Claude Code not found — the commander needs a claude install (native installer or npm global). Install it, then retry.',
+              message: claudeNotFoundMessage('commander'),
             };
             return;
           }

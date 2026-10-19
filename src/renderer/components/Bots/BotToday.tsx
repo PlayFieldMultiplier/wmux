@@ -93,6 +93,7 @@ function openClaudeInstallPage(): void {
 function EngineErrorCard({
   botId,
   code,
+  account,
   message,
   t,
   onResume,
@@ -101,6 +102,8 @@ function EngineErrorCard({
 }: {
   botId: string;
   code: EngineErrorCode;
+  /** `not_logged_in` on a registered account: its name. */
+  account?: string;
   message: string;
   t: T;
   onResume: () => void;
@@ -149,8 +152,12 @@ function EngineErrorCard({
 
   return (
     <div className="flex flex-col gap-1 pb-1" data-bots-engine-error={code} role="status">
-      <div className="flex items-center gap-3">
-        <span className="min-w-0 flex-1 text-[var(--text-sub)]">{t(ENGINE_ERROR_KEYS[code])}</span>
+      {/* The buttons wrap below the text in a narrow column (the profile
+          popover): the text keeps a readable width, never squeezed to 0. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-bots-engine-error-row>
+        <span className="min-w-[10rem] flex-1 text-[var(--text-sub)]">
+          {code === 'not_logged_in' && account ? t('botsPage.engineError.notLoggedInAccount', { account }) : t(ENGINE_ERROR_KEYS[code])}
+        </span>
         {showFix && (
           <Button size="sm" variant="primary" data-bots-engine-error-fix disabled={fixBusy || busy} onClick={() => void fix()}>
             {fixLabel}
@@ -209,6 +216,7 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
           <EngineErrorCard
             botId={row.bot.id}
             code={engineCode}
+            {...(err.account ? { account: err.account } : {})}
             message={err.message}
             t={t}
             canResume={canResume}

@@ -198,6 +198,9 @@ export interface BotRuntimeDeps {
    *  conversation runs on, null for the default login, undefined when no
    *  conversation says (the workspace's binding then). Absent: not reported. */
   claudeQuota?: (workspaceId: string, accountId: string | null | undefined) => BotQuota | null;
+  /** The name of the registered Claude account a bot's turns run on (as
+   *  claudeQuota resolves it); null for the default login. Absent: not named. */
+  claudeAccountName?: (workspaceId: string, accountId: string | null | undefined) => string | null;
 }
 
 /** What `workerLoad` reports. */
@@ -379,7 +382,7 @@ export function botCwd(wmuxDir: string, botId: string): string {
 export class BotRuntime {
   private readonly live = new Map<string, LiveSession>();
   private readonly running = new Map<string, RunningTurn>();
-  private readonly lastError = new Map<string, { message: string; at: number; code?: EngineErrorCode }>();
+  private readonly lastError = new Map<string, { message: string; at: number; code?: EngineErrorCode; account?: string }>();
   private readonly now: () => number;
   private readonly defer: (fn: () => void) => void;
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
@@ -467,6 +470,16 @@ export class BotRuntime {
     return live?.adapter.conversationAccountId !== undefined
       ? live.adapter.conversationAccountId
       : this.resumableSession(profile)?.accountId;
+  }
+
+  /** The registered Claude account the bot's turns run on, by name; null
+   *  for the default login or when not known. Never throws. */
+  private accountName(profile: BotProfile): string | null {
+    try {
+      return this.deps.claudeAccountName?.(profile.workspaceId, this.claudeAccountOf(profile.id)) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** The status's `quota`, for a bot whose brain runs on Claude Code: the
@@ -1260,7 +1273,10 @@ export class BotRuntime {
       // turn keeps no code.
       const classified = classifyEngineError(message);
       const code = outcome === 'engine' || classified !== 'other' ? classified : undefined;
-      this.lastError.set(botId, { message: message.slice(0, 500), at, ...(code ? { code } : {}) });
+      // Signed out on a registered account: the card names it (main's own
+      // sign-in may be fine).
+      const account = code === 'not_logged_in' ? this.accountName(profile) : null;
+      this.lastError.set(botId, { message: message.slice(0, 500), at, ...(code ? { code } : {}), ...(account ? { account } : {}) });
       const giveUp = outcome === 'engine' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
       if (!giveUp) {
         this.deps.queue.retry(item.id);
