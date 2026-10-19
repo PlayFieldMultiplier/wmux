@@ -653,6 +653,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       void listSessions().then((sessions) => {
         let moved = false;
         for (const r of resumed) {
+          // Read again after the await: a stop or a new resume since owns it.
+          const cur = reclaimed.get(r.taskId);
+          if (cur?.state !== 'resumed' || cur.at !== r.at) continue;
           if (!resumedAgentAlive(r, sessions)) moved = r.sessions.some((p) => noteWorkerAgentExit(reclaimed, p.sessionId)) || moved;
         }
         if (moved) changed();

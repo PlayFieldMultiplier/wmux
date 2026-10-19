@@ -1185,6 +1185,9 @@ export async function reclaimWorker(
       if (out) out.deferred = true;
       return ports.store.get(entry.id);
     }
+    // Only the record this stop wrote: a worker resumed meanwhile (its
+    // record moved on) is running again and keeps its state.
+    if (ports.store.get(entry.id)?.state !== 'stopping') return ports.store.get(entry.id);
     ports.store.setState(entry.id, 'stopped', now());
     // Reopened part way: the conversation stays recorded, no card (the
     // task is open again, and its open row counts what still runs).
@@ -2166,7 +2169,9 @@ export function stoppedByReclaimLately(sessionId: string, now: number): boolean 
 /** A resumed worker whose agent exited is stopped again (resumable). */
 export function noteWorkerAgentExit(store: ReclaimedWorkers, sessionId: string, now: number = Date.now()): boolean {
   const taskId = store.taskOfSession(sessionId);
-  return taskId ? store.setState(taskId, 'stopped', now) : false;
+  // Only a resumed worker: one a stop is under way for is that stop's to
+  // settle (marked stopped early, it could be resumed before the stop ends).
+  return taskId && store.get(taskId)?.state === 'resumed' ? store.setState(taskId, 'stopped', now) : false;
 }
 
 // ── Clear ───────────────────────────────────────────────────────────────────

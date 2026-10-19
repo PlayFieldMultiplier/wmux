@@ -723,6 +723,38 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     await settled(store);
   });
 
+  it('an agent exit seen while a stop is under way leaves the record to that stop', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const current = working();
+    await store.put({
+      taskId: current.id, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${current.id}`,
+      ended: 'reported', sessions: [{ sessionId: 'daemon-1', cwd: wt, resumeSessionId: UUID }], state: 'stopping', at: 2_000, endRev: 3,
+    });
+    expect(noteWorkerAgentExit(store, 'daemon-1', 3_000)).toBe(false);
+    expect(store.get(current.id)?.state).toBe('stopping');
+    store.setState(current.id, 'resumed', 4_000);
+    expect(noteWorkerAgentExit(store, 'daemon-1', 5_000)).toBe(true);
+    expect(store.get(current.id)?.state).toBe('stopped');
+    await settled(store);
+  });
+
+  it('a stop whose worker was resumed while it ran leaves the resumed record alone', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const current = working();
+    const gate: { release?: () => void } = {};
+    const stopAgent = vi.fn(() => new Promise<{ ok: boolean; stopped: boolean }>((resolve) => { gate.release = () => resolve({ ok: true, stopped: true }); }));
+    const { ports } = reclaimPorts(store, [session()], { row: () => current, turnEnded: () => true, stopAgent, now: () => 1_000 + OPEN_IDLE_MS });
+    const done = reclaimWorker(ports, current, 'reported');
+    await vi.waitFor(() => expect(stopAgent).toHaveBeenCalled(), { timeout: 10_000 });
+    // Something else settled it and the owner resumed it meanwhile.
+    store.setState(current.id, 'stopped', 1_000 + OPEN_IDLE_MS);
+    store.setState(current.id, 'resumed', 1_000 + OPEN_IDLE_MS + 1);
+    gate.release?.();
+    await done;
+    expect(store.get(current.id)?.state).toBe('resumed');
+    await settled(store);
+  });
+
   it('a worker resumed on its still-open row is stopped again once idle, counted from the resume', async () => {
     const store = ReclaimedWorkers.at(dir);
     const current = working();
