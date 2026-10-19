@@ -112,6 +112,10 @@ export class TaskCloseService {
    *  Close and keep folder never reports a folder kept while an earlier
    *  close of the same task is still on its way to removing it. */
   private readonly closing = new Map<string, Promise<CloseTaskResult>>();
+  /** Tasks closed with Close and keep folder, and the folder kept: a close
+   *  queued behind the keep (asked before it) finds the task closed and
+   *  removes nothing. */
+  private readonly keptByOwner = new Map<string, string | undefined>();
 
   async closeTask(input: CloseTaskInput): Promise<CloseTaskResult> {
     const before = this.closing.get(input.taskId);
@@ -147,8 +151,16 @@ export class TaskCloseService {
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
       // A close of the task that ran first may have removed it already.
       const kept = folder && fs.existsSync(folder) ? folder : undefined;
+      this.keptByOwner.set(taskId, kept);
       console.warn(`[worktask] task ${taskId} closed with Close and keep folder: the owner chose to keep its folder${folder ? ` ${folder}` : ''} on disk as it is${folder && !kept ? ' (it was already gone)' : ''}`);
       return { ok: true, taskId, archivePending: closed.archivePending, ...(kept ? { keptFolder: kept } : {}) };
+    }
+
+    // The owner kept the folder already (a close asked before the keep, run
+    // after it): the task is closed, and its folder is not this close's.
+    if (this.keptByOwner.has(taskId)) {
+      const kept = this.keptByOwner.get(taskId);
+      return { ok: true, taskId, archivePending: false, ...(kept && fs.existsSync(kept) ? { keptFolder: kept } : {}) };
     }
 
     // 미물질화 close(CX4): worktree 단계 전체 건너뜀 — close만 커밋.

@@ -6,6 +6,8 @@
 
 import { useStore } from '../../stores';
 import { getWorkspacePtyIds } from '../../../shared/paneUtils';
+import { selectWorkspaceAgentRoster } from '../../stores/selectors/workspaceAgentRoster';
+import { paneRowsFinished } from '../Sidebar/sidebarTree';
 import type { useT } from '../../hooks/useT';
 
 type Translate = ReturnType<typeof useT>;
@@ -33,35 +35,39 @@ export async function closeKeepingFolder(taskId: string, verifiedWorkspaceId: st
   return false;
 }
 
-/** Whether a pane of `workspaceId` has its shell running a command (OSC
- *  133): work that a close of the workspace would end. */
-export function workspaceRunsCommand(workspaceId: string): boolean {
+/** Whether `workspaceId` runs work that a close of it would end: an agent
+ *  not finished, or a shell running a command (OSC 133). */
+export function workspaceBusy(workspaceId: string): boolean {
   const st = useStore.getState();
   const ws = st.workspaces.find((w) => w.id === workspaceId);
-  return !!ws && getWorkspacePtyIds(ws).some((ptyId) => st.commandRunningByPtyId[ptyId] === true);
+  if (!ws) return false;
+  return !paneRowsFinished(selectWorkspaceAgentRoster(st, workspaceId).rows)
+    || getWorkspacePtyIds(ws).some((ptyId) => st.commandRunningByPtyId[ptyId] === true);
 }
 
 /** The toast action offering Close and keep folder after a refused close;
- *  `onClosed` runs once the task closed. `recheck`, asked at the click: why
- *  the task may not be closed any more (its work started again since the
- *  refusal), or null; the action then toasts that and closes nothing. */
+ *  `onClosed` runs once the task closed. `recheck`: why the task's work may
+ *  not be ended now (it started again since the refusal), or null. Asked at
+ *  the click (the action then closes nothing) and again once the task closed
+ *  (`afterClose`: `onClosed` is then skipped, the workspace stays open). */
 export function keepFolderAction(
   taskId: string,
   verifiedWorkspaceId: string,
   t: Translate,
   onClosed?: () => void,
-  recheck?: () => string | null,
+  recheck?: (afterClose: boolean) => string | null,
 ): { label: string; onClick: () => void } {
+  const refused = (afterClose: boolean): boolean => {
+    const why = recheck?.(afterClose) ?? null;
+    if (why) useStore.getState().pushToast({ level: 'warn', message: why });
+    return why !== null;
+  };
   return {
     label: t('worktask.keepFolder.action'),
     onClick: () => {
-      const refused = recheck?.() ?? null;
-      if (refused) {
-        useStore.getState().pushToast({ level: 'warn', message: refused });
-        return;
-      }
+      if (refused(false)) return;
       void closeKeepingFolder(taskId, verifiedWorkspaceId, t).then((closed) => {
-        if (closed) onClosed?.();
+        if (closed && !refused(true)) onClosed?.();
       });
     },
   };

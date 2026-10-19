@@ -429,6 +429,20 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(fs.existsSync(worktreePath)).toBe(false);
   });
 
+  it('a close queued behind a keep of the same task removes nothing', async () => {
+    const { worktreePath } = await makeWorktree('keep-first');
+    const stopPanesIn = vi.fn(async () => []);
+    const { port, calls } = makeDaemon();
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager(), stopPanesIn });
+    const keeping = svc.closeTask({ taskId: 'wtask-k6', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath, keepFolder: true });
+    const removing = svc.closeTask({ taskId: 'wtask-k6', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath });
+    expect(await keeping).toMatchObject({ ok: true, keptFolder: worktreePath });
+    expect(await removing).toMatchObject({ ok: true, keptFolder: worktreePath });
+    expect(stopPanesIn).not.toHaveBeenCalled();
+    expect(fs.existsSync(worktreePath)).toBe(true);
+    expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
+  });
+
   it('keepFolder leaves the task open when the pending removal cannot be ended', async () => {
     const left = path.join(wtBase, 'left-k4');
     fs.mkdirSync(left, { recursive: true });

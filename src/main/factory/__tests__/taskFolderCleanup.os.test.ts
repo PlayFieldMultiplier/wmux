@@ -637,6 +637,28 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(await cleanTaskFolders(known, [stopped], { force: true })).toEqual({ removed: 0, keptDirty: 0, busy: 1, failed: 0 });
   });
 
+  // #2388: Close and keep folder detaches the task's mission; a folder a stop
+  // kept earlier is then the owner's, even once the ledger pruned the row.
+  it('Clean up now leaves a kept folder whose mission was detached, after its row is gone', async () => {
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-5', 'task-5');
+    fs.mkdirSync(scratch, { recursive: true });
+    const stopped = row('cancelled', {
+      id: 'wtask-kept-00000005', summary: 'stopped by owner', updatedBy: { kind: 'system', workspaceId: 'ws-daemon' }, updatedAt: 49_000,
+      dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' },
+    });
+    const missions = new Map<string, TaskMission>([[stopped.id, { folder: scratch }]]);
+    const p = ports({}, missions);
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)?.state).toBe('kept_stopped');
+    missions.set(stopped.id, { folder: scratch, detached: true });
+    expect(await cleanTaskFolders(p, [], { force: true })).toEqual({ removed: 0, keptDirty: 0, busy: 0, failed: 0 });
+    expect(fs.existsSync(scratch)).toBe(true);
+    // Missions that cannot be read leave it too.
+    const unread = { ...p, missions: async () => { throw new Error('daemon gone'); } };
+    expect(await cleanTaskFolders(unread, [], { force: true })).toEqual({ removed: 0, keptDirty: 0, busy: 0, failed: 0 });
+    expect(fs.existsSync(scratch)).toBe(true);
+  });
+
   it('a removal of a kept folder that fails (EBUSY) stays found, is reported, and the next Clean up now finishes it', async () => {
     const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-3', 'task-3');
     fs.mkdirSync(scratch, { recursive: true });

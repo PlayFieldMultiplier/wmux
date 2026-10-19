@@ -287,6 +287,22 @@ describe('FleetView — Ready to review', () => {
     expect(useStore.getState().toasts.some((toast) => toast.level === 'warn' && /Fix t1/.test(toast.message) && toast.action === undefined)).toBe(true);
   });
 
+  it('a command started while Close and keep folder runs keeps the task\'s workspace open', async () => {
+    close.mockResolvedValueOnce({ ok: false, reason: 'error', error: 'could not verify all processes exited' });
+    mount();
+    await settle();
+    await closeFromRow();
+    const offered = keepFolderToast();
+    let answer!: (r: unknown) => void;
+    close.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    await act(async () => { offered!.action!.onClick(); });
+    act(() => { useStore.setState({ commandRunningByPtyId: { 'pty-1': true } } as never); });
+    await act(async () => { answer({ ok: true, taskId: 't1', archivePending: false, keptFolder: '/wt/t1' }); });
+    await settle();
+    expect(close).toHaveBeenLastCalledWith('t1', 'ws-o', { keepFolder: true });
+    expect(useStore.getState().workspaces.map((w) => w.id)).toContain('ws-t1');
+  });
+
   it('offers no Close and keep folder for an unpushed branch, nor after a close that worked', async () => {
     close.mockResolvedValueOnce({ ok: false, reason: 'unpushed', aheadCount: 2 });
     mount();

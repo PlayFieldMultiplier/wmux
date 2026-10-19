@@ -32,7 +32,7 @@ import { selectWorkspaceAgentRoster } from '../../stores/selectors/workspaceAgen
 import { isTaskReadyForReview } from '../../stores/selectors/reviewQueue';
 import { displayWorkspaceName } from '../../utils/fanoutProvenance';
 import { refuseWorkspaceClose } from '../Moa/moaHqGuard';
-import { keepFolderAction, keptFolderMessage, workspaceRunsCommand } from '../WorkTask/closeKeepFolder';
+import { keepFolderAction, keptFolderMessage, workspaceBusy } from '../WorkTask/closeKeepFolder';
 
 /**
  * An owner's tasks split by requesting pane (see selectOwnerPaneTaskSplit:
@@ -189,12 +189,15 @@ function TaskGroupMenu({ ownerKey, finishedIds, nameOf, toReview = 0, groupName,
           );
           // #2388: the way out of a close that keeps refusing. An unpushed
           // branch has its own next step (push or a PR).
-          const keepFolder = keepFolderAction(mission.id, mission.owner.verifiedWorkspaceId, t, () => onCloseWorkspace(id), () => {
-            // Asked again at the click: the task's work may have started again since.
-            const now = useStore.getState();
-            const again = revalidateTaskForClose(now, id, ownerKey, (wsId) => selectWorkspaceAgentRoster(now, wsId).rows);
-            if (!again.ok) return `${name}: ${t(SKIP_KEY[again.reason])}`;
-            return workspaceRunsCommand(id) ? `${name}: ${t(SKIP_KEY['not-finished'])}` : null;
+          const keepFolder = keepFolderAction(mission.id, mission.owner.verifiedWorkspaceId, t, () => onCloseWorkspace(id), (afterClose) => {
+            // Asked again at the click and once the task closed: the task's
+            // work may have started again since.
+            if (!afterClose) {
+              const now = useStore.getState();
+              const again = revalidateTaskForClose(now, id, ownerKey, (wsId) => selectWorkspaceAgentRoster(now, wsId).rows);
+              if (!again.ok) return `${name}: ${t(SKIP_KEY[again.reason])}`;
+            }
+            return workspaceBusy(id) ? `${name}: ${t(SKIP_KEY['not-finished'])}` : null;
           });
           if (res.ok) {
             onCloseWorkspace(id);

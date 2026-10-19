@@ -891,7 +891,17 @@ export async function cleanTaskFolders(ports: TaskFolderPorts, rows: readonly Le
   // ended rows after a while: its record says where it is.
   for (const rec of keptRecords(ports.store)) {
     if (handled.has(rec.taskId)) continue;
-    count(await cleanTaskFolder(ports, keptRow(rec), { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) }, sessions, opts), rec.taskId, rec.path);
+    // Its mission, when the daemon still holds it, says whether the folder
+    // was handed to the owner (detached: Close and keep folder, #2388), as
+    // the automatic pass reads it; only a mission gone too leaves the record
+    // to say where.
+    // Missions that could not be read leave it for a later pass.
+    const owner = rec.stopped?.workspaceId;
+    if (owner && !byOwner.has(owner)) byOwner.set(owner, await ports.missions(owner).catch(() => null));
+    const missions = owner ? byOwner.get(owner) : undefined;
+    if (owner && !missions) continue;
+    const mission = missions?.get(rec.taskId) ?? { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) };
+    count(await cleanTaskFolder(ports, keptRow(rec), mission, sessions, opts), rec.taskId, rec.path);
   }
   return out;
 }
