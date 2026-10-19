@@ -26,13 +26,11 @@ describe('the pending-removal lock on pane creation', () => {
     expect(src.slice(second, spawn)).not.toContain("daemonClient.rpc('daemon.createSession'");
   });
 
-  it('the daemon\'s createSession checks it before the session is created', () => {
+  it('the daemon checks it for every spawn (DaemonSessionManager.setSpawnCwdRefusal)', () => {
     const src = read('src/daemon/index.ts');
-    // In the form the spawn uses: `~/` expanded as prepareSpawn does.
-    const check = src.indexOf('pendingRemovalRefusalAt(getWmuxDir(), p.cwd ? expandTilde(p.cwd) : p.cwd');
-    expect(check).toBeGreaterThan(-1);
-    const create = src.indexOf('sessionManager.createSessionAsync({', check);
-    expect(create).toBeGreaterThan(check);
-    expect(src.slice(check, create)).toContain('if (pendingRefusal) throw new Error(pendingRefusal);');
+    const wired = src.indexOf('sessionManager.setSpawnCwdRefusal((cwd, session) => pendingRemovalRefusalAt(getWmuxDir(), cwd, session));');
+    expect(wired).toBeGreaterThan(-1);
+    // Wired before the boot recovery spawns anything.
+    expect(wired).toBeLessThan(src.indexOf('await recoverSessions('));
   });
 });

@@ -46,7 +46,6 @@ import { createOpenCodeDecisions } from './approvals/openCodeDecisions';
 import { isNativeDecision } from './approvals/types';
 import { SCROLLBACK_ROWS } from './web/hostSearch';
 import { recoveryCwd, isWslShell, isWslCwdMissingError } from '../shared/wsl';
-import { expandTilde } from '../shared/expandTilde';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -2533,11 +2532,6 @@ function registerRpcHandlers(
     if (p.args !== undefined && !isWslDistroSpawnArgs(p.cmd, p.args)) {
       throw new Error('Invalid session args: expected [\'-d\', wsl-distro] for a wsl.exe cmd');
     }
-    // #2388: a task folder whose removal did not finish takes no new pane,
-    // whoever asks (the desktop, a phone, an automation). Checked in the form
-    // the spawn uses (`~/` expanded, as prepareSpawn does; a no-op on Windows).
-    const pendingRefusal = pendingRemovalRefusalAt(getWmuxDir(), p.cwd ? expandTilde(p.cwd) : p.cwd, { ...(p.wslTarget ? { wslTarget: p.wslTarget } : {}) });
-    if (pendingRefusal) throw new Error(pendingRefusal);
     const session = await sessionManager.createSessionAsync({
       id: p.id,
       cmd: p.cmd,
@@ -9138,6 +9132,9 @@ async function main(): Promise<void> {
   // renderer answers the startup DA1 itself; before that the bytes only reach
   // it through the (query-stripped) ring replay, and the daemon answers.
   sessionManager.setLiveRendererProbe((id) => sessionPipes.get(id)?.isFlushed === true);
+  // #2388: a task folder whose removal did not finish takes no new pane,
+  // whoever asks (the desktop, a phone, an automation, a recovery).
+  sessionManager.setSpawnCwdRefusal((cwd, session) => pendingRemovalRefusalAt(getWmuxDir(), cwd, session));
 
   // Forward reference — initialised at step 8c after the snapshot runner is
   // wired. RPC handlers that fire before initialisation simply skip the

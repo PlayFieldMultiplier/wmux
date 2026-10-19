@@ -281,6 +281,25 @@ export class DaemonSessionManager extends EventEmitter {
     this.liveRendererProbe = fn;
   }
 
+  /**
+   * #2388: why a pane may not start in its folder (a task folder whose
+   * removal did not finish), or null. Injected by daemon/index.ts, which
+   * knows where that record lives. Checked for every spawn (a create, a
+   * recovery, a restart, a promote) once its directory is final, before
+   * anything is spawned. A folder locked while a pid is still pending is not
+   * refused here: that session registers, and the removal's last look before
+   * it deletes finds it and keeps the folder. Default: nothing is refused.
+   */
+  private spawnCwdRefusal: (cwd: string, session: { wslTarget?: WslTarget }) => string | null = () => null;
+
+  setSpawnCwdRefusal(fn: (cwd: string, session: { wslTarget?: WslTarget }) => string | null): void {
+    this.spawnCwdRefusal = fn;
+  }
+
+  private spawnCwdRefusalOf(prepared: PreparedSpawn): string | null {
+    return this.spawnCwdRefusal(prepared.cwd, prepared.params.wslTarget ? { wslTarget: prepared.params.wslTarget } : {});
+  }
+
   /** #2388: waits before each new read of a spawned shell's start time
    *  after a failed one (recordSpawnStartTime). Each read may take up to
    *  3 s itself (`ps` timeout). Overridable for tests. */
@@ -368,6 +387,8 @@ export class DaemonSessionManager extends EventEmitter {
     if (isWslShell(cmd)) throw new Error('WSL creation requires createSessionAsync');
     if (this.pendingCreates.has(params.id)) throw new Error(`Session '${params.id}' creation is already pending`);
     const prepared = this.prepareSpawn({ ...params, cmd });
+    const cwdRefusal = this.spawnCwdRefusalOf(prepared);
+    if (cwdRefusal) throw new Error(cwdRefusal);
     let conptyBackend: ConptyBackend = 'inbox';
     let ptyProcess: IPty;
     try {
@@ -392,6 +413,8 @@ export class DaemonSessionManager extends EventEmitter {
         : undefined;
       if (this.pendingCreates.get(params.id) !== token) throw new Error('Session creation cancelled');
       const prepared = this.prepareSpawn({ ...params, cmd }, wsl);
+      const cwdRefusal = this.spawnCwdRefusalOf(prepared);
+      if (cwdRefusal) throw new Error(cwdRefusal);
       const cancelled = (): boolean => this.pendingCreates.get(params.id) !== token || this.sessions.has(params.id);
       let conptyBackend: ConptyBackend = 'inbox';
       let ptyProcess: IPty;
