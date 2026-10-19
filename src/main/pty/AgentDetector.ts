@@ -924,10 +924,13 @@ export class AgentDetector {
   private criticalSeen = new Map<string, number>();
   // Track which agents have been "gated" (confirmed active) in this session
   private activeAgents = new Set<string>();
-  // Most recently emitted agent name. PTYBridge consults this when forwarding
-  // ActivityMonitor 'active' transitions to label the running status with the
-  // agent that owns this PTY.
+  // Pattern owner: screen-confirmed or explicitly seeded from fresh external
+  // identity. External identity alone must never become screen evidence.
   private lastAgent: string | null = null;
+  private lastScreenAgent: string | null = null;
+  private trustedAgent: AgentSlug | null = null;
+  private identityEpoch = 0;
+  private identityBoundaryAt = 0;
   // Kiro uses a compound gate so another agent merely mentioning "Kiro CLI"
   // cannot steal this PTY's identity. Evidence is scoped to this detector/PTy.
   private kiroChromeSeen = false;
@@ -1012,14 +1015,75 @@ export class AgentDetector {
     };
   }
 
-  /** Snapshot of agent gates that have matched in this session. */
+  /** Profile activation history, including explicit trusted identity seeds. */
   getActiveAgents(): string[] {
     return Array.from(this.activeAgents);
   }
 
-  /** Most recently emitted agent name, or null if no agent event has fired. */
+  /** Most recent screen-confirmed name; a trusted seed alone returns null. */
   getLastAgent(): string | null {
-    return this.lastAgent;
+    return this.lastScreenAgent;
+  }
+
+  /** External identity is separate from screen provenance and turn state. */
+  getTrustedAgent(): AgentSlug | null {
+    return this.trustedAgent;
+  }
+
+  /** Capture before an asynchronous process probe; stale results cannot seed. */
+  getIdentityEpoch(): number {
+    return this.identityEpoch;
+  }
+
+  /** Reject hook timestamps at/before this boundary, in addition to epoch checks. */
+  getIdentityBoundaryAt(): number {
+    return this.identityBoundaryAt;
+  }
+
+  /**
+   * Activate only prompt parsing for a fresh, verified process/hook identity.
+   * The caller must establish provenance and freshness (including hook event
+   * time after getIdentityBoundaryAt), never use cached metadata or a TTL.
+   * This method does not infer running, completion, or even an Agent started
+   * event from process presence. Unsupported profiles and stale epochs fail
+   * without changing the current owner. Repeated same-owner evidence is a
+   * no-op so a pending dialog and emission dedup survive repeated probes.
+   */
+  seedTrustedIdentity(slug: AgentSlug, expectedEpoch: number): boolean {
+    if (expectedEpoch !== this.identityEpoch) return false;
+    const profile = AGENT_PATTERNS.find((candidate) => candidate.slug === slug);
+    if (!profile) return false;
+    if (this.trustedAgent === slug && !this.shellPromptSinceOwner) return true;
+
+    const sameOwner = this.lastAgent === profile.agent && !this.shellPromptSinceOwner;
+    if (!sameOwner) {
+      if (this.lastAgent !== null && this.lastAgent !== profile.agent) this.advanceIdentityBoundary();
+      this.resetLaunchEvidence();
+      this.lastScreenAgent = null;
+    }
+    this.trustedAgent = slug;
+    this.lastAgent = profile.agent;
+    this.activeAgents.add(profile.agent);
+    this.shellPromptSinceOwner = false;
+    return true;
+  }
+
+  /** Confirmed death/disposal: revoke all launch identity, without an event. */
+  clearTrustedIdentity(): void {
+    this.advanceIdentityBoundary();
+    this.trustedAgent = null;
+    this.lastAgent = null;
+    this.lastScreenAgent = null;
+    this.activeAgents.clear();
+    this.shellPromptSinceOwner = false;
+    this.resetLaunchEvidence();
+  }
+
+  private advanceIdentityBoundary(): void {
+    this.identityEpoch++;
+    // Keep time monotonic if the wall clock moves backwards. Epoch is the
+    // authority for process probes; hook timestamps additionally use this.
+    this.identityBoundaryAt = Math.max(this.identityBoundaryAt, Date.now());
   }
 
   /**
@@ -1080,7 +1144,14 @@ export class AgentDetector {
   }
 
   private noteShellReturn(): void {
+    this.advanceIdentityBoundary();
+    this.trustedAgent = null;
     if (this.lastAgent !== null) this.shellPromptSinceOwner = true;
+    this.resetLaunchEvidence();
+  }
+
+  private resetLaunchEvidence(): void {
+    this.resetEmissionState();
     // activeAgents is detection history, not evidence that an earlier
     // launch owns the pane. Compound gates and unfinished dialogs must be
     // established again, including when the same agent starts again.
@@ -1224,13 +1295,19 @@ export class AgentDetector {
    * 검사와 processLine 양쪽에서 사용). activeAgents 가드로 세션당 1회만 발화.
    */
   private checkGates(clean: string, completeRow = false): void {
+    // While external identity is authoritative, unrelated chrome cannot even
+    // accumulate partial evidence for a later gate. Use the pattern owner for
+    // this policy; it applies equally to every compound profile below.
+    const canCollectChrome = (agent: string): boolean => this.trustedAgent === null || this.lastAgent === agent;
     // Kiro has no hook fallback, so identify its live TUI from two independent
     // pieces of chrome. Newer v3 builds show the docs URL instead of a "Kiro
     // CLI" banner; their cursor-drawn composer can also collapse whitespace in
     // the raw PTY stream. Probe only a bounded tail and only when a cheap
     // literal hint is present. Once Kiro is active this entire path is skipped.
-    const kiroIsActive = this.activeAgents.has('Kiro CLI') && !this.shellPromptSinceOwner;
-    if (!kiroIsActive && (!this.kiroChromeSeen || !this.kiroPromptSeen)) {
+    const kiroIsActive = this.activeAgents.has('Kiro CLI') && !this.shellPromptSinceOwner
+      && (this.trustedAgent === null || this.lastScreenAgent === 'Kiro CLI');
+    if (canCollectChrome('Kiro CLI')
+      && !kiroIsActive && (!this.kiroChromeSeen || !this.kiroPromptSeen)) {
       const probe = clean.length > 4096 ? clean.slice(-4096) : clean;
       const mayContainChrome = !this.kiroChromeSeen && (
         probe.includes('kiro') ||
@@ -1282,8 +1359,10 @@ export class AgentDetector {
 
     // #850: Claude compound gate — same model as Kiro. Collect banner and
     // prompt evidence independently; gate opens only when both are present.
-    const claudeIsActive = this.activeAgents.has('Claude Code') && !this.shellPromptSinceOwner;
-    if (!claudeIsActive && (!this.claudeBannerSeen || !this.claudePromptSeen)) {
+    const claudeIsActive = this.activeAgents.has('Claude Code') && !this.shellPromptSinceOwner
+      && (this.trustedAgent === null || this.lastScreenAgent === 'Claude Code');
+    if (canCollectChrome('Claude Code')
+      && !claudeIsActive && (!this.claudeBannerSeen || !this.claudePromptSeen)) {
       // Bound the probe and gate it behind a cheap literal, then walk lines.
       // A blob-level `╭.*Claude` used to backtrack the whole 4 KB probe on
       // every full-screen TUI frame (btop); line-level chrome is both cheaper
@@ -1346,7 +1425,10 @@ export class AgentDetector {
     for (const ap of AGENT_PATTERNS) {
       // Skip an already-seen gate within a launch, but reconsider it after
       // the shell returns: Claude -> Codex -> Claude must reclaim the pane.
-      if (!ap.gate || (this.activeAgents.has(ap.agent) && !this.shellPromptSinceOwner)) continue;
+      if (this.trustedAgent !== null && this.trustedAgent !== ap.slug) continue;
+      const trustedOwner = this.trustedAgent === ap.slug;
+      if (!ap.gate || (this.activeAgents.has(ap.agent) && !this.shellPromptSinceOwner
+        && (!trustedOwner || this.lastScreenAgent === ap.agent))) continue;
       // Opening a gate makes its agent the lastAgent, and processLine then
       // skips every other agent's patterns for the rest of the session. The
       // compound gates (Claude, Kiro) and Grok's chrome may take a pane at any
@@ -1381,7 +1463,11 @@ export class AgentDetector {
       if (this.shellPromptSinceOwner) this.resetEmissionState();
       this.activeAgents.add(ap.agent);
       this.lastAgent = ap.agent;
+      this.lastScreenAgent = ap.agent;
       this.shellPromptSinceOwner = false;
+      // The profile was already active from fresh external identity. Chrome
+      // adds screen provenance, not another launch or a replayed prompt.
+      if (trustedOwner) continue;
       for (const cb of this.callbacks) {
         cb({ agent: ap.agent, status: 'running', message: 'Agent started' });
       }
