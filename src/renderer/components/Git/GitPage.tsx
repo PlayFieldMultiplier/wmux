@@ -77,7 +77,11 @@ export default function GitPage() {
   // repos, or for a picked repo (its lists and owner come from its group).
   const [menuOpen, setMenuOpen] = useState(false);
   const pick = page.scope === 'repo' ? page.pick : null;
-  const groups = useRepoGroups(refreshKey, menuOpen || page.scope === 'all' || pick !== null);
+  const remoteScope = useStore(selectRemoteScopeName);
+  // Following a workspace whose folder is not a repo: read the groups too, to
+  // tell whether its subfolders hold repos to pick from (#2438).
+  const followingNoRepo = page.scope === 'repo' && pick === null && remoteScope === null && !active.loading && !active.repo;
+  const groups = useRepoGroups(refreshKey, menuOpen || page.scope === 'all' || pick !== null || followingNoRepo);
   const pickedGroup = pick && groups ? groups.find((g) => g.key === pick) ?? null : null;
   // A picked repo with no open workspace left: follow the active one instead.
   const pickMissing = pick !== null && groups !== null && pickedGroup === null;
@@ -85,7 +89,6 @@ export default function GitPage() {
   // Another computer is on screen (PC rail): the active workspace's files are
   // there, so following it reads nothing and says so; picked repos and All
   // repos are this computer's and stay as they are.
-  const remoteScope = useStore(selectRemoteScopeName);
   const remoteFiles = following && remoteScope !== null;
   // The repo shown in This repo (the gate's repo in All repos).
   const resolved = following
@@ -94,6 +97,10 @@ export default function GitPage() {
   const resolving = following ? active.loading : groups === null;
   const web = repoWeb(resolved?.remoteKey ?? null);
   const repoName = resolved ? web?.label ?? pathLeaf(resolved.mainPath) : null;
+  // Repos in the active workspace's subfolders, when its folder is not one.
+  const heldRepos = following && !resolved && groups && activeWorkspaceId
+    ? groups.filter((g) => g.foundIn.includes(activeWorkspaceId)).length
+    : 0;
   const choose = (choice: Pick<GitPageState, 'scope' | 'pick'>) => {
     setGitPage(choice);
     saveGitRepoChoice(choice);
@@ -326,7 +333,11 @@ export default function GitPage() {
           {pickMissing && <p className="wmux-git-page-summary" data-git-pick-missing>{t('git.repoMenu.missing')}</p>}
           {/* A computer the roster has not named yet gets no line, as on the rail pages. */}
           {page.scope === 'repo' && remoteFiles && remoteScope && <p className="wmux-git-page-summary" data-git-remote-files>{t('pcRail.filesNotShown', { name: remoteScope })}</p>}
-          {page.scope === 'repo' && !remoteFiles && !resolved && !resolving && <p className="wmux-git-page-summary" data-git-no-repo>{t('git.noRepo')}</p>}
+          {page.scope === 'repo' && !remoteFiles && !resolved && !resolving && (
+            <p className="wmux-git-page-summary" data-git-no-repo>
+              {heldRepos > 0 ? t(`git.noRepo.holds.${heldRepos === 1 ? 'one' : 'other'}`, { count: heldRepos }) : t('git.noRepo')}
+            </p>
+          )}
           {counts.length > 0 && <p className="wmux-git-page-summary" data-git-page-counts>{counts.join(' · ')}</p>}
           {page.scope === 'all' && page.allLayout === 'flat' && page.tab !== 'worktrees' && turnCounts && <GitTurnSummary counts={turnCounts} />}
           {/* Same gating as the lists it sums: no line for another computer's workspace when following it. */}

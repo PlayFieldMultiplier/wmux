@@ -559,3 +559,56 @@ describe('Git page', () => {
     });
   });
 });
+
+describe('Git page — a workspace folder holding several repos (#2438)', () => {
+  const useScan = () => {
+    const api = (window as unknown as { electronAPI: { diff: Record<string, unknown> } }).electronAPI;
+    const scanRepos = vi.fn(async (cwd: string) => (cwd === '/work' ? { ok: true, repoPaths: ['/code/alpha', '/code/beta'] } : { ok: true, repoPaths: [] }));
+    api.diff.scanRepos = scanRepos;
+    act(() => useStore.setState({ workspaces: [workspace('root', '/work')], activeWorkspaceId: 'root' }));
+    return scanRepos;
+  };
+
+  it('following it says how many repos its subfolders hold, and the menu lists them', async () => {
+    useScan();
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe(
+      'This folder is not a git repository but holds 2 in its subfolders — pick one from the repo menu, or choose All repos.',
+    );
+    act(() => switcher().click());
+    await settle();
+    expect(container.querySelector('[data-git-repo-option="repo:github.com/o/alpha"]')).not.toBeNull();
+    expect(container.querySelector('[data-git-repo-option="repo:path:/code/beta"]')).not.toBeNull();
+  });
+
+  it('All repos lists each repo found in it, instead of "no workspace is in a repo"', async () => {
+    useScan();
+    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(container.querySelector('[data-git-all-empty]')).toBeNull();
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
+  it('a folder with no repos below it keeps the plain no-repo line', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({ workspaces: [workspace('root', '/elsewhere')] }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/elsewhere');
+    expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe('Not a git repository — focus a pane inside a repo.');
+  });
+
+  it('a pane in a folder with no repos does not take the repos of its profile or the starting directory', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/elsewhere'), workspace('prof', '/elsewhere', { profile: { startupCwd: '/work' } } as Partial<Workspace>)],
+      startupDirectory: '/work',
+    }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).not.toHaveBeenCalledWith('/work');
+    expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe('Not a git repository — focus a pane inside a repo.');
+  });
+});

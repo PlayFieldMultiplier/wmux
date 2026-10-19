@@ -9,16 +9,17 @@
 //   fingerprint, so an adoption can only ever apply the diff the user saw
 //   (plans/apply-hunks-toctou-design.md).
 import { ipcMain } from 'electron';
-import { readFile, lstat } from 'node:fs/promises';
+import { readFile, lstat, realpath } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { tmpdir } from 'node:os';
-import { join, isAbsolute, normalize, dirname } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, isAbsolute, normalize, dirname, parse } from 'node:path';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
 import { git } from '../../git/git';
 import { resolveAccessiblePath } from './fs.handler';
+import { scanRepos } from '../../git/scanRepos';
 import { metaDirForWorktree } from '../../worktask/TaskWorktreeManager';
 import { WORKTASK_META_FILENAME } from '../../../shared/workTask';
 import {
@@ -791,6 +792,47 @@ export function registerDiffHandlers(): () => void {
     ),
   );
 
+  // The repos in a folder's subfolders, for a workspace whose folder is not a
+  // repo itself (#2438). Each is its worktree toplevel, as diff:resolveRepo
+  // answers it, so the Git page resolves them like any other workspace repo.
+  ipcMain.removeHandler(IPC.DIFF_SCAN_REPOS);
+  ipcMain.handle(
+    IPC.DIFF_SCAN_REPOS,
+    wrapHandler(
+      IPC.DIFF_SCAN_REPOS,
+      async (
+        _event: Electron.IpcMainInvokeEvent,
+        cwd: unknown,
+      ): Promise<{ ok: true; repoPaths: string[] } | { ok: false }> => {
+        if (typeof cwd !== 'string' || !cwd) return { ok: false };
+        // F2 (#615): confine the renderer path before it is walked.
+        const safeCwd = await resolveAccessiblePath(cwd);
+        if (!safeCwd) return { ok: false };
+        // Home and a drive or filesystem root are where a shell starts, not a
+        // workspace of repos: walking them would list every clone on the disk.
+        // safeCwd is a real path, so home is compared as its real path too
+        // (fs/promises realpath is the native resolver: links, junctions and
+        // 8.3 short names resolve to one spelling).
+        const fold = (p: string) => (process.platform === 'win32' ? normalize(p).toLowerCase() : normalize(p));
+        const home = await realpath(homedir()).catch(() => homedir());
+        if (safeCwd === parse(safeCwd).root || fold(safeCwd) === fold(home)) {
+          return { ok: true, repoPaths: [] };
+        }
+        const repoPaths = await scanRepos(
+          safeCwd,
+          async (dir) => {
+            const r = await git(['rev-parse', '--show-toplevel'], dir);
+            return r.code === 0 ? r.stdout.trim() || null : null;
+          },
+          // Each folder below the root passes the same confinement check
+          // before it is read or handed to git.
+          resolveAccessiblePath,
+        );
+        return { ok: true, repoPaths };
+      },
+    ),
+  );
+
   ipcMain.removeHandler(IPC.DIFF_APPLY_HUNKS);
   ipcMain.handle(
     IPC.DIFF_APPLY_HUNKS,
@@ -821,6 +863,7 @@ export function registerDiffHandlers(): () => void {
     ipcMain.removeHandler(IPC.DIFF_SUMMARY);
     ipcMain.removeHandler(IPC.DIFF_STATUS);
     ipcMain.removeHandler(IPC.DIFF_RESOLVE_REPO);
+    ipcMain.removeHandler(IPC.DIFF_SCAN_REPOS);
     ipcMain.removeHandler(IPC.DIFF_APPLY_HUNKS);
   };
 }

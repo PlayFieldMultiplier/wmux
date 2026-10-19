@@ -402,6 +402,9 @@ export const IPC = {
   // (서브디렉토리 cwd를 그대로 diff:read에 넘기면 untracked 합성의
   //  join(worktreePath, rel)이 repo-root 상대경로와 어긋난다.)
   DIFF_RESOLVE_REPO: 'diff:resolveRepo',
+  // Git page — a folder that is not a repo itself: the repositories in its
+  // subfolders (two levels deep), each as its worktree toplevel (#2438).
+  DIFF_SCAN_REPOS: 'diff:scanRepos',
   // Fleet Ready to review — a task's change counts only (numstat + untracked),
   // no patch text; answers `unchanged` when the worktree state key matches.
   DIFF_SUMMARY: 'diff:summary',

@@ -1,6 +1,7 @@
 // Short-lived answers the Git page asks git for again and again: which
 // worktree a cwd sits in, which repo (main worktree) a worktree belongs to,
-// and the repo's remote identity. Shared by every GitTab and the All repos
+// the repo's remote identity, and the repos inside a folder that is not one.
+// Shared by every GitTab and the All repos
 // grouping, so a page with many workspaces on one repo resolves each cwd once,
 // lists the repo's worktrees once, and reads its remote once. A refresh or a
 // mutation passes `force`.
@@ -14,10 +15,12 @@ type ListWorktrees = (repoPath: string) => Promise<
   { ok: true; mainPath: string; worktrees: { path: string }[] } | { ok: false }
 >;
 type RepoKey = (repoPath: string) => Promise<{ key: string | null }>;
+type ScanRepos = (cwd: string) => Promise<{ ok: true; repoPaths: string[] } | { ok: false }>;
 
 const repoOf = new Map<string, { value: string | null; at: number }>();
 const mainOf = new Map<string, { value: string | null; at: number }>();
 const keyOf = new Map<string, { value: string | null; at: number }>();
+const reposIn = new Map<string, { value: readonly string[]; at: number }>();
 
 function fresh<T>(m: Map<string, { value: T; at: number }>, k: string, force: boolean): { value: T } | null {
   const hit = m.get(k);
@@ -78,9 +81,29 @@ export async function repoKeyCached(repoKey: RepoKey | undefined, repoPath: stri
   return value;
 }
 
+/**
+ * A folder that is not a repo → the repos in its subfolders (#2438), each as
+ * its worktree toplevel; empty when there are none or the bridge is missing.
+ */
+export async function scanReposCached(scan: ScanRepos | undefined, cwd: string, force = false): Promise<readonly string[]> {
+  if (!scan) return [];
+  const hit = fresh(reposIn, cwd, force);
+  if (hit) return hit.value;
+  let value: readonly string[] = [];
+  try {
+    const r = await scan(cwd);
+    value = r.ok ? r.repoPaths : [];
+  } catch {
+    value = [];
+  }
+  reposIn.set(cwd, { value, at: Date.now() });
+  return value;
+}
+
 /** Test seam: forget everything. */
 export function clearGitCaches(): void {
   repoOf.clear();
   mainOf.clear();
   keyOf.clear();
+  reposIn.clear();
 }

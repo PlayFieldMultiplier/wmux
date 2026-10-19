@@ -1429,6 +1429,11 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.DIFF_RESOLVE_REPO, cwd) as Promise<
         { ok: true; repoPath: string } | { ok: false }
       >,
+    // Git page — the repos in a non-repo folder's subfolders (#2438).
+    scanRepos: (cwd: string) =>
+      ipcRenderer.invoke(IPC.DIFF_SCAN_REPOS, cwd) as Promise<
+        { ok: true; repoPaths: string[] } | { ok: false }
+      >,
     // mode='workspace'는 cwd repo/worktree 자신의 미커밋 변경만(본 repo 매핑 없음).
     read: (worktreePath: string, targetHeadOid?: string, mode?: 'task' | 'workspace') =>
       ipcRenderer.invoke(IPC.DIFF_READ, worktreePath, targetHeadOid ?? '', mode ?? 'task') as Promise<
