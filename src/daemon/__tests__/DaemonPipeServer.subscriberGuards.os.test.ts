@@ -174,17 +174,18 @@ describe('DaemonPipeServer — subscriber backpressure (D6)', () => {
     expect(server.isEventSubscriber(clientId)).toBe(false);
     expect(socket.destroyed).toBe(false);
 
-    // Frames carry no raw newline, so newlines count them: the whoami reply
-    // plus every accepted payload, then whatever is broadcast after.
-    let frames = 0;
     let tail = '';
     socket.setEncoding('utf8');
     socket.on('data', (chunk: string) => {
-      frames += chunk.split('\n').length - 1;
       tail = (tail + chunk).slice(-512);
     });
     socket.resume();
-    await waitFor(() => frames >= accepted + 1);
+    // Wait on the server's own write queue, the one broadcast checks. The
+    // client can read the last payload before the server's write of it
+    // completes (Windows named pipes), and a broadcast in that window drops
+    // the subscriber again. Every payload alone is over the cap, so a probe
+    // that sendTo accepts means none of them is still queued.
+    await waitFor(() => server.sendTo(clientId, { type: 'probe' }));
 
     expect(server.subscribeEvents(clientId)).toBe(true);
     server.broadcast({ type: 'title.changed', n: 'after-resubscribe' });
