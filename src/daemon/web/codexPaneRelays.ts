@@ -8,7 +8,7 @@ import type {CodexRelayObservation} from './codexTuiSelection';
 import {threadIdentityEnv} from './codexRelayPolicy';
 
 type Relay = Awaited<ReturnType<typeof createCodexTuiRelay>>;
-interface Entry {id:string; relayId:string; relay?:Relay; owner?:ManagedSession; retired:boolean; codeHome?:string}
+interface Entry {id:string; relayId:string; leaseId:string; relay?:Relay; owner?:ManagedSession; retired:boolean; codeHome?:string}
 
 export interface CodexPaneRelayHooks {
   /** Before every relay (and so every wmux Codex launch): make sure the shared
@@ -36,6 +36,19 @@ export interface CodexPaneRelayHooks {
 }
 /** One Codex request, keyed by (relay incarnation, thread, server request id). */
 export interface CodexDecisionRef {relayId:string; threadId:string; requestId:string; method?:string}
+/** The Codex account a pane's relay serves: the pane's own CODEX_HOME, else
+ * ~/.codex. A caller may name it; naming another account is refused, so a
+ * relay serves only the pane's own account. */
+export function paneCodexHome(asked:string | undefined, paneHome:string | undefined,
+  {home = os.homedir(), caseInsensitive = process.platform === 'win32'}:{home?:string; caseInsensitive?:boolean} = {}):string {
+  const own = path.resolve(paneHome || path.join(home,'.codex'));
+  if (asked === undefined) return own;
+  if (!path.isAbsolute(asked) || asked.includes('\0')) throw new Error('Invalid Codex account scope');
+  const key = (p:string)=>caseInsensitive ? p.toLowerCase() : p;
+  if (key(path.resolve(asked)) !== key(own)) throw new Error(`This terminal's Codex account is ${own}. Run wmux codex with that CODEX_HOME, or open a terminal for the other account.`);
+  return own;
+}
+
 /** Remembered thread owners; the oldest is forgotten past this (forgotten = unknown owner). */
 const MAX_THREAD_OWNERS = 4096;
 /** Hard bound on a native interrupt: the request and the wait for the pane's own `turn/completed`. */
@@ -84,9 +97,11 @@ export class CodexPaneRelays {
   }
 
   async prepare(id:string, codeHome?:string) {
+    const previous = this.entries.get(id);
+    if (previous?.relay?.retired()) await this.retireEntry(previous);
     if (this.stopped || this.entries.has(id) || this.entries.size >= 256 || this.creating.size >= 256) throw new Error('Codex pane relay unavailable');
     codeHome ??= path.join(os.homedir(),'.codex');
-    const entry:Entry = {id,relayId:randomUUID(),retired:false,codeHome};
+    const entry:Entry = {id,relayId:randomUUID(),leaseId:randomUUID(),retired:false,codeHome};
     this.entries.set(id,entry);
     try {await this.hooks.ensureRuntime?.(id,codeHome);} catch {/* The relay probe below decides availability. */}
     let creation:Promise<Relay> | undefined;
@@ -137,6 +152,7 @@ export class CodexPaneRelays {
       }
       return {
         url:relay.url,
+        ...(relay.authToken ? {authToken:relay.authToken} : {}),
         commit:(owner:ManagedSession):boolean=>{
           if (entry.retired || this.entries.get(id) !== entry || entry.owner || owner.meta.id !== id ||
               !['attached','detached'].includes(owner.meta.state)) return false;
@@ -265,6 +281,14 @@ export class CodexPaneRelays {
   retire(id:string):Promise<void> {
     const entry = this.entries.get(id);
     return entry ? this.retireEntry(entry) : Promise.resolve();
+  }
+
+  /** A late launcher cleanup cannot close a replacement or reconnected lease. */
+  leaseId(id:string):string | undefined { return this.entries.get(id)?.leaseId; }
+
+  release(id:string, leaseId:string):Promise<void> {
+    const entry = this.entries.get(id);
+    return entry?.leaseId === leaseId ? this.retireEntry(entry) : Promise.resolve();
   }
 
   async shutdown():Promise<void> {

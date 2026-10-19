@@ -17,7 +17,7 @@ import { persistCodexThreadOwner, invalidateCodexThreadOwner, trackCodexPaneOwne
 import { codexCdOperand, recoverCodexPane, withCodexRemote } from './web/recoverCodexPane';
 import { CodexRelayUnavailableError } from './web/codexTuiRelay';
 import { paneCodexSettings } from './web/paneCodexSettings';
-import { CodexPaneRelays } from './web/codexPaneRelays';
+import { CodexPaneRelays, paneCodexHome } from './web/codexPaneRelays';
 import { createCodexAccountStatusReader } from './web/codexAccountStatus';
 import { buildAgentLaunch, installedAgentLaunchOptions, pinnedAgentLaunch } from './web/agentLaunch';
 import { agentExecEnv } from '../shared/execEnv';
@@ -4511,6 +4511,25 @@ function registerRpcHandlers(
         : outcome.error === 'launch-unsupported' ? 'Terminal changed or is busy.'
           : 'Could not start the installed agent. Check Terminal before retrying.';
     return { ok: false, error };
+  });
+
+  pipeServer.onRpc('daemon.codex.relay.prepare', async (params, ctx) => {
+    if (!firstPartyOnly(ctx.clientId, 'codex.relay.prepare') || process.platform !== 'win32') throw new Error('Unavailable');
+    const id = typeof params.id === 'string' ? params.id : '';
+    const owner = sessionManager.getSession(id);
+    if (!owner || !['attached','detached'].includes(owner.meta.state)) throw new Error('Terminal is no longer live');
+    const codeHome = paneCodexHome(typeof params.codeHome === 'string' ? params.codeHome : undefined, owner.meta.env?.CODEX_HOME);
+    const relay = await codexPaneRelays.prepare(id,codeHome);
+    if (sessionManager.getSession(id) !== owner || !relay.commit(owner)) {
+      await relay.close();
+      throw new Error('Terminal changed during launch');
+    }
+    return {url:relay.url,authToken:relay.authToken,leaseId:codexPaneRelays.leaseId(id)};
+  });
+  pipeServer.onRpc('daemon.codex.relay.close', async (params, ctx) => {
+    if (!firstPartyOnly(ctx.clientId, 'codex.relay.close') || typeof params.id !== 'string' || typeof params.leaseId !== 'string') throw new Error('Unavailable');
+    await codexPaneRelays.release(params.id,params.leaseId);
+    return {ok:true};
   });
 
   pipeServer.onRpc('daemon.transcript.status', async (params, ctx) => {
