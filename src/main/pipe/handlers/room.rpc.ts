@@ -615,6 +615,9 @@ export function createRoomModule(
         },
       });
       setRoomWriter(writer);
+      // The first sweep of the bots' stored files: it needs the writer to
+      // know which files the kept cards still list.
+      getRoomFileStore()?.sweep();
       setBotRuntimePorts({
         postTurnText: (profile, item, text, since) => postTurnText(profile, item, text, since, { writer: getRoomWriter, ports: resolve, wmuxDir: deps.wmuxDir }),
       });

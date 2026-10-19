@@ -145,6 +145,19 @@ describe('RoomFileStore.copyIn', () => {
     expect(other.copyIn('ws-files-2', src, [repo()])).toMatchObject({ ok: false, reason: 'full' });
   });
 
+  it('keeps each room tally across copies and removals without measuring the store again', () => {
+    const wsDir = path.join(storeRoot(), WS);
+    fs.mkdirSync(wsDir, { recursive: true });
+    for (let i = 0; i < ROOM_FILE_LIMITS.ROOM_MAX_FILES - 2; i++) fs.writeFileSync(path.join(wsDir, i.toString(16).padStart(32, '0')), '');
+    const a = store.copyIn(WS, write(path.join(repo(), 'a.txt')), [repo()]);
+    const b = store.copyIn(WS, write(path.join(repo(), 'b.txt')), [repo()]);
+    if (!a.ok || !b.ok) throw new Error('copy failed');
+    expect(store.copyIn(WS, write(path.join(repo(), 'c.txt')), [repo()])).toMatchObject({ ok: false, reason: 'full' });
+    store.remove(WS, [a.file.id]);
+    expect(store.copyIn(WS, write(path.join(repo(), 'd.txt')), [repo()])).toMatchObject({ ok: true });
+    expect(stored()).toHaveLength(ROOM_FILE_LIMITS.ROOM_MAX_FILES);
+  });
+
   it('sweeps old stored files no kept card lists, and stray temporary files; none while the cards are unreadable', () => {
     let referenced: ReadonlySet<string> | null = null;
     const swept = new RoomFileStore({ root: storeRoot(), now: () => now, log: () => undefined, referenced: () => referenced });

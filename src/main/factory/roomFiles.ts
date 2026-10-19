@@ -214,6 +214,9 @@ export class RoomFileStore {
   private readonly now: () => number;
   private readonly log: (msg: string, err?: unknown) => void;
   private lastSweep = 0;
+  /** Each room's held files and bytes: measured on its first copy, then kept
+   *  by store and remove, and measured again after a sweep. */
+  private readonly held = new Map<string, { files: number; bytes: number }>();
 
   constructor(private readonly opts: RoomFileStoreOptions) {
     this.now = opts.now ?? Date.now;
@@ -326,7 +329,7 @@ export class RoomFileStore {
     const dir = this.dir(workspaceId);
     if (!dir) return refuse('store');
     this.maybeSweep();
-    const held = this.measure(dir);
+    const held = this.held.get(workspaceId) ?? this.measure(dir);
     if (held.files + 1 > ROOM_FILE_LIMITS.ROOM_MAX_FILES || held.bytes + data.length > ROOM_FILE_LIMITS.ROOM_MAX_BYTES) return refuse('full');
     const id = crypto.randomBytes(16).toString('hex');
     const final = path.join(dir, id);
@@ -337,6 +340,7 @@ export class RoomFileStore {
       if (!isRealDir(this.opts.root) || !isRealDir(dir)) throw new Error('the file folder is not a directory');
       fs.writeFileSync(temp, data, { mode: 0o600, flag: 'wx' });
       fs.renameSync(temp, final);
+      this.held.set(workspaceId, { files: held.files + 1, bytes: held.bytes + data.length });
     } catch (err) {
       try { fs.unlinkSync(temp); } catch { /* not written */ }
       this.log('a file was not stored', err);
@@ -350,7 +354,12 @@ export class RoomFileStore {
     for (const id of ids) {
       const file = this.file(workspaceId, id);
       if (!file) continue;
-      try { fs.unlinkSync(file); } catch { /* gone */ }
+      try {
+        const { size } = fs.lstatSync(file);
+        fs.unlinkSync(file);
+        const held = this.held.get(workspaceId);
+        if (held) this.held.set(workspaceId, { files: held.files - 1, bytes: held.bytes - size });
+      } catch { /* gone */ }
     }
   }
 
@@ -393,6 +402,7 @@ export class RoomFileStore {
   sweep(): void {
     const now = this.now();
     this.lastSweep = now;
+    this.held.clear();
     if (!isRealDir(this.opts.root)) return;
     let workspaces: string[] = [];
     try {

@@ -806,13 +806,13 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   });
   photos.sweep();
   setRoomAttachmentStore(photos);
-  // The files bots attach to their cards: swept by age the same way (roomFiles.ts).
+  // The files bots attach to their cards: swept by age once the rooms start,
+  // since the sweep keeps every file a kept card lists (roomFiles.ts).
   const roomFiles = new RoomFileStore({
     root: path.join(deps.wmuxDir(), 'factory', ROOM_FILES_DIRNAME),
     // An old file stays while a kept card (an open one) still lists it.
     referenced: (workspaceId) => getRoomWriter()?.fileIds(workspaceId) ?? null,
   });
-  roomFiles.sweep();
   setRoomFileStore(roomFiles);
   setFactoryPhoneMessageHandler((payload) => factoryPhoneMessageSaved(payload, { settings, writer: getRoomWriter, ports: roomPorts }));
 
