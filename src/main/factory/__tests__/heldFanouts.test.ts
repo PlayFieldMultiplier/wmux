@@ -25,6 +25,7 @@ function rig(dir: string) {
     openWorkers: (botId) => ({ bot: open.get(botId) ?? 0, factory: factory() }),
     // The wake file's write is the queue's own (botStores tests): taken as done.
     wakes: () => ({ enqueue: (input) => queue.enqueue(input), flush: () => Promise.resolve() }),
+    liveWakes: () => queue.list({ states: ['queued', 'running'] }),
   };
   const held = HeldFanouts.at(dir, ports);
   held.load();
@@ -128,6 +129,11 @@ describe('HeldFanouts', () => {
     expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
     expect(r.held.list()).toEqual([]);
 
+    // Its turn ran and started the worker, which the live count reads now.
+    const [first] = r.queue.list({ botId: BOT_A });
+    r.queue.start(first.id);
+    r.queue.finish(first.id);
+
     // Held again; this time the owner closes a task workspace (no row moves).
     r.ports.openWorkers = () => ({ bot: 0, factory: 1, live: 8 });
     r.held.hold(request(BOT_A, 'verify #8'));
@@ -154,6 +160,70 @@ describe('HeldFanouts', () => {
     r.held.hold(request(BOT_B, 'verify #8'));
     expect((await r.held.releaseNow()).map((h) => h.botId)).toEqual([BOT_A]);
     expect(r.held.list().map((h) => h.botId)).toEqual([BOT_B]);
+  });
+
+  it('a slot handed to a held wake stays taken across passes until that wake\'s turn ends without starting', async () => {
+    const r = rig(dir);
+    r.ports.budget = () => ({ maxConcurrentWorkers: 2 });
+    // The live count stays at 7: the woken turn has not booked anything.
+    r.ports.openWorkers = () => ({ bot: 0, factory: 0, live: 7 });
+    r.ports.liveLimit = () => 8;
+    r.held.hold(request(BOT_A, 'verify #7'));
+    vi.advanceTimersByTime(10);
+    r.held.hold(request(BOT_B, 'verify #8'));
+    expect((await r.held.releaseNow()).map((h) => h.botId)).toEqual([BOT_A]);
+    // Later passes (a kick, the recheck) before BOT_A's turn books wake nobody.
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await r.held.releaseNow()).toEqual([]);
+    }
+    expect(r.queue.list({ botId: BOT_B })).toEqual([]);
+    // Still taken while BOT_A's turn runs.
+    const [wake] = r.queue.list({ botId: BOT_A });
+    r.queue.start(wake.id);
+    expect(await r.held.releaseNow()).toEqual([]);
+    // Its turn ends without starting: the slot goes to BOT_B, through the
+    // queue's change.
+    r.queue.finish(wake.id);
+    releaseHeldFanouts();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(r.queue.list({ botId: BOT_B }).map((w) => w.reason.kind)).toEqual(['held_fanout']);
+    expect(r.held.list()).toEqual([]);
+  });
+
+  it('a held wake whose turn booked its workers counts by the booking, not twice', async () => {
+    const r = rig(dir);
+    r.ports.budget = () => ({ maxConcurrentWorkers: 2 });
+    let live = 7;
+    r.ports.openWorkers = () => ({ bot: 0, factory: 0, live });
+    r.ports.liveLimit = () => 8;
+    r.held.hold(request(BOT_A, 'verify #7'));
+    vi.advanceTimersByTime(10);
+    r.held.hold(request(BOT_B, 'verify #8'));
+    await r.held.releaseNow();
+    const [wake] = r.queue.list({ botId: BOT_A });
+    r.queue.start(wake.id);
+    // The turn reserved its worker: the booking is in the live count.
+    live = 8;
+    r.held.reserved(wake.id);
+    expect(await r.held.releaseNow()).toEqual([]);
+    // That worker ends while the turn still runs: the slot is free again.
+    live = 7;
+    expect((await r.held.releaseNow()).map((h) => h.botId)).toEqual([BOT_B]);
+  });
+
+  it('a held wake dropped unrun hands its factory slot back', async () => {
+    const r = rig(dir);
+    r.ports.factoryLimit = () => 1;
+    r.held.hold(request(BOT_A, 'one'));
+    vi.advanceTimersByTime(10);
+    r.held.hold(request(BOT_B, 'two'));
+    await r.held.releaseNow();
+    expect(r.held.list().map((h) => h.botId)).toEqual([BOT_B]);
+    // The factory's one slot is BOT_A's wake's until it is dropped.
+    expect(await r.held.releaseNow()).toEqual([]);
+    r.queue.drop(r.queue.list({ botId: BOT_A })[0].id, 'expired');
+    expect((await r.held.releaseNow()).map((h) => h.botId)).toEqual([BOT_B]);
   });
 
   it('a holder record that changes (a worker reclaimed or stopped) releases too', async () => {

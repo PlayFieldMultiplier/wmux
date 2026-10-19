@@ -40,7 +40,7 @@ import { botAccountQuota, type ClaudeUsageCache } from '../../factory/botQuota';
 import { openBotWorkers } from '../../factory/openBotWorkers';
 import { FANOUT_LIVE_TASK_CAP } from '../../worktask/fanoutGuards';
 import { getAgentSlots, refreshSlotLiveness } from '../../factory/agentSlots';
-import { HeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../../factory/heldFanouts';
+import { HeldFanouts, releaseHeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../../factory/heldFanouts';
 import { BotFanoutReceipts, botFanoutReceiptsPath, setBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { isVerifyReport } from '../../factory/verifyPreset';
@@ -486,7 +486,11 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       }
       const queue = new WakeQueue(wakeQueuePath(wmuxDir), {
         isBotEnabled: (botId) => store.get(botId)?.enabled === true,
-        onChange: () => runtime?.kick(),
+        // A held fan-out's wake that ends, unbooked, hands its slot back.
+        onChange: () => {
+          runtime?.kick();
+          releaseHeldFanouts();
+        },
       });
       queue.load();
       // Issue wakes queued for a triage bot under its old default triggers
@@ -505,6 +509,7 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
         openWorkers: openBotWorkers,
         refreshLiveness: refreshSlotLiveness,
         wakes: () => queue,
+        liveWakes: () => queue.list({ states: ['queued', 'running'] }),
         liveLimit: () => FANOUT_LIVE_TASK_CAP,
       };
       let held: HeldFanouts;

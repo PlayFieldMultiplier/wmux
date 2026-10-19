@@ -19,6 +19,13 @@
 // record (a liveness read sees it), so while anything is held a timer checks
 // as well, a second layer.
 //
+// A slot handed to a held request's wake stays counted against every cap
+// (the bot's, the factory's and the live one) until that wake's turn books
+// its workers (fanout_start reserved them: the booking counts from then on),
+// or the wake leaves the queue without that (its turn ended, it was dropped
+// or expired). Read from the wake queue on every pass, so a later pass
+// before the woken turn books never hands the same slot out again.
+//
 // `<wmuxDir>/factory/held-fanouts.json`, version 1: a held request survives a
 // restart. One held longer than HELD_MAX_MS is dropped.
 
@@ -85,6 +92,9 @@ export interface HeldFanoutPorts {
   /** Brings openWorkers up to date (never rejects). */
   refreshLiveness?(): Promise<void>;
   wakes(): Pick<WakeSinkApi, 'enqueue' | 'flush'> | null | undefined;
+  /** The wakes queued or running now (any reason; the held fan-outs' are
+   *  read from it). Absent: a slot is counted only within one pass. */
+  liveWakes?: () => readonly Pick<WakeItem, 'id' | 'botId' | 'reason' | 'enqueuedAt'>[];
   factoryLimit?: () => number;
   /** The wmux-wide live fan-out cap (FANOUT_LIVE_TASK_CAP). Absent: not
    *  checked here (the bot's retry is refused and held again). */
@@ -204,6 +214,8 @@ export class HeldFanouts {
   private again = false;
   private seq = 0;
   private disposed = false;
+  /** Held wakes whose turn booked its workers: their slot is the booking's. */
+  private readonly booked = new Set<string>();
 
   constructor(private readonly ports: HeldFanoutPorts, private readonly file?: string) {
     this.persister = file ? createFilePersister(file, () => ({ version: HELD_FANOUTS_VERSION, held: this.held })) : null;
@@ -272,6 +284,12 @@ export class HeldFanouts {
     if (this.held.length !== before) this.save();
   }
 
+  /** The turn of this wake reserved its workers (fanout_start passed the
+   *  reserve): the slot its held wake was handed is the booking's now. */
+  reserved(wakeId: string): void {
+    this.booked.add(wakeId);
+  }
+
   /** Forget a bot's held requests (its work was stopped, or it was removed). */
   dropFor(botId: string): void {
     const before = this.held.length;
@@ -310,9 +328,11 @@ export class HeldFanouts {
       const limit = (this.ports.factoryLimit ?? (() => WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS))();
       const liveLimit = this.ports.liveLimit?.();
       let changed = false;
-      // Slots this pass handed out: a bot woken for one has not booked it yet.
-      let factoryTaken = 0;
-      const botTaken = new Map<string, number>();
+      // Slots handed out to a held wake, in this pass or an earlier one,
+      // whose turn has not booked its workers yet.
+      const { all: handed, byBot: handedBot } = this.handedOut(now);
+      let factoryTaken = handed;
+      const botTaken = new Map<string, number>(handedBot);
       for (const h of [...this.held].sort((a, b) => a.heldAt - b.heldAt)) {
         let budget: Pick<BotBudget, 'maxConcurrentWorkers'> | null = null;
         let open: { bot: number; factory: number; live?: number } | null = null;
@@ -378,6 +398,35 @@ export class HeldFanouts {
   /** Resolves once every change so far is on disk. */
   async flush(): Promise<void> {
     await this.persister?.schedule();
+  }
+
+  /** The slots handed to held wakes still queued or running whose turn has
+   *  not booked them, in all and per bot. A wake whose hold is still here
+   *  (its queue write failed) is the hold's, counted when that is. */
+  private handedOut(now: number): { all: number; byBot: Map<string, number> } {
+    const byBot = new Map<string, number>();
+    let all = 0;
+    let wakes: readonly Pick<WakeItem, 'id' | 'botId' | 'reason' | 'enqueuedAt'>[] | undefined;
+    try {
+      wakes = this.ports.liveWakes?.();
+    } catch (err) {
+      this.log(`[factory] held fan-outs: the wake queue could not be read: ${String(err)}`);
+      wakes = undefined;
+    }
+    if (!wakes) return { all, byBot };
+    const live = new Set<string>();
+    const holding = new Set(this.held.map((h) => h.id));
+    for (const w of wakes) {
+      if (w.reason.kind !== 'held_fanout') continue;
+      live.add(w.id);
+      // Booked, too old to run (the queue drops it unrun), or still a hold.
+      if (this.booked.has(w.id) || now - w.enqueuedAt > HELD_MAX_MS || holding.has(w.reason.heldId)) continue;
+      const n = w.reason.titles.length;
+      all += n;
+      byBot.set(w.botId, (byBot.get(w.botId) ?? 0) + n);
+    }
+    for (const id of this.booked) if (!live.has(id)) this.booked.delete(id);
+    return { all, byBot };
   }
 
   private wake(h: HeldFanout): boolean {
@@ -448,6 +497,16 @@ export function heldFanoutStarted(botId: string, args: HeldFanoutArgs, context: 
     instance?.started(botId, args, context);
   } catch {
     /* the held wake says to end the turn when the work is done */
+  }
+}
+
+/** A bot's turn reserved its fan-out's workers: the slot its held wake was
+ *  handed (if it is one) is counted by the booking from now on. Never throws. */
+export function heldFanoutReserved(wakeId: string): void {
+  try {
+    instance?.reserved(wakeId);
+  } catch {
+    /* counted until the wake ends */
   }
 }
 

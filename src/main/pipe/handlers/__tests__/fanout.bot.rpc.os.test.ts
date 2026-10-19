@@ -402,6 +402,42 @@ describe('task.fanout.start — bot origin', () => {
     }
   });
 
+  it('a held fan-out\'s wake that reserves its workers hands its slot to the booking; another wake\'s reserve does not', async () => {
+    const held = new HeldFanouts({ budget: () => ({ maxConcurrentWorkers: 2 }), openWorkers: () => ({ bot: 0, factory: 0 }), wakes: () => null });
+    const reserved = vi.spyOn(held, 'reserved');
+    setHeldFanouts(held);
+    const queue = new WakeQueue(wakeQueuePath(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-held-reserve-'))));
+    queue.load();
+    setWakeQueue(queue);
+    try {
+      const params = { titles: ['fix it'], prompt: 'fix', preset: 'repro' };
+      const r = rig('lead');
+      r.setDefaultBranchNote({ name: null, recorded: false });
+      // An owner's message: its reserve is no held wake's.
+      const human = queue.enqueue({ botId: BOT_ID, workspaceId: 'ws-bot', priority: 0, reason: { kind: 'human', text: 'go', source: 'desktop' } });
+      queue.start(human?.id ?? '');
+      r.setWake(human?.id ?? null);
+      expect(await r.call({ idempotencyKey: `wake:${human?.id}:1`, ...params }, botCtx('lead'))).toMatchObject({ ok: true });
+      await r.flush();
+      queue.finish(human?.id ?? '');
+      expect(reserved).not.toHaveBeenCalled();
+      // The held wake's turn reserves: its slot is the booking's now.
+      const wake = queue.enqueue({
+        botId: BOT_ID, workspaceId: 'ws-bot', priority: 1, threadId: 'general',
+        reason: { kind: 'held_fanout', heldId: 'held-r', heldAt: 1, titles: ['fix it'], args: params, fingerprint: heldFanoutFingerprint(params), tainted: false, handoffId: 'h-dispatch' },
+      });
+      queue.start(wake?.id ?? '');
+      r.setWake(wake?.id ?? null);
+      expect(await r.call({ idempotencyKey: `wake:${wake?.id}:1`, ...params }, botCtx('lead'))).toMatchObject({ ok: true });
+      await r.flush();
+      expect(reserved.mock.calls).toEqual([[wake?.id]]);
+    } finally {
+      setHeldFanouts(null);
+      setWakeQueue(null);
+      await queue.flush();
+    }
+  });
+
   it('only the internal workflow port stamps binding/base and retains the existing wake gates', async () => {
     const r = rig('maintainer', {}, { builtinPresets: true });
     const workflow = { id: 'wf-' + 'a'.repeat(24), step: 1 };

@@ -141,10 +141,10 @@ import { botThreadRefusal, resolveRoomPorts, runningWake } from '../../factory/r
 import { getHandoffRouter } from '../../factory/handoffRouter';
 import { emitBotHook } from '../../factory/botHooks';
 import { checkWorkerHours, recordWorkerStart, workerSlotsFull, type BotUsage, type WorkerSlotsFull } from '../../factory/budget';
-import { getHeldFanouts, heldFanoutStarted, heldWakeIsFor } from '../../factory/heldFanouts';
+import { getHeldFanouts, heldFanoutReserved, heldFanoutStarted, heldWakeIsFor } from '../../factory/heldFanouts';
 import { botFanoutPreset, botFanoutPresetList, botPresetCheckoutRefusal, composeBotWorkerPrompt } from '../../worktask/botFanoutPresets';
 import { getFactLog } from '../../factory/factLog';
-import { dropQueuedHeldFanoutWakes, getWakeQueue } from '../../factory/wakeQueue';
+import { currentWakeItem, dropQueuedHeldFanoutWakes, getWakeQueue } from '../../factory/wakeQueue';
 import { isWakeStoppedByOwner } from '../../factory/factoryStop';
 import { getAgentSlots, refreshSlotLiveness } from '../../factory/agentSlots';
 import { countOpenBotWorkers, openBotWorkers, verdictedTaskIds } from '../../factory/openBotWorkers';
@@ -1587,6 +1587,10 @@ export function registerFanOutRpc(
     const reservation = guards.reserve(key, parsed.titles.length, { ownerWorkspaceId: callerWorkspaceId, ...(bot ? { botId: bot.botId } : {}) });
     if (!reservation.ok) return deny('RESOURCE_EXHAUSTED', reservation.message);
     if (bot) botPort?.recordFanoutKey(key);
+    // A held fan-out's wake booked its workers: the slot it was handed is
+    // this booking's now (factory/heldFanouts.ts).
+    const bookingWake = bot ? currentWakeItem(bot.botId) : null;
+    if (bookingWake && bookingWake.id === botWakeId && bookingWake.reason.kind === 'held_fanout') heldFanoutReserved(botWakeId);
     // The request as a hold would name it (read here: params is not read
     // after the approval): a hold of it retires once a worker of it started.
     const heldArgs = bot && !workflow ? heldFanoutArgs(params) : null;
