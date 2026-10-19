@@ -86,6 +86,16 @@ describe('EmptyLeafFunnel — binding the created pty', () => {
     expect(leaf()?.surfaces.map((s) => s.ptyId)).toEqual(['pty-other']);
   });
 
+  it('adopts into the asking workspace after a switch away mid-create', async () => {
+    act(() => root.render(createElement(EmptyLeafFunnel)));
+    // Another workspace (already filled, so it asks for nothing) becomes active.
+    const other = createWorkspace('other');
+    act(() => useStore.setState({ workspaces: [...useStore.getState().workspaces, other], activeWorkspaceId: other.id }));
+    await act(async () => { settle[0]({ id: 'pty-a' }); });
+    expect(leaf()?.surfaces.map((s) => s.ptyId)).toEqual(['pty-a']);
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
   it('a refused create is not fired again by a re-run, only after Retry (#2398)', async () => {
     create.mockImplementationOnce(() => Promise.reject(new Error('[RESOURCE_EXHAUSTED] session cap reached')));
     act(() => root.render(createElement(EmptyLeafFunnel)));

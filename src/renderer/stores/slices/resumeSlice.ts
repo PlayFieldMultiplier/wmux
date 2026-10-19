@@ -170,7 +170,8 @@ export const createResumeSlice: StateCreator<
       if (!surfaceId || !ptyId) return;
       const surface = findSurfaceDraft(draft, surfaceId);
       const recovery = surface?.pendingRecovery;
-      if (!surface || !recovery) return;
+      // Only a replacement that actually landed consumes the descriptor.
+      if (!surface || !recovery || surface.ptyId !== ptyId) return;
       delete surface.pendingRecovery;
       completed = true;
 

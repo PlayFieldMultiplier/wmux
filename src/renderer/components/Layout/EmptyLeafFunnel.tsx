@@ -230,7 +230,7 @@ export function EmptyLeafFunnel() {
           const shellName = created.shell ? shellDisplayName(created.shell) : 'Terminal';
           // v2 RCA fix (axis A): the immediate persist now lives INSIDE addSurface
           // (surfaceSlice centralization) so every binding call site gets it.
-          addSurface(paneId, created.id, shellName, created.cwd || '');
+          addSurface(paneId, created.id, shellName, created.cwd || '', wsId);
           // Set initial CWD in workspace metadata from first pane
           if (created.cwd) {
             const currentMeta = useStore.getState().workspaces.find((w) => w.id === wsId)?.metadata;

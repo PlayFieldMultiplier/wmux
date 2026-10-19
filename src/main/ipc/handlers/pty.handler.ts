@@ -1475,11 +1475,10 @@ export function registerPTYHandlers(
 
     ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string) => {
       try {
-        // #2398 — includeSuspended: a cap-skipped native session lives only in
-        // the daemon's persisted state, and a list without it reported such a
-        // pane `session-dead`, so the renderer cleared its id and self-created
-        // a blank shell over it. Listed, it takes the promote branch below.
-        const sessions = await daemonClient.rpc('daemon.listSessions', { includeSuspended: true }) as Array<{
+        // #2398 — a cap-skipped session lives only in sessions.json, which
+        // includeSuspended parses on the daemon thread: only an id the live
+        // list lacks pays for it, and then takes the promote branch below.
+        let sessions = await daemonClient.rpc('daemon.listSessions', {}) as Array<{
           id: string;
           cmd: string;
           state: string;
@@ -1493,6 +1492,9 @@ export function registerPTYHandlers(
           wslTarget?: WslTarget;
           resumeBinding?: ResumeBinding;
         }>;
+        if (!sessions.some(s => s.id === id)) {
+          sessions = await daemonClient.rpc('daemon.listSessions', { includeSuspended: true }) as typeof sessions;
+        }
         let session = sessions.find(s => s.id === id);
         if (!session || session.state === 'dead') {
           // RCA A1 — permanent failure: the daemon authoritatively reports the

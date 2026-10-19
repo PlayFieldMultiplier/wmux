@@ -134,6 +134,12 @@ describe('resumeSlice', () => {
       const root = useStore.getState().workspaces[0].rootPane;
       return root.type === 'leaf' ? root.surfaces[0].pendingRecovery : undefined;
     };
+    // What Pane.onPtyCreated does: bind the replacement, then complete.
+    const land = (ptyId: string) => {
+      const paneId = useStore.getState().workspaces[0].rootPane.id;
+      useStore.getState().updateSurfacePtyId(paneId, 'surface-a', ptyId);
+      useStore.getState().completeDeadPaneRecovery('surface-a', ptyId);
+    };
 
     it('stages on the surface, and staging for a surface that is gone is a no-op', () => {
       useStore.getState().stageDeadPaneRecovery('surface-a', { spawnCwd: 'D:\\wmux' });
@@ -150,7 +156,7 @@ describe('resumeSlice', () => {
         resumeBinding,
       });
 
-      useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-new');
+      land('pty-new');
 
       expect(staged()).toBeUndefined();
       expect(useStore.getState().resumeHintByPtyId['pty-new']).toBe('claude');
@@ -161,7 +167,7 @@ describe('resumeSlice', () => {
       useStore.getState().stageDeadPaneRecovery('surface-a', {
         resumeBinding: binding('dead-conversation'),
       });
-      useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-new');
+      land('pty-new');
 
       useStore.getState().hydrateResume({});
       useStore.getState().hydrateResumeBindings({});
@@ -181,6 +187,7 @@ describe('resumeSlice', () => {
       useStore.setState({ paneGate: 'ready' });
       try {
         useStore.getState().stageDeadPaneRecovery('surface-a', { spawnCwd: 'D:/wmux' });
+        useStore.getState().updateSurfacePtyId(useStore.getState().workspaces[0].rootPane.id, 'surface-a', 'pty-new');
         saver.mockClear();
         useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-new');
         expect(saver).toHaveBeenCalledTimes(1);
@@ -192,9 +199,17 @@ describe('resumeSlice', () => {
       }
     });
 
+    it('keeps the staged recovery when the replacement did not land on the surface', () => {
+      useStore.getState().stageDeadPaneRecovery('surface-a', { spawnCwd: 'D:\\wmux', resumeAgent: 'claude' });
+      // The surface moved away, so the pane-keyed bind found nothing.
+      useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-disposed');
+      expect(staged()).toEqual({ spawnCwd: 'D:\\wmux', resumeAgent: 'claude' });
+      expect(useStore.getState().resumeHintByPtyId['pty-disposed']).toBeUndefined();
+    });
+
     it('consumes cwd-only recovery without inventing a resume offer', () => {
       useStore.getState().stageDeadPaneRecovery('surface-a', { spawnCwd: 'D:\\wmux' });
-      useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-new');
+      land('pty-new');
       expect(staged()).toBeUndefined();
       expect(useStore.getState().deadPaneRecoveryOfferByPtyId['pty-new']).toBeUndefined();
       expect(useStore.getState().resumeHintByPtyId['pty-new']).toBeUndefined();
@@ -205,14 +220,14 @@ describe('resumeSlice', () => {
         spawnCwd: 'D:\\first',
         resumeBinding: binding('dead-conversation'),
       });
-      useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-first');
+      land('pty-first');
 
       useStore.getState().stageDeadPaneRecovery(
         'surface-a',
         { spawnCwd: 'D:\\second' },
         'pty-first',
       );
-      useStore.getState().completeDeadPaneRecovery('surface-a', 'pty-second');
+      land('pty-second');
 
       expect(useStore.getState().deadPaneRecoveryOfferByPtyId['pty-first']).toBeUndefined();
       expect(useStore.getState().resumeHintByPtyId['pty-first']).toBeUndefined();

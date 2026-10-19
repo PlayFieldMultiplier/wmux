@@ -103,12 +103,15 @@ describe('PTY_RECONNECT registers session:data before attachSession (source-leve
  * state. pty:reconnect listed sessions without includeSuspended, so such a
  * pane read as absent → `session-dead` → the renderer cleared its id and
  * self-created a blank shell over it (its scrollback and binding lost). Listed
- * with includeSuspended it takes the promote branch instead. Source lock: the
- * handler is a closure inside registerPTYHandlers.
+ * with includeSuspended it takes the promote branch instead. includeSuspended
+ * makes the daemon read and parse sessions.json on its thread, so it is asked
+ * only for an id the live list lacks. Source lock: the handler is a closure
+ * inside registerPTYHandlers.
  */
 describe('PTY_RECONNECT promotes a cap-skipped session instead of declaring it dead (#2398)', () => {
-  it('lists suspended sessions too', () => {
-    expect(RECONNECT).toMatch(/const sessions = await daemonClient\.rpc\('daemon\.listSessions', \{ includeSuspended: true \}\)/);
+  it('lists live sessions first, and suspended ones only for an id the live list lacks', () => {
+    expect(RECONNECT).toMatch(/let sessions = await daemonClient\.rpc\('daemon\.listSessions', \{\}\)/);
+    expect(RECONNECT).toMatch(/if \(!sessions\.some\(s => s\.id === id\)\) \{\s*sessions = await daemonClient\.rpc\('daemon\.listSessions', \{ includeSuspended: true \}\)/);
   });
 
   it('a suspended entry goes down the promote branch, before any attach', () => {
