@@ -1,4 +1,10 @@
 export const en = {
+  'ipc.error.daemonDisconnected': "The terminal service is not responding. Retrying…",
+  'ipc.error.validation': "The request is invalid.",
+  'ipc.error.notFound': "The item could not be found.",
+  'ipc.error.permissionDenied': "Permission was denied.",
+  'ipc.error.resourceExhausted': "The terminal session limit has been reached. Close some panes or restart wmux, then try again.",
+  'ipc.error.unknown': "An unknown error occurred.",
   'settings.terminalEngine': "Terminal engine",
   'settings.terminalEngineDesc': "PTY and output buffer for ordinary and team sessions. Changes apply after the terminal host restarts.",
   'settings.terminalEngineRust': "Rust (experimental)",

@@ -4,7 +4,7 @@
  * Normalises arbitrary IPC calls (e.g. `window.electronAPI.pty.create(...)`)
  * into a discriminated `IpcResult<T>`. On failure it reads the `code` that
  * `wrapHandler` (T3a/T3b) attached on the main-side error, maps it to a
- * localized-ish user message, and optionally pushes a UI toast.
+ * localized user message, and optionally pushes a UI toast.
  *
  * Design notes:
  *   - Returns `{ invoke }` rather than auto-invoking so call-sites retain
@@ -15,6 +15,8 @@
  */
 import { useMemo } from 'react';
 import { useStore } from '../stores';
+import { t } from '../i18n';
+import type { TranslationKey } from '../i18n/locales/en';
 
 export type IpcErrorCode =
   | 'DAEMON_DISCONNECTED'
@@ -74,14 +76,14 @@ export interface UseIpcOptions {
   silent?: IpcErrorCode[];
 }
 
-/** Default, user-facing messages (Korean, to match the rest of the UI). */
-const DEFAULT_MESSAGES: Record<IpcErrorCode, string> = {
-  DAEMON_DISCONNECTED: 'daemon이 응답하지 않습니다. 재시도 중…',
-  VALIDATION_ERROR: '요청이 유효하지 않습니다.',
-  NOT_FOUND: '항목을 찾을 수 없습니다.',
-  PERMISSION_DENIED: '권한이 거부되었습니다.',
-  RESOURCE_EXHAUSTED: '터미널 세션 한도에 도달했습니다. 일부 pane을 닫거나 wmux를 재시작한 뒤 다시 시도해주세요.',
-  UNKNOWN: '알 수 없는 오류가 발생했습니다.',
+/** Resolve at failure time so an existing invoke follows locale changes. */
+const DEFAULT_MESSAGE_KEYS: Record<IpcErrorCode, TranslationKey> = {
+  DAEMON_DISCONNECTED: 'ipc.error.daemonDisconnected',
+  VALIDATION_ERROR: 'ipc.error.validation',
+  NOT_FOUND: 'ipc.error.notFound',
+  PERMISSION_DENIED: 'ipc.error.permissionDenied',
+  RESOURCE_EXHAUSTED: 'ipc.error.resourceExhausted',
+  UNKNOWN: 'ipc.error.unknown',
 };
 
 /** Map an error code to a toast level. */
@@ -172,7 +174,7 @@ export function createInvoke(
       return { ok: true, data };
     } catch (err: unknown) {
       const code = classifyCode(err);
-      const message = overrides[code] ?? DEFAULT_MESSAGES[code];
+      const message = overrides[code] ?? t(DEFAULT_MESSAGE_KEYS[code]);
       const error: IpcErrorShape = {
         code,
         message,
@@ -202,6 +204,5 @@ export function useIpc(opts?: UseIpcOptions): UseIpcReturn {
   return useMemo<UseIpcReturn>(() => {
     const invoke = createInvoke(opts, surfaceToast);
     return { invoke };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toastOnError, silentKey, messagesKey]);
 }

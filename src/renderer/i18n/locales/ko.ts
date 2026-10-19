@@ -1,4 +1,10 @@
 export const ko = {
+  'ipc.error.daemonDisconnected': "daemon이 응답하지 않습니다. 재시도 중…",
+  'ipc.error.validation': "요청이 유효하지 않습니다.",
+  'ipc.error.notFound': "항목을 찾을 수 없습니다.",
+  'ipc.error.permissionDenied': "권한이 거부되었습니다.",
+  'ipc.error.resourceExhausted': "터미널 세션 한도에 도달했습니다. 일부 pane을 닫거나 wmux를 재시작한 뒤 다시 시도해주세요.",
+  'ipc.error.unknown': "알 수 없는 오류가 발생했습니다.",
   'settings.terminalEngine': "터미널 엔진",
   'settings.terminalEngineDesc': "일반·팀 세션의 PTY와 출력 버퍼 엔진입니다. 터미널 호스트를 재시작하면 적용됩니다.",
   'settings.terminalEngineRust': "Rust (실험적)",

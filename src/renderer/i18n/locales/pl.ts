@@ -1,4 +1,10 @@
 export const pl = {
+  'ipc.error.daemonDisconnected': "Usługa terminala nie odpowiada. Ponawianie…",
+  'ipc.error.validation': "Żądanie jest nieprawidłowe.",
+  'ipc.error.notFound': "Nie znaleziono elementu.",
+  'ipc.error.permissionDenied': "Odmowa dostępu.",
+  'ipc.error.resourceExhausted': "Osiągnięto limit sesji terminala. Zamknij część paneli lub uruchom ponownie wmux, a następnie spróbuj ponownie.",
+  'ipc.error.unknown': "Wystąpił nieznany błąd.",
   'settings.terminalEngine': "Silnik terminala",
   'settings.terminalEngineDesc': "PTY i bufor wyjścia dla sesji zwykłych i zespołowych. Zmiany obowiązują po ponownym uruchomieniu procesu obsługującego terminal.",
   'settings.terminalEngineRust': "Rust (eksperymentalny)",
