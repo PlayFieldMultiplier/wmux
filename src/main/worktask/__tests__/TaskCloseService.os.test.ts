@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { TaskCloseService } from '../TaskCloseService';
 import type { CloseDaemonPort } from '../TaskCloseService';
 import { TaskWorktreeManager } from '../TaskWorktreeManager';
+import { PendingWorktreeRemovals } from '../pendingWorktreeRemovals';
 
 let repoRoot: string;
 let wtBase: string;
@@ -266,7 +267,7 @@ describe('close-only with a leftover folder (#2388)', () => {
     const svc = new TaskCloseService({ daemon: port, worktrees, stopPanesIn: async () => ['p-1'], panesStopped });
     const res = await svc.closeTask({ taskId: 'wtask-8', verifiedWorkspaceId: 'ws-owner', leftoverPath: '/wt/left' });
     expect(res).toMatchObject({ ok: true, unmaterialized: true });
-    expect(finishPendingRemoval).toHaveBeenCalledWith('/wt/left', expect.any(Function));
+    expect(finishPendingRemoval).toHaveBeenCalledWith('/wt/left', expect.any(Function), { keepWhenRepoGone: true });
     expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
     expect(panesStopped).toHaveBeenCalledWith('wtask-8', ['p-1']);
   });
@@ -286,5 +287,66 @@ describe('close-only with a leftover folder (#2388)', () => {
     const svc = new TaskCloseService({ daemon: port, worktrees });
     expect((await svc.closeTask({ taskId: 'wtask-10', verifiedWorkspaceId: 'ws-owner', leftoverPath: '/wt/left' })).ok).toBe(true);
     expect(calls).toHaveLength(1);
+  });
+
+  // Its repository moved or deleted, the folder can never pass git's checks
+  // again: without a way out, every close of the task refused, forever.
+  it('a half-removed folder whose repository is gone: the close keeps the folder, names it, and closes', async () => {
+    const root = path.join(wtBase, 'root');
+    const left = path.join(root, 'task-gone');
+    fs.mkdirSync(left, { recursive: true });
+    fs.writeFileSync(path.join(left, 'held.txt'), 'x\n');
+    const store = new PendingWorktreeRemovals(path.join(wtBase, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: left, repoRoot: path.join(wtBase, 'moved-away'), repoHash: 'closehash', at: 1 });
+    const stopPanesIn = vi.fn(async () => []);
+    const { port, calls } = makeDaemon();
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ worktreesRoot: root, pendingRemovals: store }), stopPanesIn });
+    const res = await svc.closeTask({ taskId: 'wtask-k4', verifiedWorkspaceId: 'ws-owner', leftoverPath: left });
+    expect(res).toMatchObject({ ok: true, unmaterialized: true, keptFolder: left });
+    expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
+    // Nothing is deleted: the folder is kept as it is. Its panes end with
+    // the task, before the close.
+    expect(stopPanesIn).toHaveBeenCalledWith(left);
+    expect(fs.readFileSync(path.join(left, 'held.txt'), 'utf8')).toBe('x\n');
+    expect(store.all()).toEqual([]);
+  });
+
+  // A task never closed whose repository was deleted since: no removal is
+  // recorded, the folder stays, and its worker kept running after the close.
+  it('a folder with no recorded removal that stays: its panes are stopped first, and the result names it', async () => {
+    const left = path.join(wtBase, 'root', 'task-never-closed');
+    fs.mkdirSync(left, { recursive: true });
+    const order: string[] = [];
+    const { port, calls } = makeDaemon();
+    const rpc = port.rpc;
+    port.rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      order.push(method);
+      return rpc(method, params);
+    }) as CloseDaemonPort['rpc'];
+    // No removal recorded: the folder is not looked at there.
+    const worktrees = { finishPendingRemoval: vi.fn(async () => null) } as unknown as TaskWorktreeManager;
+    const panesStopped = vi.fn();
+    const stopPanesIn = vi.fn(async (dir: string) => {
+      order.push(`stop ${dir}`);
+      return ['p-claude'];
+    });
+    const svc = new TaskCloseService({ daemon: port, worktrees, stopPanesIn, panesStopped });
+    const res = await svc.closeTask({ taskId: 'wtask-k5', verifiedWorkspaceId: 'ws-owner', leftoverPath: left });
+    expect(res).toMatchObject({ ok: true, unmaterialized: true, keptFolder: left });
+    expect(order).toEqual([`stop ${left}`, 'task.mission.close']);
+    expect(panesStopped).toHaveBeenCalledWith('wtask-k5', ['p-claude']);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('a folder that stays whose panes could not be stopped keeps the task open', async () => {
+    const left = path.join(wtBase, 'root', 'task-held');
+    fs.mkdirSync(left, { recursive: true });
+    const { port, calls } = makeDaemon();
+    const worktrees = { finishPendingRemoval: vi.fn(async () => null) } as unknown as TaskWorktreeManager;
+    const svc = new TaskCloseService({ daemon: port, worktrees, stopPanesIn: async () => { throw new Error("this pane's process identity isn't known yet"); } });
+    const res = await svc.closeTask({ taskId: 'wtask-k6', verifiedWorkspaceId: 'ws-owner', leftoverPath: left });
+    expect(res).toMatchObject({ ok: false, reason: 'error', preservedWorktree: left });
+    if (!res.ok) expect(res.error).toMatch(/task stays open and the folder is kept.*identity isn't known yet/);
+    expect(calls).toHaveLength(0);
   });
 });

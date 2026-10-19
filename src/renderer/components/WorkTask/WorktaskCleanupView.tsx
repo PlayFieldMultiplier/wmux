@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useStore } from '../../stores';
+import { keptFolderMessage } from './closeKeepFolder';
 import { useT } from '../../hooks/useT';
 import { findLeafPanes, activePaneTerminalPty } from '../../hooks/a2aAddressing';
 import { formatBracketedPastePayload } from '../../utils/ptyMessageDelivery';
@@ -200,7 +201,7 @@ export default function WorktaskCleanupView() {
       try {
         const res = await api.close(taskId, closeAs);
         if (res.ok) {
-          pushToast({ level: 'info', message: t('worktask.cleanup.closed') });
+          pushToast({ level: 'info', message: keptFolderMessage(res, t) ?? t('worktask.cleanup.closed') });
           setCloseFailed((prev) => {
             const { [taskId]: _done, ...rest } = prev;
             return rest;

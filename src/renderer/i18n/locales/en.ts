@@ -4199,6 +4199,7 @@ export const en = {
   'worktask.cleanup.preserved': 'Uncommitted artifacts preserved — commit/PR from the diff or discard, then close again.',
   'worktask.cleanup.unpushed': 'You have {count} unpushed commit(s) — PR/push, then close again.',
   'worktask.cleanup.closeFailed': 'close failed: {error}',
+  'worktask.keepFolder.done': 'Task closed. Its folder was kept at {path}.',
   // C-4 — what to do about a close that failed on a worktree holding work.
   'worktask.cleanup.commitAndClose': 'Commit & close',
   'worktask.cleanup.openWorktree': 'Open worktree',

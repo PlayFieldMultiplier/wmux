@@ -6,6 +6,7 @@
 // workspace jump, and the task close (which refuses dirty or unpushed work).
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useStore } from '../../stores';
+import { keptFolderMessage } from '../WorkTask/closeKeepFolder';
 import { useT } from '../../hooks/useT';
 import { cachedReviewSummary, loadReviewSummary, type ReviewChangeSummary } from './reviewSummary';
 import type { PrStatus } from '../../../shared/types';
@@ -131,7 +132,7 @@ export async function closeReviewTask(workspaceId: string, t: Translate): Promis
       const ws = now.workspaces.find((w) => w.id === workspaceId);
       if (ws) disposeWorkspacePtys(ws);
       now.removeWorkspace(workspaceId);
-      push({ level: 'info', message: t('fleet.review.closed', { title: name }) });
+      push({ level: 'info', message: keptFolderMessage(res, t) ?? t('fleet.review.closed', { title: name }) });
       return true;
     }
     const reason = res.reason === 'dirty' ? t('worktask.cleanup.preserved')

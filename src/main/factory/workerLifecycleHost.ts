@@ -22,7 +22,9 @@ import { getBotRuntime } from './BotRuntime';
 import { getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
-import { taskFolderFromMissions } from './verifyPreset';
+import { readTaskFolder, taskFolderFromMissions } from './verifyPreset';
+import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive } from '../worktask/stopSessionsInDir';
+import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { releaseHeldFanouts } from './heldFanouts';
 import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
@@ -104,7 +106,9 @@ const TURN_SEED_READ_TIMEOUT_MS = 5_000;
 /** A workspace tree push looks for freed task folders at most this often. */
 const FOLDER_KICK_MIN_MS = 10_000;
 /** The task folder cleanup's worktree manager (its per-repository lock
- *  orders its own removals and restores). */
+ *  orders its own removals and restores). No pending-removal store (#2388):
+ *  a bot's folder is recorded in the cleanup's own store before it goes, and
+ *  a half-removed one is finished from that record (taskFolderCleanup). */
 const folderWorktrees = new TaskWorktreeManager();
 
 /** The renderer's workspace.close answers this fast or not at all. */
@@ -237,6 +241,28 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       (ws) => ledger.findByTaskWorkspace(ws)?.id ?? null,
       (ws) => getFanOutGuards().lineageFor([ws])[ws] ?? null,
     );
+    // #2388: an ended task's panes go with their whole process trees before
+    // the renderer closes them (taskTreeStop.ts).
+    const stopTrees = (taskId: string, ptyIds: readonly string[], stillDue: () => boolean): Promise<void> => stopTaskPaneTrees({
+      // A row the ledger pruned names no folder; a mission list that could
+      // not be read is retried by the caller.
+      folderOf: async (id) => {
+        const entry = ledger.get(id);
+        if (!entry) return null;
+        const read = await readTaskFolder((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry);
+        if (!read) throw new Error(`the folder of task ${id} could not be read`);
+        return read.folder;
+      },
+      listSessions,
+      destroyTree: async (id) => {
+        const c = daemon();
+        if (!c) throw new Error('the daemon is not connected');
+        return destroyedTreeOf(await c.rpc('daemon.destroySession' as never, { id, killTree: true }, { timeoutMs: TREE_DESTROY_TIMEOUT_MS }));
+      },
+      isAlive: isPidAlive,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (message) => console.warn(message),
+    }, taskId, ptyIds, stillDue);
     const closeWorkspace = async (workspaceId: string): Promise<boolean> => {
       const res = await sendToRenderer(() => deps.getMainWindow?.() ?? null, 'workspace.close', { id: workspaceId }, { timeoutMs: CLOSE_TIMEOUT_MS });
       return !!res && typeof res === 'object' && (res as { ok?: unknown }).ok === true;
@@ -256,6 +282,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       taskOpen,
       isTaskWorkspace,
       closeWorkspace,
+      stopTrees,
       changed,
     });
     const reconcile = (): void => {
@@ -614,6 +641,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       destroySession: async (ptyId) => {
         await rpc('daemon.destroySession', { id: ptyId });
       },
+      stopTrees,
       closePane: async (paneId) => {
         const res = await sendToRenderer(() => deps.getMainWindow?.() ?? null, 'pane.close', { id: paneId }, { timeoutMs: CLOSE_TIMEOUT_MS });
         return !!res && typeof res === 'object' && (res as { ok?: unknown }).ok === true;

@@ -2142,6 +2142,13 @@ export interface WorkerClearPorts {
   /** Close one workspace through the renderer's workspace.close (its guards
    *  apply); true only when it closed. */
   closeWorkspace: (workspaceId: string) => Promise<boolean>;
+  /** #2388: end the task's panes among `ptyIds` with their whole process
+   *  trees, before the close (whose own pane teardown ends only the pane).
+   *  `stillDue` is asked again right before anything is stopped (the owner
+   *  may have opened the workspace meanwhile). Throws when one could not be
+   *  stopped, or one is busy again: the workspace then stays, and is looked
+   *  at again later. Absent: the close alone ends them. */
+  stopTrees?: (taskId: string, ptyIds: readonly string[], stillDue: () => boolean) => Promise<void>;
   changed?: () => void;
   now?: () => number;
   log?: (msg: string) => void;
@@ -2246,6 +2253,19 @@ export function createWorkerClear(ports: WorkerClearPorts): WorkerClear {
         if (reopenedNow) continue;
         let ok = false;
         try {
+          const ptys = [...(ports.workspacePtys(ws) ?? [])];
+          await ports.stopTrees?.(cur.taskId, ptys, () => {
+            const v = ports.viewedWorkspace();
+            return v !== null && v !== ws && !(ports.taskOpen?.(cur.taskId) ?? false);
+          });
+          // A pane opened in it while the trees were stopped (a split, a new
+          // tab) was not among them, and the close would end it unchecked:
+          // the next pass looks at the workspace as it is now.
+          const nowPtys = ports.workspacePtys(ws) ?? [];
+          if (nowPtys.length !== ptys.length || nowPtys.some((id) => !ptys.includes(id))) {
+            log(`[factory] clear: ${ws} (task ${cur.taskId}) changed while its panes were stopped; looked at again on the next pass`);
+            continue;
+          }
           ok = await ports.closeWorkspace(ws);
         } catch (err) {
           log(`[factory] clear: ${ws} (task ${cur.taskId}) was not closed: ${String(err)}`);

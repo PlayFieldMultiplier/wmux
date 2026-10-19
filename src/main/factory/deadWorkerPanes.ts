@@ -143,6 +143,13 @@ export interface DeadPaneSweepPorts {
   /** daemon.destroySession: a task's own dead session a close left behind
    *  with no pane any more. */
   destroySession: (ptyId: string) => Promise<void>;
+  /** #2388: end the task's panes among `ptyIds` with their whole process
+   *  trees, before each close or destroy above (which end only the pane).
+   *  `stillDue` is asked again right before anything is stopped. Throws
+   *  when one could not be stopped, or one is busy again: nothing is closed
+   *  then, and it is looked at again later. Absent: the close alone ends
+   *  them. */
+  stopTrees?: (taskId: string, ptyIds: readonly string[], stillDue: () => boolean) => Promise<void>;
   /** How long a close is waited for to show (its sessions gone from the
    *  daemon, its panes from the tree) before it counts as not done. */
   confirmMs?: number;
@@ -243,6 +250,7 @@ export function createDeadPaneSweep(ports: DeadPaneSweepPorts): DeadPaneSweep {
         continue;
       }
       try {
+        await ports.stopTrees?.(p.taskId, [id], () => !safe(() => ports.inAnyWorkspace(id), true));
         await ports.destroySession(id);
       } catch {
         /* read again below */
@@ -268,6 +276,11 @@ export function createDeadPaneSweep(ports: DeadPaneSweepPorts): DeadPaneSweep {
     const recNow = ports.store.get(row.id);
     return (recNow?.state ?? null) === (rec?.state ?? null) && (recNow?.at ?? null) === (rec?.at ?? null);
   };
+
+  /** The close of an ended task's panes in `ws` is still due: the task
+   *  unchanged, and the owner not viewing it (known). */
+  const stillDue = (row: LedgerEntry, rec: ReclaimedWorker | null, ws: string): boolean => unchanged(row, rec)
+    && safe(() => ports.viewedWorkspace(), null) !== null && !safe(() => ports.viewed(ws), true);
 
   const closeEnded = async (row: LedgerEntry, rec: ReclaimedWorker | null, ws: string, ptys: readonly string[], byId: Map<string, DeadPaneSession>): Promise<number> => {
     const shellIn = (m: Map<string, DeadPaneSession>, id: string): boolean => {
@@ -318,6 +331,7 @@ export function createDeadPaneSweep(ports: DeadPaneSweepPorts): DeadPaneSweep {
       if (nowPtys.every(dead) && layout.length > 0 && layout.every(paneDead)) {
         let ok = false;
         try {
+          await ports.stopTrees?.(row.id, nowPtys, () => stillDue(row, rec, ws));
           ok = await ports.closeWorkspace(ws);
         } catch (err) {
           log(`[factory] dead panes: ${ws} (task ${row.id}) was not closed: ${String(err)}`);
@@ -345,6 +359,7 @@ export function createDeadPaneSweep(ports: DeadPaneSweepPorts): DeadPaneSweep {
         const ids = [...p.surfacePtyIds];
         let ok = false;
         try {
+          await ports.stopTrees?.(row.id, ids, () => stillDue(row, rec, ws));
           ok = await ports.closePane(p.id);
         } catch {
           ok = false;

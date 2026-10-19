@@ -83,8 +83,11 @@ export const CAPTURE_ROUNDS = 8;
 export interface CaptureOptions {
   /** Whether the root found at the pid is the process the caller means:
    *  given the root's creation time (Windows: FILETIME; POSIX: `ps -o
-   *  lstart=`), false when it is another one (the pid was reused). Null or
-   *  absent: not known, taken as the caller's. */
+   *  lstart=`), false when it is another one (the pid was reused). Absent:
+   *  taken as the caller's. Null (nothing recorded to compare with): the tree
+   *  is not walked, since nothing confirms the pid leads to the caller's
+   *  process; the kill reports it unverified and leaves the root to its
+   *  owner (the PTY destroy ends a pane's shell). */
   rootIsOurs?: (startTime: string) => boolean | null;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -100,12 +103,35 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => set
  * (unknown) when nothing was recorded or the record is in neither format.
  */
 export function matchesRecordedStart(recorded: string | undefined, current: string): boolean | null {
-  if (!recorded) return null;
-  if (process.platform === 'win32') {
-    if (!/^\d+$/.test(recorded) && dmtfToUtcMicros(recorded) === null) return null;
-    return sameProcessStartTime(recorded, current);
-  }
+  if (!recordedStartUsable(recorded)) return null;
+  if (process.platform === 'win32') return sameProcessStartTime(recorded, current);
   return recorded.trim().replace(/\s+/g, ' ') === current.trim().replace(/\s+/g, ' ');
+}
+
+/** Whether a recorded start time can be compared at all (matchesRecordedStart). */
+function recordedStartUsable(recorded: string | undefined, platform: NodeJS.Platform = process.platform): recorded is string {
+  if (!recorded) return false;
+  return platform !== 'win32' || /^\d+$/.test(recorded) || dmtfToUtcMicros(recorded) !== null;
+}
+
+/** Why a pane's tree kill is refused now. */
+export const UNKNOWN_ROOT_REFUSAL = "this pane's process identity isn't known yet, so it was left running and its folder is kept; Close and keep folder closes the task without removing the folder";
+
+/**
+ * Why a running pane's tree may not be killed now (#2388), or null: no start
+ * time of its shell is recorded (read right after the spawn, a few attempts:
+ * DaemonSessionManager.recordSpawnStartTime), so nothing confirms its pid
+ * still leads to the shell and the tree cannot be taken. Destroying the
+ * session then would end the pane but orphan its tree, unkilled, and a later
+ * close would find nothing left to stop. The session is left as it is
+ * instead, and the caller keeps the folder.
+ */
+export function treeKillRefusal(
+  meta: { pid: number; state: string; pidCreatedAtFt?: string; pidStartTime?: string },
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if ((meta.state !== 'attached' && meta.state !== 'detached') || !(meta.pid > 0)) return null;
+  return recordedStartUsable(recordedStartOf(meta, platform), platform) ? null : UNKNOWN_ROOT_REFUSAL;
 }
 
 /**
@@ -210,7 +236,14 @@ export function survivorsStillRunningWin32(survivors: readonly TreeKillSurvivor[
           if (seen.has(pid)) continue;
           seen.add(pid);
           const child = api.open(pid);
-          // One that is gone or cannot be identified is not followed.
+          // One that is gone is not followed. One still running that cannot
+          // be opened (another user's, an elevated one) cannot be told apart
+          // from what the survivor started: the survivor stays in the record,
+          // so a later check looks again rather than clearing it.
+          if ('failure' in child) {
+            if (!out.includes(s)) out.push(s);
+            continue;
+          }
           if (!('handle' in child)) continue;
           try {
             const ours = child.createdAt >= item.created && (item.until === null || child.createdAt < item.until);
@@ -267,6 +300,8 @@ function failedCapture(rootPid: number, reason: string): CapturedTree {
   };
 }
 
+const UNCONFIRMED_ROOT = "the pane's shell has no recorded start time to confirm its pid, so its tree was not taken";
+
 // ─── Windows ────────────────────────────────────────────────────────────────
 
 interface WinTracked {
@@ -282,10 +317,10 @@ export function captureTreeWin32(rootPid: number, api: ProcessHandleApi, opts: C
   const root = api.open(rootPid);
   if ('gone' in root) return null;
   if ('failure' in root) return failedCapture(rootPid, `the root could not be opened: ${root.failure}`);
-  if (opts.rootIsOurs?.(root.createdAt.toString()) === false) {
-    api.close(root.handle);
-    return null;
-  }
+  const ours = opts.rootIsOurs?.(root.createdAt.toString());
+  if (ours === false || ours === null) api.close(root.handle);
+  if (ours === false) return null;
+  if (ours === null) return failedCapture(rootPid, UNCONFIRMED_ROOT);
   const tracked = new Map<number, WinTracked>([[rootPid, { pid: rootPid, ...root }]]);
   /** Processes whose ppid names one of ours but that could not be identified. */
   const unidentified = new Map<number, string>();
@@ -517,12 +552,17 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   }
   const rootRow = rows.find((r) => r.pid === rootPid);
   if (!rootRow || rootRow.stat.startsWith('Z')) return null;
-  if (opts.rootIsOurs?.(rootRow.start) === false) return null;
+  const ours = opts.rootIsOurs?.(rootRow.start);
+  if (ours === false) return null;
+  if (ours === null) return failedCapture(rootPid, UNCONFIRMED_ROOT);
   /** pid → start time, in discovery order (parents before children). */
   const targets = new Map<number, string>();
   let scanError: string | null = null;
   let complete = false;
   const unfrozen: number[] = [];
+  /** Found in the tree, but gone or another process's by the stop: what it
+   *  started meanwhile went to init, where no scan leads. */
+  const lost: number[] = [];
   for (let round = 0; round < CAPTURE_ROUNDS; round++) {
     if (round > 0) {
       try {
@@ -533,6 +573,13 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       }
     }
     const byPid = new Map(rows.map((r) => [r.pid, r]));
+    // The root confirmed above, or nothing: once its pid holds another
+    // process, what the pid leads to is not ours (the root may not be among
+    // the captured yet, when it changed hands before its stop).
+    if (byPid.get(rootPid)?.start !== rootRow.start) {
+      scanError = 'the root ended or was replaced before the tree was taken';
+      break;
+    }
     // Parent links lead to our processes only through the ones captured: a
     // frozen one someone else killed hands its children to init, and its pid
     // can go to another process whose children are not ours.
@@ -541,19 +588,59 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
       scanError = `process(es) ${replaced.join(', ')} of the tree ended or were replaced while frozen`;
       break;
     }
-    let added = 0;
-    for (const pid of collectDescendants(rows.map((r) => [r.pid, r.ppid] as const), rootPid)) {
-      if (targets.has(pid)) continue;
-      const row = byPid.get(pid);
-      if (!row) continue;
-      targets.set(pid, row.start);
+    const found = collectDescendants(rows.map((r) => [r.pid, r.ppid] as const), rootPid)
+      .filter((pid) => !targets.has(pid) && byPid.has(pid));
+    if (found.length === 0) {
+      complete = true;
+      break;
+    }
+    // Read again right before the stop: one that exited since, or whose pid
+    // went to another process, is not stopped, and the tree is not known
+    // whole (a child it forked before it went is under no captured pid).
+    let fresh: Map<number, PosixProcRow>;
+    try {
+      fresh = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
+    } catch (err) {
+      scanError = err instanceof Error ? err.message : String(err);
+      break;
+    }
+    const stopped: number[] = [];
+    for (const pid of found) {
+      const start = (byPid.get(pid) as PosixProcRow).start;
+      if (fresh.get(pid)?.start !== start) {
+        lost.push(pid);
+        continue;
+      }
+      targets.set(pid, start);
       // One that cannot be frozen (another user's, a setuid program) can
       // still fork and exit, leaving a child the tree no longer leads to.
-      if (!send(pid, 'SIGSTOP')) unfrozen.push(pid);
-      added++;
+      if (send(pid, 'SIGSTOP')) stopped.push(pid);
+      else unfrozen.push(pid);
     }
-    if (added === 0) {
-      complete = true;
+    if (stopped.length === 0) continue;
+    // Read once more after the stops. A pid still held by the process read
+    // before its stop was stopped as that process (a pid cannot change hands
+    // and come back). One that changed hands is not ours, and nothing shows
+    // whether it took the stop (it may be a job stopped on its own): it is
+    // never signalled again. Only a process whose identity is unchanged
+    // since its stop is ever resumed or killed (release, kill).
+    let after: Map<number, PosixProcRow>;
+    try {
+      after = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
+    } catch (err) {
+      scanError = err instanceof Error ? err.message : String(err);
+      break;
+    }
+    const changed: number[] = [];
+    for (const pid of stopped) {
+      if (after.get(pid)?.start === targets.get(pid)) continue;
+      targets.delete(pid);
+      changed.push(pid);
+    }
+    // What such a process forked before it went is under no captured pid,
+    // and its pid now leads to another process's children.
+    if (changed.length > 0) {
+      scanError = `process(es) ${changed.join(', ')} of the tree ended or changed hands around their stop`;
       break;
     }
   }
@@ -561,18 +648,20 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
   // forked before it was frozen, into a process group the kill misses.
   if (!complete && scanError === null) scanError = `the tree was still growing after ${CAPTURE_ROUNDS} scans`;
   if (unfrozen.length > 0 && scanError === null) scanError = `process(es) ${unfrozen.join(', ')} could not be frozen`;
+  if (lost.length > 0 && scanError === null) scanError = `process(es) ${lost.join(', ')} of the tree ended or changed hands before they could be frozen`;
   let released = false;
   /** The captured pids still held by the processes captured (their start
    *  time unchanged), in capture order. A frozen process cannot exit, but
    *  another process can kill it and its pid go to an unrelated one; that
-   *  one is never signalled. When the table cannot be read, all of them:
-   *  frozen, they keep their pids. */
+   *  one is never killed. When the table cannot be read, the frozen ones:
+   *  they keep their pids. One that could not be frozen may have exited and
+   *  its pid gone to another process, so it is left out. */
   const stillCaptured = async (): Promise<number[]> => {
     try {
       const byPid = new Map((await deps.listProcesses()).map((r) => [r.pid, r]));
       return [...targets].filter(([pid, start]) => byPid.get(pid)?.start === start).map(([pid]) => pid);
     } catch {
-      return [...targets.keys()];
+      return [...targets.keys()].filter((pid) => !unfrozen.includes(pid));
     }
   };
   return {
@@ -581,6 +670,9 @@ export async function captureTreePosix(rootPid: number, deps: PosixTreeDeps, opt
     release: () => {
       if (released) return;
       released = true;
+      // What this capture stopped runs again: each pid still held by the
+      // process it stopped. One whose pid went to another process since is
+      // not signalled (that one never took this stop).
       void stillCaptured().then((pids) => {
         for (const pid of pids) send(pid, 'SIGCONT');
       });

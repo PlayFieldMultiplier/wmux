@@ -221,6 +221,13 @@ export async function taskMissionFromMissions(rpc: Rpc | null, entry: LedgerEntr
 /** The folder a task's worker runs in: its worktree, or the output folder of
  *  a task without one (a research task's scratch folder), or null. */
 export async function taskFolderFromMissions(rpc: Rpc | null, entry: LedgerEntry): Promise<string | null> {
+  return (await readTaskFolder(rpc, entry))?.folder ?? null;
+}
+
+/** taskFolderFromMissions, telling a read that failed (null: the daemon
+ *  could not be asked, or did not answer with the list) from a task that
+ *  records no folder or is not listed (`folder: null`). */
+export async function readTaskFolder(rpc: Rpc | null, entry: LedgerEntry): Promise<{ folder: string | null } | null> {
   if (!rpc) return null;
   let reply: unknown;
   try {
@@ -232,10 +239,10 @@ export async function taskFolderFromMissions(rpc: Rpc | null, entry: LedgerEntry
   if (!tasks || tasks.ok !== true || !Array.isArray(tasks.tasks)) return null;
   for (const t of tasks.tasks as Array<Record<string, unknown>>) {
     if (!t || t.id !== entry.id) continue;
-    if (typeof t.worktreePath === 'string' && t.worktreePath) return t.worktreePath;
-    if (typeof t.outputDir === 'string' && t.outputDir) return t.outputDir;
+    if (typeof t.worktreePath === 'string' && t.worktreePath) return { folder: t.worktreePath };
+    if (typeof t.outputDir === 'string' && t.outputDir) return { folder: t.outputDir };
   }
-  return null;
+  return { folder: null };
 }
 
 /** origin's default branch (`origin/<name>`): origin/HEAD, else main or master. */

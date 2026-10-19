@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../shared/bot';
 import type { GateRunInput, GateRunResult } from '../../worktask/TaskGateRunner';
-import { describeGateRun, installVerifyGate, isVerifyReport, originDefaultRef, taskFolderFromMissions, verifyGateFactId, worktreeFromMissions, type VerifyGatePorts } from '../verifyPreset';
+import { describeGateRun, installVerifyGate, isVerifyReport, originDefaultRef, readTaskFolder, taskFolderFromMissions, verifyGateFactId, worktreeFromMissions, type VerifyGatePorts } from '../verifyPreset';
 
 const SHA = 'a'.repeat(40);
 const BOT_ID = 'bot-0a1b2c3d';
@@ -174,6 +174,13 @@ describe('verify gate', () => {
     expect(await worktreeFromMissions(research, entry())).toBeNull();
     expect(await taskFolderFromMissions(research, entry())).toBe('/bots/b/research/batch/1-claude-x');
     expect(await taskFolderFromMissions(rpc, entry())).toBe('/wt/1');
+    // A read that failed is told from a task that records no folder (#2388).
+    expect(await readTaskFolder(rpc, entry())).toEqual({ folder: '/wt/1' });
+    expect(await readTaskFolder(async () => ({ ok: true, tasks: [{ id: 'task-1' }] }), entry())).toEqual({ folder: null });
+    expect(await readTaskFolder(async () => ({ ok: true, tasks: [] }), entry())).toEqual({ folder: null });
+    expect(await readTaskFolder(async () => ({ ok: false }), entry())).toBeNull();
+    expect(await readTaskFolder(async () => { throw new Error('daemon offline'); }, entry())).toBeNull();
+    expect(await readTaskFolder(null, entry())).toBeNull();
     const git = async (args: string[]) => (args[0] === 'symbolic-ref' ? { stdout: 'refs/remotes/origin/trunk\n', code: 0 } : { stdout: '', code: 1 });
     expect(await originDefaultRef(git, '/r')).toBe('origin/trunk');
     const noHead = async (args: string[]) => (args[0] === 'symbolic-ref' ? { stdout: '', code: 1 } : args[3]?.includes('master') ? { stdout: SHA, code: 0 } : { stdout: '', code: 1 });

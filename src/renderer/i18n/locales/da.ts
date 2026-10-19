@@ -613,6 +613,7 @@ export const da = {
   'worktask.cleanup.preserved': 'Ikke-committede artefakter bevaret — commit/PR fra diff eller kassér, og luk så igen.',
   'worktask.cleanup.unpushed': 'Du har {count} ikke-pushede commit(s) — PR/push, og luk så igen.',
   'worktask.cleanup.closeFailed': 'close mislykkedes: {error}',
+  'worktask.keepFolder.done': 'Opgave lukket. Dens mappe blev beholdt i {path}.',
 
   // ─── Workspace item: task worktree boundary warning ───
   'workspace.cwdDeparted': 'Panelets cwd forlod opgavens worktree-grænse: {cwd}',
