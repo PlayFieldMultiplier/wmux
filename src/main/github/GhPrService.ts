@@ -429,6 +429,9 @@ export class GhPrService implements PrProvider {
 
   async prDetail(repoPath: string, number: number, updatedAt: string, remoteKey?: string): Promise<PrDetailResult> {
     const key = `${remoteKey ?? cacheKey(repoPath)}\0${number}`;
+    // gh api asks github.com unless told the host: name the remote's (GHES, GHE.com).
+    const apiHost = remoteKey?.split('/')[0];
+    const hostArgs = apiHost ? ['--hostname', apiHost] : [];
     const cached = this.detailCache.get(key);
     // updatedAt 불변 → 코멘트 재fetch 생략(rate limit 상한의 핵심).
     if (
@@ -448,7 +451,7 @@ export class GhPrService implements PrProvider {
       let reviewComments: GhReviewComment[] = [];
       try {
         const rc = await this.gh(
-          ['api', '--paginate', `repos/{owner}/{repo}/pulls/${number}/comments?per_page=100`],
+          ['api', '--paginate', `repos/{owner}/{repo}/pulls/${number}/comments?per_page=100`, ...hostArgs],
           repoPath,
         );
         const parsed = JSON.parse(rc.stdout) as GhReviewComment[];
@@ -459,7 +462,7 @@ export class GhPrService implements PrProvider {
       let authorTypes: Map<string, 'Bot' | 'User'> | null = null;
       try {
         const g = await this.gh(
-          ['api', 'graphql', '-F', 'owner={owner}', '-F', 'name={repo}', '-F', `number=${number}`, '-f', `query=${BOT_AUTHORS_QUERY}`],
+          ['api', 'graphql', '-F', 'owner={owner}', '-F', 'name={repo}', '-F', `number=${number}`, '-f', `query=${BOT_AUTHORS_QUERY}`, ...hostArgs],
           repoPath,
         );
         authorTypes = authorTypesFromGraphql(JSON.parse(g.stdout));

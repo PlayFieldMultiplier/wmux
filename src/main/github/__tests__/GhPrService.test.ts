@@ -285,6 +285,16 @@ describe('GhPrService — 목록 TTL·상세 updatedAt 캐시', () => {
     expect(calls.filter((c) => c.args[1] === 'list').length).toBe(2);
   });
 
+  it('detail: the api reads name the remote\'s host (GHES, GHE.com)', async () => {
+    const { svc, calls } = makeService((args) => (args[0] === 'pr'
+      ? { stdout: JSON.stringify({ number: 7, url: 'u', comments: [], reviews: [] }) }
+      : { stdout: '[]' }));
+    await svc.prDetail('D:/r', 7, 'T1', 'github.acme.com/acme/app');
+    const api = calls.filter((c) => c.args[0] === 'api');
+    expect(api).toHaveLength(2);
+    for (const c of api) expect(c.args.slice(-2)).toEqual(['--hostname', 'github.acme.com']);
+  });
+
   it('상세 — 같은 updatedAt이면 재fetch 생략, 바뀌면 재fetch', async () => {
     const { svc, calls } = makeService((args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
@@ -336,6 +346,8 @@ describe('parseRemoteHost / isGithubHost — provider 라우팅 재료', () => {
     ['git@gitlab.com:g/p.git', false],
     ['https://git.corp.example/g/sub/p.git', false],
     ['https://mygithub.example/o/r.git', false],
+    ['https://github-mirror.acme.com/g/p.git', false],
+    ['git@gitlab-work:g/p.git', false],
   ])('%s is a GitHub host: %s', (url, expected) => {
     expect(isGithubHost(parseRemoteHost(url) as string)).toBe(expected);
   });
