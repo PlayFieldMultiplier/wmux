@@ -85,6 +85,14 @@ describe('the wire call', () => {
     expect(mockSendRpc.mock.calls.at(-1)).toHaveLength(2);
   });
 
+  // #2388: Close and keep folder is the owner's control; a bot cannot ask
+  // for it, so task_close neither takes nor forwards it.
+  it('task_close takes no keep-folder input and never sends keepFolder', async () => {
+    expect(Object.keys(shapes.get('task_close') ?? {})).toEqual(['task_id']);
+    await tools.get('task_close')?.({ task_id: 'wtask-1', keep_folder: true, keepFolder: true });
+    expect(mockSendRpc).toHaveBeenLastCalledWith('task.close', { taskId: 'wtask-1', senderPtyId: 'pty-mine' });
+  });
+
   it('resolves identity BEFORE reading the ptyId (a cold getter answers empty)', async () => {
     await tools.get('task_close')?.({ task_id: 'wtask-1' });
     expect(resolveCalls).toBe(1);
