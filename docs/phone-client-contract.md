@@ -4366,6 +4366,8 @@ worded (the values listed); a value not listed means the English `title`.
 | `worker.paused` | `title` string | `Worker paused: {title}`<br>`Worker paused` | `title`: the task's title, or its short id when it has none. The second title when there is no `title` (a card written before worker cards named their task). |
 | `worker.pausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | `title` as `worker.paused`. `kind: "research"`: a research task (a task folder, not a worktree). |
 | `worker.idlePausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | As `worker.pausedResumable`. |
+| `worker.openIdlePaused` | `title` string | `Worker paused: {title}`<br>`Worker paused` | As `worker.paused`; the task was still working or needing input. |
+| `worker.openIdlePausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | As `worker.pausedResumable`; the task was still working or needing input. |
 | `worker.done` | `title` string, `status` string | `Worker done: {title}`<br>`Worker done` | `title` as `worker.paused`. `status`: `completed`, `cancelled` or `failed`. |
 | `worker.doneResumable` | `title` string, `status` string, `kind` string | `Worker done (resumable): {title}`<br>`Worker done (resumable)` | As `worker.done`; `kind` as `worker.pausedResumable`. |
 | `worker.resumed` | `title` string, `by` string, `where` string | `Worker resumed: {title}`<br>`Worker resumed` | `title` as `worker.paused`. `by`: `owner` or `bot`. `where`: `folder` or `newPane`. |

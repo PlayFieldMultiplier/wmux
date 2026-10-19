@@ -90,6 +90,8 @@ export interface HolderRecord {
   ended: 'completed' | 'cancelled' | 'failed' | 'reported';
   /** When it reached its state. */
   at: number;
+  /** The row revision its stop (or end) was made for. */
+  endRev?: number;
 }
 
 /** Everything the holder rules read, as plain data. */
@@ -370,8 +372,11 @@ function decide(
   if (isOpen(row.status)) {
     // Its worker was stopped (paused for review) and the row still says so:
     // a status that has not moved, whatever was edited on the row, unless a
-    // worker relaunched there.
-    if (stopped && record?.ended === 'reported' && row.status === 'review_requested'
+    // worker relaunched there. Paused while still working or needing input
+    // (idle for hours): only while the row is the one it was paused at (a
+    // row that moved on during the stop may have a pane left running).
+    if (stopped && record?.ended === 'reported'
+      && (row.status === 'review_requested' || record.endRev === row.rev)
       && !seen(s.busy) && !seen(s.agentSeen)) return { state: 'free', why: 'stopped' };
     // Launched lately: its pane and agent come up after the launch record.
     if (launchedLately) return { state: 'held', why: 'starting' };

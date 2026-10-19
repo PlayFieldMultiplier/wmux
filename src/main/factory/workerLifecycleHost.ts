@@ -35,7 +35,6 @@ import { getFactLog } from './factLog';
 import { getWakeQueue } from './wakeQueue';
 import {
   RECLAIM_CATCHUP_MS,
-  REPORTED_IDLE_MS,
   isReclaimableEnd,
   RESUMED_IDLE_MS,
   ReclaimedWorkers,
@@ -44,11 +43,12 @@ import {
   createViewAttention,
   createWorkerClear,
   installWorkerReclaim,
-  isReclaimableReport,
   isReclaimedSince,
   isTaskWorkspaceOf,
   mergePaneActivity,
   noteWorkerAgentExit,
+  pauseDue,
+  pauseIdleMsFor,
   reportedWorkerPanes,
   resumedAgentAlive,
   setWorkerResumePorts,
@@ -57,7 +57,6 @@ import {
   type WorkerResumePorts,
   type WorkerSessionInfo,
   viewProtects,
-  workerPanesIdle,
 } from './workerReclaim';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { createDeadPaneSweep } from './deadWorkerPanes';
@@ -268,8 +267,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       const ws = entries.find((e) => e.id === workspaceId);
       return ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
     };
-    // A reported task's own worker panes, and the daemon's view of their
-    // turn where main has none (after a restart): createDaemonTurnSeed.
+    // An open bot task's own worker panes (a reported one, or one still
+    // working or needing input), and the daemon's view of their turn where
+    // main has none (after a restart): createDaemonTurnSeed.
     const turnSeed = createDaemonTurnSeed({
       tasks: () => {
         const entries = mirror.getEntries();
@@ -277,7 +277,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         const out: Array<{ taskId: string; reportedAt: number; panes: readonly string[]; recorded: readonly string[]; launched: readonly string[] }> = [];
         for (const r of ledger.list({ openOnly: true })) {
           const rec = reclaimed.get(r.id);
-          if (!isReclaimableReport(r) || isReclaimedSince(rec, r)) continue;
+          if (pauseIdleMsFor(r) === null || isReclaimedSince(rec, r)) continue;
           const ws = entries.find((e) => e.id === r.taskWorkspaceId);
           const panes = ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
           out.push({
@@ -329,10 +329,13 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     const viewed = (workspaceId: string): boolean => (mirror.getViewed()?.workspaceId === workspaceId
       || mirror.getPanelWorkspaceId() === workspaceId)
       && viewProtects(attention.focusedAt(workspaceId), (workspacePtys(workspaceId) ?? []).map((id) => paneActivity(id).inputAt), Date.now());
+    // An open task's window: REPORTED_IDLE_MS once reported, OPEN_IDLE_MS
+    // while still working or needing input (pauseIdleMsFor), counted from
+    // its last row write.
     const reportedIdle = (entry: LedgerEntry): boolean => {
-      if (viewed(entry.taskWorkspaceId)) return false;
+      if (pauseIdleMsFor(entry) === null) return false;
       const panes = reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId));
-      return !!panes && workerPanesIdle(panes.map(paneActivity), entry.updatedAt, Date.now(), REPORTED_IDLE_MS);
+      return pauseDue(entry, viewed(entry.taskWorkspaceId), panes?.map(paneActivity) ?? null, entry.updatedAt, Date.now());
     };
     offs.push(installWorkerReclaim({
       onTransition: (fn) => ledger.onTransition(fn),
@@ -351,12 +354,19 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       // A WSL pane counts as the task's worker only when identified (#2266).
       sessionRecordOf: botWorkerSessionRecord,
       note,
+      noticeBot: (n) => {
+        noticeBot({ factLog: getFactLog, wakes: getWakeQueue }, n);
+      },
+      // A stopped worker frees its agent slot: the slot queue looks again,
+      // as after the resumed-worker stop.
       changed: () => {
         changed();
         reconcile();
+        getAgentSlots()?.kick();
       },
       retryMs: RESUMED_SWEEP_MS,
-      // A reported task's worker is stopped once every one of its own worker
+      // An open task's worker (reported, or still working or needing input
+      // past the longer window) is stopped once every one of its own worker
       // panes (turnSeed: a pane of its workspace whose agent runs; never a
       // plain shell) sat idle for the window, counted from the report and
       // from each pane's own last turn edge and input (workerPanesIdle), and

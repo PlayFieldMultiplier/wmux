@@ -31,9 +31,14 @@
 // a report follows the task when it later ends (no second stop, no second
 // card); a task that moved on from the report (sent back, a newer report)
 // before the stop has nothing stopped.
-// Never on anything else: a row that is working or needs input keeps its
-// worker however long it is quiet, and a task the owner stopped is left to
-// that stop (factoryStop.ts ends its panes itself).
+// A task still `working` or `input_required` whose worker sat idle the same
+// way for OPEN_IDLE_MS (a worker that finished but never reported holds its
+// agent slot for good otherwise) has its worker's agent stopped and recorded
+// the same way too: the row stays as it is, and one notice tells the bot that
+// started it, which resumes or settles it. A worker mid-turn, or one whose
+// pane shows a prompt the owner can still answer, is never stopped.
+// Never on anything else, and a task the owner stopped is left to that stop
+// (factoryStop.ts ends its panes itself).
 //
 // Resume (the owner's Resume, or the bot that started the task) types
 // `claude --resume <that session> [its permission flag]` into the same pane,
@@ -65,6 +70,7 @@ import { createFilePersister, readVersionedFile, type FilePersister } from './ve
 import { STOPPED_BY_OWNER } from './factoryStop';
 import { fanoutTaskShortId } from '../../shared/fanoutCallerNudge';
 import type { WorkerSlots } from './workerSlots';
+import type { BotNoticeInput } from './botNotices';
 
 export const RECLAIMED_WORKERS_FILENAME = 'reclaimed-workers.json';
 export const RECLAIMED_WORKERS_VERSION = 1 as const;
@@ -72,6 +78,12 @@ export const RECLAIMED_WORKERS_VERSION = 1 as const;
 export const RECLAIM_CATCHUP_MS = 24 * 3_600_000;
 /** How long a reported task's worker sits idle before it is stopped. */
 export const REPORTED_IDLE_MS = 5 * 60_000;
+/** How long the worker of a task still working or needing input sits idle
+ *  (counted from its last turn end, input and row write, never during a turn)
+ *  before it is stopped. Long, because such a worker may still be answered:
+ *  its bot is woken on `input_required` and wakes on its own cadence, so this
+ *  leaves it several wakes to message or settle the worker first. */
+export const OPEN_IDLE_MS = 2 * 3_600_000;
 /** A pane whose turn status main has not seen (as after a restart) counts
  *  as idle only once its task was reported this long ago. */
 export const REPORTED_UNSEEN_IDLE_MS = 30 * 60_000;
@@ -107,7 +119,8 @@ export interface ReclaimedWorker {
   /** The task's room thread (taskThreadOf at the reclaim). */
   threadId: ThreadId;
   /** The ledger status the task ended in; `reported`: the task was still
-   *  `review_requested` (open) when its idle worker was stopped. */
+   *  open (`review_requested`, or `working` / `input_required` past
+   *  OPEN_IDLE_MS) when its idle worker was stopped. */
   ended: 'completed' | 'cancelled' | 'failed' | 'reported';
   sessions: ReclaimedSession[];
   /** stopping: recorded, its agent not yet known to be stopped (a later look
@@ -228,6 +241,17 @@ export function isReclaimableReport(entry: LedgerEntry): boolean {
   return entry.status === 'review_requested'
     && d?.origin.kind === 'bot' && typeof d.origin.botId === 'string' && d.origin.botId.length > 0
     && d.preset !== 'verify';
+}
+
+/** How long an open bot task's worker sits idle before it is stopped (the
+ *  stop recorded `reported`): `reportedMs` for a reported task
+ *  (isReclaimableReport), `openMs` for one still working or needing input;
+ *  null for any other row. Pure. */
+export function pauseIdleMsFor(entry: LedgerEntry, reportedMs: number = REPORTED_IDLE_MS, openMs: number = OPEN_IDLE_MS): number | null {
+  if (isReclaimableReport(entry)) return reportedMs;
+  const origin = entry.dispatch?.origin;
+  if (origin?.kind !== 'bot' || typeof origin.botId !== 'string' || !origin.botId) return null;
+  return entry.status === 'working' || entry.status === 'input_required' ? openMs : null;
 }
 
 /** The resume line for one recorded pane, or null without a conversation. Pure. */
@@ -412,13 +436,23 @@ export interface WorkerReclaimPorts {
    *  task at most RECLAIM_ATTEMPTS_MAX times per rev. Absent: only at install. */
   retryMs?: number;
   /** Whether every pane in the task's workspace sat idle for the window
-   *  (workerPanesIdle, its floor the report: each reported its turn's end and
-   *  nothing happened in it since) and the owner is not viewing it. Absent: a
-   *  reported task's worker is never stopped. */
+   *  (pauseDue: workerPanesIdle, its floor the report or the last row write:
+   *  each reported its turn's end and nothing happened in it since) and the
+   *  owner is not viewing it; asked of a reported task and of one still
+   *  working or needing input. Absent: an open task's worker is never
+   *  stopped. */
   turnEnded?: (entry: LedgerEntry) => boolean;
   /** How long a reported task sits before its idle worker is stopped
    *  (default REPORTED_IDLE_MS). */
   reportedIdleMs?: number;
+  /** How long a task still working or needing input sits before its idle
+   *  worker is stopped (default OPEN_IDLE_MS). turnEnded answers for such a
+   *  row too, with this window. */
+  openIdleMs?: number;
+  /** Tell the bot that started a task what became of its worker (one
+   *  bot.notice and a wake, botNotices.ts noticeBot). Absent: the room card
+   *  alone. */
+  noticeBot?: (n: BotNoticeInput) => void;
   /** The panes a workspace owns, null when not known. A reported task's
    *  stop reaches only its own workspace's panes (whose turns turnEnded
    *  checked), never another pane opened in its folder; unknown: nothing is
@@ -486,6 +520,24 @@ export function workerPanesIdle(panes: readonly PaneActivity[], floor: number, n
     && (p.turnStartAt === undefined || p.turnEndAt >= p.turnStartAt)
     && p.status !== 'running' && p.status !== 'awaiting_input'
     && now - Math.max(floor, p.turnEndAt, p.inputAt ?? -Infinity) >= ms);
+}
+
+/** Whether an open bot task's idle worker is due to be stopped: its window
+ *  (pauseIdleMsFor) has passed by workerPanesIdle over its own worker panes
+ *  (null: not known, never due), from `floor` (its last row write), and the owner is
+ *  not viewing it (`viewed`, viewProtects). A turn running or a prompt
+ *  waiting in any pane is never due. Pure. */
+export function pauseDue(
+  entry: LedgerEntry,
+  viewed: boolean,
+  panes: readonly PaneActivity[] | null,
+  floor: number,
+  now: number,
+  windows: { reportedMs?: number; openMs?: number } = {},
+): boolean {
+  const ms = pauseIdleMsFor(entry, windows.reportedMs, windows.openMs);
+  if (ms === null || viewed || !panes) return false;
+  return workerPanesIdle(panes, floor, now, ms);
 }
 
 /** How long a worker the owner is shown (the active workspace, or the Bots
@@ -837,6 +889,9 @@ export function endedTaskAgentRuns(
   });
 }
 
+/** The daemon's session.stopAgent refusals that come before any signal. */
+const STOP_REFUSED_BEFORE_SIGNAL: ReadonlySet<string> = new Set(['turn_open', 'unsupported', 'not_authorized', 'no_session']);
+
 /** Attempts per ended task before the reclaim gives it up. */
 export const RECLAIM_ATTEMPTS_MAX = 3;
 /** A `stopping` record is looked at again this long after its stop began
@@ -845,9 +900,10 @@ export const STOPPING_SETTLE_MS = 2 * 60_000;
 
 /** Whether the task moved on from the state its worker is being stopped
  *  for. An end: its row is open again (it reopened since it ended); a row
- *  that cannot be read is not counted as open. A report: its row is no
- *  longer that report (another status or rev, unreadable) or a turn runs
- *  again in its panes (`rowOnly`: the row alone). Pure over its reads. */
+ *  that cannot be read is not counted as open. An open row (a report, or a
+ *  task still working or needing input): its row is no longer the one read
+ *  (another status or rev, unreadable) or a turn runs again in its panes
+ *  (`rowOnly`: the row alone). Pure over its reads. */
 function movedOn(ports: Pick<WorkerReclaimPorts, 'row' | 'turnEnded'>, entry: LedgerEntry, ended: ReclaimedWorker['ended'], rowOnly = false): boolean {
   if (ended === 'reported' && !ports.row) return false;
   let now: LedgerEntry | null = null;
@@ -857,7 +913,7 @@ function movedOn(ports: Pick<WorkerReclaimPorts, 'row' | 'turnEnded'>, entry: Le
     now = null;
   }
   if (ended === 'reported') {
-    if (!now || now.status !== 'review_requested' || now.rev !== entry.rev) return true;
+    if (!now || now.status !== entry.status || now.rev !== entry.rev) return true;
     if (rowOnly) return false;
     try {
       return ports.turnEnded?.(now) === false;
@@ -1001,6 +1057,8 @@ export async function reclaimWorker(
     if (panes.length === 0) return rec;
     let failed = 0;
     let attempted = 0;
+    // Failed stops that may have signalled the agent (not refused before).
+    let signalled = 0;
     // A pane is closed only in the task's own workspace: a WSL terminal the
     // owner opened in the same folder elsewhere is never the worker's.
     let ownPanes: readonly string[] | null = null;
@@ -1045,6 +1103,9 @@ export async function reclaimWorker(
           && isWslWorkerPane(sessions.find((x) => x.id === p.sessionId))
           && isTaskOwnWorkerPane({ id: p.sessionId }, entry.id, recorded, ports.sessionRecordOf);
         const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined);
+        // Refused before any signal; any other failure (a part of its tree
+        // left running, a failed read) may follow a signal.
+        const beforeSignal = typeof r.code === 'string' && STOP_REFUSED_BEFORE_SIGNAL.has(r.code);
         // The daemon found the turn open at the stop itself: nothing was
         // signalled, and it is no failed stop.
         if (r.code === 'turn_open') {
@@ -1057,10 +1118,13 @@ export async function reclaimWorker(
         // (counted as one, it kept the record `stopping` for good).
         if (r.ok !== true && r.code !== 'no_session') {
           failed++;
+          if (!beforeSignal) signalled++;
           log(`[factory] reclaim: the agent of ${p.sessionId} (task ${entry.id}) was not stopped: ${r.code ?? 'refused'}`);
         }
       } catch (err) {
         failed++;
+        // A lost answer may follow a signal.
+        signalled++;
         log(`[factory] reclaim: the agent of ${p.sessionId} (task ${entry.id}) was not stopped: ${String(err)}`);
       }
     }
@@ -1069,7 +1133,10 @@ export async function reclaimWorker(
       await (prior ? ports.store.put(prior) : ports.store.remove(entry.id)).catch(() => undefined);
       return null;
     }
-    if (failed === attempted && !prior) {
+    // An open task's stop that signalled its agent stays recorded
+    // (`stopping`): its agent may be gone, and the settle pass then marks it
+    // stopped with its cards.
+    if (failed === attempted && !prior && !(ended === 'reported' && signalled > 0)) {
       // Nothing was stopped: no record, so a later look tries again.
       await ports.store.remove(entry.id).catch(() => undefined);
       return null;
@@ -1099,7 +1166,9 @@ export async function reclaimWorker(
       : 'Its pane closes.';
     const task = lifecycleCardTask(entry.title, entry.id);
     try {
-      if (ended === 'reported') {
+      if (ended === 'reported' && entry.status !== 'review_requested') {
+        noteOpenPause(ports, entry, panes, rec.at);
+      } else if (ended === 'reported') {
         ports.note?.(
           entry.ownerWorkspaceId,
           taskThreadOf(entry),
@@ -1134,6 +1203,54 @@ export async function reclaimWorker(
   } catch (err) {
     log(`[factory] reclaim of ${entry.id} failed: ${String(err)}`);
     return null;
+  }
+}
+
+/** The cards of an open task's idle stop (a task still working or needing
+ *  input): one resumable card for the owner in the task's thread, and one
+ *  notice to the bot that started it, which resumes or settles it. The row
+ *  stays as it is. Best effort, never throws. */
+function noteOpenPause(ports: Pick<WorkerReclaimPorts, 'note' | 'noticeBot'>, entry: LedgerEntry, sessions: readonly ReclaimedSession[], at: number): void {
+  const resumable = sessions.some((p) => resumeLineFor(p) !== null);
+  // A research task works in a task folder, not a worktree.
+  const research = isResearchDispatch(entry.dispatch);
+  const keptText = `${research ? 'task folder' : 'worktree'} and the conversation are kept`;
+  const task = lifecycleCardTask(entry.title, entry.id);
+  try {
+    ports.note?.(
+      entry.ownerWorkspaceId,
+      taskThreadOf(entry),
+      `${resumable ? 'Worker paused (resumable)' : 'Worker paused'}: ${task}`,
+      resumable
+        ? `The task is still open and its worker sat idle for hours without reporting: its Claude stopped to free memory and its agent slot. The task stays as it is and its pane stays; the ${keptText}, and Resume continues the same conversation.`
+        : 'The task is still open and its worker sat idle for hours without reporting: its Claude stopped to free memory and its agent slot. The task stays as it is and its pane stays; the worktree is kept, but no conversation was recorded to resume.',
+      { code: resumable ? 'worker.openIdlePausedResumable' : 'worker.openIdlePaused', args: { title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
+      entry.id,
+    );
+  } catch {
+    /* the card is best effort */
+  }
+  const botId = entry.dispatch?.origin.botId;
+  if (!botId) return;
+  try {
+    ports.noticeBot?.({
+      botId,
+      workspaceId: entry.ownerWorkspaceId,
+      key: `worker.paused:${entry.id}:${at}`,
+      topic: 'worker.paused',
+      title: `Your worker for "${task}" was paused (task ${entry.id})`,
+      body: `It sat idle with the task still ${entry.status} and no report, so main stopped its Claude to free its agent slot. The ledger row is unchanged. `
+        + (resumable
+          ? 'To continue, resume it with worker_resume (its message is what it acts on); if its work is done or not needed, settle the task with ledger_update.'
+          : 'No conversation was recorded to resume: settle the task with ledger_update, or start a new task for the rest of the work.'),
+      threadId: taskThreadOf(entry),
+      // The task's own taint (unknown counts as outside text): its title
+      // came with it, and a resume with a message follows it.
+      tainted: entry.dispatch?.origin.tainted !== false,
+      taskId: entry.id,
+    });
+  } catch {
+    /* best effort */
   }
 }
 
@@ -1211,10 +1328,14 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     }
     const at = now();
     const since = at - RECLAIM_CATCHUP_MS;
-    const idleSince = at - (ports.reportedIdleMs ?? REPORTED_IDLE_MS);
     for (const e of rows) {
-      if (e.updatedAt >= since && isReclaimableEnd(e, e.status)) run(e, e.status as 'completed' | 'cancelled' | 'failed');
-      else if (ports.turnEnded && e.updatedAt <= idleSince && isReclaimableReport(e) && turnEndedIn(e)) run(e, 'reported');
+      if (e.updatedAt >= since && isReclaimableEnd(e, e.status)) {
+        run(e, e.status as 'completed' | 'cancelled' | 'failed');
+        continue;
+      }
+      const idleMs = pauseIdleMsFor(e, ports.reportedIdleMs, ports.openIdleMs);
+      if (idleMs === null || e.updatedAt > at - idleMs) continue;
+      if (ports.turnEnded && turnEndedIn(e)) run(e, 'reported');
     }
     void settleStopping();
   };
@@ -1248,8 +1369,11 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
           continue;
         }
         // An open task's worker is its row's: the reclaim of its next end
-        // looks at the record again.
-        if (row && (row.status === 'working' || row.status === 'input_required')) continue;
+        // looks at the record again. A record of its own idle stop
+        // (`reported`) is settled here like a reported task's: once no agent
+        // is left (its stop cut off, its agent exited since), it is stopped
+        // and resumable; one still running is the idle stop's to retry.
+        if (row && (row.status === 'working' || row.status === 'input_required') && cur.ended !== 'reported') continue;
         // Its recorded panes and every pane of its workspace: an agent in
         // another pane there keeps it (a stopped record frees the slot).
         const recorded = cur.sessions.map((x) => x.sessionId);
@@ -1262,9 +1386,12 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
         if (!panes) continue;
         const ptys = [...new Set([...recorded, ...panes])];
         if (!endedTaskAgentRuns(ptys, cur.taskId, recorded, byId, ports.sessionRecordOf)) {
-          if (ports.store.setState(rec.taskId, 'stopped', now())) {
+          const at = now();
+          if (ports.store.setState(rec.taskId, 'stopped', at)) {
             moved = true;
             log(`[factory] reclaim: ${rec.taskId} was left stopping with no agent running; marked stopped`);
+            // An open task's idle stop cut off before its cards: they go now.
+            if (cur.ended === 'reported' && row && (row.status === 'working' || row.status === 'input_required')) noteOpenPause(ports, row, cur.sessions, at);
           }
           continue;
         }
