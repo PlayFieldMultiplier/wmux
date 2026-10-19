@@ -144,48 +144,6 @@ describe('fan-out worker watch — exits', () => {
     expect(ledger.get('wtask-1')!.status).toBe('working');
   });
 
-  it('an exit wmux caused itself (the bot worker reclaim\'s idle stop) changes nothing', async () => {
-    start({ stoppedByWmux: (ptyId) => (ptyId === 'pty-w1' ? Promise.resolve(true) : null) });
-    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
-    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w2' });
-    await settle();
-    expect(ledger.get('wtask-1')!.status).toBe('working');
-    expect(ledger.get('wtask-2')!.status).toBe('input_required');
-  });
-
-  it('an exit wmux caused is known as it arrives: a resume during the grace does not turn it into a silent stop', async () => {
-    let marked = true;
-    start({ stoppedByWmux: () => (marked ? Promise.resolve(true) : null), exitGraceMs: 30 });
-    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
-    // The resume forgets the stop while the grace runs.
-    marked = false;
-    await deliberateSleep(60, 'negative: the grace runs out with the row unchanged');
-    await settle();
-    expect(ledger.get('wtask-1')!.status).toBe('working');
-  });
-
-  it('a natural exit that arrives while a wmux stop is refused before any signal (turn_open) still moves the row', async () => {
-    let refuse: (signalled: boolean) => void = () => undefined;
-    const stop = new Promise<boolean>((resolve) => { refuse = resolve; });
-    start({ stoppedByWmux: (ptyId) => (ptyId === 'pty-w1' ? stop : null), exitGraceMs: 30 });
-    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
-    // The stop's answer comes in the same batch: refused, nothing signalled.
-    refuse(false);
-    await vi.waitFor(async () => {
-      await settle();
-      expect(ledger.get('wtask-1')!.status).toBe('input_required');
-    }, { timeout: 5_000 });
-    expect(ledger.get('wtask-1')!.summary).toBe(WORKER_EXIT_SUMMARY);
-  });
-
-  it('a wmux stop still under way when the grace ends counts as the exit\'s cause', async () => {
-    start({ stoppedByWmux: () => new Promise<boolean>(() => undefined), exitGraceMs: 10 });
-    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
-    await deliberateSleep(40, 'negative: the stop in flight explains the exit');
-    await settle();
-    expect(ledger.get('wtask-1')!.status).toBe('working');
-  });
-
   it('never for an owner with a brain', async () => {
     start({ hasBrain: () => true });
     daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });

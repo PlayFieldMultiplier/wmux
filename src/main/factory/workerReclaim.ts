@@ -1102,24 +1102,10 @@ export async function reclaimWorker(
           && !!ownPanes?.includes(p.sessionId)
           && isWslWorkerPane(sessions.find((x) => x.id === p.sessionId))
           && isTaskOwnWorkerPane({ id: p.sessionId }, entry.id, recorded, ports.sessionRecordOf);
-        // The stop's outcome, for an exit seen while it is under way: true
-        // when it may have signalled the agent (that exit is the stop's).
-        let settleStop: (signalled: boolean) => void = () => undefined;
-        reclaimStops.set(p.sessionId, { at: now(), signalled: new Promise<boolean>((resolve) => { settleStop = resolve; }) });
-        let r: { ok?: boolean; stopped?: boolean; code?: string };
-        try {
-          r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined);
-        } catch (err) {
-          // A lost answer may follow a signal.
-          settleStop(true);
-          throw err;
-        }
-        // Refused before any signal: an exit is the worker's own. Any other
-        // answer (a stop, a part of its tree left running, a failed read)
-        // may follow a signal, so its exit is the reclaim's.
+        const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined);
+        // Refused before any signal; any other failure (a part of its tree
+        // left running, a failed read) may follow a signal.
         const beforeSignal = typeof r.code === 'string' && STOP_REFUSED_BEFORE_SIGNAL.has(r.code);
-        settleStop(!beforeSignal);
-        if (beforeSignal) reclaimStops.delete(p.sessionId);
         // The daemon found the turn open at the stop itself: nothing was
         // signalled, and it is no failed stop.
         if (r.code === 'turn_open') {
@@ -1840,9 +1826,6 @@ async function launched(
   where: 'folder' | 'newPane',
 ): Promise<WorkerResumeResult> {
   const now = ports.now ?? Date.now;
-  // A new agent runs there now: its exit is its own, not the earlier stop's.
-  reclaimStops.delete(sessionId);
-  for (const p of rec.sessions) reclaimStops.delete(p.sessionId);
   ports.store.setState(rec.taskId, 'resumed', now());
   try {
     ports.folderResumed?.(rec.taskId);
@@ -2081,30 +2064,6 @@ export function createResumedIdleSweep(ports: ResumedIdlePorts): ResumedIdleSwee
       return out;
     },
   };
-}
-
-/** How long after a reclaim stopped a pane's agent its exit counts as that
- *  stop's (the fan-out worker watch confirms an exit after 20 s). */
-export const RECLAIM_EXIT_WINDOW_MS = 2 * 60_000;
-
-/** The panes whose agent the reclaim asked the daemon to stop, and when. In
- *  memory: only a stop this process made explains an exit it sees. */
-const reclaimStops = new Map<string, { at: number; signalled: Promise<boolean> }>();
-
-/** For an agent exit of pane `sessionId` seen now: the outcome of the stop
- *  the reclaim itself sent there within RECLAIM_EXIT_WINDOW_MS (true: it may
- *  have signalled the agent, so the exit is that stop's; false: it was
- *  refused before any signal, so the exit is the worker's own), or null when
- *  it sent none. The outcome may still be pending (the stop is under way).
- *  A record written for an exit seen (a dead pane, a resumed worker's exit)
- *  is no such stop. One stop explains one exit: the answer is used up, and a
- *  resume there forgets it. */
-export function reclaimStopOutcome(sessionId: string, now: number): Promise<boolean> | null {
-  for (const [id, m] of reclaimStops) if (now - m.at >= RECLAIM_EXIT_WINDOW_MS) reclaimStops.delete(id);
-  const m = reclaimStops.get(sessionId);
-  if (!m) return null;
-  reclaimStops.delete(sessionId);
-  return m.signalled;
 }
 
 /** A resumed worker whose agent exited is stopped again (resumable). */
