@@ -880,10 +880,14 @@ export class TaskWorktreeManager {
         if (!opts.keepWhenRepoGone) {
           return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, so nothing can check the folder; it was kept; close its task to close it and keep the folder`, preserved: true };
         }
-        // Nothing deletes the folder from here: its record ends (one whose
-        // deletion cannot be written stays, and is finished under every
-        // check once the repository is back).
-        await this.forgetPending(rec.path);
+        // Nothing deletes the folder from here: its record ends, or the task
+        // stays open. A record left on disk would lock the folder and be
+        // finished once the repository is back, against the keep reported.
+        try {
+          await this.pendingRemovals?.delete(rec.path);
+        } catch (err) {
+          return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, and the folder's pending removal could not be ended: ${(err as Error).message}`, preserved: true };
+        }
         console.warn(`[worktask] the repository of ${rec.path} (${rec.repoRoot}) is not there; the task closes and the folder is kept`);
         return { ok: true, keptFolder: rec.path };
       }

@@ -564,6 +564,24 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(onDisk).toEqual([b, c].sort());
   });
 
+  it('a close whose repository is gone keeps the task open when the record cannot be ended', async () => {
+    const dir = leftover();
+    const file = path.join(tmp, 'wmux', 'worktask', 'pending-removals.json');
+    const store = new PendingWorktreeRemovals(file);
+    await store.put({ path: dir, repoRoot: path.join(tmp, 'moved-away'), repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr, removeTree } = manager(fakeGit().git, { pendingRemovals: store });
+    // The file cannot be written: a file stands where its folder goes.
+    const folder = path.dirname(file);
+    fs.rmSync(folder, { recursive: true });
+    fs.writeFileSync(folder, 'not a folder');
+    const res = await mgr.finishPendingRemoval(dir, undefined, { keepWhenRepoGone: true });
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    if (res && !res.ok) expect(res.error).toMatch(/pending removal could not be ended/);
+    expect(store.get(dir)).not.toBeNull();
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(removeTree).not.toHaveBeenCalled();
+  });
+
   it('a record whose deletion cannot be written stays, so a later delete writes again', async () => {
     const dir = leftover();
     const file = path.join(tmp, 'wmux', 'worktask', 'pending-removals.json');

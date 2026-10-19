@@ -615,6 +615,7 @@ export const es = {
   'worktask.cleanup.preserved': 'Artefactos sin confirmar conservados — commit/PR desde el diff o descártalos, luego ciérrala de nuevo.',
   'worktask.cleanup.unpushed': 'Tienes {count} commit(s) sin subir — PR/push, luego ciérrala de nuevo.',
   'worktask.cleanup.closeFailed': 'error al cerrar: {error}',
+  'worktask.keepFolder.done': 'Tarea cerrada. Su carpeta se conservó en {path}.',
 
   // ─── Elemento de espacio de trabajo: aviso de límite del worktree de la tarea ───
   'workspace.cwdDeparted': 'El cwd del panel salió del límite del worktree de la tarea: {cwd}',

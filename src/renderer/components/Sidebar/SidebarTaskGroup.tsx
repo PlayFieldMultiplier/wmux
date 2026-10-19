@@ -32,6 +32,7 @@ import { selectWorkspaceAgentRoster } from '../../stores/selectors/workspaceAgen
 import { isTaskReadyForReview } from '../../stores/selectors/reviewQueue';
 import { displayWorkspaceName } from '../../utils/fanoutProvenance';
 import { refuseWorkspaceClose } from '../Moa/moaHqGuard';
+import { keptFolderMessage } from '../WorkTask/closeKeepFolder';
 
 /**
  * An owner's tasks split by requesting pane (see selectOwnerPaneTaskSplit:
@@ -158,6 +159,7 @@ function TaskGroupMenu({ ownerKey, finishedIds, nameOf, toReview = 0, groupName,
   const closeFinished = useCallback(async (ids: readonly string[]) => {
     setClosing(true);
     const kept: string[] = [];
+    const keptFolders: string[] = [];
     let closed = 0;
     try {
       for (const id of ids) {
@@ -188,6 +190,8 @@ function TaskGroupMenu({ ownerKey, finishedIds, nameOf, toReview = 0, groupName,
           if (res.ok) {
             onCloseWorkspace(id);
             closed += 1;
+            const keptAt = keptFolderMessage(res, t);
+            if (keptAt) keptFolders.push(keptAt);
           } else if (res.reason === 'dirty') {
             kept.push(`${name}: ${t('worktask.cleanup.preserved')}`);
           } else if (res.reason === 'unpushed') {
@@ -204,6 +208,7 @@ function TaskGroupMenu({ ownerKey, finishedIds, nameOf, toReview = 0, groupName,
     }
     const push = useStore.getState().pushToast;
     if (closed > 0) push({ level: 'info', message: t('sidebar.tasks.closeFinishedDone', { count: closed }) });
+    for (const message of keptFolders) push({ level: 'info', message });
     for (const line of kept) push({ level: 'warn', message: line });
   }, [ownerKey, onCloseWorkspace, t]);
 

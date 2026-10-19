@@ -242,6 +242,21 @@ describe('FleetView — Ready to review', () => {
     expect(useStore.getState().toasts.some((toast) => toast.level === 'warn' && /Uncommitted/.test(toast.message))).toBe(true);
   });
 
+  // #2388: a half-removed folder whose repository is gone is kept, and the
+  // close says where it stays.
+  it('a close that kept the folder (its repository is gone) says where', async () => {
+    close.mockResolvedValueOnce({ ok: true, taskId: 't1', archivePending: false, unmaterialized: true, keptFolder: '/wt/t1' });
+    mount();
+    await settle();
+    const row = reviewRow('ws-t1')!;
+    act(() => { row.focus(); });
+    key(row, 'Backspace');
+    await act(async () => { container.querySelector<HTMLButtonElement>('[data-fleet-review-confirm="close"]')!.click(); });
+    await settle();
+    expect(useStore.getState().workspaces.map((w) => w.id)).not.toContain('ws-t1');
+    expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/t1.')).toBe(true);
+  });
+
   it('p creates a PR after a confirm when the task has none, and opens it when it has one', async () => {
     mount();
     await settle();

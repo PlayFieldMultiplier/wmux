@@ -615,6 +615,7 @@ export const tr = {
   'worktask.cleanup.preserved': "İşlenmemiş çıktılar korundu — diff'ten commit/PR yapın ya da atın, sonra tekrar kapatın.",
   'worktask.cleanup.unpushed': "{count} push edilmemiş commit'iniz var — PR/push, sonra tekrar kapatın.",
   'worktask.cleanup.closeFailed': 'close başarısız: {error}',
+  'worktask.keepFolder.done': 'Görev kapatıldı. Klasörü {path} konumunda korundu.',
 
   // ─── Çalışma alanı ögesi: görev worktree sınırı uyarısı ───
   'workspace.cwdDeparted': "Bölme cwd'si görev worktree sınırının dışına çıktı: {cwd}",

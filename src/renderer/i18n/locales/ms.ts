@@ -615,6 +615,7 @@ export const ms = {
   'worktask.cleanup.preserved': 'Artifak belum di-commit dikekalkan — commit/PR daripada diff atau buang, kemudian tutup semula.',
   'worktask.cleanup.unpushed': 'Anda mempunyai {count} commit yang belum di-push — PR/push, kemudian tutup semula.',
   'worktask.cleanup.closeFailed': 'close gagal: {error}',
+  'worktask.keepFolder.done': 'Tugas ditutup. Foldernya disimpan di {path}.',
 
   // ─── Workspace item: task worktree boundary warning ───
   'workspace.cwdDeparted': 'cwd panel keluar dari sempadan worktree tugas: {cwd}',
