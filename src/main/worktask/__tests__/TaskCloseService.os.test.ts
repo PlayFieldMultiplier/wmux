@@ -374,7 +374,8 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(calls[0].params).toMatchObject({ taskId: 'wtask-k1', detach: true });
     expect(stopPanesIn).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(worktreePath, 'wip.txt'), 'utf8')).toBe('uncommitted\n');
-    expect(git(['worktree', 'list', '--porcelain'], repoRoot)).toContain(worktreePath.replace(/\\/g, '/'));
+    // By name: Windows lists the long form of a short (8.3) temp path.
+    expect(git(['worktree', 'list', '--porcelain'], repoRoot)).toContain(path.basename(worktreePath));
     expect(store.get(worktreePath)).toBeNull();
     expect(forgetStops).toHaveBeenCalledWith(worktreePath);
   });
