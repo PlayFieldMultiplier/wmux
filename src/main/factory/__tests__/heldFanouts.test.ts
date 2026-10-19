@@ -170,6 +170,34 @@ describe('HeldFanouts', () => {
     }
   });
 
+  it('a hold made outside a handoff is retired, with its queued wake, by the same request started from a handoff', async () => {
+    // A bot retried a held fan-out from an answer's turn before its
+    // held_fanout turn ran: the hold had no handoff, the retry carried the
+    // answer's. The hold and its wake must not survive the launch.
+    const r = rig(dir);
+    setWakeQueue(r.queue);
+    try {
+      const outside = { ...request(BOT_A, 'x'), handoffId: undefined };
+      const context = { threadId: 'pr:github.com/o/r#7' as const, handoffId: 'h-answer' };
+      // Still held: the launch retires it.
+      r.held.hold(outside);
+      r.held.started(BOT_A, outside.args, context);
+      expect(r.held.list(BOT_A)).toEqual([]);
+      // Its wake already queued (a slot freed first): the launch drops it.
+      r.held.hold(outside);
+      await r.held.releaseNow();
+      const wakes = r.queue.list({ botId: BOT_A });
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0].reason).not.toHaveProperty('handoffId');
+      expect(dropQueuedHeldFanoutWakes(BOT_A, (w) => heldWakeIsFor(w, outside.args, context))).toBe(1);
+      expect(r.queue.get(wakes[0].id)?.state).toBe('dropped');
+      // Another thread is another request.
+      expect(heldWakeIsFor(wakes[0], outside.args, { ...context, threadId: 'pr:github.com/o/r#8' })).toBe(false);
+    } finally {
+      setWakeQueue(null);
+    }
+  });
+
   it('a request too long to keep is still matched when the bot starts it after all', () => {
     const r = rig(dir);
     const titles = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
