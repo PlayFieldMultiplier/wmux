@@ -122,6 +122,25 @@ function classifyCode(err: unknown): IpcErrorCode {
   return 'UNKNOWN';
 }
 
+/**
+ * Refusals whose own sentence is the message: the code alone would say "An
+ * unknown error occurred." and drop what to do. #2388: a pane refused in a
+ * task folder whose removal did not finish names the folder and the ways out.
+ */
+const OWN_SENTENCE_REFUSALS: readonly RegExp[] = [/a task folder whose removal did not finish/];
+
+/** The main-side sentence of such a refusal, without Electron's envelope or
+ *  wrapHandler's code token; null for any other error. */
+function ownSentence(err: unknown): string | null {
+  const raw = extractMessage(err);
+  if (!OWN_SENTENCE_REFUSALS.some((re) => re.test(raw))) return null;
+  const coded = MESSAGE_CODE_PREFIX.exec(raw);
+  const body = coded
+    ? raw.slice(coded.index + coded[0].length)
+    : raw.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+  return body.trim() || null;
+}
+
 function extractMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'string') return err;
@@ -174,7 +193,7 @@ export function createInvoke(
       return { ok: true, data };
     } catch (err: unknown) {
       const code = classifyCode(err);
-      const message = overrides[code] ?? t(DEFAULT_MESSAGE_KEYS[code]);
+      const message = ownSentence(err) ?? overrides[code] ?? t(DEFAULT_MESSAGE_KEYS[code]);
       const error: IpcErrorShape = {
         code,
         message,

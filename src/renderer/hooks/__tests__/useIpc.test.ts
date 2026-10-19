@@ -48,6 +48,41 @@ describe('useIpc / createInvoke', () => {
     });
   });
 
+  // #2388: a pane refused in a task folder whose removal did not finish
+  // showed "An unknown error occurred." on its banner and toast.
+  describe('a refusal that carries its own sentence', () => {
+    const sentence = '/wt/task-a is inside /wt/task-a, a task folder whose removal did not finish; open the pane in another folder, or close its task again to finish the removal';
+
+    it('passes the sentence through Electron\'s envelope and the code token', async () => {
+      const invoke = createInvoke(undefined, toastSpy);
+      const result = await invoke(async () => {
+        throw new Error(`Error invoking remote method 'pty:create': Error: [UNKNOWN] ${sentence}`);
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('UNKNOWN');
+        expect(result.error.message).toBe(sentence);
+      }
+      expect(toastSpy).toHaveBeenCalledWith(sentence, 'error');
+    });
+
+    it('passes it through without a code token too', async () => {
+      const invoke = createInvoke(undefined, toastSpy);
+      const result = await invoke(async () => {
+        throw new Error(`Error invoking remote method 'pty:create': Error: ${sentence}`);
+      });
+      if (!result.ok) expect(result.error.message).toBe(sentence);
+    });
+
+    it('leaves any other unknown error on the fixed message', async () => {
+      const invoke = createInvoke(undefined, toastSpy);
+      const result = await invoke(async () => {
+        throw new Error("Error invoking remote method 'pty:create': Error: [UNKNOWN] spawn failed");
+      });
+      if (!result.ok) expect(result.error.message).toBe('An unknown error occurred.');
+    });
+  });
+
   describe('error classification', () => {
     const cases: Array<{ code: IpcErrorCode; expected: string }> = [
       { code: 'DAEMON_DISCONNECTED', expected: 'The terminal service is not responding. Retrying…' },

@@ -195,7 +195,7 @@ function refusalAmong(
   for (const rec of records) {
     const held = canonicalKey(rec.path);
     if (want === held || want.startsWith(held + path.sep)) {
-      return `${cwd} is inside ${rec.path}, a task folder whose removal did not finish; open the pane in another folder, or close its task again to finish the removal`;
+      return `${cwd} is inside ${rec.path}, a task folder whose removal did not finish; open the pane in another folder, or close its task again to finish the removal (Close and keep folder ends the removal and keeps the folder)`;
     }
   }
   return null;
