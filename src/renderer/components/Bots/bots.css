@@ -699,3 +699,62 @@
 .wmux-bots-photo-viewer img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
 /* The composer's staged photos sit above the pill, end-aligned with it. */
 [data-bots-composer-photos] .wmux-chat-attachments { padding: 0 4px; }
+
+/* Files a bot attached to its card (BotsFiles.tsx): a chip each under the
+   bubble, wrapping — the chip grammar (26px, --chip-radius, a --selection
+   fill and no border), pressed (--selection-emphasis) while the side panel
+   shows it. A card without files draws nothing. */
+.wmux-bots-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+}
+.wmux-bots-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+  border-radius: var(--chip-radius);
+  background: var(--selection);
+  color: var(--text-main);
+  font-size: 12px;
+}
+.wmux-bots-file-chip:hover { background: var(--selection-hover); }
+.wmux-bots-file-chip.is-open { background: var(--selection-emphasis); }
+.wmux-bots-file-glyph { display: inline-flex; flex-shrink: 0; color: var(--text-muted); }
+.wmux-bots-file-name { min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wmux-bots-file-size { flex-shrink: 0; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* A file in the side panel: the panel's header, then the file filling the
+   rest — text and markdown scroll inside; an image is fitted (never above
+   100%). */
+.wmux-bots-file-body { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.wmux-bots-file-scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 16px; }
+.wmux-bots-file-note { margin: 0 0 8px; padding: 0 16px; font-size: 12px; color: var(--text-muted); }
+.wmux-bots-file-scroll .wmux-bots-file-note { padding: 0; }
+.wmux-bots-file-body > .wmux-bots-file-note { padding-top: 4px; }
+.wmux-bots-file-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.wmux-bots-file-markdown { user-select: text; }
+.wmux-bots-file-image {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+.wmux-bots-file-image img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }

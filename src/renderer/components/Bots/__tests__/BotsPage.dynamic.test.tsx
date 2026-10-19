@@ -938,6 +938,39 @@ describe('Bots page', () => {
     expect(document.querySelector('[data-testid="bots-photo-viewer"]')).toBeNull();
   });
 
+  it("a bot card's files show as chips that open in the side panel; Escape and another conversation close it", async () => {
+    const id = 'd'.repeat(32);
+    const file = { id, name: 'report.md', mediaType: 'text/markdown', bytes: 2048 };
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Here is the report', threadId: `dm:${LEAD}`, at: 500, files: [file] }));
+    const withFiles = api();
+    withFiles.fileRead = vi.fn(async () => ({ ok: true as const, file, text: '# Report' })) as unknown as RoomsApi['fileRead'];
+    withFiles.fileSave = vi.fn(async () => ({ ok: true as const, savedTo: '/tmp/report.md' })) as unknown as RoomsApi['fileSave'];
+    setRoomsApiForTests(withFiles);
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    await act(async () => { await Promise.resolve(); });
+    const withChip = container.querySelector(`[data-room-card-id="${cards.at(-1)!.id}"]`)!;
+    const chip = withChip.querySelector<HTMLButtonElement>(`[data-bots-file="${id}"]`)!;
+    expect(chip.getAttribute('aria-label')).toBe('Open report.md (2.0 KB)');
+    // A card without files draws no file row.
+    expect(container.querySelector(`[data-room-card-id="${cards[1].id}"] [data-bots-files]`)).toBeNull();
+    chip.focus();
+    await act(async () => { chip.click(); });
+    expect(withFiles.fileRead).toHaveBeenCalledWith({ workspaceId: 'w1', fileId: id });
+    await vi.waitFor(() => expect(q('[data-bots-file-panel] [data-bots-file-view="markdown"]')?.textContent).toBe('Report'), { timeout: 5_000 });
+    expect(q('.wmux-bots-chat-area')?.getAttribute('data-worker-open')).toBe('true');
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(q('[data-bots-file-panel]')).toBeNull();
+    // Another conversation closes it.
+    await act(async () => { q<HTMLButtonElement>(`[data-room-card-id="${cards.at(-1)!.id}"] [data-bots-file]`)!.click(); });
+    expect(q('[data-bots-file-panel]')).not.toBeNull();
+    act(() => q('[data-bots-row="group:grp-000000a1"]')!.click());
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    expect(q('[data-bots-file-panel]')).toBeNull();
+  });
+
   it('a group message goes to every bot of the group unless some are picked: "To: everyone ▾", a ticked box or a typed @name; picks reset after send', async () => {
     seedRooms();
     await render(<BotsPage />);
