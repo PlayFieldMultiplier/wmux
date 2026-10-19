@@ -30,6 +30,10 @@ describe('describeExitCode', () => {
     expect(describeExitCode(0xffff7003)).toBe('0xFFFF7003 (native crash; Crashpad had no handler, the fault code is lost)');
   });
 
+  it('names Node’s own abort on Windows (a heap out of memory exits 134 there, not the CRT’s 3)', () => {
+    expect(describeExitCode(134)).toBe('0x00000086 (Node abort: out of memory or process.abort(); see the crash-reports folder)');
+  });
+
   it('gives an unknown code its decimal value', () => {
     expect(describeExitCode(77)).toBe('0x0000004D (code 77)');
     expect(hexExitCode(0xdeadbeef)).toBe('0xDEADBEEF');

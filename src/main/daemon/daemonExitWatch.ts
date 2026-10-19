@@ -33,6 +33,10 @@ const KNOWN_EXIT_CODES = new Map<number, string>([
   [0, 'clean exit'],
   [1, 'exit(1)'],
   [3, 'abort()'],
+  // Node's own abort on Windows (a V8 heap out of memory, process.abort()):
+  // Node exits 134 there, not the CRT's 3. On POSIX the same abort is SIGABRT,
+  // which the `killed by` branch reports instead.
+  [134, 'Node abort: out of memory or process.abort(); see the crash-reports folder'],
   [DAEMON_EXIT_ALREADY_RUNNING, 'another daemon already runs'],
   [0xc0000005, 'access violation'],
   [0xc0000017, 'out of memory'],
