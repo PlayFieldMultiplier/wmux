@@ -4989,6 +4989,8 @@ export const en = {
   'botsPage.guest.empty': "No guest bots yet.",
   'botsPage.guest.revoke': "Revoke",
   'botsPage.guest.revoked': "revoked",
+  'botsPage.guest.revoking': "Revoking…",
+  'botsPage.guest.error.revokeFailed': "Guest bot \"{name}\" was not revoked: {reason} Its token still works: open Guest bots and revoke it again.",
   'botsPage.guest.lastSeen': "last seen {when}",
   'botsPage.guest.neverSeen': "not connected yet",
   'botsPage.guest.author': "{name} · external guest",

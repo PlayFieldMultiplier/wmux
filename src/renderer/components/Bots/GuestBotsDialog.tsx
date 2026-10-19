@@ -17,7 +17,8 @@ import {
   GUEST_LIMITS, GUEST_NAME_MAX, GUEST_ROUTES, sanitizeGuestName,
   type GuestBotErrorCode, type GuestBotGates, type GuestBotView, type GuestScope,
 } from '../../../shared/guestBots';
-import { getGuestBotPort, type GuestBotPort } from './guestBots';
+import { getGuestBotPort, getGuestRevocations, type GuestBotPort, type GuestRevocations } from './guestBots';
+import { useStore } from '../../stores';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -47,11 +48,13 @@ export function guestGateNotes(g: GuestBotGates): string[] {
   return out;
 }
 
-export default function GuestBotsDialog({ t, conversations, onClose, port = getGuestBotPort() }: {
+export default function GuestBotsDialog({ t, conversations, onClose, port = getGuestBotPort(), revocations = getGuestRevocations() }: {
   t: T;
   conversations: readonly GuestConversationOption[];
   onClose: () => void;
   port?: GuestBotPort;
+  /** Revokes in flight; they outlive this dialog. */
+  revocations?: GuestRevocations;
 }): React.ReactElement {
   const [guests, setGuests] = useState<GuestBotView[]>([]);
   const [gates, setGates] = useState<GuestBotGates | null>(null);
@@ -95,11 +98,31 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
     setName('');
     reload();
   };
-  const revoke = async (guestId: string) => {
+  // Revocations in flight, kept outside this dialog: closing it never hides
+  // a failure (an unseen one becomes a persistent error toast).
+  const [revoking, setRevoking] = useState<ReadonlySet<string>>(() => revocations.pending());
+  useEffect(() => {
+    const offChange = revocations.onChange(() => setRevoking(revocations.pending()));
+    const offOutcome = revocations.onOutcome(({ result }) => {
+      if (!result.ok) setError(t(ERROR_KEYS[result.code]));
+      reload();
+      return true;
+    });
+    setRevoking(revocations.pending());
+    return () => {
+      offChange();
+      offOutcome();
+    };
+  }, [revocations, reload, t]);
+  const revoke = (g: GuestBotView) => {
     setError(null);
-    const r = await port.revoke(guestId).catch(() => ({ ok: false as const, code: 'unavailable' as const }));
-    if (!r.ok) setError(t(ERROR_KEYS[r.code]));
-    reload();
+    void revocations.revoke(port, g.guestId, (r) => {
+      useStore.getState().pushToast({
+        level: 'error',
+        persist: true,
+        message: t('botsPage.guest.error.revokeFailed', { name: g.name, reason: t(ERROR_KEYS[r.code]) }),
+      });
+    });
   };
   const toggle = async (on: boolean) => {
     setError(null);
@@ -161,8 +184,15 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
                     : g.lastSeenAt ? t('botsPage.guest.lastSeen', { when: new Date(g.lastSeenAt).toLocaleString() }) : t('botsPage.guest.neverSeen')}`}</span>
                 </span>
                 {!g.revokedAt && (
-                  <button type="button" data-testid={`guest-revoke-${g.guestId}`} onClick={() => void revoke(g.guestId)} className={`text-[11px] text-[var(--accent-red)] hover:underline ${FOCUS_RING}`}>
-                    {t('botsPage.guest.revoke')}
+                  <button
+                    type="button"
+                    data-testid={`guest-revoke-${g.guestId}`}
+                    disabled={revoking.has(g.guestId)}
+                    aria-busy={revoking.has(g.guestId) || undefined}
+                    onClick={() => revoke(g)}
+                    className={`text-[11px] text-[var(--accent-red)] hover:underline disabled:opacity-60 disabled:no-underline ${FOCUS_RING}`}
+                  >
+                    {t(revoking.has(g.guestId) ? 'botsPage.guest.revoking' : 'botsPage.guest.revoke')}
                   </button>
                 )}
               </li>

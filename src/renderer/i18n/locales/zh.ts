@@ -4095,6 +4095,8 @@ export const zh = {
   'botsPage.guest.empty': "还没有访客机器人。",
   'botsPage.guest.revoke': "撤销",
   'botsPage.guest.revoked': "已撤销",
+  'botsPage.guest.revoking': "正在撤销…",
+  'botsPage.guest.error.revokeFailed': "访客机器人“{name}”未能撤销：{reason} 它的令牌仍然有效：请打开访客机器人并再次撤销。",
   'botsPage.guest.lastSeen': "最后连接 {when}",
   'botsPage.guest.neverSeen': "尚未连接",
   'botsPage.guest.author': "{name} · 外部访客",

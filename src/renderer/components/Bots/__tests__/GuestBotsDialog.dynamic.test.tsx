@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GuestBotGates, GuestBotView, GuestScope } from '../../../../shared/guestBots';
 import { en } from '../../../i18n/locales/en';
 import GuestBotsDialog, { guestGateNotes } from '../GuestBotsDialog';
-import type { GuestBotPort } from '../guestBots';
+import { GuestRevocations, type GuestBotPort } from '../guestBots';
+import { useStore } from '../../../stores';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -44,6 +45,8 @@ function fakePort(start: GuestBotView[] = [], gates: GuestBotGates = GATES) {
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  revocations = new GuestRevocations();
+  useStore.getState().clearToasts();
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -68,8 +71,9 @@ async function click(el: Element | null): Promise<void> {
   await flush();
 }
 
+let revocations = new GuestRevocations();
 async function open(port: ReturnType<typeof fakePort>) {
-  act(() => root.render(<GuestBotsDialog t={t} conversations={conversations} onClose={() => undefined} port={port} />));
+  act(() => root.render(<GuestBotsDialog t={t} conversations={conversations} onClose={() => undefined} port={port} revocations={revocations} />));
   await flush();
 }
 
@@ -110,6 +114,50 @@ describe('GuestBotsDialog', () => {
     expect(port.revoke).toHaveBeenCalledWith(ID);
     expect(q(`[data-guest-row="${ID}"]`)?.getAttribute('data-guest-revoked')).toBe('true');
     expect(q(`[data-testid="guest-revoke-${ID}"]`)).toBeNull();
+  });
+
+  it('a revoke in flight shows Revoking… and sends once; a failure shows in the open dialog, not as a toast', async () => {
+    const port = fakePort([{ v: 1, guestId: ID, name: 'Grok', scope: DM, createdAt: '2026-10-19T00:00:00.000Z' }]);
+    let answer: (r: { ok: false; code: 'persist-failed' }) => void = () => undefined;
+    port.revoke.mockImplementationOnce(() => new Promise((res) => { answer = res; }) as never);
+    await open(port);
+    await click(q(`[data-testid="guest-revoke-${ID}"]`));
+    const btn = q<HTMLButtonElement>(`[data-testid="guest-revoke-${ID}"]`)!;
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toBe(en['botsPage.guest.revoking']);
+    await click(btn);
+    expect(port.revoke).toHaveBeenCalledTimes(1);
+    await act(async () => { answer({ ok: false, code: 'persist-failed' }); });
+    await flush();
+    expect(q('[data-guest-error]')?.textContent).toBe(en['botsPage.guest.error.persistFailed']);
+    expect(q<HTMLButtonElement>(`[data-testid="guest-revoke-${ID}"]`)!.disabled).toBe(false);
+    expect(useStore.getState().toasts).toEqual([]);
+  });
+
+  it('a revoke that fails after the dialog closed becomes a persistent error toast', async () => {
+    const port = fakePort([{ v: 1, guestId: ID, name: 'Grok', scope: DM, createdAt: '2026-10-19T00:00:00.000Z' }]);
+    let answer: (r: { ok: false; code: 'unavailable' }) => void = () => undefined;
+    port.revoke.mockImplementationOnce(() => new Promise((res) => { answer = res; }) as never);
+    await open(port);
+    await click(q(`[data-testid="guest-revoke-${ID}"]`));
+    act(() => root.unmount());
+    root = createRoot(host);
+    expect(revocations.isPending(ID)).toBe(true);
+    await act(async () => { answer({ ok: false, code: 'unavailable' }); });
+    await flush();
+    const toasts = useStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ level: 'error', persist: true });
+    expect(toasts[0].message).toContain('Grok');
+    expect(toasts[0].message).toContain(en['botsPage.guest.error.unavailable']);
+    // Reopened while one is in flight, the dialog shows it as Revoking….
+    port.revoke.mockImplementationOnce(() => new Promise(() => undefined) as never);
+    await open(port);
+    await click(q(`[data-testid="guest-revoke-${ID}"]`));
+    act(() => root.unmount());
+    root = createRoot(host);
+    await open(port);
+    expect(q<HTMLButtonElement>(`[data-testid="guest-revoke-${ID}"]`)!.disabled).toBe(true);
   });
 
   it('shows a refusal from the daemon', async () => {

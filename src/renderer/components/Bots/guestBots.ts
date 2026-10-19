@@ -44,3 +44,86 @@ export function getGuestBotPort(): GuestBotPort {
 export function setGuestBotPort(next: GuestBotPort | null): void {
   port = next;
 }
+
+// ── Revocations in flight ───────────────────────────────────────────────────
+//
+// A revoke outlives the dialog that asked for it: the owner may close Guest
+// bots before the daemon answers. The pending set and the outcome live here,
+// not in the dialog. An open dialog shows both (Revoking…, its error line);
+// a failure no open dialog took is reported through `onUnseenFailure`, so the
+// owner always learns that a token still works.
+
+export type GuestRevokeListener = (ev: { guestId: string; result: GuestBotSimpleResult }) => boolean | void;
+
+export class GuestRevocations {
+  private readonly inFlight = new Set<string>();
+  private readonly listeners = new Set<GuestRevokeListener>();
+  private readonly changes = new Set<() => void>();
+
+  pending(): ReadonlySet<string> {
+    return new Set(this.inFlight);
+  }
+
+  isPending(guestId: string): boolean {
+    return this.inFlight.has(guestId);
+  }
+
+  /** Told of each outcome; returning true means it was shown to the owner. */
+  onOutcome(fn: GuestRevokeListener): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  onChange(fn: () => void): () => void {
+    this.changes.add(fn);
+    return () => this.changes.delete(fn);
+  }
+
+  /** Revoke once per guest at a time; a second ask while one is in flight
+   *  returns null and sends nothing. */
+  async revoke(port: GuestBotPort, guestId: string, onUnseenFailure: (result: Extract<GuestBotSimpleResult, { ok: false }>) => void): Promise<GuestBotSimpleResult | null> {
+    if (this.inFlight.has(guestId)) return null;
+    this.inFlight.add(guestId);
+    this.changed();
+    let result: GuestBotSimpleResult;
+    try {
+      result = await port.revoke(guestId);
+    } catch {
+      result = { ok: false, code: 'unavailable' };
+    }
+    this.inFlight.delete(guestId);
+    this.changed();
+    let seen = false;
+    for (const fn of [...this.listeners]) {
+      try {
+        if (fn({ guestId, result }) === true) seen = true;
+      } catch {
+        /* a listener's failure is not the revoke's */
+      }
+    }
+    if (!result.ok && !seen) onUnseenFailure(result);
+    return result;
+  }
+
+  private changed(): void {
+    for (const fn of [...this.changes]) {
+      try {
+        fn();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+let revocations: GuestRevocations | null = null;
+
+export function getGuestRevocations(): GuestRevocations {
+  revocations ??= new GuestRevocations();
+  return revocations;
+}
+
+/** Tests. */
+export function setGuestRevocations(next: GuestRevocations | null): void {
+  revocations = next;
+}

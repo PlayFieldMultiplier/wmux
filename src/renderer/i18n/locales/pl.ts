@@ -4950,6 +4950,8 @@ export const pl = {
   'botsPage.guest.empty': "Nie ma jeszcze botów-gości.",
   'botsPage.guest.revoke': "Odwołaj",
   'botsPage.guest.revoked': "odwołany",
+  'botsPage.guest.revoking': "Odwoływanie…",
+  'botsPage.guest.error.revokeFailed': "Nie odwołano bota-gościa „{name}”: {reason} Jego token nadal działa: otwórz Boty-goście i odwołaj go ponownie.",
   'botsPage.guest.lastSeen': "ostatnio {when}",
   'botsPage.guest.neverSeen': "jeszcze nie połączony",
   'botsPage.guest.author': "{name} · gość z zewnątrz",
