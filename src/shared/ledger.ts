@@ -190,9 +190,10 @@ export interface LedgerDispatch {
   handoffId?: string;
   /** A bot's task: the connections its worker was started with (names). */
   connectors?: string[];
-  /** Completion criteria for a research / no-changes task, set only by main
-   *  at dispatch (never by a worker). The worker's evidence is graded against
-   *  these; absent = main stamped the default research criteria. */
+  /** Completion criteria for a research task, set only by main at dispatch
+   *  (never by a worker): what the worker's evidence should show. A task's
+   *  no-changes skip is known only after its run, so such a task has none;
+   *  its evidence is graded the same way (TaskLedger.update). */
   criteria?: string[];
   /** Written by the WorkTask reconciler for a task it mirrored with no row,
    *  from the task's lineage stamp: only `origin` is known. The fan-out's own

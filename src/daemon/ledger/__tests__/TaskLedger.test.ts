@@ -657,6 +657,24 @@ describe('TaskLedger — non-code verifiedItemCount grade', () => {
     return { id, rev: reported.entry.rev };
   }
 
+  it('a new report replaces the evidence: none or malformed leaves Not verified, never the earlier grade', async () => {
+    const a = open();
+    const { id, rev } = await seedResearchReported(a);
+    expect(a.get(id)?.verifiedItemCount).toBe(1);
+    const resumed = await a.update({ id, status: 'working', actor: WORKER, expectedRev: rev });
+    if (!resumed.ok) throw new Error(resumed.message);
+    const bare = await a.update({ id, status: 'review_requested', actor: WORKER, expectedRev: resumed.entry.rev, summary: 'again' });
+    expect(bare.ok && bare.entry.evidence === undefined && bare.entry.verifiedItemCount === undefined).toBe(true);
+    if (!bare.ok) throw new Error(bare.message);
+    const resumed2 = await a.update({ id, status: 'working', actor: WORKER, expectedRev: bare.entry.rev });
+    if (!resumed2.ok) throw new Error(resumed2.message);
+    const malformed = await a.update({ id, status: 'review_requested', actor: WORKER, expectedRev: resumed2.entry.rev, evidence: { nope: true } });
+    if (!malformed.ok) throw new Error(malformed.message);
+    expect(malformed.entry.evidence).toBeUndefined();
+    const done = await a.update({ id, status: 'completed', actor: BRAIN, expectedRev: malformed.entry.rev });
+    expect(done).toMatchObject({ ok: true, entry: { status: 'completed', verifiedItemCount: 0 } });
+  });
+
   it('grades evidence on completed; a caller-supplied verifiedItemCount is ignored', async () => {
     const a = open();
     const { id, rev } = await seedResearchReported(a);

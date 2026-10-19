@@ -93,7 +93,6 @@
 // completion and the wake (same id, so a delivered wake is dropped).
 
 import { isResearchDispatch, type LedgerActor, type LedgerEntry, type LedgerGateResult } from '../../shared/ledger';
-import { gradeNonCodeEvidence } from '../../shared/nonCodeTaskEvidence';
 import type { BotProfile } from '../../shared/bot';
 import type { Fact } from '../../shared/facts';
 import { normalizeRepoKey } from '../../shared/repoKey';
@@ -121,14 +120,11 @@ export function reportWasGated(entry: LedgerEntry): boolean {
 /**
  * Complete a bot's research task on its report: only a row still in
  * review_requested whose dispatch is a research task, written as the task's
- * owner with no force (the ledger completes such a row without a gate). One
- * retry on a write that landed in between. Never throws.
+ * owner with no force (the ledger completes such a row without a gate and
+ * grades the evidence the row holds then). One retry on a write that landed
+ * in between. Never throws.
  */
-export async function completeResearchTask(
-  ledger: CheckedTaskLedger,
-  taskId: string,
-  evidence?: { evidence?: LedgerEntry['evidence']; verifiedItemCount?: number },
-): Promise<{ entry: LedgerEntry } | { entry: null; why: string }> {
+export async function completeResearchTask(ledger: CheckedTaskLedger, taskId: string): Promise<{ entry: LedgerEntry } | { entry: null; why: string }> {
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       const row = ledger.get(taskId);
@@ -140,8 +136,6 @@ export async function completeResearchTask(
         status: 'completed',
         actor: { kind: 'brain', workspaceId: row.ownerWorkspaceId },
         expectedRev: row.rev,
-        ...(evidence?.evidence ? { evidence: evidence.evidence } : {}),
-        ...(evidence && typeof evidence.verifiedItemCount === 'number' ? { verifiedItemCount: evidence.verifiedItemCount } : {}),
       });
       if (r.ok) return { entry: r.entry };
       if (r.error !== 'stale_rev') return { entry: null, why: r.message };
@@ -328,7 +322,7 @@ export interface TaskGatePorts {
   /** completeCheckedTask over the hosted ledger. */
   complete: (taskId: string) => Promise<{ entry: LedgerEntry } | { entry: null; why: string }>;
   /** completeResearchTask over the hosted ledger. */
-  completeResearch?: (taskId: string, evidence?: { evidence?: LedgerEntry['evidence']; verifiedItemCount?: number }) => Promise<{ entry: LedgerEntry } | { entry: null; why: string }>;
+  completeResearch?: (taskId: string) => Promise<{ entry: LedgerEntry } | { entry: null; why: string }>;
   /** The fact log's live facts: a `pr.merged` on a task's repository checks
    *  its open reports now (a trigger only: prsOfBranch is the evidence). */
   onFact?: (fn: (f: Fact) => void) => () => void;
@@ -710,21 +704,16 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
   const run = async (taskId: string, atInstall: boolean): Promise<void> => {
     const entry = stillReported(taskId);
     if (!entry) return;
-    // A research task changed no code: no code gate, but criteria/evidence still grade it.
+    // A research task changed no code: no code gate; the ledger grades its evidence.
     if (isResearchDispatch(entry.dispatch)) {
-      const graded = gradeNonCodeEvidence(entry.evidence);
       const done = ports.completeResearch
-        ? await ports.completeResearch(entry.id, {
-            ...(graded.evidence ? { evidence: graded.evidence } : {}),
-            verifiedItemCount: graded.verifiedItemCount,
-          })
+        ? await ports.completeResearch(entry.id)
         : { entry: null, why: 'research tasks cannot be completed here' };
       if (done.entry) {
         const verified = done.entry.verifiedItemCount ?? 0;
         const total = done.entry.evidence?.items?.length ?? 0;
-        const criteria = entry.dispatch?.criteria ?? [];
         const body = verified > 0 && total > 0
-          ? `Evidence ${verified}/${total} verified against ${criteria.length || 'the'} completion criteria. A research task changes no code, so no code gate runs.`
+          ? `Evidence attached: ${verified}/${total} item(s) marked verified. A research task changes no code, so no code gate runs.`
           : 'No verified evidence was recorded for this research report (Not verified). A research task changes no code, so no code gate runs.';
         const notice = verified > 0
           ? { code: 'research.completed' as const, args: { verified, total } }

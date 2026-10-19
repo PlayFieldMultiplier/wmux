@@ -883,7 +883,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
             return runner.run(input);
           },
           complete: (taskId) => completeCheckedTask(ledger, taskId),
-          completeResearch: (taskId, evidence) => completeResearchTask(ledger, taskId, evidence),
+          completeResearch: (taskId) => completeResearchTask(ledger, taskId),
           // A merged PR from a reported task's branch ends that task: GitHub's
           // list is the evidence (the repo watch's gh runner and breaker); a
           // pr.merged fact only checks again sooner.

@@ -545,6 +545,17 @@ describe('a research task (no repository, no code)', () => {
     expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', row.rev)]);
   });
 
+  it('completes with the evidence the row holds when it settles: a newer report\'s, not an earlier one\'s', async () => {
+    await register('task-1', 'research');
+    const evidence = { summary: 'Findings', items: [{ kind: 'inspection', status: 'verified', summary: 'Source A', location: 'https://a.example' }] };
+    const first = await ledger.update({ id: 'task-1', status: 'review_requested', actor: { kind: 'worker', workspaceId: 'task-1-ws' }, expectedRev: (ledger.get('task-1') as LedgerEntry).rev, summary: 'done', evidence });
+    if (!first.ok) throw new Error(first.message);
+    expect(first.entry.verifiedItemCount).toBe(1);
+    await report('task-1', 'working');
+    await report('task-1');
+    expect((await completeResearchTask(ledger, 'task-1')).entry).toMatchObject({ status: 'completed', verifiedItemCount: 0 });
+  });
+
   it('the ledger completes only a bot\'s research row without a gate: a pane task named "research" still needs one', async () => {
     await register('task-1', 'research');
     await register('task-2', 'research', { kind: 'pane' });

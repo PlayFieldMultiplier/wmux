@@ -537,20 +537,24 @@ export class TaskLedger {
         ? truncateHead(`${base ? `${base} ` : ''}[forced: ${forcedReason}]`, LEDGER_SUMMARY_MAX_BYTES)
         : base;
     // Research / no-changes evidence: graded here so a worker cannot claim
-    // verifiedItemCount. On a report, store the evidence; on a system/brain
-    // completion of a non-code task, grade what is there (0 = Not verified).
+    // verifiedItemCount. Each report replaces the evidence (none or malformed
+    // clears it, so an earlier report's grade never carries over); on a
+    // system/brain completion of a non-code task, grade what is there
+    // (0 = Not verified).
     let evidencePatch: { evidence?: LedgerEntry['evidence']; verifiedItemCount?: number } = {};
     const nonCode = isResearchDispatch(entry.dispatch) || entry.gate?.skipped === 'no_changes';
-    if (next === 'review_requested' && input.evidence !== undefined) {
-      const graded = gradeNonCodeEvidence(input.evidence);
-      if (graded.evidence) evidencePatch = { evidence: graded.evidence, verifiedItemCount: graded.verifiedItemCount };
+    if (next === 'review_requested') {
+      const graded = input.evidence !== undefined ? gradeNonCodeEvidence(input.evidence) : null;
+      evidencePatch = graded?.evidence
+        ? { evidence: graded.evidence, verifiedItemCount: graded.verifiedItemCount }
+        : { evidence: undefined, verifiedItemCount: undefined };
     } else if (next === 'completed' && nonCode) {
       const raw = input.evidence !== undefined ? input.evidence : entry.evidence;
       const graded = gradeNonCodeEvidence(raw);
       // Grade is authoritative. input.verifiedItemCount is ignored for every
       // actor — workers via RPC/MCP must never raise the grade, and the
-      // in-process settle (taskGate) already grades the same evidence, so the
-      // ledger's count stays the single source of truth.
+      // in-process settle (taskGate) passes no evidence, so the ledger's
+      // count of the row's current evidence stays the single source of truth.
       evidencePatch = {
         ...(graded.evidence ? { evidence: graded.evidence } : entry.evidence ? { evidence: entry.evidence } : {}),
         verifiedItemCount: graded.verifiedItemCount,
