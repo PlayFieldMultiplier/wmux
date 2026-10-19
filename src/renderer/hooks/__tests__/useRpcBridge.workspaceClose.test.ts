@@ -92,6 +92,16 @@ describe('useRpcBridge — workspace.close receipt honesty (#799)', () => {
     );
   });
 
+  // #2388: a bot task's workspace is closed here right after its panes'
+  // trees were stopped; a command started since must not be ended.
+  it('refuses, without force, a workspace whose shell runs a command, before any dispose', () => {
+    const block = closeHandler();
+    const refusal = block.indexOf('a command is still running in');
+    expect(block).toMatch(/store\.commandRunningByPtyId\[ptyId\] === true/);
+    expect(refusal).toBeGreaterThan(block.indexOf('if (params.force !== true) {'));
+    expect(refusal).toBeLessThan(block.indexOf('window.electronAPI.pty.dispose('));
+  });
+
   it('has exactly one ok receipt, and it comes after the removal check', () => {
     const block = closeHandler();
     expect(block.match(/return \{ ok: true \};/g)).toHaveLength(1);
