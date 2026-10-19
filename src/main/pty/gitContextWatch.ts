@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { watchTarget } from '../../shared/watchTarget';
 import { wslPathToHost } from '../../mcp/wslPaths';
+import { ChildProbeReader, InProcessProbeReader, type ProbeReader, type ProbeReaderFactory } from './shareReader';
 
 /**
  * X1 workspace-context sidebar — git branch tracking via fs.watch.
@@ -78,7 +79,9 @@ export const REMOTE_POLL_MAX_MS = 60_000;
  * Sized for a cold start, where every recovered pane resolves at once, one
  * probe at a time: measured on a running distro, a non-repo cwd five levels
  * deep is 13 probes in ~12 ms, so 25 panes take ~0.3 s, and ~1.5 s at the
- * MAX_WALK_UP ceiling. A late answer still applies.
+ * MAX_WALK_UP ceiling. A late answer still applies, unless the read it
+ * waits on was itself out for SHARE_READ_DEADLINE_MS (shareReader.ts): that
+ * read fails, and the poll the session falls back to walks again.
  */
 export const REMOTE_RESOLVE_TIMEOUT_MS = 5_000;
 
@@ -131,8 +134,7 @@ type RepoState = { repo: ResolvedRepo | null; conclusive: boolean };
  */
 export interface Probe { op: 'stat' | 'read' | 'realpath'; path: string }
 export type ProbeAnswer = 'dir' | 'file' | 'other' | 'missing' | 'error' | string | null;
-/** `live`, when given, says whether the probe is still wanted (serialProbeIo). */
-export type ProbeIo = (probe: Probe, live?: () => boolean) => Promise<ProbeAnswer>;
+export type ProbeIo = (probe: Probe) => Promise<ProbeAnswer>;
 type Walk = Generator<Probe, RepoState, ProbeAnswer>;
 
 function* resolveSteps(startDir: string, mapGitDir?: GitDirMapper): Walk {
@@ -228,21 +230,11 @@ function statFailure(err: unknown): ProbeAnswer {
 }
 
 /**
- * One probe at a time through `answer` (fs.promises by default). A probe on a
- * WSL share waits on the distro's 9P server, which can be booting or wedged;
- * serialised, a stuck probe parks one libuv threadpool thread (of four)
- * instead of every one the daemon's own fs work needs. `live` is asked when
- * the probe's turn comes, not when it was queued: a probe for a pane that
- * moved on or closed meanwhile is dropped without any IO.
+ * Where a probe is answered: a share's reads in that distro's own reader
+ * process, every other path in this process (see shareReader.ts).
  */
-export function serialProbeIo(answer: ProbeIo = answerAsync): ProbeIo {
-  let tail: Promise<unknown> = Promise.resolve();
-  return (probe, live) => {
-    const run = tail.then(() => (live && !live() ? Promise.reject(new Error('probe no longer wanted')) : answer(probe)));
-    tail = run.catch(() => undefined);
-    return run;
-  };
-}
+export const defaultReaders: ProbeReaderFactory = (share) =>
+  share ? new ChildProbeReader() : new InProcessProbeReader(answerAsync);
 
 /** The distro whose share `p` is on, lower-cased; '' for any other path. */
 function shareOf(p: string): string {
@@ -332,6 +324,16 @@ interface SessionWatch {
   head?: GitContext;
   /** A remote poll round missed its deadline: the answer is unknown. */
   stalled?: boolean;
+  /**
+   * Outside a repo: the poll saw the cwd's `.git`/`HEAD` change and walks
+   * again to learn what it means; cleared once a walk lands.
+   */
+  changed?: boolean;
+  /**
+   * In a repo: a re-walk of the cwd missed its deadline, so what its `.git`
+   * points at is not known to be unchanged. The poll walks again, backing off.
+   */
+  rewalk?: boolean;
   watcher: GitWatchHandle | null;
   debounce: NodeJS.Timeout | null;
   /** Last emitted value, JSON-encoded, to suppress no-op re-emits. */
@@ -341,6 +343,8 @@ interface SessionWatch {
 /** The latest WSL-share cwd a session asked for, until its walk applies. */
 interface RemoteTarget {
   cwd: string;
+  /** The session's generation when asked for; its walk applies only while it is current. */
+  generation: number;
   mapGitDir?: GitDirMapper;
   /** Reads the session as unknown if the walk outlasts REMOTE_RESOLVE_TIMEOUT_MS. */
   timer: NodeJS.Timeout;
@@ -356,39 +360,52 @@ interface RemoteTarget {
  * change (OSC 7 / prompt scrape). When the cwd is outside any repository the
  * watcher arms on the cwd itself so a later `git init` is picked up without
  * polling. A cwd on a WSL share is the exception (see WSL_SHARE): it is
- * resolved asynchronously and polled every REMOTE_POLL_MS, through one probe
- * queue per distro so a wedged distro holds up only its own panes.
+ * resolved asynchronously and polled every REMOTE_POLL_MS, its reads done by
+ * a reader process per distro (shareReader.ts), so a wedged distro holds up
+ * only its own panes and never this process's fs threads.
  */
 export class GitContextWatcher extends EventEmitter {
   private sessions = new Map<string, SessionWatch>();
   private readonly watchFactory: GitWatchFactory;
   private readonly isRemote: (cwd: string) => boolean;
-  private readonly answer: ProbeIo;
-  private readonly queues = new Map<string, ProbeIo>();
+  private readonly makeReader: ProbeReaderFactory;
+  /** One reader per share in use ('' for host paths); closed once unused. */
+  private readonly readers = new Map<string, ProbeReader>();
   /** The WSL-share cwd each session waits on; a superseded one is dropped. */
   private pending = new Map<string, RemoteTarget>();
   /** Sessions with a walk running: at most one each, which takes the latest target. */
   private resolving = new Set<string>();
-  private outstanding = 0;
+  /** The running walk's reads, cancelled the moment its target is replaced or dropped. */
+  private walks = new Map<string, AbortController>();
+  /**
+   * Each session's generation, renewed by every update() and dropped by
+   * remove(). A walk or poll round notes it when it starts and applies its
+   * answer only if it is still current, so an answer read for an earlier
+   * cwd or watch never lands on a newer one.
+   */
+  private generations = new Map<string, number>();
+  private lastGeneration = 0;
 
   /**
    * @param watchFactory Test seam only. Omitted in production, where the
    *   watcher arms `fs.watch` exactly as before.
    * @param remote Test seam only: which cwds take the WSL-share path, and
-   *   what answers each probe (queued per distro by the watcher).
+   *   what reads them: `readers` per share, or `io` answering in this process.
    */
   constructor(
     watchFactory: GitWatchFactory = defaultWatchFactory,
-    remote: { isRemote?: (cwd: string) => boolean; io?: ProbeIo } = {},
+    remote: { isRemote?: (cwd: string) => boolean; io?: ProbeIo; readers?: ProbeReaderFactory } = {},
   ) {
     super();
     this.watchFactory = watchFactory;
     this.isRemote = remote.isRemote ?? ((cwd) => WSL_SHARE.test(cwd));
-    this.answer = remote.io ?? answerAsync;
+    const io = remote.io;
+    this.makeReader = remote.readers ?? (io ? () => new InProcessProbeReader(io) : defaultReaders);
   }
 
   /** @param mapGitDir See GitDirMapper; kept for every later re-resolve. */
   update(sessionId: string, cwd: string, mapGitDir?: GitDirMapper): void {
+    this.generations.set(sessionId, ++this.lastGeneration);
     if (this.isRemote(cwd)) {
       this.updateRemote(sessionId, cwd, mapGitDir);
       return;
@@ -408,18 +425,21 @@ export class GitContextWatcher extends EventEmitter {
 
   /**
    * Resolve a WSL-share cwd off the event loop. Requests coalesce: the
-   * session's target is replaced, and its one walk (resolveRemote) takes the
-   * latest when it next looks, so a burst of cds queues no more than one
-   * probe. A walk slower than REMOTE_RESOLVE_TIMEOUT_MS reads as unknown
-   * until it lands.
+   * session's target is replaced, and its one walk (resolveRemote) lets go
+   * of its read (taking it out of the distro's queue if it was not yet read)
+   * and goes on with the latest, so a burst of cds leaves no more than one
+   * read queued, and a read stuck on another distro never holds up the new
+   * one. A walk slower than REMOTE_RESOLVE_TIMEOUT_MS reads as unknown until
+   * it lands.
    */
   private updateRemote(sessionId: string, cwd: string, mapGitDir?: GitDirMapper): void {
     this.dropPending(sessionId);
     const target: RemoteTarget = {
       cwd,
       mapGitDir,
+      generation: this.generations.get(sessionId) ?? 0,
       timer: setTimeout(() => {
-        if (this.pending.get(sessionId) !== target) return;
+        if (!this.isCurrent(sessionId, target.generation)) return;
         // A live poll on this same cwd (a resync or `git init` re-resolve) is
         // still the best answer there is; keep it.
         const live = this.sessions.get(sessionId);
@@ -442,41 +462,93 @@ export class GitContextWatcher extends EventEmitter {
     try {
       for (let target = this.pending.get(sessionId); target; target = this.pending.get(sessionId)) {
         const wanted = target;
-        const live = () => this.pending.get(sessionId) === wanted;
-        const io: ProbeIo = (probe) => this.probe(probe, live);
+        const live = () => this.isCurrent(sessionId, wanted.generation);
+        const walk = new AbortController();
+        this.walks.set(sessionId, walk);
+        const io: ProbeIo = (probe) => this.probe(probe, walk.signal);
         let state: RepoState = { repo: null, conclusive: false };
         let head: GitContext | undefined;
+        let failed = false;
         try {
           state = await resolveRepoStateAsync(wanted.cwd, io, wanted.mapGitDir);
-          if (state.repo) head = await readGitContextAsync(state.repo, io);
-        } catch { /* superseded, or an answer that throws: unknown */ }
+        } catch {
+          // Cancelled (superseded), or a read that missed its deadline.
+          failed = true;
+        }
+        if (!failed && state.repo) {
+          // The repository is known even if its HEAD does not answer: it is
+          // applied with the branch unknown, and its poll reads HEAD.
+          try { head = await readGitContextAsync(state.repo, io); } catch { /* unknown */ }
+        }
         // Superseded or removed meanwhile: go on with the latest, if any.
         if (!live()) continue;
         this.dropPending(sessionId);
+        // A failed re-walk of the cwd a live poll already watches tells
+        // nothing new; that poll keeps the answer (and reports a stall itself).
+        const current = this.sessions.get(sessionId);
+        if (failed && current?.cwd === wanted.cwd && current.watcher) {
+          // Unless the poll saw the cwd change (a `.git` appearing) and this
+          // walk was how it meant to learn what that is: it has recorded the
+          // new entries already, so it would never ask again. The cwd is no
+          // longer known to be absent, and the poll walks it again.
+          if (current.changed) {
+            current.changed = false;
+            current.conclusive = false;
+            this.readAndEmit(sessionId, current);
+          }
+          // In a repo the poll only reads HEAD and would never walk again,
+          // so a `.git` retargeted in place would keep the old repository.
+          if (current.repo) current.rewalk = true;
+          return;
+        }
         this.apply(sessionId, wanted.cwd, wanted.mapGitDir, state, 'remote', head);
         return;
       }
     } finally {
       this.resolving.delete(sessionId);
+      this.walks.delete(sessionId);
     }
   }
 
-  /** Through the share's own queue, so one wedged distro holds up only its panes. */
-  private probe(probe: Probe, live: () => boolean): Promise<ProbeAnswer> {
-    const share = shareOf(probe.path);
-    let queue = this.queues.get(share);
-    if (!queue) this.queues.set(share, queue = serialProbeIo(this.answer));
-    this.outstanding++;
-    const run = queue(probe, live);
-    const done = () => { this.outstanding--; };
-    run.then(done, done);
-    return run;
+  private isCurrent(sessionId: string, generation: number | undefined): boolean {
+    return generation !== undefined && this.generations.get(sessionId) === generation;
   }
 
+  /** Through the share's own reader, so one wedged distro holds up only its panes. */
+  private probe(probe: Probe, signal: AbortSignal): Promise<ProbeAnswer> {
+    const share = shareOf(probe.path);
+    let reader = this.readers.get(share);
+    if (!reader) this.readers.set(share, reader = this.makeReader(share));
+    return reader.read(probe, signal);
+  }
+
+  /** Drops the session's pending target and cancels the read its walk waits on. */
   private dropPending(sessionId: string): void {
     const target = this.pending.get(sessionId);
     if (target) clearTimeout(target.timer);
     this.pending.delete(sessionId);
+    this.walks.get(sessionId)?.abort();
+  }
+
+  /**
+   * Close every reader no session needs any more: none watches or is moving
+   * to a path on its share, and it has no read in flight (one mid-walk is
+   * looked at again on the next apply or remove). So a distro's reader
+   * process lives exactly as long as some pane is watched there.
+   */
+  private pruneReaders(): void {
+    const used = new Set<string>();
+    for (const watch of this.sessions.values()) {
+      if (!watch.remote) continue;
+      used.add(shareOf(watch.cwd));
+      if (watch.repo) used.add(shareOf(watch.repo.gitDir));
+    }
+    for (const target of this.pending.values()) used.add(shareOf(target.cwd));
+    for (const [share, reader] of this.readers) {
+      if (used.has(share) || reader.outstanding > 0) continue;
+      reader.close();
+      this.readers.delete(share);
+    }
   }
 
   /**
@@ -495,7 +567,12 @@ export class GitContextWatcher extends EventEmitter {
     const existing = this.sessions.get(sessionId);
     if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir
       && existing.conclusive === conclusive && existing.watcher) {
+      existing.changed = false;
+      existing.rewalk = false;
       if (head) this.readAndEmit(sessionId, existing, head);
+      // A walk that moved through another share and back may have left that
+      // share's reader with no pane.
+      this.pruneReaders();
       return; // same checkout — keep the live watcher.
     }
     if (existing) this.teardown(existing);
@@ -520,6 +597,7 @@ export class GitContextWatcher extends EventEmitter {
       watch.watcher = this.poll(sessionId, watch);
     }
     this.readAndEmit(sessionId, watch, head);
+    this.pruneReaders();
   }
 
   /**
@@ -547,17 +625,23 @@ export class GitContextWatcher extends EventEmitter {
   }
 
   remove(sessionId: string): void {
+    this.generations.delete(sessionId);
     this.dropPending(sessionId);
     const watch = this.sessions.get(sessionId);
-    if (!watch) return;
-    this.teardown(watch);
-    this.sessions.delete(sessionId);
+    if (watch) {
+      this.teardown(watch);
+      this.sessions.delete(sessionId);
+    }
+    this.pruneReaders();
   }
 
   dispose(): void {
     for (const sessionId of [...this.pending.keys()]) this.dropPending(sessionId);
     for (const watch of this.sessions.values()) this.teardown(watch);
     this.sessions.clear();
+    this.generations.clear();
+    for (const reader of this.readers.values()) reader.close();
+    this.readers.clear();
     this.removeAllListeners();
   }
 
@@ -566,9 +650,21 @@ export class GitContextWatcher extends EventEmitter {
     return this.sessions.size;
   }
 
-  /** Share probes queued or running — observability/testing only. */
+  /** Reads asked of the readers and not yet settled — observability/testing only. */
   get probesOutstanding(): number {
-    return this.outstanding;
+    let count = 0;
+    for (const reader of this.readers.values()) count += reader.outstanding;
+    return count;
+  }
+
+  /** Sessions with a walk running — observability/testing only. */
+  get walksRunning(): number {
+    return this.resolving.size;
+  }
+
+  /** Readers open, by share ('' for host paths) — observability/testing only. */
+  get readerShares(): string[] {
+    return [...this.readers.keys()];
   }
 
   private teardown(watch: SessionWatch): void {
@@ -644,7 +740,10 @@ export class GitContextWatcher extends EventEmitter {
     let entries: string | null = watch.conclusive ? 'missing missing ' : null;
     let walkEvery = 1;
     let roundsSinceWalk = 0;
-    const io: ProbeIo = (probe) => this.probe(probe, () => !closed);
+    // Closing the poll cancels its read, so nothing waits on a share for a
+    // pane that has gone.
+    const rounds = new AbortController();
+    const io: ProbeIo = (probe) => this.probe(probe, rounds.signal);
     const look = async (): Promise<{ head: GitContext } | { seen: string }> => {
       if (watch.repo) return { head: await readGitContextAsync(watch.repo, io) };
       const gitEntry = await io({ op: 'stat', path: path.join(watch.cwd, '.git') });
@@ -662,9 +761,15 @@ export class GitContextWatcher extends EventEmitter {
         return;
       }
       out = true;
+      const generation = this.generations.get(sessionId);
       const round = look().finally(() => { out = false; });
       const result = await within(round, REMOTE_POLL_DEADLINE_MS);
       if (closed) return;
+      if (!this.isCurrent(sessionId, generation)) {
+        // Read before a newer update(): that one's answer is the current one.
+        schedule();
+        return;
+      }
       if (!result) {
         interval = Math.min(interval * 2, REMOTE_POLL_MAX_MS);
         watch.stalled = true;
@@ -674,8 +779,15 @@ export class GitContextWatcher extends EventEmitter {
         watch.stalled = false;
         if ('head' in result) {
           this.readAndEmit(sessionId, watch, result.head);
+          if (watch.rewalk && ++roundsSinceWalk >= walkEvery) {
+            roundsSinceWalk = 0;
+            walkEvery = Math.min(walkEvery * 2, REMOTE_REWALK_MAX_ROUNDS);
+            watch.rewalk = false;
+            this.update(sessionId, watch.cwd, watch.mapGitDir);
+          }
         } else {
           let again = entries !== null && result.seen !== entries;
+          if (again) watch.changed = true;
           entries = result.seen;
           // An inconclusive walk may have met a passing error (a distro still
           // booting) anywhere up the tree: walk again, backing off.
@@ -696,7 +808,7 @@ export class GitContextWatcher extends EventEmitter {
     };
     schedule();
     return {
-      close() { closed = true; if (timer) clearTimeout(timer); timer = null; },
+      close() { closed = true; if (timer) clearTimeout(timer); timer = null; rounds.abort(); },
       on() { return this; },
     };
   }
