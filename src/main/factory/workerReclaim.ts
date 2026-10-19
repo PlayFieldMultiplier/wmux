@@ -2247,10 +2247,19 @@ export function createWorkerClear(ports: WorkerClearPorts): WorkerClear {
         if (reopenedNow) continue;
         let ok = false;
         try {
-          await ports.stopTrees?.(cur.taskId, ports.workspacePtys(ws) ?? [], () => {
+          const ptys = [...(ports.workspacePtys(ws) ?? [])];
+          await ports.stopTrees?.(cur.taskId, ptys, () => {
             const v = ports.viewedWorkspace();
             return v !== null && v !== ws && !(ports.taskOpen?.(cur.taskId) ?? false);
           });
+          // A pane opened in it while the trees were stopped (a split, a new
+          // tab) was not among them, and the close would end it unchecked:
+          // the next pass looks at the workspace as it is now.
+          const nowPtys = ports.workspacePtys(ws) ?? [];
+          if (nowPtys.length !== ptys.length || nowPtys.some((id) => !ptys.includes(id))) {
+            log(`[factory] clear: ${ws} (task ${cur.taskId}) changed while its panes were stopped; looked at again on the next pass`);
+            continue;
+          }
           ok = await ports.closeWorkspace(ws);
         } catch (err) {
           log(`[factory] clear: ${ws} (task ${cur.taskId}) was not closed: ${String(err)}`);

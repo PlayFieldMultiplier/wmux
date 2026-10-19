@@ -188,6 +188,26 @@ describe('createWorkerClear', () => {
     expect(r.closeWorkspace).not.toHaveBeenCalled();
   });
 
+  // #2388: a pane opened while the trees were stopped (pane.split,
+  // surface.new) was not among them; the close would end it without its tree.
+  it('does not close a workspace that gained a pane while its trees were stopped; the next pass takes it as it is', async () => {
+    const store = await reclaimed('cancelled');
+    let ptys = ['daemon-1'];
+    const stopped: string[][] = [];
+    const r = clearRig(store, {
+      workspacePtys: (id) => (id === 'ws-task' ? ptys : []),
+      stopTrees: async (_t, ids) => {
+        stopped.push([...ids]);
+        if (stopped.length === 1) ptys = ['daemon-1', 'daemon-2'];
+      },
+    });
+    expect(await r.clear.reconcile()).toBe(0);
+    expect(r.closeWorkspace).not.toHaveBeenCalled();
+    expect(await r.clear.reconcile()).toBe(1);
+    expect(stopped).toEqual([['daemon-1'], ['daemon-1', 'daemon-2']]);
+    expect(r.closeWorkspace).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps a failed task\'s workspace until the owner has looked at it, then closes it once they leave', async () => {
     const store = await reclaimed('failed');
     const r = clearRig(store);
