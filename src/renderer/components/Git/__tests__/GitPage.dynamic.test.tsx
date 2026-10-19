@@ -599,4 +599,16 @@ describe('Git page — a workspace folder holding several repos (#2438)', () => 
     expect(scan).toHaveBeenCalledWith('/elsewhere');
     expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe('Not a git repository — focus a pane inside a repo.');
   });
+
+  it('a pane in a folder with no repos does not take the repos of its profile or the starting directory', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/elsewhere'), workspace('prof', '/elsewhere', { profile: { startupCwd: '/work' } } as Partial<Workspace>)],
+      startupDirectory: '/work',
+    }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).not.toHaveBeenCalledWith('/work');
+    expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe('Not a git repository — focus a pane inside a repo.');
+  });
 });

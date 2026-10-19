@@ -180,15 +180,13 @@ export function useRepoGroups(refreshKey: number, enabled = true): RepoGroup[] |
           if (!live()) return;
           if (top !== null) break;
         }
-        // Not in a repo: the repos in its folder's subfolders, from the first
-        // candidate that holds any (#2438).
+        // Not in a repo: the repos in its own folder's subfolders (#2438).
+        // Only the first candidate is scanned, the folder the header names;
+        // the later ones (profile, global starting directory) are not it.
         let tops: readonly string[] = top !== null ? [top] : [];
-        if (top === null) {
-          for (const cwd of candidates) {
-            tops = await scanReposCached(api?.diff?.scanRepos, cwd, force);
-            if (!live()) return;
-            if (tops.length > 0) break;
-          }
+        if (top === null && candidates.length > 0) {
+          tops = await scanReposCached(api?.diff?.scanRepos, candidates[0], force);
+          if (!live()) return;
         }
         for (const t of tops) {
           const mainPath = await mainPathCached(list, t, plat, force);
