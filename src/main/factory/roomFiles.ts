@@ -8,10 +8,14 @@
 // A source is taken only when (`copyIn`):
 //   - its real path (every link in its folders resolved) is strictly inside
 //     the real path of one allowed root (the caller decides the roots: the
-//     bot's repository, its task folders, its own folder);
+//     bot's repository, its task folders, its own folder); on Windows the
+//     real path must also start with the root in its exact case;
 //   - no path segment below that root is a protected file
 //     (botRepoRead.ts BOT_REPO_SECRET_PATTERNS: `.env`, keys, `.git`, ...);
-//   - the path itself is a regular file, not a link, a folder or a device;
+//   - the path itself is a regular file, not a link, a folder or a device,
+//     and on Windows it names the file, not one of its data streams;
+//   - the file has one name: a file with more than one (a hard link) may
+//     hold the content of a file outside every root;
 //   - it opens without following a link and the opened descriptor is the
 //     same file (device and inode) that lstat saw, so a swap between the
 //     check and the read is refused; after the read the real path is
@@ -73,6 +77,25 @@ const MEDIA_TYPES = new Map<string, string>(Object.entries({
 }));
 const KNOWN_MEDIA_TYPES = new Set([OCTET, ...MEDIA_TYPES.values()]);
 
+/** A Windows device name (CON, NUL, COM1, ...), with or without an extension. */
+const WIN32_DEVICE_RE = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/i;
+/** Characters a Windows file name cannot hold. */
+const WIN32_RESERVED_RE = /[:*?"<>|]/;
+
+/** Whether a Windows path names a data stream of a file (`a.txt:s`,
+ *  `a.txt::$DATA`): a `:` past its drive or `\\?\` prefix. Pure. */
+export function namesWin32Stream(p: string): boolean {
+  const rest = p.replace(/^[\\/]{2}[?.][\\/](?:unc[\\/])?/i, '').replace(/^[A-Za-z]:/, '');
+  return rest.includes(':');
+}
+
+/** Whether a file name cannot stand for itself on Windows: a reserved
+ *  character (`:` would name a stream), a trailing dot or space (dropped by
+ *  Windows), or a device name. Pure. */
+export function isWin32UnsafeName(name: string): boolean {
+  return WIN32_RESERVED_RE.test(name) || /[. ]$/.test(name) || WIN32_DEVICE_RE.test(name);
+}
+
 /** A file name's media type, by its extension. Pure. */
 export function roomFileMediaType(name: string): string {
   const dot = name.lastIndexOf('.');
@@ -85,11 +108,16 @@ export function isRoomFileText(mediaType: string): boolean {
   return mediaType.startsWith('text/') || mediaType === 'application/json' || mediaType === 'image/svg+xml';
 }
 
-/** The name a card shows: the last path segment, without control
- *  characters, trimmed to NAME_MAX. Empty when nothing is left. Pure. */
+/** The name a card shows and Save a copy offers: the last path segment,
+ *  without control characters, made a name Windows saves as itself (each
+ *  reserved character becomes `_`, trailing dots and spaces go, a device
+ *  name gets a leading `_`), trimmed to NAME_MAX. Empty when nothing is
+ *  left. Pure. */
 export function roomFileName(source: string): string {
   // eslint-disable-next-line no-control-regex
-  const base = (source.split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  const segment = (source.split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f\u007f]/g, '');
+  const kept = segment.replace(/[:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '');
+  const base = WIN32_DEVICE_RE.test(kept) ? `_${kept}` : kept;
   if (base.length <= ROOM_FILE_LIMITS.NAME_MAX) return base;
   // Keep the extension: it decides how the file is shown.
   const dot = base.lastIndexOf('.');
@@ -107,7 +135,7 @@ export function parseRoomFiles(value: unknown): RoomFile[] | undefined {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     const f = raw as Record<string, unknown>;
     if (typeof f.id !== 'string' || !ROOM_FILE_ID_RE.test(f.id) || seen.has(f.id)) continue;
-    if (typeof f.name !== 'string' || !f.name || f.name.length > ROOM_FILE_LIMITS.NAME_MAX || CONTROL_RE.test(f.name) || /[\\/]/.test(f.name)) continue;
+    if (typeof f.name !== 'string' || !f.name || f.name.length > ROOM_FILE_LIMITS.NAME_MAX || CONTROL_RE.test(f.name) || /[\\/]/.test(f.name) || isWin32UnsafeName(f.name)) continue;
     if (typeof f.mediaType !== 'string' || !KNOWN_MEDIA_TYPES.has(f.mediaType)) continue;
     if (typeof f.bytes !== 'number' || !Number.isSafeInteger(f.bytes) || f.bytes <= 0 || f.bytes > ROOM_FILE_LIMITS.MAX_BYTES) continue;
     seen.add(f.id);
@@ -117,7 +145,7 @@ export function parseRoomFiles(value: unknown): RoomFile[] | undefined {
 }
 
 /** Why a source was not taken. */
-export type RoomFileRefusalReason = 'outside' | 'protected' | 'missing' | 'not_file' | 'size' | 'empty' | 'changed' | 'full' | 'store';
+export type RoomFileRefusalReason = 'outside' | 'protected' | 'missing' | 'not_file' | 'stream' | 'links' | 'size' | 'empty' | 'changed' | 'full' | 'store';
 
 export type RoomFileCopy =
   | { ok: true; file: RoomFile }
@@ -128,6 +156,8 @@ const REFUSAL_TEXT: Record<RoomFileRefusalReason, string> = {
   protected: 'it is a protected file (a secret, a key or git\'s own folder)',
   missing: 'there is no such file',
   not_file: 'it is not a regular file (a folder, a link or a device)',
+  stream: 'it names a data stream of a file, not the file itself',
+  links: 'it has more than one name on disk; attach a file with a single name',
   size: `it is larger than ${ROOM_FILE_LIMITS.MAX_BYTES / (1024 * 1024)} MiB`,
   empty: 'it is empty',
   changed: 'it changed while it was being read',
@@ -183,10 +213,16 @@ function realpathOrNull(p: string): string | null {
   }
 }
 
-/** `target` relative to `root` when strictly inside it, else null. */
-function strictlyInside(root: string, target: string): string | null {
-  const rel = path.relative(root, target);
-  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+/** `target` relative to `root` when strictly inside it, else null. Both are
+ *  real paths. Windows compares paths without regard to case, yet a folder
+ *  can be case-sensitive (WSL makes them so), where `REPO` is a sibling of
+ *  `repo`; a real path gives each folder its on-disk case, so one truly
+ *  inside starts with the root exactly. Pure. */
+export function strictlyInside(root: string, target: string, platform: NodeJS.Platform = process.platform): string | null {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const rel = p.relative(root, target);
+  if (!rel || rel === '..' || rel.startsWith(`..${p.sep}`) || p.isAbsolute(rel)) return null;
+  if (platform === 'win32' && !target.startsWith(/[\\/]$/.test(root) ? root : `${root}${p.sep}`)) return null;
   return rel;
 }
 
@@ -267,6 +303,7 @@ export class RoomFileStore {
    */
   copyIn(workspaceId: string, source: string, allowedRoots: readonly string[]): RoomFileCopy {
     if (!path.isAbsolute(source)) return refuse('missing');
+    if (process.platform === 'win32' && namesWin32Stream(source)) return refuse('stream');
     const realRoots = allowedRoots
       .filter((r) => path.isAbsolute(r))
       .map(realpathOrNull)
@@ -283,6 +320,7 @@ export class RoomFileStore {
     if (!inside) return refuse('outside');
     if (protectedPatternOf(inside.rel)) return refuse('protected');
     if (!lst.isFile() || lst.isSymbolicLink()) return refuse('not_file');
+    if (lst.nlink > 1) return refuse('links');
     if (lst.size > ROOM_FILE_LIMITS.MAX_BYTES) return refuse('size');
     if (lst.size === 0) return refuse('empty');
     let data: Buffer | null;
@@ -296,6 +334,7 @@ export class RoomFileStore {
     try {
       fst = fs.fstatSync(fd);
       if (!fst.isFile() || fst.dev !== lst.dev || fst.ino !== lst.ino) return refuse('changed');
+      if (fst.nlink > 1) return refuse('links');
       if (fst.size > ROOM_FILE_LIMITS.MAX_BYTES) return refuse('size');
       // Linux names the opened file itself: that path must be inside a root.
       if (process.platform === 'linux') {

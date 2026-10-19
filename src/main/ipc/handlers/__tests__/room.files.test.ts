@@ -17,7 +17,7 @@ vi.mock('electron', () => ({
 import { IPC } from '../../../../shared/constants';
 import { RoomWriter } from '../../../factory/roomWriter';
 import { RoomFileStore } from '../../../factory/roomFiles';
-import { registerRoomIpcHandlers } from '../room.handler';
+import { registerRoomIpcHandlers, roomFileSave } from '../room.handler';
 import type { RoomCard } from '../../../../shared/room';
 import type { RoomFile, RoomFileReadResult, RoomFileSaveResult } from '../../../../shared/roomFiles';
 
@@ -112,5 +112,19 @@ describe('ROOM_FILE_SAVE', () => {
     expect(r).toEqual({ ok: true, savedTo: target });
     expect(fs.readFileSync(target, 'utf8')).toBe('keep me');
     expect(await s.call(IPC.ROOM_FILE_SAVE, { workspaceId: 'ws-file-ipc-2', fileId: id })).toMatchObject({ ok: false });
+  });
+
+  it('on Windows, refuses a target that names a data stream or a device, and writes nothing', async () => {
+    const s = setup();
+    const id = s.botCard(WS, [['notes.txt', 'keep me']]).files![0].id;
+    const saved = path.join(dir, 'saved');
+    fs.mkdirSync(saved);
+    for (const name of ['notes.txt:s', 'CON.txt', 'notes.txt.']) {
+      const r = await roomFileSave({ workspaceId: WS, fileId: id }, s.writer, s.store, async () => path.join(saved, name), 'win32');
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining('Windows cannot use that file name') });
+    }
+    expect(fs.readdirSync(saved)).toEqual([]);
+    const ok = await roomFileSave({ workspaceId: WS, fileId: id }, s.writer, s.store, async () => path.join(saved, 'notes.txt'), 'win32');
+    expect(ok).toEqual({ ok: true, savedTo: path.join(saved, 'notes.txt') });
   });
 });

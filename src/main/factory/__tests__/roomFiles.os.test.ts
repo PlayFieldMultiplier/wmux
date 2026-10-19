@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ROOM_FILE_RETAIN_MS, RoomFileStore, parseRoomFiles, roomFileMediaType, roomFileName } from '../roomFiles';
+import { ROOM_FILE_RETAIN_MS, RoomFileStore, isWin32UnsafeName, namesWin32Stream, parseRoomFiles, roomFileMediaType, roomFileName, strictlyInside } from '../roomFiles';
 import { RoomWriter } from '../roomWriter';
 import { botFileRoots, handleRoomPost, type BotFileRoots, type RoomHandlerDeps } from '../../pipe/handlers/room.rpc';
 import { TaskFolders, setTaskFolderPorts, type TaskFolderPorts, type TaskMission } from '../taskFolderCleanup';
@@ -69,6 +69,45 @@ describe('room file rules', () => {
     const many = Array.from({ length: 12 }, (_, i) => ({ ...ok, id: i.toString(16).repeat(32).slice(0, 32) }));
     expect(parseRoomFiles(many)).toHaveLength(ROOM_FILE_LIMITS.PER_CARD);
   });
+
+  it('makes a name Windows saves as itself: no reserved character, trailing dot or space, or device name', () => {
+    expect(roomFileName('C:\\r\\README.md:hidden')).toBe('README.md_hidden');
+    expect(roomFileName('/r/a<b>|c?"d*.txt')).toBe('a_b__c__d_.txt');
+    expect(roomFileName('/r/notes.md. . ')).toBe('notes.md');
+    expect(roomFileName('/r/CON.txt')).toBe('_CON.txt');
+    expect(roomFileName('/r/nul')).toBe('_nul');
+    expect(roomFileName('/r/lpt1')).toBe('_lpt1');
+    expect(roomFileName('/r/console.txt')).toBe('console.txt');
+    for (const name of ['README.md_hidden', '_CON.txt', 'console.txt', 'a.b.md']) expect(isWin32UnsafeName(name)).toBe(false);
+    for (const name of ['a:b.md', 'x.md.', 'x.md ', 'CON', 'aux.txt', 'COM1.log', 'a?b', 'a|b']) expect(isWin32UnsafeName(name)).toBe(true);
+  });
+
+  it('drops a stored name Windows would not save as itself', () => {
+    const ok = { id: 'b'.repeat(32), name: 'r.md', mediaType: 'text/markdown', bytes: 3 };
+    for (const name of ['README.md:hidden', 'x.md.', 'CON', 'aux.txt', 'a<b.md']) expect(parseRoomFiles([{ ...ok, name }])).toBeUndefined();
+    expect(parseRoomFiles([{ ...ok, name: 'README.md_hidden' }])).toEqual([{ ...ok, name: 'README.md_hidden' }]);
+  });
+
+  it('tells a Windows path to a data stream from a path to a file', () => {
+    expect(namesWin32Stream('D:\\r\\a.txt:s')).toBe(true);
+    expect(namesWin32Stream('D:\\r\\a.txt::$DATA')).toBe(true);
+    expect(namesWin32Stream('\\\\?\\D:\\r\\a.txt:s')).toBe(true);
+    expect(namesWin32Stream('D:\\r\\a.txt')).toBe(false);
+    expect(namesWin32Stream('\\\\?\\D:\\r\\a.txt')).toBe(false);
+    expect(namesWin32Stream('\\\\?\\UNC\\srv\\share\\a.txt')).toBe(false);
+    expect(namesWin32Stream('\\\\wsl.localhost\\distro\\root\\a.md')).toBe(false);
+  });
+
+  it('on Windows, a real path is inside a root only when it starts with the root in its exact case', () => {
+    expect(strictlyInside('C:\\w\\repo', 'C:\\w\\repo\\docs\\a.md', 'win32')).toBe('docs\\a.md');
+    // A sibling that differs only in case (a case-sensitive folder) is another folder.
+    expect(strictlyInside('C:\\w\\repo', 'C:\\w\\REPO\\a.md', 'win32')).toBeNull();
+    expect(strictlyInside('C:\\w\\repo', 'C:\\w\\repo2\\a.md', 'win32')).toBeNull();
+    expect(strictlyInside('C:\\', 'C:\\a.md', 'win32')).toBe('a.md');
+    expect(strictlyInside('\\\\wsl.localhost\\d\\root\\repo', '\\\\wsl.localhost\\d\\root\\repo\\a.md', 'win32')).toBe('a.md');
+    expect(strictlyInside('/w/repo', '/w/repo/a.md', 'linux')).toBe('a.md');
+    expect(strictlyInside('/w/repo', '/w/REPO/a.md', 'linux')).toBeNull();
+  });
 });
 
 describe('RoomFileStore.copyIn', () => {
@@ -106,6 +145,24 @@ describe('RoomFileStore.copyIn', () => {
     fs.symlinkSync(outside(), path.join(repo(), 'linked-dir'));
     expect(store.copyIn(WS, path.join(repo(), 'linked-dir', 'secret.txt'), [repo()])).toMatchObject({ ok: false, reason: 'outside' });
     expect(stored()).toEqual([]);
+  });
+
+  it('refuses a file with more than one name, whether the other name is outside the root or inside it', () => {
+    const out = write(path.join(outside(), 'secret.txt'), 'outside\n');
+    fs.linkSync(out, path.join(repo(), 'linked.txt'));
+    expect(store.copyIn(WS, path.join(repo(), 'linked.txt'), [repo()])).toMatchObject({ ok: false, reason: 'links' });
+    const inside = write(path.join(repo(), 'a.txt'));
+    fs.linkSync(inside, path.join(repo(), 'b.txt'));
+    expect(store.copyIn(WS, inside, [repo()])).toMatchObject({ ok: false, reason: 'links' });
+    expect(stored()).toEqual([]);
+  });
+
+  it.runIf(process.platform === 'win32')('refuses a path that names a data stream of a file in the root', () => {
+    const file = write(path.join(repo(), 'README.md'), '# Readme\n');
+    fs.writeFileSync(`${file}:hidden`, 'stream\n');
+    expect(store.copyIn(WS, `${file}:hidden`, [repo()])).toMatchObject({ ok: false, reason: 'stream' });
+    expect(store.copyIn(WS, `${file}::$DATA`, [repo()])).toMatchObject({ ok: false, reason: 'stream' });
+    expect(store.copyIn(WS, file, [repo()])).toMatchObject({ ok: true, file: { name: 'README.md' } });
   });
 
   it.skipIf(process.platform === 'win32')('refuses a FIFO without blocking on it', async () => {

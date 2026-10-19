@@ -32,7 +32,7 @@ import { getFactorySettingsStore } from '../../factory/factorySettings';
 import { getRoomAttachmentStore, type RoomAttachmentStore } from '../../factory/roomAttachments';
 import { ROOM_ATTACHMENT_ID_RE, ROOM_ATTACHMENT_LIMITS, type RoomAttachment } from '../../../shared/roomAttachments';
 import { resolveAccessiblePath } from './fs.handler';
-import { getRoomFileStore, isRoomFileText, type RoomFileStore } from '../../factory/roomFiles';
+import { getRoomFileStore, isRoomFileText, isWin32UnsafeName, namesWin32Stream, type RoomFileStore } from '../../factory/roomFiles';
 import { ROOM_FILE_ID_RE, type RoomFile, type RoomFileReadResult, type RoomFileSaveResult } from '../../../shared/roomFiles';
 
 /** What the dock needs to know about the factory. */
@@ -349,17 +349,23 @@ export function roomFileRead(raw: unknown, writer: RoomWriter | null, store: Roo
     : { ok: true, file: found.meta, dataUrl: `data:${found.meta.mediaType};base64,${data.toString('base64')}` };
 }
 
-/** ROOM_FILE_SAVE: copy the stored file where the owner picks. */
+/** ROOM_FILE_SAVE: copy the stored file where the owner picks. On Windows a
+ *  target that names a data stream or a device is refused, so a copy only
+ *  ever lands in a file of its own. */
 export async function roomFileSave(
   raw: unknown,
   writer: RoomWriter | null,
   store: RoomFileStore | null,
   pick: (defaultName: string) => Promise<string | null>,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<RoomFileSaveResult> {
   const found = cardFile(raw, writer, store);
   if (!found || !store) return { ok: false, error: 'no such file in this room' };
   const target = await pick(found.meta.name);
   if (!target) return { ok: false, canceled: true };
+  if (platform === 'win32' && (namesWin32Stream(target) || isWin32UnsafeName(path.win32.basename(target)))) {
+    return { ok: false, error: 'the file could not be saved: Windows cannot use that file name' };
+  }
   const data = store.read(found.workspaceId, found.meta.id);
   if (!data) return { ok: false, error: 'the file is no longer stored' };
   try {
