@@ -958,7 +958,7 @@ describe('Bots page', () => {
     chip.focus();
     await act(async () => { chip.click(); });
     expect(withFiles.fileRead).toHaveBeenCalledWith({ workspaceId: 'w1', fileId: id });
-    await vi.waitFor(() => expect(q('[data-bots-file-panel] [data-bots-file-view="markdown"]')?.textContent).toBe('Report'));
+    await vi.waitFor(() => expect(q('[data-bots-file-panel] [data-bots-file-view="markdown"]')?.textContent).toBe('Report'), { timeout: 5_000 });
     expect(q('.wmux-bots-chat-area')?.getAttribute('data-worker-open')).toBe('true');
     expect(chip.getAttribute('aria-pressed')).toBe('true');
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });

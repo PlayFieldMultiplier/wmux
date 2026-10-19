@@ -139,6 +139,22 @@ describe('BotsFilePanel', () => {
     expect(cycle.view()).toBe('image');
   });
 
+  it('an SVG that embeds another SVG reads as text, a PNG data URL still as a picture', async () => {
+    const inner = encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>');
+    const embeds = [
+      `<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/svg+xml,${inner}"/></svg>`,
+      `<svg xmlns="http://www.w3.org/2000/svg"><feImage href="DATA:IMAGE/SVG+XML;base64,PHN2Zy8+"/></svg>`,
+      '<svg xmlns="http://www.w3.org/2000/svg"><image href="&#100;ata:image/svg+xml,%3Csvg/%3E"/></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:url(\\64 ata:x)}</style><rect/></svg>',
+    ];
+    for (const text of embeds) {
+      const shown = await panel(file('chart.svg', 'image/svg+xml'), { text });
+      expect(shown.view()).toBe('text');
+    }
+    const png = await panel(file('chart.svg', 'image/svg+xml'), { text: '<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,iVBORw0KGgo="/></svg>' });
+    expect(png.view()).toBe('image');
+  });
+
   it('an HTML page and an SVG source never become markup: the page reads as text, the SVG only as an <img>', async () => {
     const page = await panel(file('page.html', 'text/html'), { text: '<p>hi</p><a href="https://x.test/">l</a>' });
     expect(page.view()).toBe('text');

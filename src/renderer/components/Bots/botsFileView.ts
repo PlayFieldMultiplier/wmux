@@ -99,10 +99,32 @@ export function svgUseDrawn(text: string): number {
   return count(doc.documentElement) - all.length;
 }
 
+/** Whether an SVG embeds another SVG document (a data: URL in an attribute
+ *  or a style), whose drawing svgUseDrawn does not count. Checked on the
+ *  parsed document, so character references are already decoded; a style
+ *  with a CSS escape counts as embedding, since an escape can spell one. */
+export function svgEmbedsSvg(text: string): boolean {
+  if (!/data|&#|\\/i.test(text)) return false;
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const names = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+  for (const el of doc.getElementsByTagName('*')) {
+    for (const attr of el.attributes) {
+      const value = names(attr.value);
+      if (value.includes('data:image/svg')) return true;
+      if (attr.localName === 'style' && value.includes('\\')) return true;
+    }
+    if (el.localName === 'style') {
+      const css = names(el.textContent ?? '');
+      if (css.includes('data:image/svg') || css.includes('\\')) return true;
+    }
+  }
+  return false;
+}
+
 /** Whether an SVG draws too much to show as a picture (it reads as text). */
 export function svgDrawsTooMuch(text: string): boolean {
   try {
-    return svgUseDrawn(text) > SVG_USE_DRAWN_MAX;
+    return svgEmbedsSvg(text) || svgUseDrawn(text) > SVG_USE_DRAWN_MAX;
   } catch {
     return true; // nested too deep to count
   }
