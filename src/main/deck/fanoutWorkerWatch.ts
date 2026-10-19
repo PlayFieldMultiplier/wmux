@@ -61,9 +61,11 @@ export interface FanoutWorkerWatchPorts {
   /** True when an agent is running in the pane again; undefined = can't tell. */
   agentRunning?: (ptyId: string) => Promise<boolean | undefined>;
   hasBrain: (ownerWorkspaceId: string) => boolean;
-  /** True when wmux itself stopped the pane's agent just now (the bot
-   *  worker reclaim's idle stop): that exit is no silent stop. */
-  stoppedByWmux?: (ptyId: string) => boolean;
+  /** For an exit seen now: the outcome of a stop wmux itself sent to the
+   *  pane's agent just now (the bot worker reclaim's idle stop), true when
+   *  that stop may have signalled it (the exit is no silent stop), false
+   *  when it was refused before any signal; null when wmux sent none. */
+  stoppedByWmux?: (ptyId: string) => Promise<boolean> | null;
   ledger?: TaskLedger;
   now?: () => number;
   idleMs?: number;
@@ -178,15 +180,20 @@ export function installFanoutWorkerWatch(ports: FanoutWorkerWatchPorts): FanoutW
     // always settle it) is not a relaunch; only one that starts in the grace is.
     const runningAtEnd = ports.isRunning(ptyId);
     // An exit wmux caused itself is no silent stop. Asked as it arrives,
-    // before any wait: a resume meanwhile starts an agent of its own.
+    // before any wait (a resume meanwhile starts an agent of its own); the
+    // stop's outcome is read after the grace. Undefined: still unknown.
+    let ours: boolean | undefined = false;
     if (kind === 'exit') {
-      let ours = false;
+      let outcome: Promise<boolean> | null = null;
       try {
-        ours = ports.stoppedByWmux?.(ptyId) === true;
+        outcome = ports.stoppedByWmux?.(ptyId) ?? null;
       } catch {
-        ours = false;
+        outcome = null;
       }
-      if (ours) return;
+      if (outcome) {
+        ours = undefined;
+        outcome.then((v) => { ours = v; }, () => { ours = true; });
+      }
     }
     try {
       const task = await taskOfPty(ptyId);
@@ -199,6 +206,10 @@ export function installFanoutWorkerWatch(ports: FanoutWorkerWatchPorts): FanoutW
           if (disposed) return;
           if ((await ports.agentRunning?.(ptyId).catch(() => undefined)) === true) return;
           if (!runningAtEnd && ports.isRunning(ptyId)) return;
+          // The stop's exit, or a stop still under way after the grace (its
+          // signal may land): no silent stop. One refused before any signal
+          // leaves this exit the worker's own.
+          if (ours !== false) return;
         } else {
           await wait(diedGraceMs);
           if (disposed || diedRestarted.get(ptyId) === true) return;

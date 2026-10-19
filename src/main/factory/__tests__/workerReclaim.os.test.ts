@@ -32,7 +32,7 @@ import {
   REPORTED_IDLE_MS,
   pauseDue,
   pauseIdleMsFor,
-  stoppedByReclaimLately,
+  reclaimStopOutcome,
   type ReclaimedWorker,
   type WorkerReclaimPorts,
   type WorkerResumePorts,
@@ -610,8 +610,8 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     // Its agent's exit is that stop's (the fan-out worker watch leaves the
     // row alone).
     // One stop explains one exit.
-    expect(stoppedByReclaimLately('daemon-1', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(true);
-    expect(stoppedByReclaimLately('daemon-1', 1_000 + OPEN_IDLE_MS + 21_000)).toBe(false);
+    expect(await reclaimStopOutcome('daemon-1', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(true);
+    expect(reclaimStopOutcome('daemon-1', 1_000 + OPEN_IDLE_MS + 21_000)).toBeNull();
     const rec = store.get(current.id);
     if (!rec) throw new Error('not recorded');
     expect(rec).toMatchObject({ ended: 'reported', endRev: 3 });
@@ -633,7 +633,7 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     });
     await reclaimWorker(partial.ports, current, 'reported');
     expect(store.get(current.id)?.state).toBe('stopping');
-    expect(stoppedByReclaimLately('daemon-7', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(true);
+    expect(await reclaimStopOutcome('daemon-7', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(true);
     // A failed read after the signal, or a lost answer, is kept the same way.
     for (const [i, stop] of [async () => ({ ok: false, code: 'unknown' }), async () => { throw new Error('timeout'); }].entries()) {
       const s2 = ReclaimedWorkers.at(path.join(dir, `lost-${i}`));
@@ -641,12 +641,21 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
       expect(s2.get(current.id)?.state).toBe('stopping');
       await settled(s2);
     }
+    const gate: { answer?: () => void } = {};
     const held = reclaimPorts(ReclaimedWorkers.at(path.join(dir, 'held')), [session({ id: 'daemon-8' })], {
       row: () => current, turnEnded: () => true, now: () => 1_000 + OPEN_IDLE_MS,
-      stopAgent: vi.fn(async () => ({ ok: false, code: 'turn_open' })),
+      stopAgent: vi.fn(() => new Promise<{ ok: boolean; code: string }>((resolve) => { gate.answer = () => resolve({ ok: false, code: 'turn_open' }); })),
     });
-    expect(await reclaimWorker(held.ports, current, 'reported')).toBeNull();
-    expect(stoppedByReclaimLately('daemon-8', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(false);
+    // An exit seen while that stop is under way learns, once it answers,
+    // that nothing was signalled: the exit is the worker's own.
+    const during = reclaimWorker(held.ports, current, 'reported');
+    await vi.waitFor(() => expect(held.ports.stopAgent).toHaveBeenCalled(), { timeout: 10_000 });
+    const outcome = reclaimStopOutcome('daemon-8', 1_000 + OPEN_IDLE_MS + 1);
+    expect(outcome).not.toBeNull();
+    gate.answer?.();
+    expect(await during).toBeNull();
+    expect(await outcome).toBe(false);
+    expect(reclaimStopOutcome('daemon-8', 1_000 + OPEN_IDLE_MS + 20_000)).toBeNull();
     await settled(store);
   });
 
