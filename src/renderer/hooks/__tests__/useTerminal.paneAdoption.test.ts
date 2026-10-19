@@ -99,13 +99,16 @@ describe('#1002 — pane-restructure terminal adoption (source-level)', () => {
   it('marks a reattach that settled without a pipe as pending, and clears it on attach', () => {
     // A rate-limited reconnect keeps the ptyId but has no session pipe; parking
     // it would hand an unattached terminal to a mount that skips its reconnect.
-    expect(src).toMatch(/reconnectPendingRef\.current = message !== null;/);
+    // #2398: so is one waiting on the reconcile, which shows no banner.
+    expect(src).toMatch(/reconnectPendingRef\.current = message !== null \|\| info\?\.awaitingReconcile === true;/);
   });
 
-  it('a rate-limited give-up reattaches again on a slow timer, cleared on teardown', () => {
+  it('a rate-limited (or #2398 exhausted / awaiting-reconcile) give-up reattaches again on a slow timer, cleared on teardown', () => {
     // No daemon:connected follows a rate limit (the daemon never disconnected),
-    // so without this the pane would wait for a manual Retry.
-    expect(src).toMatch(/if \(info\?\.rateLimited && slowRetry === null\) \{\s*slowRetry = setTimeout\(\(\) => \{ slowRetry = null; void reattach\('rate-limit-retry'\); \}/);
+    // so without this the pane would wait for a manual Retry. Since #2398 an
+    // exhausted reattach keeps its id unconfirmed too, and so does one waiting
+    // on a reconcile that may not resolve it; both retry the same way.
+    expect(src).toMatch(/if \(\(info\?\.rateLimited \|\| info\?\.unconfirmed \|\| info\?\.awaitingReconcile\) && slowRetry === null\) \{\s*slowRetry = setTimeout\(\(\) => \{ slowRetry = null; void reattach\('rate-limit-retry'\); \}/);
     expect(src).toMatch(/if \(slowRetry !== null\) clearTimeout\(slowRetry\);\s*if \(off\) off\(\);/);
   });
 

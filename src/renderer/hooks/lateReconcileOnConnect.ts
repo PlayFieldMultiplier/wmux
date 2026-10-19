@@ -45,10 +45,22 @@ export interface LateReconcileDeps {
 export function createLateReconcileOnConnect(deps: LateReconcileDeps): {
   /** Wire this to electronAPI.daemon.onConnected. */
   onConnected: () => void;
+  /**
+   * #2398 — run the same guarded reconcile for another reason than a connect:
+   * the startup reconcile timed out and kept every binding unconfirmed, and
+   * no daemon:connected is coming (the daemon never disconnected); or a pane
+   * found its unconfirmed binding gone. Unlike a connect it never aborts a
+   * pass in flight: it runs once more after that pass settles, so a stream of
+   * requests cannot keep restarting a reconcile before it finishes.
+   */
+  rerun: (reason: string) => void;
   /** Abort any in-flight late reconcile (effect cleanup). */
   dispose: () => void;
 } {
   let activeCtl: AbortController | null = null;
+  let running = false;
+  let rerunAfter: string | null = null;
+  let disposed = false;
   const log =
     deps.log ??
     ((level: 'log' | 'warn', message: string, err?: unknown) => {
@@ -58,26 +70,52 @@ export function createLateReconcileOnConnect(deps: LateReconcileDeps): {
       else console[level](message, err);
     });
 
+  const run = (startMessage: string) => {
+    log('log', startMessage);
+    // A newer connect supersedes any still-running late reconcile.
+    activeCtl?.abort();
+    const ctl = new AbortController();
+    activeCtl = ctl;
+    running = true;
+    const timer = setTimeout(() => ctl.abort(), deps.timeoutMs);
+    void deps
+      .reconcile(ctl.signal)
+      .catch((err: unknown) => {
+        log('warn', '[lifecycle] late reconcile failed — preserving ptyIds (no clear):', err);
+      })
+      .finally(() => {
+        clearTimeout(timer);
+        if (activeCtl !== ctl) return;
+        running = false;
+        const reason = rerunAfter;
+        rerunAfter = null;
+        // A pass that timed out still lets the queued one run; only disposal
+        // (or a newer connect, which replaced activeCtl above) drops it.
+        if (reason !== null && !disposed && deps.getPaneGate() === 'ready') {
+          run(`[lifecycle] ${reason} — re-reconciling PTYs`);
+        }
+      });
+  };
+
   return {
     onConnected: () => {
       if (deps.getPaneGate() !== 'ready') {
         log('log', '[lifecycle] daemon connected during startup — skipping late reconcile (startup path owns it)');
         return;
       }
-      log('log', '[lifecycle] daemon connected late — re-reconciling PTYs');
-      // A newer connect supersedes any still-running late reconcile.
-      activeCtl?.abort();
-      const ctl = new AbortController();
-      activeCtl = ctl;
-      const timer = setTimeout(() => ctl.abort(), deps.timeoutMs);
-      void deps
-        .reconcile(ctl.signal)
-        .catch((err: unknown) => {
-          log('warn', '[lifecycle] late reconcile failed — preserving ptyIds (no clear):', err);
-        })
-        .finally(() => clearTimeout(timer));
+      run('[lifecycle] daemon connected late — re-reconciling PTYs');
+    },
+    rerun: (reason) => {
+      if (deps.getPaneGate() !== 'ready') return;
+      if (running) {
+        rerunAfter ??= reason;
+        return;
+      }
+      run(`[lifecycle] ${reason} — re-reconciling PTYs`);
     },
     dispose: () => {
+      disposed = true;
+      rerunAfter = null;
       activeCtl?.abort();
     },
   };

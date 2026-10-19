@@ -80,6 +80,7 @@ import {
   removeSessionPromptSchedulesForPty,
 } from '../../pty/sessionPromptScheduleStore';
 import { createSessionPromptScheduleHandlers } from '../../pty/sessionPromptScheduleHandlers';
+import { localReconnectAnswer } from './localPtyReconnect';
 
 /**
  * Allowed shell basenames (compared case-insensitively).
@@ -375,6 +376,13 @@ export function registerPTYHandlers(
   ptyBridge: PTYBridge,
   daemonClient?: DaemonClient,
   getWindow?: () => BrowserWindow | null,
+  opts: {
+    /**
+     * #2398 — whether a daemon may still come (back) while these are local
+     * handlers (DaemonRespawnController.daemonMayReturn). Absent = it may not.
+     */
+    daemonMayReturn?: () => boolean;
+  } = {},
 ): () => void {
   const useDaemon = daemonClient?.isConnected ?? false;
   // A bot worker's launch writes its own wmux server entry (botWorkerMcp.ts).
@@ -1467,7 +1475,10 @@ export function registerPTYHandlers(
 
     ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string) => {
       try {
-        const sessions = await daemonClient.rpc('daemon.listSessions', {}) as Array<{
+        // #2398 — a cap-skipped session lives only in sessions.json, which
+        // includeSuspended parses on the daemon thread: only an id the live
+        // list lacks pays for it, and then takes the promote branch below.
+        let sessions = await daemonClient.rpc('daemon.listSessions', {}) as Array<{
           id: string;
           cmd: string;
           state: string;
@@ -1481,6 +1492,9 @@ export function registerPTYHandlers(
           wslTarget?: WslTarget;
           resumeBinding?: ResumeBinding;
         }>;
+        if (!sessions.some(s => s.id === id)) {
+          sessions = await daemonClient.rpc('daemon.listSessions', { includeSuspended: true }) as typeof sessions;
+        }
         let session = sessions.find(s => s.id === id);
         if (!session || session.state === 'dead') {
           // RCA A1 — permanent failure: the daemon authoritatively reports the
@@ -1601,13 +1615,10 @@ export function registerPTYHandlers(
       }
     }));
   } else {
-    ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, (_event: Electron.IpcMainInvokeEvent, id: string) => {
-      const instance = ptyManager.get(id);
-      if (!instance) {
-        return { success: false, error: 'PTY not found' };
-      }
-      return { success: true, id: instance.id, shell: instance.shell };
-    }));
+    // #2398 — an id this process does not own is gone for good only once no
+    // daemon is coming back (see localPtyReconnect.ts).
+    ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, (_event: Electron.IpcMainInvokeEvent, id: string) =>
+      localReconnectAnswer(ptyManager.get(id), opts.daemonMayReturn?.() ?? false)));
   }
 
   // pty:resync (phase 3 PR-B) — live-pipe re-flush. Rehydrates a pane WITHOUT

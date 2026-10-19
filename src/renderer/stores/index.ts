@@ -28,8 +28,9 @@ import { createMoaSlice, type MoaSlice } from './slices/moaSlice';
 import { createA2aRemoteSlice, type A2aRemoteSlice } from './slices/a2aRemoteSlice';
 import { createPcRailSlice, type PcRailSlice } from './slices/pcRailSlice';
 import { createRoomSlice, type RoomSlice } from './slices/roomSlice';
+import { createPtyLifecycleSlice, type PtyLifecycleSlice } from './slices/ptyLifecycleSlice';
 
-export type StoreState = WorkspaceSlice & PaneSlice & SurfaceSlice & UISlice & NotificationSlice & A2aSlice & ApprovalInboxSlice & BrowserHelpSlice & CompanySlice & ToastSlice & SearchSlice & ProjectConfigSlice & SupervisionSlice & ResumeSlice & AgentToolbarSlice & ChromePresetSlice & RemoteInboxSlice & ChannelsSlice & WorkTaskSlice & RemoteWorkspacesSlice & OrphanSessionsSlice & SchedulesSlice & UsageLimitSlice & WorkspaceSettleSlice & MoaSlice & A2aRemoteSlice & PcRailSlice & RoomSlice;
+export type StoreState = WorkspaceSlice & PaneSlice & SurfaceSlice & UISlice & NotificationSlice & A2aSlice & ApprovalInboxSlice & BrowserHelpSlice & CompanySlice & ToastSlice & SearchSlice & ProjectConfigSlice & SupervisionSlice & ResumeSlice & AgentToolbarSlice & ChromePresetSlice & RemoteInboxSlice & ChannelsSlice & WorkTaskSlice & RemoteWorkspacesSlice & OrphanSessionsSlice & SchedulesSlice & UsageLimitSlice & WorkspaceSettleSlice & MoaSlice & A2aRemoteSlice & PcRailSlice & RoomSlice & PtyLifecycleSlice;
 
 export const useStore = create<StoreState>()(
   immer((...args) => ({
@@ -61,5 +62,6 @@ export const useStore = create<StoreState>()(
     ...createA2aRemoteSlice(...args),
     ...createPcRailSlice(...args),
     ...createRoomSlice(...args),
+    ...createPtyLifecycleSlice(...args),
   }))
 );

@@ -46,6 +46,21 @@ export function selectActiveEmptyLeafIdsKey(state: StoreState): string {
 }
 
 /**
+ * #2398 — the ACTIVE workspace's empty leaves whose create was refused (the
+ * empty-leaf funnel keys a create by leaf id). The funnel re-runs when this
+ * changes, so a Retry that only clears a refusal creates again. Scoped to the
+ * leaves the funnel walks: a refusal anywhere else (a surface's own create, a
+ * leaf of another workspace) leaves it unchanged.
+ */
+export function selectActiveRefusedEmptyLeafIdsKey(state: StoreState): string {
+  const ws = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
+  if (!ws) return '';
+  const ids: string[] = [];
+  collectEmptyLeafIds(ws.rootPane, ids);
+  return ids.filter((id) => state.ptyCreateByKey?.[id]?.state === 'createFailed').join('|');
+}
+
+/**
  * Signature of every workspace's effective project cwd (metadata.cwd, seeded by
  * the first pane, else profile.startupCwd). Changes only when a workspace's cwd
  * first appears / changes — NOT on title/agentStatus churn. This MUST be a

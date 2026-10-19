@@ -26,6 +26,7 @@ import type { AgentSlug } from './events';
 import type { OrchestratorRoleBindings } from './orchestratorRole';
 import type { PcRailPersisted } from './pcRail';
 import type { AgentSignalKind } from './hooks/signal-types';
+import type { DeadPaneRecovery } from './ptyRecovery';
 
 // Re-export for backward compatibility
 /** BYOB M0 — which runtime serves as a workspace's orchestrator brain.
@@ -136,6 +137,14 @@ export interface Surface {
    *  Not refreshed from OSC titles while locked — an agent retitles its tab
    *  many times a second, and each refresh would be a store write. */
   autoTitle?: string;
+  /**
+   * #2398 — this surface replaces a session the daemon confirmed dead, and has
+   * not created its replacement yet. Carried with the surface (and so saved
+   * with it) until the replacement pty is bound, so a restart before the pane
+   * is shown keeps the source session, the WSL target, both cwd candidates and
+   * the resume binding. Untrusted on load: loadSession re-validates it.
+   */
+  pendingRecovery?: DeadPaneRecovery;
 }
 
 // === Pane: either a leaf (has surfaces) or a branch (has children) ===
@@ -1488,6 +1497,10 @@ export function clonePaneTreeFresh(pane: Pane): Pane {
       // go too (#1129): a clone that kept `remoteOwned` would offer to
       // destroy a session it does not point at.
       delete next.remoteOwned;
+      // #2398 — a staged dead-pane recovery names the SOURCE pane's dead
+      // session (its directory, WSL target and resume binding); the clone is
+      // a fresh pane under the copied profile, not that session's replacement.
+      delete next.pendingRecovery;
       return next;
     });
     // Preserve which surface was active by POSITION, since ids changed.

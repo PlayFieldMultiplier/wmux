@@ -109,6 +109,16 @@ describe('clonePaneTreeFresh', () => {
     expect(clone.surfaces[0].surfaceType).toBe('remote-terminal');
   });
 
+  it('#2398 — drops a staged dead-pane recovery: the clone is not that session’s replacement', () => {
+    const src = leaf(
+      [surface({ id: 's1', ptyId: '', pendingRecovery: { sourceSessionId: 'daemon-dead', spawnCwd: '/old', resumeAgent: 'claude' } })],
+      's1',
+    );
+    const clone = clonePaneTreeFresh(src) as PaneLeaf;
+    expect(clone.surfaces[0].pendingRecovery).toBeUndefined();
+    expect(src.surfaces[0].pendingRecovery).toBeDefined();
+  });
+
   it('does not mutate the source tree', () => {
     const src = leaf([surface({ id: 's1', ptyId: 'pty-keep' })], 's1');
     clonePaneTreeFresh(src);

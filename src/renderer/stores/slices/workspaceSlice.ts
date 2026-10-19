@@ -18,7 +18,7 @@ import { MULTIVIEW_ARRANGEMENTS } from '../../utils/multiviewGrid';
 import { publishWorkspaceMetadataChanged, publishA2aTask } from '../../events/publisher';
 import { retentionMigrationDone, markRetentionMigrationDone } from '../retentionMigration';
 import { decUnread } from './notificationSlice';
-import { mergeDeadPaneRecovery, type DeadPaneRecovery } from '../../../shared/ptyRecovery';
+import { mergeDeadPaneRecovery, normalizeDeadPaneRecovery, type DeadPaneRecovery } from '../../../shared/ptyRecovery';
 import { stashedPaneLiveness } from '../../../shared/paneStash';
 import { resolveAttentionBlink, resolveAttentionBlinkFinished, resolveAttentionRemindMs } from '../../components/Sidebar/attentionBlink';
 import { resolveWindowGlass } from '../../utils/windowGlass';
@@ -307,10 +307,12 @@ export interface WorkspaceSlice {
    * Fix 0 fallback action. Clears every ptyId-keyed piece of renderer state
    * in one atomic immer set: terminal surface ptyId across all workspaces +
    * nested split panes, floatingPanePtyId, terminalBookmarks,
-   * and company member.ptyId. Called from AppLayout startup catch when
-   * reconcile aborts/times out, so Terminal.tsx self-create receives a
-   * consistent blank slate and external RPC handlers don't have stale
-   * pty-keyed maps lying around.
+   * and company member.ptyId. Called from AppLayout startup when scrollback
+   * restore is off, and from its catch only when no daemon holds sessions
+   * (local mode), so Terminal.tsx self-create receives a consistent blank
+   * slate and external RPC handlers don't have stale pty-keyed maps lying
+   * around. A daemon-mode reconcile failure keeps the bindings unconfirmed
+   * instead (#2398): clearing them self-created shells beside live sessions.
    */
   clearAllPtyState: () => void;
   /**
@@ -692,19 +694,16 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         const removedWs = state.workspaces[idx];
         for (const pid of getWorkspacePtyIds(removedWs)) delete state.taskPtyRegistry[pid];
       }
-      // #650 recovery metadata is transient but hydration-sticky. A removed
-      // workspace must evict both surface-keyed pending hand-offs and offers
-      // rebound to its ptys, otherwise the normal list poll intentionally keeps
-      // them alive forever.
+      // #650 recovery offers rebound to a replacement pty are transient but
+      // hydration-sticky. A removed workspace must evict the ones rebound to
+      // its ptys, otherwise the normal list poll intentionally keeps them alive
+      // forever. (A pending hand-off lives on its surface and goes with it.)
       {
         const removedWs = state.workspaces[idx];
         const allSurfaces = getWorkspaceLeafPanes(removedWs).flatMap((leaf) =>
           leaf.surfaces.map((s) => ({ id: s.id, ptyId: s.ptyId })),
         );
         for (const surface of allSurfaces) {
-          if (state.pendingDeadPaneRecoveryBySurfaceId) {
-            delete state.pendingDeadPaneRecoveryBySurfaceId[surface.id];
-          }
           if (surface.ptyId && state.deadPaneRecoveryOfferByPtyId?.[surface.ptyId]) {
             delete state.deadPaneRecoveryOfferByPtyId[surface.ptyId];
             delete state.resumeHintByPtyId[surface.ptyId];
@@ -1114,11 +1113,16 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       //   entirely by Terminal.tsx — the well-tested path stays
       //   well-tested.
       //
-      //   On any reconcile failure (abort, timeout, RPC reject),
-      //   AppLayout's catch calls store.clearAllPtyState(), which
-      //   reproduces the historical wipe — but as an explicit,
-      //   logged, generation-guarded fallback, not an unconditional
-      //   startup behavior. The wipe lives there, not here.
+      //   On a reconcile failure (abort, timeout, RPC reject) with a
+      //   daemon, AppLayout's catch KEEPS every saved ptyId and marks
+      //   it unconfirmed (#2398): a timeout says nothing about whether
+      //   a session is alive, and wiping them self-created duplicate
+      //   shells beside sessions the daemon still ran. A late
+      //   reconcile and each Terminal's own reattach then confirm or
+      //   clear them on an authoritative answer. Only with no daemon
+      //   (local mode, where no pty outlives the app) does the catch
+      //   call store.clearAllPtyState(), the explicit, logged,
+      //   generation-guarded form of the historical wipe.
       //
       //   Side state (floatingPanePtyId, terminalBookmarks,
       //   company member.ptyId) is also cleared by
@@ -1156,6 +1160,13 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
               if (BLOCKED_URL_SCHEMES.some((scheme) => normalized.startsWith(scheme))) {
                 s.browserUrl = 'about:blank';
               }
+            }
+            // #2398 — a staged dead-pane recovery is replayed into pty.create,
+            // so it gets the same validation as a fresh daemon tombstone.
+            if (s.pendingRecovery !== undefined) {
+              const recovery = normalizeDeadPaneRecovery(s.pendingRecovery);
+              if (recovery) s.pendingRecovery = recovery;
+              else delete s.pendingRecovery;
             }
           }
         } else {
@@ -1780,23 +1791,26 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
     // mount and creates fresh PTYs — the well-tested new-pane path.
     clearSurfacePtyIdByPty: (ptyId: string, recovery?: DeadPaneRecovery) => set((state: StoreState) => {
       if (!ptyId) return;
+      // The floating pane is the one pty binding outside a surface. A session
+      // confirmed dead must free it too, or FloatingPane (which creates only
+      // while the field is empty) is stuck on it (#2398: the failed-startup
+      // fallback no longer wipes it with everything else).
+      if (state.floatingPanePtyId === ptyId) state.floatingPanePtyId = null;
       const walk = (pane: PaneLeaf, stashed: boolean) => {
         {
           for (const s of pane.surfaces) {
             // 유틸 surface(git·review)는 pty 없음 — 명시적으로 제외해 방어.
             if (s.ptyId === ptyId && s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'preview' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
               const previousOffer = state.deadPaneRecoveryOfferByPtyId?.[ptyId];
-              if ((recovery || previousOffer) && state.pendingDeadPaneRecoveryBySurfaceId) {
-                state.pendingDeadPaneRecoveryBySurfaceId[s.id] = mergeDeadPaneRecovery(
-                  state.pendingDeadPaneRecoveryBySurfaceId[s.id] ?? previousOffer,
-                  recovery ?? {},
-                );
+              if (recovery || previousOffer) {
+                s.pendingRecovery = mergeDeadPaneRecovery(s.pendingRecovery ?? previousOffer, recovery ?? {});
               }
               if (previousOffer) {
                 delete state.deadPaneRecoveryOfferByPtyId[ptyId];
                 delete state.resumeHintByPtyId[ptyId];
                 delete state.resumeBindingByPtyId[ptyId];
               }
+              if (state.ptyUnconfirmedById) delete state.ptyUnconfirmedById[ptyId];
               s.ptyId = '';
               // #977 — a stashed pane's liveness is DERIVED from its surfaces'
               // ptyIds, so this clear IS the alive→exited transition. Log it:
@@ -1826,6 +1840,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
           if (s.surfaceType !== 'browser' && s.surfaceType !== 'editor' && s.surfaceType !== 'preview' && s.surfaceType !== 'diff' && s.surfaceType !== 'git' && s.surfaceType !== 'review') {
             s.ptyId = '';
           }
+          if (s.pendingRecovery) delete s.pendingRecovery;
         }
       };
       // Workspace-wide (#977): this is the "we could not reconcile anything"
@@ -1845,8 +1860,8 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       for (const ws of state.workspaces) {
         if (ws.metadata?.listeningPorts !== undefined) delete ws.metadata.listeningPorts;
       }
-      if (state.pendingDeadPaneRecoveryBySurfaceId) state.pendingDeadPaneRecoveryBySurfaceId = {};
       if (state.deadPaneRecoveryOfferByPtyId) state.deadPaneRecoveryOfferByPtyId = {};
+      if (state.ptyUnconfirmedById) state.ptyUnconfirmedById = {};
 
       // 3. companySlice — member.ptyId across all departments.
       if (state.company) {

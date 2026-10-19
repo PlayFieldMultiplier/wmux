@@ -8,7 +8,6 @@ import type { ResumeBinding } from '../../../../shared/agentResume';
 import type { AgentSlug } from '../../../../shared/events';
 
 type TestState = WorkspaceSlice & {
-  pendingDeadPaneRecoveryBySurfaceId: Record<string, DeadPaneRecovery>;
   deadPaneRecoveryOfferByPtyId: Record<string, DeadPaneRecovery>;
   resumeHintByPtyId: Record<string, AgentSlug>;
   resumeBindingByPtyId: Record<string, ResumeBinding>;
@@ -19,12 +18,18 @@ function createTestStore() {
     immer((...args) => ({
       // @ts-expect-error — intentionally minimal cross-slice test store.
       ...createWorkspaceSlice(...args),
-      pendingDeadPaneRecoveryBySurfaceId: {},
       deadPaneRecoveryOfferByPtyId: {},
       resumeHintByPtyId: {},
       resumeBindingByPtyId: {},
     })),
   );
+}
+
+/** The recovery staged on a surface (#2398: it lives on the surface now). */
+function stagedOn(store: ReturnType<typeof createTestStore>, surfaceId: string): DeadPaneRecovery | undefined {
+  const leaf = store.getState().workspaces[0].rootPane;
+  if (leaf.type !== 'leaf') throw new Error('expected leaf fixture');
+  return leaf.surfaces.find((s) => s.id === surfaceId)?.pendingRecovery;
 }
 
 describe('WorkspaceSlice.clearSurfacePtyIdByPty (#650)', () => {
@@ -44,13 +49,15 @@ describe('WorkspaceSlice.clearSurfacePtyIdByPty (#650)', () => {
     expect(store.getState().workspaces[0].rootPane).toMatchObject({
       surfaces: [{ id: surface.id, ptyId: '' }],
     });
-    expect(store.getState().pendingDeadPaneRecoveryBySurfaceId[surface.id]).toEqual(recovery);
+    expect(stagedOn(store, surface.id)).toEqual(recovery);
   });
 
   it('does not stage metadata when the pty no longer belongs to a surface', () => {
     const store = createTestStore();
     store.getState().clearSurfacePtyIdByPty('pty-gone', { spawnCwd: 'D:\\spawn' });
-    expect(store.getState().pendingDeadPaneRecoveryBySurfaceId).toEqual({});
+    const leaf = store.getState().workspaces[0].rootPane;
+    if (leaf.type !== 'leaf') throw new Error('expected leaf fixture');
+    expect(leaf.surfaces.some((s) => s.pendingRecovery)).toBe(false);
   });
 
   it('carries an unconsumed resume offer across another replacement', () => {
@@ -77,7 +84,7 @@ describe('WorkspaceSlice.clearSurfacePtyIdByPty (#650)', () => {
 
     store.getState().clearSurfacePtyIdByPty('pty-dead', { cwd: 'D:\\live' });
 
-    expect(store.getState().pendingDeadPaneRecoveryBySurfaceId[surface.id]).toEqual({
+    expect(stagedOn(store, surface.id)).toEqual({
       spawnCwd: 'D:\\spawn',
       cwd: 'D:\\live',
       resumeAgent: 'claude',

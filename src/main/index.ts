@@ -790,6 +790,10 @@ ipcMain.handle('daemon:get-ready-state', async () => {
 // because pipeServer.getAuthToken() reads the file written during startup,
 // which may not have happened yet when handlers are first registered.
 const mcpHandlerOptions = {
+  // #2398 — every registerAllHandlers call spreads these, the handler swap to
+  // local mode on a daemon disconnect included: the local pty:reconnect needs
+  // to know whether that fallback is final.
+  daemonMayReturn: (): boolean => daemonRespawnController?.daemonMayReturn ?? false,
   mcpRegistrar,
   getMcpAuthToken: (): string | null => {
     try {

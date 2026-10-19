@@ -11,7 +11,9 @@ import { openTerminalUrl } from '../../utils/browserPaneActions';
 import { terminalFontFamilyCss } from '../../utils/terminalFont';
 import { isFileDrag } from '../../../shared/dragDrop';
 import type { FixedGeometry } from '../../terminal/fixedGeometryFit';
-import { findLeafBySurfaceId } from '../../../shared/paneUtils';
+import { findLeafBySurfaceId, getWorkspaceLeafPanes } from '../../../shared/paneUtils';
+import { ptyLifecycle, TERMINAL_INSTANCE_KEY_PREFIX } from '../../hooks/ptyLifecycle';
+import type { DeadPaneRecovery } from '../../../shared/ptyRecovery';
 import ViCopyMode from './ViCopyMode';
 import SearchBar from './SearchBar';
 import BookmarkIndicator from './BookmarkIndicator';
@@ -25,6 +27,20 @@ import '@xterm/xterm/css/xterm.css';
 const ChatView = lazy(() => import('../Chat/ChatView'));
 
 const EMPTY_BOOKMARKS: number[] = [];
+
+/**
+ * Whether the surface still exists anywhere a workspace owns it, and — when
+ * `ptyId` is given — whether it is bound to exactly that pty ('' = blank).
+ */
+function surfaceHoldsPty(surfaceId: string, ptyId: string | undefined): boolean {
+  for (const ws of useStore.getState().workspaces) {
+    for (const leaf of getWorkspaceLeafPanes(ws)) {
+      const surface = leaf.surfaces.find((s) => s.id === surfaceId);
+      if (surface) return ptyId === undefined || (surface.ptyId || '') === ptyId;
+    }
+  }
+  return false;
+}
 
 interface TerminalProps {
   chatView?: boolean;
@@ -54,24 +70,37 @@ interface TerminalProps {
   workspaceId?: string;
   /** ID of the surface this terminal occupies. Sent as WMUX_SURFACE_ID. */
   surfaceId?: string;
+  /** The surface's staged dead-session recovery (`surface.pendingRecovery`):
+   *  present when this blank surface replaces a session the daemon confirmed
+   *  dead, so the create asks for that session's cwd/target instead. */
+  pendingRecovery?: DeadPaneRecovery;
   /** Grid owned elsewhere — see useTerminal's `fixedGeometry`. Only the
    *  browser build (wmux web) sets it; the desktop never does. */
   fixedGeometry?: FixedGeometry | null;
 }
 
-export default function TerminalComponent({ chatView = false, ptyId: externalPtyId, shell, cwd, onPtyCreated, isActive = true, visible, isWorkspaceVisible = true, scrollbackFile, workspaceId: ownerWorkspaceId, surfaceId: ownerSurfaceId, fixedGeometry }: TerminalProps) {
+export default function TerminalComponent({ chatView = false, ptyId: externalPtyId, shell, cwd, onPtyCreated, isActive = true, visible, isWorkspaceVisible = true, scrollbackFile, workspaceId: ownerWorkspaceId, surfaceId: ownerSurfaceId, pendingRecovery: deadPaneRecovery, fixedGeometry }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [ptyId, setPtyId] = useState<string | null>(externalPtyId || null);
-  const creatingRef = useRef(false);
+  // #2398 — the key this surface's own create runs under (hooks/ptyLifecycle).
+  // A Terminal with no surface (never self-creating in practice) gets a key of
+  // its own instance.
+  const instanceKeyRef = useRef<string | null>(null);
+  if (instanceKeyRef.current === null) instanceKeyRef.current = `${TERMINAL_INSTANCE_KEY_PREFIX}${Math.random().toString(36).slice(2)}`;
+  const lifecycleKey = ownerSurfaceId ?? instanceKeyRef.current;
+  const createAttempt = useStore((s) => s.ptyCreateByKey?.[lifecycleKey]);
+  // A refused create shows its alert (below), gated on the surface binding:
+  // a pane whose binding was cleared still holds its old id locally until a
+  // replacement binds.
+  const createRefused = !externalPtyId && createAttempt?.state === 'createFailed';
+  // Starts (or, with retry, restarts) this surface's create; null while bound.
+  const selfCreateRef = useRef<((retry: boolean) => void) | null>(null);
   const [restoring, setRestoring] = useState(!!scrollbackFile);
 
   const viCopyModeActive = useStore((s) => s.viCopyModeActive);
   const setViCopyModeActive = useStore((s) => s.setViCopyModeActive);
   const searchBarVisible = useStore((s) => s.searchBarVisible);
   const setSearchBarVisible = useStore((s) => s.setSearchBarVisible);
-  const deadPaneRecovery = useStore((s) =>
-    ownerSurfaceId ? s.pendingDeadPaneRecoveryBySurfaceId[ownerSurfaceId] : undefined,
-  );
   const bookmarks = useStore((s) => (ptyId ? s.terminalBookmarks[ptyId] : undefined)) ?? EMPTY_BOOKMARKS;
   const { invoke: ipcInvoke } = useIpc();
   // Keep the invoker stable across re-renders without re-triggering the PTY
@@ -93,6 +122,9 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
   // Silent stale display failed the app-weight review's DX gate — the pane
   // must identify itself whenever its content is not current.
   const [syncState, setSyncState] = useState<PaneSyncUiState>(null);
+  // #2398 — a binding kept although it could not be checked (failed startup
+  // reconcile, exhausted reattach): the pane says so until it attaches.
+  const unconfirmed = useStore((s) => (ptyId ? Boolean(s.ptyUnconfirmedById?.[ptyId]) : false));
   useEffect(() => {
     if (!ptyId) { setSyncState(null); return; }
     setSyncState(getPaneSyncUi(ptyId));
@@ -118,144 +150,139 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
     if (externalPtyId) {
       console.log(`[Terminal] Using existing ptyId: ${externalPtyId}`);
       setPtyId(externalPtyId);
+      selfCreateRef.current = null;
+      // Another path bound this surface while its own create was in flight:
+      // that create is replaced and must never bind (a no-op otherwise). A
+      // refusal from before is over too (cancel forgets it): once bound, a
+      // later clear creates.
+      ptyLifecycle.cancel(lifecycleKey, ownerSurfaceId);
       return;
     }
 
-    if (creatingRef.current) return;
-    creatingRef.current = true;
+    const start = (retry: boolean) => {
+      // Estimate initial terminal size from container so the shell banner
+      // is formatted for the actual viewport, preventing cursor misalignment.
+      const container = containerRef.current;
+      let cols: number | undefined;
+      let rows: number | undefined;
+      if (container && container.offsetWidth > 0 && container.offsetHeight > 0) {
+        const fontSize = useStore.getState().terminalFontSize || 13;
+        const fontFamily = useStore.getState().terminalFontFamily || 'Cascadia Code';
+        const padding = 8;
 
-    let cancelled = false;
+        // Measure actual character dimensions using a canvas probe instead of
+        // hardcoded ratios, so CJK fonts and varying DPI are handled correctly.
+        let charWidth: number;
+        let lineHeight: number;
+        try {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d')!;
+          ctx.font = `${fontSize}px ${terminalFontFamilyCss(fontFamily)}`;
+          charWidth = ctx.measureText('W').width;
+          lineHeight = fontSize * 1.2;
+        } catch {
+          charWidth = fontSize * 0.6;
+          lineHeight = fontSize * 1.2;
+        }
 
-    // Estimate initial terminal size from container so the shell banner
-    // is formatted for the actual viewport, preventing cursor misalignment.
-    const container = containerRef.current;
-    let cols: number | undefined;
-    let rows: number | undefined;
-    if (container && container.offsetWidth > 0 && container.offsetHeight > 0) {
-      const fontSize = useStore.getState().terminalFontSize || 13;
-      const fontFamily = useStore.getState().terminalFontFamily || 'Cascadia Code';
-      const padding = 8;
-
-      // Measure actual character dimensions using a canvas probe instead of
-      // hardcoded ratios, so CJK fonts and varying DPI are handled correctly.
-      let charWidth: number;
-      let lineHeight: number;
-      try {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d')!;
-        ctx.font = `${fontSize}px ${terminalFontFamilyCss(fontFamily)}`;
-        charWidth = ctx.measureText('W').width;
-        lineHeight = fontSize * 1.2;
-      } catch {
-        charWidth = fontSize * 0.6;
-        lineHeight = fontSize * 1.2;
+        cols = Math.max(2, Math.floor((container.offsetWidth - padding) / charWidth));
+        rows = Math.max(2, Math.floor((container.offsetHeight - padding) / lineHeight));
       }
 
-      cols = Math.max(2, Math.floor((container.offsetWidth - padding) / charWidth));
-      rows = Math.max(2, Math.floor((container.offsetHeight - padding) / lineHeight));
-    }
-
-    // Owner identity, not global active. Codex P1 fix 2026-05-24: the
-    // previous `useStore.getState().activeWorkspaceId` read produced wrong
-    // env on workspace boot reconcile (all PTYs got the workspace that
-    // happened to be active at restore time) and during multiview rendering
-    // (every tile saw the focused tile's workspace). The owner prop is
-    // threaded down from Pane → Terminal so the correct identity reaches
-    // the daemon at PTY-create time.
-    const workspaceId = ownerWorkspaceId ?? useStore.getState().activeWorkspaceId;
-    const surfaceId = ownerSurfaceId;
-    const defaultShell = useStore.getState().defaultShell;
-    // Owning workspace's profile (env + startup command) for this new pane.
-    const profile = useStore.getState().workspaces.find((w) => w.id === workspaceId)?.profile;
-    // Issue #515: a self-create is a NEW shell for a blank surface — resolve the
-    // startup dir with the workspace default OUTRANKING the (possibly stale/home-
-    // contaminated) surface.cwd prop, so a dead-session respawn heals back to
-    // profile.startupCwd instead of perpetuating home.
-    const startupDirectory = useStore.getState().startupDirectory;
-    // #650: a known-dead session carries BOTH persisted cwd candidates to
-    // main, which validates spawnCwd → live cwd → home. Ordinary blank surfaces
-    // stay on #515's profile-first resolver; recovery never changes that policy.
-    const respawnCwd = deadPaneRecovery
-      ? undefined
-      : resolveRespawnCwd({ surfaceCwd: cwd, profile, startupDirectory });
-    // Derive the source tag from the RESOLVED value (not a parallel branch tree)
-    // so the log can never disagree with what was actually requested.
-    const cwdSource =
-      deadPaneRecovery ? 'dead-session'
-      : respawnCwd === undefined ? 'none'
-      : respawnCwd === profile?.startupCwd ? 'profile'
-      : respawnCwd === cwd ? 'surface'
-      : 'global';
-    const requestedCwd = deadPaneRecovery?.spawnCwd ?? deadPaneRecovery?.cwd ?? respawnCwd;
-    console.log(`[Terminal] self-create PTY: shell=${shell}, cwd=${requestedCwd ?? '(home)'} source=${cwdSource} surfaceCwd=${cwd ?? '-'} cols=${cols}, rows=${rows}, ws=${workspaceId}, surface=${surfaceId ?? '-'}`);
-    void ipcInvokeRef.current<{ id: string; cwd?: string }>(() =>
-      window.electronAPI.pty.create(withWorkspaceProfile(withDefaultShell({
-        shell,
-        ...(deadPaneRecovery
-          ? { recoveryCwds: { spawnCwd: deadPaneRecovery.spawnCwd, cwd: deadPaneRecovery.cwd, wslTarget: deadPaneRecovery.wslTarget, args: deadPaneRecovery.args, sourceSessionId: deadPaneRecovery.sourceSessionId } }
-          : { cwd: respawnCwd }),
-        cols,
-        rows,
-        workspaceId,
-        surfaceId,
-        spawnKind: 'user-shell',
-      }, defaultShell), profile))
-    ).then((result) => {
-      // v2 RCA fix (adversarial review): release the latch once this create
-      // settles. It guards against DOUBLE-create within one attempt, but as a
-      // one-shot it permanently bricked any LATER self-create on the same
-      // mounted Terminal — a designed cycle now that reconcile rebind can land
-      // on a session that dies (rebind → reconnect fails → clear → '' → this
-      // effect must run again). Without the reset, the pane stays blank until
-      // a remount.
-      creatingRef.current = false;
-      if (!result.ok) {
-        // Toast surfaced by useIpc (e.g. DAEMON_DISCONNECTED). Nothing to do.
-        return;
-      }
-      if (cancelled) {
-        // Already unmounted — clean the pty up. Reached only when the cancel
-        // below lost the race (the spawn had already happened), which is why
-        // both exist: one stops the spawn, this one undoes it.
-        window.electronAPI.pty.dispose(result.data.id);
-        return;
-      }
-      setPtyId(result.data.id);
-      onPtyCreated?.(result.data.id);
-      // Heal the surface's tracked cwd to what main actually spawned in, so a
-      // contaminated-home surface.cwd is corrected the moment it respawns and a
-      // later split seeds from the real dir (issue #515). onPtyCreated binds the
-      // ptyId first, so this write lands on the now-bound surface.
-      // Skip the heal when main landed somewhere OTHER than what we requested
-      // (validateCwd dropped it → homedir fallback): engraving the fallback
-      // would hide a broken/missing startup dir behind a healthy-looking cwd.
-      const spawned = result.data.cwd;
-      const shouldHeal = shouldHealSurfaceCwd({
-        spawnedCwd: spawned,
-        requestedCwd: respawnCwd,
-        recoveryCwds: deadPaneRecovery,
+      // Owner identity, not global active. Codex P1 fix 2026-05-24: the
+      // previous `useStore.getState().activeWorkspaceId` read produced wrong
+      // env on workspace boot reconcile (all PTYs got the workspace that
+      // happened to be active at restore time) and during multiview rendering
+      // (every tile saw the focused tile's workspace). The owner prop is
+      // threaded down from Pane → Terminal so the correct identity reaches
+      // the daemon at PTY-create time.
+      const workspaceId = ownerWorkspaceId ?? useStore.getState().activeWorkspaceId;
+      const surfaceId = ownerSurfaceId;
+      const defaultShell = useStore.getState().defaultShell;
+      // Owning workspace's profile (env + startup command) for this new pane.
+      const profile = useStore.getState().workspaces.find((w) => w.id === workspaceId)?.profile;
+      // Issue #515: a self-create is a NEW shell for a blank surface — resolve the
+      // startup dir with the workspace default OUTRANKING the (possibly stale/home-
+      // contaminated) surface.cwd prop, so a dead-session respawn heals back to
+      // profile.startupCwd instead of perpetuating home.
+      const startupDirectory = useStore.getState().startupDirectory;
+      // #650: a known-dead session carries BOTH persisted cwd candidates to
+      // main, which validates spawnCwd → live cwd → home. Ordinary blank surfaces
+      // stay on #515's profile-first resolver; recovery never changes that policy.
+      const respawnCwd = deadPaneRecovery
+        ? undefined
+        : resolveRespawnCwd({ surfaceCwd: cwd, profile, startupDirectory });
+      // Derive the source tag from the RESOLVED value (not a parallel branch tree)
+      // so the log can never disagree with what was actually requested.
+      const cwdSource =
+        deadPaneRecovery ? 'dead-session'
+        : respawnCwd === undefined ? 'none'
+        : respawnCwd === profile?.startupCwd ? 'profile'
+        : respawnCwd === cwd ? 'surface'
+        : 'global';
+      const requestedCwd = deadPaneRecovery?.spawnCwd ?? deadPaneRecovery?.cwd ?? respawnCwd;
+      // #2398 — one create per surface, shared by every mount of it: a remount
+      // or a re-run of this effect joins the attempt in flight instead of
+      // cancelling it and starting another, and a refused create (toast
+      // surfaced by useIpc) stays refused until the pane's Retry.
+      void ptyLifecycle.ensure<{ id: string; cwd?: string }>(lifecycleKey, {
+        retry,
+        create: () => {
+          console.log(`[Terminal] self-create PTY: shell=${shell}, cwd=${requestedCwd ?? '(home)'} source=${cwdSource} surfaceCwd=${cwd ?? '-'} cols=${cols}, rows=${rows}, ws=${workspaceId}, surface=${surfaceId ?? '-'}`);
+          return ipcInvokeRef.current<{ id: string; cwd?: string }>(() =>
+            window.electronAPI.pty.create(withWorkspaceProfile(withDefaultShell({
+              shell,
+              ...(deadPaneRecovery
+                ? { recoveryCwds: { spawnCwd: deadPaneRecovery.spawnCwd, cwd: deadPaneRecovery.cwd, wslTarget: deadPaneRecovery.wslTarget, args: deadPaneRecovery.args, sourceSessionId: deadPaneRecovery.sourceSessionId } }
+                : { cwd: respawnCwd }),
+              cols,
+              rows,
+              workspaceId,
+              surfaceId,
+              spawnKind: 'user-shell',
+            }, defaultShell), profile)),
+          );
+        },
+        bind: (created) => {
+          // Closed, or bound to another pty since the create began: not ours to keep.
+          if (surfaceId && !surfaceHoldsPty(surfaceId, '')) return false;
+          onPtyCreated?.(created.id);
+          // onPtyCreated binds by pane; a surface that moved out from under it
+          // was not bound, and an unbound pty would be leaked.
+          if (surfaceId && onPtyCreated && !surfaceHoldsPty(surfaceId, created.id)) return false;
+          setPtyId(created.id);
+          // Heal the surface's tracked cwd to what main actually spawned in, so a
+          // contaminated-home surface.cwd is corrected the moment it respawns and a
+          // later split seeds from the real dir (issue #515). onPtyCreated binds the
+          // ptyId first, so this write lands on the now-bound surface.
+          // Skip the heal when main landed somewhere OTHER than what we requested
+          // (validateCwd dropped it → homedir fallback): engraving the fallback
+          // would hide a broken/missing startup dir behind a healthy-looking cwd.
+          const spawned = created.cwd;
+          const shouldHeal = shouldHealSurfaceCwd({
+            spawnedCwd: spawned,
+            requestedCwd: respawnCwd,
+            recoveryCwds: deadPaneRecovery,
+          });
+          if (spawned && shouldHeal) {
+            useStore.getState().updateSurfaceCwd(created.id, spawned);
+          } else if (spawned && (respawnCwd || deadPaneRecovery)) {
+            console.warn(`[Terminal] requested cwd ${requestedCwd ?? '(recovery home fallback)'} but spawned in ${spawned} (requested dirs missing/invalid?) — keeping surface cwd untouched`);
+          }
+          return true;
+        },
       });
-      if (spawned && shouldHeal) {
-        useStore.getState().updateSurfaceCwd(result.data.id, spawned);
-      } else if (spawned && (respawnCwd || deadPaneRecovery)) {
-        console.warn(`[Terminal] requested cwd ${requestedCwd ?? '(recovery home fallback)'} but spawned in ${spawned} (requested dirs missing/invalid?) — keeping surface cwd untouched`);
-      }
-    });
+    };
+    selfCreateRef.current = start;
+    start(false);
 
     return () => {
-      cancelled = true;
-      // #1305 — the dispose above can only run once the create resolves, and a
-      // local-mode WSL create sits in a cwd probe first: closing the surface
-      // during that window spawned a whole shell just to kill it, and a window
-      // that goes away before the promise settles never killed it at all. Ask
-      // for the pending create to be dropped before it spawns. Best effort by
-      // design — a create that already spawned answers false and is handled by
-      // the dispose above.
-      // Optional-chain style guard, as at reportViewerVisibility: a packaged
-      // app updated under a running renderer can leave a preload that does not
-      // expose the method yet.
-      if (surfaceId && typeof window.electronAPI.pty.cancelCreate === 'function') {
-        void window.electronAPI.pty.cancelCreate(surfaceId);
+      // #1305 / #2398 — only closing the surface ends its create (ptyLifecycle
+      // asks main to drop it before it spawns, and disposes one that already
+      // did). A remount, a re-render or a dependency change keeps it running
+      // for the next mount to join.
+      if (!ownerSurfaceId || !surfaceHoldsPty(ownerSurfaceId, undefined)) {
+        ptyLifecycle.cancel(lifecycleKey, ownerSurfaceId);
       }
     };
   }, [externalPtyId, shell, cwd, deadPaneRecovery]); // onPtyCreated 제거 (stale closure 방지)
@@ -535,9 +562,25 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
           </div>
         </div>
       )}
-      {/* Daemon link notice; the recovery alert above wins when both apply
-          (it carries the actions). */}
-      {!recoveryError && linkNotice && ownerSurfaceId && <DaemonLinkNotice notice={linkNotice} surfaceId={ownerSurfaceId} />}
+      {/* #2398 — a refused create: the reason and the one way to try again.
+          Same alert shape as the recovery banner above; a refused create
+          never fires again by itself. */}
+      {createRefused && createAttempt?.state === 'createFailed' && (
+        <div role="alert" className="absolute inset-x-2 top-2 z-20 rounded border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-primary)]">
+          <p className="break-words">{t('terminal.createFailed')}</p>
+          <p className="mt-1 break-words text-[var(--text-muted)]">{createAttempt.error}</p>
+          <div className="mt-2 flex gap-2">
+            <button type="button" onClick={() => selfCreateRef.current?.(true)}
+              className="rounded border border-[var(--border)] px-3 py-1">
+              {t('terminal.retryCreate')}
+            </button>
+          </div>
+        </div>
+      )}
+      {/* Daemon link notice; the recovery alert and the refused-create alert
+          above win when both apply (they carry the actions, and share its
+          place). */}
+      {!recoveryError && !createRefused && linkNotice && ownerSurfaceId && <DaemonLinkNotice notice={linkNotice} surfaceId={ownerSurfaceId} />}
       {/* Session restore overlay */}
       {restoring && (
         <div className="absolute inset-0 flex items-center justify-center text-[var(--text-muted)] text-sm font-mono z-10 pointer-events-none">
@@ -547,10 +590,13 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
 
       {/* P0-5 freshness chip — non-blocking corner badge while the pane is
           catching up from the daemon, or after a degraded resync left it
-          potentially stale. Muted per the color grammar (status, not action). */}
-      {syncState && (
+          potentially stale. Muted per the color grammar (status, not action).
+          #2398: the same chip says "reattaching…" while the binding is
+          unconfirmed; once the reattach gives up, the banner above (with
+          Retry) says it instead. */}
+      {(syncState || (unconfirmed && !recoveryError)) && (
         <div className="absolute top-1 right-2 z-10 pointer-events-none px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--bg-secondary)] text-[var(--text-muted)] border border-[var(--border)] opacity-90">
-          {syncState === 'syncing' ? t('terminal.catchingUp') : t('terminal.staleScreen')}
+          {syncState === 'syncing' ? t('terminal.catchingUp') : syncState ? t('terminal.staleScreen') : t('terminal.reattaching')}
         </div>
       )}
 

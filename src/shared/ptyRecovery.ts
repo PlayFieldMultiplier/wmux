@@ -1,7 +1,7 @@
 import { isWslDistroSpawnArgs } from './wslDistro';
 import { validWslTarget, type WslTarget } from './wslTarget';
 import { isAgentSlug, type AgentSlug } from './agentIdentity';
-import type { ResumeBinding } from './agentResume';
+import { isUsableResumeBinding, type ResumeBinding } from './agentResume';
 
 /**
  * Minimal metadata carried while a renderer surface replaces a known-dead
@@ -77,4 +77,31 @@ export function mergeDeadPaneRecovery(
       ? { resumeBinding: incoming.resumeBinding ?? previous.resumeBinding }
       : {}),
   };
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * #2398 — re-validate a descriptor read back from session.json, which is
+ * user-editable and may come from another build. The same rules as a fresh
+ * daemon tombstone, plus a resume binding must have the fields its consumers
+ * read. Anything that is not an object is dropped; an object with nothing
+ * valid left stays an empty descriptor, because its presence alone means
+ * "replace a dead session" (home, not the workspace profile, is the fallback).
+ */
+export function normalizeDeadPaneRecovery(raw: unknown): DeadPaneRecovery | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const args = Array.isArray(r.args) && r.args.every((a) => typeof a === 'string') ? (r.args as string[]) : undefined;
+  return createDeadPaneRecovery({
+    id: stringField(r.sourceSessionId),
+    args,
+    wslTarget: r.wslTarget as WslTarget | undefined,
+    spawnCwd: stringField(r.spawnCwd),
+    cwd: stringField(r.cwd),
+    resumeAgent: stringField(r.resumeAgent),
+    resumeBinding: isUsableResumeBinding(r.resumeBinding) ? r.resumeBinding : undefined,
+  });
 }

@@ -151,4 +151,72 @@ describe('createLateReconcileOnConnect', () => {
 
     expect(signals[0].aborted).toBe(true);
   });
+
+  // #2398 — a failed startup reconcile keeps the bindings unconfirmed and asks
+  // for another pass; no daemon:connected follows it.
+  it('rerun runs the same guarded reconcile once the gate is ready', () => {
+    const { late, reconcile, log } = make();
+    late.rerun('startup reconcile failed');
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith('log', '[lifecycle] startup reconcile failed — re-reconciling PTYs');
+  });
+
+  it('rerun does nothing while the gate is still pending', () => {
+    const { late, reconcile } = make({ getPaneGate: () => 'pending' });
+    late.rerun('startup reconcile failed');
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('a rerun that fails preserves (swallowed, never thrown)', async () => {
+    const reconcile = vi.fn<(signal: AbortSignal) => Promise<void>>(async () => { throw new Error('rpc timeout'); });
+    const { late, log } = make({ reconcile });
+    late.rerun('startup reconcile failed');
+    await vi.runAllTimersAsync();
+    expect(log).toHaveBeenCalledWith('warn', '[lifecycle] late reconcile failed — preserving ptyIds (no clear):', expect.any(Error));
+  });
+
+  it('a rerun during a pass waits for it, then runs once, never aborting it (#2398)', async () => {
+    const signals: AbortSignal[] = [];
+    let finish: () => void = () => undefined;
+    const reconcile = vi.fn<(signal: AbortSignal) => Promise<void>>((signal) => {
+      signals.push(signal);
+      return new Promise<void>((resolve) => { finish = resolve; });
+    });
+    const { late } = make({ reconcile, timeoutMs: 60_000 });
+    late.rerun('startup reconcile failed');
+    late.rerun('unconfirmed binding a reported gone');
+    late.rerun('unconfirmed binding b reported gone');
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(signals[0].aborted).toBe(false);
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+  });
+
+  it('a rerun queued behind a pass that times out still runs (Codex P2)', async () => {
+    const reconcile = vi.fn<(signal: AbortSignal) => Promise<void>>((signal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('aborted')));
+    }));
+    const { late } = make({ reconcile, timeoutMs: 1_000 });
+    late.rerun('startup reconcile failed');
+    late.rerun('unconfirmed binding a reported gone');
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispose drops a queued rerun', async () => {
+    let finish: () => void = () => undefined;
+    const reconcile = vi.fn<(signal: AbortSignal) => Promise<void>>(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const { late } = make({ reconcile, timeoutMs: 60_000 });
+    late.rerun('a');
+    late.rerun('b');
+    late.dispose();
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
 });
