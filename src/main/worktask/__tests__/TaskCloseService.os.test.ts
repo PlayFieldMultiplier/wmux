@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { TaskCloseService } from '../TaskCloseService';
 import type { CloseDaemonPort } from '../TaskCloseService';
 import { TaskWorktreeManager } from '../TaskWorktreeManager';
+import { PendingWorktreeRemovals } from '../pendingWorktreeRemovals';
 
 let repoRoot: string;
 let wtBase: string;
@@ -266,7 +267,7 @@ describe('close-only with a leftover folder (#2388)', () => {
     const svc = new TaskCloseService({ daemon: port, worktrees, stopPanesIn: async () => ['p-1'], panesStopped });
     const res = await svc.closeTask({ taskId: 'wtask-8', verifiedWorkspaceId: 'ws-owner', leftoverPath: '/wt/left' });
     expect(res).toMatchObject({ ok: true, unmaterialized: true });
-    expect(finishPendingRemoval).toHaveBeenCalledWith('/wt/left', expect.any(Function));
+    expect(finishPendingRemoval).toHaveBeenCalledWith('/wt/left', expect.any(Function), { keepWhenRepoGone: true });
     expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
     expect(panesStopped).toHaveBeenCalledWith('wtask-8', ['p-1']);
   });
@@ -286,5 +287,26 @@ describe('close-only with a leftover folder (#2388)', () => {
     const svc = new TaskCloseService({ daemon: port, worktrees });
     expect((await svc.closeTask({ taskId: 'wtask-10', verifiedWorkspaceId: 'ws-owner', leftoverPath: '/wt/left' })).ok).toBe(true);
     expect(calls).toHaveLength(1);
+  });
+
+  // Its repository moved or deleted, the folder can never pass git's checks
+  // again: without a way out, every close of the task refused, forever.
+  it('a half-removed folder whose repository is gone: the close keeps the folder, names it, and closes', async () => {
+    const root = path.join(wtBase, 'root');
+    const left = path.join(root, 'task-gone');
+    fs.mkdirSync(left, { recursive: true });
+    fs.writeFileSync(path.join(left, 'held.txt'), 'x\n');
+    const store = new PendingWorktreeRemovals(path.join(wtBase, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: left, repoRoot: path.join(wtBase, 'moved-away'), repoHash: 'closehash', at: 1 });
+    const stopPanesIn = vi.fn(async () => []);
+    const { port, calls } = makeDaemon();
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager({ worktreesRoot: root, pendingRemovals: store }), stopPanesIn });
+    const res = await svc.closeTask({ taskId: 'wtask-k4', verifiedWorkspaceId: 'ws-owner', leftoverPath: left });
+    expect(res).toMatchObject({ ok: true, unmaterialized: true, keptFolder: left });
+    expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
+    // Nothing is stopped or deleted on the way: the folder is kept as it is.
+    expect(stopPanesIn).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(left, 'held.txt'), 'utf8')).toBe('x\n');
+    expect(store.all()).toEqual([]);
   });
 });

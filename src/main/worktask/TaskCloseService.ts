@@ -49,7 +49,9 @@ export interface CloseTaskInput {
 }
 
 export type CloseTaskResult =
-  | { ok: true; taskId: string; archivePending: boolean; unmaterialized?: boolean }
+  /** `keptFolder`: the task closed and this folder stays on disk (its
+   *  repository is gone, so nothing could check it before a deletion). */
+  | { ok: true; taskId: string; archivePending: boolean; unmaterialized?: boolean; keptFolder?: string }
   | {
       ok: false;
       taskId: string;
@@ -113,6 +115,9 @@ export class TaskCloseService {
               stopped.ids = Array.isArray(ids) ? ids : null;
             }
             : undefined,
+          // Its repository gone, the folder can never be checked again: the
+          // task closes, and the folder stays (named in the result).
+          { keepWhenRepoGone: true },
         )
         : null;
       if (finished && !finished.ok) {
@@ -127,7 +132,13 @@ export class TaskCloseService {
           // Best effort: the next liveness read records it.
         }
       }
-      return { ok: true, taskId, archivePending: closed.archivePending, unmaterialized: true };
+      return {
+        ok: true,
+        taskId,
+        archivePending: closed.archivePending,
+        unmaterialized: true,
+        ...(finished?.ok && finished.keptFolder ? { keptFolder: finished.keptFolder } : {}),
+      };
     }
 
     // ⓪ upstream/ahead 검사(CX3): 커밋됐지만 push 안 된 산출물이 있으면 진행 중단.

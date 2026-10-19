@@ -25,7 +25,7 @@ import * as crypto from 'node:crypto';
 import * as os from 'node:os';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { getExecEnv } from '../../shared/execEnv';
-import { originPinFromConfigList } from './workerGit';
+import { originPinFromConfigList, workerGitPreflight } from './workerGit';
 import type { PendingRemovalStore, PendingWorktreeRemoval } from './pendingWorktreeRemovals';
 
 const execFileAsync = promisify(execFile);
@@ -186,7 +186,9 @@ export interface RunGitOptions {
 type RunGit = (args: string[], cwd: string, opts?: RunGitOptions) => Promise<{ stdout: string; stderr: string }>;
 
 export type RemoveResult =
-  | { ok: true }
+  /** `keptFolder`: the task may close, but its folder stays on disk (the
+   *  repository it came from is gone, so nothing could check it). */
+  | { ok: true; keptFolder?: string }
   | {
       ok: false;
       error: string;
@@ -234,6 +236,26 @@ function leftoverGitEntry(folder: string): string | null {
 
 function sameCanonical(a: string, b: string): boolean {
   return process.platform === 'win32' || process.platform === 'darwin' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/** Whether `p`, or a folder between it and the root (`rootReal`, canonical),
+ *  is a link (a symlink or a junction), or the way cannot be read: a folder
+ *  replaced by one leads its canonical path somewhere else. An 8.3 short
+ *  name is not a link. */
+function linkOnTheWay(p: string, rootReal: string): boolean {
+  let cur = path.resolve(p);
+  for (;;) {
+    try {
+      if (sameCanonical(fs.realpathSync.native(cur), rootReal)) return false;
+      if (fs.lstatSync(cur).isSymbolicLink()) return true;
+    } catch {
+      return true;
+    }
+    const up = path.dirname(cur);
+    // Never reached the root.
+    if (up === cur) return true;
+    cur = up;
+  }
 }
 
 /**
@@ -830,14 +852,40 @@ export class TaskWorktreeManager {
    * folder first. The leftover goes only under the second layer's checks
    * (removeDeregisteredLeftover). Null when no removal of `worktreePath` is
    * recorded; a folder already gone ends the record.
+   *
+   * A record whose repository is gone (moved or deleted) can never pass
+   * git's checks again. `keepWhenRepoGone` (a task close, which the person
+   * asked for) then ends the record and keeps the folder, named in
+   * `keptFolder`, so the task can close; without it (the sweep at start, for
+   * which a missing drive may come back) the record and the folder stay, and
+   * the refusal names the way out: closing the task.
    */
-  async finishPendingRemoval(worktreePath: string, beforeRemove?: (worktreePath: string) => Promise<void>): Promise<RemoveResult | null> {
-    const rec = this.pendingRemovals?.get(worktreePath);
-    if (!rec) return null;
-    return this.withRepoLock(rec.repoHash, async () => {
+  async finishPendingRemoval(
+    worktreePath: string,
+    beforeRemove?: (worktreePath: string) => Promise<void>,
+    opts: { beforeDelete?: (worktreePath: string) => Promise<void>; keepWhenRepoGone?: boolean } = {},
+  ): Promise<RemoveResult | null> {
+    const queued = this.pendingRemovals?.get(worktreePath);
+    if (!queued) return null;
+    return this.withRepoLock(queued.repoHash, async () => {
+      // Read again under the lock: another finish may have ended the record
+      // while this waited.
+      const rec = this.pendingRemovals?.get(worktreePath);
+      if (!rec) return null;
       if (!fs.existsSync(rec.path)) {
         await this.forgetPending(rec.path);
         return { ok: true };
+      }
+      if (!fs.existsSync(rec.repoRoot)) {
+        if (!opts.keepWhenRepoGone) {
+          return { ok: false, error: `removeWorktree: its repository ${rec.repoRoot} is not there, so nothing can check the folder; it was kept; close its task to close it and keep the folder`, preserved: true };
+        }
+        // Nothing deletes the folder from here: its record ends (one whose
+        // deletion cannot be written stays, and is finished under every
+        // check once the repository is back).
+        await this.forgetPending(rec.path);
+        console.warn(`[worktask] the repository of ${rec.path} (${rec.repoRoot}) is not there; the task closes and the folder is kept`);
+        return { ok: true, keptFolder: rec.path };
       }
       // Every check first, stopping nothing: a folder that is kept anyway
       // (work written into it since, git listing it again) never costs the
@@ -855,7 +903,7 @@ export class TaskWorktreeManager {
           };
         }
       }
-      const leftover = await this.removeDeregisteredLeftover(rec);
+      const leftover = await this.removeDeregisteredLeftover(rec, { beforeDelete: opts.beforeDelete });
       if (leftover.ok) {
         await this.forgetPending(rec.path);
         return { ok: true };
@@ -900,7 +948,10 @@ export class TaskWorktreeManager {
    *   - it is deleted by removeTreeNoFollow from the trusted root, which
    *     never follows a link and checks each folder is where it was.
    */
-  private async removeDeregisteredLeftover(rec: PendingWorktreeRemoval, opts: { checkOnly?: boolean } = {}): Promise<LeftoverResult> {
+  private async removeDeregisteredLeftover(
+    rec: PendingWorktreeRemoval,
+    opts: { checkOnly?: boolean; beforeDelete?: (worktreePath: string) => Promise<void> } = {},
+  ): Promise<LeftoverResult> {
     let real: string;
     let rootReal: string;
     let repoReal: string;
@@ -912,21 +963,35 @@ export class TaskWorktreeManager {
       return { ok: false, error: `the leftover folder was kept: a path could not be resolved (${(err as Error).message})` };
     }
     if (!strictlyInside(real, rootReal)) return { ok: false, error: 'the leftover folder was kept: it is not inside the wmux worktrees folder' };
+    // What is deleted is the folder recorded, not where a link put in its
+    // place (or in a folder above it) leads.
+    if (linkOnTheWay(rec.path, rootReal)) return { ok: false, error: 'the leftover folder was kept: a link or junction stands in its place or on the way to it' };
     if (sameCanonical(real, repoReal) || strictlyInside(repoReal, real) || strictlyInside(real, repoReal)) {
       return { ok: false, error: 'the leftover folder was kept: it is, or holds, or sits in the repository' };
     }
     const gitEntry = leftoverGitEntry(real);
+    const registered = await this.listsWorktree(rec.repoRoot, repoReal, real);
+    // A folder git still lists (a locked worktree git refused to remove) is a
+    // worktree, not a leftover, whatever its .git holds: its record ends.
+    if (registered === true) return { ok: false, registered: true, error: 'the folder is still a worktree' };
     if (gitEntry !== null) return { ok: false, error: `the leftover folder was kept: ${gitEntry}` };
 
-    const registered = await this.listsWorktree(rec.repoRoot, repoReal, real);
     if (registered === null) return { ok: false, error: 'the leftover folder was kept: git did not confirm it is no longer a worktree' };
-    if (registered) return { ok: false, registered: true, error: 'the folder is still a worktree' };
 
     if (!rec.head) return { ok: false, error: 'the leftover folder was kept: no clean commit was recorded to compare it with' };
     const changed = await this.leftoverChanges(rec.repoRoot, real, rec.head);
     if (typeof changed !== 'number') return { ok: false, error: `the leftover folder was kept: its contents could not be compared with ${rec.head}: ${changed.error}` };
     if (changed > 0) return { ok: false, dirty: true, error: `the leftover folder was kept: ${changed} file(s) in it are not what git left` };
     if (opts.checkOnly) return { ok: true };
+    // The last look before anything is deleted: the checks above take a
+    // while (git), and a pane may have opened in the folder meanwhile.
+    if (opts.beforeDelete) {
+      try {
+        await opts.beforeDelete(real);
+      } catch (err) {
+        return { ok: false, error: `the leftover folder was kept: ${(err as Error).message}` };
+      }
+    }
 
     try {
       await this.removeTree(real, rootReal);
@@ -995,6 +1060,18 @@ export class TaskWorktreeManager {
       tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-leftover-'));
       const env = { GIT_INDEX_FILE: path.join(tmp, 'index') };
       const base = ['-c', 'core.fsmonitor=false', `--git-dir=${commonDir}`, `--work-tree=${folder}`];
+      // The repository's config is the task's to write: a content filter in
+      // it (filter.*.clean, .process) would run in main when the index is
+      // refreshed. Refused as for any read main does in a worker's checkout.
+      const pre = await workerGitPreflight(async (args) => {
+        try {
+          const r = await this.runGit([...base, ...args], folder, { env });
+          return { code: 0, stdout: r.stdout, stderr: r.stderr };
+        } catch (err) {
+          return { code: 1, stdout: '', stderr: (err as Error).message };
+        }
+      }, 'read');
+      if (!pre.ok) return { error: pre.error };
       await this.runGit([...base, 'read-tree', head], folder, { env });
       // read-tree leaves no file stats in the index: refresh hashes each file
       // once, so an unchanged one compares equal. It exits non-zero when some
