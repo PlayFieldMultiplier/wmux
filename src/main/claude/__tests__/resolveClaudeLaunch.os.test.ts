@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { resolveClaudeLaunch, sdkDefaultScriptHost } from '../resolveClaudeLaunch';
 
 describe('resolveClaudeLaunch', () => {
@@ -62,5 +62,25 @@ describe('resolveClaudeLaunch', () => {
       command: '/tmp/claude.cmd',
       args: ['--version'],
     });
+  });
+});
+
+describe('resolveClaudeLaunch in Electron main (real process.execPath, no nodeExecutable)', () => {
+  const realExecPath = process.execPath;
+  afterEach(() => {
+    Object.defineProperty(process, 'execPath', { value: realExecPath, configurable: true, writable: true });
+  });
+
+  it('runs cli.js / cli.mjs with PATH node, never the Electron binary', () => {
+    const electron = 'C:\\Program Files\\wmux\\wmux.exe';
+    Object.defineProperty(process, 'execPath', { value: electron, configurable: true, writable: true });
+    expect(process.execPath).toBe(electron);
+    for (const cli of ['C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js', '/opt/claude/cli.mjs']) {
+      const launch = resolveClaudeLaunch(cli, { args: ['--version'] });
+      expect(launch.command).toBe('node');
+      expect(launch.command).not.toBe(electron);
+      expect(launch.args).toEqual([cli, '--version']);
+      expect(launch.env).toBeUndefined();
+    }
   });
 });
