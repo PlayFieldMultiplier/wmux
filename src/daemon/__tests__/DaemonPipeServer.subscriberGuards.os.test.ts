@@ -152,6 +152,47 @@ describe('DaemonPipeServer — subscriber backpressure (D6)', () => {
     expect(server.isEventSubscriber(draining.clientId)).toBe(true);
   });
 
+  // #2244 keeps the socket of a dropped subscriber open so the app can
+  // subscribe again on it; delivery has to come back once it has drained.
+  it('delivers again to a dropped subscriber that drained and subscribed again', async () => {
+    const { server, pipe, token } = await startServer('broadcast-resubscribe');
+    const { socket, clientId } = await connectClient(server, pipe, token);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    server.markFirstParty(clientId);
+    expect(server.subscribeEvents(clientId)).toBe(true);
+
+    socket.pause();
+    const payload = { type: 'transcript.appended', blob: 'z'.repeat(SUBSCRIBER_BACKPRESSURE_BYTES) };
+    let accepted = 0;
+    for (let i = 0; i < 6; i++) {
+      if (!server.sendTo(clientId, payload)) break;
+      accepted += 1;
+    }
+    expect(accepted).toBeLessThan(6);
+
+    server.broadcast({ type: 'title.changed', n: 'lost' });
+    expect(server.isEventSubscriber(clientId)).toBe(false);
+    expect(socket.destroyed).toBe(false);
+
+    // Frames carry no raw newline, so newlines count them: the whoami reply
+    // plus every accepted payload, then whatever is broadcast after.
+    let frames = 0;
+    let tail = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      frames += chunk.split('\n').length - 1;
+      tail = (tail + chunk).slice(-512);
+    });
+    socket.resume();
+    await waitFor(() => frames >= accepted + 1);
+
+    expect(server.subscribeEvents(clientId)).toBe(true);
+    server.broadcast({ type: 'title.changed', n: 'after-resubscribe' });
+    await waitFor(() => tail.includes('"n":"after-resubscribe"'));
+    expect(server.isEventSubscriber(clientId)).toBe(true);
+    expect(tail).not.toContain('"n":"lost"');
+  });
+
   it('closes a stalled socket instead of accepting a lossy subscription retry', async () => {
     const { server, pipe, token } = await startServer('subscribe-flush-backpressure');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

@@ -13,13 +13,18 @@ import { broadcastSettledIdle, settleHookTurnToIdle } from './turnSettle';
  * the socket, and the health ping subscribes again (#2244). Everything pushed
  * in between is gone: an `activity.active` that started a turn (it fires once
  * per output cycle), the hook signals that open and close a turn (they ride
- * the same subscription as `agent.event`), detector statuses, and titles. The
- * panes then show what they showed before the gap until their next event.
+ * the same subscription as `agent.event`), detector statuses, titles, cwd
+ * changes, and `session.died`. The panes then show what they showed before the
+ * gap until their next event, and a pane whose shell exited has no next event:
+ * the daemon also closes its session pipe, which main does not read as a death.
  *
  * This reads each pane's state from the daemon once and corrects only where
- * the pane shows something else. It notifies nobody: a completion or a
- * question from the gap is shown as the pane's status, not replayed as a toast.
- * A second pass right after the first changes nothing.
+ * the pane shows something else. A session the daemon lists dead that main
+ * still tracks gets the `session:died` it missed, from the tombstone's exit
+ * code and signal, so every listener ends it as it would have live. It
+ * notifies nobody: a completion or a question from the gap is shown as the
+ * pane's status, not replayed as a toast. A second pass right after the first
+ * changes nothing.
  */
 
 /** One pane's daemon-side state, as `DaemonClient.getAgentState` reads it. */
@@ -34,11 +39,34 @@ export interface DaemonPaneState {
   hookReports?: boolean;
 }
 
+/** The `daemon.listSessions` fields the resync reads; raw off the RPC. */
+export interface DaemonSessionRow {
+  id?: unknown;
+  state?: unknown;
+  cwd?: unknown;
+  exitCode?: unknown;
+  exitSignal?: unknown;
+}
+
 export interface ResubscribeResyncDeps {
-  /** The daemon's session ids. */
-  listSessionIds: () => Promise<string[]>;
+  /** The daemon's sessions, dead ones included (`daemon.listSessions`). */
+  listSessions: () => Promise<DaemonSessionRow[]>;
+  /**
+   * Main's cwd for a session it still tracks; undefined once it heard the
+   * session end (or never attached it).
+   */
+  trackedCwd: (id: string) => string | undefined;
   /** One pane's state, or null when it could not be read. */
   readState: (id: string) => Promise<DaemonPaneState | null>;
+  /** Ends a session the way a live `session.died` does. */
+  emitDied: (id: string, exitCode: number | null, signal?: number) => void;
+  /** Sends a cwd the way a live `cwd.changed` does. */
+  emitCwd: (id: string, cwd: string) => void;
+  /**
+   * Calls back on each live `cwd.changed` ('cwd') and each live death,
+   * destroy or supervised restart ('lifecycle'); returns the unsubscribe.
+   */
+  onLiveEvent: (listener: (kind: 'cwd' | 'lifecycle', id: string) => void) => () => void;
   /** Sends a title to the renderer the way a live `title.changed` does. */
   emitTitle: (id: string, title: string) => void;
   hookRouter: HookSignalRouter | null;
@@ -50,15 +78,61 @@ export interface ResubscribeResyncResult {
   panes: number;
   statusesCorrected: number;
   titles: number;
+  deaths: number;
+  cwds: number;
 }
 
 export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promise<ResubscribeResyncResult> {
-  const result: ResubscribeResyncResult = { panes: 0, statusesCorrected: 0, titles: 0 };
-  let ids: string[];
+  const result: ResubscribeResyncResult = { panes: 0, statusesCorrected: 0, titles: 0, deaths: 0, cwds: 0 };
+  // A live event that lands after the daemon took its list, but before the
+  // pass acts on it (both can arrive in one socket read), is newer than what
+  // was listed or read: a live cwd wins over the listed one, and a pane that
+  // died, was destroyed or restarted live is left to that event.
+  const liveCwd = new Set<string>();
+  const liveLifecycle = new Set<string>();
+  const offLive = deps.onLiveEvent((kind, id) => { (kind === 'cwd' ? liveCwd : liveLifecycle).add(id); });
   try {
-    ids = await deps.listSessionIds();
+    return await resync(deps, result, liveCwd, liveLifecycle);
+  } finally {
+    offLive();
+  }
+}
+
+async function resync(
+  deps: ResubscribeResyncDeps,
+  result: ResubscribeResyncResult,
+  liveCwd: ReadonlySet<string>,
+  liveLifecycle: ReadonlySet<string>,
+): Promise<ResubscribeResyncResult> {
+  let rows: DaemonSessionRow[];
+  try {
+    rows = await deps.listSessions();
   } catch {
     return result;
+  }
+  const ids: string[] = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = row?.id;
+    if (typeof id !== 'string' || id.length === 0 || liveLifecycle.has(id)) continue;
+    const tracked = deps.trackedCwd(id);
+    if (row.state === 'dead') {
+      // A tombstone's agent state is what it held when the shell went, so it
+      // is never read as the pane's status.
+      if (tracked === undefined) continue;
+      const signal = typeof row.exitSignal === 'number' ? row.exitSignal : undefined;
+      let exitCode = typeof row.exitCode === 'number' ? row.exitCode : null;
+      // An older daemon keeps no signal, and a killed shell reports code 0:
+      // read as a clean exit, that would close the tab. Unknown keeps it.
+      if (exitCode === 0 && !('exitSignal' in row)) exitCode = null;
+      deps.emitDied(id, exitCode, signal);
+      result.deaths += 1;
+      continue;
+    }
+    if (tracked !== undefined && !liveCwd.has(id) && typeof row.cwd === 'string' && row.cwd.length > 0 && row.cwd !== tracked) {
+      deps.emitCwd(id, row.cwd);
+      result.cwds += 1;
+    }
+    ids.push(id);
   }
   const states = await Promise.all(ids.map(async (id) => {
     try {
@@ -69,6 +143,7 @@ export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promi
   }));
   for (const [id, state] of states) {
     if (!state) continue;
+    if (liveLifecycle.has(id)) continue;
     result.panes += 1;
     if (state.title) {
       deps.emitTitle(id, state.title);

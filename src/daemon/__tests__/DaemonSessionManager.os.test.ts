@@ -59,8 +59,8 @@ class MockPty extends EventEmitter {
     for (const cb of this.dataCallbacks) cb(data);
   }
 
-  simulateExit(exitCode: number): void {
-    for (const cb of this.exitCallbacks) cb({ exitCode });
+  simulateExit(exitCode: number, signal?: number): void {
+    for (const cb of this.exitCallbacks) cb(signal === undefined ? { exitCode } : { exitCode, signal });
   }
 
   get cols() { return this._cols; }
@@ -661,6 +661,15 @@ describe('DaemonSessionManager', () => {
     expect(diedHandler).toHaveBeenCalledWith(expect.objectContaining({ id: 'die', exitCode: 1 }));
     const session = manager.getSession('die');
     expect(session?.meta.state).toBe('dead');
+  });
+
+  // A client that reads the tombstone (main after a lost event subscription)
+  // tells a kill from `exit` only by the signal kept beside the code.
+  it('keeps the exit signal on the dead session', () => {
+    manager.createSession({ id: 'killed', cmd: 'cmd.exe', cwd: '.' });
+    lastMockPty?.simulateExit(0, 15);
+    const listed = manager.listSessions().find((s) => s.id === 'killed');
+    expect(listed).toMatchObject({ state: 'dead', exitCode: 0, exitSignal: 15 });
   });
 
   // Dead session cannot be attached/detached
