@@ -26,6 +26,7 @@
  */
 
 import { botWorkerAgentPromptNote } from '../../shared/codexWorkerGuard';
+import { DEFAULT_RESEARCH_CRITERIA } from '../../shared/nonCodeTaskEvidence';
 import { ensureSecretHook } from '../git/secretHookHost';
 import { beginBotWorkerSpawn } from '../agents/botWorkerMergeGuard';
 import { mintSecretGrant, revokeSecretGrant } from '../factory/secretGrants';
@@ -1773,6 +1774,7 @@ export class FanOutService {
                 ...(ctx.handoffId ? { handoffId: ctx.handoffId } : {}),
                 ...(ctx.workflow ? { workflow: ctx.workflow } : {}),
                 ...(connectors.length > 0 ? { connectors: connectors.map((c) => c.name) } : {}),
+                ...(ctx.preset === 'research' ? { criteria: [...DEFAULT_RESEARCH_CRITERIA] } : {}),
               },
             }
           : {}),

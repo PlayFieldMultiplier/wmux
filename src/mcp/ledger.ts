@@ -40,6 +40,7 @@ const LEDGER_UPDATE_SHAPE = {
     .describe('review_requested = done AND your own gate passed; input_required = blocked, say on what; failed = cannot finish; working = resumed.'),
   expected_rev: z.number().int().describe('The rev you last read (1 right after fan-out). A stale rev is refused: re-read and retry.'),
   summary: z.string().max(2000).optional().describe('One or two lines: what landed / what blocks you.'),
+  evidence: z.unknown().optional().describe('For research / no-code reports: completion evidence (summary + items). Graded by wmux; missing evidence completes as Not verified. You cannot change the task criteria.'),
 };
 
 const LEDGER_BRAIN_UPDATE_SHAPE = {
@@ -73,7 +74,7 @@ export function registerLedgerUpdateTool(server: McpServer, deps: LedgerToolDeps
     'ledger_update',
     'Record the state of YOUR fan-out task in the task ledger. Call it with status "review_requested" when the task is done and your own gate (tsc/lint/tests) passed, or "input_required" when you are blocked — a natural-language "done" is not completion. Only your own task, only these statuses; the brain marks completed.',
     LEDGER_UPDATE_SHAPE,
-    async ({ task_id, status, expected_rev, summary }) => {
+    async ({ task_id, status, expected_rev, summary, evidence }) => {
       if (deps.resolveWorkspaceId) {
         try {
           await deps.resolveWorkspaceId();
@@ -84,6 +85,7 @@ export function registerLedgerUpdateTool(server: McpServer, deps: LedgerToolDeps
       const params: Record<string, unknown> = { status, expectedRev: expected_rev };
       if (task_id !== undefined) params['taskId'] = task_id;
       if (summary !== undefined) params['summary'] = summary;
+      if (evidence !== undefined) params['evidence'] = evidence;
       const pty = resolveSenderPtyId();
       if (pty) params['senderPtyId'] = pty;
       try {

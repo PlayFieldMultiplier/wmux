@@ -13,6 +13,8 @@
 // when it believes it is done. `completed` is reserved for the brain, after a
 // gate pass — a worker cannot self-certify.
 
+import type { CompletionEvidence } from './types';
+
 export const LEDGER_SCHEMA_VERSION = 1 as const;
 
 export const LEDGER_STATUSES = [
@@ -115,6 +117,14 @@ export interface LedgerEntry {
    *  report), written by the ledger on that move. Absent on rows not
    *  reported since it existed. */
   reportedAtRev?: number;
+  /** Completion evidence for a research / no-changes task (shared/types
+   *  CompletionEvidence). Set on the report or at system settle; never a
+   *  substitute for the code-task gate. Absent = not recorded. */
+  evidence?: CompletionEvidence;
+  /** Grade of `evidence` (shared/completionEvidence.ts): count of verified
+   *  items. 0 = Not verified. Written only by main / the ledger, never
+   *  trusted from the worker's word alone. */
+  verifiedItemCount?: number;
 }
 
 /** See LedgerEntry.completion. */
@@ -180,6 +190,10 @@ export interface LedgerDispatch {
   handoffId?: string;
   /** A bot's task: the connections its worker was started with (names). */
   connectors?: string[];
+  /** Completion criteria for a research / no-changes task, set only by main
+   *  at dispatch (never by a worker). The worker's evidence is graded against
+   *  these; absent = main stamped the default research criteria. */
+  criteria?: string[];
   /** Written by the WorkTask reconciler for a task it mirrored with no row,
    *  from the task's lineage stamp: only `origin` is known. The fan-out's own
    *  register, when it lands later, replaces it with the full record. */
@@ -191,8 +205,9 @@ export interface LedgerDispatch {
 export const RESEARCH_PRESET = 'research';
 
 /** Whether a row is a bot's research task: main wrote its dispatch with the
- *  research preset. Such a task changes no code, so there is no gate to run
- *  and its report completes it without one (TaskLedger.update). Pure. */
+ *  research preset. Such a task changes no code, so there is no code gate to
+ *  run; its report still records criteria/evidence (Not verified when missing)
+ *  and then completes (TaskLedger.update). Pure. */
 export function isResearchDispatch(d: LedgerDispatch | undefined): boolean {
   return d?.origin.kind === 'bot' && typeof d.origin.botId === 'string' && d.origin.botId.length > 0 && d.preset === RESEARCH_PRESET;
 }
