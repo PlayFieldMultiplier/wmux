@@ -154,10 +154,9 @@ export class PTYBridge {
         // the byte-silence heuristic must NOT raise a toast — it can't tell a
         // finished turn from a mid-turn tool call / web search / long bash, and
         // fired on plain shells too (the "Task may have finished" false-positive
-        // the owner reported). Neither orca nor amirlehmam/wmux has any
-        // silence-based completion notification; genuine completions come from
-        // the precise Stop/awaiting_input hook + AgentDetector paths, which are
-        // untouched. See plans/agent-status-dot-quiet-notifications-2026-07-12.md.
+        // the owner reported). Completion notifications require the precise
+        // Stop/awaiting_input hook or AgentDetector paths; byte silence only
+        // clears the stale status. See plans/agent-status-dot-quiet-notifications-2026-07-12.md.
         broadcastMetadataUpdate(win, { ptyId, agentStatus: 'idle', agentName: '' });
       } catch (err) {
         console.warn('[PTYBridge] onActiveToIdle callback error:', err);
