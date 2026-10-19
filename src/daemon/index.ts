@@ -2619,6 +2619,9 @@ function registerRpcHandlers(
     // #2388: a tree that cannot be taken is not orphaned by ending its pane:
     // refused before anything of the session is touched.
     if (p.killTree === true) {
+      // Read now when the spawn's read left none: still the shell's pid
+      // while its exit is not handled (recordShellIdentity).
+      if (sessionManager.getSession(p.id)) await sessionManager.recordShellIdentity(p.id);
       const meta = sessionManager.getSession(p.id)?.meta;
       const refusal = meta ? treeKillRefusal(meta) : null;
       if (refusal) {

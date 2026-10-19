@@ -38,6 +38,7 @@ import { ENV_KEYS } from '../shared/constants';
 import { containsControlChars } from '../shared/cwdShape';
 import { createDefaultConfig } from './config';
 import { getProcessCreatedAtFt, getProcessStartTime, isPhantomExit, isPidAlive } from './phantomExit';
+import { treeKillRefusal } from './automation/verifiedTreeKill';
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -1395,6 +1396,34 @@ export class DaemonSessionManager extends EventEmitter {
 
   getSession(id: string): ManagedSession | undefined {
     return this.sessions.get(id);
+  }
+
+  /**
+   * #2388: record the shell's start time now, when the read at its spawn
+   * left none (POSIX `ps` failed or timed out, Windows' native read failed)
+   * and nothing else ever reads it again: a tree kill needs it to confirm
+   * the pid. Read only while the pane's PTY child has not exited (its exit
+   * not handled yet), before and after the read: node-pty holds that pid
+   * until then (Windows: an open process handle; POSIX: a child not yet
+   * reaped), so the start time read is the shell's. True when the session's
+   * identity is known after.
+   */
+  async recordShellIdentity(id: string): Promise<boolean> {
+    const live = (): DaemonSession | null => {
+      const meta = this.sessions.get(id)?.meta;
+      return meta && (meta.state === 'attached' || meta.state === 'detached') && meta.pid > 0 ? meta : null;
+    };
+    const meta = live();
+    if (!meta) return false;
+    if (treeKillRefusal(meta) === null) return true;
+    const pid = meta.pid;
+    const start = await getProcessStartTime(pid);
+    // Exited (or replaced) while it was read: the reading may be another
+    // process's.
+    if (!start || live() !== meta || meta.pid !== pid) return false;
+    if (process.platform === 'win32') meta.pidCreatedAtFt = start;
+    else meta.pidStartTime = start;
+    return treeKillRefusal(meta) === null;
   }
 
   /** Return all managed sessions (for shutdown buffer dump). */
