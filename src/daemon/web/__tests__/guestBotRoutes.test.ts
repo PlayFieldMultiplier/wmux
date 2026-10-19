@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GUEST_LIMITS, GUEST_ROOM_POST_COMMAND, GUEST_ROUTES, formatGuestCredential } from '../../../shared/guestBots';
 import { PHONE_ROOM_CARDS_COMMAND } from '../../../shared/phoneRooms';
 import { DesktopPhoneError } from '../../phone/DesktopPhoneBridge';
-import { GuestRateLimiter, guestRouteResponse, type GuestBotResolver, type GuestRouteContext } from '../guestBotRoutes';
+import { GuestRateLimiter, guestCardView, guestRouteResponse, type GuestBotResolver, type GuestRouteContext } from '../guestBotRoutes';
 
 const GUEST_ID = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
 const SECRET = 'A'.repeat(43);
@@ -129,7 +129,7 @@ describe('guest routes: reading', () => {
     expect(d.request).toHaveBeenCalledWith(PHONE_ROOM_CARDS_COMMAND, { ...SCOPE, sinceSeq: 0, limit: 10 });
     expect(r.status).toBe(200);
     const cards = (r.body.cards as Array<Record<string, unknown>>);
-    expect(cards).toEqual([{ id: 'c1', seq: 1, at: 1, kind: 'human', from: { kind: 'owner' }, title: 'hi', body: 'hello there' }]);
+    expect(cards).toEqual([{ id: 'c1', seq: 1, at: 1, kind: 'message', from: { kind: 'owner' }, title: 'hi', body: 'hello there' }]);
     // The approval card is not a message: no card, no approval id.
     expect(JSON.stringify(r.body)).not.toContain('apr-1');
   });
@@ -162,6 +162,15 @@ describe('guest routes: reading', () => {
     const joined = resolver({ resolve: vi.fn(async () => ({ ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 100, joinSeq: 2 })) });
     const after = await guestRouteResponse(ctx({ pathname: GUEST_ROUTES.messages, desktop: d, guests: joined }));
     expect((after.body.cards as Array<{ id: string }>).map((c) => c.id)).toEqual(['reply', 'g']);
+  });
+
+  it('serves a stable public shape: kind message or report, from owner, bot or guest', () => {
+    const base = { id: 'x', seq: 1, at: 1, threadId: 'dm:bot-0000aaaa', title: 't' };
+    const bot = { kind: 'bot', botId: 'bot-0000aaaa' };
+    expect(guestCardView({ ...base, kind: 'report', actor: bot } as never)).toMatchObject({ kind: 'report', from: { kind: 'bot', botId: 'bot-0000aaaa' } });
+    expect(guestCardView({ ...base, kind: 'opinion', actor: bot } as never)).toMatchObject({ kind: 'message' });
+    expect(guestCardView({ ...base, kind: 'guest', actor: { kind: 'system' } } as never)).toMatchObject({ kind: 'message', from: { kind: 'guest' } });
+    expect(guestCardView({ ...base, kind: 'fact', actor: { kind: 'system' } } as never)).toBeNull();
   });
 
   it('a guest revoked while its request waits gets nothing: no cards back, no post sent', async () => {

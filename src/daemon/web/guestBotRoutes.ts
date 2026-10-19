@@ -144,31 +144,35 @@ async function ask(desktop: RoomsDesktop, command: string, payload: Record<strin
   }
 }
 
-/** A card as a guest sees it: who wrote it, what it says, nothing else (no
- *  refs, approval ids, photos or idempotency keys). */
+/** A card as a guest sees it (v1, a stable public shape): who wrote it,
+ *  what it says, nothing else (no refs, approval ids, photos or idempotency
+ *  keys). `kind` is `report` for a bot's report and `message` otherwise;
+ *  wmux's own card kinds are not part of it. */
 export interface GuestCardView {
   id: string;
   seq: number;
   at: number;
-  kind: string;
-  from: { kind: 'owner' } | { kind: 'bot'; botId: string; name?: string } | { kind: 'guest' } | { kind: 'system' };
+  kind: 'message' | 'report';
+  from: { kind: 'owner' } | { kind: 'bot'; botId: string; name?: string } | { kind: 'guest' };
   title: string;
   body?: string;
   replyTo?: string;
 }
 
-/** A guest's view of one card, with key patterns masked once more on the
- *  way out (main already masked stored bot secrets, RoomWriter.read). */
-export function guestCardView(c: PhoneRoomCard): GuestCardView {
-  const from: GuestCardView['from'] = c.kind === 'guest' ? { kind: 'guest' }
-    : c.actor.kind === 'human' ? { kind: 'owner' }
-    : c.actor.kind === 'bot' ? { kind: 'bot', botId: c.actor.botId, ...(c.actor.name ? { name: redactSecrets(c.actor.name) } : {}) }
-    : { kind: 'system' };
+/** A guest's view of one card (guestSeesCard), with key patterns masked once
+ *  more on the way out (main already masked stored bot secrets,
+ *  RoomWriter.read); null for a card that is not a guest-visible message. */
+export function guestCardView(c: PhoneRoomCard): GuestCardView | null {
+  const from: GuestCardView['from'] | null = c.kind === 'guest' ? { kind: 'guest' }
+    : c.kind === 'human' && c.actor.kind === 'human' ? { kind: 'owner' }
+    : c.actor.kind === 'bot' && c.kind !== 'human' ? { kind: 'bot', botId: c.actor.botId, ...(c.actor.name ? { name: redactSecrets(c.actor.name) } : {}) }
+    : null;
+  if (!from) return null;
   return {
     id: c.id,
     seq: c.seq,
     at: c.at,
-    kind: c.kind,
+    kind: c.kind === 'report' ? 'report' : 'message',
     from,
     title: redactSecrets(c.title),
     ...(c.body ? { body: redactSecrets(c.body) } : {}),
@@ -299,7 +303,7 @@ async function read(ctx: GuestRouteContext, scope: GuestScope, since: number, jo
     status: 200,
     // After the conversation's last card when it was added, by seq (no
     // clock), and from that moment on (guestSeesCard).
-    body: { ok: true, cards: page.cards.filter((c) => c.seq > joinSeq && guestSeesCard(c, since)).map(guestCardView), nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore },
+    body: { ok: true, cards: page.cards.filter((c) => c.seq > joinSeq && guestSeesCard(c, since)).map(guestCardView).filter((v): v is GuestCardView => v !== null), nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore },
   };
 }
 
