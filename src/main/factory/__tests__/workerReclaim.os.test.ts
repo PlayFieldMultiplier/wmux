@@ -632,6 +632,10 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     off();
     // The reported stop's path: conditional on the turn being over.
     expect(stopAgent).toHaveBeenCalledWith('daemon-1', { ifTurnClosed: true });
+    // Its agent's exit is that stop's for a while (the fan-out worker watch
+    // leaves the row alone), then no longer.
+    expect(stoppedByReclaimLately('daemon-1', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(true);
+    expect(stoppedByReclaimLately('daemon-1', 1_000 + OPEN_IDLE_MS + 10 * 60_000)).toBe(false);
     const rec = store.get(current.id);
     if (!rec) throw new Error('not recorded');
     expect(rec).toMatchObject({ ended: 'reported', endRev: 3 });
@@ -1465,10 +1469,6 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     expect(gone.note.mock.calls.map((c) => c[4]?.code)).toEqual(['worker.openIdlePausedResumable']);
     expect(noticeBot).toHaveBeenCalledTimes(1);
     expect(noticeBot.mock.calls[0][0]).toMatchObject({ topic: 'worker.paused', taskId: TASK });
-    // stoppedByReclaimLately: its exit is that stop's for a while, then no longer.
-    expect(stoppedByReclaimLately(store, 'daemon-1', 5_000 + 1_000)).toBe(true);
-    expect(stoppedByReclaimLately(store, 'daemon-1', 5_000 + 10 * 60_000)).toBe(false);
-    expect(stoppedByReclaimLately(store, 'daemon-9', 5_000)).toBe(false);
     await settled(store);
   });
 

@@ -11,7 +11,7 @@ import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { getLastBroadcastAgentStatus, hasOutstandingRunningClaim } from '../ipc/handlers/metadata.handler';
 import { createDaemonLaunchProbe, type LaunchProbeDaemon } from '../worktask/fanoutLaunchProbe';
 import { installFanoutWorkerWatch, type FanoutWorkerWatch, type WorkerWatchDaemon } from './fanoutWorkerWatch';
-import { getWorkerResumePorts, stoppedByReclaimLately } from '../factory/workerReclaim';
+import { stoppedByReclaimLately } from '../factory/workerReclaim';
 
 export function startFanoutWorkerWatch(
   getWindow: () => BrowserWindow | null,
@@ -31,7 +31,7 @@ export function startFanoutWorkerWatch(
     isRunning: (ptyId) => getLastBroadcastAgentStatus(ptyId) === 'running' || hasOutstandingRunningClaim(ptyId),
     agentRunning: (ptyId) => probe.agentRunning(ptyId),
     hasBrain,
-    stoppedByWmux: (ptyId) => stoppedByReclaimLately(getWorkerResumePorts()?.store ?? null, ptyId, Date.now()),
+    stoppedByWmux: (ptyId) => stoppedByReclaimLately(ptyId, Date.now()),
   });
   // Its own subscription, not the deck's: that one only runs while Moa is on.
   const offBus = eventBus.subscribe((ev) => {

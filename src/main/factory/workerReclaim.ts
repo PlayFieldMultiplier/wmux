@@ -1136,6 +1136,7 @@ export async function reclaimWorker(
           && !!ownPanes?.includes(p.sessionId)
           && isWslWorkerPane(sessions.find((x) => x.id === p.sessionId))
           && isTaskOwnWorkerPane({ id: p.sessionId }, entry.id, recorded, ports.sessionRecordOf);
+        reclaimStops.set(p.sessionId, now());
         const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined);
         // The daemon found the turn open at the stop itself: nothing was
         // signalled, and it is no failed stop.
@@ -2136,13 +2137,18 @@ export function createResumedIdleSweep(ports: ResumedIdlePorts): ResumedIdleSwee
  *  stop's (the fan-out worker watch confirms an exit after 20 s). */
 export const RECLAIM_EXIT_WINDOW_MS = 2 * 60_000;
 
-/** Whether the reclaim stopped (or is stopping) the agent of pane
- *  `sessionId` within RECLAIM_EXIT_WINDOW_MS of `now`: its exit is that
- *  stop, not a worker that died on its own. Pure over the store. */
-export function stoppedByReclaimLately(store: Pick<ReclaimedWorkers, 'taskOfSession' | 'get'> | null, sessionId: string, now: number): boolean {
-  const taskId = store?.taskOfSession(sessionId);
-  const rec = taskId ? store?.get(taskId) : null;
-  return !!rec && (rec.state === 'stopping' || rec.state === 'stopped') && now - rec.at < RECLAIM_EXIT_WINDOW_MS;
+/** The panes whose agent the reclaim asked the daemon to stop, and when. In
+ *  memory: only a stop this process made explains an exit it sees. */
+const reclaimStops = new Map<string, number>();
+
+/** Whether the reclaim itself asked to stop the agent of pane `sessionId`
+ *  within RECLAIM_EXIT_WINDOW_MS of `now`: its exit is that stop, not a
+ *  worker that died on its own. A record written for an exit seen (a dead
+ *  pane, a resumed worker's exit) is no such stop. */
+export function stoppedByReclaimLately(sessionId: string, now: number): boolean {
+  for (const [id, at] of reclaimStops) if (now - at >= RECLAIM_EXIT_WINDOW_MS) reclaimStops.delete(id);
+  const at = reclaimStops.get(sessionId);
+  return at !== undefined && now - at < RECLAIM_EXIT_WINDOW_MS;
 }
 
 /** A resumed worker whose agent exited is stopped again (resumable). */
