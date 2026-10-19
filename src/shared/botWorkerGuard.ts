@@ -42,24 +42,39 @@ export function ghApiDeny(rest: string): string[] {
   return [`Bash(gh api${rest})`, `Bash(gh -* api${rest})`];
 }
 
-/** `glab <group> <verb>` in every spelling glab runs it: with options
- *  (`-R g/p`) between the group and the verb. glab takes no options before
- *  the group (`glab -R g/p mr list` is refused by glab itself), so there is
- *  no spelling for that. The group is also read under its aliases
- *  (`project` is `repo`); callers name each of a verb's aliases (`mr accept`
- *  is `mr merge`). Pure. */
-export function glabSubcommandDeny(group: string, verb: string): string[] {
+/** glab's built-in aliases for a command group. */
+export const GLAB_GROUP_ALIASES: Readonly<Record<string, readonly string[]>> = { repo: ['project'], variable: ['var'], stack: ['stacks'] };
+
+/** `glab <group…> <verb>` up to the verb, in every option placement glab
+ *  takes (`-R g/p` before the group, between the group's words, before the
+ *  verb), the group also under its aliases. `optionBeforeVerb`: the spelling
+ *  ends in ` -* <verb>`. */
+function glabCommandPrefixes(group: string, verb: string): { prefix: string; optionBeforeVerb: boolean }[] {
   const [head, ...rest] = group.split(' ');
-  const groups = [head, ...(GLAB_GROUP_ALIASES[head] ?? [])].map((g) => [g, ...rest].join(' '));
-  return groups.flatMap((g) => [`Bash(glab ${g} ${verb}*)`, `Bash(glab ${g} -* ${verb})`, `Bash(glab ${g} -* ${verb} *)`]);
+  return [head, ...(GLAB_GROUP_ALIASES[head] ?? [])].flatMap((h) => {
+    let spellings = ['glab ', 'glab -* '].map((s) => `${s}${h}`);
+    for (const word of [...rest, verb]) spellings = spellings.flatMap((s) => [`${s} ${word}`, `${s} -* ${word}`]);
+    return spellings.map((prefix) => ({ prefix, optionBeforeVerb: prefix.endsWith(` -* ${verb}`) }));
+  });
 }
 
-/** glab's built-in aliases for a command group. */
-const GLAB_GROUP_ALIASES: Readonly<Record<string, readonly string[]>> = { repo: ['project'], variable: ['var'], stack: ['stacks'] };
+/** `glab <group…> <verb>` in every spelling glab runs it, as
+ *  ghSubcommandDeny: options before the group, between its words and the
+ *  verb, or both; the verb a whole word after options. Callers name each of
+ *  a verb's aliases (`mr accept` is `mr merge`). Pure. */
+export function glabSubcommandDeny(group: string, verb: string): string[] {
+  return glabCommandPrefixes(group, verb).flatMap(({ prefix, optionBeforeVerb }) =>
+    optionBeforeVerb ? [`Bash(${prefix})`, `Bash(${prefix} *)`] : [`Bash(${prefix}*)`]);
+}
 
-/** `glab api<rest>`. Pure. */
+/** `glab <group…> <verb> <rest>` in every option placement before the verb. Pure. */
+function glabCommandWithDeny(group: string, verb: string, rest: string): string[] {
+  return glabCommandPrefixes(group, verb).map(({ prefix }) => `Bash(${prefix} ${rest})`);
+}
+
+/** `glab api<rest>`, also after options. Pure. */
 export function glabApiDeny(rest: string): string[] {
-  return [`Bash(glab api${rest})`];
+  return [`Bash(glab api${rest})`, `Bash(glab -* api${rest})`];
 }
 
 /** The deny rules that send a merge through the lane instead of `gh` or
@@ -69,7 +84,7 @@ export const BOT_WORKER_MERGE_DENY: readonly string[] = [
   ...ghSubcommandDeny('pr', 'merge'), ...ghApiDeny('*merge*'),
   ...['merge', 'accept', 'approve'].flatMap((v) => glabSubcommandDeny('mr', v)),
   // A new merge request set to merge itself once its checks pass.
-  ...['create', 'new'].flatMap((v) => ['', '-* '].map((pre) => `Bash(glab mr ${pre}${v} *--auto-merge*)`)),
+  ...['create', 'new'].flatMap((v) => glabCommandWithDeny('mr', v, '*--auto-merge*')),
 ];
 
 /** The default branch names main always treats as a repository's default
@@ -118,10 +133,10 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
   // creates one there. A plain `glab mr create --source-branch <branch>`
   // opens the request for the branch main pushed.
   // `-f` also in a bundle with create's other switches (`-yf`, `-wf`).
-  ...['create', 'new'].flatMap((v) => ['', '-* '].flatMap((pre) => [
+  ...['create', 'new'].flatMap((v) => [
     '*--fill*', '*--push*', '*--create-source-branch*',
     ...['f', 'yf', 'wf', 'ywf', 'wyf'].flatMap((b) => [`-${b}*`, `* -${b}*`]),
-  ].map((rest) => `Bash(glab mr ${pre}${v} ${rest})`))),
+  ].flatMap((rest) => glabCommandWithDeny('mr', v, rest))),
   ...glabSubcommandDeny('mr', 'rebase'), ...glabSubcommandDeny('mr', 'for'), ...glabSubcommandDeny('stack', 'sync'),
 ];
 

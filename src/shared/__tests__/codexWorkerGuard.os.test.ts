@@ -267,6 +267,8 @@ describe('the codex worker rules', () => {
     expect(rules).toContain('["gh", "api"]');
     expect(rules).toContain('"--repo=acme/app"');
     expect(rules).toContain('"--git-dir=/repo/.git"');
+    expect(rules).toContain('["glab", "api"]');
+    expect(buildCodexWorkerRules({ repoKey: 'gitlab.example/g/sub/p', cwd: CWD, gitDirs: [] })).toContain('"--repo=g/sub/p"');
   });
 
   // Codex's own matcher, when a codex CLI is installed here (not in CI).
@@ -287,8 +289,16 @@ describe('the codex worker rules', () => {
         ['git', '-C', '/w', 'push'], ['git', '-c', 'x=y', 'push'], ['git', 'config', 'remote.origin.pushurl', 'x'], ['git', 'remote', 'set-url', 'origin', 'x'],
         ['git', '--git-dir=/repo/.git', 'push'], ['git', '--no-pager', 'push'], ['git', '-p', 'push'],
         ['git', 'send-pack', 'x', 'HEAD'], ['git', 'http-push', 'x'], ['git', 'remote', 'add', 'o2', 'x'], ['git', 'config', 'alias.p', 'push'],
+        ['glab', 'mr', 'merge', '3'], ['glab', 'mr', 'accept', '3'], ['glab', '-R', 'g/p', 'mr', 'merge', '3'], ['glab', 'mr', '-R', 'g/p', 'approve', '3'],
+        ['glab', 'mr', 'create', '--fill'], ['glab', 'mr', 'new', '-yf'], ['glab', 'mr', 'note', '3', '-m', 'hi'], ['glab', 'mr', 'update', '3', '--ready'],
+        ['glab', 'issue', 'create', '-t', 'x'], ['glab', 'project', 'delete', 'g/p'], ['glab', 'var', 'set', 'K', 'v'], ['glab', 'stacks', 'sync'],
+        ['glab', 'repo', 'members', 'add', '--username=a'], ['glab', 'repo', '-R', 'g/p', 'members', 'add'], ['glab', 'issue', 'board', 'create'],
+        ['glab', 'api', 'projects/1/merge_requests/3/merge', '-X', 'PUT'], ['glab', 'alias', 'set', 'm', 'mr merge'],
       ]) expect(decide(cmd), cmd.join(' ')).toBe('forbidden');
-      for (const cmd of [['gh', 'pr', 'view', '3'], ['gh', 'pr', 'create', '--fill'], ['git', 'commit', '-m', 'push it'], ['git', 'status'], ['git', 'remote', '-v']]) {
+      for (const cmd of [
+        ['gh', 'pr', 'view', '3'], ['gh', 'pr', 'create', '--fill'], ['git', 'commit', '-m', 'push it'], ['git', 'status'], ['git', 'remote', '-v'],
+        ['glab', 'mr', 'create', '--source-branch', 'wtask/a', '--yes'], ['glab', 'mr', 'view', '3'], ['glab', 'mr', 'list'], ['glab', 'repo', 'members', 'list'],
+      ]) {
         expect(decide(cmd), cmd.join(' ')).toBe('none');
       }
     } finally {

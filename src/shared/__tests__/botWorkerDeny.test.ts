@@ -40,9 +40,9 @@ describe('bot worker deny rules', () => {
   });
 
   it('the rule set is pinned: any change to a rule is a deliberate change to this test', () => {
-    expect(BOT_WORKER_DENY.length).toBe(560);
+    expect(BOT_WORKER_DENY.length).toBe(867);
     expect(createHash('sha256').update(JSON.stringify(BOT_WORKER_DENY)).digest('hex'))
-      .toBe('c586f0b8e8738069ae84f1cb84c9dc754d5187dd2835b951fc14586e6d94df14');
+      .toBe('d6b8823853b154c124ee9a52ef7a35222a2549a7ab5778cdd92692c505cc34ba');
   });
 
   it('no rule holds a `:*` that does not end it (Claude Code reads such a rule with a notice)', () => {
@@ -188,6 +188,16 @@ describe('bot worker deny rules', () => {
     'glab api -iX PUT projects/123/merge_requests/3/merge',
     'glab api -if title=x projects/123/issues',
     'glab issue board create --name triage',
+    // glab's options before the group and between its words too.
+    'glab -R g/p mr merge 3',
+    'glab -R g/p mr approve 3',
+    'glab --repo g/p mr -R g/p merge 3',
+    'glab repo -R g/p members add --username=alice --role=developer',
+    'glab project -R g/p members remove --username=alice',
+    'glab -R g/p mr create --fill',
+    'glab -R g/p mr create --source-branch wtask/a --auto-merge',
+    'glab -R g/p issue create -t x',
+    'glab -R g/p api -X POST projects/:id/issues',
   ])('refuses %s', (cmd) => {
     expect(denied(cmd)).toBe(true);
   });
@@ -200,6 +210,8 @@ describe('bot worker deny rules', () => {
     'glab repo archive g/p',
     'glab project view g/p',
     'glab api -i projects/123/issues',
+    'glab -R g/p mr create --source-branch wtask/a --yes',
+    'glab -R g/p mr view 3',
     'glab mr create --source-branch wtask/fix-it --yes',
     'glab mr create --draft --source-branch wtask/a -y',
     'glab mr create --source-branch wtask/a --title "x" --description "y" --yes',
