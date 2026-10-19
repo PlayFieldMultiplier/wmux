@@ -1569,19 +1569,11 @@ export function registerFanOutRpc(
     const guards = guardsOf();
     const reservation = guards.reserve(key, parsed.titles.length, { ownerWorkspaceId: callerWorkspaceId, ...(bot ? { botId: bot.botId } : {}) });
     if (!reservation.ok) return deny('RESOURCE_EXHAUSTED', reservation.message);
-    if (bot) {
-      botPort?.recordFanoutKey(key);
-      // Started after all (a retry found a free slot): no longer held.
-      const heldArgs = heldFanoutArgs(params);
-      const heldContext = { threadId: botNoticeThread, ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}) };
-      heldFanoutStarted(bot.botId, heldArgs, heldContext);
-      // And a wake already queued for it (a slot freed while this turn ran).
-      try {
-        dropQueuedHeldFanoutWakes(bot.botId, (w) => heldWakeIsFor(w, heldArgs, heldContext));
-      } catch {
-        /* that wake says to end the turn when the work is done */
-      }
-    }
+    if (bot) botPort?.recordFanoutKey(key);
+    // The request as a hold would name it (read here: params is not read
+    // after the approval): a hold of it retires once a worker of it started.
+    const heldArgs = bot ? heldFanoutArgs(params) : null;
+    const heldContext = { threadId: botNoticeThread, ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}) };
 
     // ── Claim the key ────────────────────────────────────────────────────
     // Last synchronous statement of the tick that read the gate above: from
@@ -1951,6 +1943,18 @@ export function registerFanOutRpc(
               if (started.length > 0) botPort.workersStarted(bot.botId, started);
             } catch {
               /* worker-hours are best effort; the open ledger rows still count */
+            }
+            // Started after all (a retry found a free slot): the same request
+            // is no longer held, nor is a wake already queued for it (a slot
+            // freed while this ran). A refusal or a start that launched
+            // nothing keeps both.
+            if (started.length > 0 && heldArgs) {
+              heldFanoutStarted(bot.botId, heldArgs, heldContext);
+              try {
+                dropQueuedHeldFanoutWakes(bot.botId, (w) => heldWakeIsFor(w, heldArgs, heldContext));
+              } catch {
+                /* that wake says to end the turn when the work is done */
+              }
             }
           }
           // Tasks that never got a workspace (the output folder could not be

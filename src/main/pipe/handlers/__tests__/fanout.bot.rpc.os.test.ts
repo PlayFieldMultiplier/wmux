@@ -31,6 +31,7 @@ import { emptyUsage } from '../../../factory/budget';
 import type { ThreadId } from '../../../../shared/room';
 import type { BotGroup } from '../../../../shared/botGroup';
 import { setFactoryRoomPorts } from '../../../factory/roomWriter';
+import { HeldFanouts, setHeldFanouts } from '../../../factory/heldFanouts';
 import type { BotWorkerStartOutcome } from '../../../factory/botNotices';
 import { SecretStore, setSecretStore } from '../../../factory/secretStore';
 import { ConnectorStore } from '../../../factory/connectorStore';
@@ -344,6 +345,28 @@ describe('task.fanout.start — bot origin', () => {
     expect(await r.call({ idempotencyKey: 'wake:w-2:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
     await r.flush();
     expect(r.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('a held request is retired only once its retry launched a worker: a refusal at the repository checks keeps it', async () => {
+    const held = new HeldFanouts({ budget: () => ({ maxConcurrentWorkers: 2 }), openWorkers: () => ({ bot: 2, factory: 2 }), wakes: () => null });
+    setHeldFanouts(held);
+    try {
+      const params = { titles: ['fix it'], prompt: 'fix', preset: 'repro' };
+      held.hold({ botId: BOT_ID, workspaceId: 'ws-bot', args: params, threadId: 'general', handoffId: 'h-dispatch', tainted: false });
+      const r = rig('lead');
+      r.setDefaultBranchNote({ name: 'odd name', recorded: false });
+      expect(JSON.stringify(await r.call({ idempotencyKey: 'wake:w-1:1', ...params }, botCtx('lead')))).toContain('cannot be kept from its workers');
+      await r.flush();
+      expect(held.list(BOT_ID)).toHaveLength(1);
+      r.setDefaultBranchNote({ name: null, recorded: false });
+      r.setWake('w-2');
+      expect(await r.call({ idempotencyKey: 'wake:w-2:1', ...params }, botCtx('lead'))).toMatchObject({ ok: true });
+      await r.flush();
+      expect(r.start).toHaveBeenCalledTimes(1);
+      expect(held.list(BOT_ID)).toEqual([]);
+    } finally {
+      setHeldFanouts(null);
+    }
   });
 
   it('verify preset at a detached SHA: repo from the profile, bot origin, preset and checkout on the request', async () => {
