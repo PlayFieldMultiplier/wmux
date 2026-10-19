@@ -34,6 +34,7 @@ import {
 } from '../taskFolderCleanup';
 import { ReclaimedWorkers, resumeWorker, type ReclaimedWorker, type WorkerResumePorts } from '../workerReclaim';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { UNKNOWN_ROOT_REFUSAL } from '../../../daemon/automation/verifiedTreeKill';
 
 // Every test here runs real git over real worktrees, several spawns in a
 // row; on a loaded CI runner (the Windows shard) one spawn can take a few
@@ -614,6 +615,26 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(await cleanTaskFolders(p, [], { force: true })).toMatchObject({ removed: 1 });
     expect(fs.existsSync(extra.path)).toBe(false);
     expect(store.get(extra.taskId)?.state).toBe('removed');
+  });
+
+  // #2388: a pane a stop left running (its process identity unknown) keeps
+  // the folder in use; Clean up now says why, not only "still in use".
+  it('a folder held by a pane whose process identity is unknown is still in use, and Clean up now names why', async () => {
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-4', 'task-4');
+    fs.mkdirSync(scratch, { recursive: true });
+    const stopped = row('cancelled', {
+      id: 'wtask-left-00000004', summary: 'stopped by owner', updatedBy: { kind: 'system', workspaceId: 'ws-daemon' }, updatedAt: 49_000,
+      dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' },
+    });
+    const pane = { id: 'daemon-left', spawnCwd: scratch, pid: process.pid, state: 'attached' };
+    const p = ports({ listSessions: async () => [pane] }, new Map([[stopped.id, { folder: scratch }]]));
+    const res = await cleanTaskFolders(p, [stopped], { force: true });
+    expect(res).toMatchObject({ removed: 0, busy: 1, failed: 0 });
+    expect(res.notRemoved).toEqual([{ path: scratch, reason: `a pane of the task is still running: ${UNKNOWN_ROOT_REFUSAL}` }]);
+    expect(fs.existsSync(scratch)).toBe(true);
+    // A pane whose identity is known is in use too, with no reason to add.
+    const known = ports({ listSessions: async () => [{ ...pane, pidStartTime: 'Mon Oct 19 05:00:00 2026', pidCreatedAtFt: '133000000000000000' }] }, new Map([[stopped.id, { folder: scratch }]]));
+    expect(await cleanTaskFolders(known, [stopped], { force: true })).toEqual({ removed: 0, keptDirty: 0, busy: 1, failed: 0 });
   });
 
   it('a removal of a kept folder that fails (EBUSY) stays found, is reported, and the next Clean up now finishes it', async () => {

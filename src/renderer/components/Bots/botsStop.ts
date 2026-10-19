@@ -17,8 +17,8 @@
 import { useSyncExternalStore } from 'react';
 import { getFactoryBotPort, type FactoryBotPort } from '../Room/factoryPorts';
 
-export interface StopAllResult { ok: boolean; botsInterrupted: number; workersStopped: number; gatesCancelled: number }
-export interface StopBotResult { ok: boolean; workersStopped: number }
+export interface StopAllResult { ok: boolean; botsInterrupted: number; workersStopped: number; gatesCancelled: number; message?: string }
+export interface StopBotResult { ok: boolean; workersStopped: number; message?: string }
 export interface StopTaskResult { ok: boolean; workersStopped: number; tasksCancelled?: number; code?: string; message?: string }
 
 export interface BotsStopPort {
@@ -50,10 +50,16 @@ export function botsStopPort(port?: FactoryBotPort & BotsStopPort): BotsStopPort
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
+/** A failed stop's line, with main's reason (#2388: a pane left running,
+ *  and why) when it gave one. */
+function failedWith(line: string, message: string | undefined): string {
+  return [line, message?.trim()].filter(Boolean).join(' ');
+}
+
 /** What a stop did, in the owner's words: only the counts that are not
  *  zero, or that nothing was running. Pure. */
 export function stopAllSummary(r: StopAllResult, t: T): string {
-  if (!r.ok) return t('botsPage.stop.failed');
+  if (!r.ok) return failedWith(t('botsPage.stop.failed'), r.message);
   const parts = [
     r.botsInterrupted > 0 ? t('botsPage.stop.botsInterrupted', { count: r.botsInterrupted }) : '',
     r.workersStopped > 0 ? t('botsPage.stop.workersStopped', { count: r.workersStopped }) : '',
@@ -64,7 +70,7 @@ export function stopAllSummary(r: StopAllResult, t: T): string {
 
 /** One bot's stop, in the owner's words. Pure. */
 export function stopBotSummary(name: string, r: StopBotResult, t: T): string {
-  if (!r.ok) return t('botsPage.stop.failed');
+  if (!r.ok) return failedWith(t('botsPage.stop.failed'), r.message);
   return r.workersStopped > 0
     ? t('botsPage.stop.botStoppedWorkers', { name, count: r.workersStopped })
     : t('botsPage.stop.botStopped', { name });
@@ -74,7 +80,7 @@ export function stopBotSummary(name: string, r: StopBotResult, t: T): string {
  *  stopped, that its task had already ended, or that it could not be
  *  stopped, with main's reason. Pure. */
 export function stopTaskSummary(task: string, r: StopTaskResult, t: T): string {
-  if (!r.ok) return [t('botsPage.stop.workerFailed', { task }), r.message?.trim()].filter(Boolean).join(' ');
+  if (!r.ok) return failedWith(t('botsPage.stop.workerFailed', { task }), r.message);
   return r.workersStopped > 0 || (r.tasksCancelled ?? 0) > 0
     ? t('botsPage.stop.workerStopped', { task })
     : t('botsPage.stop.workerAlreadyStopped', { task });
@@ -107,7 +113,7 @@ export function useWorkerStopUnfinished(taskId: string | undefined): boolean {
 
 /** What turning the bots off stopped, as main's settings write reports it
  *  (absent from a main that does not stop work on Off). */
-export interface FactoryStoppedWork { workers: number; tasks: number; ok: boolean }
+export interface FactoryStoppedWork { workers: number; tasks: number; ok: boolean; message?: string }
 
 /** The stop report a settings write answered with, when it carries one. */
 export function stoppedWorkOf(result: unknown): FactoryStoppedWork | null {
@@ -115,7 +121,7 @@ export function stoppedWorkOf(result: unknown): FactoryStoppedWork | null {
   if (!w || typeof w !== 'object') return null;
   const r = w as Record<string, unknown>;
   if (typeof r.ok !== 'boolean' || typeof r.workers !== 'number' || typeof r.tasks !== 'number') return null;
-  return { ok: r.ok, workers: r.workers, tasks: r.tasks };
+  return { ok: r.ok, workers: r.workers, tasks: r.tasks, ...(typeof r.message === 'string' && r.message ? { message: r.message } : {}) };
 }
 
 interface ToastSink {
@@ -134,7 +140,7 @@ export function toastStoppedWork(result: unknown, t: T, sink: ToastSink, stop: B
   }
   const stopAll = stop.stopAll;
   sink.pushToast({
-    message: t('settings.factory.offStopFailed'),
+    message: failedWith(t('settings.factory.offStopFailed'), w.message),
     level: 'error',
     persist: true,
     ...(stopAll ? {

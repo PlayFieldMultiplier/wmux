@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { botsStopPort, stopTaskSummary, stoppedWorkOf, toastStoppedWork } from '../botsStop';
+import { botsStopPort, stopAllSummary, stopBotSummary, stopTaskSummary, stoppedWorkOf, toastStoppedWork } from '../botsStop';
 import type { FactoryBotPort } from '../../Room/factoryPorts';
 
 const t = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ''}`;
@@ -32,6 +32,26 @@ describe('stopped work on Off', () => {
     await Promise.resolve();
     expect(stopAll).toHaveBeenCalledTimes(1);
     expect(pushToast).toHaveBeenCalledTimes(2);
+  });
+});
+
+// #2388: a partial stop that left a pane running (its process identity is
+// unknown) says why on Stop all, a bot's Stop and "Run bots" off, not only on
+// Stop worker.
+describe('a partial stop carries main\'s reason', () => {
+  const why = 'Some work could not be stopped: this pane\'s process identity isn\'t known yet, so it was left running and its folder is kept; the owner can close the task with Close and keep folder, which keeps the folder.';
+
+  it('Stop all and a bot\'s Stop append it', () => {
+    expect(stopAllSummary({ ok: false, botsInterrupted: 0, workersStopped: 0, gatesCancelled: 0, message: why }, t)).toBe(`botsPage.stop.failed ${why}`);
+    expect(stopBotSummary('Lead', { ok: false, workersStopped: 0, message: why }, t)).toBe(`botsPage.stop.failed ${why}`);
+    expect(stopAllSummary({ ok: false, botsInterrupted: 0, workersStopped: 0, gatesCancelled: 0 }, t)).toBe('botsPage.stop.failed');
+  });
+
+  it('"Run bots" off appends it to its failure toast', () => {
+    const pushToast = vi.fn();
+    expect(stoppedWorkOf({ stoppedWork: { workers: 0, tasks: 1, ok: false, message: why } })).toEqual({ workers: 0, tasks: 1, ok: false, message: why });
+    toastStoppedWork({ stoppedWork: { workers: 0, tasks: 1, ok: false, message: why } }, t, { pushToast }, {});
+    expect(pushToast.mock.calls[0][0]).toMatchObject({ message: `settings.factory.offStopFailed ${why}`, level: 'error' });
   });
 });
 

@@ -67,6 +67,7 @@ import { BOT_ID_RE } from '../../shared/bot';
 import { getExecEnv } from '../../shared/execEnv';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { assertNothingRunsIn, sessionHostDir } from '../worktask/stopSessionsInDir';
+import { treeKillRefusal } from '../../daemon/automation/verifiedTreeKill';
 import { STOPPED_BY_OWNER, STOP_SYSTEM_WORKSPACE, isStoppedByOwnerRow } from './factoryStop';
 
 export const TASK_FOLDERS_FILENAME = 'task-folders.json';
@@ -242,6 +243,11 @@ export interface TaskFolderSession {
   spawnCwd?: string;
   cwd?: string;
   wslTarget?: { distribution?: unknown };
+  /** The daemon's session meta, for why a pane still runs (#2388). */
+  pid?: number;
+  state?: string;
+  pidStartTime?: string;
+  pidCreatedAtFt?: string;
 }
 
 export interface TaskFolderPorts {
@@ -317,14 +323,14 @@ function defaultExists(p: string): boolean {
 
 /** Whether any daemon session was started in the folder or works in it now
  *  (a WSL pane's Linux path read as the Windows folder it is). */
-function folderInUse(folder: string, sessions: readonly TaskFolderSession[]): boolean {
+function sessionsInFolder(folder: string, sessions: readonly TaskFolderSession[]): TaskFolderSession[] {
   let real = folder;
   try {
     real = fs.realpathSync(folder);
   } catch {
     /* compared as given */
   }
-  return sessions.some((s) => [s.spawnCwd, s.cwd].some((d) => {
+  return sessions.filter((s) => [s.spawnCwd, s.cwd].some((d) => {
     if (typeof d !== 'string' || d.length === 0) return false;
     const host = sessionHostDir(d, s);
     return isInside(host, folder) || isInside(host, real);
@@ -333,6 +339,10 @@ function folderInUse(folder: string, sessions: readonly TaskFolderSession[]): bo
 
 /** taskId → why its folder's last removal failed (read right after it). */
 const folderFailures = new Map<string, string>();
+/** taskId → why its folder is still in use, when a stop could not end the
+ *  pane holding it (#2388: its process identity is not known). Read right
+ *  after it, like folderFailures. */
+const folderBusyReasons = new Map<string, string>();
 
 /** The real path of a folder as the OS resolves it (native: on Windows a
  *  junction or a volume mount point resolves to its target), compared
@@ -678,7 +688,15 @@ async function cleanTaskFolderNow(
     await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removed', ...keep, ...stoppedMark, at: now() }).catch(() => undefined);
     return 'skipped';
   }
-  if (folderInUse(mission.folder, sessions)) return 'busy';
+  const inFolder = sessionsInFolder(mission.folder, sessions);
+  if (inFolder.length > 0) {
+    // A pane a stop left running says why: Clean up now names it.
+    const refused = inFolder.map((x) => (typeof x.pid === 'number' && typeof x.state === 'string'
+      ? treeKillRefusal({ pid: x.pid, state: x.state, pidStartTime: x.pidStartTime, pidCreatedAtFt: x.pidCreatedAtFt })
+      : null)).find((r): r is string => r !== null);
+    if (refused) folderBusyReasons.set(entry.id, `a pane of the task is still running: ${refused}`);
+    return 'busy';
+  }
   if (ports.gateRunning?.(entry.id) === true) return 'busy';
   try {
     await (ports.nothingRunsIn ?? ((d, list) => assertNothingRunsIn(d, { listSessions: async () => [...list] })))(mission.folder, sessions);
@@ -851,12 +869,16 @@ export async function cleanTaskFolders(ports: TaskFolderPorts, rows: readonly Le
   const count = (r: TaskFolderOutcome, taskId: string, folder: string | undefined): void => {
     if (r === 'removed') out.removed++;
     else if (r === 'kept_dirty') out.keptDirty++;
-    else if (r === 'busy') out.busy++;
-    else if (r === 'failed') {
+    else if (r === 'busy') {
+      out.busy++;
+      const why = folderBusyReasons.get(taskId);
+      if (why) (out.notRemoved ??= []).push({ path: folder ?? taskId, reason: why });
+    } else if (r === 'failed') {
       out.failed++;
       (out.notRemoved ??= []).push({ path: folder ?? taskId, reason: folderFailures.get(taskId) ?? 'it could not be removed' });
     }
     folderFailures.delete(taskId);
+    folderBusyReasons.delete(taskId);
   };
   const handled = new Set<string>();
   for (const row of ended) {
@@ -1089,6 +1111,7 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
           if (!missions) continue;
           const r = await cleanTaskFolder(ports, row, missions.get(row.id) ?? null, sessions);
           folderFailures.delete(row.id);
+          folderBusyReasons.delete(row.id);
           if (r === 'failed') {
             const key = `${row.id}@${row.rev}`;
             attempts.set(key, (attempts.get(key) ?? 0) + 1);
@@ -1112,6 +1135,7 @@ export function installTaskFolderCleanup(ports: TaskFolderPorts & {
             ?? (live ? null : { folder: rec.path, ...(rec.branch ? { branch: rec.branch } : {}) });
           const r = await cleanTaskFolder(ports, live ?? keptRow(rec), mission, sessions, { keptTtl: true });
           folderFailures.delete(rec.taskId);
+          folderBusyReasons.delete(rec.taskId);
           if (r === 'failed') {
             const key = `${rec.taskId}@kept`;
             attempts.set(key, (attempts.get(key) ?? 0) + 1);
