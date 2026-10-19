@@ -45,6 +45,9 @@ describe('factoryEngineLoginHandler', () => {
     await handler(e, { botId: BOT });
     expect(openTab).toHaveBeenCalledTimes(1);
     expect(String((openTab.mock.calls[0] as unknown[])[1])).toContain('/accounts/work');
-    await expect(handler(e, { botId: '../x' })).rejects.toThrow(/not a bot id/);
+    for (const bad of [{ botId: '../x' }, { botId: 7 }, { botId: null }, {}, null, 'bot-0000000a']) {
+      await expect(handler(e, bad)).rejects.toThrow(/not a bot id/);
+    }
+    expect(openTab).toHaveBeenCalledTimes(1);
   });
 });

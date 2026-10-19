@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { CLAUDE_PROBE_TIMEOUT_MS, clearClaudeProbeCache, probeClaudeExecutable } from '../claudeProbe';
 import { resolveClaudeLaunch } from '../../claude/resolveClaudeLaunch';
@@ -105,5 +108,19 @@ describe('probeClaudeExecutable', () => {
     }
     await probeClaudeExecutable('/bin/claude', { run, mtimeMs: () => 1 });
     expect(run).toHaveBeenCalledTimes(2);
+  });
+  it('runs without NODE_OPTIONS, as the Agent SDK launches Claude: an inherited preload hook does not fail it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-probe-env-'));
+    const cli = path.join(dir, 'cli.js');
+    fs.writeFileSync(cli, "console.log('2.1.0 (Claude Code)');\n");
+    const prior = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = `--require ${path.join(dir, 'missing-hook.js')}`;
+    try {
+      await expect(probeClaudeExecutable(cli, { useCache: false, launchOpts: { nodeExecutable: process.execPath } }))
+        .resolves.toEqual({ ok: true, version: '2.1.0 (Claude Code)' });
+    } finally {
+      if (prior === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = prior;
+    }
   });
 });

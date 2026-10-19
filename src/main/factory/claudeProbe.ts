@@ -42,6 +42,15 @@ export interface ClaudeProbeDeps {
   launchOpts?: Omit<ResolveClaudeLaunchOpts, 'args'>;
 }
 
+/** The probe's environment: main's, with the launch's overlay, and without
+ *  NODE_OPTIONS, which the Agent SDK deletes before it spawns Claude (a
+ *  preload hook in it must not fail a probe the bots' launch would pass). */
+export function probeEnv(overlay: Record<string, string> | undefined, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...(overlay ?? {}) };
+  delete env.NODE_OPTIONS;
+  return env;
+}
+
 function defaultRun(
   command: string,
   args: readonly string[],
@@ -59,7 +68,7 @@ function defaultRun(
           maxBuffer: 64 * 1024,
           windowsHide: true,
           ...(opts.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-          ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}),
+          env: probeEnv(opts.env),
         },
         (err, stdout, stderr) => {
           const out = typeof stdout === 'string' ? stdout : '';

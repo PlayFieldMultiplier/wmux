@@ -256,8 +256,13 @@ export function factoryEngineLoginHandler(
 ): (e: { sender?: unknown; senderFrame?: unknown }, req?: unknown) => Promise<void> {
   return async (e, req) => {
     if (!isMainWindowSender(e, getWindow())) throw new Error('only the main window may start the Claude sign-in');
-    const botId = req && typeof req === 'object' && typeof (req as { botId?: unknown }).botId === 'string' ? (req as { botId: string }).botId : null;
-    if (botId !== null && !BOT_ID_RE.test(botId)) throw new Error('not a bot id');
+    // No request: main's own sign-in. A request names a bot, or is refused.
+    let botId: string | null = null;
+    if (req !== undefined) {
+      const named = req && typeof req === 'object' ? (req as { botId?: unknown }).botId : undefined;
+      if (typeof named !== 'string' || !BOT_ID_RE.test(named)) throw new Error('not a bot id');
+      botId = named;
+    }
     // The sign-in goes to the folder readiness reads and the bots run on,
     // or to the one a named bot's account keeps its sign-in in.
     const { botConfigDir, ...login } = deps;
