@@ -240,6 +240,15 @@ describe('captureTreeWin32', () => {
     expect(f.openHandles()).toBe(0);
   });
 
+  it('does not walk a root nothing confirms: unverified, nothing terminated', async () => {
+    const f = fakeWin([{ pid: 10, ppid: 1, createdAt: 100n }, { pid: 11, ppid: 10, createdAt: 110n }]);
+    const r = await captureTreeWin32(10, f.api, { rootIsOurs: () => null })!.kill({ timeoutMs: 0 });
+    expect(r).toMatchObject({ ok: false, killed: [] });
+    if (!r.ok) expect(r.survivors[0]).toMatchObject({ pid: 10, unverified: true });
+    expect(f.terminated).toEqual([]);
+    expect(f.openHandles()).toBe(0);
+  });
+
   it('release() kills nothing and closes every handle', () => {
     const f = fakeWin([{ pid: 10, ppid: 1, createdAt: 100n }, { pid: 11, ppid: 10, createdAt: 110n }]);
     captureTreeWin32(10, f.api)!.release();
@@ -283,6 +292,14 @@ describe('captureTreePosix', () => {
     expect(f.signals.some(([p]) => p === 200)).toBe(false);
   });
 
+  it('does not walk a root nothing confirms: unverified, nothing signalled', async () => {
+    const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)]);
+    const r = await (await captureTreePosix(100, f.deps, { sleep: noWait, rootIsOurs: () => null }))!.kill({ timeoutMs: 0 });
+    expect(r).toMatchObject({ ok: false, killed: [] });
+    if (!r.ok) expect(r.survivors[0]).toMatchObject({ pid: 100, unverified: true });
+    expect(f.signals).toEqual([]);
+  });
+
   it('counts a pid another process took as gone', async () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)], { reuse: { 101: 'later' } });
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 100 });
@@ -293,6 +310,107 @@ describe('captureTreePosix', () => {
     const f = fakePosix([row(1, 0), row(100, 1), row(101, 100)], { stuck: [101] });
     const r = await (await captureTreePosix(100, f.deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
     expect(r).toEqual({ ok: false, killed: [100], survivors: [{ pid: 101, reason: 'still running', startTime: 't101' }] });
+  });
+
+  it('takes nothing a root that changed hands before its stop leads to', async () => {
+    let reads = 0;
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // Read 1 confirms the root. By read 2 (right before the stop) it
+        // exited and its pid went to a stranger, which has a child of its own.
+        return reads === 1
+          ? [row(1, 0), row(100, 1), row(101, 100)]
+          : [row(1, 0), { pid: 100, ppid: 1, stat: 'S', start: 'stranger' }, row(102, 100)];
+      },
+      signal: (pid, sig) => { signals.push([pid, sig]); },
+    };
+    const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+    const r = await tree.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors.some((s) => s.unverified && /root ended or was replaced/.test(s.reason))).toBe(true);
+    expect(signals.filter(([p, s]) => (p === 100 || p === 102 || p === -100) && s !== 'SIGCONT')).toEqual([]);
+  });
+
+  it('a process of the tree gone before its stop leaves the tree unverified: what it forked went to init', async () => {
+    let reads = 0;
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // Read 1 lists 101 under 100. By read 2 it forked 102 into a group
+        // of its own and exited: 102 is init's now, under no captured pid.
+        return reads === 1
+          ? [row(1, 0), row(100, 1), row(101, 100)]
+          : [row(1, 0), row(100, 1), row(102, 1)];
+      },
+      signal: () => undefined,
+    };
+    const r = await (await captureTreePosix(100, deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.survivors).toContainEqual(expect.objectContaining({ unverified: true, reason: expect.stringMatching(/101 of the tree ended or changed hands before they could be frozen/) }));
+  });
+
+  it('never kills a process it could not freeze when the table cannot be read again', async () => {
+    let reads = 0;
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // The capture's reads work; the kill's read fails.
+        if (reads > 3) throw new Error('ps failed');
+        return [row(1, 0), row(100, 1), row(101, 100)];
+      },
+      // 101 cannot be stopped (another user's): it may exit, and its pid go.
+      signal: (pid, sig) => {
+        signals.push([pid, sig]);
+        if (pid === 101 && sig === 'SIGSTOP') throw new Error('EPERM');
+      },
+    };
+    const r = await (await captureTreePosix(100, deps, { sleep: noWait }))!.kill({ timeoutMs: 0 });
+    expect(r.ok).toBe(false);
+    expect(signals.filter(([p, s]) => p === 101 && s === 'SIGKILL')).toEqual([]);
+  });
+
+  it('does not stop a pid that changed hands between the read and the stop', async () => {
+    let reads = 0;
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const deps: PosixTreeDeps = {
+      listProcesses: async () => {
+        reads++;
+        // Read 1 lists 101 under 100; by read 2 (right before the stop) 101
+        // exited and its pid went to a stranger.
+        return reads === 1
+          ? [row(1, 0), row(100, 1), row(101, 100)]
+          : [row(1, 0), row(100, 1), { pid: 101, ppid: 1, stat: 'S', start: 'stranger' }];
+      },
+      signal: (pid, sig) => { signals.push([pid, sig]); },
+    };
+    const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+    expect(signals.filter(([p]) => p === 101)).toEqual([]);
+    await tree.kill({ timeoutMs: 0 });
+    expect(signals.filter(([p, s]) => p === 101 && s !== 'SIGCONT')).toEqual([]);
+  });
+
+  it('runs on a stranger the stop reached: the kill and the release send it SIGCONT, never SIGKILL', async () => {
+    for (const end of ['kill', 'release'] as const) {
+      const rows = [row(1, 0), row(100, 1), row(101, 100)];
+      const signals: Array<[number, NodeJS.Signals]> = [];
+      const deps: PosixTreeDeps = {
+        listProcesses: async () => rows.map((r) => ({ ...r })),
+        signal: (pid, sig) => {
+          signals.push([pid, sig]);
+          // The pid changed hands right before the stop landed: it stopped a stranger.
+          if (pid === 101 && sig === 'SIGSTOP') rows[2] = { pid: 101, ppid: 1, stat: 'T', start: 'stranger' };
+        },
+      };
+      const tree = (await captureTreePosix(100, deps, { sleep: noWait }))!;
+      if (end === 'kill') await tree.kill({ timeoutMs: 0 });
+      else tree.release();
+      const to101 = signals.filter(([p]) => p === 101).map(([, s]) => s);
+      expect(to101).toContain('SIGCONT');
+      expect(to101).not.toContain('SIGKILL');
+    }
   });
 
   it('fails closed when a process of the tree cannot be frozen', async () => {
@@ -313,10 +431,11 @@ describe('captureTreePosix', () => {
     const deps: PosixTreeDeps = {
       listProcesses: async () => {
         reads++;
-        // Read 1: 100 -> 101. Read 2: 101 was killed by someone else and
+        // Reads 1-2 (the scan and the read before the stop): 100 -> 101.
+        // Then 101 was killed by someone else and
         // another process got its pid, with a child of its own (102), and
         // 100 also started 103 before it was frozen.
-        if (reads === 1) return [row(1, 0), row(100, 1), row(101, 100)];
+        if (reads <= 2) return [row(1, 0), row(100, 1), row(101, 100)];
         return [row(1, 0), row(100, 1), { pid: 101, ppid: 100, stat: 'S', start: 'other' }, row(102, 101), row(103, 100)];
       },
       signal: (pid, sig) => { signals.push([pid, sig]); },
@@ -440,6 +559,15 @@ describe('survivorsStillRunningWin32', () => {
       { pid: 22, ppid: 21, createdAt: 160n },
     ]);
     expect(survivorsStillRunningWin32([{ pid: 11, reason: 'access denied', startTime: '110' }], f.api)).toEqual([]);
+  });
+
+  it('keeps an exited survivor while a child under its pid runs that cannot be opened', () => {
+    const f = fakeWin([
+      { pid: 11, ppid: 1, createdAt: 110n, exited: true },
+      { pid: 21, ppid: 11, createdAt: 150n, unopenable: true },
+    ]);
+    const s11 = { pid: 11, reason: 'access denied', startTime: '110' };
+    expect(survivorsStillRunningWin32([s11], f.api)).toEqual([s11]);
   });
 
   it('stays unverified when a child that vanished shows a child of its own in a later table', async () => {
