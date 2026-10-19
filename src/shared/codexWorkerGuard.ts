@@ -77,7 +77,7 @@ const GH_VALUE_OPTIONS = ['-R', '--repo', '--hostname'];
  *  as the glab rules of BOT_WORKER_DENY). A group's own aliases
  *  (GLAB_GROUP_ALIASES) are refused with it. */
 const GLAB_WRITE_VERBS: Readonly<Record<string, readonly string[]>> = {
-  mr: ['merge', 'accept', 'approve', 'note', 'comment', 'revoke', 'unapprove', 'close', 'reopen', 'delete', 'del', 'update', 'rebase', 'for'],
+  mr: ['merge', 'accept', 'approve', 'note', 'comment', 'revoke', 'unapprove', 'close', 'reopen', 'delete', 'del', 'update', 'rebase', 'for', 'new-for', 'create-for'],
   issue: ['create', 'new', 'close', 'note', 'comment', 'delete', 'del', 'reopen', 'update'],
   release: ['create', 'delete', 'upload'],
   repo: ['create', 'fork', 'update', 'delete', 'transfer', 'mirror', 'publish'],
@@ -92,7 +92,10 @@ const GLAB_NESTED_WRITE_VERBS: readonly (readonly [string, string, readonly stri
 ];
 /** `glab mr create` options that push the branch or merge it later (as the
  *  first word after the verb: Codex rules match leading words). */
-const GLAB_CREATE_PUSH_OPTIONS = ['-f', '--fill', '--push', '--auto-merge', '--create-source-branch', '-yf', '-wf', '-ywf', '-wyf'];
+const GLAB_CREATE_PUSH_OPTIONS = [
+  '-f', '-yf', '-wf', '-ywf', '-wyf',
+  ...['--fill', '--push', '--auto-merge', '--create-source-branch'].flatMap((o) => [o, `${o}=true`]),
+];
 /** glab options that take a value, spelled as their own word. */
 const GLAB_VALUE_OPTIONS = ['-R', '--repo'];
 /** git options before the command that take a value or change where git

@@ -137,7 +137,7 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
     '*--fill*', '*--push*', '*--create-source-branch*',
     ...['f', 'yf', 'wf', 'ywf', 'wyf'].flatMap((b) => [`-${b}*`, `* -${b}*`]),
   ].flatMap((rest) => glabCommandWithDeny('mr', v, rest))),
-  ...glabSubcommandDeny('mr', 'rebase'), ...glabSubcommandDeny('mr', 'for'), ...glabSubcommandDeny('stack', 'sync'),
+  ...['rebase', 'for', 'new-for', 'create-for'].flatMap((v) => glabSubcommandDeny('mr', v)), ...glabSubcommandDeny('stack', 'sync'),
 ];
 
 /** Public acts under the owner's GitHub identity — issues, comments,
