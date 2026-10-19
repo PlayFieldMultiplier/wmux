@@ -329,6 +329,11 @@ interface SessionWatch {
    * again to learn what it means; cleared once a walk lands.
    */
   changed?: boolean;
+  /**
+   * In a repo: a re-walk of the cwd missed its deadline, so what its `.git`
+   * points at is not known to be unchanged. The poll walks again, backing off.
+   */
+  rewalk?: boolean;
   watcher: GitWatchHandle | null;
   debounce: NodeJS.Timeout | null;
   /** Last emitted value, JSON-encoded, to suppress no-op re-emits. */
@@ -491,6 +496,9 @@ export class GitContextWatcher extends EventEmitter {
             current.conclusive = false;
             this.readAndEmit(sessionId, current);
           }
+          // In a repo the poll only reads HEAD and would never walk again,
+          // so a `.git` retargeted in place would keep the old repository.
+          if (current.repo) current.rewalk = true;
           return;
         }
         this.apply(sessionId, wanted.cwd, wanted.mapGitDir, state, 'remote', head);
@@ -560,7 +568,11 @@ export class GitContextWatcher extends EventEmitter {
     if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir
       && existing.conclusive === conclusive && existing.watcher) {
       existing.changed = false;
+      existing.rewalk = false;
       if (head) this.readAndEmit(sessionId, existing, head);
+      // A walk that moved through another share and back may have left that
+      // share's reader with no pane.
+      this.pruneReaders();
       return; // same checkout — keep the live watcher.
     }
     if (existing) this.teardown(existing);
@@ -767,6 +779,12 @@ export class GitContextWatcher extends EventEmitter {
         watch.stalled = false;
         if ('head' in result) {
           this.readAndEmit(sessionId, watch, result.head);
+          if (watch.rewalk && ++roundsSinceWalk >= walkEvery) {
+            roundsSinceWalk = 0;
+            walkEvery = Math.min(walkEvery * 2, REMOTE_REWALK_MAX_ROUNDS);
+            watch.rewalk = false;
+            this.update(sessionId, watch.cwd, watch.mapGitDir);
+          }
         } else {
           let again = entries !== null && result.seen !== entries;
           if (again) watch.changed = true;

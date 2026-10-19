@@ -1218,6 +1218,36 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events.at(-1)?.branch).toBe('next');
   });
 
+  it('a worktree retargeted in place whose re-walk misses its deadline is walked again by the poll', async () => {
+    const a = tmp();
+    const b = tmp();
+    initFakeRepo(a, 'old');
+    initFakeRepo(b, 'new');
+    const wt = tmp();
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(a, '.git')}\n`);
+    let failWalk = false;
+    const io: ProbeIo = (probe) => {
+      if (failWalk && probe.op === 'read' && probe.path === path.join(wt, '.git')) {
+        failWalk = false;
+        return Promise.reject(new Error('no answer within 5000 ms'));
+      }
+      return localIo(probe);
+    };
+    const watcher = makeRemoteWatcher(io);
+    watcher.update('s1', wt);
+    await settle();
+    expect(events.at(-1)?.branch).toBe('old');
+
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(b, '.git')}\n`);
+    failWalk = true;
+    watcher.update('s1', wt);
+    await settle();
+    expect(failWalk).toBe(false); // the re-walk failed
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)?.branch).toBe('new');
+  });
+
   it('closes a share\'s reader once the last pane on it leaves', async () => {
     const opened: string[] = [];
     const closed: string[] = [];
