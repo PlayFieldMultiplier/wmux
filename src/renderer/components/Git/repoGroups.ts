@@ -8,6 +8,11 @@
 // on one repo cost one `worktree.list` and one remote read, and it reruns only
 // when a workspace's cwd candidates change, not on every name or PR update:
 // names and PR badges are joined from the live store at render.
+//
+// A workspace whose folder is not a repo but holds repos in its subfolders
+// (#2438) is listed under each of them as "found in" that workspace: the repo
+// gets its group, but the workspace does not sit on any of its worktrees, so
+// no row is marked as its and the group is not the active one.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -16,7 +21,7 @@ import type { StoreState } from '../../stores';
 import type { PrStatus } from '../../../shared/types';
 import { normWorktreePath, type WorkspaceOnRepo } from './worktreeRows';
 import { hostPlatform, pathLeaf, repoCwdCandidates } from './GitTab';
-import { mainPathCached, repoKeyCached, resolveRepoCached } from './repoCache';
+import { mainPathCached, repoKeyCached, resolveRepoCached, scanReposCached } from './repoCache';
 
 export interface ResolvedWorkspace {
   workspaceId: string;
@@ -26,6 +31,9 @@ export interface ResolvedWorkspace {
   mainPath: string;
   /** The checkout's remote identity (host/owner/repo), null without one. */
   remoteKey: string | null;
+  /** The repo was found in a subfolder of the workspace's folder, which is
+   *  not a repo itself (#2438): the workspace is not on this repo. */
+  contained?: boolean;
 }
 
 export interface Checkout {
@@ -46,6 +54,8 @@ export interface RepoGroup {
   /** Where the group's one PR list is read from (any checkout serves). */
   prPath: string;
   workspaceCount: number;
+  /** Workspaces whose folder holds this repo in a subfolder (#2438). */
+  foundIn: string[];
 }
 
 type Live = Record<string, { name: string; pr: PrStatus | null }>;
@@ -53,8 +63,9 @@ type Live = Record<string, { name: string; pr: PrStatus | null }>;
 /** The workspace that owns a repo group's hand-offs (the fan-out runs from
  *  it): the active workspace when it is in the group, else the group's first
  *  workspace; undefined when none is open on it. */
-export function repoOwnerWorkspace(group: Pick<RepoGroup, 'checkouts'>, activeWorkspaceId: string | null): string | undefined {
-  const all = group.checkouts.flatMap((c) => c.workspaces.map((w) => w.workspaceId));
+export function repoOwnerWorkspace(group: Pick<RepoGroup, 'checkouts'> & { foundIn?: readonly string[] }, activeWorkspaceId: string | null): string | undefined {
+  // Workspaces on the repo first; a workspace it was only found in otherwise.
+  const all = [...group.checkouts.flatMap((c) => c.workspaces.map((w) => w.workspaceId)), ...(group.foundIn ?? [])];
   if (activeWorkspaceId && all.includes(activeWorkspaceId)) return activeWorkspaceId;
   return all[0];
 }
@@ -84,7 +95,7 @@ export function groupWorkspacesByRepo(
     let g = groups.get(key);
     if (!g) {
       const name = w.remoteKey ? w.remoteKey.split('/').pop() ?? pathLeaf(w.mainPath) : pathLeaf(w.mainPath);
-      g = { key, name, checkouts: [], active: false, prPath: w.mainPath, workspaceCount: 0 };
+      g = { key, name, checkouts: [], active: false, prPath: w.mainPath, workspaceCount: 0, foundIn: [] };
       groups.set(key, g);
     }
     const ck = normWorktreePath(w.mainPath, platform);
@@ -93,8 +104,15 @@ export function groupWorkspacesByRepo(
       c = { mainPath: w.mainPath, label: pathLeaf(w.mainPath), workspaces: [] };
       g.checkouts.push(c);
     }
+    // A workspace counts once per group, however many of its checkouts it is in or holds.
+    const counted = g.foundIn.includes(w.workspaceId) || g.checkouts.some((x) => x.workspaces.some((y) => y.workspaceId === w.workspaceId));
+    if (w.contained) {
+      if (!g.foundIn.includes(w.workspaceId)) g.foundIn.push(w.workspaceId);
+      if (!counted) g.workspaceCount++;
+      continue;
+    }
     c.workspaces.push({ workspaceId: w.workspaceId, name: info.name, pr: info.pr, repoPath: w.repoPath });
-    g.workspaceCount++;
+    if (!counted) g.workspaceCount++;
     if (w.workspaceId === activeWorkspaceId) {
       g.active = true;
       g.prPath = w.mainPath;
@@ -107,6 +125,7 @@ export function groupWorkspacesByRepo(
 type ResolveRepo = (cwd: string) => Promise<{ ok: true; repoPath: string } | { ok: false }>;
 type ListWorktrees = (repoPath: string) => Promise<{ ok: true; mainPath: string; worktrees: { path: string }[] } | { ok: false }>;
 type RepoKey = (repoPath: string) => Promise<{ key: string | null }>;
+type ScanRepos = (cwd: string) => Promise<{ ok: true; repoPaths: string[] } | { ok: false }>;
 
 /** Each workspace's id and cwd candidates — the only inputs to resolution. */
 function selectResolutionKey(s: StoreState): string {
@@ -140,7 +159,7 @@ export function useRepoGroups(refreshKey: number, enabled = true): RepoGroup[] |
     const force = lastRefresh.current !== refreshKey;
     lastRefresh.current = refreshKey;
     const api = (window as unknown as {
-      electronAPI?: { diff?: { resolveRepo?: ResolveRepo }; worktree?: { list?: ListWorktrees }; github?: { repoKey?: RepoKey } };
+      electronAPI?: { diff?: { resolveRepo?: ResolveRepo; scanRepos?: ScanRepos }; worktree?: { list?: ListWorktrees }; github?: { repoKey?: RepoKey } };
     }).electronAPI;
     const resolveRepo = api?.diff?.resolveRepo;
     const list = api?.worktree?.list;
@@ -154,19 +173,31 @@ export function useRepoGroups(refreshKey: number, enabled = true): RepoGroup[] |
       const plat = hostPlatform();
       const out: ResolvedWorkspace[] = [];
       for (const ws of state.workspaces) {
+        const candidates = repoCwdCandidates(ws, state.startupDirectory || '', true);
         let top: string | null = null;
-        for (const cwd of repoCwdCandidates(ws, state.startupDirectory || '', true)) {
+        for (const cwd of candidates) {
           top = await resolveRepoCached(resolveRepo, cwd, force);
           if (!live()) return;
           if (top !== null) break;
         }
-        if (top === null) continue;
-        const mainPath = await mainPathCached(list, top, plat, force);
-        if (!live()) return;
-        if (!mainPath) continue;
-        const remoteKey = await repoKeyCached(api?.github?.repoKey, mainPath, plat, force);
-        if (!live()) return;
-        out.push({ workspaceId: ws.id, repoPath: top, mainPath, remoteKey });
+        // Not in a repo: the repos in its folder's subfolders, from the first
+        // candidate that holds any (#2438).
+        let tops: readonly string[] = top !== null ? [top] : [];
+        if (top === null) {
+          for (const cwd of candidates) {
+            tops = await scanReposCached(api?.diff?.scanRepos, cwd, force);
+            if (!live()) return;
+            if (tops.length > 0) break;
+          }
+        }
+        for (const t of tops) {
+          const mainPath = await mainPathCached(list, t, plat, force);
+          if (!live()) return;
+          if (!mainPath) continue;
+          const remoteKey = await repoKeyCached(api?.github?.repoKey, mainPath, plat, force);
+          if (!live()) return;
+          out.push({ workspaceId: ws.id, repoPath: t, mainPath, remoteKey, ...(top === null ? { contained: true } : {}) });
+        }
       }
       if (live()) setResolved(out);
     })();

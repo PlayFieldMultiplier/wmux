@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupWorkspacesByRepo, type ResolvedWorkspace } from '../repoGroups';
+import { groupWorkspacesByRepo, repoOwnerWorkspace, type ResolvedWorkspace } from '../repoGroups';
 
 const w = (workspaceId: string, repoPath: string, mainPath: string, remoteKey: string | null = null): ResolvedWorkspace =>
   ({ workspaceId, repoPath, mainPath, remoteKey });
@@ -45,5 +45,32 @@ describe('groupWorkspacesByRepo', () => {
     expect(groups[0].checkouts[0].workspaces).toEqual([
       { workspaceId: 'a', name: 'Renamed', pr: { number: 3, state: 'open', checks: null, url: 'u' }, repoPath: '/r' },
     ]);
+  });
+
+  it('lists the repos found in a non-repo workspace folder, without putting the workspace on them (#2438)', () => {
+    const found = (workspaceId: string, repoPath: string, remoteKey: string | null = null): ResolvedWorkspace =>
+      ({ workspaceId, repoPath, mainPath: repoPath, remoteKey, contained: true });
+    const groups = groupWorkspacesByRepo([
+      found('root', '/work/frontend', 'bitbucket.org/acme/frontend'),
+      found('root', '/work/services/billing'),
+      found('root', '/work/infra'),
+      w('b', '/work/infra', '/work/infra'),
+    ], live('root', 'b'), 'root', 'linux');
+    // One group per repo, by name: none is "active", since the workspace is in none.
+    expect(groups.map((g) => g.name)).toEqual(['billing', 'frontend', 'infra']);
+    expect(groups.every((g) => !g.active)).toBe(true);
+    const frontend = groups[1];
+    expect(frontend.foundIn).toEqual(['root']);
+    expect(frontend.workspaceCount).toBe(1);
+    // No worktree row is marked as the found-in workspace's.
+    expect(frontend.checkouts[0].workspaces).toEqual([]);
+    expect(frontend.checkouts[0].currentPath).toBeUndefined();
+    // Hand-offs from it still have a workspace to run from.
+    expect(repoOwnerWorkspace(frontend, 'root')).toBe('root');
+    // A workspace actually on the repo is listed on it, and owns it before the one it was found in.
+    const infra = groups[2];
+    expect(infra.checkouts[0].workspaces.map((x) => x.workspaceId)).toEqual(['b']);
+    expect(infra.workspaceCount).toBe(2);
+    expect(repoOwnerWorkspace(infra, null)).toBe('b');
   });
 });
