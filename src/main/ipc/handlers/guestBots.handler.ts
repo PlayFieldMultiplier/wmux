@@ -11,6 +11,7 @@ import {
   type GuestBotCreateResult, type GuestBotErrorCode, type GuestBotListResult, type GuestBotSimpleResult, type GuestBotView, type GuestScope,
 } from '../../../shared/guestBots';
 import { getRoomWriter } from '../../factory/roomWriter';
+import { dropQueuedGuestWakes } from '../../factory/wakeQueue';
 
 const CODES: readonly GuestBotErrorCode[] = ['unavailable', 'invalid', 'too-many', 'not-found', 'persist-failed'];
 
@@ -85,6 +86,21 @@ async function simple(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, meth
   }
 }
 
+/** Revoke a guest; its wakes that have not run are dropped whatever the
+ *  daemon answers (the owner asked for it to stop). */
+export async function revokeGuestBot(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, guestId: string, drop: (guestId?: string) => number = dropQueuedGuestWakes): Promise<GuestBotSimpleResult> {
+  const r = await simple(dc, GUEST_BOT_RPC.revoke, { guestId });
+  drop(guestId);
+  return r;
+}
+
+/** Turn guest bots on or off; off drops every guest wake that has not run. */
+export async function setGuestBotsEnabled(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, enabled: boolean, drop: (guestId?: string) => number = dropQueuedGuestWakes): Promise<GuestBotSimpleResult> {
+  const r = await simple(dc, GUEST_BOT_RPC.setEnabled, { enabled });
+  if (!enabled) drop();
+  return r;
+}
+
 export function registerGuestBotHandlers(getDaemonClient: () => DaemonClient | null, getWindow: () => BrowserWindow | null): () => void {
   const channels = Object.values(GUEST_BOT_IPC);
   for (const c of channels) ipcMain.removeHandler(c);
@@ -95,11 +111,11 @@ export function registerGuestBotHandlers(getDaemonClient: () => DaemonClient | n
   ipcMain.handle(GUEST_BOT_IPC.create, wrapHandler(GUEST_BOT_IPC.create, guard((req) => createGuestBot(getDaemonClient(), req, (scope) => getRoomWriter()?.summary(scope.workspaceId, scope.threadId).lastSeq ?? null))));
   ipcMain.handle(GUEST_BOT_IPC.revoke, wrapHandler(GUEST_BOT_IPC.revoke, guard((req) => {
     const guestId = req && typeof req === 'object' ? (req as { guestId?: unknown }).guestId : undefined;
-    return isGuestId(guestId) ? simple(getDaemonClient(), GUEST_BOT_RPC.revoke, { guestId }) : Promise.resolve({ ok: false as const, code: 'invalid' as const });
+    return isGuestId(guestId) ? revokeGuestBot(getDaemonClient(), guestId) : Promise.resolve({ ok: false as const, code: 'invalid' as const });
   })));
   ipcMain.handle(GUEST_BOT_IPC.setEnabled, wrapHandler(GUEST_BOT_IPC.setEnabled, guard((req) => {
     const enabled = req && typeof req === 'object' ? (req as { enabled?: unknown }).enabled : undefined;
-    return typeof enabled === 'boolean' ? simple(getDaemonClient(), GUEST_BOT_RPC.setEnabled, { enabled }) : Promise.resolve({ ok: false as const, code: 'invalid' as const });
+    return typeof enabled === 'boolean' ? setGuestBotsEnabled(getDaemonClient(), enabled) : Promise.resolve({ ok: false as const, code: 'invalid' as const });
   })));
   return () => {
     for (const c of channels) ipcMain.removeHandler(c);

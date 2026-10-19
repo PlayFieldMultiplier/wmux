@@ -51,6 +51,8 @@ export interface WakeSinkApi {
   /** Merges fact wakes per the trigger's batch window; null = dropped. A
    *  keyed wake already queued or run returns that item (wakeQueue.ts). */
   enqueue(input: { botId: string; workspaceId: string; reason: WakeReason; priority: 0 | 1 | 2; threadId?: ThreadId; overCap?: true }): WakeItem | null;
+  /** The bot's `guest` wakes waiting to run (wakeQueue.ts GUEST_WAKES_QUEUED_PER_BOT). */
+  queuedGuestWakes?(botId: string): number;
   /** Resolves once every change so far is on disk (absent: in memory only). */
   flush?(): Promise<void>;
 }

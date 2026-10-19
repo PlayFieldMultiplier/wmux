@@ -23,7 +23,7 @@ import {
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, type RoomCard, type ThreadId } from '../../shared/room';
 import { capBody, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
 import { redactStoredSecrets } from './secretRedaction';
-import { HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
+import { GUEST_WAKES_QUEUED_PER_BOT, HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
 
 export type GuestPostHandler = (payload: Record<string, unknown>) => Promise<GuestPostResult>;
 
@@ -140,6 +140,9 @@ export function postGuestMessage(raw: Record<string, unknown>, deps: GuestPostDe
     const named = Date.now() - prior.at < HUMAN_RETRY_WINDOW_MS ? (prior.refs?.botIds ?? []).filter((id) => byId.has(id)) : [];
     return { ok: true, cardId: prior.id, seq: prior.seq, duplicate: true, woke: enqueueGuestWakes(ports, named.map((id) => byId.get(id)!), p, prior) };
   }
+  // A bot that already holds its share of guest wakes takes no new message
+  // now: the guest is told to retry (busy) and nothing is written.
+  if (p.mentions.some((id) => (ports.wakes?.queuedGuestWakes?.(id) ?? 0) >= GUEST_WAKES_QUEUED_PER_BOT)) return { ok: false, code: 'busy' };
   const r = writer.post({
     workspaceId: p.workspaceId,
     threadId: p.threadId,

@@ -46,6 +46,8 @@ export const WAKE_QUEUE_VERSION = 1 as const;
 /** What the trigger engine and the handoff router call (§14). */
 export interface WakeSinkApi {
   enqueue(input: WakeEnqueueInput): WakeItem | null;
+  /** The bot's `guest` wakes waiting to run (GUEST_WAKES_QUEUED_PER_BOT). */
+  queuedGuestWakes?(botId: string): number;
   /** Resolves once every change so far is on disk (absent: in memory only). */
   flush?(): Promise<void>;
 }
@@ -76,6 +78,9 @@ export const WAKE_RECORD_RETAIN_MS = 7 * 24 * 3_600_000;
 /** How long the record of an owner's message is kept whatever the count: a
  *  retry of the message within it queues no second wake. */
 export const HUMAN_RETRY_WINDOW_MS = 24 * 3_600_000;
+/** Most external guests' wakes one bot holds queued at once: the rest of
+ *  its queue stays for the owner's and the factory's work. */
+export const GUEST_WAKES_QUEUED_PER_BOT = 3;
 export const WAKE_RECORD_MAX = 500;
 const FACT_IDS_MAX = 100;
 const HUMAN_TEXT_MAX = 16 * 1024;
@@ -351,6 +356,7 @@ export class WakeQueue implements WakeSinkApi {
       const prior = mine.find((i) => i.state !== 'dropped' && keyOf(i.reason) === key);
       if (prior) return copyItem(prior);
     }
+    if (reason.kind === 'guest' && this.queuedGuestWakes(input.botId) >= GUEST_WAKES_QUEUED_PER_BOT) return this.record(req, 'queue_full');
     const cap = WAKE_LIMITS.PER_BOT_QUEUE_CAP + (input.overCap === true ? OVER_CAP_RESERVE[reason.kind] ?? 0 : 0);
     if (mine.filter((i) => i.state === 'queued').length >= cap) return this.record(req, 'queue_full');
     const now = this.now();
@@ -375,6 +381,10 @@ export class WakeQueue implements WakeSinkApi {
   get(id: string): WakeItem | null {
     const i = this.items.find((x) => x.id === id);
     return i ? copyItem(i) : null;
+  }
+
+  queuedGuestWakes(botId: string): number {
+    return this.items.filter((i) => i.botId === botId && i.state === 'queued' && i.reason.kind === 'guest').length;
   }
 
   list(filter: { botId?: string; states?: readonly WakeState[] } = {}): WakeItem[] {
@@ -581,6 +591,19 @@ export function dropQueuedHeldFanoutWakes(botId: string, only?: (wake: WakeItem)
   for (const i of current.list({ botId, states: ['queued', 'parked'] })) {
     if (i.reason.kind !== 'held_fanout') continue;
     if (only && !only(i)) continue;
+    if (current.drop(i.id, 'expired')) n++;
+  }
+  return n;
+}
+
+/** Drop the external guests' wakes that have not run, queued or parked:
+ *  `guestId`'s only, or every guest's when it is omitted (the owner revoked
+ *  a guest or turned guest bots off). Returns how many. */
+export function dropQueuedGuestWakes(guestId?: string): number {
+  if (!current) return 0;
+  let n = 0;
+  for (const i of current.list({ states: ['queued', 'parked'] })) {
+    if (i.reason.kind !== 'guest' || (guestId !== undefined && i.reason.guestId !== guestId)) continue;
     if (current.drop(i.id, 'expired')) n++;
   }
   return n;

@@ -106,6 +106,14 @@ describe('postGuestMessage', () => {
     expect(postGuestMessage({ ...base, text: 'other words' }, deps)).toEqual({ ok: false, code: 'id_reused' });
   });
 
+  it('a named bot holding its share of guest wakes makes the post busy, and nothing is written', () => {
+    const { writer, deps } = setup();
+    const ports = deps.ports() as unknown as { wakes: Record<string, unknown> };
+    ports.wakes.queuedGuestWakes = (id: string) => (id === A ? 3 : 0);
+    expect(postGuestMessage(base, deps)).toEqual({ ok: false, code: 'busy' });
+    expect(writer.find('ws-1', (c) => c.kind === 'guest', { guests: true })).toBeNull();
+  });
+
   it('a repeat queues the wake the first post could not', () => {
     const { enqueue, deps } = setup({}, () => Date.now());
     enqueue.mockReturnValueOnce(null as never);
