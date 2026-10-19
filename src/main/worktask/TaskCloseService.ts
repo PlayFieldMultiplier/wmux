@@ -71,8 +71,8 @@ export interface TaskCloseServiceOptions {
    *  Answers the sessions it stopped, when it knows them. */
   stopPanesIn?: (worktreePath: string) => Promise<void | string[]>;
   /** The task closed after its worktree's panes were stopped (`sessionIds`):
-   *  its agent is gone (agentGoneFacts.ts). Not called for a close-only
-   *  task, whose panes nothing stopped. */
+   *  its agent is gone (agentGoneFacts.ts). A close-only task: only when
+   *  a folder of it stays or was finished, the panes in it stopped. */
   panesStopped?: (taskId: string, sessionIds: string[]) => void;
   /** Removes the task's relay repository (task_push/task_fetch); called on every close. */
   removeRelay?: (taskId: string) => void | Promise<void>;
@@ -123,6 +123,27 @@ export class TaskCloseService {
       if (finished && !finished.ok) {
         return { ok: false, taskId, reason: finished.dirty ? 'dirty' : 'error', error: finished.error, preservedWorktree: input.leftoverPath };
       }
+      // A folder that stays on disk: its repository is gone (a pending
+      // removal that ended keeping it, or a task never closed whose
+      // repository went). Nothing removes it, but the panes started in it
+      // are the task's and end with it, whole trees, before the close.
+      const kept = finished?.ok
+        ? finished.keptFolder
+        : finished === null && input.leftoverPath && fs.existsSync(input.leftoverPath) ? input.leftoverPath : undefined;
+      if (kept && stopPanesIn) {
+        try {
+          const ids = await stopPanesIn(kept);
+          stopped.ids = Array.isArray(ids) ? ids : null;
+        } catch (err) {
+          return {
+            ok: false,
+            taskId,
+            reason: 'error',
+            error: `close: could not stop the panes started in ${kept}, so the task stays open and the folder is kept: ${(err as Error).message}`,
+            preservedWorktree: kept,
+          };
+        }
+      }
       const closed = await this.missionClose(taskId, input.verifiedWorkspaceId);
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
       if (stopped.ids) {
@@ -137,7 +158,7 @@ export class TaskCloseService {
         taskId,
         archivePending: closed.archivePending,
         unmaterialized: true,
-        ...(finished?.ok && finished.keptFolder ? { keptFolder: finished.keptFolder } : {}),
+        ...(kept ? { keptFolder: kept } : {}),
       };
     }
 
