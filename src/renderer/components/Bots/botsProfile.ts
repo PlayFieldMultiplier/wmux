@@ -18,7 +18,7 @@ import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, validateBotWorkerAgent }
 export const CAN_DO_PHRASES: ReadonlyArray<{ key: string; tools: readonly BotToolName[] }> = [
   { key: 'botsPage.canDo.talk', tools: ['room_post', 'room_read', 'handoff_send', 'bot_list'] },
   { key: 'botsPage.canDo.ask', tools: ['ask_person', 'question_close'] },
-  { key: 'botsPage.canDo.fanout', tools: ['fanout_start', 'worker_resume', 'worker_message'] },
+  { key: 'botsPage.canDo.fanout', tools: ['fanout_start', 'worker_resume', 'worker_message', 'workflow_create', 'workflow_read', 'workflow_advance'] },
   { key: 'botsPage.canDo.workspaces', tools: ['workspace_list'] },
   { key: 'botsPage.canDo.terminals', tools: ['terminal_read'] },
   { key: 'botsPage.canDo.tasks', tools: ['ledger_update'] },

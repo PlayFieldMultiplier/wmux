@@ -7,7 +7,8 @@
 // as long as the switch stays off any bot task that still registers (a
 // launch that was already past its check) is stopped as it registers.
 // Turning bots on again reopens nothing: a cancelled task stays cancelled,
-// an interrupted wake is not replayed, and paused routines stay paused.
+// an interrupted wake is not replayed, paused routines stay paused, and
+// stopped workflows remain blocked even when their next step had not started.
 // Nothing is deleted by a stop: worktrees, branches, scratch folders, logs
 // and the workers' conversations all stay.
 // Stop all (and Stop for one bot) is the same stop while bots keep running
@@ -73,6 +74,8 @@ export interface FactoryStopResult {
   gatesCancelled: number;
   /** Routines paused by this stop (absent: no routines are kept). */
   routinesPaused?: number;
+  /** Active workflows permanently blocked by this stop. */
+  workflowsBlocked?: number;
   code?: string;
   message?: string;
 }
@@ -101,6 +104,8 @@ export interface FactoryStopPorts {
   /** Pause the routines of one bot, or of every bot (routines.ts); how many
    *  it paused. Absent: no routines are kept. */
   pauseRoutines?: (botId?: string) => number;
+  /** Durably block active workflows, including pending steps without tasks. */
+  blockWorkflows?: (botId?: string) => Promise<number>;
   /** Stop the resumed workers of one bot, or of every bot (workerReclaim.ts):
    *  their tasks ended, so step 2 does not reach them; how many it stopped
    *  (and how many it could not). */
@@ -383,6 +388,19 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
       log(`[factory] stop: routines were not paused: ${String(err)}`);
     }
   }
+  let workflowsBlocked: number | undefined;
+  let workflows: Promise<void> | null = null;
+  try {
+    // Queue the stop before the first await, alongside routine pausing. The
+    // store serializes it with any creation/claim already in flight.
+    workflows = ports.blockWorkflows?.(scope.botId).then((count) => { workflowsBlocked = count; }, (err) => {
+      failures++;
+      log(`[factory] stop: workflows were not blocked: ${String(err)}`);
+    }) ?? null;
+  } catch (err) {
+    failures++;
+    log(`[factory] stop: workflows were not blocked: ${String(err)}`);
+  }
   let resumed: Promise<number | { stopped: number; failed: number; taskIds?: string[] }> | null = null;
   try {
     resumed = ports.stopResumed?.(scope.botId) ?? null;
@@ -441,8 +459,9 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
       log(`[factory] stop: resumed workers were not stopped: ${String(err)}`);
     }
   }
+  await workflows;
   workersStopped += stoppedTasks.size;
-  const counts = { botsInterrupted, workersStopped, tasksCancelled, gatesCancelled, ...(routinesPaused !== undefined ? { routinesPaused } : {}) };
+  const counts = { botsInterrupted, workersStopped, tasksCancelled, gatesCancelled, ...(routinesPaused !== undefined ? { routinesPaused } : {}), ...(workflowsBlocked !== undefined ? { workflowsBlocked } : {}) };
   return failures > 0
     ? { ok: false, ...counts, code: 'partial', message: partialMessage(failures, loadingFailures, 'Some work could not be stopped; stop again to retry.') }
     : { ok: true, ...counts };

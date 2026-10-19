@@ -1,3 +1,4 @@
+import { getBotWorkflowStore } from './botWorkflow';
 // ─── Factory wiring — the real instances behind every module's ports ───────
 //
 // Each factory module takes its collaborators as ports, so it builds and
@@ -964,6 +965,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         stopWorker: (entry, opts) => stopTaskWorker(entry, daemon, taskWorkspacePtys, { ...opts, sessionRecordOf: (id) => botWorkerSessionRecord(id) }),
         isOff: () => !settings().enabled,
         pauseRoutines: (botId) => getRoutineStore()?.pauseFor(botId, 'stop') ?? 0,
+        blockWorkflows: (botId) => getBotWorkflowStore()?.blockFor(botId) ?? Promise.resolve(0),
         stopResumed: async (botId) => {
           const p = getWorkerResumePorts();
           return p ? stopResumedWorkers(p, botId) : 0;

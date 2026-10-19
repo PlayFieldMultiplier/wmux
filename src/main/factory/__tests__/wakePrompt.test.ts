@@ -300,3 +300,14 @@ describe('worker note: connections', () => {
     expect(workerTaskIdentityNote('t-1', 'ch-1', 'wtask/x', 'claude')).not.toContain('Connections');
   });
 });
+
+
+it('guides a ready workflow wake through saved bindings instead of redispatch', () => {
+  const item: WakeItem = { id: 'w-1', botId: profile.id, workspaceId: 'ws1', reason: {
+    kind: 'facts', trigger: { kind: 'task.done' }, factIds: ['workflow.ready:wf-123@2'],
+  }, priority: 0, enqueuedAt: 1, attempts: 1, state: 'running' };
+  const prompt = buildWakePrompt({ item, profile });
+  expect(prompt).toContain('Use workflow_read');
+  expect(prompt).toContain('then workflow_advance');
+  expect(prompt).toContain('Do not recreate its steps with fanout_start');
+});

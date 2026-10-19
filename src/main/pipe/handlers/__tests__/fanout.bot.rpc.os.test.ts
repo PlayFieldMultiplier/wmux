@@ -1,3 +1,4 @@
+import { getWorkflowFanout } from '../../../factory/workflowFanout';
 // task.fanout.start from a factory bot (§4, §13 rule 3, R8): the repository
 // comes from the bot's profile (no anchor pane), only the role's presets and
 // only worktrees are allowed, a detached checkout is the verify preset's, the
@@ -392,6 +393,32 @@ describe('task.fanout.start — bot origin', () => {
       setWakeQueue(null);
       await queue.flush();
     }
+  });
+
+  it('only the internal workflow port stamps binding/base and retains the existing wake gates', async () => {
+    const r = rig('maintainer', {}, { builtinPresets: true });
+    const workflow = { id: 'wf-' + 'a'.repeat(24), step: 1 };
+    const params = { idempotencyKey: 'wake:w-1:1', titles: ['step'], prompt: 'implement', preset: 'default', workflow, workflowBaseSha: SHA };
+    expect((await r.call(params, botCtx('maintainer'))).ok).toBe(true);
+    await r.flush();
+    expect(r.start.mock.calls[0][0]).not.toHaveProperty('workflow');
+    expect(r.start.mock.calls[0][0]).not.toHaveProperty('workflowBaseSha');
+    const binding = { ...workflow, baseSha: SHA, repoKey: 'o/r', tainted: true, onStartFailed: vi.fn() };
+    expect(await getWorkflowFanout()!({ ...params, idempotencyKey: 'wake:w-1:2' }, botCtx('maintainer'), { ...binding, repoKey: 'other/repo' })).toMatchObject({ ok: false });
+    expect(await getWorkflowFanout()!({ ...params, idempotencyKey: 'wake:old:1' }, botCtx('maintainer'), binding)).toMatchObject({ ok: false });
+    expect(await getWorkflowFanout()!({ ...params, idempotencyKey: 'wake:w-1:2' }, botCtx('maintainer'), binding)).toMatchObject({ ok: true });
+    await r.flush();
+    expect(r.start.mock.calls[1][0]).toMatchObject({ workflow, workflowBaseSha: SHA, caller: { tainted: true } });
+  });
+
+  it('blocks an accepted workflow when its owner stops during approval without launching a worker', async () => {
+    const r = rig('maintainer', {}, { builtinPresets: true });
+    r.approve();
+    const failed = vi.fn();
+    const binding = { id: 'wf-' + 'a'.repeat(24), step: 0, repoKey: 'o/r', tainted: false, onStartFailed: failed };
+    expect(await getWorkflowFanout()!({ idempotencyKey: 'wake:w-1:1', titles: ['step'], preset: 'default' }, botCtx('maintainer'), binding)).toMatchObject({ ok: true });
+    r.port.refusal = 'the owner stopped this bot'; r.approve(); await r.flush();
+    expect(r.start).not.toHaveBeenCalled(); expect(failed).toHaveBeenCalledWith('the owner stopped this bot');
   });
 
   it('verify preset at a detached SHA: repo from the profile, bot origin, preset and checkout on the request', async () => {

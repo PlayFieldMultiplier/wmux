@@ -429,6 +429,14 @@ export function buildWakePrompt(input: WakePromptInput): string {
         // of a task that ended since (cancelled by the owner) is not a wait.
         if (task ? task.status === 'input_required' : id.startsWith('task.input_required:')) waiting = true;
       }
+      if (r.factIds.some((id) => /^workflow\.ready:[A-Za-z0-9_-]+@\d+$/.test(id))) {
+        lines.push(
+          '',
+          'A saved workflow is ready to continue. Use workflow_read to inspect your workflows and their recorded results, '
+            + 'then workflow_advance for the ready workflow with a fresh idempotency_key from this wake. '
+            + 'Do not recreate its steps with fanout_start. Completed steps stay completed; a blocked workflow needs review, not redispatch.',
+        );
+      }
       const parent = input.taskParent;
       if (parent && !parent.answered) {
         lines.push(

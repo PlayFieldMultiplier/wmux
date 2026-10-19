@@ -114,6 +114,18 @@ describe('stopFactoryWork', () => {
     }
   });
 
+  it('awaits durable workflow stops and reports persistence failure without skipping task cancellation', async () => {
+    const blockWorkflows = vi.fn(async (id?: string) => id ? 1 : 2);
+    expect(await stopFactoryWork(ports({ blockWorkflows }).p, { botId: TRIAGE })).toMatchObject({ ok: true, workflowsBlocked: 1 });
+    expect(blockWorkflows).toHaveBeenLastCalledWith(TRIAGE);
+    expect(await stopFactoryWork(ports({ blockWorkflows }).p)).toMatchObject({ ok: true, workflowsBlocked: 2 });
+    expect(blockWorkflows).toHaveBeenLastCalledWith(undefined);
+    await task('t-workflow-failure', LEAD);
+    const failed = await stopFactoryWork(ports({ blockWorkflows: async () => { throw new Error('disk full'); } }).p);
+    expect(failed).toMatchObject({ ok: false, code: 'partial', tasksCancelled: 1 });
+    expect(failed.workflowsBlocked).toBeUndefined();
+  });
+
   it('interrupts running turns, cancels every open bot task as "stopped by owner", cancels its gate and stops its worker', async () => {
     await task('t-work', LEAD);
     await task('t-ask', TRIAGE, 'input_required');

@@ -445,3 +445,30 @@ Codex session. Read returns only model/effort/catalogue, busy state and a scoped
 opaque revision. Write rechecks pane identity and runtime revision, rejects busy
 or unsupported choices, and confirms the result by rereading the runtime.
 It is not registered in the public RPC/MCP or phone HTTP routers.
+
+
+### Saved bot code workflows
+
+Bots can persist up to eight ordered code steps with `workflow_create`
+(`workflow.create`). A stable `client_workflow_id` identifies one definition
+across retries and restarts. `workflow_read` (`workflow.read`) returns the
+calling bot's workflows, step states, and task/result bindings.
+
+`workflow_advance` (`workflow.advance`) starts at most one eligible step through
+the existing fan-out authorization, budget, and wake ordinal checks. Its
+`idempotency_key` shares the `wake:<wakeId>:<n>` sequence with `fanout_start`.
+A system-verified result unlocks the next step; a review request or manually
+forced completion does not. The next worker starts from the preceding verified
+commit, or the refreshed default branch after a verified merge. Missing
+predecessor code blocks dispatch rather than substituting another checkout. Restart recovery reconciles durable task bindings
+and wakes the owning bot for ready work. Completed steps are not dispatched
+again. An ambiguous dispatch without a durable task binding blocks the workflow
+for review rather than guessing whether to retry.
+
+Owner stop actions also stop pending saved workflows. Turning bots back on or
+restarting does not dispatch those steps again.
+
+The initial version supports sequential code steps using the default worker
+preset. It does not add research steps, parallel dependencies, or automatic
+retries of blocked steps. All three RPC methods are internal bot tools and scope
+access to the caller's binding.

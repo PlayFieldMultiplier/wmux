@@ -11,3 +11,4 @@ import './botRoutines';
 import './botSkills';
 import './botWorkers';
 import './factorySecrets';
+import './botWorkflow';

@@ -36,6 +36,7 @@ import { COMMANDER_TEARDOWN_DENY } from './commanderSurface';
 import { BOT_APPROVAL_RPC } from './botApproval';
 import { BOT_SECRET_RPC } from './botSecret';
 import { ROUTINE_RPC } from './botRoutine';
+import { WORKFLOW_RPC } from './botWorkflow';
 import { BOT_SKILL_RPC } from './botSkill';
 
 /** Read-side factory RPCs behind the role tools (handlers: main/factory/roles). */
@@ -70,6 +71,7 @@ export const FACTORY_RPC_METHODS: readonly RpcMethod[] = [
   // A bot steers its own live worker and closes its own questions.
   BOT_RPC.workerMessage, BOT_RPC.questionClose,
   ROUTINE_RPC.set, ROUTINE_RPC.list, ROUTINE_RPC.pause,
+  WORKFLOW_RPC.create, WORKFLOW_RPC.read, WORKFLOW_RPC.advance,
   BOT_APPROVAL_RPC.request, BOT_APPROVAL_RPC.list,
   BOT_SECRET_RPC.request, BOT_SECRET_RPC.list, BOT_SECRET_RPC.loginRequest,
   // A bot's own skills (shared/botSkill.ts).
@@ -114,6 +116,9 @@ export const BOT_TOOL_RPC = {
   routine_set: [ROUTINE_RPC.set],
   routine_list: [ROUTINE_RPC.list],
   routine_pause: [ROUTINE_RPC.pause],
+  workflow_create: [WORKFLOW_RPC.create],
+  workflow_read: [WORKFLOW_RPC.read],
+  workflow_advance: [WORKFLOW_RPC.advance],
   approval_request: [BOT_APPROVAL_RPC.request],
   approval_list: [BOT_APPROVAL_RPC.list],
   secret_request: [BOT_SECRET_RPC.request],
@@ -154,6 +159,7 @@ export const SHARED_SURFACE_TOOLS: readonly BotToolName[] = [
   'room_post', 'room_read', 'handoff_send', 'ask_person', 'question_close', 'bot_list',
   // own profile and work
   'job_set', 'routine_set', 'routine_list', 'routine_pause', 'stop_my_work',
+  'workflow_create', 'workflow_read', 'workflow_advance',
   // own skills (proposals wait for the owner's approval)
   'skill_propose', 'skill_read',
   // workers (terminal_read reaches only the bot's own task panes, main-scoped)
