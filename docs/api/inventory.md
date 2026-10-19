@@ -452,7 +452,26 @@ It is not registered in the public RPC/MCP or phone HTTP routers.
 Bots can persist up to eight ordered code steps with `workflow_create`
 (`workflow.create`). A stable `client_workflow_id` identifies one definition
 across retries and restarts. `workflow_read` (`workflow.read`) returns the
-calling bot's workflows, step states, and task/result bindings.
+calling bot's workflows, step states, and task/result bindings. Each readback
+includes `blockedReason` and `lastVerifiedResult` (both nullable). The latter
+is the last system-verified result recorded in the workflow, not a worker's
+unverified report or a promise that an in-flight task has finished.
+
+The desktop owner can use `factory.readWorkflows({botId, workspaceId, workflowId?})`
+and `factory.cancelWorkflow({botId, workspaceId, workflowId, expectedRevision})`
+on the preload API. Their channels are `factory:workflow:read` and
+`factory:workflow:cancel`; both accept only the main window's top frame.
+Cancellation is not a bot MCP tool or a pipe RPC. The required revision prevents
+an old view from cancelling a newly advanced step. A repeated cancellation is
+idempotent, and completed plans are left unchanged.
+
+Cancelling a workflow durably blocks its remaining advancement and keeps its
+steps, task bindings, results, and original blocking reason. Pending step labels
+remain in the retained definition, but the workflow's `stoppedByOwner` barrier
+prevents them from running, including after restart. A dispatch already handed
+to fan-out may still start or finish; cancellation neither kills that worker
+nor changes its ledger row. Use the existing worker stop action to stop it.
+There is no resume or automatic redispatch operation.
 
 History retains completed and blocked plans to prevent replay. Each bot/workspace
 owner can retain 500 plans, and the shared store has a separate 5,000-plan safety

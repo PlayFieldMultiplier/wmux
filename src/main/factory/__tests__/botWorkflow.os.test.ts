@@ -17,6 +17,8 @@ import { FANOUT_PROMPT_MAX_BYTES } from '../../../shared/workTask';
 import { WORKFLOW_RPC, WORKFLOW_LIMITS, workflowReadyFactId, type BotWorkflow } from '../../../shared/botWorkflow';
 import type { BotProfile } from '../../../shared/bot';
 import type { RpcContext } from '../../../shared/rpc';
+import { workflowOwnerHandlers } from '../../ipc/handlers/workflow.handler';
+import type { BrowserWindow } from 'electron';
 import type { FactoryRouter } from '../factoryHost';
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp', isPackaged: false, on: vi.fn() }, ipcMain: { handle: vi.fn(), on: vi.fn() } }));
@@ -57,6 +59,114 @@ function harness(store: BotWorkflowStore, ledger = new TaskLedger({ dir })) {
   const call = (name: string, params: Record<string, unknown>, ctx = context) => handlers.get(name)!(params, ctx);
   return { ports, fanout, queue, call, ledger };
 }
+
+describe('owner workflow cancellation and readback', () => {
+  function ipc(store: BotWorkflowStore) {
+    const frame = {}; const webContents = { mainFrame: frame };
+    const win = { isDestroyed: () => false, webContents } as unknown as BrowserWindow;
+    return { handlers: workflowOwnerHandlers(() => win, () => store), event: { sender: webContents, senderFrame: frame } };
+  }
+  const req = (w: BotWorkflow) => ({ botId: w.botId, workspaceId: w.workspaceId, workflowId: w.id, expectedRevision: w.revision });
+
+  it('authorizes only the owner top frame for reads and cancellation and binds both identities', async () => {
+    const store = open(); const w = await store.create(owner, input); const { handlers, event } = ipc(store);
+    for (const bad of [{}, { ...event, senderFrame: {} }, { ...event, sender: {} }]) {
+      expect(await handlers.read(bad, req(w))).toEqual({ ok: false, code: 'operator_only' });
+      expect(await handlers.cancel(bad, req(w))).toEqual({ ok: false, code: 'operator_only' });
+    }
+    expect(await handlers.cancel(event, { ...req(w), workspaceId: 'other' })).toEqual({ ok: false, code: 'not_found' });
+    expect(await handlers.read(event, { ...req(w), botId: 'other' })).toEqual({ ok: false, code: 'not_found' });
+    expect(await handlers.cancel(event, { ...req(w), expectedRevision: 0 })).toEqual({ ok: false, code: 'invalid_request' });
+    expect(store.get(w.id, w.botId, w.workspaceId)).toEqual(w);
+  });
+
+  it('durably cancels one pending plan once, retains evidence, and survives repeated restart without a wake', async () => {
+    const store = open(); const w = await store.create(owner, input);
+    const other = await store.create(owner, { ...input, clientWorkflowId: 'other' });
+    const { handlers, event } = ipc(store);
+    const first = await handlers.cancel(event, req(w));
+    expect(first).toMatchObject({ ok: true, workflow: { stoppedByOwner: true, revision: 2, blockedReason: expect.stringContaining('Cancelled by owner'), lastVerifiedResult: null } });
+    const disk = fs.readFileSync(file(), 'utf8');
+    expect(await handlers.cancel(event, req(w))).toEqual(first);
+    expect(fs.readFileSync(file(), 'utf8')).toBe(disk);
+    const restored = open();
+    expect(await restored.claim(w.id, w.botId, w.workspaceId, 'wake:new:1')).toBeNull();
+    const h = harness(restored);
+    await wakeReadyWorkflows(h.ports, await restored.reconcile([], true));
+    expect(h.queue.list().some((wake) => JSON.stringify(wake.reason).includes(w.id))).toBe(false);
+    expect(restored.get(other.id, other.botId, other.workspaceId)?.state).toBe('active');
+  });
+
+  it('leaves a dispatched worker ledger row untouched and preserves its task binding', async () => {
+    const store = open(); const w = await store.create(owner, input); const h = harness(store);
+    await h.call(WORKFLOW_RPC.advance, { workflowId: w.id, idempotencyKey: 'wake:one:1' });
+    await task(h.ledger, w.id); await store.reconcile(h.ledger.list());
+    const current = store.get(w.id, w.botId, w.workspaceId)!; const before = h.ledger.get('wtask-one');
+    const { handlers, event } = ipc(store);
+    expect(await handlers.cancel(event, req(w))).toEqual({ ok: false, code: 'revision_conflict' });
+    expect(await handlers.cancel(event, req(current))).toMatchObject({ ok: true, workflow: { stoppedByOwner: true, steps: [{ taskId: 'wtask-one', dispatchKey: 'wake:one:1' }, {}] } });
+    expect(h.ledger.get('wtask-one')).toEqual(before);
+    await h.call(WORKFLOW_RPC.advance, { workflowId: w.id, idempotencyKey: 'wake:one:2' });
+    expect(h.fanout).toHaveBeenCalledTimes(1);
+    expect(open().get(w.id, w.botId, w.workspaceId)?.stoppedByOwner).toBe(true);
+  });
+
+  it('returns the last recorded system-verified result and original blocking reason through both reads', async () => {
+    const store = open(); const w = await store.create(owner, input); const h = harness(store);
+    await store.claim(w.id, w.botId, w.workspaceId, 'wake:one:1');
+    await task(h.ledger, w.id); await report(h.ledger); await gate(h.ledger); await complete(h.ledger);
+    await store.reconcile(h.ledger.list());
+    await store.claim(w.id, w.botId, w.workspaceId, 'wake:one:2'); await store.block(w.id, 1, 'Worker capacity refused');
+    const current = store.get(w.id, w.botId, w.workspaceId)!; const { handlers, event } = ipc(store);
+    await handlers.cancel(event, req(current));
+    const botRead = await h.call(WORKFLOW_RPC.read, { workflowId: w.id });
+    expect(botRead).toMatchObject({ ok: true, workflow: { blockedReason: 'Worker capacity refused', lastVerifiedResult: { taskId: 'wtask-one', headSha: sha } } });
+    expect(await handlers.read(event, req(w))).toMatchObject({ ok: true, workflows: [(botRead as { workflow: unknown }).workflow] });
+  });
+
+  it('drains a real cancellation queued behind the claim before invoking fan-out', async () => {
+    let cancellation: ReturnType<BotWorkflowStore['cancel']> | undefined;
+    const store = new BotWorkflowStore(file(), Date.now, async (target, value) => {
+      const w = (value as { workflows: BotWorkflow[] }).workflows[0];
+      if (w.steps[0].state === 'dispatching' && !cancellation) {
+        // Queue an owner request while the actual claim write is in flight.
+        cancellation = store.cancel(w.id, w.botId, w.workspaceId, w.revision);
+      }
+      await fs.promises.writeFile(target, JSON.stringify(value));
+    });
+    const w = await store.create(owner, input); const h = harness(store);
+    expect(await h.call(WORKFLOW_RPC.advance, { workflowId: w.id, idempotencyKey: 'wake:one:1' })).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await cancellation).toMatchObject({ ok: true });
+    expect(h.fanout).not.toHaveBeenCalled();
+    expect(open().get(w.id, w.botId, w.workspaceId)?.stoppedByOwner).toBe(true);
+  });
+
+  it('returns the committed cancelled state when cancellation wins before a queued claim', async () => {
+    let release: () => void = () => undefined;
+    const writeHeld = new Promise<void>((resolve) => { release = resolve; });
+    const store = new BotWorkflowStore(file(), Date.now, async (target, value) => {
+      if ((value as { workflows: BotWorkflow[] }).workflows[0].stoppedByOwner) await writeHeld;
+      await fs.promises.writeFile(target, JSON.stringify(value));
+    });
+    const w = await store.create(owner, input); const h = harness(store);
+    const claimed = vi.spyOn(store, 'claim');
+    const advancing = h.call(WORKFLOW_RPC.advance, { workflowId: w.id, idempotencyKey: 'wake:one:1' });
+    const cancelling = store.cancel(w.id, w.botId, w.workspaceId, w.revision);
+    await vi.waitFor(() => expect(claimed).toHaveBeenCalled(), { timeout: 2_000 });
+    release(); await cancelling;
+    expect(await advancing).toMatchObject({ ok: true, workflow: { state: 'blocked', stoppedByOwner: true,
+      blockedReason: expect.stringContaining('Cancelled by owner'), lastVerifiedResult: null } });
+    expect(h.fanout).not.toHaveBeenCalled();
+  });
+
+  it('does not acknowledge a cancellation that failed durable storage', async () => {
+    const base = open(); const w = await base.create(owner, input);
+    const store = new BotWorkflowStore(file(), Date.now, async () => { throw new Error('disk failure'); }); store.load();
+    await expect(store.cancel(w.id, w.botId, w.workspaceId, w.revision)).rejects.toThrow('disk failure');
+    expect(store.get(w.id, w.botId, w.workspaceId)).toEqual(w);
+    expect(open().get(w.id, w.botId, w.workspaceId)).toEqual(w);
+  });
+});
 
 describe('durable sequential workflows', () => {
   it('caps each bot/workspace history independently and reloads more than 500 retained plans', async () => {

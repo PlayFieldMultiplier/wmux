@@ -1,3 +1,4 @@
+import { WORKFLOW_OWNER_IPC } from '../shared/botWorkflow';
 import type { TerminalCoreSettings, TerminalEngine } from '../shared/terminalCoreSettings';
 import { CHAT_IPC } from '../shared/transcript/chatIpc';
 import type { ChatBridgeApi } from '../shared/transcript/turnEvents';
@@ -1243,6 +1244,10 @@ const electronAPI = {
     // (`hue`: its colour slot, kept for the cards it wrote).
     removeBot: (botId: string, hue?: number) =>
       factoryBotCall('bot.remove', { botId, ...(hue !== undefined ? { hue } : {}) }),
+    readWorkflows: (req: import('../shared/botWorkflow').OwnerWorkflowRequest) =>
+      ipcRenderer.invoke(WORKFLOW_OWNER_IPC.read, req) as Promise<import('../shared/botWorkflow').OwnerWorkflowReadResult>,
+    cancelWorkflow: (req: import('../shared/botWorkflow').OwnerWorkflowCancelRequest) =>
+      ipcRenderer.invoke(WORKFLOW_OWNER_IPC.cancel, req) as Promise<import('../shared/botWorkflow').OwnerWorkflowCancelResult>,
     createBot: (req: import('../shared/botCreate').FactoryBotCreateRequest) =>
       ipcRenderer.invoke(IPC.FACTORY_BOT_CREATE, req) as Promise<import('../shared/botCreate').FactoryBotCreateResult>,
     createBotTeam: (req: import('../shared/botCreate').FactoryBotCreateTeamRequest) =>

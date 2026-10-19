@@ -1,5 +1,7 @@
 import type { ThreadId } from './room';
 
+/** Owner IPC channels are separate from the bot's RPC surface. */
+export const WORKFLOW_OWNER_IPC = { read: 'factory:workflow:read', cancel: 'factory:workflow:cancel' } as const;
 export const WORKFLOW_RPC = { create: 'workflow.create', read: 'workflow.read', advance: 'workflow.advance' } as const;
 // History is retained to prevent replay: each owner has its own quota, with
 // a separate aggregate storage ceiling that fails closed without deletion.
@@ -42,3 +44,20 @@ export interface BotWorkflow {
 export function workflowReadyFactId(workflow: Pick<BotWorkflow, 'id' | 'revision'>): string {
   return `workflow.ready:${workflow.id}@${workflow.revision}`;
 }
+
+/** Readback fields are derived; cancellation never deletes dispatch evidence. */
+export interface WorkflowView extends BotWorkflow {
+  blockedReason: string | null;
+  lastVerifiedResult: WorkflowResultBinding | null;
+}
+export function workflowView(workflow: BotWorkflow): WorkflowView {
+  return { ...workflow,
+    blockedReason: workflow.steps.find((s) => s.state === 'blocked')?.error ?? null,
+    lastVerifiedResult: [...workflow.steps].reverse().find((s) => s.result)?.result ?? null,
+  };
+}
+export interface OwnerWorkflowRequest { botId: string; workspaceId: string; workflowId?: string; }
+export interface OwnerWorkflowCancelRequest extends OwnerWorkflowRequest { workflowId: string; expectedRevision: number; }
+export type OwnerWorkflowFailure = { ok: false; code: 'operator_only' | 'invalid_request' | 'unavailable' | 'not_found' | 'revision_conflict' };
+export type OwnerWorkflowReadResult = { ok: true; workflows: WorkflowView[] } | OwnerWorkflowFailure;
+export type OwnerWorkflowCancelResult = { ok: true; workflow: WorkflowView } | OwnerWorkflowFailure;

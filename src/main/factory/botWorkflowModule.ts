@@ -2,7 +2,7 @@ import type { RpcContext } from '../../shared/rpc';
 import type { BotProfile } from '../../shared/bot';
 import { GENERAL_THREAD, type ThreadId } from '../../shared/room';
 import { botFanoutIdempotencyKey } from '../../shared/wake';
-import { WORKFLOW_RPC, workflowReadyFactId, type BotWorkflow } from '../../shared/botWorkflow';
+import { WORKFLOW_RPC, workflowReadyFactId, workflowView, type BotWorkflow } from '../../shared/botWorkflow';
 import type { LedgerEntry } from '../../shared/ledger';
 import { registerFactoryRpcModule, type FactoryRouter } from './factoryHost';
 import { BotWorkflowStore, botWorkflowsPath, setBotWorkflowStore, validateWorkflowInput } from './botWorkflow';
@@ -57,9 +57,9 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
   router.register(WORKFLOW_RPC.read, async (params, ctx) => {
     const bot = owner(ctx, p);
     if (!bot) return refuse('NOT_AUTHORIZED', 'workflow.read requires the owning factory bot');
-    if (params.workflowId === undefined) return { ok: true, workflows: p.store.list(bot.id, bot.workspaceId) };
+    if (params.workflowId === undefined) return { ok: true, workflows: p.store.list(bot.id, bot.workspaceId).map(workflowView) };
     const workflow = typeof params.workflowId === 'string' ? p.store.get(params.workflowId, bot.id, bot.workspaceId) : null;
-    return workflow ? { ok: true, workflow } : refuse('NOT_FOUND', 'workflow not found');
+    return workflow ? { ok: true, workflow: workflowView(workflow) } : refuse('NOT_FOUND', 'workflow not found');
   });
   router.register(WORKFLOW_RPC.create, async (params, ctx) => {
     const bot = owner(ctx, p);
@@ -70,7 +70,7 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
       const workflow = await p.store.create({ botId: bot.id, workspaceId: bot.workspaceId, repoKey: bot.repo.repoKey,
         threadId: turn.threadId ?? GENERAL_THREAD, tainted: p.tainted(bot.id) !== false }, params);
       await wakeReadyWorkflows(p, [workflow]);
-      return { ok: true, workflow };
+      return { ok: true, workflow: workflowView(p.store.get(workflow.id, bot.id, bot.workspaceId) ?? workflow) };
     } catch (error) { return refuse('FAILED_PRECONDITION', String(error)); }
   });
   router.register(WORKFLOW_RPC.advance, async (params, ctx) => {
@@ -89,8 +89,10 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
       if (bot.repo?.repoKey !== workflow.repoKey) return refuse('FAILED_PRECONDITION', 'the bot repository changed; this workflow cannot move repositories');
       if (!p.active() || isWakeStoppedByOwner(turn.wakeId) || p.turn(bot.id)?.wakeId !== turn.wakeId) return refuse('FAILED_PRECONDITION', 'the owner wake ended during reconciliation');
       const claim = await p.store.claim(workflow.id, bot.id, bot.workspaceId, key as string);
-      if (!claim) return { ok: true, workflow };
+      if (!claim) return { ok: true, workflow: workflowView(p.store.get(workflow.id, bot.id, bot.workspaceId) ?? workflow) };
+      await p.store.flush();
       if (!p.active() || isWakeStoppedByOwner(turn.wakeId) || p.turn(bot.id)?.wakeId !== turn.wakeId) return refuse('FAILED_PRECONDITION', 'the workflow owner wake ended during persistence; inspect this durable intent before retrying');
+      if (p.store.get(workflow.id, bot.id, bot.workspaceId)?.stoppedByOwner) return refuse('FAILED_PRECONDITION', 'the owner cancelled this workflow during persistence');
       const step = claim.workflow.steps[claim.step];
       const predecessor = claim.workflow.steps[claim.step - 1]?.result;
       const prompt = workflowWorkerPrompt(step.prompt, predecessor);
@@ -102,7 +104,7 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
         || !('status' in dispatch) || dispatch.status !== 'accepted') {
         await blockAndWake(workflow.id, claim.step, 'Fan-out did not accept a new workflow step. It will not be resent automatically.');
       }
-      return { ok: true, workflow: p.store.get(workflow.id, bot.id, bot.workspaceId), dispatch };
+      return { ok: true, workflow: workflowView(p.store.get(workflow.id, bot.id, bot.workspaceId) ?? claim.workflow), dispatch };
     } catch (error) {
       // A durable dispatching intent is deliberately preserved on an unknown
       // outcome. Restart reconciliation attaches its stamped task or blocks it.
