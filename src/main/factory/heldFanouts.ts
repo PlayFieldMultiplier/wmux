@@ -155,6 +155,20 @@ function requestIdentity(h: Pick<HeldFanout, 'fingerprint' | 'threadId' | 'hando
   return JSON.stringify([h.fingerprint, h.threadId ?? null, h.handoffId ?? null]);
 }
 
+/** Whether a fan-out that started is the held request: the same arguments
+ *  and thread. The handoff counts only when the hold has one: a hold made
+ *  outside a handoff is still the request a later turn (an answer's
+ *  handoff) retries. */
+function startedIsHeld(
+  held: Pick<HeldFanout, 'fingerprint' | 'threadId' | 'handoffId'>,
+  fingerprint: string,
+  context: HeldContext,
+): boolean {
+  return held.fingerprint === fingerprint
+    && (held.threadId ?? null) === (context.threadId ?? null)
+    && (held.handoffId === undefined || held.handoffId === context.handoffId);
+}
+
 function parseHeld(raw: unknown): HeldFanout | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
@@ -247,9 +261,9 @@ export class HeldFanouts {
   /** The bot started this request after all (a retry that found a free
    *  slot): it is no longer held. */
   started(botId: string, args: HeldFanoutArgs, context: HeldContext): void {
-    const want = requestIdentity({ fingerprint: heldFanoutFingerprint(args), ...context });
+    const fingerprint = heldFanoutFingerprint(args);
     const before = this.held.length;
-    this.held = this.held.filter((h) => h.botId !== botId || requestIdentity(h) !== want);
+    this.held = this.held.filter((h) => h.botId !== botId || !startedIsHeld(h, fingerprint, context));
     if (this.held.length !== before) this.save();
   }
 
@@ -429,13 +443,12 @@ export function heldFanoutStarted(botId: string, args: HeldFanoutArgs, context: 
   }
 }
 
-/** Whether a held fan-out's wake is for this request (its fingerprint, its
- *  thread and handoff). Pure. */
+/** Whether a held fan-out's wake is for this request (its fingerprint and
+ *  thread, and its handoff when the hold had one). Pure. */
 export function heldWakeIsFor(wake: Pick<WakeItem, 'reason' | 'threadId'>, args: HeldFanoutArgs, context: HeldContext): boolean {
   const r = wake.reason;
   if (r.kind !== 'held_fanout' || !r.fingerprint) return false;
-  return requestIdentity({ fingerprint: r.fingerprint, threadId: wake.threadId, handoffId: r.handoffId })
-    === requestIdentity({ fingerprint: heldFanoutFingerprint(args), ...context });
+  return startedIsHeld({ fingerprint: r.fingerprint, threadId: wake.threadId, handoffId: r.handoffId }, heldFanoutFingerprint(args), context);
 }
 let offHolderInputs: (() => void) | null = null;
 
