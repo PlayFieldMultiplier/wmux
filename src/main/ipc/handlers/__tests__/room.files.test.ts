@@ -1,3 +1,6 @@
+// @wmux-lane unit
+// 'win32' here is only the platform argument roomFileSave takes; the test
+// runs the same on every OS.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
