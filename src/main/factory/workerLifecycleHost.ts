@@ -14,7 +14,7 @@ import { BOT_EVENT } from '../../shared/bot';
 import { sanitizePtyText } from '../../shared/types';
 import { eventBus } from '../events/EventBus';
 import { getLastBroadcastAgentStatus, hasOutstandingRunningClaim } from '../ipc/handlers/metadata.handler';
-import { lastHookTurnStart, lastTurnEnd, promptOpenSince } from '../notification/turnEvidence';
+import { lastHookTurnStart, lastTurnEnd } from '../notification/turnEvidence';
 import { lastUserInputAt } from '../notification/idleSuppression';
 import { botWorkerSessionRecord, guardSessionLaunch } from '../agents/botWorkerMergeGuard';
 import { getTaskLedger } from '../deck/taskLedgerHost';
@@ -43,12 +43,11 @@ import {
   createViewAttention,
   createWorkerClear,
   installWorkerReclaim,
-  isPausedSince,
+  isReclaimedSince,
   isTaskWorkspaceOf,
   mergePaneActivity,
   noteWorkerAgentExit,
   pauseDue,
-  pauseFloor,
   pauseIdleMsFor,
   reportedWorkerPanes,
   resumedAgentAlive,
@@ -58,8 +57,6 @@ import {
   type WorkerResumePorts,
   type WorkerSessionInfo,
   viewProtects,
-  workerPromptWaiting,
-  OPEN_IDLE_MS,
 } from './workerReclaim';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { createDeadPaneSweep } from './deadWorkerPanes';
@@ -280,12 +277,12 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         const out: Array<{ taskId: string; reportedAt: number; panes: readonly string[]; recorded: readonly string[]; launched: readonly string[] }> = [];
         for (const r of ledger.list({ openOnly: true })) {
           const rec = reclaimed.get(r.id);
-          if (pauseIdleMsFor(r) === null || isPausedSince(rec, r)) continue;
+          if (pauseIdleMsFor(r) === null || isReclaimedSince(rec, r)) continue;
           const ws = entries.find((e) => e.id === r.taskWorkspaceId);
           const panes = ws && Array.isArray(ws.ptyIds) ? ws.ptyIds : [];
           out.push({
             taskId: r.id,
-            reportedAt: pauseFloor(r, rec),
+            reportedAt: r.updatedAt,
             panes,
             recorded: rec?.sessions.map((x) => x.sessionId) ?? [],
             // The pane the task's own fan-out (or resume) launch created.
@@ -314,13 +311,11 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       const turnStartAt = lastHookTurnStart(id);
       const turnEndAt = lastTurnEnd(id);
       const inputAt = lastUserInputAt(id);
-      const promptAt = promptOpenSince(id);
       return mergePaneActivity({
         ...(status !== undefined ? { status } : {}),
         ...(turnStartAt !== undefined ? { turnStartAt } : {}),
         ...(turnEndAt !== undefined ? { turnEndAt } : {}),
         ...(inputAt !== undefined ? { inputAt } : {}),
-        ...(promptAt !== undefined ? { promptAt } : {}),
       }, turnSeed.activity(id));
     };
     // Shown protects a worker only while the owner typed into it or focused
@@ -336,18 +331,11 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       && viewProtects(attention.focusedAt(workspaceId), (workspacePtys(workspaceId) ?? []).map((id) => paneActivity(id).inputAt), Date.now());
     // An open task's window: REPORTED_IDLE_MS once reported, OPEN_IDLE_MS
     // while still working or needing input (pauseIdleMsFor), counted from
-    // its last row write or the resume of its worker (pauseFloor).
+    // its last row write.
     const reportedIdle = (entry: LedgerEntry): boolean => {
       if (pauseIdleMsFor(entry) === null) return false;
       const panes = reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId));
-      return pauseDue(entry, viewed(entry.taskWorkspaceId), panes?.map(paneActivity) ?? null, pauseFloor(entry, reclaimed.get(entry.id)), Date.now());
-    };
-    // A worker of a task still working or needing input left on a prompt the
-    // owner can answer: never stopped, its bot told (workerPromptWaiting).
-    const promptWaiting = (entry: LedgerEntry): boolean => {
-      if (viewed(entry.taskWorkspaceId)) return false;
-      const panes = reportedWorkerPanes(turnSeed.workerPanes(entry.id), workspacePtys(entry.taskWorkspaceId));
-      return !!panes && workerPromptWaiting(panes.map(paneActivity), pauseFloor(entry, reclaimed.get(entry.id)), Date.now(), OPEN_IDLE_MS);
+      return pauseDue(entry, viewed(entry.taskWorkspaceId), panes?.map(paneActivity) ?? null, entry.updatedAt, Date.now());
     };
     offs.push(installWorkerReclaim({
       onTransition: (fn) => ledger.onTransition(fn),
@@ -369,7 +357,6 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       noticeBot: (n) => {
         noticeBot({ factLog: getFactLog, wakes: getWakeQueue }, n);
       },
-      promptWaiting,
       // A stopped worker frees its agent slot: the slot queue looks again,
       // as after the resumed-worker stop.
       changed: () => {
@@ -653,9 +640,6 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       void listSessions().then((sessions) => {
         let moved = false;
         for (const r of resumed) {
-          // Read again after the await: a stop or a new resume since owns it.
-          const cur = reclaimed.get(r.taskId);
-          if (cur?.state !== 'resumed' || cur.at !== r.at) continue;
           if (!resumedAgentAlive(r, sessions)) moved = r.sessions.some((p) => noteWorkerAgentExit(reclaimed, p.sessionId)) || moved;
         }
         if (moved) changed();

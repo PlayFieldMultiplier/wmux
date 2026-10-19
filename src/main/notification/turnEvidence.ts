@@ -8,16 +8,11 @@
 
 const lastHookTurnStartAt = new Map<string, number>();
 const lastTurnEndAt = new Map<string, number>();
-/** When the PTY's current `awaiting_input` (a prompt mid-turn) first went
- *  out; gone on any other status. */
-const promptOpenAt = new Map<string, number>();
 const TURN_END_STATUSES: ReadonlySet<string> = new Set(['complete', 'waiting', 'error']);
 
 /** One broadcast status (the funnel calls this for every status it records). */
 export function noteBroadcastStatus(ptyId: string, status: string, hookKind: unknown, now: number = Date.now()): void {
   if (!ptyId) return;
-  if (status !== 'awaiting_input') promptOpenAt.delete(ptyId);
-  else if (!promptOpenAt.has(ptyId)) promptOpenAt.set(ptyId, now);
   if (status === 'running' && hookKind) lastHookTurnStartAt.set(ptyId, now);
   else if (TURN_END_STATUSES.has(status)) lastTurnEndAt.set(ptyId, now);
 }
@@ -36,20 +31,13 @@ export function lastHookTurnStart(ptyId: string): number | undefined {
 export function lastTurnEnd(ptyId: string): number | undefined {
   return lastTurnEndAt.get(ptyId);
 }
-/** When the PTY's open prompt (`awaiting_input`) went out, or undefined
- *  (none open, or none seen since main started). */
-export function promptOpenSince(ptyId: string): number | undefined {
-  return promptOpenAt.get(ptyId);
-}
 
 export function clearTurnEvidence(ptyId?: string): void {
   if (ptyId === undefined) {
     lastHookTurnStartAt.clear();
     lastTurnEndAt.clear();
-    promptOpenAt.clear();
     return;
   }
   lastHookTurnStartAt.delete(ptyId);
   lastTurnEndAt.delete(ptyId);
-  promptOpenAt.delete(ptyId);
 }

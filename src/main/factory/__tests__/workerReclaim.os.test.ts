@@ -30,11 +30,8 @@ import {
   STOPPING_SETTLE_MS,
   OPEN_IDLE_MS,
   REPORTED_IDLE_MS,
-  isPausedSince,
   pauseDue,
-  pauseFloor,
   pauseIdleMsFor,
-  workerPromptWaiting,
   stoppedByReclaimLately,
   type ReclaimedWorker,
   type WorkerReclaimPorts,
@@ -47,7 +44,6 @@ import { taskFolderFromMissions } from '../verifyPreset';
 import { RESEARCH_PRESET } from '../../../shared/ledger';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { holdsUnsettledRunningClaim } from '../../notification/turnSettle';
-import { clearTurnEvidence, noteBroadcastStatus, promptOpenSince } from '../../notification/turnEvidence';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // The status funnel main keeps per pane (metadata.handler.ts), in memory: the
@@ -594,27 +590,6 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     expect(pauseDue(working(), false, [{ ...quiet, inputAt: at - 3_600_000 }], 1_000, at)).toBe(false);
   });
 
-  it('promptOpenSince: when the open prompt first went out; any other status closes it', () => {
-    noteBroadcastStatus('p-prompt', 'awaiting_input', undefined, 100);
-    noteBroadcastStatus('p-prompt', 'awaiting_input', undefined, 200);
-    expect(promptOpenSince('p-prompt')).toBe(100);
-    noteBroadcastStatus('p-prompt', 'running', 'PreToolUse', 300);
-    expect(promptOpenSince('p-prompt')).toBeUndefined();
-    clearTurnEvidence('p-prompt');
-  });
-
-  it('workerPromptWaiting: a prompt left for the window, never while a turn runs or before the window', () => {
-    const at = 1_000 + OPEN_IDLE_MS;
-    const prompt = { status: 'awaiting_input', turnStartAt: 900, promptAt: 1_000 };
-    expect(workerPromptWaiting([prompt], 1_000, at, OPEN_IDLE_MS)).toBe(true);
-    // A prompt that went out lately, or whose start is not known, is not overdue.
-    expect(workerPromptWaiting([{ ...prompt, promptAt: at - 60_000 }], 1_000, at, OPEN_IDLE_MS)).toBe(false);
-    expect(workerPromptWaiting([{ status: 'awaiting_input', turnStartAt: 900 }], 1_000, at, OPEN_IDLE_MS)).toBe(false);
-    expect(workerPromptWaiting([prompt], 1_000, at - 1, OPEN_IDLE_MS)).toBe(false);
-    expect(workerPromptWaiting([prompt, { status: 'running' }], 1_000, at, OPEN_IDLE_MS)).toBe(false);
-    expect(workerPromptWaiting([{ status: 'complete', turnEndAt: 900 }], 1_000, at, OPEN_IDLE_MS)).toBe(false);
-  });
-
   it('stops the idle worker past the window, keeps its row, pane and workspace, frees it and tells its bot once', async () => {
     const store = ReclaimedWorkers.at(dir);
     const current = working();
@@ -642,7 +617,6 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     expect(rec).toMatchObject({ ended: 'reported', endRev: 3 });
     expect(reclaimedWorkerState(rec)).toBe('resumable');
     expect(clearVerdict(rec, true, 'ws-elsewhere')).toBe('keep');
-    expect(isPausedSince(rec, current)).toBe(true);
     expect(note.mock.calls[0].slice(4)).toEqual([{ code: 'worker.openIdlePausedResumable', args: { title: 'perf-A' } }, current.id]);
     expect(noticeBot).toHaveBeenCalledTimes(1);
     expect(noticeBot.mock.calls[0][0]).toMatchObject({ botId: BOT, workspaceId: 'ws-owner', topic: 'worker.paused', taskId: current.id, threadId: `task:${current.id}` });
@@ -650,128 +624,19 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     await settled(store);
   });
 
-  it('a worker mid-turn or on a prompt is never stopped; a prompt left past the window tells its bot once', async () => {
+  it('a worker mid-turn is never stopped and its bot is not told', async () => {
     const store = ReclaimedWorkers.at(dir);
     const current = working();
     const noticeBot = vi.fn();
-    let prompt = false;
     const { ports, stopAgent } = reclaimPorts(store, [session()], {
-      allRows: () => [current], row: () => current, turnEnded: () => false, noticeBot, promptWaiting: () => prompt,
-      now: () => 1_000 + OPEN_IDLE_MS, retryMs: 5,
+      allRows: () => [current], row: () => current, turnEnded: () => false, noticeBot, now: () => 1_000 + OPEN_IDLE_MS, retryMs: 5,
     });
     const off = installWorkerReclaim(ports);
-    await deliberateSleep(20, 'negative: a turn that runs is not stopped and tells nobody');
-    expect(noticeBot).not.toHaveBeenCalled();
-    prompt = true;
-    await vi.waitFor(() => expect(noticeBot).toHaveBeenCalledTimes(1), { timeout: 10_000 });
-    await deliberateSleep(20, 'negative: one notice per prompt');
+    await deliberateSleep(30, 'negative: a turn that runs is not stopped and tells nobody');
     off();
-    expect(noticeBot).toHaveBeenCalledTimes(1);
-    expect(noticeBot.mock.calls[0][0]).toMatchObject({ botId: BOT, topic: 'worker.prompt_waiting', taskId: current.id });
     expect(stopAgent).not.toHaveBeenCalled();
+    expect(noticeBot).not.toHaveBeenCalled();
     expect(store.get(current.id)).toBeNull();
-  });
-
-  it('a stop that failed after a resume is retried, whatever the attempts the first pause took', async () => {
-    const store = ReclaimedWorkers.at(dir);
-    const current = working();
-    let failures = 2;
-    const stopAgent = vi.fn(async () => (failures-- > 0 ? { ok: false, code: 'refused' } : { ok: true, stopped: true }));
-    const { ports } = reclaimPorts(store, [session()], {
-      allRows: () => [current], row: () => current, turnEnded: () => true, stopAgent, now: () => 1_000 + OPEN_IDLE_MS, retryMs: 5,
-    });
-    const off = installWorkerReclaim(ports);
-    await vi.waitFor(() => expect(store.get(current.id)?.state).toBe('stopped'), { timeout: 10_000 });
-    expect(stopAgent).toHaveBeenCalledTimes(3);
-    // Resumed on the open row, then idle again: its first stop fails.
-    failures = 1;
-    store.setState(current.id, 'resumed', 1_000);
-    await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(5), { timeout: 10_000 });
-    await vi.waitFor(() => expect(store.get(current.id)?.state).toBe('stopped'), { timeout: 10_000 });
-    // Resumed again; every stop of this resume fails, and the settle pass
-    // marks it stopped once its agent is gone: the next resume is still tried.
-    failures = 3;
-    store.setState(current.id, 'resumed', 2_000);
-    await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(8), { timeout: 10_000 });
-    store.setState(current.id, 'stopped', 3_000);
-    store.setState(current.id, 'resumed', 4_000);
-    await vi.waitFor(() => expect(store.get(current.id)?.state).toBe('stopped'), { timeout: 10_000 });
-    expect(stopAgent).toHaveBeenCalledTimes(9);
-    off();
-    await settled(store);
-  });
-
-  it('a resumed worker whose task then ended keeps the settle pass\'s retry after its stops failed', async () => {
-    const store = ReclaimedWorkers.at(dir);
-    const ended = row('completed', { rev: 4, updatedAt: 3_000 });
-    await store.put({
-      taskId: ended.id, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${ended.id}`,
-      ended: 'reported', sessions: [{ sessionId: 'daemon-1', cwd: wt, resumeSessionId: UUID }], state: 'resumed', at: 2_000, endRev: 3,
-    });
-    let failing = true;
-    const stopAgent = vi.fn(async () => (failing ? { ok: false, code: 'refused' } : { ok: true, stopped: true }));
-    let t = 5_000;
-    const { ports } = reclaimPorts(store, [session()], { allRows: () => [ended], row: () => ended, stopAgent, now: () => t, retryMs: 5, workspacePanes: () => ['daemon-1'] });
-    const off = installWorkerReclaim(ports);
-    await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(3), { timeout: 10_000 });
-    await deliberateSleep(20, 'negative: the end\'s attempts are spent');
-    expect(store.get(ended.id)?.state).toBe('stopping');
-    failing = false;
-    t += STOPPING_SETTLE_MS;
-    await vi.waitFor(() => expect(store.get(ended.id)?.state).toBe('stopped'), { timeout: 10_000 });
-    off();
-    await settled(store);
-  });
-
-  it('an agent exit seen while a stop is under way leaves the record to that stop', async () => {
-    const store = ReclaimedWorkers.at(dir);
-    const current = working();
-    await store.put({
-      taskId: current.id, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${current.id}`,
-      ended: 'reported', sessions: [{ sessionId: 'daemon-1', cwd: wt, resumeSessionId: UUID }], state: 'stopping', at: 2_000, endRev: 3,
-    });
-    expect(noteWorkerAgentExit(store, 'daemon-1', 3_000)).toBe(false);
-    expect(store.get(current.id)?.state).toBe('stopping');
-    store.setState(current.id, 'resumed', 4_000);
-    expect(noteWorkerAgentExit(store, 'daemon-1', 5_000)).toBe(true);
-    expect(store.get(current.id)?.state).toBe('stopped');
-    await settled(store);
-  });
-
-  it('a stop whose worker was resumed while it ran leaves the resumed record alone', async () => {
-    const store = ReclaimedWorkers.at(dir);
-    const current = working();
-    const gate: { release?: () => void } = {};
-    const stopAgent = vi.fn(() => new Promise<{ ok: boolean; stopped: boolean }>((resolve) => { gate.release = () => resolve({ ok: true, stopped: true }); }));
-    const { ports } = reclaimPorts(store, [session()], { row: () => current, turnEnded: () => true, stopAgent, now: () => 1_000 + OPEN_IDLE_MS });
-    const done = reclaimWorker(ports, current, 'reported');
-    await vi.waitFor(() => expect(stopAgent).toHaveBeenCalled(), { timeout: 10_000 });
-    // Something else settled it and the owner resumed it meanwhile.
-    store.setState(current.id, 'stopped', 1_000 + OPEN_IDLE_MS);
-    store.setState(current.id, 'resumed', 1_000 + OPEN_IDLE_MS + 1);
-    gate.release?.();
-    await done;
-    expect(store.get(current.id)?.state).toBe('resumed');
-    await settled(store);
-  });
-
-  it('a worker resumed on its still-open row is stopped again once idle, counted from the resume', async () => {
-    const store = ReclaimedWorkers.at(dir);
-    const current = working();
-    await store.put({
-      taskId: current.id, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${current.id}`,
-      ended: 'reported', sessions: [{ sessionId: 'daemon-1', cwd: wt, resumeSessionId: UUID }], state: 'resumed', at: 2_000, endRev: 3,
-    });
-    const resumed = store.get(current.id);
-    expect(isPausedSince(resumed, current)).toBe(false);
-    expect(pauseFloor(current, resumed)).toBe(2_000);
-    const { ports } = reclaimPorts(store, [session()], {
-      allRows: () => [current], row: () => current, turnEnded: () => true, now: () => 2_000 + OPEN_IDLE_MS,
-    });
-    const off = installWorkerReclaim(ports);
-    await vi.waitFor(() => expect(store.get(current.id)?.state).toBe('stopped'), { timeout: 10_000 });
-    off();
-    await settled(store);
   });
 });
 
