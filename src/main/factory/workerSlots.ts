@@ -596,7 +596,11 @@ export function beginPaneRelaunch(sessionId: string): ((typed: boolean) => void)
   const bot = pane ? null : botWorkerSessionRecord(sessionId);
   // The task of the pane as every reader resolves it (resolvePaneOwner).
   const owner = taskOfPane(sessionId);
-  const holder = pane || bot?.workspaceId ? null : getWorkspaceMirror().getEntries()?.find((e) => Array.isArray(e.ptyIds) && e.ptyIds.includes(sessionId))?.id;
+  // The workspace that holds the pane, read only when neither its launch
+  // record nor its session record names its task. A session record with no
+  // task (another pane of a task's workspace) still goes on to the
+  // workspace's task below.
+  const holder = pane || bot?.taskId ? null : getWorkspaceMirror().getEntries()?.find((e) => Array.isArray(e.ptyIds) && e.ptyIds.includes(sessionId))?.id;
   // No record names the pane (created before panes were recorded): the task
   // of the workspace that holds it, only when that workspace is a task's and
   // its record and its ledger row agree on which (a pane moved into another
@@ -630,23 +634,29 @@ export interface PaneOwner {
   botId?: string;
 }
 
-/** Where the task of a pane is read from, newest record first. */
+/** Where the task of a pane is read from, in the order resolvePaneOwner reads them. */
 export interface PaneOwnerSources {
   /** The pane's launch record here (WorkerSlots.paneOf), with its bot. */
   launch?: (sessionId: string) => PaneOwner | null;
-  /** A pane created before launch records were kept: the reclaim record
-   *  that names it (workerReclaim.ts ReclaimedWorkers.taskOfSession). */
-  reclaimed?: (sessionId: string) => { taskId: string; botId?: string } | null;
-  /** Else the bot worker session record its create wrote. */
+  /** The bot worker session record its create wrote (its task when its
+   *  own launch created it): written once, for this pane only. */
   sessionRecord?: (sessionId: string) => { taskId?: unknown; botId?: unknown } | null | undefined;
+  /** A pane neither of those names (created before either was kept): the
+   *  reclaim record that lists it (workerReclaim.ts taskOfSession). */
+  reclaimed?: (sessionId: string) => { taskId: string; botId?: string } | null;
 }
 
 /**
  * The one answer to "which task is this pane the worker of": its launch
- * record, else the reclaim record that names it, else the bot worker session
- * record its create wrote. The holder set (through taskOfPane), the
+ * record, else the bot worker session record its create wrote, else the
+ * reclaim record that lists it. The holder set (through taskOfPane), the
  * workspace liveness and a relaunch in a pane all read it here, so they can
- * never name two tasks for one pane. A source that throws is skipped. Pure.
+ * never name two tasks for one pane. The session record goes before the
+ * reclaim record: it is this pane's own, written at its create and never
+ * changed, while a reclaim record lists the panes found for a task (an
+ * older build listed every pane started in its folder). Where the two
+ * disagree, the pane's own record decides. A source that throws is
+ * skipped. Pure.
  */
 export function resolvePaneOwner(sessionId: string, src: PaneOwnerSources): PaneOwner | null {
   try {
@@ -656,16 +666,16 @@ export function resolvePaneOwner(sessionId: string, src: PaneOwnerSources): Pane
     // the older records below
   }
   try {
-    const r = src.reclaimed?.(sessionId);
-    if (r?.taskId) return { taskId: r.taskId, ...(r.botId ? { botId: r.botId } : {}) };
+    const rec = src.sessionRecord?.(sessionId);
+    if (typeof rec?.taskId === 'string' && rec.taskId) {
+      return { taskId: rec.taskId, ...(typeof rec.botId === 'string' && rec.botId ? { botId: rec.botId } : {}) };
+    }
   } catch {
-    // the session record below
+    // the reclaim record below
   }
   try {
-    const rec = src.sessionRecord?.(sessionId);
-    return typeof rec?.taskId === 'string' && rec.taskId
-      ? { taskId: rec.taskId, ...(typeof rec.botId === 'string' && rec.botId ? { botId: rec.botId } : {}) }
-      : null;
+    const r = src.reclaimed?.(sessionId);
+    return r?.taskId ? { taskId: r.taskId, ...(r.botId ? { botId: r.botId } : {}) } : null;
   } catch {
     return null;
   }
