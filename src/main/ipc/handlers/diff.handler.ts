@@ -9,7 +9,7 @@
 //   fingerprint, so an adoption can only ever apply the diff the user saw
 //   (plans/apply-hunks-toctou-design.md).
 import { ipcMain } from 'electron';
-import { readFile, lstat } from 'node:fs/promises';
+import { readFile, lstat, realpath } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -810,14 +810,24 @@ export function registerDiffHandlers(): () => void {
         if (!safeCwd) return { ok: false };
         // Home and a drive or filesystem root are where a shell starts, not a
         // workspace of repos: walking them would list every clone on the disk.
+        // safeCwd is a real path, so home is compared as its real path too
+        // (fs/promises realpath is the native resolver: links, junctions and
+        // 8.3 short names resolve to one spelling).
         const fold = (p: string) => (process.platform === 'win32' ? normalize(p).toLowerCase() : normalize(p));
-        if (safeCwd === parse(safeCwd).root || fold(safeCwd) === fold(homedir())) {
+        const home = await realpath(homedir()).catch(() => homedir());
+        if (safeCwd === parse(safeCwd).root || fold(safeCwd) === fold(home)) {
           return { ok: true, repoPaths: [] };
         }
-        const repoPaths = await scanRepos(safeCwd, async (dir) => {
-          const r = await git(['rev-parse', '--show-toplevel'], dir);
-          return r.code === 0 ? r.stdout.trim() || null : null;
-        });
+        const repoPaths = await scanRepos(
+          safeCwd,
+          async (dir) => {
+            const r = await git(['rev-parse', '--show-toplevel'], dir);
+            return r.code === 0 ? r.stdout.trim() || null : null;
+          },
+          // Each folder below the root passes the same confinement check
+          // before it is read or handed to git.
+          resolveAccessiblePath,
+        );
         return { ok: true, repoPaths };
       },
     ),
