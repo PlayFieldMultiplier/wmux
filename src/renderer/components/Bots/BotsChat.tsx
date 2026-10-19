@@ -2259,8 +2259,15 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     // A window brought back to the front may not change visibility.
     window.addEventListener('focus', onVisible);
     // The chat coming into view (the narrow layout's list → chat) resizes it.
+    // A side panel opening narrows it and its cards grow taller: a chat read
+    // at the bottom stays at the bottom.
     const el = scrollRef.current;
-    const ro = el && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => markSeen()) : null;
+    const ro = el && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+        if (atBottom.current) el.scrollTop = el.scrollHeight;
+        markSeen();
+      })
+      : null;
     if (el) ro?.observe(el);
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
