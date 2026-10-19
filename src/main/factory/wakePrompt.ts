@@ -12,7 +12,7 @@
 import { botTemplate, isCoordinatorBot, type BotProfile, type BotTemplate } from '../../shared/bot';
 import { effectiveJob } from './roles/templates';
 import type { Fact } from '../../shared/facts';
-import type { RoomCard, ThreadId } from '../../shared/room';
+import { isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
 import { botFanoutIdempotencyKey, type WakeItem } from '../../shared/wake';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel } from '../../shared/botWorkerAgent';
 import type { SkillIndexEntry } from '../../shared/botSkill';
@@ -307,7 +307,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
   // line. A bot reads them otherwise only with room_read's include_guest,
   // which taints its turn (wakeTaint.ts).
   const guestWake = item.reason.kind === 'guest';
-  const shownCards = thread ? thread.cards.filter((c) => guestWake || c.kind !== 'guest') : [];
+  const shownCards = thread ? thread.cards.filter((c) => guestWake || !isGuestSourcedCard(c)) : [];
   const hiddenGuestCards = thread && !guestWake ? thread.cards.length - shownCards.length + (thread.hiddenGuestCards ?? 0) : 0;
   if (thread && shownCards.length > 0) {
     const cards = shownCards.map((c) => ({
@@ -326,7 +326,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
     );
   }
   if (thread && hiddenGuestCards > 0) {
-    lines.push('', `${hiddenGuestCards} card(s) from an external guest agent in ${thread.threadId} are left out of this wake: they are outside text, not the owner's words. Reading them (room_read with include_guest) marks this turn as started from outside text.`);
+    lines.push('', `${hiddenGuestCards} card(s) from an external guest agent (or written in a turn it started) in ${thread.threadId} are left out of this wake: they are outside text, not the owner's words. Reading them (room_read with include_guest) marks this turn as started from outside text.`);
   }
   const r = item.reason;
   const group = input.group ?? null;

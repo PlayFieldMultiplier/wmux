@@ -56,7 +56,7 @@ import type { BotGroup } from '../../shared/botGroup';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
 import type { FactorySettings } from '../../shared/factorySettings';
-import { ROOM_LIMITS, dmThreadBot, dmThreadId, parseThreadId, taskThreadOf } from '../../shared/room';
+import { ROOM_LIMITS, dmThreadBot, dmThreadId, isGuestSourcedCard, parseThreadId, taskThreadOf } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
@@ -340,7 +340,7 @@ export function threadTail(writer: RoomWriter | null, workspaceId: string, threa
     let sinceSeq = truncated ? first.seq - 1 : 0;
     for (;;) {
       const more = writer.read(workspaceId, { threadId, sinceSeq, guests: true });
-      hiddenGuestCards += more.cards.filter((c) => c.kind === 'guest').length;
+      hiddenGuestCards += more.cards.filter(isGuestSourcedCard).length;
       if (!more.hasMore || more.nextSinceSeq <= sinceSeq) break;
       sinceSeq = more.nextSinceSeq;
     }

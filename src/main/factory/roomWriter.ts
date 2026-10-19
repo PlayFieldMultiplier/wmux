@@ -41,6 +41,7 @@ import {
   groupThreadGroup,
   parseThreadId,
   issueThreadId,
+  isGuestSourcedCard,
   prThreadId,
   taskOriginThread,
   type CardKind,
@@ -237,6 +238,24 @@ export class WakeOrdinals {
 export const wakeOrdinals = new WakeOrdinals();
 
 /** The running wake of a bot through the ports, or null. Never throws. */
+/** Whether the turn bot `botId` is running now started from or read an
+ *  external guest's message (wakeTaint.ts); set by the taint module. A bot
+ *  card written while it says so carries `origin: 'guest'`. */
+let guestTurnProbe: ((botId: string) => boolean) | null = null;
+
+export function setGuestTurnProbe(probe: ((botId: string) => boolean) | null): void {
+  guestTurnProbe = probe;
+}
+
+function guestSourcedTurn(actor: Party): boolean {
+  if (actor.kind !== 'bot' || !guestTurnProbe) return false;
+  try {
+    return guestTurnProbe(actor.botId) === true;
+  } catch {
+    return false;
+  }
+}
+
 export function runningWake(ports: Partial<FactoryRoomPorts>, botId: string): RunningWake | null {
   try {
     const w = ports.currentWake?.(botId) ?? null;
@@ -479,6 +498,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(attachments ? { attachments } : {}),
     ...(files ? { files } : {}),
     ...(guest ? { guest } : {}),
+    ...(c.origin === 'guest' && actor.kind === 'bot' ? { origin: 'guest' as const } : {}),
   };
 }
 
@@ -753,6 +773,7 @@ export class RoomWriter {
     const files = actor.kind === 'bot' ? parseRoomFiles(input.files) : undefined;
     const guest = input.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(input.guest) : undefined;
     if (input.kind === 'guest' && !guest) return null;
+    const fromGuestTurn = guestSourcedTurn(actor);
     // A fact delivered twice (a re-subscribe, a replay) writes one card.
     const factKey = refs?.factId ? factCardKey({ refs, threadId, kind: input.kind }) : null;
     if (factKey && state.seenFacts.has(factKey)) return null;
@@ -776,6 +797,7 @@ export class RoomWriter {
       ...(attachments ? { attachments } : {}),
       ...(files ? { files } : {}),
       ...(guest ? { guest } : {}),
+      ...(fromGuestTurn ? { origin: 'guest' as const } : {}),
       ...(extra?.replyTo ? { replyTo: extra.replyTo } : {}),
       ...(extra?.clientPostId ? { clientPostId: extra.clientPostId } : {}),
     };
@@ -805,9 +827,14 @@ export class RoomWriter {
     const clientPostId = isClientId(input.clientPostId) ? input.clientPostId : undefined;
     if (clientPostId) {
       const prior = state.byId.get(state.byClientId.get(clientPostId) ?? '');
-      // An external guest's card is returned only to a guest post: anyone
-      // else reusing its id would read it without asking (read's `guests`).
-      if (prior && prior.kind === 'guest' && input.kind !== 'guest') return { ok: false, code: 'invalid', message: 'that clientPostId is already used in this room' };
+      // A guest-sourced card is returned only to a post of the same kind
+      // (a guest's, or a bot's in a guest-sourced turn): any other reader
+      // gets it only by asking (read's `guests`).
+      if (prior && isGuestSourcedCard(prior)) {
+        const actor = sanitizeParty(input.actor);
+        const sameSource = prior.kind === 'guest' ? input.kind === 'guest' : !!actor && guestSourcedTurn(actor);
+        if (!sameSource) return { ok: false, code: 'invalid', message: 'that clientPostId is already used in this room' };
+      }
       if (prior) return { ok: true, card: prior, duplicate: true };
     }
     const threadId = input.threadId === undefined ? GENERAL_THREAD : parseThreadId(input.threadId);
@@ -879,7 +906,7 @@ export class RoomWriter {
   find(workspaceId: string, match: (c: RoomCard) => boolean, opts: { guests?: boolean } = {}): RoomCard | null {
     const cards = this.room(workspaceId)?.cards ?? [];
     for (let i = cards.length - 1; i >= 0; i -= 1) {
-      if (cards[i].kind === 'guest' && opts.guests !== true) continue;
+      if (isGuestSourcedCard(cards[i]) && opts.guests !== true) continue;
       if (match(cards[i])) return cards[i];
     }
     return null;
@@ -898,7 +925,7 @@ export class RoomWriter {
     const state = this.room(workspaceId);
     if (!state) return { cards: [], nextSinceSeq: 0, hasMore: false };
     const limit = Math.max(1, Math.min(ROOM_LIMITS.PAGE, Math.floor(opts.limit ?? ROOM_LIMITS.PAGE)));
-    const visible = opts.guests === true ? state.cards : state.cards.filter((c) => c.kind !== 'guest');
+    const visible = opts.guests === true ? state.cards : state.cards.filter((c) => !isGuestSourcedCard(c));
     const scoped = opts.threadId === undefined ? visible : visible.filter((c) => c.threadId === opts.threadId);
     const since = typeof opts.sinceSeq === 'number' && Number.isFinite(opts.sinceSeq) ? opts.sinceSeq : null;
     // Every reader (bots, the renderer's room.read, the phone's room routes)

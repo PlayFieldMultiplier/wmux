@@ -392,6 +392,21 @@ export function markRunningTurnReadGuestText(botId: string): boolean {
   }
 }
 
+/** Whether the turn `botId` is running now started from an external guest's
+ *  message or read one (room_read include_guest): null when it cannot be
+ *  told (no tracker, no running wake). */
+export function runningTurnGuestSourced(botId: string): boolean | null {
+  const c = current;
+  if (!c) return null;
+  try {
+    const item = c.runningWake(botId)?.item;
+    if (!item) return null;
+    return item.reason.kind === 'guest' || c.taint.turnReadGuestText(item.id);
+  } catch {
+    return null;
+  }
+}
+
 /** Whether the wake `botId` is running now is tainted; true when it cannot
  *  be told (no tracker, no running wake). */
 export function runningWakeTainted(botId: string): boolean {

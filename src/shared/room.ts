@@ -200,6 +200,17 @@ export interface RoomCard {
   /** Main-written, `guest` cards only (actor system): the outside agent that
    *  posted it (shared/guestBots.ts). The card is external whatever it says. */
   guest?: { guestId: string; name: string };
+  /** Main-written, bot cards only: written in a turn that an external
+   *  guest's message started or that read one (wakeTaint.ts). Read like a
+   *  `guest` card (isGuestSourcedCard). */
+  origin?: 'guest';
+}
+
+/** Whether a card is an external guest's words or a bot's card from a turn
+ *  that started from or read them: what a reader sees only when it asks
+ *  for guest cards (RoomWriter.read `guests`). Pure. */
+export function isGuestSourcedCard(c: Pick<RoomCard, 'kind' | 'origin'>): boolean {
+  return c.kind === 'guest' || c.origin === 'guest';
 }
 
 /** A factory system card's stable code: the task gate's and the worker

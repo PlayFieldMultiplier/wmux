@@ -5,7 +5,8 @@
 import path from 'node:path';
 import type { WakeItem } from '../../shared/wake';
 import { registerFactoryRpcModule } from './factoryHost';
-import { TAINT_FILENAME, WakeTaint, setWakeTaint } from './wakeTaint';
+import { TAINT_FILENAME, WakeTaint, runningTurnGuestSourced, setWakeTaint } from './wakeTaint';
+import { setGuestTurnProbe } from './roomWriter';
 import { getBotWorkflowStore } from './botWorkflow';
 
 registerFactoryRpcModule('wakeTaint', (_router, deps) => {
@@ -38,12 +39,15 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
         file: path.join(deps.wmuxDir(), 'factory', TAINT_FILENAME),
       });
       setWakeTaint(taint, runningWake);
+      // A bot's card from a guest-sourced turn is stamped (RoomCard.origin).
+      setGuestTurnProbe((botId) => runningTurnGuestSourced(botId) === true);
       const log = getFactLog();
       off = log ? log.subscribe((f) => taint.onFact(f)) : null;
     },
     dispose() {
       off?.();
       off = null;
+      setGuestTurnProbe(null);
       setWakeTaint(null);
     },
   };
