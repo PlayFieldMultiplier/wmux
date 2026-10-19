@@ -1301,12 +1301,17 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
   const installedAt = now();
   const inFlight = new Set<string>();
   const attempts = new Map<string, number>();
+  /** The last resume seen of each task's worker (its record's time then). */
+  const resumeGen = new Map<string, number>();
   const run = (entry: LedgerEntry, ended: ReclaimedWorker['ended']): void => {
     const prior = ports.store.get(entry.id);
     if (inFlight.has(entry.id) || (ended === 'reported' ? isPausedSince(prior, entry) : isReclaimedSince(prior, entry))) return;
     // Per end: a task that reopened and ended again is tried afresh, and so
-    // is an open row's worker resumed since its last stop.
-    const key = `${entry.id}@${entry.rev}`;
+    // is each resume of an open row's worker (its attempts count apart, from
+    // the resume until it is stopped again).
+    if (prior?.state === 'resumed') resumeGen.set(entry.id, prior.at);
+    const gen = resumeGen.get(entry.id);
+    const key = `${entry.id}@${entry.rev}${gen !== undefined ? `:${gen}` : ''}`;
     const n = attempts.get(key) ?? 0;
     if (n >= RECLAIM_ATTEMPTS_MAX) return;
     attempts.set(key, n + 1);
@@ -1314,12 +1319,8 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     const out: { deferred?: boolean } = {};
     void reclaimWorker(ports, entry, ended, out).finally(() => {
       inFlight.delete(entry.id);
-      // Held back because the turn is not over: no attempt spent. Stopped:
-      // the count starts over (a worker resumed on its open row may need
-      // stopping again at the same rev).
-      const after = ports.store.get(entry.id);
-      if (after?.state === 'stopped' && (prior?.state !== 'stopped' || after.at !== prior.at)) attempts.delete(key);
-      else if (out.deferred && attempts.get(key) === n + 1) attempts.set(key, n);
+      // Held back because the turn is not over: no attempt spent.
+      if (out.deferred && attempts.get(key) === n + 1) attempts.set(key, n);
     });
   };
   const off = ports.onTransition((t) => {

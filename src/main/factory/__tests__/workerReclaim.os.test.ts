@@ -682,6 +682,15 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     store.setState(current.id, 'resumed', 1_000);
     await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(5), { timeout: 10_000 });
     await vi.waitFor(() => expect(store.get(current.id)?.state).toBe('stopped'), { timeout: 10_000 });
+    // Resumed again; every stop of this resume fails, and the settle pass
+    // marks it stopped once its agent is gone: the next resume is still tried.
+    failures = 3;
+    store.setState(current.id, 'resumed', 2_000);
+    await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(8), { timeout: 10_000 });
+    store.setState(current.id, 'stopped', 3_000);
+    store.setState(current.id, 'resumed', 4_000);
+    await vi.waitFor(() => expect(store.get(current.id)?.state).toBe('stopped'), { timeout: 10_000 });
+    expect(stopAgent).toHaveBeenCalledTimes(9);
     off();
     await settled(store);
   });
