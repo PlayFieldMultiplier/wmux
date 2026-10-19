@@ -90,7 +90,8 @@ describe('bot fan-out presets', () => {
     }
     const repro = composeBotWorkerPrompt('repro', '', undefined, 'gitlab.com/g/p');
     expect(repro).toContain('open a DRAFT merge request (`glab mr create --draft --source-branch <your branch> --yes`)');
-    expect(repro).toContain('`glab mr update <number> --ready`');
+    expect(repro).toContain('the merge request stays a draft for the owner to mark ready');
+    expect(repro).not.toMatch(/glab mr update/);
     expect(composeBotWorkerPrompt('maintain', '', undefined, 'gitlab.com/g/p')).toContain('open a merge request (`glab mr create --source-branch <your branch> --yes`)');
     // No host to read: the GitHub lines, as before the host was read.
     for (const name of ['repro', 'maintain', 'default']) {

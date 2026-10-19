@@ -42,8 +42,26 @@ export function ghApiDeny(rest: string): string[] {
   return [`Bash(gh api${rest})`, `Bash(gh -* api${rest})`];
 }
 
-/** The deny rules that send a merge through the lane instead of `gh`. */
-export const BOT_WORKER_MERGE_DENY: readonly string[] = [...ghSubcommandDeny('pr', 'merge'), ...ghApiDeny('*merge*')];
+/** `glab <group> <verb>` in every spelling glab runs it: with options
+ *  (`-R g/p`) between the group and the verb. glab takes no options before
+ *  the group (`glab -R g/p mr list` is refused by glab itself), so there is
+ *  no spelling for that. Pure. */
+export function glabSubcommandDeny(group: string, verb: string): string[] {
+  return [`Bash(glab ${group} ${verb}*)`, `Bash(glab ${group} -* ${verb})`, `Bash(glab ${group} -* ${verb} *)`];
+}
+
+/** `glab api<rest>`. Pure. */
+export function glabApiDeny(rest: string): string[] {
+  return [`Bash(glab api${rest})`];
+}
+
+/** The deny rules that send a merge through the lane instead of `gh` or
+ *  `glab` (an approval counts toward a GitLab merge; glab's API merge and
+ *  approval are writes, refused with the other `glab api` writes below). */
+export const BOT_WORKER_MERGE_DENY: readonly string[] = [
+  ...ghSubcommandDeny('pr', 'merge'), ...ghApiDeny('*merge*'),
+  ...glabSubcommandDeny('mr', 'merge'), ...glabSubcommandDeny('mr', 'approve'),
+];
 
 /** The default branch names main always treats as a repository's default
  *  branch, whatever its own default branch reads (see the default-branches
@@ -85,6 +103,13 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
   ...['send-pack', 'http-push'].flatMap((v) => [`Bash(git ${v}*)`, `Bash(git -* ${v}*)`]),
   // An alias names any of the acts above under another word.
   'Bash(git*config*alias.*)', 'Bash(git*-c*alias.*)',
+  // glab's own pushes: `mr create --fill` (`-f`) or `--push` pushes the
+  // branch and `--create-source-branch` creates one, a stack sync pushes the
+  // stack, `mr rebase` rewrites the source branch on the server and `mr for`
+  // creates one there. A plain `glab mr create --source-branch <branch>`
+  // opens the request for the branch main pushed.
+  ...['', '-* '].flatMap((pre) => ['*--fill*', '*--push*', '*--create-source-branch*', '-f*', '* -f*'].map((rest) => `Bash(glab mr ${pre}create ${rest})`)),
+  ...glabSubcommandDeny('mr', 'rebase'), ...glabSubcommandDeny('mr', 'for'), ...glabSubcommandDeny('stack', 'sync'),
 ];
 
 /** Public acts under the owner's GitHub identity — issues, comments,
@@ -102,6 +127,17 @@ export const BOT_WORKER_PUBLIC_DENY: readonly string[] = [
   ...['* -f*', '* -F*', '*--field*', '*--raw-field*', '*--input*'].flatMap(ghApiDeny),
   // An alias names any of the acts above under another word.
   ...ghSubcommandDeny('alias', 'set'), ...ghSubcommandDeny('alias', 'import'),
+  // The same acts through glab, under the owner's GitLab identity, and every
+  // `glab api` write. Editing a merge request (`mr update`, which also marks
+  // one ready) is the owner's.
+  ...['create', 'close', 'note', 'delete', 'reopen', 'update'].flatMap((v) => glabSubcommandDeny('issue', v)),
+  ...['note', 'revoke', 'close', 'reopen', 'delete', 'update'].flatMap((v) => glabSubcommandDeny('mr', v)),
+  ...['create', 'delete', 'upload'].flatMap((v) => glabSubcommandDeny('release', v)),
+  ...['create', 'update', 'delete', 'transfer', 'archive', 'mirror', 'publish'].flatMap((v) => glabSubcommandDeny('repo', v)),
+  ...['set', 'update', 'delete'].flatMap((v) => glabSubcommandDeny('variable', v)),
+  ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [...glabApiDeny(`*-X*${x}*`), ...glabApiDeny(`*--method*${x}*`)])),
+  ...['* -f*', '* -F*', '*--field*', '*--raw-field*', '*--form*', '*--input*'].flatMap(glabApiDeny),
+  ...glabSubcommandDeny('alias', 'set'),
 ];
 
 /** Everything a bot's worker is refused. */

@@ -40,9 +40,9 @@ describe('bot worker deny rules', () => {
   });
 
   it('the rule set is pinned: any change to a rule is a deliberate change to this test', () => {
-    expect(BOT_WORKER_DENY.length).toBe(289);
+    expect(BOT_WORKER_DENY.length).toBe(414);
     expect(createHash('sha256').update(JSON.stringify(BOT_WORKER_DENY)).digest('hex'))
-      .toBe('682d41805516beb078960a404862ae7b8169cad228c892718eefe1ad8469f091');
+      .toBe('1e9f91b7cf25281657ec2dbe343079be838e9b5f59a6c5f8a21761a2aa56575b');
   });
 
   it('no rule holds a `:*` that does not end it (Claude Code reads such a rule with a notice)', () => {
@@ -141,12 +141,51 @@ describe('bot worker deny rules', () => {
     'gh --hostname example.com api repos/o/r/issues -f title=x',
     'gh alias set pm "pr merge"',
     'gh alias import aliases.yml',
+    // The worker guard extended to glab.
+    'glab mr merge 3',
+    'glab mr -R g/p merge 3 --squash',
+    'glab mr approve 3',
+    'glab mr create --fill',
+    'glab mr create -f --draft',
+    'glab mr create --source-branch wtask/a --push',
+    'glab mr create --source-branch wtask/a --fill --yes',
+    'glab mr -R g/p create --fill',
+    'glab mr create --create-source-branch --source-branch wtask/a',
+    'glab mr rebase 3',
+    'glab mr for 4',
+    'glab stack sync',
+    'glab mr note 3 -m hi',
+    'glab mr update 3 --ready',
+    'glab mr close 3',
+    'glab issue create -t x -d y',
+    'glab issue note 4 -m hi',
+    'glab release create v1.0.0',
+    'glab repo delete g/p --yes',
+    'glab variable set TOKEN x',
+    'glab api -X POST projects/:id/issues',
+    'glab api --method PUT projects/:id/merge_requests/3/merge',
+    'glab api projects/:id/issues -F title=x',
+    'glab api projects/:id/issues -f title=x',
+    'glab api projects/:id/uploads --form file=@x.png',
+    'glab api projects/:id/issues --input body.json',
+    'glab alias set m "mr merge"',
   ])('refuses %s', (cmd) => {
     expect(denied(cmd)).toBe(true);
   });
 
   it.each([
     'gh pr create --title x --body y',
+    'glab mr create --source-branch x --yes',
+    'glab mr create --source-branch wtask/fix-it --yes',
+    'glab mr create --draft --source-branch wtask/a -y',
+    'glab mr create --source-branch wtask/a --title "x" --description "y" --yes',
+    'glab mr view 3',
+    'glab mr list',
+    'glab mr diff 3',
+    'glab issue view 4',
+    'glab ci status',
+    'glab api projects/:id/merge_requests/3',
+    'glab release view v1.0.0',
     'gh pr view 3 --json headRefOid',
     'gh pr checks 3',
     'gh issue view 4',

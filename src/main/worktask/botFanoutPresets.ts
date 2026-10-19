@@ -40,7 +40,9 @@
 // The review request each preset opens follows the bot repository's host the
 // way the Git page picks its CLI (github/PrProvider.ts): a GitHub host gets
 // `gh pr create`, every other host is GitLab and gets `glab mr create`, and a
-// bot with no recorded repository host keeps the GitHub lines.
+// bot with no recorded repository host keeps the GitHub lines. A GitLab repro
+// worker leaves its draft for the owner to mark ready (`glab mr update` is the
+// owner's, shared/botWorkerGuard.ts).
 
 import type { FanoutAgentChoice, FanoutPreset } from '../../shared/fanoutPreset';
 import { fanoutPresetKey } from '../../shared/fanoutPreset';
@@ -113,7 +115,7 @@ const REVIEW_REQUEST: Readonly<Record<BotReviewHost, ReviewRequestLines>> = {
     link: 'the merge request link',
     create: '`glab mr create --source-branch <your branch> --yes`',
     draft: '`glab mr create --draft --source-branch <your branch> --yes`',
-    ready: 'mark the merge request ready with `glab mr update <number> --ready`. When the issue does not reproduce, the merge request stays a draft, if you opened one.',
+    ready: 'the merge request stays a draft for the owner to mark ready: GitLab runs its pipeline on a draft too.',
   },
 };
 
