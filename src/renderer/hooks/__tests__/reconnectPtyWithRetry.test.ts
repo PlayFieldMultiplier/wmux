@@ -212,7 +212,7 @@ describe('reconnectPtyWithRetry (RCA A1 non-destructive contract)', () => {
    // Still non-destructive: the pane keeps its id and its scrollback, which is
    // the whole point of offering the fresh start instead of a close.
    expect(clearPtyId).not.toHaveBeenCalled();
- 
+
 });
 
 // #2398 — after a failed startup reconcile, a pane's own reattach must not
