@@ -677,4 +677,5 @@ export const ar = {
   'worktask.cleanup.detail.orphanUnlinked': 'لا ترتبط به أي مهمة ولا سجل مهمة — تحقّق منه، ثم احذفه.',
   'worktask.cleanup.detail.orphanMeta': 'لم يتبقَّ سوى سجل المهمة دون شجرة العمل (انقطعت عملية إزالة) — تحقّق منه، ثم احذفه.',
   'worktask.cleanup.detail.diskMissing': 'شجرة العمل غير موجودة على القرص (حُذفت خارج wmux أو بسبب عطل) — أغلق المهمة لتنظيفها.',
+  'botsPage.guest.readNotice': "من الآن فصاعدًا، يمكن لبوت خارجي قراءة الرسائل في هذه المحادثة والنشر فيها. لا يرى أبدًا ما قيل قبل إضافته.",
 } as const;

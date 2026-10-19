@@ -13,8 +13,10 @@
 //   2. the owner's switch is off → 403 guest-bots-disabled
 //   3. the listener is plain HTTP on a non-loopback bind → 403 insecure-transport
 //   4. the credential: malformed / unknown / revoked → 401
-//   5. the server's grants: `--allow-transcript` to read or post, and
-//      `--allow-input` as well to post → 403
+//   5. the server's grants: "Conversation access" to read or post, and
+//      "Allow input" as well to post → 403. Each refusal of steps 2, 3 and
+//      5 carries a `message` naming the setting the owner turns on, by the
+//      name the wmux window shows (GUEST_GATE_MESSAGES).
 //   6. the guest's rate budget → 429 with Retry-After
 //   7. the route
 //
@@ -34,6 +36,7 @@ import {
   GUEST_ROOM_POST_COMMAND,
   GUEST_ROUTES,
   parseGuestCredential,
+  guestSeesCard,
   parseGuestPostResult,
   type GuestPostPayload,
   type GuestScope,
@@ -78,6 +81,18 @@ export interface GuestRouteContext {
 
 const refuse = (status: number, error: string, extra: Record<string, unknown> = {}, headers?: Record<string, string>): GuestRouteResponse =>
   ({ status, body: { ok: false, error, ...extra }, ...(headers ? { headers } : {}) });
+
+/** What an agent can tell its owner when a gate refuses it: which setting to
+ *  turn on, named as the wmux window names it (the "web" button in the
+ *  sidebar; the Bots page), never by a command-line flag. */
+export const GUEST_GATE_MESSAGES = {
+  'guest-bots-disabled': 'Guest bots are off on this wmux. The owner turns them on in Bots → "…" → Guest bots ("Let guest bots connect").',
+  'insecure-transport': 'This wmux serves plain HTTP on the network, so guest tokens are refused. The owner opens the "web" button in the sidebar, stops it, turns on "Serve over HTTPS (needs Tailscale)" or turns off "Expose to network", and starts it again.',
+  'transcript-disabled': 'Reading conversations is off on this wmux. The owner opens the "web" button in the sidebar and turns on "Conversation access".',
+  'input-disabled': 'Posting is off on this wmux: a guest can read but not post. The owner opens the "web" button in the sidebar and turns on "Allow input".',
+} as const;
+
+const gate = (code: keyof typeof GUEST_GATE_MESSAGES): GuestRouteResponse => refuse(403, code, { message: GUEST_GATE_MESSAGES[code] });
 
 /**
  * Per-guest sliding-window budgets (posts and reads apart), in memory. A
@@ -142,10 +157,12 @@ export interface GuestCardView {
   replyTo?: string;
 }
 
+/** A guest's view of one card, with key patterns masked once more on the
+ *  way out (main already masked stored bot secrets, RoomWriter.read). */
 export function guestCardView(c: PhoneRoomCard): GuestCardView {
   const from: GuestCardView['from'] = c.kind === 'guest' ? { kind: 'guest' }
     : c.actor.kind === 'human' ? { kind: 'owner' }
-    : c.actor.kind === 'bot' ? { kind: 'bot', botId: c.actor.botId, ...(c.actor.name ? { name: c.actor.name } : {}) }
+    : c.actor.kind === 'bot' ? { kind: 'bot', botId: c.actor.botId, ...(c.actor.name ? { name: redactSecrets(c.actor.name) } : {}) }
     : { kind: 'system' };
   return {
     id: c.id,
@@ -153,8 +170,8 @@ export function guestCardView(c: PhoneRoomCard): GuestCardView {
     at: c.at,
     kind: c.kind,
     from,
-    title: c.title,
-    ...(c.body ? { body: c.body } : {}),
+    title: redactSecrets(c.title),
+    ...(c.body ? { body: redactSecrets(c.body) } : {}),
     ...(c.replyTo ? { replyTo: c.replyTo } : {}),
   };
 }
@@ -186,9 +203,9 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
   } catch {
     on = false;
   }
-  if (!ctx.guests || !on) return refuse(403, 'guest-bots-disabled');
+  if (!ctx.guests || !on) return gate('guest-bots-disabled');
   // 3. A durable token never crosses a network in clear.
-  if (ctx.gates.transportRefusal) return refuse(403, 'insecure-transport');
+  if (ctx.gates.transportRefusal) return gate('insecure-transport');
   // 4. The credential.
   const cred = parseGuestCredential(ctx.bearer);
   if (!cred) return refuse(401, 'unauthorized');
@@ -205,8 +222,8 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
   const posting = route === 'messages' && ctx.method === 'POST';
   if (!posting && ctx.method !== 'GET') return refuse(405, 'method-not-allowed');
   // 5. The server's grants, as for the phone's room routes.
-  if (!ctx.gates.transcript) return refuse(403, 'transcript-disabled');
-  if (posting && !ctx.gates.input) return refuse(403, 'input-disabled');
+  if (!ctx.gates.transcript) return gate('transcript-disabled');
+  if (posting && !ctx.gates.input) return gate('input-disabled');
   // 6. The guest's budget.
   const wait = ctx.limiter.take(who.guestId, posting ? 'post' : 'read');
   if (wait !== null) return refuse(429, 'rate-limited', { retryAfterSeconds: wait }, { 'Retry-After': String(wait) });
@@ -223,6 +240,8 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
         ok: true,
         guest: { guestId: who.guestId, name: who.name },
         conversation: { workspaceId: scope.workspaceId, threadId: scope.threadId },
+        // Messages from this moment on only (guestSeesCard).
+        readsFrom: new Date(who.createdAt).toISOString(),
         canPost: ctx.gates.input,
         limits: {
           textMax: GUEST_LIMITS.textMax, mentionsMax: GUEST_LIMITS.mentionsMax, pageMax: GUEST_LIMITS.pageMax,
@@ -231,10 +250,14 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
       },
     };
   }
-  return posting ? post(ctx, who, scope) : read(ctx, scope);
+  return posting ? post(ctx, who, scope) : read(ctx, scope, who.createdAt);
 }
 
-async function read(ctx: GuestRouteContext, scope: GuestScope): Promise<GuestRouteResponse> {
+/** The guest's conversation from the moment it was added, messages only
+ *  (guestSeesCard): what the owner and the bots said before, and wmux's own
+ *  lines, are never a guest's. A page may come back with fewer cards than
+ *  `limit` (even none) while `hasMore`; keep paging with `nextSinceSeq`. */
+async function read(ctx: GuestRouteContext, scope: GuestScope, since: number): Promise<GuestRouteResponse> {
   const sinceSeq = queryInt(ctx.query.get('sinceSeq'), 0, Number.MAX_SAFE_INTEGER);
   if (sinceSeq === null) return refuse(400, 'invalid-request', { detail: 'sinceSeq' });
   const limit = queryInt(ctx.query.get('limit'), 1, GUEST_LIMITS.pageMax);
@@ -257,7 +280,7 @@ async function read(ctx: GuestRouteContext, scope: GuestScope): Promise<GuestRou
   if (!page) return refuse(502, 'desktop-bad-reply');
   return {
     status: 200,
-    body: { ok: true, cards: page.cards.map(guestCardView), nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore },
+    body: { ok: true, cards: page.cards.filter((c) => guestSeesCard(c, since)).map(guestCardView), nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore },
   };
 }
 

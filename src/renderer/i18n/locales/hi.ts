@@ -676,4 +676,5 @@ export const hi = {
   'worktask.cleanup.detail.orphanUnlinked': 'कोई कार्य या कार्य रिकॉर्ड इससे जुड़ा नहीं है — जाँचें, फिर हटाएँ।',
   'worktask.cleanup.detail.orphanMeta': 'केवल कार्य रिकॉर्ड बचा है, worktree नहीं (हटाना बीच में रुक गया) — जाँचें, फिर हटाएँ।',
   'worktask.cleanup.detail.diskMissing': 'worktree डिस्क पर नहीं है (wmux के बाहर हटाया गया, या क्रैश) — साफ़ करने के लिए कार्य बंद करें।',
+  'botsPage.guest.readNotice': "अब से एक बाहरी बॉट इस बातचीत के संदेश पढ़ सकता है और इसमें लिख सकता है। जोड़े जाने से पहले कही गई बातें वह कभी नहीं देखता।",
 } as const;

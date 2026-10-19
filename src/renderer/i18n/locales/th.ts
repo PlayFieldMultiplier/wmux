@@ -675,4 +675,5 @@ export const th = {
   'worktask.cleanup.detail.orphanUnlinked': 'ไม่มีงานหรือบันทึกงานเชื่อมโยงกับรายการนี้ — ตรวจสอบ แล้วลบ',
   'worktask.cleanup.detail.orphanMeta': 'เหลือเพียงบันทึกงาน ไม่มี worktree (การลบถูกขัดจังหวะ) — ตรวจสอบ แล้วลบ',
   'worktask.cleanup.detail.diskMissing': 'ไม่พบ worktree บนดิสก์ (ถูกลบนอก wmux หรือเกิดการขัดข้อง) — ปิดงานเพื่อเคลียร์',
+  'botsPage.guest.readNotice': "นับจากนี้ บอตภายนอกจะอ่านข้อความในบทสนทนานี้และโพสต์ในนั้นได้ โดยจะไม่เห็นสิ่งที่พูดกันก่อนที่จะถูกเพิ่มเข้ามา",
 } as const;

@@ -55,7 +55,7 @@ describe('GuestBotStore', () => {
     const s = make();
     const { token } = await s.create({ name: 'Grok', scope: GROUP });
     const { guestId, secret } = secretOf(token);
-    expect(await s.resolve(guestId, secret)).toEqual({ ok: true, guestId, name: 'Grok', scope: GROUP });
+    expect(await s.resolve(guestId, secret)).toEqual({ ok: true, guestId, name: 'Grok', scope: GROUP, createdAt: clock });
     expect(s.stats().derivations).toBe(0);
     const again = make();
     expect(await again.resolve(guestId, secret)).toMatchObject({ ok: true, scope: GROUP });
@@ -75,6 +75,19 @@ describe('GuestBotStore', () => {
     expect(fresh.stats().derivations).toBe(spent);
     clock += GUEST_LIMITS.failureWindowMs;
     expect(await fresh.resolve(guestId, secret)).toMatchObject({ ok: true });
+  });
+
+  it('a wrong-secret flood never locks out a guest whose secret was verified already', async () => {
+    const s = make();
+    const { token } = await s.create({ name: 'Grok', scope: DM });
+    const { guestId, secret } = secretOf(token);
+    expect(await s.resolve(guestId, secret)).toMatchObject({ ok: true });
+    for (let i = 0; i < GUEST_LIMITS.failuresPerWindow * 3; i++) await s.resolve(guestId, 'B'.repeat(43));
+    const spent = s.stats().derivations;
+    expect(await s.resolve(guestId, secret)).toMatchObject({ ok: true });
+    // The budget still holds the flood: no derivation past it.
+    await s.resolve(guestId, 'C'.repeat(43));
+    expect(s.stats().derivations).toBe(spent);
   });
 
   it('revoke is immediate, survives a restart, and a failed write still refuses', async () => {

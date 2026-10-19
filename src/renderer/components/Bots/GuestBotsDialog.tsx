@@ -113,6 +113,12 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
   };
 
   const notes = gates ? guestGateNotes(gates) : [];
+  // The remote-access settings by the names the "web" panel shows them.
+  const gateVars = {
+    setting: notes.includes('botsPage.guest.gate.input') ? t('web.allowInput') : t('web.allowTranscript'),
+    https: t('web.tailscale').split(/\s*—\s*/)[0],
+    expose: t('web.expose'),
+  };
   return (
     <Dialog onClose={onClose} width={560} data-testid="bots-guest-dialog">
       <DialogHeader title={t('botsPage.guest.title')} closeLabel={t('settings.close')} />
@@ -130,7 +136,7 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
             <span className="text-[var(--text-main)]">{t('botsPage.guest.enable')}</span>
           </label>
           {gates?.enabled && notes.map((k) => (
-            <p key={k} role="status" data-guest-gate={k} className="rounded-[8px] bg-[var(--selection-subtle)] px-2 py-1 text-[var(--text-sub)]">{t(k)}</p>
+            <p key={k} role="status" data-guest-gate={k} className="rounded-[8px] bg-[var(--selection-subtle)] px-2 py-1 text-[var(--text-sub)]">{t(k, gateVars)}</p>
           ))}
 
           {fresh && (
@@ -166,6 +172,8 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
           {conversations.length === 0 ? (
             <p className="text-[var(--text-muted)]" data-guest-no-conversations>{t('botsPage.guest.noConversations')}</p>
           ) : (
+            <>
+            <p className="text-[var(--text-sub)]" data-guest-read-notice>{t('botsPage.guest.readNotice')}</p>
             <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); void add(); }}>
               <label className="flex min-w-[160px] flex-1 flex-col gap-1">
                 <span className="text-[var(--text-muted)]">{t('botsPage.guest.name')}</span>
@@ -181,6 +189,7 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
                 {t('botsPage.guest.add')}
               </Button>
             </form>
+            </>
           )}
           {error && <p role="alert" data-guest-error className="text-[var(--accent-red)]">{error}</p>}
         </div>

@@ -43,7 +43,7 @@ import {
 export const GUEST_BOTS_FILE = 'guest-bots.json';
 
 export type GuestAuthResult =
-  | { ok: true; guestId: string; name: string; scope: GuestScope }
+  | { ok: true; guestId: string; name: string; scope: GuestScope; /** ms; the guest reads nothing older. */ createdAt: number }
   | { ok: false; reason: 'unknown' | 'revoked' };
 
 interface StoredGuest {
@@ -193,7 +193,9 @@ export class GuestBotStore {
     const rec = typeof guestId === 'string' ? this.guests.get(guestId) : undefined;
     if (!rec) return REJECT_UNKNOWN;
     if (rec.revokedAt !== undefined) return REJECT_REVOKED;
-    if (this.overBudget(rec.guestId)) return REJECT_UNKNOWN;
+    // The wrong-secret budget is checked in verify(), after the cache: a
+    // flood of wrong secrets never locks out the guest whose secret was
+    // verified already.
     if (typeof secret !== 'string' || !parseGuestCredential(formatGuestCredential({ guestId: rec.guestId, secret }))) {
       this.noteFailure(rec.guestId);
       return REJECT_UNKNOWN;
@@ -201,7 +203,13 @@ export class GuestBotStore {
     if (!(await this.verify(rec, secret))) return REJECT_UNKNOWN;
     // Revoked while the derivation was in flight.
     if (rec.revokedAt !== undefined || this.guests.get(rec.guestId) !== rec) return REJECT_REVOKED;
-    return { ok: true, guestId: rec.guestId, name: rec.name, scope: { workspaceId: rec.workspaceId, threadId: rec.threadId as GuestScope['threadId'] } };
+    const createdAt = Date.parse(rec.createdAt);
+    return {
+      ok: true, guestId: rec.guestId, name: rec.name,
+      scope: { workspaceId: rec.workspaceId, threadId: rec.threadId as GuestScope['threadId'] },
+      // A record with no readable date reads nothing from before now.
+      createdAt: Number.isFinite(createdAt) ? createdAt : this.now(),
+    };
   }
 
   /** Note a successful request: in memory always, on disk at most once per LAST_SEEN_PERSIST_MS. */

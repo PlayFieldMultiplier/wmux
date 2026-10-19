@@ -244,3 +244,18 @@ export function parseGuestPostResult(raw: unknown): GuestPostResult | null {
 export function guestCardTitle(name: string): string {
   return `External guest: ${sanitizeGuestName(name) || 'Guest'}`;
 }
+
+/** The card kinds a guest reads: the conversation's messages (the owner's,
+ *  a bot's chat reply, report or opinion, a guest's). Never wmux's system
+ *  lines, tasks, plans, approvals, questions or requests. */
+export const GUEST_VISIBLE_KINDS: ReadonlySet<string> = new Set(['human', 'guest', 'status', 'report', 'opinion']);
+
+/** Whether a guest may read a card: a message kind written by its own kind of
+ *  author (the owner's words by the owner, a bot's by a bot, a guest card as
+ *  main writes it), at or after the moment the guest was added. Pure. */
+export function guestSeesCard(c: { kind: string; at: number; actor: { kind: string } }, guestCreatedAt: number): boolean {
+  if (!GUEST_VISIBLE_KINDS.has(c.kind) || !(c.at >= guestCreatedAt)) return false;
+  if (c.kind === 'human') return c.actor.kind === 'human';
+  if (c.kind === 'guest') return c.actor.kind === 'system';
+  return c.actor.kind === 'bot';
+}

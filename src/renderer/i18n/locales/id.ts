@@ -680,4 +680,5 @@ export const id = {
   'worktask.cleanup.detail.orphanUnlinked': 'Tidak ada tugas atau catatan tugas yang terhubung — periksa, lalu hapus.',
   'worktask.cleanup.detail.orphanMeta': 'Hanya catatan tugas yang tersisa, tanpa worktree (penghapusan terputus) — periksa, lalu hapus.',
   'worktask.cleanup.detail.diskMissing': 'Worktree tidak ada di disk (dihapus di luar wmux, atau crash) — tutup tugas untuk merapikannya.',
+  'botsPage.guest.readNotice': "Mulai sekarang, bot eksternal dapat membaca pesan dalam percakapan ini dan menulis di dalamnya. Bot itu tidak pernah melihat apa yang dikatakan sebelum ditambahkan.",
 } as const;

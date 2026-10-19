@@ -729,4 +729,5 @@ export const ja = {
   'worktask.cleanup.detail.orphanUnlinked': 'これにリンクするタスクもタスク記録もありません — 確認してから削除してください。',
   'worktask.cleanup.detail.orphanMeta': 'タスク記録だけが残り、worktree はありません（削除が中断されました）— 確認してから削除してください。',
   'worktask.cleanup.detail.diskMissing': 'worktree がディスク上にありません（wmux の外で削除されたか、クラッシュ）— タスクを閉じて整理してください。',
+  'botsPage.guest.readNotice': "今後、外部ボットがこの会話のメッセージを読み、投稿できるようになります。追加される前の内容は見えません。",
 } as const;

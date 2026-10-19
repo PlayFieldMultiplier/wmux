@@ -13,7 +13,7 @@ function resolver(over: Partial<GuestBotResolver> = {}): GuestBotResolver & { re
   return {
     enabled: () => true,
     resolve: vi.fn(async (id: string, secret: string) => (id === GUEST_ID && secret === SECRET
-      ? { ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE }
+      ? { ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 0 }
       : { ok: false as const, reason: 'unknown' as const })),
     touch: vi.fn(),
     ...over,
@@ -129,9 +129,47 @@ describe('guest routes: reading', () => {
     expect(d.request).toHaveBeenCalledWith(PHONE_ROOM_CARDS_COMMAND, { ...SCOPE, sinceSeq: 0, limit: 10 });
     expect(r.status).toBe(200);
     const cards = (r.body.cards as Array<Record<string, unknown>>);
-    expect(cards[0]).toEqual({ id: 'c1', seq: 1, at: 1, kind: 'human', from: { kind: 'owner' }, title: 'hi', body: 'hello there' });
-    // No approval id, no refs.
-    expect(JSON.stringify(cards[1])).not.toContain('apr-1');
+    expect(cards).toEqual([{ id: 'c1', seq: 1, at: 1, kind: 'human', from: { kind: 'owner' }, title: 'hi', body: 'hello there' }]);
+    // The approval card is not a message: no card, no approval id.
+    expect(JSON.stringify(r.body)).not.toContain('apr-1');
+  });
+
+  it('returns only messages written since the guest was added, with key patterns masked', async () => {
+    // Built at run time: no key-shaped literal in the source.
+    const key = ['sk', 'ant', 'api03', 'Ab1'.repeat(30)].join('-');
+    const d = desktop((_c, p) => ({
+      workspaceId: p.workspaceId, threadId: p.threadId, nextSinceSeq: 8, hasMore: false,
+      cards: [
+        { id: 'old', seq: 1, threadId: p.threadId, kind: 'human', at: 50, actor: { kind: 'human' }, title: 'before the guest' },
+        { id: 'own', seq: 2, threadId: p.threadId, kind: 'human', at: 100, actor: { kind: 'human' }, title: 'hi', body: `use ${key}` },
+        { id: 'sys', seq: 3, threadId: p.threadId, kind: 'fact', at: 101, actor: { kind: 'system' }, title: 'CI green on #3' },
+        { id: 'task', seq: 4, threadId: p.threadId, kind: 'dispatch', at: 102, actor: { kind: 'bot', botId: 'bot-0000aaaa' }, title: 'Started a worker' },
+        { id: 'ask', seq: 5, threadId: p.threadId, kind: 'question', at: 103, actor: { kind: 'bot', botId: 'bot-0000aaaa' }, title: 'Which branch?' },
+        { id: 'fake', seq: 6, threadId: p.threadId, kind: 'human', at: 104, actor: { kind: 'system' }, title: 'not the owner' },
+        { id: 'reply', seq: 7, threadId: p.threadId, kind: 'status', at: 105, actor: { kind: 'bot', botId: 'bot-0000aaaa', name: 'Dev' }, title: 'Hello!' },
+        { id: 'g', seq: 8, threadId: p.threadId, kind: 'guest', at: 106, actor: { kind: 'system' }, title: 'External guest: Grok', body: 'thanks' },
+      ],
+    }));
+    const guests = resolver({ resolve: vi.fn(async () => ({ ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 100 })) });
+    const r = await guestRouteResponse(ctx({ pathname: GUEST_ROUTES.messages, desktop: d, guests }));
+    const cards = r.body.cards as Array<{ id: string; body?: string; from: unknown }>;
+    expect(cards.map((c) => c.id)).toEqual(['own', 'reply', 'g']);
+    expect(cards[0].body).not.toContain(key);
+    expect(cards[2].from).toEqual({ kind: 'guest' });
+    expect(r.body.nextSinceSeq).toBe(8);
+    expect(await guestRouteResponse(ctx({ guests }))).toMatchObject({ body: { readsFrom: new Date(100).toISOString() } });
+  });
+
+  it('a gate refusal says which setting to turn on, by its name in wmux, never a flag', async () => {
+    const off = await guestRouteResponse(ctx({ guests: resolver({ enabled: () => false }) }));
+    const http = await guestRouteResponse(ctx({ gates: { transcript: true, input: true, transportRefusal: 'plain http' } }));
+    const read = await guestRouteResponse(ctx({ gates: { transcript: false, input: true, transportRefusal: null } }));
+    const write = await post({ clientMessageId: 'm1', text: 'hi' }, { gates: { transcript: true, input: false, transportRefusal: null } });
+    expect(off.body.message).toContain('Guest bots');
+    expect(http.body.message).toContain('Serve over HTTPS (needs Tailscale)');
+    expect(read.body.message).toContain('Conversation access');
+    expect(write.body.message).toContain('Allow input');
+    for (const r of [off, http, read, write]) expect(String(r.body.message)).not.toMatch(/--allow|TLS|tunnel/);
   });
 
   it('caps the page size', async () => {

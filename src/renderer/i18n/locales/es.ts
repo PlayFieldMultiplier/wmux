@@ -681,4 +681,5 @@ export const es = {
   'worktask.cleanup.detail.orphanUnlinked': 'Ninguna tarea ni registro de tarea lo enlaza — revísalo y luego elimínalo.',
   'worktask.cleanup.detail.orphanMeta': 'Solo queda el registro de la tarea, no el worktree (se interrumpió una eliminación) — revísalo y luego elimínalo.',
   'worktask.cleanup.detail.diskMissing': 'El worktree no está en el disco (eliminado fuera de wmux o por un fallo) — cierra la tarea para limpiarlo.',
+  'botsPage.guest.readNotice': "A partir de ahora, un bot externo puede leer los mensajes de esta conversación y publicar en ella. Nunca ve lo que se dijo antes de que se añadiera.",
 } as const;

@@ -681,4 +681,5 @@ export const ptBR = {
   'worktask.cleanup.detail.orphanUnlinked': 'Nenhuma tarefa ou registro de tarefa está ligado a ele — verifique e depois exclua.',
   'worktask.cleanup.detail.orphanMeta': 'Só resta o registro da tarefa, não o worktree (uma remoção foi interrompida) — verifique e depois exclua.',
   'worktask.cleanup.detail.diskMissing': 'O worktree não está no disco (excluído fora do wmux ou após uma falha) — feche a tarefa para limpar.',
+  'botsPage.guest.readNotice': "A partir de agora, um bot externo pode ler as mensagens desta conversa e publicar nela. Ele nunca vê o que foi dito antes de ser adicionado.",
 } as const;

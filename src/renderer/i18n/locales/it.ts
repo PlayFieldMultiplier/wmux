@@ -680,4 +680,5 @@ export const it = {
   'worktask.cleanup.detail.orphanUnlinked': 'Nessuna attività o record di attività vi è collegato — controlla, poi elimina.',
   'worktask.cleanup.detail.orphanMeta': 'Resta solo il record dell’attività, non il worktree (una rimozione è stata interrotta) — controlla, poi elimina.',
   'worktask.cleanup.detail.diskMissing': 'Il worktree manca dal disco (eliminato fuori da wmux o per un crash) — chiudi l’attività per sistemarlo.',
+  'botsPage.guest.readNotice': "Da ora un bot esterno può leggere i messaggi di questa conversazione e scrivervi. Non vede mai ciò che è stato detto prima della sua aggiunta.",
 } as const;

@@ -681,4 +681,5 @@ export const ms = {
   'worktask.cleanup.detail.orphanUnlinked': 'Tiada tugasan atau rekod tugasan yang dipautkan — semak, kemudian padam.',
   'worktask.cleanup.detail.orphanMeta': 'Hanya rekod tugasan yang tinggal, tanpa worktree (pengalihan keluar terganggu) — semak, kemudian padam.',
   'worktask.cleanup.detail.diskMissing': 'Worktree tiada pada cakera (dipadam di luar wmux, atau ranap) — tutup tugasan untuk membersihkannya.',
+  'botsPage.guest.readNotice': "Mulai sekarang, bot luaran boleh membaca mesej dalam perbualan ini dan menulis di dalamnya. Ia tidak pernah melihat apa yang dikatakan sebelum ia ditambah.",
 } as const;

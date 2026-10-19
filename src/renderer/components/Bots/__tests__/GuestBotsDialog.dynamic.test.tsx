@@ -129,6 +129,25 @@ describe('GuestBotsDialog', () => {
     expect(port.setEnabled).toHaveBeenCalledWith(true);
   });
 
+  it('says, before a guest is added, that it reads this conversation from now on', async () => {
+    await open(fakePort());
+    expect(q('[data-guest-read-notice]')?.textContent).toBe(en['botsPage.guest.readNotice']);
+  });
+
+  it('a gate note names the setting to turn on as the web panel names it, never a flag', async () => {
+    await open(fakePort([], { ...GATES, transcript: false }));
+    const note = q('[data-guest-gate="botsPage.guest.gate.transcript"]')?.textContent ?? '';
+    expect(note).toContain(`"${en['web.allowTranscript']}"`);
+    expect(note).not.toMatch(/--allow|transcript/);
+    act(() => root.unmount());
+    root = createRoot(host);
+    await open(fakePort([], { ...GATES, secureTransport: false, input: false }));
+    expect(q('[data-guest-gate="botsPage.guest.gate.input"]')?.textContent).toContain(`"${en['web.allowInput']}"`);
+    const transport = q('[data-guest-gate="botsPage.guest.gate.transport"]')?.textContent ?? '';
+    expect(transport).toContain('"Serve over HTTPS (needs Tailscale)"');
+    expect(transport).toContain(`"${en['web.expose']}"`);
+  });
+
   it('names the remote-access gates still in the way', () => {
     expect(guestGateNotes(GATES)).toEqual([]);
     expect(guestGateNotes({ ...GATES, serverRunning: false, secureTransport: false })).toEqual(['botsPage.guest.gate.server']);
