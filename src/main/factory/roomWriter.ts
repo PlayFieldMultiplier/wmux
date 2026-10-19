@@ -54,6 +54,7 @@ import { redactStoredSecrets, redactStoredSecretsDeep } from './secretRedaction'
 import type { BotDirectoryApi, FactLogApi, WakeSinkApi } from './triggerEngine';
 import type { BotGroup } from '../../shared/botGroup';
 import { parseRoomAttachments } from '../../shared/roomAttachments';
+import { parseRoomFiles } from './roomFiles';
 
 export const ROOMS_DIRNAME = 'rooms';
 
@@ -451,6 +452,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
   const jobChange = c.kind === 'job_changed' ? sanitizeJobChange(c.jobChange) : undefined;
   const notice = actor.kind === 'system' ? sanitizeNotice(c.notice) : undefined;
   const attachments = c.kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(c.attachments) : undefined;
+  const files = actor.kind === 'bot' ? parseRoomFiles(c.files) : undefined;
   return {
     version: 1,
     id: c.id,
@@ -471,6 +473,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(c.greeting === true && c.kind === 'question' ? { greeting: true as const } : {}),
     ...(notice ? { notice } : {}),
     ...(attachments ? { attachments } : {}),
+    ...(files ? { files } : {}),
   };
 }
 
@@ -510,6 +513,9 @@ export interface RoomCardInput {
   /** The owner's `human` cards only (RoomCard.attachments): photos already
    *  in the room's store. */
   attachments?: RoomCard['attachments'];
+  /** Bot cards only (RoomCard.files): files already in the room's file
+   *  store (roomFiles.ts). */
+  files?: RoomCard['files'];
 }
 
 /** A post from a bot or the owner: idempotent by clientPostId, and a replyTo
@@ -722,6 +728,7 @@ export class RoomWriter {
     const jobChange = input.kind === 'job_changed' ? sanitizeJobChange(redactStoredSecretsDeep(input.jobChange)) : undefined;
     const notice = actor.kind === 'system' ? sanitizeNotice(redactStoredSecretsDeep(input.notice)) : undefined;
     const attachments = input.kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(input.attachments) : undefined;
+    const files = actor.kind === 'bot' ? parseRoomFiles(input.files) : undefined;
     // A fact delivered twice (a re-subscribe, a replay) writes one card.
     const factKey = refs?.factId ? factCardKey({ refs, threadId, kind: input.kind }) : null;
     if (factKey && state.seenFacts.has(factKey)) return null;
@@ -743,6 +750,7 @@ export class RoomWriter {
       ...(input.greeting === true && input.kind === 'question' ? { greeting: true as const } : {}),
       ...(notice ? { notice } : {}),
       ...(attachments ? { attachments } : {}),
+      ...(files ? { files } : {}),
       ...(extra?.replyTo ? { replyTo: extra.replyTo } : {}),
       ...(extra?.clientPostId ? { clientPostId: extra.clientPostId } : {}),
     };

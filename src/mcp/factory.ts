@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { BOT_ID_RE, BOT_RPC } from '../shared/bot';
 import { BOT_POSTABLE_CARD_KINDS, ROOM_LIMITS, ROOM_RPC } from '../shared/room';
 import { ASK_PERSON_RPC, HANDOFF_LIMITS, HANDOFF_RPC } from '../shared/handoff';
+import { ROOM_FILE_LIMITS } from '../shared/roomFiles';
 import { registerToolModule } from './toolModules';
 
 const THREAD_ID = z
@@ -56,7 +57,8 @@ registerToolModule({
       'Post one typed card into your workspace\'s room — the record the owner and the other bots read. '
         + `kind is your output: ${BOT_POSTABLE_CARD_KINDS.join(', ')}. It lands in the thread you were woken for `
         + 'unless you name another. To speak to other bots, put their bot ids (bot_list) in mentions: each is woken once '
-        + 'with your card. A name in the text notifies nobody. Returns the card with its id and seq (duplicate: true when '
+        + 'with your card. A name in the text notifies nobody. To hand the owner files you made (a report, a spec, a diff), '
+        + 'list their paths in files: wmux copies each onto the card, and the owner opens it from there. Returns the card with its id and seq (duplicate: true when '
         + 'this turn already posted it) and, per mention, whether it was delivered.',
       {
         kind: z.enum(BOT_POSTABLE_CARD_KINDS as unknown as [string, ...string[]]).describe('The card kind.'),
@@ -67,9 +69,11 @@ registerToolModule({
         refs: REFS,
         mentions: z.array(BOT_ID).max(ROOM_LIMITS.MENTIONS_MAX).optional()
           .describe('Bot ids this card speaks to (any workspace, never yourself); each is woken once.'),
+        files: z.array(z.string().min(1).max(4096)).max(ROOM_FILE_LIMITS.PER_CARD).optional()
+          .describe(`Up to ${ROOM_FILE_LIMITS.PER_CARD} files you made, each at most ${ROOM_FILE_LIMITS.MAX_BYTES / (1024 * 1024)} MiB: absolute paths inside your repository, one of your task folders or your bot folder, or paths relative to your repository. One file that cannot be taken refuses the whole post, saying why.`),
       },
-      async ({ kind, title, body, thread_id, reply_to, refs, mentions }) =>
-        call(ROOM_RPC.post, { kind, title, body, threadId: thread_id, replyTo: reply_to, refs, mentions }),
+      async ({ kind, title, body, thread_id, reply_to, refs, mentions, files }) =>
+        call(ROOM_RPC.post, { kind, title, body, threadId: thread_id, replyTo: reply_to, refs, mentions, files }),
     );
 
     host.tool(

@@ -46,7 +46,7 @@ import {
 import type { RpcContext } from '../../../shared/rpc';
 import type { WakeItem } from '../../../shared/wake';
 import { resolveThreadDecision } from '../../deck/deckDecisionStore';
-import { setBotRuntimePorts } from '../../factory/BotRuntime';
+import { botCwd, setBotRuntimePorts } from '../../factory/BotRuntime';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle, type FactoryRouter } from '../../factory/factoryHost';
 import { getHandoffRouter } from '../../factory/handoffRouter';
 import { redactStoredSecrets } from '../../factory/secretRedaction';
@@ -78,6 +78,9 @@ import { humanAddressee, parseMentions, postHumanMessage } from '../../factory/h
 import { parseResolution } from '../../factory/morningReport';
 import { getRoomAttachmentStore, type RoomAttachmentStore } from '../../factory/roomAttachments';
 import { parseRoomAttachments, type RoomAttachment } from '../../../shared/roomAttachments';
+import { getRoomFileStore, type RoomFileStore } from '../../factory/roomFiles';
+import { ROOM_FILE_LIMITS, type RoomFile } from '../../../shared/roomFiles';
+import { getTaskFolderPorts, taskFolderKind } from '../../factory/taskFolderCleanup';
 
 // The owner's messages (shared with the phone) live in factory/humanMessage.ts.
 export { humanAddressee, postHumanMessage };
@@ -127,6 +130,90 @@ export interface RoomHandlerDeps {
   wmuxDir: () => string;
   /** The room's photo store. Default: the factory's. */
   attachments?: () => RoomAttachmentStore | null;
+  /** The room's file store (bot cards' `files`). Default: the factory's. */
+  files?: () => RoomFileStore | null;
+  /** The folders a bot's `files` may come from. Default: botFileRoots. */
+  fileRoots?: (bot: BotBinding) => Promise<BotFileRoots>;
+}
+
+/** Where a bot's `files` may come from, and what a relative path means. */
+export interface BotFileRoots {
+  /** Absolute folders: the bot's repository, its own folder, its tasks'. */
+  roots: string[];
+  /** The repository a relative path is read from, when the bot has one. */
+  base?: string;
+  /** Some of its task folders could not be listed (the daemon did not answer). */
+  tasksUnread?: true;
+}
+
+/** The folders a bot's files may come from: its profile's repository, its
+ *  own folder (`factory/bots/<id>`, which holds its research tasks'
+ *  folders), and the worktrees of the bot's own tasks (the ledger rows it
+ *  started, by the folder the daemon's mission names, and the folders a
+ *  stop kept). Another bot's or the owner's worktrees are never included,
+ *  nor a worktree detached to the owner. */
+export async function botFileRoots(bot: BotBinding, deps: Pick<RoomHandlerDeps, 'ports' | 'wmuxDir'>): Promise<BotFileRoots> {
+  let profile: BotProfile | null = null;
+  try {
+    profile = deps.ports().bots?.get(bot.botId) ?? null;
+  } catch {
+    profile = null;
+  }
+  const repo = profile?.repo?.repoPath && path.isAbsolute(profile.repo.repoPath) ? profile.repo.repoPath : undefined;
+  const roots = [botCwd(deps.wmuxDir(), bot.botId), ...(repo ? [repo] : [])];
+  let tasksUnread = false;
+  const folders = getTaskFolderPorts();
+  if (folders) {
+    const own = folders.allRows().filter((r) => r.dispatch?.origin.kind === 'bot' && r.dispatch.origin.botId === bot.botId);
+    const owners = [...new Set(own.map((r) => r.ownerWorkspaceId))];
+    for (const owner of owners) {
+      const missions = await folders.missions(owner).catch(() => null);
+      if (!missions) { tasksUnread = true; continue; }
+      for (const row of own) {
+        if (row.ownerWorkspaceId !== owner) continue;
+        const m = missions.get(row.id);
+        if (m && m.detached !== true && taskFolderKind(m.folder, m.branch, bot.botId, folders.roots) === 'worktree') roots.push(m.folder);
+      }
+    }
+    for (const rec of folders.store.all()) {
+      if (rec.stopped?.botId === bot.botId && rec.kind === 'worktree' && rec.state !== 'removed'
+        && taskFolderKind(rec.path, rec.branch, bot.botId, folders.roots) === 'worktree') roots.push(rec.path);
+    }
+  }
+  return { roots: [...new Set(roots)], ...(repo ? { base: repo } : {}), ...(tasksUnread ? { tasksUnread: true as const } : {}) };
+}
+
+/** One path of a bot's `files` as the refusal names it. */
+function fileLabel(index: number, value: string): string {
+  return `files[${index}] ${JSON.stringify(value.length > 200 ? `${value.slice(0, 200)}…` : value)}`;
+}
+
+/** Copy the files a bot named into the room's file store, all or none. */
+async function copyBotFiles(
+  bot: BotBinding,
+  paths: readonly string[],
+  deps: RoomHandlerDeps,
+): Promise<{ ok: true; files: RoomFile[]; store: RoomFileStore } | FactoryRefusal<'file' | 'not_started'>> {
+  const store = deps.files ? deps.files() : getRoomFileStore();
+  if (!store) return refusal('not_started', 'the room\'s file store is not running yet');
+  const where = await (deps.fileRoots ? deps.fileRoots(bot) : botFileRoots(bot, deps));
+  const files: RoomFile[] = [];
+  for (const [index, given] of paths.entries()) {
+    let source: string | null = path.isAbsolute(given) ? given : where.base ? path.resolve(where.base, given) : null;
+    if (!source) {
+      store.remove(bot.workspaceId, files.map((f) => f.id));
+      return refusal('file', `${fileLabel(index, given)}: a relative path is read from your repository, and you have none; give an absolute path`);
+    }
+    source = path.normalize(source);
+    const r = store.copyIn(bot.workspaceId, source, where.roots);
+    if (!r.ok) {
+      store.remove(bot.workspaceId, files.map((f) => f.id));
+      const unread = r.reason === 'outside' && where.tasksUnread ? ' (your task folders could not be listed just now; try again)' : '';
+      return refusal('file', `${fileLabel(index, given)}: ${r.message}${unread}. Nothing was posted.`);
+    }
+    files.push(r.file);
+  }
+  return { ok: true, files, store };
 }
 
 /** The operator's stored photos, undefined for none, null when one is not a
@@ -167,9 +254,17 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
   const mentions = p.mentions === undefined ? undefined : parseMentions(p.mentions);
   if (mentions === null) return refusal('invalid', `mentions must be at most ${ROOM_LIMITS.MENTIONS_MAX} bot ids`);
 
+  const filePaths = (p as { files?: unknown }).files;
+
   if (caller.kind === 'bot') {
     const bot = caller.bot;
     if (!botHasTool(bot, 'room_post')) return refusal('surface', 'room_post is not on the bot surface');
+    if (filePaths !== undefined && (!Array.isArray(filePaths) || filePaths.some((f) => typeof f !== 'string' || !f || f.length > 4096))) {
+      return refusal('invalid', 'files must be a list of file paths');
+    }
+    if (Array.isArray(filePaths) && filePaths.length > ROOM_FILE_LIMITS.PER_CARD) {
+      return refusal('invalid', `a card carries at most ${ROOM_FILE_LIMITS.PER_CARD} files; this one names ${filePaths.length}`);
+    }
     if (!(BOT_POSTABLE_CARD_KINDS as readonly unknown[]).includes(p.kind)) {
       return refusal('card_kind', `a bot posts one of: ${BOT_POSTABLE_CARD_KINDS.join(', ')}`);
     }
@@ -193,6 +288,15 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     // opened thread drops the parent it named in the conversation.
     const replyTo = (pinned === namedThread ? p.replyTo : undefined) ?? wakeReplyTo(writer, wake, bot.workspaceId, threadId);
     const { valid, dropped } = settleMentions(ports, bot, mentions ?? []);
+    // Files are copied once per post: a repeat whose card is up keeps that
+    // card's files and reads nothing (the task folder may be gone by then).
+    const prior = clientPostId ? writer.find(bot.workspaceId, (c) => c.clientPostId === clientPostId) : null;
+    let copied: { files: RoomFile[]; store: RoomFileStore } | null = null;
+    if (Array.isArray(filePaths) && filePaths.length > 0 && !prior) {
+      const c = await copyBotFiles(bot, filePaths as string[], deps);
+      if (!c.ok) return c;
+      copied = c;
+    }
     const r = writer.post({
       workspaceId: bot.workspaceId,
       threadId,
@@ -204,7 +308,14 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
       ...(p.kind === 'proposal' || p.kind === 'plan' ? { state: 'open' as const } : {}),
       ...(replyTo ? { replyTo } : {}),
       ...(clientPostId ? { clientPostId } : {}),
+      ...(copied ? { files: copied.files } : {}),
     });
+    // Copies no card took (a refused post, or one that found its card) go.
+    if (copied) {
+      const kept = new Set((r.ok ? r.card.files ?? [] : []).map((f) => f.id));
+      const orphans = copied.files.filter((f) => !kept.has(f.id)).map((f) => f.id);
+      if (orphans.length > 0) copied.store.remove(bot.workspaceId, orphans);
+    }
     if (!r.ok) return r;
     // The card's own addressees wake (a repeat of the post routes the same
     // ones again, which the router answers from its records: no bot wakes
@@ -225,6 +336,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
 
   // The operator: a human message.
   if (p.kind !== undefined && p.kind !== 'human') return refusal('card_kind', 'the owner posts human cards');
+  if (filePaths !== undefined) return refusal('invalid', 'files are attached by bots; the owner sends photos');
   if (!isRoomWorkspaceId(p.workspaceId)) return refusal('invalid', 'workspaceId is required');
   if (p.to !== undefined && !isBotRole(p.to)) return refusal('invalid', 'to is not a bot role');
   // Photos the renderer's room bridge already copied into the room's store

@@ -393,7 +393,9 @@ export function phoneRoomCard(
         return { kind: 'bot' as const, botId: card.actor.botId, ...(info ? { role: info.role, name: info.name } : {}) };
       })()
     : { kind: card.actor.kind };
-  const { clientPostId, ...rest } = card;
+  // A bot card's files reach the phone in a later contract change.
+  const { clientPostId, files: _files, ...rest } = card;
+  void _files;
   const sent = clientPostId ? PHONE_POST_ID.exec(clientPostId)?.[1] : undefined;
   const approvalId = card.kind === 'approval' ? card.refs?.approvalId : undefined;
   const action = approvalId && approvalAction ? approvalAction(approvalId) : null;

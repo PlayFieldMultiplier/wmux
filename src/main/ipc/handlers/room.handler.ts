@@ -16,7 +16,7 @@
 // the runtime has started.
 import fs from 'node:fs';
 import path from 'node:path';
-import type { BrowserWindow, OpenDialogOptions } from 'electron';
+import type { BrowserWindow, OpenDialogOptions, SaveDialogOptions } from 'electron';
 import { isMainWindowSender } from '../mainWindowSender';
 import { dialog, ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
@@ -32,6 +32,8 @@ import { getFactorySettingsStore } from '../../factory/factorySettings';
 import { getRoomAttachmentStore, type RoomAttachmentStore } from '../../factory/roomAttachments';
 import { ROOM_ATTACHMENT_ID_RE, ROOM_ATTACHMENT_LIMITS, type RoomAttachment } from '../../../shared/roomAttachments';
 import { resolveAccessiblePath } from './fs.handler';
+import { getRoomFileStore, isRoomFileText, type RoomFileStore } from '../../factory/roomFiles';
+import { ROOM_FILE_ID_RE, type RoomFile, type RoomFileReadResult, type RoomFileSaveResult } from '../../../shared/roomFiles';
 
 /** What the dock needs to know about the factory. */
 export interface RoomFactoryState {
@@ -69,6 +71,10 @@ export interface RoomIpcPorts {
   resolvePath?: (file: string) => Promise<string | null>;
   /** The composer's photo picker. */
   pickFiles?: () => Promise<string[] | null>;
+  /** The room's file store (roomFiles.ts): files bots attached to cards. */
+  files?: () => RoomFileStore | null;
+  /** Where to save a copy of a bot's file (a save dialog); null when cancelled. */
+  pickSavePath?: (defaultName: string) => Promise<string | null>;
 }
 
 /** A bot as a card author. A removed one (`removed`) keeps its name, its
@@ -140,7 +146,7 @@ export function registerRoomIpcHandlers(getWindow: () => BrowserWindow | null, p
   };
   const bots = ports.bots ?? (() => getBotStore()?.list() ?? []);
   const removedBots = ports.removedBots ?? (() => getBotStore()?.listRemoved() ?? []);
-  const channels = [IPC.ROOM_STATUS, IPC.ROOM_READ, IPC.ROOM_THREADS, IPC.ROOM_POST, IPC.ROOM_RESOLVE, IPC.ROOM_DECISION, IPC.ROOM_ACTORS, IPC.ROOM_ATTACHMENT, IPC.ROOM_PICK_ATTACHMENTS];
+  const channels = [IPC.ROOM_STATUS, IPC.ROOM_READ, IPC.ROOM_THREADS, IPC.ROOM_POST, IPC.ROOM_RESOLVE, IPC.ROOM_DECISION, IPC.ROOM_ACTORS, IPC.ROOM_ATTACHMENT, IPC.ROOM_PICK_ATTACHMENTS, IPC.ROOM_FILE_READ, IPC.ROOM_FILE_SAVE];
   for (const c of channels) ipcMain.removeHandler(c);
 
   // Every channel acts with the operator's authority, so every one checks
@@ -166,6 +172,10 @@ export function registerRoomIpcHandlers(getWindow: () => BrowserWindow | null, p
     writer, store: photos, resolvePath, posting,
   }))));
   ipcMain.handle(IPC.ROOM_ATTACHMENT, wrapHandler(IPC.ROOM_ATTACHMENT, operatorOnly((raw) => roomPhoto(raw, writer(), photos()))));
+  // A bot's file on its card: read for the side panel, or saved elsewhere.
+  const files = ports.files ?? getRoomFileStore;
+  ipcMain.handle(IPC.ROOM_FILE_READ, wrapHandler(IPC.ROOM_FILE_READ, operatorOnly((raw) => roomFileRead(raw, writer(), files()))));
+  ipcMain.handle(IPC.ROOM_FILE_SAVE, wrapHandler(IPC.ROOM_FILE_SAVE, operatorOnly((raw) => roomFileSave(raw, writer(), files(), ports.pickSavePath ?? ((name) => pickSavePath(getWindow, name))))));
   ipcMain.handle(IPC.ROOM_PICK_ATTACHMENTS, wrapHandler(IPC.ROOM_PICK_ATTACHMENTS, operatorOnly(async () => (await (ports.pickFiles ?? (() => pickPhotos(getWindow)))()) ?? [])));
   ipcMain.handle(IPC.ROOM_RESOLVE, wrapHandler(IPC.ROOM_RESOLVE, operatorOnly((raw) => call(ROOM_RPC.resolve, raw))));
   // The decision behind a question card (its options), for answering it.
@@ -315,4 +325,59 @@ async function pickPhotos(getWindow: () => BrowserWindow | null): Promise<string
   const win = getWindow();
   const r = win && !win.isDestroyed() ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
   return r.canceled ? null : r.filePaths.slice(0, ROOM_ATTACHMENT_LIMITS.PER_MESSAGE);
+}
+
+// ── Bot files ──────────────────────────────────────────────────────────────
+
+/** A file of a kept bot card of that room, and where its copy is. */
+function cardFile(raw: unknown, writer: RoomWriter | null, store: RoomFileStore | null): { workspaceId: string; meta: RoomFile } | null {
+  const { workspaceId, fileId } = obj(raw);
+  if (!isRoomWorkspaceId(workspaceId) || typeof fileId !== 'string' || !ROOM_FILE_ID_RE.test(fileId) || !writer || !store) return null;
+  const card = writer.find(workspaceId, (c) => c.actor.kind === 'bot' && !!c.files?.some((f) => f.id === fileId));
+  const meta = card?.files?.find((f) => f.id === fileId);
+  return meta ? { workspaceId, meta } : null;
+}
+
+/** ROOM_FILE_READ: a text file as UTF-8 text, anything else as a data URL. */
+export function roomFileRead(raw: unknown, writer: RoomWriter | null, store: RoomFileStore | null): RoomFileReadResult {
+  const found = cardFile(raw, writer, store);
+  if (!found || !store) return { ok: false, error: 'no such file in this room' };
+  const data = store.read(found.workspaceId, found.meta.id);
+  if (!data) return { ok: false, error: 'the file is no longer stored' };
+  return isRoomFileText(found.meta.mediaType)
+    ? { ok: true, file: found.meta, text: data.toString('utf8') }
+    : { ok: true, file: found.meta, dataUrl: `data:${found.meta.mediaType};base64,${data.toString('base64')}` };
+}
+
+/** ROOM_FILE_SAVE: copy the stored file where the owner picks. */
+export async function roomFileSave(
+  raw: unknown,
+  writer: RoomWriter | null,
+  store: RoomFileStore | null,
+  pick: (defaultName: string) => Promise<string | null>,
+): Promise<RoomFileSaveResult> {
+  const found = cardFile(raw, writer, store);
+  if (!found || !store) return { ok: false, error: 'no such file in this room' };
+  const target = await pick(found.meta.name);
+  if (!target) return { ok: false, canceled: true };
+  const data = store.read(found.workspaceId, found.meta.id);
+  if (!data) return { ok: false, error: 'the file is no longer stored' };
+  try {
+    await fs.promises.writeFile(target, data);
+  } catch (err) {
+    return { ok: false, error: `the file could not be saved: ${(err as NodeJS.ErrnoException)?.code ?? String(err)}` };
+  }
+  return { ok: true, savedTo: target };
+}
+
+/** The save dialog, named after the file. An isolated instance
+ *  (WMUX_DATA_SUFFIX) started with WMUX_TEST_ROOM_FILE_SAVE_DIR saves into
+ *  that folder instead of asking, so a live check can drive it. */
+async function pickSavePath(getWindow: () => BrowserWindow | null, defaultName: string): Promise<string | null> {
+  const testDir = process.env.WMUX_DATA_SUFFIX ? process.env.WMUX_TEST_ROOM_FILE_SAVE_DIR : undefined;
+  if (testDir) return path.join(testDir, defaultName);
+  const opts: SaveDialogOptions = { defaultPath: defaultName };
+  const win = getWindow();
+  const r = win && !win.isDestroyed() ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+  return r.canceled || !r.filePath ? null : r.filePath;
 }

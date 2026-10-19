@@ -65,6 +65,7 @@ import { onBotHook, type BotHookEvent } from './botHooks';
 import { normalizeRepoKey } from './repoWatch';
 import { setFactoryTriggerPorts, type BotDirectoryApi, type FactLogApi, type FactoryTrustApi } from './triggerEngine';
 import { ROOM_ATTACHMENTS_DIRNAME, RoomAttachmentStore, cardImages, getRoomAttachmentStore, setRoomAttachmentStore } from './roomAttachments';
+import { ROOM_FILES_DIRNAME, RoomFileStore, setRoomFileStore } from './roomFiles';
 import { capBody, getRoomWriter, oneLine, setFactoryRoomPorts, type FactoryRoomPorts, type RoomBotHookEvent, type RoomWriter, type RunningWake } from './roomWriter';
 import { getBotRuntime, setBotRuntimePorts } from './BotRuntime';
 import { getHandoffRouter, summarizeHandoff } from './handoffRouter';
@@ -805,6 +806,10 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   });
   photos.sweep();
   setRoomAttachmentStore(photos);
+  // The files bots attach to their cards: swept by age the same way (roomFiles.ts).
+  const roomFiles = new RoomFileStore({ root: path.join(deps.wmuxDir(), 'factory', ROOM_FILES_DIRNAME) });
+  roomFiles.sweep();
+  setRoomFileStore(roomFiles);
   setFactoryPhoneMessageHandler((payload) => factoryPhoneMessageSaved(payload, { settings, writer: getRoomWriter, ports: roomPorts }));
 
   const morning = new MorningSchedule({
@@ -994,6 +999,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       hooks.dispose();
       setFactoryPhoneMessageHandler(null);
       setRoomAttachmentStore(null);
+      setRoomFileStore(null);
       cursor.flush();
     },
   };

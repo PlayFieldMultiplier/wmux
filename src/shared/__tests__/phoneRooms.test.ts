@@ -37,6 +37,13 @@ describe('phone room cards', () => {
     expect(phoneRoomCard(card(8, { attachments: [photo] }), () => null)).not.toHaveProperty('attachments');
   });
 
+  it("leaves a bot card's files off the phone wire for now", () => {
+    const files = [{ id: 'b'.repeat(32), name: 'report.md', mediaType: 'text/markdown', bytes: 12 }];
+    const out = phoneRoomCard(card(9, { files }), () => ({ role: 'lead', name: 'Lead' }));
+    expect(out).not.toBeNull();
+    expect(out).not.toHaveProperty('files');
+  });
+
   it("gives an owner card a phone sent its clientMessageId, and no other card any id", () => {
     const human = { kind: 'human' as const, actor: { kind: 'human' as const } };
     const owner = phoneRoomCard(card(4, { ...human, clientPostId: 'phone:0123456789abcdef:msg-1' }), () => null);

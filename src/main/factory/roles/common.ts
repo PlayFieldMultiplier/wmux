@@ -42,7 +42,7 @@ export const WORKER_FRESH_MAIN =
   'A worker brings in fresh main, or settles a conflict with it, with its task_fetch tool (wmux fetches with its own credentials), running the `git fetch` line it returns, then `git merge origin/<default branch>`: that works where the worker\'s own `git fetch` has no credentials.';
 
 export const COMMON_POWERS: Readonly<Record<string, string>> = {
-  room_post: 'post one typed card into your workspace\'s room; the card kind is the output it carries. To speak to other bots, put their bot ids in mentions: each one is woken once.',
+  room_post: 'post one typed card into your workspace\'s room; the card kind is the output it carries. To speak to other bots, put their bot ids in mentions: each one is woken once. To hand the owner files you or your workers made (a report, a spec, a diff), list their paths in files; the owner opens them from the card.',
   room_read: 'read your room or one thread of it, oldest first, paging with since_seq.',
   handoff_send: 'hand work to another bot or report back on work handed to you; to_bot_id names one bot in any workspace, and wmux wakes it.',
   ask_person: 'put a question to the owner as a question card (and on their phone), with options when the answer is a choice; their answer wakes you.',
