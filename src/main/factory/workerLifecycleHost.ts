@@ -14,7 +14,7 @@ import { BOT_EVENT } from '../../shared/bot';
 import { sanitizePtyText } from '../../shared/types';
 import { eventBus } from '../events/EventBus';
 import { getLastBroadcastAgentStatus, hasOutstandingRunningClaim } from '../ipc/handlers/metadata.handler';
-import { lastHookTurnStart, lastTurnEnd } from '../notification/turnEvidence';
+import { lastHookTurnStart, lastTurnEnd, promptOpenSince } from '../notification/turnEvidence';
 import { lastUserInputAt } from '../notification/idleSuppression';
 import { botWorkerSessionRecord, guardSessionLaunch } from '../agents/botWorkerMergeGuard';
 import { getTaskLedger } from '../deck/taskLedgerHost';
@@ -314,11 +314,13 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       const turnStartAt = lastHookTurnStart(id);
       const turnEndAt = lastTurnEnd(id);
       const inputAt = lastUserInputAt(id);
+      const promptAt = promptOpenSince(id);
       return mergePaneActivity({
         ...(status !== undefined ? { status } : {}),
         ...(turnStartAt !== undefined ? { turnStartAt } : {}),
         ...(turnEndAt !== undefined ? { turnEndAt } : {}),
         ...(inputAt !== undefined ? { inputAt } : {}),
+        ...(promptAt !== undefined ? { promptAt } : {}),
       }, turnSeed.activity(id));
     };
     // Shown protects a worker only while the owner typed into it or focused

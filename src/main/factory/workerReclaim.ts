@@ -523,6 +523,8 @@ export interface PaneActivity {
   turnEndAt?: number;
   /** When someone last typed into it. */
   inputAt?: number;
+  /** When its open prompt (`awaiting_input`) went out. */
+  promptAt?: number;
 }
 
 /**
@@ -565,11 +567,14 @@ export function pauseDue(
 
 /** Whether a worker waits on a prompt the owner can still answer, left so
  *  for `ms` at `now`: a pane shows one (`awaiting_input`: an approval or a
- *  y/N gate mid-turn, which no idle stop ever stops), none runs a turn, and
- *  nothing happened in any pane for `ms` since `floor`, its last turn start,
- *  turn end and input. No panes: no. Pure. */
+ *  y/N gate mid-turn, which no idle stop ever stops) that went out at least
+ *  `ms` ago (`promptAt`; unknown: no), none runs a turn, and nothing
+ *  happened in any pane for `ms` since `floor`, its last turn start, turn end
+ *  and input. No panes: no. Pure. */
 export function workerPromptWaiting(panes: readonly PaneActivity[], floor: number, now: number, ms: number): boolean {
-  if (!panes.some((p) => p.status === 'awaiting_input') || panes.some((p) => p.status === 'running')) return false;
+  const prompts = panes.filter((p) => p.status === 'awaiting_input');
+  if (prompts.length === 0 || panes.some((p) => p.status === 'running')) return false;
+  if (!prompts.every((p) => p.promptAt !== undefined && now - p.promptAt >= ms)) return false;
   return panes.every((p) => now - Math.max(floor, p.turnStartAt ?? -Infinity, p.turnEndAt ?? -Infinity, p.inputAt ?? -Infinity) >= ms);
 }
 
@@ -689,6 +694,7 @@ export function mergePaneActivity(live: PaneActivity, seeded: Pick<PaneActivity,
     ...(live.turnStartAt !== undefined ? { turnStartAt: live.turnStartAt } : {}),
     ...(turnEndAt !== undefined ? { turnEndAt } : {}),
     ...(inputAt !== undefined ? { inputAt } : {}),
+    ...(live.promptAt !== undefined ? { promptAt: live.promptAt } : {}),
   };
 }
 
@@ -1300,7 +1306,7 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     if (inFlight.has(entry.id) || (ended === 'reported' ? isPausedSince(prior, entry) : isReclaimedSince(prior, entry))) return;
     // Per end: a task that reopened and ended again is tried afresh, and so
     // is an open row's worker resumed since its last stop.
-    const key = `${entry.id}@${entry.rev}${prior?.state === 'resumed' ? `:${prior.at}` : ''}`;
+    const key = `${entry.id}@${entry.rev}`;
     const n = attempts.get(key) ?? 0;
     if (n >= RECLAIM_ATTEMPTS_MAX) return;
     attempts.set(key, n + 1);
@@ -1308,8 +1314,12 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     const out: { deferred?: boolean } = {};
     void reclaimWorker(ports, entry, ended, out).finally(() => {
       inFlight.delete(entry.id);
-      // Held back because the turn is not over: no attempt spent.
-      if (out.deferred && attempts.get(key) === n + 1) attempts.set(key, n);
+      // Held back because the turn is not over: no attempt spent. Stopped:
+      // the count starts over (a worker resumed on its open row may need
+      // stopping again at the same rev).
+      const after = ports.store.get(entry.id);
+      if (after?.state === 'stopped' && (prior?.state !== 'stopped' || after.at !== prior.at)) attempts.delete(key);
+      else if (out.deferred && attempts.get(key) === n + 1) attempts.set(key, n);
     });
   };
   const off = ports.onTransition((t) => {
