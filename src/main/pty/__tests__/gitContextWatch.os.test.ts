@@ -934,6 +934,33 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'recovered', isWorktree: false });
   });
 
+  it('a .git found by the poll whose walk then fails is walked again, not left absent', async () => {
+    const root = tmp();
+    let failHead = false;
+    const io: ProbeIo = (probe) => {
+      // The distro fails the new repository's first HEAD read (a missed deadline).
+      if (failHead && probe.op === 'read' && probe.path === path.join(root, '.git', 'HEAD')) {
+        failHead = false;
+        return Promise.reject(new Error('no answer within 5000 ms'));
+      }
+      return localIo(probe);
+    };
+    makeRemoteWatcher(io).update('s1', root);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false, absent: true }]);
+
+    initFakeRepo(root, 'fresh');
+    failHead = true;
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(failHead).toBe(false); // the walk ran and failed
+    // No longer known absent: the app may ask git meanwhile.
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'fresh', isWorktree: false });
+  });
+
   it('backs off walking a cwd that stays inconclusive', async () => {
     const parent = tmp();
     const cwd = path.join(parent, 'bare');

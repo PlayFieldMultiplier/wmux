@@ -324,6 +324,11 @@ interface SessionWatch {
   head?: GitContext;
   /** A remote poll round missed its deadline: the answer is unknown. */
   stalled?: boolean;
+  /**
+   * Outside a repo: the poll saw the cwd's `.git`/`HEAD` change and walks
+   * again to learn what it means; cleared once a walk lands.
+   */
+  changed?: boolean;
   watcher: GitWatchHandle | null;
   debounce: NodeJS.Timeout | null;
   /** Last emitted value, JSON-encoded, to suppress no-op re-emits. */
@@ -472,7 +477,18 @@ export class GitContextWatcher extends EventEmitter {
         // A failed re-walk of the cwd a live poll already watches tells
         // nothing new; that poll keeps the answer (and reports a stall itself).
         const current = this.sessions.get(sessionId);
-        if (failed && current?.cwd === wanted.cwd && current.watcher) return;
+        if (failed && current?.cwd === wanted.cwd && current.watcher) {
+          // Unless the poll saw the cwd change (a `.git` appearing) and this
+          // walk was how it meant to learn what that is: it has recorded the
+          // new entries already, so it would never ask again. The cwd is no
+          // longer known to be absent, and the poll walks it again.
+          if (current.changed) {
+            current.changed = false;
+            current.conclusive = false;
+            this.readAndEmit(sessionId, current);
+          }
+          return;
+        }
         this.apply(sessionId, wanted.cwd, wanted.mapGitDir, state, 'remote', head);
         return;
       }
@@ -539,6 +555,7 @@ export class GitContextWatcher extends EventEmitter {
     const existing = this.sessions.get(sessionId);
     if (existing && existing.cwd === cwd && existing.repo?.gitDir === repo?.gitDir
       && existing.conclusive === conclusive && existing.watcher) {
+      existing.changed = false;
       if (head) this.readAndEmit(sessionId, existing, head);
       return; // same checkout — keep the live watcher.
     }
@@ -748,6 +765,7 @@ export class GitContextWatcher extends EventEmitter {
           this.readAndEmit(sessionId, watch, result.head);
         } else {
           let again = entries !== null && result.seen !== entries;
+          if (again) watch.changed = true;
           entries = result.seen;
           // An inconclusive walk may have met a passing error (a distro still
           // booting) anywhere up the tree: walk again, backing off.

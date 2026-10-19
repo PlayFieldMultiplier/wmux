@@ -16,6 +16,12 @@ import type { Probe, ProbeAnswer, ProbeIo } from './gitContextWatch';
  * wedged distro parks one read, not a pile of them. A read whose caller no
  * longer wants it (the pane closed or moved on) leaves the queue at once and
  * is never handed over.
+ *
+ * The trade-off is head-of-line blocking within one distro: a read already
+ * handed over is not killed when its caller lets go (a pane cd'ing during a
+ * walk would otherwise respawn the process on every move), so the next read
+ * there waits for its answer or its deadline: at most SHARE_READ_DEADLINE_MS
+ * (5 s). Its answer, if one comes, is dropped. Other distros are unaffected.
  */
 export interface ProbeReader {
   /**
