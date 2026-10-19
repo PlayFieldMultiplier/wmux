@@ -60,6 +60,10 @@ export interface Handoff {
    *  had not answered yet). The answer's wake answers that hop: a result sent
    *  from it, with no replyTo, is that hop's result. Main-written. */
   forHop?: string;
+  /** ask_person: asked in a turn that started from or read an external
+   *  guest's message; its question card carries RoomCard.origin 'guest'
+   *  whenever it is raised. Main-written. */
+  guestSourced?: true;
   /** dispatch: the bots that take the work after the addressee, in order
    *  (a relay). Named by a coordinator only; see HandoffSendParams.next. */
   next?: string[];

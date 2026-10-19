@@ -122,6 +122,7 @@ import {
   sanitizeRefs,
   wakeOrdinals,
   wakeReplyTo,
+  isGuestSourcedTurn,
   writeFactCards,
   type FactoryRoomPorts,
   type RoomWriter,
@@ -318,6 +319,7 @@ export function parseHandoff(raw: unknown): Handoff | null {
     ...(h.intro === true && h.kind === 'ask_person' ? { intro: true as const } : {}),
     ...(h.kind === 'ask_person' && typeof h.ownerCardId === 'string' && ID_RE.test(h.ownerCardId) ? { ownerCardId: h.ownerCardId } : {}),
     ...(h.kind === 'ask_person' && typeof h.forHop === 'string' && ID_RE.test(h.forHop) ? { forHop: h.forHop } : {}),
+    ...(h.kind === 'ask_person' && h.guestSourced === true ? { guestSourced: true as const } : {}),
     ...(h.kind === 'dispatch' ? relayNext(h.next) : {}),
     ...(h.kind === 'dispatch' && h.relay === true ? { relay: true as const } : {}),
     ...(typeof h.relayStopped === 'string' && oneLine(h.relayStopped, 300) ? { relayStopped: oneLine(h.relayStopped, 300) } : {}),
@@ -1459,6 +1461,7 @@ export class HandoffRouter {
         ...(asking?.reasonKind === 'intro' ? { intro: true as const } : {}),
         ...(asking?.ownerCardId ? { ownerCardId: asking.ownerCardId } : {}),
         ...(forHop ? { forHop } : {}),
+        ...(isGuestSourcedTurn(sender.botId) ? { guestSourced: true as const } : {}),
         createdAt: this.now(),
         updatedAt: this.now(),
       };
@@ -1539,6 +1542,7 @@ export class HandoffRouter {
       refs: { ...(h.payload.refs ?? {}), handoffId: h.id, decisionId: decision.id },
       state: 'open',
       ...(h.intro ? { greeting: true as const } : {}),
+      ...(h.guestSourced ? { origin: 'guest' as const } : {}),
     }, replyTo ? { replyTo } : undefined);
     return { decision };
   }
@@ -1751,7 +1755,8 @@ export class HandoffRouter {
     const ws = partyWorkspace(h.from);
     const rooms = this.opts.rooms();
     if (!ws || !rooms) return null;
-    return rooms.find(ws, (c) => c.kind === 'question' && c.refs?.handoffId === h.id)?.id ?? null;
+    // Main's own bookkeeping: a guest-sourced question card is found too.
+    return rooms.find(ws, (c) => c.kind === 'question' && c.refs?.handoffId === h.id, { guests: true })?.id ?? null;
   }
 
   private closeQuestionCard(h: Handoff): void {

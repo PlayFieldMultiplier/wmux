@@ -319,7 +319,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     const { valid, dropped } = settleMentions(ports, bot, mentions ?? []);
     // Files are copied once per post: a repeat whose card is up keeps that
     // card's files and reads nothing (the task folder may be gone by then).
-    const prior = clientPostId ? writer.find(bot.workspaceId, (c) => c.clientPostId === clientPostId) : null;
+    const prior = clientPostId ? writer.find(bot.workspaceId, (c) => c.clientPostId === clientPostId, { guests: true }) : null;
     let copied: { files: RoomFile[]; store: RoomFileStore } | null = null;
     if (Array.isArray(filePaths) && filePaths.length > 0 && !prior) {
       const c = await copyBotFiles(bot, filePaths as string[], deps);
@@ -423,7 +423,7 @@ export async function postTurnText(
   const attemptKey = `wake:${item.id}:`;
   const own = writer.find(profile.workspaceId, (c) => c.threadId === threadId
     && c.actor.kind === 'bot' && c.actor.botId === profile.id
-    && (c.at > since || c.clientPostId?.startsWith(attemptKey) === true));
+    && (c.at > since || c.clientPostId?.startsWith(attemptKey) === true), { guests: true });
   if (own) return null;
   const nl = trimmed.indexOf('\n');
   const first = nl < 0 ? trimmed : trimmed.slice(0, nl);

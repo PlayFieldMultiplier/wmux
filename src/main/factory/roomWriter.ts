@@ -247,6 +247,12 @@ export function setGuestTurnProbe(probe: ((botId: string) => boolean) | null): v
   guestTurnProbe = probe;
 }
 
+/** Whether bot `botId`'s running turn is guest-sourced, as the probe says
+ *  (false without one). */
+export function isGuestSourcedTurn(botId: string): boolean {
+  return guestSourcedTurn({ kind: 'bot', workspaceId: '', botId });
+}
+
 function guestSourcedTurn(actor: Party): boolean {
   if (actor.kind !== 'bot' || !guestTurnProbe) return false;
   try {
@@ -551,6 +557,10 @@ export interface RoomCardInput {
   files?: RoomCard['files'];
   /** `guest` cards only, actor system (RoomCard.guest). */
   guest?: RoomCard['guest'];
+  /** Bot cards only (RoomCard.origin): main's record that the content came
+   *  from a guest-sourced turn, for a card written after that turn ended (a
+   *  queued question). A card written during the turn is stamped anyway. */
+  origin?: 'guest';
 }
 
 /** A post from a bot or the owner: idempotent by clientPostId, and a replyTo
@@ -773,7 +783,7 @@ export class RoomWriter {
     const files = actor.kind === 'bot' ? parseRoomFiles(input.files) : undefined;
     const guest = input.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(input.guest) : undefined;
     if (input.kind === 'guest' && !guest) return null;
-    const fromGuestTurn = guestSourcedTurn(actor);
+    const fromGuestTurn = actor.kind === 'bot' && (input.origin === 'guest' || guestSourcedTurn(actor));
     // A fact delivered twice (a re-subscribe, a replay) writes one card.
     const factKey = refs?.factId ? factCardKey({ refs, threadId, kind: input.kind }) : null;
     if (factKey && state.seenFacts.has(factKey)) return null;

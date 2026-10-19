@@ -19,7 +19,7 @@ import {
   importLegacyMoaHandoffs,
 } from '../handoffRouter';
 import { runFactoryMigrations } from '../migrate';
-import { RoomWriter, writeFactCards, type FactoryRoomPorts } from '../roomWriter';
+import { RoomWriter, setGuestTurnProbe, writeFactCards, type FactoryRoomPorts } from '../roomWriter';
 import { TriggerEngine, botSeesFact } from '../triggerEngine';
 import { handleRoomPost } from '../../pipe/handlers/room.rpc';
 import type { RpcContext } from '../../../shared/rpc';
@@ -619,6 +619,30 @@ describe('ask_person', () => {
     expect(h.router.get(second.handoffId)!.status).toBe('delivered');
     expect(loadThreadDecision('ws1', 'task:t1', dir)).toMatchObject({ question: 'second', handoffId: second.handoffId });
     expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.title)).toEqual(['first', 'second']);
+  });
+
+  it('a question asked in a guest-sourced turn is raised later as a guest-sourced card, found and closed by main', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const h = await harness([lead, other]);
+    const first = await h.router.askPerson(binding(lead), { title: 'first', body: '', threadId: 'task:t1' });
+    setGuestTurnProbe((botId) => botId === other.id);
+    let second: Awaited<ReturnType<typeof h.router.askPerson>>;
+    try {
+      second = await h.router.askPerson(binding(other), { title: 'second', body: '', threadId: 'task:t1' });
+    } finally {
+      setGuestTurnProbe(null);
+    }
+    if (!first.ok || !second.ok) throw new Error('asks failed');
+    expect(h.router.get(second.handoffId)?.guestSourced).toBe(true);
+    // Raised after the asking turn ended: the card still says where it came from.
+    await resolveThreadDecision('ws1', first.decisionId!, 'ok', {}, dir);
+    await h.router.reconcile();
+    expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.title)).toEqual(['first']);
+    const card = h.rooms.read('ws1', { guests: true }).cards.find((c) => c.title === 'second');
+    expect(card?.origin).toBe('guest');
+    await h.router.reconcile();
+    expect(h.rooms.read('ws1', { guests: true }).cards.filter((c) => c.title === 'second')).toHaveLength(1);
   });
 
   it('a dismissed question answers the bot that it was closed without a choice', async () => {
