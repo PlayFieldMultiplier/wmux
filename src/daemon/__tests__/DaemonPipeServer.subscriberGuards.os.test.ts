@@ -122,6 +122,12 @@ describe('DaemonPipeServer — subscriber backpressure (D6)', () => {
       received += chunk;
     });
 
+    // Both subscribe while healthy (a socket already past the cap is refused).
+    server.markFirstParty(stalled.clientId);
+    server.markFirstParty(draining.clientId);
+    expect(server.subscribeEvents(stalled.clientId)).toBe(true);
+    expect(server.subscribeEvents(draining.clientId)).toBe(true);
+
     // Prime only the paused socket so the broadcast below tests subscriber
     // isolation without temporarily making the healthy socket look stalled too.
     const payload = { type: 'transcript.appended', blob: 'z'.repeat(SUBSCRIBER_BACKPRESSURE_BYTES) };
@@ -131,11 +137,6 @@ describe('DaemonPipeServer — subscriber backpressure (D6)', () => {
       refused = server.sendTo(stalled.clientId, payload) === false;
     }
     expect(refused).toBe(true);
-
-    server.markFirstParty(stalled.clientId);
-    server.markFirstParty(draining.clientId);
-    expect(server.subscribeEvents(stalled.clientId)).toBe(true);
-    expect(server.subscribeEvents(draining.clientId)).toBe(true);
 
     server.broadcast({ type: 'title.changed', n: 'first' });
     await waitFor(() => received.includes('"n":"first"'));
@@ -186,10 +187,56 @@ describe('DaemonPipeServer — subscriber backpressure (D6)', () => {
     socket.resume();
     await waitFor(() => frames >= accepted + 1);
 
-    expect(server.subscribeEvents(clientId)).toBe(true);
+    // The app having read every byte does not mean the daemon has seen the
+    // write complete (on Windows it may not have yet): until it has, the
+    // subscribe is refused rather than dropped again by the next broadcast.
+    await waitFor(() => server.subscribeEvents(clientId));
     server.broadcast({ type: 'title.changed', n: 'after-resubscribe' });
     await waitFor(() => tail.includes('"n":"after-resubscribe"'));
     expect(server.isEventSubscriber(clientId)).toBe(true);
+    expect(tail).not.toContain('"n":"lost"');
+  });
+
+  /** A paused first-party subscriber past the cap, dropped by a broadcast. */
+  async function droppedSubscriber(suffix: string) {
+    const { server, pipe, token } = await startServer(suffix);
+    const { socket, clientId } = await connectClient(server, pipe, token);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    server.markFirstParty(clientId);
+    expect(server.subscribeEvents(clientId)).toBe(true);
+    socket.pause();
+    const payload = { type: 'transcript.appended', blob: 'z'.repeat(SUBSCRIBER_BACKPRESSURE_BYTES) };
+    let refused = false;
+    for (let i = 0; i < 6 && !refused; i++) refused = !server.sendTo(clientId, payload);
+    expect(refused).toBe(true);
+    server.broadcast({ type: 'title.changed', n: 'lost' });
+    expect(server.isEventSubscriber(clientId)).toBe(false);
+    return { server, socket, clientId };
+  }
+
+  // What failed on Windows: one large pipe write is released by a single
+  // completion that can reach the daemon after the app already read its last
+  // byte, so a resubscribe could arrive while the socket still counted those
+  // bytes. It was accepted and the next broadcast dropped it again. Holding
+  // the socket paused makes that state deterministic on every OS.
+  it('refuses a resubscribe while its socket is still past the cap, and accepts it once drained', async () => {
+    const { server, socket, clientId } = await droppedSubscriber('resubscribe-queued');
+    expect(server.subscribeEvents(clientId)).toBe(false);
+    expect(server.isEventSubscriber(clientId)).toBe(false);
+    expect(socket.destroyed).toBe(false);
+
+    let tail = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      tail = (tail + chunk).slice(-512);
+    });
+    socket.resume();
+    // The app's side of this is the health ping: `eventsSubscribed: false`
+    // until a subscribe is accepted.
+    await waitFor(() => server.subscribeEvents(clientId));
+    server.broadcast({ type: 'title.changed', n: 'after-resubscribe' });
+    expect(server.isEventSubscriber(clientId)).toBe(true);
+    await waitFor(() => tail.includes('"n":"after-resubscribe"'));
     expect(tail).not.toContain('"n":"lost"');
   });
 

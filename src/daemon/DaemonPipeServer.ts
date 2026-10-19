@@ -797,7 +797,8 @@ export class DaemonPipeServer {
 
   /**
    * Start delivering pushed events to an identified first-party client.
-   * Returns false when the client is unclassified or already gone.
+   * Returns false when the client is unclassified or already gone, or while
+   * its socket is still past SUBSCRIBER_BACKPRESSURE_BYTES.
    *
    * `markFirstParty` is a classification over the shared control-pipe token,
    * not a second authentication boundary. Requiring it still removes the
@@ -813,6 +814,17 @@ export class DaemonPipeServer {
       this.preSubscribeBacklogs.delete(socket);
       backlog = undefined;
     }
+    // Refuse while the socket is still past the cap: `broadcast` would drop
+    // it on the very next event, so a success here would be a subscription
+    // that delivers nothing. This is the resubscribe of a dropped subscriber
+    // (#2244) that arrives before the daemon has seen its old backlog drain;
+    // on a Windows named pipe the completion of one large write can reach the
+    // daemon after the app has already read that write's last byte. The
+    // socket stays open, `daemon.ping` keeps reporting `eventsSubscribed:
+    // false`, and the app subscribes again once it has drained. With retained
+    // frames the flush below closes such a socket instead (a refusal would
+    // let a retry succeed after the retained tail was lost).
+    if (!backlog?.frames.length && socket.writableLength > SUBSCRIBER_BACKPRESSURE_BYTES) return false;
     // Flush before the subscribe reply is written by processLine. Subscribers
     // already have to correlate RPC ids with interleaved id-less event frames;
     // preserving this order makes every accepted-window event observable once.
