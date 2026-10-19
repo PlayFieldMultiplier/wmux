@@ -594,21 +594,25 @@ export function beginPaneRelaunch(sessionId: string): ((typed: boolean) => void)
   const slots = getWorkerSlots();
   const pane = slots.paneOf(sessionId);
   const bot = pane ? null : botWorkerSessionRecord(sessionId);
-  // A pane created before panes were recorded: the task of the workspace
-  // that holds it, only when that workspace is a task's and its record and
-  // its ledger row agree on which (a pane moved into another task's or the
-  // owner's workspace is not known, never taken as the wrong task's).
-  const holder = pane || bot?.taskId ? null : getWorkspaceMirror().getEntries()?.find((e) => Array.isArray(e.ptyIds) && e.ptyIds.includes(sessionId))?.id;
-  const held = holder ? slots.workspaceOf(holder) : null;
+  // The task of the pane as every reader resolves it (resolvePaneOwner).
+  const owner = taskOfPane(sessionId);
+  const holder = pane || bot?.workspaceId ? null : getWorkspaceMirror().getEntries()?.find((e) => Array.isArray(e.ptyIds) && e.ptyIds.includes(sessionId))?.id;
+  // No record names the pane (created before panes were recorded): the task
+  // of the workspace that holds it, only when that workspace is a task's and
+  // its record and its ledger row agree on which (a pane moved into another
+  // task's or the owner's workspace is not known, never taken as the wrong
+  // task's).
+  const held = !owner && holder ? slots.workspaceOf(holder) : null;
   const heldTask = held && getTaskLedger().findByTaskWorkspace(holder as string)?.id === held.taskId ? held.taskId : undefined;
-  const taskId = pane?.taskId ?? bot?.taskId ?? heldTask;
+  const taskId = owner?.taskId ?? heldTask;
   if (!taskId) return null;
   const prior = slots.launchOf(taskId);
   const workspaceId = pane?.workspaceId ?? bot?.workspaceId ?? holder ?? '';
   const { gen } = slots.beginLaunch({
     taskId,
-    origin: prior?.origin ?? (bot ? 'bot' : 'owner'),
-    ...(prior?.botId ? { botId: prior.botId } : {}),
+    // A task known by its bot worker or reclaim record is a bot's.
+    origin: prior?.origin ?? (bot?.taskId || owner?.botId ? 'bot' : 'owner'),
+    ...(prior?.botId ?? owner?.botId ? { botId: prior?.botId ?? owner?.botId } : {}),
     ownerWorkspaceId: prior?.ownerWorkspaceId ?? '',
     pane: { sessionId, workspaceId },
   });
@@ -618,15 +622,76 @@ export function beginPaneRelaunch(sessionId: string): ((typed: boolean) => void)
   };
 }
 
-/** The task and generation a pane belongs to: its own record, else the bot
- *  worker session record its create wrote (generation unknown). */
-export function taskOfPane(sessionId: string): { taskId: string; gen?: number } | null {
+/** The task (and bot) a pane is the worker of. */
+export interface PaneOwner {
+  taskId: string;
+  /** Known only from the pane's launch record. */
+  gen?: number;
+  botId?: string;
+}
+
+/** Where the task of a pane is read from, newest record first. */
+export interface PaneOwnerSources {
+  /** The pane's launch record here (WorkerSlots.paneOf), with its bot. */
+  launch?: (sessionId: string) => PaneOwner | null;
+  /** A pane created before launch records were kept: the reclaim record
+   *  that names it (workerReclaim.ts ReclaimedWorkers.taskOfSession). */
+  reclaimed?: (sessionId: string) => { taskId: string; botId?: string } | null;
+  /** Else the bot worker session record its create wrote. */
+  sessionRecord?: (sessionId: string) => { taskId?: unknown; botId?: unknown } | null | undefined;
+}
+
+/**
+ * The one answer to "which task is this pane the worker of": its launch
+ * record, else the reclaim record that names it, else the bot worker session
+ * record its create wrote. The holder set (through taskOfPane), the
+ * workspace liveness and a relaunch in a pane all read it here, so they can
+ * never name two tasks for one pane. A source that throws is skipped. Pure.
+ */
+export function resolvePaneOwner(sessionId: string, src: PaneOwnerSources): PaneOwner | null {
   try {
-    const p = getWorkerSlots().paneOf(sessionId);
-    if (p) return { taskId: p.taskId, gen: p.gen };
-    const t = botWorkerSessionRecord(sessionId)?.taskId;
-    return t ? { taskId: t } : null;
+    const p = src.launch?.(sessionId);
+    if (p) return { taskId: p.taskId, ...(p.gen !== undefined ? { gen: p.gen } : {}), ...(p.botId ? { botId: p.botId } : {}) };
+  } catch {
+    // the older records below
+  }
+  try {
+    const r = src.reclaimed?.(sessionId);
+    if (r?.taskId) return { taskId: r.taskId, ...(r.botId ? { botId: r.botId } : {}) };
+  } catch {
+    // the session record below
+  }
+  try {
+    const rec = src.sessionRecord?.(sessionId);
+    return typeof rec?.taskId === 'string' && rec.taskId
+      ? { taskId: rec.taskId, ...(typeof rec.botId === 'string' && rec.botId ? { botId: rec.botId } : {}) }
+      : null;
   } catch {
     return null;
   }
+}
+
+/** The hosted store's pane launch record, with its task's bot. */
+export function launchPaneOwner(sessionId: string, slots: WorkerSlots = getWorkerSlots()): PaneOwner | null {
+  const p = slots.paneOf(sessionId);
+  if (!p) return null;
+  const botId = slots.launchOf(p.taskId)?.botId;
+  return { taskId: p.taskId, gen: p.gen, ...(botId ? { botId } : {}) };
+}
+
+let reclaimedPanes: PaneOwnerSources['reclaimed'] | null = null;
+
+/** Set by the worker lifecycle host while the reclaim runs (null: none). */
+export function setReclaimedPaneSource(next: PaneOwnerSources['reclaimed'] | null): void {
+  reclaimedPanes = next;
+}
+
+/** The task and generation a pane belongs to (resolvePaneOwner over the
+ *  hosted records; generation known only from its launch record). */
+export function taskOfPane(sessionId: string): PaneOwner | null {
+  return resolvePaneOwner(sessionId, {
+    launch: (id) => launchPaneOwner(id),
+    ...(reclaimedPanes ? { reclaimed: reclaimedPanes } : {}),
+    sessionRecord: botWorkerSessionRecord,
+  });
 }

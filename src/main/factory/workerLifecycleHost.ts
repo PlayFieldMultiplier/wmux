@@ -70,7 +70,7 @@ import { STOPPED_BY_OWNER } from './factoryStop';
 import { getFanOutGuards, setDormantRefresh, taskOfWorkspace } from '../worktask/fanoutGuards';
 import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
 import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
-import { getWorkerSlots, taskOfPane } from './workerSlots';
+import { getWorkerSlots, launchPaneOwner, setReclaimedPaneSource, taskOfPane } from './workerSlots';
 import { holderInputsRevision } from './holderInputs';
 import { holderCounts, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
 import { getVerdictedTasks } from './verdictedTasks';
@@ -190,12 +190,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     records: () => (reclaimOn ? reclaimed.all() : []),
     recordedSessions: (taskId) => reclaimedStore?.get(taskId)?.sessions.map((x) => x.sessionId) ?? [],
     sessionRecordOf: botWorkerSessionRecord,
-    paneTask: (sessionId) => {
-      const p = launches.paneOf(sessionId);
-      if (!p) return null;
-      const botId = launches.launchOf(p.taskId)?.botId;
-      return { taskId: p.taskId, ...(botId ? { botId } : {}) };
-    },
+    paneTask: (sessionId) => launchPaneOwner(sessionId, launches),
     workspaceTask: (workspaceId) => launches.workspaceOf(workspaceId)?.taskId ?? null,
     facts: goneFacts,
     refreshMs: LIVENESS_REFRESH_MS,
@@ -225,6 +220,17 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   } catch (err) {
     reclaimOn = false;
     console.warn(`[factory] worker reclaim off: ${String(err)}`);
+  }
+  // A pane created before launch records were kept is known by the reclaim
+  // record that names it: the same answer for the holder set (taskOfPane)
+  // as for the liveness above (workerSlots.ts resolvePaneOwner).
+  if (reclaimOn) {
+    setReclaimedPaneSource((sessionId) => {
+      const taskId = reclaimed.taskOfSession(sessionId);
+      const botId = taskId ? reclaimed.get(taskId)?.botId : undefined;
+      return taskId ? { taskId, ...(botId ? { botId } : {}) } : null;
+    });
+    offs.push(() => setReclaimedPaneSource(null));
   }
   // The fan-out's bounded wait for a fresh read before its live-cap check.
   setDormantRefresh(taskLiveness.refresh);

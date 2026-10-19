@@ -11,6 +11,7 @@ import type { WorkspaceListEntry } from '../../shared/workspaceMirror';
 import { IdleSnapshot, paneRunsNoAgent, paneShowsWork } from './agentSlots';
 import type { AgentGoneFact, AgentGoneFacts } from './agentGoneFacts';
 import { endedTaskAgentRuns, isTaskOwnWorkerPane, type ReclaimedWorker, type WorkerSessionInfo, type WorkerSessionRecordOf } from './workerReclaim';
+import { resolvePaneOwner, type PaneOwnerSources } from './workerSlots';
 
 const isEndedStatus = (status: LedgerEntry['status']): boolean => status === 'completed' || status === 'cancelled' || status === 'failed';
 
@@ -147,27 +148,14 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     // another workspace, or one the tree lost): the task runs again.
     const recordedOwner = new Map<string, { taskId: string; botId?: string }>();
     for (const r of ports.records()) for (const x of r.sessions) recordedOwner.set(x.sessionId, { taskId: r.taskId, botId: r.botId });
-    /** The task (and bot) a pane is the worker of, or undefined: its launch
-     *  record; a pane created before those were kept, by its reclaim record
-     *  or its bot worker session record. */
-    const paneOwner = (id: string): { taskId: string; botId?: string } | undefined => {
-      try {
-        const launched = ports.paneTask?.(id);
-        if (launched) return launched;
-      } catch {
-        // fall through to the older records
-      }
-      const known = recordedOwner.get(id);
-      if (known) return known;
-      try {
-        const rec = ports.sessionRecordOf?.(id) as { taskId?: unknown; botId?: unknown } | null | undefined;
-        return typeof rec?.taskId === 'string' && rec.taskId
-          ? { taskId: rec.taskId, ...(typeof rec.botId === 'string' && rec.botId ? { botId: rec.botId } : {}) }
-          : undefined;
-      } catch {
-        return undefined;
-      }
-    };
+    /** The task (and bot) a pane is the worker of, or undefined, as every
+     *  other reader resolves it (workerSlots.ts resolvePaneOwner): its launch
+     *  record, else its reclaim record, else its bot worker session record. */
+    const paneOwner = (id: string): { taskId: string; botId?: string } | undefined => resolvePaneOwner(id, {
+      ...(ports.paneTask ? { launch: ports.paneTask } : {}),
+      reclaimed: (sid) => recordedOwner.get(sid) ?? null,
+      ...(ports.sessionRecordOf ? { sessionRecord: ports.sessionRecordOf as PaneOwnerSources['sessionRecord'] } : {}),
+    }) ?? undefined;
     // The same owner as a session record: a pane its launch record names
     // is that task's own worker pane, also for a WSL agent no process
     // attributes (endedTaskAgentRuns asks which task's pane it is).

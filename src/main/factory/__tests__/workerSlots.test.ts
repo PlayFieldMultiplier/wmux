@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_MAX, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
+import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_MAX, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, resolvePaneOwner, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
 import { __resetWorkspaceMirrorForTest, getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
@@ -436,5 +436,22 @@ describe('readers of the recorded launch', () => {
     const back = s.beginLaunch({ taskId: 't', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner', pane: { sessionId: 'p-t', workspaceId: 'ws-t' } });
     s.launched('t', back.gen, 'ws-t', 'p-t');
     expect(s.workspaceOf('ws-t')).toEqual({ taskId: 't', gen: back.gen });
+  });
+});
+
+describe('resolvePaneOwner: one answer to which task a pane is the worker of', () => {
+  it('reads the launch record, then the reclaim record, then the bot worker session record; a source that throws is skipped', () => {
+    const launch = (id: string) => (id === 'p1' ? { taskId: 'a', gen: 2, botId: 'bot-0000000a' } : null);
+    const reclaimed = (id: string) => (id === 'p1' || id === 'p2' ? { taskId: 'b', botId: 'bot-0000000b' } : null);
+    const sessionRecord = (id: string) => (id === 'p3' || id === 'p2' ? { taskId: 'c', botId: 'bot-0000000c' } : null);
+    expect(resolvePaneOwner('p1', { launch, reclaimed, sessionRecord })).toEqual({ taskId: 'a', gen: 2, botId: 'bot-0000000a' });
+    expect(resolvePaneOwner('p2', { launch, reclaimed, sessionRecord })).toEqual({ taskId: 'b', botId: 'bot-0000000b' });
+    expect(resolvePaneOwner('p3', { launch, reclaimed, sessionRecord })).toEqual({ taskId: 'c', botId: 'bot-0000000c' });
+    expect(resolvePaneOwner('p4', { launch, reclaimed, sessionRecord })).toBeNull();
+    const boom = (): never => {
+      throw new Error('unreadable');
+    };
+    expect(resolvePaneOwner('p3', { launch: boom, reclaimed: boom, sessionRecord })).toEqual({ taskId: 'c', botId: 'bot-0000000c' });
+    expect(resolvePaneOwner('p3', { sessionRecord: () => ({ taskId: '' }) })).toBeNull();
   });
 });

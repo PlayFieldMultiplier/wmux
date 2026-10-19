@@ -14,7 +14,7 @@ import { computeHolders, holderCounts, liveHolders, setHolderSource, type Holder
 import { AgentSlots, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { openBotWorkers } from '../openBotWorkers';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
-import { WORKER_SLOTS_FILENAME, WorkerSlots, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
+import { WORKER_SLOTS_FILENAME, WorkerSlots, setReclaimedPaneSource, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
 import { STOPPED_BY_OWNER } from '../factoryStop';
 
 const NOW = 10_000_000_000;
@@ -272,6 +272,7 @@ function rig(over: Partial<HolderSnapshot> = {}): Rig {
 }
 
 afterEach(() => {
+  setReclaimedPaneSource(null);
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setWorkerSlotsForTests(null);
@@ -292,6 +293,22 @@ describe('the four caps agree on the paths that used to split them (#2393)', () 
     expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
     // The reconciler's row (lineage origin, #2403) is the same holder.
     r.snap = { ...r.snap, rows: [row('lost', { taskWorkspaceId: 'ws-lost', dispatch: { origin: { kind: 'bot', botId: BOT }, reconciled: true } })], busy: new Set(['ws-lost']) };
+    expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
+  });
+
+  it('a pane only its reclaim record names is that task\'s in the holder set too, as the liveness reads it: one holder, not two', () => {
+    // A worker resumed by an older build (no launch record) whose pane sits
+    // in a stamped workspace no row or launch record names.
+    const r = rig({
+      rows: [row('r', { status: 'completed' })],
+      records: [record('r', { state: 'resumed' })],
+      workspaces: new Set(['ws-r', 'ws-adopt']),
+      ptys: new Map([['ws-r', []], ['ws-adopt', ['p-old']]]),
+      stamps: new Map([['ws-r', { owner: OWNER }], ['ws-adopt', { owner: OWNER, origin: { kind: 'bot', botId: BOT } }]]),
+      busy: new Set(['ws-adopt']),
+    });
+    setReclaimedPaneSource((id) => (id === 'p-old' ? { taskId: 'r', botId: BOT } : null));
+    expect(taskOfPane('p-old')).toEqual({ taskId: 'r', botId: BOT });
     expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
   });
 
