@@ -234,7 +234,7 @@ describe('fresh authoritative identity enables bannerless detector patterns', ()
     }
   });
 
-  it('does not replay a quiet approval drawn before identity; a later fresh frame is required', () => {
+  it('does not replay old bytes when no current-screen reader is available', () => {
     pty.feed(APPROVAL);
     expect(events).not.toHaveBeenCalled();
     bridge.noteAgentProcess({ slug: 'codex', alive: true, observedAt: Date.now() });
@@ -255,4 +255,48 @@ describe('fresh authoritative identity enables bannerless detector patterns', ()
     pty.feed(APPROVAL);
     expect(events).not.toHaveBeenCalled();
   });
+  const trustGrid = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', 'No, exit', '↑/↓ Navigate · enter Confirm'];
+
+  it.each(['process', 'hook'] as const)('recovers a quiet current trust dialog after fresh %s identity', async (source) => {
+    const read = vi.fn(async () => ({ rows: trustGrid, isCurrent: () => true }));
+    bridge.setApprovalScreenReader(read);
+    pty.feed(trustGrid.join('\r\n'));
+    expect(events).not.toHaveBeenCalled();
+    if (source === 'process') bridge.noteAgentProcess({ slug: 'agy', alive: true, observedAt: Date.now() });
+    else bridge.noteHookAgentIdentity(signal({ agent: 'agy' }), { slug: 'agy', source: 'hook' });
+    await vi.waitFor(() => expect(events).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(events.mock.calls[0]?.[0]).toMatchObject({ sessionId: 'pane-a', event: { agent: 'Antigravity CLI', status: 'awaiting_input' } });
+    expect(bridge.getAgentStatus()).toBe('awaiting_input');
+    expect(bridge.getLastAgent()).toBeNull();
+    expect(active).not.toHaveBeenCalled();
+    bridge.noteAgentProcess({ slug: 'agy', alive: true, observedAt: Date.now() });
+    await Promise.resolve();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(events).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['input', 'resize', 'shell', 'death', 'replacement', 'dispose', 'same-id-reuse'] as const)(
+    'rejects a quiet screen render overtaken by %s', async (change) => {
+      let resolve: (value: { rows: string[]; isCurrent: () => boolean }) => void = () => undefined;
+      const pending = new Promise<{ rows: string[]; isCurrent: () => boolean }>((done) => { resolve = done; });
+      bridge.setApprovalScreenReader(() => pending);
+      pty.feed(trustGrid.join('\r\n'));
+      bridge.noteAgentProcess({ slug: 'agy', alive: true, observedAt: Date.now() });
+      if (change === 'input') bridge.noteInput('y');
+      if (change === 'resize') bridge.noteResize();
+      if (change === 'shell') pty.feed(SHELL_RETURN);
+      if (change === 'death') bridge.noteAgentProcess({ slug: 'agy', alive: false });
+      if (change === 'replacement') bridge.noteAgentProcess({ slug: 'codex', alive: true, observedAt: Date.now() });
+      if (change === 'dispose' || change === 'same-id-reuse') bridge.cleanup();
+      if (change === 'same-id-reuse') {
+        pty = fakePty();
+        bridge.setupDataForwarding(pty.pty, new RingBuffer(65536), 'pane-a', new PromptEventLog());
+        bridge.on('agent', events);
+      }
+      resolve({ rows: trustGrid, isCurrent: () => true });
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(events).not.toHaveBeenCalled();
+    },
+  );
+
 });

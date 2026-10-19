@@ -248,4 +248,42 @@ describe('local hook RPC → PTYBridge trusted screen identity', () => {
     if (change === 'replaced') r.feed('Do you trust the contents of this project?\n');
     expectNoDetectorStatus();
   });
+  const trustGrid = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', 'No, exit', '↑/↓ Navigate · enter Confirm'];
+
+  it('recovers a quiet local trust dialog through the normal detector notification path', async () => {
+    const r = rig();
+    const read = vi.fn(async () => ({ rows: trustGrid, isCurrent: () => true }));
+    r.bridge.setApprovalScreenReader(read);
+    // Leave output in the 8ms batch: the accepted hook drains it before the
+    // snapshot request, even though no more PTY output follows the identity.
+    r.output(trustGrid.join('\r\n'));
+    await r.dispatch();
+    await vi.waitFor(() => expect(mocks.metadata).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentStatus: 'awaiting_input' })), { timeout: 5_000 });
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(detectorEvents()).toHaveLength(1);
+    expect(detectorEvents()[0]).toMatchObject({ agent: 'agy', kind: 'agent.awaiting_input' });
+    await r.dispatch();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['input', 'shell', 'dispose', 'same-id-reuse'] as const)('rejects a quiet local viewport after %s', async (change) => {
+    const r = rig();
+    let resolve: (value: { rows: string[]; isCurrent: () => boolean }) => void = () => undefined;
+    const pending = new Promise<{ rows: string[]; isCurrent: () => boolean }>((done) => { resolve = done; });
+    r.bridge.setApprovalScreenReader(() => pending);
+    r.feed(trustGrid.join('\r\n'));
+    await r.dispatch();
+    if (change === 'input') r.bridge.noteUserInput('pty-1');
+    if (change === 'shell') r.feed('\u001b]133;A\u0007');
+    if (change === 'dispose') r.bridge.cleanupInstance('pty-1');
+    if (change === 'same-id-reuse') r.recreate();
+    mocks.metadata.mockClear();
+    eventBus.reset();
+    resolve({ rows: trustGrid, isCurrent: () => true });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(detectorEvents()).toEqual([]);
+    expect(mocks.metadata.mock.calls.some(([, update]) => update.agentStatus === 'awaiting_input')).toBe(false);
+  });
+
 });

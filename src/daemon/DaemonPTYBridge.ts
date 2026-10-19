@@ -26,6 +26,7 @@ import type { AgentSignal } from '../shared/hooks/signal-types';
 import { canSeedHookIdentity, DETECTOR_IDENTITY_HOOK_MAX_AGE_MS } from '../shared/hooks/detectorIdentity';
 import type { CanonicalAgentIdentity } from './canonicalAgent';
 import type { TurnFailure } from '../shared/phoneTurnFailure';
+import type { ApprovalScreenReader } from '../shared/approvalScreen';
 
 /**
  * #1965 — the answer the daemon gives the bundled OpenConsole's startup DA1.
@@ -105,6 +106,7 @@ export class DaemonPTYBridge extends EventEmitter {
   private outputInterpreter: OutputInterpreter | null = null;
   private modeTracker: OutputModes | null = null;
   private agentDetector: AgentDetector | null = null;
+  private approvalScreenReader: ApprovalScreenReader | null = null;
   private activityMonitor: ActivityMonitor | null = null;
   private dataDisposable: (() => void) | null = null;
   private exitDisposable: (() => void) | null = null;
@@ -375,6 +377,7 @@ export class DaemonPTYBridge extends EventEmitter {
 
   /** Called by DaemonSessionManager.resizeSession on every applied resize. */
   noteResize(): void {
+    this.agentDetector?.invalidateApprovalScreen();
     this.lastResizeAtMs = Date.now();
     // One event for BOTH resize paths (the phone's /api/sessions/:id/resize and
     // the desk's RPC) — they both land in resizeSession, and an SSE viewer whose
@@ -411,6 +414,7 @@ export class DaemonPTYBridge extends EventEmitter {
   noteInput(data: string, opts: boolean | { selfWrite: true } = false): void | number {
     if (typeof opts === 'object') {
       if (data.length > 0) {
+        this.agentDetector?.invalidateApprovalScreen();
         this.lastInputAt = Date.now();
         this.inputRevision += 1;
         this.keyInputRevision += 1;
@@ -436,6 +440,7 @@ export class DaemonPTYBridge extends EventEmitter {
       this.lastInputAt = Date.now();
       this.inputRevision += 1;
       const active = stripPassiveInput(data);
+      if (active.length > 0) this.agentDetector?.invalidateApprovalScreen();
       // Every path that types into a pane ends here (pipe, web raw input, chat
       // Stop, approval keys), so this is the one place a lone Esc is seen.
       // Inside a bracketed paste an ESC is text, not a key. On Windows the
@@ -1062,6 +1067,22 @@ export class DaemonPTYBridge extends EventEmitter {
     this.agentDetector?.clearTrustedIdentity();
   }
 
+  /** The host supplies a parsed live viewport with output/geometry fences. */
+  setApprovalScreenReader(reader: ApprovalScreenReader): void {
+    this.approvalScreenReader = reader;
+  }
+
+  private recheckQuietApproval(detector: AgentDetector): void {
+    const reader = this.approvalScreenReader;
+    const sessionId = this.sessionId;
+    if (!reader || !sessionId || this.muted) return;
+    void detector.revalidateApprovalScreen(async () => {
+      if (this.agentDetector !== detector || this.sessionId !== sessionId || this.muted) return null;
+      const snapshot = await reader(sessionId);
+      return this.agentDetector === detector && this.sessionId === sessionId && !this.muted ? snapshot : null;
+    }).catch(() => undefined); // an unavailable screen cannot change pane state
+  }
+
   /**
    * The daemon's process tracker picked the pane's agent process, or saw it
    * die. Only the watched pid's death is reported, so a relaunch the tracker
@@ -1087,7 +1108,7 @@ export class DaemonPTYBridge extends EventEmitter {
     if (!state.alive || ((state.observedAt !== undefined || state.replacedLive) && state.slug && previous && previous !== state.slug)) this.noteAgentEnded();
     this.trackedAgent = { ...(state.slug ? { slug: state.slug } : {}), alive: state.alive };
     if (detector && state.alive && state.observedAt !== undefined && isAgentSlug(state.slug)) {
-      detector.seedTrustedIdentity(state.slug, detector.getIdentityEpoch());
+      if (detector.seedTrustedIdentity(state.slug, detector.getIdentityEpoch())) this.recheckQuietApproval(detector);
     }
     // A cycle the title armed waits for output to start its idle countdown;
     // an agent that died (or was replaced by another) right after the frame
@@ -1116,7 +1137,9 @@ export class DaemonPTYBridge extends EventEmitter {
     // The caller computed the canonical identity with process contradiction
     // checks; retain that check here for callers that race a process edge.
     if (this.trackedAgent?.alive && this.trackedAgent.slug && this.trackedAgent.slug !== signal.agent) return false;
-    return detector.seedTrustedIdentity(signal.agent, detector.getIdentityEpoch());
+    const seeded = detector.seedTrustedIdentity(signal.agent, detector.getIdentityEpoch());
+    if (seeded) this.recheckQuietApproval(detector);
+    return seeded;
   }
 
   /** Ends the cycle noteCodexTitleSpinner armed if it is still that cycle and

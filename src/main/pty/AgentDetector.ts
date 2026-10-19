@@ -12,6 +12,8 @@ import { CRITICAL_PATTERNS, matchesCriticalPattern } from '../../shared/critical
 import { CodexUsageLimitLineScanner } from '../../shared/usageLimit';
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSlug } from '../../shared/agentIdentity';
+import type { ApprovalScreenSnapshot } from '../../shared/approvalScreen';
+import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, type ScreenApproval } from './approvalScreen';
 export type { AgentSlug };
 export { agentDisplayToSlug } from '../../shared/agentIdentity';
 
@@ -123,6 +125,8 @@ interface AgentPattern {
   chrome?: (line: string) => boolean;
   /** This visible banner can be a prose prefix until its visual row ends. */
   completeChromeRow?: boolean;
+  /** Strict live-grid recovery, used only after a fresh external identity. */
+  approvalScreen?: (rows: readonly string[]) => ScreenApproval | null;
   patterns: { regex: RegExp; status: AgentEvent['status']; message: string }[];
 }
 
@@ -215,6 +219,7 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Claude Code',
     slug: 'claude',
+    approvalScreen: claudeScreenApproval,
     // \s* — Claude Code TUI는 배너 "Claude Code"를 셀 단위 커서 이동으로 그려,
     // ANSI strip 후 "Claude"와 "Code" 사이 공백이 사라진 "ClaudeCode"가 된다.
     // 공백을 선택적으로 둬야 daemon mode에서도 gate가 매칭된다(핵심 race 원인).
@@ -351,6 +356,7 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Codex CLI',
     slug: 'codex',
+    approvalScreen: codexScreenApproval,
     // The trust-prompt phrase is part of the gate because on a first boot in
     // an untrusted directory Codex shows it BEFORE the "OpenAI Codex" banner
     // — with the banner-only gate the trust pattern below could never fire.
@@ -431,6 +437,7 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Antigravity CLI',
     slug: 'agy',
+    approvalScreen: agyScreenApproval,
     gate: /Antigravity\s*CLI/,
     chrome: isAntigravityChrome,
     completeChromeRow: true,
@@ -461,6 +468,7 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'OpenCode',
     slug: 'opencode',
+    approvalScreen: openCodeScreenApproval,
     gate: /OpenCode|OC \|/,
     chrome: isOpenCodeChrome,
     patterns: [
@@ -931,6 +939,11 @@ export class AgentDetector {
   private trustedAgent: AgentSlug | null = null;
   private identityEpoch = 0;
   private identityBoundaryAt = 0;
+  private approvalOutputRevision = 0;
+  private approvalScreenGeneration = 0;
+  private approvalHintTail = '';
+  private approvalHintAt: number | null = null;
+  private approvalRecheckEpoch: number | null = null;
   // Kiro uses a compound gate so another agent merely mentioning "Kiro CLI"
   // cannot steal this PTY's identity. Evidence is scoped to this detector/PTy.
   private kiroChromeSeen = false;
@@ -1057,7 +1070,10 @@ export class AgentDetector {
 
     const sameOwner = this.lastAgent === profile.agent && !this.shellPromptSinceOwner;
     if (!sameOwner) {
-      if (this.lastAgent !== null && this.lastAgent !== profile.agent) this.advanceIdentityBoundary();
+      if (this.lastAgent !== null && this.lastAgent !== profile.agent) {
+        this.advanceIdentityBoundary();
+        this.invalidateApprovalScreen();
+      }
       this.resetLaunchEvidence();
       this.lastScreenAgent = null;
     }
@@ -1070,6 +1086,7 @@ export class AgentDetector {
 
   /** Confirmed death/disposal: revoke all launch identity, without an event. */
   clearTrustedIdentity(): void {
+    this.invalidateApprovalScreen();
     this.advanceIdentityBoundary();
     this.trustedAgent = null;
     this.lastAgent = null;
@@ -1077,6 +1094,50 @@ export class AgentDetector {
     this.activeAgents.clear();
     this.shellPromptSinceOwner = false;
     this.resetLaunchEvidence();
+  }
+
+  /** Input/resize makes the previous unanswered-looking grid unsafe to recover. */
+  invalidateApprovalScreen(): void {
+    this.approvalScreenGeneration++;
+    this.approvalHintTail = '';
+    this.approvalHintAt = null;
+    this.approvalRecheckEpoch = null;
+  }
+
+  /**
+   * One bounded current-screen check after fresh identity arrives. The recent
+   * raw hint only justifies a read; it is never replayed or treated as an
+   * approval. Only a provider's interactive, current viewport may emit here,
+   * and only awaiting_input. No gate, running, completion or critical path is
+   * called. A busy renderer gets one fresh read after output overtakes it.
+   */
+  async revalidateApprovalScreen(read: () => Promise<ApprovalScreenSnapshot | null>): Promise<boolean> {
+    const owner = this.trustedAgent;
+    const profile = AGENT_PATTERNS.find((candidate) => candidate.slug === owner);
+    const epoch = this.identityEpoch;
+    const generation = this.approvalScreenGeneration;
+    const fresh = (): boolean => this.approvalHintAt !== null
+      && Date.now() >= this.approvalHintAt && Date.now() - this.approvalHintAt <= 30_000;
+    if (!owner || !profile?.approvalScreen || !fresh() || this.approvalRecheckEpoch === epoch) return false;
+    this.approvalRecheckEpoch = epoch;
+    const owns = (): boolean => this.trustedAgent === owner && this.identityEpoch === epoch
+      && this.approvalScreenGeneration === generation && !this.shellPromptSinceOwner && fresh();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const revision = this.approvalOutputRevision;
+      let snapshot: ApprovalScreenSnapshot | null;
+      try { snapshot = await read(); } catch { return false; }
+      if (!owns()) return false;
+      if (revision !== this.approvalOutputRevision) continue;
+      if (!snapshot || !snapshot.isCurrent()) return false;
+      const approval = profile.approvalScreen(snapshot.rows);
+      if (!approval) return false;
+      const key = `${profile.agent}:awaiting_input`;
+      if (this.lastEmittedFor.get(key) === approval.text) return false;
+      this.lastEmittedFor.set(key, approval.text);
+      for (const cb of this.callbacks) cb({ agent: profile.agent, status: 'awaiting_input', message: approval.message });
+      return true;
+    }
+    return false;
   }
 
   private advanceIdentityBoundary(): void {
@@ -1116,6 +1177,7 @@ export class AgentDetector {
   }
 
   feed(data: string): void {
+    if (data) this.approvalOutputRevision++;
     const text = this.shellBoundaryBuffer + data;
     this.shellBoundaryBuffer = '';
     // Process each launch in wire order, even when a PTY read contains both
@@ -1144,6 +1206,7 @@ export class AgentDetector {
   }
 
   private noteShellReturn(): void {
+    this.invalidateApprovalScreen();
     this.advanceIdentityBoundary();
     this.trustedAgent = null;
     if (this.lastAgent !== null) this.shellPromptSinceOwner = true;
@@ -1170,6 +1233,16 @@ export class AgentDetector {
 
   private feedOutput(data: string): void {
     if (!data) return;
+    const previousLength = stripAnsi(this.approvalHintTail).length;
+    const probe = this.approvalHintTail + data;
+    const cleanProbe = stripAnsi(probe);
+    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required/g;
+    for (const match of cleanProbe.matchAll(hint)) {
+      // Only newly drawn text refreshes freshness. Retaining an old question
+      // in the tail across a title update must not make it recent again.
+      if (match.index + match[0].length > previousLength) this.approvalHintAt = Date.now();
+    }
+    this.approvalHintTail = probe.slice(-4096);
     this.lineBuffer += data;
     if (this.lineBuffer.length > MAX_BUFFER) {
       this.lineBuffer = this.lineBuffer.slice(-MAX_BUFFER);

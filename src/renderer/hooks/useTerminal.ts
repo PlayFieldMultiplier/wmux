@@ -624,12 +624,12 @@ function revealTiming(ptyId: string, stage: string, extra = ''): void {
 // Read-path hydration (MCP pane.search / input.readScreen): a dirty hidden
 // pane must be re-synced before its buffer is scanned, or agents silently read
 // stale output. Keyed by ptyId; registered per mounted terminal.
-const hydrateRegistry = new Map<string, () => Promise<void>>();
+const hydrateRegistry = new Map<string, () => Promise<boolean>>();
 /** Longest a read waits for a painted cold frame to be swapped out. */
 const COLD_FRAME_READ_WAIT_MS = 3000;
-export async function hydrateTerminalForRead(ptyId: string): Promise<void> {
+export async function hydrateTerminalForRead(ptyId: string): Promise<boolean> {
   const fn = hydrateRegistry.get(ptyId);
-  if (fn) await fn();
+  return fn ? await fn() : false;
 }
 
 // Monotonic token source so each useTerminal instance gets a stable, unique key
@@ -2494,7 +2494,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
             bracketedPasteMode: !!imgModes?.bracketedPasteMode,
             screenIsAlternate: terminal.buffer.active.type === 'alternate',
           });
-        })().catch(() => {});
+        })().catch(() => { /* Clipboard failures must not escape the key handler. */ });
         return false;
       }
 
@@ -2549,7 +2549,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
             bracketedPasteMode: !!imgModes?.bracketedPasteMode,
             screenIsAlternate: terminal.buffer.active.type === 'alternate',
           });
-        })().catch(() => {});
+        })().catch(() => { /* Clipboard failures must not escape the key handler. */ });
         return false;
       }
 
@@ -2588,7 +2588,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
             bracketedPasteMode: !!imgModes?.bracketedPasteMode,
             screenIsAlternate: terminal.buffer.active.type === 'alternate',
           });
-        })().catch(() => {});
+        })().catch(() => { /* Clipboard failures must not escape the key handler. */ });
         return false;
       }
 
@@ -3401,8 +3401,8 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // wedged (a handler that threw mid-drain strands every queued callback)
     // would otherwise never call back, and the read would burn its whole RPC
     // deadline and return nothing. See parseBarrier.ts.
-    const hydrateForRead = async (): Promise<void> => {
-      if (terminalRef.current !== terminal) return;
+    const hydrateForRead = async (): Promise<boolean> => {
+      if (terminalRef.current !== terminal) return false;
       // Cold-park reveal: a painted cold frame is minutes old. Let the daemon
       // replay replace it before the buffer is read (bounded: a lost flush
       // marker reads the frame, as before).
@@ -3410,7 +3410,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       while (warmSwap.phase !== 'idle' && terminalRef.current === terminal && performance.now() < swapDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      if (terminalRef.current !== terminal) return;
+      if (terminalRef.current !== terminal) return false;
       if (isTerminalDirty(terminal)) {
         await startResync('hydrate-read');
       } else {
@@ -3422,6 +3422,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
           `[useTerminal] parse barrier timed out ptyId=${ptyIdRef.current} — reading a possibly unsettled buffer (xterm write buffer may be wedged)`,
         );
       }
+      return parsed && terminalRef.current === terminal && warmSwap.phase === 'idle' && !isTerminalDirty(terminal);
     };
     if (ptyId) hydrateRegistry.set(ptyId, hydrateForRead);
 
