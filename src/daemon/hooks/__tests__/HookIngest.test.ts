@@ -13,6 +13,8 @@ import type { AgentSignal, AgentSignalKind } from '../../../shared/hooks/signal-
 import type { ResumeBinding } from '../../../shared/agentResume';
 import os from 'node:os';
 import path from 'node:path';
+import { lifecycleAlarmScenarios, type AlarmReplayOutput } from '../../../shared/__tests__/fixtures/lifecycleAlarmScenarios';
+import { replayTimeline } from '../../../shared/__tests__/fixtures/replayTimeline';
 
 // A transcript path the guard accepts: inside the real Claude projects root and
 // named after the agent session id. Built from `os.homedir()` so the test is
@@ -103,6 +105,44 @@ describe('HookIngest', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each(lifecycleAlarmScenarios)('replays ingress alarm timeline: $name', (scenario) => {
+    const startedAt = Date.now();
+    const outputs: AlarmReplayOutput[] = [];
+    const record = (event: HookAgentEventData | DetectorHeldEventData) => {
+      // Status-only and vetoed events remain observable to the UI; this
+      // contract measures exactly the confirmed notification outlets.
+      if (event.decision !== 'emit') return;
+      const status = event.status === 'waiting' ? 'complete' : event.status;
+      if (status !== 'complete' && status !== 'error' && status !== 'awaiting_input') {
+        throw new Error(`Unexpected alarm status: ${status}`);
+      }
+      outputs.push({ atMs: Date.now() - startedAt, status });
+    };
+    const replayIngest = new HookIngest({
+      ...fixture.deps,
+      now: () => Date.now(),
+      emitAgentEvent: (_sessionId, data) => record(data),
+      emitDetectorEvent: (_sessionId, data) => record(data),
+    });
+    try {
+      replayTimeline(scenario, {
+        advanceBy: (ms) => vi.advanceTimersByTime(ms),
+        dispatch: (input) => {
+          if (input.source === 'hook') {
+            expect(replayIngest.handle(makeSignal({
+              ptyId: 'pty-a', kind: input.kind, payload: input.payload ?? {}, ts: Date.now(),
+            })).ok).toBe(true);
+          } else {
+            replayIngest.arbitrateDetector('pty-a', { agent: 'Claude Code', status: input.status });
+          }
+        },
+        checkpoint: (expected, atMs) => expect(outputs, `${scenario.name} at ${atMs}ms`).toEqual(expected),
+      });
+    } finally {
+      replayIngest.dispose();
+    }
   });
 
   it('hands every resolved signal, payload intact, to onResolvedSignal', () => {
@@ -307,6 +347,19 @@ describe('HookIngest', () => {
   });
 
   describe('stop_failure broadcast (turn end on an API error)', () => {
+    it('keeps an API failure when a generic Stop arrives before its alarm confirms', () => {
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.user_prompt_submit' }));
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.stop_failure' }));
+      vi.advanceTimersByTime(100);
+      fixture.advance(100);
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.stop' }));
+      vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+      const alarms = fixture.emitted.filter((e) => e.data.decision === 'emit');
+      expect(alarms.map((e) => [e.data.hookKind, e.data.status])).toEqual([
+        ['agent.stop_failure', 'error'],
+      ]);
+    });
+
     it('broadcasts error, never complete, and says what failed', () => {
       ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.user_prompt_submit' }));
       ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.stop_failure' }));

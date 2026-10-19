@@ -8,6 +8,8 @@ import {
 } from '../CompletionAlarm';
 import type { AlarmClass, AlarmCue } from '../CompletionAlarm';
 import type { AgentSignal } from '../signal-types';
+import { lifecycleAlarmScenarios, type AlarmReplayOutput } from '../../__tests__/fixtures/lifecycleAlarmScenarios';
+import { replayTimeline } from '../../__tests__/fixtures/replayTimeline';
 
 function makeSignal(overrides: Partial<AgentSignal> = {}): AgentSignal {
   return {
@@ -47,6 +49,73 @@ describe('CompletionAlarm', () => {
   afterEach(() => {
     alarm.dispose();
     vi.useRealTimers();
+  });
+
+  it.each(lifecycleAlarmScenarios)('replays alarm timeline: $name', (scenario) => {
+    const startedAt = Date.now();
+    const outputs: AlarmReplayOutput[] = [];
+    const replayAlarm = new CompletionAlarm({
+      onConfirmed: (_pane, _slug, cls, resume, firm) => resume({ cls, firm }),
+    });
+    try {
+      replayTimeline(scenario, {
+        advanceBy: (ms) => vi.advanceTimersByTime(ms),
+        dispatch: (input) => {
+          const cue = input.source === 'hook'
+            ? normalizeHookCue(makeSignal({ kind: input.kind, payload: input.payload ?? {}, ts: Date.now() }))
+            : normalizeDetectorCue(input.status);
+          if (!cue) throw new Error('Replay input must have alarm semantics');
+          replayAlarm.observe('p1', 'claude', cue, (confirmed) => {
+            outputs.push({
+              atMs: Date.now() - startedAt,
+              status: confirmed?.cls === 'done' ? 'complete'
+                : input.source === 'hook' && input.kind === 'agent.stop_failure' ? 'error' : 'awaiting_input',
+            });
+          });
+        },
+        checkpoint: (expected, atMs) => expect(outputs, `${scenario.name} at ${atMs}ms`).toEqual(expected),
+      });
+    } finally {
+      replayAlarm.dispose();
+    }
+  });
+
+  it('a cancelled scheduler callback cannot confirm or delete its replacement window', () => {
+    // An injected scheduler may already have queued a cancelled callback.
+    // This models that contract boundary, not ordinary setTimeout behavior.
+    const callbacks: Array<() => void> = [];
+    const resumed: string[] = [];
+    const cancel = vi.fn();
+    const racingAlarm = new CompletionAlarm({
+      schedule: (fn) => { callbacks.push(fn); return cancel; },
+      onConfirmed: (_pane, _slug, _cls, resume) => resume(),
+    });
+    try {
+      replayTimeline<string, string>({
+        name: 'cancelled callback arrives after replacement',
+        steps: [
+          { atMs: 0, input: 'working' },
+          { atMs: 100, input: 'stop' },
+          { atMs: 200, input: 'failure' },
+          { atMs: 1_600, input: 'old callback' },
+          { atMs: 1_600, expect: [] },
+          { atMs: 1_700, input: 'replacement callback' },
+          { atMs: 1_700, expect: ['failure'] },
+        ],
+      }, {
+        advanceBy: (ms) => vi.advanceTimersByTime(ms),
+        dispatch: (input) => {
+          if (input === 'old callback') callbacks[0]();
+          else if (input === 'replacement callback') callbacks[1]();
+          else racingAlarm.observe('p1', 'claude', input === 'working' ? WORKING
+            : input === 'stop' ? STOP : { class: 'attention', failure: true }, () => resumed.push(input));
+        },
+        checkpoint: (expected) => expect(resumed).toEqual(expected),
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      racingAlarm.dispose();
+    }
   });
 
   // The canonical happy path: prompt → agent works → stops → nothing rebuts
@@ -227,6 +296,38 @@ describe('CompletionAlarm', () => {
     expect(alarm.observe('p1', 'claude', ATTENTION)).toBe('hold');
     vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
     expect(confirmed).toEqual([expect.objectContaining({ cls: 'attention' })]);
+  });
+
+  it.each([
+    ['stop', STOP],
+    ['detector completion', normalizeDetectorCue('complete') as AlarmCue],
+    ['dialog answer', { class: 'answered' } as AlarmCue],
+    ['delayed dialog', FIRM_ATTENTION],
+  ])('a pending failure survives a %s without becoming a successful completion', (_name, late) => {
+    const failureResume = vi.fn();
+    alarm.observe('p1', 'claude', WORKING);
+    alarm.observe('p1', 'claude', normalizeHookCue(makeSignal({ kind: 'agent.stop_failure' })), failureResume);
+    vi.advanceTimersByTime(100);
+    expect(alarm.observe('p1', 'claude', late, vi.fn())).toBe('drop');
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS - 100);
+    expect(confirmed).toEqual([{ pane: 'p1', slug: 'claude', cls: 'attention', resume: failureResume }]);
+    expect(alarm.observe('p1', 'claude', STOP)).toBe('drop');
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(confirmed).toHaveLength(1);
+  });
+
+  it.each([WORKING, { class: 'session' } as AlarmCue])('new $class evidence can supersede a pending failure and the next turn can complete', (cue) => {
+    // Failure must not inherit an older dialog's firmness; real retry work
+    // should cancel it, rather than announce an error over the resumed turn.
+    alarm.observe('p1', 'claude', FIRM_ATTENTION);
+    alarm.observe('p1', 'claude', normalizeHookCue(makeSignal({ kind: 'agent.stop_failure' })));
+    alarm.observe('p1', 'claude', cue);
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(confirmed).toHaveLength(0);
+    alarm.observe('p1', 'claude', WORKING);
+    alarm.observe('p1', 'claude', STOP);
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    expect(confirmed.map((c) => c.cls)).toEqual(['done']);
   });
 
   it('attention cancels a pending done window (stop raced an approval prompt)', () => {
