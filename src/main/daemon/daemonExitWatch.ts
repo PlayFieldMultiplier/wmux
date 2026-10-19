@@ -108,7 +108,10 @@ export function createDaemonExitWatch(pid: number | null, spawned: boolean, deps
 
   let logged = false;
   let disposed = false;
-  let reporting = false;
+  // The report in flight, shared by every caller that asks while it runs, so
+  // a later caller (a full shutdown waiting before quit) waits for the same
+  // evidence instead of returning at once.
+  let inFlight: Promise<void> | null = null;
   let childExit: SpawnedDaemonExit | null = null;
   let handle: ProcessExitHandle | null = null;
   let handleFailure: string | null = null;
@@ -146,7 +149,7 @@ export function createDaemonExitWatch(pid: number | null, spawned: boolean, deps
     stopChildWatch = onChildExit(pid, (exit) => {
       childExit = exit;
       logExit(exit, 'child exit');
-      if (!reporting) release();
+      if (!inFlight) release();
     }, !spawned);
     if (platform === 'win32' && !logged) {
       const opened = openHandle(pid);
@@ -176,39 +179,48 @@ export function createDaemonExitWatch(pid: number | null, spawned: boolean, deps
   };
 
   return {
-    async report(reason: string): Promise<void> {
-      if (logged || reporting || disposed) return;
-      reporting = true;
-      try {
-        const startedAt = now();
-        for (let step = 0; ; step++) {
-          const wait = POLL_STEPS_MS[step] ?? POLL_LATER_MS;
-          if (wait > 0) await sleep(wait);
-          if (logged) return;
-          const r = readOnce();
-          if ('exited' in r) {
-            logExit(r.exited, `at ${reason}`);
-            return;
-          }
-          if ('unavailable' in r) {
-            logged = true;
-            deps.log('warn', `daemon pid ${pid ?? '?'} ${reason}, exit code unavailable: ${r.unavailable}`);
-            return;
-          }
-          if (now() - startedAt >= budgetMs) {
-            logged = true;
-            deps.log('warn', `daemon pid ${pid} still running ${now() - startedAt}ms after ${reason} — exit code unavailable: it has not exited`);
-            return;
-          }
+    report(reason: string): Promise<void> {
+      if (inFlight) return inFlight;
+      if (logged || disposed) return Promise.resolve();
+      // The await always yields, so the cleanup below runs after inFlight is
+      // set, even when poll() finishes without waiting.
+      inFlight = (async () => {
+        try {
+          await poll(reason);
+        } finally {
+          inFlight = null;
+          if (logged || disposed) release();
         }
-      } finally {
-        reporting = false;
-        if (logged || disposed) release();
-      }
+      })();
+      return inFlight;
     },
     dispose(): void {
       disposed = true;
-      if (!reporting) release();
+      if (!inFlight) release();
     },
   };
+
+  async function poll(reason: string): Promise<void> {
+    const startedAt = now();
+    for (let step = 0; ; step++) {
+      const wait = POLL_STEPS_MS[step] ?? POLL_LATER_MS;
+      if (wait > 0) await sleep(wait);
+      if (logged) return;
+      const r = readOnce();
+      if ('exited' in r) {
+        logExit(r.exited, `at ${reason}`);
+        return;
+      }
+      if ('unavailable' in r) {
+        logged = true;
+        deps.log('warn', `daemon pid ${pid ?? '?'} ${reason}, exit code unavailable: ${r.unavailable}`);
+        return;
+      }
+      if (now() - startedAt >= budgetMs) {
+        logged = true;
+        deps.log('warn', `daemon pid ${pid} still running ${now() - startedAt}ms after ${reason} — exit code unavailable: it has not exited`);
+        return;
+      }
+    }
+  }
 }

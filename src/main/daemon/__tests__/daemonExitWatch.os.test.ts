@@ -171,6 +171,17 @@ describe('createDaemonExitWatch (Windows handle)', () => {
     expect(lines).toHaveLength(1);
   });
 
+  it('a report asked while another runs waits for the same exit line (Codex P2)', async () => {
+    // A socket-close report is polling when a full shutdown asks again; the
+    // shutdown awaits its report before quit, so it must not return early.
+    const h = scriptedHandle([{ state: 'running' }, { state: 'running' }, { state: 'exited', code: 0xc0000005 }]);
+    const { lines, deps } = winHarness({ openHandle: () => h.handle });
+    const watch = createDaemonExitWatch(9, false, deps);
+    void watch.report('socket close');
+    await watch.report('full shutdown');
+    expect(lines.map((l) => l.msg)).toEqual(['daemon pid 9 exited 0xC0000005 (access violation) — at socket close']);
+  });
+
   it('dispose closes the handle without logging; a report already running still finishes', async () => {
     const quiet = scriptedHandle([{ state: 'running' }]);
     const a = winHarness({ openHandle: () => quiet.handle });
