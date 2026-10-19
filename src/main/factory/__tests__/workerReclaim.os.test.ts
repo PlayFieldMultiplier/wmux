@@ -695,6 +695,28 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     await settled(store);
   });
 
+  it('a resumed worker whose task then ended keeps the settle pass\'s retry after its stops failed', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const ended = row('completed', { rev: 4, updatedAt: 3_000 });
+    await store.put({
+      taskId: ended.id, botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 'perf-A', threadId: `task:${ended.id}`,
+      ended: 'reported', sessions: [{ sessionId: 'daemon-1', cwd: wt, resumeSessionId: UUID }], state: 'resumed', at: 2_000, endRev: 3,
+    });
+    let failing = true;
+    const stopAgent = vi.fn(async () => (failing ? { ok: false, code: 'refused' } : { ok: true, stopped: true }));
+    let t = 5_000;
+    const { ports } = reclaimPorts(store, [session()], { allRows: () => [ended], row: () => ended, stopAgent, now: () => t, retryMs: 5, workspacePanes: () => ['daemon-1'] });
+    const off = installWorkerReclaim(ports);
+    await vi.waitFor(() => expect(stopAgent).toHaveBeenCalledTimes(3), { timeout: 10_000 });
+    await deliberateSleep(20, 'negative: the end\'s attempts are spent');
+    expect(store.get(ended.id)?.state).toBe('stopping');
+    failing = false;
+    t += STOPPING_SETTLE_MS;
+    await vi.waitFor(() => expect(store.get(ended.id)?.state).toBe('stopped'), { timeout: 10_000 });
+    off();
+    await settled(store);
+  });
+
   it('a worker resumed on its still-open row is stopped again once idle, counted from the resume', async () => {
     const store = ReclaimedWorkers.at(dir);
     const current = working();

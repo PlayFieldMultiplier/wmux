@@ -1307,10 +1307,11 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
     const prior = ports.store.get(entry.id);
     if (inFlight.has(entry.id) || (ended === 'reported' ? isPausedSince(prior, entry) : isReclaimedSince(prior, entry))) return;
     // Per end: a task that reopened and ended again is tried afresh, and so
-    // is each resume of an open row's worker (its attempts count apart, from
-    // the resume until it is stopped again).
-    if (prior?.state === 'resumed') resumeGen.set(entry.id, prior.at);
-    const gen = resumeGen.get(entry.id);
+    // is each resume of an open row's worker (an idle stop's attempts count
+    // apart, from the resume until it is stopped again). An end's key is
+    // the row's alone (settleStopping resets it).
+    if (ended === 'reported' && prior?.state === 'resumed') resumeGen.set(entry.id, prior.at);
+    const gen = ended === 'reported' ? resumeGen.get(entry.id) : undefined;
     const key = `${entry.id}@${entry.rev}${gen !== undefined ? `:${gen}` : ''}`;
     const n = attempts.get(key) ?? 0;
     if (n >= RECLAIM_ATTEMPTS_MAX) return;
