@@ -59,6 +59,8 @@ interface FakeGitOpts {
   leftoverUntracked?: string;
   /** `worktree remove` fails and drops the record. */
   removeFails?: boolean;
+  /** `config -z --list --show-scope` output. */
+  config?: string;
 }
 
 function fakeGit(o: FakeGitOpts = {}) {
@@ -67,6 +69,7 @@ function fakeGit(o: FakeGitOpts = {}) {
   const git = vi.fn(async (args: string[], _cwd: string, _opts?: RunGitOptions) => {
     calls.push(args);
     const out = (stdout: string) => ({ stdout, stderr: '' });
+    if (args.includes('config') && args.includes('--list')) return out(o.config ?? '');
     if (args.includes('read-tree')) return out('');
     if (args.some((a) => a.startsWith('--work-tree=')) && args.includes('diff-files')) return out(o.leftoverDiff ?? 'D\tsrc/b.ts\n');
     if (args.some((a) => a.startsWith('--work-tree=')) && args.includes('ls-files')) return out(o.leftoverUntracked ?? '');
@@ -607,6 +610,19 @@ describe('a removal that could not finish is recorded for a later close', () => 
     } finally {
       setActivePendingRemovals(null);
     }
+  });
+
+  it('never compares a leftover under a repository whose config sets a content filter (it would run in main)', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const g = fakeGit({ config: 'local\0filter.x.clean\nrun-me\0' });
+    const { mgr, removeTree } = manager(g.git, { pendingRemovals: store });
+    const res = await mgr.finishPendingRemoval(dir);
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    if (res && !res.ok) expect(res.error).toMatch(/filter\.x\.clean/);
+    expect(g.calls.some((a) => a.includes('read-tree') || a.includes('update-index'))).toBe(false);
+    expect(removeTree).not.toHaveBeenCalled();
   });
 
   it('a refused finish of a leftover names Close and keep folder', async () => {

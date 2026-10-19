@@ -25,7 +25,7 @@ import * as crypto from 'node:crypto';
 import * as os from 'node:os';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { getExecEnv } from '../../shared/execEnv';
-import { originPinFromConfigList } from './workerGit';
+import { originPinFromConfigList, workerGitPreflight } from './workerGit';
 import type { PendingRemovalStore, PendingWorktreeRemoval } from './pendingWorktreeRemovals';
 
 const execFileAsync = promisify(execFile);
@@ -1123,6 +1123,18 @@ export class TaskWorktreeManager {
       tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-leftover-'));
       const env = { GIT_INDEX_FILE: path.join(tmp, 'index') };
       const base = ['-c', 'core.fsmonitor=false', `--git-dir=${commonDir}`, `--work-tree=${folder}`];
+      // The repository's config is the task's to write: a content filter in
+      // it (filter.*.clean, .process) would run in main when the index is
+      // refreshed. Refused as for any read main does in a worker's checkout.
+      const pre = await workerGitPreflight(async (args) => {
+        try {
+          const r = await this.runGit([...base, ...args], folder, { env });
+          return { code: 0, stdout: r.stdout, stderr: r.stderr };
+        } catch (err) {
+          return { code: 1, stdout: '', stderr: (err as Error).message };
+        }
+      }, 'read');
+      if (!pre.ok) return { error: pre.error };
       await this.runGit([...base, 'read-tree', head], folder, { env });
       // read-tree leaves no file stats in the index: refresh hashes each file
       // once, so an unchanged one compares equal. It exits non-zero when some
