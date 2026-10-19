@@ -3,9 +3,9 @@
 // The Codex twin of shared/botWorkerGuard.ts. A codex worker a bot started
 // launches only on a line main rebuilt from an allowlist, with Codex's own
 // command rules (execpolicy) refusing what the Claude worker settings refuse:
-// a merge (`gh pr merge`, `gh api`), every `git push` (main pushes the task
-// branch, `task.push`), the git settings that redirect a push, and the public
-// `gh` acts that go to the owner as approvals. The rules are a Starlark file
+// a merge (`gh pr merge`, `gh api`, and glab's), every `git push` (main
+// pushes the task branch, `task.push`), the git settings that redirect a push,
+// and the public `gh` and `glab` acts that go to the owner. The rules are a Starlark file
 // main writes into the worktree's project layer
 // (`<worktree>/.codex/rules/wmux-bot-worker.rules`, CODEX_WORKER_RULES_PATH);
 // main/agents/codexWorkerGuard.ts writes it, checks the folder and proves the
@@ -13,7 +13,8 @@
 //
 // Codex rules match a command's leading words (a prefix, with alternatives
 // per word, no wildcards), so the rules forbid whole option families before a
-// verb rather than spellings of one value, and `gh api` entirely.
+// verb rather than spellings of one value, and `gh api` and `glab api`
+// entirely.
 //
 // The launch: `-a never -s workspace-write`, network on, and as the only
 // extra writable roots what a commit writes (codexWorkerWritableRoots): the
@@ -48,6 +49,7 @@ import { UNLISTED_TOOLS } from './unlistedTools';
 import { FANOUT_WORKER_DISALLOWED_TOOLS, splitModelEnvMarker } from './workerLaunch';
 import type { Connector } from './botConnector';
 import { CONNECTOR_NPM_REGISTRY } from './botWorkerMcp';
+import { GLAB_GROUP_ALIASES } from './botWorkerGuard';
 
 /** The rules file, relative to the worktree. */
 export const CODEX_WORKER_RULES_PATH = '.codex/rules/wmux-bot-worker.rules';
@@ -71,6 +73,32 @@ const GH_WRITE_VERBS: Readonly<Record<string, readonly string[]>> = {
 };
 /** gh options that take a value, spelled as their own word. */
 const GH_VALUE_OPTIONS = ['-R', '--repo', '--hostname'];
+/** glab groups and the verbs that write, each with its aliases (same intent
+ *  as the glab rules of BOT_WORKER_DENY). A group's own aliases
+ *  (GLAB_GROUP_ALIASES) are refused with it. */
+const GLAB_WRITE_VERBS: Readonly<Record<string, readonly string[]>> = {
+  mr: ['merge', 'accept', 'approve', 'note', 'comment', 'revoke', 'unapprove', 'close', 'reopen', 'delete', 'del', 'update', 'rebase', 'for', 'new-for', 'create-for'],
+  issue: ['create', 'new', 'close', 'note', 'comment', 'delete', 'del', 'reopen', 'update'],
+  release: ['create', 'delete', 'upload'],
+  repo: ['create', 'fork', 'update', 'delete', 'transfer', 'mirror', 'publish'],
+  variable: ['set', 'new', 'create', 'update', 'delete', 'remove', 'import', 'im'],
+  ci: ['run', 'create', 'trigger', 'run-trig', 'retry', 'cancel', 'delete'],
+  alias: ['set'],
+  stack: ['sync'],
+};
+/** glab's nested groups that write: [group, subgroup, verbs]. */
+const GLAB_NESTED_WRITE_VERBS: readonly (readonly [string, string, readonly string[]])[] = [
+  ['repo', 'members', ['add', 'remove']],
+  ['issue', 'board', ['create', 'new']],
+];
+/** `glab mr create` options that push the branch, upload a file or merge it
+ *  later (as the first word after the verb: Codex rules match leading words). */
+const GLAB_CREATE_PUSH_OPTIONS = [
+  '-f', '-yf', '-wf', '-ywf', '-wyf', '--attach',
+  ...['--fill', '--push', '--auto-merge', '--create-source-branch'].flatMap((o) => [o, `${o}=true`]),
+];
+/** glab options that take a value, spelled as their own word. */
+const GLAB_VALUE_OPTIONS = ['-R', '--repo'];
 /** git options before the command that take a value or change where git
  *  runs, spelled as their own word. */
 const GIT_GLOBAL_OPTIONS = [
@@ -99,6 +127,15 @@ function repoOptionWords(repoKey: string | undefined): string[] {
   return keys.flatMap((k) => [`--repo=${k}`, `-R${k}`]);
 }
 
+/** The repository's one-word spellings for glab (`--repo=<path>`, `-R<path>`). Pure. */
+function glabRepoOptionWords(repoKey: string | undefined): string[] {
+  const parts = repoKey?.split('/') ?? [];
+  if (parts.length < 3) return [];
+  const host = parts[0];
+  const project = parts.slice(1).join('/');
+  return [project, `${host}/${project}`, `https://${host}/${project}`].flatMap((k) => [`--repo=${k}`, `-R${k}`]);
+}
+
 /** The rules document. Pure. */
 export function buildCodexWorkerRules(input: CodexWorkerRulesInput): string {
   const rules: { pattern: (string | string[])[]; why: string }[] = [];
@@ -112,6 +149,21 @@ export function buildCodexWorkerRules(input: CodexWorkerRulesInput): string {
   }
   forbid(['gh', [...GH_VALUE_OPTIONS, ...repoWords]], 'name the gh command first, options after it');
   forbid(['gh', 'api'], 'gh api is not available; read with gh pr view / gh issue view');
+  const glabOptions = [...GLAB_VALUE_OPTIONS, ...glabRepoOptionWords(input.repoKey)];
+  const glabGroup = (g: string): string[] => [g, ...(GLAB_GROUP_ALIASES[g] ?? [])];
+  for (const [group, verbs] of Object.entries(GLAB_WRITE_VERBS)) {
+    forbid(['glab', glabGroup(group), [...verbs]], group === 'mr'
+      ? 'a merge goes through the merge lane, and merge request writes go to the owner'
+      : `glab ${group} writes go to the owner`);
+    forbid(['glab', glabGroup(group), glabOptions], `name the glab ${group} command first, options after it`);
+  }
+  for (const [group, sub, verbs] of GLAB_NESTED_WRITE_VERBS) {
+    forbid(['glab', glabGroup(group), sub, [...verbs]], `glab ${group} ${sub} writes go to the owner`);
+    forbid(['glab', glabGroup(group), sub, glabOptions], `name the glab ${group} ${sub} command first, options after it`);
+  }
+  forbid(['glab', 'mr', ['create', 'new'], GLAB_CREATE_PUSH_OPTIONS], 'wmux pushes your task branch: open the merge request with glab mr create --source-branch <your branch> --yes');
+  forbid(['glab', glabOptions], 'name the glab command first, options after it');
+  forbid(['glab', 'api'], 'glab api is not available; read with glab mr view / glab issue view');
   forbid(['git', 'push'], 'wmux pushes your task branch: use the task_push tool');
   forbid(['git', ['send-pack', 'http-push']], 'wmux pushes your task branch: use the task_push tool');
   forbid(['git', 'remote', ['set-url', 'add', 'rename', 'remove', 'rm']], 'the remotes are not yours to change');

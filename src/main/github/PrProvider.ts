@@ -55,8 +55,13 @@ export function parseRemoteHost(url: string): string | null {
   return host || null;
 }
 
+/** A GitHub host: github.com and its subdomains, GitHub Enterprise Cloud
+ *  (`*.ghe.com`), a host with a label that is exactly `github` (GHES, e.g.
+ *  `github.acme.com`), and a dotless SSH host alias that names github
+ *  (`github-work`, which gh resolves itself). Every other host is GitLab. Pure. */
 export function isGithubHost(host: string): boolean {
-  return host === 'github.com' || host.endsWith('.github.com');
+  return host === 'github.com' || host.endsWith('.github.com') || host.endsWith('.ghe.com')
+    || /(?:^|\.)github(?:\.|$)/.test(host) || (!host.includes('.') && host.includes('github'));
 }
 
 /** repo의 origin hostname — remote 없으면 null. */

@@ -1469,7 +1469,7 @@ export function registerFanOutRpc(
       if (checkoutRefusal) return deny('INVALID_ARGUMENT', checkoutRefusal);
       // The preset's worker prompt goes ahead of the bot's own, and every
       // task's effective prompt must still fit the cap.
-      const composed = composeBotWorkerPrompt(botPresetName, sharedPrompt, checkout);
+      const composed = composeBotWorkerPrompt(botPresetName, sharedPrompt, checkout, botProfile?.repo?.repoKey);
       const tooLong = parsed.taskPrompts.some((own) =>
         Buffer.byteLength(own ? `${composed}\n\n${own}` : composed, 'utf8') > FANOUT_PROMPT_MAX_BYTES);
       if (tooLong) return deny('INVALID_ARGUMENT', `a task prompt with the ${botPresetName} preset's worker prompt exceeds ${FANOUT_PROMPT_MAX_BYTES} bytes`);

@@ -30,7 +30,7 @@ export function registerTaskPushTool(server: McpServer, deps: TaskPushToolDeps):
   const resolveSenderPtyId = deps.getSenderPtyId ?? (() => '');
   server.tool(
     'task_push',
-    'Push YOUR fan-out task branch to origin (fast-forward only). Commit first. wmux pushes the branch of the task in your own workspace; there is nothing to name. Then open the PR with gh pr create --head <your branch>.',
+    'Push YOUR fan-out task branch to origin (fast-forward only). Commit first. wmux pushes the branch of the task in your own workspace; there is nothing to name. Then open the PR with gh pr create --head <your branch> (GitLab: glab mr create --source-branch <your branch>).',
     {},
     async () => {
       if (deps.resolveWorkspaceId) {

@@ -36,11 +36,20 @@
 //             its findings with their sources. The only preset a bot without
 //             a repository can start; its report completes the task without
 //             a gate (shared/ledger.ts isResearchDispatch).
+//
+// The review request each preset opens follows the bot repository's host the
+// way the Git page picks its CLI (github/PrProvider.ts): a GitHub host gets
+// `gh pr create`, every other host is GitLab and gets `glab mr create`, and a
+// bot with no recorded repository host keeps the GitHub lines. A GitLab repro
+// worker leaves its draft for the owner to mark ready (`glab mr update` is the
+// owner's, shared/botWorkerGuard.ts).
 
 import type { FanoutAgentChoice, FanoutPreset } from '../../shared/fanoutPreset';
 import { fanoutPresetKey } from '../../shared/fanoutPreset';
 import type { FanoutWorkerPermissionMode } from '../../shared/workerLaunch';
 import { FANOUT_MAX_TASKS } from '../../shared/workTask';
+import { normalizeRepoKey } from '../../shared/repoKey';
+import { isGithubHost } from '../github/PrProvider';
 
 export type BotFanoutPresetName = 'verify' | 'repro' | 'maintain' | 'default' | 'research';
 
@@ -52,11 +61,21 @@ export interface BotPresetCheckout {
   fetchRef?: string;
 }
 
+/** Which CLI opens the worker's review request: gh for a pull request,
+ *  glab for a GitLab merge request. */
+export type BotReviewHost = 'github' | 'gitlab';
+
+export interface BotPresetPromptContext {
+  checkout?: BotPresetCheckout;
+  /** Unset: github (a bot with no recorded repository host). */
+  reviewHost?: BotReviewHost;
+}
+
 export interface BotFanoutPreset {
   name: BotFanoutPresetName;
   description: string;
   /** The worker's prompt, ahead of the bot's own. */
-  workerPrompt: (ctx: { checkout?: BotPresetCheckout }) => string;
+  workerPrompt: (ctx: BotPresetPromptContext) => string;
   /** Unattended: the worker's pane has nobody to answer a permission prompt. */
   permissionMode: FanoutWorkerPermissionMode;
   /** The agent CLI every task of this preset runs on. */
@@ -74,7 +93,47 @@ const CLAUDE: FanoutAgentChoice = { agent: 'claude' };
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 
-const VERIFY_PROMPT = (ctx: { checkout?: BotPresetCheckout }): string => [
+/** The review request's words and commands for one host. */
+interface ReviewRequestLines {
+  noun: string;
+  /** How a worker reads a merged request's title and changed files. */
+  read: string;
+  link: string;
+  create: string;
+  draft: string;
+  ready: string;
+}
+
+const REVIEW_REQUEST: Readonly<Record<BotReviewHost, ReviewRequestLines>> = {
+  github: {
+    noun: 'pull request',
+    read: 'the merged pull requests the task names (`gh pr view <n> --json files,title`)',
+    link: 'the PR link',
+    create: '`gh pr create --head <your branch>`',
+    draft: '`gh pr create --draft --head <your branch>`',
+    ready: 'mark the PR ready with `gh pr ready <number>`: CI skips drafts, so this is what starts it. When the issue does not reproduce, the PR stays a draft, if you opened one.',
+  },
+  gitlab: {
+    noun: 'merge request',
+    read: 'the merged merge requests the task names (`glab mr view <n> --output json` and `glab mr diff <n>`)',
+    link: 'the merge request link',
+    create: '`glab mr create --source-branch <your branch> --title "<title>" --description "<what and why>" --yes`',
+    draft: '`glab mr create --draft --source-branch <your branch> --title "<title>" --description "<repro steps and the test>" --yes`',
+    ready: 'the merge request stays a draft for the owner to mark ready: GitLab runs its pipeline on a draft too.',
+  },
+};
+
+/** The bot repository's review host, from its repo key's host the way the Git
+ *  page picks gh or glab; undefined when there is no key to read. */
+export function botReviewHost(repoKey: string | undefined): BotReviewHost | undefined {
+  const host = normalizeRepoKey(repoKey)?.split('/')[0];
+  if (!host) return undefined;
+  return isGithubHost(host) ? 'github' : 'gitlab';
+}
+
+const review = (ctx: BotPresetPromptContext): ReviewRequestLines => REVIEW_REQUEST[ctx.reviewHost ?? 'github'];
+
+const VERIFY_PROMPT = (ctx: BotPresetPromptContext): string => [
   '# Verify worker',
   '',
   `You are a verify worker. Your worktree is commit ${ctx.checkout?.sha ?? '(the PR head)'} checked out detached: the exact head of a pull request a factory verifier bot is grading.`,
@@ -90,7 +149,7 @@ const VERIFY_PROMPT = (ctx: { checkout?: BotPresetCheckout }): string => [
   '- If dependencies cannot be installed or the change cannot be read, report input_required and say what is missing.',
 ].join('\n');
 
-const REPRO_PROMPT = (): string => [
+const REPRO_PROMPT = (ctx: BotPresetPromptContext): string => [
   '# Repro worker',
   '',
   'You are a repro worker. Your worktree is a fresh branch from origin\'s default branch, and the task below describes an issue.',
@@ -99,24 +158,24 @@ const REPRO_PROMPT = (): string => [
   '- Reproduce the issue with the smallest steps you can find.',
   '- Write a test that fails because of it.',
   '- Attempt the minimal fix that makes that test pass, and run the repository gate (typecheck, lint, tests).',
-  '- Commit on your branch, push it with the `task_push` tool, and open a DRAFT pull request (`gh pr create --draft --head <your branch>`) whose body has the repro steps and the test.',
-  '- Once the failing test (and the fix, if there is one) is committed and pushed, mark the PR ready with `gh pr ready <number>`: CI skips drafts, so this is what starts it. When the issue does not reproduce, the PR stays a draft, if you opened one.',
+  `- Commit on your branch, push it with the \`task_push\` tool, and open a DRAFT ${review(ctx).noun} (${review(ctx).draft}) whose body has the repro steps and the test.`,
+  `- Once the failing test (and the fix, if there is one) is committed and pushed, ${review(ctx).ready}`,
   '',
-  'What you hand back (ledger summary, status review_requested): the repro steps, the failing test, the fix if there is one, and the PR link. When the issue does not reproduce, the summary starts with `no-repro` and lists what you tried.',
+  `What you hand back (ledger summary, status review_requested): the repro steps, the failing test, the fix if there is one, and ${review(ctx).link}. When the issue does not reproduce, the summary starts with \`no-repro\` and lists what you tried.`,
 ].join('\n');
 
-const MAINTAIN_PROMPT = (): string => [
+const MAINTAIN_PROMPT = (ctx: BotPresetPromptContext): string => [
   '# Maintain worker',
   '',
   'You are a maintain worker. Your worktree is a fresh branch from origin\'s default branch. You keep the verify-wmux feature map (`.claude/skills/verify-wmux/references/features/*.md`) true to the code.',
   '',
   'What you can do here:',
-  '- Read the merged pull requests the task names (`gh pr view <n> --json files,title`) and the renderer handles they touched.',
+  `- Read ${review(ctx).read} and the renderer handles they touched.`,
   '- Update the matching feature entries, keeping each entry\'s four-section shape.',
   '- Run each affected verify-wmux recipe once when it can run here, and note the ones that cannot.',
-  '- Commit, push with the `task_push` tool, and open a pull request (`gh pr create --head <your branch>`) with what changed and why.',
+  `- Commit, push with the \`task_push\` tool, and open a ${review(ctx).noun} (${review(ctx).create}) with what changed and why.`,
   '',
-  'What you hand back (ledger summary, status review_requested): the entries you changed, the recipes you ran and their outcome, and the PR link; or `no-drift` when every entry already matched.',
+  `What you hand back (ledger summary, status review_requested): the entries you changed, the recipes you ran and their outcome, and ${review(ctx).link}; or \`no-drift\` when every entry already matched.`,
 ].join('\n');
 
 const RESEARCH_PROMPT = (): string => [
@@ -129,15 +188,15 @@ const RESEARCH_PROMPT = (): string => [
   'What you hand back (ledger summary, status review_requested): your findings, each with a link to its source, and what they mean for the question. That report completes the task. If the question needs a change to code, say so in the summary instead of making one.',
 ].join('\n');
 
-const DEFAULT_PROMPT = (): string => [
+const DEFAULT_PROMPT = (ctx: BotPresetPromptContext): string => [
   '# Task worker',
   '',
   'You are a task worker dispatched by a factory bot. Your worktree is a fresh branch from origin\'s default branch.',
   '',
-  'What you can do here: implement the task below within the files it names, run the repository gate (typecheck, lint, tests), commit, push your branch with the `task_push` tool, and open a pull request (`gh pr create --head <your branch>`).',
-  'When the task asks a question instead of a change (research, a comparison, a look at the web), answer it: search, read the sources, and report; such a task opens no pull request.',
+  `What you can do here: implement the task below within the files it names, run the repository gate (typecheck, lint, tests), commit, push your branch with the \`task_push\` tool, and open a ${review(ctx).noun} (${review(ctx).create}).`,
+  `When the task asks a question instead of a change (research, a comparison, a look at the web), answer it: search, read the sources, and report; such a task opens no ${review(ctx).noun}.`,
   '',
-  'What you hand back (ledger summary, status review_requested): what landed, what you verified, and the PR link — or, for a question, your findings with a link to each source.',
+  `What you hand back (ledger summary, status review_requested): what landed, what you verified, and ${review(ctx).link} — or, for a question, your findings with a link to each source.`,
 ].join('\n');
 
 export const BOT_FANOUT_PRESETS: Readonly<Record<BotFanoutPresetName, BotFanoutPreset>> = {
@@ -228,11 +287,13 @@ export function botPresetCheckoutRefusal(name: string, checkout: BotPresetChecko
   return null;
 }
 
-/** The prompt a bot's worker receives: the preset's, then the bot's own. */
-export function composeBotWorkerPrompt(name: string, botPrompt: string, checkout?: BotPresetCheckout): string {
+/** The prompt a bot's worker receives: the preset's, then the bot's own. The
+ *  bot repository's key picks the review request's CLI (botReviewHost). */
+export function composeBotWorkerPrompt(name: string, botPrompt: string, checkout?: BotPresetCheckout, repoKey?: string): string {
   const preset = botFanoutPreset(name);
   if (!preset) return botPrompt;
-  const head = preset.workerPrompt({ ...(checkout ? { checkout } : {}) });
+  const reviewHost = botReviewHost(repoKey);
+  const head = preset.workerPrompt({ ...(checkout ? { checkout } : {}), ...(reviewHost ? { reviewHost } : {}) });
   const own = botPrompt.trim();
   return own ? `${head}\n\n## Your task\n\n${own}` : head;
 }

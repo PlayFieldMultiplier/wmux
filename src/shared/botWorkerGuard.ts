@@ -42,8 +42,50 @@ export function ghApiDeny(rest: string): string[] {
   return [`Bash(gh api${rest})`, `Bash(gh -* api${rest})`];
 }
 
-/** The deny rules that send a merge through the lane instead of `gh`. */
-export const BOT_WORKER_MERGE_DENY: readonly string[] = [...ghSubcommandDeny('pr', 'merge'), ...ghApiDeny('*merge*')];
+/** glab's built-in aliases for a command group. */
+export const GLAB_GROUP_ALIASES: Readonly<Record<string, readonly string[]>> = { repo: ['project'], variable: ['var'], stack: ['stacks'], ci: ['pipe', 'pipeline'] };
+
+/** `glab <group…> <verb>` up to the verb, in every option placement glab
+ *  takes (`-R g/p` before the group, between the group's words, before the
+ *  verb), the group also under its aliases. `optionBeforeVerb`: the spelling
+ *  ends in ` -* <verb>`. */
+function glabCommandPrefixes(group: string, verb: string): { prefix: string; optionBeforeVerb: boolean }[] {
+  const [head, ...rest] = group.split(' ');
+  return [head, ...(GLAB_GROUP_ALIASES[head] ?? [])].flatMap((h) => {
+    let spellings = ['glab ', 'glab -* '].map((s) => `${s}${h}`);
+    for (const word of [...rest, verb]) spellings = spellings.flatMap((s) => [`${s} ${word}`, `${s} -* ${word}`]);
+    return spellings.map((prefix) => ({ prefix, optionBeforeVerb: prefix.endsWith(` -* ${verb}`) }));
+  });
+}
+
+/** `glab <group…> <verb>` in every spelling glab runs it, as
+ *  ghSubcommandDeny: options before the group, between its words and the
+ *  verb, or both; the verb a whole word after options. Callers name each of
+ *  a verb's aliases (`mr accept` is `mr merge`). Pure. */
+export function glabSubcommandDeny(group: string, verb: string): string[] {
+  return glabCommandPrefixes(group, verb).flatMap(({ prefix, optionBeforeVerb }) =>
+    optionBeforeVerb ? [`Bash(${prefix})`, `Bash(${prefix} *)`] : [`Bash(${prefix}*)`]);
+}
+
+/** `glab <group…> <verb> <rest>` in every option placement before the verb. Pure. */
+function glabCommandWithDeny(group: string, verb: string, rest: string): string[] {
+  return glabCommandPrefixes(group, verb).map(({ prefix }) => `Bash(${prefix} ${rest})`);
+}
+
+/** `glab api<rest>`, also after options. Pure. */
+export function glabApiDeny(rest: string): string[] {
+  return [`Bash(glab api${rest})`, `Bash(glab -* api${rest})`];
+}
+
+/** The deny rules that send a merge through the lane instead of `gh` or
+ *  `glab` (an approval counts toward a GitLab merge; glab's API merge and
+ *  approval are writes, refused with the other `glab api` writes below). */
+export const BOT_WORKER_MERGE_DENY: readonly string[] = [
+  ...ghSubcommandDeny('pr', 'merge'), ...ghApiDeny('*merge*'),
+  ...['merge', 'accept', 'approve'].flatMap((v) => glabSubcommandDeny('mr', v)),
+  // A new merge request set to merge itself once its checks pass.
+  ...['create', 'new'].flatMap((v) => glabCommandWithDeny('mr', v, '*--auto-merge*')),
+];
 
 /** The default branch names main always treats as a repository's default
  *  branch, whatever its own default branch reads (see the default-branches
@@ -85,6 +127,18 @@ export const BOT_WORKER_PUSH_DENY: readonly string[] = [
   ...['send-pack', 'http-push'].flatMap((v) => [`Bash(git ${v}*)`, `Bash(git -* ${v}*)`]),
   // An alias names any of the acts above under another word.
   'Bash(git*config*alias.*)', 'Bash(git*-c*alias.*)',
+  // glab's own pushes: `mr create --fill` (`-f`) or `--push` pushes the
+  // branch and `--create-source-branch` creates one, a stack sync pushes the
+  // stack, `mr rebase` rewrites the source branch on the server and `mr for`
+  // creates one there. A plain `glab mr create --source-branch <branch>`
+  // opens the request for the branch main pushed. `--attach` uploads a file
+  // to the project, a public act like the ones below.
+  // `-f` also in a bundle with create's other switches (`-yf`, `-wf`).
+  ...['create', 'new'].flatMap((v) => [
+    '*--fill*', '*--push*', '*--create-source-branch*', '*--attach*',
+    ...['f', 'yf', 'wf', 'ywf', 'wyf'].flatMap((b) => [`-${b}*`, `* -${b}*`]),
+  ].flatMap((rest) => glabCommandWithDeny('mr', v, rest))),
+  ...['rebase', 'for', 'new-for', 'create-for'].flatMap((v) => glabSubcommandDeny('mr', v)), ...glabSubcommandDeny('stack', 'sync'),
 ];
 
 /** Public acts under the owner's GitHub identity — issues, comments,
@@ -102,6 +156,24 @@ export const BOT_WORKER_PUBLIC_DENY: readonly string[] = [
   ...['* -f*', '* -F*', '*--field*', '*--raw-field*', '*--input*'].flatMap(ghApiDeny),
   // An alias names any of the acts above under another word.
   ...ghSubcommandDeny('alias', 'set'), ...ghSubcommandDeny('alias', 'import'),
+  // The same acts through glab, under the owner's GitLab identity, and every
+  // `glab api` write. Editing a merge request (`mr update`, which also marks
+  // one ready) is the owner's.
+  // Each verb with its aliases (`issue new`, `mr comment`, `variable remove`).
+  ...['create', 'new', 'close', 'note', 'comment', 'delete', 'del', 'reopen', 'update'].flatMap((v) => glabSubcommandDeny('issue', v)),
+  ...['note', 'comment', 'revoke', 'unapprove', 'close', 'reopen', 'delete', 'del', 'update'].flatMap((v) => glabSubcommandDeny('mr', v)),
+  ...['create', 'delete', 'upload'].flatMap((v) => glabSubcommandDeny('release', v)),
+  ...['create', 'new'].flatMap((v) => glabSubcommandDeny('issue board', v)),
+  ...['create', 'fork', 'update', 'delete', 'transfer', 'mirror', 'publish'].flatMap((v) => glabSubcommandDeny('repo', v)),
+  ...['add', 'remove'].flatMap((v) => glabSubcommandDeny('repo members', v)),
+  ...['set', 'new', 'create', 'update', 'delete', 'remove', 'import', 'im'].flatMap((v) => glabSubcommandDeny('variable', v)),
+  // Starting a pipeline or job runs under the owner's GitLab identity;
+  // cancelling or deleting one changes the owner's pipelines.
+  ...['run', 'create', 'trigger', 'run-trig', 'retry', 'cancel', 'delete'].flatMap((v) => glabSubcommandDeny('ci', v)),
+  // Also bundled after api's one other switch, `-i` (`-iX PUT`, `-if`).
+  ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [`*-X*${x}*`, `*-iX*${x}*`, `*--method*${x}*`].flatMap(glabApiDeny))),
+  ...['* -f*', '* -F*', '* -if*', '* -iF*', '*--field*', '*--raw-field*', '*--form*', '*--input*'].flatMap(glabApiDeny),
+  ...glabSubcommandDeny('alias', 'set'),
 ];
 
 /** Everything a bot's worker is refused. */

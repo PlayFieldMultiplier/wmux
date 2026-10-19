@@ -47,8 +47,9 @@
 //     (`ls-remote --symref` at the pushed URL).
 //
 // Any fan-out worker may call it; for a bot's worker it is the only way to
-// publish. Afterwards the worker runs `gh pr create --head <branch>`; main
-// writes no upstream ref.
+// publish. Afterwards the worker opens the review request its preset names
+// (`gh pr create --head <branch>`, or `glab mr create --source-branch
+// <branch>` on GitLab); main writes no upstream ref.
 
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
