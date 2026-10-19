@@ -40,7 +40,7 @@ import { botAccountQuota, type ClaudeUsageCache } from '../../factory/botQuota';
 import { openBotWorkers } from '../../factory/openBotWorkers';
 import { FANOUT_LIVE_TASK_CAP } from '../../worktask/fanoutGuards';
 import { getAgentSlots, refreshSlotLiveness } from '../../factory/agentSlots';
-import { HeldFanouts, releaseHeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../../factory/heldFanouts';
+import { HeldFanouts, heldFanoutWakesChanged, setHeldFanouts, type HeldFanoutPorts } from '../../factory/heldFanouts';
 import { BotFanoutReceipts, botFanoutReceiptsPath, setBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { isVerifyReport } from '../../factory/verifyPreset';
@@ -489,7 +489,7 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
         // A held fan-out's wake that ends, unbooked, hands its slot back.
         onChange: () => {
           runtime?.kick();
-          releaseHeldFanouts();
+          heldFanoutWakesChanged();
         },
       });
       queue.load();

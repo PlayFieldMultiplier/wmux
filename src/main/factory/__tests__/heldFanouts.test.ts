@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentSlots } from '../agentSlots';
-import { HELD_PER_BOT_MAX, HeldFanouts, heldWakeIsFor, installHeldFanoutReleases, releaseHeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../heldFanouts';
+import { HELD_MAX_MS, HELD_PER_BOT_MAX, HeldFanouts, heldFanoutWakesChanged, heldWakeIsFor, installHeldFanoutReleases, releaseHeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../heldFanouts';
 import { holderInputsChanged } from '../holderInputs';
 import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../secretRedaction';
 import { WakeQueue, dropQueuedHeldFanoutWakes, setWakeQueue, wakeQueuePath } from '../wakeQueue';
@@ -18,7 +18,8 @@ const SHA = 'a'.repeat(40);
 function rig(dir: string) {
   const open = new Map<string, number>();
   const factory = (): number => [...open.values()].reduce((a, b) => a + b, 0);
-  const queue = new WakeQueue(wakeQueuePath(dir));
+  // As bot.rpc.ts wires it: a held wake that leaves the queue re-checks.
+  const queue = new WakeQueue(wakeQueuePath(dir), { onChange: heldFanoutWakesChanged });
   queue.load();
   const ports: HeldFanoutPorts = {
     budget: () => ({ maxConcurrentWorkers: 1 }),
@@ -183,9 +184,8 @@ describe('HeldFanouts', () => {
     r.queue.start(wake.id);
     expect(await r.held.releaseNow()).toEqual([]);
     // Its turn ends without starting: the slot goes to BOT_B, through the
-    // queue's change.
+    // queue's change alone.
     r.queue.finish(wake.id);
-    releaseHeldFanouts();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(r.queue.list({ botId: BOT_B }).map((w) => w.reason.kind)).toEqual(['held_fanout']);
     expect(r.held.list()).toEqual([]);
@@ -361,6 +361,58 @@ describe('HeldFanouts', () => {
     expect(await r.held.releaseNow()).toHaveLength(1);
     expect(r.held.list()).toEqual([]);
     expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
+  });
+
+  it('a wake queued for a hold whose write failed stays counted: an older request does not take its slot', async () => {
+    const r = rig(dir);
+    const caps = new Map([[BOT_A, 2], [BOT_B, 1]]);
+    r.ports.budget = (botId) => ({ maxConcurrentWorkers: caps.get(botId) ?? 1 });
+    r.ports.openWorkers = (botId) => ({ bot: botId === BOT_B ? 1 : 0, factory: 0, live: 7 });
+    r.ports.liveLimit = () => 8;
+    let fail = true;
+    r.ports.wakes = () => ({ enqueue: (input) => r.queue.enqueue(input), flush: () => (fail ? Promise.reject(new Error('disk full')) : Promise.resolve()) });
+    r.ports.log = () => undefined;
+    // BOT_B is older but its own slot is full; BOT_A takes the live slot.
+    r.held.hold(request(BOT_B, 'older'));
+    vi.advanceTimersByTime(10);
+    r.held.hold(request(BOT_A, 'younger'));
+    expect(await r.held.releaseNow()).toEqual([]);
+    expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
+    // BOT_B's own slot frees: the live slot is still BOT_A's queued wake's.
+    caps.set(BOT_B, 2);
+    fail = false;
+    expect((await r.held.releaseNow()).map((h) => h.botId)).toEqual([BOT_A]);
+    expect(r.queue.list({ botId: BOT_B })).toEqual([]);
+    expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
+  });
+
+  it('a held wake running past its queue age still holds its slot until its turn ends', async () => {
+    const r = rig(dir);
+    r.ports.budget = () => ({ maxConcurrentWorkers: 2 });
+    r.ports.openWorkers = () => ({ bot: 0, factory: 0, live: 7 });
+    r.ports.liveLimit = () => 8;
+    r.held.hold(request(BOT_A, 'first'));
+    await r.held.releaseNow();
+    const [wake] = r.queue.list({ botId: BOT_A });
+    r.queue.start(wake.id);
+    vi.advanceTimersByTime(HELD_MAX_MS - 1_000);
+    r.held.hold(request(BOT_B, 'second'));
+    vi.advanceTimersByTime(2_000);
+    expect(await r.held.releaseNow()).toEqual([]);
+  });
+
+  it('a wake-queue change re-checks only when a held wake left the queue', () => {
+    const r = rig(dir);
+    r.open.set(BOT_A, 1);
+    r.held.hold(request(BOT_A, 'x'));
+    const release = vi.spyOn(r.held, 'release');
+    // A wake added, or one refused at a full queue (recorded as dropped),
+    // checks nothing: no loop of passes that each refuse again.
+    const wake = r.queue.enqueue({ botId: BOT_B, workspaceId: 'ws-1', priority: 1, reason: { kind: 'held_fanout', heldId: 'held-x', heldAt: 1, titles: ['y'], tainted: false } });
+    r.queue.enqueue({ botId: BOT_B, workspaceId: 'ws-1', priority: 0, reason: { kind: 'human', text: 'hi', source: 'desktop' } });
+    expect(release).not.toHaveBeenCalled();
+    r.queue.drop(wake?.id ?? '', 'expired');
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it('a stored secret in a title is redacted in what is kept', () => {
