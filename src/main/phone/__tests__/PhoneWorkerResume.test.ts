@@ -70,6 +70,18 @@ describe('workspaces.workerResume', () => {
     expect(d.resume).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps a success for as long as its id is accepted, even an id stamped ahead of this clock', async () => {
+    let now = NOW;
+    const d = { ...deps(), now: () => now };
+    const ahead = `${NOW + 30_000}-0a9b8c7d-6e5f-4a3b-8c2d-000000000001`;
+    expect(await call(d, { taskId: TASK, clientRequestId: ahead })).toMatchObject({ resumed: { taskId: TASK } });
+    now = NOW + 10 * 60_000 + 1;
+    expect(await call(d, { taskId: TASK, clientRequestId: ahead })).toMatchObject({ replayed: true });
+    now = NOW + 30_000 + 10 * 60_000;
+    expect(await call(d, { taskId: TASK, clientRequestId: ahead })).toEqual({ invalid: true });
+    expect(d.resume).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a new request once the receipts are full', async () => {
     const d = deps();
     for (let n = 0; n < PHONE_WORKER_RESUME_RECEIPTS_MAX; n++) await call(d, { taskId: TASK, clientRequestId: id(n) });

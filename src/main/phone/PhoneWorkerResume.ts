@@ -12,7 +12,7 @@
 // time window, the same as its receipt's life, so a forgotten receipt never
 // starts a second worker.
 
-import { checkChatId } from '../../daemon/chat/chatBridge';
+import { chatIdTime, checkChatId } from '../../daemon/chat/chatBridge';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getWorkerResumePorts, ownerResumeWorker, type WorkerResumeResult } from '../factory/workerReclaim';
 import {
@@ -95,7 +95,9 @@ export async function handlePhoneWorkerResumeCommand(
   }
   if (receipts.size >= PHONE_WORKER_RESUME_RECEIPTS_MAX) return { full: true };
   if (!deps.taskKnown(taskId)) return { notFound: true };
-  const receipt: Receipt = { taskId, expiresAt: now + PHONE_WORKER_RESUME_WINDOW_MS };
+  // Kept for as long as the id itself is accepted (an id may be stamped a
+  // little ahead of this clock).
+  const receipt: Receipt = { taskId, expiresAt: chatIdTime(id as string) + PHONE_WORKER_RESUME_WINDOW_MS };
   receipt.pending = deps.resume(taskId).then(replyOf);
   receipts.set(key, receipt);
   let reply: PhoneWorkerResumeReply | null = null;
