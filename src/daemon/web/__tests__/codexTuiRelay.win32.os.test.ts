@@ -1,19 +1,24 @@
 import os from 'node:os';
 import path from 'node:path';
 import {mkdtemp,rm} from 'node:fs/promises';
-import WebSocket from 'ws';
+import WebSocket,{WebSocketServer} from 'ws';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {createCodexTuiRelay} from '../codexTuiRelay';
 
 // A Windows test of the relay's upgrade checks. Only there does the relay
 // listen on loopback TCP behind a per-launch bearer. The account server is
 // stubbed: its socket identity and readiness probe, and the TUI's upstream
-// link, which no refused upgrade reaches.
-vi.mock('../codexAccountSocket',async(importOriginal)=>({
-  ...await importOriginal<typeof import('../codexAccountSocket')>(),
-  windowsCodexSocketIdentity:vi.fn(async()=>'1:1'),
-  openCodexAccountSocket:vi.fn(()=>{throw new Error('no account server in this test');}),
-}));
+// link, which goes to a plain local WebSocket server (no refused upgrade
+// reaches it).
+const upstream = vi.hoisted(()=>({url:''}));
+vi.mock('../codexAccountSocket',async(importOriginal)=>{
+  const {default:Client} = await import('ws');
+  return {
+    ...await importOriginal<typeof import('../codexAccountSocket')>(),
+    windowsCodexSocketIdentity:vi.fn(async()=>'1:1'),
+    openCodexAccountSocket:vi.fn((_socketPath:string,options:ConstructorParameters<typeof Client>[2])=>new Client(upstream.url,options)),
+  };
+});
 vi.mock('../codexSettingsTransport',async(importOriginal)=>({
   ...await importOriginal<typeof import('../codexSettingsTransport')>(),
   connectCodexSettings:vi.fn(async()=>({close:()=>{ /* noop */ }})),
@@ -32,8 +37,20 @@ function upgrade(relay:Relay, headers:Record<string,string>, origin?:string):Pro
 
 describe.runIf(process.platform === 'win32')('Codex TUI relay upgrade checks on Windows',()=>{
   let home:string;
-  beforeEach(async()=>{home = await mkdtemp(path.join(os.tmpdir(),'wmux-relay-win-'));});
-  afterEach(async()=>{vi.useRealTimers();await rm(home,{recursive:true,force:true});});
+  let server:WebSocketServer;
+  beforeEach(async()=>{
+    home = await mkdtemp(path.join(os.tmpdir(),'wmux-relay-win-'));
+    server = new WebSocketServer({host:'127.0.0.1',port:0});
+    await new Promise<void>(resolve=>server.once('listening',()=>resolve()));
+    const address = server.address();
+    upstream.url = typeof address === 'string' ? address : `ws://127.0.0.1:${address.port}`;
+  });
+  afterEach(async()=>{
+    vi.useRealTimers();
+    for (const client of server.clients) client.terminate();
+    await new Promise<void>(resolve=>server.close(()=>resolve()));
+    await rm(home,{recursive:true,force:true});
+  });
 
   it('refuses a missing bearer, a wrong bearer and an Origin, then accepts the TUI\'s own bearer',async()=>{
     const relay = await createCodexTuiRelay({codeHome:home});
