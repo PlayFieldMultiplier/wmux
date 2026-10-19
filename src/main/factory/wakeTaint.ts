@@ -392,6 +392,11 @@ export function markRunningTurnReadGuestText(botId: string): boolean {
   }
 }
 
+/** What a bot is told when a guest-sourced turn asks to start or resume
+ *  workers, or to save a workflow (fanout.rpc.ts, workerResume.rpc.ts,
+ *  botWorkflowModule.ts). */
+export const GUEST_TURN_STARTS_NO_WORKERS = 'this turn started from or read an external guest\'s message, and such a turn starts no workers; tell the owner what you would start';
+
 /** Whether the turn `botId` is running now started from an external guest's
  *  message or read one (room_read include_guest): null when it cannot be
  *  told (no tracker, no running wake). */
@@ -405,6 +410,15 @@ export function runningTurnGuestSourced(botId: string): boolean | null {
   } catch {
     return null;
   }
+}
+
+/** Why bot `botId`, in its wake `wakeId`, may not start or resume a worker
+ *  for a guest's reason, or null: the running turn started from or read an
+ *  external guest's message, or that cannot be told. */
+export function guestTurnRefusal(botId: string, wakeId: string): string | null {
+  const running = runningTurnGuestSourced(botId);
+  const read = current?.taint.turnReadGuestText(wakeId) === true;
+  return running !== false || read ? GUEST_TURN_STARTS_NO_WORKERS : null;
 }
 
 /** Whether the wake `botId` is running now is tainted; true when it cannot

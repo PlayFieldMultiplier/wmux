@@ -10,7 +10,7 @@ import { getWorkflowFanout, type WorkflowFanout } from './workflowFanout';
 import { getBotDirectory } from './botStore';
 import { getBotRuntime } from './BotRuntime';
 import { getWakeQueue, type WakeSinkApi } from './wakeQueue';
-import { runningWakeTainted } from './wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, runningTurnGuestSourced, runningWakeTainted } from './wakeTaint';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { workflowWorkerPrompt } from './workflowPrompt';
 import { isWakeStoppedByOwner } from './factoryStop';
@@ -20,6 +20,9 @@ export interface WorkflowPorts {
   profile(botId: string): BotProfile | null;
   turn(botId: string): { wakeId: string; threadId?: ThreadId } | null;
   tainted(botId: string): boolean;
+  /** Whether the bot's running turn started from or read an external
+   *  guest's message (wakeTaint.ts); null when it cannot be told. */
+  guestSourced(botId: string): boolean | null;
   rows(): LedgerEntry[];
   fanout(): WorkflowFanout | null;
   queue(): WakeSinkApi | null;
@@ -65,6 +68,8 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
     const bot = owner(ctx, p);
     const turn = bot && p.turn(bot.id);
     if (!bot?.enabled || !turn || isWakeStoppedByOwner(turn.wakeId) || !bot.repo) return refuse('FAILED_PRECONDITION', 'create a code workflow during an enabled bot wake with a repository');
+    // A saved workflow starts its steps' workers from later wakes.
+    if (p.guestSourced(bot.id) !== false) return refuse('FAILED_PRECONDITION', `workflow.create: ${GUEST_TURN_STARTS_NO_WORKERS}`);
     if (!validateWorkflowInput(params)) return refuse('INVALID_ARGUMENT', 'provide a stable clientWorkflowId, title and one to eight titled step prompts');
     try {
       const workflow = await p.store.create({ botId: bot.id, workspaceId: bot.workspaceId, repoKey: bot.repo.repoKey,
@@ -118,7 +123,7 @@ registerFactoryRpcModule('workflows', (router, deps) => {
   let active = false;
   let off: (() => void) | null = null;
   const ports: WorkflowPorts = { store, profile: (id) => getBotDirectory()?.get(id) ?? null,
-    turn: (id) => getBotRuntime()?.currentTurn(id) ?? null, tainted: runningWakeTainted,
+    turn: (id) => getBotRuntime()?.currentTurn(id) ?? null, tainted: runningWakeTainted, guestSourced: runningTurnGuestSourced,
     rows: () => getTaskLedger().list(), fanout: getWorkflowFanout, queue: getWakeQueue, active: () => active };
   registerWorkflowRpc(router, ports);
   return {

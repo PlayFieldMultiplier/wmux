@@ -14,6 +14,7 @@ import { getAgentSlots, type AgentSlots } from '../../factory/agentSlots';
 import { getBotRuntime } from '../../factory/BotRuntime';
 import { getBotStore } from '../../factory/botStore';
 import { isWakeStoppedByOwner } from '../../factory/factoryStop';
+import { guestTurnRefusal } from '../../factory/wakeTaint';
 import { botLaunchRefusal } from './fanout.rpc';
 import { RESUME_MESSAGE_MAX, getWorkerResumePorts, resumeWorker, type WorkerResumePorts } from '../../factory/workerReclaim';
 
@@ -72,6 +73,8 @@ registerFactoryRpcModule('worker-resume', (router) => {
       const runtime = getBotRuntime();
       const wakeId = runtime?.currentTurn(botId)?.wakeId ?? '';
       if (wakeId && isWakeStoppedByOwner(wakeId)) return 'your work was stopped in this turn';
+      const guest = wakeId ? guestTurnRefusal(botId, wakeId) : null;
+      if (guest) return guest;
       return botLaunchRefusal(getFactorySettings().enabled, getBotStore()?.get(botId) ?? null, runtime?.wakeState(wakeId) ?? null);
     },
   });

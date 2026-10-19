@@ -8,7 +8,7 @@ import type { Fact } from '../../../shared/facts';
 import type { Handoff } from '../../../shared/handoff';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WakeItem } from '../../../shared/wake';
-import { WakeTaint, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, guestTurnRefusal, runningTurnGuestSourced, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-taint-')); });
@@ -268,5 +268,26 @@ describe('WakeTaint', () => {
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), '{nope');
     const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
     expect(make({}, [], [handoff('h', fromBot)]).handoffTainted('h')).toBe(true);
+  });
+});
+
+describe('guest-sourced turns', () => {
+  afterEach(() => setWakeTaint(null));
+
+  it('a guest wake or a turn that read guest cards may not start or resume workers; an owner turn may', () => {
+    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
+    const t = make({ runningWake: () => running });
+    setWakeTaint(t, () => running);
+    expect(runningTurnGuestSourced('bot-a')).toBe(false);
+    expect(guestTurnRefusal('bot-a', 'w-1')).toBeNull();
+    t.markTurnReadGuestText('w-1');
+    expect(runningTurnGuestSourced('bot-a')).toBe(true);
+    expect(guestTurnRefusal('bot-a', 'w-1')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
+    // The mark outlives the turn: a launch checked after it ended still refuses.
+    running = null;
+    expect(runningTurnGuestSourced('bot-a')).toBeNull();
+    expect(guestTurnRefusal('bot-a', 'w-1')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
+    running = { item: { ...wake({ kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c', text: 'x' }), id: 'w-2' }, startedAt: 2 };
+    expect(guestTurnRefusal('bot-a', 'w-2')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
   });
 });

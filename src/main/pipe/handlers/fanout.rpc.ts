@@ -136,7 +136,7 @@ import { originUrlRepoKey, readRawOriginUrl } from '../../worktask/workerGit';
 import { getFactorySettings } from '../../factory/factorySettings';
 import { getBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { noticeWorkerStarts, plainStartFailure, type BotWorkerStartOutcome } from '../../factory/botNotices';
-import { getWakeTaint, runningWakeTainted } from '../../factory/wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, getWakeTaint, runningWakeTainted } from '../../factory/wakeTaint';
 import { botThreadRefusal, resolveRoomPorts, runningWake } from '../../factory/roomWriter';
 import { getHandoffRouter } from '../../factory/handoffRouter';
 import { emitBotHook } from '../../factory/botHooks';
@@ -853,8 +853,11 @@ function defaultBotPort(): FanOutBotPort | null {
   return {
     fanoutKeySeen: (key) => receipts.has(key),
     recordFanoutKey: (key) => receipts.add(key),
+    // Asked again after every wait: a turn that read guest cards meanwhile
+    // launches nothing more (the mark outlives the turn).
     launchRefusal: (botId, wakeId) => (isWakeStoppedByOwner(wakeId)
       ? 'the owner stopped this bot'
+      : getWakeTaint()?.turnReadGuestText(wakeId) === true ? GUEST_TURN_STARTS_NO_WORKERS
       : botLaunchRefusal(getFactorySettings().enabled, store.get(botId), runtime.wakeState(wakeId))),
     profile: (botId) => store.get(botId),
     currentWakeId: (botId) => runtime.currentTurn(botId)?.wakeId ?? null,
@@ -1287,7 +1290,7 @@ export function registerFanOutRpc(
       // Workers run unattended (botFanoutPresets.ts): a turn an external
       // guest's message started, or one that read one, starts none.
       if (botPort.wakeGuestSourced(bot.botId, wakeId)) {
-        return deny('FAILED_PRECONDITION', 'task.fanout.start: this turn started from or read an external guest\'s message, and such a turn starts no workers; tell the owner what you would start');
+        return deny('FAILED_PRECONDITION', `task.fanout.start: ${GUEST_TURN_STARTS_NO_WORKERS}`);
       }
       botWakeId = wakeId;
       // Read in the same tick as the wake id, before any await: the wake can
