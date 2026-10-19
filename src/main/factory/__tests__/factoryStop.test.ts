@@ -208,6 +208,24 @@ describe('stopFactoryWork', () => {
     expect(why).not.toMatch(/stop again/);
   });
 
+  it('a refusal met first by a re-stop still tells the room, once', async () => {
+    await task('t-late', LEAD);
+    let refuse = false;
+    const stopWorker = vi.fn(async (): Promise<number> => {
+      if (!refuse) throw new WorkerStopPendingError(0, ['wsl']);
+      throw new Error(UNKNOWN_ROOT_REFUSAL);
+    });
+    const noteLeftRunning = vi.fn();
+    const r = ports({ stopWorker, noteLeftRunning });
+    expect(await stopFactoryWork(r.p, { botId: LEAD })).toMatchObject({ ok: false, message: WORKSPACES_LOADING_MESSAGE });
+    expect(noteLeftRunning).not.toHaveBeenCalled();
+    refuse = true;
+    expect(await stopFactoryTask(r.p, 't-late')).toMatchObject({ ok: false, message: `The worker could not be stopped: ${UNKNOWN_ROOT_REFUSAL}.` });
+    expect(await stopFactoryWork(r.p, { botId: LEAD })).toMatchObject({ ok: false, message: `Some work could not be stopped: ${UNKNOWN_ROOT_REFUSAL}.` });
+    expect(noteLeftRunning).toHaveBeenCalledTimes(1);
+    expect(noteLeftRunning).toHaveBeenCalledWith(expect.objectContaining({ id: 't-late' }), UNKNOWN_ROOT_REFUSAL);
+  });
+
   it('a pane left running beside another failure names both', async () => {
     await task('t-unknown', LEAD);
     await task('t-broken', LEAD);

@@ -108,10 +108,29 @@ export class TaskCloseService {
     this.pushedHead = opts.pushedHead;
   }
 
+  /** Closes under way, by task: one runs at a time for a task (#2388), so a
+   *  Close and keep folder never reports a folder kept while an earlier
+   *  close of the same task is still on its way to removing it. */
+  private readonly closing = new Map<string, Promise<CloseTaskResult>>();
+
   async closeTask(input: CloseTaskInput): Promise<CloseTaskResult> {
+    const before = this.closing.get(input.taskId);
+    const run = (before ? before.catch(() => undefined) : Promise.resolve()).then(() => this.closeTaskNow(input));
+    this.closing.set(input.taskId, run);
+    try {
+      return await run;
+    } finally {
+      if (this.closing.get(input.taskId) === run) this.closing.delete(input.taskId);
+    }
+  }
+
+  private async closeTaskNow(input: CloseTaskInput): Promise<CloseTaskResult> {
     const { taskId } = input;
 
-    // Close and keep folder: the task closes, the folder stays as it is.
+    // Close and keep folder: the task closes, the folder stays as it is. A
+    // detach close (the daemon's record of a task whose folder lives on):
+    // the cleanup scan, the closed-task GC and a bot task's folder cleanup
+    // all leave a detached task's folder alone.
     if (input.keepFolder) {
       const folder = input.worktreePath ?? input.leftoverPath;
       if (folder) {
@@ -124,10 +143,12 @@ export class TaskCloseService {
         }
         this.forgetFolderStops(folder);
       }
-      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId);
+      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
       if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-      console.warn(`[worktask] task ${taskId} closed with Close and keep folder: the owner chose to keep its folder${folder ? ` ${folder}` : ''} on disk as it is`);
-      return { ok: true, taskId, archivePending: closed.archivePending, ...(folder ? { keptFolder: folder } : {}) };
+      // A close of the task that ran first may have removed it already.
+      const kept = folder && fs.existsSync(folder) ? folder : undefined;
+      console.warn(`[worktask] task ${taskId} closed with Close and keep folder: the owner chose to keep its folder${folder ? ` ${folder}` : ''} on disk as it is${folder && !kept ? ' (it was already gone)' : ''}`);
+      return { ok: true, taskId, archivePending: closed.archivePending, ...(kept ? { keptFolder: kept } : {}) };
     }
 
     // 미물질화 close(CX4): worktree 단계 전체 건너뜀 — close만 커밋.
@@ -288,11 +309,13 @@ export class TaskCloseService {
   private async missionClose(
     taskId: string,
     verifiedWorkspaceId: string,
+    opts: { detach?: boolean } = {},
   ): Promise<{ ok: true; archivePending: boolean } | { ok: false; error: string }> {
     try {
       const res = (await this.daemon.rpc('task.mission.close', {
         taskId,
         verifiedWorkspaceId,
+        ...(opts.detach ? { detach: true } : {}),
       })) as { ok?: boolean; archivePending?: boolean; error?: { message?: string } };
       if (res && res.ok === true) {
         // Lane F: the task ledger learns about the close now, not on the

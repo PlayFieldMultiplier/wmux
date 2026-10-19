@@ -369,6 +369,9 @@ describe('a close that keeps the folder (#2388)', () => {
     const res = await svc.closeTask({ taskId: 'wtask-k1', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath, keepFolder: true });
     expect(res).toEqual({ ok: true, taskId: 'wtask-k1', archivePending: false, keptFolder: worktreePath });
     expect(calls.map((c) => c.method)).toEqual(['task.mission.close']);
+    // A detach close: the cleanup scan, the closed-task GC and a bot task's
+    // folder cleanup leave a detached task's folder alone.
+    expect(calls[0].params).toMatchObject({ taskId: 'wtask-k1', detach: true });
     expect(stopPanesIn).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(worktreePath, 'wip.txt'), 'utf8')).toBe('uncommitted\n');
     expect(git(['worktree', 'list', '--porcelain'], repoRoot)).toContain(worktreePath.replace(/\\/g, '/'));
@@ -402,6 +405,28 @@ describe('a close that keeps the folder (#2388)', () => {
     expect(res).toMatchObject({ ok: false, reason: 'error' });
     expect(store.get(left)).toBeNull();
     expect(fs.existsSync(left)).toBe(true);
+  });
+
+  it('keepFolder waits for a close of the same task under way, and names no folder that close removed', async () => {
+    const { worktreePath } = await makeWorktree('keep-race');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let stopping!: () => void;
+    const stopStarted = new Promise<void>((r) => { stopping = r; });
+    const { port, calls } = makeDaemon();
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager(), stopPanesIn: async () => { stopping(); await gate; return []; } });
+    const removing = svc.closeTask({ taskId: 'wtask-k5', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath });
+    await stopStarted;
+    const keeping = svc.closeTask({ taskId: 'wtask-k5', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath, keepFolder: true });
+    await new Promise((r) => setTimeout(r, 20));
+    // The keep has not run: the first close still holds the task.
+    expect(calls).toHaveLength(0);
+    release();
+    expect(await removing).toMatchObject({ ok: true });
+    const kept = await keeping;
+    expect(kept).toMatchObject({ ok: true, taskId: 'wtask-k5' });
+    expect(kept).not.toHaveProperty('keptFolder');
+    expect(fs.existsSync(worktreePath)).toBe(false);
   });
 
   it('keepFolder leaves the task open when the pending removal cannot be ended', async () => {

@@ -5,6 +5,7 @@
 // its own and names it the same way.
 
 import { useStore } from '../../stores';
+import { getWorkspacePtyIds } from '../../../shared/paneUtils';
 import type { useT } from '../../hooks/useT';
 
 type Translate = ReturnType<typeof useT>;
@@ -32,12 +33,33 @@ export async function closeKeepingFolder(taskId: string, verifiedWorkspaceId: st
   return false;
 }
 
+/** Whether a pane of `workspaceId` has its shell running a command (OSC
+ *  133): work that a close of the workspace would end. */
+export function workspaceRunsCommand(workspaceId: string): boolean {
+  const st = useStore.getState();
+  const ws = st.workspaces.find((w) => w.id === workspaceId);
+  return !!ws && getWorkspacePtyIds(ws).some((ptyId) => st.commandRunningByPtyId[ptyId] === true);
+}
+
 /** The toast action offering Close and keep folder after a refused close;
- *  `onClosed` runs once the task closed. */
-export function keepFolderAction(taskId: string, verifiedWorkspaceId: string, t: Translate, onClosed?: () => void): { label: string; onClick: () => void } {
+ *  `onClosed` runs once the task closed. `recheck`, asked at the click: why
+ *  the task may not be closed any more (its work started again since the
+ *  refusal), or null; the action then toasts that and closes nothing. */
+export function keepFolderAction(
+  taskId: string,
+  verifiedWorkspaceId: string,
+  t: Translate,
+  onClosed?: () => void,
+  recheck?: () => string | null,
+): { label: string; onClick: () => void } {
   return {
     label: t('worktask.keepFolder.action'),
     onClick: () => {
+      const refused = recheck?.() ?? null;
+      if (refused) {
+        useStore.getState().pushToast({ level: 'warn', message: refused });
+        return;
+      }
       void closeKeepingFolder(taskId, verifiedWorkspaceId, t).then((closed) => {
         if (closed) onClosed?.();
       });

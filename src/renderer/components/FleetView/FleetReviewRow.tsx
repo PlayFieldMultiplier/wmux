@@ -6,7 +6,7 @@
 // workspace jump, and the task close (which refuses dirty or unpushed work).
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useStore } from '../../stores';
-import { keepFolderAction, keptFolderMessage } from '../WorkTask/closeKeepFolder';
+import { keepFolderAction, keptFolderMessage, workspaceRunsCommand } from '../WorkTask/closeKeepFolder';
 import { useT } from '../../hooks/useT';
 import { cachedReviewSummary, loadReviewSummary, type ReviewChangeSummary } from './reviewSummary';
 import type { PrStatus } from '../../../shared/types';
@@ -115,6 +115,15 @@ function removeClosedTaskWorkspace(workspaceId: string): boolean {
   return true;
 }
 
+/** Why a Close and keep folder offered earlier may not close the task's
+ *  workspace now (its work started again since), or null. */
+function keepFolderRefusal(workspaceId: string, groupKey: string, name: string, t: Translate): string | null {
+  const st = useStore.getState();
+  const check = revalidateTaskForClose(st, workspaceId, groupKey, (id) => selectWorkspaceAgentRoster(st, id).rows);
+  if (!check.ok) return `${name}: ${t(CLOSE_SKIP_KEY[check.reason])}`;
+  return workspaceRunsCommand(workspaceId) ? `${name}: ${t(CLOSE_SKIP_KEY['not-finished'])}` : null;
+}
+
 /**
  * Close one task the way the sidebar's "Close finished tasks" does: re-check it
  * against the current store, run the real task close (it refuses a dirty or
@@ -153,7 +162,7 @@ export async function closeReviewTask(workspaceId: string, t: Translate): Promis
       // #2388: the way out of a close that keeps refusing. An unpushed
       // branch has its own next step (push or a PR).
       ...(res.reason !== 'unpushed'
-        ? { action: keepFolderAction(check.mission.id, check.mission.owner.verifiedWorkspaceId, t, () => { removeClosedTaskWorkspace(workspaceId); }) }
+        ? { action: keepFolderAction(check.mission.id, check.mission.owner.verifiedWorkspaceId, t, () => { removeClosedTaskWorkspace(workspaceId); }, () => keepFolderRefusal(workspaceId, groupKey, name, t)) }
         : {}),
     });
   } catch (err) {

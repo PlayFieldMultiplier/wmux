@@ -202,6 +202,22 @@ export function __resetFactoryStopForTesting(): void {
   stoppedWakes.clear();
   lateStops.clear();
   turnStops.clear();
+  leftRunningNoted.clear();
+}
+
+/** The tasks whose room was told a stop left a pane running: once each,
+ *  whichever stop met the refusal first (a re-stop meets it the same way). */
+const leftRunningNoted = new Set<string>();
+
+/** Tell `row`'s room that a stop left a pane running, and why, once. */
+function noteLeftRunningOnce(ports: FactoryStopPorts, row: LedgerEntry, reason: string, log: (m: string) => void): void {
+  if (leftRunningNoted.has(row.id)) return;
+  leftRunningNoted.add(row.id);
+  try {
+    ports.noteLeftRunning?.(row, reason);
+  } catch (err) {
+    log(`[factory] stop: the room was not told ${row.id} left a pane running: ${String(err)}`);
+  }
 }
 
 /** Whether a row is a bot task the owner stopped (Stop worker, Stop for one
@@ -302,13 +318,7 @@ async function stopTask(
     leftRunning = leftRunningReason(err);
     log(`[factory] stop: the worker of ${row.id} was not stopped: ${String(err)}`);
   }
-  if (leftRunning) {
-    try {
-      ports.noteLeftRunning?.(row, leftRunning);
-    } catch (err) {
-      log(`[factory] stop: the room was not told ${row.id} left a pane running: ${String(err)}`);
-    }
-  }
+  if (leftRunning) noteLeftRunningOnce(ports, row, leftRunning, log);
   const failed = outcome === 'failed' || !workerOk || gateFailed;
   // Loading: the worker's stop was the only failure, and only for that.
   // leftRunningOnly: likewise, a pane left running was the only failure.
@@ -481,6 +491,7 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
       if (why) {
         leftRunning.count++;
         leftRunning.reason = why;
+        noteLeftRunningOnce(ports, row, why, log);
       }
       if (stoppedBeforeFailure(err) > 0) stoppedTasks.add(row.id);
       log(`[factory] stop: the worker of ${row.id} was not stopped: ${String(err)}`);
@@ -578,6 +589,7 @@ export async function stopFactoryTask(ports: FactoryStopPorts, taskId: string): 
     } catch (err) {
       failed = true;
       leftRunning = leftRunningReason(err);
+      if (leftRunning) noteLeftRunningOnce(ports, row, leftRunning, log);
       if (isWorkspacesLoading(err)) loading = true;
       else if (!leftRunning) otherFailure = true;
       stopped = stoppedBeforeFailure(err) > 0;

@@ -270,6 +270,23 @@ describe('FleetView — Ready to review', () => {
     expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/t1.')).toBe(true);
   });
 
+  // A command started in the task since the refusal: the action offered
+  // then closes nothing, so it cannot end that work.
+  it('a Close and keep folder offered earlier closes nothing once a command runs in the task', async () => {
+    close.mockResolvedValueOnce({ ok: false, reason: 'error', error: 'could not verify all processes exited' });
+    mount();
+    await settle();
+    await closeFromRow();
+    const offered = keepFolderToast();
+    expect(offered).toBeDefined();
+    act(() => { useStore.setState({ commandRunningByPtyId: { 'pty-1': true } } as never); });
+    await act(async () => { offered!.action!.onClick(); });
+    await settle();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(useStore.getState().workspaces.map((w) => w.id)).toContain('ws-t1');
+    expect(useStore.getState().toasts.some((toast) => toast.level === 'warn' && /Fix t1/.test(toast.message) && toast.action === undefined)).toBe(true);
+  });
+
   it('offers no Close and keep folder for an unpushed branch, nor after a close that worked', async () => {
     close.mockResolvedValueOnce({ ok: false, reason: 'unpushed', aheadCount: 2 });
     mount();
