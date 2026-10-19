@@ -411,11 +411,12 @@ export class TaskLedger {
     });
   }
 
-  update(input: LedgerUpdateInput): Promise<LedgerUpdateResult> {
-    return this.serialize(() => this.updateLocked(input));
+  /** `guard` is main's in-process commit check, never accepted from RPC data. */
+  update(input: LedgerUpdateInput, guard?: () => boolean | Promise<boolean>): Promise<LedgerUpdateResult> {
+    return this.serialize(() => this.updateLocked(input, guard));
   }
 
-  private async updateLocked(input: LedgerUpdateInput): Promise<LedgerUpdateResult> {
+  private async updateLocked(input: LedgerUpdateInput, guard?: () => boolean | Promise<boolean>): Promise<LedgerUpdateResult> {
     const entry = this.entries.get(input.id);
     if (!entry) return { ok: false, error: 'not_found', message: `no ledger entry for task ${input.id}` };
     // Authorization comes before anything that reads the entry back: a
@@ -528,6 +529,7 @@ export class TaskLedger {
         ? { completion: { source: 'merge' as const, pr: input.completion.pr } }
         : {}),
     });
+    if (guard && !(await guard())) return { ok: true, entry, noop: true };
     try {
       await this.append({ op: 'entry', entry: updated });
     } catch (err) {

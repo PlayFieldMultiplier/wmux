@@ -77,6 +77,8 @@ import { verdictedTaskIds } from './openBotWorkers';
 import type { FanOutService } from '../worktask/FanOutService';
 import { sendToRenderer } from '../pipe/handlers/_bridge';
 import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
+import { createWorkerLaunchRecovery } from './workerLaunchRecovery';
+import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS, LAUNCH_PROBE_TIMEOUT_MS } from '../worktask/fanoutLaunchProbe';
 import type { PermissionMode } from '../../shared/agentResume';
 
 /** A resumed worker is checked for an exited agent this often. */
@@ -129,10 +131,10 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   /** The reclaim record, once loaded below (the slot count reads it). */
   let reclaimedStore: ReclaimedWorkers | null = null;
   const daemon = (): DaemonClient | null => deps.getDaemonClient?.() ?? null;
-  const rpc = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+  const rpc = async (method: string, params: Record<string, unknown>, opts?: { timeoutMs: number }): Promise<unknown> => {
     const c = daemon();
     if (!c) throw new Error('the daemon is not connected');
-    return c.rpc(method as never, params);
+    return c.rpc(method as never, params, opts);
   };
   const changed = (): void => {
     try {
@@ -151,6 +153,19 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   // Each task's launch generation (workerSlots.ts): loaded, or rebuilt from
   // the ledger rows on the first start with it.
   const launches = getWorkerSlots();
+  const launchRecovery = createWorkerLaunchRecovery({ ledger, launches,
+    readSessions: () => rpc('daemon.listSessions', { withRecovery: true }),
+    readPresence: (id, probeProcess) => rpc('daemon.getLaunchPresence', { id, probeProcess },
+      { timeoutMs: probeProcess ? LAUNCH_PROBE_CONFIRM_TIMEOUT_MS : LAUNCH_PROBE_TIMEOUT_MS }), changed,
+    log: (message) => console.warn(message),
+  });
+  const recoverLaunches = (): void => { void launchRecovery.pass(); };
+  offs.push(() => launchRecovery.dispose());
+  offs.push(getWorkspaceMirror().onSnapshot(recoverLaunches));
+  const recoverySweep = setInterval(recoverLaunches, LIVENESS_REFRESH_MS);
+  recoverySweep.unref?.();
+  offs.push(() => clearInterval(recoverySweep));
+  recoverLaunches();
   const goneFacts = AgentGoneFacts.at(deps.wmuxDir(), (taskId) => launches.launchOf(taskId)?.launchedAt);
   goneFacts.load();
   setAgentGoneFacts(goneFacts);

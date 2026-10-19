@@ -131,7 +131,7 @@ import { GateFlagFile } from './gateFlagFile';
 import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
 import { CommandStartAgentProbe } from './commandStartAgentProbe';
 import { resolveCanonicalAgentIdentity, detectorSuppressedBy, reportedAgentName, provesLiveAgent, type CanonicalAgentIdentity, recordPaneIdentity } from './canonicalAgent';
-import { decideLaunchPresence, launchPresenceNeedsProcessRead, type IdleShellRead } from './launchPresence';
+import { inspectLaunchPresence } from './launchPresence';
 import { promptLineState } from '../shared/promptLineState';
 import { parseWriteExpectation, writeIfUnchanged } from './writeIfUnchanged';
 import { Watchdog } from './Watchdog';
@@ -5160,29 +5160,25 @@ function registerRpcHandlers(
   // cheaper signal already decided.
   pipeServer.onRpc('daemon.getLaunchPresence', async (params) => {
     const id = typeof params['id'] === 'string' ? params['id'] : '';
-    const session = id ? sessionManager.getSession(id) : undefined;
-    const inputs = {
-      sessionExists: !!session,
-      agentName: readDaemonAgentState(id).agentName ?? null,
-      trackerAlive: agentProcessTracker.statusFor(id),
-      commandRunning: session?.promptLog.commandRunningIfKnown(),
-      isExec: !!session?.meta.exec,
-      isWsl: !!session?.meta.wslTarget,
-      exitAfterPrompt: session?.promptLog.exitAfterPrompt(),
-      lineNeverRead: !!session && promptLineState(session.promptLog.snapshot(), session.ringBuffer.totalBytesWritten) === 'idle-at-prompt',
-    };
-    let idleShell: IdleShellRead | undefined;
-    if (session && params['probeProcess'] === true && launchPresenceNeedsProcessRead(inputs)) {
-      try {
-        idleShell = await agentProcessTracker.idleShellState(session.meta.pid, session.meta.env, true);
-      } catch {
-        idleShell = 'error';
-      }
-    }
-    return {
-      ...decideLaunchPresence({ ...inputs, idleShell }),
-      incarnationId: session?.meta.incarnationId ?? null,
-    };
+    const original = id ? sessionManager.getSession(id) : undefined;
+    return inspectLaunchPresence(() => {
+      const session = id ? sessionManager.getSession(id) : undefined;
+      return { session: session ?? null, incarnationId: session?.meta.incarnationId ?? null,
+        inputRevision: session?.bridge.getInputRevision() ?? 0,
+        outputBytes: session?.ringBuffer.totalBytesWritten ?? 0,
+        inputs: {
+          sessionExists: !!session,
+          agentName: readDaemonAgentState(id).agentName ?? null,
+          trackerAlive: agentProcessTracker.statusFor(id),
+          commandRunning: session?.promptLog.commandRunningIfKnown(),
+          isExec: !!session?.meta.exec,
+          isWsl: !!session?.meta.wslTarget,
+          exitAfterPrompt: session?.promptLog.exitAfterPrompt(),
+          lineNeverRead: !!session && promptLineState(session.promptLog.snapshot(), session.ringBuffer.totalBytesWritten) === 'idle-at-prompt',
+        } };
+    }, params['probeProcess'] === true, async () => original
+      ? agentProcessTracker.idleShellState(original.meta.pid, original.meta.env, true, { fresh: true })
+      : 'error');
   });
   pipeServer.onRpc('daemon.getAgentState', async (params) => {
     const id = typeof params['id'] === 'string' ? params['id'] : '';

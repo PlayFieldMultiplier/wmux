@@ -18,6 +18,26 @@ const entry = (pid: number, ppid: number, name: string, cmdline?: string): Proce
   ...(cmdline !== undefined ? { cmdline } : {}),
 });
 
+describe('fresh idle-shell evidence', () => {
+  it('does not join an older in-flight snapshot that predates the caller\'s witness', async () => {
+    const shell = entry(100, 1, 'bash');
+    const worker = entry(200, 100, 'node', 'node claude.js');
+    let finishOld!: (table: ProcessTreeEntry[]) => void;
+    const enumerate = vi.fn<() => Promise<ProcessTreeEntry[]>>()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValue([shell, worker]);
+    const tracker = new AgentProcessTracker({ watch: () => undefined, unwatch: () => undefined }, enumerate);
+    // An unrelated lookup starts before the worker is launched. Its old
+    // process listing has not been delivered when recovery captures a witness.
+    const old = tracker.commandLineOf(100);
+    const fresh = tracker.idleShellState(100, {}, true, { fresh: true });
+    finishOld([shell]);
+    expect(await fresh).toEqual({ ok: false, reason: 'shell-has-children' });
+    expect(enumerate).toHaveBeenCalledTimes(2);
+    await old;
+  });
+});
+
 describe('parsePipeDelimited', () => {
   it('parses pid|ppid|name|cmdline lines, rejoining pipes inside the cmdline', () => {
     const out = parsePipeDelimited(

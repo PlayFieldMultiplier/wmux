@@ -6,9 +6,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   decideLaunchPresence,
+  inspectLaunchPresence,
   launchPresenceAllowsResend,
   launchPresenceNeedsProcessRead,
   type LaunchPresenceInputs,
+  type LaunchPresenceSnapshot,
 } from '../launchPresence';
 import { promptLineState } from '../../shared/promptLineState';
 
@@ -146,6 +148,46 @@ describe('decideLaunchPresence', () => {
   });
 });
 
+describe('a launch-presence process read is fenced to its pane', () => {
+  const snapshot = (): LaunchPresenceSnapshot => ({ session: {}, inputs: { ...base },
+    incarnationId: 'incarnation-one', inputRevision: 1, outputBytes: 100 });
+
+  it('returns an idle-shell witness only when input, output and session lifetime did not change', async () => {
+    const state = snapshot();
+    expect(await inspectLaunchPresence(() => ({ ...state }), true, async () => ({ ok: true }))).toEqual({
+      presence: 'absent', reason: 'idle-shell', incarnationId: state.incarnationId, inputRevision: 1, outputBytes: 100,
+    });
+  });
+
+  it.each(['input', 'output', 'incarnation', 'replacement', 'gone'])('refuses a process result after %s changed during its await', async (change) => {
+    const state = snapshot();
+    const result = await inspectLaunchPresence(() => ({ ...state }), true, async () => {
+      if (change === 'input') state.inputRevision++;
+      else if (change === 'output') state.outputBytes++;
+      else if (change === 'incarnation') state.incarnationId = 'incarnation-two';
+      else if (change === 'replacement') state.session = {};
+      else { state.session = null; state.inputs = { ...base, sessionExists: false }; }
+      return { ok: true };
+    });
+    expect(result).toMatchObject({ presence: 'unknown', reason: 'pane-changed' });
+  });
+
+  it.each(['agent', 'command'])('rechecks current %s evidence after the process read', async (change) => {
+    const state = snapshot();
+    const result = await inspectLaunchPresence(() => ({ ...state }), true, async () => {
+      state.inputs = change === 'agent' ? { ...base, trackerAlive: true } : { ...base, commandRunning: true };
+      return { ok: true };
+    });
+    expect(result.presence).toBe(change === 'agent' ? 'running' : 'unknown');
+  });
+
+  it('keeps a failed process read unknown', async () => {
+    const state = snapshot();
+    expect(await inspectLaunchPresence(() => ({ ...state }), true, async () => { throw new Error('no process table'); }))
+      .toMatchObject({ presence: 'unknown', reason: 'probe-failed' });
+  });
+});
+
 // Source-shape guard: the handler is a closure inside the daemon's RPC
 // registration, which a unit test cannot construct (see
 // agentStateReaderWiring.test.ts for the same pattern).
@@ -171,9 +213,10 @@ describe('daemon.getLaunchPresence wiring', () => {
   });
 
   it('reads the process table only when asked and still undecided, and a failed read is unknown', () => {
-    expect(body).toMatch(/params\['probeProcess'\] === true && launchPresenceNeedsProcessRead\(inputs\)/);
-    expect(body).toMatch(/agentProcessTracker\.idleShellState\(session\.meta\.pid, session\.meta\.env, true\)/);
-    expect(body).toMatch(/idleShell = 'error'/);
-    expect(body).toMatch(/decideLaunchPresence\(\{ \.\.\.inputs, idleShell \}\)/);
+    expect(body).toContain('inspectLaunchPresence(');
+    expect(body).toContain("params['probeProcess'] === true");
+    expect(body).toContain('agentProcessTracker.idleShellState(original.meta.pid, original.meta.env, true, { fresh: true })');
+    expect(body).toContain('inputRevision: session?.bridge.getInputRevision()');
+    expect(body).toContain('outputBytes: session?.ringBuffer.totalBytesWritten');
   });
 });
