@@ -34,8 +34,8 @@ function busy(x: WorkerSessionInfo): boolean {
  * recorded against it), when the close is no longer due (`stillDue`), or
  * when any of `ptyIds` runs an agent or a command again, inside the folder
  * or not: the close that follows ends them all. Both are asked again right
- * before each kill (the kills are one at a time); a throw then leaves the
- * rest, and what was stopped stays recorded.
+ * before each kill (the kills are one at a time), and once more after the
+ * last; a throw then leaves the rest, and what was stopped stays recorded.
  */
 export async function stopTaskPaneTrees(ports: TaskTreeStopPorts, taskId: string, ptyIds: readonly string[], stillDue: () => boolean): Promise<void> {
   if (ptyIds.length === 0) return;
@@ -63,4 +63,7 @@ export async function stopTaskPaneTrees(ports: TaskTreeStopPorts, taskId: string
     ...(ports.platform ? { platform: ports.platform } : {}),
     ...(ports.log ? { log: ports.log } : {}),
   });
+  // Once more after the last kill, which may have taken a while: the close
+  // that follows ends every pane passed in.
+  check(await targets());
 }

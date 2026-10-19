@@ -63,6 +63,20 @@ describe('stopTaskPaneTrees', () => {
     expect(destroyTree.mock.calls.map((c) => c[0])).toEqual(['a']);
   });
 
+  it('asks once more after the last kill: a pane outside the folder busy since refuses the close', async () => {
+    const sessions: WorkerSessionInfo[] = [{ id: 'a', spawnCwd: DIR, commandRunning: false }, { id: 'other', spawnCwd: '/elsewhere', commandRunning: false }];
+    const { ports, destroyTree } = rig(sessions);
+    destroyTree.mockImplementation(async (id: string) => {
+      sessions.splice(sessions.findIndex((s) => s.id === id), 1);
+      // The owner starts a command outside the folder while the kill runs.
+      const other = sessions.find((s) => s.id === 'other');
+      if (other) other.commandRunning = true;
+      return { ok: true as const, killed: [] };
+    });
+    await expect(stopTaskPaneTrees(ports, TASK, ['a', 'other'], () => true)).rejects.toThrow(/other of task .* run\(s\) again/);
+    expect(destroyTree.mock.calls.map((c) => c[0])).toEqual(['a']);
+  });
+
   it('never counts a dead session as busy, and refuses a folder that is not known', async () => {
     const { ports, destroyTree } = rig([{ id: 'a', spawnCwd: DIR, commandRunning: true, state: 'dead' } as WorkerSessionInfo]);
     await stopTaskPaneTrees(ports, TASK, ['a'], () => true);
