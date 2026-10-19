@@ -36,6 +36,8 @@ import { eventBus } from '../events/EventBus';
 import type { HookSignalRouter } from '../hooks/HookSignalRouter';
 import { normalizeDetectorCue, type CompletionAlarm } from '../../shared/hooks/CompletionAlarm';
 import type { AgentStatus } from '../../shared/types';
+import type { AgentSignal } from '../../shared/hooks/signal-types';
+import { canSeedHookIdentity } from '../../shared/hooks/detectorIdentity';
 
 // How long after an AgentDetector event to suppress the ActivityMonitor idle
 // fallback notification. Prevents double-firing when both signals agree
@@ -152,10 +154,9 @@ export class PTYBridge {
         // the byte-silence heuristic must NOT raise a toast — it can't tell a
         // finished turn from a mid-turn tool call / web search / long bash, and
         // fired on plain shells too (the "Task may have finished" false-positive
-        // the owner reported). Neither orca nor amirlehmam/wmux has any
-        // silence-based completion notification; genuine completions come from
-        // the precise Stop/awaiting_input hook + AgentDetector paths, which are
-        // untouched. See plans/agent-status-dot-quiet-notifications-2026-07-12.md.
+        // the owner reported). Completion notifications require the precise
+        // Stop/awaiting_input hook or AgentDetector paths; byte silence only
+        // clears the stale status. See plans/agent-status-dot-quiet-notifications-2026-07-12.md.
         broadcastMetadataUpdate(win, { ptyId, agentStatus: 'idle', agentName: '' });
       } catch (err) {
         console.warn('[PTYBridge] onActiveToIdle callback error:', err);
@@ -314,6 +315,28 @@ export class PTYBridge {
     } catch (err) {
       console.warn('[PTYBridge] noteUserInput alarm feed error:', err);
     }
+  }
+
+  /** Identity evidence from a newly accepted local hook, never cached authority.
+   * Flush queued PTY bytes first so a shell return cannot be overtaken by a
+   * delayed hook. Seeding only lets subsequent screen rows use that profile;
+   * it emits no status or alarm and does not arm a working turn.
+   */
+  noteAcceptedHook(ptyId: string, signal: AgentSignal): boolean {
+    const detector = this.agentDetectors.get(ptyId);
+    if (!detector || !this.ptyManager.get(ptyId)) return false;
+    this.flushPending(ptyId);
+    // Middleware/event callbacks can dispose or replace this pane while the
+    // flush runs. Never seed the captured, now-retired detector afterwards.
+    if (this.agentDetectors.get(ptyId) !== detector || !this.ptyManager.get(ptyId)) return false;
+    if (!canSeedHookIdentity(signal, {
+      ptyId,
+      now: Date.now(),
+      // The id can be reused after cleanup: the new detector has no memory
+      // of the previous PTY, but its creation time still fences old hooks.
+      boundaryAt: Math.max(this.ptyCreatedAt.get(ptyId) ?? Date.now(), detector.getIdentityBoundaryAt()),
+    })) return false;
+    return detector.seedTrustedIdentity(signal.agent, detector.getIdentityEpoch());
   }
 
   /**

@@ -1148,7 +1148,9 @@ async function getBootId(): Promise<string> {
     } else if (process.platform === 'darwin') {
       // macOS: sysctl exposes the boot timestamp; encode it as a stable string.
       // Format: "{ sec = 1745678901, usec = 123456 } Mon Apr 28 ..."
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
       const { execFile } = require('child_process');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
       const { promisify } = require('util');
       const execFileAsync = promisify(execFile);
       const { stdout } = await execFileAsync(
@@ -1174,6 +1176,7 @@ function getBootIdSync(): string {
     if (process.platform === 'win32') {
       return getWin32BootIdSync();
     } else if (process.platform === 'darwin') {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
       const { execFileSync } = require('child_process');
       const result = execFileSync(
         'sysctl',
@@ -1568,7 +1571,9 @@ async function processLiveness(pid: number): Promise<ProcessLiveness> {
     // — so probe with tasklist. A thrown probe leaves stdout null → unknown.
     let stdout: string | null = null;
     try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
       const { execFile } = require('child_process');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
       const { promisify } = require('util');
       const execFileAsync = promisify(execFile);
       const systemRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -1609,7 +1614,9 @@ async function processLiveness(pid: number): Promise<ProcessLiveness> {
 async function reapProcessTree(pid: number, reason: string): Promise<void> {
   try {
     if (process.platform === 'win32') {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
       const { execFile } = require('child_process');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
       const { promisify } = require('util');
       const execFileAsync = promisify(execFile);
       const systemRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -1709,7 +1716,9 @@ async function reapIfIdentityConfirmed(opts: {
  *  Prevents killing unrelated processes after PID recycling (e.g. reboot). */
 async function isOurShellProcess(pid: number, expectedCmd: string): Promise<boolean> {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
     const { execFile } = require('child_process');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- keep this optional dependency lazy
     const { promisify } = require('util');
     const execFileAsync = promisify(execFile);
     // Unix: check /proc/<pid>/exe or use ps
@@ -2875,7 +2884,7 @@ function registerRpcHandlers(
       // Stop existing SessionPipe if still listening (prevents EADDRINUSE on reconnect)
       const existingPipe = sessionPipes.get(p.id);
       if (existingPipe) {
-        await existingPipe.stop().catch(() => {});
+        await existingPipe.stop().catch(() => undefined);
         sessionPipes.delete(p.id);
       }
 
@@ -4744,7 +4753,8 @@ function registerRpcHandlers(
         // broadcast (or drive phone liveness) when its window expires either.
         const screenSlug = agentDisplayToSlug(data.agent);
         // `false` also tells HookIngest not to record a terminal_prompt for it.
-        if (detectorSuppressedBy(canonicalIdentityFor(agentProcessTracker, sessionId, screenSlug), screenSlug)) return false;
+        const screenName = sessionManager.getSession(sessionId)?.bridge.getLastAgent();
+        if (detectorSuppressedBy(canonicalIdentityFor(agentProcessTracker, sessionId, screenName ? agentDisplayToSlug(screenName) : undefined), screenSlug)) return false;
         sessionManager.getSession(sessionId)?.bridge.noteAgentStatus(data.status as AgentEventStatus);
         const event: DaemonEvent = { type: 'agent.event', sessionId, data };
         pipeServer.broadcast(event);
@@ -4772,6 +4782,7 @@ function registerRpcHandlers(
           sessionId,
           screenAgent ? agentDisplayToSlug(screenAgent) : undefined,
         );
+        const identitySeeded = managed.bridge.noteHookAgentIdentity(signal, canonical);
         if (recordPaneIdentity(managed.meta, canonical, Date.now())) {
           stateWriter.saveImmediate(buildState(sessionManager));
         }
@@ -4792,7 +4803,7 @@ function registerRpcHandlers(
         if (agent) {
           agentProcessTracker.armWsl(sessionId, {
             shell: managed.meta.cmd, target: wslTarget, hostPid: managed.meta.pid,
-          }, agent);
+          }, agent, identitySeeded ? signal.ts : undefined);
         }
       },
       // #1463 — the agent's own "question answered" signal takes the same
@@ -6813,7 +6824,7 @@ function wireEvents(
     try {
       const pipe = sessionPipes.get(payload.id);
       if (pipe) {
-        pipe.stop().catch(() => {});
+        pipe.stop().catch(() => undefined);
         sessionPipes.delete(payload.id);
       }
     } catch (err) {
@@ -6911,7 +6922,7 @@ function wireEvents(
     try {
       const pipe = sessionPipes.get(payload.id);
       if (pipe) {
-        pipe.stop().catch(() => {});
+        pipe.stop().catch(() => undefined);
         sessionPipes.delete(payload.id);
       }
     } catch (err) {
@@ -7107,7 +7118,8 @@ function wireEvents(
     // the detector's sticky label on every output burst, undoing whatever the
     // canonical rule had corrected (Codex #5).
     const activeScreenSlug = agentDisplayToSlug(payload.agentName ?? '');
-    const activeCanonical = canonicalIdentityFor(agentProcessTracker, payload.sessionId, activeScreenSlug);
+    const activeScreenName = sessionManager.getSession(payload.sessionId)?.bridge.getLastAgent();
+    const activeCanonical = canonicalIdentityFor(agentProcessTracker, payload.sessionId, activeScreenName ? agentDisplayToSlug(activeScreenName) : undefined);
     // Past a usage-limit hold, real output means the agent works again.
     if (!payload.likelyRepaint) usageLimits?.noteActive(payload.sessionId);
     if (!payload.likelyRepaint) hookIngest?.notePaneWorking(
@@ -7177,7 +7189,8 @@ function wireEvents(
     // nothing. arm() above is fire-and-forget, so the FIRST banner on an
     // unarmed pane still resolves screen-tier — corrected on the tracker's
     // attribution callback or the next event once the probe lands.
-    const canonical = canonicalIdentityFor(agentProcessTracker, payload.sessionId, slug);
+    const screenName = managed?.bridge.getLastAgent();
+    const canonical = canonicalIdentityFor(agentProcessTracker, payload.sessionId, screenName ? agentDisplayToSlug(screenName) : undefined);
     // A screen-tier identity may name an unnamed pane, never rename one
     // (mayPersistIdentity): the flip is what made a Claude pane "codex" for
     // the resume pill after a quoted banner row or a post-exit shell echo.
@@ -7741,7 +7754,7 @@ async function shutdown(
   // Clean up all session pipes
   const pipeStopsStart = phaseStartedAt();
   const pipeStops = Array.from(sessionPipes.values()).map((pipe) =>
-    pipe.stop().catch(() => {}),
+    pipe.stop().catch(() => undefined),
   );
   await Promise.all(pipeStops);
   sessionPipes.clear();
@@ -7815,7 +7828,7 @@ async function shutdown(
   // still needs the pipe to flush its ack.
   if (!opts.skipPipeStop) {
     const pipeServerStopStart = phaseStartedAt();
-    await pipeServer.stop().catch(() => {});
+    await pipeServer.stop().catch(() => undefined);
     phaseLog('pipeServerStop', pipeServerStopStart);
   }
 
@@ -8848,6 +8861,12 @@ async function main(): Promise<void> {
   // (Codex #12). No identity-flip agent.event is fabricated (its lifecycle
   // status semantics would invent completions); the label self-heals through
   // activity.active / getAgentName on the next output burst.
+  agentProcessTracker.setIdentityProbeGuard((sessionId) => {
+    const managed = sessionManager.getSession(sessionId);
+    const guard = managed?.bridge.captureIdentityProbe();
+    if (!managed || !guard) return undefined;
+    return { epoch: guard.epoch, isCurrent: () => sessionManager.getSession(sessionId) === managed && guard.isCurrent() };
+  });
   agentProcessTracker.setStateChangeListener((sessionId, state) => {
     if (!state.alive) hookIngest?.expireAuthorityFor(sessionId, state.slug);
     if (!state.alive) automationEngine?.onAgentProcessExit(sessionId);
@@ -8909,8 +8928,8 @@ async function main(): Promise<void> {
     }
     // A death edge, or a launch edge for a different agent than the last one
     // seen here, ends the previous agent's running episode.
-    const previousSlug = managed.meta.lastDetectedAgent;
-    if (!state.alive || (state.slug && previousSlug && state.slug !== previousSlug)) managed.bridge.noteAgentEnded();
+    // The bridge validates the observation before retiring a previous owner,
+    // so a stale async probe cannot invalidate the replacement launch.
     // The process truth the bridge's running-title path reads.
     managed.bridge.noteAgentProcess(state);
     const screenSlug = managed.bridge.getLastAgent();

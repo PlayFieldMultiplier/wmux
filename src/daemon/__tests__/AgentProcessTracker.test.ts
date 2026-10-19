@@ -332,7 +332,7 @@ describe('AgentProcessTracker', () => {
     expect(tracker.identityFor('s1')).toEqual({ slug: 'codex', alive: true });
     // The scoped launcher script names no agent; the native binary does.
     expect(watcher.watches.get('agent:s1')?.pid).toBe(201);
-    expect(listener).toHaveBeenCalledWith('s1', { slug: 'codex', alive: true });
+    expect(listener).toHaveBeenCalledWith('s1', { slug: 'codex', alive: true, observedAt: expect.any(Number) });
   });
 
   it('armIfAgent leaves no trace for a non-agent command and backs off only itself', async () => {
@@ -414,9 +414,9 @@ describe('AgentProcessTracker', () => {
     expect(tracker.identityFor('s1')).toEqual({ slug: 'codex', alive: true });
     expect(watcher.watches.get('agent:s1')?.pid).toBe(300);
     expect(listener.mock.calls).toEqual([
-      ['s1', { slug: 'claude', alive: true }],
+      ['s1', { slug: 'claude', alive: true, observedAt: expect.any(Number) }],
       ['s1', { slug: 'claude', alive: false }],
-      ['s1', { slug: 'codex', alive: true }],
+      ['s1', { slug: 'codex', alive: true, observedAt: expect.any(Number) }],
     ]);
   });
 
@@ -480,7 +480,7 @@ describe('AgentProcessTracker', () => {
 
     tracker.arm('s1', SHELL);
     await flush();
-    expect(listener).toHaveBeenCalledWith('s1', { slug: 'claude', alive: true });
+    expect(listener).toHaveBeenCalledWith('s1', { slug: 'claude', alive: true, observedAt: expect.any(Number) });
 
     watcher.watches.get('agent:s1')?.onDead();
     expect(listener).toHaveBeenCalledWith('s1', { slug: 'claude', alive: false });

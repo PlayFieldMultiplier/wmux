@@ -280,6 +280,8 @@ describe('AgentProcessTracker in a WSL pane', () => {
     tracker.armWsl('wsl-1', LOCATION, reported);
     tracker.armWsl('wsl-1', LOCATION, { ...reported, pid: 700, start: '10', bootId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' });
     expect(states).toHaveLength(2);
+    // Different boots do not order a queued old report against a current one.
+    expect(states[1]).toEqual({ slug: 'claude', alive: true });
   });
 
   it('disarm drops the WSL watch', () => {

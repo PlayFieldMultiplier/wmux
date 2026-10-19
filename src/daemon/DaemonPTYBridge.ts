@@ -21,7 +21,10 @@ import { stripPassiveInput } from '../shared/terminal/passiveInput';
 import { kittyChunkAsLegacy } from '../shared/kittyKeyEvents';
 import { titleShowsFinishedTurn, titleShowsRunningTurn } from './transcript/chatScreenGate';
 import { CLAUDE_IDLE_TITLE, CLAUDE_RUNNING_TITLE, CLAUDE_RUNNING_TITLE_OSC } from '../shared/agentTitleRules';
-import { agentRow } from '../shared/agentIdentity';
+import { agentDisplayToSlug, agentRow, isAgentSlug } from '../shared/agentIdentity';
+import type { AgentSignal } from '../shared/hooks/signal-types';
+import { canSeedHookIdentity, DETECTOR_IDENTITY_HOOK_MAX_AGE_MS } from '../shared/hooks/detectorIdentity';
+import type { CanonicalAgentIdentity } from './canonicalAgent';
 import type { TurnFailure } from '../shared/phoneTurnFailure';
 
 /**
@@ -276,6 +279,8 @@ export class DaemonPTYBridge extends EventEmitter {
    * agent outlives the agent; this is the process truth the title path reads.
    */
   private trackedAgent: { slug?: string; alive: boolean } | null = null;
+  /** This bridge's PTY lifetime; old async evidence cannot seed a replacement. */
+  private identityLifetimeAt = 0;
 
   /**
    * Which terminal status settled the pane, while one has. Read only to keep
@@ -620,6 +625,7 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   /** Every mouse report: SGR (press, release, wheel, motion) and X10. */
+  // eslint-disable-next-line no-control-regex -- terminal mouse reports contain ESC bytes
   private static readonly ANY_MOUSE = /\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}/g;
   static readonly TYPED_INPUT_THROTTLE_MS = 30_000;
   private typedInputAt = -Infinity;
@@ -1053,6 +1059,7 @@ export class DaemonPTYBridge extends EventEmitter {
   noteAgentEnded(): void {
     this.closeTurn();
     this.hookSeen = false;
+    this.agentDetector?.clearTrustedIdentity();
   }
 
   /**
@@ -1060,14 +1067,56 @@ export class DaemonPTYBridge extends EventEmitter {
    * die. Only the watched pid's death is reported, so a relaunch the tracker
    * already picked is never ended by its predecessor's late death edge.
    */
-  noteAgentProcess(state: { slug?: string; alive: boolean }): void {
+  noteAgentProcess(state: { slug?: string; alive: boolean; observedAt?: number; replacedLive?: true; identityEpoch?: number | null }): void {
+    const detector = this.agentDetector;
+    const now = Date.now();
+    const boundaryAt = Math.max(this.identityLifetimeAt, detector?.getIdentityBoundaryAt() ?? 0);
+    const epochProven = state.identityEpoch !== undefined && state.identityEpoch !== null
+      && state.identityEpoch === detector?.getIdentityEpoch();
+    // Missing time cannot seed identity. An explicit WSL replacement can
+    // still retire the old episode without granting the new process a seed.
+    // A probe begun before a shell return belongs to that older launch even
+    // when the process table arrives after the next one started.
+    if (state.alive && state.identityEpoch !== undefined && !epochProven) return;
+    if (state.alive && state.observedAt !== undefined && (!Number.isFinite(state.observedAt)
+      || (epochProven ? state.observedAt < boundaryAt : state.observedAt <= boundaryAt) || state.observedAt > now
+      || now - state.observedAt > DETECTOR_IDENTITY_HOOK_MAX_AGE_MS)) return;
+    const screenName = this.getLastAgent();
+    const previous = detector?.getTrustedAgent() ?? this.trackedAgent?.slug
+      ?? (screenName ? agentDisplayToSlug(screenName) : undefined);
+    if (!state.alive || ((state.observedAt !== undefined || state.replacedLive) && state.slug && previous && previous !== state.slug)) this.noteAgentEnded();
     this.trackedAgent = { ...(state.slug ? { slug: state.slug } : {}), alive: state.alive };
+    if (detector && state.alive && state.observedAt !== undefined && isAgentSlug(state.slug)) {
+      detector.seedTrustedIdentity(state.slug, detector.getIdentityEpoch());
+    }
     // A cycle the title armed waits for output to start its idle countdown;
     // an agent that died (or was replaced by another) right after the frame
     // writes none, and the cycle would read running forever. It goes with
     // the agent that armed it.
     if (state.alive && agentRow(state.slug)?.titleRunning) return;
     this.releaseTitleCycle();
+  }
+
+  /** Capture before an async probe, not when its result is delivered. */
+  captureIdentityProbe(): { epoch: number; isCurrent: () => boolean } | undefined {
+    const detector = this.agentDetector;
+    if (!detector) return undefined;
+    const epoch = detector.getIdentityEpoch();
+    return { epoch, isCurrent: () => this.agentDetector === detector && detector.getIdentityEpoch() === epoch };
+  }
+
+  /** Fresh hook identity may enable screen fallback patterns, never a turn. */
+  noteHookAgentIdentity(signal: AgentSignal, canonical: CanonicalAgentIdentity | undefined): boolean {
+    const detector = this.agentDetector;
+    if (!detector || !this.sessionId || canonical?.source !== 'hook' || canonical.slug !== signal.agent) return false;
+    if (!canSeedHookIdentity(signal, {
+      ptyId: this.sessionId, now: Date.now(),
+      boundaryAt: Math.max(this.identityLifetimeAt, detector.getIdentityBoundaryAt()),
+    })) return false;
+    // The caller computed the canonical identity with process contradiction
+    // checks; retain that check here for callers that race a process edge.
+    if (this.trackedAgent?.alive && this.trackedAgent.slug && this.trackedAgent.slug !== signal.agent) return false;
+    return detector.seedTrustedIdentity(signal.agent, detector.getIdentityEpoch());
   }
 
   /** Ends the cycle noteCodexTitleSpinner armed if it is still that cycle and
@@ -1348,6 +1397,7 @@ export class DaemonPTYBridge extends EventEmitter {
 
     const agentDetector = new AgentDetector();
     this.agentDetector = agentDetector;
+    this.identityLifetimeAt = Date.now();
 
     this.sessionId = sessionId;
     this.explicitTerminalStatus = false;
@@ -1947,6 +1997,7 @@ export class DaemonPTYBridge extends EventEmitter {
     this.outputInterpreter?.dispose();
     this.outputInterpreter = null;
     this.modeTracker = null;
+    this.agentDetector?.clearTrustedIdentity();
     this.agentDetector = null;
     this.activityMonitor = null;
     this.sessionId = null;
