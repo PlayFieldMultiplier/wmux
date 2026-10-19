@@ -534,6 +534,36 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(store.all()).toHaveLength(PENDING_REMOVALS_MAX);
   });
 
+  // A change whose write fails is rolled back; another change written
+  // meanwhile must not put it on disk while memory drops it (the daemon reads
+  // the file, the desktop reads memory: two different locks).
+  it('changes run one at a time: a failed write rolled back never reaches the file through a later one', async () => {
+    const file = path.join(tmp, 'wmux', 'worktask', 'pending-removals.json');
+    const store = new PendingWorktreeRemovals(file);
+    const a = path.join(root, 'hash1', 'task-a');
+    const b = path.join(root, 'hash1', 'task-b');
+    const c = path.join(root, 'hash2', 'task-c');
+    await store.put({ path: c, repoRoot: repo, repoHash: 'hash2', at: 0 });
+    const slowFailure = (): Promise<never> => new Promise((_, reject) => setTimeout(() => reject(new Error('disk full')), 30));
+    const mkdir = vi.spyOn(fs.promises, 'mkdir').mockImplementationOnce(slowFailure);
+    try {
+      const failing = store.put({ path: a, repoRoot: repo, repoHash: 'hash1', at: 1 });
+      const writing = store.put({ path: b, repoRoot: repo, repoHash: 'hash1', at: 2 });
+      await expect(failing).rejects.toThrow('disk full');
+      await writing;
+      mkdir.mockImplementationOnce(slowFailure);
+      const failingDelete = store.delete(c);
+      const writing2 = store.put({ path: b, repoRoot: repo, repoHash: 'hash1', at: 3 });
+      await expect(failingDelete).rejects.toThrow('disk full');
+      await writing2;
+    } finally {
+      mkdir.mockRestore();
+    }
+    const onDisk = (JSON.parse(fs.readFileSync(file, 'utf8')).removals as Array<{ path: string }>).map((r) => r.path).sort();
+    expect(onDisk).toEqual(store.all().map((r) => r.path).sort());
+    expect(onDisk).toEqual([b, c].sort());
+  });
+
   it('a record whose deletion cannot be written stays, so a later delete writes again', async () => {
     const dir = leftover();
     const file = path.join(tmp, 'wmux', 'worktask', 'pending-removals.json');

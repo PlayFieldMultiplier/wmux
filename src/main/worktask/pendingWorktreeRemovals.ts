@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createFilePersister, readVersionedFile, type FilePersister } from '../factory/versionedFile';
+import { createSerialChain } from '../deck/serialChain';
 import { sessionHostDir } from './stopSessionsInDir';
 
 export const PENDING_REMOVALS_FILENAME = 'pending-removals.json';
@@ -57,6 +58,11 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
   private readonly records = new Map<string, PendingWorktreeRemoval>();
   private readonly persister: FilePersister;
 
+  /** Every change runs whole (change, write, roll back) one at a time: a
+   *  write that started while an earlier change was still to be rolled back
+   *  would put that change on disk while memory drops it. */
+  private readonly serial = createSerialChain();
+
   constructor(private readonly file: string) {
     this.persister = createFilePersister(file, () => ({ version: PENDING_REMOVALS_VERSION, removals: [...this.records.values()] }));
   }
@@ -85,7 +91,11 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
   /** A record whose write fails is not taken (the write throws): memory
    *  goes back to what the file holds, so a retry writes again rather than
    *  find the change made. */
-  async put(rec: PendingWorktreeRemoval): Promise<void> {
+  put(rec: PendingWorktreeRemoval): Promise<void> {
+    return this.serial(() => this.putNow(rec));
+  }
+
+  private async putNow(rec: PendingWorktreeRemoval): Promise<void> {
     const key = pendingRemovalKey(rec.path);
     const prev = this.records.get(key);
     const next = { ...rec };
@@ -113,7 +123,11 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
   /** A record whose deletion cannot be written stays (the write throws):
    *  the file still holds it, so a restart would find it again, and a later
    *  delete must try the write again rather than find nothing to do. */
-  async delete(worktreePath: string): Promise<void> {
+  delete(worktreePath: string): Promise<void> {
+    return this.serial(() => this.deleteNow(worktreePath));
+  }
+
+  private async deleteNow(worktreePath: string): Promise<void> {
     const key = pendingRemovalKey(worktreePath);
     const rec = this.records.get(key);
     if (!rec) return;
