@@ -23,7 +23,8 @@ import { getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { getRoomWriter } from './roomWriter';
 import { taskFolderFromMissions } from './verifyPreset';
-import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive, stopSessionsInDir } from '../worktask/stopSessionsInDir';
+import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive } from '../worktask/stopSessionsInDir';
+import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { releaseHeldFanouts } from './heldFanouts';
 import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
@@ -241,39 +242,22 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       (ws) => getFanOutGuards().lineageFor([ws])[ws] ?? null,
     );
     // #2388: an ended task's panes go with their whole process trees before
-    // the renderer closes them (its close ends only each pane), the same
-    // stop as the owner's (stopTaskWorker): the task folder's sessions among
-    // `ptyIds`, killTree, survivors recorded against the folder so its
-    // cleanup keeps it while one runs. A folder that is not known closes
-    // nothing: survivors could not be recorded against it. Checked again
-    // right before each pane's kill (the kills are one at a time): the close
-    // still due, and the pane not running an agent or a command again.
-    const stopTrees = async (taskId: string, ptyIds: readonly string[], stillDue: () => boolean): Promise<void> => {
-      if (ptyIds.length === 0) return;
-      const entry = ledger.get(taskId);
-      const dir = entry ? await taskFolderFromMissions((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry) : null;
-      if (!dir) throw new Error(`the folder of task ${taskId} is not known`);
-      // A dead or suspended session runs nothing, whatever its last prompt
-      // state said.
-      const busy = (x: WorkerSessionInfo): boolean => {
-        const state = (x as { state?: unknown }).state;
-        return state !== 'dead' && state !== 'suspended' && (x.agentProcessAlive === true || x.commandRunning === true);
-      };
-      await stopSessionsInDir(dir, {
-        listSessions: async () => (await listSessions()).filter((x) => ptyIds.includes(x.id)),
-        destroySession: async (id) => {
-          const now = (await listSessions()).find((x) => x.id === id);
-          if (!stillDue()) throw new Error(`the close of task ${taskId}'s panes is no longer due`);
-          if (now && busy(now)) throw new Error(`${id} of task ${taskId} runs again`);
-          const c = daemon();
-          if (!c) throw new Error('the daemon is not connected');
-          return destroyedTreeOf(await c.rpc('daemon.destroySession' as never, { id, killTree: true }, { timeoutMs: TREE_DESTROY_TIMEOUT_MS }));
-        },
-        isAlive: isPidAlive,
-        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        log: (message) => console.warn(message),
-      });
-    };
+    // the renderer closes them (taskTreeStop.ts).
+    const stopTrees = (taskId: string, ptyIds: readonly string[], stillDue: () => boolean): Promise<void> => stopTaskPaneTrees({
+      folderOf: async (id) => {
+        const entry = ledger.get(id);
+        return entry ? taskFolderFromMissions((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry) : null;
+      },
+      listSessions,
+      destroyTree: async (id) => {
+        const c = daemon();
+        if (!c) throw new Error('the daemon is not connected');
+        return destroyedTreeOf(await c.rpc('daemon.destroySession' as never, { id, killTree: true }, { timeoutMs: TREE_DESTROY_TIMEOUT_MS }));
+      },
+      isAlive: isPidAlive,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (message) => console.warn(message),
+    }, taskId, ptyIds, stillDue);
     const closeWorkspace = async (workspaceId: string): Promise<boolean> => {
       const res = await sendToRenderer(() => deps.getMainWindow?.() ?? null, 'workspace.close', { id: workspaceId }, { timeoutMs: CLOSE_TIMEOUT_MS });
       return !!res && typeof res === 'object' && (res as { ok?: unknown }).ok === true;
