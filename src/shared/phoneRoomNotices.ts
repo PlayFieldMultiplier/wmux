@@ -98,10 +98,11 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
     titles: BUDGET_LIMITS,
     more: ['room.notice.budget.exhausted.at', 'room.notice.budget.exhausted.manual', 'room.notice.budget.exhausted.workers'],
   },
-  // A fan-out waiting for a worker slot, the bot's own or the factory's (roomWriter.ts).
+  // A fan-out waiting for a worker slot, the bot's own, the factory's or
+  // wmux's live fan-out cap (roomWriter.ts).
   'workers.full': {
     args: { bot: 'string', scope: 'string', inUse: 'number', cap: 'number' },
-    titles: ['room.notice.workers.full.bot', 'room.notice.workers.full.factory'],
+    titles: ['room.notice.workers.full.bot', 'room.notice.workers.full.factory', 'room.notice.workers.full.wmux'],
     more: ['room.notice.workers.full.body'],
   },
   'budget.held': titled('budget.held', { bot: 'string', until: 'number' }, ['room.notice.budget.held.at', 'room.notice.budget.held.manual']),

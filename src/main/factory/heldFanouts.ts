@@ -1,7 +1,8 @@
 // ─── Held fan-outs — a bot's fan-out that waits for a worker slot ──────────
 //
-// A bot's fan-out over its own worker slots (budget.maxConcurrentWorkers) or
-// the factory's (WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS) is not a budget
+// A bot's fan-out over its own worker slots (budget.maxConcurrentWorkers),
+// the factory's (WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS) or the wmux-wide
+// live fan-out cap (FANOUT_LIVE_TASK_CAP, the owner's fan-outs counted) is not a budget
 // refusal: the bot waits for a slot. The fan-out's refusal (fanout.rpc.ts)
 // keeps the request here, at most HELD_PER_BOT_MAX per bot, and once a
 // slot frees for it queues one wake for the bot that carries the request
@@ -78,12 +79,16 @@ export function heldFanoutFingerprint(args: HeldFanoutArgs): string {
 export interface HeldFanoutPorts {
   /** The bot's budget, or null when the bot is gone or off. */
   budget(botId: string): Pick<BotBudget, 'maxConcurrentWorkers'> | null;
-  /** Open workers of the bot and of every bot, as the fan-out counts them. */
-  openWorkers(botId: string): { bot: number; factory: number };
+  /** Open workers of the bot and of every bot, as the fan-out counts them;
+   *  `live`: every live fan-out task across wmux (absent: not known). */
+  openWorkers(botId: string): { bot: number; factory: number; live?: number };
   /** Brings openWorkers up to date (never rejects). */
   refreshLiveness?(): Promise<void>;
   wakes(): Pick<WakeSinkApi, 'enqueue' | 'flush'> | null | undefined;
   factoryLimit?: () => number;
+  /** The wmux-wide live fan-out cap (FANOUT_LIVE_TASK_CAP). Absent: not
+   *  checked here (the bot's retry is refused and held again). */
+  liveLimit?: () => number;
   now?: () => number;
   newId?: () => string;
   log?: (line: string) => void;
@@ -303,13 +308,14 @@ export class HeldFanouts {
       }
       const now = (this.ports.now ?? Date.now)();
       const limit = (this.ports.factoryLimit ?? (() => WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS))();
+      const liveLimit = this.ports.liveLimit?.();
       let changed = false;
       // Slots this pass handed out: a bot woken for one has not booked it yet.
       let factoryTaken = 0;
       const botTaken = new Map<string, number>();
       for (const h of [...this.held].sort((a, b) => a.heldAt - b.heldAt)) {
         let budget: Pick<BotBudget, 'maxConcurrentWorkers'> | null = null;
-        let open: { bot: number; factory: number } | null = null;
+        let open: { bot: number; factory: number; live?: number } | null = null;
         try {
           budget = this.ports.budget(h.botId);
           if (budget) open = this.ports.openWorkers(h.botId);
@@ -325,7 +331,9 @@ export class HeldFanouts {
           continue;
         }
         const taken = botTaken.get(h.botId) ?? 0;
-        if (workerSlotsFull(budget, open.bot + taken, open.factory + factoryTaken, h.count, limit)) continue;
+        // A bot slot handed out in this pass is a live wmux task too.
+        const wmux = liveLimit !== undefined && open.live !== undefined ? { live: open.live + factoryTaken, limit: liveLimit } : undefined;
+        if (workerSlotsFull(budget, open.bot + taken, open.factory + factoryTaken, h.count, limit, wmux)) continue;
         // Held until its wake is queued: a full queue keeps it for a later check.
         if (!this.wake(h)) continue;
         woken.push(h);

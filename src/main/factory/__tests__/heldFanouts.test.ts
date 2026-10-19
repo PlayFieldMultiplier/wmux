@@ -86,6 +86,32 @@ describe('HeldFanouts', () => {
     expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
   });
 
+  it('a request held at the wmux-wide live cap (the owner\'s fan-outs fill it) is woken only once a live slot frees', async () => {
+    const r = rig(dir);
+    let live = 8;
+    r.ports.openWorkers = (botId) => ({ bot: r.open.get(botId) ?? 0, factory: 0, live });
+    r.ports.liveLimit = () => 8;
+    expect(r.held.hold(request(BOT_A, 'verify #7'))).not.toBeNull();
+    // The bot's own and the factory's slots are free; wmux's are not.
+    expect(await r.held.releaseNow()).toEqual([]);
+    expect(r.queue.list({ botId: BOT_A })).toEqual([]);
+    // One of the owner's fan-outs ends.
+    live = 7;
+    expect((await r.held.releaseNow()).map((h) => h.titles)).toEqual([['verify #7']]);
+    expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
+  });
+
+  it('one free live slot wakes one held request, not two', async () => {
+    const r = rig(dir);
+    r.ports.budget = () => ({ maxConcurrentWorkers: 2 });
+    r.ports.openWorkers = () => ({ bot: 0, factory: 0, live: 7 });
+    r.ports.liveLimit = () => 8;
+    r.held.hold(request(BOT_A, 'verify #7'));
+    r.held.hold(request(BOT_B, 'verify #8'));
+    expect((await r.held.releaseNow()).map((h) => h.botId)).toEqual([BOT_A]);
+    expect(r.held.list().map((h) => h.botId)).toEqual([BOT_B]);
+  });
+
   it('a holder record that changes (a worker reclaimed or stopped) releases too', async () => {
     const r = rig(dir);
     r.open.set(BOT_A, 1);

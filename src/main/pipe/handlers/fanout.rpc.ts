@@ -100,7 +100,7 @@ import type { DaemonClient } from '../../DaemonClient';
 import { hostCwdForPane, type DaemonRpc } from '../../pty/wslCallerCwd';
 import { loadWorkspaceDecision } from '../../deck/deckDecisionStore';
 import type { FanOutRequest, FanOutService, FanOutTaskResult } from '../../worktask/FanOutService';
-import { getFanOutGuards, launchedAuditTask, promptDigest, refreshDormantTaskWorkspaces, type FanOutGuards } from '../../worktask/fanoutGuards';
+import { FANOUT_LIVE_TASK_CAP, getFanOutGuards, launchedAuditTask, promptDigest, refreshDormantTaskWorkspaces, type FanOutGuards } from '../../worktask/fanoutGuards';
 import { loadFanoutRequireApproval, loadFanoutWorkerPermissionMode } from '../../worktask/fanoutWorkerPolicy';
 import { workerLaunchFlags, type FanoutWorkerPermissionMode } from '../../../shared/workerLaunch';
 import { loadFanoutPresets } from '../../worktask/fanoutPresets';
@@ -723,8 +723,10 @@ export interface FanOutBotPort {
    *  true when it cannot be told. Its tasks' dispatch carries the mark. */
   currentWakeTainted(botId: string): boolean;
   /** Open fan-out tasks started by this bot, and by any bot, the bot
-   *  fan-outs still being started included (`botStarting`: this bot's). */
-  openWorkers(botId: string): { bot: number; factory: number; botStarting?: number };
+   *  fan-outs still being started included (`botStarting`: this bot's).
+   *  `live`: every live fan-out task across wmux, the owner's included, as
+   *  the wmux-wide live cap counts them; absent when not known. */
+  openWorkers(botId: string): { bot: number; factory: number; botStarting?: number; live?: number };
   /** Brings what openWorkers counts up to date (which workers' panes still
    *  run an agent). Awaited before the caps are checked. Never rejects. */
   refreshLiveness?(): Promise<void>;
@@ -783,7 +785,9 @@ export function heldFanoutArgs(params: Record<string, unknown>): HeldFanoutArgs 
 export function workersFullText(full: WorkerSlotsFull, held: boolean, heldNote = ''): string {
   const whose = full.scope === 'factory'
     ? `the factory's bot worker slots are all in use (${full.running} of ${full.limit}, every bot's workers counted)`
-    : `all of this bot's worker slots are in use (${full.running} of ${full.limit})${heldNote}`;
+    : full.scope === 'wmux'
+      ? `every live fan-out slot across wmux is in use (${full.running} of ${full.limit}, the owner's fan-outs counted)`
+      : `all of this bot's worker slots are in use (${full.running} of ${full.limit})${heldNote}`;
   return `${whose}. This is not a budget limit: ${held
     ? 'wmux holds this fan-out and wakes you with its arguments when a slot frees, to start it then'
     : 'start it again once one of the running workers ends'}.`;
@@ -1550,7 +1554,12 @@ export function registerFanOutRpc(
         botPort.budgetExhausted(bot, 'worker_hours_day');
         return deny('RESOURCE_EXHAUSTED', 'this bot\'s worker budget refuses the fan-out (worker_hours_day): its worker hours for today are used');
       }
-      const full = workerSlotsFull(botProfile.budget, open.bot, open.factory, n, WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS);
+      // The wmux-wide live cap (the owner's fan-outs count too) is the same
+      // wait for a slot: checked here, with the count the reserve below
+      // reads in this same tick, so its refusal is held like the others
+      // instead of reaching the reserve and being lost.
+      const wmux = open.live !== undefined ? { live: open.live, limit: FANOUT_LIVE_TASK_CAP } : undefined;
+      const full = workerSlotsFull(botProfile.budget, open.bot, open.factory, n, WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS, wmux);
       const most = Math.min(botProfile.budget.maxConcurrentWorkers, WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS);
       if (n > most) {
         // More tasks than the slots could ever hold: reported only when the

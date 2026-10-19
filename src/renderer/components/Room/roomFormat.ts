@@ -224,7 +224,7 @@ const NOTICE_WORDS: Readonly<Record<string, ReadonlySet<string>>> = {
   // Why a worker could not start (botNotices.ts START_FAILURES).
   cause: new Set(['fetch', 'worktree', 'repository', 'promptFile', 'slot', 'pane', 'setupStep', 'setup']),
   // Whose worker slots are full (roomWriter.ts `workers.full`).
-  scope: new Set(['bot', 'factory']),
+  scope: new Set(['bot', 'factory', 'wmux']),
 };
 
 /** Why wmux moved a task to input_required (roomWriter.ts inputRequiredWhy). */

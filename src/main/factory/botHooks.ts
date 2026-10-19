@@ -28,9 +28,11 @@ export type BotHookEvent =
     }
   /** A bot's fan-out found every worker slot in use: its own
    *  (`scope` bot: maxConcurrentWorkers) or the factory's (`scope` factory:
-   *  WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS). Not a budget limit: the request
+   *  WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS), or wmux's live fan-out cap
+   *  (`scope` wmux: FANOUT_LIVE_TASK_CAP, the owner's fan-outs counted).
+   *  Not a budget limit: the request
    *  is held and the bot is woken when a slot frees (heldFanouts.ts). */
-  | { type: 'bot.workers_full'; botId: string; workspaceId: string; scope: 'bot' | 'factory'; running: number; limit: number; held: boolean; at: number }
+  | { type: 'bot.workers_full'; botId: string; workspaceId: string; scope: 'bot' | 'factory' | 'wmux'; running: number; limit: number; held: boolean; at: number }
   /** `until`: the turn hit the provider's usage limit; the bot is parked
    *  until then and picks up by itself. */
   | { type: 'bot.error'; botId: string; workspaceId: string; message: string; wakeId?: string; until?: number; at: number }

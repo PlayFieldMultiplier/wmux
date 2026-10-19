@@ -38,6 +38,7 @@ import { createDefaultBotEngineFactory, runnableDefaultEngine, type BotEngineFac
 import { recordWorkerEnd } from '../../factory/budget';
 import { botAccountQuota, type ClaudeUsageCache } from '../../factory/botQuota';
 import { openBotWorkers } from '../../factory/openBotWorkers';
+import { FANOUT_LIVE_TASK_CAP } from '../../worktask/fanoutGuards';
 import { getAgentSlots, refreshSlotLiveness } from '../../factory/agentSlots';
 import { HeldFanouts, setHeldFanouts, type HeldFanoutPorts } from '../../factory/heldFanouts';
 import { BotFanoutReceipts, botFanoutReceiptsPath, setBotFanoutReceipts } from '../../factory/botFanoutReceipts';
@@ -504,6 +505,7 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
         openWorkers: openBotWorkers,
         refreshLiveness: refreshSlotLiveness,
         wakes: () => queue,
+        liveLimit: () => FANOUT_LIVE_TASK_CAP,
       };
       let held: HeldFanouts;
       try {
