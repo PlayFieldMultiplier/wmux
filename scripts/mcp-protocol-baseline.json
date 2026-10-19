@@ -201,7 +201,7 @@
   "botProfiles": {
     "lead": {
       "maxListBytes": 40000,
-      "wireResultSha256": "bbd74a9d547225d09ecc9b9cd7998ed4ee3c83f2c6adc2909055640bcf8a49c7",
+      "wireResultSha256": "d8b2231c568c225ee441f8ec7d453a553deef5a9789706ccaacfab560368b828",
       "instructionSha256": "7c1100716407e8c1dbe49aba89adc91ed5719827564d1b63eb285d0520430ce4",
       "toolNames": [
         "terminal_read",
@@ -235,12 +235,15 @@
         "worker_message",
         "secret_request",
         "secret_list",
-        "login_request"
+        "login_request",
+        "workflow_create",
+        "workflow_read",
+        "workflow_advance"
       ]
     },
     "triage": {
       "maxListBytes": 40000,
-      "wireResultSha256": "bbd74a9d547225d09ecc9b9cd7998ed4ee3c83f2c6adc2909055640bcf8a49c7",
+      "wireResultSha256": "d8b2231c568c225ee441f8ec7d453a553deef5a9789706ccaacfab560368b828",
       "instructionSha256": "7c1100716407e8c1dbe49aba89adc91ed5719827564d1b63eb285d0520430ce4",
       "toolNames": [
         "terminal_read",
@@ -274,12 +277,15 @@
         "worker_message",
         "secret_request",
         "secret_list",
-        "login_request"
+        "login_request",
+        "workflow_create",
+        "workflow_read",
+        "workflow_advance"
       ]
     },
     "verifier": {
       "maxListBytes": 40000,
-      "wireResultSha256": "bbd74a9d547225d09ecc9b9cd7998ed4ee3c83f2c6adc2909055640bcf8a49c7",
+      "wireResultSha256": "d8b2231c568c225ee441f8ec7d453a553deef5a9789706ccaacfab560368b828",
       "instructionSha256": "7c1100716407e8c1dbe49aba89adc91ed5719827564d1b63eb285d0520430ce4",
       "toolNames": [
         "terminal_read",
@@ -313,12 +319,15 @@
         "worker_message",
         "secret_request",
         "secret_list",
-        "login_request"
+        "login_request",
+        "workflow_create",
+        "workflow_read",
+        "workflow_advance"
       ]
     },
     "maintainer": {
       "maxListBytes": 40000,
-      "wireResultSha256": "bbd74a9d547225d09ecc9b9cd7998ed4ee3c83f2c6adc2909055640bcf8a49c7",
+      "wireResultSha256": "d8b2231c568c225ee441f8ec7d453a553deef5a9789706ccaacfab560368b828",
       "instructionSha256": "7c1100716407e8c1dbe49aba89adc91ed5719827564d1b63eb285d0520430ce4",
       "toolNames": [
         "terminal_read",
@@ -352,12 +361,15 @@
         "worker_message",
         "secret_request",
         "secret_list",
-        "login_request"
+        "login_request",
+        "workflow_create",
+        "workflow_read",
+        "workflow_advance"
       ]
     },
     "moa": {
       "maxListBytes": 40000,
-      "wireResultSha256": "bbd74a9d547225d09ecc9b9cd7998ed4ee3c83f2c6adc2909055640bcf8a49c7",
+      "wireResultSha256": "d8b2231c568c225ee441f8ec7d453a553deef5a9789706ccaacfab560368b828",
       "instructionSha256": "7c1100716407e8c1dbe49aba89adc91ed5719827564d1b63eb285d0520430ce4",
       "toolNames": [
         "terminal_read",
@@ -391,7 +403,10 @@
         "worker_message",
         "secret_request",
         "secret_list",
-        "login_request"
+        "login_request",
+        "workflow_create",
+        "workflow_read",
+        "workflow_advance"
       ]
     }
   }
