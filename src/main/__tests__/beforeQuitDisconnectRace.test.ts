@@ -103,4 +103,18 @@ describe('before-quit daemon lifecycle — source invariants (tmux persistence)'
     expect(localBranch).toMatch(/if\s*\(\s*fullShutdownRequested\s*\)/);
     expect(localBranch).toMatch(/killDaemonByPidFile\(\)/);
   });
+
+  it('a full shutdown keeps watching the daemon exit through the shutdown race', () => {
+    // dispose() closes the exit watch; a full shutdown takes it first, so a
+    // daemon that dies natively during teardown still gets its exit code logged.
+    const takePos = beforeQuitBlock.indexOf('takeExitWatch()');
+    const disposePos = beforeQuitBlock.indexOf('daemonRespawnController?.dispose()');
+    const reportPos = beforeQuitBlock.indexOf("exitWatchAtQuit?.report('full shutdown')");
+    const racePos = beforeQuitBlock.indexOf('raceDaemonShutdown(clientAtQuit');
+    expect(beforeQuitBlock).toMatch(/fullShutdownRequested\s*\?\s*\(daemonRespawnController\?\.takeExitWatch\(\)/);
+    expect(takePos).toBeGreaterThan(0);
+    expect(disposePos).toBeGreaterThan(takePos);
+    expect(reportPos).toBeGreaterThan(disposePos);
+    expect(racePos).toBeGreaterThan(reportPos);
+  });
 });

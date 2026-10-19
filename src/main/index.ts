@@ -196,7 +196,7 @@ import { toastManager } from './notification/ToastManager';
 import { WorkspaceContextRouter } from './metadata/WorkspaceContextRouter';
 import { ensureDaemon, killDaemonByPidFile, describeDaemonKillOutcome, killVerifiedDaemonPid, checkProcessLiveness, isDaemonPipeGone } from './daemon/launcher';
 import { DaemonRespawnController } from './daemon/DaemonRespawnController';
-import { createDaemonExitWatch } from './daemon/daemonExitWatch';
+import { createDaemonExitWatch, type DaemonExitWatch } from './daemon/daemonExitWatch';
 import { loadConfig, getWmuxDir } from '../daemon/config';
 import { CHANNELS_EPOCH } from '../shared/channels';
 import { createTray, destroyTray, updateTraySessionCount } from './tray';
@@ -3081,6 +3081,12 @@ app.on('before-quit', async (e) => {
   // and detaches listeners — it does NOT call `onUninstall()`, so the
   // shutdown-race path below remains the single authority for taking the
   // client offline cleanly.
+  // A full shutdown keeps the daemon's exit watch past dispose(), so a daemon
+  // that dies natively during its teardown still has its exit code logged. A
+  // detach Quit leaves the daemon alive on purpose: nothing to watch.
+  const exitWatchAtQuit: DaemonExitWatch | null = fullShutdownRequested
+    ? (daemonRespawnController?.takeExitWatch() ?? null)
+    : null;
   safeStep('daemonRespawnController.dispose', () => {
     daemonRespawnController?.dispose();
     daemonRespawnController = null;
@@ -3117,6 +3123,9 @@ app.on('before-quit', async (e) => {
           `[Main] Full shutdown — racing daemon.shutdown (${FULL_SHUTDOWN_TIMEOUT_MS}ms budget)`,
         );
         logLine('info', 'main', 'full-shutdown: racing daemon.shutdown');
+        // Watch the exit alongside the race, not after it: the line lands as
+        // soon as the daemon goes, while main is still here to write it.
+        void exitWatchAtQuit?.report('full shutdown');
         const shutdownStart = Date.now();
         const race = await raceDaemonShutdown(clientAtQuit, FULL_SHUTDOWN_TIMEOUT_MS);
         const elapsed = Date.now() - shutdownStart;

@@ -279,6 +279,18 @@ export class DaemonRespawnController {
     this.exitWatch = null;
   }
 
+  /**
+   * Hand the exit watch to the caller, so dispose() leaves it running. A full
+   * shutdown keeps watching the daemon through its teardown: a native crash
+   * there is one of the exits the watch exists for, and main is still alive
+   * awaiting the shutdown RPC when it happens.
+   */
+  takeExitWatch(): DaemonExitWatch | null {
+    const watch = this.exitWatch;
+    this.exitWatch = null;
+    return watch;
+  }
+
   /** Public entry for tests / future manual reconnect UI. */
   async forceRespawn(): Promise<void> {
     if (this.disposed) return;

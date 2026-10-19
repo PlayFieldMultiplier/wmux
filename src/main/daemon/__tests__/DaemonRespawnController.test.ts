@@ -1156,3 +1156,22 @@ describe('DaemonRespawnController trusts the pid that answered the ping', () => 
     expect(h.logs).toContainEqual({ level: 'info', msg: 'stale daemon replaced (old pid=4300 → new pid=5000)' });
   });
 });
+
+describe('DaemonRespawnController hands its exit watch over for a full shutdown', () => {
+  it('a taken watch survives dispose, and the controller no longer reports on it', async () => {
+    const ew = makeExitWatches();
+    const h = makeHarness({ config: { healthIntervalMs: 0 }, watchDaemonExit: ew.factory });
+    const c1 = new FakeDaemonClient();
+    h.clientQueue.push(c1);
+    await h.controller.bootstrap();
+
+    const taken = h.controller.takeExitWatch();
+    h.controller.dispose();
+    c1.fireDisconnect();
+
+    expect(taken).not.toBeNull();
+    expect(ew.watches[0]).toMatchObject({ reports: [], disposed: false });
+    await taken!.report('full shutdown');
+    expect(ew.watches[0].reports).toEqual(['full shutdown']);
+  });
+});
