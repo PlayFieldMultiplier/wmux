@@ -170,8 +170,8 @@ export function plainStartFailure(error: string): string {
   // cause and the remedy (promptFileArgument.cmdLaunchPathRefusal), as does
   // the merge-lane guard's for a data folder no shell can pass (#2268,
   // promptFileArgument.dataDirNoShellRefusal), in any shell.
-  const cmd = /Command Prompt cannot pass [^\n]*/.exec(error);
-  if (cmd) return cmd[0];
+  const own = /(?:Command Prompt cannot pass|No shell can pass the wmux data folder) [^\n]*/.exec(error);
+  if (own) return own[0];
   const e = error.toLowerCase();
   return (START_FAILURES.find((f) => f.test.test(e)) ?? START_FAILURES[START_FAILURES.length - 1]).text;
 }

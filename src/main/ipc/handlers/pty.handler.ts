@@ -1016,8 +1016,9 @@ export function registerPTYHandlers(
       // The interrupt edge: Ctrl+C / ESC ESC ends the agent's turn without any
       // Stop hook, and `claude` stays the foreground command so OSC 133 cannot
       // see it either. A lone ESC is recorded, and settles the turn once the
-      // agent prints its "Interrupted" row. Runs before the write so the settle is not gated on
-      // delivery — the operator's intent is the same either way.
+      // agent prints its "Interrupted" row. Runs before the write so the
+      // settle is not gated on delivery — the operator's intent is the same
+      // either way.
       ptyBridge.noteInterruptInput(id, data);
       // The Enter that submits a staged launch line (agentGoneFacts.ts).
       noteSessionInput(id, data);

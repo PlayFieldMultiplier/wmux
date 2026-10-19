@@ -60,7 +60,7 @@ describe('the cmd.exe prompt argument (#2231)', () => {
   it('#2256: a path cmd cannot carry is refused by its own cause and remedy, not as a merge-lane guard failure', () => {
     const prompt = (flaw: string) => `Command Prompt cannot pass the prompt file (its path ${flaw}); set Default shell to PowerShell (Settings › Terminal) or move the wmux data folder`;
     const dataDir = (flaw: string) => `Command Prompt cannot pass the wmux data folder (its path ${flaw}); set Default shell to PowerShell (Settings › Terminal) or move the folder`;
-    const stuck = (flaw: string) => `Command Prompt cannot pass the wmux data folder (its path ${flaw}), and no other shell can either; move the folder`;
+    const stuck = (flaw: string) => `No shell can pass the wmux data folder to a worker (its path ${flaw}); move the folder`;
     const line = (p: string) => `claude --model opus ${promptFileArgument(p, 'win32')}`;
     const okDir = 'C:\\Users\\me\\.wmux';
     // No shell passes the guard's files from this folder, so PowerShell is not offered.
@@ -101,7 +101,7 @@ describe('the cmd.exe prompt argument (#2231)', () => {
   });
 
   it('#2268: a data folder no shell can pass gets #2256\'s sentence in every shell, on Windows and POSIX paths alike', () => {
-    const stuck = (flaw: string) => `Command Prompt cannot pass the wmux data folder (its path ${flaw}), and no other shell can either; move the folder`;
+    const stuck = (flaw: string) => `No shell can pass the wmux data folder to a worker (its path ${flaw}); move the folder`;
     // The same words a Command Prompt pane gets.
     expect(dataDirNoShellRefusal('C:\\Users\\me\\.wmux-wE9!')).toBe(cmdLaunchPathRefusal('claude', 'C:\\Users\\me\\.wmux-wE9!', true));
     expect(dataDirNoShellRefusal('C:\\Users\\me\\.wmux-wE9!')).toBe(stuck('contains "!"'));

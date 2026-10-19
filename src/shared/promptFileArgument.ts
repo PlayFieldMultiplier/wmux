@@ -215,9 +215,11 @@ const CMD_DATA_DIR_UNSAFE = '\'"`$%!&|^<>\\u0000-\\u001f\\u007f';
 
 /** #2256's sentence for a data folder no shell can pass the guard's files
  *  from. One wording whichever shell refused the worker (#2268), so the room
- *  card and the phone show one message. */
+ *  card and the phone show one message; it names no shell, since a
+ *  PowerShell or WSL pane's worker is refused for the same cause as a
+ *  Command Prompt one's (botNotices.plainStartFailure keeps it whole). */
 function noShellDataDirSentence(flaw: string): string {
-  return `Command Prompt cannot pass the wmux data folder (its path ${flaw}), and no other shell can either; move the folder`;
+  return `No shell can pass the wmux data folder to a worker (its path ${flaw}); move the folder`;
 }
 
 /**
