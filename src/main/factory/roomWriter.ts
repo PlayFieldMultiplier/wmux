@@ -805,6 +805,9 @@ export class RoomWriter {
     const clientPostId = isClientId(input.clientPostId) ? input.clientPostId : undefined;
     if (clientPostId) {
       const prior = state.byId.get(state.byClientId.get(clientPostId) ?? '');
+      // An external guest's card is returned only to a guest post: anyone
+      // else reusing its id would read it without asking (read's `guests`).
+      if (prior && prior.kind === 'guest' && input.kind !== 'guest') return { ok: false, code: 'invalid', message: 'that clientPostId is already used in this room' };
       if (prior) return { ok: true, card: prior, duplicate: true };
     }
     const threadId = input.threadId === undefined ? GENERAL_THREAD : parseThreadId(input.threadId);

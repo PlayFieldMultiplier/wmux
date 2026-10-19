@@ -135,6 +135,16 @@ describe('RoomWriter store', () => {
     expect(reloaded).toMatchObject({ ok: true, duplicate: true });
   });
 
+  it('a guest card\'s clientPostId returns it only to another guest post', () => {
+    const w = writer();
+    const guest = { workspaceId: 'ws1', kind: 'guest' as const, actor: SYS, title: 'External guest: G', body: 'GUEST-WORDS', guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'G' }, clientPostId: 'guest:g:m1' };
+    expect(w.post(guest)).toMatchObject({ ok: true });
+    const reused = w.post({ workspaceId: 'ws1', kind: 'status', actor: { kind: 'bot', workspaceId: 'ws1', botId: 'bot-0000aaaa' }, title: 'x', clientPostId: 'guest:g:m1' });
+    expect(reused).toMatchObject({ ok: false, code: 'invalid' });
+    expect(JSON.stringify(reused)).not.toContain('GUEST-WORDS');
+    expect(w.post(guest)).toMatchObject({ ok: true, duplicate: true });
+  });
+
   it('replyTo must name a card of the same thread', () => {
     const w = writer();
     const parent = w.append({ workspaceId: 'ws1', threadId: 'task:t1', kind: 'dispatch', actor: SYS, title: 'p' })!;
