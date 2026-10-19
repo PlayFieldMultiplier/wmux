@@ -9,7 +9,7 @@ export interface ScreenApproval {
 }
 
 function rowsAtBottom(rows: readonly string[]): string[] {
-  return rows.map((row) => row.replace(/[│║┃╭╮╯╰┌┐┘└]/g, ' ').trim()).filter(Boolean).slice(-24);
+  return rows.map((row) => row.replace(/[│║┃╭╮╯╰┌┐┘└]/g, ' ').trim()).filter(Boolean);
 }
 
 export function claudeScreenApproval(rows: readonly string[]): ScreenApproval | null {
@@ -20,7 +20,10 @@ export function claudeScreenApproval(rows: readonly string[]): ScreenApproval | 
 function choiceDialog(rows: readonly string[], question: RegExp, footer: RegExp): string | null {
   const tail = rowsAtBottom(rows);
   if (!footer.test(tail.at(-1) ?? '')) return null;
-  const q = tail.findIndex((row) => question.test(row));
+  let q = -1;
+  for (let i = tail.length - 2; i >= 0; i--) {
+    if (question.test(tail[i] ?? '')) { q = i; break; }
+  }
   if (q < 0) return null;
   const body = tail.slice(q + 1, -1);
   const option = /^[❯›>]?\s*(?:\d+[.)]\s*)?(?:Yes|No)\b/i;

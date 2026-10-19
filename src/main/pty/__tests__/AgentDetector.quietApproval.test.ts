@@ -5,8 +5,11 @@ import codex from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts
 import openCode from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/opencode-permission-bash-01.json';
 import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/claude-write-01-create.json';
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
+import { codexScreenApproval } from '../approvalScreen';
 
 const TRUST = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', '  No, exit', '↑/↓ Navigate · enter Confirm'];
+const CODEX_EDIT = ['Would you like to make the following edits?', '› 1. Yes, proceed (y)',
+  '  2. No, and tell Codex what to do differently (esc)', 'Press enter to confirm or esc to cancel'] as const;
 function setup(slug: AgentSlug = 'agy', output = TRUST.join('\r\n')) {
   const det = new AgentDetector();
   const events = vi.fn();
@@ -43,13 +46,42 @@ describe('quiet approval recovery reads only the current interactive viewport', 
   });
 
   it.each([
-    ['codex', codex.screen.slice(6)],
+    ['codex', codex.screen],
     ['opencode', openCode.screen],
     ['claude', claude.screen],
   ] as const)('recovers a real %s permission fixture using its current choice/footer structure', async (slug, rows) => {
-    const { det, events } = setup(slug, rows.join('\r\n'));
+    // The full Codex banner already opens normal stream detection. Quiet
+    // recovery starts with only a question hint but reads the complete grid.
+    const output = slug === 'codex' ? 'Would you like to run the following command?\r\n' : rows.join('\r\n');
+    const { det, events } = setup(slug, output);
     expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
     expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
+  });
+
+  it('recovers a live edit dialog whose body exceeds 24 nonblank viewport rows', async () => {
+    const rows = [CODEX_EDIT[0], ...Array.from({ length: 32 }, (_, i) => `+ added line ${i}`), ...CODEX_EDIT.slice(1)];
+    const { det, events } = setup('codex', rows.join('\r\n'));
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
+  });
+
+  it('uses the newest live question when an answered dialog remains above it', async () => {
+    const rows = ['Would you like to run the following command?', ...CODEX_EDIT.slice(1),
+      'Command finished', ...CODEX_EDIT];
+    expect(codexScreenApproval(rows)?.text).toBe(CODEX_EDIT[0]);
+    const { det, events } = setup('codex', rows.join('\r\n'));
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
+  });
+
+  it.each([
+    ['output after the footer', [...CODEX_EDIT, 'Applied the edits']],
+    ['output before a redrawn footer', [...CODEX_EDIT.slice(0, -1), 'Applied the edits', CODEX_EDIT[3]]],
+    ['a newer question without choices', [...CODEX_EDIT, 'Applied the edits', CODEX_EDIT[0], CODEX_EDIT[3]]],
+  ])('rejects stale Codex choices with %s', async (_label, rows) => {
+    const { det, events } = setup('codex', rows.join('\r\n'));
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(false);
+    expect(events).not.toHaveBeenCalled();
   });
 
   it.each([
