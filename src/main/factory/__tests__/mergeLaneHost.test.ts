@@ -508,12 +508,14 @@ describe('guest wake → fan-out / handoff → merge lane', () => {
     expect(await r.host.evaluate(KEY, 3, HEAD)).toBe('owner-only');
   });
 
-  it('wakes are never folded across kinds: a guest wake and the owner\'s stay two turns, and a facts batch is tainted if any fact is', () => {
+  it('wakes are never folded across kinds: a guest wake and the owner\'s stay two turns, and a facts batch is tainted if any fact is', async () => {
     const q = new WakeQueue(wakeQueuePath(dir), { now: () => 1 });
     const a = q.enqueue({ botId: LEAD, workspaceId: 'ws-1', priority: 2, threadId: 'general', reason: guestWake.reason });
     const b = q.enqueue({ botId: LEAD, workspaceId: 'ws-1', priority: 0, threadId: 'general', reason: ownerWake.reason });
     expect(a && b && a.id !== b.id).toBe(true);
     expect(q.list({ botId: LEAD }).map((i) => i.reason.kind).sort()).toEqual(['guest', 'human']);
+    // The queue's write lands before the folder is removed.
+    await q.flush();
     const withFacts = new WakeTaint({
       facts: (ids) => ids.map((id) => ({ id, seq: 1, kind: id === 'f-pr' ? 'pr.opened' : 'merge.done', at: 1, dedupeKey: id, ref: {}, payload: {} })) as never,
       handoff: () => null, taskRow: () => null, runningWake: () => null,
