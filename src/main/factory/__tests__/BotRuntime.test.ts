@@ -611,6 +611,25 @@ describe('BotRuntime', () => {
     expect(r.adapters[0].prompts).toHaveLength(4);
   });
 
+  it('a turn that fails signed out parks with the not_logged_in code (the Log in card); a plain failure keeps none', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const item = r.runtime.wake(id);
+    await settle(10);
+    r.adapters[0].end([{ type: 'error', message: 'Not logged in · Please run /login' }]);
+    await settle(10);
+    r.adapters[0].end([{ type: 'error', message: 'Not logged in · Please run /login' }]);
+    await settle(10);
+    expect(r.queue.get(item!.id)?.state).toBe('parked');
+    expect(r.runtime.status(id)).toMatchObject({ presence: 'parked', lastError: { message: 'Not logged in · Please run /login', code: 'not_logged_in' } });
+    const plain = rig({ mode: 'error' });
+    const other = createBot(plain);
+    plain.runtime.wake(other);
+    await settle(10);
+    expect(plain.runtime.status(other)?.presence).toBe('parked');
+    expect(plain.runtime.status(other)?.lastError).not.toHaveProperty('code');
+  });
+
   it('a usage limit parks the bot until the reset, then it picks up by itself; its turn is not charged', async () => {
     const timers: Array<{ fn: () => void; at: number }> = [];
     const r = rig({ timers });

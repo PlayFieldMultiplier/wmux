@@ -1245,7 +1245,12 @@ export class BotRuntime {
       // Nor is the turn charged to the bot's budget: it never reached the model.
       if (startedAt !== undefined && this.deps.store.get(botId)) this.deps.store.mutateUsage(botId, (u) => { unrecordTurn(u, startedAt); });
     } else {
-      const code = outcome === 'engine' ? classifyEngineError(message) : undefined;
+      // A setup failure the adapter reports mid-turn (signed out: "Not
+      // logged in · Please run /login") gets the same code as the engine's
+      // own refusal, so the parked bot shows its Fix card; any other failed
+      // turn keeps no code.
+      const classified = classifyEngineError(message);
+      const code = outcome === 'engine' || classified !== 'other' ? classified : undefined;
       this.lastError.set(botId, { message: message.slice(0, 500), at, ...(code ? { code } : {}) });
       const giveUp = outcome === 'engine' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
       if (!giveUp) {
