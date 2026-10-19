@@ -246,27 +246,25 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     // `ptyIds`, killTree, survivors recorded against the folder so its
     // cleanup keeps it while one runs. A folder that is not known closes
     // nothing: survivors could not be recorded against it. Checked again
-    // on the sessions read for the stop, after the folder lookup: the close
-    // still due, and none of them running an agent or a command again.
+    // right before each pane's kill (the kills are one at a time): the close
+    // still due, and the pane not running an agent or a command again.
     const stopTrees = async (taskId: string, ptyIds: readonly string[], stillDue: () => boolean): Promise<void> => {
       if (ptyIds.length === 0) return;
       const entry = ledger.get(taskId);
       const dir = entry ? await taskFolderFromMissions((m, p) => rpc(m, (p ?? {}) as Record<string, unknown>), entry) : null;
       if (!dir) throw new Error(`the folder of task ${taskId} is not known`);
+      // A dead or suspended session runs nothing, whatever its last prompt
+      // state said.
+      const busy = (x: WorkerSessionInfo): boolean => {
+        const state = (x as { state?: unknown }).state;
+        return state !== 'dead' && state !== 'suspended' && (x.agentProcessAlive === true || x.commandRunning === true);
+      };
       await stopSessionsInDir(dir, {
-        listSessions: async () => {
-          const targets = (await listSessions()).filter((x) => ptyIds.includes(x.id));
-          if (!stillDue()) throw new Error(`the close of task ${taskId}'s panes is no longer due`);
-          // A dead or suspended session runs nothing, whatever its last
-          // prompt state said.
-          const busy = targets.filter((x) => {
-            const state = (x as { state?: unknown }).state;
-            return state !== 'dead' && state !== 'suspended' && (x.agentProcessAlive === true || x.commandRunning === true);
-          });
-          if (busy.length > 0) throw new Error(`${busy.map((x) => x.id).join(', ')} of task ${taskId} run(s) again`);
-          return targets;
-        },
+        listSessions: async () => (await listSessions()).filter((x) => ptyIds.includes(x.id)),
         destroySession: async (id) => {
+          const now = (await listSessions()).find((x) => x.id === id);
+          if (!stillDue()) throw new Error(`the close of task ${taskId}'s panes is no longer due`);
+          if (now && busy(now)) throw new Error(`${id} of task ${taskId} runs again`);
           const c = daemon();
           if (!c) throw new Error('the daemon is not connected');
           return destroyedTreeOf(await c.rpc('daemon.destroySession' as never, { id, killTree: true }, { timeoutMs: TREE_DESTROY_TIMEOUT_MS }));
