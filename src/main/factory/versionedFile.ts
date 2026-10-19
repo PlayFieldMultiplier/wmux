@@ -31,12 +31,19 @@ export function readVersionedFile(file: string, version: number): Record<string,
 export interface FilePersister {
   /** Schedule a write of the current snapshot; resolves once it is on disk. */
   schedule(): Promise<void>;
+  /** Resolves once every write scheduled so far has finished (written or
+   *  failed); never rejects. A fire-and-forget save (a state change whose
+   *  caller does not await the write) is still running until then. */
+  settled(): Promise<void>;
 }
 
 export function createFilePersister(file: string, snapshot: () => unknown): FilePersister {
   assertNotLiveWmuxPath(file);
   const chain = createSerialChain();
   let pending: Promise<void> | null = null;
+  // The newest write scheduled: the chain is serial, so once it is done
+  // every earlier one is too.
+  let last: Promise<void> = Promise.resolve();
   return {
     schedule() {
       // One queued write is enough: it reads the snapshot when it runs.
@@ -44,7 +51,11 @@ export function createFilePersister(file: string, snapshot: () => unknown): File
         pending = null;
         await atomicWriteJSON(file, snapshot());
       });
+      last = pending;
       return pending;
+    },
+    settled() {
+      return last.then(() => undefined, () => undefined);
     },
   };
 }

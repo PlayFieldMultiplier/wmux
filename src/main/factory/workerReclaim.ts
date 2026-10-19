@@ -319,6 +319,12 @@ export class ReclaimedWorkers {
     return this.save();
   }
 
+  /** Resolves once every write scheduled so far (setState, markSeen and
+   *  advanceEndRev do not wait for theirs) is done; never rejects. */
+  settled(): Promise<void> {
+    return this.persister.settled();
+  }
+
   /** Told of every state change made through setState (the agent budget
    *  counts a resumed worker's run from these). */
   onStateChange: ((rec: { taskId: string; botId: string }, from: ReclaimedWorker['state'], to: ReclaimedWorker['state'], at: number) => void) | null = null;
