@@ -62,8 +62,11 @@ export interface ResubscribeResyncDeps {
   emitDied: (id: string, exitCode: number | null, signal?: number) => void;
   /** Sends a cwd the way a live `cwd.changed` does. */
   emitCwd: (id: string, cwd: string) => void;
-  /** Calls back on each live `cwd.changed`; returns the unsubscribe. */
-  onLiveCwd: (listener: (id: string) => void) => () => void;
+  /**
+   * Calls back on each live `cwd.changed` ('cwd') and each live death,
+   * destroy or supervised restart ('lifecycle'); returns the unsubscribe.
+   */
+  onLiveEvent: (listener: (kind: 'cwd' | 'lifecycle', id: string) => void) => () => void;
   /** Sends a title to the renderer the way a live `title.changed` does. */
   emitTitle: (id: string, title: string) => void;
   hookRouter: HookSignalRouter | null;
@@ -81,24 +84,36 @@ export interface ResubscribeResyncResult {
 
 export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promise<ResubscribeResyncResult> {
   const result: ResubscribeResyncResult = { panes: 0, statusesCorrected: 0, titles: 0, deaths: 0, cwds: 0 };
-  // A live cwd that lands after the daemon took its list, but before this
-  // continuation runs (both can arrive in one socket read), is newer than the
-  // listed one.
+  // A live event that lands after the daemon took its list, but before the
+  // pass acts on it (both can arrive in one socket read), is newer than what
+  // was listed or read: a live cwd wins over the listed one, and a pane that
+  // died, was destroyed or restarted live is left to that event.
   const liveCwd = new Set<string>();
-  const offLiveCwd = deps.onLiveCwd((id) => { liveCwd.add(id); });
+  const liveLifecycle = new Set<string>();
+  const offLive = deps.onLiveEvent((kind, id) => { (kind === 'cwd' ? liveCwd : liveLifecycle).add(id); });
+  try {
+    return await resync(deps, result, liveCwd, liveLifecycle);
+  } finally {
+    offLive();
+  }
+}
+
+async function resync(
+  deps: ResubscribeResyncDeps,
+  result: ResubscribeResyncResult,
+  liveCwd: ReadonlySet<string>,
+  liveLifecycle: ReadonlySet<string>,
+): Promise<ResubscribeResyncResult> {
   let rows: DaemonSessionRow[];
   try {
     rows = await deps.listSessions();
   } catch {
     return result;
-  } finally {
-    offLiveCwd();
   }
   const ids: string[] = [];
-  const trackedAtList = new Set<string>();
   for (const row of Array.isArray(rows) ? rows : []) {
     const id = row?.id;
-    if (typeof id !== 'string' || id.length === 0) continue;
+    if (typeof id !== 'string' || id.length === 0 || liveLifecycle.has(id)) continue;
     const tracked = deps.trackedCwd(id);
     if (row.state === 'dead') {
       // A tombstone's agent state is what it held when the shell went, so it
@@ -117,7 +132,6 @@ export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promi
       deps.emitCwd(id, row.cwd);
       result.cwds += 1;
     }
-    if (tracked !== undefined) trackedAtList.add(id);
     ids.push(id);
   }
   const states = await Promise.all(ids.map(async (id) => {
@@ -129,8 +143,7 @@ export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promi
   }));
   for (const [id, state] of states) {
     if (!state) continue;
-    // It ended live while its state was read: what was read is already stale.
-    if (trackedAtList.has(id) && deps.trackedCwd(id) === undefined) continue;
+    if (liveLifecycle.has(id)) continue;
     result.panes += 1;
     if (state.title) {
       deps.emitTitle(id, state.title);

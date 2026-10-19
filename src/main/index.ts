@@ -2386,10 +2386,16 @@ app.on('ready', async () => {
           client.emit('session:died', { sessionId: id, exitCode, ...(signal !== undefined ? { signal } : {}) });
         },
         emitCwd: (id, cwd) => { client.emit('session:cwd', { sessionId: id, cwd }); },
-        onLiveCwd: (listener) => {
-          const onCwd = (payload: { sessionId: string }) => { listener(payload.sessionId); };
+        onLiveEvent: (listener) => {
+          const onCwd = (payload: { sessionId: string }) => { listener('cwd', payload.sessionId); };
+          const onLifecycle = (payload: { sessionId: string }) => { listener('lifecycle', payload.sessionId); };
+          const lifecycle = ['session:died', 'session:destroyed', 'session:restarted'] as const;
           client.on('session:cwd', onCwd);
-          return () => { client.off('session:cwd', onCwd); };
+          for (const e of lifecycle) client.on(e, onLifecycle);
+          return () => {
+            client.off('session:cwd', onCwd);
+            for (const e of lifecycle) client.off(e, onLifecycle);
+          };
         },
         emitTitle: (id, title) => { client.emit('session:title', { sessionId: id, title }); },
         hookRouter: hookSignalRouter,

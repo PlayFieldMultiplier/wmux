@@ -26,22 +26,28 @@ import { SignalLatencyMeter } from '../../../shared/hooks/SignalLatencyMeter';
 function run(
   states: Record<string, DaemonPaneState | null>,
   router: HookSignalRouter | null = null,
-  opts: { rows?: DaemonSessionRow[]; tracked?: Map<string, string>; liveCwdDuringList?: [string, string] } = {},
+  opts: {
+    rows?: DaemonSessionRow[];
+    tracked?: Map<string, string>;
+    liveCwdDuringList?: [string, string];
+    liveLifecycleDuringList?: string;
+  } = {},
 ) {
   const titles: Array<[string, string]> = [];
   const died: Array<[string, number | null, number | undefined]> = [];
   const cwds: Array<[string, string]> = [];
   const read: string[] = [];
   const tracked = opts.tracked ?? new Map<string, string>();
-  let liveCwd: ((id: string) => void) | null = null;
+  let live: ((kind: 'cwd' | 'lifecycle', id: string) => void) | null = null;
   const result = resyncAfterResubscribe({
     listSessions: async () => {
       // A live cwd event processed before the resync reads the reply.
       if (opts.liveCwdDuringList) {
         const [id, cwd] = opts.liveCwdDuringList;
         tracked.set(id, cwd);
-        liveCwd?.(id);
+        live?.('cwd', id);
       }
+      if (opts.liveLifecycleDuringList) live?.('lifecycle', opts.liveLifecycleDuringList);
       return opts.rows ?? Object.keys(states).map((id) => ({ id, state: 'attached' }));
     },
     trackedCwd: (id) => tracked.get(id),
@@ -49,7 +55,7 @@ function run(
     // As live: the died listeners drop main's record of the session.
     emitDied: (id, exitCode, signal) => { died.push([id, exitCode, signal]); tracked.delete(id); },
     emitCwd: (id, cwd) => { cwds.push([id, cwd]); tracked.set(id, cwd); },
-    onLiveCwd: (listener) => { liveCwd = listener; return () => { liveCwd = null; }; },
+    onLiveEvent: (listener) => { live = listener; return () => { live = null; }; },
     emitTitle: (id, title) => { titles.push([id, title]); },
     hookRouter: router,
     win: null,
@@ -231,18 +237,21 @@ describe('resyncAfterResubscribe (#2263)', () => {
 
   it('leaves a pane alone that died live while its state was read', async () => {
     mocks.last.set('d1', 'idle');
+    let live: ((kind: 'cwd' | 'lifecycle', id: string) => void) | null = null;
     const tracked = new Map([['d1', '/repo']]);
     const titles: string[] = [];
     const result = await resyncAfterResubscribe({
       listSessions: async () => [{ id: 'd1', state: 'attached', cwd: '/repo' }],
       trackedCwd: (id) => tracked.get(id),
       readState: async () => {
-        tracked.delete('d1'); // the live session:died lands meanwhile
+        // The live session:died lands meanwhile.
+        tracked.delete('d1');
+        live?.('lifecycle', 'd1');
         return { agentStatus: 'running', agentName: 'Codex', title: 'stale', turnOpen: true };
       },
-      emitDied: () => {},
-      emitCwd: () => {},
-      onLiveCwd: () => () => {},
+      emitDied: vi.fn(),
+      emitCwd: vi.fn(),
+      onLiveEvent: (listener) => { live = listener; return () => { live = null; }; },
       emitTitle: (_id, title) => { titles.push(title); },
       hookRouter: null,
       win: null,
@@ -250,5 +259,26 @@ describe('resyncAfterResubscribe (#2263)', () => {
     expect(result.statusesCorrected).toBe(0);
     expect(titles).toEqual([]);
     expect(statuses()).toEqual([]);
+  });
+
+  it('leaves a listed pane to a live death or restart that landed before the list was read', async () => {
+    mocks.last.set('alive', 'idle');
+    const died = run({ alive: { agentStatus: 'running', agentName: 'Codex', title: 'stale', turnOpen: true } }, null, {
+      rows: [{ id: 'alive', state: 'attached', cwd: '/repo' }],
+      tracked: new Map([['alive', '/repo']]),
+      liveLifecycleDuringList: 'alive',
+    });
+    expect((await died.result).statusesCorrected).toBe(0);
+    expect(died.read).toEqual([]);
+    expect(died.titles).toEqual([]);
+
+    // A tombstone listed before a supervised restart reused its id.
+    const restarted = run({}, null, {
+      rows: [{ id: 'sup', state: 'dead', exitCode: 1, exitSignal: null }],
+      tracked: new Map([['sup', '/repo']]),
+      liveLifecycleDuringList: 'sup',
+    });
+    expect((await restarted.result).deaths).toBe(0);
+    expect(restarted.died).toEqual([]);
   });
 });
