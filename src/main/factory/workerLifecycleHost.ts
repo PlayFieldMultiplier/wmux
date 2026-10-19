@@ -26,7 +26,7 @@ import { readTaskFolder, taskFolderFromMissions } from './verifyPreset';
 import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive } from '../worktask/stopSessionsInDir';
 import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
-import { releaseHeldFanouts } from './heldFanouts';
+import { installHeldFanoutReleases, releaseHeldFanouts } from './heldFanouts';
 import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
@@ -786,6 +786,13 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   setHolderSource(holderSnapshot, holderKey);
   offs.push(() => setHolderSource(null));
   offs.push(ledger.onTransition(() => slots.kick()));
+  // A held fan-out waits on the wmux-wide live cap too, which the owner's own
+  // tasks fill: their row ending and their workspace closing check it again.
+  offs.push(installHeldFanoutReleases({
+    onTransition: (fn) => ledger.onTransition(fn),
+    onWorkspaces: (fn) => getWorkspaceMirror().onSnapshot(fn),
+    openWorkspaces: () => getWorkspaceMirror().getEntries()?.map((e) => e.id) ?? null,
+  }));
   offs.push(() => {
     slots.dispose();
     setAgentSlots(null);

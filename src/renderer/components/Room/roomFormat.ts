@@ -224,7 +224,7 @@ const NOTICE_WORDS: Readonly<Record<string, ReadonlySet<string>>> = {
   // Why a worker could not start (botNotices.ts START_FAILURES).
   cause: new Set(['fetch', 'worktree', 'repository', 'promptFile', 'slot', 'pane', 'setupStep', 'setup']),
   // Whose worker slots are full (roomWriter.ts `workers.full`).
-  scope: new Set(['bot', 'factory']),
+  scope: new Set(['bot', 'factory', 'wmux']),
 };
 
 /** Why wmux moved a task to input_required (roomWriter.ts inputRequiredWhy). */
@@ -321,7 +321,8 @@ export function noticeText(card: Pick<RoomCard, 'actor' | 'body' | 'notice'>, t:
   // One title per whose slots are full.
   if (notice.code === 'workers.full') {
     if (args.scope === undefined) return null;
-    return { title: t(`room.notice.workers.full.${args.scope}`, vars), body: t('room.notice.workers.full.body', vars) };
+    // Only a held request starts by itself (`held`: 1).
+    return { title: t(`room.notice.workers.full.${args.scope}`, vars), body: t(args.held === 1 ? 'room.notice.workers.full.held' : 'room.notice.workers.full.body', vars) };
   }
   // A hop says what it carried: one template per kind, forwarded by wmux
   // for a coordinator's relay.

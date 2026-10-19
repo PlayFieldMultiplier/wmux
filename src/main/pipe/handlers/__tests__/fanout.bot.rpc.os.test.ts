@@ -25,7 +25,7 @@ import { git } from '../../../git/git';
 import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, registerFanOutRpc, verdictedTaskIds, workersHeldNote, type FanOutBotPort, type HeldFanoutRequest } from '../fanout.rpc';
 import type { FanOutRequest, FanOutResult, FanOutService, FanOutStatus } from '../../../worktask/FanOutService';
 import type { RpcRouter } from '../../RpcRouter';
-import { FanOutGuards } from '../../../worktask/fanoutGuards';
+import { FANOUT_LIVE_TASK_CAP, FanOutGuards } from '../../../worktask/fanoutGuards';
 import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import { DEFAULT_BOT_BUDGETS, type BotProfile, type BotRole } from '../../../../shared/bot';
 import { emptyUsage } from '../../../factory/budget';
@@ -72,6 +72,7 @@ interface Rig {
   setWake: (id: string | null) => void;
   setThread: (t: string | null) => void;
   setOpen: (o: { bot: number; factory: number }) => void;
+  setLiveTasks: (n: number) => void;
   setTainted: (t: boolean) => void;
   flush: () => Promise<void>;
   /** Repositories whose default branch was read, with how many fan-outs had started then. */
@@ -111,11 +112,14 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
   let wake: string | null = 'w-1';
   let thread: string | null = null;
   let open = { bot: 0, factory: 0 };
+  /** Live fan-out tasks across wmux that are not bot fan-outs booked here
+   *  (the owner's, mostly): the guards' live cap counts them. */
+  let liveTasks = 0;
   let tainted = false;
   const defaultBranchReads: Rig['defaultBranchReads'] = [];
   let defaultBranchNote: { name: string | null; recorded: boolean } = { name: 'develop', recorded: true };
   const p = profile(role, over);
-  const guards = new FanOutGuards({ dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-fanout-bot-')), countLiveTasks: () => 0, ledgerTaskOwner: () => null });
+  const guards = new FanOutGuards({ dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-fanout-bot-')), countLiveTasks: () => liveTasks, ledgerTaskOwner: () => null });
   /** Bot fan-outs booked and not through their start: the holder set counts
    *  them (factory/workerHolders.ts). */
   const booked = (botId?: string): number => guards.reservedTasks().filter((u) => u.botId && (botId === undefined || u.botId === botId)).length;
@@ -139,7 +143,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     currentWakeThread: () => thread as ThreadId | null,
     currentWakeTainted: () => tainted,
     currentWakeHandoff: () => (wake ? 'h-dispatch' : null),
-    openWorkers: (botId) => ({ bot: open.bot + booked(botId), factory: open.factory + booked(), botStarting: booked(botId) }),
+    openWorkers: (botId) => ({ bot: open.bot + booked(botId), factory: open.factory + booked(), botStarting: booked(botId), live: liveTasks + guards.reservedTasks().length }),
     usage: () => emptyUsage(),
     workersStarted: (_b, ids) => {
       port.started.push([...ids]);
@@ -188,6 +192,9 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     },
     setOpen: (o) => {
       open = o;
+    },
+    setLiveTasks: (n) => {
+      liveTasks = n;
     },
     setTainted: (t) => {
       tainted = t;
@@ -388,6 +395,42 @@ describe('task.fanout.start — bot origin', () => {
       await r.flush();
       expect(held.list(BOT_ID)).toEqual([]);
       expect(queue.get(wake?.id ?? '')?.state).toBe('dropped');
+    } finally {
+      setHeldFanouts(null);
+      setWakeQueue(null);
+      await queue.flush();
+    }
+  });
+
+  it('a held fan-out\'s wake that reserves its workers hands its slot to the booking; another wake\'s reserve does not', async () => {
+    const held = new HeldFanouts({ budget: () => ({ maxConcurrentWorkers: 2 }), openWorkers: () => ({ bot: 0, factory: 0 }), wakes: () => null });
+    const reserved = vi.spyOn(held, 'reserved');
+    setHeldFanouts(held);
+    const queue = new WakeQueue(wakeQueuePath(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-held-reserve-'))));
+    queue.load();
+    setWakeQueue(queue);
+    try {
+      const params = { titles: ['fix it'], prompt: 'fix', preset: 'repro' };
+      const r = rig('lead');
+      r.setDefaultBranchNote({ name: null, recorded: false });
+      // An owner's message: its reserve is no held wake's.
+      const human = queue.enqueue({ botId: BOT_ID, workspaceId: 'ws-bot', priority: 0, reason: { kind: 'human', text: 'go', source: 'desktop' } });
+      queue.start(human?.id ?? '');
+      r.setWake(human?.id ?? null);
+      expect(await r.call({ idempotencyKey: `wake:${human?.id}:1`, ...params }, botCtx('lead'))).toMatchObject({ ok: true });
+      await r.flush();
+      queue.finish(human?.id ?? '');
+      expect(reserved).not.toHaveBeenCalled();
+      // The held wake's turn reserves: its slot is the booking's now.
+      const wake = queue.enqueue({
+        botId: BOT_ID, workspaceId: 'ws-bot', priority: 1, threadId: 'general',
+        reason: { kind: 'held_fanout', heldId: 'held-r', heldAt: 1, titles: ['fix it'], args: params, fingerprint: heldFanoutFingerprint(params), tainted: false, handoffId: 'h-dispatch' },
+      });
+      queue.start(wake?.id ?? '');
+      r.setWake(wake?.id ?? null);
+      expect(await r.call({ idempotencyKey: `wake:${wake?.id}:1`, ...params }, botCtx('lead'))).toMatchObject({ ok: true });
+      await r.flush();
+      expect(reserved.mock.calls).toEqual([[wake?.id]]);
     } finally {
       setHeldFanouts(null);
       setWakeQueue(null);
@@ -677,6 +720,21 @@ describe('task.fanout.start — bot origin', () => {
       handoffId: 'h-dispatch',
     });
     expect(r.start).not.toHaveBeenCalled();
+  });
+
+  it('the wmux-wide live cap full of the owner\'s fan-outs holds the bot\'s request too, instead of a refusal that loses it', async () => {
+    const r = rig('verifier');
+    r.setLiveTasks(FANOUT_LIVE_TASK_CAP);
+    const e = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier')));
+    expect(e.code).toBe('RESOURCE_EXHAUSTED');
+    expect(e.message).toMatch(/all 8 tasks that can run at once across wmux are in use \(8 of 8/);
+    expect(e.message).toMatch(/wakes you/);
+    expect(r.port.full.map(({ scope, running, limit }) => ({ scope, running, limit }))).toEqual([{ scope: 'wmux', running: 8, limit: 8 }]);
+    expect(r.port.full[0].request).toMatchObject({ args: { titles: ['x'], preset: 'verify' } });
+    expect(r.start).not.toHaveBeenCalled();
+    // One live slot frees: the same request starts.
+    r.setLiveTasks(FANOUT_LIVE_TASK_CAP - 1);
+    expect((await r.call({ idempotencyKey: 'wake:w-1:2', titles: ['x'], preset: 'verify', checkout: { sha: SHA } }, botCtx('verifier'))).ok).toBe(true);
   });
 
   it('more tasks than the bot\'s slots hold: a batch-size refusal, reported as workers_full only while its slots are all in use', async () => {

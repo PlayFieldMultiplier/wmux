@@ -63,12 +63,15 @@ export function countOpenBotWorkers(
 }
 
 /** Open workers of `botId`, and of every bot, as the fan-out's cap counts
- *  them: fan-outs still being started included (`botStarting`: the bot's). */
-export function openBotWorkers(botId: string): { bot: number; factory: number; botStarting?: number } {
+ *  them: fan-outs still being started included (`botStarting`: the bot's).
+ *  `live`: every live fan-out task across wmux, the owner's included, as the
+ *  wmux-wide live cap counts them (FanOutGuards.reserve); absent when that
+ *  count is unknown (the reserve then refuses on its own). */
+export function openBotWorkers(botId: string): { bot: number; factory: number; botStarting?: number; live?: number } {
   const holders = liveHolders();
   if (holders) {
     const c = holderCounts(holders.holders, botId);
-    return { bot: c.bot, factory: c.workers, botStarting: c.botStarting };
+    return { bot: c.bot, factory: c.workers, botStarting: c.botStarting, live: c.live };
   }
   const rows = getTaskLedger().list({ openOnly: true }).filter((r) => rowHoldsAgentSlot(r));
   const open = countOpenBotWorkers(rows, botId, (ids) => {
@@ -80,5 +83,12 @@ export function openBotWorkers(botId: string): { bot: number; factory: number; b
   // The bot fan-outs booked and not through their start (FanOutGuards).
   const booked = getFanOutGuards().reservedTasks().filter((u) => u.botId);
   const bookedBot = booked.filter((u) => u.botId === botId).length;
-  return { bot: open.bot + bookedBot, factory: open.factory + booked.length, botStarting: bookedBot };
+  let live: number | undefined;
+  try {
+    const guards = getFanOutGuards();
+    live = guards.liveTaskCount() + guards.reservedTasks().length;
+  } catch {
+    live = undefined;
+  }
+  return { bot: open.bot + bookedBot, factory: open.factory + booked.length, botStarting: bookedBot, ...(live !== undefined ? { live } : {}) };
 }

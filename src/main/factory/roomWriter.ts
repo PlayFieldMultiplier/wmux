@@ -1216,21 +1216,29 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
       };
     }
     case 'bot.workers_full': {
-      // Not a budget limit: the bot waits for a worker slot, its own or the
-      // factory's, and is woken with its held request when one frees.
+      // Not a budget limit: the bot waits for a worker slot, its own, the
+      // factory's or wmux's live fan-out cap, and is woken with its held
+      // request when one frees.
       const name = botLabel(bots, fact.ref?.botId);
-      const scope = p.scope === 'factory' ? 'factory' : p.scope === 'bot' ? 'bot' : null;
+      const scope = p.scope === 'factory' ? 'factory' : p.scope === 'bot' ? 'bot' : p.scope === 'wmux' ? 'wmux' : null;
       const running = typeof p.running === 'number' && Number.isSafeInteger(p.running) ? p.running : null;
       const limit = typeof p.limit === 'number' && Number.isSafeInteger(p.limit) ? p.limit : null;
       if (!scope || running === null || limit === null) return null;
+      // Only a held request starts by itself: a batch larger than the
+      // bot's slots is refused unheld, and the bot is told to split it.
+      const held = p.held === true;
       return {
         workspaces: factRooms(fact, bots), threadId: GENERAL_THREAD, kind: 'fact',
         title: scope === 'bot'
           ? `${name} is waiting for a worker slot: ${running} of its ${limit} are in use`
-          : `${name} is waiting for a worker slot: the bots use ${running} of ${limit}`,
-        body: 'This is not a budget limit: a slot frees when a running worker ends.',
+          : scope === 'wmux'
+            ? `${name} is waiting: all ${limit} tasks that can run at once are in use (including yours)`
+            : `${name} is waiting for a worker slot: the bots use ${running} of ${limit}`,
+        body: held
+          ? 'It will start automatically when one finishes. This is not a budget limit.'
+          : 'This is not a budget limit: a slot frees when a running worker ends.',
         refs: baseRefs,
-        notice: { code: 'workers.full', args: { bot: name, scope, inUse: running, cap: limit } },
+        notice: { code: 'workers.full', args: { bot: name, scope, inUse: running, cap: limit, ...(held ? { held: 1 } : {}) } },
       };
     }
     case 'bot.notice': {

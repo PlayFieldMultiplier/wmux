@@ -170,7 +170,9 @@ export function checkWorkers(budget: BotBudget, usage: BotUsage, running: number
  *  (`scope` bot) or the factory's, counted over every bot (`scope` factory).
  *  Not a budget limit: a slot frees when a worker ends. */
 export interface WorkerSlotsFull {
-  scope: 'bot' | 'factory';
+  /** bot: the bot's own slots; factory: every bot's; wmux: every live
+   *  fan-out task across wmux, the owner's included (FANOUT_LIVE_TASK_CAP). */
+  scope: 'bot' | 'factory' | 'wmux';
   running: number;
   limit: number;
 }
@@ -179,8 +181,18 @@ export interface WorkerSlotsFull {
  *  factory's now: null when they do, else the cap that is full (the
  *  factory's first). `running`/`factoryRunning`: the open workers as the
  *  fan-out counts them (openBotWorkers.ts). Pure. */
-export function workerSlotsFull(budget: Pick<BotBudget, 'maxConcurrentWorkers'>, running: number, factoryRunning: number, count: number, factoryLimit: number): WorkerSlotsFull | null {
+export function workerSlotsFull(
+  budget: Pick<BotBudget, 'maxConcurrentWorkers'>,
+  running: number,
+  factoryRunning: number,
+  count: number,
+  factoryLimit: number,
+  wmux?: { live: number; limit: number },
+): WorkerSlotsFull | null {
   if (factoryRunning + count > factoryLimit) return { scope: 'factory', running: factoryRunning, limit: factoryLimit };
+  // The wmux-wide live cap counts the owner's fan-outs too: the same wait
+  // for a slot, freed when any live task ends.
+  if (wmux && wmux.live + count > wmux.limit) return { scope: 'wmux', running: wmux.live, limit: wmux.limit };
   if (running + count > budget.maxConcurrentWorkers) return { scope: 'bot', running, limit: budget.maxConcurrentWorkers };
   return null;
 }

@@ -413,9 +413,18 @@ describe('facts → system cards', () => {
     expect(own.kind).toBe('fact');
     expect(own.title).toMatch(/ is waiting for a worker slot: 2 of its 2 are in use$/);
     expect(own.body).toMatch(/not a budget limit/);
-    expect(own.notice).toEqual({ code: 'workers.full', args: { bot: expect.any(String), scope: 'bot', inUse: 2, cap: 2 } });
+    expect(own.notice).toEqual({ code: 'workers.full', args: { bot: expect.any(String), scope: 'bot', inUse: 2, cap: 2, held: 1 } });
     const [factory] = writeFactCards(w, fact('bot.workers_full', { id: 'f-s2', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'factory', running: 3, limit: 3, held: true } }), bots);
     expect(factory.title).toMatch(/ is waiting for a worker slot: the bots use 3 of 3$/);
+    const [wmux] = writeFactCards(w, fact('bot.workers_full', { id: 'f-s4', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'wmux', running: 8, limit: 8, held: true } }), bots);
+    expect(wmux.title).toMatch(/ is waiting: all 8 tasks that can run at once are in use \(including yours\)$/);
+    expect(wmux.body).toBe('It will start automatically when one finishes. This is not a budget limit.');
+    expect(wmux.notice).toEqual({ code: 'workers.full', args: { bot: expect.any(String), scope: 'wmux', inUse: 8, cap: 8, held: 1 } });
+    // Refused unheld (a batch larger than the bot's slots): nothing starts by
+    // itself, so the card promises nothing.
+    const [unheld] = writeFactCards(w, fact('bot.workers_full', { id: 'f-s5', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'wmux', running: 8, limit: 8, held: false } }), bots);
+    expect(`${unheld.title} ${unheld.body}`).not.toMatch(/automatically/);
+    expect(unheld.notice).toEqual({ code: 'workers.full', args: { bot: expect.any(String), scope: 'wmux', inUse: 8, cap: 8 } });
     expect(writeFactCards(w, fact('bot.workers_full', { id: 'f-s3', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'elsewhere', running: 1, limit: 1 } }), bots)).toEqual([]);
   });
 

@@ -115,6 +115,20 @@ describe('factory system cards in the reader\'s language (RoomCard.notice)', () 
     expect(noticeText(card({ body: 'x', notice: { code: 'task.inputRequired', args: { title: 'add', why: 'later' } } }), i18nT)?.body).toBe('x');
   });
 
+  it('a workers-full card promises an automatic start only for a held request, in every worded language', () => {
+    for (const locale of ['en', 'ko', 'pl', 'zh'] as const) {
+      setLocale(locale);
+      const held = noticeText(card({ notice: { code: 'workers.full', args: { bot: 'B', scope: 'wmux', inUse: 8, cap: 8, held: 1 } } }), i18nT);
+      const unheld = noticeText(card({ notice: { code: 'workers.full', args: { bot: 'B', scope: 'wmux', inUse: 8, cap: 8 } } }), i18nT);
+      expect(held?.body).toBe(i18nT('room.notice.workers.full.held'));
+      expect(unheld?.body).toBe(i18nT('room.notice.workers.full.body'));
+      // The promise is the held body's alone: neither title nor the plain body carries it.
+      const promise = i18nT('room.notice.workers.full.held').split(/[.。]/)[0];
+      expect(`${unheld?.title} ${unheld?.body}`).not.toContain(promise);
+      expect(held?.title).toBe(unheld?.title);
+    }
+  });
+
   it('words a known code in Korean, its values worded too; evidence bodies stay as written', () => {
     setLocale('ko');
     expect(noticeText(card({ notice: { code: 'worker.pausedResumable' } }), i18nT)?.title).toBe('워커 일시 중지됨 (이어서 가능)');
