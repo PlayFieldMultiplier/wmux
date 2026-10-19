@@ -425,6 +425,29 @@ describe('Bots page', () => {
     expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(false);
   });
 
+  it('first screen: Claude not installed offers Install Claude Code and Check again', async () => {
+    bots = [];
+    seedRooms();
+    setFactoryBotPort({ ...port, create: vi.fn() } as unknown as FactoryBotPort);
+    const openExternal = vi.fn(async () => undefined);
+    (window as unknown as { electronAPI: { shell: { openExternal: typeof openExternal } } }).electronAPI = {
+      ...(window as unknown as { electronAPI?: object }).electronAPI,
+      shell: { openExternal },
+    };
+    const engine: EnginePort = {
+      readiness: vi.fn(async () => ({ ready: false, reason: 'claude-not-installed' as const })),
+    };
+    await render(<BotsPage engine={engine} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-engine="claude-not-installed"]')?.textContent).toContain('isn\'t installed');
+    expect(q('[data-bots-engine-install]')?.className).toContain('ui-btn-primary');
+    expect(q('[data-bots-engine-login]')).toBeNull();
+    expect(q<HTMLButtonElement>('[data-bots-first-start]')!.disabled).toBe(true);
+    await act(async () => { q('[data-bots-engine-install]')!.click(); });
+    expect(openExternal).toHaveBeenCalledWith(expect.stringContaining('claude-code'));
+    expect(q('[data-bots-engine-recheck]')).not.toBeNull();
+  });
+
   it('first screen: Start waits for the engine\'s first answer', async () => {
     bots = [];
     seedRooms();
@@ -677,6 +700,30 @@ describe('Bots page', () => {
     act(() => q('[data-bots-pill]')!.click());
     expect(q('[data-bots-profile-parked]')).toBeNull();
     expect(q('[data-testid="bots-resume-bot"]')).toBeNull();
+  });
+
+  it('a bot parked signed out: Log in opens the sign-in of that bot\'s account and steps aside to its terminal', async () => {
+    const factoryEngineLogin = vi.fn(async () => undefined);
+    vi.stubGlobal('electronAPI', { web: { status: vi.fn(async () => ({ running: false })) }, factory: { factoryEngineLogin } });
+    bots[2] = {
+      ...bots[2],
+      bot: { ...bots[2].bot, parked: { reason: 'error', at: 1 } },
+      status: { ...bots[2].status!, presence: 'parked', lastError: { message: 'Not logged in · Please run /login', at: 1, code: 'not_logged_in', account: 'Work' } },
+    };
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => useStore.getState().setAppRoute('bots'));
+    act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    expect(q('[data-bots-engine-error="not_logged_in"]')?.textContent).toContain('not signed in for the account Work');
+    // In the narrow profile popover the buttons wrap below the text, which
+    // keeps a readable width instead of shrinking to nothing.
+    const row = q('[data-bots-engine-error-row]')!;
+    expect(row.className).toContain('flex-wrap');
+    expect(row.firstElementChild?.className).toMatch(/min-w-\[10rem\]/);
+    await act(async () => { q<HTMLButtonElement>('[data-bots-engine-error-fix]')!.click(); });
+    expect(factoryEngineLogin).toHaveBeenCalledWith({ botId: VERIFIER });
+    expect(useStore.getState().appRoute).toBe('workspaces');
   });
 
   it('Delete bot asks in place, saying what happens, then removes it with its colour slot', async () => {

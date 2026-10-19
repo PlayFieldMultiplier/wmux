@@ -38,6 +38,8 @@ import { getFactoryStopPorts, stopFactoryTask, stopFactoryWork, type FactoryStop
 import { getWorkerResumePorts, resumeWorker, type WorkerResumePorts, type WorkerResumeResult } from '../../factory/workerReclaim';
 import { getAgentSlots, type AgentSlots } from '../../factory/agentSlots';
 import { botClaudeConfigDir, engineReadiness, startEngineLogin, type EngineLoginDeps, type EngineReadinessDeps } from '../../factory/engineReadiness';
+import { resolveConversationAccount } from '../../account/backgroundLaunchAccount';
+import { VENDOR_ENV_KEYS } from '../../account/accountStore';
 import type { FactoryEngineReadiness } from '../../../shared/factoryEngine';
 import { BOT_WORKER_AGENTS, botWorkerAgentLabel, botWorkerAgentSupported, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import { agentExecEnv } from '../../../shared/execEnv';
@@ -226,15 +228,47 @@ export function factoryTaskFoldersCleanHandler(
   };
 }
 
-/** FACTORY_ENGINE_LOGIN: open the Claude sign-in tab; main window only. */
+/** The Claude config folder a bot's turns sign in with: the account its
+ *  conversation runs on, else its workspace's binding, else main's own
+ *  (botClaudeConfigDir). Undefined: Claude's default folder. Throws for a
+ *  bot that is gone. */
+export function botLoginConfigDir(
+  botId: string,
+  ports: {
+    workspaceOf: (botId: string) => string | null;
+    accountOf: (botId: string) => string | null | undefined;
+    resolve?: typeof resolveConversationAccount;
+  } = {
+    workspaceOf: (id) => getBotStore()?.get(id)?.workspaceId ?? null,
+    accountOf: (id) => getBotRuntime()?.claudeAccountOf(id),
+  },
+): string | undefined {
+  const workspaceId = ports.workspaceOf(botId);
+  if (!workspaceId) throw new Error('that bot is gone');
+  const { run } = (ports.resolve ?? resolveConversationAccount)(workspaceId, 'claude', ports.accountOf(botId));
+  return run.env[VENDOR_ENV_KEYS.claude] ?? botClaudeConfigDir();
+}
+
+/** FACTORY_ENGINE_LOGIN: open the Claude sign-in tab; main window only.
+ *  `{ botId }`: the sign-in of the account that bot runs on. */
 export function factoryEngineLoginHandler(
   getWindow: () => BrowserWindow | null,
-  deps: Omit<EngineLoginDeps, 'platform'> & { platform?: NodeJS.Platform },
-): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<void> {
-  return async (e) => {
+  deps: Omit<EngineLoginDeps, 'platform'> & { platform?: NodeJS.Platform; botConfigDir?: (botId: string) => string | undefined },
+): (e: { sender?: unknown; senderFrame?: unknown }, req?: unknown) => Promise<void> {
+  return async (e, req) => {
     if (!isMainWindowSender(e, getWindow())) throw new Error('only the main window may start the Claude sign-in');
-    // The sign-in goes to the folder readiness reads and the bots run on.
-    await startEngineLogin({ configDir: botClaudeConfigDir(), ...deps, platform: deps.platform ?? process.platform });
+    // No request: main's own sign-in. A request names a bot, or is refused.
+    let botId: string | null = null;
+    if (req !== undefined) {
+      const named = req && typeof req === 'object' ? (req as { botId?: unknown }).botId : undefined;
+      if (typeof named !== 'string' || !BOT_ID_RE.test(named)) throw new Error('not a bot id');
+      botId = named;
+    }
+    // The sign-in goes to the folder readiness reads and the bots run on,
+    // or to the one a named bot's account keeps its sign-in in.
+    const { botConfigDir, ...login } = deps;
+    const configDir = botId ? (botConfigDir ?? botLoginConfigDir)(botId) : botClaudeConfigDir();
+    await startEngineLogin({ ...login, configDir, platform: deps.platform ?? process.platform });
   };
 }
 

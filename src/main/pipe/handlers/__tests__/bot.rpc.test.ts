@@ -30,7 +30,7 @@ vi.mock('../../../deck/taskLedgerHost', () => ({ getTaskLedger: () => ledgerMock
 
 import type { RpcContext } from '../../../../shared/rpc';
 import type { BrainAdapter, BrainEvent } from '../../../deck/BrainAdapter';
-import { registerBotRpcHandlers, botRuntimeModule, wakeOnOwnerAnswer, type SetJobPorts } from '../bot.rpc';
+import { registerBotRpcHandlers, botRuntimeModule, statusFor, wakeOnOwnerAnswer, type SetJobPorts } from '../bot.rpc';
 import { DISMISSED_ANSWER } from '../../../factory/handoffRouter';
 import { WakeTaint } from '../../../factory/wakeTaint';
 import type { Handoff } from '../../../../shared/handoff';
@@ -532,5 +532,20 @@ describe('bot-runtime module', () => {
     mod.stop();
     expect(disposed).toEqual([true]);
     await mod.dispose();
+  });
+});
+
+describe('statusFor', () => {
+  it('a bot reads no account: neither the quota\'s nor the one a signed-out bot is on; the owner reads both', () => {
+    const status = {
+      botId: 'bot-0000000a', presence: 'parked' as const, queueDepth: 0,
+      budgetLeft: { turnsHour: 1, turnsDay: 1, workerHoursDay: 1 },
+      lastError: { message: 'Not logged in', at: 1, code: 'not_logged_in' as const, account: 'Work' },
+    };
+    const bot = { kind: 'bot' as const, botId: 'bot-0000000b', role: 'lead' };
+    expect(statusFor(bot, status)?.lastError).toEqual({ message: 'Not logged in', at: 1, code: 'not_logged_in' });
+    expect(statusFor(bot, { ...status, quota: { accountName: 'Work' } })).not.toHaveProperty('quota');
+    expect(statusFor({ kind: 'operator' }, status)?.lastError?.account).toBe('Work');
+    expect(status.lastError.account).toBe('Work');
   });
 });

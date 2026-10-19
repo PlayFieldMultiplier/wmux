@@ -41,6 +41,17 @@ export function botQuotaOf(accountName: string | null, snapshot: UsageSnapshot |
   return { accountName, ...(session ? { session } : {}), ...(weekly ? { weekly } : {}) };
 }
 
+/** The name of the registered account a bot's brain runs on; null for the
+ *  default login, or one that is gone. Never throws. */
+export function botAccountName(workspaceId: string, conversationAccountId: string | null | undefined): string | null {
+  try {
+    const { run } = resolveConversationAccount(workspaceId, 'claude', conversationAccountId);
+    return run.accountId ? getAccountStore().getAccount(run.accountId)?.name ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The quota of the account a bot's brain runs on. Never throws. */
 export function botAccountQuota(
   cache: ClaudeUsageCache,

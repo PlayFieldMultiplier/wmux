@@ -33,6 +33,7 @@ import { mintBotToken, mintCommanderToken, revokeCommanderToken } from './comman
 import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenHandoff';
 import { BOT_REPO_READ_TOOLS, botRepoReadDenyRules, evaluateBotRepoRead, grepOutputNamesProtected } from '../factory/botRepoRead';
 import { redactStoredSecretsDeep } from '../factory/secretRedaction';
+import { claudeNotFoundMessage } from '../factory/engineError';
 import type { BotBinding } from '../../shared/bot';
 import { SHARED_SURFACE } from '../../shared/botSurface';
 import { evaluateCommanderToolPermission } from './commanderToolSandbox';
@@ -161,6 +162,7 @@ export async function loadSdkQueryFn(): Promise<SdkQueryFn> {
 // vendored binary is too heavy to ship). Resolution lives in one shared module
 // so Moa and the first-run wizard agree on whether claude is installed.
 import { resolveClaudeExecutable } from '../claude/resolveClaudeExecutable';
+import { resolveClaudeLaunch } from '../claude/resolveClaudeLaunch';
 
 /** The SDK's warning that bare `allowedTools` names bypass `canUseTool`. */
 export const CAN_USE_TOOL_SHADOWED = 'CLAUDE_SDK_CAN_USE_TOOL_SHADOWED';
@@ -199,7 +201,7 @@ export function withShadowedWarningOnce<T>(fn: () => T, proc: Pick<NodeJS.Proces
 export function __resetShadowedWarningForTesting(): void {
   shadowedWarned = false;
 }
-export { resolveClaudeExecutable };
+export { resolveClaudeExecutable, resolveClaudeLaunch };
 
 /** GLM / Z.ai (or any Anthropic-compatible) endpoint profile. When set, the
  *  same adapter targets a different backend purely via env — the review-team
@@ -1215,8 +1217,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
             this.disposeHandoff();
             yield {
               type: 'error',
-              message:
-                'Claude Code not found — the commander needs a claude install (native installer or npm global). Install it, then retry.',
+              message: claudeNotFoundMessage('commander'),
             };
             return;
           }

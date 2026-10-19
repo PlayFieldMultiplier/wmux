@@ -1,6 +1,9 @@
 // The bot profile's Today block: one line on what keeps the bot from new
 // work now (with Resume when it is parked), then each limit with what is
 // used of it. botBudgetView.ts decides; this only words and colours it.
+// When the park came from a known engine_unavailable cause, a Fix card
+// replaces the raw English lastError with a localized line, a Fix action,
+// and the raw detail behind a toggle.
 
 import { useState } from 'react';
 import Button from '../ui/Button';
@@ -9,8 +12,13 @@ import type { FactoryBotPort, FactoryBotRow } from '../Room/factoryPorts';
 import { botActionsFor } from '../Room/BotChips';
 import { formatNoticeTime } from '../Room/roomFormat';
 import { botBudgetView, type BotBlocker, type BotTodayLine } from './botBudgetView';
+import { bridgeEnginePort } from './botsEngine';
+import { showWorkspaces } from '../../utils/showWorkspaces';
+import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
+
+type EngineErrorCode = 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'other';
 
 /** "2h 10m", "6h", "45m", "0m". */
 export function workerTimeText(min: number, t: T): string {
@@ -44,10 +52,6 @@ function lineText(line: BotTodayLine, t: T, liveWorkers?: number, inReviewTasks 
     case 'turnsDay': return { label: t('botsPage.profile.turnsToday'), value: t('botsPage.profile.turnsTodayValue', { used: line.used, left: line.left }) };
     case 'workerTime': return { label: t('botsPage.profile.today.workerTime'), value: t('botsPage.profile.today.ofMax', { count: workerTimeText(line.usedMin, t), max: workerTimeText(line.maxMin, t) }) };
     case 'workers': {
-      // The cap counts agent slots held, and a task in review whose worker's
-      // agent still runs holds one: say how many, so this line and "Workers
-      // now" (live workers only) do not read as a contradiction. Never more
-      // than the bot's tasks in review (a worker still starting holds one too).
       const parts = [t('botsPage.profile.today.ofMax', { count: line.running, max: line.max })];
       const inReview = liveWorkers === undefined ? 0 : Math.min(line.running - liveWorkers, inReviewTasks);
       if (inReview > 0) parts.push(t('botsPage.profile.today.slotsInReview', { count: inReview }));
@@ -72,6 +76,115 @@ export function usdText(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+const ENGINE_ERROR_KEYS: Record<EngineErrorCode, string> = {
+  not_installed: 'botsPage.engineError.notInstalled',
+  not_logged_in: 'botsPage.engineError.notLoggedIn',
+  mcp_missing: 'botsPage.engineError.mcpMissing',
+  acp_test_only: 'botsPage.engineError.acpTestOnly',
+  unusable: 'botsPage.engineError.unusable',
+  other: 'botsPage.engineError.other',
+};
+
+function openClaudeInstallPage(): void {
+  void window.electronAPI?.shell?.openExternal?.(CLAUDE_CODE_INSTALL_URL)?.catch?.(() => undefined);
+}
+
+/** Localized engine-error card with Fix + details. Pure over the row's lastError. */
+function EngineErrorCard({
+  botId,
+  code,
+  account,
+  message,
+  t,
+  onResume,
+  canResume,
+  busy,
+}: {
+  botId: string;
+  code: EngineErrorCode;
+  /** `not_logged_in` on a registered account: its name. */
+  account?: string;
+  message: string;
+  t: T;
+  onResume: () => void;
+  canResume: boolean;
+  busy: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [fixBusy, setFixBusy] = useState(false);
+  const engine = bridgeEnginePort();
+
+  const fix = async () => {
+    setFixBusy(true);
+    try {
+      if (code === 'not_installed') {
+        openClaudeInstallPage();
+        return;
+      }
+      if (code === 'not_logged_in' && engine.login) {
+        // The sign-in of the account this bot runs on, in a terminal tab the
+        // page steps aside to (as the first screen's Log in does).
+        await engine.login(botId);
+        const st = useStore.getState();
+        st.pushToast({ message: t('botsPage.onboarding.loginOpened'), level: 'info' });
+        showWorkspaces(st);
+        return;
+      }
+      // mcp_missing / unusable / other / acp: resume after the owner fixed it,
+      // or just open details — Resume is the recovery once the cause is gone.
+      if (canResume) onResume();
+    } catch (err) {
+      useStore.getState().pushToast({
+        message: err instanceof Error ? err.message : String(err),
+        level: 'error',
+      });
+    } finally {
+      setFixBusy(false);
+    }
+  };
+
+  const fixLabel =
+    code === 'not_installed' ? t('botsPage.onboarding.install')
+      : code === 'not_logged_in' ? t('botsPage.onboarding.login')
+        : t('botsPage.engineError.fix');
+
+  const showFix = code === 'not_installed' || (code === 'not_logged_in' && !!engine.login) || canResume;
+
+  return (
+    <div className="flex flex-col gap-1 pb-1" data-bots-engine-error={code} role="status">
+      {/* The buttons wrap below the text in a narrow column (the profile
+          popover): the text keeps a readable width, never squeezed to 0. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-bots-engine-error-row>
+        <span className="min-w-[10rem] flex-1 text-[var(--text-sub)]">
+          {code === 'not_logged_in' && account ? t('botsPage.engineError.notLoggedInAccount', { account }) : t(ENGINE_ERROR_KEYS[code])}
+        </span>
+        {showFix && (
+          <Button size="sm" variant="primary" data-bots-engine-error-fix disabled={fixBusy || busy} onClick={() => void fix()}>
+            {fixLabel}
+          </Button>
+        )}
+        {canResume && (
+          <Button size="sm" variant="secondary" data-testid="bots-resume-bot" disabled={busy} onClick={onResume}>{t('room.bot.resume')}</Button>
+        )}
+      </div>
+      <button
+        type="button"
+        data-bots-engine-error-details
+        className="self-start text-[11px] text-[var(--text-muted)] underline-offset-2 hover:underline"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? t('botsPage.engineError.hideDetails') : t('botsPage.engineError.showDetails')}
+      </button>
+      {open && (
+        <pre data-bots-engine-error-raw className="max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-[8px] bg-[var(--selection-subtle)] px-2 py-1 text-[11px] text-[var(--text-muted)]">
+          {message}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 /** `liveWorkers`: the bot's workers live now (the profile's "Workers now"),
  *  to name the slots held by tasks in review. */
 export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act?: FactoryBotPort['act']; liveWorkers?: number; t: T }) {
@@ -79,7 +192,6 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
   const view = botBudgetView(row.bot, row.status);
   if (!view.blocker && view.lines.length === 0) return null;
   const canResume = !!act && botActionsFor(row).resume;
-  // A task in review (reported, still open) may keep its worker's slot.
   const inReviewTasks = (row.tasks ?? []).filter((task) => task.stage === 'coded').length;
   const resume = async () => {
     if (!act) return;
@@ -93,11 +205,26 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
       setBusy(false);
     }
   };
+  const err = row.status?.lastError;
+  const engineCode = view.blocker?.kind === 'errors' && err?.code ? err.code : null;
+
   return (
     <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-today>
       <span className="w-[112px] shrink-0 text-[var(--text-muted)]">{t('botsPage.profile.today')}</span>
       <div className="min-w-0 flex-1">
-        {view.blocker && (
+        {view.blocker && engineCode && err && (
+          <EngineErrorCard
+            botId={row.bot.id}
+            code={engineCode}
+            {...(err.account ? { account: err.account } : {})}
+            message={err.message}
+            t={t}
+            canResume={canResume}
+            busy={busy}
+            onResume={() => void resume()}
+          />
+        )}
+        {view.blocker && !engineCode && (
           <div
             className="flex items-center gap-3 pb-1"
             data-bots-profile-blocker={view.blocker.kind}
@@ -107,7 +234,6 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
             {canResume && <Button size="sm" variant="secondary" data-testid="bots-resume-bot" disabled={busy} onClick={() => void resume()}>{t('room.bot.resume')}</Button>}
           </div>
         )}
-        {/* One label column for every row, so each value starts at the same x. */}
         <ul className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-2 gap-y-0.5 tabular-nums">
           {view.lines.map((line) => {
             const { label, value } = lineText(line, t, liveWorkers, inReviewTasks);

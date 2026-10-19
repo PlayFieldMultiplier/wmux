@@ -334,7 +334,15 @@ export interface BotStatus {
    *  runs on, from the usage readings wmux already holds (absent: another
    *  engine, nothing read yet, or the caller is a bot). */
   quota?: BotQuota;
-  lastError?: { message: string; at: number };
+  lastError?: {
+    message: string;
+    at: number;
+    /** A stable cause when the park came from engine_unavailable (engineError.ts). */
+    code?: 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'other';
+    /** `not_logged_in` on a registered account (not the default sign-in):
+     *  that account's name. */
+    account?: string;
+  };
 }
 
 /** One usage-limit window of a bot's account. */

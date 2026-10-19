@@ -54,6 +54,7 @@ import type { BrainAdapter, BrainEvent, BrainImage } from '../deck/BrainAdapter'
 import { USAGE_LIMIT_UNKNOWN_HOLD_MS, findClaudeUsageLimitNotice, parseUsageLimitReset, usageLimitHoldEndsAt } from '../../shared/usageLimit';
 import { emitBotHook } from './botHooks';
 import type { BotEngineFactory } from './botEngines';
+import { classifyEngineError, type EngineErrorCode } from './engineError';
 import type { BotStore } from './botStore';
 import {
   budgetLeft, checkTurn, costUsdDay, hourlyCap, nextTurnAllowedAt, recordCost, recordTurn, runningWorkers, turnsUsedDay, turnsUsedHour, unrecordTurn,
@@ -197,6 +198,9 @@ export interface BotRuntimeDeps {
    *  conversation runs on, null for the default login, undefined when no
    *  conversation says (the workspace's binding then). Absent: not reported. */
   claudeQuota?: (workspaceId: string, accountId: string | null | undefined) => BotQuota | null;
+  /** The name of the registered Claude account a bot's turns run on (as
+   *  claudeQuota resolves it); null for the default login. Absent: not named. */
+  claudeAccountName?: (workspaceId: string, accountId: string | null | undefined) => string | null;
 }
 
 /** What `workerLoad` reports. */
@@ -378,7 +382,7 @@ export function botCwd(wmuxDir: string, botId: string): string {
 export class BotRuntime {
   private readonly live = new Map<string, LiveSession>();
   private readonly running = new Map<string, RunningTurn>();
-  private readonly lastError = new Map<string, { message: string; at: number }>();
+  private readonly lastError = new Map<string, { message: string; at: number; code?: EngineErrorCode; account?: string }>();
   private readonly now: () => number;
   private readonly defer: (fn: () => void) => void;
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
@@ -456,14 +460,33 @@ export class BotRuntime {
     };
   }
 
+  /** The Claude account a bot's turns run on: its live or saved
+   *  conversation's (null: the default sign-in), or undefined when neither
+   *  records one (the workspace binding then applies). */
+  claudeAccountOf(botId: string): string | null | undefined {
+    const profile = this.deps.store.get(botId);
+    if (!profile) return undefined;
+    const live = this.live.get(profile.id);
+    return live?.adapter.conversationAccountId !== undefined
+      ? live.adapter.conversationAccountId
+      : this.resumableSession(profile)?.accountId;
+  }
+
+  /** The registered Claude account the bot's turns run on, by name; null
+   *  for the default login or when not known. Never throws. */
+  private accountName(profile: BotProfile): string | null {
+    try {
+      return this.deps.claudeAccountName?.(profile.workspaceId, this.claudeAccountOf(profile.id)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** The status's `quota`, for a bot whose brain runs on Claude Code: the
    *  account its live or saved conversation runs on, else the binding. */
   private quotaView(profile: BotProfile): { quota?: BotQuota } {
     if (!this.deps.claudeQuota || profile.engine.kind !== 'claude-sdk' || this.deps.settings().acpStub === true) return {};
-    const live = this.live.get(profile.id);
-    const accountId = live?.adapter.conversationAccountId !== undefined
-      ? live.adapter.conversationAccountId
-      : this.resumableSession(profile)?.accountId;
+    const accountId = this.claudeAccountOf(profile.id);
     try {
       const quota = this.deps.claudeQuota(profile.workspaceId, accountId);
       return quota ? { quota } : {};
@@ -1244,7 +1267,16 @@ export class BotRuntime {
       // Nor is the turn charged to the bot's budget: it never reached the model.
       if (startedAt !== undefined && this.deps.store.get(botId)) this.deps.store.mutateUsage(botId, (u) => { unrecordTurn(u, startedAt); });
     } else {
-      this.lastError.set(botId, { message: message.slice(0, 500), at });
+      // A setup failure the adapter reports mid-turn (signed out: "Not
+      // logged in · Please run /login") gets the same code as the engine's
+      // own refusal, so the parked bot shows its Fix card; any other failed
+      // turn keeps no code.
+      const classified = classifyEngineError(message);
+      const code = outcome === 'engine' || classified !== 'other' ? classified : undefined;
+      // Signed out on a registered account: the card names it (main's own
+      // sign-in may be fine).
+      const account = code === 'not_logged_in' ? this.accountName(profile) : null;
+      this.lastError.set(botId, { message: message.slice(0, 500), at, ...(code ? { code } : {}), ...(account ? { account } : {}) });
       const giveUp = outcome === 'engine' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
       if (!giveUp) {
         this.deps.queue.retry(item.id);
