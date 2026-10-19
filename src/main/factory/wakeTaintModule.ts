@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { WakeItem } from '../../shared/wake';
 import { registerFactoryRpcModule } from './factoryHost';
 import { TAINT_FILENAME, WakeTaint, setWakeTaint } from './wakeTaint';
+import { getBotWorkflowStore } from './botWorkflow';
 
 registerFactoryRpcModule('wakeTaint', (_router, deps) => {
   let off: (() => void) | null = null;
@@ -31,6 +32,7 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
         facts: (ids) => resolveFactsFrom(getFactLog(), ids),
         handoff: (id) => getHandoffRouter()?.get(id) ?? null,
         taskRow: (id) => getTaskLedger().get(id),
+        workflow: (id) => getBotWorkflowStore()?.provenance(id) ?? null,
         runningWake,
         bot: (botId) => getBotDirectory()?.get(botId) ?? null,
         file: path.join(deps.wmuxDir(), 'factory', TAINT_FILENAME),

@@ -104,6 +104,12 @@ export class BotWorkflowStore {
     return copy(this.records.find((w) => w.id === id && w.botId === botId && w.workspaceId === workspaceId) ?? null);
   }
 
+  /** Main's provenance lookup for synthetic ready facts; no plan text leaves here. */
+  provenance(id: string): Pick<BotWorkflow, 'revision' | 'tainted'> | null {
+    const workflow = this.records.find((w) => w.id === id);
+    return workflow ? { revision: workflow.revision, tainted: workflow.tainted } : null;
+  }
+
   private async update<T>(fn: (records: BotWorkflow[]) => T): Promise<T> {
     return this.serial(async () => {
       const next = copy(this.records);
@@ -119,6 +125,7 @@ export class BotWorkflowStore {
   create(owner: Pick<BotWorkflow, 'botId' | 'workspaceId' | 'repoKey' | 'threadId' | 'tainted'>, input: WorkflowCreateParams): Promise<BotWorkflow> {
     if (!validateWorkflowInput(input)) return Promise.reject(new Error('invalid workflow definition'));
     input = redactStoredSecretsDeep({ clientWorkflowId: input.clientWorkflowId, title: input.title, steps: input.steps.map(({ title, prompt }) => ({ title, prompt })) });
+    if (!validateWorkflowInput(input)) return Promise.reject(new Error('redacted workflow definition exceeds its limits'));
     return this.update((records) => {
       const id = `wf-${createHash('sha256').update(`${owner.botId}\0${owner.workspaceId}\0${input.clientWorkflowId}`).digest('hex').slice(0, 24)}`;
       const existing = records.find((w) => w.id === id);

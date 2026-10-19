@@ -13,6 +13,8 @@
 //             tainted, or a fact that cannot be found. The task ids main
 //             gives a bot's own task wakes (`task.<status>:<taskId>@<rev>`,
 //             not in the fact log) are as tainted as that task's dispatch.
+//             Synthetic workflow.ready facts use the saved workflow's current
+//             mark; an unknown workflow or future revision remains tainted.
 //   handoff,  the handoff's own mark: recorded when it is sent (or, failing
 //   mention   that, when it was delivered), from the sender's running wake
 //             (a send is synchronous inside the sender's turn). A dispatch
@@ -50,6 +52,7 @@ import type { Fact, FactKind } from '../../shared/facts';
 import { botTemplate, type BotProfile } from '../../shared/bot';
 import type { Handoff } from '../../shared/handoff';
 import type { LedgerEntry } from '../../shared/ledger';
+import type { BotWorkflow } from '../../shared/botWorkflow';
 import type { WakeItem, WakeReason } from '../../shared/wake';
 import { taskIdOfFactId } from './wakePrompt';
 
@@ -78,6 +81,8 @@ export interface WakeTaintPorts {
   handoff: (id: string) => Handoff | null;
   /** A fan-out task's ledger row. */
   taskRow: (taskId: string) => LedgerEntry | null;
+  /** Main's persisted workflow provenance, absent when its store is unavailable. */
+  workflow?: (workflowId: string) => Pick<BotWorkflow, 'revision' | 'tainted'> | null;
   /** The wake `botId` is running now and when its turn started, or null. */
   runningWake: (botId: string) => { item: WakeItem; startedAt: number } | null;
   /** A bot's profile (its template), or null when it is not known. */
@@ -137,7 +142,17 @@ export class WakeTaint {
           if (f) return this.factTainted(f);
           // A bot task's own wake names its task, not a logged fact.
           const taskId = taskIdOfFactId(id);
-          return taskId ? this.taskIdTainted(taskId) : true;
+          if (taskId) return this.taskIdTainted(taskId);
+          const workflow = /^workflow\.ready:(wf-[a-f0-9]{24})@([1-9][0-9]*)$/.exec(id);
+          if (!workflow || !Number.isSafeInteger(Number(workflow[2]))) return true;
+          try {
+            const saved = this.ports.workflow?.(workflow[1]);
+            // Older ready wakes inherit the current mark: a workflow that
+            // acquired taint must never become clean through a stale fact.
+            return !saved || !Number.isSafeInteger(saved.revision) || saved.revision < Number(workflow[2]) || saved.tainted !== false;
+          } catch {
+            return true;
+          }
         });
       }
       default:

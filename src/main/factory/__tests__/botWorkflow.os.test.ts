@@ -10,6 +10,8 @@ import { registerWorkflowRpc, wakeReadyWorkflows, type WorkflowPorts } from '../
 import { WakeQueue } from '../wakeQueue';
 import { stopFactoryWork, __resetFactoryStopForTesting } from '../factoryStop';
 import { workflowWorkerPrompt } from '../workflowPrompt';
+import { setRedactedSecrets, __resetRedactedSecretsForTesting } from '../secretRedaction';
+import { WakeTaint } from '../wakeTaint';
 import { composeBotWorkerPrompt } from '../../worktask/botFanoutPresets';
 import { FANOUT_PROMPT_MAX_BYTES } from '../../../shared/workTask';
 import { WORKFLOW_RPC } from '../../../shared/botWorkflow';
@@ -26,7 +28,7 @@ const worker = { kind: 'worker' as const, workspaceId: 'ws-worker' };
 const sha = 'a'.repeat(40);
 const context: RpcContext = { origin: 'local', commanderWorkspace: owner.workspaceId, bot: { botId: owner.botId, workspaceId: owner.workspaceId, role: 'maintainer' } };
 beforeEach(() => { __resetFactoryStopForTesting(); dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-workflow-')); });
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { __resetRedactedSecretsForTesting(); fs.rmSync(dir, { recursive: true, force: true }); });
 const file = () => path.join(dir, 'workflows.json');
 const open = () => { const store = new BotWorkflowStore(file()); store.load(); return store; };
 async function task(ledger: TaskLedger, workflowId: string, overrides = {}) {
@@ -54,6 +56,46 @@ function harness(store: BotWorkflowStore, ledger = new TaskLedger({ dir })) {
 }
 
 describe('durable sequential workflows', () => {
+  it.each(['title', 'step title', 'prompt', 'client id'])('rejects an overlong redacted %s without replacing the loadable primary', async (field) => {
+    const store = open(); const existing = await store.create(owner, input);
+    const before = fs.readFileSync(file(), 'utf8');
+    setRedactedSecrets([{ name: 'TEST_API_TOKEN', value: '12345678' }]);
+    const definition = structuredClone({ ...input, clientWorkflowId: 'redacted-plan' });
+    if (field === 'title') definition.title = 'x'.repeat(192) + '12345678';
+    else if (field === 'step title') definition.steps[0].title = 'x'.repeat(192) + '12345678';
+    else if (field === 'prompt') definition.steps[0].prompt = 'x'.repeat(5_992) + '12345678';
+    else definition.clientWorkflowId = 'x'.repeat(120) + '12345678';
+    await expect(store.create(owner, definition)).rejects.toThrow('redacted workflow definition exceeds its limits');
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before);
+    expect(open().get(existing.id, owner.botId, owner.workspaceId)).toEqual(existing);
+  });
+
+  it('ready wakes retain clean and dirty workflow provenance across restart and use newly acquired taint', async () => {
+    const store = open();
+    const clean = await store.create({ ...owner, tainted: false }, input);
+    const dirty = await store.create({ ...owner, botId: 'bot-b' }, { ...input, clientWorkflowId: 'dirty-plan' });
+    const h = harness(store);
+    await wakeReadyWorkflows(h.ports, [clean, dirty]);
+    const restoredQueue = new WakeQueue(path.join(dir, 'wake-queue.json'));
+    restoredQueue.load();
+    const wakes = restoredQueue.list({ states: ['queued'] });
+    let recovered: BotWorkflowStore | null = open();
+    const tracker = new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null,
+      runningWake: () => null, workflow: (id) => recovered?.provenance(id) ?? null });
+    const cleanWake = wakes.find((w) => w.reason.kind === 'facts' && w.reason.factIds.some((id) => id.includes(clean.id)));
+    const dirtyWake = wakes.find((w) => w.reason.kind === 'facts' && w.reason.factIds.some((id) => id.includes(dirty.id)));
+    if (!cleanWake || !dirtyWake) throw new Error('persisted workflow wakes are missing');
+    expect(tracker.wakeTainted(cleanWake)).toBe(false);
+    expect(tracker.wakeTainted(dirtyWake)).toBe(true);
+    await recovered.claim(clean.id, owner.botId, owner.workspaceId, 'wake:one:1');
+    await task(h.ledger, clean.id);
+    await recovered.reconcile(h.ledger.list());
+    recovered = open();
+    expect(tracker.wakeTainted(cleanWake)).toBe(true);
+    recovered = null;
+    expect(tracker.wakeTainted(cleanWake)).toBe(true);
+  });
+
   it('accepts eight long UTF-8 steps while every composed successor stays inside the existing worker byte cap', async () => {
     const store = open();
     const prompt = '한'.repeat(2_000);
