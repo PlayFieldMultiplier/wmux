@@ -1556,7 +1556,9 @@ export function registerFanOutRpc(
         return deny('RESOURCE_EXHAUSTED', `this bot runs at most ${most} worker${most === 1 ? '' : 's'} at once: start at most ${most} task${most === 1 ? '' : 's'} per fan-out`);
       }
       if (full) {
-        const held = botPort.workersFull(bot, full, {
+        // A workflow's durable intent owns its dispatch. A plain held retry
+        // cannot carry that internal binding or its verified predecessor SHA.
+        const held = botPort.workersFull(bot, full, workflow ? undefined : {
           args: heldFanoutArgs(params),
           threadId: botNoticeThread,
           tainted: botWakeTainted,
@@ -1575,7 +1577,7 @@ export function registerFanOutRpc(
     if (bot) botPort?.recordFanoutKey(key);
     // The request as a hold would name it (read here: params is not read
     // after the approval): a hold of it retires once a worker of it started.
-    const heldArgs = bot ? heldFanoutArgs(params) : null;
+    const heldArgs = bot && !workflow ? heldFanoutArgs(params) : null;
     const heldContext = { threadId: botNoticeThread, ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}) };
 
     // ── Claim the key ────────────────────────────────────────────────────
