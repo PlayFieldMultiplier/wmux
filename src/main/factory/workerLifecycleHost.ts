@@ -370,9 +370,12 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         noticeBot({ factLog: getFactLog, wakes: getWakeQueue }, n);
       },
       promptWaiting,
+      // A stopped worker frees its agent slot: the slot queue looks again,
+      // as after the resumed-worker stop.
       changed: () => {
         changed();
         reconcile();
+        getAgentSlots()?.kick();
       },
       retryMs: RESUMED_SWEEP_MS,
       // An open task's worker (reported, or still working or needing input
