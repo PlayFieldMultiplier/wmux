@@ -147,6 +147,48 @@ describe('FanOutService task graph', () => {
     expect(r.tasks[1].error).toMatch(/dependency \(index 0\) was cancelled/);
   });
 
+  it('keeps a failed dependency retryable and releases each downstream task after its own dependency reports', async () => {
+    const { service, spawned } = makeService();
+    const settled = vi.fn();
+    const r = await service.start({ ...req, titles: ['Build API', 'Build UI', 'Verify UI'], dependsOn: [[], [0], [1]], onDeferredLaunch: settled });
+    const dep = ledger.get(r.tasks[0].taskId!)!;
+    expect((await ledger.update({ id: dep.id, status: 'failed', actor: { kind: 'worker', workspaceId: dep.taskWorkspaceId }, expectedRev: dep.rev })).ok).toBe(true);
+    await service.drainDeferredLaunches();
+    expect(spawned).toHaveLength(1);
+    expect(r.tasks[1].pending).toEqual({ waitingOn: [0] });
+    expect(r.tasks[2].pending).toEqual({ waitingOn: [1] });
+    expect(settled).not.toHaveBeenCalled();
+    const retry = await ledger.update({ id: dep.id, status: 'working', actor: { kind: 'brain', workspaceId: 'ws-owner' }, expectedRev: ledger.get(dep.id)!.rev });
+    expect(retry.ok).toBe(true);
+    await service.drainDeferredLaunches();
+    expect(spawned).toHaveLength(1);
+    expect((await ledger.update({ id: dep.id, status: 'review_requested', actor: { kind: 'worker', workspaceId: dep.taskWorkspaceId }, expectedRev: ledger.get(dep.id)!.rev })).ok).toBe(true);
+    await service.drainDeferredLaunches();
+    expect(spawned).toHaveLength(2);
+    expect(r.tasks[1].pending).toBeUndefined();
+    expect(r.tasks[2].pending).toEqual({ waitingOn: [1] });
+    const next = ledger.get(r.tasks[1].taskId!)!;
+    expect((await ledger.update({ id: next.id, status: 'review_requested', actor: { kind: 'worker', workspaceId: next.taskWorkspaceId }, expectedRev: next.rev })).ok).toBe(true);
+    await service.drainDeferredLaunches();
+    expect(spawned).toHaveLength(3);
+    expect(r.tasks.every((t) => t.ok && !t.pending)).toBe(true);
+    expect(settled.mock.calls.map(([task, info]) => [task.index, info.remaining])).toEqual([[1, 1], [2, 0]]);
+  });
+
+  it('cancelling a failed dependency drops its dependent even while another dependency is still working', async () => {
+    const { service, spawned } = makeService();
+    const r = await service.start({ ...req, titles: ['Build API', 'Build DB', 'Build UI'], dependsOn: [[], [], [0, 1]] });
+    const dep = ledger.get(r.tasks[1].taskId!)!;
+    expect((await ledger.update({ id: dep.id, status: 'failed', actor: { kind: 'worker', workspaceId: dep.taskWorkspaceId }, expectedRev: dep.rev })).ok).toBe(true);
+    await service.drainDeferredLaunches();
+    expect(r.tasks[2].pending).toEqual({ waitingOn: [0, 1] });
+    await ledger.closeTask(dep.id);
+    await service.drainDeferredLaunches();
+    expect(spawned).toHaveLength(2);
+    expect(r.tasks[2].pending).toBeUndefined();
+    expect(r.tasks[2].error).toMatch(/dependency \(index 1\) was cancelled/);
+  });
+
   it('drops on a cancelled dependency even while another dependency is still working', async () => {
     const { service, spawned } = makeService();
     const r = await service.start({ ...req, titles: ['A', 'B', 'C'], dependsOn: [[], [], [0, 1]] });

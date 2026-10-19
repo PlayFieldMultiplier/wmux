@@ -458,8 +458,10 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
   const running = new Set<string>();
   /** Reports that arrived while their task's gate ran: gated again after. */
   const again = new Set<string>();
+  let disposed = false;
 
   const note = (entry: LedgerEntry, title: string, body: string, notice: CardNotice): void => {
+    if (disposed) return;
     try {
       ports.note?.(entry.ownerWorkspaceId, taskThreadOf(entry), title, body, verifyGateFactId(entry.id, entry.rev), notice);
     } catch {
@@ -467,6 +469,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     }
   };
   const wake = (entry: LedgerEntry): void => {
+    if (disposed) return;
     const botId = entry.dispatch?.origin.botId ?? '';
     try {
       ports.wake({
@@ -479,6 +482,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
   };
   /** The row now, when it still holds the report being gated. */
   const stillReported = (taskId: string): LedgerEntry | null => {
+    if (disposed) return null;
     const row = ports.ledgerRow(taskId);
     return row && isTaskGateReport(row, row.status) ? row : null;
   };
@@ -502,7 +506,6 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     wake(row);
   };
 
-  let disposed = false;
   const clock = ports.now ?? Date.now;
   const mergeable = (): boolean => !!(ports.branchOf && ports.completeMerged && ports.headMerged && ports.headOf && ports.prsOfBranch && ports.defaultBranchOf);
   /** The open reports a merge could end: code tasks with their repository recorded. */
@@ -596,7 +599,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     // Written only to what was checked: the row's rev (the ledger's
     // compare-and-set) and the worktree's HEAD (read again here).
     if (disposed) return 'unknown';
-    if (await headOf(worktree) !== head) return 'unknown';
+    if (await headOf(worktree) !== head || disposed) return 'unknown';
     const done = await completeMerged(taskId, pr, row.rev);
     if (!done.entry) {
       log(`[factory] merged PR #${pr} did not complete task ${taskId}: ${done.why}`);
@@ -745,8 +748,10 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
     // No commits beyond its base: nothing of the task's to gate. Recorded as
     // a skip and left open for the bot to settle from the report.
     const unchanged = await unchangedBase(before);
+    // A lookup may outlive this host or the report that started it. No new
+    // process or skip receipt may be started for that obsolete run.
+    if (again.has(taskId) || !stillReported(taskId)) return;
     if (unchanged && ports.recordNoChanges) {
-      if (again.has(taskId) || !stillReported(taskId)) return;
       const detail = noChangesDetail(unchanged.base);
       const recorded = await ports.recordNoChanges(taskId, detail, unchanged.head);
       const now = again.has(taskId) ? null : stillReported(taskId);
@@ -772,13 +777,28 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
   };
 
   const start = (taskId: string, atInstall = false): void => {
+    if (disposed) return;
     if (running.has(taskId)) {
       again.add(taskId);
       return;
     }
     running.add(taskId);
     void run(taskId, atInstall)
-      .catch((err) => log(`[factory] gate for ${taskId} failed: ${String(err)}`))
+      .catch((err) => {
+        log(`[factory] gate for ${taskId} failed: ${String(err)}`);
+        // The worker's report wake is held until this gate settles. An
+        // unexpected error must release that wake too, without inventing a
+        // verdict or completing the task. A newer report has its own run;
+        // a stopped host or a task sent back/cancelled needs no stale wake.
+        const row = disposed || again.has(taskId) ? null : stillReported(taskId);
+        if (!row) return;
+        const failure = describeTaskGate({
+          ok: true, status: 'skipped', taskId, skipped: 'gate_unavailable',
+          detail: `The system could not finish checking this report: ${String(err)}. The task stays open; send it back and report again to retry the gate.`,
+        });
+        note(row, failure.title, failure.body, failure.notice);
+        wake(row);
+      })
       .finally(() => {
         running.delete(taskId);
         if (again.delete(taskId) && stillReported(taskId)) start(taskId);

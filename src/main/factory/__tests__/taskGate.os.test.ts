@@ -126,6 +126,161 @@ describe('the system gate on a bot task report', () => {
     expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', row.rev)]);
   });
 
+  it('an unexpected gate error leaves the report open, tells its bot once, and a repaired report is gated again', async () => {
+    await register();
+    const runGate = recordingRunner(PASS);
+    runGate.mockRejectedValueOnce(new Error('gate process could not be started'));
+    const r = rig({ log: () => undefined }, runGate);
+    try {
+      await report();
+      await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      const row = ledger.get('task-1') as LedgerEntry;
+      expect(row.status).toBe('review_requested');
+      expect(row.gate).toBeUndefined();
+      expect(r.note).toHaveBeenCalledTimes(1);
+      expect(r.note.mock.calls[0][3]).toContain('gate process could not be started');
+      expect(r.note.mock.calls[0][5]).toEqual({ code: 'gate.skipped', args: { reason: 'gate_unavailable' } });
+      expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId(row.id, row.rev)]);
+
+      const back = await ledger.update({ id: row.id, status: 'input_required', actor: { kind: 'brain', workspaceId: 'ws-lead' }, expectedRev: row.rev });
+      expect(back.ok).toBe(true);
+      await report();
+      await vi.waitFor(() => expect(r.wake).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+      expect(runGate).toHaveBeenCalledTimes(2);
+      expect(ledger.get(row.id)?.status).toBe('completed');
+      expect(r.note.mock.calls[1][5]).toEqual({ code: 'gate.checked' });
+    } finally {
+      r.off();
+    }
+  });
+
+  it('an old gate rejection does not wake a newer report before its own gate finishes', async () => {
+    await register();
+    let rejectFirst!: (error: Error) => void;
+    const pending = new Promise<GateRunResult>((_resolve, reject) => { rejectFirst = reject; });
+    const runGate = recordingRunner(PASS);
+    runGate.mockImplementationOnce(() => pending);
+    const r = rig({ log: () => undefined }, runGate);
+    try {
+      await report();
+      await vi.waitFor(() => expect(runGate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      const row = ledger.get('task-1') as LedgerEntry;
+      expect((await ledger.update({ id: row.id, status: 'input_required', actor: { kind: 'brain', workspaceId: 'ws-lead' }, expectedRev: row.rev })).ok).toBe(true);
+      await report();
+      rejectFirst(new Error('old run failed'));
+      await vi.waitFor(() => expect(ledger.get(row.id)?.status).toBe('completed'), { timeout: 5_000 });
+      expect(runGate).toHaveBeenCalledTimes(2);
+      expect(r.wake).toHaveBeenCalledTimes(1);
+      expect(r.note).toHaveBeenCalledTimes(1);
+      expect(r.note.mock.calls[0][5]).toEqual({ code: 'gate.checked' });
+    } finally {
+      r.off();
+    }
+  });
+
+  it.each(['cancelled', 'disposed'] as const)('a gate rejection after the task is %s writes no card and wakes nobody', async (end) => {
+    await register();
+    let rejectRun!: (error: Error) => void;
+    const pending = new Promise<GateRunResult>((_resolve, reject) => { rejectRun = reject; });
+    const log = vi.fn();
+    const r = rig({ log }, vi.fn(() => pending));
+    try {
+      await report();
+      await vi.waitFor(() => expect(r.runGate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      if (end === 'disposed') r.off();
+      else {
+        const row = ledger.get('task-1') as LedgerEntry;
+        expect((await ledger.update({ id: row.id, status: 'cancelled', actor: { kind: 'brain', workspaceId: 'ws-lead' }, expectedRev: row.rev })).ok).toBe(true);
+      }
+      rejectRun(new Error('gate interrupted'));
+      await vi.waitFor(() => expect(log).toHaveBeenCalled(), { timeout: 5_000 });
+      expect(r.note).not.toHaveBeenCalled();
+      expect(r.wake).not.toHaveBeenCalled();
+    } finally {
+      r.off();
+    }
+  });
+
+  it.each([0, 1])('a gate resolving with exit %s after disposal leaves settlement to the next host', async (exitCode) => {
+    await register();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const record = recordingRunner({ ...PASS, exitCode });
+    const runGate = vi.fn(async (input: GateRunInput) => { await pending; return record(input); });
+    const complete = vi.fn((id: string) => completeCheckedTask(ledger, id));
+    const r = rig({ complete }, runGate);
+    try {
+      await report();
+      await vi.waitFor(() => expect(runGate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      r.off();
+      release();
+      await vi.waitFor(() => expect(ledger.get('task-1')?.gate?.recordedBy).toBe('system'), { timeout: 5_000 });
+      await deliberateSleep(30, 'negative assertion: the disposed host must not settle a returned gate');
+      expect(complete).not.toHaveBeenCalled();
+      expect(r.note).not.toHaveBeenCalled();
+      expect(r.wake).not.toHaveBeenCalled();
+      expect(ledger.get('task-1')?.status).toBe('review_requested');
+    } finally {
+      release();
+      r.off();
+    }
+  });
+
+  it.each(['worktree', 'changes'] as const)('disposal during the %s lookup starts no gate process', async (stage) => {
+    await register();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const lookup = vi.fn(async () => { await pending; });
+    const r = rig(stage === 'worktree'
+      ? { worktreeOf: async () => { await lookup(); return '/wt/task'; } }
+      : { noChanges: async () => { await lookup(); return { kind: 'changed', why: 'worker committed changes' }; }, recordNoChanges: async () => true });
+    try {
+      await report();
+      await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      r.off();
+      release();
+      await deliberateSleep(30, 'negative assertion: a disposed host starts no gate after its lookup settles');
+      expect(r.runGate).not.toHaveBeenCalled();
+      expect(r.note).not.toHaveBeenCalled();
+      expect(r.wake).not.toHaveBeenCalled();
+      expect(ledger.get('task-1')?.status).toBe('review_requested');
+    } finally {
+      release();
+      r.off();
+    }
+  });
+
+  it.each(['default', 'research'])('a %s completion already written at disposal is only woken by the next host', async (preset) => {
+    await register('task-1', preset);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const complete = async (id: string) => {
+      const result = await (preset === 'research' ? completeResearchTask(ledger, id) : completeCheckedTask(ledger, id));
+      await pending;
+      return result;
+    };
+    const r = rig({ complete, completeResearch: complete });
+    let offRestart: () => void = () => undefined;
+    try {
+      await report();
+      await vi.waitFor(() => expect(ledger.get('task-1')?.status).toBe('completed'), { timeout: 5_000 });
+      r.off();
+      release();
+      await deliberateSleep(30, 'negative assertion: an already-started completion cannot notify from a disposed host');
+      expect(r.note).not.toHaveBeenCalled();
+      expect(r.wake).not.toHaveBeenCalled();
+      const restart = rig({ allRows: () => ledger.list({}) });
+      offRestart = restart.off;
+      expect(restart.wake).toHaveBeenCalledTimes(1);
+      expect(restart.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', ledger.get('task-1')?.rev ?? 0)]);
+      expect(restart.runGate).not.toHaveBeenCalled();
+    } finally {
+      release();
+      r.off();
+      offRestart();
+    }
+  });
+
   it('skipped: a recorded "no gate declared" is not a check; an unrecorded skip and a refusal leave it open too', async () => {
     await register('a');
     await register('b');
@@ -977,6 +1132,29 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
     const row = ledger.get('task-1') as LedgerEntry;
     expect(row.status).toBe('review_requested');
     expect(row.completion).toBeUndefined();
+  });
+
+  it('disposal during the final HEAD read starts no merge completion or gate', async () => {
+    await registerTask();
+    let release!: (head: string) => void;
+    const pending = new Promise<string>((resolve) => { release = resolve; });
+    const r = mergeRig({ [B1]: [pr(2)] }, { 'task-1': 'wmux/task-1' });
+    r.headOf.mockResolvedValueOnce(HEAD).mockImplementationOnce(() => pending);
+    try {
+      await report();
+      await vi.waitFor(() => expect(r.headOf).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+      r.off();
+      release(HEAD);
+      await deliberateSleep(30, 'negative assertion: the disposed host cannot write after its final HEAD read');
+      expect(r.completeMerged).not.toHaveBeenCalled();
+      expect(r.runGate).not.toHaveBeenCalled();
+      expect(r.note).not.toHaveBeenCalled();
+      expect(r.wake).not.toHaveBeenCalled();
+      expect(ledger.get('task-1')?.status).toBe('review_requested');
+    } finally {
+      release(HEAD);
+      r.off();
+    }
   });
 
   it('a HEAD that moved while the merge was checked is not completed on that answer', async () => {
