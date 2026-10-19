@@ -1415,8 +1415,11 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
           continue;
         }
         // An open task's worker is its row's: the reclaim of its next end
-        // looks at the record again.
-        if (row && (row.status === 'working' || row.status === 'input_required')) continue;
+        // looks at the record again. A record of its own idle stop
+        // (`reported`) is settled here like a reported task's: once no agent
+        // is left (its stop cut off, its agent exited since), it is stopped
+        // and resumable; one still running is the idle stop's to retry.
+        if (row && (row.status === 'working' || row.status === 'input_required') && cur.ended !== 'reported') continue;
         // Its recorded panes and every pane of its workspace: an agent in
         // another pane there keeps it (a stopped record frees the slot).
         const recorded = cur.sessions.map((x) => x.sessionId);

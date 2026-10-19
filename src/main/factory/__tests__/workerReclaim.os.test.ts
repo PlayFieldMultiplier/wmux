@@ -1414,6 +1414,23 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     await settled(inReview);
   });
 
+  it('the idle stop of a task still working, left stopping with no agent left, is settled stopped; an agent still running keeps it', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await store.put(stopping({ ended: 'reported' }));
+    const alive = reclaimPorts(store, [session()], { row: () => row('working'), allRows: () => [], workspacePanes: () => ['daemon-1'] });
+    let off = installWorkerReclaim({ ...alive.ports, now: () => 5_000 });
+    await deliberateSleep(30, 'negative: an agent still runs, the record stays stopping');
+    off();
+    expect(store.get(TASK)?.state).toBe('stopping');
+    const gone = reclaimPorts(store, [session({ agentProcessAlive: false })], { row: () => row('working'), allRows: () => [], workspacePanes: () => ['daemon-1'] });
+    off = installWorkerReclaim({ ...gone.ports, now: () => 5_000 });
+    await vi.waitFor(() => expect(store.get(TASK)?.state).toBe('stopped'), { timeout: 10_000 });
+    off();
+    expect(reclaimedWorkerState(store.get(TASK))).toBe('resumable');
+    expect(gone.stopAgent).not.toHaveBeenCalled();
+    await settled(store);
+  });
+
   it('an agent in another pane of its workspace, or a tree not known, keeps it stopping', async () => {
     const store = ReclaimedWorkers.at(dir);
     // A reported stop held back; its recorded pane is gone since.
