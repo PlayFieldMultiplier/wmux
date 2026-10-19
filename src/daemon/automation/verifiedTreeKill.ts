@@ -115,16 +115,16 @@ function recordedStartUsable(recorded: string | undefined, platform: NodeJS.Plat
 }
 
 /** Why a pane's tree kill is refused now. */
-export const UNKNOWN_ROOT_REFUSAL = "this pane's process identity isn't known yet, so it was left running; try again in a moment";
+export const UNKNOWN_ROOT_REFUSAL = "this pane's process identity isn't known yet, so it was left running and its folder is kept; Close and keep folder closes the task without removing the folder";
 
 /**
  * Why a running pane's tree may not be killed now (#2388), or null: no start
- * time of its shell is recorded yet (POSIX reads it after the spawn), so
- * nothing confirms its pid still leads to the shell and the tree cannot be
- * taken. Destroying the session then would end the pane but orphan its
- * tree, unkilled, and a later close would find nothing left to stop. The
- * session is left as it is instead; a later close retries once the start
- * time is recorded.
+ * time of its shell is recorded (read right after the spawn, a few attempts:
+ * DaemonSessionManager.recordSpawnStartTime), so nothing confirms its pid
+ * still leads to the shell and the tree cannot be taken. Destroying the
+ * session then would end the pane but orphan its tree, unkilled, and a later
+ * close would find nothing left to stop. The session is left as it is
+ * instead, and the caller keeps the folder.
  */
 export function treeKillRefusal(
   meta: { pid: number; state: string; pidCreatedAtFt?: string; pidStartTime?: string },

@@ -281,6 +281,11 @@ export class DaemonSessionManager extends EventEmitter {
     this.liveRendererProbe = fn;
   }
 
+  /** #2388: waits before each new read of a spawned shell's start time
+   *  after a failed one (recordSpawnStartTime). Each read may take up to
+   *  3 s itself (`ps` timeout). Overridable for tests. */
+  spawnStartRetryDelaysMs: readonly number[] = [250, 1000, 2000];
+
   /** Optionally set config so that session.bufferSizeMb is respected. */
   setConfig(config: DaemonConfig): void {
     this.config = config;
@@ -1103,18 +1108,52 @@ export class DaemonSessionManager extends EventEmitter {
     // and left the field empty.
     const createdAtFt = getProcessCreatedAtFt(meta.pid);
     if (createdAtFt !== null) meta.pidCreatedAtFt = createdAtFt.toString();
-    if (process.platform !== 'win32') {
+    if (process.platform !== 'win32' || createdAtFt === null) {
       // Not awaited — createSession is synchronous and `ps` is a subprocess.
       // The value lands on the live meta well before any tombstone could be
       // written, and every sessions.json write reads meta at write time, so
       // persistence picks it up.
-      void getProcessStartTime(meta.pid).then((startTime) => {
-        if (startTime) meta.pidStartTime = startTime;
-      });
+      void this.recordSpawnStartTime(params.id, managed);
     }
 
     this.emit('session:created', { session: { ...meta } });
     return { ...meta };
+  }
+
+  /**
+   * #2388: read the shell's start time right after its spawn, retrying a
+   * failed read (`ps` timed out, Windows' native read failed) a few times.
+   * Nothing reads it later, and a tree kill of the pane is refused for as
+   * long as it is unknown. Read only in this window: the pid was just handed
+   * out to this spawn, and every attempt and its result are dropped once the
+   * PTY child exited or the session is no longer this one. Windows records
+   * the FILETIME (`pidCreatedAtFt`), POSIX the `lstart`.
+   */
+  private async recordSpawnStartTime(id: string, managed: ManagedSession): Promise<void> {
+    const { meta } = managed;
+    const pid = meta.pid;
+    let exited = false;
+    const exitSub = managed.ptyProcess.onExit(() => { exited = true; });
+    const live = (): boolean => !exited && this.sessions.get(id) === managed && meta.pid === pid
+      && (meta.state === 'attached' || meta.state === 'detached');
+    try {
+      for (let attempt = 0; attempt <= this.spawnStartRetryDelaysMs.length; attempt++) {
+        if (attempt > 0) {
+          await new Promise<void>((r) => setTimeout(r, this.spawnStartRetryDelaysMs[attempt - 1]).unref?.());
+        }
+        if (!live()) return;
+        const start = await getProcessStartTime(pid);
+        if (!live()) return;
+        if (start) {
+          if (process.platform === 'win32') meta.pidCreatedAtFt = start;
+          else meta.pidStartTime = start;
+          return;
+        }
+      }
+      console.warn(`[DaemonSessionManager] session ${id}: could not read the start time of pid ${pid}; a tree kill of this pane will be refused`);
+    } finally {
+      exitSub.dispose();
+    }
   }
 
   destroySession(id: string): void {
