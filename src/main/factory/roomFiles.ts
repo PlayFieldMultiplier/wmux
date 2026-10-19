@@ -25,12 +25,9 @@
 // no kept card lists is swept (an open card outlives the retention), on
 // start and at most hourly on a copy; while the cards cannot be read, none.
 //
-// The checks are path based (Node has no openat): a process that swaps a
-// folder above the file for a link between the checks and the open, and
-// back before the checks after the read, is caught on Linux by the opened
-// descriptor's own path and elsewhere only by the identity checks around
-// the open. That process already runs as the owner's user inside the bot's
-// own folders, and a file it gets onto a card is shown only to the owner.
+// The checks are path based (Node has no openat); the identity checks
+// around the open back them up, and on Linux so does the opened
+// descriptor's own path.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
