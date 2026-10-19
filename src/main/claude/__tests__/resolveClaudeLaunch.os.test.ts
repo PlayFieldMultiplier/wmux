@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveClaudeLaunch } from '../resolveClaudeLaunch';
+import { resolveClaudeLaunch, sdkDefaultScriptHost } from '../resolveClaudeLaunch';
 
 describe('resolveClaudeLaunch', () => {
   it('runs a native binary as the command', () => {
@@ -16,20 +16,33 @@ describe('resolveClaudeLaunch', () => {
     });
   });
 
-  it('runs cli.js (and other scripts) under node — same as the Claude Agent SDK', () => {
-    const node = '/usr/bin/node';
+  it('runs cli.js under PATH node by default — same as the Claude Agent SDK (not process.execPath)', () => {
     const cli = 'C:\\Users\\a\\AppData\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js';
+    // Electron main: execPath is the wmux binary. The old bug spawned that
+    // without ELECTRON_RUN_AS_NODE and timed out a valid npm install.
+    const electron = '/Applications/wmux.app/Contents/MacOS/wmux';
     expect(resolveClaudeLaunch(cli, {
       platform: 'win32',
-      nodeExecutable: node,
+      execPath: electron,
       args: ['--version'],
     })).toEqual({
-      command: node,
+      command: 'node',
       args: [cli, '--version'],
     });
-    expect(resolveClaudeLaunch('/opt/claude/cli.mjs', { nodeExecutable: node, args: ['--version'] })).toEqual({
-      command: node,
+    expect(sdkDefaultScriptHost()).toBe('node');
+    expect(resolveClaudeLaunch('/opt/claude/cli.mjs', { args: ['--version'] })).toEqual({
+      command: 'node',
       args: ['/opt/claude/cli.mjs', '--version'],
+    });
+  });
+
+  it('when an Electron binary is forced as the script host, sets ELECTRON_RUN_AS_NODE', () => {
+    const electron = '/Applications/wmux.app/Contents/MacOS/wmux';
+    const cli = '/opt/claude/cli.js';
+    expect(resolveClaudeLaunch(cli, { nodeExecutable: electron, args: ['--version'] })).toEqual({
+      command: electron,
+      args: [cli, '--version'],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
     });
   });
 
@@ -44,9 +57,7 @@ describe('resolveClaudeLaunch', () => {
     expect(launch.command).toBe(cmd);
     expect(launch.windowsVerbatimArguments).toBe(true);
     expect(launch.args.slice(0, 3)).toEqual(['/d', '/s', '/c']);
-    // Outer quotes wrap each-token-quoted inner line (shell.handler pattern).
     expect(launch.args[3]).toBe(`""${shim}" "--version""`);
-    // .cmd on a non-Windows platform is treated as a normal file (no cmd.exe).
     expect(resolveClaudeLaunch('/tmp/claude.cmd', { platform: 'linux', args: ['--version'] })).toEqual({
       command: '/tmp/claude.cmd',
       args: ['--version'],

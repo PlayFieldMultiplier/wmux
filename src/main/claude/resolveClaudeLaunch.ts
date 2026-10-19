@@ -1,9 +1,11 @@
 // ─── How Claude is actually spawned (probe + BotRuntime / SDK) ─────────────
 //
 // ClaudeSdkAdapter hands the resolved path to the Anthropic agent SDK as
-// `pathToClaudeCodeExecutable`. The SDK then:
+// `pathToClaudeCodeExecutable`. The SDK then (sdk.mjs YK + yS.initialize):
 //   • runs script paths (`.js` / `.mjs` / `.ts` / `.tsx` / `.jsx`) under
-//     `node` (or bun) — see YK() in @anthropic-ai/claude-agent-sdk;
+//     PATH `node` (or `bun` when `process.versions.bun` is set) —
+//     getDefaultExecutable() returns the literal string "node" / "bun",
+//     never process.execPath;
 //   • otherwise spawns the path directly.
 //
 // Windows npm also ships a `claude.cmd` shim. Node 20+ refuses to execFile a
@@ -14,7 +16,10 @@
 //
 // This module is the ONE place that turns a resolved Claude path into
 // `{ command, args }` for a direct spawn. The readiness probe uses it so it
-// never disagrees with how BotRuntime's SDK session launches Claude.
+// never disagrees with how BotRuntime's SDK session launches Claude. Do NOT
+// default scripts to process.execPath: in Electron main that is the wmux
+// binary, and without ELECTRON_RUN_AS_NODE a valid npm cli.js install is
+// falsely flagged claude-unusable.
 
 import * as path from 'path';
 
@@ -26,16 +31,29 @@ export interface ClaudeLaunch {
   args: string[];
   /** When true, pass `windowsVerbatimArguments` to spawn / execFile. */
   windowsVerbatimArguments?: boolean;
+  /** Merged into the child env (e.g. ELECTRON_RUN_AS_NODE for an Electron host). */
+  env?: Record<string, string>;
 }
 
 export interface ResolveClaudeLaunchOpts {
   /** Extra CLI args after the executable (e.g. `['--version']`). */
   args?: readonly string[];
-  /** Node (or bun) binary for script paths. Default: `process.execPath`. */
+  /**
+   * Host for script paths. Default: PATH `node` (or `bun` under bun) — the
+   * same literal the Claude Agent SDK's getDefaultExecutable() returns.
+   * Pass an absolute Electron binary only as an explicit fallback; we then
+   * set ELECTRON_RUN_AS_NODE=1 so it behaves as Node.
+   */
   nodeExecutable?: string;
   platform?: NodeJS.Platform;
   /** Absolute path to cmd.exe on Windows. Default: SystemRoot\System32\cmd.exe. */
   cmdExecutable?: string;
+  /**
+   * Test / documentation seam: the process execPath that used to be the
+   * mistaken default. Ignored for the script host (SDK uses PATH node). Kept
+   * so a regression that prefers execPath over PATH can be asserted against.
+   */
+  execPath?: string;
 }
 
 function isScriptPath(exe: string): boolean {
@@ -55,6 +73,21 @@ function defaultCmdExecutable(): string {
 }
 
 /**
+ * Same as @anthropic-ai/claude-agent-sdk getDefaultExecutable(): the PATH
+ * name `node`, or `bun` when this process is bun. Never process.execPath.
+ */
+export function sdkDefaultScriptHost(): string {
+  return typeof process.versions.bun === 'string' ? 'bun' : 'node';
+}
+
+/** True when `command` is an Electron (or other non-Node) binary that needs
+ *  ELECTRON_RUN_AS_NODE to run a .js entrypoint. */
+function needsElectronRunAsNode(command: string): boolean {
+  const base = path.basename(command).toLowerCase();
+  return base !== 'node' && base !== 'node.exe' && base !== 'bun' && base !== 'bun.exe';
+}
+
+/**
  * Turn a resolved Claude path into the `{ command, args }` BotRuntime's SDK
  * session (and this probe) actually spawn. Pure aside from defaulting
  * `nodeExecutable` / `cmdExecutable` / `platform` to the process.
@@ -65,9 +98,16 @@ export function resolveClaudeLaunch(exe: string, opts: ResolveClaudeLaunchOpts =
   if (!exe) return { command: exe, args: extra };
 
   if (isScriptPath(exe)) {
+    // Prefer an explicit host; otherwise PATH node/bun like the SDK.
+    // opts.execPath is intentionally NOT consulted — that was the Electron
+    // main bug (wmux binary without ELECTRON_RUN_AS_NODE).
+    void opts.execPath;
+    const command = opts.nodeExecutable ?? sdkDefaultScriptHost();
+    const env = needsElectronRunAsNode(command) ? { ELECTRON_RUN_AS_NODE: '1' } : undefined;
     return {
-      command: opts.nodeExecutable ?? process.execPath,
+      command,
       args: [exe, ...extra],
+      ...(env ? { env } : {}),
     };
   }
 

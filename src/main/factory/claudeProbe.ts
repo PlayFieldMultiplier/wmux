@@ -8,7 +8,7 @@
 // model for anything (no quota, no billing).
 //
 // Launch matches BotRuntime / the Claude Agent SDK (resolveClaudeLaunch): a
-// Windows `.cmd` goes through cmd.exe, a `cli.js` under node. Successful
+// Windows `.cmd` goes through cmd.exe, a `cli.js` under PATH `node` (SDK), never Electron execPath. Successful
 // answers are cached by resolved path + mtime so opening the Bots page does
 // not re-probe every readiness poll. Failure detail is redacted before it
 // reaches lastError / the UI.
@@ -29,7 +29,7 @@ export interface ClaudeProbeDeps {
   run?: (
     command: string,
     args: readonly string[],
-    opts: { timeoutMs: number; windowsVerbatimArguments?: boolean },
+    opts: { timeoutMs: number; windowsVerbatimArguments?: boolean; env?: Record<string, string> },
   ) => Promise<{ code: number | null; stdout: string; stderr: string }>;
   timeoutMs?: number;
   /** Override launch resolution (tests). */
@@ -45,7 +45,7 @@ export interface ClaudeProbeDeps {
 function defaultRun(
   command: string,
   args: readonly string[],
-  opts: { timeoutMs: number; windowsVerbatimArguments?: boolean },
+  opts: { timeoutMs: number; windowsVerbatimArguments?: boolean; env?: Record<string, string> },
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     try {
@@ -59,6 +59,7 @@ function defaultRun(
           maxBuffer: 64 * 1024,
           windowsHide: true,
           ...(opts.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}),
         },
         (err, stdout, stderr) => {
           const out = typeof stdout === 'string' ? stdout : '';
@@ -135,6 +136,7 @@ export async function probeClaudeExecutable(exe: string, deps: ClaudeProbeDeps =
     r = await run(launch.command, launch.args, {
       timeoutMs,
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      ...(launch.env ? { env: launch.env } : {}),
     });
   } catch (err) {
     return { ok: false, detail: failDetail(err instanceof Error ? err.message : String(err)) };

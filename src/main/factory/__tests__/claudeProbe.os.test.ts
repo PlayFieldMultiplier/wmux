@@ -29,19 +29,38 @@ describe('probeClaudeExecutable', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it('launches a Windows cli.js under node (shared resolveClaudeLaunch)', async () => {
+  it('launches a Windows cli.js under PATH node (shared resolveClaudeLaunch; ignores Electron execPath)', async () => {
     const cli = 'C:\\Users\\a\\AppData\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js';
-    const node = 'C:\\Program Files\\nodejs\\node.exe';
+    const electron = 'C:\\Program Files\\wmux\\wmux.exe';
     const run = vi.fn(async () => ({ code: 0, stdout: '2.0.0\n', stderr: '' }));
     await expect(
       probeClaudeExecutable(cli, {
         run,
         mtimeMs: () => null,
-        launchOpts: { platform: 'win32', nodeExecutable: node },
+        launchOpts: { platform: 'win32', execPath: electron },
       }),
     ).resolves.toEqual({ ok: true, version: '2.0.0' });
-    const expected = resolveClaudeLaunch(cli, { platform: 'win32', nodeExecutable: node, args: ['--version'] });
+    const expected = resolveClaudeLaunch(cli, { platform: 'win32', execPath: electron, args: ['--version'] });
+    expect(expected.command).toBe('node');
+    expect(expected.env).toBeUndefined();
     expect(run).toHaveBeenCalledWith(expected.command, expected.args, { timeoutMs: CLAUDE_PROBE_TIMEOUT_MS });
+  });
+
+  it('passes ELECTRON_RUN_AS_NODE when an Electron host is forced for cli.js', async () => {
+    const cli = '/opt/claude/cli.js';
+    const electron = '/Applications/wmux.app/Contents/MacOS/wmux';
+    const run = vi.fn(async () => ({ code: 0, stdout: '1.0.0\n', stderr: '' }));
+    await expect(
+      probeClaudeExecutable(cli, {
+        run,
+        mtimeMs: () => null,
+        launchOpts: { nodeExecutable: electron },
+      }),
+    ).resolves.toEqual({ ok: true, version: '1.0.0' });
+    expect(run).toHaveBeenCalledWith(electron, [cli, '--version'], {
+      timeoutMs: CLAUDE_PROBE_TIMEOUT_MS,
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    });
   });
 
   it('launches a Windows .cmd through cmd.exe (shared resolveClaudeLaunch)', async () => {
@@ -68,7 +87,6 @@ describe('probeClaudeExecutable', () => {
     await expect(probeClaudeExecutable('/bin/claude', opts)).resolves.toEqual({ ok: true, version: '1.0.0' });
     await expect(probeClaudeExecutable('/bin/claude', opts)).resolves.toEqual({ ok: true, version: '1.0.0' });
     expect(run).toHaveBeenCalledTimes(1);
-    // mtime change → re-probe
     await expect(probeClaudeExecutable('/bin/claude', { run, mtimeMs: () => 99 })).resolves.toEqual({ ok: true, version: '1.0.0' });
     expect(run).toHaveBeenCalledTimes(2);
   });
