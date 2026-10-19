@@ -842,7 +842,9 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   });
   setRoomFileStore(roomFiles);
   setFactoryPhoneMessageHandler((payload) => factoryPhoneMessageSaved(payload, { settings, writer: getRoomWriter, ports: roomPorts }));
-  // A guest bot's post: its card, and the wakes it names once they are on disk.
+  // A guest bot's post: its card, and the wakes it names once they are on
+  // disk. A wake that is not is `busy`: the guest's retry of the same message
+  // id queues it again (postGuestMessage) and writes it.
   setGuestPostHandler(async (payload) => {
     const r = postGuestMessage(payload, { enabled: () => settings().enabled, writer: getRoomWriter, ports: roomPorts });
     if (r.ok && r.woke.length > 0) {
@@ -850,6 +852,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         await roomPorts().wakes?.flush?.();
       } catch (err) {
         console.warn(`[factory] guest wake not on disk: ${String(err)}`);
+        return { ok: false, code: 'busy' };
       }
     }
     return r;
