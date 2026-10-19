@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { renderBrainMarkdown, renderBrainMarkdownWhole, MAX_QUOTE_DEPTH, MAX_BLOCKS } from '../BrainMarkdown';
+import { renderBrainMarkdown, renderBrainMarkdownWhole, MAX_QUOTE_DEPTH, MAX_BLOCKS, MAX_TABLE_CELLS, reduceInlineHtml } from '../BrainMarkdown';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -158,6 +158,52 @@ describe('renderBrainMarkdown', () => {
       renderBrainMarkdown(src, { links: true, githubHtml: true });
     }
     expect(performance.now() - start).toBeLessThan(1_500);
+  });
+
+  it('GitHub HTML: anchor labels, <summary> and </details> scans stay linear on large bodies', () => {
+    // Each of these once rescanned the rest of the input at every candidate.
+    const start = performance.now();
+    for (const src of [
+      `<a>${'<'.repeat(64_000)}</a>`,
+      `<details>\n${'<summary>x'.repeat(16_000)}`,
+      `<details>\n${'x</details>'.repeat(16_000)}`,
+    ]) renderBrainMarkdown(src, { links: true, githubHtml: true });
+    expect(performance.now() - start).toBeLessThan(1_500);
+  });
+
+  it('GitHub HTML: text after a closing </details> goes back in without overflowing the stack', () => {
+    expect(() => renderBrainMarkdown(`<details><details>\n</details>\n${'a\n'.repeat(150_000)}`, { githubHtml: true })).not.toThrow();
+    gh('<details>\n<summary>Why</summary>\nbody\n</details>\nafter');
+    expect(container.querySelector('[data-brain-md-details] summary')?.textContent).toBe('Why');
+    expect(container.textContent).toContain('after');
+  });
+
+  it('a table draws at most MAX_TABLE_CELLS cells and says it was cut', () => {
+    const src = `|${'h|'.repeat(400)}\n|${'-|'.repeat(400)}\n${'|\n'.repeat(400)}`;
+    render(src);
+    expect(container.querySelectorAll('[data-brain-md-table] th, [data-brain-md-table] td').length).toBeLessThanOrEqual(MAX_TABLE_CELLS);
+    expect(container.querySelector('[data-brain-md-cut]')).not.toBeNull();
+    expect(renderBrainMarkdownWhole(src)).toBeNull();
+    // A table under the cap draws whole.
+    expect(renderBrainMarkdownWhole('| a | b |\n| - | - |\n| 1 | 2 |')).not.toBeNull();
+    // The allowance is shared by every table in the render.
+    const many = `${`|${'h|'.repeat(50)}\n|${'-|'.repeat(50)}\n${'|\n'.repeat(99)}\n`.repeat(300)}`;
+    render(many);
+    expect(container.querySelectorAll('[data-brain-md-table] th, [data-brain-md-table] td').length).toBeLessThanOrEqual(MAX_TABLE_CELLS);
+    expect(renderBrainMarkdownWhole(many)).toBeNull();
+  });
+
+  it('a long run of mentions does not overflow the stack', () => {
+    const mention = { pattern: /@(Ada)\b/g, render: (name: string, key: string) => createElement('b', { key }, name) };
+    expect(() => renderBrainMarkdown('@Ada '.repeat(80_000), { mention })).not.toThrow();
+    expect(() => renderBrainMarkdown(`**x** ${'@Ada '.repeat(80_000)}`, { mention })).not.toThrow();
+  });
+
+  it('GitHub HTML: quoted attributes holding `<` still read as one tag', () => {
+    gh('<details title="x < y"><summary>Why</summary>body</details>\nafter');
+    expect(container.querySelectorAll('[data-brain-md-details]')).toHaveLength(1);
+    expect(container.querySelector('[data-brain-md-details] summary')?.textContent).toBe('Why');
+    expect(reduceInlineHtml('<a href="https://example.com"><span title="x < y">Label</span></a>')).toBe('[Label](https://example.com)');
   });
 
   it('renderBrainMarkdownWhole returns null only when the render would be cut', () => {
