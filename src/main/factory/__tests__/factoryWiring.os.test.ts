@@ -452,6 +452,9 @@ describe('lookups the runtime and rooms read', () => {
     // A truncated tail counts only the guest cards inside its window.
     writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'human', actor: { kind: 'human' }, title: 'again' });
     expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1)).toMatchObject({ truncated: true, hiddenGuestCards: 0 });
+    // Past one page of guest cards, all are counted.
+    for (let i = 0; i < 120; i++) writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000bbbb', kind: 'guest', actor: { kind: 'system' }, title: 'External guest: G', guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'G' } });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000bbbb', 5)).toMatchObject({ cards: [], truncated: false, hiddenGuestCards: 120 });
   });
 
   it('the running wake: id, a 1-based attempt that is the same for the whole turn, and its handoff', () => {

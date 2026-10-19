@@ -335,8 +335,16 @@ export function threadTail(writer: RoomWriter | null, workspaceId: string, threa
     && writer.find(workspaceId, (c) => c.threadId === threadId && c.seq < first.seq, { guests }) !== null;
   // The guest cards a clean wake leaves out of that window, counted so its
   // prompt can say they exist (their words stay out).
-  const hiddenGuestCards = guests ? 0
-    : writer.read(workspaceId, { threadId, sinceSeq: truncated ? first.seq - 1 : 0, guests: true }).cards.filter((c) => c.kind === 'guest').length;
+  let hiddenGuestCards = 0;
+  if (!guests) {
+    let sinceSeq = truncated ? first.seq - 1 : 0;
+    for (;;) {
+      const more = writer.read(workspaceId, { threadId, sinceSeq, guests: true });
+      hiddenGuestCards += more.cards.filter((c) => c.kind === 'guest').length;
+      if (!more.hasMore || more.nextSinceSeq <= sinceSeq) break;
+      sinceSeq = more.nextSinceSeq;
+    }
+  }
   return { cards: page.cards, truncated, hiddenGuestCards };
 }
 
