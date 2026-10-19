@@ -632,10 +632,11 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     off();
     // The reported stop's path: conditional on the turn being over.
     expect(stopAgent).toHaveBeenCalledWith('daemon-1', { ifTurnClosed: true });
-    // Its agent's exit is that stop's for a while (the fan-out worker watch
-    // leaves the row alone), then no longer.
+    // Its agent's exit is that stop's (the fan-out worker watch leaves the
+    // row alone).
+    // One stop explains one exit.
     expect(stoppedByReclaimLately('daemon-1', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(true);
-    expect(stoppedByReclaimLately('daemon-1', 1_000 + OPEN_IDLE_MS + 10 * 60_000)).toBe(false);
+    expect(stoppedByReclaimLately('daemon-1', 1_000 + OPEN_IDLE_MS + 21_000)).toBe(false);
     const rec = store.get(current.id);
     if (!rec) throw new Error('not recorded');
     expect(rec).toMatchObject({ ended: 'reported', endRev: 3 });

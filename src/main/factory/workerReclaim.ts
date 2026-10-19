@@ -1899,6 +1899,9 @@ async function launched(
   where: 'folder' | 'newPane',
 ): Promise<WorkerResumeResult> {
   const now = ports.now ?? Date.now;
+  // A new agent runs there now: its exit is its own, not the earlier stop's.
+  reclaimStops.delete(sessionId);
+  for (const p of rec.sessions) reclaimStops.delete(p.sessionId);
   ports.store.setState(rec.taskId, 'resumed', now());
   try {
     ports.folderResumed?.(rec.taskId);
@@ -2150,11 +2153,14 @@ const reclaimStops = new Map<string, number>();
 /** Whether the reclaim itself asked to stop the agent of pane `sessionId`
  *  within RECLAIM_EXIT_WINDOW_MS of `now`: its exit is that stop, not a
  *  worker that died on its own. A record written for an exit seen (a dead
- *  pane, a resumed worker's exit) is no such stop. */
+ *  pane, a resumed worker's exit) is no such stop. One stop explains one
+ *  exit: the answer is used up, and a resume there forgets it. */
 export function stoppedByReclaimLately(sessionId: string, now: number): boolean {
   for (const [id, at] of reclaimStops) if (now - at >= RECLAIM_EXIT_WINDOW_MS) reclaimStops.delete(id);
   const at = reclaimStops.get(sessionId);
-  return at !== undefined && now - at < RECLAIM_EXIT_WINDOW_MS;
+  if (at === undefined || now - at >= RECLAIM_EXIT_WINDOW_MS) return false;
+  reclaimStops.delete(sessionId);
+  return true;
 }
 
 /** A resumed worker whose agent exited is stopped again (resumable). */
