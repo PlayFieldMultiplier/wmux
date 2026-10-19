@@ -34,6 +34,7 @@ import { registerGithubHandlers } from './handlers/github.handler';
 import { registerPrReviewHandlers } from './handlers/prReview.handler';
 import { registerWorkLinkHandlers } from './handlers/workLink.handler';
 import { registerTrackRecordHandlers } from './handlers/trackRecord.handler';
+import { registerWorkflowHandlers } from './handlers/workflow.handler';
 import { registerFactoryHandlers } from './handlers/factory.handler';
 import { registerGitShipHandlers } from './handlers/gitShip.handler';
 import { registerGhLoginHandlers } from './handlers/ghLogin.handler';
@@ -216,6 +217,7 @@ export function registerAllHandlers(
   // Moa's track record — the retro card and its schedule (Settings → Moa).
   const cleanupTrackRecord = registerTrackRecordHandlers(getWindow);
   // Agent factory bots: list, status and settings for the renderer.
+  const cleanupWorkflows = registerWorkflowHandlers(getWindow);
   const cleanupFactory = registerFactoryHandlers(getWindow, { cwdOf: getCwd });
   const cleanupGitShip = registerGitShipHandlers();
   const cleanupGhLogin = registerGhLoginHandlers(getWindow);
@@ -554,6 +556,7 @@ export function registerAllHandlers(
     cleanupPrReview();
     cleanupWorkLinks();
     cleanupTrackRecord();
+    cleanupWorkflows();
     cleanupFactory();
     cleanupGitShip();
     cleanupGhLogin();

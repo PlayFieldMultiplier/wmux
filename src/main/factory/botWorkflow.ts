@@ -167,6 +167,27 @@ export class BotWorkflowStore {
     });
   }
 
+  /** Cancel advancement only. Worker processes and task ledger rows are untouched. */
+  cancel(id: string, botId: string, workspaceId: string, expectedRevision: number): Promise<
+    { ok: true; workflow: BotWorkflow } | { ok: false; code: 'not_found' | 'revision_conflict' }
+  > {
+    return this.update((records) => {
+      const w = records.find((r) => r.id === id && r.botId === botId && r.workspaceId === workspaceId);
+      if (!w) return { ok: false as const, code: 'not_found' as const };
+      // A repeated cancellation is idempotent, including a lost IPC response.
+      if (w.stoppedByOwner || w.state === 'completed') return { ok: true as const, workflow: w };
+      if (w.revision !== expectedRevision) return { ok: false as const, code: 'revision_conflict' as const };
+      const step = w.steps.find((s) => s.state !== 'completed')!;
+      if (step.state !== 'blocked') {
+        step.state = 'blocked';
+        step.error = 'Cancelled by owner; remaining steps will not run. Any dispatched worker is left running.';
+      }
+      w.state = 'blocked'; w.stoppedByOwner = true;
+      this.changed(w);
+      return { ok: true as const, workflow: w };
+    });
+  }
+
   block(id: string, step: number, reason: string): Promise<BotWorkflow | null> {
     return this.update((records) => {
       const w = records.find((r) => r.id === id);
