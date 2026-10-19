@@ -10,6 +10,7 @@ import { BOT_EVENT } from '../shared/bot';
 import { BOT_APPROVAL_IPC } from '../shared/botApproval';
 import { BOT_SECRET_IPC } from '../shared/botSecret';
 import { CONNECTOR_IPC } from '../shared/botConnector';
+import { GUEST_BOT_IPC } from '../shared/guestBots';
 import { BOT_SKILL_IPC } from '../shared/botSkill';
 import { BOT_GROUP_IPC } from '../shared/botGroup';
 import type { PaneLabelRejection } from '../shared/paneLabelRules';
@@ -1321,6 +1322,15 @@ const electronAPI = {
       list: (botId: string) => ipcRenderer.invoke(BOT_SKILL_IPC.list, { botId }) as Promise<import('../shared/botSkill').SkillListResult>,
       archive: (req: import('../shared/botSkill').SkillArchiveRequest) =>
         ipcRenderer.invoke(BOT_SKILL_IPC.archive, req) as Promise<import('../shared/botSkill').SkillArchiveResult>,
+    },
+    // Guest bots (renderer/components/Bots/guestBots.ts): an outside agent's
+    // token comes back once, from create; nothing reads one back.
+    guestBots: {
+      list: () => ipcRenderer.invoke(GUEST_BOT_IPC.list) as Promise<import('../shared/guestBots').GuestBotListResult>,
+      create: (req: { name: string; scope: import('../shared/guestBots').GuestScope }) =>
+        ipcRenderer.invoke(GUEST_BOT_IPC.create, req) as Promise<import('../shared/guestBots').GuestBotCreateResult>,
+      revoke: (guestId: string) => ipcRenderer.invoke(GUEST_BOT_IPC.revoke, { guestId }) as Promise<import('../shared/guestBots').GuestBotSimpleResult>,
+      setEnabled: (enabled: boolean) => ipcRenderer.invoke(GUEST_BOT_IPC.setEnabled, { enabled }) as Promise<import('../shared/guestBots').GuestBotSimpleResult>,
     },
     // The owner's group chats (shared/botGroup.ts); changes arrive as
     // BOT_EVENT {type:'groups-changed'}.

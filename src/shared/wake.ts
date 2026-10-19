@@ -38,7 +38,12 @@ export type WakeReason =
    *  carried outside text. `handoffId`: the handoff that wake delivered, so
    *  the tasks still answer it. `fingerprint`: of the arguments (a retry
    *  that started them retires this wake too). */
-  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; handoffId?: string };
+  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; handoffId?: string }
+  /** An outside agent's message named this bot (shared/guestBots.ts):
+   *  `cardId` is its `guest` card, `text` what it said (redacted). Always
+   *  tainted (wakeTaint.ts): nothing this wake starts merges without the
+   *  owner. */
+  | { kind: 'guest'; guestId: string; guestName: string; cardId: string; text: string };
 
 /** A held fan-out's fanout_start arguments, as the bot's tool takes them. */
 export interface HeldFanoutArgs {
@@ -65,6 +70,7 @@ export function wakeReasonDedupeKey(r: WakeReason): string | null {
     case 'mention': return `mention:${r.cardId}`;
     case 'intro': return 'intro';
     case 'held_fanout': return `held_fanout:${r.heldId}`;
+    case 'guest': return `guest:${r.cardId}`;
     default: return null;
   }
 }

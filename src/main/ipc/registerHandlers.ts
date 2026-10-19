@@ -47,6 +47,7 @@ import { registerA2aRemoteHandlers } from './handlers/a2aRemote.handler';
 import { registerPaneResourcesHandlers } from './handlers/paneResources.handler';
 import { registerChatHandlers } from './handlers/chat.handler';
 import { registerChatV2Handlers } from './handlers/chatv2.handler';
+import { registerGuestBotHandlers } from './handlers/guestBots.handler';
 import { registerWebHandlers } from './handlers/web.handler';
 import { registerAutomationHandlers } from './handlers/automation.handler';
 import { registerAccountHandlers } from './handlers/account.handler';
@@ -256,6 +257,8 @@ export function registerAllHandlers(
   // Chat v2 — unconditional like chat: with no daemon every call answers `unavailable`.
   const cleanupChatV2 = registerChatV2Handlers(daemonClient, getWindow);
   const cleanupWeb = registerWebHandlers(() => daemonClient ?? null);
+  // Guest bots (Bots page): unconditional like web, main window only.
+  const cleanupGuestBots = registerGuestBotHandlers(() => daemonClient ?? null, getWindow);
   // Scheduled runs — unconditional like web: with no daemon the calls resolve
   // empty / refused instead of meeting a missing handler.
   // A browser identity is granted from the main window's top frame only.
@@ -571,6 +574,7 @@ export function registerAllHandlers(
     if (cleanupPaneResources) cleanupPaneResources();
     if (cleanupPlanApprovals) cleanupPlanApprovals();
     cleanupWeb();
+    cleanupGuestBots();
     cleanupAutomation();
     cleanupChat();
     cleanupChatV2();

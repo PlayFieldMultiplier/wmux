@@ -75,6 +75,7 @@ import { getApprovalService } from './approvals';
 import { wakeContext, type WakeContextPorts } from './wakeContext';
 import { readUiLocale } from '../quit/quitAndStopCopy';
 import { setFactoryPhoneMessageHandler } from './phoneMessage';
+import { postGuestMessage, setGuestPostHandler } from './guestMessage';
 import { humanCardIdOfRun, postHumanMessage } from './humanMessage';
 import { phoneBot } from './phoneBot';
 import { redactStoredSecrets } from './secretRedaction';
@@ -820,6 +821,18 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   });
   setRoomFileStore(roomFiles);
   setFactoryPhoneMessageHandler((payload) => factoryPhoneMessageSaved(payload, { settings, writer: getRoomWriter, ports: roomPorts }));
+  // A guest bot's post: its card, and the wakes it names once they are on disk.
+  setGuestPostHandler(async (payload) => {
+    const r = postGuestMessage(payload, { enabled: () => settings().enabled, writer: getRoomWriter, ports: roomPorts });
+    if (r.ok && r.woke.length > 0) {
+      try {
+        await roomPorts().wakes?.flush?.();
+      } catch (err) {
+        console.warn(`[factory] guest wake not on disk: ${String(err)}`);
+      }
+    }
+    return r;
+  });
 
   const morning = new MorningSchedule({
     file: path.join(deps.wmuxDir(), 'factory', MORNING_SCHEDULE_FILENAME),
@@ -1016,6 +1029,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       offHookFacts();
       hooks.dispose();
       setFactoryPhoneMessageHandler(null);
+      setGuestPostHandler(null);
       setRoomAttachmentStore(null);
       setRoomFileStore(null);
       cursor.flush();

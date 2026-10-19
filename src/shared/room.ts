@@ -124,7 +124,8 @@ export type CardKind =
   | 'routine'         // a bot created or changed a routine (refs.routineId)
   | 'secret_request'  // a bot asks for a named secret (refs.secretName); [Enter] opens the modal
   | 'login_request'   // a bot asks the owner to log in (refs.url for a website)
-  | 'job_changed';    // a bot's job changed (RoomCard.jobChange) with Undo
+  | 'job_changed'     // a bot's job changed (RoomCard.jobChange) with Undo
+  | 'guest';          // an outside agent's message (shared/guestBots.ts), always external
 
 /** The card kinds a bot may post with `room.post` (the rest are written by
  *  main: facts, questions via ask.person, human messages, refusals, budget,
@@ -196,6 +197,9 @@ export interface RoomCard {
   /** Main-written, bot cards only: the files the bot attached with
    *  room_post `files`, as stored copies (shared/roomFiles.ts). */
   files?: RoomFile[];
+  /** Main-written, `guest` cards only (actor system): the outside agent that
+   *  posted it (shared/guestBots.ts). The card is external whatever it says. */
+  guest?: { guestId: string; name: string };
 }
 
 /** A factory system card's stable code: the task gate's and the worker

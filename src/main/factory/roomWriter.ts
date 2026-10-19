@@ -24,6 +24,7 @@
 // Every new or changed card is pushed to the renderer as ROOM_EVENT with its
 // thread's summary.
 
+import { isGuestId, sanitizeGuestName } from '../../shared/guestBots';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -75,7 +76,7 @@ const URL_MAX = 500;
 export const CARD_KINDS: readonly CardKind[] = [
   'fact', 'dispatch', 'status', 'triage', 'verdict', 'report', 'plan', 'proposal', 'opinion',
   'question', 'human', 'refusal', 'budget',
-  'approval', 'routine', 'secret_request', 'login_request', 'job_changed',
+  'approval', 'routine', 'secret_request', 'login_request', 'job_changed', 'guest',
 ];
 
 // ── Ports (design §14; resolved at module start, wired by the factory host) ─
@@ -453,6 +454,9 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
   const notice = actor.kind === 'system' ? sanitizeNotice(c.notice) : undefined;
   const attachments = c.kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(c.attachments) : undefined;
   const files = actor.kind === 'bot' ? parseRoomFiles(c.files) : undefined;
+  const guest = c.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(c.guest) : undefined;
+  // A guest card that does not say whose it is is not a card of this room.
+  if (c.kind === 'guest' && !guest) return null;
   return {
     version: 1,
     id: c.id,
@@ -474,7 +478,16 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(notice ? { notice } : {}),
     ...(attachments ? { attachments } : {}),
     ...(files ? { files } : {}),
+    ...(guest ? { guest } : {}),
   };
+}
+
+/** A `guest` card's author (RoomCard.guest), or undefined. */
+export function sanitizeGuestRef(value: unknown): RoomCard['guest'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const g = value as Record<string, unknown>;
+  const name = sanitizeGuestName(g.name);
+  return isGuestId(g.guestId) && name ? { guestId: g.guestId, name } : undefined;
 }
 
 /** The seq high-water mark line a compaction writes, or null. */
@@ -516,6 +529,8 @@ export interface RoomCardInput {
   /** Bot cards only (RoomCard.files): files already in the room's file
    *  store (roomFiles.ts). */
   files?: RoomCard['files'];
+  /** `guest` cards only, actor system (RoomCard.guest). */
+  guest?: RoomCard['guest'];
 }
 
 /** A post from a bot or the owner: idempotent by clientPostId, and a replyTo
@@ -736,6 +751,8 @@ export class RoomWriter {
     const notice = actor.kind === 'system' ? sanitizeNotice(redactStoredSecretsDeep(input.notice)) : undefined;
     const attachments = input.kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(input.attachments) : undefined;
     const files = actor.kind === 'bot' ? parseRoomFiles(input.files) : undefined;
+    const guest = input.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(input.guest) : undefined;
+    if (input.kind === 'guest' && !guest) return null;
     // A fact delivered twice (a re-subscribe, a replay) writes one card.
     const factKey = refs?.factId ? factCardKey({ refs, threadId, kind: input.kind }) : null;
     if (factKey && state.seenFacts.has(factKey)) return null;
@@ -758,6 +775,7 @@ export class RoomWriter {
       ...(notice ? { notice } : {}),
       ...(attachments ? { attachments } : {}),
       ...(files ? { files } : {}),
+      ...(guest ? { guest } : {}),
       ...(extra?.replyTo ? { replyTo: extra.replyTo } : {}),
       ...(extra?.clientPostId ? { clientPostId: extra.clientPostId } : {}),
     };

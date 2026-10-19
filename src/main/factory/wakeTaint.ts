@@ -125,6 +125,9 @@ export class WakeTaint {
         return this.handoffTainted(reason.handoffId);
       case 'mention':
         return this.handoffTainted(reason.handoffId);
+      // An outside agent's words, whatever they say.
+      case 'guest':
+        return true;
       // The wake that asked for the held fan-out, as it was marked then.
       case 'held_fanout':
         return reason.tainted !== false;

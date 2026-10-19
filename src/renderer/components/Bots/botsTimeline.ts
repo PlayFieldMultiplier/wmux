@@ -139,7 +139,9 @@ export function buildTimeline(entries: readonly RoomEntry[], opts: {
       if (work.steps.includes(card)) continue;
     }
     const prev = out[out.length - 1];
-    if (card.actor.kind === 'system') {
+    // A guest's card is a message in the conversation (marked external in
+    // its row), not one of wmux's own system lines.
+    if (card.actor.kind === 'system' && card.kind !== 'guest') {
       const thread = opts.threads?.get(card.id);
       if (prev?.kind === 'system' && prev.cards[0].threadId === card.threadId && prev.cards[0].workspaceId === card.workspaceId) {
         prev.cards.push(card);

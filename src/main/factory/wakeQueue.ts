@@ -28,6 +28,7 @@
 // A dropped wake is kept as a record (state `dropped` + code) and `enqueue`
 // returns null for it. Finished records are pruned by age and count.
 
+import { isGuestId, sanitizeGuestName } from '../../shared/guestBots';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { BOT_ID_RE, type BotTrigger } from '../../shared/bot';
@@ -136,6 +137,12 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
         : null;
     case 'intro':
       return { kind: 'intro' };
+    case 'guest': {
+      if (!isGuestId(r.guestId) || !boundedId(r.cardId)) return null;
+      const guestName = sanitizeGuestName(r.guestName);
+      if (!guestName || typeof r.text !== 'string' || r.text.trim().length === 0 || r.text.length > HUMAN_TEXT_MAX) return null;
+      return { kind: 'guest', guestId: r.guestId, guestName, cardId: r.cardId, text: r.text };
+    }
     case 'held_fanout': {
       if (!boundedId(r.heldId) || !Number.isSafeInteger(r.heldAt) || typeof r.tainted !== 'boolean') return null;
       if (!Array.isArray(r.titles) || r.titles.length === 0 || r.titles.length > FANOUT_MAX_TASKS || !r.titles.every((t) => typeof t === 'string' && t.length <= 256)) return null;
