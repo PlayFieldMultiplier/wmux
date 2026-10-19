@@ -300,6 +300,8 @@ export class TaskLedger {
   private readonly listeners = new Set<(t: LedgerTransition) => void>();
   /** Every write runs inside this chain — checks, append and commit together. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** Includes queued writes, so recovery never waits behind an older mutation. */
+  private pendingMutations = 0;
   /** Lines the last load skipped (torn tail / malformed) — observability. */
   readonly skippedLines: number;
   /** True when the last load recovered from the rotated `.1` file. */
@@ -411,11 +413,17 @@ export class TaskLedger {
     });
   }
 
-  update(input: LedgerUpdateInput): Promise<LedgerUpdateResult> {
-    return this.serialize(() => this.updateLocked(input));
+  /** `guard` is main's in-process commit check, never accepted from RPC data. */
+  update(input: LedgerUpdateInput, guard?: () => boolean): Promise<LedgerUpdateResult> {
+    return this.serialize(() => this.updateLocked(input, guard));
   }
 
-  private async updateLocked(input: LedgerUpdateInput): Promise<LedgerUpdateResult> {
+  /** Main-only recovery admission: a fresh proof must not wait in the queue. */
+  updateIfIdle(input: LedgerUpdateInput, guard: () => boolean): Promise<LedgerUpdateResult | null> {
+    return this.pendingMutations > 0 ? Promise.resolve(null) : this.update(input, guard);
+  }
+
+  private async updateLocked(input: LedgerUpdateInput, guard?: () => boolean): Promise<LedgerUpdateResult> {
     const entry = this.entries.get(input.id);
     if (!entry) return { ok: false, error: 'not_found', message: `no ledger entry for task ${input.id}` };
     // Authorization comes before anything that reads the entry back: a
@@ -528,6 +536,7 @@ export class TaskLedger {
         ? { completion: { source: 'merge' as const, pr: input.completion.pr } }
         : {}),
     });
+    if (guard && !guard()) return { ok: true, entry, noop: true };
     try {
       await this.append({ op: 'entry', entry: updated });
     } catch (err) {
@@ -754,7 +763,8 @@ export class TaskLedger {
 
   /** Run `fn` after every earlier write, and before every later one. */
   private serialize<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(fn, fn);
+    this.pendingMutations++;
+    const run = this.queue.then(fn, fn).finally(() => { this.pendingMutations--; });
     this.queue = run.then(() => undefined, () => undefined);
     return run;
   }

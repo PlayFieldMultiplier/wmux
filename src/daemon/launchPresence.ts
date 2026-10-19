@@ -53,6 +53,7 @@ export type LaunchPresenceReason =
   | 'shell-missing'
   | 'unsupported-shell'
   | 'probe-failed'
+  | 'pane-changed'
   | 'idle-shell';
 
 /** The idle-shell read of the pane's root process (AgentProcessTracker.idleShellState),
@@ -88,6 +89,47 @@ export interface LaunchPresenceInputs {
 export interface LaunchPresenceVerdict {
   presence: LaunchPresence;
   reason: LaunchPresenceReason;
+}
+
+export interface LaunchPresenceSnapshot {
+  /** The actual managed session object, so a reused id is not the same pane. */
+  session: object | null;
+  inputs: Omit<LaunchPresenceInputs, 'idleShell'>;
+  incarnationId: string | null;
+  inputRevision: number;
+  outputBytes: number;
+  recoveredAgentUnconfirmed: boolean;
+}
+
+export interface LaunchPresenceReading extends LaunchPresenceVerdict {
+  incarnationId: string | null;
+  inputRevision: number;
+  outputBytes: number;
+  recoveredAgentUnconfirmed: boolean;
+}
+
+/** A process read is evidence only while the pane and its input/output stay
+ *  unchanged. Return the witness too, so a caller can fence a later action. */
+export async function inspectLaunchPresence(
+  read: () => LaunchPresenceSnapshot,
+  probeProcess: boolean,
+  idleShellState: () => Promise<IdleShellRead>,
+): Promise<LaunchPresenceReading> {
+  const before = read();
+  let after = before;
+  let idleShell: IdleShellRead | undefined;
+  if (before.session && probeProcess && launchPresenceNeedsProcessRead(before.inputs)) {
+    try { idleShell = await idleShellState(); } catch { idleShell = 'error'; }
+    after = read();
+    if (after.session !== before.session || after.incarnationId !== before.incarnationId
+      || after.inputRevision !== before.inputRevision || after.outputBytes !== before.outputBytes
+      || after.recoveredAgentUnconfirmed !== before.recoveredAgentUnconfirmed) {
+      return { presence: 'unknown', reason: 'pane-changed', incarnationId: after.incarnationId,
+        inputRevision: after.inputRevision, outputBytes: after.outputBytes, recoveredAgentUnconfirmed: after.recoveredAgentUnconfirmed };
+    }
+  }
+  return { ...decideLaunchPresence({ ...after.inputs, idleShell }), incarnationId: after.incarnationId,
+    inputRevision: after.inputRevision, outputBytes: after.outputBytes, recoveredAgentUnconfirmed: after.recoveredAgentUnconfirmed };
 }
 
 /**

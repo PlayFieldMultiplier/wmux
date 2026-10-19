@@ -598,9 +598,11 @@ export class AgentProcessTracker {
   /** Which launch precondition failed, so a phone can be told what to do.
    *  `env` is the pane's spawn env, used only to locate a helper's install.
    *  `anyShell` also accepts PowerShell, pwsh and cmd: for a caller that only
-   *  needs the shell idle and never types a command into it. */
-  async idleShellState(pid: number, env: NodeJS.ProcessEnv = {}, anyShell = false): Promise<{ ok: true } | { ok: false; reason: 'missing' | 'unsupported-shell' | 'shell-has-children' }> {
-    const entries = await this.snapshot();
+   *  needs the shell idle and never types a command into it. `fresh` starts
+   *  its own enumeration: a confirming read must not join a snapshot that
+   *  began before its caller captured the pane's input/output witness. */
+  async idleShellState(pid: number, env: NodeJS.ProcessEnv = {}, anyShell = false, options: { fresh?: boolean } = {}): Promise<{ ok: true } | { ok: false; reason: 'missing' | 'unsupported-shell' | 'shell-has-children' }> {
+    const entries = await (options.fresh ? this.enumerate() : this.snapshot());
     const root = entries.find(entry => entry.pid === pid);
     if (!root) return { ok: false, reason: 'missing' };
     const shell = anyShell ? /^(?:-?)(?:zsh|bash|sh|powershell|pwsh|cmd)(?:\.exe)?$/i : /^(?:-?)(?:zsh|bash|sh)$/i;

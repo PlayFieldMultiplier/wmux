@@ -127,6 +127,10 @@ export class WorkerSlots {
   private mode: 'disk' | 'memory' | 'broken' = 'disk';
   /** Launches begun in this run and not settled yet: task → generation. */
   private readonly underway = new Map<string, number>();
+  /** Generations begun by this process, including ones whose pane came up. */
+  private readonly begunHere = new Map<string, number>();
+  /** Recovery holds this only through its guarded ledger commit. */
+  private readonly recoveryLeases = new Map<string, symbol>();
   /** Relaunches in an existing pane begun in this run: task → generation.
    *  Such a launch claims no workspace (see setWorkspace). */
   private readonly relaunches = new Map<string, number>();
@@ -267,6 +271,25 @@ export class WorkerSlots {
     return t ? { ...t } : null;
   }
 
+  /** Startup recovery must never inspect a launch still starting in this run. */
+  beganInThisRun(taskId: string, gen: number): boolean {
+    return this.begunHere.get(taskId) === gen;
+  }
+
+  /** Every pane recorded for one generation, including panes moved elsewhere. */
+  panesOf(taskId: string, gen: number): string[] {
+    return [...this.panes].filter(([, p]) => p.taskId === taskId && p.gen === gen).map(([id]) => id);
+  }
+
+  /** Fence the exact generation through a recovery commit's disk append. */
+  leaseRecovery(taskId: string, gen: number): (() => void) | null {
+    const launch = this.tasks.get(taskId);
+    if (!launch || launch.gen !== gen || launch.state === 'released' || this.recoveryLeases.has(taskId)) return null;
+    const token = Symbol();
+    this.recoveryLeases.set(taskId, token);
+    return () => { if (this.recoveryLeases.get(taskId) === token) this.recoveryLeases.delete(taskId); };
+  }
+
   /** When the task's worker came up or is coming up now: a launched entry's
    *  launch time, or a launching one's while that launch is under way in
    *  this run. A released entry, or one left launching by a crash, starts
@@ -305,6 +328,7 @@ export class WorkerSlots {
    *  generation is bumped and written now. THROWS when it cannot be written:
    *  the caller does not launch. */
   beginLaunch(req: LaunchRequest): { gen: number; launchedAt: number } {
+    if (this.recoveryLeases.has(req.taskId)) throw new Error('Task startup recovery is settling this launch; retry once it finishes.');
     const prior = this.tasks.get(req.taskId);
     // Above every generation a pane or workspace of the task still names,
     // so a generation never goes back (an entry dropped by the bound).
@@ -347,6 +371,8 @@ export class WorkerSlots {
       throw new Error(`the task's launch could not be recorded: ${String(err)}`);
     }
     this.underway.set(req.taskId, next.gen);
+    this.begunHere.set(req.taskId, next.gen);
+    for (const id of this.begunHere.keys()) if (!this.tasks.has(id)) this.begunHere.delete(id);
     if (req.pane) this.relaunches.set(req.taskId, next.gen);
     else this.relaunches.delete(req.taskId);
     return { gen: next.gen, launchedAt: next.launchedAt };
