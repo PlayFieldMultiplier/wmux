@@ -936,11 +936,13 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
 
   it('a .git found by the poll whose walk then fails is walked again, not left absent', async () => {
     const root = tmp();
-    let failHead = false;
+    let armed = false;
+    let gitStats = 0;
     const io: ProbeIo = (probe) => {
-      // The distro fails the new repository's first HEAD read (a missed deadline).
-      if (failHead && probe.op === 'read' && probe.path === path.join(root, '.git', 'HEAD')) {
-        failHead = false;
+      // The poll's round sees the new `.git`; the walk it starts then misses
+      // its deadline on that same `.git`.
+      if (armed && probe.op === 'stat' && probe.path === path.join(root, '.git') && ++gitStats === 2) {
+        armed = false;
         return Promise.reject(new Error('no answer within 5000 ms'));
       }
       return localIo(probe);
@@ -950,15 +952,45 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false, absent: true }]);
 
     initFakeRepo(root, 'fresh');
-    failHead = true;
+    armed = true;
     await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
     await settle();
-    expect(failHead).toBe(false); // the walk ran and failed
+    expect(armed).toBe(false); // the walk ran and failed
     // No longer known absent: the app may ask git meanwhile.
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: null, isWorktree: false });
     await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
     await settle();
     expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'fresh', isWorktree: false });
+  });
+
+  it('a worktree retargeted in place whose new HEAD does not answer still moves to the new repository', async () => {
+    const a = tmp();
+    const b = tmp();
+    initFakeRepo(a, 'old');
+    initFakeRepo(b, 'new');
+    const wt = tmp();
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(a, '.git')}\n`);
+    let failNewHead = true;
+    const io: ProbeIo = (probe) => {
+      if (failNewHead && probe.op === 'read' && probe.path === path.join(b, '.git', 'HEAD')) {
+        failNewHead = false;
+        return Promise.reject(new Error('no answer within 5000 ms'));
+      }
+      return localIo(probe);
+    };
+    const watcher = makeRemoteWatcher(io);
+    watcher.update('s1', wt);
+    await settle();
+    expect(events.at(-1)?.branch).toBe('old');
+
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(b, '.git')}\n`);
+    watcher.update('s1', wt);
+    await settle();
+    expect(failNewHead).toBe(false); // the new HEAD read failed
+    expect(events.at(-1)?.branch).toBeNull(); // unknown, not 'old'
+    await vi.advanceTimersByTimeAsync(REMOTE_POLL_MS);
+    await settle();
+    expect(events.at(-1)?.branch).toBe('new');
   });
 
   it('backs off walking a cwd that stays inconclusive', async () => {

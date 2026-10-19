@@ -466,10 +466,14 @@ export class GitContextWatcher extends EventEmitter {
         let failed = false;
         try {
           state = await resolveRepoStateAsync(wanted.cwd, io, wanted.mapGitDir);
-          if (state.repo) head = await readGitContextAsync(state.repo, io);
         } catch {
           // Cancelled (superseded), or a read that missed its deadline.
           failed = true;
+        }
+        if (!failed && state.repo) {
+          // The repository is known even if its HEAD does not answer: it is
+          // applied with the branch unknown, and its poll reads HEAD.
+          try { head = await readGitContextAsync(state.repo, io); } catch { /* unknown */ }
         }
         // Superseded or removed meanwhile: go on with the latest, if any.
         if (!live()) continue;
