@@ -715,6 +715,13 @@ describe('the earlier fixes hold through the set', () => {
     expect(r.four()).toEqual({ agents: 0, factory: 0, bot: 0, live: 0 });
   });
 
+  it('a worker paused while its task is still working or needing input holds no cap, with no read yet; a relaunch there holds again', () => {
+    const r = rig({ rows: [row('w'), row('n', { status: 'input_required' })], records: [record('w', { ended: 'reported' }), record('n', { ended: 'reported' })], read: 'down' });
+    expect(r.four()).toEqual({ agents: 0, factory: 0, bot: 0, live: 0 });
+    r.snap = { ...r.snap, read: 'ok', readAt: NOW - 5_000, busy: new Set(['ws-w']) };
+    expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
+  });
+
   it('#2321: stopped workers, a respawned shell with no agent and ended rows hold no bot slot', () => {
     const r = rig({
       rows: [row('stopped', { status: 'review_requested' }), row('respawned'), row('ended', { status: 'completed' })],

@@ -368,10 +368,10 @@ function decide(
     return s.read === 'ok' ? { state: 'held', why: 'no-task-record' } : { state: 'unknown', why: 'stale-read' };
   }
   if (isOpen(row.status)) {
-    // Its worker was stopped (paused for review) and the row still says so:
-    // a status that has not moved, whatever was edited on the row, unless a
-    // worker relaunched there.
-    if (stopped && record?.ended === 'reported' && row.status === 'review_requested'
+    // Its worker was stopped while the row was open (paused for review, or
+    // idle for hours while working or needing input) and the row is still
+    // open: whatever was edited on the row, unless a worker relaunched there.
+    if (stopped && record?.ended === 'reported'
       && !seen(s.busy) && !seen(s.agentSeen)) return { state: 'free', why: 'stopped' };
     // Launched lately: its pane and agent come up after the launch record.
     if (launchedLately) return { state: 'held', why: 'starting' };

@@ -79,7 +79,7 @@ export interface FactRef {
  *  main only, in main's words; `detail` may quote a tool's error output and
  *  is shown to the bot as data. */
 export interface BotNoticePayload {
-  topic: 'worker.started' | 'worker.start_failed' | 'worker.report_after_end' | 'approval.decided' | 'pr.merged';
+  topic: 'worker.started' | 'worker.start_failed' | 'worker.report_after_end' | 'worker.paused' | 'worker.prompt_waiting' | 'approval.decided' | 'pr.merged';
   /** One line, main's words. */
   title: string;
   /** More of main's words (optional). */
