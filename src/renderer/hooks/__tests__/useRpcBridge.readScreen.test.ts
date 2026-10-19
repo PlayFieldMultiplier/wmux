@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { Terminal } from '@xterm/headless';
 import { generateTextSnapshot } from '../../../daemon/HeadlessSnapshot';
 import { terminalRegistry } from '../useTerminal';
+import * as terminalModule from '../useTerminal';
 import { handleRpcMethod } from '../useRpcBridge';
 import { useStore } from '../../stores';
 import { needleInComposer, submitNeedle } from '../../../main/pipe/handlers/input.rpc';
@@ -168,6 +169,33 @@ it('keeps the submit probe cursor-anchored under a multi-line statusline (#1595)
     terminalRegistry.delete(ptyId);
     terminal.dispose();
     window.electronAPI = previousAPI;
+    useStore.setState({ paneGate: previousGate });
+  }
+});
+
+
+it('approval probes read only a settled current viewport, never scrollback or parked frames', async () => {
+  const ptyId = 'approval-viewport';
+  const terminal = new Terminal({ cols: 80, rows: 3, scrollback: 100, allowProposedApi: true });
+  const previousGate = useStore.getState().paneGate;
+  const hydrate = vi.spyOn(terminalModule, 'hydrateTerminalForRead').mockResolvedValue(true);
+  useStore.setState({ paneGate: 'ready' });
+  try {
+    await new Promise<void>((resolve) => terminal.write('Old approval?\r\nYes / No\r\nfinished\r\ncurrent 1\r\ncurrent 2\r\ncurrent 3', resolve));
+    terminal.scrollToTop();
+    (terminalRegistry as Map<string, unknown>).set(ptyId, terminal);
+    expect(await handleRpcMethod('input.readScreen', { ptyId, approvalScreen: true, full_scrollback: true })).toEqual({
+      ptyId, approvalScreen: true, rows: ['current 1', 'current 2', 'current 3'], cols: 80, rowCount: 3,
+    });
+    hydrate.mockResolvedValue(false);
+    expect(await handleRpcMethod('input.readScreen', { ptyId, approvalScreen: true })).toBeNull();
+    hydrate.mockImplementation(async () => { terminalRegistry.delete(ptyId); return true; });
+    expect(await handleRpcMethod('input.readScreen', { ptyId, approvalScreen: true })).toBeNull();
+    expect(await handleRpcMethod('input.readScreen', { ptyId, approvalScreen: true })).toBeNull();
+  } finally {
+    hydrate.mockRestore();
+    terminalRegistry.delete(ptyId);
+    terminal.dispose();
     useStore.setState({ paneGate: previousGate });
   }
 });

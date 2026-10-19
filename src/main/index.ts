@@ -54,6 +54,7 @@ import { createWindow, loadMainRenderer } from './window/createWindow';
 import { attachDesktopPresenceReporter, reportDesktopPresence } from './window/desktopPresence';
 import { PTYManager } from './pty/PTYManager';
 import { PTYBridge } from './pty/PTYBridge';
+import { createLocalApprovalScreenReader } from './pty/localApprovalScreen';
 import { pruneDaemonPidMapAtConnect } from './pty/pidMap';
 import { registerAllHandlers } from './ipc/registerHandlers';
 import { RpcRouter } from './pipe/RpcRouter';
@@ -562,6 +563,11 @@ let hookSignalRouter: HookSignalRouter | null = null;
 // hook's Stop candidate must arbitrate against the same pane gate.
 let localCompletionAlarm: CompletionAlarm | null = null;
 const ptyBridge = new PTYBridge(ptyManager, () => mainWindow, () => hookSignalRouter, () => localCompletionAlarm);
+ptyBridge.setApprovalScreenReader(createLocalApprovalScreenReader({
+  getPty: (id) => ptyManager.get(id),
+  getWindow: () => mainWindow,
+  read: (id) => sendToRenderer(() => mainWindow, 'input.readScreen', { ptyId: id, approvalScreen: true }, { timeoutMs: 4500 }),
+}));
 // The hooks carry the two things the updater cannot reach: the quit flag that
 // lets windows actually close (without it quitAndInstall never installs — see
 // prepareInstallQuit) and the way back if that handoff stalls.

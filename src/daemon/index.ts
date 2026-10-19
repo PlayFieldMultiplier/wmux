@@ -6635,6 +6635,23 @@ function wireEvents(
     const screenAgent = managed?.bridge.getLastAgent() ?? null;
     return (screenAgent ? agentDisplayToSlug(screenAgent) : undefined) ?? managed?.meta.lastDetectedAgent;
   };
+  const installApprovalReader = (id: string): void => {
+    const managed = sessionManager.getSession(id);
+    if (!managed) return;
+    managed.bridge.setApprovalScreenReader(async (ptyId) => {
+      if (ptyId !== id || sessionManager.getSession(id) !== managed) return null;
+      const cols = managed.ptyProcess.cols;
+      const rows = managed.ptyProcess.rows;
+      const frame = await renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot);
+      if (!frame) return null;
+      const isCurrent = (): boolean => sessionManager.getSession(id) === managed
+        && !managed.bridge.isMuted && managed.ringBuffer.totalBytesWritten === frame.mark
+        && managed.ptyProcess.cols === cols && managed.ptyProcess.rows === rows;
+      return isCurrent() ? { rows: frame.rows, isCurrent } : null;
+    });
+  };
+  for (const session of sessionManager.listSessions()) installApprovalReader(session.id);
+  sessionManager.on('session:created', (payload: { session: { id: string } }) => installApprovalReader(payload.session.id));
   const awaitingVerifier = new AwaitingScreenVerifier({
     isAwaiting: (id) => sessionManager.getSession(id)?.bridge.isAwaitingHuman() === true,
     eligible: (id) => isClaudeFamilyAgent(paneAgentSlug(id)),

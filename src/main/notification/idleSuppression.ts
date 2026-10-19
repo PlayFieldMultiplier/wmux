@@ -25,9 +25,17 @@
  */
 
 const lastResizeAt = new Map<string, number>();
+const resizeRevisions = new Map<string, number>();
+let nextResizeRevision = 0;
 
 export function markResize(ptyId: string): void {
   lastResizeAt.set(ptyId, Date.now());
+  resizeRevisions.set(ptyId, ++nextResizeRevision);
+}
+
+/** Monotonic across same-size resizes and clock changes, for async screen reads. */
+export function resizeRevision(ptyId: string): number {
+  return resizeRevisions.get(ptyId) ?? 0;
 }
 
 /**
@@ -131,6 +139,7 @@ export function lastUserInputAt(ptyId: string): number | undefined {
 
 export function clearPty(ptyId: string): void {
   lastResizeAt.delete(ptyId);
+  resizeRevisions.delete(ptyId);
   lastSettleAt.delete(ptyId);
   lastEscapeAt.delete(ptyId);
   lastInputAt.delete(ptyId);

@@ -38,6 +38,7 @@ import { normalizeDetectorCue, type CompletionAlarm } from '../../shared/hooks/C
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSignal } from '../../shared/hooks/signal-types';
 import { canSeedHookIdentity } from '../../shared/hooks/detectorIdentity';
+import type { ApprovalScreenReader } from '../../shared/approvalScreen';
 
 // How long after an AgentDetector event to suppress the ActivityMonitor idle
 // fallback notification. Prevents double-firing when both signals agree
@@ -54,6 +55,7 @@ export type PTYDataMiddleware = (data: string) => void;
 export class PTYBridge {
   private oscParsers = new Map<string, OscParser>();
   private agentDetectors = new Map<string, AgentDetector>();
+  private approvalScreenReader: ApprovalScreenReader | null = null;
   private activityMonitor = new ActivityMonitor();
   private ptyCreatedAt = new Map<string, number>();
   private middlewareStacks = new Map<string, PTYDataMiddleware[]>();
@@ -199,6 +201,7 @@ export class PTYBridge {
    * (e.g. from PTYManager.dispose()) to ensure cleanup when onExit is not fired.
    */
   cleanupInstance(ptyId: string): void {
+    this.agentDetectors.get(ptyId)?.clearTrustedIdentity();
     // Clear agentStatus on every disposal path. onExit already broadcasts
     // 'idle', but the PTYManager.dispose → onDispose path can reach this
     // method WITHOUT going through onExit (e.g. user closes a pane via the
@@ -294,6 +297,10 @@ export class PTYBridge {
    * recentlyEscaped and the onInterrupted handlers).
    */
   noteInterruptInput(ptyId: string, data: string): void {
+    if (data.length > 0) {
+      this.flushPending(ptyId);
+      this.agentDetectors.get(ptyId)?.invalidateApprovalScreen();
+    }
     try {
       markUserInput(ptyId);
       if (isEscapeChunk(kittyChunkAsLegacy(data))) markEscapeKey(ptyId);
@@ -305,6 +312,8 @@ export class PTYBridge {
   }
 
   noteUserInput(ptyId: string): void {
+    this.flushPending(ptyId);
+    this.agentDetectors.get(ptyId)?.invalidateApprovalScreen();
     const alarm = this.getAlarm?.() ?? null;
     if (!alarm) return;
     try {
@@ -315,6 +324,29 @@ export class PTYBridge {
     } catch (err) {
       console.warn('[PTYBridge] noteUserInput alarm feed error:', err);
     }
+  }
+
+  /** The host supplies a flushed, current renderer viewport or null. */
+  setApprovalScreenReader(reader: ApprovalScreenReader): void {
+    this.approvalScreenReader = reader;
+  }
+
+  private recheckQuietApproval(ptyId: string, detector: AgentDetector): void {
+    const reader = this.approvalScreenReader;
+    const instance = this.ptyManager.get(ptyId);
+    if (!reader || !instance) return;
+    const current = (): boolean => this.agentDetectors.get(ptyId) === detector && this.ptyManager.get(ptyId) === instance;
+    void detector.revalidateApprovalScreen(async () => {
+      if (!current()) return null;
+      this.flushPending(ptyId);
+      if (!current()) return null;
+      const snapshot = await reader(ptyId);
+      if (!current()) return null;
+      // Raw output may still be inside the 8ms batch. Let the detector see it
+      // before deciding whether this rendered frame still describes the pane.
+      this.flushPending(ptyId);
+      return current() ? snapshot : null;
+    }).catch(() => undefined);
   }
 
   /** Identity evidence from a newly accepted local hook, never cached authority.
@@ -336,7 +368,9 @@ export class PTYBridge {
       // of the previous PTY, but its creation time still fences old hooks.
       boundaryAt: Math.max(this.ptyCreatedAt.get(ptyId) ?? Date.now(), detector.getIdentityBoundaryAt()),
     })) return false;
-    return detector.seedTrustedIdentity(signal.agent, detector.getIdentityEpoch());
+    const seeded = detector.seedTrustedIdentity(signal.agent, detector.getIdentityEpoch());
+    if (seeded) this.recheckQuietApproval(ptyId, detector);
+    return seeded;
   }
 
   /**
