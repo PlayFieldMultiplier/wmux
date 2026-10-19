@@ -30,7 +30,7 @@ async function call(channel: string, payload: unknown): Promise<unknown> {
 
 /** rpc(list owner-scoped / close) + writeToSession을 가진 최소 DaemonClient 페이크. */
 function makeDaemon(
-  tasks: Array<{ id: string; title: string; status: 'open' | 'closed'; owner: string; worktreePath?: string; branch?: string }>,
+  tasks: Array<{ id: string; title: string; status: 'open' | 'closed'; owner: string; worktreePath?: string; branch?: string; outputDir?: string; detachedAt?: number }>,
 ) {
   const writes: Array<{ sessionId: string; data: string }> = [];
   const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];

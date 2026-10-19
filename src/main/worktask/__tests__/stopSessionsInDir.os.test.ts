@@ -157,6 +157,15 @@ describe('stopSessionsInDir', () => {
     expect(await stopSessionsInDir('/w/t', second.p)).toEqual([]);
   });
 
+  it('a pane opened since an unverified stop is stopped all the same, and the folder is still refused', async () => {
+    const unverified = { ok: false as const, killed: [7], survivors: [{ pid: 7, reason: 'the process table could not be read', unverified: true as const }] };
+    await expect(stopSessionsInDir('/w/t', port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux', { trees: { s: unverified } }).p)).rejects.toThrow();
+    const later = port([{ id: 'new', pid: 9, spawnCwd: '/w/t' }], 'linux');
+    await expect(stopSessionsInDir('/w/t', later.p)).rejects.toThrow(/use Close and keep folder/);
+    expect(later.p.destroySession).toHaveBeenCalledWith('new');
+    forgetFolderStops('/w/t', later.p);
+  });
+
   it('a stop whose destroy did not answer fails, and leaves nothing behind for the next one', async () => {
     const first = port([{ id: 's', pid: 7, spawnCwd: '/w/t' }], 'linux');
     first.p.destroySession = async () => { throw new Error('RPC timeout: daemon.destroySession (60000ms)'); };

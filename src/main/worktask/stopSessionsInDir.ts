@@ -248,7 +248,10 @@ export async function stopSessionsInDir(dir: string, port: SessionsInDirPort): P
 
 async function stopNow(dir: string, key: string, platform: NodeJS.Platform, port: SessionsInDirPort): Promise<string[]> {
   const sessions = await port.listSessions();
-  await checkEarlierStops(key, port);
+  // What an earlier stop left still keeps the folder, but never the panes
+  // open now: they are stopped all the same (a bot worker's stop relies on
+  // it), and the earlier refusal is reported after.
+  const earlier = await checkEarlierStops(key, port).then(() => null, (err: unknown) => err);
   const inside = sessions.filter((s) => typeof s.spawnCwd === 'string' && s.spawnCwd.length > 0
     && isInside(sessionHostDir(s.spawnCwd, s, platform), dir, port, platform));
   const unknown = sessions.filter((s) => !s.spawnCwd).length;
@@ -276,6 +279,7 @@ async function stopNow(dir: string, key: string, platform: NodeJS.Platform, port
   }
   const survivors = [...treeSurvivors, ...unreported.filter((p) => port.isAlive(p)).map((pid) => ({ pid, reason: 'still running' }))];
   if (survivors.length > 0) throw survivorsError(survivors);
+  if (earlier) throw earlier;
   return inside.map((s) => s.id);
 }
 
