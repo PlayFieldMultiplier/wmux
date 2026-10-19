@@ -19,7 +19,7 @@ import { FOCUS_RING } from '../focusRing';
 import { IconFile, IconImage, IconX } from '../icons';
 import Button from '../ui/Button';
 import { renderBrainMarkdownWhole, type MarkdownOptions } from '../shared/BrainMarkdown';
-import { FILE_MARKDOWN_SHOWN_MAX, fileGlyph, fileViewKind, shownText, svgImageSource } from './botsFileView';
+import { FILE_MARKDOWN_SHOWN_MAX, fileGlyph, fileViewKind, shownText, svgDrawsTooMuch, svgImageSource } from './botsFileView';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -109,9 +109,11 @@ function MarkdownView({ text, t, total }: { text: string; t: T; total: number })
 function FileBody({ read, t }: { read: Extract<RoomFileReadResult, { ok: true }>; t: T }) {
   const { file, text, dataUrl } = read;
   const kind = fileViewKind(file);
+  // Counting an SVG's drawing parses it: once per read, not per render.
+  const svgSrc = useMemo(() => (kind === 'svg' && read.text !== undefined && !svgDrawsTooMuch(read.text) ? svgImageSource(read) : null), [kind, read]);
   if (kind === 'markdown' && text !== undefined) return <div className="wmux-bots-file-scroll"><MarkdownView text={text} t={t} total={file.bytes} /></div>;
   if (kind === 'svg') {
-    const src = svgImageSource(read);
+    const src = svgSrc;
     if (src) return <div className="wmux-bots-file-image" data-bots-file-view="image"><img src={src} alt={file.name} /></div>;
   }
   if (kind === 'image' && dataUrl) return <div className="wmux-bots-file-image" data-bots-file-view="image"><img src={dataUrl} alt={file.name} /></div>;

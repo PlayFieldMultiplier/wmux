@@ -118,6 +118,27 @@ describe('BotsFilePanel', () => {
     expect(svg.el.querySelector('.wmux-bots-file-body svg')).toBeNull();
   });
 
+  it('an SVG whose nested <use> would draw too much reads as text, an icon sheet still as a picture', async () => {
+    // Blink also follows a %-escaped fragment and a <use> under any prefix.
+    const nested = (levels: number, attr: string, ref = (l: number) => `#l${l}`, use = 'use') => {
+      let s = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:ñ="http://www.w3.org/2000/svg"><defs><rect id="l0" width="1" height="1"/>';
+      for (let l = 1; l <= levels; l++) s += `<g id="l${l}">${`<${use} ${attr}="${ref(l - 1)}"/>`.repeat(10)}</g>`;
+      return `${s}</defs><${use} ${attr}="${ref(levels)}"/></svg>`;
+    };
+    const variants = [nested(6, 'href'), nested(6, 'xlink:href'), nested(6, 'href', (l) => `#%6c${l}`), nested(6, 'href', undefined, 'ñ:use')];
+    for (const text of variants) {
+      const heavy = await panel(file('chart.svg', 'image/svg+xml'), { text });
+      expect(heavy.view()).toBe('text');
+      expect(heavy.el.querySelector('img')).toBeNull();
+    }
+    const sheet = '<svg xmlns="http://www.w3.org/2000/svg"><defs><path id="i" d="M0 0h1v1z"/></defs>'
+      + Array.from({ length: 200 }, (_, k) => `<use href="#i" x="${k}"/>`).join('') + '</svg>';
+    const icons = await panel(file('icons.svg', 'image/svg+xml'), { text: sheet });
+    expect(icons.view()).toBe('image');
+    const cycle = await panel(file('loop.svg', 'image/svg+xml'), { text: '<svg xmlns="http://www.w3.org/2000/svg"><g id="a"><use href="#a"/></g></svg>' });
+    expect(cycle.view()).toBe('image');
+  });
+
   it('an HTML page and an SVG source never become markup: the page reads as text, the SVG only as an <img>', async () => {
     const page = await panel(file('page.html', 'text/html'), { text: '<p>hi</p><a href="https://x.test/">l</a>' });
     expect(page.view()).toBe('text');
