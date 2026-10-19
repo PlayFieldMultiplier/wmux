@@ -128,7 +128,10 @@ export interface LedgerUpdateInput {
    *  settle): completion evidence for a research / no-changes task. Validated
    *  with shared/completionEvidence; criteria stay on dispatch. */
   evidence?: CompletionEvidence | unknown;
-  /** System settle only: the graded count for `evidence`. */
+  /** Ignored on write: the ledger grades `evidence` itself. Kept on the
+   *  input type so in-process callers (taskGate) can pass the grade they
+   *  already computed without a type error; workers via RPC/MCP never
+   *  forward this field, and even if they did it would not stick. */
   verifiedItemCount?: number;
 }
 
@@ -544,11 +547,13 @@ export class TaskLedger {
     } else if (next === 'completed' && nonCode) {
       const raw = input.evidence !== undefined ? input.evidence : entry.evidence;
       const graded = gradeNonCodeEvidence(raw);
+      // Grade is authoritative. input.verifiedItemCount is ignored for every
+      // actor — workers via RPC/MCP must never raise the grade, and the
+      // in-process settle (taskGate) already grades the same evidence, so the
+      // ledger's count stays the single source of truth.
       evidencePatch = {
         ...(graded.evidence ? { evidence: graded.evidence } : entry.evidence ? { evidence: entry.evidence } : {}),
-        verifiedItemCount: typeof input.verifiedItemCount === 'number' && Number.isInteger(input.verifiedItemCount) && input.verifiedItemCount >= 0
-          ? input.verifiedItemCount
-          : graded.verifiedItemCount,
+        verifiedItemCount: graded.verifiedItemCount,
       };
     }
 

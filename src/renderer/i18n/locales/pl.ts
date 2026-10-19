@@ -4759,7 +4759,7 @@ export const pl = {
   'botsPage.work.review': "Czeka na przegląd",
   'botsPage.work.needsYou': "Czeka na ciebie",
   'botsPage.task.notVerified': "Niezweryfikowane",
-  'botsPage.task.evidencePartial': "{verified}/{total} zweryfikowane",
+  'botsPage.task.evidencePartial': "Dołączono dowody {verified}/{total}",
   'botsPage.work.steps': "Kroki: {count} · ostatni {time}",
   'botsPage.work.stepsOne': "1 krok · ostatni {time}",
   'botsPage.work.show': "Pokaż kroki",

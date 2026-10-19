@@ -3965,7 +3965,7 @@ export const zh = {
   'botsPage.work.review': "等待审查",
   'botsPage.work.needsYou': "等你回复",
   'botsPage.task.notVerified': "未验证",
-  'botsPage.task.evidencePartial': "已验证 {verified}/{total}",
+  'botsPage.task.evidencePartial': "已附证据 {verified}/{total}",
   'botsPage.work.steps': "{count} 个步骤 · 最后 {time}",
   'botsPage.work.stepsOne': "1 个步骤 · 最后 {time}",
   'botsPage.work.show': "展开步骤",

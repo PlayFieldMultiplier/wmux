@@ -4300,7 +4300,7 @@ export const ko = {
   'botsPage.work.review': "검토 대기",
   'botsPage.work.needsYou': "응답 필요",
   'botsPage.task.notVerified': "검증되지 않음",
-  'botsPage.task.evidencePartial': "{verified}/{total} 검증됨",
+  'botsPage.task.evidencePartial': "증거 첨부됨 {verified}/{total}",
   'botsPage.work.steps': "{count}단계 · 마지막 {time}",
   'botsPage.work.stepsOne': "1단계 · 마지막 {time}",
   'botsPage.work.show': "펼치기",

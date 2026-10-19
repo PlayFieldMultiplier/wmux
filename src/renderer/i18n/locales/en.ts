@@ -4798,7 +4798,7 @@ export const en = {
   'botsPage.work.review': "Waiting for review",
   'botsPage.work.needsYou': "Waiting on you",
   'botsPage.task.notVerified': "Not verified",
-  'botsPage.task.evidencePartial': "{verified}/{total} verified",
+  'botsPage.task.evidencePartial': "Evidence attached {verified}/{total}",
   'botsPage.work.steps': "{count} steps · last {time}",
   'botsPage.work.stepsOne': "1 step · last {time}",
   'botsPage.work.show': "Show steps",

@@ -624,3 +624,65 @@ describe('TaskLedger — dispatch', () => {
     expect(open().get('wtask-h')?.dispatch?.handoffId).toBe('h-1');
   });
 });
+
+describe('TaskLedger — non-code verifiedItemCount grade', () => {
+  const researchDispatch = {
+    origin: { kind: 'bot' as const, botId: 'bot-00000001' },
+    preset: 'research' as const,
+    criteria: ['Cite sources'],
+  };
+  const oneVerified = {
+    summary: 'Findings',
+    items: [{ kind: 'inspection' as const, status: 'verified' as const, summary: 'Source A', location: 'https://a.example' }],
+  };
+
+  async function seedResearchReported(ledger: TaskLedger): Promise<{ id: string; rev: number }> {
+    const id = 'wtask-research';
+    await ledger.register({
+      id,
+      taskWorkspaceId: 'ws-task',
+      ownerWorkspaceId: 'ws-owner',
+      title: 'look into X',
+      dispatch: researchDispatch,
+    });
+    const reported = await ledger.update({
+      id,
+      status: 'review_requested',
+      actor: WORKER,
+      expectedRev: 1,
+      summary: 'done',
+      evidence: oneVerified,
+    });
+    if (!reported.ok) throw new Error(reported.message);
+    return { id, rev: reported.entry.rev };
+  }
+
+  it('grades evidence on completed; a caller-supplied verifiedItemCount is ignored', async () => {
+    const a = open();
+    const { id, rev } = await seedResearchReported(a);
+    // Brain settle tries to claim 99 verified items — ledger grades the evidence (1).
+    const done = await a.update({
+      id,
+      status: 'completed',
+      actor: BRAIN,
+      expectedRev: rev,
+      evidence: oneVerified,
+      verifiedItemCount: 99,
+    });
+    expect(done).toMatchObject({ ok: true, entry: { status: 'completed', verifiedItemCount: 1 } });
+  });
+
+  it('rejects a worker that tries to complete with a supplied verifiedItemCount', async () => {
+    const a = open();
+    const { id, rev } = await seedResearchReported(a);
+    const refused = await a.update({
+      id,
+      status: 'completed',
+      actor: WORKER,
+      expectedRev: rev,
+      verifiedItemCount: 99,
+    });
+    expect(refused).toMatchObject({ ok: false, error: 'not_authorized' });
+    expect(a.get(id)?.verifiedItemCount).toBe(1); // still the report-time grade
+  });
+});
