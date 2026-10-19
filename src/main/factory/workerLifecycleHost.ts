@@ -257,7 +257,12 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         listSessions: async () => {
           const targets = (await listSessions()).filter((x) => ptyIds.includes(x.id));
           if (!stillDue()) throw new Error(`the close of task ${taskId}'s panes is no longer due`);
-          const busy = targets.filter((x) => x.agentProcessAlive === true || x.commandRunning === true);
+          // A dead or suspended session runs nothing, whatever its last
+          // prompt state said.
+          const busy = targets.filter((x) => {
+            const state = (x as { state?: unknown }).state;
+            return state !== 'dead' && state !== 'suspended' && (x.agentProcessAlive === true || x.commandRunning === true);
+          });
           if (busy.length > 0) throw new Error(`${busy.map((x) => x.id).join(', ')} of task ${taskId} run(s) again`);
           return targets;
         },
