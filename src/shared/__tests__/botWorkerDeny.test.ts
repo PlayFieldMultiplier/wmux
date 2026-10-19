@@ -40,9 +40,9 @@ describe('bot worker deny rules', () => {
   });
 
   it('the rule set is pinned: any change to a rule is a deliberate change to this test', () => {
-    expect(BOT_WORKER_DENY.length).toBe(947);
+    expect(BOT_WORKER_DENY.length).toBe(1037);
     expect(createHash('sha256').update(JSON.stringify(BOT_WORKER_DENY)).digest('hex'))
-      .toBe('794093b6d27ea2378e4a1fca333213624099d2e18a7a9fae866b2cdfdd222f09');
+      .toBe('f8aa4e1b4522bdf733293cdd76eef96d779b7a56700684010d0907f9a1a4ee76');
   });
 
   it('no rule holds a `:*` that does not end it (Claude Code reads such a rule with a notice)', () => {
@@ -207,6 +207,11 @@ describe('bot worker deny rules', () => {
     'glab pipeline run',
     'glab ci -R g/p run',
     'glab -R g/p pipe create',
+    'glab ci trigger build',
+    'glab ci run-trig -t token',
+    'glab pipeline retry 12',
+    'glab ci cancel pipeline 34',
+    'glab ci -R g/p delete 34',
     'glab variable import --input-file vars.json',
     'glab var im --input-file vars.json',
   ])('refuses %s', (cmd) => {
@@ -221,6 +226,8 @@ describe('bot worker deny rules', () => {
     'glab mr create --draft --source-branch wtask/a --title "Repro" --description "Steps and the test" --yes',
     'glab ci list',
     'glab pipeline status',
+    'glab ci view',
+    'glab ci trace 12',
     'glab variable export',
     'glab repo members list',
     'glab repo archive g/p',

@@ -167,8 +167,9 @@ export const BOT_WORKER_PUBLIC_DENY: readonly string[] = [
   ...['create', 'fork', 'update', 'delete', 'transfer', 'mirror', 'publish'].flatMap((v) => glabSubcommandDeny('repo', v)),
   ...['add', 'remove'].flatMap((v) => glabSubcommandDeny('repo members', v)),
   ...['set', 'new', 'create', 'update', 'delete', 'remove', 'import', 'im'].flatMap((v) => glabSubcommandDeny('variable', v)),
-  // A new pipeline runs under the owner's GitLab identity.
-  ...['run', 'create'].flatMap((v) => glabSubcommandDeny('ci', v)),
+  // Starting a pipeline or job runs under the owner's GitLab identity;
+  // cancelling or deleting one changes the owner's pipelines.
+  ...['run', 'create', 'trigger', 'run-trig', 'retry', 'cancel', 'delete'].flatMap((v) => glabSubcommandDeny('ci', v)),
   // Also bundled after api's one other switch, `-i` (`-iX PUT`, `-if`).
   ...['POST', 'PATCH', 'PUT', 'DELETE'].flatMap((m) => [m, m.toLowerCase()].flatMap((x) => [`*-X*${x}*`, `*-iX*${x}*`, `*--method*${x}*`].flatMap(glabApiDeny))),
   ...['* -f*', '* -F*', '* -if*', '* -iF*', '*--field*', '*--raw-field*', '*--form*', '*--input*'].flatMap(glabApiDeny),
