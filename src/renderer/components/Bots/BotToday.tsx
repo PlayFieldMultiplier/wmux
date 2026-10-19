@@ -13,6 +13,7 @@ import { botActionsFor } from '../Room/BotChips';
 import { formatNoticeTime } from '../Room/roomFormat';
 import { botBudgetView, type BotBlocker, type BotTodayLine } from './botBudgetView';
 import { bridgeEnginePort } from './botsEngine';
+import { showWorkspaces } from '../../utils/showWorkspaces';
 import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -90,6 +91,7 @@ function openClaudeInstallPage(): void {
 
 /** Localized engine-error card with Fix + details. Pure over the row's lastError. */
 function EngineErrorCard({
+  botId,
   code,
   message,
   t,
@@ -97,6 +99,7 @@ function EngineErrorCard({
   canResume,
   busy,
 }: {
+  botId: string;
   code: EngineErrorCode;
   message: string;
   t: T;
@@ -116,8 +119,12 @@ function EngineErrorCard({
         return;
       }
       if (code === 'not_logged_in' && engine.login) {
-        await engine.login();
-        useStore.getState().pushToast({ message: t('botsPage.onboarding.loginOpened'), level: 'info' });
+        // The sign-in of the account this bot runs on, in a terminal tab the
+        // page steps aside to (as the first screen's Log in does).
+        await engine.login(botId);
+        const st = useStore.getState();
+        st.pushToast({ message: t('botsPage.onboarding.loginOpened'), level: 'info' });
+        showWorkspaces(st);
         return;
       }
       // mcp_missing / unusable / other / acp: resume after the owner fixed it,
@@ -200,6 +207,7 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
       <div className="min-w-0 flex-1">
         {view.blocker && engineCode && err && (
           <EngineErrorCard
+            botId={row.bot.id}
             code={engineCode}
             message={err.message}
             t={t}

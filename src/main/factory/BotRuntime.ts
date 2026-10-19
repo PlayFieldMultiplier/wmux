@@ -457,14 +457,23 @@ export class BotRuntime {
     };
   }
 
+  /** The Claude account a bot's turns run on: its live or saved
+   *  conversation's (null: the default sign-in), or undefined when neither
+   *  records one (the workspace binding then applies). */
+  claudeAccountOf(botId: string): string | null | undefined {
+    const profile = this.deps.store.get(botId);
+    if (!profile) return undefined;
+    const live = this.live.get(profile.id);
+    return live?.adapter.conversationAccountId !== undefined
+      ? live.adapter.conversationAccountId
+      : this.resumableSession(profile)?.accountId;
+  }
+
   /** The status's `quota`, for a bot whose brain runs on Claude Code: the
    *  account its live or saved conversation runs on, else the binding. */
   private quotaView(profile: BotProfile): { quota?: BotQuota } {
     if (!this.deps.claudeQuota || profile.engine.kind !== 'claude-sdk' || this.deps.settings().acpStub === true) return {};
-    const live = this.live.get(profile.id);
-    const accountId = live?.adapter.conversationAccountId !== undefined
-      ? live.adapter.conversationAccountId
-      : this.resumableSession(profile)?.accountId;
+    const accountId = this.claudeAccountOf(profile.id);
     try {
       const quota = this.deps.claudeQuota(profile.workspaceId, accountId);
       return quota ? { quota } : {};

@@ -10,6 +10,13 @@ describe('classifyEngineError', () => {
     expect(classifyEngineError('Claude Code is not signed in.')).toBe('not_logged_in');
   });
 
+  it('maps the setup failures the SDK adapter reports during a turn', () => {
+    expect(classifyEngineError('Not logged in · Please run /login')).toBe('not_logged_in');
+    expect(classifyEngineError('Failed to spawn Claude Code process: spawn EACCES')).toBe('unusable');
+    expect(classifyEngineError('Claude Code native binary at /opt/claude exists but failed to launch. This usually means the binary does not match this system')).toBe('unusable');
+    expect(classifyEngineError('Claude Code executable not found at /usr/local/bin/claude. Is options.pathToClaudeCodeExecutable set?')).toBe('not_installed');
+  });
+
   it('unknown text is other', () => {
     expect(classifyEngineError('something else went wrong')).toBe('other');
     expect(classifyEngineError('')).toBe('other');

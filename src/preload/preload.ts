@@ -1272,7 +1272,7 @@ const electronAPI = {
     // Start the Claude sign-in (`claude auth login` in a terminal tab of the
     // active workspace); rejects when no tab could be opened. Poll
     // factoryEngineReadiness to see it land.
-    factoryEngineLogin: () => ipcRenderer.invoke(IPC.FACTORY_ENGINE_LOGIN) as Promise<void>,
+    factoryEngineLogin: (req?: { botId: string }) => ipcRenderer.invoke(IPC.FACTORY_ENGINE_LOGIN, req) as Promise<void>,
     // The engines a bot's workers may run on, and which are installed here.
     workerAgents: () =>
       ipcRenderer.invoke(IPC.FACTORY_WORKER_AGENTS) as Promise<import('../shared/botWorkerAgent').BotWorkerAgentOption[]>,

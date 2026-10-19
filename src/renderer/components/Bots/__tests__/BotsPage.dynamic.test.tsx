@@ -702,6 +702,25 @@ describe('Bots page', () => {
     expect(q('[data-testid="bots-resume-bot"]')).toBeNull();
   });
 
+  it('a bot parked signed out: Log in opens the sign-in of that bot\'s account and steps aside to its terminal', async () => {
+    const factoryEngineLogin = vi.fn(async () => undefined);
+    vi.stubGlobal('electronAPI', { web: { status: vi.fn(async () => ({ running: false })) }, factory: { factoryEngineLogin } });
+    bots[2] = {
+      ...bots[2],
+      bot: { ...bots[2].bot, parked: { reason: 'error', at: 1 } },
+      status: { ...bots[2].status!, presence: 'parked', lastError: { message: 'Not logged in · Please run /login', at: 1, code: 'not_logged_in' } },
+    };
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => useStore.getState().setAppRoute('bots'));
+    act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
+    act(() => q('[data-bots-pill]')!.click());
+    expect(q('[data-bots-engine-error="not_logged_in"]')).not.toBeNull();
+    await act(async () => { q<HTMLButtonElement>('[data-bots-engine-error-fix]')!.click(); });
+    expect(factoryEngineLogin).toHaveBeenCalledWith({ botId: VERIFIER });
+    expect(useStore.getState().appRoute).toBe('workspaces');
+  });
+
   it('Delete bot asks in place, saying what happens, then removes it with its colour slot', async () => {
     const remove = vi.fn(async () => ({ ok: true }));
     setFactoryBotPort({ ...port, remove });
