@@ -13,7 +13,7 @@ function resolver(over: Partial<GuestBotResolver> = {}): GuestBotResolver & { re
   return {
     enabled: () => true,
     resolve: vi.fn(async (id: string, secret: string) => (id === GUEST_ID && secret === SECRET
-      ? { ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 0 }
+      ? { ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 0, joinSeq: 0 }
       : { ok: false as const, reason: 'unknown' as const })),
     touch: vi.fn(),
     ...over,
@@ -150,7 +150,7 @@ describe('guest routes: reading', () => {
         { id: 'g', seq: 8, threadId: p.threadId, kind: 'guest', at: 106, actor: { kind: 'system' }, title: 'External guest: Grok', body: 'thanks' },
       ],
     }));
-    const guests = resolver({ resolve: vi.fn(async () => ({ ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 100 })) });
+    const guests = resolver({ resolve: vi.fn(async () => ({ ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 100, joinSeq: 0 })) });
     const r = await guestRouteResponse(ctx({ pathname: GUEST_ROUTES.messages, desktop: d, guests }));
     const cards = r.body.cards as Array<{ id: string; body?: string; from: unknown }>;
     expect(cards.map((c) => c.id)).toEqual(['own', 'reply', 'g']);
@@ -158,13 +158,17 @@ describe('guest routes: reading', () => {
     expect(cards[2].from).toEqual({ kind: 'guest' });
     expect(r.body.nextSinceSeq).toBe(8);
     expect(await guestRouteResponse(ctx({ guests }))).toMatchObject({ body: { readsFrom: new Date(100).toISOString() } });
+    // By seq too: a card of the same millisecond, written before the guest was added, stays out.
+    const joined = resolver({ resolve: vi.fn(async () => ({ ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 100, joinSeq: 2 })) });
+    const after = await guestRouteResponse(ctx({ pathname: GUEST_ROUTES.messages, desktop: d, guests: joined }));
+    expect((after.body.cards as Array<{ id: string }>).map((c) => c.id)).toEqual(['reply', 'g']);
   });
 
   it('a guest revoked while its request waits gets nothing: no cards back, no post sent', async () => {
     let live = true;
     const guests = resolver({
       resolve: vi.fn(async () => (live
-        ? { ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 0 }
+        ? { ok: true as const, guestId: GUEST_ID, name: 'Grok', scope: SCOPE, createdAt: 0, joinSeq: 0 }
         : { ok: false as const, reason: 'revoked' as const })),
     });
     const d = desktop((_c, p) => { live = false; return cardsReply(p); });

@@ -43,7 +43,9 @@ import {
 export const GUEST_BOTS_FILE = 'guest-bots.json';
 
 export type GuestAuthResult =
-  | { ok: true; guestId: string; name: string; scope: GuestScope; /** ms; the guest reads nothing older. */ createdAt: number }
+  | { ok: true; guestId: string; name: string; scope: GuestScope; /** ms; the guest reads nothing older. */ createdAt: number;
+      /** The conversation's last card seq when the guest was added (0 = not known): it reads only cards after it. */
+      joinSeq: number }
   | { ok: false; reason: 'unknown' | 'revoked' };
 
 interface StoredGuest {
@@ -53,6 +55,8 @@ interface StoredGuest {
   workspaceId: string;
   threadId: string;
   createdAt: string;
+  /** See GuestAuthResult.joinSeq; absent on a record that main gave none. */
+  joinSeq?: number;
   lastSeenAt?: string;
   revokedAt?: string;
   secretHash: string;
@@ -103,6 +107,8 @@ export class GuestBotStore {
   private readonly lastSeenPersistedAt = new Map<string, number>();
   private readonly failures = new Map<string, { windowStart: number; count: number }>();
   private readonly kdfChains = new Map<string, Promise<void>>();
+  /** Revoked in memory, not yet on disk: a later revoke writes it again. */
+  private readonly unsaved = new Set<string>();
   private writable = true;
   private on = false;
   private derivations = 0;
@@ -137,18 +143,23 @@ export class GuestBotStore {
 
   /** The owner's view, newest first. Never carries the hash, salt or KDF. */
   list(): GuestBotView[] {
-    return [...this.guests.values()].map(project).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // A revoke that is not on disk yet shows as not done, so the owner can
+    // try it again (it is refused in memory meanwhile).
+    return [...this.guests.values()]
+      .map((r) => (this.unsaved.has(r.guestId) ? project({ ...r, revokedAt: undefined }) : project(r)))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   /**
    * Add a guest for one conversation and hand out its token, once. Persists
    * BEFORE returning; rolls back and throws when the file cannot be written.
    */
-  async create(params: { name: unknown; scope: unknown }): Promise<{ guest: GuestBotView; token: string }> {
+  async create(params: { name: unknown; scope: unknown; joinSeq?: unknown }): Promise<{ guest: GuestBotView; token: string }> {
     if (!this.writable) throw new GuestStoreError('unavailable', 'guest store is unavailable');
     const name = sanitizeGuestName(params.name);
     const scope = parseGuestScope(params.scope);
     if (!name || !scope) throw new GuestStoreError('invalid', 'a guest needs a name and one conversation');
+    const joinSeq = isSeq(params.joinSeq) ? params.joinSeq : undefined;
     this.assertRoom();
     const secret = crypto.randomBytes(DEVICE_SECRET_BYTES).toString('base64url');
     const salt = crypto.randomBytes(DEVICE_SALT_BYTES);
@@ -167,6 +178,7 @@ export class GuestBotStore {
       workspaceId: scope.workspaceId,
       threadId: scope.threadId,
       createdAt: new Date(at).toISOString(),
+      ...(joinSeq !== undefined ? { joinSeq } : {}),
       secretHash,
       salt: salt.toString('hex'),
       kdf,
@@ -209,6 +221,7 @@ export class GuestBotStore {
       scope: { workspaceId: rec.workspaceId, threadId: rec.threadId as GuestScope['threadId'] },
       // A record with no readable date reads nothing from before now.
       createdAt: Number.isFinite(createdAt) ? createdAt : this.now(),
+      joinSeq: rec.joinSeq ?? 0,
     };
   }
 
@@ -229,13 +242,15 @@ export class GuestBotStore {
 
   /**
    * Revoke a guest: refused from this moment on. False when it is unknown or
-   * already revoked. A failed write keeps the revocation in memory and throws.
+   * already revoked. A failed write keeps the revocation in memory and throws;
+   * revoking it again writes it again.
    */
   revoke(guestId: string): boolean {
     const rec = this.guests.get(guestId);
-    if (!rec || rec.revokedAt !== undefined) return false;
-    rec.revokedAt = new Date(this.now()).toISOString();
+    if (!rec || (rec.revokedAt !== undefined && !this.unsaved.has(guestId))) return false;
+    if (rec.revokedAt === undefined) rec.revokedAt = new Date(this.now()).toISOString();
     this.verified.delete(guestId);
+    this.unsaved.add(guestId);
     this.pruneRevoked();
     if (!this.writable) throw storeUnavailable(GUEST_BOTS_FILE);
     try {
@@ -261,7 +276,7 @@ export class GuestBotStore {
 
   private pruneRevoked(): void {
     const revoked = [...this.guests.values()]
-      .filter((g) => g.revokedAt !== undefined)
+      .filter((g) => g.revokedAt !== undefined && !this.unsaved.has(g.guestId))
       .sort((a, b) => (b.revokedAt ?? '').localeCompare(a.revokedAt ?? ''));
     for (const old of revoked.slice(REVOKED_GUESTS_KEPT)) {
       this.guests.delete(old.guestId);
@@ -334,6 +349,8 @@ export class GuestBotStore {
   private persist(): void {
     const file: GuestFileV1 = { v: GUEST_RECORD_V, enabled: this.on, guests: [...this.guests.values()] };
     this.write(this.filePath, file);
+    // Every record was written, unsaved revokes included.
+    this.unsaved.clear();
     this.scheduleHarden(this.filePath);
   }
 
@@ -380,6 +397,10 @@ function sha256(input: Buffer): Buffer {
   return crypto.createHash('sha256').update(input).digest();
 }
 
+function isSeq(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
 /** Whole-file validation (fail-closed): any record we cannot verify against rejects the file. */
 function coerceFile(raw: unknown): { enabled: boolean; guests: StoredGuest[] } | null {
   if (!isPlainObject(raw) || raw['v'] !== 1 || typeof raw['enabled'] !== 'boolean' || !Array.isArray(raw['guests'])) return null;
@@ -387,11 +408,12 @@ function coerceFile(raw: unknown): { enabled: boolean; guests: StoredGuest[] } |
   const seen = new Set<string>();
   for (const r of raw['guests']) {
     if (!isPlainObject(r) || r['v'] !== 1) return null;
-    const { guestId, name, createdAt, lastSeenAt, revokedAt, secretHash, salt } = r;
+    const { guestId, name, createdAt, joinSeq, lastSeenAt, revokedAt, secretHash, salt } = r;
     const kdf = coerceKdf(r['kdf']);
     const scope = parseGuestScope({ workspaceId: r['workspaceId'], threadId: r['threadId'] });
     const cleanName = sanitizeGuestName(name);
     if (!isGuestId(guestId) || seen.has(guestId) || !cleanName || !scope || !isIsoString(createdAt)) return null;
+    if (joinSeq !== undefined && !isSeq(joinSeq)) return null;
     if (lastSeenAt !== undefined && !isIsoString(lastSeenAt)) return null;
     if (revokedAt !== undefined && !isIsoString(revokedAt)) return null;
     if (!isHex(secretHash) || !isHex(salt) || !kdf || secretHash.length !== kdf.keylen * 2) return null;
@@ -403,6 +425,7 @@ function coerceFile(raw: unknown): { enabled: boolean; guests: StoredGuest[] } |
       workspaceId: scope.workspaceId,
       threadId: scope.threadId,
       createdAt,
+      ...(joinSeq !== undefined ? { joinSeq } : {}),
       ...(lastSeenAt !== undefined ? { lastSeenAt } : {}),
       ...(revokedAt !== undefined ? { revokedAt } : {}),
       secretHash,

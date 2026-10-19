@@ -55,11 +55,16 @@ describe('GuestBotStore', () => {
     const s = make();
     const { token } = await s.create({ name: 'Grok', scope: GROUP });
     const { guestId, secret } = secretOf(token);
-    expect(await s.resolve(guestId, secret)).toEqual({ ok: true, guestId, name: 'Grok', scope: GROUP, createdAt: clock });
+    expect(await s.resolve(guestId, secret)).toEqual({ ok: true, guestId, name: 'Grok', scope: GROUP, createdAt: clock, joinSeq: 0 });
     expect(s.stats().derivations).toBe(0);
     const again = make();
     expect(await again.resolve(guestId, secret)).toMatchObject({ ok: true, scope: GROUP });
     expect(again.stats().derivations).toBe(1);
+    // The conversation's seq when the guest was added is kept; a malformed one is none.
+    const seq = secretOf((await s.create({ name: 'S', scope: DM, joinSeq: 41 })).token);
+    expect(await make().resolve(seq.guestId, seq.secret)).toMatchObject({ ok: true, joinSeq: 41 });
+    const bad = secretOf((await s.create({ name: 'B', scope: DM, joinSeq: -1 })).token);
+    expect(await s.resolve(bad.guestId, bad.secret)).toMatchObject({ ok: true, joinSeq: 0 });
   });
 
   it('a wrong secret is unknown, and past the budget no derivation runs', async () => {
@@ -101,6 +106,13 @@ describe('GuestBotStore', () => {
     fail = true;
     expect(() => s.revoke(b.guestId)).toThrow('disk full');
     expect(await s.resolve(b.guestId, b.secret)).toEqual({ ok: false, reason: 'revoked' });
+    // Not on disk yet: the owner's list shows it not done, and revoking again writes it.
+    expect(s.list().find((g) => g.guestId === b.guestId)?.revokedAt).toBeUndefined();
+    fail = false;
+    expect(s.revoke(b.guestId)).toBe(true);
+    expect(s.list().find((g) => g.guestId === b.guestId)?.revokedAt).toBeDefined();
+    expect(await make().resolve(b.guestId, b.secret)).toEqual({ ok: false, reason: 'revoked' });
+    expect(s.revoke(b.guestId)).toBe(false);
   });
 
   it('refuses a bad name or a scope that is not a conversation', async () => {

@@ -3851,7 +3851,7 @@ function registerRpcHandlers(
   pipeServer.onRpc(GUEST_BOT_RPC.create, async (params) => {
     await afterRestore();
     try {
-      const { guest, token } = await getGuestBotStore().create({ name: params['name'], scope: params['scope'] });
+      const { guest, token } = await getGuestBotStore().create({ name: params['name'], scope: params['scope'], joinSeq: params['joinSeq'] });
       log('info', `[web] guest bot ${guest.guestId} added for ${guest.scope.threadId}`);
       return { ok: true, guest, token };
     } catch (err) {

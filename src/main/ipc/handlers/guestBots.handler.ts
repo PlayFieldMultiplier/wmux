@@ -8,8 +8,9 @@ import type { DaemonClient } from '../../DaemonClient';
 import { isMainWindowSender } from '../mainWindowSender';
 import {
   GUEST_BOT_IPC, GUEST_BOT_RPC, isGuestId, parseGuestScope, sanitizeGuestName,
-  type GuestBotCreateResult, type GuestBotErrorCode, type GuestBotListResult, type GuestBotSimpleResult, type GuestBotView,
+  type GuestBotCreateResult, type GuestBotErrorCode, type GuestBotListResult, type GuestBotSimpleResult, type GuestBotView, type GuestScope,
 } from '../../../shared/guestBots';
+import { getRoomWriter } from '../../factory/roomWriter';
 
 const CODES: readonly GuestBotErrorCode[] = ['unavailable', 'invalid', 'too-many', 'not-found', 'persist-failed'];
 
@@ -49,14 +50,22 @@ export async function listGuestBots(dc: Pick<DaemonClient, 'rpc' | 'isConnected'
   }
 }
 
-export async function createGuestBot(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, req: unknown): Promise<GuestBotCreateResult> {
+/** `joinSeq`: the conversation's last card seq now (null when the room
+ *  cannot say): the guest reads only cards after it. */
+export async function createGuestBot(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, req: unknown, joinSeq: (scope: GuestScope) => number | null = () => null): Promise<GuestBotCreateResult> {
   const r = req && typeof req === 'object' ? (req as Record<string, unknown>) : {};
   const name = sanitizeGuestName(r.name);
   const scope = parseGuestScope(r.scope);
   if (!name || !scope) return { ok: false, code: 'invalid' };
   if (!dc || !dc.isConnected) return { ok: false, code: 'unavailable' };
   try {
-    const res = (await dc.rpc(GUEST_BOT_RPC.create as never, { name, scope })) as Record<string, unknown> | null;
+    let seq: number | null = null;
+    try {
+      seq = joinSeq(scope);
+    } catch {
+      seq = null;
+    }
+    const res = (await dc.rpc(GUEST_BOT_RPC.create as never, { name, scope, ...(seq !== null ? { joinSeq: seq } : {}) })) as Record<string, unknown> | null;
     const guest = view(res?.guest);
     if (!res || res.ok !== true || !guest || typeof res.token !== 'string') return { ok: false, code: code(res) };
     return { ok: true, guest, token: res.token };
@@ -83,7 +92,7 @@ export function registerGuestBotHandlers(getDaemonClient: () => DaemonClient | n
   const guard = <R>(fn: (req: unknown) => Promise<R>) =>
     async (e: Electron.IpcMainInvokeEvent, req: unknown): Promise<R | typeof denied> => (isMainWindowSender(e, getWindow()) ? fn(req) : denied);
   ipcMain.handle(GUEST_BOT_IPC.list, wrapHandler(GUEST_BOT_IPC.list, guard(() => listGuestBots(getDaemonClient()))));
-  ipcMain.handle(GUEST_BOT_IPC.create, wrapHandler(GUEST_BOT_IPC.create, guard((req) => createGuestBot(getDaemonClient(), req))));
+  ipcMain.handle(GUEST_BOT_IPC.create, wrapHandler(GUEST_BOT_IPC.create, guard((req) => createGuestBot(getDaemonClient(), req, (scope) => getRoomWriter()?.summary(scope.workspaceId, scope.threadId).lastSeq ?? null))));
   ipcMain.handle(GUEST_BOT_IPC.revoke, wrapHandler(GUEST_BOT_IPC.revoke, guard((req) => {
     const guestId = req && typeof req === 'object' ? (req as { guestId?: unknown }).guestId : undefined;
     return isGuestId(guestId) ? simple(getDaemonClient(), GUEST_BOT_RPC.revoke, { guestId }) : Promise.resolve({ ok: false as const, code: 'invalid' as const });

@@ -59,7 +59,7 @@ describe('guest bot gate', () => {
     guests = {
       enabled: vi.fn(() => true),
       resolve: vi.fn<GuestBotResolver['resolve']>(async (id, secret) =>
-        id === GUEST_ID && secret === SECRET ? { ok: true, guestId: id, name: 'Grok', scope: SCOPE, createdAt: 0 } : { ok: false, reason: 'unknown' }),
+        id === GUEST_ID && secret === SECRET ? { ok: true, guestId: id, name: 'Grok', scope: SCOPE, createdAt: 0, joinSeq: 0 } : { ok: false, reason: 'unknown' }),
       touch: vi.fn(),
     };
     devices = {
