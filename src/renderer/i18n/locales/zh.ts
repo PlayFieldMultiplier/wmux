@@ -1,4 +1,10 @@
 export const zh = {
+  'ipc.error.daemonDisconnected': "终端服务无响应，正在重试…",
+  'ipc.error.validation': "请求无效。",
+  'ipc.error.notFound': "找不到该项目。",
+  'ipc.error.permissionDenied': "权限被拒绝。",
+  'ipc.error.resourceExhausted': "已达到终端会话数量上限。请关闭一些窗格或重启 wmux，然后重试。",
+  'ipc.error.unknown': "发生未知错误。",
   // App lifecycle
   'app.restoringPanes': '正在恢复面板…',
   'web.surfacePlaceholder': '浏览器中暂不显示',

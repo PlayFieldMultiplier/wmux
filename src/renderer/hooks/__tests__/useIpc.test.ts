@@ -5,8 +5,9 @@
  * hook wires up) so the tests can run in vitest's default `node`
  * environment without needing a React renderer.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createInvoke, type IpcErrorCode } from '../useIpc';
+import { getLocale, setLocale, type Locale } from '../../i18n';
 
 type ToastSink = (message: string, level: 'info' | 'warn' | 'error') => void;
 
@@ -22,9 +23,14 @@ function makeCodedError(code: string | undefined, message = 'boom'): Error {
 describe('useIpc / createInvoke', () => {
   let toastSpy: ReturnType<typeof vi.fn> & ToastSink;
 
+  let originalLocale: Locale;
   beforeEach(() => {
+    originalLocale = getLocale();
+    setLocale('en');
     toastSpy = vi.fn() as ReturnType<typeof vi.fn> & ToastSink;
   });
+
+  afterEach(() => setLocale(originalLocale));
 
   describe('success path', () => {
     it('returns { ok: true, data } when the call resolves', async () => {
@@ -44,12 +50,12 @@ describe('useIpc / createInvoke', () => {
 
   describe('error classification', () => {
     const cases: Array<{ code: IpcErrorCode; expected: string }> = [
-      { code: 'DAEMON_DISCONNECTED', expected: 'daemon이 응답하지 않습니다. 재시도 중…' },
-      { code: 'VALIDATION_ERROR',    expected: '요청이 유효하지 않습니다.' },
-      { code: 'NOT_FOUND',           expected: '항목을 찾을 수 없습니다.' },
-      { code: 'PERMISSION_DENIED',   expected: '권한이 거부되었습니다.' },
-      { code: 'RESOURCE_EXHAUSTED',  expected: '터미널 세션 한도에 도달했습니다. 일부 pane을 닫거나 wmux를 재시작한 뒤 다시 시도해주세요.' },
-      { code: 'UNKNOWN',             expected: '알 수 없는 오류가 발생했습니다.' },
+      { code: 'DAEMON_DISCONNECTED', expected: 'The terminal service is not responding. Retrying…' },
+      { code: 'VALIDATION_ERROR',    expected: 'The request is invalid.' },
+      { code: 'NOT_FOUND',           expected: 'The item could not be found.' },
+      { code: 'PERMISSION_DENIED',   expected: 'Permission was denied.' },
+      { code: 'RESOURCE_EXHAUSTED',  expected: 'The terminal session limit has been reached. Close some panes or restart wmux, then try again.' },
+      { code: 'UNKNOWN',             expected: 'An unknown error occurred.' },
     ];
 
     for (const { code, expected } of cases) {
@@ -98,6 +104,21 @@ describe('useIpc / createInvoke', () => {
         expect(result.error.original).toBe('string-error');
       }
     });
+  });
+
+  it('uses the current locale when a previously created invoke fails', async () => {
+    const invoke = createInvoke(undefined, toastSpy);
+    for (const [locale, message] of [
+      ['en', 'An unknown error occurred.'],
+      ['ko', '알 수 없는 오류가 발생했습니다.'],
+      ['zh', '发生未知错误。'],
+      ['pl', 'Wystąpił nieznany błąd.'],
+    ] as const) {
+      setLocale(locale);
+      const result = await invoke(async () => { throw new Error('failure'); });
+      expect(result).toMatchObject({ ok: false, error: { code: 'UNKNOWN', message } });
+      expect(toastSpy).toHaveBeenLastCalledWith(message, 'error');
+    }
   });
 
   describe('options', () => {
@@ -222,7 +243,7 @@ describe('useIpc / createInvoke', () => {
       if (!result.ok) {
         expect(result.error.code).toBe('RESOURCE_EXHAUSTED');
         expect(result.error.message).toBe(
-          '터미널 세션 한도에 도달했습니다. 일부 pane을 닫거나 wmux를 재시작한 뒤 다시 시도해주세요.',
+          'The terminal session limit has been reached. Close some panes or restart wmux, then try again.',
         );
       }
     });
