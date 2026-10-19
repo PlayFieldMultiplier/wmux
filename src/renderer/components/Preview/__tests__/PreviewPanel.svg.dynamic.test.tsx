@@ -13,6 +13,7 @@ import PreviewPanel from '../PreviewPanel';
 let container: HTMLDivElement;
 let root: Root;
 let body: string | Uint8Array<ArrayBuffer> = '';
+let opened = 0;
 
 beforeEach(() => {
   container = document.createElement('div');
@@ -40,7 +41,8 @@ afterEach(() => {
 
 async function show(svg: string | Uint8Array<ArrayBuffer>) {
   body = svg;
-  act(() => root.render(createElement(PreviewPanel, { filePath: '/repo/chart.svg', isActive: true, paneId: 'p1' })));
+  // A path of its own each call: the panel opens it afresh.
+  act(() => root.render(createElement(PreviewPanel, { filePath: `/repo/chart-${++opened}.svg`, isActive: true, paneId: 'p1' })));
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
   return {
     source: container.querySelector('[data-preview-svg-source]')?.textContent ?? null,
@@ -73,16 +75,24 @@ describe('SVG in the file preview', () => {
     expect(shown.image?.getAttribute('src')).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
   });
 
-  it('a UTF-16 SVG is checked as the text it is', async () => {
-    let svg = '<svg xmlns="http://www.w3.org/2000/svg"><defs><rect id="l0" width="1" height="1"/>';
+  it('a UTF-16 SVG, with a byte order mark or without, is checked as the text it is', async () => {
+    let svg = '<?xml version="1.0" encoding="UTF-16"?><svg xmlns="http://www.w3.org/2000/svg"><defs><rect id="l0" width="1" height="1"/>';
     for (let l = 1; l <= 6; l++) svg += `<g id="l${l}">${`<use href="#l${l - 1}"/>`.repeat(10)}</g>`;
     svg += '</defs><use href="#l6"/></svg>';
-    const bytes = new Uint8Array(2 + svg.length * 2);
-    bytes.set([0xff, 0xfe]);
-    for (let i = 0; i < svg.length; i++) bytes[2 + i * 2] = svg.charCodeAt(i);
-    const shown = await show(bytes);
-    expect(shown.source).toBe(svg);
-    expect(shown.image).toBeNull();
+    for (const bom of [[0xff, 0xfe], []]) {
+      const bytes = new Uint8Array(bom.length + svg.length * 2);
+      bytes.set(bom);
+      for (let i = 0; i < svg.length; i++) bytes[bom.length + i * 2] = svg.charCodeAt(i);
+      const shown = await show(bytes);
+      expect(shown.source).toBe(svg);
+      expect(shown.image).toBeNull();
+    }
+  });
+
+  it('an SVG in the encoding its declaration names is drawn from that text', async () => {
+    const svg = '<?xml version="1.0" encoding="ISO-8859-1"?><svg xmlns="http://www.w3.org/2000/svg"><text>caf\u00e9</text></svg>';
+    const shown = await show(Uint8Array.from(svg, (c) => c.charCodeAt(0)));
+    expect(shown.image?.getAttribute('src')).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
   });
 
   it('an SVG that draws too much and is too long to show as text says so', async () => {

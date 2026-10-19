@@ -13,11 +13,26 @@ const SOURCE_SHOWN_MAX = 512 * 1024;
  *  the text itself when it shows as source. */
 type Checked = { image: string } | { text: string };
 
-/** The file's text: UTF-16 by its byte order mark, else UTF-8. */
+/** The encoding an XML parser reads the file in: its byte order mark, a
+ *  UTF-16 `<?` with none, or the declaration's `encoding`; else UTF-8. */
+function svgEncoding(b: Uint8Array): string {
+  if (b[0] === 0xff && b[1] === 0xfe) return 'utf-16le';
+  if (b[0] === 0xfe && b[1] === 0xff) return 'utf-16be';
+  if (b[0] === 0x3c && b[1] === 0x00 && b[2] === 0x3f && b[3] === 0x00) return 'utf-16le';
+  if (b[0] === 0x00 && b[1] === 0x3c && b[2] === 0x00 && b[3] === 0x3f) return 'utf-16be';
+  const head = String.fromCharCode(...b.subarray(0, 256));
+  return /^<\?xml[^>]*?\sencoding\s*=\s*["']([A-Za-z][\w.:-]*)["']/.exec(head)?.[1] ?? 'utf-8';
+}
+
+/** The file's text, in the encoding svgEncoding picks (UTF-8 for one
+ *  TextDecoder does not know). */
 function decodeSvg(bytes: ArrayBuffer): string {
-  const head = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
-  const encoding = head[0] === 0xff && head[1] === 0xfe ? 'utf-16le' : head[0] === 0xfe && head[1] === 0xff ? 'utf-16be' : 'utf-8';
-  return new TextDecoder(encoding).decode(bytes);
+  const b = new Uint8Array(bytes);
+  try {
+    return new TextDecoder(svgEncoding(b)).decode(b);
+  } catch {
+    return new TextDecoder('utf-8').decode(b);
+  }
 }
 
 /**
