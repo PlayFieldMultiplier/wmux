@@ -155,13 +155,18 @@ export function setActivePendingRemovals(store: PendingRemovalStore | null): voi
 }
 
 /** The key of a folder as the file system names it: links, junctions and
- *  8.3 short names resolved when it exists. */
+ *  8.3 short names resolved in its nearest existing ancestor (macOS'
+ *  `/var` → `/private/var` too), the rest compared as spelled. */
 function canonicalKey(p: string): string {
-  let real = path.resolve(p);
-  try {
-    real = fs.realpathSync.native(real);
-  } catch {
-    // Not there: compared as spelled.
+  const resolved = path.resolve(p);
+  let real = resolved;
+  for (let dir = resolved; ; dir = path.dirname(dir)) {
+    try {
+      real = path.join(fs.realpathSync.native(dir), path.relative(dir, resolved));
+      break;
+    } catch {
+      if (path.dirname(dir) === dir) break;
+    }
   }
   return pendingRemovalKey(real);
 }
