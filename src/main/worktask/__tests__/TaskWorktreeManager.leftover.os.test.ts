@@ -608,6 +608,12 @@ describe('a removal that could not finish is recorded for a later close', () => 
     expect(pendingRemovalRefusalAt(wmuxDir, path.join(dir, 'src'))).toMatch(/removal did not finish.*close its task again/);
     expect(pendingRemovalRefusalAt(wmuxDir, `${dir}-sibling`)).toBeNull();
     expect(pendingRemovalRefusalAt(wmuxDir, undefined)).toBeNull();
+    // A `..` after a link leaves the link's target, as the spawn's chdir does.
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    const link = path.join(tmp, 'into-src');
+    fs.symlinkSync(path.join(dir, 'src'), link, 'junction');
+    expect(pendingRemovalRefusalAt(wmuxDir, `${link}${path.sep}..`)).toMatch(/removal did not finish/);
+    expect(pendingRemovalRefusalAt(wmuxDir, `${link}${path.sep}..${path.sep}not-yet`)).toMatch(/removal did not finish/);
     await store.delete(dir);
     expect(pendingRemovalRefusalAt(wmuxDir, dir)).toBeNull();
   });

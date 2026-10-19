@@ -156,10 +156,12 @@ export function setActivePendingRemovals(store: PendingRemovalStore | null): voi
 
 /** The key of a folder as the file system names it: links, junctions and
  *  8.3 short names resolved in its nearest existing ancestor (macOS'
- *  `/var` → `/private/var` too), the rest compared as spelled. */
+ *  `/var` → `/private/var` too), the rest compared as spelled. A `..` is
+ *  left to the file system until then: after a link it leaves the link's
+ *  target, not the link (path.resolve would drop both). */
 function canonicalKey(p: string): string {
-  const resolved = path.resolve(p);
-  let real = resolved;
+  const resolved = path.isAbsolute(p) ? p : `${process.cwd()}${path.sep}${p}`;
+  let real = path.resolve(resolved);
   for (let dir = resolved; ; dir = path.dirname(dir)) {
     try {
       real = path.join(fs.realpathSync.native(dir), path.relative(dir, resolved));
