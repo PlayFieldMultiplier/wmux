@@ -1192,37 +1192,7 @@ export async function reclaimWorker(
     const task = lifecycleCardTask(entry.title, entry.id);
     try {
       if (ended === 'reported' && entry.status !== 'review_requested') {
-        // Still working or needing input: the bot that started it is told
-        // too, so it resumes the worker or settles the task.
-        ports.note?.(
-          entry.ownerWorkspaceId,
-          taskThreadOf(entry),
-          `${resumable ? 'Worker paused (resumable)' : 'Worker paused'}: ${task}`,
-          resumable
-            ? `The task is still open and its worker sat idle for hours without reporting: its Claude stopped to free memory and its agent slot. The task stays as it is and its pane stays; the ${keptText}, and Resume continues the same conversation.`
-            : 'The task is still open and its worker sat idle for hours without reporting: its Claude stopped to free memory and its agent slot. The task stays as it is and its pane stays; the worktree is kept, but no conversation was recorded to resume.',
-          { code: resumable ? 'worker.openIdlePausedResumable' : 'worker.openIdlePaused', args: { title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
-          entry.id,
-        );
-        const botId = entry.dispatch?.origin.botId;
-        if (botId) {
-          ports.noticeBot?.({
-            botId,
-            workspaceId: entry.ownerWorkspaceId,
-            key: `worker.paused:${entry.id}:${rec.at}`,
-            topic: 'worker.paused',
-            title: `Your worker for "${task}" was paused (task ${entry.id})`,
-            body: `It sat idle with the task still ${entry.status} and no report, so main stopped its Claude to free its agent slot. The ledger row is unchanged. `
-              + (resumable
-                ? 'To continue, resume it with worker_resume (its message is what it acts on); if its work is done or not needed, settle the task with ledger_update.'
-                : 'No conversation was recorded to resume: settle the task with ledger_update, or start a new task for the rest of the work.'),
-            threadId: taskThreadOf(entry),
-            // The task's own taint (unknown counts as outside text): its
-            // title came with it, and a resume with a message follows it.
-            tainted: entry.dispatch?.origin.tainted !== false,
-            taskId: entry.id,
-          });
-        }
+        noteOpenPause(ports, entry, panes, rec.at);
       } else if (ended === 'reported') {
         ports.note?.(
           entry.ownerWorkspaceId,
@@ -1258,6 +1228,54 @@ export async function reclaimWorker(
   } catch (err) {
     log(`[factory] reclaim of ${entry.id} failed: ${String(err)}`);
     return null;
+  }
+}
+
+/** The cards of an open task's idle stop (a task still working or needing
+ *  input): one resumable card for the owner in the task's thread, and one
+ *  notice to the bot that started it, which resumes or settles it. The row
+ *  stays as it is. Best effort, never throws. */
+function noteOpenPause(ports: Pick<WorkerReclaimPorts, 'note' | 'noticeBot'>, entry: LedgerEntry, sessions: readonly ReclaimedSession[], at: number): void {
+  const resumable = sessions.some((p) => resumeLineFor(p) !== null);
+  // A research task works in a task folder, not a worktree.
+  const research = isResearchDispatch(entry.dispatch);
+  const keptText = `${research ? 'task folder' : 'worktree'} and the conversation are kept`;
+  const task = lifecycleCardTask(entry.title, entry.id);
+  try {
+    ports.note?.(
+      entry.ownerWorkspaceId,
+      taskThreadOf(entry),
+      `${resumable ? 'Worker paused (resumable)' : 'Worker paused'}: ${task}`,
+      resumable
+        ? `The task is still open and its worker sat idle for hours without reporting: its Claude stopped to free memory and its agent slot. The task stays as it is and its pane stays; the ${keptText}, and Resume continues the same conversation.`
+        : 'The task is still open and its worker sat idle for hours without reporting: its Claude stopped to free memory and its agent slot. The task stays as it is and its pane stays; the worktree is kept, but no conversation was recorded to resume.',
+      { code: resumable ? 'worker.openIdlePausedResumable' : 'worker.openIdlePaused', args: { title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
+      entry.id,
+    );
+  } catch {
+    /* the card is best effort */
+  }
+  const botId = entry.dispatch?.origin.botId;
+  if (!botId) return;
+  try {
+    ports.noticeBot?.({
+      botId,
+      workspaceId: entry.ownerWorkspaceId,
+      key: `worker.paused:${entry.id}:${at}`,
+      topic: 'worker.paused',
+      title: `Your worker for "${task}" was paused (task ${entry.id})`,
+      body: `It sat idle with the task still ${entry.status} and no report, so main stopped its Claude to free its agent slot. The ledger row is unchanged. `
+        + (resumable
+          ? 'To continue, resume it with worker_resume (its message is what it acts on); if its work is done or not needed, settle the task with ledger_update.'
+          : 'No conversation was recorded to resume: settle the task with ledger_update, or start a new task for the rest of the work.'),
+      threadId: taskThreadOf(entry),
+      // The task's own taint (unknown counts as outside text): its title
+      // came with it, and a resume with a message follows it.
+      tainted: entry.dispatch?.origin.tainted !== false,
+      taskId: entry.id,
+    });
+  } catch {
+    /* best effort */
   }
 }
 
@@ -1434,9 +1452,12 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
         if (!panes) continue;
         const ptys = [...new Set([...recorded, ...panes])];
         if (!endedTaskAgentRuns(ptys, cur.taskId, recorded, byId, ports.sessionRecordOf)) {
-          if (ports.store.setState(rec.taskId, 'stopped', now())) {
+          const at = now();
+          if (ports.store.setState(rec.taskId, 'stopped', at)) {
             moved = true;
             log(`[factory] reclaim: ${rec.taskId} was left stopping with no agent running; marked stopped`);
+            // An open task's idle stop cut off before its cards: they go now.
+            if (cur.ended === 'reported' && row && (row.status === 'working' || row.status === 'input_required')) noteOpenPause(ports, row, cur.sessions, at);
           }
           continue;
         }
@@ -2109,6 +2130,19 @@ export function createResumedIdleSweep(ports: ResumedIdlePorts): ResumedIdleSwee
       return out;
     },
   };
+}
+
+/** How long after a reclaim stopped a pane's agent its exit counts as that
+ *  stop's (the fan-out worker watch confirms an exit after 20 s). */
+export const RECLAIM_EXIT_WINDOW_MS = 2 * 60_000;
+
+/** Whether the reclaim stopped (or is stopping) the agent of pane
+ *  `sessionId` within RECLAIM_EXIT_WINDOW_MS of `now`: its exit is that
+ *  stop, not a worker that died on its own. Pure over the store. */
+export function stoppedByReclaimLately(store: Pick<ReclaimedWorkers, 'taskOfSession' | 'get'> | null, sessionId: string, now: number): boolean {
+  const taskId = store?.taskOfSession(sessionId);
+  const rec = taskId ? store?.get(taskId) : null;
+  return !!rec && (rec.state === 'stopping' || rec.state === 'stopped') && now - rec.at < RECLAIM_EXIT_WINDOW_MS;
 }
 
 /** A resumed worker whose agent exited is stopped again (resumable). */

@@ -35,6 +35,7 @@ import {
   pauseFloor,
   pauseIdleMsFor,
   workerPromptWaiting,
+  stoppedByReclaimLately,
   type ReclaimedWorker,
   type WorkerReclaimPorts,
   type WorkerResumePorts,
@@ -1453,12 +1454,21 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     await deliberateSleep(30, 'negative: an agent still runs, the record stays stopping');
     off();
     expect(store.get(TASK)?.state).toBe('stopping');
-    const gone = reclaimPorts(store, [session({ agentProcessAlive: false })], { row: () => row('working'), allRows: () => [], workspacePanes: () => ['daemon-1'] });
+    const noticeBot = vi.fn();
+    const gone = reclaimPorts(store, [session({ agentProcessAlive: false })], { row: () => row('working'), allRows: () => [], workspacePanes: () => ['daemon-1'], noticeBot });
     off = installWorkerReclaim({ ...gone.ports, now: () => 5_000 });
     await vi.waitFor(() => expect(store.get(TASK)?.state).toBe('stopped'), { timeout: 10_000 });
     off();
     expect(reclaimedWorkerState(store.get(TASK))).toBe('resumable');
     expect(gone.stopAgent).not.toHaveBeenCalled();
+    // A stop cut off before its cards: they go once it is settled.
+    expect(gone.note.mock.calls.map((c) => c[4]?.code)).toEqual(['worker.openIdlePausedResumable']);
+    expect(noticeBot).toHaveBeenCalledTimes(1);
+    expect(noticeBot.mock.calls[0][0]).toMatchObject({ topic: 'worker.paused', taskId: TASK });
+    // stoppedByReclaimLately: its exit is that stop's for a while, then no longer.
+    expect(stoppedByReclaimLately(store, 'daemon-1', 5_000 + 1_000)).toBe(true);
+    expect(stoppedByReclaimLately(store, 'daemon-1', 5_000 + 10 * 60_000)).toBe(false);
+    expect(stoppedByReclaimLately(store, 'daemon-9', 5_000)).toBe(false);
     await settled(store);
   });
 

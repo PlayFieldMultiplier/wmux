@@ -144,6 +144,15 @@ describe('fan-out worker watch — exits', () => {
     expect(ledger.get('wtask-1')!.status).toBe('working');
   });
 
+  it('an exit wmux caused itself (the bot worker reclaim\'s idle stop) changes nothing', async () => {
+    start({ stoppedByWmux: (ptyId) => ptyId === 'pty-w1' });
+    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
+    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w2' });
+    await settle();
+    expect(ledger.get('wtask-1')!.status).toBe('working');
+    expect(ledger.get('wtask-2')!.status).toBe('input_required');
+  });
+
   it('never for an owner with a brain', async () => {
     start({ hasBrain: () => true });
     daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });

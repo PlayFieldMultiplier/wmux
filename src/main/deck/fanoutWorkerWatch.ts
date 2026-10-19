@@ -61,6 +61,9 @@ export interface FanoutWorkerWatchPorts {
   /** True when an agent is running in the pane again; undefined = can't tell. */
   agentRunning?: (ptyId: string) => Promise<boolean | undefined>;
   hasBrain: (ownerWorkspaceId: string) => boolean;
+  /** True when wmux itself stopped the pane's agent just now (the bot
+   *  worker reclaim's idle stop): that exit is no silent stop. */
+  stoppedByWmux?: (ptyId: string) => boolean;
   ledger?: TaskLedger;
   now?: () => number;
   idleMs?: number;
@@ -185,6 +188,13 @@ export function installFanoutWorkerWatch(ports: FanoutWorkerWatchPorts): FanoutW
           if (disposed) return;
           if ((await ports.agentRunning?.(ptyId).catch(() => undefined)) === true) return;
           if (!runningAtEnd && ports.isRunning(ptyId)) return;
+          let ours = false;
+          try {
+            ours = ports.stoppedByWmux?.(ptyId) === true;
+          } catch {
+            ours = false;
+          }
+          if (ours) return;
         } else {
           await wait(diedGraceMs);
           if (disposed || diedRestarted.get(ptyId) === true) return;
