@@ -1067,13 +1067,14 @@ export class DaemonPTYBridge extends EventEmitter {
    * die. Only the watched pid's death is reported, so a relaunch the tracker
    * already picked is never ended by its predecessor's late death edge.
    */
-  noteAgentProcess(state: { slug?: string; alive: boolean; observedAt?: number; identityEpoch?: number | null }): void {
+  noteAgentProcess(state: { slug?: string; alive: boolean; observedAt?: number; replacedLive?: true; identityEpoch?: number | null }): void {
     const detector = this.agentDetector;
     const now = Date.now();
     const boundaryAt = Math.max(this.identityLifetimeAt, detector?.getIdentityBoundaryAt() ?? 0);
     const epochProven = state.identityEpoch !== undefined && state.identityEpoch !== null
       && state.identityEpoch === detector?.getIdentityEpoch();
-    // Missing time is a legacy/cache-only status update, never identity proof.
+    // Missing time cannot seed identity. An explicit WSL replacement can
+    // still retire the old episode without granting the new process a seed.
     // A probe begun before a shell return belongs to that older launch even
     // when the process table arrives after the next one started.
     if (state.alive && state.identityEpoch !== undefined && !epochProven) return;
@@ -1083,7 +1084,7 @@ export class DaemonPTYBridge extends EventEmitter {
     const screenName = this.getLastAgent();
     const previous = detector?.getTrustedAgent() ?? this.trackedAgent?.slug
       ?? (screenName ? agentDisplayToSlug(screenName) : undefined);
-    if (!state.alive || (state.observedAt !== undefined && state.slug && previous && previous !== state.slug)) this.noteAgentEnded();
+    if (!state.alive || ((state.observedAt !== undefined || state.replacedLive) && state.slug && previous && previous !== state.slug)) this.noteAgentEnded();
     this.trackedAgent = { ...(state.slug ? { slug: state.slug } : {}), alive: state.alive };
     if (detector && state.alive && state.observedAt !== undefined && isAgentSlug(state.slug)) {
       detector.seedTrustedIdentity(state.slug, detector.getIdentityEpoch());

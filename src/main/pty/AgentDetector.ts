@@ -338,7 +338,7 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Aider',
     slug: 'aider',
-    gate: /aider v/,
+    gate: /aider v/i,
     chrome: isAiderChrome,
     completeChromeRow: true,
     patterns: [
@@ -830,7 +830,7 @@ function isGeminiFooterRow(line: string): boolean {
 
 /** Existing Aider startup fixtures carry its version on a row of its own. */
 function isAiderChrome(line: string): boolean {
-  return /^aider v\d+\.\d+\.\d+(?:[\w.+-]*)?$/.test(visibleChrome(line));
+  return /^aider v\d+\.\d+\.\d+(?:[\w.+-]*)?$/i.test(visibleChrome(line));
 }
 
 /** agy 1.2.13 live-capture shapes, including the block-glyph version logo. */

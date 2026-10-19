@@ -536,6 +536,9 @@ export interface TrackedAgentState {
   /** Actual process snapshot start (or WSL hook payload time), only on fresh launch edges.
    * Cached identityFor reads deliberately omit it. */
   observedAt?: number;
+  /** A same-boot WSL launch edge replaced a different live process. Teardown evidence
+   * only; unlike observedAt, this cannot seed detector identity. */
+  replacedLive?: true;
   /** Captured detector epoch on a fresh probe; null means its owner changed. */
   identityEpoch?: number | null;
 }
@@ -821,6 +824,10 @@ export class AgentProcessTracker {
       if (agent.ancestors.includes(cur.pid)) return;
       if (BigInt(agent.start) < BigInt(cur.wsl.start)) return;
     }
+    // Start times order launches only within one boot. A queued old-boot
+    // report cannot establish that it replaced the current live owner.
+    const replacedLive = cur?.alive === true && cur.wsl?.bootId === agent.bootId
+      && (cur.pid !== agent.pid || cur.wsl.start !== agent.start);
     const identity = observedAt !== undefined ? this.identityProbeGuard?.(sessionId) : undefined;
     const key = AgentProcessTracker.watchKey(sessionId);
     const watched: WslWatchedAgent = { ...location, pid: agent.pid, start: agent.start, bootId: agent.bootId };
@@ -833,6 +840,7 @@ export class AgentProcessTracker {
       this.emitState(sessionId, { slug: agent.slug, alive: false });
     });
     this.emitState(sessionId, { slug: agent.slug, alive: true, ...(observedAt !== undefined ? { observedAt } : {}),
+      ...(replacedLive ? { replacedLive: true } : {}),
       ...(identity ? { identityEpoch: identity.isCurrent() ? identity.epoch : null } : {}),
     });
   }

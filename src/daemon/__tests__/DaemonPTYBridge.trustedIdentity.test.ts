@@ -86,6 +86,46 @@ describe('fresh authoritative identity enables bannerless detector patterns', ()
     expect(events).toHaveBeenCalledTimes(1);
   });
 
+  describe.each([
+    ['different pid', 20, '200'],
+    ['reused pid', 10, '200'],
+  ] as const)('a WSL replacement with %s and no OSC 133', (_label, pid, start) => {
+    it.each(['idle', 'mid-turn'] as const)('retires the previous %s owner without seeding from an untimed report', (phase) => {
+      const watches = new Map<string, () => void>();
+      const tracker = new AgentProcessTracker(
+        { watch: () => undefined, unwatch: () => undefined }, async () => [], async () => undefined, '/home/dev', {
+          watcher: { watch: (key, _agent, onDead) => watches.set(key, onDead), unwatch: (key) => watches.delete(key) },
+        });
+      const changed = vi.fn((_id: string, state: Parameters<DaemonPTYBridge['noteAgentProcess']>[0]) => bridge.noteAgentProcess(state));
+      tracker.setStateChangeListener(changed);
+      const location = { shell: 'wsl.exe', target: { distribution: 'Ubuntu', user: 'dev' }, hostPid: 100 };
+      const first = { pid: 10, start: '100', bootId: '11111111-1111-4111-8111-111111111111', slug: 'claude' as const, ancestors: [1] };
+      bridge.noteHookAgentIdentity(signal({ agent: 'claude' }), { slug: 'claude', source: 'hook' });
+      tracker.armWsl('pane-a', location, first);
+      const oldDeath = watches.get('agent:pane-a');
+      expect(oldDeath).toBeDefined();
+      bridge.noteAgentStatus('running', true);
+      if (phase === 'idle') bridge.noteAgentStatus('complete', true);
+      expect(bridge.hasHookReports()).toBe(true);
+      expect(bridge.isTurnOpen()).toBe(phase === 'mid-turn');
+      vi.advanceTimersByTime(5_000);
+
+      tracker.armWsl('pane-a', location, { ...first, pid, start, slug: 'codex' });
+
+      expect(changed).toHaveBeenLastCalledWith('pane-a', { slug: 'codex', alive: true, replacedLive: true });
+      expect(bridge.hasHookReports()).toBe(false);
+      expect(bridge.isTurnOpen()).toBe(false);
+      expect(tracker.identityFor('pane-a')).toEqual({ slug: 'codex', alive: true });
+      pty.feed(APPROVAL);
+      expect(events).not.toHaveBeenCalled(); // replacement proof is not detector authority
+      const edgeCount = changed.mock.calls.length;
+      oldDeath?.();
+      expect(changed).toHaveBeenCalledTimes(edgeCount);
+      expect(tracker.statusFor('pane-a')).toBe(true);
+      tracker.disarm('pane-a');
+    });
+  });
+
   it('exact fresh positive hook evidence enables patterns without making the pane working', () => {
     expect(bridge.noteHookAgentIdentity(signal(), { slug: 'codex', source: 'hook' })).toBe(true);
     expect(active).not.toHaveBeenCalled();

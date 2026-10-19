@@ -679,6 +679,8 @@ describe('AgentDetector', () => {
       'OC | a title printed as plain text\n',
       '"Welcome to GitHub Copilot CLI!"\n',
       'aider v0.86.1 is mentioned in docs\n',
+      'Aider v0.86.1 is mentioned in docs\n',
+      '$ aider --model sonnet\n',
       'Antigravity CLI 1.2.13 is mentioned in docs\n',
       'Welcome to the Antigravity CLI. is the welcome message\n',
       'Welcome to GitHub Copilot CLI! is the welcome message\n',
@@ -702,6 +704,9 @@ describe('AgentDetector', () => {
 
     it.each([
       ['Aider', 'aider v0.86.1\n'],
+      ['Aider', 'Aider v0.86.1\r\n'],
+      ['Aider', '\u001b[1mAider v0.86.1\u001b[0m\r\n'],
+      ['Aider', 'Aider v0.86.2.dev42+g1a2b3c4\r\n'],
       ['Antigravity CLI', '  ▄▀▀▄        Antigravity CLI 1.2.13\r\n'],
       ['Antigravity CLI', 'Welcome to the Antigravity CLI. You are currently not signed in.\n'],
       ['GitHub Copilot CLI', 'Welcome to GitHub Copilot CLI!\n'],
