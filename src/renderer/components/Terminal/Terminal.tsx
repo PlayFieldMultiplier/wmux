@@ -89,6 +89,10 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
   if (instanceKeyRef.current === null) instanceKeyRef.current = `${TERMINAL_INSTANCE_KEY_PREFIX}${Math.random().toString(36).slice(2)}`;
   const lifecycleKey = ownerSurfaceId ?? instanceKeyRef.current;
   const createAttempt = useStore((s) => s.ptyCreateByKey?.[lifecycleKey]);
+  // A refused create shows its alert (below), gated on the surface binding:
+  // a pane whose binding was cleared still holds its old id locally until a
+  // replacement binds.
+  const createRefused = !externalPtyId && createAttempt?.state === 'createFailed';
   // Starts (or, with retry, restarts) this surface's create; null while bound.
   const selfCreateRef = useRef<((retry: boolean) => void) | null>(null);
   const [restoring, setRestoring] = useState(!!scrollbackFile);
@@ -561,10 +565,7 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
       {/* #2398 — a refused create: the reason and the one way to try again.
           Same alert shape as the recovery banner above; a refused create
           never fires again by itself. */}
-      {/* Gated on the surface binding, not the local ptyId: a pane whose
-          binding was cleared still holds its old id locally until a
-          replacement binds. */}
-      {!externalPtyId && createAttempt?.state === 'createFailed' && (
+      {createRefused && createAttempt?.state === 'createFailed' && (
         <div role="alert" className="absolute inset-x-2 top-2 z-20 rounded border border-[var(--border)] bg-[var(--bg-base)] p-3 text-sm text-[var(--text-primary)]">
           <p className="break-words">{t('terminal.createFailed')}</p>
           <p className="mt-1 break-words text-[var(--text-muted)]">{createAttempt.error}</p>
@@ -579,7 +580,7 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
       {/* Daemon link notice; the recovery alert and the refused-create alert
           above win when both apply (they carry the actions, and share its
           place). */}
-      {!recoveryError && !(!ptyId && createAttempt?.state === 'createFailed') && linkNotice && ownerSurfaceId && <DaemonLinkNotice notice={linkNotice} surfaceId={ownerSurfaceId} />}
+      {!recoveryError && !createRefused && linkNotice && ownerSurfaceId && <DaemonLinkNotice notice={linkNotice} surfaceId={ownerSurfaceId} />}
       {/* Session restore overlay */}
       {restoring && (
         <div className="absolute inset-0 flex items-center justify-center text-[var(--text-muted)] text-sm font-mono z-10 pointer-events-none">
