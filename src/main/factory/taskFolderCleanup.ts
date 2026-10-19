@@ -67,6 +67,7 @@ import { BOT_ID_RE } from '../../shared/bot';
 import { getExecEnv } from '../../shared/execEnv';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { sessionHostDir } from '../worktask/stopSessionsInDir';
+import { folderKeptByOwner } from '../worktask/pendingWorktreeRemovals';
 import { STOPPED_BY_OWNER, STOP_SYSTEM_WORKSPACE, isStoppedByOwnerRow } from './factoryStop';
 
 export const TASK_FOLDERS_FILENAME = 'task-folders.json';
@@ -610,6 +611,9 @@ async function cleanTaskFolderNow(
   const log = ports.log ?? ((m: string) => console.warn(m));
   const exists = ports.exists ?? defaultExists;
   if (!isEndedBotTask(entry) || !mission || mission.detached === true || keptByOwner.has(entry.id)) return 'skipped';
+  // Kept by a Close and keep folder whose close did not finish (no detached
+  // mission yet): its record says so, across a restart too.
+  if (folderKeptByOwner(mission.folder)) return 'skipped';
   const botId = entry.dispatch?.origin.botId ?? '';
   const kind = taskFolderKind(mission.folder, mission.branch, botId, ports.roots);
   if (!kind) return 'skipped';

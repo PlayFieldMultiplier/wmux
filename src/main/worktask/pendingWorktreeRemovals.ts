@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createFilePersister, readVersionedFile, type FilePersister } from '../factory/versionedFile';
 import { sessionHostDir } from './stopSessionsInDir';
+import { getWmuxDir } from '../../daemon/config';
 
 export const PENDING_REMOVALS_FILENAME = 'pending-removals.json';
 export const PENDING_REMOVALS_VERSION = 1 as const;
@@ -231,6 +232,25 @@ export function pendingRemovalRefusalAt(
     return null;
   }
   return records.length > 0 ? refusalAmong(cwd, session, records, platform) : null;
+}
+
+/**
+ * Whether Close and keep folder recorded `folder` kept (a keep: true record),
+ * read from the app's store, or from the file under `wmuxDir` before that
+ * store is set. A keep whose close did not finish has no detached mission
+ * yet: this is what tells the bots' task folder cleanup to leave it.
+ */
+export function folderKeptByOwner(folder: string, wmuxDir: () => string = getWmuxDir): boolean {
+  if (active) return active.get(folder)?.keep === true;
+  try {
+    const raw = readVersionedFile(path.join(wmuxDir(), 'worktask', PENDING_REMOVALS_FILENAME), PENDING_REMOVALS_VERSION);
+    const list = raw && Array.isArray(raw.removals) ? raw.removals.filter(isRecord) : [];
+    const key = pendingRemovalKey(folder);
+    return list.some((r) => r.keep === true && pendingRemovalKey(r.path) === key);
+  } catch {
+    // Unreadable: nothing is known kept here; the store, once set, says.
+    return false;
+  }
 }
 
 /** What the sweep at start needs (TaskWorktreeManager and the daemon). */

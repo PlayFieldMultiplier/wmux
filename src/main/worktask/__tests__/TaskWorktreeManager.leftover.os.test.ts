@@ -14,7 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { TaskWorktreeManager, type RunGitOptions } from '../TaskWorktreeManager';
-import { PendingWorktreeRemovals, pendingRemovalRefusal, pendingRemovalRefusalAt, setActivePendingRemovals, sweepPendingRemovals } from '../pendingWorktreeRemovals';
+import { PendingWorktreeRemovals, folderKeptByOwner, pendingRemovalRefusal, pendingRemovalRefusalAt, setActivePendingRemovals, sweepPendingRemovals } from '../pendingWorktreeRemovals';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const HEAD = 'a'.repeat(40);
@@ -590,6 +590,23 @@ describe('a removal that could not finish is recorded for a later close', () => 
     fs.rmSync(folder);
     await mgr.markPendingRemovalKept(dir);
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).removals).toEqual([expect.objectContaining({ path: dir, keep: true })]);
+  });
+
+  it('a folder recorded kept is known kept, from the store or, before it is set, from its file', async () => {
+    const dir = leftover();
+    const wmuxDir = path.join(tmp, 'wmux');
+    const store = new PendingWorktreeRemovals(path.join(wmuxDir, 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: '', repoHash: '', keep: true, at: 1 });
+    expect(folderKeptByOwner(dir, () => wmuxDir)).toBe(true);
+    expect(folderKeptByOwner(`${dir}-sibling`, () => wmuxDir)).toBe(false);
+    setActivePendingRemovals(store);
+    try {
+      expect(folderKeptByOwner(dir, () => wmuxDir)).toBe(true);
+      await store.delete(dir);
+      expect(folderKeptByOwner(dir, () => wmuxDir)).toBe(false);
+    } finally {
+      setActivePendingRemovals(null);
+    }
   });
 
   it('a refused finish of a leftover names Close and keep folder', async () => {

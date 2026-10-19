@@ -35,6 +35,7 @@ import {
 } from '../taskFolderCleanup';
 import { ReclaimedWorkers, resumeWorker, type ReclaimedWorker, type WorkerResumePorts } from '../workerReclaim';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { PendingWorktreeRemovals, setActivePendingRemovals } from '../../worktask/pendingWorktreeRemovals';
 
 // Every test here runs real git over real worktrees, several spawns in a
 // row; on a loaded CI runner (the Windows shard) one spawn can take a few
@@ -276,6 +277,20 @@ describe('review safeguards', () => {
     const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
     await noteTaskFolderKept('wtask-kept-12345678', null);
     expect(await cleanTaskFolder(ports(), row('completed', { id: 'wtask-kept-12345678' }), mission, [])).toBe('skipped');
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('leaves a folder a Close and keep folder recorded kept, though its close did not finish (no detached mission)', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager());
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    const store = new PendingWorktreeRemovals(path.join(wmuxDir, 'worktask', 'pending-removals.json'));
+    await store.put({ path: wt, repoRoot: '', repoHash: '', keep: true, at: 1 });
+    setActivePendingRemovals(store);
+    try {
+      expect(await cleanTaskFolder(ports(), row('completed', { id: 'wtask-keep3-12345678' }), mission, [])).toBe('skipped');
+    } finally {
+      setActivePendingRemovals(null);
+    }
     expect(fs.existsSync(wt)).toBe(true);
   });
 
