@@ -29,7 +29,7 @@ import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
 import { killProcessTree } from './automation/treeKill';
-import { captureProcessTree, matchesRecordedStart, recordedStartOf, type CapturedTree } from './automation/verifiedTreeKill';
+import { captureProcessTree, matchesRecordedStart, recordedStartOf, treeKillRefusal, type CapturedTree } from './automation/verifiedTreeKill';
 import { pendingRemovalRefusalAt } from '../main/worktask/pendingWorktreeRemovals';
 import { recordedRunPtyIds } from './automation/store';
 import { AUTOMATION_EVENT } from '../shared/automation';
@@ -2616,6 +2616,16 @@ function registerRpcHandlers(
     // OBSERVABILITY: log wmux-initiated kills (pane/workspace close, reset) so
     // they can be told apart from a process self-exit in the session:died log.
     log('info', `[lifecycle] destroySession id=${p.id} reason=rpc${p.killTree === true ? ' killTree' : ''}`);
+    // #2388: a tree that cannot be taken is not orphaned by ending its pane:
+    // refused before anything of the session is touched.
+    if (p.killTree === true) {
+      const meta = sessionManager.getSession(p.id)?.meta;
+      const refusal = meta ? treeKillRefusal(meta) : null;
+      if (refusal) {
+        log('warn', `[lifecycle] destroySession id=${p.id} refused: ${refusal}`);
+        throw new Error(refusal);
+      }
+    }
 
     // Remove data listener to prevent leak
     const tracked = sessionDataListeners.get(p.id);
