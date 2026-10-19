@@ -116,13 +116,20 @@ export function isRoomFileText(mediaType: string): boolean {
 export function roomFileName(source: string): string {
   // eslint-disable-next-line no-control-regex
   const segment = (source.split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f\u007f]/g, '');
-  const kept = segment.replace(/[:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '');
-  const base = WIN32_DEVICE_RE.test(kept) ? `_${kept}` : kept;
+  const base = windowsSafeName(segment);
   if (base.length <= ROOM_FILE_LIMITS.NAME_MAX) return base;
-  // Keep the extension: it decides how the file is shown.
+  // Keep the extension: it decides how the file is shown. The cut can end
+  // in a dot or a space, so the shortened name is made safe again.
   const dot = base.lastIndexOf('.');
   const ext = dot > 0 && base.length - dot <= 16 ? base.slice(dot) : '';
-  return base.slice(0, ROOM_FILE_LIMITS.NAME_MAX - ext.length) + ext;
+  return windowsSafeName(base.slice(0, ROOM_FILE_LIMITS.NAME_MAX - ext.length) + ext);
+}
+
+/** `name` with each reserved character as `_`, without trailing dots and
+ *  spaces, and with a leading `_` on a device name. */
+function windowsSafeName(name: string): string {
+  const kept = name.replace(/[:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '');
+  return WIN32_DEVICE_RE.test(kept) ? `_${kept}` : kept;
 }
 
 /** A card's files read from disk or input, or undefined for none. Pure. */

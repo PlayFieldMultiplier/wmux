@@ -78,6 +78,14 @@ describe('room file rules', () => {
     expect(roomFileName('/r/nul')).toBe('_nul');
     expect(roomFileName('/r/lpt1')).toBe('_lpt1');
     expect(roomFileName('/r/console.txt')).toBe('console.txt');
+    // A cut to NAME_MAX that ends in a dot, and a long device-like name, stay
+    // names a stored list keeps.
+    for (const source of [`/r/${'a'.repeat(199)}.${'b'.repeat(20)}`, `/r/con.${'x'.repeat(250)}`, `/r/${'a'.repeat(198)} .${'b'.repeat(20)}`]) {
+      const name = roomFileName(source);
+      expect(name.length).toBeLessThanOrEqual(ROOM_FILE_LIMITS.NAME_MAX);
+      expect(isWin32UnsafeName(name)).toBe(false);
+      expect(parseRoomFiles([{ id: 'c'.repeat(32), name, mediaType: 'application/octet-stream', bytes: 1 }])).toHaveLength(1);
+    }
     for (const name of ['README.md_hidden', '_CON.txt', 'console.txt', 'a.b.md']) expect(isWin32UnsafeName(name)).toBe(false);
     for (const name of ['a:b.md', 'x.md.', 'x.md ', 'CON', 'aux.txt', 'COM1.log', 'a?b', 'a|b']) expect(isWin32UnsafeName(name)).toBe(true);
   });
