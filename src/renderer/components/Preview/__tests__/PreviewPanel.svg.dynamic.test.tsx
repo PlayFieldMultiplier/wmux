@@ -12,7 +12,7 @@ import PreviewPanel from '../PreviewPanel';
 
 let container: HTMLDivElement;
 let root: Root;
-let body = '';
+let body: string | Uint8Array<ArrayBuffer> = '';
 
 beforeEach(() => {
   container = document.createElement('div');
@@ -38,7 +38,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function show(svg: string) {
+async function show(svg: string | Uint8Array<ArrayBuffer>) {
   body = svg;
   act(() => root.render(createElement(PreviewPanel, { filePath: '/repo/chart.svg', isActive: true, paneId: 'p1' })));
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
@@ -66,9 +66,31 @@ describe('SVG in the file preview', () => {
     expect(shown.image).toBeNull();
   });
 
-  it('a plain SVG still shows as a picture', async () => {
-    const shown = await show('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>');
+  it('a plain SVG still shows as a picture, drawn from the text that was checked', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>';
+    const shown = await show(svg);
     expect(shown.source).toBeNull();
-    expect(shown.image?.getAttribute('src')).toMatch(/^wmux-preview:\/\/a{32}\/chart\.svg\?v=1$/);
+    expect(shown.image?.getAttribute('src')).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+  });
+
+  it('a UTF-16 SVG is checked as the text it is', async () => {
+    let svg = '<svg xmlns="http://www.w3.org/2000/svg"><defs><rect id="l0" width="1" height="1"/>';
+    for (let l = 1; l <= 6; l++) svg += `<g id="l${l}">${`<use href="#l${l - 1}"/>`.repeat(10)}</g>`;
+    svg += '</defs><use href="#l6"/></svg>';
+    const bytes = new Uint8Array(2 + svg.length * 2);
+    bytes.set([0xff, 0xfe]);
+    for (let i = 0; i < svg.length; i++) bytes[2 + i * 2] = svg.charCodeAt(i);
+    const shown = await show(bytes);
+    expect(shown.source).toBe(svg);
+    expect(shown.image).toBeNull();
+  });
+
+  it('an SVG that draws too much and is too long to show as text says so', async () => {
+    const inner = encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"><!--${'x'.repeat(600 * 1024)}--><image href="data:image/svg+xml,${inner}"/></svg>`;
+    const shown = await show(svg);
+    expect(shown.source).toBeNull();
+    expect(shown.image).toBeNull();
+    expect(container.querySelector('[data-preview-error="too-large"]')).not.toBeNull();
   });
 });
