@@ -228,4 +228,27 @@ describe('resyncAfterResubscribe (#2263)', () => {
     await result;
     expect(died).toEqual([['old-daemon', null, undefined], ['new-daemon', 0, undefined]]);
   });
+
+  it('leaves a pane alone that died live while its state was read', async () => {
+    mocks.last.set('d1', 'idle');
+    const tracked = new Map([['d1', '/repo']]);
+    const titles: string[] = [];
+    const result = await resyncAfterResubscribe({
+      listSessions: async () => [{ id: 'd1', state: 'attached', cwd: '/repo' }],
+      trackedCwd: (id) => tracked.get(id),
+      readState: async () => {
+        tracked.delete('d1'); // the live session:died lands meanwhile
+        return { agentStatus: 'running', agentName: 'Codex', title: 'stale', turnOpen: true };
+      },
+      emitDied: () => {},
+      emitCwd: () => {},
+      onLiveCwd: () => () => {},
+      emitTitle: (_id, title) => { titles.push(title); },
+      hookRouter: null,
+      win: null,
+    });
+    expect(result.statusesCorrected).toBe(0);
+    expect(titles).toEqual([]);
+    expect(statuses()).toEqual([]);
+  });
 });

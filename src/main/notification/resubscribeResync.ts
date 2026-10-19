@@ -95,6 +95,7 @@ export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promi
     offLiveCwd();
   }
   const ids: string[] = [];
+  const trackedAtList = new Set<string>();
   for (const row of Array.isArray(rows) ? rows : []) {
     const id = row?.id;
     if (typeof id !== 'string' || id.length === 0) continue;
@@ -116,6 +117,7 @@ export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promi
       deps.emitCwd(id, row.cwd);
       result.cwds += 1;
     }
+    if (tracked !== undefined) trackedAtList.add(id);
     ids.push(id);
   }
   const states = await Promise.all(ids.map(async (id) => {
@@ -127,6 +129,8 @@ export async function resyncAfterResubscribe(deps: ResubscribeResyncDeps): Promi
   }));
   for (const [id, state] of states) {
     if (!state) continue;
+    // It ended live while its state was read: what was read is already stale.
+    if (trackedAtList.has(id) && deps.trackedCwd(id) === undefined) continue;
     result.panes += 1;
     if (state.title) {
       deps.emitTitle(id, state.title);
