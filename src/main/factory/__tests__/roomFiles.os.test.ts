@@ -108,6 +108,13 @@ describe('RoomFileStore.copyIn', () => {
     expect(stored()).toEqual([]);
   });
 
+  it.skipIf(process.platform === 'win32')('refuses a FIFO without blocking on it', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const fifo = path.join(repo(), 'pipe.txt');
+    execFileSync('mkfifo', [fifo]);
+    expect(store.copyIn(WS, fifo, [repo()])).toMatchObject({ ok: false, reason: 'not_file' });
+  });
+
   it('refuses a folder, a missing file, an empty file, an oversized file and a protected file', () => {
     fs.mkdirSync(path.join(repo(), 'sub'));
     expect(store.copyIn(WS, path.join(repo(), 'sub'), [repo()])).toMatchObject({ ok: false, reason: 'not_file' });

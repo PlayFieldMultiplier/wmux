@@ -51,6 +51,10 @@ const WORKSPACE_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 
+/** No link followed, and a FIFO swapped in for the file never blocks the
+ *  open (main would hang); fstat then refuses anything but a file. */
+const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+
 const OCTET = 'application/octet-stream';
 const TEXT = 'text/plain';
 /** Media types by lower-case extension; anything else is octet-stream. */
@@ -241,7 +245,7 @@ export class RoomFileStore {
     try {
       const st = fs.lstatSync(file);
       if (!st.isFile() || st.size > ROOM_FILE_LIMITS.MAX_BYTES) return null;
-      fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+      fd = fs.openSync(file, OPEN_FLAGS);
     } catch {
       return null;
     }
@@ -285,7 +289,7 @@ export class RoomFileStore {
     let fst: fs.Stats;
     let fd: number;
     try {
-      fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+      fd = fs.openSync(real, OPEN_FLAGS);
     } catch {
       return refuse('changed');
     }
