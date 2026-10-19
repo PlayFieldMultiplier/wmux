@@ -7,8 +7,8 @@
 // Receipts are kept here, in memory, by caller and request id: the daemon's
 // bridge gives up after 15 s while a resume that reopens a pane may still
 // run, so only main knows how a request ended. A repeat joins the request
-// under way or replays its success; a refusal is not kept (nothing started),
-// so a repeat runs the checks again. An id is accepted only within its own
+// under way or replays its success; a refusal is not kept, so a repeat runs
+// the checks again. An id is accepted only within its own
 // time window, the same as its receipt's life, so a forgotten receipt never
 // starts a second worker.
 
@@ -105,7 +105,8 @@ export async function handlePhoneWorkerResumeCommand(
     reply = await receipt.pending;
   } finally {
     receipt.pending = undefined;
-    // A refusal or a failure started nothing: a repeat runs the checks again.
+    // A refusal is not kept: a repeat runs the checks again (a worker that
+    // did start reads as resumed there).
     if (reply && 'resumed' in reply) receipt.done = reply;
     else if (receipts.get(key) === receipt) receipts.delete(key);
   }

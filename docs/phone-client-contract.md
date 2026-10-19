@@ -4828,7 +4828,8 @@ outside it is `400`, so a forgotten receipt never resumes twice):
 - The same id while the first request runs waits for it and answers with its
   outcome. The same id after a success answers that `200` again with
   `replayed: true`. Nothing starts a second time.
-- A refusal is not kept (nothing started): the same id checks again.
+- A refusal is not kept: the same id checks again, and a worker that did
+  start answers `already_running`.
 - After `504 desktop-timeout` the resume may still finish: send the same id
   again. After a desktop restart the receipt is gone, and a repeat answers
   `409` `already_running`: for your own retried id, read that as done and
@@ -4860,7 +4861,7 @@ outside it is `400`, so a forgotten receipt never resumes twice):
 | `pane_gone`, `worktree_gone`, `moved`, `unknown_state` | Not resumable from here: the pane is closed with no way to reopen it, the worktree is gone, the pane left the task folder, or what runs in the pane cannot be told (resume on the desktop). |
 | `no_slot` | Every agent slot is in use; `cap` is the limit. A slot frees when a worker ends. |
 | `busy` | Another resume of this task, or a close of its panes, is under way. `Retry-After: 5`. |
-| `not_typed`, `not_reopened`, `not_now` | The resume began but could not finish, and nothing runs. Try again. |
+| `not_typed`, `not_reopened`, `not_now` | The resume began but could not finish. wmux stops a worker it had already reopened; until that stop lands the task reads as resumed. Read the thread, then try again. |
 
 #### Workspace layout tree
 
