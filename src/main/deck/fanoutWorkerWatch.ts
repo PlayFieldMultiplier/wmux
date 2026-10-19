@@ -177,6 +177,17 @@ export function installFanoutWorkerWatch(ports: FanoutWorkerWatchPorts): FanoutW
     // A running status left over from the killed turn (the exit edge does not
     // always settle it) is not a relaunch; only one that starts in the grace is.
     const runningAtEnd = ports.isRunning(ptyId);
+    // An exit wmux caused itself is no silent stop. Asked as it arrives,
+    // before any wait: a resume meanwhile starts an agent of its own.
+    if (kind === 'exit') {
+      let ours = false;
+      try {
+        ours = ports.stoppedByWmux?.(ptyId) === true;
+      } catch {
+        ours = false;
+      }
+      if (ours) return;
+    }
     try {
       const task = await taskOfPty(ptyId);
       if (!task || exitWoken.has(task.id) || inFlight.has(task.id)) return;
@@ -188,13 +199,6 @@ export function installFanoutWorkerWatch(ports: FanoutWorkerWatchPorts): FanoutW
           if (disposed) return;
           if ((await ports.agentRunning?.(ptyId).catch(() => undefined)) === true) return;
           if (!runningAtEnd && ports.isRunning(ptyId)) return;
-          let ours = false;
-          try {
-            ours = ports.stoppedByWmux?.(ptyId) === true;
-          } catch {
-            ours = false;
-          }
-          if (ours) return;
         } else {
           await wait(diedGraceMs);
           if (disposed || diedRestarted.get(ptyId) === true) return;

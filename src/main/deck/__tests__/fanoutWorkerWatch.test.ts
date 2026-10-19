@@ -153,6 +153,17 @@ describe('fan-out worker watch — exits', () => {
     expect(ledger.get('wtask-2')!.status).toBe('input_required');
   });
 
+  it('an exit wmux caused is known as it arrives: a resume during the grace does not turn it into a silent stop', async () => {
+    let marked = true;
+    start({ stoppedByWmux: () => marked, exitGraceMs: 30 });
+    daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
+    // The resume forgets the stop while the grace runs.
+    marked = false;
+    await deliberateSleep(60, 'negative: the grace runs out with the row unchanged');
+    await settle();
+    expect(ledger.get('wtask-1')!.status).toBe('working');
+  });
+
   it('never for an owner with a brain', async () => {
     start({ hasBrain: () => true });
     daemon.emit('session:agentProcessExit', { sessionId: 'pty-w1' });
