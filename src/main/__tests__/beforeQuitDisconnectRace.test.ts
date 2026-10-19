@@ -104,17 +104,33 @@ describe('before-quit daemon lifecycle — source invariants (tmux persistence)'
     expect(localBranch).toMatch(/killDaemonByPidFile\(\)/);
   });
 
-  it('a full shutdown keeps watching the daemon exit through the shutdown race', () => {
-    // dispose() closes the exit watch; a full shutdown takes it first, so a
-    // daemon that dies natively during teardown still gets its exit code logged.
-    const takePos = beforeQuitBlock.indexOf('takeExitWatch()');
+  it('a full shutdown watches the daemon exit from before the race until before the quit', () => {
+    // dispose() closes the exit watch; a full shutdown takes it first and
+    // reports on it, so a daemon that dies natively during teardown still gets
+    // its exit code logged. The daemon exits after its ack, so the quit waits
+    // (bounded) for the line.
+    const startPos = beforeQuitBlock.indexOf('if (fullShutdownRequested) startStopExitReport();');
     const disposePos = beforeQuitBlock.indexOf('daemonRespawnController?.dispose()');
-    const reportPos = beforeQuitBlock.indexOf("exitWatchAtQuit?.report('full shutdown')");
     const racePos = beforeQuitBlock.indexOf('raceDaemonShutdown(clientAtQuit');
-    expect(beforeQuitBlock).toMatch(/fullShutdownRequested\s*\?\s*\(daemonRespawnController\?\.takeExitWatch\(\)/);
-    expect(takePos).toBeGreaterThan(0);
-    expect(disposePos).toBeGreaterThan(takePos);
-    expect(reportPos).toBeGreaterThan(disposePos);
-    expect(racePos).toBeGreaterThan(reportPos);
+    const waitPos = beforeQuitBlock.search(/await Promise\.race\(\[\s*stopExitReport,/);
+    const quitPos = beforeQuitBlock.indexOf('app.quit();');
+    expect(startPos).toBeGreaterThan(0);
+    expect(disposePos).toBeGreaterThan(startPos);
+    expect(racePos).toBeGreaterThan(disposePos);
+    expect(waitPos).toBeGreaterThan(racePos);
+    expect(quitPos).toBeGreaterThan(waitPos);
+    expect(beforeQuitBlock).toMatch(/setTimeout\(resolve, STOP_EXIT_REPORT_WAIT_MS\)/);
+  });
+
+  it('"Quit and Stop Sessions" takes the exit watch before it disposes the controller', () => {
+    // The menu stops the daemon before before-quit runs, and disposes the
+    // respawn controller first; the watch must be reported on before then.
+    const prepare = indexSrc.slice(indexSrc.indexOf('prepareStop: () => {'));
+    const startPos = prepare.indexOf('startStopExitReport();');
+    const disposePos = prepare.indexOf('daemonRespawnController?.dispose();');
+    expect(startPos).toBeGreaterThan(0);
+    expect(disposePos).toBeGreaterThan(startPos);
+    // The report is taken from the controller and kept for before-quit.
+    expect(indexSrc).toMatch(/function startStopExitReport\(\): void \{\s*if \(stopExitReport\) return;\s*const watch = daemonRespawnController\?\.takeExitWatch\(\) \?\? null;\s*if \(watch\) stopExitReport = watch\.report\('full shutdown'\)/);
   });
 });

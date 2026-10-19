@@ -196,7 +196,7 @@ import { toastManager } from './notification/ToastManager';
 import { WorkspaceContextRouter } from './metadata/WorkspaceContextRouter';
 import { ensureDaemon, killDaemonByPidFile, describeDaemonKillOutcome, killVerifiedDaemonPid, checkProcessLiveness, isDaemonPipeGone } from './daemon/launcher';
 import { DaemonRespawnController } from './daemon/DaemonRespawnController';
-import { createDaemonExitWatch, type DaemonExitWatch } from './daemon/daemonExitWatch';
+import { createDaemonExitWatch } from './daemon/daemonExitWatch';
 import { loadConfig, getWmuxDir } from '../daemon/config';
 import { CHANNELS_EPOCH } from '../shared/channels';
 import { createTray, destroyTray, updateTraySessionCount } from './tray';
@@ -498,6 +498,23 @@ let isQuitting = false;
 // tells before-quit to additionally tear the daemon down (daemon.shutdown +
 // pid-kill backstop) for an explicit full exit.
 let fullShutdownRequested = false;
+// The daemon's exit report for a deliberate stop (the tray's full shutdown or
+// the menu's "Quit and Stop Sessions"). The watch is taken from the respawn
+// controller before it is disposed and reported on before the stop begins, so
+// a daemon that dies natively during its teardown still has its exit code
+// logged; before-quit waits for it before quitting.
+let stopExitReport: Promise<void> | null = null;
+function startStopExitReport(): void {
+  if (stopExitReport) return;
+  const watch = daemonRespawnController?.takeExitWatch() ?? null;
+  if (watch) stopExitReport = watch.report('full shutdown').catch(() => { /* evidence only */ });
+}
+// How long before-quit waits for that report once the stop is done. The daemon
+// exits within about 1 s of acking daemon.shutdown (50 ms pipe teardown, a 1 s
+// forced exit), and at once after the pid-kill; a daemon still running after
+// this is one the stop did not end, and holding the quit for the report's own
+// 15 s budget would only delay the exit.
+const STOP_EXIT_REPORT_WAIT_MS = 2_000;
 // Windows sends WM_ENDSESSION to every top-level window, so a logoff can
 // reach more than one main window's 'session-end' listener (an update-recovery
 // window adopted while the old one is still being torn down). The emergency
@@ -1811,6 +1828,7 @@ app.on('ready', async () => {
     getDaemonClient: () => daemonClient,
     isQuitting: () => isQuitting,
     prepareStop: () => {
+      startStopExitReport();
       daemonRespawnController?.dispose();
       daemonRespawnController = null;
     },
@@ -3081,12 +3099,9 @@ app.on('before-quit', async (e) => {
   // and detaches listeners — it does NOT call `onUninstall()`, so the
   // shutdown-race path below remains the single authority for taking the
   // client offline cleanly.
-  // A full shutdown keeps the daemon's exit watch past dispose(), so a daemon
-  // that dies natively during its teardown still has its exit code logged. A
-  // detach Quit leaves the daemon alive on purpose: nothing to watch.
-  const exitWatchAtQuit: DaemonExitWatch | null = fullShutdownRequested
-    ? (daemonRespawnController?.takeExitWatch() ?? null)
-    : null;
+  // A full shutdown keeps watching the daemon's exit past dispose(). A detach
+  // Quit leaves the daemon alive on purpose: nothing to watch.
+  if (fullShutdownRequested) startStopExitReport();
   safeStep('daemonRespawnController.dispose', () => {
     daemonRespawnController?.dispose();
     daemonRespawnController = null;
@@ -3123,9 +3138,6 @@ app.on('before-quit', async (e) => {
           `[Main] Full shutdown — racing daemon.shutdown (${FULL_SHUTDOWN_TIMEOUT_MS}ms budget)`,
         );
         logLine('info', 'main', 'full-shutdown: racing daemon.shutdown');
-        // Watch the exit alongside the race, not after it: the line lands as
-        // soon as the daemon goes, while main is still here to write it.
-        void exitWatchAtQuit?.report('full shutdown');
         const shutdownStart = Date.now();
         const race = await raceDaemonShutdown(clientAtQuit, FULL_SHUTDOWN_TIMEOUT_MS);
         const elapsed = Date.now() - shutdownStart;
@@ -3185,6 +3197,16 @@ app.on('before-quit', async (e) => {
         logLine('warn', 'main', `full-shutdown: post-throw pid-kill backstop ${describeDaemonKillOutcome(outcome)}`);
       });
     }
+  }
+
+  // The daemon goes after its ack, not with it: wait for its exit line.
+  if (fullShutdownRequested && stopExitReport) {
+    let waitTimer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      stopExitReport,
+      new Promise<void>((resolve) => { waitTimer = setTimeout(resolve, STOP_EXIT_REPORT_WAIT_MS); }),
+    ]);
+    clearTimeout(waitTimer);
   }
 
   safeStep('claudeWorker.stop', () => claudeWorker.stop());
