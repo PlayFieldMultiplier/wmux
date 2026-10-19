@@ -1447,6 +1447,7 @@ export const ko = {
   'room.notice.gate.notRunNoBaseRef.body': "origin의 기본 브랜치를 확인할 수 없어서 실행할 기본 게이트가 없어요.",
   'room.notice.research.completed': "조사 보고됨: 작업 완료",
   'room.notice.research.completed.body': "이 조사 보고에 증거가 기록됐어요. 조사 작업은 코드를 바꾸지 않아서 코드 게이트를 돌리지 않아요.",
+  'room.notice.research.completed.body.counted': "이 조사 보고에 증거가 기록됐어요({total}개 중 {verified}개 검증됨). 조사 작업은 코드를 바꾸지 않아서 코드 게이트를 돌리지 않아요.",
   'room.notice.research.unverified': "조사 보고됨: 검증되지 않음",
   'room.notice.research.unverified.body': "이 조사 보고에 검증된 증거가 없어요. 조사 작업은 코드를 바꾸지 않아서 코드 게이트를 돌리지 않아요.",
   'room.notice.research.notCompleted': "조사 보고됨: 작업이 완료되지 않음",

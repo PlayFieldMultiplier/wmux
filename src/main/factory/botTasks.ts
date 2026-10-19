@@ -67,7 +67,11 @@ export function botTaskView(row: LedgerEntry, pr: BotTaskPr | null): BotTaskView
   if (!botId) return null;
   const g = row.gate?.recordedBy === 'system' ? row.gate : undefined;
   const summary = typeof row.summary === 'string' ? row.summary.replace(/\s+/g, ' ').trim().slice(0, BOT_TASK_SUMMARY_MAX) : '';
-  const nonCode = isResearchDispatch(row.dispatch) || g?.skipped === 'no_changes';
+  // Graded only once the worker reported (the report carries the evidence)
+  // and the row still stands on that report: before it, missing evidence is
+  // pending, not Not verified.
+  const reported = row.reportedAtRev !== undefined && (row.status === 'review_requested' || row.status === 'completed');
+  const nonCode = reported && (isResearchDispatch(row.dispatch) || g?.skipped === 'no_changes');
   const total = row.evidence?.items?.length ?? 0;
   const verified = row.verifiedItemCount;
   const verification = nonCode

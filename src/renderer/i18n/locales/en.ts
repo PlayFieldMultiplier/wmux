@@ -1947,6 +1947,7 @@ export const en = {
   'room.notice.gate.notRunNoBaseRef.body': "origin's default branch could not be resolved, so there is no base gate to run.",
   'room.notice.research.completed': "Research reported: task completed",
   'room.notice.research.completed.body': "Evidence was recorded for this research report. A research task changes no code, so no code gate runs.",
+  'room.notice.research.completed.body.counted': "Evidence was recorded for this research report ({verified} of {total} verified). A research task changes no code, so no code gate runs.",
   'room.notice.research.unverified': "Research reported: Not verified",
   'room.notice.research.unverified.body': "No verified evidence was recorded for this research report. A research task changes no code, so no code gate runs.",
   'room.notice.research.notCompleted': "Research reported: task not completed",

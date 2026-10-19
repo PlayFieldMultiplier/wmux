@@ -4388,7 +4388,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `gate.notRunNoBot` | — | `Gate not run: task left open` | — |
 | `gate.notRunNoWorktree` | — | `Gate not run: task left open` | — |
 | `gate.notRunNoBaseRef` | — | `Gate not run: task left open` | — |
-| `research.completed` | `verified` number, `total` number | `Research reported: task completed` | — |
+| `research.completed` | `verified` number, `total` number | `Research reported: task completed` | Body `…({verified} of {total} verified)…` when both counts are present and `total` > 0; the plain body otherwise (a card written before the grade). |
 | `research.unverified` | `verified` number, `total` number | `Research reported: Not verified` | — |
 | `research.notCompleted` | — | `Research reported: task not completed` | — |
 | `task.merged` | `pr` number | `PR #{pr} merged: task completed` | `pr`: the merged pull request that ended the task. |

@@ -335,7 +335,11 @@ export function noticeText(card: Pick<RoomCard, 'actor' | 'body' | 'notice'>, t:
   // A PR closed with no title known says only its number; a worker card
   // written before it named its task says what happened only.
   const titleKey = UNTITLED_NOTICE_CODES.has(notice.code) && args.title === undefined ? `${key}.untitled` : key;
-  const bodyKey = args.kind === 'research' && (RESUMABLE_NOTICE_CODES.has(notice.code) || notice.code === 'task.keptFolderCleaned') ? `${key}.body.research` : `${key}.body`;
+  const bodyKey = args.kind === 'research' && (RESUMABLE_NOTICE_CODES.has(notice.code) || notice.code === 'task.keptFolderCleaned') ? `${key}.body.research`
+    // A research report with its graded evidence says how much was verified
+    // (a card written before the grade has no counts).
+    : notice.code === 'research.completed' && typeof args.verified === 'number' && typeof args.total === 'number' && args.total > 0 ? `${key}.body.counted`
+      : `${key}.body`;
   return { title: t(titleKey, vars), body: wordedBody ? t(bodyKey, vars) : (card.body ?? '') };
 }
 

@@ -57,8 +57,9 @@ export interface BotTaskView {
    *  `needs_input`, what the worker is waiting for. Written by the worker or
    *  by main; shown as plain text. */
   summary?: string;
-  /** Non-code task evidence grade (research / no_changes). Absent on code
-   *  tasks graded by the system gate. `missing` = no evidence recorded. */
+  /** Non-code task evidence grade (research / no_changes), once the worker
+   *  reported. Absent on code tasks graded by the system gate, and before a
+   *  report (pending). `missing` = the report recorded no evidence. */
   verification?: {
     state: 'missing' | 'unverified' | 'partial' | 'verified';
     verified: number;

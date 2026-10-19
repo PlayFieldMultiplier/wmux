@@ -1925,6 +1925,7 @@ export const pl = {
   'room.notice.gate.notRunNoBaseRef.body': "Nie udało się ustalić domyślnej gałęzi origin, więc nie ma bazowej bramki do uruchomienia.",
   'room.notice.research.completed': "Research zgłoszony: zadanie ukończone",
   'room.notice.research.completed.body': "Zapisano dowody dla tego raportu researchu. Zadanie researchu nie zmienia kodu, więc nie uruchamia się na nim bramki kodu.",
+  'room.notice.research.completed.body.counted': "Zapisano dowody dla tego raportu researchu (zweryfikowano {verified} z {total}). Zadanie researchu nie zmienia kodu, więc nie uruchamia się na nim bramki kodu.",
   'room.notice.research.unverified': "Raport researchu: Niezweryfikowane",
   'room.notice.research.unverified.body': "Dla tego raportu researchu nie zapisano zweryfikowanych dowodów. Zadanie researchu nie zmienia kodu, więc nie uruchamia się na nim bramki kodu.",
   'room.notice.research.notCompleted': "Research zgłoszony: zadanie nieukończone",

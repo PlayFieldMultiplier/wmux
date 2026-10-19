@@ -2015,6 +2015,7 @@ export const zh = {
   'room.notice.gate.notRunNoBaseRef.body': "无法解析 origin 的默认分支，因此没有可运行的基础检查。",
   'room.notice.research.completed': "研究已报告：任务已完成",
   'room.notice.research.completed.body': "已为此研究报告记录证据。研究任务不修改代码，因此不运行代码检查。",
+  'room.notice.research.completed.body.counted': "已为此研究报告记录证据（已验证 {verified}/{total} 项）。研究任务不修改代码，因此不运行代码检查。",
   'room.notice.research.unverified': "研究报告：未验证",
   'room.notice.research.unverified.body': "此研究报告未记录已验证的证据。研究任务不修改代码，因此不运行代码检查。",
   'room.notice.research.notCompleted': "研究已报告：任务未完成",
