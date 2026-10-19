@@ -150,7 +150,7 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     for (const r of ports.records()) for (const x of r.sessions) recordedOwner.set(x.sessionId, { taskId: r.taskId, botId: r.botId });
     /** The task (and bot) a pane is the worker of, or undefined, as every
      *  other reader resolves it (workerSlots.ts resolvePaneOwner): its launch
-     *  record, else its reclaim record, else its bot worker session record. */
+     *  record, else its bot worker session record, else its reclaim record. */
     const paneOwner = (id: string): { taskId: string; botId?: string } | undefined => resolvePaneOwner(id, {
       ...(ports.paneTask ? { launch: ports.paneTask } : {}),
       reclaimed: (sid) => recordedOwner.get(sid) ?? null,
