@@ -237,6 +237,35 @@ describe('second layer: a folder git left after dropping the worktree', () => {
     expect(fs.existsSync(path.join(outside, 'task-a', 'src'))).toBe(true);
   });
 
+  it('never deletes where a link put in the folder\'s place leads, though it is inside the root and matches', async () => {
+    const backup = path.join(root, 'hash1', 'backup');
+    fs.mkdirSync(path.join(backup, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(backup, 'src', 'a.ts'), 'x');
+    const dir = path.join(root, 'hash1', 'task-a');
+    fs.symlinkSync(backup, dir, 'junction');
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    const { mgr, removeTree } = manager(fakeGit().git, { pendingRemovals: store });
+    const res = await mgr.finishPendingRemoval(dir);
+    expect(res).toMatchObject({ ok: false, preserved: true });
+    if (res && !res.ok) expect(res.error).toMatch(/a link or junction stands in its place/);
+    expect(removeTree).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(backup, 'src', 'a.ts'))).toBe(true);
+  });
+
+  it('a keep chosen while a finish ends the record (a worktree again) is recorded all the same', async () => {
+    const dir = leftover();
+    const store = new PendingWorktreeRemovals(path.join(tmp, 'wmux', 'worktask', 'pending-removals.json'));
+    await store.put({ path: dir, repoRoot: repo, repoHash: 'hash1', head: HEAD, at: 1 });
+    // git lists it again: the finish ends its record.
+    const { mgr } = manager(fakeGit({ listed: [dir] }).git, { pendingRemovals: store });
+    const finishing = mgr.finishPendingRemoval(dir);
+    const keeping = mgr.markPendingRemovalKept(dir);
+    await finishing;
+    await keeping;
+    expect(store.get(dir)).toMatchObject({ keep: true });
+  });
+
   it('never while git still lists it under another spelling (a junction alias)', async () => {
     const dir = leftover();
     const alias = path.join(tmp, 'alias');

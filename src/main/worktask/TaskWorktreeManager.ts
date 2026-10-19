@@ -248,6 +248,26 @@ function sameCanonical(a: string, b: string): boolean {
   return process.platform === 'win32' || process.platform === 'darwin' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+/** Whether `p`, or a folder between it and the root (`rootReal`, canonical),
+ *  is a link (a symlink or a junction), or the way cannot be read: a folder
+ *  replaced by one leads its canonical path somewhere else. An 8.3 short
+ *  name is not a link. */
+function linkOnTheWay(p: string, rootReal: string): boolean {
+  let cur = path.resolve(p);
+  for (;;) {
+    try {
+      if (sameCanonical(fs.realpathSync.native(cur), rootReal)) return false;
+      if (fs.lstatSync(cur).isSymbolicLink()) return true;
+    } catch {
+      return true;
+    }
+    const up = path.dirname(cur);
+    // Never reached the root.
+    if (up === cur) return true;
+    cur = up;
+  }
+}
+
 /**
  * repo 단위 직렬 큐를 갖춘 worktree 매니저. 인스턴스는 프로세스 수명 동안 재사용
  * (repoHash → 뮤텍스 체인을 유지해야 하므로).
@@ -964,7 +984,10 @@ export class TaskWorktreeManager {
       }
       await this.withRepoLock(queued.repoHash, async () => {
         const rec = store.get(safePath);
-        if (rec && !rec.keep) await store.put({ ...rec, keep: true });
+        if (rec?.keep) return;
+        // Gone while this waited (a finish found it a worktree again): the
+        // keep is recorded all the same.
+        await store.put(rec ? { ...rec, keep: true } : { path: safePath, repoRoot: '', repoHash: '', keep: true, at: Date.now() });
       });
     } finally {
       release();
@@ -1026,6 +1049,9 @@ export class TaskWorktreeManager {
       return { ok: false, error: `the leftover folder was kept: a path could not be resolved (${(err as Error).message})` };
     }
     if (!strictlyInside(real, rootReal)) return { ok: false, error: 'the leftover folder was kept: it is not inside the wmux worktrees folder' };
+    // What is deleted is the folder recorded, not where a link put in its
+    // place (or in a folder above it) leads.
+    if (linkOnTheWay(rec.path, rootReal)) return { ok: false, error: 'the leftover folder was kept: a link or junction stands in its place or on the way to it' };
     if (sameCanonical(real, repoReal) || strictlyInside(repoReal, real) || strictlyInside(real, repoReal)) {
       return { ok: false, error: 'the leftover folder was kept: it is, or holds, or sits in the repository' };
     }
