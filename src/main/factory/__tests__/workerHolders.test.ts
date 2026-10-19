@@ -716,8 +716,12 @@ describe('the earlier fixes hold through the set', () => {
   });
 
   it('a worker paused while its task is still working or needing input holds no cap, with no read yet; a relaunch there holds again', () => {
-    const r = rig({ rows: [row('w'), row('n', { status: 'input_required' })], records: [record('w', { ended: 'reported' }), record('n', { ended: 'reported' })], read: 'down' });
+    const r = rig({ rows: [row('w'), row('n', { status: 'input_required' })], records: [record('w', { ended: 'reported', endRev: 3 }), record('n', { ended: 'reported', endRev: 3 })], read: 'down' });
     expect(r.four()).toEqual({ agents: 0, factory: 0, bot: 0, live: 0 });
+    // A row that moved on since the pause (a pane may have been left running) is not freed by the record.
+    r.snap = { ...r.snap, rows: [row('w', { rev: 4 }), row('n', { status: 'input_required' })] };
+    expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
+    r.snap = { ...r.snap, rows: [row('w'), row('n', { status: 'input_required' })] };
     r.snap = { ...r.snap, read: 'ok', readAt: NOW - 5_000, busy: new Set(['ws-w']) };
     expect(r.four()).toEqual({ agents: 1, factory: 1, bot: 1, live: 1 });
   });
