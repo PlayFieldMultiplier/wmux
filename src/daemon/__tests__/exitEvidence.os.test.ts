@@ -90,12 +90,12 @@ describe('daemon exit evidence in a real process', () => {
   it('turns on fatal-error reports into the given directory and logs where', async () => {
     const reportDir = path.join(root, 'crash-reports');
     const r = await runChild(
-      `fs.appendFileSync(${JSON.stringify(path.join(root, 'report-settings.json'))}, JSON.stringify({ dir: process.report.directory, on: process.report.reportOnFatalError, excludeEnv: process.report.excludeEnv }));`,
+      `fs.appendFileSync(${JSON.stringify(path.join(root, 'report-settings.json'))}, JSON.stringify({ dir: process.report.directory, on: process.report.reportOnFatalError, excludeEnv: process.report.excludeEnv, excludeNetwork: process.report.excludeNetwork }));`,
       reportDir,
     );
     expect(r.code).toBe(0);
     expect(fs.existsSync(reportDir)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(path.join(root, 'report-settings.json'), 'utf8'))).toEqual({ dir: reportDir, on: true, excludeEnv: true });
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'report-settings.json'), 'utf8'))).toEqual({ dir: reportDir, on: true, excludeEnv: true, excludeNetwork: true });
     expect(r.log).toContain(`[info] [exit] a fatal error writes a diagnostic report (environment excluded) to ${reportDir}`);
   });
 });

@@ -33,7 +33,7 @@ export interface ExitEvidenceProcess {
   on(event: 'exit', listener: (code: number) => void): unknown;
   on(event: 'uncaughtExceptionMonitor', listener: (err: unknown, origin: string) => void): unknown;
   listenerCount(event: string): number;
-  report?: { reportOnFatalError: boolean; directory: string; excludeEnv?: boolean } | undefined;
+  report?: { reportOnFatalError: boolean; directory: string; excludeEnv?: boolean; excludeNetwork?: boolean } | undefined;
 }
 
 export interface ExitEvidenceOptions {
@@ -159,6 +159,11 @@ export function installExitEvidence(proc: ExitEvidenceProcess, opts: ExitEvidenc
         opts.log('warn', '[exit] diagnostic reports off: this Node cannot leave the environment out of them');
         return;
       }
+      // The header also lists every network interface with its MAC and IP
+      // addresses, and each TCP endpoint gets a reverse DNS lookup (which,
+      // in a process that is dying, is also a wait). None of it names a
+      // crash cause. Best effort: an older Node keeps it.
+      if ('excludeNetwork' in proc.report) proc.report.excludeNetwork = true;
       fs.mkdirSync(opts.reportDir, { recursive: true });
       // In the background: startup must not wait on the disk.
       void pruneCrashReports(opts.reportDir, { log: opts.log, now });
