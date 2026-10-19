@@ -90,7 +90,7 @@ describe('durable sequential workflows', () => {
     expect(() => open()).toThrow('owner history exceeds its limit');
   });
 
-  it('publishes startup readiness after a persistence-to-wake crash but does not churn the queue on unrelated ledger transitions', async () => {
+  it('publishes pending startup readiness without republishing old blocks or churning on unrelated ledger transitions', async () => {
     const store = open();
     const pending = await store.create(owner, input);
     const blocked = await store.create(owner, { ...input, clientWorkflowId: 'blocked' });
@@ -101,7 +101,7 @@ describe('durable sequential workflows', () => {
     await wakeReadyWorkflows(h.ports, await restored.reconcile([], true));
     expect(restored.get(blocked.id, owner.botId, owner.workspaceId)?.revision).toBe(blockedRevision);
     const facts = h.queue.list().flatMap((w) => w.reason.kind === 'facts' ? w.reason.factIds : []);
-    expect(facts).toEqual(expect.arrayContaining([workflowReadyFactId({ ...pending, revision: pending.revision + 1 }), workflowReadyFactId(restored.get(blocked.id, owner.botId, owner.workspaceId)!)]));
+    expect(facts).toEqual([workflowReadyFactId({ ...pending, revision: pending.revision + 1 })]);
     const baseline = h.queue.list();
     const enqueue = vi.spyOn(h.queue, 'enqueue');
     const jobs: Promise<void>[] = [];
@@ -112,6 +112,27 @@ describe('durable sequential workflows', () => {
       expect(enqueue).not.toHaveBeenCalled();
       expect(h.queue.list()).toEqual(baseline);
     } finally { off(); }
+  });
+
+  it('notifies a newly blocked startup intent once and does not replay its notification on later restarts', async () => {
+    const store = open(); const w = await store.create(owner, input);
+    await store.claim(w.id, owner.botId, owner.workspaceId, 'wake:old:1');
+    const restored = open(); const h = harness(restored);
+    await wakeReadyWorkflows(h.ports, await restored.reconcile([], true));
+    const blocked = restored.get(w.id, owner.botId, owner.workspaceId)!;
+    expect(blocked.state).toBe('blocked');
+    const first = h.queue.list()[0];
+    expect(first.reason).toMatchObject({ kind: 'facts', factIds: [workflowReadyFactId(blocked)] });
+    h.queue.start(first.id); h.queue.finish(first.id); await h.queue.flush();
+    const before = h.queue.list();
+    for (let i = 0; i < 3; i++) {
+      const next = open(); const after = harness(next); after.queue.load();
+      const changed = await next.reconcile([], true);
+      expect(changed).toEqual([]);
+      await wakeReadyWorkflows(after.ports, changed);
+      expect(after.queue.list()).toEqual(before);
+      expect(next.get(w.id, owner.botId, owner.workspaceId)?.revision).toBe(blocked.revision);
+    }
   });
 
   it('recovers a still-pending plan even when its previous ready wake finished before the crash', async () => {

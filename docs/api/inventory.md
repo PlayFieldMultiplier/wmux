@@ -475,6 +475,11 @@ for review rather than guessing whether to retry.
 Owner stop actions also stop pending saved workflows. Turning bots back on or
 restarting does not dispatch those steps again.
 
+Startup refreshes pending work and notifies steps newly blocked during recovery;
+it does not republish older blocked history. A crash after persisting a block
+but before publishing its wake can lose that one notification. The blocked
+state remains available through `workflow_read`; recovery never redispatches it.
+
 The initial version supports sequential code steps using the default worker
 preset. It does not add research steps, parallel dependencies, or automatic
 retries of blocked steps. All three RPC methods are internal bot tools and scope

@@ -236,9 +236,9 @@ export class BotWorkflowStore {
           this.changed(w);
         }
       }
-      // Startup must cover a crash between persisting readiness/blocking and
-      // publishing its wake. Live transitions publish only newly changed facts.
-      return recovering ? records : records.filter((w) => w.revision !== revisions.get(w.id));
+      // Startup revisits active work and newly blocked steps. Retained blocked
+      // history must not consume another wake record on every restart.
+      return records.filter((w) => (recovering && w.state === 'active') || w.revision !== revisions.get(w.id));
     });
   }
 
