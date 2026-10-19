@@ -11,6 +11,7 @@
 import type { FactRef } from './facts';
 import type { Party } from './handoff';
 import type { RoomAttachment } from './roomAttachments';
+import type { RoomFile } from './roomFiles';
 import { normalizeRepoKey } from './repoKey';
 import { BOT_ID_RE } from './bot';
 
@@ -192,6 +193,9 @@ export interface RoomCard {
   /** Main-written, `human` cards only: the photos the owner sent with the
    *  message (shared/roomAttachments.ts). Never set by a room.post param. */
   attachments?: RoomAttachment[];
+  /** Main-written, bot cards only: the files the bot attached with
+   *  room_post `files`, as stored copies (shared/roomFiles.ts). */
+  files?: RoomFile[];
 }
 
 /** A factory system card's stable code: the task gate's and the worker

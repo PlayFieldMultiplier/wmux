@@ -517,6 +517,8 @@ export const IPC = {
   // A photo on an owner card (the room's stored copy, as a data URL), and the
   // composer's file picker for photos.
   ROOM_ATTACHMENT: 'room:attachment',
+  ROOM_FILE_READ: 'room:file-read',
+  ROOM_FILE_SAVE: 'room:file-save',
   ROOM_PICK_ATTACHMENTS: 'room:pick-attachments',
   DIALOG_PICK_FOLDER: 'dialog:pick-folder',
   // File system
