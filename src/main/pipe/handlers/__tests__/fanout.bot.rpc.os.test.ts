@@ -411,6 +411,19 @@ describe('task.fanout.start — bot origin', () => {
     expect(r.start.mock.calls[1][0]).toMatchObject({ workflow, workflowBaseSha: SHA, caller: { tainted: true } });
   });
 
+  it.each(['awaiting approval', 'completed'])('an ordinary fan-out key cannot poll as an accepted workflow while %s', async (phase) => {
+    const r = rig('maintainer', {}, { builtinPresets: true });
+    if (phase === 'awaiting approval') r.approve();
+    const params = { idempotencyKey: 'wake:w-1:1', titles: ['ordinary'], preset: 'default' };
+    expect(await r.call(params, botCtx('maintainer'))).toMatchObject({ ok: true, status: 'accepted' });
+    if (phase === 'completed') await r.flush();
+    const binding = { id: 'wf-' + 'a'.repeat(24), step: 0, repoKey: 'o/r', tainted: false, onStartFailed: vi.fn() };
+    expect(await getWorkflowFanout()!(params, botCtx('maintainer'), binding)).toMatchObject({ ok: false });
+    if (phase === 'awaiting approval') { r.approve(); await r.flush(); }
+    expect(r.start).toHaveBeenCalledTimes(1);
+    expect(r.start.mock.calls[0][0]).not.toHaveProperty('workflow');
+  });
+
   it('blocks an accepted workflow when its owner stops during approval without launching a worker', async () => {
     const r = rig('maintainer', {}, { builtinPresets: true });
     r.approve();

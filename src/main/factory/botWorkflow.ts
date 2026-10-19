@@ -81,7 +81,7 @@ export class BotWorkflowStore {
     const raw: unknown = JSON.parse(fs.readFileSync(this.file, 'utf8'));
     if (!object(raw) || raw.version !== 1) throw new Error('unsupported workflow file');
     // Malformed dispatch evidence must never turn back into pending work.
-    if (!Array.isArray(raw.workflows) || raw.workflows.length > WORKFLOW_LIMITS.records
+    if (!Array.isArray(raw.workflows) || raw.workflows.length > WORKFLOW_LIMITS.totalRecords
       || !raw.workflows.every((w) => object(w) && validateWorkflowInput(w)
         && typeof w.id === 'string' && /^wf-[a-f0-9]{24}$/.test(w.id)
         && bounded(w.botId, 100) && bounded(w.workspaceId, 200) && bounded(w.repoKey, 300)
@@ -94,6 +94,13 @@ export class BotWorkflowStore {
     }
     const records = raw.workflows as unknown as BotWorkflow[];
     if (new Set(records.map((w) => w.id)).size !== records.length) throw new Error('duplicate workflow IDs');
+    const owners = new Map<string, number>();
+    for (const w of records) {
+      const key = JSON.stringify([w.botId, w.workspaceId]);
+      const count = (owners.get(key) ?? 0) + 1;
+      if (count > WORKFLOW_LIMITS.records) throw new Error('workflow owner history exceeds its limit');
+      owners.set(key, count);
+    }
     this.records = copy(records);
   }
 
@@ -135,7 +142,10 @@ export class BotWorkflowStore {
         }
         return existing;
       }
-      if (records.length >= WORKFLOW_LIMITS.records) throw new Error('workflow history is full; existing records are retained to prevent replay');
+      if (records.filter((w) => w.botId === owner.botId && w.workspaceId === owner.workspaceId).length >= WORKFLOW_LIMITS.records) {
+        throw new Error('this workflow owner history is full; existing records are retained to prevent replay');
+      }
+      if (records.length >= WORKFLOW_LIMITS.totalRecords) throw new Error('global workflow storage is full; existing records are retained to prevent replay');
       const at = this.now();
       const workflow: BotWorkflow = { ...owner, ...input, id, steps: input.steps.map((s) => ({ ...s, state: 'pending' })), state: 'active', revision: 1, createdAt: at, updatedAt: at };
       records.push(workflow);
@@ -157,12 +167,13 @@ export class BotWorkflowStore {
     });
   }
 
-  block(id: string, step: number, reason: string): Promise<void> {
+  block(id: string, step: number, reason: string): Promise<BotWorkflow | null> {
     return this.update((records) => {
       const w = records.find((r) => r.id === id);
-      if (!w || w.steps[step]?.state !== 'dispatching') return;
+      if (!w || w.steps[step]?.state !== 'dispatching') return null;
       w.steps[step].state = 'blocked'; w.steps[step].error = reason.slice(0, 1_000);
       w.state = 'blocked'; this.changed(w);
+      return w;
     });
   }
 
@@ -187,6 +198,7 @@ export class BotWorkflowStore {
   /** Task identity is main's stamp, additionally constrained by both owners. */
   reconcile(rows: readonly LedgerEntry[], recovering = false): Promise<BotWorkflow[]> {
     return this.update((records) => {
+      const revisions = new Map(records.map((w) => [w.id, w.revision]));
       for (const w of records) {
         if (w.state !== 'active') continue;
         const step = w.steps.findIndex((s) => s.state !== 'completed');
@@ -201,6 +213,8 @@ export class BotWorkflowStore {
             s.state = 'blocked'; s.error = matches.length > 1 ? 'More than one task claims this step; inspect tasks before continuing.' : 'Dispatch outcome is unknown after restart. Inspect tasks; this step will not be resent automatically.';
             w.state = 'blocked'; this.changed(w);
           }
+          // A prior ready wake may have finished before the pending step was
+          // claimed. Give startup one fresh fact; ordinary transitions do not.
           if (recovering && s.state === 'pending') this.changed(w);
           continue;
         }
@@ -222,7 +236,9 @@ export class BotWorkflowStore {
           this.changed(w);
         }
       }
-      return records;
+      // Startup must cover a crash between persisting readiness/blocking and
+      // publishing its wake. Live transitions publish only newly changed facts.
+      return recovering ? records : records.filter((w) => w.revision !== revisions.get(w.id));
     });
   }
 

@@ -50,6 +50,10 @@ export async function wakeReadyWorkflows(p: WorkflowPorts, workflows: readonly B
 }
 
 export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): void {
+  const blockAndWake = async (id: string, step: number, reason: string): Promise<void> => {
+    const changed = await p.store.block(id, step, reason);
+    if (changed) await wakeReadyWorkflows(p, [changed]);
+  };
   router.register(WORKFLOW_RPC.read, async (params, ctx) => {
     const bot = owner(ctx, p);
     if (!bot) return refuse('NOT_AUTHORIZED', 'workflow.read requires the owning factory bot');
@@ -79,7 +83,7 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
     if (!ordinal || Number(ordinal) > 16 || key !== botFanoutIdempotencyKey(turn.wakeId, Number(ordinal))) return refuse('INVALID_ARGUMENT', 'use the current wake fan-out key (workflow and fan-out share its ordinal)');
     if (typeof params.workflowId !== 'string') return refuse('INVALID_ARGUMENT', 'workflowId is required');
     try {
-      await p.store.reconcile(p.rows());
+      await wakeReadyWorkflows(p, await p.store.reconcile(p.rows()));
       const workflow = p.store.get(params.workflowId, bot.id, bot.workspaceId);
       if (!workflow) return refuse('NOT_FOUND', 'workflow not found');
       if (bot.repo?.repoKey !== workflow.repoKey) return refuse('FAILED_PRECONDITION', 'the bot repository changed; this workflow cannot move repositories');
@@ -92,10 +96,11 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
       const prompt = workflowWorkerPrompt(step.prompt, predecessor);
       const dispatch = await fanout({ prompt, titles: [step.title], preset: 'default', idempotencyKey: key, threadId: workflow.threadId }, ctx,
         { id: workflow.id, step: claim.step, tainted: workflow.tainted, repoKey: workflow.repoKey, ...(predecessor?.headSha ? { baseSha: predecessor.headSha } : {}),
-          onStartFailed: (reason) => { if (!p.active()) return; void p.store.block(workflow.id, claim.step, reason).then(() => wakeReadyWorkflows(p, p.store.list(bot.id, bot.workspaceId))).catch((error) => console.warn('[workflow] start failure persistence:', error)); } });
+          onStartFailed: (reason) => { if (!p.active()) return; void blockAndWake(workflow.id, claim.step, reason).catch((error) => console.warn('[workflow] start failure persistence:', error)); } });
       if (!p.active()) return refuse('FAILED_PRECONDITION', 'workflow module stopped while fan-out was pending');
-      if (!dispatch || typeof dispatch !== 'object' || !('ok' in dispatch) || dispatch.ok !== true) {
-        await p.store.block(workflow.id, claim.step, 'Fan-out refused the step. It will not be resent automatically.');
+      if (!dispatch || typeof dispatch !== 'object' || !('ok' in dispatch) || dispatch.ok !== true
+        || !('status' in dispatch) || dispatch.status !== 'accepted') {
+        await blockAndWake(workflow.id, claim.step, 'Fan-out did not accept a new workflow step. It will not be resent automatically.');
       }
       return { ok: true, workflow: p.store.get(workflow.id, bot.id, bot.workspaceId), dispatch };
     } catch (error) {

@@ -454,6 +454,13 @@ Bots can persist up to eight ordered code steps with `workflow_create`
 across retries and restarts. `workflow_read` (`workflow.read`) returns the
 calling bot's workflows, step states, and task/result bindings.
 
+History retains completed and blocked plans to prevent replay. Each bot/workspace
+owner can retain 500 plans, and the shared store has a separate 5,000-plan safety
+ceiling. Reaching either limit refuses new plans without deleting existing
+evidence; idempotent retries and reads of retained plans remain available. The
+aggregate ceiling can eventually be reached across multiple owners and requires
+operator review rather than automatic history pruning.
+
 `workflow_advance` (`workflow.advance`) starts at most one eligible step through
 the existing fan-out authorization, budget, and wake ordinal checks. Its
 `idempotency_key` shares the `wake:<wakeId>:<n>` sequence with `fanout_start`.

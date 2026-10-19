@@ -1186,6 +1186,9 @@ export function registerFanOutRpc(
       return { ok: true as const, status: 'pending_cancelled' as const, idempotencyKey: callerKey, dropped };
     }
     const known = service.statusOf(key);
+    if (workflow && (known.state !== 'unknown' || pending.has(key) || terminal.has(key))) {
+      return deny('FAILED_PRECONDITION', 'this fan-out key already names a dispatch; use a fresh current-wake ordinal for a workflow step');
+    }
     if (known.state === 'running') {
       return { ok: true as const, status: 'running' as const, idempotencyKey: callerKey };
     }

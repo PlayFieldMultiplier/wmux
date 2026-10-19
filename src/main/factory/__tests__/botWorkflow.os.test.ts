@@ -14,7 +14,7 @@ import { setRedactedSecrets, __resetRedactedSecretsForTesting } from '../secretR
 import { WakeTaint } from '../wakeTaint';
 import { composeBotWorkerPrompt } from '../../worktask/botFanoutPresets';
 import { FANOUT_PROMPT_MAX_BYTES } from '../../../shared/workTask';
-import { WORKFLOW_RPC } from '../../../shared/botWorkflow';
+import { WORKFLOW_RPC, WORKFLOW_LIMITS, workflowReadyFactId, type BotWorkflow } from '../../../shared/botWorkflow';
 import type { BotProfile } from '../../../shared/bot';
 import type { RpcContext } from '../../../shared/rpc';
 import type { FactoryRouter } from '../factoryHost';
@@ -31,6 +31,9 @@ beforeEach(() => { __resetFactoryStopForTesting(); dir = fs.mkdtempSync(path.joi
 afterEach(() => { __resetRedactedSecretsForTesting(); fs.rmSync(dir, { recursive: true, force: true }); });
 const file = () => path.join(dir, 'workflows.json');
 const open = () => { const store = new BotWorkflowStore(file()); store.load(); return store; };
+const history = (w: BotWorkflow, count: number) => Array.from({ length: count }, (_, i) => ({ ...w,
+  id: `wf-${i.toString(16).padStart(24, '0')}`, clientWorkflowId: `history-${i}`,
+  botId: i < WORKFLOW_LIMITS.records ? w.botId : `bot-history-${Math.floor(i / WORKFLOW_LIMITS.records)}` }));
 async function task(ledger: TaskLedger, workflowId: string, overrides = {}) {
   return ledger.register({ id: 'wtask-one', title: 'first', ownerWorkspaceId: owner.workspaceId, taskWorkspaceId: worker.workspaceId,
     dispatch: { origin: { kind: 'bot', botId: owner.botId }, repoKey: owner.repoKey, workflow: { id: workflowId, step: 0 } }, ...overrides });
@@ -56,6 +59,99 @@ function harness(store: BotWorkflowStore, ledger = new TaskLedger({ dir })) {
 }
 
 describe('durable sequential workflows', () => {
+  it('caps each bot/workspace history independently and reloads more than 500 retained plans', async () => {
+    const w = await open().create(owner, input);
+    fs.writeFileSync(file(), JSON.stringify({ version: 1, workflows: history(w, WORKFLOW_LIMITS.records) }));
+    const store = open();
+    await expect(store.create(owner, input)).rejects.toThrow('owner history is full');
+    const otherBot = { ...owner, botId: 'bot-other' };
+    const otherWorkspace = { ...owner, workspaceId: 'ws-other' };
+    const other = await store.create(otherBot, input);
+    const moved = await store.create(otherWorkspace, input);
+    const restored = open();
+    expect(restored.list(owner.botId, owner.workspaceId)).toHaveLength(WORKFLOW_LIMITS.records);
+    expect(restored.get(other.id, otherBot.botId, otherBot.workspaceId)).toEqual(other);
+    expect(restored.get(moved.id, otherWorkspace.botId, otherWorkspace.workspaceId)).toEqual(moved);
+    expect(await restored.create(otherBot, input)).toEqual(other);
+  });
+
+  it('retains all records at the aggregate storage ceiling and refuses further new work without deleting evidence', async () => {
+    const w = await open().create(owner, input);
+    const records = history(w, WORKFLOW_LIMITS.totalRecords);
+    fs.writeFileSync(file(), JSON.stringify({ version: 1, workflows: records }));
+    const before = fs.readFileSync(file(), 'utf8');
+    const store = open();
+    await expect(store.create({ ...owner, botId: 'bot-new' }, input)).rejects.toThrow('global workflow storage is full');
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before);
+    expect(open().list(owner.botId, owner.workspaceId)).toHaveLength(WORKFLOW_LIMITS.records);
+    fs.writeFileSync(file(), JSON.stringify({ version: 1, workflows: history(w, WORKFLOW_LIMITS.totalRecords + 1) }));
+    expect(() => open()).toThrow('invalid workflow evidence');
+    fs.writeFileSync(file(), JSON.stringify({ version: 1, workflows: history(w, WORKFLOW_LIMITS.records + 1).map((r) => ({ ...r, botId: owner.botId })) }));
+    expect(() => open()).toThrow('owner history exceeds its limit');
+  });
+
+  it('publishes startup readiness after a persistence-to-wake crash but does not churn the queue on unrelated ledger transitions', async () => {
+    const store = open();
+    const pending = await store.create(owner, input);
+    const blocked = await store.create(owner, { ...input, clientWorkflowId: 'blocked' });
+    await store.claim(blocked.id, owner.botId, owner.workspaceId, 'wake:old:1');
+    await store.block(blocked.id, 0, 'known refusal');
+    const restored = open(); const h = harness(restored);
+    const blockedRevision = restored.get(blocked.id, owner.botId, owner.workspaceId)?.revision;
+    await wakeReadyWorkflows(h.ports, await restored.reconcile([], true));
+    expect(restored.get(blocked.id, owner.botId, owner.workspaceId)?.revision).toBe(blockedRevision);
+    const facts = h.queue.list().flatMap((w) => w.reason.kind === 'facts' ? w.reason.factIds : []);
+    expect(facts).toEqual(expect.arrayContaining([workflowReadyFactId({ ...pending, revision: pending.revision + 1 }), workflowReadyFactId(restored.get(blocked.id, owner.botId, owner.workspaceId)!)]));
+    const baseline = h.queue.list();
+    const enqueue = vi.spyOn(h.queue, 'enqueue');
+    const jobs: Promise<void>[] = [];
+    const off = h.ledger.onTransition(() => { jobs.push(restored.reconcile(h.ledger.list()).then((changed) => wakeReadyWorkflows(h.ports, changed))); });
+    try {
+      for (let i = 0; i < 40; i++) await h.ledger.register({ id: `unrelated-${i}`, title: 'Other work', ownerWorkspaceId: 'ws-other', taskWorkspaceId: 'ws-unrelated-task' });
+      await Promise.all(jobs);
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(h.queue.list()).toEqual(baseline);
+    } finally { off(); }
+  });
+
+  it('recovers a still-pending plan even when its previous ready wake finished before the crash', async () => {
+    const store = open(); const w = await store.create(owner, input); const before = harness(store);
+    await wakeReadyWorkflows(before.ports, [w]);
+    const prior = before.queue.list()[0];
+    before.queue.start(prior.id); before.queue.finish(prior.id); await before.queue.flush();
+    const restored = open(); const after = harness(restored); after.queue.load();
+    await wakeReadyWorkflows(after.ports, await restored.reconcile([], true));
+    const next = after.queue.list({ states: ['queued'] });
+    expect(next).toHaveLength(1);
+    expect(next[0].reason).toMatchObject({ kind: 'facts', factIds: [workflowReadyFactId({ ...w, revision: w.revision + 1 })] });
+    expect(after.queue.get(prior.id)?.state).toBe('done');
+    await wakeReadyWorkflows(after.ports, await restored.reconcile([]));
+    expect(after.queue.list()).toHaveLength(2);
+    await after.queue.flush();
+  });
+
+  it('wakes only the workflow newly blocked by a start failure, once', async () => {
+    const store = open(); const w = await store.create(owner, input);
+    const other = await store.create(owner, { ...input, clientWorkflowId: 'other' });
+    const h = harness(store); const enqueue = vi.spyOn(h.queue, 'enqueue');
+    await h.call(WORKFLOW_RPC.advance, { workflowId: w.id, idempotencyKey: 'wake:one:1' });
+    h.fanout.mock.calls[0][2].onStartFailed('launch failed');
+    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+    await h.queue.flush();
+    expect(JSON.stringify(h.queue.list())).not.toContain(other.id);
+    h.fanout.mock.calls[0][2].onStartFailed('duplicate callback');
+    await store.flush();
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['running', 'completed', 'awaiting_approval', 'already_started', undefined])('blocks a reused ordinary fan-out key instead of accepting its %s poll as a new dispatch', async (status) => {
+    const store = open(); const w = await store.create(owner, input); const h = harness(store);
+    h.fanout.mockResolvedValue({ ok: true, status });
+    expect(await h.call(WORKFLOW_RPC.advance, { workflowId: w.id, idempotencyKey: 'wake:one:1' })).toMatchObject({ ok: true, workflow: { state: 'blocked' } });
+    await h.call(WORKFLOW_RPC.advance, { workflowId: w.id, idempotencyKey: 'wake:one:2' });
+    expect(h.fanout).toHaveBeenCalledTimes(1);
+    expect(open().get(w.id, owner.botId, owner.workspaceId)?.steps[0].state).toBe('blocked');
+  });
   it.each(['title', 'step title', 'prompt', 'client id'])('rejects an overlong redacted %s without replacing the loadable primary', async (field) => {
     const store = open(); const existing = await store.create(owner, input);
     const before = fs.readFileSync(file(), 'utf8');

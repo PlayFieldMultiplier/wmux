@@ -1,7 +1,9 @@
 import type { ThreadId } from './room';
 
 export const WORKFLOW_RPC = { create: 'workflow.create', read: 'workflow.read', advance: 'workflow.advance' } as const;
-export const WORKFLOW_LIMITS = { steps: 8, records: 500, promptChars: 6_000, promptBytes: 6_000, titleChars: 200, clientIdChars: 128 } as const;
+// History is retained to prevent replay: each owner has its own quota, with
+// a separate aggregate storage ceiling that fails closed without deletion.
+export const WORKFLOW_LIMITS = { steps: 8, records: 500, totalRecords: 5_000, promptChars: 6_000, promptBytes: 6_000, titleChars: 200, clientIdChars: 128 } as const;
 
 export interface WorkflowStepInput { title: string; prompt: string; }
 export interface WorkflowCreateParams { clientWorkflowId: string; title: string; steps: WorkflowStepInput[]; }
