@@ -76,11 +76,16 @@ function botIdParam(params: Record<string, unknown>): string | null {
 }
 
 /** A status as a caller reads it: a bot does not read the owner's account
- *  and its usage limits. */
-function statusFor(caller: Caller, status: BotStatus | null): BotStatus | null {
-  if (!status || caller?.kind !== 'bot' || !status.quota) return status;
+ *  and its usage limits, nor the account a signed-out bot is on. */
+export function statusFor(caller: Caller, status: BotStatus | null): BotStatus | null {
+  if (!status || caller?.kind !== 'bot' || (!status.quota && status.lastError?.account === undefined)) return status;
   const out = { ...status };
   delete out.quota;
+  if (out.lastError?.account !== undefined) {
+    const lastError = { ...out.lastError };
+    delete lastError.account;
+    out.lastError = lastError;
+  }
   return out;
 }
 
