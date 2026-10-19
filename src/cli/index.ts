@@ -278,6 +278,9 @@ async function main(): Promise<void> {
   if (argv[0] === 'codex') {
     process.removeAllListeners('SIGINT');
     process.on('SIGINT', () => { /* the foreground TUI handles Ctrl-C */ });
+    // Ctrl+Break would otherwise end this process before handleCodex's
+    // finally closes the pane's relay lease.
+    if (process.platform === 'win32') process.on('SIGBREAK', () => { /* the foreground TUI handles Ctrl+Break */ });
     try { await handleCodex(argv.slice(1)); }
     catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
     return;

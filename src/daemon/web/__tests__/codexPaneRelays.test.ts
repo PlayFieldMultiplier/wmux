@@ -143,6 +143,20 @@ describe('Codex pane relay lifetime',()=>{
     await old.close();expect(registry.selection('pane',current)).toBeDefined();
     expect(second.close).not.toHaveBeenCalled();await registry.shutdown();
   });
+  it('releases only the current lease: a stale lease keeps the replacement relay, the current lease closes it',async()=>{
+    const first=relay();const second=relay();let count=0;
+    const registry=new CodexPaneRelays(async()=>count++ ? second : first);
+    (await registry.prepare('pane')).commit(owner());
+    const stale=registry.leaseId('pane')!;
+    await registry.retire('pane');
+    (await registry.prepare('pane')).commit(owner());const current=registry.leaseId('pane')!;
+    expect(current).not.toBe(stale);
+    await registry.release('pane',stale);
+    expect(second.close).not.toHaveBeenCalled();expect(registry.leaseId('pane')).toBe(current);
+    await registry.release('pane',current);
+    expect(second.close).toHaveBeenCalledOnce();expect(registry.leaseId('pane')).toBeUndefined();
+    await registry.shutdown();
+  });
   it('rejects duplicate reservations and all reservations after shutdown',async()=>{
     const registry=new CodexPaneRelays(async()=>relay());
     await registry.prepare('pane');

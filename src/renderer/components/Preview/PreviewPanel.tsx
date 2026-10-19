@@ -6,6 +6,7 @@ import { useStore } from '../../stores';
 import { previewFileName } from '../../../shared/filePreview';
 import { usePreviewSource } from './usePreviewSource';
 import ImageView from './ImageView';
+import SvgView from './SvgView';
 import PdfView from './PdfView';
 import HtmlView from './HtmlView';
 
@@ -98,7 +99,10 @@ export default function PreviewPanel({ filePath, isActive, paneId }: { filePath:
           {t(`preview.error.${source.reason}`)}
         </div>
       )}
-      {source.status === 'ready' && source.kind === 'image' && (
+      {source.status === 'ready' && source.kind === 'image' && source.mime === 'image/svg+xml' && (
+        <SvgView url={source.url} size={source.size} format={format} exists={source.exists} complete={source.complete} />
+      )}
+      {source.status === 'ready' && source.kind === 'image' && source.mime !== 'image/svg+xml' && (
         <ImageView url={source.url} size={source.size} format={format} exists={source.exists} complete={source.complete} />
       )}
       {source.status === 'ready' && source.kind === 'html' && (
