@@ -81,6 +81,7 @@ import {
 } from '../../pty/sessionPromptScheduleStore';
 import { createSessionPromptScheduleHandlers } from '../../pty/sessionPromptScheduleHandlers';
 import { localReconnectAnswer } from './localPtyReconnect';
+import { pendingRemovalRefusal } from '../../worktask/pendingWorktreeRemovals';
 
 /**
  * Allowed shell basenames (compared case-insensitively).
@@ -552,6 +553,9 @@ export function registerPTYHandlers(
       // A bot's worker starts in the folder its rules or settings were checked in.
       const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution) ?? guardedClaudeCwdRefusal(staged.launch, cwdResolution);
       if (codexCwdRefusal) throw new Error(codexCwdRefusal);
+      // #2388: a task folder whose removal did not finish is locked.
+      const pendingRefusal = pendingRemovalRefusal(cwdResolution.safeCwd);
+      if (pendingRefusal) throw new Error(pendingRefusal);
       if (secretEnv) {
         const refusal = secretCreateCwdRefusal(grantedCwd, cwdResolution);
         if (refusal) throw new Error(refusal);
@@ -900,6 +904,8 @@ export function registerPTYHandlers(
       // A bot's worker starts in the folder its rules or settings were checked in.
       const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution) ?? guardedClaudeCwdRefusal(staged.launch, cwdResolution);
       if (codexCwdRefusal) throw new Error(codexCwdRefusal);
+      const pendingRefusal = pendingRemovalRefusal(cwdResolution.safeCwd);
+      if (pendingRefusal) throw new Error(pendingRefusal);
       const safeCwd = cwdResolution.safeCwd;
       const effectiveCwd = safeCwd ?? undefined;
       // Split off initialCommand — it's written into the shell post-create, not

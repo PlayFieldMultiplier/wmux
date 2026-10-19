@@ -104,7 +104,9 @@ const TURN_SEED_READ_TIMEOUT_MS = 5_000;
 /** A workspace tree push looks for freed task folders at most this often. */
 const FOLDER_KICK_MIN_MS = 10_000;
 /** The task folder cleanup's worktree manager (its per-repository lock
- *  orders its own removals and restores). */
+ *  orders its own removals and restores). No pending-removal store (#2388):
+ *  a bot's folder is recorded in the cleanup's own store before it goes, and
+ *  a half-removed one is finished from that record (taskFolderCleanup). */
 const folderWorktrees = new TaskWorktreeManager();
 
 /** The renderer's workspace.close answers this fast or not at all. */

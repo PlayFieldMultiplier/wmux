@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createFilePersister, readVersionedFile, type FilePersister } from '../factory/versionedFile';
+import { sessionHostDir } from './stopSessionsInDir';
 
 export const PENDING_REMOVALS_FILENAME = 'pending-removals.json';
 export const PENDING_REMOVALS_VERSION = 1 as const;
@@ -81,26 +82,127 @@ export class PendingWorktreeRemovals implements PendingRemovalStore {
     return [...this.records.values()].map((r) => ({ ...r }));
   }
 
-  put(rec: PendingWorktreeRemoval): Promise<void> {
+  /** A record whose write fails is not taken (the write throws): memory
+   *  goes back to what the file holds, so a retry writes again rather than
+   *  find the change made. */
+  async put(rec: PendingWorktreeRemoval): Promise<void> {
     const key = pendingRemovalKey(rec.path);
+    const prev = this.records.get(key);
+    const next = { ...rec };
     this.records.delete(key);
-    this.records.set(key, { ...rec });
-    for (const k of this.records.keys()) {
+    this.records.set(key, next);
+    const dropped: Array<[string, PendingWorktreeRemoval]> = [];
+    for (const [k, v] of this.records) {
       if (this.records.size <= PENDING_REMOVALS_MAX) break;
-      if (k !== key) this.records.delete(k);
+      if (k === key) continue;
+      this.records.delete(k);
+      dropped.push([k, v]);
     }
-    return this.write();
+    try {
+      await this.write();
+    } catch (err) {
+      if (this.records.get(key) === next) {
+        if (prev) this.records.set(key, prev);
+        else this.records.delete(key);
+      }
+      for (const [k, v] of dropped) if (!this.records.has(k)) this.records.set(k, v);
+      throw err;
+    }
   }
 
-  delete(worktreePath: string): Promise<void> {
-    if (!this.records.delete(pendingRemovalKey(worktreePath))) return Promise.resolve();
-    return this.write();
+  /** A record whose deletion cannot be written stays (the write throws):
+   *  the file still holds it, so a restart would find it again, and a later
+   *  delete must try the write again rather than find nothing to do. */
+  async delete(worktreePath: string): Promise<void> {
+    const key = pendingRemovalKey(worktreePath);
+    const rec = this.records.get(key);
+    if (!rec) return;
+    this.records.delete(key);
+    try {
+      await this.write();
+    } catch (err) {
+      if (!this.records.has(key)) this.records.set(key, rec);
+      throw err;
+    }
   }
 
   private async write(): Promise<void> {
     await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
     await this.persister.schedule();
   }
+}
+
+/** The store the app's task close uses: a record in it locks its folder
+ *  against new panes (pendingRemovalRefusal). */
+let active: PendingRemovalStore | null = null;
+
+export function setActivePendingRemovals(store: PendingRemovalStore | null): void {
+  active = store;
+}
+
+/** The key of a folder as the file system names it: links, junctions and
+ *  8.3 short names resolved when it exists. */
+function canonicalKey(p: string): string {
+  let real = path.resolve(p);
+  try {
+    real = fs.realpathSync.native(real);
+  } catch {
+    // Not there: compared as spelled.
+  }
+  return pendingRemovalKey(real);
+}
+
+/**
+ * Why a pane may not start in `cwd`, or null: a folder whose removal is
+ * pending is half deleted, and what a pane wrote there would be checked
+ * against it, or deleted with it. A WSL pane's Linux path is read as the
+ * Windows folder it is. Both sides are compared canonical, so an alias of
+ * the folder (a link, a junction, an 8.3 name) is refused too.
+ */
+export function pendingRemovalRefusal(cwd: string | null | undefined, platform: NodeJS.Platform = process.platform): string | null {
+  if (!cwd || !active) return null;
+  return refusalAmong(cwd, {}, active.all(), platform);
+}
+
+function refusalAmong(
+  cwd: string,
+  session: { wslTarget?: { distribution?: unknown } },
+  records: readonly PendingWorktreeRemoval[],
+  platform: NodeJS.Platform,
+): string | null {
+  const want = canonicalKey(sessionHostDir(cwd, session, platform));
+  for (const rec of records) {
+    const held = canonicalKey(rec.path);
+    if (want === held || want.startsWith(held + path.sep)) {
+      return `${cwd} is inside ${rec.path}, a task folder whose removal did not finish; open the pane in another folder, or close its task again to finish the removal`;
+    }
+  }
+  return null;
+}
+
+/**
+ * pendingRemovalRefusal for the daemon, which starts panes the desktop never
+ * sees (a phone's, an automation's): read from the store's file under
+ * `wmuxDir`. A file that cannot be read refuses nothing here (logged); the
+ * desktop's own check and the sweep's last look before a deletion still
+ * hold.
+ */
+export function pendingRemovalRefusalAt(
+  wmuxDir: string,
+  cwd: string | null | undefined,
+  session: { wslTarget?: { distribution?: unknown } } = {},
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (!cwd) return null;
+  let records: PendingWorktreeRemoval[];
+  try {
+    const raw = readVersionedFile(path.join(wmuxDir, 'worktask', PENDING_REMOVALS_FILENAME), PENDING_REMOVALS_VERSION);
+    records = raw && Array.isArray(raw.removals) ? raw.removals.filter(isRecord) : [];
+  } catch (err) {
+    console.warn(`[worktask] pending removals not read for a new pane: ${(err as Error).message}`);
+    return null;
+  }
+  return records.length > 0 ? refusalAmong(cwd, session, records, platform) : null;
 }
 
 /** What the sweep at start needs (TaskWorktreeManager and the daemon). */
