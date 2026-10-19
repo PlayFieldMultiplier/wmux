@@ -889,6 +889,9 @@ export function endedTaskAgentRuns(
   });
 }
 
+/** The daemon's session.stopAgent refusals that come before any signal. */
+const STOP_REFUSED_BEFORE_SIGNAL: ReadonlySet<string> = new Set(['turn_open', 'unsupported', 'not_authorized', 'no_session']);
+
 /** Attempts per ended task before the reclaim gives it up. */
 export const RECLAIM_ATTEMPTS_MAX = 3;
 /** A `stopping` record is looked at again this long after its stop began
@@ -1054,7 +1057,7 @@ export async function reclaimWorker(
     if (panes.length === 0) return rec;
     let failed = 0;
     let attempted = 0;
-    // Stops that signalled the agent, with part of its tree left running.
+    // Failed stops that may have signalled the agent (not refused before).
     let signalled = 0;
     // A pane is closed only in the task's own workspace: a WSL terminal the
     // owner opened in the same folder elsewhere is never the worker's.
@@ -1101,10 +1104,11 @@ export async function reclaimWorker(
           && isTaskOwnWorkerPane({ id: p.sessionId }, entry.id, recorded, ports.sessionRecordOf);
         reclaimStops.set(p.sessionId, now());
         const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined);
-        // Held back before any signal: a later exit is the worker's own. Any
+        // Refused before any signal: a later exit is the worker's own. Any
         // other answer (a stop, a part of its tree left running, a failed
         // read) may follow a signal, so its exit stays the reclaim's.
-        if (r.code === 'turn_open') reclaimStops.delete(p.sessionId);
+        const beforeSignal = typeof r.code === 'string' && STOP_REFUSED_BEFORE_SIGNAL.has(r.code);
+        if (beforeSignal) reclaimStops.delete(p.sessionId);
         // The daemon found the turn open at the stop itself: nothing was
         // signalled, and it is no failed stop.
         if (r.code === 'turn_open') {
@@ -1117,11 +1121,13 @@ export async function reclaimWorker(
         // (counted as one, it kept the record `stopping` for good).
         if (r.ok !== true && r.code !== 'no_session') {
           failed++;
-          if (r.code === 'still_running') signalled++;
+          if (!beforeSignal) signalled++;
           log(`[factory] reclaim: the agent of ${p.sessionId} (task ${entry.id}) was not stopped: ${r.code ?? 'refused'}`);
         }
       } catch (err) {
         failed++;
+        // A lost answer may follow a signal.
+        signalled++;
         log(`[factory] reclaim: the agent of ${p.sessionId} (task ${entry.id}) was not stopped: ${String(err)}`);
       }
     }

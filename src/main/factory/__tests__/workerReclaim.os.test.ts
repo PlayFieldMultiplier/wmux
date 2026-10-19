@@ -634,6 +634,13 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     await reclaimWorker(partial.ports, current, 'reported');
     expect(store.get(current.id)?.state).toBe('stopping');
     expect(stoppedByReclaimLately('daemon-7', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(true);
+    // A failed read after the signal, or a lost answer, is kept the same way.
+    for (const [i, stop] of [async () => ({ ok: false, code: 'unknown' }), async () => { throw new Error('timeout'); }].entries()) {
+      const s2 = ReclaimedWorkers.at(path.join(dir, `lost-${i}`));
+      await reclaimWorker(reclaimPorts(s2, [session({ id: `daemon-l${i}` })], { row: () => current, turnEnded: () => true, now: () => 1_000 + OPEN_IDLE_MS, stopAgent: vi.fn(stop) }).ports, current, 'reported');
+      expect(s2.get(current.id)?.state).toBe('stopping');
+      await settled(s2);
+    }
     const held = reclaimPorts(ReclaimedWorkers.at(path.join(dir, 'held')), [session({ id: 'daemon-8' })], {
       row: () => current, turnEnded: () => true, now: () => 1_000 + OPEN_IDLE_MS,
       stopAgent: vi.fn(async () => ({ ok: false, code: 'turn_open' })),
