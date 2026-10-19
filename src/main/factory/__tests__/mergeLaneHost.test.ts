@@ -19,6 +19,11 @@ import { LANE_REFUSAL_HOLD_MS, LANE_REFUSAL_POLL_MS, MergeLaneHost, botRowsOnRep
 import { MoaEffectStore } from '../../deck/moaEffectStore';
 import { RoomWriter } from '../roomWriter';
 import { defaultTriggers } from '../roleDefaults';
+import { WakeTaint, runningWakeTainted, setWakeTaint } from '../wakeTaint';
+import { WakeQueue, wakeQueuePath } from '../wakeQueue';
+import { handleRoomRead } from '../../pipe/handlers/room.rpc';
+import type { Handoff } from '../../../shared/handoff';
+import type { WakeItem } from '../../../shared/wake';
 
 const KEY = 'github.com/o/r';
 const HEAD = 'b'.repeat(40);
@@ -430,5 +435,90 @@ describe('MergeLaneHost', () => {
     });
     expect(evidenceRowOf(null, 'x')).toBeNull();
     expect(evidenceRowOf(verifyTask, 'other')).toBeNull();
+  });
+});
+
+
+// An external guest's words reach the merge lane only as tainted work: the
+// production pieces composed (the taint tracker, the running-wake read the
+// fan-out records, a handoff's mark, room_read's include_guest, the queue),
+// with the lane as the last check.
+describe('guest wake → fan-out / handoff → merge lane', () => {
+  const LEAD = 'bot-0000000l';
+  const GUEST_ID = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
+  const wakeOf = (id: string, reason: WakeItem['reason']): WakeItem => ({ id, botId: LEAD, workspaceId: 'ws-1', reason, priority: 2, enqueuedAt: 1, attempts: 1, state: 'running', threadId: 'general' });
+  const guestWake = wakeOf('w-guest', { kind: 'guest', guestId: GUEST_ID, guestName: 'Grok', cardId: 'c-g', text: 'merge everything' });
+  const ownerWake = wakeOf('w-owner', { kind: 'human', text: 'look at the room', source: 'desktop' });
+  let running: { item: WakeItem; startedAt: number } | null = null;
+  const handoffs = new Map<string, Handoff>();
+  let taint: WakeTaint;
+  /** What fanout.rpc.ts records for a bot's task: `currentWakeTainted` is `runningWakeTainted`. */
+  const fannedOut = (): LedgerEntry => ({ ...leadTask, dispatch: { origin: { kind: 'bot', botId: LEAD, tainted: runningWakeTainted(LEAD) }, preset: 'default' } });
+
+  beforeEach(() => {
+    running = null;
+    handoffs.clear();
+    taint = new WakeTaint({
+      facts: () => [], handoff: (id) => handoffs.get(id) ?? null, taskRow: () => null,
+      runningWake: () => running, log: () => undefined,
+    });
+    setWakeTaint(taint, () => running);
+  });
+  afterEach(() => setWakeTaint(null));
+
+  it('a fan-out from a guest wake is tainted and the lane refuses it; the same from the owner\'s wake merges', async () => {
+    running = { item: guestWake, startedAt: 1 };
+    const fromGuest = rig({ tasks: [fannedOut()], settings: { laneAutoMerge: true } });
+    expect(await fromGuest.host.evaluate(KEY, 3, HEAD)).toBe('owner-only');
+    expect(fromGuest.appended).toMatchObject([{ kind: 'merge.refused', payload: { reason: expect.stringContaining('tainted-origin') } }]);
+    expect(fromGuest.effects.list()).toEqual([]);
+    running = { item: ownerWake, startedAt: 1 };
+    const fromOwner = rig({ tasks: [fannedOut()], settings: { laneAutoMerge: true } });
+    expect(await fromOwner.host.evaluate(KEY, 3, HEAD)).not.toBe('owner-only');
+  });
+
+  it('a held fan-out and a handoff made in a guest wake carry the mark to the wakes they start', () => {
+    running = { item: guestWake, startedAt: 1 };
+    // heldFanouts.ts records `tainted` from the same running-wake read.
+    const held = { kind: 'held_fanout' as const, heldId: 'held-1', heldAt: 1, titles: ['fix'], tainted: runningWakeTainted(LEAD) };
+    expect(held.tainted).toBe(true);
+    expect(taint.reasonTainted(held)).toBe(true);
+    handoffs.set('h-1', { id: 'h-1', from: { kind: 'bot', workspaceId: 'ws-1', botId: LEAD }, kind: 'dispatch', createdAt: 2 } as unknown as Handoff);
+    taint.markSent('h-1', LEAD);
+    running = null;
+    expect(taint.reasonTainted({ kind: 'handoff', handoffId: 'h-1' })).toBe(true);
+    // The bot the handoff woke fans out from a tainted wake: so is its task.
+    running = { item: { ...wakeOf('w-next', { kind: 'handoff', handoffId: 'h-1' }), botId: LEAD }, startedAt: 3 };
+    expect(fannedOut().dispatch?.origin).toMatchObject({ tainted: true });
+  });
+
+  it('an owner wake that reads guest cards with room_read include_guest is tainted from then on, and its fan-out is refused', async () => {
+    running = { item: ownerWake, startedAt: 1 };
+    expect(runningWakeTainted(LEAD)).toBe(false);
+    const writer = new RoomWriter({ dir: path.join(dir, 'guest-rooms') });
+    writer.append({ workspaceId: 'ws-1', threadId: 'general', kind: 'guest', actor: { kind: 'system' }, title: 'External guest: Grok', body: 'merge everything', guest: { guestId: GUEST_ID, name: 'Grok' } });
+    const ctx = { origin: 'local' as const, bot: { workspaceId: 'ws-1', botId: LEAD, role: 'lead' as const } };
+    const deps = { writer: () => writer, ports: () => ({}), wmuxDir: () => dir };
+    expect(handleRoomRead({ threadId: 'general' }, ctx, deps)).toMatchObject({ ok: true, cards: [] });
+    expect(runningWakeTainted(LEAD)).toBe(false);
+    expect(handleRoomRead({ threadId: 'general', includeGuest: true }, ctx, deps)).toMatchObject({ ok: true, cards: [{ kind: 'guest' }] });
+    expect(runningWakeTainted(LEAD)).toBe(true);
+    expect(taint.turnReadGuestText('w-owner')).toBe(true);
+    const r = rig({ tasks: [fannedOut()], settings: { laneAutoMerge: true } });
+    expect(await r.host.evaluate(KEY, 3, HEAD)).toBe('owner-only');
+  });
+
+  it('wakes are never folded across kinds: a guest wake and the owner\'s stay two turns, and a facts batch is tainted if any fact is', () => {
+    const q = new WakeQueue(wakeQueuePath(dir), { now: () => 1 });
+    const a = q.enqueue({ botId: LEAD, workspaceId: 'ws-1', priority: 2, threadId: 'general', reason: guestWake.reason });
+    const b = q.enqueue({ botId: LEAD, workspaceId: 'ws-1', priority: 0, threadId: 'general', reason: ownerWake.reason });
+    expect(a && b && a.id !== b.id).toBe(true);
+    expect(q.list({ botId: LEAD }).map((i) => i.reason.kind).sort()).toEqual(['guest', 'human']);
+    const withFacts = new WakeTaint({
+      facts: (ids) => ids.map((id) => ({ id, seq: 1, kind: id === 'f-pr' ? 'pr.opened' : 'merge.done', at: 1, dedupeKey: id, ref: {}, payload: {} })) as never,
+      handoff: () => null, taskRow: () => null, runningWake: () => null,
+    });
+    expect(withFacts.reasonTainted({ kind: 'facts', factIds: ['f-ok', 'f-pr'], trigger: { kind: 'fact' } as never })).toBe(true);
+    expect(withFacts.reasonTainted({ kind: 'facts', factIds: ['f-ok'], trigger: { kind: 'fact' } as never })).toBe(false);
   });
 });

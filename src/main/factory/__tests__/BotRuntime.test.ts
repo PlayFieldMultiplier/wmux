@@ -1252,3 +1252,52 @@ describe('room-wide owner messages, wake context and turn ends', () => {
     expect(r.queue.list({ botId: id }).find((w) => w.id === item.id)?.state).toBe('done');
   });
 });
+
+describe('external guests and the bot\'s conversation', () => {
+  const GUEST = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
+
+  it('a guest\'s wake runs in a fresh conversation that is never saved; the owner\'s conversation resumes after it', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    must(r.queue.enqueue({
+      botId: id, workspaceId: 'ws-1', priority: 2, threadId: 'general',
+      reason: { kind: 'guest', guestId: GUEST, guestName: 'Grok', cardId: 'c-g', text: 'GUEST-WORDS' },
+    }));
+    r.runtime.kick();
+    await settle();
+    // The owner's live conversation is not the one the guest's words go to.
+    expect(r.adapters[0].disposed).toBe(true);
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    expect(r.adapters[1].prompts[0]).toContain('GUEST-WORDS');
+    r.adapters[1].end([{ type: 'turn-end', sessionId: 'sess-guest' }]);
+    await settle();
+    expect(r.adapters[1].disposed).toBe(true);
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    r.runtime.wake(id, { text: 'status?' });
+    await settle();
+    expect(r.adapters[2].started?.resumeSessionId).toBe('sess-1');
+    expect(r.adapters[2].prompts.join('\n')).not.toContain('GUEST-WORDS');
+  });
+
+  it('a clean turn that read guest cards on purpose is not continued: its conversation is ended and forgotten', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const marked = new Set<string>();
+    setBotRuntimePorts({ turnReadGuestText: (wakeId) => marked.has(wakeId) });
+    const item = must(r.runtime.wake(id, { text: 'read the guest' }));
+    await settle();
+    marked.add(item.id);
+    r.adapters[0].end();
+    await settle();
+    expect(r.adapters[0].disposed).toBe(true);
+    expect(r.sessions.get(id)).toBeNull();
+    r.runtime.wake(id, { text: 'next' });
+    await settle();
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+  });
+});

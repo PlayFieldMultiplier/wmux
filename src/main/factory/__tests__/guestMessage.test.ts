@@ -54,7 +54,7 @@ describe('postGuestMessage', () => {
     const { writer, enqueue, deps } = setup();
     const r = postGuestMessage(base, deps);
     expect(r).toMatchObject({ ok: true, woke: [A] });
-    const card = writer.find('ws-1', (c) => c.kind === 'guest');
+    const card = writer.find('ws-1', (c) => c.kind === 'guest', { guests: true });
     expect(card).toMatchObject({
       kind: 'guest', actor: { kind: 'system' }, threadId: `dm:${A}`, title: 'External guest: Grok',
       body: 'hello there', guest: { guestId: GUEST_ID, name: 'Grok' }, clientPostId: `guest:${GUEST_ID}:m1`,
@@ -76,7 +76,7 @@ describe('postGuestMessage', () => {
     expect(postGuestMessage({ ...base, mentions: [B] }, deps)).toEqual({ ok: false, code: 'mention_refused' });
     expect(postGuestMessage({ ...base, threadId: 'general', mentions: [OTHER] }, deps)).toEqual({ ok: false, code: 'mention_refused' });
     expect(enqueue).not.toHaveBeenCalled();
-    expect(writer.find('ws-1', (c) => c.kind === 'guest')).toBeFalsy();
+    expect(writer.find('ws-1', (c) => c.kind === 'guest', { guests: true })).toBeFalsy();
   });
 
   it('a group takes only its members; General the room\'s bots', () => {

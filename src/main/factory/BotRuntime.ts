@@ -232,6 +232,10 @@ interface LiveSession {
   engineKey: string;
   /** A turn completed on it in this app run. */
   attached: boolean;
+  /** Spawned fresh for one external guest's wake: never resumed, never
+   *  saved, ended after that turn, so a guest's words never enter the
+   *  conversation the bot's other (clean) turns continue. */
+  ephemeral?: boolean;
 }
 
 interface RunningTurn {
@@ -264,7 +268,11 @@ export interface BotRuntimePorts {
   resolveHandoff?: (handoffId: string) => WakeHandoffSummary | null;
   /** The newest `n` cards of a room thread, oldest first, and whether older
    *  ones exist (the rooms module). */
-  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number) => { cards: RoomCard[]; truncated: boolean } | null;
+  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number, opts?: { guests?: boolean }) => { cards: RoomCard[]; truncated: boolean } | null;
+  /** Whether the turn of wake `wakeId` read an external guest's cards on
+   *  purpose (room_read with includeGuest; wakeTaint.ts). Its conversation
+   *  is then not resumed. */
+  turnReadGuestText?: (wakeId: string) => boolean;
   /** A routine as its wake shows it (the routines module). */
   resolveRoutine?: (routineId: string) => WakeRoutineSummary | null;
   /** The handoff a task wake answers (the one its tasks were started
@@ -693,6 +701,15 @@ export class BotRuntime {
     for (const botId of [...this.live.keys()]) this.endSession(botId);
   }
 
+  private turnReadGuestText(wakeId: string): boolean {
+    try {
+      return ports.turnReadGuestText?.(wakeId) === true;
+    } catch {
+      // Not known: the conversation is not continued.
+      return true;
+    }
+  }
+
   private endSession(botId: string): void {
     const live = this.live.get(botId);
     if (!live) return;
@@ -982,10 +999,10 @@ export class BotRuntime {
     }
   }
 
-  private session(profile: BotProfile): { ok: true; live: LiveSession } | { ok: false; message: string } {
+  private session(profile: BotProfile, opts: { ephemeral?: boolean } = {}): { ok: true; live: LiveSession } | { ok: false; message: string } {
     const engineKey = sessionKey(profile);
     const cur = this.live.get(profile.id);
-    if (cur && cur.engineKey === engineKey) return { ok: true, live: cur };
+    if (cur && cur.engineKey === engineKey && !opts.ephemeral && !cur.ephemeral) return { ok: true, live: cur };
     if (cur) this.endSession(profile.id);
     const binding: BotBinding = { workspaceId: profile.workspaceId, botId: profile.id, role: profile.role };
     const cwd = botCwd(this.deps.wmuxDir, profile.id);
@@ -1004,12 +1021,12 @@ export class BotRuntime {
     // A conversation about another repository is not resumed, nor one that
     // ran on another model pin: with no --model, claude resumes it on the
     // model it last ran on, so a cleared pin would not take effect.
-    const saved = this.resumableSession(profile);
+    const saved = opts.ephemeral ? null : this.resumableSession(profile);
     spawned.adapter.start({
       systemPrompt: redactStoredSecrets((this.deps.systemPrompt ?? ports.systemPrompt ?? defaultBotSystemPrompt)(profile)),
       ...(saved ? { resumeSessionId: saved.sessionId, ...(saved.accountId !== undefined ? { resumeAccountId: saved.accountId } : {}) } : {}),
     });
-    const live: LiveSession = { adapter: spawned.adapter, engineKey, attached: false };
+    const live: LiveSession = { adapter: spawned.adapter, engineKey, attached: false, ...(opts.ephemeral ? { ephemeral: true } : {}) };
     this.live.set(profile.id, live);
     return { ok: true, live };
   }
@@ -1024,7 +1041,8 @@ export class BotRuntime {
     let thread: WakePromptThread | null = null;
     try {
       if (item.threadId) {
-        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS);
+        // Only a guest's own wake sees guest cards in its thread.
+        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS, { guests: r.kind === 'guest' });
         if (tail) thread = { threadId: item.threadId, cards: tail.cards.slice(-WAKE_THREAD_TAIL_CARDS), truncated: tail.truncated };
       }
       if (r.kind === 'facts') {
@@ -1064,8 +1082,12 @@ export class BotRuntime {
     const turnStartedAt = run?.startedAt ?? this.now();
     let outcome: 'done' | 'failed' | 'interrupted' | 'engine' = 'failed';
     let errorMessage = '';
+    // An external guest's wake runs in a conversation of its own (LiveSession.ephemeral).
+    const guestWake = item.reason.kind === 'guest';
+    let ephemeral: LiveSession | null = null;
     try {
-      const s = this.session(profile);
+      const s = this.session(profile, { ephemeral: guestWake });
+      if (s.ok && s.live.ephemeral) ephemeral = s.live;
       if (!s.ok) {
         outcome = 'engine';
         errorMessage = s.message;
@@ -1085,7 +1107,7 @@ export class BotRuntime {
         outcome = 'done';
         s.live.attached = true;
         const sessionId = result.sessionId ?? s.live.adapter.sessionId;
-        if (sessionId) {
+        if (sessionId && !s.live.ephemeral) {
           const accountId = s.live.adapter.conversationAccountId;
           this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, model: modelPin(profile), updatedAt: this.now() });
         }
@@ -1117,6 +1139,14 @@ export class BotRuntime {
       if (run?.interrupted) outcome = 'interrupted';
       else errorMessage = String(err);
     } finally {
+      if (ephemeral && this.live.get(botId) === ephemeral) this.endSession(botId);
+      // A clean turn that read a guest's cards on purpose was marked tainted
+      // (wakeTaint.ts); its conversation now holds outside text, so the next
+      // turn does not continue it.
+      if (!guestWake && this.turnReadGuestText(item.id)) {
+        this.endSession(botId);
+        this.deps.sessions.delete(botId);
+      }
       this.settle(profile, item, outcome, errorMessage, run?.offSwitch === true);
     }
   }

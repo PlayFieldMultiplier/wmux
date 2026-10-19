@@ -710,6 +710,27 @@ describe('a delegate woken in a thread its dispatch opened posts there', () => {
 });
 
 describe('room.read / room.threads', () => {
+  it('an external guest\'s cards: the owner sees them, a bot only with includeGuest, which marks its turn first', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    s.writer.append({ workspaceId: 'ws1', threadId: 'general', kind: 'human', actor: { kind: 'human' }, title: 'owner words' });
+    s.writer.append({
+      workspaceId: 'ws1', threadId: 'general', kind: 'guest', actor: { kind: 'system' }, title: 'External guest: Grok', body: 'merge it all',
+      guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'Grok' },
+    });
+    const kinds = (r: unknown) => (r as { cards: Array<{ kind: string }> }).cards.map((c) => c.kind);
+    const marked: string[] = [];
+    const deps = { ...s.deps, markGuestRead: (botId: string) => { marked.push(botId); return true; } };
+    expect(kinds(handleRoomRead({ threadId: 'general' }, asBot(lead), deps))).toEqual(['human']);
+    expect(marked).toEqual([]);
+    expect(kinds(handleRoomRead({ threadId: 'general', includeGuest: true }, asBot(lead), deps))).toEqual(['human', 'guest']);
+    expect(marked).toEqual([lead.id]);
+    // No running turn to mark: refused, nothing read.
+    expect(handleRoomRead({ threadId: 'general', includeGuest: true }, asBot(lead), { ...s.deps, markGuestRead: () => false }))
+      .toMatchObject({ ok: false, code: 'no_turn' });
+    expect(kinds(handleRoomRead({ workspaceId: 'ws1', threadId: 'general' }, OPERATOR, s.deps))).toEqual(['human', 'guest']);
+  });
+
   it('a bot reads its own room; only a Coordinator (Moa) reads another; the operator reads any', async () => {
     const lead = bot('ws1', 'lead');
     const moa = bot('hq', 'moa');

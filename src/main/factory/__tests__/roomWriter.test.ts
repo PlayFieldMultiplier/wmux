@@ -560,3 +560,18 @@ describe('inputRequiredWhy (#2231)', () => {
     expect(inputRequiredWhy('I need the staging API key')).toBeNull();
   });
 });
+
+
+describe('RoomWriter — external guests\' cards', () => {
+  it('read and find leave guest cards out unless asked; paging still advances past them', () => {
+    const w = writer();
+    w.append({ workspaceId: 'ws', threadId: 'general', kind: 'human', actor: { kind: 'human' }, title: 'one' });
+    w.append({ workspaceId: 'ws', threadId: 'general', kind: 'guest', actor: SYS, title: 'External guest: G', body: 'x', guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'G' } });
+    w.append({ workspaceId: 'ws', threadId: 'general', kind: 'human', actor: { kind: 'human' }, title: 'three' });
+    expect(w.read('ws').cards.map((c) => c.title)).toEqual(['one', 'three']);
+    expect(w.read('ws', { guests: true }).cards.map((c) => c.kind)).toEqual(['human', 'guest', 'human']);
+    expect(w.read('ws', { sinceSeq: 1, limit: 1 })).toMatchObject({ cards: [{ title: 'three' }], hasMore: false });
+    expect(w.find('ws', (c) => c.kind === 'guest')).toBeNull();
+    expect(w.find('ws', (c) => c.kind === 'guest', { guests: true })?.title).toBe('External guest: G');
+  });
+});

@@ -36,6 +36,12 @@
 // (fanout.rpc.ts) are always tainted. A bot of any other template is marked by
 // its wake's origin alone.
 //
+// The one exception to "by origin" is an external guest's room cards: a bot
+// reads them only with room_read's `includeGuest`, and that marks its running
+// turn tainted from then on (markTurnReadGuestText), so a fan-out, handoff or
+// held fan-out the turn makes after it is tainted too. A guest's own wake is
+// always tainted (`guest` below).
+//
 // Consequences: a bot's fan-out records `dispatch.origin.tainted` (true or
 // false, fanout.rpc.ts; a bot task without it counts as tainted); the merge lane and a
 // remembered rule never merge a head a tainted task touched; an approval
@@ -74,6 +80,9 @@ const HANDOFF_FACT_KINDS: ReadonlySet<FactKind> = new Set<FactKind>(['handoff.re
 
 export const TAINT_FILENAME = 'taint.json';
 export const TAINT_MARKS_MAX = 5000;
+/** Running turns marked for reading a guest's cards (in memory: a turn
+ *  does not survive a restart, and a restarted turn is never replayed). */
+export const TURN_MARKS_MAX = 1000;
 
 export interface WakeTaintPorts {
   /** Facts by id ([] for ids that cannot be found). */
@@ -94,6 +103,7 @@ export interface WakeTaintPorts {
 
 export class WakeTaint {
   private readonly marks = new Map<string, boolean>();
+  private readonly turnMarks = new Set<string>();
 
   constructor(private readonly ports: WakeTaintPorts) {
     if (!ports.file) return;
@@ -108,9 +118,26 @@ export class WakeTaint {
     }
   }
 
-  /** Whether a wake carried outside text. */
-  wakeTainted(item: Pick<WakeItem, 'reason'>): boolean {
+  /** Whether a wake carried outside text, or its turn read some on purpose. */
+  wakeTainted(item: Pick<WakeItem, 'reason'> & { id?: string }): boolean {
+    if (typeof item.id === 'string' && this.turnMarks.has(item.id)) return true;
     return this.reasonTainted(item.reason);
+  }
+
+  /** The turn of wake `wakeId` read an external guest's cards: tainted from
+   *  now on. */
+  markTurnReadGuestText(wakeId: string): void {
+    this.turnMarks.delete(wakeId);
+    this.turnMarks.add(wakeId);
+    while (this.turnMarks.size > TURN_MARKS_MAX) {
+      const first = this.turnMarks.values().next().value;
+      if (first === undefined) break;
+      this.turnMarks.delete(first);
+    }
+  }
+
+  turnReadGuestText(wakeId: string): boolean {
+    return this.turnMarks.has(wakeId);
   }
 
   reasonTainted(reason: WakeReason): boolean {
@@ -347,6 +374,22 @@ export function setWakeTaint(taint: WakeTaint | null, runningWake?: WakeTaintPor
 /** The running taint tracker, or null before the module started. */
 export function getWakeTaint(): WakeTaint | null {
   return current?.taint ?? null;
+}
+
+/** Mark the turn `botId` is running now as having read an external guest's
+ *  cards. False when there is no tracker or no running turn to mark: the
+ *  caller then refuses the read. */
+export function markRunningTurnReadGuestText(botId: string): boolean {
+  const c = current;
+  if (!c) return false;
+  try {
+    const item = c.runningWake(botId)?.item;
+    if (!item) return false;
+    c.taint.markTurnReadGuestText(item.id);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Whether the wake `botId` is running now is tainted; true when it cannot

@@ -71,7 +71,7 @@ import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 
 /** The room reads this file needs (RoomWriter). */
 export interface PhoneRoomReader {
-  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number }): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean };
+  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean }): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean };
   summary(workspaceId: string, threadId: ThreadId): ThreadSummary;
   threads(workspaceId: string): ThreadSummary[];
   /** The newest card of a room that matches (RoomWriter.find). */
@@ -284,6 +284,9 @@ export function handlePhoneRoomCommand(command: string, payload: Record<string, 
     ...(threadId ? { threadId } : {}),
     ...(sinceSeq !== undefined ? { sinceSeq } : {}),
     limit,
+    // The owner's phone (and a guest's own read, projected by the daemon)
+    // shows external guests' cards; bots never read through here.
+    guests: true,
   });
   const info = botInfo(bots);
   const action = (approvalId: string): string | null => {

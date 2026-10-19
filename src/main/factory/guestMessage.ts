@@ -128,7 +128,7 @@ export function postGuestMessage(raw: Record<string, unknown>, deps: GuestPostDe
   const clientPostId = `guest:${p.guestId}:${p.clientMessageId}`.slice(0, ROOM_LIMITS.CLIENT_ID_MAX);
   // Processed whole, shortened last (as the room does).
   const body = capBody(redactStoredSecrets(p.text));
-  const prior = writer.find(p.workspaceId, (c) => c.clientPostId === clientPostId);
+  const prior = writer.find(p.workspaceId, (c) => c.clientPostId === clientPostId, { guests: true });
   if (prior) {
     // A repeat is the same words in the same thread, or a reused id.
     if (prior.kind !== 'guest' || prior.threadId !== p.threadId || (prior.body ?? '') !== body) return { ok: false, code: 'id_reused' };

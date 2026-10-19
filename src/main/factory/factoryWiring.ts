@@ -102,6 +102,7 @@ import { getAgentSlots } from './agentSlots';
 import { getWorkerResumePorts, isTaskOwnWorkerPane, isWslWorkerPane, reclaimedWorkerState, stopResumedWorker, stopResumedWorkers, workerWorkspaceOf, type WorkerSessionInfo, type WorkerSessionRecordOf } from './workerReclaim';
 import { botWorkerSessionRecord } from '../agents/botWorkerMergeGuard';
 import { getTaskFolderPorts } from './taskFolderCleanup';
+import { getWakeTaint } from './wakeTaint';
 
 // ── Trigger cursor ─────────────────────────────────────────────────────────
 
@@ -322,9 +323,10 @@ export function resolveFactsWhere(log: unknown, match: (f: Fact) => boolean, lim
 }
 
 /** The newest `n` cards of a thread, oldest first, and whether older ones exist. */
-export function threadTail(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId, n: number): { cards: RoomCard[]; truncated: boolean } | null {
+export function threadTail(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId, n: number, opts: { guests?: boolean } = {}): { cards: RoomCard[]; truncated: boolean } | null {
   if (!writer) return null;
-  const page = writer.read(workspaceId, { threadId, limit: n });
+  // An external guest's cards only for the guest's own wake (RoomWriter.read).
+  const page = writer.read(workspaceId, { threadId, limit: n, guests: opts.guests === true });
   return { cards: page.cards, truncated: writer.summary(workspaceId, threadId).cardCount > page.cards.length };
 }
 
@@ -786,7 +788,8 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     resolveFacts: (ids) => resolveFactsFrom(getFactLog(), ids),
     resolveHandoff: summarizeHandoff,
     taskHandoff: (item) => taskWakeHandoff(item.reason, (id) => getTaskLedger().get(id)),
-    readThreadTail: (workspaceId, threadId, n) => threadTail(getRoomWriter(), workspaceId, threadId, n),
+    readThreadTail: (workspaceId, threadId, n, opts) => threadTail(getRoomWriter(), workspaceId, threadId, n, opts),
+    turnReadGuestText: (wakeId) => getWakeTaint()?.turnReadGuestText(wakeId) ?? false,
     wakeContext: (profile, item) => wakeContext(contextPorts(), profile, item),
     wakeImages: (profile, item) => wakeImagesOf(getRoomWriter(), getRoomAttachmentStore(), profile, item),
     onTurnDone: (profile, item) => getHandoffRouter()?.closeAnsweredInChat(profile.id, item),

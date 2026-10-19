@@ -871,22 +871,32 @@ export class RoomWriter {
     return ids;
   }
 
-  /** The first card of the room that matches, newest first. */
-  find(workspaceId: string, match: (c: RoomCard) => boolean): RoomCard | null {
+  /** The first card of the room that matches, newest first. An external
+   *  guest's card is skipped unless `guests` is set (see `read`). */
+  find(workspaceId: string, match: (c: RoomCard) => boolean, opts: { guests?: boolean } = {}): RoomCard | null {
     const cards = this.room(workspaceId)?.cards ?? [];
-    for (let i = cards.length - 1; i >= 0; i -= 1) if (match(cards[i])) return cards[i];
+    for (let i = cards.length - 1; i >= 0; i -= 1) {
+      if (cards[i].kind === 'guest' && opts.guests !== true) continue;
+      if (match(cards[i])) return cards[i];
+    }
     return null;
   }
 
   /** Cards in arrival (seq) order, at most `limit` (≤ PAGE). threadId
    *  omitted: every card; `general`: the general thread only. With sinceSeq:
    *  the cards after it, `hasMore` when the page stopped short; without: the
-   *  newest page. Pass `nextSinceSeq` back to continue. */
-  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number } = {}): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean } {
+   *  newest page. Pass `nextSinceSeq` back to continue.
+   *
+   *  An external guest's cards (kind `guest`, outside text) are left out
+   *  unless `guests` is set: only the owner's views, the guest's own read and
+   *  the guest's own (tainted) wake ask for them, so a bot never reads a
+   *  guest's words by accident in a turn whose work may merge. */
+  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean } = {}): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean } {
     const state = this.room(workspaceId);
     if (!state) return { cards: [], nextSinceSeq: 0, hasMore: false };
     const limit = Math.max(1, Math.min(ROOM_LIMITS.PAGE, Math.floor(opts.limit ?? ROOM_LIMITS.PAGE)));
-    const scoped = opts.threadId === undefined ? state.cards : state.cards.filter((c) => c.threadId === opts.threadId);
+    const visible = opts.guests === true ? state.cards : state.cards.filter((c) => c.kind !== 'guest');
+    const scoped = opts.threadId === undefined ? visible : visible.filter((c) => c.threadId === opts.threadId);
     const since = typeof opts.sinceSeq === 'number' && Number.isFinite(opts.sinceSeq) ? opts.sinceSeq : null;
     // Every reader (bots, the renderer's room.read, the phone's room routes)
     // gets cards with stored bot secrets redacted, whenever a card was written.

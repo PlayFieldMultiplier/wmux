@@ -25,6 +25,7 @@
 // Any other caller — no bot binding and not the operator — is refused.
 
 import fs from 'node:fs';
+import { markRunningTurnReadGuestText } from '../../factory/wakeTaint';
 import path from 'node:path';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { isBotRole, isCoordinatorBot } from '../../../shared/bot';
@@ -135,6 +136,9 @@ export interface RoomHandlerDeps {
   files?: () => RoomFileStore | null;
   /** The folders a bot's `files` may come from. Default: botFileRoots. */
   fileRoots?: (bot: BotBinding) => Promise<BotFileRoots>;
+  /** Mark the bot's running turn as having read a guest's cards; false when
+   *  there is no turn to mark. Default: wakeTaint.ts's tracker. */
+  markGuestRead?: (botId: string) => boolean;
 }
 
 /** Where a bot's `files` may come from, and what a relative path means. */
@@ -493,10 +497,20 @@ export function handleRoomRead(raw: unknown, ctx: RpcContext | undefined, deps: 
     if (!threadId || typeof p.markThroughSeq !== 'number') return refusal('invalid', 'markThroughSeq needs a threadId and a seq');
     writer.markRead(ws, threadId, p.markThroughSeq);
   }
+  // An external guest's cards are outside text. The owner always sees them;
+  // a bot only when it asks, and asking taints its running turn first (no
+  // running turn to mark: refused), so what it starts after can never merge
+  // without the owner (wakeTaint.ts).
+  let guests = caller.kind === 'operator';
+  if (caller.kind !== 'operator' && p.includeGuest === true) {
+    if (!(deps.markGuestRead ?? markRunningTurnReadGuestText)(caller.bot.botId)) return refusal('no_turn', 'guest cards are read only inside a turn, which is then marked as started from outside text');
+    guests = true;
+  }
   const page = writer.read(ws, {
     ...(threadId ? { threadId } : {}),
     ...(typeof p.sinceSeq === 'number' ? { sinceSeq: p.sinceSeq } : {}),
     ...(typeof p.limit === 'number' ? { limit: p.limit } : {}),
+    guests,
   });
   const result: RoomReadResult = { ok: true, workspaceId: ws, threadId, ...page };
   return result;

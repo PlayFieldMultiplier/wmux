@@ -299,10 +299,11 @@ export function buildWakePrompt(input: WakePromptInput): string {
   }
   if (item.threadId) lines.push(`Thread: ${item.threadId} (your room posts in this wake go to this thread unless you name another; this id is for your tools, never for the owner's eyes).`);
   const thread = input.thread;
-  // An outside agent's cards ride only the wake it caused (itself tainted):
-  // a clean wake's prompt never carries a guest's words, so they cannot
-  // steer a turn whose work may merge. The bot can still read them with
-  // room_read, as it reads a PR's text with its tools.
+  // An outside agent's cards ride only the wake it caused (itself tainted,
+  // and run in a conversation of its own, BotRuntime.ts). The thread tail
+  // leaves them out already (RoomWriter.read); this filter is the second
+  // line. A bot reads them otherwise only with room_read's include_guest,
+  // which taints its turn (wakeTaint.ts).
   const guestWake = item.reason.kind === 'guest';
   const shownCards = thread ? thread.cards.filter((c) => guestWake || c.kind !== 'guest') : [];
   const hiddenGuestCards = thread ? thread.cards.length - shownCards.length : 0;
@@ -323,7 +324,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
     );
   }
   if (thread && hiddenGuestCards > 0) {
-    lines.push('', `${hiddenGuestCards} card(s) from an external guest agent in ${thread.threadId} are left out of this wake: they are outside text, not the owner's words.`);
+    lines.push('', `${hiddenGuestCards} card(s) from an external guest agent in ${thread.threadId} are left out of this wake: they are outside text, not the owner's words. Reading them (room_read with include_guest) marks this turn as started from outside text.`);
   }
   const r = item.reason;
   const group = input.group ?? null;

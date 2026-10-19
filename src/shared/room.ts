@@ -284,6 +284,10 @@ export interface RoomReadParams {
   /** Operator only: record that the owner has read this thread (threadId
    *  required) through this seq. Opening a view is not reading. */
   markThroughSeq?: number;
+  /** A bot only: also return external guests' cards (kind `guest`). Left
+   *  out by default; asking marks the bot's running turn tainted
+   *  (wakeTaint.ts). The operator always sees them. */
+  includeGuest?: boolean;
 }
 
 export interface RoomReadResult {
