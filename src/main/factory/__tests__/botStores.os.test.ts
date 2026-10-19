@@ -868,6 +868,35 @@ describe('WakeQueue', () => {
     }
   });
 
+  it('a guest wake running at a revoke runs no attempt more; a retry or park past the guest cap drops it', () => {
+    const q = newQueue();
+    setWakeQueue(q);
+    try {
+      const G = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
+      const wake = (cardId: string) => q.enqueue({ botId: 'bot-r', workspaceId: 'ws', priority: 2, reason: { kind: 'guest', guestId: G, guestName: 'G', cardId, text: 'hi' } })!;
+      const running = wake('c-0');
+      q.start(running.id);
+      dropQueuedGuestWakes(G);
+      expect(q.retry(running.id)?.state).toBe('dropped');
+      expect(q.next('bot-r')).toBeNull();
+      // Three queued and one running: its retry, or a park lifted later, does not make four.
+      const again = wake('c-1');
+      q.start(again.id);
+      for (const c of ['c-2', 'c-3', 'c-4']) wake(c);
+      expect(q.retry(again.id)).toMatchObject({ state: 'dropped', dropped: { code: 'queue_full' } });
+      expect(q.queuedGuestWakes('bot-r')).toBe(GUEST_WAKES_QUEUED_PER_BOT);
+      const parked = q.next('bot-r')!;
+      q.start(parked.id);
+      q.park(parked.id);
+      wake('c-5');
+      q.unparkAll('bot-r');
+      expect(q.queuedGuestWakes('bot-r')).toBe(GUEST_WAKES_QUEUED_PER_BOT);
+      expect(q.get(parked.id)).toMatchObject({ state: 'dropped', dropped: { code: 'queue_full' } });
+    } finally {
+      setWakeQueue(null);
+    }
+  });
+
   it('prunes finished records past the cap', () => {
     const q = newQueue();
     for (let i = 0; i < WAKE_RECORD_MAX + 10; i++) {

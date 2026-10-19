@@ -442,6 +442,36 @@ export class WakeQueue implements WakeSinkApi {
     return [...new Set(this.items.filter((i) => i.state === 'queued').map((i) => i.botId))];
   }
 
+  /** Running wakes that run no attempt more (endRunningGuestWakes): a retry
+   *  or park drops them. In memory: a running wake is interrupted on restart. */
+  private readonly lastAttempt = new Set<string>();
+
+  /** Whether `i`, leaving `running` for the queue, is dropped instead: its
+   *  guest was revoked or turned off while it ran, or its bot already holds
+   *  GUEST_WAKES_QUEUED_PER_BOT guest wakes. Marks it dropped when so. */
+  private dropInsteadOfQueue(i: WakeItem): boolean {
+    const code: WakeDropCode | null = this.lastAttempt.delete(i.id) ? 'expired'
+      : i.reason.kind === 'guest' && this.queuedGuestWakes(i.botId) >= GUEST_WAKES_QUEUED_PER_BOT ? 'queue_full'
+      : null;
+    if (!code) return false;
+    i.state = 'dropped';
+    i.dropped = { code };
+    return true;
+  }
+
+  /** The running wakes `match` names run no attempt more: a retry or park
+   *  of one drops it. Returns how many. */
+  endRunning(match: (i: WakeItem) => boolean): number {
+    let n = 0;
+    for (const i of this.items) {
+      if (i.state === 'running' && match(i)) {
+        this.lastAttempt.add(i.id);
+        n++;
+      }
+    }
+    return n;
+  }
+
   private transition(id: string, from: readonly WakeState[], apply: (i: WakeItem) => void): WakeItem | null {
     const i = this.items.find((x) => x.id === id);
     if (!i || !from.includes(i.state)) return null;
@@ -470,6 +500,7 @@ export class WakeQueue implements WakeSinkApi {
    *  failure is not the wake's fault). */
   retry(id: string, opts: { notBefore?: number; refundAttempt?: boolean } = {}): WakeItem | null {
     return this.transition(id, ['running'], (i) => {
+      if (this.dropInsteadOfQueue(i)) return;
       i.state = 'queued';
       if (opts.notBefore !== undefined) i.notBefore = opts.notBefore;
       if (opts.refundAttempt) i.attempts = Math.max(0, i.attempts - 1);
@@ -479,6 +510,7 @@ export class WakeQueue implements WakeSinkApi {
   /** queued/running → parked (held with its parked bot). */
   park(id: string): WakeItem | null {
     return this.transition(id, ['queued', 'running'], (i) => {
+      if (i.state === 'running' && this.dropInsteadOfQueue(i)) return;
       i.state = 'parked';
     });
   }
@@ -502,6 +534,12 @@ export class WakeQueue implements WakeSinkApi {
     let n = 0;
     for (const i of this.items) {
       if (i.botId === botId && i.state === 'parked') {
+        if (i.reason.kind === 'guest' && this.queuedGuestWakes(botId) >= GUEST_WAKES_QUEUED_PER_BOT) {
+          i.state = 'dropped';
+          i.dropped = { code: 'queue_full' };
+          n++;
+          continue;
+        }
         i.state = 'queued';
         i.attempts = 0;
         n++;
@@ -601,11 +639,13 @@ export function dropQueuedHeldFanoutWakes(botId: string, only?: (wake: WakeItem)
  *  a guest or turned guest bots off). Returns how many. */
 export function dropQueuedGuestWakes(guestId?: string): number {
   if (!current) return 0;
+  const mine = (i: WakeItem): boolean => i.reason.kind === 'guest' && (guestId === undefined || i.reason.guestId === guestId);
   let n = 0;
   for (const i of current.list({ states: ['queued', 'parked'] })) {
-    if (i.reason.kind !== 'guest' || (guestId !== undefined && i.reason.guestId !== guestId)) continue;
-    if (current.drop(i.id, 'expired')) n++;
+    if (mine(i) && current.drop(i.id, 'expired')) n++;
   }
+  // One running now finishes its turn and runs no attempt more.
+  current.endRunning(mine);
   return n;
 }
 
