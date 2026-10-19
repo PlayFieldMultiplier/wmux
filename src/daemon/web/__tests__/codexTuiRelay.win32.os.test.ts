@@ -43,7 +43,7 @@ describe.runIf(process.platform === 'win32')('Codex TUI relay upgrade checks on 
     server = new WebSocketServer({host:'127.0.0.1',port:0});
     await new Promise<void>(resolve=>server.once('listening',()=>resolve()));
     const address = server.address();
-    upstream.url = typeof address === 'string' ? address : `ws://127.0.0.1:${address.port}`;
+    upstream.url = address && typeof address !== 'string' ? `ws://127.0.0.1:${address.port}` : '';
   });
   afterEach(async()=>{
     vi.useRealTimers();
