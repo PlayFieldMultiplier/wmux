@@ -2,7 +2,7 @@
 // close(F3). electron ipcMain을 캡처해 핸들러를 직접 호출한다(diff.handler.os.test.ts 패턴).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,7 +30,7 @@ async function call(channel: string, payload: unknown): Promise<unknown> {
 
 /** rpc(list owner-scoped / close) + writeToSession을 가진 최소 DaemonClient 페이크. */
 function makeDaemon(
-  tasks: Array<{ id: string; title: string; status: 'open' | 'closed'; owner: string; worktreePath?: string; branch?: string }>,
+  tasks: Array<{ id: string; title: string; status: 'open' | 'closed'; owner: string; worktreePath?: string; branch?: string; detachedAt?: number }>,
 ) {
   const writes: Array<{ sessionId: string; data: string }> = [];
   const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -285,5 +285,15 @@ describe('task:close keepFolder', () => {
     expect(daemon.rpcCalls.filter((c) => c.method === 'task.mission.close')).toHaveLength(1);
     expect(daemon.rpcCalls.some((c) => c.method === 'daemon.destroySession')).toBe(false);
     expect(pendingRemovalRefusal(wt)).toBeNull();
+  });
+
+  it('a detached task (kept earlier, even before a restart) only closes: its folder stays', async () => {
+    const wt = seedWorktree('task-detached', false);
+    daemon = makeDaemon([{ id: 'wtask-d', title: 'D', status: 'closed', owner: 'parent-ws', worktreePath: wt, branch: 'wtask/d', detachedAt: 1 }]);
+    dispose = registerWorktaskHandlers(() => daemon.client);
+    const res = (await call(IPC.TASK_CLOSE, { taskId: 'wtask-d', verifiedWorkspaceId: 'parent-ws' })) as { ok: boolean };
+    expect(res.ok).toBe(true);
+    expect(existsSync(wt)).toBe(true);
+    expect(daemon.rpcCalls.some((c) => c.method === 'daemon.listSessions' || c.method === 'daemon.destroySession')).toBe(false);
   });
 });

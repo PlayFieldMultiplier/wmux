@@ -373,6 +373,12 @@ describe('task.close', () => {
     expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS, keepFolder: true, leftoverPath: TASK.worktreePath });
   });
 
+  it('a detached task (kept earlier, even before a restart) only closes: nothing is removed', async () => {
+    const h = harness({ tasks: [{ ...TASK, status: 'closed', detachedAt: 1 }] });
+    await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1' });
+    expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS });
+  });
+
   it('only a literal true keeps the folder', async () => {
     const h = harness();
     await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1', keepFolder: 'true' });

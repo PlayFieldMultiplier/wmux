@@ -817,6 +817,9 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
     if (keepFolder) {
       return deps.close.closeTask({ taskId: task.id, verifiedWorkspaceId: workspaceId, keepFolder: true, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
     }
+    // A detached task's folder is the owner's (kept, or detached): a close
+    // of it, even after a restart, removes nothing and only closes.
+    if (task.detachedAt !== undefined) return deps.close.closeTask({ taskId: task.id, verifiedWorkspaceId: workspaceId });
 
     if (!task.worktreePath || !fileExists(task.worktreePath)) {
       // Nothing on disk to remove — close-only, exactly as the IPC path

@@ -192,6 +192,9 @@ export function registerWorktaskHandlers(
       if ((raw as { keepFolder?: unknown } | null)?.keepFolder === true) {
         return closeService.closeTask({ taskId, verifiedWorkspaceId, keepFolder: true, ...(task.worktreePath ? { leftoverPath: task.worktreePath } : {}) });
       }
+      // A detached task's folder is the owner's (kept, or detached): a close
+      // of it, even after a restart, removes nothing and only closes.
+      if (task.detachedAt !== undefined) return closeService.closeTask({ taskId, verifiedWorkspaceId });
 
       // F3 — close-only 라우팅: worktreePath 부재(미물질화 CX4) / 디스크 결측
       // (fs.existsSync false) / 본 repo 해석 불가(worktree 손상)면 remove 단계를
