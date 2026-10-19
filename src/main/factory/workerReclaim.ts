@@ -1054,6 +1054,8 @@ export async function reclaimWorker(
     if (panes.length === 0) return rec;
     let failed = 0;
     let attempted = 0;
+    // Stops that signalled the agent, with part of its tree left running.
+    let signalled = 0;
     // A pane is closed only in the task's own workspace: a WSL terminal the
     // owner opened in the same folder elsewhere is never the worker's.
     let ownPanes: readonly string[] | null = null;
@@ -1098,13 +1100,11 @@ export async function reclaimWorker(
           && isWslWorkerPane(sessions.find((x) => x.id === p.sessionId))
           && isTaskOwnWorkerPane({ id: p.sessionId }, entry.id, recorded, ports.sessionRecordOf);
         reclaimStops.set(p.sessionId, now());
-        const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined)
-          .catch((err: unknown) => {
-            reclaimStops.delete(p.sessionId);
-            throw err;
-          });
-        // Refused or held back: nothing was stopped, so a later exit is the worker's own.
-        if (r.ok !== true || r.code === 'turn_open') reclaimStops.delete(p.sessionId);
+        const r = await stopOrClose(ports.stopAgent, closable ? ports.closePane : undefined, p.sessionId, ended === 'reported' ? { ifTurnClosed: true } : undefined);
+        // Held back before any signal: a later exit is the worker's own. Any
+        // other answer (a stop, a part of its tree left running, a failed
+        // read) may follow a signal, so its exit stays the reclaim's.
+        if (r.code === 'turn_open') reclaimStops.delete(p.sessionId);
         // The daemon found the turn open at the stop itself: nothing was
         // signalled, and it is no failed stop.
         if (r.code === 'turn_open') {
@@ -1117,6 +1117,7 @@ export async function reclaimWorker(
         // (counted as one, it kept the record `stopping` for good).
         if (r.ok !== true && r.code !== 'no_session') {
           failed++;
+          if (r.code === 'still_running') signalled++;
           log(`[factory] reclaim: the agent of ${p.sessionId} (task ${entry.id}) was not stopped: ${r.code ?? 'refused'}`);
         }
       } catch (err) {
@@ -1129,7 +1130,10 @@ export async function reclaimWorker(
       await (prior ? ports.store.put(prior) : ports.store.remove(entry.id)).catch(() => undefined);
       return null;
     }
-    if (failed === attempted && !prior) {
+    // An open task's stop that signalled its agent stays recorded
+    // (`stopping`): its agent may be gone, and the settle pass then marks it
+    // stopped with its cards.
+    if (failed === attempted && !prior && !(ended === 'reported' && signalled > 0)) {
       // Nothing was stopped: no record, so a later look tries again.
       await ports.store.remove(entry.id).catch(() => undefined);
       return null;

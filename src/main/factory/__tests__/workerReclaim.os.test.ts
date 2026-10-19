@@ -624,6 +624,25 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     await settled(store);
   });
 
+  it('a stop that signalled the agent but left part of its tree running keeps its record and its exit; a stop held back keeps neither', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const current = working();
+    const partial = reclaimPorts(store, [session({ id: 'daemon-7' })], {
+      row: () => current, turnEnded: () => true, now: () => 1_000 + OPEN_IDLE_MS,
+      stopAgent: vi.fn(async () => ({ ok: false, code: 'still_running' })),
+    });
+    await reclaimWorker(partial.ports, current, 'reported');
+    expect(store.get(current.id)?.state).toBe('stopping');
+    expect(stoppedByReclaimLately('daemon-7', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(true);
+    const held = reclaimPorts(ReclaimedWorkers.at(path.join(dir, 'held')), [session({ id: 'daemon-8' })], {
+      row: () => current, turnEnded: () => true, now: () => 1_000 + OPEN_IDLE_MS,
+      stopAgent: vi.fn(async () => ({ ok: false, code: 'turn_open' })),
+    });
+    expect(await reclaimWorker(held.ports, current, 'reported')).toBeNull();
+    expect(stoppedByReclaimLately('daemon-8', 1_000 + OPEN_IDLE_MS + 20_000)).toBe(false);
+    await settled(store);
+  });
+
   it('a worker mid-turn is never stopped and its bot is not told', async () => {
     const store = ReclaimedWorkers.at(dir);
     const current = working();
