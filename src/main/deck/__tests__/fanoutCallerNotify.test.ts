@@ -205,3 +205,32 @@ describe('installBotFanoutWake recovery and the queue (review fixes, second pass
     }
   });
 });
+
+
+describe('bot worker accounting and owner wake isolation', () => {
+  it('still wakes a failed worker’s owner when accounting throws; retry gets its own wake', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-bot-accounting-'));
+    const ledger = new TaskLedger({ dir });
+    const enqueue = vi.fn();
+    const onWorkerEnded = vi.fn(() => { throw new Error('worker hours unavailable'); });
+    const off = installBotFanoutWake({ enqueue, onWorkerEnded }, ledger);
+    try {
+      await ledger.register({ id: 'task-a', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 'retryable task', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' }, preset: 'default' } });
+      const update = async (status: string, kind: 'worker' | 'brain', workspaceId: string) => {
+        const result = await ledger.update({ id: 'task-a', status, actor: { kind, workspaceId }, expectedRev: ledger.get('task-a')?.rev ?? 0 });
+        expect(result.ok).toBe(true);
+      };
+      await update('failed', 'worker', 'ws-task');
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      await update('working', 'brain', 'ws-owner');
+      await update('failed', 'worker', 'ws-task');
+      expect(onWorkerEnded).toHaveBeenCalledTimes(2);
+      expect(enqueue.mock.calls.map(([input]) => input.reason.factIds)).toEqual([
+        ['task.failed:task-a@2'], ['task.failed:task-a@4'],
+      ]);
+    } finally {
+      off();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

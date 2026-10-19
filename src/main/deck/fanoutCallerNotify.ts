@@ -248,8 +248,14 @@ export function installBotFanoutWake(ports: BotFanoutWakePorts, instance?: TaskL
   return ledger.onTransition((t) => {
     const origin = t.entry.dispatch?.origin;
     if (!origin || origin.kind !== 'bot' || !origin.botId) return;
+    // Worker-hours accounting is best effort; its failure must not strand
+    // the terminal task transition before the durable owner wake is queued.
     try {
       if (WORKER_ENDED.has(t.to)) ports.onWorkerEnded?.(origin.botId, t.entry.id);
+    } catch (err) {
+      console.warn(`[factory] could not account for bot ${origin.botId} worker ${t.entry.id}: ${String(err)}`);
+    }
+    try {
       wake(t, origin.botId);
     } catch (err) {
       console.warn(`[factory] could not wake bot ${origin.botId} for task ${t.entry.id}: ${String(err)}`);
