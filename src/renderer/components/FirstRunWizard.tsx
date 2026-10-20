@@ -37,7 +37,7 @@ import { IconCheck, IconWarning } from './icons';
 import { FOCUS_RING } from './focusRing';
 import { AgentReadyGroup, AgentSetupCorner, cornerRun, decideAgentPrimary } from './FirstRunAgentCards';
 import { refreshAgentStatus, useAgentSetup } from '../utils/agentSetupRuns';
-import { anyAgentReady } from '../../shared/agentSetup';
+import { anyAgentReady, type AgentId } from '../../shared/agentSetup';
 
 // ─── Local type narrowing for electronAPI.firstRun ────────────────────────────
 //
@@ -313,18 +313,22 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   }, []);
   // Aside (the corner card) whenever a run starts or the user opens a run's
   // tab, and back when every run has ended or on "Back to setup".
-  const runningIds = Object.values(runs).filter((r) => r?.phase === 'running').map((r) => String(r?.id)).sort().join(',');
-  const [aside, setAside] = useState(false);
+  // `aside` names the agent whose tab the corner card is about: the one that
+  // just started a run, or the one whose View log / Show terminal was clicked.
+  const running = Object.values(runs).filter((r): r is NonNullable<typeof r> => r?.phase === 'running');
+  const runningIds = running.map((r) => `${r.id}:${r.agent}`).sort().join(',');
+  const [aside, setAside] = useState<AgentId | null>(null);
   const seenRunning = useRef('');
   useEffect(() => {
     const before = seenRunning.current;
     seenRunning.current = runningIds;
     const prev = new Set(before.split(',').filter(Boolean));
-    if (runningIds.split(',').some((id) => id && !prev.has(id))) setAside(true);
-    else if (before && !runningIds) setAside(false);
+    const started = runningIds.split(',').filter((key) => key && !prev.has(key));
+    if (started.length > 0) setAside(started[started.length - 1].split(':')[1] as AgentId);
+    else if (before && !runningIds) setAside(null);
   }, [runningIds]);
-  const stepAside = useCallback(() => setAside(true), []);
-  const asideRun = cornerRun(runs);
+  const stepAside = useCallback((agent: AgentId) => setAside(agent), []);
+  const asideRun = aside ? runs[aside] ?? cornerRun(runs) : undefined;
   // An install the cards just saw: re-read the checklist so the rows that need
   // an installed agent (MCP registration, hooks) appear without reopening.
   const installedKey = statuses?.filter((s) => s.readiness !== 'not-installed').map((s) => s.agent).join(',') ?? null;
@@ -440,7 +444,8 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
     try {
       const res = await firstRunBridge().registerMcp();
       if (res.ok) {
-        await refresh();
+        // Quiet: the agent cards keep what the user was doing in them.
+        await refresh({ quiet: true });
       } else {
         setRegisterError({ code: res.code, message: res.message });
       }
@@ -590,7 +595,7 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   });
 
   if (aside && asideRun) {
-    return <AgentSetupCorner onExpand={() => setAside(false)} />;
+    return <AgentSetupCorner agent={asideRun.agent} onExpand={() => setAside(null)} />;
   }
 
   // ─── Render ────────────────────────────────────────────────────────────────

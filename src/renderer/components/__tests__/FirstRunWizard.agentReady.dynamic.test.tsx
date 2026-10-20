@@ -171,4 +171,40 @@ describe('FirstRunWizard agent ready step', () => {
     await settle();
     expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-install']);
   });
+
+  it('View log shows the clicked agent\'s tab, not the newest run', async () => {
+    const fr = installBridge([notInstalled('claude'), notInstalled('codex')]);
+    fr.agentPlan.mockImplementation(async (agent: string) => ({
+      agent,
+      install: { command: `install ${agent}`, shell: 'user', officialPage: 'https://example.invalid', missing: [] },
+      login: null,
+    }));
+    const handlers: Array<(id: string, data: string, replay: boolean) => void> = [];
+    (window as unknown as { electronAPI: { pty: Record<string, unknown> } }).electronAPI.pty.onData =
+      vi.fn((cb: (id: string, data: string, replay: boolean) => void) => { handlers.push(cb); return () => undefined; });
+    let n = 0;
+    tab.open.mockImplementation(async () => ({ workspaceId: 'ws-1', ptyId: `pty-${++n}` }));
+    const prev = useStore.getState();
+    useStore.setState({
+      activeWorkspaceId: 'ws-1',
+      workspaces: [{ ...(prev.workspaces[0] ?? {}), id: 'ws-1', activePaneId: 'pane-1',
+        rootPane: { type: 'leaf', id: 'pane-1', surfaces: [{ id: 'surf-1', ptyId: 'pty-1' }, { id: 'surf-2', ptyId: 'pty-2' }] } }] as never,
+    });
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    const fail = async (agent: 'claude' | 'codex', pty: string) => {
+      await act(async () => { byId(`first-run-agent-${agent}-install`)?.click(); });
+      await settle();
+      await act(async () => { byId(`first-run-agent-${agent}-run`)?.click(); });
+      await settle();
+      await act(async () => { for (const h of handlers) h(pty, '\x1b]133;C\x07\x1b]133;D;1\x07', false); });
+      await settle();
+    };
+    await fail('claude', 'pty-1'); // older run
+    await fail('codex', 'pty-2');  // newer run
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => { byId('first-run-agent-claude-view-log')?.click(); });
+    expect(byId('first-run-agent-corner')?.dataset.agent).toBe('claude');
+    useStore.setState({ workspaces: prev.workspaces, activeWorkspaceId: prev.activeWorkspaceId });
+  });
 });

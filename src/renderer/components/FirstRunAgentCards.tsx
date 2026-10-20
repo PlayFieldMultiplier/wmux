@@ -117,7 +117,7 @@ export function decideAgentPrimary(
  * card brings a run's terminal tab to the front, so the wizard can step aside
  * (a modal over the pane would keep the user from typing or reading it).
  */
-export function AgentReadyGroup({ primary, onShowPane }: { primary: AgentId | null; onShowPane: () => void }) {
+export function AgentReadyGroup({ primary, onShowPane }: { primary: AgentId | null; onShowPane: (agent: AgentId) => void }) {
   const t = useT();
   const { statuses, runs } = useAgentSetup();
   return (
@@ -149,7 +149,7 @@ export function AgentCard({ agent, status, loaded, run, primary, onShowPane }: {
   loaded: boolean;
   run: AgentRun | undefined;
   primary: boolean;
-  onShowPane?: () => void;
+  onShowPane?: (agent: AgentId) => void;
 }) {
   const t = useT();
   const name = agentName(agent);
@@ -180,7 +180,7 @@ export function AgentCard({ agent, status, loaded, run, primary, onShowPane }: {
   };
 
   const showPane = () => {
-    if (showAgentRunPane(agent)) onShowPane?.();
+    if (showAgentRunPane(agent)) onShowPane?.(agent);
   };
 
   const runInstall = async (plan: AgentSetupPlan) => {
@@ -399,10 +399,11 @@ export function cornerRun(runs: Partial<Record<AgentId, AgentRun>>): AgentRun | 
  * window's corner (like the keyboard cheat sheet), so the terminal stays
  * usable. It says what the pane is asking and leads back to the full wizard.
  */
-export function AgentSetupCorner({ onExpand }: { onExpand: () => void }) {
+export function AgentSetupCorner({ agent, onExpand }: { agent?: AgentId; onExpand: () => void }) {
   const t = useT();
   const { runs } = useAgentSetup();
-  const run = cornerRun(runs);
+  // The agent the user is looking at, not whichever run happens to be newest.
+  const run = (agent ? runs[agent] : undefined) ?? cornerRun(runs);
   useEffect(() => {
     // The pane is the point of this mode: put it in front once.
     if (run) showAgentRunPane(run.agent);
@@ -416,6 +417,7 @@ export function AgentSetupCorner({ onExpand }: { onExpand: () => void }) {
       role="status"
       aria-live="polite"
       data-testid="first-run-agent-corner"
+      data-agent={run.agent}
       data-screen={run.screen ?? ''}
     >
       <p className="ui-row-title">{t(guide.title, { name })}</p>
