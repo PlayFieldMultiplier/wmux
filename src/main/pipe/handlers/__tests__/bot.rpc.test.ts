@@ -473,6 +473,24 @@ describe('bot-runtime module', () => {
     await mod.dispose();
   });
 
+  it('tells the window when the factory settings change, from any caller', async () => {
+    fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+    fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: false, planConsent: { version: 1, at: '2026-10-20T00:00:00.000Z' } }));
+    const { router } = captureRouter();
+    const sent: unknown[] = [];
+    const deps = {
+      wmuxDir: () => dir,
+      getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (_c: string, p: unknown) => sent.push(p) } }),
+    } as unknown as FactoryHostDeps;
+    const mod = botRuntimeModule(router, deps, { engines: () => ({ ok: true, adapter: new OkAdapter() }) });
+    await mod.start();
+    sent.length = 0;
+    // A write that does not come through Settings (a script, another caller).
+    await getFactorySettingsStore()!.update({ enabled: true });
+    expect(sent).toContainEqual({ type: 'settings-changed' });
+    await mod.dispose();
+  });
+
   it('creates no bot of its own: an HQ setting no longer brings a Moa', async () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: true, hqWorkspaceId: 'ws-hq' }));

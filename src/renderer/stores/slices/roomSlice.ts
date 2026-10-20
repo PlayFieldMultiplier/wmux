@@ -166,7 +166,12 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
     const prev = s.roomPreviewCards[key];
     if (!prev || prev.seq <= card.seq) s.roomPreviewCards[key] = card;
   }),
-  setRoomStatus: (status) => set((s) => { s.roomStatus = status; }),
+  setRoomStatus: (status) => set((s) => {
+    // The same answer again keeps the object, so readers do not re-render.
+    const cur = s.roomStatus;
+    if (cur && status && cur.running === status.running && cur.enabled === status.enabled && cur.hqWorkspaceId === status.hqWorkspaceId) return;
+    s.roomStatus = status;
+  }),
   setRoomThreads: (workspaceId, threads) => set((s) => { s.roomThreads[workspaceId] = threads; }),
   setRoomPage: (workspaceId, thread, page, mode, startedAt) => set((s) => {
     const key = timelineKey(workspaceId, thread);

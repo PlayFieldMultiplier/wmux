@@ -466,7 +466,9 @@ export interface BotSetJobParams {
  *  - `connectors-changed`: the connection library changed
  *    (shared/botConnector.ts);
  *  - `groups-changed`: the owner's group chats changed (shared/botGroup.ts);
- *  - `skills-changed`: a bot's skills changed (shared/botSkill.ts). */
+ *  - `skills-changed`: a bot's skills changed (shared/botSkill.ts);
+ *  - `settings-changed`: the factory settings changed (the bots switched
+ *    on or off, from any caller). */
 export type BotEventPayload =
   | { type: 'bot.status'; status: BotStatus }
   | { type: 'bots-changed' }
@@ -475,7 +477,8 @@ export type BotEventPayload =
   | { type: 'secrets-changed' }
   | { type: 'connectors-changed' }
   | { type: 'groups-changed' }
-  | { type: 'skills-changed'; botId?: string };
+  | { type: 'skills-changed'; botId?: string }
+  | { type: 'settings-changed' };
 
 export const BOT_EVENT = 'bot.event';
 
