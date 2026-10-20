@@ -1,4 +1,4 @@
-import { WINDOW_START_THEME, type StartPolarity } from '../../shared/windowStartPaint';
+import { START_POLARITY_STORAGE_KEY, WINDOW_START_THEME, type StartPolarity } from '../../shared/windowStartPaint';
 
 type ThemedRoot = Pick<HTMLElement, 'getAttribute' | 'setAttribute'>;
 
@@ -19,4 +19,13 @@ export function startTheme(polarity: StartPolarity | null | undefined, storeThem
  */
 export function settleStartTheme(root: ThemedRoot, shown: string, storeTheme: string): void {
   if (root.getAttribute('data-theme') === shown && shown !== storeTheme) root.setAttribute('data-theme', storeTheme);
+}
+
+/** Record the polarity on screen for the next reload's start (the preload reads it). */
+export function rememberStartPolarity(storage: () => Pick<Storage, 'setItem'> | undefined, polarity: StartPolarity): void {
+  try {
+    storage()?.setItem(START_POLARITY_STORAGE_KEY, polarity);
+  } catch {
+    // Storage can be unavailable; a reload then starts from the window's polarity.
+  }
 }

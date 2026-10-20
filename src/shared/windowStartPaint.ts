@@ -35,7 +35,23 @@ export function startPolarityArg(polarity: StartPolarity): string {
 export function startPolarityFromArgv(argv: readonly string[] | undefined): StartPolarity | null {
   const arg = argv?.find((a) => a.startsWith(ARG_PREFIX));
   if (!arg) return null;
-  const value = arg.slice(ARG_PREFIX.length);
+  return asPolarity(arg.slice(ARG_PREFIX.length));
+}
+
+/**
+ * The page's sessionStorage key for the polarity of the theme on screen. The
+ * renderer writes it whenever the theme's polarity is read; it outlives a
+ * reload and a renderer crash but not the window, so a reload starts in the
+ * theme the user has now rather than the one the window was built with.
+ */
+export const START_POLARITY_STORAGE_KEY = 'wmux:start-polarity';
+
+/** A reload's polarity (sessionStorage) over the window's (argv); null when neither is known. */
+export function resolveStartPolarity(stored: string | null | undefined, argv: readonly string[] | undefined): StartPolarity | null {
+  return asPolarity(stored) ?? startPolarityFromArgv(argv);
+}
+
+function asPolarity(value: unknown): StartPolarity | null {
   return value === 'dark' || value === 'light' ? value : null;
 }
 

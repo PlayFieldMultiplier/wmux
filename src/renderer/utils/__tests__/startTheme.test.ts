@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { settleStartTheme, startTheme } from '../startTheme';
+import { rememberStartPolarity, settleStartTheme, startTheme } from '../startTheme';
 
 function fakeRoot(theme: string) {
   const attrs = new Map<string, string>([['data-theme', theme]]);
@@ -42,5 +42,19 @@ describe('settleStartTheme', () => {
     const root = fakeRoot('paper');
     settleStartTheme(root, 'paper', 'paper');
     expect(root.theme()).toBe('paper');
+  });
+});
+
+describe('rememberStartPolarity', () => {
+  it('records the polarity on screen for the next reload', () => {
+    const items = new Map<string, string>();
+    rememberStartPolarity(() => ({ setItem: (k: string, v: string) => { items.set(k, v); } }), 'dark');
+    expect(items.get('wmux:start-polarity')).toBe('dark');
+  });
+
+  it('never throws when storage is unavailable', () => {
+    expect(() => rememberStartPolarity(() => { throw new Error('SecurityError'); }, 'light')).not.toThrow();
+    expect(() => rememberStartPolarity(() => ({ setItem: () => { throw new Error('QuotaExceeded'); } }), 'light')).not.toThrow();
+    expect(() => rememberStartPolarity(() => undefined, 'light')).not.toThrow();
   });
 });

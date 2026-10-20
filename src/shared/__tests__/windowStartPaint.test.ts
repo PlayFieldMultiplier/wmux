@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   WINDOW_START_COLORS,
+  resolveStartPolarity,
   startPaintCss,
   startPolarity,
   startPolarityArg,
@@ -33,5 +34,19 @@ describe('the polarity argument', () => {
 describe('startPaintCss', () => {
   it.each(['dark', 'light'] as const)('paints the %s start colour only before a theme is set', (polarity) => {
     expect(startPaintCss(polarity)).toBe(`:root:not([data-theme]) { --bg-base: ${WINDOW_START_COLORS[polarity].background}; }`);
+  });
+});
+
+describe('resolveStartPolarity', () => {
+  const argv = ['electron', startPolarityArg('light')];
+
+  it('takes the polarity a reload recorded over the one the window was built with', () => {
+    expect(resolveStartPolarity('dark', argv)).toBe('dark');
+  });
+
+  it('takes the window\'s polarity on its first load, or when the record is not one it knows', () => {
+    expect(resolveStartPolarity(null, argv)).toBe('light');
+    expect(resolveStartPolarity('system', argv)).toBe('light');
+    expect(resolveStartPolarity(undefined, ['electron'])).toBeNull();
   });
 });

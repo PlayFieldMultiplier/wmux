@@ -10,7 +10,7 @@ import { CHAT_IPC } from '../shared/transcript/chatIpc';
 import type { ChatBridgeApi } from '../shared/transcript/turnEvents';
 import { CHATV2_IPC, type ChatV2BridgeApi, type ChatV2EventsPush, type ChatV2ResyncPush } from '../shared/chatv2/ipc';
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
-import { startPaintCss, startPolarityFromArgv } from '../shared/windowStartPaint';
+import { START_POLARITY_STORAGE_KEY, resolveStartPolarity, startPaintCss } from '../shared/windowStartPaint';
 import { IPC } from '../shared/constants';
 import { ROOM_EVENT } from '../shared/room';
 import { BOT_EVENT } from '../shared/bot';
@@ -220,7 +220,16 @@ const chatv2: ChatV2BridgeApi = {
 // The page's first paint comes before any script, from the stylesheet's dark
 // `:root` block; main passes the saved theme's polarity so that paint is the
 // window's start colour instead, and a light theme does not start dark (#2512).
-const startPolarity = startPolarityFromArgv(process.argv);
+// A reload takes the polarity the renderer last recorded, which follows a
+// theme changed since the window was built.
+function storedStartPolarity(): string | null {
+  try {
+    return window.sessionStorage.getItem(START_POLARITY_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+const startPolarity = resolveStartPolarity(storedStartPolarity(), process.argv);
 if (startPolarity) void webFrame.insertCSS(startPaintCss(startPolarity));
 
 const electronAPI = {

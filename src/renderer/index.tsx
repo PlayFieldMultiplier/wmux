@@ -4,7 +4,7 @@ import { useStore } from './stores';
 import { installChromeScrollPin } from './utils/pinChromeScroll';
 import { installWindowGlass } from './utils/windowGlass';
 import { hasRoundedWindowCorners } from '../shared/windowCorners';
-import { settleStartTheme, startTheme } from './utils/startTheme';
+import { rememberStartPolarity, settleStartTheme, startTheme } from './utils/startTheme';
 import { installDocumentHiddenMotion, installSystemReducedMotion } from './utils/reducedMotion';
 import './styles/globals.css';
 import './styles/ui.css';
@@ -40,7 +40,10 @@ installChromeScrollPin();
 // flashes the defaults' glass or flips the app's appearance twice.
 // The theme's polarity rides the session save (main starts a glass window in it).
 // The start theme is settled first, so glass reads the theme that stays.
-const saveWindowAppearance = (appearance: 'dark' | 'light') => useStore.getState().setWindowAppearance(appearance);
+const saveWindowAppearance = (appearance: 'dark' | 'light') => {
+  useStore.getState().setWindowAppearance(appearance);
+  rememberStartPolarity(() => window.sessionStorage, appearance);
+};
 const onSessionSettingsLoaded = () => {
   settleStartTheme(document.documentElement, shownStartTheme, useStore.getState().theme);
   installWindowGlass(document.documentElement, saveWindowAppearance);
