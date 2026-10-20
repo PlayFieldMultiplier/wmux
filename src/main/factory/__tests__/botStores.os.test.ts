@@ -644,6 +644,25 @@ describe('worker time across a pause (recordWorkerStateChange)', () => {
     expect(workerHoursDay(u, 6 * HOUR_MS)).toBe(2);
   });
 
+  it('a resumed run keeps counting while its stop is under way, and ends at the confirmed stop', () => {
+    const u = emptyUsage();
+    recordWorkerStateChange(u, 't1', 'stopped', 'resumed', 0);
+    // The reclaim records `stopping` before it signals the agent.
+    recordWorkerStateChange(u, 't1', 'resumed', 'stopping', HOUR_MS);
+    expect(workerHoursDay(u, 2 * HOUR_MS)).toBe(2);
+    recordWorkerStateChange(u, 't1', 'stopping', 'stopped', 2 * HOUR_MS);
+    expect(workerHoursDay(u, 4 * HOUR_MS)).toBe(2);
+  });
+
+  it('a stop that stopped nothing goes back to resumed without a gap or a second run', () => {
+    const u = emptyUsage();
+    recordWorkerStateChange(u, 't1', 'stopped', 'resumed', 0);
+    recordWorkerStateChange(u, 't1', 'resumed', 'stopping', HOUR_MS);
+    recordWorkerStateChange(u, 't1', 'stopping', 'resumed', HOUR_MS);
+    expect(u.workers.filter((w) => w.taskId === 't1')).toHaveLength(1);
+    expect(workerHoursDay(u, 3 * HOUR_MS)).toBe(3);
+  });
+
   it('a stop still under way leaves the run counting', () => {
     const u = emptyUsage();
     recordWorkerStart(u, 't1', 0);
