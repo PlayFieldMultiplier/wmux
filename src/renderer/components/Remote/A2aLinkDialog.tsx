@@ -414,7 +414,9 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, offer, onCl
 
   const onAcceptOffer = useCallback(async () => {
     if (!api?.offersAccept || !offer || end.kind !== 'pane' || !local.found) return;
+    // The pane shown beside the result is the one this answer names, whatever sorts first later.
     setAnswered(true);
+    setPickedKey(`${end.workspaceId}/${end.paneId}`);
     setBusy(true); setOutcome(null);
     try {
       const r = await api.offersAccept({
