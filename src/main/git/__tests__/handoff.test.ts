@@ -209,6 +209,17 @@ describe('startHandoffWorktree', () => {
     expect(res).toMatchObject({ ok: true, prep: { skipped: 'stale', missing: 1, refused: 1 } });
   });
 
+  it('adds no second notice for a preparation its Preparing card already shows', async () => {
+    const { d } = deps();
+    (d.startFanOut as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true, setupSkipped: 'needs-review',
+      tasks: [{ index: 0, title: 't', ok: true, workspaceId: 'ws-new', worktreePath: '/wt/x', branch: 'issue-12-crash-on-launch', prepOnCard: true, configFiles: { copied: 0, missing: 1, present: 0, refused: 0 } }],
+    });
+    const res = await startHandoffWorktree(d, { item: { kind: 'issue', ref: issue }, repoPath: '/repo', workspaceId: 'ws-repo' });
+    expect(res).toMatchObject({ ok: true });
+    expect(res).not.toHaveProperty('prep');
+  });
+
   it('runs the fan-out with branch issue-<n>-<slug> and the fixed reference, then records the worktree on the link', async () => {
     const { d, upserts } = deps();
     const res = await startHandoffWorktree(d, { item: { kind: 'issue', ref: issue }, repoPath: '/repo', workspaceId: 'ws-repo', agentCmd: 'codex --model=gpt-5' });

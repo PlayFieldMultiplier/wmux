@@ -14,6 +14,7 @@
 // (task.mission.start/update/close, a2a.channel.invite) and the renderer spawn
 // port (sendToRenderer('fanout.spawnWorkspace')).
 
+import { fileCopySuggestionStore, getWorkspacePrepCards } from './workspacePrepCards';
 import type { BrowserWindow } from 'electron';
 import type { DaemonClient } from '../DaemonClient';
 import type { RpcMethod } from '../../shared/rpc';
@@ -133,6 +134,10 @@ export function createFanOutService(
     project: {
       getState: (cwd: string) => getProjectConfigStore().getState(cwd),
     },
+    // A worktree a person opened (start from an issue, Quick Launch) is
+    // prepared under a "Preparing" card that asks before giving up on it.
+    prepCards: getWorkspacePrepCards(),
+    copySuggestions: fileCopySuggestionStore(),
     // A-1 — viewport + keystroke for the first-run watch. The viewport is the
     // renderer's (the same read every other main-side screen check uses); the
     // keystroke goes through the daemon, which owns the session. With no daemon

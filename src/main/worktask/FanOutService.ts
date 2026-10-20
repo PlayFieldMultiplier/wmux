@@ -55,6 +55,7 @@ import {
   FANOUT_TASK_PORT_ENV,
   assignFanoutPorts,
   releaseFanoutPorts,
+  FANOUT_SETUP_TIMEOUT_MS,
   runFanoutSetup,
   type FanoutSetupSkipReason,
 } from './fanoutEnvironment';
@@ -65,7 +66,10 @@ import {
   worktreeProjectDir,
   type WorkspaceCopyResult,
   type WorkspacePrepOrigin,
+  type WorkspacePrepResult,
+  type WorkspacePrepSkipReason,
 } from './workspacePrep';
+import { runWithPrepCard, takeCopySuggestion, type CopySuggestionStore, type WorkspacePrepCards } from './workspacePrepCards';
 import { workerTempEnv } from './fanoutTempDir';
 import { inheritTaskAutonomy } from './taskAutonomy';
 import { getFanOutGuards, type FanOutGuards } from './fanoutGuards';
@@ -418,6 +422,12 @@ export const FANOUT_PREP_REVIEW_WARNING =
 export const FANOUT_COPY_BLOCKED_WARNING =
   "the repository's config files (fanout.copy) were not copied into these worktrees: copying into bot and fan-out workspaces is off for this project";
 
+/** The last lines a setup printed, for a failure report. */
+function setupTail(tail: string | undefined): string[] | undefined {
+  const text = (tail ?? '').trim();
+  return text.length > 0 ? text.split(/\r?\n/).slice(-WORKSPACE_PREP_TAIL_LINES) : undefined;
+}
+
 /** The warning for a task whose selected config files did not all arrive. */
 export function configFilesGapWarning(index: number, c: WorkspaceCopyResult): string | undefined {
   if (c.missing + c.refused === 0) return undefined;
@@ -465,6 +475,9 @@ export interface FanOutTaskResult {
   setupTimedOut?: true;
   /** setupFailed on a worktree a person opened: the last lines it printed. */
   setupOutputTail?: string[];
+  /** Its preparation was shown on a "Preparing" card, which already says
+   *  what was skipped or missing (no second notice). */
+  prepOnCard?: true;
   /** A-1 — a first-run screen was seen in this worker's pane. Carries the
    *  headline so a report names what the worker is looking at. */
   firstRunPrompt?: string;
@@ -509,6 +522,12 @@ export interface FanOutServiceOptions {
   worktrees?: TaskWorktreeManager;
   /** T2 — trust-gated `wmux.json` reader. Omitted → no ports, no setup hook. */
   project?: FanOutProjectPort;
+  /** The "Preparing" cards a worktree a person opened is prepared under.
+   *  Omitted → such a worktree is prepared like a fan-out task's (a failed
+   *  setup rolls it back). */
+  prepCards?: WorkspacePrepCards;
+  /** Where the one-time copy suggestion remembers the projects it was made for. */
+  copySuggestions?: CopySuggestionStore;
   /** A-1 — pane viewport + keystroke port for the first-run watch. Omitted →
    *  the env still goes in, but nothing watches the screen. */
   firstRun?: FirstRunPort;
@@ -603,6 +622,8 @@ export class FanOutService {
   private readonly daemon: FanOutDaemonPort;
   private readonly renderer: FanOutRendererPort;
   private readonly worktrees: TaskWorktreeManager;
+  private readonly prepCards?: WorkspacePrepCards;
+  private readonly copySuggestions?: CopySuggestionStore;
   /** T2 — per-project wmux.json reader (absent = feature off). */
   private readonly project?: FanOutProjectPort;
   /** A-1 — pane viewport + keystroke port (absent = no first-run watch). */
@@ -646,6 +667,8 @@ export class FanOutService {
     // No pending-removal store (#2388): fan-out only removes a worktree no
     // pane ever ran in, by force, and a forced removal records nothing.
     this.worktrees = opts.worktrees ?? new TaskWorktreeManager({ onCreated: ensureSecretHook });
+    this.prepCards = opts.prepCards;
+    this.copySuggestions = opts.copySuggestions;
     this.project = opts.project;
     this.firstRun = opts.firstRun;
     this.autonomy = opts.autonomy;
@@ -886,6 +909,8 @@ export class FanOutService {
       workerMode,
       requester,
       ...(prepOrigin === 'human' ? { prepOrigin } : {}),
+      ...(prepOrigin === 'human' && env.setupSkipped && env.setupSkipped !== 'none-declared' ? { prepSkipped: env.setupSkipped } : {}),
+      ...(env.suggestCopy ? { suggestCopy: env.suggestCopy } : {}),
     });
     const tasks: FanOutTaskResult[] = [];
     for (const k of titles.keys()) {
@@ -1228,6 +1253,7 @@ export class FanOutService {
     copyBlocked?: true;
     setupSkipped?: FanoutSetupSkipReason;
     portRangeInvalid?: true;
+    suggestCopy?: { cwd: string; count: number };
   }> {
     const empty = { ports: new Array<number | undefined>(count).fill(undefined) };
     if (!this.project) return empty;
@@ -1260,16 +1286,30 @@ export class FanOutService {
     // turned on copyIntoAutomated.
     const prep = resolveWorkspacePrep(state, origin);
     const rangeReport = portRangeInvalid ? { portRangeInvalid: true as const } : {};
+    // Once per project, on a worktree a person opened (only with a card to show it on).
+    const suggestCopy = origin === 'human' && this.prepCards && this.copySuggestions
+      ? await takeCopySuggestion(state, repoPath, this.copySuggestions).catch(() => undefined)
+      : undefined;
+    const suggestion = suggestCopy ? { suggestCopy } : {};
     // Nothing declared reports nothing; a declared preparation that does not
     // run (not approved, or malformed) is always reported.
-    if (prep.skipped) return { ports, ...rangeReport, setupSkipped: prep.skipped };
+    if (prep.skipped) return { ports, ...rangeReport, ...suggestion, setupSkipped: prep.skipped };
     return {
       ports,
       ...rangeReport,
+      ...suggestion,
       ...(prep.setup !== undefined ? { setupCommand: prep.setup } : {}),
       ...(prep.copy.length > 0 && state.root ? { copy: { files: prep.copy, projectRoot: state.root } } : {}),
       ...(prep.copyBlocked ? { copyBlocked: true as const } : {}),
     };
+  }
+
+  /** Copy the project's selected config files into a task worktree. */
+  private async copyConfigFiles(copy: { files: string[]; projectRoot: string }, plan: TaskWorktreePlan): Promise<WorkspaceCopyResult> {
+    const destDir = worktreeProjectDir(plan.repoRoot, copy.projectRoot, plan.worktreePath);
+    return destDir
+      ? copyWorkspaceFiles(copy.projectRoot, destDir, copy.files)
+      : { copied: 0, missing: 0, present: 0, refused: copy.files.length };
   }
 
   /** One task's spawn (spawnOneInSlot). An agent slot it was granted is
@@ -1305,6 +1345,10 @@ export class FanOutService {
     copy?: { files: string[]; projectRoot: string };
     /** A person opened this worktree (FanOutRequest.prepOrigin). */
     prepOrigin?: 'human';
+    /** Why the project's declared preparation did not run (shown on the card). */
+    prepSkipped?: WorkspacePrepSkipReason;
+    /** The one-time "Copy this file too?" suggestion (human origin only). */
+    suggestCopy?: { cwd: string; count: number };
     /** Orchestrator role for this task's pane (absent = unroled). */
     role?: string;
     /** The task branch's name (absent = wtask/{slug}-{id}). */
@@ -1526,16 +1570,61 @@ export class FanOutService {
     // T2 — worktree setup 훅(신뢰된 wmux.json에서만 도달). 에이전트 기동 **전**에
     // 돌린다. 실패는 태스크 실패로 취급하고 페인을 열지 않는다 — 의존성이 안 깔린
     // worktree에서 에이전트를 띄우면 그 사실을 발견하는 데 한 턴을 태운다.
-    // Config files first, so the setup hook (and the agent) see them.
-    if (ctx.copy && plan) {
-      const destDir = worktreeProjectDir(plan.repoRoot, ctx.copy.projectRoot, plan.worktreePath);
-      const copied: WorkspaceCopyResult = destDir
-        ? await copyWorkspaceFiles(ctx.copy.projectRoot, destDir, ctx.copy.files)
-        : { copied: 0, missing: 0, present: 0, refused: ctx.copy.files.length };
-      base.configFiles = copied;
+    // A worktree a person opened, with a card to show it on: the preparation
+    // runs under the card, and a failed setup waits for the person's answer
+    // (Retry in place, Start anyway, or leave it) instead of rolling back.
+    let preparedByCard = false;
+    if (ctx.prepOrigin === 'human' && this.prepCards && plan && (ctx.copy || ctx.setupCommand !== undefined || ctx.prepSkipped || ctx.suggestCopy)) {
+      const cardPlan = plan;
+      const card = this.prepCards.begin(ctx.title, true, ctx.suggestCopy ? { suggestCopy: ctx.suggestCopy } : {});
+      base.prepOnCard = true;
+      let copy: WorkspaceCopyResult = { copied: 0, missing: 0, present: 0, refused: 0 };
+      if (ctx.copy) {
+        card.progress({ phase: 'copying', copy });
+        copy = await this.copyConfigFiles(ctx.copy, cardPlan);
+        base.configFiles = copy;
+      }
+      const setupCommand = ctx.setupCommand;
+      const skipped = ctx.prepSkipped;
+      const outcome = await runWithPrepCard(card, async (onProgress): Promise<WorkspacePrepResult> => {
+        if (skipped) return { status: 'skipped', reason: skipped, copy, setupRan: false };
+        if (setupCommand === undefined) return { status: 'ready', copy, setupRan: false };
+        onProgress({ phase: 'setup', copy, setupStartedAt: Date.now(), setupTimeoutMs: FANOUT_SETUP_TIMEOUT_MS });
+        const gates = getSharedTaskGateRunner();
+        const run = () => runFanoutSetup(setupCommand, cardPlan.worktreePath, taskEnv);
+        const r = gates ? await gates.withPermit(run) : await run();
+        if (r.ok) return { status: 'ready', copy, setupRan: true };
+        const outputTail = setupTail(r.tail);
+        return {
+          status: 'failed', copy, setupRan: true, error: r.summary ?? r.error,
+          ...(r.timedOut ? { timedOut: true as const } : {}),
+          ...(outputTail ? { outputTail } : {}),
+        };
+      });
+      if (outcome.next === 'dismiss') {
+        // Left as it is, for the person to look at; no agent starts in it.
+        discardTempDir();
+        const error = `worktree setup hook failed: ${outcome.last.error ?? 'unknown'}; the worktree was left as it is`;
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
+        const { port: _heldPort, ...withoutPort } = base;
+        return {
+          ...withoutPort,
+          setupFailed: true,
+          error,
+          ...(outcome.last.timedOut ? { setupTimedOut: true as const } : {}),
+          ...(outcome.last.outputTail ? { setupOutputTail: outcome.last.outputTail } : {}),
+          preservedWorktree: plan.worktreePath,
+        };
+      }
+      preparedByCard = true;
     }
 
-    if (ctx.setupCommand !== undefined && plan) {
+    // Config files first, so the setup hook (and the agent) see them.
+    if (!preparedByCard && ctx.copy && plan) {
+      base.configFiles = await this.copyConfigFiles(ctx.copy, plan);
+    }
+
+    if (!preparedByCard && ctx.setupCommand !== undefined && plan) {
       // Under the machine-wide gate permit: an install never overlaps a gate.
       const setupCommand = ctx.setupCommand;
       const worktreePath = plan.worktreePath;
@@ -1548,8 +1637,7 @@ export class FanOutService {
         // 호출부 루프가 다음 태스크를 그대로 이어간다.
         discardTempDir();
         const error = `worktree setup hook failed: ${setupRun.error}`;
-        const setupOutput = (setupRun.tail ?? '').trim();
-        const outputTail = setupOutput.length > 0 ? setupOutput.split(/\r?\n/).slice(-WORKSPACE_PREP_TAIL_LINES) : undefined;
+        const outputTail = setupTail(setupRun.tail);
         const humanReport = ctx.prepOrigin === 'human'
           ? { ...(setupRun.timedOut ? { setupTimedOut: true as const } : {}), ...(outputTail ? { setupOutputTail: outputTail } : {}) }
           : {};

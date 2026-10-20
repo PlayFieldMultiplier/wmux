@@ -22,7 +22,22 @@ import { git } from '../../git/git';
 import { localSpelling, resolveAccessiblePath } from './fs.handler';
 import { getProjectConfigStore } from '../../project/ProjectConfigStore';
 import { ensureSecretHook } from '../../git/secretHookHost';
-import { prepareNewWorktree, type WorkspacePrepResult } from '../../worktask/workspacePrep';
+import {
+  prepareNewWorktree,
+  resolveWorkspacePrep,
+  workspacePrepHasWork,
+  type WorkspacePrepProgress,
+  type WorkspacePrepResult,
+} from '../../worktask/workspacePrep';
+import {
+  fileCopySuggestionStore,
+  getWorkspacePrepCards,
+  runWithPrepCard,
+  takeCopySuggestion,
+  type CopySuggestionStore,
+  type WorkspacePrepCards,
+} from '../../worktask/workspacePrepCards';
+import type { ProjectConfigState } from '../../../shared/wmuxProjectConfig';
 import { gatedSetup } from '../../worktask/gatedSetup';
 import {
   parseWorktreePorcelain,
@@ -106,7 +121,7 @@ export type MergeStatusResult = { ok: true; status: MergeSessionStatus | null } 
 export type MergeActionResult = { ok: true } | { ok: false; error: string };
 
 export type WorktreeMutateResult =
-  | { ok: true; worktreePath: string; prep?: WorkspacePrepResult }
+  | { ok: true; worktreePath: string; prep?: WorkspacePrepResult; preparing?: true }
   | { ok: false; error: string };
 
 // repo 단위 뮤텍스 — diff.handler.withRepoLock과 동형 복제(additive 원칙:
@@ -252,17 +267,35 @@ async function addWorktree(repoPath: string, branch: string): Promise<WorktreeMu
  * Git page writes. A failed preparation keeps the worktree: it is reported,
  * and nothing is started in it.
  */
-export async function addPreparedWorktree(repoPath: string, branch: string): Promise<WorktreeMutateResult> {
+export async function addPreparedWorktree(
+  repoPath: string,
+  branch: string,
+  opts: { cards?: WorkspacePrepCards; suggestions?: CopySuggestionStore } = {},
+): Promise<WorktreeMutateResult> {
   const added = await addWorktree(repoPath, branch);
   if (!added.ok) return added;
   // The pre-commit secret check lives in the common git dir, so a copied
   // secret can't be committed from this worktree either.
   ensureSecretHook(added.worktreePath);
-  const prep = await prepareNewWorktree(
-    { sourceCwd: repoPath, worktreePath: added.worktreePath, origin: 'human' },
-    { getState: (cwd) => getProjectConfigStore().getState(cwd), runSetup: gatedSetup },
+  const getState = (cwd: string) => getProjectConfigStore().getState(cwd);
+  const run = (onProgress?: (p: WorkspacePrepProgress) => void) => prepareNewWorktree(
+    { sourceCwd: repoPath, worktreePath: added.worktreePath, origin: 'human', ...(onProgress ? { onProgress } : {}) },
+    { getState, runSetup: gatedSetup },
   );
-  return prep.status === 'none' ? added : { ...added, prep };
+  if (!opts.cards) {
+    const prep = await run();
+    return prep.status === 'none' ? added : { ...added, prep };
+  }
+  // With a card to show it on, the preparation runs after the answer: the
+  // Git page is not held for a long install, and a failed setup waits on
+  // the card for Retry (no agent starts here, so there is no Start anyway).
+  const state = await getState(repoPath).catch((): ProjectConfigState => ({ found: false }));
+  const plan = resolveWorkspacePrep(state, 'human');
+  const suggestCopy = opts.suggestions ? await takeCopySuggestion(state, repoPath, opts.suggestions).catch(() => undefined) : undefined;
+  if (!workspacePrepHasWork(plan) && !suggestCopy) return added;
+  const card = opts.cards.begin(branch, false, suggestCopy ? { suggestCopy } : {});
+  void runWithPrepCard(card, (onProgress) => run(onProgress)).catch(() => card.close());
+  return { ...added, preparing: true };
 }
 
 async function removeWorktree(repoPath: string, worktreePath: string): Promise<WorktreeMutateResult> {
@@ -606,7 +639,7 @@ export function registerWorktreeHandlers(): () => void {
       async (_e: Electron.IpcMainInvokeEvent, repoPath: unknown, branch: unknown) => {
         if (typeof repoPath !== 'string' || !repoPath) return { ok: false, error: 'repoPath required' };
         if (typeof branch !== 'string' || !branch) return { ok: false, error: 'branch required' };
-        return addPreparedWorktree(repoPath, branch);
+        return addPreparedWorktree(repoPath, branch, { cards: getWorkspacePrepCards(), suggestions: fileCopySuggestionStore() });
       },
     ),
   );

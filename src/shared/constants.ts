@@ -808,6 +808,9 @@ export const IPC = {
   WORKSPACE_PREP_NOTICE: 'workspace-prep:notice',
   PROJECT_PREP_GET: 'project-config:prep-get',
   PROJECT_PREP_SAVE: 'project-config:prep-save',
+  WORKSPACE_PREP_EVENT: 'workspace-prep:event',
+  WORKSPACE_PREP_LIST: 'workspace-prep:list',
+  WORKSPACE_PREP_DECIDE: 'workspace-prep:decide',
   // Remote workspace attach (see src/shared/remoteHosts.ts)
   REMOTE_HOSTS_LIST: 'remote:hosts:list',
   REMOTE_HOSTS_ADD: 'remote:hosts:add',

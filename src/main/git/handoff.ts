@@ -271,7 +271,9 @@ export function handoffBranch(h: HandoffRef, suffix: () => string = () => random
 }
 
 /** Never silent: a skipped setup, or config files that did not arrive. */
-export function prepNoticeOf(result: FanOutResult, task: { configFiles?: { missing: number; refused: number } }): HandoffPrepNotice | undefined {
+export function prepNoticeOf(result: FanOutResult, task: { configFiles?: { missing: number; refused: number }; prepOnCard?: true }): HandoffPrepNotice | undefined {
+  // Its card says it already, and stays until dismissed.
+  if (task.prepOnCard) return undefined;
   const skipped = result.setupSkipped && result.setupSkipped !== 'none-declared' ? result.setupSkipped : undefined;
   const missing = task.configFiles?.missing ?? 0;
   const refused = task.configFiles?.refused ?? 0;

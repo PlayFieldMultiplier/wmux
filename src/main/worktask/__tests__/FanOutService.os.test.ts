@@ -30,6 +30,7 @@ import type { FanOutDaemonPort, FanOutRendererPort } from '../FanOutService';
 import { TaskWorktreeManager, type TaskWorktreePlan } from '../TaskWorktreeManager';
 import type { ProjectConfigState } from '../../../shared/wmuxProjectConfig';
 import { clearFanoutPortReservationsForTest } from '../fanoutEnvironment';
+import { WorkspacePrepCards } from '../workspacePrepCards';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, setFanOutGuardsForTests } from '../fanoutGuards';
@@ -1354,6 +1355,53 @@ describe('new workspace preparation on fan-out worktrees', () => {
     const second = await svc.start(req('fo-retry-2'));
     expect(second.tasks[0].ok).toBe(true);
     expect(g(repo, 'rev-parse', 'refs/heads/mine')).toBe(mineAt);
+  });
+
+  it('with a card, a failed setup waits for the person: Retry runs it again in place, Start anyway starts the agent', async () => {
+    const { repo, worktrees } = realRepo();
+    const renderer = makeRendererFake();
+    const cards = new WorkspacePrepCards();
+    const sentinel = path.join(metaRoot, 'second-run');
+    const hook = path.join(metaRoot, 'hook2.js');
+    fs.writeFileSync(hook, `const fs=require('fs');if(!fs.existsSync(${JSON.stringify(sentinel)})){fs.writeFileSync(${JSON.stringify(sentinel)},'1');console.log('first try');process.exit(1)}`);
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees,
+      prepCards: cards,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { copy: ['.env'], setup: `node ${JSON.stringify(hook)}` } } }),
+    });
+    const started = svc.start(baseReq({ repoPath: repo, titles: ['issue-3'], prepOrigin: 'human' }));
+    await vi.waitFor(() => expect(cards.list()[0]?.status).toBe('failed'), { timeout: 10_000 });
+    expect(cards.list()[0]).toMatchObject({ outputTail: ['first try'], copied: 1, startsAgent: true });
+    expect(renderer.spawned).toHaveLength(0);
+    expect(cards.decide(cards.list()[0].id, 'retry')).toBe(true);
+    const res = await started;
+    expect(res.tasks[0].ok).toBe(true);
+    expect(renderer.spawned).toHaveLength(1);
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled();
+    expect(res.tasks[0].prepOnCard).toBe(true);
+  });
+
+  it('with a card, Dismiss leaves the worktree as it is and starts no agent', async () => {
+    const { repo, worktrees } = realRepo();
+    const renderer = makeRendererFake();
+    const cards = new WorkspacePrepCards();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees,
+      prepCards: cards,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { setup: 'node -e "process.exit(5)"' } } }),
+    });
+    const started = svc.start(baseReq({ repoPath: repo, titles: ['issue-4'], prepOrigin: 'human' }));
+    await vi.waitFor(() => expect(cards.list()[0]?.status).toBe('failed'), { timeout: 10_000 });
+    cards.decide(cards.list()[0].id, 'dismiss');
+    const [task] = (await started).tasks;
+    expect(task).toMatchObject({ ok: false, setupFailed: true });
+    expect(fs.existsSync(task.preservedWorktree!)).toBe(true);
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled();
+    expect(renderer.spawned).toHaveLength(0);
   });
 
   it('copies nothing from a config changed since approval', async () => {

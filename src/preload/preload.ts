@@ -1612,6 +1612,18 @@ const electronAPI = {
       return () => { ipcRenderer.removeListener(IPC.WORKSPACE_PREP_NOTICE, listener); };
     },
   },
+  // "Preparing" cards of worktrees a person opened (main owns them; the
+  // renderer draws them and answers a failed setup).
+  workspacePrep: {
+    onCard: (cb: (card: import('../shared/workspacePrepCard').WorkspacePrepCard) => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, card: import('../shared/workspacePrepCard').WorkspacePrepCard) => cb(card);
+      ipcRenderer.on(IPC.WORKSPACE_PREP_EVENT, listener);
+      return () => { ipcRenderer.removeListener(IPC.WORKSPACE_PREP_EVENT, listener); };
+    },
+    list: () => ipcRenderer.invoke(IPC.WORKSPACE_PREP_LIST) as Promise<import('../shared/workspacePrepCard').WorkspacePrepCard[]>,
+    decide: (id: string, decision: import('../shared/workspacePrepCard').WorkspacePrepDecision) =>
+      ipcRenderer.invoke(IPC.WORKSPACE_PREP_DECIDE, id, decision) as Promise<{ ok: boolean }>,
+  },
   // Plugin host (B-1). `list` returns loaded UI plugin summaries + load
   // failures; `rpc` forwards a host-validated bridge request from a plugin
   // iframe to main, where it dispatches through the shared RpcRouter with

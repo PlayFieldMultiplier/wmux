@@ -136,7 +136,7 @@ interface WorktreeBridge {
     | { ok: false; error: string }
   >;
   add: (repoPath: string, branch: string) => Promise<
-    { ok: true; worktreePath: string; prep?: WorkspacePrepResult } | { ok: false; error: string }
+    { ok: true; worktreePath: string; prep?: WorkspacePrepResult; preparing?: true } | { ok: false; error: string }
   >;
   remove: (repoPath: string, worktreePath: string) => Promise<
     { ok: true; worktreePath: string } | { ok: false; error: string }
@@ -554,8 +554,9 @@ export function GitTab({
         return;
       }
       setNewBranch('');
-      // The new worktree's preparation is always reported, never silent.
-      const prep = res.prep;
+      // The new worktree's preparation is always reported, never silent: on
+      // its "Preparing" card while it runs (res.preparing), or here.
+      const prep = res.preparing ? undefined : res.prep;
       if (prep?.status === 'failed') {
         // The last lines it printed say why, as on start from an issue.
         const tail = prep.outputTail?.slice(-3).join(' · ').slice(-300);

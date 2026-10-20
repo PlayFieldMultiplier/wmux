@@ -77,6 +77,10 @@ export interface ProjectConfigSlice {
   /** Workspace whose "New workspace setup" dialog is open. */
   prepDialogWsId: string | null;
   setPrepDialogWsId: (workspaceId: string | null) => void;
+  /** Or the folder it is open for (the one-time suggestion names a checkout,
+   *  not a workspace). */
+  prepDialogCwd: string | null;
+  setPrepDialogCwd: (cwd: string | null) => void;
 
   /**
    * Replace `workspaceId`'s pane tree with the trusted project layout.
@@ -192,6 +196,14 @@ export const createProjectConfigSlice: StateCreator<
 
   setPrepDialogWsId: (workspaceId) => set((draft: StoreState) => {
     draft.prepDialogWsId = workspaceId;
+    draft.prepDialogCwd = null;
+  }),
+
+  prepDialogCwd: null,
+
+  setPrepDialogCwd: (cwd) => set((draft: StoreState) => {
+    draft.prepDialogCwd = cwd;
+    draft.prepDialogWsId = null;
   }),
 
   applyProjectLayout: (workspaceId) => {
