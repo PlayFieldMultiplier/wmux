@@ -366,7 +366,9 @@ describe('fan-out tasks under the pane — review fixes', () => {
   it('Close finished offers Close and keep folder for a refused close, not for an unpushed branch', async () => {
     seed({ active: 'bee', status: { t1: 'complete', t2: 'complete' } });
     const mission = (id: string) => ({ id: `m-${id}`, title: id, status: 'open', owner: { verifiedWorkspaceId: 'w1' } });
-    act(() => useStore.setState({ missionByPaneGroup: { t1: mission('t1'), t2: mission('t2') }, toasts: [] } as never));
+    // Each task's finished agent is still its shell's running command (OSC
+    // 133): the close ends it, so the keep is not refused for it.
+    act(() => useStore.setState({ missionByPaneGroup: { t1: mission('t1'), t2: mission('t2') }, commandRunningByPtyId: { 'pty-t1': true, 'pty-t2': true }, toasts: [] } as never));
     const close = vi.fn(async (taskId: string, _ws: string, opts?: { keepFolder?: boolean }) => {
       if (opts?.keepFolder) return { ok: true, taskId, archivePending: false, keptFolder: `/wt/${taskId}` };
       return taskId === 'm-t1'

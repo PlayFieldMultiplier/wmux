@@ -252,6 +252,13 @@ describe('FleetView — Ready to review', () => {
     await settle();
   };
   const keepFolderToast = () => useStore.getState().toasts.find((toast) => toast.action?.label === 'Close and keep folder');
+  // A second tab in the task's pane: a plain shell, no agent in it.
+  const addShellTab = (): void => {
+    const p1: Pane = { id: 'p1', type: 'leaf', surfaces: [surface('s-p1', 'pty-1'), surface('s-p1-shell', 'pty-1-shell')], activeSurfaceId: 's-p1' };
+    act(() => {
+      useStore.setState({ workspaces: useStore.getState().workspaces.map((w) => (w.id === 'ws-t1' ? workspace('ws-t1', w.name, p1) : w)) });
+    });
+  };
 
   it('a refused close offers Close and keep folder, which closes the task keeping its folder', async () => {
     close.mockResolvedValueOnce({ ok: false, reason: 'error', error: 'could not verify all processes exited' });
@@ -270,16 +277,35 @@ describe('FleetView — Ready to review', () => {
     expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/t1.')).toBe(true);
   });
 
-  // A command started in the task since the refusal: the action offered
-  // then closes nothing, so it cannot end that work.
-  it('a Close and keep folder offered earlier closes nothing once a command runs in the task', async () => {
+  // The task's own agent is the command its shell runs (OSC 133) until it
+  // exits: that is the work the close ends, so it does not refuse the keep.
+  it('Close and keep folder closes the task while its own finished agent is its shell\'s running command', async () => {
+    act(() => { useStore.setState({ commandRunningByPtyId: { 'pty-1': true } } as never); });
     close.mockResolvedValueOnce({ ok: false, reason: 'error', error: 'could not verify all processes exited' });
     mount();
     await settle();
     await closeFromRow();
     const offered = keepFolderToast();
     expect(offered).toBeDefined();
-    act(() => { useStore.setState({ commandRunningByPtyId: { 'pty-1': true } } as never); });
+    close.mockResolvedValueOnce({ ok: true, taskId: 't1', archivePending: false, keptFolder: '/wt/t1' });
+    await act(async () => { offered!.action!.onClick(); });
+    await settle();
+    expect(close).toHaveBeenLastCalledWith('t1', 'ws-o', { keepFolder: true });
+    expect(useStore.getState().workspaces.map((w) => w.id)).not.toContain('ws-t1');
+    expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/t1.')).toBe(true);
+  });
+
+  // A command started in the task since the refusal: the action offered
+  // then closes nothing, so it cannot end that work.
+  it('a Close and keep folder offered earlier closes nothing once a command runs in the task', async () => {
+    addShellTab();
+    close.mockResolvedValueOnce({ ok: false, reason: 'error', error: 'could not verify all processes exited' });
+    mount();
+    await settle();
+    await closeFromRow();
+    const offered = keepFolderToast();
+    expect(offered).toBeDefined();
+    act(() => { useStore.setState({ commandRunningByPtyId: { 'pty-1': true, 'pty-1-shell': true } } as never); });
     await act(async () => { offered!.action!.onClick(); });
     await settle();
     expect(close).toHaveBeenCalledTimes(1);
@@ -288,6 +314,7 @@ describe('FleetView — Ready to review', () => {
   });
 
   it('a command started while Close and keep folder runs keeps the task\'s workspace open', async () => {
+    addShellTab();
     close.mockResolvedValueOnce({ ok: false, reason: 'error', error: 'could not verify all processes exited' });
     mount();
     await settle();
@@ -296,7 +323,7 @@ describe('FleetView — Ready to review', () => {
     let answer!: (r: unknown) => void;
     close.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
     await act(async () => { offered!.action!.onClick(); });
-    act(() => { useStore.setState({ commandRunningByPtyId: { 'pty-1': true } } as never); });
+    act(() => { useStore.setState({ commandRunningByPtyId: { 'pty-1-shell': true } } as never); });
     await act(async () => { answer({ ok: true, taskId: 't1', archivePending: false, keptFolder: '/wt/t1' }); });
     await settle();
     expect(close).toHaveBeenLastCalledWith('t1', 'ws-o', { keepFolder: true });

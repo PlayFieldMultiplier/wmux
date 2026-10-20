@@ -36,13 +36,18 @@ export async function closeKeepingFolder(taskId: string, verifiedWorkspaceId: st
 }
 
 /** Whether `workspaceId` runs work that a close of it would end: an agent
- *  not finished, or a shell running a command (OSC 133). */
+ *  not finished, or a shell running a command (OSC 133) other than the
+ *  task's own finished agent. That agent is the command its shell runs
+ *  until it exits, and ending it is what the close is for. */
 export function workspaceBusy(workspaceId: string): boolean {
   const st = useStore.getState();
   const ws = st.workspaces.find((w) => w.id === workspaceId);
   if (!ws) return false;
-  return !paneRowsFinished(selectWorkspaceAgentRoster(st, workspaceId).rows)
-    || getWorkspacePtyIds(ws).some((ptyId) => st.commandRunningByPtyId[ptyId] === true);
+  const rows = selectWorkspaceAgentRoster(st, workspaceId).rows;
+  if (!paneRowsFinished(rows)) return true;
+  // A pane whose agent is known gone runs something else now.
+  const ownAgents = new Set(rows.filter((r) => st.agentAliveByPtyId[r.ptyId] !== false).map((r) => r.ptyId));
+  return getWorkspacePtyIds(ws).some((ptyId) => !ownAgents.has(ptyId) && st.commandRunningByPtyId[ptyId] === true);
 }
 
 /** The toast action offering Close and keep folder after a refused close;
