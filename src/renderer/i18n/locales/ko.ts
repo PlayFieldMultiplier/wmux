@@ -1582,6 +1582,7 @@ export const ko = {
   'room.notice.gate.killed': "게이트가 강제 종료됨: 작업은 열린 채로 둠",
   'room.notice.gate.failed': "게이트 실패 (종료 코드 {exit}): 작업은 열린 채로 둠",
   'room.notice.gate.skipped': "게이트 건너뜀 ({reason}): 작업은 열린 채로 둠",
+  'room.notice.gate.skipped.titled': "{title} 게이트 건너뜀 ({reason}): 작업은 열린 채로 둠",
   'room.notice.gate.reason.gate_unavailable': "게이트 명령을 시작하지 못함",
   'room.notice.gate.reason.no_gate_command': "게이트 명령이 없음",
   'room.notice.gate.reason.no_changes': "태스크가 변경한 것이 없음",

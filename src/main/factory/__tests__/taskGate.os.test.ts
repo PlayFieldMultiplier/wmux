@@ -630,6 +630,21 @@ describe('describeTaskGate', () => {
     expect(describeTaskGate(skip, { verified: 2, total: 2 }).body).toBe('Evidence recorded (2 of 2 verified). No gate ran.');
     expect(describeTaskGate({ ...skip, skipped: 'gate_unavailable' }, { verified: 1, total: 2 }).body).toBe('No gate ran.');
   });
+
+  it('a no_changes skip names its task, so two such cards read apart; with no title it keeps the plain title', () => {
+    const skip = { ok: true, status: 'skipped', taskId: 't', skipped: 'no_changes', detail: 'No gate ran.', recorded: true } as const;
+    const c4 = describeTaskGate(skip, { verified: 1, total: 2, title: 'C4 check the API' });
+    const c5 = describeTaskGate(skip, { verified: 1, total: 2, title: 'C5 read the log' });
+    expect(c4.title).toBe('Gate skipped for C4 check the API (the task made no changes): task left open');
+    expect(c5.title).toBe('Gate skipped for C5 read the log (the task made no changes): task left open');
+    expect(c4.notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes', title: 'C4 check the API' } });
+    expect(c4.body).toBe('Evidence recorded (1 of 2 verified). No gate ran.');
+    const untitled = describeTaskGate(skip, { verified: 1, total: 2, title: '  ' });
+    expect(untitled.title).toBe('Gate skipped (the task made no changes): task left open');
+    expect(untitled.notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes' } });
+    // Another skip reason is not named (its card is unchanged).
+    expect(describeTaskGate({ ...skip, skipped: 'deps_missing' }, { verified: 0, total: 0, title: 'C4' }).notice).toEqual({ code: 'gate.skipped', args: { reason: 'deps_missing' } });
+  });
 });
 
 // Several of these run on real timers (the sweep): generous bounds, so a
@@ -1295,7 +1310,7 @@ describe('a merged pull request ends its task', { timeout: 30_000 }, () => {
     const row = ledger.get('task-1') as LedgerEntry;
     expect(row.status).toBe('review_requested');
     expect(row.gate).toMatchObject({ exitCode: 0, command: 'none', skipped: 'no_changes', recordedBy: 'system' });
-    expect(r.note.mock.calls.map((c) => c[2])).toEqual(['Gate skipped (the task made no changes): task left open']);
+    expect(r.note.mock.calls.map((c) => c[2])).toEqual(['Gate skipped for task task-1 (the task made no changes): task left open']);
     r.off();
   });
 
@@ -1411,11 +1426,11 @@ describe('a task with no commits beyond its base', () => {
     expect(row.updatedBy.kind).toBe('system');
     expect(r.note).toHaveBeenCalledTimes(1);
     const [, , title, body, key, notice] = r.note.mock.calls[0];
-    expect(title).toBe('Gate skipped (the task made no changes): task left open');
+    expect(title).toBe('Gate skipped for task task-1 (the task made no changes): task left open');
     // A report with no evidence: the card says so.
     expect(body).toBe(`Evidence: Not verified (the report recorded none). ${noChangesDetail(BASE)}`);
     expect(key).toBe(verifyGateFactId('task-1', row.rev));
-    expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes' } });
+    expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes', title: 'task task-1' } });
     expect(r.wake).toHaveBeenCalledTimes(1);
     expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', row.rev)]);
   });
@@ -1433,9 +1448,9 @@ describe('a task with no commits beyond its base', () => {
     expect(r.runGate).not.toHaveBeenCalled();
     expect(r.note).toHaveBeenCalledTimes(1);
     const [, , title, body, , notice] = r.note.mock.calls[0];
-    expect(title).toBe('Gate skipped (the task made no changes): task left open');
+    expect(title).toBe('Gate skipped for task task-1 (the task made no changes): task left open');
     expect(body).toBe(`Evidence recorded (1 of 2 verified). ${noChangesDetail(BASE)}`);
-    expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes' } });
+    expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes', title: 'task task-1' } });
   });
 
   it('the bot then settles it failed from the report', async () => {

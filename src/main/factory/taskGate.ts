@@ -393,10 +393,11 @@ export interface GateCard {
   notice: CardNotice;
 }
 
-/** The card for a gate run that did not complete the task. `evidence`: the
- *  report's graded evidence, stated on a no_changes skip (the bot settles
- *  that task from its report, so the owner sees what it holds). */
-export function describeTaskGate(r: GateRunResult, evidence?: { verified: number | undefined; total: number }): GateCard {
+/** The card for a gate run that did not complete the task. `report`: the
+ *  report's graded evidence and its task's title, stated on a no_changes skip
+ *  (the bot settles that task from its report, so the owner sees what it
+ *  holds, and two such cards read apart). */
+export function describeTaskGate(r: GateRunResult, report?: { verified: number | undefined; total: number; title?: string }): GateCard {
   if (r.ok && r.status === 'completed') {
     const g = r.result;
     const verdict = g.exitCode === 0 ? 'passed' : g.exitCode === null ? 'was killed' : `failed (exit ${g.exitCode})`;
@@ -410,10 +411,14 @@ export function describeTaskGate(r: GateRunResult, evidence?: { verified: number
     // record to complete on: say so.
     const recordedBody = r.skipped === 'no_changes' && r.recorded === false ? `${r.detail} The skip was NOT recorded (ledger unreachable).` : r.detail;
     // The evidence leads: a long card body is folded after its first lines.
-    const body = r.skipped === 'no_changes' && evidence ? `${nonCodeEvidenceLine(evidence.verified, evidence.total)} ${recordedBody}` : recordedBody;
+    const body = r.skipped === 'no_changes' && report ? `${nonCodeEvidenceLine(report.verified, report.total)} ${recordedBody}` : recordedBody;
     // The stored English words for no_changes are the rendered card's
     // (room.notice.gate.reason.no_changes): the bot reads this title too.
     const reason = r.skipped === 'no_changes' ? 'the task made no changes' : r.skipped;
+    const title = r.skipped === 'no_changes' ? report?.title?.trim() : undefined;
+    if (title) {
+      return { title: `Gate skipped for ${title} (${reason}): task left open`, body, notice: { code: 'gate.skipped', args: { reason: r.skipped, title } } };
+    }
     return { title: `Gate skipped (${reason}): task left open`, body, notice: { code: 'gate.skipped', args: { reason: r.skipped } } };
   }
   if (!r.ok && r.status === 'busy') return { title: 'Gate already running: task left open', body: 'Another gate run holds this task; its result is in the task\'s ledger row when it ends.', notice: { code: 'gate.busy' } };
@@ -772,7 +777,7 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       if (!now) return;
       await settle(now, describeTaskGate(
         { ok: true, status: 'skipped', taskId, skipped: 'no_changes', detail, recorded },
-        { verified: now.verifiedItemCount, total: now.evidence?.items?.length ?? 0 },
+        { verified: now.verifiedItemCount, total: now.evidence?.items?.length ?? 0, title: now.title },
       ));
       return;
     }

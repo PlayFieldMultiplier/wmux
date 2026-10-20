@@ -4395,7 +4395,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `gate.passed` | — | `Gate passed: task left open` | — |
 | `gate.killed` | — | `Gate was killed: task left open` | — |
 | `gate.failed` | `exit` number | `Gate failed (exit {exit}): task left open` | — |
-| `gate.skipped` | `reason` string | `Gate skipped ({reason}): task left open` | `reason`: `deps_missing`, `no_gate_command`, `gate_unavailable` or `no_changes`. |
+| `gate.skipped` | `reason` string, `title` string | `Gate skipped ({reason}): task left open`<br>`Gate skipped for {title} ({reason}): task left open` | `reason`: `deps_missing`, `no_gate_command`, `gate_unavailable` or `no_changes`. `title`: the task's title, on a `no_changes` skip only (the second template); a card without it uses the first. |
 | `gate.busy` | — | `Gate already running: task left open` | — |
 | `gate.noBase` | `detail` string | `No gate on the default branch yet: task left open` | `detail`: the error, in English. |
 | `gate.refused` | — | `Gate refused: task left open` | — |

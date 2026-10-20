@@ -16,9 +16,26 @@ import type { AgentStatus } from '../../../shared/types';
 import { FOCUS_RING } from '../focusRing';
 import { IconChevron, IconFanOut, IconGitBranch } from '../icons';
 import { StatusMarkView } from '../Sidebar/AgentMarks';
+import type { BotTaskView } from '../../../shared/botTask';
 import type { BotTreeRow } from './botsModel';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
+
+/** A reported non-code task's evidence grade in words, as the rail and the
+ *  tree say it: Not verified, or how much is attached; nothing once every
+ *  item is verified or before a report. */
+export function verificationLabel(v: BotTaskView['verification'], t: T): string | null {
+  if (!v || v.state === 'verified') return null;
+  return t(v.state === 'partial' ? 'botsPage.task.evidencePartial' : 'botsPage.task.notVerified', { verified: v.verified, total: v.total });
+}
+
+/** The evidence grade's mark, in the caution yellow (the rail's task row
+ *  and the tree's row). `prefix`: text before the words (the rail's " · "). */
+export function TaskVerification({ verification, t, className, prefix = '' }: { verification: BotTaskView['verification']; t: T; className: string; prefix?: string }) {
+  const label = verificationLabel(verification, t);
+  if (!label || !verification) return null;
+  return <span data-bots-task-verification={verification.state} className={className}>{`${prefix}${label}`}</span>;
+}
 
 /** The Sidebar's status mark for a tree row's state. */
 const ROW_STATUS: Record<BotTreeRow['state'], AgentStatus> = {
@@ -49,8 +66,8 @@ export function treeRowState(row: BotTreeRow, t: T): string {
 /** A tree row's state with its folder note, as the row's label and the
  *  worker panel's header say it. */
 export function treeRowLabel(row: BotTreeRow, t: T): string {
-  const state = treeRowState(row, t);
-  return row.folderKept ? `${state} · ${t('botsPage.worker.folderKept')}` : state;
+  return [treeRowState(row, t), row.folderKept ? t('botsPage.worker.folderKept') : null, verificationLabel(row.verification, t)]
+    .filter(Boolean).join(' · ');
 }
 
 function TreeRow({ row, selected, t, onOpen }: { row: BotTreeRow; selected: boolean; t: T; onOpen: () => void }) {
@@ -84,6 +101,8 @@ function TreeRow({ row, selected, t, onOpen }: { row: BotTreeRow; selected: bool
         {row.summary && (
           <span data-bots-worker-summary title={row.summary} className="mt-0.5 block truncate text-[11px] text-[var(--attention-text)]">{row.summary}</span>
         )}
+        {/* A reported non-code task's evidence, as the rail says it. */}
+        <TaskVerification verification={row.verification} t={t} className="mt-0.5 block truncate text-[11px] text-[var(--accent-yellow)]" />
         {/* A neutral note, not an error: the folder waits for its changes. */}
         {row.folderKept && (
           <span data-bots-worker-folder-kept className="mt-0.5 block truncate text-[11px] text-[var(--text-muted)]">{t('botsPage.worker.folderKept')}</span>

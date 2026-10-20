@@ -78,7 +78,7 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
   'gate.passed': titled('gate.passed'),
   'gate.killed': titled('gate.killed'),
   'gate.failed': titled('gate.failed', { exit: 'number' }),
-  'gate.skipped': titled('gate.skipped', { reason: 'string' }, GATE_REASONS),
+  'gate.skipped': { args: { reason: 'string', title: 'string' }, titles: [k('gate.skipped'), `${k('gate.skipped')}.titled`], more: GATE_REASONS },
   'gate.busy': bodied('gate.busy'),
   'gate.noBase': bodied('gate.noBase', { detail: 'string' }),
   'gate.refused': titled('gate.refused'),

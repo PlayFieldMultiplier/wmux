@@ -242,6 +242,20 @@ describe('factory system cards in the reader\'s language (RoomCard.notice)', () 
     setLocale('en');
   });
 
+  it('a no-changes skip names its task in every worded language; a card without the title keeps the plain one', () => {
+    setLocale('en');
+    expect(noticeText(card({ notice: { code: 'gate.skipped', args: { reason: 'no_changes', title: 'C4 check the API' } } }), i18nT)?.title)
+      .toBe('Gate skipped for C4 check the API (the task made no changes): task left open');
+    for (const locale of ['ko', 'pl', 'zh'] as const) {
+      setLocale(locale);
+      const titled = noticeText(card({ notice: { code: 'gate.skipped', args: { reason: 'no_changes', title: 'C4 check the API' } } }), i18nT)?.title ?? '';
+      expect(titled).toContain('C4 check the API');
+      expect(titled).not.toMatch(/[{}]|no_changes/);
+      expect(noticeText(card({ notice: { code: 'gate.skipped', args: { reason: 'no_changes' } } }), i18nT)?.title).not.toContain('{title}');
+    }
+    setLocale('en');
+  });
+
   it('a task card\'s label in the reader\'s language, a stopped task Cancelled, its evidence body kept', () => {
     setLocale('ko');
     expect(noticeText(card({ notice: { code: 'task.done', args: { title: 'fix login' } } }), i18nT)).toEqual({ title: '작업 완료: fix login', body: 'English body' });
