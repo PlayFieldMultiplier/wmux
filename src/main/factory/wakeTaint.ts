@@ -521,6 +521,13 @@ export function taskGuest(row: Pick<LedgerEntry, 'dispatch'>): GuestProvenance {
 
 // ── Singleton (registered by wakeTaintModule.ts) ───────────────────────────
 
+/** Set when the taint module is part of the app (wakeTaintModule.ts). */
+let trackerExpected = false;
+
+export function expectWakeTaint(on = true): void {
+  trackerExpected = on;
+}
+
 let current: { taint: WakeTaint; runningWake: WakeTaintPorts['runningWake']; wakeItem: (wakeId: string) => WakeItem | null } | null = null;
 
 export function setWakeTaint(taint: WakeTaint | null, runningWake?: WakeTaintPorts['runningWake'], wakeItem?: (wakeId: string) => WakeItem | null): void {
@@ -569,7 +576,10 @@ export function guestOfRunningWake(botId: string): GuestProvenance {
  *  words (WakeTaint.factGuest). Read again for each read. */
 export function factVisibleToBot(botId: string): (f: Fact) => boolean {
   const c = current;
-  if (!c || guestOfRunningWake(botId) === true) return () => true;
+  // No tracker where one is expected (its module not started, or failed):
+  // only facts that never carry a bot's or a guest's words.
+  if (!c) return trackerExpected ? (f) => !TASK_FACT_KINDS.has(f.kind) && !HANDOFF_FACT_KINDS.has(f.kind) && f.kind !== 'bot.notice' : () => true;
+  if (guestOfRunningWake(botId) === true) return () => true;
   return (f) => {
     try {
       return c.taint.factGuest(f) === false;

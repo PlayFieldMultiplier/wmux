@@ -5,9 +5,14 @@
 import path from 'node:path';
 import type { WakeItem } from '../../shared/wake';
 import { registerFactoryRpcModule } from './factoryHost';
-import { TAINT_FILENAME, WakeTaint, setWakeTaint } from './wakeTaint';
-import { setFactGuestProbe, setGuestTurnProbe } from './roomWriter';
+import { TAINT_FILENAME, WakeTaint, expectWakeTaint, setWakeTaint } from './wakeTaint';
+import { expectGuestProbes, setFactGuestProbe, setGuestTurnProbe } from './roomWriter';
 import { getBotWorkflowStore } from './botWorkflow';
+
+// Part of the app: until (or unless) the tracker runs, reads and stamps
+// fail closed.
+expectWakeTaint();
+expectGuestProbes();
 
 registerFactoryRpcModule('wakeTaint', (_router, deps) => {
   let off: (() => void) | null = null;

@@ -13,6 +13,8 @@ import {
   parseCardLine,
   sanitizeRefs,
   setFactGuestProbe,
+  setGuestTurnProbe,
+  expectGuestProbes,
   systemCardForFact,
   writeFactCards,
   formatHeldUntil,
@@ -359,6 +361,29 @@ describe('facts → system cards', () => {
     const reloaded = writer();
     expect(JSON.stringify(reloaded.read('ws1').cards)).not.toContain('GUEST-');
     expect(reloaded.read('ws1', { guests: true }).cards[0]?.origin).toBe('guest');
+  });
+
+  it('where the probes are expected but missing, bot and fact cards are stamped guest-sourced; a caller\'s captured clean is kept', () => {
+    const w = writer();
+    const botActor = { kind: 'bot' as const, workspaceId: 'ws1', botId: 'bot-00000001' };
+    expectGuestProbes();
+    try {
+      w.append({ workspaceId: 'ws1', kind: 'status', actor: botActor, title: 'NO-PROBE' });
+      writeFactCards(w, fact('handoff.received', { workspaceId: 'ws1', ref: { handoffId: 'h-x' }, payload: { handoffKind: 'dispatch', title: 'NO-PROBE-FACT', threadId: 'general', toWorkspaceId: 'ws1' } }), bots);
+    } finally {
+      expectGuestProbes(false);
+    }
+    expect(JSON.stringify(w.read('ws1').cards)).not.toContain('NO-PROBE');
+    setGuestTurnProbe(() => true);
+    try {
+      w.append({ workspaceId: 'ws1', kind: 'status', actor: botActor, title: 'CAPTURED-CLEAN', origin: 'clean' });
+      w.append({ workspaceId: 'ws1', kind: 'status', actor: botActor, title: 'IN-GUEST-WAKE' });
+    } finally {
+      setGuestTurnProbe(null);
+    }
+    const clean = w.read('ws1').cards;
+    expect(clean.map((c) => c.title)).toEqual(['CAPTURED-CLEAN']);
+    expect(clean[0]).not.toHaveProperty('origin');
   });
 
   it('a delivered room mention writes no line; a plain message does, and a refused mention writes a refusal card', () => {

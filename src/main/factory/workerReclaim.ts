@@ -1590,7 +1590,7 @@ export interface WorkerResumePorts {
   /** Whether the pane's agent runs (process truth), for a message. */
   agentAlive?: (sessionId: string) => Promise<boolean>;
   /** Deliver a message to the relaunched agent (waits while someone types). */
-  submit?: (sessionId: string, text: string) => Promise<boolean>;
+  submit?: (sessionId: string, text: string, stillOk?: () => string | null) => Promise<boolean>;
   /** daemon `session.stopAgent`, for the stop of a resumed worker. */
   stopAgent?: (sessionId: string) => Promise<{ ok?: boolean; stopped?: boolean; code?: string }>;
   /** Close a pane whose agent the daemon cannot stop (WorkerReclaimPorts.closePane). */
@@ -2008,7 +2008,9 @@ async function launched(
   }
   // Asked again after the wait, in the tick that sends the message.
   if (up && (stillOk?.() ?? null)) return { ...out, messageDelivered: false };
-  const delivered = up ? await ports.submit(sessionId, text.slice(0, RESUME_MESSAGE_MAX)).catch(() => false) : false;
+  // ... and again right before the paste and the Enter.
+  const body = text.slice(0, RESUME_MESSAGE_MAX);
+  const delivered = up ? await (stillOk ? ports.submit(sessionId, body, stillOk) : ports.submit(sessionId, body)).catch(() => false) : false;
   return { ...out, messageDelivered: delivered };
 }
 

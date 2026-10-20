@@ -122,6 +122,15 @@ describe('bot.resumeWorker message', () => {
     expect(await handlers.get(BOT_RPC.resumeWorker)!({ taskId: TASK, message: 'go on' }, ctx)).toMatchObject({ ok: true, messageDelivered: false });
     expect(p.typeLine).toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
+    // Still clean after the wait: the message goes with the guard for the paste and the Enter.
+    refusal = null;
+    p.agentAlive = async () => true;
+    await store.setState(TASK, 'stopped', 2);
+    expect(await handlers.get(BOT_RPC.resumeWorker)!({ taskId: TASK, message: 'go on' }, ctx)).toMatchObject({ ok: true, messageDelivered: true });
+    const guard = (submit.mock.calls[0] as unknown[])[2] as () => string | null;
+    expect(guard()).toBeNull();
+    refusal = 'no longer';
+    expect(guard()).toBe('no longer');
   });
 });
 

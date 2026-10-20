@@ -258,6 +258,15 @@ export function isGuestSourcedTurn(botId: string): boolean {
  *  `origin: 'guest'`. */
 let factGuestProbe: ((fact: Fact) => boolean) | null = null;
 
+/** Set when the taint module is part of the app (wakeTaintModule.ts): from
+ *  then on a missing probe (the module not started, or failed) stamps a
+ *  bot's cards and a fact's cards guest-sourced rather than clean. */
+let probeExpected = false;
+
+export function expectGuestProbes(on = true): void {
+  probeExpected = on;
+}
+
 export function setFactGuestProbe(probe: ((fact: Fact) => boolean) | null): void {
   factGuestProbe = probe;
 }
@@ -265,7 +274,7 @@ export function setFactGuestProbe(probe: ((fact: Fact) => boolean) | null): void
 /** Whether a fact's cards are guest-sourced, as the probe says (false
  *  without one; true when it throws). */
 function guestSourcedFact(fact: Fact): boolean {
-  if (!factGuestProbe) return false;
+  if (!factGuestProbe) return probeExpected;
   try {
     return factGuestProbe(fact) === true;
   } catch {
@@ -274,7 +283,8 @@ function guestSourcedFact(fact: Fact): boolean {
 }
 
 function guestSourcedTurn(actor: Party): boolean {
-  if (actor.kind !== 'bot' || !guestTurnProbe) return false;
+  if (actor.kind !== 'bot') return false;
+  if (!guestTurnProbe) return probeExpected;
   try {
     return guestTurnProbe(actor.botId) === true;
   } catch {
@@ -580,8 +590,10 @@ export interface RoomCardInput {
   /** RoomCard.origin, from the item the card comes from: a bot card the
    *  caller decided at its call's start (written after an await, or after
    *  its wake ended), a system card derived from a guest-sourced item. A bot
-   *  card written in a wake that is not known clean is stamped anyway. */
-  origin?: 'guest';
+   *  card written in a wake that is not known clean is stamped anyway,
+   *  unless the caller says `'clean'`: it decided the card is clean at its
+   *  call's start (never stored). */
+  origin?: 'guest' | 'clean';
 }
 
 /** A post from a bot or the owner: idempotent by clientPostId, and a replyTo
@@ -805,7 +817,7 @@ export class RoomWriter {
     const guest = input.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(input.guest) : undefined;
     if (input.kind === 'guest' && !guest) return null;
     // A system card derived from a guest-sourced item passes its origin too.
-    const fromGuestTurn = input.origin === 'guest' || (actor.kind === 'bot' && guestSourcedTurn(actor));
+    const fromGuestTurn = input.origin === 'guest' || (input.origin === undefined && actor.kind === 'bot' && guestSourcedTurn(actor));
     // A fact delivered twice (a re-subscribe, a replay) writes one card.
     const factKey = refs?.factId ? factCardKey({ refs, threadId, kind: input.kind }) : null;
     if (factKey && state.seenFacts.has(factKey)) return null;
@@ -864,7 +876,7 @@ export class RoomWriter {
       // gets it only by asking (read's `guests`).
       if (prior && isGuestSourcedCard(prior)) {
         const actor = sanitizeParty(input.actor);
-        const sameSource = prior.kind === 'guest' ? input.kind === 'guest' : input.origin === 'guest' || (!!actor && guestSourcedTurn(actor));
+        const sameSource = prior.kind === 'guest' ? input.kind === 'guest' : input.origin === 'guest' || (input.origin === undefined && !!actor && guestSourcedTurn(actor));
         if (!sameSource) return { ok: false, code: 'invalid', message: 'that clientPostId is already used in this room' };
       }
       if (prior) return { ok: true, card: prior, duplicate: true };

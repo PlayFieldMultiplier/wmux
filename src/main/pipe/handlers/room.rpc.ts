@@ -343,7 +343,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
       ...(replyTo ? { replyTo } : {}),
       ...(clientPostId ? { clientPostId } : {}),
       ...(copied ? { files: copied.files } : {}),
-      ...(fromGuest ? { origin: 'guest' as const } : {}),
+      origin: fromGuest ? 'guest' as const : 'clean' as const,
     });
     // Copies no card took (a refused post, or one that found its card) go.
     if (copied) {

@@ -8,7 +8,7 @@ import type { Fact } from '../../../shared/facts';
 import type { Handoff } from '../../../shared/handoff';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WakeItem } from '../../../shared/wake';
-import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, factVisibleToBot, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, expectWakeTaint, factVisibleToBot, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-taint-')); });
@@ -364,6 +364,14 @@ describe('guest provenance', () => {
     // No running wake: not known to be a guest one.
     running = null;
     expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-c', 'f-pr']);
+    // No tracker where one is expected: only facts that carry no bot's or guest's words.
+    setWakeTaint(null);
+    expectWakeTaint();
+    try {
+      expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-pr']);
+    } finally {
+      expectWakeTaint(false);
+    }
   });
 
   it('a guest mark that cannot be written fails the send', () => {
