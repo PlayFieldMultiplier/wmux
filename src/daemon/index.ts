@@ -159,7 +159,8 @@ import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
 import { installExitEvidence, noteExitReason, STATUS_CONTROL_C_EXIT } from './exitEvidence';
 import { newerTimestamp } from './util/idleAnchor';
-import type { DaemonState } from './types';
+import type { DaemonSession, DaemonState } from './types';
+import { retireAdopted, withDiskOnlySessions } from './diskOnlySessions';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonDestroySessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
 import { gitDirMapperFor, gitWatchCwdFor } from './gitWatchCwd';
@@ -2326,15 +2327,15 @@ async function recoverSessions(
       // still owed. On the meta, so every save keeps it until spent.
       if (recordWasMidTurn(persisted, Date.now())) managed.meta.resumeContinuePending = true;
     }
-    // Build combined state: recovered (live) sessions + everything we
-    // intentionally left untouched (originally-dead within TTL, plus
-    // any session the recovery cap excluded — which stays suspended).
-    const liveState = buildState(sessionManager);
-    const preservedFromState = state.sessions.filter(
-      (s) => !liveState.sessions.some((live) => live.id === s.id),
-    );
-    liveState.sessions.push(...preservedFromState);
-    stateWriter.saveImmediate(liveState);
+  }
+  // Everything recovery left untouched (originally-dead within TTL, plus any
+  // session the recovery cap excluded — which stays suspended) stays on disk
+  // through every later save, not only this one (#2493).
+  const managedIds = new Set(sessionManager.listSessions().map((s) => s.id));
+  diskOnlySessions = state.sessions.filter((s) => !managedIds.has(s.id));
+  if (changed) {
+    // Build combined state: recovered (live) sessions + the disk-only ones.
+    stateWriter.saveImmediate(buildState(sessionManager));
   }
 
   // X6 ③ (Rung 3): reconcile the durable hook spool onto the recovered sessions
@@ -2687,6 +2688,10 @@ function registerRpcHandlers(
         throw new Error(refusal);
       }
     }
+
+    // #2493: closing a pane whose session recovery left on disk only (the
+    // manager emits no session:destroyed for it) ends that record too.
+    diskOnlySessions = diskOnlySessions.filter((s) => s.id !== p.id);
 
     // Remove data listener to prevent leak
     const tracked = sessionDataListeners.get(p.id);
@@ -7609,6 +7614,8 @@ function wireEvents(
     recoveredAgentShellIds.delete(payload.id); // X6 ②: drop hint on explicit close too (CodeRabbit #2)
     recoveredResumeBindings.delete(payload.id); // X6 ③: drop the exact binding too (id reuse, CodeRabbit)
     spendContinue(sessionManager, stateWriter, payload.id);
+    // #2493: a closed pane's old disk-only record must not come back on the next save.
+    diskOnlySessions = diskOnlySessions.filter((s) => s.id !== payload.id);
     hookIngest?.dropPty(payload.id); // M1: ...and the dedup ledger / hook authority
     // Transcript projection: the pane is gone, so its watch has no reader left…
     chatSessions?.drop(payload.id);
@@ -7769,6 +7776,15 @@ let activeEventLogFormatVersion: number | undefined = undefined;
 
 /** Cached boot ID — populated at startup via initBootId() */
 let cachedBootId: string | undefined;
+/** Records recovery left on disk without managing them (see diskOnlySessions.ts). */
+let diskOnlySessions: DaemonSession[] = [];
+
+/** What every save writes: the managed sessions, then the disk-only records they have not taken. */
+function sessionsToSave(sessionManager: DaemonSessionManager): DaemonSession[] {
+  const managed = sessionManager.listSessions();
+  diskOnlySessions = retireAdopted(managed, diskOnlySessions);
+  return withDiskOnlySessions(managed, diskOnlySessions);
+}
 
 /** Initialize the cached boot ID (call once at startup). */
 async function initBootId(): Promise<void> {
@@ -7791,7 +7807,7 @@ function buildState(sessionManager: DaemonSessionManager): DaemonState {
   if (!cachedBootId) cachedBootId = getBootIdSync();
   return {
     version: 1,
-    sessions: sessionManager.listSessions(),
+    sessions: sessionsToSave(sessionManager),
     bootId: cachedBootId,
   };
 }
@@ -7982,7 +7998,7 @@ async function shutdown(
   const stateSaveStart = phaseStartedAt();
   const suspendState: DaemonState = {
     version: 1,
-    sessions: sessionManager.listSessions(),
+    sessions: sessionsToSave(sessionManager),
     bootId: cachedBootId,
   };
   // saveImmediate is non-throwing (returns false on write failure). Capture
@@ -9759,7 +9775,7 @@ async function main(): Promise<void> {
         if (!cachedBootId) cachedBootId = getBootIdSync();
         const suspendState: DaemonState = {
           version: 1,
-          sessions: sessionManager.listSessions(),
+          sessions: sessionsToSave(sessionManager),
           bootId: cachedBootId,
         };
         stateWriter.saveImmediate(suspendState);
