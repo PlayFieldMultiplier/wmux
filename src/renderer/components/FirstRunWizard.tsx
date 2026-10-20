@@ -35,7 +35,7 @@ import MediaPreview from './ui/MediaPreview';
 import { MEDIA_CLIPS } from '../assets/media';
 import { IconCheck, IconWarning } from './icons';
 import { FOCUS_RING } from './focusRing';
-import { AgentReadyGroup, AgentSetupCorner, decideAgentPrimary } from './FirstRunAgentCards';
+import { AgentReadyGroup, AgentSetupCorner, cornerRun, decideAgentPrimary } from './FirstRunAgentCards';
 import { refreshAgentStatus, useAgentSetup } from '../utils/agentSetupRuns';
 import { anyAgentReady } from '../../shared/agentSetup';
 
@@ -276,8 +276,10 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
   // ─── Initial check ─────────────────────────────────────────────────────────
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  // `quiet`: re-read without the loading state, which would unmount the cards
+  // (and lose what the user typed in one) while another card just installed.
+  const refresh = useCallback(async (opts: { quiet?: boolean } = {}) => {
+    if (!opts.quiet) setLoading(true);
     try {
       const next =
         mode === 'reopen'
@@ -309,11 +311,20 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   useEffect(() => {
     void refreshAgentStatus();
   }, []);
-  const anyRunning = Object.values(runs).some((r) => r?.phase === 'running');
-  const [expandedWhileRunning, setExpandedWhileRunning] = useState(false);
+  // Aside (the corner card) whenever a run starts or the user opens a run's
+  // tab, and back when every run has ended or on "Back to setup".
+  const runningIds = Object.values(runs).filter((r) => r?.phase === 'running').map((r) => String(r?.id)).sort().join(',');
+  const [aside, setAside] = useState(false);
+  const seenRunning = useRef('');
   useEffect(() => {
-    if (anyRunning) setExpandedWhileRunning(false);
-  }, [anyRunning]);
+    const before = seenRunning.current;
+    seenRunning.current = runningIds;
+    const prev = new Set(before.split(',').filter(Boolean));
+    if (runningIds.split(',').some((id) => id && !prev.has(id))) setAside(true);
+    else if (before && !runningIds) setAside(false);
+  }, [runningIds]);
+  const stepAside = useCallback(() => setAside(true), []);
+  const asideRun = cornerRun(runs);
   // An install the cards just saw: re-read the checklist so the rows that need
   // an installed agent (MCP registration, hooks) appear without reopening.
   const installedKey = statuses?.filter((s) => s.readiness !== 'not-installed').map((s) => s.agent).join(',') ?? null;
@@ -322,7 +333,7 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
     if (installedKey === null) return;
     const before = seenInstalled.current;
     seenInstalled.current = installedKey;
-    if (before !== null && before !== installedKey) void refresh();
+    if (before !== null && before !== installedKey) void refresh({ quiet: true });
   }, [installedKey, refresh]);
   const agentPrimary = decideAgentPrimary(statuses, runs);
   const noAgentReady = statuses !== null && !anyAgentReady(statuses);
@@ -578,8 +589,8 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
     agentAction: agentPrimary !== null,
   });
 
-  if (anyRunning && !expandedWhileRunning) {
-    return <AgentSetupCorner onExpand={() => setExpandedWhileRunning(true)} />;
+  if (aside && asideRun) {
+    return <AgentSetupCorner onExpand={() => setAside(false)} />;
   }
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -615,7 +626,7 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
             {/* Setup checklist: one grouped container, one row per item. Rows
                 that need an action are notice rows with the action on the right. */}
             {/* Agent ready: Claude Code and Codex, one is enough to go on. */}
-            <AgentReadyGroup primary={primary === 'agent' ? agentPrimary : null} />
+            <AgentReadyGroup primary={primary === 'agent' ? agentPrimary : null} onShowPane={stepAside} />
 
             <div className="ui-group" data-testid="first-run-wizard-checklist">
               {/* The Claude card above says installed or not; this keeps the

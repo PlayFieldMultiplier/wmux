@@ -13,6 +13,7 @@ const tab = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('../../utils/accountLogin', () => ({ openTerminalTab: tab.open }));
 
 import FirstRunWizard from '../FirstRunWizard';
+import { useStore } from '../../stores';
 import { resetAgentSetupForTests } from '../../utils/agentSetupRuns';
 import type { AgentSetupStatus } from '../../../shared/agentSetup';
 
@@ -115,5 +116,59 @@ describe('FirstRunWizard agent ready step', () => {
     await act(async () => { byId('first-run-agent-corner-back')?.click(); });
     expect(container.querySelector('[role="dialog"]')).not.toBeNull();
     expect(byId('first-run-agent-claude')?.textContent).toContain('Installing');
+  });
+
+  it('Retry after a failed install goes back to the confirm step; View log steps the dialog aside', async () => {
+    installBridge([notInstalled('claude'), notInstalled('codex')]);
+    let onData: ((id: string, data: string, replay: boolean) => void) | null = null;
+    (window as unknown as { electronAPI: { pty: Record<string, unknown> } }).electronAPI.pty.onData =
+      vi.fn((cb: typeof onData) => { onData = cb; return () => undefined; });
+    tab.open.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-1' });
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    await act(async () => { byId('first-run-agent-claude-install')?.click(); });
+    await settle();
+    await act(async () => { byId('first-run-agent-claude-run')?.click(); });
+    await settle();
+    // The installer exits 1: the run fails and the dialog comes back.
+    await act(async () => { onData?.('pty-1', '\x1b]133;C\x07\x1b]133;D;1\x07', false); });
+    await settle();
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(byId('first-run-agent-claude')?.dataset.status).toBe('error');
+
+    // View log: with the run's tab in the store, the dialog steps aside so the
+    // tab is usable, and "Back to setup" returns to it.
+    const prev = useStore.getState();
+    useStore.setState({
+      activeWorkspaceId: 'ws-1',
+      workspaces: [{ ...(prev.workspaces[0] ?? {}), id: 'ws-1', activePaneId: 'pane-1',
+        rootPane: { type: 'leaf', id: 'pane-1', surfaces: [{ id: 'surf-1', ptyId: 'pty-1' }] } }] as never,
+    });
+    await act(async () => { byId('first-run-agent-claude-view-log')?.click(); });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(byId('first-run-agent-corner')?.textContent).toContain('the terminal tab');
+    await act(async () => { byId('first-run-agent-corner-back')?.click(); });
+    useStore.setState({ workspaces: prev.workspaces, activeWorkspaceId: prev.activeWorkspaceId });
+    await act(async () => {
+      (Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Retry') as HTMLButtonElement).click();
+    });
+    await settle();
+    expect(byId('first-run-agent-claude-command')?.textContent).toBe(INSTALL);
+    // One primary only: the card that was primary keeps it (Run).
+    expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-run']);
+  });
+
+  it('Run on a card that is not the primary stays secondary', async () => {
+    const fr = installBridge([notInstalled('claude'), notInstalled('codex')]);
+    fr.agentPlan.mockResolvedValue({
+      agent: 'codex',
+      install: { command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh', shell: 'user', officialPage: 'https://learn.chatgpt.com/docs/codex/cli', missing: [] },
+      login: null,
+    });
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    await act(async () => { byId('first-run-agent-codex-install')?.click(); });
+    await settle();
+    expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-install']);
   });
 });

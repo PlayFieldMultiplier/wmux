@@ -102,11 +102,22 @@ export function decideAgentPrimary(
   if (!statuses) return null;
   if (statuses.some((s) => s.readiness === 'ready')) return null;
   if (Object.values(runs).some((r) => r?.phase === 'running')) return null;
-  return AGENT_IDS.find((a) => agentStatusOf(a, statuses)) ?? null;
+  // The first card whose own action can be the primary (Install, Retry, Log
+  // in); a card that only offers "Check again" is never the primary.
+  return AGENT_IDS.find((a) => {
+    const status = agentStatusOf(a, statuses);
+    const phase = runs[a]?.phase;
+    if (!status || phase === 'not-found' || phase === 'no-tab') return false;
+    return status.readiness === 'not-installed' || status.readiness === 'login-needed';
+  }) ?? null;
 }
 
-/** The "Agent ready" group: one row per agent. */
-export function AgentReadyGroup({ primary }: { primary: AgentId | null }) {
+/**
+ * The "Agent ready" group: one row per agent. `onShowPane` is called when a
+ * card brings a run's terminal tab to the front, so the wizard can step aside
+ * (a modal over the pane would keep the user from typing or reading it).
+ */
+export function AgentReadyGroup({ primary, onShowPane }: { primary: AgentId | null; onShowPane: () => void }) {
   const t = useT();
   const { statuses, runs } = useAgentSetup();
   return (
@@ -124,6 +135,7 @@ export function AgentReadyGroup({ primary }: { primary: AgentId | null }) {
             loaded={statuses !== null}
             run={runs[agent]}
             primary={primary === agent}
+            onShowPane={onShowPane}
           />
         ))}
       </div>
@@ -131,12 +143,13 @@ export function AgentReadyGroup({ primary }: { primary: AgentId | null }) {
   );
 }
 
-export function AgentCard({ agent, status, loaded, run, primary }: {
+export function AgentCard({ agent, status, loaded, run, primary, onShowPane }: {
   agent: AgentId;
   status: AgentSetupStatus | null;
   loaded: boolean;
   run: AgentRun | undefined;
   primary: boolean;
+  onShowPane?: () => void;
 }) {
   const t = useT();
   const name = agentName(agent);
@@ -160,7 +173,14 @@ export function AgentCard({ agent, status, loaded, run, primary }: {
 
   const askInstall = async () => {
     const plan = await loadPlan();
-    if (plan) setConfirming(plan);
+    if (!plan) return;
+    // Retry: the failed run gives way to the confirm step.
+    clearAgentRun(agent);
+    setConfirming(plan);
+  };
+
+  const showPane = () => {
+    if (showAgentRunPane(agent)) onShowPane?.();
   };
 
   const runInstall = async (plan: AgentSetupPlan) => {
@@ -208,7 +228,7 @@ export function AgentCard({ agent, status, loaded, run, primary }: {
         testId={testId}
         title={name}
         detail={run.kind === 'install' ? t('firstRunWizard.agent.installing') : t('firstRunWizard.agent.loggingIn')}
-        action={<Button size="sm" variant="secondary" onClick={() => showAgentRunPane(agent)}>{t('firstRunWizard.agent.showTerminal')}</Button>}
+        action={<Button size="sm" variant="secondary" onClick={showPane}>{t('firstRunWizard.agent.showTerminal')}</Button>}
       />
     );
   }
@@ -232,11 +252,12 @@ export function AgentCard({ agent, status, loaded, run, primary }: {
       <Row status="error" testId={testId} title={name} detail={t(key)}
         action={<Button size="sm" variant={variant(primary)} onClick={() => void askInstall()}>{t('firstRunWizard.agent.retry')}</Button>}>
         <div className="wmux-agent-setup-actions">
-          <Button size="sm" variant="ghost" onClick={() => showAgentRunPane(agent)} data-testid={`${testId}-view-log`}>
+          <Button size="sm" variant="ghost" onClick={showPane} data-testid={`${testId}-view-log`}>
             {t('firstRunWizard.agent.viewLog')}
           </Button>
           {officialPage}
         </div>
+        {planError && <p className="ui-row-error">{t('firstRunWizard.agent.planError')}</p>}
       </Row>
     );
   }
@@ -262,7 +283,7 @@ export function AgentCard({ agent, status, loaded, run, primary }: {
           </Button>
         </div>
         {pathResult && !pathResult.ok && (
-          <p className="ui-row-error">{t(`firstRunWizard.agent.pathError.${pathResult.reason}`)}</p>
+          <p className="ui-row-error">{t(`firstRunWizard.agent.pathError.${pathResult.reason}`, { name })}</p>
         )}
       </Row>
     );
@@ -319,7 +340,7 @@ export function AgentCard({ agent, status, loaded, run, primary }: {
       <Row status="todo" testId={testId} title={name} detail={t('firstRunWizard.agent.confirmInstall')}>
         <code className="ui-code wmux-agent-setup-line" data-testid={`${testId}-command`}>{confirming.install.command}</code>
         <div className="wmux-agent-setup-actions">
-          <Button size="sm" variant="primary" onClick={() => void runInstall(confirming)} data-testid={`${testId}-run`}>
+          <Button size="sm" variant={variant(primary)} onClick={() => void runInstall(confirming)} data-testid={`${testId}-run`}>
             {t('firstRunWizard.agent.confirmRun')}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>{t('firstRunWizard.agent.cancel')}</Button>
@@ -341,6 +362,16 @@ export function AgentCard({ agent, status, loaded, run, primary }: {
 
 /** The guide line for what the sign-in pane shows right now. */
 export function guideKeys(run: AgentRun): { title: string; body: string } {
+  // A run that already ended (the user opened its tab with View log).
+  if (run.phase !== 'running') {
+    const body = run.phase === 'failed'
+      ? run.failure === 'network' ? 'firstRunWizard.agent.failedNetwork'
+        : run.failure === 'permission' ? 'firstRunWizard.agent.failedPermission' : 'firstRunWizard.agent.failedUnknown'
+      : run.phase === 'not-found' ? 'firstRunWizard.agent.notFound'
+        : run.phase === 'succeeded' ? 'firstRunWizard.agent.ready'
+          : run.kind === 'login' ? 'firstRunWizard.agent.loginClosed' : 'firstRunWizard.agent.failedUnknown';
+    return { title: 'firstRunWizard.agent.guide.logTitle', body };
+  }
   if (run.kind === 'install') {
     return { title: 'firstRunWizard.agent.guide.installTitle', body: 'firstRunWizard.agent.guide.installBody' };
   }
@@ -357,6 +388,12 @@ export function guideKeys(run: AgentRun): { title: string; body: string } {
   return { title: 'firstRunWizard.agent.guide.claudeTitle', body: 'firstRunWizard.agent.guide.claudeBody' };
 }
 
+/** The run the corner card is about: a running one, else the latest with a tab. */
+export function cornerRun(runs: Partial<Record<AgentId, AgentRun>>): AgentRun | undefined {
+  const all = AGENT_IDS.map((a) => runs[a]).filter((r): r is AgentRun => !!r && r.ptyId !== null);
+  return all.find((r) => r.phase === 'running') ?? all.sort((a, b) => b.id - a.id)[0];
+}
+
 /**
  * The wizard while a setup pane is in use: a small non-modal card in the
  * window's corner (like the keyboard cheat sheet), so the terminal stays
@@ -365,7 +402,7 @@ export function guideKeys(run: AgentRun): { title: string; body: string } {
 export function AgentSetupCorner({ onExpand }: { onExpand: () => void }) {
   const t = useT();
   const { runs } = useAgentSetup();
-  const run = AGENT_IDS.map((a) => runs[a]).find((r) => r?.phase === 'running');
+  const run = cornerRun(runs);
   useEffect(() => {
     // The pane is the point of this mode: put it in front once.
     if (run) showAgentRunPane(run.agent);
