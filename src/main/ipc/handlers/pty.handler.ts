@@ -232,8 +232,8 @@ async function stageCreate(options: PtyCreateOptions | undefined, botWorker: Bot
     const rewritten = promptFileArgumentForShell(line0, { wsl, cmd: process.platform === 'win32' && isCmdShellPath(shellPath) });
     if (rewritten !== line0) options = { ...options, initialCommand: rewritten };
   }
-  // Agent-setup panes sign in to the default account the card detects: no rotation.
-  let staged = options?.ignoreAccountBinding === true ? options : await withAccountQuota(options);
+  // Agent-setup panes (ignoreAccountBinding) are left as they are by the quota.
+  let staged = await withAccountQuota(options);
   let level: string | undefined;
   const line = staged?.initialCommand;
   if (botWorker && staged && line && namesClaude(line) && !namesCodex(line)) {
