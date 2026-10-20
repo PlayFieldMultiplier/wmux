@@ -611,4 +611,40 @@ describe('Git page — a workspace folder holding several repos (#2438)', () => 
     expect(scan).not.toHaveBeenCalledWith('/work');
     expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe('Not a git repository — focus a pane inside a repo.');
   });
+
+  it('a shell in a folder with no repos and the agent in a folder of repos lists the agent folder\'s repos', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({ workspaces: [workspace('root', '/home-ish', { metadata: { cwd: '/work' } } as Partial<Workspace>)] }));
+    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/home-ish');
+    expect(scan).toHaveBeenCalledWith('/work');
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
+  it('the agent cwd spelled as the shell cwd is scanned once', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({ workspaces: [workspace('root', '/work', { metadata: { cwd: '/work/' } } as Partial<Workspace>)] }));
+    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(scan).toHaveBeenCalledWith('/work');
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
+  it('with an agent cwd, the profile and starting directory are still not scanned', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/elsewhere', { metadata: { cwd: '/agent' }, profile: { startupCwd: '/work' } } as Partial<Workspace>)],
+      startupDirectory: '/work',
+    }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/elsewhere');
+    expect(scan).toHaveBeenCalledWith('/agent');
+    expect(scan).not.toHaveBeenCalledWith('/work');
+    expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe('Not a git repository — focus a pane inside a repo.');
+  });
 });

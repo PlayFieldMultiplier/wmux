@@ -127,6 +127,18 @@ type ListWorktrees = (repoPath: string) => Promise<{ ok: true; mainPath: string;
 type RepoKey = (repoPath: string) => Promise<{ key: string | null }>;
 type ScanRepos = (cwd: string) => Promise<{ ok: true; repoPaths: string[] } | { ok: false }>;
 
+/** The folders scanned for repos when a workspace resolves to none (#2438):
+ *  its first cwd candidate, then its agent's reported cwd when that is one
+ *  of the candidates and another folder. */
+export function repoScanRoots(candidates: readonly string[], agentCwd: string | undefined, platform?: string): string[] {
+  const roots = candidates.slice(0, 1);
+  if (agentCwd && candidates.includes(agentCwd)
+    && !roots.some((r) => normWorktreePath(r, platform) === normWorktreePath(agentCwd, platform))) {
+    roots.push(agentCwd);
+  }
+  return roots;
+}
+
 /** Each workspace's id and cwd candidates — the only inputs to resolution. */
 function selectResolutionKey(s: StoreState): string {
   return s.workspaces.map((w) => `${w.id}\u0001${repoCwdCandidates(w, s.startupDirectory || '', true).join('\u0002')}`).join('\n');
@@ -181,12 +193,26 @@ export function useRepoGroups(refreshKey: number, enabled = true): RepoGroup[] |
           if (top !== null) break;
         }
         // Not in a repo: the repos in its own folder's subfolders (#2438).
-        // Only the first candidate is scanned, the folder the header names;
-        // the later ones (profile, global starting directory) are not it.
+        // The first candidate is scanned, the folder the header names, and
+        // the agent's reported cwd when it is another folder (a shell in
+        // home, the agent in a folder of repos); the later ones (profile,
+        // global starting directory) are not the workspace's folder.
         let tops: readonly string[] = top !== null ? [top] : [];
         if (top === null && candidates.length > 0) {
-          tops = await scanReposCached(api?.diff?.scanRepos, candidates[0], force);
-          if (!live()) return;
+          const found: string[] = [];
+          const seen = new Set<string>();
+          for (const root of repoScanRoots(candidates, ws.metadata?.cwd, plat)) {
+            const inRoot = await scanReposCached(api?.diff?.scanRepos, root, force);
+            if (!live()) return;
+            for (const t of inRoot) {
+              const k = normWorktreePath(t, plat);
+              if (!seen.has(k)) {
+                seen.add(k);
+                found.push(t);
+              }
+            }
+          }
+          tops = found;
         }
         for (const t of tops) {
           const mainPath = await mainPathCached(list, t, plat, force);
