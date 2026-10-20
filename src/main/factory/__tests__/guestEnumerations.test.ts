@@ -69,6 +69,7 @@ const BOT_LIST_CALLERS: Record<string, Why> = {
   'src/main/factory/roomWriter.ts#factRooms': { kind: 'guest-skip', why: 'a repository\'s rooms skip guest workspaces' },
   'src/main/factory/triggerEngine.ts#TriggerEngine.route': { kind: 'closed', why: 'fact wakes; botSeesFact holds the island too' },
   'src/main/factory/workerLifecycleHost.ts#runningBotNames': { kind: 'owner', why: 'names in the owner\'s quit dialog' },
+  'src/main/factory/workerLifecycleHost.ts#startWorkerLifecycle': { kind: 'not-bots', why: 'bot ids for each bot\'s own worker-time runs, no profile read' },
   'src/main/ipc/handlers/factory.handler.ts#factoryBotRows': { kind: 'owner', why: 'the owner\'s Bots page' },
   'src/main/ipc/handlers/guestBots.handler.ts#defaultGuestWorkspacePorts': { kind: 'owner', why: 'the owner flagging one workspace checks its bots' },
   'src/main/ipc/handlers/room.handler.ts#registerRoomIpcHandlers': { kind: 'owner', why: 'the owner\'s room view' },
