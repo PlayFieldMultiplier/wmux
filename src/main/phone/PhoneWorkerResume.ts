@@ -13,6 +13,7 @@
 // receipt's life, so a forgotten receipt never starts a second worker.
 
 import { chatIdTime, checkChatId } from '../../daemon/chat/chatBridge';
+import { DESKTOP_PHONE_TIMEOUT_MS } from '../../daemon/phone/DesktopPhoneBridge';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getWorkerResumePorts, ownerResumeWorker, type WorkerResumeResult } from '../factory/workerReclaim';
 import {
@@ -28,10 +29,12 @@ const DEVICE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const PHONE_WORKER_RESUME_RECEIPTS_MAX = 256;
 /** A second layer over the resume's own bounded steps (each daemon, renderer
  *  and git call has its own timeout, but they add up): past this a reply
- *  answers busy instead of waiting on. The resume goes on under its task's
- *  lock and its receipt stays, so a repeat of the id gets its outcome; the
- *  receipt is dropped with its id's window at the latest. */
-export const PHONE_WORKER_RESUME_WAIT_MS = 60_000;
+ *  answers busy instead of waiting on. It stays well under the daemon's
+ *  bridge timeout (DESKTOP_PHONE_TIMEOUT_MS), so the phone gets busy rather
+ *  than a bridge timeout. The resume goes on under its task's lock and its
+ *  receipt stays, so a repeat of the id gets its outcome; the receipt is
+ *  dropped with its id's window at the latest. */
+export const PHONE_WORKER_RESUME_WAIT_MS = DESKTOP_PHONE_TIMEOUT_MS - 5_000;
 
 export interface PhoneWorkerResumeDeps {
   /** The owner's resume (ownerResumeWorker). */

@@ -1,7 +1,8 @@
 // main's side of the phone's worker Resume: the command's checks, main's
 // result as the reply the daemon maps, and the receipts by caller and id.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearPhoneWorkerResumeReceipts, handlePhoneWorkerResumeCommand, PHONE_WORKER_RESUME_RECEIPTS_MAX, type PhoneWorkerResumeDeps } from '../PhoneWorkerResume';
+import { clearPhoneWorkerResumeReceipts, handlePhoneWorkerResumeCommand, PHONE_WORKER_RESUME_RECEIPTS_MAX, PHONE_WORKER_RESUME_WAIT_MS, type PhoneWorkerResumeDeps } from '../PhoneWorkerResume';
+import { DESKTOP_PHONE_TIMEOUT_MS } from '../../../daemon/phone/DesktopPhoneBridge';
 import type { WorkerResumeResult } from '../../factory/workerReclaim';
 
 const NOW = 1_760_900_000_000;
@@ -91,6 +92,22 @@ describe('workspaces.workerResume', () => {
     d.resume.mockResolvedValue(OK);
     expect(await call(d, { taskId: TASK, clientRequestId: id() })).toMatchObject({ resumed: { taskId: TASK }, replayed: true });
     expect(d.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers busy before the daemon\'s bridge gives up on the request', async () => {
+    expect(PHONE_WORKER_RESUME_WAIT_MS).toBeLessThanOrEqual(DESKTOP_PHONE_TIMEOUT_MS - 5_000);
+    vi.useFakeTimers();
+    try {
+      const d = deps(() => new Promise<WorkerResumeResult>(() => undefined));
+      let reply: unknown = null;
+      void call(d, { taskId: TASK, clientRequestId: id() }).then((r) => { reply = r; });
+      await vi.advanceTimersByTimeAsync(PHONE_WORKER_RESUME_WAIT_MS - 1);
+      expect(reply).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reply).toMatchObject({ refused: { code: 'busy' } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a resume that never ends holds its receipt only for its id\'s window', async () => {
