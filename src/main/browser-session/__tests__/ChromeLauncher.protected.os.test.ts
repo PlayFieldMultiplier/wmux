@@ -122,7 +122,9 @@ let nextPort = 18001;
 function spawnWritesPortFile(child: EventEmitter): number {
   const port = nextPort++;
   spawnMock.mockImplementationOnce((_bin: string, args: string[]) => {
-    const dir = (args.find((a) => a.startsWith('--user-data-dir=')) ?? '').slice('--user-data-dir='.length);
+    const dir = (args.find((a) => a.startsWith('--user-data-dir=')) ?? '')
+      .slice('--user-data-dir='.length)
+      .replace(/\\/g, '/'); // registry dirs go through join() → platform separators
     state.portFiles[dir] = `${port}\n/devtools/browser/uuid-${port}\n`;
     const proxy = args.find((a) => a.startsWith('--proxy-server='));
     state.proxyPort = proxy ? Number(proxy.split(':').at(-1)) : 0;
