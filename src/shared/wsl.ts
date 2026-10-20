@@ -4,6 +4,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 
 import { isWslShell, isLinuxCwd, validWslTarget, wslTargetArgs, type WslTarget } from './wslTarget';
+import { isUncOrDevicePath } from './cwdShape';
 export { isWslShell, isLinuxCwd, validWslTarget, wslTargetArgs, type WslTarget } from './wslTarget';
 
 /**
@@ -167,7 +168,8 @@ export function recoveryCwd(session: { cmd: string; cwd: string }, platform = pr
   }
   // #1941 — a directory, not just an existing path: a stored cwd that now
   // names a file cannot start a shell, and home is the documented fallback.
-  return isDirectory(session.cwd) ? session.cwd : os.homedir();
+  // A network or device path saved by an older build goes home unread.
+  return !isUncOrDevicePath(session.cwd) && isDirectory(session.cwd) ? session.cwd : os.homedir();
 }
 
 function isDirectory(dir: string): boolean {

@@ -74,6 +74,16 @@ describe('WSL execution target', () => {
     } finally { stat.mockRestore(); }
   });
 
+  it('recovers a native shell saved in a network or device path into home, unread', () => {
+    const stat = vi.spyOn(fs, 'statSync');
+    try {
+      for (const cwd of ['\\\\server\\share\\repo', '//server/share', '\\\\?\\UNC\\server\\share', '\\\\.\\pipe\\x']) {
+        expect(recoveryCwd({ cmd: 'powershell.exe', cwd }, 'win32')).toBe(os.homedir());
+      }
+      expect(stat).not.toHaveBeenCalled();
+    } finally { stat.mockRestore(); }
+  });
+
   it('recovers a native shell only into a directory (#1941)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-1941-'));
     try {

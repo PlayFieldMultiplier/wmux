@@ -58,7 +58,7 @@ describe('fs.handler security helpers', () => {
     await expect(resolveAccessiblePath(path.join(home, 'project', 'src', '..', 'src', 'index.ts'))).resolves.toBe(canonical);
   });
 
-  it.each(['//host/share', '\\\\host\\share', '\\\\?\\UNC\\host\\share', '\\\\.\\pipe\\x', '\\\\?\\C:\\x'])(
+  it.each(['//host/share', '\\\\host\\share', '\\\\server\\share\\repo', '\\\\?\\UNC\\host\\share', '\\\\.\\pipe\\x', '\\\\?\\C:\\x'])(
     'refuses the network or device path %s before canonical lookup',
     async (p) => {
       await expect(resolveAccessiblePath(p)).resolves.toBeNull();
@@ -66,9 +66,27 @@ describe('fs.handler security helpers', () => {
     },
   );
 
-  it('refuses a local spelling whose real path is a network share', async () => {
+  it('refuses a non-drive spelling whose real path is a network share', async () => {
     realpathSpy.mockResolvedValue('\\\\server\\share\\repo');
-    await expect(resolveAccessiblePath(path.join(home, 'project', 'link-to-share'))).resolves.toBeNull();
+    // Relative, so it is not a drive path on any platform.
+    await expect(resolveAccessiblePath(path.join('project', 'link-to-share'))).resolves.toBeNull();
+  });
+
+  it('keeps a mapped drive working, spelled from its drive', async () => {
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'Z:\\' ? '\\\\server\\share\\' : '\\\\server\\share\\repo'));
+    await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
+    // The answer passes the check again when a caller hands it back.
+    await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
+  });
+
+  it('keeps the real path of a drive path whose root does not lead to the share', async () => {
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'D:\\' ? 'D:\\' : '\\\\server\\share\\repo'));
+    await expect(resolveAccessiblePath('D:\\work\\link')).resolves.toBe('\\\\server\\share\\repo');
+  });
+
+  it('refuses a drive path whose real path is a device path', async () => {
+    realpathSpy.mockResolvedValue('\\\\?\\GLOBALROOT\\Device\\x');
+    await expect(resolveAccessiblePath('Z:\\x')).resolves.toBeNull();
   });
 
   it('keeps a WSL share as its real path', async () => {

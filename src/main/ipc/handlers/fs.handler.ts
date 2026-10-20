@@ -100,13 +100,38 @@ export async function resolveAccessiblePath(inputPath: string): Promise<string |
 
   try {
     const canonical = await fs.promises.realpath(resolved);
-    // A link to a network folder, or a mapped network drive (its real path
-    // is the share), is not a local folder either.
-    if (isUncOrDevicePath(canonical) || isSensitivePath(canonical)) return null;
-    return canonical;
+    if (isSensitivePath(canonical)) return null;
+    if (!isUncOrDevicePath(canonical)) return canonical;
+    // A drive path whose real path is a share: a mapped network drive the user
+    // set up. Any other input that lands on a share or a device (a link from a
+    // local folder) is refused.
+    if (!DRIVE_PATH.test(inputPath) || /^[\\/]{2}[?.][\\/]/.test(canonical)) return null;
+    return await spelledFromDrive(inputPath, canonical);
   } catch {
     return null;
   }
+}
+
+const DRIVE_PATH = /^[A-Za-z]:[\\/]/;
+
+/**
+ * A mapped drive's real path (`\\server\share\repo`) spelled from its drive
+ * again (`Z:\repo`), so the answer passes this check when a caller hands it
+ * back. When the drive root does not lead to the share (a link on a local
+ * drive), the real path is returned as it is.
+ */
+async function spelledFromDrive(inputPath: string, canonical: string): Promise<string> {
+  const root = path.win32.parse(path.win32.resolve(inputPath)).root;
+  try {
+    const share = (await fs.promises.realpath(root)).replace(/[\\/]+$/, '');
+    const rest = canonical.slice(share.length);
+    if (canonical.toLowerCase().startsWith(share.toLowerCase()) && /^(?:[\\/]|$)/.test(rest)) {
+      return path.win32.join(root, rest);
+    }
+  } catch {
+    // An unreadable drive root keeps the real path.
+  }
+  return canonical;
 }
 
 export function closeAllWatchers(): void {
