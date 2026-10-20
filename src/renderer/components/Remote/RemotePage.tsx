@@ -21,7 +21,7 @@ import { selectRemoteInbox } from '../../stores/selectors/remoteInbox';
 import { heldNeedsPerson, heldReason, offerWaitsOnYou, selectRemoteNeedsYou } from '../../stores/slices/a2aRemoteSlice';
 import { refreshA2aRemote } from '../../hooks/useA2aRemoteBridge';
 import { buildPaneSnapshot } from '../../hooks/useA2aRemoteSnapshot';
-import { A2aLinkRequestRow, A2aLinkRow, A2aOfferRow, type LocalNames } from './A2aLinksPanel';
+import { A2aLinkRequestRow, A2aLinkRow, A2aOfferRow, A2aShareRow, type LocalNames } from './A2aLinksPanel';
 import { A2aHeldRow, A2aIdentityRow, heldPeer } from './A2aDeliveryPanel';
 import A2aLinkDialog from './A2aLinkDialog';
 import RemoteConnectDialog, { type ConnectTab } from './RemoteConnectDialog';
@@ -480,6 +480,18 @@ export default function RemotePage() {
           t={t}
         />
       )),
+      ...feed.offers
+        .filter((o) => o.side === 'out' && (o.state === 'open' || o.state === 'claimed') && o.hostId === pc.hostId)
+        .map((o) => (
+          <A2aShareRow
+            key={o.offerId}
+            offer={o}
+            pcName={pc.name}
+            busy={busy === o.offerId}
+            onWithdraw={() => a2a?.offersWithdraw && void linkCall(o.offerId, () => a2a.offersWithdraw(o.offerId))}
+            t={t}
+          />
+        )),
     ];
   });
   const hostRows: ReactNode[] = hostEntries.flatMap((h) => {

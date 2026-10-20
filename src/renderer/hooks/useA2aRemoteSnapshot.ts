@@ -138,7 +138,11 @@ export function useA2aLinkRequestToast(t: (key: string) => string): void {
     return api.onLinkEvent((event) => {
       let message: string;
       if (event.type === 'a2a.remote.link.proposed') message = t('a2aLink.requestToast');
-      else if (event.type === 'a2a.remote.offer.changed' && event.side === 'in' && event.state === 'open' && !toastedOffers.has(event.offerId)) {
+      // The other PC accepted a share: say so at once, its link row names the pane it chose.
+      else if (event.type === 'a2a.remote.offer.changed' && event.side === 'out' && event.state === 'accepted' && !toastedOffers.has(event.offerId)) {
+        toastedOffers.add(event.offerId);
+        message = t('a2aShare.acceptedToast');
+      } else if (event.type === 'a2a.remote.offer.changed' && event.side === 'in' && event.state === 'open' && !toastedOffers.has(event.offerId)) {
         toastedOffers.add(event.offerId);
         message = t('a2aOffer.toast');
       } else return;

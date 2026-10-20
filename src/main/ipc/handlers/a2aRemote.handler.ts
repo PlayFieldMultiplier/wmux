@@ -7,6 +7,7 @@ import type {
   A2aRemoteLinkProposeParams,
   A2aRemoteOfferAcceptParams,
   A2aRemoteOfferEvent,
+  A2aRemoteOfferShareParams,
 } from '../../../shared/rpc';
 import { wrapHandler } from '../wrapHandler';
 import type { DaemonClient } from '../../DaemonClient';
@@ -127,6 +128,22 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
       },
     ],
     [IPC.A2A_REMOTE_OFFERS_DECLINE, async (offerId) => (await clientNow()).a2aRemoteOfferDecline(str(offerId))],
+    [
+      IPC.A2A_REMOTE_OFFERS_CREATE,
+      async (params) => {
+        const p = (params ?? {}) as A2aRemoteOfferShareParams;
+        const c = await clientNow();
+        // What the other PC sees comes from this PC's own tree, never from the renderer's words.
+        const end = await publisher.candidateFor(str(p.workspaceId), str(p.paneId));
+        if (!end) return { ok: false, error: 'bad-request', message: 'that pane is not open on this PC' };
+        const allow = { outbound: p.allow?.outbound === true, inbound: p.allow?.inbound === true };
+        const result = await c.a2aRemoteOfferCreate({ hostId: str(p.hostId), end, allow });
+        // The pane is listed to that PC too (GET /exposed) once the snapshot is republished.
+        if (result.ok) await publisher.republish();
+        return result;
+      },
+    ],
+    [IPC.A2A_REMOTE_OFFERS_WITHDRAW, async (offerId) => (await clientNow()).a2aRemoteOfferWithdraw(str(offerId))],
     [IPC.A2A_REMOTE_HOSTS_STATUS, async () => (await client()).rpc('a2a.remote.hosts.status', {})],
     [IPC.A2A_REMOTE_HELD_LIST, async () => (await client()).rpc(A2A_REMOTE_RPC.held, {})],
     [

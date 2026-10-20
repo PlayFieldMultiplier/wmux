@@ -28,12 +28,20 @@ describe('A2aExposureChecklist', () => {
   it('waits for the saved exposure, then writes each tick on top of the last', async () => {
     let release!: (v: { exposure: A2aExposureV1 }) => void;
     const sets: Array<[string[], Record<string, string[]>]> = [];
+    // The daemon's copy: the first read waits; later reads answer what is saved now.
+    let saved: A2aExposureV1 | null = null;
+    let first = true;
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       a2aRemote: {
-        exposureGet: vi.fn(() => new Promise((r) => { release = r; })),
+        exposureGet: vi.fn(() => {
+          if (!first) return Promise.resolve({ exposure: saved });
+          first = false;
+          return new Promise((r) => { release = (v) => { saved = v.exposure; r(v); }; });
+        }),
         exposureSet: vi.fn(async (_h: string, ws: string[], panes: Record<string, string[]>) => {
           sets.push([ws, panes]);
-          return { exposure: rec(ws, panes) };
+          saved = rec(ws, panes);
+          return { exposure: saved };
         }),
       },
     };
@@ -59,5 +67,10 @@ describe('A2aExposureChecklist', () => {
     expect(box('a').disabled).toBe(false);
     await act(async () => { box('a').click(); });
     expect(sets).toEqual([[['w1'], { w1: ['b', 'a'] }]]);
+
+    // A share shows another pane meanwhile: the next tick keeps it.
+    saved = rec(['w1'], { w1: ['b', 'a', 'c'] });
+    await act(async () => { box('b').click(); });
+    expect(sets.at(-1)).toEqual([['w1'], { w1: ['a', 'c'] }]);
   });
 });

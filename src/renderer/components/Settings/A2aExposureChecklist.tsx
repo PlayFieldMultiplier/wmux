@@ -42,6 +42,7 @@ export function A2aExposureChecklistView(p: A2aExposureChecklistViewProps) {
   return (
     <div className="flex flex-col gap-2" data-testid="a2a-exposure-checklist">
       <p className="wmux-a2a-note">{t('settings.a2aExposureDesc', { name: p.pcName })}</p>
+      <p className="wmux-a2a-note" data-testid="a2a-exposure-share-hint">{t('a2aShare.checklistHint')}</p>
       {/* Moa was removed, so this PC has none to show: the row stays only so
           an exposure an earlier version saved can still be unticked. */}
       {(p.moaAvailable || p.exposure.brain === true) && (
@@ -143,6 +144,13 @@ export function A2aExposureChecklist({ hostId, pcName, t }: { hostId: string; pc
     if (!api) return;
     setBusy(true); setFailed(false);
     queue.current = queue.current.then(async () => {
+      // Re-read first: a share may have shown a pane since this list was read.
+      try {
+        const fresh = await api.exposureGet(hostId);
+        latest.current = fresh?.exposure ? listsOf(fresh.exposure) : { workspaceIds: [], paneIds: {} };
+      } catch {
+        // Keep the last value read; the write below still applies to it.
+      }
       const next = op(latest.current);
       try {
         const r = await api.exposureSet(hostId, next.workspaceIds, next.paneIds, next.brain === true);
