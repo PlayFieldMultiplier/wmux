@@ -80,10 +80,13 @@ type GlassWindow = Pick<
 
 /**
  * Switch a live window's glass for a new level: material, background colour
- * and overlay colour together. `colors` is the renderer's solid overlay pair
- * (the frame colour it paints with glass off); without it the opaque window
- * falls back to its construction colours. Returns false when the window
- * already had this state and nothing was called.
+ * and overlay colour together. With glass off the background goes back to
+ * the construction colour, the same one an opaque window is built with: it
+ * is never repainted on a theme change, so a theme's colour would go stale.
+ * The overlay takes `colors`, the renderer's solid pair (the frame colour it
+ * paints with glass off), which the theme sync keeps current; without it the
+ * construction pair. Returns false when the window already had this state
+ * and nothing was called.
  */
 export function applyWindowsGlass(
   win: BrowserWindow,
@@ -93,11 +96,10 @@ export function applyWindowsGlass(
   const on = level !== 'off';
   if (isWindowGlassOn(win) === on) return false;
   const w: GlassWindow = win;
-  const solid = colors?.color ?? WIN_OPAQUE_BACKGROUND;
   w.setBackgroundMaterial(on ? 'acrylic' : 'none');
-  w.setBackgroundColor(on ? TRANSPARENT : solid);
+  w.setBackgroundColor(on ? TRANSPARENT : WIN_OPAQUE_BACKGROUND);
   w.setTitleBarOverlay({
-    color: on ? TRANSPARENT : solid,
+    color: on ? TRANSPARENT : (colors?.color ?? WIN_OPAQUE_BACKGROUND),
     symbolColor: colors?.symbolColor ?? WIN_OVERLAY_SYMBOL,
     height: winOverlayHeight(w.webContents.getZoomFactor()),
   });

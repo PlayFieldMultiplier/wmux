@@ -1070,6 +1070,15 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         window.electronAPI.settings.setSecretGuardEnabled?.(data.secretGuardEnabled);
       }
 
+      // Window glass, ahead of the empty-workspace return below. On Windows
+      // main built the window from the saved level (session.json) and the
+      // glass sync sends the store's level once the session is loaded, so a
+      // skipped restore would turn a saved Off back into the default Soft.
+      if (data.windowGlass !== undefined) {
+        state.windowGlass = resolveWindowGlass(data.windowGlass);
+        document.documentElement.setAttribute('data-glass-level', state.windowGlass);
+      }
+
       if (!data.workspaces || data.workspaces.length === 0) return;
 
       // Cold-park is renderer-only and non-persisted. loadSession replaces the
@@ -1588,10 +1597,6 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       state.attentionBlink = resolveAttentionBlink(data.attentionBlink);
       state.attentionBlinkRemindMs = resolveAttentionRemindMs(data.attentionBlinkRemindMs);
       state.attentionBlinkFinished = resolveAttentionBlinkFinished(data.attentionBlinkFinished);
-      if (data.windowGlass !== undefined) {
-        state.windowGlass = resolveWindowGlass(data.windowGlass);
-        document.documentElement.setAttribute('data-glass-level', state.windowGlass);
-      }
       // #1481 — the sort mode supersedes the attention flag; a session that
       // predates it carries only the flag, which maps onto 'attention'.
       state.sidebarSortMode = resolveSidebarSortMode(data);

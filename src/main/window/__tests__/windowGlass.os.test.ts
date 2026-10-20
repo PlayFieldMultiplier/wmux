@@ -93,11 +93,13 @@ describe('applyWindowsGlass', () => {
     expect(isWindowGlassOn(bw)).toBe(true);
   });
 
-  it('turns glass off back to the frame colour the renderer paints', () => {
+  it('turns glass off: the construction background and the frame colour the renderer paints on the strip', () => {
+    // The background is never repainted on a theme change, so it takes the
+    // fixed construction colour rather than a theme's, which would go stale.
     const { win, bw, calls } = fakeWindow();
     markWindowGlass(bw, true);
     expect(applyWindowsGlass(bw, 'off', { color: '#f4f3f1', symbolColor: '#6d6775' })).toBe(true);
-    expect(calls).toEqual(['material:none', 'background:#f4f3f1', 'overlay:#f4f3f1']);
+    expect(calls).toEqual(['material:none', `background:${WIN_OPAQUE_BACKGROUND}`, 'overlay:#f4f3f1']);
     expect(win.setTitleBarOverlay).toHaveBeenCalledWith({ color: '#f4f3f1', symbolColor: '#6d6775', height: 40 });
     expect(isWindowGlassOn(bw)).toBe(false);
   });
