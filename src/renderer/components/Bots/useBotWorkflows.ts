@@ -6,7 +6,8 @@
 // With no workflow port the list stays empty and there is no Cancel.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OwnerWorkflowCancelResult, WorkflowView } from '../../../shared/botWorkflow';
-import type { ThreadId } from '../../../shared/room';
+import type { RoomCard, ThreadId } from '../../../shared/room';
+import { threadKey } from '../../../shared/botsWork';
 import { getFactoryBotPort, type FactoryBotPort } from '../Room/factoryPorts';
 import type { Conversation } from './botsModel';
 import { conversationWorkflows } from './botsWorkflow';
@@ -77,15 +78,16 @@ export function useBotWorkflows(owners: readonly WorkflowOwner[], port?: Factory
 }
 
 /** The workflows a conversation shows (botsWorkflow.ts
- *  conversationWorkflows): a 1:1's bot's, a group's bots' (`started`: the
- *  threads the group started, botsWork.ts conversationStartedThreads). */
-export function useConversationWorkflows(conversation: Conversation, started?: ReadonlySet<string>, port?: FactoryBotPort): ReturnType<typeof useBotWorkflows> {
+ *  conversationWorkflows): a 1:1's bot's, a group's bots' (`cards`: the
+ *  cards the conversation shows, whose threads are its). */
+export function useConversationWorkflows(conversation: Conversation, cards: readonly RoomCard[], port?: FactoryBotPort): ReturnType<typeof useBotWorkflows> {
   const rows = conversation.kind === 'bot' ? [conversation.row] : conversation.bots;
   const { workflows, cancel } = useBotWorkflows(rows.map((r) => ({ botId: r.bot.id, workspaceId: r.bot.workspaceId })), port);
   const groupThread: ThreadId | null = conversation.kind === 'room' ? conversation.threadId : null;
+  const threads = useMemo(() => new Set(groupThread ? cards.map((c) => threadKey(c.workspaceId, c.threadId)) : []), [cards, groupThread]);
   const shown = useMemo(
-    () => conversationWorkflows(workflows, groupThread ? { kind: 'room', threadId: groupThread } : { kind: 'bot' }, started),
-    [workflows, groupThread, started],
+    () => conversationWorkflows(workflows, groupThread ? { kind: 'room', threadId: groupThread } : { kind: 'bot' }, threads),
+    [workflows, groupThread, threads],
   );
   return { workflows: shown, ...(cancel ? { cancel } : {}) };
 }

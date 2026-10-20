@@ -38,9 +38,11 @@ function stateText(state: WorkflowState, t: T): string {
 /** Why it stopped, in the owner's words. */
 export function workflowReasonText(reason: WorkflowReason, t: T): string {
   switch (reason.kind) {
-    case 'cancelled': return reason.started
-      ? t('botsPage.workflow.reason.cancelledStarted', { step: reason.step })
-      : t('botsPage.workflow.reason.cancelled');
+    case 'cancelled': return reason.running
+      ? t('botsPage.workflow.reason.cancelledRunning', { step: reason.step })
+      : reason.started
+        ? t('botsPage.workflow.reason.cancelledStarted', { step: reason.step })
+        : t('botsPage.workflow.reason.cancelled');
     case 'stopped': return t('botsPage.workflow.reason.stopped');
     case 'taskFailed': return t('botsPage.workflow.reason.taskFailed', { step: reason.step });
     case 'taskCancelled': return t('botsPage.workflow.reason.taskCancelled', { step: reason.step });

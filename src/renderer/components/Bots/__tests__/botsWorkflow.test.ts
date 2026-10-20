@@ -42,9 +42,11 @@ describe('workflowCardView', () => {
   it('the owner\'s cancel: a started step keeps its worker; nothing is offered to cancel again', () => {
     const steps = workflow().steps;
     const started = workflow({ state: 'blocked', stoppedByOwner: true, steps: [steps[0], { ...steps[1], state: 'blocked', error: WORKFLOW_BLOCK.cancelled }] });
-    expect(workflowCardView(started)).toMatchObject({ state: 'cancelled', reason: { kind: 'cancelled', step: 2, started: true }, canCancel: false, cancelledWhileBlocked: false });
+    expect(workflowCardView(started)).toMatchObject({ state: 'cancelled', reason: { kind: 'cancelled', step: 2, started: true, running: true }, canCancel: false, cancelledWhileBlocked: false });
+    const handedOff = workflow({ state: 'blocked', stoppedByOwner: true, steps: [steps[0], { title: 'Document it', prompt: 'p2', state: 'blocked', dispatchKey: 'k2', error: WORKFLOW_BLOCK.cancelled }] });
+    expect(workflowCardView(handedOff).reason).toEqual({ kind: 'cancelled', step: 2, started: true, running: false });
     const pending = workflow({ state: 'blocked', stoppedByOwner: true, steps: [steps[0], { title: 'Document it', prompt: 'p2', state: 'blocked', error: WORKFLOW_BLOCK.cancelled }] });
-    expect(workflowCardView(pending).reason).toEqual({ kind: 'cancelled', step: 2, started: false });
+    expect(workflowCardView(pending).reason).toEqual({ kind: 'cancelled', step: 2, started: false, running: false });
     const blockedFirst = workflow({ state: 'blocked', stoppedByOwner: true, steps: [steps[0], { ...steps[1], state: 'blocked', error: WORKFLOW_BLOCK.unknownDispatch }] });
     expect(workflowCardView(blockedFirst)).toMatchObject({ state: 'cancelled', reason: { kind: 'unknownDispatch' }, cancelledWhileBlocked: true });
   });

@@ -102,7 +102,7 @@ describe('BotsWorkflowCard', () => {
     await click('[data-testid="bots-workflow-cancel-confirm"]');
     expect(cancelWorkflow).toHaveBeenCalledTimes(1);
     expect(q('[data-bots-workflow-state]')?.textContent).toBe('botsPage.workflow.cancelled');
-    expect(q('[data-bots-workflow-reason]')?.textContent).toBe('botsPage.workflow.reason.cancelledStarted(2)');
+    expect(q('[data-bots-workflow-reason]')?.textContent).toBe('botsPage.workflow.reason.cancelledRunning(2)');
     expect(q('[data-testid="bots-workflow-cancel"]')).toBeNull();
   });
 
@@ -133,7 +133,7 @@ describe('BotsWorkflowCard', () => {
     act(() => root.render(<BotsWorkflowCard workflow={cancelledOf(workflow())} t={t} onCancel={vi.fn()} />));
     expect(q('[data-workflow-state]')?.getAttribute('data-workflow-state')).toBe('cancelled');
     expect(q('[data-bots-workflow-state]')?.textContent).toBe('botsPage.workflow.cancelled');
-    expect(q('[data-bots-workflow-reason]')?.textContent).toBe('botsPage.workflow.reason.cancelledStarted(2)');
+    expect(q('[data-bots-workflow-reason]')?.textContent).toBe('botsPage.workflow.reason.cancelledRunning(2)');
     expect(q('[data-testid="bots-workflow-cancel"]')).toBeNull();
   });
 

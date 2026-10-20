@@ -18,9 +18,10 @@ export type WorkflowState = 'running' | 'blocked' | 'cancelled' | 'done';
 
 /** Why a workflow stopped. `step` is 1-based. */
 export type WorkflowReason =
-  /** The owner's Cancel; `started`: the step had already been handed to
-   *  fan-out, whose worker (if one started) the cancel does not stop. */
-  | { kind: 'cancelled'; step: number; started: boolean }
+  /** The owner's Cancel. `started`: the step was handed to fan-out (a
+   *  worker may have started); `running`: its task exists, so its worker
+   *  did start. The cancel stops neither. */
+  | { kind: 'cancelled'; step: number; started: boolean; running: boolean }
   /** The owner stopped the bot (its workers with it). */
   | { kind: 'stopped' }
   | { kind: 'taskFailed' | 'taskCancelled' | 'taskUnverified' | 'unknownDispatch' | 'multipleTasks' | 'bindingChanged'; step: number }
@@ -58,7 +59,7 @@ function reasonOf(w: WorkflowView): WorkflowReason | null {
   const s = w.steps[index];
   const step = index + 1;
   const text = s.error ?? w.blockedReason ?? '';
-  if (text === WORKFLOW_BLOCK.cancelled) return { kind: 'cancelled', step, started: s.dispatchKey !== undefined };
+  if (text === WORKFLOW_BLOCK.cancelled) return { kind: 'cancelled', step, started: s.dispatchKey !== undefined, running: s.taskId !== undefined };
   if (text === WORKFLOW_BLOCK.stopped) return { kind: 'stopped' };
   if (text === WORKFLOW_BLOCK.unknownDispatch) return { kind: 'unknownDispatch', step };
   if (text === WORKFLOW_BLOCK.multipleTasks) return { kind: 'multipleTasks', step };
@@ -99,14 +100,14 @@ export function workflowCardView(w: WorkflowView): WorkflowCardView {
 }
 
 /** The workflows a conversation shows, oldest first (each was read for its
- *  own bot and workspace): a group's, saved in its thread or a thread it
- *  started (`started`: threadKey); a 1:1's, saved anywhere but a group's
- *  own thread — its 1:1, General, or a work or task thread. */
-export function conversationWorkflows(workflows: readonly WorkflowView[], conversation: { kind: 'bot' } | { kind: 'room'; threadId: ThreadId }, started: ReadonlySet<string> = new Set()): WorkflowView[] {
+ *  own bot and workspace): a group's, saved in its thread or a thread whose
+ *  cards it shows (`shown`: threadKey); a 1:1's, saved anywhere but a
+ *  group's own thread — its 1:1, General, or a work or task thread. */
+export function conversationWorkflows(workflows: readonly WorkflowView[], conversation: { kind: 'bot' } | { kind: 'room'; threadId: ThreadId }, shown: ReadonlySet<string> = new Set()): WorkflowView[] {
   return workflows
     .filter((w) => (conversation.kind === 'bot'
       ? !w.threadId.startsWith('group:')
-      : w.threadId === conversation.threadId || started.has(threadKey(w.workspaceId, w.threadId))))
+      : w.threadId === conversation.threadId || shown.has(threadKey(w.workspaceId, w.threadId))))
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
