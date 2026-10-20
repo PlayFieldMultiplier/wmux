@@ -37,6 +37,7 @@ import {
   type WorkerResumePorts,
   type WorkerSessionInfo,
 } from '../workerReclaim';
+import { computeHolders, holderCounts } from '../workerHolders';
 import { STOPPED_BY_OWNER } from '../factoryStop';
 import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import { taskFolderFromMissions } from '../verifyPreset';
@@ -121,6 +122,70 @@ describe('lifecycleCardTask', () => {
 });
 
 describe('reclaimWorker', () => {
+  it('keeps an unmatched live worker counted, reports an honest card once, and frees it after a real stop', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const entry = row('completed');
+    let alive = true;
+    const { ports, note } = reclaimPorts(store, [], {
+      listSessions: async () => [session({ agentProcessAlive: undefined, commandRunning: alive })],
+      stopAgent: async () => ({ ok: true, stopped: !alive }),
+    });
+    const count = () => holderCounts(computeHolders({
+      now: 6_000, rows: [entry], reclaimable: new Set([entry.id]), catchupMs: 86_400_000,
+      workspaces: new Set([entry.taskWorkspaceId]), ptys: new Map([[entry.taskWorkspaceId, ['daemon-1']]]),
+      stamps: new Map(), read: 'ok', readAt: 6_000, idle: new Set(), busy: new Set(),
+      agentSeen: new Set(alive ? [entry.taskWorkspaceId] : []), gone: new Set(), records: store.all(),
+      verdicted: new Set(), taskOfWorkspace: () => entry.id, taskOfPane: () => entry.id,
+      launchAt: () => undefined, launchOf: () => null, reservations: [], grants: [], heldWorkspaces: [],
+    }), BOT).bot;
+    expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopping', stopUnconfirmed: true });
+    expect(count()).toBe(1);
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.stopUnconfirmed' });
+    expect(note.mock.calls[0][3]).toContain('slot is still in use');
+    const restored = ReclaimedWorkers.at(dir);
+    restored.load();
+    await reclaimWorker({ ...ports, store: restored }, entry, 'completed');
+    expect(note).toHaveBeenCalledTimes(1);
+    alive = false;
+    expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopped' });
+    expect(count()).toBe(0);
+    expect(note.mock.calls.at(-1)?.[4]).toMatchObject({ code: 'worker.doneResumable' });
+  });
+
+  it('does not suppress the owner notice after a failed card write', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const note = vi.fn().mockImplementationOnce(() => { throw new Error('room unavailable'); });
+    const { ports } = reclaimPorts(store, [session()], { note, stopAgent: async () => ({ ok: true, stopped: false }) });
+    expect(await reclaimWorker(ports, row('completed'), 'completed')).toMatchObject({ state: 'stopping' });
+    expect(store.get(row('completed').id)?.stopUnconfirmed).toBeUndefined();
+    expect(await reclaimWorker(ports, row('completed'), 'completed')).toMatchObject({ state: 'stopping', stopUnconfirmed: true });
+    expect(note).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { label: 'gone pane', fresh: [] },
+    { label: 'exited agent', fresh: [session({ agentProcessAlive: false })] },
+    { label: 'returned shell prompt', fresh: [session({ agentProcessAlive: undefined, commandRunning: false })] },
+  ])('accepts stopped:false only after a fresh read proves $label', async ({ fresh }) => {
+    const store = ReclaimedWorkers.at(dir);
+    const listSessions = vi.fn().mockResolvedValueOnce([session()]).mockResolvedValue(fresh);
+    const { ports, note } = reclaimPorts(store, [], { listSessions, stopAgent: async () => ({ ok: true, stopped: false }) });
+    expect(await reclaimWorker(ports, row('completed'), 'completed')).toMatchObject({ state: 'stopped' });
+    expect(listSessions).toHaveBeenCalledTimes(2);
+    expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.doneResumable' });
+  });
+
+  it.each(['unreadable', 'silent'])('does not infer a stop from %s liveness', async (kind) => {
+    const store = ReclaimedWorkers.at(dir);
+    const listSessions = vi.fn().mockResolvedValueOnce([session()]);
+    if (kind === 'unreadable') listSessions.mockRejectedValue(new Error('daemon unavailable'));
+    else listSessions.mockResolvedValue([session({ agentProcessAlive: undefined, commandRunning: undefined })]);
+    const { ports, note } = reclaimPorts(store, [], { listSessions, stopAgent: async () => ({ ok: true, stopped: false }) });
+    expect(await reclaimWorker(ports, row('completed'), 'completed')).toMatchObject({ state: 'stopping' });
+    expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.stopUnconfirmed' });
+  });
+
   it('stops the agent of every pane started in the worktree and records its conversation', async () => {
     const store = ReclaimedWorkers.at(dir);
     const other = session({ id: 'daemon-2', spawnCwd: path.join(dir, 'elsewhere') });

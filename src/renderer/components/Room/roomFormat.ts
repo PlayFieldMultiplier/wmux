@@ -167,6 +167,7 @@ export function withoutInternalIds(text: string, labels: IdLabels): string {
 const NOTICE_CODES: ReadonlyMap<string, boolean> = new Map([
   ['worker.paused', true], ['worker.pausedResumable', true], ['worker.idlePausedResumable', true],
   ['worker.openIdlePaused', true], ['worker.openIdlePausedResumable', true],
+  ['worker.stopUnconfirmed', true],
   ['worker.done', true], ['worker.doneResumable', true],
   ['worker.resumed', true], ['worker.waiting', true],
   ['worker.noReport', true], ['worker.stillNoReport', true],
@@ -195,7 +196,7 @@ const NOTICE_CODES: ReadonlyMap<string, boolean> = new Map([
 const UNTITLED_NOTICE_CODES: ReadonlySet<string> = new Set([
   'pr.merged', 'pr.closed',
   'worker.paused', 'worker.pausedResumable', 'worker.idlePausedResumable', 'worker.openIdlePaused', 'worker.openIdlePausedResumable',
-  'worker.done', 'worker.doneResumable', 'worker.resumed',
+  'worker.stopUnconfirmed', 'worker.done', 'worker.doneResumable', 'worker.resumed',
 ]);
 
 export { RESUMABLE_NOTICE_CODES };

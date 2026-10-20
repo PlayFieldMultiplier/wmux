@@ -128,6 +128,8 @@ export interface ReclaimedWorker {
    *  tries again; it still counts as live); stopped: the agent was stopped
    *  (or none ran); resumed: relaunched. */
   state: 'stopping' | 'stopped' | 'resumed';
+  /** An unconfirmed stop was reported to the owner for this attempt. */
+  stopUnconfirmed?: true;
   at: number;
   /** The workspace the worker's pane lives in when a resume opened a new
    *  one (absent: taskWorkspaceId). */
@@ -287,7 +289,8 @@ function isRecord(v: unknown): v is ReclaimedWorker {
     && r.sessions.every((s) => !!s && typeof (s as ReclaimedSession).sessionId === 'string' && typeof (s as ReclaimedSession).cwd === 'string')
     && (r.paneWorkspaceId === undefined || typeof r.paneWorkspaceId === 'string')
     && (r.seenAt === undefined || typeof r.seenAt === 'number')
-    && (r.endRev === undefined || typeof r.endRev === 'number');
+    && (r.endRev === undefined || typeof r.endRev === 'number')
+    && (r.stopUnconfirmed === undefined || r.stopUnconfirmed === true);
 }
 
 /** The reclaimed workers, persisted under `<wmuxDir>/factory/`. */
@@ -1046,6 +1049,7 @@ export async function reclaimWorker(
       sessions: [...panes, ...kept.filter((k) => !panes.some((p) => p.sessionId === k.sessionId))],
       // No pane left in the worktree: nothing to stop.
       state: panes.length === 0 ? 'stopped' : 'stopping',
+      ...(prior?.state === 'stopping' && prior.stopUnconfirmed ? { stopUnconfirmed: true as const } : {}),
       at: now(),
       endRev: entry.rev,
       ...(prior?.paneWorkspaceId ? { paneWorkspaceId: prior.paneWorkspaceId } : {}),
@@ -1077,6 +1081,7 @@ export async function reclaimWorker(
     // A pane whose stop was held back (its turn is not over after all):
     // the record stays `stopping`, live, for a later look.
     let heldBack = false;
+    let unconfirmed = false;
     for (const p of panes) {
       // The task reopened (or moved on from its report) meanwhile: what
       // still runs is its worker again.
@@ -1121,6 +1126,21 @@ export async function reclaimWorker(
           if (out) out.deferred = true;
           break;
         }
+        // A successful lookup can find no matching agent and stop nothing.
+        // Only a fresh liveness read can then prove this worker is gone.
+        if (r.ok === true && r.stopped !== true) {
+          let gone = false;
+          try {
+            const fresh = await ports.listSessions();
+            gone = !endedTaskAgentRuns([p.sessionId], entry.id, [p.sessionId], new Map(fresh.map((s) => [s.id, s])), ports.sessionRecordOf);
+          } catch { /* an unreadable process state proves no stop */ }
+          if (!gone) {
+            failed++;
+            unconfirmed = true;
+            log(`[factory] reclaim: the stop of ${p.sessionId} (task ${entry.id}) was not confirmed`);
+            continue;
+          }
+        }
         // A pane gone since the read took its agent with it: no failed stop
         // (counted as one, it kept the record `stopping` for good).
         if (r.ok !== true && r.code !== 'no_session') {
@@ -1143,7 +1163,20 @@ export async function reclaimWorker(
     // An open task's stop that signalled its agent stays recorded
     // (`stopping`): its agent may be gone, and the settle pass then marks it
     // stopped with its cards.
-    if (failed === attempted && !prior && !(ended === 'reported' && signalled > 0)) {
+    if (unconfirmed && ports.note && (prior?.state !== 'stopping' || !prior.stopUnconfirmed)) {
+      try {
+        const task = lifecycleCardTask(entry.title, entry.id);
+        ports.note(
+          entry.ownerWorkspaceId, taskThreadOf(entry), `Worker stop unconfirmed: ${task}`,
+          'wmux could not stop the worker or confirm its exit. Its slot is still in use. Open its terminal to check it and stop it if needed.',
+          { code: 'worker.stopUnconfirmed', args: { title: task } }, entry.id,
+        );
+        await ports.store.put({ ...(ports.store.get(entry.id) ?? rec), stopUnconfirmed: true });
+      } catch (err) {
+        log(`[factory] reclaim: the unconfirmed-stop notice for ${entry.id} was not recorded: ${String(err)}`);
+      }
+    }
+    if (failed === attempted && !prior && !unconfirmed && !(ended === 'reported' && signalled > 0)) {
       // Nothing was stopped: no record, so a later look tries again.
       await ports.store.remove(entry.id).catch(() => undefined);
       return null;
