@@ -590,6 +590,20 @@ describe('ChromeLauncherRegistry', () => {
 // Crash-path adoption: a previous session's Chrome still holds the profile
 // dir — reuse its recorded endpoint instead of dying on the SingletonLock.
 describe('ChromeLauncher zombie adoption', () => {
+  it('a quit landing after ensureRunning resolved still keeps endpoint() from answering', async () => {
+    state.portFiles['/tmp/adopt-quit-2'] = '18936\n/devtools/browser/x\n';
+    fetchMock.mockResolvedValue(fetchOk({}));
+    const launcher = new ChromeLauncher('/tmp/adopt-quit-2');
+    const inner = launcher.ensureRunning.bind(launcher);
+    // Dispose right after ensureRunning's own gate passed, before endpoint() resumes.
+    vi.spyOn(launcher, 'ensureRunning').mockImplementation(async () => {
+      const port = await inner();
+      void launcher.dispose();
+      return port;
+    });
+    await expect(launcher.endpoint()).rejects.toThrow('disposed');
+  });
+
   it('an adoption still probing when the app quits hands out no endpoint', async () => {
     state.portFiles['/tmp/adopt-quit'] = '18935\n/devtools/browser/x\n';
     let answer: (() => void) | null = null;

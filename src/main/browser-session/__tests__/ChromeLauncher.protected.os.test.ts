@@ -409,6 +409,33 @@ describe('ChromeLauncher — protected launch readiness', () => {
 });
 
 describe('ChromeLauncher — quitting during a protected launch', () => {
+  it('a protected launch still evicting when the app quits starts no proxy', async () => {
+    const { ProtectedProxy } = await import('../ProtectedProxy');
+    const start = vi.spyOn(ProtectedProxy.prototype, 'start');
+    try {
+      // A previous Chrome still answers on the recorded endpoint: eviction waits on it.
+      state.portFiles['/tmp/prot-quit-evict'] = '17998\n/devtools/browser/old\n';
+      let answer: (() => void) | null = null;
+      fetchMock.mockImplementationOnce(async () => {
+        await new Promise<void>((r) => {
+          answer = r;
+        });
+        dead.add(17998);
+        return { ok: true, text: async () => '{}', json: async () => ({}) };
+      });
+      const launcher = new ChromeLauncher('/tmp/prot-quit-evict', { protection: () => denyAll });
+      const pending = launcher.endpoint();
+      await vi.waitFor(() => expect(answer).not.toBeNull(), { timeout: 5_000 });
+      await launcher.dispose();
+      (answer as unknown as () => void)();
+      await expect(pending).rejects.toThrow('disposed');
+      expect(start).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      start.mockRestore();
+    }
+  });
+
   it('a protected launch whose proxy is still starting when the app quits spawns no Chrome', async () => {
     const { ProtectedProxy } = await import('../ProtectedProxy');
     const realStart = ProtectedProxy.prototype.start;
@@ -428,6 +455,9 @@ describe('ChromeLauncher — quitting during a protected launch', () => {
       (release as unknown as () => void)();
       await expect(pending).rejects.toThrow('disposed');
       expect(spawnMock).not.toHaveBeenCalled();
+      // The proxy that finished starting after the quit is not left listening.
+      const proxy = spy.mock.contexts[0] as InstanceType<typeof ProtectedProxy>;
+      expect(proxy.isRunning()).toBe(false);
     } finally {
       spy.mockRestore();
     }

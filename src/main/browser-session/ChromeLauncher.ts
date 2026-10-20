@@ -767,7 +767,9 @@ export class ChromeLauncher implements ChromeBackendClient {
 
   /** Dedicated instances expose the HTTP CDP port (launching on demand). */
   async endpoint(): Promise<ChromeBackendEndpoint> {
-    return { cdpPort: await this.ensureRunning() };
+    const cdpPort = await this.ensureRunning();
+    this.assertOpen(); // a quit may land between ensureRunning's gate and here
+    return { cdpPort };
   }
 
   /** Registry-scoped tabs seed page selection for dedicated instances. */
@@ -1212,6 +1214,7 @@ export class ChromeLauncher implements ChromeBackendClient {
   }
 
   private async ensureProxy(plan: ChromeProtectionPlan): Promise<number> {
+    this.assertOpen();
     if (!this.proxy) {
       // The proxy reads the CURRENT plan per request, so a policy edit applies
       // on the next request without a restart.
@@ -1226,11 +1229,20 @@ export class ChromeLauncher implements ChromeBackendClient {
         },
       });
     }
+    const proxy = this.proxy;
+    let port: number;
     try {
-      return await this.proxy.start();
+      port = await proxy.start();
     } catch {
       throw new Error(PROTECTION_NOT_READY);
     }
+    if (this.disposed) {
+      // dispose() closed it before it was listening; close what start opened.
+      proxy.close();
+      if (this.proxy === proxy) this.proxy = null;
+      this.assertOpen();
+    }
+    return port;
   }
 
   /**
