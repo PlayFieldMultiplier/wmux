@@ -1,3 +1,5 @@
+// @wmux-lane unit -- pure string functions: the platform is a parameter here,
+// never read from the host, so running on Windows cannot change a result.
 import { describe, expect, it } from 'vitest';
 import { AGENT_IDS } from '../agentSetup';
 import {

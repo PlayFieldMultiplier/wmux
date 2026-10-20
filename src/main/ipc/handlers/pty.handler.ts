@@ -232,7 +232,6 @@ async function stageCreate(options: PtyCreateOptions | undefined, botWorker: Bot
     const rewritten = promptFileArgumentForShell(line0, { wsl, cmd: process.platform === 'win32' && isCmdShellPath(shellPath) });
     if (rewritten !== line0) options = { ...options, initialCommand: rewritten };
   }
-  // Agent-setup panes (ignoreAccountBinding) are left as they are by the quota.
   let staged = await withAccountQuota(options);
   let level: string | undefined;
   const line = staged?.initialCommand;
@@ -248,8 +247,7 @@ async function stageCreate(options: PtyCreateOptions | undefined, botWorker: Bot
   if (botWorker && process.platform === 'win32' && isCmdShellPath(shellPath) && guarded?.initialCommand && !isPlainCmdLaunchLine(guarded.initialCommand)) {
     throw new Error('PTY_CREATE: a bot\'s worker line for a Command Prompt pane holds characters cmd would read as more than one command');
   }
-  // Agent-setup panes type exactly the line the card showed: no session pin.
-  const pinned = guarded?.ignoreAccountBinding === true ? guarded : withLaunchSessionPin(guarded);
+  const pinned = withLaunchSessionPin(guarded);
   // A bot worker's record keeps the conversation its line pinned and the mode
   // that line starts it in (workerReclaim.ts: a resume with no hook-recorded mode).
   const conversation = botWorker && pinned?.initialCommand ? launchedConversation(splitModelEnvMarker(pinned.initialCommand).command) : null;
