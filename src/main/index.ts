@@ -3050,6 +3050,15 @@ app.on('before-quit', async (e) => {
     console.error('[Main] before-quit computer-use dispose failed:', err);
   }
 
+  // The agent Chrome quits through Browser.close so a quit keeps the sign-ins
+  // Chrome holds only for the session. Started here and awaited just before
+  // app.quit(): its wait (one QUIT_GRACE_MS deadline shared by every profile,
+  // then the signal) runs alongside the session save and the daemon teardown
+  // below, so nothing waits behind a Chrome and it adds no time of its own.
+  const chromeStopped = chromeRegistry.disposeAll().catch((err) => {
+    console.error('[Main] before-quit step "chromeRegistry.disposeAll" threw — continuing:', err);
+  });
+
   // macOS 로그아웃/재시작/종료 대응(P4): win32의 'session-end' flushSync와 동등한
   // 동기 세션 flush. macOS는 WM_ENDSESSION 대신 Apple Event로 quit을 보내고
   // 이 async 핸들러가 끝까지 못 돌 수 있으므로, 어떤 await보다도 먼저 pending
@@ -3254,13 +3263,8 @@ app.on('before-quit', async (e) => {
 
   safeStep('claudeWorker.stop', () => claudeWorker.stop());
   safeStep('webviewCdpManager.disposeAll', () => webviewCdpManager.disposeAll());
-  // The agent Chrome quits through Browser.close, bounded inside dispose, so a
-  // quit keeps the sign-ins Chrome holds only for the session.
-  try {
-    await chromeRegistry.disposeAll();
-  } catch (err) {
-    console.error('[Main] before-quit step "chromeRegistry.disposeAll" threw — continuing:', err);
-  }
+  // Started at the top of this handler; long settled on a slow teardown.
+  await chromeStopped;
   safeStep('chromeSurfaceStore.flushSync', () => chromeSurfaceStore.flushSync());
   // Recorded browser flows are written on a debounce, so a quit inside that
   // window would drop the save the agent just made — the one it is most likely

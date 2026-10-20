@@ -429,6 +429,28 @@ describe('ChromeLauncher — quitting', () => {
     expect(child.kill).toHaveBeenCalledTimes(1);
   }, 15_000);
 
+  it('disposeAll stops every Chrome in parallel against one deadline, then signals the ones still running', async () => {
+    const { ChromeLauncherRegistry } = await import('../ChromeLauncher');
+    const registry = new ChromeLauncherRegistry({
+      defaultDir: '/tmp/quit-all-default',
+      profilesDir: '/tmp/quit-all-profiles',
+      store: { profileFor: () => 'default', hasPaneBindings: () => false, isPaneBound: () => false },
+    });
+    // Three profiles whose Chromes all ignore Browser.close.
+    const children = [makeChild(), makeChild(), makeChild()];
+    for (const [i, name] of ['pa', 'pb', 'pc'].entries()) {
+      spawnWritesPortFile(children[i]);
+      await registry.forProfile(name).endpoint();
+    }
+    const t0 = Date.now();
+    await registry.disposeAll();
+    const elapsed = Date.now() - t0;
+    // One shared 3 s deadline, not one per profile in turn.
+    expect(elapsed).toBeLessThan(5_000);
+    for (const child of children) expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(sockets.filter((x) => x.sent.some((m) => m.method === 'Browser.close'))).toHaveLength(3);
+  }, 15_000);
+
   it('a quit past its bound sends nothing more to the port', async () => {
     const child = makeChild();
     spawnWritesPortFile(child);

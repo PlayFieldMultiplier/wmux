@@ -1036,10 +1036,15 @@ export class ChromeLauncher implements ChromeBackendClient {
    * recording a clean exit. A signal ends it as `SessionEnded` instead, and
    * cookie writes still pending in memory are lost with it. Its tabs are
    * closed first, so the session it saves restores nothing but a blank tab.
-   * True when the process exited within QUIT_GRACE_MS.
+   * True when the process exited by `deadline` (QUIT_GRACE_MS from now unless
+   * the caller shares one deadline across several Chromes).
    */
-  private async closeGracefully(port: number, child: ChildProcess): Promise<boolean> {
-    const exited = waitForExit(child, QUIT_GRACE_MS);
+  private async closeGracefully(
+    port: number,
+    child: ChildProcess,
+    deadline = Date.now() + QUIT_GRACE_MS,
+  ): Promise<boolean> {
+    const exited = waitForExit(child, Math.max(0, deadline - Date.now()));
     // Once the bound is up the port may already belong to a newer Chrome (a
     // pinned port is reused), so the rest of the ask is dropped.
     let expired = false;
@@ -1688,7 +1693,7 @@ export class ChromeLauncher implements ChromeBackendClient {
    * the fallback. `immediate` signals at once, for a quit that cannot wait.
    * Terminal: later demands throw (app teardown only).
    */
-  async dispose(opts?: { immediate?: boolean }): Promise<void> {
+  async dispose(opts?: { immediate?: boolean; deadline?: number }): Promise<void> {
     this.disposed = true;
     const child = this.child;
     const port = this.cdpPort;
@@ -1696,7 +1701,7 @@ export class ChromeLauncher implements ChromeBackendClient {
     this.proxy?.close();
     this.proxy = null;
     if (!child) return;
-    if (!opts?.immediate && port > 0 && (await this.closeGracefully(port, child))) return;
+    if (!opts?.immediate && port > 0 && (await this.closeGracefully(port, child, opts?.deadline))) return;
     try {
       child.kill();
     } catch {
@@ -1944,13 +1949,19 @@ export class ChromeLauncherRegistry {
     this.live?.writeScope.clearBorrows(workspaceId);
   }
 
-  /** Quit every launched Chrome; `immediate` as in ChromeLauncher.dispose. */
+  /**
+   * Quit every launched Chrome; `immediate` as in ChromeLauncher.dispose. The
+   * Chromes stop in parallel against one deadline, QUIT_GRACE_MS from now:
+   * whichever is still running when it passes gets the signal, so the whole
+   * call resolves within that bound however many profiles are open.
+   */
   async disposeAll(opts?: { immediate?: boolean }): Promise<void> {
     // An immediate dispose is the install quit, which can still be called off
     // (abortInstallQuit); new launchers stay possible after it.
     if (!opts?.immediate) this.disposed = true;
+    const deadline = Date.now() + QUIT_GRACE_MS;
     const stopping = [...this.launchers.values()].map((launcher) =>
-      launcher instanceof ChromeLauncher ? launcher.dispose(opts) : launcher.dispose(),
+      launcher instanceof ChromeLauncher ? launcher.dispose({ ...opts, deadline }) : launcher.dispose(),
     );
     this.launchers.clear();
     // Socket close only — never touches the user's Chrome process.
