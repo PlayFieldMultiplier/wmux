@@ -193,7 +193,7 @@ const MAX_COMMANDS = 64;
  */
 function isSafeEntryPath(p: unknown): p is string {
   if (typeof p !== 'string' || p.length === 0 || p.length > MAX_ENTRY_LEN) return false;
-  if (p.includes('\\') || p.includes('..') || p.includes(':')) return false;
+  if (p.includes('\\') || p.includes('..') || p.includes(':') || /[?#%]/.test(p)) return false;
   if (p.startsWith('/') || p.includes('\0')) return false;
   return true;
 }

@@ -19,7 +19,7 @@ describe('agent.state permission and scope boundary', () => {
     const { call } = setup();
     read.mockResolvedValue({ ...snapshot, privateText: 'secret' });
     expect(await call({ workspaceId: 'other' })).toMatchObject({ ok: true, result: snapshot });
-    expect(read).toHaveBeenCalledWith(expect.any(Function), 'agent.state', { workspaceId: 'w1', includeActivity: false });
+    expect(read).toHaveBeenCalledWith(expect.any(Function), 'agent.state', { workspaceId: 'w1', includeActivity: false }, { timeoutError: expect.any(Error) });
   });
   it.each(['unconfirmed', 'denied'] as const)('refuses %s even in shadow mode', async (status) => {
     const { call } = setup(['agent.state.read'], status);
@@ -59,5 +59,11 @@ describe('agent.state permission and scope boundary', () => {
     const { call, trust } = setup();
     read.mockImplementation(async () => { trust.status = 'denied'; return snapshot; });
     expect(await call()).toMatchObject({ ok: false });
+  });
+  it('marks a missing renderer responder as retryable and accepts a later response', async () => {
+    const { call } = setup();
+    read.mockImplementationOnce(async (_window, _method, _params, options) => { throw options.timeoutError; });
+    expect(await call()).toMatchObject({ ok: false, retryable: true, error: 'Agent state responder is not ready; retry the request' });
+    expect(await call()).toMatchObject({ ok: true, result: snapshot });
   });
 });

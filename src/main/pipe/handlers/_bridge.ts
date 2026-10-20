@@ -8,6 +8,8 @@ const DEFAULT_TIMEOUT_MS = 5000;
 
 interface SendToRendererOptions {
   timeoutMs?: number;
+  /** Read-only callers can mark a missing responder as a transient failure. */
+  timeoutError?: Error;
 }
 
 /**
@@ -33,7 +35,7 @@ export function sendToRenderer(
 
     const timer = setTimeout(() => {
       ipcMain.removeAllListeners(responseChannel);
-      reject(new Error(`RPC timeout: ${method} (${timeoutMs}ms)`));
+      reject(options.timeoutError ?? new Error(`RPC timeout: ${method} (${timeoutMs}ms)`));
     }, timeoutMs);
 
     ipcMain.once(responseChannel, (_event, result: unknown) => {
