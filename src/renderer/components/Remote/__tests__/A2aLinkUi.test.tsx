@@ -414,6 +414,15 @@ describe('A2aLinkDialogView accepting a shared pane', () => {
     expect(boxes.map((b) => b.disabled)).toEqual([false, true]);
   });
 
+  it('accepted here but still waiting on an older PC’s human says sent, not linked', () => {
+    const shared = pane('p1');
+    const body = render(createElement(A2aLinkDialogView, dialogProps({
+      panes: rankExposedPanes([shared], null), selected: shared, offer: { pc: 'DESK', outbound: true, inbound: true },
+      outcome: { ok: true, waiting: true },
+    })));
+    expect(body.querySelector('[data-testid="a2a-link-outcome"]')?.textContent).toBe('a2aLink.sent');
+  });
+
   it('a closed share says so', () => {
     const shared = pane('p1');
     const body = render(createElement(A2aLinkDialogView, dialogProps({

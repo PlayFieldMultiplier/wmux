@@ -49,7 +49,8 @@ export interface A2aLinkDialogViewProps {
   onReceive: (v: boolean) => void;
   busy: boolean;
   /** `uncertain`: sent, no answer — it may have reached that PC; Check settles it. */
-  outcome: { ok: true } | { ok: false; error: A2aRemoteCallError | 'unknown-offer'; uncertain?: boolean } | null;
+  /** `waiting`: accepted here, the other PC (an older wmux) still has its human accept. */
+  outcome: { ok: true; waiting?: boolean } | { ok: false; error: A2aRemoteCallError | 'unknown-offer'; uncertain?: boolean } | null;
   /** Accepting a pane `pc` shared: no PC picker, and only the directions it offered can be ticked. */
   offer?: { pc: string; outbound: boolean; inbound: boolean };
   onPropose: () => void;
@@ -248,7 +249,7 @@ export function A2aLinkDialogView(p: A2aLinkDialogViewProps) {
         )}
         {p.outcome && (
           <p className="wmux-a2a-note" data-tone={p.outcome.ok ? undefined : 'danger'} data-testid="a2a-link-outcome">
-            {p.outcome.ok ? t(offerMode ? 'a2aOffer.accepted' : 'a2aLink.sent') : p.outcome.uncertain ? t('a2aLink.uncertain') : t(`a2aLink.error.${p.outcome.error}`)}
+            {p.outcome.ok ? t(offerMode && !p.outcome.waiting ? 'a2aOffer.accepted' : 'a2aLink.sent') : p.outcome.uncertain ? t('a2aLink.uncertain') : t(`a2aLink.error.${p.outcome.error}`)}
           </p>
         )}
       </DialogBody>
@@ -281,28 +282,65 @@ export interface A2aLinkDialogProps {
 }
 
 export default function A2aLinkDialog({ local: fixed, initialHostId, offer, onClose }: A2aLinkDialogProps) {
+  const t = useT();
   // This PC's panes, for the picker shown when no end was handed in. The
   const workspaces = useStore((s) => s.workspaces);
   const paneLabels = useStore((s) => s.paneLabel);
   const agents = useStore((s) => s.surfaceAgent);
-  const localChoices = useMemo(() => (fixed ? undefined : workspaces
-    .flatMap((ws) => getWorkspaceLeafPanes(ws).map((leaf) => ({
-      key: `${ws.id}/${leaf.id}`,
-      label: `${ws.name} / ${leafDisplayName(paneLabels, ws, leaf, activeAgentSlug(agents, leaf))}`,
-    })))), [fixed, workspaces, paneLabels, agents]);
+  // Accepting a share: this PC's panes on the shared pane's repo come first.
+  const sharedRepo = offer?.end.gitRemote ?? null;
+  const [localRepos, setLocalRepos] = useState<Record<string, string>>({});
+  const cwdByKey = useMemo(() => {
+    if (!sharedRepo) return {};
+    const out: Record<string, string> = {};
+    for (const w of buildPaneSnapshot({ workspaces, surfaceAgent: agents }).workspaces) {
+      for (const pane of w.panes) if (pane.cwd) out[`${w.id}/${pane.paneId}`] = pane.cwd;
+    }
+    return out;
+  }, [sharedRepo, workspaces, agents]);
+  const cwdKey = JSON.stringify(cwdByKey);
+  useEffect(() => {
+    let live = true;
+    const repoKey = window.electronAPI?.github?.repoKey;
+    if (!repoKey || !sharedRepo) return;
+    void Promise.all(Object.entries(cwdByKey).map(async ([key, cwd]) => [key, (await repoKey(cwd).catch(() => null))?.key ?? null] as const))
+      .then((pairs) => {
+        if (!live) return;
+        const next: Record<string, string> = {};
+        for (const [key, repo] of pairs) if (repo) next[key] = repo;
+        setLocalRepos(next);
+      });
+    return () => { live = false; };
+    // cwdKey stands in for cwdByKey (a new object whenever the store changes).
+  }, [cwdKey, sharedRepo]);
+  const localChoices = useMemo(() => {
+    if (fixed) return undefined;
+    const all = workspaces.flatMap((ws) => getWorkspaceLeafPanes(ws).map((leaf) => {
+      const key = `${ws.id}/${leaf.id}`;
+      const same = !!sharedRepo && localRepos[key] === sharedRepo;
+      return { key, same, label: `${ws.name} / ${leafDisplayName(paneLabels, ws, leaf, activeAgentSlug(agents, leaf))}${same ? ` · ${t('a2aLink.recommended')}` : ''}` };
+    }));
+    return [...all.filter((c) => c.same), ...all.filter((c) => !c.same)];
+  }, [fixed, workspaces, paneLabels, agents, sharedRepo, localRepos, t]);
   const [pickedKey, setPickedKey] = useState<string | null>(() => {
     if (fixed) return null;
     const s = useStore.getState();
     const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
     return ws?.activePaneId ? `${ws.id}/${ws.activePaneId}` : null;
   });
+  // The only pane here on the shared repo is picked, unless the person picked one or the focused pane is on it.
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (touched || !localChoices) return;
+    const same = localChoices.filter((c) => c.same);
+    if (same.length === 1 && !same.some((c) => c.key === pickedKey)) setPickedKey(same[0].key);
+  }, [localChoices, touched, pickedKey]);
   const localKey = localChoices?.some((c) => c.key === pickedKey) ? pickedKey : localChoices?.[0]?.key ?? null;
   const end: LocalEnd = fixed ?? (localKey
     ? { kind: 'pane', workspaceId: localKey.split('/')[0], paneId: localKey.slice(localKey.indexOf('/') + 1) }
     : { kind: 'pane', workspaceId: '', paneId: '' });
   const workspaceId = end.workspaceId;
   const paneId = end.kind === 'pane' ? end.paneId : '';
-  const t = useT();
   const api = window.electronAPI?.a2aRemote;
   // My pane as the snapshot describes it (label, cwd), from the live store.
   const local = useStore(useShallow((s) => {
@@ -381,7 +419,9 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, offer, onCl
         local: { kind: 'pane', workspaceId, paneId, label: local.label, workspaceName: local.workspaceName, ...(myRemote ? { gitRemote: myRemote } : {}) },
         allow: { outbound: send, inbound: receive },
       });
-      setOutcome(r.ok ? { ok: true } : { ok: false, error: r.error, ...(r.uncertain ? { uncertain: true } : {}) });
+      setOutcome(r.ok
+        ? { ok: true, ...(r.link?.state === 'active' ? {} : { waiting: true }) }
+        : { ok: false, error: r.error, ...(r.uncertain ? { uncertain: true } : {}) });
     } catch {
       setOutcome({ ok: false, error: 'failed' });
     } finally {
@@ -446,7 +486,7 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, offer, onCl
       onPropose={() => void (offer ? onAcceptOffer() : onPropose())}
       onClose={onClose}
       {...(offer ? { offer: { pc: hosts.find((h) => h.hostId === offer.hostId)?.name ?? '', outbound: offer.allow.outbound, inbound: offer.allow.inbound } } : {})}
-      {...(localChoices ? { localChoices, localKey: localKey ?? '', onPickLocal: setPickedKey } : {})}
+      {...(localChoices ? { localChoices, localKey: localKey ?? '', onPickLocal: (key: string) => { setTouched(true); setPickedKey(key); } } : {})}
       t={t}
     />
   );
