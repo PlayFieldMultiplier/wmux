@@ -413,10 +413,12 @@ describe('ChromeLauncherRegistry', () => {
   });
 
   it('a profile asked for while the registry quits gets a launcher that never starts Chrome', async () => {
+    const surfaceStore = { listForProfile: vi.fn(() => []), save: vi.fn(), saveNow: vi.fn(async () => undefined), dropProfile: vi.fn(async () => undefined), flushSync: vi.fn() };
     const registry = new ChromeLauncherRegistry({
       defaultDir: '/tmp/default-prof',
       profilesDir: '/tmp/profiles',
       store: makeStore({}),
+      surfaceStore: surfaceStore as never,
     });
     const stopping = registry.disposeAll();
     const late = registry.forProfile('late');
@@ -424,6 +426,10 @@ describe('ChromeLauncherRegistry', () => {
     await stopping;
     expect(spawnMock).not.toHaveBeenCalled();
     expect(registry.peekLauncher('late')).toBeUndefined();
+    // Its teardown leaves the profile's persisted records (an adopted Chrome
+    // may still hold their tabs) untouched.
+    expect(surfaceStore.save).not.toHaveBeenCalled();
+    expect(surfaceStore.saveNow).not.toHaveBeenCalled();
   });
 
   it('revealNewest activates the newest tab of a running pane profile and never launches one', async () => {

@@ -282,6 +282,12 @@ function waitForExit(child: ChildProcess, ms: number): Promise<boolean> {
   });
 }
 
+/** A cleanup request's bound, cut short when `stop` fires. */
+function boundedBy(stop?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(RESTORE_SETTLE_MS);
+  return stop ? AbortSignal.any([stop, timeout]) : timeout;
+}
+
 /** The one tab a Chrome starts with when it restores nothing. */
 function isStartupTabUrl(url: string): boolean {
   return url === 'about:blank' || /^[a-z]+:\/\/(newtab|new-tab-page(-third-party)?)\/?$/.test(url);
@@ -1046,26 +1052,30 @@ export class ChromeLauncher implements ChromeBackendClient {
   ): Promise<boolean> {
     const exited = waitForExit(child, Math.max(0, deadline - Date.now()));
     // Once the bound is up the port may already belong to a newer Chrome (a
-    // pinned port is reused), so the rest of the ask is dropped.
-    let expired = false;
-    const current = () => !expired;
+    // pinned port is reused): the rest of the ask is cancelled, in flight or not.
+    const expiry = new AbortController();
+    const stop = expiry.signal;
     const ask = async () => {
       try {
-        const list = await this.fetchJsonAt(port, '/json/list', 'GET', AbortSignal.timeout(RESTORE_SETTLE_MS));
-        if (Array.isArray(list) && current()) {
-          const { closed } = await this.closeToStartupTab(port, list as Array<{ id: string; url: string; type: string }>);
+        const list = await this.fetchJsonAt(port, '/json/list', 'GET', boundedBy(stop));
+        if (Array.isArray(list) && !stop.aborted) {
+          const { closed } = await this.closeToStartupTab(
+            port,
+            list as Array<{ id: string; url: string; type: string }>,
+            stop,
+          );
           // `/json/close` only starts a close; a tab still closing when the
           // quit lands stays in the saved session.
-          await this.waitTargetsGone(port, closed);
+          await this.waitTargetsGone(port, closed, stop);
         }
       } catch {
         /* nothing listed; the quit itself still keeps the cookies */
       }
-      return current() && this.closeBrowserAt(port, current);
+      return !stop.aborted && this.closeBrowserAt(port, () => !stop.aborted);
     };
     // The bound covers the ask too: a wedged endpoint must not hold a quit.
     const asked = await Promise.race([ask(), exited]);
-    expired = true;
+    expiry.abort();
     return asked ? exited : hasExited(child);
   }
 
@@ -1111,31 +1121,33 @@ export class ChromeLauncher implements ChromeBackendClient {
   private async closeToStartupTab(
     port: number,
     targets: Array<{ id: string; url: string; type?: string }>,
+    stop?: AbortSignal,
   ): Promise<{ closed: string[]; complete: boolean }> {
-    const bounded = () => AbortSignal.timeout(RESTORE_SETTLE_MS);
     const pages = targets.filter((t) => t.type === undefined || t.type === 'page');
     const others = pages.filter((p) => !isStartupTabUrl(p.url));
     if (others.length === 0) return { closed: [], complete: true };
     const keptOpen =
       others.length < pages.length ||
-      (await this.fetchJsonAt(port, '/json/new', 'PUT', bounded()).then(
+      (await this.fetchJsonAt(port, '/json/new', 'PUT', boundedBy(stop)).then(
         (t) => typeof (t as { id?: unknown } | null)?.id === 'string',
         () => false,
       ));
+    if (stop?.aborted) return { closed: [], complete: false };
     const closing = keptOpen ? others : others.slice(1);
     await Promise.all(
-      closing.map((p) => this.fetchJsonAt(port, `/json/close/${p.id}`, 'GET', bounded()).catch(() => undefined)),
+      closing.map((p) => this.fetchJsonAt(port, `/json/close/${p.id}`, 'GET', boundedBy(stop)).catch(() => undefined)),
     );
     return { closed: closing.map((p) => p.id), complete: keptOpen };
   }
 
   /** Wait (bounded) until none of `ids` is listed any more; false if one still is. */
-  private async waitTargetsGone(port: number, ids: string[]): Promise<boolean> {
+  private async waitTargetsGone(port: number, ids: string[], stop?: AbortSignal): Promise<boolean> {
     const deadline = Date.now() + RESTORE_SETTLE_MS;
     for (;;) {
       if (ids.length === 0) return true;
+      if (stop?.aborted) return false;
       try {
-        const list = await this.fetchJsonAt(port, '/json/list', 'GET', AbortSignal.timeout(RESTORE_SETTLE_MS));
+        const list = await this.fetchJsonAt(port, '/json/list', 'GET', boundedBy(stop));
         if (Array.isArray(list) && !list.some((t: { id?: string }) => t.id !== undefined && ids.includes(t.id))) {
           return true;
         }
@@ -1805,7 +1817,9 @@ export class ChromeLauncherRegistry {
         // account-profile it is) is identifiable at a glance.
         profileLabel: `wmux · ${name}`,
         profileName: name,
-        ...(this.opts.surfaceStore && { surfaceStore: this.opts.surfaceStore }),
+        // One asked for during the quit owns no records: its own teardown
+        // must not overwrite the profile's persisted ones.
+        ...(this.opts.surfaceStore && !this.disposed && { surfaceStore: this.opts.surfaceStore }),
         ...(this.opts.protection && { protection: () => this.opts.protection?.(name) ?? null }),
       },
     );

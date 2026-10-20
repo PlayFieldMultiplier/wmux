@@ -18,6 +18,10 @@ const { spawnMock, state, sockets } = vi.hoisted(() => ({
     onGuardArm: null as (() => Promise<void>) | null,
     restoredPage: false,
     holdList: null as Promise<void> | null,
+    // holdPut: PUT /json/new answers only once this settles; onlyRestored: no
+    // startup tab is listed, so a blank one must be opened first.
+    holdPut: null as Promise<void> | null,
+    onlyRestored: false,
     portFiles: {} as Record<string, string>,
     proxyPort: 0,
     routeViaProxy: true,
@@ -132,11 +136,16 @@ const fetchMock = vi.fn(async (url: string): Promise<{ ok: boolean; text: () => 
   const port = Number(/:(\d+)\//.exec(String(url))?.[1]);
   if (dead.has(port)) throw new Error('ECONNREFUSED');
   if (state.holdList && String(url).endsWith('/json/list')) await state.holdList;
+  if (state.holdPut && String(url).includes('/json/new')) {
+    await state.holdPut;
+    const created = { id: 'blank', url: 'about:blank' };
+    return { ok: true, text: async () => JSON.stringify(created), json: async () => created };
+  }
   // A fresh Chrome lists only its startup tab.
   const body = String(url).endsWith('/json/list')
     ? [
-        { id: 'startup', url: 'chrome://newtab/', title: 'New Tab', type: 'page' },
-        ...(state.restoredPage ? [{ id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' }] : []),
+        ...(state.onlyRestored ? [] : [{ id: 'startup', url: 'chrome://newtab/', title: 'New Tab', type: 'page' }]),
+        ...(state.restoredPage || state.onlyRestored ? [{ id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' }] : []),
       ]
     : { webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/x` };
   return { ok: true, text: async () => JSON.stringify(body), json: async () => body };
@@ -155,6 +164,8 @@ beforeEach(() => {
   state.onGuardArm = null;
   state.restoredPage = false;
   state.holdList = null;
+  state.holdPut = null;
+  state.onlyRestored = false;
   sockets.length = 0;
   dead.clear();
   nextPort = 18001;
@@ -465,6 +476,27 @@ describe('ChromeLauncher — quitting', () => {
     const before = sockets.length;
     release(); // the stalled ask resumes against a port that may be reused
     await deliberateSleep(100, 'negative check: the resumed ask must send nothing');
+    expect(sockets).toHaveLength(before);
+  }, 15_000);
+
+  it('a quit whose blank tab answers past the bound closes nothing and polls nothing', async () => {
+    const child = makeChild();
+    spawnWritesPortFile(child);
+    const launcher = new ChromeLauncher('/tmp/quit-e');
+    await launcher.ensureRunning();
+    state.onlyRestored = true; // the agent's own page is all that is open
+    let release = () => undefined as void;
+    state.holdPut = new Promise<void>((r) => {
+      release = r;
+    });
+    await launcher.dispose();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    const calls = fetchMock.mock.calls.length;
+    const before = sockets.length;
+    release();
+    await deliberateSleep(150, 'negative check: the resumed ask must send nothing');
+    const after = fetchMock.mock.calls.slice(calls).map(([u]) => String(u));
+    expect(after.filter((u) => u.includes('/json/close/') || u.endsWith('/json/list'))).toEqual([]);
     expect(sockets).toHaveLength(before);
   }, 15_000);
 
