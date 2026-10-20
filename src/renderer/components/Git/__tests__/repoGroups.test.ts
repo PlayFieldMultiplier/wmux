@@ -73,4 +73,15 @@ describe('groupWorkspacesByRepo', () => {
     expect(infra.workspaceCount).toBe(2);
     expect(repoOwnerWorkspace(infra, null)).toBe('b');
   });
+
+  it('a repo found below both the shell\'s folder and the agent\'s folder is one group, credited to the first', () => {
+    const at = (root: string, byAgent: boolean): ResolvedWorkspace =>
+      ({ workspaceId: 'root', repoPath: '/work/api', mainPath: '/work/api', remoteKey: null, contained: true, foundUnder: { root, byAgent } });
+    const groups = groupWorkspacesByRepo([at('/work', false), at('/', true)], live('root'), 'root', 'linux');
+    expect(groups).toHaveLength(1);
+    expect(groups[0].foundIn).toEqual(['root']);
+    expect(groups[0].workspaceCount).toBe(1);
+    expect(groups[0].checkouts).toHaveLength(1);
+    expect(groups[0].foundUnder.root).toEqual({ root: '/work', byAgent: false });
+  });
 });
