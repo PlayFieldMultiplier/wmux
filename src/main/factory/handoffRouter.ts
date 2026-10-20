@@ -899,6 +899,11 @@ export class HandoffRouter {
     const target = this.addresseeFor(sender, kind, parent, spec.toWorkspaceId, spec.toBotId);
     if ('refusal' in target) return this.refuse(draft, target.refusal, target.detail);
     draft.to = { kind: 'bot', workspaceId: target.bot.workspaceId, botId: target.bot.id };
+    // A hop not known clean of a guest's words stays in the sender's own
+    // workspace (a send, a reply, a room mention).
+    if (draft.guestSourced === true && target.bot.workspaceId !== sender.workspaceId) {
+      return this.refuse(draft, 'no_addressee', 'in a turn that comes from an external guest\'s message (or one wmux cannot tell the source of), a bot reaches only the bots of its own workspace');
+    }
 
     if (spec.next) {
       if (!coordinator) return this.refuse(draft, 'surface', 'only a coordinator names the bots that follow (next)');

@@ -321,7 +321,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     // is about, when it lands in that message's thread. A post moved to the
     // opened thread drops the parent it named in the conversation.
     const replyTo = (pinned === namedThread ? p.replyTo : undefined) ?? wakeReplyTo(writer, wake, bot.workspaceId, threadId);
-    const { valid, dropped } = settleMentions(ports, bot, mentions ?? []);
+    const { valid, dropped } = settleMentions(ports, bot, mentions ?? [], fromGuest);
     // Files are copied once per post: a repeat whose card is up keeps that
     // card's files and reads nothing (the task folder may be gone by then).
     const prior = clientPostId ? writer.find(bot.workspaceId, (c) => c.clientPostId === clientPostId, { guests: true }) : null;
@@ -454,9 +454,12 @@ export function settleMentions(
   ports: Partial<FactoryRoomPorts>,
   poster: BotBinding,
   mentions: readonly string[],
-): { valid: string[]; dropped: Array<{ botId: string; reason: 'self' | 'not_enabled' }> } {
+  /** The post comes from a wake not known clean of a guest's words: it
+   *  names only bots of the poster's own workspace. */
+  fromGuest = false,
+): { valid: string[]; dropped: Array<{ botId: string; reason: 'self' | 'not_enabled' | 'other_workspace' }> } {
   const valid: string[] = [];
-  const dropped: Array<{ botId: string; reason: 'self' | 'not_enabled' }> = [];
+  const dropped: Array<{ botId: string; reason: 'self' | 'not_enabled' | 'other_workspace' }> = [];
   for (const botId of mentions) {
     if (botId === poster.botId) {
       dropped.push({ botId, reason: 'self' });
@@ -468,8 +471,9 @@ export function settleMentions(
     } catch {
       bot = null;
     }
-    if (bot && bot.enabled) valid.push(botId);
-    else dropped.push({ botId, reason: 'not_enabled' });
+    if (!bot || !bot.enabled) dropped.push({ botId, reason: 'not_enabled' });
+    else if (fromGuest && bot.workspaceId !== poster.workspaceId) dropped.push({ botId, reason: 'other_workspace' });
+    else valid.push(botId);
   }
   return { valid, dropped };
 }

@@ -938,6 +938,29 @@ describe('messages and room mentions (group rooms)', () => {
     expect(h.wakes).toHaveLength(1);
   });
 
+  it('a hop not known clean stays in the sender\'s workspace; a clean one still reaches any workspace', async () => {
+    const a = bot('ws1', 'lead');
+    const same = bot('ws1', 'triage');
+    const far = bot('ws2', 'lead');
+    let guest = true;
+    const taint: HandoffTaintPort = {
+      markSent: (_id, _s, _a, source) => ((source ?? guest) ? 'guest' : false), markForward: () => false,
+      runningGuest: () => guest, handoffGuest: () => guest,
+    };
+    const h = await harness([a, same, far], { taint });
+    const refusedFar = h.router.send(binding(a), { kind: 'message', toBotId: far.id, title: 'x', body: '' });
+    expect(refusedFar).toMatchObject({ ok: false, code: 'no_addressee', message: expect.stringContaining('its own workspace') });
+    expect(h.router.send(binding(a), { kind: 'dispatch', toWorkspaceId: 'ws2', title: 'x', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    const [mentioned] = h.router.mention(binding(a), { id: 'c-g', threadId: 'general' as ThreadId, title: 't', body: '', origin: 'guest' }, [far.id]);
+    expect(mentioned.result).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: same.id, title: 'x', body: '' })).toMatchObject({ ok: true });
+    expect(h.wakes.map((w) => w.botId)).toEqual([same.id]);
+    guest = false;
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: far.id, title: 'y', body: '' })).toMatchObject({ ok: true, to: { workspaceId: 'ws2' } });
+    const [clean] = h.router.mention(binding(a), { id: 'c-c', threadId: 'general' as ThreadId, title: 't', body: '' }, [far.id]);
+    expect(clean.result).toMatchObject({ ok: true });
+  });
+
   it('without a tracker where one is expected, a send and a question are guest-sourced', async () => {
     const a = bot('ws1', 'triage');
     const lead = bot('ws1', 'lead');

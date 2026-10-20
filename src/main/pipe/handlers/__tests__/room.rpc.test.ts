@@ -26,6 +26,7 @@ import {
   onRoomCardResolved,
   postTurnText,
   resolutionCorrection,
+  settleMentions,
   type RoomHandlerDeps,
 } from '../room.rpc';
 import { handleAskPerson, handleHandoffAnswer, handleHandoffList, handleHandoffSend, handleQuestionClose } from '../handoff.rpc';
@@ -1062,5 +1063,18 @@ describe('long room card text is shortened as the last step', () => {
     } finally {
       router.dispose();
     }
+  });
+});
+
+describe('settleMentions', () => {
+  it('a post from a wake not known clean names only bots of the poster\'s workspace; a clean post names any', () => {
+    const poster = bot('ws1', 'lead');
+    const same = bot('ws1', 'triage');
+    const far = bot('ws2', 'lead');
+    const bots = [poster, same, far];
+    const ports = { bots: { listEnabled: () => bots, get: (id: string) => bots.find((b) => b.id === id) ?? null } } as unknown as Partial<FactoryRoomPorts>;
+    const binding = { workspaceId: 'ws1', botId: poster.id, role: 'lead' as const };
+    expect(settleMentions(ports, binding, [same.id, far.id], true)).toEqual({ valid: [same.id], dropped: [{ botId: far.id, reason: 'other_workspace' }] });
+    expect(settleMentions(ports, binding, [same.id, far.id])).toEqual({ valid: [same.id, far.id], dropped: [] });
   });
 });
