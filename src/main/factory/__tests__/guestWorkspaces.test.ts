@@ -20,6 +20,7 @@ import {
   setGuestWorkspaceStore,
 } from '../guestWorkspaces';
 import { FactorySettingsStore, HQ_NOT_GUEST_WORKSPACE, factorySettingsPath } from '../factorySettings';
+import { BotStore, botsFilePath } from '../botStore';
 
 let dir = '';
 const file = (): string => guestWorkspacesPath(dir);
@@ -142,5 +143,74 @@ describe('the HQ workspace', () => {
     await expect(settings.update({ hqWorkspaceId: 'ws-g' })).rejects.toThrow(HQ_NOT_GUEST_WORKSPACE);
     expect(settings.get().hqWorkspaceId).toBeNull();
     expect((await settings.update({ hqWorkspaceId: 'ws-a' })).hqWorkspaceId).toBe('ws-a');
+  });
+});
+
+describe('a bot in a guest workspace (BotStore)', () => {
+  const guestWs = (ws: string) => ws === 'ws-g';
+  const make = () => new BotStore(botsFilePath(dir), { guestWorkspace: guestWs });
+  const repo = { repoKey: 'o/r', repoPath: '/tmp/r' };
+
+  it('is created only as a lead-role bot with no repository on the gated engine', () => {
+    const s = make();
+    expect(s.create({ workspaceId: 'ws-g', template: 'developer' }).ok).toBe(true);
+    expect(s.create({ workspaceId: 'ws-g', template: 'custom' }).ok).toBe(true);
+    for (const input of [
+      { template: 'coordinator' }, { role: 'moa' }, { template: 'reviewer' }, { template: 'issue' }, { role: 'maintainer' },
+      { template: 'developer', repo }, { template: 'developer', engine: { kind: 'claude-pty' } },
+    ]) {
+      const r = s.create({ workspaceId: 'ws-g', ...input });
+      expect(r.ok, JSON.stringify(input)).toBe(false);
+    }
+    // Elsewhere nothing changes.
+    expect(s.create({ workspaceId: 'ws-a', template: 'coordinator', repo }).ok).toBe(true);
+  });
+
+  it('is never updated into one that breaks the rules; a bot turned off for one can be fixed field by field', () => {
+    const s = make();
+    const made = s.create({ workspaceId: 'ws-g', template: 'developer' });
+    if (!made.ok) throw new Error('not made');
+    const id = made.bot.id;
+    for (const patch of [{ template: 'coordinator' }, { repo }, { engine: { kind: 'claude-pty' } }, { template: 'reviewer' }]) {
+      expect(s.update(id, patch).ok, JSON.stringify(patch)).toBe(false);
+    }
+    expect(s.update(id, { name: 'Dev 2' }).ok).toBe(true);
+  });
+
+  it('a hand-edited bots.json loads with the breaking bots turned off, not dropped', async () => {
+    const seed = new BotStore(botsFilePath(dir));
+    const coord = seed.create({ workspaceId: 'ws-g', template: 'coordinator' });
+    const withRepo = seed.create({ workspaceId: 'ws-g', template: 'developer', repo });
+    const ok = seed.create({ workspaceId: 'ws-g', template: 'developer' });
+    const other = seed.create({ workspaceId: 'ws-a', template: 'coordinator' });
+    await seed.flush();
+    if (!coord.ok || !withRepo.ok || !ok.ok || !other.ok) throw new Error('not made');
+    const warn = console.warn;
+    console.warn = () => undefined;
+    const s = make();
+    s.load();
+    console.warn = warn;
+    expect(s.get(coord.bot.id)?.enabled).toBe(false);
+    expect(s.get(withRepo.bot.id)?.enabled).toBe(false);
+    expect(s.get(ok.bot.id)?.enabled).toBe(true);
+    expect(s.get(other.bot.id)?.enabled).toBe(true);
+    expect(s.guestRuleDisabledBots().map((d) => d.botId).sort()).toEqual([coord.bot.id, withRepo.bot.id].sort());
+    // Turned on again only once it keeps the rules.
+    expect(s.update(withRepo.bot.id, { enabled: true }).ok).toBe(false);
+    expect(s.update(withRepo.bot.id, { repo: null }).ok).toBe(true);
+    expect(s.update(withRepo.bot.id, { enabled: true }).ok).toBe(true);
+    await s.flush();
+  });
+
+  it('a list that cannot be read turns nothing off on load but refuses a breaking create', () => {
+    const seed = new BotStore(botsFilePath(dir));
+    const coord = seed.create({ workspaceId: 'ws-g', template: 'coordinator' });
+    if (!coord.ok) throw new Error('not made');
+    return seed.flush().then(() => {
+      const s = new BotStore(botsFilePath(dir), { guestWorkspace: () => 'unknown' });
+      s.load();
+      expect(s.get(coord.bot.id)?.enabled).toBe(true);
+      expect(s.create({ workspaceId: 'ws-x', template: 'coordinator' }).ok).toBe(false);
+    });
   });
 });

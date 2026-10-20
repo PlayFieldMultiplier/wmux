@@ -224,14 +224,21 @@ export function crossesGuestBoundary(a: string | null | undefined, b: string | n
 
 // ── Construction rules ─────────────────────────────────────────────────────
 
-/** Why a bot may not be in a guest workspace as it is, or null: a guest
+/** Every rule a bot breaks to be in a guest workspace as it is: a guest
  *  workspace holds no repository, no Coordinator, only bots of the `lead`
  *  role (the others' default triggers reach across workspaces) and only
  *  engines that hold their tools back per call. Pure. */
+export function guestWorkspaceBotRefusals(bot: Pick<BotProfile, 'role' | 'template' | 'engine' | 'repo'>): string[] {
+  const out: string[] = [];
+  const template = botTemplate(bot);
+  if (bot.repo) out.push('a bot in a guest workspace has no repository');
+  if (template === 'coordinator' || bot.role === 'moa') out.push('a guest workspace has no Coordinator');
+  else if (bot.role !== 'lead' || template === 'reviewer' || template === 'issue') out.push('a bot in a guest workspace is a Developer, Researcher or Custom bot');
+  if (!botEngineGatesTools(bot.engine)) out.push('a bot in a guest workspace runs on an engine that holds its tools back for guest messages (Claude SDK)');
+  return out;
+}
+
+/** The first rule a bot breaks to be in a guest workspace, or null. Pure. */
 export function guestWorkspaceBotRefusal(bot: Pick<BotProfile, 'role' | 'template' | 'engine' | 'repo'>): string | null {
-  if (bot.repo) return 'a bot in a guest workspace has no repository';
-  if (botTemplate(bot) === 'coordinator' || bot.role === 'moa') return 'a guest workspace has no Coordinator';
-  if (bot.role !== 'lead' || botTemplate(bot) === 'reviewer' || botTemplate(bot) === 'issue') return 'a bot in a guest workspace is a Developer, Researcher or Custom bot';
-  if (!botEngineGatesTools(bot.engine)) return 'a bot in a guest workspace runs on an engine that holds its tools back for guest messages (Claude SDK)';
-  return null;
+  return guestWorkspaceBotRefusals(bot)[0] ?? null;
 }
