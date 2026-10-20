@@ -7895,6 +7895,12 @@ async function shutdown(
 ): Promise<{ stateSaved: boolean }> {
   if (shuttingDown) return { stateSaved: false };
   shuttingDown = true;
+  // #2398: a clean exit keeps what panes started on purpose (paneJob.ts).
+  // Disarmed here, where the exit is decided: every caller's kill budget (the
+  // tray's full shutdown, Quit and Stop Sessions, an update, the 10s guard
+  // below) can end the phases that follow, and a kill-on-close job still armed
+  // then would take every pane's tree with it.
+  paneJob.disarm();
   noteExitReason(`shutdown (${signal})`);
   gateFlag?.stop();
   stopPushRecovery?.();
@@ -8063,8 +8069,6 @@ async function shutdown(
   const disposeStart = phaseStartedAt();
   const disposedCount = sessionManager.listManagedSessions().length;
   sessionManager.disposeAll();
-  // A clean exit keeps what panes started on purpose (paneJob.ts).
-  paneJob.disarm();
   await codexPaneRelays.shutdown();
   phaseLog('disposeAll', disposeStart, { count: disposedCount });
 

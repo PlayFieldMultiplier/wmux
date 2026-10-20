@@ -2,26 +2,33 @@
 // node process) puts a long-running grandchild in its pane job and then dies
 // without a clean shutdown: the grandchild must die with it. With the clean
 // exit's disarm first, it must survive, as a program started from a pane
-// survives a normal quit. The grandchild is the only process killed here, by
-// the pid this test started it with.
+// survives a normal quit. A pid the stand-in did not spawn (here, a process
+// this test started) must never be taken into its job. The test kills only the
+// processes it started, by the pids it started them with.
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { transformSync } from 'esbuild';
+import { buildSync } from 'esbuild';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
 const started: number[] = [];
 
-// The stand-in runs plain node, so it loads paneJob.ts compiled to CommonJS,
-// with koffi resolved from the repo's node_modules.
+// The stand-in runs plain node, so it loads paneJob.ts bundled to CommonJS
+// (with the winSnapshotNative reads it identifies a shell through), koffi
+// resolved from the repo's node_modules.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-pane-job-'));
 const compiled = path.join(tmp, 'paneJob.js');
-fs.writeFileSync(compiled, transformSync(fs.readFileSync(path.join(__dirname, '..', 'paneJob.ts'), 'utf8'), {
-  loader: 'ts',
+buildSync({
+  entryPoints: [path.join(__dirname, '..', 'paneJob.ts')],
+  bundle: true,
+  platform: 'node',
   format: 'cjs',
-}).code);
+  external: ['koffi'],
+  outfile: compiled,
+  logLevel: 'silent',
+});
 const koffiEntry = require.resolve('koffi');
 const nodeModules = koffiEntry.slice(0, koffiEntry.lastIndexOf(`node_modules${path.sep}`) + 'node_modules'.length);
 
@@ -34,18 +41,40 @@ function alive(pid: number): boolean {
   }
 }
 
-/** Runs a stand-in daemon; resolves with the grandchild pid it contained. */
-function runStandIn(disarm: boolean): Promise<number> {
+function startPing(): number {
+  const child = spawn('ping', ['-n', '60', '127.0.0.1'], { stdio: 'ignore', detached: true });
+  child.unref();
+  const pid = child.pid;
+  if (!pid) throw new Error('ping did not start');
+  started.push(pid);
+  return pid;
+}
+
+/**
+ * Runs a stand-in daemon that contains a ping it spawns itself, or, given
+ * `stranger`, that pid instead. Resolves with the pid it was asked to contain
+ * once the stand-in has exited.
+ */
+function runStandIn(opts: { disarm?: boolean; stranger?: number } = {}): Promise<number> {
   const script = `
     const { createPaneJob } = require(${JSON.stringify(compiled)});
     const { spawn } = require('node:child_process');
     const job = createPaneJob({ log: (level, m) => console.error(level, m) });
-    const child = spawn('ping', ['-n', '60', '127.0.0.1'], { stdio: 'ignore', detached: true });
-    child.unref();
-    job.contain(child.pid);
-    if (job.stats().contained !== 1) { console.error('not contained'); process.exit(2); }
-    process.stdout.write(String(child.pid));
-    ${disarm ? 'job.disarm();' : ''}
+    const mark = job.spawnMark();
+    let pid = ${opts.stranger ?? 0};
+    if (!pid) {
+      const child = spawn('ping', ['-n', '60', '127.0.0.1'], { stdio: 'ignore', detached: true });
+      child.unref();
+      pid = child.pid;
+    }
+    process.stdout.write(String(pid));
+    job.contain(pid, mark);
+    const { contained, failed } = job.stats();
+    if (contained !== ${opts.stranger ? 0 : 1} || failed !== ${opts.stranger ? 1 : 0}) {
+      console.error('contained ' + contained + ', failed ' + failed);
+      process.exit(2);
+    }
+    ${opts.disarm ? 'job.disarm();' : ''}
     // No clean shutdown: the process ends and its job handle closes with it.
     process.exit(0);
   `;
@@ -86,12 +115,20 @@ afterEach(() => {
 
 describe.runIf(process.platform === 'win32')('pane job on Windows', () => {
   it('ends a contained process when the daemon dies without a clean shutdown', async () => {
-    const pid = await runStandIn(false);
+    const pid = await runStandIn();
     expect(await waitGone(pid, 5000)).toBe(true);
   }, 30_000);
 
   it('keeps a contained process when the job was disarmed for a clean exit', async () => {
-    const pid = await runStandIn(true);
+    const pid = await runStandIn({ disarm: true });
     expect(await waitGone(pid, 1500)).toBe(false);
+  }, 30_000);
+
+  it('never takes a pid the daemon did not spawn, so it outlives the daemon', async () => {
+    // What a reused pid looks like: a live process of the same user, not a
+    // child of the daemon. Opening it by pid alone would succeed.
+    const stranger = startPing();
+    await runStandIn({ stranger });
+    expect(await waitGone(stranger, 1500)).toBe(false);
   }, 30_000);
 });

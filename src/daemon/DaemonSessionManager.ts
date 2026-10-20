@@ -402,12 +402,13 @@ export class DaemonSessionManager extends EventEmitter {
     if (cwdRefusal) throw new Error(cwdRefusal);
     let conptyBackend: ConptyBackend = 'inbox';
     let ptyProcess: IPty;
+    const spawnMark = this.paneJob?.spawnMark() ?? null;
     try {
       ptyProcess = spawnPtySync(this.spawnRequest(prepared, (backend) => { conptyBackend = backend; }));
     } catch (err) {
       throw this.spawnFailure(prepared, err);
     }
-    return this.registerSession(prepared, ptyProcess, conptyBackend);
+    return this.registerSpawned(prepared, ptyProcess, conptyBackend, spawnMark);
   }
 
   async createSessionAsync(params: Parameters<DaemonSessionManager['prepareSpawn']>[0]): Promise<DaemonSession> {
@@ -429,6 +430,7 @@ export class DaemonSessionManager extends EventEmitter {
       const cancelled = (): boolean => this.pendingCreates.get(params.id) !== token || this.sessions.has(params.id);
       let conptyBackend: ConptyBackend = 'inbox';
       let ptyProcess: IPty;
+      const spawnMark = this.paneJob?.spawnMark() ?? null;
       this.spawningCreates.add(token);
       try {
         ptyProcess = await spawnPty(this.spawnRequest(prepared, (backend) => { conptyBackend = backend; }));
@@ -447,7 +449,7 @@ export class DaemonSessionManager extends EventEmitter {
         try { ptyProcess.kill(); } catch { /* already gone */ }
         throw new Error('Session creation cancelled');
       }
-      const created = this.registerSession(prepared, ptyProcess, conptyBackend);
+      const created = this.registerSpawned(prepared, ptyProcess, conptyBackend, spawnMark);
       if (wsl) this.pendingRecovery.delete(params.id);
       return created;
     } finally {
@@ -824,11 +826,40 @@ export class DaemonSessionManager extends EventEmitter {
     return new Error(`Failed to start shell "${prepared.cmd}" in "${prepared.cwd}": ${detail}`);
   }
 
+  /**
+   * registerSession for a shell this create just spawned. A throw there would
+   * otherwise leave the shell running with no session to reach it: it is
+   * killed, and any part of the session already registered is dropped.
+   */
+  private registerSpawned(
+    prepared: PreparedSpawn,
+    ptyProcess: IPty,
+    conptyBackend: ConptyBackend,
+    spawnMark: bigint | null,
+  ): DaemonSession {
+    try {
+      return this.registerSession(prepared, ptyProcess, conptyBackend, spawnMark);
+    } catch (err) {
+      const half = this.sessions.get(prepared.params.id);
+      if (half?.ptyProcess === ptyProcess) {
+        half.bridge.cleanup();
+        this.sessions.delete(prepared.params.id);
+      }
+      try { ptyProcess.kill(); } catch { /* already gone */ }
+      throw err;
+    }
+  }
+
   /** Builds and registers the session around a PTY whose pid is known. */
-  private registerSession(prepared: PreparedSpawn, ptyProcess: IPty, conptyBackend: ConptyBackend): DaemonSession {
+  private registerSession(
+    prepared: PreparedSpawn,
+    ptyProcess: IPty,
+    conptyBackend: ConptyBackend,
+    spawnMark: bigint | null,
+  ): DaemonSession {
     const { params, cfg, cmd, cwd, env, cols, rows, wsl } = prepared;
     // The Rust core puts each pane in its own kill-on-close job already.
-    if (ptyBackend(ptyProcess) === 'node') this.paneJob?.contain(ptyProcess.pid);
+    if (ptyBackend(ptyProcess) === 'node') this.paneJob?.contain(ptyProcess.pid, spawnMark);
     const now = new Date().toISOString();
     const meta: DaemonSession = {
       id: params.id,
