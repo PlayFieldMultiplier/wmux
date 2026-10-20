@@ -3,6 +3,7 @@ import App from './App';
 import { useStore } from './stores';
 import { installChromeScrollPin } from './utils/pinChromeScroll';
 import { installWindowGlass } from './utils/windowGlass';
+import { hasRoundedWindowCorners } from '../shared/windowCorners';
 import { installDocumentHiddenMotion, installSystemReducedMotion } from './utils/reducedMotion';
 import './styles/globals.css';
 import './styles/ui.css';
@@ -16,6 +17,10 @@ import './styles/onboarding.css';
 document.documentElement.setAttribute('data-theme', useStore.getState().theme);
 document.documentElement.setAttribute('data-glass-level', useStore.getState().windowGlass);
 document.documentElement.setAttribute('data-platform', window.electronAPI?.platform ?? '');
+// Round window corners (macOS, Windows 11) let the sheet sit flush with the
+// window's edges; square ones keep its margin (ui.css, "Frame and sheet").
+document.documentElement.setAttribute('data-window-corners',
+  hasRoundedWindowCorners(window.electronAPI?.platform, window.electronAPI?.windowsBuildNumber) ? 'round' : 'square');
 
 // Windows' Animation effects off, which the media query misses there.
 installSystemReducedMotion();

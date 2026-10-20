@@ -1819,6 +1819,15 @@ const electronAPI = {
       ipcRenderer.on(IPC.WINDOW_FULLSCREEN_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC.WINDOW_FULLSCREEN_CHANGED, listener);
     },
+    /** Sheet frame: mount-time maximized state (pull). */
+    isMaximized: () => ipcRenderer.invoke(IPC.WINDOW_IS_MAXIMIZED) as Promise<boolean>,
+    /** Sheet frame: live maximize / unmaximize transitions (push). */
+    onMaximizedChanged: (cb: (maximized: boolean) => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, payload: { maximized?: boolean }) =>
+        cb(payload?.maximized === true);
+      ipcRenderer.on(IPC.WINDOW_MAXIMIZED_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC.WINDOW_MAXIMIZED_CHANGED, listener);
+    },
     /**
      * #882 — is anyone looking at this window (not minimized, not hidden to
      * tray, screen not locked)? Mount-time pull; the push below carries the

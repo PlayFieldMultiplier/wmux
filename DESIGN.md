@@ -112,15 +112,18 @@ reads as a second, differently tinted panel.
 │l │           │                                                     │ │
 │48│           │  [agent bar — overlay, on approach]                 │ │
 │  │╰───────────────────────────────────────────────────────────────────┤
-└──┴── sheet flush with the window's edges on macOS (8px elsewhere) ───┘
+└──┴── sheet flush with round window corners (8px in square ones) ─────┘
 ```
 
 - **Frame:** the titlebar row and the 48px rail, painted `--frame-bg` — a
-  step darker than the sheet in the dark looks, a soft grey in Paper. On
-  macOS, whose windows have rounded corners, the sheet has no margin: it
-  meets the window's edges, its own rounded corners kept. Windows and Linux
-  keep an 8px margin (`--sheet-inset`) on the sides away from the rail and
-  the bottom, so no frame notch shows in a square window corner.
+  step darker than the sheet in the dark looks, a soft grey in Paper. Where
+  the window has rounded corners — macOS, and Windows 11 (build 22000 and
+  later) — the sheet has no margin: it meets the window's edges, its own
+  rounded corners kept. Square-cornered windows — Windows 10, Linux, and a
+  Windows build that could not be read — keep an 8px margin
+  (`--sheet-inset`) on the sides away from the rail and the bottom, so no
+  frame notch shows in a square window corner. `data-window-corners` on
+  `<html>` carries the decision (`shared/windowCorners.ts`).
 - **Sheet:** one rounded panel (`--sheet-radius` 12px) flush under the
   titlebar, holding the sidebar and the panes (and the file tree column
   when it is shown). Nothing docks opposite the sidebar (the Bots page's
@@ -132,10 +135,12 @@ reads as a second, differently tinted panel.
   corners) with a 1px `--sheet-edge` hairline along the curve, and that
   line is the one seam. With the sidebar hidden the pane column drops both,
   leaving the sheet's own edge as the only boundary.
-- **Native fullscreen** (any platform): the sheet drops its margins and
+- **Native fullscreen** (any platform) and **maximized on Windows** (whose
+  maximized windows have square corners): the sheet drops its margins and
   radius. The rail stays.
 - **Terminal geometry is untouched** by the frame: margin changes, a sidebar
-  collapse and fullscreen each refit the terminals once, never per frame.
+  collapse, maximize and fullscreen each refit the terminals once, never per
+  frame.
 - **Window glass (macOS and Windows 11, every theme, `--theme-glass: 1`):**
   on macOS the window gets the `sidebar` vibrancy material behind a
   transparent background; on Windows 11 22H2 and later (build 22621+) it gets

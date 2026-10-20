@@ -643,6 +643,10 @@ export const IPC = {
   // time initial state.
   WINDOW_FULLSCREEN_CHANGED: 'window:fullscreen-changed',
   WINDOW_IS_FULLSCREEN: 'window:isFullScreen',
+  // Maximized state, same push + pull shape: a maximized Windows window has
+  // square corners, so the sheet drops its margin and radius as in fullscreen.
+  WINDOW_MAXIMIZED_CHANGED: 'window:maximized-changed',
+  WINDOW_IS_MAXIMIZED: 'window:isMaximized',
   // #882 — "is anyone looking at this window": minimized / hidden to tray /
   // screen locked. Same push + pull shape as fullscreen above. Feeds the #766
   // viewer-visibility report, because `document.visibilityState` never reports
