@@ -50,6 +50,7 @@ import { capBody, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
 import { redactStoredSecrets } from './secretRedaction';
 import { HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
 import { crossesGuestBoundary } from './guestWorkspaces';
+import { enabledBotsIncludingGuest } from './botStore';
 
 /** Longest human message a wake carries (the wake caps its reason at 16 KiB). */
 const HUMAN_WAKE_TEXT_MAX = 16 * 1024;
@@ -58,7 +59,9 @@ const HUMAN_FACT_TEXT_MAX = 3000;
 
 function enabledBots(bots: FactoryRoomPorts['bots'] | undefined): BotProfile[] {
   try {
-    return (bots?.listEnabled() ?? []).filter((b) => b.enabled);
+    // The owner's own message: any workspace's bots, guest ones included;
+    // postHumanMessage holds the boundary.
+    return enabledBotsIncludingGuest(bots).filter((b) => b.enabled);
   } catch {
     return [];
   }

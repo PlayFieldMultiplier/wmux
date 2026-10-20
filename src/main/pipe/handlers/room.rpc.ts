@@ -496,7 +496,10 @@ function readableWorkspace(
   if (tool && !botHasTool(bot, tool)) return refusal('surface', `${tool} is not on the bot surface`);
   if (requested === undefined || requested === bot.workspaceId) return bot.workspaceId;
   if (!botReadsEveryRoom(ports, bot.botId)) return refusal('cross_workspace', 'a bot reads its own workspace\'s room; another room is a Coordinator\'s read');
-  return isRoomWorkspaceId(requested) ? requested : refusal('invalid', 'workspaceId is not a workspace id');
+  if (!isRoomWorkspaceId(requested)) return refusal('invalid', 'workspaceId is not a workspace id');
+  // A Coordinator never reads a guest workspace's room (guestWorkspaces.ts).
+  if (crossesGuestBoundary(bot.workspaceId, requested)) return refusal('cross_workspace', 'a guest workspace\'s room is read only from inside it');
+  return requested;
 }
 
 export function handleRoomRead(raw: unknown, ctx: RpcContext | undefined, deps: RoomHandlerDeps): unknown {

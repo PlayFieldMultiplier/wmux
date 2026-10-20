@@ -30,6 +30,7 @@ import type { PrReviewRead } from '../../shared/prReview';
 import type { FactDraft } from '../../shared/facts';
 import type { BotProfile } from '../../shared/bot';
 import type { BotDirectoryApi, FactLogApi } from './triggerEngine';
+import { guestSide } from './guestWorkspaces';
 
 export const REPO_WATCH_FILENAME = 'repo-watch.json';
 
@@ -593,7 +594,8 @@ export class RepoWatch {
     let on = true;
     try {
       on = this.ports.enabled ? this.ports.enabled() : true;
-      if (on) bots = this.ports.bots.listEnabled();
+      // A guest workspace has no repository; skipped all the same.
+      if (on) bots = this.ports.bots.listEnabled().filter((b) => !guestSide(b.workspaceId));
     } catch (err) {
       // Unreadable directory: keep what runs, change nothing.
       this.log('bot directory unreadable', err);

@@ -99,6 +99,7 @@ import { wakeReplyTo, type RoomWriter } from './roomWriter';
 import type { BotNoticeInput } from './botNotices';
 import type { BotDirectoryApi } from './triggerEngine';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRecord } from './wakeTaint';
+import { guestSide } from './guestWorkspaces';
 
 export const APPROVALS_FILENAME = 'approvals.json';
 
@@ -1326,7 +1327,8 @@ export class ApprovalService {
     }
     let watching: BotProfile[] = [];
     try {
-      watching = (this.ports.bots()?.listEnabled() ?? []).filter((b) => normalizeRepoKey(b.repo?.repoKey) === repoKey);
+      // A guest workspace has no repository; skipped all the same.
+      watching = (this.ports.bots()?.listEnabled() ?? []).filter((b) => normalizeRepoKey(b.repo?.repoKey) === repoKey && !guestSide(b.workspaceId));
     } catch {
       watching = [];
     }

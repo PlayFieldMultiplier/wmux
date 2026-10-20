@@ -35,7 +35,7 @@ import type { BotDirectoryApi } from './botStore';
 import type { RoomWriter } from './roomWriter';
 import { DAY_MS, type TrustReadResult } from './trustMetrics';
 import type { CorrectionGroup } from './gardener';
-import { crossesGuestBoundary } from './guestWorkspaces';
+import { crossesGuestBoundary, guestSide } from './guestWorkspaces';
 
 export const MORNING_LIMITS = {
   WINDOW_MS: DAY_MS,
@@ -129,7 +129,9 @@ export async function buildMorningData(ports: MorningPorts): Promise<MorningData
   const now = (ports.now ?? Date.now)();
   const since = now - MORNING_LIMITS.WINDOW_MS;
   const bots = ports.bots();
-  const all = enabled(bots);
+  // listEnabled leaves out guest workspaces' bots; held again here, as for
+  // the facts and the rooms below: the report reads no guest workspace.
+  const all = enabled(bots).filter((b) => !guestSide(b.workspaceId));
   const L = MORNING_LIMITS;
 
   // Trust per distinct repository (oldest bot first).
@@ -164,7 +166,7 @@ export async function buildMorningData(ports: MorningPorts): Promise<MorningData
   let facts: Fact[] = [];
   try {
     const log = ports.factLog();
-    facts = log ? factsSince(log, since) : [];
+    facts = (log ? factsSince(log, since) : []).filter((f) => !guestSide(f.workspaceId));
   } catch {
     facts = [];
   }

@@ -32,7 +32,7 @@ import type { FactoryRefusal } from '../../../shared/botSurface';
 import { parseThreadId, type ThreadId } from '../../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryRouter } from '../../factory/factoryHost';
 import { BotStore, botsFilePath, setBotStore } from '../../factory/botStore';
-import { GuestWorkspaceStore, expectGuestWorkspaces, guestWorkspacesPath, setGuestWorkspaceStore } from '../../factory/guestWorkspaces';
+import { GuestWorkspaceStore, crossesGuestBoundary, expectGuestWorkspaces, guestWorkspacesPath, setGuestWorkspaceStore } from '../../factory/guestWorkspaces';
 import { WakeQueue, wakeQueuePath, setWakeQueue } from '../../factory/wakeQueue';
 import { FactorySettingsStore, factorySettingsPath, onFactorySettingsChanged, setFactorySettingsStore } from '../../factory/factorySettings';
 import { BotRuntime, BotSessionStore, botSessionsPath, setBotRuntime } from '../../factory/BotRuntime';
@@ -228,7 +228,11 @@ export function registerBotRpcHandlers(
     if (!l) return NOT_STARTED;
     const workspaceId = typeof params['workspaceId'] === 'string' ? params['workspaceId'] : undefined;
     const scope = caller.kind === 'bot' ? listScope(caller.botId) : undefined;
-    const bots = l.store.list(workspaceId ? { workspaceId } : {}).filter((b) => !scope || scope.has(b.id));
+    // A bot lists only its side of a guest workspace's boundary: inside one,
+    // its own workspace's bots; elsewhere, none of a guest workspace's.
+    const ownWs = caller.kind === 'bot' ? l.store.get(caller.botId)?.workspaceId ?? null : null;
+    const bots = l.store.list(workspaceId ? { workspaceId } : {}).filter((b) => (!scope || scope.has(b.id))
+      && (caller.kind !== 'bot' || (ownWs !== null && !crossesGuestBoundary(ownWs, b.workspaceId))));
     return {
       ok: true,
       bots: bots.map((bot) => ({ bot: pipeProfile(bot), status: statusFor(caller, l.runtime.status(bot.id)) })),

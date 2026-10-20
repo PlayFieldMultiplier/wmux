@@ -25,6 +25,7 @@ import { capBody, runningWakeThread, type FactoryRoomPorts, type RoomWriter } fr
 import { redactStoredSecrets } from './secretRedaction';
 import { GUEST_WAKES_QUEUED_PER_BOT, HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
 import { guestWorkspaceFlag } from './guestWorkspaces';
+import { enabledBotsIncludingGuest } from './botStore';
 import type { GuestProvenance } from './wakeTaint';
 
 export type GuestPostHandler = (payload: Record<string, unknown>) => Promise<GuestPostResult>;
@@ -84,7 +85,8 @@ function parsePayload(raw: Record<string, unknown>): ParsedPost | null {
 function conversationBots(ports: Partial<FactoryRoomPorts>, workspaceId: string, threadId: ThreadId): BotProfile[] | null {
   let enabled: BotProfile[] = [];
   try {
-    enabled = (ports.bots?.listEnabled() ?? []).filter((b) => b.enabled);
+    // The guest's own conversation, inside its guest workspace.
+    enabled = enabledBotsIncludingGuest(ports.bots).filter((b) => b.enabled);
   } catch {
     enabled = [];
   }

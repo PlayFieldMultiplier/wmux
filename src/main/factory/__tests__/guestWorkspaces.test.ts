@@ -31,7 +31,11 @@ beforeEach(() => {
   __resetGuestWorkspacesForTesting();
 });
 
-afterEach(() => {
+/** Stores whose writes run past their test: awaited before the folder goes. */
+const writing: Array<{ flush(): Promise<void> }> = [];
+
+afterEach(async () => {
+  for (const s of writing.splice(0)) await s.flush().catch(() => undefined);
   __resetGuestWorkspacesForTesting();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -140,6 +144,7 @@ describe('the HQ workspace', () => {
     await s.add('ws-g');
     const settings = new FactorySettingsStore(factorySettingsPath(dir));
     settings.load();
+    writing.push({ flush: () => settings.update({}).then(() => undefined) });
     await expect(settings.update({ hqWorkspaceId: 'ws-g' })).rejects.toThrow(HQ_NOT_GUEST_WORKSPACE);
     expect(settings.get().hqWorkspaceId).toBeNull();
     expect((await settings.update({ hqWorkspaceId: 'ws-a' })).hqWorkspaceId).toBe('ws-a');
@@ -148,7 +153,11 @@ describe('the HQ workspace', () => {
 
 describe('a bot in a guest workspace (BotStore)', () => {
   const guestWs = (ws: string) => ws === 'ws-g';
-  const make = () => new BotStore(botsFilePath(dir), { guestWorkspace: guestWs });
+  const make = () => {
+    const s = new BotStore(botsFilePath(dir), { guestWorkspace: guestWs });
+    writing.push(s);
+    return s;
+  };
   const repo = { repoKey: 'o/r', repoPath: '/tmp/r' };
 
   it('is created only as a lead-role bot with no repository on the gated engine', () => {
@@ -208,6 +217,7 @@ describe('a bot in a guest workspace (BotStore)', () => {
     if (!coord.ok) throw new Error('not made');
     return seed.flush().then(() => {
       const s = new BotStore(botsFilePath(dir), { guestWorkspace: () => 'unknown' });
+      writing.push(s);
       s.load();
       expect(s.get(coord.bot.id)?.enabled).toBe(true);
       expect(s.create({ workspaceId: 'ws-x', template: 'coordinator' }).ok).toBe(false);

@@ -60,7 +60,7 @@ import { ROOM_LIMITS, dmThreadBot, dmThreadId, isGuestSourcedCard, parseThreadId
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
-import { getBotDirectory, getBotStore } from './botStore';
+import { enabledBotsIncludingGuest, getBotDirectory, getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { onBotHook, type BotHookEvent } from './botHooks';
 import { normalizeRepoKey } from './repoWatch';
@@ -443,7 +443,9 @@ export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneD
   if (!writer || !ports.wakes) return { ok: false, code: 'busy' };
   let enabledBots: BotProfile[] = [];
   try {
-    enabledBots = ports.bots?.listEnabled() ?? [];
+    // The owner's phone reaches a guest workspace's bots too;
+    // postHumanMessage holds the boundary.
+    enabledBots = enabledBotsIncludingGuest(ports.bots);
   } catch {
     enabledBots = [];
   }

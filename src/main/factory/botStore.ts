@@ -97,10 +97,21 @@ const EFFORTS: ReadonlySet<string> = new Set(CLAUDE_EFFORT_LEVELS);
 /** The refusal for an engine sanitizeBotEngine rejects, with both model rules. */
 const ENGINE_MALFORMED = `engine is malformed (a claude-sdk model must be one model id of up to ${BOT_BRAIN_MODEL_MAX} characters: a letter or digit first, then letters, digits and . _ : / @ -, optionally ending in a [variant], so a Bedrock or Vertex id or a model ARN passes; a claude-pty model: a letter or digit first, then letters, digits and . _ : -, up to ${ROLE_BINDING_MODEL_MAX})`;
 
-/** What a store answers to the trigger engine (§14). */
+/** What a store answers to the trigger engine (§14). `listEnabled` leaves
+ *  out the bots of guest workspaces (and of a workspace that cannot be
+ *  told): a reader that is to see them asks `listEnabledIncludingGuest`,
+ *  and is listed with its reason in guestEnumerations.test.ts. */
 export interface BotDirectoryApi {
   listEnabled(): BotProfile[];
+  listEnabledIncludingGuest?(): BotProfile[];
   get(botId: string): BotProfile | null;
+}
+
+/** A directory's enabled bots, guest workspaces' included (a directory
+ *  without the method lists them all in `listEnabled`). */
+export function enabledBotsIncludingGuest(dir: Pick<BotDirectoryApi, 'listEnabled' | 'listEnabledIncludingGuest'> | null | undefined): BotProfile[] {
+  if (!dir) return [];
+  return dir.listEnabledIncludingGuest ? dir.listEnabledIncludingGuest() : dir.listEnabled();
 }
 
 // ── validation ──────────────────────────────────────────────────────────────
@@ -585,7 +596,15 @@ export class BotStore implements BotDirectoryApi {
       .map(copyProfile);
   }
 
+  /** The enabled bots outside guest workspaces: closed by default, so a new
+   *  reader never reaches across a guest workspace's boundary by accident. */
   listEnabled(): BotProfile[] {
+    return [...this.bots.values()].filter((b) => b.enabled && this.isGuestWs(b.workspaceId) === false).map(copyProfile);
+  }
+
+  /** Every enabled bot, guest workspaces' included: for the readers that
+   *  run inside one (or are the owner's) and apply the boundary themselves. */
+  listEnabledIncludingGuest(): BotProfile[] {
     return [...this.bots.values()].filter((b) => b.enabled).map(copyProfile);
   }
 

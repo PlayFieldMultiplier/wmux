@@ -61,7 +61,9 @@ export interface WakeSinkApi {
 }
 
 export interface BotDirectoryApi {
+  /** Guest workspaces' bots left out (botStore.ts). */
   listEnabled(): BotProfile[];
+  listEnabledIncludingGuest?(): BotProfile[];
   get(botId: string): BotProfile | null;
 }
 

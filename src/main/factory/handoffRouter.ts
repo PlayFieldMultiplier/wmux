@@ -100,6 +100,7 @@ import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, parseThread
 import { humanCardIdOfRun } from './humanMessage';
 import { untrackedGuest, type GuestProvenance, type TaintMark } from './wakeTaint';
 import { crossesGuestBoundary } from './guestWorkspaces';
+import { enabledBotsIncludingGuest } from './botStore';
 import {
   DECISION_LIMITS,
   clearThreadDecision,
@@ -1232,7 +1233,8 @@ export class HandoffRouter {
   private leadOf(bots: NonNullable<ReturnType<HandoffRouterOptions['ports']>['bots']>, workspaceId: string, senderId: string): BotProfile | null {
     let enabled: BotProfile[] = [];
     try {
-      enabled = bots.listEnabled();
+      // One workspace's own bots, a guest workspace's too.
+      enabled = enabledBotsIncludingGuest(bots);
     } catch {
       return null;
     }

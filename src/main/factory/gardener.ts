@@ -36,6 +36,7 @@ import type { BotDirectoryApi } from './botStore';
 import { factsSince, hqBot, parseResolution, type ResolvedCardEvent } from './morningReport';
 import { fenceData } from './wakePrompt';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
+import { crossesGuestBoundary, guestSide } from './guestWorkspaces';
 
 export const GARDENER_THRESHOLD = 3;
 export const GARDENER_WINDOW_MS = 7 * 24 * 3_600_000;
@@ -89,6 +90,9 @@ export function correctionGroups(facts: readonly Fact[], bots: BotDirectoryApi |
     } catch {
       /* no workspace */
     }
+    // A guest workspace's corrections never leave it (guestWorkspaces.ts):
+    // neither its words nor its patterns reach the Coordinator.
+    if (guestSide(ws)) continue;
     if (ws) g.ws.set(ws, (g.ws.get(ws) ?? 0) + 1);
     groups.set(key, g);
   }
@@ -218,11 +222,11 @@ export class Gardener {
   maintainerFor(record: ProposalRecord | undefined, hqWorkspaceId: string | null): BotProfile | null {
     let all: BotProfile[] = [];
     try {
-      all = (this.ports.bots()?.listEnabled() ?? []).filter((b) => b.role === 'maintainer').sort((a, b) => a.createdAt - b.createdAt);
+      all = (this.ports.bots()?.listEnabled() ?? []).filter((b) => b.role === 'maintainer' && !guestSide(b.workspaceId)).sort((a, b) => a.createdAt - b.createdAt);
     } catch {
       all = [];
     }
-    for (const ws of [...(record?.workspaceIds ?? []), ...(hqWorkspaceId ? [hqWorkspaceId] : [])]) {
+    for (const ws of [...(record?.workspaceIds ?? []), ...(hqWorkspaceId ? [hqWorkspaceId] : [])].filter((w) => !guestSide(w))) {
       const m = all.find((b) => b.workspaceId === ws);
       if (m) return m;
     }
@@ -245,7 +249,8 @@ export class Gardener {
     } catch {
       author = null;
     }
-    if (!author) return 'ignored';
+    // The answer wakes a bot of the room it was given in only.
+    if (!author || crossesGuestBoundary(ev.workspaceId, author.workspaceId)) return 'ignored';
     const isGardener = card.threadId.startsWith(GARDENER_THREAD_PREFIX);
     // A gardener thread is the Coordinator's; any other bot's proposal answer
     // wakes its author like the Coordinator's does.
