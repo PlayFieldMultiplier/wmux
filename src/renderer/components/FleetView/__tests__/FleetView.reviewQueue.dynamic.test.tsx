@@ -295,6 +295,22 @@ describe('FleetView — Ready to review', () => {
     expect(useStore.getState().toasts.some((toast) => toast.message === 'Task closed. Its folder was kept at /wt/t1.')).toBe(true);
   });
 
+  // The agent's process is known gone: the command its pane runs now is
+  // something else, and the keep would end it.
+  it('Close and keep folder closes nothing when the agent pane runs a command after its agent exited', async () => {
+    close.mockResolvedValueOnce({ ok: false, reason: 'error', error: 'could not verify all processes exited' });
+    mount();
+    await settle();
+    await closeFromRow();
+    const offered = keepFolderToast();
+    expect(offered).toBeDefined();
+    act(() => { useStore.setState({ commandRunningByPtyId: { 'pty-1': true }, agentAliveByPtyId: { 'pty-1': false } } as never); });
+    await act(async () => { offered!.action!.onClick(); });
+    await settle();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(useStore.getState().workspaces.map((w) => w.id)).toContain('ws-t1');
+  });
+
   // A command started in the task since the refusal: the action offered
   // then closes nothing, so it cannot end that work.
   it('a Close and keep folder offered earlier closes nothing once a command runs in the task', async () => {
