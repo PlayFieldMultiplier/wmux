@@ -36,6 +36,7 @@ import { startFactIngest, type FactIngest, type FactIngestPorts } from '../../fa
 import { eventBus } from '../../events/EventBus';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { onPrVerdictRecorded } from '../../github/prVerdictStore';
+import { factVisibleToBot } from '../../factory/wakeTaint';
 
 const ID_MAX = 256;
 
@@ -75,6 +76,7 @@ export async function handleFactPoll(
   ctx: RpcContext | undefined,
   repoOfBot: (botId: string) => string | null = botRepoKey,
   readsEverywhere: (botId: string) => boolean = botReadsEverywhere,
+  visibleToBot: (botId: string) => (f: Fact) => boolean = factVisibleToBot,
 ): Promise<FactPollResult | FactoryRefusal> {
   if (!ctx?.bot && ctx?.operator !== true) return refuse('forbidden', 'fact.poll is for bots and the operator');
   if (!log) return refuse('unavailable', 'the fact log is not running');
@@ -93,13 +95,16 @@ export async function handleFactPoll(
   // Read from the live profile, and again after a blocking wait: a bot no
   // longer a Coordinator when the wait ends reads its own workspace only.
   let everything = ctx.operator === true || (!!ctx.bot && readsEverywhere(ctx.bot.botId));
+  // A bot outside a guest-sourced wake reads no fact that may carry a
+  // guest's words; judged again after a blocking wait, like the scope.
+  let visible = ctx.bot ? visibleToBot(ctx.bot.botId) : (): boolean => true;
   const ownWorkspace = ctx.bot?.workspaceId;
   const ownRepo = ctx.bot ? repoOfBot(ctx.bot.botId) : null;
   const match = (f: Fact): boolean => (
     everything
     || (!!ownWorkspace && f.workspaceId === ownWorkspace)
     || (ownRepo !== null && f.repoKey !== undefined && normalizeRepoKey(f.repoKey) === ownRepo)
-  ) && (!kinds || kinds.has(f.kind));
+  ) && (!kinds || kinds.has(f.kind)) && visible(f);
 
   let r = log.readWhere(since, match, limit);
   if (r.facts.length === 0 && blockMs > 0 && !ctx.signal?.aborted) {
@@ -118,7 +123,10 @@ export async function handleFactPoll(
         if (f.seq > after && match(f)) done();
       });
     });
-    if (ctx.bot) everything = readsEverywhere(ctx.bot.botId);
+    if (ctx.bot) {
+      everything = readsEverywhere(ctx.bot.botId);
+      visible = visibleToBot(ctx.bot.botId);
+    }
     r = log.readWhere(after, match, limit);
   }
   return { ok: true, facts: r.facts, nextSeq: r.lastSeq };

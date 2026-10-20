@@ -426,18 +426,20 @@ export class WakeTaint {
 
   /** A bot is sending a handoff now, inside its turn: mark it from that
    *  turn's wake, and as tainted and as guest-sourced as any handoff it
-   *  answers (`answers`). A handoff already marked keeps its mark. Returns
-   *  the mark, or null when a guest mark could not be written (the send is
-   *  then refused). Never throws. */
-  markSent(handoffId: string, senderBotId: string, answers: readonly string[] = []): TaintMark | null {
+   *  answers (`answers`); guest whatever the turn is when `guestSource`
+   *  says it carries a guest-sourced card's words (a room mention). A
+   *  handoff already marked keeps its mark. Returns the mark, or null when
+   *  a guest mark could not be written (the send is then refused). Never
+   *  throws. */
+  markSent(handoffId: string, senderBotId: string, answers: readonly string[] = [], guestSource = false): TaintMark | null {
     const had = this.marks.get(handoffId);
     if (had !== undefined) return had;
     let tainted = true;
     let guest = true;
     try {
       const running = this.ports.runningWake(senderBotId);
-      tainted = !running || this.alwaysTainted(senderBotId) || this.wakeTainted(running.item) || answers.some((id) => this.handoffTainted(id));
-      guest = !running || this.wakeGuest(running.item) !== false || answers.some((id) => this.handoffGuest(id) !== false);
+      tainted = guestSource || !running || this.alwaysTainted(senderBotId) || this.wakeTainted(running.item) || answers.some((id) => this.handoffTainted(id));
+      guest = guestSource || !running || this.wakeGuest(running.item) !== false || answers.some((id) => this.handoffGuest(id) !== false);
     } catch {
       tainted = true;
       guest = true;
@@ -560,6 +562,21 @@ export function guestOfRunningWake(botId: string): GuestProvenance {
   } catch {
     return 'unknown';
   }
+}
+
+/** Which facts a bot's own reads (fact.poll) show: every fact in a
+ *  guest-sourced wake; in any other, only facts known clean of a guest's
+ *  words (WakeTaint.factGuest). Read again for each read. */
+export function factVisibleToBot(botId: string): (f: Fact) => boolean {
+  const c = current;
+  if (!c || guestOfRunningWake(botId) === true) return () => true;
+  return (f) => {
+    try {
+      return c.taint.factGuest(f) === false;
+    } catch {
+      return false;
+    }
+  };
 }
 
 /** Why work wake `wakeId` asks for may not start or be saved, or null: the

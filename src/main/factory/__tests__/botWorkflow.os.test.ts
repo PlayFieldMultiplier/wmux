@@ -482,6 +482,18 @@ describe('durable sequential workflows', () => {
     expect(await h.call(WORKFLOW_RPC.create, input)).toMatchObject({ ok: true });
   });
 
+  it('a workflow is judged again inside its write: one whose wake turned unknown, or ended, while queued is not saved', async () => {
+    const store = open(); const h = harness(store);
+    const unknown = h.call(WORKFLOW_RPC.create, input);
+    guestSourced = 'unknown';
+    expect(await unknown).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION', message: expect.stringContaining('external guest') });
+    guestSourced = false;
+    const ended = h.call(WORKFLOW_RPC.create, input);
+    h.ports.turn = () => ({ wakeId: 'two' });
+    expect(await ended).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(store.list(owner.botId, owner.workspaceId)).toHaveLength(0);
+  });
+
   it('serializes a stop between an earlier in-flight creation and later new work, scoped to its bot', async () => {
     const store = open();
     const other = await store.create({ ...owner, botId: 'bot-other' }, input);

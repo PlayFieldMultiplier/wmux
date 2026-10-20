@@ -219,7 +219,7 @@ export interface HandoffWakeSummary {
 /** What the router asks of the taint tracker (wakeTaint.ts). A mark of
  *  null is a guest mark that did not reach the file: the hop is refused. */
 export interface HandoffTaintPort {
-  markSent(handoffId: string, senderBotId: string, answers?: readonly string[]): TaintMark | null;
+  markSent(handoffId: string, senderBotId: string, answers?: readonly string[], guestSource?: boolean): TaintMark | null;
   markForward(handoffId: string, from: { senderBotId?: string; handoffIds: readonly string[] }): TaintMark | null;
   /** The guest provenance of a handoff (WakeTaint.handoffGuest). */
   handoffGuest?(handoffId: string): GuestProvenance;
@@ -381,6 +381,8 @@ interface RouteSpec {
   toBotId?: string;
   clientHandoffId?: string;
   next?: string[];
+  /** It carries a guest-sourced card's words (a room mention). */
+  guestSource?: true;
 }
 
 /** The idempotency key of the message a card's mention sends one bot. */
@@ -781,7 +783,7 @@ export class HandoffRouter {
    * across a retried turn or a restart. The caller has dropped the poster
    * itself; an unknown or disabled bot is refused `no_addressee`.
    */
-  mention(sender: BotBinding, card: Pick<RoomCard, 'id' | 'threadId' | 'title' | 'body' | 'refs'>, botIds: readonly string[]): Array<{ botId: string; result: HandoffResult }> {
+  mention(sender: BotBinding, card: Pick<RoomCard, 'id' | 'threadId' | 'title' | 'body' | 'refs' | 'origin'>, botIds: readonly string[]): Array<{ botId: string; result: HandoffResult }> {
     const refs = sanitizeRefs({ pr: card.refs?.pr, issue: card.refs?.issue, headSha: card.refs?.headSha, taskId: card.refs?.taskId, url: card.refs?.url, messageId: card.id });
     // The owner asked the poster in its own 1:1 and it asked around in
     // General: the bots of its room answer in that 1:1, where the owner is.
@@ -799,6 +801,8 @@ export class HandoffRouter {
         namedThread: askedInDm && wakeThread && safeGet(ports.bots, botId)?.workspaceId === sender.workspaceId ? wakeThread : card.threadId,
         toBotId: botId,
         clientHandoffId: mentionKey(card.id, botId),
+        // The card's own provenance, not the turn running when it is routed.
+        ...(card.origin === 'guest' ? { guestSource: true as const } : {}),
       }),
     }));
   }
@@ -857,6 +861,9 @@ export class HandoffRouter {
       },
       status: 'queued',
       ...(spec.clientHandoffId ? { clientHandoffId: spec.clientHandoffId } : {}),
+      // Said on a refused record too: a refusal wakes its sender
+      // (markSent below sets it for a sent one).
+      guestSourced: spec.guestSource === true || this.runningGuest(sender.botId) !== false || (!!parent && this.guestOf(parent)),
       createdAt: this.now(),
       updatedAt: this.now(),
     };
@@ -924,7 +931,7 @@ export class HandoffRouter {
     // Marked now, in the sender's turn, from the wake it is running; a reply
     // is also as tainted (and as guest-sourced) as the handoff it answers.
     // A guest mark is on disk before the hop is, or the hop is not sent.
-    const mark = this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : []);
+    const mark = this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : [], spec.guestSource === true);
     if (mark === null) return { ok: false, code: 'write_failed', message: 'the handoff could not be recorded' };
     // Said on the record too, so it outlives the mark.
     const sending: Handoff = mark === undefined ? draft : { ...draft, guestSourced: mark === 'guest' };
@@ -1456,6 +1463,8 @@ export class HandoffRouter {
     // The default key is taken now, in call order, like a send's.
     const asking = runningWake(ports, sender.botId);
     const clientHandoffId = params?.clientHandoffId ?? wakeOrdinals.next(asking, 'handoff');
+    // Read now too: the question may be stored after this wake has ended.
+    const askingGuest = this.runningGuest(sender.botId) !== false;
     return this.serial(async () => {
       const title = oneLine(params?.title, HANDOFF_STORE_LIMITS.TITLE_MAX);
       if (!title) return invalid('title is required');
@@ -1502,7 +1511,7 @@ export class HandoffRouter {
         ...(asking?.ownerCardId ? { ownerCardId: asking.ownerCardId } : {}),
         ...(forHop ? { forHop } : {}),
         // Always said: an answer to it inherits it (wakeTaint.ts).
-        guestSourced: this.runningGuest(sender.botId) !== false,
+        guestSourced: askingGuest,
         createdAt: this.now(),
         updatedAt: this.now(),
       };

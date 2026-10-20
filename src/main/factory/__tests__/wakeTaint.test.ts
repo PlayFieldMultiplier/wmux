@@ -8,7 +8,7 @@ import type { Fact } from '../../../shared/facts';
 import type { Handoff } from '../../../shared/handoff';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WakeItem } from '../../../shared/wake';
-import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, factVisibleToBot, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-taint-')); });
@@ -335,6 +335,31 @@ describe('guest provenance', () => {
     expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-guest' }))).toBe(true);
     expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-clean' }))).toBe(false);
     expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-old' }))).toBe(true);
+  });
+
+  it('a mention carrying a guest-sourced card is guest whatever turn routes it; a refused clean send wakes its sender clean', () => {
+    const clean = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
+    const refused = { ...handoff('h-refused', fromBot), status: 'refused' as const, guestSourced: false };
+    const t = make({ runningWake: () => clean }, [], [handoff('h-m', fromBot), refused]);
+    expect(t.markSent('h-m', 'bot-a', [], true)).toBe('guest');
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-m' }))).toBe(true);
+    const withFact = make({ runningWake: () => clean }, [{ ...fact('f-r', 'handoff.refused', { handoffId: 'h-refused' }) }], [refused]);
+    expect(withFact.wakeGuest(wake({ kind: 'facts', factIds: ['f-r'], trigger: { kind: 'fact' } as never }))).toBe(false);
+  });
+
+  it('a bot\'s fact reads show only facts known clean, except in a guest-sourced wake', () => {
+    const guestHop = { ...handoff('h-g', fromBot), guestSourced: true };
+    const cleanHop = { ...handoff('h-c', fromBot), guestSourced: false };
+    const facts = [fact('f-g', 'handoff.received', { handoffId: 'h-g' }), fact('f-c', 'handoff.received', { handoffId: 'h-c' }), fact('f-x', 'handoff.received', { handoffId: 'h-gone' }), fact('f-pr', 'pr.opened')];
+    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
+    const t = make({ runningWake: () => running }, facts, [guestHop, cleanHop]);
+    setWakeTaint(t, () => running);
+    expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-c', 'f-pr']);
+    running = { item: wake(guestReason), startedAt: 1 };
+    expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-g', 'f-c', 'f-x', 'f-pr']);
+    // No running wake: not known to be a guest one.
+    running = null;
+    expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-c', 'f-pr']);
   });
 
   it('a guest mark that cannot be written fails the send', () => {

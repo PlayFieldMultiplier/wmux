@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { WakeItem } from '../../shared/wake';
 import { registerFactoryRpcModule } from './factoryHost';
 import { TAINT_FILENAME, WakeTaint, setWakeTaint } from './wakeTaint';
-import { setGuestTurnProbe } from './roomWriter';
+import { setFactGuestProbe, setGuestTurnProbe } from './roomWriter';
 import { getBotWorkflowStore } from './botWorkflow';
 
 registerFactoryRpcModule('wakeTaint', (_router, deps) => {
@@ -46,6 +46,9 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
         const running = runningWake(botId);
         return running !== null && taint.wakeGuest(running.item) !== false;
       });
+      // A fact's system cards (a handoff's title or answer, a notice) are
+      // stamped the same way, from the fact's own record.
+      setFactGuestProbe((f) => taint.factGuest(f) !== false);
       const log = getFactLog();
       off = log ? log.subscribe((f) => taint.onFact(f)) : null;
     },
@@ -53,6 +56,7 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
       off?.();
       off = null;
       setGuestTurnProbe(null);
+      setFactGuestProbe(null);
       setWakeTaint(null);
     },
   };

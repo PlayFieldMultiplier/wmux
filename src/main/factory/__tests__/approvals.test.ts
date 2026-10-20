@@ -780,6 +780,20 @@ describe('the bots learn what became of a request (A4)', () => {
     expect(r.notices[0]).toMatchObject({ key: `approval:${req.requestId}:denied`, topic: 'approval.decided', threadId: 'general', title: 'The owner denied: Merge PR #1.' });
   });
 
+  it('a decision on a guest-sourced request is told in a guest-sourced notice; a clean one in a clean notice', async () => {
+    const r = noticeRig();
+    const clean = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: null, tainted: false, guest: true });
+    const fromGuest = await r.ask(DEV, { action: 'merge', prNumber: 2, reason: 'y' });
+    r.svc.decide({ requestId: clean.requestId, decision: 'deny' }, 'desktop');
+    r.svc.decide({ requestId: fromGuest.requestId, decision: 'deny' }, 'desktop');
+    const of = (id: string) => r.notices.find((n) => n.key === `approval:${id}:denied`);
+    expect(of(clean.requestId)?.guest).toBeUndefined();
+    expect(of(fromGuest.requestId)).toMatchObject({ guest: true, tainted: true });
+    // What the owner's views read does not change.
+    expect(r.svc.listForOperator(WS).find((v) => v.requestId === fromGuest.requestId)).not.toHaveProperty('guest');
+  });
+
   it('a refused merge is told in plain words; the view carries the plain text', async () => {
     const r = noticeRig();
     const req = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });

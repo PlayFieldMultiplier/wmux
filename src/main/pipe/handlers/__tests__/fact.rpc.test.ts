@@ -72,6 +72,25 @@ describe('fact.poll', () => {
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(LEAD), () => null))).toEqual([]);
   });
 
+  it('a bot reads no fact its guest view hides; the operator reads all; judged again after a blocking wait', async () => {
+    log.append(draft('t-clean', 'ws-a'));
+    log.append(draft('t-guest', 'ws-a'));
+    const ids = (r: unknown) => (r as { facts: { ref?: { taskId?: string } }[] }).facts.map((f) => f.ref?.taskId);
+    let guestWake = false;
+    const view = () => (guestWake ? () => true : (f: { ref?: { taskId?: string } }) => !f.ref?.taskId?.startsWith('t-guest'));
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(LEAD), () => null, () => false, view))).toEqual(['t-clean']);
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, OPERATOR, () => null, () => false, view))).toEqual(['t-clean', 't-guest']);
+    guestWake = true;
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(LEAD), () => null, () => false, view))).toEqual(['t-clean', 't-guest']);
+    // Waiting in a guest-sourced wake that has ended by the time the fact comes.
+    const waiting = handleFactPoll(log, { blockMs: 5_000 }, bot(LEAD), () => null, () => false, view);
+    guestWake = false;
+    expect(log.append(draft('t-guest-2', 'ws-a'))).not.toBeNull();
+    const started = Date.now();
+    expect(ids(await waiting)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
   it('a workspace param cannot widen a bot read', async () => {
     log.append(draft('t2', 'ws-b'));
     const r = await handleFactPoll(log, { sinceSeq: 0, workspaceId: 'ws-b' }, bot(LEAD));

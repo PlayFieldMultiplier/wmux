@@ -98,6 +98,7 @@ import { laneRefusalCodes, laneRefusalLine } from './laneRefusalText';
 import { wakeReplyTo, type RoomWriter } from './roomWriter';
 import type { BotNoticeInput } from './botNotices';
 import type { BotDirectoryApi } from './triggerEngine';
+import { guestOfRecord } from './wakeTaint';
 
 export const APPROVALS_FILENAME = 'approvals.json';
 
@@ -132,6 +133,10 @@ export interface StoredApproval extends ApprovalRequest {
   effectId?: string;
   /** Why a covering rule did not approve it (shown on the card). */
   ruleSkipped?: string;
+  /** Its wake was not known clean of a guest's words; the bots told of its
+   *  decision are told in a guest-sourced notice. Absent (a request stored
+   *  before it was recorded): as its taint says. */
+  guest?: boolean;
 }
 
 /** A request as the main window and the bot see it (no checkout path). */
@@ -141,6 +146,7 @@ export function approvalView(r: StoredApproval): ApprovalView {
   const view: Partial<StoredApproval> = { ...r };
   delete view.repoPath;
   delete view.clientRequestId;
+  delete view.guest;
   // What the owner reads: sentences, never the raw codes.
   delete view.refusalText;
   delete view.ruleSkippedText;
@@ -607,6 +613,7 @@ export class ApprovalService {
       // As the wake reads now, after the waits, and never cleaner than when
       // it asked.
       tainted: wake.tainted || still.tainted || guestSourcedWake(wake) || guestSourcedWake(still),
+      guest: guestSourcedWake(wake) || guestSourcedWake(still),
       state: 'pending',
       clientRequestId,
       createdAt: at,
@@ -654,6 +661,7 @@ export class ApprovalService {
       threadId: this.conversationThread(bot.botId, wake),
       reason,
       tainted: wake.tainted || guestSourcedWake(wake),
+      guest: guestSourcedWake(wake),
       state: 'pending',
       clientRequestId: `skill:${input.name}:${input.hash}`,
       createdAt: at,
@@ -1260,10 +1268,14 @@ export class ApprovalService {
   private tellDecided(r: StoredApproval, title: string, body?: string): void {
     const cardSeq = r.cardId ? this.ports.rooms()?.get(r.workspaceId, r.cardId)?.seq ?? null : null;
     const bots = new Set([r.botId, ...this.speakersAfter(r.workspaceId, r.threadId, cardSeq)]);
+    // As guest-sourced as the request (an older one without the field: as
+    // its taint says).
+    const guest = guestOfRecord(r.guest, r.tainted) !== false;
     for (const botId of [...bots].slice(0, APPROVAL_LIMITS.NOTIFY_MAX)) {
       this.notice({
         botId, workspaceId: r.workspaceId, key: `approval:${r.requestId}:${r.state}`, topic: 'approval.decided',
         title, ...(body ? { body } : {}), threadId: r.threadId, repoKey: r.repoKey,
+        ...(guest ? { guest: true, tainted: true } : {}),
         ...(r.prNumber !== undefined ? { pr: r.prNumber } : {}),
       });
     }

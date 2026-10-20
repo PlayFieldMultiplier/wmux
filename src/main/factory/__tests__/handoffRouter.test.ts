@@ -653,6 +653,19 @@ describe('ask_person', () => {
     expect(answered?.guestSourced).toBe(true);
   });
 
+  it('a question keeps the provenance of the wake that asked it when it is stored after that wake', async () => {
+    const lead = bot('ws1', 'lead');
+    const guestBots = new Set<string>([lead.id]);
+    const taint: HandoffTaintPort = { markSent: () => false, markForward: () => false, runningGuest: (botId) => guestBots.has(botId), handoffGuest: () => false };
+    const h = await harness([lead], { taint });
+    const asked = h.router.askPerson(binding(lead), { title: 'later', body: '' });
+    // A clean wake is running by the time the queued question is stored.
+    guestBots.clear();
+    const r = await asked;
+    if (!r.ok) throw new Error('ask failed');
+    expect(h.router.get(r.handoffId)?.guestSourced).toBe(true);
+  });
+
   it('a dismissed question answers the bot that it was closed without a choice', async () => {
     const lead = bot('ws1', 'lead');
     const h = await harness([lead]);
@@ -887,6 +900,36 @@ describe('messages and room mentions (group rooms)', () => {
     const later = await harness([a, b, c]);
     expect(later.router.mention(binding(a), card('c-one'), [b.id, c.id]).every((o) => o.result.ok && o.result.duplicate)).toBe(true);
     expect(later.wakes).toEqual([]);
+  });
+
+  it('a mention keeps its card\'s guest provenance, whatever turn routes it', async () => {
+    const a = bot('ws1', 'lead');
+    const b = bot('ws1', 'triage');
+    const sent: Array<[string, boolean | undefined]> = [];
+    const taint: HandoffTaintPort = {
+      markSent: (id, _sender, _answers, guestSource) => { sent.push([id, guestSource]); return guestSource ? 'guest' : false; },
+      markForward: () => false, runningGuest: () => false, handoffGuest: () => false,
+    };
+    const h = await harness([a, b], { taint });
+    const [guestOut] = h.router.mention(binding(a), card('c-guest', { origin: 'guest' }), [b.id]);
+    const [cleanOut] = h.router.mention(binding(a), card('c-clean'), [b.id]);
+    if (!guestOut.result.ok || !cleanOut.result.ok) throw new Error('mentions failed');
+    expect(h.router.get(guestOut.result.handoffId)?.guestSourced).toBe(true);
+    expect(h.router.get(cleanOut.result.handoffId)?.guestSourced).toBe(false);
+    expect(sent).toEqual([[guestOut.result.handoffId, true], [cleanOut.result.handoffId, false]]);
+  });
+
+  it('a refused send says its provenance on the record, so the refusal does not wake its sender as unknown', async () => {
+    const a = bot('ws1', 'triage');
+    let guest = false;
+    const taint: HandoffTaintPort = { markSent: () => false, markForward: () => false, runningGuest: () => guest, handoffGuest: () => false };
+    const h = await harness([a], { taint });
+    const clean = h.router.send(binding(a), { kind: 'dispatch', toWorkspaceId: 'ws9', title: 'x', body: '' });
+    guest = true;
+    const fromGuest = h.router.send(binding(a), { kind: 'dispatch', toWorkspaceId: 'ws9', title: 'y', body: '' });
+    if (clean.ok || fromGuest.ok) throw new Error('expected refusals');
+    expect(h.router.get(clean.handoffId!)).toMatchObject({ status: 'refused', guestSourced: false });
+    expect(h.router.get(fromGuest.handoffId!)).toMatchObject({ status: 'refused', guestSourced: true });
   });
 
   it('a broadcast in General from a wake the owner started in the poster\'s 1:1 wakes its room\'s bots in that 1:1', async () => {

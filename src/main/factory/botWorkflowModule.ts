@@ -71,8 +71,11 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
     if (p.guestSourced(bot.id) !== false) return refuse('FAILED_PRECONDITION', `workflow.create: ${GUEST_TURN_STARTS_NO_WORKERS}`);
     if (!validateWorkflowInput(params)) return refuse('INVALID_ARGUMENT', 'provide a stable clientWorkflowId, title and one to eight titled step prompts');
     try {
+      // Judged again in the write's own turn: the same wake, still clean.
+      const refusal = (): string | null => p.turn(bot.id)?.wakeId !== turn.wakeId ? 'the wake that asked for it has ended'
+        : p.guestSourced(bot.id) !== false ? `workflow.create: ${GUEST_TURN_STARTS_NO_WORKERS}` : null;
       const workflow = await p.store.create({ botId: bot.id, workspaceId: bot.workspaceId, repoKey: bot.repo.repoKey,
-        threadId: turn.threadId ?? GENERAL_THREAD, tainted: p.tainted(bot.id) !== false, guest: false }, params);
+        threadId: turn.threadId ?? GENERAL_THREAD, tainted: p.tainted(bot.id) !== false, guest: false }, params, refusal);
       await wakeReadyWorkflows(p, [workflow]);
       return { ok: true, workflow: workflowView(p.store.get(workflow.id, bot.id, bot.workspaceId) ?? workflow) };
     } catch (error) { return refuse('FAILED_PRECONDITION', String(error)); }

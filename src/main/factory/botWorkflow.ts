@@ -139,11 +139,15 @@ export class BotWorkflowStore {
     });
   }
 
-  create(owner: Pick<BotWorkflow, 'botId' | 'workspaceId' | 'repoKey' | 'threadId' | 'tainted' | 'guest'>, input: WorkflowCreateParams): Promise<BotWorkflow> {
+  /** `refusal`, when given, is asked inside the serialized write, right
+   *  before anything is stored; a reason refuses the create with it. */
+  create(owner: Pick<BotWorkflow, 'botId' | 'workspaceId' | 'repoKey' | 'threadId' | 'tainted' | 'guest'>, input: WorkflowCreateParams, refusal?: () => string | null): Promise<BotWorkflow> {
     if (!validateWorkflowInput(input)) return Promise.reject(new Error('invalid workflow definition'));
     input = redactStoredSecretsDeep({ clientWorkflowId: input.clientWorkflowId, title: input.title, steps: input.steps.map(({ title, prompt }) => ({ title, prompt })) });
     if (!validateWorkflowInput(input)) return Promise.reject(new Error('redacted workflow definition exceeds its limits'));
     return this.update((records) => {
+      const refused = refusal?.() ?? null;
+      if (refused) throw new Error(refused);
       const id = `wf-${createHash('sha256').update(`${owner.botId}\0${owner.workspaceId}\0${input.clientWorkflowId}`).digest('hex').slice(0, 24)}`;
       const existing = records.find((w) => w.id === id);
       if (existing) {

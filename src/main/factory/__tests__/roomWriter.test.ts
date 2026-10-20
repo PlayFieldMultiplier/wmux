@@ -12,6 +12,7 @@ import {
   factRooms,
   parseCardLine,
   sanitizeRefs,
+  setFactGuestProbe,
   systemCardForFact,
   writeFactCards,
   formatHeldUntil,
@@ -339,6 +340,25 @@ describe('facts → system cards', () => {
     writeFactCards(w, fact('handoff.received', { workspaceId: 'ws2', ref: { handoffId: 'h-9' }, payload: { handoffKind: 'dispatch', title: 'x', threadId: 'handoff:h-9', toWorkspaceId: 'ws2', fromWorkspaceId: 'hq' } }), bots);
     expect(w.read('ws2').cards).toHaveLength(1);
     expect(w.read('hq').cards).toHaveLength(1);
+  });
+
+  it('the cards of a fact not known clean of a guest\'s words are guest-sourced: kept out of a clean read, across a reload', () => {
+    const w = writer();
+    setFactGuestProbe((f) => f.ref?.handoffId === 'h-guest');
+    try {
+      const payload = { handoffKind: 'answer', title: 'GUEST-TITLE', answer: 'GUEST-ANSWER', threadId: 'general', toWorkspaceId: 'ws1' };
+      writeFactCards(w, fact('handoff.received', { workspaceId: 'ws1', ref: { handoffId: 'h-guest' }, payload }), bots);
+      writeFactCards(w, fact('handoff.received', { workspaceId: 'ws1', ref: { handoffId: 'h-clean' }, payload: { ...payload, title: 'clean', answer: 'fine' } }), bots);
+    } finally {
+      setFactGuestProbe(null);
+    }
+    expect(w.read('ws1', { guests: true }).cards.map((c) => [c.title.includes('GUEST-TITLE'), c.origin])).toEqual([[true, 'guest'], [false, undefined]]);
+    const clean = JSON.stringify(w.read('ws1').cards);
+    expect(clean).not.toContain('GUEST-');
+    expect(clean).toContain('fine');
+    const reloaded = writer();
+    expect(JSON.stringify(reloaded.read('ws1').cards)).not.toContain('GUEST-');
+    expect(reloaded.read('ws1', { guests: true }).cards[0]?.origin).toBe('guest');
   });
 
   it('a delivered room mention writes no line; a plain message does, and a refused mention writes a refusal card', () => {

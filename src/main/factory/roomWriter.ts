@@ -253,6 +253,26 @@ export function isGuestSourcedTurn(botId: string): boolean {
   return guestSourcedTurn({ kind: 'bot', workspaceId: '', botId });
 }
 
+/** Whether a fact is not known clean of a guest's words (wakeTaint.ts
+ *  factGuest); set by the taint module. Its system cards carry
+ *  `origin: 'guest'`. */
+let factGuestProbe: ((fact: Fact) => boolean) | null = null;
+
+export function setFactGuestProbe(probe: ((fact: Fact) => boolean) | null): void {
+  factGuestProbe = probe;
+}
+
+/** Whether a fact's cards are guest-sourced, as the probe says (false
+ *  without one; true when it throws). */
+function guestSourcedFact(fact: Fact): boolean {
+  if (!factGuestProbe) return false;
+  try {
+    return factGuestProbe(fact) === true;
+  } catch {
+    return true;
+  }
+}
+
 function guestSourcedTurn(actor: Party): boolean {
   if (actor.kind !== 'bot' || !guestTurnProbe) return false;
   try {
@@ -1350,6 +1370,7 @@ export function writeFactCards(writer: RoomWriter, fact: Fact, bots?: BotDirecto
     return [];
   }
   if (!spec) return [];
+  const guest = guestSourcedFact(fact);
   const out: RoomCard[] = [];
   for (const workspaceId of spec.workspaces) {
     const card = writer.append({
@@ -1362,6 +1383,7 @@ export function writeFactCards(writer: RoomWriter, fact: Fact, bots?: BotDirecto
       ...(spec.refs ? { refs: spec.refs } : {}),
       ...(spec.closes ? { closes: true as const } : {}),
       ...(spec.notice ? { notice: spec.notice } : {}),
+      ...(guest ? { origin: 'guest' as const } : {}),
       at: fact.at,
     });
     if (card) out.push(card);
