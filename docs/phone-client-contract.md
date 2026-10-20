@@ -4314,7 +4314,8 @@ arrival order (`seq`, increasing; never sort by `at`).
   no buttons. Absent when the desktop no longer has the request.
 - `resumable: true` — on a system card whose `notice.code` is one of
   `worker.pausedResumable`, `worker.idlePausedResumable`,
-  `worker.openIdlePausedResumable` or `worker.doneResumable`, and whose
+  `worker.openIdlePausedResumable`, `worker.stopResolvedResumable` or
+  `worker.doneResumable`, and whose
   task's worker can resume **now** (the desktop's own rule for its card's
   Resume button). Omitted otherwise: an older card for a worker resumed since
   has none, and a worker stopped again after a resume brings it back without
@@ -4380,6 +4381,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `worker.openIdlePausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | As `worker.pausedResumable`; the task was still working or needing input. |
 | `worker.stopUnconfirmed` | `title` string | `Worker stop unconfirmed: {title}`<br>`Worker stop unconfirmed` | The stop was not confirmed; the worker still holds its slot. `title` as `worker.paused`. |
 | `worker.stopResolved` | `title` string | `Worker slot freed: {title}`<br>`Worker slot freed` | Follow-up to an unconfirmed stop: the worker has stopped and its slot is free. `title` as `worker.paused`. |
+| `worker.stopResolvedResumable` | `title` string, `kind` string | `Worker slot freed (resumable): {title}`<br>`Worker slot freed (resumable)` | As `worker.stopResolved`; the conversation is kept and the worker can resume. `kind` as `worker.pausedResumable`. |
 | `worker.done` | `title` string, `status` string | `Worker done: {title}`<br>`Worker done` | `title` as `worker.paused`. `status`: `completed`, `cancelled` or `failed`. |
 | `worker.doneResumable` | `title` string, `status` string, `kind` string | `Worker done (resumable): {title}`<br>`Worker done (resumable)` | As `worker.done`; `kind` as `worker.pausedResumable`. |
 | `worker.resumed` | `title` string, `by` string, `where` string | `Worker resumed: {title}`<br>`Worker resumed` | `title` as `worker.paused`. `by`: `owner` or `bot`. `where`: `folder` or `newPane`. |

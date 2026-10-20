@@ -25,7 +25,7 @@ export interface PhoneNoticeCode {
 
 /** The notice codes that tell the owner a stopped worker can resume (the
  *  desktop's card Resume, and the phone card's `resumable`). */
-export const RESUMABLE_NOTICE_CODES: ReadonlySet<string> = new Set(['worker.pausedResumable', 'worker.idlePausedResumable', 'worker.openIdlePausedResumable', 'worker.doneResumable']);
+export const RESUMABLE_NOTICE_CODES: ReadonlySet<string> = new Set(['worker.pausedResumable', 'worker.idlePausedResumable', 'worker.openIdlePausedResumable', 'worker.stopResolvedResumable', 'worker.doneResumable']);
 
 /** The longest string arg the phone receives (a task title, a gate's error,
  *  the slot holders). */
@@ -61,6 +61,7 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
   'worker.openIdlePausedResumable': taskNamed('worker.openIdlePausedResumable', { kind: 'string' }, [`${k('worker.openIdlePausedResumable')}.body.research`]),
   'worker.stopUnconfirmed': taskNamed('worker.stopUnconfirmed'),
   'worker.stopResolved': taskNamed('worker.stopResolved'),
+  'worker.stopResolvedResumable': taskNamed('worker.stopResolvedResumable', { kind: 'string' }, [`${k('worker.stopResolvedResumable')}.body.research`]),
   'worker.done': taskNamed('worker.done', { status: 'string' }, STATUS),
   'worker.doneResumable': taskNamed('worker.doneResumable', { status: 'string', kind: 'string' }, [`${k('worker.doneResumable')}.body.research`, ...STATUS]),
   'worker.resumed': taskNamed('worker.resumed', { by: 'string', where: 'string' }, ['room.notice.by.owner', 'room.notice.by.bot', 'room.notice.where.folder', 'room.notice.where.newPane']),
