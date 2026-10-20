@@ -5,8 +5,13 @@ import type { A2aRemotePeerHint, RemoteA2aRpcDeps } from '../pipe/handlers/a2a.r
 
 type DaemonRpc = { rpc: (method: string, params: Record<string, unknown>, opts?: { timeoutMs?: number }) => Promise<unknown> };
 
-/** How long a2a.discover waits for a joined PC to say how many panes it shows this one. */
-export const PEER_EXPOSED_TIMEOUT_MS = 1_500;
+/** The cap on each local daemon read behind the paired-PC hints. */
+export const PEER_HINT_RPC_TIMEOUT_MS = 1_500;
+/** How long a joined PC's answer to "what do you show me" is reused before it is asked again. */
+export const PEER_EXPOSED_TTL_MS = 30_000;
+
+/** What a joined PC last said it shows this one. */
+interface ExposedSeen { panes: number; brain: boolean; at: number }
 
 /**
  * The cross-host hooks of the a2a pipe handlers, backed by daemon RPCs
@@ -23,6 +28,32 @@ export function daemonRemoteA2aRpcDeps(
     if (isRecord(res) && res.ok === true && typeof res.taskId === 'string') return { ok: true, taskId: res.taskId };
     return { ok: false, error: isRecord(res) && typeof res.error === 'string' ? res.error : 'unavailable' };
   };
+  // Asking a joined PC what it shows goes over the network, so a2a.discover
+  // never waits for it: it reads the last answer and, when that is missing or
+  // old, starts a read in the background for the next call: at most one per
+  // PC per TTL, answered or not.
+  const exposedSeen = new Map<string, ExposedSeen>();
+  const exposedAskedAt = new Map<string, number>();
+  function exposedOf(dc: DaemonRpc, hostId: string): ExposedSeen | null {
+    const seen = exposedSeen.get(hostId) ?? null;
+    const now = Date.now();
+    const askedAt = exposedAskedAt.get(hostId);
+    if ((!seen || now - seen.at > PEER_EXPOSED_TTL_MS) && (askedAt === undefined || now - askedAt > PEER_EXPOSED_TTL_MS)) {
+      exposedAskedAt.set(hostId, now);
+      void dc.rpc('a2a.remote.hosts.exposed', { hostId })
+        .then((res) => {
+          if (!isRecord(res) || res.ok !== true || !Array.isArray(res.panes)) return;
+          const panes = (res.panes as unknown[]).filter(isRecord);
+          exposedSeen.set(hostId, {
+            panes: panes.filter((p) => p.kind === 'pane').length,
+            brain: panes.some((p) => p.kind === 'brain'),
+            at: Date.now(),
+          });
+        })
+        .catch(() => undefined);
+    }
+    return seen;
+  }
   return {
     listTargets: async () => {
       const dc = getDaemonClient();
@@ -36,7 +67,7 @@ export function daemonRemoteA2aRpcDeps(
     read: async (input) => getDaemonClient()?.rpc(A2A_REMOTE_RPC.read, { ...input }),
     listPeers: async (workspaceId) => {
       const dc = getDaemonClient();
-      return dc ? listPeerHints(dc, workspaceId) : [];
+      return dc ? listPeerHints(dc, workspaceId, (hostId) => exposedOf(dc, hostId)) : [];
     },
   };
 }
@@ -50,10 +81,14 @@ const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 
  * shows is never named here, and nothing about a pane it does not show
  * reaches this PC at all (the other PC filters `/api/a2a/exposed`).
  */
-async function listPeerHints(dc: DaemonRpc, workspaceId?: string): Promise<A2aRemotePeerHint[]> {
+async function listPeerHints(
+  dc: DaemonRpc,
+  workspaceId: string | undefined,
+  exposedOf: (hostId: string) => ExposedSeen | null,
+): Promise<A2aRemotePeerHint[]> {
   const [status, list] = await Promise.all([
-    dc.rpc('a2a.remote.hosts.status', {}, { timeoutMs: PEER_EXPOSED_TIMEOUT_MS }),
-    dc.rpc('a2a.remote.links.list', {}, { timeoutMs: PEER_EXPOSED_TIMEOUT_MS }),
+    dc.rpc('a2a.remote.hosts.status', {}, { timeoutMs: PEER_HINT_RPC_TIMEOUT_MS }),
+    dc.rpc('a2a.remote.links.list', {}, { timeoutMs: PEER_HINT_RPC_TIMEOUT_MS }),
   ]);
   const hosts = isRecord(status) && Array.isArray(status.hosts) ? (status.hosts as A2aRemoteHostStatus[]) : [];
   const links = (isRecord(list) && Array.isArray(list.links) ? (list.links as A2aLinkRecordV1[]) : [])
@@ -65,19 +100,12 @@ async function listPeerHints(dc: DaemonRpc, workspaceId?: string): Promise<A2aRe
     const asking = own.filter((l) => l.state === 'proposed-out').length;
     const connected = h.state === 'connected';
     // Only a PC this one joined shows panes to it; asked only while its stream is up.
-    let exposedPanes: number | null = null;
-    if (h.role === 'joiner' && connected) {
-      try {
-        const res = await dc.rpc('a2a.remote.hosts.exposed', { hostId: h.hostId }, { timeoutMs: PEER_EXPOSED_TIMEOUT_MS });
-        if (isRecord(res) && res.ok === true && Array.isArray(res.panes)) {
-          exposedPanes = (res.panes as Array<{ kind?: unknown }>).filter((p) => isRecord(p) && p.kind === 'pane').length;
-        }
-      } catch { /* away or slow: the count stays unknown */ }
-    }
+    const exposed = h.role === 'joiner' && connected ? exposedOf(h.hostId) : null;
+    const exposedPanes = exposed ? exposed.panes : null;
     let shown: number | null = null;
     if (h.role === 'server') {
       try {
-        const res = await dc.rpc('a2a.remote.exposure.get', { hostId: h.hostId }, { timeoutMs: PEER_EXPOSED_TIMEOUT_MS });
+        const res = await dc.rpc('a2a.remote.exposure.get', { hostId: h.hostId }, { timeoutMs: PEER_HINT_RPC_TIMEOUT_MS });
         const exp = isRecord(res) && isRecord(res.exposure) ? res.exposure : null;
         const ids = exp && Array.isArray(exp.workspaceIds) ? (exp.workspaceIds as string[]) : [];
         const panes = exp && isRecord(exp.paneIds) ? exp.paneIds : {};
@@ -96,6 +124,8 @@ async function listPeerHints(dc: DaemonRpc, workspaceId?: string): Promise<A2aRe
       hint = shown === 0
         ? 'paired (it joined this PC); this PC shows it no pane yet (a person picks them on the Remote page), then a person on that PC requests the link'
         : `paired (it joined this PC); ${shown === null ? 'no pane linked yet' : `this PC shows it ${plural(shown, 'pane')}, none linked yet`} (a person on that PC requests the link)`;
+    } else if (exposedPanes === 0 && exposed?.brain) {
+      hint = 'paired; that PC shows its Moa but no pane to this one (a person can link Moa from the Remote page, or its owner ticks panes in Settings › LAN)';
     } else if (exposedPanes === 0) hint = 'paired; that PC shows no pane to this one yet (its owner ticks panes in Settings › LAN)';
     else if (exposedPanes !== null) hint = `paired; that PC shows ${plural(exposedPanes, 'pane')}, none linked yet (a person links one from a pane menu: Link with a pane on another PC)`;
     else hint = 'paired; no pane linked yet';

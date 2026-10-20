@@ -290,9 +290,9 @@ export interface A2aRemotePeerHint {
   paired: true;
   connected: boolean;
   /**
-   * Panes that PC shows this one, counted only when this PC joined it and it
-   * is connected; null otherwise (it joined this PC, it is away, or it did
-   * not answer in time).
+   * Panes that PC shows this one, as it last answered (asked again every 30 s
+   * at most, never while discover waits); null when it joined this PC, it is
+   * away, or it has not answered yet.
    */
   exposedPanes: number | null;
   /** Link requests waiting for a person, on either PC. */
@@ -968,8 +968,8 @@ export function registerA2aRpc(
   router.register('a2a.whoami', (params) => sendToRenderer(getWindow, 'a2a.whoami', params));
   router.register('a2a.discover', async (params) => {
     const ws = typeof params.workspaceId === 'string' && params.workspaceId ? params.workspaceId : '';
-    // Started beside the renderer read and capped: a joined PC may be asked
-    // over the network, and the hints are optional.
+    // Started beside the renderer read and capped: the hints are optional, and
+    // they read only this PC's daemon (never the other PC) on this path.
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const peersP: Promise<A2aRemotePeerHint[]> = remote?.listPeers
       ? Promise.race([
