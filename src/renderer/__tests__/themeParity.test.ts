@@ -10,10 +10,13 @@ import {
   UI_THEME_TOKENS,
   deriveBuiltinPalette,
   CSS_VAR_MAP,
+  THEME_STYLES,
   type BuiltinThemeId,
   type FullCssPalette,
 } from '../themes';
-import { hexToRgbString } from '../tailwindPalette';
+import { hexToRgbString, isLight } from '../tailwindPalette';
+import { WINDOW_START_COLORS, WINDOW_START_THEME } from '../../shared/windowStartPaint';
+import { useStore } from '../stores';
 
 function parseGlobals(css: string): Record<string, Record<string, string>> {
   const out: Record<string, Record<string, string>> = {};
@@ -58,5 +61,19 @@ describe('theme SSOT parity (themes.ts ⇄ globals.css)', () => {
 
   it('every built-in theme has a globals.css block', () => {
     for (const id of ids) expect(globals[id], id).toBeDefined();
+  });
+});
+
+describe('window start colours (shared/windowStartPaint.ts) are the default themes\'', () => {
+  it.each(['dark', 'light'] as const)('%s is its start theme\'s frame and secondary text, in that polarity', (polarity) => {
+    const theme = WINDOW_START_THEME[polarity] as BuiltinThemeId;
+    expect(ids).toContain(theme);
+    expect(WINDOW_START_COLORS[polarity].background).toBe(THEME_STYLES[theme]?.frame);
+    expect(WINDOW_START_COLORS[polarity].symbol.toUpperCase()).toBe(deriveBuiltinPalette(theme).textSub.toUpperCase());
+    expect(isLight(deriveBuiltinPalette(theme).bgBase)).toBe(polarity === 'light');
+  });
+
+  it('dark starts in the store\'s default theme', () => {
+    expect(WINDOW_START_THEME.dark).toBe(useStore.getState().theme);
   });
 });

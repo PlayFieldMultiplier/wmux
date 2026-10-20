@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   options: [] as Array<Record<string, unknown>>,
   themeAtConstruction: [] as string[],
   nativeTheme: { themeSource: 'system' as 'system' | 'light' | 'dark' },
+  plan: { maximized: false, fullScreen: false },
+  windows: [] as Array<{ maximize: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; fire(event: string): void }>,
 }));
 
 vi.mock('node:os', async (importOriginal) => {
@@ -19,6 +21,8 @@ vi.mock('node:os', async (importOriginal) => {
 
 vi.mock('electron', () => {
   class BrowserWindow {
+    private visible: boolean;
+    private handlers = new Map<string, () => void>();
     webContents = {
       on: vi.fn(),
       once: vi.fn(),
@@ -31,9 +35,17 @@ vi.mock('electron', () => {
     constructor(opts: Record<string, unknown>) {
       h.options.push(opts);
       h.themeAtConstruction.push(h.nativeTheme.themeSource);
+      this.visible = opts.show !== false;
+      h.windows.push(this);
     }
     on = vi.fn();
-    maximize = vi.fn();
+    once = vi.fn((event: string, handler: () => void) => { this.handlers.set(event, handler); });
+    fire(event: string): void { this.handlers.get(event)?.(); }
+    // Electron's maximize() shows a hidden window.
+    maximize = vi.fn(() => { this.visible = true; });
+    show = vi.fn(() => { this.visible = true; });
+    focus = vi.fn();
+    isVisible = () => this.visible;
     isDestroyed = () => false;
   }
   return {
@@ -52,7 +64,7 @@ vi.mock('../windowState', () => ({
   DEFAULT_WINDOW_SIZE: { width: 1280, height: 800 },
   MIN_WINDOW_SIZE: { width: 600, height: 400 },
   loadWindowState: () => null,
-  planRestore: () => ({ maximized: false, fullScreen: false }),
+  planRestore: () => h.plan,
   saveWindowState: vi.fn(),
   saveWindowStateSync: vi.fn(),
 }));
@@ -65,12 +77,13 @@ async function optionsFor(platform: NodeJS.Platform, release: string, windowGlas
   h.options.length = 0;
   h.themeAtConstruction.length = 0;
   h.nativeTheme.themeSource = 'system';
+  h.windows.length = 0;
   vi.resetModules();
   const { createWindow } = await import('../createWindow');
   const { isWindowGlassOn } = await import('../windowGlass');
   const win = createWindow({ deferLoad: true, windowGlass, windowAppearance });
   // The appearance as the window was built: what DWM tints the first frames with.
-  return { opts: h.options[0], glassOn: isWindowGlassOn(win), themeSource: h.themeAtConstruction[0] };
+  return { opts: h.options[0], glassOn: isWindowGlassOn(win), themeSource: h.themeAtConstruction[0], win: h.windows[0] };
 }
 
 beforeEach(() => {
@@ -78,6 +91,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  h.plan = { maximized: false, fullScreen: false };
   Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   delete (globalThis as Record<string, unknown>).MAIN_WINDOW_VITE_DEV_SERVER_URL;
 });
@@ -92,12 +106,18 @@ describe('createWindow window glass options', () => {
     expect(glassOn).toBe(true);
   });
 
-  it('Windows 11 with glass Off: today\'s opaque window', async () => {
+  it('Windows 11 with glass Off: an opaque window in the dark frame colour', async () => {
     const { opts, glassOn } = await optionsFor('win32', '10.0.26200', 'off');
     expect(opts.backgroundMaterial).toBeUndefined();
     expect(opts.backgroundColor).toBe('#121015');
     expect(opts.titleBarOverlay).toEqual({ color: '#121015', symbolColor: '#C2BDC9', height: 40 });
     expect(glassOn).toBe(false);
+  });
+
+  it('Windows 11 with glass Off and a light theme saved: the light frame colour (#2512)', async () => {
+    const { opts } = await optionsFor('win32', '10.0.26200', 'off', 'light');
+    expect(opts.backgroundColor).toBe('#ECECEF');
+    expect(opts.titleBarOverlay).toEqual({ color: '#ECECEF', symbolColor: '#3F3F48', height: 40 });
   });
 
   it.each(['10.0.19045', '10.0.22000'])('Windows build %s: opaque whatever the level', async (release) => {
@@ -116,11 +136,16 @@ describe('createWindow window glass options', () => {
     expect(opts.titleBarOverlay).toBeUndefined();
   });
 
-  it('Linux stays opaque', async () => {
+  it('Linux stays opaque, in the dark start colour by default', async () => {
     const { opts } = await optionsFor('linux', '6.8.0', 'soft');
-    expect(opts.backgroundColor).toBe('#1A171D');
+    expect(opts.backgroundColor).toBe('#121015');
     expect(opts.backgroundMaterial).toBeUndefined();
     expect(opts.vibrancy).toBeUndefined();
+  });
+
+  it('Linux with a light theme saved starts in the light start colour (#2512)', async () => {
+    const { opts } = await optionsFor('linux', '6.8.0', 'soft', 'light');
+    expect(opts.backgroundColor).toBe('#ECECEF');
   });
 });
 
@@ -146,5 +171,43 @@ describe('createWindow app appearance before a glass window exists', () => {
   it('leaves macOS and Linux to the renderer', async () => {
     expect((await optionsFor('darwin', '25.0.0', 'soft', 'light')).themeSource).toBe('system');
     expect((await optionsFor('linux', '6.8.0', 'soft', 'light')).themeSource).toBe('system');
+  });
+});
+
+describe('createWindow first frames (#2512)', () => {
+  it('builds the opaque Windows window hidden and shows it on its first paint', async () => {
+    const { opts, win } = await optionsFor('win32', '10.0.26200', 'off', 'dark');
+    expect(opts.show).toBe(false);
+    expect(win.show).not.toHaveBeenCalled();
+    win.fire('ready-to-show');
+    expect(win.show).toHaveBeenCalledTimes(1);
+  });
+
+  it('maximizes a restored maximized window when it is revealed, not before', async () => {
+    h.plan = { maximized: true, fullScreen: false };
+    const { win } = await optionsFor('win32', '10.0.26200', 'off', 'dark');
+    expect(win.maximize).not.toHaveBeenCalled();
+    win.fire('ready-to-show');
+    expect(win.maximize).toHaveBeenCalledTimes(1);
+    expect(win.show).not.toHaveBeenCalled();
+  });
+
+  it('shows a glass window at once, and maximizes it at once', async () => {
+    h.plan = { maximized: true, fullScreen: false };
+    const { opts, win } = await optionsFor('win32', '10.0.26200', 'soft', 'dark');
+    expect(opts.show).toBeUndefined();
+    expect(win.maximize).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['win32', '10.0.26200', 'off', 'light'],
+    ['win32', '10.0.26200', 'soft', 'light'],
+    ['darwin', '25.0.0', 'soft', 'light'],
+    ['linux', '6.8.0', 'soft', 'dark'],
+    ['win32', '10.0.26200', 'off', undefined],
+  ] as const)('on %s (%s, glass %s) passes the saved polarity %s to the preload', async (platform, release, level, appearance) => {
+    const { opts } = await optionsFor(platform, release, level, appearance);
+    const prefs = opts.webPreferences as { additionalArguments?: string[] };
+    expect(prefs.additionalArguments).toEqual([`--wmux-start-polarity=${appearance ?? 'dark'}`]);
   });
 });
