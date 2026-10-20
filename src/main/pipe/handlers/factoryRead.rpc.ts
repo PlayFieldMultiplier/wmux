@@ -36,6 +36,7 @@ import type { BotDirectoryApi } from '../../factory/botStore';
 import type { RoomWriter } from '../../factory/roomWriter';
 import { DAY_MS, type TrustReadResult } from '../../factory/trustMetrics';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
 
 // ── Limits ─────────────────────────────────────────────────────────────────
 
@@ -400,6 +401,9 @@ export async function handlePlanPropose(raw: unknown, ctx: RpcContext | undefine
     if (!ws || !itTitle || !why || !size) return refusal('invalid', `item ${k + 1} needs workspaceId, title, size (S, M or L) and why`);
     if (ws !== own.workspaceId && !anyWorkspace) {
       return refusal('cross_workspace', `item ${k + 1}: a bot plans for its own workspace; another workspace is a Coordinator's`);
+    }
+    if (crossesGuestBoundary(own.workspaceId, ws)) {
+      return refusal('cross_workspace', `item ${k + 1}: a guest workspace is planned for only from inside it`);
     }
     if (!leads.has(ws)) return refusal('no_lead', `item ${k + 1}: workspace ${ws} has no enabled lead to dispatch to`);
     items.push({ workspaceId: ws, title: itTitle, size, why });

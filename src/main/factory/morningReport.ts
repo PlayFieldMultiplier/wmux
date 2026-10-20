@@ -35,6 +35,7 @@ import type { BotDirectoryApi } from './botStore';
 import type { RoomWriter } from './roomWriter';
 import { DAY_MS, type TrustReadResult } from './trustMetrics';
 import type { CorrectionGroup } from './gardener';
+import { crossesGuestBoundary } from './guestWorkspaces';
 
 export const MORNING_LIMITS = {
   WINDOW_MS: DAY_MS,
@@ -322,8 +323,9 @@ export function routePlanAnswer(ev: ResolvedCardEvent, ports: PlanAnswerPorts): 
   } catch {
     author = null;
   }
-  // Any bot may propose a plan (plan.propose); the answer wakes its author.
-  if (!author || !author.enabled) return 'ignored';
+  // Any bot may propose a plan (plan.propose); the answer wakes its author,
+  // in the room it wrote the plan in.
+  if (!author || !author.enabled || crossesGuestBoundary(ev.workspaceId, author.workspaceId)) return 'ignored';
   const verb = kind === 'approve' ? 'approved' : 'answered';
   ports.wake({
     botId: author.id,

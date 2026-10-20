@@ -26,6 +26,7 @@ import { TriggerEngine, botSeesFact } from '../triggerEngine';
 import { handleRoomPost } from '../../pipe/handlers/room.rpc';
 import type { RpcContext } from '../../../shared/rpc';
 import { defaultTriggers } from '../roleDefaults';
+import { GuestWorkspaceStore, __resetGuestWorkspacesForTesting, setGuestWorkspaceStore } from '../guestWorkspaces';
 
 let dir = '';
 let now = 1_000_000_000_000;
@@ -1487,3 +1488,72 @@ describe('retention of a hop held by an open question', () => {
     expect(h.router.get('h-ask')?.forHop).toBe('h-held');
   });
 });
+
+describe('a guest workspace is an island (handoffs, mentions, their cards)', () => {
+  afterEach(() => __resetGuestWorkspacesForTesting());
+
+  async function island(): Promise<void> {
+    const store = new GuestWorkspaceStore({ file: path.join(dir, 'factory', 'guest-workspaces.json'), log: () => undefined });
+    store.load();
+    await store.add('wsg');
+    await store.add('wsh');
+    setGuestWorkspaceStore(store);
+  }
+
+  const queued = (id: string, from: BotProfile, to: BotProfile, extra: Record<string, unknown> = {}) => JSON.stringify({
+    version: 1, id, runId: `run-${id}`, threadId: 'general', depth: 1, hopsInRun: 1,
+    from: { kind: 'bot', workspaceId: from.workspaceId, botId: from.id }, to: { kind: 'bot', workspaceId: to.workspaceId, botId: to.id }, kind: 'message',
+    attribution: { originator: { kind: 'bot', workspaceId: from.workspaceId, botId: from.id }, chain: [] }, landing: 'wake',
+    payload: { title: `title of ${id}`, body: '' }, status: 'queued', createdAt: now, updatedAt: now, ...extra,
+  });
+
+  it('a hop either way across the boundary is refused, guest A to guest B too; inside one it is delivered', async () => {
+    await island();
+    const g = bot('wsg', 'lead');
+    const g2 = bot('wsg', 'lead');
+    const other = bot('wsh', 'lead');
+    const clean = bot('ws1', 'lead');
+    const h = await harness([g, g2, other, clean]);
+    expect(h.router.send(binding(clean), { kind: 'message', toBotId: g.id, title: 'in', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(g), { kind: 'message', toBotId: clean.id, title: 'out', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(g), { kind: 'message', toBotId: other.id, title: 'across', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    const [m1] = h.router.mention(binding(clean), { id: 'c-1', threadId: 'general' as ThreadId, title: 't', body: '' }, [g.id]);
+    const [m2] = h.router.mention(binding(g), { id: 'c-2', threadId: 'general' as ThreadId, title: 't', body: '' }, [clean.id]);
+    expect(m1.result).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(m2.result).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.wakes).toEqual([]);
+    expect(h.router.send(binding(g), { kind: 'message', toBotId: g2.id, title: 'inside', body: '' })).toMatchObject({ ok: true });
+    expect(h.wakes.map((w) => w.botId)).toEqual([g2.id]);
+  });
+
+  it('a refused hop\'s card is written only in the sender\'s room: nothing crosses', async () => {
+    await island();
+    const g = bot('wsg', 'lead');
+    const clean = bot('ws1', 'lead');
+    const h = await harness([g, clean]);
+    h.router.send(binding(g), { kind: 'message', toBotId: clean.id, title: 'guest words', body: '' });
+    h.router.send(binding(clean), { kind: 'message', toBotId: g.id, title: 'clean words', body: '' });
+    const titles = (ws: string) => h.rooms.read(ws, { guests: true }).cards.map((c) => c.title).join('\n');
+    expect(titles('wsg')).toContain('guest words');
+    expect(titles('wsg')).not.toContain('clean words');
+    expect(titles('ws1')).toContain('clean words');
+    expect(titles('ws1')).not.toContain('guest words');
+  });
+
+  it('a hop stored before a restart, a relay\'s forward or a mention, is refused when it crosses', async () => {
+    await island();
+    const g = bot('wsg', 'lead');
+    const clean = bot('ws1', 'moa', { template: 'coordinator' });
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, [
+      queued('h-in', clean, g, { kind: 'dispatch', relay: true }),
+      queued('h-out', g, clean),
+      queued('h-mention', clean, g, { clientHandoffId: `mention:c-m:${g.id}`, payload: { title: 'x', body: '', refs: { messageId: 'c-m' } } }),
+    ].join('\n') + '\n');
+    const h = await harness([g, clean]);
+    expect(h.wakes).toEqual([]);
+    for (const id of ['h-in', 'h-out', 'h-mention']) expect(h.router.get(id)?.status, id).toBe('refused');
+  });
+});
+

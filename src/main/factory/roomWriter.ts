@@ -57,6 +57,7 @@ import type { BotDirectoryApi, FactLogApi, WakeSinkApi } from './triggerEngine';
 import type { BotGroup } from '../../shared/botGroup';
 import { parseRoomAttachments } from '../../shared/roomAttachments';
 import { parseRoomFiles } from './roomFiles';
+import { guestSide } from './guestWorkspaces';
 
 export const ROOMS_DIRNAME = 'rooms';
 
@@ -1132,8 +1133,18 @@ export function factRooms(fact: Fact, bots: BotDirectoryApi | undefined): string
     return [];
   }
   const out = new Set<string>();
-  for (const b of enabled) if (normalizeRepoKey(b.repo?.repoKey) === repo && isRoomWorkspaceId(b.workspaceId)) out.add(b.workspaceId);
+  // A guest workspace has no repository (botStore.ts); skipped all the same.
+  for (const b of enabled) if (normalizeRepoKey(b.repo?.repoKey) === repo && isRoomWorkspaceId(b.workspaceId) && !guestSide(b.workspaceId)) out.add(b.workspaceId);
   return [...out];
+}
+
+/** The rooms a fact's cards go to, held to the island: when they span a
+ *  guest workspace and another, only the fact's own workspace (a delivery
+ *  the addressee's, a refusal the sender's), so no card crosses. */
+export function islandRooms(workspaces: readonly string[], home: string | undefined): string[] {
+  const distinct = [...new Set(workspaces)];
+  if (distinct.length < 2 || !distinct.some((ws) => guestSide(ws))) return distinct;
+  return home && distinct.includes(home) ? [home] : [];
 }
 
 interface SystemCard { workspaces: string[]; threadId: ThreadId; kind: CardKind; title: string; body?: string; refs?: RoomCard['refs']; closes?: true; notice?: CardNotice }
@@ -1384,7 +1395,7 @@ export function writeFactCards(writer: RoomWriter, fact: Fact, bots?: BotDirecto
   if (!spec) return [];
   const guest = guestSourcedFact(fact);
   const out: RoomCard[] = [];
-  for (const workspaceId of spec.workspaces) {
+  for (const workspaceId of islandRooms(spec.workspaces, fact.workspaceId)) {
     const card = writer.append({
       workspaceId,
       threadId: spec.threadId,

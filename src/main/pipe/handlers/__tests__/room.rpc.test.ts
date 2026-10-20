@@ -13,7 +13,10 @@ const ROOM_BODY_MAX = ROOM_LIMITS.CARD_BODY_MAX;
 import { loadThreadDecision } from '../../../deck/deckDecisionStore';
 import { HANDOFFS_FILENAME, HandoffRouter, deckDecisionPort, invitesFreeText, setHandoffRouter } from '../../../factory/handoffRouter';
 import { RoomWriter, type FactoryRoomPorts } from '../../../factory/roomWriter';
-import { humanAddressees, humanCardIdOfRun, humanRunId } from '../../../factory/humanMessage';
+import { humanAddressees, humanCardIdOfRun, humanRunId, postHumanMessage } from '../../../factory/humanMessage';
+import { GuestWorkspaceStore, __resetGuestWorkspacesForTesting, setGuestWorkspaceStore } from '../../../factory/guestWorkspaces';
+import { islandRooms, writeFactCards } from '../../../factory/roomWriter';
+import { routePlanAnswer } from '../../../factory/morningReport';
 import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../../../factory/secretRedaction';
 import { botSeesFact } from '../../../factory/triggerEngine';
 import {
@@ -1078,3 +1081,67 @@ describe('settleMentions', () => {
     expect(settleMentions(ports, binding, [same.id, far.id])).toEqual({ valid: [same.id, far.id], dropped: [] });
   });
 });
+
+describe('a guest workspace is an island (the owner\'s messages, mentions, fact cards)', () => {
+  afterEach(() => __resetGuestWorkspacesForTesting());
+  async function island(): Promise<void> {
+    const store = new GuestWorkspaceStore({ file: path.join(dir, 'factory', 'guest-workspaces.json'), log: () => undefined });
+    store.load();
+    await store.add('wsg');
+    setGuestWorkspaceStore(store);
+  }
+
+  it('the owner naming a bot across the boundary is refused, from the window (room.post), the phone and the operator\'s RPC', async () => {
+    await island();
+    const g = bot('wsg', 'lead');
+    const clean = bot('ws1', 'lead');
+    const moa = bot('ws1', 'moa', { template: 'coordinator' });
+    const s = setup([g, clean, moa]);
+    // From a guest room: a clean bot by mention, by id, by the moa role.
+    expect(await handleRoomPost({ workspaceId: 'wsg', kind: 'human', title: 'hi', mentions: [clean.id] }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'invalid' });
+    expect(postHumanMessage(s.writer, s.ports, { workspaceId: 'wsg', title: 'hi', toBotId: clean.id, source: 'phone' })).toMatchObject({ ok: false, code: 'invalid' });
+    expect(postHumanMessage(s.writer, s.ports, { workspaceId: 'wsg', title: 'hi', to: 'moa', source: 'desktop' })).toMatchObject({ ok: false, code: 'invalid' });
+    // Into a guest room from elsewhere.
+    expect(await handleRoomPost({ workspaceId: 'ws1', kind: 'human', title: 'hi', mentions: [g.id] }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'invalid' });
+    expect(s.wakes).toEqual([]);
+    expect(s.writer.read('wsg', { guests: true }).cards).toEqual([]);
+    // Inside the guest room the owner reaches its bot.
+    expect(await handleRoomPost({ workspaceId: 'wsg', kind: 'human', title: 'hi', mentions: [g.id] }, OPERATOR, s.deps)).toMatchObject({ ok: true });
+    expect(s.wakes.map((w) => w.botId)).toEqual([g.id]);
+  });
+
+  it('a bot\'s card names no bot across the boundary, whatever its wake', async () => {
+    await island();
+    const g = bot('wsg', 'lead');
+    const clean = bot('ws1', 'lead');
+    const s = setup([g, clean]);
+    expect(settleMentions(s.ports, { workspaceId: 'ws1', botId: clean.id, role: 'lead' }, [g.id]).dropped).toEqual([{ botId: g.id, reason: 'other_workspace' }]);
+    expect(settleMentions(s.ports, { workspaceId: 'wsg', botId: g.id, role: 'lead' }, [clean.id]).dropped).toEqual([{ botId: clean.id, reason: 'other_workspace' }]);
+  });
+
+  it('a fact\'s cards across the boundary stay in the fact\'s own room; a repository\'s rooms skip a guest workspace', async () => {
+    await island();
+    expect(islandRooms(['ws1', 'ws2'], 'ws1')).toEqual(['ws1', 'ws2']);
+    expect(islandRooms(['ws1', 'wsg'], 'wsg')).toEqual(['wsg']);
+    expect(islandRooms(['wsg', 'ws1'], 'ws1')).toEqual(['ws1']);
+    expect(islandRooms(['wsg', 'ws1'], undefined)).toEqual([]);
+    const s = setup([]);
+    const refused: Fact = {
+      id: 'f-r', seq: 1, dedupeKey: 'r', kind: 'handoff.refused', at: 1, workspaceId: 'wsg', ref: { handoffId: 'h-1' }, actor: { kind: 'system' },
+      payload: { title: 'guest words', fromWorkspaceId: 'wsg', toWorkspaceId: 'ws1', code: 'no_addressee', detail: 'x' },
+    };
+    writeFactCards(s.writer, refused);
+    expect(s.writer.read('wsg', { guests: true }).cards).toHaveLength(1);
+    expect(s.writer.read('ws1', { guests: true }).cards).toHaveLength(0);
+  });
+
+  it('a plan answered in a room wakes no author across the boundary', async () => {
+    await island();
+    const clean = bot('ws1', 'moa', { template: 'coordinator' });
+    const wake = vi.fn();
+    const card = { version: 1, id: 'c-p', seq: 1, workspaceId: 'wsg', threadId: 'plan:p-1', kind: 'plan', at: 1, actor: { kind: 'bot', workspaceId: 'ws1', botId: clean.id }, title: 'Plan' } as RoomCard;
+    expect(routePlanAnswer({ workspaceId: 'wsg', card, resolution: 'approve' }, { bots: () => ({ listEnabled: () => [clean], get: () => clean }), wake })).toBe('ignored');
+    expect(wake).not.toHaveBeenCalled();
+  });
+});
+

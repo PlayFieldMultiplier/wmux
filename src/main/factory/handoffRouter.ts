@@ -99,6 +99,7 @@ import {
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, parseThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import { humanCardIdOfRun } from './humanMessage';
 import { untrackedGuest, type GuestProvenance, type TaintMark } from './wakeTaint';
+import { crossesGuestBoundary } from './guestWorkspaces';
 import {
   DECISION_LIMITS,
   clearThreadDecision,
@@ -1113,6 +1114,11 @@ export class HandoffRouter {
   private wakeForStop(resultId: string, lead: BotProfile): void {
     const result = this.records.get(resultId);
     if (!result) return;
+    // The island holds here too: this wake does not go through deliver.
+    if (result.from.kind === 'bot' && crossesGuestBoundary(result.from.workspaceId, lead.workspaceId)) {
+      this.log(`relay stopped at ${result.id}; ${lead.id} is across a guest workspace's boundary and is not woken`);
+      return;
+    }
     let wakeId: string | undefined;
     try {
       wakeId = this.opts.ports().wakes?.enqueue({
@@ -1293,6 +1299,13 @@ export class HandoffRouter {
 
   /** Store, announce and wake. A wake the queue does not take refuses the hop. */
   private deliver(draft: Handoff, bot: BotProfile): HandoffResult {
+    // The island (guestWorkspaces.ts): a bot's hop between a guest workspace
+    // and any other is never delivered. Every handoff wake goes through
+    // here: a send or reply, a mention, a relay's forward, a restart's
+    // redelivery and the owner's answer.
+    if (draft.from.kind === 'bot' && crossesGuestBoundary(draft.from.workspaceId, bot.workspaceId)) {
+      return this.refuse(draft, 'no_addressee', 'a guest workspace\'s bots reach only the bots of their own workspace, and only those reach them');
+    }
     // A hop not known clean of a guest's words never wakes a bot whose
     // engine cannot hold its tools back for it.
     if (!botEngineGatesTools(bot.engine) && this.guestOf(draft)) return this.refuse(draft, 'no_addressee', `${this.partyLabel(draft.to)}: ${BOT_TAKES_NO_GUEST_WAKES}`);

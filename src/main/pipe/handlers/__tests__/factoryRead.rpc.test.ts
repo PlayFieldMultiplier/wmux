@@ -11,6 +11,7 @@ import { DEFAULT_BOT_BUDGETS, type BotProfile, type BotRole } from '../../../../
 import type { PrLaneFacts } from '../../../../shared/prReview';
 import type { PrVerdictRecord } from '../../../../shared/prVerdict';
 import { RoomWriter } from '../../../factory/roomWriter';
+import { __resetGuestWorkspacesForTesting, expectGuestWorkspaces } from '../../../factory/guestWorkspaces';
 import {
   FACTORY_READ_LIMITS,
   handleCiRead,
@@ -261,6 +262,15 @@ describe('plan.propose', () => {
     const own = await handlePlanPropose({ title: 'Plan', items: [{ ...ITEM, workspaceId: 'ws-a' }] }, ctxOf(lead), deps());
     expect(own).toMatchObject({ ok: true, card: { kind: 'plan', workspaceId: 'ws-a', actor: { kind: 'bot', botId: lead.id } } });
     expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(lead), deps())).toMatchObject({ ok: false, code: 'cross_workspace' });
+  });
+
+  it('a Coordinator plans nothing into a guest workspace (here: a workspace that cannot be told)', async () => {
+    expectGuestWorkspaces();
+    try {
+      expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(MOA), deps())).toMatchObject({ ok: false, code: 'cross_workspace', message: expect.stringContaining('guest workspace') });
+    } finally {
+      __resetGuestWorkspacesForTesting();
+    }
   });
 
   it('refuses the operator, malformed items and a workspace with no lead', async () => {

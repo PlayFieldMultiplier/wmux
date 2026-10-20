@@ -26,6 +26,7 @@
 
 import fs from 'node:fs';
 import { guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
 import path from 'node:path';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { isBotRole, isCoordinatorBot } from '../../../shared/bot';
@@ -472,7 +473,10 @@ export function settleMentions(
       bot = null;
     }
     if (!bot || !bot.enabled) dropped.push({ botId, reason: 'not_enabled' });
+    // Layer 2: a post not known clean names its own workspace's bots only.
     else if (fromGuest && bot.workspaceId !== poster.workspaceId) dropped.push({ botId, reason: 'other_workspace' });
+    // The island: either side a guest workspace means the same workspace.
+    else if (crossesGuestBoundary(poster.workspaceId, bot.workspaceId)) dropped.push({ botId, reason: 'other_workspace' });
     else valid.push(botId);
   }
   return { valid, dropped };
