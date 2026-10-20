@@ -1,0 +1,10 @@
+{
+  "name": "office",
+  "version": "1.0.0",
+  "description": "The workspace's agents as employees in a pixel-art office. Reads names, labels and status. pane.read additionally permits pane metadata (including cwd) and focus. No terminal content permission.",
+  "capabilities": ["ui.rail-page", "agent.state.read", "pane.read"],
+  "activationEvents": [],
+  "contributes": {
+    "railPage": { "title": "Office", "entry": "index.html", "agentStateEvents": true }
+  }
+}
