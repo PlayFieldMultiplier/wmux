@@ -28,6 +28,7 @@ import type { RpcRouter } from '../RpcRouter';
 import type { RpcContext } from '../../../shared/rpc';
 import type { Automation, AutomationRun } from '../../../shared/automation';
 import { validateDraft, effectiveMode } from '../../../daemon/automation/draft';
+import { isUncOrDevicePath } from '../../../shared/cwdShape';
 import type { AutomationClient } from '../../automation/AutomationClient';
 
 export const AUTOMATION_PROPOSE_LIMIT = 5;
@@ -139,11 +140,6 @@ function slidingWindow(limit: number, windowMs: number, now: () => number): () =
     hits.push(t);
     return true;
   };
-}
-
-/** `\\server\share`, `//server/share`, `\\?\…`, `\\.\…`: network or device paths. */
-function isUncOrDevicePath(p: string): boolean {
-  return /^[\\/]{2}/.test(p);
 }
 
 export function registerAutomationRpc(router: RpcRouter, deps: AutomationRpcDeps): void {

@@ -1128,6 +1128,7 @@ export class DaemonSessionManager extends EventEmitter {
         && (bridge.isMuted || !this.liveRendererProbe(params.id)),
       () => console.log(`[DaemonSessionManager] session ${params.id}: answered the bundled ConPTY startup DA1`),
     );
+    if (isWslShell(cmd) || isWslDistroSpawnArgs(cmd, params.args)) bridge.markWslDistro();
     bridge.setupDataForwarding(ptyProcess, ringBuffer, params.id, promptLog);
 
     // #646: stamp the pid's OS creation time so later reaping paths can tell

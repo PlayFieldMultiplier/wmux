@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { IPC } from '../../../shared/constants';
+import { isUncOrDevicePath } from '../../../shared/cwdShape';
 import { wrapHandler } from '../wrapHandler';
 import { focusedPrimaryWindow, primaryWindow } from '../../window/auxiliaryWindows';
 
@@ -80,19 +81,96 @@ export function isSensitivePath(resolvedPath: string): boolean {
   return false;
 }
 
+/**
+ * A network or device path, as given or once resolved: POSIX path.resolve
+ * folds a leading `//`, and a relative input takes the process cwd's root.
+ * Pure, so a caller can refuse the path before any filesystem call.
+ */
+export function isNonLocalPath(inputPath: string): boolean {
+  return isUncOrDevicePath(inputPath) || isUncOrDevicePath(path.resolve(inputPath));
+}
+
 export async function resolveAccessiblePath(inputPath: string): Promise<string | null> {
   if (!inputPath || typeof inputPath !== 'string') return null;
 
+  // Local folders only, refused before realpath or any other filesystem call.
+  if (isNonLocalPath(inputPath)) return null;
   const resolved = path.resolve(inputPath);
   if (isSensitivePath(resolved)) return null;
 
   try {
     const canonical = await fs.promises.realpath(resolved);
     if (isSensitivePath(canonical)) return null;
-    return canonical;
+    if (!isUncOrDevicePath(canonical)) {
+      // A drive that leads to no share (any more) has no entry.
+      if (DRIVE_PATH.test(inputPath)) mappedDrives.delete(driveKey(inputPath));
+      return canonical;
+    }
+    // A drive path whose real path is below the share its drive leads to: a
+    // mapped network drive the user set up. Any other input that lands on a
+    // share or a device (a link or junction to one) is refused.
+    if (!DRIVE_PATH.test(inputPath) || DEVICE_PATH.test(canonical)) return null;
+    return await spelledFromDrive(inputPath, canonical);
   } catch {
     return null;
   }
+}
+
+const DRIVE_PATH = /^[A-Za-z]:[\\/]/;
+const DEVICE_PATH = /^[\\/]{2}[?.][\\/]/;
+
+/**
+ * Each mapped network drive an accepted drive path was on: its root (`Z:\\`)
+ * and the share it leads to (`\\\\server\\share`). Read again on every drive
+ * path, so a drive mapped elsewhere since, or no longer mapped, updates it.
+ */
+const mappedDrives = new Map<string, string>();
+const driveKey = (drivePath: string) => path.win32.parse(path.win32.resolve(drivePath)).root.toUpperCase();
+
+/** `p` below `share`, spelled from `root`; null when it is not below it. */
+function underShare(p: string, share: string, root: string): string | null {
+  const unc = p.replace(/\//g, '\\');
+  const rest = unc.slice(share.length);
+  if (!unc.toLowerCase().startsWith(share.toLowerCase()) || !/^(?:\\|$)/.test(rest)) return null;
+  return path.win32.join(root, rest);
+}
+
+/**
+ * A mapped drive's real path (`\\server\share\repo`) spelled from its drive
+ * again (`Z:\repo`), so the answer, and a folder below it, passes this check
+ * when a caller hands it back. Null when the real path is not below the share
+ * the drive root leads to: a link on a local drive, or one on the mapped
+ * drive to another share, or a root that cannot be read.
+ */
+async function spelledFromDrive(inputPath: string, canonical: string): Promise<string | null> {
+  const drivePath = path.win32.resolve(inputPath);
+  const root = path.win32.parse(drivePath).root;
+  const key = driveKey(drivePath);
+  mappedDrives.delete(key);
+  try {
+    const share = (await fs.promises.realpath(root)).replace(/[\\/]+$/, '').replace(/\//g, '\\');
+    const onShare = isUncOrDevicePath(share) && !DEVICE_PATH.test(share);
+    if (!onShare) return null;
+    mappedDrives.set(key, share);
+    return underShare(canonical, share, root);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A path git reported (`--show-toplevel`, `worktree list`) for `accepted`, an
+ * answer of resolveAccessiblePath, in the spelling that check accepts: git
+ * answers a mapped drive's folders as its share (`//server/share/repo`), so
+ * they are spelled from the drive `accepted` is on (`Z:\\repo`), as that
+ * check last found it mapped. Null for a share or device path below no such
+ * drive; a local path is returned as it is.
+ */
+export function localSpelling(p: string, accepted: string): string | null {
+  if (!isUncOrDevicePath(p)) return p;
+  if (!DRIVE_PATH.test(accepted)) return null;
+  const share = mappedDrives.get(driveKey(accepted));
+  return share ? underShare(p, share, path.win32.parse(path.win32.resolve(accepted)).root) : null;
 }
 
 export function closeAllWatchers(): void {

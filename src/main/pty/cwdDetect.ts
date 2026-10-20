@@ -1,14 +1,15 @@
 /**
  * Working-directory detection helpers shared by PTYBridge.
  *
- * Extracted as pure functions (no Electron / Node deps) so the two
+ * Extracted as pure functions (no Electron deps) so the two
  * notoriously fiddly parsers — OSC 7 URI decoding and prompt-pattern
  * scraping — have direct regression coverage. Both feed the same
  * `IPC.CWD_CHANGED` channel that drives the per-surface cwd shown in the tab
  * tooltip and the workspace "Working directories" menu.
  */
 
-import { isPlausibleCwd } from '../../shared/cwdShape';
+import os from 'node:os';
+import { isPlausibleCwd, isUncOrDevicePath } from '../../shared/cwdShape';
 
 const PROMPT_CWD_RE = /(?:PS\s+([A-Za-z]:\\[^>]*?)>)|(?:\w+@[\w.-]+:([^$]+?)\$)/g;
 
@@ -29,8 +30,14 @@ const PROMPT_CWD_RE = /(?:PS\s+([A-Za-z]:\\[^>]*?)>)|(?:\w+@[\w.-]+:([^$]+?)\$)/
  *     `///` after the host separator), which we collapse back to
  *     `\\server\share`.
  * POSIX paths (`/home/me`) pass through unchanged.
+ *
+ * Returns null, and the caller keeps the previous cwd, when the report is not
+ * a local folder: a host other than this machine (`localHosts`, lowercase;
+ * null skips the host check) or a network or device path.
  */
-export function parseOsc7Cwd(data: string): string {
+export function parseOsc7Cwd(data: string, localHosts: readonly string[] | null = machineHostnames()): string | null {
+  const host = /^file:\/\/([^/]*)/.exec(data)?.[1] ?? '';
+  if (localHosts && !localHosts.includes(host.toLowerCase())) return null;
   let p = data.replace(/^file:\/\/[^/]*/, '');
   try {
     p = decodeURIComponent(p);
@@ -42,9 +49,12 @@ export function parseOsc7Cwd(data: string): string {
     return p.slice(1).replace(/\//g, '\\');
   }
   // Windows UNC path: "/" (host separator) + "//server/share" → "\\server\share".
+  // Only a WSL distro's share is kept.
   if (/^\/\/\//.test(p)) {
-    return p.slice(1).replace(/\//g, '\\');
+    const unc = p.slice(1).replace(/\//g, '\\');
+    return isUncOrDevicePath(unc) ? null : unc;
   }
+  if (isUncOrDevicePath(p)) return null;
   // Deliberately NOT NFC-normalized here: this value doubles as the split-
   // inheritance spawn seed, and on normalization-SENSITIVE filesystems
   // (Linux ext4; NFS/macFUSE mounts on macOS) the NFC spelling may not name
@@ -53,6 +63,21 @@ export function parseOsc7Cwd(data: string): string {
   // state/spawning; the DISPLAY boundary (tab tooltip / working-directories
   // menu) normalizes for rendering instead — see displayPath().
   return p;
+}
+
+/**
+ * The OSC 7 hosts that mean this machine: none, `localhost`, and every name
+ * the machine has had while this process ran. The hooks send zsh `$HOST`,
+ * bash `$HOSTNAME` or pwsh `$env:COMPUTERNAME` (the short NetBIOS name), and
+ * a shell keeps the name it started with when macOS renames the host on a
+ * network change.
+ */
+const seenHostnames = new Set<string>();
+export function machineHostnames(): string[] {
+  seenHostnames.add(os.hostname().toLowerCase());
+  const netbios = process.env.COMPUTERNAME;
+  if (netbios) seenHostnames.add(netbios.toLowerCase());
+  return ['', 'localhost', ...seenHostnames];
 }
 
 /**

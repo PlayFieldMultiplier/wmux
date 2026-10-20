@@ -39,7 +39,7 @@ import {
   type PreviewKind,
   type PreviewOpenResult,
 } from '../../shared/filePreview';
-import { isSensitivePath, resolveAccessiblePath } from '../ipc/handlers/fs.handler';
+import { isNonLocalPath, isSensitivePath, resolveAccessiblePath } from '../ipc/handlers/fs.handler';
 
 /** Registered together with the plugin scheme: see registerPrivilegedSchemes. */
 export const PREVIEW_SCHEME_PRIVILEGES: CustomScheme = {
@@ -336,7 +336,7 @@ export async function openPreview(sender: WebContents, filePath: unknown): Promi
   if (isSensitivePath(path.resolve(filePath))) return { ok: false, reason: 'denied' };
   const canonical = await resolveAccessiblePath(filePath);
   if (!canonical) {
-    return { ok: false, reason: fs.existsSync(filePath) ? 'denied' : 'missing' };
+    return { ok: false, reason: isNonLocalPath(filePath) || fs.existsSync(filePath) ? 'denied' : 'missing' };
   }
   // A symlink is judged, and typed, by what it points at.
   const actual = previewTypeOf(canonical);

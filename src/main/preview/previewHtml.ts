@@ -45,7 +45,7 @@ import {
   type PreviewLinkEvent,
   type PreviewOpenResult,
 } from '../../shared/filePreview';
-import { isSensitivePath, resolveAccessiblePath } from '../ipc/handlers/fs.handler';
+import { isNonLocalPath, isSensitivePath, resolveAccessiblePath } from '../ipc/handlers/fs.handler';
 import { onSenderReleased, senderStillCurrent, setHtmlPreviewHandler, watchSender } from './previewProtocol';
 
 /** Registered with every other privileged scheme in one call (privilegedSchemes.ts). */
@@ -226,7 +226,7 @@ export async function openHtmlPreview(sender: WebContents, filePath: string): Pr
   const generation = watchSender(sender);
   if (isSensitivePath(path.resolve(filePath))) return { ok: false, reason: 'denied' };
   const canonical = await resolveAccessiblePath(filePath);
-  if (!canonical) return { ok: false, reason: fs.existsSync(filePath) ? 'denied' : 'missing' };
+  if (!canonical) return { ok: false, reason: isNonLocalPath(filePath) || fs.existsSync(filePath) ? 'denied' : 'missing' };
   let st: fs.Stats;
   try {
     st = await fs.promises.stat(canonical);

@@ -5,6 +5,7 @@ import { TerminalNotificationParser } from './oscNotification';
 import { AgentDetector, agentDisplayToSlug } from './AgentDetector';
 import { ActivityMonitor } from './ActivityMonitor';
 import { parseOsc7Cwd, detectPromptCwd } from './cwdDetect';
+import { isWslShell } from '../../shared/wslTarget';
 import { ClaudeTitleTurnEdge, sanitizeTitle } from './titleDetect';
 import { IPC } from '../../shared/constants';
 import {
@@ -426,6 +427,9 @@ export class PTYBridge {
     // (the hook re-emits on every prompt; scraping could only add false
     // positives, e.g. agent TUI output shaped like "user@host:path$").
     let oscCwdSeen = false;
+    // A WSL distro's shell names the distro's own hostname in OSC 7, which can
+    // differ from this machine's (wsl.conf): its reports skip the host check.
+    const wslDistro = isWslShell(instance.shell);
 
     // Desktop-notification sequences (OSC 9/777/99). Stateful for OSC 99
     // chunk assembly, so it lives per-PTY alongside the OscParser. Captured
@@ -468,9 +472,11 @@ export class PTYBridge {
           // OSC 7-sticky (2026-07-21): the hook is the authoritative cwd
           // source — permanently disable prompt scraping for this PTY so
           // screen text shaped like a prompt can never override it (twin of
-          // the DaemonPTYBridge guard).
+          // the DaemonPTYBridge guard). A report that is not a local folder
+          // is ignored and the previous cwd stays.
+          const cwd = wslDistro ? parseOsc7Cwd(event.data, null) : parseOsc7Cwd(event.data);
+          if (cwd === null) break;
           oscCwdSeen = true;
-          const cwd = parseOsc7Cwd(event.data);
           updateCwd(ptyId, cwd);
           win.webContents.send(IPC.CWD_CHANGED, ptyId, cwd);
           break;
