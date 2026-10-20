@@ -99,7 +99,8 @@ export type PrVerdictRefusalCode =
   | 'on-pr-branch'
   /** The verdict store could not be read or written. */
   | 'store-error'
-  /** A bot caller whose role records no verdicts (only the verifier does). */
+  /** A bot caller whose role records no verdicts (only the verifier does),
+   *  or whose wake is not known clean of a guest's words. */
   | 'surface'
   /** A bot verdict without `evidence: {taskId}` naming a task in the ledger. */
   | 'evidence-missing'

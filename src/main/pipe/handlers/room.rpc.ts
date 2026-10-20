@@ -36,6 +36,7 @@ import {
   ROOM_EVENT,
   ROOM_LIMITS,
   ROOM_RPC,
+  isGuestSourcedCard,
   parseThreadId,
   type CardKind,
   type RoomCard,
@@ -598,6 +599,8 @@ export async function handleRoomResolve(raw: unknown, ctx: RpcContext | undefine
     title: `Resolved: ${card.title}`,
     body: resolution,
     refs: { ...(card.refs?.handoffId ? { handoffId: card.refs.handoffId } : {}) },
+    // It repeats the card's title: as guest-sourced as that card.
+    ...(isGuestSourcedCard(card) ? { origin: 'guest' as const } : {}),
   });
   const correction = resolutionCorrection(closed, resolution);
   if (correction) emitHumanCorrection(deps.ports(), correction);

@@ -15,7 +15,7 @@ import type { Fact, FactDraft } from '../../../shared/facts';
 import type { MergeEffect } from '../../../shared/moaDecision';
 import type { PrLaneFacts } from '../../../shared/prReview';
 import type { RpcContext } from '../../../shared/rpc';
-import { ApprovalService, registerApprovalRpc, ruleCovers, typedApprovalSourceAllowed, typedApprovalTargets, withoutOwnerQuotes, type ApprovalMergeHost, type ApprovalPorts, type ApprovalWake, type StoredApproval } from '../approvals';
+import { ApprovalService, GUEST_REASON_HIDDEN, registerApprovalRpc, ruleCovers, typedApprovalSourceAllowed, typedApprovalTargets, withoutOwnerQuotes, type ApprovalMergeHost, type ApprovalPorts, type ApprovalWake, type StoredApproval } from '../approvals';
 import type { BotNoticeInput } from '../botNotices';
 import { RoomWriter } from '../roomWriter';
 import { registeredFactoryModules } from '../factoryHost';
@@ -116,6 +116,24 @@ describe('approval requests (bot side)', () => {
       expect(r.writer.read(WS).cards.find((c) => c.id === req.cardId)).toBeUndefined();
       expect(r.writer.get(WS, req.cardId as string)?.origin).toBe('guest');
     }
+  });
+
+  it('a guest-sourced request\'s words are not read back in a wake that is not guest-sourced: not listed, not as a duplicate', async () => {
+    const r = rig();
+    r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: true });
+    const req = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'GUEST-REASON', clientRequestId: 'k-1' });
+    const listed = () => {
+      const res = r.svc.listFor(binding(DEV), {});
+      if (!res.ok) throw new Error('list refused');
+      return res.requests.find((x) => x.requestId === req.requestId);
+    };
+    expect(listed()?.reason).toBe('GUEST-REASON');
+    r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: null, tainted: false });
+    expect(listed()).toMatchObject({ requestId: req.requestId, state: 'pending', reason: GUEST_REASON_HIDDEN });
+    const again = await r.svc.request(binding(DEV), { action: 'merge', prNumber: 1, reason: 'clean', clientRequestId: 'k-1' });
+    expect(again).toMatchObject({ ok: true, duplicate: true, request: { reason: GUEST_REASON_HIDDEN } });
+    const sameHead = await r.svc.request(binding(DEV), { action: 'merge', prNumber: 1, reason: 'clean' });
+    expect(sameHead).toMatchObject({ ok: true, duplicate: true, request: { requestId: req.requestId, reason: GUEST_REASON_HIDDEN } });
   });
 
   it('a request stores its wake\'s taint as read after the GitHub lookup, never cleaner', async () => {

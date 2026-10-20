@@ -564,7 +564,7 @@ describe('line diff', () => {
 function approvalRig(botName?: string, gone: ReadonlySet<string> = new Set()) {
   const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
   const skills = store();
-  const wakes = new Map<string, ApprovalWake>([[A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false }]]);
+  const wakes = new Map<string, ApprovalWake>([[A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false }]]);
   const notices: string[] = [];
   const events: string[] = [];
   const svc = new ApprovalService({
@@ -718,7 +718,7 @@ describe('skill_propose → approval card → load', () => {
     const svc = new ApprovalService({
       file: path.join(wmuxDir, 'factory', 'approvals.json'),
       bots: () => ({ listEnabled: () => [profile(A)], get: (id) => (id === A ? profile(A) : null) }),
-      runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false }),
+      runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false }),
       readPr: async () => { throw new Error('no PR'); },
       ghLogin: async () => null,
       rooms: () => writer,
@@ -735,6 +735,16 @@ describe('skill_propose → approval card → load', () => {
     expect(skills.read(A, 'report')).toMatchObject({ ok: true });
     expect(svc.decide({ requestId: req.request.requestId, decision: 'undo' }, 'desktop')).toMatchObject({ ok: false, code: 'too_late' });
     expect(svc.get(req.request.requestId)?.state).toBe('approved');
+  });
+
+  it('a wake not known clean proposes no skill', () => {
+    const r = approvalRig();
+    for (const guest of [true, 'unknown'] as const) {
+      r.wakes.set(A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest });
+      const res = r.svc.proposeSkill(binding(A), { name: 'report', hash: 'h'.repeat(64), version: '1.0.0', update: false, diff: '--- SKILL.md\n+ x', reason: 'r' });
+      expect(res).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('external guest') });
+    }
+    expect(r.svc.listForOperator(WS)).toHaveLength(0);
   });
 
   it('the card is measured as the room stores it: a change that grows past the card once redacted is refused', () => {

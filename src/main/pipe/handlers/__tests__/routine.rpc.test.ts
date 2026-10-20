@@ -97,6 +97,20 @@ describe('routine.set', () => {
     }
   });
 
+  it('a wake not known clean pauses a routine but does not resume one', async () => {
+    const opts: { guestWake: boolean | 'unknown' } = { guestWake: false };
+    const r = rig(opts);
+    const a = await r.call('routine.set', params, asBot(A)) as { routine: { id: string } };
+    for (const g of [true, 'unknown'] as const) {
+      opts.guestWake = g;
+      expect(await r.call('routine.pause', { routineId: a.routine.id, paused: true }, asBot(A))).toMatchObject({ ok: true, routine: { state: 'paused' } });
+      expect(await r.call('routine.pause', { routineId: a.routine.id, paused: false }, asBot(A))).toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('external guest') });
+      expect(r.store.list(A)[0]).toMatchObject({ state: 'paused' });
+    }
+    opts.guestWake = false;
+    expect(await r.call('routine.pause', { routineId: a.routine.id, paused: false }, asBot(A))).toMatchObject({ ok: true });
+  });
+
   it('turnOnOwnerWords: the owner\'s message or answer; a closed question, a mention, facts, a plain handoff or no turn are not', () => {
     const item = (reason: WakeItem['reason']) => (() => ({ id: 'w', reason }) as WakeItem);
     const answers = (id: string) => (id === 'h-answer' ? { handoffId: id, kind: 'answer', from: 'o', title: '', body: '', ownerWords: true }

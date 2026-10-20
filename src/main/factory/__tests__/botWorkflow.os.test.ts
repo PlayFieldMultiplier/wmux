@@ -482,6 +482,16 @@ describe('durable sequential workflows', () => {
     expect(await h.call(WORKFLOW_RPC.create, input)).toMatchObject({ ok: true });
   });
 
+  it('a wake not known clean advances no workflow', async () => {
+    const store = open(); const h = harness(store);
+    const created = await h.call(WORKFLOW_RPC.create, input) as { ok: true; workflow: { id: string } };
+    for (const g of [true, 'unknown'] as const) {
+      guestSourced = g;
+      expect(await h.call(WORKFLOW_RPC.advance, { workflowId: created.workflow.id, idempotencyKey: 'wake:one:1' })).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION', message: expect.stringContaining('external guest') });
+    }
+    expect(h.fanout).not.toHaveBeenCalled();
+  });
+
   it('a workflow is judged again inside its write: one whose wake turned unknown, or ended, while queued is not saved', async () => {
     const store = open(); const h = harness(store);
     const unknown = h.call(WORKFLOW_RPC.create, input);

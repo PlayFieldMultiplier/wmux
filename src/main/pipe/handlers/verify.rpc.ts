@@ -43,6 +43,7 @@ import { getBotDirectory } from '../../factory/botStore';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { closeVerifyTask, isBotVerifyTask } from '../../factory/verdictedTasks';
 import { bodyOf, resolvePaneCaller, type PaneCallerDeps } from '../paneCaller';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 
 export interface VerifyRpcDeps extends PaneCallerDeps {
   /** The remote key of the repo a cwd belongs to, or null. */
@@ -64,6 +65,9 @@ export interface VerifyBotPorts {
   /** Close this bot's verify task (verdictedTasks.ts closeVerifyTask).
    *  Missing: a stale task is left open. */
   closeVerifyTask?: (taskId: string, botId: string, why: string) => Promise<boolean>;
+  /** The guest provenance of the bot's running wake (wakeTaint.ts). Missing:
+   *  the running tracker's. */
+  guestWake?: (botId: string) => GuestProvenance;
 }
 
 const defaultBotPorts: VerifyBotPorts = {
@@ -107,6 +111,11 @@ export async function recordBotVerdict(
   const evidence = botEvidenceOf(rawEvidence);
   if (!evidence) return { ok: false, code: 'evidence-missing', message: 'evidence must be {taskId}: the verify task this verdict rests on' };
   const ports = deps.bot ?? defaultBotPorts;
+  // A verdict is merge evidence: no wake that is not known clean records one.
+  const guestRefusal = (): PrVerdictResult | null => ((ports.guestWake ?? guestOfRunningWake)(bot.botId) !== false
+    ? { ok: false, code: 'surface', message: GUEST_TURN_STARTS_NO_WORKERS } : null);
+  const refusedAtEntry = guestRefusal();
+  if (refusedAtEntry) return refusedAtEntry;
   let profile: BotProfile | null;
   try {
     profile = ports.profile(bot.botId);
@@ -177,6 +186,9 @@ export async function recordBotVerdict(
         : 'the task is not this bot\'s verify task on a detached checkout of headSha with a system gate run at headSha';
     return { ok: false, code: why === 'verdict-no-evidence' ? 'evidence-missing' : why, message };
   }
+  // Judged again after the reads, in the tick that writes.
+  const refusedLate = guestRefusal();
+  if (refusedLate) return refusedLate;
   try {
     await deps.record(record);
   } catch {

@@ -113,6 +113,8 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     const store = deps.store();
     if (!store) return NOT_STARTED;
     const p = obj(raw);
+    // Pausing is always allowed; a resumed routine wakes the bot later as clean work.
+    if (p.paused !== true && (deps.guestWake ?? guestOfRunningWake)(ctx.bot.botId) !== false) return refuse('not_authorized', GUEST_TURN_STARTS_NO_WORKERS);
     return store.pause({ kind: 'bot', botId: ctx.bot.botId, workspaceId: ctx.bot.workspaceId }, p.routineId, p.paused);
   });
 

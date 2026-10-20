@@ -1856,7 +1856,7 @@ async function resumeOnce(
     else ports.launches?.released(rec.taskId, gen);
   }
   if (!typed) return refuse('not_typed', 'the resume line could not be typed into the worker\'s pane');
-  return launched(ports, rec, pane.sessionId, pane.resumeSessionId, workerWorkspaceOf(rec), by, message, onLaunched, 'folder');
+  return launched(ports, rec, pane.sessionId, pane.resumeSessionId, workerWorkspaceOf(rec), by, message, onLaunched, 'folder', stillOk);
 }
 
 /** The worker's pane is gone: open a new task workspace in the worktree. */
@@ -1931,7 +1931,7 @@ async function respawnOnce(
     await stopRelaunched(ports, rec.taskId, r.sessionId);
     return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   }
-  return launched(ports, rec, r.sessionId, pane.resumeSessionId, r.workspaceId, by, message, onLaunched, 'newPane');
+  return launched(ports, rec, r.sessionId, pane.resumeSessionId, r.workspaceId, by, message, onLaunched, 'newPane', stillOk);
 }
 
 /** The task's ledger row names `workspaceId` (written now when it named
@@ -1976,6 +1976,7 @@ async function launched(
   message: string | undefined,
   onLaunched: (() => void) | undefined,
   where: 'folder' | 'newPane',
+  stillOk?: () => string | null,
 ): Promise<WorkerResumeResult> {
   const now = ports.now ?? Date.now;
   ports.store.setState(rec.taskId, 'resumed', now());
@@ -2005,6 +2006,8 @@ async function launched(
     }
     await sleep(1000);
   }
+  // Asked again after the wait, in the tick that sends the message.
+  if (up && (stillOk?.() ?? null)) return { ...out, messageDelivered: false };
   const delivered = up ? await ports.submit(sessionId, text.slice(0, RESUME_MESSAGE_MAX)).catch(() => false) : false;
   return { ...out, messageDelivered: delivered };
 }

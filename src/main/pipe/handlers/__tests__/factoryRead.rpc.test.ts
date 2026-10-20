@@ -83,6 +83,7 @@ function deps(over: Partial<FactoryReadDeps> = {}): FactoryReadDeps & { roomsDir
     }),
     rooms: () => writer,
     postKey: () => 'wake:w-1:1',
+    guestWake: () => false,
     now: () => 1_000_000,
     ...over,
   };
@@ -222,6 +223,14 @@ describe('plan.propose', () => {
     expect(card.body).toContain('Two items.');
     // Same wake key: the same card, not a second one.
     expect(await handlePlanPropose({ title: 'Plan for Monday', items: [ITEM] }, ctxOf(MOA), d)).toMatchObject({ duplicate: true });
+  });
+
+  it('a wake not known clean proposes no plan', async () => {
+    for (const g of [true, 'unknown'] as const) {
+      const d = deps({ guestWake: () => g });
+      expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(MOA), d)).toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('external guest') });
+      expect((d.rooms() as RoomWriter).read('ws-hq', { guests: true }).cards).toHaveLength(0);
+    }
   });
 
   it('a newer plan supersedes the bot\'s older plan still open; another bot\'s stays open', async () => {

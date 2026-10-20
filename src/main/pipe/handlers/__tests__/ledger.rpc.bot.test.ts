@@ -28,7 +28,7 @@ beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp2-ledger-bot-'));
   ledger = new TaskLedger({ dir });
   const handlers = new Map<string, Handler>();
-  registerLedgerRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger });
+  registerLedgerRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, guestWake: () => false });
   update = handlers.get('ledger.update') as Handler;
   await ledger.register({ id: 't-mine', taskWorkspaceId: 'ws-t1', ownerWorkspaceId: 'ws-bot', title: 'mine', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' } } });
   await ledger.register({ id: 't-other', taskWorkspaceId: 'ws-t2', ownerWorkspaceId: 'ws-bot', title: 'other', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000b' } } });
@@ -52,10 +52,24 @@ describe('ledger.update — bot scope', () => {
       .toMatchObject({ ok: false, error: { code: 'NOT_AUTHORIZED' } });
   });
 
+  it('a wake not known clean moves no task, judged again after the no-changes check', async () => {
+    let guest: boolean | 'unknown' = true;
+    const handlers = new Map<string, Handler>();
+    registerLedgerRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, guestWake: () => guest });
+    const guarded = handlers.get('ledger.update') as Handler;
+    for (const g of [true, 'unknown'] as const) {
+      guest = g;
+      expect(await guarded({ taskId: 't-mine', status: 'failed', expectedRev: 1, summary: 'x' }, bot('bot-0000000a'))).toMatchObject({ ok: false, error: { code: 'NOT_AUTHORIZED', message: expect.stringContaining('external guest') } });
+    }
+    expect(ledger.get('t-mine')?.status).not.toBe('failed');
+    guest = false;
+    expect(await guarded({ taskId: 't-mine', status: 'failed', expectedRev: 1 }, bot('bot-0000000a'))).toMatchObject({ ok: true });
+  });
+
   /** ledger.update with the no-changes check answering `verdict`. */
   const guardedBy = (verdict: () => NoChangesVerdict | Promise<NoChangesVerdict>): Handler => {
     const handlers = new Map<string, Handler>();
-    registerLedgerRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, noChangesCheck: async () => verdict() });
+    registerLedgerRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, noChangesCheck: async () => verdict(), guestWake: () => false });
     return handlers.get('ledger.update') as Handler;
   };
   const CHECKED = 'c'.repeat(40);

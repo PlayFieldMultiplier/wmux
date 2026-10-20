@@ -35,6 +35,7 @@ import type { FactoryRouter } from '../../factory/factoryHost';
 import type { BotDirectoryApi } from '../../factory/botStore';
 import type { RoomWriter } from '../../factory/roomWriter';
 import { DAY_MS, type TrustReadResult } from '../../factory/trustMetrics';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 
 // ── Limits ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,9 @@ export interface FactoryReadDeps {
   /** The running wake's idempotency key for a bot's n-th post (room.post's). */
   postKey: (botId: string) => string | undefined;
   now?: () => number;
+  /** The guest provenance of a bot's running wake (wakeTaint.ts); default
+   *  the running tracker. */
+  guestWake?: (botId: string) => GuestProvenance;
 }
 
 // ── Caller and repo scope ──────────────────────────────────────────────────
@@ -373,6 +377,8 @@ export async function handlePlanPropose(raw: unknown, ctx: RpcContext | undefine
   if (!own || !own.enabled || own.workspaceId !== bot.workspaceId) {
     return refusal('not_attributed', 'this bot is not running in the factory');
   }
+  // The owner's answer to a plan wakes its bot to start the work.
+  if ((deps.guestWake ?? guestOfRunningWake)(bot.botId) !== false) return refusal('not_authorized', `plan.propose: ${GUEST_TURN_STARTS_NO_WORKERS}`);
   const anyWorkspace = isCoordinatorBot(own);
   const p = params(raw);
   const L = FACTORY_READ_LIMITS;

@@ -103,6 +103,28 @@ describe('bot.resumeWorker', () => {
   });
 });
 
+describe('bot.resumeWorker message', () => {
+  it('is judged again after the wait for the agent, right before the message is sent', async () => {
+    const handlers = new Map<string, (p: Record<string, unknown>, ctx?: RpcContext) => Promise<unknown>>();
+    let refusal: string | null = null;
+    const p = ports();
+    const submit = vi.fn(async () => true);
+    p.submit = submit;
+    p.sleep = async () => undefined;
+    p.agentAlive = async () => {
+      refusal = 'this turn comes from an external guest\'s message';
+      return true;
+    };
+    registerWorkerResumeRpc({ register: (m: string, h: never) => handlers.set(m, h), onBotRefused: () => undefined } as never, {
+      ports: () => p, slots: () => null, factoryEnabled: () => true, wakeId: () => 'w-1', launchRefusal: () => refusal,
+    });
+    const ctx = { bot: { botId: BOT, workspaceId: 'ws-owner' } } as unknown as RpcContext;
+    expect(await handlers.get(BOT_RPC.resumeWorker)!({ taskId: TASK, message: 'go on' }, ctx)).toMatchObject({ ok: true, messageDelivered: false });
+    expect(p.typeLine).toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+  });
+});
+
 describe('FACTORY_WORKER_RESUME (IPC guard)', () => {
   const mainFrame = { id: 'top' };
   const webContents = { mainFrame };

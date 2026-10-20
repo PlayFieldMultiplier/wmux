@@ -381,8 +381,9 @@ interface RouteSpec {
   toBotId?: string;
   clientHandoffId?: string;
   next?: string[];
-  /** It carries a guest-sourced card's words (a room mention). */
-  guestSource?: true;
+  /** The provenance of the card it carries (a room mention): read in
+   *  place of the running turn's. */
+  guestSource?: boolean;
 }
 
 /** The idempotency key of the message a card's mention sends one bot. */
@@ -801,8 +802,9 @@ export class HandoffRouter {
         namedThread: askedInDm && wakeThread && safeGet(ports.bots, botId)?.workspaceId === sender.workspaceId ? wakeThread : card.threadId,
         toBotId: botId,
         clientHandoffId: mentionKey(card.id, botId),
-        // The card's own provenance, not the turn running when it is routed.
-        ...(card.origin === 'guest' ? { guestSource: true as const } : {}),
+        // The card's own provenance (stamped when it was written), not the
+        // turn running when it is routed.
+        guestSource: card.origin === 'guest',
       }),
     }));
   }
@@ -863,7 +865,7 @@ export class HandoffRouter {
       ...(spec.clientHandoffId ? { clientHandoffId: spec.clientHandoffId } : {}),
       // Said on a refused record too: a refusal wakes its sender
       // (markSent below sets it for a sent one).
-      guestSourced: spec.guestSource === true || this.runningGuest(sender.botId) !== false || (!!parent && this.guestOf(parent)),
+      guestSourced: (spec.guestSource ?? this.runningGuest(sender.botId) !== false) || (!!parent && this.guestOf(parent)),
       createdAt: this.now(),
       updatedAt: this.now(),
     };
@@ -931,7 +933,7 @@ export class HandoffRouter {
     // Marked now, in the sender's turn, from the wake it is running; a reply
     // is also as tainted (and as guest-sourced) as the handoff it answers.
     // A guest mark is on disk before the hop is, or the hop is not sent.
-    const mark = this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : [], spec.guestSource === true);
+    const mark = this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : [], spec.guestSource);
     if (mark === null) return { ok: false, code: 'write_failed', message: 'the handoff could not be recorded' };
     // Said on the record too, so it outlives the mark.
     const sending: Handoff = mark === undefined ? draft : { ...draft, guestSourced: mark === 'guest' };

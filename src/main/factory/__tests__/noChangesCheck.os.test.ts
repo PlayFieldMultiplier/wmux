@@ -139,7 +139,7 @@ describe.skipIf(process.platform === 'win32')('the no-changes check over real gi
   /** ledger.update as a brain, with the live check wired. */
   const complete = async (): Promise<unknown> => {
     const handlers = new Map<string, (p: Record<string, unknown>, c?: RpcContext) => Promise<unknown>>();
-    registerLedgerRpc({ register: (m: string, h: never) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, noChangesCheck: check() });
+    registerLedgerRpc({ register: (m: string, h: never) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, noChangesCheck: check(), guestWake: () => false });
     return (handlers.get('ledger.update') as (p: Record<string, unknown>, c?: RpcContext) => Promise<unknown>)(
       { taskId: 't1', status: 'completed', expectedRev: row().rev },
       { origin: 'local', commanderWorkspace: 'ws-o' } as RpcContext,
@@ -289,7 +289,7 @@ describe.skipIf(process.platform === 'win32')('the no-changes check over real gi
       },
     };
     const handlers = new Map<string, (p: Record<string, unknown>, c?: RpcContext) => Promise<unknown>>();
-    registerLedgerRpc({ register: (m: string, h: never) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, noChangesCheck: (e) => checkNoChanges(slowOrigin, e) });
+    registerLedgerRpc({ register: (m: string, h: never) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, noChangesCheck: (e) => checkNoChanges(slowOrigin, e), guestWake: () => false });
     const r = await (handlers.get('ledger.update') as (p: Record<string, unknown>, c?: RpcContext) => Promise<unknown>)(
       { taskId: 't1', status: 'completed', expectedRev: row().rev },
       { origin: 'local', commanderWorkspace: 'ws-o' } as RpcContext,

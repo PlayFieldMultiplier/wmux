@@ -186,6 +186,12 @@ describe('the owner\'s answer to a plan', () => {
     expect(wake).toHaveBeenCalledTimes(2);
   });
 
+  it('a guest-sourced plan card\'s answer wakes nobody', () => {
+    const wake = vi.fn();
+    expect(routePlanAnswer({ workspaceId: 'ws-hq', card: card({ origin: 'guest' }), resolution: 'approve' }, { bots: () => directory(), wake })).toBe('ignored');
+    expect(wake).not.toHaveBeenCalled();
+  });
+
   it('only plan cards a bot posted: any enabled bot\'s plan answer wakes its author', () => {
     const wake = vi.fn();
     const ports = { bots: () => directory(), wake };

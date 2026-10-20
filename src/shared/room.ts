@@ -200,10 +200,10 @@ export interface RoomCard {
   /** Main-written, `guest` cards only (actor system): the outside agent that
    *  posted it (shared/guestBots.ts). The card is external whatever it says. */
   guest?: { guestId: string; name: string };
-  /** Main-written, bot and system cards: written in a guest-sourced wake
-   *  (wakeTaint.ts), or derived from a guest-sourced item (a question, its
-   *  closing card, a thread's Finished card). Read like a `guest` card
-   *  (isGuestSourcedCard). */
+  /** Main-written: a bot card written in a guest-sourced wake (wakeTaint.ts),
+   *  or a card derived from a guest-sourced item (a question, its closing
+   *  card, a thread's Finished card, a fact's card, the owner's resolution
+   *  of such a card). Read like a `guest` card (isGuestSourcedCard). */
   origin?: 'guest';
 }
 

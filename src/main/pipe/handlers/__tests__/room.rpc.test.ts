@@ -801,6 +801,17 @@ describe('room.resolve', () => {
     expect(s.writer.read('hq').cards.at(-1)).toMatchObject({ kind: 'fact', title: 'Resolved: Add a lint rule', body: 'Approve' });
     expect(await handleRoomResolve({ workspaceId: 'hq', cardId: 'c-none', resolution: 'x' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'not_found' });
   });
+
+  it('the resolution of a guest-sourced card is guest-sourced too, across a reload', async () => {
+    const moa = bot('hq', 'moa');
+    const s = setup([moa]);
+    const source = s.writer.append({ workspaceId: 'hq', kind: 'proposal', actor: { kind: 'bot', workspaceId: 'hq', botId: moa.id }, title: 'GUEST-PLAN', state: 'open', origin: 'guest' });
+    expect(await handleRoomResolve({ workspaceId: 'hq', cardId: source!.id, resolution: 'Approve' }, OPERATOR, s.deps)).toMatchObject({ ok: true });
+    expect(JSON.stringify(s.writer.read('hq').cards)).not.toContain('GUEST-PLAN');
+    expect(s.writer.read('hq', { guests: true }).cards.at(-1)).toMatchObject({ actor: { kind: 'human' }, title: 'Resolved: GUEST-PLAN', origin: 'guest' });
+    const reloaded = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), log: () => undefined });
+    expect(JSON.stringify(reloaded.read('hq').cards)).not.toContain('GUEST-PLAN');
+  });
 });
 
 describe('human.correction from the owner\'s answers', () => {

@@ -524,7 +524,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(attachments ? { attachments } : {}),
     ...(files ? { files } : {}),
     ...(guest ? { guest } : {}),
-    ...(c.origin === 'guest' && (actor.kind === 'bot' || actor.kind === 'system') ? { origin: 'guest' as const } : {}),
+    ...(c.origin === 'guest' ? { origin: 'guest' as const } : {}),
   };
 }
 

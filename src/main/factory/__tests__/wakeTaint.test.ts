@@ -343,6 +343,10 @@ describe('guest provenance', () => {
     const t = make({ runningWake: () => clean }, [], [handoff('h-m', fromBot), refused]);
     expect(t.markSent('h-m', 'bot-a', [], true)).toBe('guest');
     expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-m' }))).toBe(true);
+    // A clean card routed after its wake ended: clean (tainted, as no turn vouches for it).
+    const after = make({ runningWake: () => null }, [], [handoff('h-c', fromBot)]);
+    expect(after.markSent('h-c', 'bot-a', [], false)).toBe(true);
+    expect(after.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-c' }))).toBe(false);
     const withFact = make({ runningWake: () => clean }, [{ ...fact('f-r', 'handoff.refused', { handoffId: 'h-refused' }) }], [refused]);
     expect(withFact.wakeGuest(wake({ kind: 'facts', factIds: ['f-r'], trigger: { kind: 'fact' } as never }))).toBe(false);
   });

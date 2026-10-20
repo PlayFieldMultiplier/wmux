@@ -133,7 +133,7 @@ function row(over: Partial<LedgerEntry> = {}): LedgerEntry {
 function botSetup(r: LedgerEntry | null = row(), profile: BotProfile | null = verifierProfile(), over: Partial<VerifyRpcDeps> = {}) {
   return setup({
     repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
-    bot: { profile: (id) => (id === BOT.botId ? profile : null), ledgerRow: (id) => (r && id === r.id ? r : null) },
+    bot: { guestWake: () => false, profile: (id) => (id === BOT.botId ? profile : null), ledgerRow: (id) => (r && id === r.id ? r : null) },
     ...over,
   });
 }
@@ -152,6 +152,21 @@ describe('verify.recordVerdict — bot path', () => {
     expect(r).toEqual({ ok: true, record: expected });
     expect(record).toHaveBeenCalledWith(expected);
     expect(readPr).toHaveBeenCalledWith('/repo', 'github.com/o/r', 7);
+  });
+
+  it('a wake not known clean records no verdict, judged again after the PR read', async () => {
+    for (const g of [true, 'unknown'] as const) {
+      const { call, record } = botSetup(row(), verifierProfile(), { bot: { guestWake: () => g, profile: () => verifierProfile(), ledgerRow: () => row() } });
+      expect(await call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'surface', message: expect.stringContaining('external guest') });
+      expect(record).not.toHaveBeenCalled();
+    }
+    let guest: boolean | 'unknown' = false;
+    const { call, record } = botSetup(row(), verifierProfile(), {
+      bot: { guestWake: () => guest, profile: () => verifierProfile(), ledgerRow: () => row() },
+      readPr: async () => { guest = 'unknown'; return FACTS; },
+    });
+    expect(await call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'surface' });
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('any enabled bot of the workspace with the repository records, whatever its role tag or template', async () => {
@@ -225,7 +240,7 @@ describe('verify.recordVerdict — bot path', () => {
     const withCloser = (r: LedgerEntry | null) => setup({
       repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
       readPr: moved,
-      bot: { profile: (id) => (id === BOT.botId ? verifierProfile() : null), ledgerRow: (id) => (r && id === r.id ? r : null), closeVerifyTask: closer },
+      bot: { guestWake: () => false, profile: (id) => (id === BOT.botId ? verifierProfile() : null), ledgerRow: (id) => (r && id === r.id ? r : null), closeVerifyTask: closer },
     });
     const stale = withCloser(row());
     expect(await stale.call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'head-mismatch' });
@@ -245,7 +260,7 @@ describe('verify.recordVerdict — bot path', () => {
     // A recorded verdict does not close here (the record hook does), and a closer that fails changes no answer.
     const ok = setup({
       repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
-      bot: { profile: () => verifierProfile(), ledgerRow: () => row(), closeVerifyTask: closer },
+      bot: { guestWake: () => false, profile: () => verifierProfile(), ledgerRow: () => row(), closeVerifyTask: closer },
     });
     expect(await ok.call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: true });
     expect(closes).toEqual([]);
@@ -255,7 +270,7 @@ describe('verify.recordVerdict — bot path', () => {
       const changed = setup({
         repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
         readPr: moved,
-        bot: { profile: () => (reads++ === 0 ? verifierProfile() : after), ledgerRow: () => row(), closeVerifyTask: closer },
+        bot: { guestWake: () => false, profile: () => (reads++ === 0 ? verifierProfile() : after), ledgerRow: () => row(), closeVerifyTask: closer },
       });
       expect(await changed.call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'head-mismatch' });
     }
@@ -263,7 +278,7 @@ describe('verify.recordVerdict — bot path', () => {
     const failing = setup({
       repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
       readPr: moved,
-      bot: { profile: () => verifierProfile(), ledgerRow: () => row(), closeVerifyTask: async () => { throw new Error('ledger'); } },
+      bot: { guestWake: () => false, profile: () => verifierProfile(), ledgerRow: () => row(), closeVerifyTask: async () => { throw new Error('ledger'); } },
     });
     expect(await failing.call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'head-mismatch' });
   });
@@ -273,7 +288,7 @@ describe('verify.recordVerdict — bot path', () => {
       let calls = 0;
       const { call, record } = setup({
         repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
-        bot: { profile: () => (calls++ === 0 ? verifierProfile() : after), ledgerRow: () => row() },
+        bot: { guestWake: () => false, profile: () => (calls++ === 0 ? verifierProfile() : after), ledgerRow: () => row() },
       });
       expect(await call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'not-attributed' });
       expect(record).not.toHaveBeenCalled();

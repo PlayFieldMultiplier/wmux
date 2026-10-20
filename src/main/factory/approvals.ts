@@ -98,7 +98,7 @@ import { laneRefusalCodes, laneRefusalLine } from './laneRefusalText';
 import { wakeReplyTo, type RoomWriter } from './roomWriter';
 import type { BotNoticeInput } from './botNotices';
 import type { BotDirectoryApi } from './triggerEngine';
-import { guestOfRecord } from './wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRecord } from './wakeTaint';
 
 export const APPROVALS_FILENAME = 'approvals.json';
 
@@ -161,6 +161,19 @@ export function approvalView(r: StoredApproval): ApprovalView {
     ...(ruleSkippedText ? { ruleSkippedText } : {}),
     ...(skip?.condition ? { ruleSkippedCondition: skip.condition } : {}),
   };
+}
+
+/** What a bot reads back of a request: a request not known clean of a
+ *  guest's words keeps its state but not its words, unless the reading
+ *  wake is itself guest-sourced. */
+export const GUEST_REASON_HIDDEN = '(asked in a turn that came from an external guest; not shown here)';
+
+export function botApprovalView(r: StoredApproval, readerGuest: boolean): ApprovalView {
+  const view = approvalView(r);
+  if (readerGuest || guestOfRecord(r.guest, r.tainted) === false) return view;
+  const hidden: ApprovalView = { ...view, reason: GUEST_REASON_HIDDEN };
+  delete hidden.skill;
+  return hidden;
 }
 
 /** The running wake of a bot, as main knows it. */
@@ -245,7 +258,7 @@ export interface SkillApprovalInput {
   reason: string;
 }
 
-type Refusal = FactoryRefusal<'not_bot' | 'not_running' | 'invalid' | 'no_repo' | 'read_failed' | 'not_open' | 'too_many' | 'not_found' | 'not_pending' | 'too_late' | 'not_ruleable' | 'write_failed' | 'not_started' | 'stale'>;
+type Refusal = FactoryRefusal<'not_bot' | 'not_running' | 'not_now' | 'invalid' | 'no_repo' | 'read_failed' | 'not_open' | 'too_many' | 'not_found' | 'not_pending' | 'too_late' | 'not_ruleable' | 'write_failed' | 'not_started' | 'stale'>;
 
 function refuse(code: Refusal['code'], message: string): Refusal {
   return { ok: false, code, message };
@@ -544,6 +557,7 @@ export class ApprovalService {
 
     const wake = this.ports.runningWake(bot.botId);
     if (!wake) return refuse('not_running', 'a bot asks for approval only during a wake');
+    const readerGuest = wake.guest === true;
     let profile: BotProfile | null = null;
     try {
       profile = this.ports.bots()?.get(bot.botId) ?? null;
@@ -558,7 +572,7 @@ export class ApprovalService {
     // One request per (bot, key): a retried turn gets the first one back.
     const clientRequestId = typeof raw.clientRequestId === 'string' ? raw.clientRequestId : this.nextOrdinal(bot.botId, wake);
     const prior = [...this.requests.values()].find((r) => r.botId === bot.botId && r.clientRequestId === clientRequestId);
-    if (prior) return { ok: true, request: approvalView(prior), duplicate: true };
+    if (prior) return { ok: true, request: botApprovalView(prior, readerGuest), duplicate: true };
     const open = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending');
     if (open.length >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${open.length} requests already wait for the owner`);
 
@@ -576,7 +590,7 @@ export class ApprovalService {
       // The same head already asked about and not settled: that request.
       const same = [...this.requests.values()].find((r) => r.action === 'merge' && r.repoKey === repoKey && r.prNumber === prNumber && r.headSha === headSha
         && (r.state === 'pending' || r.state === 'approved'));
-      if (same) return { ok: true, request: approvalView(same), duplicate: true };
+      if (same) return { ok: true, request: botApprovalView(same, readerGuest), duplicate: true };
       const login = await this.ports.ghLogin({ key: repoKey, path: repoPath }).catch(() => null);
       if (!login) return refuse('read_failed', 'the gh login could not be read');
       ghLogin = login.toLowerCase();
@@ -589,7 +603,7 @@ export class ApprovalService {
     // A request stored while this one read GitHub (a retry, another bot).
     const again = [...this.requests.values()].find((r) => (r.botId === bot.botId && r.clientRequestId === clientRequestId)
       || (headSha !== undefined && r.action === 'merge' && r.repoKey === repoKey && r.prNumber === prNumber && r.headSha === headSha && (r.state === 'pending' || r.state === 'approved')));
-    if (again) return { ok: true, request: approvalView(again), duplicate: true };
+    if (again) return { ok: true, request: botApprovalView(again, readerGuest), duplicate: true };
     const openNow = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending').length;
     if (openNow >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${openNow} requests already wait for the owner`);
 
@@ -633,6 +647,8 @@ export class ApprovalService {
   proposeSkill(bot: BotBinding, input: SkillApprovalInput): { ok: true; request: ApprovalView } | Refusal {
     const wake = this.ports.runningWake(bot.botId);
     if (!wake) return refuse('not_running', 'a bot proposes a skill only during a wake');
+    // An approved skill is read in every later wake.
+    if (guestSourcedWake(wake)) return refuse('not_now', `skill_propose: ${GUEST_TURN_STARTS_NO_WORKERS}`);
     let profile: BotProfile | null = null;
     try {
       profile = this.ports.bots()?.get(bot.botId) ?? null;
@@ -793,11 +809,17 @@ export class ApprovalService {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > APPROVAL_LIMITS.LIST_MAX) return refuse('invalid', `limit must be 1..${APPROVAL_LIMITS.LIST_MAX}`);
     this.expire();
     const want = states as ApprovalState[] | undefined;
+    let readerGuest = false;
+    try {
+      readerGuest = this.ports.runningWake(bot.botId)?.guest === true;
+    } catch {
+      readerGuest = false;
+    }
     const rows = [...this.requests.values()]
       .filter((r) => r.botId === bot.botId && (!want || want.includes(r.state)))
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, limit)
-      .map(approvalView);
+      .map((r) => botApprovalView(r, readerGuest));
     return { ok: true, requests: rows };
   }
 

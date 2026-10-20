@@ -28,7 +28,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isCoordinatorBot, type BotProfile } from '../../shared/bot';
 import { FACT_LIMITS, type Fact, type FactDraft } from '../../shared/facts';
-import { GENERAL_THREAD, type RoomCard, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
 import type { WakeReason } from '../../shared/wake';
 import type { FactLog, FactLogApi } from './factLog';
 import type { BotDirectoryApi } from './botStore';
@@ -311,6 +311,9 @@ export interface PlanAnswerPorts {
 export function routePlanAnswer(ev: ResolvedCardEvent, ports: PlanAnswerPorts): 'woken' | 'declined' | 'ignored' {
   const card = ev.card;
   if (card.kind !== 'plan' || card.actor.kind !== 'bot') return 'ignored';
+  // Its title would wake the bot as the owner's words: a plan not known
+  // clean of a guest's words wakes nobody.
+  if (isGuestSourcedCard(card)) return 'ignored';
   const kind = parseResolution(ev.resolution);
   if (kind === 'decline') return 'declined';
   let author: BotProfile | null = null;
