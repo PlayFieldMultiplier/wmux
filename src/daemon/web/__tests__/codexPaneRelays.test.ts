@@ -1,4 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
+import path from 'node:path';
 import type {ManagedSession} from '../../DaemonSessionManager';
 import {CodexPaneRelays,paneCodexHome} from '../codexPaneRelays';
 import {CodexUpstreamError,type createCodexTuiRelay} from '../codexTuiRelay';
@@ -31,16 +32,19 @@ function relay() {
     }};
 }
 describe('Codex pane relay account',()=>{
+  // The account is resolved with the platform's `path`: on Windows a rooted
+  // '/u/me' lands on the current drive (D:\u\me), so expect resolved paths.
+  const own=path.resolve('/u/me/.codex');const acctB=path.resolve('/acct/b');
   it('serves the pane\'s own account and refuses another one',()=>{
-    expect(paneCodexHome(undefined,undefined,{home:'/u/me'})).toBe('/u/me/.codex');
-    expect(paneCodexHome('/u/me/.codex',undefined,{home:'/u/me'})).toBe('/u/me/.codex');
-    expect(paneCodexHome('/acct/b',  '/acct/b',{home:'/u/me'})).toBe('/acct/b');
-    expect(()=>paneCodexHome('/tmp/other',undefined,{home:'/u/me'})).toThrow(/Codex account is \/u\/me\/\.codex/);
-    expect(()=>paneCodexHome('/acct/a','/acct/b',{home:'/u/me'})).toThrow(/Codex account is \/acct\/b/);
+    expect(paneCodexHome(undefined,undefined,{home:'/u/me'})).toBe(own);
+    expect(paneCodexHome('/u/me/.codex',undefined,{home:'/u/me'})).toBe(own);
+    expect(paneCodexHome('/acct/b',  '/acct/b',{home:'/u/me'})).toBe(acctB);
+    expect(()=>paneCodexHome('/tmp/other',undefined,{home:'/u/me'})).toThrow(`Codex account is ${own}.`);
+    expect(()=>paneCodexHome('/acct/a','/acct/b',{home:'/u/me'})).toThrow(`Codex account is ${acctB}.`);
     expect(()=>paneCodexHome('relative',undefined,{home:'/u/me'})).toThrow('Invalid Codex account scope');
   });
   it('compares without case where the file system does',()=>{
-    expect(paneCodexHome('/U/Me/.Codex',undefined,{home:'/u/me',caseInsensitive:true})).toBe('/u/me/.codex');
+    expect(paneCodexHome('/U/Me/.Codex',undefined,{home:'/u/me',caseInsensitive:true})).toBe(own);
     expect(()=>paneCodexHome('/U/Me/.Codex',undefined,{home:'/u/me',caseInsensitive:false})).toThrow();
   });
 });
