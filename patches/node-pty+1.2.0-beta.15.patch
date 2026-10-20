@@ -1,5 +1,5 @@
 diff --git a/node_modules/node-pty/lib/windowsConoutConnection.js b/node_modules/node-pty/lib/windowsConoutConnection.js
-index 66da02a..b3aa5cb 100644
+index 66da02a..8c335a9 100644
 --- a/node_modules/node-pty/lib/windowsConoutConnection.js
 +++ b/node_modules/node-pty/lib/windowsConoutConnection.js
 @@ -2,42 +2,6 @@
@@ -45,7 +45,7 @@ index 66da02a..b3aa5cb 100644
  Object.defineProperty(exports, "__esModule", { value: true });
  exports.ConoutConnection = void 0;
  var worker_threads_1 = require("worker_threads");
-@@ -50,40 +14,94 @@ var eventEmitter2_1 = require("./eventEmitter2");
+@@ -50,40 +14,98 @@ var eventEmitter2_1 = require("./eventEmitter2");
   * the timer has started.
   */
  var FLUSH_DATA_INTERVAL = 1000;
@@ -78,7 +78,11 @@ index 66da02a..b3aa5cb 100644
 +                connection._ready();
 +                return;
 +            case 2 /* ConoutWorkerMessage.ERROR */:
++                // The worker has already closed this drain. A drain that fails
++                // before it is ready fails its pty's connection; either way the
++                // connection is gone, and the worker ends with its last one.
 +                connection._fail(new Error(message.error));
++                releaseConnection(message.id);
 +                return;
 +            default:
 +                console.warn('Unexpected ConoutWorkerMessage', message);
@@ -166,7 +170,7 @@ index 66da02a..b3aa5cb 100644
      }
      Object.defineProperty(ConoutConnection.prototype, "onReady", {
          get: function () { return this._onReady.event; },
-@@ -95,6 +113,15 @@ var ConoutConnection = /** @class */ (function () {
+@@ -95,6 +117,15 @@ var ConoutConnection = /** @class */ (function () {
          enumerable: false,
          configurable: true
      });
@@ -182,7 +186,7 @@ index 66da02a..b3aa5cb 100644
      ConoutConnection.prototype.dispose = function () {
          if (!this._useConptyDll && this._isDisposed) {
              return;
-@@ -114,18 +141,9 @@ var ConoutConnection = /** @class */ (function () {
+@@ -114,18 +145,9 @@ var ConoutConnection = /** @class */ (function () {
          this._drainTimeout = setTimeout(function () { return _this._destroySocket(); }, FLUSH_DATA_INTERVAL);
      };
      ConoutConnection.prototype._destroySocket = function () {
@@ -205,10 +209,10 @@ index 66da02a..b3aa5cb 100644
 \ No newline at end of file
 +//# sourceMappingURL=windowsConoutConnection.js.map
 diff --git a/node_modules/node-pty/lib/worker/conoutSocketWorker.js b/node_modules/node-pty/lib/worker/conoutSocketWorker.js
-index 92e16da..0ba5491 100644
+index 92e16da..3992447 100644
 --- a/node_modules/node-pty/lib/worker/conoutSocketWorker.js
 +++ b/node_modules/node-pty/lib/worker/conoutSocketWorker.js
-@@ -6,17 +6,65 @@ Object.defineProperty(exports, "__esModule", { value: true });
+@@ -6,17 +6,66 @@ Object.defineProperty(exports, "__esModule", { value: true });
  var worker_threads_1 = require("worker_threads");
  var net_1 = require("net");
  var conout_1 = require("../shared/conout");
@@ -241,7 +245,7 @@ index 92e16da..0ba5491 100644
 +}
 +function openDrain(id, conoutPipeName) {
 +    var conoutSocket = new net_1.Socket();
-+    var drain = { conoutSocket: conoutSocket, server: undefined, clients: new Set(), ready: false };
++    var drain = { conoutSocket: conoutSocket, server: undefined, clients: new Set() };
 +    drain.server = (0, net_1.createServer)(function (workerSocket) {
 +        drain.clients.add(workerSocket);
 +        workerSocket.on('error', function () { return workerSocket.destroy(); });
@@ -253,10 +257,12 @@ index 92e16da..0ba5491 100644
 -        throw new Error('worker_threads parentPort is null');
 +    drains.set(id, drain);
 +    var fail = function (error) {
-+        if (!drain.ready) {
-+            parentPort.postMessage({ type: 2 /* ConoutWorkerMessage.ERROR */, id: id, error: String(error && error.message || error) });
++        if (!drains.has(id)) {
++            return;
 +        }
 +        closeDrain(id);
++        // Told before or after READY: the parent releases the connection.
++        parentPort.postMessage({ type: 2 /* ConoutWorkerMessage.ERROR */, id: id, error: String(error && error.message || error) });
 +    };
 +    conoutSocket.on('error', fail);
 +    drain.server.on('error', fail);
@@ -266,7 +272,6 @@ index 92e16da..0ba5491 100644
 +            if (!drains.has(id)) {
 +                return;
 +            }
-+            drain.ready = true;
 +            parentPort.postMessage({ type: 1 /* ConoutWorkerMessage.READY */, id: id });
 +        });
 +    });

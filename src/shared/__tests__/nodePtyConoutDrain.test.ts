@@ -136,6 +136,28 @@ describe('node-pty conout drain (patched)', () => {
     expect(failedB).not.toHaveBeenCalled();
   });
 
+  it('releases a ready connection whose drain failed, and ends the worker with the last one', () => {
+    const [a, b] = open(2);
+    const worker = FakeWorker.instances[0];
+    const [idA, idB] = worker.posted.map((m) => m.id);
+    const failed = vi.fn();
+    a.onError(failed);
+    worker.emit('message', { type: 1, id: idA });
+    worker.emit('message', { type: 1, id: idB });
+
+    // The worker closed A's drain after READY: A is released, not reported.
+    worker.emit('message', { type: 2, id: idA, error: 'pipe broken' });
+    expect(failed).not.toHaveBeenCalled();
+    expect(worker.terminated).toBe(false);
+    // A's later dispose finds nothing left to close.
+    a.dispose();
+    vi.advanceTimersByTime(1000);
+    expect(worker.posted.filter((m) => m.type === 'close' && m.id === idA)).toHaveLength(1);
+
+    worker.emit('message', { type: 2, id: idB, error: 'pipe broken' });
+    expect(worker.terminated).toBe(true);
+  });
+
   it('does not report an error for a connection that is already ready', () => {
     const [a] = open(1);
     const failed = vi.fn();
