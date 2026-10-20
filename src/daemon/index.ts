@@ -110,7 +110,7 @@ import { registerA2aLinkRpc } from './a2aRemote/linkRpc';
 import { A2aOffers } from './a2aRemote/offers';
 import { OfferStore } from './a2aRemote/offerStore';
 import { A2aRemoteDelivery } from './a2aRemote/delivery';
-import { isRemoteTaskId } from '../shared/a2aRemote';
+import { A2A_FEATURE_LINK_OFFER, isRemoteTaskId } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
 import { AppendOnlyLog } from './eventlog/AppendOnlyLog';
@@ -9310,6 +9310,8 @@ async function main(): Promise<void> {
         broadcast: (event) => pipeServer.broadcast(event),
         refreshLink: (linkId) => (refresh ? refresh({ linkId }) : Promise.resolve(null)),
         offers: a2aOffersRef,
+        // This build shows and accepts share offers: tell the servers it joins.
+        features: [A2A_FEATURE_LINK_OFFER],
         log: a2aLog,
       });
       a2aDelivery.registerRoutes(a2aRoutes);

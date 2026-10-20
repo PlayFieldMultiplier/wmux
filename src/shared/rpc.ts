@@ -1692,6 +1692,13 @@ export type A2aRemoteOfferCreateResult =
   | { ok: true; offer: A2aLinkOfferRecordV1; existing?: true }
   | { ok: false; error: A2aRemoteOfferCreateError; message?: string };
 
+/** `a2a.remote.offers.accept`: this PC's pane to link the shared one with, and the directions (only narrower than offered). */
+export interface A2aRemoteOfferAcceptParams {
+  offerId: string;
+  local: { kind: 'pane'; workspaceId: string; paneId: string; label?: string; workspaceName?: string; gitRemote?: string };
+  allow: { outbound: boolean; inbound: boolean };
+}
+
 /** `a2a.remote.offers.withdraw` / `.decline` / `.accept`. */
 export type A2aRemoteOfferResult =
   | { ok: true; offer: A2aLinkOfferRecordV1; link?: A2aLinkRecordV1 }

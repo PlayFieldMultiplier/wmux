@@ -97,6 +97,10 @@ import type {
   A2aRemoteHostsStatusResult,
   A2aRemoteHostsExposedResult,
   A2aRemoteLinkEvent,
+  A2aRemoteOfferAcceptParams,
+  A2aRemoteOfferEvent,
+  A2aRemoteOfferResult,
+  A2aRemoteOffersListResult,
   A2aRemoteLinkProposeParams,
   A2aRemoteLinkResult,
   A2aRemoteLinksListResult,
@@ -2168,8 +2172,13 @@ document.addEventListener('DOMContentLoaded', () => {
   linksReject: (linkId: string) => ipcRenderer.invoke(IPC.A2A_REMOTE_LINKS_REJECT, linkId) as Promise<A2aRemoteLinkResult>,
   linksRevoke: (linkId: string) => ipcRenderer.invoke(IPC.A2A_REMOTE_LINKS_REVOKE, linkId) as Promise<A2aRemoteLinkResult>,
   linksRefresh: (linkId: string) => ipcRenderer.invoke(IPC.A2A_REMOTE_LINKS_REFRESH, linkId) as Promise<A2aRemoteLinkResult>,
-  onLinkEvent: (callback: (event: A2aRemoteLinkEvent) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: A2aRemoteLinkEvent) => callback(payload);
+  offersList: () => ipcRenderer.invoke(IPC.A2A_REMOTE_OFFERS_LIST) as Promise<A2aRemoteOffersListResult>,
+  offersAccept: (params: A2aRemoteOfferAcceptParams) =>
+    ipcRenderer.invoke(IPC.A2A_REMOTE_OFFERS_ACCEPT, params) as Promise<A2aRemoteOfferResult>,
+  offersDecline: (offerId: string) => ipcRenderer.invoke(IPC.A2A_REMOTE_OFFERS_DECLINE, offerId) as Promise<A2aRemoteOfferResult>,
+  /** Link nudges, and share offer nudges (`a2a.remote.offer.changed`). */
+  onLinkEvent: (callback: (event: A2aRemoteLinkEvent | A2aRemoteOfferEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: A2aRemoteLinkEvent | A2aRemoteOfferEvent) => callback(payload);
     ipcRenderer.on(IPC.A2A_REMOTE_LINK_EVENT, listener);
     return () => { ipcRenderer.removeListener(IPC.A2A_REMOTE_LINK_EVENT, listener); };
   },

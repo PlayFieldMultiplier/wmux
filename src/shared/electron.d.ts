@@ -43,6 +43,10 @@ import type {
   A2aRemoteHostsStatusResult,
   A2aRemoteHostsExposedResult,
   A2aRemoteLinkEvent,
+  A2aRemoteOfferAcceptParams,
+  A2aRemoteOfferEvent,
+  A2aRemoteOfferResult,
+  A2aRemoteOffersListResult,
   A2aRemoteLinkProposeParams,
   A2aRemoteLinkResult,
   A2aRemoteLinksListResult,
@@ -245,8 +249,14 @@ declare global {
         linksRevoke: (linkId: string) => Promise<A2aRemoteLinkResult>;
         /** Re-read a link's state from the PC it was proposed to. */
         linksRefresh: (linkId: string) => Promise<A2aRemoteLinkResult>;
-        /** Daemon link nudges (a proposal arrived, a link changed). Returns unsubscribe. */
-        onLinkEvent: (callback: (event: A2aRemoteLinkEvent) => void) => () => void;
+        /** Share offers: this PC's own and the ones other PCs sent it. */
+        offersList: () => Promise<A2aRemoteOffersListResult>;
+        /** Accept a pane another PC shared, linking it with one of this PC's panes. */
+        offersAccept: (params: A2aRemoteOfferAcceptParams) => Promise<A2aRemoteOfferResult>;
+        /** Decline a pane another PC shared; that PC is told. */
+        offersDecline: (offerId: string) => Promise<A2aRemoteOfferResult>;
+        /** Daemon link and share offer nudges. Returns unsubscribe. */
+        onLinkEvent: (callback: (event: A2aRemoteLinkEvent | A2aRemoteOfferEvent) => void) => () => void;
         /** Connection state of every paired PC. */
         hostsStatus: () => Promise<A2aRemoteHostsStatusResult>;
         /** A paired PC's connection changed. Returns unsubscribe. */

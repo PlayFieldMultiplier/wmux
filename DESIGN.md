@@ -851,7 +851,14 @@ One page, Tailnet first, filling the sheet with 28px sides
   (how many links removing it ends; Remove asking twice, Pair again…, which
   opens Connect a PC on Paste when this PC joined that one and on Invite when
   it joined this one). There is no pane picker on a request: the request
-  already names this PC's pane.
+  already names this PC's pane. A **pane another PC shared** is its own row
+  (2026-10-21): one sentence naming that PC's pane as its report, its age,
+  the other PC's fingerprint prefix, its agent and repo, the directions it
+  offers and how long it stays open (an hour); Decline, **Accept…**. The row
+  has no pane picker either: Accept… opens the link dialog with that PC and
+  its pane fixed, this PC's pane picked there (the focused pane first), and
+  the directions starting as offered, only narrowable. It counts in the
+  Needs you number like a request; its toast offers Review only.
 - **One list** (one hairline container, 36px rows on shared columns: icon ·
   13px/500 name · 12px muted meta · status · actions), in groups with a muted
   heading and count:
@@ -1652,6 +1659,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-16 | Owner decision: a bot's profile shows Today — each of its limits (turns per hour and day, worker time, running workers, the queue) with what is used of it, and one line on top naming the first that stops it, in a fixed order | A bot has four separate limits plus a queue cap, and the owner could not tell which stopped it: the reviewer had 26 turns left but no worker time and a full queue, and looked simply stuck. The limits stay as they are; they are made visible |
 | 2026-10-18 | Owner decision: photos in Bots messages, from the desktop composer and the phone. A muted picture button beside "+", staged chips and sent thumbnails in Chat view's 2026-09-25 grammar, the full photo in a dialog; no new colour or control style | The owner sends screenshots and photos to bots from the phone; the bot sees the photo itself in its turn, and the desktop draws what was sent the way Chat view already does |
 | 2026-10-20 | Owner decision: window glass on Windows 11 (acrylic). Windows 11 22H2+ gets the acrylic backdrop under the same Off / Soft / Clear setting, switched at runtime, with its own coverage numbers (light looks paint more so acrylic does not read grey) and a transparent caption-button strip; Windows 10, older Windows 11 builds and Linux stay opaque, and the setting says why there. Amends Window glass | A live prototype on Windows 11 showed acrylic blurring the desktop much like macOS vibrancy, staying on while unfocused, with clean caption buttons over a transparent strip; Mica read almost opaque. |
+| 2026-10-21 | Owner decision: a pane is linked across PCs by one share from the PC that accepts connections. On the receiving PC the share is a Needs you row of its own (no pane picker on the row; Accept… opens the link dialog with the other PC's pane fixed), counted with link requests, neutral apart from the one attention hairline and badge | Pairing, ticking the pane, a request from the other PC and an accept there took two machine switches; a share is the sharing PC's consent, and the receiver's Accept is its own. The dialog keeps "no pane picker on a request" for the row |
 
 ### Desktop conversation view
 

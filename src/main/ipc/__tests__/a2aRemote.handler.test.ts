@@ -74,3 +74,16 @@ describe('a2aRemote handlers before the daemon connects', () => {
     expect(client.a2aRemotePairBegin).not.toHaveBeenCalled();
   });
 });
+
+describe('a2aRemote offer accept', () => {
+  it('sends only a pane that is open in this PC’s own tree', async () => {
+    const client = { ...fakeClient(), a2aRemoteOfferAccept: vi.fn(async () => ({ ok: true })) } as unknown as DaemonClient;
+    cleanups.push(registerA2aRemoteHandlers(client));
+    const params = { offerId: 'o1', local: { kind: 'pane', workspaceId: 'w1', paneId: 'p1' }, allow: { outbound: true, inbound: true } };
+    await expect(invoke(IPC.A2A_REMOTE_OFFERS_ACCEPT, params)).resolves.toMatchObject({ ok: false, error: 'bad-request' });
+    expect(client.a2aRemoteOfferAccept).not.toHaveBeenCalled();
+    await invoke(IPC.A2A_REMOTE_SNAPSHOT, { workspaces: [{ id: 'w1', name: 'API', panes: [{ paneId: 'p1' }] }] });
+    await expect(invoke(IPC.A2A_REMOTE_OFFERS_ACCEPT, params)).resolves.toEqual({ ok: true });
+    expect(client.a2aRemoteOfferAccept).toHaveBeenCalledWith(params);
+  });
+});

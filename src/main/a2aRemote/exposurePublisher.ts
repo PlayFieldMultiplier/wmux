@@ -158,6 +158,12 @@ export class A2aExposurePublisher {
     });
   }
 
+  /** Is `paneId` a pane of `workspaceId` in the renderer's latest tree? */
+  hasPane(workspaceId: string, paneId: string): boolean {
+    const tree = this.raw ?? this.last;
+    return !!tree?.workspaces.some((w) => w.id === workspaceId && w.panes.some((p) => p.paneId === paneId));
+  }
+
   /** Re-publish the last snapshot (exposure settings changed, or the daemon reconnected). */
   republish(): Promise<void> {
     return this.enqueue(() => this.publishNow());

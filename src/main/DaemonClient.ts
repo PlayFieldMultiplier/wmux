@@ -21,6 +21,8 @@ import type {
   A2aRemoteHostsExposedResult,
   A2aRemoteLinkProposeParams,
   A2aRemoteLinkResult,
+  A2aRemoteOfferAcceptParams,
+  A2aRemoteOfferResult,
   A2aRemoteOffersListResult,
   A2aRemoteLinksListResult,
   A2aRemotePaneGoneParams,
@@ -691,6 +693,15 @@ export class DaemonClient extends EventEmitter {
 
   async a2aRemoteOffersList(): Promise<A2aRemoteOffersListResult> {
     return (await this.rpc('a2a.remote.offers.list', {})) as A2aRemoteOffersListResult;
+  }
+
+  /** Accept / decline reach the PC that shared, hence 30s. */
+  async a2aRemoteOfferAccept(params: A2aRemoteOfferAcceptParams): Promise<A2aRemoteOfferResult> {
+    return (await this.rpc('a2a.remote.offers.accept', params as unknown as Record<string, unknown>, { timeoutMs: 30_000 })) as A2aRemoteOfferResult;
+  }
+
+  async a2aRemoteOfferDecline(offerId: string): Promise<A2aRemoteOfferResult> {
+    return (await this.rpc('a2a.remote.offers.decline', { offerId }, { timeoutMs: 30_000 })) as A2aRemoteOfferResult;
   }
 
   async a2aRemotePaneGone(params: A2aRemotePaneGoneParams): Promise<{ ok: true; broken: number }> {

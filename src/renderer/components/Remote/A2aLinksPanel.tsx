@@ -1,4 +1,4 @@
-import type { A2aLinkRecordV1 } from '../../../shared/a2aRemote';
+import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
 import type { Workspace } from '../../../shared/types';
 import type { AgentSlug } from '../../../shared/events';
 import UiButton from '../ui/Button';
@@ -93,6 +93,58 @@ export function A2aLinkRequestRow(p: A2aLinkRequestRowProps) {
         <UiButton variant="ghost" size="md" disabled={p.busy} onClick={p.onReject}>{t('a2aLink.decline')}</UiButton>
         <UiButton variant={p.primary ? 'primary' : 'secondary'} size="md" disabled={p.busy} onClick={p.onAccept} data-testid="a2a-link-accept">
           {t('a2aLink.accept')}
+        </UiButton>
+      </div>
+    </li>
+  );
+}
+
+export interface A2aOfferRowProps {
+  offer: A2aLinkOfferRecordV1;
+  pcName: string;
+  /** That PC's certificate fingerprint (this PC joined it, so it holds the pin). */
+  fingerprint?: string | null;
+  now: number;
+  /** The page's one primary button is the first Accept. */
+  primary: boolean;
+  busy: boolean;
+  onAccept: () => void;
+  onDecline: () => void;
+  t: T;
+}
+
+/**
+ * A pane another PC shared with this one (Needs you). Its names are that PC's
+ * report. There is no pane picker on the row: Accept… opens the link dialog,
+ * where this PC's pane is chosen.
+ */
+export function A2aOfferRow(p: A2aOfferRowProps) {
+  const { offer: o, t } = p;
+  const theirs = `${o.end.workspaceName}/${o.end.label ?? o.end.paneId ?? ''}`;
+  const created = Date.parse(o.createdAt);
+  const left = Math.max(0, Math.ceil((Date.parse(o.expiresAt) - p.now) / 60_000));
+  return (
+    <li className="wmux-remote-req" data-offer-id={o.offerId} data-testid="a2a-offer-request">
+      <div className="wmux-remote-req-body">
+        <span className="wmux-remote-req-title">
+          <b>{p.pcName}</b>
+          <span>{t('remotePage.needs.offerTitle')}</span>
+          {Number.isFinite(created) && <span className="wmux-remote-req-when">{timeAgo(created, p.now)}</span>}
+        </span>
+        <span className="wmux-remote-req-text">{t('remotePage.needs.offerSentence', { pc: p.pcName, theirs })}</span>
+        <span className="wmux-remote-req-ev">
+          <span data-testid="a2a-offer-reported">{t('remotePage.needs.reported', { pc: p.pcName })}</span>
+          {p.fingerprint && <span>{t('remotePage.needs.fingerprint')} <code className="ui-code">{fingerprintPrefix(p.fingerprint)}</code></span>}
+          {o.end.agent && <span>{o.end.agent}</span>}
+          {o.end.gitRemote && <span className="ui-code">{o.end.gitRemote}</span>}
+          <span>{t(DIRECTION_KEY[linkDirection(o.allow)])}</span>
+          <span data-testid="a2a-offer-expires">{t('remotePage.needs.offerExpires', { minutes: left })}</span>
+        </span>
+      </div>
+      <div className="wmux-remote-req-acts">
+        <UiButton variant="ghost" size="md" disabled={p.busy} onClick={p.onDecline}>{t('a2aLink.decline')}</UiButton>
+        <UiButton variant={p.primary ? 'primary' : 'secondary'} size="md" disabled={p.busy} onClick={p.onAccept} data-testid="a2a-offer-accept">
+          {t('a2aOffer.acceptOpen')}
         </UiButton>
       </div>
     </li>
