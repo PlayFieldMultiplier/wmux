@@ -187,6 +187,11 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     usageOf: (botId) => getBotStore()?.usageOf(botId) ?? emptyUsage(),
     mutateUsage: (botId, fn) => getBotStore()?.mutateUsage(botId, fn),
     row: (taskId) => ledger.get(taskId),
+    stoppedAt: (taskId) => {
+      const rec = reclaimedStore?.get(taskId);
+      return rec?.state === 'stopped' ? rec.at : goneFacts.get(taskId)?.at;
+    },
+    launchedAt: (taskId) => launches.liveLaunchAt(taskId),
   };
   const holderNotice = holderChangeNotice(changed, undefined, (look) => {
     if (getBotStore() && endRunsOfGoneWorkers(runEnds, look, Date.now()) > 0) changed();

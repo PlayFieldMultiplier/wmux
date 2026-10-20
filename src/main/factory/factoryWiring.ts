@@ -61,6 +61,7 @@ import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandl
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
 import { enabledBotsIncludingGuest, getBotDirectory, getBotStore } from './botStore';
+import { setWorkerStopsConfirmed } from './workerRunEnds';
 import { getFactorySettings } from './factorySettings';
 import { onBotHook, type BotHookEvent } from './botHooks';
 import { normalizeRepoKey } from './repoWatch';
@@ -751,6 +752,9 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   let ownerLogin: string | null = null;
   let loginTimer: NodeJS.Timeout | null = null;
   let disposed = false;
+  // A worker lifecycle host comes (below, on start): its holder set ends the
+  // bots' worker runs, so from now on no row end does (workerRunEnds.ts).
+  if (deps.getDaemonClient) setWorkerStopsConfirmed(true);
   const refreshLogin = async (): Promise<void> => {
     let bots: BotProfile[] = [];
     try {
@@ -1038,6 +1042,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     },
     dispose() {
       disposed = true;
+      setWorkerStopsConfirmed(false);
       for (const off of offTasks.splice(0)) {
         try {
           off();

@@ -71,8 +71,12 @@ function rig(rows: () => LedgerEntry[]) {
     usageOf: () => usage,
     mutateUsage: (_id, fn) => fn(usage),
     row: (taskId) => rows().find((r) => r.id === taskId) ?? null,
+    stoppedAt: (taskId) => stops.get(taskId),
+    launchedAt: (taskId) => launched.get(taskId),
   };
-  return { usage, ports };
+  const stops = new Map<string, number>();
+  const launched = new Map<string, number>();
+  return { usage, ports, stops, launched };
 }
 
 describe('endRunsOfFreeTasks', () => {
@@ -158,6 +162,36 @@ describe('endRunsOfFreeTasks', () => {
     const before = rig(() => rows);
     recordWorkerStart(before.usage, 't', NOW - 60_000);
     expect(endRunsOfGoneWorkers(before.ports, holders(rows, { ptys: new Map([['ws-t', []]]), read: 'stale' }), NOW)).toBe(0);
+  });
+
+  it('a task no holder names any more ends its run at its durable stop\'s time', () => {
+    const r = rig(() => [row('old', { status: 'completed' })]);
+    recordWorkerStart(r.usage, 'old', NOW - 31 * 3_600_000);
+    r.stops.set('old', NOW - 30 * 3_600_000);
+    expect(endRunsOfGoneWorkers(r.ports, { holders: [], workspacesKnown: true, readOk: true }, NOW)).toBe(1);
+    expect(r.usage.workers[0].endedAt).toBe(NOW - 30 * 3_600_000);
+    expect(workerHoursDay(r.usage, NOW)).toBe(0);
+  });
+
+  it('a worker relaunched in its pane after its agent exited runs on its bot\'s time again, from the launch', () => {
+    let rows = [row('t')];
+    const r = rig(() => rows);
+    recordWorkerStart(r.usage, 't', NOW - 3_600_000);
+    // Its agent exits: the run ends.
+    expect(endRunsOfGoneWorkers(r.ports, holders(rows, { idle: new Set(['ws-t']) }), NOW)).toBe(1);
+    // A launch line typed again in its pane: its agent runs again.
+    r.launched.set('t', NOW + 60_000);
+    rows = [row('t')];
+    const running = holders(rows, { now: NOW + 120_000, agentSeen: new Set(['ws-t']), launchAt: () => NOW + 60_000 });
+    expect(endRunsOfGoneWorkers(r.ports, running, NOW + 120_000)).toBe(1);
+    expect(r.usage.workers.map((w) => [w.startedAt, w.endedAt])).toEqual([[NOW - 3_600_000, NOW], [NOW + 60_000, undefined]]);
+    // Looking again opens nothing more; its stop ends the new run.
+    expect(endRunsOfGoneWorkers(r.ports, running, NOW + 130_000)).toBe(0);
+    const stopped = holders(rows, { now: NOW + 600_000, records: [record('t', { ended: 'reported', at: NOW + 600_000, endRev: 3 })], launchAt: () => NOW + 60_000 });
+    expect(endRunsOfGoneWorkers(r.ports, stopped, NOW + 600_000)).toBe(1);
+    expect(workerHoursDay(r.usage, NOW + 3_600_000)).toBeCloseTo(1 + 540_000 / 3_600_000, 9);
+    // A launch older than the last run's end opens nothing.
+    expect(endRunsOfGoneWorkers(r.ports, running, NOW + 700_000)).toBe(0);
   });
 
   it('a stop recorded while the app was closed ends the run at the stop, not at the next look', () => {
