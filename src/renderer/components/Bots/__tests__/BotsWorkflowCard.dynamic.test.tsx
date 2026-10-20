@@ -55,8 +55,8 @@ const click = async (sel: string) => {
 };
 
 /** The cards as the chat draws them: read and cancelled through the port. */
-function Cards({ port }: { port: FactoryBotPort }) {
-  const { workflows, cancel } = useBotWorkflows([{ botId: 'bot-0000000a', workspaceId: 'w1' }], port);
+function Cards({ port, botId = 'bot-0000000a' }: { port: FactoryBotPort; botId?: string }) {
+  const { workflows, cancel } = useBotWorkflows([{ botId, workspaceId: 'w1' }], port);
   return <>{workflows.map((w) => <BotsWorkflowCard key={w.id} workflow={w} t={t} onCancel={cancel} />)}</>;
 }
 
@@ -118,6 +118,15 @@ describe('BotsWorkflowCard', () => {
     });
     expect(cancelWorkflow).not.toHaveBeenCalled();
     expect(q('[data-bots-workflow-state]')?.textContent).toBe('botsPage.workflow.running');
+  });
+
+  it('a bot no longer in the conversation loses its card at once', async () => {
+    const { port } = portWith(workflow());
+    await act(async () => { root.render(<Cards port={port} />); });
+    expect(q('[data-bots-workflow]')).not.toBeNull();
+    port.readWorkflows = () => new Promise(() => undefined);
+    await act(async () => { root.render(<Cards port={port} botId="bot-0000000b" />); });
+    expect(q('[data-bots-workflow]')).toBeNull();
   });
 
   it('a cancelled workflow renders its state, with no Cancel', () => {

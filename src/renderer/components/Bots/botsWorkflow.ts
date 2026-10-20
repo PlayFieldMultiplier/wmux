@@ -11,14 +11,15 @@
 // places it; BotsWorkflowCard.tsx draws it.
 import { WORKFLOW_BLOCK, workflowTaskBlocked, type WorkflowView } from '../../../shared/botWorkflow';
 import type { ThreadId } from '../../../shared/room';
-import type { TimelineItem } from './botsTimeline';
+import { threadKey } from '../../../shared/botsWork';
+import { dayKey, type TimelineItem } from './botsTimeline';
 
 export type WorkflowState = 'running' | 'blocked' | 'cancelled' | 'done';
 
 /** Why a workflow stopped. `step` is 1-based. */
 export type WorkflowReason =
-  /** The owner's Cancel; `started`: the step had already been handed to a
-   *  worker, which keeps running. */
+  /** The owner's Cancel; `started`: the step had already been handed to
+   *  fan-out, whose worker (if one started) the cancel does not stop. */
   | { kind: 'cancelled'; step: number; started: boolean }
   /** The owner stopped the bot (its workers with it). */
   | { kind: 'stopped' }
@@ -97,11 +98,15 @@ export function workflowCardView(w: WorkflowView): WorkflowCardView {
   };
 }
 
-/** The workflows saved from these threads, oldest first (each was read for
- *  its own bot and workspace). */
-export function conversationWorkflows(workflows: readonly WorkflowView[], threads: readonly ThreadId[]): WorkflowView[] {
+/** The workflows a conversation shows, oldest first (each was read for its
+ *  own bot and workspace): a group's, saved in its thread or a thread it
+ *  started (`started`: threadKey); a 1:1's, saved anywhere but a group's
+ *  own thread — its 1:1, General, or a work or task thread. */
+export function conversationWorkflows(workflows: readonly WorkflowView[], conversation: { kind: 'bot' } | { kind: 'room'; threadId: ThreadId }, started: ReadonlySet<string> = new Set()): WorkflowView[] {
   return workflows
-    .filter((w) => threads.includes(w.threadId))
+    .filter((w) => (conversation.kind === 'bot'
+      ? !w.threadId.startsWith('group:')
+      : w.threadId === conversation.threadId || started.has(threadKey(w.workspaceId, w.threadId))))
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
@@ -118,7 +123,9 @@ function itemAt(item: TimelineItem): number | null {
 }
 
 /** The timeline with each workflow's card at the time it was saved: after
- *  the last item at or before then, and never inside a run of bubbles. */
+ *  the last item at or before then, and never inside a run of bubbles. A
+ *  card on another day than the item before it brings its own date
+ *  separator (and takes the place of a same-day one right after it). */
 export function withWorkflows(items: readonly TimelineItem[], workflows: readonly WorkflowView[]): WorkflowTimelineItem[] {
   const out: WorkflowTimelineItem[] = [...items];
   for (const workflow of [...workflows].sort((a, b) => a.createdAt - b.createdAt)) {
@@ -133,7 +140,20 @@ export function withWorkflows(items: readonly TimelineItem[], workflows: readonl
       if ((next.kind === 'message' || next.kind === 'work') && next.continuation) at++;
       else break;
     }
-    out.splice(at, 0, { kind: 'workflow', key: `workflow:${workflow.id}`, workflow, at: workflow.createdAt });
+    let before: number | null = null;
+    for (let i = at - 1; i >= 0 && before === null; i--) {
+      const item = out[i];
+      before = item.kind === 'workflow' ? item.at : itemAt(item);
+    }
+    const day = dayKey(workflow.createdAt);
+    const card: WorkflowTimelineItem = { kind: 'workflow', key: `workflow:${workflow.id}`, workflow, at: workflow.createdAt };
+    if (before !== null && dayKey(before) === day) {
+      out.splice(at, 0, card);
+      continue;
+    }
+    const next = out[at];
+    const sameDayNext = next?.kind === 'day' && dayKey(next.at) === day;
+    out.splice(at, sameDayNext ? 1 : 0, { kind: 'day', key: `day:workflow:${workflow.id}`, at: workflow.createdAt }, card);
   }
   return out;
 }

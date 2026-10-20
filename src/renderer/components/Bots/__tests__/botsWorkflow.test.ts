@@ -60,17 +60,27 @@ describe('conversationWorkflows and withWorkflows', () => {
   const card = (id: string, at: number, botId = 'bot-0000000a'): RoomCard => ({ version: 1, id, seq: 1, workspaceId: 'w1', threadId: DM, kind: 'opinion', at, actor: { kind: 'bot', workspaceId: 'w1', botId }, title: id });
   const msg = (id: string, at: number, continuation: boolean): TimelineItem => ({ kind: 'message', key: id, card: card(id, at), continuation, runEnd: !continuation, waiting: false });
 
-  it('keeps the workflows of the conversation\'s threads, oldest first', () => {
+  it('a 1:1 keeps its bot\'s workflows but a group\'s; a group its own and its started threads\', oldest first', () => {
     const a = workflow({ id: 'wf-00000000000000000000000a', createdAt: 5 });
-    const b = workflow({ id: 'wf-00000000000000000000000b', createdAt: 1 });
-    const other = workflow({ id: 'wf-00000000000000000000000c', threadId: 'group:g1' as ThreadId });
-    expect(conversationWorkflows([a, other, b], [DM]).map((w) => w.id)).toEqual([b.id, a.id]);
-    expect(conversationWorkflows([a], ['group:g1' as ThreadId])).toEqual([]);
+    const b = workflow({ id: 'wf-00000000000000000000000b', createdAt: 1, threadId: 'handoff:h-1' as ThreadId });
+    const g = workflow({ id: 'wf-00000000000000000000000c', threadId: 'group:g1' as ThreadId });
+    expect(conversationWorkflows([a, g, b], { kind: 'bot' }).map((w) => w.id)).toEqual([b.id, a.id]);
+    const group = { kind: 'room' as const, threadId: 'group:g1' as ThreadId };
+    expect(conversationWorkflows([a, g, b], group).map((w) => w.id)).toEqual([g.id]);
+    expect(conversationWorkflows([a, g, b], group, new Set(['w1\u0000handoff:h-1'])).map((w) => w.id)).toEqual([b.id, g.id]);
   });
 
   it('places a card at the time it was saved, after the run it falls in', () => {
     const items = [msg('m1', 500, false), msg('m2', 900, false), msg('m3', 1_100, true), msg('m4', 3_000, false)];
     expect(withWorkflows(items, [workflow({ createdAt: 1_000 })]).map((i) => i.key)).toEqual(['m1', 'm2', 'm3', 'workflow:wf-000000000000000000000001', 'm4']);
-    expect(withWorkflows([], [workflow()]).map((i) => i.kind)).toEqual(['workflow']);
+    expect(withWorkflows([], [workflow()]).map((i) => i.kind)).toEqual(['day', 'workflow']);
+  });
+
+  it('a card on a later day than the item before it brings its date separator', () => {
+    const yesterday = new Date(2026, 9, 19, 18, 0).getTime();
+    const today = new Date(2026, 9, 20, 9, 0).getTime();
+    const later = new Date(2026, 9, 20, 9, 30).getTime();
+    const items: TimelineItem[] = [msg('m1', yesterday, false), { kind: 'day', key: 'd2', at: later }, msg('m2', later, false)];
+    expect(withWorkflows(items, [workflow({ createdAt: today })]).map((i) => i.key)).toEqual(['m1', 'day:workflow:wf-000000000000000000000001', 'workflow:wf-000000000000000000000001', 'm2']);
   });
 });

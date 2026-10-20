@@ -6,7 +6,7 @@
 // With no workflow port the list stays empty and there is no Cancel.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OwnerWorkflowCancelResult, WorkflowView } from '../../../shared/botWorkflow';
-import { GENERAL_THREAD, dmThreadId, type ThreadId } from '../../../shared/room';
+import type { ThreadId } from '../../../shared/room';
 import { getFactoryBotPort, type FactoryBotPort } from '../Room/factoryPorts';
 import type { Conversation } from './botsModel';
 import { conversationWorkflows } from './botsWorkflow';
@@ -60,6 +60,11 @@ export function useBotWorkflows(owners: readonly WorkflowOwner[], port?: Factory
       off();
     };
   }, [p, key]);
+  // Only the current bots' workflows, while a read for new ones is out.
+  const shown = useMemo(() => {
+    const current = new Set(key.split('\u0001'));
+    return workflows.filter((w) => current.has(`${w.workspaceId}\u0000${w.botId}`));
+  }, [workflows, key]);
   const cancelPort = p.cancelWorkflow;
   const cancel = useCallback(async (workflow: WorkflowView): Promise<OwnerWorkflowCancelResult> => {
     if (!cancelPort) return { ok: false, code: 'unavailable' };
@@ -68,17 +73,19 @@ export function useBotWorkflows(owners: readonly WorkflowOwner[], port?: Factory
     else if (r.code === 'revision_conflict') reload.current();
     return r;
   }, [cancelPort]);
-  return { workflows, ...(cancelPort ? { cancel } : {}) };
+  return { workflows: shown, ...(cancelPort ? { cancel } : {}) };
 }
 
-/** The workflows a conversation shows: a 1:1's bot's, saved from its 1:1
- *  or General (where a wake with no conversation saves one); a group's
- *  bots', saved from the group. */
-export function useConversationWorkflows(conversation: Conversation, port?: FactoryBotPort): ReturnType<typeof useBotWorkflows> {
+/** The workflows a conversation shows (botsWorkflow.ts
+ *  conversationWorkflows): a 1:1's bot's, a group's bots' (`started`: the
+ *  threads the group started, botsWork.ts conversationStartedThreads). */
+export function useConversationWorkflows(conversation: Conversation, started?: ReadonlySet<string>, port?: FactoryBotPort): ReturnType<typeof useBotWorkflows> {
   const rows = conversation.kind === 'bot' ? [conversation.row] : conversation.bots;
   const { workflows, cancel } = useBotWorkflows(rows.map((r) => ({ botId: r.bot.id, workspaceId: r.bot.workspaceId })), port);
-  const threads: ThreadId[] = conversation.kind === 'bot' ? [dmThreadId(conversation.row.bot.id), GENERAL_THREAD] : [conversation.threadId];
-  const key = threads.join('\u0000');
-  const shown = useMemo(() => conversationWorkflows(workflows, key.split('\u0000') as ThreadId[]), [workflows, key]);
+  const groupThread: ThreadId | null = conversation.kind === 'room' ? conversation.threadId : null;
+  const shown = useMemo(
+    () => conversationWorkflows(workflows, groupThread ? { kind: 'room', threadId: groupThread } : { kind: 'bot' }, started),
+    [workflows, groupThread, started],
+  );
   return { workflows: shown, ...(cancel ? { cancel } : {}) };
 }

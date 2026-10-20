@@ -4823,7 +4823,7 @@ export const en = {
   'botsPage.workflow.cancelled': "Cancelled by you",
   'botsPage.workflow.stepOf': "Step {step} of {total}",
   'botsPage.workflow.reason.cancelled': "You cancelled it. No further steps will start.",
-  'botsPage.workflow.reason.cancelledStarted': "You cancelled it. Step {step} had already started: its worker keeps running. No further steps will start.",
+  'botsPage.workflow.reason.cancelledStarted': "You cancelled it. No further steps will start. Cancelling does not stop a worker step {step} already started: it keeps running until you stop it from its row.",
   'botsPage.workflow.reason.stopped': "Stopped when you stopped the bot. It will not continue by itself.",
   'botsPage.workflow.reason.taskFailed': "Step {step}'s task failed, so the next step will not start.",
   'botsPage.workflow.reason.taskCancelled': "Step {step}'s task was cancelled, so the next step will not start.",
