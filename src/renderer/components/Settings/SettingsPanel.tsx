@@ -91,7 +91,7 @@ import { QuickLaunchSection } from './QuickLaunchSection';
 import PairedDevicesModal from '../StatusBar/PairedDevicesModal';
 import { FOCUS_RING } from '../focusRing';
 import { SETTINGS_CATALOG, SETTINGS_NAV_GROUPS, catalogEntryOnPlatform, resolveSettingsTab, type SettingsTabId } from '../../settings/catalog';
-import { windowGlassSupported } from '../../utils/windowGlass';
+import { windowGlassSupported, type WindowGlassLevel } from '../../utils/windowGlass';
 import { matchSettings, tabHitCount } from '../../settings/searchSettings';
 import { CursorShapePicker } from './CursorShapePicker';
 import { SettingsSearchResults } from './SettingsSearchResults';
@@ -3547,6 +3547,39 @@ function FontFamilyField() {
   );
 }
 
+/**
+ * The window glass row. Without a material (Windows before 11 22H2) it reads
+ * Off with every level disabled and says why.
+ */
+export function WindowGlassSetting({
+  supported,
+  value,
+  onChange,
+}: {
+  supported: boolean;
+  value: WindowGlassLevel;
+  onChange: (level: WindowGlassLevel) => void;
+}) {
+  const t = useT();
+  return (
+    <SettingRow
+      id="windowglass"
+      label={t('settings.windowGlass')}
+      description={supported ? t('settings.windowGlassDesc') : t('settings.windowGlassUnsupported')}
+    >
+      <SegmentedControl
+        value={supported ? value : 'off'}
+        onValueChange={onChange}
+        options={[
+          { value: 'off', label: t('settings.windowGlassOff'), disabled: !supported },
+          { value: 'soft', label: t('settings.windowGlassSoft'), disabled: !supported },
+          { value: 'clear', label: t('settings.windowGlassClear'), disabled: !supported },
+        ]}
+      />
+    </SettingRow>
+  );
+}
+
 export function ChromePresetActionsView({
   onApply,
 }: {
@@ -3728,21 +3761,7 @@ function TabAppearance() {
             reason, so nobody picks a level that changes nothing. Linux has
             no material and no row. */}
         {(window.electronAPI?.platform === 'darwin' || window.electronAPI?.platform === 'win32') && (
-          <SettingRow
-            id="windowglass"
-            label={t('settings.windowGlass')}
-            description={glassSupported ? t('settings.windowGlassDesc') : t('settings.windowGlassUnsupported')}
-          >
-            <SegmentedControl
-              value={glassSupported ? windowGlass : 'off'}
-              onValueChange={setWindowGlass}
-              options={[
-                { value: 'off', label: t('settings.windowGlassOff'), disabled: !glassSupported },
-                { value: 'soft', label: t('settings.windowGlassSoft'), disabled: !glassSupported },
-                { value: 'clear', label: t('settings.windowGlassClear'), disabled: !glassSupported },
-              ]}
-            />
-          </SettingRow>
+          <WindowGlassSetting supported={glassSupported} value={windowGlass} onChange={setWindowGlass} />
         )}
         <SettingRow id="chrome" label={t('settings.chromePreset')} description={t('settings.chromePresetDesc')}>
           <ChromePresetActionsView onApply={applyChromePresetWithFeedback} />
