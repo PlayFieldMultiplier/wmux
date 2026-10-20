@@ -1,0 +1,40 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import type { BrowserWindow } from 'electron';
+const mocks = vi.hoisted(() => ({ handle: vi.fn(), remove: vi.fn(), connect: vi.fn(async () => ({ status: 'authorized' })), status: vi.fn(() => ({ status: 'signed-out' })), disconnect: vi.fn(), cancel: vi.fn(), dispose: vi.fn(), approve: vi.fn(() => ({ status: 'authorizing' })), reconcile: vi.fn(), library: vi.fn(), subscribe: vi.fn((_listener: () => void) => () => undefined) }));
+vi.mock('electron', () => ({ ipcMain: { handle: mocks.handle, removeHandler: mocks.remove }, shell: { openExternal: vi.fn() } }));
+vi.mock('../../../../daemon/config', () => ({ getWmuxDir: () => '/unused' }));
+vi.mock('../../../connectors/connectorOAuth', () => ({ ConnectorOAuth: class { connect = mocks.connect; status = mocks.status; approve = mocks.approve; reconcile = mocks.reconcile; disconnect = mocks.disconnect; cancel = mocks.cancel; dispose = mocks.dispose; } }));
+vi.mock('../../../factory/secretStore', () => ({ electronSecretCrypto: () => ({ state: () => 'unavailable' }) }));
+vi.mock('../../../factory/connectorStore', () => ({ getConnectorStore: mocks.library, onConnectorLibraryChanged: mocks.subscribe }));
+import { registerConnectorOAuthHandlers } from '../connectorOAuth.handler';
+afterEach(() => vi.clearAllMocks());
+it('permits only the main frame, known actions and saved connection IDs', async () => {
+  const frame = {}; const sender = { mainFrame: frame };
+  const win = { isDestroyed: () => false, webContents: sender } as unknown as BrowserWindow;
+  const { cleanup } = registerConnectorOAuthHandlers(() => win);
+  const invoke = mocks.handle.mock.calls[0][1];
+  const event = { sender, senderFrame: frame };
+  expect(await invoke({ ...event, senderFrame: {} }, 'connect', 'con-12345678')).toEqual({ status: 'unavailable' });
+  expect(await invoke({ ...event, sender: {} }, 'connect', 'con-12345678')).toEqual({ status: 'unavailable' });
+  expect(await invoke(event, 'connect', '../token')).toEqual({ status: 'unavailable' });
+  expect(await invoke(event, 'unknown', 'con-12345678')).toEqual({ status: 'unavailable' });
+  expect(mocks.connect).not.toHaveBeenCalled();
+  expect(await invoke(event, 'approve', 'con-12345678')).toEqual({ status: 'unavailable' });
+  expect(mocks.approve).not.toHaveBeenCalled();
+  expect(await invoke(event, 'approve', 'con-12345678', 'attempt-one')).toEqual({ status: 'authorizing' });
+  expect(mocks.approve).toHaveBeenCalledWith('con-12345678', 'attempt-one');
+  expect(await invoke(event, 'connect', 'con-12345678')).toEqual({ status: 'authorized' });
+  expect(mocks.connect).toHaveBeenCalledWith('con-12345678');
+  cleanup(); expect(mocks.dispose).toHaveBeenCalled();
+});
+
+it('reconciles a readable library at startup and on changes, preserving auth when the library is unreadable', () => {
+  let refusal: string | null = 'Cannot read connections';
+  mocks.library.mockReturnValue({ writeRefusal: () => refusal });
+  const { cleanup } = registerConnectorOAuthHandlers(() => null);
+  const changed = mocks.subscribe.mock.calls[0][0] as () => void;
+  expect(mocks.reconcile).not.toHaveBeenCalled();
+  changed(); expect(mocks.reconcile).not.toHaveBeenCalled();
+  refusal = null; changed(); expect(mocks.reconcile).toHaveBeenCalledTimes(1);
+  cleanup();
+});

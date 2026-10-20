@@ -272,6 +272,17 @@ for (const p of packages) {
   lines.push('');
 }
 
+// Adapted connector UI utilities (MIT), bundled outside npm.
+lines.push('LibreChat connector utilities and catalog behavior');
+lines.push('Source: https://github.com/LibreChat-AI/LibreChat/tree/e081b566a42d3a83b8102157bd7806cf4ff63b17');
+lines.push('Copied function: normalizeUrl from client/src/components/SidePanel/MCPBuilder/MCPServerDialog/utils/urlUtils.ts');
+lines.push('Local file: src/shared/connectorUrl.ts (function behavior unchanged; attribution added).');
+lines.push('Behavior reference: client/src/components/SidePanel/MCPBuilder/MCPBuilderPanel.tsx');
+lines.push('Local adaptation: src/renderer/components/Connectors/ConnectorsPage.tsx (wmux navigation, state, IPC and i18n).');
+lines.push('No LibreChat OAuth or token-storage implementation is included in this adaptation.');
+lines.push(readFileSync(join(ROOT, 'src/renderer/components/Connectors/LICENSE.LibreChat'), 'utf8').trim());
+lines.push(SEP);
+
 // --- Step 4: emit bundled fonts ---------------------------------------------
 // Fonts are shipped in the renderer via @font-face (see styles/globals.css),
 // not as npm dependencies, so they are enumerated here from their committed

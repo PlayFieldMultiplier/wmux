@@ -70,7 +70,7 @@ describe('titlebar workspace chrome', () => {
   it('rail pages name the page with no + or branch, whatever the sidebar does', () => {
     for (const sidebarVisible of [true, false]) {
       mount({ sidebarVisible, sidebarPosition: 'right' });
-      for (const [route, name] of [['git', 'Git'], ['fleet', 'Fleet'], ['schedules', 'Schedules'], ['remote', 'Remote']] as const) {
+      for (const [route, name] of [['git', 'Git'], ['fleet', 'Fleet'], ['schedules', 'Schedules'], ['remote', 'Remote'], ['connectors', 'Connectors']] as const) {
         act(() => useStore.setState({ appRoute: route }));
         expect([title(), plus(), branch(), search()]).toEqual([name, false, false, false]);
       }

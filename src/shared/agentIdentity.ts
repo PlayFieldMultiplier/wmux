@@ -147,6 +147,8 @@ export interface AgentIdentityRow {
   readonly apiErrorTurnEnd?: true;
   /** MCP registration target (src/shared/mcpTargets.ts). */
   readonly mcp?: AgentMcpTargetSpec;
+  /** Per-session local connector launch syntax (shared/connectorTerminal). */
+  readonly connectorLaunch?: 'mcp-json' | 'mcp-toml';
   /** The pane is a TUI chat box: a pasted line lands in a composer, not a
    *  shell, so a channel wake nudge may carry the message body
    *  (channelWakeWorker `mayCarryBody`). */
@@ -195,6 +197,7 @@ export const AGENT_IDENTITIES = [
   {
     slug: 'claude',
     display: 'Claude Code',
+    connectorLaunch: 'mcp-json',
     modelFlag: '--model',
     resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
     permissions: 'permission-mode',
@@ -216,6 +219,7 @@ export const AGENT_IDENTITIES = [
   {
     slug: 'codex',
     display: 'Codex CLI',
+    connectorLaunch: 'mcp-toml',
     modelFlag: '--model',
     resume: { picker: 'resume', exact: 'resume {id}', idFormat: 'uuid' },
     detect: 'screen',

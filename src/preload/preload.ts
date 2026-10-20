@@ -1,3 +1,7 @@
+import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult } from '../shared/connectorTerminal';
+import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthAction, type ConnectorOAuthResult } from '../shared/connectorOAuth';
+import { CONNECTOR_CATALOG_IPC, type ConnectorCatalogResult } from '../shared/connectorCatalog';
+import { CONNECTOR_CHECK_IPC, type ConnectorCheckResult } from '../shared/connectorCheck';
 import { WORKFLOW_OWNER_IPC } from '../shared/botWorkflow';
 import type { TerminalCoreSettings, TerminalEngine } from '../shared/terminalCoreSettings';
 import { CHAT_IPC } from '../shared/transcript/chatIpc';
@@ -1504,6 +1508,18 @@ const electronAPI = {
   // failures; `rpc` forwards a host-validated bridge request from a plugin
   // iframe to main, where it dispatches through the shared RpcRouter with
   // clientName pinned to the plugin (full permission enforcement applies).
+  connectorTerminal: {
+    launchCommand: (id: string, agent: 'claude' | 'codex') => ipcRenderer.invoke(CONNECTOR_TERMINAL_IPC, id, agent) as Promise<ConnectorTerminalResult>,
+  },
+  connectorOAuth: {
+    action: (action: ConnectorOAuthAction, id: string, consentId?: string) => ipcRenderer.invoke(CONNECTOR_OAUTH_IPC, action, id, consentId) as Promise<ConnectorOAuthResult>,
+  },
+  connectorCatalog: {
+    list: (search: string, cursor?: string) => ipcRenderer.invoke(CONNECTOR_CATALOG_IPC, search, cursor) as Promise<ConnectorCatalogResult>,
+  },
+  connectorChecks: {
+    check: (id: string) => ipcRenderer.invoke(CONNECTOR_CHECK_IPC, id) as Promise<ConnectorCheckResult>,
+  },
   plugins: {
     list: () => ipcRenderer.invoke(IPC.PLUGINS_LIST) as Promise<{
       plugins: unknown[];

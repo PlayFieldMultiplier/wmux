@@ -1,3 +1,4 @@
+import { normalizeUrl } from '../../../shared/connectorUrl';
 // ─── The connection dialog — add or edit one library connection ────────────
 //
 // Opened from Settings › Bots › Connections and from a bot's profile. A
@@ -105,11 +106,12 @@ export function draftOf(f: Form, id?: string): ConnectorDraft {
   };
 }
 
-export function ConnectionDialog({ t, bots, editing, presetBotId, onClose, port = getBotConnectorPort() }: {
+export function ConnectionDialog({ t, bots, editing, initialDraft, presetBotId, onClose, port = getBotConnectorPort() }: {
   t: T;
   bots: readonly FactoryBotRow[];
   /** The connection to edit; absent to add one. */
   editing?: ConnectorView;
+  initialDraft?: ConnectorDraft;
   /** Add from a bot's profile: the scope starts as that bot. */
   presetBotId?: string;
   onClose: () => void;
@@ -117,7 +119,7 @@ export function ConnectionDialog({ t, bots, editing, presetBotId, onClose, port 
 }): React.ReactElement {
   const start = (): Form => {
     if (editing) return formOf(editing, editing.preset ?? 'custom');
-    const f = formOf(customConnectorDraft(), 'custom');
+    const f = formOf(initialDraft ?? customConnectorDraft(), initialDraft?.preset ?? 'custom');
     return presetBotId ? { ...f, scope: 'bots', botIds: [presetBotId] } : f;
   };
   const [form, setForm] = useState<Form>(start);
@@ -221,7 +223,7 @@ export function ConnectionDialog({ t, bots, editing, presetBotId, onClose, port 
           ) : (
             <>
               <Field label={t('settings.factory.connections.url')} layout="stacked">
-                <Input data-testid="connection-url" value={form.url} spellCheck={false} onChange={(e) => set('url', e.target.value)} className="w-full font-mono text-[12px]" />
+                <Input data-testid="connection-url" value={form.url} spellCheck={false} onChange={(e) => set('url', e.target.value)} onBlur={() => set('url', normalizeUrl(form.url))} className="w-full font-mono text-[12px]" />
               </Field>
               <SegmentedControl
                 ariaLabel={t('settings.factory.connections.protocol')}

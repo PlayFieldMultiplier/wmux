@@ -1,3 +1,7 @@
+import { registerConnectorTerminalHandlers } from './handlers/connectorTerminal.handler';
+import { registerConnectorOAuthHandlers } from './handlers/connectorOAuth.handler';
+import { registerConnectorCatalogHandlers } from './handlers/connectorCatalog.handler';
+import { registerConnectorCheckHandlers } from './handlers/connectorCheck.handler';
 import { registerTerminalCoreHandlers } from './handlers/terminalCore.handler';
 import { registerQuickCommandHandlers } from './handlers/quickCommand.handler';
 import { registerUsageLimitHandlers } from '../usageLimit/usageLimit.handler';
@@ -267,6 +271,10 @@ export function registerAllHandlers(
   const cleanupAccountRotation = registerAccountRotationHandlers();
   const cleanupAgyAccounts = registerAgyAccountHandlers(getWindow);
   const cleanupQuickCommands = registerQuickCommandHandlers();
+  const connectorOAuth = registerConnectorOAuthHandlers(getWindow);
+  const cleanupConnectorTerminal = registerConnectorTerminalHandlers(getWindow, connectorOAuth.service);
+  const cleanupConnectorChecks = registerConnectorCheckHandlers(getWindow, connectorOAuth.service);
+  const cleanupConnectorCatalog = registerConnectorCatalogHandlers(getWindow);
 
   // X1 local-mode context watchers (git HEAD fs.watch + PID-tree ports).
   // Daemon mode gets the same data from the daemon process via
@@ -578,6 +586,10 @@ export function registerAllHandlers(
     cleanupAccountRotation();
     cleanupAgyAccounts();
     cleanupQuickCommands();
+    cleanupConnectorChecks();
+    cleanupConnectorTerminal();
+    connectorOAuth.cleanup();
+    cleanupConnectorCatalog();
     // Mirror the register-side removeHandler so a teardown leaves no stale
     // handle behind (handle handlers are not .on listeners — see above).
     ipcMain.removeHandler(IPC.RPC_INVOKE);

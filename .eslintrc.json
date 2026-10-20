@@ -167,6 +167,25 @@
           }
         ]
       }
+    },
+    {
+      "files": [
+        "src/main/connectors/checkConnector.ts",
+        "src/main/connectors/connectorOAuth.ts",
+        "src/main/connectors/oauthStore.ts",
+        "src/main/connectors/terminalGateway.ts",
+        "src/main/connectors/__tests__/terminalGateway.os.test.ts"
+      ],
+      "rules": {
+        "import/no-unresolved": [
+          "error",
+          {
+            "ignore": [
+              "^@modelcontextprotocol/sdk/(?:(?:client|server)/(?:index|streamableHttp|auth)|types)\\.js$"
+            ]
+          }
+        ]
+      }
     }
   ]
 }
