@@ -1142,7 +1142,9 @@ export class BotRuntime {
         // new conversation, and the saved one is forgotten.
         if ('freshSession' in result && result.freshSession) {
           this.endSession(botId);
-          this.deps.sessions.delete(botId);
+          // A conversation of its own (a wake not known clean) was never
+          // saved: the bot's own saved one stays.
+          if (!s.live.ephemeral) this.deps.sessions.delete(botId);
         }
       }
     } catch (err) {

@@ -1312,6 +1312,25 @@ describe('external guests and the bot\'s conversation', () => {
     expect(r.adapters[2].started?.resumeSessionId).toBe('sess-1');
   });
 
+  it('a failed turn in a conversation of its own leaves the bot\'s saved conversation in place', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    setBotRuntimePorts({ wakeGuest: () => 'unknown' });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'general', reason: { kind: 'handoff', handoffId: 'h-gone' } }));
+    r.runtime.kick();
+    await settle();
+    r.adapters[1].end([{ type: 'error', message: 'the bot called room_post, which are not its tools', botTools: 'unreached' }]);
+    await settle();
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    vi.restoreAllMocks();
+  });
+
   it('a bot whose engine cannot hold its tools back runs no wake that is not known clean', async () => {
     const r = rig();
     const res = r.store.create({ workspaceId: 'ws-1', role: 'verifier', engine: { kind: 'acp', command: 'agent', args: [] } });
