@@ -636,6 +636,20 @@ describe('WakeQueue', () => {
     return q;
   };
 
+  it('drops a wake that names a workspace other than its bot\'s own (cross_workspace) and keeps its record', async () => {
+    const q = new WakeQueue(wakeQueuePath(dir), { now, newId: () => `w-${n++}`, botWorkspace: (id) => (id === 'bot-1' ? 'ws-g' : null) });
+    pendingFlush.push(() => q.flush());
+    expect(q.enqueue({ botId: 'bot-1', workspaceId: 'ws-a', reason: { kind: 'human', text: 'hi', source: 'desktop' }, priority: 0 })).toBeNull();
+    expect(q.enqueue({ botId: 'bot-9', workspaceId: 'ws-a', reason: { kind: 'human', text: 'hi', source: 'desktop' }, priority: 0 })).toBeNull();
+    expect(q.list().map((i) => i.dropped?.code)).toEqual(['cross_workspace', 'cross_workspace']);
+    expect(q.enqueue({ botId: 'bot-1', workspaceId: 'ws-g', reason: { kind: 'human', text: 'hi', source: 'desktop' }, priority: 0 })?.state).toBe('queued');
+    // The record reads back after a restart.
+    await q.flush();
+    const again = new WakeQueue(wakeQueuePath(dir), { now });
+    again.load();
+    expect(again.list().filter((i) => i.dropped?.code === 'cross_workspace')).toHaveLength(2);
+  });
+
   it('orders by priority then age, holding batched facts until their window closes', () => {
     const q = newQueue();
     const facts = q.enqueue({ botId: 'bot-1', workspaceId: 'ws', reason: { kind: 'facts', factIds: ['f1'], trigger }, priority: 2 });

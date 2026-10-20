@@ -154,9 +154,9 @@ describe('WakeTaint', () => {
     const fromB = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-b' };
     const fromGone = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-c' };
     const hs = [handoff('h-research', fromA), handoff('h-dev', fromB), handoff('h-gone', fromGone)];
-    const profiles: Record<string, { role: 'lead'; template: 'researcher' | 'developer' }> = {
-      'bot-a': { role: 'lead', template: 'researcher' },
-      'bot-b': { role: 'lead', template: 'developer' },
+    const profiles: Record<string, { role: 'lead'; template: 'researcher' | 'developer'; workspaceId: string }> = {
+      'bot-a': { role: 'lead', template: 'researcher', workspaceId: 'ws' },
+      'bot-b': { role: 'lead', template: 'developer', workspaceId: 'ws' },
     };
     const t = make({
       runningWake: () => ({ item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 }),
@@ -176,7 +176,7 @@ describe('WakeTaint', () => {
     const fromA = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), JSON.stringify({ version: 1, handoffs: { 'h-old': false, 'h-dev': false } }));
-    const t = make({ bot: (id) => (id === 'bot-a' ? { role: 'lead', template: 'researcher' } : { role: 'lead', template: 'developer' }) },
+    const t = make({ bot: (id) => (id === 'bot-a' ? { role: 'lead', template: 'researcher', workspaceId: 'ws' } : { role: 'lead', template: 'developer', workspaceId: 'ws' }) },
       [], [handoff('h-old', fromA), handoff('h-dev', { kind: 'bot', workspaceId: 'ws', botId: 'bot-b' })]);
     expect(t.handoffTainted('h-old')).toBe(true);
     expect(t.handoffTainted('h-dev')).toBe(false);
@@ -408,5 +408,27 @@ describe('guest provenance', () => {
     items.delete('w-1');
     expect(guestOfWake('w-1')).toBe('unknown');
     expect(guestTurnRefusal('w-1')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
+  });
+});
+
+describe('a guest workspace is an island', () => {
+  const human = { kind: 'human' as const, text: 'go', source: 'desktop' as const };
+  it('every wake there is a guest wake and tainted, the owner\'s own message included', () => {
+    const t = make({ guestWorkspace: (ws) => ws === 'ws-g', bot: () => ({ role: 'lead', template: 'developer', workspaceId: 'ws-g' }) });
+    const item = { ...wake(human), workspaceId: 'ws-g' };
+    expect(t.wakeGuest(item)).toBe(true);
+    expect(t.wakeTainted(item)).toBe(true);
+    // The bot's stored workspace decides too, whatever the item names.
+    expect(t.wakeGuest({ ...item, workspaceId: 'ws-a' })).toBe(true);
+  });
+
+  it('a clean workspace keeps the record\'s answer; a missing bot or an unknown workspace is unknown', () => {
+    const clean = make({ guestWorkspace: () => false, bot: () => ({ role: 'lead', template: 'developer', workspaceId: 'ws' }) });
+    expect(clean.wakeGuest(wake(human))).toBe(false);
+    expect(clean.wakeTainted(wake(human))).toBe(false);
+    expect(make({ guestWorkspace: () => false, bot: () => null }).wakeGuest(wake(human))).toBe('unknown');
+    expect(make({ guestWorkspace: () => 'unknown' }).wakeGuest(wake(human))).toBe('unknown');
+    // A guest's own wake stays a guest wake whatever the workspace says.
+    expect(make({ guestWorkspace: () => 'unknown' }).wakeGuest(wake({ kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c', text: 'x' }))).toBe(true);
   });
 });

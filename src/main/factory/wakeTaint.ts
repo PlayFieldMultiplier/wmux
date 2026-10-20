@@ -67,6 +67,7 @@ import type { LedgerEntry } from '../../shared/ledger';
 import type { BotWorkflow } from '../../shared/botWorkflow';
 import type { WakeItem, WakeReason } from '../../shared/wake';
 import { taskIdOfFactId } from './wakePrompt';
+import { isGuestWorkspace } from './guestWorkspaces';
 
 /** Facts whose payload is GitHub-authored text. */
 export const OUTSIDE_TEXT_FACT_KINDS: ReadonlySet<FactKind> = new Set<FactKind>([
@@ -119,8 +120,10 @@ export interface WakeTaintPorts {
   workflow?: (workflowId: string) => Pick<BotWorkflow, 'revision' | 'tainted' | 'guest'> | null;
   /** The wake `botId` is running now and when its turn started, or null. */
   runningWake: (botId: string) => { item: WakeItem; startedAt: number } | null;
-  /** A bot's profile (its template), or null when it is not known. */
-  bot?: (botId: string) => Pick<BotProfile, 'template' | 'role'> | null;
+  /** A bot's profile (its template and workspace), or null when it is not known. */
+  bot?: (botId: string) => Pick<BotProfile, 'template' | 'role' | 'workspaceId'> | null;
+  /** Whether a workspace is a guest workspace (default isGuestWorkspace). */
+  guestWorkspace?: (workspaceId: string) => GuestProvenance;
   /** `<wmuxDir>/factory/taint.json`; absent: marks in memory only. */
   file?: string;
   log?: (line: string) => void;
@@ -142,15 +145,43 @@ export class WakeTaint {
     }
   }
 
-  /** Whether a wake carried outside text. */
-  wakeTainted(item: Pick<WakeItem, 'reason'>): boolean {
+  /** Whether a wake carried outside text. Every wake in a guest workspace does. */
+  wakeTainted(item: Pick<WakeItem, 'reason'> & Partial<Pick<WakeItem, 'botId' | 'workspaceId'>>): boolean {
+    if (item.botId !== undefined && item.workspaceId !== undefined && this.islandGuest({ botId: item.botId, workspaceId: item.workspaceId }) !== false) return true;
     return this.reasonTainted(item.reason);
   }
 
-  /** A wake's guest provenance, from its record alone (the branches of
+  /** A wake's guest provenance. First its workspace: every wake of a bot in
+   *  a guest workspace is a guest wake, the owner's own messages there
+   *  included (guestWorkspaces.ts). Then its record alone (the branches of
    *  reasonTainted). */
-  wakeGuest(item: Pick<WakeItem, 'reason'>): GuestProvenance {
-    const reason = item.reason;
+  wakeGuest(item: Pick<WakeItem, 'reason' | 'botId' | 'workspaceId'>): GuestProvenance {
+    const island = this.islandGuest(item);
+    if (island === true) return true;
+    const own = this.reasonGuest(item.reason);
+    return own === true ? true : island === 'unknown' ? 'unknown' : own;
+  }
+
+  /** Whether a wake's workspace, or its bot's stored one, is a guest
+   *  workspace; unknown when that cannot be told or the bot is missing. */
+  private islandGuest(item: Pick<WakeItem, 'botId' | 'workspaceId'>): GuestProvenance {
+    const guestWs = this.ports.guestWorkspace ?? isGuestWorkspace;
+    try {
+      const own = guestWs(item.workspaceId);
+      if (own === true) return true;
+      let botWs: GuestProvenance = false;
+      if (this.ports.bot) {
+        const profile = this.ports.bot(item.botId);
+        botWs = profile ? guestWs(profile.workspaceId) : 'unknown';
+      }
+      if (botWs === true) return true;
+      return own === 'unknown' || botWs === 'unknown' ? 'unknown' : false;
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  private reasonGuest(reason: WakeReason): GuestProvenance {
     switch (reason.kind) {
       case 'human':
       case 'manual':

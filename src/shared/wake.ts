@@ -94,7 +94,8 @@ export interface WakeItem {
   /** max 2; then a 'bot.error' fact and the item is parked with the bot */
   attempts: number;
   state: WakeState;
-  dropped?: { code: 'budget' | 'duplicate' | 'bot_disabled' | 'expired' | 'queue_full' };
+  /** `cross_workspace`: the wake named a workspace other than its bot's. */
+  dropped?: { code: 'budget' | 'duplicate' | 'bot_disabled' | 'expired' | 'queue_full' | 'cross_workspace' };
 }
 
 export const WAKE_LIMITS = {

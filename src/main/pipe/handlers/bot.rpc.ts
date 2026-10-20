@@ -130,7 +130,7 @@ export interface SetJobPorts {
    *  question (wakeOnOwnerAnswer). Missing: no wake does. */
   ownerAnswer?: (botId: string, wake: Pick<WakeItem, 'reason'>) => boolean;
   /** That wake's guest provenance (wakeTaint.ts wakeGuest). Missing: clean. */
-  wakeGuest?: (wake: Pick<WakeItem, 'reason'>) => GuestProvenance;
+  wakeGuest?: (wake: Pick<WakeItem, 'reason' | 'botId' | 'workspaceId'>) => GuestProvenance;
 }
 
 /** The wake carries the owner's own answer to the bot's question: an
@@ -523,6 +523,7 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       }
       const queue = new WakeQueue(wakeQueuePath(wmuxDir), {
         isBotEnabled: (botId) => store.get(botId)?.enabled === true,
+        botWorkspace: (botId) => store.get(botId)?.workspaceId ?? null,
         // A held fan-out's wake that ends, unbooked, hands its slot back.
         onChange: () => {
           runtime?.kick();

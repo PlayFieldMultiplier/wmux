@@ -16,7 +16,8 @@
 //   the bot already has in any state but `dropped` is not queued again:
 //   enqueue returns that item, so a redelivery or a retry is idempotent.
 // - Caps: at most PER_BOT_QUEUE_CAP queued items per bot (`queue_full`); a bot
-//   that is disabled gets nothing (`bot_disabled`); facts, schedule and
+//   that is disabled gets nothing (`bot_disabled`), nor a wake that names a
+//   workspace other than its own (`cross_workspace`); facts, schedule and
 //   routine wakes expire after FACT_TTL_MS (`expired`, checked when the item
 //   would run).
 //   A wake marked `overCap` (an owner's message, the answer to a bot's own
@@ -168,7 +169,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
 }
 
 const STATES: ReadonlySet<string> = new Set(['queued', 'running', 'done', 'dropped', 'parked', 'interrupted']);
-const DROP_CODES: ReadonlySet<string> = new Set(['budget', 'duplicate', 'bot_disabled', 'expired', 'queue_full']);
+const DROP_CODES: ReadonlySet<string> = new Set(['budget', 'duplicate', 'bot_disabled', 'expired', 'queue_full', 'cross_workspace']);
 
 function parseWakeItem(raw: unknown): WakeItem | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -212,6 +213,10 @@ export interface WakeQueueOptions {
   newId?: () => string;
   /** Whether a bot exists and is enabled. Absent: every bot is. */
   isBotEnabled?: (botId: string) => boolean;
+  /** A bot's own workspace (null: not known). A wake that names another
+   *  is dropped `cross_workspace`: a bot runs in its own workspace only,
+   *  which keeps a guest workspace an island. Absent: not checked. */
+  botWorkspace?: (botId: string) => string | null;
   /** Called after every change (the runtime re-schedules on it). */
   onChange?: () => void;
 }
@@ -327,6 +332,7 @@ export class WakeQueue implements WakeSinkApi {
       ...(threadId ? { threadId } : {}),
     };
     if (this.opts.isBotEnabled && !this.opts.isBotEnabled(input.botId)) return this.record(req, 'bot_disabled');
+    if (this.opts.botWorkspace && this.opts.botWorkspace(input.botId) !== input.workspaceId) return this.record(req, 'cross_workspace');
     const mine = this.items.filter((i) => i.botId === input.botId);
 
     if (reason.kind === 'facts') {

@@ -169,7 +169,7 @@ describe('a coordinator\'s relay', () => {
     const f1 = forwardOf(r, res1.handoffId)!;
     expect(f1.guestSourced).toBe(true);
     // The developer's wake on it is guest-sourced (it runs in a conversation of its own).
-    expect(r.taint.wakeGuest({ reason: { kind: 'handoff', handoffId: f1.id } })).toBe(true);
+    expect(r.taint.wakeGuest({ botId: t.dev.id, workspaceId: t.dev.workspaceId, reason: { kind: 'handoff', handoffId: f1.id } })).toBe(true);
     await r.router.idle();
     const res2 = answer(r, t.dev, f1, 'Built');
     if (!res2.ok) throw new Error('refused');
