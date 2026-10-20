@@ -277,8 +277,11 @@ export interface RemoteA2aRpcDeps {
   state: (input: A2aRemoteStateInput) => Promise<RemoteOpResult>;
   /** The receiver of an inbound remote task read it: the sender gets a `read` receipt. */
   read?: (input: { taskId: string; workspaceId: string }) => Promise<unknown>;
-  /** Paired PCs with no active link in the workspace (every workspace when omitted). */
-  listPeers?: (workspaceId?: string) => Promise<A2aRemotePeerHint[]>;
+  /**
+   * Paired PCs with no active link in the workspace (every workspace when
+   * omitted). `panesOf` counts a local workspace's panes, from discover's own list.
+   */
+  listPeers?: (workspaceId: string | undefined, panesOf: (workspaceId: string) => number) => Promise<A2aRemotePeerHint[]>;
 }
 
 /**
@@ -298,6 +301,18 @@ export interface A2aRemotePeerHint {
   /** Link requests waiting for a person, on either PC. */
   pendingLinks: number;
   hint: string;
+}
+
+/** Distinct panes per workspace in the renderer's discover agents (each entry's `url` is its workspace id). */
+function paneCounter(agents: unknown[]): (workspaceId: string) => number {
+  const byWs = new Map<string, Set<string>>();
+  for (const a of agents) {
+    if (!isRecord(a) || typeof a.url !== 'string' || !Array.isArray(a.panes)) continue;
+    const ids = new Set<string>();
+    for (const p of a.panes) if (isRecord(p) && typeof p.paneId === 'string') ids.add(p.paneId);
+    byWs.set(a.url, ids);
+  }
+  return (workspaceId) => byWs.get(workspaceId)?.size ?? 0;
 }
 
 /** The most a2a.discover waits for the paired-PC hints; past it they are left out. */
@@ -968,17 +983,18 @@ export function registerA2aRpc(
   router.register('a2a.whoami', (params) => sendToRenderer(getWindow, 'a2a.whoami', params));
   router.register('a2a.discover', async (params) => {
     const ws = typeof params.workspaceId === 'string' && params.workspaceId ? params.workspaceId : '';
-    // Started beside the renderer read and capped: the hints are optional, and
-    // they read only this PC's daemon (never the other PC) on this path.
+    const res = await sendToRenderer(getWindow, 'a2a.discover', params);
+    if (!remote || !isRecord(res) || !Array.isArray(res.agents)) return res;
+    // Capped: the hints are optional, and on this path they read only this
+    // PC's daemon (never the other PC).
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    const peersP: Promise<A2aRemotePeerHint[]> = remote?.listPeers
+    const panesOf = paneCounter(res.agents);
+    const peersP: Promise<A2aRemotePeerHint[]> = remote.listPeers
       ? Promise.race([
-        remote.listPeers(ws || undefined).catch(() => []),
+        remote.listPeers(ws || undefined, panesOf).catch(() => []),
         new Promise<A2aRemotePeerHint[]>((resolve) => { deadline = setTimeout(() => resolve([]), PEER_HINTS_DEADLINE_MS); }),
       ]).finally(() => clearTimeout(deadline))
       : Promise.resolve([]);
-    const res = await sendToRenderer(getWindow, 'a2a.discover', params);
-    if (!remote || !isRecord(res) || !Array.isArray(res.agents)) return res;
     const [targets, remotePeers] = await Promise.all([remote.listTargets().catch(() => [] as A2aRemoteTarget[]), peersP]);
     // A remote pane is addressable only from its linked local pane: list the
     // links of the caller's workspace (every link when no workspace is named).

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { daemonRemoteA2aRpcDeps } from '../remoteA2aRpcDeps';
 
+const none = (): number => 0;
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 describe('daemonRemoteA2aRpcDeps', () => {
@@ -56,9 +57,9 @@ describe('daemonRemoteA2aRpcDeps', () => {
     });
     const deps = daemonRemoteA2aRpcDeps(() => ({ rpc }));
     // The first call never waits on the other PC: its count is unknown until the background read lands.
-    expect((await deps.listPeers!('ws-a'))[0]).toMatchObject({ name: 'mac-mini', exposedPanes: null });
+    expect((await deps.listPeers!('ws-a', none))[0]).toMatchObject({ name: 'mac-mini', exposedPanes: null });
     await flush();
-    const peers = await deps.listPeers!('ws-a');
+    const peers = await deps.listPeers!('ws-a', none);
     expect(peers).toEqual([
       { name: 'mac-mini', paired: true, connected: true, exposedPanes: 1, pendingLinks: 0, hint: expect.stringMatching(/shows 1 pane, none linked/) },
       { name: 'desk', paired: true, connected: true, exposedPanes: null, pendingLinks: 1, hint: expect.stringMatching(/link request from that PC/) },
@@ -79,20 +80,20 @@ describe('daemonRemoteA2aRpcDeps', () => {
       return {};
     });
     const deps = daemonRemoteA2aRpcDeps(() => ({ rpc }));
-    await deps.listPeers!();
+    await deps.listPeers!(undefined, none);
     await flush();
-    expect(await deps.listPeers!()).toEqual([
+    expect(await deps.listPeers!(undefined, none)).toEqual([
       { name: 'mac-mini', paired: true, connected: true, exposedPanes: 0, pendingLinks: 0, hint: expect.stringMatching(/shows no pane to this one/) },
     ]);
-    expect(await daemonRemoteA2aRpcDeps(() => null).listPeers!()).toEqual([]);
-    // A PC that joined this one and sees a whole workspace (no pane list): the count is unknown, not zero.
+    expect(await daemonRemoteA2aRpcDeps(() => null).listPeers!(undefined, none)).toEqual([]);
+    // A PC that joined this one and sees a whole workspace (no pane list): that workspace's panes now.
     const whole = vi.fn(async (method: string) => {
       if (method === 'a2a.remote.hosts.status') return { hosts: [{ hostId: 'h', name: 'desk', role: 'server', state: 'connected', pending: 0 }] };
       if (method === 'a2a.remote.links.list') return { links: [] };
       if (method === 'a2a.remote.exposure.get') return { exposure: { v: 1, hostId: 'h', workspaceIds: ['ws'], updatedAt: 'x' } };
       return {};
     });
-    const [desk] = await daemonRemoteA2aRpcDeps(() => ({ rpc: whole })).listPeers!();
-    expect(desk.hint).not.toMatch(/no pane yet/);
+    const [desk] = await daemonRemoteA2aRpcDeps(() => ({ rpc: whole })).listPeers!(undefined, (ws) => (ws === 'ws' ? 3 : 0));
+    expect(desk.hint).toMatch(/this PC shows it 3 panes, none linked/);
   });
 });

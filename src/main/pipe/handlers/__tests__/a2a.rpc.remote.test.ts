@@ -273,13 +273,22 @@ describe('a2a.discover — remote panes', () => {
     expect(other).not.toHaveProperty('remotePeers');
   });
 
+  it('hands listPeers the distinct pane count of each local workspace from the discover list', async () => {
+    sendToRendererMock.mockImplementation(async (_w: unknown, method: string) => (method === 'a2a.discover'
+      ? { agents: [{ name: 'Local', url: 'ws-a', panes: [{ paneId: 'p1' }, { paneId: 'p1' }, { paneId: 'p2' }], metadata: { workspaceId: 'ws-a' } }] }
+      : { ok: true }));
+    await call(setup(), 'a2a.discover', {});
+    const panesOf = remote.listPeers.mock.calls[0][1] as (ws: string) => number;
+    expect([panesOf('ws-a'), panesOf('ws-none')]).toEqual([2, 0]);
+  });
+
   it('adds remotePeers for paired PCs not linked yet, scoped to the caller; a failed read keeps the old shape', async () => {
     const peer = { name: 'mac-mini', paired: true, connected: true, exposedPanes: 0, pendingLinks: 0, hint: 'paired; that PC shows no pane to this one yet' };
     remote.listPeers.mockResolvedValue([peer]);
     const res = await call(setup(), 'a2a.discover', { workspaceId: 'ws-a' });
     expect(res.remotePeers).toEqual([peer]);
     expect(res.agents).toHaveLength(2);
-    expect(remote.listPeers).toHaveBeenCalledWith('ws-a');
+    expect(remote.listPeers).toHaveBeenCalledWith('ws-a', expect.any(Function));
     remote.listPeers.mockRejectedValue(new Error('daemon away'));
     const failed = await call(setup(), 'a2a.discover', { workspaceId: 'ws-a' });
     expect(failed).not.toHaveProperty('remotePeers');

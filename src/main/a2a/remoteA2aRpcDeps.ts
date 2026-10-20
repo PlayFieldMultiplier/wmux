@@ -65,9 +65,9 @@ export function daemonRemoteA2aRpcDeps(
     reply: (input) => op(A2A_REMOTE_RPC.reply, input),
     state: (input) => op(A2A_REMOTE_RPC.state, input),
     read: async (input) => getDaemonClient()?.rpc(A2A_REMOTE_RPC.read, { ...input }),
-    listPeers: async (workspaceId) => {
+    listPeers: async (workspaceId, panesOf) => {
       const dc = getDaemonClient();
-      return dc ? listPeerHints(dc, workspaceId, (hostId) => exposedOf(dc, hostId)) : [];
+      return dc ? listPeerHints(dc, workspaceId, (hostId) => exposedOf(dc, hostId), panesOf) : [];
     },
   };
 }
@@ -85,6 +85,7 @@ async function listPeerHints(
   dc: DaemonRpc,
   workspaceId: string | undefined,
   exposedOf: (hostId: string) => ExposedSeen | null,
+  panesOf: (workspaceId: string) => number,
 ): Promise<A2aRemotePeerHint[]> {
   const [status, list] = await Promise.all([
     dc.rpc('a2a.remote.hosts.status', {}, { timeoutMs: PEER_HINT_RPC_TIMEOUT_MS }),
@@ -109,10 +110,8 @@ async function listPeerHints(
         const exp = isRecord(res) && isRecord(res.exposure) ? res.exposure : null;
         const ids = exp && Array.isArray(exp.workspaceIds) ? (exp.workspaceIds as string[]) : [];
         const panes = exp && isRecord(exp.paneIds) ? exp.paneIds : {};
-        // A workspace with no pane list shows every pane it has: the count is unknown here.
-        shown = ids.every((ws) => Array.isArray(panes[ws]))
-          ? ids.reduce((n, ws) => n + (panes[ws] as unknown[]).length, 0)
-          : null;
+        // A workspace with no pane list shows every pane it has now.
+        shown = ids.reduce((n, ws) => n + (Array.isArray(panes[ws]) ? (panes[ws] as unknown[]).length : panesOf(ws)), 0);
       } catch { /* the hint falls back to the general line */ }
     }
     let hint: string;

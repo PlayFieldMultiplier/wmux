@@ -119,6 +119,17 @@ is the one that will accept connections, and PC A is the one that joins it.
    target too. If two links would have the same alias, the newer one gets
    `#2`, `#3` and so on.
 
+   Until a pane is linked, `a2a_discover` lists the paired PC under
+   `remotePeers` instead (the field is left out when there is none): its
+   name, whether it is connected, `exposedPanes` (how many panes that PC
+   shows this one; `null` when that PC joined this one, or before it has
+   answered), `pendingLinks` (link requests waiting for a person on either
+   PC), and a `hint` naming the missing step, such as "paired; that PC
+   shows no pane to this one yet". It carries counts only: no pane names,
+   ids, addresses or fingerprints. To get `exposedPanes`, discover asks each
+   connected PC this one joined (`GET /api/a2a/exposed`) in the background,
+   at most once per PC every 30 seconds, and reports the last answer.
+
    Only the linked pane can send on the link. Its agent calls
    `send_message` with the alias (or the `remote:` id) as it would for a
    local pane. The call returns at once with the task queued for PC B. The
