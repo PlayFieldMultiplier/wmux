@@ -10,7 +10,16 @@ const { spawnMock, state, sockets } = vi.hoisted(() => ({
   // proxyPort: the --proxy-server port of the latest spawn. routeViaProxy:
   // whether the fake Chrome's traffic reaches it (false = a profile whose
   // proxy setting is overridden).
-  state: { portFiles: {} as Record<string, string>, proxyPort: 0, routeViaProxy: true, probeDelayMs: 0, reportErrorPage: false },
+  // onBrowserClose: what the fake Chrome does when asked to quit over CDP
+  // (null = it ignores the request).
+  state: {
+    portFiles: {} as Record<string, string>,
+    proxyPort: 0,
+    routeViaProxy: true,
+    probeDelayMs: 0,
+    reportErrorPage: false,
+    onBrowserClose: null as (() => void) | null,
+  },
   sockets: [] as Array<{ sent: Array<{ method: string; params: unknown }>; closed: boolean }>,
 }));
 vi.mock('child_process', () => ({ spawn: spawnMock }));
@@ -48,6 +57,7 @@ vi.mock('../CdpSocket', () => ({
     }
     async send(method: string, params: unknown = {}) {
       this.rec.sent.push({ method, params });
+      if (method === 'Browser.close') state.onBrowserClose?.();
       if (method === 'Target.createTarget' && !state.routeViaProxy && state.reportErrorPage) {
         // Not routed: `.invalid` fails to resolve and Chrome shows its error page.
         setTimeout(() => this.handlers.get('Target.targetInfoChanged')?.({
@@ -123,6 +133,7 @@ beforeEach(() => {
   state.routeViaProxy = true;
   state.probeDelayMs = 0;
   state.reportErrorPage = false;
+  state.onBrowserClose = null;
   sockets.length = 0;
   dead.clear();
   nextPort = 18001;
@@ -204,7 +215,7 @@ describe('ChromeLauncher — protected profiles', () => {
     launcher.dispose();
   });
 
-  it('restarts a running Chrome when protection turns on', async () => {
+  it('restarts a running Chrome when protection turns on, quitting it through Browser.close', async () => {
     let plan: ChromeProtectionPlan | null = null;
     const first = makeChild();
     spawnWritesPortFile(first);
@@ -212,10 +223,16 @@ describe('ChromeLauncher — protected profiles', () => {
     const p1 = await launcher.ensureRunning();
     expect(launcher.isProtected()).toBe(false);
     plan = denyAll;
-    dead.add(p1); // the killed Chrome stops answering
+    // The fake Chrome honours a CDP quit, as the real one does.
+    state.onBrowserClose = () => {
+      dead.add(p1);
+      first.emit('exit');
+    };
     spawnWritesPortFile(makeChild());
     await launcher.ensureRunning();
-    expect(first.kill).toHaveBeenCalled();
+    expect(sockets.some((x) => x.sent.some((m) => m.method === 'Browser.close'))).toBe(true);
+    // An orderly quit keeps what a signal would lose; no signal was needed.
+    expect(first.kill).not.toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect((spawnMock.mock.calls[1][1] as string[]).some((a) => a.startsWith('--proxy-server='))).toBe(true);
     expect(launcher.isProtected()).toBe(true);
@@ -313,6 +330,44 @@ describe('ChromeLauncher — protected profiles', () => {
     expect(launcher.isProtected()).toBe(true);
     launcher.dispose();
   }, 20_000);
+});
+
+describe('ChromeLauncher — quitting', () => {
+  it('dispose quits through Browser.close and sends no signal when Chrome goes', async () => {
+    const child = makeChild();
+    const port = spawnWritesPortFile(child);
+    const launcher = new ChromeLauncher('/tmp/quit-a');
+    await launcher.ensureRunning();
+    state.onBrowserClose = () => {
+      dead.add(port);
+      child.emit('exit');
+    };
+    await launcher.dispose();
+    expect(sockets.at(-1)?.sent.map((m) => m.method)).toEqual(['Browser.close']);
+    expect(child.kill).not.toHaveBeenCalled();
+    await expect(launcher.ensureRunning()).rejects.toThrow('disposed');
+  });
+
+  it('dispose falls back to a signal when Chrome ignores Browser.close', async () => {
+    const child = makeChild();
+    spawnWritesPortFile(child);
+    const launcher = new ChromeLauncher('/tmp/quit-b');
+    await launcher.ensureRunning();
+    await launcher.dispose();
+    expect(sockets.at(-1)?.sent.map((m) => m.method)).toEqual(['Browser.close']);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('an immediate dispose signals at once without asking', async () => {
+    const child = makeChild();
+    spawnWritesPortFile(child);
+    const launcher = new ChromeLauncher('/tmp/quit-c');
+    await launcher.ensureRunning();
+    const before = sockets.length;
+    void launcher.dispose({ immediate: true });
+    expect(child.kill).toHaveBeenCalledTimes(1); // synchronously, before any await
+    expect(sockets).toHaveLength(before);
+  });
 });
 
 describe('ChromeLauncher — recently blocked hosts (#2063)', () => {

@@ -2933,7 +2933,9 @@ function prepareInstallQuit(): void {
   // The full before-quit teardown is skipped on this path — the agent Chrome
   // must not outlive the app across an update install.
   try {
-    chromeRegistry.disposeAll();
+    // Signals at once: the installer ends this process right after this
+    // returns, before a graceful Chrome quit could be waited on.
+    void chromeRegistry.disposeAll({ immediate: true });
     chromeSurfaceStore.flushSync();
     getActionCacheStore().flushSync();
   } catch (err) {
@@ -3252,7 +3254,13 @@ app.on('before-quit', async (e) => {
 
   safeStep('claudeWorker.stop', () => claudeWorker.stop());
   safeStep('webviewCdpManager.disposeAll', () => webviewCdpManager.disposeAll());
-  safeStep('chromeRegistry.disposeAll', () => chromeRegistry.disposeAll());
+  // The agent Chrome quits through Browser.close, bounded inside dispose, so a
+  // quit keeps the sign-ins Chrome holds only for the session.
+  try {
+    await chromeRegistry.disposeAll();
+  } catch (err) {
+    console.error('[Main] before-quit step "chromeRegistry.disposeAll" threw — continuing:', err);
+  }
   safeStep('chromeSurfaceStore.flushSync', () => chromeSurfaceStore.flushSync());
   // Recorded browser flows are written on a debounce, so a quit inside that
   // window would drop the save the agent just made — the one it is most likely
