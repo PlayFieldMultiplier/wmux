@@ -12,8 +12,12 @@ const { spawnMock, state, sockets } = vi.hoisted(() => ({
   // proxy setting is overridden).
   // onBrowserClose: what the fake Chrome does when asked to quit over CDP
   // (null = it ignores the request).
+  // restoredPage: a page session restore brought back that will not close.
+  // holdList: /json/list answers only once this settles.
   state: {
     onGuardArm: null as (() => Promise<void>) | null,
+    restoredPage: false,
+    holdList: null as Promise<void> | null,
     portFiles: {} as Record<string, string>,
     proxyPort: 0,
     routeViaProxy: true,
@@ -102,6 +106,7 @@ vi.mock('../CdpSocket', () => ({
 }));
 
 import { ChromeLauncher, type ChromeProtectionPlan } from '../ChromeLauncher';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 function makeChild() {
   const child = new EventEmitter() as EventEmitter & { kill: ReturnType<typeof vi.fn> };
@@ -126,7 +131,14 @@ const dead = new Set<number>();
 const fetchMock = vi.fn(async (url: string): Promise<{ ok: boolean; text: () => Promise<string>; json: () => Promise<unknown> }> => {
   const port = Number(/:(\d+)\//.exec(String(url))?.[1]);
   if (dead.has(port)) throw new Error('ECONNREFUSED');
-  const body = { webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/x` };
+  if (state.holdList && String(url).endsWith('/json/list')) await state.holdList;
+  // A fresh Chrome lists only its startup tab.
+  const body = String(url).endsWith('/json/list')
+    ? [
+        { id: 'startup', url: 'chrome://newtab/', title: 'New Tab', type: 'page' },
+        ...(state.restoredPage ? [{ id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' }] : []),
+      ]
+    : { webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/x` };
   return { ok: true, text: async () => JSON.stringify(body), json: async () => body };
 });
 
@@ -141,6 +153,8 @@ beforeEach(() => {
   state.reportErrorPage = false;
   state.onBrowserClose = null;
   state.onGuardArm = null;
+  state.restoredPage = false;
+  state.holdList = null;
   sockets.length = 0;
   dead.clear();
   nextPort = 18001;
@@ -377,6 +391,18 @@ describe('ChromeLauncher — protected launch readiness', () => {
   });
 });
 
+describe('ChromeLauncher — protected launch readiness, restored pages', () => {
+  it('refuses a protected launch whose restored page will not close, and stops that Chrome', async () => {
+    state.restoredPage = true;
+    const child = makeChild();
+    spawnWritesPortFile(child);
+    const launcher = new ChromeLauncher('/tmp/prot-restored', { protection: () => denyAll });
+    await expect(launcher.ensureRunning()).rejects.toThrow(/policy_denied/);
+    expect(child.kill).toHaveBeenCalled();
+    expect(launcher.isProtected()).toBe(false);
+  });
+});
+
 describe('ChromeLauncher — quitting', () => {
   it('dispose quits through Browser.close and sends no signal when Chrome goes', async () => {
     const child = makeChild();
@@ -401,6 +427,23 @@ describe('ChromeLauncher — quitting', () => {
     await launcher.dispose();
     expect(sockets.at(-1)?.sent.map((m) => m.method)).toEqual(['Browser.close']);
     expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('a quit past its bound sends nothing more to the port', async () => {
+    const child = makeChild();
+    spawnWritesPortFile(child);
+    const launcher = new ChromeLauncher('/tmp/quit-d');
+    await launcher.ensureRunning();
+    let release = () => undefined as void;
+    state.holdList = new Promise<void>((r) => {
+      release = r;
+    });
+    await launcher.dispose();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    const before = sockets.length;
+    release(); // the stalled ask resumes against a port that may be reused
+    await deliberateSleep(100, 'negative check: the resumed ask must send nothing');
+    expect(sockets).toHaveLength(before);
   });
 
   it('an immediate dispose signals at once without asking', async () => {

@@ -1017,10 +1017,10 @@ export class ChromeLauncher implements ChromeBackendClient {
   }
 
   /** Ask the Chrome on `port` to quit. false when nothing there could be asked. */
-  private async closeBrowserAt(port: number): Promise<boolean> {
+  private async closeBrowserAt(port: number, current: () => boolean = () => true): Promise<boolean> {
     try {
       const url = await this.browserWsUrlAt(port);
-      if (!url) return false;
+      if (!url || !current()) return false;
       const socket = new CdpSocket(() => url, { label: 'ChromeLauncher evict', timeoutMs: 3_000 });
       await socket.send('Browser.close').catch(() => undefined);
       socket.close();
@@ -1040,11 +1040,15 @@ export class ChromeLauncher implements ChromeBackendClient {
    */
   private async closeGracefully(port: number, child: ChildProcess): Promise<boolean> {
     const exited = waitForExit(child, QUIT_GRACE_MS);
+    // Once the bound is up the port may already belong to a newer Chrome (a
+    // pinned port is reused), so the rest of the ask is dropped.
+    let expired = false;
+    const current = () => !expired;
     const ask = async () => {
       try {
         const list = await this.fetchJsonAt(port, '/json/list', 'GET', AbortSignal.timeout(RESTORE_SETTLE_MS));
-        if (Array.isArray(list)) {
-          const closed = await this.closeToStartupTab(port, list as Array<{ id: string; url: string; type: string }>);
+        if (Array.isArray(list) && current()) {
+          const { closed } = await this.closeToStartupTab(port, list as Array<{ id: string; url: string; type: string }>);
           // `/json/close` only starts a close; a tab still closing when the
           // quit lands stays in the saved session.
           await this.waitTargetsGone(port, closed);
@@ -1052,10 +1056,11 @@ export class ChromeLauncher implements ChromeBackendClient {
       } catch {
         /* nothing listed; the quit itself still keeps the cookies */
       }
-      return this.closeBrowserAt(port);
+      return current() && this.closeBrowserAt(port, current);
     };
     // The bound covers the ask too: a wedged endpoint must not hold a quit.
     const asked = await Promise.race([ask(), exited]);
+    expired = true;
     return asked ? exited : hasExited(child);
   }
 
@@ -1070,24 +1075,26 @@ export class ChromeLauncher implements ChromeBackendClient {
    * Restore can finish after the endpoint first answers, so the list is read
    * until it holds still.
    */
-  private async closeRestoredTabs(): Promise<void> {
+  private async closeRestoredTabs(): Promise<boolean> {
     const deadline = Date.now() + RESTORE_SETTLE_MS;
     let pages: Array<{ id: string; url: string }> = [];
     let previous = '';
     for (;;) {
       try {
         const list = await this.fetchJson('/json/list', 'GET', AbortSignal.timeout(RESTORE_SETTLE_MS));
-        if (!Array.isArray(list)) return;
+        if (!Array.isArray(list)) return false;
         pages = (list as Array<{ id: string; url: string; type: string }>).filter((t) => t.type === 'page');
       } catch {
-        return; // no list, nothing to tidy
+        return false; // no list: what is open is unknown
       }
       const ids = pages.map((p) => p.id).sort().join(',');
       if ((pages.length > 0 && ids === previous) || Date.now() > deadline) break;
       previous = ids;
       await new Promise((r) => setTimeout(r, READY_POLL_MS));
     }
-    await this.closeToStartupTab(this.cdpPort, pages);
+    const port = this.cdpPort;
+    const { closed, complete } = await this.closeToStartupTab(port, pages);
+    return complete && (await this.waitTargetsGone(port, closed));
   }
 
   /**
@@ -1099,11 +1106,11 @@ export class ChromeLauncher implements ChromeBackendClient {
   private async closeToStartupTab(
     port: number,
     targets: Array<{ id: string; url: string; type?: string }>,
-  ): Promise<string[]> {
+  ): Promise<{ closed: string[]; complete: boolean }> {
     const bounded = () => AbortSignal.timeout(RESTORE_SETTLE_MS);
     const pages = targets.filter((t) => t.type === undefined || t.type === 'page');
     const others = pages.filter((p) => !isStartupTabUrl(p.url));
-    if (others.length === 0) return [];
+    if (others.length === 0) return { closed: [], complete: true };
     const keptOpen =
       others.length < pages.length ||
       (await this.fetchJsonAt(port, '/json/new', 'PUT', bounded()).then(
@@ -1114,15 +1121,23 @@ export class ChromeLauncher implements ChromeBackendClient {
     await Promise.all(
       closing.map((p) => this.fetchJsonAt(port, `/json/close/${p.id}`, 'GET', bounded()).catch(() => undefined)),
     );
-    return closing.map((p) => p.id);
+    return { closed: closing.map((p) => p.id), complete: keptOpen };
   }
 
-  /** Wait (bounded) until none of `ids` is listed any more. */
-  private async waitTargetsGone(port: number, ids: string[]): Promise<void> {
+  /** Wait (bounded) until none of `ids` is listed any more; false if one still is. */
+  private async waitTargetsGone(port: number, ids: string[]): Promise<boolean> {
     const deadline = Date.now() + RESTORE_SETTLE_MS;
-    while (ids.length > 0 && Date.now() < deadline) {
-      const list = await this.fetchJsonAt(port, '/json/list', 'GET', AbortSignal.timeout(RESTORE_SETTLE_MS));
-      if (!Array.isArray(list) || !list.some((t: { id?: string }) => t.id !== undefined && ids.includes(t.id))) return;
+    for (;;) {
+      if (ids.length === 0) return true;
+      try {
+        const list = await this.fetchJsonAt(port, '/json/list', 'GET', AbortSignal.timeout(RESTORE_SETTLE_MS));
+        if (Array.isArray(list) && !list.some((t: { id?: string }) => t.id !== undefined && ids.includes(t.id))) {
+          return true;
+        }
+      } catch {
+        /* unanswered: not confirmed */
+      }
+      if (Date.now() > deadline) return false;
       await new Promise((r) => setTimeout(r, 50));
     }
   }
@@ -1468,7 +1483,8 @@ export class ChromeLauncher implements ChromeBackendClient {
             this.launchedProtected = true;
             try {
               await this.armDownloadGuard();
-              await this.closeRestoredTabs();
+              // Traffic opens only once no restored page is left to use it.
+              if (!(await this.closeRestoredTabs())) throw new Error(PROTECTION_NOT_READY);
               this.enforcementReady = true;
               // Its own bound from now: a slow start must not eat the probe's turn.
               await this.verifyProxyRoute(Date.now() + READY_TIMEOUT_MS);
