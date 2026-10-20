@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { emptyUsage, recordWorkerStart, recordWorkerStateChange, workerHoursDay, type BotUsage } from '../budget';
+import { emptyUsage, recordWorkerEnd, recordWorkerStart, recordWorkerStateChange, workerHoursDay, type BotUsage } from '../budget';
 import { computeHolders, type HolderRecord, type HolderSnapshot, type LiveHolders } from '../workerHolders';
 import { endRunsOfEndedRows, endRunsOfGoneWorkers, type RunEndPorts } from '../workerRunEnds';
 
@@ -201,6 +201,26 @@ describe('endRunsOfFreeTasks', () => {
     r.launched.set('t', NOW - 60_000);
     expect(endRunsOfGoneWorkers(r.ports, holders(rows, { agentTasks: new Map([['t', BOT]]), launchAt: () => NOW - 60_000 }), NOW)).toBe(1);
     expect(r.usage.workers).toEqual([{ taskId: 't', startedAt: NOW - 5_000 }]);
+  });
+
+  it('a verify worker relaunched after its verdict runs on its bot\'s time again, though its slot is free', () => {
+    const rows = [row('t', { status: 'review_requested', dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'verify' } })];
+    const r = rig(() => rows);
+    recordWorkerStart(r.usage, 't', NOW - 3_600_000);
+    recordWorkerEnd(r.usage, 't', NOW);
+    r.launched.set('t', NOW + 60_000);
+    const running = holders(rows, { now: NOW + 120_000, readAt: NOW + 90_000, verdicted: new Set(['t']), agentTasks: new Map([['t', BOT]]), launchAt: () => NOW + 60_000 });
+    expect(running.holders[0]).toMatchObject({ state: 'free', why: 'verdicted', agentSeen: true });
+    expect(running.holders[0].workerGone).toBeUndefined();
+    expect(endRunsOfGoneWorkers(r.ports, running, NOW + 120_000)).toBe(1);
+    expect(r.usage.workers.map((w) => [w.startedAt, w.endedAt])).toEqual([[NOW - 3_600_000, NOW], [NOW + 90_000, undefined]]);
+  });
+
+  it('a reported task no holder names keeps its run while the holder set is up', () => {
+    const r = rig(() => [row('t', { status: 'review_requested' })]);
+    recordWorkerStart(r.usage, 't', NOW - 60_000);
+    expect(endRunsOfGoneWorkers(r.ports, { holders: [], workspacesKnown: true, readOk: true }, NOW)).toBe(0);
+    expect(r.usage.workers[0].endedAt).toBeUndefined();
   });
 
   it('a launch line staged in its pane and not run yet starts no run', () => {

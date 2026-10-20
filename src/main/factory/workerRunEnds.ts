@@ -111,11 +111,13 @@ export function endRunsOfGoneWorkers(ports: RunEndPorts, look: LiveHolders, at: 
       for (const [taskId, when] of ends) if (recordWorkerEnd(u, taskId, when)) moved++;
     });
   }
-  // Starts: a bot task's own agent seen running again.
+  // Starts: a bot task's own agent seen running again. Whether it runs is
+  // the holder's `workerGone`, not its slot: a verify verdict frees the slot
+  // of a worker that may still run.
   const readAt = look.readOk === true ? look.readAt : undefined;
   if (readAt === undefined || readAt > at) return moved;
   for (const h of look.holders) {
-    if (h.origin !== 'bot' || !h.botId || !h.agentSeen || h.state === 'free' || h.workerGone) continue;
+    if (h.origin !== 'bot' || !h.botId || !h.agentSeen || h.workerGone) continue;
     const launch = ports.launchedAt(h.taskId);
     if (launch === undefined || readAt <= launch) continue;
     const mine = ports.usageOf(h.botId).workers.filter((w) => w.taskId === h.taskId);
