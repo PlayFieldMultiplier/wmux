@@ -8960,7 +8960,11 @@ async function main(): Promise<void> {
       if (!wslAgent) return { ok: false, code: 'unsupported' };
       if (stillIdle && !stillIdle()) return { ok: false, code: 'turn_open' };
       try {
-        return await stopWslAgent(wslAgent);
+        const r = await stopWslAgent(wslAgent);
+        // Gone (stopped now, or before the stop found it): the next session
+        // list reports it so, not the WSL watcher's next poll.
+        if (r.ok) agentProcessTracker.noteWslAgentGone(id, wslAgent);
+        return r;
       } catch {
         return { ok: false, code: 'unknown' };
       }

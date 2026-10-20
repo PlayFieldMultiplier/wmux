@@ -268,6 +268,99 @@ describe('AgentProcessTracker', () => {
     expect(tracker.statusFor('s1')).toBe(true);
   });
 
+  it('a stop\'s confirming read records the death edge at once, not on the monitor\'s next poll', async () => {
+    // session.stopAgent kills the agent and confirms it gone with a fresh
+    // table (stillRunning). The session list read right after must not still
+    // report it alive until the monitor polls (a slot shown free, then in use
+    // again, then free).
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    const edges: boolean[] = [];
+    tracker.setStateChangeListener((_id, st) => edges.push(st.alive));
+    tracker.arm('s1', SHELL);
+    await flush();
+    const root = (await tracker.agentProcessTree('s1', 'claude'))?.root;
+    expect(root?.pid).toBe(200);
+
+    table = [];
+    expect(await tracker.stillRunning(root ? [root] : [])).toEqual([]);
+    expect(tracker.statusFor('s1')).toBe(false);
+    expect(edges).toEqual([true, false]);
+    // The monitor no longer watches it: no second report of the same death.
+    expect(watcher.watches.has('agent:s1')).toBe(false);
+  });
+
+  it('a confirming read that still lists the agent, or names another pid, changes nothing', async () => {
+    const watcher = makeWatcher();
+    const table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    expect(await tracker.stillRunning([entry(200, SHELL, 'claude.exe')])).toHaveLength(1);
+    expect(await tracker.stillRunning([entry(999, 200, 'node')])).toEqual([]);
+    expect(tracker.statusFor('s1')).toBe(true);
+    expect(watcher.watches.has('agent:s1')).toBe(true);
+  });
+
+  it('a reused pid is no longer the agent: the confirming read records its death edge', async () => {
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    const root = (await tracker.agentProcessTree('s1', 'claude'))?.root;
+    table = [entry(200, 1, 'notepad.exe')];
+    expect(await tracker.stillRunning(root ? [root] : [])).toEqual([]);
+    expect(tracker.statusFor('s1')).toBe(false);
+  });
+
+  it('an agent armed after the tree read is not the one found gone', async () => {
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    const root = (await tracker.agentProcessTree('s1', 'claude'))?.root;
+    // A relaunch in the same pane, armed before the old tree is checked.
+    table = [entry(300, SHELL, 'claude.exe')];
+    tracker.rearm('s1', SHELL);
+    await flush();
+    expect(watcher.watches.get('agent:s1')?.pid).toBe(300);
+    expect(await tracker.stillRunning(root ? [root] : [])).toEqual([]);
+    expect(tracker.statusFor('s1')).toBe(true);
+    expect(watcher.watches.get('agent:s1')?.pid).toBe(300);
+  });
+
+  it('a re-probe of the same agent after the tree read still takes the confirmed death', async () => {
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    const root = (await tracker.agentProcessTree('s1', 'claude'))?.root;
+    // A conflicting banner forces a probe that picks the same process again.
+    tracker.rearm('s1', SHELL);
+    await flush();
+    expect(watcher.watches.get('agent:s1')?.pid).toBe(200);
+    table = [];
+    expect(await tracker.stillRunning(root ? [root] : [])).toEqual([]);
+    expect(tracker.statusFor('s1')).toBe(false);
+    expect(watcher.watches.has('agent:s1')).toBe(false);
+  });
+
+  it('a tree read that no longer finds the tracked agent records its death edge', async () => {
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    table = [];
+    expect(await tracker.agentProcessTree('s1', 'claude')).toBeNull();
+    expect(tracker.statusFor('s1')).toBe(false);
+    expect(watcher.watches.has('agent:s1')).toBe(false);
+  });
+
   it('a slugless pick answers liveness but claims no identity', async () => {
     const watcher = makeWatcher();
     const tracker = new AgentProcessTracker(watcher, async () => [entry(200, SHELL, 'somewrapper.exe')]);

@@ -10,7 +10,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { holderInputsRevision } from '../holderInputs';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { computeHolders, holderCounts, liveHolders, setHolderSource, type HolderRecord, type HolderSnapshot, type WorkerHolder } from '../workerHolders';
+import { computeHolders, holderChangeNotice, holderCounts, liveHolders, setHolderSource, type HolderRecord, type HolderSnapshot, type WorkerHolder } from '../workerHolders';
 import { AgentSlots, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { openBotWorkers } from '../openBotWorkers';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
@@ -774,5 +774,88 @@ describe('the earlier fixes hold through the set', () => {
     const r = rig({ rows, read: 'down', gone: new Set(rows.map((x) => x.id)) });
     expect(r.four()).toEqual({ agents: 0, factory: 0, bot: 0, live: 0 });
     expect(r.guards.reserve('k', 8, { ownerWorkspaceId: OWNER })).toEqual({ ok: true });
+  });
+});
+
+describe('a holder move tells the window (holderChangeNotice)', () => {
+  afterEach(() => setHolderSource(null));
+  // A paused worker (stopped for its report): a read after the stop that
+  // still sees its agent holds it; the next read, seeing it gone, frees it.
+  // Only that read moved, and it tells the window nothing by itself.
+  const rows = [row('p', { status: 'review_requested' })];
+  const records = [record('p', { ended: 'reported', at: NOW - 60_000 })];
+  const seen = snapshot({ rows, records, agentSeen: new Set(['ws-p']), readAt: NOW - 30_000 });
+  const gone = snapshot({ rows, records, readAt: NOW - 5_000 });
+  const rig = (snap: () => HolderSnapshot) => {
+    const due: Array<() => void> = [];
+    let calls = 0;
+    setHolderSource(snap);
+    const notice = holderChangeNotice(() => { calls++; }, (fn) => { due.push(fn); });
+    const turn = () => { for (const fn of due.splice(0)) fn(); };
+    return { notice, turn, calls: () => calls };
+  };
+
+  it('a read that frees a held slot tells it once; a move that changes nothing does not', () => {
+    let snap = seen;
+    const r = rig(() => snap);
+    r.notice.schedule();
+    r.turn();
+    expect(r.calls()).toBe(1); // the first check
+    expect(holderOf(liveHolders()?.holders ?? [], 'p')?.state).toBe('held');
+    r.notice.schedule();
+    r.turn();
+    expect(r.calls()).toBe(1);
+    snap = gone;
+    r.notice.schedule();
+    r.notice.schedule();
+    r.turn();
+    expect(r.calls()).toBe(2);
+    expect(holderOf(liveHolders()?.holders ?? [], 'p')?.state).toBe('free');
+  });
+
+  it('a look between a move and its check hides nothing (a cap check, a status read)', () => {
+    let snap = seen;
+    const r = rig(() => snap);
+    r.notice.schedule();
+    r.turn();
+    snap = gone;
+    r.notice.schedule();
+    expect(holderOf(liveHolders()?.holders ?? [], 'p')?.state).toBe('free');
+    r.turn();
+    expect(r.calls()).toBe(2);
+  });
+
+  it('a worker that came and went between two reads is told both ways', () => {
+    let snap = snapshot({ rows: [] });
+    const r = rig(() => snap);
+    r.notice.schedule();
+    r.turn();
+    snap = snapshot({ rows: [row('w')] });
+    r.notice.schedule();
+    r.turn();
+    expect(holderCounts(liveHolders()?.holders ?? [], BOT).bot).toBe(1);
+    snap = snapshot({ rows: [] });
+    r.notice.schedule();
+    r.turn();
+    expect(r.calls()).toBe(3);
+  });
+
+  it('a holder that goes from held to unknown still counts: no call', () => {
+    let snap = snapshot({ rows: [row('w')] });
+    const r = rig(() => snap);
+    r.notice.schedule();
+    r.turn();
+    snap = snapshot({ rows: [row('w')], read: 'stale' });
+    expect(holderOf(computeHolders(snap), 'w')?.state).toBe('unknown');
+    r.notice.schedule();
+    r.turn();
+    expect(r.calls()).toBe(1);
+  });
+
+  it('a holder set that cannot be read says nothing', () => {
+    const r = rig(() => { throw new Error('no snapshot'); });
+    r.notice.schedule();
+    r.turn();
+    expect(r.calls()).toBe(0);
   });
 });

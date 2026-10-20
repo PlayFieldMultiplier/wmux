@@ -27,7 +27,7 @@ import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive } from '../worktas
 import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { installHeldFanoutReleases, releaseHeldFanouts } from './heldFanouts';
-import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
+import { checkWorkers, recordWorkerStateChange } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
@@ -72,8 +72,8 @@ import { getFanOutGuards, setDormantRefresh, taskOfWorkspace } from '../worktask
 import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
 import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
 import { getWorkerSlots, launchPaneOwner, setReclaimedPaneSource, taskOfPane } from './workerSlots';
-import { holderInputsRevision } from './holderInputs';
-import { holderCounts, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
+import { holderInputsRevision, onHolderInputsChanged } from './holderInputs';
+import { holderChangeNotice, holderCounts, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
 import { getVerdictedTasks } from './verdictedTasks';
 import { verdictedTaskIds } from './openBotWorkers';
 import type { FanOutService } from '../worktask/FanOutService';
@@ -177,6 +177,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   // (the mirror, read now) and those whose panes all run no agent any more
   // (the daemon's sessions, read at most every LIVENESS_REFRESH_MS; until
   // the first read, none). A cap check awaits a fresh read (refreshSlotLiveness).
+  // The bot status the window shows counts the holders (openBotWorkers):
+  // any move of what they read is checked, and a change tells the window.
+  const holderNotice = holderChangeNotice(changed);
   const taskLiveness = createTaskWorkspaceLiveness({
     entries: () => getWorkspaceMirror().getEntries(),
     // Asked with the daemon's recovery state: a read while it still restores
@@ -197,6 +200,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     workspaceTask: (workspaceId) => launches.workspaceOf(workspaceId)?.taskId ?? null,
     facts: goneFacts,
     refreshMs: LIVENESS_REFRESH_MS,
+    onRead: holderNotice.schedule,
   });
   // A task that runs again loses its fact: its row reopened (a resume of its
   // reclaimed worker and a new worker session clear it where they happen).
@@ -206,7 +210,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   const idle = taskLiveness.idle;
   // A cap check awaits a fresh read of the daemon's sessions first
   // (refreshSlotLiveness): what the holder set reads (workerHolders.ts).
-  setSlotLivenessRefresh(() => idle.fresh());
+  setSlotLivenessRefresh((since) => (since === undefined ? idle.fresh() : idle.since(since)));
   offs.push(() => setSlotLivenessRefresh(null));
   /** Whether a task's row is open (a reclaimed task can reopen: failed → working). */
   const taskOpen = (taskId: string): boolean => {
@@ -606,7 +610,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     });
     offs.push(() => setWorkerResumePorts(null));
     // A resumed worker runs on its bot's worker budget: counted live by the
-    // holder set, and its run (resume to stop) in the bot's hours.
+    // holder set, and its run (resume to stop) in the bot's hours, as is a
+    // first run up to its stop.
     reclaimed.onStateChange = (rec, from, to, at) => {
       // A resumed worker runs again: a fact that said it was gone goes.
       if (to === 'resumed') goneFacts.clear(rec.taskId, 'its worker was resumed');
@@ -614,8 +619,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       if (from === 'resumed' && to === 'stopped' && folderPorts) void noteKeptFolderStopped(folderPorts, rec.taskId, at);
       const store = getBotStore();
       if (!store?.get(rec.botId)) return;
-      if (to === 'resumed') store.mutateUsage(rec.botId, (u) => recordWorkerStart(u, rec.taskId, at, { resumed: true }));
-      else if (from === 'resumed') store.mutateUsage(rec.botId, (u) => { recordWorkerEnd(u, rec.taskId, at); });
+      // A resume opens a run and any stop ends it: worker time counts only
+      // while a worker runs.
+      store.mutateUsage(rec.botId, (u) => recordWorkerStateChange(u, rec.taskId, from, to, at));
     };
     offs.push(() => { reclaimed.onStateChange = null; });
     // Dead shells in bot task workspaces (a daemon cold start respawns every
@@ -785,6 +791,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   const holderKey = (): readonly unknown[] => [getFanOutGuards(), holderInputsRevision(), transitions, mirrorPushes, taskLiveness.lastReadAt()];
   setHolderSource(holderSnapshot, holderKey);
   offs.push(() => setHolderSource(null));
+  offs.push(onHolderInputsChanged(holderNotice.schedule));
+  offs.push(ledger.onTransition(holderNotice.schedule));
+  offs.push(getWorkspaceMirror().onSnapshot(holderNotice.schedule));
   offs.push(ledger.onTransition(() => slots.kick()));
   // A held fan-out waits on the wmux-wide live cap too, which the owner's own
   // tasks fill: their row ending and their workspace closing check it again.

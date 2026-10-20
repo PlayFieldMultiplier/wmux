@@ -569,6 +569,9 @@ export class AgentProcessTracker {
   /** Shared snapshot promise — concurrent probes across sessions ride one
    *  enumeration instead of spawning one each. */
   private snapshotInFlight: Promise<ProcessTreeEntry[]> | null = null;
+  /** The tracked agent each agentProcessTree() root entry is, so a
+   *  stillRunning() verdict on that entry is a verdict on that agent. */
+  private readonly treeRoots = new WeakMap<ProcessTreeEntry, { sessionId: string; state: TrackedAgent }>();
   private snapshotStartedAt = 0;
   private identityProbeGuard?: (sessionId: string) => { epoch: number; isCurrent: () => boolean } | undefined;
   private stateListener: ((sessionId: string, state: TrackedAgentState) => void) | undefined;
@@ -870,6 +873,15 @@ export class AgentProcessTracker {
     return s?.alive === true && s.wsl !== undefined;
   }
 
+  /** A stop that confirmed this WSL agent gone (stopWslAgent): its death
+   *  edge now, not on the WSL watcher's next poll, while the session still
+   *  tracks that same agent (`agent` as wslAgentFor gave it, not one a hook
+   *  reported since). */
+  noteWslAgentGone(sessionId: string, agent: WslWatchedAgent): void {
+    const s = this.states.get(sessionId);
+    if (s?.wsl === agent) this.recordDeath(sessionId, s);
+  }
+
   /** #2261 — the live WSL agent a stop may signal (its Linux pid, boot id and
    *  start time, and the pane's wsl.exe), or undefined. Never probes. */
   wslAgentFor(sessionId: string): WslWatchedAgent | undefined {
@@ -955,7 +967,12 @@ export class AgentProcessTracker {
     if (this.states.get(sessionId) !== s || !s.alive || this.shellPids.get(sessionId) !== shellPid) return null;
     const pick = selectAgentProcess(table, shellPid);
     const root = table.find((e) => e.pid === s.pid);
-    if (!root || pick?.pid !== s.pid || pick.slug !== expectedSlug) return null;
+    // The tracked pid is in no process at all: its agent is gone.
+    if (!root) {
+      this.recordDeath(sessionId, s);
+      return null;
+    }
+    if (pick?.pid !== s.pid || pick.slug !== expectedSlug) return null;
     const byParent = new Map<number, ProcessTreeEntry[]>();
     for (const e of table) {
       const list = byParent.get(e.ppid);
@@ -973,6 +990,7 @@ export class AgentProcessTracker {
         queue.push(child.pid);
       }
     }
+    this.treeRoots.set(root, { sessionId, state: s });
     return { root, descendants };
   }
 
@@ -983,7 +1001,32 @@ export class AgentProcessTracker {
   async stillRunning(entries: readonly ProcessTreeEntry[]): Promise<ProcessTreeEntry[]> {
     if (entries.length === 0) return [];
     const table = await this.snapshot();
-    return entries.filter((e) => table.some((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline));
+    const left = entries.filter((e) => table.some((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline));
+    // A tree read's root found gone is that tracked agent gone: the launch
+    // the read was made for, or one tracked since on the same pid when no
+    // process holds that pid any more (a re-probe of the same agent). A
+    // process that took the pid since is another launch, left to its watch.
+    for (const e of entries) {
+      const tracked = this.treeRoots.get(e);
+      if (!tracked || left.includes(e)) continue;
+      const cur = this.states.get(tracked.sessionId);
+      if (!cur || cur.wsl) continue;
+      if (cur === tracked.state || (cur.pid === e.pid && !table.some((t) => t.pid === e.pid))) this.recordDeath(tracked.sessionId, cur);
+    }
+    return left;
+  }
+
+  /** The agent's death edge, recorded by a fresh process table rather than
+   *  the monitor's next poll (up to one cadence later), so a stop that just
+   *  confirmed the agent gone (session.stopAgent) is what the next session
+   *  list reports. Its watch is dropped so the monitor cannot report the
+   *  same death again. */
+  private recordDeath(sessionId: string, s: TrackedAgent): void {
+    if (!s.alive) return;
+    if (s.wsl) this.wsl.watcher?.unwatch(AgentProcessTracker.watchKey(sessionId));
+    else this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
+    s.alive = false;
+    this.emitState(sessionId, { ...(s.slug ? { slug: s.slug } : {}), alive: false });
   }
 
   /** Drop all tracking for a session (died / interrupted / killed). */

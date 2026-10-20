@@ -69,6 +69,8 @@ export interface TaskWorkspaceLivenessPorts {
   facts: AgentGoneFacts | null;
   refreshMs: number;
   now?: () => number;
+  /** Told after each good read, once every answer below reflects it. */
+  onRead?: () => void;
 }
 
 export interface TaskWorkspaceLiveness {
@@ -239,7 +241,7 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
     agentTaskIds = withAgentTasks;
     return next;
   };
-  const idle = new IdleSnapshot(read, ports.refreshMs, now);
+  const idle = new IdleSnapshot(read, ports.refreshMs, now, ports.onRead);
 
   /** Whether a fact still says what it said: its task's row is still the
    *  one of its workspace, and no pane it does not name opened there since

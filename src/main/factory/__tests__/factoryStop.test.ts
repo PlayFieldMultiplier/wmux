@@ -19,6 +19,7 @@ import { factorySettingsSetHandler, factoryStopHandler } from '../../ipc/handler
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings, type FactorySettingsStore } from '../factorySettings';
 import { HeldFanouts, setHeldFanouts } from '../heldFanouts';
 import { WakeQueue, setWakeQueue, wakeQueuePath } from '../wakeQueue';
+import { setSlotLivenessRefresh } from '../agentSlots';
 
 const LEAD = 'bot-0000000a';
 const TRIAGE = 'bot-0000000b';
@@ -654,6 +655,32 @@ describe('stopFactoryTask (the Bots page Stop worker)', () => {
     const row = ledger.get('t-one') as LedgerEntry;
     expect(isStoppedByOwnerRow({ ...row, updatedBy: { kind: 'brain', workspaceId: 'ws-1' } })).toBe(false);
     expect(isStoppedByOwnerRow({ ...row, dispatch: { origin: { kind: 'pane' }, preset: 'default' } })).toBe(false);
+  });
+
+  it('asks for a liveness read that starts after the worker stopped, never one from before it', async () => {
+    // The cancel tells the window before the worker is stopped, and the
+    // read that look starts can see the worker still running.
+    await task('t-read', LEAD);
+    await task('t-none', LEAD);
+    const sinces: Array<number | undefined> = [];
+    setSlotLivenessRefresh(async (since) => { sinces.push(since); });
+    try {
+      let stoppedAt = 0;
+      const r = ports({ stopWorker: vi.fn(async (entry: LedgerEntry) => {
+        stoppedAt = Date.now();
+        return entry.id === 't-read' ? 1 : 0;
+      }) });
+      await stopFactoryTask(r.p, 't-read');
+      await Promise.resolve();
+      expect(sinces).toHaveLength(1);
+      expect(sinces[0]).toBeGreaterThanOrEqual(stoppedAt);
+      // Nothing stopped: no read asked for.
+      await stopFactoryTask(r.p, 't-none');
+      await Promise.resolve();
+      expect(sinces).toHaveLength(1);
+    } finally {
+      setSlotLivenessRefresh(null);
+    }
   });
 
   it('wakes no bot, as the bot-wide stop does', async () => {

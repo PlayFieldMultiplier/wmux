@@ -333,10 +333,24 @@ export class ReclaimedWorkers {
   }
 
   put(rec: ReclaimedWorker): Promise<void> {
+    return this.write(rec, rec.at);
+  }
+
+  /** Put back the record a put whose write failed replaced (`rec`, as get()
+   *  gave it before). The state change it makes is told as happening `at`
+   *  (now), never at the record's own older time: the listeners date what
+   *  they record by it (the bot's worker time). */
+  restore(rec: ReclaimedWorker, at: number): Promise<void> {
+    return this.write(rec, at);
+  }
+
+  private write(rec: ReclaimedWorker, at: number): Promise<void> {
     const prior = this.records.get(rec.taskId);
     this.records.delete(rec.taskId);
     this.records.set(rec.taskId, rec);
-    if (prior && prior.state !== rec.state) this.notifyState(rec, prior.state, rec.state, rec.at);
+    // A first record is a change too: one written `stopped` at once (no
+    // pane left to stop, a dead pane) ends its worker's first run.
+    if (prior?.state !== rec.state) this.notifyState(rec, prior?.state ?? null, rec.state, at);
     // Oldest first, never a live worker (resumed, or not yet stopped).
     for (const [id, r] of this.records) {
       if (this.records.size <= RECLAIMED_WORKERS_MAX) break;
@@ -356,11 +370,12 @@ export class ReclaimedWorkers {
     return this.persister.settled();
   }
 
-  /** Told of every state change made through setState (the agent budget
-   *  counts a resumed worker's run from these). */
-  onStateChange: ((rec: { taskId: string; botId: string }, from: ReclaimedWorker['state'], to: ReclaimedWorker['state'], at: number) => void) | null = null;
+  /** Told of every state change made through put, restore and setState,
+   *  a first record's included (`from` null), as of the time it happened
+   *  (the agent budget counts a worker's runs from these). */
+  onStateChange: ((rec: { taskId: string; botId: string }, from: ReclaimedWorker['state'] | null, to: ReclaimedWorker['state'], at: number) => void) | null = null;
 
-  private notifyState(r: ReclaimedWorker, from: ReclaimedWorker['state'], to: ReclaimedWorker['state'], at: number): void {
+  private notifyState(r: ReclaimedWorker, from: ReclaimedWorker['state'] | null, to: ReclaimedWorker['state'], at: number): void {
     try {
       this.onStateChange?.({ taskId: r.taskId, botId: r.botId }, from, to, at);
     } catch (err) {
@@ -1058,11 +1073,12 @@ export async function reclaimWorker(
       ...(prior?.paneWorkspaceId ? { paneWorkspaceId: prior.paneWorkspaceId } : {}),
     };
     // On disk before anything is stopped: a stopped worker always has its
-    // conversation recorded. A write that fails stops nothing.
+    // conversation recorded. A write that fails stops nothing, and an
+    // earlier record (a resumed worker's, still running) stays as it was.
     try {
       await ports.store.put(rec);
     } catch (err) {
-      await ports.store.remove(entry.id).catch(() => undefined);
+      await (prior ? ports.store.restore(prior, now()) : ports.store.remove(entry.id)).catch(() => undefined);
       log(`[factory] reclaim: ${entry.id} not recorded, its worker keeps running: ${String(err)}`);
       return null;
     }
@@ -1163,7 +1179,7 @@ export async function reclaimWorker(
     }
     if (attempted === 0) {
       // Reopened before any stop: nothing was stopped, the record is as it was.
-      await (prior ? ports.store.put(prior) : ports.store.remove(entry.id)).catch(() => undefined);
+      await (prior ? ports.store.restore(prior, now()) : ports.store.remove(entry.id)).catch(() => undefined);
       return null;
     }
     // An open task's stop that signalled its agent stays recorded

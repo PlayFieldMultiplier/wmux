@@ -361,11 +361,15 @@ export class IdleSnapshot {
   private idle: ReadonlySet<string> = new Set();
   private readAt = 0;
   private reading: Promise<void> | null = null;
+  /** When the read in flight (else the last one) started. */
+  private startedAt = -Infinity;
 
   constructor(
     private readonly read: () => Promise<ReadonlySet<string>>,
     private readonly refreshMs: number,
     private readonly now: () => number = Date.now,
+    /** Told after each good read, once the snapshot holds it. */
+    private readonly onRead?: () => void,
   ) {}
 
   /** The last snapshot (none until the first read). */
@@ -378,9 +382,24 @@ export class IdleSnapshot {
   fresh(): Promise<void> {
     if (this.reading) return this.reading;
     if (this.readAt > 0 && this.now() - this.readAt < this.refreshMs) return Promise.resolve();
+    return this.start();
+  }
+
+  /** Resolves once a read that started after `at` is done (or failed),
+   *  however recent the last one: what a read started before `at` saw says
+   *  nothing of what happened then (a worker just stopped). One started in
+   *  the same millisecond may have come first, so it does not count. */
+  since(at: number): Promise<void> {
+    if (this.startedAt > at) return this.reading ?? Promise.resolve();
+    return (this.reading ?? Promise.resolve()).then(() => (this.startedAt > at ? this.reading ?? undefined : this.start()));
+  }
+
+  private start(): Promise<void> {
+    this.startedAt = this.now();
     this.reading = this.read().then((next) => {
       this.idle = next;
       this.readAt = this.now();
+      this.onRead?.();
     }).catch(() => undefined).finally(() => {
       this.reading = null;
     });
@@ -389,19 +408,21 @@ export class IdleSnapshot {
 }
 
 let current: AgentSlots | null = null;
-let livenessRefresh: (() => Promise<void>) | null = null;
+let livenessRefresh: ((since?: number) => Promise<void>) | null = null;
 
 /** Set by the worker lifecycle host: how to bring what the holder set reads
- *  of the workers' panes up to date before a decision. */
-export function setSlotLivenessRefresh(refresh: (() => Promise<void>) | null): void {
+ *  of the workers' panes up to date before a decision (`since`: with a read
+ *  that started then or later). */
+export function setSlotLivenessRefresh(refresh: ((since?: number) => Promise<void>) | null): void {
   livenessRefresh = refresh;
 }
 
-/** Brings what the holder set reads of the workers' panes up to date.
- *  Never rejects. */
-export async function refreshSlotLiveness(): Promise<void> {
+/** Brings what the holder set reads of the workers' panes up to date;
+ *  `since`: with a read that started then or later, however recent the
+ *  last one (a stop that just ended). Never rejects. */
+export async function refreshSlotLiveness(since?: number): Promise<void> {
   try {
-    await livenessRefresh?.();
+    await livenessRefresh?.(since);
   } catch {
     /* decided on what is known */
   }

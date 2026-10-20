@@ -436,6 +436,16 @@ export function holderCounts(holders: readonly WorkerHolder[], botId?: string): 
   return out;
 }
 
+/** The holders that count against a cap (those not free: who, for which
+ *  bot, booked only or not), as one comparable key. Pure. */
+export function heldKey(holders: readonly WorkerHolder[]): string {
+  return holders
+    .filter((h) => h.state !== 'free')
+    .map((h) => `${h.taskId}\u0000${h.origin}\u0000${h.botId ?? ''}\u0000${h.reserved}`)
+    .sort()
+    .join('\n');
+}
+
 export interface LiveHolders {
   holders: WorkerHolder[];
   /** Whether the open workspaces were known (the renderer pushed its tree). */
@@ -480,4 +490,39 @@ export function liveHolders(): LiveHolders | null {
     });
   }
   return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown };
+}
+
+/** Tells `changed` when the holders that count moved since the last
+ *  check: `schedule` (on any move of what the holder set reads) checks once,
+ *  on the next turn (`defer`), however many moves came before it. The first
+ *  check tells it too. Most of what moves a holder (a read of the daemon's
+ *  sessions, a slot grant released, a booking settled) tells the window
+ *  nothing by itself, and the bot status it shows counts these holders. */
+export function holderChangeNotice(
+  changed: () => void,
+  defer: (fn: () => void) => void = (fn) => { setImmediate(fn); },
+): { schedule: () => void } {
+  let shown: string | null = null;
+  let due = false;
+  const check = (): void => {
+    due = false;
+    let key: string;
+    try {
+      const h = liveHolders();
+      if (!h) return;
+      key = heldKey(h.holders);
+    } catch {
+      return;
+    }
+    if (key === shown) return;
+    shown = key;
+    changed();
+  };
+  return {
+    schedule: () => {
+      if (due) return;
+      due = true;
+      defer(check);
+    },
+  };
 }
