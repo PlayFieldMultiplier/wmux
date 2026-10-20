@@ -12,6 +12,8 @@ export const PLUGIN_MANAGEMENT_IPC = {
 export const UI_PLUGIN_CATALOG = [{
   id: 'agent-state-page',
   name: 'Agent status',
+  titleKey: 'plugins.settings.agentStatus',
+  hintKey: 'plugins.settings.agentStatusHint',
   publisher: 'wmux',
   license: 'MIT',
   version: '1.0.0',
@@ -19,6 +21,8 @@ export const UI_PLUGIN_CATALOG = [{
 }, {
   id: 'office',
   name: 'Office',
+  titleKey: 'plugins.settings.office',
+  hintKey: 'plugins.settings.officeHint',
   publisher: 'bluemas',
   license: 'MIT',
   version: '1.0.0',

@@ -62,3 +62,13 @@ it('does not offer file deletion for a manual installation', async () => {
   expect(api.setEnabled).toHaveBeenCalledExactlyOnceWith('agent-state-page', false);
   expect(api.remove).not.toHaveBeenCalled();
 });
+
+it('lists each catalog entry under its own name, hint and publisher', async () => {
+  await mount([{ ...plugin, name: 'office' }]);
+  expect(host.textContent).toContain('office · 1 · bluemas · MIT');
+  await act(async () => button('Discover').click());
+  expect(host.textContent).toContain(en['plugins.settings.agentStatusHint']);
+  expect(host.textContent).toContain(en['plugins.settings.officeHint']);
+  expect(host.textContent).toContain('bluemas · MIT · 1.0.0');
+  expect(host.textContent).toContain('wmux · MIT · 1.0.0');
+});

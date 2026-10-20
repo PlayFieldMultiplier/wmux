@@ -33,6 +33,8 @@ export const pl = {
   "plugins.settings.manual": "Zainstalowano ręcznie. Tutaj można wyłączyć wtyczkę; aby ją odinstalować, usuń jej folder ręcznie.",
   "plugins.settings.agentStatus": "Stan agentów",
   "plugins.settings.agentStatusHint": "Sprawdź stan agentów w bieżącym obszarze roboczym i przejdź do panelu. Bez dostępu do treści terminala.",
+  "plugins.settings.office": "Biuro",
+  "plugins.settings.officeHint": "Zobacz agentów bieżącego obszaru roboczego jako pracowników w pikselowym biurze i przejdź do panelu. Bez dostępu do treści terminala.",
   "plugins.settings.install": "Zainstaluj",
   "plugins.settings.loadFailed": "Nie udało się wczytać {name}. Sprawdź manifest i pliki wtyczki.",
 
