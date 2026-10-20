@@ -436,6 +436,29 @@ export function holderCounts(holders: readonly WorkerHolder[], botId?: string): 
   return out;
 }
 
+/** A check that calls `changed` when the holders that count against a cap
+ *  (those not free: who, for which bot, booked only or not) differ from the
+ *  last check's, the first check included. `holders` may throw: that check
+ *  says nothing. */
+export function holderMoveCheck(holders: () => readonly WorkerHolder[] | null, changed: () => void): () => void {
+  let last: string | null = null;
+  return () => {
+    let key: string;
+    try {
+      key = (holders() ?? [])
+        .filter((h) => h.state !== 'free')
+        .map((h) => `${h.taskId}\u0000${h.origin}\u0000${h.botId ?? ''}\u0000${h.reserved}`)
+        .sort()
+        .join('\n');
+    } catch {
+      return;
+    }
+    if (key === last) return;
+    last = key;
+    changed();
+  };
+}
+
 export interface LiveHolders {
   holders: WorkerHolder[];
   /** Whether the open workspaces were known (the renderer pushed its tree). */

@@ -366,6 +366,8 @@ export class IdleSnapshot {
     private readonly read: () => Promise<ReadonlySet<string>>,
     private readonly refreshMs: number,
     private readonly now: () => number = Date.now,
+    /** Told after each good read, once the snapshot holds it. */
+    private readonly onRead?: () => void,
   ) {}
 
   /** The last snapshot (none until the first read). */
@@ -381,6 +383,7 @@ export class IdleSnapshot {
     this.reading = this.read().then((next) => {
       this.idle = next;
       this.readAt = this.now();
+      this.onRead?.();
     }).catch(() => undefined).finally(() => {
       this.reading = null;
     });

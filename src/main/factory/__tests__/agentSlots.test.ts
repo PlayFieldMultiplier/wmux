@@ -267,4 +267,25 @@ describe('IdleSnapshot (#2255)', () => {
     await idle.fresh();
     expect([...idle.get()]).toEqual(['ws-a']);
   });
+
+  it('tells onRead after each good read, once get() answers with it', async () => {
+    let now = 1_000_000;
+    let fail = false;
+    let next = new Set(['ws-a']);
+    const told: string[][] = [];
+    const idle: IdleSnapshot = new IdleSnapshot(async () => {
+      if (fail) throw new Error('the daemon is not connected');
+      return next;
+    }, 10_000, () => now, () => told.push([...idle.get()]));
+    await idle.fresh();
+    expect(told).toEqual([['ws-a']]);
+    next = new Set(['ws-b']);
+    now += 60_000;
+    await idle.fresh();
+    expect(told).toEqual([['ws-a'], ['ws-b']]);
+    fail = true;
+    now += 60_000;
+    await idle.fresh();
+    expect(told).toHaveLength(2);
+  });
 });

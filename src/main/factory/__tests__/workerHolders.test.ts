@@ -10,7 +10,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { holderInputsRevision } from '../holderInputs';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { computeHolders, holderCounts, liveHolders, setHolderSource, type HolderRecord, type HolderSnapshot, type WorkerHolder } from '../workerHolders';
+import { computeHolders, holderCounts, holderMoveCheck, liveHolders, setHolderSource, type HolderRecord, type HolderSnapshot, type WorkerHolder } from '../workerHolders';
 import { AgentSlots, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { openBotWorkers } from '../openBotWorkers';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
@@ -774,5 +774,51 @@ describe('the earlier fixes hold through the set', () => {
     const r = rig({ rows, read: 'down', gone: new Set(rows.map((x) => x.id)) });
     expect(r.four()).toEqual({ agents: 0, factory: 0, bot: 0, live: 0 });
     expect(r.guards.reserve('k', 8, { ownerWorkspaceId: OWNER })).toEqual({ ok: true });
+  });
+});
+
+describe('a liveness read that moves a holder tells the window (holderMoveCheck)', () => {
+  // A paused worker (stopped for its report): a read after the stop that
+  // still sees its agent holds it; the next read, seeing it gone, frees it.
+  // Only that read moved, so only the check tells the window.
+  const rows = [row('p', { status: 'review_requested' })];
+  const records = [record('p', { ended: 'reported', at: NOW - 60_000 })];
+  const seen = snapshot({ rows, records, agentSeen: new Set(['ws-p']), readAt: NOW - 30_000 });
+  const gone = snapshot({ rows, records, readAt: NOW - 5_000 });
+
+  it('calls changed once per move, and not for a read that moved nothing', () => {
+    let snap = seen;
+    let calls = 0;
+    const check = holderMoveCheck(() => computeHolders(snap), () => { calls++; });
+    check();
+    expect(holderOf(computeHolders(seen), 'p')?.state).toBe('held');
+    expect(calls).toBe(1);
+    check();
+    expect(calls).toBe(1);
+    snap = gone;
+    expect(holderOf(computeHolders(gone), 'p')?.state).toBe('free');
+    check();
+    expect(calls).toBe(2);
+    check();
+    expect(calls).toBe(2);
+  });
+
+  it('a holder that goes from held to unknown still counts: no call', () => {
+    let snap = snapshot({ rows: [row('w')] });
+    let calls = 0;
+    const check = holderMoveCheck(() => computeHolders(snap), () => { calls++; });
+    check();
+    expect(holderOf(computeHolders(snap), 'w')?.state).toBe('held');
+    snap = snapshot({ rows: [row('w')], read: 'stale' });
+    expect(holderOf(computeHolders(snap), 'w')?.state).toBe('unknown');
+    check();
+    expect(calls).toBe(1);
+  });
+
+  it('a holder set that cannot be read says nothing', () => {
+    let calls = 0;
+    const check = holderMoveCheck(() => { throw new Error('no snapshot'); }, () => { calls++; });
+    check();
+    expect(calls).toBe(0);
   });
 });

@@ -955,7 +955,11 @@ export class AgentProcessTracker {
     if (this.states.get(sessionId) !== s || !s.alive || this.shellPids.get(sessionId) !== shellPid) return null;
     const pick = selectAgentProcess(table, shellPid);
     const root = table.find((e) => e.pid === s.pid);
-    if (!root || pick?.pid !== s.pid || pick.slug !== expectedSlug) return null;
+    if (!root) {
+      this.recordGone(table, new Set([s.pid]));
+      return null;
+    }
+    if (pick?.pid !== s.pid || pick.slug !== expectedSlug) return null;
     const byParent = new Map<number, ProcessTreeEntry[]>();
     for (const e of table) {
       const list = byParent.get(e.ppid);
@@ -983,7 +987,22 @@ export class AgentProcessTracker {
   async stillRunning(entries: readonly ProcessTreeEntry[]): Promise<ProcessTreeEntry[]> {
     if (entries.length === 0) return [];
     const table = await this.snapshot();
+    this.recordGone(table, new Set(entries.map((e) => e.pid)));
     return entries.filter((e) => table.some((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline));
+  }
+
+  /** A tracked agent among `pids` that a fresh process table no longer
+   *  lists has exited: its death edge is recorded now, not on the monitor's
+   *  next poll (up to one cadence later), so a stop that just confirmed the
+   *  agent gone (session.stopAgent) is what the next session list reports.
+   *  Its watch is dropped so the monitor cannot report the same death again. */
+  private recordGone(table: readonly ProcessTreeEntry[], pids: ReadonlySet<number>): void {
+    for (const [sessionId, s] of this.states) {
+      if (!s.alive || s.wsl || !pids.has(s.pid) || table.some((e) => e.pid === s.pid)) continue;
+      this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
+      s.alive = false;
+      this.emitState(sessionId, { ...(s.slug ? { slug: s.slug } : {}), alive: false });
+    }
   }
 
   /** Drop all tracking for a session (died / interrupted / killed). */
