@@ -31,6 +31,7 @@ vi.mock('../../../deck/taskLedgerHost', () => ({ getTaskLedger: () => ledgerMock
 import type { RpcContext } from '../../../../shared/rpc';
 import type { BrainAdapter, BrainEvent } from '../../../deck/BrainAdapter';
 import { registerBotRpcHandlers, botRuntimeModule, statusFor, wakeOnOwnerAnswer, type SetJobPorts } from '../bot.rpc';
+import { BOT_EVENT } from '../../../../shared/bot';
 import { DISMISSED_ANSWER } from '../../../factory/handoffRouter';
 import { WakeTaint } from '../../../factory/wakeTaint';
 import type { Handoff } from '../../../../shared/handoff';
@@ -477,17 +478,17 @@ describe('bot-runtime module', () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: false, planConsent: { version: 1, at: '2026-10-20T00:00:00.000Z' } }));
     const { router } = captureRouter();
-    const sent: unknown[] = [];
+    const sent: [string, unknown][] = [];
     const deps = {
       wmuxDir: () => dir,
-      getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (_c: string, p: unknown) => sent.push(p) } }),
+      getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (c: string, p: unknown) => sent.push([c, p]) } }),
     } as unknown as FactoryHostDeps;
     const mod = botRuntimeModule(router, deps, { engines: () => ({ ok: true, adapter: new OkAdapter() }) });
     await mod.start();
     sent.length = 0;
     // A write that does not come through Settings (a script, another caller).
     await getFactorySettingsStore()!.update({ enabled: true });
-    expect(sent).toContainEqual({ type: 'settings-changed' });
+    expect(sent).toContainEqual([BOT_EVENT, { type: 'settings-changed' }]);
     await mod.dispose();
   });
 
