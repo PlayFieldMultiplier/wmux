@@ -792,7 +792,24 @@ export class ChromeLauncher implements ChromeBackendClient {
    * first calls share one launch. A dead child relaunches here on demand.
    */
   async ensureRunning(): Promise<number> {
+    this.assertOpen();
+    const port = await this.ensureRunningOnce();
+    // The endpoint gate: whatever the path awaited, a quit that began meanwhile
+    // wins over handing out its port.
+    this.assertOpen();
+    return port;
+  }
+
+  /**
+   * The shutdown gate. dispose() closes it for good; every async path that
+   * could start, adopt or hand out a Chrome passes it after its last await, so
+   * a call already in flight when the quit began cannot outlive it.
+   */
+  private assertOpen(): void {
     if (this.disposed) throw new Error('ChromeLauncher: disposed (app is quitting)');
+  }
+
+  private async ensureRunningOnce(): Promise<number> {
     const wanted = this.wantedProtection();
     if (!wanted && !this.launchedProtected) {
       // A launch in flight has published its port before it is done (restored
@@ -839,7 +856,7 @@ export class ChromeLauncher implements ChromeBackendClient {
     // old terms; it is never handed out under the new ones.
     if (!!this.wantedProtection() !== this.launchedProtected) {
       await this.stopForProtectionChange();
-      return this.ensureRunning();
+      return this.ensureRunningOnce();
     }
     return port;
   }
@@ -888,6 +905,7 @@ export class ChromeLauncher implements ChromeBackendClient {
       this.cdpPort = port;
       try {
         await this.fetchJson('/json/version');
+        this.assertOpen();
         // No child handle for an adopted instance — dispose() can only close
         // tabs we open; the process outlives us like it outlived its spawner.
         this.child = null;
@@ -899,9 +917,11 @@ export class ChromeLauncher implements ChromeBackendClient {
         // outlived the swap.
         await this.restoreFromStore();
         await this.reviveByTabAnchor();
+        this.assertOpen();
         return port;
-      } catch {
+      } catch (err) {
         this.cdpPort = 0;
+        if (this.disposed) throw err;
       }
     }
     return null;
@@ -1402,9 +1422,7 @@ export class ChromeLauncher implements ChromeBackendClient {
   }
 
   private async launch(): Promise<number> {
-    // A demand that was already awaiting when the app began to quit must not
-    // start or adopt a Chrome after dispose() has stopped this profile's.
-    if (this.disposed) throw new Error('ChromeLauncher: disposed (app is quitting)');
+    this.assertOpen();
     const plan = this.wantedProtection();
     // A fresh Chrome starts with a fresh list: what the last one was refused
     // is not what this one will ask for.
@@ -1436,8 +1454,10 @@ export class ChromeLauncher implements ChromeBackendClient {
 
     if (this.profileLabel) seedChromeProfileLabel(this.userDataDir, this.profileLabel);
 
-    // Checked again after every await above (adoption, eviction).
-    if (this.disposed) throw new Error('ChromeLauncher: disposed (app is quitting)');
+    const protectedArgs = plan ? protectedChromeArgs(await this.ensureProxy(plan)) : [];
+    // After the last await before the spawn (adoption, eviction, the proxy):
+    // a Chrome started now would be one dispose() never saw.
+    this.assertOpen();
     const child = spawn(
       binary,
       [
@@ -1456,7 +1476,7 @@ export class ChromeLauncher implements ChromeBackendClient {
         // left off", passed per launch rather than written into Preferences.
         // The tabs it brings back are closed below (closeRestoredTabs).
         '--restore-last-session',
-        ...(plan ? protectedChromeArgs(await this.ensureProxy(plan)) : []),
+        ...protectedArgs,
         ...this.extraArgs,
       ],
       { stdio: 'ignore' },
@@ -1760,7 +1780,7 @@ import { LiveChromeClient, isLiveChromeReachable } from './LiveChromeClient';
 export class ChromeLauncherRegistry {
   private readonly launchers = new Map<string, ChromeBackendClient>();
   private live: LiveChromeClient | null = null;
-  /** Set by a graceful disposeAll: the app is quitting. */
+  /** Set by disposeAll: the app is quitting. Cleared by reopen(). */
   private disposed = false;
 
   constructor(
@@ -1968,6 +1988,11 @@ export class ChromeLauncherRegistry {
     this.live?.writeScope.clearBorrows(workspaceId);
   }
 
+  /** An install quit was called off (abortInstallQuit): profiles may launch again. */
+  reopen(): void {
+    this.disposed = false;
+  }
+
   /**
    * Quit every launched Chrome; `immediate` as in ChromeLauncher.dispose. The
    * Chromes stop in parallel against one deadline, QUIT_GRACE_MS from now:
@@ -1975,9 +2000,9 @@ export class ChromeLauncherRegistry {
    * call resolves within that bound however many profiles are open.
    */
   async disposeAll(opts?: { immediate?: boolean }): Promise<void> {
-    // An immediate dispose is the install quit, which can still be called off
-    // (abortInstallQuit); new launchers stay possible after it.
-    if (!opts?.immediate) this.disposed = true;
+    // Closed for an immediate (install) quit too; reopen() undoes it if the
+    // install is called off.
+    this.disposed = true;
     const deadline = Date.now() + QUIT_GRACE_MS;
     const stopping = [...this.launchers.values()].map((launcher) =>
       launcher instanceof ChromeLauncher ? launcher.dispose({ ...opts, deadline }) : launcher.dispose(),

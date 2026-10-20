@@ -466,6 +466,24 @@ describe('ChromeLauncherRegistry', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it('an install quit closes the registry until it is called off', async () => {
+    const registry = new ChromeLauncherRegistry({
+      defaultDir: '/tmp/default-prof',
+      profilesDir: '/tmp/profiles',
+      store: makeStore({}),
+    });
+    void registry.disposeAll({ immediate: true });
+    // A lookup during the install quit (e.g. a consent request) stays outside it.
+    const late = registry.forProfile('during-install');
+    await expect(late.endpoint()).rejects.toThrow('disposed');
+    expect(registry.peekLauncher('during-install')).toBeUndefined();
+    // The install was called off: profiles launch again.
+    registry.reopen();
+    const again = registry.forProfile('during-install');
+    expect(again).not.toBe(late);
+    expect(registry.peekLauncher('during-install')).toBe(again);
+  });
+
   it('revealNewest activates the newest tab of a running pane profile and never launches one', async () => {
     const child = makeChild();
     spawnWritesPortFile(child);
@@ -572,6 +590,27 @@ describe('ChromeLauncherRegistry', () => {
 // Crash-path adoption: a previous session's Chrome still holds the profile
 // dir — reuse its recorded endpoint instead of dying on the SingletonLock.
 describe('ChromeLauncher zombie adoption', () => {
+  it('an adoption still probing when the app quits hands out no endpoint', async () => {
+    state.portFiles['/tmp/adopt-quit'] = '18935\n/devtools/browser/x\n';
+    let answer: (() => void) | null = null;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (!answer && String(url).includes(':18935/json/version')) {
+        await new Promise<void>((r) => {
+          answer = r;
+        });
+      }
+      return fetchOk({});
+    });
+    const launcher = new ChromeLauncher('/tmp/adopt-quit');
+    const pending = launcher.endpoint();
+    await vi.waitFor(() => expect(answer).not.toBeNull(), { timeout: 5_000 });
+    await launcher.dispose();
+    (answer as unknown as () => void)();
+    await expect(pending).rejects.toThrow('disposed');
+    expect(launcher.currentPort()).toBeNull();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('adopts an existing instance when DevToolsActivePort answers, without spawning', async () => {
     state.portFiles['/tmp/adopt-prof'] = '18933\n/devtools/browser/x\n';
     fetchMock.mockResolvedValue(fetchOk({ Browser: 'Chrome/151' }));

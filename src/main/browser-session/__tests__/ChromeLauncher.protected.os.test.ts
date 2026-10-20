@@ -408,6 +408,32 @@ describe('ChromeLauncher — protected launch readiness', () => {
   });
 });
 
+describe('ChromeLauncher — quitting during a protected launch', () => {
+  it('a protected launch whose proxy is still starting when the app quits spawns no Chrome', async () => {
+    const { ProtectedProxy } = await import('../ProtectedProxy');
+    const realStart = ProtectedProxy.prototype.start;
+    let release: (() => void) | null = null;
+    const spy = vi.spyOn(ProtectedProxy.prototype, 'start').mockImplementation(async function (this: InstanceType<typeof ProtectedProxy>) {
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      return realStart.call(this);
+    });
+    try {
+      spawnWritesPortFile(makeChild());
+      const launcher = new ChromeLauncher('/tmp/prot-quit-proxy', { protection: () => denyAll });
+      const pending = launcher.endpoint();
+      await vi.waitFor(() => expect(release).not.toBeNull(), { timeout: 5_000 });
+      await launcher.dispose();
+      (release as unknown as () => void)();
+      await expect(pending).rejects.toThrow('disposed');
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('ChromeLauncher — protected launch readiness, restored pages', () => {
   it('refuses a protected launch whose restored page will not close, and stops that Chrome', async () => {
     state.restoredPage = true;

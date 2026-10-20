@@ -2956,6 +2956,8 @@ function prepareInstallQuit(): void {
 // reports the failure.
 async function abortInstallQuit(): Promise<void> {
   isQuitting = false;
+  // prepareInstallQuit stopped every agent Chrome and closed the registry.
+  chromeRegistry.reopen();
   // stop() latches, so start() alone would be a no-op — without resume() one
   // aborted install leaves MCP down for the rest of the session, silently.
   mcpBrokerSupervisor.resume();
