@@ -384,6 +384,15 @@ export function recoveryAgentLive(args: {
 const AUTO_RESUME_AGENTS: ReadonlySet<string> = new Set(['claude', 'codex']);
 
 /**
+ * The prompt an automatic resume hands an agent that was mid-turn when the
+ * daemon died, as the launch's positional prompt (`claude … --resume <id>
+ * "<prompt>"`, `codex resume <id> "<prompt>"`). Plain ASCII with no quote, `$`,
+ * `%`, `!` or backslash, so the same double-quoted word is one literal
+ * argument in PowerShell, cmd and POSIX shells alike.
+ */
+export const AUTO_RESUME_CONTINUE_PROMPT = 'Continue the task you were working on when this session was interrupted.';
+
+/**
  * The line to run when a recovered Claude Code or Codex pane is resumed on app
  * start, or null
  * when it should be left alone. Same assembly as the Resume pill, with the
@@ -410,6 +419,9 @@ export function planAutoResume(args: {
   /** #2408: the screen tier sighted an agent in the pane since the restart,
    *  whether or not it is on screen now (the read may still be pending). */
   agentSighted?: boolean;
+  /** The daemon's `resumeWasRunning`: the agent was mid-turn when the old
+   *  daemon died, so the line carries {@link AUTO_RESUME_CONTINUE_PROMPT}. */
+  wasRunning?: boolean;
 }): string | null {
   const agent = args.agent;
   if (!args.enabled || !agent || !AUTO_RESUME_AGENTS.has(agent)) return null;
@@ -450,12 +462,14 @@ export function planAutoResume(args: {
   if (!plan) return null;
   // With a permission flag and an exact id the plan types only the base line
   // first; build the whole line instead.
+  let line = plan.text;
   if (plan.advanceStage) {
     const grammar = resumeGrammarFor(agent);
     if (!grammar || !sessionId) return null;
-    return `${plan.text} ${grammar.withId(sessionId)}`;
+    line = `${plan.text} ${grammar.withId(sessionId)}`;
   }
-  return plan.text;
+  // The positional prompt goes last, after every option and the session id.
+  return args.wasRunning === true ? `${line} "${AUTO_RESUME_CONTINUE_PROMPT}"` : line;
 }
 
 export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVisible = true, isZoomHidden = false }: PaneProps) {
@@ -906,7 +920,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     const ptyId = activeSurfacePtyId;
     if (!ptyId || !resumePtyReady || supervision || chatV2OwnsPane) return;
     if (autoResumedPtys.has(ptyId)) return;
-    const line = planAutoResume({
+    const planLine = (wasRunning: boolean) => planAutoResume({
       enabled: useStore.getState().claudeResumeOnStart,
       agent: resumeHint,
       binding: resumeBinding,
@@ -915,8 +929,10 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
       commandRunning: useStore.getState().commandRunningByPtyId[ptyId],
       agentAlive: useStore.getState().agentAliveByPtyId[ptyId],
       agentSighted: useStore.getState().resumeAgentOnScreenByPtyId[ptyId] !== undefined,
+      wasRunning,
     });
-    if (!line) return;
+    const planned = planLine(false);
+    if (!planned) return;
     // A beat after the first output, so the prompt is up and reading input.
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -946,6 +962,10 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         if (now.resumeAgentOnScreen !== undefined || now.commandRunning === true || now.agentProcessAlive === true) return;
         if (!useStore.getState().claudeResumeOnStart) return;
         if (useStore.getState().resumeHintByPtyId[ptyId] !== resumeHint) return;
+        // Read off this last list, not the store: the daemon spends the mark on
+        // the pane's first submit, so only a list taken right before typing
+        // tells whether the turn the old daemon died in is still to continue.
+        const line = now.resumeWasRunning === true ? planLine(true) ?? planned : planned;
         if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
         // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
         // A refused line keeps the pill, so the pane can still be resumed by hand.

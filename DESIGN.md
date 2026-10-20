@@ -1661,7 +1661,8 @@ no empty reply row or reserved gap under the latest prompt.
   tooltip), then the sync badge; the PR badge always stays. The git line uses the branch and worktree icons;
   no text glyphs that can render as emoji (⎇ ⊕ ⚠ ✓ ✗).
 - **Agent row:** status mark · title · agent kind (non-Claude only) · muted trailer (live
-  activity while running, else the pane coordinate) · elapsed time since the
+  activity while running, else the pane coordinate) · muted subagent count
+  while the agent has any running (`2 subagents`; nothing at 0) · elapsed time since the
   last activity, right-aligned (11px like the rest of the roster row, muted,
   tabular — the 11px metadata floor). A pending question
   keeps its own attention-orange second line. Stashed rows keep their status word (their

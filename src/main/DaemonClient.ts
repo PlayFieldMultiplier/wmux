@@ -1109,6 +1109,14 @@ export class DaemonClient extends EventEmitter {
           }
           break;
         }
+        case 'agent.subagents': {
+          // How many subagents the pane's agent has running, from its transcript.
+          const data = event.data as { count?: unknown } | null;
+          if (typeof data?.count === 'number' && Number.isFinite(data.count) && data.count >= 0) {
+            this.emit('session:subagents', { sessionId: event.sessionId, count: Math.floor(data.count) });
+          }
+          break;
+        }
         case 'prompt.event':
           // OSC 133 shell-integration marker (A/B/C/D) parsed in the daemon.
           // DaemonNotificationRouter consumes this to tee the D variant onto

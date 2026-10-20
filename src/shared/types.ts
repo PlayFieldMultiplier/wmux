@@ -546,6 +546,13 @@ export interface MetadataUpdatePayload {
   // applying any active-pane update to workspace metadata (it is not workspace
   // state). Never persisted.
   activity?: string;
+  /**
+   * How many subagents this pane's agent has running, read by the daemon from
+   * the agent's transcript (daemon/transcript/subagentCount). Per-ptyId only,
+   * like `activity`: the renderer destructures it out before applying the
+   * payload to workspace metadata. 0 clears.
+   */
+  subagents?: number;
   // P2 — pane label relay. MetadataStore's `pane.metadata.changed` is teed to
   // the renderer as a paneId-only update (no ptyId/workspaceId);
   // useNotificationListener routes on `paneId` and writes ONLY the per-pane

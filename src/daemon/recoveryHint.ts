@@ -1,5 +1,9 @@
 import { agentDisplayToSlug, type AgentSlug } from '../shared/agentIdentity';
+import type { ResumeBinding } from '../shared/agentResume';
 import { screenShowsActiveDialog, screenShowsAgentDialog } from './transcript/chatScreenGate';
+import { transcriptTurnState } from './transcript/chatAgentStatus';
+import { fileTranscriptProvider } from './transcript/providers';
+import { readTranscriptPage } from './transcript/readTail';
 
 /**
  * The recovery hint for a pane, or undefined once process truth shows the
@@ -25,6 +29,44 @@ export function liveRecoveryHint<S, B>(
     return undefined;
   }
   return slug;
+}
+
+/** How recent a recovered pane's last output must be for its turn to be continued. */
+export const RESUME_CONTINUE_MAX_QUIET_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether the persisted record of a pane says its agent was mid-turn when the
+ * daemon that wrote it died (`turnRunningSince`, see DaemonPTYBridge
+ * isAgentMidTurn). A running agent paints all the time, so the record's last
+ * output is close to that death; when it is older than a day the machine sat
+ * off for that long or the pane was silent with a turn left open, and neither
+ * is work to pick up again on its own.
+ */
+export function recordWasMidTurn(record: { turnRunningSince?: unknown; resumeContinuePending?: unknown; lastActivity?: unknown }, now: number): boolean {
+  const since = record.turnRunningSince;
+  const midTurn = typeof since === 'number' && Number.isFinite(since) && since > 0;
+  // A continue owed by an earlier recovery and not yet spent counts the same.
+  if (!midTurn && record.resumeContinuePending !== true) return false;
+  const lastOutput = typeof record.lastActivity === 'string' ? Date.parse(record.lastActivity) : NaN;
+  if (!Number.isFinite(lastOutput)) return false;
+  return now - lastOutput <= RESUME_CONTINUE_MAX_QUIET_MS;
+}
+
+/**
+ * Whether the agent's own transcript still shows open the turn the daemon saw
+ * running when it died: no interrupt and no finished reply after its last
+ * work or prompt. The daemon's mid-turn mark says an agent was in a turn; only
+ * the transcript says the user did not stop it (an interrupt fires no hook,
+ * and the daemon may have had no reader of the transcript's end). Anything
+ * unknown (no transcript, outside the account's sessions, unreadable) is no.
+ */
+export function recordedTurnStillOpen(binding: ResumeBinding | undefined, env?: Record<string, string>): boolean {
+  const file = binding?.transcriptPath;
+  const provider = binding ? fileTranscriptProvider(binding.agent) : undefined;
+  if (!binding || !file || !provider) return false;
+  if (!provider.check(file, binding.sessionId, env).ok) return false;
+  const page = readTranscriptPage(file, { parseLine: (line, offset) => provider.parse(line, offset).events });
+  return transcriptTurnState(page?.events) === 'open';
 }
 
 /**

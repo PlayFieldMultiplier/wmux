@@ -1361,6 +1361,9 @@ export function registerPTYHandlers(
         // the restart: whether it is on screen now. Hides the pill only; the
         // offer stays.
         resumeAgentOnScreen?: boolean;
+        // With resumeAgent: the agent was mid-turn when the previous daemon
+        // died, so the automatic resume continues that turn. One-shot.
+        resumeWasRunning?: boolean;
         // X6 ③ — the captured resume binding (origin id + cwd + permission mode),
         // surfaced alongside resumeAgent (recovery-only, cwd-matched) for the pill.
         args?: string[];
@@ -1427,6 +1430,7 @@ export function registerPTYHandlers(
           // X6 ② — carry the resume hint (agent slug) for the renderer pill.
           ...(s.resumeAgent ? { resumeAgent: s.resumeAgent } : {}),
           ...(s.resumeAgent && typeof s.resumeAgentOnScreen === 'boolean' ? { resumeAgentOnScreen: s.resumeAgentOnScreen } : {}),
+          ...(s.resumeAgent && s.resumeWasRunning === true ? { resumeWasRunning: true } : {}),
           // X6 ③ — carry the binding so the pill can build `--resume <id>`.
           ...(s.resumeBinding ? { resumeBinding: s.resumeBinding } : {}),
           ...(s.args ? { args: s.args } : {}),

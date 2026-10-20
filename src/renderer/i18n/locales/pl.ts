@@ -607,6 +607,8 @@ export const pl = {
   'roster.stashedExited': 'Sesja zakończona',
   'roster.unstashAction': 'Przywróć do układu',
   'roster.recoverAction': 'Przywróć i odzyskaj',
+  'roster.subagentsOne': '1 podagent',
+  'roster.subagents': 'Podagenty: {count}',
   'workspace.close': 'Zamknij obszar roboczy',
   'workspace.copyInfo': 'Kopiuj informacje o sesji',
   'workspace.copied': 'Skopiowano!',

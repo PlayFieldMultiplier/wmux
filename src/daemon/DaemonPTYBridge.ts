@@ -101,6 +101,9 @@ export function scanStartupDa1(text: string): 'answer' | 'more' | 'closed' {
  *                 reads it as "someone is using this pane".
  *  - 'resize'   → (no payload) — an applied geometry change; consumers read the
  *                 new size from the session's own meta.
+ *  - 'agentTurn' → { sessionId, runningSince: number | null } — the pane's
+ *                 agent started (epoch ms of the episode's start) or stopped
+ *                 being mid-turn; see isAgentMidTurn. Edges only.
  */
 export class DaemonPTYBridge extends EventEmitter {
   private outputInterpreter: OutputInterpreter | null = null;
@@ -247,6 +250,8 @@ export class DaemonPTYBridge extends EventEmitter {
    * `startAnsweredTurn`).
    */
   private bootEpisode = false;
+  /** The last `isAgentMidTurn` value reported through 'agentTurn'. */
+  private reportedMidTurn = false;
 
   /**
    * Reads the pane's transcript for the latest recorded turn end (epoch ms),
@@ -618,6 +623,7 @@ export class DaemonPTYBridge extends EventEmitter {
     // status (main mutes the byte heuristic while the turn latch is held), so
     // the daemon broadcasts `running` and cancels a still-held awaiting window.
     if (wasAwaiting && this.sessionId) this.emit('answered', { sessionId: this.sessionId, reason });
+    this.reportMidTurn();
   }
 
   /** SGR mouse reports and focus in/out reports: terminal input that is not a key. */
@@ -699,6 +705,7 @@ export class DaemonPTYBridge extends EventEmitter {
         if (authoritative) this.hookArmedCycle = true;
         this.activityMonitor.beginTurnIfInactive(this.sessionId);
       }
+      this.reportMidTurn();
       return;
     }
     this.explicitTerminalStatus = true;
@@ -740,6 +747,7 @@ export class DaemonPTYBridge extends EventEmitter {
     if (this.activityMonitor && this.sessionId) {
       this.activityMonitor.endTurn(this.sessionId);
     }
+    this.reportMidTurn();
   }
 
   /**
@@ -806,6 +814,7 @@ export class DaemonPTYBridge extends EventEmitter {
     this.turnOpen = true;
     if (resume && this.turnSoftClosed) {
       this.turnSoftClosed = false;
+      this.reportMidTurn();
       return;
     }
     this.turnSoftClosed = false;
@@ -817,6 +826,33 @@ export class DaemonPTYBridge extends EventEmitter {
     // hook budget allows plus margin) replaces the receive time.
     this.turnOpenedAt = signalTs !== undefined && Number.isFinite(signalTs) && signalTs <= now && now - signalTs < 10_000 ? signalTs : now;
     this.bootEpisode = this.codexBootWindow;
+    this.reportMidTurn();
+  }
+
+  /**
+   * The pane's agent is in the middle of a turn: what a pane recovered after
+   * this daemon died must continue rather than sit idle (see 'agentTurn').
+   *
+   * `turnOpen` is the one episode both signals feed: a hook's running edge
+   * (UserPromptSubmit, tool hooks) and the byte/title heuristics a hookless
+   * pane runs on. It is not enough alone. A submit opens it in a plain shell
+   * too, and a shell without OSC 133 never settles it, so an agent must be
+   * present: one whose hooks report (`hookSeen`, reset when the agent ends) or
+   * a live agent process. A boot episode (the launch Enter or the TUI's first
+   * paint, with no hook or joining submit since) is not a turn yet; that also
+   * leaves out a hookless agent's first turn after its launch, which is the
+   * safe side: continuing an agent idle at its composer would invent work.
+   */
+  isAgentMidTurn(): boolean {
+    return this.turnOpen && !this.bootEpisode && (this.hookSeen || this.trackedAgent?.alive === true);
+  }
+
+  /** Emits 'agentTurn' when `isAgentMidTurn` changed since the last report. */
+  private reportMidTurn(): void {
+    const midTurn = this.isAgentMidTurn();
+    if (midTurn === this.reportedMidTurn || !this.sessionId) return;
+    this.reportedMidTurn = midTurn;
+    this.emit('agentTurn', { sessionId: this.sessionId, runningSince: midTurn ? this.turnOpenedAt : null });
   }
 
   private closeTurn(soft = false): void {
@@ -829,6 +865,7 @@ export class DaemonPTYBridge extends EventEmitter {
     else if (!soft) this.turnSoftClosed = false;
     this.turnOpen = false;
     if (!this.turnSoftClosed) this.bootEpisode = false;
+    this.reportMidTurn();
   }
 
   /**
@@ -1176,6 +1213,7 @@ export class DaemonPTYBridge extends EventEmitter {
       ?? (screenName ? agentDisplayToSlug(screenName) : undefined);
     if (!state.alive || ((state.observedAt !== undefined || state.replacedLive) && state.slug && previous && previous !== state.slug)) this.noteAgentEnded();
     this.trackedAgent = { ...(state.slug ? { slug: state.slug } : {}), alive: state.alive };
+    this.reportMidTurn();
     if (detector && state.alive && state.observedAt !== undefined && isAgentSlug(state.slug)) {
       if (detector.seedTrustedIdentity(state.slug, detector.getIdentityEpoch())) this.recheckQuietApproval(detector);
     }
@@ -1381,6 +1419,7 @@ export class DaemonPTYBridge extends EventEmitter {
     this.bootEpisode = bootEpisode;
     this.byteOpenedTurn = byteOpenedTurn;
     this.spinnerOpenedTurn = spinnerOpenedTurn;
+    this.reportMidTurn();
     if (!isFreshSessionSource(source)) {
       this.preTurn = false;
       return;
@@ -2082,6 +2121,7 @@ export class DaemonPTYBridge extends EventEmitter {
     this.turnOpen = false;
     this.turnSoftClosed = false;
     this.bootEpisode = false;
+    this.reportedMidTurn = false;
     this.byteOpenedTurn = false;
     this.heldBurstAt = 0;
     this.spinnerArmedCycle = false;

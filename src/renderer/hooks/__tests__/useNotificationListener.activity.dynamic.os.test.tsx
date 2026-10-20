@@ -160,6 +160,16 @@ describe('useNotificationListener — Fleet activity line (METADATA_UPDATE.activ
     expect(useStore.getState().surfaceActivity['pty-1']).toBe('✎ leak.ts');
   });
 
+  it('stores a subagent count per pty, clears it on 0, and never writes it into workspace metadata', () => {
+    const wsId = seedActivePaneSurface('pty-1');
+    act(() => { metaCb!({ ptyId: 'pty-1', subagents: 2 }); });
+    expect(useStore.getState().surfaceSubagents['pty-1']).toBe(2);
+    const ws = useStore.getState().workspaces.find((w) => w.id === wsId)!;
+    expect((ws.metadata as Record<string, unknown> | undefined)?.subagents).toBeUndefined();
+    act(() => { metaCb!({ ptyId: 'pty-1', subagents: 0 }); });
+    expect(useStore.getState().surfaceSubagents['pty-1']).toBeUndefined();
+  });
+
   // Byte-based per-PTY 'running' (daemon ActivityMonitor) has no activity
   // string; it must stamp the running freshness clock (surfaceActivityAt) so a
   // background dot lights — this replaced the per-tool PostToolUse hook. The

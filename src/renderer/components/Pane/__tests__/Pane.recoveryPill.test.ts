@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { claimAutoResume, markResumePillUsed, planAutoResume, planRecoveryPillType, resolveRecoveryPillPermissions } from '../Pane';
+import { AUTO_RESUME_CONTINUE_PROMPT, claimAutoResume, markResumePillUsed, planAutoResume, planRecoveryPillType, resolveRecoveryPillPermissions } from '../Pane';
 import type { RoleBinding } from '../../../../shared/orchestratorRole';
 
 const SID = 'a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a';
@@ -408,6 +408,50 @@ describe('planAutoResume — session id validation', () => {
       expect(planAutoResume({ ...base, binding: { agent: 'claude', cwd: 'C:/git/wmux', sessionId, permissionMode: 'acceptEdits' } }))
         .toBeNull();
     }
+  });
+});
+
+describe('planAutoResume — a turn the old daemon died in is continued', () => {
+  const PROMPT = `"${AUTO_RESUME_CONTINUE_PROMPT}"`;
+  const claude = { enabled: true, agent: 'claude', binding: { agent: 'claude', cwd: 'C:/git/wmux', sessionId: SID }, paneCwds: ['C:/git/wmux'], roleBinding: undefined };
+  const codex = { enabled: true, agent: 'codex', binding: { agent: 'codex', cwd: 'C:/git/Heartbound', sessionId: SID }, paneCwds: ['C:/git/Heartbound'], roleBinding: undefined };
+
+  it('appends the quoted prompt after the session id when the agent was running', () => {
+    expect(planAutoResume({ ...claude, wasRunning: true })).toBe(`claude --resume ${SID} ${PROMPT}`);
+    expect(planAutoResume({ ...codex, wasRunning: true })).toBe(`codex resume ${SID} ${PROMPT}`);
+  });
+
+  it('puts the prompt after the permission flag and the id on a one-line restore', () => {
+    const line = planAutoResume({ ...claude, binding: { ...claude.binding, permissionMode: 'acceptEdits' }, wasRunning: true });
+    expect(line).toMatch(new RegExp(`acceptEdits --resume ${SID} "${AUTO_RESUME_CONTINUE_PROMPT.replace(/\./g, '\\.')}"$`));
+  });
+
+  it('adds nothing when the agent was idle or the daemon did not say', () => {
+    expect(planAutoResume({ ...claude, wasRunning: false })).toBe(`claude --resume ${SID}`);
+    expect(planAutoResume({ ...claude })).toBe(`claude --resume ${SID}`);
+    expect(planAutoResume({ ...codex, wasRunning: false })).toBe(`codex resume ${SID}`);
+  });
+
+  it('keeps every guard: nothing is typed into a running agent, or without an exact binding', () => {
+    expect(planAutoResume({ ...claude, wasRunning: true, commandRunning: true })).toBeNull();
+    expect(planAutoResume({ ...claude, wasRunning: true, agentAlive: true })).toBeNull();
+    expect(planAutoResume({ ...claude, wasRunning: true, agentSighted: true })).toBeNull();
+    expect(planAutoResume({ ...claude, wasRunning: true, binding: undefined })).toBeNull();
+    expect(planAutoResume({ ...claude, wasRunning: true, enabled: false })).toBeNull();
+  });
+
+  it('is a plain ASCII sentence one pair of double quotes keeps literal in pwsh, cmd and POSIX shells', () => {
+    expect(AUTO_RESUME_CONTINUE_PROMPT).toMatch(/^[A-Za-z ,.]+$/);
+  });
+
+  it('the Resume pill never carries the prompt', () => {
+    const plan = planRecoveryPillType({ launcher: 'claude', sessionId: SID, permFlag: '', forceSkip: false, resumeStage: 0, roleBinding: undefined });
+    expect(plan?.text).toBe(`claude --resume ${SID}`);
+  });
+
+  it('the Pane effect reads the mark off the list taken right before typing', () => {
+    const source = readFileSync(resolve(__dirname, '../Pane.tsx'), 'utf8');
+    expect(source).toMatch(/const line = now\.resumeWasRunning === true \? planLine\(true\) \?\? planned : planned;\s*if \(!claimAutoResume\(ptyId\)\) return;/);
   });
 });
 
