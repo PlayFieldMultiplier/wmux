@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commandLineBinding, sessionFromCommandLine, settleStoppedBinding } from '../agentCommandLineBinding';
 import { MAX_PROJECT_DIRS } from '../TranscriptDiscovery';
 import { toResumeCommand } from '../../../shared/agentResume';
@@ -105,7 +105,11 @@ describe('sessionFromCommandLine — claude (flag form)', () => {
 describe('commandLineBinding — validates against the exact transcript', () => {
   let home: string;
   beforeEach(() => { home = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-cmdline-')); });
-  afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
 
   it('binds a resumed Codex thread whose rollout exists (#1891)', () => {
     // A UUIDv7 thread lives in the local-date folder of its creation time.
@@ -122,6 +126,22 @@ describe('commandLineBinding — validates against the exact transcript', () => 
   it('refuses a resumed id with no transcript', () => {
     expect(commandLineBinding('codex', `codex resume ${ID}`, '/work', { CODEX_HOME: home })).toBeUndefined();
     expect(commandLineBinding('claude', `claude --resume ${ID}`, '/work', { CLAUDE_CONFIG_DIR: home })).toBeUndefined();
+  });
+
+  it('binds the copy in the account the pane runs on, not the original in the default root (#2510)', () => {
+    // After Continue on another account the pane runs `claude --resume <id>`
+    // with CLAUDE_CONFIG_DIR set to the new account, and the id's transcript is
+    // under both the default root (where it was) and the account (the copy).
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    const user = path.join(home, 'user');
+    vi.spyOn(os, 'homedir').mockReturnValue(user);
+    const account = path.join(home, 'account-b');
+    for (const dir of [path.join(user, '.claude', 'projects', '-work'), path.join(account, 'projects', '-work')]) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${ID}.jsonl`), '{}\n');
+    }
+    const b = commandLineBinding('claude', `claude --resume ${ID}`, '/work', { CLAUDE_CONFIG_DIR: account }, { now: 7 });
+    expect(b?.transcriptPath).toBe(path.join(account, 'projects', '-work', `${ID}.jsonl`));
   });
 
   it('binds a resumed Claude conversation by its transcript name', () => {

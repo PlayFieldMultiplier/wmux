@@ -1346,7 +1346,9 @@ function settledForReplay(
   pane: { env?: Record<string, string>; cmd?: string; wslTarget?: unknown },
 ): ResumeBinding | undefined {
   if (!binding || pane.wslTarget || isWslShell(pane.cmd)) return binding;
-  const settled = settleStoppedBinding(binding, pane.env ?? {});
+  // A record without its environment is respawned with the daemon's: say so
+  // (undefined), rather than an empty environment that names no account.
+  const settled = settleStoppedBinding(binding, pane.env);
   if (settled !== binding) {
     log('info', `[resume] ${id}: ${binding.agent} conversation ${binding.sessionId} ${settled ? 'has its transcript now' : 'was never written; not resuming it'}`);
   }

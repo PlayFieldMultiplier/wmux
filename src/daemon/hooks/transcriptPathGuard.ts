@@ -113,6 +113,23 @@ export function claudeProjectRoots(sessionEnv?: Record<string, string>): string[
   return roots;
 }
 
+/**
+ * The one directory the pane's Claude reads and writes its transcripts under:
+ * `$CLAUDE_CONFIG_DIR/projects` when the session names an account folder, else
+ * `~/.claude/projects`. Claude never looks in the default root once
+ * `CLAUDE_CONFIG_DIR` is set, so a file there is another account's. Finding a
+ * transcript searches this root alone; claudeProjectRoots above is where a
+ * transcript is allowed to be, which is wider. The session's environment is the
+ * pane's whole environment: a session that leaves the variable out or empty
+ * runs on the default root, whatever the daemon's own environment says (an
+ * unbound workspace drops inherited account variables on purpose). The
+ * daemon's is consulted only when no session environment is known.
+ */
+export function claudeTranscriptRoot(sessionEnv?: Record<string, string>): string {
+  const configured = sessionEnv ? sessionEnv['CLAUDE_CONFIG_DIR'] : process.env['CLAUDE_CONFIG_DIR'];
+  return configured ? path.join(configured, 'projects') : path.join(os.homedir(), '.claude', 'projects');
+}
+
 export interface TranscriptPathCheck {
   ok: boolean;
   /** Why it was refused, for the warn log. Empty when `ok`. */

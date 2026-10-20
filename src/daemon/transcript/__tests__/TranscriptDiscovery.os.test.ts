@@ -33,6 +33,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -47,6 +48,27 @@ describe('scanForTranscript', () => {
   it('finds the transcript by name in a project directory', () => {
     const file = writeTranscript(path.join(root, '-synthetic-repo'));
     expect(scanForTranscript(ID, env)).toEqual([file]);
+  });
+
+  it('searches the account the pane names, not the default root beside it (#2510)', () => {
+    // Continue on another account copies a conversation into the new account,
+    // so the same id is on disk under both roots.
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    vi.spyOn(os, 'homedir').mockReturnValue(path.join(home, 'user'));
+    const original = writeTranscript(path.join(home, 'user', '.claude', 'projects', '-synthetic-repo'));
+    const copy = writeTranscript(path.join(root, '-synthetic-repo'));
+    expect(scanForTranscript(ID, env)).toEqual([copy]);
+    expect(scanForTranscript(ID, {})).toEqual([original]);
+  });
+
+  it('a pane that clears CLAUDE_CONFIG_DIR searches the default root, not the daemon\'s account', () => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, 'config'));
+    vi.spyOn(os, 'homedir').mockReturnValue(path.join(home, 'user'));
+    const original = writeTranscript(path.join(home, 'user', '.claude', 'projects', '-synthetic-repo'));
+    writeTranscript(path.join(root, '-synthetic-repo'));
+    expect(scanForTranscript(ID, { CLAUDE_CONFIG_DIR: '' })).toEqual([original]);
+    // An unbound workspace's pane env leaves the variable out altogether.
+    expect(scanForTranscript(ID, {})).toEqual([original]);
   });
 
   it('refuses a same-named file OUTSIDE the projects root', () => {
