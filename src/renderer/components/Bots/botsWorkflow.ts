@@ -19,8 +19,9 @@ export type WorkflowState = 'running' | 'blocked' | 'cancelled' | 'done';
 /** Why a workflow stopped. `step` is 1-based. */
 export type WorkflowReason =
   /** The owner's Cancel. `started`: the step was handed to fan-out (a
-   *  worker may have started); `running`: its task exists, so its worker
-   *  did start. The cancel stops neither. */
+   *  worker may have started); `running`: its task existed, so its worker
+   *  had started. The cancel stops neither; the card says so, not that the
+   *  worker still runs (a blocked workflow no longer follows its task). */
   | { kind: 'cancelled'; step: number; started: boolean; running: boolean }
   /** The owner stopped the bot (its workers with it). */
   | { kind: 'stopped' }

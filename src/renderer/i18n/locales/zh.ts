@@ -3991,7 +3991,7 @@ export const zh = {
   'botsPage.workflow.stepOf': "第 {step} 步，共 {total} 步",
   'botsPage.workflow.reason.cancelled': "你已取消。后续步骤不会开始。",
   'botsPage.workflow.reason.cancelledStarted': "你已取消。后续步骤不会开始。如果第 {step} 步已启动工作者，取消不会停止它。",
-  'botsPage.workflow.reason.cancelledRunning': "第 {step} 步的工作者会继续运行：取消不会停止它（可在它的行中停止）。后续步骤不会开始。",
+  'botsPage.workflow.reason.cancelledRunning': "你已取消：后续步骤不会开始。取消没有停止第 {step} 步的工作者；如果它仍在运行，请在它的行中停止它。",
   'botsPage.workflow.reason.stopped': "在你停止机器人时一并停止。不会自行继续。",
   'botsPage.workflow.reason.taskFailed': "第 {step} 步的任务失败，所以下一步不会开始。",
   'botsPage.workflow.reason.taskCancelled': "第 {step} 步的任务已取消，所以下一步不会开始。",

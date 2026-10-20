@@ -4785,7 +4785,7 @@ export const pl = {
   'botsPage.workflow.stepOf': "Krok {step} z {total}",
   'botsPage.workflow.reason.cancelled': "Anulowano. Kolejne kroki nie zostaną uruchomione.",
   'botsPage.workflow.reason.cancelledStarted': "Anulowano. Kolejne kroki nie zostaną uruchomione. Anulowanie nie zatrzymuje workera, którego krok {step} mógł już uruchomić.",
-  'botsPage.workflow.reason.cancelledRunning': "Worker kroku {step} działa dalej: anulowanie go nie zatrzymuje (zatrzymaj go z jego wiersza). Kolejne kroki nie zostaną uruchomione.",
+  'botsPage.workflow.reason.cancelledRunning': "Anulowano: kolejne kroki nie zostaną uruchomione. Anulowanie nie zatrzymało workera kroku {step}; jeśli nadal działa, zatrzymaj go z jego wiersza.",
   'botsPage.workflow.reason.stopped': "Zatrzymany razem z botem. Nie wznowi się sam.",
   'botsPage.workflow.reason.taskFailed': "Zadanie kroku {step} nie powiodło się, więc kolejny krok nie zostanie uruchomiony.",
   'botsPage.workflow.reason.taskCancelled': "Zadanie kroku {step} zostało anulowane, więc kolejny krok nie zostanie uruchomiony.",

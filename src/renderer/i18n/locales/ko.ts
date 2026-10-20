@@ -4326,7 +4326,7 @@ export const ko = {
   'botsPage.workflow.stepOf': "{total}단계 중 {step}단계",
   'botsPage.workflow.reason.cancelled': "직접 취소했어요. 다음 단계는 시작되지 않아요.",
   'botsPage.workflow.reason.cancelledStarted': "직접 취소했어요. 다음 단계는 시작되지 않아요. {step}단계가 이미 워커를 시작했다면 취소해도 그 워커는 멈추지 않아요.",
-  'botsPage.workflow.reason.cancelledRunning': "{step}단계 워커는 계속 실행돼요. 취소해도 멈추지 않으니 그 행에서 중지하세요. 다음 단계는 시작되지 않아요.",
+  'botsPage.workflow.reason.cancelledRunning': "직접 취소했어요. 다음 단계는 시작되지 않아요. 취소는 {step}단계 워커를 멈추지 않았어요. 아직 실행 중이면 그 행에서 중지하세요.",
   'botsPage.workflow.reason.stopped': "봇을 중지할 때 함께 멈췄어요. 저절로 이어지지 않아요.",
   'botsPage.workflow.reason.taskFailed': "{step}단계 작업이 실패해서 다음 단계가 시작되지 않아요.",
   'botsPage.workflow.reason.taskCancelled': "{step}단계 작업이 취소돼서 다음 단계가 시작되지 않아요.",
