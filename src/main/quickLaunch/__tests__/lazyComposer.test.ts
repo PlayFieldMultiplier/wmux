@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 interface FakeWindow {
   visible: boolean;
   destroyed: boolean;
+  webContents: object;
   emit(event: string): boolean;
 }
 
@@ -11,6 +12,7 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   shortcuts: new Map<string, () => void>(),
   config: { enabled: true, accelerator: 'CommandOrControl+Shift+Space' },
+  launched: null as null | ((result: { ok: boolean; tasks: unknown[] }) => void),
 }));
 
 vi.mock('electron', async () => {
@@ -72,8 +74,12 @@ vi.mock('electron', async () => {
 });
 vi.mock('../../window/createWindow', () => ({ normalizeDevServerUrl: () => null }));
 vi.mock('../../window/auxiliaryWindows', () => ({ markAuxiliaryWindow: () => undefined }));
-vi.mock('../../pipe/handlers/_bridge', () => ({ sendToRenderer: vi.fn() }));
-vi.mock('../../ipc/handlers/fanout.handler', () => ({ startGuiFanOut: vi.fn() }));
+vi.mock('../../pipe/handlers/_bridge', () => ({
+  sendToRenderer: async () => ({ workspaces: [{ id: 'ws-1', name: 'Repo', cwd: '/repo' }] }),
+}));
+vi.mock('../../ipc/handlers/fanout.handler', () => ({
+  startGuiFanOut: () => new Promise((resolve) => (h.launched = resolve)),
+}));
 vi.mock('../config', () => ({
   readQuickLaunchConfig: () => ({ ...h.config }),
   writeQuickLaunchConfig: (next: typeof h.config) => Object.assign(h.config, next),
@@ -166,5 +172,24 @@ describe('quick-launch composer window is built on first use', () => {
     await paint(win);
     expect(win.destroyed).toBe(true);
     expect(win.visible).toBe(false);
+  });
+
+  it('a submit that finishes after the composer was rebuilt does not hide the new one', async () => {
+    press();
+    const [old] = h.windows;
+    await paint(old);
+    const submit = h.handlers.get(IPC.QUICK_LAUNCH_SUBMIT)?.(
+      { sender: old.webContents },
+      { prompt: 'fix it', workspaceId: 'ws-1', agent: { kind: 'default' }, checkout: 'worktree' },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    setSettings({ enabled: false });
+    setSettings({ enabled: true });
+    press();
+    const fresh = h.windows[1];
+    await paint(fresh);
+    h.launched?.({ ok: true, tasks: [] });
+    await submit;
+    expect(fresh.visible).toBe(true);
   });
 });

@@ -261,7 +261,9 @@ export function initQuickLaunch(deps: {
     const req = normalizeQuickLaunchRequest(raw);
     if ('error' in req) return { ok: false, error: req.error };
     const result = await launchQuick(req, deps);
-    if (result.ok) hideQuickLaunch();
+    // Re-checked after the wait: the composer may have been switched off and
+    // rebuilt meanwhile, and a stale submit must not hide the new one.
+    if (result.ok && fromComposer(event)) hideQuickLaunch();
     return result;
   });
 
