@@ -23,6 +23,7 @@ import { localSpelling, resolveAccessiblePath } from './fs.handler';
 import { getProjectConfigStore } from '../../project/ProjectConfigStore';
 import { ensureSecretHook } from '../../git/secretHookHost';
 import { prepareNewWorktree, type WorkspacePrepResult } from '../../worktask/workspacePrep';
+import { getSharedTaskGateRunner } from '../../worktask/TaskGateRunner';
 import {
   parseWorktreePorcelain,
   validateGitRef,
@@ -257,10 +258,14 @@ export async function addPreparedWorktree(repoPath: string, branch: string): Pro
   // The pre-commit secret check lives in the common git dir, so a copied
   // secret can't be committed from this worktree either.
   ensureSecretHook(added.worktreePath);
-  const prep = await prepareNewWorktree(
+  const run = () => prepareNewWorktree(
     { sourceCwd: repoPath, worktreePath: added.worktreePath, origin: 'human' },
     { getState: (cwd) => getProjectConfigStore().getState(cwd) },
   );
+  // Under the machine-wide gate permit, as a fan-out's setup: an install
+  // never overlaps a task gate.
+  const gates = getSharedTaskGateRunner();
+  const prep = gates ? await gates.withPermit(run) : await run();
   return prep.status === 'none' ? added : { ...added, prep };
 }
 

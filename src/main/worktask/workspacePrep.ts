@@ -151,8 +151,8 @@ async function isIgnored(gitRun: NonNullable<WorkspacePrepDeps['git']>, cwd: str
 
 /**
  * Copy `entries` (validated project-relative paths) from `sourceRoot` into
- * `worktreePath`. A file is copied only when it is a plain file inside the
- * source checkout, git-ignored there, not already in the worktree, lands
+ * `worktreePath`. A file is copied only when it is (or links to) a plain file
+ * inside the source checkout, git-ignored there, not already in the worktree, lands
  * inside the worktree (no tracked symlink can redirect the write), and is
  * still git-ignored in the worktree afterwards.
  */
@@ -177,19 +177,17 @@ export async function copyWorkspaceFiles(
   for (const entry of entries) {
     const parts = entry.split('/');
     const src = path.join(realSource, ...parts);
-    let srcStat: fs.Stats;
+    let realSrc: string;
     try {
-      srcStat = fs.lstatSync(src);
+      // A link (`.env -> .env.local`) is followed, but only to a file inside
+      // the source checkout.
+      realSrc = fs.realpathSync.native(src);
     } catch {
       result.missing++;
       continue;
     }
     try {
-      if (!srcStat.isFile() || !within(realSource, fs.realpathSync.native(src))) {
-        result.refused++;
-        continue;
-      }
-      if (!(await isIgnored(gitRun, realSource, entry))) {
+      if (!within(realSource, realSrc) || !(await isIgnored(gitRun, realSource, entry))) {
         result.refused++;
         continue;
       }
@@ -198,13 +196,17 @@ export async function copyWorkspaceFiles(
         result.present++;
         continue;
       }
-      const parent = path.dirname(dest);
-      fs.mkdirSync(parent, { recursive: true });
-      if (!within(realWorktree, fs.realpathSync.native(parent))) {
+      // Checked before anything is created: a tracked link among the parent
+      // folders must not make a folder outside the worktree.
+      if (!parentStaysInside(realWorktree, path.dirname(dest))) {
         result.refused++;
         continue;
       }
-      fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (!within(realWorktree, fs.realpathSync.native(path.dirname(dest))) || !copyPlainFile(realSrc, dest)) {
+        result.refused++;
+        continue;
+      }
       if (!(await isIgnored(gitRun, realWorktree, entry))) {
         // The worktree's own ignore rules differ from the source's: a copy
         // that git would offer to commit must not stay.
@@ -240,6 +242,45 @@ export function worktreeProjectDir(sourceTop: string, projectRoot: string, workt
   return rel === '' ? worktreePath : path.join(worktreePath, rel);
 }
 
+/** Largest config file copied (a bigger one is not a setting). */
+const MAX_COPY_BYTES = 8 * 1024 * 1024;
+
+/** The nearest existing folder at or above `dir` resolves inside `root`. */
+function parentStaysInside(root: string, dir: string): boolean {
+  let current = dir;
+  for (;;) {
+    try {
+      return within(root, fs.realpathSync.native(current));
+    } catch {
+      const up = path.dirname(current);
+      if (up === current) return false;
+      current = up;
+    }
+  }
+}
+
+/**
+ * Copy one resolved plain file. The source is opened without following a
+ * link (it was resolved already, so a link appearing there now is a swap)
+ * and checked to be a regular file on the open descriptor; the destination
+ * is created exclusively, with the source's permission bits.
+ */
+function copyPlainFile(realSrc: string, dest: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(realSrc, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_COPY_BYTES) return false;
+    const bytes = fs.readFileSync(fd);
+    fs.writeFileSync(dest, bytes, { flag: 'wx', mode: st.mode & 0o777 });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 function isDanglingLink(p: string): boolean {
   try {
     return fs.lstatSync(p).isSymbolicLink();
@@ -271,8 +312,7 @@ export interface RunWorkspacePrepInput {
 
 /**
  * Run a resolved plan: copy, then setup. Never throws. A failed setup is a
- * 'failed' result; the caller must not start the agent on it (it offers Retry
- * and Start anyway instead, or fails the task when nobody is there to ask).
+ * 'failed' result; the caller must not start the agent on it.
  */
 export async function runWorkspacePrep(input: RunWorkspacePrepInput, deps: WorkspacePrepDeps = {}): Promise<WorkspacePrepResult> {
   const { plan } = input;
@@ -365,6 +405,6 @@ export async function prepareNewWorktree(input: PrepareNewWorktreeInput, deps: P
 export function phonePrepSummary(result: WorkspacePrepResult): PhoneWorktreePrep | 'failed' | undefined {
   if (result.status === 'none') return undefined;
   if (result.status === 'failed') return 'failed';
-  if (result.status === 'skipped') return { status: 'skipped', copied: 0, missing: 0, ...(result.reason ? { reason: result.reason } : {}) };
-  return { status: 'ready', copied: result.copy.copied, missing: result.copy.missing };
+  if (result.status === 'skipped') return { status: 'skipped', copied: 0, missing: 0, refused: 0, ...(result.reason ? { reason: result.reason } : {}) };
+  return { status: 'ready', copied: result.copy.copied, missing: result.copy.missing, refused: result.copy.refused };
 }

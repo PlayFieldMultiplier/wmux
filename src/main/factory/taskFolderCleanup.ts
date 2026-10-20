@@ -1009,7 +1009,15 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
         // Nothing has worked in it since it was put back: what is there is
         // the kept branch plus the setup's own output, so force is safe, and
         // the record stays 'removed' for the next resume to try again.
-        await ports.worktrees.removeWorktree(rec.repoRoot, rec.repoHash, rec.path, undefined, { force: true }).catch(() => undefined);
+        const away = await ports.worktrees.removeWorktree(rec.repoRoot, rec.repoHash, rec.path, undefined, { force: true })
+          .catch((err: unknown) => ({ ok: false as const, error: String(err) }));
+        if (!away.ok) {
+          // Still on disk: recorded as restored so a later cleanup pass
+          // sees it as this task's folder again, not as nothing.
+          (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} could not be put away again: ${away.error}`);
+          await ports.store.put({ ...rec, state: 'restored', at: now() }).catch(() => undefined);
+          ports.changed?.();
+        }
         return false;
       }
     }

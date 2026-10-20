@@ -127,7 +127,7 @@ describe('phone worktree creation', { timeout: 60_000 }, () => {
       commit(repo, { '.gitignore': '.env\n' });
       fs.writeFileSync(path.join(repo, '.env'), 'SECRET=1\n');
       const { receipt } = await create(preparing(() => trusted({ copy: ['.env', '.env.local'] })), repo, 'with-env');
-      expect(receipt).toMatchObject({ state: 'created', prep: { status: 'ready', copied: 1, missing: 1 } });
+      expect(receipt).toMatchObject({ state: 'created', prep: { status: 'ready', copied: 1, missing: 1, refused: 0 } });
       expect(JSON.stringify(receipt)).not.toContain('SECRET');
       expect(JSON.stringify(receipt)).not.toContain('.env');
       expect(fs.readFileSync(path.join(phoneDir(repo, 'with-env'), '.env'), 'utf8')).toBe('SECRET=1\n');
@@ -144,7 +144,7 @@ describe('phone worktree creation', { timeout: 60_000 }, () => {
     it('reports an unapproved config as skipped, running nothing', async () => {
       const marker = path.join(root, 'prep-ran');
       const { receipt } = await create(preparing(() => ({ ...trusted({ setup: `node -e "require('fs').writeFileSync(${JSON.stringify(marker)}, '1')"` }), trust: 'stale' })), repo, 'stale-cfg');
-      expect(receipt).toMatchObject({ state: 'created', prep: { status: 'skipped', reason: 'stale', copied: 0, missing: 0 } });
+      expect(receipt).toMatchObject({ state: 'created', prep: { status: 'skipped', reason: 'stale', copied: 0, missing: 0, refused: 0 } });
       expect(fs.existsSync(marker)).toBe(false);
     });
   });

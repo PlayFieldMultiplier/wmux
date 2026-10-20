@@ -515,6 +515,11 @@ describe('normalizeWmuxProjectConfig — fanout.copy / copyIntoAutomated', () =>
     ['.git/config'],
     ['.env*'],
     ['.env:stream'],
+    ['.git./config'],
+    ['GIT~1/config'],
+    ['nul'],
+    ['sub/CON.txt'],
+    ['cfg /local.json'],
     [''],
   ])('rejects the whole list when one entry is %j', (bad) => {
     const cfg = normalizeWmuxProjectConfig({ fanout: { copy: ['.env', bad], setup: 'npm ci' } });

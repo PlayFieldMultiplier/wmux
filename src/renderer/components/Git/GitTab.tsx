@@ -558,9 +558,11 @@ export function GitTab({
       if (prep?.status === 'failed') {
         pushToast({ level: 'warn', message: t('git.prepFailed', { error: prep.error ?? '' }) });
       } else if (prep?.status === 'skipped') {
-        pushToast({ level: 'warn', message: t('git.prepSkipped') });
-      } else if (prep?.status === 'ready' && prep.copy.copied + prep.copy.missing > 0) {
-        pushToast({ level: 'info', message: t('git.prepReady', { copied: prep.copy.copied, missing: prep.copy.missing }) });
+        pushToast({ level: 'warn', message: t(prep.reason === 'malformed' ? 'git.prepMalformed' : 'git.prepSkipped') });
+      } else if (prep?.status === 'ready' && prep.copy.missing + prep.copy.refused > 0) {
+        pushToast({ level: 'warn', message: t('git.prepGaps', { copied: prep.copy.copied, missing: prep.copy.missing, refused: prep.copy.refused }) });
+      } else if (prep?.status === 'ready' && prep.copy.copied > 0) {
+        pushToast({ level: 'info', message: t('git.prepReady', { copied: prep.copy.copied }) });
       }
       void load(true);
     } catch (e) {

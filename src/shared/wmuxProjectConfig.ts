@@ -568,8 +568,9 @@ export function parseFanoutPortRange(input: unknown): FanoutPortRangeResult {
 
 /**
  * A `fanout.copy` entry: a project-relative file path with no `..` segment,
- * no absolute or drive prefix, no glob, no `:` (a Windows stream name) and
- * nothing inside `.git`. Normalized to forward slashes so
+ * no absolute or drive prefix, no glob, no `:` (a Windows stream name),
+ * nothing inside `.git`, and no segment Windows would read as another name
+ * (see isUnsafeCopySegment). Normalized to forward slashes so
  * the same file has one spelling on every platform.
  */
 export function normFanoutCopyPath(input: unknown): string | undefined {
@@ -578,8 +579,22 @@ export function normFanoutCopyPath(input: unknown): string | undefined {
   if (!isValidProjectRelativeCwd(trimmed)) return undefined;
   if (/[*?[\]:\0]/.test(trimmed)) return undefined;
   const normalized = trimmed.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+/g, '/').replace(/\/$/, '');
-  if (normalized.length === 0 || normalized === '.' || normalized.split('/').some((seg) => seg === '.' || seg.toLowerCase() === '.git')) return undefined;
+  if (normalized.length === 0 || normalized === '.' || normalized.split('/').some(isUnsafeCopySegment)) return undefined;
   return normalized;
+}
+
+/** Windows device names, which name a device in any folder and with any extension. */
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+
+/**
+ * A path segment that must never be copied to: `.` and `.git`, and the
+ * spellings Windows treats as another name for them or for a device (a
+ * trailing dot or space is dropped there, `GIT~1` is a short name).
+ */
+function isUnsafeCopySegment(seg: string): boolean {
+  if (seg === '.' || seg.toLowerCase() === '.git') return true;
+  if (/[. ]$/.test(seg) || /~\d/.test(seg)) return true;
+  return WINDOWS_DEVICE_NAME.test(seg);
 }
 
 function normalizeFanoutCopy(input: unknown): string[] | undefined {

@@ -3283,9 +3283,11 @@ export const ko = {
   'git.removeFailed': '제거 실패',
   'git.create': '생성',
   'git.createFailed': '생성 실패',
-  'git.prepReady': 'worktree 준비 완료: 파일 {copied}개 복사, {missing}개 없음',
+  'git.prepReady': 'worktree 준비 완료: 설정 파일 {copied}개 복사',
+  'git.prepGaps': 'worktree는 준비했지만 설정 파일이 다 오지 않았습니다: {copied}개 복사, {missing}개 없음, {refused}개 거부(이 체크아웃의 git-ignore 파일이 아님)',
   'git.prepFailed': 'worktree는 만들었지만 준비 명령이 실패했습니다: {error}',
   'git.prepSkipped': 'worktree를 준비 없이 만들었습니다: wmux.json이 승인되지 않았습니다. 사이드바 배지에서 검토하세요.',
+  'git.prepMalformed': 'worktree를 준비 없이 만들었습니다: 이 프로젝트 wmux.json의 준비 항목을 읽을 수 없습니다.',
   'git.newBranchPlaceholder': '새 브랜치 이름…',
   // Git 탭 — Pull Requests 섹션 (gh CLI).
   'git.pullRequests': 'Pull Requests',

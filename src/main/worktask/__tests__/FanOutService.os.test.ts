@@ -1240,6 +1240,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
     expect(res.ok).toBe(true);
     expect(res.tasks[0].configFiles).toEqual({ copied: 1, missing: 1, present: 0, refused: 0 });
+    expect(res.warnings).toContainEqual(expect.stringMatching(/^task 1: 1 of the repository's config files .* \(1 not found, 0 refused/));
     expect(fs.readFileSync(path.join(res.tasks[0].worktreePath!, '.env'), 'utf8')).toBe('SECRET=1\n');
     expect(renderer.spawned).toHaveLength(1);
   });
@@ -1258,7 +1259,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
     expect(res.tasks[0].configFiles).toMatchObject({ copied: 1 });
   });
 
-  it('a failed setup on a worktree a person opened keeps it and starts no agent', async () => {
+  it('a failed setup on a worktree a person opened starts no agent and reports the last output lines', async () => {
     const { repo, worktrees } = realRepo();
     const renderer = makeRendererFake();
     const svc = new FanOutService({
@@ -1272,9 +1273,8 @@ describe('new workspace preparation on fan-out worktrees', () => {
     expect(task.ok).toBe(false);
     expect(task.setupFailed).toBe(true);
     expect(task.setupOutputTail).toEqual(['step one']);
-    expect(task.preservedWorktree).toBeDefined();
-    expect(fs.existsSync(path.join(task.preservedWorktree!, '.env'))).toBe(true);
-    expect(worktrees.removeWorktree).not.toHaveBeenCalled();
+    // Rolled back (the same branch name is started again from the issue).
+    expect(worktrees.removeWorktree).toHaveBeenCalledTimes(1);
     expect(renderer.spawned).toHaveLength(0);
   });
 

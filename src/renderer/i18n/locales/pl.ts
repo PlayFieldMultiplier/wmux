@@ -3891,9 +3891,11 @@ export const pl = {
   'git.removeFailed': 'Usuwanie nie powiodło się',
   'git.create': 'Utwórz',
   'git.createFailed': 'Tworzenie nie powiodło się',
-  'git.prepReady': 'Worktree przygotowany: skopiowane pliki: {copied}, nieznalezione: {missing}',
+  'git.prepReady': 'Worktree przygotowany: skopiowane pliki konfiguracyjne: {copied}',
+  'git.prepGaps': 'Worktree przygotowany, ale nie wszystkie pliki konfiguracyjne dotarły: skopiowane: {copied}, nieznalezione: {missing}, odrzucone: {refused} (nie jest to plik ignorowany przez git w tym checkoucie)',
   'git.prepFailed': 'Worktree utworzony, ale jego przygotowanie nie powiodło się: {error}',
   'git.prepSkipped': 'Worktree utworzony bez przygotowania: wmux.json nie jest zatwierdzony. Przejrzyj go z plakietki na pasku bocznym.',
+  'git.prepMalformed': 'Worktree utworzony bez przygotowania: nie można odczytać sekcji przygotowania w wmux.json tego projektu.',
   'git.newBranchPlaceholder': 'nazwa nowego brancha…',
   // Git tab — Pull Requests section (gh CLI).
   'git.pullRequests': 'Pull Requesty',

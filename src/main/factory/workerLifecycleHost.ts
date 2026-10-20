@@ -483,10 +483,15 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       repoInfo: gitRepoInfo,
       // A resumed bot worker's folder is prepared again (it was removed with
       // its ignored files, node_modules included).
-      prepare: (repoRoot: string, worktreePath: string) => prepareNewWorktree(
-        { sourceCwd: repoRoot, worktreePath, origin: 'automated' },
-        { getState: (cwd) => getProjectConfigStore().getState(cwd) },
-      ),
+      prepare: (repoRoot: string, worktreePath: string) => {
+        const run = () => prepareNewWorktree(
+          { sourceCwd: repoRoot, worktreePath, origin: 'automated' },
+          { getState: (cwd) => getProjectConfigStore().getState(cwd) },
+        );
+        // Under the machine-wide gate permit, as a fan-out's setup.
+        const gates = getSharedTaskGateRunner();
+        return gates ? gates.withPermit(run) : run();
+      },
       gateRunning: (taskId: string) => getSharedTaskGateRunner()?.isRunning(taskId) === true,
       changed,
       // A kept folder removed after its TTL: one card in the task's thread

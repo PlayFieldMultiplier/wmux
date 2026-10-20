@@ -3916,9 +3916,11 @@ export const en = {
   'git.removeFailed': 'Remove failed',
   'git.create': 'Create',
   'git.createFailed': 'Create failed',
-  'git.prepReady': 'Worktree prepared: {copied} file(s) copied, {missing} not found',
+  'git.prepReady': 'Worktree prepared: {copied} config file(s) copied',
+  'git.prepGaps': 'Worktree prepared, but not every config file arrived: {copied} copied, {missing} not found, {refused} refused (not a git-ignored file in this checkout)',
   'git.prepFailed': 'Worktree created, but its setup failed: {error}',
   'git.prepSkipped': 'Worktree created without its setup: wmux.json is not approved. Review it from the sidebar badge.',
+  'git.prepMalformed': 'Worktree created without its setup: this project\'s wmux.json setup section could not be read.',
   'git.newBranchPlaceholder': 'new branch name…',
   // Git tab — Pull Requests section (gh CLI).
   'git.pullRequests': 'Pull Requests',

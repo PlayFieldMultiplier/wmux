@@ -67,6 +67,30 @@ failure report, never killed mid-run.
 > warm cache: `npm ci` against a shared store, not a cold full build). Running
 > the hooks in parallel is a follow-up.
 
+## `fanout.copy`
+
+A list of git-ignored files (project-relative, e.g. `[".env", ".env.local"]`)
+copied from your checkout into each new worktree before `setup` runs, so the
+setup command and the agent find them. Settings live in the same file; the
+**New workspace setup** dialog (command palette) lists the candidates and writes
+them for you.
+
+- Only plain files that are git-ignored in your checkout are copied (a link is
+  followed only to a file inside the checkout). A file that the new worktree
+  would not ignore is removed again, so a copy can never be committed by
+  accident, and `git worktree remove` deletes the copies with the folder.
+- An existing file in the worktree is never overwritten.
+- Copies stay on this computer: a phone request copies on the desktop, and only
+  counts reach the phone.
+- By default files are copied only into worktrees a person opened (the Git
+  page, start from an issue, Quick Launch, a phone request). Fan-out and bot
+  worktrees get them only with **`"copyIntoAutomated": true`** ("Also copy into
+  bot and fan-out workspaces"): an agent there can read them, and one misled by
+  a prompt could send them elsewhere.
+- A selected file that is not found, or refused, is reported with the result.
+
+`copy` and `setup` run on every path that creates a worktree, not only fan-out.
+
 ### Trust gating
 
 `wmux.json` is checked into the repo, so a pull request can edit it. The setup
@@ -75,8 +99,9 @@ hook is a shell command and is therefore gated exactly like supervised panes:
 - It runs **only** when you have explicitly trusted the file's current bytes.
 - Any edit to `wmux.json` demotes it to *stale* and the hook stops running until
   you review and approve again.
-- The hook command is shown verbatim in the trust dialog's command list before
-  you approve.
+- The hook command and the `copy` list are shown verbatim in the trust dialog
+  before you approve. Saving them from the New workspace setup dialog approves
+  exactly the bytes it writes.
 
 When a hook is declared but the config isn't trusted, the fan-out still runs and
 reports why the hook was skipped (`untrusted`, `stale`, `denied`) instead of

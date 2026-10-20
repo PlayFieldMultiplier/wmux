@@ -108,6 +108,8 @@ export interface PhoneWorktreePrep {
   copied: number;
   /** Selected files the session's checkout does not have. */
   missing: number;
+  /** Selected files not copied: not a git-ignored plain file inside the checkout. */
+  refused: number;
   reason?: 'untrusted' | 'stale' | 'denied' | 'malformed';
 }
 

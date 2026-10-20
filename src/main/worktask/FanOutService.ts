@@ -408,12 +408,18 @@ export const FANOUT_DEPENDENCY_WAIT_MS = 12 * 60 * 60 * 1000;
  *  set it. `review_requested` is the worker's own "done, gate passed". */
 const DEPENDENCY_DONE_STATUSES: readonly string[] = ['review_requested', 'completed'];
 
-/** 태스크 단위 결과(리포트 — 상태 구분). */
 /** Said once per fan-out when the project lists config files but keeps them
  *  out of fan-out and bot worktrees (the default). */
 export const FANOUT_COPY_BLOCKED_WARNING =
   "the repository's config files (fanout.copy) were not copied into these worktrees: copying into bot and fan-out workspaces is off for this project";
 
+/** The warning for a task whose selected config files did not all arrive. */
+export function configFilesGapWarning(index: number, c: WorkspaceCopyResult): string | undefined {
+  if (c.missing + c.refused === 0) return undefined;
+  return `task ${index + 1}: ${c.missing + c.refused} of the repository's config files (fanout.copy) were not copied (${c.missing} not found, ${c.refused} refused: not a git-ignored file inside the checkout)`;
+}
+
+/** 태스크 단위 결과(리포트 — 상태 구분). */
 export interface FanOutTaskResult {
   index: number;
   title: string;
@@ -904,6 +910,12 @@ export class FanOutService {
 
     const warnings = base.warning ? [base.warning] : [];
     if (env.copyBlocked) warnings.push(FANOUT_COPY_BLOCKED_WARNING);
+    // A selected file that could not be copied is said, never silent: the
+    // agent would otherwise start without it and nobody would know why.
+    for (const t of tasks) {
+      const gap = t.configFiles ? configFilesGapWarning(t.index, t.configFiles) : undefined;
+      if (gap) warnings.push(gap);
+    }
     const result: FanOutResult = {
       ok: tasks.every((t) => t.ok || t.pending),
       tasks,
@@ -1513,6 +1525,7 @@ export class FanOutService {
       base.configFiles = copied;
     }
 
+
     if (ctx.setupCommand !== undefined && plan) {
       // Under the machine-wide gate permit: an install never overlaps a gate.
       const setupCommand = ctx.setupCommand;
@@ -1528,20 +1541,9 @@ export class FanOutService {
         const error = `worktree setup hook failed: ${setupRun.error}`;
         const setupOutput = (setupRun.tail ?? '').trim();
         const outputTail = setupOutput.length > 0 ? setupOutput.split(/\r?\n/).slice(-WORKSPACE_PREP_TAIL_LINES) : undefined;
-        if (ctx.prepOrigin === 'human') {
-          // A person asked for this worktree: keep it (with whatever the
-          // setup got through) for Retry or Start anyway, and start no agent.
-          await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
-          const { port: _heldPort, ...withoutPort } = base;
-          return {
-            ...withoutPort,
-            setupFailed: true,
-            error,
-            ...(setupRun.timedOut ? { setupTimedOut: true as const } : {}),
-            ...(outputTail ? { setupOutputTail: outputTail } : {}),
-            preservedWorktree: plan.worktreePath,
-          };
-        }
+        const humanReport = ctx.prepOrigin === 'human'
+          ? { ...(setupRun.timedOut ? { setupTimedOut: true as const } : {}), ...(outputTail ? { setupOutputTail: outputTail } : {}) }
+          : {};
         const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
         await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
         // 페인이 뜨지 않았으니 포트는 이 태스크의 것이 아니다 — 결과에서 뺀다
@@ -1549,6 +1551,7 @@ export class FanOutService {
         const { port: _unusedPort, ...withoutPort } = base;
         return {
           ...withoutPort,
+          ...humanReport,
           setupFailed: true,
           error,
           ...(rolledBack.removed ? {} : { preservedWorktree: plan.worktreePath }),

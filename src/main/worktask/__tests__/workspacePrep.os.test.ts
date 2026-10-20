@@ -88,6 +88,22 @@ describe('copyWorkspaceFiles and runWorkspacePrep (real git)', () => {
     expect(g(wt, 'status', '--porcelain')).toBe('');
   });
 
+  it.skipIf(process.platform === 'win32')('follows a link to a file inside the checkout, never one outside it or a tracked link out of the worktree', async () => {
+    const wtL = path.join(tmp, 'wt-links');
+    const outside = path.join(tmp, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'id_rsa'), 'PRIVATE\n');
+    fs.symlinkSync('.env.local', path.join(repo, '.env.linked'));
+    fs.symlinkSync(path.join(outside, 'id_rsa'), path.join(repo, '.env.escape'));
+    g(repo, 'worktree', 'add', '-q', wtL, '-b', 'links');
+    // A tracked link in the worktree pointing out of it must not receive a copy.
+    fs.symlinkSync(outside, path.join(wtL, 'config'));
+    const r = await copyWorkspaceFiles(repo, wtL, ['.env.linked', '.env.escape', 'config/local.json']);
+    expect(r).toEqual({ copied: 1, missing: 0, present: 0, refused: 2 });
+    expect(fs.readFileSync(path.join(wtL, '.env.linked'), 'utf8')).toBe('LOCAL=1\n');
+    expect(fs.existsSync(path.join(outside, 'local.json'))).toBe(false);
+  });
+
   it('never overwrites a file already in the worktree', async () => {
     fs.writeFileSync(path.join(wt, '.env.local'), 'KEEP\n');
     const r = await copyWorkspaceFiles(repo, wt, ['.env.local']);
