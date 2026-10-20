@@ -209,7 +209,19 @@ export default function ProjectConfigDialog() {
 
         {(prepSetup !== undefined || prepCopy.length > 0) && (
           <section data-testid="project-prep-review">
-            <p className="ui-group-label">{t('project.prepHeading')}</p>
+            <div className="flex items-center gap-2 mb-2">
+              <p className="ui-group-label flex-1 !mb-0">{t('project.prepHeading')}</p>
+              {isTrusted && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="shrink-0"
+                  onClick={() => { close(); useStore.getState().setPrepDialogWsId(wsId); }}
+                >
+                  {t('project.editPrep')}
+                </Button>
+              )}
+            </div>
             <div className="ui-group">
               {prepSetup !== undefined && (
                 <div className="ui-row">

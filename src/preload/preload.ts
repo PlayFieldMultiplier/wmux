@@ -1596,6 +1596,12 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.PROJECT_CONFIG_GET, cwd) as Promise<import('../shared/wmuxProjectConfig').ProjectConfigState>,
     setTrust: (root: string, decision: 'trusted' | 'denied' | 'clear', contentHash?: string, unattended?: boolean) =>
       ipcRenderer.invoke(IPC.PROJECT_CONFIG_SET_TRUST, root, decision, contentHash, unattended === true) as Promise<{ ok: boolean }>,
+    // New workspace setup: read the section, and save it (the save is the
+    // trust approval of the written bytes).
+    prepGet: (cwd: string) =>
+      ipcRenderer.invoke(IPC.PROJECT_PREP_GET, cwd) as Promise<import('../shared/workspacePrepSettings').WorkspacePrepSettingsView>,
+    prepSave: (cwd: string, settings: import('../shared/workspacePrepSettings').WorkspacePrepSettings, expectedHash?: string) =>
+      ipcRenderer.invoke(IPC.PROJECT_PREP_SAVE, cwd, settings, expectedHash ?? null) as Promise<import('../shared/workspacePrepSettings').WorkspacePrepSaveResult>,
   },
   // A new worktree's preparation notice from main (a Quick Launch worktree,
   // whose composer closes on start): shown as a toast in this window.
