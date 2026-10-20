@@ -328,13 +328,15 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, offer, onCl
     const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
     return ws?.activePaneId ? `${ws.id}/${ws.activePaneId}` : null;
   });
-  // The only pane here on the shared repo is picked, unless the person picked one or the focused pane is on it.
+  // The only pane here on the shared repo is picked, unless the person picked
+  // one, the focused pane is on it, or an answer is already out (it names its pane).
   const [touched, setTouched] = useState(false);
+  const [answered, setAnswered] = useState(false);
   useEffect(() => {
-    if (touched || !localChoices) return;
+    if (touched || answered || !localChoices) return;
     const same = localChoices.filter((c) => c.same);
     if (same.length === 1 && !same.some((c) => c.key === pickedKey)) setPickedKey(same[0].key);
-  }, [localChoices, touched, pickedKey]);
+  }, [localChoices, touched, answered, pickedKey]);
   const localKey = localChoices?.some((c) => c.key === pickedKey) ? pickedKey : localChoices?.[0]?.key ?? null;
   const end: LocalEnd = fixed ?? (localKey
     ? { kind: 'pane', workspaceId: localKey.split('/')[0], paneId: localKey.slice(localKey.indexOf('/') + 1) }
@@ -412,6 +414,7 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, offer, onCl
 
   const onAcceptOffer = useCallback(async () => {
     if (!api?.offersAccept || !offer || end.kind !== 'pane' || !local.found) return;
+    setAnswered(true);
     setBusy(true); setOutcome(null);
     try {
       const r = await api.offersAccept({
