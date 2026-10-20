@@ -280,6 +280,34 @@ describe('ChromeLauncher', () => {
     await expect(launcher.ensureRunning()).rejects.toThrow('disposed');
   });
 
+  it('a graceful dispose closes the pages first, so the session Chrome saves restores none', async () => {
+    let listed = [{ id: 'ntp', url: 'chrome://newtab/', title: 'New Tab', type: 'page' }];
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      const u = String(url);
+      if (init?.method === 'PUT') {
+        listed = [...listed, { id: 'agent-1', url: 'https://a.test/', title: 'A', type: 'page' }];
+        return fetchOk({ id: 'agent-1', url: 'https://a.test/' });
+      }
+      if (u.includes('/json/close/')) {
+        const id = u.split('/json/close/')[1];
+        listed = listed.filter((t) => t.id !== id);
+        return fetchOk('Target is closing');
+      }
+      return fetchOk(u.endsWith('/json/list') ? listed : {});
+    });
+    const child = makeChild();
+    spawnWritesPortFile(child);
+    const launcher = new ChromeLauncher('/tmp/profile-pre-close');
+    await launcher.openTab('https://a.test/', 'ws-1');
+
+    await launcher.dispose();
+
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/json/close/agent-1'))).toBe(true);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/json/close/ntp'))).toBe(false);
+    expect(listed.map((t) => t.id)).toEqual(['ntp']);
+    expect(child.kill).toHaveBeenCalled(); // no browser socket in this fake: the signal fallback
+  });
+
   it('an env-pinned port launches with that fixed port (no DevToolsActivePort involved)', async () => {
     process.env.WMUX_CHROME_TEST_PIN = '19555';
     try {

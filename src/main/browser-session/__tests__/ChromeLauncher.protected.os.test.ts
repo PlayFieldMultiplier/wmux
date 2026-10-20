@@ -13,6 +13,7 @@ const { spawnMock, state, sockets } = vi.hoisted(() => ({
   // onBrowserClose: what the fake Chrome does when asked to quit over CDP
   // (null = it ignores the request).
   state: {
+    onGuardArm: null as (() => Promise<void>) | null,
     portFiles: {} as Record<string, string>,
     proxyPort: 0,
     routeViaProxy: true,
@@ -58,6 +59,11 @@ vi.mock('../CdpSocket', () => ({
     async send(method: string, params: unknown = {}) {
       this.rec.sent.push({ method, params });
       if (method === 'Browser.close') state.onBrowserClose?.();
+      if (method === 'Browser.setDownloadBehavior' && state.onGuardArm) {
+        const hook = state.onGuardArm;
+        state.onGuardArm = null;
+        await hook();
+      }
       if (method === 'Target.createTarget' && !state.routeViaProxy && state.reportErrorPage) {
         // Not routed: `.invalid` fails to resolve and Chrome shows its error page.
         setTimeout(() => this.handlers.get('Target.targetInfoChanged')?.({
@@ -134,6 +140,7 @@ beforeEach(() => {
   state.probeDelayMs = 0;
   state.reportErrorPage = false;
   state.onBrowserClose = null;
+  state.onGuardArm = null;
   sockets.length = 0;
   dead.clear();
   nextPort = 18001;
@@ -330,6 +337,44 @@ describe('ChromeLauncher — protected profiles', () => {
     expect(launcher.isProtected()).toBe(true);
     launcher.dispose();
   }, 20_000);
+});
+
+describe('ChromeLauncher — protected launch readiness', () => {
+  it('refuses every request until the download guard holds, and records none of those as blocked', async () => {
+    const net = await import('node:net');
+    const upstream = net.createServer((sock) => sock.end());
+    await new Promise<void>((r) => upstream.listen(0, '127.0.0.1', r));
+    const upstreamPort = (upstream.address() as { port: number }).port;
+    const allowOk: ChromeProtectionPlan = {
+      matcher: () => ({ allows: (host: string) => host === 'ok.test' }),
+      resolve: () => ({ host: '127.0.0.1', port: upstreamPort }),
+    };
+    const connect = (authority: string) =>
+      new Promise<string>((resolve) => {
+        const sock = net.connect(state.proxyPort, '127.0.0.1', () => sock.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`));
+        sock.once('data', (d) => {
+          resolve(d.toString().split('\r\n')[0]);
+          sock.destroy();
+        });
+        sock.on('error', () => resolve('error'));
+      });
+    let beforeGuard = '';
+    // What a page session restore brought back would meet, before the guard.
+    state.onGuardArm = async () => {
+      beforeGuard = await connect('ok.test:443');
+    };
+    spawnWritesPortFile(makeChild());
+    const launcher = new ChromeLauncher('/tmp/prot-ready', { protection: () => allowOk });
+    await launcher.ensureRunning();
+    try {
+      expect(beforeGuard).toContain('403');
+      expect(await connect('ok.test:443')).toContain('200');
+      expect(launcher.blockedHosts()).toEqual([]);
+    } finally {
+      upstream.close();
+      launcher.dispose();
+    }
+  });
 });
 
 describe('ChromeLauncher — quitting', () => {
