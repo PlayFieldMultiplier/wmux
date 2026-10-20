@@ -289,8 +289,10 @@ export class A2aOffers {
     } catch (err) {
       const msg = errMsg(err);
       if (msg.includes('conflict')) return fail('conflict', msg);
-      if (msg.includes('unavailable')) return fail('unavailable', msg);
-      return fail('forbidden', msg);
+      // A refusal of the offer itself (shape, cap) is for good; anything else is
+      // this PC's store failing, so the stream event is not acked and comes again.
+      if (msg.startsWith('offer:')) return fail('forbidden', msg);
+      return fail('unavailable', msg);
     }
   }
 

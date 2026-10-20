@@ -180,6 +180,17 @@ describe('share offers — sharer creates, receiver gets it', () => {
     expect(await a.offers.applyInbound(changed as A2aRemoteEnvelope, { hostId: B })).toMatchObject({ ok: false, error: 'conflict' });
   });
 
+  it('a store that cannot write answers unavailable, so the stream sends the offer again', async () => {
+    const a = makeSide(A, B);
+    const b = makeSide(B, A);
+    b.offers.create({ hostId: A, end: B_PANE, allow: both });
+    const realReceive = a.store.receiveIn.bind(a.store);
+    a.store.receiveIn = () => { throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' }); };
+    expect(await a.offers.applyInbound(b.outbox[0].env, { hostId: B })).toMatchObject({ ok: false, error: 'unavailable' });
+    a.store.receiveIn = realReceive;
+    expect(await a.offers.applyInbound(b.outbox[0].env, { hostId: B })).toEqual({ ok: true, duplicate: false });
+  });
+
   it('the receiver refuses an offer from a PC it did not join', async () => {
     const a = makeSide(A, B);
     const b = makeSide(B, A);
