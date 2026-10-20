@@ -345,7 +345,7 @@ export class A2aOffers {
   }
 
   /**
-   * Startup: a claimed offer is settled by what `links.json` holds — active:
+   * Startup, and the minute upkeep: a claimed offer is settled by what `links.json` holds — active:
    * accepted; still proposed-in: accept it now (the claim bound the consent);
    * missing: the crash came first, it is open again.
    */
@@ -355,6 +355,7 @@ export class A2aOffers {
       const link = this.deps.links.get(rec.linkId);
       try {
         if (!link || link.remote.hostId !== rec.hostId) this.changed(this.store.unclaim(rec.offerId));
+        // A proposed-in link waits for the app's closed-pane pass (finish answers 503 till then).
         else if (link.state === 'proposed-in' || link.state === 'active') this.finish(rec, link);
       } catch (err) {
         this.deps.log('warn', `[a2a-remote] offer ${rec.offerId} not recovered: ${errMsg(err)}`);
@@ -405,6 +406,8 @@ export class A2aOffers {
   private finish(rec: A2aLinkOfferRecordV1, link: A2aLinkRecordV1): OfferRouteAnswer {
     let current = link;
     if (current.state === 'proposed-in') {
+      // Not before the app's closed-pane pass: the pane may be gone.
+      if (this.deps.appReady && !this.deps.appReady()) return refuse(503, 'unavailable');
       try {
         current = this.deps.links.accept(current.linkId);
       } catch (err) {

@@ -237,10 +237,12 @@ describe('ExposureStore — one pane for a share (addPane / removePane)', () => 
     expect(s.get(HOST)!.workspaceIds).toEqual(['ws1']);
   });
 
-  it('never narrows an every-pane workspace to an explicit list when removing', () => {
+  it('an every-pane workspace cannot lose one pane, so it is dropped whole; others stay', () => {
     const s = make();
-    s.set(HOST, { workspaceIds: ['ws1'] });
+    s.set(HOST, { workspaceIds: ['ws1', 'ws2'] });
     s.removePane(HOST, 'ws1', 'p1', false);
-    expect(s.isPaneExposed(HOST, 'ws1', 'p2')).toBe(true);
+    expect(s.isPaneExposed(HOST, 'ws1', 'p1')).toBe(false);
+    expect(s.isPaneExposed(HOST, 'ws1', 'p2')).toBe(false);
+    expect(s.isPaneExposed(HOST, 'ws2', 'p9')).toBe(true);
   });
 });

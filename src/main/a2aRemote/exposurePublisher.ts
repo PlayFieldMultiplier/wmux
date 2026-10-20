@@ -244,6 +244,14 @@ export class A2aExposurePublisher {
     }
     await this.flushGone(client);
     const reconciled = offersRead && this.pending.size === 0;
+    // A shares read that failed is tried again, or shares stay unacceptable until the next change.
+    if (!offersRead && !this.retryArmed) {
+      this.retryArmed = true;
+      this.setTimer(() => {
+        this.retryArmed = false;
+        void this.republish();
+      }, A2A_GONE_RETRY_MS);
+    }
     const { exposures } = await client.a2aRemoteExposureList();
     const exposed = new Set((exposures ?? []).flatMap((e) => e.workspaceIds));
     const panes: A2aExposureCandidate[] = [];

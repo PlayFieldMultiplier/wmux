@@ -482,6 +482,34 @@ describe('share offers — review fixes (consent stays bound, debts stay owed)',
     expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-2')).toBe(true);
   });
 
+  it('a workspace written in the every-pane form loses the shared pane too (dropped whole), and the debt is paid', async () => {
+    const { b, offerId } = await shared();
+    b.exposures.set(A, { workspaceIds: ['ws-api'] });
+    b.offers.withdraw(offerId);
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+    expect(b.store.get(offerId)?.addedExposure).toBeFalsy();
+  });
+
+  it('a claimed link left proposed-in is finished only after the app’s closed-pane pass', async () => {
+    let ready = true;
+    const b = makeSide(B, A, { appReady: () => ready });
+    const a = makeSide(A, B);
+    const made = b.offers.create({ hostId: A, end: B_PANE, allow: both });
+    if (!made.ok) throw new Error('create failed');
+    await flush(b, a);
+    const { link, request } = proposalFor(a, made.offer.offerId);
+    b.store.claim(made.offer.offerId, link.linkId);
+    b.links.receiveProposal({ linkId: link.linkId, local: { kind: 'pane', workspaceId: 'ws-api', paneId: 'pane-1' }, remote: { hostId: A, kind: 'pane', workspaceId: 'ws-web', paneId: 'pane-a' }, allow: both });
+    ready = false;
+    expect(b.offers.acceptProposal(A, request)).toEqual({ status: 503, body: { ok: false, error: 'unavailable' } });
+    b.offers.recover();
+    expect(b.links.get(link.linkId)?.state).toBe('proposed-in');
+    ready = true;
+    b.offers.recover();
+    expect(b.links.get(link.linkId)?.state).toBe('active');
+    expect(b.store.get(made.offer.offerId)?.state).toBe('accepted');
+  });
+
   it('two shares to one PC expiring together both put their pane back, also on disk', async () => {
     const b = makeSide(B, A);
     b.offers.create({ hostId: A, end: B_PANE, allow: both });

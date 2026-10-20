@@ -246,8 +246,8 @@ export class A2aRemoteDelivery {
     } catch (err) {
       this.deps.log('warn', `[a2a-remote] hold expiry failed: ${errMsg(err)}`);
     }
-    this.deps.offers?.expire();
-    this.deps.offers?.reconcileExposure();
+    // Expiry, put-backs still owed, and claims a restart (or the app's absence) left unfinished.
+    this.deps.offers?.recover();
   }
 
   // --- RPC ------------------------------------------------------------------

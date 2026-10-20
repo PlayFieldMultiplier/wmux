@@ -146,17 +146,21 @@ export class ExposureStore {
   /**
    * Put back what `addPane` added: drop the pane from its explicit list, and
    * the workspace too when `dropWorkspace` and no pane of it is left listed.
-   * An every-pane workspace is left alone. Only narrows, so a failed write
-   * keeps the in-memory effect and still throws.
+   * A workspace in the every-pane form (which no wmux UI writes; only a
+   * hand-edited file has it) cannot lose one pane, so it is dropped whole:
+   * putting a share back only ever narrows. A failed write keeps the
+   * in-memory effect and still throws.
    */
   removePane(hostId: HostId, workspaceId: string, paneId: string, dropWorkspace: boolean): void {
     this.assertWritable();
     const rec = this.exposures.get(hostId);
-    if (!rec || !rec.workspaceIds.includes(workspaceId) || !rec.paneIds || !Object.hasOwn(rec.paneIds, workspaceId)) return;
-    const left = rec.paneIds[workspaceId].filter((p) => p !== paneId);
-    const dropWs = dropWorkspace && left.length === 0;
-    if (left.length === rec.paneIds[workspaceId].length && !dropWs) return;
-    const paneIds = { ...rec.paneIds };
+    if (!rec || !rec.workspaceIds.includes(workspaceId)) return;
+    const everyPane = !rec.paneIds || !Object.hasOwn(rec.paneIds, workspaceId);
+    const listed = everyPane ? [] : rec.paneIds![workspaceId];
+    const left = listed.filter((p) => p !== paneId);
+    const dropWs = everyPane || (dropWorkspace && left.length === 0);
+    if (left.length === listed.length && !dropWs) return;
+    const paneIds = { ...(rec.paneIds ?? {}) };
     if (dropWs) delete paneIds[workspaceId];
     else paneIds[workspaceId] = left;
     this.exposures.set(hostId, {

@@ -272,8 +272,9 @@ describe('A2aExposurePublisher — shares are acceptable only after the reconnec
       a2aRemoteLinksList: vi.fn(async () => ({ links: [] })),
       ...(o.offers ? { a2aRemoteOffersList: vi.fn(o.offers) } : {}),
     };
-    const pub = new A2aExposurePublisher({ client: () => client, repoKey: async () => null, log: () => undefined, setTimer: () => undefined });
-    return { pub, flags, gone };
+    const timers: Array<() => void> = [];
+    const pub = new A2aExposurePublisher({ client: () => client, repoKey: async () => null, log: () => undefined, setTimer: (fn) => void timers.push(fn) });
+    return { pub, flags, gone, timers };
   }
 
   it('says reconciled once the shares were read and their gone notices landed', async () => {
@@ -281,6 +282,17 @@ describe('A2aExposurePublisher — shares are acceptable only after the reconnec
     await pub.accept(tree);
     expect(gone).toEqual([{ workspaceId: 'w1', paneId: 'p1', reason: 'pane-closed' }]);
     expect(flags).toEqual([true]);
+  });
+
+  it('a shares read that failed is tried again, and the retry can say reconciled', async () => {
+    let fail = true;
+    const { pub, flags, timers } = rig({ offers: async () => { if (fail) throw new Error('busy'); return { offers: [] }; } });
+    await pub.accept(tree);
+    expect(flags).toEqual([false]);
+    expect(timers).toHaveLength(1);
+    fail = false;
+    timers[0]();
+    await vi.waitFor(() => expect(flags).toEqual([false, true]), { timeout: 5_000 });
   });
 
   it('not when the shares could not be read, or a notice did not land', async () => {
