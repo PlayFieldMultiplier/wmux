@@ -127,9 +127,10 @@ function ensurePanel(): Promise<BrowserWindow | null> {
   const pending = new Promise<BrowserWindow | null>((resolve) => {
     const settle = () => resolve(win.isDestroyed() ? null : win);
     win.once('ready-to-show', settle);
-    // A page that fails to load is still shown, as before, rather than
-    // swallowing every press.
+    // A page that fails to load (or whose renderer dies before it paints) is
+    // still shown, as before, rather than swallowing every press.
     win.webContents.once('did-fail-load', settle);
+    win.webContents.once('render-process-gone', settle);
     win.once('closed', settle);
   });
   const done = pending.finally(() => {
