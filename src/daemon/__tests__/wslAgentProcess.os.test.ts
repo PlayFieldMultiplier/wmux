@@ -255,6 +255,24 @@ describe('AgentProcessTracker in a WSL pane', () => {
     expect(tracker.hasLiveWslAgent('wsl-1')).toBe(false);
   });
 
+  it('a stop that confirmed the agent gone records its death edge at once, for that agent only', () => {
+    const { tracker, watches, states } = setup();
+    tracker.armWsl('wsl-1', LOCATION, reported);
+    const stopped = tracker.wslAgentFor('wsl-1');
+    expect(stopped).toBeDefined();
+    if (!stopped) return;
+    // A relaunch reported while the stop ran is not the one it stopped.
+    tracker.armWsl('wsl-1', LOCATION, { ...reported, pid: 5000, start: '999999' });
+    tracker.noteWslAgentGone('wsl-1', stopped);
+    expect(tracker.statusFor('wsl-1')).toBe(true);
+    const current = tracker.wslAgentFor('wsl-1');
+    if (!current) throw new Error('no tracked agent');
+    tracker.noteWslAgentGone('wsl-1', current);
+    expect(tracker.statusFor('wsl-1')).toBe(false);
+    expect(watches.has('agent:wsl-1')).toBe(false);
+    expect(states.at(-1)).toEqual({ slug: 'claude', alive: false });
+  });
+
   it('a relaunched agent replaces the old one, and the old death edge is ignored', () => {
     const { tracker, watches } = setup();
     tracker.armWsl('wsl-1', LOCATION, reported);

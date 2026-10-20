@@ -873,6 +873,15 @@ export class AgentProcessTracker {
     return s?.alive === true && s.wsl !== undefined;
   }
 
+  /** A stop that confirmed this WSL agent gone (stopWslAgent): its death
+   *  edge now, not on the WSL watcher's next poll, while the session still
+   *  tracks that same agent (`agent` as wslAgentFor gave it, not one a hook
+   *  reported since). */
+  noteWslAgentGone(sessionId: string, agent: WslWatchedAgent): void {
+    const s = this.states.get(sessionId);
+    if (s?.wsl === agent) this.recordDeath(sessionId, s);
+  }
+
   /** #2261 — the live WSL agent a stop may signal (its Linux pid, boot id and
    *  start time, and the pane's wsl.exe), or undefined. Never probes. */
   wslAgentFor(sessionId: string): WslWatchedAgent | undefined {
@@ -1014,7 +1023,8 @@ export class AgentProcessTracker {
    *  same death again. */
   private recordDeath(sessionId: string, s: TrackedAgent): void {
     if (!s.alive) return;
-    this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
+    if (s.wsl) this.wsl.watcher?.unwatch(AgentProcessTracker.watchKey(sessionId));
+    else this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
     s.alive = false;
     this.emitState(sessionId, { ...(s.slug ? { slug: s.slug } : {}), alive: false });
   }

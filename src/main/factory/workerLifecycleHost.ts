@@ -27,7 +27,7 @@ import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive } from '../worktas
 import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { installHeldFanoutReleases, releaseHeldFanouts } from './heldFanouts';
-import { checkWorkers, recordWorkerEnd, recordWorkerStart } from './budget';
+import { checkWorkers, recordWorkerStateChange } from './budget';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
@@ -610,7 +610,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     });
     offs.push(() => setWorkerResumePorts(null));
     // A resumed worker runs on its bot's worker budget: counted live by the
-    // holder set, and its run (resume to stop) in the bot's hours.
+    // holder set, and its run (resume to stop) in the bot's hours, as is a
+    // first run up to its stop.
     reclaimed.onStateChange = (rec, from, to, at) => {
       // A resumed worker runs again: a fact that said it was gone goes.
       if (to === 'resumed') goneFacts.clear(rec.taskId, 'its worker was resumed');
@@ -618,8 +619,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       if (from === 'resumed' && to === 'stopped' && folderPorts) void noteKeptFolderStopped(folderPorts, rec.taskId, at);
       const store = getBotStore();
       if (!store?.get(rec.botId)) return;
-      if (to === 'resumed') store.mutateUsage(rec.botId, (u) => recordWorkerStart(u, rec.taskId, at, { resumed: true }));
-      else if (from === 'resumed') store.mutateUsage(rec.botId, (u) => { recordWorkerEnd(u, rec.taskId, at); });
+      // A resume opens a run and any stop ends it: worker time counts only
+      // while a worker runs.
+      store.mutateUsage(rec.botId, (u) => recordWorkerStateChange(u, rec.taskId, from, to, at));
     };
     offs.push(() => { reclaimed.onStateChange = null; });
     // Dead shells in bot task workspaces (a daemon cold start respawns every
