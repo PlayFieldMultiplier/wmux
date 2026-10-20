@@ -27,8 +27,8 @@ import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive } from '../worktas
 import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { installHeldFanoutReleases, releaseHeldFanouts } from './heldFanouts';
-import { checkWorkers, recordWorkerStateChange } from './budget';
-import { endReportedRunIfAgentGone, endWorkerRun, setWorkerStopsConfirmed } from './workerRunEnds';
+import { checkWorkers, emptyUsage, recordWorkerStateChange } from './budget';
+import { endRunsOfFreeTasks, setWorkerStopsConfirmed, type RunEndPorts } from './workerRunEnds';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
@@ -180,7 +180,17 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   // the first read, none). A cap check awaits a fresh read (refreshSlotLiveness).
   // The bot status the window shows counts the holders (openBotWorkers):
   // any move of what they read is checked, and a change tells the window.
-  const holderNotice = holderChangeNotice(changed);
+  // Each check also ends the worker runs whose task holds nothing any more
+  // (workerRunEnds.ts): a bot's worker time runs until its worker stopped.
+  const runEnds: RunEndPorts = {
+    bots: () => (getBotStore()?.list({}) ?? []).map((b) => b.id),
+    usageOf: (botId) => getBotStore()?.usageOf(botId) ?? emptyUsage(),
+    mutateUsage: (botId, fn) => getBotStore()?.mutateUsage(botId, fn),
+    row: (taskId) => ledger.get(taskId),
+  };
+  const holderNotice = holderChangeNotice(changed, undefined, (holders) => {
+    if (getBotStore() && endRunsOfFreeTasks(runEnds, holders, Date.now()) > 0) changed();
+  });
   const taskLiveness = createTaskWorkspaceLiveness({
     entries: () => getWorkspaceMirror().getEntries(),
     // Asked with the daemon's recovery state: a read while it still restores
@@ -625,21 +635,6 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       store.mutateUsage(rec.botId, (u) => recordWorkerStateChange(u, rec.taskId, from, to, at));
     };
     offs.push(() => { reclaimed.onStateChange = null; });
-    // From here a worker's run ends at its confirmed stop, not at its row's
-    // end (workerRunEnds.ts). A worker whose agent is already gone when it
-    // reports ends its run at once rather than at its idle stop.
-    setWorkerStopsConfirmed(true);
-    offs.push(() => setWorkerStopsConfirmed(false));
-    offs.push(ledger.onTransition((t) => {
-      if (t.to !== 'review_requested' || t.entry.dispatch?.origin.kind !== 'bot') return;
-      void endReportedRunIfAgentGone({
-        listSessions,
-        row: (taskId) => ledger.get(taskId),
-        recordedSessions: (taskId) => reclaimed.get(taskId)?.sessions.map((x) => x.sessionId) ?? [],
-        sessionRecordOf: botWorkerSessionRecord,
-        end: endWorkerRun,
-      }, t.entry);
-    }));
     // Dead shells in bot task workspaces (a daemon cold start respawns every
     // pane as a plain shell; an ended task may keep one): deadWorkerPanes.ts.
     const deadPanes = createDeadPaneSweep({
@@ -807,6 +802,11 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   const holderKey = (): readonly unknown[] => [getFanOutGuards(), holderInputsRevision(), transitions, mirrorPushes, taskLiveness.lastReadAt()];
   setHolderSource(holderSnapshot, holderKey);
   offs.push(() => setHolderSource(null));
+  // From here a worker's run ends once its task holds nothing, not at its
+  // row's end; the first check ends what stopped while the app was closed.
+  setWorkerStopsConfirmed(true);
+  offs.push(() => setWorkerStopsConfirmed(false));
+  holderNotice.schedule();
   offs.push(onHolderInputsChanged(holderNotice.schedule));
   offs.push(ledger.onTransition(holderNotice.schedule));
   offs.push(getWorkspaceMirror().onSnapshot(holderNotice.schedule));

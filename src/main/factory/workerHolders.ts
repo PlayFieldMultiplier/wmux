@@ -497,22 +497,32 @@ export function liveHolders(): LiveHolders | null {
  *  on the next turn (`defer`), however many moves came before it. The first
  *  check tells it too. Most of what moves a holder (a read of the daemon's
  *  sessions, a slot grant released, a booking settled) tells the window
- *  nothing by itself, and the bot status it shows counts these holders. */
+ *  nothing by itself, and the bot status it shows counts these holders.
+ *  `each` is handed the holders of every check. */
 export function holderChangeNotice(
   changed: () => void,
   defer: (fn: () => void) => void = (fn) => { setImmediate(fn); },
+  each?: (holders: readonly WorkerHolder[]) => void,
 ): { schedule: () => void } {
   let shown: string | null = null;
   let due = false;
   const check = (): void => {
     due = false;
     let key: string;
+    let holders: readonly WorkerHolder[];
     try {
       const h = liveHolders();
       if (!h) return;
-      key = heldKey(h.holders);
+      holders = h.holders;
+      key = heldKey(holders);
     } catch {
       return;
+    }
+    // Every check, moved or not (the bots' worker time: workerRunEnds.ts).
+    try {
+      each?.(holders);
+    } catch {
+      /* the window is told all the same */
     }
     if (key === shown) return;
     shown = key;

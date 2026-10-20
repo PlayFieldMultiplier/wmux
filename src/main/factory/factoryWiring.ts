@@ -61,7 +61,6 @@ import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandl
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
 import { enabledBotsIncludingGuest, getBotDirectory, getBotStore } from './botStore';
-import { endWorkerRun } from './workerRunEnds';
 import { getFactorySettings } from './factorySettings';
 import { onBotHook, type BotHookEvent } from './botHooks';
 import { normalizeRepoKey } from './repoWatch';
@@ -1003,7 +1002,6 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         ledger,
         gates: getSharedTaskGateRunner,
         stopWorker: (entry, opts) => stopTaskWorker(entry, daemon, taskWorkspacePtys, { ...opts, sessionRecordOf: (id) => botWorkerSessionRecord(id) }),
-        workerStopped: (entry, at) => endWorkerRun(entry.dispatch?.origin.botId ?? '', entry.id, at),
         isOff: () => !settings().enabled,
         pauseRoutines: (botId) => getRoutineStore()?.pauseFor(botId, 'stop') ?? 0,
         blockWorkflows: (botId) => getBotWorkflowStore()?.blockFor(botId) ?? Promise.resolve(0),

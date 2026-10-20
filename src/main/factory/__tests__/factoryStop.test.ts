@@ -683,29 +683,6 @@ describe('stopFactoryTask (the Bots page Stop worker)', () => {
     }
   });
 
-  it('tells workerStopped once the worker stop answers, as of then, and not when it fails', async () => {
-    await task('t-ok', LEAD);
-    await task('t-fail', LEAD);
-    const stopped: Array<[string, number]> = [];
-    let failing = true;
-    const r = ports({
-      now: () => 4_242,
-      workerStopped: (entry, at) => { stopped.push([entry.id, at]); },
-      stopWorker: vi.fn(async (entry: LedgerEntry) => {
-        if (entry.id === 't-fail' && failing) throw new Error('the agent in daemon-1 was not stopped (still_running)');
-        return 1;
-      }),
-    });
-    await stopFactoryTask(r.p, 't-ok');
-    expect(stopped).toEqual([['t-ok', 4_242]]);
-    expect(await stopFactoryTask(r.p, 't-fail')).toMatchObject({ ok: false });
-    expect(stopped).toEqual([['t-ok', 4_242]]);
-    // Stopping again stops the agent that outlived it: that stop confirms it.
-    failing = false;
-    await stopFactoryTask(r.p, 't-fail');
-    expect(stopped).toEqual([['t-ok', 4_242], ['t-fail', 4_242]]);
-  });
-
   it('wakes no bot, as the bot-wide stop does', async () => {
     await task('t-stop', LEAD);
     const enqueue = vi.fn();

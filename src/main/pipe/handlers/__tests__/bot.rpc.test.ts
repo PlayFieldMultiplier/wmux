@@ -44,8 +44,8 @@ import { getWakeQueue } from '../../../factory/wakeQueue';
 import { getBotRuntime } from '../../../factory/BotRuntime';
 import { factorySettingsPath, getFactorySettingsStore } from '../../../factory/factorySettings';
 import { getBotStore } from '../../../factory/botStore';
-import { recordWorkerStart, workerHoursDay } from '../../../factory/budget';
-import { endWorkerRun, setWorkerStopsConfirmed } from '../../../factory/workerRunEnds';
+import { recordWorkerStart } from '../../../factory/budget';
+import { setWorkerStopsConfirmed } from '../../../factory/workerRunEnds';
 
 type Handler = (params: Record<string, unknown>, ctx?: RpcContext) => Promise<unknown>;
 
@@ -479,7 +479,7 @@ describe('bot-runtime module', () => {
     expect(ledgerMock.listeners.size).toBe(0);
   });
 
-  it('worker time runs until the worker is confirmed stopped, not until its row ends', async () => {
+  it('a task\'s row ending leaves its worker run open while a holder set ends runs, and ends it without one', async () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: true }));
     const { router, handlers } = captureRouter();
@@ -490,36 +490,15 @@ describe('bot-runtime module', () => {
       const created = (await (handlers.get('bot.create') as Handler)({ workspaceId: 'ws-1', role: 'verifier' }, OPERATOR)) as { bot: { id: string } };
       const botId = created.bot.id;
       const store = getBotStore() as BotStore;
-      const startedAt = Date.now() - 60_000;
-      const task = (id: string) => { store.mutateUsage(botId, (u) => recordWorkerStart(u, id, startedAt)); };
       const end = (id: string, to: string) => {
+        store.mutateUsage(botId, (u) => recordWorkerStart(u, id, Date.now() - 60_000));
         for (const l of ledgerMock.listeners) l({ entry: { id, rev: 2, ownerWorkspaceId: 'ws-1', dispatch: { origin: { kind: 'bot', botId } } }, from: 'working', to, by: { kind: 'worker' } });
+        return store.usageOf(botId).workers.find((w) => w.taskId === id)?.endedAt;
       };
-      const run = (id: string) => store.usageOf(botId).workers.filter((w) => w.taskId === id);
       setWorkerStopsConfirmed(true);
-      // Reported, then its agent confirmed stopped 30 s later: those 30 s count.
-      task('t-rep');
-      end('t-rep', 'review_requested');
-      const reportedAt = Date.now();
-      expect(run('t-rep')[0].endedAt).toBeUndefined();
-      endWorkerRun(botId, 't-rep', reportedAt + 30_000);
-      expect(run('t-rep')[0].endedAt).toBe(reportedAt + 30_000);
-      // Each end alike: a cancelled row keeps its run until the stop confirms,
-      // and a second confirmation (the owner's stop, then the reclaim's) moves
-      // nothing: one interval, ended at the first.
-      task('t-can');
-      end('t-can', 'cancelled');
-      expect(run('t-can')[0].endedAt).toBeUndefined();
-      endWorkerRun(botId, 't-can', reportedAt + 10_000);
-      endWorkerRun(botId, 't-can', reportedAt + 50_000);
-      expect(run('t-can')).toEqual([{ taskId: 't-can', startedAt, endedAt: reportedAt + 10_000 }]);
-      expect(workerHoursDay(store.usageOf(botId), reportedAt + 60_000) * 3_600_000).toBeCloseTo(2 * (reportedAt - startedAt) + 40_000, -1);
-      // With no stop confirmed (no lifecycle host, or its reclaim off) the
-      // row's end still ends the run, so none stays open for good.
+      for (const to of ['review_requested', 'completed', 'failed', 'cancelled']) expect(end(`t-${to}`, to)).toBeUndefined();
       setWorkerStopsConfirmed(false);
-      task('t-off');
-      end('t-off', 'completed');
-      expect(run('t-off')[0].endedAt).toBeDefined();
+      expect(end('t-off', 'completed')).toBeDefined();
     } finally {
       setWorkerStopsConfirmed(false);
       await mod.dispose();

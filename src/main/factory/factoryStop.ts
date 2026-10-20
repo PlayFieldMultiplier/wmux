@@ -99,11 +99,6 @@ export interface FactoryStopPorts {
    *  error with a numeric `workers` (a stop left pending) says how many it
    *  stopped before. */
   stopWorker: (entry: LedgerEntry, opts?: { agentsOnly?: boolean }) => Promise<number>;
-  /** Told once a stop of the task's worker answered without an error: its
-   *  agents are confirmed stopped (or none ran), as of `at`. The worker's
-   *  run in its bot's worker time ends here (workerRunEnds.ts): the owner's
-   *  stop writes no reclaim record. */
-  workerStopped?: (entry: LedgerEntry, at: number) => void;
   /** Whether "Run bots" is off now: while it is, every bot task that
    *  registers is stopped (installLateStopSweep). Absent: never. */
   isOff?: () => boolean;
@@ -279,18 +274,6 @@ function partialMessage(failures: number, loading: number, otherwise: string, le
  *  stops run even when the row could not be written. `stopped`: its worker's
  *  processes were confirmed gone (some were running). `off` ("Run bots"
  *  off): a task that ended by itself meanwhile has its worker stopped too. */
-/** Stop the task's worker (ports.stopWorker) and, once that answered
- *  without an error, tell workerStopped. Throws as stopWorker does. */
-async function stopWorker(ports: FactoryStopPorts, row: LedgerEntry, opts?: { agentsOnly?: boolean }): Promise<number> {
-  const n = await (opts ? ports.stopWorker(row, opts) : ports.stopWorker(row));
-  try {
-    ports.workerStopped?.(row, (ports.now ?? Date.now)());
-  } catch (err) {
-    (ports.log ?? ((m: string) => console.warn(m)))(`[factory] stop: the end of ${row.id}'s worker run was not recorded: ${String(err)}`);
-  }
-  return n;
-}
-
 async function stopTask(
   ports: FactoryStopPorts,
   row: LedgerEntry,
@@ -327,7 +310,7 @@ async function stopTask(
   let sessions = 0;
   let leftRunning: string | null = null;
   try {
-    sessions = await stopWorker(ports, row);
+    sessions = await ports.stopWorker(row);
   } catch (err) {
     workerOk = false;
     loading = isWorkspacesLoading(err);
@@ -504,7 +487,7 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
     try {
       // Only an agent that outlived that stop: the task's panes, a plain
       // shell the owner kept or reopened, stay (its card says so).
-      if ((await stopWorker(ports, row, { agentsOnly: true })) > 0) stoppedTasks.add(row.id);
+      if ((await ports.stopWorker(row, { agentsOnly: true })) > 0) stoppedTasks.add(row.id);
     } catch (err) {
       failures++;
       if (isWorkspacesLoading(err)) loadingFailures++;
@@ -606,7 +589,7 @@ export async function stopFactoryTask(ports: FactoryStopPorts, taskId: string): 
       log(`[factory] stop: the gate of ${row.id} was not cancelled: ${String(err)}`);
     }
     try {
-      stopped = (await stopWorker(ports, row, { agentsOnly: true })) > 0;
+      stopped = (await ports.stopWorker(row, { agentsOnly: true })) > 0;
       if (stopped) void refreshSlotLiveness(Date.now());
     } catch (err) {
       failed = true;
