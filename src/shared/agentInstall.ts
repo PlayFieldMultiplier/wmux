@@ -1,14 +1,16 @@
 // The install and sign-in commands behind the "Agent ready" cards.
 //
-// SUPPLY CHAIN: this table ships inside the app and changes only with an app
-// release. wmux never fetches a command (or a list of commands) at runtime;
-// the line the user is shown and confirms is exactly the line typed into the
-// visible pane. Each line is the agent vendor's own documented native
-// installer, copied verbatim (no flag added or removed) from the source URL
-// next to it, checked 2026-10-21. Both install into the user's own folder and
-// need no administrator rights and no Node.js. When an install fails, the card
-// opens `officialPage` instead of trying anything else.
+// SUPPLY CHAIN: the install lines live on the agents' registry rows
+// (src/shared/agentIdentity.ts, `setup.install`), ship inside the app and
+// change only with an app release. wmux never fetches a command (or a list of
+// commands) at runtime; the line the user is shown and confirms is exactly the
+// line typed into the visible pane. Each line is the vendor's own documented
+// native installer, copied verbatim (no flag added or removed) from the source
+// URL next to it. Both install into the user's own folder and need no
+// administrator rights and no Node.js. When an install fails, the card opens
+// `officialPage` instead of trying anything else.
 
+import { agentRow } from './agentIdentity';
 import type { AgentId } from './agentSetup';
 
 /** Which shell the pane runs the line in. */
@@ -33,61 +35,31 @@ export interface AgentInstallMethod {
   requires: readonly string[];
 }
 
-const CLAUDE_PAGE = 'https://code.claude.com/docs/en/setup';
-const CODEX_PAGE = 'https://learn.chatgpt.com/docs/codex/cli';
-
-/** Bundled install lines, by agent and by `posix` (macOS, Linux) / `win32`. */
-export const AGENT_INSTALL_TABLE: Readonly<Record<AgentId, Readonly<Record<'posix' | 'win32', AgentInstallMethod>>>> = {
-  claude: {
-    // Source: https://code.claude.com/docs/en/setup, "Native Install
-    // (Recommended)", macOS, Linux, WSL.
-    posix: {
-      command: 'curl -fsSL https://claude.ai/install.sh | bash',
-      shell: 'user',
-      source: CLAUDE_PAGE,
-      officialPage: CLAUDE_PAGE,
-      requires: ['curl', 'bash'],
-    },
-    // Source: https://code.claude.com/docs/en/setup, "Native Install
-    // (Recommended)", Windows PowerShell ("You do not need to run as
-    // Administrator").
-    win32: {
-      command: 'irm https://claude.ai/install.ps1 | iex',
-      shell: 'powershell',
-      source: CLAUDE_PAGE,
-      officialPage: CLAUDE_PAGE,
-      requires: [],
-    },
-  },
-  codex: {
-    // Source: https://github.com/openai/codex README ("Mac or Linux") and
-    // https://learn.chatgpt.com/docs/codex/cli (macOS/Linux tab).
-    posix: {
-      command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
-      shell: 'user',
-      source: 'https://github.com/openai/codex#readme',
-      officialPage: CODEX_PAGE,
-      requires: ['curl', 'sh'],
-    },
-    // Source: https://github.com/openai/codex README ("Windows"). The
-    // `-ExecutionPolicy ByPass` is the vendor's own text, kept verbatim.
-    win32: {
-      command: 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
-      shell: 'powershell',
-      source: 'https://github.com/openai/codex#readme',
-      officialPage: CODEX_PAGE,
-      requires: [],
-    },
-  },
-};
-
-export function agentInstallMethod(agent: AgentId, platform: NodeJS.Platform): AgentInstallMethod {
-  return AGENT_INSTALL_TABLE[agent][platform === 'win32' ? 'win32' : 'posix'];
+/** The bundled install line for an agent on this platform (from its row). */
+export function agentInstallMethod(agent: AgentId, platform: NodeJS.Platform): AgentInstallMethod | null {
+  const install = agentRow(agent)?.setup?.install;
+  if (!install) return null;
+  const win = platform === 'win32';
+  return {
+    command: win ? install.win32.command : install.posix.command,
+    shell: win ? 'powershell' : 'user',
+    source: install.source,
+    officialPage: install.officialPage,
+    requires: win ? [] : install.posix.requires,
+  };
 }
 
 /** Official install page for an agent (the fallback whenever a command fails). */
-export function agentOfficialPage(agent: AgentId): string {
-  return agent === 'claude' ? CLAUDE_PAGE : CODEX_PAGE;
+export function agentOfficialPage(agent: AgentId): string | null {
+  return agentRow(agent)?.setup?.install.officialPage ?? null;
+}
+
+/** File names a typed path may end in: the binary, its `.exe`, and the npm entrypoints. */
+export function agentExecutableNames(agent: AgentId): string[] {
+  const spec = agentRow(agent)?.setup;
+  if (!spec) return [];
+  const entries = spec.npm.winEntries.map((e) => e[e.length - 1] ?? '').filter(Boolean);
+  return [...new Set([spec.binary, `${spec.binary}.exe`, ...entries].map((n) => n.toLowerCase()))];
 }
 
 /**
@@ -160,9 +132,3 @@ export interface AgentSetupPlan {
 export type SetAgentPathResult =
   | { ok: true }
   | { ok: false; reason: 'not-absolute' | 'not-found' | 'wrong-program' | 'does-not-run' };
-
-/** File names a typed path may end in, per agent (case-insensitive). */
-export const AGENT_EXECUTABLE_NAMES: Readonly<Record<AgentId, readonly string[]>> = {
-  claude: ['claude', 'claude.exe', 'cli.js'],
-  codex: ['codex', 'codex.exe', 'codex.js'],
-};

@@ -144,6 +144,22 @@ export interface AgentSetupSpec {
     | { readonly args: readonly string[]; readonly read: 'exit-code'; readonly signedOutText: string };
   /** Below this version the card says "update recommended" (never forced). */
   readonly updateFloor: string;
+  /**
+   * The vendor's documented native installer, verbatim, with where it was
+   * copied from. Bundled with the app, never fetched (src/shared/agentInstall.ts).
+   * `posix` runs in the user's own shell; `win32` in PowerShell. `requires`
+   * lists programs the line calls that are checked before it is offered.
+   */
+  readonly install: {
+    readonly posix: { readonly command: string; readonly requires: readonly string[] };
+    readonly win32: { readonly command: string };
+    readonly source: string;
+    /** Opened when an install fails or cannot run here. */
+    readonly officialPage: string;
+  };
+  /** The agent's own first-run screens have a guide card
+   *  (src/shared/claudeFirstRun.ts `claudeSetupScreen`). */
+  readonly firstRunScreens?: 'claude';
 }
 
 /**
@@ -268,6 +284,16 @@ export const AGENT_IDENTITIES = [
       // The interrupt / Stop hook findings the hook bridge is built on
       // (src/shared/hooks/interruptKeystroke.ts, HookSignalRouter.ts).
       updateFloor: '2.1.236',
+      // https://code.claude.com/docs/en/setup, "Native Install (Recommended)":
+      // macOS, Linux, WSL / Windows PowerShell ("You do not need to run as
+      // Administrator"). Checked 2026-10-21.
+      install: {
+        posix: { command: 'curl -fsSL https://claude.ai/install.sh | bash', requires: ['curl', 'bash'] },
+        win32: { command: 'irm https://claude.ai/install.ps1 | iex' },
+        source: 'https://code.claude.com/docs/en/setup',
+        officialPage: 'https://code.claude.com/docs/en/setup',
+      },
+      firstRunScreens: 'claude',
     },
   },
   {
@@ -308,6 +334,15 @@ export const AGENT_IDENTITIES = [
       // One background server per account, which pane identity relies on
       // (src/mcp/codexThreadIdentity.ts).
       updateFloor: '0.157.0',
+      // https://github.com/openai/codex README, "Mac or Linux" / "Windows"
+      // (also https://learn.chatgpt.com/docs/codex/cli). `-ExecutionPolicy
+      // ByPass` is the vendor's own text, kept verbatim. Checked 2026-10-21.
+      install: {
+        posix: { command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh', requires: ['curl', 'sh'] },
+        win32: { command: 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"' },
+        source: 'https://github.com/openai/codex#readme',
+        officialPage: 'https://learn.chatgpt.com/docs/codex/cli',
+      },
     },
   },
   {

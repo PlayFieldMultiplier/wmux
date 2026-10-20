@@ -29,6 +29,7 @@ import {
   type InstallFailureKind,
 } from '../../shared/agentInstall';
 import { claudeSetupScreen, type ClaudeSetupScreen } from '../../shared/claudeFirstRun';
+import { agentRow } from '../../shared/agentIdentity';
 import { openTerminalTab } from './accountLogin';
 import { readPtyBufferTail } from './terminalTail';
 import { showWorkspaces } from './showWorkspaces';
@@ -106,8 +107,15 @@ function firstRunApi() {
 
 let inflight: Promise<AgentSetupStatus[] | null> | null = null;
 
-/** Re-read both cards. Concurrent callers share one round of probes. */
-export function refreshAgentStatus(): Promise<AgentSetupStatus[] | null> {
+/**
+ * Re-read both cards. Concurrent callers share one round of probes, unless
+ * `fresh`: then the answer comes from a round that starts after this call
+ * (a run that just ended must not be judged by a probe begun before it did).
+ */
+export function refreshAgentStatus(opts: { fresh?: boolean } = {}): Promise<AgentSetupStatus[] | null> {
+  if (opts.fresh && inflight) {
+    return inflight.then(() => refreshAgentStatus(), () => refreshAgentStatus());
+  }
   if (!inflight) {
     const api = firstRunApi();
     if (!api?.agentStatus) return Promise.resolve(state.statuses);
@@ -192,7 +200,24 @@ function tabStillOpen(workspaceId: string, ptyId: string): boolean {
  * Open the pane and type the line. One run per agent: starting another
  * (Retry, Log in again) ends the watch on the previous one.
  */
-export async function startAgentRun(
+const starting = new Map<AgentId, Promise<AgentRun>>();
+
+export function startAgentRun(
+  agent: AgentId,
+  kind: AgentRunKind,
+  plan: AgentSetupPlan,
+  title: string,
+): Promise<AgentRun> {
+  // One pane at a time per agent: a second click while a tab is being opened
+  // gets that run, not a second tab.
+  const pending = starting.get(agent);
+  if (pending) return pending;
+  const p = openRun(agent, kind, plan, title).finally(() => { starting.delete(agent); });
+  starting.set(agent, p);
+  return p;
+}
+
+async function openRun(
   agent: AgentId,
   kind: AgentRunKind,
   plan: AgentSetupPlan,
@@ -236,7 +261,7 @@ function watch(runId: number, agent: AgentId, kind: AgentRunKind, workspaceId: s
     if (ending) return;
     ending = true;
     stop();
-    const statuses = await refreshAgentStatus();
+    const statuses = await refreshAgentStatus({ fresh: true });
     const status = agentStatusOf(agent, statuses);
     if (runSucceeded(kind, status)) {
       setRun(agent, runId, { phase: 'succeeded', screen: null });
@@ -277,7 +302,7 @@ function watch(runId: number, agent: AgentId, kind: AgentRunKind, workspaceId: s
       void finish(undefined, false);
       return;
     }
-    if (kind === 'login' && agent === 'claude') {
+    if (kind === 'login' && agentRow(agent)?.setup?.firstRunScreens) {
       const screen = claudeSetupScreen(paneText(ptyId));
       if (screen !== (state.runs[agent]?.screen ?? null)) setRun(agent, runId, { screen });
     }
@@ -304,9 +329,12 @@ export function showAgentRunPane(agent: AgentId): boolean {
   const s = useStore.getState();
   const ws = s.workspaces.find((w) => w.id === run.workspaceId);
   const pane = ws && getWorkspaceLeafPanes(ws).find((p) => p.surfaces.some((x) => x.ptyId === run.ptyId));
-  if (!ws || !pane) return false;
+  const surface = pane?.surfaces.find((x) => x.ptyId === run.ptyId);
+  if (!ws || !pane || !surface) return false;
   if (s.activeWorkspaceId !== ws.id) s.setActiveWorkspace(ws.id);
   s.setActivePane(pane.id);
+  // The run's own tab, not whichever tab the pane had in front.
+  s.setActiveSurface(pane.id, surface.id, ws.id);
   showWorkspaces(useStore.getState());
   return true;
 }
@@ -323,6 +351,7 @@ export function clearAgentRun(agent: AgentId): void {
 /** Test seam. */
 export function resetAgentSetupForTests(): void {
   for (const agent of [...watches.keys()]) stopWatch(agent);
+  starting.clear();
   inflight = null;
   state = { statuses: null, checking: false, runs: {} };
 }

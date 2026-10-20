@@ -30,7 +30,7 @@ import type {
 } from '../../shared/firstRun';
 import { AGENT_IDS, type AgentId, type AgentSetupStatus } from '../../shared/agentSetup';
 import {
-  AGENT_EXECUTABLE_NAMES,
+  agentExecutableNames,
   agentInstallMethod,
   agentLoginCommand,
   type AgentSetupPlan,
@@ -118,6 +118,7 @@ export class FirstRunOrchestrator {
    */
   async agentPlan(agent: AgentId): Promise<AgentSetupPlan> {
     const method = agentInstallMethod(agent, process.platform);
+    if (!method) throw new Error(`first-run: no install line for ${agent}`);
     const env = this.agentDetector.probeEnvFor(process.execPath);
     const missing = method.requires.filter((name) => !this.onPath(name, env));
     const executable = this.agentDetector.resolveExecutable(agent);
@@ -142,7 +143,7 @@ export class FirstRunOrchestrator {
     const p = input.trim().replace(/^"(.*)"$/, '$1');
     if (!path.isAbsolute(p)) return { ok: false, reason: 'not-absolute' };
     if (!isExecutableFile(p)) return { ok: false, reason: 'not-found' };
-    if (!AGENT_EXECUTABLE_NAMES[agent].includes(path.basename(p).toLowerCase())) {
+    if (!agentExecutableNames(agent).includes(path.basename(p).toLowerCase())) {
       return { ok: false, reason: 'wrong-program' };
     }
     if ((await this.agentDetector.readVersion(p)) === null) return { ok: false, reason: 'does-not-run' };

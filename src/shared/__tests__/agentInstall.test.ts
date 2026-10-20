@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { AGENT_IDS } from '../agentSetup';
 import {
-  AGENT_INSTALL_TABLE,
+  agentExecutableNames,
   agentInstallMethod,
   agentLoginCommand,
   classifyInstallFailure,
@@ -9,17 +10,19 @@ import {
 describe('bundled install table', () => {
   it('holds the vendors\' documented native installer lines, verbatim', () => {
     // A change here must come with a re-check against the source URL in agentInstall.ts.
-    expect(agentInstallMethod('claude', 'darwin').command).toBe('curl -fsSL https://claude.ai/install.sh | bash');
-    expect(agentInstallMethod('claude', 'linux').command).toBe('curl -fsSL https://claude.ai/install.sh | bash');
-    expect(agentInstallMethod('claude', 'win32').command).toBe('irm https://claude.ai/install.ps1 | iex');
-    expect(agentInstallMethod('codex', 'darwin').command).toBe('curl -fsSL https://chatgpt.com/codex/install.sh | sh');
-    expect(agentInstallMethod('codex', 'win32').command)
+    expect(agentInstallMethod('claude', 'darwin')?.command).toBe('curl -fsSL https://claude.ai/install.sh | bash');
+    expect(agentInstallMethod('claude', 'linux')?.command).toBe('curl -fsSL https://claude.ai/install.sh | bash');
+    expect(agentInstallMethod('claude', 'win32')?.command).toBe('irm https://claude.ai/install.ps1 | iex');
+    expect(agentInstallMethod('codex', 'darwin')?.command).toBe('curl -fsSL https://chatgpt.com/codex/install.sh | sh');
+    expect(agentInstallMethod('codex', 'win32')?.command)
       .toBe('powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"');
-    for (const byOs of Object.values(AGENT_INSTALL_TABLE)) {
-      expect(byOs.win32.shell).toBe('powershell');
-      expect(byOs.posix.shell).toBe('user');
+    for (const agent of AGENT_IDS) {
+      const win = agentInstallMethod(agent, 'win32');
+      const posix = agentInstallMethod(agent, 'darwin');
+      expect(win?.shell).toBe('powershell');
+      expect(posix?.shell).toBe('user');
       // No elevation anywhere: both installers write to the user's folder.
-      expect(`${byOs.win32.command} ${byOs.posix.command}`).not.toMatch(/sudo|runas|-Verb/i);
+      expect(`${win?.command} ${posix?.command}`).not.toMatch(/sudo|runas|-Verb/i);
     }
   });
 });
@@ -40,5 +43,12 @@ describe('classifyInstallFailure', () => {
     expect(classifyInstallFailure('irm : Unable to connect to the remote server')).toBe('network');
     expect(classifyInstallFailure('mkdir: /Users/u/.local/bin: Permission denied')).toBe('permission');
     expect(classifyInstallFailure('Unsupported platform')).toBe('unknown');
+  });
+});
+
+describe('agentExecutableNames', () => {
+  it('accepts the binary, its .exe and the npm entrypoints', () => {
+    expect(agentExecutableNames('claude')).toEqual(['claude', 'claude.exe', 'cli.js']);
+    expect(agentExecutableNames('codex')).toEqual(['codex', 'codex.exe', 'codex.js']);
   });
 });

@@ -11,6 +11,7 @@ import {
   RUN_TICK_MS,
   DETECT_EVERY_TICKS,
   scanCommandEnd,
+  showAgentRunPane,
   startAgentRun,
 } from '../agentSetupRuns';
 import type { AgentSetupStatus } from '../../../shared/agentSetup';
@@ -48,6 +49,7 @@ function setup() {
     paneGate: 'ready', activeWorkspaceId: 'ws-1', workspaces: [ws], startupDirectory: '', defaultShell: '',
     addSurface: vi.fn((_p: string, ptyId: string) => { surfaces.push({ id: 'surf-setup', ptyId }); }),
     updateSurfaceTitle: vi.fn(), setActivePane: vi.fn(), setSettingsPanelVisible: vi.fn(), pushToast: vi.fn(),
+    setActiveWorkspace: vi.fn(), setActiveSurface: vi.fn(),
   };
   const agentStatus = vi.fn(async () => current);
   (globalThis as unknown as { window: unknown }).window = { electronAPI: { pty, firstRun: { agentStatus } } };
@@ -59,7 +61,7 @@ function setup() {
   };
 }
 
-const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
 describe('scanCommandEnd', () => {
   it('ignores the first prompt\'s command-end and reads the exit after a command start', () => {
@@ -133,6 +135,39 @@ describe('startAgentRun', () => {
     release();
     await flush();
     expect(getAgentSetupState().runs.claude).toMatchObject({ id: second.id, phase: 'running' });
+  });
+
+  it('a second click while the tab is opening gets the same run, not a second tab', async () => {
+    const h = setup();
+    const [a, b] = await Promise.all([
+      startAgentRun('claude', 'install', plan, 'Install Claude Code'),
+      startAgentRun('claude', 'install', plan, 'Install Claude Code'),
+    ]);
+    expect(h.pty.create).toHaveBeenCalledTimes(1);
+    expect(a.id).toBe(b.id);
+  });
+
+  it('judges a finished install by a detection round that started after it finished', async () => {
+    const h = setup();
+    await startAgentRun('claude', 'install', plan, 'Install Claude Code');
+    // A poll starts while the installer is still running and answers late.
+    let release: () => void = () => undefined;
+    h.agentStatus.mockImplementationOnce(() => new Promise((r) => { release = () => r(status('not-installed')); }));
+    await vi.advanceTimersByTimeAsync(RUN_TICK_MS * DETECT_EVERY_TICKS);
+    h.setStatus(status('login-needed'));
+    h.data(`${C}${D(0)}`);
+    release();
+    await flush();
+    await flush();
+    expect(getAgentSetupState().runs.claude?.phase).toBe('succeeded');
+  });
+
+  it('"View log" brings the run\'s own tab to the front', async () => {
+    setup();
+    await startAgentRun('claude', 'install', plan, 'Install Claude Code');
+    expect(showAgentRunPane('claude')).toBe(true);
+    const st = store.state as Record<string, ReturnType<typeof vi.fn>>;
+    expect(st.setActiveSurface).toHaveBeenCalledWith('pane-1', 'surf-setup', 'ws-1');
   });
 
   it('says "not found" when the installer finished but detection still misses it', async () => {
