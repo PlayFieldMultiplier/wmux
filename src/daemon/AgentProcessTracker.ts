@@ -993,11 +993,16 @@ export class AgentProcessTracker {
     if (entries.length === 0) return [];
     const table = await this.snapshot();
     const left = entries.filter((e) => table.some((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline));
-    // A tree read's root found gone is that tracked agent gone, while the
-    // session still tracks that same launch (not one armed since).
+    // A tree read's root found gone is that tracked agent gone: the launch
+    // the read was made for, or one tracked since on the same pid when no
+    // process holds that pid any more (a re-probe of the same agent). A
+    // process that took the pid since is another launch, left to its watch.
     for (const e of entries) {
       const tracked = this.treeRoots.get(e);
-      if (tracked && !left.includes(e) && this.states.get(tracked.sessionId) === tracked.state) this.recordDeath(tracked.sessionId, tracked.state);
+      if (!tracked || left.includes(e)) continue;
+      const cur = this.states.get(tracked.sessionId);
+      if (!cur || cur.wsl) continue;
+      if (cur === tracked.state || (cur.pid === e.pid && !table.some((t) => t.pid === e.pid))) this.recordDeath(tracked.sessionId, cur);
     }
     return left;
   }

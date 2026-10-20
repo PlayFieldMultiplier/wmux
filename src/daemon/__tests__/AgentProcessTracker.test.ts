@@ -332,6 +332,23 @@ describe('AgentProcessTracker', () => {
     expect(watcher.watches.get('agent:s1')?.pid).toBe(300);
   });
 
+  it('a re-probe of the same agent after the tree read still takes the confirmed death', async () => {
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    const root = (await tracker.agentProcessTree('s1', 'claude'))?.root;
+    // A conflicting banner forces a probe that picks the same process again.
+    tracker.rearm('s1', SHELL);
+    await flush();
+    expect(watcher.watches.get('agent:s1')?.pid).toBe(200);
+    table = [];
+    expect(await tracker.stillRunning(root ? [root] : [])).toEqual([]);
+    expect(tracker.statusFor('s1')).toBe(false);
+    expect(watcher.watches.has('agent:s1')).toBe(false);
+  });
+
   it('a tree read that no longer finds the tracked agent records its death edge', async () => {
     const watcher = makeWatcher();
     let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
