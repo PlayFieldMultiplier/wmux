@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolvePtyIdsToClear } from '../reconcileWithReQuery';
+import { holdsSuspendedSession, resolvePtyIdsToClear } from '../reconcileWithReQuery';
 
 // RCA A1/A9 partial-list reconcile guard. The bug: a single partial daemon
 // snapshot (mid-rehydrate) caused the reconcile to clear a live ptyId on the
@@ -65,5 +65,18 @@ describe('resolvePtyIdsToClear (RCA A1/A9 partial-list 2-strike guard)', () => {
     const toClear = await resolvePtyIdsToClear(['pty-1'], { reList, sleep, isCurrent: () => alive, log: noLog });
     expect(toClear.size).toBe(0);
     expect(reList).not.toHaveBeenCalled();
+  });
+});
+
+// #2398 — the startup reconcile promoted every suspended session it found,
+// on screen or not: a spawn per hidden pane at boot.
+describe('holdsSuspendedSession', () => {
+  it('holds a hidden pane’s suspended session (neither promoted nor cleared)', () => {
+    expect(holdsSuspendedSession({ shown: false, stashed: false })).toBe(true);
+  });
+
+  it('promotes a shown pane’s, and a stashed pane’s as before', () => {
+    expect(holdsSuspendedSession({ shown: true, stashed: false })).toBe(false);
+    expect(holdsSuspendedSession({ shown: false, stashed: true })).toBe(false);
   });
 });

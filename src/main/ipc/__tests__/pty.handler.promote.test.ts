@@ -64,7 +64,7 @@ describe('pty.handler PTY_PROMOTE — renderer→daemon hop', () => {
 
   it('carries the same code out of the reconnect path, where the banner is actually raised', () => {
     const start = source.indexOf("ipcMain.handle(IPC.PTY_RECONNECT");
-    const region = source.slice(start, start + 2500);
+    const region = source.slice(start, start + 3500);
     expect(region).toMatch(/recoveryPending: true[\s\S]*?cwdMissing: result\.error\?\.code === 'CWD_MISSING'/);
   });
 
@@ -221,5 +221,38 @@ describe('daemon.promoteSession — guards', () => {
     // (`reply` only wraps it when the caller asks `withRecovery`, #2393).
     expect(region).toMatch(/return reply\(activeSessions\);/);
     expect(region).toMatch(/withRecovery \? \{ sessions, recoveryDone: [^}]+\} : sessions/);
+  });
+});
+
+// #2398 — a hidden pane attaches without promoting: its suspended session is a
+// spawn, and a cold start with many restored workspaces spawned one per pane
+// nobody had opened. The pane promotes it when first shown.
+describe('attach without promote (#2398)', () => {
+  const handler = readSourceText(path.join(__dirname, '..', 'handlers', 'pty.handler.ts'));
+  const daemon = readSourceText(path.join(srcRoot, 'daemon', 'index.ts'));
+
+  it('pty:reconnect answers a suspended session deferred, before any promote, when asked not to promote', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 4000);
+    expect(region).toMatch(/opts\?: \{ promote\?: boolean \}/);
+    const deferAt = region.indexOf('if (opts?.promote === false)');
+    const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
+    expect(deferAt).toBeGreaterThan(region.indexOf("session.state === 'suspended'"));
+    expect(deferAt).toBeLessThan(promoteAt);
+    expect(region.slice(deferAt, promoteAt)).toMatch(/return \{ success: false, deferred: true \}/);
+  });
+
+  it('daemon.attachSession leaves a pending recovery pending with promote:false', () => {
+    const start = daemon.indexOf("pipeServer.onRpc('daemon.attachSession'");
+    const region = daemon.slice(start, start + 1200);
+    const deferAt = region.indexOf('if (p.promote === false) return');
+    expect(deferAt).toBeGreaterThan(0);
+    expect(deferAt).toBeLessThan(region.indexOf('promoteOnce(p.id)'));
+  });
+
+  it('the boot-time WSL background promote starts only exec units and supervised sessions', () => {
+    const start = daemon.indexOf('// Defer cold WSL starts until RPC registration');
+    const region = daemon.slice(start, start + 1500);
+    expect(region).toMatch(/recoversInBackground\(placeholder\)/);
   });
 });

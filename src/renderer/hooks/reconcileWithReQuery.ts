@@ -95,3 +95,19 @@ export async function resolvePtyIdsToClear(
   );
   return toClear;
 }
+
+/**
+ * #2398 — whether the reconcile holds a suspended session (cap-skipped, or a
+ * WSL placeholder) instead of promoting it: one on a pane nobody is looking
+ * at is neither promoted (that is a spawn per hidden pane at boot) nor
+ * cleared; its pane attaches without promoting and promotes it when first
+ * shown. A shown pane's, and a stashed pane's as before, is promoted.
+ */
+export function holdsSuspendedSession(candidate: {
+  /** In the workspace's stash, not its visible tree. */
+  stashed: boolean;
+  /** On screen in the sense that starts a shell (stores/selectors/surfaceShown.ts). */
+  shown: boolean;
+}): boolean {
+  return !candidate.shown && !candidate.stashed;
+}

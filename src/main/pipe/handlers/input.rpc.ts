@@ -1253,6 +1253,23 @@ export function registerInputRpc(
         ].filter((ws) => typeof ws === 'string' && ws.length > 0 && ws !== owner),
   });
 
+  /**
+   * #2398 — a daemon session with no session pipe here may be one its hidden
+   * pane attached without promoting (left suspended until shown). A raw write
+   * starts it first (owner decision §6-6); asked only after the caller's
+   * access to the pty was checked. Any other pty is left as it is.
+   */
+  const startIfSuspended = async (method: string, ptyId: string): Promise<void> => {
+    if (ptyManager.get(ptyId)) return;
+    const dc = getDaemonClient?.();
+    // Only on a positive "no pipe": a client that cannot say leaves it as is.
+    if (!dc?.isConnected || dc.isSessionPipeWritable?.(ptyId) !== false) return;
+    const res = await sendToRenderer(getWindow, 'surface.ensurePty', { ptyId }, { timeoutMs: ENSURE_PTY_TIMEOUT_MS });
+    if (res !== null && typeof res === 'object' && typeof (res as Record<string, unknown>)['error'] === 'string') {
+      throw new Error(`${method}: ${(res as Record<string, string>)['error']}`);
+    }
+  };
+
   /** The untrusted label, only on a pane reached through the owner lane. */
   const untrustedLabel = (access: PtyAccess): Record<string, unknown> =>
     access.lane === 'task-owner' ? { untrusted: true, untrustedNote: TASK_PANE_UNTRUSTED_NOTE } : {};
@@ -1299,6 +1316,7 @@ export function registerInputRpc(
       'input.send',
       taskOwnerLane(params, ctx),
     );
+    await startIfSuspended('input.send', ptyId);
 
     if (access.lane === 'task-owner') {
       const refusal = taskPaneTextRefusal(text, params['raw'] === true);
@@ -1581,6 +1599,7 @@ export function registerInputRpc(
       'input.sendKey',
       APPROVAL_BLOCK_EXEMPT_KEYS.has(key) ? taskOwnerLane(params, ctx) : undefined,
     );
+    await startIfSuspended('input.sendKey', ptyId);
 
     // Ctrl+D arrives here as its escape sequence, so the same guard applies.
     assertNotKillingAGateHeldPane(

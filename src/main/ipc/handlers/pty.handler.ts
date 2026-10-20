@@ -1484,7 +1484,7 @@ export function registerPTYHandlers(
       return { success: false, error: res.error?.message ?? 'promote failed', cwdMissing: res.error?.code === 'CWD_MISSING' };
     }));
 
-    ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string) => {
+    ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string, opts?: { promote?: boolean }) => {
       try {
         // #2398 — a cap-skipped session lives only in sessions.json, which
         // includeSuspended parses on the daemon thread: only an id the live
@@ -1522,6 +1522,13 @@ export function registerPTYHandlers(
         }
 
         if (session.state === 'suspended') {
+          // #2398 — a hidden pane attaches without promoting: its suspended
+          // session (cap-skipped, or a WSL placeholder) starts when the pane
+          // is first shown, which reattaches with promote. The id is kept.
+          if (opts?.promote === false) {
+            console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, pane hidden)`);
+            return { success: false, deferred: true };
+          }
           try {
             const result = await daemonClient.rpc('daemon.promoteSession', { id }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; error?: { code?: string; message: string } };
             // #1305 — carry WHY it stayed pending, not just that it did. The

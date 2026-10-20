@@ -21,7 +21,8 @@ export type PtyCreateAttempt =
  * - `bound`: the daemon holds the pty.
  * - `unconfirmed`: a binding kept although it could not be checked
  *   (reconcile timeout, reconnect exhaustion, rate limiting).
- * - `deferred`: blank, nothing in flight.
+ * - `deferred`: not started: blank with nothing in flight, or bound to a
+ *   suspended session a hidden pane attached without promoting.
  * - `creating`: one create in flight.
  * - `createFailed`: the create was refused.
  */
@@ -37,6 +38,11 @@ export interface PtyLifecycleSlice {
   ptyUnconfirmedById: Record<string, number>;
   /** The sequence number the latest mark took (0 before any). */
   ptyUnconfirmedSeq: number;
+  /**
+   * #2398 — bound ptys whose suspended session a hidden pane attached without
+   * promoting: not started, and not dead. Promoted when the pane is first shown.
+   */
+  ptyDeferredById: Record<string, true>;
   /** Set or clear (null) one key's create attempt. */
   setPtyCreateAttempt: (key: string, attempt: PtyCreateAttempt | null) => void;
   /**
@@ -47,15 +53,20 @@ export interface PtyLifecycleSlice {
    * never saw — wins.
    */
   setPtysUnconfirmed: (ptyIds: Iterable<string>, unconfirmed: boolean, opts?: { markedAtOrBefore?: number }) => void;
+  /** Mark a bound pty's session deferred (attached without promote), or not. */
+  setPtyDeferred: (ptyId: string, deferred: boolean) => void;
 }
 
 /** One surface's lifecycle state, from its create key and its bound ptyId. */
 export function surfacePtyLifecycle(
-  state: Pick<PtyLifecycleSlice, 'ptyCreateByKey' | 'ptyUnconfirmedById'>,
+  state: Pick<PtyLifecycleSlice, 'ptyCreateByKey' | 'ptyUnconfirmedById'> & Partial<Pick<PtyLifecycleSlice, 'ptyDeferredById'>>,
   key: string,
   ptyId: string | null | undefined,
 ): SurfacePtyLifecycle {
-  if (ptyId) return state.ptyUnconfirmedById?.[ptyId] ? 'unconfirmed' : 'bound';
+  if (ptyId) {
+    if (state.ptyUnconfirmedById?.[ptyId]) return 'unconfirmed';
+    return state.ptyDeferredById?.[ptyId] ? 'deferred' : 'bound';
+  }
   return state.ptyCreateByKey?.[key]?.state ?? 'deferred';
 }
 
@@ -68,6 +79,7 @@ export const createPtyLifecycleSlice: StateCreator<
   ptyCreateByKey: {},
   ptyUnconfirmedById: {},
   ptyUnconfirmedSeq: 0,
+  ptyDeferredById: {},
 
   setPtyCreateAttempt: (key, attempt) => {
     const current = get().ptyCreateByKey[key];
@@ -89,6 +101,14 @@ export const createPtyLifecycleSlice: StateCreator<
         if (unconfirmed) draft.ptyUnconfirmedById[id] = ++draft.ptyUnconfirmedSeq;
         else delete draft.ptyUnconfirmedById[id];
       }
+    });
+  },
+
+  setPtyDeferred: (ptyId, deferred) => {
+    if (!ptyId || !!get().ptyDeferredById[ptyId] === deferred) return;
+    set((draft: StoreState) => {
+      if (deferred) draft.ptyDeferredById[ptyId] = true;
+      else delete draft.ptyDeferredById[ptyId];
     });
   },
 });

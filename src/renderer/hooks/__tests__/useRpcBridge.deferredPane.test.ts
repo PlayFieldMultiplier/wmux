@@ -60,6 +60,7 @@ beforeEach(() => {
     activeWorkspaceId: SENDER.id,
     paneGate: 'ready',
     ptyCreateByKey: {},
+    ptyDeferredById: {},
     defaultShell: '',
     startupDirectory: '',
   });
@@ -120,6 +121,35 @@ describe('agent deliveries to a pane that has not started', () => {
   it('an A2A send addressed to it says its terminal has not started', async () => {
     const result = await handleRpcMethod('a2a.task.send', { workspaceId: SENDER.id, to: TARGET.id, message: 'hello', paneId: 'pane-blank' }) as { error?: string };
     expect(result.error).toMatch(/has not started yet/);
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
+// A pane bound to a suspended session its hidden pane attached without
+// promoting (pty.reconnect answered `deferred`) is not started either.
+describe('a bound pane whose suspended session was left suspended', () => {
+  beforeEach(() => {
+    const ws = useStore.getState().workspaces;
+    const root = ws[1].rootPane as unknown as { children: PaneLeaf[] };
+    root.children[0].surfaces[0].ptyId = 'pty-2398-suspended';
+    useStore.setState({ workspaces: [...ws], ptyDeferredById: { 'pty-2398-suspended': true } });
+  });
+
+  it('reads as deferred, by the active pane and by its ptyId', async () => {
+    expect(await handleRpcMethod('input.readScreen', { workspaceId: TARGET.id }))
+      .toEqual({ ptyId: 'pty-2398-suspended', text: '', deferred: true, deferredSurfaceId: 'surf-pane-blank' });
+    expect(await handleRpcMethod('input.readScreen', { workspaceId: TARGET.id, ptyId: 'pty-2398-suspended' }))
+      .toEqual({ ptyId: 'pty-2398-suspended', text: '', deferred: true });
+    const rows = await handleRpcMethod('pane.list', { workspaceId: TARGET.id }) as Array<{ id: string; deferred?: boolean }>;
+    expect(rows.find((r) => r.id === 'pane-blank')?.deferred).toBe(true);
+  });
+
+  it('a raw write starts it: promoted and attached, then answered', async () => {
+    const reconnect = vi.fn(async () => ({ success: true }));
+    (window.electronAPI.pty as unknown as { reconnect: typeof reconnect }).reconnect = reconnect;
+    expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-suspended' })).toEqual({ ptyId: 'pty-2398-suspended' });
+    expect(reconnect).toHaveBeenCalledWith('pty-2398-suspended', { promote: true });
+    expect(useStore.getState().ptyDeferredById['pty-2398-suspended']).toBeUndefined();
     expect(create).not.toHaveBeenCalled();
   });
 });

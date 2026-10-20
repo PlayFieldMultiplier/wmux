@@ -65,16 +65,17 @@ export function resumesOnStart(recovery: DeadPaneRecovery | undefined, resumeOnS
   return resumeOnStart && !!recovery?.resumeAgent && AUTO_RESUME_AGENTS.has(recovery.resumeAgent);
 }
 
-type DeferredState = Pick<StoreState, 'ptyCreateByKey' | 'ptyUnconfirmedById'>;
+type DeferredState = Pick<StoreState, 'ptyCreateByKey' | 'ptyUnconfirmedById'> & Partial<Pick<StoreState, 'ptyDeferredById'>>;
 
 /**
- * A local terminal surface whose shell has not started: no pty, and no create
- * in flight or refused. Not running, and not dead — agents and RPC reads see
- * it as such (`deferred: true`), and only showing it or a raw terminal write
+ * A local terminal surface whose shell has not started: no pty and no create
+ * in flight or refused, or a suspended session its hidden pane attached
+ * without promoting. Not running, and not dead — agents and RPC reads see it
+ * as such (`deferred: true`), and only showing it or a raw terminal write
  * starts it.
  */
 export function isSurfaceDeferred(state: DeferredState, surface: Pick<PaneLeaf['surfaces'][number], 'id' | 'ptyId' | 'surfaceType'>): boolean {
-  return isTerminalSurfaceType(surface.surfaceType) && !surface.ptyId
+  return isTerminalSurfaceType(surface.surfaceType)
     && surfacePtyLifecycle(state, surface.id, surface.ptyId) === 'deferred';
 }
 

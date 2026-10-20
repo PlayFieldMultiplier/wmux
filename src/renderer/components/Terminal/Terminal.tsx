@@ -85,7 +85,9 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
   // so. A Terminal outside a workspace surface (the floating pane, the deck's
   // embed) has nothing to wait for.
   const surfaceShown = useStore((s) => !ownerSurfaceId || !ownerWorkspaceId || isSurfaceShown(s, ownerWorkspaceId, ownerSurfaceId));
-  const notStarted = !externalPtyId && !createAttempt && !surfaceShown;
+  // Bound to a suspended session left suspended while hidden: not started either.
+  const sessionDeferred = useStore((s) => (externalPtyId ? Boolean(s.ptyDeferredById?.[externalPtyId]) : false));
+  const notStarted = !surfaceShown && (externalPtyId ? sessionDeferred : !createAttempt);
   // The create effect's input: constant while bound, so a bound pane's
   // visibility changes never re-run it.
   const startAllowed = !!externalPtyId || surfaceShown;
@@ -300,7 +302,10 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
     // there the key stays a pane byte rather than dying between the two
     // gates (#1280 review).
     ownsComposeShortcut: true,
-    fixedGeometry });
+    fixedGeometry,
+    // #2398 — a hidden pane's reattach leaves a suspended session suspended;
+    // the first show promotes it.
+    surfaceShown });
 
   // terminalInstance (state, #1256) — not terminalRef.current (a render-time
   // snapshot): the ref is populated after this render ran, so a snapshot read

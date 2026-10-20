@@ -103,3 +103,39 @@ describe('a raw write to a pane that has not started (#2398)', () => {
     expect(ensureCalls()).toHaveLength(0);
   });
 });
+
+// A pane bound to a suspended session its hidden pane attached without
+// promoting has no session pipe here: a raw write by ptyId starts it first,
+// after the access check, through the renderer (which owns the reattach).
+describe('a raw write by ptyId to a session left suspended (#2398)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function setupDaemon(writable: boolean) {
+    const writeToSession = vi.fn(() => true);
+    const dc = { isConnected: true, isSessionPipeWritable: vi.fn(() => writable), writeToSession };
+    const pty = { get: vi.fn(() => undefined), write: vi.fn() } as unknown as PTYManager;
+    const router = new RpcRouter();
+    registerInputRpc(router, pty, () => fakeWindow, () => dc as never);
+    return { router, writeToSession };
+  }
+
+  it('asks the renderer to start it, after the ownership check, then sends the key', async () => {
+    renderer(() => ({ ptyId: 'pty-suspended' }));
+    const { router, writeToSession } = setupDaemon(false);
+    const res = await router.dispatch({ id: '8', method: 'input.sendKey', params: { key: 'ctrl+l', ptyId: 'pty-suspended', workspaceId: 'ws-ext' } });
+    expect(res.ok).toBe(true);
+    const methods = sendToRendererMock.mock.calls.map((c: unknown[]) => c[1]);
+    expect(methods.indexOf('input.findOwnerWorkspace')).toBeLessThan(methods.indexOf('surface.ensurePty'));
+    expect(ensureCalls()[0][2]).toEqual({ ptyId: 'pty-suspended' });
+    expect(writeToSession).toHaveBeenCalledWith('pty-suspended', '\x0c');
+  });
+
+  it('a session with a live pipe is written as before, with no renderer start', async () => {
+    renderer();
+    const { router, writeToSession } = setupDaemon(true);
+    const res = await router.dispatch({ id: '9', method: 'input.sendKey', params: { key: 'ctrl+l', ptyId: 'pty-live', workspaceId: 'ws-ext' } });
+    expect(res.ok).toBe(true);
+    expect(ensureCalls()).toHaveLength(0);
+    expect(writeToSession).toHaveBeenCalledWith('pty-live', '\x0c');
+  });
+});

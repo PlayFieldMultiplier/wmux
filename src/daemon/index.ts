@@ -2933,8 +2933,11 @@ function registerRpcHandlers(
 
   // daemon.attachSession
   pipeServer.onRpc('daemon.attachSession', async (params) => {
-    const p = params as unknown as DaemonSessionIdParams;
+    const p = params as unknown as DaemonSessionIdParams & { promote?: boolean };
     if (sessionManager.getPendingRecovery(p.id)) {
+      // #2398 — `promote: false` (a pane not on screen) leaves a pending
+      // recovery pending: nothing is spawned until the pane is shown.
+      if (p.promote === false) return { ok: false, pending: true };
       touchPendingRecovery(p.id);
       const result = await promoteOnce(p.id);
       if (!result.ok) throw new Error(result.error?.message || 'WSL recovery failed; retry after checking the target');

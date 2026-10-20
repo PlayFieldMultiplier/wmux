@@ -252,3 +252,35 @@ describe('reconnectPtyWithRetry — an unconfirmed binding reported gone (#2398)
     expect(clearPtyId).toHaveBeenCalledWith('pty-kept', undefined);
   });
 });
+
+// #2398 — a hidden pane asks without promote; a suspended session answers
+// `deferred`. That is an answer, not a failure: the id is kept and nothing
+// enters the back-off (which would spend the whole schedule per hidden pane
+// and end every one of them exhausted).
+describe('reconnectPtyWithRetry — a deferred answer (#2398)', () => {
+  it('keeps the id, marks it deferred, and neither retries nor sleeps', async () => {
+    const clearPtyId = vi.fn();
+    const sleep = vi.fn(noSleep);
+    const setDeferred = vi.fn();
+    const setUnconfirmed = vi.fn();
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: false, deferred: true }));
+    const got = await reconnectPtyWithRetry('pty-suspended', alwaysCurrent, {
+      reconnect, clearPtyId, sleep, log: noLog, setDeferred, setUnconfirmed, onRecoveryError,
+    });
+    expect(got).toBeNull();
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(clearPtyId).not.toHaveBeenCalled();
+    expect(setDeferred).toHaveBeenCalledWith('pty-suspended', true);
+    expect(setUnconfirmed).toHaveBeenCalledWith('pty-suspended', false);
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { deferred: true });
+  });
+
+  it('a later attach clears the deferred mark', async () => {
+    const setDeferred = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: true }));
+    await reconnectPtyWithRetry('pty-suspended', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), sleep: noSleep, log: noLog, setDeferred });
+    expect(setDeferred).toHaveBeenCalledWith('pty-suspended', false);
+  });
+});

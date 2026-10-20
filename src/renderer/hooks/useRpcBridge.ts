@@ -46,7 +46,7 @@ import {
   handleBrowserTabsRpc,
 } from '../utils/browserTabs';
 import { terminalRegistry, hydrateTerminalForRead } from './useTerminal';
-import { ensureSurfacePty } from './surfacePtyCreate';
+import { ensurePtyStarted, ensureSurfacePty } from './surfacePtyCreate';
 import { isPaneDeferred, isSurfaceDeferred } from '../stores/selectors/surfaceShown';
 import { readPtyBufferLines, readPtyBufferTail, rowsBelowCursor, DEFAULT_READ_TAIL_LINES } from '../utils/terminalTail';
 import { terminalReadCoverage } from '../../shared/terminalReadCoverage';
@@ -2618,8 +2618,11 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // #2398 (owner decision §6-6) — main asks this before a raw terminal write
     // (input.send / input.sendKey) to a pane whose shell has not started:
     // start it, then answer its ptyId. Reads never come here.
+    // By ptyId (main, after its access check on an explicit target): a pty
+    // left suspended while its pane is hidden is promoted first.
+    if (typeof params.ptyId === 'string' && params.ptyId.length > 0) return ensurePtyStarted(params.ptyId);
     const surfaceId = typeof params.surfaceId === 'string' ? params.surfaceId : '';
-    if (!surfaceId) return { error: 'surface.ensurePty: surfaceId is required' };
+    if (!surfaceId) return { error: 'surface.ensurePty: surfaceId or ptyId is required' };
     const workspaceId = typeof params.workspaceId === 'string' && params.workspaceId.length > 0 ? params.workspaceId : undefined;
     return ensureSurfacePty(surfaceId, workspaceId);
   }
@@ -2644,11 +2647,11 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
           );
           ptyId = surface?.ptyId ?? null;
           // #2398 — a terminal whose shell has not started (its pane was never
-          // shown) is not running, and it is not dead either. A read never
-          // starts it; a raw write does (main's input.send, via
-          // surface.ensurePty with this surface id).
-          if (!ptyId && surface && isSurfaceDeferred(store, surface)) {
-            return { ptyId: '', text: '', deferred: true, deferredSurfaceId: surface.id };
+          // shown, or its suspended session was left suspended while hidden)
+          // is not running, and it is not dead either. A read never starts
+          // it; a raw write does (main's input.send, via surface.ensurePty).
+          if (surface && isSurfaceDeferred(store, surface)) {
+            return { ptyId: surface.ptyId || '', text: '', deferred: true, deferredSurfaceId: surface.id };
           }
         }
       }
@@ -2694,6 +2697,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       const screenRows = Array.from({ length: rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '');
       return { ptyId, approvalScreen: true, rows: screenRows, cols, rowCount: rows };
     }
+    // #2398 — a suspended session its hidden pane attached without promoting
+    // has no screen to read yet: not running, and not dead.
+    if (store.ptyDeferredById?.[ptyId]) return { ptyId, text: '', deferred: true };
     if (!terminal) {
       // Cold-park fallback (TASK-9): the pane's terminal is unmounted (parked).
       // Read its grid from the daemon ring instead of returning empty — an agent

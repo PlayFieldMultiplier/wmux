@@ -36,6 +36,11 @@ export interface ReconnectResult {
    */
   cwdMissing?: boolean;
   recovery?: DeadPaneRecovery;
+  /**
+   * #2398 — asked without promote (the pane is hidden) and the session is
+   * suspended: it stays suspended and the id is kept until the pane is shown.
+   */
+  deferred?: boolean;
   /** The session's stored PTY geometry, reported on success. */
   cols?: number;
   rows?: number;
@@ -49,6 +54,8 @@ export interface ReconnectSettleInfo {
   unconfirmed?: boolean;
   /** The daemon no longer has the id; a reconcile decides rebind or clear (#2398). */
   awaitingReconcile?: boolean;
+  /** Suspended and not promoted while the pane is hidden (#2398); first show promotes. */
+  deferred?: boolean;
 }
 
 export interface ReconnectDeps {
@@ -74,6 +81,8 @@ export interface ReconnectDeps {
    * requester registered), and the caller then clears as before.
    */
   requestReconcile?: (reason: string) => boolean;
+  /** #2398 — record whether the bound session was left suspended (deferred). */
+  setDeferred?: (id: string, deferred: boolean) => void;
   /** Sleep between retries. Injectable so tests don't wait real time. */
   sleep?: (ms: number) => Promise<void>;
   /** Optional structured logger. Defaults to console. */
@@ -130,6 +139,7 @@ export async function reconnectPtyWithRetry(
       // nothing: its geometry must not resize the terminal current now.
       if (!isCurrent()) return null;
       deps.setUnconfirmed?.(ptyId, false);
+      deps.setDeferred?.(ptyId, false);
       deps.onRecoveryError?.(null);
       return result.cols && result.rows ? { cols: result.cols, rows: result.rows } : null;
     }
@@ -141,6 +151,18 @@ export async function reconnectPtyWithRetry(
         );
       }
       return null; // Keep the original id, binding and scrollback. Retry is explicit.
+    }
+    if (result?.deferred) {
+      // #2398 — a hidden pane's suspended session, left suspended on purpose:
+      // an answer, not a failure. Keep the id, never enter the back-off, and
+      // let the pane's first show reattach with promote.
+      if (isCurrent()) {
+        // The daemon holds it, so a binding kept unconfirmed is confirmed.
+        deps.setUnconfirmed?.(ptyId, false);
+        deps.setDeferred?.(ptyId, true);
+        deps.onRecoveryError?.(null, { deferred: true });
+      }
+      return null;
     }
     lastErr = result?.error ?? '<no error>';
     // #2398 — an unconfirmed binding was kept through a failed startup
@@ -160,7 +182,10 @@ export async function reconnectPtyWithRetry(
     // Permanent failure (daemon says the session is dead): clear now, no retry.
     if (result?.transient === false) {
       log('warn', `[useTerminal] pty.reconnect ${ptyId} permanent failure (${lastErr}) — clearing ptyId for self-create`);
-      if (isCurrent()) deps.clearPtyId(ptyId, result.recovery);
+      if (isCurrent()) {
+        deps.setDeferred?.(ptyId, false);
+        deps.clearPtyId(ptyId, result.recovery);
+      }
       return null;
     }
     if (isRateLimitedError(lastErr)) rateLimited = true;
