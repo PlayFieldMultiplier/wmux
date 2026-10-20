@@ -25,12 +25,14 @@
 // wake queue, and publishes the singletons the other factory modules use
 // (getBotDirectory, getWakeQueue, getBotRuntime, getFactorySettings).
 
+import path from 'node:path';
 import type { RpcContext, RpcMethod } from '../../../shared/rpc';
 import { BOT_EVENT, BOT_ID_RE, BOT_IDENTITY_SLOTS, BOT_JOB_MAX, BOT_RPC, type BotProfile, type BotStatus } from '../../../shared/bot';
 import type { FactoryRefusal } from '../../../shared/botSurface';
 import { parseThreadId, type ThreadId } from '../../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryRouter } from '../../factory/factoryHost';
 import { BotStore, botsFilePath, setBotStore } from '../../factory/botStore';
+import { GuestWorkspaceStore, expectGuestWorkspaces, guestWorkspacesPath, setGuestWorkspaceStore } from '../../factory/guestWorkspaces';
 import { WakeQueue, wakeQueuePath, setWakeQueue } from '../../factory/wakeQueue';
 import { FactorySettingsStore, factorySettingsPath, onFactorySettingsChanged, setFactorySettingsStore } from '../../factory/factorySettings';
 import { BotRuntime, BotSessionStore, botSessionsPath, setBotRuntime } from '../../factory/BotRuntime';
@@ -52,7 +54,7 @@ import { getWakeTaint, guestGateProvenance, type GuestProvenance, type WakeTaint
 import { conversationBotIds } from '../../factory/guestMessage';
 import type { Handoff } from '../../../shared/handoff';
 import type { WakeItem } from '../../../shared/wake';
-import { getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread, wakeReplyTo } from '../../factory/roomWriter';
+import { ROOMS_DIRNAME, getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread, wakeReplyTo } from '../../factory/roomWriter';
 import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
 import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 
@@ -500,6 +502,12 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       const wmuxDir = deps.wmuxDir();
       const settings = new FactorySettingsStore(factorySettingsPath(wmuxDir));
       settings.load();
+      // The guest workspaces first: the bot store's load checks its bots
+      // against them, and every check reads 'unknown' until they are set.
+      expectGuestWorkspaces();
+      const guestWorkspaces = new GuestWorkspaceStore({ file: guestWorkspacesPath(wmuxDir), roomsDir: path.join(wmuxDir, 'factory', ROOMS_DIRNAME) });
+      guestWorkspaces.load();
+      setGuestWorkspaceStore(guestWorkspaces);
       const store = new BotStore(botsFilePath(wmuxDir), { defaultEngine: () => runnableDefaultEngine(settings.get().defaultEngine) });
       store.load();
       const sessions = new BotSessionStore(botSessionsPath(wmuxDir));
@@ -642,6 +650,7 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       setHeldFanouts(null);
       setWakeQueue(null);
       setBotStore(null);
+      setGuestWorkspaceStore(null);
       setFactorySettingsStore(null);
       await l?.store.flush().catch(() => undefined);
     },
