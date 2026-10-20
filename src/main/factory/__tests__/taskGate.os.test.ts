@@ -627,6 +627,7 @@ describe('describeTaskGate', () => {
     expect(describeTaskGate(skip, { verified: undefined, total: 0 }).body).toBe('Evidence: Not verified (the report recorded none). No gate ran.');
     expect(describeTaskGate(skip, { verified: 0, total: 2 }).body).toBe('Evidence: Not verified (0 of 2 verified). No gate ran.');
     expect(describeTaskGate(skip, { verified: 1, total: 2 }).body).toBe('Evidence recorded (1 of 2 verified). No gate ran.');
+    expect(describeTaskGate(skip, { verified: 2, total: 2 }).body).toBe('Evidence recorded (2 of 2 verified). No gate ran.');
     expect(describeTaskGate({ ...skip, skipped: 'gate_unavailable' }, { verified: 1, total: 2 }).body).toBe('No gate ran.');
   });
 });
