@@ -111,17 +111,38 @@ function place(win: BrowserWindow): void {
   });
 }
 
+/** The panel being built: a press while it loads waits for it, not a second one. */
+let creating: Promise<BrowserWindow | null> | null = null;
+
 /**
- * Build the hidden panel ahead of the first press, so the page is mounted and
- * the first keystrokes after the shortcut land in the prompt instead of being
- * typed into a window that is still loading.
+ * The panel, built on first use and kept hidden between presses so later ones
+ * are instant. Resolves once the page has painted, so it is never shown
+ * blank; null when it was destroyed while loading (switched off, quitting).
  */
-export function prepareQuickLaunch(): void {
-  if (!quickLaunchWindow()) panel = build();
+function ensurePanel(): Promise<BrowserWindow | null> {
+  const existing = quickLaunchWindow();
+  if (existing) return Promise.resolve(existing);
+  if (creating) return creating;
+  const win = (panel = build());
+  const pending = new Promise<BrowserWindow | null>((resolve) => {
+    const settle = () => resolve(win.isDestroyed() ? null : win);
+    win.once('ready-to-show', settle);
+    // A page that fails to load (or whose renderer dies before it paints) is
+    // still shown, as before, rather than swallowing every press.
+    win.webContents.once('did-fail-load', settle);
+    win.webContents.once('render-process-gone', settle);
+    win.once('closed', settle);
+  });
+  const done = pending.finally(() => {
+    if (creating === done) creating = null;
+  });
+  creating = done;
+  return done;
 }
 
-export function showQuickLaunch(onShown: (win: BrowserWindow) => void): void {
-  const win = quickLaunchWindow() ?? (panel = build());
+export async function showQuickLaunch(onShown: (win: BrowserWindow) => void): Promise<void> {
+  const win = await ensurePanel();
+  if (!win || win.isDestroyed()) return;
   place(win);
   win.show();
   win.focus();
@@ -132,11 +153,15 @@ export function hideQuickLaunch(): void {
   quickLaunchWindow()?.hide();
 }
 
-/** The shortcut toggles: a second press dismisses. */
+/**
+ * The shortcut toggles: a second press dismisses. A press while the panel is
+ * still being built joins that build, so the panel opens once and stays open.
+ */
 export function toggleQuickLaunch(onShown: (win: BrowserWindow) => void): void {
+  if (creating) return;
   const win = quickLaunchWindow();
   if (win?.isVisible()) win.hide();
-  else showQuickLaunch(onShown);
+  else void showQuickLaunch(onShown);
 }
 
 /** Grow or shrink to the card, keeping the top edge where it is. */
@@ -150,4 +175,5 @@ export function fitQuickLaunch(height: number): void {
 export function destroyQuickLaunch(): void {
   quickLaunchWindow()?.destroy();
   panel = null;
+  creating = null;
 }

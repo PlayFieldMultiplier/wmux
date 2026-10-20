@@ -40,7 +40,7 @@ import { startGuiFanOut } from '../ipc/handlers/fanout.handler';
 import { workerLaunchCommand, type FanOutService } from '../worktask/FanOutService';
 import { readQuickLaunchConfig, writeQuickLaunchConfig } from './config';
 import { QuickLaunchHotkey } from './hotkey';
-import { destroyQuickLaunch, fitQuickLaunch, hideQuickLaunch, prepareQuickLaunch, quickLaunchWindow, setQuickLaunchQuitting, toggleQuickLaunch } from './window';
+import { destroyQuickLaunch, fitQuickLaunch, hideQuickLaunch, quickLaunchWindow, setQuickLaunchQuitting, toggleQuickLaunch } from './window';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -191,11 +191,9 @@ export function initQuickLaunch(deps: {
     onPress: () => toggleQuickLaunch(notifyShown),
     log: (m) => console.warn(m),
   });
+  // Only the chord is held at startup. The composer window is built on the
+  // first press (and then kept hidden), so an unused composer costs no RAM.
   applyConfig(readQuickLaunchConfig());
-  // Off the boot path: the main window loads first.
-  const prepareTimer = setTimeout(() => {
-    if (readQuickLaunchConfig().enabled) prepareQuickLaunch();
-  }, 5000);
 
   const snapshot = (error?: string): QuickLaunchSettingsPayload => {
     const config = readQuickLaunchConfig();
@@ -236,8 +234,8 @@ export function initQuickLaunch(deps: {
       applyConfig(current);
       return snapshot(`Could not save: ${(err as Error).message}`);
     }
-    if (next.enabled) prepareQuickLaunch();
-    else hideQuickLaunch();
+    // Switched off: drop the window. Switched on: the next press builds it.
+    if (!next.enabled) destroyQuickLaunch();
     return snapshot();
   });
 
@@ -263,7 +261,9 @@ export function initQuickLaunch(deps: {
     const req = normalizeQuickLaunchRequest(raw);
     if ('error' in req) return { ok: false, error: req.error };
     const result = await launchQuick(req, deps);
-    if (result.ok) hideQuickLaunch();
+    // Re-checked after the wait: the composer may have been switched off and
+    // rebuilt meanwhile, and a stale submit must not hide the new one.
+    if (result.ok && fromComposer(event)) hideQuickLaunch();
     return result;
   });
 
@@ -279,7 +279,6 @@ export function initQuickLaunch(deps: {
 
   return {
     dispose() {
-      clearTimeout(prepareTimer);
       hotkey.release();
       destroyQuickLaunch();
       for (const channel of [
