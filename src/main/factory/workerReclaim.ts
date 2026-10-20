@@ -128,6 +128,10 @@ export interface ReclaimedWorker {
    *  tries again; it still counts as live); stopped: the agent was stopped
    *  (or none ran); resumed: relaunched. */
   state: 'stopping' | 'stopped' | 'resumed';
+  /** An unconfirmed stop was reported to the owner for this attempt. */
+  stopUnconfirmed?: true;
+  /** The follow-up confirming the slot was freed was written. */
+  stopResolved?: true;
   at: number;
   /** The workspace the worker's pane lives in when a resume opened a new
    *  one (absent: taskWorkspaceId). */
@@ -287,7 +291,9 @@ function isRecord(v: unknown): v is ReclaimedWorker {
     && r.sessions.every((s) => !!s && typeof (s as ReclaimedSession).sessionId === 'string' && typeof (s as ReclaimedSession).cwd === 'string')
     && (r.paneWorkspaceId === undefined || typeof r.paneWorkspaceId === 'string')
     && (r.seenAt === undefined || typeof r.seenAt === 'number')
-    && (r.endRev === undefined || typeof r.endRev === 'number');
+    && (r.endRev === undefined || typeof r.endRev === 'number')
+    && (r.stopUnconfirmed === undefined || r.stopUnconfirmed === true)
+    && (r.stopResolved === undefined || r.stopResolved === true);
 }
 
 /** The reclaimed workers, persisted under `<wmuxDir>/factory/`. */
@@ -1046,6 +1052,7 @@ export async function reclaimWorker(
       sessions: [...panes, ...kept.filter((k) => !panes.some((p) => p.sessionId === k.sessionId))],
       // No pane left in the worktree: nothing to stop.
       state: panes.length === 0 ? 'stopped' : 'stopping',
+      ...(prior?.state === 'stopping' && prior.stopUnconfirmed ? { stopUnconfirmed: true as const } : {}),
       at: now(),
       endRev: entry.rev,
       ...(prior?.paneWorkspaceId ? { paneWorkspaceId: prior.paneWorkspaceId } : {}),
@@ -1061,7 +1068,10 @@ export async function reclaimWorker(
     }
     // No pane left in the worktree: recorded so it no longer counts as a
     // live worker.
-    if (panes.length === 0) return rec;
+    if (panes.length === 0) {
+      await noteStopResolved(ports, rec, entry);
+      return ports.store.get(entry.id);
+    }
     let failed = 0;
     let attempted = 0;
     // Failed stops that may have signalled the agent (not refused before).
@@ -1077,6 +1087,7 @@ export async function reclaimWorker(
     // A pane whose stop was held back (its turn is not over after all):
     // the record stays `stopping`, live, for a later look.
     let heldBack = false;
+    let unconfirmed = false;
     for (const p of panes) {
       // The task reopened (or moved on from its report) meanwhile: what
       // still runs is its worker again.
@@ -1121,6 +1132,21 @@ export async function reclaimWorker(
           if (out) out.deferred = true;
           break;
         }
+        // A successful lookup can find no matching agent and stop nothing.
+        // Only a fresh liveness read can then prove this worker is gone.
+        if (r.ok === true && r.stopped !== true) {
+          let gone = false;
+          try {
+            const fresh = await ports.listSessions();
+            gone = !endedTaskAgentRuns([p.sessionId], entry.id, [p.sessionId], new Map(fresh.map((s) => [s.id, s])), ports.sessionRecordOf);
+          } catch { /* an unreadable process state proves no stop */ }
+          if (!gone) {
+            failed++;
+            unconfirmed = true;
+            log(`[factory] reclaim: the stop of ${p.sessionId} (task ${entry.id}) was not confirmed`);
+            continue;
+          }
+        }
         // A pane gone since the read took its agent with it: no failed stop
         // (counted as one, it kept the record `stopping` for good).
         if (r.ok !== true && r.code !== 'no_session') {
@@ -1143,7 +1169,20 @@ export async function reclaimWorker(
     // An open task's stop that signalled its agent stays recorded
     // (`stopping`): its agent may be gone, and the settle pass then marks it
     // stopped with its cards.
-    if (failed === attempted && !prior && !(ended === 'reported' && signalled > 0)) {
+    if (unconfirmed && ports.note && (prior?.state !== 'stopping' || !prior.stopUnconfirmed)) {
+      try {
+        const task = lifecycleCardTask(entry.title, entry.id);
+        ports.note(
+          entry.ownerWorkspaceId, taskThreadOf(entry), `Worker stop unconfirmed: ${task}`,
+          'wmux could not stop the worker or confirm its exit. Its slot is still in use. Open its terminal to check it and stop it if needed.',
+          { code: 'worker.stopUnconfirmed', args: { title: task } }, entry.id,
+        );
+        await ports.store.put({ ...(ports.store.get(entry.id) ?? rec), stopUnconfirmed: true });
+      } catch (err) {
+        log(`[factory] reclaim: the unconfirmed-stop notice for ${entry.id} was not recorded: ${String(err)}`);
+      }
+    }
+    if (failed === attempted && !prior && !unconfirmed && !(ended === 'reported' && signalled > 0)) {
       // Nothing was stopped: no record, so a later look tries again.
       await ports.store.remove(entry.id).catch(() => undefined);
       return null;
@@ -1161,6 +1200,12 @@ export async function reclaimWorker(
       return ports.store.get(entry.id);
     }
     ports.store.setState(entry.id, 'stopped', now());
+    // An unconfirmed stop ends with its own card only: the cards below say
+    // wmux stopped the agent, which it did not show.
+    if (await noteStopResolved(ports, ports.store.get(entry.id), entry)) {
+      ports.changed?.();
+      return ports.store.get(entry.id);
+    }
     // Reopened part way: the conversation stays recorded, no card (the
     // task is open again, and its open row counts what still runs).
     if (attempted < panes.length) return ports.store.get(entry.id);
@@ -1237,8 +1282,16 @@ function noteOpenPause(ports: Pick<WorkerReclaimPorts, 'note' | 'noticeBot'>, en
   } catch {
     /* the card is best effort */
   }
+  noticePausedBot(ports, entry, resumable, at, false);
+}
+
+/** The notice to the bot that started an open task whose worker was paused,
+ *  which resumes or settles it (`exited`: the stop was not confirmed and its
+ *  agent exited since). Best effort, never throws. */
+function noticePausedBot(ports: Pick<WorkerReclaimPorts, 'noticeBot'>, entry: LedgerEntry, resumable: boolean, at: number, exited: boolean): void {
   const botId = entry.dispatch?.origin.botId;
   if (!botId) return;
+  const task = lifecycleCardTask(entry.title, entry.id);
   try {
     ports.noticeBot?.({
       botId,
@@ -1246,7 +1299,10 @@ function noteOpenPause(ports: Pick<WorkerReclaimPorts, 'note' | 'noticeBot'>, en
       key: `worker.paused:${entry.id}:${at}`,
       topic: 'worker.paused',
       title: `Your worker for "${task}" was paused (task ${entry.id})`,
-      body: `It sat idle with the task still ${entry.status} and no report, so main stopped its Claude to free its agent slot. The ledger row is unchanged. `
+      body: (exited
+        ? `It sat idle with the task still ${entry.status} and no report; main's stop to free its agent slot was not confirmed, and its Claude has exited since. `
+        : `It sat idle with the task still ${entry.status} and no report, so main stopped its Claude to free its agent slot. `)
+        + 'The ledger row is unchanged. '
         + (resumable
           ? 'To continue, resume it with worker_resume (its message is what it acts on); if its work is done or not needed, settle the task with ledger_update.'
           : 'No conversation was recorded to resume: settle the task with ledger_update, or start a new task for the rest of the work.'),
@@ -1292,6 +1348,37 @@ async function stopOrClose(
 export function isReclaimedSince(rec: ReclaimedWorker | null, entry: Pick<LedgerEntry, 'updatedAt' | 'rev'>): boolean {
   if (!rec || rec.state === 'stopping') return false;
   return rec.endRev !== undefined ? rec.endRev >= entry.rev : rec.at >= entry.updatedAt;
+}
+
+/** The one end of an unconfirmed stop, whichever path sees the record
+ *  stopped (the reclaim's retry, the settle sweep): the owner, told the stop
+ *  was not confirmed, gets one card saying the slot is free, with Resume when
+ *  a conversation was kept, in place of the stop's usual card; an open
+ *  task's bot is told its worker is gone. A card that fails to write is tried
+ *  again by the settle sweep. Whether `rec` is an unconfirmed stop: the
+ *  caller then posts no card of its own. */
+async function noteStopResolved(ports: WorkerReclaimPorts, rec: ReclaimedWorker | null, row: LedgerEntry | null): Promise<boolean> {
+  if (!rec?.stopUnconfirmed) return false;
+  if (rec.state !== 'stopped' || rec.stopResolved || !ports.note) return true;
+  const resumable = rec.sessions.some((p) => resumeLineFor(p) !== null);
+  // A research task works in a task folder, not a worktree.
+  const research = resumable && isResearchDispatch(row?.dispatch);
+  const task = lifecycleCardTask(rec.title, rec.taskId);
+  try {
+    ports.note(
+      rec.ownerWorkspaceId, rec.threadId, `${resumable ? 'Worker slot freed (resumable)' : 'Worker slot freed'}: ${task}`,
+      resumable
+        ? `The worker has stopped; its slot is free. The ${research ? 'task folder' : 'worktree'} and the conversation are kept, and Resume continues the same conversation.`
+        : 'The worker has stopped; its slot is free.',
+      { code: resumable ? 'worker.stopResolvedResumable' : 'worker.stopResolved', args: { title: task, ...(research ? { kind: 'research' } : {}) } }, rec.taskId,
+    );
+    await ports.store.put({ ...rec, stopResolved: true });
+  } catch (err) {
+    ports.log?.(`[factory] reclaim: the stop-resolution notice for ${rec.taskId} was not recorded: ${String(err)}`);
+    return true;
+  }
+  if (rec.ended === 'reported' && row && (row.status === 'working' || row.status === 'input_required')) noticePausedBot(ports, row, resumable, rec.at, true);
+  return true;
 }
 
 /** Install the reclaim on bot task ends. Returns the unsubscribe. */
@@ -1358,11 +1445,22 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
   const settleStopping = async (): Promise<void> => {
     if (settling || !ports.row) return;
     const at = now();
+    const pending = ports.store.all().filter((r) => r.state === 'stopped' && r.stopUnconfirmed && !r.stopResolved && !inFlight.has(r.taskId));
     const stale = ports.store.all().filter((r) => r.state === 'stopping' && !inFlight.has(r.taskId)
       && (r.at < installedAt || at - r.at >= STOPPING_SETTLE_MS));
-    if (stale.length === 0) return;
+    if (stale.length === 0 && pending.length === 0) return;
     settling = true;
     try {
+      for (const rec of pending) {
+        let row: LedgerEntry | null = null;
+        try {
+          row = ports.row(rec.taskId);
+        } catch {
+          row = null;
+        }
+        await noteStopResolved(ports, ports.store.get(rec.taskId), row);
+      }
+      if (stale.length === 0) return;
       const byId = new Map((await ports.listSessions()).map((x) => [x.id, x]));
       let moved = false;
       for (const rec of stale) {
@@ -1397,8 +1495,10 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
           if (ports.store.setState(rec.taskId, 'stopped', at)) {
             moved = true;
             log(`[factory] reclaim: ${rec.taskId} was left stopping with no agent running; marked stopped`);
-            // An open task's idle stop cut off before its cards: they go now.
-            if (cur.ended === 'reported' && row && (row.status === 'working' || row.status === 'input_required')) noteOpenPause(ports, row, cur.sessions, at);
+            // An unconfirmed stop ends with its own card only; an open task's
+            // idle stop cut off before its cards: they go now.
+            if (!(await noteStopResolved(ports, ports.store.get(rec.taskId), row))
+              && cur.ended === 'reported' && row && (row.status === 'working' || row.status === 'input_required')) noteOpenPause(ports, row, cur.sessions, at);
           }
           continue;
         }

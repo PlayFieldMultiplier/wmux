@@ -37,6 +37,7 @@ import {
   type WorkerResumePorts,
   type WorkerSessionInfo,
 } from '../workerReclaim';
+import { computeHolders, holderCounts } from '../workerHolders';
 import { STOPPED_BY_OWNER } from '../factoryStop';
 import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import { taskFolderFromMissions } from '../verifyPreset';
@@ -121,6 +122,127 @@ describe('lifecycleCardTask', () => {
 });
 
 describe('reclaimWorker', () => {
+  it('keeps an unmatched live worker counted, reports an honest card once, and frees it after a real stop', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const entry = row('completed');
+    let alive = true;
+    const { ports, note } = reclaimPorts(store, [], {
+      listSessions: async () => [session({ agentProcessAlive: undefined, commandRunning: alive })],
+      stopAgent: async () => ({ ok: true, stopped: !alive }),
+    });
+    const count = () => holderCounts(computeHolders({
+      now: 6_000, rows: [entry], reclaimable: new Set([entry.id]), catchupMs: 86_400_000,
+      workspaces: new Set([entry.taskWorkspaceId]), ptys: new Map([[entry.taskWorkspaceId, ['daemon-1']]]),
+      stamps: new Map(), read: 'ok', readAt: 6_000, idle: new Set(), busy: new Set(),
+      agentSeen: new Set(alive ? [entry.taskWorkspaceId] : []), gone: new Set(), records: store.all(),
+      verdicted: new Set(), taskOfWorkspace: () => entry.id, taskOfPane: () => entry.id,
+      launchAt: () => undefined, launchOf: () => null, reservations: [], grants: [], heldWorkspaces: [],
+    }), BOT).bot;
+    expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopping', stopUnconfirmed: true });
+    expect(count()).toBe(1);
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.stopUnconfirmed' });
+    expect(note.mock.calls[0][3]).toContain('slot is still in use');
+    const restored = ReclaimedWorkers.at(dir);
+    restored.load();
+    await reclaimWorker({ ...ports, store: restored }, entry, 'completed');
+    expect(note).toHaveBeenCalledTimes(1);
+    alive = false;
+    expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopped' });
+    expect(count()).toBe(0);
+    // One card ends the warning; no done card follows it.
+    expect(note.mock.calls.map((call) => call[4]?.code)).toEqual(['worker.stopUnconfirmed', 'worker.stopResolvedResumable']);
+    expect(store.get(entry.id)?.stopResolved).toBe(true);
+  });
+
+  it('an unconfirmed stop resolves with the same one card whether a retry or the settle sweep sees its agent gone', async () => {
+    const entry = row('completed');
+    let alive = true;
+    const over = {
+      listSessions: async () => [session({ agentProcessAlive: alive ? true : false })],
+      stopAgent: async () => ({ ok: true, stopped: false }),
+    };
+    // The reclaim's retry: its stop matches no agent again, and a fresh read shows the agent gone.
+    const viaRetry = ReclaimedWorkers.at(path.join(dir, 'retry'));
+    const retry = reclaimPorts(viaRetry, [], over);
+    expect(await reclaimWorker(retry.ports, entry, 'completed')).toMatchObject({ state: 'stopping', stopUnconfirmed: true });
+    alive = false;
+    expect(await reclaimWorker(retry.ports, entry, 'completed')).toMatchObject({ state: 'stopped', stopResolved: true });
+    // The settle sweep: the same record, left stopping, found with no agent.
+    alive = true;
+    const viaSweep = ReclaimedWorkers.at(path.join(dir, 'sweep'));
+    const sweep = reclaimPorts(viaSweep, [], { ...over, row: () => entry, allRows: () => [] });
+    expect(await reclaimWorker(sweep.ports, entry, 'completed')).toMatchObject({ state: 'stopping', stopUnconfirmed: true });
+    alive = false;
+    const off = installWorkerReclaim({ ...sweep.ports, now: () => 6_000 });
+    await vi.waitFor(() => expect(viaSweep.get(entry.id)?.stopResolved).toBe(true), { timeout: 10_000 });
+    off();
+    for (const { note } of [retry, sweep]) {
+      expect(note.mock.calls.map((call) => call[4]?.code)).toEqual(['worker.stopUnconfirmed', 'worker.stopResolvedResumable']);
+      expect(note.mock.calls[1][2]).toBe('Worker slot freed (resumable): perf-A');
+      expect(note.mock.calls[1][3]).not.toContain('stopped because the task ended');
+    }
+    expect(sweep.note.mock.calls[1]).toEqual(retry.note.mock.calls[1]);
+    expect(viaSweep.get(entry.id)).toMatchObject({ state: 'stopped', stopUnconfirmed: true, stopResolved: true });
+    await settled(viaRetry);
+    await settled(viaSweep);
+  });
+
+  it('resolves each new unconfirmed stop after the same task is resumed', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    let alive = true;
+    const { ports, note } = reclaimPorts(store, [], {
+      listSessions: async () => [session({ agentProcessAlive: undefined, commandRunning: alive })],
+      stopAgent: async () => ({ ok: true, stopped: !alive }),
+    });
+    for (const rev of [3, 5]) {
+      alive = true;
+      const entry = row('completed', { rev });
+      expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopping', stopUnconfirmed: true });
+      expect(store.get(entry.id)?.stopResolved).toBeUndefined();
+      alive = false;
+      expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopped', stopResolved: true });
+      if (rev === 3) store.setState(entry.id, 'resumed', 6_000);
+    }
+    expect(note.mock.calls.filter((call) => call[4]?.code === 'worker.stopUnconfirmed')).toHaveLength(2);
+    expect(note.mock.calls.filter((call) => call[4]?.code === 'worker.stopResolvedResumable')).toHaveLength(2);
+    expect(note.mock.calls.some((call) => call[4]?.code === 'worker.doneResumable')).toBe(false);
+    await store.settled();
+  });
+
+  it('does not suppress the owner notice after a failed card write', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const note = vi.fn().mockImplementationOnce(() => { throw new Error('room unavailable'); });
+    const { ports } = reclaimPorts(store, [session()], { note, stopAgent: async () => ({ ok: true, stopped: false }) });
+    expect(await reclaimWorker(ports, row('completed'), 'completed')).toMatchObject({ state: 'stopping' });
+    expect(store.get(row('completed').id)?.stopUnconfirmed).toBeUndefined();
+    expect(await reclaimWorker(ports, row('completed'), 'completed')).toMatchObject({ state: 'stopping', stopUnconfirmed: true });
+    expect(note).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { label: 'gone pane', fresh: [] },
+    { label: 'exited agent', fresh: [session({ agentProcessAlive: false })] },
+    { label: 'returned shell prompt', fresh: [session({ agentProcessAlive: undefined, commandRunning: false })] },
+  ])('accepts stopped:false only after a fresh read proves $label', async ({ fresh }) => {
+    const store = ReclaimedWorkers.at(dir);
+    const listSessions = vi.fn().mockResolvedValueOnce([session()]).mockResolvedValue(fresh);
+    const { ports, note } = reclaimPorts(store, [], { listSessions, stopAgent: async () => ({ ok: true, stopped: false }) });
+    expect(await reclaimWorker(ports, row('completed'), 'completed')).toMatchObject({ state: 'stopped' });
+    expect(listSessions).toHaveBeenCalledTimes(2);
+    expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.doneResumable' });
+  });
+
+  it.each(['unreadable', 'silent'])('does not infer a stop from %s liveness', async (kind) => {
+    const store = ReclaimedWorkers.at(dir);
+    const listSessions = vi.fn().mockResolvedValueOnce([session()]);
+    if (kind === 'unreadable') listSessions.mockRejectedValue(new Error('daemon unavailable'));
+    else listSessions.mockResolvedValue([session({ agentProcessAlive: undefined, commandRunning: undefined })]);
+    const { ports, note } = reclaimPorts(store, [], { listSessions, stopAgent: async () => ({ ok: true, stopped: false }) });
+    expect(await reclaimWorker(ports, row('completed'), 'completed')).toMatchObject({ state: 'stopping' });
+    expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.stopUnconfirmed' });
+  });
+
   it('stops the agent of every pane started in the worktree and records its conversation', async () => {
     const store = ReclaimedWorkers.at(dir);
     const other = session({ id: 'daemon-2', spawnCwd: path.join(dir, 'elsewhere') });
@@ -1316,6 +1438,60 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     expect(changed).toHaveBeenCalled();
     off();
     await settled(store);
+  });
+
+  it('closes an unconfirmed-stop warning once after exit, including a reload and repeated sweeps', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await store.put(stopping({ stopUnconfirmed: true }));
+    const { ports, note } = reclaimPorts(store, [], { row: () => ownerStopped(), allRows: () => [], retryMs: 10 });
+    const off = installWorkerReclaim(ports);
+    await vi.waitFor(() => expect(store.get(TASK)?.stopResolved).toBe(true), { timeout: 10_000 });
+    expect(note.mock.calls.map((call) => call[4]?.code)).toEqual(['worker.stopResolvedResumable']);
+    expect(note.mock.calls[0][3]).toBe('The worker has stopped; its slot is free. The worktree and the conversation are kept, and Resume continues the same conversation.');
+    off();
+    await settled(store);
+    const restored = ReclaimedWorkers.at(dir);
+    restored.load();
+    const stop = installWorkerReclaim({ ...ports, store: restored });
+    await deliberateSleep(40, 'negative: repeated sweeps and reload must not duplicate the resolved card');
+    stop();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(restored.get(TASK)).toMatchObject({ state: 'stopped', stopResolved: true });
+    await settled(restored);
+  });
+
+  it('an open task\'s unconfirmed idle stop resolves with one owner card, and its bot hears the agent exited', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await store.put(stopping({ stopUnconfirmed: true, ended: 'reported' }));
+    const noticeBot = vi.fn();
+    const { ports, note } = reclaimPorts(store, [], { row: () => row('working'), allRows: () => [], noticeBot });
+    const off = installWorkerReclaim(ports);
+    await vi.waitFor(() => expect(store.get(TASK)?.stopResolved).toBe(true), { timeout: 10_000 });
+    off();
+    expect(note.mock.calls.map((call) => call[4]?.code)).toEqual(['worker.stopResolvedResumable']);
+    expect(noticeBot).toHaveBeenCalledTimes(1);
+    expect(noticeBot.mock.calls[0][0].body).toContain('was not confirmed, and its Claude has exited since');
+    await settled(store);
+  });
+
+  it('retries a failed resolution card without reclaiming a stopped worker again', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await store.put(stopping({ stopUnconfirmed: true }));
+    const note = vi.fn().mockImplementationOnce(() => { throw new Error('room unavailable'); });
+    const { ports, stopAgent } = reclaimPorts(store, [], { note, row: () => ownerStopped(), allRows: () => [] });
+    const off = installWorkerReclaim(ports);
+    await vi.waitFor(() => expect(store.get(TASK)?.state).toBe('stopped'), { timeout: 10_000 });
+    off();
+    await settled(store);
+    expect(store.get(TASK)?.stopResolved).toBeUndefined();
+    const restored = ReclaimedWorkers.at(dir);
+    restored.load();
+    const stop = installWorkerReclaim({ ...ports, store: restored });
+    await vi.waitFor(() => expect(restored.get(TASK)?.stopResolved).toBe(true), { timeout: 10_000 });
+    stop();
+    expect(note).toHaveBeenCalledTimes(2);
+    expect(stopAgent).not.toHaveBeenCalled();
+    await settled(restored);
   });
 
   it('one left stopping in this run is looked at only past the bound, then marked stopped', async () => {
