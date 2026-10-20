@@ -21,6 +21,8 @@ vi.mock('electron', () => {
   class BrowserWindow {
     webContents = {
       on: vi.fn(),
+      once: vi.fn(),
+      ipc: { handle: vi.fn() },
       send: vi.fn(),
       setWindowOpenHandler: vi.fn(),
       openDevTools: vi.fn(),
