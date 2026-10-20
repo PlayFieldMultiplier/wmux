@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { WORKFLOW_BLOCK, workflowTaskBlocked, workflowView, type BotWorkflow, type WorkflowView } from '../../../../shared/botWorkflow';
 import type { RoomCard, ThreadId } from '../../../../shared/room';
 import type { TimelineItem } from '../botsTimeline';
-import { conversationWorkflows, withWorkflows, workflowCardView } from '../botsWorkflow';
+import { conversationWorkflows, countNewWorkflows, withWorkflows, workflowCardView } from '../botsWorkflow';
 
 const SHA = 'a'.repeat(40);
 const DM = 'dm:bot-0000000a' as ThreadId;
@@ -84,5 +84,17 @@ describe('conversationWorkflows and withWorkflows', () => {
     const later = new Date(2026, 9, 20, 9, 30).getTime();
     const items: TimelineItem[] = [msg('m1', yesterday, false), { kind: 'day', key: 'd2', at: later }, msg('m2', later, false)];
     expect(withWorkflows(items, [workflow({ createdAt: today })]).map((i) => i.key)).toEqual(['m1', 'day:workflow:wf-000000000000000000000001', 'workflow:wf-000000000000000000000001', 'm2']);
+  });
+});
+
+describe('countNewWorkflows', () => {
+  it('counts a workflow saved after the chat opened once, and none read in when it opened', () => {
+    const counted = new Set<string>();
+    const old = workflow({ id: 'wf-00000000000000000000000a', createdAt: 900 });
+    expect(countNewWorkflows([old], counted, 1_000)).toBe(0);
+    const fresh = workflow({ id: 'wf-00000000000000000000000b', createdAt: 1_500 });
+    expect(countNewWorkflows([old, fresh], counted, 1_000)).toBe(1);
+    // The same workflow read again (a state change) is not new again.
+    expect(countNewWorkflows([old, { ...fresh, revision: 9 }], counted, 1_000)).toBe(0);
   });
 });

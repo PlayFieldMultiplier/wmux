@@ -101,7 +101,7 @@ import { buildTimeline, clockTime, elapsed, fullTime, hasKindWord, liveNewAfter,
 import { conversationStartedThreads, workView } from './botsWork';
 import BotsWorkCard from './BotsWorkCard';
 import BotsWorkflowCard from './BotsWorkflowCard';
-import { withWorkflows, type WorkflowTimelineItem } from './botsWorkflow';
+import { countNewWorkflows, withWorkflows, type WorkflowTimelineItem } from './botsWorkflow';
 import { useConversationWorkflows } from './useBotWorkflows';
 import '../Chat/chatMono.css';
 
@@ -2261,12 +2261,16 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     useStore.getState().markBotsSeen(conversationId, newestAt);
   }, [conversationId, newestAt, inView]);
   // "N new" while scrolled up: the cards from others newer than any seen
-  // before (older history read in later is not new).
+  // before (older history read in later is not new), and the workflows saved
+  // since the chat opened.
   const [newCount, setNewCount] = useState(0);
   const newestSeen = useRef(cards.reduce((m, c) => Math.max(m, c.at), 0));
+  const openedAt = useRef(Date.now());
+  const countedFlows = useRef(new Set<string>());
   useEffect(() => {
     const before = newestSeen.current;
     const added = cards.filter((c) => c.actor.kind !== 'human' && c.at > before).length;
+    const addedFlows = countNewWorkflows(flows.workflows, countedFlows.current, openedAt.current);
     newestSeen.current = cards.reduce((m, c) => Math.max(m, c.at), before);
     if (added > 0) {
       const visible = inView();
@@ -2279,7 +2283,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       // A hidden window draws no frames, and Blink keeps a scroll event (with
       // the whole chat, once it unmounts) until the next one: pin on return.
       if (document.visibilityState !== 'hidden') el.scrollTop = el.scrollHeight;
-    } else if (added > 0) setNewCount((n) => n + added);
+    } else if (added + addedFlows > 0) setNewCount((n) => n + added + addedFlows);
     markSeen();
   }, [lastId, workers.length, markSeen, cards, inView, flows.workflows]);
   useEffect(() => {

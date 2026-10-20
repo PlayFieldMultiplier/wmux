@@ -112,6 +112,20 @@ export function conversationWorkflows(workflows: readonly WorkflowView[], conver
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
+/** How many of these workflows were saved after the chat opened and are not
+ *  counted yet; it counts them (`counted` keeps their ids). The "N new" pill
+ *  adds them as it adds new cards; those read in when the chat opens are
+ *  not new. */
+export function countNewWorkflows(workflows: readonly WorkflowView[], counted: Set<string>, openedAt: number): number {
+  let added = 0;
+  for (const w of workflows) {
+    if (counted.has(w.id)) continue;
+    counted.add(w.id);
+    if (w.createdAt > openedAt) added++;
+  }
+  return added;
+}
+
 export type WorkflowTimelineItem = TimelineItem | { kind: 'workflow'; key: string; workflow: WorkflowView; at: number };
 
 function itemAt(item: TimelineItem): number | null {
