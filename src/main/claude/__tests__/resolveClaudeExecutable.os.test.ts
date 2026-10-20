@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { claudeCandidates, resolveClaudeExecutableWith, type ResolveClaudeEnv } from '../resolveClaudeExecutable';
+import { agentCandidates, claudeCandidates, resolveAgentExecutableWith, resolveClaudeExecutableWith, type ResolveClaudeEnv } from '../resolveClaudeExecutable';
 
 function posix(files: string[], env: Record<string, string> = {}, platform: NodeJS.Platform = 'linux'): ResolveClaudeEnv {
   const set = new Set(files);
@@ -199,5 +199,38 @@ describe.skipIf(process.platform === 'win32')('loadLoginShellPath (real child pr
     const { parseMarkedPath } = await import('../resolveClaudeExecutable');
     expect(parseMarkedPath('/usr/bin:/bin')).toBeNull();
     expect(parseMarkedPath('x__WMUX_PATH_START__/a__WMUX_PATH_END__y')).toBe('/a');
+  });
+});
+
+describe('Codex candidates', () => {
+  it('finds codex at the standalone installer location when PATH misses it', () => {
+    const files = new Set(['/home/u/.local/bin/codex']);
+    const r: ResolveClaudeEnv = { platform: 'darwin', env: { PATH: '/usr/bin' }, homedir: '/home/u', isFile: (p) => files.has(p) };
+    expect(resolveAgentExecutableWith(r, 'codex')).toBe('/home/u/.local/bin/codex');
+  });
+
+  it('looks in the Windows installer folder and the npm entrypoint, never a .cmd shim', () => {
+    const r: ResolveClaudeEnv = {
+      platform: 'win32',
+      env: { PATH: 'C:\\npm', PATHEXT: '.EXE;.CMD', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local', APPDATA: 'C:\\Users\\u\\AppData\\Roaming' },
+      homedir: 'C:\\Users\\u',
+      isFile: () => false,
+    };
+    expect(agentCandidates(r, 'codex')).toEqual([
+      'C:\\npm\\codex.exe',
+      'C:\\Users\\u\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe',
+      'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js',
+    ]);
+  });
+
+  it('runs the npm entrypoint next to a codex.cmd shim in any PATH folder (custom npm prefix)', () => {
+    const files = new Set(['d:\\npm\\codex.cmd', 'd:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js']);
+    const r: ResolveClaudeEnv = {
+      platform: 'win32',
+      env: { PATH: 'D:\\npm', PATHEXT: '.EXE;.CMD' },
+      homedir: 'C:\\Users\\u',
+      isFile: (p) => files.has(p.toLowerCase()),
+    };
+    expect(resolveAgentExecutableWith(r, 'codex')).toBe('D:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js');
   });
 });

@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { agentRow, type AgentSlugWith } from '../../shared/agentIdentity';
 
 // One answer to "where is the user's claude?", shared by Moa (the deck
 // adapters) and the first-run wizard's "Claude Code detected" row so the two
@@ -43,7 +44,7 @@ function byVersionDesc(a: string, b: string): number {
 }
 
 /** nvm installs: the `default` alias first, then newest. */
-function nvmBins(r: ResolveClaudeEnv, p: typeof path.posix): string[] {
+function nvmBins(r: ResolveClaudeEnv, p: typeof path.posix, name: string): string[] {
   const nvmDir = r.env.NVM_DIR || p.join(r.homedir, '.nvm');
   const root = p.join(nvmDir, 'versions', 'node');
   const versions = (r.readDir?.(root) ?? []).filter((v) => /^v?\d/.test(v)).sort(byVersionDesc);
@@ -51,11 +52,11 @@ function nvmBins(r: ResolveClaudeEnv, p: typeof path.posix): string[] {
   const alias = r.readText?.(p.join(nvmDir, 'alias', 'default'))?.trim().replace(/^v/, '');
   const preferred = alias ? versions.find((v) => v.replace(/^v/, '') === alias || v.replace(/^v/, '').startsWith(`${alias}.`)) : undefined;
   const ordered = preferred ? [preferred, ...versions.filter((v) => v !== preferred)] : versions;
-  return ordered.map((v) => p.join(root, v, 'bin', 'claude'));
+  return ordered.map((v) => p.join(root, v, 'bin', name));
 }
 
 /** fnm installs, newest first. */
-function fnmBins(r: ResolveClaudeEnv, p: typeof path.posix): string[] {
+function fnmBins(r: ResolveClaudeEnv, p: typeof path.posix, name: string): string[] {
   const dirs = r.env.FNM_DIR
     ? [r.env.FNM_DIR]
     : r.platform === 'darwin'
@@ -65,10 +66,18 @@ function fnmBins(r: ResolveClaudeEnv, p: typeof path.posix): string[] {
   for (const d of dirs) {
     const root = p.join(d, 'node-versions');
     for (const v of (r.readDir?.(root) ?? []).filter((x) => /^v?\d/.test(x)).sort(byVersionDesc)) {
-      out.push(p.join(root, v, 'installation', 'bin', 'claude'));
+      out.push(p.join(root, v, 'installation', 'bin', name));
     }
   }
   return out;
+}
+
+function isFileSafe(r: ResolveClaudeEnv, p: string): boolean {
+  try {
+    return r.isFile(p);
+  } catch {
+    return false;
+  }
 }
 
 const UNSPAWNABLE_EXTS = new Set(['.cmd', '.bat']);
@@ -93,34 +102,60 @@ function pathExts(r: ResolveClaudeEnv): string[] {
     .filter((e) => e.startsWith('.') && !UNSPAWNABLE_EXTS.has(e));
 }
 
+/** The agents whose registry row declares how to find them (`setup`). */
+export type AgentBinary = AgentSlugWith<'setup'>;
+
 /** Every candidate path, in priority order. Pure; exported for tests. */
 export function claudeCandidates(r: ResolveClaudeEnv): string[] {
+  return agentCandidates(r, 'claude');
+}
+
+/**
+ * Candidate paths for one agent CLI, in priority order: PATH first, then the
+ * agent's own native installer location, then npm / Homebrew / Node version
+ * managers. The per-agent facts (binary name, installer folder, npm package)
+ * are the row's `setup` in src/shared/agentIdentity.ts.
+ */
+export function agentCandidates(r: ResolveClaudeEnv, agent: AgentBinary): string[] {
+  const spec = agentRow(agent)?.setup;
+  if (!spec) return [];
+  const name = spec.binary;
   const p = r.platform === 'win32' ? path.win32 : path.posix;
   const out: string[] = [];
   const win = r.platform === 'win32';
   for (const dir of pathDirs(r)) {
-    if (win) for (const ext of pathExts(r)) out.push(p.join(dir, `claude${ext}`));
-    else out.push(p.join(dir, 'claude'));
+    if (win) for (const ext of pathExts(r)) out.push(p.join(dir, `${name}${ext}`));
+    else out.push(p.join(dir, name));
+    // Windows npm in any prefix: the PATH folder holds an unspawnable .cmd
+    // shim next to node_modules; run the package entrypoint instead.
+    if (win && spec.npm.besideShim && isFileSafe(r, p.join(dir, `${name}.cmd`))) {
+      for (const entry of spec.npm.winEntries) out.push(p.join(dir, 'node_modules', ...spec.npm.package, ...entry));
+    }
   }
   // Native installer (self-updating).
-  out.push(p.join(r.homedir, '.local', 'bin', win ? 'claude.exe' : 'claude'));
+  if (win) {
+    const base = spec.native.win32.root === 'home' ? r.homedir : r.env[spec.native.win32.root];
+    if (base) out.push(p.join(base, ...spec.native.win32.path));
+  } else {
+    out.push(p.join(r.homedir, ...spec.native.posix));
+  }
   if (win) {
     const appData = r.env.APPDATA;
     if (appData) {
-      const pkg = p.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code');
-      out.push(p.join(pkg, 'bin', 'claude.exe'), p.join(pkg, 'cli.js'));
+      const pkg = p.join(appData, 'npm', 'node_modules', ...spec.npm.package);
+      for (const entry of spec.npm.winEntries) out.push(p.join(pkg, ...entry));
     }
   } else {
     // npm global prefix: explicit config, then the common user-level prefix.
     const prefix = r.env.npm_config_prefix ?? r.env.NPM_CONFIG_PREFIX;
-    if (prefix) out.push(p.join(prefix, 'bin', 'claude'));
-    out.push(p.join(r.homedir, '.npm-global', 'bin', 'claude'));
+    if (prefix) out.push(p.join(prefix, 'bin', name));
+    out.push(p.join(r.homedir, '.npm-global', 'bin', name));
     // Homebrew (Apple silicon, Intel / Linuxbrew-style).
-    out.push('/opt/homebrew/bin/claude', '/usr/local/bin/claude');
-    out.push('/home/linuxbrew/.linuxbrew/bin/claude');
+    out.push(`/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`);
+    out.push(`/home/linuxbrew/.linuxbrew/bin/${name}`);
     // Node version managers (npm -g lands inside the active Node's bin).
-    out.push(p.join(r.env.VOLTA_HOME || p.join(r.homedir, '.volta'), 'bin', 'claude'));
-    out.push(...nvmBins(r, p as typeof path.posix), ...fnmBins(r, p as typeof path.posix));
+    out.push(p.join(r.env.VOLTA_HOME || p.join(r.homedir, '.volta'), 'bin', name));
+    out.push(...nvmBins(r, p as typeof path.posix, name), ...fnmBins(r, p as typeof path.posix, name));
   }
   return [...new Set(out)];
 }
@@ -139,14 +174,19 @@ function firstHit(r: ResolveClaudeEnv, candidates: string[]): string | null {
 }
 
 export function resolveClaudeExecutableWith(r: ResolveClaudeEnv): string | null {
-  const hit = firstHit(r, claudeCandidates(r));
+  return resolveAgentExecutableWith(r, 'claude');
+}
+
+export function resolveAgentExecutableWith(r: ResolveClaudeEnv, agent: AgentBinary): string | null {
+  const hit = firstHit(r, agentCandidates(r, agent));
+  const name = agentRow(agent)?.setup?.binary ?? agent;
   if (hit || r.platform === 'win32' || !r.loginShellPath) return hit;
   // Last resort, and only then (it spawns a shell once): the PATH the user's
   // login shell builds. A Finder/Dock launch inherits a minimal PATH without
   // the nvm/fnm/volta lines from ~/.zshrc. Same absolute-only rule as PATH.
   const login = r.loginShellPath();
   if (!login) return null;
-  return firstHit(r, pathDirs(r, login).map((d) => path.posix.join(d, 'claude')));
+  return firstHit(r, pathDirs(r, login).map((d) => path.posix.join(d, name)));
 }
 
 export function isExecutableFile(p: string): boolean {
@@ -245,6 +285,25 @@ function cachedLoginShellPath(): string | null {
 }
 
 let lastLogged: string | null | undefined;
+
+/** The live inputs both resolvers read. `env` is a parameter so a caller can
+ *  pass a PATH re-read from the Windows registry after an install. */
+export function liveResolveEnv(env: Record<string, string | undefined> = process.env): ResolveClaudeEnv {
+  return {
+    platform: process.platform,
+    env,
+    homedir: os.homedir(),
+    isFile: isExecutableFile,
+    readDir,
+    readText,
+    loginShellPath: cachedLoginShellPath,
+  };
+}
+
+/** Where the user's Codex CLI is, by the same rules as {@link resolveClaudeExecutable}. */
+export function resolveCodexExecutable(env?: Record<string, string | undefined>): string | null {
+  return resolveAgentExecutableWith(liveResolveEnv(env), 'codex');
+}
 
 export function resolveClaudeExecutable(): string | null {
   const found = resolveClaudeExecutableWith({
