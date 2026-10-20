@@ -129,6 +129,19 @@ describe('guest routes: reading', () => {
     expect(await guestRouteResponse(ctx({ desktop: desktop(() => ({ unavailable: true })) }))).toMatchObject({ status: 503, body: { error: 'rooms-unavailable' } });
     expect(await guestRouteResponse(ctx({ desktop: null }))).toMatchObject({ status: 503, body: { error: 'desktop-unavailable' } });
     expect(await guestRouteResponse(ctx({ desktop: desktop(() => ({}), [GUEST_ROOM_POST_COMMAND]) }))).toMatchObject({ status: 503, body: { error: 'rooms-unavailable' } });
+    // Only a page of this conversation confirms it.
+    for (const reply of [null, {}, cardsReply({ ...SCOPE, workspaceId: 'ws-other' })]) {
+      expect(await guestRouteResponse(ctx({ desktop: desktop(() => reply) })), JSON.stringify(reply)).toMatchObject({ status: 502, body: { error: 'desktop-bad-reply' } });
+    }
+  });
+
+  it('me is refused for a guest revoked while main answers', async () => {
+    const guests = resolver();
+    const d = desktop((_c, p) => {
+      guests.resolve.mockResolvedValue({ ok: false, reason: 'revoked' });
+      return cardsReply(p);
+    });
+    expect(await guestRouteResponse(ctx({ desktop: d, guests }))).toMatchObject({ status: 401, body: { error: 'unauthorized' } });
   });
 
   it('reads only the stored conversation, whatever the query says, and projects the cards', async () => {

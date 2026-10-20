@@ -242,12 +242,27 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
     /* bookkeeping */
   }
   const scope = who.scope;
+  // Revoke (or the owner's switch) is instant: an authorization is checked
+  // again after every wait, right before a post leaves for main and before
+  // a read's cards are returned. A verified secret is cached, so this costs
+  // no key derivation.
+  const guests = ctx.guests;
+  const stillAllowed = async (): Promise<boolean> => {
+    try {
+      if (guests.enabled() !== true) return false;
+      const again = await guests.resolve(cred.guestId, cred.secret);
+      return again.ok && again.guestId === who.guestId;
+    } catch {
+      return false;
+    }
+  };
   if (route === 'me') {
     // The same per-request check as a read and a post: main answers for the
     // conversation only in a guest workspace (an empty page asked past its
     // end), and refuses the same way otherwise.
     const refused = await meScopeRefusal(ctx, scope);
     if (refused) return refused;
+    if (!(await stillAllowed())) return revokedMidRequest();
     return {
       status: 200,
       body: {
@@ -264,20 +279,6 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
       },
     };
   }
-  // Revoke (or the owner's switch) is instant: an authorization is checked
-  // again after every wait, right before a post leaves for main and before
-  // a read's cards are returned. A verified secret is cached, so this costs
-  // no key derivation.
-  const guests = ctx.guests;
-  const stillAllowed = async (): Promise<boolean> => {
-    try {
-      if (guests.enabled() !== true) return false;
-      const again = await guests.resolve(cred.guestId, cred.secret);
-      return again.ok && again.guestId === who.guestId;
-    } catch {
-      return false;
-    }
-  };
   return posting ? post(ctx, who, scope, stillAllowed) : read(ctx, scope, who.createdAt, who.joinSeq, stillAllowed);
 }
 
@@ -297,6 +298,8 @@ async function meScopeRefusal(ctx: GuestRouteContext, scope: GuestScope): Promis
   if (r.unavailable === true) return refuse(503, 'rooms-unavailable');
   if (r.notFound === true) return refuse(404, 'conversation-not-found');
   if (r.invalid === true) return refuse(400, 'invalid-request');
+  // Only a page of this very conversation confirms it, as for a read.
+  if (!parsePhoneRoomCardsReply(answered.reply, scope.workspaceId, scope.threadId)) return refuse(502, 'desktop-bad-reply');
   return null;
 }
 
