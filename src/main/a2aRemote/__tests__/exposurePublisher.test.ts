@@ -58,6 +58,14 @@ describe('A2aExposurePublisher', () => {
     expect(gone).toEqual([{ workspaceId: 'w1', reason: 'workspace-gone' }]);
   });
 
+  it('a pane of another PC’s shadow workspace is never one of this PC’s panes', async () => {
+    const { pub } = rig(['w1']);
+    const shadow = 'shadow:11111111-1111-4111-8111-111111111111:w9';
+    await pub.accept(snap([['w1', ['a']], [shadow, ['z']]]));
+    expect(pub.hasPane('w1', 'a')).toBe(true);
+    expect(pub.hasPane(shadow, 'z')).toBe(false);
+  });
+
   it('publishes nothing while nothing is exposed', async () => {
     const { pub, published } = rig([]);
     await pub.accept(snap([['w1', ['a']]]));

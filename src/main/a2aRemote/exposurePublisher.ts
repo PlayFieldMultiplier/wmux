@@ -7,6 +7,7 @@ import type {
   A2aRemotePaneGoneParams,
   A2aRemotePaneSnapshot,
 } from '../../shared/rpc';
+import { isShadowWorkspaceId } from '../../shared/pcRail';
 
 /**
  * Main's half of cross-host exposure. The renderer sends its whole pane tree
@@ -158,8 +159,9 @@ export class A2aExposurePublisher {
     });
   }
 
-  /** Is `paneId` a pane of `workspaceId` in the renderer's latest tree? */
+  /** Is `paneId` a pane of `workspaceId` in the renderer's latest tree (and this PC's own, not a shadow of another PC's)? */
   hasPane(workspaceId: string, paneId: string): boolean {
+    if (isShadowWorkspaceId(workspaceId)) return false;
     const tree = this.raw ?? this.last;
     return !!tree?.workspaces.some((w) => w.id === workspaceId && w.panes.some((p) => p.paneId === paneId));
   }
