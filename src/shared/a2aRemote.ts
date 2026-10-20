@@ -73,6 +73,9 @@ export const A2A_ROUTES = Object.freeze({
   stream: '/api/a2a/stream',
   /** POST — joiner acknowledges stream events up to a cursor. Body: A2aStreamAck. */
   ack: '/api/a2a/ack',
+  /** POST — the joiner declines a share offer. Path: /api/a2a/offers/:offerId/decline */
+  offers: '/api/a2a/offers',
+  offerDeclineSuffix: '/decline',
 } as const);
 
 /**
@@ -80,6 +83,31 @@ export const A2A_ROUTES = Object.freeze({
  * and LanLink (45651) defaults; the operator can change it in Settings.
  */
 export const A2A_REMOTE_DEFAULT_PORT = 45660;
+
+/**
+ * Optional features a build understands, advertised by the joiner on every
+ * `GET /api/a2a/stream` (comma-separated tokens). Additive: an older server
+ * ignores the header, an older joiner sends none, and the protocol number
+ * stays the same.
+ */
+export const A2A_FEATURES_HEADER = 'x-wmux-a2a-features';
+/** The joiner shows and accepts share offers (`link.state: 'offer'`). */
+export const A2A_FEATURE_LINK_OFFER = 'link-offer.1';
+const FEATURE_RE = /^[a-z0-9][a-z0-9.-]{0,31}$/;
+const FEATURES_MAX = 16;
+
+/** Parse a features header value; malformed tokens are dropped. */
+export function parseA2aFeatures(raw: unknown): string[] {
+  const value = Array.isArray(raw) ? raw.join(',') : raw;
+  if (typeof value !== 'string' || value.length > 1024) return [];
+  const out: string[] = [];
+  for (const token of value.split(',')) {
+    const t = token.trim().toLowerCase();
+    if (FEATURE_RE.test(t) && !out.includes(t)) out.push(t);
+    if (out.length >= FEATURES_MAX) break;
+  }
+  return out;
+}
 
 /** True iff `pathname` is a peer route (prefix match on the canonical path). */
 export function isA2aRoute(pathname: string): boolean {
@@ -451,6 +479,13 @@ export interface A2aLinkProposeRequest {
   /** Minted by the proposer; the receiver refuses a duplicate id. */
   linkId: string;
   /**
+   * The receiver's share offer this proposal answers. The receiver accepts at
+   * once when the proposal fits the offer (its end, a subset of its
+   * directions, still open). An older receiver ignores the field and takes it
+   * as an ordinary proposal for its human.
+   */
+  offerId?: string;
+  /**
    * Proposer's pane (the receiver stores it as `remote`). The names and the
    * repo key are display-only, sanitized and bounded by the receiver.
    */
@@ -466,7 +501,17 @@ export interface A2aLinkProposeRequest {
 
 export interface A2aLinkProposeResponse {
   linkId: string;
-  state: 'proposed-in';
+  /** 'active' only for a proposal that answered an open offer. */
+  state: 'proposed-in' | 'active';
+  /** The link's version on the receiver (present with 'active'). */
+  version?: number;
+}
+
+/** `409 offer-closed` answer: why the offer can no longer be taken. */
+export interface A2aOfferClosedResponse {
+  ok: false;
+  error: 'offer-closed';
+  reason: A2aOfferEndReason;
 }
 
 /** `GET /api/a2a/links/:linkId` — the link from the SERVER's perspective. */
@@ -534,8 +579,14 @@ export interface A2aRemoteEnvelope {
   text?: string;
   /** For 'state'. */
   state?: TaskState;
-  /** For 'link'. */
-  link?: { state: 'active' | 'revoked' | 'broken'; version: number; reason?: A2aLinkRecordV1['endedReason'] };
+  /**
+   * For 'link'. `offer` / `offer-withdrawn` carry a share offer instead of a
+   * link notice: `linkId` is then the offerId, both versions are 0, and the
+   * payload is in `offer`. An older receiver refuses them as an unknown link.
+   */
+  link?: { state: 'active' | 'revoked' | 'broken' | 'offer' | 'offer-withdrawn'; version: number; reason?: A2aLinkRecordV1['endedReason'] };
+  /** For a 'link' envelope whose state is `offer` / `offer-withdrawn`. */
+  offer?: A2aOfferPayload;
   /** For 'receipt' (with `taskId`). */
   receipt?: A2aRemoteReceipt;
   sentAt: string;
@@ -553,7 +604,9 @@ export type A2aRemoteErrorCode =
   | 'too-large'
   | 'bad-request'
   | 'protocol'
-  | 'unavailable';
+  | 'unavailable'
+  /** The share offer a proposal answers is no longer open. */
+  | 'offer-closed';
 
 export type A2aRemoteDeliverResponse =
   | { ok: true; taskId?: string; duplicate: boolean }
@@ -599,6 +652,82 @@ export interface A2aOutboxRecordV1 {
   createdAt: string;
   updatedAt: string;
   lastError?: A2aRemoteErrorCode;
+}
+
+// ─── Share offers ───────────────────────────────────────────────────────────
+
+/**
+ * A share offer: the server's human shared one of its panes with one paired
+ * PC. It is that human's consent that the PC may link the pane, within the
+ * directions offered, once, before `expiresAt`. The other PC's human then
+ * picks its own pane and accepts, which sends an ordinary proposal naming the
+ * offer (`A2aLinkProposeRequest.offerId`); the sharer accepts it at once.
+ */
+export const A2A_OFFER_TTL_MS = 60 * 60 * 1000;
+
+export type A2aOfferState =
+  | 'open'
+  /** Sharer only: a matching proposal is being turned into a link. */
+  | 'claimed'
+  | 'accepted'
+  | 'declined'
+  | 'withdrawn'
+  | 'expired';
+
+export type A2aOfferEndReason =
+  | 'declined'
+  | 'withdrawn'
+  | 'expired'
+  | 'pane-closed'
+  | 'pane-moved'
+  | 'workspace-gone'
+  | 'exposure-revoked'
+  | 'peer-removed'
+  | 'receiver-unsupported'
+  /** The offer already made its one link. */
+  | 'used';
+
+export const A2A_OFFER_END_REASONS: readonly A2aOfferEndReason[] = Object.freeze([
+  'declined', 'withdrawn', 'expired', 'pane-closed', 'pane-moved', 'workspace-gone', 'exposure-revoked', 'peer-removed', 'receiver-unsupported', 'used',
+]);
+
+/** `A2aRemoteEnvelope.offer`: an open offer, or why it was withdrawn. */
+export type A2aOfferPayload =
+  | {
+      /** The sharer's pane, display fields included (sanitized by the receiver). */
+      end: A2aExposedPane;
+      /** Directions from the SHARER's point of view. */
+      allow: { outbound: boolean; inbound: boolean };
+      /** Lifetime from receipt (relative, so clocks need not agree). */
+      ttlMs: number;
+    }
+  | { reason: A2aOfferEndReason };
+
+/** One share offer, from this host's perspective (`offers.json`). */
+export interface A2aLinkOfferRecordV1 {
+  v: 1;
+  offerId: string;
+  /** 'out': this PC shared one of its panes; 'in': another PC shared one with this PC. */
+  side: 'out' | 'in';
+  /** The other PC. */
+  hostId: HostId;
+  /** The sharer's pane: ours for 'out', theirs (as that PC reports it) for 'in'. */
+  end: A2aExposedPane;
+  /** Directions from THIS host's point of view. */
+  allow: { outbound: boolean; inbound: boolean };
+  state: A2aOfferState;
+  endedReason?: A2aOfferEndReason;
+  /** The link this offer made ('claimed' / 'accepted'). */
+  linkId?: string;
+  /** Receiver only: our proposal for this offer, sent but not settled. */
+  pendingLinkId?: string;
+  /** Sharer only: the share added this pane (and maybe its workspace) to that PC's exposure. */
+  addedExposure?: boolean;
+  addedWorkspace?: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /** Sharer: authoritative. Receiver: receipt time + ttlMs, for display. */
+  expiresAt: string;
 }
 
 // ─── Ledger marker ──────────────────────────────────────────────────────────

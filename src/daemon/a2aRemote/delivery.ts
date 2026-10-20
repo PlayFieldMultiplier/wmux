@@ -17,6 +17,7 @@ import { remoteTaskId } from './ids';
 import { acceptInbound, type InboundDeps } from './inbound';
 import type { NotifyLinkChange } from './linkRpc';
 import type { LinkStore } from './linkStore';
+import type { A2aOffers } from './offers';
 import { aliasTable, linkAlias, listRemoteTargets, sendRemoteReply, sendRemoteState, sendRemoteTask, syncRemoteTask, type OutboundDeps } from './outbound';
 import { OutboxStore } from './outboxStore';
 import type { A2aRouteTable } from './routes';
@@ -57,6 +58,10 @@ export interface A2aRemoteDeliveryDeps {
   /** `a2a.remote.links.refresh` — fold the server's view of one link into ours. */
   refreshLink: (linkId: string) => Promise<unknown>;
   localWorkspaceName?: (workspaceId: string) => string | undefined;
+  /** Share offers: received as link envelopes, refused by older builds, ended when a peer stops supporting them. */
+  offers?: A2aOffers;
+  /** Optional features this PC advertises on its streams to the servers it joined. */
+  features?: readonly string[];
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   /** Test seams. */
   timing?: Partial<SessionTiming>;
@@ -94,6 +99,7 @@ export class A2aRemoteDelivery {
       accept: (env, peer) => this.accept(env, peer),
       serves: (hostId) => !deps.remoteHosts.get(hostId),
       onStatus: (hostId) => this.announceServed(hostId),
+      onFeatures: (hostId, features) => deps.offers?.onPeerFeatures(hostId, features),
       ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
       log: deps.log,
     });
@@ -240,6 +246,7 @@ export class A2aRemoteDelivery {
     } catch (err) {
       this.deps.log('warn', `[a2a-remote] hold expiry failed: ${errMsg(err)}`);
     }
+    this.deps.offers?.expire();
   }
 
   // --- RPC ------------------------------------------------------------------
@@ -359,6 +366,7 @@ export class A2aRemoteDelivery {
       onRefused: (rec, code) => this.onRefused(rec, code),
       reconcileLinks: () => this.reconcileLinks(hostId),
       onStatus: (status) => this.deps.broadcast({ type: 'a2a.remote.hosts.status', sessionId: '', data: status }),
+      ...(this.deps.features ? { features: this.deps.features } : {}),
       ...(this.deps.timing ? { timing: this.deps.timing } : {}),
       ...(this.deps.client ? { client: this.deps.client } : {}),
       log: this.deps.log,
@@ -377,6 +385,7 @@ export class A2aRemoteDelivery {
   /** The other PC refused a message for good: the task it carried fails here. */
   private async onRefused(rec: A2aOutboxRecordV1, code: A2aRemoteErrorCode): Promise<void> {
     this.deps.log('warn', `[a2a-remote] ${rec.hostId} refused ${rec.envelope.kind} on link ${rec.envelope.linkId}: ${code}`);
+    this.deps.offers?.onRefused(rec.hostId, rec.envelope, code);
     const taskId = taskOfEnvelope(rec.envelope, remoteTaskId);
     if (!taskId || !this.deps.taskService.getTask(taskId)) return;
     await this.deps.taskService.forceFailRemote({ taskId, reason: `refused by the other PC: ${code}`, forced: 'remote_refused' });
@@ -435,6 +444,7 @@ export class A2aRemoteDelivery {
 
   private servedStatus(hostId: HostId, name: string): A2aRemoteHostStatus {
     const since = this.hub.connectedSince(hostId);
+    const features = this.hub.featuresOf(hostId);
     return {
       hostId,
       name,
@@ -442,6 +452,7 @@ export class A2aRemoteDelivery {
       state: this.hub.isConnected(hostId) ? 'connected' : 'disconnected',
       pending: this.outbox.openCount(hostId),
       ...(since !== undefined ? { connectedAt: new Date(since).toISOString() } : {}),
+      ...(features ? { features: [...features] } : {}),
     };
   }
 
@@ -460,6 +471,7 @@ export class A2aRemoteDelivery {
       broadcast: (event) => this.deps.broadcast({ type: event.type, sessionId: '', data: event }),
       aliasFor: (l) => this.aliasFor(l),
       ...(this.deps.localWorkspaceName ? { localWorkspaceName: this.deps.localWorkspaceName } : {}),
+      ...(this.deps.offers ? { offers: this.deps.offers } : {}),
     };
   }
 

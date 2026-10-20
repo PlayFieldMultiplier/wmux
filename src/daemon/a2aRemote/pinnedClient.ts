@@ -2,7 +2,7 @@ import http from 'node:http';
 import net from 'node:net';
 import tls from 'node:tls';
 import { StringDecoder } from 'node:string_decoder';
-import { normalizeFingerprint256 } from '../../shared/a2aRemote';
+import { A2A_FEATURES_HEADER, normalizeFingerprint256, parseA2aFeatures } from '../../shared/a2aRemote';
 
 /**
  * Certificate-pinned HTTPS client for cross-host A2A (joiner -> server).
@@ -227,11 +227,13 @@ export class PinnedTlsClient {
    */
   async *openStream(
     path: string,
-    { signal, lastEventId }: { signal: AbortSignal; lastEventId?: string },
+    { signal, lastEventId, features }: { signal: AbortSignal; lastEventId?: string; features?: readonly string[] },
   ): AsyncGenerator<PinnedSseEvent, void, undefined> {
     if (lastEventId !== undefined && !isHeaderSafeId(lastEventId)) {
       throw new PinnedClientError('bad-options', 'lastEventId is not a valid header value', { sent: false });
     }
+    // Only well-formed feature tokens go on the wire (the same rule the server parses by).
+    const featureHeader = features && features.length > 0 ? parseA2aFeatures(features.join(',')).join(',') : '';
     if (signal.aborted) return;
     let conn: { socket: tls.TLSSocket; address: string };
     try {
@@ -263,6 +265,7 @@ export class PinnedTlsClient {
           Accept: 'text/event-stream',
           'Cache-Control': 'no-cache',
           ...(lastEventId !== undefined ? { 'Last-Event-ID': lastEventId } : {}),
+          ...(featureHeader ? { [A2A_FEATURES_HEADER]: featureHeader } : {}),
         }),
         createConnection: () => socket,
       });

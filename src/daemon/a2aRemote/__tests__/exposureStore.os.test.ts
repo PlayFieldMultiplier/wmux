@@ -184,3 +184,63 @@ describe('ExposureStore Moa flag', () => {
     expect(make().isBrainExposed(HOST)).toBe(false);
   });
 });
+
+describe('ExposureStore — one pane for a share (addPane / removePane)', () => {
+  it('adds one pane to a new workspace as an explicit single-pane list, keeping the rest', () => {
+    const s = make({ write: flakyWrite });
+    s.set(HOST, { workspaceIds: ['ws1'], paneIds: { ws1: ['p1'] }, brain: true });
+    expect(s.addPane(HOST, 'ws2', 'p9')).toEqual({ added: true, addedWorkspace: true });
+    const rec = make().get(HOST)!;
+    expect(rec.workspaceIds).toEqual(['ws1', 'ws2']);
+    expect(rec.paneIds).toEqual({ ws1: ['p1'], ws2: ['p9'] });
+    expect(rec.brain).toBe(true);
+    expect(s.isPaneExposed(HOST, 'ws2', 'p8')).toBe(false);
+  });
+
+  it('adds a pane to an already shown workspace without hiding its siblings', () => {
+    const s = make();
+    s.set(HOST, { workspaceIds: ['ws1'], paneIds: { ws1: ['p1'] } });
+    expect(s.addPane(HOST, 'ws1', 'p2')).toEqual({ added: true, addedWorkspace: false });
+    expect(s.get(HOST)!.paneIds).toEqual({ ws1: ['p1', 'p2'] });
+  });
+
+  it('writes nothing when the pane is already shown, including by the every-pane form', () => {
+    const writes: unknown[] = [];
+    const s = make({ write: (p, d) => { writes.push(d); atomicWriteJSONSync(p, d); } });
+    s.set(HOST, { workspaceIds: ['ws1', 'ws2'], paneIds: { ws2: ['p2'] } });
+    writes.length = 0;
+    expect(s.addPane(HOST, 'ws1', 'anything')).toEqual({ added: false, addedWorkspace: false });
+    expect(s.addPane(HOST, 'ws2', 'p2')).toEqual({ added: false, addedWorkspace: false });
+    expect(writes).toEqual([]);
+  });
+
+  it('creates the record for a host with nothing shown yet; a failed write rolls back', () => {
+    const s = make({ write: flakyWrite });
+    fail = true;
+    expect(() => s.addPane(HOST, 'ws1', 'p1')).toThrow(/disk full/);
+    expect(s.isPaneExposed(HOST, 'ws1', 'p1')).toBe(false);
+    fail = false;
+    expect(s.addPane(HOST, 'ws1', 'p1')).toEqual({ added: true, addedWorkspace: true });
+    expect(s.get(HOST)).toMatchObject({ workspaceIds: ['ws1'], paneIds: { ws1: ['p1'] } });
+  });
+
+  it('removes the pane (and the workspace it added) again; a failed write keeps it hidden', () => {
+    const s = make({ write: flakyWrite });
+    s.set(HOST, { workspaceIds: ['ws1'], paneIds: { ws1: ['p1'] } });
+    s.addPane(HOST, 'ws1', 'p2');
+    s.addPane(HOST, 'ws2', 'p9');
+    s.removePane(HOST, 'ws1', 'p2', false);
+    expect(s.get(HOST)!.paneIds).toEqual({ ws1: ['p1'], ws2: ['p9'] });
+    fail = true;
+    expect(() => s.removePane(HOST, 'ws2', 'p9', true)).toThrow(/disk full/);
+    expect(s.isPaneExposed(HOST, 'ws2', 'p9')).toBe(false);
+    expect(s.get(HOST)!.workspaceIds).toEqual(['ws1']);
+  });
+
+  it('never narrows an every-pane workspace to an explicit list when removing', () => {
+    const s = make();
+    s.set(HOST, { workspaceIds: ['ws1'] });
+    s.removePane(HOST, 'ws1', 'p1', false);
+    expect(s.isPaneExposed(HOST, 'ws1', 'p2')).toBe(true);
+  });
+});

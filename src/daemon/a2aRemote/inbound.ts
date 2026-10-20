@@ -29,7 +29,9 @@ import { isPlainObject, isSafeId } from './storeFile';
  *           `a2a.remote.inbound` broadcast so main delivers it.
  *   reply → appended to that task's history.
  *   state → applied as `remote:<linkId>` under the ordinary authz rules.
- *   link  → the matching link-store transition.
+ *   link  → the matching link-store transition; a share offer
+ *           (`link.state` `offer` / `offer-withdrawn`, linkId = offerId)
+ *           goes to the offer handler instead.
  *
  * The same (linkId, messageId) with the same payload answers `duplicate: true`;
  * with a different payload, `conflict`.
@@ -43,6 +45,8 @@ export interface InboundDeps {
   aliasFor: (link: A2aLinkRecordV1) => string;
   /** Display name of a local workspace, when the daemon knows it. */
   localWorkspaceName?: (workspaceId: string) => string | undefined;
+  /** Share offers (`link.state` `offer` / `offer-withdrawn`); absent, they are an unknown link. */
+  offers?: { applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse | Promise<A2aRemoteDeliverResponse> };
 }
 
 const BROKEN: ReadonlySet<string> = new Set(['pane-closed', 'pane-moved', 'workspace-gone', 'exposure-revoked']);
@@ -60,6 +64,9 @@ export async function acceptInbound(
     typeof parsed.envelope.text === 'string' ? { ...parsed.envelope, text: sanitizeRemoteText(parsed.envelope.text) } : parsed.envelope;
   if ((env.kind === 'task' || env.kind === 'reply') && !env.text) return fail('bad-request');
 
+  if (env.kind === 'link' && deps.offers && (env.link?.state === 'offer' || env.link?.state === 'offer-withdrawn')) {
+    return deps.offers.applyInbound(env, peer);
+  }
   if (env.kind === 'link') return applyLinkNotice(env, peer.hostId, deps);
 
   let onThisLink = false;

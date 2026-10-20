@@ -3,6 +3,7 @@ import { moaRemoteTasks } from '../a2aRemoteDelivery';
 import { summarizeTask } from '../a2aTaskQueryView';
 import {
   a2aEndpointAlias,
+  parseA2aFeatures,
   isAllowedEndpointPair,
   isConsistentEndpoint,
   formatInvite,
@@ -172,3 +173,17 @@ describe('receipts in summaries', () => {
   });
 });
 
+
+describe('parseA2aFeatures', () => {
+  it('keeps well-formed tokens, lower-cased and once each', () => {
+    expect(parseA2aFeatures('link-offer.1, Future-Thing ,link-offer.1')).toEqual(['link-offer.1', 'future-thing']);
+    expect(parseA2aFeatures(['link-offer.1', 'x.2'])).toEqual(['link-offer.1', 'x.2']);
+  });
+
+  it('drops anything else and is bounded', () => {
+    expect(parseA2aFeatures(undefined)).toEqual([]);
+    expect(parseA2aFeatures('bad token,\u001b[31m,-lead,' + 'a'.repeat(40))).toEqual([]);
+    expect(parseA2aFeatures(Array.from({ length: 40 }, (_, i) => `f${i}`).join(','))).toHaveLength(16);
+    expect(parseA2aFeatures('x'.repeat(2000))).toEqual([]);
+  });
+});

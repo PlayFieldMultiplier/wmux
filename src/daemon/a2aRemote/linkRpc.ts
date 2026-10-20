@@ -1,4 +1,5 @@
 import {
+  A2A_OFFER_END_REASONS,
   A2A_ROUTES,
   a2aLinkPath,
   formatPeerCredential,
@@ -6,8 +7,10 @@ import {
   isConsistentEndpoint,
   type A2aEndpointKind,
   type A2aExposureV1,
+  type A2aLinkOfferRecordV1,
   type A2aLinkProposeRequest,
   type A2aLinkRecordV1,
+  type A2aOfferEndReason,
   type A2aRemoteErrorCode,
   type A2aRemoteHostRecordV1,
   type HostId,
@@ -18,12 +21,14 @@ import type {
   A2aRemoteHostsExposedResult,
   A2aRemoteLinkEvent,
   A2aRemoteLinkResult,
+  A2aRemoteOfferResult,
   A2aRemotePaneGoneParams,
 } from '../../shared/rpc';
 import { cleanExposedPane, type ExposedPaneCache, type ExposureCheck } from './exposedPanes';
 import { isVisibleEnd } from './routes';
 import type { JsonClient } from './joiner';
 import type { BrokenReason, LinkStore } from './linkStore';
+import type { A2aOffers } from './offers';
 import { PinnedClientError, PinnedTlsClient, type PinnedClientOptions } from './pinnedClient';
 import { addressPromoter } from './remoteHostStore';
 import { errMsg, isPlainObject, isSafeId } from './storeFile';
@@ -68,6 +73,8 @@ export interface A2aLinkRpcDeps {
   broadcast: (event: A2aRemoteLinkEvent) => void;
   /** Default: no-op (wired to the outbox with the delivery layer). */
   notifyLinkChange?: NotifyLinkChange;
+  /** Share offers (`a2a.remote.offers.*`); absent, those RPCs are not registered. */
+  offers?: A2aOffers;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   /** Test seam; default `new PinnedTlsClient(opts)`. */
   client?: (opts: PinnedClientOptions) => JsonClient;
@@ -79,8 +86,9 @@ const DEFAULT_TIMEOUTS = { connectMs: 3_000, requestMs: 10_000 };
 const NON_TERMINAL: ReadonlySet<string> = new Set(['proposed-out', 'proposed-in', 'active']);
 const REMOTE_ERRORS: ReadonlySet<string> = new Set<A2aRemoteErrorCode>([
   'unauthorized', 'forbidden', 'unknown-link', 'link-not-active', 'stale-link-version', 'direction-not-allowed',
-  'unknown-task', 'conflict', 'too-large', 'bad-request', 'protocol', 'unavailable',
+  'unknown-task', 'conflict', 'too-large', 'bad-request', 'protocol', 'unavailable', 'offer-closed',
 ]);
+const OFFER_REASONS: ReadonlySet<string> = new Set(A2A_OFFER_END_REASONS);
 const GONE_REASONS: ReadonlySet<string> = new Set(['pane-closed', 'pane-moved', 'workspace-gone']);
 /** Broken reasons the other PC may report for its end (`refresh`). */
 const SERVER_BROKEN_REASONS: ReadonlySet<string> = new Set([...GONE_REASONS, 'exposure-revoked']);
@@ -90,7 +98,14 @@ class CallFailure extends Error {
    * `sent`: request bytes may have reached the other PC. `answered`: it
    * replied (a definite refusal). Sent but not answered = outcome unknown.
    */
-  constructor(readonly code: A2aRemoteCallError, detail: string, readonly sent = false, readonly answered = false) {
+  constructor(
+    readonly code: A2aRemoteCallError,
+    detail: string,
+    readonly sent = false,
+    readonly answered = false,
+    /** The other PC's `reason` field, when it gave one (an `offer-closed` answer). */
+    readonly reason?: string,
+  ) {
     super(detail);
   }
 }
@@ -133,11 +148,13 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
     }
     if (answer.status >= 200 && answer.status < 300) return answer.json;
     const code = isPlainObject(answer.json) ? answer.json['error'] : undefined;
+    const reason = isPlainObject(answer.json) && typeof answer.json['reason'] === 'string' ? answer.json['reason'] : undefined;
     throw new CallFailure(
       typeof code === 'string' && REMOTE_ERRORS.has(code) ? (code as A2aRemoteErrorCode) : 'failed',
       `the other PC answered HTTP ${answer.status}`,
       true,
       true,
+      reason,
     );
   };
 
@@ -181,6 +198,8 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
         : deps.exposures.isPaneExposed(hostId, rec.local.workspaceId, rec.local.paneId ?? '');
       if (!stillShown) breakLink(rec, 'exposure-revoked');
     }
+    // A human saved this list: shares to that PC owe nothing back, and a share it hides ends.
+    deps.offers?.onExposureSetByHuman(hostId);
     return { exposure };
   });
 
@@ -326,7 +345,9 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
     } catch (err) {
       // The server no longer knows a link we still wait on: it is over there.
       if (err instanceof CallFailure && err.code === 'unknown-link') {
-        changed(endRemotely(rec));
+        // Our answer to a share that never reached it: drop the proposal and
+        // keep the share open there and here, so it can be accepted again.
+        if (!dropUnsentOfferProposal(rec)) changed(endRemotely(rec));
       }
       return fail(err);
     }
@@ -357,6 +378,7 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
       breakLink(rec, reason as BrokenReason);
       broken += 1;
     }
+    if (!brainGone) deps.offers?.onPaneGone({ workspaceId, ...(paneId ? { paneId } : {}), reason: reason as 'pane-closed' | 'pane-moved' | 'workspace-gone' });
     try {
       if (brainGone) {
         deps.panes.forgetBrain();
@@ -372,6 +394,183 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
     }
     return { ok: true, broken };
   });
+
+  // --- share offers ------------------------------------------------------------
+
+  /**
+   * `rec` is our proposal answering an open share the other PC says it never
+   * got: drop the proposal (it existed only here) and clear the offer's
+   * pending mark. True when that is what `rec` was.
+   */
+  function dropUnsentOfferProposal(rec: A2aLinkRecordV1): boolean {
+    const offer = deps.offers?.store.findByLink(rec.linkId);
+    if (!offer || offer.side !== 'in' || offer.state !== 'open' || offer.pendingLinkId !== rec.linkId || rec.state !== 'proposed-out') return false;
+    try {
+      links.discard(rec.linkId);
+      deps.offers!.announce(deps.offers!.store.setPending(offer.offerId, null));
+    } catch (err) {
+      deps.log('warn', `[a2a-remote] offer ${offer.offerId}: unsent proposal not dropped: ${errMsg(err)}`);
+    }
+    deps.broadcast({ type: 'a2a.remote.link.changed', linkId: rec.linkId, state: 'revoked' });
+    return true;
+  }
+
+  if (deps.offers) registerOfferRpc(deps.offers);
+
+  function registerOfferRpc(offers: A2aOffers): void {
+    onRpc('a2a.remote.offers.list', async () => ({ offers: offers.list() }));
+
+    onRpc('a2a.remote.offers.create', async (params) =>
+      offers.create({ hostId: str(params, 'hostId'), end: params['end'], allow: params['allow'] }));
+
+    onRpc('a2a.remote.offers.withdraw', async (params) => offers.withdraw(str(params, 'offerId')));
+
+    // This PC's human accepts another PC's share, linking it with one of our panes.
+    onRpc('a2a.remote.offers.accept', async (params): Promise<A2aRemoteOfferResult> => {
+      offers.expire();
+      const offerId = str(params, 'offerId');
+      const rec = offers.store.get(offerId);
+      if (!rec || rec.side !== 'in') return { ok: false, error: 'unknown-offer' };
+      if (rec.state !== 'open') return offerClosed(rec.endedReason ?? 'expired');
+      const local = endArg(params['local']);
+      const allow = params['allow'];
+      if (!local || local.kind !== 'pane' || !isPlainObject(allow) || typeof allow['outbound'] !== 'boolean' || typeof allow['inbound'] !== 'boolean') {
+        return { ok: false, error: 'bad-request' };
+      }
+      // Narrow only: never more than the sharer offered, and at least one way.
+      const want = { outbound: allow['outbound'] && rec.allow.outbound, inbound: allow['inbound'] && rec.allow.inbound };
+      if (!want.outbound && !want.inbound) return { ok: false, error: 'bad-request', message: 'no direction allowed' };
+      if (!deps.remoteHosts.get(rec.hostId)) return { ok: false, error: 'not-paired' };
+
+      // One offer, one proposal: a retry after an unanswered send reuses it.
+      let link = rec.pendingLinkId ? links.get(rec.pendingLinkId) : undefined;
+      if (link && link.state === 'active') return settleAccepted(offerId, link);
+      if (link && link.state !== 'proposed-out') link = undefined;
+      if (link && (link.local.workspaceId !== local.workspaceId || link.local.paneId !== local.paneId)) {
+        return { ok: false, error: 'invalid-state', message: 'an earlier answer to this share is still unsettled; use Check' };
+      }
+      if (!link) {
+        try {
+          link = links.proposeOut({
+            local: { kind: 'pane', workspaceId: local.workspaceId, paneId: local.paneId },
+            remote: {
+              hostId: rec.hostId,
+              kind: 'pane',
+              workspaceId: rec.end.workspaceId,
+              paneId: rec.end.paneId,
+              ...(rec.end.label ? { label: rec.end.label } : {}),
+              workspaceName: rec.end.workspaceName,
+              ...(rec.end.gitRemote ? { gitRemote: rec.end.gitRemote } : {}),
+            },
+            allow: want,
+          });
+        } catch (err) {
+          return { ok: false, error: 'conflict', message: errMsg(err) };
+        }
+        try {
+          offers.store.setPending(offerId, link.linkId);
+        } catch (err) {
+          dropProposal(link.linkId);
+          return { ok: false, error: 'unavailable', message: errMsg(err) };
+        }
+      }
+      const request: A2aLinkProposeRequest = {
+        linkId: link.linkId,
+        offerId,
+        from: local,
+        to: { kind: 'pane', workspaceId: rec.end.workspaceId, paneId: rec.end.paneId },
+        allow: link.allow,
+      };
+      let json: unknown;
+      try {
+        json = await call(rec.hostId, 'POST', A2A_ROUTES.links, request);
+      } catch (err) {
+        if (!(err instanceof CallFailure) || (err.sent && !err.answered)) {
+          // It may have landed: keep the proposal; Check (refresh) settles it.
+          const r = fail(err);
+          return r.ok ? { ok: false, error: 'failed' } : { ok: false, error: r.error, ...(r.message ? { message: r.message } : {}), uncertain: true };
+        }
+        dropProposal(link.linkId);
+        if (err.code === 'offer-closed') {
+          const reason = OFFER_REASONS.has(err.reason ?? '') ? (err.reason as A2aOfferEndReason) : 'withdrawn';
+          try {
+            offers.announce(offers.store.end(offerId, reason === 'expired' ? 'expired' : 'withdrawn', reason));
+          } catch (endErr) {
+            deps.log('warn', `[a2a-remote] offer ${offerId} end not persisted: ${errMsg(endErr)}`);
+          }
+          return offerClosed(reason);
+        }
+        try {
+          offers.store.setPending(offerId, null);
+        } catch (clearErr) {
+          deps.log('warn', `[a2a-remote] offer ${offerId} pending mark not cleared: ${errMsg(clearErr)}`);
+        }
+        return { ok: false, error: err.code, message: err.message };
+      }
+      // The sharer's stream notice may have made the link active first: apply in either order.
+      const answer = isPlainObject(json) ? json : {};
+      const current = links.get(link.linkId);
+      if (answer['state'] === 'active' && typeof answer['version'] === 'number' && current?.state === 'proposed-out') {
+        try {
+          links.applyRemoteAccept(link.linkId, answer['version']);
+        } catch (err) {
+          deps.log('warn', `[a2a-remote] offer ${offerId}: accept of link ${link.linkId} not applied yet: ${errMsg(err)}`);
+        }
+      }
+      const after = links.get(link.linkId) ?? link;
+      changed(after);
+      return settleAccepted(offerId, after);
+    });
+
+    // This PC's human declines another PC's share; the sharer is told (best effort; it also expires there).
+    onRpc('a2a.remote.offers.decline', async (params): Promise<A2aRemoteOfferResult> => {
+      const offerId = str(params, 'offerId');
+      const rec = offers.store.get(offerId);
+      if (!rec || rec.side !== 'in') return { ok: false, error: 'unknown-offer' };
+      if (rec.state !== 'open') return offerClosed(rec.endedReason ?? 'expired');
+      if (rec.pendingLinkId && links.get(rec.pendingLinkId)?.state === 'proposed-out') {
+        return { ok: false, error: 'invalid-state', message: 'an answer to this share is still unsettled; use Check' };
+      }
+      let ended: A2aLinkOfferRecordV1;
+      try {
+        ended = offers.store.end(offerId, 'declined', 'declined');
+      } catch (err) {
+        ended = offers.store.get(offerId) ?? rec;
+        if (ended.state === 'open') return { ok: false, error: 'failed', message: errMsg(err) };
+      }
+      offers.announce(ended);
+      if (deps.remoteHosts.get(rec.hostId)) {
+        await call(rec.hostId, 'POST', `${A2A_ROUTES.offers}/${encodeURIComponent(offerId)}${A2A_ROUTES.offerDeclineSuffix}`, {}).catch(() => undefined);
+      }
+      return { ok: true, offer: ended };
+    });
+
+    /** The offer's link is live (or waiting on an older sharer's human): the offer is accepted. */
+    function settleAccepted(offerId: string, link: A2aLinkRecordV1): A2aRemoteOfferResult {
+      let offer = offers.store.get(offerId);
+      if (offer && offer.state === 'open' && (link.state === 'active' || link.state === 'proposed-out')) {
+        try {
+          offer = offers.store.markAccepted(offerId, link.linkId);
+          offers.announce(offer);
+        } catch (err) {
+          deps.log('warn', `[a2a-remote] offer ${offerId}: accepted, not stored yet: ${errMsg(err)}`);
+        }
+      }
+      return offer ? { ok: true, offer, link } : { ok: false, error: 'unknown-offer' };
+    }
+
+    function dropProposal(linkId: string): void {
+      try {
+        links.discard(linkId);
+      } catch (err) {
+        deps.log('error', `[a2a-remote] could not drop proposal ${linkId}: ${errMsg(err)}`);
+      }
+    }
+  }
+
+  function offerClosed(reason: A2aOfferEndReason): A2aRemoteOfferResult {
+    return { ok: false, error: 'offer-closed', reason };
+  }
 
   /** Break here; a failed write keeps it broken in memory (LinkStore rule). */
   function breakLink(rec: A2aLinkRecordV1, reason: BrokenReason): void {
