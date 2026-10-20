@@ -9,6 +9,8 @@
 //
 // Which facts a bot sees (scope), in order:
 //   1. a fact a bot produced (actor {kind:'bot', id}) never wakes that bot;
+//      a bot in a guest workspace sees only its own workspace's facts, and
+//      no other bot sees a guest workspace's (guestWorkspaces.ts);
 //   2. a directed fact (handoff.received / handoff.refused / human.message /
 //      schedule.fired / bot.notice with ref.botId) is seen by that bot only; a directed
 //      human.message and a routine's schedule.fired wake nobody here (their
@@ -37,6 +39,7 @@ import { GENERAL_THREAD, type ThreadId } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
 import { REPO_WATCH_FILENAME, RepoWatch, normalizeRepoKey, type WatchGraphql } from './repoWatch';
 import { factThreadId } from './roomWriter';
+import { factInIsland } from './guestWorkspaces';
 
 // ── Ports (shapes of design §14; the real ones are wired by the factory host) ─
 
@@ -116,6 +119,9 @@ export function isRoutineFact(fact: Fact): boolean {
 /** Whether a bot can see a fact at all (scope rules 1–6 above). */
 export function botSeesFact(bot: Pick<BotProfile, 'id' | 'workspaceId' | 'role' | 'template' | 'repo'>, fact: Fact): boolean {
   if (fact.actor?.kind === 'bot' && fact.actor.id === bot.id) return false;
+  // The island first (guestWorkspaces.ts): before the directed and HQ-wide
+  // rules, and in place of the fallthrough for a bot in a guest workspace.
+  if (!factInIsland(bot.workspaceId, fact)) return false;
   if (DIRECTED_KINDS.has(fact.kind) && fact.ref?.botId) return fact.ref.botId === bot.id;
   if (isCoordinatorBot(bot) && HQ_WIDE_KINDS.has(fact.kind)) return true;
   if (fact.repoKey !== undefined) {

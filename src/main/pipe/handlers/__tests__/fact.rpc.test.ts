@@ -17,6 +17,8 @@ import { createFactLog, getFactLog, type FactLog } from '../../../factory/factLo
 import { registerFactoryRpc, type FactoryHostDeps } from '../../../factory/factoryHost';
 import { RpcRouter } from '../../RpcRouter';
 import { mintBotToken, revokeCommanderToken } from '../../../deck/commanderTrust';
+import { __resetGuestWorkspacesForTesting, noteGuestRecordWorkspaces } from '../../../factory/guestWorkspaces';
+import { botSeesFact } from '../../../factory/triggerEngine';
 
 const LEAD: BotBinding = { workspaceId: 'ws-a', botId: 'bot-0000000a', role: 'lead' };
 const MOA: BotBinding = { workspaceId: 'ws-hq', botId: 'bot-0000000c', role: 'moa' };
@@ -59,6 +61,32 @@ describe('fact.poll', () => {
     // a Coordinator (or is unknown) reads its own workspace only.
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA), () => null, () => false))).toEqual([]);
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA)))).toEqual([]);
+  });
+
+  it('the island: the Coordinator reads no guest workspace\'s facts, a guest workspace\'s bot only its own; the operator all', async () => {
+    noteGuestRecordWorkspaces(['ws-g']);
+    try {
+      const GUEST: BotBinding = { workspaceId: 'ws-g', botId: 'bot-0000000g', role: 'lead' };
+      log.append(draft('t1', 'ws-a'));
+      log.append(draft('t2', 'ws-g'));
+      log.append({ kind: 'merge.done', at: Date.now(), repoKey: 'h/o/r', ref: { pr: 1 }, payload: {} });
+      const ids = (r: unknown) => (r as { facts: { seq: number }[] }).facts.map((f) => f.seq);
+      const coordinator = (id: string) => id === MOA.botId;
+      expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA), () => null, coordinator))).toEqual([1, 3]);
+      expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(GUEST), () => 'h/o/r', coordinator))).toEqual([2]);
+      expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, OPERATOR))).toEqual([1, 2, 3]);
+      // The trigger engine's scope, first: directed and HQ-wide facts too.
+      const guestFact = { id: 'f', seq: 1, dedupeKey: 'k', kind: 'bot.error' as const, at: 1, workspaceId: 'ws-g', ref: { botId: 'bot-0000000g' }, payload: {} };
+      const coord = { id: MOA.botId, workspaceId: 'ws-hq', role: 'moa' as const, template: 'coordinator' as const };
+      expect(botSeesFact(coord, guestFact)).toBe(false);
+      expect(botSeesFact(coord, { ...guestFact, workspaceId: 'ws-a' })).toBe(true);
+      const guestBot = { id: GUEST.botId, workspaceId: 'ws-g', role: 'lead' as const, template: 'developer' as const };
+      expect(botSeesFact(guestBot, { ...guestFact, kind: 'handoff.received', ref: { botId: GUEST.botId }, workspaceId: 'ws-a' })).toBe(false);
+      expect(botSeesFact(guestBot, { ...guestFact, kind: 'pr.opened', workspaceId: undefined })).toBe(false);
+      expect(botSeesFact(guestBot, { ...guestFact, kind: 'handoff.received', ref: { botId: GUEST.botId } })).toBe(true);
+    } finally {
+      __resetGuestWorkspacesForTesting();
+    }
   });
 
   it('a bot also sees the facts of the repo its profile acts on (the directory, not a param)', async () => {

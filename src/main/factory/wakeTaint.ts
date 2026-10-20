@@ -67,7 +67,7 @@ import type { LedgerEntry } from '../../shared/ledger';
 import type { BotWorkflow } from '../../shared/botWorkflow';
 import type { WakeItem, WakeReason } from '../../shared/wake';
 import { taskIdOfFactId } from './wakePrompt';
-import { isGuestWorkspace } from './guestWorkspaces';
+import { factInIsland, isGuestWorkspace } from './guestWorkspaces';
 
 /** Facts whose payload is GitHub-authored text. */
 export const OUTSIDE_TEXT_FACT_KINDS: ReadonlySet<FactKind> = new Set<FactKind>([
@@ -443,6 +443,16 @@ export class WakeTaint {
     this.mark(handoffId, guest ? 'guest' : tainted);
   }
 
+  /** A bot's stored workspace; null when it cannot be looked up, or there
+   *  is no directory to ask (then: the workspace of none). */
+  botWorkspace(botId: string): string | null {
+    try {
+      return this.ports.bot?.(botId)?.workspaceId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** A researcher-template bot's sends are always tainted; a bot that
    *  cannot be looked up is not known to be clean either. */
   private alwaysTainted(botId: string): boolean {
@@ -610,10 +620,14 @@ export function factVisibleToBot(botId: string): (f: Fact) => boolean {
   // No tracker where one is expected (its module not started, or failed):
   // only facts that never carry a bot's or a guest's words.
   if (!c) return trackerExpected ? (f) => !TASK_FACT_KINDS.has(f.kind) && !HANDOFF_FACT_KINDS.has(f.kind) && f.kind !== 'bot.notice' : () => true;
-  if (guestOfRunningWake(botId) === true) return () => true;
+  // The island first: a bot sees no fact across a guest workspace's
+  // boundary, whatever its wake (a bot that cannot be found sees none).
+  const ws = c.taint.botWorkspace(botId);
+  const island = (f: Fact): boolean => ws !== null && factInIsland(ws, f);
+  if (guestOfRunningWake(botId) === true) return island;
   return (f) => {
     try {
-      return c.taint.factGuest(f) === false;
+      return island(f) && c.taint.factGuest(f) === false;
     } catch {
       return false;
     }

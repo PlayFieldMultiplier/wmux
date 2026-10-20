@@ -222,6 +222,15 @@ export function crossesGuestBoundary(a: string | null | undefined, b: string | n
   return guestSide(a) || guestSide(b);
 }
 
+/** Whether a bot of `botWorkspaceId` may see a fact, by the island alone: a
+ *  bot in a guest workspace sees only its own workspace's facts (none
+ *  without a workspace, none of a repository), and no other bot sees a
+ *  guest workspace's. */
+export function factInIsland(botWorkspaceId: string, fact: { workspaceId?: string }): boolean {
+  if (guestSide(botWorkspaceId)) return fact.workspaceId === botWorkspaceId;
+  return fact.workspaceId === undefined || !guestSide(fact.workspaceId);
+}
+
 // ── Construction rules ─────────────────────────────────────────────────────
 
 /** Every rule a bot breaks to be in a guest workspace as it is: a guest

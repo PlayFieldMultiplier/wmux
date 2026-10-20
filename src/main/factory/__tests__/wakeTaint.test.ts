@@ -8,6 +8,7 @@ import type { Fact } from '../../../shared/facts';
 import type { Handoff } from '../../../shared/handoff';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WakeItem } from '../../../shared/wake';
+import { __resetGuestWorkspacesForTesting, noteGuestRecordWorkspaces } from '../guestWorkspaces';
 import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, expectWakeTaint, factVisibleToBot, guestTurnProbeOf, untrackedGuest, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
 
 let dir: string;
@@ -356,7 +357,7 @@ describe('guest provenance', () => {
     const cleanHop = { ...handoff('h-c', fromBot), guestSourced: false };
     const facts = [fact('f-g', 'handoff.received', { handoffId: 'h-g' }), fact('f-c', 'handoff.received', { handoffId: 'h-c' }), fact('f-x', 'handoff.received', { handoffId: 'h-gone' }), fact('f-pr', 'pr.opened')];
     let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
-    const t = make({ runningWake: () => running }, facts, [guestHop, cleanHop]);
+    const t = make({ runningWake: () => running, bot: () => ({ role: 'lead', template: 'developer', workspaceId: 'ws' }) }, facts, [guestHop, cleanHop]);
     setWakeTaint(t, () => running);
     expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-c', 'f-pr']);
     running = { item: wake(guestReason), startedAt: 1 };
@@ -420,6 +421,25 @@ describe('a guest workspace is an island', () => {
     expect(t.wakeTainted(item)).toBe(true);
     // The bot's stored workspace decides too, whatever the item names.
     expect(t.wakeGuest({ ...item, workspaceId: 'ws-a' })).toBe(true);
+  });
+
+  it('a bot\'s fact reads stay on its side of the boundary, in any wake', () => {
+    const facts: Fact[] = [{ ...fact('f-g', 'pr.opened'), workspaceId: 'ws-g' }, { ...fact('f-a', 'pr.opened'), workspaceId: 'ws-a' }, fact('f-none', 'pr.opened')];
+    const guestWs = (ws: string) => ws === 'ws-g';
+    let botWs = 'ws-a';
+    const running = { item: wake(human), startedAt: 1 };
+    const t = make({ runningWake: () => running, guestWorkspace: guestWs, bot: () => ({ role: 'lead', template: 'developer', workspaceId: botWs }) }, facts);
+    setWakeTaint(t, () => running);
+    try {
+      // The predicate factInIsland reads (a daemon record's workspace).
+      noteGuestRecordWorkspaces(['ws-g']);
+      expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-a', 'f-none']);
+      botWs = 'ws-g';
+      expect(facts.filter(factVisibleToBot('bot-g')).map((f) => f.id)).toEqual(['f-g']);
+    } finally {
+      setWakeTaint(null);
+      __resetGuestWorkspacesForTesting();
+    }
   });
 
   it('a clean workspace keeps the record\'s answer; a missing bot or an unknown workspace is unknown', () => {

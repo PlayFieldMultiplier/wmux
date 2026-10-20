@@ -37,6 +37,7 @@ import { eventBus } from '../../events/EventBus';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { onPrVerdictRecorded } from '../../github/prVerdictStore';
 import { factVisibleToBot } from '../../factory/wakeTaint';
+import { factInIsland } from '../../factory/guestWorkspaces';
 
 const ID_MAX = 256;
 
@@ -100,11 +101,13 @@ export async function handleFactPoll(
   let visible = ctx.bot ? visibleToBot(ctx.bot.botId) : (): boolean => true;
   const ownWorkspace = ctx.bot?.workspaceId;
   const ownRepo = ctx.bot ? repoOfBot(ctx.bot.botId) : null;
+  // The island holds for every bot, the Coordinator's every-workspace read
+  // included; the operator reads everything.
   const match = (f: Fact): boolean => (
     everything
     || (!!ownWorkspace && f.workspaceId === ownWorkspace)
     || (ownRepo !== null && f.repoKey !== undefined && normalizeRepoKey(f.repoKey) === ownRepo)
-  ) && (!kinds || kinds.has(f.kind)) && visible(f);
+  ) && (!ownWorkspace || factInIsland(ownWorkspace, f)) && (!kinds || kinds.has(f.kind)) && visible(f);
 
   let r = log.readWhere(since, match, limit);
   if (r.facts.length === 0 && blockMs > 0 && !ctx.signal?.aborted) {
