@@ -57,6 +57,14 @@ export interface BotTaskView {
    *  `needs_input`, what the worker is waiting for. Written by the worker or
    *  by main; shown as plain text. */
   summary?: string;
+  /** Non-code task evidence grade (research / no_changes), once the worker
+   *  reported. Absent on code tasks graded by the system gate, and before a
+   *  report (pending). `missing` = the report recorded no evidence. */
+  verification?: {
+    state: 'missing' | 'unverified' | 'partial' | 'verified';
+    verified: number;
+    total: number;
+  };
   /** The worker of an ended task (main/factory/workerReclaim.ts): stopped
    *  with a conversation to resume, stopped without one, or resumed. */
   worker?: 'resumable' | 'stopped' | 'resumed';

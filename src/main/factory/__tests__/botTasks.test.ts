@@ -8,7 +8,7 @@ vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() 
 import type { Fact } from '../../../shared/facts';
 import type { LedgerEntry, LedgerGateResult } from '../../../shared/ledger';
 import { BOT_TASK_SUMMARY_MAX, botTaskStage, isSystemGatePass } from '../../../shared/botTask';
-import { BOT_TASK_VIEW_MAX, TaskBranchCache, botTaskViews, indexPrFacts, prOfBranch, type BotTaskSources } from '../botTasks';
+import { BOT_TASK_VIEW_MAX, TaskBranchCache, botTaskView, botTaskViews, indexPrFacts, prOfBranch, type BotTaskSources } from '../botTasks';
 import { factoryBotRowsWithTasks, type FactoryBotRow } from '../../ipc/handlers/factory.handler';
 
 const BOT = 'bot-0000000a';
@@ -151,5 +151,20 @@ describe('the task\'s summary on the Bots page (B2 contract)', () => {
     expect(byId.get('wtask-s1')).toMatchObject({ stage: 'needs_input', summary: 'push to origin HEAD was refused: which branch should I push?' });
     expect(byId.get('wtask-s2')?.summary).toHaveLength(BOT_TASK_SUMMARY_MAX);
     expect(byId.get('wtask-s3')).not.toHaveProperty('summary');
+  });
+});
+
+describe('botTaskView verification', () => {
+  const research = { origin: { kind: 'bot' as const, botId: BOT }, preset: 'research' };
+  it('a research task is graded only once it reported: before that, no evidence is pending, not Not verified', () => {
+    // Working, never reported: nothing to grade yet.
+    expect(botTaskView(row('r', 'working', { dispatch: research }), null)).not.toHaveProperty('verification');
+    // Reported with no evidence, then completed by the settle: Not verified.
+    expect(botTaskView(row('r', 'review_requested', { dispatch: research, reportedAtRev: 2 }), null)?.verification).toEqual({ state: 'missing', verified: 0, total: 0 });
+    expect(botTaskView(row('r', 'completed', { dispatch: research, reportedAtRev: 2, verifiedItemCount: 0 }), null)?.verification?.state).toBe('missing');
+    // Sent back to work after a report: pending again.
+    expect(botTaskView(row('r', 'working', { dispatch: research, reportedAtRev: 2 }), null)).not.toHaveProperty('verification');
+    // A code task is the gate's.
+    expect(botTaskView(row('c', 'completed', { reportedAtRev: 2, gate: PASS }), null)).not.toHaveProperty('verification');
   });
 });

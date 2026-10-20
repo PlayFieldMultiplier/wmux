@@ -16,6 +16,8 @@
 import type { Fact } from '../../shared/facts';
 import type { LedgerEntry } from '../../shared/ledger';
 import { BOT_TASK_SUMMARY_MAX, botTaskStage, type BotTaskPr, type BotTaskView } from '../../shared/botTask';
+import { isResearchDispatch } from '../../shared/ledger';
+import { nonCodeVerificationState } from '../../shared/nonCodeTaskEvidence';
 import { normalizeRepoKey } from '../../shared/repoKey';
 
 export const BOT_TASK_VIEW_MAX = 20;
@@ -65,6 +67,20 @@ export function botTaskView(row: LedgerEntry, pr: BotTaskPr | null): BotTaskView
   if (!botId) return null;
   const g = row.gate?.recordedBy === 'system' ? row.gate : undefined;
   const summary = typeof row.summary === 'string' ? row.summary.replace(/\s+/g, ' ').trim().slice(0, BOT_TASK_SUMMARY_MAX) : '';
+  // Graded only once the worker reported (the report carries the evidence)
+  // and the row still stands on that report: before it, missing evidence is
+  // pending, not Not verified.
+  const reported = row.reportedAtRev !== undefined && (row.status === 'review_requested' || row.status === 'completed');
+  const nonCode = reported && (isResearchDispatch(row.dispatch) || g?.skipped === 'no_changes');
+  const total = row.evidence?.items?.length ?? 0;
+  const verified = row.verifiedItemCount;
+  const verification = nonCode
+    ? {
+        state: nonCodeVerificationState(verified, total > 0 ? total : verified === undefined ? undefined : 0),
+        verified: verified ?? 0,
+        total,
+      }
+    : undefined;
   return {
     taskId: row.id,
     taskWorkspaceId: row.taskWorkspaceId,
@@ -77,6 +93,7 @@ export function botTaskView(row: LedgerEntry, pr: BotTaskPr | null): BotTaskView
     ...(g ? { gate: { exitCode: g.exitCode, at: g.at, ...(g.skipped ? { skipped: g.skipped } : {}), ...(g.headSha ? { headSha: g.headSha } : {}) } } : {}),
     ...(pr ? { pr } : {}),
     ...(summary ? { summary } : {}),
+    ...(verification ? { verification } : {}),
     updatedAt: row.updatedAt,
   };
 }

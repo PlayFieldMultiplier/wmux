@@ -120,8 +120,9 @@ export function reportWasGated(entry: LedgerEntry): boolean {
 /**
  * Complete a bot's research task on its report: only a row still in
  * review_requested whose dispatch is a research task, written as the task's
- * owner with no force (the ledger completes such a row without a gate). One
- * retry on a write that landed in between. Never throws.
+ * owner with no force (the ledger completes such a row without a gate and
+ * grades the evidence the row holds then). One retry on a write that landed
+ * in between. Never throws.
  */
 export async function completeResearchTask(ledger: CheckedTaskLedger, taskId: string): Promise<{ entry: LedgerEntry } | { entry: null; why: string }> {
   try {
@@ -703,13 +704,21 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
   const run = async (taskId: string, atInstall: boolean): Promise<void> => {
     const entry = stillReported(taskId);
     if (!entry) return;
-    // A research task changed no code: nothing to gate.
+    // A research task changed no code: no code gate; the ledger grades its evidence.
     if (isResearchDispatch(entry.dispatch)) {
       const done = ports.completeResearch
         ? await ports.completeResearch(entry.id)
         : { entry: null, why: 'research tasks cannot be completed here' };
       if (done.entry) {
-        note(done.entry, 'Research reported: task completed', 'A research task changes no code, so no gate runs on it.', { code: 'research.completed' });
+        const verified = done.entry.verifiedItemCount ?? 0;
+        const total = done.entry.evidence?.items?.length ?? 0;
+        const body = verified > 0 && total > 0
+          ? `Evidence attached: ${verified}/${total} item(s) marked verified. A research task changes no code, so no code gate runs.`
+          : 'No verified evidence was recorded for this research report (Not verified). A research task changes no code, so no code gate runs.';
+        const notice = verified > 0
+          ? { code: 'research.completed' as const, args: { verified, total } }
+          : { code: 'research.unverified' as const, args: { verified: 0, total } };
+        note(done.entry, verified > 0 ? 'Research reported: task completed' : 'Research reported: Not verified', body, notice);
         wake(done.entry);
         return;
       }

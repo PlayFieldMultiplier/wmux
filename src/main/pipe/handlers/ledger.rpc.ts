@@ -163,6 +163,9 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
       ...(text(params.summary) ? { summary: text(params.summary) } : {}),
       ...(params.force === true ? { force: true } : {}),
       ...(text(params.reason) ? { reason: text(params.reason) } : {}),
+      // Research / no-changes evidence: graded inside the ledger (a worker
+      // cannot set verifiedItemCount). Criteria stay on dispatch.
+      ...(params.evidence !== undefined ? { evidence: params.evidence } : {}),
     });
     if (!res.ok) {
       refusedOnOwnTask(ledgerOf().get(taskId));

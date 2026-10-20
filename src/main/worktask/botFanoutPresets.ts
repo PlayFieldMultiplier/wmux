@@ -185,7 +185,12 @@ const RESEARCH_PROMPT = (): string => [
   '',
   'What you can do here: search the web, read the sources, and keep notes or downloads in this folder if they help.',
   '',
-  'What you hand back (ledger summary, status review_requested): your findings, each with a link to its source, and what they mean for the question. That report completes the task. If the question needs a change to code, say so in the summary instead of making one.',
+  'Completion criteria are fixed on the task at dispatch (you cannot change them). Check each one and record evidence.',
+  '',
+  'What you hand back (ledger_update status review_requested):',
+  '- summary: your findings and what they mean for the question;',
+  '- evidence: items that show how each criterion was met (kind inspection or artifact with status verified, or kind command with status passed), each with a source URL in location or summary. Without evidence the task completes as Not verified.',
+  'If the question needs a change to code, say so in the summary instead of making one.',
 ].join('\n');
 
 const DEFAULT_PROMPT = (ctx: BotPresetPromptContext): string => [

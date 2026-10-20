@@ -282,6 +282,17 @@ describe('factory system cards in the reader\'s language (RoomCard.notice)', () 
     }
   });
 
+  it('a research report\'s card says how much of its evidence was verified, in every worded language; one without counts does not', () => {
+    for (const loc of ['en', 'ko', 'pl', 'zh'] as const) {
+      setLocale(loc);
+      const body = noticeText(card({ notice: { code: 'research.completed', args: { verified: 3, total: 3 } } }), i18nT)?.body ?? '';
+      expect(body).toMatch(/3\D+3/);
+      expect(noticeText(card({ notice: { code: 'research.completed' } }), i18nT)?.body).not.toMatch(/[{}]|\d/);
+    }
+    setLocale('en');
+    expect(noticeText(card({ notice: { code: 'research.completed', args: { verified: 2, total: 3 } } }), i18nT)?.body).toContain('(2 of 3 verified)');
+  });
+
   it('a resumable research worker\'s card speaks of its task folder, not a worktree', () => {
     for (const code of ['worker.doneResumable', 'worker.pausedResumable']) {
       const args: Record<string, string> = code === 'worker.doneResumable' ? { status: 'completed' } : {};

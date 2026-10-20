@@ -64,6 +64,8 @@ import {
   type LedgerGateResult,
   type LedgerStatus,
 } from '../../shared/ledger';
+import { sanitizeTaskCriteria, gradeNonCodeEvidence } from '../../shared/nonCodeTaskEvidence';
+import type { CompletionEvidence } from '../../shared/types';
 
 export const LEDGER_FILENAME = 'task-ledger.jsonl';
 /** Rotate past this many bytes (spec: 5 MB). */
@@ -122,6 +124,15 @@ export interface LedgerUpdateInput {
   /** On a move to `completed` only: what ended it (LedgerEntry.completion).
    *  Main's own in-process write; no RPC forwards it. */
   completion?: Extract<LedgerCompletion, { source: 'merge' }>;
+  /** On a move to `review_requested` (worker report) or `completed` (system
+   *  settle): completion evidence for a research / no-changes task. Validated
+   *  with shared/completionEvidence; criteria stay on dispatch. */
+  evidence?: CompletionEvidence | unknown;
+  /** Ignored on write: the ledger grades `evidence` itself. Kept on the
+   *  input type so in-process callers (taskGate) can pass the grade they
+   *  already computed without a type error; workers via RPC/MCP never
+   *  forward this field, and even if they did it would not stick. */
+  verifiedItemCount?: number;
 }
 
 export type LedgerUpdateError =
@@ -271,6 +282,7 @@ function copyDispatch(d: LedgerDispatch): LedgerDispatch {
     ...(Array.isArray(d.connectors) && d.connectors.length > 0 && d.connectors.length <= 8 && d.connectors.every((n) => typeof n === 'string' && /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(n))
       ? { connectors: [...d.connectors] }
       : {}),
+    ...((() => { const c = sanitizeTaskCriteria(d.criteria); return c ? { criteria: c } : {}; })()),
     ...(d.reconciled === true ? { reconciled: true as const } : {}),
   };
 }
@@ -524,6 +536,31 @@ export class TaskLedger {
       forcedReason !== undefined
         ? truncateHead(`${base ? `${base} ` : ''}[forced: ${forcedReason}]`, LEDGER_SUMMARY_MAX_BYTES)
         : base;
+    // Research / no-changes evidence: graded here so a worker cannot claim
+    // verifiedItemCount. Each report replaces the evidence (none or malformed
+    // clears it, so an earlier report's grade never carries over); on a
+    // system/brain completion of a non-code task, grade what is there
+    // (0 = Not verified).
+    let evidencePatch: { evidence?: LedgerEntry['evidence']; verifiedItemCount?: number } = {};
+    const nonCode = isResearchDispatch(entry.dispatch) || entry.gate?.skipped === 'no_changes';
+    if (next === 'review_requested') {
+      const graded = input.evidence !== undefined ? gradeNonCodeEvidence(input.evidence) : null;
+      evidencePatch = graded?.evidence
+        ? { evidence: graded.evidence, verifiedItemCount: graded.verifiedItemCount }
+        : { evidence: undefined, verifiedItemCount: undefined };
+    } else if (next === 'completed' && nonCode) {
+      const raw = input.evidence !== undefined ? input.evidence : entry.evidence;
+      const graded = gradeNonCodeEvidence(raw);
+      // Grade is authoritative. input.verifiedItemCount is ignored for every
+      // actor — workers via RPC/MCP must never raise the grade, and the
+      // in-process settle (taskGate) passes no evidence, so the ledger's
+      // count of the row's current evidence stays the single source of truth.
+      evidencePatch = {
+        ...(graded.evidence ? { evidence: graded.evidence } : entry.evidence ? { evidence: entry.evidence } : {}),
+        verifiedItemCount: graded.verifiedItemCount,
+      };
+    }
+
     const updated: LedgerEntry = this.redact({
       ...entry,
       status: next,
@@ -541,6 +578,7 @@ export class TaskLedger {
           && entry.reportedAtRev !== undefined && entry.gate.reportRev === entry.reportedAtRev
           ? { completion: { source: 'gate' as const, headSha: entry.gate.headSha, reportRev: entry.reportedAtRev } }
           : { completion: undefined }),
+      ...evidencePatch,
     });
     if (guard && !guard()) return { ok: true, entry, noop: true };
     try {

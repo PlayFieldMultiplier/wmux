@@ -624,3 +624,83 @@ describe('TaskLedger — dispatch', () => {
     expect(open().get('wtask-h')?.dispatch?.handoffId).toBe('h-1');
   });
 });
+
+describe('TaskLedger — non-code verifiedItemCount grade', () => {
+  const researchDispatch = {
+    origin: { kind: 'bot' as const, botId: 'bot-00000001' },
+    preset: 'research' as const,
+    criteria: ['Cite sources'],
+  };
+  const oneVerified = {
+    summary: 'Findings',
+    items: [{ kind: 'inspection' as const, status: 'verified' as const, summary: 'Source A', location: 'https://a.example' }],
+  };
+
+  async function seedResearchReported(ledger: TaskLedger): Promise<{ id: string; rev: number }> {
+    const id = 'wtask-research';
+    await ledger.register({
+      id,
+      taskWorkspaceId: 'ws-task',
+      ownerWorkspaceId: 'ws-owner',
+      title: 'look into X',
+      dispatch: researchDispatch,
+    });
+    const reported = await ledger.update({
+      id,
+      status: 'review_requested',
+      actor: WORKER,
+      expectedRev: 1,
+      summary: 'done',
+      evidence: oneVerified,
+    });
+    if (!reported.ok) throw new Error(reported.message);
+    return { id, rev: reported.entry.rev };
+  }
+
+  it('a new report replaces the evidence: none or malformed leaves Not verified, never the earlier grade', async () => {
+    const a = open();
+    const { id, rev } = await seedResearchReported(a);
+    expect(a.get(id)?.verifiedItemCount).toBe(1);
+    const resumed = await a.update({ id, status: 'working', actor: WORKER, expectedRev: rev });
+    if (!resumed.ok) throw new Error(resumed.message);
+    const bare = await a.update({ id, status: 'review_requested', actor: WORKER, expectedRev: resumed.entry.rev, summary: 'again' });
+    expect(bare.ok && bare.entry.evidence === undefined && bare.entry.verifiedItemCount === undefined).toBe(true);
+    if (!bare.ok) throw new Error(bare.message);
+    const resumed2 = await a.update({ id, status: 'working', actor: WORKER, expectedRev: bare.entry.rev });
+    if (!resumed2.ok) throw new Error(resumed2.message);
+    const malformed = await a.update({ id, status: 'review_requested', actor: WORKER, expectedRev: resumed2.entry.rev, evidence: { nope: true } });
+    if (!malformed.ok) throw new Error(malformed.message);
+    expect(malformed.entry.evidence).toBeUndefined();
+    const done = await a.update({ id, status: 'completed', actor: BRAIN, expectedRev: malformed.entry.rev });
+    expect(done).toMatchObject({ ok: true, entry: { status: 'completed', verifiedItemCount: 0 } });
+  });
+
+  it('grades evidence on completed; a caller-supplied verifiedItemCount is ignored', async () => {
+    const a = open();
+    const { id, rev } = await seedResearchReported(a);
+    // Brain settle tries to claim 99 verified items — ledger grades the evidence (1).
+    const done = await a.update({
+      id,
+      status: 'completed',
+      actor: BRAIN,
+      expectedRev: rev,
+      evidence: oneVerified,
+      verifiedItemCount: 99,
+    });
+    expect(done).toMatchObject({ ok: true, entry: { status: 'completed', verifiedItemCount: 1 } });
+  });
+
+  it('rejects a worker that tries to complete with a supplied verifiedItemCount', async () => {
+    const a = open();
+    const { id, rev } = await seedResearchReported(a);
+    const refused = await a.update({
+      id,
+      status: 'completed',
+      actor: WORKER,
+      expectedRev: rev,
+      verifiedItemCount: 99,
+    });
+    expect(refused).toMatchObject({ ok: false, error: 'not_authorized' });
+    expect(a.get(id)?.verifiedItemCount).toBe(1); // still the report-time grade
+  });
+});
