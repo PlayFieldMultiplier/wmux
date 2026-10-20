@@ -492,28 +492,37 @@ export function liveHolders(): LiveHolders | null {
   return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown };
 }
 
-/** Tells `changed` when one read of the daemon's sessions moved the
- *  holders that count: `before` right before the read's answers are
- *  published, `after` once they all are (a look between the two cannot hide
- *  the move). A read alone can move a holder (an agent seen gone, or at work
- *  again) with nothing else to tell the window. */
-export function holderReadNotice(changed: () => void): { before: () => void; after: () => void } {
-  const key = (): string | null => {
+/** Tells `changed` when the holders that count moved since the last
+ *  check: `schedule` (on any move of what the holder set reads) checks once,
+ *  on the next turn (`defer`), however many moves came before it. The first
+ *  check tells it too. Most of what moves a holder (a read of the daemon's
+ *  sessions, a slot grant released, a booking settled) tells the window
+ *  nothing by itself, and the bot status it shows counts these holders. */
+export function holderChangeNotice(
+  changed: () => void,
+  defer: (fn: () => void) => void = (fn) => { setImmediate(fn); },
+): { schedule: () => void } {
+  let shown: string | null = null;
+  let due = false;
+  const check = (): void => {
+    due = false;
+    let key: string;
     try {
       const h = liveHolders();
-      return h ? heldKey(h.holders) : null;
+      if (!h) return;
+      key = heldKey(h.holders);
     } catch {
-      return null;
+      return;
     }
+    if (key === shown) return;
+    shown = key;
+    changed();
   };
-  let baseline: string | null = null;
   return {
-    before: () => {
-      baseline = key();
-    },
-    after: () => {
-      const now = key();
-      if (now !== null && now !== baseline) changed();
+    schedule: () => {
+      if (due) return;
+      due = true;
+      defer(check);
     },
   };
 }

@@ -69,9 +69,7 @@ export interface TaskWorkspaceLivenessPorts {
   facts: AgentGoneFacts | null;
   refreshMs: number;
   now?: () => number;
-  /** Told right before a good read's answers are published, and after,
-   *  once every answer below reflects it. */
-  beforePublish?: () => void;
+  /** Told after each good read, once every answer below reflects it. */
   onRead?: () => void;
 }
 
@@ -236,7 +234,6 @@ export function createTaskWorkspaceLiveness(ports: TaskWorkspaceLivenessPorts): 
         ports.facts?.note({ taskId: row.id, taskWorkspaceId: row.taskWorkspaceId, sessions: [], at });
       }
     }
-    ports.beforePublish?.();
     readAt = at;
     busyWorkspaces = busy;
     endedNoAgentWorkspaces = endedNoAgent;
