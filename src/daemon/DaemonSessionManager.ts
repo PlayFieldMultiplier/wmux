@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { IPty } from 'node-pty';
 import { ptyBackend, type TerminalPty } from '../shared/terminalPty';
 import { spawnPty, spawnPtySync, type SpawnPtyRequest } from '../shared/spawnPty';
+import type { PaneJob } from './paneJob';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -294,6 +295,16 @@ export class DaemonSessionManager extends EventEmitter {
 
   setSpawnCwdRefusal(fn: (cwd: string, session: { wslTarget?: WslTarget }) => string | null): void {
     this.spawnCwdRefusal = fn;
+  }
+
+  /**
+   * #2398: the job every pane shell spawned through node-pty joins, so it ends
+   * with the daemon (paneJob.ts). Unset: shells are not tied to the daemon.
+   */
+  private paneJob: PaneJob | null = null;
+
+  setPaneJob(job: PaneJob): void {
+    this.paneJob = job;
   }
 
   private spawnCwdRefusalOf(prepared: PreparedSpawn): string | null {
@@ -816,6 +827,8 @@ export class DaemonSessionManager extends EventEmitter {
   /** Builds and registers the session around a PTY whose pid is known. */
   private registerSession(prepared: PreparedSpawn, ptyProcess: IPty, conptyBackend: ConptyBackend): DaemonSession {
     const { params, cfg, cmd, cwd, env, cols, rows, wsl } = prepared;
+    // The Rust core puts each pane in its own kill-on-close job already.
+    if (ptyBackend(ptyProcess) === 'node') this.paneJob?.contain(ptyProcess.pid);
     const now = new Date().toISOString();
     const meta: DaemonSession = {
       id: params.id,

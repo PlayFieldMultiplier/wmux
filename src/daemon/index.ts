@@ -17,6 +17,7 @@ import { persistCodexThreadOwner, invalidateCodexThreadOwner, trackCodexPaneOwne
 import { codexCdOperand, recoverCodexPane, withCodexRemote } from './web/recoverCodexPane';
 import { CodexRelayUnavailableError } from './web/codexTuiRelay';
 import { paneCodexSettings } from './web/paneCodexSettings';
+import { createPaneJob } from './paneJob';
 import { CodexPaneRelays, paneCodexHome } from './web/codexPaneRelays';
 import { createCodexAccountStatusReader } from './web/codexAccountStatus';
 import { buildAgentLaunch, installedAgentLaunchOptions, pinnedAgentLaunch } from './web/agentLaunch';
@@ -444,6 +445,8 @@ const codexSharedRuntime = createCodexSharedRuntime({
   notice: (paneId, title, body) => broadcastCodexNotice?.(paneId, title, body),
   log: (level, message) => log(level, message),
 });
+// #2398: one kill-on-close job for every pane shell this daemon spawns.
+const paneJob = createPaneJob({ log: (level, message) => log(level, message) });
 const codexPaneRelays = new CodexPaneRelays(undefined,()=>log('warn','[phone] Codex relay cleanup failed'),
   (id,owner)=>persistCodexRelayState?.(id,owner),
   {
@@ -5926,6 +5929,8 @@ function registerRpcHandlers(
       pid: process.pid,
       uptime,
       sessions: sessions.length,
+      // #2398: pane shells in the kill-on-close job, and ones it could not take.
+      paneJob: paneJob.stats(),
       // Sessions with a running PTY (attached or detached). An upgrade over SSH
       // restarts the daemon only when this is 0.
       liveSessions: sessionManager.listLiveSessions().length,
@@ -8058,6 +8063,8 @@ async function shutdown(
   const disposeStart = phaseStartedAt();
   const disposedCount = sessionManager.listManagedSessions().length;
   sessionManager.disposeAll();
+  // A clean exit keeps what panes started on purpose (paneJob.ts).
+  paneJob.disarm();
   await codexPaneRelays.shutdown();
   phaseLog('disposeAll', disposeStart, { count: disposedCount });
 
@@ -8177,6 +8184,8 @@ async function main(): Promise<void> {
 
   const sessionManager = new DaemonSessionManager();
   sessionManager.setConfig(config);
+  // #2398: pane shells end with the daemon when it crashes or is killed.
+  sessionManager.setPaneJob(paneJob);
   // Opt-in, local-only detection agreement log — see
   // daemon/diagnostics/detectionAgreementLog.ts. Built before any session can
   // emit; the hook authority is read lazily because HookIngest is created later
