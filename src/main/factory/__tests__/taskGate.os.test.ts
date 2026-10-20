@@ -624,9 +624,9 @@ describe('describeTaskGate', () => {
 
   it('a no_changes skip states the report\'s evidence; other skips do not', () => {
     const skip = { ok: true, status: 'skipped', taskId: 't', skipped: 'no_changes', detail: 'No gate ran.', recorded: true } as const;
-    expect(describeTaskGate(skip, { verified: undefined, total: 0 }).body).toBe('No gate ran. Evidence: Not verified (the report recorded none).');
-    expect(describeTaskGate(skip, { verified: 0, total: 2 }).body).toBe('No gate ran. Evidence: Not verified (0 of 2 verified).');
-    expect(describeTaskGate(skip, { verified: 1, total: 2 }).body).toBe('No gate ran. Evidence recorded (1 of 2 verified).');
+    expect(describeTaskGate(skip, { verified: undefined, total: 0 }).body).toBe('Evidence: Not verified (the report recorded none). No gate ran.');
+    expect(describeTaskGate(skip, { verified: 0, total: 2 }).body).toBe('Evidence: Not verified (0 of 2 verified). No gate ran.');
+    expect(describeTaskGate(skip, { verified: 1, total: 2 }).body).toBe('Evidence recorded (1 of 2 verified). No gate ran.');
     expect(describeTaskGate({ ...skip, skipped: 'gate_unavailable' }, { verified: 1, total: 2 }).body).toBe('No gate ran.');
   });
 });
@@ -1412,7 +1412,7 @@ describe('a task with no commits beyond its base', () => {
     const [, , title, body, key, notice] = r.note.mock.calls[0];
     expect(title).toBe('Gate skipped (the task made no changes): task left open');
     // A report with no evidence: the card says so.
-    expect(body).toBe(`${noChangesDetail(BASE)} Evidence: Not verified (the report recorded none).`);
+    expect(body).toBe(`Evidence: Not verified (the report recorded none). ${noChangesDetail(BASE)}`);
     expect(key).toBe(verifyGateFactId('task-1', row.rev));
     expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes' } });
     expect(r.wake).toHaveBeenCalledTimes(1);
@@ -1433,7 +1433,7 @@ describe('a task with no commits beyond its base', () => {
     expect(r.note).toHaveBeenCalledTimes(1);
     const [, , title, body, , notice] = r.note.mock.calls[0];
     expect(title).toBe('Gate skipped (the task made no changes): task left open');
-    expect(body).toBe(`${noChangesDetail(BASE)} Evidence recorded (1 of 2 verified).`);
+    expect(body).toBe(`Evidence recorded (1 of 2 verified). ${noChangesDetail(BASE)}`);
     expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes' } });
   });
 

@@ -409,7 +409,8 @@ export function describeTaskGate(r: GateRunResult, evidence?: { verified: number
     // A no_changes skip that did not land in the ledger leaves the bot no
     // record to complete on: say so.
     const recordedBody = r.skipped === 'no_changes' && r.recorded === false ? `${r.detail} The skip was NOT recorded (ledger unreachable).` : r.detail;
-    const body = r.skipped === 'no_changes' && evidence ? `${recordedBody} ${nonCodeEvidenceLine(evidence.verified, evidence.total)}` : recordedBody;
+    // The evidence leads: a long card body is folded after its first lines.
+    const body = r.skipped === 'no_changes' && evidence ? `${nonCodeEvidenceLine(evidence.verified, evidence.total)} ${recordedBody}` : recordedBody;
     // The stored English words for no_changes are the rendered card's
     // (room.notice.gate.reason.no_changes): the bot reads this title too.
     const reason = r.skipped === 'no_changes' ? 'the task made no changes' : r.skipped;
