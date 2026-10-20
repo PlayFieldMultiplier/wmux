@@ -116,12 +116,14 @@ const DRIVE_PATH = /^[A-Za-z]:[\\/]/;
 
 /**
  * A mapped drive's real path (`\\server\share\repo`) spelled from its drive
- * again (`Z:\repo`), so the answer passes this check when a caller hands it
- * back. When the drive root does not lead to the share (a link on a local
- * drive), the real path is returned as it is.
+ * again (`Z:\repo`), so the answer, and a folder below it, passes this check
+ * when a caller hands it back. When the drive root does not lead to the share
+ * (a link on a local drive, an unreadable root), the drive path as given is
+ * the answer, for the same reason.
  */
 async function spelledFromDrive(inputPath: string, canonical: string): Promise<string> {
-  const root = path.win32.parse(path.win32.resolve(inputPath)).root;
+  const drivePath = path.win32.resolve(inputPath);
+  const root = path.win32.parse(drivePath).root;
   try {
     const share = (await fs.promises.realpath(root)).replace(/[\\/]+$/, '');
     const rest = canonical.slice(share.length);
@@ -129,9 +131,9 @@ async function spelledFromDrive(inputPath: string, canonical: string): Promise<s
       return path.win32.join(root, rest);
     }
   } catch {
-    // An unreadable drive root keeps the real path.
+    // An unreadable drive root: the drive path as given.
   }
-  return canonical;
+  return drivePath;
 }
 
 export function closeAllWatchers(): void {

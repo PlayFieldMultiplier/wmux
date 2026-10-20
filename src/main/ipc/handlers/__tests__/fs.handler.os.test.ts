@@ -75,13 +75,26 @@ describe('fs.handler security helpers', () => {
   it('keeps a mapped drive working, spelled from its drive', async () => {
     realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'Z:\\' ? '\\\\server\\share\\' : '\\\\server\\share\\repo'));
     await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
-    // The answer passes the check again when a caller hands it back.
+    // The answer and a folder below it pass the check when a caller hands them back.
     await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'Z:\\' ? '\\\\server\\share\\' : '\\\\server\\share\\repo\\src'));
+    await expect(resolveAccessiblePath('Z:\\repo\\src')).resolves.toBe('Z:\\repo\\src');
   });
 
-  it('keeps the real path of a drive path whose root does not lead to the share', async () => {
+  it('answers with the drive path when its root does not lead to the share', async () => {
     realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'D:\\' ? 'D:\\' : '\\\\server\\share\\repo'));
-    await expect(resolveAccessiblePath('D:\\work\\link')).resolves.toBe('\\\\server\\share\\repo');
+    await expect(resolveAccessiblePath('D:\\work\\link')).resolves.toBe('D:\\work\\link');
+    // The answer and a folder below it pass the check again.
+    await expect(resolveAccessiblePath('D:\\work\\link')).resolves.toBe('D:\\work\\link');
+    await expect(resolveAccessiblePath('D:\\work\\link\\child')).resolves.toBe('D:\\work\\link\\child');
+  });
+
+  it('answers with the drive path when the drive root cannot be read', async () => {
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => {
+      if (p === 'Z:\\') throw new Error('EACCES');
+      return '\\\\server\\share\\repo';
+    });
+    await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
   });
 
   it('refuses a drive path whose real path is a device path', async () => {
