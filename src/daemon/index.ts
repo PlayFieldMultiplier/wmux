@@ -3370,6 +3370,12 @@ function registerRpcHandlers(
           cwd: s.cwd,
           createdAt: s.createdAt,
           lastActivity: s.lastActivity,
+          // #2398 §6-4 option B: its agent's resume binding, under the same
+          // guard as a live pane's durable one (its transcript still exists),
+          // so a hidden pane can resume it on start.
+          ...(isUsableResumeBinding(s.resumeBinding) && bindingTranscriptLives(s.resumeBinding)
+            ? { resumeBinding: s.resumeBinding }
+            : {}),
         }));
       return reply([...activeSessions, ...suspendedEntries]);
     }

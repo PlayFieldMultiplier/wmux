@@ -84,6 +84,7 @@ import {
   rebindTerminalOutputWriter,
 } from '../terminal/terminalOutputScheduler';
 import { reconnectPtyWithRetry as reconnectPtyWithRetryImpl, type ReconnectSettleInfo } from './reconnectPtyWithRetry';
+import { resumesOnStart, type ResumeHint } from '../stores/selectors/surfaceShown';
 import { awaitsReconcile, requestReconcile } from './reconcileRequest';
 import { adoptTerminal, parkTerminal, restoreParkedViewport, type ParkedTerminal } from '../terminal/terminalPark';
 import { captureColdFrame, clearPersistedColdFrames, coldFrameFits, dropColdFrame, persistColdFrames, splitTrailingEscape, takeColdFrame, WarmFrameSwap, COLD_FRAME_MAX_ENTRIES, FULL_RESET, REPAINT_BEGIN, REPAINT_END, type ColdFrame } from '../terminal/coldFrame';
@@ -3729,10 +3730,15 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // a raw write (through the registry); never the slow retry below, which
     // is a back-off.
     let current: Promise<void> | undefined;
-    const noteDeferred = (deferred: boolean) => {
+    // §6-4 option B: a deferred session that would resume an exact Claude
+    // Code or Codex conversation is promoted at boot, hidden or not, when
+    // resume-on-start is on (resumesOnStart, as a dead pane's create).
+    let resumeAtBoot = false;
+    const noteDeferred = (deferred: boolean, resume?: ResumeHint) => {
       deferredAttachRef.current = deferred;
       // No session pipe either: refuses the park, like a pending reattach.
       if (deferred) reconnectPendingRef.current = true;
+      resumeAtBoot = deferred && resumesOnStart(resume, useStore.getState().claudeResumeOnStart === true);
     };
     const reattach = (reason: string): Promise<void> | undefined => {
       // #2398 — a raw write must not settle on an attempt that leaves the
@@ -3745,8 +3751,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       inFlight = true;
       reconnectInFlightRef.current = true;
       if (slowRetry !== null) { clearTimeout(slowRetry); slowRetry = null; }
-      // #2398 — promote only a pane on screen, or for a raw write to it.
-      const promote = promoteRef.current || reason === 'raw-write';
+      // #2398 — promote only a pane on screen, for a raw write to it, or for
+      // its agent's resume on start.
+      const promote = promoteRef.current || reason === 'raw-write' || reason === 'resume-on-start';
       console.log(`[useTerminal] daemon reattach ptyId=${id} (${reason}${promote ? '' : ', hidden'})`);
       revealTiming(id, 'reattach-start', `reason=${reason}`);
       return reconnectPtyWithRetry(id, () => ptyIdRef.current === id && terminalRef.current !== null, (message, info) => {
@@ -3754,7 +3761,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // (rate limited, WSL recovery pending); null means it attached —
         // unless it is waiting on the reconcile (#2398), which shows no banner.
         reconnectPendingRef.current = message !== null || info?.awaitingReconcile === true;
-        noteDeferred(info?.deferred === true);
+        noteDeferred(info?.deferred === true, info?.resume);
         if ((info?.rateLimited || info?.unconfirmed || info?.awaitingReconcile) && slowRetry === null) {
           slowRetry = setTimeout(() => { slowRetry = null; void reattach('rate-limit-retry'); }, 8000 + Math.random() * 4000);
         }
@@ -3797,12 +3804,18 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
           }
           sendResize(id, stored.cols, stored.rows);
         })
-        // #2398 — shown while a hidden attempt was in flight: its first show
-        // found nothing to promote yet, so promote now.
-        .finally(() => { inFlight = false; reconnectInFlightRef.current = false; promoteIfShownMeanwhile(); });
+        // #2398 — shown while a hidden attempt was in flight (its first show
+        // found nothing to promote yet), or left suspended with a conversation
+        // to resume on start: promote now.
+        .finally(() => { inFlight = false; reconnectInFlightRef.current = false; promoteIfDue(); });
     };
-    const promoteIfShownMeanwhile = () => {
-      if (deferredAttachRef.current && promoteRef.current && ptyIdRef.current === id) void reattach('first-show');
+    const promoteIfDue = () => {
+      if (!deferredAttachRef.current || ptyIdRef.current !== id) return;
+      if (promoteRef.current) void reattach('first-show');
+      else if (resumeAtBoot) {
+        resumeAtBoot = false;
+        void reattach('resume-on-start');
+      }
     };
     const rawWriteReattach = () => reattach('raw-write');
     writeAttachRegistry.set(id, rawWriteReattach);

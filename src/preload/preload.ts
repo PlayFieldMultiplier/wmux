@@ -362,7 +362,7 @@ const electronAPI = {
       // pane is offered a fresh start in the home directory instead.
       // #2398 — `promote: false` (a hidden pane) attaches a live session but
       // leaves a suspended one suspended, answered `deferred`.
-      ipcRenderer.invoke(IPC.PTY_RECONNECT, id, opts) as Promise<{ success: boolean; id?: string; shell?: string; cols?: number; rows?: number; error?: string; code?: string; transient?: boolean; recoveryPending?: boolean; cwdMissing?: boolean; deferred?: boolean; recovery?: DeadPaneRecovery }>,
+      ipcRenderer.invoke(IPC.PTY_RECONNECT, id, opts) as Promise<{ success: boolean; id?: string; shell?: string; cols?: number; rows?: number; error?: string; code?: string; transient?: boolean; recoveryPending?: boolean; cwdMissing?: boolean; deferred?: boolean; resumeAgent?: string; resumeBinding?: ResumeBinding; recovery?: DeadPaneRecovery }>,
     // Fix B — on-demand promote of a cap-skipped suspended session.
     // #1305 — `fresh` promotes it in the home directory WITHOUT resuming the
     // recorded conversation: the way out when its own directory is gone.

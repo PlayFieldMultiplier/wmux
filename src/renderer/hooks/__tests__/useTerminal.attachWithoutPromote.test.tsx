@@ -21,7 +21,7 @@ vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: class { constructor() { throw new Error('no WebGL in jsdom'); } },
 }));
 
-type ReconnectAnswer = { success: boolean; deferred?: boolean; transient?: boolean; error?: string };
+type ReconnectAnswer = { success: boolean; deferred?: boolean; transient?: boolean; error?: string; resumeAgent?: string; resumeBinding?: { agent: string; sessionId: string; cwd: string } };
 const reconnect = vi.fn<(id: string, opts?: { promote?: boolean }) => Promise<ReconnectAnswer>>(async () => ({ success: true }));
 const unsub = () => () => undefined;
 
@@ -71,7 +71,7 @@ afterEach(() => {
   reconnect.mockReset();
   reconnect.mockImplementation(async () => ({ success: true }));
   setDaemonModeActive(false);
-  useStore.setState({ ptyDeferredById: {} });
+  useStore.setState({ ptyDeferredById: {}, claudeResumeOnStart: false });
 });
 
 const settle = () => act(async () => { await deliberateSleep(50, 'lets the reattach settle under act; nothing polled'); });
@@ -133,5 +133,54 @@ describe('reattach of a hidden pane (#2398)', { timeout: 60_000 }, () => {
     expect(started).toBe(true);
     expect(promoteFlags()).toEqual([false, true]);
     expect(useStore.getState().ptyDeferredById['p-written']).toBeUndefined();
+  });
+});
+
+// #2398 §6-4 option B: before #2398 every pane started at boot, so
+// resume-on-start also brought back the agents of hidden suspended panes
+// (WSL placeholders, sessions past the restore limit). A suspended session
+// whose record binds an exact Claude Code / Codex conversation is still
+// promoted at boot while hidden when the setting is on; anything else waits
+// for the pane's first show.
+describe('resume on start for a hidden suspended session (#2398 §6-4 option B)', { timeout: 60_000 }, () => {
+  const exact = { agent: 'claude', sessionId: '0c8f6a52-6c1b-4b6e-9a51-2f0d3c4b5a69', cwd: '/home/me/p' };
+  const suspendedWith = (extra: Partial<ReconnectAnswer>) => async (_id: string, opts?: { promote?: boolean }): Promise<ReconnectAnswer> =>
+    (opts?.promote === false ? { success: false, deferred: true, ...extra } : { success: true });
+
+  it('setting on: promoted at boot while hidden', async () => {
+    useStore.setState({ claudeResumeOnStart: true });
+    reconnect.mockImplementation(suspendedWith({ resumeBinding: exact }));
+    setDaemonModeActive(true);
+    await render('p-agent-on', false);
+    expect(promoteFlags()).toEqual([false, true]);
+    expect(useStore.getState().ptyDeferredById['p-agent-on']).toBeUndefined();
+  });
+
+  it('setting off: stays deferred until first show', async () => {
+    reconnect.mockImplementation(suspendedWith({ resumeBinding: exact }));
+    setDaemonModeActive(true);
+    await render('p-agent-off', false);
+    expect(promoteFlags()).toEqual([false]);
+    expect(useStore.getState().ptyDeferredById['p-agent-off']).toBe(true);
+    await render('p-agent-off', true);
+    expect(promoteFlags()).toEqual([false, true]);
+  });
+
+  it('a plain shell with the setting on stays deferred', async () => {
+    useStore.setState({ claudeResumeOnStart: true });
+    reconnect.mockImplementation(suspendedWith({}));
+    setDaemonModeActive(true);
+    await render('p-plain', false);
+    expect(promoteFlags()).toEqual([false]);
+    expect(useStore.getState().ptyDeferredById['p-plain']).toBe(true);
+  });
+
+  it('a binding without an exact session id stays deferred', async () => {
+    useStore.setState({ claudeResumeOnStart: true });
+    reconnect.mockImplementation(suspendedWith({ resumeAgent: 'claude', resumeBinding: { ...exact, sessionId: 'latest' } }));
+    setDaemonModeActive(true);
+    await render('p-guess', false);
+    expect(promoteFlags()).toEqual([false]);
+    expect(useStore.getState().ptyDeferredById['p-guess']).toBe(true);
   });
 });

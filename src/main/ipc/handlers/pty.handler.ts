@@ -1527,7 +1527,15 @@ export function registerPTYHandlers(
           // is first shown, which reattaches with promote. The id is kept.
           if (opts?.promote === false) {
             console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, pane hidden)`);
-            return { success: false, deferred: true };
+            // With the session's guarded resume binding (the daemon surfaces
+            // it only while its transcript lives): the renderer promotes it at
+            // boot after all when resume-on-start would bring that agent back.
+            return {
+              success: false,
+              deferred: true,
+              ...(session.resumeAgent ? { resumeAgent: session.resumeAgent } : {}),
+              ...(session.resumeBinding ? { resumeBinding: session.resumeBinding } : {}),
+            };
           }
           try {
             const result = await daemonClient.rpc('daemon.promoteSession', { id }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; error?: { code?: string; message: string } };

@@ -284,3 +284,15 @@ describe('reconnectPtyWithRetry — a deferred answer (#2398)', () => {
     expect(setDeferred).toHaveBeenCalledWith('pty-suspended', false);
   });
 });
+
+// #2398 §6-4 option B: the deferred answer carries what the session would
+// resume, so the pane can resume it on start.
+describe('reconnectPtyWithRetry — a deferred answer with a resume binding', () => {
+  it('hands the binding to the settle callback', async () => {
+    const onRecoveryError = vi.fn();
+    const resumeBinding = { agent: 'claude', sessionId: '0c8f6a52-6c1b-4b6e-9a51-2f0d3c4b5a69', cwd: '/home/me/p', ts: 1 };
+    const reconnect = vi.fn(async () => ({ success: false, deferred: true, resumeBinding }));
+    await reconnectPtyWithRetry('pty-suspended', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), sleep: noSleep, log: noLog, onRecoveryError });
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { deferred: true, resume: { resumeAgent: undefined, resumeBinding } });
+  });
+});

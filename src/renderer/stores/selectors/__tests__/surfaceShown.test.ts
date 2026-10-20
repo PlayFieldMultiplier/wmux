@@ -69,12 +69,23 @@ describe('isPaneDeferred', () => {
   });
 });
 
-describe('resumesOnStart (owner decision §6-2)', () => {
-  it('only a Claude Code or Codex recovery, only with the setting on', () => {
-    expect(resumesOnStart({ resumeAgent: 'claude' }, true)).toBe(true);
-    expect(resumesOnStart({ resumeAgent: 'codex' }, true)).toBe(true);
-    expect(resumesOnStart({ resumeAgent: 'claude' }, false)).toBe(false);
+describe('resumesOnStart (owner decisions §6-2, §6-4 option B)', () => {
+  const exact = (agent: string) => ({ agent, sessionId: '0c8f6a52-6c1b-4b6e-9a51-2f0d3c4b5a69', cwd: '/home/me/p' });
+
+  it('only an exact Claude Code or Codex conversation, only with the setting on', () => {
+    expect(resumesOnStart({ resumeAgent: 'claude', resumeBinding: exact('claude') }, true)).toBe(true);
+    expect(resumesOnStart({ resumeAgent: 'codex', resumeBinding: exact('codex') }, true)).toBe(true);
+    // The agent read off the binding alone (a suspended session's record).
+    expect(resumesOnStart({ resumeBinding: exact('claude') }, true)).toBe(true);
+    expect(resumesOnStart({ resumeAgent: 'claude', resumeBinding: exact('claude') }, false)).toBe(false);
     expect(resumesOnStart({}, true)).toBe(false);
     expect(resumesOnStart(undefined, true)).toBe(false);
+  });
+
+  it('never guesses a session: no binding, a binding for another agent, or a malformed id waits', () => {
+    expect(resumesOnStart({ resumeAgent: 'claude' }, true)).toBe(false);
+    expect(resumesOnStart({ resumeAgent: 'claude', resumeBinding: exact('codex') }, true)).toBe(false);
+    expect(resumesOnStart({ resumeAgent: 'claude', resumeBinding: { agent: 'claude', sessionId: 'latest' } }, true)).toBe(false);
+    expect(resumesOnStart({ resumeBinding: exact('aider') }, true)).toBe(false);
   });
 });

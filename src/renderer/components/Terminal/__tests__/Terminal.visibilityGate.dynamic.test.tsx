@@ -237,15 +237,24 @@ describe('a hidden dead-pane recovery waits with its descriptor (#2398)', () => 
     expect(storedSurface()?.pendingRecovery).toBeUndefined();
   });
 
+  const exactBinding = { agent: 'claude', sessionId: '0c8f6a52-6c1b-4b6e-9a51-2f0d3c4b5a69', cwd: '/home/me/b', ts: 1 };
+
   it('with resume-on-start on, a hidden pane resuming Claude Code starts at once (§6-2)', () => {
     act(() => useStore.setState({ claudeResumeOnStart: true }));
-    stage({ ...recovery, resumeAgent: 'claude' });
+    stage({ ...recovery, resumeAgent: 'claude', resumeBinding: exactBinding });
     mount({ pendingRecovery: storedSurface()?.pendingRecovery });
     expect(create).toHaveBeenCalledTimes(1);
     expect((create.mock.calls[0][0] as { recoveryCwds?: unknown }).recoveryCwds).toMatchObject({ sourceSessionId: 'daemon-dead' });
   });
 
   it('with resume-on-start off, the same pane waits', () => {
+    stage({ ...recovery, resumeAgent: 'claude', resumeBinding: exactBinding });
+    mount({ pendingRecovery: storedSurface()?.pendingRecovery });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('a Claude Code recovery without an exact session id waits even with resume-on-start on', () => {
+    act(() => useStore.setState({ claudeResumeOnStart: true }));
     stage({ ...recovery, resumeAgent: 'claude' });
     mount({ pendingRecovery: storedSurface()?.pendingRecovery });
     expect(create).not.toHaveBeenCalled();

@@ -1,4 +1,5 @@
 import type { DeadPaneRecovery } from '../../shared/ptyRecovery';
+import type { ResumeBinding } from '../../shared/agentResume';
 
 /**
  * RCA A1 — reconnect a live daemon session with retry, distinguishing
@@ -41,6 +42,9 @@ export interface ReconnectResult {
    * suspended: it stays suspended and the id is kept until the pane is shown.
    */
   deferred?: boolean;
+  /** With `deferred`: the suspended session's agent resume binding, if it has one. */
+  resumeAgent?: string;
+  resumeBinding?: ResumeBinding;
   /** The session's stored PTY geometry, reported on success. */
   cols?: number;
   rows?: number;
@@ -56,6 +60,8 @@ export interface ReconnectSettleInfo {
   awaitingReconcile?: boolean;
   /** Suspended and not promoted while the pane is hidden (#2398); first show promotes. */
   deferred?: boolean;
+  /** With `deferred`: what the session would resume (resume-on-start, #2398 §6-4). */
+  resume?: { resumeAgent?: string; resumeBinding?: ResumeBinding };
 }
 
 export interface ReconnectDeps {
@@ -160,7 +166,10 @@ export async function reconnectPtyWithRetry(
         // The daemon holds it, so a binding kept unconfirmed is confirmed.
         deps.setUnconfirmed?.(ptyId, false);
         deps.setDeferred?.(ptyId, true);
-        deps.onRecoveryError?.(null, { deferred: true });
+        const resume = result.resumeAgent || result.resumeBinding
+          ? { resume: { resumeAgent: result.resumeAgent, resumeBinding: result.resumeBinding } }
+          : {};
+        deps.onRecoveryError?.(null, { deferred: true, ...resume });
       }
       return null;
     }

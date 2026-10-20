@@ -239,7 +239,7 @@ describe('attach without promote (#2398)', () => {
     const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
     expect(deferAt).toBeGreaterThan(region.indexOf("session.state === 'suspended'"));
     expect(deferAt).toBeLessThan(promoteAt);
-    expect(region.slice(deferAt, promoteAt)).toMatch(/return \{ success: false, deferred: true \}/);
+    expect(region.slice(deferAt, promoteAt)).toMatch(/return \{\s*success: false,\s*deferred: true,/);
   });
 
   it('daemon.attachSession leaves a pending recovery pending with promote:false', () => {
@@ -254,5 +254,25 @@ describe('attach without promote (#2398)', () => {
     const start = daemon.indexOf('// Defer cold WSL starts until RPC registration');
     const region = daemon.slice(start, start + 1500);
     expect(region).toMatch(/recoversInBackground\(placeholder\)/);
+  });
+});
+
+// #2398 §6-4 option B: a hidden suspended session that would resume an agent
+// conversation is promoted at boot by the renderer when resume-on-start is on,
+// so the deferred answer and the suspended list carry its guarded binding.
+describe('resume on start for a suspended session (#2398 §6-4 option B)', () => {
+  const handler = readSourceText(path.join(__dirname, '..', 'handlers', 'pty.handler.ts'));
+  const daemon = readSourceText(path.join(srcRoot, 'daemon', 'index.ts'));
+
+  it('the deferred reconnect answer carries the session binding', () => {
+    const start = handler.indexOf('if (opts?.promote === false)');
+    const region = handler.slice(start, start + 900);
+    expect(region).toMatch(/deferred: true,[\s\S]*?resumeBinding: session\.resumeBinding/);
+  });
+
+  it('a cap-skipped suspended entry carries its binding only while its transcript lives', () => {
+    const start = daemon.indexOf('const suspendedEntries = persistedState.sessions');
+    const region = daemon.slice(start, start + 1400);
+    expect(region).toMatch(/isUsableResumeBinding\(s\.resumeBinding\) && bindingTranscriptLives\(s\.resumeBinding\)/);
   });
 });

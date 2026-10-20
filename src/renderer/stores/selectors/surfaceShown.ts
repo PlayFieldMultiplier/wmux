@@ -15,7 +15,7 @@
 
 import type { StoreState } from '../index';
 import type { PaneLeaf } from '../../../shared/types';
-import type { DeadPaneRecovery } from '../../../shared/ptyRecovery';
+import { CHATV2_PROVIDER_SESSION_ID } from '../../../shared/chatv2/ipc';
 import { findLeafBySurfaceId } from '../../../shared/paneUtils';
 import { selectWorkerPanelHost } from '../slices/roomSlice';
 import { isTerminalKindSurfaceType, isTerminalSurfaceType, isWorkSurfaceType, pickSplitShownSurfaces } from '../../components/Pane/surfaceKinds';
@@ -55,14 +55,31 @@ export function isSurfaceShown(state: ShownState, workspaceId: string, surfaceId
   return !!leaf && isSurfaceDrawnInLeaf(leaf, surfaceId);
 }
 
+/** What a pane knows of the agent conversation it would resume. */
+export interface ResumeHint {
+  resumeAgent?: string;
+  resumeBinding?: { agent?: string; sessionId?: string };
+}
+
 /**
- * Owner decision (#2398 §6-2): with resume-on-start on, a hidden pane that
- * replaces a dead Claude Code or Codex session starts at once, so its
- * conversation resumes at boot like a shown one instead of waiting to be
- * opened.
+ * Owner decisions (#2398 §6-2, and §6-4 option B): with resume-on-start on, a
+ * hidden pane that would resume a Claude Code or Codex conversation starts at
+ * boot like a shown one instead of waiting to be opened — a pane replacing a
+ * dead session, and a suspended session its hidden pane attached without
+ * promoting. Before #2398 every pane started at boot, so the setting brought
+ * those agents back; waiting for the first show would silently undo it.
+ *
+ * Only an exact conversation: the binding names that agent and a well-formed
+ * session id, the same id rule the automatic resume types by (planAutoResume).
+ * Anything less is never guessed at boot: the pane waits for its first show,
+ * where the pill offers the choice.
  */
-export function resumesOnStart(recovery: DeadPaneRecovery | undefined, resumeOnStart: boolean): boolean {
-  return resumeOnStart && !!recovery?.resumeAgent && AUTO_RESUME_AGENTS.has(recovery.resumeAgent);
+export function resumesOnStart(hint: ResumeHint | undefined, resumeOnStart: boolean): boolean {
+  if (!resumeOnStart || !hint) return false;
+  const binding = hint.resumeBinding;
+  const agent = hint.resumeAgent ?? binding?.agent;
+  return !!agent && AUTO_RESUME_AGENTS.has(agent) && binding?.agent === agent
+    && typeof binding.sessionId === 'string' && CHATV2_PROVIDER_SESSION_ID.test(binding.sessionId);
 }
 
 type DeferredState = Pick<StoreState, 'ptyCreateByKey' | 'ptyUnconfirmedById'> & Partial<Pick<StoreState, 'ptyDeferredById'>>;
