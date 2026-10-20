@@ -87,6 +87,10 @@ export interface TaskCloseServiceOptions {
   pushedHead?: (taskId: string) => string | null;
   /** Close and keep folder: forget what earlier stops of the folder left. */
   forgetStops?: (folder: string) => void;
+  /** Close and keep folder: hold the task's folder against a bot task's
+   *  folder cleanup while the task closes; the release says whether the
+   *  task closed keeping it (holdTaskFolderToKeep). */
+  holdFolder?: (taskId: string) => Promise<(kept: boolean) => void>;
 }
 
 export class TaskCloseService {
@@ -97,9 +101,11 @@ export class TaskCloseService {
   private readonly removeRelay?: (taskId: string) => void | Promise<void>;
   private readonly pushedHead?: (taskId: string) => string | null;
   private readonly forgetStops?: (folder: string) => void;
+  private readonly holdFolder?: (taskId: string) => Promise<(kept: boolean) => void>;
 
   constructor(opts: TaskCloseServiceOptions) {
     this.forgetStops = opts.forgetStops;
+    this.holdFolder = opts.holdFolder;
     this.daemon = opts.daemon;
     this.worktrees = opts.worktrees;
     this.stopPanesIn = opts.stopPanesIn;
@@ -136,24 +142,18 @@ export class TaskCloseService {
     // the cleanup scan, the closed-task GC and a bot task's folder cleanup
     // all leave a detached task's folder alone.
     if (input.keepFolder) {
-      const folder = input.worktreePath ?? input.leftoverPath;
-      if (folder) {
-        // The pending removal ends first: one left on disk would be finished
-        // later and delete the folder the owner chose to keep.
-        try {
-          await this.worktrees.forgetPendingRemoval(folder);
-        } catch (err) {
-          return { ok: false, taskId, reason: 'error', error: `close: the folder's pending removal could not be ended, so the task stays open: ${(err as Error).message}`, preservedWorktree: folder };
-        }
-        this.forgetFolderStops(folder);
+      // A bot task's folder cleanup that read the task's mission before the
+      // detach must not remove the folder after it: the folder is held
+      // while the task closes, and a cleanup under way is waited for.
+      const release = this.holdFolder ? await this.holdFolder(taskId) : undefined;
+      let closed = false;
+      try {
+        const res = await this.closeKeepingFolder(input);
+        closed = res.ok;
+        return res;
+      } finally {
+        release?.(closed);
       }
-      const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
-      if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
-      // A close of the task that ran first may have removed it already.
-      const kept = folder && fs.existsSync(folder) ? folder : undefined;
-      this.keptByOwner.set(taskId, kept);
-      console.warn(`[worktask] task ${taskId} closed with Close and keep folder: the owner chose to keep its folder${folder ? ` ${folder}` : ''} on disk as it is${folder && !kept ? ' (it was already gone)' : ''}`);
-      return { ok: true, taskId, archivePending: closed.archivePending, ...(kept ? { keptFolder: kept } : {}) };
     }
 
     // The owner kept the folder already (a close asked before the keep, run
@@ -306,6 +306,29 @@ export class TaskCloseService {
     }
 
     return { ok: true, taskId, archivePending: closed.archivePending };
+  }
+
+  /** Close and keep folder: the task closes, the folder stays as it is. */
+  private async closeKeepingFolder(input: CloseTaskInput): Promise<CloseTaskResult> {
+    const { taskId } = input;
+    const folder = input.worktreePath ?? input.leftoverPath;
+    if (folder) {
+      // The pending removal ends first: one left on disk would be finished
+      // later and delete the folder the owner chose to keep.
+      try {
+        await this.worktrees.forgetPendingRemoval(folder);
+      } catch (err) {
+        return { ok: false, taskId, reason: 'error', error: `close: the folder's pending removal could not be ended, so the task stays open: ${(err as Error).message}`, preservedWorktree: folder };
+      }
+      this.forgetFolderStops(folder);
+    }
+    const closed = await this.missionClose(taskId, input.verifiedWorkspaceId, { detach: true });
+    if (!closed.ok) return { ok: false, taskId, reason: 'error', error: closed.error };
+    // A close of the task that ran first may have removed it already.
+    const kept = folder && fs.existsSync(folder) ? folder : undefined;
+    this.keptByOwner.set(taskId, kept);
+    console.warn(`[worktask] task ${taskId} closed with Close and keep folder: the owner chose to keep its folder${folder ? ` ${folder}` : ''} on disk as it is${folder && !kept ? ' (it was already gone)' : ''}`);
+    return { ok: true, taskId, archivePending: closed.archivePending, ...(kept ? { keptFolder: kept } : {}) };
   }
 
   /** A folder that stays: what earlier stops of it left is not checked again. */

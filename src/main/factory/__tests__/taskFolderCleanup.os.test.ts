@@ -19,6 +19,7 @@ import {
   forgetKeptFolder,
   gitRepoInfo,
   holdTaskFolder,
+  holdTaskFolderToKeep,
   gitWorktreeRegistered,
   installTaskFolderCleanup,
   noteKeptFolderStopped,
@@ -281,6 +282,21 @@ describe('review safeguards', () => {
 
   // #2388: a tree kill that left processes running has removed their
   // session already; only the stop's own record still names them.
+  // #2388: a pass hands each task the mission it read at its start; Close
+  // and keep folder may detach one before the pass reaches it.
+  it('a cleanup handed a mission read before Close and keep folder detached it leaves the folder', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager());
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    const kept = row('completed', { id: 'wtask-keep-00000009' });
+    (await holdTaskFolderToKeep(kept.id))(true);
+    expect(await cleanTaskFolder(ports(), kept, mission, [])).toBe('skipped');
+    expect(fs.existsSync(wt)).toBe(true);
+    // A keep whose close failed leaves the folder to the usual rules.
+    const open = row('completed', { id: 'wtask-keep-0000000a' });
+    (await holdTaskFolderToKeep(open.id))(false);
+    expect(await cleanTaskFolder(ports(), open, mission, [])).toBe('removed');
+  });
+
   it('waits while processes an earlier stop of the folder left still run, with no session left', async () => {
     const wt = await taskWorktree(new TaskWorktreeManager());
     const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };

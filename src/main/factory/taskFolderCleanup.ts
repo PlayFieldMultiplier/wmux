@@ -558,6 +558,25 @@ export async function holdTaskFolder(taskId: string): Promise<() => void> {
   };
 }
 
+/** Tasks whose folder the owner kept (Close and keep folder, #2388): no
+ *  cleanup removes it, even one handed the task's mission before the close
+ *  detached it. */
+const keptByOwner = new Set<string>();
+
+/**
+ * Close and keep folder holds the task's folder while the task closes, as a
+ * resume does (holdTaskFolder). The release says whether the task closed
+ * keeping it; a cleanup queued with a mission read before the detach then
+ * leaves the folder alone.
+ */
+export async function holdTaskFolderToKeep(taskId: string): Promise<(kept: boolean) => void> {
+  const release = await holdTaskFolder(taskId);
+  return (kept) => {
+    if (kept) keptByOwner.add(taskId);
+    release();
+  };
+}
+
 /** Whether the folder is where its root says, through no link: the real
  *  path relative to the root's real path is the path as written. */
 function throughNoLink(folder: string, root: string): boolean {
@@ -605,7 +624,7 @@ async function cleanTaskFolderNow(
   const now = ports.now ?? Date.now;
   const log = ports.log ?? ((m: string) => console.warn(m));
   const exists = ports.exists ?? defaultExists;
-  if (!isEndedBotTask(entry) || !mission || mission.detached === true) return 'skipped';
+  if (!isEndedBotTask(entry) || !mission || mission.detached === true || keptByOwner.has(entry.id)) return 'skipped';
   const botId = entry.dispatch?.origin.botId ?? '';
   const kind = taskFolderKind(mission.folder, mission.branch, botId, ports.roots);
   if (!kind) return 'skipped';
@@ -671,7 +690,7 @@ async function cleanTaskFolderNow(
     folderFailures.set(entry.id, reason);
     return 'failed';
   };
-  if ((folderHolds.get(entry.id) ?? 0) > 0) return 'skipped';
+  if ((folderHolds.get(entry.id) ?? 0) > 0 || keptByOwner.has(entry.id)) return 'skipped';
   if (prior?.state === 'removed') return 'skipped';
   if (prior?.state === 'kept_dirty' && opts.force !== true) return 'skipped';
   if (prior?.state === 'restored' && now() - prior.at < TASK_FOLDER_RESTORE_HOLD_MS) return 'skipped';
@@ -761,7 +780,7 @@ async function cleanTaskFolderNow(
   const repo = await ports.repoInfo(mission.folder).catch(() => null);
   // A detached checkout comes back on its commit, so it needs one.
   if (!repo || (!mission.branch && !repo.head)) return fail(prior?.repoRoot ? 'its repository could not be read' : 'it is no longer a worktree, and its repository was not recorded');
-  if ((folderHolds.get(entry.id) ?? 0) > 0) return 'skipped';
+  if ((folderHolds.get(entry.id) ?? 0) > 0 || keptByOwner.has(entry.id)) return 'skipped';
   // Commits made on a detached HEAD are held by no branch: a ref keeps them
   // before the worktree (and with it HEAD's reflog) goes.
   const kept = await keepDetachedCommits(repo.repoRoot, mission.folder, entry.id, mission.branch, repo.head, entry.dispatch?.checkout?.sha);

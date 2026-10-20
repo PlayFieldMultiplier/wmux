@@ -419,15 +419,35 @@ describe('a close that keeps the folder (#2388)', () => {
     const removing = svc.closeTask({ taskId: 'wtask-k5', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath });
     await stopStarted;
     const keeping = svc.closeTask({ taskId: 'wtask-k5', verifiedWorkspaceId: 'ws-owner', repoRoot, repoHash: 'closehash', worktreePath, keepFolder: true });
-    await new Promise((r) => setTimeout(r, 20));
-    // The keep has not run: the first close still holds the task.
-    expect(calls).toHaveLength(0);
     release();
     expect(await removing).toMatchObject({ ok: true });
     const kept = await keeping;
+    // The keep ran after the first close: its detach close comes second.
+    expect(calls.map((c) => c.params['detach'] === true)).toEqual([false, true]);
     expect(kept).toMatchObject({ ok: true, taskId: 'wtask-k5' });
     expect(kept).not.toHaveProperty('keptFolder');
     expect(fs.existsSync(worktreePath)).toBe(false);
+  });
+
+  it('keepFolder holds the task\'s folder against a bot task\'s cleanup while it closes, and says whether it kept it', async () => {
+    const { worktreePath } = await makeWorktree('keep-hold');
+    const events: string[] = [];
+    const holdFolder = vi.fn(async (taskId: string) => {
+      events.push(`hold ${taskId}`);
+      return (kept: boolean) => { events.push(`release ${kept}`); };
+    });
+    const { port } = makeDaemon();
+    const rpc = port.rpc as ReturnType<typeof vi.fn>;
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      events.push(method);
+      return params['taskId'] === 'wtask-k7' ? { ok: true } : { ok: false, error: { message: 'mission is gone' } };
+    });
+    const svc = new TaskCloseService({ daemon: port, worktrees: new TaskWorktreeManager(), holdFolder });
+    expect(await svc.closeTask({ taskId: 'wtask-k7', verifiedWorkspaceId: 'ws-owner', worktreePath, keepFolder: true })).toMatchObject({ ok: true, keptFolder: worktreePath });
+    expect(events).toEqual(['hold wtask-k7', 'task.mission.close', 'release true']);
+    events.length = 0;
+    expect(await svc.closeTask({ taskId: 'wtask-k8', verifiedWorkspaceId: 'ws-owner', worktreePath, keepFolder: true })).toMatchObject({ ok: false });
+    expect(events).toEqual(['hold wtask-k8', 'task.mission.close', 'release false']);
   });
 
   it('a close queued behind a keep of the same task removes nothing', async () => {
