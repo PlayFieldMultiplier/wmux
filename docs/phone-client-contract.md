@@ -4803,6 +4803,9 @@ runs, with the same checks and the same agent slot.
 - **Discovery**: `/api/config` carries `workerResume: true` for every caller
   when the attached desktop answers the route (omitted otherwise). It does not
   say whether this caller may resume; a refused one answers `403`.
+- **Factory switch**: a resume works with the desktop's factory switch off
+  (`factoryEnabled: false`), as the desktop's button does, while a message to
+  a bot is refused then (`409 factory-off`).
 
 **`POST /api/bot-tasks/:taskId/resume`** — body
 `{"clientRequestId": "<13-digit ms>-<lowercase uuid>"}` (the chat send id
@@ -4852,7 +4855,9 @@ outside it is `400`, so a forgotten receipt never resumes twice):
 | `503 {error:"desktop-unavailable"}` / `503 {error:"resume-unavailable"}` | No desktop, or one that cannot resume (too old, factory not started). |
 | `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer in time (the outcome is unknown: retry with the same id), or answered badly. |
 
-`resume-refused` codes (show an unknown one from its `message`):
+`resume-refused` codes (show an unknown one from its `message`). After
+`no_slot` or `already_running`, read the card's thread again: its
+`resumable` says whether Resume is still offered.
 
 | `code` | Meaning |
 |---|---|
@@ -4860,7 +4865,7 @@ outside it is `400`, so a forgotten receipt never resumes twice):
 | `not_reclaimed`, `no_conversation` | Nothing to resume: wmux did not stop this worker, or recorded no conversation for it. |
 | `pane_gone`, `worktree_gone`, `moved`, `unknown_state` | Not resumable from here: the pane is closed with no way to reopen it, the worktree is gone, the pane left the task folder, or what runs in the pane cannot be told (resume on the desktop). |
 | `no_slot` | Every agent slot is in use; `cap` is the limit. A slot frees when a worker ends. |
-| `busy` | Another resume of this task, or a close of its panes, is under way. `Retry-After: 5`. |
+| `busy` | Another resume of this task, or a close of its panes, is under way, or the desktop stopped waiting (60 s) for this one, which goes on. `Retry-After: 5`. |
 | `not_typed`, `not_reopened`, `not_now` | The resume began but could not finish. wmux stops a worker it had already reopened; until that stop lands the task reads as resumed. Read the thread, then try again. |
 
 #### Workspace layout tree

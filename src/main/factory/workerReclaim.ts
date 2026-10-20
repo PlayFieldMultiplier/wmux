@@ -1645,6 +1645,9 @@ export async function ownerResumeWorker(
   const p = ports();
   if (!p) return refuse('not_started', 'The factory is not running.');
   if (p.store.get(taskId)?.state === 'resumed') return resumeWorker(p, taskId, { kind: 'owner' });
+  // A resume of this task under way answers busy before a slot is asked
+  // for: a second request never reads as "no free slot".
+  if (resuming.has(taskId)) return refuse('busy', 'this worker is being resumed already');
   const s = slots();
   const botId = p.store.get(taskId)?.botId;
   const slot = s ? s.tryAcquire({ taskId, ...(botId ? { botId } : {}), byOwner: true }) : null;

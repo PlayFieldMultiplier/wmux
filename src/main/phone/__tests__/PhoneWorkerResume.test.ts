@@ -62,6 +62,30 @@ describe('workspaces.workerResume', () => {
     expect(d.resume).toHaveBeenCalledTimes(2);
   });
 
+  it('keys receipts by caller: the operator and a device sharing an id never replay or collide', async () => {
+    const d = deps();
+    expect(await call(d, { taskId: TASK, clientRequestId: id() })).toMatchObject({ resumed: { taskId: TASK } });
+    // The device's same id is its own request: neither a replay nor a reuse.
+    expect(await call(d, { taskId: 'wtask-other', clientRequestId: id(), deviceId: 'd1' })).toEqual({ notFound: true });
+    d.resume.mockResolvedValueOnce({ ok: false, code: 'already_running', message: 'up' });
+    expect(await call(d, { taskId: TASK, clientRequestId: id(), deviceId: 'd1' })).toEqual({ refused: { code: 'already_running', message: 'up' } });
+    expect(d.resume).toHaveBeenCalledTimes(2);
+    // A malformed device id never falls back to the operator's receipts.
+    for (const deviceId of ['', 'bad id', 7, null]) {
+      expect(await call(d, { taskId: TASK, clientRequestId: id(), deviceId })).toEqual({ invalid: true });
+    }
+    expect(d.resume).toHaveBeenCalledTimes(2);
+  });
+
+  it('settles a resume that does not answer in time, so a repeat is not held by it', async () => {
+    const d = { ...deps(() => new Promise<WorkerResumeResult>(() => undefined)), waitMs: 5 };
+    expect(await call(d, { taskId: TASK, clientRequestId: id() })).toEqual({ refused: { code: 'busy', message: 'the resume is still under way; try again in a moment' } });
+    // Not kept: the repeat asks again (the resume's own lock answers it).
+    d.resume.mockResolvedValueOnce({ ok: false, code: 'busy', message: 'this worker is being resumed already' });
+    expect(await call(d, { taskId: TASK, clientRequestId: id() })).toMatchObject({ refused: { code: 'busy' } });
+    expect(d.resume).toHaveBeenCalledTimes(2);
+  });
+
   it('a refusal is not kept: the same id runs the checks again', async () => {
     const d = deps();
     d.resume.mockResolvedValueOnce({ ok: false, code: 'busy', message: 'later' });

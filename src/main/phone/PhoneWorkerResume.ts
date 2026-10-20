@@ -26,6 +26,11 @@ import {
 const DEVICE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 /** Requests one desktop keeps receipts for at once; far above any honest load. */
 export const PHONE_WORKER_RESUME_RECEIPTS_MAX = 256;
+/** A second layer over the resume's own bounded steps (each daemon, renderer
+ *  and git call has its own timeout, but they add up): past this the receipt
+ *  settles, so a repeat is never held by it. The resume itself goes on and
+ *  keeps its task's lock, so a repeat then answers busy or already_running. */
+export const PHONE_WORKER_RESUME_WAIT_MS = 60_000;
 
 export interface PhoneWorkerResumeDeps {
   /** The owner's resume (ownerResumeWorker). */
@@ -34,6 +39,8 @@ export interface PhoneWorkerResumeDeps {
   taskKnown(taskId: string): boolean;
   now(): number;
   log(line: string): void;
+  /** How long main waits for the resume (PHONE_WORKER_RESUME_WAIT_MS). */
+  waitMs?: number;
 }
 
 function defaultDeps(): PhoneWorkerResumeDeps {
@@ -84,7 +91,10 @@ export async function handlePhoneWorkerResumeCommand(
   const now = deps.now();
   const id = payload.clientRequestId;
   if (checkChatId(id, now, PHONE_WORKER_RESUME_WINDOW_MS) !== 'ok') return { invalid: true };
-  const deviceId = typeof payload.deviceId === 'string' && DEVICE_ID_RE.test(payload.deviceId) ? payload.deviceId : undefined;
+  // A device id the daemon sent must be one: it keys the receipts, and a
+  // malformed one never falls back to the operator's.
+  if (payload.deviceId !== undefined && !(typeof payload.deviceId === 'string' && DEVICE_ID_RE.test(payload.deviceId))) return { invalid: true };
+  const deviceId = payload.deviceId as string | undefined;
   for (const [k, r] of receipts) if (r.expiresAt <= now && !r.pending) receipts.delete(k);
   const key = `${deviceId ?? 'operator'}\0${id as string}`;
   const seen = receipts.get(key);
@@ -98,7 +108,12 @@ export async function handlePhoneWorkerResumeCommand(
   // Kept for as long as the id itself is accepted (an id may be stamped a
   // little ahead of this clock).
   const receipt: Receipt = { taskId, expiresAt: chatIdTime(id as string) + PHONE_WORKER_RESUME_WINDOW_MS };
-  receipt.pending = deps.resume(taskId).then(replyOf);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<PhoneWorkerResumeReply>((resolve) => {
+    timer = setTimeout(() => resolve({ refused: { code: 'busy', message: 'the resume is still under way; try again in a moment' } }), deps.waitMs ?? PHONE_WORKER_RESUME_WAIT_MS);
+    timer.unref?.();
+  });
+  receipt.pending = Promise.race([deps.resume(taskId).then(replyOf), late]).finally(() => clearTimeout(timer));
   receipts.set(key, receipt);
   let reply: PhoneWorkerResumeReply | null = null;
   try {
