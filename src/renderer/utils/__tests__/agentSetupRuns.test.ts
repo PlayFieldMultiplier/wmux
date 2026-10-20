@@ -10,6 +10,7 @@ import {
   resetAgentSetupForTests,
   RUN_TICK_MS,
   DETECT_EVERY_TICKS,
+  paneSyntaxFor,
   scanCommandEnd,
   showAgentRunPane,
   startAgentRun,
@@ -80,6 +81,15 @@ describe('scanCommandEnd', () => {
     expect(r.ended).toBe(false);
     r = scanCommandEnd(`${r.rest}\x07`, r.started);
     expect(r).toMatchObject({ ended: true, exitCode: 6 });
+  });
+});
+
+describe('paneSyntaxFor', () => {
+  it('quotes for PowerShell only when the default shell is pwsh / powershell', () => {
+    expect(paneSyntaxFor('/usr/local/bin/pwsh')).toBe('powershell');
+    expect(paneSyntaxFor('C:\\Program Files\\PowerShell\\7\\pwsh.exe')).toBe('powershell');
+    expect(paneSyntaxFor('/bin/zsh')).toBe('user');
+    expect(paneSyntaxFor(undefined)).toBe('user');
   });
 });
 
@@ -160,6 +170,14 @@ describe('startAgentRun', () => {
     await flush();
     await flush();
     expect(getAgentSetupState().runs.claude?.phase).toBe('succeeded');
+  });
+
+  it('brings the new tab into view, even if the user moved away while it opened', async () => {
+    setup();
+    const st = store.state as Record<string, unknown>;
+    st.activeWorkspaceId = 'ws-1';
+    await startAgentRun('claude', 'install', plan, 'Install Claude Code');
+    expect((st.setActiveSurface as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('pane-1', 'surf-setup', 'ws-1');
   });
 
   it('"View log" brings the run\'s own tab to the front', async () => {

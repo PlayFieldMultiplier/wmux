@@ -33,6 +33,7 @@ import {
   agentExecutableNames,
   agentInstallMethod,
   agentLoginCommand,
+  type AgentCommandShell,
   type AgentSetupPlan,
   type SetAgentPathResult,
 } from '../../shared/agentInstall';
@@ -116,7 +117,7 @@ export class FirstRunOrchestrator {
    * program it needs that is missing here) and, once installed, the sign-in
    * line for the exact executable the card shows.
    */
-  async agentPlan(agent: AgentId): Promise<AgentSetupPlan> {
+  async agentPlan(agent: AgentId, paneSyntax: AgentCommandShell = 'user'): Promise<AgentSetupPlan> {
     const method = agentInstallMethod(agent, process.platform);
     if (!method) throw new Error(`first-run: no install line for ${agent}`);
     const env = this.agentDetector.probeEnvFor(process.execPath);
@@ -125,7 +126,12 @@ export class FirstRunOrchestrator {
     return {
       agent,
       install: { command: method.command, shell: method.shell, officialPage: method.officialPage, missing },
-      login: executable ? { command: agentLoginCommand(executable, method.shell), shell: method.shell } : null,
+      // The sign-in line is typed into the pane's shell, so it is quoted for that
+      // shell: PowerShell on Windows, and on macOS/Linux whatever the user's
+      // default shell speaks (pwsh there too, when that is their shell).
+      login: executable
+        ? { command: agentLoginCommand(executable, method.shell === 'powershell' ? 'powershell' : paneSyntax), shell: method.shell }
+        : null,
     };
   }
 
@@ -134,8 +140,18 @@ export class FirstRunOrchestrator {
    * checking it names that agent and runs (`--version`). `null` forgets it.
    */
   async setAgentPath(agent: AgentId, input: string | null): Promise<SetAgentPathResult> {
-    const paths = this.readAgentPaths();
+    // One save at a time, each merged into what is on disk when it writes, so
+    // two cards saving at once never drop each other's path.
+    const run = this.agentPathsQueue.then(() => this.applyAgentPath(agent, input));
+    this.agentPathsQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private agentPathsQueue: Promise<void> = Promise.resolve();
+
+  private async applyAgentPath(agent: AgentId, input: string | null): Promise<SetAgentPathResult> {
     if (input === null) {
+      const paths = this.readAgentPaths();
       delete paths[agent];
       await this.writeAgentPaths(paths);
       return { ok: true };
@@ -147,6 +163,7 @@ export class FirstRunOrchestrator {
       return { ok: false, reason: 'wrong-program' };
     }
     if ((await this.agentDetector.readVersion(p)) === null) return { ok: false, reason: 'does-not-run' };
+    const paths = this.readAgentPaths();
     paths[agent] = p;
     await this.writeAgentPaths(paths);
     return { ok: true };

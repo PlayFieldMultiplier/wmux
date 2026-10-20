@@ -60,8 +60,8 @@ export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): ()
   ipcMain.removeHandler(IPC.FIRST_RUN_AGENT_PLAN);
   ipcMain.handle(
     IPC.FIRST_RUN_AGENT_PLAN,
-    wrapHandler(IPC.FIRST_RUN_AGENT_PLAN, async (_event: IpcMainInvokeEvent, agent: unknown) =>
-      orchestrator.agentPlan(requireAgentId(agent))),
+    wrapHandler(IPC.FIRST_RUN_AGENT_PLAN, async (_event: IpcMainInvokeEvent, agent: unknown, paneSyntax: unknown) =>
+      orchestrator.agentPlan(requireAgentId(agent), paneSyntax === 'powershell' ? 'powershell' : 'user')),
   );
 
   ipcMain.removeHandler(IPC.FIRST_RUN_AGENT_SET_PATH);

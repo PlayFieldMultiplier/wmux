@@ -169,6 +169,15 @@ export function scanCommandEnd(
 
 let nextRunId = 1;
 
+/**
+ * The syntax of the shell a macOS/Linux setup pane opens in (the user's
+ * default shell), for quoting the sign-in line. Pass to `agentPlan`.
+ */
+export function paneSyntaxFor(defaultShell: string | undefined): AgentCommandShell {
+  const base = (defaultShell ?? '').split(/[\\/]/).pop() ?? '';
+  return /^(pwsh|powershell)(\.exe)?$/i.test(base) ? 'powershell' : 'user';
+}
+
 function shellFor(shell: AgentCommandShell): string | undefined {
   return shell === 'powershell' ? 'powershell.exe' : undefined;
 }
@@ -246,6 +255,9 @@ async function openRun(
   const run: AgentRun = { ...base, phase: 'running', ptyId: tab.ptyId, workspaceId: tab.workspaceId, screen: null };
   set({ runs: { ...state.runs, [agent]: run } });
   watch(run.id, agent, kind, tab.workspaceId, tab.ptyId);
+  // The user may have switched workspace or page while the tab opened: the
+  // line must run in view, so bring its workspace, pane and tab to the front.
+  showAgentRunPane(agent);
   return run;
 }
 
