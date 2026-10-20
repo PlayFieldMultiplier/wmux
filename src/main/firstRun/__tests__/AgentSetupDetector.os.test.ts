@@ -118,14 +118,21 @@ esac`);
   );
 
   it.skipIf(process.platform === 'win32')('a status probe that hangs is "could not tell", not signed out', async () => {
-    // `exec` so the timeout's kill reaches the sleeping process itself.
+    // Like an npm launcher: the probed process starts a child and waits on it.
+    // The timeout must take the child down too, not only the launcher.
+    const pidFile = flag('child.pid');
     writeScript('claude', `
 case "$1" in
   --version) echo "2.1.300 (Claude Code)" ;;
-  *) exec sleep 20 ;;
+  *) sleep 30 & echo $! > "${pidFile}"; wait ;;
 esac`);
     const [claude] = await detector(2000).detectAll();
     expect(claude).toMatchObject({ readiness: 'login-needed', loginKnown: false, version: '2.1.300' });
+
+    const childPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    const alive = (): boolean => { try { process.kill(childPid, 0); return true; } catch { return false; } };
+    for (let i = 0; i < 40 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(alive()).toBe(false);
   });
 });
 

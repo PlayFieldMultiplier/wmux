@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -11,6 +11,8 @@ import {
   type AgentSetupStatus,
 } from '../../shared/agentSetup';
 import { isInternalEnvKey } from '../../shared/envFilter';
+import { withFreshWindowsPath } from '../../shared/windowsPathEnv';
+import { killProcessTree } from '../../daemon/automation/treeKill';
 import {
   agentCandidates,
   liveResolveEnv,
@@ -109,34 +111,49 @@ export function buildProbeEnv(
   return out;
 }
 
-/** Real runner: execFile with a hard timeout. Only the spawned child is killed. */
+/**
+ * Real runner with a hard timeout. On timeout the probe's whole process tree
+ * is killed (an npm-installed agent is a node launcher with a native child,
+ * which a signal to the launcher alone would leave running), and nothing else:
+ * POSIX probes get their own process group, Windows uses taskkill /T on the
+ * probe's pid. Output past the cap is dropped, never a reason to kill.
+ */
 export const execProbe: ProbeRunner = (command, args, opts) =>
   new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (code: number | null, timedOut: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code, stdout, stderr, timedOut });
+    };
+    let child: ReturnType<typeof spawn>;
     try {
-      const child = execFile(
-        command,
-        args,
-        {
-          env: opts.env,
-          cwd: opts.cwd,
-          timeout: opts.timeoutMs,
-          killSignal: 'SIGKILL',
-          maxBuffer: MAX_PROBE_OUTPUT,
-          windowsHide: true,
-          encoding: 'utf8',
-          ...(opts.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-        },
-        (err, stdout, stderr) => {
-          const e = err as (NodeJS.ErrnoException & { killed?: boolean; code?: number | string }) | null;
-          const timedOut = Boolean(e?.killed);
-          const code = !e ? 0 : typeof e.code === 'number' ? e.code : null;
-          resolve({ code: timedOut ? null : code, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), timedOut });
-        },
-      );
-      child.stdin?.end();
+      child = spawn(command, args, {
+        env: opts.env,
+        cwd: opts.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+        ...(opts.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      });
     } catch {
-      resolve({ code: null, stdout: '', stderr: '', timedOut: false });
+      finish(null, false);
+      return;
     }
+    const append = (cur: string, chunk: Buffer): string =>
+      cur.length >= MAX_PROBE_OUTPUT ? cur : (cur + chunk.toString('utf8')).slice(0, MAX_PROBE_OUTPUT);
+    child.stdout?.on('data', (c: Buffer) => { stdout = append(stdout, c); });
+    child.stderr?.on('data', (c: Buffer) => { stderr = append(stderr, c); });
+    child.on('error', () => finish(null, false));
+    child.on('close', (code) => finish(typeof code === 'number' ? code : null, false));
+    timer = setTimeout(() => {
+      if (child.pid) void killProcessTree(child.pid);
+      finish(null, true);
+    }, opts.timeoutMs);
   });
 
 /**
@@ -174,7 +191,9 @@ export class AgentSetupDetector {
   private inflight: Promise<AgentSetupStatus[]> | null = null;
 
   constructor(deps: AgentSetupDetectorDeps = {}) {
-    this.env = deps.env ?? (() => process.env);
+    // Windows: PATH as the registry has it now, so an install made while wmux
+    // is running is found (and its node launcher can find node) without a restart.
+    this.env = deps.env ?? (() => withFreshWindowsPath(process.env));
     this.resolve = deps.resolve ?? ((agent, env) => resolveAgentExecutableWith(liveResolveEnv(env), agent));
     this.candidates = deps.candidates ?? ((agent, env) => agentCandidates(liveResolveEnv(env), agent));
     this.run = deps.run ?? execProbe;
