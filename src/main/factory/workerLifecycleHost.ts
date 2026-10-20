@@ -189,7 +189,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     row: (taskId) => ledger.get(taskId),
     stoppedAt: (taskId) => {
       const rec = reclaimedStore?.get(taskId);
-      return rec?.state === 'stopped' ? rec.at : goneFacts.get(taskId)?.at;
+      const stops = [rec?.state === 'stopped' ? rec.at : undefined, goneFacts.get(taskId)?.at].filter((t): t is number => t !== undefined);
+      return stops.length > 0 ? Math.max(...stops) : undefined;
     },
     launchedAt: (taskId) => launches.liveLaunchAt(taskId),
   };

@@ -58,6 +58,9 @@ export interface WorkerHolder {
    *  its slot), with when that was known when a record or fact dates it. The
    *  bot's worker time ends its run there (workerRunEnds.ts). */
   workerGone?: { at?: number };
+  /** Its own agent was seen running by the last good read (its workspace's
+   *  panes, or its own pane wherever it is). */
+  agentSeen?: true;
 }
 
 export type HolderReason =
@@ -333,6 +336,7 @@ export function computeHolders(s: HolderSnapshot): WorkerHolder[] {
       reserved,
       why,
       ...(workerGone ? { workerGone: goneAt !== undefined ? { at: goneAt } : {} } : {}),
+      ...(a.sighted || [...ws].some((w) => s.agentSeen.has(w)) ? { agentSeen: true as const } : {}),
     });
   }
   return out;
@@ -478,6 +482,8 @@ export interface LiveHolders {
   workspacesKnown: boolean;
   /** Whether the daemon's sessions were read lately (`read: 'ok'`). */
   readOk?: boolean;
+  /** When the last good read of them started. */
+  readAt?: number;
 }
 
 let source: (() => HolderSnapshot) | null = null;
@@ -504,10 +510,10 @@ export function liveHolders(): LiveHolders | null {
   if (!source) return null;
   const key = sourceKey ? sourceKey() : null;
   if (key && memo && sameKey(key, memo.key)) {
-    return { holders: memo.value.holders.slice(), workspacesKnown: memo.value.workspacesKnown, readOk: memo.value.readOk };
+    return { holders: memo.value.holders.slice(), workspacesKnown: memo.value.workspacesKnown, readOk: memo.value.readOk, readAt: memo.value.readAt };
   }
   const snap = source();
-  const value = { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null, readOk: snap.read === 'ok' };
+  const value = { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null, readOk: snap.read === 'ok', readAt: snap.readAt };
   if (key) {
     const entry = { key, value };
     memo = entry;
@@ -517,7 +523,7 @@ export function liveHolders(): LiveHolders | null {
       if (memo === entry) memo = null;
     });
   }
-  return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown, readOk: value.readOk };
+  return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown, readOk: value.readOk, readAt: value.readAt };
 }
 
 /** Tells `changed` when the holders that count moved since the last

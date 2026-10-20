@@ -61,7 +61,7 @@ function holders(rows: LedgerEntry[], over: Partial<HolderSnapshot> = {}): LiveH
     heldWorkspaces: [],
     ...over,
   };
-  return { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null, readOk: snap.read === 'ok' };
+  return { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null, readOk: snap.read === 'ok', ...(snap.readAt !== undefined ? { readAt: snap.readAt } : {}) };
 }
 
 function rig(rows: () => LedgerEntry[]) {
@@ -173,25 +173,56 @@ describe('endRunsOfFreeTasks', () => {
     expect(workerHoursDay(r.usage, NOW)).toBe(0);
   });
 
-  it('a worker relaunched in its pane after its agent exited runs on its bot\'s time again, from the launch', () => {
+  it('a worker relaunched in its pane after its agent exited runs on its bot\'s time again, from the read that saw it', () => {
     let rows = [row('t')];
     const r = rig(() => rows);
     recordWorkerStart(r.usage, 't', NOW - 3_600_000);
     // Its agent exits: the run ends.
     expect(endRunsOfGoneWorkers(r.ports, holders(rows, { idle: new Set(['ws-t']) }), NOW)).toBe(1);
-    // A launch line typed again in its pane: its agent runs again.
+    // A launch line typed again in its pane; a read after it sees its agent.
     r.launched.set('t', NOW + 60_000);
     rows = [row('t')];
-    const running = holders(rows, { now: NOW + 120_000, agentSeen: new Set(['ws-t']), launchAt: () => NOW + 60_000 });
+    const running = holders(rows, { now: NOW + 120_000, readAt: NOW + 90_000, agentSeen: new Set(['ws-t']), launchAt: () => NOW + 60_000 });
     expect(endRunsOfGoneWorkers(r.ports, running, NOW + 120_000)).toBe(1);
-    expect(r.usage.workers.map((w) => [w.startedAt, w.endedAt])).toEqual([[NOW - 3_600_000, NOW], [NOW + 60_000, undefined]]);
+    expect(r.usage.workers.map((w) => [w.startedAt, w.endedAt])).toEqual([[NOW - 3_600_000, NOW], [NOW + 90_000, undefined]]);
     // Looking again opens nothing more; its stop ends the new run.
     expect(endRunsOfGoneWorkers(r.ports, running, NOW + 130_000)).toBe(0);
     const stopped = holders(rows, { now: NOW + 600_000, records: [record('t', { ended: 'reported', at: NOW + 600_000, endRev: 3 })], launchAt: () => NOW + 60_000 });
     expect(endRunsOfGoneWorkers(r.ports, stopped, NOW + 600_000)).toBe(1);
-    expect(workerHoursDay(r.usage, NOW + 3_600_000)).toBeCloseTo(1 + 540_000 / 3_600_000, 9);
-    // A launch older than the last run's end opens nothing.
+    expect(workerHoursDay(r.usage, NOW + 3_600_000)).toBeCloseTo(1 + 510_000 / 3_600_000, 9);
+    // A read older than the last run's end opens nothing.
     expect(endRunsOfGoneWorkers(r.ports, running, NOW + 700_000)).toBe(0);
+  });
+
+  it('a relaunch long after its last run (older runs pruned) runs on its bot\'s time too', () => {
+    const rows = [row('t')];
+    const r = rig(() => rows);
+    // No run of the task kept.
+    r.launched.set('t', NOW - 60_000);
+    expect(endRunsOfGoneWorkers(r.ports, holders(rows, { agentSeen: new Set(['ws-t']), launchAt: () => NOW - 60_000 }), NOW)).toBe(1);
+    expect(r.usage.workers).toEqual([{ taskId: 't', startedAt: NOW - 5_000 }]);
+  });
+
+  it('a launch line staged in its pane and not run yet starts no run', () => {
+    const rows = [row('t')];
+    const r = rig(() => rows);
+    recordWorkerStart(r.usage, 't', NOW - 3_600_000);
+    expect(endRunsOfGoneWorkers(r.ports, holders(rows, { idle: new Set(['ws-t']) }), NOW)).toBe(1);
+    // Staged: the launch is recorded and the pane holds (its grace), but no
+    // read sees its agent.
+    r.launched.set('t', NOW + 10_000);
+    const staged = holders(rows, { now: NOW + 20_000, readAt: NOW + 15_000, launchAt: () => NOW + 10_000 });
+    expect(staged.holders[0]).toMatchObject({ state: 'held', why: 'starting' });
+    expect(endRunsOfGoneWorkers(r.ports, staged, NOW + 20_000)).toBe(0);
+    expect(r.usage.workers).toHaveLength(1);
+  });
+
+  it('a stop older than the run it would end is not its stop: the run ends now', () => {
+    const r = rig(() => [row('t', { status: 'cancelled' })]);
+    recordWorkerStart(r.usage, 't', NOW - 60_000);
+    r.stops.set('t', NOW - 3_600_000);
+    expect(endRunsOfGoneWorkers(r.ports, { holders: [], workspacesKnown: true, readOk: true }, NOW)).toBe(1);
+    expect(r.usage.workers[0].endedAt).toBe(NOW);
   });
 
   it('a stop recorded while the app was closed ends the run at the stop, not at the next look', () => {
