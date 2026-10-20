@@ -7,9 +7,9 @@
 //     threads, summary) is in one of the two tables below, keyed by
 //     `file#enclosingFunction`, with why it keeps the island. A new caller,
 //     or a table entry no caller has any more, fails here.
-//   - One test per path a guest's words once travelled out by, closed by a
-//     chokepoint: the gardener's proposals, the morning report, and reads
-//     across threads and workspaces.
+//   - One test per derived path a chokepoint closes: the gardener's
+//     proposals, the morning report, and reads across threads and
+//     workspaces.
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -250,7 +250,7 @@ describe('the bot store lists guest workspaces\' bots only when asked', () => {
   });
 });
 
-describe('P1-1: a gardener proposal never carries a guest workspace\'s words', () => {
+describe('a gardener proposal never carries a guest workspace\'s words', () => {
   it('its corrections and maintainers skip guest workspaces; an answer in one wakes its own bot as a guest wake', () => {
     const g = bot('bot-0000000a', 'ws-g');
     const directory = { listEnabled: () => [g], get: (id: string) => (id === g.id ? g : null) };
@@ -273,7 +273,7 @@ describe('P1-1: a gardener proposal never carries a guest workspace\'s words', (
   });
 });
 
-describe('P1-2: the morning report reads no guest workspace', () => {
+describe('the morning report reads no guest workspace', () => {
   it('leaves out guest workspaces\' bots, facts and rooms', async () => {
     const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), log: () => undefined });
     writer.append({ workspaceId: 'ws-g', threadId: 'task:t-1' as never, kind: 'status', actor: { kind: 'system' }, title: 'guest words' });
@@ -296,7 +296,7 @@ describe('P1-2: the morning report reads no guest workspace', () => {
   });
 });
 
-describe('P1-3: reads across threads and workspaces stop at the boundary', () => {
+describe('reads across threads and workspaces stop at the boundary', () => {
   it('a Coordinator reads no guest workspace\'s room; a guest workspace\'s bot reads its whole own room', async () => {
     const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), log: () => undefined });
     writer.append({ workspaceId: 'ws-g', threadId: 'general', kind: 'status', actor: { kind: 'system' }, title: 'in the island' });
