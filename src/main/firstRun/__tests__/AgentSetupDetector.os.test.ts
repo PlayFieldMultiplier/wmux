@@ -40,7 +40,8 @@ describe('AgentSetupDetector with fake executables', () => {
       platform: process.platform,
       env,
       homedir: home,
-      isFile: isExecutableFile,
+      // Fixture files only: the host's own claude/codex (Homebrew, nvm, ...) must not count.
+      isFile: (p) => p.startsWith(root) && isExecutableFile(p),
     });
     return new AgentSetupDetector({
       // /bin and /usr/bin keep `sh` and `sleep` reachable for the scripts.
