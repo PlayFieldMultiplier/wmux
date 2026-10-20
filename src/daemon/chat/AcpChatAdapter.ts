@@ -20,10 +20,14 @@ export class AcpChatAdapter implements ChatAdapter {
   private loading = false;
   private turnId = '';
   private active = false;
+  private closed = false;
   constructor(private executable: string, private args: string[]) {}
 
   async connect(context: ChatAdapterContext): Promise<string> {
     acp ??= await import('@agentclientprotocol/sdk');
+    // close() may have run while the SDK loaded; it found no child to stop, so
+    // nothing may be spawned for this adapter now.
+    if (this.closed) throw new Error('ACP adapter closed');
     this.context = context;
     const child = this.child = spawnAgent(this.executable, this.args, context.cwd, context.env);
     child.stderr.resume();
@@ -82,7 +86,7 @@ export class AcpChatAdapter implements ChatAdapter {
     if (!this.connection || !sdk) throw new Error('ACP agent disconnected');
     await this.connection.agent.notify(sdk.methods.agent.session.cancel, { sessionId: this.session });
   }
-  close(): void { this.connection?.close(); if (this.child) stopAgent(this.child); this.connection = undefined; this.child = undefined; }
+  close(): void { this.closed = true; this.connection?.close(); if (this.child) stopAgent(this.child); this.connection = undefined; this.child = undefined; }
 
   private update(params: AcpSdk.SessionNotification): void {
     if (params.sessionId !== this.session) return;
