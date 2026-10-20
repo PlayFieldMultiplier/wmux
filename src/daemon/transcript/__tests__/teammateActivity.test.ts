@@ -127,6 +127,41 @@ describe('TeammateScanner', () => {
     expect(scanner.anyWorking(now)).toBe(true);
   });
 
+  it('a teammate added within the folder mtime tick of the last listing is still found', () => {
+    const now = Date.now();
+    agent('plain', undefined, [toolUse('x', now)]);
+    const scanner = new TeammateScanner(sub);
+    // A coarse-tick filesystem leaves the folder mtime where the listing saw it.
+    const tick = new Date(Math.floor(now / 1000) * 1000);
+    fs.utimesSync(sub, tick, tick);
+    expect(scanner.anyWorking(now)).toBe(false);
+    agent('mate', 'in_process_teammate', [toolUse('a', now)]);
+    fs.utimesSync(sub, tick, tick);
+    expect(scanner.anyWorking(now)).toBe(true);
+  });
+
+  it('an unchanged folder is listed once more after it settles, then served from cache', () => {
+    const now = Date.now();
+    agent('mate', 'in_process_teammate', [toolUse('a', now)]);
+    let clock = 1_000;
+    const mono = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const scanner = new TeammateScanner(sub);
+    const listing = vi.spyOn(fs, 'readdirSync');
+    try {
+      scanner.anyWorking(now);
+      scanner.anyWorking(now);
+      clock += 2_001;
+      scanner.anyWorking(now);
+      const settled = listing.mock.calls.length;
+      scanner.anyWorking(now);
+      expect(settled).toBe(3);
+      expect(listing.mock.calls.length).toBe(3);
+    } finally {
+      listing.mockRestore();
+      mono.mockRestore();
+    }
+  });
+
   it('a meta file caught mid-write is asked again, not taken as no teammate', () => {
     const now = Date.now();
     const file = agent('mate', 'in_process_teammate', [toolUse('a', now)]);

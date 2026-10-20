@@ -161,9 +161,21 @@ function readSince(file: string, offset: number, size: number, pending: Set<stri
   return { tail: classifyTeammateTail(raw.subarray(0, end).toString('utf8').split('\n'), pending, previous), offset: offset + end + 1 };
 }
 
+/**
+ * An unchanged folder mtime does not prove a listing current until a relist
+ * taken this long after the mtime was first seen: filesystems stamp mtimes at
+ * a coarse tick (Linux kernel jiffies, 2 s on FAT), so a file added in the
+ * same tick leaves it unchanged. Measured on the monotonic clock, so a skew
+ * between the wall clock and the filesystem's clock cannot shorten it.
+ */
+const DIR_MTIME_SETTLE_MS = 2000;
+
 /** Scans one session's `subagents/` folder; keep one per watched transcript. */
 export class TeammateScanner {
   private dirMtimeMs = -1;
+  /** Monotonic time `dirMtimeMs` was first listed under. */
+  private mtimeSeenAt = -1;
+  private listingSettled = false;
   private names: string[] = [];
   private readonly files = new Map<string, FileState>();
 
@@ -192,7 +204,8 @@ export class TeammateScanner {
       this.files.clear();
       return;
     }
-    if (mtimeMs === this.dirMtimeMs) return;
+    if (mtimeMs === this.dirMtimeMs && this.listingSettled) return;
+    const listedAt = performance.now();
     try {
       this.names = fs.readdirSync(this.dir).filter((n) => n.endsWith('.jsonl'));
     } catch {
@@ -200,7 +213,13 @@ export class TeammateScanner {
       this.names = [];
       return;
     }
-    this.dirMtimeMs = mtimeMs;
+    if (mtimeMs !== this.dirMtimeMs) {
+      this.dirMtimeMs = mtimeMs;
+      this.mtimeSeenAt = listedAt;
+      this.listingSettled = false;
+    } else if (listedAt - this.mtimeSeenAt > DIR_MTIME_SETTLE_MS) {
+      this.listingSettled = true;
+    }
     const keep = new Set(this.names.map((n) => path.join(this.dir, n)));
     for (const file of [...this.files.keys()]) if (!keep.has(file)) this.files.delete(file);
   }
