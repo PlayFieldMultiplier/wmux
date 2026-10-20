@@ -1824,6 +1824,7 @@ export const en = {
   'room.kind.secret_request': "Key request",
   'room.kind.login_request': "Login request",
   'room.kind.job_changed': "Job changed",
+  'room.kind.guest': "Guest",
   'room.approval.approve': "Approve",
   'room.approval.deny': "Deny",
   'room.approval.always': "Always allow",

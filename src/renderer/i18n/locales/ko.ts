@@ -1324,6 +1324,7 @@ export const ko = {
   'room.kind.secret_request': "키 요청",
   'room.kind.login_request': "로그인 요청",
   'room.kind.job_changed': "업무 변경",
+  'room.kind.guest': "게스트",
   'room.approval.approve': "승인",
   'room.approval.deny': "거절",
   'room.approval.always': "항상 허용",

@@ -1802,6 +1802,7 @@ export const pl = {
   'room.kind.secret_request': "Prośba o klucz",
   'room.kind.login_request': "Prośba o logowanie",
   'room.kind.job_changed': "Zmiana zadania",
+  'room.kind.guest': "Gość",
   'room.approval.approve': "Zatwierdź",
   'room.approval.deny': "Odrzuć",
   'room.approval.always': "Zawsze zezwalaj",

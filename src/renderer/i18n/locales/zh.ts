@@ -1897,6 +1897,7 @@ export const zh = {
   'room.kind.secret_request': "密钥请求",
   'room.kind.login_request': "登录请求",
   'room.kind.job_changed': "职责变更",
+  'room.kind.guest': "访客",
   'room.approval.approve': "批准",
   'room.approval.deny': "拒绝",
   'room.approval.always': "始终允许",
