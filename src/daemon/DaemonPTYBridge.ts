@@ -186,6 +186,13 @@ export class DaemonPTYBridge extends EventEmitter {
    */
   private oscCwdSeen = false;
 
+  /**
+   * A WSL distro's shell names the distro's own hostname in OSC 7, which can
+   * differ from this machine's (wsl.conf), so its reports skip the host check.
+   * The path rules still apply.
+   */
+  private wslDistro = false;
+
   /** Last cwd emitted by the prompt-scrape fallback (shells without OSC 7). */
   private lastDetectedPromptCwd = '';
 
@@ -1721,7 +1728,7 @@ export class DaemonPTYBridge extends EventEmitter {
         // the prompt-detect guard (lastDetectedPromptCwd) below; the first OSC 7
         // after spawn always emits because the cache starts null. A report
         // that is not a local folder is ignored and the previous cwd stays.
-        const cwd = parseOsc7Cwd(event.data);
+        const cwd = this.wslDistro ? parseOsc7Cwd(event.data, null) : parseOsc7Cwd(event.data);
         if (cwd === null) return;
         // OSC 7-sticky (2026-07-21): this shell has the integration hook — the
         // authoritative cwd source. Disable prompt scraping for the session's
@@ -1965,6 +1972,11 @@ export class DaemonPTYBridge extends EventEmitter {
    * it is not user input, and nothing that tracks input (drafts, submits,
    * detector dedup, typed-input or fence events) may see it.
    */
+  /** The shell runs in a WSL distro on this machine (see wslDistro). */
+  markWslDistro(): void {
+    this.wslDistro = true;
+  }
+
   armStartupDa1Reply(canAnswer: () => boolean, onAnswered?: () => void): void {
     this.startupDa1 = { scanned: '', canAnswer, onAnswered };
   }

@@ -74,6 +74,13 @@ describe('DaemonPTYBridge OSC 7 cwd dedup (app-weight P1-4)', () => {
     feed(osc7('C:/next', ''));
     expect(cwdEvents.map((e) => e.cwd)).toEqual(['C:\\repo', 'C:\\next']);
   });
+
+  it("takes a WSL distro's own hostname, but not its network paths", () => {
+    bridge.markWslDistro();
+    feed(osc7('home/me', 'ubuntu-dev'));
+    feed(osc7('//server/share', 'ubuntu-dev'));
+    expect(cwdEvents.map((e) => e.cwd)).toEqual(['/home/me']);
+  });
 });
 
 // OSC 7-sticky (2026-07-21): once the shell has proven it runs the integration

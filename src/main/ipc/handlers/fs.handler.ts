@@ -81,14 +81,21 @@ export function isSensitivePath(resolvedPath: string): boolean {
   return false;
 }
 
+/**
+ * A network or device path, as given or once resolved: POSIX path.resolve
+ * folds a leading `//`, and a relative input takes the process cwd's root.
+ * Pure, so a caller can refuse the path before any filesystem call.
+ */
+export function isNonLocalPath(inputPath: string): boolean {
+  return isUncOrDevicePath(inputPath) || isUncOrDevicePath(path.resolve(inputPath));
+}
+
 export async function resolveAccessiblePath(inputPath: string): Promise<string | null> {
   if (!inputPath || typeof inputPath !== 'string') return null;
 
   // Local folders only, refused before realpath or any other filesystem call.
-  // Both spellings: POSIX path.resolve folds a leading `//`, and a relative
-  // input takes the process cwd's root.
+  if (isNonLocalPath(inputPath)) return null;
   const resolved = path.resolve(inputPath);
-  if (isUncOrDevicePath(inputPath) || isUncOrDevicePath(resolved)) return null;
   if (isSensitivePath(resolved)) return null;
 
   try {

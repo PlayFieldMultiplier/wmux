@@ -100,6 +100,18 @@ describe('opening a preview', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
 
+  it.each(['//host/share/x.png', '\\\\host\\share\\x.png', '\\\\?\\UNC\\host\\share\\x.png'])(
+    'refuses the network path %s without touching it',
+    async (p) => {
+      const exists = vi.spyOn(fs, 'existsSync');
+      const realpath = vi.spyOn(fs.promises, 'realpath');
+      // POSIX reads a backslash form as one odd file name: refused by type there.
+      expect((await openPreview(asSender(sender()), p)).ok).toBe(false);
+      expect(exists).not.toHaveBeenCalled();
+      expect(realpath).not.toHaveBeenCalled();
+    },
+  );
+
   it('refuses credential stores, unsupported types, relative paths and oversized files', async () => {
     const s = asSender(sender());
     const secret = path.join(home, '.ssh', 'key.png');

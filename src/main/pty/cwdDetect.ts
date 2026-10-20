@@ -32,12 +32,12 @@ const PROMPT_CWD_RE = /(?:PS\s+([A-Za-z]:\\[^>]*?)>)|(?:\w+@[\w.-]+:([^$]+?)\$)/
  * POSIX paths (`/home/me`) pass through unchanged.
  *
  * Returns null, and the caller keeps the previous cwd, when the report is not
- * a local folder: a host other than this machine (`localHosts`, lowercase) or
- * a network or device path.
+ * a local folder: a host other than this machine (`localHosts`, lowercase;
+ * null skips the host check) or a network or device path.
  */
-export function parseOsc7Cwd(data: string, localHosts: readonly string[] = machineHostnames()): string | null {
+export function parseOsc7Cwd(data: string, localHosts: readonly string[] | null = machineHostnames()): string | null {
   const host = /^file:\/\/([^/]*)/.exec(data)?.[1] ?? '';
-  if (!localHosts.includes(host.toLowerCase())) return null;
+  if (localHosts && !localHosts.includes(host.toLowerCase())) return null;
   let p = data.replace(/^file:\/\/[^/]*/, '');
   try {
     p = decodeURIComponent(p);

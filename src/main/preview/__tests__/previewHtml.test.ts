@@ -157,6 +157,17 @@ describe('serving a page', () => {
     expect(await (await get(`wmux-html://${opened.token}/docs/`)).text()).toBe('<h1>docs</h1>');
   });
 
+  it.each(['//host/share/x.html', '\\\\host\\share\\x.html', '\\\\?\\UNC\\host\\share\\x.html'])(
+    'refuses the network path %s without touching it',
+    async (p) => {
+      const exists = vi.spyOn(fs, 'existsSync');
+      const realpath = vi.spyOn(fs.promises, 'realpath');
+      expect(await openHtmlPreview(asSender(sender()), p)).toEqual({ ok: false, reason: 'denied' });
+      expect(exists).not.toHaveBeenCalled();
+      expect(realpath).not.toHaveBeenCalled();
+    },
+  );
+
   it('refuses a page in a credential store or directly in home', async () => {
     fs.writeFileSync(path.join(home, '.ssh', 'x.html'), 'x');
     expect(await openHtmlPreview(asSender(sender()), path.join(home, '.ssh', 'x.html'))).toEqual({ ok: false, reason: 'denied' });
