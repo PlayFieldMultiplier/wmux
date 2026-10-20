@@ -92,6 +92,22 @@ describe('diff:resolveRepo and diff:scanRepos accept local paths only', () => {
       await expect(invoke(IPC.DIFF_RESOLVE_REPO, 'Z:\\work\\alpha')).resolves.toEqual({ ok: false });
     });
 
+    it.each([
+      ['a junction on a local drive', 'C:\\work\\link', async (p: fs.PathLike) => (String(p) === 'C:\\' ? 'C:\\' : '\\\\host\\share')],
+      ['a link on Z: to another share', 'Z:\\work\\link', async (p: fs.PathLike) => (String(p) === 'Z:\\' ? '\\\\server\\share\\' : '\\\\other\\share\\repo')],
+      ['a drive path on a share whose drive root cannot be read', 'Y:\\work\\repo', async (p: fs.PathLike) => {
+        if (String(p) === 'Y:\\') throw new Error('EACCES');
+        return '\\\\server\\share\\repo';
+      }],
+    ])('refuses %s, with no git, readdir or folder scan after realpath', async (_name, cwd, real) => {
+      realpathSpy.mockImplementation(real);
+      await expect(invoke(IPC.DIFF_RESOLVE_REPO, cwd)).resolves.toEqual({ ok: false });
+      await expect(invoke(IPC.DIFF_SCAN_REPOS, cwd)).resolves.toEqual({ ok: false });
+      expect(gitMock).not.toHaveBeenCalled();
+      expect(readdirSpy).not.toHaveBeenCalled();
+      expect(scanReposMock).not.toHaveBeenCalled();
+    });
+
     it('diff:scanRepos answers every repo in drive spelling', async () => {
       realpathSpy.mockImplementation(onZ);
       gitMock.mockImplementation(async (_args: string[], cwd: string) => ({ code: 0, stdout: gitTop(cwd), stderr: '' }));

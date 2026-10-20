@@ -81,20 +81,30 @@ describe('fs.handler security helpers', () => {
     await expect(resolveAccessiblePath('Z:\\repo\\src')).resolves.toBe('Z:\\repo\\src');
   });
 
-  it('answers with the drive path when its root does not lead to the share', async () => {
-    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'D:\\' ? 'D:\\' : '\\\\server\\share\\repo'));
-    await expect(resolveAccessiblePath('D:\\work\\link')).resolves.toBe('D:\\work\\link');
-    // The answer and a folder below it pass the check again.
-    await expect(resolveAccessiblePath('D:\\work\\link')).resolves.toBe('D:\\work\\link');
-    await expect(resolveAccessiblePath('D:\\work\\link\\child')).resolves.toBe('D:\\work\\link\\child');
+  it('refuses a junction on a local drive whose real path is a share', async () => {
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'C:\\' ? 'C:\\' : '\\\\host\\share'));
+    await expect(resolveAccessiblePath('C:\\link')).resolves.toBeNull();
+    await expect(resolveAccessiblePath('C:\\link\\child')).resolves.toBeNull();
   });
 
-  it('answers with the drive path when the drive root cannot be read', async () => {
+  it('refuses a link on a mapped drive whose real path is another share', async () => {
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'Z:\\' ? '\\\\server\\share\\' : '\\\\other\\share\\repo'));
+    await expect(resolveAccessiblePath('Z:\\link')).resolves.toBeNull();
+    // The share-prefix check is per segment.
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'Z:\\' ? '\\\\server\\share\\' : '\\\\server\\shared\\repo'));
+    await expect(resolveAccessiblePath('Z:\\link')).resolves.toBeNull();
+  });
+
+  it('refuses a drive path on a share when the drive root cannot be read', async () => {
+    // Mapped first, so the unreadable root must also drop that mapping.
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'Z:\\' ? '\\\\server\\share\\' : '\\\\server\\share\\repo'));
+    await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
     realpathSpy.mockImplementation(async (p: fs.PathLike) => {
       if (p === 'Z:\\') throw new Error('EACCES');
       return '\\\\server\\share\\repo';
     });
-    await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
+    await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBeNull();
+    expect(localSpelling('//server/share/repo', 'Z:\\repo')).toBeNull();
   });
 
   it("spells git's paths on a mapped drive from that drive, and no other share", async () => {

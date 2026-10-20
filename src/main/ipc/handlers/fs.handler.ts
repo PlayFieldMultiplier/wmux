@@ -106,9 +106,9 @@ export async function resolveAccessiblePath(inputPath: string): Promise<string |
       if (DRIVE_PATH.test(inputPath)) mappedDrives.delete(driveKey(inputPath));
       return canonical;
     }
-    // A drive path whose real path is a share: a mapped network drive the user
-    // set up. Any other input that lands on a share or a device (a link from a
-    // local folder) is refused.
+    // A drive path whose real path is below the share its drive leads to: a
+    // mapped network drive the user set up. Any other input that lands on a
+    // share or a device (a link or junction to one) is refused.
     if (!DRIVE_PATH.test(inputPath) || DEVICE_PATH.test(canonical)) return null;
     return await spelledFromDrive(inputPath, canonical);
   } catch {
@@ -138,11 +138,11 @@ function underShare(p: string, share: string, root: string): string | null {
 /**
  * A mapped drive's real path (`\\server\share\repo`) spelled from its drive
  * again (`Z:\repo`), so the answer, and a folder below it, passes this check
- * when a caller hands it back. When the drive root does not lead to the share
- * (a link on a local drive, an unreadable root), the drive path as given is
- * the answer, for the same reason.
+ * when a caller hands it back. Null when the real path is not below the share
+ * the drive root leads to: a link on a local drive, or one on the mapped
+ * drive to another share, or a root that cannot be read.
  */
-async function spelledFromDrive(inputPath: string, canonical: string): Promise<string> {
+async function spelledFromDrive(inputPath: string, canonical: string): Promise<string | null> {
   const drivePath = path.win32.resolve(inputPath);
   const root = path.win32.parse(drivePath).root;
   const key = driveKey(drivePath);
@@ -150,13 +150,12 @@ async function spelledFromDrive(inputPath: string, canonical: string): Promise<s
   try {
     const share = (await fs.promises.realpath(root)).replace(/[\\/]+$/, '').replace(/\//g, '\\');
     const onShare = isUncOrDevicePath(share) && !DEVICE_PATH.test(share);
-    if (onShare) mappedDrives.set(key, share);
-    const spelled = onShare ? underShare(canonical, share, root) : null;
-    if (spelled) return spelled;
+    if (!onShare) return null;
+    mappedDrives.set(key, share);
+    return underShare(canonical, share, root);
   } catch {
-    // An unreadable drive root: the drive path as given.
+    return null;
   }
-  return drivePath;
 }
 
 /**
