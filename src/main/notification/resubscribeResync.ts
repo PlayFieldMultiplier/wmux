@@ -196,3 +196,42 @@ function applyStatus(id: string, state: DaemonPaneState, deps: ResubscribeResync
   broadcastMetadataUpdate(deps.win, { ptyId: id, agentStatus: truth, agentName });
   return true;
 }
+
+/**
+ * Runs resyncs one at a time. A resubscribe that succeeds while a pass is
+ * running asks for one more pass after it (with the latest argument) instead
+ * of a second pass interleaved with the first: two passes over the same list
+ * could both see a death before either one's `session:died` had dropped the
+ * session, and end it twice. Any number of asks during a pass is one rerun.
+ */
+export function serialResync<T>(run: (arg: T) => Promise<unknown>): (arg: T) => Promise<void> {
+  let running: Promise<void> | null = null;
+  let pending: { arg: T } | null = null;
+  const loop = async (arg: T): Promise<void> => {
+    let next: { arg: T } | null = { arg };
+    while (next) {
+      const current = next;
+      pending = null;
+      try {
+        await run(current.arg);
+      } catch {
+        /* the caller's run reports its own failure */
+      }
+      next = pending;
+      // Idle in the same step that finds nothing pending: clearing it later
+      // (a `.finally`) leaves a microtask gap where an ask only sets
+      // `pending`, which no pass then reads.
+      if (!next) running = null;
+    }
+  };
+  return (arg: T) => {
+    if (running) {
+      pending = { arg };
+      return running;
+    }
+    // `loop` awaits a pass before it can clear `running`, so this assignment
+    // always comes first.
+    running = loop(arg);
+    return running;
+  };
+}

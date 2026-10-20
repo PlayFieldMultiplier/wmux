@@ -185,7 +185,7 @@ import { DaemonClient, getDaemonPipeName, readDaemonAuthToken } from './DaemonCl
 import { raceDaemonShutdown } from './daemonShutdownRace';
 import { migrateScrollbackOnce } from './scrollback/legacyMigration';
 import { DaemonNotificationRouter } from './notification/DaemonNotificationRouter';
-import { resyncAfterResubscribe, type DaemonSessionRow } from './notification/resubscribeResync';
+import { resyncAfterResubscribe, serialResync, type DaemonSessionRow } from './notification/resubscribeResync';
 import { markRendererNotificationListenerNotReady } from './notification/rendererNotificationReadiness';
 import { RemoteInboxBridge } from './lanlink/RemoteInboxBridge';
 import { RemoteA2aBridge } from './a2a/RemoteA2aBridge';
@@ -2132,6 +2132,41 @@ app.on('ready', async () => {
     onShutdownAll: () => { fullShutdownRequested = true; },
   });
 
+  // #2263 — the daemon dropped our event subscription and the health probe
+  // subscribed again; correct the panes from a fresh read of their state.
+  // main's cwd cache doubles as its record of which sessions it still
+  // tracks: pty create and reattach seed it, and session:died /
+  // session:destroyed drop it (WorkspaceContextRouter).
+  const resyncSerial = serialResync(async (client: DaemonClient) => {
+    await resyncAfterResubscribe({
+      listSessions: async () => (await client.rpc('daemon.listSessions', {})) as DaemonSessionRow[],
+      trackedCwd: (id) => getCwd(id),
+      readState: (id) => client.getAgentState(id),
+      emitDied: (id, exitCode, signal) => {
+        client.emit('session:died', { sessionId: id, exitCode, ...(signal !== undefined ? { signal } : {}) });
+      },
+      emitCwd: (id, cwd) => { client.emit('session:cwd', { sessionId: id, cwd }); },
+      onLiveEvent: (listener) => {
+        const onCwd = (payload: { sessionId: string }) => { listener('cwd', payload.sessionId); };
+        const onLifecycle = (payload: { sessionId: string }) => { listener('lifecycle', payload.sessionId); };
+        const lifecycle = ['session:died', 'session:destroyed', 'session:restarted'] as const;
+        client.on('session:cwd', onCwd);
+        for (const e of lifecycle) client.on(e, onLifecycle);
+        return () => {
+          client.off('session:cwd', onCwd);
+          for (const e of lifecycle) client.off(e, onLifecycle);
+        };
+      },
+      emitTitle: (id, title) => { client.emit('session:title', { sessionId: id, title }); },
+      hookRouter: hookSignalRouter,
+      win: mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
+    }).then((r) => {
+      logLine('info', 'daemon-respawn', `resync after resubscribe: ${r.panes} panes, ${r.statusesCorrected} statuses corrected, ${r.titles} titles, ${r.deaths} deaths, ${r.cwds} cwds`);
+    }, (err: unknown) => {
+      logLine('warn', 'daemon-respawn', `resync after resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  });
+
   // Auto-start daemon and connect.
   //
   // Previously a one-shot `ensureDaemon()` call with a degrade-only
@@ -2378,40 +2413,9 @@ app.on('ready', async () => {
         }
       }
     },
-    // #2263 — the daemon dropped our event subscription and the health probe
-    // subscribed again; correct the panes from a fresh read of their state.
-    // main's cwd cache doubles as its record of which sessions it still
-    // tracks: pty create and reattach seed it, and session:died /
-    // session:destroyed drop it (WorkspaceContextRouter).
-    onEventsResubscribed: (client) => {
-      void resyncAfterResubscribe({
-        listSessions: async () => (await client.rpc('daemon.listSessions', {})) as DaemonSessionRow[],
-        trackedCwd: (id) => getCwd(id),
-        readState: (id) => client.getAgentState(id),
-        emitDied: (id, exitCode, signal) => {
-          client.emit('session:died', { sessionId: id, exitCode, ...(signal !== undefined ? { signal } : {}) });
-        },
-        emitCwd: (id, cwd) => { client.emit('session:cwd', { sessionId: id, cwd }); },
-        onLiveEvent: (listener) => {
-          const onCwd = (payload: { sessionId: string }) => { listener('cwd', payload.sessionId); };
-          const onLifecycle = (payload: { sessionId: string }) => { listener('lifecycle', payload.sessionId); };
-          const lifecycle = ['session:died', 'session:destroyed', 'session:restarted'] as const;
-          client.on('session:cwd', onCwd);
-          for (const e of lifecycle) client.on(e, onLifecycle);
-          return () => {
-            client.off('session:cwd', onCwd);
-            for (const e of lifecycle) client.off(e, onLifecycle);
-          };
-        },
-        emitTitle: (id, title) => { client.emit('session:title', { sessionId: id, title }); },
-        hookRouter: hookSignalRouter,
-        win: mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
-      }).then((r) => {
-        logLine('info', 'daemon-respawn', `resync after resubscribe: ${r.panes} panes, ${r.statusesCorrected} statuses corrected, ${r.titles} titles, ${r.deaths} deaths, ${r.cwds} cwds`);
-      }, (err: unknown) => {
-        logLine('warn', 'daemon-respawn', `resync after resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    },
+    // #2263 — correct the panes once the daemon ACCEPTED the resubscribe,
+    // one pass at a time (resyncSerial above).
+    onEventsResubscribed: (client) => { void resyncSerial(client); },
     logger: {
       info: (msg) => { logLine('info', 'daemon-respawn', msg); },
       warn: (msg) => { logLine('warn', 'daemon-respawn', msg); },

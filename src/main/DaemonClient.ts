@@ -175,9 +175,25 @@ export class DaemonClient extends EventEmitter {
    * a subscriber whose socket buffer passes its backpressure cap without
    * closing the socket, so the health probe calls this when a ping reports
    * `eventsSubscribed: false`.
+   *
+   * Unlike the connect-time handshake this settles on the OUTCOME, not on the
+   * request being written: true once the daemon accepted a subscribe (or
+   * predates opt-in events and pushes to every client), false when every
+   * attempt was refused or the connection went away. The daemon refuses while
+   * the socket is still backed up past its cap (#2469), and a state read made
+   * before the accepted attempt can miss a change that lands in between, so
+   * the caller resyncs only on true.
    */
-  resubscribeEvents(): Promise<void> {
-    return this.startEventHandshake();
+  async resubscribeEvents(): Promise<boolean> {
+    const generation = ++this.eventHandshakeGeneration;
+    try {
+      return await this.runEventHandshakeWithRetry(generation, () => undefined);
+    } catch (err) {
+      console.warn(
+        `[lifecycle] DaemonClient event resubscribe threw: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
   }
 
   private startEventHandshake(): Promise<void> {
@@ -199,12 +215,13 @@ export class DaemonClient extends EventEmitter {
     });
   }
 
+  /** True once a subscribe was accepted (or the daemon has no opt-in). */
   private async runEventHandshakeWithRetry(
     generation: number,
     signalHandshakeWritten: () => void,
-  ): Promise<void> {
+  ): Promise<boolean> {
     for (let attempt = 1; attempt <= DaemonClient.EVENT_HANDSHAKE_MAX_ATTEMPTS; attempt++) {
-      if (generation !== this.eventHandshakeGeneration || !this.connected) return;
+      if (generation !== this.eventHandshakeGeneration || !this.connected) return false;
       // Subscribe stays first for compatibility with daemons that already
       // retain an accept-to-subscribe backlog but do not yet enforce identity:
       // sending identify first would make those daemons discard the backlog.
@@ -219,12 +236,12 @@ export class DaemonClient extends EventEmitter {
         result.status === 'fulfilled'
         && (result.value as { ok?: boolean } | null)?.ok === true;
 
-      if (rpcSucceeded(subscribeResult)) return;
+      if (rpcSucceeded(subscribeResult)) return true;
       if (subscribeResult.status === 'rejected') {
         const message = subscribeResult.reason instanceof Error
           ? subscribeResult.reason.message
           : String(subscribeResult.reason);
-        if (message.includes('Unknown method')) return;
+        if (message.includes('Unknown method')) return true;
       }
 
       if (identifyResult.status === 'rejected') {
@@ -247,10 +264,10 @@ export class DaemonClient extends EventEmitter {
         && this.connected) {
         try {
           const retry = (await this.rpc('daemon.events.subscribe')) as { ok?: boolean } | null;
-          if (retry?.ok === true) return;
+          if (retry?.ok === true) return true;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          if (message.includes('Unknown method')) return;
+          if (message.includes('Unknown method')) return true;
           console.warn(`[lifecycle] DaemonClient post-identify subscribe attempt ${attempt} failed: ${message}`);
         }
       } else if (subscribeResult.status === 'rejected') {
@@ -263,9 +280,11 @@ export class DaemonClient extends EventEmitter {
         await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
       }
     }
+    if (generation !== this.eventHandshakeGeneration || !this.connected) return false;
     console.error(
       '[lifecycle] DaemonClient could not subscribe to daemon events — this connection will receive none',
     );
+    return false;
   }
 
   /** Disconnect from daemon, cleaning up all pipes. */

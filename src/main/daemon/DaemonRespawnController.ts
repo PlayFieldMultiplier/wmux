@@ -41,7 +41,8 @@ export interface DaemonRespawnDeps {
   emit: (event: RespawnEvent) => void;
   /**
    * #2263 — called once the health probe has subscribed the live client to
-   * events again after the daemon dropped it. Everything pushed in between is
+   * events again after the daemon dropped it, and only after the daemon
+   * accepted that subscribe (a refused attempt is retried first). Everything pushed in between is
    * lost, so the owner reconciles pane state from a fresh read. Optional.
    */
   onEventsResubscribed?: (client: DaemonClient) => void;
@@ -592,6 +593,9 @@ export class DaemonRespawnController {
     }, this.cfg.healthIntervalMs);
   }
 
+  // Clients with a resubscribe in flight (see runHealthPing).
+  private readonly resubscribing = new WeakSet<DaemonClient>();
+
   private stopHealthProbe(): void {
     if (this.healthInterval) {
       clearInterval(this.healthInterval);
@@ -612,13 +616,20 @@ export class DaemonRespawnController {
       // behind past the backpressure cap) but kept the socket. Without this the
       // app stays deaf to agent status, titles and notifications until it is
       // restarted. An older daemon omits the field.
-      if (pong?.eventsSubscribed === false && this.client === client) {
+      if (pong?.eventsSubscribed === false && this.client === client && !this.resubscribing.has(client)) {
         this.deps.logger.warn('daemon dropped our event subscription — subscribing again');
-        // The subscribe request is written before the state reads that
-        // follow it on the same socket, so whatever changes after them
-        // arrives as an event and wins.
-        void client.resubscribeEvents().then(() => {
-          if (this.client === client) this.deps.onEventsResubscribed?.(client);
+        // The owner's state reads start only after the daemon ACCEPTED a
+        // subscribe: it refuses one while the socket is still backed up
+        // (#2469), and a read taken before the accepted retry would miss a
+        // change made in between, which no event then carries. One resubscribe
+        // at a time; a refused one is asked again by the next ping.
+        this.resubscribing.add(client);
+        void client.resubscribeEvents().then((subscribed) => {
+          if (this.client !== client) return;
+          if (subscribed) this.deps.onEventsResubscribed?.(client);
+          else this.deps.logger.warn('daemon refused our event subscribe — the next health ping asks again');
+        }, () => undefined).finally(() => {
+          this.resubscribing.delete(client);
         });
       }
       // RCA A4 — a ping that SUCCEEDS proves the daemon is alive even if its
