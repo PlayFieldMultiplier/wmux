@@ -280,7 +280,7 @@ lines.push('Local file: src/shared/connectorUrl.ts (function behavior unchanged;
 lines.push('Behavior reference: client/src/components/SidePanel/MCPBuilder/MCPBuilderPanel.tsx');
 lines.push('Local adaptation: src/renderer/components/Connectors/ConnectorsPage.tsx (wmux navigation, state, IPC and i18n).');
 lines.push('No LibreChat OAuth or token-storage implementation is included in this adaptation.');
-lines.push(readFileSync(join(ROOT, 'src/renderer/components/Connectors/LICENSE.LibreChat'), 'utf8').trim());
+lines.push(lf(readFileSync(join(ROOT, 'src/renderer/components/Connectors/LICENSE.LibreChat'), 'utf8')).trim());
 lines.push(SEP);
 
 // --- Step 4: emit bundled fonts ---------------------------------------------
