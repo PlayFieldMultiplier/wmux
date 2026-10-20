@@ -1,4 +1,7 @@
 export const pl = {
+  "connectors.scope.none": "Bez botów",
+  "connectors.scope.noneHint": "Boty nie mogą używać tego połączenia. Połączenia HTTP można używać w obsługiwanych sesjach terminala.",
+
   "connectors.services.setup.paypal": "Tylko środowisko testowe. Sprawdzenie punktu bez uwierzytelnienia zwróciło 404. Dokumentacja opisuje logowanie w przeglądarce, ale przed użyciem potwierdź dostępność serwera PayPal.",
   "connectors.tools.title": "Dostępne narzędzia",
   "connectors.tools.hint": "Wybierz do 64 narzędzi, następnie przejrzyj i zapisz połączenie. Samo zaznaczenie nie przyznaje dostępu. Nazwy pochodzą z serwera; sprawdź działanie narzędzi przed zezwoleniem.",

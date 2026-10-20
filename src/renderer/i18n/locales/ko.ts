@@ -1,4 +1,7 @@
 export const ko = {
+  "connectors.scope.none": "봇 없음",
+  "connectors.scope.noneHint": "봇은 이 연결을 사용할 수 없습니다. HTTP 연결은 지원되는 터미널 세션에서 사용할 수 있습니다.",
+
   "connectors.services.setup.paypal": "샌드박스 전용입니다. 비인증 주소 확인에서 404가 반환됐습니다. 브라우저 로그인은 공식 문서에 안내되어 있지만, 사용 전에 PayPal 서버 가용성을 확인하세요.",
   "connectors.tools.title": "사용 가능한 도구",
   "connectors.tools.hint": "최대 64개 도구를 선택한 뒤 연결을 검토하고 저장하세요. 체크만으로 권한이 부여되지 않습니다. 도구 이름은 서버에서 제공하므로 허용 전에 동작을 확인하세요.",

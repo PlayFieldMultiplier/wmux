@@ -1,4 +1,7 @@
 export const zh = {
+  "connectors.scope.none": "不向机器人开放",
+  "connectors.scope.noneHint": "机器人无法使用此连接。HTTP 连接可用于支持的终端会话。",
+
   "connectors.services.setup.paypal": "仅限沙盒。未认证的端点检查返回 404。官方文档说明支持浏览器登录，但使用前请向 PayPal 确认服务器可用性。",
   "connectors.tools.title": "可用工具",
   "connectors.tools.hint": "选择最多 64 个工具，然后检查并保存连接。勾选本身不授予访问权限。工具名称来自服务器，请先确认其作用。",

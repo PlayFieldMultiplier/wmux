@@ -1,4 +1,7 @@
 export const en = {
+  "connectors.scope.none": "No bots",
+  "connectors.scope.noneHint": "Bots cannot use this connection. HTTP connections can be used in supported terminal sessions.",
+
   "connectors.services.setup.paypal": "Sandbox only. The unauthenticated endpoint check returned 404. Browser sign-in is documented, but verify server availability with PayPal before relying on this connection.",
   "connectors.tools.title": "Available tools",
   "connectors.tools.hint": "Choose up to 64 tools, then review and save the connection. Checking boxes alone grants no access. Tool names come from the server; review their effects before allowing them.",

@@ -20,6 +20,21 @@ async function mount(p: BotConnectorPort) { host = document.createElement('div')
 afterEach(() => { act(() => root?.unmount()); host?.remove(); vi.unstubAllGlobals(); });
 function button(name: string): HTMLButtonElement { const b = [...document.querySelectorAll('button')].find((x) => x.textContent === name); if (!b) throw new Error(`Missing ${name}`); return b; }
 describe('Connectors page', () => {
+  it('saves a Gmail service recipe through the dialog without selecting any bots or granting tools', async () => {
+    const p = port();
+    p.save = vi.fn(async () => ({ ok: true as const, connector: c }));
+    await mount(p);
+    await act(async () => button('Discover').click());
+    const gmail = [...host.querySelectorAll('li')].find((li) => li.querySelector('h3')?.textContent === 'Gmail')!;
+    await act(async () => gmail.querySelector('button')!.click());
+    const save = document.querySelector<HTMLButtonElement>('[data-testid="connection-save"]')!;
+    expect(save.disabled).toBe(false);
+    await act(async () => save.click());
+    expect(p.save).toHaveBeenCalledWith({ connector: expect.objectContaining({
+      name: 'gmail', transport: 'http', enabled: false,
+      scope: { kind: 'bots', botIds: [] }, tools: { mode: 'listed', allowed: [] },
+    }) });
+  });
   it.each(['darwin', 'linux', 'win32'])('offers terminal launch only on supported platforms: %s', async (platform) => {
     vi.stubGlobal('electronAPI', { platform, connectorTerminal: { create: vi.fn() } });
     await mount(port());
