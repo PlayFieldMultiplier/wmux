@@ -173,8 +173,10 @@ reads as a second, differently tinted panel.
   any light theme, custom ones included. With glass Off the app returns to
   the system appearance, and glass is only installed once the saved theme
   and level are loaded, so a launch never flips the appearance twice.
-- `BrowserWindow.backgroundColor` follows the default look so the first
-  frame never flashes white; no native menu bar is visible
+- `BrowserWindow.backgroundColor` and the page's pre-theme paint follow the
+  saved theme's polarity, and the opaque Windows window is shown once it has
+  painted, so the first frame is never the system's blank colour or the
+  other polarity; no native menu bar is visible
   (`autoHideMenuBar`; accelerators keep working).
 
 ## Titlebar
