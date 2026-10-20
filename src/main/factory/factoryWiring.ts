@@ -61,7 +61,7 @@ import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandl
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
 import { enabledBotsIncludingGuest, getBotDirectory, getBotStore } from './botStore';
-import { setWorkerStopsConfirmed } from './workerRunEnds';
+import { endRunsOfEndedRows, setWorkerStopsConfirmed } from './workerRunEnds';
 import { getFactorySettings } from './factorySettings';
 import { onBotHook, type BotHookEvent } from './botHooks';
 import { normalizeRepoKey } from './repoWatch';
@@ -987,7 +987,21 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
           if (disposed) return;
           offTasks.push(m.startWorkerLifecycle({ wmuxDir: deps.wmuxDir, getDaemonClient: deps.getDaemonClient, getMainWindow: deps.getMainWindow, fanOutService: deps.fanOutService }));
         })
-        .catch((err) => console.warn(`[factory] worker lifecycle not started: ${String(err)}`));
+        .catch((err) => {
+          console.warn(`[factory] worker lifecycle not started: ${String(err)}`);
+          // No holder set ends the bots' worker runs: the row's end does,
+          // and the rows that ended meanwhile end theirs now.
+          setWorkerStopsConfirmed(false);
+          const store = getBotStore();
+          if (store) {
+            endRunsOfEndedRows({
+              bots: () => store.list({}).map((b) => b.id),
+              usageOf: (botId) => store.usageOf(botId),
+              mutateUsage: (botId, fn) => store.mutateUsage(botId, fn),
+              row: (taskId) => ledger.get(taskId),
+            }, Date.now());
+          }
+        });
       setBotTaskSources({
         rows: () => ledger.list({}),
         workerState: (taskId) => reclaimedWorkerState(getWorkerResumePorts()?.store.get(taskId) ?? null),

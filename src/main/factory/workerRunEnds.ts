@@ -121,3 +121,24 @@ export function endRunsOfGoneWorkers(ports: RunEndPorts, look: LiveHolders, at: 
   }
   return moved;
 }
+
+/** End, at `at`, every open run whose task's row has ended: the row-end
+ *  rule, for the runs a lifecycle host that was coming and never came up
+ *  left open. Returns how many it ended. */
+export function endRunsOfEndedRows(ports: Pick<RunEndPorts, 'bots' | 'usageOf' | 'mutateUsage' | 'row'>, at: number): number {
+  let ended = 0;
+  for (const botId of ports.bots()) {
+    const done = ports.usageOf(botId).workers
+      .filter((w) => w.endedAt === undefined)
+      .map((w) => w.taskId)
+      .filter((taskId) => {
+        const status = ports.row(taskId)?.status;
+        return status === 'completed' || status === 'cancelled' || status === 'failed';
+      });
+    if (done.length === 0) continue;
+    ports.mutateUsage(botId, (u) => {
+      for (const taskId of done) if (recordWorkerEnd(u, taskId, at)) ended++;
+    });
+  }
+  return ended;
+}

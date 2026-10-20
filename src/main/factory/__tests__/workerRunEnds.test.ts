@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { emptyUsage, recordWorkerStart, recordWorkerStateChange, workerHoursDay, type BotUsage } from '../budget';
 import { computeHolders, type HolderRecord, type HolderSnapshot, type LiveHolders } from '../workerHolders';
-import { endRunsOfGoneWorkers, type RunEndPorts } from '../workerRunEnds';
+import { endRunsOfEndedRows, endRunsOfGoneWorkers, type RunEndPorts } from '../workerRunEnds';
 
 const NOW = 10_000_000_000;
 const BOT = 'bot-0000000a';
@@ -182,7 +182,7 @@ describe('endRunsOfFreeTasks', () => {
     // A launch line typed again in its pane; a read after it sees its agent.
     r.launched.set('t', NOW + 60_000);
     rows = [row('t')];
-    const running = holders(rows, { now: NOW + 120_000, readAt: NOW + 90_000, agentSeen: new Set(['ws-t']), launchAt: () => NOW + 60_000 });
+    const running = holders(rows, { now: NOW + 120_000, readAt: NOW + 90_000, agentTasks: new Map([['t', BOT]]), launchAt: () => NOW + 60_000 });
     expect(endRunsOfGoneWorkers(r.ports, running, NOW + 120_000)).toBe(1);
     expect(r.usage.workers.map((w) => [w.startedAt, w.endedAt])).toEqual([[NOW - 3_600_000, NOW], [NOW + 90_000, undefined]]);
     // Looking again opens nothing more; its stop ends the new run.
@@ -199,7 +199,7 @@ describe('endRunsOfFreeTasks', () => {
     const r = rig(() => rows);
     // No run of the task kept.
     r.launched.set('t', NOW - 60_000);
-    expect(endRunsOfGoneWorkers(r.ports, holders(rows, { agentSeen: new Set(['ws-t']), launchAt: () => NOW - 60_000 }), NOW)).toBe(1);
+    expect(endRunsOfGoneWorkers(r.ports, holders(rows, { agentTasks: new Map([['t', BOT]]), launchAt: () => NOW - 60_000 }), NOW)).toBe(1);
     expect(r.usage.workers).toEqual([{ taskId: 't', startedAt: NOW - 5_000 }]);
   });
 
@@ -214,6 +214,19 @@ describe('endRunsOfFreeTasks', () => {
     const staged = holders(rows, { now: NOW + 20_000, readAt: NOW + 15_000, launchAt: () => NOW + 10_000 });
     expect(staged.holders[0]).toMatchObject({ state: 'held', why: 'starting' });
     expect(endRunsOfGoneWorkers(r.ports, staged, NOW + 20_000)).toBe(0);
+    expect(r.usage.workers).toHaveLength(1);
+  });
+
+  it('another agent in the task\'s workspace (an owner\'s split) opens no run for a staged relaunch', () => {
+    const rows = [row('t')];
+    const r = rig(() => rows);
+    recordWorkerStart(r.usage, 't', NOW - 3_600_000);
+    expect(endRunsOfGoneWorkers(r.ports, holders(rows, { idle: new Set(['ws-t']) }), NOW)).toBe(1);
+    r.launched.set('t', NOW + 10_000);
+    // The workspace shows an agent, but no pane of the task's worker runs one.
+    const split = holders(rows, { now: NOW + 200_000, readAt: NOW + 190_000, agentSeen: new Set(['ws-t']), launchAt: () => NOW + 10_000 });
+    expect(split.holders[0]).toMatchObject({ state: 'held' });
+    expect(endRunsOfGoneWorkers(r.ports, split, NOW + 200_000)).toBe(0);
     expect(r.usage.workers).toHaveLength(1);
   });
 
@@ -233,5 +246,16 @@ describe('endRunsOfFreeTasks', () => {
     const look = holders(rows, { now: NOW + 6 * 3_600_000, records: [record('t', { ended: 'completed', at: NOW })] });
     expect(endRunsOfGoneWorkers(ports, look, NOW + 6 * 3_600_000)).toBe(1);
     expect(usage.workers[0].endedAt).toBe(NOW);
+  });
+});
+
+describe('endRunsOfEndedRows', () => {
+  it('a lifecycle host that never came up: the rows that ended end their runs, open rows keep theirs', () => {
+    const rows = [row('done', { status: 'completed' }), row('open')];
+    const r = rig(() => rows);
+    recordWorkerStart(r.usage, 'done', NOW - 60_000);
+    recordWorkerStart(r.usage, 'open', NOW - 60_000);
+    expect(endRunsOfEndedRows(r.ports, NOW)).toBe(1);
+    expect(r.usage.workers.map((w) => [w.taskId, w.endedAt])).toEqual([['done', NOW], ['open', undefined]]);
   });
 });

@@ -58,8 +58,9 @@ export interface WorkerHolder {
    *  its slot), with when that was known when a record or fact dates it. The
    *  bot's worker time ends its run there (workerRunEnds.ts). */
   workerGone?: { at?: number };
-  /** Its own agent was seen running by the last good read (its workspace's
-   *  panes, or its own pane wherever it is). */
+  /** Its own agent was seen running by the last good read: a pane its
+   *  launch, reclaim or session record names as its worker's (another agent
+   *  in its workspace, an owner's split, is not its). */
   agentSeen?: true;
 }
 
@@ -336,7 +337,7 @@ export function computeHolders(s: HolderSnapshot): WorkerHolder[] {
       reserved,
       why,
       ...(workerGone ? { workerGone: goneAt !== undefined ? { at: goneAt } : {} } : {}),
-      ...(a.sighted || [...ws].some((w) => s.agentSeen.has(w)) ? { agentSeen: true as const } : {}),
+      ...(a.sighted ? { agentSeen: true as const } : {}),
     });
   }
   return out;
