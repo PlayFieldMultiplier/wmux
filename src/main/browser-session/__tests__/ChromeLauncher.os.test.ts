@@ -432,6 +432,40 @@ describe('ChromeLauncherRegistry', () => {
     expect(surfaceStore.saveNow).not.toHaveBeenCalled();
   });
 
+  it('a demand already awaiting its liveness check when the app quits starts no new Chrome', async () => {
+    const child = makeChild();
+    const port = spawnWritesPortFile(child);
+    let failLiveness: (() => void) | null = null;
+    let launched = false;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (launched && !failLiveness && String(url).includes(`:${port}/json/version`)) {
+        return new Promise((_resolve, reject) => {
+          failLiveness = () => reject(new Error('gone'));
+        });
+      }
+      return fetchOk({});
+    });
+    const registry = new ChromeLauncherRegistry({
+      defaultDir: '/tmp/default-prof',
+      profilesDir: '/tmp/profiles',
+      store: makeStore({}),
+    });
+    const launcher = registry.forProfile('racing');
+    await launcher.endpoint();
+    launched = true;
+    const pending = launcher.endpoint(); // parked on the liveness fetch
+    await vi.waitFor(() => expect(failLiveness).not.toBeNull(), { timeout: 5_000 });
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const stopping = registry.disposeAll();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopping;
+    vi.useRealTimers();
+    spawnWritesPortFile(makeChild());
+    (failLiveness as unknown as () => void)();
+    await expect(pending).rejects.toThrow('disposed');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it('revealNewest activates the newest tab of a running pane profile and never launches one', async () => {
     const child = makeChild();
     spawnWritesPortFile(child);

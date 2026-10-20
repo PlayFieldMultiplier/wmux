@@ -1402,6 +1402,9 @@ export class ChromeLauncher implements ChromeBackendClient {
   }
 
   private async launch(): Promise<number> {
+    // A demand that was already awaiting when the app began to quit must not
+    // start or adopt a Chrome after dispose() has stopped this profile's.
+    if (this.disposed) throw new Error('ChromeLauncher: disposed (app is quitting)');
     const plan = this.wantedProtection();
     // A fresh Chrome starts with a fresh list: what the last one was refused
     // is not what this one will ask for.
@@ -1433,6 +1436,8 @@ export class ChromeLauncher implements ChromeBackendClient {
 
     if (this.profileLabel) seedChromeProfileLabel(this.userDataDir, this.profileLabel);
 
+    // Checked again after every await above (adoption, eviction).
+    if (this.disposed) throw new Error('ChromeLauncher: disposed (app is quitting)');
     const child = spawn(
       binary,
       [
