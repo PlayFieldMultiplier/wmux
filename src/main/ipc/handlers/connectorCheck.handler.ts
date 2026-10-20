@@ -4,11 +4,10 @@ import { CONNECTOR_CHECK_IPC, type ConnectorCheckResult } from '../../../shared/
 import { CONNECTOR_ID_RE } from '../../../shared/botConnector';
 import { getConnectorStore } from '../../factory/connectorStore';
 import { getSecretStore } from '../../factory/secretStore';
-import { checkConnector } from '../../connectors/checkConnector';
 import { isMainWindowSender } from '../mainWindowSender';
 import { wrapHandler } from '../wrapHandler';
 
-export function registerConnectorCheckHandlers(getWindow: () => BrowserWindow | null, oauth?: ConnectorOAuth): () => void {
+export function registerConnectorCheckHandlers(getWindow: () => BrowserWindow | null, source?: ConnectorOAuth | (() => Promise<ConnectorOAuth>)): () => void {
   const active = new Map<string, AbortController>();
   ipcMain.removeHandler(CONNECTOR_CHECK_IPC);
   ipcMain.handle(CONNECTOR_CHECK_IPC, wrapHandler(CONNECTOR_CHECK_IPC, async (event, id: unknown): Promise<ConnectorCheckResult> => {
@@ -28,6 +27,8 @@ export function registerConnectorCheckHandlers(getWindow: () => BrowserWindow | 
     const controller = new AbortController();
     active.set(id, controller);
     try {
+      const oauth = typeof source === 'function' ? await source() : source;
+      const { checkConnector } = await import('../../connectors/checkConnector');
       const authRevision = oauth?.revision(id);
       const authStatus = oauth?.status(id).status;
       if (oauth && (authStatus === 'authorized' || authStatus === 'expired')) {

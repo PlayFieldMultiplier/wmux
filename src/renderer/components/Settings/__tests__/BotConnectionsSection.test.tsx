@@ -84,6 +84,7 @@ describe('BotConnectionsSection', () => {
     const req = port.save.mock.calls[0][0];
     expect(req.connector).toMatchObject({ name: 'github', transport: 'http', remote: { url: GITHUB_MCP_URL }, scope: { kind: 'all' } });
     expect(req.connector.tools.mode).toBe('all');
+    expect(req.connector.terminalAccess?.mode).toBe('none');
     expect(req.connector.tools.blocked).toContain('merge_pull_request');
     expect(req.keyValues).toEqual({ GITHUB_MCP_TOKEN: 'ghp_typed_value_0123456789' });
     // The dialog closed and holds no value.

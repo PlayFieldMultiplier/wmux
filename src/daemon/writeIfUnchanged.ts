@@ -14,6 +14,10 @@ import type { PromptEvent } from './PromptEventLog';
 
 /** The pane as the caller saw it. */
 export interface WriteExpectation {
+  /** Optional stronger fence for an owner-triggered fresh shell launch. */
+  keyInputRevision?: number;
+  incarnationId?: string;
+  requireEmptyShellPrompt?: true;
   outputBytes: number;
   markerCount: number;
   /** The last prompt marker, or null when there was none. */
@@ -21,6 +25,9 @@ export interface WriteExpectation {
 }
 
 export interface WritableSession {
+  keyInputRevision?: number;
+  incarnationId?: string;
+  emptyShellPrompt?: boolean;
   ringBuffer: { readonly totalBytesWritten: number };
   promptLog: { readonly size: number; recent(n: number): PromptEvent[] };
   /** Writes to the PTY (and does the session's input accounting). */
@@ -31,13 +38,22 @@ export interface WritableSession {
 export function parseWriteExpectation(raw: unknown): WriteExpectation | null {
   if (!raw || typeof raw !== 'object') return null;
   const e = raw as Record<string, unknown>;
+  if (e.keyInputRevision !== undefined && (!Number.isSafeInteger(e.keyInputRevision) || (e.keyInputRevision as number) < 0)) return null;
+  if (e.incarnationId !== undefined && (typeof e.incarnationId !== 'string' || !e.incarnationId || e.incarnationId.length > 128)) return null;
+  if (e.requireEmptyShellPrompt !== undefined && e.requireEmptyShellPrompt !== true) return null;
+  const fence = {
+    ...(e.keyInputRevision !== undefined ? { keyInputRevision: e.keyInputRevision as number } : {}),
+    ...(e.incarnationId !== undefined ? { incarnationId: e.incarnationId as string } : {}),
+    ...(e.requireEmptyShellPrompt === true ? { requireEmptyShellPrompt: true as const } : {}),
+  };
   if (!Number.isSafeInteger(e.outputBytes) || !Number.isSafeInteger(e.markerCount)) return null;
   const last = e.lastPromptMarker;
-  if (last === null) return { outputBytes: e.outputBytes as number, markerCount: e.markerCount as number, lastPromptMarker: null };
+  if (last === null) return { ...fence, outputBytes: e.outputBytes as number, markerCount: e.markerCount as number, lastPromptMarker: null };
   if (!last || typeof last !== 'object') return null;
   const m = last as Record<string, unknown>;
   if (typeof m.type !== 'string' || !Number.isSafeInteger(m.byteOffset)) return null;
   return {
+    ...fence,
     outputBytes: e.outputBytes as number,
     markerCount: e.markerCount as number,
     lastPromptMarker: { type: m.type, byteOffset: m.byteOffset as number },
@@ -46,6 +62,9 @@ export function parseWriteExpectation(raw: unknown): WriteExpectation | null {
 
 /** Write `data` only when the session still matches `expect`. Synchronous. */
 export function writeIfUnchanged(session: WritableSession, data: string, expect: WriteExpectation): boolean {
+  if (expect.keyInputRevision !== undefined && session.keyInputRevision !== expect.keyInputRevision) return false;
+  if (expect.incarnationId !== undefined && session.incarnationId !== expect.incarnationId) return false;
+  if (expect.requireEmptyShellPrompt && session.emptyShellPrompt !== true) return false;
   if (session.ringBuffer.totalBytesWritten !== expect.outputBytes) return false;
   if (session.promptLog.size !== expect.markerCount) return false;
   const last = session.promptLog.recent(1)[0] ?? null;

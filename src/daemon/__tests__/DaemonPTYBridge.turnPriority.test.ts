@@ -84,6 +84,20 @@ describe('DaemonPTYBridge turn priority', () => {
   });
 
   describe('baseline (unsettled pane)', () => {
+    it.each(['\x1b[A', 'queued-draft'])('does not certify input queued after Enter in the same chunk: %s', (queued) => {
+      feed('\x1b]133;B\x07'); bridge.noteInput(`sleep 3\r${queued}`);
+      feed('\x1b]133;C\x07\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07');
+      expect(bridge.isEmptyShellPrompt()).toBe(false);
+    });
+    it.each(['before command start', 'during command'])('keeps queued history input invalid at the returned prompt: %s', (timing) => {
+      feed('\x1b]133;B\x07');
+      bridge.noteInput('sleep 3\r');
+      if (timing === 'before command start') bridge.noteInput('\x1b[A');
+      feed('\x1b]133;C\x07');
+      if (timing === 'during command') bridge.noteInput('\x1b[A');
+      feed('\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07sleep 3');
+      expect(bridge.isEmptyShellPrompt()).toBe(false);
+    });
     it('reports a passive burst as active and then idle', () => {
       feed(BIG);
       expect(active).toEqual(['sess-1']);

@@ -19,6 +19,7 @@
 
 import { isCredentialEnvKey } from './envFilter';
 import { isBotSecretName } from './botSecret';
+import { parseTerminalAccess, type ConnectorTerminalAccess } from './connectorAccess';
 
 export type ConnectorTransport = 'stdio' | 'http' | 'sse';
 
@@ -57,6 +58,8 @@ export interface Connector {
   secrets: ConnectorSecret[];
   tools: ConnectorTools;
   scope: ConnectorScope;
+  /** Absent on legacy records: ordinary terminal access is off until reviewed. */
+  terminalAccess?: ConnectorTerminalAccess;
   /** Bots an every-bot connection is switched off for. */
   offFor: string[];
   /** Library-wide on/off. */
@@ -321,6 +324,8 @@ export function parseConnectorShape(
   if (!tools) return refuse('tools', `Tool names are letters, digits, _, . and - (at most ${CONNECTOR_LIMITS.TOOLS}).`);
   const scope = scopeOf(raw.scope ?? { kind: 'all' });
   if (!scope) return refuse('scope', 'The bots picked are malformed.');
+  const terminalAccess = raw.terminalAccess === undefined ? undefined : parseTerminalAccess(raw.terminalAccess);
+  if (terminalAccess === null) return refuse('terminalAccess', 'The terminal access selection is malformed.');
   if (hasDottedToolPolicy(tools) && (transport !== 'http' || scope.kind !== 'bots' || scope.botIds.length !== 0)) {
     return refuse('tools', 'Dotted tool names require an HTTP connection with no bots selected; use the terminal gateway.');
   }
@@ -340,6 +345,7 @@ export function parseConnectorShape(
       secrets,
       tools,
       scope,
+      ...(terminalAccess ? { terminalAccess } : {}),
       // Off-for applies to an every-bot connection only.
       offFor: scope.kind === 'all' ? [...new Set(offFor)] : [],
       enabled: raw.enabled,

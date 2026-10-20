@@ -12,26 +12,21 @@ async function mount(enabled: boolean) {
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   await act(async () => root.render(<ConnectorTerminal id="con-12345678" enabled={enabled} />));
 }
-it('prepares only the clicked agent and clears the copied capability through the ephemeral clipboard', async () => {
-  const launchCommand = vi.fn(async () => ({ ok: true, command: 'prepared-command' }));
-  const writeEphemeral = vi.fn(async () => undefined);
-  vi.stubGlobal('electronAPI', { connectorTerminal: { launchCommand } });
-  vi.stubGlobal('clipboardAPI', { writeEphemeral });
+it('launches only into the selected destination without copying a command', async () => {
+  const launch = vi.fn(async () => ({ ok: true }));
+  const targets = vi.fn(async () => ({ workspaces: [{ id: 'ws-a', name: 'Work' }], panes: [{ id: 'pane-a', workspaceId: 'ws-a', ptyIds: ['daemon-a'] }] }));
+  vi.stubGlobal('electronAPI', { connectorTerminal: { launch, targets } });
   await mount(true);
-  expect(launchCommand).not.toHaveBeenCalled();
-  await act(async () => host.querySelectorAll('button')[1].click());
-  expect(launchCommand).toHaveBeenCalledWith('con-12345678', 'codex');
-  expect(writeEphemeral).toHaveBeenCalledWith('prepared-command', 60000);
-  expect(host.textContent).toContain('Launch copied');
+  expect(host.querySelector('button')!.disabled).toBe(true);
+  await act(async () => { const select = host.querySelector('select')!; select.value = 'daemon-a'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await act(async () => host.querySelector('button')!.click());
+  expect(launch).toHaveBeenCalledWith('con-12345678', 'claude', 'daemon-a');
+  expect(host.textContent).toContain(en['connectors.access.started']);
 });
-it('disables launch without tool permission and reports clipboard failures accurately', async () => {
-  const launchCommand = vi.fn(async () => ({ ok: true, command: 'prepared-command' }));
-  vi.stubGlobal('electronAPI', { connectorTerminal: { launchCommand } });
-  vi.stubGlobal('clipboardAPI', { writeEphemeral: vi.fn().mockRejectedValue(new Error('locked')) });
+it('does not start a connection whose access is disabled', async () => {
+  const launch = vi.fn();
+  vi.stubGlobal('electronAPI', { connectorTerminal: { launch, targets: async () => null } });
   await mount(false);
   expect([...host.querySelectorAll('button')].every((b) => b.disabled)).toBe(true);
-  await act(async () => root.render(<ConnectorTerminal id="con-12345678" enabled />));
-  await act(async () => host.querySelector('button')?.click());
-  expect(host.textContent).toContain('Could not prepare launch');
-  expect(host.textContent).not.toContain('Launch copied');
+  expect(launch).not.toHaveBeenCalled();
 });

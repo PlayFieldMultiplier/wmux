@@ -840,7 +840,7 @@ registerSessionHandlers(() => daemonClient?.isConnected === true);
 // OAuth consent and terminal gateway leases belong to the app, not a daemon
 // connection. Keep them alive across registerAllHandlers teardown/reconnect.
 const connectorOAuth = registerConnectorOAuthHandlers(() => mainWindow);
-const cleanupConnectorTerminal = registerConnectorTerminalHandlers(() => mainWindow, connectorOAuth.service);
+const cleanupConnectorTerminal = registerConnectorTerminalHandlers(() => mainWindow, connectorOAuth.service, () => daemonClient);
 const cleanupConnectorChecks = registerConnectorCheckHandlers(() => mainWindow, connectorOAuth.service);
 const cleanupConnectorCatalog = registerConnectorCatalogHandlers(() => mainWindow);
 
