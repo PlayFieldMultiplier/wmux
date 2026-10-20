@@ -26,6 +26,10 @@
 //   - The hook's own time, not its arrival. The next woken turn's entry is
 //     written milliseconds after the Stop fires, often before the daemon has
 //     ingested that Stop; the entry then waits for it.
+//   - After that Stop is applied. HookIngest tells this module about a hook
+//     before it applies the hook to the pane, in one synchronous call; a turn
+//     opened inside it would be closed by the very Stop it follows, so a
+//     decision a hook makes runs once that call has returned.
 //   - Once per entry. Entries are keyed by their uuid, so a replay of the
 //     window before the watcher's offset, a re-subscribe or a second reader
 //     never opens the turn twice. A daemon restart starts with no turn end
@@ -80,6 +84,8 @@ export interface TeammateWakeDeps {
   mayOpen: (sessionId: string, path: string) => boolean;
   /** Open the pane's turn; `at` is the entry's own time. */
   emit: (sessionId: string, at: number) => void;
+  /** Runs `fn` once the current synchronous call has returned. */
+  defer?: (fn: () => void) => void;
 }
 
 interface PaneState {
@@ -95,7 +101,11 @@ interface PaneState {
 export class TeammateWakes {
   private readonly panes = new Map<string, PaneState>();
 
-  constructor(private readonly deps: TeammateWakeDeps) {}
+  private readonly defer: (fn: () => void) => void;
+
+  constructor(private readonly deps: TeammateWakeDeps) {
+    this.defer = deps.defer ?? queueMicrotask;
+  }
 
   private pane(sessionId: string): PaneState {
     let p = this.panes.get(sessionId);
@@ -125,7 +135,7 @@ export class TeammateWakes {
     if (kind === 'agent.stop' || kind === 'agent.stop_failure') {
       const s = this.pane(sessionId);
       s.endAt = at;
-      this.decide(sessionId, s);
+      if (s.pending) this.defer(() => { if (this.panes.get(sessionId) === s) this.decide(sessionId, s); });
     } else if (kind === 'agent.user_prompt_submit') {
       const s = this.pane(sessionId);
       s.startAt = at;

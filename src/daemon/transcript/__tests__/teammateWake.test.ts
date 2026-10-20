@@ -38,7 +38,7 @@ describe('teammateWakeFromTranscriptLine', () => {
 });
 
 describe('TeammateWakes — the live capture', () => {
-  it('opens each woken lead turn once, at its entry, in the order the hooks and lines arrived', () => {
+  it('opens each woken lead turn once, at its entry, in the order the hooks and lines arrived', async () => {
     const { emit, hook, line } = rig();
     hook('agent.session_start', '20:03:39.493');
     hook('agent.user_prompt_submit', '20:03:49.169');
@@ -53,13 +53,32 @@ describe('TeammateWakes — the live capture', () => {
     line(WAKE_2);
     expect(emit).toHaveBeenCalledTimes(1);
     hook('agent.stop', '20:04:21.936');
+    await Promise.resolve();
     expect(emit).toHaveBeenCalledTimes(2);
     expect(emit).toHaveBeenLastCalledWith('pty-1', ms('20:04:21.951'));
     hook('agent.stop', '20:04:23.881');
     expect(emit).toHaveBeenCalledTimes(2);
   });
 
-  it('never opens a turn twice for one entry: a replay, a second read or a restart', () => {
+  it('opens a waiting entry only after its Stop is applied, never before it', async () => {
+    // HookIngest nudges this module, then applies the Stop to the bridge and
+    // broadcasts it, in one synchronous call. A wake sent inside the nudge
+    // would be closed by that very Stop.
+    const order: string[] = [];
+    const wakes = new TeammateWakes({ isReader: () => true, mayOpen: () => true, emit: () => { order.push('wake'); } });
+    wakes.noteHookSignal('pty-1', 'agent.user_prompt_submit', ms('20:03:49.169'));
+    wakes.noteHookSignal('pty-1', 'agent.stop', ms('20:03:57.365'));
+    await Promise.resolve();
+    wakes.noteLine('pty-1', PATH, WAKE_1);
+    wakes.noteLine('pty-1', PATH, WAKE_2);
+    order.length = 0;
+    wakes.noteHookSignal('pty-1', 'agent.stop', ms('20:04:21.936'));
+    order.push('stop applied');
+    await Promise.resolve();
+    expect(order).toEqual(['stop applied', 'wake']);
+  });
+
+  it('never opens a turn twice for one entry: a replay, a second read or a restart', async () => {
     const { emit, hook, line, wakes } = rig();
     hook('agent.user_prompt_submit', '20:03:49.169');
     hook('agent.stop', '20:03:57.365');
@@ -72,14 +91,16 @@ describe('TeammateWakes — the live capture', () => {
     wakes.dropSession('pty-1');
     line(WAKE_1);
     hook('agent.stop', '20:04:23.881');
+    await Promise.resolve();
     expect(emit).toHaveBeenCalledTimes(1);
   });
 
-  it('starts nothing for an entry the lead read mid-turn, before any turn end, or after a prompt', () => {
+  it('starts nothing for an entry the lead read mid-turn, before any turn end, or after a prompt', async () => {
     const mid = rig();
     mid.hook('agent.user_prompt_submit', '20:04:10.000');
     mid.line(WAKE_1);
     mid.hook('agent.stop', '20:04:21.936');
+    await Promise.resolve();
     expect(mid.emit).not.toHaveBeenCalled();
 
     const prompted = rig();
@@ -87,6 +108,7 @@ describe('TeammateWakes — the live capture', () => {
     prompted.hook('agent.user_prompt_submit', '20:04:10.000');
     prompted.line(WAKE_1);
     prompted.hook('agent.stop', '20:04:21.936');
+    await Promise.resolve();
     expect(prompted.emit).not.toHaveBeenCalled();
 
     const fresh = rig();
