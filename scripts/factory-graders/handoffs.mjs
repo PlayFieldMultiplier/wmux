@@ -163,7 +163,13 @@ export function researchNoRepoCloses(snap, expect) {
   const folders = arr(snap.workers).filter((e) => e.event === 'start').map((e) => String(e.cwd ?? ''));
   const taskWakes = wakesOf(snap, expect.researcher).filter((w) => w.reason?.kind === 'facts' && arr(w.reason.factIds).some((f) => /^task\./.test(f)));
   const settles = stubTools(snap, expect.researcher, 'ledger_update');
-  const closed = arr(snap.cards).filter((c) => c.actor?.kind === 'system' && c.title === 'Research reported: task completed');
+  const { verified, total } = expect.evidence;
+  const code = verified > 0 ? 'research.completed' : 'research.unverified';
+  const closed = arr(snap.cards).filter((c) => c.actor?.kind === 'system'
+    && task && c.threadId === `task:${task.id}` && c.notice?.code === code);
+  const items = arr(task?.evidence?.items);
+  const graded = items.filter((item) => item.kind === 'command' ? item.status === 'passed'
+    : ['inspection', 'artifact'].includes(item.kind) && item.status === 'verified').length;
   return [
     criterion('bot_has_no_repo', !!bot && !bot.repo, bot ? `repo ${bot.repo ? 'set' : 'none'}` : 'no bot'),
     criterion('one_research_task', !!task && task.dispatch?.preset === 'research', `${tasks.length} task(s), preset ${task?.dispatch?.preset ?? '-'}`),
@@ -174,7 +180,10 @@ export function researchNoRepoCloses(snap, expect) {
     criterion('research_is_tainted', task?.dispatch?.origin?.tainted === true, String(task?.dispatch?.origin?.tainted)),
     criterion('woken_once_after_report', taskWakes.length === 1 && taskWakes[0].state === 'done', taskWakes.map((w) => `${arr(w.reason.factIds).join('+')}:${w.state}`).join(', ') || 'no task wake'),
     criterion('bot_did_not_settle', settles.length === 0, `${settles.length} ledger_update call(s) by the bot`),
-    criterion('closed_card', closed.length === 1, `${closed.length} card(s)`),
+    criterion('evidence_grade', task?.verifiedItemCount === verified && graded === verified
+      && items.length === total, `ledger ${task?.verifiedItemCount}, items ${graded}/${items.length}; expected ${verified}/${total}`),
+    criterion('closed_card', closed.length === 1 && closed[0].notice.args?.verified === verified
+      && closed[0].notice.args?.total === total, `${closed.length} ${code} card(s): ${JSON.stringify(closed[0]?.notice?.args)}`),
     // Reclaim found the worker in its scratch folder and stopped its agent.
     criterion('worker_reclaimed', arr(snap.cards).some((c) => c.actor?.kind === 'system' && String(c.title ?? '').startsWith('Worker done')), 'no "Worker done" card'),
   ];

@@ -7,7 +7,8 @@
   "setup": {
     "repo": true,
     "worker": {
-      "delayMs": 1000
+      "delayMs": 1000,
+      "commit": true
     },
     "bots": [
       {

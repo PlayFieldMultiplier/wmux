@@ -315,7 +315,8 @@
           },
           "preset": "research"
         },
-        "summary": "fake worker: review_requested for wtask-mv9cdq98-plx80nlz"
+        "summary": "fake worker: review_requested for wtask-mv9cdq98-plx80nlz",
+        "verifiedItemCount": 0
       }
     ],
     "cards": [
@@ -370,8 +371,15 @@
         "actor": {
           "kind": "system"
         },
-        "title": "Research reported: task completed",
-        "body": "A research task changes no code, so no gate runs on it."
+        "title": "Research reported: Not verified",
+        "body": "A research task changes no code, so no gate runs on it.",
+        "notice": {
+          "code": "research.unverified",
+          "args": {
+            "verified": 0,
+            "total": 0
+          }
+        }
       },
       {
         "version": 1,

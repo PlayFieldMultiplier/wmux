@@ -117,3 +117,58 @@ describe('a scenario that names no bystander', () => {
     expect(names.some((n) => String(n).startsWith('undefined'))).toBe(false);
   });
 });
+
+describe('research completion evidence', () => {
+  const sc = scenarios.get('research-no-repo-closes');
+  const fixture = JSON.parse(fs.readFileSync(path.join(FIXTURES, `${sc.name}.json`), 'utf8')).pass;
+  const cases = [
+    { name: 'no attached evidence', items: [], verified: 0 },
+    { name: 'only unverified evidence', items: [{ kind: 'inspection', status: 'unverified', summary: 'Not checked' }], verified: 0 },
+    { name: 'mixed evidence', items: [
+      { kind: 'command', status: 'passed', command: 'check', summary: 'Check passed' },
+      { kind: 'artifact', status: 'verified', summary: 'Artifact checked' },
+      { kind: 'inspection', status: 'unverified', summary: 'Not checked' },
+    ], verified: 2 },
+  ];
+  for (const { name, items, verified } of cases) {
+    describe(name, () => {
+      function sample() {
+        const snap = structuredClone(fixture);
+        snap.ledger[0].verifiedItemCount = verified;
+        if (items.length) snap.ledger[0].evidence = { summary: 'Research evidence', items };
+        const card = snap.cards[2];
+        card.title = 'Localized title';
+        card.body = 'Localized explanation';
+        card.notice = { code: verified > 0 ? 'research.completed' : 'research.unverified', args: { verified, total: items.length } };
+        const scenario = { ...sc, expect: { ...sc.expect, evidence: { verified, total: items.length } } };
+        return { snap, scenario };
+      }
+      it('uses the notice and evidence grade, independent of English copy', () => {
+        const { snap, scenario } = sample();
+        expect(gradeSnapshot(scenario, snap).status).toBe('pass');
+      });
+      for (const [label, mutate, criterion] of [
+        ['missing ledger grade', (s) => { delete s.ledger[0].verifiedItemCount; }, 'evidence_grade'],
+        ['inflated ledger grade', (s) => { s.ledger[0].verifiedItemCount++; }, 'evidence_grade'],
+        ['wrong notice code', (s) => { s.cards[2].notice.code = 'research.notCompleted'; }, 'closed_card'],
+        ['wrong verified count', (s) => { s.cards[2].notice.args.verified++; }, 'closed_card'],
+        ['wrong total count', (s) => { s.cards[2].notice.args.total++; }, 'closed_card'],
+        ['another task card', (s) => { s.cards[2].threadId = 'task:other'; }, 'closed_card'],
+        ['English title without a notice', (s) => { delete s.cards[2].notice; s.cards[2].title = 'Research reported: task completed'; }, 'closed_card'],
+        ['duplicate completion card', (s) => { s.cards.push(structuredClone(s.cards[2])); }, 'closed_card'],
+      ]) {
+        it(`rejects ${label}`, () => {
+          const { snap, scenario } = sample();
+          mutate(snap);
+          expect(gradeSnapshot(scenario, snap).criteria.filter((c) => !c.pass).map((c) => c.name)).toEqual([criterion]);
+        });
+      }
+      if (verified > 0) it('rejects evidence downgraded after the recorded grade', () => {
+        const { snap, scenario } = sample();
+        snap.ledger[0].evidence = structuredClone(snap.ledger[0].evidence);
+        snap.ledger[0].evidence.items[0].status = 'failed';
+        expect(gradeSnapshot(scenario, snap).criteria.filter((c) => !c.pass).map((c) => c.name)).toEqual(['evidence_grade']);
+      });
+    });
+  }
+});
