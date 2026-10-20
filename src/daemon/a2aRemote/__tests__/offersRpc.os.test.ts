@@ -225,6 +225,27 @@ describe('a2a.remote.offers.accept — review fixes', () => {
   });
 });
 
+describe('a2a.remote.offers.accept — retries keep one answer', () => {
+  it('a sharer not ready yet (503) keeps the proposal, and the retry sends the same one', async () => {
+    let ready = false;
+    script = async (_m, _p, body) => {
+      const linkId = (body as { linkId: string }).linkId;
+      return ready ? { status: 200, json: { linkId, state: 'active', version: 2 } } : { status: 503, json: { ok: false, error: 'unavailable' } };
+    };
+    expect(await accept()).toMatchObject({ ok: false, error: 'unavailable' });
+    const linkId = store.get(OFFER)!.pendingLinkId!;
+    expect(links.get(linkId)?.state).toBe('proposed-out');
+    ready = true;
+    expect(await accept()).toMatchObject({ ok: true, link: { linkId, state: 'active' } });
+  });
+
+  it('a retry with narrower directions than the unsettled answer is refused, not silently widened', async () => {
+    script = async () => ({ status: 503, json: { ok: false, error: 'unavailable' } });
+    await accept();
+    expect(await accept({ allow: { outbound: true, inbound: false } })).toMatchObject({ ok: false, error: 'invalid-state' });
+  });
+});
+
 describe('a2a.remote.offers.decline', () => {
   it('ends the offer here and tells the sharer', async () => {
     script = async () => ({ status: 200, json: { ok: true, state: 'declined' } });

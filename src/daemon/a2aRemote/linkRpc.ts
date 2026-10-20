@@ -454,7 +454,9 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
       let link = rec.pendingLinkId ? links.get(rec.pendingLinkId) : undefined;
       if (link && link.state === 'active') return settleAccepted(offerId, link);
       if (link && link.state !== 'proposed-out') link = undefined;
-      if (link && (link.local.workspaceId !== local.workspaceId || link.local.paneId !== local.paneId)) {
+      // A retry is the same answer: the same pane here and the same directions.
+      if (link && (link.local.workspaceId !== local.workspaceId || link.local.paneId !== local.paneId ||
+        link.allow.outbound !== want.outbound || link.allow.inbound !== want.inbound)) {
         return { ok: false, error: 'invalid-state', message: 'an earlier answer to this share is still unsettled; use Check' };
       }
       if (!link) {
@@ -499,6 +501,8 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
           const r = fail(err);
           return r.ok ? { ok: false, error: 'failed' } : { ok: false, error: r.error, ...(r.message ? { message: r.message } : {}), uncertain: true };
         }
+        // Not now (the sharer is not ready, or its store is busy): the same proposal is sent again later.
+        if (err.code === 'unavailable') return { ok: false, error: 'unavailable', message: err.message };
         dropProposal(link.linkId);
         if (err.code === 'offer-closed') {
           const reason = OFFER_REASONS.has(err.reason ?? '') ? (err.reason as A2aOfferEndReason) : 'withdrawn';

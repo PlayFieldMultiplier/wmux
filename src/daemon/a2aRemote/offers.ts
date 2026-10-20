@@ -305,9 +305,18 @@ export class A2aOffers {
       return;
     }
     if (rec.side === 'out') {
+      if (!TERMINAL_LINK.has(link.state)) return;
+      // A claim whose link ended before it was marked accepted is spent too.
+      if (rec.state === 'claimed') {
+        try {
+          this.changed(this.store.markAccepted(rec.offerId));
+        } catch (err) {
+          this.deps.log('warn', `[a2a-remote] offer ${rec.offerId}: spent, not stored yet: ${errMsg(err)}`);
+        }
+      }
       // The link a share made ended: the pane it showed is hidden again (and
       // any other share's pane this link was the last user of).
-      if (TERMINAL_LINK.has(link.state)) this.reconcileExposure();
+      this.reconcileExposure();
       return;
     }
     if (rec.state !== 'open' || rec.pendingLinkId !== link.linkId) return;
@@ -357,6 +366,8 @@ export class A2aOffers {
         if (!link || link.remote.hostId !== rec.hostId) this.changed(this.store.unclaim(rec.offerId));
         // A proposed-in link waits for the app's closed-pane pass (finish answers 503 till then).
         else if (link.state === 'proposed-in' || link.state === 'active') this.finish(rec, link);
+        // The link was made and has ended since: the offer is spent, and owes its exposure back.
+        else this.changed(this.store.markAccepted(rec.offerId));
       } catch (err) {
         this.deps.log('warn', `[a2a-remote] offer ${rec.offerId} not recovered: ${errMsg(err)}`);
       }

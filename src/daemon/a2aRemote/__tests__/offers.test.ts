@@ -510,6 +510,16 @@ describe('share offers — review fixes (consent stays bound, debts stay owed)',
     expect(b.store.get(made.offer.offerId)?.state).toBe('accepted');
   });
 
+  it('a claim whose link ended is spent, and its pane is hidden again', async () => {
+    const { a, b, offerId } = await shared();
+    const { link } = proposalFor(a, offerId);
+    b.store.claim(offerId, link.linkId);
+    b.links.receiveProposal({ linkId: link.linkId, local: { kind: 'pane', workspaceId: 'ws-api', paneId: 'pane-1' }, remote: { hostId: A, kind: 'pane', workspaceId: 'ws-web', paneId: 'pane-a' }, allow: both });
+    b.links.revoke(link.linkId, 'local');
+    expect(b.store.get(offerId)?.state).toBe('accepted');
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+  });
+
   it('two shares to one PC expiring together both put their pane back, also on disk', async () => {
     const b = makeSide(B, A);
     b.offers.create({ hostId: A, end: B_PANE, allow: both });
