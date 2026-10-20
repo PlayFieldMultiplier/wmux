@@ -83,7 +83,7 @@ export default function PluginsSection() {
         </div>
         {!plugin.managed && <p className="mt-2 text-[12px] text-[var(--text-sub)]">{t('plugins.settings.manual')}</p>}
       </div>)}
-      {view === 'discover' && UI_PLUGIN_CATALOG.map((entry) => <div key={entry.id} className="px-3.5 py-3">
+      {view === 'discover' && UI_PLUGIN_CATALOG.map((entry) => <div key={entry.id} data-catalog-entry={entry.id} className="px-3.5 py-3">
         <div className="flex items-center justify-between gap-3"><span className="text-[14px]">{t(entry.titleKey)}</span><Button disabled={busy || loading || inventory.plugins.some((plugin) => plugin.name === entry.id)} onClick={() => void mutate(async () => { await window.electronAPI.pluginManagement.install(entry.id); setView('mine'); })}>{t(inventory.plugins.some((plugin) => plugin.name === entry.id) ? 'plugins.settings.installed' : 'plugins.settings.install')}</Button></div>
         <p className="mt-1 text-[12px] text-[var(--text-sub)]">{t(entry.hintKey)}</p>
         <p className="mt-1 text-[11px] text-[var(--text-sub)]">{entry.publisher} · {entry.license} · {entry.version}</p>
