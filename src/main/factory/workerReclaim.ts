@@ -333,10 +333,22 @@ export class ReclaimedWorkers {
   }
 
   put(rec: ReclaimedWorker): Promise<void> {
+    return this.write(rec, rec.at);
+  }
+
+  /** Put back the record a put whose write failed replaced (`rec`, as get()
+   *  gave it before). The state change it makes is told as happening `at`
+   *  (now), never at the record's own older time: the listeners date what
+   *  they record by it (the bot's worker time). */
+  restore(rec: ReclaimedWorker, at: number): Promise<void> {
+    return this.write(rec, at);
+  }
+
+  private write(rec: ReclaimedWorker, at: number): Promise<void> {
     const prior = this.records.get(rec.taskId);
     this.records.delete(rec.taskId);
     this.records.set(rec.taskId, rec);
-    if (prior && prior.state !== rec.state) this.notifyState(rec, prior.state, rec.state, rec.at);
+    if (prior && prior.state !== rec.state) this.notifyState(rec, prior.state, rec.state, at);
     // Oldest first, never a live worker (resumed, or not yet stopped).
     for (const [id, r] of this.records) {
       if (this.records.size <= RECLAIMED_WORKERS_MAX) break;
@@ -1063,7 +1075,7 @@ export async function reclaimWorker(
     try {
       await ports.store.put(rec);
     } catch (err) {
-      await (prior ? ports.store.put(prior) : ports.store.remove(entry.id)).catch(() => undefined);
+      await (prior ? ports.store.restore(prior, now()) : ports.store.remove(entry.id)).catch(() => undefined);
       log(`[factory] reclaim: ${entry.id} not recorded, its worker keeps running: ${String(err)}`);
       return null;
     }
@@ -1164,7 +1176,7 @@ export async function reclaimWorker(
     }
     if (attempted === 0) {
       // Reopened before any stop: nothing was stopped, the record is as it was.
-      await (prior ? ports.store.put(prior) : ports.store.remove(entry.id)).catch(() => undefined);
+      await (prior ? ports.store.restore(prior, now()) : ports.store.remove(entry.id)).catch(() => undefined);
       return null;
     }
     // An open task's stop that signalled its agent stays recorded

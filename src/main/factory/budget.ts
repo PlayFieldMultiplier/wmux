@@ -234,15 +234,12 @@ export function unrecordTurn(usage: BotUsage, at: number): boolean {
 
 /** A task's worker starts once: a second start of the same task records
  *  nothing. `resumed`: the task's stopped worker runs again, a new interval
- *  (unless one is still open), never starting before the task's last one
- *  ended: one task's runs never overlap, so a resume told with an older time
- *  (a reclaim record put back after a failed write) counts no time twice. */
+ *  (unless one is still open). */
 export function recordWorkerStart(usage: BotUsage, taskId: string, now: number, opts: { resumed?: boolean } = {}): void {
   pruneUsage(usage, now);
   const mine = usage.workers.filter((w) => w.taskId === taskId);
   if (opts.resumed ? mine.some((w) => w.endedAt === undefined) : mine.length > 0) return;
-  const lastEnd = Math.max(-Infinity, ...mine.map((w) => w.endedAt ?? -Infinity));
-  usage.workers.push({ taskId, startedAt: Math.max(now, lastEnd) });
+  usage.workers.push({ taskId, startedAt: now });
 }
 
 /** Returns false when the worker was not running. An end that comes before

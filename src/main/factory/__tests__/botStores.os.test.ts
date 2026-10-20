@@ -663,18 +663,6 @@ describe('worker time across a pause (recordWorkerStateChange)', () => {
     expect(workerHoursDay(u, 3 * HOUR_MS)).toBe(3);
   });
 
-  it('a resume told with an older time (a record put back) never counts time twice', () => {
-    const u = emptyUsage();
-    recordWorkerStateChange(u, 't1', 'stopped', 'resumed', 0);
-    recordWorkerStateChange(u, 't1', 'resumed', 'stopped', 2 * HOUR_MS);
-    // The record's write failed and the resumed record is put back, its
-    // state change told with the resume's own time.
-    recordWorkerStateChange(u, 't1', 'stopped', 'resumed', 0);
-    expect(workerHoursDay(u, 2 * HOUR_MS)).toBe(2);
-    recordWorkerStateChange(u, 't1', 'resumed', 'stopped', 3 * HOUR_MS);
-    expect(workerHoursDay(u, 4 * HOUR_MS)).toBe(3);
-  });
-
   it('a stop still under way leaves the run counting', () => {
     const u = emptyUsage();
     recordWorkerStart(u, 't1', 0);

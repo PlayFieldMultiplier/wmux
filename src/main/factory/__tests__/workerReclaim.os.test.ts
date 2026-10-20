@@ -45,6 +45,7 @@ import { RESEARCH_PRESET } from '../../../shared/ledger';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { holdsUnsettledRunningClaim } from '../../notification/turnSettle';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { HOUR_MS, costUsdDay, emptyUsage, recordCost, recordTurn, recordWorkerStart, recordWorkerStateChange, workerHoursDay } from '../budget';
 
 // The status funnel main keeps per pane (metadata.handler.ts), in memory: the
 // real module pulls in electron.
@@ -1022,6 +1023,33 @@ describe('resume safety (review fixes)', () => {
     expect(stopAgent).not.toHaveBeenCalled();
     // Still resumed, so its later stop ends its run in the bot's hours.
     expect(store.get('wtask-abc-12345678')?.state).toBe('resumed');
+  });
+
+  it('a failed write put back keeps the bot\'s turns and costs, and its run, as they were', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const RESUMED_AT = 1_000;
+    await store.put({ taskId: 'wtask-abc-12345678', botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 't', threadId: 'task:x' as never, ended: 'completed', sessions: [{ sessionId: 'daemon-1', cwd: wt }], state: 'resumed', at: RESUMED_AT });
+    // The bot's usage, kept by its state changes as the lifecycle host does.
+    const NOW = RESUMED_AT + 3 * HOUR_MS;
+    const usage = emptyUsage();
+    recordWorkerStart(usage, 'wtask-abc-12345678', RESUMED_AT, { resumed: true });
+    recordTurn(usage, NOW - HOUR_MS);
+    recordCost(usage, 0.5, NOW - HOUR_MS);
+    store.onStateChange = (rec, from, to, at) => recordWorkerStateChange(usage, rec.taskId, from, to, at);
+    // The write fails after the record (and its state change) went in.
+    const put = store.put.bind(store);
+    vi.spyOn(store, 'put').mockImplementationOnce(async (rec) => {
+      await put(rec);
+      throw new Error('disk full');
+    });
+    const { ports: p, stopAgent } = reclaimPorts(store, [session()], { now: () => NOW });
+    expect(await reclaimWorker(p, row('completed'), 'completed')).toBeNull();
+    expect(stopAgent).not.toHaveBeenCalled();
+    expect(store.get('wtask-abc-12345678')).toMatchObject({ state: 'resumed', at: RESUMED_AT });
+    expect(usage.turns).toEqual([NOW - HOUR_MS]);
+    expect(costUsdDay(usage, NOW)).toBe(0.5);
+    expect(usage.workers).toHaveLength(1);
+    expect(workerHoursDay(usage, NOW)).toBe(3);
   });
 
   it('never evicts a resumed worker to stay under the record cap', async () => {
