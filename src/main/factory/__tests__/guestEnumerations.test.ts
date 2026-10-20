@@ -56,6 +56,7 @@ const BOT_LIST_CALLERS: Record<string, Why> = {
   'src/main/factory/botStore.ts#enabledBotsIncludingGuest': { kind: 'including-guest', why: 'the helper itself' },
   'src/main/factory/botWorkflowModule.ts#registerWorkflowRpc': { kind: 'not-bots', why: 'the workflow store, by the bot and its workspace' },
   'src/main/factory/factoryWiring.ts#factoryPhoneMessage': { kind: 'including-guest', why: 'the owner\'s phone message; postHumanMessage holds the boundary' },
+  'src/main/factory/factoryWiring.ts#handBackWorkerRuns': { kind: 'not-bots', why: 'bot ids for each bot\'s own worker-time runs, no profile read' },
   'src/main/factory/factoryWiring.ts#refreshLogin': { kind: 'closed', why: 'a repository checkout for the gh login' },
   'src/main/factory/factoryWiring.ts#start': { kind: 'not-bots', why: 'bot ids for the room file store\'s sweep, no profile read' },
   'src/main/factory/gardener.ts#Gardener.maintainerFor': { kind: 'guest-skip', why: 'skips guest workspaces\' maintainers and proposal workspaces' },

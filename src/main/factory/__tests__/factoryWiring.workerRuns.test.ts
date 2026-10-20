@@ -20,4 +20,20 @@ describe('the wiring and the bots\' worker runs', () => {
     createFactoryWiring({ wmuxDir: () => '/nonexistent' });
     expect(workerStopsConfirmed()).toBe(false);
   });
+
+  it('a start that fails before the lifecycle host is on its way hands the runs back to row ends', () => {
+    let failing = false;
+    const wiring = createFactoryWiring({
+      wmuxDir: () => {
+        if (failing) throw new Error('no data folder');
+        return '/nonexistent';
+      },
+      getDaemonClient: () => null,
+    });
+    expect(workerStopsConfirmed()).toBe(true);
+    failing = true;
+    expect(() => wiring.start?.()).toThrow('no data folder');
+    expect(workerStopsConfirmed()).toBe(false);
+    wiring.dispose?.();
+  });
 });
