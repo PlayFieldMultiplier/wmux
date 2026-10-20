@@ -20,7 +20,7 @@ import { buildRemoteEntries, paneNamesByPty, serverReach, type RemoteEntry, type
 import { selectRemoteInbox } from '../../stores/selectors/remoteInbox';
 import { heldNeedsPerson, heldReason, selectRemoteNeedsYou } from '../../stores/slices/a2aRemoteSlice';
 import { refreshA2aRemote } from '../../hooks/useA2aRemoteBridge';
-import { buildPaneSnapshot, moaBrainEnd } from '../../hooks/useA2aRemoteSnapshot';
+import { buildPaneSnapshot } from '../../hooks/useA2aRemoteSnapshot';
 import { A2aLinkRequestRow, A2aLinkRow, type LocalNames } from './A2aLinksPanel';
 import { A2aHeldRow, A2aIdentityRow, heldPeer } from './A2aDeliveryPanel';
 import A2aLinkDialog from './A2aLinkDialog';
@@ -117,7 +117,7 @@ export default function RemotePage() {
   const [addSsh, setAddSsh] = useState(false);
   const [checkSsh, setCheckSsh] = useState<{ id: string; label: string } | null>(null);
   const [sshStates, setSshStates] = useState<Record<string, SshTunnelState>>({});
-  const [linkDialog, setLinkDialog] = useState<{ hostId: string; moa?: boolean } | null>(null);
+  const [linkDialog, setLinkDialog] = useState<{ hostId: string } | null>(null);
   const [exposure, setExposure] = useState<{ hostId: string; name: string } | null>(null);
   const [confirming, setConfirming] = useState<Confirm>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -168,8 +168,6 @@ export default function RemotePage() {
   const workspaces = useStore((s) => s.workspaces);
   const paneLabel = useStore((s) => s.paneLabel);
   const surfaceAgent = useStore((s) => s.surfaceAgent);
-  const moa = useStore((s) => s.moa);
-  const brain = useMemo(() => moaBrainEnd({ workspaces, surfaceAgent, moa }), [workspaces, surfaceAgent, moa]);
   const names: LocalNames = useMemo(() => ({ workspaces, paneLabel, surfaceAgent }), [workspaces, paneLabel, surfaceAgent]);
 
   const remoteWorkspaces = useStore(useShallow((s) => s.remoteWorkspaces));
@@ -443,7 +441,6 @@ export default function RemotePage() {
     ].filter(Boolean).join(' · ');
     const menu: RemoteRowMenuItem[] = [
       ...(pc.joined ? [{ id: 'link', label: t('remotePage.menu.linkPanes'), onSelect: () => setLinkDialog({ hostId: pc.hostId }) }] : []),
-      ...(pc.joined && brain ? [{ id: 'moa', label: t('remotePage.menu.linkMoa'), onSelect: () => setLinkDialog({ hostId: pc.hostId, moa: true }) }] : []),
       ...(pc.peerId ? [{ id: 'exposure', label: t('remotePage.menu.exposure'), onSelect: () => setExposure({ hostId: pc.hostId, name: pc.name }) }] : []),
       { id: 'remove', label: t('remotePage.remove'), danger: true, onSelect: () => setConfirming({ kind: 'pc', id: pc.hostId }) },
     ];
@@ -813,7 +810,6 @@ export default function RemotePage() {
       {linkDialog && (
         <A2aLinkDialog
           initialHostId={linkDialog.hostId}
-          {...(linkDialog.moa && brain ? { local: { kind: 'brain' as const, workspaceId: brain.workspaceId } } : {})}
           onClose={() => { setLinkDialog(null); void refresh(); }}
         />
       )}

@@ -51,10 +51,16 @@ describe('A2aExposureChecklistView Moa row', () => {
     expect((on.match(/aria-checked="true"/g) ?? []).length).toBe(1);
   });
 
-  it('is disabled while this PC has no Moa', () => {
+  it('is hidden while this PC has no Moa and none is shown', () => {
     const html = render({ moaAvailable: false });
+    expect(html).not.toContain('a2a-exposure-moa');
+    expect(html).not.toContain('settings.a2aExposureMoa');
+  });
+
+  it('stays, so it can be unticked, for an exposure an earlier version saved', () => {
+    const html = render({ moaAvailable: false, exposure: { workspaceIds: [], paneIds: {}, brain: true } });
     expect(html).toContain('settings.a2aExposureMoaOff');
-    expect(html).toMatch(/data-testid="a2a-exposure-moa"[\s\S]*?disabled=""/);
+    expect(html).not.toMatch(/data-testid="a2a-exposure-moa"[\s\S]*?disabled=""/);
   });
 });
 

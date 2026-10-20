@@ -349,7 +349,7 @@ const DEFAULT_NAMES: Readonly<Record<BotRole, string>> = {
   triage: 'Triage',
   verifier: 'Verifier',
   maintainer: 'Maintainer',
-  moa: 'Moa',
+  moa: 'Coordinator',
 };
 
 /** The default name of a bot created from a template and no name. */
