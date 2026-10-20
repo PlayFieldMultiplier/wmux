@@ -11,7 +11,7 @@ import { attachFlashFrameAutoClear } from './flashFrame';
 import { windowDisplayedReporter } from './windowDisplayed';
 import { initialWindowsAppearance, initialWindowsGlass, markWindowGlass, windowsGlassSupported, winWindowOptions } from './windowGlass';
 import { revealWhenPainted } from './revealWhenPainted';
-import { startPolarity, startPolarityArg } from '../../shared/windowStartPaint';
+import { WINDOW_START_COLORS, startPolarity, startPolarityArg } from '../../shared/windowStartPaint';
 import {
   DEFAULT_WINDOW_SIZE,
   MIN_WINDOW_SIZE,
@@ -266,9 +266,9 @@ export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown;
         backgroundColor: '#00000000',
       },
       default: {
-        // Matches the Tint (default) theme's bgBase so the first paint
-        // doesn't flash a foreign color behind the renderer.
-        backgroundColor: '#1A171D',
+        // The saved polarity's start colour, the one the page paints before
+        // its theme is set, so a light theme does not start dark (#2512).
+        backgroundColor: WINDOW_START_COLORS[polarity].background,
       },
     }),
     webPreferences: {

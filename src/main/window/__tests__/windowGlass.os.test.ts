@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import {
   applyAppearance,
+  applyTitleBarColors,
   applyWindowsGlass,
   initialWindowsAppearance,
   initialWindowsGlass,
@@ -126,13 +127,12 @@ describe('applyWindowsGlass', () => {
     expect(isWindowGlassOn(bw)).toBe(true);
   });
 
-  it('turns glass off: the construction background and the frame colour the renderer paints on the strip', () => {
-    // The background is never repainted on a theme change, so it takes the
-    // fixed construction colour rather than a theme's, which would go stale.
+  it('turns glass off: the frame colour the renderer paints, on the background and the strip', () => {
+    // The theme sync keeps the background current from here (applyTitleBarColors).
     const { win, bw, calls } = fakeWindow();
     markWindowGlass(bw, true);
     expect(applyWindowsGlass(bw, 'off', { color: '#f4f3f1', symbolColor: '#6d6775' })).toBe(true);
-    expect(calls).toEqual(['material:none', `background:${WIN_OPAQUE_BACKGROUND}`, 'overlay:#f4f3f1']);
+    expect(calls).toEqual(['material:none', 'background:#f4f3f1', 'overlay:#f4f3f1']);
     expect(win.setTitleBarOverlay).toHaveBeenCalledWith({ color: '#f4f3f1', symbolColor: '#6d6775', height: 40 });
     expect(isWindowGlassOn(bw)).toBe(false);
   });
@@ -164,6 +164,26 @@ describe('applyWindowsGlass', () => {
     expect(applyWindowsGlass(bw, 'off')).toBe(false);
     expect(applyWindowsGlass(bw, 'clear')).toBe(true);
     expect(calls[0]).toBe('material:acrylic');
+  });
+});
+
+describe('applyTitleBarColors', () => {
+  it('repaints an opaque window\'s background and strip in the theme\'s frame colour (#2512)', () => {
+    // Built in the dark start colour, then the theme turns light: the
+    // background must follow, or it shows dark wherever the page has not painted.
+    const { win, bw, calls } = fakeWindow(1.25);
+    markWindowGlass(bw, false);
+    applyTitleBarColors(bw, { color: '#ececef', symbolColor: '#3f3f48' });
+    expect(calls).toEqual(['background:#ececef', 'overlay:#ececef']);
+    expect(win.setTitleBarOverlay).toHaveBeenCalledWith({ color: '#ececef', symbolColor: '#3f3f48', height: 50 });
+  });
+
+  it('leaves a glass window\'s background transparent and its strip transparent', () => {
+    const { win, bw } = fakeWindow();
+    markWindowGlass(bw, true);
+    applyTitleBarColors(bw, { color: '#ececef', symbolColor: '#3f3f48' });
+    expect(win.setBackgroundColor).not.toHaveBeenCalled();
+    expect(win.setTitleBarOverlay).toHaveBeenCalledWith({ color: TRANSPARENT, symbolColor: '#3f3f48', height: 40 });
   });
 });
 

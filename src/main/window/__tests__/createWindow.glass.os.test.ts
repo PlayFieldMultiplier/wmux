@@ -136,11 +136,16 @@ describe('createWindow window glass options', () => {
     expect(opts.titleBarOverlay).toBeUndefined();
   });
 
-  it('Linux stays opaque', async () => {
+  it('Linux stays opaque, in the dark start colour by default', async () => {
     const { opts } = await optionsFor('linux', '6.8.0', 'soft');
-    expect(opts.backgroundColor).toBe('#1A171D');
+    expect(opts.backgroundColor).toBe('#121015');
     expect(opts.backgroundMaterial).toBeUndefined();
     expect(opts.vibrancy).toBeUndefined();
+  });
+
+  it('Linux with a light theme saved starts in the light start colour (#2512)', async () => {
+    const { opts } = await optionsFor('linux', '6.8.0', 'soft', 'light');
+    expect(opts.backgroundColor).toBe('#ECECEF');
   });
 });
 

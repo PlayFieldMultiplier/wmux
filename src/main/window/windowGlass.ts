@@ -105,13 +105,11 @@ type GlassWindow = Pick<
 
 /**
  * Switch a live window's glass for a new level: material, background colour
- * and overlay colour together. With glass off the background goes back to
- * the construction colour, the same one an opaque window is built with: it
- * is never repainted on a theme change, so a theme's colour would go stale.
- * The overlay takes `colors`, the renderer's solid pair (the frame colour it
- * paints with glass off), which the theme sync keeps current; without it the
- * construction pair. Returns false when the window already had this state
- * and nothing was called.
+ * and overlay colour together. With glass off the background and the overlay
+ * take `colors`, the renderer's solid pair (the frame colour it paints with
+ * glass off), which the theme sync keeps current (applyTitleBarColors);
+ * without it the construction pair. Returns false when the window already had
+ * this state and nothing was called.
  */
 export function applyWindowsGlass(
   win: BrowserWindow,
@@ -122,14 +120,34 @@ export function applyWindowsGlass(
   if (isWindowGlassOn(win) === on) return false;
   const w: GlassWindow = win;
   w.setBackgroundMaterial(on ? 'acrylic' : 'none');
-  w.setBackgroundColor(on ? TRANSPARENT : WIN_OPAQUE_BACKGROUND);
+  const solid = colors?.color ?? WIN_OPAQUE_BACKGROUND;
+  w.setBackgroundColor(on ? TRANSPARENT : solid);
   w.setTitleBarOverlay({
-    color: on ? TRANSPARENT : (colors?.color ?? WIN_OPAQUE_BACKGROUND),
+    color: on ? TRANSPARENT : solid,
     symbolColor: colors?.symbolColor ?? WIN_OVERLAY_SYMBOL,
     height: winOverlayHeight(w.webContents.getZoomFactor()),
   });
   glassOn.set(win, on);
   return true;
+}
+
+/**
+ * The theme sync's native calls (WINDOW_SET_TITLEBAR_OVERLAY): the overlay
+ * strip in the frame colour the renderer paints, transparent while the window
+ * shows glass. An opaque window's background takes that colour too. It shows
+ * wherever the page has not painted (a window being enlarged, a renderer
+ * restarting after a crash), so left at its start colour it would show the
+ * polarity the window was built in after the theme changed (#2512).
+ */
+export function applyTitleBarColors(win: BrowserWindow, colors: { color: string; symbolColor: string }): void {
+  const w: GlassWindow = win;
+  const glass = isWindowGlassOn(win);
+  if (!glass) w.setBackgroundColor(colors.color);
+  w.setTitleBarOverlay({
+    color: glass ? TRANSPARENT : colors.color,
+    symbolColor: colors.symbolColor,
+    height: winOverlayHeight(w.webContents.getZoomFactor()),
+  });
 }
 
 /**

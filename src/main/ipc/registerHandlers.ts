@@ -59,9 +59,10 @@ import { registerApprovalIpcHandlers } from './handlers/approval.handler';
 import { registerPlanApprovalHandlers } from './handlers/planApproval.handler';
 import { createRpcInvokeHandler } from './rpcInvoke';
 import { createFlashFrameHandler } from '../window/flashFrame';
-import { applyUiZoom, winOverlayHeight } from '../window/uiZoom';
+import { applyUiZoom } from '../window/uiZoom';
 import {
   applyAppearance,
+  applyTitleBarColors,
   applyWindowsGlass,
   overlayColorFor,
   parseGlassRequest,
@@ -413,12 +414,9 @@ export function registerAllHandlers(
       // overlay height out from under it, so read the current factor. Zoom
       // defaults to 1, so with no UI scale applied this is still 36.
       // While the window shows glass the strip is transparent, or it would
-      // sit as a solid band across the acrylic (windowGlass.ts).
-      win.setTitleBarOverlay({
-        color: overlayColorFor(win, color),
-        symbolColor,
-        height: winOverlayHeight(win.webContents.getZoomFactor()),
-      });
+      // sit as a solid band across the acrylic; an opaque window's background
+      // follows the frame colour too (windowGlass.ts).
+      applyTitleBarColors(win, { color, symbolColor });
     } catch {
       // Window created without titleBarOverlay (e.g. future flag/rollback) —
       // restyling is cosmetic, never let it crash main.
