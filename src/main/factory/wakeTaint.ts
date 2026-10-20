@@ -589,6 +589,15 @@ export function factVisibleToBot(botId: string): (f: Fact) => boolean {
   };
 }
 
+/** The guest provenance RpcRouter's gate reads for a bot call: the running
+ *  wake's; without a tracker, unknown where one is expected (its module not
+ *  started, or failed) and clean where none is (a router built without the
+ *  factory, as in tests). */
+export function guestGateProvenance(botId: string): GuestProvenance {
+  if (!current) return trackerExpected ? 'unknown' : false;
+  return guestOfRunningWake(botId);
+}
+
 /** Why work wake `wakeId` asks for may not start or be saved, or null: the
  *  wake is guest-sourced, or its provenance is not known. */
 export function guestTurnRefusal(wakeId: string): string | null {
