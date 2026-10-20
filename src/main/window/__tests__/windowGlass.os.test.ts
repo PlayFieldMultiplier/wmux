@@ -80,16 +80,26 @@ describe('initialWindowsAppearance', () => {
 });
 
 describe('winWindowOptions', () => {
-  it('is today\'s opaque window with glass off', () => {
+  it('is an opaque window in the default dark frame colour with glass off, built hidden (#2512)', () => {
     expect(winWindowOptions(false)).toEqual({
       titleBarStyle: 'hidden',
       titleBarOverlay: { color: '#121015', symbolColor: '#C2BDC9', height: 40 },
       backgroundColor: '#121015',
+      show: false,
     });
   });
 
-  it('is acrylic behind a transparent background and a transparent overlay with glass on', () => {
-    expect(winWindowOptions(true)).toEqual({
+  it('starts an opaque window for a light theme in the light frame colour, caption buttons included', () => {
+    expect(winWindowOptions(false, 'light')).toEqual({
+      titleBarStyle: 'hidden',
+      titleBarOverlay: { color: '#ECECEF', symbolColor: '#3F3F48', height: 40 },
+      backgroundColor: '#ECECEF',
+      show: false,
+    });
+  });
+
+  it.each(['dark', 'light'] as const)('is acrylic behind a transparent background and a transparent overlay with glass on (%s), shown at once', (polarity) => {
+    expect(winWindowOptions(true, polarity)).toEqual({
       titleBarStyle: 'hidden',
       titleBarOverlay: { color: '#00000000', symbolColor: '#C2BDC9', height: 40 },
       backgroundColor: '#00000000',

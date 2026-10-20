@@ -10,6 +10,8 @@ import { PREVIEW_PROTOCOL_SCHEME } from '../../shared/filePreview';
 import { attachFlashFrameAutoClear } from './flashFrame';
 import { windowDisplayedReporter } from './windowDisplayed';
 import { initialWindowsAppearance, initialWindowsGlass, markWindowGlass, windowsGlassSupported, winWindowOptions } from './windowGlass';
+import { revealWhenPainted } from './revealWhenPainted';
+import { startPolarity, startPolarityArg } from '../../shared/windowStartPaint';
 import {
   DEFAULT_WINDOW_SIZE,
   MIN_WINDOW_SIZE,
@@ -191,6 +193,9 @@ export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown;
   // exists, not when the renderer loads, so the first frames match the theme.
   const bootAppearance = process.platform === 'win32' ? initialWindowsAppearance(winGlass, opts.windowAppearance) : null;
   if (bootAppearance) nativeTheme.themeSource = bootAppearance;
+  // The saved theme's polarity, for what the window paints before the
+  // renderer applies the theme (shared/windowStartPaint.ts).
+  const polarity = startPolarity(opts.windowAppearance);
   // #1362 — restore the placement the user left the window in. Off-screen or
   // corrupt saved state yields an empty plan and the 1280x800 default.
   let plan: RestorePlan = { maximized: false, fullScreen: false };
@@ -243,7 +248,7 @@ export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown;
       // different shade before the renderer paints. With glass the strip, the
       // background and the material are the acrylic set instead
       // (winWindowOptions in windowGlass.ts).
-      win: winWindowOptions(winGlass),
+      win: winWindowOptions(winGlass, polarity),
       mac: {
         titleBarStyle: 'hidden',
         // Centered in the 40px bar: macTrafficLightPosition(1) in uiZoom.ts.
@@ -271,14 +276,21 @@ export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown;
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
+      // The preload paints the page in this polarity until the theme is set.
+      additionalArguments: [startPolarityArg(polarity)],
     },
   });
 
   // Fullscreen is requested through the constructor (above) — calling
   // setFullScreen() on a window that has not been shown yet is unreliable
-  // across platforms. Maximize has no constructor option and is safe here.
-  if (!plan.fullScreen && plan.maximized) {
-    mainWindow.maximize();
+  // across platforms. Maximize has no constructor option. It also shows a
+  // hidden window, so a window built hidden (the opaque Windows one) is
+  // maximized when it is revealed instead.
+  const maximize = !plan.fullScreen && plan.maximized;
+  if (mainWindow.isVisible()) {
+    if (maximize) mainWindow.maximize();
+  } else {
+    revealWhenPainted(mainWindow, { maximize });
   }
   if (process.platform === 'win32') markWindowGlass(mainWindow, winGlass);
   attachWindowStatePersistence(mainWindow);

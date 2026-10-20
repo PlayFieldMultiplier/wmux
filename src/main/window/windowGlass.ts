@@ -1,5 +1,6 @@
 import type { BrowserWindow, BrowserWindowConstructorOptions } from 'electron';
 import { parseWindowsBuildNumber } from '../../shared/platform';
+import { WINDOW_START_COLORS, type StartPolarity } from '../../shared/windowStartPaint';
 import {
   WINDOW_GLASS_LEVELS,
   isWindowGlassSupported,
@@ -29,9 +30,9 @@ import { winOverlayHeight } from './uiZoom';
  */
 
 /** The opaque window's background and overlay colour: the default (Tint) theme's frame. */
-export const WIN_OPAQUE_BACKGROUND = '#121015';
+export const WIN_OPAQUE_BACKGROUND = WINDOW_START_COLORS.dark.background;
 /** The overlay's caption-button colour before the renderer sends the theme's. */
-export const WIN_OVERLAY_SYMBOL = '#C2BDC9';
+export const WIN_OVERLAY_SYMBOL = WINDOW_START_COLORS.dark.symbol;
 export const TRANSPARENT = '#00000000';
 
 /** Whether this Windows machine can show glass, from `os.release()`. False off Windows. */
@@ -61,14 +62,22 @@ export function initialWindowsAppearance(glass: boolean, persisted: unknown): 'd
 }
 
 /**
- * The win32 window options. With glass off they are exactly the opaque
- * window wmux has always opened: a solid overlay strip and a solid background
- * in the default theme's frame colour, so the first paint never flashes.
+ * The win32 window options. With glass off the window is opaque: a solid
+ * overlay strip and a solid background in the frame colour of the saved
+ * polarity's default theme (shared/windowStartPaint.ts), so a light theme does
+ * not start dark. It is also built hidden: Windows draws a window shown before
+ * Chromium's first frame in the system's blank colour (#F3F3F3 on a light
+ * system), which `backgroundColor` cannot cover, so createWindow shows it once
+ * it has painted (#2512). With glass on the acrylic material covers those
+ * frames, and the window is shown at once as before.
  */
-export function winWindowOptions(glass: boolean): Partial<BrowserWindowConstructorOptions> {
+export function winWindowOptions(glass: boolean, polarity: StartPolarity = 'dark'): Partial<BrowserWindowConstructorOptions> {
   // Height 40 = uiZoom's CHROME_H at zoom 1 (the scaled resync uses it).
-  const titleBarOverlay = { color: glass ? TRANSPARENT : WIN_OPAQUE_BACKGROUND, symbolColor: WIN_OVERLAY_SYMBOL, height: 40 };
-  if (!glass) return { titleBarStyle: 'hidden', titleBarOverlay, backgroundColor: WIN_OPAQUE_BACKGROUND };
+  if (!glass) {
+    const { background, symbol } = WINDOW_START_COLORS[polarity];
+    return { titleBarStyle: 'hidden', titleBarOverlay: { color: background, symbolColor: symbol, height: 40 }, backgroundColor: background, show: false };
+  }
+  const titleBarOverlay = { color: TRANSPARENT, symbolColor: WIN_OVERLAY_SYMBOL, height: 40 };
   return { titleBarStyle: 'hidden', titleBarOverlay, backgroundColor: TRANSPARENT, backgroundMaterial: 'acrylic' };
 }
 

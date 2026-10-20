@@ -9,7 +9,8 @@ import type { TerminalCoreSettings, TerminalEngine } from '../shared/terminalCor
 import { CHAT_IPC } from '../shared/transcript/chatIpc';
 import type { ChatBridgeApi } from '../shared/transcript/turnEvents';
 import { CHATV2_IPC, type ChatV2BridgeApi, type ChatV2EventsPush, type ChatV2ResyncPush } from '../shared/chatv2/ipc';
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
+import { startPaintCss, startPolarityFromArgv } from '../shared/windowStartPaint';
 import { IPC } from '../shared/constants';
 import { ROOM_EVENT } from '../shared/room';
 import { BOT_EVENT } from '../shared/bot';
@@ -216,6 +217,12 @@ const chatv2: ChatV2BridgeApi = {
   },
 };
 
+// The page's first paint comes before any script, from the stylesheet's dark
+// `:root` block; main passes the saved theme's polarity so that paint is the
+// window's start colour instead, and a light theme does not start dark (#2512).
+const startPolarity = startPolarityFromArgv(process.argv);
+if (startPolarity) void webFrame.insertCSS(startPaintCss(startPolarity));
+
 const electronAPI = {
   chat,
   chatv2,
@@ -223,6 +230,9 @@ const electronAPI = {
   // directly under sandbox + contextIsolation, so expose it here.
   // 'win32' | 'darwin' | 'linux' | 'aix' | 'freebsd' | 'openbsd' | 'sunos' | 'cygwin' | 'netbsd'
   platform: process.platform as NodeJS.Platform,
+  // The saved theme's polarity main started the window in, or null: index.tsx
+  // shows that polarity's default theme until the session's loads (#2512).
+  startPolarity,
   // The Windows build number (eg. 19045), or null off Windows / when it cannot
   // be read. xterm needs this SYNCHRONOUSLY at Terminal construction to pick
   // its ConPTY behaviour, so it is a static value here rather than an IPC call.
