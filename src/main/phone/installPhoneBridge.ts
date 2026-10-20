@@ -6,6 +6,7 @@ import { FLEET_TICKET_DETAIL_COMMAND } from '../../shared/phoneFleetTickets';
 import { PHONE_ROOM_ATTACHMENT_COMMAND, PHONE_ROOM_CARDS_COMMAND, PHONE_ROOM_THREADS_COMMAND } from '../../shared/phoneRooms';
 import { PHONE_BOTS_COMMAND } from '../../shared/phoneBots';
 import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND } from '../../shared/phoneBotApprovals';
+import { PHONE_WORKER_RESUME_COMMAND } from '../../shared/phoneWorkerResume';
 
 export function installPhoneBridge(client: DaemonClient, handle: (command: string, payload: Record<string,unknown>) => Promise<unknown>): () => void {
   let active = true;
@@ -32,6 +33,6 @@ export function installPhoneBridge(client: DaemonClient, handle: (command: strin
   client.on('event',listener);
   // Announce the optional commands this desktop handles; a daemon that predates
   // the announcement ignores the params.
-  void client.rpc('daemon.phone.register',{commands:[DESKTOP_ACCOUNT_ENV_COMMAND,MOA_WAKE_COMMAND,FACTORY_PHONE_MESSAGE_CAPABILITY,FLEET_TICKET_DETAIL_COMMAND,PHONE_ROOM_THREADS_COMMAND,PHONE_ROOM_CARDS_COMMAND,PHONE_BOT_APPROVAL_COMMAND,PHONE_BOT_APPROVAL_DECIDE_COMMAND,PHONE_BOTS_COMMAND,FACTORY_THREAD_MESSAGE_CAPABILITY,FACTORY_THREAD_ATTACHMENTS_CAPABILITY,PHONE_ROOM_ATTACHMENT_COMMAND]}).catch(() => { /* Older daemon: no capability. */ });
+  void client.rpc('daemon.phone.register',{commands:[DESKTOP_ACCOUNT_ENV_COMMAND,MOA_WAKE_COMMAND,FACTORY_PHONE_MESSAGE_CAPABILITY,FLEET_TICKET_DETAIL_COMMAND,PHONE_ROOM_THREADS_COMMAND,PHONE_ROOM_CARDS_COMMAND,PHONE_BOT_APPROVAL_COMMAND,PHONE_BOT_APPROVAL_DECIDE_COMMAND,PHONE_BOTS_COMMAND,FACTORY_THREAD_MESSAGE_CAPABILITY,FACTORY_THREAD_ATTACHMENTS_CAPABILITY,PHONE_ROOM_ATTACHMENT_COMMAND,PHONE_WORKER_RESUME_COMMAND]}).catch(() => { /* Older daemon: no capability. */ });
   return () => { active = false; client.off('event',listener); };
 }

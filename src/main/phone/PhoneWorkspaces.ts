@@ -14,6 +14,7 @@ import {
 import { getPhoneFleetTicketStore } from './PhoneFleetTicketStore';
 import { handlePhoneBotsCommand, handlePhoneRoomCommand, withPhoneFactory } from './PhoneFactory';
 import { handlePhoneBotApprovalCommand } from './PhoneBotApprovals';
+import { handlePhoneWorkerResumeCommand } from './PhoneWorkerResume';
 
 /** How long the list waits for the optional sidebar projection. */
 const PHONE_SIDEBAR_RENDERER_TIMEOUT_MS = 1500;
@@ -92,6 +93,9 @@ export async function handlePhoneWorkspaces(command: string, payload: Record<str
   // A bot's approval request: read or decided by the phone's operator.
   const approval = handlePhoneBotApprovalCommand(command, payload);
   if (approval) return approval;
+  // A stopped worker's Resume by the phone's operator.
+  const resumed = await handlePhoneWorkerResumeCommand(command, payload);
+  if (resumed) return resumed;
   if (command === 'workspaces.list') {
     // The sidebar projection rides along, fetched in parallel and optional: a
     // failure or a slow renderer omits it and the list answers as before.

@@ -19,7 +19,7 @@ import { APPROVAL_ID_RE } from './botApproval';
 import { isBotSecretName } from './botSecret';
 import { parseThreadId, ROOM_LIMITS, type CardKind, type RoomCard, type ThreadId, type ThreadStatus, type ThreadSummary } from './room';
 import { PHONE_BOT_ROLES, clampSidebarString, type PhoneBotRole } from './phoneFleetSidebar';
-import { PHONE_NOTICE_ARG_MAX, PHONE_ROOM_NOTICE_CODES } from './phoneRoomNotices';
+import { PHONE_NOTICE_ARG_MAX, PHONE_ROOM_NOTICE_CODES, RESUMABLE_NOTICE_CODES } from './phoneRoomNotices';
 import { parseRoomAttachments, type RoomAttachment } from './roomAttachments';
 
 /** Bridge commands; `workspaces.` routes them through main's PhoneWorkspaces. */
@@ -126,6 +126,10 @@ export interface PhoneRoomCard {
   /** An `approval` card only: the act its request asks for (`merge`,
    *  `comment`, …, `skill`; any later name passes). */
   approvalAction?: string;
+  /** A system card saying a stopped worker can resume (its notice code is
+   *  one of RESUMABLE_NOTICE_CODES), whose task's worker can resume now:
+   *  `POST /api/bot-tasks/:refs.taskId/resume` (shared/phoneWorkerResume.ts). */
+  resumable?: true;
   /** An owner (`human`) card only: the photos sent with it, drawn from
    *  `GET /api/rooms/:workspaceId/attachments/:id`. */
   attachments?: PhoneRoomAttachment[];
@@ -300,6 +304,7 @@ export function parsePhoneRoomCard(value: unknown): PhoneRoomCard | null {
   const notice = actor.kind === 'system' ? parsePhoneRoomNotice(value.notice) : undefined;
   const approvalAction = kind === 'approval' && typeof value.approvalAction === 'string' && APPROVAL_ACTION_RE.test(value.approvalAction) ? value.approvalAction : undefined;
   const attachments = kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(value.attachments, { keepUpload: false }) : undefined;
+  const resumable = value.resumable === true && !!notice && RESUMABLE_NOTICE_CODES.has(notice.code) && !!refs?.taskId;
   return {
     id, seq, threadId, kind, at, actor, title,
     ...(text !== undefined ? { body: text } : {}),
@@ -311,6 +316,7 @@ export function parsePhoneRoomCard(value: unknown): PhoneRoomCard | null {
     ...(clientMessageId ? { clientMessageId } : {}),
     ...(notice ? { notice } : {}),
     ...(approvalAction ? { approvalAction } : {}),
+    ...(resumable ? { resumable: true as const } : {}),
     ...(attachments ? { attachments } : {}),
   };
 }
@@ -386,6 +392,8 @@ export function phoneRoomCard(
   card: RoomCard,
   bot: (botId: string) => { role: PhoneBotRole; name: string } | null,
   approvalAction?: (approvalId: string) => string | null,
+  /** Whether a task's stopped worker can resume now. */
+  workerResumable?: (taskId: string) => boolean,
 ): PhoneRoomCard | null {
   const actor = card.actor.kind === 'bot'
     ? (() => {
@@ -399,7 +407,9 @@ export function phoneRoomCard(
   const sent = clientPostId ? PHONE_POST_ID.exec(clientPostId)?.[1] : undefined;
   const approvalId = card.kind === 'approval' ? card.refs?.approvalId : undefined;
   const action = approvalId && approvalAction ? approvalAction(approvalId) : null;
-  return parsePhoneRoomCard({ ...rest, actor, ...(sent ? { clientMessageId: sent } : {}), ...(action ? { approvalAction: action } : {}) });
+  const taskId = card.actor.kind === 'system' && card.notice && RESUMABLE_NOTICE_CODES.has(card.notice.code) ? card.refs?.taskId : undefined;
+  const resumable = !!taskId && workerResumable?.(taskId) === true;
+  return parsePhoneRoomCard({ ...rest, actor, ...(sent ? { clientMessageId: sent } : {}), ...(action ? { approvalAction: action } : {}), ...(resumable ? { resumable: true } : {}) });
 }
 
 const encoder = new TextEncoder();

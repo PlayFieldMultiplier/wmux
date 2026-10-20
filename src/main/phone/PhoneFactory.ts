@@ -66,6 +66,7 @@ import { phoneBot } from '../factory/phoneBot';
 import { getGroupStore } from '../factory/groupStore';
 import { getApprovalService } from '../factory/approvals';
 import { botTaskViews, getBotTaskSources } from '../factory/botTasks';
+import { getWorkerResumePorts, reclaimedWorkerState } from '../factory/workerReclaim';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 
 /** The room reads this file needs (RoomWriter). */
@@ -94,6 +95,9 @@ export interface PhoneFactoryPorts {
   /** An approval request's action (`approval` cards' `approvalAction`), or
    *  null when it is not known. Absent: none is served. */
   approvalAction?(approvalId: string): string | null;
+  /** Whether a task's stopped worker can resume now (resumable worker
+   *  cards' `resumable`). Absent: none is served. */
+  workerResumable?(taskId: string): boolean;
 }
 
 function roomFile(workspaceId: string): string {
@@ -118,6 +122,7 @@ export function defaultPhoneFactoryPorts(): PhoneFactoryPorts {
     },
     now: () => Date.now(),
     approvalAction: (approvalId) => getApprovalService()?.get(approvalId)?.action ?? null,
+    workerResumable: (taskId) => reclaimedWorkerState(getWorkerResumePorts()?.store.get(taskId) ?? null) === 'resumable',
   };
 }
 
@@ -288,9 +293,16 @@ export function handlePhoneRoomCommand(command: string, payload: Record<string, 
       return null;
     }
   };
+  const resumable = (taskId: string): boolean => {
+    try {
+      return ports.workerResumable?.(taskId) === true;
+    } catch {
+      return false;
+    }
+  };
   const cards: PhoneRoomCard[] = [];
   for (const card of page.cards) {
-    const projected = phoneRoomCard(card, info, action);
+    const projected = phoneRoomCard(card, info, action, resumable);
     if (projected) cards.push(projected);
   }
   return fitPhoneRoomPage({ workspaceId, threadId, cards, nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore }, sinceSeq !== undefined);

@@ -70,6 +70,7 @@ import { createFilePersister, readVersionedFile, type FilePersister } from './ve
 import { STOPPED_BY_OWNER } from './factoryStop';
 import { fanoutTaskShortId } from '../../shared/fanoutCallerNudge';
 import type { WorkerSlots } from './workerSlots';
+import { getAgentSlots, type AgentSlots } from './agentSlots';
 import type { BotNoticeInput } from './botNotices';
 
 export const RECLAIMED_WORKERS_FILENAME = 'reclaimed-workers.json';
@@ -1626,6 +1627,42 @@ export async function resumeWorker(
     unbook();
     release?.();
     resuming.delete(taskId);
+  }
+}
+
+/** The owner's resume of a stopped worker: the desktop's Resume button
+ *  (FACTORY_WORKER_RESUME) and the phone's (main/phone/PhoneWorkerResume.ts)
+ *  both run this once they admitted the caller and checked the task id. A
+ *  resumed worker holds an agent slot like a bot's resume does
+ *  (agentSlots.ts), so it starts only with a slot free now; otherwise it is
+ *  refused with the cap, and nothing starts. A worker resumed already says so
+ *  without taking a slot. */
+export async function ownerResumeWorker(
+  taskId: string,
+  ports: () => WorkerResumePorts | null = getWorkerResumePorts,
+  slots: () => AgentSlots | null = getAgentSlots,
+): Promise<WorkerResumeResult> {
+  const p = ports();
+  if (!p) return refuse('not_started', 'The factory is not running.');
+  if (p.store.get(taskId)?.state === 'resumed') return resumeWorker(p, taskId, { kind: 'owner' });
+  // A resume of this task under way answers busy before a slot is asked
+  // for: a second request never reads as "no free slot".
+  if (resuming.has(taskId)) return refuse('busy', 'this worker is being resumed already');
+  const s = slots();
+  const botId = p.store.get(taskId)?.botId;
+  const slot = s ? s.tryAcquire({ taskId, ...(botId ? { botId } : {}), byOwner: true }) : null;
+  if (s && !slot) {
+    const cap = s.limit();
+    return { ok: false, code: 'no_slot', cap, message: `No free agent slot (the limit is ${cap}). Stop an idle worker, or raise the limit in Settings › Bots.` };
+  }
+  // The slot hands over to the resumed-worker count once the line is typed.
+  const release = (): void => {
+    if (slot?.ok) slot.release();
+  };
+  try {
+    return await resumeWorker(p, taskId, { kind: 'owner' }, undefined, release);
+  } finally {
+    release();
   }
 }
 

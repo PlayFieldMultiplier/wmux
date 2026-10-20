@@ -10,6 +10,8 @@ import { DesktopPhoneBridge } from '../../phone/DesktopPhoneBridge';
 import { RoomWriter } from '../../../main/factory/roomWriter';
 import { handlePhoneRoomCommand, withPhoneFactory, type PhoneFactoryPorts } from '../../../main/phone/PhoneFactory';
 import { handlePhoneBotApprovalCommand } from '../../../main/phone/PhoneBotApprovals';
+import { clearPhoneWorkerResumeReceipts, handlePhoneWorkerResumeCommand } from '../../../main/phone/PhoneWorkerResume';
+import type { WorkerResumeResult } from '../../../main/factory/workerReclaim';
 import { parsePhoneSidebarSnapshot } from '../../../shared/phoneFleetSidebar';
 import { PHONE_ROOM_LIMITS } from '../../../shared/phoneRooms';
 import type { BotProfile, BotStatus } from '../../../shared/bot';
@@ -53,6 +55,7 @@ describe('factory phone routes', () => {
   let legacyMoa: boolean;
   let roomDir: string;
   let approvals: { get: ReturnType<typeof vi.fn>; decide: ReturnType<typeof vi.fn> };
+  let resume: ReturnType<typeof vi.fn<(taskId: string) => Promise<WorkerResumeResult>>>;
 
   beforeEach(() => {
     roomDir = fs.mkdtempSync(path.join(tmp, 'rooms-'));
@@ -62,6 +65,8 @@ describe('factory phone routes', () => {
     roomsUp = true;
     handoffs = [];
     legacyMoa = false;
+    resume = vi.fn(async (taskId: string): Promise<WorkerResumeResult> => ({ ok: true, taskId, sessionId: 'daemon-1', resumeSessionId: 'conv-1', workspaceId: 'ws-task' }));
+    clearPhoneWorkerResumeReceipts();
     approvals = { get: vi.fn(() => APPROVAL), decide: vi.fn(() => ({ ok: true, request: { ...APPROVAL, state: 'denied', decidedBy: 'owner', decidedAt: 2 } })) };
   });
   afterEach(async () => { if (server?.isRunning) await server.stop(); server = undefined; });
@@ -82,9 +87,11 @@ describe('factory phone routes', () => {
   async function start(opts: { allowTranscript?: boolean; allowInput?: boolean; desktop?: boolean; announce?: string[] } = {}) {
     const bridge = new DesktopPhoneBridge((clientId, event) => {
       const data = (event as { data: { requestId: string; command: string; payload: Record<string, unknown> } }).data;
-      queueMicrotask(() => {
+      queueMicrotask(async () => {
         let result: unknown;
-        if (data.command === 'workspaces.list') {
+        if (data.command === 'workspaces.workerResume') {
+          result = await handlePhoneWorkerResumeCommand(data.command, data.payload, { resume, taskKnown: (id) => id.startsWith('wtask-'), now: () => Date.now(), log: () => undefined });
+        } else if (data.command === 'workspaces.list') {
           const parsed = parsePhoneSidebarSnapshot({ ...legacySidebar, ...(legacyMoa ? { moa: true } : {}) })!;
           result = { workspaces: [], sidebar: withPhoneFactory(parsed, ports()) };
         } else if (data.command.startsWith('workspaces.botApproval')) {
@@ -138,7 +145,7 @@ describe('factory phone routes', () => {
       const res = await fetch(`http://127.0.0.1:${server!.status().port}${route}`, {
         method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
-      return { status: res.status, body: await res.json() as Record<string, unknown>, cache: res.headers.get('cache-control') };
+      return { status: res.status, body: await res.json() as Record<string, unknown>, cache: res.headers.get('cache-control'), retryAfter: res.headers.get('retry-after') };
     };
     return { get, post, bridge, operator: `Bearer ${info.token as string}` };
   }
@@ -355,6 +362,57 @@ describe('factory phone routes', () => {
       expect(await decide(r, r.operator)).toMatchObject({ status: 403, body: { error: 'read-only' } });
       expect(await decide(r, 'Bearer d1.s1')).toMatchObject({ status: 403, body: { error: 'read-only' } });
       expect(approvals.decide).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('/api/bot-tasks/:taskId/resume', () => {
+    const route = '/api/bot-tasks/wtask-abc-12345678/resume';
+    const rid = (n = 0) => `${Date.now()}-0a9b8c7d-6e5f-4a3b-8c2d-${String(n).padStart(12, '0')}`;
+
+    it('/api/config announces the route to every caller when the desktop takes it', async () => {
+      const r = await start({ announce: ['workspaces.workerResume'] });
+      expect((await r.get('/api/config', r.operator)).body.workerResume).toBe(true);
+      expect((await r.get('/api/config', 'Bearer d3.s3')).body.workerResume).toBe(true);
+      await server!.stop();
+      const without = await start();
+      expect((await without.get('/api/config')).body).not.toHaveProperty('workerResume');
+      expect(await without.post(route, { clientRequestId: rid() })).toMatchObject({ status: 503, body: { error: 'resume-unavailable' } });
+    });
+
+    it('the operator and an explicitly granted device resume; a repeat of the same id is replayed', async () => {
+      const r = await start({ announce: ['workspaces.workerResume'] });
+      const id = rid(1);
+      expect(await r.post(route, { clientRequestId: id })).toMatchObject({
+        status: 200, cache: 'no-store',
+        body: { state: 'resumed', taskId: 'wtask-abc-12345678', workspaceId: 'ws-task', sessionId: 'daemon-1', clientRequestId: id, replayed: false },
+      });
+      expect(await r.post(route, { clientRequestId: id })).toMatchObject({ status: 200, body: { replayed: true } });
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect((await r.post(route, { clientRequestId: rid(2) }, r.operator)).status).toBe(200);
+      expect(resume).toHaveBeenCalledTimes(2);
+    });
+
+    it('refuses a legacy grant, no grant, a revoked device, a device revoked mid-request and a read-only server', async () => {
+      const r = await start({ announce: ['workspaces.workerResume'] });
+      const body = { clientRequestId: rid() };
+      expect(await r.post(route, body, 'Bearer d2.s2')).toMatchObject({ status: 403, body: { error: 'read-only: this device has no explicit input grant' } });
+      expect(await r.post(route, body, 'Bearer d3.s3')).toMatchObject({ status: 403, body: { error: 'read-only: this device was paired without permission to type' } });
+      expect(await r.post(route, body, 'Bearer d4.s4')).toMatchObject({ status: 401, body: { error: 'unauthorized', reason: 'revoked' } });
+      expect(await r.post(route, body, 'Bearer d5.s5')).toMatchObject({ status: 401, body: { error: 'authorization-expired' } });
+      await server!.stop();
+      const ro = await start({ announce: ['workspaces.workerResume'], allowInput: false });
+      expect(await ro.post(route, body, ro.operator)).toMatchObject({ status: 403, body: { error: 'read-only' } });
+      expect(resume).not.toHaveBeenCalled();
+    });
+
+    it('serves main\'s refusals with their code', async () => {
+      const r = await start({ announce: ['workspaces.workerResume'] });
+      resume.mockResolvedValueOnce({ ok: false, code: 'no_slot', cap: 3, message: 'full' });
+      expect(await r.post(route, { clientRequestId: rid(3) })).toMatchObject({ status: 409, body: { error: 'resume-refused', code: 'no_slot', cap: 3 } });
+      resume.mockResolvedValueOnce({ ok: false, code: 'busy', message: 'later' });
+      expect(await r.post(route, { clientRequestId: rid(4) })).toMatchObject({ status: 409, retryAfter: '5', body: { code: 'busy' } });
+      expect(await r.post('/api/bot-tasks/other/resume', { clientRequestId: rid(5) })).toMatchObject({ status: 404, body: { error: 'task-not-found' } });
+      expect(await r.post(route, { clientRequestId: 'x' })).toMatchObject({ status: 400, body: { error: 'invalid-resume-request' } });
     });
   });
 });

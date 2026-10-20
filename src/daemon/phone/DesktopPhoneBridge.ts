@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-export type DesktopPhoneCommand = 'accounts.list' | 'accounts.bind' | 'accounts.usage' | 'accounts.env' | 'accounts.envForAccount' | 'prompts.list' | 'prompts.replace' | 'workspaces.list' | 'workspaces.create' | 'workspaces.fleetTicket' | 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll' | 'moa.wake' | 'workspaces.roomThreads' | 'workspaces.roomCards' | 'workspaces.roomAttachment' | 'workspaces.botApproval' | 'workspaces.botApprovalDecide';
+export type DesktopPhoneCommand = 'accounts.list' | 'accounts.bind' | 'accounts.usage' | 'accounts.env' | 'accounts.envForAccount' | 'prompts.list' | 'prompts.replace' | 'workspaces.list' | 'workspaces.create' | 'workspaces.fleetTicket' | 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll' | 'moa.wake' | 'workspaces.roomThreads' | 'workspaces.roomCards' | 'workspaces.roomAttachment' | 'workspaces.botApproval' | 'workspaces.botApprovalDecide' | 'workspaces.workerResume';
 export class DesktopPhoneError extends Error {
   constructor(public readonly tag: string) { super(tag); }
 }
@@ -12,13 +12,16 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** How long a request waits for the desktop's reply by default. */
+export const DESKTOP_PHONE_TIMEOUT_MS = 15000;
+
 /** Bounded, owner-bound requests to the first-party desktop process. */
 export class DesktopPhoneBridge {
   private owner: string | null = null;
   /** Optional commands the attached desktop announced at register; reset with the owner. */
   private commands = new Set<string>();
   private pending = new Map<string, Pending>();
-  constructor(private readonly send: (clientId: string, event: unknown) => boolean, private readonly timeoutMs = 15000) {}
+  constructor(private readonly send: (clientId: string, event: unknown) => boolean, private readonly timeoutMs = DESKTOP_PHONE_TIMEOUT_MS) {}
   get available() { return this.owner !== null; }
   /**
    * `commands` is the desktop's announcement of the optional commands it

@@ -8,7 +8,7 @@ import { RoomWriter } from '../../factory/roomWriter';
 import type { BotProfile } from '../../../shared/bot';
 import type { BotTaskView } from '../../../shared/botTask';
 import type { PhoneBotsReply } from '../../../shared/phoneBots';
-import type { PhoneRoomCardsReply } from '../../../shared/phoneRooms';
+import { parsePhoneRoomCard, type PhoneRoomCardsReply } from '../../../shared/phoneRooms';
 import { fitSidebarToBudget } from '../PhoneWorkspaces';
 import type { PhoneSidebarSnapshot } from '../../../shared/phoneFleetSidebar';
 
@@ -166,5 +166,25 @@ describe('the phone wire — work cards and approval actions over a real room', 
     // A desktop that cannot say keeps the card as before.
     const plain = handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', threadId: DM, limit: 50 }, botsPorts(writer, { approvalAction: () => { throw new Error('x'); } })) as PhoneRoomCardsReply;
     expect(plain.cards.find((c) => c.id === approval.id)).not.toHaveProperty('approvalAction');
+  });
+
+  it('marks a resumable worker card `resumable` only while its task\'s worker can resume now', () => {
+    const { writer } = room();
+    const sys = { kind: 'fact' as const, actor: { kind: 'system' as const }, workspaceId: 'ws-1', threadId: DM };
+    const paused = writer.append({ ...sys, title: 'Worker paused (resumable): A', notice: { code: 'worker.pausedResumable', args: { title: 'A' } }, refs: { taskId: 'wtask-a' } })!;
+    const done = writer.append({ ...sys, title: 'Worker done (resumable): B', notice: { code: 'worker.doneResumable', args: { title: 'B', status: 'completed' } }, refs: { taskId: 'wtask-b' } })!;
+    const resumed = writer.append({ ...sys, title: 'Worker resumed: A', notice: { code: 'worker.resumed', args: { title: 'A', by: 'owner', where: 'folder' } }, refs: { taskId: 'wtask-a' } })!;
+    const read = (over: Partial<PhoneBotsPorts>) => (handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', threadId: DM, limit: 50 }, botsPorts(writer, over)) as PhoneRoomCardsReply).cards;
+    const cards = read({ workerResumable: (taskId) => taskId === 'wtask-a' });
+    expect(cards.find((c) => c.id === paused.id)?.resumable).toBe(true);
+    // A task whose worker cannot resume now, and a card that is no Resume card.
+    expect(cards.find((c) => c.id === done.id)).not.toHaveProperty('resumable');
+    expect(cards.find((c) => c.id === resumed.id)).not.toHaveProperty('resumable');
+    expect(cards.filter((c) => c.resumable)).toHaveLength(1);
+    // A desktop that cannot say serves none.
+    expect(read({ workerResumable: () => { throw new Error('x'); } }).filter((c) => c.resumable)).toHaveLength(0);
+    // The daemon's parse keeps it only on a Resume card that names its task.
+    expect(parsePhoneRoomCard({ ...cards.find((c) => c.id === resumed.id), resumable: true })).not.toHaveProperty('resumable');
+    expect(parsePhoneRoomCard(cards.find((c) => c.id === paused.id))?.resumable).toBe(true);
   });
 });
