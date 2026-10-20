@@ -15,8 +15,10 @@ updates or automatic approval is added.
 
 Office catalog registration and packaged resources follow review and acceptance
 of its source contribution. Its current-workspace version can be tested before
-any API expansion. Check original art provenance and attribution with the author;
-the submitted license alone is not proof of ownership.
+any API expansion. The contributor's original-art statement in #2522 is the
+recorded provenance. Preserve the submitted MIT license and attribution when
+packaging; a generator link or copyright-line change is not a registration
+prerequisite.
 
 ## Additive API proposal: review before implementation
 

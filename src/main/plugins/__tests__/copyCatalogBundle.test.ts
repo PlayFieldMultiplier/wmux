@@ -37,7 +37,8 @@ it('copies declared multi-file assets and license without copying undeclared fil
   for (const file of f.files) expect(fs.readFileSync(path.join(f.destination, file))).toEqual(fs.readFileSync(path.join(f.source, file)));
   expect(fs.existsSync(path.join(f.destination, 'private.txt'))).toBe(false);
 });
-it.each(['../outside', '/absolute', 'a/../outside', 'a\\outside', './index.html'])('rejects unsafe catalog path %s before copying', (file) => {
+it.each(['../outside', '/absolute', 'a/../outside', 'a\\outside', './index.html',
+  'CON.txt', 'assets/NUL.png', 'lpt9.js', 'COM1', 'index.html.', 'assets./page.js', 'index.html '])('rejects unsupported catalog path %s before copying', (file) => {
   const f = fixture(); expect(() => copyCatalogBundle(f.source, f.destination, [...f.files, file])).toThrow('path');
   expect(fs.readdirSync(f.destination)).toEqual([]);
 });
@@ -45,6 +46,7 @@ it('rejects missing attribution, duplicate entries and oversized bundles', () =>
   const f = fixture();
   expect(() => copyCatalogBundle(f.source, f.destination, f.files.filter((file) => file !== 'LICENSE'))).toThrow('file list');
   expect(() => copyCatalogBundle(f.source, f.destination, [...f.files, 'LICENSE'])).toThrow('file list');
+  expect(() => copyCatalogBundle(f.source, f.destination, [...f.files, 'license'])).toThrow('file list');
   fs.truncateSync(path.join(f.source, 'images/characters.png'), 8 * 1024 * 1024);
   expect(() => copyCatalogBundle(f.source, f.destination, f.files)).toThrow('size limit');
   expect(fs.readdirSync(f.destination)).toEqual([]);
