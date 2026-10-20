@@ -155,6 +155,7 @@ describe('research completion evidence', () => {
         ['wrong total count', (s) => { s.cards[2].notice.args.total++; }, 'closed_card'],
         ['another task card', (s) => { s.cards[2].threadId = 'task:other'; }, 'closed_card'],
         ['English title without a notice', (s) => { delete s.cards[2].notice; s.cards[2].title = 'Research reported: task completed'; }, 'closed_card'],
+        ['contradictory completion card', (s) => { const other = structuredClone(s.cards[2]); other.notice.code = other.notice.code === 'research.completed' ? 'research.unverified' : 'research.completed'; s.cards.push(other); }, 'closed_card'],
         ['duplicate completion card', (s) => { s.cards.push(structuredClone(s.cards[2])); }, 'closed_card'],
       ]) {
         it(`rejects ${label}`, () => {

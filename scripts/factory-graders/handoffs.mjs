@@ -166,7 +166,8 @@ export function researchNoRepoCloses(snap, expect) {
   const { verified, total } = expect.evidence;
   const code = verified > 0 ? 'research.completed' : 'research.unverified';
   const closed = arr(snap.cards).filter((c) => c.actor?.kind === 'system'
-    && task && c.threadId === `task:${task.id}` && c.notice?.code === code);
+    && task && c.threadId === `task:${task.id}`
+    && ['research.completed', 'research.unverified'].includes(c.notice?.code));
   const items = arr(task?.evidence?.items);
   const graded = items.filter((item) => item.kind === 'command' ? item.status === 'passed'
     : ['inspection', 'artifact'].includes(item.kind) && item.status === 'verified').length;
@@ -182,7 +183,8 @@ export function researchNoRepoCloses(snap, expect) {
     criterion('bot_did_not_settle', settles.length === 0, `${settles.length} ledger_update call(s) by the bot`),
     criterion('evidence_grade', task?.verifiedItemCount === verified && graded === verified
       && items.length === total, `ledger ${task?.verifiedItemCount}, items ${graded}/${items.length}; expected ${verified}/${total}`),
-    criterion('closed_card', closed.length === 1 && closed[0].notice.args?.verified === verified
+    criterion('closed_card', closed.length === 1 && closed[0].notice.code === code
+      && closed[0].notice.args?.verified === verified
       && closed[0].notice.args?.total === total, `${closed.length} ${code} card(s): ${JSON.stringify(closed[0]?.notice?.args)}`),
     // Reclaim found the worker in its scratch folder and stopped its agent.
     criterion('worker_reclaimed', arr(snap.cards).some((c) => c.actor?.kind === 'system' && String(c.title ?? '').startsWith('Worker done')), 'no "Worker done" card'),
