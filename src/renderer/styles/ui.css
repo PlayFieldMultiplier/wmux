@@ -1829,6 +1829,23 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-agent-setup-paths { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; max-height: 120px; overflow: auto; }
 .wmux-agent-setup-path { display: flex; gap: 6px; margin-top: 8px; }
 .wmux-agent-setup-path > input { flex: 1; min-width: 0; }
+/* Sidebar foot: "Agent not set up · Set up" (owner-approved slot, 2026-10-21).
+ * Neutral text, no fill; only the glyph carries the caution colour. */
+.wmux-agent-not-ready {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 8px;
+  padding: 4px 8px;
+  min-height: 24px;
+  border-radius: 6px;
+  color: var(--text-sub);
+  font-size: 12px;
+  text-align: left;
+}
+.wmux-agent-not-ready:hover { background: var(--hover-fill); color: var(--text-main); }
+.wmux-agent-not-ready-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wmux-agent-not-ready-action { color: var(--text-main); white-space: nowrap; }
 /* The wizard while a setup pane is in use: non-modal, in the window's corner
  * like the keyboard cheat sheet, so the terminal keeps the keyboard. */
 .wmux-agent-setup-corner {

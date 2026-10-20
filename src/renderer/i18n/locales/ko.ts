@@ -2942,6 +2942,8 @@ export const ko = {
   'firstRunWizard.sampleTaskDescription': '2x2 분할을 열고 Claude에게 웹 검색을 시켜봅니다.',
   'firstRunWizard.tryItButton': '샘플 작업 실행',
   'firstRunWizard.skipButton': '건너뛰기',
+  'sidebar.agentNotReady': "에이전트 미설정",
+  'sidebar.agentSetUp': "설정",
   'firstRunWizard.agent.groupTitle': "에이전트 준비",
   'firstRunWizard.agent.groupHint': "로그인된 에이전트 하나면 계속할 수 있습니다. 다른 하나는 나중에 설정해도 됩니다.",
   'firstRunWizard.agent.checking': "확인 중…",

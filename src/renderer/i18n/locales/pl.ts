@@ -3522,6 +3522,8 @@ export const pl = {
   'firstRunWizard.sampleTaskDescription': 'Otwórz podział 2x2 i pozwól Claude przeszukać sieć za Ciebie.',
   'firstRunWizard.tryItButton': 'Wypróbuj przykładowe zadanie',
   'firstRunWizard.skipButton': 'Pomiń na razie',
+  'sidebar.agentNotReady': "Agent nieskonfigurowany",
+  'sidebar.agentSetUp': "Skonfiguruj",
   'firstRunWizard.agent.groupTitle': "Agent gotowy",
   'firstRunWizard.agent.groupHint': "Wystarczy jeden zalogowany agent, aby kontynuować. Drugiego możesz skonfigurować później.",
   'firstRunWizard.agent.checking': "Sprawdzanie…",

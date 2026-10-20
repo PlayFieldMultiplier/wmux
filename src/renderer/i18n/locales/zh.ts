@@ -3132,6 +3132,8 @@ export const zh = {
   'firstRunWizard.sampleTaskDescription': '打开一个 2x2 分割，让 Claude 为你搜索网页。',
   'firstRunWizard.tryItButton': '运行示例任务',
   'firstRunWizard.skipButton': '暂不设置',
+  'sidebar.agentNotReady': "代理未设置",
+  'sidebar.agentSetUp': "设置",
   'firstRunWizard.agent.groupTitle': "代理就绪",
   'firstRunWizard.agent.groupHint': "有一个已登录的代理即可继续。另一个可以稍后再设置。",
   'firstRunWizard.agent.checking': "正在检查…",

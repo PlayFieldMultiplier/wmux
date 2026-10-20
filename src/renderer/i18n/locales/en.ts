@@ -3548,6 +3548,8 @@ export const en = {
   'firstRunWizard.sampleTaskDescription': 'Open a 2x2 split and let Claude search the web for you.',
   'firstRunWizard.tryItButton': 'Try sample task',
   'firstRunWizard.skipButton': 'Skip for now',
+  'sidebar.agentNotReady': "Agent not set up",
+  'sidebar.agentSetUp': "Set up",
   'firstRunWizard.agent.groupTitle': "Agent ready",
   'firstRunWizard.agent.groupHint': "One signed-in agent is enough to go on. You can set up the other one later.",
   'firstRunWizard.agent.checking': "Checking…",
