@@ -1135,6 +1135,11 @@ export const en = {
   // (may include --dangerously-skip-permissions), so it is surfaced explicitly.
   'project.unattendedHeading': 'Unattended (skip permission prompts after reboot)',
   'project.unattendedConsent': 'Allow reboots to auto-run these {count} pane(s) without permission prompts. Each restores its last-used permission mode, which may include --dangerously-skip-permissions.',
+  'project.prepHeading': 'New workspace setup',
+  'project.prepSetup': 'Runs in every new worktree before its agent starts',
+  'project.prepCopy': 'Copies these git-ignored files from this checkout into new worktrees',
+  'project.prepCopyAutomated': 'Also into bot and fan-out workspaces',
+  'project.prepCopyHumanOnly': 'Only into workspaces you open',
   'palette.catWorkspace': 'Workspace',
   'palette.catSurface': 'Surface',
   'palette.catCommand': 'Command',
@@ -3911,6 +3916,9 @@ export const en = {
   'git.removeFailed': 'Remove failed',
   'git.create': 'Create',
   'git.createFailed': 'Create failed',
+  'git.prepReady': 'Worktree prepared: {copied} file(s) copied, {missing} not found',
+  'git.prepFailed': 'Worktree created, but its setup failed: {error}',
+  'git.prepSkipped': 'Worktree created without its setup: wmux.json is not approved. Review it from the sidebar badge.',
   'git.newBranchPlaceholder': 'new branch name…',
   // Git tab — Pull Requests section (gh CLI).
   'git.pullRequests': 'Pull Requests',

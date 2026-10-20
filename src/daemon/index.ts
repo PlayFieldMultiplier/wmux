@@ -35,6 +35,8 @@ import { recordedRunPtyIds } from './automation/store';
 import { AUTOMATION_EVENT } from '../shared/automation';
 import { InputReceiptStore } from './web/InputReceiptStore';
 import { PhoneWorktreeService } from './web/phoneWorktree';
+import { ProjectConfigStore } from '../main/project/ProjectConfigStore';
+import { phonePrepSummary, prepareNewWorktree } from '../main/worktask/workspacePrep';
 import { PhoneGitWriteGate } from './web/phoneGitWriteGate';
 import { startPushRecovery } from './web/phoneGitPush';
 import { AnswerReceiptStore } from './approvals/AnswerReceiptStore';
@@ -273,6 +275,14 @@ function getPhoneWorktrees(sessionManager: DaemonSessionManager): PhoneWorktreeS
     liveCwds: () => sessionManager.listSessions().flatMap((s) => [s.cwd, s.spawnCwd].filter((c): c is string => typeof c === 'string' && c.length > 0)),
     audit: (deviceId, reason) => getDeviceStore().recordGitWorktree(deviceId, reason),
     log: (level, msg) => log(level, msg),
+    // A person asked for this worktree from the phone: it is prepared like one
+    // opened on the desktop. A fresh store per job, so trust the desktop has
+    // just granted (or revoked) is read from disk, not from a stale cache.
+    prepare: async (sourceCwd, worktreeDir) => {
+      const store = new ProjectConfigStore();
+      const result = await prepareNewWorktree({ sourceCwd, worktreePath: worktreeDir, origin: 'human' }, { getState: (cwd) => store.getState(cwd) });
+      return phonePrepSummary(result);
+    },
   });
 }
 // Phone git write actions: one gate for the daemon's lifetime, shared by every

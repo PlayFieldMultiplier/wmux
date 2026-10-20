@@ -124,6 +124,8 @@ export async function launchQuick(
       ...(agentChoice ? { agents: [agentChoice] } : {}),
       worktree: true,
       verifiedWorkspaceId: ws.id,
+      // One worktree a person asked for from the composer.
+      prepOrigin: 'human',
     });
     if (result.ok) return { ok: true };
     return { ok: false, error: result.error ?? result.tasks.find((t) => t.error)?.error ?? 'The worktree could not be started.' };

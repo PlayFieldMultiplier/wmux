@@ -89,6 +89,11 @@ export default function ProjectConfigDialog() {
   const trust = project.trust;
   const isTrusted = trust === 'trusted';
   const commands = project.config?.commands ?? [];
+  // New workspace setup: runs (and copies secrets) on the same grant, so the
+  // review lists it verbatim beside the commands and the layout.
+  const prepSetup = project.config?.fanout?.setup;
+  const prepCopy = project.config?.fanout?.copy ?? [];
+  const prepCopyAutomated = project.config?.fanout?.copyIntoAutomated === true;
   const layout = project.config?.layout;
   const rows = layout ? layoutRows(layout) : [];
   // Leaves that would restore their captured permission mode on reboot — the
@@ -186,6 +191,32 @@ export default function ProjectConfigDialog() {
                   </div>
                 </div>
               ))}
+            </div>
+          </section>
+        )}
+
+        {(prepSetup !== undefined || prepCopy.length > 0) && (
+          <section data-testid="project-prep-review">
+            <p className="ui-group-label">{t('project.prepHeading')}</p>
+            <div className="ui-group">
+              {prepSetup !== undefined && (
+                <div className="ui-row">
+                  <div className="ui-row-text">
+                    <p className="ui-row-title font-mono !text-[12px] break-all">{prepSetup}</p>
+                    <p className="ui-row-detail">{t('project.prepSetup')}</p>
+                  </div>
+                </div>
+              )}
+              {prepCopy.length > 0 && (
+                <div className="ui-row">
+                  <div className="ui-row-text">
+                    <p className="ui-row-title font-mono !text-[12px] break-all">{prepCopy.join(', ')}</p>
+                    <p className="ui-row-detail">
+                      {t('project.prepCopy')} · {t(prepCopyAutomated ? 'project.prepCopyAutomated' : 'project.prepCopyHumanOnly')}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         )}

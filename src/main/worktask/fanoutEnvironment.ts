@@ -213,7 +213,18 @@ export function resolveFanoutSetup(state: ProjectConfigState | null | undefined)
   return { run: true, command: setup };
 }
 
-export type FanoutSetupRunResult = { ok: true } | { ok: false; error: string };
+export type FanoutSetupRunResult =
+  | { ok: true }
+  | {
+      ok: false;
+      /** One line: what happened, with the output tail appended. */
+      error: string;
+      /** What happened without the output (exit code, signal, timeout). */
+      summary?: string;
+      /** The last output the command printed (the report tail, not capped to a line count). */
+      tail?: string;
+      timedOut?: true;
+    };
 
 /**
  * Run a resolved setup command inside `cwd` (the fresh worktree). The command
@@ -272,12 +283,14 @@ export async function runFanoutSetup(
     };
 
     child.on('error', (err) => {
-      settle({ ok: false, error: `failed to start: ${err.message}` });
+      const summary = `failed to start: ${err.message}`;
+      settle({ ok: false, error: summary, summary });
     });
 
     child.on('close', (code, signal) => {
       if (timedOut) {
-        settle({ ok: false, error: `timed out after ${timeoutMs}ms${detailSuffix(tail)}` });
+        const summary = `timed out after ${timeoutMs}ms`;
+        settle({ ok: false, error: `${summary}${detailSuffix(tail)}`, summary, tail, timedOut: true });
         return;
       }
       if (code === 0) {
@@ -285,7 +298,7 @@ export async function runFanoutSetup(
         return;
       }
       const how = signal ? `killed by ${signal}` : `exited with code ${code}`;
-      settle({ ok: false, error: `${how}${detailSuffix(tail)}` });
+      settle({ ok: false, error: `${how}${detailSuffix(tail)}`, summary: how, tail });
     });
   });
 }

@@ -41,7 +41,7 @@ describe('launchQuick', () => {
     );
     expect(result).toEqual({ ok: true });
     const req = h.startGuiFanOut.mock.calls[0][1];
-    expect(req).toMatchObject({ repoPath: '/repo', verifiedWorkspaceId: 'ws-1', worktree: true, agents: [{ agent: 'codex' }] });
+    expect(req).toMatchObject({ repoPath: '/repo', verifiedWorkspaceId: 'ws-1', worktree: true, agents: [{ agent: 'codex' }], prepOrigin: 'human' });
     expect(req.roles).toBeUndefined();
   });
 

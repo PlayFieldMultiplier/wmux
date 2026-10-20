@@ -67,6 +67,17 @@ describe('ProjectConfigDialog', () => {
     expect(decideProjectTrust).toHaveBeenCalledWith('ws-1', 'trusted', true);
   });
 
+  it('lists the setup command and the files it copies in the review, verbatim', () => {
+    act(() => useStore.setState({
+      projectConfigs: { 'ws-1': { ...config, config: { ...config.config, fanout: { setup: 'npm ci && cp x y', copy: ['.env', 'config/local.json'] } } } },
+    } as never));
+    act(() => root.render(createElement(ProjectConfigDialog)));
+    const section = container.querySelector('[data-testid="project-prep-review"]') as HTMLElement;
+    expect(section.textContent).toContain('npm ci && cp x y');
+    expect(section.textContent).toContain('.env, config/local.json');
+    expect(section.textContent).toContain('Only into workspaces you open');
+  });
+
   it('closes on Escape without deciding anything', () => {
     vi.mocked(decideProjectTrust).mockClear();
     act(() => root.render(createElement(ProjectConfigDialog)));

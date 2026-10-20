@@ -154,6 +154,26 @@ describe('cleanTaskFolder', () => {
     expect(await restoreTaskFolder(p, 'wtask-abc-12345678', path.join(dir, 'elsewhere'))).toBe(false);
   });
 
+  it('prepares a worktree put back for a resume, and puts it away again when its setup fails', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr);
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    const calls: Array<[string, string]> = [];
+    let status = 'failed';
+    const p = ports({ prepare: async (root, folder) => { calls.push([root, folder]); return { status, error: 'exited with code 1' }; } });
+    expect(await cleanTaskFolder(p, row('completed'), mission, [])).toBe('removed');
+
+    expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(false);
+    expect(calls).toEqual([[repo, wt]]);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(p.store.get('wtask-abc-12345678')?.state).toBe('removed');
+
+    status = 'ready';
+    expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(p.store.get('wtask-abc-12345678')?.state).toBe('restored');
+  });
+
   it('keeps a worktree with uncommitted changes, never removes it automatically, and Clean up now removes it once it is clean', async () => {
     const mgr = new TaskWorktreeManager();
     const wt = await taskWorktree(mgr);

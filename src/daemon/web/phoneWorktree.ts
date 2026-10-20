@@ -11,7 +11,7 @@ import { canonicalPath, listWorktrees, pathWithin, resolvePhoneGitRepo, samePath
 import { PhoneWorktreeReceipts, ReceiptCapacityError, type PhoneWorktreeExec, type PhoneWorktreeOutcome } from './phoneWorktreeReceipts';
 import {
   parseWorktreeCreateBody, phoneWorktreeAddArgs, phoneWorktreeNames, PHONE_WORKTREE_DIR_PREFIX, PHONE_WORKTREE_RETRY_AFTER_MS,
-  type PhoneWorktreeReceipt, type PhoneWorktreeRefusal,
+  type PhoneWorktreePrep, type PhoneWorktreeReceipt, type PhoneWorktreeRefusal,
 } from '../../shared/phoneGitV1';
 import { directoryHold, type DirectoryHold } from '../../shared/directoryHold';
 import { killProcessTree } from '../automation/treeKill';
@@ -219,6 +219,14 @@ export interface PhoneWorktreeOptions {
   directoryHold?: (dir: string) => Promise<DirectoryHold>;
   /** The working directories (current and spawn) of every live session: recovery never removes a checkout one runs in. */
   liveCwds?: () => string[] | Promise<string[]>;
+  /**
+   * The new workspace preparation for a created worktree (config files from
+   * the session's checkout `sourceCwd`, then the setup command), run before
+   * the receipt says `created` so the phone opens its pane in a ready
+   * worktree. 'failed' turns the receipt into `refused`/`prep-failed` (the
+   * worktree stays for the desktop); undefined = nothing declared.
+   */
+  prepare?: (sourceCwd: string, worktreeDir: string) => Promise<PhoneWorktreePrep | 'failed' | undefined>;
   /** One audit line per job that reached the background: device id and outcome tag. */
   audit?: (deviceId: string, reason: string) => void;
   log?: (level: 'warn', msg: string) => void;
@@ -306,6 +314,15 @@ export class PhoneWorktreeService {
       outcome = error instanceof NotRun ? RETRY
         : error instanceof Refusal ? { state: 'refused', error: error.tag }
         : recovering ? RETRY : { state: 'unknown', error: 'git-outcome-unknown' };
+    }
+    if (outcome.state === 'created' && this.opts.prepare) {
+      // Outside the repository queue: a long install never holds up another
+      // creation in the same repository. The receipt stays `pending` until
+      // it is done; a recovered checkout (adopted after a restart) is
+      // prepared again here, and never overwrites a file already copied.
+      const prep = await this.opts.prepare(job.cwd, outcome.cwd).catch(() => 'failed' as const);
+      if (prep === 'failed') outcome = { state: 'refused', error: 'prep-failed' };
+      else if (prep) outcome = { ...outcome, prep };
     }
     try {
       this.receipts.settle(job.owner, requestId, outcome);

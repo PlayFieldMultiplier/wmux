@@ -264,7 +264,13 @@ export interface TaskFolderPorts {
    *  stopped (a resumed worker stopped again). Absent: not known. */
   workerStoppedAt?: (taskId: string) => number | undefined;
   worktrees: {
-    removeWorktree(repoRoot: string, repoHash: string, worktreePath: string): Promise<{ ok: true } | { ok: false; error: string; dirty?: boolean }>;
+    removeWorktree(
+      repoRoot: string,
+      repoHash: string,
+      worktreePath: string,
+      beforeRemove?: (worktreePath: string) => Promise<void>,
+      opts?: { force?: boolean },
+    ): Promise<{ ok: true } | { ok: false; error: string; dirty?: boolean }>;
     restoreWorktree(repoRoot: string, repoHash: string, worktreePath: string, ref: string, detached?: boolean): Promise<{ ok: true } | { ok: false; error: string }>;
   };
   /** A worktree's main repository root, its hash (the manager's lock key)
@@ -283,6 +289,14 @@ export interface TaskFolderPorts {
   /** Default: gitWorktreeRegistered. */
   worktreeRegistered?: (repoRoot: string, folder: string) => Promise<boolean | null>;
   makeDir?: (dir: string) => Promise<void>;
+  /**
+   * The new workspace preparation for a worktree put back for a resume (the
+   * project's setup command; config files only when the project copies into
+   * bot workspaces). A failure puts the folder away again, so the worker is
+   * not resumed in a worktree whose dependencies never installed. Absent:
+   * none (tests).
+   */
+  prepare?: (repoRoot: string, worktreePath: string) => Promise<{ status: string; error?: string }>;
   exists?: (p: string) => boolean;
   now?: () => number;
   log?: (msg: string) => void;
@@ -987,6 +1001,17 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
     if (!r.ok) {
       (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} not put back: ${r.error}`);
       return false;
+    }
+    if (ports.prepare) {
+      const prep = await ports.prepare(rec.repoRoot, rec.path).catch((err: unknown) => ({ status: 'failed', error: String(err) }));
+      if (prep.status === 'failed') {
+        (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put away again: its setup failed: ${prep.error ?? 'unknown'}`);
+        // Nothing has worked in it since it was put back: what is there is
+        // the kept branch plus the setup's own output, so force is safe, and
+        // the record stays 'removed' for the next resume to try again.
+        await ports.worktrees.removeWorktree(rec.repoRoot, rec.repoHash, rec.path, undefined, { force: true }).catch(() => undefined);
+        return false;
+      }
     }
   }
   await ports.store.put({ ...rec, state: 'restored', at: now() }).catch(() => undefined);

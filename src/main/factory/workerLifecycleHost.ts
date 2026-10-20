@@ -66,6 +66,8 @@ import { createDeadPaneSweep } from './deadWorkerPanes';
 import path from 'node:path';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { TaskWorktreeManager } from '../worktask/TaskWorktreeManager';
+import { prepareNewWorktree } from '../worktask/workspacePrep';
+import { getProjectConfigStore } from '../project/ProjectConfigStore';
 import { TaskFolders, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, noteKeptFolderStopped, restoreTaskFolder, setTaskFolderPorts, type KeptFolderCleaned, type TaskMission } from './taskFolderCleanup';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { STOPPED_BY_OWNER } from './factoryStop';
@@ -479,6 +481,12 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       },
       worktrees: folderWorktrees,
       repoInfo: gitRepoInfo,
+      // A resumed bot worker's folder is prepared again (it was removed with
+      // its ignored files, node_modules included).
+      prepare: (repoRoot: string, worktreePath: string) => prepareNewWorktree(
+        { sourceCwd: repoRoot, worktreePath, origin: 'automated' },
+        { getState: (cwd) => getProjectConfigStore().getState(cwd) },
+      ),
       gateRunning: (taskId: string) => getSharedTaskGateRunner()?.isRunning(taskId) === true,
       changed,
       // A kept folder removed after its TTL: one card in the task's thread

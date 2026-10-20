@@ -207,6 +207,8 @@ describe('startHandoffWorktree', () => {
     expect(req).toMatchObject({
       titles: ['issue-12-crash-on-launch'], branches: ['issue-12-crash-on-launch'], repoPath: '/repo', agentCmd: 'codex --model=gpt-5',
       worktree: true, verifiedWorkspaceId: 'ws-repo',
+      // A person started it: prepared like a worktree opened by hand.
+      prepOrigin: 'human',
     });
     expect(req.prompt).toContain('Read it with: gh issue view 12 --repo Acme/Widgets');
     expect(upserts[0]).toMatchObject({

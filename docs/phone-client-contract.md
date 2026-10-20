@@ -6644,7 +6644,22 @@ Refusals found by the background job land in the receipt as `state:
 `worktree-path-exists`, `path-too-long` (over 260 characters),
 `not-a-git-repo` (including bare), `unborn-head`, `submodules-unsupported`,
 `git-filters-require-desktop`, `git-operation-in-progress`,
-`git-operation-failed`, `worktree-path-unsafe`, `git-version-unsupported`.
+`git-operation-failed`, `worktree-path-unsafe`, `git-version-unsupported`,
+`prep-failed` (below).
+
+**New workspace preparation.** When the session's project declares one in
+its `wmux.json` (`fanout.copy`, `fanout.setup`, approved on the desktop), the
+new worktree is prepared before the receipt leaves `pending`: the selected
+git-ignored config files are copied from the session's checkout, then the
+setup command runs (up to 5 minutes, so `pending` can last that long). A
+`created` receipt then carries `prep: {status, copied, missing, reason?}`:
+`status` is `ready`, or `skipped` with `reason` `untrusted`, `stale`,
+`denied` or `malformed` when the desktop has not approved the file (nothing
+ran). Only counts cross to the phone, never a file name, its content or the
+command's output. Without a declared preparation `prep` is absent. A failed
+setup is not `created`: the receipt is `refused` with `prep-failed`, so no
+client opens a pane in it; the worktree is kept on the desktop, whose cleanup
+list shows it.
 
 **Receipt store.** A new file, `phone-worktree-receipts.json`, `version: 1`,
 mode 0600, written durably. Entries are keyed by a hash of (owner,

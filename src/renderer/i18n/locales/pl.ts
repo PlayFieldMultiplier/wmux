@@ -1122,6 +1122,11 @@ export const pl = {
   // (may include --dangerously-skip-permissions), so it is surfaced explicitly.
   'project.unattendedHeading': 'Bez nadzoru (pomija pytania o uprawnienia po restarcie)',
   'project.unattendedConsent': 'Zezwól, aby restart systemu automatycznie uruchamiał te {count} panele bez pytań o uprawnienia. Każdy przywraca swój ostatnio używany tryb uprawnień, co może obejmować --dangerously-skip-permissions.',
+  'project.prepHeading': 'Przygotowanie nowego obszaru roboczego',
+  'project.prepSetup': 'Uruchamiane w każdym nowym worktree, zanim wystartuje jego agent',
+  'project.prepCopy': 'Kopiuje te pliki ignorowane przez git z tego checkoutu do nowych worktree',
+  'project.prepCopyAutomated': 'Także do obszarów botów i fan-outu',
+  'project.prepCopyHumanOnly': 'Tylko do obszarów otwartych przez Ciebie',
   'palette.catWorkspace': 'Obszar roboczy',
   'palette.catSurface': 'Powierzchnia',
   'palette.catCommand': 'Polecenie',
@@ -3886,6 +3891,9 @@ export const pl = {
   'git.removeFailed': 'Usuwanie nie powiodło się',
   'git.create': 'Utwórz',
   'git.createFailed': 'Tworzenie nie powiodło się',
+  'git.prepReady': 'Worktree przygotowany: skopiowane pliki: {copied}, nieznalezione: {missing}',
+  'git.prepFailed': 'Worktree utworzony, ale jego przygotowanie nie powiodło się: {error}',
+  'git.prepSkipped': 'Worktree utworzony bez przygotowania: wmux.json nie jest zatwierdzony. Przejrzyj go z plakietki na pasku bocznym.',
   'git.newBranchPlaceholder': 'nazwa nowego brancha…',
   // Git tab — Pull Requests section (gh CLI).
   'git.pullRequests': 'Pull Requesty',

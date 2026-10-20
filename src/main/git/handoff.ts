@@ -292,6 +292,9 @@ export async function startHandoffWorktree(deps: HandoffDeps, raw: unknown): Pro
       agentCmd: agent.cmd,
       worktree: true,
       verifiedWorkspaceId: workspaceId,
+      // A person started this issue: its worktree is prepared like one they
+      // opened by hand (config files copied by default).
+      prepOrigin: 'human',
     }).catch((err: unknown) => ({ ok: false, error: err instanceof Error ? err.message : String(err), tasks: [] }) as FanOutResult);
     const task = result.tasks?.find((t) => t.ok);
     if (!result.ok || !task || !task.workspaceId) {

@@ -10,6 +10,7 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import {
   FanOutService,
+  FANOUT_COPY_BLOCKED_WARNING,
   buildInitialCommand,
   workerLaunchCommand,
   firstRunStuckSummary,
@@ -842,7 +843,7 @@ describe('§0 E2E 멱등 — 동일 키 재호출', () => {
   });
 
   it('in-flight 중복 호출은 거부', async () => {
-    let releaseStart: () => void = () => {};
+    let releaseStart: () => void = () => undefined;
     const gate = new Promise<void>((r) => { releaseStart = r; });
     const daemon: FanOutDaemonPort = {
       rpc: vi.fn(async (method: string, params: Record<string, unknown>) => {
@@ -1184,6 +1185,110 @@ describe('T2 per-repo fan-out environment (ports + setup hook)', () => {
     const closed = daemon.calls.filter((c) => c.method === 'task.mission.close');
     expect(closed).toHaveLength(1);
     expect(closed[0]?.params.taskId).toBe(first.taskId);
+  });
+});
+
+describe('new workspace preparation on fan-out worktrees', () => {
+  function makeProjectFake(state: ProjectConfigState) {
+    return { getState: vi.fn(async () => state) };
+  }
+
+  /** A real repository with an ignored `.env`, and a worktrees fake whose
+   *  createWorktree runs a real `git worktree add` so the copy has somewhere to land. */
+  function realRepo() {
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(metaRoot, 'src-')));
+    const g = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore' });
+    g(repo, 'init', '-q');
+    fs.writeFileSync(path.join(repo, '.gitignore'), '.env\n');
+    g(repo, 'add', '.gitignore');
+    g(repo, '-c', 'user.email=a@b.c', '-c', 'user.name=a', 'commit', '-q', '-m', 'init');
+    fs.writeFileSync(path.join(repo, '.env'), 'SECRET=1\n');
+    const worktrees = makeWorktreesFake();
+    worktrees.preflight = vi.fn(async (_r: string, _t: string, taskId: string) => ({ ok: true as const, plan: { ...makePlan(taskId.slice(-8)), repoRoot: repo } }));
+    worktrees.createWorktree = vi.fn(async (plan: TaskWorktreePlan) => {
+      g(repo, 'worktree', 'add', '-q', plan.worktreePath, '-b', plan.branch);
+      return { ok: true as const, worktreePath: plan.worktreePath, branch: plan.branch };
+    });
+    return { repo, worktrees };
+  }
+
+  it('does not copy config files into fan-out worktrees by default, and says so', async () => {
+    const { repo, worktrees } = realRepo();
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', config: { version: 1, fanout: { copy: ['.env'] } } }),
+    });
+    const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
+    expect(res.ok).toBe(true);
+    expect(res.warnings).toContain(FANOUT_COPY_BLOCKED_WARNING);
+    expect(res.tasks[0].configFiles).toBeUndefined();
+    expect(fs.existsSync(path.join(res.tasks[0].worktreePath!, '.env'))).toBe(false);
+  });
+
+  it('copies them before the agent starts when copyIntoAutomated is on', async () => {
+    const { repo, worktrees } = realRepo();
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', config: { version: 1, fanout: { copy: ['.env', '.env.gone'], copyIntoAutomated: true } } }),
+    });
+    const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
+    expect(res.ok).toBe(true);
+    expect(res.tasks[0].configFiles).toEqual({ copied: 1, missing: 1, present: 0, refused: 0 });
+    expect(fs.readFileSync(path.join(res.tasks[0].worktreePath!, '.env'), 'utf8')).toBe('SECRET=1\n');
+    expect(renderer.spawned).toHaveLength(1);
+  });
+
+  it('copies into a worktree a person opened (start from an issue) without the toggle', async () => {
+    const { repo, worktrees } = realRepo();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: makeRendererFake().port,
+      worktrees,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', config: { version: 1, fanout: { copy: ['.env'] } } }),
+    });
+    const res = await svc.start(baseReq({ repoPath: repo, titles: ['issue-1'], prepOrigin: 'human' }));
+    expect(res.ok).toBe(true);
+    expect(res.warnings ?? []).not.toContain(FANOUT_COPY_BLOCKED_WARNING);
+    expect(res.tasks[0].configFiles).toMatchObject({ copied: 1 });
+  });
+
+  it('a failed setup on a worktree a person opened keeps it and starts no agent', async () => {
+    const { repo, worktrees } = realRepo();
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', config: { version: 1, fanout: { copy: ['.env'], setup: 'node -e "console.log(\'step one\'); process.exit(3)"' } } }),
+    });
+    const res = await svc.start(baseReq({ repoPath: repo, titles: ['issue-2'], prepOrigin: 'human' }));
+    const [task] = res.tasks;
+    expect(task.ok).toBe(false);
+    expect(task.setupFailed).toBe(true);
+    expect(task.setupOutputTail).toEqual(['step one']);
+    expect(task.preservedWorktree).toBeDefined();
+    expect(fs.existsSync(path.join(task.preservedWorktree!, '.env'))).toBe(true);
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled();
+    expect(renderer.spawned).toHaveLength(0);
+  });
+
+  it('copies nothing from a config changed since approval', async () => {
+    const { repo, worktrees } = realRepo();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: makeRendererFake().port,
+      worktrees,
+      project: makeProjectFake({ found: true, root: repo, trust: 'stale', config: { version: 1, fanout: { copy: ['.env'], copyIntoAutomated: true } } }),
+    });
+    const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
+    expect(res.setupSkipped).toBe('stale');
+    expect(fs.existsSync(path.join(res.tasks[0].worktreePath!, '.env'))).toBe(false);
   });
 });
 

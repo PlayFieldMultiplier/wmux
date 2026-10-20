@@ -20,6 +20,9 @@ import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
 import { git } from '../../git/git';
 import { localSpelling, resolveAccessiblePath } from './fs.handler';
+import { getProjectConfigStore } from '../../project/ProjectConfigStore';
+import { ensureSecretHook } from '../../git/secretHookHost';
+import { prepareNewWorktree, type WorkspacePrepResult } from '../../worktask/workspacePrep';
 import {
   parseWorktreePorcelain,
   validateGitRef,
@@ -102,7 +105,7 @@ export type MergeStatusResult = { ok: true; status: MergeSessionStatus | null } 
 export type MergeActionResult = { ok: true } | { ok: false; error: string };
 
 export type WorktreeMutateResult =
-  | { ok: true; worktreePath: string }
+  | { ok: true; worktreePath: string; prep?: WorkspacePrepResult }
   | { ok: false; error: string };
 
 // repo 단위 뮤텍스 — diff.handler.withRepoLock과 동형 복제(additive 원칙:
@@ -239,6 +242,26 @@ async function addWorktree(repoPath: string, branch: string): Promise<WorktreeMu
     if (created.code !== 0) return { ok: false, error: created.stderr.slice(0, 300) };
     return { ok: true, worktreePath: wtPath };
   });
+}
+
+/**
+ * The Git page's "create worktree": add it, then prepare it the way every new
+ * worktree a person opens is prepared (config files, setup command), outside
+ * the repository lock so a long install never blocks the repository's other
+ * Git page writes. A failed preparation keeps the worktree: it is reported,
+ * and nothing is started in it.
+ */
+export async function addPreparedWorktree(repoPath: string, branch: string): Promise<WorktreeMutateResult> {
+  const added = await addWorktree(repoPath, branch);
+  if (!added.ok) return added;
+  // The pre-commit secret check lives in the common git dir, so a copied
+  // secret can't be committed from this worktree either.
+  ensureSecretHook(added.worktreePath);
+  const prep = await prepareNewWorktree(
+    { sourceCwd: repoPath, worktreePath: added.worktreePath, origin: 'human' },
+    { getState: (cwd) => getProjectConfigStore().getState(cwd) },
+  );
+  return prep.status === 'none' ? added : { ...added, prep };
 }
 
 async function removeWorktree(repoPath: string, worktreePath: string): Promise<WorktreeMutateResult> {
@@ -582,7 +605,7 @@ export function registerWorktreeHandlers(): () => void {
       async (_e: Electron.IpcMainInvokeEvent, repoPath: unknown, branch: unknown) => {
         if (typeof repoPath !== 'string' || !repoPath) return { ok: false, error: 'repoPath required' };
         if (typeof branch !== 'string' || !branch) return { ok: false, error: 'branch required' };
-        return addWorktree(repoPath, branch);
+        return addPreparedWorktree(repoPath, branch);
       },
     ),
   );
