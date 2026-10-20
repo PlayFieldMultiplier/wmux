@@ -15,9 +15,18 @@ describe('shouldUseGlass', () => {
     expect(shouldUseGlass('darwin', '#F7F7F7', '1', true)).toBe(false);
   });
 
-  it('is off on Windows and Linux whatever the theme', () => {
+  it('is on for Windows 11 22H2 and later, where the window has acrylic', () => {
+    expect(shouldUseGlass('win32', '#171717', '1', true, 'soft', 26200)).toBe(true);
+    expect(shouldUseGlass('win32', '#F7F7F7', '1', false, 'clear', 22621)).toBe(true);
+    expect(shouldUseGlass('win32', '#171717', '1', true, 'off', 26200)).toBe(false);
+    expect(shouldUseGlass('win32', '#171717', '1', false, 'soft', 26200)).toBe(false);
+  });
+
+  it('is off on Windows 10, older Windows 11, an unread build and Linux whatever the theme', () => {
     expect(shouldUseGlass('win32', '#171717')).toBe(false);
-    expect(shouldUseGlass('linux', '#171717')).toBe(false);
+    expect(shouldUseGlass('win32', '#171717', '1', true, 'soft', 19045)).toBe(false);
+    expect(shouldUseGlass('win32', '#171717', '1', true, 'soft', 22000)).toBe(false);
+    expect(shouldUseGlass('linux', '#171717', '1', true, 'soft', 26200)).toBe(false);
     expect(shouldUseGlass(undefined, '#171717')).toBe(false);
   });
 

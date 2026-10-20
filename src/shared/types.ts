@@ -1008,7 +1008,7 @@ export interface SessionData {
   attentionBlink?: string;
   attentionBlinkRemindMs?: number;
   attentionBlinkFinished?: string;
-  /** macOS window glass level ('off' | 'soft' | 'clear'). Whitelisted on load (windowGlass.ts). */
+  /** Window glass level ('off' | 'soft' | 'clear'), macOS and Windows 11. Whitelisted on load (shared/windowGlass.ts). */
   windowGlass?: string;
   /** #1481 — workspace list order ('manual' | 'attention' | 'recent'). Absent in
    *  older sessions; `sidebarAttentionFirst` then decides. Whitelisted on load. */

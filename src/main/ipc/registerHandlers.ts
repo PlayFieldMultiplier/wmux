@@ -4,6 +4,7 @@ import { registerUsageLimitHandlers } from '../usageLimit/usageLimit.handler';
 import { registerContinueOnAccountHandler } from '../account/continueOnAccount.handler';
 import { registerWorkspaceSettle } from '../workspace/settle/workspaceSettleHost';
 import { ipcMain, nativeTheme, type BrowserWindow } from 'electron';
+import os from 'node:os';
 import { PTYManager } from '../pty/PTYManager';
 import { PTYBridge } from '../pty/PTYBridge';
 import { DaemonClient } from '../DaemonClient';
@@ -58,6 +59,13 @@ import { registerPlanApprovalHandlers } from './handlers/planApproval.handler';
 import { createRpcInvokeHandler } from './rpcInvoke';
 import { createFlashFrameHandler } from '../window/flashFrame';
 import { applyUiZoom, winOverlayHeight } from '../window/uiZoom';
+import {
+  applyAppearance,
+  applyWindowsGlass,
+  overlayColorFor,
+  parseGlassRequest,
+  windowsGlassSupported,
+} from '../window/windowGlass';
 import { IPC } from '../../shared/constants';
 import { toastManager } from '../pipe/handlers/notify.rpc';
 import { markRendererNotificationListenerReady } from '../notification/rendererNotificationReadiness';
@@ -401,8 +409,10 @@ export function registerAllHandlers(
       // would let a theme change race ahead of the zoom handler and reset the
       // overlay height out from under it, so read the current factor. Zoom
       // defaults to 1, so with no UI scale applied this is still 36.
+      // While the window shows glass the strip is transparent, or it would
+      // sit as a solid band across the acrylic (windowGlass.ts).
       win.setTitleBarOverlay({
-        color,
+        color: overlayColorFor(win, color),
         symbolColor,
         height: winOverlayHeight(win.webContents.getZoomFactor()),
       });
@@ -414,17 +424,37 @@ export function registerAllHandlers(
   ipcMain.removeAllListeners(IPC.WINDOW_SET_TITLEBAR_OVERLAY);
   ipcMain.on(IPC.WINDOW_SET_TITLEBAR_OVERLAY, onSetTitleBarOverlay);
 
-  // macOS window glass: the vibrancy material follows the app's appearance,
-  // so the renderer sets it from the theme (a dark theme gets the dark
-  // material on a light Mac). App-wide by design: native menus and the
-  // in-app browser's prefers-color-scheme follow the theme too.
+  // Window glass: the material follows the app's appearance (macOS vibrancy,
+  // Windows 11 acrylic), so the renderer sets it from the theme (a dark theme
+  // gets the dark material on a light desktop). App-wide by design: native
+  // menus and the in-app browser's prefers-color-scheme follow the theme too.
+  // Windows without glass and Linux keep the system appearance.
+  const winGlassSupported = windowsGlassSupported(process.platform, os.release());
   const onSetAppearance = (_event: Electron.IpcMainEvent, appearance: unknown): void => {
-    if (process.platform !== 'darwin') return;
-    if (appearance !== 'dark' && appearance !== 'light' && appearance !== 'system') return;
-    if (nativeTheme.themeSource !== appearance) nativeTheme.themeSource = appearance;
+    applyAppearance(nativeTheme, appearance, process.platform, winGlassSupported);
   };
   ipcMain.removeAllListeners(IPC.WINDOW_SET_APPEARANCE);
   ipcMain.on(IPC.WINDOW_SET_APPEARANCE, onSetAppearance);
+
+  // Windows window glass at runtime: the Settings level switches the acrylic
+  // material, the background and the overlay colour together, no restart.
+  // Trust boundary as above: a whitelisted level, and only hex colours
+  // (parseGlassRequest).
+  const onSetGlass = (_event: Electron.IpcMainEvent, opts: unknown): void => {
+    if (process.platform !== 'win32' || !winGlassSupported) return;
+    const request = parseGlassRequest(opts);
+    if (!request) return;
+    const win = getWindow();
+    if (!win || win.isDestroyed()) return;
+    try {
+      applyWindowsGlass(win, request.level, request.colors);
+    } catch {
+      // A torn-down window can throw from the native setters; the switch is
+      // cosmetic, so never let it crash main.
+    }
+  };
+  ipcMain.removeAllListeners(IPC.WINDOW_SET_GLASS);
+  ipcMain.on(IPC.WINDOW_SET_GLASS, onSetGlass);
 
   // Whole-interface zoom (#822). The renderer owns the persisted factor and
   // pushes it here whenever it changes (Settings slider, session hydration).
@@ -450,7 +480,7 @@ export function registerAllHandlers(
     const overlay =
       typeof color === 'string' && HEX_COLOR_ZOOM.test(color) &&
       typeof symbolColor === 'string' && HEX_COLOR_ZOOM.test(symbolColor)
-        ? { color, symbolColor }
+        ? { color: overlayColorFor(win, color), symbolColor }
         : undefined;
     try {
       applyUiZoom(win, factor, overlay);

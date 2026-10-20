@@ -622,10 +622,16 @@ export const IPC = {
   // native min/max/close) so the controls never clash with the theme.
   // Windows-only no-op elsewhere (see registerHandlers).
   WINDOW_SET_TITLEBAR_OVERLAY: 'window:setTitleBarOverlay',
-  // macOS window glass: the renderer asks main to set the app's appearance
-  // ('dark' | 'light') from the theme, so the vibrancy material behind the
-  // window matches it. macOS-only no-op elsewhere (see registerHandlers).
+  // Window glass: the renderer asks main to set the app's appearance
+  // ('dark' | 'light') from the theme, so the material behind the window
+  // (macOS vibrancy, Windows 11 acrylic) matches it. A no-op on Linux and on
+  // Windows builds without glass (see registerHandlers).
   WINDOW_SET_APPEARANCE: 'window:setAppearance',
+  // Windows window glass: the renderer sends the glass level (plus its solid
+  // overlay colour pair) and main switches the acrylic material, the window
+  // background and the titleBarOverlay colour together. A no-op off Windows
+  // and on Windows builds without glass (see registerHandlers).
+  WINDOW_SET_GLASS: 'window:setGlass',
   // Whole-interface zoom (#822): the renderer asks main to scale the
   // BrowserWindow with setZoomFactor and re-place the native chrome to match.
   // One-way send — the persisted factor lives in the renderer store.

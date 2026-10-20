@@ -136,8 +136,10 @@ reads as a second, differently tinted panel.
   radius. The rail stays.
 - **Terminal geometry is untouched** by the frame: margin changes, a sidebar
   collapse and fullscreen each refit the terminals once, never per frame.
-- **Window glass (macOS, every theme, `--theme-glass: 1`):** the window gets
-  the `sidebar` vibrancy material behind a transparent background. The
+- **Window glass (macOS and Windows 11, every theme, `--theme-glass: 1`):**
+  on macOS the window gets the `sidebar` vibrancy material behind a
+  transparent background; on Windows 11 22H2 and later (build 22621+) it gets
+  the acrylic backdrop the same way. The
   renderer sets the app's appearance from the theme (a dark theme, the dark
   material; a light theme, the light one — app-wide, so native menus and the
   in-app browser's `prefers-color-scheme` follow the theme), and `data-glass`
@@ -150,7 +152,16 @@ reads as a second, differently tinted panel.
   about 29% Soft / 14% Clear; strongly hued themes (Stars & Stripes, Red
   Dynasty, Catppuccin) about 64% / 43% so their colour survives the grey
   material; light themes, whose material is milkier, about 14% / 3%.
-  Windows and Linux are opaque. The page fades through
+  Windows has its own numbers, because acrylic is a different material:
+  dark themes about 34% / 16%; strongly hued themes the macOS 64% / 43%;
+  light themes, whose acrylic reads grey rather than milky, about 60% / 40%
+  so they stay clean. On Windows the level switches the material at
+  runtime: Off sets the material to none, the opaque frame background and
+  a solid `titleBarOverlay` strip; Soft or Clear sets acrylic, a transparent
+  background and a transparent strip (a solid one would sit as a band behind
+  the caption buttons). Mica is not offered: it reads almost opaque. Windows
+  10, Windows 11 before 22H2 and Linux are opaque; on those Windows builds
+  the setting reads Off, disabled, with the reason. The page fades through
   `color-mix(… 0%, transparent)`, never the `transparent` keyword (which
   interpolates through black). `data-glass` carries the material's
   appearance (`dark` or `light`), which is how the light tuning applies to
@@ -1614,6 +1625,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-16 | Owner decision: per-bot models. A bot's profile picks the model and effort it thinks on and its workers' model and effort, each a text value with a muted Change (model combobox + effort Select, Cancel and Save), between the repository and on/off lines; Settings › Bots' list rows and the group dialog's bot rows add one muted, truncated note of what is set (e.g. "haiku (latest) · workers opus (latest)"), nothing when both are on the defaults. New Coordinator, Issue and Researcher bots think on a fast model, new Developer and Reviewer bots' workers on the strongest; existing bots keep theirs. Amends the profile's item list only | The owner could not choose models per bot; a one-line note keeps the list scannable without a column, and the profile stays a list of lines with no new control style |
 | 2026-10-16 | Owner decision: a bot's profile shows Today — each of its limits (turns per hour and day, worker time, running workers, the queue) with what is used of it, and one line on top naming the first that stops it, in a fixed order | A bot has four separate limits plus a queue cap, and the owner could not tell which stopped it: the reviewer had 26 turns left but no worker time and a full queue, and looked simply stuck. The limits stay as they are; they are made visible |
 | 2026-10-18 | Owner decision: photos in Bots messages, from the desktop composer and the phone. A muted picture button beside "+", staged chips and sent thumbnails in Chat view's 2026-09-25 grammar, the full photo in a dialog; no new colour or control style | The owner sends screenshots and photos to bots from the phone; the bot sees the photo itself in its turn, and the desktop draws what was sent the way Chat view already does |
+| 2026-10-20 | Owner decision: window glass on Windows 11 (acrylic). Windows 11 22H2+ gets the acrylic backdrop under the same Off / Soft / Clear setting, switched at runtime, with its own coverage numbers (light looks paint more so acrylic does not read grey) and a transparent caption-button strip; Windows 10, older Windows 11 builds and Linux stay opaque, and the setting says why there. Amends Window glass | A live prototype on Windows 11 showed acrylic blurring the desktop much like macOS vibrancy, staying on while unfocused, with clean caption buttons over a transparent strip; Mica read almost opaque. |
 
 ### Desktop conversation view
 

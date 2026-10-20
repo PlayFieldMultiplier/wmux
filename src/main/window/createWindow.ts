@@ -1,4 +1,5 @@
 import { app, BrowserWindow, powerMonitor, screen, shell } from 'electron';
+import os from 'node:os';
 import path from 'node:path';
 import { platformChoice } from '../../shared/platform';
 import { IPC } from '../../shared/constants';
@@ -6,6 +7,7 @@ import { PLUGIN_PROTOCOL_SCHEME } from '../../shared/pluginHost';
 import { PREVIEW_PROTOCOL_SCHEME } from '../../shared/filePreview';
 import { attachFlashFrameAutoClear } from './flashFrame';
 import { windowDisplayedReporter } from './windowDisplayed';
+import { initialWindowsGlass, markWindowGlass, windowsGlassSupported, winWindowOptions } from './windowGlass';
 import {
   DEFAULT_WINDOW_SIZE,
   MIN_WINDOW_SIZE,
@@ -170,7 +172,10 @@ function attachWindowStatePersistence(win: BrowserWindow): void {
   win.on('closed', stop);
 }
 
-export function createWindow(opts: { deferLoad?: boolean } = {}): BrowserWindow {
+export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown } = {}): BrowserWindow {
+  // Windows window glass (windowGlass.ts): acrylic on Windows 11 22H2+ unless
+  // the persisted level is Off; the renderer switches it at runtime after.
+  const winGlass = initialWindowsGlass(windowsGlassSupported(process.platform, os.release()), opts.windowGlass);
   // #1362 — restore the placement the user left the window in. Off-screen or
   // corrupt saved state yields an empty plan and the 1280x800 default.
   let plan: RestorePlan = { maximized: false, fullScreen: false };
@@ -215,18 +220,15 @@ export function createWindow(opts: { deferLoad?: boolean } = {}): BrowserWindow 
     autoHideMenuBar: true,
     // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/app/shell/TitleBar.tsx), MIT License, Copyright (c) 2026 Nick
     ...platformChoice<Partial<Electron.BrowserWindowConstructorOptions>>({
-      win: {
-        titleBarStyle: 'hidden',
-        // The overlay strip sits on the window frame, so it starts in the
-        // default (Tint) theme's frame colour, --frame-bg #121015 — the
-        // renderer re-pushes the live theme's painted frame colour on
-        // boot/theme-change via window:setTitleBarOverlay (overlayColors()).
-        // The first paint uses the same colour so the controls never sit on
-        // a different shade before the renderer paints.
-        // Height 40 = uiZoom's CHROME_H at zoom 1 (the scaled resync uses it).
-        titleBarOverlay: { color: '#121015', symbolColor: '#C2BDC9', height: 40 },
-        backgroundColor: '#121015',
-      },
+      // The overlay strip sits on the window frame, so the opaque window
+      // starts it in the default (Tint) theme's frame colour, --frame-bg
+      // #121015 — the renderer re-pushes the live theme's painted frame colour
+      // on boot/theme-change via window:setTitleBarOverlay (overlayColors()).
+      // The first paint uses the same colour so the controls never sit on a
+      // different shade before the renderer paints. With glass the strip, the
+      // background and the material are the acrylic set instead
+      // (winWindowOptions in windowGlass.ts).
+      win: winWindowOptions(winGlass),
       mac: {
         titleBarStyle: 'hidden',
         // Centered in the 40px bar: macTrafficLightPosition(1) in uiZoom.ts.
@@ -263,6 +265,7 @@ export function createWindow(opts: { deferLoad?: boolean } = {}): BrowserWindow 
   if (!plan.fullScreen && plan.maximized) {
     mainWindow.maximize();
   }
+  if (process.platform === 'win32') markWindowGlass(mainWindow, winGlass);
   attachWindowStatePersistence(mainWindow);
 
   // macOS: native fullscreen hides the traffic lights, so the renderer's

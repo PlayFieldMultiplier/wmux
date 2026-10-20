@@ -286,6 +286,24 @@ export class SessionManager {
   }
 
   /**
+   * The persisted window glass level, as a targeted read. The window is built
+   * before the renderer loads the session, and on Windows the glass level
+   * decides the window's background material at construction. Same shape as
+   * readAutoUpdateEnabled; the caller whitelists the raw value. Returns null
+   * when nothing is persisted, which the caller reads as the default level.
+   */
+  readWindowGlass(): unknown {
+    try {
+      const loaded = atomicReadJSONSync<SessionData>(this.filePath, {
+        validate: SessionManager.isSessionData,
+      });
+      return loaded?.windowGlass ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The persisted per-site memory toggle, as a targeted read.
    *
    * Same shape and same reasoning as readAutoUpdateEnabled: the browser RPC

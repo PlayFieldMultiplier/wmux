@@ -1191,10 +1191,11 @@ select option {
   animation: none;
 }
 
-/* ─── Window glass (macOS) ────────────────────────────────────────────────────
+/* ─── Window glass (macOS, Windows 11) ────────────────────────────────────────
  * Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/styles/index.css),
  * MIT License, Copyright (c) 2026 Nick. Main gives the macOS window a vibrancy
- * material in the theme's appearance; `data-glass` (utils/windowGlass.ts) is
+ * material, and the Windows 11 22H2+ window the acrylic backdrop, in the
+ * theme's appearance; `data-glass` (utils/windowGlass.ts) is
  * set while the theme and the material agree and the user's glass level is
  * not Off. The page then stops painting an opaque backdrop: the frame (the
  * titlebar row and the rail) and the sheet's sidebar tone paint part-way over
@@ -1232,6 +1233,38 @@ html[data-glass="light"] {
 html[data-glass="light"][data-glass-level="clear"] {
   --glass-frame: 0%;
   --glass-sheet: 3%;
+}
+/* Windows 11 acrylic is a different material from the macOS one, so it has
+ * its own numbers. Each rule carries `data-platform`, so it outranks the
+ * macOS rule of the same case above. Dark acrylic is already deep, so a dark
+ * look paints a little more than on macOS to keep its own tone: about 34%
+ * Soft and 16% Clear over the sidebar. Strongly hued looks keep the macOS
+ * numbers. Light acrylic reads grey, the opposite of the milky macOS
+ * material, so a light look paints much more of its own colour to stay
+ * clean: about 60% Soft and 40% Clear. */
+html[data-glass][data-platform="win32"] {
+  --glass-frame: 30%;
+  --glass-sheet: 6%;
+}
+html[data-glass][data-platform="win32"][data-glass-level="clear"] {
+  --glass-frame: 12%;
+  --glass-sheet: 5%;
+}
+html[data-glass][data-platform="win32"]:is([data-theme="stars-and-stripes"], [data-theme="red-dynasty"], [data-theme="catppuccin-mocha"]) {
+  --glass-frame: 55%;
+  --glass-sheet: 20%;
+}
+html[data-glass][data-platform="win32"]:is([data-theme="stars-and-stripes"], [data-theme="red-dynasty"], [data-theme="catppuccin-mocha"])[data-glass-level="clear"] {
+  --glass-frame: 35%;
+  --glass-sheet: 12%;
+}
+html[data-glass="light"][data-platform="win32"] {
+  --glass-frame: 55%;
+  --glass-sheet: 10%;
+}
+html[data-glass="light"][data-platform="win32"][data-glass-level="clear"] {
+  --glass-frame: 35%;
+  --glass-sheet: 8%;
 }
 html[data-glass],
 html[data-glass] body,
