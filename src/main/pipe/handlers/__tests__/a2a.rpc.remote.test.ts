@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { mintCommanderToken } from '../../../deck/commanderTrust';
 import { RpcRouter } from '../../RpcRouter';
-import { registerA2aRpc, type RemoteA2aRpcDeps } from '../a2a.rpc';
+import { PEER_HINTS_DEADLINE_MS, registerA2aRpc, type RemoteA2aRpcDeps } from '../a2a.rpc';
 import type { ClaudeWorker } from '../../../a2a/ClaudeWorker';
 import type { DaemonClient } from '../../../DaemonClient';
 import type { A2aRemoteTarget } from '../../../../shared/a2aRemoteDelivery';
@@ -284,5 +284,17 @@ describe('a2a.discover — remote panes', () => {
     const failed = await call(setup(), 'a2a.discover', { workspaceId: 'ws-a' });
     expect(failed).not.toHaveProperty('remotePeers');
     expect(failed.agents).toHaveLength(2);
+    // A read that never answers is cut at the deadline; the agents still come back.
+    vi.useFakeTimers();
+    try {
+      remote.listPeers.mockReturnValue(new Promise(() => undefined));
+      const pending = call(setup(), 'a2a.discover', { workspaceId: 'ws-a' });
+      await vi.advanceTimersByTimeAsync(PEER_HINTS_DEADLINE_MS);
+      const slow = await pending;
+      expect(slow).not.toHaveProperty('remotePeers');
+      expect(slow.agents).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

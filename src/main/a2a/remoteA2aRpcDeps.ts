@@ -52,8 +52,8 @@ const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 
  */
 async function listPeerHints(dc: DaemonRpc, workspaceId?: string): Promise<A2aRemotePeerHint[]> {
   const [status, list] = await Promise.all([
-    dc.rpc('a2a.remote.hosts.status', {}),
-    dc.rpc('a2a.remote.links.list', {}),
+    dc.rpc('a2a.remote.hosts.status', {}, { timeoutMs: PEER_EXPOSED_TIMEOUT_MS }),
+    dc.rpc('a2a.remote.links.list', {}, { timeoutMs: PEER_EXPOSED_TIMEOUT_MS }),
   ]);
   const hosts = isRecord(status) && Array.isArray(status.hosts) ? (status.hosts as A2aRemoteHostStatus[]) : [];
   const links = (isRecord(list) && Array.isArray(list.links) ? (list.links as A2aLinkRecordV1[]) : [])
@@ -77,12 +77,14 @@ async function listPeerHints(dc: DaemonRpc, workspaceId?: string): Promise<A2aRe
     let shown: number | null = null;
     if (h.role === 'server') {
       try {
-        const res = await dc.rpc('a2a.remote.exposure.get', { hostId: h.hostId });
+        const res = await dc.rpc('a2a.remote.exposure.get', { hostId: h.hostId }, { timeoutMs: PEER_EXPOSED_TIMEOUT_MS });
         const exp = isRecord(res) && isRecord(res.exposure) ? res.exposure : null;
         const ids = exp && Array.isArray(exp.workspaceIds) ? (exp.workspaceIds as string[]) : [];
         const panes = exp && isRecord(exp.paneIds) ? exp.paneIds : {};
-        // a2a.remote.exposure.set always writes each workspace's pane list.
-        shown = ids.reduce((n, ws) => n + (Array.isArray(panes[ws]) ? (panes[ws] as unknown[]).length : 0), 0);
+        // A workspace with no pane list shows every pane it has: the count is unknown here.
+        shown = ids.every((ws) => Array.isArray(panes[ws]))
+          ? ids.reduce((n, ws) => n + (panes[ws] as unknown[]).length, 0)
+          : null;
       } catch { /* the hint falls back to the general line */ }
     }
     let hint: string;

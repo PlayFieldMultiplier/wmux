@@ -76,5 +76,14 @@ describe('daemonRemoteA2aRpcDeps', () => {
       { name: 'mac-mini', paired: true, connected: true, exposedPanes: 0, pendingLinks: 0, hint: expect.stringMatching(/shows no pane to this one/) },
     ]);
     expect(await daemonRemoteA2aRpcDeps(() => null).listPeers!()).toEqual([]);
+    // A PC that joined this one and sees a whole workspace (no pane list): the count is unknown, not zero.
+    const whole = vi.fn(async (method: string) => {
+      if (method === 'a2a.remote.hosts.status') return { hosts: [{ hostId: 'h', name: 'desk', role: 'server', state: 'connected', pending: 0 }] };
+      if (method === 'a2a.remote.links.list') return { links: [] };
+      if (method === 'a2a.remote.exposure.get') return { exposure: { v: 1, hostId: 'h', workspaceIds: ['ws'], updatedAt: 'x' } };
+      return {};
+    });
+    const [desk] = await daemonRemoteA2aRpcDeps(() => ({ rpc: whole })).listPeers!();
+    expect(desk.hint).not.toMatch(/no pane yet/);
   });
 });

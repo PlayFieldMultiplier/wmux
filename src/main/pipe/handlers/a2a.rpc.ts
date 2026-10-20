@@ -300,6 +300,9 @@ export interface A2aRemotePeerHint {
   hint: string;
 }
 
+/** The most a2a.discover waits for the paired-PC hints; past it they are left out. */
+export const PEER_HINTS_DEADLINE_MS = 2_000;
+
 const REMOTE_QUEUED = { stored: true, notified: false, queued: true, reason: 'queued_for_remote_host' } as const;
 const REMOTE_STATES: ReadonlySet<string> = new Set(['working', 'input-required', 'completed', 'failed', 'canceled']);
 
@@ -965,9 +968,14 @@ export function registerA2aRpc(
   router.register('a2a.whoami', (params) => sendToRenderer(getWindow, 'a2a.whoami', params));
   router.register('a2a.discover', async (params) => {
     const ws = typeof params.workspaceId === 'string' && params.workspaceId ? params.workspaceId : '';
-    // Started beside the renderer read: a joined PC may be asked over the network.
+    // Started beside the renderer read and capped: a joined PC may be asked
+    // over the network, and the hints are optional.
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     const peersP: Promise<A2aRemotePeerHint[]> = remote?.listPeers
-      ? remote.listPeers(ws || undefined).catch(() => [])
+      ? Promise.race([
+        remote.listPeers(ws || undefined).catch(() => []),
+        new Promise<A2aRemotePeerHint[]>((resolve) => { deadline = setTimeout(() => resolve([]), PEER_HINTS_DEADLINE_MS); }),
+      ]).finally(() => clearTimeout(deadline))
       : Promise.resolve([]);
     const res = await sendToRenderer(getWindow, 'a2a.discover', params);
     if (!remote || !isRecord(res) || !Array.isArray(res.agents)) return res;
