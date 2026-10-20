@@ -9,6 +9,8 @@ import { useStore } from '../../../stores';
 import MiniSidebar from '../MiniSidebar';
 import { seedFleetTriageStore } from '../../../utils/__tests__/fleetTriageFixture';
 import { selectFleetSectionCounts } from '../../../stores/selectors/fleet';
+import { setRoomsApiForTests, useRoomSync, type RoomsApi } from '../../../hooks/useRoomSync';
+import { setFactoryBotPort } from '../../Room/factoryPorts';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -56,6 +58,57 @@ describe('sidebar icon rail', () => {
     // No status read yet (or no bot runtime): not listed either.
     act(() => useStore.setState({ roomStatus: null }));
     expect(navIds()).toEqual(['home', 'fleet', 'schedules', 'remote', 'git', 'connectors']);
+  });
+
+  describe('kept in step with main by useRoomSync, with no window focus', () => {
+    // main's answer to room:status, and the BOT_EVENT listeners the bridge holds.
+    let enabled = false;
+    let botEvents: (() => void)[] = [];
+    let focusEvents = 0;
+    const onFocus = () => { focusEvents += 1; };
+    beforeEach(() => {
+      enabled = false;
+      botEvents = [];
+      focusEvents = 0;
+      window.addEventListener('focus', onFocus);
+      useStore.setState({ roomStatus: null });
+      setRoomsApiForTests({
+        status: vi.fn(async () => ({ running: true, enabled, hqWorkspaceId: null })),
+        onEvent: vi.fn(() => () => undefined),
+      } as unknown as RoomsApi);
+      setFactoryBotPort({
+        available: true,
+        list: async () => [],
+        subscribe: (fn) => { botEvents.push(fn); return () => { botEvents = botEvents.filter((f) => f !== fn); }; },
+        act: async () => ({ ok: true }),
+      });
+    });
+    afterEach(() => {
+      window.removeEventListener('focus', onFocus);
+      setRoomsApiForTests(undefined);
+      setFactoryBotPort(null);
+    });
+    function App() {
+      useRoomSync();
+      return <MiniSidebar rail collapsed={false} />;
+    }
+
+    it('lists Bots once main says the bots were switched on elsewhere (a script), on its push', async () => {
+      await act(async () => root.render(<App />));
+      expect(navIds()).toEqual(['home', 'fleet', 'schedules', 'remote', 'git']);
+      // Switched on by a caller other than Settings: main pushes a bot event.
+      enabled = true;
+      await act(async () => { for (const fn of botEvents) fn(); });
+      expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git']);
+      expect(focusEvents).toBe(0);
+    });
+
+    it('lists Bots on a fresh mount (a reload) while the bots are already on', async () => {
+      enabled = true;
+      await act(async () => root.render(<App />));
+      expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git']);
+      expect(focusEvents).toBe(0);
+    });
   });
 
   it('the Bots shortcut and palette command open Settings › Bots while the bots are off', () => {

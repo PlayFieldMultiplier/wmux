@@ -1,7 +1,9 @@
 // Rooms — keeps the room slice in step with main.
 //
 // `useRoomSync` (mounted once, in AppLayout) asks whether rooms run and the
-// factory is on, again whenever the window regains focus, and applies every
+// factory is on, again on every BOT_EVENT push (main sends one when the
+// factory settings change, from any caller, and when the bot runtime starts)
+// and, as a second layer, whenever the window regains focus; it applies every
 // ROOM_EVENT push to the slice. The loaders below read pages by seq: a
 // timeline's first read is the newest page; a catch-up read continues from
 // its cursor (`nextSinceSeq`) page by page while `hasMore`, so a push missed
@@ -16,6 +18,7 @@ import type { ElectronAPI } from '../../preload/preload';
 import type { ThreadId } from '../../shared/room';
 import { ALL_THREADS, timelineKey, type TimelineThread } from '../stores/slices/roomSlice';
 import { noteRemovedBotHues } from '../components/Room/BotAvatar';
+import { getFactoryBotPort } from '../components/Room/factoryPorts';
 
 export type RoomsApi = ElectronAPI['rooms'];
 
@@ -35,15 +38,22 @@ export function setRoomsApiForTests(api: RoomsApi | null | undefined): void {
 /** Catch-up stops after this many pages (ROOM_LIMITS.PAGE cards each). */
 export const CATCH_UP_MAX_PAGES = 50;
 
+/** The newest status read: reads overlap (mount, focus, every bot event),
+ *  and only the newest one's answer is applied. */
+let statusRead = 0;
+
 export async function refreshRoomStatus(): Promise<void> {
   const api = roomsApi();
   const st = useStore.getState();
+  const read = ++statusRead;
   if (!api) {
     st.setRoomStatus(null);
     return;
   }
   try {
     const r = await api.status();
+    // An older read answering after a newer one would undo it.
+    if (read !== statusRead) return;
     useStore.getState().setRoomStatus('ok' in r ? null : { running: r.running, enabled: r.enabled, hqWorkspaceId: r.hqWorkspaceId });
   } catch {
     // main gone: keep the last answer
@@ -248,17 +258,22 @@ export async function markRoomThreadRead(workspaceId: string, threadId: ThreadId
   await loadRoomThreads(workspaceId);
 }
 
-/** Status on mount and on focus; every push into the slice. */
+/** Status on mount, on every bot event and on focus; every push into the
+ *  slice. */
 export function useRoomSync(): void {
   useEffect(() => {
     const api = roomsApi();
     if (!api) return;
     void refreshRoomStatus();
     const off = api.onEvent((payload) => useStore.getState().applyRoomEvent(payload));
+    // The bridge passes no payload: any bot event re-reads the status, and an
+    // unchanged answer leaves the slice as it was (setRoomStatus).
+    const offBots = getFactoryBotPort().subscribe(() => void refreshRoomStatus());
     const onFocus = () => void refreshRoomStatus();
     window.addEventListener('focus', onFocus);
     return () => {
       off();
+      offBots();
       window.removeEventListener('focus', onFocus);
     };
   }, []);
