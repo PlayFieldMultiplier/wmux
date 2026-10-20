@@ -101,6 +101,7 @@ export const pl = {
   "connectors.confirm": "Usuń połączenie",
   "connectors.configure": "Konfiguruj",
 
+  'plugins.page.frameUnavailable': 'Nie udało się otworzyć strony wtyczki. Otwórz ją ponownie, aby spróbować jeszcze raz.',
   'plugins.page.extension': 'Wtyczka interfejsu',
   'plugins.page.approve': 'Sprawdź uprawnienia, aby otworzyć',
   'plugins.page.approvalFailed': 'Nie udało się poprosić o zgodę. Spróbuj ponownie.',

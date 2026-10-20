@@ -101,6 +101,7 @@ export const zh = {
   "connectors.confirm": "删除连接",
   "connectors.configure": "配置",
 
+  'plugins.page.frameUnavailable': '无法打开此插件页面。请重新打开后重试。',
   'plugins.page.extension': 'UI 插件',
   'plugins.page.approve': '审核权限后打开',
   'plugins.page.approvalFailed': '无法请求授权。请重试。',

@@ -101,6 +101,7 @@ export const ko = {
   "connectors.confirm": "연결 삭제",
   "connectors.configure": "설정",
 
+  'plugins.page.frameUnavailable': '플러그인 페이지를 열 수 없습니다. 페이지를 다시 열어 주세요.',
   'plugins.page.extension': 'UI 플러그인',
   'plugins.page.approve': '권한 검토 후 열기',
   'plugins.page.approvalFailed': '권한 승인을 요청하지 못했습니다. 다시 시도하세요.',

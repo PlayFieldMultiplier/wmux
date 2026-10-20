@@ -1,3 +1,4 @@
+import { PLUGIN_FRAME_IPC } from '../shared/pluginHost';
 import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult } from '../shared/connectorTerminal';
 import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthAction, type ConnectorOAuthClient, type ConnectorOAuthResult } from '../shared/connectorOAuth';
 import { CONNECTOR_CATALOG_IPC, type ConnectorCatalogResult } from '../shared/connectorCatalog';
@@ -1532,6 +1533,13 @@ const electronAPI = {
     check: (id: string) => ipcRenderer.invoke(CONNECTOR_CHECK_IPC, id) as Promise<ConnectorCheckResult>,
   },
   plugins: {
+    frameReady: (pluginName: string, frameName: string, nonce: string) =>
+      ipcRenderer.invoke(PLUGIN_FRAME_IPC.ready, pluginName, frameName, nonce) as Promise<boolean>,
+    onFrameNavigation: (callback: (frameName: string) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, frameName: string) => callback(frameName);
+      ipcRenderer.on(PLUGIN_FRAME_IPC.navigated, listener);
+      return () => { ipcRenderer.removeListener(PLUGIN_FRAME_IPC.navigated, listener); };
+    },
     list: () => ipcRenderer.invoke(IPC.PLUGINS_LIST) as Promise<{
       plugins: unknown[];
       failures: Array<{ name: string; errors: string[] }>;

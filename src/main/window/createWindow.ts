@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { platformChoice } from '../../shared/platform';
 import { IPC } from '../../shared/constants';
+import { attachPluginFrameNavigation } from '../plugins/pluginFrameNavigation';
 import { PLUGIN_PAGE_CSP } from '../plugins/pluginProtocol';
 import { PLUGIN_PROTOCOL_SCHEME } from '../../shared/pluginHost';
 import { PREVIEW_PROTOCOL_SCHEME } from '../../shared/filePreview';
@@ -315,6 +316,8 @@ export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown;
   // UI zoom (#822) is now renderer-driven: the persisted factor lives in the
   // renderer store and is pushed via the window:setUiScale IPC on hydration
   // and on Settings changes. See src/renderer/components/Layout/AppLayout.tsx.
+
+  attachPluginFrameNavigation(mainWindow.webContents);
 
   if (!opts.deferLoad) {
     loadMainRenderer(mainWindow);

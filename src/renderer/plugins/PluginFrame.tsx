@@ -1,3 +1,5 @@
+import { pluginFrameHandshake } from './pluginFrameHandshake';
+import { useT } from '../hooks/useT';
 import { subscribeAgentState } from './agentStateSubscription';
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../stores';
@@ -31,10 +33,9 @@ const EVENT_POLL_INTERVAL_MS = 1000;
  *     clientName, so the Phase 2.2 permission stack (trust status,
  *     capability/path checks, approval prompts) applies to every call.
  *
- * Bridge handshake: on iframe `load`, the host creates a MessageChannel and
- * posts `{ v: 1, kind: 'init' }` with port2 transferred. targetOrigin is
- * `'*'` by necessity — a sandboxed frame's origin is opaque ("null") and
- * unmatchable; the port transfer is still point-to-point to this frame.
+ * Bridge handshake: main bootstraps a channel in the checked document. The
+ * host accepts that document's port only after main confirms execution. A
+ * later navigation cannot inherit the port through a WindowProxy transfer.
  *
  * Event forwarding (`forwardEvents`): the host polls `events.poll` THROUGH
  * the plugin's own RPC identity (so the events.subscribe capability and the
@@ -66,10 +67,15 @@ export default function PluginFrame({
   railPage?: boolean;
   className?: string;
 }) {
+  const t = useT();
+  const [blocked, setBlocked] = useState(false);
+  useEffect(() => setBlocked(false), [pluginName, entry]);
+  const [frameId] = useState(() => crypto.randomUUID());
+  const frameName = `wmux-plugin-frame:${pluginName}:${frameId}`;
   const frameRef = useRef<HTMLIFrameElement>(null);
   const portRef = useRef<MessagePort | null>(null);
-  // Bumped every time a fresh port is handed to the frame. Zero means no
-  // bridge yet, so the poll effect has nowhere to deliver events.
+  // Monotonic across retirement and handoff, even when React batches both.
+  // Readiness comes from portRef; generations must never repeat on reload.
   const [bridgeEpoch, setBridgeEpoch] = useState(0);
   // Fix: scope events.poll to the active workspace so plugins cannot observe
   // other workspaces' lifecycle events (TODOS: "Unscoped plugin events.poll").
@@ -86,7 +92,7 @@ export default function PluginFrame({
   // ── Bridge: port lifetime, request forwarding, palette commands ──────────
   useEffect(() => {
     const iframe = frameRef.current;
-    if (!iframe) return;
+    if (!iframe || blocked) return;
     let disposed = false;
     let unregisterFrame: (() => void) | null = null;
 
@@ -115,15 +121,30 @@ export default function PluginFrame({
       }
     };
 
-    const onLoad = () => {
+    const handshake = pluginFrameHandshake(iframe, pluginName, frameName);
+    let navigationEpoch = 0;
+    const dropBridge = () => {
+      navigationEpoch++;
+      handshake.cancel();
       portRef.current?.close();
+      portRef.current = null;
       unregisterFrame?.();
-      const channel = new MessageChannel();
-      const port = channel.port1;
+      unregisterFrame = null;
+      setBridgeEpoch((n) => n + 1);
+    };
+    const unsubscribeNavigation = window.electronAPI.plugins.onFrameNavigation((name) => {
+      if (name === frameName) dropBridge();
+    });
+    const onLoad = async () => {
+      dropBridge();
+      const epoch = navigationEpoch;
+      const port = await handshake.request();
+      if (disposed || epoch !== navigationEpoch) { port?.close(); return; }
+      if (!port) { setBlocked(true); return; }
       portRef.current = port;
       port.onmessage = (e: MessageEvent) => {
         const req = parseBridgeRequest(e.data);
-        if (!req || disposed) return;
+        if (!req || disposed || portRef.current !== port) return;
         const requestWorkspace = useStore.getState().activeWorkspaceId;
         const requestEpoch = scopeEpochRef.current;
         window.electronAPI.plugins
@@ -166,7 +187,7 @@ export default function PluginFrame({
             });
           });
       };
-      iframe.contentWindow?.postMessage({ v: PLUGIN_BRIDGE_VERSION, kind: 'init' }, '*', [channel.port2]);
+      port.start();
 
       // Palette command delivery (kind:'command' envelopes) + queued flush.
       unregisterFrame = registerFrame(pluginName, (command) => {
@@ -179,23 +200,22 @@ export default function PluginFrame({
     iframe.addEventListener('load', onLoad);
     return () => {
       disposed = true;
+      unsubscribeNavigation();
+      handshake.dispose();
+      navigationEpoch++;
       iframe.removeEventListener('load', onLoad);
       unregisterFrame?.();
       unregisterFrame = null;
       portRef.current?.close();
       portRef.current = null;
-      // Back to "no bridge". Without this the invariant only holds until the
-      // first teardown: a pluginName/entry change nulls the port but leaves
-      // the epoch at >= 1, so the poll effect restarts immediately and spends
-      // the window before the new `load` posting into a null port — events
-      // dropped, silently, with nothing to notice it.
-      setBridgeEpoch(0);
+      // Invalidate subscriptions even if a new load is batched with cleanup.
+      setBridgeEpoch((n) => n + 1);
     };
-  }, [pluginName, entry, railPage]);
+  }, [pluginName, entry, railPage, frameName, blocked]);
 
   // ── Event forwarding: re-subscribes when the active workspace changes ────
   useEffect(() => {
-    if (!forwardEvents || bridgeEpoch === 0) return;
+    if (!forwardEvents || !portRef.current) return;
     let cursor: number | null = null; // null until the head is established
     let inFlight = false;
     let stopped = false;
@@ -268,9 +288,12 @@ export default function PluginFrame({
     });
   }, [pluginName, agentStateEvents, railPage, activeWorkspaceId, bridgeEpoch, scopeEpoch]);
 
+  if (blocked) return <div role="status" className="p-4 text-[13px] text-[var(--text-sub)]">{t('plugins.page.frameUnavailable')}</div>;
   return (
     <iframe
+      key={frameName}
       ref={frameRef}
+      name={frameName}
       src={`${PLUGIN_PROTOCOL_SCHEME}://${pluginName}/${entry}`}
       sandbox="allow-scripts"
       className={className}
