@@ -107,6 +107,11 @@ export async function openTerminalTab(req: {
   shell?: string;
   /** Start here instead of the workspace's startup folder; null = the home folder. */
   cwd?: string | null;
+  /**
+   * The user's own shell environment only: no workspace profile env and no
+   * bound-account env (agent setup, which must match what detection reads).
+   */
+  plainEnv?: boolean;
 }): Promise<LoginTab | null> {
   const state = useStore.getState();
   if (state.paneGate !== 'ready') return null;
@@ -125,21 +130,20 @@ export async function openTerminalTab(req: {
   // this initialCommand, and main applies options.env after any account
   // binding — so the tab always logs into THIS account's dir. No role binding:
   // it would rewrite the login command as an agent launch.
-  const options = withWorkspaceProfile(
-    withDefaultShell(
+  const base = withDefaultShell(
       {
         workspaceId: ws.id,
         cwd,
         spawnKind: 'user-shell' as const,
+        ...(req.plainEnv ? { ignoreAccountBinding: true } : {}),
         ...(req.env ? { env: req.env } : {}),
         ...(req.wslAccountLoginEnvKey ? { wslAccountLoginEnvKey: req.wslAccountLoginEnvKey } : {}),
         ...(req.shell ? { shell: req.shell } : {}),
         initialCommand: req.initialCommand,
       },
       state.defaultShell,
-    ),
-    ws.profile,
-  );
+    );
+  const options = req.plainEnv ? base : withWorkspaceProfile(base, ws.profile);
   try {
     const created = await window.electronAPI.pty.create(options) as { id: string; shell?: string; cwd?: string };
     const dispose = () => { void window.electronAPI.pty.dispose(created.id).catch(() => undefined); };

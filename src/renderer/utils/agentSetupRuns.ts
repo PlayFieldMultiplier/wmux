@@ -48,6 +48,8 @@ export type AgentRunKind = 'install' | 'login';
 export type AgentRunPhase = 'running' | 'succeeded' | 'failed' | 'not-found' | 'closed' | 'no-tab';
 
 export interface AgentRun {
+  /** Unique per start: a late callback of an earlier run never touches a newer one. */
+  id: number;
   agent: AgentId;
   kind: AgentRunKind;
   command: string;
@@ -79,9 +81,9 @@ function set(next: Partial<AgentSetupState>): void {
   for (const l of listeners) l();
 }
 
-function setRun(agent: AgentId, patch: Partial<AgentRun>): void {
+function setRun(agent: AgentId, runId: number, patch: Partial<AgentRun>): void {
   const cur = state.runs[agent];
-  if (!cur) return;
+  if (!cur || cur.id !== runId) return;
   set({ runs: { ...state.runs, [agent]: { ...cur, ...patch } } });
 }
 
@@ -128,24 +130,36 @@ export function runSucceeded(kind: AgentRunKind, status: AgentSetupStatus | null
   return kind === 'install' ? status.readiness !== 'not-installed' : status.readiness === 'ready';
 }
 
+/** Longest unterminated tail kept between chunks (a mark is ~12 bytes). */
+const MARK_CARRY_MAX = 256;
+
 /**
  * Finds the end of the line the pane ran in raw PTY output: the first
- * `133;D[;exit]` after a `133;C`. Exported for tests. Chunks may split a mark,
- * so the caller feeds the previous tail back in.
+ * terminated `133;D[;exit]` (BEL or ST) after a terminated `133;C`. Exported
+ * for tests. Chunks may split a mark anywhere, so the caller passes back
+ * `rest` (everything after the last complete mark, capped) with the next chunk.
  */
 export function scanCommandEnd(
   text: string,
   started: boolean,
-): { started: boolean; ended: boolean; exitCode: number | null } {
+): { started: boolean; ended: boolean; exitCode: number | null; rest: string } {
   let s = started;
+  let consumed = 0;
   // eslint-disable-next-line no-control-regex -- OSC 133 marks are control bytes
-  const re = /\x1b\]133;([CD])(?:;(-?\d+))?/g;
+  const re = /\x1b\]133;([CD])(?:;(-?\d+))?[^\x07\x1b]*(?:\x07|\x1b\\)/g;
   for (let m = re.exec(text); m; m = re.exec(text)) {
+    consumed = re.lastIndex;
     if (m[1] === 'C') s = true;
-    else if (s) return { started: true, ended: true, exitCode: m[2] !== undefined ? Number(m[2]) : null };
+    else if (s) return { started: true, ended: true, exitCode: m[2] !== undefined ? Number(m[2]) : null, rest: '' };
   }
-  return { started: s, ended: false, exitCode: null };
+  // Keep only what could still be the start of a mark.
+  const tail = text.slice(consumed);
+  const esc = tail.lastIndexOf('\x1b]');
+  const rest = esc >= 0 ? tail.slice(esc).slice(-MARK_CARRY_MAX) : (tail.endsWith('\x1b') ? '\x1b' : '');
+  return { started: s, ended: false, exitCode: null, rest };
 }
+
+let nextRunId = 1;
 
 function shellFor(shell: AgentCommandShell): string | undefined {
   return shell === 'powershell' ? 'powershell.exe' : undefined;
@@ -187,7 +201,7 @@ export async function startAgentRun(
   stopWatch(agent);
   const line = kind === 'install' ? plan.install : plan.login;
   const command = line?.command ?? '';
-  const base: AgentRun = { agent, kind, command, phase: 'no-tab', ptyId: null, workspaceId: null };
+  const base: AgentRun = { id: nextRunId++, agent, kind, command, phase: 'no-tab', ptyId: null, workspaceId: null };
   if (!line) {
     set({ runs: { ...state.runs, [agent]: base } });
     return base;
@@ -197,6 +211,7 @@ export async function startAgentRun(
     initialCommand: command,
     title,
     cwd: runCwd(),
+    plainEnv: true,
     ...(shell ? { shell } : {}),
   });
   if (!tab) {
@@ -205,11 +220,11 @@ export async function startAgentRun(
   }
   const run: AgentRun = { ...base, phase: 'running', ptyId: tab.ptyId, workspaceId: tab.workspaceId, screen: null };
   set({ runs: { ...state.runs, [agent]: run } });
-  watch(agent, kind, tab.workspaceId, tab.ptyId);
+  watch(run.id, agent, kind, tab.workspaceId, tab.ptyId);
   return run;
 }
 
-function watch(agent: AgentId, kind: AgentRunKind, workspaceId: string, ptyId: string): void {
+function watch(runId: number, agent: AgentId, kind: AgentRunKind, workspaceId: string, ptyId: string): void {
   let started = false;
   let carry = '';
   let ticks = 0;
@@ -224,25 +239,28 @@ function watch(agent: AgentId, kind: AgentRunKind, workspaceId: string, ptyId: s
     const statuses = await refreshAgentStatus();
     const status = agentStatusOf(agent, statuses);
     if (runSucceeded(kind, status)) {
-      setRun(agent, { phase: 'succeeded', screen: null });
+      setRun(agent, runId, { phase: 'succeeded', screen: null });
       return;
     }
     if (kind === 'login' || paneGone || exitCode === undefined) {
-      setRun(agent, { phase: 'closed', screen: null });
+      setRun(agent, runId, { phase: 'closed', screen: null });
       return;
     }
-    if (exitCode === 0) {
-      setRun(agent, { phase: 'not-found' });
+    // `curl … | sh` exits with the shell's status, so a failed download can
+    // still end 0: read the pane before calling it "installed but not found".
+    const failure = classifyInstallFailure(paneText(ptyId));
+    if (exitCode === 0 && failure === 'unknown') {
+      setRun(agent, runId, { phase: 'not-found' });
       return;
     }
-    setRun(agent, { phase: 'failed', failure: classifyInstallFailure(paneText(ptyId)) });
+    setRun(agent, runId, { phase: 'failed', failure });
   };
 
   const offData = pty?.onData?.((id: string, data: string, replay: boolean) => {
     if (id !== ptyId || replay) return;
     const scan = scanCommandEnd(carry + data, started);
     started = scan.started;
-    carry = data.slice(-32);
+    carry = scan.rest;
     if (scan.ended) void finish(scan.exitCode, false);
   });
   const offExit = pty?.onExit?.((id: string) => {
@@ -261,7 +279,7 @@ function watch(agent: AgentId, kind: AgentRunKind, workspaceId: string, ptyId: s
     }
     if (kind === 'login' && agent === 'claude') {
       const screen = claudeSetupScreen(paneText(ptyId));
-      if (screen !== (state.runs[agent]?.screen ?? null)) setRun(agent, { screen });
+      if (screen !== (state.runs[agent]?.screen ?? null)) setRun(agent, runId, { screen });
     }
     if (ticks % DETECT_EVERY_TICKS === 0) {
       void refreshAgentStatus().then((statuses) => {
@@ -274,7 +292,7 @@ function watch(agent: AgentId, kind: AgentRunKind, workspaceId: string, ptyId: s
     clearInterval(timer);
     offData?.();
     offExit?.();
-    watches.delete(agent);
+    if (watches.get(agent) === stop) watches.delete(agent);
   }
   watches.set(agent, stop);
 }

@@ -63,9 +63,21 @@ const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve();
 
 describe('scanCommandEnd', () => {
   it('ignores the first prompt\'s command-end and reads the exit after a command start', () => {
-    expect(scanCommandEnd(`${D(0)}`, false)).toEqual({ started: false, ended: false, exitCode: null });
-    expect(scanCommandEnd(`${D(0)}${C}output${D(7)}`, false)).toEqual({ started: true, ended: true, exitCode: 7 });
-    expect(scanCommandEnd(`more${D(0)}`, true)).toEqual({ started: true, ended: true, exitCode: 0 });
+    expect(scanCommandEnd(`${D(0)}`, false)).toMatchObject({ started: false, ended: false, exitCode: null });
+    expect(scanCommandEnd(`${D(0)}${C}output${D(7)}`, false)).toMatchObject({ started: true, ended: true, exitCode: 7 });
+    expect(scanCommandEnd(`more${D(0)}`, true)).toMatchObject({ started: true, ended: true, exitCode: 0 });
+  });
+
+  it('waits for the terminator, across any number of chunks', () => {
+    // `ESC]133;D` alone is not a finished mark: its exit code may still be coming.
+    let r = scanCommandEnd(`${C}out\x1b]133;`, false);
+    expect(r).toMatchObject({ started: true, ended: false });
+    r = scanCommandEnd(`${r.rest}D`, r.started);
+    expect(r.ended).toBe(false);
+    r = scanCommandEnd(`${r.rest};6`, r.started);
+    expect(r.ended).toBe(false);
+    r = scanCommandEnd(`${r.rest}\x07`, r.started);
+    expect(r).toMatchObject({ ended: true, exitCode: 6 });
   });
 });
 
@@ -82,6 +94,8 @@ describe('startAgentRun', () => {
     const opts = (h.pty.create.mock.calls[0] as unknown as [Record<string, unknown>])[0];
     expect(opts.shell).toBeUndefined();
     expect(opts.env).toBeUndefined();
+    // Not the workspace's bound account either: the pane must match what detection reads.
+    expect(opts.ignoreAccountBinding).toBe(true);
 
     h.setStatus(status('login-needed'));
     h.data(`${C}installing...${D(0)}`);
@@ -96,6 +110,29 @@ describe('startAgentRun', () => {
     h.data(`${C}${D(6)}`);
     await flush();
     expect(getAgentSetupState().runs.claude).toMatchObject({ phase: 'failed', failure: 'network' });
+  });
+
+  it('a download that failed inside `curl | sh` still reads as a failure though the line exits 0', async () => {
+    const h = setup();
+    await startAgentRun('claude', 'install', plan, 'Install Claude Code');
+    tail.lines = ['curl: (6) Could not resolve host: claude.ai'];
+    h.data(`${C}${D(0)}`);
+    await flush();
+    expect(getAgentSetupState().runs.claude).toMatchObject({ phase: 'failed', failure: 'network' });
+  });
+
+  it('a late end of an earlier run never changes the run that replaced it', async () => {
+    const h = setup();
+    await startAgentRun('claude', 'install', plan, 'Install Claude Code');
+    let release: () => void = () => undefined;
+    h.agentStatus.mockImplementationOnce(() => new Promise((r) => { release = () => r(status('not-installed')); }));
+    tail.lines = ['curl: (6) Could not resolve host: claude.ai'];
+    h.data(`${C}${D(6)}`); // the first run starts ending, waiting on detection
+    await flush();
+    const second = await startAgentRun('claude', 'install', plan, 'Install Claude Code');
+    release();
+    await flush();
+    expect(getAgentSetupState().runs.claude).toMatchObject({ id: second.id, phase: 'running' });
   });
 
   it('says "not found" when the installer finished but detection still misses it', async () => {

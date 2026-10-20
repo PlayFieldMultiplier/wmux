@@ -266,6 +266,8 @@ export class PTYManager {
 
   private prepareSpawn(options?: {
     wslAccountLoginEnvKey?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME';
+    /** Agent-setup panes: no bound-account env (see pty.handler PtyCreateOptions). */
+    ignoreAccountBinding?: boolean;
     /** #2231 — a WSL fan-out task pane's worktree git location. */
     wslTaskGit?: { plan: WslWorkerGitPlan; config: WslWorkerGitConfig };
     shell?: string;
@@ -331,7 +333,7 @@ export class PTYManager {
     // Multi-account (M0): overlay the workspace's bound-account env (main-owned
     // store) between baseline and profile; a manual profile CLAUDE_CONFIG_DIR
     // wins. Missing bound dir → default-credential fallback + warn.
-    const accountEnv = options?.workspaceId
+    const accountEnv = options?.workspaceId && options.ignoreAccountBinding !== true
       ? getAccountStore().resolveWorkspaceAccountEnv(options.workspaceId, (acc) =>
           console.warn(
             `[account] pane ${id}: bound account "${acc.name}" (${acc.vendor}) configDir missing on disk ` +
