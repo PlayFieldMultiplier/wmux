@@ -3,7 +3,7 @@
   "layer": "regression",
   "runs": 1,
   "model": "stub",
-  "description": "A researcher with no repository fans out one research task; the scripted worker reports review_requested from its scratch folder. The task ends completed without a gate (unforced, as the owner), in a folder under the bot's data folder, and the researcher takes one turn after it without settling the task itself.",
+  "description": "A researcher with no repository fans out one research task; the scripted worker reports review_requested from its scratch folder. The task ends completed without a gate (unforced, as the owner), in a folder under the bot's data folder, and the researcher takes one turn after it without settling the task itself. With no evidence attached, the ledger and completion notice explicitly record zero verified items.",
   "setup": {
     "worker": {
       "delayMs": 1000
@@ -98,6 +98,10 @@
       "ledger",
       "workers"
     ],
-    "researcher": "researcher"
+    "researcher": "researcher",
+    "evidence": {
+      "verified": 0,
+      "total": 0
+    }
   }
 }

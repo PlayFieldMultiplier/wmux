@@ -118,7 +118,15 @@
               ]
             }
           ]
-        }
+        },
+        "triggers": [
+          {
+            "kind": "pr.opened",
+            "filter": {
+              "authorTrusted": true
+            }
+          }
+        ]
       }
     ],
     "settings": {
