@@ -78,6 +78,16 @@ describe('Titlebar window-state attributes', () => {
     expect(html().hasAttribute('data-fullscreen')).toBe(false);
   });
 
+  it('keeps a push that lands before the mount-time pull answers', async () => {
+    let answer: ((on: boolean) => void) | undefined;
+    const api = (window as unknown as { electronAPI: { window: { isMaximized: () => Promise<boolean> } } }).electronAPI.window;
+    api.isMaximized = vi.fn(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+    await render();
+    act(() => pushMaximized?.(true));
+    await act(async () => { answer?.(false); });
+    expect(html().hasAttribute('data-maximized')).toBe(true);
+  });
+
   it('unsubscribes and clears the attribute on unmount', async () => {
     const cleanup = await render();
     act(() => pushMaximized?.(true));

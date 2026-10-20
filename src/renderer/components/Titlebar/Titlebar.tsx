@@ -116,12 +116,15 @@ function useWindowStateAttribute(
     const root = document.documentElement;
     const apply = (on: boolean) => { if (on) root.setAttribute(attribute, ''); else root.removeAttribute(attribute); };
     let alive = true;
+    // Subscribe before pulling, and let a push win over a pull still in
+    // flight: its answer was read before the transition the push reports.
+    let pushed = false;
+    const off = api ? subscribe(api, (on) => { pushed = true; apply(on); }) : undefined;
     if (api) {
-      void pull(api)?.then((on: boolean) => { if (alive) apply(on); }).catch(() => {
+      void pull(api)?.then((on: boolean) => { if (alive && !pushed) apply(on); }).catch(() => {
         /* best-effort: the push listener corrects state */
       });
     }
-    const off = api ? subscribe(api, apply) : undefined;
     return () => { alive = false; off?.(); root.removeAttribute(attribute); };
   }, [attribute, pull, subscribe]);
 }
