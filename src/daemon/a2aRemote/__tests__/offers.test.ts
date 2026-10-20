@@ -483,6 +483,22 @@ describe('share offers — review fixes (consent stays bound, debts stay owed)',
     expect(new ExposureStore({ dir: b.dir, scheduleHarden: () => undefined }).isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
   });
 
+  it('an older share’s unpaid put-back does not hide the pane a newer share of it showed', async () => {
+    const { b, offerId } = await shared();
+    b.failWrites.exposure = true;
+    b.offers.withdraw(offerId);
+    b.failWrites.exposure = false;
+    const again = b.offers.create({ hostId: A, end: B_PANE, allow: both });
+    if (!again.ok) throw new Error('create failed');
+    // Restart before the old debt was paid.
+    const restarted = makeSide(B, A, { dir: b.dir });
+    restarted.offers.recover();
+    expect(restarted.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(true);
+    expect(restarted.store.get(again.offer.offerId)?.state).toBe('open');
+    restarted.offers.withdraw(again.offer.offerId);
+    expect(restarted.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+  });
+
   it('a pane still used by another live link stays shown until that link ends too', async () => {
     const { a, b, offerId } = await shared();
     const { link, request } = proposalFor(a, offerId);

@@ -514,7 +514,12 @@ export class A2aOffers {
       (l) => !TERMINAL_LINK.has(l.state) && l.linkId !== rec.linkId && l.remote.hostId === rec.hostId &&
         l.local.kind === 'pane' && l.local.workspaceId === rec.end.workspaceId && l.local.paneId === rec.end.paneId,
     );
-    if (inUse) return;
+    // Nor while a newer share of the same pane to that PC is still live (it owes its own put-back).
+    const reshared = this.store.list().some(
+      (o) => o.side === 'out' && o.offerId !== rec.offerId && (o.state === 'open' || o.state === 'claimed') &&
+        o.hostId === rec.hostId && o.end.workspaceId === rec.end.workspaceId && o.end.paneId === rec.end.paneId,
+    );
+    if (inUse || reshared) return;
     if (this.putBackUnsaved.has(rec.offerId)) {
       // Hidden in memory already; the debt is paid once the file says so too.
       try {
