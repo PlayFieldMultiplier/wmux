@@ -1,3 +1,4 @@
+import { subscribeAgentState } from './agentStateSubscription';
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../stores';
 import {
@@ -54,11 +55,15 @@ export default function PluginFrame({
   pluginName,
   entry,
   forwardEvents = false,
+  agentStateEvents = false,
+  railPage = false,
   className,
 }: {
   pluginName: string;
   entry: string;
   forwardEvents?: boolean;
+  agentStateEvents?: boolean;
+  railPage?: boolean;
   className?: string;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -69,6 +74,14 @@ export default function PluginFrame({
   // Fix: scope events.poll to the active workspace so plugins cannot observe
   // other workspaces' lifecycle events (TODOS: "Unscoped plugin events.poll").
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
+  const scopeEpochRef = useRef(0);
+  const [scopeEpoch, setScopeEpoch] = useState(0);
+  useEffect(() => useStore.subscribe((state, previous) => {
+    if (state.activeWorkspaceId !== previous.activeWorkspaceId) {
+      scopeEpochRef.current += 1;
+      setScopeEpoch(scopeEpochRef.current);
+    }
+  }), []);
 
   // ── Bridge: port lifetime, request forwarding, palette commands ──────────
   useEffect(() => {
@@ -111,6 +124,8 @@ export default function PluginFrame({
       port.onmessage = (e: MessageEvent) => {
         const req = parseBridgeRequest(e.data);
         if (!req || disposed) return;
+        const requestWorkspace = useStore.getState().activeWorkspaceId;
+        const requestEpoch = scopeEpochRef.current;
         window.electronAPI.plugins
           // #922: the workspace the host is showing rides alongside the
           // request, never inside it, so main can tell what this plugin IS
@@ -119,15 +134,26 @@ export default function PluginFrame({
           // workspace switch, which is exactly what #928 fixed.
           .rpc(pluginName, req.method, req.params, useStore.getState().activeWorkspaceId)
           .then((raw) => {
-            const resp = raw as { ok?: boolean; result?: unknown; error?: string } | null;
+            if (req.method === 'agent.state' && (disposed || portRef.current !== port
+              || scopeEpochRef.current !== requestEpoch || useStore.getState().activeWorkspaceId !== requestWorkspace)) {
+              respondOn(port, { v: PLUGIN_BRIDGE_VERSION, id: req.id, kind: 'response', error: { code: 'scope-changed', message: 'The workspace changed. Read again.' } });
+              return;
+            }
+            const resp = raw as { ok?: boolean; result?: unknown; error?: string; retryable?: boolean } | null;
             if (resp && resp.ok === true) {
               respondOn(port, { v: PLUGIN_BRIDGE_VERSION, id: req.id, kind: 'response', result: resp.result });
+              const state = useStore.getState();
+              if (railPage && req.method === 'pane.focus' && portRef.current === port && !disposed
+                && scopeEpochRef.current === requestEpoch
+                && state.activeWorkspaceId === requestWorkspace && state.appRoute === `plugin:${pluginName}`
+                && (resp.result as { ok?: boolean } | null)?.ok === true) state.setAppRoute('workspaces');
+
             } else {
               respondOn(port, {
                 v: PLUGIN_BRIDGE_VERSION,
                 id: req.id,
                 kind: 'response',
-                error: { code: 'rpc-rejected', message: resp?.error ?? 'request rejected' },
+                error: { code: 'rpc-rejected', message: resp?.error ?? 'request rejected', ...(resp?.retryable === true ? { retryable: true } : {}) },
               });
             }
           })
@@ -165,7 +191,7 @@ export default function PluginFrame({
       // dropped, silently, with nothing to notice it.
       setBridgeEpoch(0);
     };
-  }, [pluginName, entry]);
+  }, [pluginName, entry, railPage]);
 
   // ── Event forwarding: re-subscribes when the active workspace changes ────
   useEffect(() => {
@@ -229,6 +255,18 @@ export default function PluginFrame({
 
     return stopEventLoop;
   }, [pluginName, forwardEvents, activeWorkspaceId, bridgeEpoch]);
+
+  useEffect(() => {
+    const port = portRef.current;
+    if (!agentStateEvents || !railPage || bridgeEpoch === 0 || !port) return;
+    return subscribeAgentState({
+      workspaceId: activeWorkspaceId,
+      read: () => window.electronAPI.plugins.rpc(pluginName, 'agent.state', {}, activeWorkspaceId),
+      post: (event) => { try { port.postMessage(event); } catch { /* closed during teardown */ } },
+      isCurrent: () => scopeEpochRef.current === scopeEpoch && portRef.current === port && useStore.getState().activeWorkspaceId === activeWorkspaceId
+        && useStore.getState().appRoute === `plugin:${pluginName}`,
+    });
+  }, [pluginName, agentStateEvents, railPage, activeWorkspaceId, bridgeEpoch, scopeEpoch]);
 
   return (
     <iframe

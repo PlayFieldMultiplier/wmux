@@ -303,3 +303,58 @@ describe('PluginFrame — bridge lifetime across a workspace switch', () => {
     }
   });
 });
+
+
+it('refuses an explicit agent-state response after switching away and back', async () => {
+  let release!: (value: unknown) => void;
+  let entered!: () => void;
+  const started = new Promise<void>((r) => { entered = r; });
+  rpc.mockImplementation(() => new Promise((resolve) => { release = resolve; entered(); }));
+  act(() => root.render(<PluginFrame pluginName="demo" entry="index.html" />));
+  const frame = container.querySelector('iframe')!;
+  const post = vi.fn();
+  Object.defineProperty(frame, 'contentWindow', { configurable: true, get: () => ({ postMessage: post }) });
+  await act(async () => { frame.dispatchEvent(new Event('load')); });
+  const port = pluginPort(post); port.start();
+  const response = request(port, 'slow', 'agent.state');
+  await started;
+  act(() => { useStore.setState({ activeWorkspaceId: 'ws-2' }); useStore.setState({ activeWorkspaceId: 'ws-1' }); });
+  release({ ok: true, result: { activity: 'private old workspace' } });
+  expect(await settledOrTimedOut(response)).toMatchObject({ error: { code: 'scope-changed' } });
+});
+
+
+it('does not navigate for a focus response from an earlier workspace epoch', async () => {
+  let release!: (value: unknown) => void;
+  let entered!: () => void;
+  const started = new Promise<void>((r) => { entered = r; });
+  rpc.mockImplementation(() => new Promise((resolve) => { release = resolve; entered(); }));
+  useStore.setState({ appRoute: 'plugin:demo' });
+  act(() => root.render(<PluginFrame pluginName="demo" entry="index.html" railPage />));
+  const frame = container.querySelector('iframe')!;
+  const post = vi.fn();
+  Object.defineProperty(frame, 'contentWindow', { configurable: true, get: () => ({ postMessage: post }) });
+  await act(async () => { frame.dispatchEvent(new Event('load')); });
+  const port = pluginPort(post); port.start();
+  const response = request(port, 'focus-slow', 'pane.focus');
+  await started;
+  act(() => { useStore.setState({ activeWorkspaceId: 'ws-2' }); useStore.setState({ activeWorkspaceId: 'ws-1' }); });
+  release({ ok: true, result: { ok: true } });
+  await settledOrTimedOut(response);
+  expect(useStore.getState().appRoute).toBe('plugin:demo');
+});
+
+it('forwards the retryable startup flag on an explicit read failure', async () => {
+  rpc.mockResolvedValue({ ok: false, error: 'Still starting', retryable: true });
+  act(() => root.render(React.createElement(PluginFrame, { pluginName: 'demo', entry: 'index.html' })));
+  const iframe = container.querySelector('iframe')!;
+  const framePostMessage = vi.fn();
+  Object.defineProperty(iframe, 'contentWindow', { configurable: true, get: () => ({ postMessage: framePostMessage }) });
+  await act(async () => { iframe.dispatchEvent(new Event('load')); });
+  const port = pluginPort(framePostMessage);
+  port.start();
+  expect(await settledOrTimedOut(request(port, 'retry', 'agent.state'))).toMatchObject({
+    kind: 'response', error: { code: 'rpc-rejected', message: 'Still starting', retryable: true },
+  });
+  port.close();
+});

@@ -101,6 +101,9 @@ export const zh = {
   "connectors.confirm": "删除连接",
   "connectors.configure": "配置",
 
+  'plugins.page.extension': 'UI 插件',
+  'plugins.page.approve': '审核权限后打开',
+  'plugins.page.approvalFailed': '无法请求授权。请重试。',
   'ipc.error.daemonDisconnected': "终端服务无响应，正在重试…",
   'ipc.error.validation': "请求无效。",
   'ipc.error.notFound': "找不到该项目。",

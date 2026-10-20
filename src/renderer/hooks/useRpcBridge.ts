@@ -1,3 +1,4 @@
+import { pluginAgentSnapshot } from '../plugins/pluginAgentSnapshot';
 import { isPhoneWorkspaceId, PHONE_WORKSPACE_REQUEST_LIMIT } from '../../shared/phoneWorkspaceRequests';
 import { useEffect } from 'react';
 import { useStore } from '../stores';
@@ -1969,6 +1970,11 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
   // -------------------------------------------------------------------------
   // pane.*
   // -------------------------------------------------------------------------
+
+  if (method === 'agent.state') {
+    if (typeof params.workspaceId !== 'string' || !params.workspaceId) return { error: 'Agent workspace required' };
+    return pluginAgentSnapshot(store, params.workspaceId, params.includeActivity === true);
+  }
 
   if (method === 'fleet.triage') {
     // The Fleet overlay's own board (selectFleetBoard), so an agent is told

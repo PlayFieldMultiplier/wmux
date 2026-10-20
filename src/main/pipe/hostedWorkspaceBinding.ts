@@ -124,6 +124,7 @@ const BODY_SCOPED_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
   'pane.resolveName',
   // No active-workspace fallback: omitted means the whole fleet. A hosted
   // caller gets its own workspace instead, the same answer pane.list gives it.
+  'agent.state',
   'fleet.triage',
   'pane.search',
   'pane.split',

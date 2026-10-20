@@ -1,0 +1,10 @@
+{
+  "name": "agent-state-page",
+  "version": "1.0.0",
+  "description": "A workspace agent page. Reads names, labels and status. pane.read additionally permits pane metadata (including cwd) and focus. No terminal content permission.",
+  "capabilities": ["ui.rail-page", "agent.state.read", "pane.read"],
+  "activationEvents": [],
+  "contributes": {
+    "railPage": { "title": "Agent status", "entry": "page.html", "agentStateEvents": true }
+  }
+}

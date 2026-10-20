@@ -84,6 +84,8 @@ const KNOWN_CAPABILITIES = new Set<string>([
   // registration time — the host refuses to mount the iframe/widget when
   // the capability is missing or the plugin isn't trusted; per-RPC
   // enforcement stays with the regular method capabilities above.
+  'ui.rail-page',
+  'agent.state.read',
   'ui.sidebar',
   'ui.statusbar',
   'ui.pane-decoration',
@@ -140,7 +142,7 @@ export function globToRegex(glob: string): RegExp {
  * against. A scoped grant for one would read as narrower than it is, so the
  * grammar refuses it rather than letting it pass as unrestricted.
  */
-const UNSCOPABLE_CAPABILITIES: ReadonlySet<string> = new Set(['automation.read', 'automation.write']);
+const UNSCOPABLE_CAPABILITIES: ReadonlySet<string> = new Set(['automation.read', 'automation.write', 'agent.state.read', 'ui.rail-page']);
 
 export function parsePermission(spec: unknown): PermissionParseResult {
   if (typeof spec !== 'string') {

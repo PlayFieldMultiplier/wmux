@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { platformChoice } from '../../shared/platform';
 import { IPC } from '../../shared/constants';
+import { PLUGIN_PAGE_CSP } from '../plugins/pluginProtocol';
 import { PLUGIN_PROTOCOL_SCHEME } from '../../shared/pluginHost';
 import { PREVIEW_PROTOCOL_SCHEME } from '../../shared/filePreview';
 import { attachFlashFrameAutoClear } from './flashFrame';
@@ -41,6 +42,15 @@ export const MAIN_WINDOW_PRODUCTION_CSP = [
   "font-src 'self'",
   `frame-src 'self' https: http: ${PLUGIN_PROTOCOL_SCHEME}:`,
 ].join('; ');
+
+/** The session hook also sees plugin responses; preserve their isolated policy. */
+export function productionResponseHeaders(url: string, headers: Record<string, string[]> = {}): Record<string, string[]> {
+  const result = Object.fromEntries(Object.entries(headers).filter(([key]) => key.toLowerCase() !== 'content-security-policy'));
+  const existing = Object.entries(headers).filter(([key]) => key.toLowerCase() === 'content-security-policy').flatMap(([, values]) => values);
+  const policies = new URL(url).protocol === `${PLUGIN_PROTOCOL_SCHEME}:`
+    ? [PLUGIN_PAGE_CSP] : [...existing, MAIN_WINDOW_PRODUCTION_CSP];
+  return { ...result, 'Content-Security-Policy': policies };
+}
 
 /**
  * Load the main renderer (Vite dev server in development, packaged HTML file
@@ -327,10 +337,7 @@ export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown;
   if (!MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
       callback({
-        responseHeaders: {
-          ...details.responseHeaders,
-          'Content-Security-Policy': [MAIN_WINDOW_PRODUCTION_CSP],
-        },
+        responseHeaders: productionResponseHeaders(details.url, details.responseHeaders),
       });
     });
   }

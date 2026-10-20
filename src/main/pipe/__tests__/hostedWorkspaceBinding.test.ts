@@ -181,6 +181,7 @@ describe('hostedWorkspaceBinding — decision', () => {
     // The list is pinned here for readability; `hostedWorkspaceBinding.drift.test.ts`
     // is what actually proves nothing is missing, by scanning the tree.
     expect([...HOSTED_BOUND_METHODS].sort()).toEqual([
+      'agent.state',
       'browser.close',
       'browser.open',
       'fleet.triage',

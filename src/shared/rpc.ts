@@ -353,7 +353,7 @@ export function hostedBindingOf(ctx?: RpcContext): string | undefined {
 
 export type RpcResponse =
   | { id: string; ok: true; result: unknown }
-  | { id: string; ok: false; error: string; rejection?: RpcRejection };
+  | { id: string; ok: false; error: string; rejection?: RpcRejection; retryable?: boolean };
 
 // Structured rejection surfaced by the Phase 2.2 permission enforcer.
 //
@@ -415,6 +415,7 @@ export type RpcMethod =
   // `#w1-2` / `#backend` → the pane's ids (MCP tools accept pane names).
   | 'pane.resolveName'
   // The Fleet attention board (needs you / running / idle) as data.
+  | 'agent.state'
   | 'fleet.triage'
   | 'pane.focus'
   | 'pane.split'
@@ -766,6 +767,7 @@ export const ALL_RPC_METHODS = [
   'surface.close',
   'pane.list',
   'pane.resolveName',
+  'agent.state',
   'fleet.triage',
   'pane.focus',
   'pane.split',

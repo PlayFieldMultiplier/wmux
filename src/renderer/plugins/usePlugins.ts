@@ -13,6 +13,7 @@ let cache: PluginListState | null = null;
 let inflight: Promise<PluginListState> | null = null;
 
 async function fetchPlugins(): Promise<PluginListState> {
+  if (!window.electronAPI?.plugins) return { plugins: [], failures: [], loaded: true };
   if (cache) return cache;
   if (!inflight) {
     inflight = window.electronAPI.plugins

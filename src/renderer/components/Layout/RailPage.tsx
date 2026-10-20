@@ -1,3 +1,4 @@
+import PluginRailPage from '../../plugins/PluginRailPage';
 import ConnectorsPage from '../Connectors/ConnectorsPage';
 import { lazy, Suspense, useEffect } from 'react';
 import { useStore } from '../../stores';
@@ -21,7 +22,7 @@ const THIS_COMPUTER_PAGES: ReadonlySet<string> = new Set(['bots', 'fleet', 'sche
  * roster has not named yet gets no line rather than an empty name. Pure.
  */
 export function thisComputerOnlyLine(route: string, remotePcName: string | null, t: (key: string, vars?: Record<string, string | number>) => string): string | null {
-  if (!remotePcName || !THIS_COMPUTER_PAGES.has(route)) return null;
+  if (!remotePcName || (!THIS_COMPUTER_PAGES.has(route) && !route.startsWith('plugin:'))) return null;
   return t('pcRail.thisComputerOnly', { name: remotePcName });
 }
 
@@ -66,6 +67,7 @@ export default function RailPage() {
         {route === 'fleet' && <ErrorBoundary name="FleetView"><FleetView /></ErrorBoundary>}
         {route === 'schedules' && <ErrorBoundary name="SchedulesView"><SchedulesView /></ErrorBoundary>}
         {route === 'remote' && <ErrorBoundary name="RemotePage"><RemotePage /></ErrorBoundary>}
+        {route.startsWith('plugin:') && <ErrorBoundary key={route} name="PluginRailPage"><PluginRailPage name={route.slice(7)} /></ErrorBoundary>}
         {route === 'connectors' && <ErrorBoundary name="ConnectorsPage"><ConnectorsPage /></ErrorBoundary>}
         {route === 'git' && <ErrorBoundary name="GitPage"><GitPage /></ErrorBoundary>}
       </div>

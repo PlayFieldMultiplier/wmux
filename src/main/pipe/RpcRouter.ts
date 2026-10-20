@@ -6,6 +6,7 @@ import type {
   RpcRequest,
   RpcResponse,
 } from '../../shared/rpc';
+import { RetryableRpcError } from './RetryableRpcError';
 import { sanitizeClientDisplayName } from '../../shared/rpc';
 import { check as enforcerCheck } from '../mcp/PermissionEnforcer';
 import { METHOD_CAPABILITY, isAlwaysEnforcedMethod, type RequiredCapability } from '../mcp/methodCapabilityMap';
@@ -625,13 +626,19 @@ export class RpcRouter {
         trustLookupFailed = true;
       }
     }
-    const outcome = enforcerCheck({
+    let outcome = enforcerCheck({
       method: request.method,
       params: effectiveParams,
       ctx,
       trust,
       trustLookupFailed,
     });
+    if (outcome.kind === 'allow' && request.method === 'agent.state' && effectiveParams.includeActivity === true) {
+      if (!trust?.declaredCapabilities?.includes('terminal.read')) {
+        return { id: request.id, ok: false, error: 'Activity requires unrestricted terminal.read permission' };
+      }
+      outcome = enforcerCheck({ method: 'fleet.triage', params: effectiveParams, ctx, trust, trustLookupFailed });
+    }
     if (outcome.kind !== 'allow' && this.shadowSink) {
       try {
         this.shadowSink({
@@ -698,6 +705,19 @@ export class RpcRouter {
 
     try {
       const result = await handler(effectiveParams, ctx);
+      // A plugin read must not return data after its trust changed mid-flight.
+      if (request.method === 'agent.state') {
+        const current = ctx.clientName && this.trustLookup ? await this.trustLookup(ctx.clientName) : undefined;
+        if (effectiveParams.includeActivity === true && !current?.declaredCapabilities?.includes('terminal.read')) {
+          return { id: request.id, ok: false, error: 'Activity permission changed' };
+        }
+        const methods: RpcMethod[] = effectiveParams.includeActivity === true ? ['agent.state', 'fleet.triage'] : ['agent.state'];
+        for (const method of methods) {
+          const check = enforcerCheck({ method, params: effectiveParams, ctx, trust: current });
+          if (check.kind !== 'allow') return { id: request.id, ok: false, error: 'Agent state permission changed' };
+        }
+      }
+
       return {
         id: request.id,
         ok: true,
@@ -712,6 +732,7 @@ export class RpcRouter {
         id: request.id,
         ok: false,
         error: ctx.bot ? redactStoredSecrets(message) : message,
+        ...(err instanceof RetryableRpcError ? { retryable: true } : {}),
       };
     }
   }

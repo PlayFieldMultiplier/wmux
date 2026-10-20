@@ -34,10 +34,13 @@ const GROUP_RENDER_ORDER: RiskClass[] = [
   'computer',
   'browser',
   'a2a',
+  'agent-state',
   'metadata',
   'events',
   'pane-lifecycle',
   'workspace',
+  'ui',
+  'notifications',
   'internal',
 ];
 
@@ -66,7 +69,9 @@ export function groupCapabilities(
       pathGlob: parsed.permission.pathGlob,
     });
   }
-  return GROUP_RENDER_ORDER.filter((r) => groups.has(r)).map(
+  // A future risk class must never silently disappear from an approval.
+  const order = [...GROUP_RENDER_ORDER, ...[...groups.keys()].filter((r) => !GROUP_RENDER_ORDER.includes(r))];
+  return order.filter((r) => groups.has(r)).map(
     (r) => groups.get(r) as CapabilityGroup,
   );
 }

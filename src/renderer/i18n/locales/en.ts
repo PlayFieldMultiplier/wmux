@@ -101,6 +101,9 @@ export const en = {
   "connectors.confirm": "Remove connection",
   "connectors.configure": "Configure",
 
+  'plugins.page.extension': 'UI plugin',
+  'plugins.page.approve': 'Review permissions to open',
+  'plugins.page.approvalFailed': 'Could not request approval. Try again.',
   'ipc.error.daemonDisconnected': "The terminal service is not responding. Retrying…",
   'ipc.error.validation': "The request is invalid.",
   'ipc.error.notFound': "The item could not be found.",

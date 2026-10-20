@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent status</title>
+<style>
+:root { color-scheme: light dark; font: 13px system-ui,sans-serif; background: Canvas; color: CanvasText; }
+body { margin: 0; padding: 20px; } h2 { font-size: 16px; font-weight: 500; }
+#notice { opacity: .7; } ul { list-style: none; padding: 0; }
+li { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #8884; }
+.label { flex: 1; } .state { min-width: 80px; } button { font: inherit; padding: 4px 10px; cursor: pointer; }
+</style></head><body>
+<h2>Agents in this workspace</h2><p id="notice" role="status">Connecting…</p><ul id="agents"></ul>
+<script>
+'use strict';
+let port, serial = 0;
+const pending = new Map();
+const list = document.querySelector('#agents');
+const notice = document.querySelector('#notice');
+const states = { working: 'Working', needsYou: 'Needs you', finished: 'Finished', resting: 'Resting' };
+function show(snapshot) {
+  list.replaceChildren();
+  notice.textContent = snapshot.truncated ? 'Some agents were omitted by the size limit.' : snapshot.panes.length ? 'Select Open to return to a pane.' : 'No local agents in this workspace.';
+  for (const pane of snapshot.panes) {
+    const row = document.createElement('li');
+    const label = document.createElement('span'); label.className = 'label'; label.textContent = pane.label;
+    const state = document.createElement('span'); state.className = 'state'; state.textContent = states[pane.state] || pane.state;
+    const button = document.createElement('button'); button.textContent = pane.stashed ? 'Stashed' : 'Open'; button.disabled = pane.stashed;
+    button.onclick = () => {
+      const id = String(++serial); button.disabled = true;
+      pending.set(id, button);
+      port.postMessage({ v: 1, id, kind: 'request', method: 'pane.focus', params: { id: pane.paneId } });
+    };
+    row.append(label, state, button); list.append(row);
+  }
+}
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent || event.data?.v !== 1 || event.data?.kind !== 'init' || !event.ports[0]) return;
+  if (port) port.close(); pending.clear(); port = event.ports[0];
+  port.onmessage = ({ data }) => {
+    if (data?.v !== 1) return;
+    if (data.kind === 'agent-state') {
+      if (data.status === 'ready' && data.snapshot) show(data.snapshot);
+      else { list.replaceChildren(); notice.textContent = data.status === 'reset' ? 'Loading workspace…' : 'Agent state unavailable. Reopen this page to retry.'; }
+    } else if (data.kind === 'response' && pending.has(data.id)) {
+      const button = pending.get(data.id); pending.delete(data.id); button.disabled = false;
+      if (data.error || data.result?.error) notice.textContent = 'Could not open that pane.';
+    }
+  };
+  port.start();
+});
+</script></body></html>

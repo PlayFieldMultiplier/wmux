@@ -35,7 +35,7 @@ export const PLUGIN_SCHEME_PRIVILEGES: CustomScheme = {
   },
 };
 
-const PLUGIN_PAGE_CSP = [
+export const PLUGIN_PAGE_CSP = [
   "default-src 'none'",
   // Bundled assets + inline. 'unsafe-inline' is deliberate for BOTH scripts
   // and styles: the page runs in an opaque-origin sandbox with no
