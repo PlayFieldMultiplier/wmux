@@ -94,6 +94,7 @@ export function A2aShareDialogView(p: A2aShareDialogViewProps) {
                 aria-checked={p.hostId === h.hostId}
                 variant={p.hostId === h.hostId ? 'secondary' : 'ghost'}
                 size="md"
+                disabled={p.busy}
                 onClick={() => p.onPickHost(h.hostId)}
               >
                 {h.name}
@@ -109,11 +110,11 @@ export function A2aShareDialogView(p: A2aShareDialogViewProps) {
         </div>
         <div className="flex flex-col gap-2">
           <label className="flex items-center gap-2 text-[13px]">
-            <Checkbox checked={p.receive} onCheckedChange={p.onReceive} disabled={done} aria-label={t('a2aShare.receive', { pc: pc || t('a2aShare.thatPc') })} />
+            <Checkbox checked={p.receive} onCheckedChange={p.onReceive} disabled={done || p.busy} aria-label={t('a2aShare.receive', { pc: pc || t('a2aShare.thatPc') })} />
             {t('a2aShare.receive', { pc: pc || t('a2aShare.thatPc') })}
           </label>
           <label className="flex items-center gap-2 text-[13px]">
-            <Checkbox checked={p.send} onCheckedChange={p.onSend} disabled={done} aria-label={t('a2aShare.send', { pc: pc || t('a2aShare.thatPc') })} />
+            <Checkbox checked={p.send} onCheckedChange={p.onSend} disabled={done || p.busy} aria-label={t('a2aShare.send', { pc: pc || t('a2aShare.thatPc') })} />
             {t('a2aShare.send', { pc: pc || t('a2aShare.thatPc') })}
           </label>
         </div>

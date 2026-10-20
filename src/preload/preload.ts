@@ -90,6 +90,7 @@ import type {
 } from '../shared/lanlink';
 import type {
   A2aRemoteExposureGetResult,
+  A2aRemoteExposureSetResult,
   A2aRemoteHeldListResult,
   A2aRemoteHeldRejectResult,
   A2aRemoteHeldRetryResult,
@@ -2163,8 +2164,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.A2A_REMOTE_SNAPSHOT, snapshot) as Promise<{ ok: boolean }>,
   exposureGet: (hostId: string) =>
     ipcRenderer.invoke(IPC.A2A_REMOTE_EXPOSURE_GET, hostId) as Promise<A2aRemoteExposureGetResult>,
-  exposureSet: (hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean) =>
-    ipcRenderer.invoke(IPC.A2A_REMOTE_EXPOSURE_SET, hostId, workspaceIds, paneIds, brain) as Promise<A2aRemoteExposureGetResult>,
+  exposureSet: (hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean, expected?: A2aRemoteExposureGetResult['exposure']) =>
+    ipcRenderer.invoke(IPC.A2A_REMOTE_EXPOSURE_SET, hostId, workspaceIds, paneIds, brain, expected) as Promise<A2aRemoteExposureSetResult>,
   hostsExposed: (hostId: string) =>
     ipcRenderer.invoke(IPC.A2A_REMOTE_HOSTS_EXPOSED, hostId) as Promise<A2aRemoteHostsExposedResult>,
   linksList: () => ipcRenderer.invoke(IPC.A2A_REMOTE_LINKS_LIST) as Promise<A2aRemoteLinksListResult>,

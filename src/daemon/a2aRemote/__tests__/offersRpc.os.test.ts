@@ -274,6 +274,39 @@ describe('a2a.remote.offers.decline', () => {
     await accept();
     expect(await rpc('a2a.remote.offers.decline', { offerId: OFFER })).toMatchObject({ ok: false, error: 'invalid-state' });
   });
+
+  it('a save naming the list it was made from writes nothing when the saved list differs', async () => {
+    const A = '44444444-4444-4444-8444-444444444444';
+    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-exposure-expected-'));
+    try {
+      const base = { dir: sdir, scheduleHarden: (): void => undefined };
+      const sExposures = new ExposureStore(base);
+      const handlers = new Map<string, (p: Record<string, unknown>) => Promise<unknown>>();
+      registerA2aLinkRpc((m, h) => handlers.set(m, h), {
+        links: new LinkStore(base),
+        exposures: sExposures,
+        panes: new ExposedPaneCache(),
+        remoteHosts: { get: () => undefined, credentialFor: () => null },
+        broadcast: () => undefined,
+        client: (): JsonClient => ({ requestJson: async () => ({ status: 500, json: {} }) }),
+        log: () => undefined,
+      });
+      const set = handlers.get('a2a.remote.exposure.set')!;
+      const read = sExposures.set(A, { workspaceIds: ['ws-api'], paneIds: { 'ws-api': ['pane-1'] } });
+      // A share shows pane-2 after the caller read the list.
+      sExposures.addPane(A, 'ws-api', 'pane-2');
+      expect(await set({ hostId: A, workspaceIds: ['ws-api'], paneIds: { 'ws-api': [] }, expected: read })).toMatchObject({ conflict: true });
+      expect(sExposures.isPaneExposed(A, 'ws-api', 'pane-2')).toBe(true);
+      // Made again on what is saved now, it lands; so does a save that names no list.
+      const now = sExposures.get(A);
+      expect(await set({ hostId: A, workspaceIds: ['ws-api'], paneIds: { 'ws-api': ['pane-2'] }, expected: now })).not.toHaveProperty('conflict');
+      expect(sExposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+      expect(await set({ hostId: A, workspaceIds: [], paneIds: {}, expected: null })).toMatchObject({ conflict: true });
+      expect(await set({ hostId: A, workspaceIds: [], paneIds: {} })).not.toHaveProperty('conflict');
+    } finally {
+      fs.rmSync(sdir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('a2a.remote.exposure.set — a human save and share debts', () => {

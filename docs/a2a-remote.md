@@ -92,7 +92,9 @@ is the one that will accept connections, and PC A is the one that joins it.
    pick the pane on PC A to link it with (panes on the same repository come
    first), untick a direction if you want fewer, and click **Accept**. The
    link is active at once on both PCs, and PC B shows a notice and the new
-   link with PC A's pane; **Unlink** there ends it and hides the pane again.
+   link with PC A's pane; **Unlink** there ends it and hides the pane again
+   (unless it was shown before the share, or you saved **Panes to show** for
+   PC A since).
 
    A share ends by itself after **1 hour** if PC A does not accept it, when
    the pane is closed or moved, when you untick it in **Panes to show**, or

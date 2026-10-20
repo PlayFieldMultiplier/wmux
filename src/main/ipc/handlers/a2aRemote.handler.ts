@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
 import type {
+  A2aRemoteExposureGetResult,
   A2aRemoteHostStatus,
   A2aRemoteLinkEvent,
   A2aRemoteLinkProposeParams,
@@ -96,15 +97,17 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
     [IPC.A2A_REMOTE_EXPOSURE_GET, async (hostId) => (await client()).a2aRemoteExposureGet(str(hostId))],
     [
       IPC.A2A_REMOTE_EXPOSURE_SET,
-      async (hostId, workspaceIds, paneIds, brain) => {
+      async (hostId, workspaceIds, paneIds, brain, expected) => {
         const result = await (await clientNow()).a2aRemoteExposureSet(
           str(hostId),
           Array.isArray(workspaceIds) ? workspaceIds.filter((w): w is string => typeof w === 'string') : [],
           (paneIds ?? {}) as Record<string, string[]>,
           brain === true,
+          // The daemon compares it field by field; anything else means "no list saved".
+          expected === undefined ? undefined : (expected as A2aRemoteExposureGetResult['exposure']),
         );
         // A newly exposed workspace's panes must be listed before the other PC looks.
-        await publisher.republish();
+        if (!result.conflict) await publisher.republish();
         return result;
       },
     ],

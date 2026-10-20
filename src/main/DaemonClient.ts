@@ -17,6 +17,7 @@ import type {
 import type {
   A2aExposureCandidate,
   A2aRemoteExposureGetResult,
+  A2aRemoteExposureSetResult,
   A2aRemoteExposureListResult,
   A2aRemoteHostsExposedResult,
   A2aRemoteLinkProposeParams,
@@ -670,8 +671,12 @@ export class DaemonClient extends EventEmitter {
     return (await this.rpc('a2a.remote.exposure.get', { hostId })) as A2aRemoteExposureGetResult;
   }
 
-  async a2aRemoteExposureSet(hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean): Promise<A2aRemoteExposureGetResult> {
-    return (await this.rpc('a2a.remote.exposure.set', { hostId, workspaceIds, paneIds, brain })) as A2aRemoteExposureGetResult;
+  async a2aRemoteExposureSet(
+    hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean, expected?: A2aRemoteExposureGetResult['exposure'],
+  ): Promise<A2aRemoteExposureSetResult> {
+    return (await this.rpc('a2a.remote.exposure.set', {
+      hostId, workspaceIds, paneIds, brain, ...(expected !== undefined ? { expected } : {}),
+    })) as A2aRemoteExposureSetResult;
   }
 
   /** Reaches the other PC over the pinned connection, hence 30s. */

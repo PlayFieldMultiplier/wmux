@@ -73,4 +73,51 @@ describe('A2aExposureChecklist', () => {
     await act(async () => { box('b').click(); });
     expect(sets.at(-1)).toEqual([['w1'], { w1: ['a', 'c'] }]);
   });
+
+  it('a save the daemon refuses because a share changed the list is made again on the new list; a failed read saves nothing', async () => {
+    const sets: Array<[string[], Record<string, string[]>]> = [];
+    let saved: A2aExposureV1 | null = rec(['w1'], { w1: ['b'] });
+    let reads = 0;
+    let readFails = false;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      a2aRemote: {
+        exposureGet: vi.fn(async () => {
+          reads++;
+          if (readFails) throw new Error('daemon gone');
+          const answer = { exposure: saved };
+          // The second read races a share of pane c, landing before the save.
+          if (reads === 2) saved = rec(['w1'], { w1: ['b', 'c'] });
+          return answer;
+        }),
+        exposureSet: vi.fn(async (_h: string, ws: string[], panes: Record<string, string[]>, _b: boolean, expected?: A2aExposureV1 | null) => {
+          if (expected !== undefined && JSON.stringify(expected) !== JSON.stringify(saved)) return { exposure: saved, conflict: true };
+          sets.push([ws, panes]);
+          saved = rec(ws, panes);
+          return { exposure: saved };
+        }),
+      },
+    };
+    act(() => {
+      useStore.setState({
+        workspaces: [{
+          id: 'w1', name: 'API', activePaneId: 'a',
+          rootPane: { id: 'b0', type: 'branch', direction: 'horizontal', children: [
+            { id: 'a', type: 'leaf', surfaces: [], activeSurfaceId: '' },
+            { id: 'b', type: 'leaf', surfaces: [], activeSurfaceId: '' },
+          ] },
+        }],
+      } as never);
+    });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    root = createRoot(el);
+    await act(async () => root!.render(createElement(A2aExposureChecklist, { hostId: HOST, pcName: 'LAPTOP', t })));
+    const box = (paneId: string): HTMLButtonElement => el.querySelector(`[data-pane-id="${paneId}"] [role="checkbox"]`)!;
+    await act(async () => { box('a').click(); });
+    expect(sets).toEqual([[['w1'], { w1: ['b', 'c', 'a'] }]]);
+
+    readFails = true;
+    await act(async () => { box('b').click(); });
+    expect(sets).toHaveLength(1);
+  });
 });

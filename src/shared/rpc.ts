@@ -1781,6 +1781,11 @@ export interface A2aRemoteExposureGetResult {
   exposure: A2aExposureV1 | null;
 }
 
+/** `a2a.remote.exposure.set`: `conflict` when the saved list was not the `expected` one (nothing written). */
+export interface A2aRemoteExposureSetResult extends A2aRemoteExposureGetResult {
+  conflict?: true;
+}
+
 /**
  * Why a call that reaches the other PC failed. The `A2aRemoteErrorCode`
  * values are what the other PC answered; the rest happened on the way.

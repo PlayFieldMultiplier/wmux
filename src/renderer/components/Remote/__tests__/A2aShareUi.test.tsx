@@ -101,6 +101,14 @@ describe('A2aShareDialogView', () => {
     expect(onWithdraw).toHaveBeenCalledOnce();
   });
 
+  it('while a share is being sent, the PC and the directions cannot change under it', () => {
+    const body = render(createElement(A2aShareDialogView, props({
+      busy: true, peers: [{ hostId: A, name: 'LAPTOP' }, { hostId: 'b', name: 'DESK' }],
+    })));
+    expect([...body.querySelectorAll<HTMLButtonElement>('[role="radio"]')].map((r) => r.disabled)).toEqual([true, true]);
+    expect([...body.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')].map((c) => c.disabled)).toEqual([true, true]);
+  });
+
   it('after sharing it says what happens next and offers no second share', () => {
     const body = render(createElement(A2aShareDialogView, props({ outcome: { ok: true } })));
     expect(body.querySelector('[data-testid="a2a-share-outcome"]')?.textContent).toBe('a2aShare.shared(LAPTOP)');
