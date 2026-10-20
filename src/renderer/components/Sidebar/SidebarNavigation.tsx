@@ -123,6 +123,10 @@ export default function SidebarNavigation({ compact = false, home = false }: {
       id: 'git', label: t('git.title'), name: gitName, active: route === 'git',
       icon: <IconGitBranch size={16} />,
       onClick: () => useStore.getState().setAppRoute('git'),
+    }, {
+      id: 'connectors', label: t('connectors.title'), name: t('connectors.title'), active: route === 'connectors',
+      icon: <Icon size={16}><path d="M5 1v4m6-4v4M3 5h10v2a5 5 0 0 1-5 5v3M3 5v2a5 5 0 0 0 5 5" /></Icon>,
+      onClick: () => useStore.getState().setAppRoute('connectors'),
     }] : []),
   ];
 

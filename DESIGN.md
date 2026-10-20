@@ -240,7 +240,7 @@ commands, sidebar links, toast and notification jumps, schedule deep links —
 navigates through it.
 
 - **Pages, in order:** Workspaces (home: the sidebar and the panes)
-  · Bots · Fleet · Schedules · Remote · Git. Bots is listed only while the
+  · Bots · Fleet · Schedules · Remote · Git · Connectors. Bots is listed only while the
   bots are on (Settings › Bots); off, its shortcut and palette command open
   Settings › Bots instead. Settings is a page too,
   opened from the rail's More menu or ⌘,.

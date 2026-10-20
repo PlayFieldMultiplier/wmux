@@ -1,6 +1,6 @@
 import { LiveSettingsError } from '../codexLiveSettings';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8491,10 +8491,9 @@ describe('WebTerminalServer', () => {
       const file = sparse(dir, 'long.mp4', bmff('isom'), 100 * 1024 * 1024);
       managed.meta.spawnCwd = dir;
       const info = await startWithTranscript();
-      // RSS alone cannot answer this question: server and client share one
-      // process, so the client's own chunks and whatever the GC has not got to
-      // yet are counted too, and a buffered handler's 100 MB would be freed
-      // before a post-hoc reading anyway. So the handle itself is watched. A
+      // RSS alone cannot prove streaming: a buffered handler's allocation can
+      // be freed before a post-hoc reading. Watch the handle directly, and use
+      // a separate client process below so its chunks cannot inflate server RSS. A
       // route that buffers asks it for `stat.size` bytes in one call; this one
       // never asks for more than a stream chunk, whatever the file weighs.
       const reads: number[] = [];
@@ -8512,21 +8511,30 @@ describe('WebTerminalServer', () => {
         }) as typeof handle.createReadStream;
         return handle;
       });
+      const before = process.memoryUsage().rss;
+      let peak = before;
+      const sample = setInterval(() => { peak = Math.max(peak, process.memoryUsage().rss); }, 5);
       try {
-        const before = process.memoryUsage().rss;
-        const res = await fetch(fileUrl('s1', file), { headers: bearer(info.token as string) });
-        expect(res.status).toBe(200);
-        expect(res.headers.get('content-length')).toBe(String(100 * 1024 * 1024));
-        // Counted, never accumulated: `arrayBuffer()` here would add 100 MB
-        // from the CLIENT side of the same process.
-        let seen = 0;
-        let peak = before;
-        for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-          seen += chunk.length;
-          const rss = process.memoryUsage().rss;
-          if (rss > peak) peak = rss;
-        }
-        expect(seen).toBe(100 * 1024 * 1024);
+        // Keep client allocation and GC out of the server RSS measurement.
+        // The child counts and discards chunks; it returns only small metadata.
+        const output = await new Promise<string>((resolve, reject) => {
+          execFile(process.execPath, ['-e', `
+            (async () => {
+              const res = await fetch(process.env.WMUX_STREAM_TEST_URL, {
+                headers: { Authorization: 'Bearer ' + process.env.WMUX_STREAM_TEST_TOKEN },
+              });
+              let seen = 0;
+              for await (const chunk of res.body) seen += chunk.length;
+              process.stdout.write(JSON.stringify({ status: res.status, length: res.headers.get('content-length'), seen }));
+            })().catch((error) => { console.error(error.message); process.exitCode = 1; });
+          `], {
+            env: { ...process.env, WMUX_STREAM_TEST_URL: fileUrl('s1', file), WMUX_STREAM_TEST_TOKEN: info.token as string },
+            timeout: 20_000,
+            encoding: 'utf8',
+          }, (error, stdout) => { if (error) reject(error); else resolve(stdout); });
+        });
+        peak = Math.max(peak, process.memoryUsage().rss);
+        expect(JSON.parse(output)).toEqual({ status: 200, length: String(100 * 1024 * 1024), seen: 100 * 1024 * 1024 });
         // Named with the evidence: a bare `toBe(1)` here reports "0 is not 1"
         // and leaves the next reader guessing whether the route stopped
         // streaming or the interception never landed.
@@ -8537,11 +8545,11 @@ describe('WebTerminalServer', () => {
         // pinning it would break on a Node that changes the default.
         expect(Math.max(...reads)).toBeLessThanOrEqual(64 * 1024);
         expect(reads.length).toBeGreaterThan(100);
-        // Secondary, and loose on purpose: this number includes the client's
-        // uncollected chunks, so it is here to catch an order-of-magnitude
-        // regression, not to measure the handler.
+        // Secondary server-only bound; direct stream/read assertions above
+        // remain the deterministic guard against whole-file buffering.
         expect(peak - before).toBeLessThan(100 * 1024 * 1024);
       } finally {
+        clearInterval(sample);
         openSpy.mockRestore();
       }
     });

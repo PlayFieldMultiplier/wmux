@@ -57,6 +57,10 @@ import { PTYBridge } from './pty/PTYBridge';
 import { createLocalApprovalScreenReader } from './pty/localApprovalScreen';
 import { pruneDaemonPidMapAtConnect } from './pty/pidMap';
 import { registerAllHandlers } from './ipc/registerHandlers';
+import { registerConnectorTerminalHandlers } from './ipc/handlers/connectorTerminal.handler';
+import { registerConnectorOAuthHandlers } from './ipc/handlers/connectorOAuth.handler';
+import { registerConnectorCatalogHandlers } from './ipc/handlers/connectorCatalog.handler';
+import { registerConnectorCheckHandlers } from './ipc/handlers/connectorCheck.handler';
 import { RpcRouter } from './pipe/RpcRouter';
 import type { RpcMethod } from '../shared/rpc';
 import { liveNoChangesCheck } from './factory/noChangesCheck';
@@ -828,6 +832,13 @@ const mcpHandlerOptions = {
 // handlers see every connect/disconnect transition that mutates that
 // variable (no closure snapshot).
 registerSessionHandlers(() => daemonClient?.isConnected === true);
+
+// OAuth consent and terminal gateway leases belong to the app, not a daemon
+// connection. Keep them alive across registerAllHandlers teardown/reconnect.
+const connectorOAuth = registerConnectorOAuthHandlers(() => mainWindow);
+const cleanupConnectorTerminal = registerConnectorTerminalHandlers(() => mainWindow, connectorOAuth.service);
+const cleanupConnectorChecks = registerConnectorCheckHandlers(() => mainWindow, connectorOAuth.service);
+const cleanupConnectorCatalog = registerConnectorCatalogHandlers(() => mainWindow);
 
 // Presence reporting for push suppression. Registered once on `app` (not on a
 // BrowserWindow) so it survives window recreation; the getter closes over the
@@ -3120,6 +3131,10 @@ app.on('before-quit', async (e) => {
     }
   };
 
+  safeStep('cleanupConnectorChecks', () => cleanupConnectorChecks());
+  safeStep('cleanupConnectorTerminal', () => cleanupConnectorTerminal());
+  safeStep('connectorOAuth.cleanup', () => connectorOAuth.cleanup());
+  safeStep('cleanupConnectorCatalog', () => cleanupConnectorCatalog());
   safeStep('cleanupHandlers', () => cleanupHandlers());
   safeStep('disposeFirstRunHandlers', () => disposeFirstRunHandlers());
   safeStep('disposeDeckHandler', () => disposeDeckHandler());

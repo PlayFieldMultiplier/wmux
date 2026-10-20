@@ -224,6 +224,7 @@ export class ConnectorStore {
   }
 
   private changed(): void {
+    notifyConnectorLibraryChanged();
     void this.persister.schedule().catch((err) => this.log(`${path.basename(this.file)} not written: ${String(err)}`));
     try {
       this.opts.onChange?.();
@@ -235,6 +236,17 @@ function cloneConnector(c: Connector): Connector {
   return JSON.parse(JSON.stringify(c)) as Connector;
 }
 
+const libraryListeners = new Set<() => void>();
+/** Main-only observers for credential lifecycle; no worker execution changes. */
+export function onConnectorLibraryChanged(listener: () => void): () => void {
+  libraryListeners.add(listener);
+  return () => { libraryListeners.delete(listener); };
+}
+function notifyConnectorLibraryChanged(): void {
+  for (const listener of libraryListeners) {
+    try { listener(); } catch { /* observers must not fail a library write */ }
+  }
+}
 let current: ConnectorStore | null = null;
 
 /** The running app's library (set by the connectors module), or null. */
@@ -244,6 +256,7 @@ export function getConnectorStore(): ConnectorStore | null {
 
 export function setConnectorStore(next: ConnectorStore | null): void {
   current = next;
+  notifyConnectorLibraryChanged();
 }
 
 /** A key name a connection owns: one a connection in the library uses, or

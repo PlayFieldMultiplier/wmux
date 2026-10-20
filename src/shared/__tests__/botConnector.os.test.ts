@@ -56,6 +56,18 @@ function lib(): Connector[] {
 }
 
 describe('parseConnectorShape', () => {
+  it('confines dotted allow/deny policies to HTTP terminal connections with no bot scope', () => {
+    for (const tools of [{ mode: 'listed', allowed: ['a.b'] }, { mode: 'all', blocked: ['files.delete'] }]) {
+      expect(refusedField(remote({ tools }))).toBe('tools');
+      expect(refusedField(remote({ tools, scope: { kind: 'bots', botIds: [A] } }))).toBe('tools');
+      expect(refusedField(stdio({ tools, scope: { kind: 'bots', botIds: [] } }))).toBe('tools');
+      expect(refusedField(remote({ tools, scope: { kind: 'bots', botIds: [] } }))).toBeNull();
+      // Even a corrupt/in-memory record cannot feed a regex or CLI alias into
+      // the unchanged worker permissions path.
+      const injected = { ...lib()[0], tools, offFor: [] } as Connector;
+      expect(connectorsForBot([injected], A)).toEqual([]);
+    }
+  });
   it('accepts a stdio and a remote connection and keeps only their own fields', () => {
     const s = parseConnectorShape(stdio({ extra: 1 }), 'darwin');
     expect(s.ok && s.connector).toMatchObject({ name: 'files', transport: 'stdio', offFor: [] });

@@ -13,6 +13,8 @@
 // goes permanently red rather than silently stopping to guard.
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,6 +31,28 @@ function runGenerator(args) {
 }
 
 describe('THIRD_PARTY_NOTICES drift guard', () => {
+  it('normalizes CRLF in the vendored connector license', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'wmux-notices-'));
+    try {
+      const preload = path.join(dir, 'crlf.cjs');
+      writeFileSync(preload, `
+        const fs = require('node:fs');
+        const read = fs.readFileSync;
+        fs.readFileSync = function(file, ...args) {
+          const result = read.call(this, file, ...args);
+          return String(file).endsWith('LICENSE.LibreChat') && typeof result === 'string'
+            ? result.replace(/\\r?\\n/g, '\\r\\n') : result;
+        };
+        require('node:module').syncBuiltinESMExports();
+      `);
+      const crlf = execFileSync(process.execPath, ['--require', preload, SCRIPT, '--stdout-digest'], {
+        cwd: REPO_ROOT, encoding: 'utf8', timeout: 120_000,
+      });
+      expect(crlf).toBe(runGenerator(['--stdout-digest']));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('is up to date with package-lock.json (generate-notices --check)', () => {
     try {
       runGenerator(['--check']);
