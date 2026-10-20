@@ -222,4 +222,15 @@ describe('Codex candidates', () => {
       'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js',
     ]);
   });
+
+  it('runs the npm entrypoint next to a codex.cmd shim in any PATH folder (custom npm prefix)', () => {
+    const files = new Set(['d:\\npm\\codex.cmd', 'd:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js']);
+    const r: ResolveClaudeEnv = {
+      platform: 'win32',
+      env: { PATH: 'D:\\npm', PATHEXT: '.EXE;.CMD' },
+      homedir: 'C:\\Users\\u',
+      isFile: (p) => files.has(p.toLowerCase()),
+    };
+    expect(resolveAgentExecutableWith(r, 'codex')).toBe('D:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js');
+  });
 });

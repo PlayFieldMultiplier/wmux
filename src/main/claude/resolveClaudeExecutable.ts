@@ -71,6 +71,14 @@ function fnmBins(r: ResolveClaudeEnv, p: typeof path.posix, name: AgentBinary): 
   return out;
 }
 
+function isFileSafe(r: ResolveClaudeEnv, p: string): boolean {
+  try {
+    return r.isFile(p);
+  } catch {
+    return false;
+  }
+}
+
 const UNSPAWNABLE_EXTS = new Set(['.cmd', '.bat']);
 
 function pathDirs(r: ResolveClaudeEnv, raw: string = r.env.PATH ?? r.env.Path ?? r.env.path ?? ''): string[] {
@@ -117,6 +125,11 @@ export function agentCandidates(r: ResolveClaudeEnv, name: AgentBinary): string[
   for (const dir of pathDirs(r)) {
     if (win) for (const ext of pathExts(r)) out.push(p.join(dir, `${name}${ext}`));
     else out.push(p.join(dir, name));
+    // Windows npm in any prefix: the PATH folder holds an unspawnable
+    // codex.cmd shim next to node_modules; run the package entrypoint instead.
+    if (win && name === 'codex' && isFileSafe(r, p.join(dir, 'codex.cmd'))) {
+      out.push(p.join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
+    }
   }
   // Native installer (self-updating). Codex's Windows installer uses its own
   // folder (below), so ~/.local/bin is only its POSIX location.
