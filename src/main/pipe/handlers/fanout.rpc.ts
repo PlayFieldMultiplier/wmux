@@ -144,7 +144,7 @@ import { checkWorkerHours, recordWorkerStart, workerSlotsFull, type BotUsage, ty
 import { getHeldFanouts, heldFanoutReserved, heldFanoutStarted, heldWakeIsFor } from '../../factory/heldFanouts';
 import { botFanoutPreset, botFanoutPresetList, botPresetCheckoutRefusal, composeBotWorkerPrompt } from '../../worktask/botFanoutPresets';
 import { getFactLog } from '../../factory/factLog';
-import { dropQueuedHeldFanoutWakes, getWakeQueue } from '../../factory/wakeQueue';
+import { currentWakeItem, dropQueuedHeldFanoutWakes, getWakeQueue } from '../../factory/wakeQueue';
 import { isWakeStoppedByOwner } from '../../factory/factoryStop';
 import { getAgentSlots, refreshSlotLiveness } from '../../factory/agentSlots';
 import { countOpenBotWorkers, openBotWorkers, verdictedTaskIds } from '../../factory/openBotWorkers';
