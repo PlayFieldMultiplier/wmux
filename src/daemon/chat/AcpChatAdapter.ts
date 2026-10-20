@@ -1,14 +1,18 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { spawnAgent, stopAgent } from './agentProcess';
 import { Readable, Writable, Transform } from 'node:stream';
-import * as acp from '@agentclientprotocol/sdk';
+import type * as AcpSdk from '@agentclientprotocol/sdk';
 import { BASE_CAPABILITIES, array, body, deadline, printable, record, string, type ChatAdapter, type ChatAdapterContext } from './adapter';
+
+// The SDK, and the zod schemas it builds, load when the first ACP session
+// connects rather than at daemon start.
+let acp: typeof AcpSdk | undefined;
 
 /** Uses the protocol SDK only; no editor/competitor implementation is included. */
 export class AcpChatAdapter implements ChatAdapter {
   readonly capabilities = { ...BASE_CAPABILITIES, fileDiff: true };
   private child?: ChildProcessWithoutNullStreams;
-  private connection?: acp.ClientConnection;
+  private connection?: AcpSdk.ClientConnection;
   private context!: ChatAdapterContext;
   private session = '';
   private counter = 0;
@@ -19,6 +23,7 @@ export class AcpChatAdapter implements ChatAdapter {
   constructor(private executable: string, private args: string[]) {}
 
   async connect(context: ChatAdapterContext): Promise<string> {
+    acp ??= await import('@agentclientprotocol/sdk');
     this.context = context;
     const child = this.child = spawnAgent(this.executable, this.args, context.cwd, context.env);
     child.stderr.resume();
@@ -64,20 +69,22 @@ export class AcpChatAdapter implements ChatAdapter {
     return this.session;
   }
   async prompt(text: string, requestId: string): Promise<void> {
-    if (!this.connection || this.active) throw new Error('ACP agent unavailable or busy');
+    const sdk = acp;
+    if (!this.connection || !sdk || this.active) throw new Error('ACP agent unavailable or busy');
     this.active = true; this.turnId = requestId; this.message = undefined;
     this.context.emit({ id: requestId, kind: 'user_text', text, turnId: requestId });
     try {
-      await this.connection.agent.request(acp.methods.agent.session.prompt, { sessionId: this.session, prompt: [{ type: 'text', text }] });
+      await this.connection.agent.request(sdk.methods.agent.session.prompt, { sessionId: this.session, prompt: [{ type: 'text', text }] });
     } finally { this.active = false; this.message = undefined; }
   }
   async cancel(): Promise<void> {
-    if (!this.connection) throw new Error('ACP agent disconnected');
-    await this.connection.agent.notify(acp.methods.agent.session.cancel, { sessionId: this.session });
+    const sdk = acp;
+    if (!this.connection || !sdk) throw new Error('ACP agent disconnected');
+    await this.connection.agent.notify(sdk.methods.agent.session.cancel, { sessionId: this.session });
   }
   close(): void { this.connection?.close(); if (this.child) stopAgent(this.child); this.connection = undefined; this.child = undefined; }
 
-  private update(params: acp.SessionNotification): void {
+  private update(params: AcpSdk.SessionNotification): void {
     if (params.sessionId !== this.session) return;
     const update = record(params.update); const kind = string(update.sessionUpdate);
     if (['agent_message_chunk', 'agent_thought_chunk', 'user_message_chunk'].includes(kind)) {
