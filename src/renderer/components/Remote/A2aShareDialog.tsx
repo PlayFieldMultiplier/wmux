@@ -60,6 +60,8 @@ export interface A2aShareDialogViewProps {
   hostId: string | null;
   onPickHost: (hostId: string) => void;
   block: ShareBlock | null;
+  /** The open share can still be withdrawn (not while it is being turned into a link). */
+  withdrawable: boolean;
   send: boolean;
   receive: boolean;
   onSend: (v: boolean) => void;
@@ -129,7 +131,7 @@ export function A2aShareDialogView(p: A2aShareDialogViewProps) {
         )}
       </DialogBody>
       <DialogFooter>
-        {p.block === 'shared' && !done && (
+        {p.block === 'shared' && p.withdrawable && !done && (
           <UiButton variant="ghost" size="md" disabled={p.busy} onClick={p.onWithdraw} data-testid="a2a-share-withdraw">{t('a2aShare.withdraw')}</UiButton>
         )}
         <UiButton variant={done ? 'secondary' : 'ghost'} size="md" onClick={p.onClose}>{done ? t('a2aLink.done') : t('a2aLink.cancel')}</UiButton>
@@ -219,6 +221,7 @@ export default function A2aShareDialog({ workspaceId, paneId, onClose }: A2aShar
       hostId={hostId}
       onPickHost={(id) => { setHostId(id); setOutcome(null); }}
       block={block}
+      withdrawable={existing?.state === 'open'}
       send={send}
       receive={receive}
       onSend={setSend}

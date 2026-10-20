@@ -61,7 +61,7 @@ function props(over: Partial<A2aShareDialogViewProps> = {}): A2aShareDialogViewP
   return {
     paneName: 'API / w1-1', agent: 'claude', cwd: '/srv/api', repo: 'github.com/acme/api',
     peers: [{ hostId: A, name: 'LAPTOP' }], hostId: A, onPickHost: () => undefined,
-    block: null, send: true, receive: true, onSend: () => undefined, onReceive: () => undefined,
+    block: null, withdrawable: true, send: true, receive: true, onSend: () => undefined, onReceive: () => undefined,
     busy: false, outcome: null, onShare: () => undefined, onWithdraw: () => undefined, onClose: () => undefined, t,
     ...over,
   };
@@ -117,6 +117,14 @@ describe('A2aShareDialogView', () => {
 });
 
 describe('A2aShareRow', () => {
+  it('a share being turned into a link offers no Withdraw, here or in the dialog', () => {
+    let body = render(createElement('ul', null, createElement(A2aShareRow, { offer: share({ state: 'claimed' }), pcName: 'LAPTOP', busy: false, onWithdraw: () => undefined, t })));
+    expect(body.querySelector('[data-testid="a2a-share-row-withdraw"]')).toBeNull();
+    for (const el of roots.splice(0)) { act(() => el.root.unmount()); el.el.remove(); }
+    body = render(createElement(A2aShareDialogView, props({ block: 'shared', withdrawable: false })));
+    expect(body.querySelector('[data-testid="a2a-share-withdraw"]')).toBeNull();
+  });
+
   it('is a neutral nested row with Withdraw', () => {
     const onWithdraw = vi.fn();
     const body = render(createElement('ul', null, createElement(A2aShareRow, { offer: share(), pcName: 'LAPTOP', busy: false, onWithdraw, t })));

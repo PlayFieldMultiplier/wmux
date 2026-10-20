@@ -164,6 +164,8 @@ export class A2aExposurePublisher {
    * (names, agent, cwd, repo key), for a share; null when it is not open.
    */
   async candidateFor(workspaceId: string, paneId: string): Promise<A2aExposureCandidate | null> {
+    // Only this PC's own panes: a shadow workspace shows another PC's.
+    if (isShadowWorkspaceId(workspaceId)) return null;
     const tree = this.raw ?? this.last;
     const w = tree?.workspaces.find((x) => x.id === workspaceId);
     const p = w?.panes.find((x) => x.paneId === paneId);

@@ -171,9 +171,12 @@ export function A2aShareRow(p: A2aShareRowProps) {
       <span className="wmux-remote-link-what">
         {`${o.end.workspaceName} / ${o.end.label ?? o.end.paneId ?? ''} → ${p.pcName} · ${t('a2aShare.waiting', { pc: p.pcName })}`}
       </span>
-      <span className="wmux-remote-acts">
-        <UiButton variant="ghost" size="sm" disabled={p.busy} onClick={p.onWithdraw} data-testid="a2a-share-row-withdraw">{t('a2aShare.withdraw')}</UiButton>
-      </span>
+      {/* A claimed share is being turned into a link; it can no longer be withdrawn. */}
+      {o.state === 'open' && (
+        <span className="wmux-remote-acts">
+          <UiButton variant="ghost" size="sm" disabled={p.busy} onClick={p.onWithdraw} data-testid="a2a-share-row-withdraw">{t('a2aShare.withdraw')}</UiButton>
+        </span>
+      )}
     </li>
   );
 }

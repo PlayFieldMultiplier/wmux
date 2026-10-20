@@ -93,7 +93,7 @@ export const PANE_ACTIONS_CLUSTER_WIDTH = 142;
  *  host, so no split, no new pane and (by the `snap-` prefix) no layout snap. */
 // 'mute-notifications': a shadow pane's notifications come from the remote
 // host's own path, which never reads this pane's mute flag.
-const HIDDEN_ON_SHADOW: ReadonlySet<string> = new Set(['split-right', 'split-down', 'new-remote', 'split-right-remote', 'split-down-remote', 'mute-notifications']);
+const HIDDEN_ON_SHADOW: ReadonlySet<string> = new Set(['split-right', 'split-down', 'new-remote', 'split-right-remote', 'split-down-remote', 'mute-notifications', 'share-remote-pane']);
 
 /** Rendered width (px) of the COLLAPSED cluster: the ⋮ trigger alone, which
  *  opens the same actions as a vertical menu. Same outer box as the full

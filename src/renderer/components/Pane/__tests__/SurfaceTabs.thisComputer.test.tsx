@@ -94,3 +94,30 @@ describe('SurfaceTabs on a shadow workspace (PC rail)', () => {
     }
   });
 });
+
+describe('SurfaceTabs share item on a shadow workspace (PC rail)', () => {
+  const menuKeys = (): Array<string | null> => {
+    act(() => {
+      container.firstElementChild!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    });
+    return [...document.querySelectorAll('[data-pane-menu-action]')].map((el) => el.getAttribute('data-pane-menu-action'));
+  };
+  beforeEach(() => {
+    (window as unknown as { electronAPI?: unknown }).electronAPI = { a2aRemote: { offersCreate: () => undefined } };
+    useStore.setState((s) => ({ a2aRemote: { ...s.a2aRemote, peers: [{ v: 1, peerId: 'p', hostId: '11111111-1111-4111-8111-111111111111', name: 'LAPTOP', createdAt: '' }] } }));
+  });
+  afterEach(() => {
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    useStore.setState((s) => ({ a2aRemote: { ...s.a2aRemote, peers: [] } }));
+  });
+
+  it('offers sharing only for this computer’s own panes', () => {
+    mount();
+    expect(menuKeys()).toContain('share-remote-pane');
+    act(() => { root.unmount(); });
+    container.remove();
+    document.body.innerHTML = '';
+    mount('shadow:h1:w1');
+    expect(menuKeys()).not.toContain('share-remote-pane');
+  });
+});
