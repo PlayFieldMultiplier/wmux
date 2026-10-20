@@ -251,3 +251,44 @@ describe('goneForOffers', () => {
     expect(goneForOffers([offer({ state: 'withdrawn', endedReason: 'withdrawn' }), offer({ side: 'in' })], tree)).toEqual([]);
   });
 });
+
+describe('A2aExposurePublisher — shares are acceptable only after the reconnect pass', () => {
+  const tree: A2aRemotePaneSnapshot = { workspaces: [{ id: 'w1', name: 'API', panes: [{ paneId: 'p2' }] }] };
+  const share: A2aLinkOfferRecordV1 = {
+    v: 1, offerId: '33333333-3333-4333-8333-333333333333', side: 'out', hostId: 'h',
+    end: { kind: 'pane', workspaceId: 'w1', workspaceName: 'API', paneId: 'p1' }, allow: { outbound: true, inbound: true },
+    state: 'open', createdAt: '', updatedAt: '', expiresAt: '',
+  };
+  function rig(o: { offers?: () => Promise<{ offers: A2aLinkOfferRecordV1[] }>; goneFails?: boolean }) {
+    const flags: Array<boolean | undefined> = [];
+    const gone: A2aRemotePaneGoneParams[] = [];
+    const client = {
+      a2aRemoteExposureList: vi.fn(async () => ({ exposures: [] })),
+      a2aRemoteExposurePublish: vi.fn(async (_p: A2aExposureCandidate[], reconciled?: boolean) => void flags.push(reconciled)),
+      a2aRemotePaneGone: vi.fn(async (p: A2aRemotePaneGoneParams) => {
+        if (o.goneFails) throw new Error('daemon busy');
+        gone.push(p);
+      }),
+      a2aRemoteLinksList: vi.fn(async () => ({ links: [] })),
+      ...(o.offers ? { a2aRemoteOffersList: vi.fn(o.offers) } : {}),
+    };
+    const pub = new A2aExposurePublisher({ client: () => client, repoKey: async () => null, log: () => undefined, setTimer: () => undefined });
+    return { pub, flags, gone };
+  }
+
+  it('says reconciled once the shares were read and their gone notices landed', async () => {
+    const { pub, flags, gone } = rig({ offers: async () => ({ offers: [share] }) });
+    await pub.accept(tree);
+    expect(gone).toEqual([{ workspaceId: 'w1', paneId: 'p1', reason: 'pane-closed' }]);
+    expect(flags).toEqual([true]);
+  });
+
+  it('not when the shares could not be read, or a notice did not land', async () => {
+    const unread = rig({ offers: async () => { throw new Error('no daemon'); } });
+    await unread.pub.accept(tree);
+    expect(unread.flags).toEqual([false]);
+    const unsent = rig({ offers: async () => ({ offers: [share] }), goneFails: true });
+    await unsent.pub.accept(tree);
+    expect(unsent.flags).toEqual([false]);
+  });
+});

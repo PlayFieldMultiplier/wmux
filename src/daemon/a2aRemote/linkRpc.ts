@@ -165,7 +165,7 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
 
   // --- exposure ---------------------------------------------------------------
 
-  onRpc('a2a.remote.exposure.publish', async (params) => ({ ok: true, count: deps.panes.publish(params['panes']) }));
+  onRpc('a2a.remote.exposure.publish', async (params) => ({ ok: true, count: deps.panes.publish(params['panes'], params['reconciled'] === true) }));
 
   onRpc('a2a.remote.exposure.list', async () => ({ exposures: deps.exposures.list() }));
 
@@ -344,10 +344,13 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
       status = json;
     } catch (err) {
       // The server no longer knows a link we still wait on: it is over there.
-      if (err instanceof CallFailure && err.code === 'unknown-link') {
+      // Unless the link moved on while we asked (its share's accept landed):
+      // then the answer is older than what we hold.
+      const now = links.get(rec.linkId);
+      if (err instanceof CallFailure && err.code === 'unknown-link' && now && now.state === rec.state && now.version === rec.version) {
         // Our answer to a share that never reached it: drop the proposal and
         // keep the share open there and here, so it can be accepted again.
-        if (!dropUnsentOfferProposal(rec)) changed(endRemotely(rec));
+        if (!dropUnsentOfferProposal(now)) changed(endRemotely(now));
       }
       return fail(err);
     }

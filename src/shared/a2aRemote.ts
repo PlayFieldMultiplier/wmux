@@ -730,12 +730,6 @@ export interface A2aLinkOfferRecordV1 {
   /** Sharer only: the share added this pane (and maybe its workspace) to that PC's exposure. */
   addedExposure?: boolean;
   addedWorkspace?: boolean;
-  /**
-   * Sharer only: that PC's exposure record as this PC last wrote it
-   * (`updatedAt`). A different value means someone else saved the list since
-   * (an older build's checklist), so nothing is put back.
-   */
-  exposureAt?: string;
   createdAt: string;
   updatedAt: string;
   /** Sharer: authoritative. Receiver: receipt time + ttlMs, for display. */

@@ -9226,8 +9226,8 @@ async function main(): Promise<void> {
       exposures: a2aExposures,
       isPeer: (hostId) => a2aPeers.list().some((p) => p.hostId === hostId && !p.revokedAt),
       isJoined: (hostId) => a2aRemoteHosts.get(hostId) !== undefined,
-      // No share is accepted before the app's panes (and its closed-pane notices) have come in.
-      appReady: () => a2aExposedPanes.hasPublished(),
+      // No share is accepted before the app has ended the shares of panes that closed while it was away.
+      appReady: () => a2aExposedPanes.isReconciled(),
       features: (hostId) => a2aDelivery?.hub.featuresOf(hostId),
       enqueue: (hostId, envelope) => {
         if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');

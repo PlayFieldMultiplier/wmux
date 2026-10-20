@@ -31,7 +31,7 @@ import type {
 
 export interface ExposurePublisherClient {
   a2aRemoteExposureList(): Promise<A2aRemoteExposureListResult>;
-  a2aRemoteExposurePublish(panes: A2aExposureCandidate[]): Promise<unknown>;
+  a2aRemoteExposurePublish(panes: A2aExposureCandidate[], reconciled?: boolean): Promise<unknown>;
   a2aRemotePaneGone(params: A2aRemotePaneGoneParams): Promise<unknown>;
   a2aRemoteLinksList(): Promise<A2aRemoteLinksListResult>;
   /** Absent on a client that predates share offers. */
@@ -233,13 +233,17 @@ export class A2aExposurePublisher {
     } catch (err) {
       this.deps.log(`links read failed: ${errMsg(err)}`);
     }
+    // Shares may be accepted only once this pass read them and every notice landed.
+    let offersRead = false;
     try {
       const offers = client.a2aRemoteOffersList ? (await client.a2aRemoteOffersList()).offers : [];
       for (const g of goneForOffers(offers ?? [], this.last)) this.pending.set(goneKey(g), g);
+      offersRead = true;
     } catch (err) {
       this.deps.log(`offers read failed: ${errMsg(err)}`);
     }
     await this.flushGone(client);
+    const reconciled = offersRead && this.pending.size === 0;
     const { exposures } = await client.a2aRemoteExposureList();
     const exposed = new Set((exposures ?? []).flatMap((e) => e.workspaceIds));
     const panes: A2aExposureCandidate[] = [];
@@ -264,7 +268,7 @@ export class A2aExposurePublisher {
         });
       }
     }
-    await client.a2aRemoteExposurePublish(panes);
+    await client.a2aRemoteExposurePublish(panes, reconciled);
   }
 }
 

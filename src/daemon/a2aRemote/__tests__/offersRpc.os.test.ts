@@ -186,6 +186,31 @@ describe('a2a.remote.offers.accept — review fixes', () => {
     expect(await pending).toMatchObject({ ok: true, offer: { state: 'accepted' }, link: { linkId, state: 'active' } });
   });
 
+  it('a Check answered before the accept landed, but read after it, leaves the now active link alone', async () => {
+    let releaseGet: () => void = () => undefined;
+    script = async (method, _p, body) => {
+      if (method === 'GET') {
+        await new Promise<void>((r) => { releaseGet = r; });
+        return { status: 404, json: { ok: false, error: 'unknown-link' } };
+      }
+      return { status: 200, json: { linkId: (body as { linkId: string }).linkId, state: 'active', version: 2 } };
+    };
+    // First answer unsettled, so a Check has something to ask about.
+    const first = script;
+    script = async () => {
+      throw new PinnedClientError('timeout', 'no answer', { sent: true });
+    };
+    await accept();
+    script = first;
+    const linkId = store.get(OFFER)!.pendingLinkId!;
+    const check = rpc('a2a.remote.links.refresh', { linkId });
+    await vi.waitFor(() => expect(calls.some((c) => c.method === 'GET')).toBe(true), { timeout: 5_000 });
+    expect(await accept()).toMatchObject({ ok: true, link: { linkId, state: 'active' } });
+    releaseGet();
+    await check;
+    expect(links.get(linkId)?.state).toBe('active');
+  });
+
   it('a sharer that took the offer but has not finished the link keeps it open; the same proposal again finishes it', async () => {
     let finished = false;
     script = async (_m, _p, body) => {

@@ -247,6 +247,7 @@ export class A2aRemoteDelivery {
       this.deps.log('warn', `[a2a-remote] hold expiry failed: ${errMsg(err)}`);
     }
     this.deps.offers?.expire();
+    this.deps.offers?.reconcileExposure();
   }
 
   // --- RPC ------------------------------------------------------------------

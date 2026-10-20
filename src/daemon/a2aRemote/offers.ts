@@ -50,9 +50,9 @@ export interface A2aOffersDeps {
   links: Pick<LinkStore, 'get' | 'list' | 'receiveProposal' | 'accept' | 'discard'>;
   exposures: Pick<ExposureStore, 'addPane' | 'removePane' | 'isPaneExposed' | 'get' | 'saveUnsaved'>;
   /**
-   * The app has published its panes since this daemon started, so a pane
-   * that closed while it was away has ended its shares. Until then no share
-   * is accepted. Default: always.
+   * The app's latest publish came after it ended every share whose pane
+   * closed or moved (its reconnect pass read the shares and every notice
+   * landed). Until then no share is accepted. Default: always.
    */
   appReady?: () => boolean;
   /** A PC that joined this one and is not revoked (it can answer a share). */
@@ -131,7 +131,6 @@ export class A2aOffers {
     if (!shown) {
       try {
         this.deps.exposures.addPane(hostId, end.workspaceId, end.paneId);
-        this.stamp(hostId);
       } catch (err) {
         this.endOut(this.store.get(offer.offerId) ?? offer, 'withdrawn', 'withdrawn', false);
         return { ok: false, error: 'unavailable', message: errMsg(err) };
@@ -338,7 +337,7 @@ export class A2aOffers {
     }
     for (const rec of ended) {
       if (rec.side === 'out') {
-        this.putBackExposure(rec);
+        this.putBackExposure(this.store.get(rec.offerId) ?? rec);
         this.tell(rec, 'expired');
       }
       this.changed(rec);
@@ -371,8 +370,10 @@ export class A2aOffers {
    * (a write failed, a live link still used the pane) is tried again here.
    */
   reconcileExposure(): void {
-    for (const rec of this.store.list()) {
-      if (rec.side !== 'out' || !rec.addedExposure) continue;
+    for (const { offerId } of this.store.list()) {
+      // Re-read: putting one back can change the next one's record.
+      const rec = this.store.get(offerId);
+      if (!rec || rec.side !== 'out' || !rec.addedExposure) continue;
       if (rec.state === 'open' || rec.state === 'claimed') continue;
       if (rec.state === 'accepted' && rec.linkId) {
         const link = this.deps.links.get(rec.linkId);
@@ -484,10 +485,10 @@ export class A2aOffers {
 
   /**
    * Hide again what a share showed. Not while a live link to that PC still
-   * uses the pane (the debt is kept and paid when that link ends), and not
-   * when someone else saved that PC's list since this PC last wrote it (an
-   * older build's checklist): that list is the truth. The debt is dropped
-   * only once the put-back is on disk.
+   * uses the pane (the debt is kept and paid when that link ends). Only a
+   * human's save of that PC's list on this build (`onExposureSetByHuman`)
+   * cancels the debt; anything else gets the narrower list. The debt is
+   * dropped only once the put-back is on disk.
    */
   private putBackExposure(rec: A2aLinkOfferRecordV1): void {
     if (rec.side !== 'out' || !rec.addedExposure || !rec.end.paneId) return;
@@ -504,22 +505,19 @@ export class A2aOffers {
         return;
       }
       this.putBackUnsaved.delete(rec.offerId);
-      this.settlePutBack(rec, true);
+      this.settlePutBack(rec);
       return;
     }
-    const current = this.deps.exposures.get(rec.hostId);
-    const editedElsewhere = !!current && !!rec.exposureAt && current.updatedAt !== rec.exposureAt;
-    if (current && !editedElsewhere && !this.unexpose(rec.hostId, rec.end, rec.addedWorkspace === true)) {
+    if (!this.unexpose(rec.hostId, rec.end, rec.addedWorkspace === true)) {
       this.putBackUnsaved.add(rec.offerId);
       return;
     }
-    this.settlePutBack(rec, !!current && !editedElsewhere);
+    this.settlePutBack(rec);
   }
 
-  private settlePutBack(rec: A2aLinkOfferRecordV1, wrote: boolean): void {
+  private settlePutBack(rec: A2aLinkOfferRecordV1): void {
     try {
       this.store.forgetExposure(rec.offerId);
-      if (wrote) this.stamp(rec.hostId);
     } catch (err) {
       this.deps.log('warn', `[a2a-remote] offer ${rec.offerId}: exposure bookkeeping not stored: ${errMsg(err)}`);
     }
@@ -536,14 +534,6 @@ export class A2aOffers {
     }
   }
 
-  /** Record this PC's latest write of `hostId`'s exposure on the shares that owe it. */
-  private stamp(hostId: HostId): void {
-    try {
-      this.store.stampExposure(hostId, this.deps.exposures.get(hostId)?.updatedAt);
-    } catch (err) {
-      this.deps.log('warn', `[a2a-remote] offers for ${hostId}: exposure stamp not stored: ${errMsg(err)}`);
-    }
-  }
 
   private offerEnvelope(rec: A2aLinkOfferRecordV1): A2aRemoteEnvelope {
     return {

@@ -250,23 +250,7 @@ export class OfferStore {
   forgetExposure(offerId: string): void {
     const rec = this.offers.get(offerId);
     if (!rec || !rec.addedExposure) return;
-    const next = { ...rec, addedExposure: false, addedWorkspace: false };
-    delete next.exposureAt;
-    this.commitRecord(rec, next, false);
-  }
-
-  /** This PC wrote `hostId`'s exposure (at `at`): every share still owing it something records that. */
-  stampExposure(hostId: HostId, at: string | undefined): void {
-    const owing = [...this.offers.values()].filter((r) => r.side === 'out' && r.hostId === hostId && r.addedExposure);
-    if (owing.length === 0) return;
-    this.assertWritable();
-    for (const r of owing) {
-      const next = { ...r };
-      if (at) next.exposureAt = at;
-      else delete next.exposureAt;
-      this.offers.set(r.offerId, next);
-    }
-    this.persist();
+    this.commitRecord(rec, { ...rec, addedExposure: false, addedWorkspace: false }, false);
   }
 
   /** A human edited the exposure for `hostId`: that list is the truth now, nothing is put back. */
@@ -472,7 +456,6 @@ function coerceRecord(r: unknown): A2aLinkOfferRecordV1 | null {
   if (side === 'out' && r['addedExposure'] === true) {
     rec.addedExposure = true;
     rec.addedWorkspace = r['addedWorkspace'] === true;
-    if (isIsoString(r['exposureAt'])) rec.exposureAt = r['exposureAt'];
   }
   return rec;
 }

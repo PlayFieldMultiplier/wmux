@@ -654,8 +654,9 @@ export class DaemonClient extends EventEmitter {
     return (await this.rpc('a2a.remote.peers.revoke', { peerId })) as { ok: boolean };
   }
 
-  async a2aRemoteExposurePublish(panes: A2aExposureCandidate[]): Promise<{ ok: true; count: number }> {
-    return (await this.rpc('a2a.remote.exposure.publish', { panes })) as { ok: true; count: number };
+  /** `reconciled`: every share whose pane closed or moved was ended first (see ExposedPaneCache.isReconciled). */
+  async a2aRemoteExposurePublish(panes: A2aExposureCandidate[], reconciled = false): Promise<{ ok: true; count: number }> {
+    return (await this.rpc('a2a.remote.exposure.publish', { panes, reconciled })) as { ok: true; count: number };
   }
 
   async a2aRemoteExposureList(): Promise<A2aRemoteExposureListResult> {

@@ -472,13 +472,26 @@ describe('share offers — review fixes (consent stays bound, debts stay owed)',
     expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
   });
 
-  it('a list saved elsewhere since (an older build’s checklist) is left as it is', async () => {
+  it('only a human save on this build cancels the debt: any other write still gets the pane hidden', async () => {
     const { b, offerId } = await shared();
     b.clock.now += 1_000;
     // Not the RPC: an older build writes exposure.json without knowing about offers.
-    b.exposures.set(A, { workspaceIds: ['ws-api'], paneIds: { 'ws-api': ['pane-1'] } });
+    b.exposures.set(A, { workspaceIds: ['ws-api'], paneIds: { 'ws-api': ['pane-1', 'pane-2'] } });
     b.offers.withdraw(offerId);
-    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(true);
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-2')).toBe(true);
+  });
+
+  it('two shares to one PC expiring together both put their pane back, also on disk', async () => {
+    const b = makeSide(B, A);
+    b.offers.create({ hostId: A, end: B_PANE, allow: both });
+    b.offers.create({ hostId: A, end: { ...B_PANE, paneId: 'pane-2' }, allow: both });
+    b.clock.now += A2A_OFFER_TTL_MS + 1;
+    b.offers.expire();
+    expect(b.store.list().every((o) => o.state === 'expired' && !o.addedExposure)).toBe(true);
+    const disk = new ExposureStore({ dir: b.dir, scheduleHarden: () => undefined });
+    expect(disk.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+    expect(disk.isPaneExposed(A, 'ws-api', 'pane-2')).toBe(false);
   });
 
   it('nothing is accepted before the app has published its panes since the daemon started', async () => {
