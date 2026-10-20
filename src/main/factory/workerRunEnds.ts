@@ -33,6 +33,12 @@ import type { BotUsage } from './budget';
 import { recordWorkerEnd, recordWorkerStart } from './budget';
 import type { LiveHolders, WorkerHolder } from './workerHolders';
 
+/** The row statuses at which a bot's task no longer needs its worker: the
+ *  row-end rule (bot.rpc.ts onWorkerEnded, via fanoutCallerNotify.ts) and
+ *  its sweep (endRunsOfEndedRows) both read this one set, so a row the
+ *  callback would have ended is never left open by the sweep. */
+export const WORKER_ENDED: ReadonlySet<string> = new Set(['review_requested', 'completed', 'failed', 'cancelled']);
+
 let confirmed = false;
 
 /** Set while a worker lifecycle host's holder set ends the runs, or one is
@@ -133,7 +139,7 @@ export function endRunsOfEndedRows(ports: Pick<RunEndPorts, 'bots' | 'usageOf' |
       .map((w) => w.taskId)
       .filter((taskId) => {
         const status = ports.row(taskId)?.status;
-        return status === 'completed' || status === 'cancelled' || status === 'failed';
+        return status !== undefined && WORKER_ENDED.has(status);
       });
     if (done.length === 0) continue;
     ports.mutateUsage(botId, (u) => {

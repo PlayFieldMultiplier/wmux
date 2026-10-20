@@ -258,4 +258,11 @@ describe('endRunsOfEndedRows', () => {
     expect(endRunsOfEndedRows(r.ports, NOW)).toBe(1);
     expect(r.usage.workers.map((w) => [w.taskId, w.endedAt])).toEqual([['done', NOW], ['open', undefined]]);
   });
+  it('a row that reached review ends its run too, as the row-end callback would have', () => {
+    const rows = [row('reviewed', { status: 'review_requested' })];
+    const r = rig(() => rows);
+    recordWorkerStart(r.usage, 'reviewed', NOW - 60_000);
+    expect(endRunsOfEndedRows(r.ports, NOW)).toBe(1);
+    expect(r.usage.workers[0].endedAt).toBe(NOW);
+  });
 });

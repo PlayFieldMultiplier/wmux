@@ -7,8 +7,16 @@ vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/repo'
 
 import { createFactoryWiring } from '../factoryWiring';
 import { setWorkerStopsConfirmed, workerStopsConfirmed } from '../workerRunEnds';
+import { emptyUsage, recordWorkerStart, type BotUsage } from '../budget';
+import { setBotStore, type BotStore } from '../botStore';
+import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
+import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 
-afterEach(() => setWorkerStopsConfirmed(false));
+afterEach(() => {
+  setWorkerStopsConfirmed(false);
+  setBotStore(null);
+  setTaskLedgerForTests(null);
+});
 
 describe('the wiring and the bots\' worker runs', () => {
   it('a host to come is known from the register on, before any module starts; none without a daemon', () => {
@@ -34,6 +42,31 @@ describe('the wiring and the bots\' worker runs', () => {
     failing = true;
     expect(() => wiring.start?.()).toThrow('no data folder');
     expect(workerStopsConfirmed()).toBe(false);
+    wiring.dispose?.();
+  });
+
+  it('a task that reached review while the host was coming ends its run when the start fails', () => {
+    const usage: BotUsage = emptyUsage();
+    recordWorkerStart(usage, 'reviewed', Date.now() - 60_000);
+    recordWorkerStart(usage, 'working', Date.now() - 60_000);
+    setBotStore({
+      list: () => [{ id: 'bot-1' }],
+      usageOf: () => usage,
+      mutateUsage: (_botId: string, fn: (u: BotUsage) => void) => fn(usage),
+    } as unknown as BotStore);
+    const statuses: Record<string, string> = { reviewed: 'review_requested', working: 'in_progress' };
+    setTaskLedgerForTests({ get: (id: string) => ({ id, status: statuses[id] }) } as unknown as TaskLedger);
+    let failing = false;
+    const wiring = createFactoryWiring({
+      wmuxDir: () => {
+        if (failing) throw new Error('no data folder');
+        return '/nonexistent';
+      },
+      getDaemonClient: () => null,
+    });
+    failing = true;
+    expect(() => wiring.start?.()).toThrow('no data folder');
+    expect(usage.workers.map((w) => [w.taskId, w.endedAt !== undefined])).toEqual([['reviewed', true], ['working', false]]);
     wiring.dispose?.();
   });
 });
