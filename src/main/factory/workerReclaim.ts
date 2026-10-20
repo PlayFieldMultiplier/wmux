@@ -130,6 +130,8 @@ export interface ReclaimedWorker {
   state: 'stopping' | 'stopped' | 'resumed';
   /** An unconfirmed stop was reported to the owner for this attempt. */
   stopUnconfirmed?: true;
+  /** The follow-up confirming the slot was freed was written. */
+  stopResolved?: true;
   at: number;
   /** The workspace the worker's pane lives in when a resume opened a new
    *  one (absent: taskWorkspaceId). */
@@ -290,7 +292,8 @@ function isRecord(v: unknown): v is ReclaimedWorker {
     && (r.paneWorkspaceId === undefined || typeof r.paneWorkspaceId === 'string')
     && (r.seenAt === undefined || typeof r.seenAt === 'number')
     && (r.endRev === undefined || typeof r.endRev === 'number')
-    && (r.stopUnconfirmed === undefined || r.stopUnconfirmed === true);
+    && (r.stopUnconfirmed === undefined || r.stopUnconfirmed === true)
+    && (r.stopResolved === undefined || r.stopResolved === true);
 }
 
 /** The reclaimed workers, persisted under `<wmuxDir>/factory/`. */
@@ -1050,6 +1053,7 @@ export async function reclaimWorker(
       // No pane left in the worktree: nothing to stop.
       state: panes.length === 0 ? 'stopped' : 'stopping',
       ...(prior?.state === 'stopping' && prior.stopUnconfirmed ? { stopUnconfirmed: true as const } : {}),
+      ...(prior?.stopResolved ? { stopResolved: true as const } : {}),
       at: now(),
       endRev: entry.rev,
       ...(prior?.paneWorkspaceId ? { paneWorkspaceId: prior.paneWorkspaceId } : {}),
@@ -1065,7 +1069,10 @@ export async function reclaimWorker(
     }
     // No pane left in the worktree: recorded so it no longer counts as a
     // live worker.
-    if (panes.length === 0) return rec;
+    if (panes.length === 0) {
+      await noteStopResolved(ports, rec);
+      return ports.store.get(entry.id);
+    }
     let failed = 0;
     let attempted = 0;
     // Failed stops that may have signalled the agent (not refused before).
@@ -1194,6 +1201,7 @@ export async function reclaimWorker(
       return ports.store.get(entry.id);
     }
     ports.store.setState(entry.id, 'stopped', now());
+    await noteStopResolved(ports, ports.store.get(entry.id));
     // Reopened part way: the conversation stays recorded, no card (the
     // task is open again, and its open row counts what still runs).
     if (attempted < panes.length) return ports.store.get(entry.id);
@@ -1327,6 +1335,23 @@ export function isReclaimedSince(rec: ReclaimedWorker | null, entry: Pick<Ledger
   return rec.endRev !== undefined ? rec.endRev >= entry.rev : rec.at >= entry.updatedAt;
 }
 
+/** Close an earlier warning once the record actually releases its slot.
+ *  Failed card writes remain pending for the existing settle sweep. */
+async function noteStopResolved(ports: WorkerReclaimPorts, rec: ReclaimedWorker | null): Promise<void> {
+  if (!rec || rec.state !== 'stopped' || !rec.stopUnconfirmed || rec.stopResolved || !ports.note) return;
+  try {
+    const task = lifecycleCardTask(rec.title, rec.taskId);
+    ports.note(
+      rec.ownerWorkspaceId, rec.threadId, `Worker slot freed: ${task}`,
+      'The worker has stopped; its slot is free.',
+      { code: 'worker.stopResolved', args: { title: task } }, rec.taskId,
+    );
+    await ports.store.put({ ...rec, stopResolved: true });
+  } catch (err) {
+    ports.log?.(`[factory] reclaim: the stop-resolution notice for ${rec.taskId} was not recorded: ${String(err)}`);
+  }
+}
+
 /** Install the reclaim on bot task ends. Returns the unsubscribe. */
 export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
   const now = ports.now ?? Date.now;
@@ -1391,11 +1416,14 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
   const settleStopping = async (): Promise<void> => {
     if (settling || !ports.row) return;
     const at = now();
+    const pending = ports.store.all().filter((r) => r.state === 'stopped' && r.stopUnconfirmed && !r.stopResolved && !inFlight.has(r.taskId));
     const stale = ports.store.all().filter((r) => r.state === 'stopping' && !inFlight.has(r.taskId)
       && (r.at < installedAt || at - r.at >= STOPPING_SETTLE_MS));
-    if (stale.length === 0) return;
+    if (stale.length === 0 && pending.length === 0) return;
     settling = true;
     try {
+      for (const rec of pending) await noteStopResolved(ports, ports.store.get(rec.taskId));
+      if (stale.length === 0) return;
       const byId = new Map((await ports.listSessions()).map((x) => [x.id, x]));
       let moved = false;
       for (const rec of stale) {
@@ -1430,6 +1458,7 @@ export function installWorkerReclaim(ports: WorkerReclaimPorts): () => void {
           if (ports.store.setState(rec.taskId, 'stopped', at)) {
             moved = true;
             log(`[factory] reclaim: ${rec.taskId} was left stopping with no agent running; marked stopped`);
+            await noteStopResolved(ports, ports.store.get(rec.taskId));
             // An open task's idle stop cut off before its cards: they go now.
             if (cur.ended === 'reported' && row && (row.status === 'working' || row.status === 'input_required')) noteOpenPause(ports, row, cur.sessions, at);
           }

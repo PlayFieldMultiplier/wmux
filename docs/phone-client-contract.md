@@ -4379,6 +4379,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `worker.openIdlePaused` | `title` string | `Worker paused: {title}`<br>`Worker paused` | As `worker.paused`; the task was still working or needing input. |
 | `worker.openIdlePausedResumable` | `title` string, `kind` string | `Worker paused (resumable): {title}`<br>`Worker paused (resumable)` | As `worker.pausedResumable`; the task was still working or needing input. |
 | `worker.stopUnconfirmed` | `title` string | `Worker stop unconfirmed: {title}`<br>`Worker stop unconfirmed` | The stop was not confirmed; the worker still holds its slot. `title` as `worker.paused`. |
+| `worker.stopResolved` | `title` string | `Worker slot freed: {title}`<br>`Worker slot freed` | Follow-up to an unconfirmed stop: the worker has stopped and its slot is free. `title` as `worker.paused`. |
 | `worker.done` | `title` string, `status` string | `Worker done: {title}`<br>`Worker done` | `title` as `worker.paused`. `status`: `completed`, `cancelled` or `failed`. |
 | `worker.doneResumable` | `title` string, `status` string, `kind` string | `Worker done (resumable): {title}`<br>`Worker done (resumable)` | As `worker.done`; `kind` as `worker.pausedResumable`. |
 | `worker.resumed` | `title` string, `by` string, `where` string | `Worker resumed: {title}`<br>`Worker resumed` | `title` as `worker.paused`. `by`: `owner` or `bot`. `where`: `folder` or `newPane`. |

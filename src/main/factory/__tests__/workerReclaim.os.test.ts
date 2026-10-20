@@ -151,6 +151,8 @@ describe('reclaimWorker', () => {
     expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopped' });
     expect(count()).toBe(0);
     expect(note.mock.calls.at(-1)?.[4]).toMatchObject({ code: 'worker.doneResumable' });
+    expect(note.mock.calls.filter((call) => call[4]?.code === 'worker.stopResolved')).toHaveLength(1);
+    expect(store.get(entry.id)?.stopResolved).toBe(true);
   });
 
   it('does not suppress the owner notice after a failed card write', async () => {
@@ -1381,6 +1383,46 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     expect(changed).toHaveBeenCalled();
     off();
     await settled(store);
+  });
+
+  it('closes an unconfirmed-stop warning once after exit, including a reload and repeated sweeps', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await store.put(stopping({ stopUnconfirmed: true }));
+    const { ports, note } = reclaimPorts(store, [], { row: () => ownerStopped(), allRows: () => [], retryMs: 10 });
+    const off = installWorkerReclaim(ports);
+    await vi.waitFor(() => expect(store.get(TASK)?.stopResolved).toBe(true), { timeout: 10_000 });
+    expect(note.mock.calls.map((call) => call[4]?.code)).toEqual(['worker.stopResolved']);
+    expect(note.mock.calls[0][3]).toBe('The worker has stopped; its slot is free.');
+    off();
+    await settled(store);
+    const restored = ReclaimedWorkers.at(dir);
+    restored.load();
+    const stop = installWorkerReclaim({ ...ports, store: restored });
+    await deliberateSleep(40, 'negative: repeated sweeps and reload must not duplicate the resolved card');
+    stop();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(restored.get(TASK)).toMatchObject({ state: 'stopped', stopResolved: true });
+    await settled(restored);
+  });
+
+  it('retries a failed resolution card without reclaiming a stopped worker again', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await store.put(stopping({ stopUnconfirmed: true }));
+    const note = vi.fn().mockImplementationOnce(() => { throw new Error('room unavailable'); });
+    const { ports, stopAgent } = reclaimPorts(store, [], { note, row: () => ownerStopped(), allRows: () => [] });
+    const off = installWorkerReclaim(ports);
+    await vi.waitFor(() => expect(store.get(TASK)?.state).toBe('stopped'), { timeout: 10_000 });
+    off();
+    await settled(store);
+    expect(store.get(TASK)?.stopResolved).toBeUndefined();
+    const restored = ReclaimedWorkers.at(dir);
+    restored.load();
+    const stop = installWorkerReclaim({ ...ports, store: restored });
+    await vi.waitFor(() => expect(restored.get(TASK)?.stopResolved).toBe(true), { timeout: 10_000 });
+    stop();
+    expect(note).toHaveBeenCalledTimes(2);
+    expect(stopAgent).not.toHaveBeenCalled();
+    await settled(restored);
   });
 
   it('one left stopping in this run is looked at only past the bound, then marked stopped', async () => {

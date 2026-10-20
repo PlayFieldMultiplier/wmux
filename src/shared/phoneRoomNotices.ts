@@ -60,6 +60,7 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
   'worker.openIdlePaused': taskNamed('worker.openIdlePaused'),
   'worker.openIdlePausedResumable': taskNamed('worker.openIdlePausedResumable', { kind: 'string' }, [`${k('worker.openIdlePausedResumable')}.body.research`]),
   'worker.stopUnconfirmed': taskNamed('worker.stopUnconfirmed'),
+  'worker.stopResolved': taskNamed('worker.stopResolved'),
   'worker.done': taskNamed('worker.done', { status: 'string' }, STATUS),
   'worker.doneResumable': taskNamed('worker.doneResumable', { status: 'string', kind: 'string' }, [`${k('worker.doneResumable')}.body.research`, ...STATUS]),
   'worker.resumed': taskNamed('worker.resumed', { by: 'string', where: 'string' }, ['room.notice.by.owner', 'room.notice.by.bot', 'room.notice.where.folder', 'room.notice.where.newPane']),
