@@ -175,8 +175,16 @@ export interface GuestBotGates {
   secureTransport: boolean;
 }
 
+/** The guest workspaces (main/factory/guestWorkspaces.ts): a guest joins
+ *  only a conversation of one. `readable` false: the list could not be read,
+ *  so no workspace takes a guest until it is fixed. */
+export interface GuestWorkspaceList {
+  readable: boolean;
+  workspaceIds: string[];
+}
+
 export type GuestBotListResult =
-  | { ok: true; guests: GuestBotView[]; gates: GuestBotGates }
+  | { ok: true; guests: GuestBotView[]; gates: GuestBotGates; workspaces: GuestWorkspaceList }
   | { ok: false; code: GuestBotErrorCode };
 
 export type GuestBotCreateResult =
@@ -185,13 +193,25 @@ export type GuestBotCreateResult =
 
 export type GuestBotSimpleResult = { ok: true } | { ok: false; code: GuestBotErrorCode };
 
-export type GuestBotErrorCode = 'unavailable' | 'invalid' | 'too-many' | 'not-found' | 'persist-failed';
+/** `not-guest-workspace`: the conversation is not in a guest workspace. */
+export type GuestBotErrorCode = 'unavailable' | 'invalid' | 'too-many' | 'not-found' | 'persist-failed' | 'not-guest-workspace';
+
+/** Why a workspace could not be made a guest workspace: it is the HQ
+ *  workspace, a bot in it breaks a guest workspace's rules (`botIds`), or
+ *  work is running in it (a turn, a task or a worker). */
+export type GuestWorkspaceMarkRefusal = 'hq' | 'bots' | 'live-work';
+
+export type GuestWorkspaceMarkResult =
+  | { ok: true }
+  | { ok: false; code: 'unavailable' | 'invalid' | 'persist-failed' }
+  | { ok: false; code: 'refused'; refusal: GuestWorkspaceMarkRefusal; botIds?: string[] };
 
 export const GUEST_BOT_IPC = Object.freeze({
   list: 'factory:guestBots:list',
   create: 'factory:guestBots:create',
   revoke: 'factory:guestBots:revoke',
   setEnabled: 'factory:guestBots:setEnabled',
+  markWorkspace: 'factory:guestBots:markWorkspace',
 } as const);
 
 export const GUEST_BOT_RPC = Object.freeze({

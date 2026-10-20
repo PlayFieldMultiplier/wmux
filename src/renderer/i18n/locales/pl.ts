@@ -4963,4 +4963,5 @@ export const pl = {
   'botsPage.guest.error.tooMany': "Najwyżej 8 botów-gości naraz: najpierw odwołaj jednego.",
   'botsPage.guest.error.notFound': "Tego gościa już nie ma.",
   'botsPage.guest.error.persistFailed': "Nie udało się zapisać zmiany.",
+  'botsPage.guest.error.notGuestWorkspace': "Gość dołącza tylko do rozmowy w obszarze roboczym dla gości. Najpierw zmień ten obszar roboczy w obszar dla gości albo dodaj gościa w nowym obszarze roboczym.",
 } as const;

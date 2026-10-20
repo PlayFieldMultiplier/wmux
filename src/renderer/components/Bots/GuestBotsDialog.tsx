@@ -36,6 +36,7 @@ const ERROR_KEYS: Record<GuestBotErrorCode, string> = {
   'too-many': 'botsPage.guest.error.tooMany',
   'not-found': 'botsPage.guest.error.notFound',
   'persist-failed': 'botsPage.guest.error.persistFailed',
+  'not-guest-workspace': 'botsPage.guest.error.notGuestWorkspace',
 };
 
 /** What still keeps a guest from connecting, as message keys. Pure. */

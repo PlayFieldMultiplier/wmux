@@ -22,12 +22,13 @@ const GATES: GuestBotGates = { enabled: true, serverRunning: true, transcript: t
 const ID = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
 const TOKEN = 'wmuxguest~' + ID + '~' + 'S'.repeat(43);
 
-function fakePort(start: GuestBotView[] = [], gates: GuestBotGates = GATES) {
+function fakePort(start: GuestBotView[] = [], gates: GuestBotGates = GATES, guestWorkspaces: string[] = ['ws-1']) {
   let guests = [...start];
+  const flagged = new Set(guestWorkspaces);
   let g = { ...gates };
   const port = {
     available: true,
-    list: vi.fn(async () => ({ ok: true as const, guests, gates: g })),
+    list: vi.fn(async () => ({ ok: true as const, guests, gates: g, workspaces: { readable: true, workspaceIds: [...flagged] } })),
     create: vi.fn(async (req: { name: string; scope: GuestScope }) => {
       const guest: GuestBotView = { v: 1, guestId: ID, name: req.name, scope: req.scope, createdAt: '2026-10-19T00:00:00.000Z' };
       guests = [...guests, guest];
@@ -38,6 +39,7 @@ function fakePort(start: GuestBotView[] = [], gates: GuestBotGates = GATES) {
       return { ok: true as const };
     }),
     setEnabled: vi.fn(async (on: boolean) => { g = { ...g, enabled: on }; return { ok: true as const }; }),
+    markWorkspace: vi.fn(async (ws: string) => { flagged.add(ws); return { ok: true as const }; }),
   };
   return port satisfies GuestBotPort;
 }

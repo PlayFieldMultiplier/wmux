@@ -4108,4 +4108,5 @@ export const zh = {
   'botsPage.guest.error.tooMany': "最多同时 8 个访客机器人：请先撤销一个。",
   'botsPage.guest.error.notFound': "该访客已不存在。",
   'botsPage.guest.error.persistFailed': "无法保存更改。",
+  'botsPage.guest.error.notGuestWorkspace': "访客只能加入访客工作区中的对话。请先将此工作区设为访客工作区，或在新工作区中添加访客。",
 } as const;

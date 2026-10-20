@@ -5002,6 +5002,7 @@ export const en = {
   'botsPage.guest.error.tooMany': "At most 8 guest bots at once: revoke one first.",
   'botsPage.guest.error.notFound': "That guest is already gone.",
   'botsPage.guest.error.persistFailed': "The change could not be saved.",
+  'botsPage.guest.error.notGuestWorkspace': "A guest joins only a conversation in a guest workspace. Make this workspace a guest workspace first, or add the guest in a new workspace.",
 } as const;
 
 export type TranslationKey = keyof typeof en;

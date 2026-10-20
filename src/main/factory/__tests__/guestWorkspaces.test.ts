@@ -19,6 +19,7 @@ import {
   noteGuestRecordWorkspaces,
   setGuestWorkspaceStore,
 } from '../guestWorkspaces';
+import { FactorySettingsStore, HQ_NOT_GUEST_WORKSPACE, factorySettingsPath } from '../factorySettings';
 
 let dir = '';
 const file = (): string => guestWorkspacesPath(dir);
@@ -127,5 +128,19 @@ describe('guestWorkspaceBotRefusal', () => {
     ['an ungated engine', { engine: { kind: 'claude-pty' as const } }],
   ])('refuses %s', (_what, patch) => {
     expect(guestWorkspaceBotRefusal({ ...base, ...patch } as never)).not.toBeNull();
+  });
+});
+
+describe('the HQ workspace', () => {
+  it('is never a guest workspace', async () => {
+    const s = store();
+    s.load();
+    setGuestWorkspaceStore(s);
+    await s.add('ws-g');
+    const settings = new FactorySettingsStore(factorySettingsPath(dir));
+    settings.load();
+    await expect(settings.update({ hqWorkspaceId: 'ws-g' })).rejects.toThrow(HQ_NOT_GUEST_WORKSPACE);
+    expect(settings.get().hqWorkspaceId).toBeNull();
+    expect((await settings.update({ hqWorkspaceId: 'ws-a' })).hqWorkspaceId).toBe('ws-a');
   });
 });

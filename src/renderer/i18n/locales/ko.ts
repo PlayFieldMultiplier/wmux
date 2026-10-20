@@ -4504,4 +4504,5 @@ export const ko = {
   'botsPage.guest.error.tooMany': "게스트 봇은 한 번에 8개까지입니다. 먼저 하나를 철회하세요.",
   'botsPage.guest.error.notFound': "그 게스트는 이미 없습니다.",
   'botsPage.guest.error.persistFailed': "변경을 저장하지 못했습니다.",
+  'botsPage.guest.error.notGuestWorkspace': "게스트는 게스트 워크스페이스의 대화에만 들어갈 수 있습니다. 먼저 이 워크스페이스를 게스트 워크스페이스로 만들거나, 새 워크스페이스에서 게스트를 추가하세요.",
 } as const;

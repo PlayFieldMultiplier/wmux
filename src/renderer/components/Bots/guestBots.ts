@@ -7,6 +7,7 @@ import type {
   GuestBotListResult,
   GuestBotSimpleResult,
   GuestScope,
+  GuestWorkspaceMarkResult,
 } from '../../../shared/guestBots';
 
 export interface GuestBotPort {
@@ -15,6 +16,8 @@ export interface GuestBotPort {
   create(req: { name: string; scope: GuestScope }): Promise<GuestBotCreateResult>;
   revoke(guestId: string): Promise<GuestBotSimpleResult>;
   setEnabled(enabled: boolean): Promise<GuestBotSimpleResult>;
+  /** Make a workspace a guest workspace (never undone). */
+  markWorkspace(workspaceId: string): Promise<GuestWorkspaceMarkResult>;
 }
 
 type Bridge = Partial<GuestBotPort>;
@@ -30,6 +33,7 @@ function bridgePort(): GuestBotPort {
     create: (req) => b?.create?.(req) ?? Promise.resolve(UNAVAILABLE),
     revoke: (id) => b?.revoke?.(id) ?? Promise.resolve(UNAVAILABLE),
     setEnabled: (on) => b?.setEnabled?.(on) ?? Promise.resolve(UNAVAILABLE),
+    markWorkspace: (ws) => b?.markWorkspace?.(ws) ?? Promise.resolve(UNAVAILABLE),
   };
 }
 

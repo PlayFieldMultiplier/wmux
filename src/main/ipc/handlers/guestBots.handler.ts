@@ -9,11 +9,71 @@ import { isMainWindowSender } from '../mainWindowSender';
 import {
   GUEST_BOT_IPC, GUEST_BOT_RPC, isGuestId, parseGuestScope, sanitizeGuestName,
   type GuestBotCreateResult, type GuestBotErrorCode, type GuestBotListResult, type GuestBotSimpleResult, type GuestBotView, type GuestScope,
+  type GuestWorkspaceList, type GuestWorkspaceMarkResult,
 } from '../../../shared/guestBots';
+import { isPhoneRoomWorkspaceId } from '../../../shared/phoneRooms';
+import type { BotProfile } from '../../../shared/bot';
 import { getRoomWriter } from '../../factory/roomWriter';
 import { dropQueuedGuestWakes } from '../../factory/wakeQueue';
+import { getGuestWorkspaceStore, guestWorkspaceBotRefusal, guestWorkspaceFlag, noteGuestRecordWorkspaces } from '../../factory/guestWorkspaces';
+import type { GuestProvenance } from '../../factory/wakeTaint';
+import { getBotStore } from '../../factory/botStore';
+import { getFactorySettings } from '../../factory/factorySettings';
+import { getBotRuntime } from '../../factory/BotRuntime';
+import { openBotWorkers } from '../../factory/openBotWorkers';
+import { getTaskLedger } from '../../deck/taskLedgerHost';
 
-const CODES: readonly GuestBotErrorCode[] = ['unavailable', 'invalid', 'too-many', 'not-found', 'persist-failed'];
+const CODES: readonly GuestBotErrorCode[] = ['unavailable', 'invalid', 'too-many', 'not-found', 'persist-failed', 'not-guest-workspace'];
+
+/** The guest workspaces as this handler reads and writes them
+ *  (main/factory/guestWorkspaces.ts). */
+export interface GuestWorkspacePorts {
+  /** The file's flag: a guest is made only where it is true. */
+  flag(workspaceId: string): GuestProvenance;
+  list(): GuestWorkspaceList;
+  /** Resolves once the flags are on disk; rejects when they cannot be. */
+  flush(): Promise<void>;
+  /** The one writer of a flag (markGuestWorkspace). */
+  add(workspaceId: string): Promise<void>;
+  hqWorkspaceId(): string | null;
+  /** The workspace's bots; null before the bot store started. */
+  bots(workspaceId: string): BotProfile[] | null;
+  /** A turn, a task or a worker of the workspace is running. */
+  liveWork(workspaceId: string, bots: readonly BotProfile[]): boolean;
+  /** The workspaces of the daemon's guest records. */
+  noteRecords(workspaceIds: string[]): void;
+}
+
+export function defaultGuestWorkspacePorts(): GuestWorkspacePorts {
+  const store = () => getGuestWorkspaceStore();
+  return {
+    flag: guestWorkspaceFlag,
+    list: () => {
+      const s = store();
+      return s && s.readable() ? { readable: true, workspaceIds: s.list().map((e) => e.workspaceId) } : { readable: false, workspaceIds: [] };
+    },
+    flush: async () => {
+      const s = store();
+      if (!s) throw new Error('the guest workspace list is not running');
+      await s.flush();
+    },
+    add: async (ws) => {
+      const s = store();
+      if (!s) throw new Error('the guest workspace list is not running');
+      await s.add(ws);
+    },
+    hqWorkspaceId: () => getFactorySettings().hqWorkspaceId,
+    bots: (ws) => getBotStore()?.list({ workspaceId: ws }) ?? null,
+    liveWork: (ws, bots) => {
+      const ids = new Set(bots.map((b) => b.id));
+      const runtime = getBotRuntime();
+      if (bots.some((b) => runtime?.currentTurn(b.id) || openBotWorkers(b.id).bot > 0)) return true;
+      return getTaskLedger().list({ openOnly: true }).some((r) => r.taskWorkspaceId === ws || r.ownerWorkspaceId === ws
+        || (r.dispatch?.origin?.kind === 'bot' && ids.has(r.dispatch.origin.botId ?? '')));
+    },
+    noteRecords: noteGuestRecordWorkspaces,
+  };
+}
 
 function code(raw: unknown): GuestBotErrorCode {
   const c = raw && typeof raw === 'object' ? (raw as { code?: unknown }).code : undefined;
@@ -32,7 +92,7 @@ function view(raw: unknown): GuestBotView | null {
 
 const bool = (v: unknown): boolean => v === true;
 
-export async function listGuestBots(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null): Promise<GuestBotListResult> {
+export async function listGuestBots(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, workspaces: GuestWorkspacePorts = defaultGuestWorkspacePorts()): Promise<GuestBotListResult> {
   if (!dc || !dc.isConnected) return { ok: false, code: 'unavailable' };
   try {
     const res = (await dc.rpc(GUEST_BOT_RPC.list as never, {})) as Record<string, unknown> | null;
@@ -41,10 +101,14 @@ export async function listGuestBots(dc: Pick<DaemonClient, 'rpc' | 'isConnected'
     // All or nothing: a roster missing a live guest would hide one the owner cannot then revoke.
     if (guests.some((g) => g === null)) return { ok: false, code: 'unavailable' };
     const g = res.gates as Record<string, unknown>;
+    // Every record's workspace, revoked ones too, counts as a guest one on
+    // the clean side from now on.
+    workspaces.noteRecords((guests as GuestBotView[]).map((v) => v.scope.workspaceId));
     return {
       ok: true,
       guests: guests as GuestBotView[],
       gates: { enabled: bool(g.enabled), serverRunning: bool(g.serverRunning), transcript: bool(g.transcript), input: bool(g.input), secureTransport: bool(g.secureTransport) },
+      workspaces: workspaces.list(),
     };
   } catch {
     return { ok: false, code: 'unavailable' };
@@ -52,13 +116,33 @@ export async function listGuestBots(dc: Pick<DaemonClient, 'rpc' | 'isConnected'
 }
 
 /** `joinSeq`: the conversation's last card seq now (null when the room
- *  cannot say): the guest reads only cards after it. */
-export async function createGuestBot(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, req: unknown, joinSeq: (scope: GuestScope) => number | null = () => null): Promise<GuestBotCreateResult> {
+ *  cannot say): the guest reads only cards after it. A guest is made only
+ *  for a conversation of a guest workspace, and only once that flag is on
+ *  disk. */
+export async function createGuestBot(
+  dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null,
+  req: unknown,
+  joinSeq: (scope: GuestScope) => number | null = () => null,
+  workspaces: GuestWorkspacePorts = defaultGuestWorkspacePorts(),
+): Promise<GuestBotCreateResult> {
   const r = req && typeof req === 'object' ? (req as Record<string, unknown>) : {};
   const name = sanitizeGuestName(r.name);
   const scope = parseGuestScope(r.scope);
   if (!name || !scope) return { ok: false, code: 'invalid' };
   if (!dc || !dc.isConnected) return { ok: false, code: 'unavailable' };
+  let flagged: GuestProvenance;
+  try {
+    flagged = workspaces.flag(scope.workspaceId);
+  } catch {
+    flagged = 'unknown';
+  }
+  if (flagged === 'unknown') return { ok: false, code: 'unavailable' };
+  if (flagged !== true) return { ok: false, code: 'not-guest-workspace' };
+  try {
+    await workspaces.flush();
+  } catch {
+    return { ok: false, code: 'persist-failed' };
+  }
   try {
     let seq: number | null = null;
     try {
@@ -69,6 +153,7 @@ export async function createGuestBot(dc: Pick<DaemonClient, 'rpc' | 'isConnected
     const res = (await dc.rpc(GUEST_BOT_RPC.create as never, { name, scope, ...(seq !== null ? { joinSeq: seq } : {}) })) as Record<string, unknown> | null;
     const guest = view(res?.guest);
     if (!res || res.ok !== true || !guest || typeof res.token !== 'string') return { ok: false, code: code(res) };
+    workspaces.noteRecords([guest.scope.workspaceId]);
     return { ok: true, guest, token: res.token };
   } catch {
     // The daemon may have added it: the list shows it, and its token was never seen, so revoke it.
@@ -101,6 +186,34 @@ export async function setGuestBotsEnabled(dc: Pick<DaemonClient, 'rpc' | 'isConn
   return r;
 }
 
+/** Make a workspace a guest workspace: the one writer of the flag, which
+ *  never clears. Refused for the HQ workspace, while a bot in it breaks a
+ *  guest workspace's rules (guestWorkspaceBotRefusal), and while a turn, a
+ *  task or a worker of it runs: what runs now started outside the island. */
+export async function markGuestWorkspace(req: unknown, workspaces: GuestWorkspacePorts = defaultGuestWorkspacePorts()): Promise<GuestWorkspaceMarkResult> {
+  const ws = req && typeof req === 'object' ? (req as { workspaceId?: unknown }).workspaceId : undefined;
+  if (!isPhoneRoomWorkspaceId(ws)) return { ok: false, code: 'invalid' };
+  try {
+    const flagged = workspaces.flag(ws);
+    if (flagged === 'unknown') return { ok: false, code: 'unavailable' };
+    if (flagged === true) return { ok: true };
+    if (workspaces.hqWorkspaceId() === ws) return { ok: false, code: 'refused', refusal: 'hq' };
+    const bots = workspaces.bots(ws);
+    if (!bots) return { ok: false, code: 'unavailable' };
+    const breaking = bots.filter((b) => guestWorkspaceBotRefusal(b) !== null).map((b) => b.id);
+    if (breaking.length > 0) return { ok: false, code: 'refused', refusal: 'bots', botIds: breaking };
+    if (workspaces.liveWork(ws, bots)) return { ok: false, code: 'refused', refusal: 'live-work' };
+  } catch {
+    return { ok: false, code: 'unavailable' };
+  }
+  try {
+    await workspaces.add(ws);
+    return { ok: true };
+  } catch {
+    return { ok: false, code: 'persist-failed' };
+  }
+}
+
 export function registerGuestBotHandlers(getDaemonClient: () => DaemonClient | null, getWindow: () => BrowserWindow | null): () => void {
   const channels = Object.values(GUEST_BOT_IPC);
   for (const c of channels) ipcMain.removeHandler(c);
@@ -113,6 +226,7 @@ export function registerGuestBotHandlers(getDaemonClient: () => DaemonClient | n
     const guestId = req && typeof req === 'object' ? (req as { guestId?: unknown }).guestId : undefined;
     return isGuestId(guestId) ? revokeGuestBot(getDaemonClient(), guestId) : Promise.resolve({ ok: false as const, code: 'invalid' as const });
   })));
+  ipcMain.handle(GUEST_BOT_IPC.markWorkspace, wrapHandler(GUEST_BOT_IPC.markWorkspace, guard((req) => markGuestWorkspace(req))));
   ipcMain.handle(GUEST_BOT_IPC.setEnabled, wrapHandler(GUEST_BOT_IPC.setEnabled, guard((req) => {
     const enabled = req && typeof req === 'object' ? (req as { enabled?: unknown }).enabled : undefined;
     return typeof enabled === 'boolean' ? setGuestBotsEnabled(getDaemonClient(), enabled) : Promise.resolve({ ok: false as const, code: 'invalid' as const });

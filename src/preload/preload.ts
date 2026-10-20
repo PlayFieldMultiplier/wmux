@@ -1331,6 +1331,7 @@ const electronAPI = {
         ipcRenderer.invoke(GUEST_BOT_IPC.create, req) as Promise<import('../shared/guestBots').GuestBotCreateResult>,
       revoke: (guestId: string) => ipcRenderer.invoke(GUEST_BOT_IPC.revoke, { guestId }) as Promise<import('../shared/guestBots').GuestBotSimpleResult>,
       setEnabled: (enabled: boolean) => ipcRenderer.invoke(GUEST_BOT_IPC.setEnabled, { enabled }) as Promise<import('../shared/guestBots').GuestBotSimpleResult>,
+      markWorkspace: (workspaceId: string) => ipcRenderer.invoke(GUEST_BOT_IPC.markWorkspace, { workspaceId }) as Promise<import('../shared/guestBots').GuestWorkspaceMarkResult>,
     },
     // The owner's group chats (shared/botGroup.ts); changes arrive as
     // BOT_EVENT {type:'groups-changed'}.
