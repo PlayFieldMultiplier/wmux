@@ -170,6 +170,7 @@ export interface ContinueOnAccountDeps {
   write: (id: string, data: string) => boolean;
   copy?: typeof copyTranscript;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
   /** How long to wait for the shell's prompt once the agent stopped. */
   promptWaitMs?: number;
 }
@@ -225,11 +226,16 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
   }
 
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const waitMs = deps.promptWaitMs ?? 5_000;
+  const now = deps.now ?? Date.now;
+  // A deadline, not a count of polls: paneFree reads the process table, which
+  // takes about a second on Windows, so fifty polls of a busy pane took ~57 s.
+  // The prompt costs nothing to read, so the pane is checked only once the
+  // shell shows one.
+  const deadline = now() + (deps.promptWaitMs ?? 5_000);
   let revision: number | null = null;
-  for (let waited = 0; ; waited += 100) {
-    revision = (await deps.paneFree(id)) ? deps.promptRevision(id) : null;
-    if (revision !== null || waited >= waitMs) break;
+  for (;;) {
+    revision = deps.promptRevision(id) !== null && await deps.paneFree(id) ? deps.promptRevision(id) : null;
+    if (revision !== null || now() >= deadline) break;
     await sleep(100);
   }
   if (revision === null) return { ok: false, code: 'shell_busy' };
