@@ -6,8 +6,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotProfile } from '../../../shared/bot';
+import type { ThreadId } from '../../../shared/room';
 import { RoomWriter, type FactoryRoomPorts } from '../roomWriter';
-import { handleGuestPost, postGuestMessage, setGuestPostHandler } from '../guestMessage';
+import { conversationBotIds, handleGuestPost, postGuestMessage, setGuestPostHandler } from '../guestMessage';
 import { WakeTaint } from '../wakeTaint';
 
 const GUEST_ID = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
@@ -77,6 +78,34 @@ describe('postGuestMessage', () => {
     expect(postGuestMessage({ ...base, threadId: 'general', mentions: [OTHER] }, deps)).toEqual({ ok: false, code: 'mention_refused' });
     expect(enqueue).not.toHaveBeenCalled();
     expect(writer.find('ws-1', (c) => c.kind === 'guest', { guests: true })).toBeFalsy();
+  });
+
+  it('refuses to name a bot whose engine cannot hold its tools back, and says which; nothing is written or woken', () => {
+    const { writer, enqueue, deps } = setup();
+    const ports = deps.ports() as { bots: { listEnabled: () => BotProfile[]; get: (id: string) => BotProfile | null } };
+    const acp = { ...bot(B, 'ws-1'), engine: { kind: 'acp' as const, command: 'agent', args: [] } };
+    const listEnabled = ports.bots.listEnabled;
+    ports.bots.listEnabled = () => listEnabled().map((x) => (x.id === B ? acp : x));
+    ports.bots.get = (id) => (id === B ? acp : listEnabled().find((x) => x.id === id) ?? null);
+    expect(postGuestMessage({ ...base, threadId: 'general', mentions: [A, B] }, deps)).toEqual({ ok: false, code: 'bot_unavailable', botIds: [B] });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(writer.find('ws-1', (c) => c.kind === 'guest', { guests: true })).toBeFalsy();
+    expect(postGuestMessage({ ...base, threadId: 'general', mentions: [A] }, deps)).toMatchObject({ ok: true, woke: [A] });
+  });
+
+  it('the bots a wake not known clean lists: those of its running wake\'s conversation', () => {
+    const { deps } = setup({ 'group:grp-0000abcd': [B] });
+    const ports = deps.ports();
+    let thread: string | null = `dm:${A}`;
+    ports.currentWakeThread = () => thread as ThreadId | null;
+    expect([...conversationBotIds(ports, A)]).toEqual([A]);
+    thread = 'general';
+    expect([...conversationBotIds(ports, A)].sort()).toEqual([A, B]);
+    thread = 'group:grp-0000abcd';
+    expect([...conversationBotIds(ports, A)]).toEqual([B]);
+    thread = 'task:wtask-1';
+    expect([...conversationBotIds(ports, A)]).toEqual([]);
+    expect([...conversationBotIds(ports, 'bot-0000ffff')]).toEqual([]);
   });
 
   it('a group takes only its members; General the room\'s bots', () => {

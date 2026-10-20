@@ -36,7 +36,7 @@ import { redactStoredSecretsDeep } from '../factory/secretRedaction';
 import { guestGateProvenance } from '../factory/wakeTaint';
 import { claudeNotFoundMessage } from '../factory/engineError';
 import type { BotBinding } from '../../shared/bot';
-import { SHARED_SURFACE } from '../../shared/botSurface';
+import { GUEST_SAFE_BUILTIN_TOOLS, GUEST_TURN_SURFACE_REFUSAL, SHARED_SURFACE } from '../../shared/botSurface';
 import { evaluateCommanderToolPermission } from './commanderToolSandbox';
 import { BotToolGuard, botToolNamingRule } from './botToolGuard';
 import { COMMANDER_MODE_ARG, COMMANDER_TOOL_SURFACE, COMMANDER_ONLY_TOOLS } from '../../shared/commanderSurface';
@@ -1016,6 +1016,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
     const naming = botToolNamingRule(this.allowedTools);
     if (naming && typeof options.systemPrompt === 'string') options.systemPrompt = `${options.systemPrompt}\n\n${naming}`;
     if (bot.repoRoot) this.applyRepoRead(options, bot.repoRoot);
+    this.applyGuestToolGate(options);
     if (!this.mcpBundlePath) {
       delete options.mcpServers;
       return;
@@ -1048,11 +1049,8 @@ export class ClaudeSdkAdapter implements BrainAdapter {
    *  rules keep protected files out of Grep / Glob results. */
   private applyRepoRead(options: Record<string, unknown>, root: string): void {
     const botId = this.bot?.binding.botId ?? '';
-    const decide = (toolName: string, input: unknown): ReturnType<typeof evaluateBotRepoRead> => {
-      // Judged on each call: no repository read in a wake not known clean.
-      if (guestGateProvenance(botId) !== false) return { ok: false, reason: 'the repository is not read in a turn that comes from an external guest\'s message (or one wmux cannot tell the source of)' };
-      return evaluateBotRepoRead(toolName, input && typeof input === 'object' ? (input as Record<string, unknown>) : {}, root);
-    };
+    const decide = (toolName: string, input: unknown) =>
+      evaluateBotRepoRead(toolName, input && typeof input === 'object' ? (input as Record<string, unknown>) : {}, root);
     const logDenied = (toolName: string, reason: string) =>
       console.warn('[factory] bot repository read denied:', JSON.stringify({ botId, tool: toolName, reason }));
     options.tools = [...BOT_REPO_READ_TOOLS];
@@ -1120,6 +1118,28 @@ export class ClaudeSdkAdapter implements BrainAdapter {
       };
     };
     options.hooks = { PreToolUse: [{ hooks: [preToolUse] }], PostToolUse: [{ hooks: [postToolUse] }] };
+  }
+
+  /** Bot mode, every session: in a wake not known clean (wakeTaint.ts), every
+   *  built-in tool outside GUEST_SAFE_BUILTIN_TOOLS is refused, judged on
+   *  each call, before the tool's own checks (a PreToolUse hook ahead of the
+   *  others, and canUseTool). The wmux MCP tools keep their own gate
+   *  (RpcRouter's GUEST_SAFE_RPC). */
+  private applyGuestToolGate(options: Record<string, unknown>): void {
+    const botId = this.bot?.binding.botId ?? '';
+    const refused = (toolName: string): boolean =>
+      !toolName.startsWith('mcp__wmux__') && !GUEST_SAFE_BUILTIN_TOOLS.has(toolName) && guestGateProvenance(botId) !== false;
+    const reason = `wmux: ${GUEST_TURN_SURFACE_REFUSAL}`;
+    const inner = options.canUseTool as ((toolName: string, input: Record<string, unknown>, ...rest: unknown[]) => Promise<unknown>) | undefined;
+    options.canUseTool = async (toolName: string, input: Record<string, unknown>, ...rest: unknown[]) => {
+      if (refused(toolName)) return { behavior: 'deny' as const, message: reason };
+      return inner ? inner(toolName, input, ...rest) : { behavior: 'deny' as const, message: 'bots act only through their wmux tools' };
+    };
+    const gate = async (hookInput: { tool_name?: string }) => (refused(hookInput.tool_name ?? '')
+      ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }
+      : {});
+    const hooks = (options.hooks ?? {}) as { PreToolUse?: unknown[]; [k: string]: unknown };
+    options.hooks = { ...hooks, PreToolUse: [{ hooks: [gate] }, ...(hooks.PreToolUse ?? [])] };
   }
 
   /** Bot mode: remove a hand-off file the MCP child did not consume. */

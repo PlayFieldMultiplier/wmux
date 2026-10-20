@@ -46,7 +46,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import type { BotBinding, BotProfile, BotQuota, BotStatus, BotStatusUsage } from '../../shared/bot';
+import { BOT_TAKES_NO_GUEST_WAKES, botEngineGatesTools, type BotBinding, type BotProfile, type BotQuota, type BotStatus, type BotStatusUsage } from '../../shared/bot';
 import type { Fact } from '../../shared/facts';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import { WAKE_LIMITS, type WakeItem, type WakeReason } from '../../shared/wake';
@@ -1089,6 +1089,13 @@ export class BotRuntime {
     const guestWake = this.wakeGuest(item) !== false;
     let ephemeral: LiveSession | null = null;
     try {
+      // An engine that cannot hold its tools back takes no such wake (the
+      // guest post and the handoff router refuse it before it is queued).
+      if (guestWake && !botEngineGatesTools(profile.engine)) {
+        console.warn(`[factory] ${item.id} not run: ${BOT_TAKES_NO_GUEST_WAKES}`);
+        outcome = 'done';
+        return;
+      }
       const s = this.session(profile, { ephemeral: guestWake });
       if (s.ok && s.live.ephemeral) ephemeral = s.live;
       if (!s.ok) {

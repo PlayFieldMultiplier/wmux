@@ -17,9 +17,9 @@ type GuestSafe =
   | { kind: 'stamped-write' }
   /** A read filtered by provenance: the predicate it goes through. */
   | { kind: 'filtered-read'; by: unknown }
-  /** A read of what only a clean wake or the owner writes (each write path
-   *  is refused in a wake not known clean; see its own tests). */
-  | { kind: 'clean-written-read'; why: string };
+  /** A read scoped in a wake not known clean to what the guest conversation
+   *  holds, of what only a clean wake or the owner writes. */
+  | { kind: 'scoped-read'; why: string };
 
 const GUEST_SAFE_TOOLS: Partial<Record<BotToolName, GuestSafe>> = {
   room_post: { kind: 'stamped-write' },
@@ -29,10 +29,7 @@ const GUEST_SAFE_TOOLS: Partial<Record<BotToolName, GuestSafe>> = {
   room_read: { kind: 'filtered-read', by: RoomWriter.prototype.read },
   fact_poll: { kind: 'filtered-read', by: factVisibleToBot },
   approval_list: { kind: 'filtered-read', by: botApprovalView },
-  bot_list: { kind: 'clean-written-read', why: 'profiles: the owner\'s, and jobs set only in a clean wake (bot.setJob)' },
-  routine_list: { kind: 'clean-written-read', why: 'routines are set and resumed only in a clean wake' },
-  workflow_read: { kind: 'clean-written-read', why: 'workflows are created and advanced only in a clean wake' },
-  skill_read: { kind: 'clean-written-read', why: 'skills are proposed only in a clean wake and approved by the owner' },
+  bot_list: { kind: 'scoped-read', why: 'the bots of the wake\'s own conversation only (bot.rpc listScope); profiles are the owner\'s, jobs set only in a clean wake' },
 };
 
 const CLEAN_ONLY_TOOLS: readonly BotToolName[] = [
@@ -43,6 +40,8 @@ const CLEAN_ONLY_TOOLS: readonly BotToolName[] = [
   'fanout_start', 'ledger_update', 'worker_resume', 'worker_message', 'stop_my_work', 'bot_park',
   'pr_verdict', 'plan_propose', 'job_set', 'routine_set', 'routine_pause',
   'workflow_create', 'workflow_advance', 'approval_request', 'skill_propose',
+  // The bot's own saved work and skills: a guest's reply does not need them.
+  'routine_list', 'workflow_read', 'skill_read',
   'secret_request', 'secret_list', 'login_request',
 ];
 
@@ -68,7 +67,7 @@ describe('GUEST_SAFE_RPC', () => {
   it('each guest-safe read says how it keeps guest-sourced text in its place', () => {
     for (const [tool, c] of Object.entries(GUEST_SAFE_TOOLS)) {
       if (c.kind === 'filtered-read') expect(typeof c.by, tool).toBe('function');
-      if (c.kind === 'clean-written-read') expect(c.why.length, tool).toBeGreaterThan(0);
+      if (c.kind === 'scoped-read') expect(c.why.length, tool).toBeGreaterThan(0);
     }
   });
 });

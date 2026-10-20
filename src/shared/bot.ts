@@ -110,6 +110,17 @@ export type BotEngine =
 
 export const DEFAULT_BOT_ENGINE: BotEngine = { kind: 'claude-sdk' };
 
+/** Whether a bot's engine refuses its built-in tools per call in a wake not
+ *  known clean of a guest's words (ClaudeSdkAdapter's guest gate). A bot on
+ *  any other engine takes no such wake. Pure. */
+export function botEngineGatesTools(engine: BotEngine | undefined): boolean {
+  return (engine?.kind ?? DEFAULT_BOT_ENGINE.kind) === 'claude-sdk';
+}
+
+/** Why a bot on such an engine is not woken from a guest's message, or from
+ *  anything that follows from one. */
+export const BOT_TAKES_NO_GUEST_WAKES = 'this bot can\'t take guest messages: its engine cannot hold its tools back for them';
+
 /** The models a NEW bot of a template starts on (main/factory/botStore.ts
  *  `create`, when the caller names no engine or worker agent): `brain` is
  *  the bot's own `claude-sdk` model (BotEngine.model), `worker` its fan-out

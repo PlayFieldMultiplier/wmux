@@ -920,6 +920,24 @@ describe('messages and room mentions (group rooms)', () => {
     expect(sent).toEqual([[guestOut.result.handoffId, true], [cleanOut.result.handoffId, false]]);
   });
 
+  it('a hop not known clean is refused, with the reason, to a bot whose engine cannot hold its tools back; a clean one goes through', async () => {
+    const a = bot('ws1', 'lead');
+    const acp = bot('ws1', 'triage', { engine: { kind: 'acp', command: 'agent', args: [] } });
+    let guest = true;
+    const taint: HandoffTaintPort = {
+      markSent: () => (guest ? 'guest' : false), markForward: () => false,
+      runningGuest: () => guest, handoffGuest: () => guest,
+    };
+    const h = await harness([a, acp], { taint });
+    const [out] = h.router.mention(binding(a), { id: 'c-g', threadId: 'general' as ThreadId, title: 't', body: '', origin: 'guest' }, [acp.id]);
+    expect(out.result).toMatchObject({ ok: false, code: 'no_addressee', message: expect.stringContaining('can\'t take guest messages') });
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: acp.id, title: 'x', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.wakes).toEqual([]);
+    guest = false;
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: acp.id, title: 'y', body: '' })).toMatchObject({ ok: true });
+    expect(h.wakes).toHaveLength(1);
+  });
+
   it('without a tracker where one is expected, a send and a question are guest-sourced', async () => {
     const a = bot('ws1', 'triage');
     const lead = bot('ws1', 'lead');

@@ -343,6 +343,7 @@ async function post(ctx: GuestRouteContext, who: Extract<GuestAuthResult, { ok: 
       case 'factory_off': return refuse(409, 'bots-off');
       case 'scope_gone': return refuse(404, 'conversation-not-found');
       case 'mention_refused': return refuse(400, 'invalid-request', { detail: 'mentions' });
+      case 'bot_unavailable': return refuse(409, 'bot-cannot-take-guests', { message: 'This bot can\'t take guest messages.', ...(result.botIds ? { botIds: result.botIds } : {}) });
       case 'busy': return refuse(503, 'busy', {}, { 'Retry-After': '5' });
       case 'id_reused': return refuse(409, 'message-id-reused');
       default: return refuse(400, 'invalid-request');

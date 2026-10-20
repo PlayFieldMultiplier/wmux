@@ -215,11 +215,13 @@ export interface GuestPostPayload {
   mentions: string[];
 }
 
-export type GuestPostRefusal = 'factory_off' | 'scope_gone' | 'mention_refused' | 'busy' | 'id_reused' | 'invalid';
+export type GuestPostRefusal = 'factory_off' | 'scope_gone' | 'mention_refused' | 'bot_unavailable' | 'busy' | 'id_reused' | 'invalid';
 
 export type GuestPostResult =
   | { ok: true; cardId: string; seq: number; duplicate?: true; woke: string[] }
-  | { ok: false; code: GuestPostRefusal };
+  /** `botIds`: with `bot_unavailable`, the named bots that take no guest
+   *  message (their engine cannot hold their tools back for one). */
+  | { ok: false; code: GuestPostRefusal; botIds?: string[] };
 
 /** Parse main's answer; null for any other shape. */
 export function parseGuestPostResult(raw: unknown): GuestPostResult | null {
@@ -232,8 +234,10 @@ export function parseGuestPostResult(raw: unknown): GuestPostResult | null {
     return { ok: true, cardId: r.cardId, seq: r.seq, ...(r.duplicate === true ? { duplicate: true as const } : {}), woke: [...(r.woke as string[])] };
   }
   if (r.ok === false) {
-    const codes: readonly string[] = ['factory_off', 'scope_gone', 'mention_refused', 'busy', 'id_reused', 'invalid'];
-    return typeof r.code === 'string' && codes.includes(r.code) ? { ok: false, code: r.code as GuestPostRefusal } : null;
+    const codes: readonly string[] = ['factory_off', 'scope_gone', 'mention_refused', 'bot_unavailable', 'busy', 'id_reused', 'invalid'];
+    if (typeof r.code !== 'string' || !codes.includes(r.code)) return null;
+    const botIds = r.code === 'bot_unavailable' && Array.isArray(r.botIds) ? (r.botIds as unknown[]).filter((id): id is string => typeof id === 'string' && /^bot-[a-f0-9]{8}$/.test(id)).slice(0, 8) : null;
+    return { ok: false, code: r.code as GuestPostRefusal, ...(botIds ? { botIds } : {}) };
   }
   return null;
 }

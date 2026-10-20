@@ -99,6 +99,28 @@ describe('bot.* auth matrix', () => {
   });
 });
 
+describe('bot.list in a wake not known clean', () => {
+  it('shows a bot only the bots of its wake\'s conversation; the operator and a clean wake see them all', async () => {
+    const store = new BotStore(botsFilePath(dir));
+    const a = store.create({ workspaceId: 'ws-1', name: 'Alpha' });
+    const b = store.create({ workspaceId: 'ws-1', name: 'Beta' });
+    const c = store.create({ workspaceId: 'ws-2', name: 'Gamma' });
+    if (!a.ok || !b.ok || !c.ok) throw new Error('create');
+    let scope: ReadonlySet<string> | undefined = new Set([a.bot.id]);
+    const runtime = { status: () => null } as unknown as BotRuntime;
+    const { router, handlers } = captureRouter();
+    registerBotRpcHandlers(router, () => ({ store, runtime, queue: {} as WakeQueue }), undefined, undefined, () => scope);
+    const list = async (ctx: RpcContext) => ((await (handlers.get('bot.list') as Handler)({}, ctx)) as { bots: Array<{ bot: { id: string } }> }).bots.map((x) => x.bot.id).sort();
+    const asBot = { origin: 'local', commanderWorkspace: 'ws-1', bot: { workspaceId: 'ws-1', botId: a.bot.id, role: 'lead' } } as RpcContext;
+    expect(await list(asBot)).toEqual([a.bot.id]);
+    expect(await list(OPERATOR)).toEqual([a.bot.id, b.bot.id, c.bot.id].sort());
+    scope = new Set();
+    expect(await list(asBot)).toEqual([]);
+    scope = undefined;
+    expect(await list(asBot)).toEqual([a.bot.id, b.bot.id, c.bot.id].sort());
+  });
+});
+
 describe('bot.remove', () => {
   function rigRemove(withStop: boolean, workerStops = true) {
     const store = new BotStore(botsFilePath(dir));

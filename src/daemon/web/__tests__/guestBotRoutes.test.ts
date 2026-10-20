@@ -250,6 +250,10 @@ describe('guest routes: posting', () => {
       const d = desktop(() => ({ ok: false, code }));
       expect(await post({ clientMessageId: 'm1', text: 'hi' }, { desktop: d })).toMatchObject({ status, body: { error } });
     }
+    // A named bot that takes no guest message: the guest is told which.
+    const d = desktop(() => ({ ok: false, code: 'bot_unavailable', botIds: ['bot-0000bbbb'] }));
+    expect(await post({ clientMessageId: 'm1', text: 'hi', mentions: ['bot-0000bbbb'] }, { desktop: d }))
+      .toMatchObject({ status: 409, body: { error: 'bot-cannot-take-guests', message: 'This bot can\'t take guest messages.', botIds: ['bot-0000bbbb'] } });
   });
 
   it('a repeat is 200 replayed; a lost answer is 202 uncertain', async () => {

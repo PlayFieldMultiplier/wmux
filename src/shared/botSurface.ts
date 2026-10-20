@@ -144,12 +144,12 @@ export const BOT_BASE_RPC: readonly RpcMethod[] = [
 
 /** What a bot may call in a wake not known clean of a guest's words
  *  (main/factory/wakeTaint.ts): RpcRouter refuses every other method on the
- *  bot surface there, whatever the method's own checks say. Talk in the
- *  room (each write is stamped guest-sourced), and reads that either filter
- *  by provenance (room.read, fact.poll, approval.list) or return only what a
- *  clean wake or the owner wrote (bot.list, routine.list, workflow.read,
- *  skill.read). Repository, CI, verdict, trust, terminal and pane reads are
- *  left out: such a turn does not pull them for a guest. */
+ *  bot surface there, whatever the method's own checks say. Only what the
+ *  guest conversation needs: talk in the room (each write is stamped
+ *  guest-sourced), reads filtered by provenance (room.read, fact.poll,
+ *  approval.list), and bot.list, scoped there to the bots of the wake's own
+ *  conversation. Everything else (repository, CI, verdict, trust, terminal
+ *  and pane reads, the bot's routines, workflows and skills) is left out. */
 export const GUEST_SAFE_RPC: ReadonlySet<string> = new Set<string>([
   ...BOT_BASE_RPC,
   ROOM_RPC.post,
@@ -159,11 +159,13 @@ export const GUEST_SAFE_RPC: ReadonlySet<string> = new Set<string>([
   BOT_RPC.questionClose,
   BOT_RPC.list,
   FACT_RPC.poll,
-  ROUTINE_RPC.list,
-  WORKFLOW_RPC.read,
-  BOT_SKILL_RPC.read,
   BOT_APPROVAL_RPC.list,
 ]);
+
+/** The engine's built-in tools a bot may use in a wake not known clean
+ *  (ClaudeSdkAdapter's per-call gate): none. A guest's reply needs only the
+ *  wmux tools (room.post). */
+export const GUEST_SAFE_BUILTIN_TOOLS: ReadonlySet<string> = new Set<string>();
 
 /** What RpcRouter answers a bot call refused by GUEST_SAFE_RPC. */
 export const GUEST_TURN_SURFACE_REFUSAL = 'this turn comes from an external guest\'s message (or wmux cannot tell where it came from); in such a turn a bot talks in its room and reads what the turn may see, and nothing else; tell the owner what you would do';

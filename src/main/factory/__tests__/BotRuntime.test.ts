@@ -1312,6 +1312,21 @@ describe('external guests and the bot\'s conversation', () => {
     expect(r.adapters[2].started?.resumeSessionId).toBe('sess-1');
   });
 
+  it('a bot whose engine cannot hold its tools back runs no wake that is not known clean', async () => {
+    const r = rig();
+    const res = r.store.create({ workspaceId: 'ws-1', role: 'verifier', engine: { kind: 'acp', command: 'agent', args: [] } });
+    if (!res.ok) throw new Error(res.message);
+    const id = res.bot.id;
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    setBotRuntimePorts({ wakeGuest: () => 'unknown' });
+    const item = must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'general', reason: { kind: 'handoff', handoffId: 'h-gone' } }));
+    r.runtime.kick();
+    await settle();
+    expect(r.adapters).toHaveLength(0);
+    expect(r.queue.get(item.id)?.state).not.toBe('queued');
+    vi.restoreAllMocks();
+  });
+
   it('a wake of unknown provenance runs ephemeral too, and sees no guest card', async () => {
     const r = rig();
     const id = createBot(r);

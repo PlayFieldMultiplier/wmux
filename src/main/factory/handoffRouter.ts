@@ -81,7 +81,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { atomicReadJSONSync, atomicWriteTextSync } from '../../daemon/util/atomicWrite';
 import { redactStoredSecretsDeep } from './secretRedaction';
-import { BOT_ID_RE, delegatesFromConversation, isBotRole, isCoordinatorBot, type BotBinding, type BotProfile } from '../../shared/bot';
+import { BOT_ID_RE, BOT_TAKES_NO_GUEST_WAKES, botEngineGatesTools, delegatesFromConversation, isBotRole, isCoordinatorBot, type BotBinding, type BotProfile } from '../../shared/bot';
 import { SHARED_SURFACE, type BotToolName } from '../../shared/botSurface';
 import type { Fact, FactDraft, FactRef } from '../../shared/facts';
 import type { WakeItem, WakeReason } from '../../shared/wake';
@@ -1288,6 +1288,9 @@ export class HandoffRouter {
 
   /** Store, announce and wake. A wake the queue does not take refuses the hop. */
   private deliver(draft: Handoff, bot: BotProfile): HandoffResult {
+    // A hop not known clean of a guest's words never wakes a bot whose
+    // engine cannot hold its tools back for it.
+    if (!botEngineGatesTools(bot.engine) && this.guestOf(draft)) return this.refuse(draft, 'no_addressee', `${this.partyLabel(draft.to)}: ${BOT_TAKES_NO_GUEST_WAKES}`);
     const h: Handoff = { ...draft, status: 'queued' };
     if (this.records.get(h.id)?.status !== 'queued' && !this.put(h)) {
       return { ok: false, code: 'write_failed', message: 'the handoff could not be stored' };

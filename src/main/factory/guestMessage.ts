@@ -15,13 +15,13 @@
 // id): a repeat returns the first card and queues only the wakes the first
 // post could not (the queue dedupes `guest:<cardId>` per bot).
 
-import { BOT_ID_RE, type BotProfile } from '../../shared/bot';
+import { BOT_ID_RE, botEngineGatesTools, type BotProfile } from '../../shared/bot';
 import {
   GUEST_LIMITS, GUEST_MESSAGE_ID_RE, guestCardTitle, isGuestId, parseGuestScope, sanitizeGuestName,
   type GuestPostResult,
 } from '../../shared/guestBots';
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, type RoomCard, type ThreadId } from '../../shared/room';
-import { capBody, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
+import { capBody, runningWakeThread, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
 import { redactStoredSecrets } from './secretRedaction';
 import { GUEST_WAKES_QUEUED_PER_BOT, HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
 
@@ -112,6 +112,21 @@ function conversationBots(ports: Partial<FactoryRoomPorts>, workspaceId: string,
   return null;
 }
 
+/** The bots `bot.list` shows a bot in a wake not known clean: those of the
+ *  conversation its running wake is in (none when that is no guest-reachable
+ *  conversation: a task or handoff thread, or none known). */
+export function conversationBotIds(ports: Partial<FactoryRoomPorts>, botId: string): ReadonlySet<string> {
+  let own: BotProfile | null = null;
+  try {
+    own = ports.bots?.get(botId) ?? null;
+  } catch {
+    own = null;
+  }
+  if (!own) return new Set();
+  const members = conversationBots(ports, own.workspaceId, runningWakeThread(ports, botId) ?? GENERAL_THREAD);
+  return new Set((members ?? []).map((b) => b.id));
+}
+
 /** Post one guest message. Synchronous from the lookup to the post. */
 export function postGuestMessage(raw: Record<string, unknown>, deps: GuestPostDeps): GuestPostResult {
   if (!deps.enabled()) return { ok: false, code: 'factory_off' };
@@ -126,6 +141,10 @@ export function postGuestMessage(raw: Record<string, unknown>, deps: GuestPostDe
   // Every name must be a bot of this conversation that is on: a guest never
   // reaches a bot the owner did not put here.
   if (p.mentions.some((id) => !byId.has(id))) return { ok: false, code: 'mention_refused' };
+  // A bot whose engine cannot hold its tools back in a guest's turn is
+  // never woken by one: the guest is told which.
+  const ungated = p.mentions.filter((id) => !botEngineGatesTools(byId.get(id)!.engine));
+  if (ungated.length > 0) return { ok: false, code: 'bot_unavailable', botIds: ungated };
   const clientPostId = `guest:${p.guestId}:${p.clientMessageId}`.slice(0, ROOM_LIMITS.CLIENT_ID_MAX);
   // Processed whole, shortened last (as the room does).
   const body = capBody(redactStoredSecrets(p.text));

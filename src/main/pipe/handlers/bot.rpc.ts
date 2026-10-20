@@ -48,7 +48,8 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { WakeTaskSummary } from '../../factory/wakePrompt';
 import { botRepoFromFolder, greetNewBot } from '../../factory/botCreate';
 import { DISMISSED_ANSWER, getHandoffRouter } from '../../factory/handoffRouter';
-import { getWakeTaint, type GuestProvenance, type WakeTaint } from '../../factory/wakeTaint';
+import { getWakeTaint, guestGateProvenance, type GuestProvenance, type WakeTaint } from '../../factory/wakeTaint';
+import { conversationBotIds } from '../../factory/guestMessage';
 import type { Handoff } from '../../../shared/handoff';
 import type { WakeItem } from '../../../shared/wake';
 import { getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread, wakeReplyTo } from '../../factory/roomWriter';
@@ -199,12 +200,22 @@ export async function forgetRemovedBot(botId: string): Promise<void> {
   }
 }
 
+/** In a wake not known clean, a bot lists only the bots of the conversation
+ *  that wake is in. */
+function defaultListScope(botId: string): ReadonlySet<string> | undefined {
+  if (guestGateProvenance(botId) === false) return undefined;
+  return conversationBotIds(resolveRoomPorts(), botId);
+}
+
 /** The bot.* handlers over a live-runtime getter. Exported for tests. */
 export function registerBotRpcHandlers(
   router: FactoryRouter,
   live: () => Live | null,
   setJobPorts: SetJobPorts = defaultSetJobPorts,
   removePorts: RemovePorts = { stopPorts: getFactoryStopPorts, afterRemove: forgetRemovedBot },
+  /** The bots a bot may list now: undefined for all (a clean wake), else
+   *  those of its running wake's conversation (guestMessage.ts). */
+  listScope: (botId: string) => ReadonlySet<string> | undefined = defaultListScope,
 ): void {
   const NOT_STARTED = refuse('not_started', 'the bot runtime is not running');
 
@@ -214,7 +225,8 @@ export function registerBotRpcHandlers(
     const l = live();
     if (!l) return NOT_STARTED;
     const workspaceId = typeof params['workspaceId'] === 'string' ? params['workspaceId'] : undefined;
-    const bots = l.store.list(workspaceId ? { workspaceId } : {});
+    const scope = caller.kind === 'bot' ? listScope(caller.botId) : undefined;
+    const bots = l.store.list(workspaceId ? { workspaceId } : {}).filter((b) => !scope || scope.has(b.id));
     return {
       ok: true,
       bots: bots.map((bot) => ({ bot: pipeProfile(bot), status: statusFor(caller, l.runtime.status(bot.id)) })),
