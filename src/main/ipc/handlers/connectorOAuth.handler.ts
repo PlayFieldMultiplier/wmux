@@ -8,6 +8,7 @@ import { ConnectorOAuthStore } from '../../connectors/oauthStore';
 import { electronSecretCrypto } from '../../factory/secretStore';
 import { getConnectorStore, onConnectorLibraryChanged } from '../../factory/connectorStore';
 import { isMainWindowSender } from '../mainWindowSender';
+import { wrapHandler } from '../wrapHandler';
 
 export function registerConnectorOAuthHandlers(getWindow: () => BrowserWindow | null) {
   const service = new ConnectorOAuth({
@@ -22,7 +23,7 @@ export function registerConnectorOAuthHandlers(getWindow: () => BrowserWindow | 
   const unsubscribe = onConnectorLibraryChanged(reconcile);
   reconcile();
   ipcMain.removeHandler(CONNECTOR_OAUTH_IPC);
-  ipcMain.handle(CONNECTOR_OAUTH_IPC, async (event, action: unknown, id: unknown, consentId: unknown): Promise<ConnectorOAuthResult> => {
+  ipcMain.handle(CONNECTOR_OAUTH_IPC, wrapHandler(CONNECTOR_OAUTH_IPC, async (event, action: unknown, id: unknown, consentId: unknown): Promise<ConnectorOAuthResult> => {
     if (!isMainWindowSender(event, getWindow()) || typeof id !== 'string' || !CONNECTOR_ID_RE.test(id)) return { status: 'unavailable' };
     switch (action) {
       case 'approve': return typeof consentId === 'string' ? service.approve(id, consentId) : { status: 'unavailable' };
@@ -32,6 +33,6 @@ export function registerConnectorOAuthHandlers(getWindow: () => BrowserWindow | 
       case 'cancel': return service.cancel(id);
       default: return { status: 'unavailable' };
     }
-  });
+  }));
   return { service, cleanup: () => { unsubscribe(); service.dispose(); ipcMain.removeHandler(CONNECTOR_OAUTH_IPC); } };
 }

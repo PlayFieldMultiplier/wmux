@@ -95,18 +95,18 @@ describe('sidebar icon rail', () => {
 
     it('lists Bots once main says the bots were switched on elsewhere (a script), on its push', async () => {
       await act(async () => root.render(<App />));
-      expect(navIds()).toEqual(['home', 'fleet', 'schedules', 'remote', 'git']);
+      expect(navIds()).toEqual(['home', 'fleet', 'schedules', 'remote', 'git', 'connectors']);
       // Switched on by a caller other than Settings: main pushes a bot event.
       enabled = true;
       await act(async () => { for (const fn of botEvents) fn(); });
-      expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git']);
+      expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git', 'connectors']);
       expect(focusEvents).toBe(0);
     });
 
     it('lists Bots on a fresh mount (a reload) while the bots are already on', async () => {
       enabled = true;
       await act(async () => root.render(<App />));
-      expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git']);
+      expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git', 'connectors']);
       expect(focusEvents).toBe(0);
     });
   });

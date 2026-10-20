@@ -10,12 +10,13 @@ import { getSecretStore } from '../../factory/secretStore';
 import type { ConnectorOAuth } from '../../connectors/connectorOAuth';
 import { createTerminalGateway } from '../../connectors/terminalGateway';
 import { isMainWindowSender } from '../mainWindowSender';
+import { wrapHandler } from '../wrapHandler';
 
 export function registerConnectorTerminalHandlers(getWindow: () => BrowserWindow | null, oauth: ConnectorOAuth): () => void {
   const leases = new Set<() => void>();
   let pending = 0; let disposed = false;
   ipcMain.removeHandler(CONNECTOR_TERMINAL_IPC);
-  ipcMain.handle(CONNECTOR_TERMINAL_IPC, async (event, id: unknown, agent: unknown): Promise<ConnectorTerminalResult> => {
+  ipcMain.handle(CONNECTOR_TERMINAL_IPC, wrapHandler(CONNECTOR_TERMINAL_IPC, async (event, id: unknown, agent: unknown): Promise<ConnectorTerminalResult> => {
     if (!isMainWindowSender(event, getWindow()) || disposed || process.platform === 'win32' || typeof id !== 'string' || !CONNECTOR_ID_RE.test(id)
       || (typeof agent !== 'string' || !agentRow(agent)?.connectorLaunch) || leases.size + pending >= 8) return { ok: false };
     pending++;
@@ -51,6 +52,6 @@ export function registerConnectorTerminalHandlers(getWindow: () => BrowserWindow
       return { ok: true, command: launch.command };
     } catch { gateway?.close(); try { launch?.close(); } catch { /* closed lease */ } return { ok: false }; }
     finally { pending--; }
-  });
+  }));
   return () => { disposed = true; for (const close of leases) close(); ipcMain.removeHandler(CONNECTOR_TERMINAL_IPC); };
 }

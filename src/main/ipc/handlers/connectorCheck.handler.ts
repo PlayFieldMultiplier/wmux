@@ -6,11 +6,12 @@ import { getConnectorStore } from '../../factory/connectorStore';
 import { getSecretStore } from '../../factory/secretStore';
 import { checkConnector } from '../../connectors/checkConnector';
 import { isMainWindowSender } from '../mainWindowSender';
+import { wrapHandler } from '../wrapHandler';
 
 export function registerConnectorCheckHandlers(getWindow: () => BrowserWindow | null, oauth?: ConnectorOAuth): () => void {
   const active = new Map<string, AbortController>();
   ipcMain.removeHandler(CONNECTOR_CHECK_IPC);
-  ipcMain.handle(CONNECTOR_CHECK_IPC, async (event, id: unknown): Promise<ConnectorCheckResult> => {
+  ipcMain.handle(CONNECTOR_CHECK_IPC, wrapHandler(CONNECTOR_CHECK_IPC, async (event, id: unknown): Promise<ConnectorCheckResult> => {
     if (!isMainWindowSender(event, getWindow()) || typeof id !== 'string' || !CONNECTOR_ID_RE.test(id)) return { status: 'unavailable' };
     if (active.has(id) || active.size >= 4) return { status: 'busy' };
     const connector = getConnectorStore()?.get(id);
@@ -43,7 +44,7 @@ export function registerConnectorCheckHandlers(getWindow: () => BrowserWindow | 
       return result;
     } catch { return { status: 'failed' }; }
     finally { active.delete(id); }
-  });
+  }));
   return () => {
     for (const controller of active.values()) controller.abort();
     active.clear();

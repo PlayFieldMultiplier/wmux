@@ -32,3 +32,7 @@ scripts/__tests__/testLanes.os.test.mjs
 
 # Every test path a workflow or package.json script names exists.
 scripts/__tests__/workflowTestPaths.test.mjs
+
+# Every main IPC handler uses the shared error wrapper; this scans source
+# rather than importing new handlers, so changed-test selection misses it.
+src/main/ipc/__tests__/wrapHandler.rollout.test.ts
