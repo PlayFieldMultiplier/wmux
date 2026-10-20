@@ -82,8 +82,6 @@ export function correctionGroups(facts: readonly Fact[], bots: BotDirectoryApi |
   for (const f of facts) {
     const key = correctionKey(f, bots);
     if (!key) continue;
-    const g = groups.get(key) ?? { facts: [], ws: new Map<string, number>() };
-    g.facts.push(f);
     let ws = f.workspaceId;
     try {
       ws ??= f.ref?.botId ? bots?.get(f.ref.botId)?.workspaceId : undefined;
@@ -91,8 +89,11 @@ export function correctionGroups(facts: readonly Fact[], bots: BotDirectoryApi |
       /* no workspace */
     }
     // A guest workspace's corrections never leave it (guestWorkspaces.ts):
-    // neither its words nor its patterns reach the Coordinator.
+    // neither its words nor its patterns reach the Coordinator. Checked
+    // before the fact joins any group.
     if (guestSide(ws)) continue;
+    const g = groups.get(key) ?? { facts: [], ws: new Map<string, number>() };
+    g.facts.push(f);
     if (ws) g.ws.set(ws, (g.ws.get(ws) ?? 0) + 1);
     groups.set(key, g);
   }

@@ -404,7 +404,8 @@ function newestMessage(rooms: PhoneRoomReader, workspaceId: string, scope: Conve
   let best: RoomCard | null = null;
   for (const t of scope.all) {
     if (best && t.lastAt < best.at) continue;
-    const cards = rooms.read(workspaceId, { threadId: t.threadId, limit: PREVIEW_SCAN }).cards;
+    // The owner's phone: a guest workspace's replies preview too.
+    const cards = rooms.read(workspaceId, { threadId: t.threadId, limit: PREVIEW_SCAN, guests: true }).cards;
     for (let i = cards.length - 1; i >= 0; i--) {
       const c = cards[i];
       if (c.actor.kind === 'system') continue;

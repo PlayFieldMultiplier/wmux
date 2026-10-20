@@ -256,6 +256,11 @@ describe('a gardener proposal never carries a guest workspace\'s words', () => {
     const directory = { listEnabled: () => [g], get: (id: string) => (id === g.id ? g : null) };
     const facts = [1, 2, 3].map((n) => fact(`f-${n}`, { workspaceId: 'ws-g', ref: { botId: g.id, messageId: `c-${n}` }, payload: { category: 'plan-declined', note: 'guest words' } }));
     expect(correctionGroups(facts, directory, 3)).toEqual([]);
+    // Joining a group clean corrections already made, it stays out of it.
+    const clean = [1, 2].map((n) => fact(`f-c${n}`, { workspaceId: 'ws-a', ref: { botId: 'bot-0000000b', messageId: `c-c${n}` }, payload: { category: 'plan-declined' } }));
+    const mixed = correctionGroups([...clean, facts[0]], { listEnabled: () => [], get: () => null }, 2);
+    expect(mixed.flatMap((g) => g.factIds)).toEqual(['f-c1', 'f-c2']);
+    expect(JSON.stringify(mixed)).not.toContain('guest words');
     const wake = vi.fn(() => ({ id: 'w' }));
     const gardener = new Gardener({ factLog: () => null, bots: () => ({ listEnabled: () => [bot('bot-0000000m', 'ws-g', { role: 'maintainer' })], get: () => null }), wake, factoryDir: path.join(dir, 'factory') });
     expect(gardener.maintainerFor({ key: 'k', at: 1, factIds: [], workspaceIds: ['ws-g'] }, null)).toBeNull();
