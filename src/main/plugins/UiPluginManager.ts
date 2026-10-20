@@ -7,6 +7,7 @@ import { UI_PLUGIN_CATALOG, type UiPluginInventory } from '../../shared/pluginMa
 import type { ApprovalQueue } from '../mcp/ApprovalQueue';
 import type { PluginTrustStore } from '../mcp/PluginTrustStore';
 import type { PluginHostLoader } from './PluginHostLoader';
+import { copyCatalogBundle } from './copyCatalogBundle';
 
 type SavedState = { version: 1; disabled: string[]; managed: string[] };
 
@@ -122,13 +123,7 @@ export class UiPluginManager {
       this.disableNow(entry.id);
       try {
         const sourceDirectory = path.join(this.options.catalogDir, entry.id);
-        if (fs.lstatSync(sourceDirectory).isSymbolicLink()) throw new Error('Invalid catalog bundle');
-        for (const file of ['manifest.json', 'page.html', 'README.md', 'LICENSE']) {
-          const source = path.join(this.options.catalogDir, entry.id, file);
-          const stat = fs.lstatSync(source);
-          if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid catalog bundle');
-          fs.copyFileSync(source, path.join(staging, file), fs.constants.COPYFILE_EXCL);
-        }
+        copyCatalogBundle(sourceDirectory, staging, entry.files);
         // A new installation always asks for its own approval, even after removal.
         await this.options.trust.setUserDecision(entry.id, 'denied');
         // Record ownership while disabled before publishing the bundle. If the

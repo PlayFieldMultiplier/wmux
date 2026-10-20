@@ -15,6 +15,7 @@ export const UI_PLUGIN_CATALOG = [{
   publisher: 'wmux',
   license: 'MIT',
   version: '1.0.0',
+  files: ['manifest.json', 'page.html', 'README.md', 'LICENSE'],
 }] as const;
 
 export interface InstalledUiPlugin extends PluginHostPluginSummary {
