@@ -66,3 +66,13 @@ export function nonCodeVerificationState(
   if (verifiedItemCount >= totalItems) return 'verified';
   return 'partial';
 }
+
+/** The evidence line a card states for a non-code report, in English, in the
+ *  settle card's form: "(N of M verified)" once an item is verified, else
+ *  "Not verified". Pure. */
+export function nonCodeEvidenceLine(verifiedItemCount: number | undefined, totalItems: number): string {
+  const state = nonCodeVerificationState(verifiedItemCount, totalItems);
+  if (state === 'missing') return 'Evidence: Not verified (the report recorded none).';
+  if (state === 'unverified') return `Evidence: Not verified (0 of ${totalItems} verified).`;
+  return `Evidence recorded (${verifiedItemCount} of ${totalItems} verified).`;
+}

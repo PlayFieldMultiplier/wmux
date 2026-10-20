@@ -621,6 +621,15 @@ describe('describeTaskGate', () => {
     expect(describeTaskGate({ ok: false, status: 'busy', taskId: 't' }).notice).toEqual({ code: 'gate.busy' });
     expect(describeTaskGate({ ok: false, status: 'refused', taskId: 't', error: 'x' }).notice).toEqual({ code: 'gate.refused' });
   });
+
+  it('a no_changes skip states the report\'s evidence; other skips do not', () => {
+    const skip = { ok: true, status: 'skipped', taskId: 't', skipped: 'no_changes', detail: 'No gate ran.', recorded: true } as const;
+    expect(describeTaskGate(skip, { verified: undefined, total: 0 }).body).toBe('Evidence: Not verified (the report recorded none). No gate ran.');
+    expect(describeTaskGate(skip, { verified: 0, total: 2 }).body).toBe('Evidence: Not verified (0 of 2 verified). No gate ran.');
+    expect(describeTaskGate(skip, { verified: 1, total: 2 }).body).toBe('Evidence recorded (1 of 2 verified). No gate ran.');
+    expect(describeTaskGate(skip, { verified: 2, total: 2 }).body).toBe('Evidence recorded (2 of 2 verified). No gate ran.');
+    expect(describeTaskGate({ ...skip, skipped: 'gate_unavailable' }, { verified: 1, total: 2 }).body).toBe('No gate ran.');
+  });
 });
 
 // Several of these run on real timers (the sweep): generous bounds, so a
@@ -1403,11 +1412,30 @@ describe('a task with no commits beyond its base', () => {
     expect(r.note).toHaveBeenCalledTimes(1);
     const [, , title, body, key, notice] = r.note.mock.calls[0];
     expect(title).toBe('Gate skipped (the task made no changes): task left open');
-    expect(body).toBe(noChangesDetail(BASE));
+    // A report with no evidence: the card says so.
+    expect(body).toBe(`Evidence: Not verified (the report recorded none). ${noChangesDetail(BASE)}`);
     expect(key).toBe(verifyGateFactId('task-1', row.rev));
     expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes' } });
     expect(r.wake).toHaveBeenCalledTimes(1);
     expect(r.wake.mock.calls[0][0].reason.factIds).toEqual([verifyGateFactId('task-1', row.rev)]);
+  });
+
+  it('the card states the report\'s graded evidence: 1 of 2 verified', async () => {
+    await register();
+    const r = noChangeRig();
+    const evidence = { summary: 'Checked', items: [
+      { kind: 'inspection', status: 'verified', summary: 'API answered 200', location: 'https://api.example' },
+      { kind: 'inspection', status: 'unverified', summary: 'Log line not found' },
+    ] };
+    const reported = await ledger.update({ id: 'task-1', status: 'review_requested', actor: { kind: 'worker', workspaceId: 'task-1-ws' }, expectedRev: (ledger.get('task-1') as LedgerEntry).rev, summary: 'done', evidence });
+    if (!reported.ok) throw new Error(reported.message);
+    await flush();
+    expect(r.runGate).not.toHaveBeenCalled();
+    expect(r.note).toHaveBeenCalledTimes(1);
+    const [, , title, body, , notice] = r.note.mock.calls[0];
+    expect(title).toBe('Gate skipped (the task made no changes): task left open');
+    expect(body).toBe(`Evidence recorded (1 of 2 verified). ${noChangesDetail(BASE)}`);
+    expect(notice).toEqual({ code: 'gate.skipped', args: { reason: 'no_changes' } });
   });
 
   it('the bot then settles it failed from the report', async () => {

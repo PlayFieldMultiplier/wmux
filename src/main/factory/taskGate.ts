@@ -97,6 +97,7 @@ import type { BotProfile } from '../../shared/bot';
 import type { Fact } from '../../shared/facts';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import { isSystemGatePass } from '../../shared/botTask';
+import { nonCodeEvidenceLine } from '../../shared/nonCodeTaskEvidence';
 import { taskThreadOf, type CardNotice, type RoomCard, type ThreadId } from '../../shared/room';
 import type { WakeReason } from '../../shared/wake';
 import type { LedgerUpdateInput, LedgerUpdateResult } from '../../daemon/ledger/TaskLedger';
@@ -392,8 +393,10 @@ export interface GateCard {
   notice: CardNotice;
 }
 
-/** The card for a gate run that did not complete the task. */
-export function describeTaskGate(r: GateRunResult): GateCard {
+/** The card for a gate run that did not complete the task. `evidence`: the
+ *  report's graded evidence, stated on a no_changes skip (the bot settles
+ *  that task from its report, so the owner sees what it holds). */
+export function describeTaskGate(r: GateRunResult, evidence?: { verified: number | undefined; total: number }): GateCard {
   if (r.ok && r.status === 'completed') {
     const g = r.result;
     const verdict = g.exitCode === 0 ? 'passed' : g.exitCode === null ? 'was killed' : `failed (exit ${g.exitCode})`;
@@ -405,7 +408,9 @@ export function describeTaskGate(r: GateRunResult): GateCard {
   if (r.ok && r.status === 'skipped') {
     // A no_changes skip that did not land in the ledger leaves the bot no
     // record to complete on: say so.
-    const body = r.skipped === 'no_changes' && r.recorded === false ? `${r.detail} The skip was NOT recorded (ledger unreachable).` : r.detail;
+    const recordedBody = r.skipped === 'no_changes' && r.recorded === false ? `${r.detail} The skip was NOT recorded (ledger unreachable).` : r.detail;
+    // The evidence leads: a long card body is folded after its first lines.
+    const body = r.skipped === 'no_changes' && evidence ? `${nonCodeEvidenceLine(evidence.verified, evidence.total)} ${recordedBody}` : recordedBody;
     // The stored English words for no_changes are the rendered card's
     // (room.notice.gate.reason.no_changes): the bot reads this title too.
     const reason = r.skipped === 'no_changes' ? 'the task made no changes' : r.skipped;
@@ -765,7 +770,10 @@ export function installTaskGate(ports: TaskGatePorts): () => void {
       const recorded = await ports.recordNoChanges(taskId, detail, unchanged.head);
       const now = again.has(taskId) ? null : stillReported(taskId);
       if (!now) return;
-      await settle(now, describeTaskGate({ ok: true, status: 'skipped', taskId, skipped: 'no_changes', detail, recorded }));
+      await settle(now, describeTaskGate(
+        { ok: true, status: 'skipped', taskId, skipped: 'no_changes', detail, recorded },
+        { verified: now.verifiedItemCount, total: now.evidence?.items?.length ?? 0 },
+      ));
       return;
     }
     const result = await ports.runGate({
