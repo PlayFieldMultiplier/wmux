@@ -1053,7 +1053,6 @@ export async function reclaimWorker(
       // No pane left in the worktree: nothing to stop.
       state: panes.length === 0 ? 'stopped' : 'stopping',
       ...(prior?.state === 'stopping' && prior.stopUnconfirmed ? { stopUnconfirmed: true as const } : {}),
-      ...(prior?.stopResolved ? { stopResolved: true as const } : {}),
       at: now(),
       endRev: entry.rev,
       ...(prior?.paneWorkspaceId ? { paneWorkspaceId: prior.paneWorkspaceId } : {}),

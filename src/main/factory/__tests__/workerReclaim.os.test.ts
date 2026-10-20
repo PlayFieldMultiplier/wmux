@@ -155,6 +155,27 @@ describe('reclaimWorker', () => {
     expect(store.get(entry.id)?.stopResolved).toBe(true);
   });
 
+  it('resolves each new unconfirmed stop after the same task is resumed', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    let alive = true;
+    const { ports, note } = reclaimPorts(store, [], {
+      listSessions: async () => [session({ agentProcessAlive: undefined, commandRunning: alive })],
+      stopAgent: async () => ({ ok: true, stopped: !alive }),
+    });
+    for (const rev of [3, 5]) {
+      alive = true;
+      const entry = row('completed', { rev });
+      expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopping', stopUnconfirmed: true });
+      expect(store.get(entry.id)?.stopResolved).toBeUndefined();
+      alive = false;
+      expect(await reclaimWorker(ports, entry, 'completed')).toMatchObject({ state: 'stopped', stopResolved: true });
+      if (rev === 3) store.setState(entry.id, 'resumed', 6_000);
+    }
+    expect(note.mock.calls.filter((call) => call[4]?.code === 'worker.stopUnconfirmed')).toHaveLength(2);
+    expect(note.mock.calls.filter((call) => call[4]?.code === 'worker.stopResolved')).toHaveLength(2);
+    await store.settled();
+  });
+
   it('does not suppress the owner notice after a failed card write', async () => {
     const store = ReclaimedWorkers.at(dir);
     const note = vi.fn().mockImplementationOnce(() => { throw new Error('room unavailable'); });
