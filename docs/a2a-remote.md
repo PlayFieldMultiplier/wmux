@@ -7,8 +7,7 @@
 Cross-PC A2A connects wmux on two PCs you own, pane to pane. An agent on PC A
 sends a task to a linked pane on PC B with `send_message`; B's agent sees it
 like any other A2A task, and its reply comes back to the pane on A that sent
-it. Both directions work over one connection. Two PCs can also link their
-Moa, so Moa on one PC can hand work to Moa on the other.
+it. Both directions work over one connection.
 
 It is **experimental** and **off by default**. Nothing listens and nothing is
 visible to another PC until you turn it on, pair, choose what to show, and
@@ -34,13 +33,12 @@ section; turning one on does not turn on the other.
   open inbound port. The joiner connects out, sends its messages over that
   connection, and holds a stream open for messages coming back.
 - **Nothing is shown by default.** For each paired PC you choose which
-  workspaces and panes, and whether this PC's Moa, it may see. A pane you did
+  workspaces and panes it may see. A pane you did
   not choose is invisible to that PC: no name, no path, no sign that it
   exists.
-- **Links are made by people.** A link joins one pane on each PC, or the Moa
-  of each PC. Someone on the joiner proposes it, and someone on the server
-  accepts it. Agents cannot create links. A pane links only with a pane, and
-  Moa only with Moa.
+- **Links are made by people.** A link joins one pane on each PC. Someone on
+  the joiner proposes it, and someone on the server accepts it. Agents cannot
+  create links. A pane links only with a pane.
 - **Messages only.** A task from another PC is delivered as a message to the
   linked pane, through the same approval and hold checks as a local A2A
   task. It never starts a worker or opens a pane on the receiving PC.
@@ -142,40 +140,6 @@ is the one that will accept connections, and PC A is the one that joins it.
 The two PCs do not need to be paired both ways. One pairing carries traffic
 in both directions over the joiner's connection.
 
-### Linking Moa
-
-Moa on two PCs can be linked the same way. A Moa links only with the other
-PC's Moa, never with a pane.
-
-1. **PC B:** turn Moa on, then in **Panes to show** for PC A tick **Show this
-   PC's Moa**.
-2. **PC A:** with Moa on, open the **Remote** page and click **Link Moa with
-   another PC…**. Pick PC B, choose its Moa and the directions, and send the
-   request.
-3. **PC B:** accept the card "*PC A*'s Moa asks to link with this PC's Moa"
-   on the Remote page.
-
-Moa then reaches the other PC's Moa as `<PC>/Moa` (for example
-`office-pc/Moa`) with `send_message`. Moa cannot send to a remote pane's
-alias; it is told to ask that PC's Moa instead.
-
-When work from another PC's Moa arrives, Moa is woken with a pointer to the
-task, not its text, and reads it with `a2a_task_query`. The wake says the
-text is a request from another PC, not your instruction, and that Moa should
-do the work itself rather than hand it to another agent. Moa handles it with
-its usual tools, which include asking you with a decision card. Wakes follow
-the usual rules, plus a limit for other PCs:
-
-- With **Auto-wake on pane events** turned off, Moa is not woken for it.
-  The task is still in Moa's list (`a2a_task_query`) for its next turn.
-- While Moa has a decision waiting for you, it is not woken. The pointer is
-  kept and comes back once you answer.
-- One PC can wake Moa at most 3 times in 10 minutes, with at most 5 of its
-  items per wake. The rest wait for a later wake, and the wake says how many
-  are waiting.
-- Work for Moa that arrives before Moa can take it (for example while the
-  app is still starting) is held and goes to Moa as soon as it can.
-
 ## Delivery, receipts and held work
 
 The **Remote** page has a **Messages between PCs** section:
@@ -186,7 +150,7 @@ The **Remote** page has a **Messages between PCs** section:
   queued on disk until the other PC confirms them, so a restart or a dropped
   connection neither loses nor repeats one.
 - **Receipts.** The receiving PC reports twice: when the task reached its
-  pane's agent (or its Moa), and when that side read the task by its id with
+  pane's agent, and when that side read the task by its id with
   `a2a_task_query`. The sender sees this as `remoteReceipt` (`delivered` or
   `read`) in `a2a_task_query`. Receipts never change the task's state.
 - **Held remote work.** Work is held for you, never sent to another pane on
@@ -194,14 +158,12 @@ The **Remote** page has a **Messages between PCs** section:
   - the pane it was meant for is gone,
   - another agent is in that pane now,
   - the link to that PC has ended,
-  - it is for Moa and Moa cannot take it yet (it goes by itself once Moa
-    can),
   - a paste was started but never confirmed (check the pane before sending
     again), or
   - the pane kept having no agent to take it.
 
-  Each held item has **Reject**, which ends it and tells the other PC, and,
-  except for work meant for Moa, **Send to the current agent**, which
+  Each held item has **Reject**, which ends it and tells the other PC, and
+  **Send to the current agent**, which
   delivers it to the agent in that pane now. Held work that nobody handles
   is rejected automatically after 24 hours.
 
@@ -341,16 +303,14 @@ hardening and will come later.
   pane (see [Delivery, receipts and held work](#delivery-receipts-and-held-work)).
   What the receiving agent decides to do with a message is up to that agent
   and its own permissions, just as with a message you type yourself.
-- **What a link covers.** A link joins exactly one pane on each side, or the
-  Moa of each side, in the directions you allowed. A paired PC sees only the
-  panes (and Moa) you showed it, can propose links only to those, and can
+- **What a link covers.** A link joins exactly one pane on each side, in the
+  directions you allowed. A paired PC sees only the panes you showed it, can propose links only to those, and can
   send only over a link that a person on one PC proposed and a person on the
   other accepted. The receiving PC decides which pane a message came from by
   its own link record, never by what the sender claims.
 - **When a link ends by itself.** A link breaks when its pane is closed or
   moves to another workspace, when its workspace is closed or archived, when
-  the server stops showing that pane (or its Moa) to the other PC, or, for a
-  Moa link, when Moa is turned off or its workspace goes away. The Remote
+  the server stops showing that pane to the other PC. The Remote
   page shows the link as **Disconnected** with the reason. A broken link
   stays ended: restoring an archived workspace does not bring it back. Link
   the panes again.
@@ -367,8 +327,7 @@ hardening and will come later.
   sequences (including clipboard writes and the end-of-paste marker) and
   control characters other than newline and tab, and turns a carriage
   return into a newline. PC, workspace and pane names in an alias keep only
-  printable characters, with `/` turned into `-`. A wake for Moa carries
-  only the task id and the PC name, never the message text.
+  printable characters, with `/` turned into `-`.
 - **Where credentials live.** Pairing issues the joiner a peer credential
   that works only on the A2A listener's `/api/a2a/*` routes. It is not a
   phone or device token and opens nothing else. The joiner keeps it in its
@@ -383,17 +342,14 @@ hardening and will come later.
 
 - Only the joiner can propose a link. The server accepts or declines it.
 - Links are created by people only; agents cannot propose one.
-- A pane links only with a pane, and Moa only with Moa. Moa cannot send to a
-  pane on another PC, and a pane cannot send to another PC's Moa.
-- No delivery without the app: a message reaches a pane or Moa only while
+- A pane links only with a pane.
+- No delivery without the app: a message reaches a pane only while
   the wmux app is open on the receiving PC. With only the daemon running, it
   waits and is delivered when the app comes back.
 - Not yet verified on real Windows PCs.
 - Each PC's identity is the id it reports when pairing; what wmux verifies
   is the server's certificate pin. This will be hardened before colleagues'
   PCs are supported.
-- Moa is told to do work from another PC's Moa itself: an answer from an
-  agent Moa handed it to would not get back to the other PC.
 - No automatic discovery: pair with an invite. There is no PIN alternative.
 - Accepting a link from a phone is not supported.
 - Names in an alias are fixed when the link is made.
