@@ -49,12 +49,15 @@ export function initialWindowsGlass(supported: boolean, persistedLevel: unknown)
  * tone from the app's appearance, which the renderer only sets once it has
  * loaded; until then a dark theme on a light Windows showed light acrylic for
  * the first frames. So main applies the polarity the renderer last saved
- * (`windowAppearance` in session.json), or dark, the default theme's, when none
- * was. Null when the window starts opaque: the system appearance stays.
+ * (`windowAppearance` in session.json). With no session at all (a first run,
+ * `undefined`) that is dark, the default theme's. A session saved before the
+ * polarity was, or an unknown value, gets null, as does a window that starts
+ * opaque: the system appearance stays until the renderer sets it.
  */
 export function initialWindowsAppearance(glass: boolean, persisted: unknown): 'dark' | 'light' | null {
   if (!glass) return null;
-  return persisted === 'light' ? 'light' : 'dark';
+  if (persisted === 'dark' || persisted === 'light') return persisted;
+  return persisted === undefined ? 'dark' : null;
 }
 
 /**

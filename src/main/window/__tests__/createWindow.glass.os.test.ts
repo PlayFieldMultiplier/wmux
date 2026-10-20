@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   release: '10.0.26200',
   options: [] as Array<Record<string, unknown>>,
+  themeAtConstruction: [] as string[],
   nativeTheme: { themeSource: 'system' as 'system' | 'light' | 'dark' },
 }));
 
@@ -27,6 +28,7 @@ vi.mock('electron', () => {
     };
     constructor(opts: Record<string, unknown>) {
       h.options.push(opts);
+      h.themeAtConstruction.push(h.nativeTheme.themeSource);
     }
     on = vi.fn();
     maximize = vi.fn();
@@ -59,12 +61,14 @@ async function optionsFor(platform: NodeJS.Platform, release: string, windowGlas
   Object.defineProperty(process, 'platform', { value: platform, configurable: true });
   h.release = release;
   h.options.length = 0;
+  h.themeAtConstruction.length = 0;
   h.nativeTheme.themeSource = 'system';
   vi.resetModules();
   const { createWindow } = await import('../createWindow');
   const { isWindowGlassOn } = await import('../windowGlass');
   const win = createWindow({ deferLoad: true, windowGlass, windowAppearance });
-  return { opts: h.options[0], glassOn: isWindowGlassOn(win), themeSource: h.nativeTheme.themeSource };
+  // The appearance as the window was built: what DWM tints the first frames with.
+  return { opts: h.options[0], glassOn: isWindowGlassOn(win), themeSource: h.themeAtConstruction[0] };
 }
 
 beforeEach(() => {
@@ -124,8 +128,12 @@ describe('createWindow app appearance before a glass window exists', () => {
     expect((await optionsFor('win32', '10.0.26200', 'clear', 'dark')).themeSource).toBe('dark');
   });
 
-  it('uses dark, the default theme, on a first run with nothing saved', async () => {
-    expect((await optionsFor('win32', '10.0.26200', null, null)).themeSource).toBe('dark');
+  it('uses dark, the default theme, on a first run with no session', async () => {
+    expect((await optionsFor('win32', '10.0.26200', null, undefined)).themeSource).toBe('dark');
+  });
+
+  it('keeps the system appearance for a session saved before the polarity was', async () => {
+    expect((await optionsFor('win32', '10.0.26200', 'soft', null)).themeSource).toBe('system');
   });
 
   it('keeps the system appearance when the window starts opaque', async () => {

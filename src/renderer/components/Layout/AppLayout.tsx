@@ -99,7 +99,6 @@ import ProjectConfigDialog from '../Project/ProjectConfigDialog';
 import AttachRemoteModal from '../Sidebar/AttachRemoteModal';
 import { probeProjectConfig, maybeAutoApplyProjectLayout, workspaceProbeCwd } from '../../utils/projectConfigProbe';
 import { serializeTerminalBuffer } from '../../utils/scrollbackDump';
-import { themeAppearance } from '../../utils/windowGlass';
 import { pastePtyChunked } from '../../utils/clipboardChunk';
 import { isDaemonModeActive, setDaemonModeActive } from '../../daemon/daemonMode';
 import { noteDaemonConnected, noteDaemonDisconnected, noteDaemonGaveUp, noteDaemonReconnecting, notePaneReattached, notePaneWriteDropped, setDaemonLinkSurfaceResolver, type DaemonPaneRef } from '../../daemon/daemonLinkNotice';
@@ -472,7 +471,7 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     windowGlass: state.windowGlass,
     // The theme's polarity, so main can give a glass window the theme's tone
     // before this renderer loads (main/window/windowGlass.ts).
-    windowAppearance: themeAppearance(getComputedStyle(document.documentElement).getPropertyValue('--bg-base')) ?? undefined,
+    windowAppearance: state.windowAppearance ?? undefined,
     sidebarSortMode: state.sidebarSortMode,
     sidebarSortModeChosen: state.sidebarSortModeChosen,
     sidebarPinnedIds: state.sidebarPinnedIds,

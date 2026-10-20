@@ -58,12 +58,19 @@ describe('initialWindowsGlass', () => {
 });
 
 describe('initialWindowsAppearance', () => {
-  it('is the saved polarity for a glass window, dark when none or an unknown value was saved', () => {
+  it('is the saved polarity for a glass window', () => {
     expect(initialWindowsAppearance(true, 'light')).toBe('light');
     expect(initialWindowsAppearance(true, 'dark')).toBe('dark');
-    expect(initialWindowsAppearance(true, null)).toBe('dark');
-    expect(initialWindowsAppearance(true, 'system')).toBe('dark');
-    expect(initialWindowsAppearance(true, 42)).toBe('dark');
+  });
+
+  it('is dark, the default theme, on a first run with no session', () => {
+    expect(initialWindowsAppearance(true, undefined)).toBe('dark');
+  });
+
+  it('keeps the system appearance for a session saved before the polarity was, or an unknown value', () => {
+    expect(initialWindowsAppearance(true, null)).toBeNull();
+    expect(initialWindowsAppearance(true, 'system')).toBeNull();
+    expect(initialWindowsAppearance(true, 42)).toBeNull();
   });
 
   it('is null for an opaque window, so the system appearance stays', () => {

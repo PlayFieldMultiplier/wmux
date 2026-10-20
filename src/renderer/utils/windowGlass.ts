@@ -65,13 +65,14 @@ interface SyncState {
   level: WindowGlassLevel | null;
 }
 
-function sync(root: HTMLElement, systemDark: boolean, last: SyncState): void {
+function sync(root: HTMLElement, systemDark: boolean, last: SyncState, onAppearance?: (appearance: 'dark' | 'light') => void): void {
   const style = getComputedStyle(root);
   const platform = window.electronAPI?.platform;
   const windowsBuild = window.electronAPI?.windowsBuildNumber ?? null;
   const supported = isWindowGlassSupported(platform, windowsBuild);
   const bgBase = style.getPropertyValue('--bg-base');
   const appearance = themeAppearance(bgBase);
+  if (appearance) onAppearance?.(appearance);
   const level = resolveWindowGlass(root.getAttribute('data-glass-level'));
   // With glass off the app goes back to the system appearance: overriding it
   // is app-wide (native menus, the in-app browser's prefers-color-scheme),
@@ -95,11 +96,18 @@ function sync(root: HTMLElement, systemDark: boolean, last: SyncState): void {
   }
 }
 
-/** Keep `data-glass` and the app's appearance in step with the theme, the glass level and the appearance. */
-export function installWindowGlass(root: HTMLElement = document.documentElement): () => void {
+/**
+ * Keep `data-glass` and the app's appearance in step with the theme, the glass
+ * level and the appearance. `onAppearance` hears the theme's polarity on every
+ * sync, for the session save.
+ */
+export function installWindowGlass(
+  root: HTMLElement = document.documentElement,
+  onAppearance?: (appearance: 'dark' | 'light') => void,
+): () => void {
   const scheme = window.matchMedia?.('(prefers-color-scheme: dark)');
   const last: SyncState = { appearance: null, level: null };
-  const run = () => sync(root, scheme ? scheme.matches : true, last);
+  const run = () => sync(root, scheme ? scheme.matches : true, last, onAppearance);
   run();
   const observer = new MutationObserver(run);
   observer.observe(root, { attributes: true, attributeFilter: ['data-theme', 'style', 'data-glass-level'] });

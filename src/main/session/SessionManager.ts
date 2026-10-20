@@ -307,15 +307,18 @@ export class SessionManager {
    * The theme polarity the renderer last saved ('dark' | 'light'), read before
    * the window exists so a glass window starts in its theme's tone (see
    * initialWindowsAppearance). Raw value; the caller whitelists it.
+   * `undefined` means no session could be read (a first run), and `null` a
+   * session saved before the polarity was, which keeps its old start.
    */
   readWindowAppearance(): unknown {
     try {
       const loaded = atomicReadJSONSync<SessionData>(this.filePath, {
         validate: SessionManager.isSessionData,
       });
-      return loaded?.windowAppearance ?? null;
+      if (!loaded) return undefined;
+      return loaded.windowAppearance ?? null;
     } catch {
-      return null;
+      return undefined;
     }
   }
 

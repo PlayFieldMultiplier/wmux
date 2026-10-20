@@ -75,3 +75,24 @@ describe('installWindowGlass on Windows without glass', () => {
     stop();
   });
 });
+
+describe('installWindowGlass theme polarity for the session save', () => {
+  it('reports the theme polarity, with glass off too, and follows a theme change', async () => {
+    const heard: string[] = [];
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      platform: 'win32', windowsBuildNumber: 26200, window: { setAppearance, setGlass },
+    };
+    window.matchMedia = ((query: string) => ({
+      matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+    const root = document.documentElement;
+    root.style.setProperty('--bg-base', '#1A171D');
+    root.setAttribute('data-glass-level', 'off');
+    const stop = installWindowGlass(root, (appearance) => heard.push(appearance));
+    expect(heard.at(-1)).toBe('dark');
+    root.style.setProperty('--bg-base', '#FFFFFF');
+    await flush();
+    expect(heard.at(-1)).toBe('light');
+    stop();
+  });
+});
