@@ -64,4 +64,19 @@ describe('registerAllHandlers race fix (v2.9.0 scrollback restore)', () => {
     // style rebrands.
     expect(source).not.toMatch(/['"]\.\/handlers\/session\.handler['"]/);
   });
+
+  it('keeps connector consent and terminal leases outside daemon swaps', () => {
+    const main = fs.readFileSync(path.join(__dirname, '..', '..', 'index.ts'), 'utf-8');
+    for (const service of ['OAuth', 'Terminal', 'Check', 'Catalog']) {
+      const register = `registerConnector${service}Handlers`;
+      expect(source).not.toContain(register);
+      expect(main.match(new RegExp(`${register}\\(`, 'g'))).toHaveLength(1);
+    }
+    const quit = main.slice(main.indexOf("app.on('before-quit',"));
+    for (const cleanup of ['cleanupConnectorChecks()', 'cleanupConnectorTerminal()', 'connectorOAuth.cleanup()', 'cleanupConnectorCatalog()']) {
+      expect(source).not.toContain(cleanup);
+      expect(main.match(new RegExp(cleanup.replace(/[().]/g, '\\$&'), 'g'))).toHaveLength(1);
+      expect(quit).toContain(cleanup);
+    }
+  });
 });

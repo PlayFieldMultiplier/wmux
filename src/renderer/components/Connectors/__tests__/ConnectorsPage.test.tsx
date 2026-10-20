@@ -20,6 +20,12 @@ async function mount(p: BotConnectorPort) { host = document.createElement('div')
 afterEach(() => { act(() => root?.unmount()); host?.remove(); vi.unstubAllGlobals(); });
 function button(name: string): HTMLButtonElement { const b = [...document.querySelectorAll('button')].find((x) => x.textContent === name); if (!b) throw new Error(`Missing ${name}`); return b; }
 describe('Connectors page', () => {
+  it.each(['darwin', 'linux', 'win32'])('offers terminal launch only on supported platforms: %s', async (platform) => {
+    vi.stubGlobal('electronAPI', { platform, connectorTerminal: { create: vi.fn() } });
+    await mount(port());
+    const launch = [...host.querySelectorAll('button')].filter((b) => /Claude|Codex/.test(b.textContent ?? ''));
+    expect(launch).toHaveLength(platform === 'win32' ? 0 : 2);
+  });
   it('keeps configured separate from authenticated and uses English labels', async () => {
     await mount(port());
     expect(host.textContent).toContain('Configured · not verified');

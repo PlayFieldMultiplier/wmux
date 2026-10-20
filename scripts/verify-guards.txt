@@ -36,3 +36,6 @@ scripts/__tests__/workflowTestPaths.test.mjs
 # Every main IPC handler uses the shared error wrapper; this scans source
 # rather than importing new handlers, so changed-test selection misses it.
 src/main/ipc/__tests__/wrapHandler.rollout.test.ts
+
+# App-owned session/connector services must survive daemon handler swaps.
+src/main/ipc/__tests__/registerHandlers.race.test.ts
