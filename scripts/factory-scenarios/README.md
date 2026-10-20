@@ -32,7 +32,7 @@ polls every 60 s).
    - `gh` → `scripts/factory-e2e/fake-gh.mjs`: a scripted GitHub held in
      `gh-state.json` (PRs, issues, checks, required checks, merges); every call
      is logged.
-   - `claude` → `scripts/factory-e2e/fake-claude.mjs` (stub scenarios only): a
+   - `claude` → `scripts/factory-e2e/claude.mjs` (the identifiable entry point for `fake-claude.mjs`) (stub scenarios only): a
      scripted fan-out worker that reports `review_requested` through the real
      `ledger_update` tool, and for a `default`-preset task commits and pushes (through `task_push`)
      its branch. Worker panes start with the run's own `ZDOTDIR` instead of the

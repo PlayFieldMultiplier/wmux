@@ -133,6 +133,14 @@ describe('resolveAgentSlug', () => {
 });
 
 describe('selectAgentProcess', () => {
+  it('identifies the factory smoke launcher while leaving arbitrary Node stubs unnamed', () => {
+    const shell = entry(100, 1, 'zsh', 'zsh');
+    expect(selectAgentProcess([shell, entry(200, 100, 'node', 'node /repo/scripts/factory-e2e/claude.mjs --session-id stub')], 100))
+      .toEqual({ pid: 200, slug: 'claude' });
+    expect(selectAgentProcess([shell, entry(200, 100, 'node', 'node /repo/scripts/factory-e2e/fake-claude.mjs --session-id stub')], 100))
+      .toEqual({ pid: 200 });
+  });
+
   const SHELL = 100;
 
   it('exec-rooted pane: the PTY root itself is the agent, not its MCP node child', () => {

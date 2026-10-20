@@ -56,7 +56,7 @@ const EVIDENCE_ROOT = path.join(REPO_ROOT, '.claude', 'skills', 'verify-wmux', '
 const CLAIM_DIR = path.join(os.homedir(), '.cache', 'wmux-cdp');
 const STUB = path.join(REPO_ROOT, 'scripts', 'acp-stub.mjs');
 const FAKE_GH = path.join(REPO_ROOT, 'scripts', 'factory-e2e', 'fake-gh.mjs');
-const FAKE_CLAUDE = path.join(REPO_ROOT, 'scripts', 'factory-e2e', 'fake-claude.mjs');
+const FAKE_CLAUDE = path.join(REPO_ROOT, 'scripts', 'factory-e2e', 'claude.mjs');
 const FAKE_CODEX = path.join(REPO_ROOT, 'scripts', 'factory-e2e', 'fake-codex.mjs');
 const MCP_BUNDLE = path.join(REPO_ROOT, 'dist', 'mcp-bundle', 'index.js');
 const ELECTRON = process.platform === 'darwin'
