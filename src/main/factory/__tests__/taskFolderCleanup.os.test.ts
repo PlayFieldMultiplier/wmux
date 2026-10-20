@@ -28,6 +28,7 @@ import {
   parseMountInfo,
   removeEmptyResearchBatch,
   restoreTaskFolder,
+  ensureTaskFolderPrepared,
   taskFolderKind,
   taskFolderUsage,
   type TaskFolderPorts,
@@ -172,6 +173,25 @@ describe('cleanTaskFolder', () => {
     expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(true);
     expect(calls).toHaveLength(2);
     expect(p.store.get('wtask-abc-12345678')?.state).toBe('restored');
+  });
+
+  it('a folder whose setup failed and could not be put away is prepared again before a resume uses it', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr);
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    let status = 'failed';
+    const p = ports({
+      prepare: async () => ({ status, error: 'exited with code 1' }),
+      worktrees: { restoreWorktree: mgr.restoreWorktree.bind(mgr), removeWorktree: async (...a: Parameters<TaskWorktreeManager['removeWorktree']>) => (a[4]?.force ? { ok: false as const, error: 'held' } : mgr.removeWorktree(...a)) },
+    });
+    expect(await cleanTaskFolder(p, row('completed'), mission, [])).toBe('removed');
+    expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(false);
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(p.store.get('wtask-abc-12345678')).toMatchObject({ state: 'restored', prepFailed: true });
+    expect(await ensureTaskFolderPrepared(p, 'wtask-abc-12345678')).toBe(false);
+    status = 'ready';
+    expect(await ensureTaskFolderPrepared(p, 'wtask-abc-12345678')).toBe(true);
+    expect(p.store.get('wtask-abc-12345678')?.prepFailed).toBeUndefined();
   });
 
   it('keeps a worktree with uncommitted changes, never removes it automatically, and Clean up now removes it once it is clean', async () => {

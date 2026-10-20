@@ -139,7 +139,7 @@ const EMPTY_COPY: WorkspaceCopyResult = { copied: 0, missing: 0, present: 0, ref
 
 function within(root: string, candidate: string): boolean {
   const rel = path.relative(root, candidate);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 async function isIgnored(gitRun: NonNullable<WorkspacePrepDeps['git']>, cwd: string, rel: string): Promise<boolean> {
@@ -272,7 +272,14 @@ function copyPlainFile(realSrc: string, dest: string): boolean {
     const st = fs.fstatSync(fd);
     if (!st.isFile() || st.size > MAX_COPY_BYTES) return false;
     const bytes = fs.readFileSync(fd);
-    fs.writeFileSync(dest, bytes, { flag: 'wx', mode: st.mode & 0o777 });
+    try {
+      fs.writeFileSync(dest, bytes, { flag: 'wx', mode: st.mode & 0o777 });
+    } catch (err) {
+      // A write cut short (a full disk) must not leave half a secret behind;
+      // a destination that already existed ('wx' refused it) is not ours.
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') fs.rmSync(dest, { force: true });
+      return false;
+    }
     return true;
   } catch {
     return false;

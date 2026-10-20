@@ -131,7 +131,19 @@ export interface HandoffStartRequest {
   force?: boolean;
 }
 
+/**
+ * What the new worktree's preparation left undone, for the start's toast:
+ * the project's setup did not run (`skipped`: its wmux.json is not approved
+ * or a part of it was rejected), or selected config files did not arrive.
+ * Counts only.
+ */
+export interface HandoffPrepNotice {
+  skipped?: 'untrusted' | 'stale' | 'denied' | 'malformed';
+  missing: number;
+  refused: number;
+}
+
 export type HandoffStartResult =
-  | { ok: true; linkId: string; workspaceId: string; branch: string }
+  | { ok: true; linkId: string; workspaceId: string; branch: string; prep?: HandoffPrepNotice }
   | { ok: false; code: 'in-progress'; inProgress: HandoffInProgress }
   | { ok: false; code: 'invalid' | 'error'; message: string };

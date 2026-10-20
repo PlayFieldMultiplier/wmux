@@ -68,8 +68,9 @@ import { getWmuxHomeDir } from '../../shared/constants';
 import { TaskWorktreeManager } from '../worktask/TaskWorktreeManager';
 import { prepareNewWorktree } from '../worktask/workspacePrep';
 import { getProjectConfigStore } from '../project/ProjectConfigStore';
-import { TaskFolders, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, noteKeptFolderStopped, restoreTaskFolder, setTaskFolderPorts, type KeptFolderCleaned, type TaskMission } from './taskFolderCleanup';
+import { TaskFolders, ensureTaskFolderPrepared, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, noteKeptFolderStopped, restoreTaskFolder, setTaskFolderPorts, type KeptFolderCleaned, type TaskMission } from './taskFolderCleanup';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
+import { gatedSetup } from '../worktask/gatedSetup';
 import { STOPPED_BY_OWNER } from './factoryStop';
 import { getFanOutGuards, setDormantRefresh, taskOfWorkspace } from '../worktask/fanoutGuards';
 import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
@@ -483,15 +484,10 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       repoInfo: gitRepoInfo,
       // A resumed bot worker's folder is prepared again (it was removed with
       // its ignored files, node_modules included).
-      prepare: (repoRoot: string, worktreePath: string) => {
-        const run = () => prepareNewWorktree(
-          { sourceCwd: repoRoot, worktreePath, origin: 'automated' },
-          { getState: (cwd) => getProjectConfigStore().getState(cwd) },
-        );
-        // Under the machine-wide gate permit, as a fan-out's setup.
-        const gates = getSharedTaskGateRunner();
-        return gates ? gates.withPermit(run) : run();
-      },
+      prepare: (repoRoot: string, worktreePath: string) => prepareNewWorktree(
+        { sourceCwd: repoRoot, worktreePath, origin: 'automated' },
+        { getState: (cwd) => getProjectConfigStore().getState(cwd), runSetup: gatedSetup },
+      ),
       gateRunning: (taskId: string) => getSharedTaskGateRunner()?.isRunning(taskId) === true,
       changed,
       // A kept folder removed after its TTL: one card in the task's thread
@@ -538,6 +534,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       },
       ...(folderPorts ? {
         restoreFolder: (taskId: string, folder: string) => restoreTaskFolder(folderPorts, taskId, folder),
+        folderPrepared: (taskId: string) => ensureTaskFolderPrepared(folderPorts, taskId),
         holdFolder: holdTaskFolder,
         folderResumed: (taskId: string) => { void forgetKeptFolder(folderPorts, taskId); },
       } : {}),

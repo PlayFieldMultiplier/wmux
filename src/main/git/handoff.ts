@@ -308,7 +308,12 @@ export async function startHandoffWorktree(deps: HandoffDeps, raw: unknown): Pro
       ...(task.agent ? { agent: task.agent } : {}),
       ...(task.worktreePath ? { worktree: { path: task.worktreePath, ...(task.branch ? { branch: task.branch } : {}) } } : {}),
     }).catch(() => null);
-    return { ok: true, linkId: link?.id ?? '', workspaceId: task.workspaceId, branch: task.branch ?? branch };
+    // Never silent: a skipped setup or config files that did not arrive.
+    const skipped = result.setupSkipped && result.setupSkipped !== 'none-declared' ? result.setupSkipped : undefined;
+    const missing = task.configFiles?.missing ?? 0;
+    const refused = task.configFiles?.refused ?? 0;
+    const prep = skipped || missing + refused > 0 ? { ...(skipped ? { skipped } : {}), missing, refused } : undefined;
+    return { ok: true, linkId: link?.id ?? '', workspaceId: task.workspaceId, branch: task.branch ?? branch, ...(prep ? { prep } : {}) };
   });
 }
 

@@ -326,7 +326,8 @@ export interface FanOutRequest {
   /**
    * 'human' = a person opened this one worktree (start from an issue, Quick
    * Launch's worktree option): the project's config files are copied in by
-   * default, and a failed setup keeps the worktree with its agent not started.
+   * default, and a failed setup reports its last output lines (the task is
+   * rolled back and no agent starts).
    * Absent = a fan-out or a bot (copy only when the project allows it; a failed
    * setup rolls the task back). Set by main-side callers only, never parsed
    * from a request.
@@ -416,7 +417,7 @@ export const FANOUT_COPY_BLOCKED_WARNING =
 /** The warning for a task whose selected config files did not all arrive. */
 export function configFilesGapWarning(index: number, c: WorkspaceCopyResult): string | undefined {
   if (c.missing + c.refused === 0) return undefined;
-  return `task ${index + 1}: ${c.missing + c.refused} of the repository's config files (fanout.copy) were not copied (${c.missing} not found, ${c.refused} refused: not a git-ignored file inside the checkout)`;
+  return `task ${index + 1}: ${c.missing + c.refused} of the repository's config files (fanout.copy) were not copied (${c.missing} not found, ${c.refused} refused: not a git-ignored file inside the project folder)`;
 }
 
 /** 태스크 단위 결과(리포트 — 상태 구분). */
@@ -950,6 +951,8 @@ export class FanOutService {
           baseWarning: lateBase.warning,
           taskNote: taskGraphNote(k, graph, result.tasks),
         });
+        const gap = r.configFiles ? configFilesGapWarning(k, r.configFiles) : undefined;
+        if (gap) addWarning(result, gap);
         return r;
       } finally {
         if (!r?.ok) releaseFanoutPorts([lateEnv.ports[0]]);
@@ -1524,7 +1527,6 @@ export class FanOutService {
         : { copied: 0, missing: 0, present: 0, refused: ctx.copy.files.length };
       base.configFiles = copied;
     }
-
 
     if (ctx.setupCommand !== undefined && plan) {
       // Under the machine-wide gate permit: an install never overlaps a gate.

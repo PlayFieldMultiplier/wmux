@@ -199,6 +199,16 @@ describe('sendHandoff', () => {
 });
 
 describe('startHandoffWorktree', () => {
+  it('reports a skipped preparation and config files that did not arrive', async () => {
+    const { d } = deps();
+    (d.startFanOut as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true, setupSkipped: 'stale',
+      tasks: [{ index: 0, title: 't', ok: true, workspaceId: 'ws-new', worktreePath: '/wt/x', branch: 'issue-12-crash-on-launch', configFiles: { copied: 0, missing: 1, present: 0, refused: 1 } }],
+    });
+    const res = await startHandoffWorktree(d, { item: { kind: 'issue', ref: issue }, repoPath: '/repo', workspaceId: 'ws-repo' });
+    expect(res).toMatchObject({ ok: true, prep: { skipped: 'stale', missing: 1, refused: 1 } });
+  });
+
   it('runs the fan-out with branch issue-<n>-<slug> and the fixed reference, then records the worktree on the link', async () => {
     const { d, upserts } = deps();
     const res = await startHandoffWorktree(d, { item: { kind: 'issue', ref: issue }, repoPath: '/repo', workspaceId: 'ws-repo', agentCmd: 'codex --model=gpt-5' });
