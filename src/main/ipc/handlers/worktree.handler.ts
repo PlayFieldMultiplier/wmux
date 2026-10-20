@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
 import { git } from '../../git/git';
-import { resolveAccessiblePath } from './fs.handler';
+import { localSpelling, resolveAccessiblePath } from './fs.handler';
 import {
   parseWorktreePorcelain,
   validateGitRef,
@@ -133,7 +133,19 @@ async function resolveToplevel(cwd: string): Promise<string | null> {
   if (!safe) return null;
   const r = await git(['rev-parse', '--show-toplevel'], safe);
   const top = r.code === 0 ? r.stdout.trim() : '';
-  return top || null;
+  return top ? localSpelling(top) : null;
+}
+
+// The listed worktrees, their paths spelled as resolveToplevel spells them
+// (a mapped drive's folders from the drive, not its share), so a path the
+// renderer hands back matches. A worktree that cannot be spelled locally is
+// left out; null when that is the main one (the first block), which callers
+// read as the repository's own folder.
+const NOT_LOCAL = 'the repository is not in a local folder';
+function listedWorktrees(porcelain: string): WorktreeEntry[] | null {
+  const spelled = parseWorktreePorcelain(porcelain).map((e) => ({ e, path: localSpelling(e.path) }));
+  if (spelled.length > 0 && !spelled[0].path) return null;
+  return spelled.flatMap(({ e, path }) => (path ? [{ ...e, path }] : []));
 }
 
 // 경로 정규화 — 파일시스템 대소문자 정책 반영(Codex P2). Windows/macOS는
@@ -149,7 +161,7 @@ function normPath(p: string): string {
 async function resolveMainWorktree(top: string): Promise<string> {
   const r = await git(['worktree', 'list', '--porcelain'], top);
   if (r.code !== 0) return top;
-  return parseWorktreePorcelain(r.stdout)[0]?.path ?? top;
+  return listedWorktrees(r.stdout)?.[0]?.path ?? top;
 }
 
 async function listWorktrees(repoPath: string): Promise<WorktreeListResult> {
@@ -157,7 +169,8 @@ async function listWorktrees(repoPath: string): Promise<WorktreeListResult> {
   if (!top) return { ok: false, error: 'not a git repository' };
   const r = await git(['worktree', 'list', '--porcelain'], top);
   if (r.code !== 0) return { ok: false, error: r.stderr.slice(0, 300) };
-  const parsed = parseWorktreePorcelain(r.stdout);
+  const parsed = listedWorktrees(r.stdout);
+  if (!parsed) return { ok: false, error: NOT_LOCAL };
   // Every branch's last commit time in one call, however many worktrees.
   const refs = await git(['for-each-ref', '--format=%(refname:short)%09%(committerdate:unix)', 'refs/heads'], top);
   const dates = refs.code === 0 ? parseBranchDates(refs.stdout) : new Map<string, number>();
@@ -232,7 +245,8 @@ async function removeWorktree(repoPath: string, worktreePath: string): Promise<W
   // 실제 워크트리 목록에 있는 경로인지 재검증한다(임의 경로 인자 차단).
   const listed = await git(['worktree', 'list', '--porcelain'], top);
   if (listed.code !== 0) return { ok: false, error: listed.stderr.slice(0, 300) };
-  const entries = parseWorktreePorcelain(listed.stdout);
+  const entries = listedWorktrees(listed.stdout);
+  if (!entries) return { ok: false, error: NOT_LOCAL };
   const target = entries.find((e) => normPath(e.path) === normPath(worktreePath));
   if (!target) return { ok: false, error: 'not a listed worktree of this repository' };
   // 본 워크트리(porcelain 첫 블록) 제거 거부.
@@ -340,7 +354,8 @@ async function resolveMergeContext(repoPath: string): Promise<MergeCtx | { error
   if (!top) return { error: 'not a git repository' };
   const listed = await git(['worktree', 'list', '--porcelain'], top);
   if (listed.code !== 0) return { error: listed.stderr.slice(0, 300) };
-  const entries = parseWorktreePorcelain(listed.stdout);
+  const entries = listedWorktrees(listed.stdout);
+  if (!entries) return { error: NOT_LOCAL };
   const mainWt = entries[0]?.path ?? top;
   return { top, mainWt, repoKey: normPath(mainWt), entries };
 }

@@ -69,4 +69,38 @@ describe('diff:resolveRepo and diff:scanRepos accept local paths only', () => {
     await expect(invoke(IPC.DIFF_RESOLVE_REPO, local)).resolves.toEqual({ ok: true, repoPath: local });
     expect(gitMock).toHaveBeenCalledWith(['rev-parse', '--show-toplevel'], local);
   });
+
+  describe('on a mapped drive', () => {
+    // Z: leads to \\server\share; git answers its folders in share spelling.
+    const onZ = async (p: fs.PathLike) => {
+      const s = String(p);
+      if (s === 'Z:\\') return '\\\\server\\share\\';
+      return `\\\\server\\share\\${s.split(/Z:\\/)[1] ?? ''}`;
+    };
+    const gitTop = (cwd: string) => `//server/share/${cwd.split('Z:\\')[1].replace(/\\/g, '/')}\n`;
+
+    it('diff:resolveRepo answers in drive spelling, and the answer passes again', async () => {
+      realpathSpy.mockImplementation(onZ);
+      gitMock.mockImplementation(async (_args: string[], cwd: string) => ({ code: 0, stdout: gitTop(cwd), stderr: '' }));
+      await expect(invoke(IPC.DIFF_RESOLVE_REPO, 'Z:\\work\\alpha')).resolves.toEqual({ ok: true, repoPath: 'Z:\\work\\alpha' });
+      await expect(invoke(IPC.DIFF_RESOLVE_REPO, 'Z:\\work\\alpha')).resolves.toEqual({ ok: true, repoPath: 'Z:\\work\\alpha' });
+    });
+
+    it('diff:resolveRepo refuses a toplevel git reports on a share no drive leads to', async () => {
+      realpathSpy.mockImplementation(onZ);
+      gitMock.mockResolvedValue({ code: 0, stdout: '//elsewhere/share/repo\n', stderr: '' });
+      await expect(invoke(IPC.DIFF_RESOLVE_REPO, 'Z:\\work\\alpha')).resolves.toEqual({ ok: false });
+    });
+
+    it('diff:scanRepos answers every repo in drive spelling', async () => {
+      realpathSpy.mockImplementation(onZ);
+      gitMock.mockImplementation(async (_args: string[], cwd: string) => ({ code: 0, stdout: gitTop(cwd), stderr: '' }));
+      scanReposMock.mockImplementation(async (root: string, toplevelOf: (dir: string) => Promise<string | null>) =>
+        (await Promise.all(['alpha', 'beta'].map((n) => toplevelOf(`${root}\\${n}`)))).filter(Boolean));
+      await expect(invoke(IPC.DIFF_SCAN_REPOS, 'Z:\\work\\two')).resolves.toEqual({
+        ok: true,
+        repoPaths: ['Z:\\work\\two\\alpha', 'Z:\\work\\two\\beta'],
+      });
+    });
+  });
 });

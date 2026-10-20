@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isSensitivePath, resolveAccessiblePath } from '../fs.handler';
+import { isSensitivePath, localSpelling, resolveAccessiblePath } from '../fs.handler';
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -95,6 +95,25 @@ describe('fs.handler security helpers', () => {
       return '\\\\server\\share\\repo';
     });
     await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
+  });
+
+  it("spells git's paths on a mapped drive from the drive, and no other share", async () => {
+    const onDrive = (real: string) => async (p: fs.PathLike) => (p === 'Y:\\' ? '\\\\nas\\team\\' : real);
+    realpathSpy.mockImplementation(onDrive('\\\\nas\\team\\repo'));
+    await expect(resolveAccessiblePath('Y:\\repo')).resolves.toBe('Y:\\repo');
+    expect(localSpelling('//nas/team/repo/alpha')).toBe('Y:\\repo\\alpha');
+    expect(localSpelling('\\\\NAS\\Team\\repo')).toBe('Y:\\repo');
+    expect(localSpelling('//nas/teamwork/x')).toBeNull();
+    expect(localSpelling('//other/share/repo')).toBeNull();
+    expect(localSpelling('\\\\?\\UNC\\nas\\team\\repo')).toBeNull();
+    expect(localSpelling('/home/me/repo')).toBe('/home/me/repo');
+    // An answer handed back passes.
+    realpathSpy.mockImplementation(onDrive('\\\\nas\\team\\repo\\alpha'));
+    await expect(resolveAccessiblePath('Y:\\repo\\alpha')).resolves.toBe('Y:\\repo\\alpha');
+    // Once the drive root no longer leads to the share, the share maps to nothing.
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'Y:\\' ? 'Y:\\' : '\\\\nas\\team\\repo'));
+    await resolveAccessiblePath('Y:\\repo');
+    expect(localSpelling('//nas/team/repo')).toBeNull();
   });
 
   it('refuses a drive path whose real path is a device path', async () => {
