@@ -1,4 +1,4 @@
-import { app, BrowserWindow, powerMonitor, screen, shell } from 'electron';
+import { app, BrowserWindow, nativeTheme, powerMonitor, screen, shell } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
 import { platformChoice } from '../../shared/platform';
@@ -7,7 +7,7 @@ import { PLUGIN_PROTOCOL_SCHEME } from '../../shared/pluginHost';
 import { PREVIEW_PROTOCOL_SCHEME } from '../../shared/filePreview';
 import { attachFlashFrameAutoClear } from './flashFrame';
 import { windowDisplayedReporter } from './windowDisplayed';
-import { initialWindowsGlass, markWindowGlass, windowsGlassSupported, winWindowOptions } from './windowGlass';
+import { initialWindowsAppearance, initialWindowsGlass, markWindowGlass, windowsGlassSupported, winWindowOptions } from './windowGlass';
 import {
   DEFAULT_WINDOW_SIZE,
   MIN_WINDOW_SIZE,
@@ -172,10 +172,14 @@ function attachWindowStatePersistence(win: BrowserWindow): void {
   win.on('closed', stop);
 }
 
-export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown } = {}): BrowserWindow {
+export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown; windowAppearance?: unknown } = {}): BrowserWindow {
   // Windows window glass (windowGlass.ts): acrylic on Windows 11 22H2+ unless
   // the persisted level is Off; the renderer switches it at runtime after.
   const winGlass = initialWindowsGlass(windowsGlassSupported(process.platform, os.release()), opts.windowGlass);
+  // The acrylic's tone follows the app appearance; set it before the window
+  // exists, not when the renderer loads, so the first frames match the theme.
+  const bootAppearance = process.platform === 'win32' ? initialWindowsAppearance(winGlass, opts.windowAppearance) : null;
+  if (bootAppearance) nativeTheme.themeSource = bootAppearance;
   // #1362 — restore the placement the user left the window in. Off-screen or
   // corrupt saved state yields an empty plan and the 1280x800 default.
   let plan: RestorePlan = { maximized: false, fullScreen: false };

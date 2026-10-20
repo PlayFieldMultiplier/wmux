@@ -304,6 +304,22 @@ export class SessionManager {
   }
 
   /**
+   * The theme polarity the renderer last saved ('dark' | 'light'), read before
+   * the window exists so a glass window starts in its theme's tone (see
+   * initialWindowsAppearance). Raw value; the caller whitelists it.
+   */
+  readWindowAppearance(): unknown {
+    try {
+      const loaded = atomicReadJSONSync<SessionData>(this.filePath, {
+        validate: SessionManager.isSessionData,
+      });
+      return loaded?.windowAppearance ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The persisted per-site memory toggle, as a targeted read.
    *
    * Same shape and same reasoning as readAutoUpdateEnabled: the browser RPC

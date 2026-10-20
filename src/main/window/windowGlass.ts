@@ -45,6 +45,19 @@ export function initialWindowsGlass(supported: boolean, persistedLevel: unknown)
 }
 
 /**
+ * The app appearance to set before a glass window is built. Acrylic takes its
+ * tone from the app's appearance, which the renderer only sets once it has
+ * loaded; until then a dark theme on a light Windows showed light acrylic for
+ * the first frames. So main applies the polarity the renderer last saved
+ * (`windowAppearance` in session.json), or dark, the default theme's, when none
+ * was. Null when the window starts opaque: the system appearance stays.
+ */
+export function initialWindowsAppearance(glass: boolean, persisted: unknown): 'dark' | 'light' | null {
+  if (!glass) return null;
+  return persisted === 'light' ? 'light' : 'dark';
+}
+
+/**
  * The win32 window options. With glass off they are exactly the opaque
  * window wmux has always opened: a solid overlay strip and a solid background
  * in the default theme's frame colour, so the first paint never flashes.

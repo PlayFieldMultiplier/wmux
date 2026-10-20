@@ -3,6 +3,7 @@ import type { BrowserWindow } from 'electron';
 import {
   applyAppearance,
   applyWindowsGlass,
+  initialWindowsAppearance,
   initialWindowsGlass,
   isWindowGlassOn,
   markWindowGlass,
@@ -53,6 +54,21 @@ describe('initialWindowsGlass', () => {
     expect(initialWindowsGlass(true, 'off')).toBe(false);
     expect(initialWindowsGlass(false, 'soft')).toBe(false);
     expect(initialWindowsGlass(false, 'clear')).toBe(false);
+  });
+});
+
+describe('initialWindowsAppearance', () => {
+  it('is the saved polarity for a glass window, dark when none or an unknown value was saved', () => {
+    expect(initialWindowsAppearance(true, 'light')).toBe('light');
+    expect(initialWindowsAppearance(true, 'dark')).toBe('dark');
+    expect(initialWindowsAppearance(true, null)).toBe('dark');
+    expect(initialWindowsAppearance(true, 'system')).toBe('dark');
+    expect(initialWindowsAppearance(true, 42)).toBe('dark');
+  });
+
+  it('is null for an opaque window, so the system appearance stays', () => {
+    expect(initialWindowsAppearance(false, 'light')).toBeNull();
+    expect(initialWindowsAppearance(false, null)).toBeNull();
   });
 });
 

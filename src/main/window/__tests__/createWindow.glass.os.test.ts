@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   release: '10.0.26200',
   options: [] as Array<Record<string, unknown>>,
+  nativeTheme: { themeSource: 'system' as 'system' | 'light' | 'dark' },
 }));
 
 vi.mock('node:os', async (importOriginal) => {
@@ -34,6 +35,7 @@ vi.mock('electron', () => {
   return {
     app: { isPackaged: false },
     BrowserWindow,
+    nativeTheme: h.nativeTheme,
     powerMonitor: { on: vi.fn() },
     screen: { getAllDisplays: () => [] },
     shell: { openExternal: vi.fn() },
@@ -53,15 +55,16 @@ vi.mock('../windowState', () => ({
 
 const realPlatform = process.platform;
 
-async function optionsFor(platform: NodeJS.Platform, release: string, windowGlass: unknown) {
+async function optionsFor(platform: NodeJS.Platform, release: string, windowGlass: unknown, windowAppearance?: unknown) {
   Object.defineProperty(process, 'platform', { value: platform, configurable: true });
   h.release = release;
   h.options.length = 0;
+  h.nativeTheme.themeSource = 'system';
   vi.resetModules();
   const { createWindow } = await import('../createWindow');
   const { isWindowGlassOn } = await import('../windowGlass');
-  const win = createWindow({ deferLoad: true, windowGlass });
-  return { opts: h.options[0], glassOn: isWindowGlassOn(win) };
+  const win = createWindow({ deferLoad: true, windowGlass, windowAppearance });
+  return { opts: h.options[0], glassOn: isWindowGlassOn(win), themeSource: h.nativeTheme.themeSource };
 }
 
 beforeEach(() => {
@@ -112,5 +115,26 @@ describe('createWindow window glass options', () => {
     expect(opts.backgroundColor).toBe('#1A171D');
     expect(opts.backgroundMaterial).toBeUndefined();
     expect(opts.vibrancy).toBeUndefined();
+  });
+});
+
+describe('createWindow app appearance before a glass window exists', () => {
+  it('sets the saved polarity before building an acrylic window', async () => {
+    expect((await optionsFor('win32', '10.0.26200', 'soft', 'light')).themeSource).toBe('light');
+    expect((await optionsFor('win32', '10.0.26200', 'clear', 'dark')).themeSource).toBe('dark');
+  });
+
+  it('uses dark, the default theme, on a first run with nothing saved', async () => {
+    expect((await optionsFor('win32', '10.0.26200', null, null)).themeSource).toBe('dark');
+  });
+
+  it('keeps the system appearance when the window starts opaque', async () => {
+    expect((await optionsFor('win32', '10.0.26200', 'off', 'dark')).themeSource).toBe('system');
+    expect((await optionsFor('win32', '10.0.19045', 'soft', 'dark')).themeSource).toBe('system');
+  });
+
+  it('leaves macOS and Linux to the renderer', async () => {
+    expect((await optionsFor('darwin', '25.0.0', 'soft', 'light')).themeSource).toBe('system');
+    expect((await optionsFor('linux', '6.8.0', 'soft', 'light')).themeSource).toBe('system');
   });
 });
