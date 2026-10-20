@@ -16,6 +16,9 @@ export interface WorkflowResultBinding {
   headSha?: string;
   mergedPr?: number;
   summary: string;
+  /** When the task's verified completion was recorded (its ledger row's
+   *  last transition). Absent on results recorded before it existed. */
+  at?: number;
 }
 export interface WorkflowStep extends WorkflowStepInput {
   state: 'pending' | 'dispatching' | 'waiting' | 'completed' | 'blocked';
@@ -40,6 +43,18 @@ export interface BotWorkflow {
   revision: number;
   createdAt: number;
   updatedAt: number;
+}
+/** Main's fixed blocking reasons, which the owner's view words in their own
+ *  language. Any other reason is shown as written. */
+export const WORKFLOW_BLOCK = {
+  cancelled: 'Cancelled by owner; remaining steps will not run. Any dispatched worker is left running.',
+  stopped: 'Stopped by owner; this workflow will not resume automatically.',
+  multipleTasks: 'More than one task claims this step; inspect tasks before continuing.',
+  unknownDispatch: 'Dispatch outcome is unknown after restart. Inspect tasks; this step will not be resent automatically.',
+  bindingChanged: 'The step task binding changed.',
+} as const;
+export function workflowTaskBlocked(taskId: string, status: string): string {
+  return `Task ${taskId} is ${status}; no verified result permits the next step.`;
 }
 export function workflowReadyFactId(workflow: Pick<BotWorkflow, 'id' | 'revision'>): string {
   return `workflow.ready:${workflow.id}@${workflow.revision}`;

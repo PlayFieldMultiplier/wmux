@@ -417,6 +417,32 @@
   color: var(--accent);
 }
 .wmux-bots-work-link:hover { text-decoration: underline; }
+/* A bot's saved workflow (botsWorkflow.ts) wears the work card: why it
+   stopped and its last verified result in 12px, the summary two lines at
+   most, Cancel workflow at its foot. */
+.wmux-bots-workflow-reason {
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-sub);
+  overflow-wrap: anywhere;
+}
+.wmux-bots-workflow-last {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-sub);
+  overflow-wrap: anywhere;
+}
+.wmux-bots-workflow-summary {
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.wmux-bots-workflow-foot { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-top: 8px; }
+.wmux-bots-workflow-foot > [role='group'] { align-self: stretch; }
 
 /* A PR or issue link in a message: its mark, #N and its title. */
 .wmux-bots-ref-chip {
