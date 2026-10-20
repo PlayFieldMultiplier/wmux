@@ -336,7 +336,10 @@ export function noticeText(card: Pick<RoomCard, 'actor' | 'body' | 'notice'>, t:
   const key = `room.notice.${notice.code}`;
   // A PR closed with no title known says only its number; a worker card
   // written before it named its task says what happened only.
-  const titleKey = UNTITLED_NOTICE_CODES.has(notice.code) && args.title === undefined ? `${key}.untitled` : key;
+  const titleKey = UNTITLED_NOTICE_CODES.has(notice.code) && args.title === undefined ? `${key}.untitled`
+    // A no-changes skip names its task (a card written before it did does not).
+    : notice.code === 'gate.skipped' && typeof args.title === 'string' ? `${key}.titled`
+      : key;
   const bodyKey = args.kind === 'research' && (RESUMABLE_NOTICE_CODES.has(notice.code) || notice.code === 'task.keptFolderCleaned') ? `${key}.body.research`
     // A research report with its graded evidence says how much was verified
     // (a card written before the grade has no counts).

@@ -1944,6 +1944,7 @@ export const en = {
   'room.notice.gate.killed': "Gate was killed: task left open",
   'room.notice.gate.failed': "Gate failed (exit {exit}): task left open",
   'room.notice.gate.skipped': "Gate skipped ({reason}): task left open",
+  'room.notice.gate.skipped.titled': "Gate skipped for {title} ({reason}): task left open",
   'room.notice.gate.reason.gate_unavailable': "the gate command could not start",
   'room.notice.gate.reason.no_gate_command': "no gate command is set",
   'room.notice.gate.reason.no_changes': "the task made no changes",

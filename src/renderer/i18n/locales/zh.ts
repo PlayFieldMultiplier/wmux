@@ -2012,6 +2012,7 @@ export const zh = {
   'room.notice.gate.killed': "检查被终止：任务保持打开",
   'room.notice.gate.failed': "检查失败（退出码 {exit}）：任务保持打开",
   'room.notice.gate.skipped': "检查已跳过（{reason}）：任务保持打开",
+  'room.notice.gate.skipped.titled': "{title} 的检查已跳过（{reason}）：任务保持打开",
   'room.notice.gate.reason.gate_unavailable': "检查命令无法启动",
   'room.notice.gate.reason.no_gate_command': "未设置检查命令",
   'room.notice.gate.reason.no_changes': "任务没有做出任何更改",

@@ -81,7 +81,7 @@ import { pickFolderDialog, templateJob } from '../Settings/FactoryTab';
 import BotAvatar, { botHueIndex, botIdentityColor, noteRemovedBotHues } from '../Room/BotAvatar';
 import { RoomAvatar } from './BotsAvatar';
 import { awaitsApproval, conversationCards, groupViewCards, livePlanIds, taskBubbles, conversationTurns, type BotTreeRow, type BotWorker, type Conversation, type RoomEntry } from './botsModel';
-import BotsWorkerTree, { treeRowLabel } from './BotsWorkerTree';
+import BotsWorkerTree, { TaskVerification, treeRowLabel } from './BotsWorkerTree';
 import { loadWholeThread } from './useBots';
 import { loadRoomActors } from '../../hooks/useRoomSync';
 import { useShallow } from 'zustand/react/shallow';
@@ -814,12 +814,7 @@ function TaskRow({ task, t, resumePort, readOnly, shownId, onOpen }: { task: Bot
       <span className="min-w-0 flex-1 truncate text-[12px]">
         <span className="text-[var(--text-main)]">{task.title}</span>
         <span className="text-[var(--text-muted)]">{` · ${error ?? taskRailState(task, t)}`}</span>
-        {!waiting && task.verification && task.verification.state !== 'verified' && (
-          <span
-            data-bots-task-verification={task.verification.state}
-            className="text-[var(--accent-yellow)]"
-          >{` · ${t(task.verification.state === 'partial' ? 'botsPage.task.evidencePartial' : 'botsPage.task.notVerified', { verified: task.verification.verified, total: task.verification.total })}`}</span>
-        )}
+        {!waiting && <TaskVerification verification={task.verification} t={t} className="text-[var(--accent-yellow)]" prefix=" · " />}
         {!waiting && task.folder === 'kept_dirty' && <span data-bots-task-folder-kept className="text-[var(--text-muted)]">{` · ${t('botsPage.worker.folderKept')}`}</span>}
       </span>
       {!waiting && paneOpen && (

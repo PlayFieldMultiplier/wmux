@@ -1921,6 +1921,7 @@ export const pl = {
   'room.notice.gate.killed': "Bramka przerwana: zadanie pozostaje otwarte",
   'room.notice.gate.failed': "Bramka nie przeszła (kod {exit}): zadanie pozostaje otwarte",
   'room.notice.gate.skipped': "Bramka pominięta ({reason}): zadanie pozostaje otwarte",
+  'room.notice.gate.skipped.titled': "Bramka pominięta dla {title} ({reason}): zadanie pozostaje otwarte",
   'room.notice.gate.reason.gate_unavailable': "nie udało się uruchomić polecenia bramki",
   'room.notice.gate.reason.no_gate_command': "nie ustawiono polecenia bramki",
   'room.notice.gate.reason.no_changes': "zadanie niczego nie zmieniło",

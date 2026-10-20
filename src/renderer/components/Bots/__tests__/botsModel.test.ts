@@ -199,6 +199,16 @@ describe('botWorkers from the bot\'s tasks', () => {
     expect(tree.map((r) => [r.workspaceId, r.state, !!r.folderKept])).toEqual([['t1', 'cancelled', true], ['t2', 'cancelled', false]]);
   });
 
+  it('a reported task\'s evidence grade rides on its row; a task with none (a code task, before a report) has none', () => {
+    const tasks = [
+      view('a', 't1', 'coded', { status: 'review_requested', updatedAt: 3, verification: { state: 'missing', verified: 0, total: 0 } }),
+      view('b', 't2', 'coded', { status: 'review_requested', updatedAt: 2, verification: { state: 'partial', verified: 1, total: 2 } }),
+      view('c', 't3', 'coded', { status: 'review_requested', updatedAt: 1 }),
+    ];
+    const tree = botWorkerTree(LEAD, [], tasks, names);
+    expect(tree.map((r) => [r.workspaceId, r.verification?.state ?? null])).toEqual([['t1', 'missing'], ['t2', 'partial'], ['t3', null]]);
+  });
+
   it('a task the owner stopped is cancelled, a neutral state with no error mark; a failed one stays failed', () => {
     const tasks = [
       view('a', 't1', 'closed', { updatedAt: 2, stage: 'cancelled', status: 'cancelled' }),

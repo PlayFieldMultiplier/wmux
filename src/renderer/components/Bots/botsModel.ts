@@ -149,6 +149,8 @@ export interface BotTreeRow {
   needsInput?: boolean;
   /** What a worker waiting on input waits for (its task's summary). */
   summary?: string;
+  /** A reported non-code task's evidence grade (BotTaskView.verification). */
+  verification?: BotTaskView['verification'];
 }
 
 /** A group chat the owner made (shared/botGroup.ts). */
@@ -512,6 +514,7 @@ export function botWorkerTree(
       resumable: task.worker === 'resumable',
       ...(review && (task.worker === 'resumable' || task.worker === 'stopped') ? { workerPaused: true } : {}),
       ...(task.folder === 'kept_dirty' ? { folderKept: true } : {}),
+      ...(task.verification ? { verification: task.verification } : {}),
     });
   }
   const others: BotTreeRow[] = [];
