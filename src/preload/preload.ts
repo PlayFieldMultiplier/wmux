@@ -58,6 +58,7 @@ import type {
   RegisterMcpResult,
   SampleTaskStartPayload,
 } from '../shared/firstRun';
+import type { AgentSetupStatus } from '../shared/agentSetup';
 import { isFileDrag } from '../shared/dragDrop';
 import { parseWindowsBuildNumber } from '../shared/platform';
 import type { NotificationCategory } from '../shared/types';
@@ -1709,6 +1710,7 @@ const electronAPI = {
     dismiss: () => ipcRenderer.invoke(IPC.FIRST_RUN_DISMISS) as Promise<void>,
     reopen: () => ipcRenderer.invoke(IPC.FIRST_RUN_REOPEN) as Promise<FirstRunCheckResult>,
     registerMcp: () => ipcRenderer.invoke(IPC.FIRST_RUN_REGISTER_MCP) as Promise<RegisterMcpResult>,
+    agentStatus: () => ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_STATUS) as Promise<AgentSetupStatus[]>,
     startSampleTask: (payload: SampleTaskStartPayload) =>
       ipcRenderer.invoke(IPC.FIRST_RUN_START_SAMPLE_TASK, payload) as Promise<void>,
     onSampleTaskReady: (callback: () => void) => {

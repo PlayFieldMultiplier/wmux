@@ -16,6 +16,7 @@ import type { BrowserWindow } from 'electron';
 import { IPC } from '../../shared/constants';
 import { sanitizePtyText } from '../../shared/types';
 import { ClaudeDetector } from './ClaudeDetector';
+import { AgentSetupDetector } from './AgentSetupDetector';
 import { SampleTaskRunner, type PtyDataSource } from './SampleTaskRunner';
 import type { PTYManager } from '../pty/PTYManager';
 import type { PTYBridge } from '../pty/PTYBridge';
@@ -26,6 +27,7 @@ import type {
   FirstRunCheckResult,
   RegisterMcpResult,
 } from '../../shared/firstRun';
+import type { AgentSetupStatus } from '../../shared/agentSetup';
 
 const MARKER_FILENAME = '.first-run';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -68,6 +70,7 @@ function buildLocalSource(ptyManager: PTYManager, ptyBridge: PTYBridge, ptyId: s
 
 export class FirstRunOrchestrator {
   private detector = new ClaudeDetector();
+  private agentDetector = new AgentSetupDetector();
   private runner = new SampleTaskRunner();
   private activeAbort: AbortController | null = null;
 
@@ -87,6 +90,14 @@ export class FirstRunOrchestrator {
       this.readCompletedAt(),
     ]);
     return completedAt !== undefined ? { shown, status, completedAt } : { shown, status };
+  }
+
+  /**
+   * The agent cards' status. Kept off check()/reopen(): it spawns each agent's
+   * --version and sign-in probes, and the wizard must not wait on those to open.
+   */
+  async agentStatus(): Promise<AgentSetupStatus[]> {
+    return this.agentDetector.detectAll();
   }
 
   async complete(): Promise<void> {

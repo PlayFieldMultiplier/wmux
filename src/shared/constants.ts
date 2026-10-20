@@ -764,6 +764,8 @@ export const IPC = {
   FIRST_RUN_REOPEN: 'first-run:reopen',
   FIRST_RUN_REGISTER_MCP: 'first-run:register-mcp',
   FIRST_RUN_START_SAMPLE_TASK: 'first-run:start-sample-task',
+  /** Agent-ready step: installed / version / signed in, per agent (spawns probes). */
+  FIRST_RUN_AGENT_STATUS: 'first-run:agent-status',
   // First-run wizard event channels (renderer-side `on()` listeners)
   FIRST_RUN_SAMPLE_TASK_READY: 'first-run:sample-task-ready',
   FIRST_RUN_SAMPLE_TASK_TIMEOUT: 'first-run:sample-task-timeout',
