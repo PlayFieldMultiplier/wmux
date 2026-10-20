@@ -38,6 +38,7 @@ import { FactorySettingsStore, factorySettingsPath, onFactorySettingsChanged, se
 import { BotRuntime, BotSessionStore, botSessionsPath, setBotRuntime } from '../../factory/BotRuntime';
 import { createDefaultBotEngineFactory, runnableDefaultEngine, type BotEngineFactory } from '../../factory/botEngines';
 import { recordWorkerEnd } from '../../factory/budget';
+import { workerStopsConfirmed } from '../../factory/workerRunEnds';
 import { botAccountName, botAccountQuota, type ClaudeUsageCache } from '../../factory/botQuota';
 import { openBotWorkers } from '../../factory/openBotWorkers';
 import { FANOUT_LIVE_TASK_CAP } from '../../worktask/fanoutGuards';
@@ -619,11 +620,15 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
         offWake = installBotFanoutWake({
           enqueue: (input) => queue.enqueue(input),
           // A usage change alone sends no event: tell the window, so the
-          // profile's running workers and worker time move on.
+          // profile's running workers and worker time move on. The run
+          // itself ends once its worker stopped (workerRunEnds.ts); only
+          // while nothing tells that does the row's end end it.
           onWorkerEnded: (botId, taskId) => {
-            store.mutateUsage(botId, (u) => {
-              recordWorkerEnd(u, taskId, Date.now());
-            });
+            if (!workerStopsConfirmed()) {
+              store.mutateUsage(botId, (u) => {
+                recordWorkerEnd(u, taskId, Date.now());
+              });
+            }
             send({ type: 'bots-changed' });
           },
           // A verify task's report wakes its verifier once, from the verify
