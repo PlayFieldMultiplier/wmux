@@ -113,6 +113,19 @@ export function claudeProjectRoots(sessionEnv?: Record<string, string>): string[
   return roots;
 }
 
+/**
+ * The one directory the pane's Claude reads and writes its transcripts under:
+ * `$CLAUDE_CONFIG_DIR/projects` when the session names an account folder, else
+ * `~/.claude/projects`. Claude never looks in the default root once
+ * `CLAUDE_CONFIG_DIR` is set, so a file there is another account's. Finding a
+ * transcript searches this root alone; claudeProjectRoots above is where a
+ * transcript is allowed to be, which is wider.
+ */
+export function claudeTranscriptRoot(sessionEnv?: Record<string, string>): string {
+  const configured = sessionEnv?.['CLAUDE_CONFIG_DIR'] || process.env['CLAUDE_CONFIG_DIR'];
+  return configured ? path.join(configured, 'projects') : path.join(os.homedir(), '.claude', 'projects');
+}
+
 export interface TranscriptPathCheck {
   ok: boolean;
   /** Why it was refused, for the warn log. Empty when `ok`. */

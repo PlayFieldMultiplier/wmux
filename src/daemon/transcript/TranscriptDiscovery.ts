@@ -38,7 +38,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { claudeProjectRoots } from '../hooks/transcriptPathGuard';
+import { claudeTranscriptRoot } from '../hooks/transcriptPathGuard';
 import { watchTarget } from '../../shared/watchTarget';
 import type { AgentSlug } from '../../shared/agentIdentity';
 
@@ -47,7 +47,7 @@ export const DISCOVERABLE_AGENT = 'claude';
 // TODO(#1904): transcript roots are per-agent code (rootsFor below).
 export type DiscoverableAgent = Extract<AgentSlug, 'claude' | 'codex'>;
 import { checkNativeTranscriptPath, codexSessionRoot } from './providers';
-const rootsFor = (agent: DiscoverableAgent, env?: Record<string, string>) => agent === 'codex' ? [codexSessionRoot(env)] : claudeProjectRoots(env);
+const rootsFor = (agent: DiscoverableAgent, env?: Record<string, string>) => agent === 'codex' ? [codexSessionRoot(env)] : [claudeTranscriptRoot(env)];
 
 /**
  * Immediate subdirectories examined per root, per scan. A projects root holds
@@ -114,9 +114,10 @@ interface SearchState {
 }
 
 /**
- * Every `<agentSessionId>.jsonl` sitting one level under a Claude projects
- * root, newest-root-first. Pure apart from the filesystem read, and exported so
- * the boundedness (one level, capped fan-out) is directly testable.
+ * Every `<agentSessionId>.jsonl` sitting one level under the projects root the
+ * pane's Claude uses (claudeTranscriptRoot: its `CLAUDE_CONFIG_DIR` account, else
+ * the default). Pure apart from the filesystem read, and exported so the
+ * boundedness (one level, capped fan-out) is directly testable.
  *
  * Symlinked entries ARE followed — a relocated project directory is a real
  * setup — because containment is judged afterwards by `checkTranscriptPath` on
@@ -136,7 +137,7 @@ export function scanForTranscript(
   if (/[\\/\0]/.test(agentSessionId)) return [];
   const target = `${agentSessionId}.jsonl`;
   const found: string[] = [];
-  for (const root of claudeProjectRoots(sessionEnv)) {
+  for (const root of [claudeTranscriptRoot(sessionEnv)]) {
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(root, { withFileTypes: true });
