@@ -21,6 +21,7 @@ import type {
   A2aRemoteHostsExposedResult,
   A2aRemoteLinkProposeParams,
   A2aRemoteLinkResult,
+  A2aRemoteOffersListResult,
   A2aRemoteLinksListResult,
   A2aRemotePaneGoneParams,
   A2aRemoteHostsListResult,
@@ -685,6 +686,10 @@ export class DaemonClient extends EventEmitter {
 
   async a2aRemoteLinkAction(action: 'accept' | 'reject' | 'revoke' | 'refresh', linkId: string): Promise<A2aRemoteLinkResult> {
     return (await this.rpc(`a2a.remote.links.${action}`, { linkId }, { timeoutMs: 30_000 })) as A2aRemoteLinkResult;
+  }
+
+  async a2aRemoteOffersList(): Promise<A2aRemoteOffersListResult> {
+    return (await this.rpc('a2a.remote.offers.list', {})) as A2aRemoteOffersListResult;
   }
 
   async a2aRemotePaneGone(params: A2aRemotePaneGoneParams): Promise<{ ok: true; broken: number }> {

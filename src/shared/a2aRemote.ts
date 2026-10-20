@@ -505,6 +505,12 @@ export interface A2aLinkProposeResponse {
   state: 'proposed-in' | 'active';
   /** The link's version on the receiver (present with 'active'). */
   version?: number;
+  /**
+   * With 'proposed-in': the receiver took the offer but could not finish the
+   * link yet; the same proposal sent again finishes it. An older receiver
+   * never sets it (its human accepts).
+   */
+  offerClaimed?: boolean;
 }
 
 /** `409 offer-closed` answer: why the offer can no longer be taken. */
@@ -724,6 +730,12 @@ export interface A2aLinkOfferRecordV1 {
   /** Sharer only: the share added this pane (and maybe its workspace) to that PC's exposure. */
   addedExposure?: boolean;
   addedWorkspace?: boolean;
+  /**
+   * Sharer only: that PC's exposure record as this PC last wrote it
+   * (`updatedAt`). A different value means someone else saved the list since
+   * (an older build's checklist), so nothing is put back.
+   */
+  exposureAt?: string;
   createdAt: string;
   updatedAt: string;
   /** Sharer: authoritative. Receiver: receipt time + ttlMs, for display. */

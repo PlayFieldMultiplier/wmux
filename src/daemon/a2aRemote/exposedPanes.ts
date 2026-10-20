@@ -26,6 +26,15 @@ export interface ExposureCheck {
 
 export class ExposedPaneCache {
   private panes: A2aExposedPane[] = [];
+  private published = false;
+
+  /**
+   * The app has published since this daemon started. Before that the
+   * closed-pane notices the app computes on reconnect have not run either.
+   */
+  hasPublished(): boolean {
+    return this.published;
+  }
 
   /** Replace the snapshot. Malformed entries are dropped. Returns how many were kept. */
   publish(raw: unknown): number {
@@ -42,6 +51,7 @@ export class ExposedPaneCache {
       next.push(pane);
     }
     this.panes = next;
+    this.published = true;
     return next.length;
   }
 

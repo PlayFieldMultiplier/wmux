@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { A2A_FEATURE_LINK_OFFER, A2A_OFFER_TTL_MS, A2A_ROUTES, type A2aRemoteHostRecordV1 } from '../../../shared/a2aRemote';
 import type { A2aRemoteOfferResult } from '../../../shared/rpc';
 import { ExposedPaneCache } from '../exposedPanes';
@@ -166,6 +166,37 @@ describe('a2a.remote.offers.accept', () => {
     store.end(OFFER, 'withdrawn', 'withdrawn');
     expect(await accept()).toEqual({ ok: false, error: 'offer-closed', reason: 'withdrawn' });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('a2a.remote.offers.accept — review fixes', () => {
+  it('a Check while the POST is still out does not drop the proposal', async () => {
+    let release: () => void = () => undefined;
+    script = async (method, _p, body) => {
+      if (method === 'GET') return { status: 404, json: { ok: false, error: 'unknown-link' } };
+      await new Promise<void>((r) => { release = r; });
+      return { status: 200, json: { linkId: (body as { linkId: string }).linkId, state: 'active', version: 2 } };
+    };
+    const pending = accept();
+    await vi.waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true), { timeout: 5_000 });
+    const linkId = store.get(OFFER)!.pendingLinkId!;
+    await rpc('a2a.remote.links.refresh', { linkId });
+    expect(links.get(linkId)?.state).toBe('proposed-out');
+    release();
+    expect(await pending).toMatchObject({ ok: true, offer: { state: 'accepted' }, link: { linkId, state: 'active' } });
+  });
+
+  it('a sharer that took the offer but has not finished the link keeps it open; the same proposal again finishes it', async () => {
+    let finished = false;
+    script = async (_m, _p, body) => {
+      const linkId = (body as { linkId: string }).linkId;
+      return finished ? { status: 200, json: { linkId, state: 'active', version: 2 } } : { status: 200, json: { linkId, state: 'proposed-in', offerClaimed: true } };
+    };
+    expect(await accept()).toMatchObject({ ok: false, error: 'unavailable' });
+    const linkId = store.get(OFFER)!.pendingLinkId!;
+    expect(store.get(OFFER)?.state).toBe('open');
+    finished = true;
+    expect(await accept()).toMatchObject({ ok: true, link: { linkId, state: 'active' } });
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { A2aExposureCandidate, A2aRemotePaneGoneParams, A2aRemotePaneSnapshot } from '../../../shared/rpc';
-import { A2A_BRAIN_GRACE_MS, A2aExposurePublisher, coercePaneSnapshot, diffGonePanes, goneForLinks } from '../exposurePublisher';
-import type { A2aLinkRecordV1 } from '../../../shared/a2aRemote';
+import { A2A_BRAIN_GRACE_MS, A2aExposurePublisher, coercePaneSnapshot, diffGonePanes, goneForLinks, goneForOffers } from '../exposurePublisher';
+import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
 
 const snap = (ws: Array<[string, string[]]>): A2aRemotePaneSnapshot => ({
   workspaces: ws.map(([id, panes]) => ({ id, name: `name-${id}`, panes: panes.map((paneId) => ({ paneId, cwd: `/repo/${paneId}` })) })),
@@ -229,5 +229,25 @@ describe('A2aExposurePublisher Moa blips', () => {
     await b.pub.accept(tree('present'));
     await b.pub.accept(tree('off'));
     expect(b.gone).toEqual([{ workspaceId: 'hq', reason: 'workspace-gone', endpoint: 'brain' }]);
+  });
+});
+
+describe('goneForOffers', () => {
+  const offer = (o: Partial<A2aLinkOfferRecordV1>): A2aLinkOfferRecordV1 => ({
+    v: 1, offerId: '33333333-3333-4333-8333-333333333333', side: 'out', hostId: '11111111-1111-4111-8111-111111111111',
+    end: { kind: 'pane', workspaceId: 'ws1', workspaceName: 'API', paneId: 'p1' }, allow: { outbound: true, inbound: true },
+    state: 'open', createdAt: '', updatedAt: '', expiresAt: '', ...o,
+  });
+  const tree = { workspaces: [{ id: 'ws1', name: 'API', panes: [{ paneId: 'p2' }] }, { id: 'ws2', name: 'Web', panes: [{ paneId: 'p3' }] }] };
+
+  it('ends the open shares whose pane closed, moved or lost its workspace while the daemon was away', () => {
+    expect(goneForOffers([offer({})], tree)).toEqual([{ workspaceId: 'ws1', paneId: 'p1', reason: 'pane-closed' }]);
+    expect(goneForOffers([offer({ end: { kind: 'pane', workspaceId: 'ws1', workspaceName: 'API', paneId: 'p3' } })], tree)).toEqual([{ workspaceId: 'ws1', paneId: 'p3', reason: 'pane-moved' }]);
+    expect(goneForOffers([offer({ end: { kind: 'pane', workspaceId: 'ws9', workspaceName: 'X', paneId: 'p9' } })], tree)).toEqual([{ workspaceId: 'ws9', reason: 'workspace-gone' }]);
+  });
+
+  it('leaves live panes, ended shares and received offers alone', () => {
+    expect(goneForOffers([offer({ end: { kind: 'pane', workspaceId: 'ws1', workspaceName: 'API', paneId: 'p2' } })], tree)).toEqual([]);
+    expect(goneForOffers([offer({ state: 'withdrawn', endedReason: 'withdrawn' }), offer({ side: 'in' })], tree)).toEqual([]);
   });
 });

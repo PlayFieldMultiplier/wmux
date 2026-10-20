@@ -44,22 +44,26 @@ interface Side {
   notices: Array<{ hostId: string; linkId: string; state: string; version: number }>;
   events: A2aOfferEvent[];
   clock: { now: number };
-  failWrites: { on: boolean };
+  failWrites: { on: boolean; exposure: boolean };
 }
 
-function makeSide(hostId: string, other: string, opts: { features?: string[] | null; dir?: string; clock?: { now: number } } = {}): Side {
+function makeSide(hostId: string, other: string, opts: { features?: string[] | null; dir?: string; clock?: { now: number }; appReady?: () => boolean } = {}): Side {
   const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-offers-'));
   if (!opts.dir) dirs.push(dir);
   const clock = opts.clock ?? { now: 1_700_000_000_000 };
-  const failWrites = { on: false };
+  const failWrites = { on: false, exposure: false };
   const write = (p: string, d: unknown): void => {
     if (failWrites.on && p.endsWith('links.json')) throw new Error('disk full');
+    atomicWriteJSONSync(p, d);
+  };
+  const exposureWrite = (p: string, d: unknown): void => {
+    if (failWrites.exposure) throw new Error('disk full');
     atomicWriteJSONSync(p, d);
   };
   const base = { dir, now: () => clock.now, scheduleHarden: (): void => undefined };
   let offersRef: A2aOffers | null = null;
   const links = new LinkStore({ ...base, write, onTransition: (l) => offersRef?.onLinkTransition(l) });
-  const exposures = new ExposureStore(base);
+  const exposures = new ExposureStore({ ...base, write: exposureWrite });
   const store = new OfferStore(base);
   const outbox: Side['outbox'] = [];
   const notices: Side['notices'] = [];
@@ -77,6 +81,7 @@ function makeSide(hostId: string, other: string, opts: { features?: string[] | n
     broadcast: (e) => void events.push(e),
     log: () => undefined,
     now: () => clock.now,
+    ...(opts.appReady ? { appReady: opts.appReady } : {}),
   });
   offersRef = offers;
   return { hostId, dir, store, links, exposures, offers, outbox, notices, events, clock, failWrites };
@@ -401,5 +406,91 @@ describe('share offers — an older build reading this build’s outbox', () => 
     expect(reopened.epoch).toBe(outbox.epoch);
     expect(reopened.pending(A).map((r) => r.envelope.kind)).toEqual(['reply', 'link', 'link']);
     expect(reopened.pending(A).slice(1).map((r) => r.envelope.link?.state)).toEqual(['offer', 'offer-withdrawn']);
+  });
+});
+
+describe('share offers — review fixes (consent stays bound, debts stay owed)', () => {
+  it('an accepted offer whose link is gone is spent: replaying it with another pane or wider directions is refused', async () => {
+    const narrowB = makeSide(B, A);
+    const a = makeSide(A, B);
+    const made = narrowB.offers.create({ hostId: A, end: B_PANE, allow: { outbound: false, inbound: true } });
+    if (!made.ok) throw new Error('create failed');
+    await flush(narrowB, a);
+    const { link, request } = proposalFor(a, made.offer.offerId, A_PANE, { outbound: true, inbound: false });
+    expect(narrowB.offers.acceptProposal(A, request).status).toBe(200);
+    narrowB.links.revoke(link.linkId, 'local');
+    // The revoked link is pruned from links.json later on.
+    const realGet = narrowB.links.get.bind(narrowB.links);
+    narrowB.links.get = (id: string) => (id === link.linkId ? undefined : realGet(id));
+    const replay = { ...request, to: { kind: 'pane' as const, workspaceId: 'ws-secret', paneId: 'pane-9' }, allow: both };
+    expect(narrowB.offers.acceptProposal(A, replay)).toEqual({ status: 409, body: { ok: false, error: 'offer-closed', reason: 'used' } });
+  });
+
+  it('a claim whose link was never made is judged like a fresh answer', async () => {
+    const narrowB = makeSide(B, A);
+    const a = makeSide(A, B);
+    const made = narrowB.offers.create({ hostId: A, end: B_PANE, allow: { outbound: false, inbound: true } });
+    if (!made.ok) throw new Error('create failed');
+    await flush(narrowB, a);
+    const { link, request } = proposalFor(a, made.offer.offerId, A_PANE, both);
+    narrowB.store.claim(made.offer.offerId, link.linkId);
+    expect(narrowB.offers.acceptProposal(A, request).status).toBe(403);
+    expect(narrowB.links.list()).toEqual([]);
+  });
+
+  it('the offer is recorded before the pane is shown: a failed exposure write leaves nothing shown', () => {
+    const b = makeSide(B, A);
+    b.failWrites.exposure = true;
+    expect(b.offers.create({ hostId: A, end: B_PANE, allow: both })).toMatchObject({ ok: false, error: 'unavailable' });
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+    expect(b.store.list()).toMatchObject([{ state: 'withdrawn' }]);
+    expect(b.outbox).toEqual([]);
+  });
+
+  it('a put-back whose write failed stays owed and lands later', async () => {
+    const { b, offerId } = await shared();
+    b.failWrites.exposure = true;
+    b.offers.withdraw(offerId);
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+    expect(b.store.get(offerId)?.addedExposure).toBe(true);
+    b.failWrites.exposure = false;
+    b.offers.reconcileExposure();
+    expect(b.store.get(offerId)?.addedExposure).toBeFalsy();
+    expect(new ExposureStore({ dir: b.dir, scheduleHarden: () => undefined }).isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+  });
+
+  it('a pane still used by another live link stays shown until that link ends too', async () => {
+    const { a, b, offerId } = await shared();
+    const { link, request } = proposalFor(a, offerId);
+    b.offers.acceptProposal(A, request);
+    const other = crypto.randomUUID();
+    b.links.receiveProposal({ linkId: other, local: { kind: 'pane', workspaceId: 'ws-api', paneId: 'pane-1' }, remote: { hostId: A, kind: 'pane', workspaceId: 'ws-web', paneId: 'pane-b' }, allow: both });
+    b.links.accept(other);
+    b.links.revoke(link.linkId, 'local');
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(true);
+    b.links.revoke(other, 'local');
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(false);
+  });
+
+  it('a list saved elsewhere since (an older build’s checklist) is left as it is', async () => {
+    const { b, offerId } = await shared();
+    b.clock.now += 1_000;
+    // Not the RPC: an older build writes exposure.json without knowing about offers.
+    b.exposures.set(A, { workspaceIds: ['ws-api'], paneIds: { 'ws-api': ['pane-1'] } });
+    b.offers.withdraw(offerId);
+    expect(b.exposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(true);
+  });
+
+  it('nothing is accepted before the app has published its panes since the daemon started', async () => {
+    let ready = false;
+    const b = makeSide(B, A, { appReady: () => ready });
+    const a = makeSide(A, B);
+    const made = b.offers.create({ hostId: A, end: B_PANE, allow: both });
+    if (!made.ok) throw new Error('create failed');
+    await flush(b, a);
+    const { request } = proposalFor(a, made.offer.offerId);
+    expect(b.offers.acceptProposal(A, request)).toEqual({ status: 503, body: { ok: false, error: 'unavailable' } });
+    ready = true;
+    expect(b.offers.acceptProposal(A, request).status).toBe(200);
   });
 });

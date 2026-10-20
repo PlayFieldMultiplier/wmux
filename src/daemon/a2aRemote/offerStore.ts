@@ -250,7 +250,23 @@ export class OfferStore {
   forgetExposure(offerId: string): void {
     const rec = this.offers.get(offerId);
     if (!rec || !rec.addedExposure) return;
-    this.commitRecord(rec, { ...rec, addedExposure: false, addedWorkspace: false }, false);
+    const next = { ...rec, addedExposure: false, addedWorkspace: false };
+    delete next.exposureAt;
+    this.commitRecord(rec, next, false);
+  }
+
+  /** This PC wrote `hostId`'s exposure (at `at`): every share still owing it something records that. */
+  stampExposure(hostId: HostId, at: string | undefined): void {
+    const owing = [...this.offers.values()].filter((r) => r.side === 'out' && r.hostId === hostId && r.addedExposure);
+    if (owing.length === 0) return;
+    this.assertWritable();
+    for (const r of owing) {
+      const next = { ...r };
+      if (at) next.exposureAt = at;
+      else delete next.exposureAt;
+      this.offers.set(r.offerId, next);
+    }
+    this.persist();
   }
 
   /** A human edited the exposure for `hostId`: that list is the truth now, nothing is put back. */
@@ -348,12 +364,13 @@ export class OfferStore {
   }
 
   /**
-   * Keep the newest `OFFERS_TERMINAL_KEEP` ended offers. An accepted offer
-   * that still owes its exposure back (its link is live) is never pruned.
+   * Keep the newest `OFFERS_TERMINAL_KEEP` ended offers. A share that still
+   * owes its exposure back (its link is live, or putting it back has not
+   * landed yet) is never pruned.
    */
   private prune(): void {
     const done = [...this.offers.values()]
-      .filter((r) => !LIVE.has(r.state) && !(r.side === 'out' && r.state === 'accepted' && r.addedExposure))
+      .filter((r) => !LIVE.has(r.state) && !(r.side === 'out' && r.addedExposure))
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
     for (const stale of done.slice(OFFERS_TERMINAL_KEEP)) this.offers.delete(stale.offerId);
   }
@@ -455,6 +472,7 @@ function coerceRecord(r: unknown): A2aLinkOfferRecordV1 | null {
   if (side === 'out' && r['addedExposure'] === true) {
     rec.addedExposure = true;
     rec.addedWorkspace = r['addedWorkspace'] === true;
+    if (isIsoString(r['exposureAt'])) rec.exposureAt = r['exposureAt'];
   }
   return rec;
 }

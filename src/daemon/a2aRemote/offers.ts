@@ -48,7 +48,13 @@ export type A2aOfferEvent = A2aRemoteOfferEvent;
 export interface A2aOffersDeps {
   store: OfferStore;
   links: Pick<LinkStore, 'get' | 'list' | 'receiveProposal' | 'accept' | 'discard'>;
-  exposures: Pick<ExposureStore, 'addPane' | 'removePane' | 'isPaneExposed'>;
+  exposures: Pick<ExposureStore, 'addPane' | 'removePane' | 'isPaneExposed' | 'get' | 'saveUnsaved'>;
+  /**
+   * The app has published its panes since this daemon started, so a pane
+   * that closed while it was away has ended its shares. Until then no share
+   * is accepted. Default: always.
+   */
+  appReady?: () => boolean;
   /** A PC that joined this one and is not revoked (it can answer a share). */
   isPeer: (hostId: HostId) => boolean;
   /** A PC this one joined (we can call it to accept or decline its offer). */
@@ -76,6 +82,8 @@ export class A2aOffers {
   private readonly deps: A2aOffersDeps;
   private readonly now: () => number;
   private readonly arrivals = new Map<HostId, number[]>();
+  /** Shares whose put-back narrowed memory but not the file yet (this run). */
+  private readonly putBackUnsaved = new Set<string>();
 
   constructor(deps: A2aOffersDeps) {
     this.deps = deps;
@@ -109,18 +117,26 @@ export class A2aOffers {
     const existing = this.store.findLiveOut(hostId, end.workspaceId, end.paneId);
     if (existing) return { ok: true, offer: existing, existing: true };
 
-    let exposed: { added: boolean; addedWorkspace: boolean };
-    try {
-      exposed = this.deps.exposures.addPane(hostId, end.workspaceId, end.paneId);
-    } catch (err) {
-      return { ok: false, error: 'unavailable', message: errMsg(err) };
-    }
+    // The record goes first, owning what it is about to show: a crash before
+    // the exposure write leaves an offer that shows nothing and expires; a
+    // crash after it leaves one that puts the pane back when it ends.
+    const shown = this.deps.exposures.isPaneExposed(hostId, end.workspaceId, end.paneId);
+    const workspaceListed = this.deps.exposures.get(hostId)?.workspaceIds.includes(end.workspaceId) === true;
     let offer: A2aLinkOfferRecordV1;
     try {
-      offer = this.store.createOut({ hostId, end, allow, addedExposure: exposed.added, addedWorkspace: exposed.addedWorkspace });
+      offer = this.store.createOut({ hostId, end, allow, addedExposure: !shown, addedWorkspace: !shown && !workspaceListed });
     } catch (err) {
-      if (exposed.added) this.unexpose(hostId, end, exposed.addedWorkspace);
       return { ok: false, error: 'conflict', message: errMsg(err) };
+    }
+    if (!shown) {
+      try {
+        this.deps.exposures.addPane(hostId, end.workspaceId, end.paneId);
+        this.stamp(hostId);
+      } catch (err) {
+        this.endOut(this.store.get(offer.offerId) ?? offer, 'withdrawn', 'withdrawn', false);
+        return { ok: false, error: 'unavailable', message: errMsg(err) };
+      }
+      offer = this.store.get(offer.offerId) ?? offer;
     }
     try {
       this.deps.enqueue(hostId, this.offerEnvelope(offer));
@@ -155,12 +171,33 @@ export class A2aOffers {
     if (rec.state === 'claimed' || rec.state === 'accepted') {
       if (rec.linkId !== proposal.linkId) return closed('used');
       const link = this.deps.links.get(proposal.linkId);
-      if (link && (link.remote.hostId !== peerHostId || !sameLocal(link, rec.end))) return closed('used');
-      // Retry, or a crash between the claim and the link: finish what the claim started.
-      return link ? this.finish(rec, link) : this.makeLink(rec, peerHostId, proposal);
+      if (link) {
+        if (link.remote.hostId !== peerHostId || !sameLocal(link, rec.end)) return closed('used');
+        // A retry: finish (or answer) the link the claim made.
+        return this.finish(rec, link);
+      }
+      // An accepted offer whose link is gone (unlinked, then pruned) is spent.
+      if (rec.state === 'accepted') return closed('used');
+      // Claimed, but the crash came before the link: judged like a fresh answer.
+      return this.check(rec, peerHostId, proposal) ?? this.makeLink(rec, peerHostId, proposal);
     }
     if (rec.state !== 'open') return closed(rec.endedReason ?? 'expired');
+    const refused = this.check(rec, peerHostId, proposal);
+    if (refused) return refused;
 
+    let claimed: A2aLinkOfferRecordV1;
+    try {
+      claimed = this.store.claim(rec.offerId, proposal.linkId);
+    } catch (err) {
+      this.deps.log('warn', `[a2a-remote] offer ${rec.offerId} claim not stored: ${errMsg(err)}`);
+      return refuse(503, 'unavailable');
+    }
+    return this.makeLink(claimed, peerHostId, proposal);
+  }
+
+  /** Does the proposal fit the offer: its pane, no wider directions, still shown? Null when it does. */
+  private check(rec: A2aLinkOfferRecordV1, peerHostId: HostId, proposal: A2aLinkProposeRequest): OfferRouteAnswer | null {
+    if (this.deps.appReady && !this.deps.appReady()) return refuse(503, 'unavailable');
     const to = proposal.to;
     if (proposal.from.kind !== 'pane' || !isAllowedEndpointPair(proposal.from.kind, to.kind) ||
       to.workspaceId !== rec.end.workspaceId || to.paneId !== rec.end.paneId) {
@@ -174,15 +211,7 @@ export class A2aOffers {
     // The store only: a publish already in flight may briefly drop the pane
     // from the snapshot, and a closed or moved pane has ended the offer.
     if (!this.deps.exposures.isPaneExposed(peerHostId, rec.end.workspaceId, rec.end.paneId ?? '')) return refuse(403, 'forbidden');
-
-    let claimed: A2aLinkOfferRecordV1;
-    try {
-      claimed = this.store.claim(rec.offerId, proposal.linkId);
-    } catch (err) {
-      this.deps.log('warn', `[a2a-remote] offer ${rec.offerId} claim not stored: ${errMsg(err)}`);
-      return refuse(503, 'unavailable');
-    }
-    return this.makeLink(claimed, peerHostId, proposal);
+    return null;
   }
 
   /** The other PC declines our share (`POST /api/a2a/offers/:offerId/decline`). */
@@ -271,10 +300,15 @@ export class A2aOffers {
   /** `LinkStore.onTransition`: settle the offer a link belongs to. */
   onLinkTransition(link: A2aLinkRecordV1): void {
     const rec = this.store.findByLink(link.linkId);
-    if (!rec) return;
+    if (!rec) {
+      // A link no share made can still be the last user of a shared pane.
+      if (TERMINAL_LINK.has(link.state)) this.reconcileExposure();
+      return;
+    }
     if (rec.side === 'out') {
-      // The link a share made ended: the pane it showed is hidden again.
-      if (TERMINAL_LINK.has(link.state) && rec.addedExposure) this.putBackExposure(rec);
+      // The link a share made ended: the pane it showed is hidden again (and
+      // any other share's pane this link was the last user of).
+      if (TERMINAL_LINK.has(link.state)) this.reconcileExposure();
       return;
     }
     if (rec.state !== 'open' || rec.pendingLinkId !== link.linkId) return;
@@ -328,6 +362,24 @@ export class A2aOffers {
       }
     }
     this.expire();
+    this.reconcileExposure();
+  }
+
+  /**
+   * Put back every share's exposure that is due and not yet back: the share
+   * ended without a link, or its link ended. A put-back that could not land
+   * (a write failed, a live link still used the pane) is tried again here.
+   */
+  reconcileExposure(): void {
+    for (const rec of this.store.list()) {
+      if (rec.side !== 'out' || !rec.addedExposure) continue;
+      if (rec.state === 'open' || rec.state === 'claimed') continue;
+      if (rec.state === 'accepted' && rec.linkId) {
+        const link = this.deps.links.get(rec.linkId);
+        if (link && !TERMINAL_LINK.has(link.state)) continue;
+      }
+      this.putBackExposure(rec);
+    }
   }
 
   // --- internals --------------------------------------------------------------
@@ -357,7 +409,7 @@ export class A2aOffers {
       } catch (err) {
         // The link stands, still acceptable by this PC's human; a retry or the next start finishes it.
         this.deps.log('warn', `[a2a-remote] offer ${rec.offerId}: accept not stored: ${errMsg(err)}`);
-        return { status: 200, body: { linkId: current.linkId, state: 'proposed-in' } };
+        return { status: 200, body: { linkId: current.linkId, state: 'proposed-in', offerClaimed: true } };
       }
       this.deps.notifyLinkChange(current.remote.hostId, current.linkId, 'active', current.version);
     }
@@ -430,27 +482,66 @@ export class A2aOffers {
     }
   }
 
-  /** Hide again what a share showed, unless a live link to that PC still uses the pane. */
+  /**
+   * Hide again what a share showed. Not while a live link to that PC still
+   * uses the pane (the debt is kept and paid when that link ends), and not
+   * when someone else saved that PC's list since this PC last wrote it (an
+   * older build's checklist): that list is the truth. The debt is dropped
+   * only once the put-back is on disk.
+   */
   private putBackExposure(rec: A2aLinkOfferRecordV1): void {
     if (rec.side !== 'out' || !rec.addedExposure || !rec.end.paneId) return;
     const inUse = this.deps.links.list().some(
       (l) => !TERMINAL_LINK.has(l.state) && l.linkId !== rec.linkId && l.remote.hostId === rec.hostId &&
         l.local.kind === 'pane' && l.local.workspaceId === rec.end.workspaceId && l.local.paneId === rec.end.paneId,
     );
-    if (!inUse) this.unexpose(rec.hostId, rec.end, rec.addedWorkspace === true);
+    if (inUse) return;
+    if (this.putBackUnsaved.has(rec.offerId)) {
+      // Hidden in memory already; the debt is paid once the file says so too.
+      try {
+        this.deps.exposures.saveUnsaved();
+      } catch {
+        return;
+      }
+      this.putBackUnsaved.delete(rec.offerId);
+      this.settlePutBack(rec, true);
+      return;
+    }
+    const current = this.deps.exposures.get(rec.hostId);
+    const editedElsewhere = !!current && !!rec.exposureAt && current.updatedAt !== rec.exposureAt;
+    if (current && !editedElsewhere && !this.unexpose(rec.hostId, rec.end, rec.addedWorkspace === true)) {
+      this.putBackUnsaved.add(rec.offerId);
+      return;
+    }
+    this.settlePutBack(rec, !!current && !editedElsewhere);
+  }
+
+  private settlePutBack(rec: A2aLinkOfferRecordV1, wrote: boolean): void {
     try {
       this.store.forgetExposure(rec.offerId);
+      if (wrote) this.stamp(rec.hostId);
     } catch (err) {
       this.deps.log('warn', `[a2a-remote] offer ${rec.offerId}: exposure bookkeeping not stored: ${errMsg(err)}`);
     }
   }
 
-  private unexpose(hostId: HostId, end: A2aExposedPane, dropWorkspace: boolean): void {
+  /** False when the write failed (the pane is hidden in memory; on disk it is put back on the next start). */
+  private unexpose(hostId: HostId, end: A2aExposedPane, dropWorkspace: boolean): boolean {
     try {
       this.deps.exposures.removePane(hostId, end.workspaceId, end.paneId ?? '', dropWorkspace);
+      return true;
     } catch (err) {
-      // removePane keeps the narrowing in memory on a failed write.
       this.deps.log('error', `[a2a-remote] pane ${end.paneId} hidden from ${hostId} in memory only: ${errMsg(err)}`);
+      return false;
+    }
+  }
+
+  /** Record this PC's latest write of `hostId`'s exposure on the shares that owe it. */
+  private stamp(hostId: HostId): void {
+    try {
+      this.store.stampExposure(hostId, this.deps.exposures.get(hostId)?.updatedAt);
+    } catch (err) {
+      this.deps.log('warn', `[a2a-remote] offers for ${hostId}: exposure stamp not stored: ${errMsg(err)}`);
     }
   }
 

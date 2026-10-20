@@ -47,6 +47,8 @@ export class ExposureStore {
   private readonly scheduleHarden: (filePath: string) => void;
   private readonly exposures = new Map<HostId, A2aExposureV1>();
   private writable = true;
+  /** A narrowing `removePane` stands in memory but its write failed (see `saveUnsaved`). */
+  private unsaved = false;
 
   constructor(opts: ExposureStoreOptions) {
     this.filePath = path.join(opts.dir, EXPOSURE_FILE);
@@ -163,7 +165,18 @@ export class ExposureStore {
       paneIds,
       updatedAt: new Date(this.now()).toISOString(),
     });
-    this.persist();
+    try {
+      this.persist();
+    } catch (err) {
+      this.unsaved = true;
+      throw err;
+    }
+  }
+
+  /** Write what a failed `removePane` left only in memory. Throws when it still does not land. */
+  saveUnsaved(): void {
+    this.assertWritable();
+    if (this.unsaved) this.persist();
   }
 
   /** Expose nothing to `hostId`. Returns false when nothing was exposed. */
@@ -241,6 +254,7 @@ export class ExposureStore {
   private persist(): void {
     const file: ExposureFileV1 = { v: A2A_REMOTE_RECORD_V, exposures: [...this.exposures.values()] };
     this.write(this.filePath, file);
+    this.unsaved = false;
     this.scheduleHarden(this.filePath);
   }
 

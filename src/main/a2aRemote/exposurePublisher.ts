@@ -1,8 +1,9 @@
-import type { A2aLinkRecordV1 } from '../../shared/a2aRemote';
+import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../shared/a2aRemote';
 import type {
   A2aExposureCandidate,
   A2aRemoteLinksListResult,
   A2aRemoteExposureListResult,
+  A2aRemoteOffersListResult,
   A2aRemotePaneGoneParams,
   A2aRemotePaneSnapshot,
 } from '../../shared/rpc';
@@ -33,6 +34,8 @@ export interface ExposurePublisherClient {
   a2aRemoteExposurePublish(panes: A2aExposureCandidate[]): Promise<unknown>;
   a2aRemotePaneGone(params: A2aRemotePaneGoneParams): Promise<unknown>;
   a2aRemoteLinksList(): Promise<A2aRemoteLinksListResult>;
+  /** Absent on a client that predates share offers. */
+  a2aRemoteOffersList?(): Promise<A2aRemoteOffersListResult>;
 }
 
 /** How long Moa may be "not known right now" before it counts as gone. */
@@ -82,7 +85,7 @@ export function diffGonePanes(prev: A2aRemotePaneSnapshot, next: A2aRemotePaneSn
  * current tree: the link list is the truth, so a notice lost while the daemon
  * was away is found again here.
  */
-export function goneForLinks(links: A2aLinkRecordV1[], tree: A2aRemotePaneSnapshot): A2aRemotePaneGoneParams[] {
+export function goneForLinks(links: Array<Pick<A2aLinkRecordV1, 'state' | 'local'>>, tree: A2aRemotePaneSnapshot): A2aRemotePaneGoneParams[] {
   const ws = new Set(tree.workspaces.map((w) => w.id));
   const paneWs = new Map<string, string>();
   for (const w of tree.workspaces) for (const p of w.panes) paneWs.set(p.paneId, w.id);
@@ -105,6 +108,18 @@ export function goneForLinks(links: A2aLinkRecordV1[], tree: A2aRemotePaneSnapsh
     else out.push({ workspaceId: l.local.workspaceId, paneId: l.local.paneId, reason: 'pane-closed' });
   }
   return out;
+}
+
+/**
+ * The same for this PC's open shares: a shared pane that closed or moved
+ * while the daemon (or the app) was away must end its share, which the
+ * other PC can otherwise still accept.
+ */
+export function goneForOffers(offers: A2aLinkOfferRecordV1[], tree: A2aRemotePaneSnapshot): A2aRemotePaneGoneParams[] {
+  const live = offers
+    .filter((o) => o.side === 'out' && (o.state === 'open' || o.state === 'claimed') && o.end.kind === 'pane')
+    .map((o): Pick<A2aLinkRecordV1, 'state' | 'local'> => ({ state: 'active', local: { kind: 'pane', workspaceId: o.end.workspaceId, paneId: o.end.paneId } }));
+  return goneForLinks(live, tree);
 }
 
 export class A2aExposurePublisher {
@@ -217,6 +232,12 @@ export class A2aExposurePublisher {
       for (const g of goneForLinks(links ?? [], this.last)) this.pending.set(goneKey(g), g);
     } catch (err) {
       this.deps.log(`links read failed: ${errMsg(err)}`);
+    }
+    try {
+      const offers = client.a2aRemoteOffersList ? (await client.a2aRemoteOffersList()).offers : [];
+      for (const g of goneForOffers(offers ?? [], this.last)) this.pending.set(goneKey(g), g);
+    } catch (err) {
+      this.deps.log(`offers read failed: ${errMsg(err)}`);
     }
     await this.flushGone(client);
     const { exposures } = await client.a2aRemoteExposureList();

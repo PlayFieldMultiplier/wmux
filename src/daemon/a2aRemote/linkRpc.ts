@@ -405,6 +405,8 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
   function dropUnsentOfferProposal(rec: A2aLinkRecordV1): boolean {
     const offer = deps.offers?.store.findByLink(rec.linkId);
     if (!offer || offer.side !== 'in' || offer.state !== 'open' || offer.pendingLinkId !== rec.linkId || rec.state !== 'proposed-out') return false;
+    // Its POST is still out: the answer, not this status, decides.
+    if (offerPostsInFlight.has(rec.linkId)) return true;
     try {
       links.discard(rec.linkId);
       deps.offers!.announce(deps.offers!.store.setPending(offer.offerId, null));
@@ -414,6 +416,9 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
     deps.broadcast({ type: 'a2a.remote.link.changed', linkId: rec.linkId, state: 'revoked' });
     return true;
   }
+
+  /** Proposals answering an offer whose POST has not come back yet. */
+  const offerPostsInFlight = new Set<string>();
 
   if (deps.offers) registerOfferRpc(deps.offers);
 
@@ -482,6 +487,7 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
         allow: link.allow,
       };
       let json: unknown;
+      offerPostsInFlight.add(link.linkId);
       try {
         json = await call(rec.hostId, 'POST', A2A_ROUTES.links, request);
       } catch (err) {
@@ -506,10 +512,19 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
           deps.log('warn', `[a2a-remote] offer ${offerId} pending mark not cleared: ${errMsg(clearErr)}`);
         }
         return { ok: false, error: err.code, message: err.message };
+      } finally {
+        offerPostsInFlight.delete(link.linkId);
       }
       // The sharer's stream notice may have made the link active first: apply in either order.
       const answer = isPlainObject(json) ? json : {};
       const current = links.get(link.linkId);
+      // Something ended our proposal while the POST was out: nothing to settle on.
+      if (!current) return { ok: false, error: 'failed', message: 'the proposal for this share is gone here; accept again' };
+      // A sharer that took the offer but could not finish the link yet: the
+      // same proposal, sent again, finishes it.
+      if (answer['state'] === 'proposed-in' && answer['offerClaimed'] === true) {
+        return { ok: false, error: 'unavailable', message: 'that PC has not finished the link yet; accept again' };
+      }
       if (answer['state'] === 'active' && typeof answer['version'] === 'number' && current?.state === 'proposed-out') {
         try {
           links.applyRemoteAccept(link.linkId, answer['version']);
@@ -517,7 +532,8 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
           deps.log('warn', `[a2a-remote] offer ${offerId}: accept of link ${link.linkId} not applied yet: ${errMsg(err)}`);
         }
       }
-      const after = links.get(link.linkId) ?? link;
+      const after = links.get(link.linkId);
+      if (!after) return { ok: false, error: 'failed' };
       changed(after);
       return settleAccepted(offerId, after);
     });
