@@ -268,7 +268,27 @@ describe('IdleSnapshot (#2255)', () => {
     expect([...idle.get()]).toEqual(['ws-a']);
   });
 
-  it('since(at) waits for a read that started at or after at, however recent the last one', async () => {
+  it('since(at) does not take a read started in the same millisecond as at', async () => {
+    const now = 1_000_000;
+    let release: (() => void) | null = null;
+    let n = 0;
+    const read = vi.fn(async () => {
+      n += 1;
+      const mine = n;
+      if (mine === 1) await new Promise<void>((r) => { release = r; });
+      return new Set([`read-${mine}`]);
+    });
+    const idle = new IdleSnapshot(read, 10_000, () => now);
+    const first = idle.fresh();
+    const after = idle.since(now);
+    (release as (() => void) | null)?.();
+    await first;
+    await after;
+    expect(read).toHaveBeenCalledTimes(2);
+    expect([...idle.get()]).toEqual(['read-2']);
+  });
+
+  it('since(at) waits for a read that started after at, however recent the last one', async () => {
     let now = 1_000_000;
     let release: (() => void) | null = null;
     let n = 0;
@@ -293,7 +313,7 @@ describe('IdleSnapshot (#2255)', () => {
     await idle.since(now);
     expect(read).toHaveBeenCalledTimes(3);
     // A read already started after `at` answers it.
-    await idle.since(now);
+    await idle.since(now - 1);
     expect(read).toHaveBeenCalledTimes(3);
   });
 

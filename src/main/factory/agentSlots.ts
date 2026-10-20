@@ -385,12 +385,13 @@ export class IdleSnapshot {
     return this.start();
   }
 
-  /** Resolves once a read that started at `at` or later is done (or
-   *  failed), however recent the last one: what a read started before
-   *  `at` saw says nothing of what happened then (a worker just stopped). */
+  /** Resolves once a read that started after `at` is done (or failed),
+   *  however recent the last one: what a read started before `at` saw says
+   *  nothing of what happened then (a worker just stopped). One started in
+   *  the same millisecond may have come first, so it does not count. */
   since(at: number): Promise<void> {
-    if (this.startedAt >= at) return this.reading ?? Promise.resolve();
-    return (this.reading ?? Promise.resolve()).then(() => (this.startedAt >= at ? this.reading ?? undefined : this.start()));
+    if (this.startedAt > at) return this.reading ?? Promise.resolve();
+    return (this.reading ?? Promise.resolve()).then(() => (this.startedAt > at ? this.reading ?? undefined : this.start()));
   }
 
   private start(): Promise<void> {
