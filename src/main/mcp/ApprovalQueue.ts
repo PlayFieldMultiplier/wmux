@@ -392,6 +392,13 @@ export class ApprovalQueue {
     }
   }
 
+  /** Stop pending capability approvals without touching unrelated browser consent. */
+  cancelPluginApprovals(clientName: string, reason: string): void {
+    for (const pending of [...this.inflight.values()]) {
+      if (pending.persist && pending.clientName === clientName) this.cancelPrompt(pending.promptId, reason);
+    }
+  }
+
   /** Test/observability helper. */
   inflightCount(): number {
     return this.inflight.size;

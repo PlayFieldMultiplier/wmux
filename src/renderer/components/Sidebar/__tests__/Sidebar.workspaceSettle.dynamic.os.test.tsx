@@ -48,7 +48,7 @@ let command: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
   command = vi.fn(async () => ({ ok: true, snapshot: useStore.getState().workspaceSettle }));
-  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, key) => (key === 'then' ? undefined : stub()) });
+  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, key) => (key === 'then' ? undefined : key === 'onChanged' ? () => () => undefined : stub()) });
   (window as unknown as { electronAPI: unknown }).electronAPI = new Proxy({ platform: 'win32', workspaceSettle: { command } } as Record<string, unknown>, {
     get: (t, key: string) => (key in t ? t[key] : stub()),
   });

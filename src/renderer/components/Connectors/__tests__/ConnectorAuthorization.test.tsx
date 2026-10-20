@@ -47,3 +47,40 @@ it('shows the token recipient and issuer and approves only the displayed attempt
   await act(async () => host.querySelector('button')?.click());
   expect(action).toHaveBeenCalledWith('approve', 'con-12345678', 'attempt-one');
 });
+it('starts sign-in automatically for an explicitly selected expired connection', async () => {
+  const action = vi.fn(async (value: string) => ({ status: value === 'status' ? 'expired' : 'authorized' }));
+  vi.stubGlobal('electronAPI', { connectorOAuth: { action } });
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root.render(<ConnectorAuthorization id="con-12345678" fingerprint="one" autoStart onChange={() => undefined} />));
+  expect(action).toHaveBeenCalledWith('connect', 'con-12345678');
+  expect(host.textContent).toContain(en['connectors.oauth.authorized']);
+});
+it('keeps a failed connect result after approving its recipient consent', async () => {
+  vi.useFakeTimers();
+  try {
+    let finish!: (result: ConnectorOAuthResult) => void;
+    let statuses = 0;
+    const action = vi.fn((value: string): Promise<ConnectorOAuthResult> => {
+      if (value === 'connect') return new Promise((resolve) => { finish = resolve; });
+      if (value === 'approve') return Promise.resolve({ status: 'authorizing' });
+      return Promise.resolve(++statuses === 1 ? { status: 'signed-out' } : { status: 'confirm', consent: { id: 'attempt', resource: 'https://example.com/mcp', issuer: 'https://example.com', authorizationOrigin: 'https://example.com' } });
+    });
+    vi.stubGlobal('electronAPI', { connectorOAuth: { action } });
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    await act(async () => root.render(<ConnectorAuthorization id="con-12345678" fingerprint="one" autoStart onChange={() => undefined} />));
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    await act(async () => [...host.querySelectorAll('button')].find((button) => button.textContent === en['connectors.oauth.approve'])!.click());
+    await act(async () => finish({ status: 'failed' }));
+    expect(host.textContent).toContain(en['connectors.oauth.failed']);
+  } finally { vi.useRealTimers(); }
+});
+it('does not announce unavailable while the initial status is loading', async () => {
+  let finish!: (result: ConnectorOAuthResult) => void;
+  const action = vi.fn(() => new Promise<ConnectorOAuthResult>((resolve) => { finish = resolve; }));
+  vi.stubGlobal('electronAPI', { connectorOAuth: { action } });
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root.render(<ConnectorAuthorization id="con-12345678" fingerprint="one" autoStart onChange={() => undefined} />));
+  expect(host.textContent).toBe('');
+  await act(async () => finish({ status: 'unavailable' }));
+  expect(host.textContent).toContain(en['connectors.quick.unavailable']);
+});

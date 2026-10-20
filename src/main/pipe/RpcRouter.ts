@@ -138,6 +138,8 @@ type RpcDispatchOptions = (
    * intersection rather than a fourth variant.
    */
   signal?: AbortSignal;
+  /** Internal lifetime fence, checked after asynchronous authorization reads. */
+  isCurrent?: () => boolean;
 };
 
 export class RpcRouter {
@@ -625,6 +627,9 @@ export class RpcRouter {
         trust = undefined;
         trustLookupFailed = true;
       }
+    }
+    if (opts?.isCurrent && !opts.isCurrent()) {
+      return { id: request.id, ok: false, error: 'Caller session changed; retry from the current session' };
     }
     let outcome = enforcerCheck({
       method: request.method,

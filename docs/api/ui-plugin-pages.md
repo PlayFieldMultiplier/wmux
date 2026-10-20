@@ -72,7 +72,19 @@ Workspaces. Responses from an earlier page/workspace lifetime do not navigate.
 The example performs this on a button click; approved plugin code can initiate
 focus calls, so this is not a claim of user-gesture attestation.
 
-Bundles are still loaded from the existing plugins directory on startup. This
-API addition does not supply a store, runtime uninstall/reload, open publishing
-or a teammate identity feed. See the original example at
+Settings > Plugins combines saved connectors and UI plugin pages, with Installed
+and Discover views. The curated UI catalog installs the original Agent status
+example from the application bundle; it does not download arbitrary URLs or
+accept public submissions. Installation keeps permissions unapproved until the
+owner reviews the existing permission prompt. The bundled example carries its
+MIT license and publisher metadata.
+
+Disabling a UI plugin stops new bridge requests, file serving and mounted pages
+without restarting. Re-enabling preserves its reviewed permissions. Uninstall
+is available for catalog-installed copies only and requires confirmation; a
+reinstall requires approval again. Manually installed bundles can be disabled
+here but their files remain under the user's control. This does not undo actions
+already dispatched before a plugin was disabled.
+
+See the original example at
 [`examples/plugins/agent-state-page`](../../examples/plugins/agent-state-page).

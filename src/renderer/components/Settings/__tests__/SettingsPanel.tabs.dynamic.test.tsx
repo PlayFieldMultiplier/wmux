@@ -41,6 +41,8 @@ const MCP_STATUS = {
 /** Explicit answers for the bridges that decide what renders. */
 const EXPLICIT: Record<string, unknown> = {
   platform: 'darwin',
+  pluginManagement: { list: resolved({ plugins: [], failures: [] }), onChanged: () => () => undefined },
+  factory: { connectors: { list: resolved({ ok: true, connectors: [] }) } },
   shell: { list: resolved([{ name: 'zsh', path: '/bin/zsh' }]), wslDistros: resolved([]) },
   fonts: { list: resolved([]) },
   autostart: { get: resolved({ enabled: false }), set: echoEnabled },
@@ -173,7 +175,7 @@ describe('Settings tabs', () => {
     expect(ALL_TABS).toEqual([
       'general', 'appearance', 'terminal', 'shortcuts', 'notifications',
       'claude-integration', 'accounts', 'factory', 'roles', 'tokens', 'browser', 'computer-use',
-      'remote', 'lanlink',
+      'plugins', 'remote', 'lanlink',
       'about',
     ]);
     const rendered = Array.from(container.querySelectorAll('[data-settings-tab]'))

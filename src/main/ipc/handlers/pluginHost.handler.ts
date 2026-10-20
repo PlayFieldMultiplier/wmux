@@ -65,9 +65,10 @@ export function registerPluginHostHandlers(
     }
     const loader = getLoader();
     const plugin = loader?.get(pluginName);
-    if (!plugin) {
+    if (!loader || !plugin) {
       throw new Error(`Unknown plugin: ${pluginName}`);
     }
+    const revision = loader.getRevision();
     // Unknown methods fall through to RpcRouter's own "Unknown method"
     // response — no separate allowlist here, the router IS the method space.
     // firstParty: the plugin host is an in-process, human-approved (trust-gated
@@ -86,6 +87,7 @@ export function registerPluginHostHandlers(
       clientVersion: plugin.manifest.version,
     }, {
       firstParty: true,
+      isCurrent: () => loader.getRevision() === revision && loader.get(pluginName) === plugin,
       // Both halves of this caller's identity are derived main-side or
       // host-side: the name from the manifest just above, the workspace from
       // the host component that owns the iframe. Neither is readable from the

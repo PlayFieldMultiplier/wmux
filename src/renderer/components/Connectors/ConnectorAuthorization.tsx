@@ -6,13 +6,28 @@ import OAuthClientFields, { initialOAuthClient } from './OAuthClientFields';
 import { parseConnectorOAuthClient } from '../../../shared/connectorOAuth';
 
 /** Independent of configuration enabled/disabled and server reachability. */
-export default function ConnectorAuthorization({ id, fingerprint, onChange, endpoint = '' }: { id: string; fingerprint: string; onChange: () => void; endpoint?: string }) {
+export default function ConnectorAuthorization({ id, fingerprint, onChange, endpoint = '', autoStart = false, onAuthorized }: { id: string; fingerprint: string; onChange: () => void; endpoint?: string; autoStart?: boolean; onAuthorized?: () => void }) {
   const t = useT();
-  const [status, setStatus] = useState<ConnectorOAuthStatus>('unavailable');
+  const [status, setStatus] = useState<ConnectorOAuthStatus>();
   const [consent, setConsent] = useState<ConnectorOAuthResult['consent']>();
   const [manual, setManual] = useState(() => !!initialOAuthClient(endpoint).issuer || endpoint === 'https://mcp.hubspot.com');
   const [client, setClient] = useState(() => initialOAuthClient(endpoint));
   const generation = useRef(0);
+  const started = useRef(false);
+  const settledAttempt = useRef<number | undefined>(undefined);
+  const reported = useRef(false);
+  const authorizedCallback = useRef(onAuthorized);
+  authorizedCallback.current = onAuthorized;
+  useEffect(() => {
+    if (status === 'authorized' && !reported.current) { reported.current = true; authorizedCallback.current?.(); }
+    if (status !== 'authorized') reported.current = false;
+  }, [status]);
+  useEffect(() => {
+    if (autoStart && !manual && (status === 'signed-out' || status === 'expired') && !started.current) {
+      started.current = true;
+      void action('connect');
+    }
+  }, [autoStart, manual, status]);
   useEffect(() => {
     let alive = true;
     const refresh = () => { void window.electronAPI?.connectorOAuth?.action('status', id).then((r) => { if (alive) { setStatus(r.status); setConsent(r.consent); } }).catch(() => { if (alive) setStatus('unavailable'); }); };
@@ -22,28 +37,34 @@ export default function ConnectorAuthorization({ id, fingerprint, onChange, endp
   useEffect(() => {
     if (status !== 'authorizing') return;
     let alive = true;
+    const attempt = generation.current;
     const timer = setInterval(() => {
-      void window.electronAPI?.connectorOAuth?.action('status', id).then((r) => { if (alive && r.status !== 'authorizing') { setStatus(r.status); setConsent(r.consent); } }).catch(() => undefined);
+      void window.electronAPI?.connectorOAuth?.action('status', id).then((r) => { if (alive && generation.current === attempt && settledAttempt.current !== attempt && r.status !== 'authorizing') { setStatus(r.status); setConsent(r.consent); } }).catch(() => undefined);
     }, 2000);
     return () => { alive = false; clearInterval(timer); };
   }, [id, status]);
   const action = async (value: ConnectorOAuthAction) => {
     const supplied = value === 'connect' && manual ? parseConnectorOAuthClient(client) : undefined;
     if (value === 'connect' && manual && !supplied) { setStatus('failed'); return; }
-    const attempt = ++generation.current;
+    const attempt = value === 'approve' ? generation.current : ++generation.current;
+    onChange();
     if (value === 'connect') setStatus('authorizing');
     try {
       const result = value === 'approve'
         ? await window.electronAPI.connectorOAuth.action(value, id, consent?.id)
         : supplied ? await window.electronAPI.connectorOAuth.action(value, id, undefined, supplied)
           : await window.electronAPI.connectorOAuth.action(value, id);
-      if (generation.current === attempt) { setStatus(result.status); setConsent(result.consent); onChange(); }
-    } catch { if (generation.current === attempt) setStatus('failed'); }
+      if (generation.current === attempt && !(value === 'approve' && settledAttempt.current === attempt)) {
+        if (value === 'connect') settledAttempt.current = attempt;
+        setStatus(result.status); setConsent(result.consent);
+      }
+    } catch { if (generation.current === attempt) { if (value === 'connect') settledAttempt.current = attempt; setStatus('failed'); } }
     finally { if (supplied) setClient((prior) => ({ ...prior, clientSecret: '' })); }
   };
-  if (status === 'unavailable') return null;
+  if (status === undefined) return null;
+  if (status === 'unavailable') return autoStart ? <p role="status">{t('connectors.quick.unavailable')}</p> : null;
   return <div className="flex flex-wrap items-center gap-2 text-[12px] text-[var(--text-sub)]">
-    {status !== 'authorizing' && status !== 'confirm' && <details className="w-full" open={manual}>
+    {!autoStart && status !== 'authorizing' && status !== 'confirm' && <details className="w-full" open={manual}>
       <summary>{t('connectors.oauth.advanced')}</summary>
       <label><input type="checkbox" checked={manual} onChange={(e) => setManual(e.target.checked)} /> {t('connectors.oauth.useClient')}</label>
       {manual && <OAuthClientFields value={client} onChange={setClient} />}

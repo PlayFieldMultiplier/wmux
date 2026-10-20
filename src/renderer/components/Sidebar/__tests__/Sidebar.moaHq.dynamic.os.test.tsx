@@ -51,7 +51,7 @@ beforeEach(() => {
   setLocale('en');
   localStorage.setItem('wmux.moa.hqWorkspaceId', 'moa');
   dispose = vi.fn();
-  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, key) => (key === 'then' ? undefined : stub()) });
+  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, key) => (key === 'then' ? undefined : key === 'onChanged' ? () => () => undefined : stub()) });
   const own: Record<string, unknown> = { platform: 'win32', pty: { dispose } };
   (window as unknown as { electronAPI: unknown }).electronAPI = new Proxy(own, {
     get: (t, key: string) => (key in t ? t[key] : stub()),

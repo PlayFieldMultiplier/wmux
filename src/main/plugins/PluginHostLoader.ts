@@ -92,6 +92,8 @@ function resolveWithinReal(dir: string, urlPath: string): string | null {
 export class PluginHostLoader {
   private plugins = new Map<string, LoadedHostPlugin>();
   private failures: PluginLoadFailure[] = [];
+  private disabled = new Set<string>();
+  private revision = 0;
 
   constructor(
     private readonly trustStore: PluginTrustStore,
@@ -104,29 +106,32 @@ export class PluginHostLoader {
    * must never block the rest. Returns the loaded plugins.
    */
   async loadAll(): Promise<LoadedHostPlugin[]> {
-    this.plugins = new Map();
-    this.failures = [];
+    const plugins = new Map<string, LoadedHostPlugin>();
+    const failures: PluginLoadFailure[] = [];
 
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(this.pluginsDir, { withFileTypes: true });
     } catch {
+      this.revision++;
+      this.plugins = plugins;
+      this.failures = failures;
       return []; // no plugins dir — normal on most installs
     }
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
       const name = entry.name;
       if (!PLUGIN_NAME_REGEX.test(name)) {
-        this.failures.push({ name, errors: ['directory name is not a valid plugin name'] });
+        failures.push({ name, errors: ['directory name is not a valid plugin name'] });
         continue;
       }
       const loaded = this.loadOne(name);
       if ('errors' in loaded) {
-        this.failures.push(loaded);
+        failures.push(loaded);
         continue;
       }
-      this.plugins.set(name, loaded);
+      plugins.set(name, loaded);
       // Register the declaration with the trust stack (identity key =
       // plugin name). Awaited per-plugin: the store serializes writes
       // internally, and load happens once at boot, off any hot path.
@@ -141,7 +146,10 @@ export class PluginHostLoader {
         console.warn(`[PluginHostLoader] trust declaration failed for ${name}:`, err);
       }
     }
-    return [...this.plugins.values()];
+    this.revision++;
+    this.plugins = plugins;
+    this.failures = failures;
+    return this.list();
   }
 
   private loadOne(name: string): LoadedHostPlugin | PluginLoadFailure {
@@ -198,11 +206,19 @@ export class PluginHostLoader {
   }
 
   get(name: string): LoadedHostPlugin | undefined {
-    return this.plugins.get(name);
+    return this.disabled.has(name) ? undefined : this.plugins.get(name);
   }
 
+  /** Synchronous revocation precedes asynchronous persistence and UI updates. */
+  setDisabled(names: Iterable<string>): void {
+    this.revision++;
+    this.disabled = new Set(names);
+  }
+
+  getRevision(): number { return this.revision; }
+
   list(): LoadedHostPlugin[] {
-    return [...this.plugins.values()];
+    return [...this.plugins.values()].filter((plugin) => !this.disabled.has(plugin.manifest.name));
   }
 
   listFailures(): PluginLoadFailure[] {
@@ -218,7 +234,7 @@ export class PluginHostLoader {
    *   - normalized path must stay strictly inside the realpathed bundle dir
    */
   resolveBundlePath(pluginName: string, urlPath: string): string | null {
-    const plugin = this.plugins.get(pluginName);
+    const plugin = this.get(pluginName);
     if (!plugin) return null;
     // realpath-checked: this result is served to an iframe, so an in-bundle
     // symlink must not be allowed to escape (see resolveWithinReal).
@@ -226,9 +242,10 @@ export class PluginHostLoader {
   }
 
   /** Renderer-facing summaries with the current trust status attached. */
-  async summaries(): Promise<PluginHostPluginSummary[]> {
+  async summaries(includeDisabled = false): Promise<PluginHostPluginSummary[]> {
     const out: PluginHostPluginSummary[] = [];
     for (const plugin of this.plugins.values()) {
+      if (!includeDisabled && this.disabled.has(plugin.manifest.name)) continue;
       let trustStatus: PluginHostPluginSummary['trustStatus'] = 'unconfirmed';
       try {
         const record = await this.trustStore.get(plugin.manifest.name);
