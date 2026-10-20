@@ -131,4 +131,22 @@ describe('continueOnAccount', () => {
     expect(await continueOnAccount(rebound, 'p1', accountB)).toEqual({ ok: false, code: 'unknown_session' });
     expect(rebound.calls).toEqual(['stop']);
   });
+
+  it('waits for the prompt for its time, however long each look at the pane takes (#2507)', async () => {
+    // A pane at its prompt with a child still running, where reading the
+    // process table takes a second (Windows): the wait ends after its 5 s,
+    // not after fifty looks.
+    let clock = 0;
+    const paneFree = vi.fn(async () => { clock += 1_000; return false; });
+    const busy = deps({ paneFree, now: () => clock, sleep: async (ms) => { clock += ms; } });
+    expect(await continueOnAccount(busy, 'p1', accountB)).toEqual({ ok: false, code: 'shell_busy' });
+    expect(paneFree.mock.calls.length).toBeLessThanOrEqual(6);
+    expect(clock).toBeLessThan(7_000);
+
+    // A command still running at the shell: no prompt, so the pane is never read.
+    const running = vi.fn(async () => true);
+    const mid = deps({ paneFree: running, promptRevision: () => null, now: () => clock, sleep: async (ms) => { clock += ms; } });
+    expect(await continueOnAccount(mid, 'p1', accountB)).toEqual({ ok: false, code: 'shell_busy' });
+    expect(running).not.toHaveBeenCalled();
+  });
 });

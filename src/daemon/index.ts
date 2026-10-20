@@ -229,6 +229,7 @@ import { deliverScheduledPrompt, deliveryInputFence, type ScheduledPromptDeliver
 import { deliverCallerNudge } from './callerNudgeDelivery';
 import { paneTurnClosed, stopAgentTree } from './agentStop';
 import { continueOnAccount } from './continueOnAccount';
+import { paneFree } from './paneFree';
 import { classifyShell } from './shell-integration';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
@@ -4421,13 +4422,7 @@ function registerRpcHandlers(
       approvals: () => approvalRegistry,
       // Single writer: a tracked agent can miss a TUI that just started or a
       // reused pid, so the anchor shell must also have no children at all.
-      paneFree: async (id) => {
-        const pane = sessionManager.getSession(id);
-        if (!pane) return false;
-        const pid = agentProcessTracker.pidFor(id);
-        if (pid !== undefined && await ProcessMonitor.isRunning(pid)) return false;
-        return (await agentProcessTracker.idleShellState(pane.meta.pid, pane.meta.env, true)).ok;
-      },
+      paneFree: (id) => sessionPaneFree(sessionManager, agentProcessTracker, id),
       writeToPane: (id, data) => {
         const pane = sessionManager.getSession(id);
         if (!pane) return false;
@@ -7784,6 +7779,19 @@ let cachedBootId: string | undefined;
 let diskOnlySessions: DaemonSession[] = [];
 
 /** What every save writes: the managed sessions, then the disk-only records they have not taken. */
+/** A pane runs nothing, so a writer may type into it (chat v2's launch, the
+ *  Continue on another account resume line). See paneFree.ts. */
+async function sessionPaneFree(sessionManager: DaemonSessionManager, agentProcessTracker: AgentProcessTracker, id: string): Promise<boolean> {
+  const pane = sessionManager.getSession(id);
+  if (!pane) return false;
+  return paneFree({
+    shellIdle: async () => (await agentProcessTracker.idleShellState(pane.meta.pid, pane.meta.env, true)).ok,
+    trackedAgentPid: () => agentProcessTracker.pidFor(id),
+    isDefinitelyDead: (pid) => ProcessMonitor.isDefinitelyDead(pid),
+    isRunning: (pid) => ProcessMonitor.isRunning(pid),
+  });
+}
+
 function sessionsToSave(sessionManager: DaemonSessionManager): DaemonSession[] {
   const managed = sessionManager.listSessions();
   diskOnlySessions = retireAdopted(managed, diskOnlySessions);
@@ -9023,13 +9031,7 @@ async function main(): Promise<void> {
           kill: (pid, signal) => process.kill(pid, signal),
           stillIdle,
         }),
-        paneFree: async (sid) => {
-          const pane = sessionManager.getSession(sid);
-          if (!pane) return false;
-          const pid = agentProcessTracker.pidFor(sid);
-          if (pid !== undefined && await ProcessMonitor.isRunning(pid)) return false;
-          return (await agentProcessTracker.idleShellState(pane.meta.pid, pane.meta.env, true)).ok;
-        },
+        paneFree: (sid) => sessionPaneFree(sessionManager, agentProcessTracker, sid),
         promptRevision: (sid) => {
           const pane = sessionManager.getSession(sid);
           if (!pane || pane.promptLog.size === 0 || pane.promptLog.isCommandRunning()) return null;
