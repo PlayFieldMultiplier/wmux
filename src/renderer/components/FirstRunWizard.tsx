@@ -35,6 +35,9 @@ import MediaPreview from './ui/MediaPreview';
 import { MEDIA_CLIPS } from '../assets/media';
 import { IconCheck, IconWarning } from './icons';
 import { FOCUS_RING } from './focusRing';
+import { AgentReadyGroup, AgentSetupCorner, decideAgentPrimary } from './FirstRunAgentCards';
+import { refreshAgentStatus, useAgentSetup } from '../utils/agentSetupRuns';
+import { anyAgentReady } from '../../shared/agentSetup';
 
 // ─── Local type narrowing for electronAPI.firstRun ────────────────────────────
 //
@@ -297,6 +300,33 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
     void refresh();
   }, [refresh]);
 
+  // ─── Agent ready step ──────────────────────────────────────────────────────
+  // Probed separately from check(): it spawns each agent's status command, and
+  // the dialog must not wait on that to open. While an install or sign-in pane
+  // is in use the dialog steps aside to a corner card (the pane needs the
+  // keyboard); it comes back when the run ends, or on "Back to setup".
+  const { statuses, runs } = useAgentSetup();
+  useEffect(() => {
+    void refreshAgentStatus();
+  }, []);
+  const anyRunning = Object.values(runs).some((r) => r?.phase === 'running');
+  const [expandedWhileRunning, setExpandedWhileRunning] = useState(false);
+  useEffect(() => {
+    if (anyRunning) setExpandedWhileRunning(false);
+  }, [anyRunning]);
+  // An install the cards just saw: re-read the checklist so the rows that need
+  // an installed agent (MCP registration, hooks) appear without reopening.
+  const installedKey = statuses?.filter((s) => s.readiness !== 'not-installed').map((s) => s.agent).join(',') ?? null;
+  const seenInstalled = useRef<string | null>(null);
+  useEffect(() => {
+    if (installedKey === null) return;
+    const before = seenInstalled.current;
+    seenInstalled.current = installedKey;
+    if (before !== null && before !== installedKey) void refresh();
+  }, [installedKey, refresh]);
+  const agentPrimary = decideAgentPrimary(statuses, runs);
+  const noAgentReady = statuses !== null && !anyAgentReady(statuses);
+
   // ─── Statusline offer (opt-in; never auto-installs — owner decision 2026-07-17) ──
   // Fetched once on mount; the block renders only when Claude is detected AND
   // there is at least one installable settings target.
@@ -545,7 +575,12 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
     registering,
     hooksState: result?.status.claudeFound ? hooksState : 'unknown',
     sampleState,
+    agentAction: agentPrimary !== null,
   });
+
+  if (anyRunning && !expandedWhileRunning) {
+    return <AgentSetupCorner onExpand={() => setExpandedWhileRunning(true)} />;
+  }
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
@@ -579,14 +614,22 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
           <>
             {/* Setup checklist: one grouped container, one row per item. Rows
                 that need an action are notice rows with the action on the right. */}
+            {/* Agent ready: Claude Code and Codex, one is enough to go on. */}
+            <AgentReadyGroup primary={primary === 'agent' ? agentPrimary : null} />
+
             <div className="ui-group" data-testid="first-run-wizard-checklist">
-              <ClaudeStatusBlock
-                claudeFound={result.status.claudeFound}
-                mcpRegistered={result.status.mcpRegistered}
-                registering={registering}
-                onRegister={handleRegister}
-                primary={primary === 'register'}
-              />
+              {/* The Claude card above says installed or not; this keeps the
+                  MCP registration row, which needs Claude. */}
+              {result.status.claudeFound && (
+                <ClaudeStatusBlock
+                  claudeFound={result.status.claudeFound}
+                  mcpRegistered={result.status.mcpRegistered}
+                  registering={registering}
+                  onRegister={handleRegister}
+                  primary={primary === 'register'}
+                  showDetectedRow={false}
+                />
+              )}
 
               {/* Hook bridge — the required half of the integration. Shown even
                   when already installed, as a check, so the checklist is complete. */}
@@ -664,7 +707,7 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
             onClick={() => void dismiss()}
             data-testid="first-run-wizard-skip"
           >
-            {t('firstRunWizard.skipButton')}
+            {noAgentReady ? t('firstRunWizard.agent.later') : t('firstRunWizard.skipButton')}
           </Button>
         </DialogFooter>
       )}
@@ -681,7 +724,7 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
  * primary — the emphasis does not jump to the next step mid-install. The
  * optional statusline offer is never primary.
  */
-export type WizardPrimaryAction = 'fallback' | 'register' | 'hooks' | 'try' | null;
+export type WizardPrimaryAction = 'fallback' | 'agent' | 'register' | 'hooks' | 'try' | null;
 
 export function decidePrimaryAction({
   uiState,
@@ -690,6 +733,7 @@ export function decidePrimaryAction({
   registering,
   hooksState,
   sampleState,
+  agentAction = false,
 }: {
   uiState: WizardUiState | null;
   claudeFound: boolean;
@@ -697,9 +741,13 @@ export function decidePrimaryAction({
   registering: boolean;
   hooksState: HooksSubState;
   sampleState: SampleSubState;
+  /** No agent is ready yet and an agent card has an action (install / sign in). */
+  agentAction?: boolean;
 }): WizardPrimaryAction {
   if (sampleState === 'timeout-fallback') return 'fallback';
   if (sampleState === 'splitting' || sampleState === 'awaiting-prompt') return null;
+  // Nothing below works without an agent: getting one ready comes first.
+  if (agentAction) return 'agent';
   // Read from the check result, not uiState: reopen mode still offers Register.
   if (claudeFound && !mcpRegistered) return registering ? null : 'register';
   if (hooksState === 'installing') return null;
@@ -774,6 +822,7 @@ export function ClaudeStatusBlock({
   registering,
   onRegister,
   primary = true,
+  showDetectedRow = true,
 }: {
   claudeFound: boolean;
   mcpRegistered: boolean;
@@ -781,6 +830,8 @@ export function ClaudeStatusBlock({
   onRegister: () => void;
   /** Draw Register as the dialog's primary action (never while registering). */
   primary?: boolean;
+  /** The "Claude Code detected" row; off where the agent card already says it. */
+  showDetectedRow?: boolean;
 }) {
   const t = useT();
 
@@ -809,7 +860,7 @@ export function ClaudeStatusBlock({
 
   return (
     <div className="contents" data-testid="first-run-wizard-claude-detected">
-      <SetupRow status="ok" title={t('firstRunWizard.claudeDetected')} />
+      {showDetectedRow && <SetupRow status="ok" title={t('firstRunWizard.claudeDetected')} />}
       {mcpRegistered ? (
         <SetupRow
           status="ok"
