@@ -284,6 +284,15 @@ export function createWindow(opts: { deferLoad?: boolean; windowGlass?: unknown;
   };
   mainWindow.on('enter-full-screen', () => pushFullscreen(true));
   mainWindow.on('leave-full-screen', () => pushFullscreen(false));
+  // A maximized window has square corners on Windows, so the sheet drops its
+  // margin and radius there (DESIGN.md "Window: frame and sheet").
+  const pushMaximized = (maximized: boolean): void => {
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IPC.WINDOW_MAXIMIZED_CHANGED, { maximized });
+    }
+  };
+  mainWindow.on('maximize', () => pushMaximized(true));
+  mainWindow.on('unmaximize', () => pushMaximized(false));
 
   // #882 — "is anyone looking at this window" (minimized / hidden to tray /
   // screen locked), pushed on the same window-event → renderer pattern. The

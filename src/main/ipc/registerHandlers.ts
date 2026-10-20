@@ -504,6 +504,12 @@ export function registerAllHandlers(
     const win = getWindow();
     return !!win && !win.isDestroyed() && win.isFullScreen();
   });
+  // Mount-time maximized state for the sheet frame; the push is in createWindow.
+  ipcMain.removeHandler(IPC.WINDOW_IS_MAXIMIZED);
+  ipcMain.handle(IPC.WINDOW_IS_MAXIMIZED, () => {
+    const win = getWindow();
+    return !!win && !win.isDestroyed() && win.isMaximized();
+  });
 
   // #882 — mount-time pull for "is anyone looking at this window". The push
   // lives in createWindow with the other window events. The pull is what makes

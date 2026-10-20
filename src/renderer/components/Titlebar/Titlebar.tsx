@@ -100,27 +100,46 @@ function useMacFullscreen(isMac: boolean): boolean {
   return fullscreen;
 }
 
+type WindowApi = NonNullable<typeof window.electronAPI>['window'];
+
 /**
- * Mark <html data-fullscreen> while the window is in native fullscreen on any
- * platform, so the floating sheet can drop its frame margins and fill the
- * window. Same push + mount-time pull as useMacFullscreen.
+ * Mirror one window state onto a boolean <html> attribute: a mount-time pull
+ * plus the push listener, the same shape as useMacFullscreen.
  */
-function useFullscreenAttribute(): void {
+function useWindowStateAttribute(
+  attribute: string,
+  pull: (api: WindowApi) => Promise<boolean> | undefined,
+  subscribe: (api: WindowApi, cb: (on: boolean) => void) => (() => void) | undefined,
+): void {
   useEffect(() => {
     const api = typeof window === 'undefined' ? undefined : window.electronAPI?.window;
     const root = document.documentElement;
-    const apply = (fs: boolean) => { if (fs) root.setAttribute('data-fullscreen', ''); else root.removeAttribute('data-fullscreen'); };
+    const apply = (on: boolean) => { if (on) root.setAttribute(attribute, ''); else root.removeAttribute(attribute); };
     let alive = true;
-    void api?.isFullScreen?.().then((fs: boolean) => { if (alive) apply(fs); }).catch(() => {
-      /* best-effort: the push listener corrects state */
-    });
-    const off = api?.onFullscreenChanged?.(apply);
-    return () => { alive = false; off?.(); };
-  }, []);
+    // Subscribe before pulling, and let a push win over a pull still in
+    // flight: its answer was read before the transition the push reports.
+    let pushed = false;
+    const off = api ? subscribe(api, (on) => { pushed = true; apply(on); }) : undefined;
+    if (api) {
+      void pull(api)?.then((on: boolean) => { if (alive && !pushed) apply(on); }).catch(() => {
+        /* best-effort: the push listener corrects state */
+      });
+    }
+    return () => { alive = false; off?.(); root.removeAttribute(attribute); };
+  }, [attribute, pull, subscribe]);
 }
 
+const pullFullscreen = (api: WindowApi) => api.isFullScreen?.();
+const subscribeFullscreen = (api: WindowApi, cb: (on: boolean) => void) => api.onFullscreenChanged?.(cb);
+const pullMaximized = (api: WindowApi) => api.isMaximized?.();
+const subscribeMaximized = (api: WindowApi, cb: (on: boolean) => void) => api.onMaximizedChanged?.(cb);
+
 export default function Titlebar() {
-  useFullscreenAttribute();
+  // <html data-fullscreen> in native fullscreen on any platform, and
+  // <html data-maximized> while maximized: the sheet drops its frame margins
+  // and radius in both (Windows only for maximized; see ui.css).
+  useWindowStateAttribute('data-fullscreen', pullFullscreen, subscribeFullscreen);
+  useWindowStateAttribute('data-maximized', pullMaximized, subscribeMaximized);
   const sidebarVisible = useStore((s) => s.sidebarVisible);
   const sidebarPosition = useStore((s) => s.sidebarPosition);
   const platform = rendererPlatform();
