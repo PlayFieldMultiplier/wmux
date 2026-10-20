@@ -158,6 +158,57 @@ describe('node-pty conout drain (patched)', () => {
     expect(worker.terminated).toBe(true);
   });
 
+  it('releases a connection whose conout pipe the worker reports closed, and ends the worker with the last one', () => {
+    // A shell that exits by itself on the ConPTY DLL path: nothing disposes
+    // its connection, so the worker's CLOSED is what lets it go.
+    const [a] = open(2);
+    const worker = FakeWorker.instances[0];
+    const [idA, idB] = worker.posted.map((m) => m.id);
+    const failed = vi.fn();
+    a.onError(failed);
+    worker.emit('message', { type: 1, id: idA });
+    worker.emit('message', { type: 1, id: idB });
+
+    worker.emit('message', { type: 3, id: idA });
+    expect(failed).not.toHaveBeenCalled();
+    expect(worker.terminated).toBe(false);
+    worker.emit('message', { type: 3, id: idB });
+    expect(worker.terminated).toBe(true);
+  });
+
+  it('drops ready connections with a worker that dies, so the next pty gets a fresh worker of its own', () => {
+    const [a, b] = open(2);
+    const first = FakeWorker.instances[0];
+    const [idA, idB] = first.posted.map((m) => m.id);
+    first.emit('message', { type: 1, id: idA });
+    first.emit('message', { type: 1, id: idB });
+    first.emit('exit', 1);
+
+    const [c] = open(1);
+    expect(FakeWorker.instances).toHaveLength(2);
+    const second = FakeWorker.instances[1];
+    // The dead worker's ptys are not the new worker's: disposing them sends it
+    // nothing, and they do not keep it alive.
+    a.dispose();
+    b.dispose();
+    vi.advanceTimersByTime(1000);
+    expect(second.posted.map((m) => m.type)).toEqual(['open']);
+    c.dispose();
+    vi.advanceTimersByTime(1000);
+    expect(second.terminated).toBe(true);
+  });
+
+  it('does not fail the new worker\'s connections over an error from the worker it replaced', () => {
+    open(1);
+    const first = FakeWorker.instances[0];
+    first.emit('exit', 1);
+    const [b] = open(1);
+    const failed = vi.fn();
+    b.onError(failed);
+    first.emit('error', new Error('old worker'));
+    expect(failed).not.toHaveBeenCalled();
+  });
+
   it('does not report an error for a connection that is already ready', () => {
     const [a] = open(1);
     const failed = vi.fn();
