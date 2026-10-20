@@ -67,7 +67,7 @@ export default function RailPage() {
         {route === 'fleet' && <ErrorBoundary name="FleetView"><FleetView /></ErrorBoundary>}
         {route === 'schedules' && <ErrorBoundary name="SchedulesView"><SchedulesView /></ErrorBoundary>}
         {route === 'remote' && <ErrorBoundary name="RemotePage"><RemotePage /></ErrorBoundary>}
-        {route.startsWith('plugin:') && <ErrorBoundary name="PluginRailPage"><PluginRailPage name={route.slice(7)} /></ErrorBoundary>}
+        {route.startsWith('plugin:') && <ErrorBoundary key={route} name="PluginRailPage"><PluginRailPage name={route.slice(7)} /></ErrorBoundary>}
         {route === 'connectors' && <ErrorBoundary name="ConnectorsPage"><ConnectorsPage /></ErrorBoundary>}
         {route === 'git' && <ErrorBoundary name="GitPage"><GitPage /></ErrorBoundary>}
       </div>
