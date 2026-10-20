@@ -16,6 +16,8 @@ import { getBotConnectorPort, type BotConnectorPort } from '../Room/botConnector
 import { getFactoryBotPort } from '../Room/factoryPorts';
 import { useFactoryBots } from '../Room/useFactoryBots';
 import { CONNECTOR_PRESETS } from '../../../shared/botConnectorPresets';
+import ServiceCatalog from './ServiceCatalog';
+import ConnectorToolPicker from './ConnectorToolPicker';
 import type { ConnectorDraft, ConnectorView } from '../../../shared/botConnector';
 
 /** Catalog/search behavior adapted from LibreChat MCPBuilderPanel (MIT).
@@ -96,11 +98,12 @@ export default function ConnectorsPage({ port = getBotConnectorPort() }: { port?
           return <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-[var(--chip-radius)] bg-[var(--hover-fill)] p-4">
           <div className="min-w-0 flex-1"><h2 className="text-[14px] font-medium">{c.name}</h2><p className="text-[12px] text-[var(--text-sub)]">{c.purpose}</p><p className="text-[11px] text-[var(--text-muted)]">{t(c.missingKeys.length ? 'connectors.missing' : c.enabled ? 'connectors.configured' : 'connectors.disabled')}</p></div>
           {c.transport === 'http' && window.electronAPI?.connectorTerminal && window.electronAPI.platform !== 'win32' && <ConnectorTerminal id={c.id} enabled={c.enabled && (c.tools.mode === 'all' || c.tools.allowed.length > 0)} />}
-          {c.transport === 'http' && <ConnectorAuthorization id={c.id} fingerprint={JSON.stringify(c)} onChange={() => setChecks((prev) => { const next = { ...prev }; delete next[c.id]; return next; })} />}
+          {c.transport === 'http' && <ConnectorAuthorization key={`${c.id}-${JSON.stringify(c)}`} id={c.id} endpoint={c.remote?.url} fingerprint={JSON.stringify(c)} onChange={() => setChecks((prev) => { const next = { ...prev }; delete next[c.id]; return next; })} />}
           <div role="status" className="text-[12px] text-[var(--text-sub)]">{checked && (checked.result ? checked.result.status === 'ready' ? t('connectors.checkReady', { count: checked.result.toolCount }) : t(`connectors.check.${checked.result.status}`) : t('connectors.checking'))}</div>
           <Button disabled={busy || !c.enabled || c.transport !== 'http' || (!!checked && !checked.result) || !window.electronAPI?.connectorChecks} onClick={() => void check(c)}>{t('connectors.check')}</Button>
           <Button disabled={busy} onClick={() => void mutate(() => port.setEnabled({ id: c.id, enabled: !c.enabled }))}>{t(c.enabled ? 'connectors.disable' : 'connectors.enable')}</Button>
           <Button disabled={busy} onClick={() => setDialog({ editing: c })}>{t('connectors.edit')}</Button>
+          {checked?.result?.status === 'ready' && checked.result.toolNames && <ConnectorToolPicker key={`${c.id}-${checked.result.checkedAt}`} names={checked.result.toolNames} policy={c.tools} disabled={busy} onReview={(tools) => setDialog({ editing: { ...c, tools } })} />}
           {removing !== c.id ? <Button disabled={busy} onClick={() => setRemoving(c.id)}>{t('connectors.remove')}</Button> : <div className="flex items-center gap-2"><span className="text-[12px]">{t('connectors.removeHint')}</span><Button disabled={busy} onClick={() => setRemoving(null)}>{t('connectors.cancel')}</Button><Button disabled={busy} onClick={() => void mutate(() => port.remove({ id: c.id, deleteKeys: false }))}>{t('connectors.confirm')}</Button></div>}
         </li>; })}
       </ul>}
@@ -109,7 +112,7 @@ export default function ConnectorsPage({ port = getBotConnectorPort() }: { port?
           <h2 className="text-[14px] font-medium">{t(p.labelKey)}</h2><p className="my-3 text-[12px] text-[var(--text-sub)]">{t(p.hintKey)}</p>
           <Button disabled={!port.available || loading || error} onClick={() => setDialog({ initialDraft: p.draft })}>{t('connectors.configure')}</Button>
         </li>)}
-      </ul><RegistryCatalog canConfigure={port.available && !loading && !error} onConfigure={(initialDraft) => setDialog({ initialDraft })} /></>}
+      </ul><ServiceCatalog canConfigure={port.available && !loading && !error} onConfigure={(initialDraft) => setDialog({ initialDraft })} /><RegistryCatalog canConfigure={port.available && !loading && !error} onConfigure={(initialDraft) => setDialog({ initialDraft })} /></>}
       {dialog && <ConnectionDialog t={t} bots={bots} editing={dialog.editing} initialDraft={dialog.initialDraft} port={port} onClose={() => { setDialog(null); reload(); }} />}
     </section>
   );

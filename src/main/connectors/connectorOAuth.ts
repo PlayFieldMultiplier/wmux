@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { auth, type OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { OAuthClientInformationMixed, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { isConnectorUrl, type Connector } from '../../shared/botConnector';
-import type { ConnectorOAuthResult } from '../../shared/connectorOAuth';
+import { parseConnectorOAuthClient, type ConnectorOAuthClient, type ConnectorOAuthResult } from '../../shared/connectorOAuth';
 import { ConnectorOAuthStore, type OAuthRecord } from './oauthStore';
 import { createOAuthFetch } from './oauthFetch';
 import { createOAuthCallback } from './oauthCallback';
@@ -80,9 +80,10 @@ export class ConnectorOAuth {
     catch { return { status: 'failed' }; }
   }
   dispose(): void { for (const controller of this.active.values()) controller.abort(); }
-  async connect(id: string): Promise<ConnectorOAuthResult> {
+  async connect(id: string, suppliedClient?: ConnectorOAuthClient): Promise<ConnectorOAuthResult> {
     if (this.active.has(id) || this.active.size >= 4) return { status: 'busy' };
-    try { await this.run(id, true); return { status: 'authorized' }; }
+    if (suppliedClient !== undefined && !parseConnectorOAuthClient(suppliedClient)) return { status: 'failed' };
+    try { await this.run(id, true, undefined, suppliedClient); return { status: 'authorized' }; }
     catch { return { status: 'failed' }; }
   }
   /** Caller must recheck the configuration after use. Never falls back to stale tokens. */
@@ -95,7 +96,8 @@ export class ConnectorOAuth {
     if (this.active.has(id) || this.active.size >= 4) throw new Error('Authorization busy');
     return (await this.run(id, false, saved)).tokens.access_token;
   }
-  private async run(id: string, interactive: boolean, saved?: OAuthRecord): Promise<OAuthRecord> {
+  private async run(id: string, interactive: boolean, saved?: OAuthRecord, suppliedClient = saved?.suppliedClient): Promise<OAuthRecord> {
+    if (suppliedClient && !parseConnectorOAuthClient(suppliedClient)) throw new Error('Invalid OAuth client');
     const connector = this.connector(id);
     if (!this.options.store.available()) throw new Error('Secure storage unavailable');
     const endpoint = connector.remote!.url;
@@ -108,7 +110,10 @@ export class ConnectorOAuth {
       if (controller.signal.aborted || this.active.get(id) !== controller || JSON.stringify(this.options.getConnector(id)) !== snapshot) throw new Error('Authorization changed');
     };
     let callback: Awaited<ReturnType<typeof createOAuthCallback>> | undefined;
-    let client: OAuthClientInformationMixed | undefined = saved?.client;
+    let client: OAuthClientInformationMixed | undefined = saved?.client ?? (suppliedClient ? {
+      client_id: suppliedClient.clientId, client_secret: suppliedClient.clientSecret,
+      issuer: suppliedClient.issuer, token_endpoint_auth_method: suppliedClient.tokenAuthMethod,
+    } : undefined);
     let tokens: OAuthTokens | undefined = saved?.tokens;
     let expiresAt = saved?.expiresAt ?? 0;
     let verifier = '';
@@ -120,7 +125,7 @@ export class ConnectorOAuth {
         const metadata = discovery?.authorizationServerMetadata;
         if (!metadata?.issuer) return false;
         return issuer === null ? issuerRequirements.get(metadata.issuer) !== true : issuer === metadata.issuer;
-      });
+      }, suppliedClient?.callbackPort);
       const redirectUrl = callback?.redirectUrl ?? saved?.redirectUrl;
       if (!redirectUrl) throw new Error('Missing redirect');
       const allowedUrl = (raw: string) => {
@@ -132,7 +137,7 @@ export class ConnectorOAuth {
       };
       const provider: OAuthClientProvider = {
         redirectUrl,
-        clientMetadata: { client_name: 'wmux', redirect_uris: [redirectUrl], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' },
+        clientMetadata: { client_name: 'wmux', redirect_uris: [redirectUrl], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: suppliedClient?.tokenAuthMethod ?? 'none' },
         state: () => state,
         clientInformation: () => client,
         saveClientInformation: (value) => { valid(); client = value; },
@@ -150,6 +155,7 @@ export class ConnectorOAuth {
           valid(); if (!interactive) throw new Error('Sign in required');
           allowedUrl(url.href);
           if (url.searchParams.get('state') !== state || url.searchParams.get('code_challenge_method') !== 'S256') throw new Error('Unsafe authorization');
+          if (suppliedClient?.offlineAccess) { url.searchParams.set('access_type', 'offline'); url.searchParams.set('prompt', 'consent'); }
           await this.options.openBrowser(url.href);
         },
         discoveryState: () => discovery,
@@ -157,6 +163,9 @@ export class ConnectorOAuth {
           valid();
           const metadata = value.authorizationServerMetadata;
           if (!metadata?.issuer || metadata.issuer !== value.authorizationServerUrl) throw new Error('Issuer mismatch');
+          // A pre-registered secret belongs to this exact issuer/token endpoint.
+          // A resource's discovery document cannot redirect it to another host.
+          if (suppliedClient && (metadata.issuer !== suppliedClient.issuer || metadata.token_endpoint !== suppliedClient.tokenEndpoint)) throw new Error('OAuth client destination changed');
           allowedUrl(metadata.issuer);
           if (metadata.authorization_endpoint) allowedUrl(metadata.authorization_endpoint);
           if (metadata.token_endpoint) allowedUrl(metadata.token_endpoint);
@@ -179,6 +188,7 @@ export class ConnectorOAuth {
         },
         invalidateCredentials: (scope) => {
           valid();
+          if (suppliedClient && (scope === 'all' || scope === 'client')) throw new Error('OAuth client rejected');
           if (scope === 'all' || scope === 'client') client = undefined;
           if (scope === 'all' || scope === 'tokens') tokens = undefined;
           if (scope === 'all' || scope === 'verifier') verifier = '';
@@ -209,16 +219,16 @@ export class ConnectorOAuth {
         } catch { /* The SDK validates response formats. */ }
         return new Response(text || null, { status: response.status, statusText: response.statusText, headers: response.headers });
       };
-      const result = await auth(provider, { serverUrl: endpoint, fetchFn });
+      const result = await auth(provider, { serverUrl: endpoint, scope: suppliedClient?.scope, fetchFn });
       if (result === 'REDIRECT') {
         if (!callback) throw new Error('Sign in required');
         const code = await callback.code;
         valid();
-        await auth(provider, { serverUrl: endpoint, authorizationCode: code, fetchFn });
+        await auth(provider, { serverUrl: endpoint, authorizationCode: code, scope: suppliedClient?.scope, fetchFn });
       }
       valid();
       if (!client || !tokens || expiresAt <= Date.now()) throw new Error('Authorization incomplete');
-      const record: OAuthRecord = { endpoint, redirectUrl, client, tokens, expiresAt };
+      const record: OAuthRecord = { endpoint, redirectUrl, client, tokens, expiresAt, ...(suppliedClient ? { suppliedClient } : {}) };
       this.options.store.write(id, record);
       this.revoked.delete(id);
       if (interactive) this.revisions.set(id, this.revision(id) + 1);

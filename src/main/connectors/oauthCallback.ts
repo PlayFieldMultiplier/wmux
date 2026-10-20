@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 /** Bind before launching the browser; consume exactly one state-matched callback. */
-export async function createOAuthCallback(state: string, signal: AbortSignal, validateIssuer: (issuer: string | null) => boolean) {
+export async function createOAuthCallback(state: string, signal: AbortSignal, validateIssuer: (issuer: string | null) => boolean, port = 0) {
   let resolve!: (code: string) => void;
   let reject!: (error: Error) => void;
   const code = new Promise<string>((yes, no) => { resolve = yes; reject = no; });
@@ -33,7 +33,7 @@ export async function createOAuthCallback(state: string, signal: AbortSignal, va
   const close = () => { consumed = true; reject(new Error('Authorization cancelled')); server.closeAllConnections(); server.close(); };
   signal.addEventListener('abort', close, { once: true });
   try {
-    await new Promise<void>((yes, no) => { server.once('error', no); server.listen(0, '127.0.0.1', yes); });
+    await new Promise<void>((yes, no) => { server.once('error', no); server.listen(port, '127.0.0.1', yes); });
     expectedHost = `127.0.0.1:${(server.address() as AddressInfo).port}`;
     if (signal.aborted) throw new Error('Authorization cancelled');
     return { redirectUrl: `http://${expectedHost}/oauth/callback`, code, close: () => { signal.removeEventListener('abort', close); close(); } };

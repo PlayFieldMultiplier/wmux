@@ -181,12 +181,13 @@ license texts. A packaged installer was not built as part of this notice-only ch
 
 The main process uses the already-installed MIT MCP SDK for discovery, dynamic
 client registration, PKCE and token exchange/refresh. No further LibreChat code
-was copied. This initial implementation requires a compatible authorization
-server supporting dynamic registration and loopback redirect URIs. It does not
-ship a provider client registration or a hosted client metadata document.
+was copied. Compatible providers can use dynamic registration, or the owner can
+supply a registered OAuth client with an exact issuer and token-endpoint pin.
+The owner registers the displayed fixed loopback callback for a supplied client.
+wmux does not ship shared provider credentials or a hosted metadata document.
 
-An explicit sign-in opens the system browser after binding an ephemeral loopback
-listener. The listener validates the host, callback path, unique parameters,
+An explicit sign-in opens the system browser after binding a loopback listener
+(ephemeral for dynamic registration, owner-selected port for a registered client). The listener validates the host, callback path, unique parameters,
 random state and authorization issuer, and consumes a callback once. Discovery
 requires metadata issuer matching the discovered authorization server. Remote
 servers cannot direct HTTP discovery to a local service. Requests refuse
@@ -307,3 +308,48 @@ Real provider-account E2E remains unverified. Installed CLI-to-gateway tests use
 only a local probe fixture. The library observer does not modify Bots worker
 execution. The feature adds no runtime dependency or license exception; source
 attribution and distributed notices above remain required.
+
+
+## Reviewed service recipes
+
+The Discover page includes 24 vendor-hosted HTTP recipes in addition to the two
+existing GitHub/filesystem presets. `src/shared/connectorServices.ts` records each
+endpoint, official setup source, category, and registration prerequisite. These
+are original endpoint configuration data, not copied vendor implementations.
+Vendor service terms and account eligibility still apply; hosted services are
+not represented as MIT software. Existing MIT code attribution is unchanged.
+
+The recipes cover Gmail, Google Calendar, Drive, Docs, Sheets, Slides, Chat,
+Contacts, Classroom, Slack, Notion, Linear, Atlassian, Figma, Asana, Sentry, Stripe,
+Vercel, Supabase, Cloudflare, Canva, HubSpot, PayPal Sandbox, and Dropbox. Google
+requires the Workspace Developer Preview and a configured Cloud project; Slack
+requires an eligible registered app. There is no claim that these provider
+accounts have been authorized or tested. Other providers remain discoverable
+through the public registry or a custom connection.
+
+Setup flow: review the provider's instructions, configure/save the disabled
+recipe, explicitly enable it, sign in (Advanced sign-in for pre-registered
+clients), check the server, select tools, and review/save their permissions.
+New recipes grant neither tools nor bot scope. Checking a server returns bounded
+tool names without calling any tool. Selection opens the existing review dialog;
+it never saves permissions on a checkbox change. Dotted tool names are accepted
+so namespaced provider tools can be listed explicitly for HTTP connections with
+no bots selected. Dotted allow/deny policies are refused for bot-scoped or stdio
+connections and filtered out of worker selection, preserving the worker
+adapters' existing CLI-safe-name and literal-regex assumptions.
+
+Pre-registered clients have a fixed loopback callback port, issuer, token
+endpoint, optional scopes and token authentication method. Both issuer and
+exact token endpoint are pinned before any client credential is submitted.
+Client credentials and configuration are stored only inside the encrypted OAuth
+record after successful sign-in and removed on disconnect. Google-style offline
+access adds access_type=offline and prompt=consent to the authorization URL.
+Refresh reuses the same pins and authentication method, without browser fallback.
+An occupied callback port fails closed. Provider client rejection never falls
+back to registering or presenting that client to another issuer.
+
+Microsoft 365 and providers requiring tenant-specific endpoints, proprietary
+client approval, unsupported auth grants or a local server are not claimed as
+ready-made recipes. No private ChatGPT/Claude service endpoint or credential is
+reused. Real account E2E remains a separate owner-authorized check; fixtures test
+confidential-client exchange, refresh, consent, destination pinning and secrecy.

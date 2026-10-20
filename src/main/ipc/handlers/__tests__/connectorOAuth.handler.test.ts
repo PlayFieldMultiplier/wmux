@@ -19,12 +19,19 @@ it('permits only the main frame, known actions and saved connection IDs', async 
   expect(await invoke(event, 'connect', '../token')).toEqual({ status: 'unavailable' });
   expect(await invoke(event, 'unknown', 'con-12345678')).toEqual({ status: 'unavailable' });
   expect(mocks.connect).not.toHaveBeenCalled();
+  expect(await invoke(event, 'connect', 'con-12345678', undefined, { clientId: 'missing-fields' })).toEqual({ status: 'failed' });
+  expect(mocks.connect).not.toHaveBeenCalled();
   expect(await invoke(event, 'approve', 'con-12345678')).toEqual({ status: 'unavailable' });
   expect(mocks.approve).not.toHaveBeenCalled();
   expect(await invoke(event, 'approve', 'con-12345678', 'attempt-one')).toEqual({ status: 'authorizing' });
   expect(mocks.approve).toHaveBeenCalledWith('con-12345678', 'attempt-one');
   expect(await invoke(event, 'connect', 'con-12345678')).toEqual({ status: 'authorized' });
   expect(mocks.connect).toHaveBeenCalledWith('con-12345678');
+  const client = { clientId: 'app', clientSecret: 'secret', issuer: 'https://issuer.example', tokenEndpoint: 'https://issuer.example/token', callbackPort: 42813, tokenAuthMethod: 'client_secret_post' };
+  expect(await invoke({ ...event, senderFrame: {} }, 'connect', 'con-12345678', undefined, client)).toEqual({ status: 'unavailable' });
+  expect(mocks.connect).toHaveBeenCalledTimes(1);
+  expect(await invoke(event, 'connect', 'con-12345678', undefined, client)).toEqual({ status: 'authorized' });
+  expect(mocks.connect).toHaveBeenLastCalledWith('con-12345678', { ...client, offlineAccess: false });
   cleanup(); expect(mocks.dispose).toHaveBeenCalled();
 });
 

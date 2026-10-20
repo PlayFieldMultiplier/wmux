@@ -54,7 +54,7 @@ export async function checkConnector(
         names.add(tool.name);
       }
       cursor = result.nextCursor;
-      if (!cursor) return { status: 'ready', toolCount: names.size, checkedAt: Date.now() };
+      if (!cursor) return { status: 'ready', toolCount: names.size, toolNames: [...names], checkedAt: Date.now() };
       if (cursors.has(cursor)) return { status: 'failed' };
       cursors.add(cursor);
     }

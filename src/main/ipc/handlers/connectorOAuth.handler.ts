@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { ipcMain, shell, type BrowserWindow } from 'electron';
 import { getWmuxDir } from '../../../daemon/config';
-import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthResult } from '../../../shared/connectorOAuth';
+import { CONNECTOR_OAUTH_IPC, parseConnectorOAuthClient, type ConnectorOAuthResult } from '../../../shared/connectorOAuth';
 import { CONNECTOR_ID_RE } from '../../../shared/botConnector';
 import { ConnectorOAuth } from '../../connectors/connectorOAuth';
 import { ConnectorOAuthStore } from '../../connectors/oauthStore';
@@ -23,12 +23,16 @@ export function registerConnectorOAuthHandlers(getWindow: () => BrowserWindow | 
   const unsubscribe = onConnectorLibraryChanged(reconcile);
   reconcile();
   ipcMain.removeHandler(CONNECTOR_OAUTH_IPC);
-  ipcMain.handle(CONNECTOR_OAUTH_IPC, wrapHandler(CONNECTOR_OAUTH_IPC, async (event, action: unknown, id: unknown, consentId: unknown): Promise<ConnectorOAuthResult> => {
+  ipcMain.handle(CONNECTOR_OAUTH_IPC, wrapHandler(CONNECTOR_OAUTH_IPC, async (event, action: unknown, id: unknown, consentId: unknown, client: unknown): Promise<ConnectorOAuthResult> => {
     if (!isMainWindowSender(event, getWindow()) || typeof id !== 'string' || !CONNECTOR_ID_RE.test(id)) return { status: 'unavailable' };
     switch (action) {
       case 'approve': return typeof consentId === 'string' ? service.approve(id, consentId) : { status: 'unavailable' };
       case 'status': return service.status(id);
-      case 'connect': return service.connect(id);
+      case 'connect': {
+        const parsed = client === undefined ? undefined : parseConnectorOAuthClient(client);
+        if (client !== undefined && !parsed) return { status: 'failed' };
+        return parsed ? service.connect(id, parsed) : service.connect(id);
+      }
       case 'disconnect': return service.disconnect(id);
       case 'cancel': return service.cancel(id);
       default: return { status: 'unavailable' };

@@ -1,5 +1,5 @@
 import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult } from '../shared/connectorTerminal';
-import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthAction, type ConnectorOAuthResult } from '../shared/connectorOAuth';
+import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthAction, type ConnectorOAuthClient, type ConnectorOAuthResult } from '../shared/connectorOAuth';
 import { CONNECTOR_CATALOG_IPC, type ConnectorCatalogResult } from '../shared/connectorCatalog';
 import { CONNECTOR_CHECK_IPC, type ConnectorCheckResult } from '../shared/connectorCheck';
 import { WORKFLOW_OWNER_IPC } from '../shared/botWorkflow';
@@ -1512,7 +1512,7 @@ const electronAPI = {
     launchCommand: (id: string, agent: 'claude' | 'codex') => ipcRenderer.invoke(CONNECTOR_TERMINAL_IPC, id, agent) as Promise<ConnectorTerminalResult>,
   },
   connectorOAuth: {
-    action: (action: ConnectorOAuthAction, id: string, consentId?: string) => ipcRenderer.invoke(CONNECTOR_OAUTH_IPC, action, id, consentId) as Promise<ConnectorOAuthResult>,
+    action: (action: ConnectorOAuthAction, id: string, consentId?: string, client?: ConnectorOAuthClient) => ipcRenderer.invoke(CONNECTOR_OAUTH_IPC, action, id, consentId, client) as Promise<ConnectorOAuthResult>,
   },
   connectorCatalog: {
     list: (search: string, cursor?: string) => ipcRenderer.invoke(CONNECTOR_CATALOG_IPC, search, cursor) as Promise<ConnectorCatalogResult>,

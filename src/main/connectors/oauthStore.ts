@@ -4,8 +4,10 @@ import { randomBytes } from 'node:crypto';
 import type { OAuthClientInformationMixed, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { SecretCrypto } from '../factory/secretStore';
 import { CONNECTOR_ID_RE } from '../../shared/botConnector';
+import type { ConnectorOAuthClient } from '../../shared/connectorOAuth';
 
 export interface OAuthRecord {
+  suppliedClient?: ConnectorOAuthClient;
   endpoint: string;
   redirectUrl: string;
   client: OAuthClientInformationMixed;
