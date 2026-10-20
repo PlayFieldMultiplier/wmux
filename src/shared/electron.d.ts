@@ -73,7 +73,8 @@ import type {
   RegisterMcpResult,
   SampleTaskStartPayload,
 } from './firstRun';
-import type { AgentSetupStatus } from './agentSetup';
+import type { AgentId, AgentSetupStatus } from './agentSetup';
+import type { AgentSetupPlan, SetAgentPathResult } from './agentInstall';
 
 declare global {
   interface Window {
@@ -119,6 +120,8 @@ declare global {
         reopen: () => Promise<FirstRunCheckResult>;
         registerMcp: () => Promise<RegisterMcpResult>;
         agentStatus: () => Promise<AgentSetupStatus[]>;
+        agentPlan: (agent: AgentId) => Promise<AgentSetupPlan>;
+        setAgentPath: (agent: AgentId, input: string | null) => Promise<SetAgentPathResult>;
         startSampleTask: (payload: SampleTaskStartPayload) => Promise<void>;
         onSampleTaskReady: (callback: () => void) => () => void;
         onSampleTaskTimeout: (callback: () => void) => () => void;

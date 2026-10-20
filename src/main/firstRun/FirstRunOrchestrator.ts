@@ -10,6 +10,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { app } from 'electron';
 import type { BrowserWindow } from 'electron';
 
@@ -27,9 +28,19 @@ import type {
   FirstRunCheckResult,
   RegisterMcpResult,
 } from '../../shared/firstRun';
-import type { AgentSetupStatus } from '../../shared/agentSetup';
+import { AGENT_IDS, type AgentId, type AgentSetupStatus } from '../../shared/agentSetup';
+import {
+  AGENT_EXECUTABLE_NAMES,
+  agentInstallMethod,
+  agentLoginCommand,
+  type AgentSetupPlan,
+  type SetAgentPathResult,
+} from '../../shared/agentInstall';
+import { isExecutableFile } from '../claude/resolveClaudeExecutable';
 
 const MARKER_FILENAME = '.first-run';
+/** Paths the user typed in an agent card ("installed but not found"). */
+const AGENT_PATHS_FILENAME = 'agent-paths.json';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const NOOP = (chunk: string): void => { void chunk; };
 
@@ -70,7 +81,7 @@ function buildLocalSource(ptyManager: PTYManager, ptyBridge: PTYBridge, ptyId: s
 
 export class FirstRunOrchestrator {
   private detector = new ClaudeDetector();
-  private agentDetector = new AgentSetupDetector();
+  private agentDetector = new AgentSetupDetector({ override: (agent) => this.readAgentPaths()[agent] ?? null });
   private runner = new SampleTaskRunner();
   private activeAbort: AbortController | null = null;
 
@@ -98,6 +109,75 @@ export class FirstRunOrchestrator {
    */
   async agentStatus(): Promise<AgentSetupStatus[]> {
     return this.agentDetector.detectAll();
+  }
+
+  /**
+   * What the card can offer for one agent: the bundled install line (and any
+   * program it needs that is missing here) and, once installed, the sign-in
+   * line for the exact executable the card shows.
+   */
+  async agentPlan(agent: AgentId): Promise<AgentSetupPlan> {
+    const method = agentInstallMethod(agent, process.platform);
+    const env = this.agentDetector.probeEnvFor(process.execPath);
+    const missing = method.requires.filter((name) => !this.onPath(name, env));
+    const executable = this.agentDetector.resolveExecutable(agent);
+    return {
+      agent,
+      install: { command: method.command, shell: method.shell, officialPage: method.officialPage, missing },
+      login: executable ? { command: agentLoginCommand(executable, method.shell), shell: method.shell } : null,
+    };
+  }
+
+  /**
+   * Remember a path the user typed for an agent wmux did not find, after
+   * checking it names that agent and runs (`--version`). `null` forgets it.
+   */
+  async setAgentPath(agent: AgentId, input: string | null): Promise<SetAgentPathResult> {
+    const paths = this.readAgentPaths();
+    if (input === null) {
+      delete paths[agent];
+      await this.writeAgentPaths(paths);
+      return { ok: true };
+    }
+    const p = input.trim().replace(/^"(.*)"$/, '$1');
+    if (!path.isAbsolute(p)) return { ok: false, reason: 'not-absolute' };
+    if (!isExecutableFile(p)) return { ok: false, reason: 'not-found' };
+    if (!AGENT_EXECUTABLE_NAMES[agent].includes(path.basename(p).toLowerCase())) {
+      return { ok: false, reason: 'wrong-program' };
+    }
+    if ((await this.agentDetector.readVersion(p)) === null) return { ok: false, reason: 'does-not-run' };
+    paths[agent] = p;
+    await this.writeAgentPaths(paths);
+    return { ok: true };
+  }
+
+  private onPath(name: string, env: NodeJS.ProcessEnv): boolean {
+    const raw = env.PATH ?? env.Path ?? '';
+    const dirs = [...raw.split(path.delimiter), '/usr/bin', '/bin'].filter((d) => path.isAbsolute(d));
+    return dirs.some((d) => isExecutableFile(path.join(d, name)));
+  }
+
+  private agentPathsPath(): string {
+    return path.join(app.getPath('userData'), AGENT_PATHS_FILENAME);
+  }
+
+  /** Sync and tiny: read on every detect so a change applies at once. */
+  private readAgentPaths(): Partial<Record<AgentId, string>> {
+    try {
+      const raw = JSON.parse(fsSync.readFileSync(this.agentPathsPath(), 'utf8')) as Record<string, unknown>;
+      const out: Partial<Record<AgentId, string>> = {};
+      for (const agent of AGENT_IDS) {
+        const v = raw?.[agent];
+        if (typeof v === 'string' && path.isAbsolute(v)) out[agent] = v;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeAgentPaths(paths: Partial<Record<AgentId, string>>): Promise<void> {
+    await fs.writeFile(this.agentPathsPath(), JSON.stringify(paths, null, 2), 'utf8');
   }
 
   async complete(): Promise<void> {

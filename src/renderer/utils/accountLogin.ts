@@ -103,6 +103,10 @@ export async function openTerminalTab(req: {
   wslAccountLoginEnvKey?: ReturnType<typeof loginEnvKey>;
   initialCommand: string;
   title: string;
+  /** Run in this shell instead of the user's default one. */
+  shell?: string;
+  /** Start here instead of the workspace's startup folder; null = the home folder. */
+  cwd?: string | null;
 }): Promise<LoginTab | null> {
   const state = useStore.getState();
   if (state.paneGate !== 'ready') return null;
@@ -110,11 +114,13 @@ export async function openTerminalTab(req: {
   // Another computer's (shadow) workspace never gets a local shell.
   if (!ws || isShadowWorkspaceId(ws.id)) return null;
   const paneId = ws.activePaneId;
-  const cwd = resolveStartupCwd({
-    splitInheritsCwd: false,
-    profile: ws.profile,
-    startupDirectory: state.startupDirectory,
-  });
+  const cwd = req.cwd !== undefined
+    ? (req.cwd ?? undefined)
+    : resolveStartupCwd({
+      splitInheritsCwd: false,
+      profile: ws.profile,
+      startupDirectory: state.startupDirectory,
+    });
   // withWorkspaceProfile merges profile env UNDER this explicit env and keeps
   // this initialCommand, and main applies options.env after any account
   // binding — so the tab always logs into THIS account's dir. No role binding:
@@ -127,6 +133,7 @@ export async function openTerminalTab(req: {
         spawnKind: 'user-shell' as const,
         ...(req.env ? { env: req.env } : {}),
         ...(req.wslAccountLoginEnvKey ? { wslAccountLoginEnvKey: req.wslAccountLoginEnvKey } : {}),
+        ...(req.shell ? { shell: req.shell } : {}),
         initialCommand: req.initialCommand,
       },
       state.defaultShell,
