@@ -469,6 +469,9 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     attentionBlinkRemindMs: state.attentionBlinkRemindMs,
     attentionBlinkFinished: state.attentionBlinkFinished,
     windowGlass: state.windowGlass,
+    // The theme's polarity, so main can give a glass window the theme's tone
+    // before this renderer loads (main/window/windowGlass.ts).
+    windowAppearance: state.windowAppearance ?? undefined,
     sidebarSortMode: state.sidebarSortMode,
     sidebarSortModeChosen: state.sidebarSortModeChosen,
     sidebarPinnedIds: state.sidebarPinnedIds,

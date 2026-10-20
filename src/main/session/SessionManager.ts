@@ -286,6 +286,43 @@ export class SessionManager {
   }
 
   /**
+   * The persisted window glass level, as a targeted read. The window is built
+   * before the renderer loads the session, and on Windows the glass level
+   * decides the window's background material at construction. Same shape as
+   * readAutoUpdateEnabled; the caller whitelists the raw value. Returns null
+   * when nothing is persisted, which the caller reads as the default level.
+   */
+  readWindowGlass(): unknown {
+    try {
+      const loaded = atomicReadJSONSync<SessionData>(this.filePath, {
+        validate: SessionManager.isSessionData,
+      });
+      return loaded?.windowGlass ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The theme polarity the renderer last saved ('dark' | 'light'), read before
+   * the window exists so a glass window starts in its theme's tone (see
+   * initialWindowsAppearance). Raw value; the caller whitelists it.
+   * `undefined` means no session could be read (a first run), and `null` a
+   * session saved before the polarity was, which keeps its old start.
+   */
+  readWindowAppearance(): unknown {
+    try {
+      const loaded = atomicReadJSONSync<SessionData>(this.filePath, {
+        validate: SessionManager.isSessionData,
+      });
+      if (!loaded) return undefined;
+      return loaded.windowAppearance ?? null;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * The persisted per-site memory toggle, as a targeted read.
    *
    * Same shape and same reasoning as readAutoUpdateEnabled: the browser RPC

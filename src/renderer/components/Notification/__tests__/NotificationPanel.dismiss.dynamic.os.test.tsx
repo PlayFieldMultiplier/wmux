@@ -2,7 +2,7 @@
 //
 // #1747 — the notification drawer must be closable with the mouse on Windows.
 //
-// The Windows window uses `titleBarOverlay` (createWindow.ts): the OS draws
+// The Windows window uses `titleBarOverlay` (windowGlass.ts): the OS draws
 // the minimize / maximize / close buttons over the top-right TITLEBAR_HEIGHT
 // strip, above any web z-index. A drawer starting at top: 0 put its close
 // button under them. jsdom has no layout, so "reachable" is asserted as
@@ -108,8 +108,9 @@ afterEach(() => {
 
 describe('NotificationPanel vs the Windows titleBarOverlay (#1747)', () => {
   it('the overlay strip is TITLEBAR_HEIGHT tall (main and renderer agree)', () => {
-    const src = readFileSync(resolve(__dirname, '../../../../main/window/createWindow.ts'), 'utf8');
-    const m = /titleBarOverlay:\s*\{[^}]*height:\s*(\d+)/.exec(src);
+    // The win32 window options live in windowGlass.ts (winWindowOptions).
+    const src = readFileSync(resolve(__dirname, '../../../../main/window/windowGlass.ts'), 'utf8');
+    const m = /titleBarOverlay\s*=\s*\{[^}]*height:\s*(\d+)/.exec(src);
     expect(m).not.toBeNull();
     expect(Number(m?.[1])).toBe(TITLEBAR_HEIGHT);
   });

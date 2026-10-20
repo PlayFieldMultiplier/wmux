@@ -90,7 +90,8 @@ import { TabComputerUse } from './ComputerUseSection';
 import { QuickLaunchSection } from './QuickLaunchSection';
 import PairedDevicesModal from '../StatusBar/PairedDevicesModal';
 import { FOCUS_RING } from '../focusRing';
-import { SETTINGS_CATALOG, SETTINGS_NAV_GROUPS, resolveSettingsTab, type SettingsTabId } from '../../settings/catalog';
+import { SETTINGS_CATALOG, SETTINGS_NAV_GROUPS, catalogEntryOnPlatform, resolveSettingsTab, type SettingsTabId } from '../../settings/catalog';
+import { windowGlassSupported, type WindowGlassLevel } from '../../utils/windowGlass';
 import { matchSettings, tabHitCount } from '../../settings/searchSettings';
 import { CursorShapePicker } from './CursorShapePicker';
 import { SettingsSearchResults } from './SettingsSearchResults';
@@ -3546,6 +3547,39 @@ function FontFamilyField() {
   );
 }
 
+/**
+ * The window glass row. Without a material (Windows before 11 22H2) it reads
+ * Off with every level disabled and says why.
+ */
+export function WindowGlassSetting({
+  supported,
+  value,
+  onChange,
+}: {
+  supported: boolean;
+  value: WindowGlassLevel;
+  onChange: (level: WindowGlassLevel) => void;
+}) {
+  const t = useT();
+  return (
+    <SettingRow
+      id="windowglass"
+      label={t('settings.windowGlass')}
+      description={supported ? t('settings.windowGlassDesc') : t('settings.windowGlassUnsupported')}
+    >
+      <SegmentedControl
+        value={supported ? value : 'off'}
+        onValueChange={onChange}
+        options={[
+          { value: 'off', label: t('settings.windowGlassOff'), disabled: !supported },
+          { value: 'soft', label: t('settings.windowGlassSoft'), disabled: !supported },
+          { value: 'clear', label: t('settings.windowGlassClear'), disabled: !supported },
+        ]}
+      />
+    </SettingRow>
+  );
+}
+
 export function ChromePresetActionsView({
   onApply,
 }: {
@@ -3604,6 +3638,7 @@ function TabAppearance() {
   const attentionBlinkFinished = useStore((s) => s.attentionBlinkFinished);
   const windowGlass = useStore((s) => s.windowGlass);
   const setWindowGlass = useStore((s) => s.setWindowGlass);
+  const glassSupported = windowGlassSupported();
   const setAttentionBlinkFinished = useStore((s) => s.setAttentionBlinkFinished);
   const workspaceSettleIdleDays = useStore((s) => s.workspaceSettle.idleDays);
   const fleetLayout = useStore((s) => s.fleetLayout);
@@ -3721,19 +3756,12 @@ function TabAppearance() {
             </span>
           </div>
         </SettingRow>
-        {/* macOS only: the window material is a macOS feature. */}
-        {window.electronAPI?.platform === 'darwin' && (
-          <SettingRow id="windowglass" label={t('settings.windowGlass')} description={t('settings.windowGlassDesc')}>
-            <SegmentedControl
-              value={windowGlass}
-              onValueChange={setWindowGlass}
-              options={[
-                { value: 'off', label: t('settings.windowGlassOff') },
-                { value: 'soft', label: t('settings.windowGlassSoft') },
-                { value: 'clear', label: t('settings.windowGlassClear') },
-              ]}
-            />
-          </SettingRow>
+        {/* The window material exists on macOS and on Windows 11 22H2+.
+            On older Windows the row stays, read as Off and disabled with the
+            reason, so nobody picks a level that changes nothing. Linux has
+            no material and no row. */}
+        {(window.electronAPI?.platform === 'darwin' || window.electronAPI?.platform === 'win32') && (
+          <WindowGlassSetting supported={glassSupported} value={windowGlass} onChange={setWindowGlass} />
         )}
         <SettingRow id="chrome" label={t('settings.chromePreset')} description={t('settings.chromePresetDesc')}>
           <ChromePresetActionsView onApply={applyChromePresetWithFeedback} />
@@ -5298,7 +5326,7 @@ export default function SettingsPanel({ initialTab }: { initialTab?: string }) {
     () => matchSettings(
       searchQuery,
       t,
-      SETTINGS_CATALOG.filter((entry) => !entry.platform || entry.platform === window.electronAPI?.platform),
+      SETTINGS_CATALOG.filter((entry) => catalogEntryOnPlatform(entry, window.electronAPI?.platform)),
     ),
     [searchQuery, t],
   );

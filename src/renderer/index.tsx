@@ -29,12 +29,14 @@ installChromeScrollPin();
 // Translucent chrome over the macOS window material, in the theme's appearance.
 // Installed once the saved theme and glass level are in, so a launch never
 // flashes the defaults' glass or flips the app's appearance twice.
-if (useStore.getState().sessionSettingsLoaded) installWindowGlass();
+// The theme's polarity rides the session save (main starts a glass window in it).
+const saveWindowAppearance = (appearance: 'dark' | 'light') => useStore.getState().setWindowAppearance(appearance);
+if (useStore.getState().sessionSettingsLoaded) installWindowGlass(document.documentElement, saveWindowAppearance);
 else {
   const unsubscribe = useStore.subscribe((state) => {
     if (!state.sessionSettingsLoaded) return;
     unsubscribe();
-    installWindowGlass();
+    installWindowGlass(document.documentElement, saveWindowAppearance);
   });
 }
 

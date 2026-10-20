@@ -1792,11 +1792,17 @@ const electronAPI = {
     setTitleBarOverlay: (opts: { color: string; symbolColor: string }) => {
       ipcRenderer.send(IPC.WINDOW_SET_TITLEBAR_OVERLAY, opts);
     },
-    // macOS window glass: match the app's appearance to the theme so the
-    // material behind the window has the theme's tone, or 'system' with glass
-    // off. Main validates it.
+    // Window glass: match the app's appearance to the theme so the material
+    // behind the window has the theme's tone, or 'system' with glass off.
+    // Main validates it.
     setAppearance: (appearance: 'dark' | 'light' | 'system') => {
       ipcRenderer.send(IPC.WINDOW_SET_APPEARANCE, appearance);
+    },
+    // Windows window glass: switch the acrylic material for a glass level.
+    // The colour pair is the solid overlay colour the frame paints with glass
+    // off (overlayColors()). Main validates it and no-ops off Windows.
+    setGlass: (opts: { level: 'off' | 'soft' | 'clear'; color?: string; symbolColor?: string }) => {
+      ipcRenderer.send(IPC.WINDOW_SET_GLASS, opts);
     },
     // Whole-interface zoom (#822): push the persisted factor to main, which
     // scales the renderer and re-places the native chrome. The overlay color

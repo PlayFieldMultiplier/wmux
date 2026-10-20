@@ -689,6 +689,9 @@ export interface UISlice {
    *  over the window material. Per user, persisted in the session. */
   windowGlass: WindowGlassLevel;
   setWindowGlass: (level: WindowGlassLevel) => void;
+  /** The current theme's polarity, saved so main can start a glass window in its tone (main/window/windowGlass.ts). */
+  windowAppearance: 'dark' | 'light' | null;
+  setWindowAppearance: (appearance: 'dark' | 'light') => void;
 
   // ─── Toast / ring notification UI ────────────────────────────────────────
   toastEnabled: boolean;
@@ -1888,6 +1891,11 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   setWindowGlass: (level) => {
     document.documentElement.setAttribute('data-glass-level', level);
     set((state) => { state.windowGlass = level; });
+  },
+  windowAppearance: null,
+  setWindowAppearance: (appearance) => {
+    if (get().windowAppearance === appearance) return;
+    set((state) => { state.windowAppearance = appearance; });
   },
 
   // ─── Toast / ring notification UI ────────────────────────────────────────
