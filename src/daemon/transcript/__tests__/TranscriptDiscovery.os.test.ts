@@ -61,6 +61,14 @@ describe('scanForTranscript', () => {
     expect(scanForTranscript(ID, {})).toEqual([original]);
   });
 
+  it('a pane that clears CLAUDE_CONFIG_DIR searches the default root, not the daemon\'s account', () => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, 'config'));
+    vi.spyOn(os, 'homedir').mockReturnValue(path.join(home, 'user'));
+    const original = writeTranscript(path.join(home, 'user', '.claude', 'projects', '-synthetic-repo'));
+    writeTranscript(path.join(root, '-synthetic-repo'));
+    expect(scanForTranscript(ID, { CLAUDE_CONFIG_DIR: '' })).toEqual([original]);
+  });
+
   it('refuses a same-named file OUTSIDE the projects root', () => {
     writeTranscript(path.join(home, 'elsewhere'));
     expect(scanForTranscript(ID, env)).toEqual([]);

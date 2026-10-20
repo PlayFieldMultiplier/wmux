@@ -119,10 +119,13 @@ export function claudeProjectRoots(sessionEnv?: Record<string, string>): string[
  * `~/.claude/projects`. Claude never looks in the default root once
  * `CLAUDE_CONFIG_DIR` is set, so a file there is another account's. Finding a
  * transcript searches this root alone; claudeProjectRoots above is where a
- * transcript is allowed to be, which is wider.
+ * transcript is allowed to be, which is wider. A session that sets the variable
+ * empty runs on the default root, whatever the daemon's own environment says.
  */
 export function claudeTranscriptRoot(sessionEnv?: Record<string, string>): string {
-  const configured = sessionEnv?.['CLAUDE_CONFIG_DIR'] || process.env['CLAUDE_CONFIG_DIR'];
+  const configured = sessionEnv && Object.hasOwn(sessionEnv, 'CLAUDE_CONFIG_DIR')
+    ? sessionEnv['CLAUDE_CONFIG_DIR']
+    : process.env['CLAUDE_CONFIG_DIR'];
   return configured ? path.join(configured, 'projects') : path.join(os.homedir(), '.claude', 'projects');
 }
 
