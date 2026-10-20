@@ -34,6 +34,14 @@ export interface ResolvedWorkspace {
   /** The repo was found in a subfolder of the workspace's folder, which is
    *  not a repo itself (#2438): the workspace is not on this repo. */
   contained?: boolean;
+  /** For a contained repo: the folder it was found below, and whether that
+   *  is the agent's reported folder rather than the workspace's own. */
+  foundUnder?: FoundUnder;
+}
+
+export interface FoundUnder {
+  root: string;
+  byAgent: boolean;
 }
 
 export interface Checkout {
@@ -56,6 +64,8 @@ export interface RepoGroup {
   workspaceCount: number;
   /** Workspaces whose folder holds this repo in a subfolder (#2438). */
   foundIn: string[];
+  /** Where each of those workspaces found it (the first folder, when both did). */
+  foundUnder: Record<string, FoundUnder>;
 }
 
 type Live = Record<string, { name: string; pr: PrStatus | null }>;
@@ -95,7 +105,7 @@ export function groupWorkspacesByRepo(
     let g = groups.get(key);
     if (!g) {
       const name = w.remoteKey ? w.remoteKey.split('/').pop() ?? pathLeaf(w.mainPath) : pathLeaf(w.mainPath);
-      g = { key, name, checkouts: [], active: false, prPath: w.mainPath, workspaceCount: 0, foundIn: [] };
+      g = { key, name, checkouts: [], active: false, prPath: w.mainPath, workspaceCount: 0, foundIn: [], foundUnder: {} };
       groups.set(key, g);
     }
     const ck = normWorktreePath(w.mainPath, platform);
@@ -108,6 +118,7 @@ export function groupWorkspacesByRepo(
     const counted = g.foundIn.includes(w.workspaceId) || g.checkouts.some((x) => x.workspaces.some((y) => y.workspaceId === w.workspaceId));
     if (w.contained) {
       if (!g.foundIn.includes(w.workspaceId)) g.foundIn.push(w.workspaceId);
+      if (w.foundUnder && !g.foundUnder[w.workspaceId]) g.foundUnder[w.workspaceId] = w.foundUnder;
       if (!counted) g.workspaceCount++;
       continue;
     }
@@ -127,9 +138,23 @@ type ListWorktrees = (repoPath: string) => Promise<{ ok: true; mainPath: string;
 type RepoKey = (repoPath: string) => Promise<{ key: string | null }>;
 type ScanRepos = (cwd: string) => Promise<{ ok: true; repoPaths: string[] } | { ok: false }>;
 
-/** Each workspace's id and cwd candidates — the only inputs to resolution. */
+/** The folders scanned for repos when a workspace resolves to none (#2438):
+ *  its first cwd candidate, then its agent's reported cwd when that is one
+ *  of the candidates and another folder. */
+export function repoScanRoots(candidates: readonly string[], agentCwd: string | undefined, platform?: string): string[] {
+  const roots = candidates.slice(0, 1);
+  if (agentCwd && candidates.includes(agentCwd)
+    && !roots.some((r) => normWorktreePath(r, platform) === normWorktreePath(agentCwd, platform))) {
+    roots.push(agentCwd);
+  }
+  return roots;
+}
+
+/** Each workspace's id, cwd candidates and agent cwd — the only inputs to
+ *  resolution. The agent cwd is its own field: it picks which candidate is
+ *  scanned even when the candidate list stays the same. */
 function selectResolutionKey(s: StoreState): string {
-  return s.workspaces.map((w) => `${w.id}\u0001${repoCwdCandidates(w, s.startupDirectory || '', true).join('\u0002')}`).join('\n');
+  return s.workspaces.map((w) => `${w.id}\u0001${repoCwdCandidates(w, s.startupDirectory || '', true).join('\u0002')}\u0001${w.metadata?.cwd ?? ''}`).join('\n');
 }
 
 function selectLive(s: StoreState): string[] {
@@ -181,20 +206,27 @@ export function useRepoGroups(refreshKey: number, enabled = true): RepoGroup[] |
           if (top !== null) break;
         }
         // Not in a repo: the repos in its own folder's subfolders (#2438).
-        // Only the first candidate is scanned, the folder the header names;
-        // the later ones (profile, global starting directory) are not it.
-        let tops: readonly string[] = top !== null ? [top] : [];
+        // The first candidate is scanned, the folder the header names, and
+        // the agent's reported cwd when it is another folder (a shell in
+        // home, the agent in a folder of repos); the later ones (profile,
+        // global starting directory) are not the workspace's folder.
+        // A repo found below both folders is one group either way
+        // (groupWorkspacesByRepo), credited to the first folder.
+        let tops: { path: string; foundUnder?: FoundUnder }[] = top !== null ? [{ path: top }] : [];
         if (top === null && candidates.length > 0) {
-          tops = await scanReposCached(api?.diff?.scanRepos, candidates[0], force);
-          if (!live()) return;
+          for (const [i, root] of repoScanRoots(candidates, ws.metadata?.cwd, plat).entries()) {
+            const inRoot = await scanReposCached(api?.diff?.scanRepos, root, force);
+            if (!live()) return;
+            tops = [...tops, ...inRoot.map((path) => ({ path, foundUnder: { root, byAgent: i > 0 } }))];
+          }
         }
-        for (const t of tops) {
+        for (const { path: t, foundUnder } of tops) {
           const mainPath = await mainPathCached(list, t, plat, force);
           if (!live()) return;
           if (!mainPath) continue;
           const remoteKey = await repoKeyCached(api?.github?.repoKey, mainPath, plat, force);
           if (!live()) return;
-          out.push({ workspaceId: ws.id, repoPath: t, mainPath, remoteKey, ...(top === null ? { contained: true } : {}) });
+          out.push({ workspaceId: ws.id, repoPath: t, mainPath, remoteKey, ...(top === null ? { contained: true, foundUnder } : {}) });
         }
       }
       if (live()) setResolved(out);

@@ -589,6 +589,8 @@ describe('Git page — a workspace folder holding several repos (#2438)', () => 
     await settle();
     expect(container.querySelector('[data-git-all-empty]')).toBeNull();
     expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+    // The active workspace's own "not a repository" note would contradict the list.
+    expect(container.textContent).not.toContain('Not a git repository');
   });
 
   it('a folder with no repos below it keeps the plain no-repo line', async () => {
@@ -608,6 +610,103 @@ describe('Git page — a workspace folder holding several repos (#2438)', () => 
     }));
     act(() => root.render(createElement(GitPage)));
     await settle();
+    expect(scan).not.toHaveBeenCalledWith('/work');
+    expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe('Not a git repository — focus a pane inside a repo.');
+  });
+
+  it('a shell in a folder with no repos and the agent in a folder of repos lists the agent folder\'s repos', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({ workspaces: [workspace('root', '/home-ish', { metadata: { cwd: '/work' } } as Partial<Workspace>)] }));
+    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/home-ish');
+    expect(scan).toHaveBeenCalledWith('/work');
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
+  it('the agent cwd spelled as the shell cwd is scanned once', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({ workspaces: [workspace('root', '/work', { metadata: { cwd: '/work/' } } as Partial<Workspace>)] }));
+    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(scan).toHaveBeenCalledWith('/work');
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
+  it('a repo found under both the shell cwd and the agent cwd is listed once', async () => {
+    const scan = useScan();
+    scan.mockImplementation(async (cwd: string) => (cwd === '/work'
+      ? { ok: true, repoPaths: ['/code/alpha', '/code/beta'] }
+      : cwd === '/shell' ? { ok: true, repoPaths: ['/code/beta'] } : { ok: true, repoPaths: [] }));
+    act(() => useStore.setState({ workspaces: [workspace('root', '/shell', { metadata: { cwd: '/work' } } as Partial<Workspace>)] }));
+    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/shell');
+    expect(scan).toHaveBeenCalledWith('/work');
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
+  it('an agent cwd reported after the page opened is scanned, even when it is already a later candidate', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/home-ish', { profile: { startupCwd: '/work' } } as Partial<Workspace>)],
+      gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null },
+    }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).not.toHaveBeenCalledWith('/work');
+    expect(container.querySelectorAll('[data-git-repo-group]')).toHaveLength(0);
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/home-ish', { metadata: { cwd: '/work' }, profile: { startupCwd: '/work' } } as Partial<Workspace>)],
+    }));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/work');
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
+  it('following it with the repos below the agent\'s folder names that folder, with no "not a repository" note', async () => {
+    useScan();
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/home-ish', { metadata: { cwd: '/work' } } as Partial<Workspace>)],
+      gitPage: { ...initialGitPageState(), tab: 'worktrees' },
+    }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe(
+      "This folder is not a git repository. The agent's folder /work holds 2 in its subfolders — pick one from the repo menu, or choose All repos.",
+    );
+    expect(container.querySelector('[data-git-tab]')).toBeNull();
+    expect(container.textContent).not.toContain('focus a pane inside a repo');
+  });
+
+  it('following it with repos below both its folder and the agent\'s folder says both', async () => {
+    const scan = useScan();
+    scan.mockImplementation(async (cwd: string) => (cwd === '/work'
+      ? { ok: true, repoPaths: ['/code/alpha', '/code/beta'] }
+      : cwd === '/shell' ? { ok: true, repoPaths: ['/code/beta'] } : { ok: true, repoPaths: [] }));
+    act(() => useStore.setState({ workspaces: [workspace('root', '/shell', { metadata: { cwd: '/work' } } as Partial<Workspace>)] }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    // beta is below both and counts once, for the shell's folder; alpha is the agent's.
+    expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe(
+      "This folder is not a git repository. Its subfolders and the agent's folder /work hold 2 — pick one from the repo menu, or choose All repos.",
+    );
+  });
+
+  it('with an agent cwd, the profile and starting directory are still not scanned', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/elsewhere', { metadata: { cwd: '/agent' }, profile: { startupCwd: '/work' } } as Partial<Workspace>)],
+      startupDirectory: '/work',
+    }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/elsewhere');
+    expect(scan).toHaveBeenCalledWith('/agent');
     expect(scan).not.toHaveBeenCalledWith('/work');
     expect(container.querySelector('[data-git-no-repo]')?.textContent).toBe('Not a git repository — focus a pane inside a repo.');
   });

@@ -97,10 +97,25 @@ export default function GitPage() {
   const resolving = following ? active.loading : groups === null;
   const web = repoWeb(resolved?.remoteKey ?? null);
   const repoName = resolved ? web?.label ?? pathLeaf(resolved.mainPath) : null;
-  // Repos in the active workspace's subfolders, when its folder is not one.
-  const heldRepos = following && !resolved && groups && activeWorkspaceId
-    ? groups.filter((g) => g.foundIn.includes(activeWorkspaceId)).length
-    : 0;
+  // Repos in the active workspace's subfolders, when its folder is not one,
+  // and how many of them were found below the agent's folder instead.
+  const held = following && !resolved && groups && activeWorkspaceId
+    ? groups.filter((g) => g.foundIn.includes(activeWorkspaceId)).map((g) => g.foundUnder[activeWorkspaceId])
+    : [];
+  const heldRepos = held.length;
+  const byAgent = held.filter((f) => f?.byAgent);
+  const noRepoLine = heldRepos === 0
+    ? t('git.noRepo')
+    : byAgent.length === 0
+      ? t(`git.noRepo.holds.${heldRepos === 1 ? 'one' : 'other'}`, { count: heldRepos })
+      : byAgent.length === heldRepos
+        ? t(`git.noRepo.agentHolds.${heldRepos === 1 ? 'one' : 'other'}`, { count: heldRepos, path: byAgent[0].root })
+        : t('git.noRepo.bothHold', { count: heldRepos, path: byAgent[0].root });
+  // The active workspace is in no repo, but repos are listed (All repos, or
+  // the header's count): the branch card's "not a git repository" note would
+  // contradict them, so it is not drawn.
+  const reposListed = !active.loading && !active.repo && remoteScope === null
+    && (page.scope === 'all' ? !!groups && groups.length > 0 : heldRepos > 0);
   const choose = (choice: Pick<GitPageState, 'scope' | 'pick'>) => {
     setGitPage(choice);
     saveGitRepoChoice(choice);
@@ -335,7 +350,7 @@ export default function GitPage() {
           {page.scope === 'repo' && remoteFiles && remoteScope && <p className="wmux-git-page-summary" data-git-remote-files>{t('pcRail.filesNotShown', { name: remoteScope })}</p>}
           {page.scope === 'repo' && !remoteFiles && !resolved && !resolving && (
             <p className="wmux-git-page-summary" data-git-no-repo>
-              {heldRepos > 0 ? t(`git.noRepo.holds.${heldRepos === 1 ? 'one' : 'other'}`, { count: heldRepos }) : t('git.noRepo')}
+              {noRepoLine}
             </p>
           )}
           {counts.length > 0 && <p className="wmux-git-page-summary" data-git-page-counts>{counts.join(' · ')}</p>}
@@ -397,11 +412,11 @@ export default function GitPage() {
                 button), unless a picked repo it is not in is shown. With
                 another computer on screen that workspace is not on this one:
                 no card, and the header says why when following it. */}
-            {(page.scope === 'all' || following || pickedGroup?.active) && remoteScope === null && <GitTab layout="summary" refreshKey={refreshKey} />}
+            {(page.scope === 'all' || following || pickedGroup?.active) && remoteScope === null && !reposListed && <GitTab layout="summary" refreshKey={refreshKey} />}
             {page.scope === 'all'
               ? <AllWorktrees groups={groups} refreshKey={refreshKey} reportCounts={reportWt} prListOf={groupPrList} />
               : following
-                ? (remoteFiles ? null : <GitTab layout="worktrees" refreshKey={refreshKey} onSectionCounts={reportWt('follow')} prList={resolved ? prListOf([resolved.repoPath]) : null} />)
+                ? (remoteFiles || reposListed ? null : <GitTab layout="worktrees" refreshKey={refreshKey} onSectionCounts={reportWt('follow')} prList={resolved ? prListOf([resolved.repoPath]) : null} />)
                 : pickedGroup
                   ? <GroupWorktrees group={pickedGroup} refreshKey={refreshKey} reportCounts={reportWt} prList={groupPrList(pickedGroup)} />
                   : <div className="wmux-git-note">{t('git.loading')}</div>}
