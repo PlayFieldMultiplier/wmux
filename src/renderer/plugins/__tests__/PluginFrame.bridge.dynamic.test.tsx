@@ -343,3 +343,18 @@ it('does not navigate for a focus response from an earlier workspace epoch', asy
   await settledOrTimedOut(response);
   expect(useStore.getState().appRoute).toBe('plugin:demo');
 });
+
+it('forwards the retryable startup flag on an explicit read failure', async () => {
+  rpc.mockResolvedValue({ ok: false, error: 'Still starting', retryable: true });
+  act(() => root.render(React.createElement(PluginFrame, { pluginName: 'demo', entry: 'index.html' })));
+  const iframe = container.querySelector('iframe')!;
+  const framePostMessage = vi.fn();
+  Object.defineProperty(iframe, 'contentWindow', { configurable: true, get: () => ({ postMessage: framePostMessage }) });
+  await act(async () => { iframe.dispatchEvent(new Event('load')); });
+  const port = pluginPort(framePostMessage);
+  port.start();
+  expect(await settledOrTimedOut(request(port, 'retry', 'agent.state'))).toMatchObject({
+    kind: 'response', error: { code: 'rpc-rejected', message: 'Still starting', retryable: true },
+  });
+  port.close();
+});

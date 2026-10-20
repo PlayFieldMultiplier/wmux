@@ -45,6 +45,16 @@ describe('agent.state permission and scope boundary', () => {
     read.mockResolvedValue({ ...snapshot, workspaceId: 'other' });
     expect(await call()).toMatchObject({ ok: false });
   });
+  it('preserves retryable startup failures but not malformed responses', async () => {
+    const { call } = setup();
+    read.mockResolvedValue({ error: 'wmux is still starting (paneGate=pending)', retryable: true });
+    expect(await call()).toMatchObject({ ok: false, error: 'wmux is still starting (paneGate=pending)', retryable: true });
+    read.mockResolvedValue({ error: 'Invalid scope', retryable: false });
+    expect(await call()).toMatchObject({ ok: false, error: 'Invalid scope' });
+    expect(await call()).not.toHaveProperty('retryable');
+    read.mockResolvedValue({ retryable: true });
+    expect(await call()).not.toHaveProperty('retryable');
+  });
   it('rechecks trust after the renderer answers', async () => {
     const { call, trust } = setup();
     read.mockImplementation(async () => { trust.status = 'denied'; return snapshot; });

@@ -23,9 +23,17 @@ export function subscribeAgentState(options: {
   const poll = async () => {
     if (!live() || !options.workspaceId) return;
     try {
-      const raw = await options.read() as { ok?: boolean; result?: unknown } | null;
+      const raw = await options.read() as { ok?: boolean; result?: unknown; retryable?: boolean } | null;
       if (!live()) return;
-      if (raw?.ok !== true) throw new Error('Agent state unavailable');
+      if (raw?.ok !== true) {
+        if (raw?.retryable === true) {
+          previous = undefined;
+          emit('reset');
+          timer = setTimeout(() => { void poll(); }, 1000);
+          return;
+        }
+        throw new Error('Agent state unavailable');
+      }
       const snapshot = parsePluginAgentSnapshot(raw.result, options.workspaceId, false);
       const serialized = JSON.stringify(snapshot);
       if (serialized !== previous) { previous = serialized; emit('ready', snapshot); }

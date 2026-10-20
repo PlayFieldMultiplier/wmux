@@ -139,7 +139,7 @@ export default function PluginFrame({
               respondOn(port, { v: PLUGIN_BRIDGE_VERSION, id: req.id, kind: 'response', error: { code: 'scope-changed', message: 'The workspace changed. Read again.' } });
               return;
             }
-            const resp = raw as { ok?: boolean; result?: unknown; error?: string } | null;
+            const resp = raw as { ok?: boolean; result?: unknown; error?: string; retryable?: boolean } | null;
             if (resp && resp.ok === true) {
               respondOn(port, { v: PLUGIN_BRIDGE_VERSION, id: req.id, kind: 'response', result: resp.result });
               const state = useStore.getState();
@@ -153,7 +153,7 @@ export default function PluginFrame({
                 v: PLUGIN_BRIDGE_VERSION,
                 id: req.id,
                 kind: 'response',
-                error: { code: 'rpc-rejected', message: resp?.error ?? 'request rejected' },
+                error: { code: 'rpc-rejected', message: resp?.error ?? 'request rejected', ...(resp?.retryable === true ? { retryable: true } : {}) },
               });
             }
           })

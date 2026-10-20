@@ -1,4 +1,5 @@
 import { isHostedCaller, hostedBindingOf } from '../../../shared/rpc';
+import { RetryableRpcError } from '../RetryableRpcError';
 import { parsePluginAgentSnapshot } from '../../../shared/pluginAgentState';
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
@@ -298,6 +299,11 @@ export function registerPaneRpc(
     if (!isHostedCaller(ctx) || !workspaceId) throw new Error('Agent state requires a bound UI plugin');
     if (params.includeActivity !== undefined && typeof params.includeActivity !== 'boolean') throw new Error('Invalid includeActivity');
     const raw = await sendToRenderer(getWindow, 'agent.state', { workspaceId, includeActivity: params.includeActivity === true });
+    const failure = raw as { error?: unknown; retryable?: unknown } | null;
+    if (failure && typeof failure.error === 'string') {
+      if (failure.retryable === true) throw new RetryableRpcError(failure.error);
+      throw new Error(failure.error);
+    }
     return parsePluginAgentSnapshot(raw, workspaceId, params.includeActivity === true);
   });
 

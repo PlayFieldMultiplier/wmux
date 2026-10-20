@@ -52,7 +52,10 @@ old data on either. Epoch changes with the port or workspace; revision is
 monotonic only within that epoch. This is replacement state, not an EventBus
 stream: it has no daemon sequence, history or replay. Events never include
 activity. Every read runs through the permission gate. The loop stops on a
-refusal/error; reopening the page retries. Page exit and reload close the old
+non-retryable refusal/error; reopening the page retries. A retryable startup
+failure clears the view with `reset` and retries after one second. Explicit
+read failures include `error.retryable:true` in the bridge response when safe
+to retry. Page exit and reload close the old
 port and timer. A workspace change invalidates pending explicit reads too.
 
 ## Navigation and installation

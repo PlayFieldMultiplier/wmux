@@ -6,6 +6,7 @@ import type {
   RpcRequest,
   RpcResponse,
 } from '../../shared/rpc';
+import { RetryableRpcError } from './RetryableRpcError';
 import { sanitizeClientDisplayName } from '../../shared/rpc';
 import { check as enforcerCheck } from '../mcp/PermissionEnforcer';
 import { METHOD_CAPABILITY, isAlwaysEnforcedMethod, type RequiredCapability } from '../mcp/methodCapabilityMap';
@@ -731,6 +732,7 @@ export class RpcRouter {
         id: request.id,
         ok: false,
         error: ctx.bot ? redactStoredSecrets(message) : message,
+        ...(err instanceof RetryableRpcError ? { retryable: true } : {}),
       };
     }
   }

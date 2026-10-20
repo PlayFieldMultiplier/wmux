@@ -44,7 +44,7 @@ export interface BridgeResponse {
   id: string;
   kind: 'response';
   result?: unknown;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; retryable?: boolean };
 }
 
 export interface BridgeEvent {

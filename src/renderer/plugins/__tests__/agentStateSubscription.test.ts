@@ -32,6 +32,34 @@ describe('agent state subscription lifetime', () => {
     expect(post).toHaveBeenCalledTimes(1);
     stop();
   });
+  it('clears stale state during startup and recovers even to the same snapshot', async () => {
+    vi.useFakeTimers();
+    const post = vi.fn();
+    const read = vi.fn().mockResolvedValueOnce({ ok: true, result: snapshot })
+      .mockResolvedValueOnce({ ok: false, retryable: true })
+      .mockResolvedValue({ ok: true, result: snapshot });
+    const stop = subscribeAgentState({ workspaceId: 'w1', post, read, isCurrent: () => true });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(post.mock.calls.map(([e]) => e.status)).toEqual(['reset', 'ready', 'reset', 'ready']);
+    expect(post.mock.calls[2][0].snapshot).toBeUndefined();
+    stop();
+  });
+  it('cancels startup retries on teardown and stops when retry becomes a refusal', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn().mockResolvedValue({ ok: false, retryable: true });
+    const stop = subscribeAgentState({ workspaceId: 'w1', post: vi.fn(), read, isCurrent: () => true });
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(read).toHaveBeenCalledTimes(1);
+    read.mockReset().mockResolvedValueOnce({ ok: false, retryable: true }).mockResolvedValue({ ok: false });
+    const post = vi.fn();
+    const stopNext = subscribeAgentState({ workspaceId: 'w1', post, read, isCurrent: () => true });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls.at(-1)?.[0].status).toBe('unavailable');
+    stopNext();
+  });
   it('clears on refusal and stops rather than retaining stale state', async () => {
     vi.useFakeTimers();
     const post = vi.fn();
