@@ -434,9 +434,21 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
     onRpc('a2a.remote.offers.withdraw', async (params) => offers.withdraw(str(params, 'offerId')));
 
     // This PC's human accepts another PC's share, linking it with one of our panes.
+    // One answer at a time per share: a second one while the first is out is refused.
+    const answering = new Set<string>();
     onRpc('a2a.remote.offers.accept', async (params): Promise<A2aRemoteOfferResult> => {
-      offers.expire();
       const offerId = str(params, 'offerId');
+      if (answering.has(offerId)) return { ok: false, error: 'invalid-state', message: 'this share is being answered already' };
+      answering.add(offerId);
+      try {
+        return await acceptOffer(offerId, params);
+      } finally {
+        answering.delete(offerId);
+      }
+    });
+
+    async function acceptOffer(offerId: string, params: Record<string, unknown>): Promise<A2aRemoteOfferResult> {
+      offers.expire();
       const rec = offers.store.get(offerId);
       if (!rec || rec.side !== 'in') return { ok: false, error: 'unknown-offer' };
       if (rec.state !== 'open') return offerClosed(rec.endedReason ?? 'expired');
@@ -543,7 +555,7 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
       if (!after) return { ok: false, error: 'failed' };
       changed(after);
       return settleAccepted(offerId, after);
-    });
+    }
 
     // This PC's human declines another PC's share; the sharer is told (best effort; it also expires there).
     onRpc('a2a.remote.offers.decline', async (params): Promise<A2aRemoteOfferResult> => {

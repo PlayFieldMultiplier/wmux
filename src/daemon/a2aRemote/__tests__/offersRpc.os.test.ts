@@ -239,6 +239,20 @@ describe('a2a.remote.offers.accept — retries keep one answer', () => {
     expect(await accept()).toMatchObject({ ok: true, link: { linkId, state: 'active' } });
   });
 
+  it('a second accept while the first is still out is refused, so one POST owns the proposal', async () => {
+    let release: () => void = () => undefined;
+    script = async (_m, _p, body) => {
+      await new Promise<void>((r) => { release = r; });
+      return { status: 200, json: { linkId: (body as { linkId: string }).linkId, state: 'active', version: 2 } };
+    };
+    const first = accept();
+    await vi.waitFor(() => expect(calls).toHaveLength(1), { timeout: 5_000 });
+    expect(await accept()).toMatchObject({ ok: false, error: 'invalid-state' });
+    release();
+    expect(await first).toMatchObject({ ok: true, link: { state: 'active' } });
+    expect(calls).toHaveLength(1);
+  });
+
   it('a retry with narrower directions than the unsettled answer is refused, not silently widened', async () => {
     script = async () => ({ status: 503, json: { ok: false, error: 'unavailable' } });
     await accept();
