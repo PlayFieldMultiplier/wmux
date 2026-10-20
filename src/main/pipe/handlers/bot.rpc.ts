@@ -48,7 +48,7 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { WakeTaskSummary } from '../../factory/wakePrompt';
 import { botRepoFromFolder, greetNewBot } from '../../factory/botCreate';
 import { DISMISSED_ANSWER, getHandoffRouter } from '../../factory/handoffRouter';
-import { getWakeTaint, type WakeTaint } from '../../factory/wakeTaint';
+import { getWakeTaint, type GuestProvenance, type WakeTaint } from '../../factory/wakeTaint';
 import type { Handoff } from '../../../shared/handoff';
 import type { WakeItem } from '../../../shared/wake';
 import { getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread, wakeReplyTo } from '../../factory/roomWriter';
@@ -126,6 +126,8 @@ export interface SetJobPorts {
   /** The running wake carries the owner's own answer to this bot's
    *  question (wakeOnOwnerAnswer). Missing: no wake does. */
   ownerAnswer?: (botId: string, wake: Pick<WakeItem, 'reason'>) => boolean;
+  /** That wake's guest provenance (wakeTaint.ts wakeGuest). Missing: clean. */
+  wakeGuest?: (wake: Pick<WakeItem, 'reason'>) => GuestProvenance;
 }
 
 /** The wake carries the owner's own answer to the bot's question: an
@@ -156,6 +158,7 @@ const defaultSetJobPorts: SetJobPorts = {
   runningWakeId: (botId) => runningWake(resolveRoomPorts(), botId)?.wakeId ?? null,
   runningThread: (botId) => runningWakeThread(resolveRoomPorts(), botId),
   ownerCardId: (botId) => runningWake(resolveRoomPorts(), botId)?.ownerCardId ?? null,
+  wakeGuest: (wake) => getWakeTaint()?.wakeGuest(wake) ?? 'unknown',
   post: ({ replyTo: candidate, ...card }) => {
     const writer = getRoomWriter();
     if (!writer) return;
@@ -255,8 +258,11 @@ export function registerBotRpcHandlers(
       // handoff or a schedule.
       const wakeId = setJobPorts.runningWakeId(botId);
       const wake = wakeId ? l.queue?.get(wakeId) ?? null : null;
+      // A job runs in every later wake: never one from a guest-sourced wake
+      // (or one whose provenance is unknown).
       const ownerWords = !!wake && wake.botId === botId && wake.state === 'running'
-        && (wake.reason.kind === 'human' || setJobPorts.ownerAnswer?.(botId, wake) === true);
+        && (wake.reason.kind === 'human' || setJobPorts.ownerAnswer?.(botId, wake) === true)
+        && (setJobPorts.wakeGuest?.(wake) ?? false) === false;
       if (!ownerWords) {
         return refuse('not_owner_words', 'a bot sets its job only while it answers the owner\'s own message, or their answer to its question');
       }

@@ -69,7 +69,8 @@ function rig(over: Partial<ApprovalPorts> = {}) {
   const ports: ApprovalPorts = {
     file: path.join(dir, 'factory', 'approvals.json'),
     bots: () => ({ listEnabled: () => [DEV, OTHER], get: (id) => [DEV, OTHER].find((b) => b.id === id) ?? null }),
-    runningWake: (id) => state.wakes.get(id) ?? null,
+    // Clean of guests unless a test says otherwise.
+    runningWake: (id) => { const w = state.wakes.get(id); return w ? { guest: false, ...w } : null; },
     readPr: async (_p, _k, n) => {
       const h = state.heads.get(n);
       if (!h) throw new Error('no such PR');
@@ -104,6 +105,29 @@ function rig(over: Partial<ApprovalPorts> = {}) {
 describe('approval requests (bot side)', () => {
   it('importing the store registers no factory module (the IPC handler imports it early; modules.ts orders the module)', () => {
     expect(registeredFactoryModules()).not.toContain('approvals');
+  });
+
+  it('a guest-sourced (or unknown) wake\'s request is tainted and its card is guest-sourced', async () => {
+    for (const guest of [true, 'unknown'] as const) {
+      const r = rig();
+      r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest });
+      const req = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'ok' });
+      expect(req).toMatchObject({ tainted: true });
+      expect(r.writer.read(WS).cards.find((c) => c.id === req.cardId)).toBeUndefined();
+      expect(r.writer.get(WS, req.cardId as string)?.origin).toBe('guest');
+    }
+  });
+
+  it('a request stores its wake\'s taint as read after the GitHub lookup, never cleaner', async () => {
+    const r = rig({
+      readPr: async (_p, _k, n) => {
+        // The tracker now says otherwise for the same wake.
+        r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: true });
+        return facts(n, HEAD);
+      },
+    });
+    r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false });
+    expect(await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'ok' })).toMatchObject({ tainted: true });
   });
 
   it('main reads the repository, head, login, thread and taint; the bot names only the act', async () => {

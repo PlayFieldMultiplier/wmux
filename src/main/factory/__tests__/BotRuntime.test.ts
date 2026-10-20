@@ -1284,20 +1284,45 @@ describe('external guests and the bot\'s conversation', () => {
     expect(r.adapters[2].prompts.join('\n')).not.toContain('GUEST-WORDS');
   });
 
-  it('a clean turn that read guest cards on purpose is not continued: its conversation is ended and forgotten', async () => {
+  it('a wake derived from a guest\'s message (here a relay dispatch) runs ephemeral and sees guest cards; the owner\'s conversation resumes after it', async () => {
     const r = rig();
     const id = createBot(r);
-    const marked = new Set<string>();
-    setBotRuntimePorts({ turnReadGuestText: (wakeId) => marked.has(wakeId) });
-    const item = must(r.runtime.wake(id, { text: 'read the guest' }));
+    const tails: Array<boolean | undefined> = [];
+    const guestHandoffs = new Set<string>(['h-relay']);
+    setBotRuntimePorts({
+      wakeGuest: (item) => (item.reason.kind === 'handoff' ? guestHandoffs.has(item.reason.handoffId) : item.reason.kind === 'guest'),
+      readThreadTail: (_ws, _t, _n, opts) => { tails.push(opts?.guests); return { cards: [], truncated: false }; },
+    });
+    r.runtime.wake(id, { text: 'hello' });
     await settle();
-    marked.add(item.id);
     r.adapters[0].end();
     await settle();
-    expect(r.adapters[0].disposed).toBe(true);
-    expect(r.sessions.get(id)).toBeNull();
-    r.runtime.wake(id, { text: 'next' });
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'general', reason: { kind: 'handoff', handoffId: 'h-relay' } }));
+    r.runtime.kick();
     await settle();
     expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    r.adapters[1].end([{ type: 'turn-end', sessionId: 'sess-relay' }]);
+    await settle();
+    expect(r.adapters[1].disposed).toBe(true);
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    expect(tails).toContain(true);
+    r.runtime.wake(id, { text: 'status?' });
+    await settle();
+    expect(r.adapters[2].started?.resumeSessionId).toBe('sess-1');
+  });
+
+  it('a wake of unknown provenance runs ephemeral too, and sees no guest card', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const tails: Array<boolean | undefined> = [];
+    setBotRuntimePorts({ wakeGuest: () => 'unknown', readThreadTail: (_ws, _t, _n, opts) => { tails.push(opts?.guests); return { cards: [], truncated: false }; } });
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'general', reason: { kind: 'handoff', handoffId: 'h-gone' } }));
+    r.runtime.kick();
+    await settle();
+    r.adapters[0].end([{ type: 'turn-end', sessionId: 'sess-u' }]);
+    await settle();
+    expect(r.sessions.get(id)).toBeNull();
+    expect(tails).toEqual([false]);
   });
 });

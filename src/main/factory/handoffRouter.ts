@@ -98,6 +98,7 @@ import {
 } from '../../shared/handoff';
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, parseThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import { humanCardIdOfRun } from './humanMessage';
+import type { GuestProvenance, TaintMark } from './wakeTaint';
 import {
   DECISION_LIMITS,
   clearThreadDecision,
@@ -122,7 +123,6 @@ import {
   sanitizeRefs,
   wakeOrdinals,
   wakeReplyTo,
-  isGuestSourcedTurn,
   writeFactCards,
   type FactoryRoomPorts,
   type RoomWriter,
@@ -216,10 +216,15 @@ export interface HandoffWakeSummary {
   trail?: string[];
 }
 
-/** What the router asks of the taint tracker (wakeTaint.ts). */
+/** What the router asks of the taint tracker (wakeTaint.ts). A mark of
+ *  null is a guest mark that did not reach the file: the hop is refused. */
 export interface HandoffTaintPort {
-  markSent(handoffId: string, senderBotId: string, answers?: readonly string[]): void;
-  markForward(handoffId: string, from: { senderBotId?: string; handoffIds: readonly string[] }): boolean;
+  markSent(handoffId: string, senderBotId: string, answers?: readonly string[]): TaintMark | null;
+  markForward(handoffId: string, from: { senderBotId?: string; handoffIds: readonly string[] }): TaintMark | null;
+  /** The guest provenance of a handoff (WakeTaint.handoffGuest). */
+  handoffGuest?(handoffId: string): GuestProvenance;
+  /** The guest provenance of the wake `botId` is running now. */
+  runningGuest?(botId: string): GuestProvenance;
 }
 
 // ── Decision store port (the real store, bound to one data dir) ────────────
@@ -319,7 +324,7 @@ export function parseHandoff(raw: unknown): Handoff | null {
     ...(h.intro === true && h.kind === 'ask_person' ? { intro: true as const } : {}),
     ...(h.kind === 'ask_person' && typeof h.ownerCardId === 'string' && ID_RE.test(h.ownerCardId) ? { ownerCardId: h.ownerCardId } : {}),
     ...(h.kind === 'ask_person' && typeof h.forHop === 'string' && ID_RE.test(h.forHop) ? { forHop: h.forHop } : {}),
-    ...(h.kind === 'ask_person' && h.guestSourced === true ? { guestSourced: true as const } : {}),
+    ...(typeof h.guestSourced === 'boolean' ? { guestSourced: h.guestSourced } : {}),
     ...(h.kind === 'dispatch' ? relayNext(h.next) : {}),
     ...(h.kind === 'dispatch' && h.relay === true ? { relay: true as const } : {}),
     ...(typeof h.relayStopped === 'string' && oneLine(h.relayStopped, 300) ? { relayStopped: oneLine(h.relayStopped, 300) } : {}),
@@ -917,14 +922,18 @@ export class HandoffRouter {
       return refused;
     }
     // Marked now, in the sender's turn, from the wake it is running; a reply
-    // is also as tainted as the handoff it answers.
-    this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : []);
+    // is also as tainted (and as guest-sourced) as the handoff it answers.
+    // A guest mark is on disk before the hop is, or the hop is not sent.
+    const mark = this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : []);
+    if (mark === null) return { ok: false, code: 'write_failed', message: 'the handoff could not be recorded' };
+    // Said on the record too, so it outlives the mark.
+    const sending: Handoff = mark === undefined ? draft : { ...draft, guestSourced: mark === 'guest' };
     // A result on a relay's hop that names bots to follow goes on to them;
     // any other is delivered (and, when it ends a coordinator's thread,
     // pointed to from where it was said).
     const result = kind === 'result' && parent && (parent.next?.length ?? 0) > 0
-      ? this.relayOn(draft, parent, target.bot)
-      : this.deliver(draft, target.bot);
+      ? this.relayOn(sending, parent, target.bot)
+      : this.deliver(sending, target.bot);
     if (result.ok && kind === 'result' && parent) this.pointToThread(draft.id, parent, 'finished');
     // A refusal the coordinator took ended its work there.
     if (result.ok && kind === 'refusal' && parent) this.pointToThread(draft.id, parent, 'stopped');
@@ -1055,12 +1064,17 @@ export class HandoffRouter {
       return null;
     }
     // Before it is stored or announced: its delivery never derives a mark
-    // from the coordinator's own wake.
-    this.opts.taint?.()?.markForward(id, {
+    // from the coordinator's own wake. A guest mark is on disk first, and
+    // the dispatch records it.
+    const mark = this.opts.taint?.()?.markForward(id, {
       ...(senderBotId ? { senderBotId } : {}),
       handoffIds: [result.id, parent.id, root.id],
     });
-    const sent = this.deliver(f, next);
+    if (mark === null) {
+      this.stopRelay(result.id, lead, 'its next hop could not be recorded');
+      return null;
+    }
+    const sent = this.deliver(mark === undefined ? f : { ...f, guestSourced: mark === 'guest' }, next);
     if (!sent.ok) {
       this.stopRelay(result.id, lead, `${this.partyLabel(f.to)} did not take the work (${sent.message})`);
       return null;
@@ -1150,6 +1164,7 @@ export class HandoffRouter {
       title: `${how === 'stopped' ? 'Stopped' : 'Finished'}: ${root.payload.title}`,
       notice: { code: how === 'stopped' ? 'thread.stopped' : 'thread.finished', args: { title: root.payload.title } },
       refs: { handoffId: result.id, threadId: root.threadId },
+      ...(this.guestOf(root) || this.guestOf(result) ? { origin: 'guest' as const } : {}),
     }, ownerCard && ownerCard.threadId === saidIn && ownerCard.kind === 'human' ? { replyTo: ownerCard.id } : undefined);
     // Written once per result: the mark is on the result itself.
     const now = card ? this.records.get(resultId) : null;
@@ -1316,6 +1331,31 @@ export class HandoffRouter {
     };
   }
 
+  /** Whether cards derived from `h` are guest-sourced: its own record says
+   *  so, or the tracker does not know it to be clean. */
+  private guestOf(h: Handoff): boolean {
+    if (h.guestSourced === true) return true;
+    const taint = this.opts.taint?.();
+    if (!taint?.handoffGuest) return false;
+    try {
+      return taint.handoffGuest(h.id) !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  /** The guest provenance of the wake `botId` is running now; false
+   *  without a tracker that says (a router built without one). */
+  private runningGuest(botId: string): GuestProvenance {
+    const taint = this.opts.taint?.();
+    if (!taint?.runningGuest) return false;
+    try {
+      return taint.runningGuest(botId);
+    } catch {
+      return 'unknown';
+    }
+  }
+
   private refuse(draft: Handoff, code: HandoffRefusalCode, detail: string): HandoffResult {
     const h: Handoff = { ...draft, status: 'refused', refusal: { code, detail: oneLine(detail, 500) } };
     const stored = this.put(h);
@@ -1461,7 +1501,8 @@ export class HandoffRouter {
         ...(asking?.reasonKind === 'intro' ? { intro: true as const } : {}),
         ...(asking?.ownerCardId ? { ownerCardId: asking.ownerCardId } : {}),
         ...(forHop ? { forHop } : {}),
-        ...(isGuestSourcedTurn(sender.botId) ? { guestSourced: true as const } : {}),
+        // Always said: an answer to it inherits it (wakeTaint.ts).
+        guestSourced: this.runningGuest(sender.botId) !== false,
         createdAt: this.now(),
         updatedAt: this.now(),
       };
@@ -1542,7 +1583,7 @@ export class HandoffRouter {
       refs: { ...(h.payload.refs ?? {}), handoffId: h.id, decisionId: decision.id },
       state: 'open',
       ...(h.intro ? { greeting: true as const } : {}),
-      ...(h.guestSourced ? { origin: 'guest' as const } : {}),
+      ...(this.guestOf(h) ? { origin: 'guest' as const } : {}),
     }, replyTo ? { replyTo } : undefined);
     return { decision };
   }
@@ -1778,6 +1819,7 @@ export class HandoffRouter {
         title: `Question closed: ${h.payload.title}`,
         body: why,
         refs: { handoffId: h.id },
+        ...(this.guestOf(h) ? { origin: 'guest' as const } : {}),
       });
     }
   }
@@ -1865,6 +1907,9 @@ export class HandoffRouter {
         body: (dismissed ? DISMISSED_ANSWER : text).slice(0, HANDOFF_STORE_LIMITS.ANSWER_MAX),
         ...(ask.payload.refs ? { refs: ask.payload.refs } : {}),
       },
+      // As guest-sourced as its question; a question that does not say is
+      // treated as one.
+      guestSourced: ask.guestSourced !== false,
       status: 'queued',
       createdAt: this.now(),
       updatedAt: this.now(),

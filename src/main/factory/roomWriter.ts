@@ -238,8 +238,8 @@ export class WakeOrdinals {
 export const wakeOrdinals = new WakeOrdinals();
 
 /** The running wake of a bot through the ports, or null. Never throws. */
-/** Whether the turn bot `botId` is running now started from or read an
- *  external guest's message (wakeTaint.ts); set by the taint module. A bot
+/** Whether the wake bot `botId` is running now is not known clean of a
+ *  guest's words (wakeTaint.ts wakeGuest); set by the taint module. A bot
  *  card written while it says so carries `origin: 'guest'`. */
 let guestTurnProbe: ((botId: string) => boolean) | null = null;
 
@@ -504,7 +504,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(attachments ? { attachments } : {}),
     ...(files ? { files } : {}),
     ...(guest ? { guest } : {}),
-    ...(c.origin === 'guest' && actor.kind === 'bot' ? { origin: 'guest' as const } : {}),
+    ...(c.origin === 'guest' && (actor.kind === 'bot' || actor.kind === 'system') ? { origin: 'guest' as const } : {}),
   };
 }
 
@@ -557,9 +557,10 @@ export interface RoomCardInput {
   files?: RoomCard['files'];
   /** `guest` cards only, actor system (RoomCard.guest). */
   guest?: RoomCard['guest'];
-  /** Bot cards only (RoomCard.origin): main's record that the content came
-   *  from a guest-sourced turn, for a card written after that turn ended (a
-   *  queued question). A card written during the turn is stamped anyway. */
+  /** RoomCard.origin, from the item the card comes from: a bot card the
+   *  caller decided at its call's start (written after an await, or after
+   *  its wake ended), a system card derived from a guest-sourced item. A bot
+   *  card written in a wake that is not known clean is stamped anyway. */
   origin?: 'guest';
 }
 
@@ -783,7 +784,8 @@ export class RoomWriter {
     const files = actor.kind === 'bot' ? parseRoomFiles(input.files) : undefined;
     const guest = input.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(input.guest) : undefined;
     if (input.kind === 'guest' && !guest) return null;
-    const fromGuestTurn = actor.kind === 'bot' && (input.origin === 'guest' || guestSourcedTurn(actor));
+    // A system card derived from a guest-sourced item passes its origin too.
+    const fromGuestTurn = input.origin === 'guest' || (actor.kind === 'bot' && guestSourcedTurn(actor));
     // A fact delivered twice (a re-subscribe, a replay) writes one card.
     const factKey = refs?.factId ? factCardKey({ refs, threadId, kind: input.kind }) : null;
     if (factKey && state.seenFacts.has(factKey)) return null;
@@ -842,7 +844,7 @@ export class RoomWriter {
       // gets it only by asking (read's `guests`).
       if (prior && isGuestSourcedCard(prior)) {
         const actor = sanitizeParty(input.actor);
-        const sameSource = prior.kind === 'guest' ? input.kind === 'guest' : !!actor && guestSourcedTurn(actor);
+        const sameSource = prior.kind === 'guest' ? input.kind === 'guest' : input.origin === 'guest' || (!!actor && guestSourcedTurn(actor));
         if (!sameSource) return { ok: false, code: 'invalid', message: 'that clientPostId is already used in this room' };
       }
       if (prior) return { ok: true, card: prior, duplicate: true };

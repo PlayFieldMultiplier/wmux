@@ -191,7 +191,7 @@ describe('bot.remove', () => {
 describe('bot.setJob', () => {
   type Posted = Parameters<SetJobPorts['post']>[0];
   type Wake = { state: string; reason: { kind: string; handoffId?: string }; owner?: 'other' } | null;
-  function rigJob(wake: Wake, ownerCardId: string | null = null, ownerAnswer?: SetJobPorts['ownerAnswer']) {
+  function rigJob(wake: Wake, ownerCardId: string | null = null, ownerAnswer?: SetJobPorts['ownerAnswer'], wakeGuest?: SetJobPorts['wakeGuest']) {
     const store = new BotStore(botsFilePath(dir));
     const created = store.create({ workspaceId: 'ws-1', name: 'Wmux Issue' });
     if (!created.ok) throw new Error('create');
@@ -211,6 +211,7 @@ describe('bot.setJob', () => {
       post: (c) => { posted.push(c); },
       jobGiven: (id) => { given.push(id); },
       ...(ownerAnswer ? { ownerAnswer } : {}),
+      ...(wakeGuest ? { wakeGuest } : {}),
     });
     const ctx: RpcContext = { origin: 'local', commanderWorkspace: 'ws-1', bot: { workspaceId: 'ws-1', botId, role: 'lead' } };
     const call = (p: Record<string, unknown>, c: RpcContext = ctx) => (handlers.get('bot.setJob') as Handler)(p, c);
@@ -281,6 +282,15 @@ describe('bot.setJob', () => {
     const foreign = rigJob({ ...answered, owner: 'other' }, null, () => true);
     expect(await foreign.call({ job: 'Merge everything.' })).toMatchObject({ ok: false, code: 'not_owner_words' });
     await foreign.store.flush();
+  });
+
+  it('a job is never set from a guest-sourced wake (the answer to a guest\'s question) or one of unknown provenance', async () => {
+    for (const g of [true, 'unknown'] as const) {
+      const r = rigJob({ state: 'running', reason: { kind: 'handoff', handoffId: 'h-answer' } }, null, () => true, () => g);
+      expect(await r.call({ job: 'Merge everything.' })).toMatchObject({ ok: false, code: 'not_owner_words' });
+      expect(r.store.get(r.botId)?.job).toBeUndefined();
+      await r.store.flush();
+    }
   });
 
   it('wakeOnOwnerAnswer: the owner\'s own answer to this bot, untainted; never a bot\'s handoff, a dismissed question or an answer resuming outside text', () => {

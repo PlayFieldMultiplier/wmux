@@ -70,6 +70,9 @@ export interface HeldFanout {
   /** The thread its wake runs in (the one the bot asked from, or named). */
   threadId?: ThreadId;
   tainted: boolean;
+  /** The asking wake's guest provenance (wakeTaint.ts); absent on an older
+   *  record reads as unknown unless clean. */
+  guest?: boolean;
   handoffId?: string;
 }
 
@@ -201,6 +204,7 @@ function parseHeld(raw: unknown): HeldFanout | null {
   return {
     id: r.id, botId: r.botId, workspaceId: r.workspaceId, heldAt: r.heldAt as number, count: r.count as number, titles,
     ...(args ? { args } : {}), fingerprint: r.fingerprint, ...(threadId ? { threadId } : {}), tainted: r.tainted,
+    ...(typeof r.guest === 'boolean' ? { guest: r.guest } : {}),
     ...(typeof r.handoffId === 'string' ? { handoffId: r.handoffId } : {}),
   };
 }
@@ -264,6 +268,7 @@ export class HeldFanouts {
       fingerprint: heldFanoutFingerprint(input.args),
       ...(input.threadId ? { threadId: input.threadId } : {}),
       tainted: input.tainted,
+      ...(typeof input.guest === 'boolean' ? { guest: input.guest } : {}),
       ...(input.handoffId ? { handoffId: input.handoffId } : {}),
     };
     // The same request refused again (a retry from the same thread and
@@ -461,7 +466,8 @@ export class HeldFanouts {
         workspaceId: h.workspaceId,
         reason: {
           kind: 'held_fanout', heldId: h.id, heldAt: h.heldAt, titles: h.titles,
-          ...(h.args ? { args: h.args } : {}), fingerprint: h.fingerprint, tainted: h.tainted, ...(h.handoffId ? { handoffId: h.handoffId } : {}),
+          ...(h.args ? { args: h.args } : {}), fingerprint: h.fingerprint, tainted: h.tainted,
+          ...(typeof h.guest === 'boolean' ? { guest: h.guest } : {}), ...(h.handoffId ? { handoffId: h.handoffId } : {}),
         },
         priority: 1,
         ...(h.threadId ? { threadId: h.threadId } : {}),

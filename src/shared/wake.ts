@@ -37,8 +37,9 @@ export type WakeReason =
    *  to start it again from this turn. `tainted`: the wake that asked for it
    *  carried outside text. `handoffId`: the handoff that wake delivered, so
    *  the tasks still answer it. `fingerprint`: of the arguments (a retry
-   *  that started them retires this wake too). */
-  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; handoffId?: string }
+   *  that started them retires this wake too). `guest`: the asking wake's
+   *  guest provenance (wakeTaint.ts); absent reads as unknown unless clean. */
+  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; guest?: boolean; handoffId?: string }
   /** An outside agent's message named this bot (shared/guestBots.ts):
    *  `cardId` is its `guest` card, `text` what it said (redacted). Always
    *  tainted (wakeTaint.ts): nothing this wake starts merges without the

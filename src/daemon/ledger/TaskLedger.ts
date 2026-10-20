@@ -268,7 +268,7 @@ function isRecordedGitDir(v: unknown): v is string {
 function copyDispatch(d: LedgerDispatch): LedgerDispatch {
   return {
     ...(d.workflow && /^wf-[a-f0-9]{24}$/.test(d.workflow.id) && Number.isInteger(d.workflow.step) && d.workflow.step >= 0 && d.workflow.step < 8 ? { workflow: { ...d.workflow } } : {}),
-    origin: { kind: d.origin.kind, ...(d.origin.botId ? { botId: d.origin.botId } : {}), ...(typeof d.origin.tainted === 'boolean' ? { tainted: d.origin.tainted } : {}) },
+    origin: { kind: d.origin.kind, ...(d.origin.botId ? { botId: d.origin.botId } : {}), ...(typeof d.origin.tainted === 'boolean' ? { tainted: d.origin.tainted } : {}), ...(typeof d.origin.guest === 'boolean' ? { guest: d.origin.guest } : {}) },
     ...(d.preset ? { preset: d.preset } : {}),
     // Only the factory's own spelling of a repository (shared/repoKey.ts).
     ...(typeof d.repoKey === 'string' && normalizeRepoKey(d.repoKey) === d.repoKey ? { repoKey: d.repoKey } : {}),

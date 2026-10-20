@@ -17,9 +17,10 @@ import {
   deckDecisionPort,
   handoffFromLegacy,
   importLegacyMoaHandoffs,
+  type HandoffTaintPort,
 } from '../handoffRouter';
 import { runFactoryMigrations } from '../migrate';
-import { RoomWriter, setGuestTurnProbe, writeFactCards, type FactoryRoomPorts } from '../roomWriter';
+import { RoomWriter, writeFactCards, type FactoryRoomPorts } from '../roomWriter';
 import { TriggerEngine, botSeesFact } from '../triggerEngine';
 import { handleRoomPost } from '../../pipe/handlers/room.rpc';
 import type { RpcContext } from '../../../shared/rpc';
@@ -67,7 +68,7 @@ interface Harness {
   wake: { thread: ThreadId | null; id: { wakeId: string; attempt: number; handoffId?: string } | null };
 }
 
-async function harness(bots: BotProfile[], opts: { noFactLog?: boolean; wakes?: FactoryRoomPorts['wakes'] } = {}): Promise<Harness> {
+async function harness(bots: BotProfile[], opts: { noFactLog?: boolean; wakes?: FactoryRoomPorts['wakes']; taint?: HandoffTaintPort } = {}): Promise<Harness> {
   const facts: Fact[] = [];
   const subs = new Set<(f: Fact) => void>();
   const rooms = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), now: () => now, log: () => undefined });
@@ -110,6 +111,7 @@ async function harness(bots: BotProfile[], opts: { noFactLog?: boolean; wakes?: 
     decisions: deckDecisionPort(dir),
     ports: () => ports,
     rooms: () => rooms,
+    ...(opts.taint ? { taint: () => opts.taint ?? null } : {}),
     now: () => now,
     log: () => undefined,
   });
@@ -621,21 +623,23 @@ describe('ask_person', () => {
     expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.title)).toEqual(['first', 'second']);
   });
 
-  it('a question asked in a guest-sourced turn is raised later as a guest-sourced card, found and closed by main', async () => {
+  it('a question asked in a guest-sourced wake is raised later as a guest-sourced card, and its closing card is too', async () => {
     const lead = bot('ws1', 'lead');
     const other = bot('ws1', 'triage');
-    const h = await harness([lead, other]);
+    const guestBots = new Set<string>([other.id]);
+    const taint: HandoffTaintPort = {
+      markSent: () => false, markForward: () => false,
+      runningGuest: (botId) => guestBots.has(botId),
+      handoffGuest: () => false,
+    };
+    const h = await harness([lead, other], { taint });
     const first = await h.router.askPerson(binding(lead), { title: 'first', body: '', threadId: 'task:t1' });
-    setGuestTurnProbe((botId) => botId === other.id);
-    let second: Awaited<ReturnType<typeof h.router.askPerson>>;
-    try {
-      second = await h.router.askPerson(binding(other), { title: 'second', body: '', threadId: 'task:t1' });
-    } finally {
-      setGuestTurnProbe(null);
-    }
+    const second = await h.router.askPerson(binding(other), { title: 'second', body: '', threadId: 'task:t1' });
     if (!first.ok || !second.ok) throw new Error('asks failed');
+    expect(h.router.get(first.handoffId)?.guestSourced).toBe(false);
     expect(h.router.get(second.handoffId)?.guestSourced).toBe(true);
-    // Raised after the asking turn ended: the card still says where it came from.
+    // Raised after the asking wake ended: the card still says where it came from.
+    guestBots.clear();
     await resolveThreadDecision('ws1', first.decisionId!, 'ok', {}, dir);
     await h.router.reconcile();
     expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.title)).toEqual(['first']);
@@ -643,6 +647,10 @@ describe('ask_person', () => {
     expect(card?.origin).toBe('guest');
     await h.router.reconcile();
     expect(h.rooms.read('ws1', { guests: true }).cards.filter((c) => c.title === 'second')).toHaveLength(1);
+    // Its answer is as guest-sourced as it is.
+    expect(await h.router.answer(second.handoffId, 'yes')).toMatchObject({ ok: true });
+    const answered = h.router.list({}).find((x) => x.kind === 'answer' && x.replyTo === second.handoffId);
+    expect(answered?.guestSourced).toBe(true);
   });
 
   it('a dismissed question answers the bot that it was closed without a choice', async () => {
@@ -698,6 +706,22 @@ describe('ask_person', () => {
     expect(loadThreadDecision('ws1', 'task:b', dir)).toBeNull();
     expect(h.wakes).toEqual([]);
     expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').every((c) => c.state === 'resolved')).toBe(true);
+  });
+
+  it('a guest-sourced question\'s closing card is guest-sourced: it stays out of a clean read, across a reload', async () => {
+    const lead = bot('ws1', 'lead');
+    const taint: HandoffTaintPort = { markSent: () => false, markForward: () => false, runningGuest: () => true, handoffGuest: () => true };
+    const h = await harness([lead], { taint });
+    const gone = await h.router.askPerson(binding(lead), { title: 'GUEST-ASKED', body: '', threadId: 'task:a' });
+    if (!gone.ok) throw new Error('ask failed');
+    await clearThreadDecision('ws1', 'task:a', undefined, dir);
+    await h.router.reconcile();
+    expect(h.router.get(gone.handoffId)!.status).toBe('expired');
+    const closed = h.rooms.read('ws1', { guests: true }).cards.find((c) => c.title === 'Question closed: GUEST-ASKED');
+    expect(closed).toMatchObject({ actor: { kind: 'system' }, origin: 'guest' });
+    const reloaded = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), now: () => now, log: () => undefined });
+    expect(reloaded.read('ws1').cards.map((c) => c.title).join('\n')).not.toContain('GUEST-ASKED');
+    expect(reloaded.read('ws1', { guests: true }).cards.find((c) => c.id === closed!.id)?.origin).toBe('guest');
   });
 
   it('handoff.answer answers a raised question and a queued one', async () => {

@@ -8,7 +8,7 @@ import type { Fact } from '../../../shared/facts';
 import type { Handoff } from '../../../shared/handoff';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WakeItem } from '../../../shared/wake';
-import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, guestTurnRefusal, runningTurnGuestSourced, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-taint-')); });
@@ -200,7 +200,7 @@ describe('WakeTaint', () => {
     const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
     const human = { kind: 'human' as const };
     const answer = (id: string, askId?: string): Handoff => ({ ...handoff(id, human), kind: 'answer', to: fromBot, ...(askId ? { replyTo: askId } : {}) });
-    const kept: Handoff = { ...handoff('a-kept', fromBot), kind: 'ask_person', to: human };
+    const kept: Handoff = { ...handoff('a-kept', fromBot), kind: 'ask_person', to: human, guestSourced: false };
     // The pruned question's answer, an intact one with no hop, and owner text that answers no question.
     const hs = [kept, answer('ans-pruned', 'a-pruned'), answer('ans-kept', 'a-kept'), answer('ans-direct'), handoff('h-out', fromBot), handoff('h-out-2', fromBot)];
     let running: { item: WakeItem; startedAt: number } | null = null;
@@ -224,7 +224,8 @@ describe('WakeTaint', () => {
     running = { item: on('ans-kept'), startedAt: 0 };
     t.markSent('h-out-2', 'bot-a', ['ans-pruned']);
     expect(t.handoffTainted('h-out-2')).toBe(true);
-    expect(t.markForward('h-fwd', { handoffIds: ['ans-pruned'] })).toBe(true);
+    // Its question gone, it is also of unknown provenance: stamped guest.
+    expect(t.markForward('h-fwd', { handoffIds: ['ans-pruned'] })).toBe('guest');
     expect(t.markForward('h-fwd-2', { handoffIds: ['ans-kept'] })).toBe(false);
     // The answer pruned in turn: its delivery mark says what it was.
     hs.push({ ...handoff('h-dirty', fromBot) }, { ...kept, id: 'a-dirty', forHop: 'h-dirty' }, answer('ans-dirty', 'a-dirty'));
@@ -271,23 +272,86 @@ describe('WakeTaint', () => {
   });
 });
 
-describe('guest-sourced turns', () => {
+describe('guest provenance', () => {
   afterEach(() => setWakeTaint(null));
+  const G = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
+  const guestReason = { kind: 'guest' as const, guestId: G, guestName: 'G', cardId: 'c', text: 'x' };
+  const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
 
-  it('a guest wake or a turn that read guest cards may not start or resume workers; an owner turn may', () => {
-    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
-    const t = make({ runningWake: () => running });
-    setWakeTaint(t, () => running);
-    expect(runningTurnGuestSourced('bot-a')).toBe(false);
-    expect(guestTurnRefusal('bot-a', 'w-1')).toBeNull();
-    t.markTurnReadGuestText('w-1');
-    expect(runningTurnGuestSourced('bot-a')).toBe(true);
-    expect(guestTurnRefusal('bot-a', 'w-1')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
-    // The mark outlives the turn: a launch checked after it ended still refuses.
-    running = null;
-    expect(runningTurnGuestSourced('bot-a')).toBeNull();
-    expect(guestTurnRefusal('bot-a', 'w-1')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
-    running = { item: { ...wake({ kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c', text: 'x' }), id: 'w-2' }, startedAt: 2 };
-    expect(guestTurnRefusal('bot-a', 'w-2')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
+  it('is decided from the wake record: guest wakes, clean reasons, records that say, and unknown when nothing does', () => {
+    const t = make({}, [
+      { ...fact('f-task', 'task.done', { taskId: 't-guest' }) },
+      { ...fact('f-notice', 'bot.notice'), payload: { topic: 'worker.started', title: 'x', guest: false } as never },
+      { ...fact('f-old-notice', 'bot.notice'), payload: { topic: 'worker.started', title: 'x', tainted: true } as never },
+      fact('f-pr', 'pr.opened'),
+    ], [], [
+      { id: 't-guest', dispatch: { origin: { kind: 'bot', botId: 'bot-a', tainted: true, guest: true } } } as unknown as LedgerEntry,
+      row('t-clean', false),
+      row('t-old-tainted', true),
+    ]);
+    expect(t.wakeGuest(wake(guestReason))).toBe(true);
+    expect(t.wakeGuest(wake({ kind: 'human', text: 'hi', source: 'desktop' }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['f-task'], trigger: { kind: 'task.done' } }))).toBe(true);
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['f-notice', 'f-pr'], trigger: { kind: 'fact' } as never }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['task.done:t-clean@2'], trigger: { kind: 'task.done' } }))).toBe(false);
+    // A record that does not say and is not known clean: unknown, never clean.
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['task.done:t-old-tainted@2'], trigger: { kind: 'task.done' } }))).toBe('unknown');
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['f-old-notice'], trigger: { kind: 'fact' } as never }))).toBe('unknown');
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['f-missing'], trigger: { kind: 'fact' } as never }))).toBe('unknown');
+    expect(t.wakeGuest(wake({ kind: 'held_fanout', heldId: 'h', heldAt: 1, titles: ['x'], tainted: false }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'held_fanout', heldId: 'h', heldAt: 1, titles: ['x'], tainted: true }))).toBe('unknown');
+    expect(t.wakeGuest(wake({ kind: 'held_fanout', heldId: 'h', heldAt: 1, titles: ['x'], tainted: true, guest: false }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-gone' }))).toBe('unknown');
+  });
+
+  it('a send from a guest wake is marked guest on disk; the receiving wake is guest, also after a reload', () => {
+    const handoffs = [handoff('h-1', fromBot)];
+    const running = { item: wake(guestReason), startedAt: 1 };
+    const t = make({ runningWake: () => running }, [], handoffs);
+    expect(t.markSent('h-1', 'bot-a')).toBe('guest');
+    expect(t.handoffTainted('h-1')).toBe(true);
+    const receiving = wake({ kind: 'handoff', handoffId: 'h-1' });
+    expect(t.wakeGuest(receiving)).toBe(true);
+    expect(make({}, [], handoffs).wakeGuest(receiving)).toBe(true);
+    // From a clean wake: a plain mark, never guest.
+    const clean = make({ runningWake: () => ({ item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 }) }, [], [handoff('h-2', fromBot)]);
+    expect(clean.markSent('h-2', 'bot-a')).toBe(false);
+    expect(clean.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-2' }))).toBe(false);
+  });
+
+  it('a relay dispatch carrying a guest-sourced result is guest-sourced', () => {
+    const result = { ...handoff('h-result', fromBot), kind: 'result' as const, guestSourced: true };
+    const t = make({}, [], [result, handoff('h-parent', fromBot), handoff('h-relay', fromBot)]);
+    expect(t.markForward('h-relay', { handoffIds: ['h-result', 'h-parent'] })).toBe('guest');
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-relay' }))).toBe(true);
+  });
+
+  it('the owner\'s answer is as guest-sourced as its question; a question that does not say counts as one', () => {
+    const ask = (id: string, guestSourced?: boolean): Handoff => ({ ...handoff(id, fromBot), kind: 'ask_person', to: { kind: 'human' }, ...(guestSourced !== undefined ? { guestSourced } : {}) });
+    const answer = (id: string, askId: string): Handoff => ({ ...handoff(id, { kind: 'human' }), kind: 'answer', replyTo: askId, to: fromBot });
+    const handoffs = [ask('q-guest', true), ask('q-clean', false), ask('q-old'), answer('a-guest', 'q-guest'), answer('a-clean', 'q-clean'), answer('a-old', 'q-old')];
+    const t = make({}, [], handoffs);
+    for (const id of ['a-guest', 'a-clean', 'a-old']) t.noteDelivered(id);
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-guest' }))).toBe(true);
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-clean' }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-old' }))).toBe(true);
+  });
+
+  it('a guest mark that cannot be written fails the send', () => {
+    fs.writeFileSync(path.join(dir, 'factory'), 'not a folder');
+    const t = make({ runningWake: () => ({ item: wake(guestReason), startedAt: 1 }) }, [], [handoff('h-1', fromBot)]);
+    expect(t.markSent('h-1', 'bot-a')).toBeNull();
+  });
+
+  it('by wake id: a guest or unknown wake may not start work; one whose record is gone is unknown', () => {
+    const items = new Map<string, WakeItem>([['w-1', wake({ kind: 'human', text: 'hi', source: 'desktop' })], ['w-g', { ...wake(guestReason), id: 'w-g' }]]);
+    const t = make();
+    setWakeTaint(t, () => null, (id) => items.get(id) ?? null);
+    expect(guestOfWake('w-1')).toBe(false);
+    expect(guestTurnRefusal('w-1')).toBeNull();
+    expect(guestTurnRefusal('w-g')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
+    items.delete('w-1');
+    expect(guestOfWake('w-1')).toBe('unknown');
+    expect(guestTurnRefusal('w-1')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
   });
 });

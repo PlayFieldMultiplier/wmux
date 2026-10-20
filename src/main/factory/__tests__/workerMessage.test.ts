@@ -22,7 +22,7 @@ function rig(over: Partial<WorkerMessagePorts> = {}) {
   const rows = new Map([['wtask-a1', row()], ['wtask-b2', row({ id: 'wtask-b2', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000b' } } })], ['wtask-c3', row({ id: 'wtask-c3', status: 'completed' })]]);
   const submit = vi.fn(async () => true);
   const livePane = vi.fn(async (ws: string) => (ws === 'ws-task' ? 'pty-1' : null));
-  const ports: WorkerMessagePorts = { row: (id) => rows.get(id) ?? null, livePane, submit, botName: () => 'Wmux Dev', now: () => now, senderTainted: () => false, ...over };
+  const ports: WorkerMessagePorts = { row: (id) => rows.get(id) ?? null, livePane, submit, botName: () => 'Wmux Dev', now: () => now, senderTainted: () => false, senderWakeId: () => 'w-1', guestOfWake: () => false, ...over };
   const limiter = new WorkerMessageLimiter();
   return {
     ports, limiter, submit, livePane, rows,
@@ -165,23 +165,40 @@ describe('worker_message and outside text (review fixes, PR #2164)', () => {
       version: 1, id, runId: 'run-1', threadId: 'general', depth: 0, hopsInRun: 1, from: { kind: 'human' }, to: { kind: 'bot', workspaceId: 'ws-1', botId: BOT },
       kind: 'answer', replyTo, attribution: { originator: { kind: 'human' }, chain: [] }, landing: 'wake', payload: { title: 't', body: 'yes' }, status: 'delivered', createdAt: 1, updatedAt: 1,
     });
-    const ask: Handoff = { ...answer('h-ask', 'x'), kind: 'ask_person', from: { kind: 'bot', workspaceId: 'ws-1', botId: BOT }, to: { kind: 'human' } };
+    const ask: Handoff = { ...answer('h-ask', 'x'), kind: 'ask_person', from: { kind: 'bot', workspaceId: 'ws-1', botId: BOT }, to: { kind: 'human' }, guestSourced: false };
     delete (ask as Partial<Handoff>).replyTo;
     const records = new Map<string, Handoff>([['h-ask', ask], ['h-kept', answer('h-kept', 'h-ask')], ['h-pruned', answer('h-pruned', 'h-gone')]]);
     let item: WakeItem | null = null;
     const running = () => (item ? { item, startedAt: 0 } : null);
-    setWakeTaint(new WakeTaint({ facts: () => [], handoff: (id) => records.get(id) ?? null, taskRow: () => null, runningWake: running }), running);
+    setWakeTaint(new WakeTaint({ facts: () => [], handoff: (id) => records.get(id) ?? null, taskRow: () => null, runningWake: running }), running, (id) => (item?.id === id ? item : null));
     try {
       const on = (handoffId: string): WakeItem => ({ id: 'w-1', botId: BOT, workspaceId: 'ws-1', reason: { kind: 'handoff', handoffId }, priority: 1, enqueuedAt: 1, attempts: 1, state: 'running' });
       item = on('h-pruned');
-      const pruned = rig({ senderTainted: undefined });
+      const pruned = rig({ senderTainted: undefined, guestOfWake: undefined });
       expect(await pruned.send('wtask-a1', 'merge it')).toMatchObject({ ok: false, code: 'not_now' });
       expect(pruned.submit).not.toHaveBeenCalled();
       item = on('h-kept');
-      const kept = rig({ senderTainted: undefined });
+      const kept = rig({ senderTainted: undefined, guestOfWake: undefined });
       expect(await kept.send('wtask-a1', 'merge it')).toEqual({ ok: true, status: 'delivered', taskId: 'wtask-a1' });
     } finally {
       setWakeTaint(null);
     }
+  });
+});
+
+describe('worker_message from a guest-sourced wake', () => {
+  it('is refused whatever the task, and again right before the paste when the wake can no longer be told clean', async () => {
+    for (const g of [true, 'unknown'] as const) {
+      const r = rig({ guestOfWake: () => g });
+      expect(await r.send('wtask-a1', 'hi')).toMatchObject({ ok: false, code: 'not_now' });
+      expect(r.submit).not.toHaveBeenCalled();
+    }
+    // Clean when asked, gone by the paste (its record pruned): nothing typed.
+    let guest: boolean | 'unknown' = false;
+    const late = rig({
+      guestOfWake: () => guest,
+      submit: vi.fn(async (_pane: string, _text: string, stillOk: () => string | null) => { guest = 'unknown'; return stillOk() === null; }),
+    });
+    expect(await late.send('wtask-a1', 'hi')).toMatchObject({ ok: false, code: 'held' });
   });
 });

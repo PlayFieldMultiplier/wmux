@@ -807,7 +807,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     resolveHandoff: summarizeHandoff,
     taskHandoff: (item) => taskWakeHandoff(item.reason, (id) => getTaskLedger().get(id)),
     readThreadTail: (workspaceId, threadId, n, opts) => threadTail(getRoomWriter(), workspaceId, threadId, n, opts),
-    turnReadGuestText: (wakeId) => getWakeTaint()?.turnReadGuestText(wakeId) ?? false,
+    wakeGuest: (item) => getWakeTaint()?.wakeGuest(item) ?? 'unknown',
     wakeContext: (profile, item) => wakeContext(contextPorts(), profile, item),
     wakeImages: (profile, item) => wakeImagesOf(getRoomWriter(), getRoomAttachmentStore(), profile, item),
     onTurnDone: (profile, item) => getHandoffRouter()?.closeAnsweredInChat(profile.id, item),

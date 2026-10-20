@@ -5,7 +5,7 @@
 import path from 'node:path';
 import type { WakeItem } from '../../shared/wake';
 import { registerFactoryRpcModule } from './factoryHost';
-import { TAINT_FILENAME, WakeTaint, runningTurnGuestSourced, setWakeTaint } from './wakeTaint';
+import { TAINT_FILENAME, WakeTaint, setWakeTaint } from './wakeTaint';
 import { setGuestTurnProbe } from './roomWriter';
 import { getBotWorkflowStore } from './botWorkflow';
 
@@ -13,7 +13,7 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
   let off: (() => void) | null = null;
   return {
     async start() {
-      const [{ getFactLog }, { getHandoffRouter }, { getTaskLedger }, { currentWakeItem }, { getBotRuntime }, { resolveFactsFrom }, { getBotDirectory }] = await Promise.all([
+      const [{ getFactLog }, { getHandoffRouter }, { getTaskLedger }, { currentWakeItem, wakeItemById }, { getBotRuntime }, { resolveFactsFrom }, { getBotDirectory }] = await Promise.all([
         import('./factLog'),
         import('./handoffRouter'),
         import('../deck/taskLedgerHost'),
@@ -38,9 +38,14 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
         bot: (botId) => getBotDirectory()?.get(botId) ?? null,
         file: path.join(deps.wmuxDir(), 'factory', TAINT_FILENAME),
       });
-      setWakeTaint(taint, runningWake);
-      // A bot's card from a guest-sourced turn is stamped (RoomCard.origin).
-      setGuestTurnProbe((botId) => runningTurnGuestSourced(botId) === true);
+      setWakeTaint(taint, runningWake, wakeItemById);
+      // A bot's card written in its running wake is stamped (RoomCard.origin)
+      // unless that wake is known clean; a write outside a wake passes its
+      // origin itself.
+      setGuestTurnProbe((botId) => {
+        const running = runningWake(botId);
+        return running !== null && taint.wakeGuest(running.item) !== false;
+      });
       const log = getFactLog();
       off = log ? log.subscribe((f) => taint.onFact(f)) : null;
     },

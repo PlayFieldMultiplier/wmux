@@ -93,7 +93,7 @@ export interface WorkTaskReconcilerPorts {
   /** Who started the task in `taskWorkspaceId`, from its lineage stamp, or
    *  null. A mirrored row carries it as its dispatch origin, so a recovered
    *  bot worker counts on its bot's slots. */
-  originOf?: (taskWorkspaceId: string) => { kind: string; botId?: string; tainted?: boolean } | null;
+  originOf?: (taskWorkspaceId: string) => { kind: string; botId?: string; tainted?: boolean; guest?: boolean } | null;
   /** Minimum spacing between two full passes (default 10s). */
   minIntervalMs?: number;
   now?: () => number;
@@ -176,7 +176,7 @@ export function createWorkTaskReconciler(ports: WorkTaskReconcilerPorts): () => 
           }
           if (typeof t.missionChannelId === 'string') missionChannels.set(t.id, t.missionChannelId);
           if (!t.paneGroupId || l.get(t.id)) continue;
-          let origin: { kind: string; botId?: string; tainted?: boolean } | null = null;
+          let origin: { kind: string; botId?: string; tainted?: boolean; guest?: boolean } | null = null;
           try {
             origin = ports.originOf?.(t.paneGroupId) ?? null;
           } catch {
@@ -196,6 +196,7 @@ export function createWorkTaskReconciler(ports: WorkTaskReconcilerPorts): () => 
                         ...(origin.botId ? { botId: origin.botId } : {}),
                         // Absent stays absent: a bot task without it counts as tainted.
                         ...(typeof origin.tainted === 'boolean' ? { tainted: origin.tainted } : {}),
+                        ...(typeof origin.guest === 'boolean' ? { guest: origin.guest } : {}),
                       },
                       reconciled: true as const,
                     },

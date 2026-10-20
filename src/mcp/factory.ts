@@ -81,14 +81,14 @@ registerToolModule({
       'Read cards from your workspace\'s room in arrival order: every thread (the default), or one thread_id '
         + '("general" is the general thread only). Without since_seq you get the newest page; pass back nextSinceSeq '
         + 'to read what came after, hasMore says there is more. The HQ bot may read another workspace\'s room. '
-        + 'Cards an external guest agent wrote are left out unless include_guest is true; reading them marks this turn as '
-        + 'started from outside text, so nothing it starts can merge without the owner, and your next turn starts a new conversation.',
+        + 'Cards an external guest agent wrote (and cards written in a turn one started) are left out; include_guest returns '
+        + 'them only in a turn an external guest\'s message started, and is refused in any other.',
       {
         thread_id: THREAD_ID.optional(),
         since_seq: z.number().int().min(0).optional().describe('Cards after this seq.'),
         limit: z.number().int().min(1).max(ROOM_LIMITS.PAGE).optional(),
         workspace_id: z.string().min(1).max(80).optional().describe('HQ bot: another workspace\'s room.'),
-        include_guest: z.boolean().optional().describe('Also return external guest agents\' cards (outside text; taints this turn).'),
+        include_guest: z.boolean().optional().describe('Also return external guest agents\' cards: only in a turn a guest\'s message started.'),
       },
       async ({ thread_id, since_seq, limit, workspace_id, include_guest }) =>
         call(ROOM_RPC.read, { threadId: thread_id, sinceSeq: since_seq, limit, workspaceId: workspace_id, ...(include_guest === true ? { includeGuest: true } : {}) }),

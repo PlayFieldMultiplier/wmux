@@ -38,6 +38,9 @@ export interface BotNoticeInput {
   threadId?: ThreadId;
   card?: boolean;
   tainted?: boolean;
+  /** What it tells of came from a guest-sourced wake (wakeTaint.ts).
+   *  Written on every notice; absent means false. */
+  guest?: boolean;
   repoKey?: string;
   pr?: number;
   taskId?: string;
@@ -76,6 +79,8 @@ export function botNoticeDraft(n: BotNoticeInput, at: number): FactDraft<'bot.no
     ...(n.notice ? { notice: n.notice } : {}),
     // Text main did not write is outside text, whatever else says so.
     ...(n.tainted || detail ? { tainted: true } : {}),
+    // Always said, so a reader never has to guess (wakeTaint.ts factGuest).
+    guest: n.guest === true,
   };
   return {
     kind: 'bot.notice',

@@ -158,6 +158,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
       return {
         kind: 'held_fanout', heldId: r.heldId, heldAt: r.heldAt as number, titles: [...(r.titles as string[])],
         ...(args ? { args } : {}), ...(r.fingerprint !== undefined ? { fingerprint: r.fingerprint as string } : {}), tainted: r.tainted,
+        ...(typeof r.guest === 'boolean' ? { guest: r.guest } : {}),
         ...(r.handoffId !== undefined ? { handoffId: r.handoffId as string } : {}),
       };
     }
@@ -647,6 +648,11 @@ export function dropQueuedGuestWakes(guestId?: string): number {
   // One running now finishes its turn and runs no attempt more.
   current.endRunning(mine);
   return n;
+}
+
+/** Wake `id`'s record (a copy), or null when it is gone or there is no queue. */
+export function wakeItemById(id: string): WakeItem | null {
+  return current?.get(id) ?? null;
 }
 
 /** The wake the bot is running now (a copy), or null. */

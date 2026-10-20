@@ -1756,7 +1756,7 @@ export class FanOutService {
         ...(ctx.requester
           ? {
               dispatch: {
-                origin: { kind: ctx.requester.kind, ...(ctx.requester.botId ? { botId: ctx.requester.botId } : {}), ...(typeof ctx.requester.tainted === 'boolean' ? { tainted: ctx.requester.tainted } : {}) },
+                origin: { kind: ctx.requester.kind, ...(ctx.requester.botId ? { botId: ctx.requester.botId } : {}), ...(typeof ctx.requester.tainted === 'boolean' ? { tainted: ctx.requester.tainted } : {}), ...(typeof ctx.requester.guest === 'boolean' ? { guest: ctx.requester.guest } : {}) },
                 ...(ctx.preset ? { preset: ctx.preset } : {}),
                 ...(ctx.repoKey ? { repoKey: ctx.repoKey } : {}),
                 // The git dir task_push and task_fetch run on.
@@ -2079,7 +2079,8 @@ export class FanOutService {
   }): Promise<{ workspaceId: string; ptyId: string } | { error: string }> {
     const connectors = input.connectors ?? [];
     // A task with connections counts as started from outside text.
-    const origin: FanoutOrigin = { kind: 'bot', botId: input.botId, tainted: input.tainted || connectors.length > 0 };
+    // A resume is refused for a guest-sourced wake (workerResume.rpc.ts).
+    const origin: FanoutOrigin = { kind: 'bot', botId: input.botId, tainted: input.tainted || connectors.length > 0, guest: false };
     const keys = [...new Set(connectors.flatMap((c) => c.secrets.map((s) => s.secret)))];
     const secretGrant = keys.length > 0
       ? mintSecretGrant({ botId: input.botId, taskId: input.taskId, ownerWorkspaceId: input.ownerWorkspaceId, cwd: input.cwd, names: [], connectionNames: keys })

@@ -36,6 +36,8 @@ export interface FanoutOrigin {
   /** kind 'bot': whether the wake that started it carried outside text (set
    *  by main from its own wake state, never from the bot's arguments). */
   tainted?: boolean;
+  /** kind 'bot': the starting wake's guest provenance (wakeTaint.ts). */
+  guest?: boolean;
 }
 
 /** One task workspace's durable stamp as FANOUT_LINEAGE answers it. `botId`
@@ -73,7 +75,7 @@ export function sanitizeFanoutOrigin(raw: unknown): FanoutOrigin | undefined {
   if (kind === 'bot') {
     const botId = r['botId'];
     if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return undefined;
-    return { kind, botId, ...(typeof r['tainted'] === 'boolean' ? { tainted: r['tainted'] } : {}) };
+    return { kind, botId, ...(typeof r['tainted'] === 'boolean' ? { tainted: r['tainted'] } : {}), ...(typeof r['guest'] === 'boolean' ? { guest: r['guest'] } : {}) };
   }
   if (kind !== 'pane') return { kind };
   const paneId = boundedString(r['paneId'], ID_MAX);

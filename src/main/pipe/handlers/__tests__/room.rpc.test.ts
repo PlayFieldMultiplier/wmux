@@ -719,15 +719,14 @@ describe('room.read / room.threads', () => {
       guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'Grok' },
     });
     const kinds = (r: unknown) => (r as { cards: Array<{ kind: string }> }).cards.map((c) => c.kind);
-    const marked: string[] = [];
-    const deps = { ...s.deps, markGuestRead: (botId: string) => { marked.push(botId); return true; } };
-    expect(kinds(handleRoomRead({ threadId: 'general' }, asBot(lead), deps))).toEqual(['human']);
-    expect(marked).toEqual([]);
-    expect(kinds(handleRoomRead({ threadId: 'general', includeGuest: true }, asBot(lead), deps))).toEqual(['human', 'guest']);
-    expect(marked).toEqual([lead.id]);
-    // No running turn to mark: refused, nothing read.
-    expect(handleRoomRead({ threadId: 'general', includeGuest: true }, asBot(lead), { ...s.deps, markGuestRead: () => false }))
-      .toMatchObject({ ok: false, code: 'no_turn' });
+    const guestWake = { ...s.deps, guestWake: () => true as const };
+    expect(kinds(handleRoomRead({ threadId: 'general' }, asBot(lead), guestWake))).toEqual(['human']);
+    expect(kinds(handleRoomRead({ threadId: 'general', includeGuest: true }, asBot(lead), guestWake))).toEqual(['human', 'guest']);
+    // A clean wake, or one whose provenance is unknown, reads no guest card.
+    for (const g of [false, 'unknown'] as const) {
+      expect(handleRoomRead({ threadId: 'general', includeGuest: true }, asBot(lead), { ...s.deps, guestWake: () => g }))
+        .toMatchObject({ ok: false, code: 'not_guest_wake' });
+    }
     expect(kinds(handleRoomRead({ workspaceId: 'ws1', threadId: 'general' }, OPERATOR, s.deps))).toEqual(['human', 'guest']);
   });
 

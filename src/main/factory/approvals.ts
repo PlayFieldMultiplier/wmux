@@ -164,11 +164,20 @@ export interface ApprovalWake {
   attempt: number;
   threadId: ThreadId | null;
   tainted: boolean;
+  /** The wake's guest provenance (wakeTaint.ts). Not known clean: the
+   *  request counts as tainted (no remembered rule approves it) and its card
+   *  is guest-sourced. Absent: unknown. */
+  guest?: boolean | 'unknown';
   /** The wake carries the owner's own message. */
   ownerWords?: boolean;
   /** The owner card that started the wake (RunningWake.ownerCardId): the
    *  request's card answers it when it lands in that card's thread. */
   ownerCardId?: string;
+}
+
+/** Whether a wake is not known to be clean of a guest's words. */
+function guestSourcedWake(wake: Pick<ApprovalWake, 'guest'>): boolean {
+  return wake.guest !== false;
 }
 
 /** What the approvals reach of the merge executor (mergeLaneHost.ts). */
@@ -595,7 +604,9 @@ export class ApprovalService {
       // approves it; the card links the PR's (or issue's) own thread.
       threadId: this.conversationThread(bot.botId, wake),
       reason,
-      tainted: wake.tainted,
+      // As the wake reads now, after the waits, and never cleaner than when
+      // it asked.
+      tainted: wake.tainted || still.tainted || guestSourcedWake(wake) || guestSourcedWake(still),
       state: 'pending',
       clientRequestId,
       createdAt: at,
@@ -642,7 +653,7 @@ export class ApprovalService {
       workspaceId: bot.workspaceId,
       threadId: this.conversationThread(bot.botId, wake),
       reason,
-      tainted: wake.tainted,
+      tainted: wake.tainted || guestSourcedWake(wake),
       state: 'pending',
       clientRequestId: `skill:${input.name}:${input.hash}`,
       createdAt: at,
@@ -1369,6 +1380,7 @@ export class ApprovalService {
       state: 'open',
       ...(replyTo ? { replyTo } : {}),
       clientPostId: `approval:${r.requestId}`,
+      ...(guestSourcedWake(wake) ? { origin: 'guest' as const } : {}),
     });
     return res.ok ? res.card : null;
   }

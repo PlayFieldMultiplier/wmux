@@ -60,10 +60,12 @@ export interface Handoff {
    *  had not answered yet). The answer's wake answers that hop: a result sent
    *  from it, with no replyTo, is that hop's result. Main-written. */
   forHop?: string;
-  /** ask_person: asked in a turn that started from or read an external
-   *  guest's message; its question card carries RoomCard.origin 'guest'
-   *  whenever it is raised. Main-written. */
-  guestSourced?: true;
+  /** Guest provenance (wakeTaint.ts): a question asked in a guest-sourced
+   *  wake, an answer to one, a relay dispatch carrying a guest-sourced
+   *  result, a bot's send from a guest-sourced wake. Written by main when it
+   *  is made (a question and an answer always say); the cards derived from
+   *  it carry RoomCard.origin 'guest'. Main-written. */
+  guestSourced?: boolean;
   /** dispatch: the bots that take the work after the addressee, in order
    *  (a relay). Named by a coordinator only; see HandoffSendParams.next. */
   next?: string[];

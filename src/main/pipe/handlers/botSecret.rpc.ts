@@ -49,6 +49,7 @@ import { SecretStore, electronSecretCrypto, getSecretStore, setSecretStore, type
 import { setSecretGrantSource } from '../../factory/secretGrants';
 import { isMainWindowSender } from '../../ipc/mainWindowSender';
 import { getConnectorStore, isConnectionKey } from '../../factory/connectorStore';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 
 export const SECRETS_FILENAME = 'secrets.json';
 const URL_MAX = 500;
@@ -82,6 +83,15 @@ export interface SecretHandlerDeps {
   ports: () => Partial<FactoryRoomPorts>;
   /** Is this key a connection's (default: the running library and store)? */
   isConnectionKey?: (name: string) => boolean;
+  /** The guest provenance of the bot's running wake. Default: wakeTaint.ts. */
+  guestWake?: (botId: string) => GuestProvenance;
+}
+
+/** A guest-sourced wake (or one of unknown provenance) asks the owner for
+ *  no key or sign-in: what it would be used for is not the owner's own
+ *  request. */
+function guestRefusal(bot: BotBinding, deps: SecretHandlerDeps): FactoryRefusal<'not_now'> | null {
+  return (deps.guestWake ?? guestOfRunningWake)(bot.botId) !== false ? refusal('not_now', GUEST_TURN_STARTS_NO_WORKERS) : null;
 }
 
 function notStarted(): FactoryRefusal<'not_started'> {
@@ -114,6 +124,8 @@ export function handleSecretRequest(raw: unknown, ctx: RpcContext | undefined, d
   if (caller.kind !== 'bot') return refusal('bot_only', 'secret_request is a bot\'s');
   const bot = caller.bot;
   if (!botHasTool(bot, 'secret_request')) return refusal('surface', 'this bot has no secret_request');
+  const guest = guestRefusal(bot, deps);
+  if (guest) return guest;
   const writer = deps.writer();
   const store = deps.store();
   if (!writer || !store) return notStarted();
@@ -192,6 +204,8 @@ export function handleLoginRequest(raw: unknown, ctx: RpcContext | undefined, de
   if (caller.kind !== 'bot') return refusal('bot_only', 'login_request is a bot\'s');
   const bot = caller.bot;
   if (!botHasTool(bot, 'login_request')) return refusal('surface', 'this bot has no login_request');
+  const guest = guestRefusal(bot, deps);
+  if (guest) return guest;
   const writer = deps.writer();
   if (!writer) return notStarted();
   const p = params(raw);

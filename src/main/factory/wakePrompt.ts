@@ -93,6 +93,9 @@ export interface WakePromptInput {
   /** A task wake: the handoff its tasks were started for. */
   taskParent?: WakeHandoffSummary | null;
   thread?: WakePromptThread | null;
+  /** The wake is guest-sourced (wakeTaint.ts wakeGuest): its thread shows
+   *  guest cards. Absent: a `guest` wake only. */
+  guestCards?: boolean;
   /** A routine wake's routine (routines.ts), when it could be read. */
   routine?: WakeRoutineSummary | null;
   /** The other enabled bots of the bot's room, for room_post mentions and
@@ -301,12 +304,11 @@ export function buildWakePrompt(input: WakePromptInput): string {
   }
   if (item.threadId) lines.push(`Thread: ${item.threadId} (your room posts in this wake go to this thread unless you name another; this id is for your tools, never for the owner's eyes).`);
   const thread = input.thread;
-  // An outside agent's cards ride only the wake it caused (itself tainted,
-  // and run in a conversation of its own, BotRuntime.ts). The thread tail
-  // leaves them out already (RoomWriter.read); this filter is the second
-  // line. A bot reads them otherwise only with room_read's include_guest,
-  // which taints its turn (wakeTaint.ts).
-  const guestWake = item.reason.kind === 'guest';
+  // An outside agent's cards ride only a guest-sourced wake (itself
+  // tainted, and run in a conversation of its own, BotRuntime.ts). The
+  // thread tail leaves them out already (RoomWriter.read); this filter is
+  // the second line.
+  const guestWake = input.guestCards ?? item.reason.kind === 'guest';
   const shownCards = thread ? thread.cards.filter((c) => guestWake || !isGuestSourcedCard(c)) : [];
   const hiddenGuestCards = thread && !guestWake ? thread.cards.length - shownCards.length + (thread.hiddenGuestCards ?? 0) : 0;
   if (thread && shownCards.length > 0) {
@@ -326,7 +328,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
     );
   }
   if (thread && hiddenGuestCards > 0) {
-    lines.push('', `${hiddenGuestCards} card(s) from an external guest agent (or written in a turn it started) in ${thread.threadId} are left out of this wake: they are outside text, not the owner's words. Reading them (room_read with include_guest) marks this turn as started from outside text.`);
+    lines.push('', `${hiddenGuestCards} card(s) from an external guest agent (or written in a turn it started) in ${thread.threadId} are left out of this wake: they are outside text, not the owner's words, and only a wake an external guest's message started reads them.`);
   }
   const r = item.reason;
   const group = input.group ?? null;

@@ -200,9 +200,10 @@ export interface RoomCard {
   /** Main-written, `guest` cards only (actor system): the outside agent that
    *  posted it (shared/guestBots.ts). The card is external whatever it says. */
   guest?: { guestId: string; name: string };
-  /** Main-written, bot cards only: written in a turn that an external
-   *  guest's message started or that read one (wakeTaint.ts). Read like a
-   *  `guest` card (isGuestSourcedCard). */
+  /** Main-written, bot and system cards: written in a guest-sourced wake
+   *  (wakeTaint.ts), or derived from a guest-sourced item (a question, its
+   *  closing card, a thread's Finished card). Read like a `guest` card
+   *  (isGuestSourcedCard). */
   origin?: 'guest';
 }
 
@@ -295,9 +296,10 @@ export interface RoomReadParams {
   /** Operator only: record that the owner has read this thread (threadId
    *  required) through this seq. Opening a view is not reading. */
   markThroughSeq?: number;
-  /** A bot only: also return external guests' cards (kind `guest`). Left
-   *  out by default; asking marks the bot's running turn tainted
-   *  (wakeTaint.ts). The operator always sees them. */
+  /** A bot only: also return external guests' cards (and cards written in
+   *  a guest-sourced wake). Left out by default; refused outside a wake an
+   *  external guest's message started (wakeTaint.ts). The operator always
+   *  sees them. */
   includeGuest?: boolean;
 }
 

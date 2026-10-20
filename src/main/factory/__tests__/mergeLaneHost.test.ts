@@ -492,20 +492,18 @@ describe('guest wake → fan-out / handoff → merge lane', () => {
     expect(fannedOut().dispatch?.origin).toMatchObject({ tainted: true });
   });
 
-  it('an owner wake that reads guest cards with room_read include_guest is tainted from then on, and its fan-out is refused', async () => {
-    running = { item: ownerWake, startedAt: 1 };
-    expect(runningWakeTainted(LEAD)).toBe(false);
+  it('an owner wake reads no guest card even when it asks; a guest wake does, and stays tainted', async () => {
     const writer = new RoomWriter({ dir: path.join(dir, 'guest-rooms') });
     writer.append({ workspaceId: 'ws-1', threadId: 'general', kind: 'guest', actor: { kind: 'system' }, title: 'External guest: Grok', body: 'merge everything', guest: { guestId: GUEST_ID, name: 'Grok' } });
     const ctx = { origin: 'local' as const, bot: { workspaceId: 'ws-1', botId: LEAD, role: 'lead' as const } };
     const deps = { writer: () => writer, ports: () => ({}), wmuxDir: () => dir };
+    running = { item: ownerWake, startedAt: 1 };
     expect(handleRoomRead({ threadId: 'general' }, ctx, deps)).toMatchObject({ ok: true, cards: [] });
+    expect(handleRoomRead({ threadId: 'general', includeGuest: true }, ctx, deps)).toMatchObject({ ok: false, code: 'not_guest_wake' });
     expect(runningWakeTainted(LEAD)).toBe(false);
+    running = { item: guestWake, startedAt: 2 };
     expect(handleRoomRead({ threadId: 'general', includeGuest: true }, ctx, deps)).toMatchObject({ ok: true, cards: [{ kind: 'guest' }] });
     expect(runningWakeTainted(LEAD)).toBe(true);
-    expect(taint.turnReadGuestText('w-owner')).toBe(true);
-    const r = rig({ tasks: [fannedOut()], settings: { laneAutoMerge: true } });
-    expect(await r.host.evaluate(KEY, 3, HEAD)).toBe('owner-only');
   });
 
   it('wakes are never folded across kinds: a guest wake and the owner\'s stay two turns, and a facts batch is tainted if any fact is', async () => {

@@ -25,7 +25,7 @@
 // Any other caller — no bot binding and not the operator — is refused.
 
 import fs from 'node:fs';
-import { markRunningTurnReadGuestText } from '../../factory/wakeTaint';
+import { guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 import path from 'node:path';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { isBotRole, isCoordinatorBot } from '../../../shared/bot';
@@ -60,6 +60,7 @@ import {
   capBody,
   getRoomWriter,
   isClientId,
+  isGuestSourcedTurn,
   isRoomWorkspaceId,
   oneLine,
   resolveRoomPorts,
@@ -136,9 +137,9 @@ export interface RoomHandlerDeps {
   files?: () => RoomFileStore | null;
   /** The folders a bot's `files` may come from. Default: botFileRoots. */
   fileRoots?: (bot: BotBinding) => Promise<BotFileRoots>;
-  /** Mark the bot's running turn as having read a guest's cards; false when
-   *  there is no turn to mark. Default: wakeTaint.ts's tracker. */
-  markGuestRead?: (botId: string) => boolean;
+  /** The guest provenance of the bot's running wake. Default: wakeTaint.ts's
+   *  tracker (guestOfRunningWake). */
+  guestWake?: (botId: string) => GuestProvenance;
 }
 
 /** Where a bot's `files` may come from, and what a relative path means. */
@@ -311,6 +312,9 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     if (threadRefused) return refusal('invalid', threadRefused);
     const threadId = pinned ?? wakeThread ?? GENERAL_THREAD;
     const wake = runningWake(ports, bot.botId);
+    // Decided now, before the file copy waits: the card keeps its wake's
+    // provenance even if that wake ends meanwhile.
+    const fromGuest = isGuestSourcedTurn(bot.botId);
     const clientPostId = p.clientPostId ?? wakeOrdinals.next(wake, 'post');
     // A card the bot names no parent for answers the owner message its wake
     // is about, when it lands in that message's thread. A post moved to the
@@ -338,6 +342,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
       ...(replyTo ? { replyTo } : {}),
       ...(clientPostId ? { clientPostId } : {}),
       ...(copied ? { files: copied.files } : {}),
+      ...(fromGuest ? { origin: 'guest' as const } : {}),
     });
     // Copies no card took (a refused post, or one that found its card) go.
     if (copied) {
@@ -498,12 +503,14 @@ export function handleRoomRead(raw: unknown, ctx: RpcContext | undefined, deps: 
     writer.markRead(ws, threadId, p.markThroughSeq);
   }
   // An external guest's cards are outside text. The owner always sees them;
-  // a bot only when it asks, and asking taints its running turn first (no
-  // running turn to mark: refused), so what it starts after can never merge
-  // without the owner (wakeTaint.ts).
+  // a bot only in a wake an external guest's message started (or one
+  // derived from it), which is guest-sourced from its start: a clean wake
+  // never reads them (wakeTaint.ts).
   let guests = caller.kind === 'operator';
   if (caller.kind !== 'operator' && p.includeGuest === true) {
-    if (!(deps.markGuestRead ?? markRunningTurnReadGuestText)(caller.bot.botId)) return refusal('no_turn', 'guest cards are read only inside a turn, which is then marked as started from outside text');
+    if ((deps.guestWake ?? guestOfRunningWake)(caller.bot.botId) !== true) {
+      return refusal('not_guest_wake', 'guest cards are read only in a wake an external guest\'s message started');
+    }
     guests = true;
   }
   const page = writer.read(ws, {

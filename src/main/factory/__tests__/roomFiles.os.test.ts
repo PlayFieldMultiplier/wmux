@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ROOM_FILE_RETAIN_MS, RoomFileStore, isWin32UnsafeName, namesWin32Stream, parseRoomFiles, roomFileMediaType, roomFileName, strictlyInside } from '../roomFiles';
-import { RoomWriter } from '../roomWriter';
+import { RoomWriter, setGuestTurnProbe } from '../roomWriter';
 import { botFileRoots, handleRoomPost, type BotFileRoots, type RoomHandlerDeps } from '../../pipe/handlers/room.rpc';
 import { TaskFolders, setTaskFolderPorts, type TaskFolderPorts, type TaskMission } from '../taskFolderCleanup';
 import type { LedgerEntry } from '../../../shared/ledger';
@@ -285,6 +285,21 @@ describe('room_post files', () => {
     expect(again).toMatchObject({ ok: true, duplicate: true });
     expect(again.card.files).toEqual(r.card.files);
     expect(stored()).toHaveLength(2);
+  });
+
+  it('a post from a guest-sourced wake keeps its origin when the wake ends while its files are copied', async () => {
+    let guestWake = true;
+    setGuestTurnProbe(() => guestWake);
+    try {
+      const s = postSetup();
+      write(path.join(repo(), 'out', 'notes.md'), '# Notes\n');
+      const deps: RoomHandlerDeps = { ...s.deps, fileRoots: async () => { guestWake = false; return { roots: [repo()], base: repo() }; } };
+      const r = await handleRoomPost({ kind: 'status', title: 'Notes', clientPostId: 'p-g', files: ['out/notes.md'] }, AS_BOT, deps) as { ok: true; card: RoomCard };
+      expect(r.card.origin).toBe('guest');
+      expect(s.writer.read(WS).cards).toEqual([]);
+    } finally {
+      setGuestTurnProbe(null);
+    }
   });
 
   it.skipIf(process.platform === 'win32')('a task folder turned into a link after it was listed is no root at the copy', async () => {

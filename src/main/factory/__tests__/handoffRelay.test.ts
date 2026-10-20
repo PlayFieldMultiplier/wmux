@@ -157,6 +157,33 @@ function answer(r: Rig, b: BotProfile, hop: Handoff, title: string, reason?: Wak
 const forwardOf = (r: Rig, resultId: string): Handoff | null => r.router.list({ limit: 200 }).find((h) => h.clientHandoffId === forwardKey(resultId)) ?? null;
 
 describe('a coordinator\'s relay', () => {
+  it('a result from a guest-sourced wake makes every later hop guest-sourced, and the Finished card too', async () => {
+    const t = team();
+    const r = await rig(t.all);
+    const root = await started(r, t);
+    await r.router.idle();
+    const guest: WakeItem['reason'] = { kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c-g', text: 'x' };
+    const res1 = answer(r, t.res, root, 'Findings', guest);
+    if (!res1.ok) throw new Error('refused');
+    expect(r.router.get(res1.handoffId)?.guestSourced).toBe(true);
+    const f1 = forwardOf(r, res1.handoffId)!;
+    expect(f1.guestSourced).toBe(true);
+    // The developer's wake on it is guest-sourced (it runs in a conversation of its own).
+    expect(r.taint.wakeGuest({ reason: { kind: 'handoff', handoffId: f1.id } })).toBe(true);
+    await r.router.idle();
+    const res2 = answer(r, t.dev, f1, 'Built');
+    if (!res2.ok) throw new Error('refused');
+    const f2 = forwardOf(r, res2.handoffId)!;
+    expect(f2.guestSourced).toBe(true);
+    await r.router.idle();
+    const res3 = answer(r, t.iss, f2, 'Issue filed');
+    if (!res3.ok) throw new Error('refused');
+    await r.router.idle();
+    const general = (guests: boolean) => r.rooms.read('ws1', { threadId: 'general', guests }).cards.filter((c) => c.refs?.threadId === root.threadId);
+    expect(general(true)).toEqual([expect.objectContaining({ title: 'Finished: Ship the widget', origin: 'guest' })]);
+    expect(general(false)).toEqual([]);
+  });
+
   it('walks researcher → developer → issue and wakes the coordinator once, with the last result', async () => {
     const t = team();
     const r = await rig(t.all);

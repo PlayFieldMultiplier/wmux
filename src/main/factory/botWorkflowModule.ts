@@ -10,7 +10,7 @@ import { getWorkflowFanout, type WorkflowFanout } from './workflowFanout';
 import { getBotDirectory } from './botStore';
 import { getBotRuntime } from './BotRuntime';
 import { getWakeQueue, type WakeSinkApi } from './wakeQueue';
-import { GUEST_TURN_STARTS_NO_WORKERS, runningTurnGuestSourced, runningWakeTainted } from './wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, runningWakeTainted, type GuestProvenance } from './wakeTaint';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { workflowWorkerPrompt } from './workflowPrompt';
 import { isWakeStoppedByOwner } from './factoryStop';
@@ -20,9 +20,8 @@ export interface WorkflowPorts {
   profile(botId: string): BotProfile | null;
   turn(botId: string): { wakeId: string; threadId?: ThreadId } | null;
   tainted(botId: string): boolean;
-  /** Whether the bot's running turn started from or read an external
-   *  guest's message (wakeTaint.ts); null when it cannot be told. */
-  guestSourced(botId: string): boolean | null;
+  /** The guest provenance of the bot's running wake (wakeTaint.ts). */
+  guestSourced(botId: string): GuestProvenance;
   rows(): LedgerEntry[];
   fanout(): WorkflowFanout | null;
   queue(): WakeSinkApi | null;
@@ -73,7 +72,7 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
     if (!validateWorkflowInput(params)) return refuse('INVALID_ARGUMENT', 'provide a stable clientWorkflowId, title and one to eight titled step prompts');
     try {
       const workflow = await p.store.create({ botId: bot.id, workspaceId: bot.workspaceId, repoKey: bot.repo.repoKey,
-        threadId: turn.threadId ?? GENERAL_THREAD, tainted: p.tainted(bot.id) !== false }, params);
+        threadId: turn.threadId ?? GENERAL_THREAD, tainted: p.tainted(bot.id) !== false, guest: false }, params);
       await wakeReadyWorkflows(p, [workflow]);
       return { ok: true, workflow: workflowView(p.store.get(workflow.id, bot.id, bot.workspaceId) ?? workflow) };
     } catch (error) { return refuse('FAILED_PRECONDITION', String(error)); }
@@ -123,7 +122,7 @@ registerFactoryRpcModule('workflows', (router, deps) => {
   let active = false;
   let off: (() => void) | null = null;
   const ports: WorkflowPorts = { store, profile: (id) => getBotDirectory()?.get(id) ?? null,
-    turn: (id) => getBotRuntime()?.currentTurn(id) ?? null, tainted: runningWakeTainted, guestSourced: runningTurnGuestSourced,
+    turn: (id) => getBotRuntime()?.currentTurn(id) ?? null, tainted: runningWakeTainted, guestSourced: guestOfRunningWake,
     rows: () => getTaskLedger().list(), fanout: getWorkflowFanout, queue: getWakeQueue, active: () => active };
   registerWorkflowRpc(router, ports);
   return {

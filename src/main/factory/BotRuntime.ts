@@ -269,10 +269,10 @@ export interface BotRuntimePorts {
   /** The newest `n` cards of a room thread, oldest first, and whether older
    *  ones exist (the rooms module). */
   readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number, opts?: { guests?: boolean }) => { cards: RoomCard[]; truncated: boolean; hiddenGuestCards?: number } | null;
-  /** Whether the turn of wake `wakeId` read an external guest's cards on
-   *  purpose (room_read with includeGuest; wakeTaint.ts). Its conversation
-   *  is then not resumed. */
-  turnReadGuestText?: (wakeId: string) => boolean;
+  /** A wake's guest provenance (wakeTaint.ts wakeGuest). A guest-sourced
+   *  wake sees guest cards and runs in a conversation of its own, and so
+   *  does one whose provenance is unknown. Absent: a `guest` wake only. */
+  wakeGuest?: (item: WakeItem) => boolean | 'unknown';
   /** A routine as its wake shows it (the routines module). */
   resolveRoutine?: (routineId: string) => WakeRoutineSummary | null;
   /** The handoff a task wake answers (the one its tasks were started
@@ -701,12 +701,12 @@ export class BotRuntime {
     for (const botId of [...this.live.keys()]) this.endSession(botId);
   }
 
-  private turnReadGuestText(wakeId: string): boolean {
+  private wakeGuest(item: WakeItem): boolean | 'unknown' {
+    if (!ports.wakeGuest) return item.reason.kind === 'guest';
     try {
-      return ports.turnReadGuestText?.(wakeId) === true;
+      return ports.wakeGuest(item);
     } catch {
-      // Not known: the conversation is not continued.
-      return true;
+      return 'unknown';
     }
   }
 
@@ -1041,8 +1041,8 @@ export class BotRuntime {
     let thread: WakePromptThread | null = null;
     try {
       if (item.threadId) {
-        // Only a guest's own wake sees guest cards in its thread.
-        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS, { guests: r.kind === 'guest' });
+        // Only a guest-sourced wake sees guest cards in its thread.
+        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS, { guests: this.wakeGuest(item) === true });
         if (tail) thread = { threadId: item.threadId, cards: tail.cards.slice(-WAKE_THREAD_TAIL_CARDS), truncated: tail.truncated, ...(tail.hiddenGuestCards ? { hiddenGuestCards: tail.hiddenGuestCards } : {}) };
       }
       if (r.kind === 'facts') {
@@ -1073,7 +1073,7 @@ export class BotRuntime {
     } catch (err) {
       console.warn(`[factory] wake context for ${item.id} could not be read: ${String(err)}`);
     }
-    return buildWakePrompt({ ...extras, item, profile, facts, tasks, handoff, taskParent, thread, routine, roster });
+    return buildWakePrompt({ ...extras, item, profile, facts, tasks, handoff, taskParent, thread, routine, roster, guestCards: this.wakeGuest(item) === true });
   }
 
   private async runTurn(profile: BotProfile, item: WakeItem): Promise<void> {
@@ -1082,8 +1082,11 @@ export class BotRuntime {
     const turnStartedAt = run?.startedAt ?? this.now();
     let outcome: 'done' | 'failed' | 'interrupted' | 'engine' = 'failed';
     let errorMessage = '';
-    // An external guest's wake runs in a conversation of its own (LiveSession.ephemeral).
-    const guestWake = item.reason.kind === 'guest';
+    // A guest-sourced wake (one derived from a guest's message too, or of
+    // unknown provenance) runs in a conversation of its own
+    // (LiveSession.ephemeral): the bot's own conversation never holds a
+    // guest's words.
+    const guestWake = this.wakeGuest(item) !== false;
     let ephemeral: LiveSession | null = null;
     try {
       const s = this.session(profile, { ephemeral: guestWake });
@@ -1140,13 +1143,6 @@ export class BotRuntime {
       else errorMessage = String(err);
     } finally {
       if (ephemeral && this.live.get(botId) === ephemeral) this.endSession(botId);
-      // A clean turn that read a guest's cards on purpose was marked tainted
-      // (wakeTaint.ts); its conversation now holds outside text, so the next
-      // turn does not continue it.
-      if (!guestWake && this.turnReadGuestText(item.id)) {
-        this.endSession(botId);
-        this.deps.sessions.delete(botId);
-      }
       this.settle(profile, item, outcome, errorMessage, run?.offSwitch === true);
     }
   }

@@ -23,7 +23,7 @@ import type { FactoryRouter } from '../factoryHost';
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp', isPackaged: false, on: vi.fn() }, ipcMain: { handle: vi.fn(), on: vi.fn() } }));
 let dir: string;
-let guestSourced: boolean | null = false;
+let guestSourced: boolean | 'unknown' = false;
 const owner = { botId: 'bot-a', workspaceId: 'ws-owner', repoKey: 'github.com/acme/repo', threadId: 'general' as const, tainted: true };
 const input = { clientWorkflowId: 'plan-a', title: 'Two steps', steps: [{ title: 'first', prompt: 'make first change' }, { title: 'second', prompt: 'build on first' }] };
 const brain = { kind: 'brain' as const, workspaceId: owner.workspaceId };
@@ -468,9 +468,9 @@ describe('durable sequential workflows', () => {
     expect(await h.call(WORKFLOW_RPC.create, input)).toMatchObject({ ok: true, workflow: { state: 'active' } });
   });
 
-  it('a turn started from or reading an external guest\'s message saves no workflow, nor one that cannot be told', async () => {
+  it('a guest-sourced wake saves no workflow, nor one whose provenance is unknown', async () => {
     const store = open(); const h = harness(store);
-    for (const g of [true, null]) {
+    for (const g of [true, 'unknown'] as const) {
       guestSourced = g;
       const r = await h.call(WORKFLOW_RPC.create, input) as { ok: boolean; message?: string };
       expect(r).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });

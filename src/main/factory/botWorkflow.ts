@@ -93,7 +93,7 @@ export class BotWorkflowStore {
       || !raw.workflows.every((w) => object(w) && validateWorkflowInput(w)
         && typeof w.id === 'string' && /^wf-[a-f0-9]{24}$/.test(w.id)
         && bounded(w.botId, 100) && bounded(w.workspaceId, 200) && bounded(w.repoKey, 300)
-        && parseThreadId(w.threadId) !== null && typeof w.tainted === 'boolean'
+        && parseThreadId(w.threadId) !== null && typeof w.tainted === 'boolean' && (w.guest === undefined || typeof w.guest === 'boolean')
         && ['active', 'blocked', 'completed'].includes(String(w.state))
         && Number.isSafeInteger(w.revision) && Number(w.revision) > 0
         && Number.isFinite(w.createdAt) && Number.isFinite(w.updatedAt)
@@ -120,9 +120,9 @@ export class BotWorkflowStore {
   }
 
   /** Main's provenance lookup for synthetic ready facts; no plan text leaves here. */
-  provenance(id: string): Pick<BotWorkflow, 'revision' | 'tainted'> | null {
+  provenance(id: string): Pick<BotWorkflow, 'revision' | 'tainted' | 'guest'> | null {
     const workflow = this.records.find((w) => w.id === id);
-    return workflow ? { revision: workflow.revision, tainted: workflow.tainted } : null;
+    return workflow ? { revision: workflow.revision, tainted: workflow.tainted, ...(typeof workflow.guest === 'boolean' ? { guest: workflow.guest } : {}) } : null;
   }
 
   private async update<T>(fn: (records: BotWorkflow[]) => T): Promise<T> {
@@ -139,7 +139,7 @@ export class BotWorkflowStore {
     });
   }
 
-  create(owner: Pick<BotWorkflow, 'botId' | 'workspaceId' | 'repoKey' | 'threadId' | 'tainted'>, input: WorkflowCreateParams): Promise<BotWorkflow> {
+  create(owner: Pick<BotWorkflow, 'botId' | 'workspaceId' | 'repoKey' | 'threadId' | 'tainted' | 'guest'>, input: WorkflowCreateParams): Promise<BotWorkflow> {
     if (!validateWorkflowInput(input)) return Promise.reject(new Error('invalid workflow definition'));
     input = redactStoredSecretsDeep({ clientWorkflowId: input.clientWorkflowId, title: input.title, steps: input.steps.map(({ title, prompt }) => ({ title, prompt })) });
     if (!validateWorkflowInput(input)) return Promise.reject(new Error('redacted workflow definition exceeds its limits'));

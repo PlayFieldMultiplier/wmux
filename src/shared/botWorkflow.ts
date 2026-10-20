@@ -35,6 +35,9 @@ export interface BotWorkflow {
   repoKey: string;
   threadId: ThreadId;
   tainted: boolean;
+  /** The creating wake's guest provenance (wakeTaint.ts); absent reads as
+   *  unknown unless the workflow is clean. */
+  guest?: boolean;
   title: string;
   steps: WorkflowStep[];
   state: 'active' | 'completed' | 'blocked';

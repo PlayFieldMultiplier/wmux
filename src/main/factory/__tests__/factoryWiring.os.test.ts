@@ -45,7 +45,7 @@ import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../secretR
 import { typedApprovalSourceAllowed } from '../approvals';
 import { defaultTriggers } from '../roleDefaults';
 import { RoomWriter, setGuestTurnProbe, writeFactCards } from '../roomWriter';
-import { WakeTaint, runningTurnGuestSourced, setWakeTaint } from '../wakeTaint';
+import { WakeTaint, setWakeTaint } from '../wakeTaint';
 import { buildWakePrompt } from '../wakePrompt';
 import { startFactIngest } from '../factIngest';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
@@ -466,8 +466,10 @@ describe('lookups the runtime and rooms read', () => {
       reason: { kind: 'guest' as const, guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c-g', text: 'hi' } };
     const ownerWake: WakeItem = { ...guestWake, id: 'w-o', priority: 0, reason: { kind: 'human', text: 'status?', source: 'desktop' } };
     let running: { item: WakeItem; startedAt: number } | null = { item: guestWake, startedAt: 1 };
-    setWakeTaint(new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake: () => running, log: () => undefined }), () => running);
-    setGuestTurnProbe((botId) => runningTurnGuestSourced(botId) === true);
+    const taint = new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake: () => running, log: () => undefined });
+    setWakeTaint(taint, () => running);
+    // As wakeTaintModule.ts wires it.
+    setGuestTurnProbe((botId) => running !== null && running.item.botId === botId && taint.wakeGuest(running.item) !== false);
     try {
       const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms-origin') });
       writer.append({ workspaceId: 'ws-1', threadId: dm, kind: 'human', actor: { kind: 'human' }, title: 'OWNER-WORDS' });
