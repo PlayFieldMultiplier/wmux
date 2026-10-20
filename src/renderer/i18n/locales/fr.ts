@@ -680,4 +680,5 @@ export const fr = {
   'worktask.cleanup.detail.orphanUnlinked': 'Aucune tâche ni aucun enregistrement de tâche n’y est lié — vérifiez, puis supprimez.',
   'worktask.cleanup.detail.orphanMeta': 'Seul l’enregistrement de la tâche reste, pas le worktree (une suppression a été interrompue) — vérifiez, puis supprimez.',
   'worktask.cleanup.detail.diskMissing': 'Le worktree est absent du disque (supprimé hors de wmux ou après un plantage) — fermez la tâche pour le nettoyer.',
+  'botsPage.guest.readNotice': "À partir de maintenant, un bot externe peut lire les messages de cette conversation et y écrire. Il ne voit jamais ce qui a été dit avant son ajout.",
 } as const;

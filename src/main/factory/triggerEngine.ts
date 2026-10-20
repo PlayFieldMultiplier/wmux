@@ -9,6 +9,8 @@
 //
 // Which facts a bot sees (scope), in order:
 //   1. a fact a bot produced (actor {kind:'bot', id}) never wakes that bot;
+//      a bot in a guest workspace sees only its own workspace's facts, and
+//      no other bot sees a guest workspace's (guestWorkspaces.ts);
 //   2. a directed fact (handoff.received / handoff.refused / human.message /
 //      schedule.fired / bot.notice with ref.botId) is seen by that bot only; a directed
 //      human.message and a routine's schedule.fired wake nobody here (their
@@ -37,6 +39,7 @@ import { GENERAL_THREAD, type ThreadId } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
 import { REPO_WATCH_FILENAME, RepoWatch, normalizeRepoKey, type WatchGraphql } from './repoWatch';
 import { factThreadId } from './roomWriter';
+import { factInIsland } from './guestWorkspaces';
 
 // ── Ports (shapes of design §14; the real ones are wired by the factory host) ─
 
@@ -51,12 +54,16 @@ export interface WakeSinkApi {
   /** Merges fact wakes per the trigger's batch window; null = dropped. A
    *  keyed wake already queued or run returns that item (wakeQueue.ts). */
   enqueue(input: { botId: string; workspaceId: string; reason: WakeReason; priority: 0 | 1 | 2; threadId?: ThreadId; overCap?: true }): WakeItem | null;
+  /** The bot's `guest` wakes waiting to run (wakeQueue.ts GUEST_WAKES_QUEUED_PER_BOT). */
+  queuedGuestWakes?(botId: string): number;
   /** Resolves once every change so far is on disk (absent: in memory only). */
   flush?(): Promise<void>;
 }
 
 export interface BotDirectoryApi {
+  /** Guest workspaces' bots left out (botStore.ts). */
   listEnabled(): BotProfile[];
+  listEnabledIncludingGuest?(): BotProfile[];
   get(botId: string): BotProfile | null;
 }
 
@@ -114,6 +121,9 @@ export function isRoutineFact(fact: Fact): boolean {
 /** Whether a bot can see a fact at all (scope rules 1–6 above). */
 export function botSeesFact(bot: Pick<BotProfile, 'id' | 'workspaceId' | 'role' | 'template' | 'repo'>, fact: Fact): boolean {
   if (fact.actor?.kind === 'bot' && fact.actor.id === bot.id) return false;
+  // The island first (guestWorkspaces.ts): before the directed and HQ-wide
+  // rules, and in place of the fallthrough for a bot in a guest workspace.
+  if (!factInIsland(bot.workspaceId, fact)) return false;
   if (DIRECTED_KINDS.has(fact.kind) && fact.ref?.botId) return fact.ref.botId === bot.id;
   if (isCoordinatorBot(bot) && HQ_WIDE_KINDS.has(fact.kind)) return true;
   if (fact.repoKey !== undefined) {

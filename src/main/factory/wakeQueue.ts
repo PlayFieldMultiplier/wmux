@@ -16,7 +16,8 @@
 //   the bot already has in any state but `dropped` is not queued again:
 //   enqueue returns that item, so a redelivery or a retry is idempotent.
 // - Caps: at most PER_BOT_QUEUE_CAP queued items per bot (`queue_full`); a bot
-//   that is disabled gets nothing (`bot_disabled`); facts, schedule and
+//   that is disabled gets nothing (`bot_disabled`), nor a wake that names a
+//   workspace other than its own (`cross_workspace`); facts, schedule and
 //   routine wakes expire after FACT_TTL_MS (`expired`, checked when the item
 //   would run).
 //   A wake marked `overCap` (an owner's message, the answer to a bot's own
@@ -28,6 +29,7 @@
 // A dropped wake is kept as a record (state `dropped` + code) and `enqueue`
 // returns null for it. Finished records are pruned by age and count.
 
+import { isGuestId, sanitizeGuestName } from '../../shared/guestBots';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { BOT_ID_RE, type BotTrigger } from '../../shared/bot';
@@ -45,6 +47,8 @@ export const WAKE_QUEUE_VERSION = 1 as const;
 /** What the trigger engine and the handoff router call (§14). */
 export interface WakeSinkApi {
   enqueue(input: WakeEnqueueInput): WakeItem | null;
+  /** The bot's `guest` wakes waiting to run (GUEST_WAKES_QUEUED_PER_BOT). */
+  queuedGuestWakes?(botId: string): number;
   /** Resolves once every change so far is on disk (absent: in memory only). */
   flush?(): Promise<void>;
 }
@@ -75,6 +79,9 @@ export const WAKE_RECORD_RETAIN_MS = 7 * 24 * 3_600_000;
 /** How long the record of an owner's message is kept whatever the count: a
  *  retry of the message within it queues no second wake. */
 export const HUMAN_RETRY_WINDOW_MS = 24 * 3_600_000;
+/** Most external guests' wakes one bot holds queued at once: the rest of
+ *  its queue stays for the owner's and the factory's work. */
+export const GUEST_WAKES_QUEUED_PER_BOT = 3;
 export const WAKE_RECORD_MAX = 500;
 const FACT_IDS_MAX = 100;
 const HUMAN_TEXT_MAX = 16 * 1024;
@@ -136,6 +143,12 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
         : null;
     case 'intro':
       return { kind: 'intro' };
+    case 'guest': {
+      if (!isGuestId(r.guestId) || !boundedId(r.cardId)) return null;
+      const guestName = sanitizeGuestName(r.guestName);
+      if (!guestName || typeof r.text !== 'string' || r.text.trim().length === 0 || r.text.length > HUMAN_TEXT_MAX) return null;
+      return { kind: 'guest', guestId: r.guestId, guestName, cardId: r.cardId, text: r.text };
+    }
     case 'held_fanout': {
       if (!boundedId(r.heldId) || !Number.isSafeInteger(r.heldAt) || typeof r.tainted !== 'boolean') return null;
       if (!Array.isArray(r.titles) || r.titles.length === 0 || r.titles.length > FANOUT_MAX_TASKS || !r.titles.every((t) => typeof t === 'string' && t.length <= 256)) return null;
@@ -146,6 +159,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
       return {
         kind: 'held_fanout', heldId: r.heldId, heldAt: r.heldAt as number, titles: [...(r.titles as string[])],
         ...(args ? { args } : {}), ...(r.fingerprint !== undefined ? { fingerprint: r.fingerprint as string } : {}), tainted: r.tainted,
+        ...(typeof r.guest === 'boolean' ? { guest: r.guest } : {}),
         ...(r.handoffId !== undefined ? { handoffId: r.handoffId as string } : {}),
       };
     }
@@ -155,7 +169,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
 }
 
 const STATES: ReadonlySet<string> = new Set(['queued', 'running', 'done', 'dropped', 'parked', 'interrupted']);
-const DROP_CODES: ReadonlySet<string> = new Set(['budget', 'duplicate', 'bot_disabled', 'expired', 'queue_full']);
+const DROP_CODES: ReadonlySet<string> = new Set(['budget', 'duplicate', 'bot_disabled', 'expired', 'queue_full', 'cross_workspace']);
 
 function parseWakeItem(raw: unknown): WakeItem | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -199,6 +213,10 @@ export interface WakeQueueOptions {
   newId?: () => string;
   /** Whether a bot exists and is enabled. Absent: every bot is. */
   isBotEnabled?: (botId: string) => boolean;
+  /** A bot's own workspace (null: not known). A wake that names another
+   *  is dropped `cross_workspace`: a bot runs in its own workspace only,
+   *  which keeps a guest workspace an island. Absent: not checked. */
+  botWorkspace?: (botId: string) => string | null;
   /** Called after every change (the runtime re-schedules on it). */
   onChange?: () => void;
 }
@@ -268,12 +286,13 @@ export class WakeQueue implements WakeSinkApi {
     const now = this.now();
     const finished = this.items.filter((i) => !LIVE.has(i.state) && i.state !== 'parked');
     let drop = new Set(finished.filter((i) => i.enqueuedAt < now - WAKE_RECORD_RETAIN_MS).map((i) => i.id));
-    // An owner's message that was taken keeps its record, whatever the
-    // count, for HUMAN_RETRY_WINDOW_MS: a retry of it within that time must
-    // find it (humanMessage.ts). Past that it counts like any other record
-    // (a group room makes one message a wake per bot).
+    // An owner's or a guest's message that was taken keeps its record,
+    // whatever the count, for HUMAN_RETRY_WINDOW_MS: a retry of it within
+    // that time must find it (humanMessage.ts, guestMessage.ts). Past that it
+    // counts like any other record (a group room makes one message a wake
+    // per bot).
     const countable = finished.filter((i) => !drop.has(i.id)
-      && !(i.state !== 'dropped' && keyOf(i.reason)?.startsWith('human:') && i.enqueuedAt >= now - HUMAN_RETRY_WINDOW_MS));
+      && !(i.state !== 'dropped' && (i.reason.kind === 'human' || i.reason.kind === 'guest') && keyOf(i.reason) !== null && i.enqueuedAt >= now - HUMAN_RETRY_WINDOW_MS));
     if (countable.length > WAKE_RECORD_MAX) {
       const oldest = [...countable].sort((a, b) => a.enqueuedAt - b.enqueuedAt).slice(0, countable.length - WAKE_RECORD_MAX);
       drop = new Set([...drop, ...oldest.map((i) => i.id)]);
@@ -313,6 +332,7 @@ export class WakeQueue implements WakeSinkApi {
       ...(threadId ? { threadId } : {}),
     };
     if (this.opts.isBotEnabled && !this.opts.isBotEnabled(input.botId)) return this.record(req, 'bot_disabled');
+    if (this.opts.botWorkspace && this.opts.botWorkspace(input.botId) !== input.workspaceId) return this.record(req, 'cross_workspace');
     const mine = this.items.filter((i) => i.botId === input.botId);
 
     if (reason.kind === 'facts') {
@@ -343,6 +363,7 @@ export class WakeQueue implements WakeSinkApi {
       const prior = mine.find((i) => i.state !== 'dropped' && keyOf(i.reason) === key);
       if (prior) return copyItem(prior);
     }
+    if (reason.kind === 'guest' && this.queuedGuestWakes(input.botId) >= GUEST_WAKES_QUEUED_PER_BOT) return this.record(req, 'queue_full');
     const cap = WAKE_LIMITS.PER_BOT_QUEUE_CAP + (input.overCap === true ? OVER_CAP_RESERVE[reason.kind] ?? 0 : 0);
     if (mine.filter((i) => i.state === 'queued').length >= cap) return this.record(req, 'queue_full');
     const now = this.now();
@@ -367,6 +388,10 @@ export class WakeQueue implements WakeSinkApi {
   get(id: string): WakeItem | null {
     const i = this.items.find((x) => x.id === id);
     return i ? copyItem(i) : null;
+  }
+
+  queuedGuestWakes(botId: string): number {
+    return this.items.filter((i) => i.botId === botId && i.state === 'queued' && i.reason.kind === 'guest').length;
   }
 
   list(filter: { botId?: string; states?: readonly WakeState[] } = {}): WakeItem[] {
@@ -424,6 +449,36 @@ export class WakeQueue implements WakeSinkApi {
     return [...new Set(this.items.filter((i) => i.state === 'queued').map((i) => i.botId))];
   }
 
+  /** Running wakes that run no attempt more (endRunningGuestWakes): a retry
+   *  or park drops them. In memory: a running wake is interrupted on restart. */
+  private readonly lastAttempt = new Set<string>();
+
+  /** Whether `i`, leaving `running` for the queue, is dropped instead: its
+   *  guest was revoked or turned off while it ran, or its bot already holds
+   *  GUEST_WAKES_QUEUED_PER_BOT guest wakes. Marks it dropped when so. */
+  private dropInsteadOfQueue(i: WakeItem): boolean {
+    const code: WakeDropCode | null = this.lastAttempt.delete(i.id) ? 'expired'
+      : i.reason.kind === 'guest' && this.queuedGuestWakes(i.botId) >= GUEST_WAKES_QUEUED_PER_BOT ? 'queue_full'
+      : null;
+    if (!code) return false;
+    i.state = 'dropped';
+    i.dropped = { code };
+    return true;
+  }
+
+  /** The running wakes `match` names run no attempt more: a retry or park
+   *  of one drops it. Returns how many. */
+  endRunning(match: (i: WakeItem) => boolean): number {
+    let n = 0;
+    for (const i of this.items) {
+      if (i.state === 'running' && match(i)) {
+        this.lastAttempt.add(i.id);
+        n++;
+      }
+    }
+    return n;
+  }
+
   private transition(id: string, from: readonly WakeState[], apply: (i: WakeItem) => void): WakeItem | null {
     const i = this.items.find((x) => x.id === id);
     if (!i || !from.includes(i.state)) return null;
@@ -452,6 +507,7 @@ export class WakeQueue implements WakeSinkApi {
    *  failure is not the wake's fault). */
   retry(id: string, opts: { notBefore?: number; refundAttempt?: boolean } = {}): WakeItem | null {
     return this.transition(id, ['running'], (i) => {
+      if (this.dropInsteadOfQueue(i)) return;
       i.state = 'queued';
       if (opts.notBefore !== undefined) i.notBefore = opts.notBefore;
       if (opts.refundAttempt) i.attempts = Math.max(0, i.attempts - 1);
@@ -461,6 +517,7 @@ export class WakeQueue implements WakeSinkApi {
   /** queued/running → parked (held with its parked bot). */
   park(id: string): WakeItem | null {
     return this.transition(id, ['queued', 'running'], (i) => {
+      if (i.state === 'running' && this.dropInsteadOfQueue(i)) return;
       i.state = 'parked';
     });
   }
@@ -484,6 +541,12 @@ export class WakeQueue implements WakeSinkApi {
     let n = 0;
     for (const i of this.items) {
       if (i.botId === botId && i.state === 'parked') {
+        if (i.reason.kind === 'guest' && this.queuedGuestWakes(botId) >= GUEST_WAKES_QUEUED_PER_BOT) {
+          i.state = 'dropped';
+          i.dropped = { code: 'queue_full' };
+          n++;
+          continue;
+        }
         i.state = 'queued';
         i.attempts = 0;
         n++;
@@ -576,6 +639,26 @@ export function dropQueuedHeldFanoutWakes(botId: string, only?: (wake: WakeItem)
     if (current.drop(i.id, 'expired')) n++;
   }
   return n;
+}
+
+/** Drop the external guests' wakes that have not run, queued or parked:
+ *  `guestId`'s only, or every guest's when it is omitted (the owner revoked
+ *  a guest or turned guest bots off). Returns how many. */
+export function dropQueuedGuestWakes(guestId?: string): number {
+  if (!current) return 0;
+  const mine = (i: WakeItem): boolean => i.reason.kind === 'guest' && (guestId === undefined || i.reason.guestId === guestId);
+  let n = 0;
+  for (const i of current.list({ states: ['queued', 'parked'] })) {
+    if (mine(i) && current.drop(i.id, 'expired')) n++;
+  }
+  // One running now finishes its turn and runs no attempt more.
+  current.endRunning(mine);
+  return n;
+}
+
+/** Wake `id`'s record (a copy), or null when it is gone or there is no queue. */
+export function wakeItemById(id: string): WakeItem | null {
+  return current?.get(id) ?? null;
 }
 
 /** The wake the bot is running now (a copy), or null. */

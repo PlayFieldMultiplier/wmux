@@ -38,6 +38,8 @@ import { botTokenBinding, isCommanderToken } from '../commanderTrust';
 import { botArgValue, botTokenFileArgValue, type BotBinding } from '../../../shared/bot';
 import type { BrainEvent } from '../BrainAdapter';
 import { botRepoReadDenyRules } from '../../factory/botRepoRead';
+import { WakeTaint, setWakeTaint } from '../../factory/wakeTaint';
+import type { WakeItem } from '../../../shared/wake';
 
 const BINDING: BotBinding = { workspaceId: 'ws-1', botId: 'bot-0a1b2c3d', role: 'verifier' };
 let dir = '';
@@ -242,7 +244,9 @@ describe('ClaudeSdkAdapter bot mode with a repository', () => {
     adapter.dispose();
     return seen;
   }
-  const preHook = (o: Record<string, unknown>) => (o.hooks as { PreToolUse: Array<{ hooks: Hook[] }> }).PreToolUse[0].hooks[0];
+  // The repository read decision is the last PreToolUse hook; the guest gate runs first.
+  const preHook = (o: Record<string, unknown>) => (o.hooks as { PreToolUse: Array<{ hooks: Hook[] }> }).PreToolUse.at(-1)!.hooks[0];
+  const guestHook = (o: Record<string, unknown>) => (o.hooks as { PreToolUse: Array<{ hooks: Hook[] }> }).PreToolUse[0].hooks[0];
   const postHook = (o: Record<string, unknown>) => (o.hooks as { PostToolUse: Array<{ hooks: Hook[] }> }).PostToolUse[0].hooks[0];
   const canUse = (o: Record<string, unknown>) => o.canUseTool as (n: string, i: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
@@ -295,6 +299,42 @@ describe('ClaudeSdkAdapter bot mode with a repository', () => {
     warn.mockRestore();
   });
 
+  it('a wake not known clean is refused every built-in tool, judged on each call; a clean wake has them again', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let running: WakeItem | null = { id: 'w-1', botId: BINDING.botId, workspaceId: BINDING.workspaceId, reason: { kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c', text: 'hi' }, priority: 1, enqueuedAt: 1, attempts: 1, state: 'running' };
+    const runningWake = () => (running ? { item: running, startedAt: 1 } : null);
+    setWakeTaint(new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake }), runningWake);
+    try {
+      for (const root of [repo, undefined]) {
+        running = { ...running!, reason: { kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c', text: 'hi' } };
+        const o = await optionsFor(root);
+        const exposed = (o.tools as string[]) ?? [];
+        const names = [...new Set([...exposed, 'Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit', 'MultiEdit', 'WebFetch', 'WebSearch', 'Task', 'NotebookEdit', 'TodoWrite', 'SomeToolAddedLater'])];
+        for (const name of names) {
+          expect(await canUse(o)(name, { file_path: 'src/a.ts', pattern: 'a', command: 'ls' }), `${name} (canUseTool)`).toMatchObject({ behavior: 'deny', message: expect.stringContaining('external guest') });
+          expect(await guestHook(o)({ tool_name: name, tool_input: {} }), `${name} (hook)`).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+        }
+        // The wmux tools pass this gate (RpcRouter keeps theirs).
+        expect(await guestHook(o)({ tool_name: 'mcp__wmux__room_post', tool_input: {} })).toEqual({});
+        // No running wake: not known clean either.
+        running = null;
+        expect(await canUse(o)('Read', { file_path: 'src/a.ts' })).toMatchObject({ behavior: 'deny' });
+        running = { id: 'w-2', botId: BINDING.botId, workspaceId: BINDING.workspaceId, reason: { kind: 'human', text: 'hi', source: 'desktop' }, priority: 0, enqueuedAt: 1, attempts: 1, state: 'running' };
+        for (const name of names) expect(await guestHook(o)({ tool_name: name, tool_input: {} }), name).toEqual({});
+        if (root) {
+          expect(await canUse(o)('Read', { file_path: 'src/a.ts' })).toMatchObject({ behavior: 'allow' });
+          expect(await canUse(o)('Bash', { command: 'ls' })).toMatchObject({ behavior: 'deny' });
+        } else {
+          // Without a repository the session's own lock still refuses them.
+          expect(await canUse(o)('Read', { file_path: 'src/a.ts' })).toMatchObject({ behavior: 'deny', message: 'bots act only through their wmux tools' });
+        }
+      }
+    } finally {
+      setWakeTaint(null);
+      vi.restoreAllMocks();
+    }
+  });
+
   it('canUseTool makes the same decision', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const can = canUse(await optionsFor(repo));
@@ -332,10 +372,11 @@ describe('ClaudeSdkAdapter bot mode with a repository', () => {
     }
   });
 
-  it('without a repository the bot keeps no built-in tools and no hooks', async () => {
+  it('without a repository the bot keeps no built-in tools and only the guest gate hook', async () => {
     const o = await optionsFor(undefined);
     expect(o.tools).toEqual([]);
-    expect(o.hooks).toBeUndefined();
+    expect((o.hooks as { PreToolUse: unknown[]; PostToolUse?: unknown }).PreToolUse).toHaveLength(1);
+    expect((o.hooks as { PostToolUse?: unknown }).PostToolUse).toBeUndefined();
     expect(o.settings).toBeUndefined();
     expect(o.disallowedTools).toEqual(expect.arrayContaining(['Read', 'Grep', 'Glob']));
   });

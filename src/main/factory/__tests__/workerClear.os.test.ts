@@ -422,7 +422,7 @@ describe('FanOutService.spawnBotTaskPane', () => {
       // As on the first launch: a resumed worker skips claude's folder-trust dialog (#2261).
       env: { CLAUDE_CODE_SANDBOXED: '1' },
       fanoutTaskOf: 'ws-owner',
-      fanoutOrigin: { kind: 'bot', botId: BOT, tainted: true },
+      fanoutOrigin: { kind: 'bot', botId: BOT, tainted: true, guest: false },
       workerPermissionMode: 'manual',
     }));
     expect(spawn.mock.calls[0][0]).not.toHaveProperty('secretGrant');

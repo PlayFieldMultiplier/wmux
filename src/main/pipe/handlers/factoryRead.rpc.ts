@@ -35,6 +35,8 @@ import type { FactoryRouter } from '../../factory/factoryHost';
 import type { BotDirectoryApi } from '../../factory/botStore';
 import type { RoomWriter } from '../../factory/roomWriter';
 import { DAY_MS, type TrustReadResult } from '../../factory/trustMetrics';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
 
 // ── Limits ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +84,9 @@ export interface FactoryReadDeps {
   /** The running wake's idempotency key for a bot's n-th post (room.post's). */
   postKey: (botId: string) => string | undefined;
   now?: () => number;
+  /** The guest provenance of a bot's running wake (wakeTaint.ts); default
+   *  the running tracker. */
+  guestWake?: (botId: string) => GuestProvenance;
 }
 
 // ── Caller and repo scope ──────────────────────────────────────────────────
@@ -373,6 +378,8 @@ export async function handlePlanPropose(raw: unknown, ctx: RpcContext | undefine
   if (!own || !own.enabled || own.workspaceId !== bot.workspaceId) {
     return refusal('not_attributed', 'this bot is not running in the factory');
   }
+  // The owner's answer to a plan wakes its bot to start the work.
+  if ((deps.guestWake ?? guestOfRunningWake)(bot.botId) !== false) return refusal('not_authorized', `plan.propose: ${GUEST_TURN_STARTS_NO_WORKERS}`);
   const anyWorkspace = isCoordinatorBot(own);
   const p = params(raw);
   const L = FACTORY_READ_LIMITS;
@@ -394,6 +401,9 @@ export async function handlePlanPropose(raw: unknown, ctx: RpcContext | undefine
     if (!ws || !itTitle || !why || !size) return refusal('invalid', `item ${k + 1} needs workspaceId, title, size (S, M or L) and why`);
     if (ws !== own.workspaceId && !anyWorkspace) {
       return refusal('cross_workspace', `item ${k + 1}: a bot plans for its own workspace; another workspace is a Coordinator's`);
+    }
+    if (crossesGuestBoundary(own.workspaceId, ws)) {
+      return refusal('cross_workspace', `item ${k + 1}: a guest workspace is planned for only from inside it`);
     }
     if (!leads.has(ws)) return refusal('no_lead', `item ${k + 1}: workspace ${ws} has no enabled lead to dispatch to`);
     items.push({ workspaceId: ws, title: itTitle, size, why });
@@ -419,8 +429,10 @@ export async function handlePlanPropose(raw: unknown, ctx: RpcContext | undefine
   // newest anyway, botsModel.ts livePlanIds).
   if (!r.duplicate) {
     for (;;) {
+      // Main's own bookkeeping: a guest-sourced plan of the bot is closed too
+      // (its words go nowhere; only its state changes).
       const older = writer.find(bot.workspaceId, (c) => c.kind === 'plan' && c.state === 'open' && c.id !== card.id
-        && c.actor.kind === 'bot' && c.actor.botId === bot.botId);
+        && c.actor.kind === 'bot' && c.actor.botId === bot.botId, { guests: true });
       if (!older || !writer.setState(bot.workspaceId, older.id, 'resolved')) break;
     }
   }

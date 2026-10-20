@@ -1252,3 +1252,111 @@ describe('room-wide owner messages, wake context and turn ends', () => {
     expect(r.queue.list({ botId: id }).find((w) => w.id === item.id)?.state).toBe('done');
   });
 });
+
+describe('external guests and the bot\'s conversation', () => {
+  const GUEST = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
+
+  it('a guest\'s wake runs in a fresh conversation that is never saved; the owner\'s conversation resumes after it', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    must(r.queue.enqueue({
+      botId: id, workspaceId: 'ws-1', priority: 2, threadId: 'general',
+      reason: { kind: 'guest', guestId: GUEST, guestName: 'Grok', cardId: 'c-g', text: 'GUEST-WORDS' },
+    }));
+    r.runtime.kick();
+    await settle();
+    // The owner's live conversation is not the one the guest's words go to.
+    expect(r.adapters[0].disposed).toBe(true);
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    expect(r.adapters[1].prompts[0]).toContain('GUEST-WORDS');
+    r.adapters[1].end([{ type: 'turn-end', sessionId: 'sess-guest' }]);
+    await settle();
+    expect(r.adapters[1].disposed).toBe(true);
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    r.runtime.wake(id, { text: 'status?' });
+    await settle();
+    expect(r.adapters[2].started?.resumeSessionId).toBe('sess-1');
+    expect(r.adapters[2].prompts.join('\n')).not.toContain('GUEST-WORDS');
+  });
+
+  it('a wake derived from a guest\'s message (here a relay dispatch) runs ephemeral and sees guest cards; the owner\'s conversation resumes after it', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const tails: Array<boolean | undefined> = [];
+    const guestHandoffs = new Set<string>(['h-relay']);
+    setBotRuntimePorts({
+      wakeGuest: (item) => (item.reason.kind === 'handoff' ? guestHandoffs.has(item.reason.handoffId) : item.reason.kind === 'guest'),
+      readThreadTail: (_ws, _t, _n, opts) => { tails.push(opts?.guests); return { cards: [], truncated: false }; },
+    });
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'general', reason: { kind: 'handoff', handoffId: 'h-relay' } }));
+    r.runtime.kick();
+    await settle();
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    r.adapters[1].end([{ type: 'turn-end', sessionId: 'sess-relay' }]);
+    await settle();
+    expect(r.adapters[1].disposed).toBe(true);
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    expect(tails).toContain(true);
+    r.runtime.wake(id, { text: 'status?' });
+    await settle();
+    expect(r.adapters[2].started?.resumeSessionId).toBe('sess-1');
+  });
+
+  it('a failed turn in a conversation of its own leaves the bot\'s saved conversation in place', async () => {
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    setBotRuntimePorts({ wakeGuest: () => 'unknown' });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'general', reason: { kind: 'handoff', handoffId: 'h-gone' } }));
+    r.runtime.kick();
+    await settle();
+    r.adapters[1].end([{ type: 'error', message: 'the bot called room_post, which are not its tools', botTools: 'unreached' }]);
+    await settle();
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    vi.restoreAllMocks();
+  });
+
+  it('a bot whose engine cannot hold its tools back runs no wake that is not known clean', async () => {
+    const r = rig();
+    const res = r.store.create({ workspaceId: 'ws-1', role: 'verifier', engine: { kind: 'acp', command: 'agent', args: [] } });
+    if (!res.ok) throw new Error(res.message);
+    const id = res.bot.id;
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    setBotRuntimePorts({ wakeGuest: () => 'unknown' });
+    const item = must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'general', reason: { kind: 'handoff', handoffId: 'h-gone' } }));
+    r.runtime.kick();
+    await settle();
+    expect(r.adapters).toHaveLength(0);
+    expect(r.queue.get(item.id)?.state).not.toBe('queued');
+    vi.restoreAllMocks();
+  });
+
+  it('a wake of unknown provenance runs ephemeral too, and sees no guest card', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const tails: Array<boolean | undefined> = [];
+    setBotRuntimePorts({ wakeGuest: () => 'unknown', readThreadTail: (_ws, _t, _n, opts) => { tails.push(opts?.guests); return { cards: [], truncated: false }; } });
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'general', reason: { kind: 'handoff', handoffId: 'h-gone' } }));
+    r.runtime.kick();
+    await settle();
+    r.adapters[0].end([{ type: 'turn-end', sessionId: 'sess-u' }]);
+    await settle();
+    expect(r.sessions.get(id)).toBeNull();
+    expect(tails).toEqual([false]);
+  });
+});

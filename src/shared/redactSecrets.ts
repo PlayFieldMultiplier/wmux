@@ -28,6 +28,9 @@ const KEY_SHAPES: readonly RegExp[] = [
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\bxox[abposr]-[A-Za-z0-9-]{8,}/g,
+  // wmux's own bearer credentials: a guest bot's and an A2A peer's
+  // (`wmuxguest~<id>~<secret>`, `wmuxpeer~<id>~<secret>`).
+  /\bwmux(?:guest|peer)~[A-Za-z0-9_-]+~[A-Za-z0-9_-]+/g,
 ];
 
 /** Applied after everything above, so they only ever mask more: the guard's

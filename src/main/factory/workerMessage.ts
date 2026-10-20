@@ -23,7 +23,8 @@
 
 import { BOT_WORKER_MESSAGE_LIMITS, type BotWorkerMessageResult } from '../../shared/bot';
 import type { LedgerEntry } from '../../shared/ledger';
-import { runningWakeTainted } from './wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfWake, runningWakeTainted, type GuestProvenance } from './wakeTaint';
+import { currentWakeId } from './wakeQueue';
 
 export const WORKER_MESSAGE_TASK_RE = /^wtask-[A-Za-z0-9_-]{1,80}$/;
 
@@ -43,6 +44,10 @@ export interface WorkerMessagePorts {
   /** Whether the bot's running wake carried outside text (unknown: true).
    *  Default: the wake taint tracker. */
   senderTainted?: (botId: string) => boolean;
+  /** The id of the wake the bot is running now. Default: wakeQueue.ts. */
+  senderWakeId?: (botId: string) => string | null;
+  /** A wake's guest provenance by id. Default: wakeTaint.ts guestOfWake. */
+  guestOfWake?: (wakeId: string) => GuestProvenance;
   now?: () => number;
 }
 
@@ -112,7 +117,14 @@ export async function deliverWorkerMessage(
   if (row.status !== 'working' && row.status !== 'input_required') {
     return refuse('not_running', `the task is ${row.status}: its worker is not taking messages (worker_resume restarts the stopped worker of an ended or reported task)`);
   }
-  // Read in the same tick as the task: the wake that sends is the one asking.
+  // Read in the same tick as the task: the wake that sends is the one
+  // asking. A guest-sourced wake (or one of unknown provenance) writes to no
+  // worker, whatever the task.
+  const senderWake = (ports.senderWakeId ?? currentWakeId)(botId);
+  const guestOf = ports.guestOfWake ?? guestOfWake;
+  const guestRefusal = (): string | null => (!senderWake || guestOf(senderWake) !== false ? GUEST_TURN_STARTS_NO_WORKERS : null);
+  const guest = guestRefusal();
+  if (guest) return refuse('not_now', guest);
   if (origin.tainted === false) {
     let tainted = true;
     try {
@@ -146,7 +158,7 @@ export async function deliverWorkerMessage(
       }
       const o = now?.dispatch?.origin;
       if (!now || o?.kind !== 'bot' || o.botId !== botId || (now.status !== 'working' && now.status !== 'input_required')) return 'the task is no longer open';
-      return ports.refusal?.(botId) ?? null;
+      return guestRefusal() ?? ports.refusal?.(botId) ?? null;
     };
     const typed = await ports.submit(pane, workerMessageText(ports.botName(botId), taskId, text), stillOk).catch(() => false);
     return typed

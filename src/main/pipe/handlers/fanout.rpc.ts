@@ -136,7 +136,7 @@ import { originUrlRepoKey, readRawOriginUrl } from '../../worktask/workerGit';
 import { getFactorySettings } from '../../factory/factorySettings';
 import { getBotFanoutReceipts } from '../../factory/botFanoutReceipts';
 import { noticeWorkerStarts, plainStartFailure, type BotWorkerStartOutcome } from '../../factory/botNotices';
-import { runningWakeTainted } from '../../factory/wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfWake, runningWakeTainted } from '../../factory/wakeTaint';
 import { botThreadRefusal, resolveRoomPorts, runningWake } from '../../factory/roomWriter';
 import { getHandoffRouter } from '../../factory/handoffRouter';
 import { emitBotHook } from '../../factory/botHooks';
@@ -722,6 +722,9 @@ export interface FanOutBotPort {
   /** Whether that running wake carried outside text (factory/wakeTaint.ts);
    *  true when it cannot be told. Its tasks' dispatch carries the mark. */
   currentWakeTainted(botId: string): boolean;
+  /** Whether wake `wakeId` is guest-sourced or of unknown provenance
+   *  (factory/wakeTaint.ts guestOfWake). Such a wake starts no workers. */
+  wakeGuestSourced(botId: string, wakeId: string): boolean;
   /** Open fan-out tasks started by this bot, and by any bot, the bot
    *  fan-outs still being started included (`botStarting`: this bot's).
    *  `live`: every live fan-out task across wmux, the owner's included, as
@@ -758,6 +761,9 @@ export interface HeldFanoutRequest {
   args: HeldFanoutArgs;
   threadId?: ThreadId;
   tainted: boolean;
+  /** The asking wake's guest provenance: a guest-sourced wake never gets
+   *  this far, so false. */
+  guest: boolean;
   handoffId?: string;
 }
 
@@ -849,13 +855,17 @@ function defaultBotPort(): FanOutBotPort | null {
   return {
     fanoutKeySeen: (key) => receipts.has(key),
     recordFanoutKey: (key) => receipts.add(key),
+    // Asked again right before each launch: a wake whose record no longer
+    // says it is clean (gone, or unknown) launches nothing more.
     launchRefusal: (botId, wakeId) => (isWakeStoppedByOwner(wakeId)
       ? 'the owner stopped this bot'
+      : guestOfWake(wakeId) !== false ? GUEST_TURN_STARTS_NO_WORKERS
       : botLaunchRefusal(getFactorySettings().enabled, store.get(botId), runtime.wakeState(wakeId))),
     profile: (botId) => store.get(botId),
     currentWakeId: (botId) => runtime.currentTurn(botId)?.wakeId ?? null,
     currentWakeThread: (botId) => runtime.currentTurn(botId)?.threadId ?? null,
     currentWakeTainted: (botId) => runningWakeTainted(botId),
+    wakeGuestSourced: (_botId, wakeId) => guestOfWake(wakeId) !== false,
     // The same wake as the turn's: a wake that ended between the two reads has no handoff.
     currentWakeHandoff: (botId) => {
       const wake = runningWake(resolveRoomPorts(), botId);
@@ -1276,6 +1286,12 @@ export function registerFanOutRpc(
       if (!wakeId) return deny('FAILED_PRECONDITION', 'task.fanout.start: a bot fans out only during a wake');
       const refusal = botPort.launchRefusal(bot.botId, wakeId);
       if (refusal) return deny('FAILED_PRECONDITION', `task.fanout.start: ${refusal}`);
+      // Workers run unattended (botFanoutPresets.ts): a turn an external
+      // guest's message started (or one derived from it, or one whose
+      // provenance is not known) starts none.
+      if (botPort.wakeGuestSourced(bot.botId, wakeId)) {
+        return deny('FAILED_PRECONDITION', `task.fanout.start: ${GUEST_TURN_STARTS_NO_WORKERS}`);
+      }
       botWakeId = wakeId;
       // Read in the same tick as the wake id, before any await: the wake can
       // end while the worktrees are being made.
@@ -1574,6 +1590,7 @@ export function registerFanOutRpc(
           args: heldFanoutArgs(params),
           threadId: botNoticeThread,
           tainted: botWakeTainted,
+          guest: false,
           ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
         });
         const note = full.scope === 'bot'
@@ -1605,7 +1622,8 @@ export function registerFanOutRpc(
     // A brain is the orchestrator; a pane caller is looked up now, while the
     // pane that asked is certainly still there (see resolveCallerOrigin).
     const callerOrigin: FanoutOrigin | undefined = bot
-      ? { kind: 'bot', botId: bot.botId, tainted: botWakeTainted }
+      // A guest-sourced wake was refused above.
+      ? { kind: 'bot', botId: bot.botId, tainted: botWakeTainted, guest: false }
       : commanderWorkspaceId
         ? { kind: 'orchestrator' }
         : await resolveCallerOrigin(getWindow, senderPtyId, callerWorkspaceId);

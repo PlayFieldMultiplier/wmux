@@ -680,4 +680,5 @@ export const bs = {
   'worktask.cleanup.detail.orphanUnlinked': 'Nijedan zadatak ni zapis zadatka nije povezan s njim — provjerite, pa obrišite.',
   'worktask.cleanup.detail.orphanMeta': 'Ostao je samo zapis zadatka, bez worktreeja (uklanjanje je prekinuto) — provjerite, pa obrišite.',
   'worktask.cleanup.detail.diskMissing': 'Worktree nedostaje na disku (obrisan izvan wmuxa ili zbog pada) — zatvorite zadatak da to uredite.',
+  'botsPage.guest.readNotice': "Od sada vanjski bot može čitati poruke u ovom razgovoru i pisati u njega. Nikad ne vidi ono što je rečeno prije nego što je dodan.",
 } as const;

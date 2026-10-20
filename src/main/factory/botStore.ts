@@ -74,6 +74,8 @@ import { parseBotAvatar } from './botAvatar';
 import { validateBotWorkerAgent } from '../../shared/botWorkerAgent';
 import { BOT_BRAIN_MODEL_MAX, validateBotBrainModel, validateFanoutModel } from '../../shared/fanoutPreset';
 import { ROLE_BINDING_MODEL_MAX } from '../../shared/orchestratorRole';
+import { guestWorkspaceBotRefusals, isGuestWorkspace } from './guestWorkspaces';
+import type { GuestProvenance } from './wakeTaint';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -95,10 +97,21 @@ const EFFORTS: ReadonlySet<string> = new Set(CLAUDE_EFFORT_LEVELS);
 /** The refusal for an engine sanitizeBotEngine rejects, with both model rules. */
 const ENGINE_MALFORMED = `engine is malformed (a claude-sdk model must be one model id of up to ${BOT_BRAIN_MODEL_MAX} characters: a letter or digit first, then letters, digits and . _ : / @ -, optionally ending in a [variant], so a Bedrock or Vertex id or a model ARN passes; a claude-pty model: a letter or digit first, then letters, digits and . _ : -, up to ${ROLE_BINDING_MODEL_MAX})`;
 
-/** What a store answers to the trigger engine (§14). */
+/** What a store answers to the trigger engine (§14). `listEnabled` leaves
+ *  out the bots of guest workspaces (and of a workspace that cannot be
+ *  told): a reader that is to see them asks `listEnabledIncludingGuest`,
+ *  and is listed with its reason in guestEnumerations.test.ts. */
 export interface BotDirectoryApi {
   listEnabled(): BotProfile[];
+  listEnabledIncludingGuest?(): BotProfile[];
   get(botId: string): BotProfile | null;
+}
+
+/** A directory's enabled bots, guest workspaces' included (a directory
+ *  without the method lists them all in `listEnabled`). */
+export function enabledBotsIncludingGuest(dir: Pick<BotDirectoryApi, 'listEnabled' | 'listEnabledIncludingGuest'> | null | undefined): BotProfile[] {
+  if (!dir) return [];
+  return dir.listEnabledIncludingGuest ? dir.listEnabledIncludingGuest() : dir.listEnabled();
 }
 
 // ── validation ──────────────────────────────────────────────────────────────
@@ -404,6 +417,8 @@ export interface BotStoreOptions {
   defaultEngine?: () => BotEngine;
   /** The host a worker agent is saved for (default: this one). */
   platform?: string;
+  /** Whether a workspace is a guest workspace (default isGuestWorkspace). */
+  guestWorkspace?: (workspaceId: string) => GuestProvenance;
 }
 
 export function botsFilePath(wmuxDir: string): string {
@@ -422,12 +437,16 @@ export class BotStore implements BotDirectoryApi {
   private readonly listeners = new Set<() => void>();
   /** Triage bots moved off the old default triggers by the last load. */
   private migrated: string[] = [];
+  /** Bots the last load turned off for breaking a guest workspace's rules. */
+  private guestDisabled: Array<{ botId: string; reason: string }> = [];
+  private readonly guestWorkspace: (workspaceId: string) => GuestProvenance;
 
   constructor(private readonly file: string, opts: BotStoreOptions = {}) {
     this.now = opts.now ?? Date.now;
     this.newId = opts.newId ?? (() => `bot-${randomBytes(4).toString('hex')}`);
     this.defaultEngine = opts.defaultEngine ?? (() => ({ kind: 'claude-sdk' }));
     this.platform = opts.platform ?? process.platform;
+    this.guestWorkspace = opts.guestWorkspace ?? isGuestWorkspace;
     this.persister = createFilePersister(file, () => this.snapshot());
   }
 
@@ -450,6 +469,7 @@ export class BotStore implements BotDirectoryApi {
     const list = Array.isArray(raw.bots) ? raw.bots : [];
     let migrated = false;
     this.migrated = [];
+    this.guestDisabled = [];
     for (const entry of list) {
       const bot = parseBotProfile(entry);
       if (!bot || this.bots.has(bot.id)) {
@@ -477,6 +497,18 @@ export class BotStore implements BotDirectoryApi {
         bot.updatedAt = this.now();
       }
       if (legacy || entry.template !== bot.template) migrated = true;
+      // A bot in a guest workspace that breaks its rules (a hand-edited
+      // file, a bot from before the flag) is turned off, not dropped: the
+      // owner sees why and fixes it. Only a workspace known to be a guest
+      // one: a list that cannot be read changes nothing on disk.
+      const broken = bot.enabled && this.isGuestWs(bot.workspaceId) === true ? guestWorkspaceBotRefusals(bot) : [];
+      if (broken.length > 0) {
+        bot.enabled = false;
+        bot.updatedAt = this.now();
+        migrated = true;
+        this.guestDisabled.push({ botId: bot.id, reason: broken[0] });
+        console.warn(`[factory] bots.json: bot ${bot.id} is off: ${broken[0]}`);
+      }
       this.bots.set(bot.id, bot);
     }
     // A profile from before identity slots were stored gets the slot the
@@ -499,6 +531,33 @@ export class BotStore implements BotDirectoryApi {
   /** The triage bots the last load moved to the current default triggers. */
   migratedTriageBots(): string[] {
     return [...this.migrated];
+  }
+
+  /** The bots the last load turned off for breaking a guest workspace's
+   *  rules, with the first rule each broke. */
+  guestRuleDisabledBots(): Array<{ botId: string; reason: string }> {
+    return this.guestDisabled.map((d) => ({ ...d }));
+  }
+
+  private isGuestWs(workspaceId: string): GuestProvenance {
+    try {
+      return this.guestWorkspace(workspaceId);
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /** Why `next` may not be stored in a guest workspace, or null: an enabled
+   *  bot keeps every rule, and no change adds a broken one (a bot turned
+   *  off for one can still be fixed one field at a time). A workspace that
+   *  cannot be told counts as a guest one. */
+  private guestRuleRefusal(next: BotProfile, cur: BotProfile | null): string | null {
+    if (this.isGuestWs(next.workspaceId) === false) return null;
+    const broken = guestWorkspaceBotRefusals(next);
+    if (broken.length === 0) return null;
+    if (next.enabled) return broken[0];
+    const had = new Set(cur ? guestWorkspaceBotRefusals(cur) : []);
+    return broken.find((r) => !had.has(r)) ?? null;
   }
 
   private snapshot(): unknown {
@@ -537,7 +596,15 @@ export class BotStore implements BotDirectoryApi {
       .map(copyProfile);
   }
 
+  /** The enabled bots outside guest workspaces: closed by default, so a new
+   *  reader never reaches across a guest workspace's boundary by accident. */
   listEnabled(): BotProfile[] {
+    return [...this.bots.values()].filter((b) => b.enabled && this.isGuestWs(b.workspaceId) === false).map(copyProfile);
+  }
+
+  /** Every enabled bot, guest workspaces' included: for the readers that
+   *  run inside one (or are the owner's) and apply the boundary themselves. */
+  listEnabledIncludingGuest(): BotProfile[] {
     return [...this.bots.values()].filter((b) => b.enabled).map(copyProfile);
   }
 
@@ -611,6 +678,8 @@ export class BotStore implements BotDirectoryApi {
       createdAt: now,
       updatedAt: now,
     };
+    const guestRule = this.guestRuleRefusal(bot, null);
+    if (guestRule) return refuse('invalid_argument', guestRule);
     this.bots.set(id, bot);
     this.usage.set(id, emptyUsage());
     this.changed();
@@ -685,6 +754,8 @@ export class BotStore implements BotDirectoryApi {
       if (typeof patch.enabled !== 'boolean') return refuse('invalid_argument', 'enabled must be a boolean');
       next.enabled = patch.enabled;
     }
+    const guestRule = this.guestRuleRefusal(next, cur);
+    if (guestRule) return refuse('invalid_argument', guestRule);
     next.updatedAt = this.now();
     this.bots.set(botId, next);
     this.changed();

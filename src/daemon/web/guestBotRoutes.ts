@@ -1,0 +1,432 @@
+// The guest bot routes (shared/guestBots.ts):
+//
+//   GET  /api/guest/v1/me
+//   GET  /api/guest/v1/messages?sinceSeq=&limit=
+//   POST /api/guest/v1/messages   {clientMessageId, text, mentions?}
+//
+// `me` asks main about the conversation as a read does, and is refused the
+// same way when main would refuse the read.
+//
+// Reached only through the guest gate in WebTerminalServer.handle, which
+// runs right after the Host guard and before every other branch, so a guest
+// credential reaches nothing else and these routes accept nothing else. The
+// order of the checks below is the contract:
+//
+//   1. a browser (`Origin` present) is refused: guests are server-to-server
+//   2. the owner's switch is off → 403 forbidden
+//   3. the listener is plain HTTP on a non-loopback bind → 403 forbidden
+//   4. the credential: malformed / unknown / revoked → 401 unauthorized
+//   5. the server's grants: "Conversation access" to read or post, and
+//      "Allow input" as well to post → 403. A refusal of this step carries
+//      a `message` naming the setting the owner turns on, by the name the
+//      wmux window shows (GUEST_GATE_MESSAGES). Steps 1 to 4 answer before
+//      the credential is verified and say no more than their code; the
+//      owner sees steps 2 and 3 in the guest bots dialog.
+//   6. the guest's rate budget → 429 with Retry-After
+//   7. the route
+//
+// The conversation is the token's stored scope; nothing in a request names
+// one. A read is `workspaces.guestCards` for that one thread (main answers
+// it only in a guest workspace), projected again to the fields a guest
+// needs. A post is redacted here
+// (shared/redactSecrets.ts) and handed to main as `workspaces.guestPost`,
+// which writes an external `guest` card and wakes only bots of that
+// conversation the post names, with a tainted `guest` wake.
+
+import type http from 'node:http';
+import { redactSecrets } from '../../shared/redactSecrets';
+import {
+  GUEST_LIMITS,
+  GUEST_MESSAGE_ID_RE,
+  GUEST_ROOM_CARDS_COMMAND,
+  GUEST_RATE_WINDOW_MS,
+  GUEST_ROOM_POST_COMMAND,
+  GUEST_ROUTES,
+  parseGuestCredential,
+  guestSeesCard,
+  parseGuestPostResult,
+  type GuestPostPayload,
+  type GuestScope,
+} from '../../shared/guestBots';
+import { BOT_ID_RE } from '../../shared/bot';
+import { parsePhoneRoomCardsReply, type PhoneRoomCard } from '../../shared/phoneRooms';
+import { DesktopPhoneError } from '../phone/DesktopPhoneBridge';
+import type { RoomsDesktop } from './rooms';
+import type { GuestAuthResult } from './GuestBotStore';
+
+/** The part of GuestBotStore the routes use. */
+export interface GuestBotResolver {
+  enabled(): boolean;
+  resolve(guestId: string, secret: string): Promise<GuestAuthResult>;
+  touch?(guestId: string): void;
+}
+
+export interface GuestRouteResponse {
+  status: number;
+  body: Record<string, unknown>;
+  headers?: Record<string, string>;
+}
+
+export type GuestBodyRead = { ok: true; value: unknown } | { ok: false; status: number; error: string };
+
+export interface GuestRouteContext {
+  method: string;
+  pathname: string;
+  query: URLSearchParams;
+  bearer: string | null;
+  hasOrigin: boolean;
+  /** Read the JSON body (bounded by GUEST_LIMITS.bodyMaxBytes). Called only
+   *  once the caller is authenticated and allowed to post. */
+  readBody: () => Promise<GuestBodyRead>;
+  /** The server's grants, read on this request. */
+  gates: { transcript: boolean; input: boolean; transportRefusal: string | null };
+  guests: GuestBotResolver | undefined;
+  desktop: RoomsDesktop | null;
+  limiter: GuestRateLimiter;
+  log: (level: 'info' | 'warn' | 'error', msg: string) => void;
+}
+
+const refuse = (status: number, error: string, extra: Record<string, unknown> = {}, headers?: Record<string, string>): GuestRouteResponse =>
+  ({ status, body: { ok: false, error, ...extra }, ...(headers ? { headers } : {}) });
+
+/** What an agent can tell its owner when a gate refuses it: which setting to
+ *  turn on, named as the wmux window names it (the "web" button in the
+ *  sidebar; the Bots page), never by a command-line flag. */
+export const GUEST_GATE_MESSAGES = {
+  'transcript-disabled': 'Reading conversations is off on this wmux. The owner opens the "web" button in the sidebar and turns on "Conversation access".',
+  'input-disabled': 'Posting is off on this wmux: a guest can read but not post. The owner opens the "web" button in the sidebar and turns on "Allow input".',
+} as const;
+
+const gate = (code: keyof typeof GUEST_GATE_MESSAGES): GuestRouteResponse => refuse(403, code, { message: GUEST_GATE_MESSAGES[code] });
+
+/**
+ * Per-guest sliding-window budgets (posts and reads apart), in memory. A
+ * restart resets them; the post budget is also what bounds the wakes a
+ * guest can cause.
+ */
+export class GuestRateLimiter {
+  private readonly hits = new Map<string, number[]>();
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  /** Spend one unit; null when allowed, else the seconds to wait. */
+  take(guestId: string, kind: 'post' | 'read'): number | null {
+    const max = kind === 'post' ? GUEST_LIMITS.postsPerMinute : GUEST_LIMITS.readsPerMinute;
+    const key = `${kind}:${guestId}`;
+    const at = this.now();
+    const kept = (this.hits.get(key) ?? []).filter((t) => at - t < GUEST_RATE_WINDOW_MS);
+    if (kept.length >= max) {
+      this.hits.set(key, kept);
+      return Math.max(1, Math.ceil((GUEST_RATE_WINDOW_MS - (at - kept[0]!)) / 1000));
+    }
+    kept.push(at);
+    this.hits.set(key, kept);
+    return null;
+  }
+
+  /** Forget a guest (revoked). */
+  forget(guestId: string): void {
+    this.hits.delete(`post:${guestId}`);
+    this.hits.delete(`read:${guestId}`);
+  }
+}
+
+/** A query integer in [min, max], `undefined` when absent, null when malformed. */
+function queryInt(value: string | null, min: number, max: number): number | undefined | null {
+  if (value === null) return undefined;
+  if (!/^[0-9]{1,15}$/.test(value)) return null;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= min && n <= max ? n : null;
+}
+
+async function ask(desktop: RoomsDesktop, command: string, payload: Record<string, unknown>): Promise<{ reply: unknown } | GuestRouteResponse> {
+  try {
+    return { reply: await desktop.request(command, payload) };
+  } catch (error) {
+    return error instanceof DesktopPhoneError && error.tag === 'desktop-timeout'
+      ? refuse(504, 'desktop-timeout')
+      : refuse(503, 'desktop-unavailable');
+  }
+}
+
+/** A card as a guest sees it (v1, a stable public shape): who wrote it,
+ *  what it says, nothing else (no refs, approval ids, photos or idempotency
+ *  keys). `kind` is `report` for a bot's report and `message` otherwise;
+ *  wmux's own card kinds are not part of it. */
+export interface GuestCardView {
+  id: string;
+  seq: number;
+  at: number;
+  kind: 'message' | 'report';
+  from: { kind: 'owner' } | { kind: 'bot'; botId: string; name?: string } | { kind: 'guest' };
+  title: string;
+  body?: string;
+  replyTo?: string;
+}
+
+/** A guest's view of one card (guestSeesCard), with key patterns masked once
+ *  more on the way out (main already masked stored bot secrets,
+ *  RoomWriter.read); null for a card that is not a guest-visible message. */
+export function guestCardView(c: PhoneRoomCard): GuestCardView | null {
+  const from: GuestCardView['from'] | null = c.kind === 'guest' ? { kind: 'guest' }
+    : c.kind === 'human' && c.actor.kind === 'human' ? { kind: 'owner' }
+    : c.actor.kind === 'bot' && c.kind !== 'human' ? { kind: 'bot', botId: c.actor.botId, ...(c.actor.name ? { name: redactSecrets(c.actor.name) } : {}) }
+    : null;
+  if (!from) return null;
+  return {
+    id: c.id,
+    seq: c.seq,
+    at: c.at,
+    kind: c.kind === 'report' ? 'report' : 'message',
+    from,
+    title: redactSecrets(c.title),
+    ...(c.body ? { body: redactSecrets(c.body) } : {}),
+    ...(c.replyTo ? { replyTo: c.replyTo } : {}),
+  };
+}
+
+/** `POST` body: `{clientMessageId, text, mentions?}`, nothing else. */
+function parsePostBody(value: unknown): { clientMessageId: string; text: string; mentions: string[] } | { detail: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { detail: 'body' };
+  const b = value as Record<string, unknown>;
+  for (const key of Object.keys(b)) if (key !== 'clientMessageId' && key !== 'text' && key !== 'mentions') return { detail: key };
+  if (typeof b.clientMessageId !== 'string' || !GUEST_MESSAGE_ID_RE.test(b.clientMessageId)) return { detail: 'clientMessageId' };
+  if (typeof b.text !== 'string' || !b.text.trim() || b.text.length > GUEST_LIMITS.textMax) return { detail: 'text' };
+  let mentions: string[] = [];
+  if (b.mentions !== undefined) {
+    if (!Array.isArray(b.mentions) || b.mentions.length > GUEST_LIMITS.mentionsMax ||
+        !b.mentions.every((id) => typeof id === 'string' && BOT_ID_RE.test(id))) return { detail: 'mentions' };
+    mentions = [...new Set(b.mentions as string[])];
+  }
+  return { clientMessageId: b.clientMessageId, text: b.text, mentions };
+}
+
+/** One guest request, gate to answer. Never throws. */
+export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestRouteResponse> {
+  // 1. Server-to-server only: a page in a browser never holds a guest token.
+  if (ctx.hasOrigin) return refuse(403, 'forbidden');
+  // 2. The owner's switch.
+  let on = false;
+  try {
+    on = ctx.guests?.enabled() === true;
+  } catch {
+    on = false;
+  }
+  if (!ctx.guests || !on) return refuse(403, 'forbidden');
+  // 3. A durable token never crosses a network in clear.
+  if (ctx.gates.transportRefusal) return refuse(403, 'forbidden');
+  // 4. The credential.
+  const cred = parseGuestCredential(ctx.bearer);
+  if (!cred) return refuse(401, 'unauthorized');
+  let who: GuestAuthResult;
+  try {
+    who = await ctx.guests.resolve(cred.guestId, cred.secret);
+  } catch (err) {
+    ctx.log('warn', `[web] guest auth failed: ${err instanceof Error ? err.message : String(err)}`);
+    return refuse(401, 'unauthorized');
+  }
+  if (!who.ok) return refuse(401, 'unauthorized');
+  const route = ctx.pathname === GUEST_ROUTES.me ? 'me' : ctx.pathname === GUEST_ROUTES.messages ? 'messages' : null;
+  if (!route) return refuse(404, 'not-found');
+  const posting = route === 'messages' && ctx.method === 'POST';
+  if (!posting && ctx.method !== 'GET') return refuse(405, 'method-not-allowed');
+  // 5. The server's grants, as for the phone's room routes.
+  if (!ctx.gates.transcript) return gate('transcript-disabled');
+  if (posting && !ctx.gates.input) return gate('input-disabled');
+  // 6. The guest's budget.
+  const wait = ctx.limiter.take(who.guestId, posting ? 'post' : 'read');
+  if (wait !== null) return refuse(429, 'rate-limited', { retryAfterSeconds: wait }, { 'Retry-After': String(wait) });
+  try {
+    ctx.guests.touch?.(who.guestId);
+  } catch {
+    /* bookkeeping */
+  }
+  const scope = who.scope;
+  // Revoke (or the owner's switch) is instant: an authorization is checked
+  // again after every wait, right before a post leaves for main and before
+  // a read's cards are returned. A verified secret is cached, so this costs
+  // no key derivation.
+  const guests = ctx.guests;
+  const stillAllowed = async (): Promise<boolean> => {
+    try {
+      if (guests.enabled() !== true) return false;
+      const again = await guests.resolve(cred.guestId, cred.secret);
+      return again.ok && again.guestId === who.guestId;
+    } catch {
+      return false;
+    }
+  };
+  if (route === 'me') {
+    // The same per-request check as a read and a post: main answers for the
+    // conversation only in a guest workspace (an empty page asked past its
+    // end), and refuses the same way otherwise.
+    const refused = await meScopeRefusal(ctx, scope);
+    if (refused) return refused;
+    if (!(await stillAllowed())) return revokedMidRequest();
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        guest: { guestId: who.guestId, name: who.name },
+        conversation: { workspaceId: scope.workspaceId, threadId: scope.threadId },
+        // Messages from this moment on only (guestSeesCard).
+        readsFrom: new Date(who.createdAt).toISOString(),
+        canPost: ctx.gates.input,
+        limits: {
+          textMax: GUEST_LIMITS.textMax, mentionsMax: GUEST_LIMITS.mentionsMax, pageMax: GUEST_LIMITS.pageMax,
+          postsPerMinute: GUEST_LIMITS.postsPerMinute, readsPerMinute: GUEST_LIMITS.readsPerMinute,
+        },
+      },
+    };
+  }
+  return posting ? post(ctx, who, scope, stillAllowed) : read(ctx, scope, who.createdAt, who.joinSeq, stillAllowed);
+}
+
+const revokedMidRequest = (): GuestRouteResponse => refuse(401, 'unauthorized');
+
+/** A refusal for `me` when main would refuse a read of the guest's
+ *  conversation, else null. */
+async function meScopeRefusal(ctx: GuestRouteContext, scope: GuestScope): Promise<GuestRouteResponse | null> {
+  const desktop = ctx.desktop;
+  if (!desktop) return refuse(503, 'desktop-unavailable');
+  if (!desktop.supports(GUEST_ROOM_CARDS_COMMAND)) return refuse(503, 'rooms-unavailable');
+  const answered = await ask(desktop, GUEST_ROOM_CARDS_COMMAND, {
+    workspaceId: scope.workspaceId, threadId: scope.threadId, sinceSeq: Number.MAX_SAFE_INTEGER, limit: 1,
+  });
+  if (!('reply' in answered)) return answered;
+  const r = answered.reply !== null && typeof answered.reply === 'object' ? answered.reply as Record<string, unknown> : {};
+  if (r.unavailable === true) return refuse(503, 'rooms-unavailable');
+  if (r.notFound === true) return refuse(404, 'conversation-not-found');
+  if (r.invalid === true) return refuse(400, 'invalid-request');
+  // Only a page of this very conversation confirms it, as for a read.
+  if (!parsePhoneRoomCardsReply(answered.reply, scope.workspaceId, scope.threadId)) return refuse(502, 'desktop-bad-reply');
+  return null;
+}
+
+/** The guest's conversation from the moment it was added, messages only
+ *  (guestSeesCard): what the owner and the bots said before, and wmux's own
+ *  lines, are never a guest's. A page may come back with fewer cards than
+ *  `limit` (even none) while `hasMore`; keep paging with `nextSinceSeq`. */
+async function read(ctx: GuestRouteContext, scope: GuestScope, since: number, joinSeq: number, stillAllowed: () => Promise<boolean>): Promise<GuestRouteResponse> {
+  const sinceSeq = queryInt(ctx.query.get('sinceSeq'), 0, Number.MAX_SAFE_INTEGER);
+  if (sinceSeq === null) return refuse(400, 'invalid-request', { detail: 'sinceSeq' });
+  const limit = queryInt(ctx.query.get('limit'), 1, GUEST_LIMITS.pageMax);
+  if (limit === null) return refuse(400, 'invalid-request', { detail: 'limit' });
+  const desktop = ctx.desktop;
+  if (!desktop) return refuse(503, 'desktop-unavailable');
+  if (!desktop.supports(GUEST_ROOM_CARDS_COMMAND)) return refuse(503, 'rooms-unavailable');
+  const answered = await ask(desktop, GUEST_ROOM_CARDS_COMMAND, {
+    workspaceId: scope.workspaceId,
+    threadId: scope.threadId,
+    ...(sinceSeq !== undefined ? { sinceSeq } : {}),
+    limit: limit ?? GUEST_LIMITS.pageMax,
+  });
+  if (!('reply' in answered)) return answered;
+  const r = answered.reply !== null && typeof answered.reply === 'object' ? answered.reply as Record<string, unknown> : {};
+  if (r.unavailable === true) return refuse(503, 'rooms-unavailable');
+  if (r.notFound === true) return refuse(404, 'conversation-not-found');
+  if (r.invalid === true) return refuse(400, 'invalid-request');
+  const page = parsePhoneRoomCardsReply(answered.reply, scope.workspaceId, scope.threadId);
+  if (!page) return refuse(502, 'desktop-bad-reply');
+  if (!(await stillAllowed())) return revokedMidRequest();
+  return {
+    status: 200,
+    // After the conversation's last card when it was added, by seq (no
+    // clock), and from that moment on (guestSeesCard).
+    body: { ok: true, cards: page.cards.filter((c) => c.seq > joinSeq && guestSeesCard(c, since)).map(guestCardView).filter((v): v is GuestCardView => v !== null), nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore },
+  };
+}
+
+async function post(ctx: GuestRouteContext, who: Extract<GuestAuthResult, { ok: true }>, scope: GuestScope, stillAllowed: () => Promise<boolean>): Promise<GuestRouteResponse> {
+  const body = await ctx.readBody();
+  if (!body.ok) return refuse(body.status, body.error);
+  const parsed = parsePostBody(body.value);
+  if ('detail' in parsed) return refuse(400, 'invalid-request', { detail: parsed.detail });
+  const desktop = ctx.desktop;
+  if (!desktop) return refuse(503, 'desktop-unavailable');
+  if (!desktop.supports(GUEST_ROOM_POST_COMMAND)) return refuse(503, 'guest-posts-unavailable');
+  // Key patterns go before anything leaves the daemon; main redacts the
+  // owner's stored secret values again when it writes the card.
+  const text = redactSecrets(parsed.text);
+  const payload: GuestPostPayload = {
+    guestId: who.guestId,
+    guestName: who.name,
+    workspaceId: scope.workspaceId,
+    threadId: scope.threadId,
+    clientMessageId: parsed.clientMessageId,
+    text,
+    mentions: parsed.mentions,
+  };
+  if (!(await stillAllowed())) return revokedMidRequest();
+  const answered = await ask(desktop, GUEST_ROOM_POST_COMMAND, { ...payload });
+  if (!('reply' in answered)) {
+    // Sent with no answer: main may have written the card. The same
+    // clientMessageId again is safe (main returns the first card).
+    return answered.status === 504
+      ? { status: 202, body: { ok: true, state: 'uncertain', clientMessageId: parsed.clientMessageId } }
+      : answered;
+  }
+  const result = parseGuestPostResult(answered.reply);
+  if (!result) return refuse(502, 'desktop-bad-reply');
+  if (!result.ok) {
+    switch (result.code) {
+      case 'factory_off': return refuse(409, 'bots-off');
+      case 'scope_gone': return refuse(404, 'conversation-not-found');
+      case 'mention_refused': return refuse(400, 'invalid-request', { detail: 'mentions' });
+      case 'bot_unavailable': return refuse(409, 'bot-cannot-take-guests', { message: 'This bot can\'t take guest messages.', ...(result.botIds ? { botIds: result.botIds } : {}) });
+      case 'busy': return refuse(503, 'busy', {}, { 'Retry-After': '5' });
+      case 'id_reused': return refuse(409, 'message-id-reused');
+      default: return refuse(400, 'invalid-request');
+    }
+  }
+  ctx.log('info', `[web] guest ${who.guestId} posted card ${result.cardId}`);
+  return {
+    status: result.duplicate ? 200 : 201,
+    body: {
+      ok: true,
+      card: { id: result.cardId, seq: result.seq },
+      ...(result.duplicate ? { replayed: true } : {}),
+      woke: result.woke,
+      redacted: text !== parsed.text,
+    },
+  };
+}
+
+/** Read a bounded JSON body from a request. */
+export function readGuestBody(req: http.IncomingMessage, maxBytes: number = GUEST_LIMITS.bodyMaxBytes): Promise<GuestBodyRead> {
+  return new Promise((resolve) => {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      req.resume();
+      resolve({ ok: false, status: 413, error: 'payload-too-large' });
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let done = false;
+    const finish = (r: GuestBodyRead) => {
+      if (done) return;
+      done = true;
+      resolve(r);
+    };
+    req.on('data', (chunk: Buffer) => {
+      if (done) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        finish({ ok: false, status: 413, error: 'payload-too-large' });
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (done) return;
+      try {
+        finish({ ok: true, value: JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown });
+      } catch {
+        finish({ ok: false, status: 400, error: 'invalid-json' });
+      }
+    });
+    req.on('error', () => finish({ ok: false, status: 400, error: 'invalid-request' }));
+  });
+}

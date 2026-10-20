@@ -448,8 +448,13 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
   const botId = card.actor.kind === 'bot' ? card.actor.botId : '';
   const botRow = ctx.bots.find((b) => b.bot.id === botId);
   const role = botRow?.bot.role ?? ctx.actors[botId]?.role;
-  const showName = group || (!!ctx.selfBot && !!botId && botId !== ctx.selfBot);
-  const name = human ? t('room.actor.you') : actorLabel(card.actor, t, ctx.bots, ctx.actors);
+  // An outside agent the owner let in (shared/guestBots.ts): always named,
+  // always marked external.
+  const guest = card.kind === 'guest';
+  const showName = guest || group || (!!ctx.selfBot && !!botId && botId !== ctx.selfBot);
+  const name = human ? t('room.actor.you')
+    : guest ? t('botsPage.guest.author', { name: card.guest?.name ?? t('botsPage.guest.unnamed') })
+    : actorLabel(card.actor, t, ctx.bots, ctx.actors);
   // A bot the runtime no longer lists still gets a face: its name, picture
   // and colour as the room knows them (a removed bot's from its tombstone).
   const known = ctx.actors[botId];
@@ -507,6 +512,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
       data-room-card-id={question ? undefined : card.id}
       data-bots-bubble={question ? 'card' : 'bot'}
       data-card-kind={card.kind}
+      data-bots-guest={guest ? 'true' : undefined}
       data-continuation={continuation ? 'true' : undefined}
       data-run-end={runEnd ? 'true' : undefined}
       data-waits-on-owner={waiting && !question ? 'true' : undefined}

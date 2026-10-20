@@ -17,13 +17,16 @@ import {
   deckDecisionPort,
   handoffFromLegacy,
   importLegacyMoaHandoffs,
+  type HandoffTaintPort,
 } from '../handoffRouter';
+import { expectWakeTaint } from '../wakeTaint';
 import { runFactoryMigrations } from '../migrate';
 import { RoomWriter, writeFactCards, type FactoryRoomPorts } from '../roomWriter';
 import { TriggerEngine, botSeesFact } from '../triggerEngine';
 import { handleRoomPost } from '../../pipe/handlers/room.rpc';
 import type { RpcContext } from '../../../shared/rpc';
 import { defaultTriggers } from '../roleDefaults';
+import { GuestWorkspaceStore, __resetGuestWorkspacesForTesting, setGuestWorkspaceStore } from '../guestWorkspaces';
 
 let dir = '';
 let now = 1_000_000_000_000;
@@ -67,7 +70,7 @@ interface Harness {
   wake: { thread: ThreadId | null; id: { wakeId: string; attempt: number; handoffId?: string } | null };
 }
 
-async function harness(bots: BotProfile[], opts: { noFactLog?: boolean; wakes?: FactoryRoomPorts['wakes'] } = {}): Promise<Harness> {
+async function harness(bots: BotProfile[], opts: { noFactLog?: boolean; wakes?: FactoryRoomPorts['wakes']; taint?: HandoffTaintPort } = {}): Promise<Harness> {
   const facts: Fact[] = [];
   const subs = new Set<(f: Fact) => void>();
   const rooms = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), now: () => now, log: () => undefined });
@@ -110,6 +113,7 @@ async function harness(bots: BotProfile[], opts: { noFactLog?: boolean; wakes?: 
     decisions: deckDecisionPort(dir),
     ports: () => ports,
     rooms: () => rooms,
+    ...(opts.taint ? { taint: () => opts.taint ?? null } : {}),
     now: () => now,
     log: () => undefined,
   });
@@ -621,6 +625,49 @@ describe('ask_person', () => {
     expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.title)).toEqual(['first', 'second']);
   });
 
+  it('a question asked in a guest-sourced wake is raised later as a guest-sourced card, and its closing card is too', async () => {
+    const lead = bot('ws1', 'lead');
+    const other = bot('ws1', 'triage');
+    const guestBots = new Set<string>([other.id]);
+    const taint: HandoffTaintPort = {
+      markSent: () => false, markForward: () => false,
+      runningGuest: (botId) => guestBots.has(botId),
+      handoffGuest: () => false,
+    };
+    const h = await harness([lead, other], { taint });
+    const first = await h.router.askPerson(binding(lead), { title: 'first', body: '', threadId: 'task:t1' });
+    const second = await h.router.askPerson(binding(other), { title: 'second', body: '', threadId: 'task:t1' });
+    if (!first.ok || !second.ok) throw new Error('asks failed');
+    expect(h.router.get(first.handoffId)?.guestSourced).toBe(false);
+    expect(h.router.get(second.handoffId)?.guestSourced).toBe(true);
+    // Raised after the asking wake ended: the card still says where it came from.
+    guestBots.clear();
+    await resolveThreadDecision('ws1', first.decisionId!, 'ok', {}, dir);
+    await h.router.reconcile();
+    expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.title)).toEqual(['first']);
+    const card = h.rooms.read('ws1', { guests: true }).cards.find((c) => c.title === 'second');
+    expect(card?.origin).toBe('guest');
+    await h.router.reconcile();
+    expect(h.rooms.read('ws1', { guests: true }).cards.filter((c) => c.title === 'second')).toHaveLength(1);
+    // Its answer is as guest-sourced as it is.
+    expect(await h.router.answer(second.handoffId, 'yes')).toMatchObject({ ok: true });
+    const answered = h.router.list({}).find((x) => x.kind === 'answer' && x.replyTo === second.handoffId);
+    expect(answered?.guestSourced).toBe(true);
+  });
+
+  it('a question keeps the provenance of the wake that asked it when it is stored after that wake', async () => {
+    const lead = bot('ws1', 'lead');
+    const guestBots = new Set<string>([lead.id]);
+    const taint: HandoffTaintPort = { markSent: () => false, markForward: () => false, runningGuest: (botId) => guestBots.has(botId), handoffGuest: () => false };
+    const h = await harness([lead], { taint });
+    const asked = h.router.askPerson(binding(lead), { title: 'later', body: '' });
+    // A clean wake is running by the time the queued question is stored.
+    guestBots.clear();
+    const r = await asked;
+    if (!r.ok) throw new Error('ask failed');
+    expect(h.router.get(r.handoffId)?.guestSourced).toBe(true);
+  });
+
   it('a dismissed question answers the bot that it was closed without a choice', async () => {
     const lead = bot('ws1', 'lead');
     const h = await harness([lead]);
@@ -674,6 +721,22 @@ describe('ask_person', () => {
     expect(loadThreadDecision('ws1', 'task:b', dir)).toBeNull();
     expect(h.wakes).toEqual([]);
     expect(h.rooms.read('ws1').cards.filter((c) => c.kind === 'question').every((c) => c.state === 'resolved')).toBe(true);
+  });
+
+  it('a guest-sourced question\'s closing card is guest-sourced: it stays out of a clean read, across a reload', async () => {
+    const lead = bot('ws1', 'lead');
+    const taint: HandoffTaintPort = { markSent: () => false, markForward: () => false, runningGuest: () => true, handoffGuest: () => true };
+    const h = await harness([lead], { taint });
+    const gone = await h.router.askPerson(binding(lead), { title: 'GUEST-ASKED', body: '', threadId: 'task:a' });
+    if (!gone.ok) throw new Error('ask failed');
+    await clearThreadDecision('ws1', 'task:a', undefined, dir);
+    await h.router.reconcile();
+    expect(h.router.get(gone.handoffId)!.status).toBe('expired');
+    const closed = h.rooms.read('ws1', { guests: true }).cards.find((c) => c.title === 'Question closed: GUEST-ASKED');
+    expect(closed).toMatchObject({ actor: { kind: 'system' }, origin: 'guest' });
+    const reloaded = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), now: () => now, log: () => undefined });
+    expect(reloaded.read('ws1').cards.map((c) => c.title).join('\n')).not.toContain('GUEST-ASKED');
+    expect(reloaded.read('ws1', { guests: true }).cards.find((c) => c.id === closed!.id)?.origin).toBe('guest');
   });
 
   it('handoff.answer answers a raised question and a queued one', async () => {
@@ -839,6 +902,93 @@ describe('messages and room mentions (group rooms)', () => {
     const later = await harness([a, b, c]);
     expect(later.router.mention(binding(a), card('c-one'), [b.id, c.id]).every((o) => o.result.ok && o.result.duplicate)).toBe(true);
     expect(later.wakes).toEqual([]);
+  });
+
+  it('a mention keeps its card\'s guest provenance, whatever turn routes it', async () => {
+    const a = bot('ws1', 'lead');
+    const b = bot('ws1', 'triage');
+    const sent: Array<[string, boolean | undefined]> = [];
+    const taint: HandoffTaintPort = {
+      markSent: (id, _sender, _answers, guestSource) => { sent.push([id, guestSource]); return guestSource ? 'guest' : false; },
+      markForward: () => false, runningGuest: () => false, handoffGuest: () => false,
+    };
+    const h = await harness([a, b], { taint });
+    const [guestOut] = h.router.mention(binding(a), card('c-guest', { origin: 'guest' }), [b.id]);
+    const [cleanOut] = h.router.mention(binding(a), card('c-clean'), [b.id]);
+    if (!guestOut.result.ok || !cleanOut.result.ok) throw new Error('mentions failed');
+    expect(h.router.get(guestOut.result.handoffId)?.guestSourced).toBe(true);
+    expect(h.router.get(cleanOut.result.handoffId)?.guestSourced).toBe(false);
+    expect(sent).toEqual([[guestOut.result.handoffId, true], [cleanOut.result.handoffId, false]]);
+  });
+
+  it('a hop not known clean is refused, with the reason, to a bot whose engine cannot hold its tools back; a clean one goes through', async () => {
+    const a = bot('ws1', 'lead');
+    const acp = bot('ws1', 'triage', { engine: { kind: 'acp', command: 'agent', args: [] } });
+    let guest = true;
+    const taint: HandoffTaintPort = {
+      markSent: () => (guest ? 'guest' : false), markForward: () => false,
+      runningGuest: () => guest, handoffGuest: () => guest,
+    };
+    const h = await harness([a, acp], { taint });
+    const [out] = h.router.mention(binding(a), { id: 'c-g', threadId: 'general' as ThreadId, title: 't', body: '', origin: 'guest' }, [acp.id]);
+    expect(out.result).toMatchObject({ ok: false, code: 'no_addressee', message: expect.stringContaining('can\'t take guest messages') });
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: acp.id, title: 'x', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.wakes).toEqual([]);
+    guest = false;
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: acp.id, title: 'y', body: '' })).toMatchObject({ ok: true });
+    expect(h.wakes).toHaveLength(1);
+  });
+
+  it('a hop not known clean stays in the sender\'s workspace; a clean one still reaches any workspace', async () => {
+    const a = bot('ws1', 'lead');
+    const same = bot('ws1', 'triage');
+    const far = bot('ws2', 'lead');
+    let guest = true;
+    const taint: HandoffTaintPort = {
+      markSent: (_id, _s, _a, source) => ((source ?? guest) ? 'guest' : false), markForward: () => false,
+      runningGuest: () => guest, handoffGuest: () => guest,
+    };
+    const h = await harness([a, same, far], { taint });
+    const refusedFar = h.router.send(binding(a), { kind: 'message', toBotId: far.id, title: 'x', body: '' });
+    expect(refusedFar).toMatchObject({ ok: false, code: 'no_addressee', message: expect.stringContaining('its own workspace') });
+    expect(h.router.send(binding(a), { kind: 'dispatch', toWorkspaceId: 'ws2', title: 'x', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    const [mentioned] = h.router.mention(binding(a), { id: 'c-g', threadId: 'general' as ThreadId, title: 't', body: '', origin: 'guest' }, [far.id]);
+    expect(mentioned.result).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: same.id, title: 'x', body: '' })).toMatchObject({ ok: true });
+    expect(h.wakes.map((w) => w.botId)).toEqual([same.id]);
+    guest = false;
+    expect(h.router.send(binding(a), { kind: 'message', toBotId: far.id, title: 'y', body: '' })).toMatchObject({ ok: true, to: { workspaceId: 'ws2' } });
+    const [clean] = h.router.mention(binding(a), { id: 'c-c', threadId: 'general' as ThreadId, title: 't', body: '' }, [far.id]);
+    expect(clean.result).toMatchObject({ ok: true });
+  });
+
+  it('without a tracker where one is expected, a send and a question are guest-sourced', async () => {
+    const a = bot('ws1', 'triage');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([a, lead]);
+    expectWakeTaint();
+    try {
+      const sent = h.router.send(binding(a), { kind: 'dispatch', title: 'x', body: '' });
+      const asked = await h.router.askPerson(binding(a), { title: 'q', body: '' });
+      if (!sent.ok || !asked.ok) throw new Error('refused');
+      expect(h.router.get(sent.handoffId)?.guestSourced).toBe(true);
+      expect(h.router.get(asked.handoffId)?.guestSourced).toBe(true);
+    } finally {
+      expectWakeTaint(false);
+    }
+  });
+
+  it('a refused send says its provenance on the record, so the refusal does not wake its sender as unknown', async () => {
+    const a = bot('ws1', 'triage');
+    let guest = false;
+    const taint: HandoffTaintPort = { markSent: () => false, markForward: () => false, runningGuest: () => guest, handoffGuest: () => false };
+    const h = await harness([a], { taint });
+    const clean = h.router.send(binding(a), { kind: 'dispatch', toWorkspaceId: 'ws9', title: 'x', body: '' });
+    guest = true;
+    const fromGuest = h.router.send(binding(a), { kind: 'dispatch', toWorkspaceId: 'ws9', title: 'y', body: '' });
+    if (clean.ok || fromGuest.ok) throw new Error('expected refusals');
+    expect(h.router.get(clean.handoffId!)).toMatchObject({ status: 'refused', guestSourced: false });
+    expect(h.router.get(fromGuest.handoffId!)).toMatchObject({ status: 'refused', guestSourced: true });
   });
 
   it('a broadcast in General from a wake the owner started in the poster\'s 1:1 wakes its room\'s bots in that 1:1', async () => {
@@ -1338,3 +1488,72 @@ describe('retention of a hop held by an open question', () => {
     expect(h.router.get('h-ask')?.forHop).toBe('h-held');
   });
 });
+
+describe('a guest workspace is an island (handoffs, mentions, their cards)', () => {
+  afterEach(() => __resetGuestWorkspacesForTesting());
+
+  async function island(): Promise<void> {
+    const store = new GuestWorkspaceStore({ file: path.join(dir, 'factory', 'guest-workspaces.json'), log: () => undefined });
+    store.load();
+    await store.add('wsg');
+    await store.add('wsh');
+    setGuestWorkspaceStore(store);
+  }
+
+  const queued = (id: string, from: BotProfile, to: BotProfile, extra: Record<string, unknown> = {}) => JSON.stringify({
+    version: 1, id, runId: `run-${id}`, threadId: 'general', depth: 1, hopsInRun: 1,
+    from: { kind: 'bot', workspaceId: from.workspaceId, botId: from.id }, to: { kind: 'bot', workspaceId: to.workspaceId, botId: to.id }, kind: 'message',
+    attribution: { originator: { kind: 'bot', workspaceId: from.workspaceId, botId: from.id }, chain: [] }, landing: 'wake',
+    payload: { title: `title of ${id}`, body: '' }, status: 'queued', createdAt: now, updatedAt: now, ...extra,
+  });
+
+  it('a hop either way across the boundary is refused, guest A to guest B too; inside one it is delivered', async () => {
+    await island();
+    const g = bot('wsg', 'lead');
+    const g2 = bot('wsg', 'lead');
+    const other = bot('wsh', 'lead');
+    const clean = bot('ws1', 'lead');
+    const h = await harness([g, g2, other, clean]);
+    expect(h.router.send(binding(clean), { kind: 'message', toBotId: g.id, title: 'in', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(g), { kind: 'message', toBotId: clean.id, title: 'out', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.router.send(binding(g), { kind: 'message', toBotId: other.id, title: 'across', body: '' })).toMatchObject({ ok: false, code: 'no_addressee' });
+    const [m1] = h.router.mention(binding(clean), { id: 'c-1', threadId: 'general' as ThreadId, title: 't', body: '' }, [g.id]);
+    const [m2] = h.router.mention(binding(g), { id: 'c-2', threadId: 'general' as ThreadId, title: 't', body: '' }, [clean.id]);
+    expect(m1.result).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(m2.result).toMatchObject({ ok: false, code: 'no_addressee' });
+    expect(h.wakes).toEqual([]);
+    expect(h.router.send(binding(g), { kind: 'message', toBotId: g2.id, title: 'inside', body: '' })).toMatchObject({ ok: true });
+    expect(h.wakes.map((w) => w.botId)).toEqual([g2.id]);
+  });
+
+  it('a refused hop\'s card is written only in the sender\'s room: nothing crosses', async () => {
+    await island();
+    const g = bot('wsg', 'lead');
+    const clean = bot('ws1', 'lead');
+    const h = await harness([g, clean]);
+    h.router.send(binding(g), { kind: 'message', toBotId: clean.id, title: 'guest words', body: '' });
+    h.router.send(binding(clean), { kind: 'message', toBotId: g.id, title: 'clean words', body: '' });
+    const titles = (ws: string) => h.rooms.read(ws, { guests: true }).cards.map((c) => c.title).join('\n');
+    expect(titles('wsg')).toContain('guest words');
+    expect(titles('wsg')).not.toContain('clean words');
+    expect(titles('ws1')).toContain('clean words');
+    expect(titles('ws1')).not.toContain('guest words');
+  });
+
+  it('a hop stored before a restart, a relay\'s forward or a mention, is refused when it crosses', async () => {
+    await island();
+    const g = bot('wsg', 'lead');
+    const clean = bot('ws1', 'moa', { template: 'coordinator' });
+    const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, [
+      queued('h-in', clean, g, { kind: 'dispatch', relay: true }),
+      queued('h-out', g, clean),
+      queued('h-mention', clean, g, { clientHandoffId: `mention:c-m:${g.id}`, payload: { title: 'x', body: '', refs: { messageId: 'c-m' } } }),
+    ].join('\n') + '\n');
+    const h = await harness([g, clean]);
+    expect(h.wakes).toEqual([]);
+    for (const id of ['h-in', 'h-out', 'h-mention']) expect(h.router.get(id)?.status, id).toBe('refused');
+  });
+});
+

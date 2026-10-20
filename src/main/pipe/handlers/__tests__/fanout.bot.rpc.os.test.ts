@@ -74,6 +74,7 @@ interface Rig {
   setOpen: (o: { bot: number; factory: number }) => void;
   setLiveTasks: (n: number) => void;
   setTainted: (t: boolean) => void;
+  setGuestSourced: (g: boolean) => void;
   flush: () => Promise<void>;
   /** Repositories whose default branch was read, with how many fan-outs had started then. */
   defaultBranchReads: Array<{ root: string; startedBefore: number }>;
@@ -116,6 +117,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
    *  (the owner's, mostly): the guards' live cap counts them. */
   let liveTasks = 0;
   let tainted = false;
+  let guestSourced = false;
   const defaultBranchReads: Rig['defaultBranchReads'] = [];
   let defaultBranchNote: { name: string | null; recorded: boolean } = { name: 'develop', recorded: true };
   const p = profile(role, over);
@@ -142,6 +144,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     currentWakeId: () => wake,
     currentWakeThread: () => thread as ThreadId | null,
     currentWakeTainted: () => tainted,
+    wakeGuestSourced: () => guestSourced,
     currentWakeHandoff: () => (wake ? 'h-dispatch' : null),
     openWorkers: (botId) => ({ bot: open.bot + booked(botId), factory: open.factory + booked(), botStarting: booked(botId), live: liveTasks + guards.reservedTasks().length }),
     usage: () => emptyUsage(),
@@ -199,6 +202,9 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: { builtinPrese
     setTainted: (t) => {
       tainted = t;
     },
+    setGuestSourced: (g) => {
+      guestSourced = g;
+    },
     flush: async () => {
       for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r));
     },
@@ -220,12 +226,26 @@ describe('task.fanout.start — bot origin', () => {
     r.setTainted(true);
     expect(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
     await r.flush();
-    expect((r.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true });
+    expect((r.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true, guest: false });
     r.setTainted(false);
     r.setWake('w-2');
     expect(await r.call({ idempotencyKey: 'wake:w-2:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
     await r.flush();
-    expect((r.start.mock.calls[1][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false });
+    expect((r.start.mock.calls[1][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false, guest: false });
+  });
+
+  it('a guest-sourced wake (or one of unknown provenance) starts no workers', async () => {
+    const r = rig('lead');
+    r.setGuestSourced(true);
+    const refused = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead')));
+    expect(refused).toMatchObject({ code: 'FAILED_PRECONDITION' });
+    expect(refused.message).toContain('external guest');
+    await r.flush();
+    expect(r.start).not.toHaveBeenCalled();
+    expect(r.port.full).toHaveLength(0);
+    r.setGuestSourced(false);
+    r.setWake('w-2');
+    expect(await r.call({ idempotencyKey: 'wake:w-2:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
   });
 
   it('a connection\'s key is refused as a plain secretNames entry, before anything starts', async () => {
@@ -274,7 +294,7 @@ describe('task.fanout.start — bot origin', () => {
       await r.flush();
       const req = r.start.mock.calls[0][0] as FanOutRequest;
       expect(req.connectors?.map((c) => c.name)).toEqual(['shared', 'mine']);
-      expect(req.caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true });
+      expect(req.caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true, guest: false });
       await lib.flush();
     });
 
@@ -328,11 +348,11 @@ describe('task.fanout.start — bot origin', () => {
     const researcher = rig('lead', { template: 'researcher' });
     expect(await researcher.call({ idempotencyKey: 'wake:w-1:1', titles: ['look it up'], prompt: 'research', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
     await researcher.flush();
-    expect((researcher.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true });
+    expect((researcher.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true, guest: false });
     const developer = rig('lead', { template: 'developer' });
     expect(await developer.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead'))).toMatchObject({ ok: true });
     await developer.flush();
-    expect((developer.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false });
+    expect((developer.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false, guest: false });
   });
 
   it('reads the bot repository\'s default branch for the workers\' push rules before anything starts', async () => {
@@ -933,7 +953,7 @@ describe('task.fanout.start — bot origin', () => {
       r.setTainted(false);
       expect((await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['q'], prompt: 'q', preset: 'research' }, botCtx('lead'))).status).toBe('accepted');
       await r.flush();
-      expect((r.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true });
+      expect((r.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true, guest: false });
     });
 
     it('a bot whose workers run on codex is told research needs claude workers', async () => {

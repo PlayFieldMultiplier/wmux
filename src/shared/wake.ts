@@ -37,8 +37,14 @@ export type WakeReason =
    *  to start it again from this turn. `tainted`: the wake that asked for it
    *  carried outside text. `handoffId`: the handoff that wake delivered, so
    *  the tasks still answer it. `fingerprint`: of the arguments (a retry
-   *  that started them retires this wake too). */
-  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; handoffId?: string };
+   *  that started them retires this wake too). `guest`: the asking wake's
+   *  guest provenance (wakeTaint.ts); absent reads as unknown unless clean. */
+  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; guest?: boolean; handoffId?: string }
+  /** An outside agent's message named this bot (shared/guestBots.ts):
+   *  `cardId` is its `guest` card, `text` what it said (redacted). Always
+   *  tainted (wakeTaint.ts): nothing this wake starts merges without the
+   *  owner. */
+  | { kind: 'guest'; guestId: string; guestName: string; cardId: string; text: string };
 
 /** A held fan-out's fanout_start arguments, as the bot's tool takes them. */
 export interface HeldFanoutArgs {
@@ -65,6 +71,7 @@ export function wakeReasonDedupeKey(r: WakeReason): string | null {
     case 'mention': return `mention:${r.cardId}`;
     case 'intro': return 'intro';
     case 'held_fanout': return `held_fanout:${r.heldId}`;
+    case 'guest': return `guest:${r.cardId}`;
     default: return null;
   }
 }
@@ -87,7 +94,8 @@ export interface WakeItem {
   /** max 2; then a 'bot.error' fact and the item is parked with the bot */
   attempts: number;
   state: WakeState;
-  dropped?: { code: 'budget' | 'duplicate' | 'bot_disabled' | 'expired' | 'queue_full' };
+  /** `cross_workspace`: the wake named a workspace other than its bot's. */
+  dropped?: { code: 'budget' | 'duplicate' | 'bot_disabled' | 'expired' | 'queue_full' | 'cross_workspace' };
 }
 
 export const WAKE_LIMITS = {

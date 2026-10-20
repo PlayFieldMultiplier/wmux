@@ -15,7 +15,7 @@ import type { Fact, FactDraft } from '../../../shared/facts';
 import type { MergeEffect } from '../../../shared/moaDecision';
 import type { PrLaneFacts } from '../../../shared/prReview';
 import type { RpcContext } from '../../../shared/rpc';
-import { ApprovalService, registerApprovalRpc, ruleCovers, typedApprovalSourceAllowed, typedApprovalTargets, withoutOwnerQuotes, type ApprovalMergeHost, type ApprovalPorts, type ApprovalWake, type StoredApproval } from '../approvals';
+import { ApprovalService, GUEST_REASON_HIDDEN, registerApprovalRpc, ruleCovers, typedApprovalSourceAllowed, typedApprovalTargets, withoutOwnerQuotes, type ApprovalMergeHost, type ApprovalPorts, type ApprovalWake, type StoredApproval } from '../approvals';
 import type { BotNoticeInput } from '../botNotices';
 import { RoomWriter } from '../roomWriter';
 import { registeredFactoryModules } from '../factoryHost';
@@ -69,7 +69,8 @@ function rig(over: Partial<ApprovalPorts> = {}) {
   const ports: ApprovalPorts = {
     file: path.join(dir, 'factory', 'approvals.json'),
     bots: () => ({ listEnabled: () => [DEV, OTHER], get: (id) => [DEV, OTHER].find((b) => b.id === id) ?? null }),
-    runningWake: (id) => state.wakes.get(id) ?? null,
+    // Clean of guests unless a test says otherwise.
+    runningWake: (id) => { const w = state.wakes.get(id); return w ? { guest: false, ...w } : null; },
     readPr: async (_p, _k, n) => {
       const h = state.heads.get(n);
       if (!h) throw new Error('no such PR');
@@ -104,6 +105,47 @@ function rig(over: Partial<ApprovalPorts> = {}) {
 describe('approval requests (bot side)', () => {
   it('importing the store registers no factory module (the IPC handler imports it early; modules.ts orders the module)', () => {
     expect(registeredFactoryModules()).not.toContain('approvals');
+  });
+
+  it('a guest-sourced (or unknown) wake\'s request is tainted and its card is guest-sourced', async () => {
+    for (const guest of [true, 'unknown'] as const) {
+      const r = rig();
+      r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest });
+      const req = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'ok' });
+      expect(req).toMatchObject({ tainted: true });
+      expect(r.writer.read(WS).cards.find((c) => c.id === req.cardId)).toBeUndefined();
+      expect(r.writer.get(WS, req.cardId as string)?.origin).toBe('guest');
+    }
+  });
+
+  it('a guest-sourced request\'s words are not read back in a wake that is not guest-sourced: not listed, not as a duplicate', async () => {
+    const r = rig();
+    r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: true });
+    const req = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'GUEST-REASON', clientRequestId: 'k-1' });
+    const listed = () => {
+      const res = r.svc.listFor(binding(DEV), {});
+      if (!res.ok) throw new Error('list refused');
+      return res.requests.find((x) => x.requestId === req.requestId);
+    };
+    expect(listed()?.reason).toBe('GUEST-REASON');
+    r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: null, tainted: false });
+    expect(listed()).toMatchObject({ requestId: req.requestId, state: 'pending', reason: GUEST_REASON_HIDDEN });
+    const again = await r.svc.request(binding(DEV), { action: 'merge', prNumber: 1, reason: 'clean', clientRequestId: 'k-1' });
+    expect(again).toMatchObject({ ok: true, duplicate: true, request: { reason: GUEST_REASON_HIDDEN } });
+    const sameHead = await r.svc.request(binding(DEV), { action: 'merge', prNumber: 1, reason: 'clean' });
+    expect(sameHead).toMatchObject({ ok: true, duplicate: true, request: { requestId: req.requestId, reason: GUEST_REASON_HIDDEN } });
+  });
+
+  it('a request stores its wake\'s taint as read after the GitHub lookup, never cleaner', async () => {
+    const r = rig({
+      readPr: async (_p, _k, n) => {
+        // The tracker now says otherwise for the same wake.
+        r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: true });
+        return facts(n, HEAD);
+      },
+    });
+    r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false });
+    expect(await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'ok' })).toMatchObject({ tainted: true });
   });
 
   it('main reads the repository, head, login, thread and taint; the bot names only the act', async () => {
@@ -754,6 +796,20 @@ describe('the bots learn what became of a request (A4)', () => {
     r.svc.decide({ requestId: req.requestId, decision: 'deny' }, 'desktop');
     expect(r.notices.map((n) => n.botId).sort()).toEqual([DEV.id, OTHER.id].sort());
     expect(r.notices[0]).toMatchObject({ key: `approval:${req.requestId}:denied`, topic: 'approval.decided', threadId: 'general', title: 'The owner denied: Merge PR #1.' });
+  });
+
+  it('a decision on a guest-sourced request is told in a guest-sourced notice; a clean one in a clean notice', async () => {
+    const r = noticeRig();
+    const clean = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
+    r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: null, tainted: false, guest: true });
+    const fromGuest = await r.ask(DEV, { action: 'merge', prNumber: 2, reason: 'y' });
+    r.svc.decide({ requestId: clean.requestId, decision: 'deny' }, 'desktop');
+    r.svc.decide({ requestId: fromGuest.requestId, decision: 'deny' }, 'desktop');
+    const of = (id: string) => r.notices.find((n) => n.key === `approval:${id}:denied`);
+    expect(of(clean.requestId)?.guest).toBeUndefined();
+    expect(of(fromGuest.requestId)).toMatchObject({ guest: true, tainted: true });
+    // What the owner's views read does not change.
+    expect(r.svc.listForOperator(WS).find((v) => v.requestId === fromGuest.requestId)).not.toHaveProperty('guest');
   });
 
   it('a refused merge is told in plain words; the view carries the plain text', async () => {

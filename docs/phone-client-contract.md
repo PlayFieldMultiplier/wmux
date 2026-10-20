@@ -4501,6 +4501,10 @@ a client that calls these routes reads replies as room cards by definition.
   - `avatar.picture` — the owner set a picture for the bot, which the desktop
     draws instead of the character. The picture itself is not served; draw
     the character.
+  - `guestWorkspace` — `true` when the bot is in a guest workspace: external
+    guest bots may join its conversations, and its turns run under guest
+    rules. Absent otherwise. Mark the bot (and its conversations) as guest;
+    the owner may read and post there as anywhere.
 - `conversations` — at most 200, newest first: by `lastAt`, a tie by the
   row's key (`bot:<botId>` or `group:<groupId>`) in string order, as the
   desktop sorts them. Fewer when
@@ -4516,6 +4520,10 @@ a client that calls these routes reads replies as room cards by definition.
     group made from a room has none and is named after its workspace (empty
     when the workspace is not open on the desktop).
   - `workspaceName` — the workspace's name, when it is open on the desktop.
+  - `guestWorkspace` — `true` when the conversation is in a guest workspace
+    (as on `bots`). A message the owner posts in one names only that
+    workspace's bots, and a message elsewhere names none of its bots: such a
+    post answers `409 no-recipient` with `reason: "room-refused"`.
   - `botId` (a 1:1) / `groupId` (a group). `memberBotIds` — a 1:1: its bot;
     a group: its bots in the owner's order.
   - `lastAt` — the newest card's time in the conversation (its own thread

@@ -28,13 +28,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isCoordinatorBot, type BotProfile } from '../../shared/bot';
 import { FACT_LIMITS, type Fact, type FactDraft } from '../../shared/facts';
-import { GENERAL_THREAD, type RoomCard, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
 import type { WakeReason } from '../../shared/wake';
 import type { FactLog, FactLogApi } from './factLog';
 import type { BotDirectoryApi } from './botStore';
 import type { RoomWriter } from './roomWriter';
 import { DAY_MS, type TrustReadResult } from './trustMetrics';
 import type { CorrectionGroup } from './gardener';
+import { crossesGuestBoundary, guestSide } from './guestWorkspaces';
 
 export const MORNING_LIMITS = {
   WINDOW_MS: DAY_MS,
@@ -128,7 +129,9 @@ export async function buildMorningData(ports: MorningPorts): Promise<MorningData
   const now = (ports.now ?? Date.now)();
   const since = now - MORNING_LIMITS.WINDOW_MS;
   const bots = ports.bots();
-  const all = enabled(bots);
+  // listEnabled leaves out guest workspaces' bots; held again here, as for
+  // the facts and the rooms below: the report reads no guest workspace.
+  const all = enabled(bots).filter((b) => !guestSide(b.workspaceId));
   const L = MORNING_LIMITS;
 
   // Trust per distinct repository (oldest bot first).
@@ -163,7 +166,7 @@ export async function buildMorningData(ports: MorningPorts): Promise<MorningData
   let facts: Fact[] = [];
   try {
     const log = ports.factLog();
-    facts = log ? factsSince(log, since) : [];
+    facts = (log ? factsSince(log, since) : []).filter((f) => !guestSide(f.workspaceId));
   } catch {
     facts = [];
   }
@@ -311,6 +314,9 @@ export interface PlanAnswerPorts {
 export function routePlanAnswer(ev: ResolvedCardEvent, ports: PlanAnswerPorts): 'woken' | 'declined' | 'ignored' {
   const card = ev.card;
   if (card.kind !== 'plan' || card.actor.kind !== 'bot') return 'ignored';
+  // Its title would wake the bot as the owner's words: a plan not known
+  // clean of a guest's words wakes nobody.
+  if (isGuestSourcedCard(card)) return 'ignored';
   const kind = parseResolution(ev.resolution);
   if (kind === 'decline') return 'declined';
   let author: BotProfile | null = null;
@@ -319,8 +325,9 @@ export function routePlanAnswer(ev: ResolvedCardEvent, ports: PlanAnswerPorts): 
   } catch {
     author = null;
   }
-  // Any bot may propose a plan (plan.propose); the answer wakes its author.
-  if (!author || !author.enabled) return 'ignored';
+  // Any bot may propose a plan (plan.propose); the answer wakes its author,
+  // in the room it wrote the plan in.
+  if (!author || !author.enabled || crossesGuestBoundary(ev.workspaceId, author.workspaceId)) return 'ignored';
   const verb = kind === 'approve' ? 'approved' : 'answered';
   ports.wake({
     botId: author.id,

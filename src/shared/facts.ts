@@ -93,6 +93,9 @@ export interface BotNoticePayload {
   card?: boolean;
   /** It carries text from outside (detail): wakeTaint counts it. */
   tainted?: boolean;
+  /** Guest provenance of what it tells of (wakeTaint.ts); main writes it on
+   *  every notice. */
+  guest?: boolean;
   /** The card's stable code, so the reader's language words it (RoomCard.notice). */
   notice?: CardNotice;
 }

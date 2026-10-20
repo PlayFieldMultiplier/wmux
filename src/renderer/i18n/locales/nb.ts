@@ -680,4 +680,5 @@ export const nb = {
   'worktask.cleanup.detail.orphanUnlinked': 'Ingen oppgave eller oppgavepost er knyttet til det — sjekk det, og slett det.',
   'worktask.cleanup.detail.orphanMeta': 'Bare oppgaveposten er igjen, ikke worktreet (en fjerning ble avbrutt) — sjekk det, og slett det.',
   'worktask.cleanup.detail.diskMissing': 'Worktreet mangler på disken (slettet utenfor wmux, eller et krasj) — lukk oppgaven for å rydde opp.',
+  'botsPage.guest.readNotice': "Fra nå av kan en ekstern bot lese meldinger i denne samtalen og skrive i den. Den ser aldri det som ble sagt før den ble lagt til.",
 } as const;

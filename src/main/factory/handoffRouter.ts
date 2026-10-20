@@ -81,7 +81,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { atomicReadJSONSync, atomicWriteTextSync } from '../../daemon/util/atomicWrite';
 import { redactStoredSecretsDeep } from './secretRedaction';
-import { BOT_ID_RE, delegatesFromConversation, isBotRole, isCoordinatorBot, type BotBinding, type BotProfile } from '../../shared/bot';
+import { BOT_ID_RE, BOT_TAKES_NO_GUEST_WAKES, botEngineGatesTools, delegatesFromConversation, isBotRole, isCoordinatorBot, type BotBinding, type BotProfile } from '../../shared/bot';
 import { SHARED_SURFACE, type BotToolName } from '../../shared/botSurface';
 import type { Fact, FactDraft, FactRef } from '../../shared/facts';
 import type { WakeItem, WakeReason } from '../../shared/wake';
@@ -98,6 +98,9 @@ import {
 } from '../../shared/handoff';
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, parseThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import { humanCardIdOfRun } from './humanMessage';
+import { untrackedGuest, type GuestProvenance, type TaintMark } from './wakeTaint';
+import { crossesGuestBoundary } from './guestWorkspaces';
+import { enabledBotsIncludingGuest } from './botStore';
 import {
   DECISION_LIMITS,
   clearThreadDecision,
@@ -215,10 +218,15 @@ export interface HandoffWakeSummary {
   trail?: string[];
 }
 
-/** What the router asks of the taint tracker (wakeTaint.ts). */
+/** What the router asks of the taint tracker (wakeTaint.ts). A mark of
+ *  null is a guest mark that did not reach the file: the hop is refused. */
 export interface HandoffTaintPort {
-  markSent(handoffId: string, senderBotId: string, answers?: readonly string[]): void;
-  markForward(handoffId: string, from: { senderBotId?: string; handoffIds: readonly string[] }): boolean;
+  markSent(handoffId: string, senderBotId: string, answers?: readonly string[], guestSource?: boolean): TaintMark | null;
+  markForward(handoffId: string, from: { senderBotId?: string; handoffIds: readonly string[] }): TaintMark | null;
+  /** The guest provenance of a handoff (WakeTaint.handoffGuest). */
+  handoffGuest?(handoffId: string): GuestProvenance;
+  /** The guest provenance of the wake `botId` is running now. */
+  runningGuest?(botId: string): GuestProvenance;
 }
 
 // ── Decision store port (the real store, bound to one data dir) ────────────
@@ -318,6 +326,7 @@ export function parseHandoff(raw: unknown): Handoff | null {
     ...(h.intro === true && h.kind === 'ask_person' ? { intro: true as const } : {}),
     ...(h.kind === 'ask_person' && typeof h.ownerCardId === 'string' && ID_RE.test(h.ownerCardId) ? { ownerCardId: h.ownerCardId } : {}),
     ...(h.kind === 'ask_person' && typeof h.forHop === 'string' && ID_RE.test(h.forHop) ? { forHop: h.forHop } : {}),
+    ...(typeof h.guestSourced === 'boolean' ? { guestSourced: h.guestSourced } : {}),
     ...(h.kind === 'dispatch' ? relayNext(h.next) : {}),
     ...(h.kind === 'dispatch' && h.relay === true ? { relay: true as const } : {}),
     ...(typeof h.relayStopped === 'string' && oneLine(h.relayStopped, 300) ? { relayStopped: oneLine(h.relayStopped, 300) } : {}),
@@ -374,6 +383,9 @@ interface RouteSpec {
   toBotId?: string;
   clientHandoffId?: string;
   next?: string[];
+  /** The provenance of the card it carries (a room mention): read in
+   *  place of the running turn's. */
+  guestSource?: boolean;
 }
 
 /** The idempotency key of the message a card's mention sends one bot. */
@@ -774,7 +786,7 @@ export class HandoffRouter {
    * across a retried turn or a restart. The caller has dropped the poster
    * itself; an unknown or disabled bot is refused `no_addressee`.
    */
-  mention(sender: BotBinding, card: Pick<RoomCard, 'id' | 'threadId' | 'title' | 'body' | 'refs'>, botIds: readonly string[]): Array<{ botId: string; result: HandoffResult }> {
+  mention(sender: BotBinding, card: Pick<RoomCard, 'id' | 'threadId' | 'title' | 'body' | 'refs' | 'origin'>, botIds: readonly string[]): Array<{ botId: string; result: HandoffResult }> {
     const refs = sanitizeRefs({ pr: card.refs?.pr, issue: card.refs?.issue, headSha: card.refs?.headSha, taskId: card.refs?.taskId, url: card.refs?.url, messageId: card.id });
     // The owner asked the poster in its own 1:1 and it asked around in
     // General: the bots of its room answer in that 1:1, where the owner is.
@@ -792,6 +804,9 @@ export class HandoffRouter {
         namedThread: askedInDm && wakeThread && safeGet(ports.bots, botId)?.workspaceId === sender.workspaceId ? wakeThread : card.threadId,
         toBotId: botId,
         clientHandoffId: mentionKey(card.id, botId),
+        // The card's own provenance (stamped when it was written), not the
+        // turn running when it is routed.
+        guestSource: card.origin === 'guest',
       }),
     }));
   }
@@ -850,6 +865,9 @@ export class HandoffRouter {
       },
       status: 'queued',
       ...(spec.clientHandoffId ? { clientHandoffId: spec.clientHandoffId } : {}),
+      // Said on a refused record too: a refusal wakes its sender
+      // (markSent below sets it for a sent one).
+      guestSourced: (spec.guestSource ?? this.runningGuest(sender.botId) !== false) || (!!parent && this.guestOf(parent)),
       createdAt: this.now(),
       updatedAt: this.now(),
     };
@@ -883,6 +901,11 @@ export class HandoffRouter {
     const target = this.addresseeFor(sender, kind, parent, spec.toWorkspaceId, spec.toBotId);
     if ('refusal' in target) return this.refuse(draft, target.refusal, target.detail);
     draft.to = { kind: 'bot', workspaceId: target.bot.workspaceId, botId: target.bot.id };
+    // A hop not known clean of a guest's words stays in the sender's own
+    // workspace (a send, a reply, a room mention).
+    if (draft.guestSourced === true && target.bot.workspaceId !== sender.workspaceId) {
+      return this.refuse(draft, 'no_addressee', 'in a turn that comes from an external guest\'s message (or one wmux cannot tell the source of), a bot reaches only the bots of its own workspace');
+    }
 
     if (spec.next) {
       if (!coordinator) return this.refuse(draft, 'surface', 'only a coordinator names the bots that follow (next)');
@@ -915,14 +938,18 @@ export class HandoffRouter {
       return refused;
     }
     // Marked now, in the sender's turn, from the wake it is running; a reply
-    // is also as tainted as the handoff it answers.
-    this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : []);
+    // is also as tainted (and as guest-sourced) as the handoff it answers.
+    // A guest mark is on disk before the hop is, or the hop is not sent.
+    const mark = this.opts.taint?.()?.markSent(draft.id, sender.botId, parent ? [parent.id] : [], spec.guestSource);
+    if (mark === null) return { ok: false, code: 'write_failed', message: 'the handoff could not be recorded' };
+    // Said on the record too, so it outlives the mark.
+    const sending: Handoff = mark === undefined ? draft : { ...draft, guestSourced: mark === 'guest' };
     // A result on a relay's hop that names bots to follow goes on to them;
     // any other is delivered (and, when it ends a coordinator's thread,
     // pointed to from where it was said).
     const result = kind === 'result' && parent && (parent.next?.length ?? 0) > 0
-      ? this.relayOn(draft, parent, target.bot)
-      : this.deliver(draft, target.bot);
+      ? this.relayOn(sending, parent, target.bot)
+      : this.deliver(sending, target.bot);
     if (result.ok && kind === 'result' && parent) this.pointToThread(draft.id, parent, 'finished');
     // A refusal the coordinator took ended its work there.
     if (result.ok && kind === 'refusal' && parent) this.pointToThread(draft.id, parent, 'stopped');
@@ -1053,12 +1080,17 @@ export class HandoffRouter {
       return null;
     }
     // Before it is stored or announced: its delivery never derives a mark
-    // from the coordinator's own wake.
-    this.opts.taint?.()?.markForward(id, {
+    // from the coordinator's own wake. A guest mark is on disk first, and
+    // the dispatch records it.
+    const mark = this.opts.taint?.()?.markForward(id, {
       ...(senderBotId ? { senderBotId } : {}),
       handoffIds: [result.id, parent.id, root.id],
     });
-    const sent = this.deliver(f, next);
+    if (mark === null) {
+      this.stopRelay(result.id, lead, 'its next hop could not be recorded');
+      return null;
+    }
+    const sent = this.deliver(mark === undefined ? f : { ...f, guestSourced: mark === 'guest' }, next);
     if (!sent.ok) {
       this.stopRelay(result.id, lead, `${this.partyLabel(f.to)} did not take the work (${sent.message})`);
       return null;
@@ -1083,6 +1115,11 @@ export class HandoffRouter {
   private wakeForStop(resultId: string, lead: BotProfile): void {
     const result = this.records.get(resultId);
     if (!result) return;
+    // The island holds here too: this wake does not go through deliver.
+    if (result.from.kind === 'bot' && crossesGuestBoundary(result.from.workspaceId, lead.workspaceId)) {
+      this.log(`relay stopped at ${result.id}; ${lead.id} is across a guest workspace's boundary and is not woken`);
+      return;
+    }
     let wakeId: string | undefined;
     try {
       wakeId = this.opts.ports().wakes?.enqueue({
@@ -1148,6 +1185,7 @@ export class HandoffRouter {
       title: `${how === 'stopped' ? 'Stopped' : 'Finished'}: ${root.payload.title}`,
       notice: { code: how === 'stopped' ? 'thread.stopped' : 'thread.finished', args: { title: root.payload.title } },
       refs: { handoffId: result.id, threadId: root.threadId },
+      ...(this.guestOf(root) || this.guestOf(result) ? { origin: 'guest' as const } : {}),
     }, ownerCard && ownerCard.threadId === saidIn && ownerCard.kind === 'human' ? { replyTo: ownerCard.id } : undefined);
     // Written once per result: the mark is on the result itself.
     const now = card ? this.records.get(resultId) : null;
@@ -1195,7 +1233,8 @@ export class HandoffRouter {
   private leadOf(bots: NonNullable<ReturnType<HandoffRouterOptions['ports']>['bots']>, workspaceId: string, senderId: string): BotProfile | null {
     let enabled: BotProfile[] = [];
     try {
-      enabled = bots.listEnabled();
+      // One workspace's own bots, a guest workspace's too.
+      enabled = enabledBotsIncludingGuest(bots);
     } catch {
       return null;
     }
@@ -1262,6 +1301,16 @@ export class HandoffRouter {
 
   /** Store, announce and wake. A wake the queue does not take refuses the hop. */
   private deliver(draft: Handoff, bot: BotProfile): HandoffResult {
+    // The island (guestWorkspaces.ts): a bot's hop between a guest workspace
+    // and any other is never delivered. Every handoff wake goes through
+    // here: a send or reply, a mention, a relay's forward, a restart's
+    // redelivery and the owner's answer.
+    if (draft.from.kind === 'bot' && crossesGuestBoundary(draft.from.workspaceId, bot.workspaceId)) {
+      return this.refuse(draft, 'no_addressee', 'a guest workspace\'s bots reach only the bots of their own workspace, and only those reach them');
+    }
+    // A hop not known clean of a guest's words never wakes a bot whose
+    // engine cannot hold its tools back for it.
+    if (!botEngineGatesTools(bot.engine) && this.guestOf(draft)) return this.refuse(draft, 'no_addressee', `${this.partyLabel(draft.to)}: ${BOT_TAKES_NO_GUEST_WAKES}`);
     const h: Handoff = { ...draft, status: 'queued' };
     if (this.records.get(h.id)?.status !== 'queued' && !this.put(h)) {
       return { ok: false, code: 'write_failed', message: 'the handoff could not be stored' };
@@ -1312,6 +1361,31 @@ export class HandoffRouter {
       to: { botId: bot.id, role: bot.role, workspaceId: bot.workspaceId },
       wakeId,
     };
+  }
+
+  /** Whether cards derived from `h` are guest-sourced: its own record says
+   *  so, or the tracker does not know it to be clean. */
+  private guestOf(h: Handoff): boolean {
+    if (h.guestSourced === true) return true;
+    const taint = this.opts.taint?.();
+    if (!taint?.handoffGuest) return untrackedGuest() !== false;
+    try {
+      return taint.handoffGuest(h.id) !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  /** The guest provenance of the wake `botId` is running now; false
+   *  without a tracker that says (a router built without one). */
+  private runningGuest(botId: string): GuestProvenance {
+    const taint = this.opts.taint?.();
+    if (!taint?.runningGuest) return untrackedGuest();
+    try {
+      return taint.runningGuest(botId);
+    } catch {
+      return 'unknown';
+    }
   }
 
   private refuse(draft: Handoff, code: HandoffRefusalCode, detail: string): HandoffResult {
@@ -1414,6 +1488,8 @@ export class HandoffRouter {
     // The default key is taken now, in call order, like a send's.
     const asking = runningWake(ports, sender.botId);
     const clientHandoffId = params?.clientHandoffId ?? wakeOrdinals.next(asking, 'handoff');
+    // Read now too: the question may be stored after this wake has ended.
+    const askingGuest = this.runningGuest(sender.botId) !== false;
     return this.serial(async () => {
       const title = oneLine(params?.title, HANDOFF_STORE_LIMITS.TITLE_MAX);
       if (!title) return invalid('title is required');
@@ -1459,6 +1535,8 @@ export class HandoffRouter {
         ...(asking?.reasonKind === 'intro' ? { intro: true as const } : {}),
         ...(asking?.ownerCardId ? { ownerCardId: asking.ownerCardId } : {}),
         ...(forHop ? { forHop } : {}),
+        // Always said: an answer to it inherits it (wakeTaint.ts).
+        guestSourced: askingGuest,
         createdAt: this.now(),
         updatedAt: this.now(),
       };
@@ -1539,6 +1617,7 @@ export class HandoffRouter {
       refs: { ...(h.payload.refs ?? {}), handoffId: h.id, decisionId: decision.id },
       state: 'open',
       ...(h.intro ? { greeting: true as const } : {}),
+      ...(this.guestOf(h) ? { origin: 'guest' as const } : {}),
     }, replyTo ? { replyTo } : undefined);
     return { decision };
   }
@@ -1751,7 +1830,8 @@ export class HandoffRouter {
     const ws = partyWorkspace(h.from);
     const rooms = this.opts.rooms();
     if (!ws || !rooms) return null;
-    return rooms.find(ws, (c) => c.kind === 'question' && c.refs?.handoffId === h.id)?.id ?? null;
+    // Main's own bookkeeping: a guest-sourced question card is found too.
+    return rooms.find(ws, (c) => c.kind === 'question' && c.refs?.handoffId === h.id, { guests: true })?.id ?? null;
   }
 
   private closeQuestionCard(h: Handoff): void {
@@ -1773,6 +1853,7 @@ export class HandoffRouter {
         title: `Question closed: ${h.payload.title}`,
         body: why,
         refs: { handoffId: h.id },
+        ...(this.guestOf(h) ? { origin: 'guest' as const } : {}),
       });
     }
   }
@@ -1860,6 +1941,9 @@ export class HandoffRouter {
         body: (dismissed ? DISMISSED_ANSWER : text).slice(0, HANDOFF_STORE_LIMITS.ANSWER_MAX),
         ...(ask.payload.refs ? { refs: ask.payload.refs } : {}),
       },
+      // As guest-sourced as its question; a question that does not say is
+      // treated as one.
+      guestSourced: ask.guestSourced !== false,
       status: 'queued',
       createdAt: this.now(),
       updatedAt: this.now(),

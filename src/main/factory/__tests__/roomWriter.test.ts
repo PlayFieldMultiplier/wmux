@@ -12,6 +12,9 @@ import {
   factRooms,
   parseCardLine,
   sanitizeRefs,
+  setFactGuestProbe,
+  setGuestTurnProbe,
+  expectGuestProbes,
   systemCardForFact,
   writeFactCards,
   formatHeldUntil,
@@ -133,6 +136,16 @@ describe('RoomWriter store', () => {
     expect(w.read('ws1').cards).toHaveLength(1);
     const reloaded = writer().post({ workspaceId: 'ws1', kind: 'status', actor: SYS, title: 'after restart', clientPostId: 'wake:w1:1' });
     expect(reloaded).toMatchObject({ ok: true, duplicate: true });
+  });
+
+  it('a guest card\'s clientPostId returns it only to another guest post', () => {
+    const w = writer();
+    const guest = { workspaceId: 'ws1', kind: 'guest' as const, actor: SYS, title: 'External guest: G', body: 'GUEST-WORDS', guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'G' }, clientPostId: 'guest:g:m1' };
+    expect(w.post(guest)).toMatchObject({ ok: true });
+    const reused = w.post({ workspaceId: 'ws1', kind: 'status', actor: { kind: 'bot', workspaceId: 'ws1', botId: 'bot-0000aaaa' }, title: 'x', clientPostId: 'guest:g:m1' });
+    expect(reused).toMatchObject({ ok: false, code: 'invalid' });
+    expect(JSON.stringify(reused)).not.toContain('GUEST-WORDS');
+    expect(w.post(guest)).toMatchObject({ ok: true, duplicate: true });
   });
 
   it('replyTo must name a card of the same thread', () => {
@@ -329,6 +342,48 @@ describe('facts → system cards', () => {
     writeFactCards(w, fact('handoff.received', { workspaceId: 'ws2', ref: { handoffId: 'h-9' }, payload: { handoffKind: 'dispatch', title: 'x', threadId: 'handoff:h-9', toWorkspaceId: 'ws2', fromWorkspaceId: 'hq' } }), bots);
     expect(w.read('ws2').cards).toHaveLength(1);
     expect(w.read('hq').cards).toHaveLength(1);
+  });
+
+  it('the cards of a fact not known clean of a guest\'s words are guest-sourced: kept out of a clean read, across a reload', () => {
+    const w = writer();
+    setFactGuestProbe((f) => f.ref?.handoffId === 'h-guest');
+    try {
+      const payload = { handoffKind: 'answer', title: 'GUEST-TITLE', answer: 'GUEST-ANSWER', threadId: 'general', toWorkspaceId: 'ws1' };
+      writeFactCards(w, fact('handoff.received', { workspaceId: 'ws1', ref: { handoffId: 'h-guest' }, payload }), bots);
+      writeFactCards(w, fact('handoff.received', { workspaceId: 'ws1', ref: { handoffId: 'h-clean' }, payload: { ...payload, title: 'clean', answer: 'fine' } }), bots);
+    } finally {
+      setFactGuestProbe(null);
+    }
+    expect(w.read('ws1', { guests: true }).cards.map((c) => [c.title.includes('GUEST-TITLE'), c.origin])).toEqual([[true, 'guest'], [false, undefined]]);
+    const clean = JSON.stringify(w.read('ws1').cards);
+    expect(clean).not.toContain('GUEST-');
+    expect(clean).toContain('fine');
+    const reloaded = writer();
+    expect(JSON.stringify(reloaded.read('ws1').cards)).not.toContain('GUEST-');
+    expect(reloaded.read('ws1', { guests: true }).cards[0]?.origin).toBe('guest');
+  });
+
+  it('where the probes are expected but missing, bot and fact cards are stamped guest-sourced; a caller\'s captured clean is kept', () => {
+    const w = writer();
+    const botActor = { kind: 'bot' as const, workspaceId: 'ws1', botId: 'bot-00000001' };
+    expectGuestProbes();
+    try {
+      w.append({ workspaceId: 'ws1', kind: 'status', actor: botActor, title: 'NO-PROBE' });
+      writeFactCards(w, fact('handoff.received', { workspaceId: 'ws1', ref: { handoffId: 'h-x' }, payload: { handoffKind: 'dispatch', title: 'NO-PROBE-FACT', threadId: 'general', toWorkspaceId: 'ws1' } }), bots);
+    } finally {
+      expectGuestProbes(false);
+    }
+    expect(JSON.stringify(w.read('ws1').cards)).not.toContain('NO-PROBE');
+    setGuestTurnProbe(() => true);
+    try {
+      w.append({ workspaceId: 'ws1', kind: 'status', actor: botActor, title: 'CAPTURED-CLEAN', origin: 'clean' });
+      w.append({ workspaceId: 'ws1', kind: 'status', actor: botActor, title: 'IN-GUEST-WAKE' });
+    } finally {
+      setGuestTurnProbe(null);
+    }
+    const clean = w.read('ws1').cards;
+    expect(clean.map((c) => c.title)).toEqual(['CAPTURED-CLEAN']);
+    expect(clean[0]).not.toHaveProperty('origin');
   });
 
   it('a delivered room mention writes no line; a plain message does, and a refused mention writes a refusal card', () => {
@@ -558,5 +613,20 @@ describe('inputRequiredWhy (#2231)', () => {
     expect(inputRequiredWhy("worker is waiting on Claude Code's auto-mode onboarding; it needs a keypress in the pane")).toBe('firstRun');
     expect(inputRequiredWhy("launch failed: no agent started in pane daemon-70a64bc2 within 45s, so the pane sits at its shell prompt; re-run the task's launch line in that pane (the fan-out result carries it)")).toBe('launchFailed');
     expect(inputRequiredWhy('I need the staging API key')).toBeNull();
+  });
+});
+
+
+describe('RoomWriter — external guests\' cards', () => {
+  it('read and find leave guest cards out unless asked; paging still advances past them', () => {
+    const w = writer();
+    w.append({ workspaceId: 'ws', threadId: 'general', kind: 'human', actor: { kind: 'human' }, title: 'one' });
+    w.append({ workspaceId: 'ws', threadId: 'general', kind: 'guest', actor: SYS, title: 'External guest: G', body: 'x', guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'G' } });
+    w.append({ workspaceId: 'ws', threadId: 'general', kind: 'human', actor: { kind: 'human' }, title: 'three' });
+    expect(w.read('ws').cards.map((c) => c.title)).toEqual(['one', 'three']);
+    expect(w.read('ws', { guests: true }).cards.map((c) => c.kind)).toEqual(['human', 'guest', 'human']);
+    expect(w.read('ws', { sinceSeq: 1, limit: 1 })).toMatchObject({ cards: [{ title: 'three' }], hasMore: false });
+    expect(w.find('ws', (c) => c.kind === 'guest')).toBeNull();
+    expect(w.find('ws', (c) => c.kind === 'guest', { guests: true })?.title).toBe('External guest: G');
   });
 });

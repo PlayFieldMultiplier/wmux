@@ -675,4 +675,5 @@ export const vi = {
   'worktask.cleanup.detail.orphanUnlinked': 'Không có tác vụ hay bản ghi tác vụ nào liên kết với nó — kiểm tra, rồi xóa.',
   'worktask.cleanup.detail.orphanMeta': 'Chỉ còn bản ghi tác vụ, không có worktree (việc xóa bị gián đoạn) — kiểm tra, rồi xóa.',
   'worktask.cleanup.detail.diskMissing': 'Worktree không có trên đĩa (bị xóa bên ngoài wmux, hoặc do sự cố) — đóng tác vụ để dọn dẹp.',
+  'botsPage.guest.readNotice': "Từ giờ, một bot bên ngoài có thể đọc tin nhắn trong cuộc trò chuyện này và đăng vào đó. Nó không bao giờ thấy những gì đã nói trước khi được thêm vào.",
 } as const;

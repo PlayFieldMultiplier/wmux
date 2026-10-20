@@ -49,6 +49,8 @@ import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, type RoomCa
 import { capBody, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
 import { redactStoredSecrets } from './secretRedaction';
 import { HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
+import { crossesGuestBoundary } from './guestWorkspaces';
+import { enabledBotsIncludingGuest } from './botStore';
 
 /** Longest human message a wake carries (the wake caps its reason at 16 KiB). */
 const HUMAN_WAKE_TEXT_MAX = 16 * 1024;
@@ -57,7 +59,9 @@ const HUMAN_FACT_TEXT_MAX = 3000;
 
 function enabledBots(bots: FactoryRoomPorts['bots'] | undefined): BotProfile[] {
   try {
-    return (bots?.listEnabled() ?? []).filter((b) => b.enabled);
+    // The owner's own message: any workspace's bots, guest ones included;
+    // postHumanMessage holds the boundary.
+    return enabledBotsIncludingGuest(bots).filter((b) => b.enabled);
   } catch {
     return [];
   }
@@ -250,6 +254,13 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     : group ? { mentions: input.mentions, toBotId: input.toBotId, to: input.to, members: group.memberIds }
     : { mentions: input.mentions, toBotId: input.toBotId, to: input.to };
   const { bots: to } = humanAddressees(ports.bots, workspaceId, addressing);
+  // A guest workspace is an island: a message in one names only its own
+  // bots, and one elsewhere names none of a guest workspace's (desktop,
+  // phone and the operator's room.post all come through here).
+  const named = [...(input.mentions ?? []), ...(input.toBotId ? [input.toBotId] : [])].map((id) => safeGet(ports, id)).filter((b): b is BotProfile => !!b);
+  if ([...named, ...to].some((b) => crossesGuestBoundary(workspaceId, b.workspaceId))) {
+    return { ok: false, code: 'invalid', message: 'a guest workspace\'s bots are reached only from that workspace, and its messages reach only its own bots' };
+  }
   const botIds = to.map((b) => b.id);
   const refs: RoomCard['refs'] = { ...(input.refs ?? {}) };
   delete refs.botId;
@@ -284,7 +295,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     const results: HumanAddresseeResult[] = [];
     for (const id of ids) {
       const bot = safeGet(ports, id);
-      if (!bot || !bot.enabled) continue;
+      if (!bot || !bot.enabled || crossesGuestBoundary(workspaceId, bot.workspaceId)) continue;
       const wakeId = wake(card, bot, said, ids.length > 1);
       results.push({ botId: bot.id, role: bot.role, ...(wakeId ? { wakeId } : {}) });
     }

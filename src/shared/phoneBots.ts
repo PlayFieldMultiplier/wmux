@@ -62,6 +62,9 @@ export interface PhoneBotsBot {
   presence: PhoneBotPresence;
   queueDepth: number;
   avatar: PhoneBotAvatar;
+  /** The bot is in a guest workspace (external guest bots may join its
+   *  conversations; its turns run under guest rules). Absent: not one. */
+  guestWorkspace?: true;
 }
 
 export interface PhoneBotsConversation {
@@ -93,6 +96,8 @@ export interface PhoneBotsConversation {
   unread: number | null;
   /** Questions asked in it that are not answered yet. */
   openQuestions: number;
+  /** The conversation is in a guest workspace (see PhoneBotsBot). Absent: not one. */
+  guestWorkspace?: true;
   /** The work this conversation handed off, one card per thread it started
    *  (the desktop's work card), newest first, at most PHONE_BOTS_LIMITS.work.
    *  Absent: none. */
@@ -281,6 +286,7 @@ export function parsePhoneBotsBot(value: unknown): PhoneBotsBot | null {
     id, name: line(value.name, PHONE_BOTS_LIMITS.name) ?? '', role, workspaceId,
     enabled: value.enabled, isHq: value.isHq, presence, queueDepth,
     avatar: { hue: isIdentitySlot(avatar.hue) ? avatar.hue : null, picture: avatar.picture },
+    ...(value.guestWorkspace === true ? { guestWorkspace: true as const } : {}),
   };
 }
 
@@ -324,6 +330,7 @@ export function parsePhoneBotsConversation(value: unknown): PhoneBotsConversatio
     ...(lastPreview ? { lastPreview } : {}),
     ...(lastPreview && lastActor ? { lastActor } : {}),
     unread, openQuestions,
+    ...(value.guestWorkspace === true ? { guestWorkspace: true as const } : {}),
     ...(work ? { work } : {}),
   };
 }

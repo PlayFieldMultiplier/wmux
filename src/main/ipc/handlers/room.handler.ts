@@ -333,7 +333,8 @@ async function pickPhotos(getWindow: () => BrowserWindow | null): Promise<string
 function cardFile(raw: unknown, writer: RoomWriter | null, store: RoomFileStore | null): { workspaceId: string; meta: RoomFile } | null {
   const { workspaceId, fileId } = obj(raw);
   if (!isRoomWorkspaceId(workspaceId) || typeof fileId !== 'string' || !ROOM_FILE_ID_RE.test(fileId) || !writer || !store) return null;
-  const card = writer.find(workspaceId, (c) => c.actor.kind === 'bot' && !!c.files?.some((f) => f.id === fileId));
+  // The owner's view: a guest-sourced bot card's files open too.
+  const card = writer.find(workspaceId, (c) => c.actor.kind === 'bot' && !!c.files?.some((f) => f.id === fileId), { guests: true });
   const meta = card?.files?.find((f) => f.id === fileId);
   return meta ? { workspaceId, meta } : null;
 }

@@ -82,6 +82,56 @@ describe('bot.resumeWorker', () => {
     expect(await full.call({ taskId: TASK }, botCtx(BOT))).toMatchObject({ ok: false, code: 'no_slot' });
     expect(full.p.typeLine).not.toHaveBeenCalled();
   });
+
+  it('is judged again, by the wake it was asked in, right before the line is typed: a wake no longer known clean types nothing', async () => {
+    const handlers = new Map<string, (p: Record<string, unknown>, ctx?: RpcContext) => Promise<unknown>>();
+    let refusal: string | null = null;
+    const asked: Array<string | undefined> = [];
+    const p = ports();
+    p.listSessions = async () => {
+      // Its record gone meanwhile: the wake's provenance is no longer known.
+      refusal = 'this turn comes from an external guest\'s message';
+      return [{ id: 'daemon-1', spawnCwd: dir, agentProcessAlive: false }];
+    };
+    registerWorkerResumeRpc({ register: (m: string, h: never) => handlers.set(m, h), onBotRefused: () => undefined } as never, {
+      ports: () => p, slots: () => null, factoryEnabled: () => true, wakeId: () => 'w-1',
+      launchRefusal: (_botId, wakeId) => { asked.push(wakeId); return refusal; },
+    });
+    expect(await handlers.get(BOT_RPC.resumeWorker)!({ taskId: TASK }, botCtx(BOT))).toMatchObject({ ok: false, code: 'not_now' });
+    expect(p.typeLine).not.toHaveBeenCalled();
+    expect(asked).toEqual(['w-1', 'w-1']);
+  });
+});
+
+describe('bot.resumeWorker message', () => {
+  it('is judged again after the wait for the agent, right before the message is sent', async () => {
+    const handlers = new Map<string, (p: Record<string, unknown>, ctx?: RpcContext) => Promise<unknown>>();
+    let refusal: string | null = null;
+    const p = ports();
+    const submit = vi.fn(async () => true);
+    p.submit = submit;
+    p.sleep = async () => undefined;
+    p.agentAlive = async () => {
+      refusal = 'this turn comes from an external guest\'s message';
+      return true;
+    };
+    registerWorkerResumeRpc({ register: (m: string, h: never) => handlers.set(m, h), onBotRefused: () => undefined } as never, {
+      ports: () => p, slots: () => null, factoryEnabled: () => true, wakeId: () => 'w-1', launchRefusal: () => refusal,
+    });
+    const ctx = { bot: { botId: BOT, workspaceId: 'ws-owner' } } as unknown as RpcContext;
+    expect(await handlers.get(BOT_RPC.resumeWorker)!({ taskId: TASK, message: 'go on' }, ctx)).toMatchObject({ ok: true, messageDelivered: false });
+    expect(p.typeLine).toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+    // Still clean after the wait: the message goes with the guard for the paste and the Enter.
+    refusal = null;
+    p.agentAlive = async () => true;
+    await store.setState(TASK, 'stopped', 2);
+    expect(await handlers.get(BOT_RPC.resumeWorker)!({ taskId: TASK, message: 'go on' }, ctx)).toMatchObject({ ok: true, messageDelivered: true });
+    const guard = (submit.mock.calls[0] as unknown[])[2] as () => string | null;
+    expect(guard()).toBeNull();
+    refusal = 'no longer';
+    expect(guard()).toBe('no longer');
+  });
 });
 
 describe('FACTORY_WORKER_RESUME (IPC guard)', () => {

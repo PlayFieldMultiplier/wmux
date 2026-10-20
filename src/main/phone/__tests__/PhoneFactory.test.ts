@@ -3,8 +3,9 @@ vi.mock('../../pipe/handlers/_bridge', () => ({ sendToRenderer: vi.fn() }));
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { handlePhoneBotsCommand, handlePhoneRoomCommand, phoneBotsReply, withPhoneFactory, type PhoneBotsPorts, type PhoneFactoryPorts } from '../PhoneFactory';
+import { handleGuestCards, handlePhoneBotsCommand, handlePhoneRoomCommand, phoneBotsReply, withPhoneFactory, type PhoneBotsPorts, type PhoneFactoryPorts } from '../PhoneFactory';
 import { RoomWriter } from '../../factory/roomWriter';
+import { setRedactedSecrets } from '../../factory/secretRedaction';
 import type { BotProfile } from '../../../shared/bot';
 import type { BotTaskView } from '../../../shared/botTask';
 import type { PhoneBotsReply } from '../../../shared/phoneBots';
@@ -157,6 +158,28 @@ describe('the phone wire — work cards and approval actions over a real room', 
     expect(phoneBotsReply(botsPorts(writer))?.conversations.find((c) => c.threadId === DM)?.work).toHaveLength(1);
   });
 
+  it('marks a guest workspace\'s bots and conversations for the owner\'s phone', () => {
+    const { writer } = room();
+    const reply = phoneBotsReply(botsPorts(writer, { guestWorkspace: (ws) => ws === 'ws-1' }))!;
+    expect(reply.bots.every((b) => b.guestWorkspace === true)).toBe(true);
+    expect(reply.conversations.every((c) => c.guestWorkspace === true)).toBe(true);
+    const clean = phoneBotsReply(botsPorts(writer, { guestWorkspace: () => false }))!;
+    expect(clean.bots.some((b) => 'guestWorkspace' in b)).toBe(false);
+    expect(clean.conversations.some((c) => 'guestWorkspace' in c)).toBe(false);
+  });
+
+  it('a guest\'s read is answered only in a guest workspace, refused while that cannot be told', () => {
+    const { writer } = room();
+    const p = botsPorts(writer);
+    const read = { workspaceId: 'ws-1', threadId: DM, limit: 50 };
+    const page = handleGuestCards(read, p, () => true) as PhoneRoomCardsReply;
+    expect(page.cards.length).toBeGreaterThan(0);
+    // An older guest record whose workspace was never flagged reads nothing.
+    expect(handleGuestCards(read, p, () => false)).toEqual({ notFound: true });
+    expect(handleGuestCards(read, p, () => 'unknown')).toEqual({ unavailable: true });
+    expect(handleGuestCards({ ...read, threadId: 'task:t1' }, p, () => true)).toEqual({ invalid: true });
+  });
+
   it('serves an approval card its action and a system card its published notice', () => {
     const { writer, approval } = room();
     const page = handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', threadId: DM, limit: 50 }, botsPorts(writer)) as PhoneRoomCardsReply;
@@ -186,5 +209,19 @@ describe('the phone wire — work cards and approval actions over a real room', 
     // The daemon's parse keeps it only on a Resume card that names its task.
     expect(parsePhoneRoomCard({ ...cards.find((c) => c.id === resumed.id), resumable: true })).not.toHaveProperty('resumable');
     expect(parsePhoneRoomCard(cards.find((c) => c.id === paused.id))?.resumable).toBe(true);
+  });
+
+  it('masks a stored key value in a bot\'s name as it masks card text', () => {
+    const { writer, reply } = room();
+    setRedactedSecrets([{ name: 'K', value: 'orchid orchard' }]);
+    try {
+      const named = { ...LEAD, name: 'Lead orchid orchard' };
+      const page = handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', threadId: DM, limit: 50 }, botsPorts(writer, { bots: () => [named, DEV] })) as PhoneRoomCardsReply;
+      const actor = page.cards.find((c) => c.id === reply.id)?.actor;
+      expect(JSON.stringify(actor)).not.toContain('orchid orchard');
+      expect(JSON.stringify(actor)).toContain('Lead');
+    } finally {
+      setRedactedSecrets([]);
+    }
   });
 });

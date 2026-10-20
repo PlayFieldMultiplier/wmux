@@ -25,16 +25,19 @@
 // Any other caller — no bot binding and not the operator — is refused.
 
 import fs from 'node:fs';
+import { guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
 import path from 'node:path';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { isBotRole, isCoordinatorBot } from '../../../shared/bot';
-import { SHARED_SURFACE, type BotToolName, type FactoryRefusal } from '../../../shared/botSurface';
+import { GUEST_TURN_SURFACE_REFUSAL, SHARED_SURFACE, type BotToolName, type FactoryRefusal } from '../../../shared/botSurface';
 import {
   BOT_POSTABLE_CARD_KINDS,
   GENERAL_THREAD,
   ROOM_EVENT,
   ROOM_LIMITS,
   ROOM_RPC,
+  isGuestSourcedCard,
   parseThreadId,
   type CardKind,
   type RoomCard,
@@ -59,6 +62,7 @@ import {
   capBody,
   getRoomWriter,
   isClientId,
+  isGuestSourcedTurn,
   isRoomWorkspaceId,
   oneLine,
   resolveRoomPorts,
@@ -135,6 +139,9 @@ export interface RoomHandlerDeps {
   files?: () => RoomFileStore | null;
   /** The folders a bot's `files` may come from. Default: botFileRoots. */
   fileRoots?: (bot: BotBinding) => Promise<BotFileRoots>;
+  /** The guest provenance of the bot's running wake. Default: wakeTaint.ts's
+   *  tracker (guestOfRunningWake). */
+  guestWake?: (botId: string) => GuestProvenance;
 }
 
 /** Where a bot's `files` may come from, and what a relative path means. */
@@ -307,17 +314,23 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     if (threadRefused) return refusal('invalid', threadRefused);
     const threadId = pinned ?? wakeThread ?? GENERAL_THREAD;
     const wake = runningWake(ports, bot.botId);
+    // Decided now, before the file copy waits: the card keeps its wake's
+    // provenance even if that wake ends meanwhile.
+    const fromGuest = isGuestSourcedTurn(bot.botId);
     const clientPostId = p.clientPostId ?? wakeOrdinals.next(wake, 'post');
     // A card the bot names no parent for answers the owner message its wake
     // is about, when it lands in that message's thread. A post moved to the
     // opened thread drops the parent it named in the conversation.
     const replyTo = (pinned === namedThread ? p.replyTo : undefined) ?? wakeReplyTo(writer, wake, bot.workspaceId, threadId);
-    const { valid, dropped } = settleMentions(ports, bot, mentions ?? []);
+    const { valid, dropped } = settleMentions(ports, bot, mentions ?? [], fromGuest);
     // Files are copied once per post: a repeat whose card is up keeps that
     // card's files and reads nothing (the task folder may be gone by then).
-    const prior = clientPostId ? writer.find(bot.workspaceId, (c) => c.clientPostId === clientPostId) : null;
+    const prior = clientPostId ? writer.find(bot.workspaceId, (c) => c.clientPostId === clientPostId, { guests: true }) : null;
     let copied: { files: RoomFile[]; store: RoomFileStore } | null = null;
     if (Array.isArray(filePaths) && filePaths.length > 0 && !prior) {
+      // Files come from the repository or a worker's folder: not in a wake
+      // not known clean.
+      if (fromGuest) return refusal('not_now', `files: ${GUEST_TURN_SURFACE_REFUSAL}`);
       const c = await copyBotFiles(bot, filePaths as string[], deps);
       if (!c.ok) return c;
       copied = c;
@@ -334,6 +347,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
       ...(replyTo ? { replyTo } : {}),
       ...(clientPostId ? { clientPostId } : {}),
       ...(copied ? { files: copied.files } : {}),
+      origin: fromGuest ? 'guest' as const : 'clean' as const,
     });
     // Copies no card took (a refused post, or one that found its card) go.
     if (copied) {
@@ -419,7 +433,7 @@ export async function postTurnText(
   const attemptKey = `wake:${item.id}:`;
   const own = writer.find(profile.workspaceId, (c) => c.threadId === threadId
     && c.actor.kind === 'bot' && c.actor.botId === profile.id
-    && (c.at > since || c.clientPostId?.startsWith(attemptKey) === true));
+    && (c.at > since || c.clientPostId?.startsWith(attemptKey) === true), { guests: true });
   if (own) return null;
   const nl = trimmed.indexOf('\n');
   const first = nl < 0 ? trimmed : trimmed.slice(0, nl);
@@ -441,9 +455,12 @@ export function settleMentions(
   ports: Partial<FactoryRoomPorts>,
   poster: BotBinding,
   mentions: readonly string[],
-): { valid: string[]; dropped: Array<{ botId: string; reason: 'self' | 'not_enabled' }> } {
+  /** The post comes from a wake not known clean of a guest's words: it
+   *  names only bots of the poster's own workspace. */
+  fromGuest = false,
+): { valid: string[]; dropped: Array<{ botId: string; reason: 'self' | 'not_enabled' | 'other_workspace' }> } {
   const valid: string[] = [];
-  const dropped: Array<{ botId: string; reason: 'self' | 'not_enabled' }> = [];
+  const dropped: Array<{ botId: string; reason: 'self' | 'not_enabled' | 'other_workspace' }> = [];
   for (const botId of mentions) {
     if (botId === poster.botId) {
       dropped.push({ botId, reason: 'self' });
@@ -455,8 +472,12 @@ export function settleMentions(
     } catch {
       bot = null;
     }
-    if (bot && bot.enabled) valid.push(botId);
-    else dropped.push({ botId, reason: 'not_enabled' });
+    if (!bot || !bot.enabled) dropped.push({ botId, reason: 'not_enabled' });
+    // Layer 2: a post not known clean names its own workspace's bots only.
+    else if (fromGuest && bot.workspaceId !== poster.workspaceId) dropped.push({ botId, reason: 'other_workspace' });
+    // The island: either side a guest workspace means the same workspace.
+    else if (crossesGuestBoundary(poster.workspaceId, bot.workspaceId)) dropped.push({ botId, reason: 'other_workspace' });
+    else valid.push(botId);
   }
   return { valid, dropped };
 }
@@ -475,7 +496,10 @@ function readableWorkspace(
   if (tool && !botHasTool(bot, tool)) return refusal('surface', `${tool} is not on the bot surface`);
   if (requested === undefined || requested === bot.workspaceId) return bot.workspaceId;
   if (!botReadsEveryRoom(ports, bot.botId)) return refusal('cross_workspace', 'a bot reads its own workspace\'s room; another room is a Coordinator\'s read');
-  return isRoomWorkspaceId(requested) ? requested : refusal('invalid', 'workspaceId is not a workspace id');
+  if (!isRoomWorkspaceId(requested)) return refusal('invalid', 'workspaceId is not a workspace id');
+  // A Coordinator never reads a guest workspace's room (guestWorkspaces.ts).
+  if (crossesGuestBoundary(bot.workspaceId, requested)) return refusal('cross_workspace', 'a guest workspace\'s room is read only from inside it');
+  return requested;
 }
 
 export function handleRoomRead(raw: unknown, ctx: RpcContext | undefined, deps: RoomHandlerDeps): unknown {
@@ -493,10 +517,22 @@ export function handleRoomRead(raw: unknown, ctx: RpcContext | undefined, deps: 
     if (!threadId || typeof p.markThroughSeq !== 'number') return refusal('invalid', 'markThroughSeq needs a threadId and a seq');
     writer.markRead(ws, threadId, p.markThroughSeq);
   }
+  // An external guest's cards are outside text. The owner always sees them;
+  // a bot only in a wake an external guest's message started (or one
+  // derived from it), which is guest-sourced from its start: a clean wake
+  // never reads them (wakeTaint.ts).
+  let guests = caller.kind === 'operator';
+  if (caller.kind !== 'operator' && p.includeGuest === true) {
+    if ((deps.guestWake ?? guestOfRunningWake)(caller.bot.botId) !== true) {
+      return refusal('not_guest_wake', 'guest cards are read only in a wake an external guest\'s message started');
+    }
+    guests = true;
+  }
   const page = writer.read(ws, {
     ...(threadId ? { threadId } : {}),
     ...(typeof p.sinceSeq === 'number' ? { sinceSeq: p.sinceSeq } : {}),
     ...(typeof p.limit === 'number' ? { limit: p.limit } : {}),
+    guests,
   });
   const result: RoomReadResult = { ok: true, workspaceId: ws, threadId, ...page };
   return result;
@@ -577,6 +613,8 @@ export async function handleRoomResolve(raw: unknown, ctx: RpcContext | undefine
     title: `Resolved: ${card.title}`,
     body: resolution,
     refs: { ...(card.refs?.handoffId ? { handoffId: card.refs.handoffId } : {}) },
+    // It repeats the card's title: as guest-sourced as that card.
+    ...(isGuestSourcedCard(card) ? { origin: 'guest' as const } : {}),
   });
   const correction = resolutionCorrection(closed, resolution);
   if (correction) emitHumanCorrection(deps.ports(), correction);

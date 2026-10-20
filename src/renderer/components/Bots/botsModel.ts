@@ -257,6 +257,8 @@ export function isBotSystemCard(card: RoomCard, botId: string, scope: BotWorkSco
  *  the bot's work scope; without it none belongs). */
 export function isBotConversationCard(card: RoomCard, botId: string, scope?: BotWorkScope): boolean {
   if (card.actor.kind === 'bot') return card.actor.botId === botId;
+  // A guest bot's card lives in the 1:1 it was let into.
+  if (card.kind === 'guest') return card.threadId === dmThreadId(botId);
   if (card.actor.kind === 'system') return !!scope && isBotSystemCard(card, botId, scope);
   return card.kind === 'human' && card.refs?.botId === botId;
 }

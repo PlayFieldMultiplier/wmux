@@ -61,6 +61,10 @@ import { getBotRuntime } from '../factory/BotRuntime';
 import { getFactorySettings } from '../factory/factorySettings';
 import { getHandoffRouter, HANDOFF_STORE_LIMITS } from '../factory/handoffRouter';
 import { getRoomWriter, ROOMS_DIRNAME } from '../factory/roomWriter';
+import { redactStoredSecrets } from '../factory/secretRedaction';
+import { guestWorkspaceFlag, isGuestWorkspace } from '../factory/guestWorkspaces';
+import type { GuestProvenance } from '../factory/wakeTaint';
+import { parseGuestScope } from '../../shared/guestBots';
 import { ROOM_ATTACHMENT_ID_RE } from '../../shared/roomAttachments';
 import { phoneBot } from '../factory/phoneBot';
 import { getGroupStore } from '../factory/groupStore';
@@ -71,7 +75,7 @@ import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 
 /** The room reads this file needs (RoomWriter). */
 export interface PhoneRoomReader {
-  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number }): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean };
+  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean }): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean };
   summary(workspaceId: string, threadId: ThreadId): ThreadSummary;
   threads(workspaceId: string): ThreadSummary[];
   /** The newest card of a room that matches (RoomWriter.find). */
@@ -233,7 +237,8 @@ function botInfo(bots: readonly BotProfile[]): (botId: string) => { role: BotPro
   const byId = new Map(bots.map((b) => [b.id, b]));
   return (botId) => {
     const b = byId.get(botId);
-    return b ? { role: b.role, name: b.name } : null;
+    // A name is stored text like a card's: masked the same way (RoomWriter.read).
+    return b ? { role: b.role, name: redactStoredSecrets(b.name) } : null;
   };
 }
 
@@ -284,6 +289,9 @@ export function handlePhoneRoomCommand(command: string, payload: Record<string, 
     ...(threadId ? { threadId } : {}),
     ...(sinceSeq !== undefined ? { sinceSeq } : {}),
     limit,
+    // The owner's phone (and a guest's own read, projected by the daemon)
+    // shows external guests' cards; bots never read through here.
+    guests: true,
   });
   const info = botInfo(bots);
   const action = (approvalId: string): string | null => {
@@ -308,6 +316,29 @@ export function handlePhoneRoomCommand(command: string, payload: Record<string, 
   return fitPhoneRoomPage({ workspaceId, threadId, cards, nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore }, sinceSeq !== undefined);
 }
 
+/** `workspaces.guestCards`: a guest bot's read of its conversation (the
+ *  daemon sends the token's stored scope). Answered only for a conversation
+ *  of a guest workspace, and refused while that cannot be told; then the
+ *  same page the owner's phone reads, which the daemon projects again. */
+export function handleGuestCards(payload: Record<string, unknown>, ports: PhoneFactoryPorts = defaultPhoneFactoryPorts(), flag: (workspaceId: string) => GuestProvenance = guestWorkspaceFlag): RoomCommandReply {
+  const scope = parseGuestScope({ workspaceId: payload.workspaceId, threadId: payload.threadId });
+  if (!scope) return { invalid: true };
+  let flagged: GuestProvenance;
+  try {
+    flagged = flag(scope.workspaceId);
+  } catch {
+    flagged = 'unknown';
+  }
+  if (flagged === 'unknown') return { unavailable: true };
+  if (flagged !== true) return { notFound: true };
+  return handlePhoneRoomCommand(PHONE_ROOM_CARDS_COMMAND, {
+    workspaceId: scope.workspaceId,
+    threadId: scope.threadId,
+    ...(payload.sinceSeq !== undefined ? { sinceSeq: payload.sinceSeq } : {}),
+    limit: payload.limit,
+  }, ports) ?? { invalid: true };
+}
+
 // ── The Bots page list ─────────────────────────────────────────────────────
 
 export interface PhoneBotsPorts extends PhoneFactoryPorts {
@@ -315,6 +346,8 @@ export interface PhoneBotsPorts extends PhoneFactoryPorts {
   groups(): BotGroup[] | null;
   /** A workspace's name on the desktop, or null when it is not open. */
   workspaceName(workspaceId: string): string | null;
+  /** Whether a workspace is a guest workspace (default isGuestWorkspace). */
+  guestWorkspace?(workspaceId: string): GuestProvenance;
   /** Each bot's tasks, as the desktop's Bots page lists them (a work card's
    *  state and pull request). Absent: work is read from the cards alone. */
   taskViews?(bots: BotProfile[]): Promise<ReadonlyMap<string, readonly BotTaskView[]>>;
@@ -371,7 +404,8 @@ function newestMessage(rooms: PhoneRoomReader, workspaceId: string, scope: Conve
   let best: RoomCard | null = null;
   for (const t of scope.all) {
     if (best && t.lastAt < best.at) continue;
-    const cards = rooms.read(workspaceId, { threadId: t.threadId, limit: PREVIEW_SCAN }).cards;
+    // The owner's phone: a guest workspace's replies preview too.
+    const cards = rooms.read(workspaceId, { threadId: t.threadId, limit: PREVIEW_SCAN, guests: true }).cards;
     for (let i = cards.length - 1; i >= 0; i--) {
       const c = cards[i];
       if (c.actor.kind === 'system') continue;
@@ -452,12 +486,21 @@ export function phoneBotsReply(ports: PhoneBotsPorts, tasks: ReadonlyMap<string,
   const settings = ports.settings();
   const hq = settings.enabled ? phoneBot(all, settings) : null;
   const sorted = [...all].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  // The owner's phone sees a guest workspace's bots, marked as such.
+  const guest = (workspaceId: string): { guestWorkspace?: true } => {
+    try {
+      return (ports.guestWorkspace ?? isGuestWorkspace)(workspaceId) === true ? { guestWorkspace: true } : {};
+    } catch {
+      return {};
+    }
+  };
   const bots: PhoneBotsBot[] = sorted.map((b) => {
     const status = ports.status(b.id);
     return {
       id: b.id, name: b.name, role: b.role, workspaceId: b.workspaceId, enabled: b.enabled,
       isHq: hq?.id === b.id, presence: presenceOf(status), queueDepth: status?.queueDepth ?? 0,
       avatar: { hue: isIdentitySlot(b.hue) ? b.hue : null, picture: typeof b.avatar === 'string' && b.avatar.length > 0 },
+      ...guest(b.workspaceId),
     };
   });
   const threadsOf = new Map<string, ThreadSummary[]>();
@@ -514,6 +557,7 @@ export function phoneBotsReply(ports: PhoneBotsPorts, tasks: ReadonlyMap<string,
       name: group.name || ws || '',
       groupId: group.id,
       memberBotIds: members,
+      ...guest(group.workspaceId),
       ...activity(group.workspaceId, scope, group.createdAt),
       // A group made from the room (General) starts no thread of its own.
       ...(groupThreadGroup(group.threadId) ? workOf(group.workspaceId, scope, { threadId: group.threadId }, author) : {}),
@@ -527,6 +571,7 @@ export function phoneBotsReply(ports: PhoneBotsPorts, tasks: ReadonlyMap<string,
       kind: 'dm', threadId: dmThreadId(b.id), workspaceId: b.workspaceId,
       ...(ws ? { workspaceName: ws } : {}),
       name: b.name, botId: b.id, memberBotIds: [b.id],
+      ...guest(b.workspaceId),
       ...activity(b.workspaceId, scope, b.createdAt),
       ...workOf(b.workspaceId, scope, { botId: b.id }, { workAuthor: b.id }),
     });

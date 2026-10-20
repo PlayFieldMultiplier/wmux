@@ -56,11 +56,11 @@ import type { BotGroup } from '../../shared/botGroup';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
 import type { FactorySettings } from '../../shared/factorySettings';
-import { ROOM_LIMITS, dmThreadBot, dmThreadId, parseThreadId, taskThreadOf } from '../../shared/room';
+import { ROOM_LIMITS, dmThreadBot, dmThreadId, isGuestSourcedCard, parseThreadId, taskThreadOf } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
-import { getBotDirectory, getBotStore } from './botStore';
+import { enabledBotsIncludingGuest, getBotDirectory, getBotStore } from './botStore';
 import { getFactorySettings } from './factorySettings';
 import { onBotHook, type BotHookEvent } from './botHooks';
 import { normalizeRepoKey } from './repoWatch';
@@ -75,6 +75,7 @@ import { getApprovalService } from './approvals';
 import { wakeContext, type WakeContextPorts } from './wakeContext';
 import { readUiLocale } from '../quit/quitAndStopCopy';
 import { setFactoryPhoneMessageHandler } from './phoneMessage';
+import { postGuestMessage, setGuestPostHandler } from './guestMessage';
 import { humanCardIdOfRun, postHumanMessage } from './humanMessage';
 import { phoneBot } from './phoneBot';
 import { redactStoredSecrets } from './secretRedaction';
@@ -101,6 +102,7 @@ import { getAgentSlots } from './agentSlots';
 import { getWorkerResumePorts, isTaskOwnWorkerPane, isWslWorkerPane, reclaimedWorkerState, stopResumedWorker, stopResumedWorkers, workerWorkspaceOf, type WorkerSessionInfo, type WorkerSessionRecordOf } from './workerReclaim';
 import { botWorkerSessionRecord } from '../agents/botWorkerMergeGuard';
 import { getTaskFolderPorts } from './taskFolderCleanup';
+import { getWakeTaint } from './wakeTaint';
 
 // ── Trigger cursor ─────────────────────────────────────────────────────────
 
@@ -321,10 +323,29 @@ export function resolveFactsWhere(log: unknown, match: (f: Fact) => boolean, lim
 }
 
 /** The newest `n` cards of a thread, oldest first, and whether older ones exist. */
-export function threadTail(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId, n: number): { cards: RoomCard[]; truncated: boolean } | null {
+export function threadTail(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId, n: number, opts: { guests?: boolean } = {}): { cards: RoomCard[]; truncated: boolean; hiddenGuestCards: number } | null {
   if (!writer) return null;
-  const page = writer.read(workspaceId, { threadId, limit: n });
-  return { cards: page.cards, truncated: writer.summary(workspaceId, threadId).cardCount > page.cards.length };
+  // An external guest's cards only for the guest's own wake (RoomWriter.read).
+  const guests = opts.guests === true;
+  const page = writer.read(workspaceId, { threadId, limit: n, guests });
+  // Older cards exist when the page is full and one came before it (guest
+  // cards left out count as none: the summary's count includes them).
+  const first = page.cards[0];
+  const truncated = page.cards.length >= n && !!first
+    && writer.find(workspaceId, (c) => c.threadId === threadId && c.seq < first.seq, { guests }) !== null;
+  // The guest cards a clean wake leaves out of that window, counted so its
+  // prompt can say they exist (their words stay out).
+  let hiddenGuestCards = 0;
+  if (!guests) {
+    let sinceSeq = truncated ? first.seq - 1 : 0;
+    for (;;) {
+      const more = writer.read(workspaceId, { threadId, sinceSeq, guests: true });
+      hiddenGuestCards += more.cards.filter(isGuestSourcedCard).length;
+      if (!more.hasMore || more.nextSinceSeq <= sinceSeq) break;
+      sinceSeq = more.nextSinceSeq;
+    }
+  }
+  return { cards: page.cards, truncated, hiddenGuestCards };
 }
 
 /** The handoff a task wake answers: the one every task of the wake was
@@ -422,7 +443,9 @@ export function factoryPhoneMessage(payload: MoaWakePayload, deps: FactoryPhoneD
   if (!writer || !ports.wakes) return { ok: false, code: 'busy' };
   let enabledBots: BotProfile[] = [];
   try {
-    enabledBots = ports.bots?.listEnabled() ?? [];
+    // The owner's phone reaches a guest workspace's bots too;
+    // postHumanMessage holds the boundary.
+    enabledBots = enabledBotsIncludingGuest(ports.bots);
   } catch {
     enabledBots = [];
   }
@@ -785,7 +808,8 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     resolveFacts: (ids) => resolveFactsFrom(getFactLog(), ids),
     resolveHandoff: summarizeHandoff,
     taskHandoff: (item) => taskWakeHandoff(item.reason, (id) => getTaskLedger().get(id)),
-    readThreadTail: (workspaceId, threadId, n) => threadTail(getRoomWriter(), workspaceId, threadId, n),
+    readThreadTail: (workspaceId, threadId, n, opts) => threadTail(getRoomWriter(), workspaceId, threadId, n, opts),
+    wakeGuest: (item) => getWakeTaint()?.wakeGuest(item) ?? 'unknown',
     wakeContext: (profile, item) => wakeContext(contextPorts(), profile, item),
     wakeImages: (profile, item) => wakeImagesOf(getRoomWriter(), getRoomAttachmentStore(), profile, item),
     onTurnDone: (profile, item) => getHandoffRouter()?.closeAnsweredInChat(profile.id, item),
@@ -820,6 +844,21 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   });
   setRoomFileStore(roomFiles);
   setFactoryPhoneMessageHandler((payload) => factoryPhoneMessageSaved(payload, { settings, writer: getRoomWriter, ports: roomPorts }));
+  // A guest bot's post: its card, and the wakes it names once they are on
+  // disk. A wake that is not is `busy`: the guest's retry of the same message
+  // id queues it again (postGuestMessage) and writes it.
+  setGuestPostHandler(async (payload) => {
+    const r = postGuestMessage(payload, { enabled: () => settings().enabled, writer: getRoomWriter, ports: roomPorts });
+    if (r.ok && r.woke.length > 0) {
+      try {
+        await roomPorts().wakes?.flush?.();
+      } catch (err) {
+        console.warn(`[factory] guest wake not on disk: ${String(err)}`);
+        return { ok: false, code: 'busy' };
+      }
+    }
+    return r;
+  });
 
   const morning = new MorningSchedule({
     file: path.join(deps.wmuxDir(), 'factory', MORNING_SCHEDULE_FILENAME),
@@ -1016,6 +1055,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       offHookFacts();
       hooks.dispose();
       setFactoryPhoneMessageHandler(null);
+      setGuestPostHandler(null);
       setRoomAttachmentStore(null);
       setRoomFileStore(null);
       cursor.flush();

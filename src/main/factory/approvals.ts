@@ -98,6 +98,8 @@ import { laneRefusalCodes, laneRefusalLine } from './laneRefusalText';
 import { wakeReplyTo, type RoomWriter } from './roomWriter';
 import type { BotNoticeInput } from './botNotices';
 import type { BotDirectoryApi } from './triggerEngine';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRecord } from './wakeTaint';
+import { guestSide } from './guestWorkspaces';
 
 export const APPROVALS_FILENAME = 'approvals.json';
 
@@ -132,6 +134,10 @@ export interface StoredApproval extends ApprovalRequest {
   effectId?: string;
   /** Why a covering rule did not approve it (shown on the card). */
   ruleSkipped?: string;
+  /** Its wake was not known clean of a guest's words; the bots told of its
+   *  decision are told in a guest-sourced notice. Absent (a request stored
+   *  before it was recorded): as its taint says. */
+  guest?: boolean;
 }
 
 /** A request as the main window and the bot see it (no checkout path). */
@@ -141,6 +147,7 @@ export function approvalView(r: StoredApproval): ApprovalView {
   const view: Partial<StoredApproval> = { ...r };
   delete view.repoPath;
   delete view.clientRequestId;
+  delete view.guest;
   // What the owner reads: sentences, never the raw codes.
   delete view.refusalText;
   delete view.ruleSkippedText;
@@ -157,6 +164,19 @@ export function approvalView(r: StoredApproval): ApprovalView {
   };
 }
 
+/** What a bot reads back of a request: a request not known clean of a
+ *  guest's words keeps its state but not its words, unless the reading
+ *  wake is itself guest-sourced. */
+export const GUEST_REASON_HIDDEN = '(asked in a turn that came from an external guest; not shown here)';
+
+export function botApprovalView(r: StoredApproval, readerGuest: boolean): ApprovalView {
+  const view = approvalView(r);
+  if (readerGuest || guestOfRecord(r.guest, r.tainted) === false) return view;
+  const hidden: ApprovalView = { ...view, reason: GUEST_REASON_HIDDEN };
+  delete hidden.skill;
+  return hidden;
+}
+
 /** The running wake of a bot, as main knows it. */
 export interface ApprovalWake {
   wakeId: string;
@@ -164,11 +184,20 @@ export interface ApprovalWake {
   attempt: number;
   threadId: ThreadId | null;
   tainted: boolean;
+  /** The wake's guest provenance (wakeTaint.ts). Not known clean: the
+   *  request counts as tainted (no remembered rule approves it) and its card
+   *  is guest-sourced. Absent: unknown. */
+  guest?: boolean | 'unknown';
   /** The wake carries the owner's own message. */
   ownerWords?: boolean;
   /** The owner card that started the wake (RunningWake.ownerCardId): the
    *  request's card answers it when it lands in that card's thread. */
   ownerCardId?: string;
+}
+
+/** Whether a wake is not known to be clean of a guest's words. */
+function guestSourcedWake(wake: Pick<ApprovalWake, 'guest'>): boolean {
+  return wake.guest !== false;
 }
 
 /** What the approvals reach of the merge executor (mergeLaneHost.ts). */
@@ -230,7 +259,7 @@ export interface SkillApprovalInput {
   reason: string;
 }
 
-type Refusal = FactoryRefusal<'not_bot' | 'not_running' | 'invalid' | 'no_repo' | 'read_failed' | 'not_open' | 'too_many' | 'not_found' | 'not_pending' | 'too_late' | 'not_ruleable' | 'write_failed' | 'not_started' | 'stale'>;
+type Refusal = FactoryRefusal<'not_bot' | 'not_running' | 'not_now' | 'invalid' | 'no_repo' | 'read_failed' | 'not_open' | 'too_many' | 'not_found' | 'not_pending' | 'too_late' | 'not_ruleable' | 'write_failed' | 'not_started' | 'stale'>;
 
 function refuse(code: Refusal['code'], message: string): Refusal {
   return { ok: false, code, message };
@@ -529,6 +558,7 @@ export class ApprovalService {
 
     const wake = this.ports.runningWake(bot.botId);
     if (!wake) return refuse('not_running', 'a bot asks for approval only during a wake');
+    const readerGuest = wake.guest === true;
     let profile: BotProfile | null = null;
     try {
       profile = this.ports.bots()?.get(bot.botId) ?? null;
@@ -543,7 +573,7 @@ export class ApprovalService {
     // One request per (bot, key): a retried turn gets the first one back.
     const clientRequestId = typeof raw.clientRequestId === 'string' ? raw.clientRequestId : this.nextOrdinal(bot.botId, wake);
     const prior = [...this.requests.values()].find((r) => r.botId === bot.botId && r.clientRequestId === clientRequestId);
-    if (prior) return { ok: true, request: approvalView(prior), duplicate: true };
+    if (prior) return { ok: true, request: botApprovalView(prior, readerGuest), duplicate: true };
     const open = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending');
     if (open.length >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${open.length} requests already wait for the owner`);
 
@@ -561,7 +591,7 @@ export class ApprovalService {
       // The same head already asked about and not settled: that request.
       const same = [...this.requests.values()].find((r) => r.action === 'merge' && r.repoKey === repoKey && r.prNumber === prNumber && r.headSha === headSha
         && (r.state === 'pending' || r.state === 'approved'));
-      if (same) return { ok: true, request: approvalView(same), duplicate: true };
+      if (same) return { ok: true, request: botApprovalView(same, readerGuest), duplicate: true };
       const login = await this.ports.ghLogin({ key: repoKey, path: repoPath }).catch(() => null);
       if (!login) return refuse('read_failed', 'the gh login could not be read');
       ghLogin = login.toLowerCase();
@@ -574,7 +604,7 @@ export class ApprovalService {
     // A request stored while this one read GitHub (a retry, another bot).
     const again = [...this.requests.values()].find((r) => (r.botId === bot.botId && r.clientRequestId === clientRequestId)
       || (headSha !== undefined && r.action === 'merge' && r.repoKey === repoKey && r.prNumber === prNumber && r.headSha === headSha && (r.state === 'pending' || r.state === 'approved')));
-    if (again) return { ok: true, request: approvalView(again), duplicate: true };
+    if (again) return { ok: true, request: botApprovalView(again, readerGuest), duplicate: true };
     const openNow = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending').length;
     if (openNow >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${openNow} requests already wait for the owner`);
 
@@ -595,7 +625,10 @@ export class ApprovalService {
       // approves it; the card links the PR's (or issue's) own thread.
       threadId: this.conversationThread(bot.botId, wake),
       reason,
-      tainted: wake.tainted,
+      // As the wake reads now, after the waits, and never cleaner than when
+      // it asked.
+      tainted: wake.tainted || still.tainted || guestSourcedWake(wake) || guestSourcedWake(still),
+      guest: guestSourcedWake(wake) || guestSourcedWake(still),
       state: 'pending',
       clientRequestId,
       createdAt: at,
@@ -615,6 +648,8 @@ export class ApprovalService {
   proposeSkill(bot: BotBinding, input: SkillApprovalInput): { ok: true; request: ApprovalView } | Refusal {
     const wake = this.ports.runningWake(bot.botId);
     if (!wake) return refuse('not_running', 'a bot proposes a skill only during a wake');
+    // An approved skill is read in every later wake.
+    if (guestSourcedWake(wake)) return refuse('not_now', `skill_propose: ${GUEST_TURN_STARTS_NO_WORKERS}`);
     let profile: BotProfile | null = null;
     try {
       profile = this.ports.bots()?.get(bot.botId) ?? null;
@@ -642,7 +677,8 @@ export class ApprovalService {
       workspaceId: bot.workspaceId,
       threadId: this.conversationThread(bot.botId, wake),
       reason,
-      tainted: wake.tainted,
+      tainted: wake.tainted || guestSourcedWake(wake),
+      guest: guestSourcedWake(wake),
       state: 'pending',
       clientRequestId: `skill:${input.name}:${input.hash}`,
       createdAt: at,
@@ -774,11 +810,17 @@ export class ApprovalService {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > APPROVAL_LIMITS.LIST_MAX) return refuse('invalid', `limit must be 1..${APPROVAL_LIMITS.LIST_MAX}`);
     this.expire();
     const want = states as ApprovalState[] | undefined;
+    let readerGuest = false;
+    try {
+      readerGuest = this.ports.runningWake(bot.botId)?.guest === true;
+    } catch {
+      readerGuest = false;
+    }
     const rows = [...this.requests.values()]
       .filter((r) => r.botId === bot.botId && (!want || want.includes(r.state)))
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, limit)
-      .map(approvalView);
+      .map((r) => botApprovalView(r, readerGuest));
     return { ok: true, requests: rows };
   }
 
@@ -1249,10 +1291,14 @@ export class ApprovalService {
   private tellDecided(r: StoredApproval, title: string, body?: string): void {
     const cardSeq = r.cardId ? this.ports.rooms()?.get(r.workspaceId, r.cardId)?.seq ?? null : null;
     const bots = new Set([r.botId, ...this.speakersAfter(r.workspaceId, r.threadId, cardSeq)]);
+    // As guest-sourced as the request (an older one without the field: as
+    // its taint says).
+    const guest = guestOfRecord(r.guest, r.tainted) !== false;
     for (const botId of [...bots].slice(0, APPROVAL_LIMITS.NOTIFY_MAX)) {
       this.notice({
         botId, workspaceId: r.workspaceId, key: `approval:${r.requestId}:${r.state}`, topic: 'approval.decided',
         title, ...(body ? { body } : {}), threadId: r.threadId, repoKey: r.repoKey,
+        ...(guest ? { guest: true, tainted: true } : {}),
         ...(r.prNumber !== undefined ? { pr: r.prNumber } : {}),
       });
     }
@@ -1281,7 +1327,8 @@ export class ApprovalService {
     }
     let watching: BotProfile[] = [];
     try {
-      watching = (this.ports.bots()?.listEnabled() ?? []).filter((b) => normalizeRepoKey(b.repo?.repoKey) === repoKey);
+      // A guest workspace has no repository; skipped all the same.
+      watching = (this.ports.bots()?.listEnabled() ?? []).filter((b) => normalizeRepoKey(b.repo?.repoKey) === repoKey && !guestSide(b.workspaceId));
     } catch {
       watching = [];
     }
@@ -1369,6 +1416,7 @@ export class ApprovalService {
       state: 'open',
       ...(replyTo ? { replyTo } : {}),
       clientPostId: `approval:${r.requestId}`,
+      ...(guestSourcedWake(wake) ? { origin: 'guest' as const } : {}),
     });
     return res.ok ? res.card : null;
   }

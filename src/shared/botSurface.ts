@@ -142,6 +142,34 @@ export const BOT_BASE_RPC: readonly RpcMethod[] = [
   'pane.resolveName',
 ];
 
+/** What a bot may call in a wake not known clean of a guest's words
+ *  (main/factory/wakeTaint.ts): RpcRouter refuses every other method on the
+ *  bot surface there, whatever the method's own checks say. Only what the
+ *  guest conversation needs: talk in the room (each write is stamped
+ *  guest-sourced), reads filtered by provenance (room.read, fact.poll,
+ *  approval.list), and bot.list, scoped there to the bots of the wake's own
+ *  conversation. Everything else (repository, CI, verdict, trust, terminal
+ *  and pane reads, the bot's routines, workflows and skills) is left out. */
+export const GUEST_SAFE_RPC: ReadonlySet<string> = new Set<string>([
+  ...BOT_BASE_RPC,
+  ROOM_RPC.post,
+  ROOM_RPC.read,
+  HANDOFF_RPC.send,
+  ASK_PERSON_RPC,
+  BOT_RPC.questionClose,
+  BOT_RPC.list,
+  FACT_RPC.poll,
+  BOT_APPROVAL_RPC.list,
+]);
+
+/** The engine's built-in tools a bot may use in a wake not known clean
+ *  (ClaudeSdkAdapter's per-call gate): none. A guest's reply needs only the
+ *  wmux tools (room.post). */
+export const GUEST_SAFE_BUILTIN_TOOLS: ReadonlySet<string> = new Set<string>();
+
+/** What RpcRouter answers a bot call refused by GUEST_SAFE_RPC. */
+export const GUEST_TURN_SURFACE_REFUSAL = 'this turn comes from an external guest\'s message (or wmux cannot tell where it came from); in such a turn a bot talks in its room and reads what the turn may see, and nothing else; tell the owner what you would do';
+
 export interface BotSurface {
   tools: ReadonlySet<string>;
   rpc: ReadonlySet<string>;
@@ -238,7 +266,9 @@ export interface BotRefusal {
   at: number;
   bot: BotBinding;
   method: string;
-  reason: 'teardown' | 'surface';
+  /** `guest`: the method is not in GUEST_SAFE_RPC and the bot's wake is not
+   *  known clean. */
+  reason: 'teardown' | 'surface' | 'guest';
 }
 
 // ── Typed refusals of factory RPC handlers ──────────────────────────────────

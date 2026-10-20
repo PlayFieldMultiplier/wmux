@@ -211,6 +211,8 @@ import { parseApprovalResolveRequest, parsePlanAnswerRequest, planDetailOnly } f
 import { GateBroker } from './approvals/GateBroker';
 import { coerceGate } from './approvals/gateConfig';
 import { DeviceStore, type DeviceBatchRevocationCause } from './web/DeviceStore';
+import { GuestBotStore, GuestStoreError } from './web/GuestBotStore';
+import { GUEST_BOT_RPC } from '../shared/guestBots';
 import { revokeDeviceAndDisconnect } from './web/deviceRevoke';
 import { withActivity, withViewingSessions } from './web/deviceActivity';
 import { buildWebPaneEnv } from './web/webPaneEnv';
@@ -507,6 +509,15 @@ function canonicalIdentityFor(
  * in-memory view of the same file: a revoke applied to one would leave the
  * other still authenticating that device until the next restart.
  */
+let guestBotStore: GuestBotStore | null = null;
+/** The owner's guest bots (shared/guestBots.ts), next to the device roster. */
+function getGuestBotStore(): GuestBotStore {
+  if (!guestBotStore) {
+    guestBotStore = new GuestBotStore({ dir: wmuxDir, log: (level, msg) => log(level, msg) });
+  }
+  return guestBotStore;
+}
+
 function getDeviceStore(): DeviceStore {
   if (!deviceStore) {
     deviceStore = new DeviceStore({ wmuxDir, log: (level, msg) => log(level, msg) });
@@ -892,6 +903,8 @@ async function restoreWebServer(sessionManager: DaemonSessionManager): Promise<v
         // construction sites: a restored server serves paired phones on their
         // own credentials, exactly like one the operator just started.
         devices: getDeviceStore(),
+        // Guest bots: injected at both construction sites, like the roster.
+        guests: getGuestBotStore(),
         runHistory: getRunHistory,
         turnFailure: (id) => sessionManager.getSession(id)?.bridge.getLastFailure(),
         inputReceipts: getInputReceipts,
@@ -3573,6 +3586,8 @@ function registerRpcHandlers(
       sessionText: sessionTextReader(sessionManager),
       // M3 — see the restore path for why the roster is injected at both sites.
       devices: getDeviceStore(),
+      // Guest bots: injected at both construction sites, like the roster.
+      guests: getGuestBotStore(),
       runHistory: getRunHistory,
       turnFailure: (id) => sessionManager.getSession(id)?.bridge.getLastFailure(),
       inputReceipts: getInputReceipts,
@@ -3869,6 +3884,60 @@ function registerRpcHandlers(
     // composer that 403s on every keystroke.
     if (!allowInput) webServer.disconnectDevice(deviceId);
     return result;
+  });
+
+  // Guest bots (shared/guestBots.ts): the owner's Bots page, through main.
+  // Token-only like the device roster RPCs above. A token leaves only in
+  // `create`'s answer, once.
+  pipeServer.onRpc(GUEST_BOT_RPC.list, async () => {
+    await afterRestore();
+    try {
+      const store = getGuestBotStore();
+      return { ok: true, guests: store.list(), gates: { enabled: store.enabled(), ...webServer.guestGates() } };
+    } catch {
+      return { ok: false, code: 'unavailable' };
+    }
+  });
+
+  pipeServer.onRpc(GUEST_BOT_RPC.create, async (params) => {
+    await afterRestore();
+    try {
+      const { guest, token } = await getGuestBotStore().create({ name: params['name'], scope: params['scope'], joinSeq: params['joinSeq'] });
+      log('info', `[web] guest bot ${guest.guestId} added for ${guest.scope.threadId}`);
+      return { ok: true, guest, token };
+    } catch (err) {
+      if (err instanceof GuestStoreError) return { ok: false, code: err.code };
+      log('warn', `[web] guest bot not added: ${err instanceof Error ? err.message : String(err)}`);
+      return { ok: false, code: 'persist-failed' };
+    }
+  });
+
+  pipeServer.onRpc(GUEST_BOT_RPC.revoke, async (params) => {
+    await afterRestore();
+    const guestId = typeof params['guestId'] === 'string' ? params['guestId'] : '';
+    try {
+      const revoked = getGuestBotStore().revoke(guestId);
+      webServer.forgetGuest(guestId);
+      if (revoked) log('info', `[web] guest bot ${guestId} revoked`);
+      return revoked ? { ok: true } : { ok: false, code: 'not-found' };
+    } catch {
+      // Revoked in memory (refused from now on), not on disk.
+      webServer.forgetGuest(guestId);
+      return { ok: false, code: 'persist-failed' };
+    }
+  });
+
+  pipeServer.onRpc(GUEST_BOT_RPC.setEnabled, async (params) => {
+    await afterRestore();
+    // Explicit boolean only: a malformed call never turns the feature on.
+    if (typeof params['enabled'] !== 'boolean') return { ok: false, code: 'invalid' };
+    try {
+      getGuestBotStore().setEnabled(params['enabled']);
+      log('info', `[web] guest bots ${params['enabled'] ? 'on' : 'off'}`);
+      return { ok: true };
+    } catch {
+      return { ok: false, code: 'persist-failed' };
+    }
   });
 
   pipeServer.onRpc('daemon.web.deviceRevoke', async (params) => {

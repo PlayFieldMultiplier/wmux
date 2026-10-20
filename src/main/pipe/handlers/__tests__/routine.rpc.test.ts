@@ -37,7 +37,7 @@ function profile(id: string, extra: Partial<BotProfile> = {}): BotProfile {
   };
 }
 
-function rig(opts: { ownerWords?: boolean; stop?: Parameters<typeof registerRoutineHandlers>[1]['stop'] } = {}) {
+function rig(opts: { ownerWords?: boolean; guestWake?: boolean | 'unknown'; stop?: Parameters<typeof registerRoutineHandlers>[1]['stop'] } = {}) {
   const store = new RoutineStore({
     file: routinesPath(dir),
     bots: () => ({ get: (id: string) => profile(id) }),
@@ -54,6 +54,7 @@ function rig(opts: { ownerWords?: boolean; stop?: Parameters<typeof registerRout
   registerRoutineHandlers({ register: (m, h) => handlers.set(m, h as never) }, {
     store: () => store,
     ownerWords: () => opts.ownerWords ?? true,
+    guestWake: () => opts.guestWake ?? false,
     defaultKey: (botId) => {
       keys.push(botId);
       return `wake:w-${botId}:r1`;
@@ -84,6 +85,30 @@ describe('routine.set', () => {
     expect(await r.call('routine.set', params, WIRE)).toMatchObject({ ok: false, code: 'not_authorized' });
     expect(await r.call('routine.set', params, asBot(A))).toMatchObject({ ok: false, code: 'not_authorized' });
     expect(r.store.list()).toEqual([]);
+  });
+
+  it('refuses a turn on the owner\'s words whose wake is guest-sourced (the answer to a guest\'s question) or of unknown provenance', async () => {
+    for (const g of [true, 'unknown'] as const) {
+      const r = rig({ guestWake: g });
+      const res = await r.call('routine.set', params, asBot(A)) as { ok: boolean; code?: string; message?: string };
+      expect(res).toMatchObject({ ok: false, code: 'not_authorized' });
+      expect(res.message).toContain('external guest');
+      expect(r.store.list()).toEqual([]);
+    }
+  });
+
+  it('a wake not known clean pauses a routine but does not resume one', async () => {
+    const opts: { guestWake: boolean | 'unknown' } = { guestWake: false };
+    const r = rig(opts);
+    const a = await r.call('routine.set', params, asBot(A)) as { routine: { id: string } };
+    for (const g of [true, 'unknown'] as const) {
+      opts.guestWake = g;
+      expect(await r.call('routine.pause', { routineId: a.routine.id, paused: true }, asBot(A))).toMatchObject({ ok: true, routine: { state: 'paused' } });
+      expect(await r.call('routine.pause', { routineId: a.routine.id, paused: false }, asBot(A))).toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('external guest') });
+      expect(r.store.list(A)[0]).toMatchObject({ state: 'paused' });
+    }
+    opts.guestWake = false;
+    expect(await r.call('routine.pause', { routineId: a.routine.id, paused: false }, asBot(A))).toMatchObject({ ok: true });
   });
 
   it('turnOnOwnerWords: the owner\'s message or answer; a closed question, a mention, facts, a plain handoff or no turn are not', () => {

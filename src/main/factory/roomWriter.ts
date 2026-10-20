@@ -24,6 +24,7 @@
 // Every new or changed card is pushed to the renderer as ROOM_EVENT with its
 // thread's summary.
 
+import { isGuestId, sanitizeGuestName } from '../../shared/guestBots';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -40,6 +41,7 @@ import {
   groupThreadGroup,
   parseThreadId,
   issueThreadId,
+  isGuestSourcedCard,
   prThreadId,
   taskOriginThread,
   type CardKind,
@@ -55,6 +57,7 @@ import type { BotDirectoryApi, FactLogApi, WakeSinkApi } from './triggerEngine';
 import type { BotGroup } from '../../shared/botGroup';
 import { parseRoomAttachments } from '../../shared/roomAttachments';
 import { parseRoomFiles } from './roomFiles';
+import { guestSide } from './guestWorkspaces';
 
 export const ROOMS_DIRNAME = 'rooms';
 
@@ -75,7 +78,7 @@ const URL_MAX = 500;
 export const CARD_KINDS: readonly CardKind[] = [
   'fact', 'dispatch', 'status', 'triage', 'verdict', 'report', 'plan', 'proposal', 'opinion',
   'question', 'human', 'refusal', 'budget',
-  'approval', 'routine', 'secret_request', 'login_request', 'job_changed',
+  'approval', 'routine', 'secret_request', 'login_request', 'job_changed', 'guest',
 ];
 
 // ── Ports (design §14; resolved at module start, wired by the factory host) ─
@@ -236,6 +239,60 @@ export class WakeOrdinals {
 export const wakeOrdinals = new WakeOrdinals();
 
 /** The running wake of a bot through the ports, or null. Never throws. */
+/** Whether the wake bot `botId` is running now is not known clean of a
+ *  guest's words (wakeTaint.ts wakeGuest); set by the taint module. A bot
+ *  card written while it says so carries `origin: 'guest'`. */
+let guestTurnProbe: ((botId: string) => boolean) | null = null;
+
+export function setGuestTurnProbe(probe: ((botId: string) => boolean) | null): void {
+  guestTurnProbe = probe;
+}
+
+/** Whether bot `botId`'s running turn is guest-sourced, as the probe says
+ *  (false without one). */
+export function isGuestSourcedTurn(botId: string): boolean {
+  return guestSourcedTurn({ kind: 'bot', workspaceId: '', botId });
+}
+
+/** Whether a fact is not known clean of a guest's words (wakeTaint.ts
+ *  factGuest); set by the taint module. Its system cards carry
+ *  `origin: 'guest'`. */
+let factGuestProbe: ((fact: Fact) => boolean) | null = null;
+
+/** Set when the taint module is part of the app (wakeTaintModule.ts): from
+ *  then on a missing probe (the module not started, or failed) stamps a
+ *  bot's cards and a fact's cards guest-sourced rather than clean. */
+let probeExpected = false;
+
+export function expectGuestProbes(on = true): void {
+  probeExpected = on;
+}
+
+export function setFactGuestProbe(probe: ((fact: Fact) => boolean) | null): void {
+  factGuestProbe = probe;
+}
+
+/** Whether a fact's cards are guest-sourced, as the probe says (false
+ *  without one; true when it throws). */
+function guestSourcedFact(fact: Fact): boolean {
+  if (!factGuestProbe) return probeExpected;
+  try {
+    return factGuestProbe(fact) === true;
+  } catch {
+    return true;
+  }
+}
+
+function guestSourcedTurn(actor: Party): boolean {
+  if (actor.kind !== 'bot') return false;
+  if (!guestTurnProbe) return probeExpected;
+  try {
+    return guestTurnProbe(actor.botId) === true;
+  } catch {
+    return false;
+  }
+}
+
 export function runningWake(ports: Partial<FactoryRoomPorts>, botId: string): RunningWake | null {
   try {
     const w = ports.currentWake?.(botId) ?? null;
@@ -453,6 +510,9 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
   const notice = actor.kind === 'system' ? sanitizeNotice(c.notice) : undefined;
   const attachments = c.kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(c.attachments) : undefined;
   const files = actor.kind === 'bot' ? parseRoomFiles(c.files) : undefined;
+  const guest = c.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(c.guest) : undefined;
+  // A guest card that does not say whose it is is not a card of this room.
+  if (c.kind === 'guest' && !guest) return null;
   return {
     version: 1,
     id: c.id,
@@ -474,7 +534,17 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(notice ? { notice } : {}),
     ...(attachments ? { attachments } : {}),
     ...(files ? { files } : {}),
+    ...(guest ? { guest } : {}),
+    ...(c.origin === 'guest' ? { origin: 'guest' as const } : {}),
   };
+}
+
+/** A `guest` card's author (RoomCard.guest), or undefined. */
+export function sanitizeGuestRef(value: unknown): RoomCard['guest'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const g = value as Record<string, unknown>;
+  const name = sanitizeGuestName(g.name);
+  return isGuestId(g.guestId) && name ? { guestId: g.guestId, name } : undefined;
 }
 
 /** The seq high-water mark line a compaction writes, or null. */
@@ -516,6 +586,15 @@ export interface RoomCardInput {
   /** Bot cards only (RoomCard.files): files already in the room's file
    *  store (roomFiles.ts). */
   files?: RoomCard['files'];
+  /** `guest` cards only, actor system (RoomCard.guest). */
+  guest?: RoomCard['guest'];
+  /** RoomCard.origin, from the item the card comes from: a bot card the
+   *  caller decided at its call's start (written after an await, or after
+   *  its wake ended), a system card derived from a guest-sourced item. A bot
+   *  card written in a wake that is not known clean is stamped anyway,
+   *  unless the caller says `'clean'`: it decided the card is clean at its
+   *  call's start (never stored). */
+  origin?: 'guest' | 'clean';
 }
 
 /** A post from a bot or the owner: idempotent by clientPostId, and a replyTo
@@ -736,6 +815,10 @@ export class RoomWriter {
     const notice = actor.kind === 'system' ? sanitizeNotice(redactStoredSecretsDeep(input.notice)) : undefined;
     const attachments = input.kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(input.attachments) : undefined;
     const files = actor.kind === 'bot' ? parseRoomFiles(input.files) : undefined;
+    const guest = input.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(input.guest) : undefined;
+    if (input.kind === 'guest' && !guest) return null;
+    // A system card derived from a guest-sourced item passes its origin too.
+    const fromGuestTurn = input.origin === 'guest' || (input.origin === undefined && actor.kind === 'bot' && guestSourcedTurn(actor));
     // A fact delivered twice (a re-subscribe, a replay) writes one card.
     const factKey = refs?.factId ? factCardKey({ refs, threadId, kind: input.kind }) : null;
     if (factKey && state.seenFacts.has(factKey)) return null;
@@ -758,6 +841,8 @@ export class RoomWriter {
       ...(notice ? { notice } : {}),
       ...(attachments ? { attachments } : {}),
       ...(files ? { files } : {}),
+      ...(guest ? { guest } : {}),
+      ...(fromGuestTurn ? { origin: 'guest' as const } : {}),
       ...(extra?.replyTo ? { replyTo: extra.replyTo } : {}),
       ...(extra?.clientPostId ? { clientPostId: extra.clientPostId } : {}),
     };
@@ -787,6 +872,14 @@ export class RoomWriter {
     const clientPostId = isClientId(input.clientPostId) ? input.clientPostId : undefined;
     if (clientPostId) {
       const prior = state.byId.get(state.byClientId.get(clientPostId) ?? '');
+      // A guest-sourced card is returned only to a post of the same kind
+      // (a guest's, or a bot's in a guest-sourced turn): any other reader
+      // gets it only by asking (read's `guests`).
+      if (prior && isGuestSourcedCard(prior)) {
+        const actor = sanitizeParty(input.actor);
+        const sameSource = prior.kind === 'guest' ? input.kind === 'guest' : input.origin === 'guest' || (input.origin === undefined && !!actor && guestSourcedTurn(actor));
+        if (!sameSource) return { ok: false, code: 'invalid', message: 'that clientPostId is already used in this room' };
+      }
       if (prior) return { ok: true, card: prior, duplicate: true };
     }
     const threadId = input.threadId === undefined ? GENERAL_THREAD : parseThreadId(input.threadId);
@@ -853,22 +946,32 @@ export class RoomWriter {
     return ids;
   }
 
-  /** The first card of the room that matches, newest first. */
-  find(workspaceId: string, match: (c: RoomCard) => boolean): RoomCard | null {
+  /** The first card of the room that matches, newest first. An external
+   *  guest's card is skipped unless `guests` is set (see `read`). */
+  find(workspaceId: string, match: (c: RoomCard) => boolean, opts: { guests?: boolean } = {}): RoomCard | null {
     const cards = this.room(workspaceId)?.cards ?? [];
-    for (let i = cards.length - 1; i >= 0; i -= 1) if (match(cards[i])) return cards[i];
+    for (let i = cards.length - 1; i >= 0; i -= 1) {
+      if (isGuestSourcedCard(cards[i]) && opts.guests !== true) continue;
+      if (match(cards[i])) return cards[i];
+    }
     return null;
   }
 
   /** Cards in arrival (seq) order, at most `limit` (≤ PAGE). threadId
    *  omitted: every card; `general`: the general thread only. With sinceSeq:
    *  the cards after it, `hasMore` when the page stopped short; without: the
-   *  newest page. Pass `nextSinceSeq` back to continue. */
-  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number } = {}): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean } {
+   *  newest page. Pass `nextSinceSeq` back to continue.
+   *
+   *  An external guest's cards (kind `guest`, outside text) are left out
+   *  unless `guests` is set: only the owner's views, the guest's own read and
+   *  the guest's own (tainted) wake ask for them, so a bot never reads a
+   *  guest's words by accident in a turn whose work may merge. */
+  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean } = {}): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean } {
     const state = this.room(workspaceId);
     if (!state) return { cards: [], nextSinceSeq: 0, hasMore: false };
     const limit = Math.max(1, Math.min(ROOM_LIMITS.PAGE, Math.floor(opts.limit ?? ROOM_LIMITS.PAGE)));
-    const scoped = opts.threadId === undefined ? state.cards : state.cards.filter((c) => c.threadId === opts.threadId);
+    const visible = opts.guests === true ? state.cards : state.cards.filter((c) => !isGuestSourcedCard(c));
+    const scoped = opts.threadId === undefined ? visible : visible.filter((c) => c.threadId === opts.threadId);
     const since = typeof opts.sinceSeq === 'number' && Number.isFinite(opts.sinceSeq) ? opts.sinceSeq : null;
     // Every reader (bots, the renderer's room.read, the phone's room routes)
     // gets cards with stored bot secrets redacted, whenever a card was written.
@@ -1030,8 +1133,18 @@ export function factRooms(fact: Fact, bots: BotDirectoryApi | undefined): string
     return [];
   }
   const out = new Set<string>();
-  for (const b of enabled) if (normalizeRepoKey(b.repo?.repoKey) === repo && isRoomWorkspaceId(b.workspaceId)) out.add(b.workspaceId);
+  // A guest workspace has no repository (botStore.ts); skipped all the same.
+  for (const b of enabled) if (normalizeRepoKey(b.repo?.repoKey) === repo && isRoomWorkspaceId(b.workspaceId) && !guestSide(b.workspaceId)) out.add(b.workspaceId);
   return [...out];
+}
+
+/** The rooms a fact's cards go to, held to the island: when they span a
+ *  guest workspace and another, only the fact's own workspace (a delivery
+ *  the addressee's, a refusal the sender's), so no card crosses. */
+export function islandRooms(workspaces: readonly string[], home: string | undefined): string[] {
+  const distinct = [...new Set(workspaces)];
+  if (distinct.length < 2 || !distinct.some((ws) => guestSide(ws))) return distinct;
+  return home && distinct.includes(home) ? [home] : [];
 }
 
 interface SystemCard { workspaces: string[]; threadId: ThreadId; kind: CardKind; title: string; body?: string; refs?: RoomCard['refs']; closes?: true; notice?: CardNotice }
@@ -1280,8 +1393,9 @@ export function writeFactCards(writer: RoomWriter, fact: Fact, bots?: BotDirecto
     return [];
   }
   if (!spec) return [];
+  const guest = guestSourcedFact(fact);
   const out: RoomCard[] = [];
-  for (const workspaceId of spec.workspaces) {
+  for (const workspaceId of islandRooms(spec.workspaces, fact.workspaceId)) {
     const card = writer.append({
       workspaceId,
       threadId: spec.threadId,
@@ -1292,6 +1406,7 @@ export function writeFactCards(writer: RoomWriter, fact: Fact, bots?: BotDirecto
       ...(spec.refs ? { refs: spec.refs } : {}),
       ...(spec.closes ? { closes: true as const } : {}),
       ...(spec.notice ? { notice: spec.notice } : {}),
+      ...(guest ? { origin: 'guest' as const } : {}),
       at: fact.at,
     });
     if (card) out.push(card);

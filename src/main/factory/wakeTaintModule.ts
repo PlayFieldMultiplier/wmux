@@ -5,14 +5,20 @@
 import path from 'node:path';
 import type { WakeItem } from '../../shared/wake';
 import { registerFactoryRpcModule } from './factoryHost';
-import { TAINT_FILENAME, WakeTaint, setWakeTaint } from './wakeTaint';
+import { TAINT_FILENAME, WakeTaint, expectWakeTaint, guestTurnProbeOf, setWakeTaint } from './wakeTaint';
+import { expectGuestProbes, setFactGuestProbe, setGuestTurnProbe } from './roomWriter';
 import { getBotWorkflowStore } from './botWorkflow';
+
+// Part of the app: until (or unless) the tracker runs, reads and stamps
+// fail closed.
+expectWakeTaint();
+expectGuestProbes();
 
 registerFactoryRpcModule('wakeTaint', (_router, deps) => {
   let off: (() => void) | null = null;
   return {
     async start() {
-      const [{ getFactLog }, { getHandoffRouter }, { getTaskLedger }, { currentWakeItem }, { getBotRuntime }, { resolveFactsFrom }, { getBotDirectory }] = await Promise.all([
+      const [{ getFactLog }, { getHandoffRouter }, { getTaskLedger }, { currentWakeItem, wakeItemById }, { getBotRuntime }, { resolveFactsFrom }, { getBotDirectory }] = await Promise.all([
         import('./factLog'),
         import('./handoffRouter'),
         import('../deck/taskLedgerHost'),
@@ -37,13 +43,22 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
         bot: (botId) => getBotDirectory()?.get(botId) ?? null,
         file: path.join(deps.wmuxDir(), 'factory', TAINT_FILENAME),
       });
-      setWakeTaint(taint, runningWake);
+      setWakeTaint(taint, runningWake, wakeItemById);
+      // A bot's card written in its running wake is stamped (RoomCard.origin)
+      // unless that wake is known clean; a write outside a wake passes its
+      // origin itself.
+      setGuestTurnProbe(guestTurnProbeOf(taint, runningWake));
+      // A fact's system cards (a handoff's title or answer, a notice) are
+      // stamped the same way, from the fact's own record.
+      setFactGuestProbe((f) => taint.factGuest(f) !== false);
       const log = getFactLog();
       off = log ? log.subscribe((f) => taint.onFact(f)) : null;
     },
     dispose() {
       off?.();
       off = null;
+      setGuestTurnProbe(null);
+      setFactGuestProbe(null);
       setWakeTaint(null);
     },
   };

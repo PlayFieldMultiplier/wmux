@@ -64,6 +64,8 @@ import { BOTS_SESSION_START } from '../../stores/slices/roomSlice';
 import { loadWholeThread, useBots, useBotsSync } from './useBots';
 import { botsStopPort, stopAllSummary, toastStoppedWork, type BotsStopPort } from './botsStop';
 import { InlineConfirm } from './InlineConfirm';
+import GuestBotsDialog, { type GuestConversationOption } from './GuestBotsDialog';
+import { getGuestBotPort, type GuestBotPort } from './guestBots';
 import './bots.css';
 
 type T = ReturnType<typeof useT>;
@@ -390,7 +392,7 @@ function StartingChat({ bot, t, onBack }: { bot: BotProfile; t: T; onBack: () =>
 }
 
 /** The list header's menu: Stop all bots (only when main offers it). */
-function HeaderMenu({ t, onStopAll }: { t: T; onStopAll: () => void }) {
+function HeaderMenu({ t, onStopAll, onGuests }: { t: T; onStopAll: (() => void) | null; onGuests: (() => void) | null }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -423,16 +425,30 @@ function HeaderMenu({ t, onStopAll }: { t: T; onStopAll: () => void }) {
           className="absolute right-0 top-full z-40 mt-1 min-w-[180px]"
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } }}
         >
-          <button
-            type="button"
-            role="menuitem"
-            data-bots-stop-all
-            autoFocus
-            onClick={() => { setOpen(false); onStopAll(); }}
-            className={`ui-section-row w-full text-left text-[13px] text-[var(--accent-red)] ${FOCUS_RING}`}
-          >
-            {t('botsPage.stop.all')}
-          </button>
+          {onGuests && (
+            <button
+              type="button"
+              role="menuitem"
+              data-bots-guests
+              autoFocus
+              onClick={() => { setOpen(false); onGuests(); }}
+              className={`ui-section-row w-full text-left text-[13px] text-[var(--text-main)] ${FOCUS_RING}`}
+            >
+              {t('botsPage.guest.menu')}
+            </button>
+          )}
+          {onStopAll && (
+            <button
+              type="button"
+              role="menuitem"
+              data-bots-stop-all
+              autoFocus={!onGuests}
+              onClick={() => { setOpen(false); onStopAll(); }}
+              className={`ui-section-row w-full text-left text-[13px] text-[var(--accent-red)] ${FOCUS_RING}`}
+            >
+              {t('botsPage.stop.all')}
+            </button>
+          )}
         </Popover>
       )}
     </span>
@@ -506,7 +522,7 @@ function TeamNotice({ t, workspace, onMake, onDismiss }: { t: T; workspace: stri
   );
 }
 
-export default function BotsPage({ onAddBot, port, api, now, settings, stop, engine, groupPort }: {
+export default function BotsPage({ onAddBot, port, api, now, settings, stop, engine, groupPort, guestPort }: {
   /** What "+" does instead of the in-page add form (tests). */
   onAddBot?: () => void;
   /** Tests: the bot port and the rooms bridge. */
@@ -520,8 +536,12 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   engine?: EnginePort;
   /** Tests: the group chats port (default: the preload's). */
   groupPort?: BotGroupPort;
+  /** Tests: the guest bots port (default: the preload's). */
+  guestPort?: GuestBotPort;
 } = {}): React.ReactElement {
   const t = useT();
+  const guestsPort = guestPort ?? getGuestBotPort();
+  const [guestsOpen, setGuestsOpen] = useState(false);
   const groupsPort = groupPort ?? getBotGroupPort();
   const botsState = useBots(port, groupsPort);
   useBotsSync(botsState, { focus: false, paused: true });
@@ -766,7 +786,13 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
             >
               <IconSearch size={16} />
             </button>
-            {stopPort.stopAll && <HeaderMenu t={t} onStopAll={() => setConfirmStopAll(true)} />}
+            {(stopPort.stopAll || guestsPort.available) && (
+              <HeaderMenu
+                t={t}
+                onStopAll={stopPort.stopAll ? () => setConfirmStopAll(true) : null}
+                onGuests={guestsPort.available ? () => setGuestsOpen(true) : null}
+              />
+            )}
             <AddMenu t={t} onAddBot={startAdd} onNewGroup={newGroup} />
           </div>
           {teamMade && newGroup && (
@@ -922,7 +948,32 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
           onClose={() => setGroupDialog(null)}
         />
       )}
+      {guestsOpen && (
+        <GuestBotsDialog
+          t={t}
+          port={guestsPort}
+          conversations={guestConversations(model.conversations, (c) => conversationTitle(c, nameOf))}
+          workspaceName={nameOf}
+          botName={(id) => bots.find((b) => b.bot.id === id)?.bot.name ?? id}
+          onClose={() => setGuestsOpen(false)}
+        />
+      )}
       {consent.dialog}
     </div>
   );
+}
+
+/** The conversations a guest bot may join: each live bot's 1:1 and each
+ *  group chat. Pure. */
+export function guestConversations(list: readonly Conversation[], title: (c: Conversation) => string): GuestConversationOption[] {
+  const out: GuestConversationOption[] = [];
+  for (const c of list) {
+    if (c.kind === 'bot') {
+      if (c.removed) continue;
+      out.push({ scope: { workspaceId: c.row.bot.workspaceId, threadId: dmThreadId(c.row.bot.id) }, label: title(c) });
+    } else {
+      out.push({ scope: { workspaceId: c.group.workspaceId, threadId: c.threadId }, label: title(c) });
+    }
+  }
+  return out;
 }

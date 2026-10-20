@@ -8,7 +8,8 @@ import type { Fact } from '../../../shared/facts';
 import type { Handoff } from '../../../shared/handoff';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WakeItem } from '../../../shared/wake';
-import { WakeTaint, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
+import { __resetGuestWorkspacesForTesting, noteGuestRecordWorkspaces } from '../guestWorkspaces';
+import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, expectWakeTaint, factVisibleToBot, guestTurnProbeOf, untrackedGuest, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-taint-')); });
@@ -154,9 +155,9 @@ describe('WakeTaint', () => {
     const fromB = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-b' };
     const fromGone = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-c' };
     const hs = [handoff('h-research', fromA), handoff('h-dev', fromB), handoff('h-gone', fromGone)];
-    const profiles: Record<string, { role: 'lead'; template: 'researcher' | 'developer' }> = {
-      'bot-a': { role: 'lead', template: 'researcher' },
-      'bot-b': { role: 'lead', template: 'developer' },
+    const profiles: Record<string, { role: 'lead'; template: 'researcher' | 'developer'; workspaceId: string }> = {
+      'bot-a': { role: 'lead', template: 'researcher', workspaceId: 'ws' },
+      'bot-b': { role: 'lead', template: 'developer', workspaceId: 'ws' },
     };
     const t = make({
       runningWake: () => ({ item: wake({ kind: 'human', text: 'go', source: 'desktop' }), startedAt: 50 }),
@@ -176,7 +177,7 @@ describe('WakeTaint', () => {
     const fromA = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), JSON.stringify({ version: 1, handoffs: { 'h-old': false, 'h-dev': false } }));
-    const t = make({ bot: (id) => (id === 'bot-a' ? { role: 'lead', template: 'researcher' } : { role: 'lead', template: 'developer' }) },
+    const t = make({ bot: (id) => (id === 'bot-a' ? { role: 'lead', template: 'researcher', workspaceId: 'ws' } : { role: 'lead', template: 'developer', workspaceId: 'ws' }) },
       [], [handoff('h-old', fromA), handoff('h-dev', { kind: 'bot', workspaceId: 'ws', botId: 'bot-b' })]);
     expect(t.handoffTainted('h-old')).toBe(true);
     expect(t.handoffTainted('h-dev')).toBe(false);
@@ -200,7 +201,7 @@ describe('WakeTaint', () => {
     const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
     const human = { kind: 'human' as const };
     const answer = (id: string, askId?: string): Handoff => ({ ...handoff(id, human), kind: 'answer', to: fromBot, ...(askId ? { replyTo: askId } : {}) });
-    const kept: Handoff = { ...handoff('a-kept', fromBot), kind: 'ask_person', to: human };
+    const kept: Handoff = { ...handoff('a-kept', fromBot), kind: 'ask_person', to: human, guestSourced: false };
     // The pruned question's answer, an intact one with no hop, and owner text that answers no question.
     const hs = [kept, answer('ans-pruned', 'a-pruned'), answer('ans-kept', 'a-kept'), answer('ans-direct'), handoff('h-out', fromBot), handoff('h-out-2', fromBot)];
     let running: { item: WakeItem; startedAt: number } | null = null;
@@ -224,7 +225,8 @@ describe('WakeTaint', () => {
     running = { item: on('ans-kept'), startedAt: 0 };
     t.markSent('h-out-2', 'bot-a', ['ans-pruned']);
     expect(t.handoffTainted('h-out-2')).toBe(true);
-    expect(t.markForward('h-fwd', { handoffIds: ['ans-pruned'] })).toBe(true);
+    // Its question gone, it is also of unknown provenance: stamped guest.
+    expect(t.markForward('h-fwd', { handoffIds: ['ans-pruned'] })).toBe('guest');
     expect(t.markForward('h-fwd-2', { handoffIds: ['ans-kept'] })).toBe(false);
     // The answer pruned in turn: its delivery mark says what it was.
     hs.push({ ...handoff('h-dirty', fromBot) }, { ...kept, id: 'a-dirty', forHop: 'h-dirty' }, answer('ans-dirty', 'a-dirty'));
@@ -268,5 +270,185 @@ describe('WakeTaint', () => {
     fs.writeFileSync(path.join(dir, 'factory', 'taint.json'), '{nope');
     const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
     expect(make({}, [], [handoff('h', fromBot)]).handoffTainted('h')).toBe(true);
+  });
+});
+
+describe('guest provenance', () => {
+  afterEach(() => setWakeTaint(null));
+  const G = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
+  const guestReason = { kind: 'guest' as const, guestId: G, guestName: 'G', cardId: 'c', text: 'x' };
+  const fromBot = { kind: 'bot' as const, workspaceId: 'ws', botId: 'bot-a' };
+
+  it('is decided from the wake record: guest wakes, clean reasons, records that say, and unknown when nothing does', () => {
+    const t = make({}, [
+      { ...fact('f-task', 'task.done', { taskId: 't-guest' }) },
+      { ...fact('f-notice', 'bot.notice'), payload: { topic: 'worker.started', title: 'x', guest: false } as never },
+      { ...fact('f-old-notice', 'bot.notice'), payload: { topic: 'worker.started', title: 'x', tainted: true } as never },
+      fact('f-pr', 'pr.opened'),
+    ], [], [
+      { id: 't-guest', dispatch: { origin: { kind: 'bot', botId: 'bot-a', tainted: true, guest: true } } } as unknown as LedgerEntry,
+      row('t-clean', false),
+      row('t-old-tainted', true),
+    ]);
+    expect(t.wakeGuest(wake(guestReason))).toBe(true);
+    expect(t.wakeGuest(wake({ kind: 'human', text: 'hi', source: 'desktop' }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['f-task'], trigger: { kind: 'task.done' } }))).toBe(true);
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['f-notice', 'f-pr'], trigger: { kind: 'fact' } as never }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['task.done:t-clean@2'], trigger: { kind: 'task.done' } }))).toBe(false);
+    // A record that does not say and is not known clean: unknown, never clean.
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['task.done:t-old-tainted@2'], trigger: { kind: 'task.done' } }))).toBe('unknown');
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['f-old-notice'], trigger: { kind: 'fact' } as never }))).toBe('unknown');
+    expect(t.wakeGuest(wake({ kind: 'facts', factIds: ['f-missing'], trigger: { kind: 'fact' } as never }))).toBe('unknown');
+    expect(t.wakeGuest(wake({ kind: 'held_fanout', heldId: 'h', heldAt: 1, titles: ['x'], tainted: false }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'held_fanout', heldId: 'h', heldAt: 1, titles: ['x'], tainted: true }))).toBe('unknown');
+    expect(t.wakeGuest(wake({ kind: 'held_fanout', heldId: 'h', heldAt: 1, titles: ['x'], tainted: true, guest: false }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-gone' }))).toBe('unknown');
+  });
+
+  it('a send from a guest wake is marked guest on disk; the receiving wake is guest, also after a reload', () => {
+    const handoffs = [handoff('h-1', fromBot)];
+    const running = { item: wake(guestReason), startedAt: 1 };
+    const t = make({ runningWake: () => running }, [], handoffs);
+    expect(t.markSent('h-1', 'bot-a')).toBe('guest');
+    expect(t.handoffTainted('h-1')).toBe(true);
+    const receiving = wake({ kind: 'handoff', handoffId: 'h-1' });
+    expect(t.wakeGuest(receiving)).toBe(true);
+    expect(make({}, [], handoffs).wakeGuest(receiving)).toBe(true);
+    // From a clean wake: a plain mark, never guest.
+    const clean = make({ runningWake: () => ({ item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 }) }, [], [handoff('h-2', fromBot)]);
+    expect(clean.markSent('h-2', 'bot-a')).toBe(false);
+    expect(clean.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-2' }))).toBe(false);
+  });
+
+  it('a relay dispatch carrying a guest-sourced result is guest-sourced', () => {
+    const result = { ...handoff('h-result', fromBot), kind: 'result' as const, guestSourced: true };
+    const t = make({}, [], [result, handoff('h-parent', fromBot), handoff('h-relay', fromBot)]);
+    expect(t.markForward('h-relay', { handoffIds: ['h-result', 'h-parent'] })).toBe('guest');
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-relay' }))).toBe(true);
+  });
+
+  it('the owner\'s answer is as guest-sourced as its question; a question that does not say counts as one', () => {
+    const ask = (id: string, guestSourced?: boolean): Handoff => ({ ...handoff(id, fromBot), kind: 'ask_person', to: { kind: 'human' }, ...(guestSourced !== undefined ? { guestSourced } : {}) });
+    const answer = (id: string, askId: string): Handoff => ({ ...handoff(id, { kind: 'human' }), kind: 'answer', replyTo: askId, to: fromBot });
+    const handoffs = [ask('q-guest', true), ask('q-clean', false), ask('q-old'), answer('a-guest', 'q-guest'), answer('a-clean', 'q-clean'), answer('a-old', 'q-old')];
+    const t = make({}, [], handoffs);
+    for (const id of ['a-guest', 'a-clean', 'a-old']) t.noteDelivered(id);
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-guest' }))).toBe(true);
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-clean' }))).toBe(false);
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'a-old' }))).toBe(true);
+  });
+
+  it('a mention carrying a guest-sourced card is guest whatever turn routes it; a refused clean send wakes its sender clean', () => {
+    const clean = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
+    const refused = { ...handoff('h-refused', fromBot), status: 'refused' as const, guestSourced: false };
+    const t = make({ runningWake: () => clean }, [], [handoff('h-m', fromBot), refused]);
+    expect(t.markSent('h-m', 'bot-a', [], true)).toBe('guest');
+    expect(t.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-m' }))).toBe(true);
+    // A clean card routed after its wake ended: clean (tainted, as no turn vouches for it).
+    const after = make({ runningWake: () => null }, [], [handoff('h-c', fromBot)]);
+    expect(after.markSent('h-c', 'bot-a', [], false)).toBe(true);
+    expect(after.wakeGuest(wake({ kind: 'handoff', handoffId: 'h-c' }))).toBe(false);
+    const withFact = make({ runningWake: () => clean }, [{ ...fact('f-r', 'handoff.refused', { handoffId: 'h-refused' }) }], [refused]);
+    expect(withFact.wakeGuest(wake({ kind: 'facts', factIds: ['f-r'], trigger: { kind: 'fact' } as never }))).toBe(false);
+  });
+
+  it('a bot\'s fact reads show only facts known clean, except in a guest-sourced wake', () => {
+    const guestHop = { ...handoff('h-g', fromBot), guestSourced: true };
+    const cleanHop = { ...handoff('h-c', fromBot), guestSourced: false };
+    const facts = [fact('f-g', 'handoff.received', { handoffId: 'h-g' }), fact('f-c', 'handoff.received', { handoffId: 'h-c' }), fact('f-x', 'handoff.received', { handoffId: 'h-gone' }), fact('f-pr', 'pr.opened')];
+    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
+    const t = make({ runningWake: () => running, bot: () => ({ role: 'lead', template: 'developer', workspaceId: 'ws' }) }, facts, [guestHop, cleanHop]);
+    setWakeTaint(t, () => running);
+    expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-c', 'f-pr']);
+    running = { item: wake(guestReason), startedAt: 1 };
+    expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-g', 'f-c', 'f-x', 'f-pr']);
+    // No running wake: not known to be a guest one.
+    running = null;
+    expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-c', 'f-pr']);
+    // No tracker where one is expected: only facts that carry no bot's or guest's words.
+    setWakeTaint(null);
+    expectWakeTaint();
+    try {
+      expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-pr']);
+    } finally {
+      expectWakeTaint(false);
+    }
+  });
+
+  it('the room\'s turn probe: a guest or unknown wake, or none running, is not known clean; untracked reads fail closed only where a tracker is expected', () => {
+    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
+    const t = make({ runningWake: () => running });
+    const probe = guestTurnProbeOf(t, () => running);
+    expect(probe('bot-a')).toBe(false);
+    running = { item: wake(guestReason), startedAt: 1 };
+    expect(probe('bot-a')).toBe(true);
+    running = null;
+    expect(probe('bot-a')).toBe(true);
+    expect(untrackedGuest()).toBe(false);
+    expectWakeTaint();
+    try {
+      expect(untrackedGuest()).toBe('unknown');
+    } finally {
+      expectWakeTaint(false);
+    }
+  });
+
+  it('a guest mark that cannot be written fails the send', () => {
+    fs.writeFileSync(path.join(dir, 'factory'), 'not a folder');
+    const t = make({ runningWake: () => ({ item: wake(guestReason), startedAt: 1 }) }, [], [handoff('h-1', fromBot)]);
+    expect(t.markSent('h-1', 'bot-a')).toBeNull();
+  });
+
+  it('by wake id: a guest or unknown wake may not start work; one whose record is gone is unknown', () => {
+    const items = new Map<string, WakeItem>([['w-1', wake({ kind: 'human', text: 'hi', source: 'desktop' })], ['w-g', { ...wake(guestReason), id: 'w-g' }]]);
+    const t = make();
+    setWakeTaint(t, () => null, (id) => items.get(id) ?? null);
+    expect(guestOfWake('w-1')).toBe(false);
+    expect(guestTurnRefusal('w-1')).toBeNull();
+    expect(guestTurnRefusal('w-g')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
+    items.delete('w-1');
+    expect(guestOfWake('w-1')).toBe('unknown');
+    expect(guestTurnRefusal('w-1')).toBe(GUEST_TURN_STARTS_NO_WORKERS);
+  });
+});
+
+describe('a guest workspace is an island', () => {
+  const human = { kind: 'human' as const, text: 'go', source: 'desktop' as const };
+  it('every wake there is a guest wake and tainted, the owner\'s own message included', () => {
+    const t = make({ guestWorkspace: (ws) => ws === 'ws-g', bot: () => ({ role: 'lead', template: 'developer', workspaceId: 'ws-g' }) });
+    const item = { ...wake(human), workspaceId: 'ws-g' };
+    expect(t.wakeGuest(item)).toBe(true);
+    expect(t.wakeTainted(item)).toBe(true);
+    // The bot's stored workspace decides too, whatever the item names.
+    expect(t.wakeGuest({ ...item, workspaceId: 'ws-a' })).toBe(true);
+  });
+
+  it('a bot\'s fact reads stay on its side of the boundary, in any wake', () => {
+    const facts: Fact[] = [{ ...fact('f-g', 'pr.opened'), workspaceId: 'ws-g' }, { ...fact('f-a', 'pr.opened'), workspaceId: 'ws-a' }, fact('f-none', 'pr.opened')];
+    const guestWs = (ws: string) => ws === 'ws-g';
+    let botWs = 'ws-a';
+    const running = { item: wake(human), startedAt: 1 };
+    const t = make({ runningWake: () => running, guestWorkspace: guestWs, bot: () => ({ role: 'lead', template: 'developer', workspaceId: botWs }) }, facts);
+    setWakeTaint(t, () => running);
+    try {
+      // The predicate factInIsland reads (a daemon record's workspace).
+      noteGuestRecordWorkspaces(['ws-g']);
+      expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-a', 'f-none']);
+      botWs = 'ws-g';
+      expect(facts.filter(factVisibleToBot('bot-g')).map((f) => f.id)).toEqual(['f-g']);
+    } finally {
+      setWakeTaint(null);
+      __resetGuestWorkspacesForTesting();
+    }
+  });
+
+  it('a clean workspace keeps the record\'s answer; a missing bot or an unknown workspace is unknown', () => {
+    const clean = make({ guestWorkspace: () => false, bot: () => ({ role: 'lead', template: 'developer', workspaceId: 'ws' }) });
+    expect(clean.wakeGuest(wake(human))).toBe(false);
+    expect(clean.wakeTainted(wake(human))).toBe(false);
+    expect(make({ guestWorkspace: () => false, bot: () => null }).wakeGuest(wake(human))).toBe('unknown');
+    expect(make({ guestWorkspace: () => 'unknown' }).wakeGuest(wake(human))).toBe('unknown');
+    // A guest's own wake stays a guest wake whatever the workspace says.
+    expect(make({ guestWorkspace: () => 'unknown' }).wakeGuest(wake({ kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c', text: 'x' }))).toBe(true);
   });
 });

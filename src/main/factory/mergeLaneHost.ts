@@ -59,6 +59,7 @@ import type { ApprovalMergeHost, StoredApproval } from './approvals';
 import type { BotDirectoryApi } from './triggerEngine';
 import type { RoomWriter } from './roomWriter';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
+import { guestSide } from './guestWorkspaces';
 
 /** The facts that can complete a PR's case. */
 export const LANE_FACT_KINDS: ReadonlySet<Fact['kind']> = new Set(['verdict.recorded', 'ci.green', 'pr.head_moved', 'pr.labelled']);
@@ -260,7 +261,8 @@ export class MergeLaneHost {
   /** The enabled bots on a repo (their workspaces' rooms get the cards). */
   private botsOn(repoKey: string): BotProfile[] {
     try {
-      return (this.ports.bots()?.listEnabled() ?? []).filter((b) => normalizeRepoKey(b.repo?.repoKey) === repoKey);
+      // A guest workspace has no repository; skipped all the same.
+      return (this.ports.bots()?.listEnabled() ?? []).filter((b) => normalizeRepoKey(b.repo?.repoKey) === repoKey && !guestSide(b.workspaceId));
     } catch {
       return [];
     }
@@ -738,7 +740,7 @@ async function productionHost(deps: FactoryHostDeps): Promise<{ host: MergeLaneH
     run: (id) => executor.run(id),
     botsBusy: (repoKey) => {
       const runtime = getBotRuntime();
-      return !!runtime && (getBotDirectory()?.listEnabled() ?? []).some((b) => normalizeRepoKey(b.repo?.repoKey) === repoKey && runtime.currentTurn(b.id) !== null);
+      return !!runtime && (getBotDirectory()?.listEnabled() ?? []).some((b) => normalizeRepoKey(b.repo?.repoKey) === repoKey && !guestSide(b.workspaceId) && runtime.currentTurn(b.id) !== null);
     },
     hasApproval: (repoKey, pr) => (getApprovalService()?.listForOperator() ?? []).some((r) => r.action === 'merge' && r.repoKey === repoKey && r.prNumber === pr),
     appendFact: (d) => log.append(d),

@@ -58,7 +58,12 @@ export function threadCards(cards: readonly RoomCard[], workspaceId: string, thr
 
 /** Who wrote a card, as runs compare it. */
 function author(card: RoomCard): string {
-  return card.actor.kind === 'bot' ? `bot:${card.actor.botId}` : card.actor.kind;
+  if (card.actor.kind === 'bot') return `bot:${card.actor.botId}`;
+  // A guest's card is written by the system actor: each guest is its own
+  // author, so one guest's message never continues another's (or a
+  // system line's) run and loses its name header.
+  if (card.kind === 'guest') return `guest:${card.guest?.guestId ?? card.id}`;
+  return card.actor.kind;
 }
 
 /** Who a run item is by: a message's author, a work card's delegating bot. */
@@ -139,7 +144,9 @@ export function buildTimeline(entries: readonly RoomEntry[], opts: {
       if (work.steps.includes(card)) continue;
     }
     const prev = out[out.length - 1];
-    if (card.actor.kind === 'system') {
+    // A guest's card is a message in the conversation (marked external in
+    // its row), not one of wmux's own system lines.
+    if (card.actor.kind === 'system' && card.kind !== 'guest') {
       const thread = opts.threads?.get(card.id);
       if (prev?.kind === 'system' && prev.cards[0].threadId === card.threadId && prev.cards[0].workspaceId === card.workspaceId) {
         prev.cards.push(card);

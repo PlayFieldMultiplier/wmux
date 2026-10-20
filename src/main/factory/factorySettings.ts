@@ -25,6 +25,7 @@ import {
 } from '../../shared/factorySettings';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { sanitizeBotEngine } from './botStore';
+import { guestSide } from './guestWorkspaces';
 
 // The shape lives in shared/ so the renderer can read it.
 export {
@@ -118,6 +119,9 @@ export function mergeFactorySettings(base: FactorySettings, raw: unknown): Facto
 export const BOTS_PLAN_CONSENT_REQUIRED =
   'Bots run on your Claude plan: turn bots on in the wmux app first, where you confirm it.';
 
+/** Why the HQ workspace was refused: it is a guest workspace. */
+export const HQ_NOT_GUEST_WORKSPACE = 'A guest workspace cannot be the HQ workspace.';
+
 export function factorySettingsPath(wmuxDir: string): string {
   return path.join(wmuxDir, 'factory', 'settings.json');
 }
@@ -152,6 +156,8 @@ export class FactorySettingsStore {
     const given = mergeFactorySettings(cloneDefaults(), { planConsent: p.planConsent }).planConsent;
     if (given) next.planConsent = { version: given.version, at: new Date().toISOString() };
     if (p.enabled === true && !hasBotsPlanConsent(next)) throw new Error(BOTS_PLAN_CONSENT_REQUIRED);
+    // A guest workspace is never the HQ: the Coordinator lives there.
+    if (next.hqWorkspaceId !== null && next.hqWorkspaceId !== this.settings.hqWorkspaceId && guestSide(next.hqWorkspaceId)) throw new Error(HQ_NOT_GUEST_WORKSPACE);
     this.settings = next;
     // Live from now, before the write lands: switching off stops the bots at
     // once, whether the write is slow or fails.

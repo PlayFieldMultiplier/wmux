@@ -22,6 +22,8 @@ import {
 } from '../../deck/commanderTrust';
 import type { RpcContext, RpcMethod } from '../../../shared/rpc';
 import type { BotRefusal } from '../../../shared/botSurface';
+import type { WakeItem } from '../../../shared/wake';
+import { WakeTaint, expectWakeTaint, setWakeTaint } from '../../factory/wakeTaint';
 
 let tmpDir = '';
 let store: PluginTrustStore;
@@ -192,6 +194,70 @@ describe('bot role gate — a throwing refusal listener never changes the dispat
     try {
       const res = await call('input.send', token);
       expect(res.ok).toBe(false);
+    } finally {
+      revokeCommanderToken(token);
+    }
+  });
+});
+
+describe('the guest gate: a wake not known clean reaches only GUEST_SAFE_RPC', () => {
+  beforeEach(() => {
+    wire('enforce');
+    for (const method of ['pr.read', 'input.readScreen'] as RpcMethod[]) {
+      router.register(method, async (_params, ctx) => {
+        seen.push({ method, ctx });
+        return { ok: true };
+      });
+    }
+  });
+  afterEach(() => {
+    setWakeTaint(null);
+    expectWakeTaint(false);
+  });
+  const G = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
+  const item = (reason: WakeItem['reason']): WakeItem => ({ id: 'w-1', botId: VERIFIER.botId, workspaceId: 'ws-v', reason, priority: 1, enqueuedAt: 1, attempts: 1, state: 'running' });
+  const tracker = (running: () => WakeItem | null): void => {
+    const runningWake = () => { const it = running(); return it ? { item: it, startedAt: 1 } : null; };
+    setWakeTaint(new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake }), runningWake);
+  };
+
+  it('a guest wake replies in its room; work, repository and terminal calls are refused and reported', async () => {
+    tracker(() => item({ kind: 'guest', guestId: G, guestName: 'G', cardId: 'c', text: 'hi' }));
+    const refusals: BotRefusal[] = [];
+    const off = router.onBotRefused((r) => refusals.push(r));
+    const token = mintBotToken(VERIFIER);
+    try {
+      expect(await call('room.post', token)).toMatchObject({ ok: true });
+      expect(seen.map((x) => x.method)).toEqual(['room.post']);
+      expect(seen[0].ctx?.bot).toEqual(VERIFIER);
+      for (const method of ['task.fanout.start', 'verify.recordVerdict', 'pr.read', 'input.readScreen', 'plan.propose', 'bot.setJob']) {
+        const res = await call(method, token);
+        expect(res.ok, method).toBe(false);
+        if (!res.ok) expect(res.error).toContain('external guest');
+      }
+      expect(seen).toHaveLength(1);
+      expect(refusals.map((r) => [r.method, r.reason])).toEqual([
+        ['task.fanout.start', 'guest'], ['verify.recordVerdict', 'guest'], ['pr.read', 'guest'], ['input.readScreen', 'guest'], ['plan.propose', 'guest'], ['bot.setJob', 'guest'],
+      ]);
+    } finally {
+      off();
+      revokeCommanderToken(token);
+    }
+  });
+
+  it('a clean wake passes; no running wake, or a tracker that is expected but missing, counts as not known clean', async () => {
+    let running: WakeItem | null = item({ kind: 'human', text: 'hi', source: 'desktop' });
+    tracker(() => running);
+    const token = mintBotToken(VERIFIER);
+    try {
+      expect(await call('task.fanout.start', token)).toMatchObject({ ok: true });
+      running = null;
+      expect(await call('task.fanout.start', token)).toMatchObject({ ok: false });
+      setWakeTaint(null);
+      expectWakeTaint();
+      expect(await call('verify.recordVerdict', token)).toMatchObject({ ok: false });
+      expect(await call('room.post', token)).toMatchObject({ ok: true });
+      expect(seen.map((x) => x.method)).toEqual(['task.fanout.start', 'room.post']);
     } finally {
       revokeCommanderToken(token);
     }

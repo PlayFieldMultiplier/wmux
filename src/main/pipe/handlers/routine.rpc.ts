@@ -36,6 +36,7 @@ import { getRoomWriter, resolveRoomPorts, runningWake, wakeOrdinals, wakeReplyTo
 import { getFactorySettings, onFactorySettingsChanged } from '../../factory/factorySettings';
 import { setBotRuntimePorts, type BotLifecycleEvent } from '../../factory/BotRuntime';
 import { summarizeHandoff } from '../../factory/handoffRouter';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 import { getFactoryStopPorts, stopFactoryWork } from '../../factory/factoryStop';
 
 type Refusal = { ok: false; code: 'not_authorized' | 'not_started' | 'invalid_argument'; message: string };
@@ -70,6 +71,8 @@ export function turnOnOwnerWords(botId: string, deps: { wake?: typeof currentWak
 export interface RoutineHandlerDeps {
   store: () => RoutineStore | null;
   ownerWords?: (botId: string) => boolean;
+  /** The guest provenance of the bot's running wake. Default: wakeTaint.ts. */
+  guestWake?: (botId: string) => GuestProvenance;
   /** The default idempotency key of a routine set in the running turn. */
   defaultKey?: (botId: string) => string | undefined;
   stop?: (botId: string) => Promise<{ ok: boolean; workersStopped: number; gatesCancelled: number; routinesPaused?: number; code?: string; message?: string }>;
@@ -84,6 +87,9 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     if (!(deps.ownerWords ?? turnOnOwnerWords)(bot.botId)) {
       return refuse('not_authorized', 'a routine is set in a turn on the owner\'s words: ask the owner, then set it when they answer');
     }
+    // The owner's answer to a guest-sourced question is guest-sourced too:
+    // a routine runs later as clean work, so none is saved from it.
+    if ((deps.guestWake ?? guestOfRunningWake)(bot.botId) !== false) return refuse('not_authorized', GUEST_TURN_STARTS_NO_WORKERS);
     const p = obj(raw) as Partial<RoutineSetParams>;
     const key = p.clientRoutineId ?? deps.defaultKey?.(bot.botId);
     return store.set({ botId: bot.botId, workspaceId: bot.workspaceId }, { ...(p as RoutineSetParams), ...(key ? { clientRoutineId: key } : {}) });
@@ -107,6 +113,8 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     const store = deps.store();
     if (!store) return NOT_STARTED;
     const p = obj(raw);
+    // Pausing is always allowed; a resumed routine wakes the bot later as clean work.
+    if (p.paused !== true && (deps.guestWake ?? guestOfRunningWake)(ctx.bot.botId) !== false) return refuse('not_authorized', GUEST_TURN_STARTS_NO_WORKERS);
     return store.pause({ kind: 'bot', botId: ctx.bot.botId, workspaceId: ctx.bot.workspaceId }, p.routineId, p.paused);
   });
 

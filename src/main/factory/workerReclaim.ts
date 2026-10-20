@@ -1590,7 +1590,7 @@ export interface WorkerResumePorts {
   /** Whether the pane's agent runs (process truth), for a message. */
   agentAlive?: (sessionId: string) => Promise<boolean>;
   /** Deliver a message to the relaunched agent (waits while someone types). */
-  submit?: (sessionId: string, text: string) => Promise<boolean>;
+  submit?: (sessionId: string, text: string, stillOk?: () => string | null) => Promise<boolean>;
   /** daemon `session.stopAgent`, for the stop of a resumed worker. */
   stopAgent?: (sessionId: string) => Promise<{ ok?: boolean; stopped?: boolean; code?: string }>;
   /** Close a pane whose agent the daemon cannot stop (WorkerReclaimPorts.closePane). */
@@ -1694,6 +1694,9 @@ export async function resumeWorker(
   /** Called once the line is typed (a launch slot hands over to the
    *  resumed-worker count here). */
   onLaunched?: () => void,
+  /** Asked in the same tick as the launch (the line typed, the pane
+   *  respawned): why it may no longer go ahead, or null. */
+  stillOk?: () => string | null,
 ): Promise<WorkerResumeResult> {
   if (resuming.has(taskId)) return refuse('busy', 'this worker is being resumed already');
   if (clearing.has(taskId)) return refuse('busy', 'this worker\'s pane is being closed; try again in a moment');
@@ -1722,7 +1725,7 @@ export async function resumeWorker(
       booking.botId = botId;
       booking.done = false;
       botStarting.set(botId, (botStarting.get(botId) ?? 0) + 1);
-    });
+    }, stillOk);
   } finally {
     unbook();
     release?.();
@@ -1773,6 +1776,7 @@ async function resumeOnce(
   message: string | undefined,
   onLaunched: (() => void) | undefined,
   book: (botId: string) => void,
+  stillOk?: () => string | null,
 ): Promise<WorkerResumeResult> {
   const rec = ports.store.get(taskId);
   if (!rec) return refuse('not_reclaimed', 'this task\'s worker was not stopped by wmux, so there is nothing to resume');
@@ -1807,7 +1811,7 @@ async function resumeOnce(
   const sessions = await ports.listSessions();
   if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   const live = sessions.find((s) => s.id === pane.sessionId);
-  if (!live) return respawnOnce(ports, rec, pane, line, sessions, by, message, onLaunched, stopped);
+  if (!live) return respawnOnce(ports, rec, pane, line, sessions, by, message, onLaunched, stopped, stillOk);
   // Both the folder the pane was started in and the one its shell is in now
   // (a `cd` moves where a typed line runs) must be the task folder.
   const here = [live.spawnCwd, live.cwd].filter((d): d is string => typeof d === 'string' && d.length > 0);
@@ -1829,6 +1833,8 @@ async function resumeOnce(
     return refuse('not_reopened', 'the task could not be moved to the worker\'s pane; try again');
   }
   if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
+  const late = stillOk?.() ?? null;
+  if (late) return refuse('not_now', late);
   // A new launch of the task, on disk before the line is typed.
   let gen: number | null = null;
   try {
@@ -1850,7 +1856,7 @@ async function resumeOnce(
     else ports.launches?.released(rec.taskId, gen);
   }
   if (!typed) return refuse('not_typed', 'the resume line could not be typed into the worker\'s pane');
-  return launched(ports, rec, pane.sessionId, pane.resumeSessionId, workerWorkspaceOf(rec), by, message, onLaunched, 'folder');
+  return launched(ports, rec, pane.sessionId, pane.resumeSessionId, workerWorkspaceOf(rec), by, message, onLaunched, 'folder', stillOk);
 }
 
 /** The worker's pane is gone: open a new task workspace in the worktree. */
@@ -1864,6 +1870,7 @@ async function respawnOnce(
   message: string | undefined,
   onLaunched: (() => void) | undefined,
   stopped: () => boolean,
+  stillOk?: () => string | null,
 ): Promise<WorkerResumeResult> {
   if (!ports.respawn || !pane.resumeSessionId) return refuse('pane_gone', 'the worker\'s pane is closed');
   // A WSL pane recorded the Linux path of its folder (/mnt/c/…): the folder
@@ -1892,6 +1899,8 @@ async function respawnOnce(
     && [s.spawnCwd, s.cwd].some((d) => typeof d === 'string' && d.length > 0 && normalizeResumeCwd(sessionHostDir(d, s, platform)) === home));
   if (busy) return refuse('already_running', 'an agent is already running in the task\'s worktree');
   if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
+  const late = stillOk?.() ?? null;
+  if (late) return refuse('not_now', late);
   let r: Awaited<ReturnType<NonNullable<WorkerResumePorts['respawn']>>>;
   try {
     r = await ports.respawn({
@@ -1922,7 +1931,7 @@ async function respawnOnce(
     await stopRelaunched(ports, rec.taskId, r.sessionId);
     return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   }
-  return launched(ports, rec, r.sessionId, pane.resumeSessionId, r.workspaceId, by, message, onLaunched, 'newPane');
+  return launched(ports, rec, r.sessionId, pane.resumeSessionId, r.workspaceId, by, message, onLaunched, 'newPane', stillOk);
 }
 
 /** The task's ledger row names `workspaceId` (written now when it named
@@ -1967,6 +1976,7 @@ async function launched(
   message: string | undefined,
   onLaunched: (() => void) | undefined,
   where: 'folder' | 'newPane',
+  stillOk?: () => string | null,
 ): Promise<WorkerResumeResult> {
   const now = ports.now ?? Date.now;
   ports.store.setState(rec.taskId, 'resumed', now());
@@ -1996,7 +2006,11 @@ async function launched(
     }
     await sleep(1000);
   }
-  const delivered = up ? await ports.submit(sessionId, text.slice(0, RESUME_MESSAGE_MAX)).catch(() => false) : false;
+  // Asked again after the wait, in the tick that sends the message.
+  if (up && (stillOk?.() ?? null)) return { ...out, messageDelivered: false };
+  // ... and again right before the paste and the Enter.
+  const body = text.slice(0, RESUME_MESSAGE_MAX);
+  const delivered = up ? await (stillOk ? ports.submit(sessionId, body, stillOk) : ports.submit(sessionId, body)).catch(() => false) : false;
   return { ...out, messageDelivered: delivered };
 }
 

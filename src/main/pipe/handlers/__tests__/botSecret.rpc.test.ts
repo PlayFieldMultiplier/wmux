@@ -61,7 +61,7 @@ beforeEach(() => {
   store = new SecretStore({ file: path.join(dir, 'secrets.json'), crypto });
   store.load();
   wakes = [];
-  deps = { store: () => store, writer: () => writer, ports: () => ({ wakes: { enqueue: (w: WakeEnqueueInput) => { wakes.push(w); return null; } } }) };
+  deps = { store: () => store, writer: () => writer, guestWake: () => false, ports: () => ({ wakes: { enqueue: (w: WakeEnqueueInput) => { wakes.push(w); return null; } } }) };
   __resetRedactedSecretsForTesting();
 });
 afterEach(() => {
@@ -73,6 +73,15 @@ describe('secret_request', () => {
   it('is a bot\'s: an operator or a pane caller is refused', () => {
     expect(handleSecretRequest({ name: 'NPM_TOKEN', label: 'l', why: 'w' }, operatorCtx, deps)).toMatchObject({ ok: false, code: 'bot_only' });
     expect(handleSecretRequest({ name: 'NPM_TOKEN', label: 'l', why: 'w' }, paneCtx, deps)).toMatchObject({ ok: false, code: 'not_bot' });
+  });
+
+  it('a guest-sourced wake (or one of unknown provenance) asks for no key or sign-in', () => {
+    for (const g of [true, 'unknown'] as const) {
+      const guest = { ...deps, guestWake: () => g };
+      expect(handleSecretRequest({ name: 'NPM_TOKEN', label: 'l', why: 'w' }, botCtx, guest)).toMatchObject({ ok: false, code: 'not_now' });
+      expect(handleLoginRequest({ service: 'github', why: 'push' }, botCtx, guest)).toMatchObject({ ok: false, code: 'not_now' });
+    }
+    expect(writer.read('ws-1', { guests: true }).cards).toEqual([]);
   });
 
   it('refuses a name that does not read as a credential, and a missing label or why', () => {

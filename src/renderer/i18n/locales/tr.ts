@@ -681,4 +681,5 @@ export const tr = {
   'worktask.cleanup.detail.orphanUnlinked': 'Ona bağlı görev veya görev kaydı yok — kontrol edin, sonra silin.',
   'worktask.cleanup.detail.orphanMeta': 'Yalnızca görev kaydı kaldı, worktree yok (bir kaldırma işlemi yarıda kesildi) — kontrol edin, sonra silin.',
   'worktask.cleanup.detail.diskMissing': 'Worktree diskte yok (wmux dışında silindi veya çökme) — temizlemek için görevi kapatın.',
+  'botsPage.guest.readNotice': "Bundan sonra harici bir bot bu konuşmadaki mesajları okuyabilir ve buraya yazabilir. Eklenmeden önce söylenenleri asla görmez.",
 } as const;

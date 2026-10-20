@@ -26,6 +26,15 @@ describe('buildTimeline', () => {
     expect(msgs.map((i) => i.kind === 'message' && i.runEnd)).toEqual([false, true, true, true]);
   });
 
+  it('each external guest is its own author: one guest never continues another\'s run', () => {
+    const g = (guestId: string, at: number) => card({ at, kind: 'guest', actor: { kind: 'system' }, title: 'External guest', guest: { guestId, name: guestId } });
+    const a1 = g('0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', T0);
+    const a2 = g('0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', T0 + 1);
+    const b1 = g('1c6a7b8f-2d3e-4f5a-9b0c-1d2e3f4a5b6c', T0 + 2);
+    const msgs = buildTimeline(entries([a1, a2, b1]), { waits: never }).filter((i) => i.kind === 'message');
+    expect(msgs.map((i) => i.kind === 'message' && i.continuation)).toEqual([false, true, false]);
+  });
+
   it('a card that waits on the owner, or one with a kind word, stays inside its run', () => {
     const a = card({ at: T0 });
     const q = card({ at: T0 + 1, kind: 'question', state: 'open' });

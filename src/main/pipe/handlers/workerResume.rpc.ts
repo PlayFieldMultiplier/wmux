@@ -14,6 +14,7 @@ import { getAgentSlots, type AgentSlots } from '../../factory/agentSlots';
 import { getBotRuntime } from '../../factory/BotRuntime';
 import { getBotStore } from '../../factory/botStore';
 import { isWakeStoppedByOwner } from '../../factory/factoryStop';
+import { guestTurnRefusal } from '../../factory/wakeTaint';
 import { botLaunchRefusal } from './fanout.rpc';
 import { RESUME_MESSAGE_MAX, getWorkerResumePorts, resumeWorker, type WorkerResumePorts } from '../../factory/workerReclaim';
 
@@ -28,8 +29,12 @@ export interface WorkerResumeRpcDeps {
   slots: () => AgentSlots | null;
   factoryEnabled: () => boolean;
   /** Why this bot may not start a worker now (disabled, parked, its running
-   *  wake stopped by the owner or by itself), or null — the fan-out's check. */
-  launchRefusal: (botId: string) => string | null;
+   *  wake stopped by the owner or by itself, guest-sourced or of unknown
+   *  provenance), or null — the fan-out's check. `wakeId`: the wake the
+   *  resume was asked in, judged again right before the launch. */
+  launchRefusal: (botId: string, wakeId?: string) => string | null;
+  /** The bot's running wake id, or null. */
+  wakeId?: (botId: string) => string | null;
 }
 
 export function registerWorkerResumeRpc(router: FactoryRouter, deps: WorkerResumeRpcDeps): void {
@@ -42,7 +47,9 @@ export function registerWorkerResumeRpc(router: FactoryRouter, deps: WorkerResum
       return refuse('invalid_argument', `message must be text of at most ${RESUME_MESSAGE_MAX} characters`);
     }
     if (!deps.factoryEnabled()) return refuse('factory_off', 'the agent factory is off');
-    const refusal = deps.launchRefusal(ctx.bot.botId);
+    // The wake it was asked in, read now: the launch is judged by it.
+    const wakeId = deps.wakeId?.(ctx.bot.botId) ?? undefined;
+    const refusal = deps.launchRefusal(ctx.bot.botId, wakeId);
     if (refusal) return refuse('not_now', refusal);
     const ports = deps.ports();
     if (!ports) return refuse('not_started', 'the agent factory has not started');
@@ -56,7 +63,9 @@ export function registerWorkerResumeRpc(router: FactoryRouter, deps: WorkerResum
       if (slot?.ok) slot.release();
     };
     try {
-      return await resumeWorker(ports, taskId, { kind: 'bot', botId: ctx.bot.botId }, typeof p.message === 'string' ? p.message : undefined, release);
+      const botId = ctx.bot.botId;
+      return await resumeWorker(ports, taskId, { kind: 'bot', botId }, typeof p.message === 'string' ? p.message : undefined, release,
+        () => deps.launchRefusal(botId, wakeId));
     } finally {
       release();
     }
@@ -68,10 +77,13 @@ registerFactoryRpcModule('worker-resume', (router) => {
     ports: getWorkerResumePorts,
     slots: getAgentSlots,
     factoryEnabled: () => getFactorySettings().enabled,
-    launchRefusal: (botId) => {
+    wakeId: (botId) => getBotRuntime()?.currentTurn(botId)?.wakeId ?? null,
+    launchRefusal: (botId, asked) => {
       const runtime = getBotRuntime();
-      const wakeId = runtime?.currentTurn(botId)?.wakeId ?? '';
+      const wakeId = asked ?? runtime?.currentTurn(botId)?.wakeId ?? '';
       if (wakeId && isWakeStoppedByOwner(wakeId)) return 'your work was stopped in this turn';
+      const guest = guestTurnRefusal(wakeId);
+      if (guest) return guest;
       return botLaunchRefusal(getFactorySettings().enabled, getBotStore()?.get(botId) ?? null, runtime?.wakeState(wakeId) ?? null);
     },
   });

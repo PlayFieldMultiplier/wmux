@@ -12,7 +12,8 @@ import { METHOD_CAPABILITY, isAlwaysEnforcedMethod, type RequiredCapability } fr
 import { isLocalExternalWireContext } from '../mcp/rpcProvenance';
 import { resolveCommanderToken } from '../deck/commanderTrust';
 import { COMMANDER_TEARDOWN_DENY } from '../../shared/commanderSurface';
-import { botSurfaceRefusal, type BotRefusal } from '../../shared/botSurface';
+import { GUEST_SAFE_RPC, GUEST_TURN_SURFACE_REFUSAL, botSurfaceRefusal, type BotRefusal } from '../../shared/botSurface';
+import { guestGateProvenance } from '../factory/wakeTaint';
 import type { EnforcementMode } from '../mcp/enforcementMode';
 import type { ApprovalQueue } from '../mcp/ApprovalQueue';
 import {
@@ -409,6 +410,16 @@ export class RpcRouter {
             error: botRefusal === 'teardown'
               ? `method ${request.method} is denied for bots (teardown gate)`
               : `method ${request.method} is not on the bot surface`,
+          };
+        }
+        // Deny by default in a wake not known clean: only GUEST_SAFE_RPC
+        // passes, before each method's own checks.
+        if (!GUEST_SAFE_RPC.has(request.method) && guestGateProvenance(binding.bot.botId) !== false) {
+          this.notifyBotRefused({ at: Date.now(), bot: { ...binding.bot }, method: request.method, reason: 'guest' });
+          return {
+            id: request.id,
+            ok: false,
+            error: `method ${request.method}: ${GUEST_TURN_SURFACE_REFUSAL}`,
           };
         }
       }

@@ -139,8 +139,10 @@ export interface LedgerDispatch {
   /** `tainted`: whether the bot's wake that started it carried outside text
    *  (issue or PR facts, a handoff from such a wake), set by main on every
    *  bot task; the merge lane and remembered rules never merge what such a
-   *  task wrote, and a bot task without it counts as tainted. */
-  origin: { kind: string; botId?: string; tainted?: boolean };
+   *  task wrote, and a bot task without it counts as tainted. `guest`: the
+   *  starting wake's guest provenance (wakeTaint.ts), written by main on
+   *  every bot task; absent reads as unknown unless the task is clean. */
+  origin: { kind: string; botId?: string; tainted?: boolean; guest?: boolean };
   /** The fan-out preset name; absent when none. */
   preset?: string;
   /** A code task: the repository it was started in (normalized

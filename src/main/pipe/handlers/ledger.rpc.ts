@@ -22,6 +22,7 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { LEDGER_SUMMARY_MAX_BYTES, truncateHead, type TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { reportOnEndedTask } from '../../factory/endedTaskReport';
 import type { NoChangesVerdict } from '../../factory/noChangesCheck';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -34,6 +35,9 @@ export interface LedgerRpcDeps {
    *  no-changes skip goes through only when it answers `unchanged` now, at
    *  the HEAD the skip checked; without it, such a completion is refused. */
   noChangesCheck?: (entry: LedgerEntry) => Promise<NoChangesVerdict>;
+  /** The guest provenance of a bot's running wake (wakeTaint.ts); default
+   *  the running tracker. */
+  guestWake?: (botId: string) => GuestProvenance;
 }
 
 function deny(code: string, message: string): { ok: false; error: { code: string; message: string } } {
@@ -51,6 +55,7 @@ function text(v: unknown): string {
 
 export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps: LedgerRpcDeps = {}): void {
   const ledgerOf = deps.getLedger ?? getTaskLedger;
+  const guestWake = deps.guestWake ?? guestOfRunningWake;
   const resolveCaller =
     deps.resolveCallerWorkspace ??
     (async (senderPtyId: string) => {
@@ -136,6 +141,9 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
         return deny('NOT_AUTHORIZED', 'ledger.update: a bot may update only the tasks it started');
       }
       if (params.force === true) return deny('NOT_AUTHORIZED', 'ledger.update: a bot cannot force a transition');
+      // A task's facts are as clean as its dispatch: no wake that is not
+      // known clean writes its status or summary.
+      if (guestWake(ctx.bot.botId) !== false) return deny('NOT_AUTHORIZED', `ledger.update: ${GUEST_TURN_STARTS_NO_WORKERS}`);
     }
     // A no-changes skip vouches for nothing the worker did after it: the
     // completion asks the same check again (its HEAD, main's push record and
@@ -155,6 +163,8 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
         return deny('FAILED_PRECONDITION', `ledger.update: the no-changes skip no longer holds (${why}); settle it failed, or have its worker report again so its work is gated`);
       }
     }
+    // Judged again after the awaits, in the tick that writes.
+    if (ctx?.bot && guestWake(ctx.bot.botId) !== false) return deny('NOT_AUTHORIZED', `ledger.update: ${GUEST_TURN_STARTS_NO_WORKERS}`);
     const res = await ledgerOf().update({
       id: taskId,
       status,

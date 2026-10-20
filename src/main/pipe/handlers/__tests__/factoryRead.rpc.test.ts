@@ -11,6 +11,7 @@ import { DEFAULT_BOT_BUDGETS, type BotProfile, type BotRole } from '../../../../
 import type { PrLaneFacts } from '../../../../shared/prReview';
 import type { PrVerdictRecord } from '../../../../shared/prVerdict';
 import { RoomWriter } from '../../../factory/roomWriter';
+import { __resetGuestWorkspacesForTesting, expectGuestWorkspaces } from '../../../factory/guestWorkspaces';
 import {
   FACTORY_READ_LIMITS,
   handleCiRead,
@@ -83,6 +84,7 @@ function deps(over: Partial<FactoryReadDeps> = {}): FactoryReadDeps & { roomsDir
     }),
     rooms: () => writer,
     postKey: () => 'wake:w-1:1',
+    guestWake: () => false,
     now: () => 1_000_000,
     ...over,
   };
@@ -224,6 +226,14 @@ describe('plan.propose', () => {
     expect(await handlePlanPropose({ title: 'Plan for Monday', items: [ITEM] }, ctxOf(MOA), d)).toMatchObject({ duplicate: true });
   });
 
+  it('a wake not known clean proposes no plan', async () => {
+    for (const g of [true, 'unknown'] as const) {
+      const d = deps({ guestWake: () => g });
+      expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(MOA), d)).toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('external guest') });
+      expect((d.rooms() as RoomWriter).read('ws-hq', { guests: true }).cards).toHaveLength(0);
+    }
+  });
+
   it('a newer plan supersedes the bot\'s older plan still open; another bot\'s stays open', async () => {
     let key = 0;
     const d = deps({ postKey: () => `wake:w-${++key}:1` });
@@ -235,6 +245,10 @@ describe('plan.propose', () => {
     expect(writer.get('ws-hq', first.card.id)?.state).toBe('resolved');
     expect(writer.get('ws-hq', other.id)?.state).toBe('open');
     expect(writer.get('ws-hq', second.card.id)?.state).toBe('open');
+    // The bot's older plan stamped guest-sourced is closed by a newer one too.
+    const stamped = writer.append({ workspaceId: 'ws-hq', threadId: 'plan:p-g', kind: 'plan', actor: { kind: 'bot', workspaceId: 'ws-hq', botId: MOA.id }, title: 'Older', state: 'open', origin: 'guest' })!;
+    await handlePlanPropose({ title: 'Plan three', items: [ITEM] }, ctxOf(MOA), d);
+    expect(writer.get('ws-hq', stamped.id)?.state).toBe('resolved');
   });
 
   it('needs the live, enabled bot behind the binding', async () => {
@@ -252,6 +266,15 @@ describe('plan.propose', () => {
     const own = await handlePlanPropose({ title: 'Plan', items: [{ ...ITEM, workspaceId: 'ws-a' }] }, ctxOf(lead), deps());
     expect(own).toMatchObject({ ok: true, card: { kind: 'plan', workspaceId: 'ws-a', actor: { kind: 'bot', botId: lead.id } } });
     expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(lead), deps())).toMatchObject({ ok: false, code: 'cross_workspace' });
+  });
+
+  it('a Coordinator plans nothing into a guest workspace (here: a workspace that cannot be told)', async () => {
+    expectGuestWorkspaces();
+    try {
+      expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(MOA), deps())).toMatchObject({ ok: false, code: 'cross_workspace', message: expect.stringContaining('guest workspace') });
+    } finally {
+      __resetGuestWorkspacesForTesting();
+    }
   });
 
   it('refuses the operator, malformed items and a workspace with no lead', async () => {

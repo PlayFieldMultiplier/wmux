@@ -10,7 +10,7 @@ import { getWorkflowFanout, type WorkflowFanout } from './workflowFanout';
 import { getBotDirectory } from './botStore';
 import { getBotRuntime } from './BotRuntime';
 import { getWakeQueue, type WakeSinkApi } from './wakeQueue';
-import { runningWakeTainted } from './wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, runningWakeTainted, type GuestProvenance } from './wakeTaint';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { workflowWorkerPrompt } from './workflowPrompt';
 import { isWakeStoppedByOwner } from './factoryStop';
@@ -20,6 +20,8 @@ export interface WorkflowPorts {
   profile(botId: string): BotProfile | null;
   turn(botId: string): { wakeId: string; threadId?: ThreadId } | null;
   tainted(botId: string): boolean;
+  /** The guest provenance of the bot's running wake (wakeTaint.ts). */
+  guestSourced(botId: string): GuestProvenance;
   rows(): LedgerEntry[];
   fanout(): WorkflowFanout | null;
   queue(): WakeSinkApi | null;
@@ -65,10 +67,15 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
     const bot = owner(ctx, p);
     const turn = bot && p.turn(bot.id);
     if (!bot?.enabled || !turn || isWakeStoppedByOwner(turn.wakeId) || !bot.repo) return refuse('FAILED_PRECONDITION', 'create a code workflow during an enabled bot wake with a repository');
+    // A saved workflow starts its steps' workers from later wakes.
+    if (p.guestSourced(bot.id) !== false) return refuse('FAILED_PRECONDITION', `workflow.create: ${GUEST_TURN_STARTS_NO_WORKERS}`);
     if (!validateWorkflowInput(params)) return refuse('INVALID_ARGUMENT', 'provide a stable clientWorkflowId, title and one to eight titled step prompts');
     try {
+      // Judged again in the write's own turn: the same wake, still clean.
+      const refusal = (): string | null => p.turn(bot.id)?.wakeId !== turn.wakeId ? 'the wake that asked for it has ended'
+        : p.guestSourced(bot.id) !== false ? `workflow.create: ${GUEST_TURN_STARTS_NO_WORKERS}` : null;
       const workflow = await p.store.create({ botId: bot.id, workspaceId: bot.workspaceId, repoKey: bot.repo.repoKey,
-        threadId: turn.threadId ?? GENERAL_THREAD, tainted: p.tainted(bot.id) !== false }, params);
+        threadId: turn.threadId ?? GENERAL_THREAD, tainted: p.tainted(bot.id) !== false, guest: false }, params, refusal);
       await wakeReadyWorkflows(p, [workflow]);
       return { ok: true, workflow: workflowView(p.store.get(workflow.id, bot.id, bot.workspaceId) ?? workflow) };
     } catch (error) { return refuse('FAILED_PRECONDITION', String(error)); }
@@ -78,6 +85,8 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
     const turn = bot && p.turn(bot.id);
     const fanout = p.fanout();
     if (!bot?.enabled || !turn || isWakeStoppedByOwner(turn.wakeId) || !fanout || !ctx) return refuse('FAILED_PRECONDITION', 'advance a workflow during an enabled bot wake');
+    // A step's worker starts from here: no wake that is not known clean claims one.
+    if (p.guestSourced(bot.id) !== false) return refuse('FAILED_PRECONDITION', `workflow.advance: ${GUEST_TURN_STARTS_NO_WORKERS}`);
     const key = params.idempotencyKey;
     const ordinal = typeof key === 'string' ? /^wake:.+:([1-9][0-9]*)$/.exec(key)?.[1] : undefined;
     if (!ordinal || Number(ordinal) > 16 || key !== botFanoutIdempotencyKey(turn.wakeId, Number(ordinal))) return refuse('INVALID_ARGUMENT', 'use the current wake fan-out key (workflow and fan-out share its ordinal)');
@@ -88,6 +97,7 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
       if (!workflow) return refuse('NOT_FOUND', 'workflow not found');
       if (bot.repo?.repoKey !== workflow.repoKey) return refuse('FAILED_PRECONDITION', 'the bot repository changed; this workflow cannot move repositories');
       if (!p.active() || isWakeStoppedByOwner(turn.wakeId) || p.turn(bot.id)?.wakeId !== turn.wakeId) return refuse('FAILED_PRECONDITION', 'the owner wake ended during reconciliation');
+      if (p.guestSourced(bot.id) !== false) return refuse('FAILED_PRECONDITION', `workflow.advance: ${GUEST_TURN_STARTS_NO_WORKERS}`);
       const claim = await p.store.claim(workflow.id, bot.id, bot.workspaceId, key as string);
       if (!claim) return { ok: true, workflow: workflowView(p.store.get(workflow.id, bot.id, bot.workspaceId) ?? workflow) };
       await p.store.flush();
@@ -118,7 +128,7 @@ registerFactoryRpcModule('workflows', (router, deps) => {
   let active = false;
   let off: (() => void) | null = null;
   const ports: WorkflowPorts = { store, profile: (id) => getBotDirectory()?.get(id) ?? null,
-    turn: (id) => getBotRuntime()?.currentTurn(id) ?? null, tainted: runningWakeTainted,
+    turn: (id) => getBotRuntime()?.currentTurn(id) ?? null, tainted: runningWakeTainted, guestSourced: guestOfRunningWake,
     rows: () => getTaskLedger().list(), fanout: getWorkflowFanout, queue: getWakeQueue, active: () => active };
   registerWorkflowRpc(router, ports);
   return {

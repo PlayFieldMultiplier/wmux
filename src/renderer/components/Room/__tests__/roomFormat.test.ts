@@ -1,9 +1,9 @@
 // What the owner reads of a card or a thread: names, never internal ids,
 // role tags or machine codes.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RoomCard } from '../../../../shared/room';
+import type { CardKind, RoomCard } from '../../../../shared/room';
 import { setLocale, t as i18nT } from '../../../i18n';
-import { actorLabel, cardResumeTaskId, formatCardTime, formatNoticeTime, noticeText, onceText, ownerCardText, requestTitles, routineCardBody, threadLabel, withoutInternalIds, withoutReasonCodes, withoutRoleTags } from '../roomFormat';
+import { actorLabel, cardResumeTaskId, kindLabel, formatCardTime, formatNoticeTime, noticeText, onceText, ownerCardText, requestTitles, routineCardBody, threadLabel, withoutInternalIds, withoutReasonCodes, withoutRoleTags } from '../roomFormat';
 
 const t = (key: string) => key;
 const system = { kind: 'system' as const };
@@ -386,5 +386,27 @@ describe('onceText', () => {
     expect(onceText(`${cut}...`, long)).toEqual({ title: long, body: '' });
     // An ellipsis alone is not a prefix of everything.
     expect(onceText('…', 'Merged #12')).toEqual({ title: '…', body: 'Merged #12' });
+  });
+});
+
+describe('kindLabel', () => {
+  // Every card kind, checked by the compiler: a new kind must be listed here.
+  const ALL: Record<CardKind, true> = {
+    fact: true, dispatch: true, status: true, triage: true, verdict: true, report: true, plan: true, proposal: true, opinion: true,
+    question: true, human: true, refusal: true, budget: true, approval: true, routine: true, secret_request: true, login_request: true,
+    job_changed: true, guest: true,
+  };
+
+  it.each(['en', 'ko', 'pl', 'zh'] as const)('names every card kind in %s, never by its key', (locale) => {
+    setLocale(locale);
+    try {
+      for (const kind of Object.keys(ALL) as CardKind[]) {
+        const label = kindLabel(kind, i18nT);
+        expect(label, kind).not.toContain('room.kind.');
+        expect(label.trim().length, kind).toBeGreaterThan(0);
+      }
+    } finally {
+      setLocale('en');
+    }
   });
 });

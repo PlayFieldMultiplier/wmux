@@ -716,4 +716,5 @@ export const zhTW = {
   'worktask.cleanup.detail.orphanUnlinked': '沒有任務或任務記錄連結到它 — 檢查後刪除。',
   'worktask.cleanup.detail.orphanMeta': '只剩下任務記錄，工作樹已不存在（移除被中斷）— 檢查後刪除。',
   'worktask.cleanup.detail.diskMissing': '工作樹在磁碟上遺失（在 wmux 外被刪除或發生當機）— 關閉任務以清理。',
+  'botsPage.guest.readNotice': "從現在起，外部機器人可以讀取此對話中的訊息並在其中發言。它看不到加入之前的內容。",
 } as const;

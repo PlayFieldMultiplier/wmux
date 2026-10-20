@@ -12,7 +12,9 @@ import {
   withoutTicketTranscript,
 } from '../../shared/phoneFleetTickets';
 import { getPhoneFleetTicketStore } from './PhoneFleetTicketStore';
-import { handlePhoneBotsCommand, handlePhoneRoomCommand, withPhoneFactory } from './PhoneFactory';
+import { GUEST_ROOM_CARDS_COMMAND, GUEST_ROOM_POST_COMMAND } from '../../shared/guestBots';
+import { handleGuestPost } from '../factory/guestMessage';
+import { handleGuestCards, handlePhoneBotsCommand, handlePhoneRoomCommand, withPhoneFactory } from './PhoneFactory';
 import { handlePhoneBotApprovalCommand } from './PhoneBotApprovals';
 import { handlePhoneWorkerResumeCommand } from './PhoneWorkerResume';
 
@@ -84,6 +86,10 @@ async function phoneFleetTicketDetail(payload: Record<string, unknown>, getWindo
 /** Named workspace operations only; never forward an arbitrary phone RPC. */
 export async function handlePhoneWorkspaces(command: string, payload: Record<string, unknown>, getWindow: () => BrowserWindow | null): Promise<unknown> {
   if (command === FLEET_TICKET_DETAIL_COMMAND) return phoneFleetTicketDetail(payload, getWindow);
+  // A guest bot's post (shared/guestBots.ts): the daemon checked the guest.
+  if (command === GUEST_ROOM_POST_COMMAND) return handleGuestPost(payload);
+  // A guest bot's read: answered only in a guest workspace.
+  if (command === GUEST_ROOM_CARDS_COMMAND) return handleGuestCards(payload);
   // The agent factory's rooms (read-only); null for any other command.
   const room = handlePhoneRoomCommand(command, payload);
   if (room) return room;

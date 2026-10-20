@@ -677,4 +677,5 @@ export const de = {
   'worktask.cleanup.detail.orphanUnlinked': 'Keine Aufgabe und kein Aufgabeneintrag verweist darauf — prüfen und dann löschen.',
   'worktask.cleanup.detail.orphanMeta': 'Nur der Aufgabeneintrag ist übrig, nicht der Worktree (Entfernen wurde unterbrochen) — prüfen und dann löschen.',
   'worktask.cleanup.detail.diskMissing': 'Der Worktree fehlt auf der Festplatte (außerhalb von wmux gelöscht oder Absturz) — schließen Sie die Aufgabe, um das zu bereinigen.',
+  'botsPage.guest.readNotice': "Ab jetzt kann ein externer Bot Nachrichten in dieser Unterhaltung lesen und darin schreiben. Was vor dem Hinzufügen gesagt wurde, sieht er nie.",
 } as const;

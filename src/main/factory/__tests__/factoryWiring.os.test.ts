@@ -14,7 +14,7 @@ import type { LedgerEntry, LedgerStatus } from '../../../shared/ledger';
 import type { LedgerTransition } from '../../../daemon/ledger/TaskLedger';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../../../shared/factorySettings';
-import { WAKE_LIMITS } from '../../../shared/wake';
+import { WAKE_LIMITS, type WakeItem } from '../../../shared/wake';
 import {
   TriggerCursor,
   botTaskStoppedWaiting,
@@ -44,7 +44,9 @@ import { humanRunId, postHumanMessage } from '../humanMessage';
 import { __resetRedactedSecretsForTesting, setRedactedSecrets } from '../secretRedaction';
 import { typedApprovalSourceAllowed } from '../approvals';
 import { defaultTriggers } from '../roleDefaults';
-import { RoomWriter, writeFactCards } from '../roomWriter';
+import { RoomWriter, setGuestTurnProbe, writeFactCards } from '../roomWriter';
+import { WakeTaint, setWakeTaint } from '../wakeTaint';
+import { buildWakePrompt } from '../wakePrompt';
 import { startFactIngest } from '../factIngest';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { installVerifyGate, isVerifyReport } from '../verifyPreset';
@@ -443,6 +445,53 @@ describe('lookups the runtime and rooms read', () => {
     expect(tail?.truncated).toBe(true);
     expect(threadTail(writer, 'ws-1', 'task:t', 12)?.truncated).toBe(false);
     expect(threadTail(null, 'ws-1', 'task:t', 3)).toBeNull();
+    // A guest's card is left out of a clean wake's tail (counted, not shown)
+    // and is no reason to call it truncated.
+    writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'guest', actor: { kind: 'system' }, title: 'External guest: G', guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'G' } });
+    writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'human', actor: { kind: 'human' }, title: 'hi' });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1)).toEqual({ cards: [expect.objectContaining({ title: 'hi' })], truncated: false, hiddenGuestCards: 1 });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1, { guests: true })).toMatchObject({ truncated: true, hiddenGuestCards: 0 });
+    // A truncated tail counts only the guest cards inside its window.
+    writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'human', actor: { kind: 'human' }, title: 'again' });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 1)).toMatchObject({ truncated: true, hiddenGuestCards: 0 });
+    // Past one page of guest cards, all are counted.
+    for (let i = 0; i < 120; i++) writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000bbbb', kind: 'guest', actor: { kind: 'system' }, title: 'External guest: G', guest: { guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', name: 'G' } });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000bbbb', 5)).toMatchObject({ cards: [], truncated: false, hiddenGuestCards: 120 });
+  });
+
+  it('a guest wake\'s reply in dm:A is absent from the next owner wake\'s tail', () => {
+    const A = 'bot-0000aaaa';
+    const dm = `dm:${A}` as const;
+    const guestWake: WakeItem = { id: 'w-g', botId: A, workspaceId: 'ws-1', priority: 2, enqueuedAt: 1, attempts: 1, state: 'running' as const, threadId: dm,
+      reason: { kind: 'guest' as const, guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c-g', text: 'hi' } };
+    const ownerWake: WakeItem = { ...guestWake, id: 'w-o', priority: 0, reason: { kind: 'human', text: 'status?', source: 'desktop' } };
+    let running: { item: WakeItem; startedAt: number } | null = { item: guestWake, startedAt: 1 };
+    const taint = new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake: () => running, log: () => undefined });
+    setWakeTaint(taint, () => running);
+    // As wakeTaintModule.ts wires it.
+    setGuestTurnProbe((botId) => running !== null && running.item.botId === botId && taint.wakeGuest(running.item) !== false);
+    try {
+      const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms-origin') });
+      writer.append({ workspaceId: 'ws-1', threadId: dm, kind: 'human', actor: { kind: 'human' }, title: 'OWNER-WORDS' });
+      const reply = writer.append({ workspaceId: 'ws-1', threadId: dm, kind: 'status', actor: { kind: 'bot', workspaceId: 'ws-1', botId: A }, title: 'REPLY-TO-GUEST' });
+      expect(reply?.origin).toBe('guest');
+      running = { item: ownerWake, startedAt: 2 };
+      const clean = writer.append({ workspaceId: 'ws-1', threadId: dm, kind: 'status', actor: { kind: 'bot', workspaceId: 'ws-1', botId: A }, title: 'CLEAN-REPLY' });
+      expect(clean).not.toHaveProperty('origin');
+      const tail = threadTail(writer, 'ws-1', dm, 10);
+      expect(tail?.cards.map((c) => c.title)).toEqual(['OWNER-WORDS', 'CLEAN-REPLY']);
+      expect(tail?.hiddenGuestCards).toBe(1);
+      const prompt = buildWakePrompt({ item: ownerWake, profile: bot(A, 'lead'), thread: { threadId: dm, ...tail! } });
+      expect(prompt).not.toContain('REPLY-TO-GUEST');
+      expect(prompt).toContain('1 card(s) from an external guest agent');
+      // Kept across a reload, and shown to a reader that asks for guest cards.
+      const reloaded = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms-origin') });
+      expect(reloaded.read('ws-1', { threadId: dm }).cards.map((c) => c.title)).not.toContain('REPLY-TO-GUEST');
+      expect(reloaded.read('ws-1', { threadId: dm, guests: true }).cards.find((c) => c.title === 'REPLY-TO-GUEST')?.origin).toBe('guest');
+    } finally {
+      setGuestTurnProbe(null);
+      setWakeTaint(null);
+    }
   });
 
   it('the running wake: id, a 1-based attempt that is the same for the whole turn, and its handoff', () => {

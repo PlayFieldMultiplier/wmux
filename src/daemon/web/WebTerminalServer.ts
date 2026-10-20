@@ -188,6 +188,8 @@ import { FLEET_TICKET_ROUTE_PREFIX, fleetTicketDetailResponse, fleetTicketsField
 import { factoryOn, moaConfigFields } from './factoryConfig';
 import { ROOMS_ROUTE, ROOM_ATTACHMENT_ROUTE, ROOM_MESSAGES_ROUTE, roomAttachmentResponse, roomsResponse, roomsSupported } from './rooms';
 import { BOTS_ROUTE, botsResponse, botsSupported } from './bots';
+import { GuestRateLimiter, guestRouteResponse, readGuestBody, type GuestBotResolver } from './guestBotRoutes';
+import { isGuestRoute, looksLikeGuestCredential, type GuestBotGates } from '../../shared/guestBots';
 import { BOT_APPROVALS_ROUTE, botApprovalDecisionRefusal, botApprovalsResponse, botApprovalsSupported, type BotApprovalsCaller } from './botApprovals';
 import { WORKER_RESUME_ROUTE, workerResumeRefusal, workerResumeResponse, workerResumeSupported } from './workerResume';
 import type { ChatV2Binding } from '../../shared/chatv2/ipc';
@@ -754,6 +756,12 @@ interface WebTerminalServerDeps {
   peers?: WebPeerResolver;
   /** The `/api/a2a/*` handlers. Absent: an authenticated peer gets 503. */
   a2a?: WebA2aRoutes;
+  /**
+   * Guest bots (shared/guestBots.ts). Absent, or switched off by the owner:
+   * every `/api/guest/*` request answers 403 — and a guest credential is
+   * refused (403) on every other route.
+   */
+  guests?: GuestBotResolver;
   /**
    * The daemon's approval registry. Optional: a daemon that has not wired one
    * (or a unit test that does not care) still serves every other route, and the
@@ -2503,6 +2511,16 @@ export class WebTerminalServer {
     }
     if (looksLikePeerCredential(bearerOf(req))) {
       return this.json(res, 403, { ok: false, error: 'forbidden' satisfies A2aRemoteErrorCode });
+    }
+    // Guest bot gate, the same shape: a guest credential reaches nothing but
+    // `/api/guest/*`, and `/api/guest/*` never reaches the operator/device
+    // routes (guestBotRoutes.ts orders its own checks).
+    if (isGuestRoute(p)) {
+      this.handleGuest(req, res, url, p);
+      return;
+    }
+    if (looksLikeGuestCredential(bearerOf(req))) {
+      return this.json(res, 403, { ok: false, error: 'forbidden' });
     }
 
     // Static, unauthenticated pages (no secrets live in these). `/` is the
@@ -9971,6 +9989,58 @@ export class WebTerminalServer {
   }
 
   // --- helpers ------------------------------------------------------------
+
+  /** Per-guest post/read budgets (guestBotRoutes.ts). */
+  private readonly guestLimiter = new GuestRateLimiter();
+
+  /**
+   * What the owner's Bots page shows about the gates a guest must pass
+   * (everything but the owner's own switch, which the store holds).
+   */
+  guestGates(): Omit<GuestBotGates, 'enabled'> {
+    const running = !!this.server && !!this.opts;
+    return {
+      serverRunning: running,
+      transcript: running && this.opts?.allowTranscript === true,
+      input: running && this.opts?.allowInput === true,
+      secureTransport: running && this.mintRefusal() === null,
+    };
+  }
+
+  /** Forget a revoked guest's budgets. */
+  forgetGuest(guestId: string): void {
+    this.guestLimiter.forget(guestId);
+  }
+
+  /**
+   * `/api/guest/*` — a guest credential and nothing else. Never a fallthrough:
+   * every answer comes from guestRouteResponse.
+   */
+  private handleGuest(req: http.IncomingMessage, res: http.ServerResponse, url: URL, p: string): void {
+    res.setHeader('Cache-Control', 'no-store');
+    void guestRouteResponse({
+      method: req.method ?? 'GET',
+      pathname: p,
+      query: url.searchParams,
+      bearer: bearerOf(req),
+      hasOrigin: req.headers['origin'] !== undefined,
+      readBody: () => readGuestBody(req),
+      gates: {
+        transcript: this.opts?.allowTranscript === true,
+        input: this.opts?.allowInput === true,
+        transportRefusal: this.mintRefusal(),
+      },
+      guests: this.deps.guests,
+      desktop: this.availableDesktop(),
+      limiter: this.guestLimiter,
+      log: (level, msg) => this.deps.log(level, msg),
+    }).then((r) => {
+      if (res.headersSent || res.destroyed) return;
+      this.json(res, r.status, r.body, r.headers);
+      // A body the route never read (a refusal before it) is drained.
+      req.resume();
+    }).catch((err: unknown) => this.failRequest(res, err));
+  }
 
   /**
    * `/api/a2a/*` — accepts a PEER credential and nothing else: no browser
