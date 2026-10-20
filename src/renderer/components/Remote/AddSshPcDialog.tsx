@@ -217,6 +217,7 @@ export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps
               <Checkbox checked={startAfterReboot} onCheckedChange={setStartAfterReboot} data-testid="remote-ssh-start-after-reboot" />
             </Field>
             <p className="wmux-remote-connect-note" data-testid="remote-ssh-consent">{t('remoteSsh.consent')}</p>
+            <p className="wmux-remote-connect-note" data-testid="remote-ssh-agent-messages">{t('remote.agentMessagesNote')}</p>
           </div>
         )}
         {step.kind === 'working' && (
@@ -257,6 +258,7 @@ export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps
             {step.viewOnly && <p className="wmux-a2a-note" data-tone="warning" data-testid="remote-ssh-view-only">{t('remoteSsh.viewOnly')}</p>}
             {step.upgradePending && <p className="wmux-a2a-note" data-tone="warning">{t('remoteSsh.upgradePending')}</p>}
             {step.service && <SshServiceNote result={step.service} name={step.label} />}
+            <p className="wmux-remote-connect-note" data-testid="remote-ssh-done-agent-messages">{t('remote.agentMessagesNote')}</p>
           </div>
         )}
       </DialogBody>
