@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { A2A_BRAIN_ALIAS, type A2aEndpointKind, type A2aExposedPane, type A2aLinkOfferRecordV1, type A2aRemoteHostRecordV1 } from '../../../shared/a2aRemote';
 import type { A2aRemoteCallError } from '../../../shared/rpc';
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
+import { isShadowWorkspaceId } from '../../../shared/pcRail';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
@@ -315,7 +316,8 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, offer, onCl
   }, [cwdKey, sharedRepo]);
   const localChoices = useMemo(() => {
     if (fixed) return undefined;
-    const all = workspaces.flatMap((ws) => getWorkspaceLeafPanes(ws).map((leaf) => {
+    // This PC's own panes only: a shadow workspace shows another PC's.
+    const all = workspaces.filter((ws) => !isShadowWorkspaceId(ws.id)).flatMap((ws) => getWorkspaceLeafPanes(ws).map((leaf) => {
       const key = `${ws.id}/${leaf.id}`;
       const same = !!sharedRepo && localRepos[key] === sharedRepo;
       return { key, same, label: `${ws.name} / ${leafDisplayName(paneLabels, ws, leaf, activeAgentSlug(agents, leaf))}${same ? ` · ${t('a2aLink.recommended')}` : ''}` };
