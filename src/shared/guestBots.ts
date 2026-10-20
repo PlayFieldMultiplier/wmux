@@ -47,9 +47,12 @@ export function isGuestRoute(pathname: string): boolean {
   return pathname.startsWith(GUEST_ROUTE_PREFIX);
 }
 
-/** The desktop bridge command a guest post rides (main answers it). The read
- *  side reuses the phone's `workspaces.roomCards` with the stored scope. */
+/** The desktop bridge command a guest post rides (main answers it). */
 export const GUEST_ROOM_POST_COMMAND = 'workspaces.guestPost';
+/** A guest's read of its conversation, with the stored scope: main answers
+ *  it only for a conversation of a guest workspace, else `notFound`, and
+ *  then as the phone's `workspaces.roomCards`. */
+export const GUEST_ROOM_CARDS_COMMAND = 'workspaces.guestCards';
 
 // ─── Limits ─────────────────────────────────────────────────────────────────
 

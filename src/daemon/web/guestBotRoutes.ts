@@ -23,8 +23,9 @@
 //   7. the route
 //
 // The conversation is the token's stored scope; nothing in a request names
-// one. A read is the phone's `workspaces.roomCards` for that one thread,
-// projected again to the fields a guest needs. A post is redacted here
+// one. A read is `workspaces.guestCards` for that one thread (main answers
+// it only in a guest workspace), projected again to the fields a guest
+// needs. A post is redacted here
 // (shared/redactSecrets.ts) and handed to main as `workspaces.guestPost`,
 // which writes an external `guest` card and wakes only bots of that
 // conversation the post names, with a tainted `guest` wake.
@@ -34,6 +35,7 @@ import { redactSecrets } from '../../shared/redactSecrets';
 import {
   GUEST_LIMITS,
   GUEST_MESSAGE_ID_RE,
+  GUEST_ROOM_CARDS_COMMAND,
   GUEST_RATE_WINDOW_MS,
   GUEST_ROOM_POST_COMMAND,
   GUEST_ROUTES,
@@ -44,7 +46,7 @@ import {
   type GuestScope,
 } from '../../shared/guestBots';
 import { BOT_ID_RE } from '../../shared/bot';
-import { PHONE_ROOM_CARDS_COMMAND, parsePhoneRoomCardsReply, type PhoneRoomCard } from '../../shared/phoneRooms';
+import { parsePhoneRoomCardsReply, type PhoneRoomCard } from '../../shared/phoneRooms';
 import { DesktopPhoneError } from '../phone/DesktopPhoneBridge';
 import type { RoomsDesktop } from './rooms';
 import type { GuestAuthResult } from './GuestBotStore';
@@ -284,8 +286,8 @@ async function read(ctx: GuestRouteContext, scope: GuestScope, since: number, jo
   if (limit === null) return refuse(400, 'invalid-request', { detail: 'limit' });
   const desktop = ctx.desktop;
   if (!desktop) return refuse(503, 'desktop-unavailable');
-  if (!desktop.supports(PHONE_ROOM_CARDS_COMMAND)) return refuse(503, 'rooms-unavailable');
-  const answered = await ask(desktop, PHONE_ROOM_CARDS_COMMAND, {
+  if (!desktop.supports(GUEST_ROOM_CARDS_COMMAND)) return refuse(503, 'rooms-unavailable');
+  const answered = await ask(desktop, GUEST_ROOM_CARDS_COMMAND, {
     workspaceId: scope.workspaceId,
     threadId: scope.threadId,
     ...(sinceSeq !== undefined ? { sinceSeq } : {}),

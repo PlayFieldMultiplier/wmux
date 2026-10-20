@@ -41,7 +41,8 @@ function setup(groups: Record<string, string[]> = {}, now: () => number = () => 
     groups: { byThread: (_ws: string, threadId: string) => (groups[threadId] ? { memberIds: groups[threadId] } : null) },
     wakes: { enqueue },
   } as unknown as Partial<FactoryRoomPorts>;
-  const deps = { enabled: () => true, writer: () => writer, ports: () => ports };
+  // ws-1 is a guest workspace; ws-2 is not.
+  const deps = { enabled: () => true, writer: () => writer, ports: () => ports, guestWorkspace: (ws: string) => ws === 'ws-1' };
   return { writer, enqueue, deps };
 }
 
@@ -162,11 +163,27 @@ describe('postGuestMessage', () => {
     for (const bad of [
       { ...base, guestId: 'nope' }, { ...base, guestName: '' }, { ...base, clientMessageId: 'a b' },
       { ...base, text: '  ' }, { ...base, text: 'x'.repeat(4001) }, { ...base, mentions: ['x'] },
-      { ...base, mentions: [A, A, A, A, A] }, { ...base, threadId: 'task:1' }, { ...base, workspaceId: '../x' },
+      { ...base, mentions: [A, A, A, A, A] }, { ...base, threadId: 'task:1' },
     ]) {
       expect(postGuestMessage(bad, deps)).toEqual({ ok: false, code: 'invalid' });
     }
     expect(postGuestMessage(base, { ...deps, enabled: () => false })).toEqual({ ok: false, code: 'factory_off' });
+  });
+
+  it('a guest whose workspace is not a guest workspace (an older record) or cannot be told posts nothing', () => {
+    const { writer, enqueue, deps } = setup();
+    expect(postGuestMessage({ ...base, workspaceId: 'ws-2', threadId: `dm:${OTHER}`, mentions: [OTHER] }, deps)).toEqual({ ok: false, code: 'scope_gone' });
+    expect(postGuestMessage(base, { ...deps, guestWorkspace: () => 'unknown' })).toEqual({ ok: false, code: 'scope_gone' });
+    expect(postGuestMessage({ ...base, workspaceId: '../x' }, deps)).toEqual({ ok: false, code: 'scope_gone' });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(writer.read('ws-1', { guests: true }).cards).toEqual([]);
+    expect(writer.read('ws-2', { guests: true }).cards).toEqual([]);
+  });
+
+  it('a group\'s member of another workspace is no bot of the guest\'s conversation', () => {
+    const { enqueue, deps } = setup({ 'group:grp-0000abcd': [B, OTHER] });
+    expect(postGuestMessage({ ...base, threadId: 'group:grp-0000abcd', mentions: [OTHER] }, deps)).toEqual({ ok: false, code: 'mention_refused' });
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it('the bridge command answers factory_off with no handler and busy when it throws', async () => {

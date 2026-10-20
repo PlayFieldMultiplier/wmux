@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GUEST_LIMITS, GUEST_ROOM_POST_COMMAND, GUEST_ROUTES, formatGuestCredential } from '../../../shared/guestBots';
+import { GUEST_LIMITS, GUEST_ROOM_CARDS_COMMAND, GUEST_ROOM_POST_COMMAND, GUEST_ROUTES, formatGuestCredential } from '../../../shared/guestBots';
 import { PHONE_ROOM_CARDS_COMMAND } from '../../../shared/phoneRooms';
 import { DesktopPhoneError } from '../../phone/DesktopPhoneBridge';
 import { GuestRateLimiter, guestCardView, guestRouteResponse, type GuestBotResolver, type GuestRouteContext } from '../guestBotRoutes';
@@ -20,7 +20,7 @@ function resolver(over: Partial<GuestBotResolver> = {}): GuestBotResolver & { re
   } as GuestBotResolver & { resolve: ReturnType<typeof vi.fn> };
 }
 
-function desktop(reply: (command: string, payload: Record<string, unknown>) => unknown, commands = [PHONE_ROOM_CARDS_COMMAND, GUEST_ROOM_POST_COMMAND]) {
+function desktop(reply: (command: string, payload: Record<string, unknown>) => unknown, commands = [GUEST_ROOM_CARDS_COMMAND, GUEST_ROOM_POST_COMMAND]) {
   return {
     supports: (c: string) => commands.includes(c),
     request: vi.fn(async (c: string, p: Record<string, unknown>) => reply(c, p)),
@@ -48,7 +48,7 @@ function ctx(over: Partial<GuestRouteContext> = {}): GuestRouteContext {
     readBody: async () => ({ ok: true, value: {} }),
     gates: { transcript: true, input: true, transportRefusal: null },
     guests: resolver(),
-    desktop: desktop((c, p) => (c === PHONE_ROOM_CARDS_COMMAND ? cardsReply(p) : { ok: true, cardId: 'card-9', seq: 9, woke: [] })),
+    desktop: desktop((c, p) => (c === GUEST_ROOM_CARDS_COMMAND ? cardsReply(p) : { ok: true, cardId: 'card-9', seq: 9, woke: [] })),
     limiter: new GuestRateLimiter(),
     log: () => undefined,
     ...over,
@@ -127,12 +127,23 @@ describe('guest routes: reading', () => {
       query: new URLSearchParams({ sinceSeq: '0', limit: '10', workspaceId: 'other', threadId: 'general' }),
       desktop: d,
     }));
-    expect(d.request).toHaveBeenCalledWith(PHONE_ROOM_CARDS_COMMAND, { ...SCOPE, sinceSeq: 0, limit: 10 });
+    expect(d.request).toHaveBeenCalledWith(GUEST_ROOM_CARDS_COMMAND, { ...SCOPE, sinceSeq: 0, limit: 10 });
     expect(r.status).toBe(200);
     const cards = (r.body.cards as Array<Record<string, unknown>>);
     expect(cards).toEqual([{ id: 'c1', seq: 1, at: 1, kind: 'message', from: { kind: 'owner' }, title: 'hi', body: 'hello there' }]);
     // The approval card is not a message: no card, no approval id.
     expect(JSON.stringify(r.body)).not.toContain('apr-1');
+  });
+
+  it('reads through the guest command only: an owner\'s room read is never used, and main\'s refusal is 404', async () => {
+    const older = desktop((_c, p) => cardsReply(p), [PHONE_ROOM_CARDS_COMMAND, GUEST_ROOM_POST_COMMAND]);
+    const r = await guestRouteResponse(ctx({ pathname: GUEST_ROUTES.messages, query: new URLSearchParams({}), desktop: older }));
+    expect(r).toMatchObject({ status: 503, body: { error: 'rooms-unavailable' } });
+    expect(older.request).not.toHaveBeenCalled();
+    // Main answers a conversation outside a guest workspace as not found.
+    const refusing = desktop(() => ({ notFound: true }));
+    expect(await guestRouteResponse(ctx({ pathname: GUEST_ROUTES.messages, query: new URLSearchParams({}), desktop: refusing })))
+      .toMatchObject({ status: 404, body: { error: 'conversation-not-found' } });
   });
 
   it('returns only messages written since the guest was added, with key patterns masked', async () => {
@@ -264,7 +275,7 @@ describe('guest routes: posting', () => {
   });
 
   it('an older desktop without the command is 503, nothing sent', async () => {
-    const d = desktop(() => ({}), [PHONE_ROOM_CARDS_COMMAND]);
+    const d = desktop(() => ({}), [GUEST_ROOM_CARDS_COMMAND]);
     expect(await post({ clientMessageId: 'm1', text: 'hi' }, { desktop: d })).toMatchObject({ status: 503, body: { error: 'guest-posts-unavailable' } });
     expect(d.request).not.toHaveBeenCalled();
   });

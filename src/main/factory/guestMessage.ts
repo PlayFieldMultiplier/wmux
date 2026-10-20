@@ -24,6 +24,8 @@ import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, type RoomCa
 import { capBody, runningWakeThread, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
 import { redactStoredSecrets } from './secretRedaction';
 import { GUEST_WAKES_QUEUED_PER_BOT, HUMAN_RETRY_WINDOW_MS } from './wakeQueue';
+import { guestWorkspaceFlag } from './guestWorkspaces';
+import type { GuestProvenance } from './wakeTaint';
 
 export type GuestPostHandler = (payload: Record<string, unknown>) => Promise<GuestPostResult>;
 
@@ -47,6 +49,8 @@ export async function handleGuestPost(payload: Record<string, unknown>): Promise
 
 export interface GuestPostDeps {
   enabled: () => boolean;
+  /** The guest workspace flag (default guestWorkspaceFlag). */
+  guestWorkspace?: (workspaceId: string) => GuestProvenance;
   writer: () => RoomWriter | null;
   ports: () => Partial<FactoryRoomPorts>;
 }
@@ -103,7 +107,8 @@ function conversationBots(ports: Partial<FactoryRoomPorts>, workspaceId: string,
   }
   if (groupThreadGroup(threadId)) {
     if (!group) return null;
-    return enabled.filter((b) => group.memberIds.includes(b.id));
+    // Members of this workspace only: a guest reaches no bot of another one.
+    return enabled.filter((b) => group.memberIds.includes(b.id) && b.workspaceId === workspaceId);
   }
   if (threadId === GENERAL_THREAD) {
     // General: a group made from the room, else the room's own bots.
@@ -129,6 +134,9 @@ export function conversationBotIds(ports: Partial<FactoryRoomPorts>, botId: stri
 
 /** Post one guest message. Synchronous from the lookup to the post. */
 export function postGuestMessage(raw: Record<string, unknown>, deps: GuestPostDeps): GuestPostResult {
+  // A guest posts only into a guest workspace; one that cannot be told is
+  // not one (guestWorkspaces.ts).
+  if (typeof raw.workspaceId !== 'string' || (deps.guestWorkspace ?? guestWorkspaceFlag)(raw.workspaceId) !== true) return { ok: false, code: 'scope_gone' };
   if (!deps.enabled()) return { ok: false, code: 'factory_off' };
   const p = parsePayload(raw);
   if (!p) return { ok: false, code: 'invalid' };

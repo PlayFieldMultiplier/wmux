@@ -3,7 +3,7 @@ vi.mock('../../pipe/handlers/_bridge', () => ({ sendToRenderer: vi.fn() }));
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { handlePhoneBotsCommand, handlePhoneRoomCommand, phoneBotsReply, withPhoneFactory, type PhoneBotsPorts, type PhoneFactoryPorts } from '../PhoneFactory';
+import { handleGuestCards, handlePhoneBotsCommand, handlePhoneRoomCommand, phoneBotsReply, withPhoneFactory, type PhoneBotsPorts, type PhoneFactoryPorts } from '../PhoneFactory';
 import { RoomWriter } from '../../factory/roomWriter';
 import { setRedactedSecrets } from '../../factory/secretRedaction';
 import type { BotProfile } from '../../../shared/bot';
@@ -156,6 +156,18 @@ describe('the phone wire — work cards and approval actions over a real room', 
     const failed = await handlePhoneBotsCommand('workspaces.bots', () => botsPorts(writer, { taskViews: async () => { throw new Error('down'); } })) as PhoneBotsReply;
     expect(failed.conversations.find((c) => c.threadId === DM)?.work?.[0].state).toBe('working');
     expect(phoneBotsReply(botsPorts(writer))?.conversations.find((c) => c.threadId === DM)?.work).toHaveLength(1);
+  });
+
+  it('a guest\'s read is answered only in a guest workspace, refused while that cannot be told', () => {
+    const { writer } = room();
+    const p = botsPorts(writer);
+    const read = { workspaceId: 'ws-1', threadId: DM, limit: 50 };
+    const page = handleGuestCards(read, p, () => true) as PhoneRoomCardsReply;
+    expect(page.cards.length).toBeGreaterThan(0);
+    // An older guest record whose workspace was never flagged reads nothing.
+    expect(handleGuestCards(read, p, () => false)).toEqual({ notFound: true });
+    expect(handleGuestCards(read, p, () => 'unknown')).toEqual({ unavailable: true });
+    expect(handleGuestCards({ ...read, threadId: 'task:t1' }, p, () => true)).toEqual({ invalid: true });
   });
 
   it('serves an approval card its action and a system card its published notice', () => {

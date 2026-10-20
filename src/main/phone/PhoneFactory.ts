@@ -62,6 +62,9 @@ import { getFactorySettings } from '../factory/factorySettings';
 import { getHandoffRouter, HANDOFF_STORE_LIMITS } from '../factory/handoffRouter';
 import { getRoomWriter, ROOMS_DIRNAME } from '../factory/roomWriter';
 import { redactStoredSecrets } from '../factory/secretRedaction';
+import { guestWorkspaceFlag } from '../factory/guestWorkspaces';
+import type { GuestProvenance } from '../factory/wakeTaint';
+import { parseGuestScope } from '../../shared/guestBots';
 import { ROOM_ATTACHMENT_ID_RE } from '../../shared/roomAttachments';
 import { phoneBot } from '../factory/phoneBot';
 import { getGroupStore } from '../factory/groupStore';
@@ -311,6 +314,29 @@ export function handlePhoneRoomCommand(command: string, payload: Record<string, 
     if (projected) cards.push(projected);
   }
   return fitPhoneRoomPage({ workspaceId, threadId, cards, nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore }, sinceSeq !== undefined);
+}
+
+/** `workspaces.guestCards`: a guest bot's read of its conversation (the
+ *  daemon sends the token's stored scope). Answered only for a conversation
+ *  of a guest workspace, and refused while that cannot be told; then the
+ *  same page the owner's phone reads, which the daemon projects again. */
+export function handleGuestCards(payload: Record<string, unknown>, ports: PhoneFactoryPorts = defaultPhoneFactoryPorts(), flag: (workspaceId: string) => GuestProvenance = guestWorkspaceFlag): RoomCommandReply {
+  const scope = parseGuestScope({ workspaceId: payload.workspaceId, threadId: payload.threadId });
+  if (!scope) return { invalid: true };
+  let flagged: GuestProvenance;
+  try {
+    flagged = flag(scope.workspaceId);
+  } catch {
+    flagged = 'unknown';
+  }
+  if (flagged === 'unknown') return { unavailable: true };
+  if (flagged !== true) return { notFound: true };
+  return handlePhoneRoomCommand(PHONE_ROOM_CARDS_COMMAND, {
+    workspaceId: scope.workspaceId,
+    threadId: scope.threadId,
+    ...(payload.sinceSeq !== undefined ? { sinceSeq: payload.sinceSeq } : {}),
+    limit: payload.limit,
+  }, ports) ?? { invalid: true };
 }
 
 // ── The Bots page list ─────────────────────────────────────────────────────
