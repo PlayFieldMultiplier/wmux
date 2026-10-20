@@ -18,7 +18,7 @@ import { getLeafPanes, getWorkspaceLeafPanes } from '../../shared/paneUtils';
 import type { DeadPaneRecovery } from '../../shared/ptyRecovery';
 import { resolveRespawnCwd, shouldHealSurfaceCwd, withDefaultShell, withWorkspaceProfile } from '../utils/ptyCreateOptions';
 import { isTerminalSurfaceType } from '../components/Pane/surfaceKinds';
-import { startDeferredAttach } from './useTerminal';
+import { attachForWrite } from './useTerminal';
 
 export interface SurfacePtyCreated {
   id: string;
@@ -140,30 +140,20 @@ function bindSurfacePty(surfaceId: string, ptyId: string): void {
 export type EnsureSurfacePtyResult = { ptyId: string } | { error: string };
 
 /**
- * A bound pty whose suspended session its hidden pane attached without
- * promoting (#2398): promote and attach it before a raw write, through the
- * pane's own reattach when it is mounted (so its replay lands once), else
- * directly. Any other pty answers as it is.
- */
-async function startBoundDeferred(ptyId: string): Promise<EnsureSurfacePtyResult> {
-  if (!useStore.getState().ptyDeferredById?.[ptyId]) return { ptyId };
-  if (!(await startDeferredAttach(ptyId))) {
-    const res = await window.electronAPI.pty.reconnect(ptyId, { promote: true });
-    if (res.success) useStore.getState().setPtyDeferred(ptyId, false);
-  }
-  return useStore.getState().ptyDeferredById?.[ptyId]
-    ? { error: "the pane's suspended session could not be started" }
-    : { ptyId };
-}
-
-/**
- * `surface.ensurePty` by ptyId — after main has checked the caller may write
- * to it: a bound pty left suspended while its pane is hidden is started
- * first. A pty no surface holds answers as it is (a floating pane, another
- * owner's lane).
+ * `surface.ensurePty` by ptyId (#2398) — main asks this, after its access
+ * check, for a daemon session it holds no writable pipe to: one a hidden pane
+ * attached without promoting, or one whose pane is not mounted at all (its
+ * workspace outside the multiview grid, or cold-parked) and whose session the
+ * startup reconcile held suspended. Attach it, promoting a suspended session:
+ * through the mounted pane's own reattach (so its replay lands once), else
+ * directly. Main checks the pipe afterwards; this answers a refusal it saw.
  */
 export async function ensurePtyStarted(ptyId: string): Promise<EnsureSurfacePtyResult> {
-  return startBoundDeferred(ptyId);
+  if (await attachForWrite(ptyId)) return { ptyId };
+  const res = await window.electronAPI.pty.reconnect(ptyId, { promote: true });
+  if (!res.success) return { error: `the pane's session could not be attached: ${res.error ?? 'unknown error'}` };
+  useStore.getState().setPtyDeferred(ptyId, false);
+  return { ptyId };
 }
 
 /**
@@ -184,7 +174,8 @@ export async function ensureSurfacePty(surfaceId: string, workspaceId?: string):
     return { error: `surface "${surfaceId}" not found${workspaceId ? ` in workspace "${workspaceId}"` : ''}` };
   }
   if (!isTerminalSurfaceType(surface.surfaceType)) return { error: `surface "${surfaceId}" has no local terminal` };
-  if (surface.ptyId) return startBoundDeferred(surface.ptyId);
+  // Bound already: main attaches it if it has no pipe (ensurePtyStarted).
+  if (surface.ptyId) return { ptyId: surface.ptyId };
   const { create, heal } = surfaceCreate({
     workspaceId: ws.id,
     surfaceId,

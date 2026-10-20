@@ -95,14 +95,22 @@ function isUnstartedTerminal(s: PaneLeaf['surfaces'][number]): boolean {
 
 /**
  * #2398 — the target's active pane holds a terminal that has not started (a
- * pane in a workspace nobody has opened yet). No agent runs there, so an
- * unaddressed delivery treats it as a pane without one (`no_agent_pane`) and
- * never starts it: only showing the pane or a raw terminal write does.
+ * pane in a workspace nobody has opened yet): blank, or bound to a suspended
+ * session its hidden pane left suspended (`isDeferredPty`). No agent runs
+ * there, so an unaddressed delivery treats it as a pane without one
+ * (`no_agent_pane`) and never starts it: only showing the pane or a raw
+ * terminal write does.
  */
-export function activePaneTerminalUnstarted(leaves: PaneLeaf[], activePaneId: string): boolean {
+export function activePaneTerminalUnstarted(
+  leaves: PaneLeaf[],
+  activePaneId: string,
+  isDeferredPty: (ptyId: string) => boolean = () => false,
+): boolean {
   const activeLeaf = leaves.find((l) => l.id === activePaneId);
-  return !!activeLeaf && !activeLeaf.surfaces.some((s) => s.surfaceType !== 'browser' && s.ptyId)
-    && activeLeaf.surfaces.some(isUnstartedTerminal);
+  if (!activeLeaf) return false;
+  const local = activeLeaf.surfaces.filter((s) => s.surfaceType === undefined || s.surfaceType === 'terminal');
+  const running = activeLeaf.surfaces.some((s) => s.surfaceType !== 'browser' && !!s.ptyId && !isDeferredPty(s.ptyId));
+  return !running && local.some((s) => !s.ptyId || isDeferredPty(s.ptyId));
 }
 
 /**

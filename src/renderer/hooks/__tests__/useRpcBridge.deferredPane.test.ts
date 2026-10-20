@@ -152,4 +152,48 @@ describe('a bound pane whose suspended session was left suspended', () => {
     expect(useStore.getState().ptyDeferredById['pty-2398-suspended']).toBeUndefined();
     expect(create).not.toHaveBeenCalled();
   });
+
+  // Review P2: a pane whose workspace is not mounted (outside the multiview
+  // grid, or cold-parked) never reconnected, so nothing marked its held
+  // session; the attach was skipped and the write dropped.
+  it('main asks by the missing pipe, not the mark: an unmarked session with no mounted pane is attached too', async () => {
+    useStore.setState({ ptyDeferredById: {} });
+    const reconnect = vi.fn(async () => ({ success: true }));
+    (window.electronAPI.pty as unknown as { reconnect: typeof reconnect }).reconnect = reconnect;
+    expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-held' })).toEqual({ ptyId: 'pty-2398-held' });
+    expect(reconnect).toHaveBeenCalledWith('pty-2398-held', { promote: true });
+  });
+
+  it('an attach the daemon refuses is answered as a refusal', async () => {
+    const reconnect = vi.fn(async () => ({ success: false, error: 'session cap reached' }));
+    (window.electronAPI.pty as unknown as { reconnect: typeof reconnect }).reconnect = reconnect;
+    expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-suspended' }))
+      .toEqual({ error: expect.stringContaining('session cap reached') });
+  });
+
+  // Review P2: the bound pane keeps its ptyId, so the unstarted check missed
+  // it and the carried-over workspace metadata (or a stale per-pane agent)
+  // authorized a write into a session with no pipe.
+  it('an unaddressed A2A send to it answers no_agent_pane and writes nothing', async () => {
+    // Its only terminal: the carried-over workspace metadata alone stands in
+    // for an agent there.
+    const ws = useStore.getState().workspaces;
+    (ws[1].rootPane as unknown as { children: PaneLeaf[] }).children[1].surfaces[0].ptyId = '';
+    useStore.setState({ workspaces: [...ws] });
+    const result = await handleRpcMethod('a2a.task.send', { workspaceId: SENDER.id, to: TARGET.id, message: 'hello' }) as { delivery?: Record<string, unknown> };
+    expect(result.delivery).toMatchObject({ stored: true, notified: false, reason: 'no_agent_pane' });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('an A2A send addressed to it answers no_agent_pane even with an agent on record for it', async () => {
+    useStore.getState().setSurfaceAgent('pty-2398-suspended', 'Claude Code', 'waiting', 'claude');
+    useStore.getState().hydrateAgentAlive({ 'pty-2398-suspended': true });
+    try {
+      const result = await handleRpcMethod('a2a.task.send', { workspaceId: SENDER.id, to: TARGET.id, message: 'hello', paneId: 'pane-blank' }) as { delivery?: Record<string, unknown> };
+      expect(result.delivery).toMatchObject({ stored: true, notified: false, reason: 'no_agent_pane' });
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      useStore.getState().clearSurfaceAgent('pty-2398-suspended');
+    }
+  });
 });

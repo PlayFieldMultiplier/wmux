@@ -632,14 +632,14 @@ export async function hydrateTerminalForRead(ptyId: string): Promise<boolean> {
   return fn ? await fn() : false;
 }
 
-// #2398 — a raw terminal write to a hidden pane whose suspended session was
-// attached without promoting starts it the way first showing the pane would:
-// through that pane's own reattach, so the replay lands once. Keyed by ptyId;
-// registered per mounted terminal while its session is deferred.
-const deferredAttachRegistry = new Map<string, () => Promise<void> | undefined>();
-/** Promote and attach a mounted pane's deferred session; false when no mounted pane holds it. */
-export async function startDeferredAttach(ptyId: string): Promise<boolean> {
-  const fn = deferredAttachRegistry.get(ptyId);
+// #2398 — a raw terminal write to a session main holds no pipe to (a hidden
+// pane's suspended session attached without promoting, say) attaches it the
+// way first showing the pane would: through that pane's own reattach, so the
+// replay lands once. Keyed by ptyId; registered per mounted terminal.
+const writeAttachRegistry = new Map<string, () => Promise<void> | undefined>();
+/** Attach (promoting) a mounted pane's session; false when no mounted pane holds it. */
+export async function attachForWrite(ptyId: string): Promise<boolean> {
+  const fn = writeAttachRegistry.get(ptyId);
   if (!fn) return false;
   await fn();
   return true;
@@ -3733,8 +3733,6 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       deferredAttachRef.current = deferred;
       // No session pipe either: refuses the park, like a pending reattach.
       if (deferred) reconnectPendingRef.current = true;
-      if (deferred) deferredAttachRegistry.set(id, rawWriteReattach);
-      else if (deferredAttachRegistry.get(id) === rawWriteReattach) deferredAttachRegistry.delete(id);
     };
     const reattach = (reason: string): Promise<void> | undefined => {
       // #2398 — a raw write must not settle on an attempt that leaves the
@@ -3807,6 +3805,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       if (deferredAttachRef.current && promoteRef.current && ptyIdRef.current === id) void reattach('first-show');
     };
     const rawWriteReattach = () => reattach('raw-write');
+    writeAttachRegistry.set(id, rawWriteReattach);
     retryReconnectRef.current = () => reattach('manual-retry');
     firstShowReattachRef.current = () => reattach('first-show');
     // Daemon already connected when we mounted: its daemon:connected fired before
@@ -3848,7 +3847,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     return () => {
       retryReconnectRef.current = null;
       firstShowReattachRef.current = null;
-      if (deferredAttachRegistry.get(id) === rawWriteReattach) deferredAttachRegistry.delete(id);
+      if (writeAttachRegistry.get(id) === rawWriteReattach) writeAttachRegistry.delete(id);
       if (slowRetry !== null) clearTimeout(slowRetry);
       if (off) off();
       offRestarted();

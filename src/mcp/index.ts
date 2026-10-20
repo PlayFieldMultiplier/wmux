@@ -23,6 +23,7 @@ import './botModules';
 import type { RpcMethod } from '../shared/rpc';
 import { EXECUTE_SEND_CLIENT_TIMEOUT_MS } from '../shared/executeApprovalBounds';
 import { NEW_TASK_SEND_CLIENT_TIMEOUT_MS, TERMINAL_SEND_NEW_TASK_TIMEOUT_MS } from '../shared/freshContext';
+import { terminalWriteClientTimeoutMs } from '../shared/terminalWriteBudget';
 import {
   claimPinnedRoute,
   clearPinnedRoute,
@@ -1524,7 +1525,10 @@ async function resolveScopedReadWorkspaceId(): Promise<string> {
 // it to a victim workspace and read/write that workspace's terminal
 // (issue #163). The cache getter honors workspaceResolved so a stale identity
 // invalidated by callRpc re-resolves instead of being served from cache.
-async function resolveTerminalRouteBound(explicitPtyId?: string) {
+// #2398 — `explicitSurfaceId`: a raw write to a named pane whose terminal has
+// not started (no pty yet). Routed as an explicit target, never as an omitted
+// one (which could claim a route).
+async function resolveTerminalRouteBound(explicitPtyId?: string, explicitSurfaceId?: string) {
   // Shared Codex app-server (#1778): a thread-only call routes to its thread's
   // pane or nowhere. It must never reach the commander route or the external
   // claim below — an unresolved thread would otherwise be pinned to a shared
@@ -1545,6 +1549,7 @@ async function resolveTerminalRouteBound(explicitPtyId?: string) {
   const commanderRoute = await resolveCommanderRoute({
     token: ctx.commanderToken,
     explicitPtyId,
+    explicitSurfaceId,
     sendRpc: (method, params) => sendRpc(method as RpcMethod, params),
   });
   if (commanderRoute) return commanderRoute;
@@ -1572,7 +1577,7 @@ async function resolveTerminalRouteBound(explicitPtyId?: string) {
         ? { noClaim: 'A factory bot reads a pane only by its ptyId: pass the ptyId of a task pane your fan-out started (or a pane in your workspace).' }
         : {}),
     },
-    explicitPtyId,
+    explicitPtyId ?? explicitSurfaceId,
   );
 }
 
@@ -1815,7 +1820,7 @@ server.tool(
     // explicit target (never as an omitted one, which could claim a route),
     // and main starts its shell before writing.
     const ref = await resolveWritePtyRef(ptyId, paneNameRpc);
-    const route = await resolveTerminalRouteBound(ref.ptyId ?? ref.surfaceId);
+    const route = await resolveTerminalRouteBound(ref.ptyId, ref.surfaceId);
     const base: Record<string, unknown> = { text, workspaceId: route.workspaceId };
     if (ref.surfaceId) base.surfaceId = ref.surfaceId;
     else if (route.ptyId) base.ptyId = route.ptyId;
@@ -1830,12 +1835,14 @@ server.tool(
     if (senderPtyId) base.senderPtyId = senderPtyId;
     if (submit) base.submit = true;
     addCallerPtyId(base);
-    // A new task may first wait out the pane's fresh-context step (#1680).
+    // #2398 — the write may first start the pane's terminal: the deadline
+    // covers that start, then the delivery (terminalWriteBudget.ts). A new
+    // task may also wait out the pane's fresh-context step (#1680).
     if (new_task) {
       base.newTask = true;
-      return callRpc('input.send', base, TERMINAL_SEND_NEW_TASK_TIMEOUT_MS);
+      return callRpc('input.send', base, terminalWriteClientTimeoutMs(TERMINAL_SEND_NEW_TASK_TIMEOUT_MS));
     }
-    return callRpc('input.send', base);
+    return callRpc('input.send', base, terminalWriteClientTimeoutMs());
   },
 );
 
@@ -1846,7 +1853,7 @@ server.tool(
   async ({ key, ptyId }) => {
     // #2398 — see terminal_send.
     const ref = await resolveWritePtyRef(ptyId, paneNameRpc);
-    const route = await resolveTerminalRouteBound(ref.ptyId ?? ref.surfaceId);
+    const route = await resolveTerminalRouteBound(ref.ptyId, ref.surfaceId);
     const params: Record<string, unknown> = { key, workspaceId: route.workspaceId };
     if (ref.surfaceId) params.surfaceId = ref.surfaceId;
     else if (route.ptyId) params.ptyId = route.ptyId;
@@ -1856,7 +1863,8 @@ server.tool(
     const senderPtyId = getTaskSenderPtyId();
     if (senderPtyId) params.senderPtyId = senderPtyId;
     addCallerPtyId(params);
-    const result = await callRpc('input.sendKey', params);
+    // #2398 — see terminal_send: the start, then the delivery.
+    const result = await callRpc('input.sendKey', params, terminalWriteClientTimeoutMs());
     // Say plainly what `ok` covers. The RPC confirms DELIVERY of a keystroke and
     // nothing more, but callers read a bare `{ok:true}` from an Enter press as
     // "submitted, the agent is running now" — orchestrators have reported panes

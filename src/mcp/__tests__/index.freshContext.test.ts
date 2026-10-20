@@ -31,7 +31,8 @@ describe('MCP fresh context per task (#1680)', () => {
   it('terminal_send forwards newTask and waits out the fresh-context step', () => {
     const handler = between("'terminal_send',", "'terminal_send_key',");
     expect(handler).toMatch(/base\.newTask = true/);
-    expect(handler).toMatch(/callRpc\('input\.send', base, TERMINAL_SEND_NEW_TASK_TIMEOUT_MS\)/);
+    // #2398: plus the terminal start budget (terminalWriteBudget.ts).
+    expect(handler).toMatch(/callRpc\('input\.send', base, terminalWriteClientTimeoutMs\(TERMINAL_SEND_NEW_TASK_TIMEOUT_MS\)\)/);
   });
 
   it('send_message gets no new param; a new task (no task_id) gets the longer client budget', () => {
@@ -56,5 +57,31 @@ describe('MCP fresh context per task (#1680)', () => {
     expect(TERMINAL_SEND_NEW_TASK_TIMEOUT_MS).toBeGreaterThanOrEqual(
       FRESH_CONTEXT_LOCK_WAIT_MS + 1_500 + FRESH_CONTEXT_TIMEOUT_MS + 2_000 + slack,
     );
+  });
+});
+
+// #2398 — a raw write may first start the pane's terminal (up to a WSL
+// create's budget). The client's 10 s default ran out first: it reported a
+// timeout while main went on and wrote, and the caller's retry wrote twice.
+describe('terminal_send / terminal_send_key wait for the terminal start (#2398)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf-8');
+  const between = (from: string, to: string): string => {
+    const start = src.indexOf(from);
+    expect(start, from).toBeGreaterThan(0);
+    return src.slice(start, src.indexOf(to, start));
+  };
+  it('both raw-write tools use the shared start-plus-delivery deadline', () => {
+    const send = between("'terminal_send',", "'terminal_send_key',");
+    expect(send).toMatch(/callRpc\('input\.send', base, terminalWriteClientTimeoutMs\(\)\)/);
+    const key = between("'terminal_send_key',", 'server.tool(');
+    expect(key).toMatch(/callRpc\('input\.sendKey', params, terminalWriteClientTimeoutMs\(\)\)/);
+  });
+
+  it('both route a pane that has not started by its surface, through the commander route too', () => {
+    for (const handler of [between("'terminal_send',", "'terminal_send_key',"), between("'terminal_send_key',", 'server.tool(')]) {
+      expect(handler).toMatch(/resolveTerminalRouteBound\(ref\.ptyId, ref\.surfaceId\)/);
+    }
+    const bound = between('async function resolveTerminalRouteBound(', '// === Browser tools');
+    expect(bound).toMatch(/resolveCommanderRoute\(\{[\s\S]*?explicitSurfaceId,/);
   });
 });

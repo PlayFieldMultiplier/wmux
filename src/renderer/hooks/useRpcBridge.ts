@@ -773,15 +773,19 @@ function a2aTargetHasAgent(
   pty: string | undefined,
 ): boolean {
   const s = useStore.getState();
+  // #2398 — a terminal that has not started runs no agent: blank, or bound to
+  // a suspended session its hidden pane left suspended (no writable pipe).
+  // Refused before any per-pane or workspace-metadata evidence, both carried
+  // over from before the restart, whether it was addressed or is the active
+  // pane an unaddressed delivery lands on.
+  const isDeferredPty = (id: string) => !!s.ptyDeferredById?.[id];
+  if (pty && isDeferredPty(pty)) return false;
+  const visible = findLeafPanes(targetWs.rootPane);
+  if (!pty && activePaneTerminalUnstarted(visible, targetWs.activePaneId, isDeferredPty)) return false;
   if (pty && paneHasDetectedAgent(pty, s.surfaceAgent, {
     agentAlive: s.agentAliveByPtyId,
     commandRunning: s.commandRunningByPtyId,
   })) return true;
-  const visible = findLeafPanes(targetWs.rootPane);
-  // #2398 — an unaddressed delivery lands on the active pane: one whose
-  // terminal has not started runs no agent, whatever the workspace's
-  // metadata (carried over from before the restart) says.
-  if (!pty && activePaneTerminalUnstarted(visible, targetWs.activePaneId)) return false;
   return isLiveTuiAgent(targetWs.metadata)
     && wsMetadataMayStandIn(visible)
     && (!pty || isTerminalPtyInLeaves(visible, pty));
@@ -2589,6 +2593,13 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
 
   if (method === 'input.findOwnerWorkspace') {
     const ptyId = typeof params.ptyId === 'string' ? params.ptyId : '';
+    // #2398 — by surface, for a terminal that has not started (no pty yet):
+    // the same workspace-wide answer main's surface lanes check.
+    const surfaceId = typeof params.surfaceId === 'string' ? params.surfaceId : '';
+    if (!ptyId && surfaceId) {
+      const owner = store.workspaces.find((ws) => getWorkspaceLeafPanes(ws).some((leaf) => leaf.surfaces.some((s) => s.id === surfaceId)));
+      return { workspaceId: owner?.id ?? null };
+    }
     if (!ptyId) return { workspaceId: null };
     // #977 — workspace-wide. This is the gate main uses for input.send, so a
     // visible-tree walk would reject writes to a stashed agent as "PTY not

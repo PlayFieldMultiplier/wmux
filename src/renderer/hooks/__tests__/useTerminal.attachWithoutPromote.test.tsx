@@ -127,9 +127,9 @@ describe('reattach of a hidden pane (#2398)', { timeout: 60_000 }, () => {
     reconnect.mockImplementation(async (_id, opts) => (opts?.promote === false ? { success: false, deferred: true } : { success: true }));
     setDaemonModeActive(true);
     await render('p-written', false);
-    const { startDeferredAttach } = await import('../useTerminal');
+    const { attachForWrite } = await import('../useTerminal');
     let started = false;
-    await act(async () => { started = await startDeferredAttach('p-written'); });
+    await act(async () => { started = await attachForWrite('p-written'); });
     expect(started).toBe(true);
     expect(promoteFlags()).toEqual([false, true]);
     expect(useStore.getState().ptyDeferredById['p-written']).toBeUndefined();

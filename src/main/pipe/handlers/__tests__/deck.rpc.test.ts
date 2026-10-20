@@ -625,3 +625,39 @@ describe('main-owned cards — a stale one is never replaced by a brain question
     expect(raiseDecisionMock).not.toHaveBeenCalled();
   });
 });
+
+// #2398 — a pane whose terminal has not started has no pty: a commander's or
+// bot's raw write to it is routed by surface, under the same rules as a pty.
+describe('deck.resolvePaneRoute by surface (#2398)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetCommanderTrustForTesting();
+  });
+
+  const route = (router: RpcRouter, token: string) =>
+    router.dispatch({ id: '1', method: 'deck.resolvePaneRoute', params: { token, surfaceId: 'surf-9' } });
+
+  it('resolves a surface owned by the token workspace, asking the renderer by surface', async () => {
+    const token = mintCommanderToken('ws-owner');
+    sendToRendererMock.mockResolvedValue({ workspaceId: 'ws-owner' });
+    const res = await route(setup(), token);
+    expect(res.ok).toBe(true);
+    expect((res as { result: unknown }).result).toEqual({ workspaceId: 'ws-owner' });
+    expect(sendToRendererMock).toHaveBeenCalledWith(expect.anything(), 'input.findOwnerWorkspace', { surfaceId: 'surf-9' });
+  });
+
+  it("routes a surface of an open task of this brain to the brain's own workspace", async () => {
+    const token = mintCommanderToken('ws-mine');
+    sendToRendererMock.mockResolvedValue({ workspaceId: 'ws-task' });
+    const res = await route(setup([{ ownerWorkspaceId: 'ws-mine', taskWorkspaceId: 'ws-task', status: 'working' }]), token);
+    expect(res.ok).toBe(true);
+    expect((res as { result: unknown }).result).toEqual({ workspaceId: 'ws-mine' });
+  });
+
+  it('fails closed on a surface of another workspace', async () => {
+    const token = mintCommanderToken('ws-mine');
+    sendToRendererMock.mockResolvedValue({ workspaceId: 'ws-other' });
+    const res = await route(setup(), token);
+    expect(res.ok).toBe(false);
+  });
+});

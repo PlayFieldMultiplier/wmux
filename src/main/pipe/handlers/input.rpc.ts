@@ -16,7 +16,7 @@ import type { BotBinding } from '../../../shared/bot';
 import type { PTYManager } from '../../pty/PTYManager';
 import type { DaemonClient } from '../../DaemonClient';
 import { sendToRenderer } from './_bridge';
-import { WSL_RPC_TIMEOUT_MS } from '../../../shared/wsl';
+import { TERMINAL_START_BUDGET_MS } from '../../../shared/terminalWriteBudget';
 import { sanitizePtyText } from '../../../shared/types';
 import {
   formatBracketedPastePayload,
@@ -51,6 +51,7 @@ import {
 import { readWorkspaceAutonomyEntry } from '../../workspace/workspaceFactsFeed';
 import {
   assertCallerMayAccessPty,
+  assertCallerMayAccessSurface,
   resolvePtyOwnerWorkspace,
   resolveRoleBindingForPty,
   type PtyAccess,
@@ -622,8 +623,31 @@ function deferredSurfaceOf(result: unknown): string | null {
     : null;
 }
 
-/** Longest a raw write waits for a not-started pane's shell: a WSL create's budget, plus the renderer's hop. */
-const ENSURE_PTY_TIMEOUT_MS = WSL_RPC_TIMEOUT_MS + 5_000;
+/**
+ * #2398 — the start phase of one raw write (shared/terminalWriteBudget.ts):
+ * every start it waits on gets only what is left of TERMINAL_START_BUDGET_MS
+ * from the write's arrival, and once it is spent the write stops with nothing
+ * written. The MCP client waits for this budget plus the delivery, so a write
+ * main completes always lands while its caller still waits for the answer;
+ * one main gives up on is never written later behind the caller's retry.
+ */
+export interface StartClock {
+  /** What is left of the start budget; throws (nothing written) once spent. */
+  left: (method: string) => number;
+}
+
+export function startClock(now: () => number = Date.now): StartClock {
+  const startBy = now() + TERMINAL_START_BUDGET_MS;
+  return {
+    left: (method) => {
+      const left = startBy - now();
+      if (left <= 0) {
+        throw new Error(`${method}: the pane's terminal took longer to start than a write may wait — nothing was written; send it again`);
+      }
+      return left;
+    },
+  };
+}
 
 /**
  * #2398 (owner decision §6-6) — start the shell of a terminal surface that has
@@ -631,8 +655,9 @@ const ENSURE_PTY_TIMEOUT_MS = WSL_RPC_TIMEOUT_MS + 5_000;
  * surface outside `workspaceId`, so nothing starts in a workspace the caller
  * could not write to.
  */
-async function startDeferredSurface(getWindow: GetWindow, method: string, surfaceId: string, workspaceId: string): Promise<string> {
-  const res = await sendToRenderer(getWindow, 'surface.ensurePty', { surfaceId, workspaceId }, { timeoutMs: ENSURE_PTY_TIMEOUT_MS });
+async function startDeferredSurface(getWindow: GetWindow, method: string, surfaceId: string, workspaceId: string, clock: StartClock): Promise<string> {
+  const res = await sendToRenderer(getWindow, 'surface.ensurePty', { surfaceId, workspaceId }, { timeoutMs: clock.left(method) });
+  clock.left(method);
   if (res !== null && typeof res === 'object') {
     const r = res as Record<string, unknown>;
     if (typeof r['ptyId'] === 'string' && r['ptyId'].length > 0) return r['ptyId'];
@@ -644,20 +669,26 @@ async function startDeferredSurface(getWindow: GetWindow, method: string, surfac
 /**
  * The pty a raw write (input.send / input.sendKey) goes to: the explicit
  * `ptyId`; else an explicit `surfaceId` (a pane name that resolved to a
- * terminal that has not started); else the caller's active pane. A pane whose
- * shell has not started is started first — the one read-side difference from
- * resolveActivePtyId.
+ * terminal that has not started), checked against the caller's lanes like a
+ * pty; else the caller's active pane. A pane whose shell has not started is
+ * started first — the one read-side difference from resolveActivePtyId.
  */
 async function resolveWriteTargetPtyId(
   getWindow: GetWindow,
   method: 'input.send' | 'input.sendKey',
   params: Record<string, unknown>,
   callerWs: string | undefined,
+  lane: TaskOwnerLane | undefined,
+  clock: StartClock,
 ): Promise<string> {
   if (typeof params['ptyId'] === 'string' && params['ptyId'].length > 0) return params['ptyId'];
   if (typeof params['surfaceId'] === 'string' && params['surfaceId'].length > 0) {
     if (!callerWs) throw new Error(`${method}: "surfaceId" needs the caller's "workspaceId"`);
-    return startDeferredSurface(getWindow, method, params['surfaceId'], callerWs);
+    const surfaceId = params['surfaceId'];
+    // The same lanes as a pty, decided before anything starts: the caller's
+    // own workspace, or an open task it owns (a commander's or bot's worker).
+    const access = await assertCallerMayAccessSurface(getWindow, surfaceId, callerWs, method, lane);
+    return startDeferredSurface(getWindow, method, surfaceId, access.lane === 'task-owner' ? access.taskWorkspaceId : callerWs, clock);
   }
   const senderPtyId = typeof params['senderPtyId'] === 'string' ? params['senderPtyId'] : '';
   const decision = decideTerminalOmittedTarget(senderPtyId);
@@ -669,7 +700,7 @@ async function resolveWriteTargetPtyId(
   const deferredSurfaceId = deferredSurfaceOf(result);
   if (deferredSurfaceId) {
     const ws = callerWs ?? '';
-    return startDeferredSurface(getWindow, method, deferredSurfaceId, ws);
+    return startDeferredSurface(getWindow, method, deferredSurfaceId, ws, clock);
   }
   if (
     result !== null &&
@@ -1254,19 +1285,28 @@ export function registerInputRpc(
   });
 
   /**
-   * #2398 — a daemon session with no session pipe here may be one its hidden
-   * pane attached without promoting (left suspended until shown). A raw write
-   * starts it first (owner decision §6-6); asked only after the caller's
-   * access to the pty was checked. Any other pty is left as it is.
+   * #2398 — a daemon session this process holds no writable pipe to cannot
+   * take a write: a session its hidden pane attached without promoting (left
+   * suspended until shown), or one whose pane is not mounted at all (a
+   * workspace outside the multiview grid, a cold-parked one), whose session
+   * the startup reconcile held suspended. Decided from the pipe itself, not
+   * from what the renderer marked: the renderer attaches it (promoting a
+   * suspended session) before the write, owner decision §6-6, and the pipe
+   * must be writable afterwards or nothing is written. Asked only after the
+   * caller's access to the pty was checked.
    */
-  const startIfSuspended = async (method: string, ptyId: string): Promise<void> => {
+  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock): Promise<void> => {
     if (ptyManager.get(ptyId)) return;
     const dc = getDaemonClient?.();
     // Only on a positive "no pipe": a client that cannot say leaves it as is.
     if (!dc?.isConnected || dc.isSessionPipeWritable?.(ptyId) !== false) return;
-    const res = await sendToRenderer(getWindow, 'surface.ensurePty', { ptyId }, { timeoutMs: ENSURE_PTY_TIMEOUT_MS });
+    const res = await sendToRenderer(getWindow, 'surface.ensurePty', { ptyId }, { timeoutMs: clock.left(method) });
+    clock.left(method);
     if (res !== null && typeof res === 'object' && typeof (res as Record<string, unknown>)['error'] === 'string') {
       throw new Error(`${method}: ${(res as Record<string, string>)['error']}`);
+    }
+    if (!dc.isSessionPipeWritable(ptyId)) {
+      throw new Error(`${method}: the pane's session "${ptyId}" could not be attached — nothing was written`);
     }
   };
 
@@ -1307,16 +1347,18 @@ export function registerInputRpc(
       throw new Error('input.send: "newTask" needs "submit": true and cannot be combined with "raw"');
     }
 
-    const ptyId = await resolveWriteTargetPtyId(getWindow, 'input.send', params, callerWs);
+    const clock = startClock();
+    const sendLane = taskOwnerLane(params, ctx);
+    const ptyId = await resolveWriteTargetPtyId(getWindow, 'input.send', params, callerWs, sendLane, clock);
 
     const access = await assertCallerMayAccessPty(
       getWindow,
       ptyId,
       callerWs,
       'input.send',
-      taskOwnerLane(params, ctx),
+      sendLane,
     );
-    await startIfSuspended('input.send', ptyId);
+    await startIfSuspended('input.send', ptyId, clock);
 
     if (access.lane === 'task-owner') {
       const refusal = taskPaneTextRefusal(text, params['raw'] === true);
@@ -1388,7 +1430,10 @@ export function registerInputRpc(
       } else {
         const dc = getDaemonClient?.();
         if (dc?.isConnected) {
-          dc.writeToSession(ptyId, data);
+          // #2398 — no pipe took it: never answered as written.
+          if (dc.writeToSession(ptyId, data) === false) {
+            throw new Error(`input.send: the session "${ptyId}" has no open pipe — the text was not delivered`);
+          }
         } else {
           throw new Error(`input.send: PTY not found — id="${ptyId}"`);
         }
@@ -1587,19 +1632,21 @@ export function registerInputRpc(
 
     const callerWs = typeof params['workspaceId'] === 'string' ? params['workspaceId'] : undefined;
 
-    const ptyId = await resolveWriteTargetPtyId(getWindow, 'input.sendKey', params, callerWs);
-
     // The owner lane covers only the two keys that stop an agent. Every other
     // key selects or submits something, and a delegated pane is not the
     // owner's to drive by keystroke.
+    const keyLane = APPROVAL_BLOCK_EXEMPT_KEYS.has(key) ? taskOwnerLane(params, ctx) : undefined;
+    const clock = startClock();
+    const ptyId = await resolveWriteTargetPtyId(getWindow, 'input.sendKey', params, callerWs, keyLane, clock);
+
     const access = await assertCallerMayAccessPty(
       getWindow,
       ptyId,
       callerWs,
       'input.sendKey',
-      APPROVAL_BLOCK_EXEMPT_KEYS.has(key) ? taskOwnerLane(params, ctx) : undefined,
+      keyLane,
     );
-    await startIfSuspended('input.sendKey', ptyId);
+    await startIfSuspended('input.sendKey', ptyId, clock);
 
     // Ctrl+D arrives here as its escape sequence, so the same guard applies.
     assertNotKillingAGateHeldPane(
@@ -1623,7 +1670,10 @@ export function registerInputRpc(
     } else {
       const dc = getDaemonClient?.();
       if (dc?.isConnected) {
-        dc.writeToSession(ptyId, sequence);
+        // #2398 — no pipe took it: never answered as sent.
+        if (dc.writeToSession(ptyId, sequence) === false) {
+          throw new Error(`input.sendKey: the session "${ptyId}" has no open pipe — the key was not delivered`);
+        }
       } else {
         throw new Error(`input.sendKey: PTY not found — id="${ptyId}"`);
       }
@@ -1769,7 +1819,8 @@ export function registerInputRpc(
     }
     const dc = getDaemonClient?.();
     if (!dc?.isConnected) throw new Error(`delivery: PTY not found — id="${ptyId}"`);
-    dc.writeToSession(ptyId, data);
+    // #2398 — no pipe took it: never answered as delivered.
+    if (dc.writeToSession(ptyId, data) === false) throw new Error(`delivery: the session "${ptyId}" has no open pipe — nothing was delivered`);
   };
   /**
    * The hand-off's wait and guard. A pane whose agent main cannot read (a

@@ -279,3 +279,16 @@ describe('resolveCommanderRoute', () => {
     ).toBeNull();
   });
 });
+
+// #2398 — a commander's (or bot's) raw write to a named pane whose terminal
+// has not started: no pty yet, so the route is resolved by surface. Sent as a
+// ptyId, deck.resolvePaneRoute matched no pty, the route fell back to the
+// external rules and the write failed before the pane could start.
+describe('resolveCommanderRoute by surface (#2398)', () => {
+  it('asks deck.resolvePaneRoute by surface and routes to the answered workspace', async () => {
+    const sendRpc = vi.fn(async () => ({ workspaceId: 'ws-owner' }));
+    const route = await resolveCommanderRoute({ token: 'tok', explicitPtyId: undefined, explicitSurfaceId: 'surf-9', sendRpc });
+    expect(route).toEqual({ workspaceId: 'ws-owner', ptyId: undefined });
+    expect(sendRpc).toHaveBeenCalledWith('deck.resolvePaneRoute', { token: 'tok', surfaceId: 'surf-9' });
+  });
+});
