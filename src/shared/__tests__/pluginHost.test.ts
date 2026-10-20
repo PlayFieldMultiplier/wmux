@@ -125,3 +125,17 @@ describe('PLUGIN_NAME_REGEX', () => {
     expect(PLUGIN_NAME_REGEX.test('has/slash')).toBe(false);
   });
 });
+
+describe('rail page contribution', () => {
+  it('requires both page and state capabilities for an event page', () => {
+    const result = parsePluginManifest({ ...VALID_MANIFEST, contributes: { railPage: { title: 'Agents', entry: 'page.html', agentStateEvents: true } } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(requiredUiCapabilities(result.manifest.contributes)).toEqual(['ui.rail-page', 'agent.state.read']);
+  });
+  it.each(['../bad.html', '/abs.html', 'C:\\page.html', 'https://example.test'])('rejects unsafe rail entry %s', (entry) => {
+    expect(parsePluginManifest({ ...VALID_MANIFEST, contributes: { railPage: { title: 'Agents', entry } } }).ok).toBe(false);
+  });
+  it('rejects a non-boolean event opt-in', () => {
+    expect(parsePluginManifest({ ...VALID_MANIFEST, contributes: { railPage: { title: 'Agents', entry: 'page.html', agentStateEvents: 'yes' } } }).ok).toBe(false);
+  });
+});

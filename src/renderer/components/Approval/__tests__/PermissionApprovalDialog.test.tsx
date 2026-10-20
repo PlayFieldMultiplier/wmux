@@ -168,3 +168,15 @@ describe('PermissionApprovalDialogView — rendering', () => {
     expect(html).toMatch(/accent-red/);
   });
 });
+
+
+it('shows every grantable permission, including rail and agent-state grants', async () => {
+  const { listKnownCapabilities } = await import('../../../../main/mcp/permissionGrammar');
+  const capabilities = listKnownCapabilities();
+  const shown = groupCapabilities(capabilities).flatMap((g) => g.capabilities.map((c) => c.raw));
+  expect(shown.sort()).toEqual([...capabilities].sort());
+  const html = renderToStaticMarkup(createElement(PermissionApprovalDialogView, defaultProps({ declaredCapabilities: ['ui.rail-page', 'agent.state.read', 'pane.read'] })));
+  expect(html).toContain('ui.rail-page');
+  expect(html).toContain('agent.state.read');
+  expect(html).toContain('pane.read');
+});

@@ -1,3 +1,5 @@
+import { isHostedCaller, hostedBindingOf } from '../../../shared/rpc';
+import { parsePluginAgentSnapshot } from '../../../shared/pluginAgentState';
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import type { DaemonClient } from '../../DaemonClient';
@@ -291,6 +293,14 @@ export function registerPaneRpc(
    * Same error contract as pane.list: a renderer that is still booting answers
    * { error, retryable } instead of a board, and its reason is propagated.
    */
+  router.register('agent.state', async (params, ctx) => {
+    const workspaceId = hostedBindingOf(ctx);
+    if (!isHostedCaller(ctx) || !workspaceId) throw new Error('Agent state requires a bound UI plugin');
+    if (params.includeActivity !== undefined && typeof params.includeActivity !== 'boolean') throw new Error('Invalid includeActivity');
+    const raw = await sendToRenderer(getWindow, 'agent.state', { workspaceId, includeActivity: params.includeActivity === true });
+    return parsePluginAgentSnapshot(raw, workspaceId, params.includeActivity === true);
+  });
+
   router.register('fleet.triage', async (params) => {
     // A malformed scope must not widen to the whole fleet: the renderer reads
     // a non-string workspaceId as "none given".

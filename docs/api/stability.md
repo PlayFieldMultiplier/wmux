@@ -367,3 +367,11 @@ Managed chat's `daemon.chat.*` methods and optional managed fields on private
 contract. They are first-party desktop only, with no public MCP/HTTP exposure.
 See [managed chat](../managed-chat.md) for the current capability and recovery
 limits; clients must not infer terminal takeover or file undo from chat support.
+
+### UI plugin page additions
+
+The v1 `railPage` contribution and `agent-state` host envelope are additive;
+existing envelopes are unchanged. The new hosted `agent.state` method and its
+projection are experimental. New capabilities require a supporting host and
+explicit approval; older hosts reject the new example manifest. See
+[UI plugin pages](ui-plugin-pages.md) for scope and lifecycle contracts.

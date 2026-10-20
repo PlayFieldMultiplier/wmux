@@ -101,6 +101,9 @@ export const pl = {
   "connectors.confirm": "Usuń połączenie",
   "connectors.configure": "Konfiguruj",
 
+  'plugins.page.extension': 'Wtyczka interfejsu',
+  'plugins.page.approve': 'Sprawdź uprawnienia, aby otworzyć',
+  'plugins.page.approvalFailed': 'Nie udało się poprosić o zgodę. Spróbuj ponownie.',
   'ipc.error.daemonDisconnected': "Usługa terminala nie odpowiada. Ponawianie…",
   'ipc.error.validation': "Żądanie jest nieprawidłowe.",
   'ipc.error.notFound': "Nie znaleziono elementu.",

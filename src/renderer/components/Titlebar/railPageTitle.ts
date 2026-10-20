@@ -17,5 +17,5 @@ export const RAIL_PAGE_TITLE_KEYS: Partial<Record<AppRoute, TranslationKey>> = {
  *  highlighted row), and a rail page names itself instead. New workspace is
  *  never in the titlebar: the sidebar's header and the rail carry it. */
 export function workspaceChromeInTitlebar(s: { appRoute: AppRoute; sidebarVisible: boolean }): boolean {
-  return !(s.appRoute in RAIL_PAGE_TITLE_KEYS) && !s.sidebarVisible;
+  return !s.appRoute.startsWith('plugin:') && !(s.appRoute in RAIL_PAGE_TITLE_KEYS) && !s.sidebarVisible;
 }

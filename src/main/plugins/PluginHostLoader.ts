@@ -186,7 +186,7 @@ export class PluginHostLoader {
     }
 
     // Contribution entries must exist inside the bundle.
-    for (const entry of [manifest.contributes.sidebar?.entry, manifest.contributes.statusbar?.entry]) {
+    for (const entry of [manifest.contributes.sidebar?.entry, manifest.contributes.statusbar?.entry, manifest.contributes.railPage?.entry]) {
       if (entry === undefined) continue;
       const resolved = resolveWithin(dir, entry);
       if (!resolved || !fs.existsSync(resolved)) {

@@ -13,6 +13,7 @@
 // docs/internal/fable-window-schema-freeze.md §4. Changes are additive-only;
 // consumers ignore unknown fields and unknown envelope kinds.
 
+import type { PluginAgentSnapshot } from './pluginAgentState';
 import type { WmuxEvent } from './events';
 
 export const PLUGIN_BRIDGE_VERSION = 1 as const;
@@ -65,7 +66,18 @@ export interface BridgeCommand {
   command: string;
 }
 
-export type BridgeEnvelope = BridgeRequest | BridgeResponse | BridgeEvent | BridgeCommand;
+/** Additive v1 projection stream; no EventBus sequence or replay semantics. */
+export interface BridgeAgentState {
+  v: typeof PLUGIN_BRIDGE_VERSION;
+  id: null;
+  kind: 'agent-state';
+  epoch: string;
+  revision: number;
+  workspaceId: string | null;
+  status: 'reset' | 'ready' | 'unavailable';
+  snapshot?: PluginAgentSnapshot;
+}
+export type BridgeEnvelope = BridgeRequest | BridgeResponse | BridgeEvent | BridgeCommand | BridgeAgentState;
 
 /**
  * Validate an inbound message from a plugin iframe. Hostile iframes can
@@ -115,7 +127,13 @@ export interface PluginCommandContribution {
   title: string;
 }
 
+export interface PluginRailPageContribution extends PluginSidebarContribution {
+  /** Receive bounded agent-state snapshots while this page is mounted. */
+  agentStateEvents?: boolean;
+}
+
 export interface PluginContributions {
+  railPage?: PluginRailPageContribution;
   sidebar?: PluginSidebarContribution;
   statusbar?: PluginStatusBarContribution;
   /**
@@ -150,6 +168,7 @@ export interface PluginManifest {
 
 /** Map of contribution point → capability required to mount it. */
 export const CONTRIBUTION_CAPABILITY = {
+  railPage: 'ui.rail-page',
   sidebar: 'ui.sidebar',
   statusbar: 'ui.statusbar',
   paneDecoration: 'ui.pane-decoration',
@@ -226,6 +245,18 @@ export function parsePluginManifest(raw: unknown): PluginManifestParseResult {
       errors.push('contributes must be an object');
     } else {
       const c = m.contributes as Record<string, unknown>;
+      if (c.railPage !== undefined) {
+        const page = c.railPage as Record<string, unknown> | null;
+        if (!page || typeof page !== 'object' || Array.isArray(page)
+          || typeof page.title !== 'string' || !page.title.trim() || page.title.length > MAX_TITLE_LEN
+          || !isSafeEntryPath(page.entry)
+          || (page.agentStateEvents !== undefined && typeof page.agentStateEvents !== 'boolean')) {
+          errors.push('contributes.railPage requires { title, entry (safe bundle-relative path), agentStateEvents?: boolean }');
+        } else {
+          contributes.railPage = { title: page.title.trim(), entry: page.entry,
+            ...(page.agentStateEvents === true ? { agentStateEvents: true } : {}) };
+        }
+      }
       if (c.sidebar !== undefined) {
         const s = c.sidebar as Record<string, unknown> | null;
         if (!s || typeof s !== 'object'
@@ -298,6 +329,8 @@ export function parsePluginManifest(raw: unknown): PluginManifestParseResult {
  */
 export function requiredUiCapabilities(contributes: PluginContributions): string[] {
   const caps: string[] = [];
+  if (contributes.railPage) caps.push(CONTRIBUTION_CAPABILITY.railPage);
+  if (contributes.railPage?.agentStateEvents) caps.push('agent.state.read');
   if (contributes.sidebar) caps.push(CONTRIBUTION_CAPABILITY.sidebar);
   if (contributes.statusbar) caps.push(CONTRIBUTION_CAPABILITY.statusbar);
   if (contributes.paneDecoration) caps.push(CONTRIBUTION_CAPABILITY.paneDecoration);

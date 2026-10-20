@@ -165,3 +165,10 @@ describe('permissionGrammar.parsePermissionList', () => {
     expect(result.errors[0].reason).toBe('permissions must be an array');
   });
 });
+
+describe('UI plugin permissions without path scopes', () => {
+  it.each(['agent.state.read', 'ui.rail-page'])('rejects a scoped %s declaration', (capability) => {
+    expect(parsePermission(`${capability}:never.matches`).ok).toBe(false);
+    expect(parsePermission(capability).ok).toBe(true);
+  });
+});

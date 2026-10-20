@@ -527,3 +527,11 @@ Things external clients may run into that aren't bugs but are explicit substrate
 | Draft 6 | 2026-06-09 | §5 transport correction. The Windows pipe is `\\.\pipe\wmux-<username>` (`os.userInfo().username`), NOT `wmux-rpc-<token>`; the token lives at `~/.wmux-auth-token` as a plain UUID, NOT `%APPDATA%\wmux\pipe-token`. Adds the POSIX Unix-domain-socket endpoint (`~/.wmux.sock`), the Windows loopback TCP fallback (`~/.wmux-tcp-port`, used on pipe `EPERM`), and the note that wmux PTYs inherit `WMUX_AUTH_TOKEN`/`WMUX_SOCKET_PATH` so in-pane plugins authenticate without reading the file. No wire-format change — corrects the documented endpoint/token paths to match `src/shared/constants.ts` and `PipeServer`. |
 
 This document evolves alongside the implementation. Changes that affect the wire contract require a major-version bump per [`api/versioning.md`](./api/versioning.md). Changes that clarify existing semantics ship in any release.
+
+### Hosted UI plugin state projection
+
+`agent.state` is available only through a bound UI-plugin host, with an
+`agent.state.read` grant. `includeActivity:true` additionally requires
+unrestricted `terminal.read`. It does not expose an external MCP/pipe method.
+The v1 bridge adds an optional `agent-state` replacement-snapshot envelope for
+opted-in rail pages. [Contract](api/ui-plugin-pages.md).
