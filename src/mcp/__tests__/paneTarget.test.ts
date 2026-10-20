@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { classifyPaneRef, resolvePaneRef, resolvePtyRef, resolvePaneIdRef } from '../paneTarget';
+import { classifyPaneRef, resolvePaneRef, resolvePtyRef, resolvePaneIdRef, resolveWritePtyRef } from '../paneTarget';
 
 const target = {
   workspaceId: 'ws-1', paneId: 'pane-1', surfaceId: 'surface-1', ptyId: 'daemon-1a2b3c4d',
@@ -64,5 +64,22 @@ describe('resolvePaneRef', () => {
   it('refuses a pane with no terminal for a pty parameter', async () => {
     const rpc = vi.fn(async () => ({ ok: true, target: { ...target, ptyId: '' } }));
     await expect(resolvePtyRef('#w1-2', rpc)).rejects.toThrow('#w1-2 has no local terminal');
+  });
+});
+
+// #2398 — a raw write may name a pane whose terminal has not started: it goes
+// to main as that surface, which starts the shell before writing. A read
+// (resolvePtyRef) still refuses it.
+describe('resolveWritePtyRef', () => {
+  it('a started pane resolves to its ptyId, an id passes through', async () => {
+    const rpc = vi.fn(async () => ({ ok: true, target }));
+    expect(await resolveWritePtyRef('#w1-2', rpc)).toEqual({ ptyId: 'daemon-1a2b3c4d' });
+    expect(await resolveWritePtyRef('daemon-9', vi.fn())).toEqual({ ptyId: 'daemon-9' });
+  });
+
+  it('a pane whose terminal has not started resolves to its surface', async () => {
+    const rpc = vi.fn(async () => ({ ok: true, target: { ...target, ptyId: '' } }));
+    expect(await resolveWritePtyRef('#w1-2', rpc)).toEqual({ surfaceId: 'surface-1' });
+    await expect(resolvePtyRef('#w1-2', rpc)).rejects.toThrow(/has no local terminal/);
   });
 });

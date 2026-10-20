@@ -1116,6 +1116,7 @@ export const pl = {
   'terminal.reattaching': 'ponowne łączenie…',
   'terminal.createFailed': 'Nie udało się uruchomić tego terminala.',
   'terminal.retryCreate': 'Spróbuj ponownie',
+  'terminal.notStarted': 'Uruchomi się po otwarciu',
   'retention.migratedNotice': 'Ta aktualizacja wstrzymuje renderowanie ukrytych paneli (wszystko działa dalej, panele nadrabiają po pokazaniu). Możesz to wyłączyć w Ustawienia → Terminal.',
   'retention.migratedNoticeTurnOff': 'Wyłącz',
   // X8 — in-pane supervised-restart marker. The trailing hint is the Ctrl+C

@@ -136,7 +136,7 @@ import { inspectLaunchPresence } from './launchPresence';
 import { promptLineState } from '../shared/promptLineState';
 import { parseWriteExpectation, writeIfUnchanged } from './writeIfUnchanged';
 import { Watchdog } from './Watchdog';
-import { selectRecoverableSessions, startLeftoverShellReaps } from './recoverySelector';
+import { recoversInBackground, selectRecoverableSessions, startLeftoverShellReaps } from './recoverySelector';
 import { isShutdownKillExit, SHUTDOWN_KILL_RECLASSIFY_MS } from './shutdownKill';
 import {
   classifyReapIdentity,
@@ -3559,11 +3559,19 @@ function registerRpcHandlers(
   // Defer cold WSL starts until RPC registration/event wiring can finish.
   // Independent panes recover concurrently; foreground attach shares the same
   // in-flight promotion. Exec units also resume when no GUI is attached.
+  // #2398 (owner decision §6-4) — only exec units and supervised sessions,
+  // which must run whether or not anyone looks at them. A plain WSL shell
+  // starts when its pane is first shown (the renderer's attach promotes it),
+  // so a cold start with many restored workspaces does not start one per
+  // pane nobody opened.
   setImmediate(() => {
     if (shuttingDown) return;
     const promotions: Array<Promise<unknown>> = [];
     try {
-      const pending = sessionManager.listSessions().filter(s => sessionManager.getPendingRecovery(s.id));
+      const pending = sessionManager.listSessions().filter(s => {
+        const placeholder = sessionManager.getPendingRecovery(s.id);
+        return !!placeholder && recoversInBackground(placeholder);
+      });
       const selected = selectRecoverableSessions(pending, Math.min(loadConfig().session.maxSessions, MAX_RECOVER_SESSIONS));
       for (const session of pending.filter(s => selected.recoverableIds.has(s.id))) {
         promotions.push(promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err)));

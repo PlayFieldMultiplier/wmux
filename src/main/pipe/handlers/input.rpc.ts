@@ -16,6 +16,7 @@ import type { BotBinding } from '../../../shared/bot';
 import type { PTYManager } from '../../pty/PTYManager';
 import type { DaemonClient } from '../../DaemonClient';
 import { sendToRenderer } from './_bridge';
+import { WSL_RPC_TIMEOUT_MS } from '../../../shared/wsl';
 import { sanitizePtyText } from '../../../shared/types';
 import {
   formatBracketedPastePayload,
@@ -590,12 +591,91 @@ async function readScreenFor(getWindow: GetWindow, params: Record<string, unknow
 async function resolveActivePtyId(getWindow: GetWindow, callerWs?: string): Promise<string> {
   const scoped = callerWs ? { workspaceId: callerWs } : {};
   const result = await sendToRenderer(getWindow, 'input.readScreen', scoped);
+  // #2398 — the active pane's terminal has not started: a read must not start
+  // it (input.send / input.sendKey do, through resolveWriteTargetPtyId).
+  if (deferredSurfaceOf(result)) {
+    throw new Error(`input: ${DEFERRED_TERMINAL_TEXT}`);
+  }
   // renderer returns { ptyId: string, ... } for the active surface
   if (
     result !== null &&
     typeof result === 'object' &&
     'ptyId' in result &&
     typeof (result as Record<string, unknown>)['ptyId'] === 'string'
+  ) {
+    return (result as Record<string, string>)['ptyId'];
+  }
+  throw new Error('input: could not resolve active ptyId from renderer');
+}
+
+/** #2398 — what a read of a pane whose shell has not started says. */
+const DEFERRED_TERMINAL_TEXT =
+  "the active pane's terminal has not started yet (it starts when the pane is first opened, " +
+  'or on terminal_send / terminal_send_key to it) — it is not running, and not dead';
+
+/** The surface id input.readScreen reports for a terminal that has not started. */
+function deferredSurfaceOf(result: unknown): string | null {
+  if (result === null || typeof result !== 'object') return null;
+  const r = result as Record<string, unknown>;
+  return r['deferred'] === true && typeof r['deferredSurfaceId'] === 'string' && r['deferredSurfaceId'].length > 0
+    ? r['deferredSurfaceId']
+    : null;
+}
+
+/** Longest a raw write waits for a not-started pane's shell: a WSL create's budget, plus the renderer's hop. */
+const ENSURE_PTY_TIMEOUT_MS = WSL_RPC_TIMEOUT_MS + 5_000;
+
+/**
+ * #2398 (owner decision §6-6) — start the shell of a terminal surface that has
+ * not started, for a raw write, and answer its ptyId. The renderer refuses a
+ * surface outside `workspaceId`, so nothing starts in a workspace the caller
+ * could not write to.
+ */
+async function startDeferredSurface(getWindow: GetWindow, method: string, surfaceId: string, workspaceId: string): Promise<string> {
+  const res = await sendToRenderer(getWindow, 'surface.ensurePty', { surfaceId, workspaceId }, { timeoutMs: ENSURE_PTY_TIMEOUT_MS });
+  if (res !== null && typeof res === 'object') {
+    const r = res as Record<string, unknown>;
+    if (typeof r['ptyId'] === 'string' && r['ptyId'].length > 0) return r['ptyId'];
+    if (typeof r['error'] === 'string') throw new Error(`${method}: ${r['error']}`);
+  }
+  throw new Error(`${method}: could not start the pane's terminal`);
+}
+
+/**
+ * The pty a raw write (input.send / input.sendKey) goes to: the explicit
+ * `ptyId`; else an explicit `surfaceId` (a pane name that resolved to a
+ * terminal that has not started); else the caller's active pane. A pane whose
+ * shell has not started is started first — the one read-side difference from
+ * resolveActivePtyId.
+ */
+async function resolveWriteTargetPtyId(
+  getWindow: GetWindow,
+  method: 'input.send' | 'input.sendKey',
+  params: Record<string, unknown>,
+  callerWs: string | undefined,
+): Promise<string> {
+  if (typeof params['ptyId'] === 'string' && params['ptyId'].length > 0) return params['ptyId'];
+  if (typeof params['surfaceId'] === 'string' && params['surfaceId'].length > 0) {
+    if (!callerWs) throw new Error(`${method}: "surfaceId" needs the caller's "workspaceId"`);
+    return startDeferredSurface(getWindow, method, params['surfaceId'], callerWs);
+  }
+  const senderPtyId = typeof params['senderPtyId'] === 'string' ? params['senderPtyId'] : '';
+  const decision = decideTerminalOmittedTarget(senderPtyId);
+  if (!decision.allow) {
+    throw new Error(`${method}: ${decision.reason}`);
+  }
+  const scoped = callerWs ? { workspaceId: callerWs } : {};
+  const result = await sendToRenderer(getWindow, 'input.readScreen', scoped);
+  const deferredSurfaceId = deferredSurfaceOf(result);
+  if (deferredSurfaceId) {
+    const ws = callerWs ?? '';
+    return startDeferredSurface(getWindow, method, deferredSurfaceId, ws);
+  }
+  if (
+    result !== null &&
+    typeof result === 'object' &&
+    typeof (result as Record<string, unknown>)['ptyId'] === 'string' &&
+    (result as Record<string, string>)['ptyId'].length > 0
   ) {
     return (result as Record<string, string>)['ptyId'];
   }
@@ -1210,18 +1290,7 @@ export function registerInputRpc(
       throw new Error('input.send: "newTask" needs "submit": true and cannot be combined with "raw"');
     }
 
-    let ptyId: string;
-
-    if (typeof params['ptyId'] === 'string' && params['ptyId'].length > 0) {
-      ptyId = params['ptyId'];
-    } else {
-      const senderPtyId = typeof params['senderPtyId'] === 'string' ? params['senderPtyId'] : '';
-      const decision = decideTerminalOmittedTarget(senderPtyId);
-      if (!decision.allow) {
-        throw new Error(`input.send: ${decision.reason}`);
-      }
-      ptyId = await resolveActivePtyId(getWindow, callerWs);
-    }
+    const ptyId = await resolveWriteTargetPtyId(getWindow, 'input.send', params, callerWs);
 
     const access = await assertCallerMayAccessPty(
       getWindow,
@@ -1500,17 +1569,7 @@ export function registerInputRpc(
 
     const callerWs = typeof params['workspaceId'] === 'string' ? params['workspaceId'] : undefined;
 
-    let ptyId: string;
-    if (typeof params['ptyId'] === 'string' && params['ptyId'].length > 0) {
-      ptyId = params['ptyId'];
-    } else {
-      const senderPtyId = typeof params['senderPtyId'] === 'string' ? params['senderPtyId'] : '';
-      const decision = decideTerminalOmittedTarget(senderPtyId);
-      if (!decision.allow) {
-        throw new Error(`input.sendKey: ${decision.reason}`);
-      }
-      ptyId = await resolveActivePtyId(getWindow, callerWs);
-    }
+    const ptyId = await resolveWriteTargetPtyId(getWindow, 'input.sendKey', params, callerWs);
 
     // The owner lane covers only the two keys that stop an agent. Every other
     // key selects or submits something, and a delegated pane is not the

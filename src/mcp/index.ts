@@ -58,7 +58,7 @@ import { registerTaskFetchTool, registerTaskPushTool } from './taskPush';
 import { registerWorktaskTools } from './worktask';
 import { registerGitTools } from './git';
 import { registerPaneLifecycleTools } from './paneLifecycle';
-import { resolvePaneIdRef, resolvePaneRef, resolvePtyRef, type PaneNameRpc } from './paneTarget';
+import { resolvePaneIdRef, resolvePaneRef, resolvePtyRef, resolveWritePtyRef, type PaneNameRpc } from './paneTarget';
 import { registerFleetTriageTools } from './fleetTriage';
 import { registerAutomationTools } from './automation';
 import { registerReplTools } from './repl/tools';
@@ -1811,9 +1811,14 @@ server.tool(
   'Send text to a terminal. By default it is written with no Enter (multi-line text to an agent as one paste), so a shell command or TUI chat prompt sits on the input line uncommitted — pass `submit: true` to commit it. `ok` means the bytes were WRITTEN, never that anything was submitted: with `submit`, read `accepted` — true only when the pane was observed to move (its turn started, or the input line cleared). `accepted:false` (with `agentStatusAfter` and the pane\'s last screen lines) means the prompt is probably still sitting uncommitted; do not report progress on it. Omit ptyId for the active terminal. To message OTHER workspaces use send_message or a2a_broadcast instead.',
   TERMINAL_SEND_SHAPE,
   async ({ text, ptyId, submit, new_task }) => {
-    const route = await resolveTerminalRouteBound(await resolvePtyRef(ptyId, paneNameRpc));
+    // #2398 — a named pane whose terminal has not started is routed as an
+    // explicit target (never as an omitted one, which could claim a route),
+    // and main starts its shell before writing.
+    const ref = await resolveWritePtyRef(ptyId, paneNameRpc);
+    const route = await resolveTerminalRouteBound(ref.ptyId ?? ref.surfaceId);
     const base: Record<string, unknown> = { text, workspaceId: route.workspaceId };
-    if (route.ptyId) base.ptyId = route.ptyId;
+    if (ref.surfaceId) base.surfaceId = ref.surfaceId;
+    else if (route.ptyId) base.ptyId = route.ptyId;
     // Forward our OWN ptyId so main can reject an omitted-ptyId send from an
     // agent (it would loop into its own pane or a non-deterministic sibling).
     // Verified PID-map hit preferred; falls back to the weak WMUX_PTY_ID env
@@ -1839,9 +1844,12 @@ server.tool(
   'Send a named key to a terminal. Omit ptyId for the active terminal. NOT A SUBMIT MECHANISM: `key:"enter"` presses Enter on whatever the input box holds, which is usually NOTHING — a question an agent PRINTED is rendered text, not pending input, so Enter submits nothing and the pane stays blocked. ok means the key was delivered, never that anything was submitted or that the agent resumed. To answer a waiting agent, send the answer with terminal_send({ text, submit: true }) and check its `accepted` field — that is the only receipt that the pane moved. Reserve this tool for real key presses: ctrl+c, escape, arrow keys, and y/N prompts the agent genuinely rendered.',
   TERMINAL_SEND_KEY_SHAPE,
   async ({ key, ptyId }) => {
-    const route = await resolveTerminalRouteBound(await resolvePtyRef(ptyId, paneNameRpc));
+    // #2398 — see terminal_send.
+    const ref = await resolveWritePtyRef(ptyId, paneNameRpc);
+    const route = await resolveTerminalRouteBound(ref.ptyId ?? ref.surfaceId);
     const params: Record<string, unknown> = { key, workspaceId: route.workspaceId };
-    if (route.ptyId) params.ptyId = route.ptyId;
+    if (ref.surfaceId) params.surfaceId = ref.surfaceId;
+    else if (route.ptyId) params.ptyId = route.ptyId;
     // See terminal_send: forward our ptyId (verified hit, else weak WMUX_PTY_ID
     // env hint — WI-002) so main can reject an omitted-ptyId key send from an
     // agent (self-loop / sibling misroute).

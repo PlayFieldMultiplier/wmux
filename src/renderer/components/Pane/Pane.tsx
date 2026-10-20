@@ -29,11 +29,12 @@ import SurfaceTabs, {
   paneHeaderExtraChromeWidth,
   PANE_ACTIONS_MIN_PANE_WIDTH,
   USAGE_LIMIT_CHIP_FULL_WIDTH,
-  isTerminalSurfaceType,
   showsEnforcedModelBadge,
   type PaneActionsMode,
 } from './SurfaceTabs';
 import { PANE_CORNER_GUTTER, paneHeaderTailGap } from './paneChrome';
+import { isTerminalKindSurfaceType, isTerminalSurfaceType, isWorkSurfaceType, pickSplitShownSurfaces } from './surfaceKinds';
+import { AUTO_RESUME_AGENTS } from '../../stores/selectors/surfaceShown';
 import WorkTabs from './WorkTabs';
 import { useElementWidth } from '../../hooks/useElementWidth';
 import { ErrorBoundary } from '../ErrorBoundary';
@@ -114,23 +115,7 @@ export function composePaneClassName(opts: {
   return classes.join(' ');
 }
 
-/**
- * A pane is a terminal column plus a work area (DESIGN.md "Pane: terminals and
- * work area"). Terminal surfaces — local, remote and placeholders — stay on
- * the pane tab strip and draw on the left; work surfaces draw on the right under their own
- * tab strip. `git` / `review` surfaces are retired and belong to neither.
- */
-export function isTerminalKindSurfaceType(surfaceType: string | undefined): boolean {
-  // A placeholder stands in for a surface a mirror cannot draw — most often a
-  // terminal slot (open elsewhere, not listed) — so it stays in the terminal
-  // column and never splits a pane on its own.
-  return isTerminalSurfaceType(surfaceType) || surfaceType === 'remote-terminal'
-    || surfaceType === 'placeholder';
-}
-
-export function isWorkSurfaceType(surfaceType: string | undefined): boolean {
-  return surfaceType === 'browser' || surfaceType === 'editor' || surfaceType === 'preview' || surfaceType === 'diff';
-}
+export { isTerminalKindSurfaceType, isWorkSurfaceType };
 
 /**
  * #2140 — whether the work area fills the pane over the terminal column.
@@ -150,32 +135,7 @@ export function isSplitWorkExpanded(
     && !terminals.some((s) => s.id === activeSurfaceId);
 }
 
-/**
- * Choose which terminal and which work surface is SHOWN on each side of the
- * split. Both sides stay visible, but a pane has a single `activeSurfaceId`, so
- * visibility (what renders on each side) must be decoupled from focus (which
- * side `activeSurfaceId` points at). Each side shows its active surface when
- * the active surface is on that side; otherwise the terminal side shows its
- * first surface and the work side the one last shown there (`lastWorkId`), so
- * focusing a terminal never swaps the page or file beside it.
- * (Bug: each surface gated `display` on `surface.id === activeSurfaceId`, so
- * focusing one side display:none'd the other.)
- *
- * Pure so it is unit-testable without mounting the split (which pulls in xterm).
- */
-export function pickSplitShownSurfaces(
-  terminals: ReadonlyArray<{ id: string }>,
-  works: ReadonlyArray<{ id: string }>,
-  activeSurfaceId: string,
-  lastWorkId?: string,
-): { shownTerminalId: string | undefined; shownWorkId: string | undefined } {
-  return {
-    shownTerminalId: terminals.find((s) => s.id === activeSurfaceId)?.id ?? terminals[0]?.id,
-    shownWorkId: works.find((s) => s.id === activeSurfaceId)?.id
-      ?? works.find((s) => s.id === lastWorkId)?.id
-      ?? works[0]?.id,
-  };
-}
+export { pickSplitShownSurfaces };
 
 /**
  * #1140 — where a freshly minted remote session (from AddRemotePaneModal)
@@ -379,9 +339,6 @@ export function recoveryAgentLive(args: {
   if (args.agentAlive === true || args.commandRunning === true) return true;
   return args.agentOnScreen === true && args.agentAlive !== false && args.commandRunning !== false;
 }
-
-/** Agents whose recovered panes are resumed automatically on start. */
-const AUTO_RESUME_AGENTS: ReadonlySet<string> = new Set(['claude', 'codex']);
 
 /**
  * The prompt an automatic resume hands an agent that was mid-turn when the

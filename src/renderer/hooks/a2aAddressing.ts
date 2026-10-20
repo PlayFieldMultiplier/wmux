@@ -62,7 +62,13 @@ export function resolvePaneAddress(
         return { error: `surface_id "${surfaceId}" does not belong to pane_id "${paneId}"` };
       }
       if (s.surfaceType === 'browser' || !s.ptyId) {
-        return { error: `surface_id "${surfaceId}" is not a terminal surface` };
+        // #2398 — a terminal surface with no pty has not started yet (its pane
+        // was never shown); it has no agent to deliver to.
+        return {
+          error: s.surfaceType !== 'browser' && !s.ptyId && isUnstartedTerminal(s)
+            ? `surface_id "${surfaceId}" is a terminal that has not started yet (it starts when its pane is first opened), so no agent runs there`
+            : `surface_id "${surfaceId}" is not a terminal surface`,
+        };
       }
       return { ptyId: s.ptyId, paneId: leaf.id, surfaceId: s.id };
     }
@@ -72,8 +78,31 @@ export function resolvePaneAddress(
   if (!leaf) return { error: `pane_id "${paneId}" not found in target workspace` };
   const active = leaf.surfaces.find((s) => s.id === leaf.activeSurfaceId && s.surfaceType !== 'browser' && s.ptyId);
   const term = active ?? leaf.surfaces.find((s) => s.surfaceType !== 'browser' && s.ptyId);
-  if (!term) return { error: `pane_id "${paneId}" has no terminal surface` };
+  if (!term) {
+    return {
+      error: leaf.surfaces.some(isUnstartedTerminal)
+        ? `pane_id "${paneId}" has a terminal that has not started yet (it starts when the pane is first opened), so no agent runs there`
+        : `pane_id "${paneId}" has no terminal surface`,
+    };
+  }
   return { ptyId: term.ptyId, paneId: leaf.id, surfaceId: term.id };
+}
+
+/** A local terminal surface (not remote, not a placeholder) with no pty yet. */
+function isUnstartedTerminal(s: PaneLeaf['surfaces'][number]): boolean {
+  return (s.surfaceType === undefined || s.surfaceType === 'terminal') && !s.ptyId;
+}
+
+/**
+ * #2398 — the target's active pane holds a terminal that has not started (a
+ * pane in a workspace nobody has opened yet). No agent runs there, so an
+ * unaddressed delivery treats it as a pane without one (`no_agent_pane`) and
+ * never starts it: only showing the pane or a raw terminal write does.
+ */
+export function activePaneTerminalUnstarted(leaves: PaneLeaf[], activePaneId: string): boolean {
+  const activeLeaf = leaves.find((l) => l.id === activePaneId);
+  return !!activeLeaf && !activeLeaf.surfaces.some((s) => s.surfaceType !== 'browser' && s.ptyId)
+    && activeLeaf.surfaces.some(isUnstartedTerminal);
 }
 
 /**
@@ -660,6 +689,11 @@ export function wsMetadataMayStandIn(visibleLeaves: PaneLeaf[]): boolean {
   return terminals === 1;
 }
 
+/** `delivery.hint` (first sentence) for a target with no terminal to write to. */
+export const NO_TARGET_PTY_HINT =
+  'The target workspace has no running terminal to write to: its active pane may be a browser surface, ' +
+  'or a terminal that has not started yet (a pane starts its shell when it is first opened).';
+
 /** `delivery.hint` for a target whose visible panes carry no detected agent. */
 export const NO_AGENT_PANE_HINT =
   'Nothing was written to the target: none of its visible panes is running a detected agent, and pasting a ' +
@@ -667,4 +701,5 @@ export const NO_AGENT_PANE_HINT =
   'the event bus — the receiver can still find it with a2a_task_query. This holds for an explicit ' +
   'pane_id/surface_id and for silent:false too: only a pane with a detected agent is ever written to. If an ' +
   'agent IS running there, detection may not have landed yet (re-send once it is detected), or its pane is ' +
-  'stashed (address that pane with pane_id/surface_id from a2a_discover).';
+  'stashed (address that pane with pane_id/surface_id from a2a_discover). A pane whose terminal has not ' +
+  'started yet (never opened since wmux started) runs no agent until it is opened.';

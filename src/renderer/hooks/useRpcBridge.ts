@@ -46,6 +46,8 @@ import {
   handleBrowserTabsRpc,
 } from '../utils/browserTabs';
 import { terminalRegistry, hydrateTerminalForRead } from './useTerminal';
+import { ensureSurfacePty } from './surfacePtyCreate';
+import { isPaneDeferred, isSurfaceDeferred } from '../stores/selectors/surfaceShown';
 import { readPtyBufferLines, readPtyBufferTail, rowsBelowCursor, DEFAULT_READ_TAIL_LINES } from '../utils/terminalTail';
 import { terminalReadCoverage } from '../../shared/terminalReadCoverage';
 import {
@@ -62,7 +64,7 @@ import { publishA2aTask } from '../events/publisher';
 import { isReceiverPaneGone } from '../../shared/a2aOrphanedTask';
 import { isRemoteTaskId, type A2aRemoteTaskMarkerV1 } from '../../shared/a2aRemote';
 import { A2A_REMOTE_NOTIFY_METHOD, isRemoteWorkspaceId, localSideOf, remoteWorkspaceId, sanitizeRemoteText, type A2aRemoteDeliveryResult, type A2aRemoteHeldReason, type A2aRemoteTaskState } from '../../shared/a2aRemoteDelivery';
-import { resolvePaneAddress, activePaneTerminalPty, resolveUnaddressedDelivery, paneHasDetectedAgent, describeAmbiguousDelivery, wsMetadataMayStandIn, NO_AGENT_PANE_HINT, decideSameWsSend, decideReplyDelivery, REPLY_SUPPRESS_HINTS, submitReceiptFields, countRoundTrips, maxSideMessages, REPLY_ROUND_CAP, isTerminalPtyInLeaves, resolveSelfPaneIdentity, resolveSenderPaneAddress, resolvePaneRole, findLeafPanes, detectedAgentTuiSlug, type PaneAddress } from './a2aAddressing';
+import { resolvePaneAddress, activePaneTerminalPty, activePaneTerminalUnstarted, resolveUnaddressedDelivery, paneHasDetectedAgent, describeAmbiguousDelivery, wsMetadataMayStandIn, NO_AGENT_PANE_HINT, NO_TARGET_PTY_HINT, decideSameWsSend, decideReplyDelivery, REPLY_SUPPRESS_HINTS, submitReceiptFields, countRoundTrips, maxSideMessages, REPLY_ROUND_CAP, isTerminalPtyInLeaves, resolveSelfPaneIdentity, resolveSenderPaneAddress, resolvePaneRole, findLeafPanes, detectedAgentTuiSlug, type PaneAddress } from './a2aAddressing';
 import { resolveWorkspaceTarget } from './workspaceTargeting';
 import { destroyRemoteSessions, destroySurfaceRemoteSession, destroyWorkspaceRemoteSessions } from '../utils/remoteSessionTeardown';
 import { remoteAgentKey } from '../../shared/remoteHosts';
@@ -767,7 +769,7 @@ function deliveryLiveMeta(
 // pane_id / pinned task anchor nor `silent:false` overrides this: the `␤` fold
 // keeps a body on one line, but that line still runs once a shell gets Enter.
 function a2aTargetHasAgent(
-  targetWs: Pick<Workspace, 'rootPane' | 'metadata'>,
+  targetWs: Pick<Workspace, 'rootPane' | 'metadata' | 'activePaneId'>,
   pty: string | undefined,
 ): boolean {
   const s = useStore.getState();
@@ -776,6 +778,10 @@ function a2aTargetHasAgent(
     commandRunning: s.commandRunningByPtyId,
   })) return true;
   const visible = findLeafPanes(targetWs.rootPane);
+  // #2398 — an unaddressed delivery lands on the active pane: one whose
+  // terminal has not started runs no agent, whatever the workspace's
+  // metadata (carried over from before the restart) says.
+  if (!pty && activePaneTerminalUnstarted(visible, targetWs.activePaneId)) return false;
   return isLiveTuiAgent(targetWs.metadata)
     && wsMetadataMayStandIn(visible)
     && (!pty || isTerminalPtyInLeaves(visible, pty));
@@ -2027,6 +2033,10 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         // CLI table and external readers that ignore unknown fields are
         // unaffected.
         surfacePtyIds: l.surfaces.map((s) => s.ptyId).filter((id): id is string => Boolean(id)),
+        // #2398 — the pane's terminal has not started (its workspace was never
+        // shown): not running and not dead. Its shell starts when the pane is
+        // first shown, or on a raw terminal_send / terminal_send_key to it.
+        ...(isPaneDeferred(store, l) ? { deferred: true } : {}),
         // Part A: per-surface agent labels for this leaf. A split pane can hold
         // more than one terminal surface; each detected agent is listed so the
         // pane is individually addressable (gaps 1/8).
@@ -2604,6 +2614,16 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     return { workspaceId: null };
   }
 
+  if (method === 'surface.ensurePty') {
+    // #2398 (owner decision §6-6) — main asks this before a raw terminal write
+    // (input.send / input.sendKey) to a pane whose shell has not started:
+    // start it, then answer its ptyId. Reads never come here.
+    const surfaceId = typeof params.surfaceId === 'string' ? params.surfaceId : '';
+    if (!surfaceId) return { error: 'surface.ensurePty: surfaceId is required' };
+    const workspaceId = typeof params.workspaceId === 'string' && params.workspaceId.length > 0 ? params.workspaceId : undefined;
+    return ensureSurfacePty(surfaceId, workspaceId);
+  }
+
   if (method === 'input.readScreen') {
     // Workspace scoping: external MCP callers MUST pass workspaceId so reads
     // can't be hijacked into whichever workspace the user happens to focus.
@@ -2623,6 +2643,13 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
             (s) => s.id === activePane.activeSurfaceId,
           );
           ptyId = surface?.ptyId ?? null;
+          // #2398 — a terminal whose shell has not started (its pane was never
+          // shown) is not running, and it is not dead either. A read never
+          // starts it; a raw write does (main's input.send, via
+          // surface.ensurePty with this surface id).
+          if (!ptyId && surface && isSurfaceDeferred(store, surface)) {
+            return { ptyId: '', text: '', deferred: true, deferredSurfaceId: surface.id };
+          }
         }
       }
     } else if (typeof params.workspaceId === 'string' && params.workspaceId.length > 0) {
@@ -3288,9 +3315,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
                   stored: true,
                   notified: false,
                   reason: 'no_target_pty',
-                  hint:
-                    'The target workspace has no terminal pane to write to (its active pane may ' +
-                    'be a browser surface). The reply is stored; the receiver must poll a2a_task_query.',
+                  hint: `${NO_TARGET_PTY_HINT} The reply is stored; the receiver must poll a2a_task_query.`,
                 };
             }
           }
@@ -3579,9 +3604,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
             stored: true,
             notified: false,
             reason: 'no_target_pty',
-            hint:
-              'The target workspace has no terminal pane to write to (its active pane may ' +
-              'be a browser surface). The task is stored; the receiver must poll a2a_task_query.',
+            hint: `${NO_TARGET_PTY_HINT} The task is stored; the receiver must poll a2a_task_query.`,
           };
     } else if (silent) {
       delivery = { stored: true, notified: false, reason: 'silent' };
