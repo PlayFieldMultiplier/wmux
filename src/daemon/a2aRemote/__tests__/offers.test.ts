@@ -191,6 +191,19 @@ describe('share offers — sharer creates, receiver gets it', () => {
     expect(await a.offers.applyInbound(b.outbox[0].env, { hostId: B })).toEqual({ ok: true, duplicate: false });
   });
 
+  it('failed writes of one offer do not use up that PC’s hourly allowance', async () => {
+    const a = makeSide(A, B);
+    const b = makeSide(B, A);
+    b.offers.create({ hostId: A, end: B_PANE, allow: both });
+    const realReceive = a.store.receiveIn.bind(a.store);
+    a.store.receiveIn = () => { throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' }); };
+    for (let i = 0; i < 12; i++) {
+      expect(await a.offers.applyInbound(b.outbox[0].env, { hostId: B })).toMatchObject({ ok: false, error: 'unavailable' });
+    }
+    a.store.receiveIn = realReceive;
+    expect(await a.offers.applyInbound(b.outbox[0].env, { hostId: B })).toEqual({ ok: true, duplicate: false });
+  });
+
   it('the receiver refuses an offer from a PC it did not join', async () => {
     const a = makeSide(A, B);
     const b = makeSide(B, A);

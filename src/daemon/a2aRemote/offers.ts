@@ -292,6 +292,8 @@ export class A2aOffers {
       // A refusal of the offer itself (shape, cap) is for good; anything else is
       // this PC's store failing, so the stream event is not acked and comes again.
       if (msg.startsWith('offer:')) return fail('forbidden', msg);
+      // Not stored, so the redelivery is not a new offer to count again.
+      if (!known) this.unadmit(peer.hostId);
       return fail('unavailable', msg);
     }
   }
@@ -575,6 +577,11 @@ export class A2aOffers {
     recent.push(now);
     this.arrivals.set(hostId, recent);
     return true;
+  }
+
+  /** Take back the arrival `admit` just counted. */
+  private unadmit(hostId: HostId): void {
+    this.arrivals.get(hostId)?.pop();
   }
 
   /** Tell the app an offer changed (also used by the receiver's accept / decline RPCs). */
