@@ -1,42 +1,73 @@
 import { describe, it, expect } from 'vitest';
-import { parseOsc7Cwd, detectPromptCwd } from '../cwdDetect';
+import os from 'node:os';
+import { parseOsc7Cwd, detectPromptCwd, machineHostnames } from '../cwdDetect';
 import { isPlausibleCwd } from '../../../shared/cwdShape';
+
+// The hosts these fixtures name, standing in for this machine's names.
+const HOSTS = ['', 'localhost', 'desktop', 'host', 'macbook.local', 'desktop-ab12'];
 
 describe('parseOsc7Cwd', () => {
   it('converts a Windows OSC 7 URI to a native backslash path', () => {
     // This is the regression: the old code left "/C:/Users/me".
-    expect(parseOsc7Cwd('file://DESKTOP/C:/Users/me')).toBe('C:\\Users\\me');
+    expect(parseOsc7Cwd('file://DESKTOP/C:/Users/me', HOSTS)).toBe('C:\\Users\\me');
   });
 
   it('handles a Windows path with no host segment', () => {
-    expect(parseOsc7Cwd('file:///C:/Windows/System32')).toBe('C:\\Windows\\System32');
+    expect(parseOsc7Cwd('file:///C:/Windows/System32', HOSTS)).toBe('C:\\Windows\\System32');
   });
 
   it('leaves a POSIX path untouched (cross-platform safe)', () => {
-    expect(parseOsc7Cwd('file://host/home/me/project')).toBe('/home/me/project');
+    expect(parseOsc7Cwd('file://host/home/me/project', HOSTS)).toBe('/home/me/project');
   });
 
   it('percent-decodes spaces and unicode in the path', () => {
-    expect(parseOsc7Cwd('file://host/C:/Users/me/My%20Docs')).toBe('C:\\Users\\me\\My Docs');
+    expect(parseOsc7Cwd('file://host/C:/Users/me/My%20Docs', HOSTS)).toBe('C:\\Users\\me\\My Docs');
   });
 
   it('keeps the raw payload when percent-decoding fails', () => {
     // A lone % is invalid percent-encoding — must not throw.
-    expect(parseOsc7Cwd('file://host/C:/bad%path')).toBe('C:\\bad%path');
+    expect(parseOsc7Cwd('file://host/C:/bad%path', HOSTS)).toBe('C:\\bad%path');
   });
 
   it('does not mangle a drive-relative-looking POSIX dir', () => {
-    expect(parseOsc7Cwd('file://host/srv/data')).toBe('/srv/data');
+    expect(parseOsc7Cwd('file://host/srv/data', HOSTS)).toBe('/srv/data');
   });
 
-  it('reconstructs a Windows UNC path emitted by the hook', () => {
-    // The pwsh hook turns `\\server\share\proj` into `//server/share/proj` and
-    // appends it after the host separator → "file://HOST///server/share/proj".
-    expect(parseOsc7Cwd('file://DESKTOP///server/share/proj')).toBe('\\\\server\\share\\proj');
+  it('reconstructs a WSL share path emitted by the hook', () => {
+    // The pwsh hook turns `\\wsl.localhost\Ubuntu\proj` into
+    // `//wsl.localhost/Ubuntu/proj` and appends it after the host separator.
+    expect(parseOsc7Cwd('file://DESKTOP///wsl.localhost/Ubuntu/proj', HOSTS)).toBe('\\\\wsl.localhost\\Ubuntu\\proj');
+    expect(parseOsc7Cwd('file://HOST///wsl$/Ubuntu/My%20Docs', HOSTS)).toBe('\\\\wsl$\\Ubuntu\\My Docs');
   });
 
-  it('percent-decodes a UNC path with spaces', () => {
-    expect(parseOsc7Cwd('file://HOST///nas/Team%20Share/x')).toBe('\\\\nas\\Team Share\\x');
+  it('ignores a network or device path', () => {
+    for (const data of [
+      'file://DESKTOP///server/share/proj',
+      'file://HOST///nas/Team%20Share/x',
+      'file://localhost//server/share',
+      'file:///%5C%5Cserver%5Cshare',
+      'file:///%5C%5C%3F%5CUNC%5Cserver%5Cshare',
+      'file:///%5C%5C.%5Cpipe%5Cx',
+    ]) {
+      expect(parseOsc7Cwd(data, HOSTS), data).toBeNull();
+    }
+  });
+
+  it('ignores a report from another host', () => {
+    expect(parseOsc7Cwd('file://other-machine/home/me', HOSTS)).toBeNull();
+    expect(parseOsc7Cwd('file://desktop.example.com/C:/Users/me', HOSTS)).toBeNull();
+  });
+
+  it('accepts an empty host and localhost in any case', () => {
+    expect(parseOsc7Cwd('file:///home/me', HOSTS)).toBe('/home/me');
+    expect(parseOsc7Cwd('file://LocalHost/home/me', HOSTS)).toBe('/home/me');
+  });
+
+  it("accepts this machine's own hostname by default", () => {
+    expect(machineHostnames()).toEqual(expect.arrayContaining(['', 'localhost', os.hostname().toLowerCase()]));
+    expect(parseOsc7Cwd(`file://${os.hostname()}/home/me`)).toBe('/home/me');
+    expect(parseOsc7Cwd('file://localhost/home/me')).toBe('/home/me');
+    expect(parseOsc7Cwd('file://not-this-machine.invalid/home/me')).toBeNull();
   });
 
   // Issue #540 round-trip pins: the exact payload shapes the v8 pwsh/bash
@@ -46,34 +77,34 @@ describe('parseOsc7Cwd', () => {
   // drive colon arrives as %3A and spaces as %20.
   it('parses the v8 pwsh hook shape (segment-encoded, uppercase drive)', () => {
     // pwsh emits file://$env:COMPUTERNAME/ + EscapeDataString per '\'-segment.
-    expect(parseOsc7Cwd('file://DESKTOP-AB12/D%3A/wmux/src')).toBe('D:\\wmux\\src');
-    expect(parseOsc7Cwd('file://DESKTOP-AB12/D%3A/Users/me/My%20Docs')).toBe('D:\\Users\\me\\My Docs');
+    expect(parseOsc7Cwd('file://DESKTOP-AB12/D%3A/wmux/src', HOSTS)).toBe('D:\\wmux\\src');
+    expect(parseOsc7Cwd('file://DESKTOP-AB12/D%3A/Users/me/My%20Docs', HOSTS)).toBe('D:\\Users\\me\\My Docs');
   });
 
   it('parses the raw-colon shape too (zsh hook and pre-encode daemons still emit it)', () => {
-    expect(parseOsc7Cwd('file://DESKTOP-AB12/D:/wmux/src')).toBe('D:\\wmux\\src');
+    expect(parseOsc7Cwd('file://DESKTOP-AB12/D:/wmux/src', HOSTS)).toBe('D:\\wmux\\src');
   });
 
   it('parses the v8 Git Bash hook shape (lowercase drive from /c/... rewrite, byte-encoded)', () => {
     // Git Bash rewrites /c/Users/me → /c:/Users/me, then byte-encodes: %3A.
-    expect(parseOsc7Cwd('file://DESKTOP-AB12/c%3A/Users/me/proj')).toBe('c:\\Users\\me\\proj');
+    expect(parseOsc7Cwd('file://DESKTOP-AB12/c%3A/Users/me/proj', HOSTS)).toBe('c:\\Users\\me\\proj');
   });
 
   it('parses the v8 Git Bash drive-root shape (/c → /c:/, trailing slash kept)', () => {
-    expect(parseOsc7Cwd('file://HOST/c%3A/')).toBe('c:\\');
+    expect(parseOsc7Cwd('file://HOST/c%3A/', HOSTS)).toBe('c:\\');
   });
 
   // v9 zsh hook shape (#541 review follow-up): POSIX path, spaces %-encoded.
   it('round-trips a POSIX path with encoded spaces (v9 zsh hook shape)', () => {
-    expect(parseOsc7Cwd('file://MacBook.local/Users/me/My%20Docs')).toBe('/Users/me/My Docs');
+    expect(parseOsc7Cwd('file://MacBook.local/Users/me/My%20Docs', HOSTS)).toBe('/Users/me/My Docs');
   });
 
   // #541 review: a directory whose REAL name contains a literal percent
   // sequence ("build%20cache") must round-trip — the hook emits %2520 (the
   // '%' byte itself encoded), and one decode yields the literal %20 back.
   it('round-trips a directory name containing a literal %20 (%2520 payload)', () => {
-    expect(parseOsc7Cwd('file://HOST/D%3A/build%2520cache')).toBe('D:\\build%20cache');
-    expect(parseOsc7Cwd('file://HOST/home/me/build%2520cache')).toBe('/home/me/build%20cache');
+    expect(parseOsc7Cwd('file://HOST/D%3A/build%2520cache', HOSTS)).toBe('D:\\build%20cache');
+    expect(parseOsc7Cwd('file://HOST/home/me/build%2520cache', HOSTS)).toBe('/home/me/build%20cache');
   });
 
   // #541 review: ESC/BEL bytes in a hostile directory name arrive %-encoded
@@ -82,7 +113,7 @@ describe('parseOsc7Cwd', () => {
   // terminate the OSC sequence (the encoder upstream is the injection
   // barrier; this pins the decoder half of the contract).
   it('decodes %-encoded control bytes into the string value without truncation', () => {
-    expect(parseOsc7Cwd('file://HOST/tmp/evil%1B%5D0%3Bpwned%07dir'))
+    expect(parseOsc7Cwd('file://HOST/tmp/evil%1B%5D0%3Bpwned%07dir', HOSTS))
       .toBe('/tmp/evil\x1b]0;pwned\x07dir');
   });
 });
@@ -138,7 +169,8 @@ describe('detectPromptCwd on a prompt wrapped in a narrow pane (#1729)', () => {
 
 describe('OSC 7 carrying an encoded control character (#1729)', () => {
   it('decodes to a value the cwd guard rejects', () => {
-    const cwd = parseOsc7Cwd('file://host/home/a%0Ab');
-    expect(isPlausibleCwd(cwd, 'linux')).toBe(false);
+    const cwd = parseOsc7Cwd('file://host/home/a%0Ab', HOSTS);
+    expect(cwd).toBe('/home/a\nb');
+    expect(isPlausibleCwd(cwd ?? '', 'linux')).toBe(false);
   });
 });

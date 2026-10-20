@@ -18,8 +18,8 @@ function makeFakePty(): { pty: IPty; feed: (data: string) => void } {
   return { pty, feed: (data: string) => dataHandler?.(data) };
 }
 
-function osc7(cwd: string): string {
-  return `\x1b]7;file://host/${encodeURIComponent(cwd).replace(/%2F/gi, '/')}\x07`;
+function osc7(cwd: string, host = 'localhost'): string {
+  return `\x1b]7;file://${host}/${encodeURIComponent(cwd).replace(/%2F/gi, '/')}\x07`;
 }
 
 describe('DaemonPTYBridge OSC 7 cwd dedup (app-weight P1-4)', () => {
@@ -63,6 +63,16 @@ describe('DaemonPTYBridge OSC 7 cwd dedup (app-weight P1-4)', () => {
     feed(osc7('C:/b'));
     feed(osc7('C:/a'));
     expect(cwdEvents.map((e) => e.cwd)).toEqual(['C:\\a', 'C:\\b', 'C:\\a']);
+  });
+
+  it('ignores a report from another host or of a network path; the cwd stays', () => {
+    feed(osc7('C:/repo'));
+    feed(osc7('C:/elsewhere', 'other-machine.example'));
+    feed(osc7('//server/share/x'));
+    feed(osc7('C:/repo', ''));
+    expect(cwdEvents.map((e) => e.cwd)).toEqual(['C:\\repo']);
+    feed(osc7('C:/next', ''));
+    expect(cwdEvents.map((e) => e.cwd)).toEqual(['C:\\repo', 'C:\\next']);
   });
 });
 

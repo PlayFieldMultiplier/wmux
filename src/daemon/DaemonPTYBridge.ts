@@ -1719,8 +1719,10 @@ export class DaemonPTYBridge extends EventEmitter {
         // OSC 7 on every prompt redraw, so an idle pane would otherwise spam
         // the same cwd across daemon→main→renderer on each redraw. Mirrors
         // the prompt-detect guard (lastDetectedPromptCwd) below; the first OSC 7
-        // after spawn always emits because the cache starts null.
+        // after spawn always emits because the cache starts null. A report
+        // that is not a local folder is ignored and the previous cwd stays.
         const cwd = parseOsc7Cwd(event.data);
+        if (cwd === null) return;
         // OSC 7-sticky (2026-07-21): this shell has the integration hook — the
         // authoritative cwd source. Disable prompt scraping for the session's
         // lifetime so screen text that happens to match a prompt regex (agent

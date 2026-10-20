@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { IPC } from '../../../shared/constants';
+import { isUncOrDevicePath } from '../../../shared/cwdShape';
 import { wrapHandler } from '../wrapHandler';
 import { focusedPrimaryWindow, primaryWindow } from '../../window/auxiliaryWindows';
 
@@ -83,7 +84,11 @@ export function isSensitivePath(resolvedPath: string): boolean {
 export async function resolveAccessiblePath(inputPath: string): Promise<string | null> {
   if (!inputPath || typeof inputPath !== 'string') return null;
 
+  // Local folders only, refused before realpath or any other filesystem call.
+  // Both spellings: POSIX path.resolve folds a leading `//`, and a relative
+  // input takes the process cwd's root.
   const resolved = path.resolve(inputPath);
+  if (isUncOrDevicePath(inputPath) || isUncOrDevicePath(resolved)) return null;
   if (isSensitivePath(resolved)) return null;
 
   try {

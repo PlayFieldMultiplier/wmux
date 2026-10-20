@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { containsControlChars, isPlausibleCwd } from '../cwdShape';
+import { containsControlChars, isPlausibleCwd, isUncOrDevicePath } from '../cwdShape';
 
 type BridgeHost = { electronAPI?: { platform?: string } };
 
@@ -28,10 +28,19 @@ describe('isPlausibleCwd — absolute-shape guard', () => {
     expect(isPlausibleCwd('', 'win32')).toBe(false);
   });
 
-  it('accepts Windows drive and UNC shapes on win32', () => {
+  it('accepts Windows drive and WSL share shapes on win32', () => {
     expect(isPlausibleCwd('C:\\Users\\me', 'win32')).toBe(true);
     expect(isPlausibleCwd('D:/wmux', 'win32')).toBe(true);
-    expect(isPlausibleCwd('\\\\server\\share', 'win32')).toBe(true);
+    expect(isPlausibleCwd('\\\\wsl.localhost\\Ubuntu\\home\\me', 'win32')).toBe(true);
+    expect(isPlausibleCwd('\\\\wsl$\\Ubuntu\\home\\me', 'win32')).toBe(true);
+  });
+
+  it('rejects network and device paths on every platform', () => {
+    for (const plat of ['win32', 'darwin', 'linux']) {
+      for (const p of ['\\\\server\\share', '//server/share', '\\\\?\\UNC\\server\\share', '\\\\.\\pipe\\x', '\\\\?\\C:\\x']) {
+        expect(isPlausibleCwd(p, plat), `${p} on ${plat}`).toBe(false);
+      }
+    }
   });
 
   it('accepts POSIX-absolute paths on win32 (WSL panes)', () => {
@@ -73,7 +82,7 @@ describe('isPlausibleCwd — default platform resolution', () => {
     // No explicit platform — exactly how surfaceSlice.updateSurfaceCwd calls it.
     expect(isPlausibleCwd('C:\\Users\\me\\repo')).toBe(true);
     expect(isPlausibleCwd('D:\\')).toBe(true);
-    expect(isPlausibleCwd('\\\\server\\share')).toBe(true);
+    expect(isPlausibleCwd('\\\\wsl$\\Ubuntu')).toBe(true);
   });
 
   it('still rejects an impossible shape when the bridge reports a POSIX host', () => {
@@ -107,5 +116,25 @@ describe('control characters (#1729)', () => {
     expect(isPlausibleCwd('~/wslt\r\nest', 'win32')).toBe(false);
     expect(isPlausibleCwd('/home/dev/x\ty', 'linux')).toBe(false);
     expect(isPlausibleCwd('~/wsltest', 'win32')).toBe(true);
+  });
+});
+
+describe('isUncOrDevicePath', () => {
+  it('flags UNC, device and extended-length forms', () => {
+    for (const p of ['\\\\server\\share', '//server/share', '/\\server\\share', '\\\\?\\UNC\\server\\share', '\\\\.\\pipe\\x', '\\\\?\\C:\\x']) {
+      expect(isUncOrDevicePath(p), p).toBe(true);
+    }
+  });
+
+  it('passes local paths and a named WSL share', () => {
+    for (const p of ['C:\\Users\\me', 'D:/', '/home/me', '~/x', '\\\\wsl.localhost\\Ubuntu\\home', '//wsl$/Ubuntu/home']) {
+      expect(isUncOrDevicePath(p), p).toBe(false);
+    }
+  });
+
+  it('flags a WSL share whose distro segment is . or ..', () => {
+    expect(isUncOrDevicePath('\\\\wsl$\\..\\server\\share')).toBe(true);
+    expect(isUncOrDevicePath('\\\\wsl.localhost\\.\\x')).toBe(true);
+    expect(isUncOrDevicePath('\\\\wsl$')).toBe(true);
   });
 });

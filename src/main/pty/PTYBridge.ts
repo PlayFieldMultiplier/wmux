@@ -468,9 +468,11 @@ export class PTYBridge {
           // OSC 7-sticky (2026-07-21): the hook is the authoritative cwd
           // source — permanently disable prompt scraping for this PTY so
           // screen text shaped like a prompt can never override it (twin of
-          // the DaemonPTYBridge guard).
-          oscCwdSeen = true;
+          // the DaemonPTYBridge guard). A report that is not a local folder
+          // is ignored and the previous cwd stays.
           const cwd = parseOsc7Cwd(event.data);
+          if (cwd === null) break;
+          oscCwdSeen = true;
           updateCwd(ptyId, cwd);
           win.webContents.send(IPC.CWD_CHANGED, ptyId, cwd);
           break;

@@ -58,6 +58,14 @@ describe('fs.handler security helpers', () => {
     await expect(resolveAccessiblePath(path.join(home, 'project', 'src', '..', 'src', 'index.ts'))).resolves.toBe(canonical);
   });
 
+  it.each(['//host/share', '\\\\host\\share', '\\\\?\\UNC\\host\\share', '\\\\.\\pipe\\x', '\\\\?\\C:\\x'])(
+    'refuses the network or device path %s before canonical lookup',
+    async (p) => {
+      await expect(resolveAccessiblePath(p)).resolves.toBeNull();
+      expect(realpathSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it('returns null when canonicalization fails', async () => {
     realpathSpy.mockRejectedValue(new Error('ENOENT'));
 

@@ -9,8 +9,9 @@
 // bash's \w renders $HOME). A bare relative token like "path" can only come from
 // scraping screen text that happened to match a prompt regex (observed live: a
 // pane's cwd stored as the literal string "path", which then broke the Git tab's
-// repo resolution). Reject anything that is not drive-absolute, UNC, POSIX-
-// absolute, or ~-anchored — on every platform.
+// repo resolution). Reject anything that is not drive-absolute, a WSL share,
+// POSIX-absolute, or ~-anchored — on every platform. Network and device paths
+// are rejected too (isUncOrDevicePath).
 
 /**
  * Resolve the host platform from whichever channel this process actually has.
@@ -46,12 +47,29 @@ export function containsControlChars(value: string): boolean {
   return /[\u0000-\u001f\u007f]/.test(value);
 }
 
+/**
+ * `\\wsl$\<distro>\…`, `\\wsl.localhost\<distro>\…`: a WSL distro's files,
+ * served by this machine. The distro segment must be a name, not `.` or `..`.
+ */
+const WSL_SHARE = /^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/](?!\.\.?(?:[\\/]|$))[^\\/]/i;
+
+/**
+ * `\\server\share`, `//server/share`, `\\?\…`, `\\.\…`: a network or device
+ * path. Checked before any filesystem call, because touching a UNC path makes
+ * the OS reach out to that host. A WSL distro's share stays on this machine and
+ * passes. `\\?\C:\…` is refused as well: nothing maps it back to a drive path.
+ * A leading `//` is refused on POSIX too, where no real cwd starts with it.
+ */
+export function isUncOrDevicePath(p: string): boolean {
+  return /^[\\/]{2}/.test(p) && !WSL_SHARE.test(p);
+}
+
 /** Whether the cwd shape can exist on the current platform. platform defaults to the runtime environment. */
 export function isPlausibleCwd(
   cwd: string,
   platform: NodeJS.Platform | string = hostPlatform(),
 ): boolean {
-  if (!cwd || containsControlChars(cwd)) return false;
+  if (!cwd || containsControlChars(cwd) || isUncOrDevicePath(cwd)) return false;
   const isWinShape = /^[A-Za-z]:[\\/]/.test(cwd) || cwd.startsWith('\\\\');
   // Absolute (or ~-anchored) shapes only — a relative token is never a real cwd.
   const isPosixShape = cwd.startsWith('/') || cwd === '~' || cwd.startsWith('~/');
