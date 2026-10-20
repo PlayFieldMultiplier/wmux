@@ -185,6 +185,7 @@ import { checkNativeTranscriptPath } from './transcript/providers';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
 import { ApiErrorTurnEnds, stopFailureSignal } from './transcript/apiErrorTurnEnd';
+import { TeammateWakes } from './transcript/teammateWake';
 import { TranscriptDiscovery, DISCOVERABLE_AGENT } from './transcript/TranscriptDiscovery';
 import { admitCodexCapture, gateCodexStop } from './transcript/codexCapture';
 import { CodexCwdBinder, codexLiveFor, describeCodexPane, readProcessStartMs, type CodexPaneFacts } from './transcript/codexRolloutByCwd';
@@ -342,6 +343,7 @@ let transcriptProjector: TranscriptProjector | null = null;
 // Codex): tails the agent's own transcript. Guarded like the projector.
 let transcriptActivity: TranscriptActivityWatcher | null = null;
 let apiErrorTurnEnds: ApiErrorTurnEnds | null = null;
+let teammateWakes: TeammateWakes | null = null;
 // Phone native chat bridge (contract v0.3.1). Built in registerRpcHandlers next
 // to the services it wraps; the web server reads it lazily per request.
 let chatBridge: ChatBridge | null = null;
@@ -4220,6 +4222,34 @@ function registerRpcHandlers(
     });
   }
   const turnEnds = apiErrorTurnEnds;
+  // A Claude lead turn an Agent Teams teammate's message woke (#2494): no
+  // prompt hook fires for it, so its start is read from the same tail, and the
+  // pane's turn opens the way a running hook opens it. Its Stop (or a
+  // StopFailure, or the API-error stand-in above) closes it as usual.
+  if (!teammateWakes) {
+    teammateWakes = new TeammateWakes({
+      isReader: (id, path) => transcriptActivity?.readsLines(id, path) === true,
+      mayOpen: (id, path) => {
+        const session = sessionManager.getSession(id);
+        const binding = resolveTranscriptBinding(id);
+        if (!session || isBrainPty({ id, env: session.meta.env })) return false;
+        const agent = agentRow(binding?.agent);
+        if (!binding || !agent?.apiErrorTurnEnd || binding.transcriptPath !== path) return false;
+        if (!checkNativeTranscriptPath(agent.slug, path, binding.sessionId, session.meta.env).ok) return false;
+        // A dialog the turn waits on belongs to a person; it is not a new turn.
+        return !session.bridge.isAwaitingHuman();
+      },
+      emit: (id, at) => {
+        const bridge = sessionManager.getSession(id)?.bridge;
+        if (!bridge) return;
+        log('info', `[hooks] ${id}: lead turn woken by a teammate's message, read from the transcript`);
+        bridge.noteAgentStatus('running', true, undefined, false, at);
+        const event: DaemonEvent = { type: 'agent.teammateWake', sessionId: id, data: { at } };
+        pipeServer.broadcast(event);
+      },
+    });
+  }
+  const wakes = teammateWakes;
   if (!transcriptActivity) {
     transcriptActivity = new TranscriptActivityWatcher({
       listSessionIds: () => sessionManager.listLiveSessions().map((s) => s.id),
@@ -4249,7 +4279,10 @@ function registerRpcHandlers(
         const event: DaemonEvent = { type: 'agent.subagents', sessionId, data: { count } };
         pipeServer.broadcast(event);
       },
-      onClaudeLine: (sessionId, path, line) => turnEnds.noteLine(sessionId, path, line),
+      onClaudeLine: (sessionId, path, line) => {
+        turnEnds.noteLine(sessionId, path, line);
+        wakes.noteLine(sessionId, path, line);
+      },
       onClaudeGap: (sessionId) => turnEnds.noteGap(sessionId),
       afterTick: () => turnEnds.settle(),
     });
@@ -4887,6 +4920,7 @@ function registerRpcHandlers(
         // A hook-fed session's own activity line wins over the transcript.
         transcriptActivity?.noteHookSignal(sessionId, kind);
         apiErrorTurnEnds?.noteHookSignal(sessionId, kind, ts, promptId);
+        teammateWakes?.noteHookSignal(sessionId, kind, ts);
         // #782 — phone turn-view nudge. Non-recording: bypasses attentionLog so
         // a busy pane cannot evict a pending approval and blank the badge on
         // replay (CRITICAL 3). Delivered only to devices watching this pane; a
@@ -6959,6 +6993,7 @@ function wireEvents(
     transcriptProjector?.dropPty(payload.id);
     transcriptActivity?.dropSession(payload.id);
     apiErrorTurnEnds?.dropSession(payload.id);
+    teammateWakes?.dropSession(payload.id);
     terminalChat?.dropPty(payload.id);
     // …and nothing left to discover a transcript FOR.
     transcriptDiscovery?.cancel(payload.id);
@@ -7624,6 +7659,7 @@ function wireEvents(
     transcriptProjector?.dropPty(payload.id);
     transcriptActivity?.dropSession(payload.id);
     apiErrorTurnEnds?.dropSession(payload.id);
+    teammateWakes?.dropSession(payload.id);
     terminalChat?.dropPty(payload.id);
     // …and nothing left to discover a transcript FOR.
     transcriptDiscovery?.cancel(payload.id);

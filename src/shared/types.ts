@@ -580,8 +580,11 @@ export interface MetadataUpdatePayload {
    * turn just started" from every other source of `agentStatus:'running'` (the
    * byte-rate heuristic, the activity reconciliation). A latch opened by a
    * heuristic guess would never decay and could never be trusted to close.
+   * `agent.teammate_wake` is main's own turn start for a lead turn an Agent
+   * Teams teammate's message woke, read from the transcript (#2494): no hook
+   * fires for it.
    */
-  hookKind?: AgentSignalKind;
+  hookKind?: AgentSignalKind | 'agent.teammate_wake';
   /**
    * This `agentStatus:'idle'` is a SETTLE — one of main's turn-end edges
    * (interrupt keystroke, OSC 133 back-at-prompt, agent process death, latch

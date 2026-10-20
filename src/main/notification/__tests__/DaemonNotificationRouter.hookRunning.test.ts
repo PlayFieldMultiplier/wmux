@@ -70,6 +70,7 @@ interface Captured {
   processExit?: (payload: { sessionId: string; slug: string | null }) => void;
   interrupted?: (payload: { sessionId: string }) => void;
   prompt?: (payload: { sessionId: string; event: unknown }) => void;
+  teammateWake?: (payload: { sessionId: string }) => void;
 }
 
 /**
@@ -107,6 +108,7 @@ function makeRouter(
       if (event === 'session:agentProcessExit') captured.processExit = cb as Captured['processExit'];
       if (event === 'session:agentInterrupted') captured.interrupted = cb as Captured['interrupted'];
       if (event === 'session:prompt') captured.prompt = cb as Captured['prompt'];
+      if (event === 'session:teammateWake') captured.teammateWake = cb as Captured['teammateWake'];
     }),
     off: vi.fn(),
   } as unknown as DaemonClient;
@@ -271,6 +273,49 @@ describe('DaemonNotificationRouter — a tool call after a finished turn reopens
 
     expect(statusesBroadcast()).toEqual([]);
     router.stop();
+  });
+});
+
+describe('DaemonNotificationRouter — a teammate\'s message wakes the lead (#2494)', () => {
+  beforeEach(() => {
+    broadcastMetadataUpdateMock.mockClear();
+    metadataHandlerMocks.lastBroadcastAgentStatus.delete(PTY);
+    metadataHandlerMocks.runningClaim.delete(PTY);
+  });
+
+  // Live, Claude Code 2.1.304: UserPromptSubmit, Stop, then two lead turns the
+  // teammate's messages woke, each ending in a Stop with no prompt hook before
+  // it. The daemon reads each turn's start from the lead transcript.
+  it('lights the pane and claims the latch for a woken turn after a Stop', () => {
+    const hookRouter = stubHookRouter(true);
+    const { router, captured } = makeRouter(hookRouter);
+    captured.agent?.(metadataEvent('agent.user_prompt_submit'));
+    // The lead's first Stop: the latch stays held, the pane reads finished.
+    metadataHandlerMocks.lastBroadcastAgentStatus.set(PTY, 'complete');
+    broadcastMetadataUpdateMock.mockClear();
+    vi.mocked(hookRouter.noteHookTurnStart).mockClear();
+
+    captured.teammateWake?.({ sessionId: PTY });
+
+    expect(statusesBroadcast()).toEqual(['running']);
+    const patch = broadcastMetadataUpdateMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(patch.hookKind).toBe('agent.teammate_wake');
+    expect(patch.agentName).toBe('Claude Code');
+    expect(hookRouter.noteHookTurnStart).toHaveBeenCalledWith(PTY, expect.any(Number), 'claude');
+    router.stop();
+  });
+
+  it('writes nothing while a turn runs or a dialog waits on a person', () => {
+    for (const status of ['running', 'awaiting_input', 'waiting']) {
+      const hookRouter = stubHookRouter(true);
+      const { router, captured } = makeRouter(hookRouter);
+      metadataHandlerMocks.lastBroadcastAgentStatus.set(PTY, status);
+      broadcastMetadataUpdateMock.mockClear();
+      captured.teammateWake?.({ sessionId: PTY });
+      expect(statusesBroadcast()).toEqual([]);
+      expect(hookRouter.noteHookTurnStart).not.toHaveBeenCalled();
+      router.stop();
+    }
   });
 });
 

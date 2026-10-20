@@ -822,14 +822,15 @@ export function useNotificationListener() {
             state.markSurfaceRunning(ptyId);
             // The TURN LATCH. Only a hook-reported turn start opens it — a
             // `UserPromptSubmit`, or main's reopen on the first tool of a turn
-            // that had none (`agent.tool_started`) —
+            // that had none (`agent.tool_started`), or a lead turn a
+            // teammate's message woke (`agent.teammate_wake`, #2494) —
             // the byte-rate heuristic's 'running' is a guess, and a latch it
             // opened would hold the pane at running with nothing able to
             // withdraw it. Withdrawal is the mirror image and lives in
             // setSurfaceAgentStatus above: every other status the agent (or the
             // process-death edge, or main's turn-expiry timer) can report ends
             // the turn.
-            if (hookKind === 'agent.user_prompt_submit' || hookKind === 'agent.tool_started') {
+            if (hookKind === 'agent.user_prompt_submit' || hookKind === 'agent.tool_started' || hookKind === 'agent.teammate_wake') {
               state.markSurfaceTurnOpen(ptyId);
             }
           }
