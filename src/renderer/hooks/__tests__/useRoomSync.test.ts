@@ -158,6 +158,24 @@ describe('status', () => {
   });
 });
 
+describe('overlapping status reads', () => {
+  it('apply only the newest answer: an older one settling last does not undo it', async () => {
+    const room = fakeRoom(0);
+    setRoomsApiForTests(room.api);
+    let answerOlder: (v: unknown) => void = () => undefined;
+    room.raw.status
+      .mockImplementationOnce(() => new Promise((resolve) => { answerOlder = resolve; }) as never)
+      .mockResolvedValueOnce({ running: true, enabled: true, hqWorkspaceId: null });
+    const older = refreshRoomStatus();
+    await refreshRoomStatus();
+    expect(useStore.getState().roomStatus).toEqual({ running: true, enabled: true, hqWorkspaceId: null });
+    // The older read answers last, from before the bots were switched on.
+    answerOlder({ running: true, enabled: false, hqWorkspaceId: null });
+    await older;
+    expect(useStore.getState().roomStatus).toEqual({ running: true, enabled: true, hqWorkspaceId: null });
+  });
+});
+
 describe('a refused first read (cold start: rooms not started yet)', () => {
   const NOT_STARTED = { ok: false as const, code: 'not_started', message: 'rooms are not running yet' };
   const key = timelineKey(WS, ALL_THREADS);

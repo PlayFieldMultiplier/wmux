@@ -38,15 +38,22 @@ export function setRoomsApiForTests(api: RoomsApi | null | undefined): void {
 /** Catch-up stops after this many pages (ROOM_LIMITS.PAGE cards each). */
 export const CATCH_UP_MAX_PAGES = 50;
 
+/** The newest status read: reads overlap (mount, focus, every bot event),
+ *  and only the newest one's answer is applied. */
+let statusRead = 0;
+
 export async function refreshRoomStatus(): Promise<void> {
   const api = roomsApi();
   const st = useStore.getState();
+  const read = ++statusRead;
   if (!api) {
     st.setRoomStatus(null);
     return;
   }
   try {
     const r = await api.status();
+    // An older read answering after a newer one would undo it.
+    if (read !== statusRead) return;
     useStore.getState().setRoomStatus('ok' in r ? null : { running: r.running, enabled: r.enabled, hqWorkspaceId: r.hqWorkspaceId });
   } catch {
     // main gone: keep the last answer
