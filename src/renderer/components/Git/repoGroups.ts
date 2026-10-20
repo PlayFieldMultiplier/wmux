@@ -139,9 +139,11 @@ export function repoScanRoots(candidates: readonly string[], agentCwd: string | 
   return roots;
 }
 
-/** Each workspace's id and cwd candidates — the only inputs to resolution. */
+/** Each workspace's id, cwd candidates and agent cwd — the only inputs to
+ *  resolution. The agent cwd is its own field: it picks which candidate is
+ *  scanned even when the candidate list stays the same. */
 function selectResolutionKey(s: StoreState): string {
-  return s.workspaces.map((w) => `${w.id}\u0001${repoCwdCandidates(w, s.startupDirectory || '', true).join('\u0002')}`).join('\n');
+  return s.workspaces.map((w) => `${w.id}\u0001${repoCwdCandidates(w, s.startupDirectory || '', true).join('\u0002')}\u0001${w.metadata?.cwd ?? ''}`).join('\n');
 }
 
 function selectLive(s: StoreState): string[] {

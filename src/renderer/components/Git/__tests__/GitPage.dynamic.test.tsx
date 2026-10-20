@@ -634,6 +634,38 @@ describe('Git page — a workspace folder holding several repos (#2438)', () => 
     expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
   });
 
+  it('a repo found under both the shell cwd and the agent cwd is listed once', async () => {
+    const scan = useScan();
+    scan.mockImplementation(async (cwd: string) => (cwd === '/work'
+      ? { ok: true, repoPaths: ['/code/alpha', '/code/beta'] }
+      : cwd === '/shell' ? { ok: true, repoPaths: ['/code/beta'] } : { ok: true, repoPaths: [] }));
+    act(() => useStore.setState({ workspaces: [workspace('root', '/shell', { metadata: { cwd: '/work' } } as Partial<Workspace>)] }));
+    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/shell');
+    expect(scan).toHaveBeenCalledWith('/work');
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
+  it('an agent cwd reported after the page opened is scanned, even when it is already a later candidate', async () => {
+    const scan = useScan();
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/home-ish', { profile: { startupCwd: '/work' } } as Partial<Workspace>)],
+      gitPage: { ...initialGitPageState(), tab: 'worktrees', scope: 'all', pick: null },
+    }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(scan).not.toHaveBeenCalledWith('/work');
+    expect(container.querySelectorAll('[data-git-repo-group]')).toHaveLength(0);
+    act(() => useStore.setState({
+      workspaces: [workspace('root', '/home-ish', { metadata: { cwd: '/work' }, profile: { startupCwd: '/work' } } as Partial<Workspace>)],
+    }));
+    await settle();
+    expect(scan).toHaveBeenCalledWith('/work');
+    expect([...container.querySelectorAll('[data-git-repo-group]')].map((g) => g.getAttribute('data-git-repo-group'))).toEqual(['alpha', 'beta']);
+  });
+
   it('with an agent cwd, the profile and starting directory are still not scanned', async () => {
     const scan = useScan();
     act(() => useStore.setState({
