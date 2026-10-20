@@ -84,3 +84,23 @@ it('does not announce unavailable while the initial status is loading', async ()
   await act(async () => finish({ status: 'unavailable' }));
   expect(host.textContent).toContain(en['connectors.quick.unavailable']);
 });
+it.each(['status', 'connect'])('retries an unavailable %s in place and still requires recipient approval', async (unavailableAt) => {
+  let statuses = 0;
+  let connects = 0;
+  const consent = { id: 'retry-attempt', resource: 'https://resource.example/mcp', issuer: 'https://issuer.example', authorizationOrigin: 'https://login.example' };
+  const action = vi.fn(async (value: string): Promise<ConnectorOAuthResult> => {
+    if (value === 'status') return { status: ++statuses === 1 && unavailableAt === 'status' ? 'unavailable' : 'signed-out' };
+    if (value === 'connect' && ++connects === 1 && unavailableAt === 'connect') return { status: 'unavailable' };
+    return { status: 'confirm', consent };
+  });
+  vi.stubGlobal('electronAPI', { connectorOAuth: { action } });
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root.render(<ConnectorAuthorization id="con-12345678" fingerprint="one" autoStart onChange={() => undefined} />));
+  expect(host.textContent).toContain(en['connectors.quick.unavailable']);
+  await act(async () => host.querySelector('button')?.click());
+  expect(statuses).toBe(2);
+  expect(action).toHaveBeenCalledWith('connect', 'con-12345678');
+  expect(connects).toBe(unavailableAt === 'connect' ? 2 : 1);
+  expect(host.textContent).toContain(consent.resource);
+  expect(action.mock.calls.some(([value]) => value === 'approve')).toBe(false);
+});

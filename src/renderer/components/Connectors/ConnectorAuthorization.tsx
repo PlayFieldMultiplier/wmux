@@ -9,6 +9,7 @@ import { parseConnectorOAuthClient } from '../../../shared/connectorOAuth';
 export default function ConnectorAuthorization({ id, fingerprint, onChange, endpoint = '', autoStart = false, onAuthorized }: { id: string; fingerprint: string; onChange: () => void; endpoint?: string; autoStart?: boolean; onAuthorized?: () => void }) {
   const t = useT();
   const [status, setStatus] = useState<ConnectorOAuthStatus>();
+  const [statusRefresh, setStatusRefresh] = useState(0);
   const [consent, setConsent] = useState<ConnectorOAuthResult['consent']>();
   const [manual, setManual] = useState(() => !!initialOAuthClient(endpoint).issuer || endpoint === 'https://mcp.hubspot.com');
   const [client, setClient] = useState(() => initialOAuthClient(endpoint));
@@ -33,7 +34,7 @@ export default function ConnectorAuthorization({ id, fingerprint, onChange, endp
     const refresh = () => { void window.electronAPI?.connectorOAuth?.action('status', id).then((r) => { if (alive) { setStatus(r.status); setConsent(r.consent); } }).catch(() => { if (alive) setStatus('unavailable'); }); };
     refresh();
     return () => { alive = false; generation.current++; };
-  }, [id, fingerprint]);
+  }, [id, fingerprint, statusRefresh]);
   useEffect(() => {
     if (status !== 'authorizing') return;
     let alive = true;
@@ -62,7 +63,10 @@ export default function ConnectorAuthorization({ id, fingerprint, onChange, endp
     finally { if (supplied) setClient((prior) => ({ ...prior, clientSecret: '' })); }
   };
   if (status === undefined) return null;
-  if (status === 'unavailable') return autoStart ? <p role="status">{t('connectors.quick.unavailable')}</p> : null;
+  if (status === 'unavailable') return autoStart ? <div className="flex flex-wrap items-center gap-2">
+    <p role="status">{t('connectors.quick.unavailable')}</p>
+    <Button onClick={() => { started.current = false; setStatus(undefined); setStatusRefresh((value) => value + 1); }}>{t('connectors.retry')}</Button>
+  </div> : null;
   return <div className="flex flex-wrap items-center gap-2 text-[12px] text-[var(--text-sub)]">
     {!autoStart && status !== 'authorizing' && status !== 'confirm' && <details className="w-full" open={manual}>
       <summary>{t('connectors.oauth.advanced')}</summary>
