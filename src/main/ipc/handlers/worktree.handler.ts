@@ -133,17 +133,18 @@ async function resolveToplevel(cwd: string): Promise<string | null> {
   if (!safe) return null;
   const r = await git(['rev-parse', '--show-toplevel'], safe);
   const top = r.code === 0 ? r.stdout.trim() : '';
-  return top ? localSpelling(top) : null;
+  return top ? localSpelling(top, safe) : null;
 }
 
 // The listed worktrees, their paths spelled as resolveToplevel spells them
 // (a mapped drive's folders from the drive, not its share), so a path the
 // renderer hands back matches. A worktree that cannot be spelled locally is
 // left out; null when that is the main one (the first block), which callers
-// read as the repository's own folder.
+// read as the repository's own folder. `top` is the accepted toplevel whose
+// drive the paths are spelled from.
 const NOT_LOCAL = 'the repository is not in a local folder';
-function listedWorktrees(porcelain: string): WorktreeEntry[] | null {
-  const spelled = parseWorktreePorcelain(porcelain).map((e) => ({ e, path: localSpelling(e.path) }));
+function listedWorktrees(porcelain: string, top: string): WorktreeEntry[] | null {
+  const spelled = parseWorktreePorcelain(porcelain).map((e) => ({ e, path: localSpelling(e.path, top) }));
   if (spelled.length > 0 && !spelled[0].path) return null;
   return spelled.flatMap(({ e, path }) => (path ? [{ ...e, path }] : []));
 }
@@ -158,10 +159,11 @@ function normPath(p: string): string {
 
 // 본 워크트리(main) = `git worktree list --porcelain` 첫 블록(git 계약).
 // cwd가 linked worktree여도 여기서 본 repo를 얻는다.
-async function resolveMainWorktree(top: string): Promise<string> {
+async function resolveMainWorktree(top: string): Promise<string | null> {
   const r = await git(['worktree', 'list', '--porcelain'], top);
   if (r.code !== 0) return top;
-  return listedWorktrees(r.stdout)?.[0]?.path ?? top;
+  const listed = listedWorktrees(r.stdout, top);
+  return listed ? listed[0]?.path ?? top : null;
 }
 
 async function listWorktrees(repoPath: string): Promise<WorktreeListResult> {
@@ -169,7 +171,7 @@ async function listWorktrees(repoPath: string): Promise<WorktreeListResult> {
   if (!top) return { ok: false, error: 'not a git repository' };
   const r = await git(['worktree', 'list', '--porcelain'], top);
   if (r.code !== 0) return { ok: false, error: r.stderr.slice(0, 300) };
-  const parsed = listedWorktrees(r.stdout);
+  const parsed = listedWorktrees(r.stdout, top);
   if (!parsed) return { ok: false, error: NOT_LOCAL };
   // Every branch's last commit time in one call, however many worktrees.
   const refs = await git(['for-each-ref', '--format=%(refname:short)%09%(committerdate:unix)', 'refs/heads'], top);
@@ -208,6 +210,7 @@ async function addWorktree(repoPath: string, branch: string): Promise<WorktreeMu
   // 경로 도출 기준 = 본(main) 워크트리(Codex P2). linked worktree에서 열면
   // top이 그 worktree 자신이라 `<linked>-worktrees`가 되던 버그를 막는다.
   const mainWt = await resolveMainWorktree(top);
+  if (!mainWt) return { ok: false, error: NOT_LOCAL };
   return withRepoLock(normPath(mainWt), async () => {
     // 관례 위치: <main부모>/<main이름>-worktrees/<branch-dir>. 오너의 실사용
     // 관례(D:\wmux-worktrees\*)와 동형 — repo 안이 아니라 형제 디렉토리라
@@ -245,7 +248,7 @@ async function removeWorktree(repoPath: string, worktreePath: string): Promise<W
   // 실제 워크트리 목록에 있는 경로인지 재검증한다(임의 경로 인자 차단).
   const listed = await git(['worktree', 'list', '--porcelain'], top);
   if (listed.code !== 0) return { ok: false, error: listed.stderr.slice(0, 300) };
-  const entries = listedWorktrees(listed.stdout);
+  const entries = listedWorktrees(listed.stdout, top);
   if (!entries) return { ok: false, error: NOT_LOCAL };
   const target = entries.find((e) => normPath(e.path) === normPath(worktreePath));
   if (!target) return { ok: false, error: 'not a listed worktree of this repository' };
@@ -354,7 +357,7 @@ async function resolveMergeContext(repoPath: string): Promise<MergeCtx | { error
   if (!top) return { error: 'not a git repository' };
   const listed = await git(['worktree', 'list', '--porcelain'], top);
   if (listed.code !== 0) return { error: listed.stderr.slice(0, 300) };
-  const entries = listedWorktrees(listed.stdout);
+  const entries = listedWorktrees(listed.stdout, top);
   if (!entries) return { error: NOT_LOCAL };
   const mainWt = entries[0]?.path ?? top;
   return { top, mainWt, repoKey: normPath(mainWt), entries };

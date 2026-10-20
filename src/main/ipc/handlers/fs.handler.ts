@@ -101,7 +101,11 @@ export async function resolveAccessiblePath(inputPath: string): Promise<string |
   try {
     const canonical = await fs.promises.realpath(resolved);
     if (isSensitivePath(canonical)) return null;
-    if (!isUncOrDevicePath(canonical)) return canonical;
+    if (!isUncOrDevicePath(canonical)) {
+      // A drive that leads to no share (any more) has no entry.
+      if (DRIVE_PATH.test(inputPath)) mappedDrives.delete(driveKey(inputPath));
+      return canonical;
+    }
     // A drive path whose real path is a share: a mapped network drive the user
     // set up. Any other input that lands on a share or a device (a link from a
     // local folder) is refused.
@@ -117,10 +121,11 @@ const DEVICE_PATH = /^[\\/]{2}[?.][\\/]/;
 
 /**
  * Each mapped network drive an accepted drive path was on: its root (`Z:\\`)
- * and the share it leads to (`\\\\server\\share`). Read again on every such
- * path, so a drive mapped elsewhere since replaces its entry.
+ * and the share it leads to (`\\\\server\\share`). Read again on every drive
+ * path, so a drive mapped elsewhere since, or no longer mapped, updates it.
  */
 const mappedDrives = new Map<string, string>();
+const driveKey = (drivePath: string) => path.win32.parse(path.win32.resolve(drivePath)).root.toUpperCase();
 
 /** `p` below `share`, spelled from `root`; null when it is not below it. */
 function underShare(p: string, share: string, root: string): string | null {
@@ -140,12 +145,12 @@ function underShare(p: string, share: string, root: string): string | null {
 async function spelledFromDrive(inputPath: string, canonical: string): Promise<string> {
   const drivePath = path.win32.resolve(inputPath);
   const root = path.win32.parse(drivePath).root;
-  const key = root.toUpperCase();
+  const key = driveKey(drivePath);
+  mappedDrives.delete(key);
   try {
     const share = (await fs.promises.realpath(root)).replace(/[\\/]+$/, '').replace(/\//g, '\\');
     const onShare = isUncOrDevicePath(share) && !DEVICE_PATH.test(share);
     if (onShare) mappedDrives.set(key, share);
-    else mappedDrives.delete(key);
     const spelled = onShare ? underShare(canonical, share, root) : null;
     if (spelled) return spelled;
   } catch {
@@ -155,19 +160,18 @@ async function spelledFromDrive(inputPath: string, canonical: string): Promise<s
 }
 
 /**
- * A path git reported (`--show-toplevel`, `worktree list`) in the spelling
- * resolveAccessiblePath accepts: git answers a mapped drive's folders as its
- * share (`//server/share/repo`), so they are spelled from the drive again
- * (`Z:\repo`). Null for a share or device path below no drive an accepted
- * path was on; a local path is returned as it is.
+ * A path git reported (`--show-toplevel`, `worktree list`) for `accepted`, an
+ * answer of resolveAccessiblePath, in the spelling that check accepts: git
+ * answers a mapped drive's folders as its share (`//server/share/repo`), so
+ * they are spelled from the drive `accepted` is on (`Z:\\repo`), as that
+ * check last found it mapped. Null for a share or device path below no such
+ * drive; a local path is returned as it is.
  */
-export function localSpelling(p: string): string | null {
+export function localSpelling(p: string, accepted: string): string | null {
   if (!isUncOrDevicePath(p)) return p;
-  for (const [root, share] of mappedDrives) {
-    const spelled = underShare(p, share, root);
-    if (spelled) return spelled;
-  }
-  return null;
+  if (!DRIVE_PATH.test(accepted)) return null;
+  const share = mappedDrives.get(driveKey(accepted));
+  return share ? underShare(p, share, path.win32.parse(path.win32.resolve(accepted)).root) : null;
 }
 
 export function closeAllWatchers(): void {

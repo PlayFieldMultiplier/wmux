@@ -76,7 +76,7 @@ async function resolveTargetRepo(worktreePath: string): Promise<string | null> {
   // common-dir의 상위(`<repo>/.git` → `<repo>`)를 work tree로 삼아 toplevel을 도출.
   const top = await git(['-C', dirname(commonDir), 'rev-parse', '--show-toplevel'], worktreePath);
   if (top.code !== 0 || !top.stdout.trim()) return null;
-  return localSpelling(top.stdout.trim());
+  return localSpelling(top.stdout.trim(), worktreePath);
 }
 
 // `git status --porcelain -z`의 NUL 구획 출력을 레코드 단위로 파싱한다(F1 — quotepath).
@@ -338,7 +338,7 @@ async function readDiff(
     mode === 'workspace'
       ? await (async () => {
           const r = await git(['rev-parse', '--show-toplevel'], worktreePath);
-          return r.code === 0 && r.stdout.trim() ? localSpelling(r.stdout.trim()) : null;
+          return r.code === 0 && r.stdout.trim() ? localSpelling(r.stdout.trim(), worktreePath) : null;
         })()
       : await resolveTargetRepo(worktreePath);
   if (!targetRepoPath) {
@@ -787,7 +787,7 @@ export function registerDiffHandlers(): () => void {
         if (!safeCwd) return { ok: false };
         const r = await git(['rev-parse', '--show-toplevel'], safeCwd);
         // git answers a mapped drive's folder as its share: spelled from the drive again.
-        const top = r.code === 0 && r.stdout.trim() ? localSpelling(r.stdout.trim()) : null;
+        const top = r.code === 0 && r.stdout.trim() ? localSpelling(r.stdout.trim(), safeCwd) : null;
         return top ? { ok: true, repoPath: top } : { ok: false };
       },
     ),
@@ -823,7 +823,7 @@ export function registerDiffHandlers(): () => void {
           safeCwd,
           async (dir) => {
             const r = await git(['rev-parse', '--show-toplevel'], dir);
-            return r.code === 0 && r.stdout.trim() ? localSpelling(r.stdout.trim()) : null;
+            return r.code === 0 && r.stdout.trim() ? localSpelling(r.stdout.trim(), dir) : null;
           },
           // Each folder below the root passes the same confinement check
           // before it is read or handed to git.

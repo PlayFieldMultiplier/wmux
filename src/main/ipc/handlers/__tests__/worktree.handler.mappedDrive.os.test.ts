@@ -77,4 +77,15 @@ describe('worktree:list on a mapped drive', () => {
     });
     await expect(list('Z:\\work\\alpha')).resolves.toMatchObject({ ok: false });
   });
+
+  it('adds no worktree when the main worktree is on a share no drive leads to', async () => {
+    gitMock.mockImplementation(async (args: string[]) => {
+      if (args.includes('--show-toplevel')) return ok('//server/share/work/alpha\n');
+      if (args[0] === 'worktree' && args[1] === 'list') return ok(porcelain('//elsewhere/share/main', '//server/share/work/alpha'));
+      return ok('');
+    });
+    const add = captured.get(IPC.WORKTREE_ADD);
+    await expect(add?.({} as never, 'Z:\\work\\alpha', 'feat')).resolves.toMatchObject({ ok: false });
+    expect(gitMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'add')).toBe(false);
+  });
 });

@@ -97,23 +97,37 @@ describe('fs.handler security helpers', () => {
     await expect(resolveAccessiblePath('Z:\\repo')).resolves.toBe('Z:\\repo');
   });
 
-  it("spells git's paths on a mapped drive from the drive, and no other share", async () => {
+  it("spells git's paths on a mapped drive from that drive, and no other share", async () => {
     const onDrive = (real: string) => async (p: fs.PathLike) => (p === 'Y:\\' ? '\\\\nas\\team\\' : real);
     realpathSpy.mockImplementation(onDrive('\\\\nas\\team\\repo'));
     await expect(resolveAccessiblePath('Y:\\repo')).resolves.toBe('Y:\\repo');
-    expect(localSpelling('//nas/team/repo/alpha')).toBe('Y:\\repo\\alpha');
-    expect(localSpelling('\\\\NAS\\Team\\repo')).toBe('Y:\\repo');
-    expect(localSpelling('//nas/teamwork/x')).toBeNull();
-    expect(localSpelling('//other/share/repo')).toBeNull();
-    expect(localSpelling('\\\\?\\UNC\\nas\\team\\repo')).toBeNull();
-    expect(localSpelling('/home/me/repo')).toBe('/home/me/repo');
+    expect(localSpelling('//nas/team/repo/alpha', 'Y:\\repo')).toBe('Y:\\repo\\alpha');
+    expect(localSpelling('\\\\NAS\\Team\\repo', 'Y:\\repo')).toBe('Y:\\repo');
+    expect(localSpelling('//nas/teamwork/x', 'Y:\\repo')).toBeNull();
+    expect(localSpelling('//other/share/repo', 'Y:\\repo')).toBeNull();
+    expect(localSpelling('\\\\?\\UNC\\nas\\team\\repo', 'Y:\\repo')).toBeNull();
+    expect(localSpelling('/home/me/repo', 'Y:\\repo')).toBe('/home/me/repo');
+    // Only the accepted path's own drive spells a share path.
+    expect(localSpelling('//nas/team/repo', 'X:\\repo')).toBeNull();
+    expect(localSpelling('//nas/team/repo', '/home/me/repo')).toBeNull();
     // An answer handed back passes.
     realpathSpy.mockImplementation(onDrive('\\\\nas\\team\\repo\\alpha'));
     await expect(resolveAccessiblePath('Y:\\repo\\alpha')).resolves.toBe('Y:\\repo\\alpha');
-    // Once the drive root no longer leads to the share, the share maps to nothing.
-    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'Y:\\' ? 'Y:\\' : '\\\\nas\\team\\repo'));
-    await resolveAccessiblePath('Y:\\repo');
-    expect(localSpelling('//nas/team/repo')).toBeNull();
+  });
+
+  it('forgets a mapping once the drive leads elsewhere or nowhere', async () => {
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'W:\\' ? '\\\\a\\share\\' : '\\\\a\\share\\repo'));
+    await resolveAccessiblePath('W:\\repo');
+    expect(localSpelling('//a/share/repo', 'W:\\repo')).toBe('W:\\repo');
+    // W: mapped to another share: the old one maps to nothing.
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => (p === 'W:\\' ? '\\\\b\\share\\' : '\\\\b\\share\\repo'));
+    await resolveAccessiblePath('W:\\repo');
+    expect(localSpelling('//a/share/repo', 'W:\\repo')).toBeNull();
+    expect(localSpelling('//b/share/repo', 'W:\\repo')).toBe('W:\\repo');
+    // W: now a local disk.
+    realpathSpy.mockImplementation(async (p: fs.PathLike) => String(p));
+    await resolveAccessiblePath('W:\\repo');
+    expect(localSpelling('//b/share/repo', 'W:\\repo')).toBeNull();
   });
 
   it('refuses a drive path whose real path is a device path', async () => {
