@@ -278,7 +278,7 @@ describe('a2a.discover — remote panes', () => {
       ? { agents: [{ name: 'Local', url: 'ws-a', panes: [{ paneId: 'p1' }, { paneId: 'p1' }, { paneId: 'p2' }], metadata: { workspaceId: 'ws-a' } }] }
       : { ok: true }));
     await call(setup(), 'a2a.discover', {});
-    const panesOf = remote.listPeers.mock.calls[0][1] as (ws: string) => number;
+    const panesOf = await (remote.listPeers.mock.calls[0][1] as Promise<(ws: string) => number>);
     expect([panesOf('ws-a'), panesOf('ws-none')]).toEqual([2, 0]);
   });
 
@@ -288,7 +288,7 @@ describe('a2a.discover — remote panes', () => {
     const res = await call(setup(), 'a2a.discover', { workspaceId: 'ws-a' });
     expect(res.remotePeers).toEqual([peer]);
     expect(res.agents).toHaveLength(2);
-    expect(remote.listPeers).toHaveBeenCalledWith('ws-a', expect.any(Function));
+    expect(remote.listPeers).toHaveBeenCalledWith('ws-a', expect.any(Promise));
     remote.listPeers.mockRejectedValue(new Error('daemon away'));
     const failed = await call(setup(), 'a2a.discover', { workspaceId: 'ws-a' });
     expect(failed).not.toHaveProperty('remotePeers');

@@ -85,7 +85,7 @@ async function listPeerHints(
   dc: DaemonRpc,
   workspaceId: string | undefined,
   exposedOf: (hostId: string) => ExposedSeen | null,
-  panesOf: (workspaceId: string) => number,
+  panesOf: Promise<(workspaceId: string) => number>,
 ): Promise<A2aRemotePeerHint[]> {
   const [status, list] = await Promise.all([
     dc.rpc('a2a.remote.hosts.status', {}, { timeoutMs: PEER_HINT_RPC_TIMEOUT_MS }),
@@ -110,8 +110,14 @@ async function listPeerHints(
         const exp = isRecord(res) && isRecord(res.exposure) ? res.exposure : null;
         const ids = exp && Array.isArray(exp.workspaceIds) ? (exp.workspaceIds as string[]) : [];
         const panes = exp && isRecord(exp.paneIds) ? exp.paneIds : {};
-        // A workspace with no pane list shows every pane it has now.
-        shown = ids.reduce((n, ws) => n + (Array.isArray(panes[ws]) ? (panes[ws] as unknown[]).length : panesOf(ws)), 0);
+        // A workspace with no pane list shows every pane it has now. Discover
+        // lists only terminal panes, so a whole workspace it counts as empty
+        // is unknown here, never "nothing shown".
+        const whole = ids.filter((ws) => !Array.isArray(panes[ws]));
+        const count = whole.length ? await panesOf : () => 0;
+        shown = whole.some((ws) => count(ws) === 0)
+          ? null
+          : ids.reduce((n, ws) => n + (Array.isArray(panes[ws]) ? (panes[ws] as unknown[]).length : count(ws)), 0);
       } catch { /* the hint falls back to the general line */ }
     }
     let hint: string;
