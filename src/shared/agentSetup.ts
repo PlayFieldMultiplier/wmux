@@ -4,9 +4,12 @@
 // the agent's account details: the sign-in probe is reduced to one boolean in
 // main before it crosses IPC.
 
-export type AgentId = 'claude' | 'codex';
+import { agentRow, agentSlugsWith, type AgentSlugWith } from './agentIdentity';
 
-export const AGENT_IDS: readonly AgentId[] = ['claude', 'codex'];
+/** The agents with a card: the registry rows that declare `setup`. */
+export type AgentId = AgentSlugWith<'setup'>;
+
+export const AGENT_IDS: readonly AgentId[] = agentSlugsWith('setup');
 
 /**
  * The three card states.
@@ -37,19 +40,14 @@ export interface AgentSetupStatus {
 }
 
 /**
- * "Update recommended" below these versions. Each floor is the oldest agent
- * version whose behaviour wmux code records relying on:
- *   - Claude Code 2.1.236: the interrupt / Stop hook findings the hook bridge
- *     is built on (src/shared/hooks/interruptKeystroke.ts, HookSignalRouter.ts).
- *   - Codex 0.157.0: one background server per account, which pane identity
- *     relies on (src/mcp/codexThreadIdentity.ts).
- * Raise a floor only together with the code that starts depending on newer
- * behaviour. Updated with app releases, never fetched.
+ * "Update recommended" below this version: the row's `setup.updateFloor`, the
+ * oldest agent version whose behaviour wmux code records relying on (the
+ * reason sits next to each floor in agentIdentity.ts). Updated with app
+ * releases, never fetched.
  */
-export const AGENT_UPDATE_FLOORS: Readonly<Record<AgentId, string>> = {
-  claude: '2.1.236',
-  codex: '0.157.0',
-};
+export function agentUpdateFloor(agent: AgentId): string | null {
+  return agentRow(agent)?.setup?.updateFloor ?? null;
+}
 
 /** First `x.y.z` in a `--version` line (`2.1.305 (Claude Code)`, `codex-cli 0.163.0`). */
 export function parseAgentVersion(output: string): string | null {

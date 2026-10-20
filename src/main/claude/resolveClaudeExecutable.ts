@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { agentRow, type AgentSlugWith } from '../../shared/agentIdentity';
 
 // One answer to "where is the user's claude?", shared by Moa (the deck
 // adapters) and the first-run wizard's "Claude Code detected" row so the two
@@ -43,7 +44,7 @@ function byVersionDesc(a: string, b: string): number {
 }
 
 /** nvm installs: the `default` alias first, then newest. */
-function nvmBins(r: ResolveClaudeEnv, p: typeof path.posix, name: AgentBinary): string[] {
+function nvmBins(r: ResolveClaudeEnv, p: typeof path.posix, name: string): string[] {
   const nvmDir = r.env.NVM_DIR || p.join(r.homedir, '.nvm');
   const root = p.join(nvmDir, 'versions', 'node');
   const versions = (r.readDir?.(root) ?? []).filter((v) => /^v?\d/.test(v)).sort(byVersionDesc);
@@ -55,7 +56,7 @@ function nvmBins(r: ResolveClaudeEnv, p: typeof path.posix, name: AgentBinary): 
 }
 
 /** fnm installs, newest first. */
-function fnmBins(r: ResolveClaudeEnv, p: typeof path.posix, name: AgentBinary): string[] {
+function fnmBins(r: ResolveClaudeEnv, p: typeof path.posix, name: string): string[] {
   const dirs = r.env.FNM_DIR
     ? [r.env.FNM_DIR]
     : r.platform === 'darwin'
@@ -101,8 +102,8 @@ function pathExts(r: ResolveClaudeEnv): string[] {
     .filter((e) => e.startsWith('.') && !UNSPAWNABLE_EXTS.has(e));
 }
 
-/** The agent CLIs this resolver knows the install locations of. */
-export type AgentBinary = 'claude' | 'codex';
+/** The agents whose registry row declares how to find them (`setup`). */
+export type AgentBinary = AgentSlugWith<'setup'>;
 
 /** Every candidate path, in priority order. Pure; exported for tests. */
 export function claudeCandidates(r: ResolveClaudeEnv): string[] {
@@ -111,41 +112,38 @@ export function claudeCandidates(r: ResolveClaudeEnv): string[] {
 
 /**
  * Candidate paths for one agent CLI, in priority order: PATH first, then the
- * agent's own installer location, then npm / Homebrew / Node version managers.
- * Codex's fixed locations come from its standalone installers
- * (https://chatgpt.com/codex/install.sh: `$HOME/.local/bin/codex`;
- * https://chatgpt.com/codex/install.ps1:
- * `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`) and its npm
- * package (`@openai/codex`, entrypoint `bin/codex.js`).
+ * agent's own native installer location, then npm / Homebrew / Node version
+ * managers. The per-agent facts (binary name, installer folder, npm package)
+ * are the row's `setup` in src/shared/agentIdentity.ts.
  */
-export function agentCandidates(r: ResolveClaudeEnv, name: AgentBinary): string[] {
+export function agentCandidates(r: ResolveClaudeEnv, agent: AgentBinary): string[] {
+  const spec = agentRow(agent)?.setup;
+  if (!spec) return [];
+  const name = spec.binary;
   const p = r.platform === 'win32' ? path.win32 : path.posix;
   const out: string[] = [];
   const win = r.platform === 'win32';
   for (const dir of pathDirs(r)) {
     if (win) for (const ext of pathExts(r)) out.push(p.join(dir, `${name}${ext}`));
     else out.push(p.join(dir, name));
-    // Windows npm in any prefix: the PATH folder holds an unspawnable
-    // codex.cmd shim next to node_modules; run the package entrypoint instead.
-    if (win && name === 'codex' && isFileSafe(r, p.join(dir, 'codex.cmd'))) {
-      out.push(p.join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
+    // Windows npm in any prefix: the PATH folder holds an unspawnable .cmd
+    // shim next to node_modules; run the package entrypoint instead.
+    if (win && spec.npm.besideShim && isFileSafe(r, p.join(dir, `${name}.cmd`))) {
+      for (const entry of spec.npm.winEntries) out.push(p.join(dir, 'node_modules', ...spec.npm.package, ...entry));
     }
   }
-  // Native installer (self-updating). Codex's Windows installer uses its own
-  // folder (below), so ~/.local/bin is only its POSIX location.
-  if (name === 'claude') out.push(p.join(r.homedir, '.local', 'bin', win ? 'claude.exe' : 'claude'));
-  else if (!win) out.push(p.join(r.homedir, '.local', 'bin', name));
+  // Native installer (self-updating).
+  if (win) {
+    const base = spec.native.win32.root === 'home' ? r.homedir : r.env[spec.native.win32.root];
+    if (base) out.push(p.join(base, ...spec.native.win32.path));
+  } else {
+    out.push(p.join(r.homedir, ...spec.native.posix));
+  }
   if (win) {
     const appData = r.env.APPDATA;
-    if (name === 'claude') {
-      if (appData) {
-        const pkg = p.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code');
-        out.push(p.join(pkg, 'bin', 'claude.exe'), p.join(pkg, 'cli.js'));
-      }
-    } else {
-      const localAppData = r.env.LOCALAPPDATA;
-      if (localAppData) out.push(p.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe'));
-      if (appData) out.push(p.join(appData, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
+    if (appData) {
+      const pkg = p.join(appData, 'npm', 'node_modules', ...spec.npm.package);
+      for (const entry of spec.npm.winEntries) out.push(p.join(pkg, ...entry));
     }
   } else {
     // npm global prefix: explicit config, then the common user-level prefix.
@@ -179,8 +177,9 @@ export function resolveClaudeExecutableWith(r: ResolveClaudeEnv): string | null 
   return resolveAgentExecutableWith(r, 'claude');
 }
 
-export function resolveAgentExecutableWith(r: ResolveClaudeEnv, name: AgentBinary): string | null {
-  const hit = firstHit(r, agentCandidates(r, name));
+export function resolveAgentExecutableWith(r: ResolveClaudeEnv, agent: AgentBinary): string | null {
+  const hit = firstHit(r, agentCandidates(r, agent));
+  const name = agentRow(agent)?.setup?.binary ?? agent;
   if (hit || r.platform === 'win32' || !r.loginShellPath) return hit;
   // Last resort, and only then (it spawns a shell once): the PATH the user's
   // login shell builds. A Finder/Dock launch inherits a minimal PATH without

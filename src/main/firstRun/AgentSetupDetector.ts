@@ -4,12 +4,13 @@ import path from 'node:path';
 
 import {
   AGENT_IDS,
-  AGENT_UPDATE_FLOORS,
+  agentUpdateFloor,
   isOlderVersion,
   parseAgentVersion,
   type AgentId,
   type AgentSetupStatus,
 } from '../../shared/agentSetup';
+import { agentRow } from '../../shared/agentIdentity';
 import { isInternalEnvKey } from '../../shared/envFilter';
 import { withFreshWindowsPath } from '../../shared/windowsPathEnv';
 import { killProcessTree } from '../../daemon/automation/treeKill';
@@ -68,10 +69,6 @@ const MAX_PROBE_OUTPUT = 64 * 1024;
 /** The candidate list is for a person to read, not a full scan dump. */
 const MAX_CANDIDATES = 12;
 
-const STATUS_ARGS: Readonly<Record<AgentId, readonly string[]>> = {
-  claude: ['auth', 'status', '--json'],
-  codex: ['login', 'status'],
-};
 
 /**
  * The environment a probe runs with. A wmux started from inside a pane (or an
@@ -158,12 +155,14 @@ export const execProbe: ProbeRunner = (command, args, opts) =>
 
 /**
  * Sign-in from a status probe: true / false, or null when it cannot be told.
- * Only the exit code and a single boolean (Claude) or the fixed "Not logged in"
- * line (Codex) are read; the rest of the output is dropped here.
+ * How to read it is the row's `setup.loginStatus`. Only the exit code and a
+ * single boolean (or the fixed signed-out line) are read; the rest of the
+ * output is dropped here.
  */
 export function readLoginState(agent: AgentId, result: ProbeResult): boolean | null {
-  if (result.timedOut || result.code === null) return null;
-  if (agent === 'claude') {
+  const spec = agentRow(agent)?.setup?.loginStatus;
+  if (!spec || result.timedOut || result.code === null) return null;
+  if (spec.read === 'json-logged-in') {
     let loggedIn: unknown;
     try {
       loggedIn = (JSON.parse(result.stdout) as { loggedIn?: unknown } | null)?.loggedIn;
@@ -175,7 +174,8 @@ export function readLoginState(agent: AgentId, result: ProbeResult): boolean | n
     return null;
   }
   if (result.code === 0) return true;
-  if (result.code === 1 && /not logged in/i.test(`${result.stdout}\n${result.stderr}`)) return false;
+  const out = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (result.code === 1 && out.includes(spec.signedOutText)) return false;
   return null;
 }
 
@@ -251,16 +251,17 @@ export class AgentSetupDetector {
 
     const [versionResult, statusResult] = await Promise.all([
       probe(['--version']),
-      probe(STATUS_ARGS[agent]),
+      probe(agentRow(agent)?.setup?.loginStatus.args ?? ['--version']),
     ]);
     const version = versionResult.code === 0 ? parseAgentVersion(versionResult.stdout) : null;
     const loggedIn = readLoginState(agent, statusResult);
+    const floor = agentUpdateFloor(agent);
     return {
       agent,
       readiness: loggedIn === true ? 'ready' : 'login-needed',
       executable,
       version,
-      updateRecommended: version !== null && isOlderVersion(version, AGENT_UPDATE_FLOORS[agent]),
+      updateRecommended: version !== null && floor !== null && isOlderVersion(version, floor),
       loginKnown: loggedIn !== null,
       candidates: [],
     };
