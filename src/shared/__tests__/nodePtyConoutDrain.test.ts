@@ -137,7 +137,7 @@ describe('node-pty conout drain (patched)', () => {
   });
 
   it('releases a ready connection whose drain failed, and ends the worker with the last one', () => {
-    const [a, b] = open(2);
+    const [a] = open(2);
     const worker = FakeWorker.instances[0];
     const [idA, idB] = worker.posted.map((m) => m.id);
     const failed = vi.fn();
