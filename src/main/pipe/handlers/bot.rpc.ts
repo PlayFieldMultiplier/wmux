@@ -230,7 +230,7 @@ export function registerBotRpcHandlers(
     const scope = caller.kind === 'bot' ? listScope(caller.botId) : undefined;
     // A bot lists only its side of a guest workspace's boundary: inside one,
     // its own workspace's bots; elsewhere, none of a guest workspace's.
-    const ownWs = caller.kind === 'bot' ? l.store.get(caller.botId)?.workspaceId ?? null : null;
+    const ownWs = caller.kind === 'bot' ? l.store.get(caller.botId)?.workspaceId ?? ctx?.bot?.workspaceId ?? null : null;
     const bots = l.store.list(workspaceId ? { workspaceId } : {}).filter((b) => (!scope || scope.has(b.id))
       && (caller.kind !== 'bot' || (ownWs !== null && !crossesGuestBoundary(ownWs, b.workspaceId))));
     return {
