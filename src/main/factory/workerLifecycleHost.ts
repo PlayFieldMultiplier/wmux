@@ -28,7 +28,7 @@ import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { installHeldFanoutReleases, releaseHeldFanouts } from './heldFanouts';
 import { checkWorkers, emptyUsage, recordWorkerStateChange } from './budget';
-import { endRunsOfFreeTasks, setWorkerStopsConfirmed, type RunEndPorts } from './workerRunEnds';
+import { endRunsOfGoneWorkers, setWorkerStopsConfirmed, type RunEndPorts } from './workerRunEnds';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
@@ -180,7 +180,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   // the first read, none). A cap check awaits a fresh read (refreshSlotLiveness).
   // The bot status the window shows counts the holders (openBotWorkers):
   // any move of what they read is checked, and a change tells the window.
-  // Each check also ends the worker runs whose task holds nothing any more
+  // Each check also ends the worker runs whose worker is gone
   // (workerRunEnds.ts): a bot's worker time runs until its worker stopped.
   const runEnds: RunEndPorts = {
     bots: () => (getBotStore()?.list({}) ?? []).map((b) => b.id),
@@ -188,8 +188,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     mutateUsage: (botId, fn) => getBotStore()?.mutateUsage(botId, fn),
     row: (taskId) => ledger.get(taskId),
   };
-  const holderNotice = holderChangeNotice(changed, undefined, (holders) => {
-    if (getBotStore() && endRunsOfFreeTasks(runEnds, holders, Date.now()) > 0) changed();
+  const holderNotice = holderChangeNotice(changed, undefined, (look) => {
+    if (getBotStore() && endRunsOfGoneWorkers(runEnds, look, Date.now()) > 0) changed();
   });
   const taskLiveness = createTaskWorkspaceLiveness({
     entries: () => getWorkspaceMirror().getEntries(),
@@ -802,8 +802,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   const holderKey = (): readonly unknown[] => [getFanOutGuards(), holderInputsRevision(), transitions, mirrorPushes, taskLiveness.lastReadAt()];
   setHolderSource(holderSnapshot, holderKey);
   offs.push(() => setHolderSource(null));
-  // From here a worker's run ends once its task holds nothing, not at its
-  // row's end; the first check ends what stopped while the app was closed.
+  // From here a worker's run ends once its worker is gone, not at its row's
+  // end; the first checks end what stopped while the app was closed.
   setWorkerStopsConfirmed(true);
   offs.push(() => setWorkerStopsConfirmed(false));
   holderNotice.schedule();

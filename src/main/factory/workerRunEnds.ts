@@ -5,15 +5,17 @@
 // whose task ended, may still run until its stop.
 //
 // What says a worker no longer runs is the holder set (workerHolders.ts),
-// the one every live-worker cap and the bot status read: a holder is free
-// once its worker was stopped (the reclaim's record), its agent was seen gone
-// (a read of the daemon's sessions, an agent-gone fact), its workspace closed,
-// or its verdict recorded; anything it cannot tell counts as held. On every
-// look at the holders (holderChangeNotice), each run still open whose task
-// holds nothing ends then. So a run ends however its worker stopped (the
-// reclaim, the owner's stop, an agent that exited by itself) and whatever
-// was missed while the app was closed, and never while its worker may run.
-// The reclaim's own confirmed stop ends it at that moment too
+// the one every live-worker cap and the bot status read: its holder's
+// `workerGone` is set once its worker was stopped (the reclaim's record),
+// its agent was seen gone (a read of the daemon's sessions, an agent-gone
+// fact) or its workspace closed; a verify verdict frees the slot but not
+// the run while its agent may still run; anything it cannot tell counts as
+// running. On every look at the holders (holderChangeNotice), each run still
+// open whose worker is gone ends, at the record's or fact's time when one
+// dates it. So a run ends however its worker stopped (the reclaim, the
+// owner's stop, an agent that exited by itself) and whatever was missed
+// while the app was closed, and never while its worker may run. The
+// reclaim's own confirmed stop ends it at that moment too
 // (recordWorkerStateChange); a run never ends twice.
 //
 // Without a holder set (the worker lifecycle host not started) nothing would
@@ -22,7 +24,7 @@
 import type { LedgerEntry } from '../../shared/ledger';
 import type { BotUsage } from './budget';
 import { recordWorkerEnd } from './budget';
-import type { WorkerHolder } from './workerHolders';
+import type { LiveHolders, WorkerHolder } from './workerHolders';
 
 let confirmed = false;
 
@@ -45,25 +47,34 @@ export interface RunEndPorts {
   row: (taskId: string) => Pick<LedgerEntry, 'status'> | null;
 }
 
-/** End, at `at`, every open run whose task holds nothing now: a holder of
- *  it that is free, or none at all while its row has ended. A task with no
- *  row yet (a fan-out between its booking and its register) is left open.
- *  Returns how many runs it ended. */
-export function endRunsOfFreeTasks(ports: RunEndPorts, holders: readonly WorkerHolder[], at: number): number {
-  const state = new Map<string, WorkerHolder['state']>();
-  for (const h of holders) if (state.get(h.taskId) !== 'held') state.set(h.taskId, h.state === 'free' ? 'free' : 'held');
-  const done = (taskId: string): boolean => {
-    const s = state.get(taskId);
-    if (s) return s === 'free';
+/** End every open run whose worker the look says is gone: its holder's
+ *  `workerGone`, at its time when one dates it (never later than `at`).
+ *  A task no holder names is gone only when its row has ended and the look
+ *  rests on the open workspaces and a recent read of the daemon's sessions
+ *  (before them, a worker still running is not seen yet); a task with no row
+ *  yet (a fan-out between its booking and its register) stays open. Returns
+ *  how many runs it ended. */
+export function endRunsOfGoneWorkers(ports: RunEndPorts, look: LiveHolders, at: number): number {
+  const byTask = new Map<string, WorkerHolder>();
+  for (const h of look.holders) byTask.set(h.taskId, h);
+  const settled = look.workspacesKnown && look.readOk === true;
+  const goneAt = (taskId: string): number | null => {
+    const h = byTask.get(taskId);
+    if (h) return h.workerGone ? Math.min(at, h.workerGone.at ?? at) : null;
     const status = ports.row(taskId)?.status;
-    return status === 'completed' || status === 'cancelled' || status === 'failed';
+    return settled && (status === 'completed' || status === 'cancelled' || status === 'failed') ? at : null;
   };
   let ended = 0;
   for (const botId of ports.bots()) {
-    const open = ports.usageOf(botId).workers.filter((w) => w.endedAt === undefined && done(w.taskId)).map((w) => w.taskId);
+    const open: Array<[string, number]> = [];
+    for (const w of ports.usageOf(botId).workers) {
+      if (w.endedAt !== undefined) continue;
+      const when = goneAt(w.taskId);
+      if (when !== null) open.push([w.taskId, when]);
+    }
     if (open.length === 0) continue;
     ports.mutateUsage(botId, (u) => {
-      for (const taskId of open) if (recordWorkerEnd(u, taskId, at)) ended++;
+      for (const [taskId, when] of open) if (recordWorkerEnd(u, taskId, when)) ended++;
     });
   }
   return ended;

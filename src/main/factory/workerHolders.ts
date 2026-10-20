@@ -52,6 +52,12 @@ export interface WorkerHolder {
   reserved: boolean;
   /** Why it is in this state (diagnostics, tests). */
   why: HolderReason;
+  /** Set when what it reads says its worker no longer runs (a free holder,
+   *  but not one a verify verdict alone frees while its agent may still
+   *  run; an open task whose workspaces have no pane left, which still holds
+   *  its slot), with when that was known when a record or fact dates it. The
+   *  bot's worker time ends its run there (workerRunEnds.ts). */
+  workerGone?: { at?: number };
 }
 
 export type HolderReason =
@@ -307,7 +313,13 @@ export function computeHolders(s: HolderSnapshot): WorkerHolder[] {
       ? launch.origin === 'bot'
       : a.grants > 0 || a.held || !!a.sighted));
     const reserved = a.units.length > 0 && a.grants === 0 && !row && !record && ws.size === 0 && !a.held;
-    const { state, why } = decide(s, taskId, a, row, record, ws, grace, inWindow);
+    const decided = decide(s, taskId, a, row, record, ws, grace, inWindow);
+    const { state, why } = decided;
+    // A verdict frees the slot whatever the panes show; whether the worker
+    // still runs is what the other rules say.
+    const rest = state !== 'free' ? decided : why === 'verdicted' ? decide(s, taskId, a, row, record, ws, grace, inWindow, true) : decided;
+    const workerGone = rest.state === 'free' || rest.paneless === true;
+    const goneAt = workerGone ? stoppedAt(s, taskId, rest.why, record) : undefined;
     out.push({
       taskId,
       origin: bot ? 'bot' : 'owner',
@@ -320,9 +332,18 @@ export function computeHolders(s: HolderSnapshot): WorkerHolder[] {
       state,
       reserved,
       why,
+      ...(workerGone ? { workerGone: goneAt !== undefined ? { at: goneAt } : {} } : {}),
     });
   }
   return out;
+}
+
+/** When a free holder's worker was known stopped, when a record or fact
+ *  dates it: its reclaim record's stop, its agent-gone fact. */
+function stoppedAt(s: HolderSnapshot, taskId: string, why: HolderReason, record: HolderRecord | undefined): number | undefined {
+  if (why === 'stopped') return record?.at;
+  if (why === 'gone') return s.goneAt?.(taskId);
+  return undefined;
 }
 
 function decide(
@@ -334,7 +355,8 @@ function decide(
   ws: ReadonlySet<string>,
   grace: number,
   inWindow: (r: LedgerEntry) => boolean,
-): { state: HolderState; why: HolderReason } {
+  ignoreVerdict = false,
+): { state: HolderState; why: HolderReason; paneless?: true } {
   // The worker's launch now (a first spawn, a respawn, a resume or a
   // relaunch in its pane): evidence older than it says nothing of it.
   const launch = s.launchAt(taskId);
@@ -350,7 +372,7 @@ function decide(
   const open = s.workspaces ? [...ws].filter((w) => s.workspaces?.has(w)) : [...ws];
   // A verify task's verdict was the reason it ran: once recorded, it holds
   // nothing, whatever its panes show.
-  if (row?.dispatch?.preset === 'verify' && row.status === 'review_requested' && s.verdicted.has(taskId)) return { state: 'free', why: 'verdicted' };
+  if (!ignoreVerdict && row?.dispatch?.preset === 'verify' && row.status === 'review_requested' && s.verdicted.has(taskId)) return { state: 'free', why: 'verdicted' };
   if (record?.state === 'resumed') return { state: 'held', why: 'resumed' };
   // A spawn under way (booked, granted or not yet settled); a granted slot
   // for a reclaimed worker is its resume.
@@ -388,6 +410,10 @@ function decide(
     // Its workspaces run no agent: one read idle, any other idle or left
     // with no pane (an earlier workspace a respawn moved it out of).
     if (open.some((w) => s.idle.has(w)) && open.every((w) => s.idle.has(w) || (s.ptys.get(w)?.length ?? 0) === 0)) return { state: 'free', why: 'no-agent' };
+    // Its workspaces left with no pane at all (its last terminal closed, the
+    // workspace kept) hold the slot, as a pane not listed yet may; its worker
+    // has no pane left to run in, so its run ends (workerGone).
+    if (s.read === 'ok' && open.every((w) => (s.ptys.get(w)?.length ?? 0) === 0)) return { state: 'held', why: 'running', paneless: true };
     return s.read === 'ok' ? { state: 'held', why: 'running' } : { state: 'unknown', why: 'stale-read' };
   }
   // Ended. An agent seen running holds, whatever a record or a fact says.
@@ -450,6 +476,8 @@ export interface LiveHolders {
   holders: WorkerHolder[];
   /** Whether the open workspaces were known (the renderer pushed its tree). */
   workspacesKnown: boolean;
+  /** Whether the daemon's sessions were read lately (`read: 'ok'`). */
+  readOk?: boolean;
 }
 
 let source: (() => HolderSnapshot) | null = null;
@@ -476,10 +504,10 @@ export function liveHolders(): LiveHolders | null {
   if (!source) return null;
   const key = sourceKey ? sourceKey() : null;
   if (key && memo && sameKey(key, memo.key)) {
-    return { holders: memo.value.holders.slice(), workspacesKnown: memo.value.workspacesKnown };
+    return { holders: memo.value.holders.slice(), workspacesKnown: memo.value.workspacesKnown, readOk: memo.value.readOk };
   }
   const snap = source();
-  const value = { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null };
+  const value = { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null, readOk: snap.read === 'ok' };
   if (key) {
     const entry = { key, value };
     memo = entry;
@@ -489,7 +517,7 @@ export function liveHolders(): LiveHolders | null {
       if (memo === entry) memo = null;
     });
   }
-  return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown };
+  return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown, readOk: value.readOk };
 }
 
 /** Tells `changed` when the holders that count moved since the last
@@ -502,25 +530,25 @@ export function liveHolders(): LiveHolders | null {
 export function holderChangeNotice(
   changed: () => void,
   defer: (fn: () => void) => void = (fn) => { setImmediate(fn); },
-  each?: (holders: readonly WorkerHolder[]) => void,
+  each?: (look: LiveHolders) => void,
 ): { schedule: () => void } {
   let shown: string | null = null;
   let due = false;
   const check = (): void => {
     due = false;
     let key: string;
-    let holders: readonly WorkerHolder[];
+    let look: LiveHolders;
     try {
       const h = liveHolders();
       if (!h) return;
-      holders = h.holders;
-      key = heldKey(holders);
+      look = h;
+      key = heldKey(h.holders);
     } catch {
       return;
     }
     // Every check, moved or not (the bots' worker time: workerRunEnds.ts).
     try {
-      each?.(holders);
+      each?.(look);
     } catch {
       /* the window is told all the same */
     }
