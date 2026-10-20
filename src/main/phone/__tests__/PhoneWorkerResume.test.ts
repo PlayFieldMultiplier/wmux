@@ -77,12 +77,31 @@ describe('workspaces.workerResume', () => {
     expect(d.resume).toHaveBeenCalledTimes(2);
   });
 
-  it('settles a resume that does not answer in time, so a repeat is not held by it', async () => {
-    const d = { ...deps(() => new Promise<WorkerResumeResult>(() => undefined)), waitMs: 5 };
-    expect(await call(d, { taskId: TASK, clientRequestId: id() })).toEqual({ refused: { code: 'busy', message: 'the resume is still under way; try again in a moment' } });
-    // Not kept: the repeat asks again (the resume's own lock answers it).
-    d.resume.mockResolvedValueOnce({ ok: false, code: 'busy', message: 'this worker is being resumed already' });
+  it('a resume slower than the wait answers busy, and its late success is still replayed for its id', async () => {
+    let finish!: (r: WorkerResumeResult) => void;
+    const d = { ...deps(() => new Promise<WorkerResumeResult>((resolve) => { finish = resolve; })), waitMs: 5 };
+    const busy = { refused: { code: 'busy', message: 'the resume is still under way; try again in a moment' } };
+    expect(await call(d, { taskId: TASK, clientRequestId: id() })).toEqual(busy);
+    // The same id while it still runs: busy again, nothing started twice.
+    expect(await call(d, { taskId: TASK, clientRequestId: id() })).toEqual(busy);
+    finish(OK);
+    await new Promise((r) => setTimeout(r, 0));
+    // Its success arrived late; the worker may have stopped again since:
+    // the same id is still this request, replayed, never a second resume.
+    d.resume.mockResolvedValue(OK);
+    expect(await call(d, { taskId: TASK, clientRequestId: id() })).toMatchObject({ resumed: { taskId: TASK }, replayed: true });
+    expect(d.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it('a resume that never ends holds its receipt only for its id\'s window', async () => {
+    let now = NOW;
+    const d = { ...deps(() => new Promise<WorkerResumeResult>(() => undefined)), waitMs: 5, now: () => now };
     expect(await call(d, { taskId: TASK, clientRequestId: id() })).toMatchObject({ refused: { code: 'busy' } });
+    now = NOW + 10 * 60_000;
+    // Its id is refused now; a new id is a new request.
+    expect(await call(d, { taskId: TASK, clientRequestId: id() })).toEqual({ invalid: true });
+    d.resume.mockResolvedValueOnce(OK);
+    expect(await call(d, { taskId: TASK, clientRequestId: `${now}-0a9b8c7d-6e5f-4a3b-8c2d-000000000077` })).toMatchObject({ resumed: { taskId: TASK } });
     expect(d.resume).toHaveBeenCalledTimes(2);
   });
 

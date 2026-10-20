@@ -7,10 +7,10 @@
 // Receipts are kept here, in memory, by caller and request id: the daemon's
 // bridge gives up after 15 s while a resume that reopens a pane may still
 // run, so only main knows how a request ended. A repeat joins the request
-// under way or replays its success; a refusal is not kept, so a repeat runs
-// the checks again. An id is accepted only within its own
-// time window, the same as its receipt's life, so a forgotten receipt never
-// starts a second worker.
+// under way or replays its success, also a success that came after the reply
+// stopped waiting; a refusal is not kept, so a repeat runs the checks again.
+// An id is accepted only within its own time window, the same as its
+// receipt's life, so a forgotten receipt never starts a second worker.
 
 import { chatIdTime, checkChatId } from '../../daemon/chat/chatBridge';
 import { getTaskLedger } from '../deck/taskLedgerHost';
@@ -27,9 +27,10 @@ const DEVICE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 /** Requests one desktop keeps receipts for at once; far above any honest load. */
 export const PHONE_WORKER_RESUME_RECEIPTS_MAX = 256;
 /** A second layer over the resume's own bounded steps (each daemon, renderer
- *  and git call has its own timeout, but they add up): past this the receipt
- *  settles, so a repeat is never held by it. The resume itself goes on and
- *  keeps its task's lock, so a repeat then answers busy or already_running. */
+ *  and git call has its own timeout, but they add up): past this a reply
+ *  answers busy instead of waiting on. The resume goes on under its task's
+ *  lock and its receipt stays, so a repeat of the id gets its outcome; the
+ *  receipt is dropped with its id's window at the latest. */
 export const PHONE_WORKER_RESUME_WAIT_MS = 60_000;
 
 export interface PhoneWorkerResumeDeps {
@@ -55,8 +56,8 @@ function defaultDeps(): PhoneWorkerResumeDeps {
 interface Receipt {
   taskId: string;
   expiresAt: number;
-  /** The request under way. */
-  pending?: Promise<PhoneWorkerResumeReply>;
+  /** The resume under way (settles the receipt itself when it ends). */
+  op?: Promise<PhoneWorkerResumeReply>;
   /** A success, replayed to a repeat. */
   done?: PhoneWorkerResumeReply;
 }
@@ -79,6 +80,18 @@ function replayed(reply: PhoneWorkerResumeReply): PhoneWorkerResumeReply {
   return 'resumed' in reply ? { ...reply, replayed: true } : reply;
 }
 
+const BUSY: PhoneWorkerResumeReply = { refused: { code: 'busy', message: 'the resume is still under way; try again in a moment' } };
+
+/** The resume's outcome, or busy once `ms` passed (the resume goes on). */
+function bounded(op: Promise<PhoneWorkerResumeReply>, ms: number): Promise<PhoneWorkerResumeReply> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<PhoneWorkerResumeReply>((resolve) => {
+    timer = setTimeout(() => resolve(BUSY), ms);
+    timer.unref?.();
+  });
+  return Promise.race([op, late]).finally(() => clearTimeout(timer));
+}
+
 /** `workspaces.workerResume`; null for any other command. */
 export async function handlePhoneWorkerResumeCommand(
   command: string,
@@ -95,36 +108,41 @@ export async function handlePhoneWorkerResumeCommand(
   // malformed one never falls back to the operator's.
   if (payload.deviceId !== undefined && !(typeof payload.deviceId === 'string' && DEVICE_ID_RE.test(payload.deviceId))) return { invalid: true };
   const deviceId = payload.deviceId as string | undefined;
-  for (const [k, r] of receipts) if (r.expiresAt <= now && !r.pending) receipts.delete(k);
+  // An id past its window is refused above, so its receipt can go, even one
+  // whose resume never ended.
+  for (const [k, r] of receipts) if (r.expiresAt <= now) receipts.delete(k);
   const key = `${deviceId ?? 'operator'}\0${id as string}`;
+  const waitMs = deps.waitMs ?? PHONE_WORKER_RESUME_WAIT_MS;
   const seen = receipts.get(key);
   if (seen) {
     if (seen.taskId !== taskId) return { idReused: true };
     if (seen.done) return replayed(seen.done);
-    if (seen.pending) return replayed(await seen.pending);
+    if (seen.op) return replayed(await bounded(seen.op, waitMs));
   }
   if (receipts.size >= PHONE_WORKER_RESUME_RECEIPTS_MAX) return { full: true };
   if (!deps.taskKnown(taskId)) return { notFound: true };
   // Kept for as long as the id itself is accepted (an id may be stamped a
   // little ahead of this clock).
   const receipt: Receipt = { taskId, expiresAt: chatIdTime(id as string) + PHONE_WORKER_RESUME_WINDOW_MS };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<PhoneWorkerResumeReply>((resolve) => {
-    timer = setTimeout(() => resolve({ refused: { code: 'busy', message: 'the resume is still under way; try again in a moment' } }), deps.waitMs ?? PHONE_WORKER_RESUME_WAIT_MS);
-    timer.unref?.();
+  // A refusal or a failure is not kept: a repeat runs the checks again (a
+  // worker that did start reads as resumed there).
+  const drop = (): void => {
+    if (receipts.get(key) === receipt) receipts.delete(key);
+  };
+  receipt.op = deps.resume(taskId).then(replyOf).then((reply) => {
+    receipt.op = undefined;
+    if ('resumed' in reply) {
+      receipt.done = reply;
+      deps.log(`[phone] worker of ${taskId} resumed from ${deviceId ? `device ${deviceId}` : 'the operator token'}`);
+    } else {
+      drop();
+    }
+    return reply;
+  }, (err: unknown) => {
+    receipt.op = undefined;
+    drop();
+    throw err;
   });
-  receipt.pending = Promise.race([deps.resume(taskId).then(replyOf), late]).finally(() => clearTimeout(timer));
   receipts.set(key, receipt);
-  let reply: PhoneWorkerResumeReply | null = null;
-  try {
-    reply = await receipt.pending;
-  } finally {
-    receipt.pending = undefined;
-    // A refusal is not kept: a repeat runs the checks again (a worker that
-    // did start reads as resumed there).
-    if (reply && 'resumed' in reply) receipt.done = reply;
-    else if (receipts.get(key) === receipt) receipts.delete(key);
-  }
-  if ('resumed' in reply) deps.log(`[phone] worker of ${taskId} resumed from ${deviceId ? `device ${deviceId}` : 'the operator token'}`);
-  return reply;
+  return bounded(receipt.op, waitMs);
 }
