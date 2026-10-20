@@ -110,9 +110,10 @@ describe('ChromeLauncher', () => {
       { id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' },
       { id: 'old-2', url: 'https://b.test/', title: 'B', type: 'page' },
     ];
-    fetchMock.mockImplementation(async (url: string) =>
-      fetchOk(String(url).endsWith('/json/list') ? restored : {}),
-    );
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'PUT') return fetchOk({ id: 'blank', url: 'about:blank' });
+      return fetchOk(String(url).endsWith('/json/list') ? restored : {});
+    });
     spawnWritesPortFile(makeChild());
 
     const launcher = new ChromeLauncher('/tmp/restored-prof');
@@ -124,6 +125,51 @@ describe('ChromeLauncher', () => {
     expect(blank).toBeGreaterThan(-1);
     expect(calls.slice(blank)).toEqual(expect.arrayContaining(['GET /json/close/old-1', 'GET /json/close/old-2']));
     expect(calls.indexOf('GET /json/close/old-1')).toBeGreaterThan(blank);
+  });
+
+  it('keeps one restored tab when no blank tab could be opened, so Chrome is not quit', async () => {
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'PUT') return { ok: false, status: 500, text: async () => '' };
+      return fetchOk(
+        String(url).endsWith('/json/list')
+          ? [
+              { id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' },
+              { id: 'old-2', url: 'https://b.test/', title: 'B', type: 'page' },
+            ]
+          : {},
+      );
+    });
+    spawnWritesPortFile(makeChild());
+
+    await new ChromeLauncher('/tmp/restored-prof-3').ensureRunning();
+
+    const closed = fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/json/close/'));
+    expect(closed).toHaveLength(1);
+  });
+
+  it('a caller arriving while restored tabs are being closed waits for the launch', async () => {
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'PUT') return fetchOk({ id: 'mine', url: 'https://x.test/' });
+      return fetchOk(
+        String(url).endsWith('/json/list')
+          ? [
+              { id: 'ntp', url: 'chrome://newtab/', title: 'New Tab', type: 'page' },
+              { id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' },
+            ]
+          : {},
+      );
+    });
+    spawnWritesPortFile(makeChild());
+    const launcher = new ChromeLauncher('/tmp/restored-prof-4');
+    const launching = launcher.ensureRunning();
+    // The port is published before the cleanup is done.
+    await vi.waitFor(() => expect(launcher.currentPort()).not.toBeNull(), { timeout: 5_000 });
+    await launcher.openTab('https://x.test/', 'ws-1');
+    await launching;
+
+    const calls = fetchMock.mock.calls.map(([u, init]) => `${(init as { method?: string } | undefined)?.method ?? 'GET'} ${new URL(String(u)).pathname}`);
+    expect(calls.indexOf('GET /json/close/old-1')).toBeGreaterThan(-1);
+    expect(calls.indexOf('GET /json/close/old-1')).toBeLessThan(calls.indexOf('PUT /json/new'));
   });
 
   it('a startup tab is left alone, and no blank tab is added beside it', async () => {
@@ -336,6 +382,20 @@ describe('ChromeLauncherRegistry', () => {
     await registry.disposeAll();
     expect(childA.kill).toHaveBeenCalled();
     expect(childB.kill).toHaveBeenCalled();
+  });
+
+  it('a profile asked for while the registry quits gets a launcher that never starts Chrome', async () => {
+    const registry = new ChromeLauncherRegistry({
+      defaultDir: '/tmp/default-prof',
+      profilesDir: '/tmp/profiles',
+      store: makeStore({}),
+    });
+    const stopping = registry.disposeAll();
+    const late = registry.forProfile('late');
+    await expect(late.endpoint()).rejects.toThrow('disposed');
+    await stopping;
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(registry.peekLauncher('late')).toBeUndefined();
   });
 
   it('revealNewest activates the newest tab of a running pane profile and never launches one', async () => {

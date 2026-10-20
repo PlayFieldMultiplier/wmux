@@ -785,7 +785,9 @@ export class ChromeLauncher implements ChromeBackendClient {
     if (this.disposed) throw new Error('ChromeLauncher: disposed (app is quitting)');
     const wanted = this.wantedProtection();
     if (!wanted && !this.launchedProtected) {
-      if (this.isRunning()) {
+      // A launch in flight has published its port before it is done (restored
+      // tabs are still being closed); callers join it rather than race it.
+      if (this.isRunning() && !this.launching) {
         // Cheap liveness check — the process object survives a crash until the
         // exit handler runs; /json/version is the truth.
         try {
@@ -1066,8 +1068,16 @@ export class ChromeLauncher implements ChromeBackendClient {
     }
     const restored = pages.filter((p) => !isStartupTabUrl(p.url));
     if (restored.length === 0) return;
-    if (restored.length === pages.length) await this.fetchJson('/json/new', 'PUT').catch(() => undefined);
-    await Promise.all(restored.map((p) => this.fetchJson(`/json/close/${p.id}`).catch(() => undefined)));
+    const keptOpen =
+      restored.length < pages.length ||
+      (await this.fetchJson('/json/new', 'PUT').then(
+        (t) => typeof (t as { id?: unknown } | null)?.id === 'string',
+        () => false,
+      ));
+    // With no blank tab to hold the window, one restored tab stays rather
+    // than the close quitting Chrome under the launch.
+    const closing = keptOpen ? restored : restored.slice(1);
+    await Promise.all(closing.map((p) => this.fetchJson(`/json/close/${p.id}`).catch(() => undefined)));
   }
 
   private async waitEndpointGone(port: number): Promise<boolean> {
@@ -1654,6 +1664,8 @@ import { LiveChromeClient, isLiveChromeReachable } from './LiveChromeClient';
 export class ChromeLauncherRegistry {
   private readonly launchers = new Map<string, ChromeBackendClient>();
   private live: LiveChromeClient | null = null;
+  /** Set by a graceful disposeAll: the app is quitting. */
+  private disposed = false;
 
   constructor(
     private readonly opts: {
@@ -1718,7 +1730,10 @@ export class ChromeLauncherRegistry {
         ...(this.opts.protection && { protection: () => this.opts.protection?.(name) ?? null }),
       },
     );
-    this.launchers.set(name, launcher);
+    // Asked while the app quits: a launcher outside disposeAll's snapshot
+    // would start a Chrome nothing stops, so it is born disposed instead.
+    if (this.disposed) void launcher.dispose();
+    else this.launchers.set(name, launcher);
     return launcher;
   }
 
@@ -1857,6 +1872,9 @@ export class ChromeLauncherRegistry {
 
   /** Quit every launched Chrome; `immediate` as in ChromeLauncher.dispose. */
   async disposeAll(opts?: { immediate?: boolean }): Promise<void> {
+    // An immediate dispose is the install quit, which can still be called off
+    // (abortInstallQuit); new launchers stay possible after it.
+    if (!opts?.immediate) this.disposed = true;
     const stopping = [...this.launchers.values()].map((launcher) =>
       launcher instanceof ChromeLauncher ? launcher.dispose(opts) : launcher.dispose(),
     );
