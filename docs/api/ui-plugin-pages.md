@@ -60,6 +60,12 @@ port and timer. A workspace change invalidates pending explicit reads too.
 
 ## Navigation and installation
 
+Plugin frames stay on their own bundle. Each document receives a fresh bridge
+port, including after an internal page navigation. The host dispatches the v1
+`{v:1, kind:"init"}` message with `source === window.parent` and the port in
+`event.ports[0]`. This initialization event is synthetic; do not require
+`event.isTrusted`. If a page cannot initialize, reopen it to retry.
+
 `pane.focus({id})` uses its existing `pane.read` gate and workspace confinement.
 After a successful focus from the current rail page, the host returns to
 Workspaces. Responses from an earlier page/workspace lifetime do not navigate.

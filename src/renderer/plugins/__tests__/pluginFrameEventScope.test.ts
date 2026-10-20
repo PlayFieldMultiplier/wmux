@@ -54,6 +54,6 @@ describe('PluginFrame — events.poll workspace scoping', () => {
     // The port is created once, in the iframe's `load` handler, and `load` does
     // not fire again for an unchanged src. A workspace switch that re-runs this
     // effect therefore closes the port with nothing left to rebuild it.
-    expect(src).toMatch(/\}, \[pluginName, entry, railPage\]\);/);
+    expect(src).toMatch(/\}, \[pluginName, entry, railPage, frameName, blocked\]\);/);
   });
 });

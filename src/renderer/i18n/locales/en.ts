@@ -101,6 +101,7 @@ export const en = {
   "connectors.confirm": "Remove connection",
   "connectors.configure": "Configure",
 
+  'plugins.page.frameUnavailable': 'This plugin page could not be opened. Reopen it to try again.',
   'plugins.page.extension': 'UI plugin',
   'plugins.page.approve': 'Review permissions to open',
   'plugins.page.approvalFailed': 'Could not request approval. Try again.',

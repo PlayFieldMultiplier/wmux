@@ -16,6 +16,12 @@
 import type { PluginAgentSnapshot } from './pluginAgentState';
 import type { WmuxEvent } from './events';
 
+/** Owner-window IPC for validating and retiring sandboxed frame bridges. */
+export const PLUGIN_FRAME_IPC = {
+  ready: 'plugins:frame-ready',
+  navigated: 'plugins:frame-navigated',
+} as const;
+
 export const PLUGIN_BRIDGE_VERSION = 1 as const;
 
 /** Protocol scheme serving plugin bundle files to sandboxed iframes. */

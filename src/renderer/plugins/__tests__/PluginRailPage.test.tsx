@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import PluginRailPage from '../PluginRailPage';
 import { useStore } from '../../stores';
 import type { PluginHostPluginSummary } from '../../../shared/pluginHost';
@@ -9,9 +9,14 @@ const mock = vi.hoisted(() => ({ plugins: [] as PluginHostPluginSummary[] }));
 vi.mock('../usePlugins', () => ({ usePlugins: () => ({ plugins: mock.plugins, loaded: true }), refreshPlugins: vi.fn() }));
 vi.mock('../../hooks/useT', () => ({ useT: () => (key: string) => key }));
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+beforeEach(() => {
+  (window as unknown as { electronAPI: unknown }).electronAPI = { plugins: {
+    frameReady: vi.fn(async () => true), onFrameNavigation: vi.fn(() => vi.fn()),
+  } };
+});
 let root: Root | undefined;
 let host: HTMLDivElement | undefined;
-afterEach(() => { act(() => root?.unmount()); host?.remove(); root = undefined; });
+afterEach(() => { act(() => root?.unmount()); host?.remove(); root = undefined; delete (window as unknown as { electronAPI?: unknown }).electronAPI; });
 function setup(status: PluginHostPluginSummary['trustStatus']) {
   mock.plugins = [{ name: 'agents', version: '1', capabilities: ['ui.rail-page'], activationEvents: [], trustStatus: status, contributes: { railPage: { title: 'Agent page', entry: 'page.html' } } }];
   useStore.setState({ appRoute: 'plugin:agents' });
