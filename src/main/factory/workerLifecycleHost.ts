@@ -28,6 +28,7 @@ import { stopTaskPaneTrees } from './taskTreeStop';
 import { AgentSlots, getAgentSlots, setAgentSlots, setSlotLivenessRefresh, slotHolderArgs } from './agentSlots';
 import { installHeldFanoutReleases, releaseHeldFanouts } from './heldFanouts';
 import { checkWorkers, recordWorkerStateChange } from './budget';
+import { endReportedRunIfAgentGone, endWorkerRun, setWorkerStopsConfirmed } from './workerRunEnds';
 import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
@@ -624,6 +625,21 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       store.mutateUsage(rec.botId, (u) => recordWorkerStateChange(u, rec.taskId, from, to, at));
     };
     offs.push(() => { reclaimed.onStateChange = null; });
+    // From here a worker's run ends at its confirmed stop, not at its row's
+    // end (workerRunEnds.ts). A worker whose agent is already gone when it
+    // reports ends its run at once rather than at its idle stop.
+    setWorkerStopsConfirmed(true);
+    offs.push(() => setWorkerStopsConfirmed(false));
+    offs.push(ledger.onTransition((t) => {
+      if (t.to !== 'review_requested' || t.entry.dispatch?.origin.kind !== 'bot') return;
+      void endReportedRunIfAgentGone({
+        listSessions,
+        row: (taskId) => ledger.get(taskId),
+        recordedSessions: (taskId) => reclaimed.get(taskId)?.sessions.map((x) => x.sessionId) ?? [],
+        sessionRecordOf: botWorkerSessionRecord,
+        end: endWorkerRun,
+      }, t.entry);
+    }));
     // Dead shells in bot task workspaces (a daemon cold start respawns every
     // pane as a plain shell; an ended task may keep one): deadWorkerPanes.ts.
     const deadPanes = createDeadPaneSweep({
