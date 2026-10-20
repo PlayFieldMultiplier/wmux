@@ -209,6 +209,13 @@ describe('botWorkers from the bot\'s tasks', () => {
     expect(tree.map((r) => [r.workspaceId, r.verification?.state ?? null])).toEqual([['t1', 'missing'], ['t2', 'partial'], ['t3', null]]);
   });
 
+  it('a reported task\'s grade stays on its row while its resumed worker runs', () => {
+    const tasks = [view('a', 't1', 'closed', { status: 'completed', worker: 'resumed', verification: { state: 'partial', verified: 1, total: 2 } })];
+    const live = botWorkers(LEAD, { t1: LEAD }, { t1: 'running' }, names, tasks);
+    const tree = botWorkerTree(LEAD, live, tasks, names);
+    expect(tree.map((r) => [r.workspaceId, r.state, r.verification?.state ?? null])).toEqual([['t1', 'running', 'partial']]);
+  });
+
   it('a task the owner stopped is cancelled, a neutral state with no error mark; a failed one stays failed', () => {
     const tasks = [
       view('a', 't1', 'closed', { updatedAt: 2, stage: 'cancelled', status: 'cancelled' }),

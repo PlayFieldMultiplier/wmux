@@ -486,6 +486,9 @@ export function botWorkerTree(
   owners: BotsInput['botTaskOf'] = {},
   workerClass: BotsInput['workerClass'] = {},
 ): BotTreeRow[] {
+  // A reported task's evidence grade stays on its row while a resumed
+  // worker runs (the rail shows it whatever the worker does).
+  const verificationOf = (taskId: string | undefined) => (taskId ? tasks.find((task) => task.taskId === taskId)?.verification : undefined);
   const out: BotTreeRow[] = workers.map((w) => ({
     workspaceId: w.workspaceId,
     title: w.name,
@@ -495,6 +498,7 @@ export function botWorkerTree(
     ...(w.taskId && tasks.some((task) => task.taskId === w.taskId && WORKING_STAGE.has(task.stage)) ? { stoppable: true as const } : {}),
     ...(w.needsInput ? { needsInput: true } : {}),
     ...(w.needsInput && w.summary ? { summary: w.summary } : {}),
+    ...(verificationOf(w.taskId) ? { verification: verificationOf(w.taskId) } : {}),
   }));
   const seen = new Set(out.map((r) => r.workspaceId));
   const ended = tasks
