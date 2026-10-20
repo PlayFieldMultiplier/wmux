@@ -78,6 +78,7 @@ interface CapturedListeners {
   prompt?: (payload: { sessionId: string; event: unknown }) => void;
   died?: (payload: { sessionId: string }) => void;
   transcript?: (payload: { sessionId: string; activity: string }) => void;
+  teammates?: (payload: { sessionId: string }) => void;
   subagents?: (payload: { sessionId: string; count: number }) => void;
   processExit?: (payload: { sessionId: string; slug?: string | null }) => void;
 }
@@ -93,6 +94,7 @@ function makeRouter(opts: {
       if (event === 'session:prompt') captured.prompt = cb as CapturedListeners['prompt'];
       if (event === 'session:died') captured.died = cb as CapturedListeners['died'];
       if (event === 'session:transcriptActivity') captured.transcript = cb as CapturedListeners['transcript'];
+      if (event === 'session:teammates') captured.teammates = cb as CapturedListeners['teammates'];
       if (event === 'session:subagents') captured.subagents = cb as CapturedListeners['subagents'];
       if (event === 'session:agentProcessExit') captured.processExit = cb as CapturedListeners['processExit'];
     }),
@@ -821,6 +823,20 @@ describe('DaemonNotificationRouter — M1 side-effect replay', () => {
       ...(withSignal ? { signal: hookSignal({ kind: 'agent.session_start' }) } : {}),
     };
   }
+
+  it('a working teammate reaches the renderer as a running stamp, never as a status', async () => {
+    const { router, captured } = makeRouter();
+    try {
+      captured.agent!({ sessionId: 'pty-a', event: activityEvent('Read') });
+      await flushMicrotasks();
+      broadcastMetadataUpdateMock.mockClear();
+      captured.teammates!({ sessionId: 'pty-a' });
+      expect(broadcastMetadataUpdateMock).toHaveBeenCalledTimes(1);
+      expect(broadcastMetadataUpdateMock).toHaveBeenLastCalledWith(null, { ptyId: 'pty-a', teammatesWorking: true });
+    } finally {
+      router.stop();
+    }
+  });
 
   it('a transcript line reaches the row, and a hook-fed pane keeps its hook line until a new session', async () => {
     const { router, captured } = makeRouter();

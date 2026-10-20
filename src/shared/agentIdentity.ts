@@ -145,6 +145,9 @@ export interface AgentIdentityRow {
    *  (`isApiErrorMessage`), read when the StopFailure hook is not installed
    *  (daemon/transcript/apiErrorTurnEnd). */
   readonly apiErrorTurnEnd?: true;
+  /** Agent Teams teammates write their own transcripts in the session's
+   *  `subagents/` folder (daemon/transcript/teammateActivity). */
+  readonly teammateTranscripts?: true;
   /** MCP registration target (src/shared/mcpTargets.ts). */
   readonly mcp?: AgentMcpTargetSpec;
   /** The pane is a TUI chat box: a pasted line lands in a composer, not a
@@ -202,6 +205,7 @@ export const AGENT_IDENTITIES = [
     detect: 'screen',
     hooks: 'claude',
     apiErrorTurnEnd: true,
+    teammateTranscripts: true,
     mcp: { format: 'json', configPath: ['.claude.json'], createIfMissing: true, verified: true, autoRegister: true },
     tuiComposer: true,
     dialogs: 'claude',

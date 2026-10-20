@@ -6,7 +6,7 @@ import { remoteAgentKey } from '../../../shared/remoteHosts';
 import { agentDisplayToSlug } from '../../../shared/agentIdentity';
 import type { StoreState } from '../index';
 import { computePaneAutoName, paneDisplayName } from '../../utils/paneNaming';
-import { HOOK_RUNNING_TTL_MS, isHookRunning, isQuietUsageLimitError, pickStashedRepresentativeSurface, resolveRemoteAgent } from './fleet';
+import { HOOK_RUNNING_TTL_MS, isHookRunning, isQuietUsageLimitError, isTeammateRunning, pickStashedRepresentativeSurface, resolveRemoteAgent } from './fleet';
 import { SUBAGENT_COUNT_STALE_MS } from '../../../shared/subagentCount';
 
 /** The pane's subagent count while the daemon keeps refreshing it; undefined for none. */
@@ -239,8 +239,15 @@ export function selectWorkspaceAgentRoster(
       if (
         !attentionStatus &&
         !pendingQuestion &&
-        lifecycleStatus === 'idle' &&
-        hookRunning
+        ((lifecycleStatus === 'idle' && hookRunning)
+          // A finished lead (complete, seen) too, while a teammate works: the
+          // same verdict Fleet's dot reads (isTeammateRunning).
+          || ((lifecycleStatus === 'idle' || lifecycleStatus === 'complete') && isTeammateRunning({
+            teammatesAt: state.surfaceTeammatesAt?.[ptyId],
+            turnEndAt: state.surfaceTurnEndAt?.[ptyId],
+            agentClockMs: state.agentClockMs,
+            lifecycle: agent.status,
+          })))
       ) {
         status = 'running';
       }
@@ -334,7 +341,13 @@ export function selectWorkspaceAgentRoster(
           ? 'idle'
           : (agent?.status ?? 'idle');
       status = attentionStatus ?? lifecycle;
-      if (!attentionStatus && lifecycle === 'idle' && hookRunning) status = 'running';
+      const teammate = !!ptyId && (lifecycle === 'idle' || lifecycle === 'complete') && isTeammateRunning({
+        teammatesAt: state.surfaceTeammatesAt?.[ptyId],
+        turnEndAt: state.surfaceTurnEndAt?.[ptyId],
+        agentClockMs: state.agentClockMs,
+        lifecycle: agent?.status,
+      });
+      if (!attentionStatus && ((lifecycle === 'idle' && hookRunning) || teammate)) status = 'running';
     }
 
     rows.push({

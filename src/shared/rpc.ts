@@ -1101,6 +1101,11 @@ export interface DaemonEvent {
     // activity line; '' clears it.
     //   agent.transcriptActivity → { activity: string }
     | 'agent.transcriptActivity'
+    // An Agent Teams teammate of the pane's agent still works (its own
+    // transcript, daemon/transcript/teammateActivity). Sent on every scan that
+    // finds one; nothing when none works.
+    //   agent.teammates → null
+    | 'agent.teammates'
     // How many subagents the agent has running, read from its transcript
     // (daemon/transcript/subagentCount). Sent on change; 0 when the watch
     // ends, so a stale count never sticks.

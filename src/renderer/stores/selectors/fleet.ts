@@ -154,6 +154,9 @@ export type FleetSelectorState = Pick<StoreState, 'workspaces' | 'surfaceAgentSt
    *  older than this belongs to the finished turn (see isHookRunning).
    *  Optional so existing fixtures stay terse. */
   surfaceTurnEndAt?: StoreState['surfaceTurnEndAt'];
+  /** ptyId → when an Agent Teams teammate of the pane's agent last reported
+   *  working (see isTeammateRunning). Optional so existing fixtures stay terse. */
+  surfaceTeammatesAt?: StoreState['surfaceTeammatesAt'];
   /**
    * PRECOMPUTED hook-'running' verdicts, ptyId → true. Supplied instead of
    * `agentClockMs` by a consumer that must not re-run on every clock tick: the
@@ -240,6 +243,26 @@ export const HOOK_RUNNING_TTL_MS = 120_000;
  * about the same pane the moment a turn goes quiet past the TTL — live-observed
  * as an amber workspace row over a roster row reading "Idle".
  */
+/**
+ * An Agent Teams teammate of the pane's agent still works after the lead's
+ * turn: its stamp is fresh, newer than the lead's last turn end, and the lead
+ * is not waiting, on an error or on a question (those keep their status).
+ * Its own stamp, never the activity one, so nothing else's running evidence
+ * is touched; Fleet and the roster both read it here.
+ */
+export function isTeammateRunning(args: {
+  teammatesAt: number | undefined;
+  turnEndAt: number | undefined;
+  agentClockMs: number | undefined;
+  /** The lead's lifecycle status (surfaceAgent). */
+  lifecycle: AgentStatus | undefined;
+}): boolean {
+  const { teammatesAt, turnEndAt, agentClockMs, lifecycle } = args;
+  if (lifecycle === 'waiting' || lifecycle === 'error' || lifecycle === 'awaiting_input') return false;
+  if (!teammatesAt || agentClockMs === undefined || agentClockMs - teammatesAt > HOOK_RUNNING_TTL_MS) return false;
+  return turnEndAt === undefined || teammatesAt > turnEndAt;
+}
+
 export function isHookRunning(args: {
   /** `surfaceActivityAt[ptyId]` — last agent-activity stamp (ms), if any. */
   activityAt: number | undefined;
@@ -476,12 +499,18 @@ export function selectHookRunningByPtyId(state: FleetSelectorState): Record<stri
   const out: Record<string, boolean> = {};
   const turnOpen = state.surfaceTurnOpenAt ?? {};
   const activity = state.surfaceActivityAt ?? {};
-  for (const ptyId of new Set([...Object.keys(turnOpen), ...Object.keys(activity)])) {
+  const teammates = state.surfaceTeammatesAt ?? {};
+  for (const ptyId of new Set([...Object.keys(turnOpen), ...Object.keys(activity), ...Object.keys(teammates)])) {
     if (isHookRunning({
       activityAt: activity[ptyId],
       turnOpenAt: turnOpen[ptyId],
       agentClockMs: state.agentClockMs,
       turnEndAt: state.surfaceTurnEndAt?.[ptyId],
+    }) || isTeammateRunning({
+      teammatesAt: teammates[ptyId],
+      turnEndAt: state.surfaceTurnEndAt?.[ptyId],
+      agentClockMs: state.agentClockMs,
+      lifecycle: state.surfaceAgent?.[ptyId]?.status,
     })) {
       // Only TRUE entries are kept: a shallow compare over a map that also
       // carried `false` would change identity for every pane that ever ran.
@@ -634,7 +663,12 @@ export function selectFleetPanes(state: FleetSelectorState): FleetPane[] {
           turnOpenAt,
           agentClockMs: state.agentClockMs,
           turnEndAt: ptyId ? state.surfaceTurnEndAt?.[ptyId] : undefined,
-        });
+        }) || (!!ptyId && isTeammateRunning({
+          teammatesAt: state.surfaceTeammatesAt?.[ptyId],
+          turnEndAt: state.surfaceTurnEndAt?.[ptyId],
+          agentClockMs: state.agentClockMs,
+          lifecycle: state.surfaceAgent?.[ptyId]?.status,
+        }));
       // #1168 — a stashed pane whose every terminal surface has lost its pty is
       // a session the daemon has confirmed gone. The roster reports that as
       // `error` / needs-you and offers recovery; this pass had no liveness

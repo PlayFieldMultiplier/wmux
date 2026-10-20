@@ -945,6 +945,17 @@ describe('surfacePendingQuestion lifecycle', () => {
     expect(store.getState().surfacePendingQuestion['pty-1']).toBeUndefined();
   });
 
+  it('is kept by an Agent Teams teammate\'s stamp, which touches nothing of the lead\'s', () => {
+    const store = createTestStore();
+    store.getState().setSurfacePendingQuestion('pty-1', 'Shall I merge?');
+    store.getState().setSurfaceAgentStatus('pty-1', 'complete');
+    store.getState().markSurfaceTeammatesWorking('pty-1');
+    expect(store.getState().surfaceTeammatesAt['pty-1']).toBeGreaterThan(0);
+    expect(store.getState().surfaceActivityAt['pty-1']).toBeUndefined();
+    expect(store.getState().surfacePendingQuestion['pty-1']).toBe('Shall I merge?');
+    expect(store.getState().surfaceAgentStatus['pty-1']).toBe('complete');
+  });
+
   it('an empty write clears it (every stop writes the field)', () => {
     const store = createTestStore();
     store.getState().setSurfacePendingQuestion('pty-1', 'Shall I merge?');

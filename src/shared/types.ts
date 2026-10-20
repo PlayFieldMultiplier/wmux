@@ -547,6 +547,12 @@ export interface MetadataUpdatePayload {
   // state). Never persisted.
   activity?: string;
   /**
+   * An Agent Teams teammate of this pane's agent still works: refreshes the
+   * pane's running stamp only, never its status. Per-ptyId, destructured out
+   * like `activity`.
+   */
+  teammatesWorking?: true;
+  /**
    * How many subagents this pane's agent has running, read by the daemon from
    * the agent's transcript (daemon/transcript/subagentCount). Per-ptyId only,
    * like `activity`: the renderer destructures it out before applying the

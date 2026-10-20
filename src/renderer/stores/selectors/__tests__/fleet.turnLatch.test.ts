@@ -20,6 +20,8 @@ import {
   isPaneAgentBusy,
   HOOK_RUNNING_TTL_MS,
   UNVERIFIABLE_AFTER_MS,
+  isTeammateRunning,
+  selectHookRunningByPtyId,
 } from '../fleet';
 import { selectWorkspaceAgentRoster } from '../workspaceAgentRoster';
 import type { AgentStatus, Pane, Surface, Workspace } from '../../../../shared/types';
@@ -248,5 +250,38 @@ describe('hook turn latch — the pane stays running while the turn is open', ()
     expect(formatStaleMinutes(29)).toBe('29m');
     expect(formatStaleMinutes(30)).toBe('30m+');
     expect(formatStaleMinutes(125)).toBe('30m+');
+  });
+});
+
+describe('isTeammateRunning — an Agent Teams teammate keeps a finished lead running', () => {
+  const NOW = 10_000_000;
+  const base = { teammatesAt: NOW - 1_000, turnEndAt: NOW - 20_000, agentClockMs: NOW };
+
+  it('counts for a lead that is idle, running or finished', () => {
+    for (const lifecycle of [undefined, 'idle', 'running', 'complete'] as const) {
+      expect(isTeammateRunning({ ...base, lifecycle })).toBe(true);
+    }
+  });
+
+  it('never for a lead waiting, on an error or on a question', () => {
+    for (const lifecycle of ['waiting', 'error', 'awaiting_input'] as const) {
+      expect(isTeammateRunning({ ...base, lifecycle })).toBe(false);
+    }
+  });
+
+  it('never for a stamp older than the lead\'s turn end, or stale', () => {
+    expect(isTeammateRunning({ ...base, teammatesAt: NOW - 30_000, lifecycle: 'complete' })).toBe(false);
+    expect(isTeammateRunning({ ...base, agentClockMs: NOW + HOOK_RUNNING_TTL_MS + 1, lifecycle: 'complete' })).toBe(false);
+  });
+
+  it('Fleet\'s running map reads it, and leaves the activity-based verdicts as they are', () => {
+    const map = selectHookRunningByPtyId({
+      workspaces: [], surfaceAgentStatus: {}, surfaceActivity: {},
+      agentClockMs: NOW,
+      surfaceTeammatesAt: { a: NOW - 1_000, b: NOW - 1_000 },
+      surfaceTurnEndAt: { a: NOW - 20_000, b: NOW - 20_000 },
+      surfaceAgent: { a: { name: 'Claude Code', status: 'complete' }, b: { name: 'Claude Code', status: 'waiting' } },
+    } as unknown as Parameters<typeof selectHookRunningByPtyId>[0]);
+    expect(map).toEqual({ a: true });
   });
 });

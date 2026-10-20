@@ -749,7 +749,7 @@ export function useNotificationListener() {
       // workspace metadata — pull it OUT here, alongside ptyId, so it can never
       // flow into `...rest` and get written into updateWorkspaceMetadata by
       // applyToWorkspace's spread.
-      const { ptyId, workspaceId: payloadWsId, activity, subagents, pendingQuestion, lastMessage, lastActivity, paneId, paneLabel, paneRole, agentSlug, hookKind, settled, ...rest } = payload;
+      const { ptyId, workspaceId: payloadWsId, activity, teammatesWorking, subagents, pendingQuestion, lastMessage, lastActivity, paneId, paneLabel, paneRole, agentSlug, hookKind, settled, ...rest } = payload;
 
       // The orchestrator's own brain pty (the `claude-pty` vendor's embedded
       // Claude Code TUI) is not a fleet agent. The daemon has no idea it is
@@ -879,7 +879,11 @@ export function useNotificationListener() {
         // mirrors here, where event order is known; a selector cannot compare
         // the timestamp with an attention state that carries no timestamp.
         // A session start drops the retained last-activity line (a Stop keeps it).
-        if (lastActivity === '') state.clearSurfaceLastActivity(ptyId);
+        if (lastActivity === '') {
+          state.clearSurfaceLastActivity(ptyId);
+          // Only a session start clears it: the old session's teammates go too.
+          state.clearSurfaceTeammates(ptyId);
+        }
         if (typeof activity === 'string') {
           state.setSurfaceActivity(ptyId, activity);
           // Only activity-ONLY payloads need lifecycle reconciliation. When
@@ -909,6 +913,10 @@ export function useNotificationListener() {
         // '' clears.
         if (typeof lastMessage === 'string') {
           state.setSurfaceLastMessage(ptyId, lastMessage);
+        }
+        // An Agent Teams teammate still works: the running stamp only.
+        if (teammatesWorking === true) {
+          state.markSurfaceTeammatesWorking(ptyId);
         }
         // How many subagents the pane's agent has running (the daemon reads it
         // from the transcript); 0 clears. Per-ptyId, never workspace metadata.

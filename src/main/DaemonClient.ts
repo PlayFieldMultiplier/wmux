@@ -1109,6 +1109,9 @@ export class DaemonClient extends EventEmitter {
           }
           break;
         }
+        case 'agent.teammates':
+          this.emit('session:teammates', { sessionId: event.sessionId });
+          break;
         case 'agent.subagents': {
           // How many subagents the pane's agent has running, from its transcript.
           const data = event.data as { count?: unknown } | null;

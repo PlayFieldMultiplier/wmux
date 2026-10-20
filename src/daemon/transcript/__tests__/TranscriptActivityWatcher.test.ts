@@ -233,6 +233,85 @@ describe('TranscriptActivityWatcher — lifecycle', () => {
   });
 });
 
+describe('TranscriptActivityWatcher — Agent Teams teammates', () => {
+  function teammates(agent: 'claude' | 'codex' = 'claude') {
+    const file = path.join(dir, `${agent}.jsonl`);
+    fs.writeFileSync(file, `${JSON.stringify({ type: 'summary', summary: 'old session' })}\n`);
+    const sub = path.join(dir, agent, 'subagents');
+    fs.mkdirSync(sub, { recursive: true });
+    const mate = path.join(sub, 'agent-mate-1.jsonl');
+    fs.writeFileSync(path.join(sub, 'agent-mate-1.meta.json'), JSON.stringify({ taskKind: 'in_process_teammate' }));
+    const at = new Date().toISOString();
+    fs.writeFileSync(mate, `${JSON.stringify({ type: 'assistant', timestamp: at, message: { role: 'assistant', stop_reason: null, content: [{ type: 'tool_use', id: 'm1', name: 'Bash', input: {} }] } })}\n`);
+    let offset = 0;
+    const state: { alive: boolean; sessions: string[] } = { alive: true, sessions: ['pty-1'] };
+    const working: string[] = [];
+    const binding: ResumeBinding = { agent, sessionId: 's', cwd: dir, transcriptPath: file, ts: 0 };
+    const watcher = new TranscriptActivityWatcher({
+      listSessionIds: () => state.sessions,
+      getBinding: () => binding,
+      isAgentAlive: () => state.alive,
+      emit: () => { /* the activity line is not under test here */ },
+      emitTeammatesWorking: (id) => working.push(id),
+      // As in the daemon: a hook-fed Claude pane keeps its watch for its lines.
+      onClaudeLine: () => { /* read, not under test */ },
+      now: () => Date.now() + offset,
+      teammatePollMs: 15_000,
+    });
+    const finish = () => fs.appendFileSync(mate, [
+      JSON.stringify({ type: 'user', timestamp: at, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'm1', content: 'ok' }] } }),
+      JSON.stringify({ type: 'assistant', timestamp: at, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } }),
+    ].map((l) => `${l}\n`).join(''));
+    return { watcher, working, state, finish, advance: (ms: number) => { offset += ms; } };
+  }
+
+  it('refreshes once per teammate scan while a teammate works, even hook-fed after a Stop', () => {
+    const h = teammates();
+    h.watcher.tick();
+    expect(h.working).toEqual(['pty-1']);
+    h.watcher.noteHookSignal('pty-1', 'agent.activity');
+    h.watcher.noteHookSignal('pty-1', 'agent.stop');
+    h.watcher.tick();
+    h.advance(5_000);
+    h.watcher.tick();
+    expect(h.working).toEqual(['pty-1']); // not before the next scan is due
+    h.advance(10_000);
+    h.watcher.tick();
+    expect(h.working).toEqual(['pty-1', 'pty-1']);
+  });
+
+  it('stops refreshing when the teammate ends its turn', () => {
+    const h = teammates();
+    h.watcher.tick();
+    h.finish();
+    h.advance(15_000);
+    h.watcher.tick();
+    h.advance(15_000);
+    h.watcher.tick();
+    expect(h.working).toEqual(['pty-1']);
+  });
+
+  it('stops with the watch: the agent died or the pane closed', () => {
+    const h = teammates();
+    h.watcher.tick();
+    h.state.alive = false;
+    h.advance(15_000);
+    h.watcher.tick();
+    expect(h.working).toEqual(['pty-1']);
+    h.state.alive = true;
+    h.state.sessions = [];
+    h.advance(15_000);
+    h.watcher.tick();
+    expect(h.working).toEqual(['pty-1']);
+  });
+
+  it('never scans for a Codex pane', () => {
+    const h = teammates('codex');
+    h.watcher.tick();
+    expect(h.working).toEqual([]);
+  });
+});
+
 describe('codexToolSummary', () => {
   it('maps Codex tools onto the shared glyphs', () => {
     expect(codexToolSummary('shell', { command: ['bash', '-lc', 'ls src'] })).toBe('$ ls src');

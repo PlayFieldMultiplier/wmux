@@ -38,6 +38,8 @@ interface StateOverrides {
   surfaceActivity?: Record<string, string>;
   surfaceActivityAt?: Record<string, number>;
   surfaceTurnOpenAt?: Record<string, number>;
+  surfaceTurnEndAt?: Record<string, number>;
+  surfaceTeammatesAt?: Record<string, number>;
   surfaceSubagents?: Record<string, number>;
   surfaceSubagentsAt?: Record<string, number>;
   paneLabel?: Record<string, string>;
@@ -304,6 +306,22 @@ describe('selectWorkspaceAgentRoster', () => {
       });
       expect(row.status).toBe('running');
       expect(row.activity).toBe('✎ fleet.ts');
+    });
+
+    it('a finished, seen lead reads running while its Agent Teams teammate works, and only then', () => {
+      const finished = {
+        surfaceAgent: { 'pty-1': { name: 'A', status: 'complete' as AgentStatus } },
+        surfaceTurnEndAt: { 'pty-1': NOW - 20_000 },
+        surfaceActivityAt: { 'pty-1': NOW - 1_000 },
+      };
+      expect(base(finished).status).toBe('complete');
+      expect(base({ ...finished, surfaceTeammatesAt: { 'pty-1': NOW - 1_000 } }).status).toBe('running');
+      // A teammate stamp from before the lead's turn ended is about that turn.
+      expect(base({ ...finished, surfaceTeammatesAt: { 'pty-1': NOW - 30_000 } }).status).toBe('complete');
+      // A lead left waiting (Fleet keeps its metadata status) stays waiting.
+      expect(base({ ...finished, surfaceAgent: { 'pty-1': { name: 'A', status: 'waiting' } }, surfaceTeammatesAt: { 'pty-1': NOW - 1_000 } }).status).toBe('waiting');
+      // An unseen result still outranks it.
+      expect(base({ ...finished, surfaceTeammatesAt: { 'pty-1': NOW - 1_000 }, surfaceAgentStatus: { 'pty-1': 'complete' } }).status).toBe('complete');
     });
 
     it('does NOT promote on a STALE activity stamp (older than the TTL)', () => {
