@@ -79,6 +79,46 @@ async function open(port: ReturnType<typeof fakePort>) {
   await flush();
 }
 
+describe('GuestBotsDialog — guest workspaces', () => {
+  it('a conversation outside a guest workspace offers to make it one, with the warning; Add waits for it', async () => {
+    const port = fakePort([], GATES, []);
+    await open(port);
+    expect(q('[data-guest-workspaces]')?.textContent).toBe(en['botsPage.guest.workspacesNone']);
+    type(q<HTMLInputElement>('[data-testid="guest-name"]')!, 'Grok');
+    expect(q<HTMLButtonElement>('[data-testid="guest-add"]')!.disabled).toBe(true);
+    expect(q('[data-guest-mark-warning]')?.textContent).toBe(en['botsPage.guest.markWarning']);
+    expect(q('[data-guest-mark-warning]')?.textContent).toContain('Anything in this workspace can be shared with its guests.');
+    await click(q('[data-testid="guest-mark"]'));
+    expect(port.markWorkspace).toHaveBeenCalledWith('ws-1');
+    expect(q('[data-guest-mark-offer]')).toBeNull();
+    expect(q('[data-guest-workspaces]')?.textContent).toContain('ws-1');
+    expect(q<HTMLButtonElement>('[data-testid="guest-add"]')!.disabled).toBe(false);
+  });
+
+  it('a refused flag says why, naming the bots', async () => {
+    const port = fakePort([], GATES, []);
+    port.markWorkspace.mockImplementationOnce(async () => ({ ok: false, code: 'refused', refusal: 'bots', botIds: ['bot-0000aaaa'] }) as never);
+    act(() => root.render(<GuestBotsDialog t={t} conversations={conversations} onClose={() => undefined} port={port} revocations={revocations} botName={(id) => (id === 'bot-0000aaaa' ? 'Dev' : id)} />));
+    await flush();
+    await click(q('[data-testid="guest-mark"]'));
+    expect(q('[data-guest-error]')?.textContent).toContain('Dev');
+    expect(q('[data-guest-mark-offer]')).not.toBeNull();
+  });
+
+  it('a guest whose workspace is not a guest one shows as needing revoke; an unreadable list says so', async () => {
+    const port = fakePort([{ v: 1, guestId: ID, name: 'Grok', scope: { workspaceId: 'ws-old', threadId: 'general' }, createdAt: '2026-10-19T00:00:00.000Z' }]);
+    await open(port);
+    expect(q(`[data-guest-row="${ID}"]`)?.getAttribute('data-guest-needs-revoke')).toBe('true');
+    expect(q(`[data-guest-row="${ID}"]`)?.textContent).toContain(en['botsPage.guest.needsRevoke']);
+    act(() => root.unmount());
+    root = createRoot(host);
+    const broken = fakePort();
+    broken.list.mockImplementation(async () => ({ ok: true as const, guests: [], gates: GATES, workspaces: { readable: false, workspaceIds: [] } }));
+    await open(broken);
+    expect(q('[data-guest-workspaces-unreadable]')).not.toBeNull();
+  });
+});
+
 describe('GuestBotsDialog', () => {
   it('adds a guest for the picked conversation and shows its token once', async () => {
     const port = fakePort();

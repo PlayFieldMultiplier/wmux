@@ -5003,6 +5003,16 @@ export const en = {
   'botsPage.guest.error.notFound': "That guest is already gone.",
   'botsPage.guest.error.persistFailed': "The change could not be saved.",
   'botsPage.guest.error.notGuestWorkspace': "A guest joins only a conversation in a guest workspace. Make this workspace a guest workspace first, or add the guest in a new workspace.",
+  'botsPage.guest.workspaces': "Guest workspaces: {names}",
+  'botsPage.guest.workspacesNone': "No guest workspace yet. A guest joins only a conversation in a guest workspace.",
+  'botsPage.guest.workspacesUnreadable': "The list of guest workspaces could not be read, so no guest can connect. Restart wmux; if this stays, the file factory/guest-workspaces.json needs fixing.",
+  'botsPage.guest.needsRevoke': "not in a guest workspace: revoke it",
+  'botsPage.guest.notGuestWorkspace': "{workspace} is not a guest workspace.",
+  'botsPage.guest.markWarning': "Anything in this workspace can be shared with its guests. Once it is a guest workspace it stays one, even after every guest is revoked: its bots have no repository and no Coordinator, every turn there runs under guest rules (your own messages too), and nothing in it reaches your other workspaces. To keep this workspace as it is, add the guest in a new workspace.",
+  'botsPage.guest.mark': "Make {workspace} a guest workspace",
+  'botsPage.guest.markRefused.hq': "This is the HQ workspace, so it cannot be a guest workspace.",
+  'botsPage.guest.markRefused.bots': "These bots don't fit a guest workspace: {names}. Its bots are Developer, Researcher or Custom bots on Claude SDK with no repository.",
+  'botsPage.guest.markRefused.liveWork': "Work is running in this workspace. Try again once its bots and tasks are done.",
 } as const;
 
 export type TranslationKey = keyof typeof en;

@@ -953,6 +953,8 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
           t={t}
           port={guestsPort}
           conversations={guestConversations(model.conversations, (c) => conversationTitle(c, nameOf))}
+          workspaceName={nameOf}
+          botName={(id) => bots.find((b) => b.bot.id === id)?.bot.name ?? id}
           onClose={() => setGuestsOpen(false)}
         />
       )}

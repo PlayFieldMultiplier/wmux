@@ -3,9 +3,13 @@
 // Opened from the Bots page's "…" menu. The owner's switch for the whole
 // feature, what the remote-access settings still block, the guests with
 // Revoke, and Add guest: a name and one conversation (a bot's 1:1 or a group
-// chat). The new guest's token is shown once, here, with Copy; closing the
-// dialog drops it. Everything else is read from the daemon each time the
-// dialog opens or changes something.
+// chat) of a guest workspace. A conversation elsewhere offers to make its
+// workspace a guest workspace, with what that means, which is never undone.
+// The guest workspaces are listed, and a guest whose workspace is not one
+// (made before workspaces were flagged) shows as needing revoke. The new
+// guest's token is shown once, here, with Copy; closing the dialog drops it.
+// Everything else is read from the daemon each time the dialog opens or
+// changes something.
 import { useCallback, useEffect, useState } from 'react';
 import Dialog, { DialogBody, DialogHeader } from '../ui/Dialog';
 import Button from '../ui/Button';
@@ -15,7 +19,7 @@ import Select from '../ui/Select';
 import { FOCUS_RING } from '../focusRing';
 import {
   GUEST_LIMITS, GUEST_NAME_MAX, GUEST_ROUTES, sanitizeGuestName,
-  type GuestBotErrorCode, type GuestBotGates, type GuestBotView, type GuestScope,
+  type GuestBotErrorCode, type GuestBotGates, type GuestBotView, type GuestScope, type GuestWorkspaceList, type GuestWorkspaceMarkResult,
 } from '../../../shared/guestBots';
 import { getGuestBotPort, getGuestRevocations, type GuestBotPort, type GuestRevocations } from './guestBots';
 import { useStore } from '../../stores';
@@ -39,6 +43,14 @@ const ERROR_KEYS: Record<GuestBotErrorCode, string> = {
   'not-guest-workspace': 'botsPage.guest.error.notGuestWorkspace',
 };
 
+/** What a refused "Make it a guest workspace" says. Pure. */
+export function guestMarkError(r: Extract<GuestWorkspaceMarkResult, { ok: false }>, t: T, botName: (id: string) => string): string {
+  if (r.code !== 'refused') return t(ERROR_KEYS[r.code]);
+  if (r.refusal === 'hq') return t('botsPage.guest.markRefused.hq');
+  if (r.refusal === 'live-work') return t('botsPage.guest.markRefused.liveWork');
+  return t('botsPage.guest.markRefused.bots', { names: (r.botIds ?? []).map(botName).join(', ') });
+}
+
 /** What still keeps a guest from connecting, as message keys. Pure. */
 export function guestGateNotes(g: GuestBotGates): string[] {
   const out: string[] = [];
@@ -49,16 +61,22 @@ export function guestGateNotes(g: GuestBotGates): string[] {
   return out;
 }
 
-export default function GuestBotsDialog({ t, conversations, onClose, port = getGuestBotPort(), revocations = getGuestRevocations() }: {
+export default function GuestBotsDialog({ t, conversations, onClose, workspaceName = () => null, botName = (id) => id, port = getGuestBotPort(), revocations = getGuestRevocations() }: {
   t: T;
   conversations: readonly GuestConversationOption[];
   onClose: () => void;
+  /** A workspace's name, or null when it is not known. */
+  workspaceName?: (workspaceId: string) => string | null;
+  /** A bot's name for a refusal that names bots. */
+  botName?: (botId: string) => string;
   port?: GuestBotPort;
   /** Revokes in flight; they outlive this dialog. */
   revocations?: GuestRevocations;
 }): React.ReactElement {
   const [guests, setGuests] = useState<GuestBotView[]>([]);
   const [gates, setGates] = useState<GuestBotGates | null>(null);
+  const [flagged, setFlagged] = useState<GuestWorkspaceList | null>(null);
+  const [marking, setMarking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [pick, setPick] = useState<string>(conversations[0] ? scopeKey(conversations[0].scope) : '');
@@ -71,6 +89,7 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
       if (r.ok) {
         setGuests(r.guests);
         setGates(r.gates);
+        setFlagged(r.workspaces ?? { readable: false, workspaceIds: [] });
       } else {
         setError(t(ERROR_KEYS[r.code]));
       }
@@ -82,9 +101,22 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
   const chosen = conversations.find((c) => scopeKey(c.scope) === pick) ?? null;
   const cleanName = sanitizeGuestName(name);
   const live = guests.filter((g) => !g.revokedAt);
+  const isGuestWs = (ws: string): boolean => !!flagged?.readable && flagged.workspaceIds.includes(ws);
+  const wsLabel = (ws: string): string => workspaceName(ws) ?? ws;
+  const chosenGuest = !!chosen && isGuestWs(chosen.scope.workspaceId);
+
+  const mark = async () => {
+    if (!chosen || marking) return;
+    setMarking(true);
+    setError(null);
+    const r = await port.markWorkspace(chosen.scope.workspaceId).catch(() => ({ ok: false as const, code: 'unavailable' as const }));
+    setMarking(false);
+    if (!r.ok) setError(guestMarkError(r, t, botName));
+    reload();
+  };
 
   const add = async () => {
-    if (!cleanName || !chosen || busy) return;
+    if (!cleanName || !chosen || !chosenGuest || busy) return;
     setBusy(true);
     setError(null);
     const r = await port.create({ name: cleanName, scope: chosen.scope }).catch(() => ({ ok: false as const, code: 'unavailable' as const }));
@@ -175,13 +207,25 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
             </div>
           )}
 
+          {flagged && !flagged.readable && (
+            <p role="alert" data-guest-workspaces-unreadable className="text-[var(--accent-red)]">{t('botsPage.guest.workspacesUnreadable')}</p>
+          )}
+          {flagged?.readable && (
+            <p className="text-[var(--text-sub)]" data-guest-workspaces>
+              {flagged.workspaceIds.length > 0
+                ? t('botsPage.guest.workspaces', { names: flagged.workspaceIds.map(wsLabel).join(', ') })
+                : t('botsPage.guest.workspacesNone')}
+            </p>
+          )}
+
           <ul className="space-y-1" data-guest-list>
             {guests.length === 0 && <li className="text-[var(--text-muted)]" data-guest-empty>{t('botsPage.guest.empty')}</li>}
             {guests.map((g) => (
-              <li key={g.guestId} data-guest-row={g.guestId} data-guest-revoked={g.revokedAt ? 'true' : undefined} className="flex items-center gap-2">
+              <li key={g.guestId} data-guest-row={g.guestId} data-guest-revoked={g.revokedAt ? 'true' : undefined} data-guest-needs-revoke={!g.revokedAt && flagged?.readable && !isGuestWs(g.scope.workspaceId) ? 'true' : undefined} className="flex items-center gap-2">
                 <span className={`min-w-0 flex-1 truncate ${g.revokedAt ? 'text-[var(--text-muted)]' : 'text-[var(--text-main)]'}`}>
                   {g.name}
                   <span className="text-[var(--text-muted)]">{` · ${labelOf(g.scope)} · ${g.revokedAt ? t('botsPage.guest.revoked')
+                    : flagged?.readable && !isGuestWs(g.scope.workspaceId) ? t('botsPage.guest.needsRevoke')
                     : g.lastSeenAt ? t('botsPage.guest.lastSeen', { when: new Date(g.lastSeenAt).toLocaleString() }) : t('botsPage.guest.neverSeen')}`}</span>
                 </span>
                 {!g.revokedAt && (
@@ -216,10 +260,21 @@ export default function GuestBotsDialog({ t, conversations, onClose, port = getG
                   {conversations.map((c) => <option key={scopeKey(c.scope)} value={scopeKey(c.scope)}>{c.label}</option>)}
                 </Select>
               </label>
-              <Button type="submit" size="sm" variant="primary" data-testid="guest-add" disabled={!cleanName || !chosen || busy || live.length >= GUEST_LIMITS.liveMax}>
+              <Button type="submit" size="sm" variant="primary" data-testid="guest-add" disabled={!cleanName || !chosen || !chosenGuest || busy || live.length >= GUEST_LIMITS.liveMax}>
                 {t('botsPage.guest.add')}
               </Button>
             </form>
+            {chosen && flagged?.readable && !chosenGuest && (
+              <div data-guest-mark-offer className="space-y-2 rounded-[12px] border border-[var(--line)] px-3 py-2">
+                <p className="font-[var(--title-weight,500)] text-[var(--text-main)]">{t('botsPage.guest.notGuestWorkspace', { workspace: wsLabel(chosen.scope.workspaceId) })}</p>
+                <p className="text-[var(--text-sub)]" data-guest-mark-warning>{t('botsPage.guest.markWarning')}</p>
+                <div className="flex justify-end">
+                  <Button size="sm" variant="secondary" data-testid="guest-mark" disabled={marking} aria-busy={marking || undefined} onClick={() => void mark()}>
+                    {t('botsPage.guest.mark', { workspace: wsLabel(chosen.scope.workspaceId) })}
+                  </Button>
+                </div>
+              </div>
+            )}
             </>
           )}
           {error && <p role="alert" data-guest-error className="text-[var(--accent-red)]">{error}</p>}

@@ -62,7 +62,7 @@ import { getFactorySettings } from '../factory/factorySettings';
 import { getHandoffRouter, HANDOFF_STORE_LIMITS } from '../factory/handoffRouter';
 import { getRoomWriter, ROOMS_DIRNAME } from '../factory/roomWriter';
 import { redactStoredSecrets } from '../factory/secretRedaction';
-import { guestWorkspaceFlag } from '../factory/guestWorkspaces';
+import { guestWorkspaceFlag, isGuestWorkspace } from '../factory/guestWorkspaces';
 import type { GuestProvenance } from '../factory/wakeTaint';
 import { parseGuestScope } from '../../shared/guestBots';
 import { ROOM_ATTACHMENT_ID_RE } from '../../shared/roomAttachments';
@@ -346,6 +346,8 @@ export interface PhoneBotsPorts extends PhoneFactoryPorts {
   groups(): BotGroup[] | null;
   /** A workspace's name on the desktop, or null when it is not open. */
   workspaceName(workspaceId: string): string | null;
+  /** Whether a workspace is a guest workspace (default isGuestWorkspace). */
+  guestWorkspace?(workspaceId: string): GuestProvenance;
   /** Each bot's tasks, as the desktop's Bots page lists them (a work card's
    *  state and pull request). Absent: work is read from the cards alone. */
   taskViews?(bots: BotProfile[]): Promise<ReadonlyMap<string, readonly BotTaskView[]>>;
@@ -483,12 +485,21 @@ export function phoneBotsReply(ports: PhoneBotsPorts, tasks: ReadonlyMap<string,
   const settings = ports.settings();
   const hq = settings.enabled ? phoneBot(all, settings) : null;
   const sorted = [...all].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  // The owner's phone sees a guest workspace's bots, marked as such.
+  const guest = (workspaceId: string): { guestWorkspace?: true } => {
+    try {
+      return (ports.guestWorkspace ?? isGuestWorkspace)(workspaceId) === true ? { guestWorkspace: true } : {};
+    } catch {
+      return {};
+    }
+  };
   const bots: PhoneBotsBot[] = sorted.map((b) => {
     const status = ports.status(b.id);
     return {
       id: b.id, name: b.name, role: b.role, workspaceId: b.workspaceId, enabled: b.enabled,
       isHq: hq?.id === b.id, presence: presenceOf(status), queueDepth: status?.queueDepth ?? 0,
       avatar: { hue: isIdentitySlot(b.hue) ? b.hue : null, picture: typeof b.avatar === 'string' && b.avatar.length > 0 },
+      ...guest(b.workspaceId),
     };
   });
   const threadsOf = new Map<string, ThreadSummary[]>();
@@ -545,6 +556,7 @@ export function phoneBotsReply(ports: PhoneBotsPorts, tasks: ReadonlyMap<string,
       name: group.name || ws || '',
       groupId: group.id,
       memberBotIds: members,
+      ...guest(group.workspaceId),
       ...activity(group.workspaceId, scope, group.createdAt),
       // A group made from the room (General) starts no thread of its own.
       ...(groupThreadGroup(group.threadId) ? workOf(group.workspaceId, scope, { threadId: group.threadId }, author) : {}),
@@ -558,6 +570,7 @@ export function phoneBotsReply(ports: PhoneBotsPorts, tasks: ReadonlyMap<string,
       kind: 'dm', threadId: dmThreadId(b.id), workspaceId: b.workspaceId,
       ...(ws ? { workspaceName: ws } : {}),
       name: b.name, botId: b.id, memberBotIds: [b.id],
+      ...guest(b.workspaceId),
       ...activity(b.workspaceId, scope, b.createdAt),
       ...workOf(b.workspaceId, scope, { botId: b.id }, { workAuthor: b.id }),
     });

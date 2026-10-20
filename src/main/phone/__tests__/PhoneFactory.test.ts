@@ -158,6 +158,16 @@ describe('the phone wire — work cards and approval actions over a real room', 
     expect(phoneBotsReply(botsPorts(writer))?.conversations.find((c) => c.threadId === DM)?.work).toHaveLength(1);
   });
 
+  it('marks a guest workspace\'s bots and conversations for the owner\'s phone', () => {
+    const { writer } = room();
+    const reply = phoneBotsReply(botsPorts(writer, { guestWorkspace: (ws) => ws === 'ws-1' }))!;
+    expect(reply.bots.every((b) => b.guestWorkspace === true)).toBe(true);
+    expect(reply.conversations.every((c) => c.guestWorkspace === true)).toBe(true);
+    const clean = phoneBotsReply(botsPorts(writer, { guestWorkspace: () => false }))!;
+    expect(clean.bots.some((b) => 'guestWorkspace' in b)).toBe(false);
+    expect(clean.conversations.some((c) => 'guestWorkspace' in c)).toBe(false);
+  });
+
   it('a guest\'s read is answered only in a guest workspace, refused while that cannot be told', () => {
     const { writer } = room();
     const p = botsPorts(writer);
