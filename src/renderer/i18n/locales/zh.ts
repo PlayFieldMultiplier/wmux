@@ -33,6 +33,8 @@ export const zh = {
   "plugins.settings.manual": "此插件为手动安装。可在此停用；卸载时请手动删除其文件夹。",
   "plugins.settings.agentStatus": "智能体状态",
   "plugins.settings.agentStatusHint": "查看当前工作区的智能体状态并跳转到窗格。不访问终端内容。",
+  "plugins.settings.office": "办公室",
+  "plugins.settings.officeHint": "将当前工作区的智能体显示为像素风办公室中的员工，并跳转到窗格。不访问终端内容。",
   "plugins.settings.install": "安装",
   "plugins.settings.loadFailed": "无法加载 {name}。请检查清单和插件文件。",
 
