@@ -60,7 +60,7 @@ import type {
   SampleTaskStartPayload,
 } from '../shared/firstRun';
 import type { AgentId, AgentSetupStatus } from '../shared/agentSetup';
-import type { AgentCommandShell, AgentSetupPlan, SetAgentPathResult } from '../shared/agentInstall';
+import type { AgentSetupPlan, SetAgentPathResult } from '../shared/agentInstall';
 import { isFileDrag } from '../shared/dragDrop';
 import { parseWindowsBuildNumber } from '../shared/platform';
 import type { NotificationCategory } from '../shared/types';
@@ -1734,8 +1734,8 @@ const electronAPI = {
     reopen: () => ipcRenderer.invoke(IPC.FIRST_RUN_REOPEN) as Promise<FirstRunCheckResult>,
     registerMcp: () => ipcRenderer.invoke(IPC.FIRST_RUN_REGISTER_MCP) as Promise<RegisterMcpResult>,
     agentStatus: () => ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_STATUS) as Promise<AgentSetupStatus[]>,
-    agentPlan: (agent: AgentId, paneSyntax?: AgentCommandShell) =>
-      ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_PLAN, agent, paneSyntax) as Promise<AgentSetupPlan>,
+    agentPlan: (agent: AgentId, paneShell?: string) =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_PLAN, agent, paneShell) as Promise<AgentSetupPlan>,
     setAgentPath: (agent: AgentId, input: string | null) =>
       ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_SET_PATH, agent, input) as Promise<SetAgentPathResult>,
     startSampleTask: (payload: SampleTaskStartPayload) =>

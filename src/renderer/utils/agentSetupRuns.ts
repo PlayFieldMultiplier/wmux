@@ -33,6 +33,7 @@ import { agentRow } from '../../shared/agentIdentity';
 import { openTerminalTab } from './accountLogin';
 import { readPtyBufferTail } from './terminalTail';
 import { showWorkspaces } from './showWorkspaces';
+import { withDefaultShell } from './ptyCreateOptions';
 
 export type AgentRunKind = 'install' | 'login';
 
@@ -170,12 +171,13 @@ export function scanCommandEnd(
 let nextRunId = 1;
 
 /**
- * The syntax of the shell a macOS/Linux setup pane opens in (the user's
- * default shell), for quoting the sign-in line. Pass to `agentPlan`.
+ * The shell a macOS/Linux setup pane will spawn, by the same rule every new
+ * pane uses (`withDefaultShell`): the user's chosen shell when it is a real
+ * executable path, otherwise undefined, and main then starts `$SHELL`. Passed
+ * to `agentPlan` so the sign-in line is quoted for that shell.
  */
-export function paneSyntaxFor(defaultShell: string | undefined): AgentCommandShell {
-  const base = (defaultShell ?? '').split(/[\\/]/).pop() ?? '';
-  return /^(pwsh|powershell)(\.exe)?$/i.test(base) ? 'powershell' : 'user';
+export function effectivePaneShell(defaultShell: string | undefined): string | undefined {
+  return withDefaultShell({}, defaultShell).shell;
 }
 
 function shellFor(shell: AgentCommandShell): string | undefined {

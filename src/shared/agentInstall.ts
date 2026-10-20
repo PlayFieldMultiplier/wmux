@@ -81,6 +81,12 @@ export function agentLoginCommand(executable: string, shell: AgentCommandShell):
   return isScript ? `node ${q}` : q;
 }
 
+/** Quoting family of a shell executable: PowerShell (pwsh) or POSIX-like. */
+export function shellSyntax(shellPath: string | undefined): AgentCommandShell {
+  const base = (shellPath ?? '').split(/[\\/]/).pop() ?? '';
+  return /^(pwsh|powershell)(\.exe)?$/i.test(base) ? 'powershell' : 'user';
+}
+
 /** Why an install line did not finish, read from the end of its pane. */
 export type InstallFailureKind = 'network' | 'permission' | 'unknown';
 

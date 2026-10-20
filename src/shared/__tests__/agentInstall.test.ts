@@ -5,6 +5,7 @@ import {
   agentInstallMethod,
   agentLoginCommand,
   classifyInstallFailure,
+  shellSyntax,
 } from '../agentInstall';
 
 describe('bundled install table', () => {
@@ -50,5 +51,14 @@ describe('agentExecutableNames', () => {
   it('accepts the binary, its .exe and the npm entrypoints', () => {
     expect(agentExecutableNames('claude')).toEqual(['claude', 'claude.exe', 'cli.js']);
     expect(agentExecutableNames('codex')).toEqual(['codex', 'codex.exe', 'codex.js']);
+  });
+});
+
+describe('shellSyntax', () => {
+  it('quotes for PowerShell only for pwsh / powershell executables', () => {
+    expect(shellSyntax('/usr/local/bin/pwsh')).toBe('powershell');
+    expect(shellSyntax('C:\\Program Files\\PowerShell\\7\\pwsh.exe')).toBe('powershell');
+    expect(shellSyntax('/bin/zsh')).toBe('user');
+    expect(shellSyntax(undefined)).toBe('user');
   });
 });

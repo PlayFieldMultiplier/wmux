@@ -33,7 +33,7 @@ import {
   agentExecutableNames,
   agentInstallMethod,
   agentLoginCommand,
-  type AgentCommandShell,
+  shellSyntax,
   type AgentSetupPlan,
   type SetAgentPathResult,
 } from '../../shared/agentInstall';
@@ -117,7 +117,7 @@ export class FirstRunOrchestrator {
    * program it needs that is missing here) and, once installed, the sign-in
    * line for the exact executable the card shows.
    */
-  async agentPlan(agent: AgentId, paneSyntax: AgentCommandShell = 'user'): Promise<AgentSetupPlan> {
+  async agentPlan(agent: AgentId, paneShell?: string): Promise<AgentSetupPlan> {
     const method = agentInstallMethod(agent, process.platform);
     if (!method) throw new Error(`first-run: no install line for ${agent}`);
     const env = this.agentDetector.probeEnvFor(process.execPath);
@@ -127,10 +127,11 @@ export class FirstRunOrchestrator {
       agent,
       install: { command: method.command, shell: method.shell, officialPage: method.officialPage, missing },
       // The sign-in line is typed into the pane's shell, so it is quoted for that
-      // shell: PowerShell on Windows, and on macOS/Linux whatever the user's
-      // default shell speaks (pwsh there too, when that is their shell).
+      // shell: PowerShell on Windows; on macOS/Linux the shell the pane spawns
+      // (the renderer's explicit choice, else $SHELL, as pty creation does),
+      // which may be pwsh too.
       login: executable
-        ? { command: agentLoginCommand(executable, method.shell === 'powershell' ? 'powershell' : paneSyntax), shell: method.shell }
+        ? { command: agentLoginCommand(executable, method.shell === 'powershell' ? 'powershell' : shellSyntax(paneShell || process.env.SHELL)), shell: method.shell }
         : null,
     };
   }

@@ -10,7 +10,7 @@ import {
   resetAgentSetupForTests,
   RUN_TICK_MS,
   DETECT_EVERY_TICKS,
-  paneSyntaxFor,
+  effectivePaneShell,
   scanCommandEnd,
   showAgentRunPane,
   startAgentRun,
@@ -84,12 +84,11 @@ describe('scanCommandEnd', () => {
   });
 });
 
-describe('paneSyntaxFor', () => {
-  it('quotes for PowerShell only when the default shell is pwsh / powershell', () => {
-    expect(paneSyntaxFor('/usr/local/bin/pwsh')).toBe('powershell');
-    expect(paneSyntaxFor('C:\\Program Files\\PowerShell\\7\\pwsh.exe')).toBe('powershell');
-    expect(paneSyntaxFor('/bin/zsh')).toBe('user');
-    expect(paneSyntaxFor(undefined)).toBe('user');
+describe('effectivePaneShell', () => {
+  it('is the shell a new pane really spawns: legacy aliases mean "$SHELL" (undefined)', () => {
+    expect(effectivePaneShell('powershell')).toBeUndefined();
+    expect(effectivePaneShell(undefined)).toBeUndefined();
+    expect(effectivePaneShell('/usr/local/bin/pwsh')).toBe('/usr/local/bin/pwsh');
   });
 });
 
