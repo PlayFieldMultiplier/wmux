@@ -271,10 +271,16 @@ function watch(runId: number, agent: AgentId, kind: AgentRunKind, workspaceId: s
   const startedAt = Date.now();
   const pty = window.electronAPI?.pty;
 
-  const finish = async (exitCode: number | null | undefined, paneGone: boolean): Promise<void> => {
+  const finish = async (exitCode: number | null | undefined, paneGone: boolean, detected = false): Promise<void> => {
     if (ending) return;
     ending = true;
     stop();
+    // Detection itself just saw the goal: no second probe that a transient
+    // timeout could turn into a false failure.
+    if (detected) {
+      setRun(agent, runId, { phase: 'succeeded', screen: null });
+      return;
+    }
     const statuses = await refreshAgentStatus({ fresh: true });
     const status = agentStatusOf(agent, statuses);
     if (runSucceeded(kind, status)) {
@@ -322,7 +328,7 @@ function watch(runId: number, agent: AgentId, kind: AgentRunKind, workspaceId: s
     }
     if (ticks % DETECT_EVERY_TICKS === 0) {
       void refreshAgentStatus().then((statuses) => {
-        if (!ending && runSucceeded(kind, agentStatusOf(agent, statuses))) void finish(null, false);
+        if (!ending && runSucceeded(kind, agentStatusOf(agent, statuses))) void finish(null, false, true);
       });
     }
   }, RUN_TICK_MS);

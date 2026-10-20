@@ -33,6 +33,8 @@ describe('agentLoginCommand', () => {
     expect(agentLoginCommand("/Users/김 O'Neil/.local/bin/claude", 'user')).toBe(`'/Users/김 O'\\''Neil/.local/bin/claude'`);
     expect(agentLoginCommand("C:\\Users\\김 O'Neil\\.local\\bin\\claude.exe", 'powershell'))
       .toBe("& 'C:\\Users\\김 O''Neil\\.local\\bin\\claude.exe'");
+    expect(agentLoginCommand('C:\\Users\\O\u2019Neil\\.local\\bin\\claude.exe', 'powershell'))
+      .toBe("& 'C:\\Users\\O\u2019\u2019Neil\\.local\\bin\\claude.exe'");
     expect(agentLoginCommand('C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js', 'powershell'))
       .toBe("node 'C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js'");
   });

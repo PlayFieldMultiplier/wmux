@@ -74,7 +74,9 @@ export function agentExecutableNames(agent: AgentId): string[] {
 export function agentLoginCommand(executable: string, shell: AgentCommandShell): string {
   const isScript = /\.(c|m)?js$/i.test(executable);
   if (shell === 'powershell') {
-    const q = `'${executable.replace(/'/g, "''")}'`;
+    // PowerShell also ends a single-quoted string at the typographic single
+    // quotes, so those are doubled too (same rule as chat/v2/handoff pwshQuote).
+    const q = `'${executable.replace(/['\u2018\u2019\u201a\u201b]/g, (c) => c + c)}'`;
     return isScript ? `node ${q}` : `& ${q}`;
   }
   const q = `'${executable.replace(/'/g, `'\\''`)}'`;

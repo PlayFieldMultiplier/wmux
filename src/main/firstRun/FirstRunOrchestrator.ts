@@ -38,6 +38,7 @@ import {
   type SetAgentPathResult,
 } from '../../shared/agentInstall';
 import { isExecutableFile } from '../claude/resolveClaudeExecutable';
+import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
 
 const MARKER_FILENAME = '.first-run';
 /** Paths the user typed in an agent card ("installed but not found"). */
@@ -196,7 +197,8 @@ export class FirstRunOrchestrator {
   }
 
   private async writeAgentPaths(paths: Partial<Record<AgentId, string>>): Promise<void> {
-    await fs.writeFile(this.agentPathsPath(), JSON.stringify(paths, null, 2), 'utf8');
+    // Atomic: a detect reading it mid-write must never see half a file.
+    await atomicWriteJSON(this.agentPathsPath(), paths);
   }
 
   async complete(): Promise<void> {
