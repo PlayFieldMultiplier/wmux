@@ -2957,7 +2957,9 @@ function prepareInstallQuit(): void {
   // The full before-quit teardown is skipped on this path — the agent Chrome
   // must not outlive the app across an update install.
   try {
-    chromeRegistry.disposeAll();
+    // Signals at once: the installer ends this process right after this
+    // returns, before a graceful Chrome quit could be waited on.
+    void chromeRegistry.disposeAll({ immediate: true });
     chromeSurfaceStore.flushSync();
     getActionCacheStore().flushSync();
   } catch (err) {
@@ -2978,6 +2980,8 @@ function prepareInstallQuit(): void {
 // reports the failure.
 async function abortInstallQuit(): Promise<void> {
   isQuitting = false;
+  // prepareInstallQuit stopped every agent Chrome and closed the registry.
+  chromeRegistry.reopen();
   // stop() latches, so start() alone would be a no-op — without resume() one
   // aborted install leaves MCP down for the rest of the session, silently.
   mcpBrokerSupervisor.resume();
@@ -3071,6 +3075,15 @@ app.on('before-quit', async (e) => {
   } catch (err) {
     console.error('[Main] before-quit computer-use dispose failed:', err);
   }
+
+  // The agent Chrome quits through Browser.close so a quit keeps the sign-ins
+  // Chrome holds only for the session. Started here and awaited just before
+  // app.quit(): its wait (one QUIT_GRACE_MS deadline shared by every profile,
+  // then the signal) runs alongside the session save and the daemon teardown
+  // below, so nothing waits behind a Chrome and it adds no time of its own.
+  const chromeStopped = chromeRegistry.disposeAll().catch((err) => {
+    console.error('[Main] before-quit step "chromeRegistry.disposeAll" threw — continuing:', err);
+  });
 
   // macOS 로그아웃/재시작/종료 대응(P4): win32의 'session-end' flushSync와 동등한
   // 동기 세션 flush. macOS는 WM_ENDSESSION 대신 Apple Event로 quit을 보내고
@@ -3280,7 +3293,8 @@ app.on('before-quit', async (e) => {
 
   safeStep('claudeWorker.stop', () => claudeWorker.stop());
   safeStep('webviewCdpManager.disposeAll', () => webviewCdpManager.disposeAll());
-  safeStep('chromeRegistry.disposeAll', () => chromeRegistry.disposeAll());
+  // Started at the top of this handler; long settled on a slow teardown.
+  await chromeStopped;
   safeStep('chromeSurfaceStore.flushSync', () => chromeSurfaceStore.flushSync());
   // Recorded browser flows are written on a debounce, so a quit inside that
   // window would drop the save the agent just made — the one it is most likely

@@ -90,7 +90,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await browser?.close().catch(() => undefined);
-  launcher?.dispose();
+  await launcher?.dispose();
   server?.close();
 });
 

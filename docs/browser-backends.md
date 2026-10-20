@@ -19,6 +19,10 @@ Settings → Browser picks one. It applies to every workspace.
 `external` is not a degraded mode. It is the right answer when a site is hostile
 to automation, and it is always available as an escape hatch.
 
+The `builtin` backend drops session cookies when wmux restarts, so a sign-in
+made without "stay signed in" lasts until then; use the `chrome` backend for
+those sign-ins.
+
 ## Which workspace a browser call acts on
 
 Every browser call acts on the workspace wmux verifies for the caller, not on a

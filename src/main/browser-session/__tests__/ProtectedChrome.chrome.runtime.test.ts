@@ -163,8 +163,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await rigA?.browser?.close().catch(() => undefined);
   await rigB?.browser?.close().catch(() => undefined);
-  rigA?.launcher.dispose();
-  rigB?.launcher.dispose();
+  await Promise.all([rigA?.launcher.dispose(), rigB?.launcher.dispose()]);
   server?.close();
 });
 

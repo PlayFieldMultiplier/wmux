@@ -42,6 +42,10 @@ import type { LiveTabOwner } from '../../shared/liveWriteScope';
 // DevToolsActivePort appearance + /json/version readiness poll.
 const READY_TIMEOUT_MS = 10_000;
 const READY_POLL_MS = 250;
+/** How long a Chrome asked to quit through Browser.close gets before a signal. */
+const QUIT_GRACE_MS = 3_000;
+/** How long a fresh launch waits for session restore to settle its tabs. */
+const RESTORE_SETTLE_MS = 2_000;
 /** How often a protected profile's download guard re-asserts deny. */
 const DOWNLOAD_DENY_REASSERT_MS = 250;
 /** Why a launch probe ended (main/browser-session/ChromeLauncher.ts verifyProxyRoute). */
@@ -126,7 +130,7 @@ export interface ChromeBackendClient {
   hasSurface(surfaceId: string): boolean;
   /** Live attach only: the agent-window write policy. Absent = dedicated. */
   readonly writeScope?: LiveWriteScopeApi;
-  dispose(): void;
+  dispose(): void | Promise<void>;
 }
 
 /** Candidate binary paths per platform, first match wins. */
@@ -257,6 +261,38 @@ function newSurfaceId(): string {
   return `chrome-${randomUUID()}`;
 }
 
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode != null || child.signalCode != null;
+}
+
+/** Resolves true once `child` exits, or false after `ms`. */
+function waitForExit(child: ChildProcess, ms: number): Promise<boolean> {
+  if (hasExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.off('exit', onExit);
+      resolve(false);
+    }, ms);
+    timer.unref?.();
+    child.once('exit', onExit);
+  });
+}
+
+/** A cleanup request's bound, cut short when `stop` fires. */
+function boundedBy(stop?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(RESTORE_SETTLE_MS);
+  return stop ? AbortSignal.any([stop, timeout]) : timeout;
+}
+
+/** The one tab a Chrome starts with when it restores nothing. */
+function isStartupTabUrl(url: string): boolean {
+  return url === 'about:blank' || /^[a-z]+:\/\/(newtab|new-tab-page(-third-party)?)\/?$/.test(url);
+}
+
 /** The slice of CDP's TargetInfo the watcher reads. */
 interface WatchedTargetInfo {
   targetId?: string;
@@ -314,6 +350,10 @@ export class ChromeLauncher implements ChromeBackendClient {
   private readonly extraArgs: string[];
   /** Whether the running instance was launched behind the proxy. */
   private launchedProtected = false;
+  /** False until a protected launch's download guard holds and the tabs
+   *  session restore brought back are closed: the proxy refuses every request
+   *  until then, so no restored page loads before enforcement is in place. */
+  private enforcementReady = false;
   private proxy: ProtectedProxy | null = null;
   /** Hosts the proxy refused since this Chrome launched or the policy last
    *  changed (#2063); the pane editor offers an Allow for each. */
@@ -727,7 +767,9 @@ export class ChromeLauncher implements ChromeBackendClient {
 
   /** Dedicated instances expose the HTTP CDP port (launching on demand). */
   async endpoint(): Promise<ChromeBackendEndpoint> {
-    return { cdpPort: await this.ensureRunning() };
+    const cdpPort = await this.ensureRunning();
+    this.assertOpen(); // a quit may land between ensureRunning's gate and here
+    return { cdpPort };
   }
 
   /** Registry-scoped tabs seed page selection for dedicated instances. */
@@ -752,10 +794,29 @@ export class ChromeLauncher implements ChromeBackendClient {
    * first calls share one launch. A dead child relaunches here on demand.
    */
   async ensureRunning(): Promise<number> {
+    this.assertOpen();
+    const port = await this.ensureRunningOnce();
+    // The endpoint gate: whatever the path awaited, a quit that began meanwhile
+    // wins over handing out its port.
+    this.assertOpen();
+    return port;
+  }
+
+  /**
+   * The shutdown gate. dispose() closes it for good; every async path that
+   * could start, adopt or hand out a Chrome passes it after its last await, so
+   * a call already in flight when the quit began cannot outlive it.
+   */
+  private assertOpen(): void {
     if (this.disposed) throw new Error('ChromeLauncher: disposed (app is quitting)');
+  }
+
+  private async ensureRunningOnce(): Promise<number> {
     const wanted = this.wantedProtection();
     if (!wanted && !this.launchedProtected) {
-      if (this.isRunning()) {
+      // A launch in flight has published its port before it is done (restored
+      // tabs are still being closed); callers join it rather than race it.
+      if (this.isRunning() && !this.launching) {
         // Cheap liveness check — the process object survives a crash until the
         // exit handler runs; /json/version is the truth.
         try {
@@ -797,7 +858,7 @@ export class ChromeLauncher implements ChromeBackendClient {
     // old terms; it is never handed out under the new ones.
     if (!!this.wantedProtection() !== this.launchedProtected) {
       await this.stopForProtectionChange();
-      return this.ensureRunning();
+      return this.ensureRunningOnce();
     }
     return port;
   }
@@ -846,6 +907,7 @@ export class ChromeLauncher implements ChromeBackendClient {
       this.cdpPort = port;
       try {
         await this.fetchJson('/json/version');
+        this.assertOpen();
         // No child handle for an adopted instance — dispose() can only close
         // tabs we open; the process outlives us like it outlived its spawner.
         this.child = null;
@@ -857,9 +919,11 @@ export class ChromeLauncher implements ChromeBackendClient {
         // outlived the swap.
         await this.restoreFromStore();
         await this.reviveByTabAnchor();
+        this.assertOpen();
         return port;
-      } catch {
+      } catch (err) {
         this.cdpPort = 0;
+        if (this.disposed) throw err;
       }
     }
     return null;
@@ -909,13 +973,15 @@ export class ChromeLauncher implements ChromeBackendClient {
   async stopForProtectionChange(): Promise<void> {
     const child = this.child;
     const port = this.cdpPort;
-    if (child) {
+    // Our own Chrome quits through Browser.close first, so the restart keeps
+    // what an ordinary quit keeps (closeGracefully); a signal is the fallback.
+    if (child && !(port > 0 && (await this.closeGracefully(port, child)))) {
       try {
         child.kill();
       } catch {
         /* already gone */
       }
-    } else if (port > 0) {
+    } else if (!child && port > 0) {
       await this.closeBrowserAt(port);
     }
     if (port > 0 && !(await this.waitEndpointGone(port)) && !(await this.forceKill(port, child))) {
@@ -978,15 +1044,140 @@ export class ChromeLauncher implements ChromeBackendClient {
     }
   }
 
-  private async closeBrowserAt(port: number): Promise<void> {
+  /** Ask the Chrome on `port` to quit. false when nothing there could be asked. */
+  private async closeBrowserAt(port: number, current: () => boolean = () => true): Promise<boolean> {
     try {
       const url = await this.browserWsUrlAt(port);
-      if (!url) return;
+      if (!url || !current()) return false;
       const socket = new CdpSocket(() => url, { label: 'ChromeLauncher evict', timeoutMs: 3_000 });
       await socket.send('Browser.close').catch(() => undefined);
       socket.close();
+      return true;
     } catch {
-      /* nothing answering there */
+      return false; // nothing answering there
+    }
+  }
+
+  /**
+   * Quit a Chrome wmux launched the way its own Quit does: CDP Browser.close.
+   * Chrome then shuts down in order, writing out its cookie store and
+   * recording a clean exit. A signal ends it as `SessionEnded` instead, and
+   * cookie writes still pending in memory are lost with it. Its tabs are
+   * closed first, so the session it saves restores nothing but a blank tab.
+   * True when the process exited by `deadline` (QUIT_GRACE_MS from now unless
+   * the caller shares one deadline across several Chromes).
+   */
+  private async closeGracefully(
+    port: number,
+    child: ChildProcess,
+    deadline = Date.now() + QUIT_GRACE_MS,
+  ): Promise<boolean> {
+    const exited = waitForExit(child, Math.max(0, deadline - Date.now()));
+    // Once the bound is up the port may already belong to a newer Chrome (a
+    // pinned port is reused): the rest of the ask is cancelled, in flight or not.
+    const expiry = new AbortController();
+    const stop = expiry.signal;
+    const ask = async () => {
+      try {
+        const list = await this.fetchJsonAt(port, '/json/list', 'GET', boundedBy(stop));
+        if (Array.isArray(list) && !stop.aborted) {
+          const { closed } = await this.closeToStartupTab(
+            port,
+            list as Array<{ id: string; url: string; type: string }>,
+            stop,
+          );
+          // `/json/close` only starts a close; a tab still closing when the
+          // quit lands stays in the saved session.
+          await this.waitTargetsGone(port, closed, stop);
+        }
+      } catch {
+        /* nothing listed; the quit itself still keeps the cookies */
+      }
+      return !stop.aborted && this.closeBrowserAt(port, () => !stop.aborted);
+    };
+    // The bound covers the ask too: a wedged endpoint must not hold a quit.
+    const asked = await Promise.race([ask(), exited]);
+    expiry.abort();
+    return asked ? exited : hasExited(child);
+  }
+
+  /**
+   * `--restore-last-session` brings the previous session's tabs back with its
+   * cookies. wmux's own quits leave only a blank tab to restore
+   * (closeGracefully), but a Chrome closed any other way leaves its pages. A
+   * real launch has just dropped every record, so those tabs belong to no
+   * surface and no agent could see or close them: close them before any
+   * surface opens, keeping the single startup tab a launch without restore
+   * shows (closing a window's last tab quits Chrome on Windows and Linux).
+   * Restore can finish after the endpoint first answers, so the list is read
+   * until it holds still.
+   */
+  private async closeRestoredTabs(): Promise<boolean> {
+    const deadline = Date.now() + RESTORE_SETTLE_MS;
+    let pages: Array<{ id: string; url: string }> = [];
+    let previous = '';
+    for (;;) {
+      try {
+        const list = await this.fetchJson('/json/list', 'GET', AbortSignal.timeout(RESTORE_SETTLE_MS));
+        if (!Array.isArray(list)) return false;
+        pages = (list as Array<{ id: string; url: string; type: string }>).filter((t) => t.type === 'page');
+      } catch {
+        return false; // no list: what is open is unknown
+      }
+      const ids = pages.map((p) => p.id).sort().join(',');
+      if ((pages.length > 0 && ids === previous) || Date.now() > deadline) break;
+      previous = ids;
+      await new Promise((r) => setTimeout(r, READY_POLL_MS));
+    }
+    const port = this.cdpPort;
+    const { closed, complete } = await this.closeToStartupTab(port, pages);
+    return complete && (await this.waitTargetsGone(port, closed));
+  }
+
+  /**
+   * Close every page but a startup tab. A blank tab is opened first when
+   * nothing else would be left; without one, a page stays rather than the
+   * close quitting Chrome. Each request has its own bound, so a wedged
+   * endpoint cannot hold a launch or a quit.
+   */
+  private async closeToStartupTab(
+    port: number,
+    targets: Array<{ id: string; url: string; type?: string }>,
+    stop?: AbortSignal,
+  ): Promise<{ closed: string[]; complete: boolean }> {
+    const pages = targets.filter((t) => t.type === undefined || t.type === 'page');
+    const others = pages.filter((p) => !isStartupTabUrl(p.url));
+    if (others.length === 0) return { closed: [], complete: true };
+    const keptOpen =
+      others.length < pages.length ||
+      (await this.fetchJsonAt(port, '/json/new', 'PUT', boundedBy(stop)).then(
+        (t) => typeof (t as { id?: unknown } | null)?.id === 'string',
+        () => false,
+      ));
+    if (stop?.aborted) return { closed: [], complete: false };
+    const closing = keptOpen ? others : others.slice(1);
+    await Promise.all(
+      closing.map((p) => this.fetchJsonAt(port, `/json/close/${p.id}`, 'GET', boundedBy(stop)).catch(() => undefined)),
+    );
+    return { closed: closing.map((p) => p.id), complete: keptOpen };
+  }
+
+  /** Wait (bounded) until none of `ids` is listed any more; false if one still is. */
+  private async waitTargetsGone(port: number, ids: string[], stop?: AbortSignal): Promise<boolean> {
+    const deadline = Date.now() + RESTORE_SETTLE_MS;
+    for (;;) {
+      if (ids.length === 0) return true;
+      if (stop?.aborted) return false;
+      try {
+        const list = await this.fetchJsonAt(port, '/json/list', 'GET', boundedBy(stop));
+        if (Array.isArray(list) && !list.some((t: { id?: string }) => t.id !== undefined && ids.includes(t.id))) {
+          return true;
+        }
+      } catch {
+        /* unanswered: not confirmed */
+      }
+      if (Date.now() > deadline) return false;
+      await new Promise((r) => setTimeout(r, 50));
     }
   }
 
@@ -1023,21 +1214,35 @@ export class ChromeLauncher implements ChromeBackendClient {
   }
 
   private async ensureProxy(plan: ChromeProtectionPlan): Promise<number> {
+    this.assertOpen();
     if (!this.proxy) {
       // The proxy reads the CURRENT plan per request, so a policy edit applies
       // on the next request without a restart.
+      const denyAll = { matcher: () => ({ allows: () => false }) };
       this.proxy = new ProtectedProxy({
-        matcher: () => (this.wantedProtection() ?? { matcher: () => ({ allows: () => false }) }).matcher(),
+        matcher: () => ((this.enforcementReady && this.wantedProtection()) || denyAll).matcher(),
         ...(plan.resolve && { resolve: plan.resolve }),
         ...(plan.onDecision && { onDecision: plan.onDecision }),
-        onBlocked: (host, port) => this.blocked.record(host, port),
+        // A refusal before enforcement is ready says nothing about the policy.
+        onBlocked: (host, port) => {
+          if (this.enforcementReady) this.blocked.record(host, port);
+        },
       });
     }
+    const proxy = this.proxy;
+    let port: number;
     try {
-      return await this.proxy.start();
+      port = await proxy.start();
     } catch {
       throw new Error(PROTECTION_NOT_READY);
     }
+    if (this.disposed) {
+      // dispose() closed it before it was listening; close what start opened.
+      proxy.close();
+      if (this.proxy === proxy) this.proxy = null;
+      this.assertOpen();
+    }
+    return port;
   }
 
   /**
@@ -1229,6 +1434,7 @@ export class ChromeLauncher implements ChromeBackendClient {
   }
 
   private async launch(): Promise<number> {
+    this.assertOpen();
     const plan = this.wantedProtection();
     // A fresh Chrome starts with a fresh list: what the last one was refused
     // is not what this one will ask for.
@@ -1260,6 +1466,10 @@ export class ChromeLauncher implements ChromeBackendClient {
 
     if (this.profileLabel) seedChromeProfileLabel(this.userDataDir, this.profileLabel);
 
+    const protectedArgs = plan ? protectedChromeArgs(await this.ensureProxy(plan)) : [];
+    // After the last await before the spawn (adoption, eviction, the proxy):
+    // a Chrome started now would be one dispose() never saw.
+    this.assertOpen();
     const child = spawn(
       binary,
       [
@@ -1272,7 +1482,13 @@ export class ChromeLauncher implements ChromeBackendClient {
         '--disable-blink-features=AutomationControlled',
         '--no-first-run',
         '--no-default-browser-check',
-        ...(plan ? protectedChromeArgs(await this.ensureProxy(plan)) : []),
+        // Chrome drops cookies without an expiry (sign-ins without "stay signed
+        // in") on every start that neither restores the last session nor
+        // follows a crash. The flag is the startup choice "continue where you
+        // left off", passed per launch rather than written into Preferences.
+        // The tabs it brings back are closed below (closeRestoredTabs).
+        '--restore-last-session',
+        ...protectedArgs,
         ...this.extraArgs,
       ],
       { stdio: 'ignore' },
@@ -1314,12 +1530,16 @@ export class ChromeLauncher implements ChromeBackendClient {
           this.byTargetId.clear();
           this.byTabTargetId.clear();
           void this.surfaceStore?.dropProfile(this.profileName).catch(() => undefined);
+          if (!plan) await this.closeRestoredTabs();
           if (plan) {
             // Enforcement readiness is part of the launch: no protected
             // surface is handed out before the download guard holds.
             this.launchedProtected = true;
             try {
               await this.armDownloadGuard();
+              // Traffic opens only once no restored page is left to use it.
+              if (!(await this.closeRestoredTabs())) throw new Error(PROTECTION_NOT_READY);
+              this.enforcementReady = true;
               // Its own bound from now: a slow start must not eat the probe's turn.
               await this.verifyProxyRoute(Date.now() + READY_TIMEOUT_MS);
             } catch (err) {
@@ -1354,6 +1574,7 @@ export class ChromeLauncher implements ChromeBackendClient {
     this.child = null;
     this.cdpPort = 0;
     this.launchedProtected = false;
+    this.enforcementReady = false;
     this.downloadGuard?.close();
     this.downloadGuard = null;
     this.dropConsentClaims();
@@ -1516,24 +1737,33 @@ export class ChromeLauncher implements ChromeBackendClient {
     return true;
   }
 
-  /** Kill the child. Terminal: later demands throw (app teardown only). */
-  dispose(): void {
+  /**
+   * Quit the child through Browser.close (closeGracefully), with a signal as
+   * the fallback. `immediate` signals at once, for a quit that cannot wait.
+   * Terminal: later demands throw (app teardown only).
+   */
+  async dispose(opts?: { immediate?: boolean; deadline?: number }): Promise<void> {
     this.disposed = true;
     const child = this.child;
+    const port = this.cdpPort;
     this.onChildGone();
     this.proxy?.close();
     this.proxy = null;
-    if (child) {
-      try {
-        child.kill();
-      } catch {
-        /* already gone */
-      }
+    if (!child) return;
+    if (!opts?.immediate && port > 0 && (await this.closeGracefully(port, child, opts?.deadline))) return;
+    try {
+      child.kill();
+    } catch {
+      /* already gone */
     }
   }
 
-  private async fetchJson(path: string, method: 'GET' | 'PUT' = 'GET'): Promise<unknown> {
-    const res = await fetch(`http://127.0.0.1:${this.cdpPort}${path}`, { method });
+  private fetchJson(path: string, method: 'GET' | 'PUT' = 'GET', signal?: AbortSignal): Promise<unknown> {
+    return this.fetchJsonAt(this.cdpPort, path, method, signal);
+  }
+
+  private async fetchJsonAt(port: number, path: string, method: 'GET' | 'PUT', signal?: AbortSignal): Promise<unknown> {
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, { method, ...(signal && { signal }) });
     if (!res.ok) throw new Error(`ChromeLauncher: ${path} → HTTP ${res.status}`);
     const text = await res.text();
     try {
@@ -1562,6 +1792,8 @@ import { LiveChromeClient, isLiveChromeReachable } from './LiveChromeClient';
 export class ChromeLauncherRegistry {
   private readonly launchers = new Map<string, ChromeBackendClient>();
   private live: LiveChromeClient | null = null;
+  /** Set by disposeAll: the app is quitting. Cleared by reopen(). */
+  private disposed = false;
 
   constructor(
     private readonly opts: {
@@ -1622,11 +1854,16 @@ export class ChromeLauncherRegistry {
         // account-profile it is) is identifiable at a glance.
         profileLabel: `wmux · ${name}`,
         profileName: name,
-        ...(this.opts.surfaceStore && { surfaceStore: this.opts.surfaceStore }),
+        // One asked for during the quit owns no records: its own teardown
+        // must not overwrite the profile's persisted ones.
+        ...(this.opts.surfaceStore && !this.disposed && { surfaceStore: this.opts.surfaceStore }),
         ...(this.opts.protection && { protection: () => this.opts.protection?.(name) ?? null }),
       },
     );
-    this.launchers.set(name, launcher);
+    // Asked while the app quits: a launcher outside disposeAll's snapshot
+    // would start a Chrome nothing stops, so it is born disposed instead.
+    if (this.disposed) void launcher.dispose();
+    else this.launchers.set(name, launcher);
     return launcher;
   }
 
@@ -1763,11 +2000,29 @@ export class ChromeLauncherRegistry {
     this.live?.writeScope.clearBorrows(workspaceId);
   }
 
-  disposeAll(): void {
-    for (const launcher of this.launchers.values()) launcher.dispose();
+  /** An install quit was called off (abortInstallQuit): profiles may launch again. */
+  reopen(): void {
+    this.disposed = false;
+  }
+
+  /**
+   * Quit every launched Chrome; `immediate` as in ChromeLauncher.dispose. The
+   * Chromes stop in parallel against one deadline, QUIT_GRACE_MS from now:
+   * whichever is still running when it passes gets the signal, so the whole
+   * call resolves within that bound however many profiles are open.
+   */
+  async disposeAll(opts?: { immediate?: boolean }): Promise<void> {
+    // Closed for an immediate (install) quit too; reopen() undoes it if the
+    // install is called off.
+    this.disposed = true;
+    const deadline = Date.now() + QUIT_GRACE_MS;
+    const stopping = [...this.launchers.values()].map((launcher) =>
+      launcher instanceof ChromeLauncher ? launcher.dispose({ ...opts, deadline }) : launcher.dispose(),
+    );
     this.launchers.clear();
     // Socket close only — never touches the user's Chrome process.
     this.live?.dispose();
     this.live = null;
+    await Promise.all(stopping);
   }
 }

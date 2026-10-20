@@ -181,6 +181,15 @@ let fetchMock: ReturnType<typeof vi.fn>;
 let listedPages: string[] = [];
 /** What the next PUT /json/new answers with. */
 let nextCreatedPage = 'page-1';
+/** PUT /json/new calls so far: a freshly spawned Chrome lists only its
+ *  startup tab until wmux opens one. */
+let opened = 0;
+const STARTUP_TAB = { id: 'startup', url: 'chrome://newtab/', title: 'New Tab', type: 'page' };
+
+function listed(): unknown[] {
+  if (spawnMock.mock.calls.length > 0 && opened === 0) return [STARTUP_TAB];
+  return listedPages.map((id) => ({ id, url: `https://${id}.test/`, title: id.toUpperCase(), type: 'page' }));
+}
 
 function fetchOk(body: unknown) {
   return { ok: true, text: async () => JSON.stringify(body) };
@@ -190,12 +199,11 @@ function serveChrome(): void {
   fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
     const s = String(url);
     if (s.includes('/json/version')) return fetchOk({ Browser: 'Chrome/151', webSocketDebuggerUrl: WS_URL });
-    if (init?.method === 'PUT') return fetchOk({ id: nextCreatedPage, url: 'https://opened.test/' });
-    if (s.includes('/json/list')) {
-      return fetchOk(
-        listedPages.map((id) => ({ id, url: `https://${id}.test/`, title: id.toUpperCase(), type: 'page' })),
-      );
+    if (init?.method === 'PUT') {
+      opened++;
+      return fetchOk({ id: nextCreatedPage, url: 'https://opened.test/' });
     }
+    if (s.includes('/json/list')) return fetchOk(listed());
     return fetchOk({});
   });
 }
@@ -219,6 +227,7 @@ beforeEach(() => {
   sessions.clear();
   listedPages = [];
   nextCreatedPage = 'page-1';
+  opened = 0;
   FakeBrowserWs.instances = [];
   FakeBrowserWs.failConnect = false;
   fetchMock = vi.fn();
@@ -351,19 +360,17 @@ describe('ChromeLauncher tab-target watcher', () => {
         }
         return fetchOk({ Browser: 'Chrome/151', webSocketDebuggerUrl: WS_URL });
       }
-      if (init?.method === 'PUT') return fetchOk({ id: nextCreatedPage, url: 'https://opened.test/' });
-      if (s.includes('/json/list')) {
-        return fetchOk(
-          listedPages.map((id) => ({ id, url: `https://${id}.test/`, title: id.toUpperCase(), type: 'page' })),
-        );
+      if (init?.method === 'PUT') {
+        opened++;
+        return fetchOk({ id: nextCreatedPage, url: 'https://opened.test/' });
       }
+      if (s.includes('/json/list')) return fetchOk(listed());
       return fetchOk({});
     });
 
     const launcher = new ChromeLauncher('/tmp/watch-6', { profileName: 'p1' });
     const opening = launcher.openTab('https://a.test/', 'ws-1');
-    await tick();
-    expect(failWatcherVersion).not.toBeNull();
+    await vi.waitFor(() => expect(failWatcherVersion).not.toBeNull(), { timeout: 5_000 });
 
     child.emit('exit'); // onChildGone lands while the startup is still in flight
     (failWatcherVersion as unknown as () => void)();

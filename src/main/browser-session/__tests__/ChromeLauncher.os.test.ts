@@ -101,6 +101,96 @@ describe('ChromeLauncher', () => {
     // Without this switch the debugging port alone makes every page report
     // `navigator.webdriver === true` (measured on Chrome 152).
     expect(args).toContain('--disable-blink-features=AutomationControlled');
+    // Without it Chrome drops cookies that carry no expiry on every restart.
+    expect(args).toContain('--restore-last-session');
+  });
+
+  it('a real launch closes the tabs session restore brought back, keeping one blank tab', async () => {
+    const restored = [
+      { id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' },
+      { id: 'old-2', url: 'https://b.test/', title: 'B', type: 'page' },
+    ];
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'PUT') return fetchOk({ id: 'blank', url: 'about:blank' });
+      return fetchOk(String(url).endsWith('/json/list') ? restored : {});
+    });
+    spawnWritesPortFile(makeChild());
+
+    const launcher = new ChromeLauncher('/tmp/restored-prof');
+    await launcher.ensureRunning();
+
+    const calls = fetchMock.mock.calls.map(([u, init]) => `${(init as { method?: string } | undefined)?.method ?? 'GET'} ${new URL(String(u)).pathname}`);
+    // The blank tab comes first: closing a window's last tab would quit Chrome.
+    const blank = calls.indexOf('PUT /json/new');
+    expect(blank).toBeGreaterThan(-1);
+    expect(calls.slice(blank)).toEqual(expect.arrayContaining(['GET /json/close/old-1', 'GET /json/close/old-2']));
+    expect(calls.indexOf('GET /json/close/old-1')).toBeGreaterThan(blank);
+  });
+
+  it('keeps one restored tab when no blank tab could be opened, so Chrome is not quit', async () => {
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'PUT') return { ok: false, status: 500, text: async () => '' };
+      return fetchOk(
+        String(url).endsWith('/json/list')
+          ? [
+              { id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' },
+              { id: 'old-2', url: 'https://b.test/', title: 'B', type: 'page' },
+            ]
+          : {},
+      );
+    });
+    spawnWritesPortFile(makeChild());
+
+    await new ChromeLauncher('/tmp/restored-prof-3').ensureRunning();
+
+    const closed = fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/json/close/'));
+    expect(closed).toHaveLength(1);
+  });
+
+  it('a caller arriving while restored tabs are being closed waits for the launch', async () => {
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'PUT') return fetchOk({ id: 'mine', url: 'https://x.test/' });
+      return fetchOk(
+        String(url).endsWith('/json/list')
+          ? [
+              { id: 'ntp', url: 'chrome://newtab/', title: 'New Tab', type: 'page' },
+              { id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' },
+            ]
+          : {},
+      );
+    });
+    spawnWritesPortFile(makeChild());
+    const launcher = new ChromeLauncher('/tmp/restored-prof-4');
+    const launching = launcher.ensureRunning();
+    // The port is published before the cleanup is done.
+    await vi.waitFor(() => expect(launcher.currentPort()).not.toBeNull(), { timeout: 5_000 });
+    await launcher.openTab('https://x.test/', 'ws-1');
+    await launching;
+
+    const calls = fetchMock.mock.calls.map(([u, init]) => `${(init as { method?: string } | undefined)?.method ?? 'GET'} ${new URL(String(u)).pathname}`);
+    expect(calls.indexOf('GET /json/close/old-1')).toBeGreaterThan(-1);
+    expect(calls.indexOf('GET /json/close/old-1')).toBeLessThan(calls.indexOf('PUT /json/new'));
+  });
+
+  it('a startup tab is left alone, and no blank tab is added beside it', async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      fetchOk(
+        String(url).endsWith('/json/list')
+          ? [
+              { id: 'ntp', url: 'chrome://newtab/', title: 'New Tab', type: 'page' },
+              { id: 'old-1', url: 'https://a.test/', title: 'A', type: 'page' },
+            ]
+          : {},
+      ),
+    );
+    spawnWritesPortFile(makeChild());
+
+    await new ChromeLauncher('/tmp/restored-prof-2').ensureRunning();
+
+    const urls = fetchMock.mock.calls.map(([u]) => String(u));
+    expect(urls.some((u) => u.endsWith('/json/close/old-1'))).toBe(true);
+    expect(urls.some((u) => u.endsWith('/json/close/ntp'))).toBe(false);
+    expect(fetchMock.mock.calls.some(([, init]) => (init as { method?: string } | undefined)?.method === 'PUT')).toBe(false);
   });
 
   it('a stale DevToolsActivePort (dead previous instance) is neither adopted nor mistaken for the fresh write', async () => {
@@ -184,10 +274,38 @@ describe('ChromeLauncher', () => {
 
     const launcher = new ChromeLauncher('/tmp/profile');
     await launcher.ensureRunning();
-    launcher.dispose();
+    await launcher.dispose();
 
     expect(child.kill).toHaveBeenCalled();
     await expect(launcher.ensureRunning()).rejects.toThrow('disposed');
+  });
+
+  it('a graceful dispose closes the pages first, so the session Chrome saves restores none', async () => {
+    let listed = [{ id: 'ntp', url: 'chrome://newtab/', title: 'New Tab', type: 'page' }];
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      const u = String(url);
+      if (init?.method === 'PUT') {
+        listed = [...listed, { id: 'agent-1', url: 'https://a.test/', title: 'A', type: 'page' }];
+        return fetchOk({ id: 'agent-1', url: 'https://a.test/' });
+      }
+      if (u.includes('/json/close/')) {
+        const id = u.split('/json/close/')[1];
+        listed = listed.filter((t) => t.id !== id);
+        return fetchOk('Target is closing');
+      }
+      return fetchOk(u.endsWith('/json/list') ? listed : {});
+    });
+    const child = makeChild();
+    spawnWritesPortFile(child);
+    const launcher = new ChromeLauncher('/tmp/profile-pre-close');
+    await launcher.openTab('https://a.test/', 'ws-1');
+
+    await launcher.dispose();
+
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/json/close/agent-1'))).toBe(true);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/json/close/ntp'))).toBe(false);
+    expect(listed.map((t) => t.id)).toEqual(['ntp']);
+    expect(child.kill).toHaveBeenCalled(); // no browser socket in this fake: the signal fallback
   });
 
   it('an env-pinned port launches with that fixed port (no DevToolsActivePort involved)', async () => {
@@ -289,9 +407,81 @@ describe('ChromeLauncherRegistry', () => {
     // A raw CDP target id is not a surface handle.
     expect(registry.ownerOfSurface('tgt-a')).toBeNull();
 
-    registry.disposeAll();
+    await registry.disposeAll();
     expect(childA.kill).toHaveBeenCalled();
     expect(childB.kill).toHaveBeenCalled();
+  });
+
+  it('a profile asked for while the registry quits gets a launcher that never starts Chrome', async () => {
+    const surfaceStore = { listForProfile: vi.fn(() => []), save: vi.fn(), saveNow: vi.fn(async () => undefined), dropProfile: vi.fn(async () => undefined), flushSync: vi.fn() };
+    const registry = new ChromeLauncherRegistry({
+      defaultDir: '/tmp/default-prof',
+      profilesDir: '/tmp/profiles',
+      store: makeStore({}),
+      surfaceStore: surfaceStore as never,
+    });
+    const stopping = registry.disposeAll();
+    const late = registry.forProfile('late');
+    await expect(late.endpoint()).rejects.toThrow('disposed');
+    await stopping;
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(registry.peekLauncher('late')).toBeUndefined();
+    // Its teardown leaves the profile's persisted records (an adopted Chrome
+    // may still hold their tabs) untouched.
+    expect(surfaceStore.save).not.toHaveBeenCalled();
+    expect(surfaceStore.saveNow).not.toHaveBeenCalled();
+  });
+
+  it('a demand already awaiting its liveness check when the app quits starts no new Chrome', async () => {
+    const child = makeChild();
+    const port = spawnWritesPortFile(child);
+    let failLiveness: (() => void) | null = null;
+    let launched = false;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (launched && !failLiveness && String(url).includes(`:${port}/json/version`)) {
+        return new Promise((_resolve, reject) => {
+          failLiveness = () => reject(new Error('gone'));
+        });
+      }
+      return fetchOk({});
+    });
+    const registry = new ChromeLauncherRegistry({
+      defaultDir: '/tmp/default-prof',
+      profilesDir: '/tmp/profiles',
+      store: makeStore({}),
+    });
+    const launcher = registry.forProfile('racing');
+    await launcher.endpoint();
+    launched = true;
+    const pending = launcher.endpoint(); // parked on the liveness fetch
+    await vi.waitFor(() => expect(failLiveness).not.toBeNull(), { timeout: 5_000 });
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const stopping = registry.disposeAll();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopping;
+    vi.useRealTimers();
+    spawnWritesPortFile(makeChild());
+    (failLiveness as unknown as () => void)();
+    await expect(pending).rejects.toThrow('disposed');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('an install quit closes the registry until it is called off', async () => {
+    const registry = new ChromeLauncherRegistry({
+      defaultDir: '/tmp/default-prof',
+      profilesDir: '/tmp/profiles',
+      store: makeStore({}),
+    });
+    void registry.disposeAll({ immediate: true });
+    // A lookup during the install quit (e.g. a consent request) stays outside it.
+    const late = registry.forProfile('during-install');
+    await expect(late.endpoint()).rejects.toThrow('disposed');
+    expect(registry.peekLauncher('during-install')).toBeUndefined();
+    // The install was called off: profiles launch again.
+    registry.reopen();
+    const again = registry.forProfile('during-install');
+    expect(again).not.toBe(late);
+    expect(registry.peekLauncher('during-install')).toBe(again);
   });
 
   it('revealNewest activates the newest tab of a running pane profile and never launches one', async () => {
@@ -301,6 +491,8 @@ describe('ChromeLauncherRegistry', () => {
     fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
       if (init?.method === 'PUT') return fetchOk({ id: `tgt-${++n}`, url: 'https://x.test/' });
       if (String(url).endsWith('/json/list')) {
+        // A fresh Chrome lists only its startup tab until wmux opens one.
+        if (n === 0) return fetchOk([{ id: 'startup', url: 'chrome://newtab/', title: 'New Tab', type: 'page' }]);
         return fetchOk([
           { id: 'tgt-1', url: 'https://x.test/', title: 'one', type: 'page' },
           { id: 'tgt-2', url: 'https://x.test/', title: 'two', type: 'page' },
@@ -398,6 +590,41 @@ describe('ChromeLauncherRegistry', () => {
 // Crash-path adoption: a previous session's Chrome still holds the profile
 // dir — reuse its recorded endpoint instead of dying on the SingletonLock.
 describe('ChromeLauncher zombie adoption', () => {
+  it('a quit landing after ensureRunning resolved still keeps endpoint() from answering', async () => {
+    state.portFiles['/tmp/adopt-quit-2'] = '18936\n/devtools/browser/x\n';
+    fetchMock.mockResolvedValue(fetchOk({}));
+    const launcher = new ChromeLauncher('/tmp/adopt-quit-2');
+    const inner = launcher.ensureRunning.bind(launcher);
+    // Dispose right after ensureRunning's own gate passed, before endpoint() resumes.
+    vi.spyOn(launcher, 'ensureRunning').mockImplementation(async () => {
+      const port = await inner();
+      void launcher.dispose();
+      return port;
+    });
+    await expect(launcher.endpoint()).rejects.toThrow('disposed');
+  });
+
+  it('an adoption still probing when the app quits hands out no endpoint', async () => {
+    state.portFiles['/tmp/adopt-quit'] = '18935\n/devtools/browser/x\n';
+    let answer: (() => void) | null = null;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (!answer && String(url).includes(':18935/json/version')) {
+        await new Promise<void>((r) => {
+          answer = r;
+        });
+      }
+      return fetchOk({});
+    });
+    const launcher = new ChromeLauncher('/tmp/adopt-quit');
+    const pending = launcher.endpoint();
+    await vi.waitFor(() => expect(answer).not.toBeNull(), { timeout: 5_000 });
+    await launcher.dispose();
+    (answer as unknown as () => void)();
+    await expect(pending).rejects.toThrow('disposed');
+    expect(launcher.currentPort()).toBeNull();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('adopts an existing instance when DevToolsActivePort answers, without spawning', async () => {
     state.portFiles['/tmp/adopt-prof'] = '18933\n/devtools/browser/x\n';
     fetchMock.mockResolvedValue(fetchOk({ Browser: 'Chrome/151' }));
@@ -407,5 +634,17 @@ describe('ChromeLauncher zombie adoption', () => {
 
     expect(port).toBe(18933);
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('never closes the tabs of an adopted instance: they are the ones its records re-bind to', async () => {
+    state.portFiles['/tmp/adopt-prof-2'] = '18934\n/devtools/browser/x\n';
+    fetchMock.mockImplementation(async (url: string) =>
+      fetchOk(String(url).endsWith('/json/list') ? [{ id: 'live-1', url: 'https://a.test/', title: 'A', type: 'page' }] : {}),
+    );
+
+    await new ChromeLauncher('/tmp/adopt-prof-2').ensureRunning();
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/json/close/'))).toBe(false);
   });
 });

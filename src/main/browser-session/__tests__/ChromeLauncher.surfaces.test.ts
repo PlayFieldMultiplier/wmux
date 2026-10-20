@@ -87,12 +87,17 @@ function spawnWritesPortFile(child: FakeChild): number {
   return port;
 }
 
+/** The one tab a freshly spawned Chrome lists before wmux opens any. */
+const STARTUP_TAB = { id: 'startup', url: 'chrome://newtab/', title: 'New Tab', type: 'page' };
+
 /** fetch double whose /json/list contents the test controls. */
 function serveTabs(getList: () => Array<{ id: string; url: string; title: string; type: string }>) {
   let created = 0;
   fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
     if (init?.method === 'PUT') return fetchOk({ id: `tgt-${++created}`, url: 'x' });
-    if (String(url).includes('/json/list')) return fetchOk(getList());
+    if (String(url).includes('/json/list')) {
+      return fetchOk(spawnMock.mock.calls.length > 0 && created === 0 ? [STARTUP_TAB] : getList());
+    }
     return fetchOk({});
   });
 }
@@ -157,13 +162,13 @@ describe('ChromeLauncher stable surface ids', () => {
   });
 
   it('a record missing past the orphan TTL is finally forgotten', async () => {
-    vi.useFakeTimers();
     spawnWritesPortFile(makeChild());
     let visible = true;
     serveTabs(() => (visible ? [pageTarget('tgt-1')] : []));
 
     const launcher = new ChromeLauncher('/tmp/sfc-3');
     const opened = await launcher.openTab('https://a.test/', 'ws-1');
+    vi.useFakeTimers();
     await launcher.listTargets('ws-1');
 
     visible = false;
@@ -262,13 +267,17 @@ describe('ChromeLauncher stable surface ids', () => {
   it('closeSurface closes by surfaceId (never the raw targetId) and drops the record', async () => {
     spawnWritesPortFile(makeChild());
     const closed: string[] = [];
+    let tabOpened = false;
     fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
-      if (init?.method === 'PUT') return fetchOk({ id: 'tgt-1', url: 'x' });
+      if (init?.method === 'PUT') {
+        tabOpened = true;
+        return fetchOk({ id: 'tgt-1', url: 'x' });
+      }
       if (String(url).includes('/json/close/')) {
         closed.push(String(url).split('/json/close/')[1] ?? '');
         return fetchOk('Target is closing');
       }
-      if (String(url).includes('/json/list')) return fetchOk([pageTarget('tgt-1')]);
+      if (String(url).includes('/json/list')) return fetchOk(tabOpened ? [pageTarget('tgt-1')] : [STARTUP_TAB]);
       return fetchOk({});
     });
     const store = makeFakeStore();
