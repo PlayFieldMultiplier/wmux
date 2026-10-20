@@ -100,6 +100,9 @@ import { routineScheduleText, routineStateText, useBotRoutines } from '../Schedu
 import { buildTimeline, clockTime, elapsed, fullTime, hasKindWord, liveNewAfter, separatorLabel, splitThreads, threadCards, type ThreadView, type TimelineItem } from './botsTimeline';
 import { conversationStartedThreads, workView } from './botsWork';
 import BotsWorkCard from './BotsWorkCard';
+import BotsWorkflowCard from './BotsWorkflowCard';
+import { withWorkflows, type WorkflowTimelineItem } from './botsWorkflow';
+import { useConversationWorkflows } from './useBotWorkflows';
 import '../Chat/chatMono.css';
 
 const EMPTY_TREE: readonly BotTreeRow[] = [];
@@ -663,7 +666,27 @@ function DayDivider({ at, ctx }: { at: number; ctx: RowCtx }) {
 }
 
 /** A timeline's rows. */
-function TimelineView({ items, ctx, group = false }: { items: readonly TimelineItem[]; ctx: RowCtx; group?: boolean }) {
+/** A bot's saved workflow as one card at the time it was saved, its bot's
+ *  avatar beside it and, in a group, its name above (botsWorkflow.ts). */
+function WorkflowRow({ item, ctx, group, onCancel }: { item: Extract<WorkflowTimelineItem, { kind: 'workflow' }>; ctx: RowCtx; group: boolean; onCancel?: React.ComponentProps<typeof BotsWorkflowCard>['onCancel'] }) {
+  const { workflow } = item;
+  const face = botFace(workflow.botId, ctx);
+  return (
+    <div className="wmux-bots-msg" data-bots-bubble="workflow" data-run-end="true">
+      <div className="wmux-bots-msg-gutter">{face ? <BotAvatar bot={face} size={28} /> : null}</div>
+      <div className="wmux-bots-msg-main">
+        {group && (
+          <div className="wmux-bots-msg-head" data-bots-msg-head>
+            <span className="truncate" style={botNameStyle(workflow.botId)}>{actorLabel({ kind: 'bot', workspaceId: workflow.workspaceId, botId: workflow.botId }, ctx.t, ctx.bots, ctx.actors)}</span>
+          </div>
+        )}
+        <BotsWorkflowCard workflow={workflow} t={ctx.t} onCancel={ctx.readOnly ? undefined : onCancel} />
+      </div>
+    </div>
+  );
+}
+
+function TimelineView({ items, ctx, group = false, onCancelWorkflow }: { items: readonly WorkflowTimelineItem[]; ctx: RowCtx; group?: boolean; onCancelWorkflow?: React.ComponentProps<typeof BotsWorkflowCard>['onCancel'] }) {
   return (
     <>
       {items.map((item) => {
@@ -673,6 +696,7 @@ function TimelineView({ items, ctx, group = false }: { items: readonly TimelineI
           case 'system': return <SystemGroup key={item.key} cards={item.cards} thread={item.thread} ctx={ctx} />;
           case 'message': return <MessageRow key={item.key} item={item} ctx={ctx} group={group} />;
           case 'work': return <WorkRow key={item.key} item={item} ctx={ctx} group={group} />;
+          case 'workflow': return <WorkflowRow key={item.key} item={item} ctx={ctx} group={group} onCancel={onCancelWorkflow} />;
         }
       })}
     </>
@@ -2197,6 +2221,8 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     const entries: RoomEntry[] = main.map((card) => ({ kind: 'card' as const, card }));
     return buildTimeline(entries, { waits, threads, surfaced, newAfter, work, ...(workAuthor ? { workAuthor } : coordinators ? { workCandidates: coordinators } : {}) });
   }, [main, threads, surfaced, waits, newAfter, work, workAuthor, coordinators]);
+  const flows = useConversationWorkflows(conversation, cards);
+  const shownItems = useMemo(() => withWorkflows(items, flows.workflows), [items, flows.workflows]);
   const botNames = useMemo(() => bots.map((b) => b.bot.name), [bots]);
   const taskTitle = useMemo(() => {
     const byId = new Map<string, string>();
@@ -2247,6 +2273,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       const at = Date.now();
       setNewAfter((cur) => liveNewAfter(cards, cur, before, visible, at));
     }
+    // A workflow card read in later (flows.workflows) is pinned the same way.
     const el = scrollRef.current;
     if (el && atBottom.current) {
       // A hidden window draws no frames, and Blink keeps a scroll event (with
@@ -2254,7 +2281,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       if (document.visibilityState !== 'hidden') el.scrollTop = el.scrollHeight;
     } else if (added > 0) setNewCount((n) => n + added);
     markSeen();
-  }, [lastId, workers.length, markSeen, cards, inView]);
+  }, [lastId, workers.length, markSeen, cards, inView, flows.workflows]);
   useEffect(() => {
     const onVisible = () => {
       const el = scrollRef.current;
@@ -2453,7 +2480,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     if (openThread) void loadWholeThread(openThread.workspaceId, openThread.threadId);
   }, [openThread]);
   const threadShown = openThread ? threadCards(roomCards, openThread.workspaceId, openThread.threadId) : null;
-  const empty = items.length === 0;
+  const empty = shownItems.length === 0;
 
   return (
     <div ref={areaRef} className="wmux-bots-chat-area" data-worker-open={shownId || openThread || openFile ? 'true' : undefined}>
@@ -2508,7 +2535,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
             {empty && conversation.kind === 'room' && (
               <p data-bots-empty-chat className="py-8 text-center text-[12px] text-[var(--text-muted)]">{t('botsPage.group.empty')}</p>
             )}
-            <TimelineView items={items} ctx={ctx} group={group} />
+            <TimelineView items={shownItems} ctx={ctx} group={group} onCancelWorkflow={flows.cancel} />
           </div>
         </div>
         {newCount > 0 && (
