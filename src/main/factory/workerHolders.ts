@@ -436,27 +436,14 @@ export function holderCounts(holders: readonly WorkerHolder[], botId?: string): 
   return out;
 }
 
-/** A check that calls `changed` when the holders that count against a cap
- *  (those not free: who, for which bot, booked only or not) differ from the
- *  last check's, the first check included. `holders` may throw: that check
- *  says nothing. */
-export function holderMoveCheck(holders: () => readonly WorkerHolder[] | null, changed: () => void): () => void {
-  let last: string | null = null;
-  return () => {
-    let key: string;
-    try {
-      key = (holders() ?? [])
-        .filter((h) => h.state !== 'free')
-        .map((h) => `${h.taskId}\u0000${h.origin}\u0000${h.botId ?? ''}\u0000${h.reserved}`)
-        .sort()
-        .join('\n');
-    } catch {
-      return;
-    }
-    if (key === last) return;
-    last = key;
-    changed();
-  };
+/** The holders that count against a cap (those not free: who, for which
+ *  bot, booked only or not), as one comparable key. Pure. */
+export function heldKey(holders: readonly WorkerHolder[]): string {
+  return holders
+    .filter((h) => h.state !== 'free')
+    .map((h) => `${h.taskId}\u0000${h.origin}\u0000${h.botId ?? ''}\u0000${h.reserved}`)
+    .sort()
+    .join('\n');
 }
 
 export interface LiveHolders {
@@ -468,6 +455,8 @@ export interface LiveHolders {
 let source: (() => HolderSnapshot) | null = null;
 let sourceKey: (() => readonly unknown[]) | null = null;
 let memo: { key: readonly unknown[]; value: LiveHolders } | null = null;
+/** The holders the last look answered with (a cap's, or a bot status's). */
+let lastLook: readonly WorkerHolder[] | null = null;
 
 /** Set by the worker lifecycle host: how to read a snapshot now, and the
  *  key of what it reads (holderInputs.ts's counter, ledger transitions,
@@ -479,6 +468,7 @@ export function setHolderSource(next: (() => HolderSnapshot) | null, key?: () =>
   source = next;
   sourceKey = next ? key ?? null : null;
   memo = null;
+  lastLook = null;
 }
 
 const sameKey = (a: readonly unknown[], b: readonly unknown[]): boolean => a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
@@ -493,6 +483,7 @@ export function liveHolders(): LiveHolders | null {
   }
   const snap = source();
   const value = { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null };
+  lastLook = value.holders;
   if (key) {
     const entry = { key, value };
     memo = entry;
@@ -503,4 +494,21 @@ export function liveHolders(): LiveHolders | null {
     });
   }
   return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown };
+}
+
+/** Called once a read of the daemon's sessions landed: calls `changed` when
+ *  the holders that count now differ from those the last look before it
+ *  answered with (whatever moved them meanwhile), or when no look came
+ *  before. A read alone can move a holder (an agent seen gone, or at work
+ *  again) with nothing else to tell the window. */
+export function holdersMovedByRead(changed: () => void): void {
+  const before = lastLook;
+  let after: LiveHolders | null;
+  try {
+    after = liveHolders();
+  } catch {
+    return;
+  }
+  if (!after) return;
+  if (before === null || heldKey(before) !== heldKey(after.holders)) changed();
 }

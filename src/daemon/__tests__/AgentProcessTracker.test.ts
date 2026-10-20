@@ -303,6 +303,35 @@ describe('AgentProcessTracker', () => {
     expect(watcher.watches.has('agent:s1')).toBe(true);
   });
 
+  it('a reused pid is no longer the agent: the confirming read records its death edge', async () => {
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    const root = (await tracker.agentProcessTree('s1', 'claude'))?.root;
+    table = [entry(200, 1, 'notepad.exe')];
+    expect(await tracker.stillRunning(root ? [root] : [])).toEqual([]);
+    expect(tracker.statusFor('s1')).toBe(false);
+  });
+
+  it('an agent armed after the tree read is not the one found gone', async () => {
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    const root = (await tracker.agentProcessTree('s1', 'claude'))?.root;
+    // A relaunch in the same pane, armed before the old tree is checked.
+    table = [entry(300, SHELL, 'claude.exe')];
+    tracker.rearm('s1', SHELL);
+    await flush();
+    expect(watcher.watches.get('agent:s1')?.pid).toBe(300);
+    expect(await tracker.stillRunning(root ? [root] : [])).toEqual([]);
+    expect(tracker.statusFor('s1')).toBe(true);
+    expect(watcher.watches.get('agent:s1')?.pid).toBe(300);
+  });
+
   it('a tree read that no longer finds the tracked agent records its death edge', async () => {
     const watcher = makeWatcher();
     let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude.exe')];

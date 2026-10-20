@@ -73,7 +73,7 @@ import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLi
 import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
 import { getWorkerSlots, launchPaneOwner, setReclaimedPaneSource, taskOfPane } from './workerSlots';
 import { holderInputsRevision } from './holderInputs';
-import { holderCounts, holderMoveCheck, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
+import { holderCounts, holdersMovedByRead, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
 import { getVerdictedTasks } from './verdictedTasks';
 import { verdictedTaskIds } from './openBotWorkers';
 import type { FanOutService } from '../worktask/FanOutService';
@@ -197,11 +197,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     workspaceTask: (workspaceId) => launches.workspaceOf(workspaceId)?.taskId ?? null,
     facts: goneFacts,
     refreshMs: LIVENESS_REFRESH_MS,
-    // A read alone can move a holder (an agent seen gone, or at work again)
-    // with no record, row or workspace change to tell the window, and the
-    // bot status it shows counts these holders (openBotWorkers): a read that
-    // moved one tells it.
-    onRead: holderMoveCheck(() => liveHolders()?.holders ?? null, changed),
+    // The bot status the window shows counts these holders (openBotWorkers):
+    // a read that moved one tells it.
+    onRead: () => holdersMovedByRead(changed),
   });
   // A task that runs again loses its fact: its row reopened (a resume of its
   // reclaimed worker and a new worker session clear it where they happen).

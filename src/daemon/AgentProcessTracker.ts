@@ -569,6 +569,9 @@ export class AgentProcessTracker {
   /** Shared snapshot promise — concurrent probes across sessions ride one
    *  enumeration instead of spawning one each. */
   private snapshotInFlight: Promise<ProcessTreeEntry[]> | null = null;
+  /** The tracked agent each agentProcessTree() root entry is, so a
+   *  stillRunning() verdict on that entry is a verdict on that agent. */
+  private readonly treeRoots = new WeakMap<ProcessTreeEntry, { sessionId: string; state: TrackedAgent }>();
   private snapshotStartedAt = 0;
   private identityProbeGuard?: (sessionId: string) => { epoch: number; isCurrent: () => boolean } | undefined;
   private stateListener: ((sessionId: string, state: TrackedAgentState) => void) | undefined;
@@ -955,8 +958,9 @@ export class AgentProcessTracker {
     if (this.states.get(sessionId) !== s || !s.alive || this.shellPids.get(sessionId) !== shellPid) return null;
     const pick = selectAgentProcess(table, shellPid);
     const root = table.find((e) => e.pid === s.pid);
+    // The tracked pid is in no process at all: its agent is gone.
     if (!root) {
-      this.recordGone(table, new Set([s.pid]));
+      this.recordDeath(sessionId, s);
       return null;
     }
     if (pick?.pid !== s.pid || pick.slug !== expectedSlug) return null;
@@ -977,6 +981,7 @@ export class AgentProcessTracker {
         queue.push(child.pid);
       }
     }
+    this.treeRoots.set(root, { sessionId, state: s });
     return { root, descendants };
   }
 
@@ -987,22 +992,26 @@ export class AgentProcessTracker {
   async stillRunning(entries: readonly ProcessTreeEntry[]): Promise<ProcessTreeEntry[]> {
     if (entries.length === 0) return [];
     const table = await this.snapshot();
-    this.recordGone(table, new Set(entries.map((e) => e.pid)));
-    return entries.filter((e) => table.some((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline));
+    const left = entries.filter((e) => table.some((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline));
+    // A tree read's root found gone is that tracked agent gone, while the
+    // session still tracks that same launch (not one armed since).
+    for (const e of entries) {
+      const tracked = this.treeRoots.get(e);
+      if (tracked && !left.includes(e) && this.states.get(tracked.sessionId) === tracked.state) this.recordDeath(tracked.sessionId, tracked.state);
+    }
+    return left;
   }
 
-  /** A tracked agent among `pids` that a fresh process table no longer
-   *  lists has exited: its death edge is recorded now, not on the monitor's
-   *  next poll (up to one cadence later), so a stop that just confirmed the
-   *  agent gone (session.stopAgent) is what the next session list reports.
-   *  Its watch is dropped so the monitor cannot report the same death again. */
-  private recordGone(table: readonly ProcessTreeEntry[], pids: ReadonlySet<number>): void {
-    for (const [sessionId, s] of this.states) {
-      if (!s.alive || s.wsl || !pids.has(s.pid) || table.some((e) => e.pid === s.pid)) continue;
-      this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
-      s.alive = false;
-      this.emitState(sessionId, { ...(s.slug ? { slug: s.slug } : {}), alive: false });
-    }
+  /** The agent's death edge, recorded by a fresh process table rather than
+   *  the monitor's next poll (up to one cadence later), so a stop that just
+   *  confirmed the agent gone (session.stopAgent) is what the next session
+   *  list reports. Its watch is dropped so the monitor cannot report the
+   *  same death again. */
+  private recordDeath(sessionId: string, s: TrackedAgent): void {
+    if (!s.alive) return;
+    this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
+    s.alive = false;
+    this.emitState(sessionId, { ...(s.slug ? { slug: s.slug } : {}), alive: false });
   }
 
   /** Drop all tracking for a session (died / interrupted / killed). */
