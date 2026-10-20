@@ -66,6 +66,16 @@ describe('fs.handler security helpers', () => {
     },
   );
 
+  it('refuses a local spelling whose real path is a network share', async () => {
+    realpathSpy.mockResolvedValue('\\\\server\\share\\repo');
+    await expect(resolveAccessiblePath(path.join(home, 'project', 'link-to-share'))).resolves.toBeNull();
+  });
+
+  it('keeps a WSL share as its real path', async () => {
+    realpathSpy.mockResolvedValue('\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+    await expect(resolveAccessiblePath(path.join(home, 'project', 'repo'))).resolves.toBe('\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+  });
+
   it('returns null when canonicalization fails', async () => {
     realpathSpy.mockRejectedValue(new Error('ENOENT'));
 

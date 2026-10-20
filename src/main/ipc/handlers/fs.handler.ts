@@ -100,7 +100,9 @@ export async function resolveAccessiblePath(inputPath: string): Promise<string |
 
   try {
     const canonical = await fs.promises.realpath(resolved);
-    if (isSensitivePath(canonical)) return null;
+    // A link to a network folder, or a mapped network drive (its real path
+    // is the share), is not a local folder either.
+    if (isUncOrDevicePath(canonical) || isSensitivePath(canonical)) return null;
     return canonical;
   } catch {
     return null;
