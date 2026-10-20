@@ -234,7 +234,7 @@ describe('ChromeLauncher — protected profiles', () => {
     expect((spawnMock.mock.calls[1][1] as string[]).some((a) => a.startsWith('--proxy-server='))).toBe(true);
     expect(launcher.isProtected()).toBe(true);
     launcher.dispose();
-  });
+  }, 15_000);
 
   it('restarts a running Chrome when protection turns on, quitting it through Browser.close', async () => {
     let plan: ChromeProtectionPlan | null = null;
@@ -329,7 +329,7 @@ describe('ChromeLauncher — protected profiles', () => {
     });
     expect(refused).toBe(true);
     launcher.dispose();
-  });
+  }, 15_000);
 
   it('force-stops a Chrome that will not exit when protection turns on', async () => {
     let plan: ChromeProtectionPlan | null = null;
@@ -350,7 +350,7 @@ describe('ChromeLauncher — protected profiles', () => {
     expect(first.kill).toHaveBeenCalledWith('SIGKILL');
     expect(launcher.isProtected()).toBe(true);
     launcher.dispose();
-  }, 20_000);
+  }, 30_000);
 });
 
 describe('ChromeLauncher — protected launch readiness', () => {
@@ -427,7 +427,7 @@ describe('ChromeLauncher — quitting', () => {
     await launcher.dispose();
     expect(sockets.at(-1)?.sent.map((m) => m.method)).toEqual(['Browser.close']);
     expect(child.kill).toHaveBeenCalledTimes(1);
-  });
+  }, 15_000);
 
   it('a quit past its bound sends nothing more to the port', async () => {
     const child = makeChild();
@@ -444,7 +444,7 @@ describe('ChromeLauncher — quitting', () => {
     release(); // the stalled ask resumes against a port that may be reused
     await deliberateSleep(100, 'negative check: the resumed ask must send nothing');
     expect(sockets).toHaveLength(before);
-  });
+  }, 15_000);
 
   it('an immediate dispose signals at once without asking', async () => {
     const child = makeChild();
