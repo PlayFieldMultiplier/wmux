@@ -183,8 +183,17 @@ export class FirstRunOrchestrator {
 
   /** Sync and tiny: read on every detect so a change applies at once. */
   private readAgentPaths(): Partial<Record<AgentId, string>> {
+    const file = this.agentPathsPath();
+    let text: string;
     try {
-      const raw = JSON.parse(fsSync.readFileSync(this.agentPathsPath(), 'utf8')) as Record<string, unknown>;
+      text = fsSync.readFileSync(file, 'utf8');
+    } catch {
+      // The atomic write moves the old file to `.bak` just before putting the
+      // new one in place; a read in that moment gets the previous paths.
+      try { text = fsSync.readFileSync(`${file}.bak`, 'utf8'); } catch { return {}; }
+    }
+    try {
+      const raw = JSON.parse(text) as Record<string, unknown>;
       const out: Partial<Record<AgentId, string>> = {};
       for (const agent of AGENT_IDS) {
         const v = raw?.[agent];

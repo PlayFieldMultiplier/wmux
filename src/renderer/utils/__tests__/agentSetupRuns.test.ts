@@ -202,9 +202,12 @@ describe('startAgentRun', () => {
     expect(h.pty.create).toHaveBeenCalledWith(expect.objectContaining({ initialCommand: plan.login?.command }));
 
     h.setStatus(status('ready'));
+    const callsBefore = h.agentStatus.mock.calls.length;
     await vi.advanceTimersByTimeAsync(RUN_TICK_MS * DETECT_EVERY_TICKS);
     await flush();
     expect(getAgentSetupState().runs.claude?.phase).toBe('succeeded');
+    // The poll that saw it is the answer: no second probe to contradict it.
+    expect(h.agentStatus.mock.calls.length).toBe(callsBefore + 1);
 
     h.setStatus(status('login-needed'));
     await startAgentRun('claude', 'login', plan, 'Sign in to Claude Code');
