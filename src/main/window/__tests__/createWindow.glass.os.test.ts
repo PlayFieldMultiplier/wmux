@@ -44,6 +44,7 @@ vi.mock('electron', () => {
     // Electron's maximize() shows a hidden window.
     maximize = vi.fn(() => { this.visible = true; });
     show = vi.fn(() => { this.visible = true; });
+    focus = vi.fn();
     isVisible = () => this.visible;
     isDestroyed = () => false;
   }

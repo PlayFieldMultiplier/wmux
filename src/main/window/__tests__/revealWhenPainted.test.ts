@@ -10,6 +10,7 @@ function fakeWindow() {
     show: vi.fn(() => { state.visible = true; }),
     // Electron's maximize() shows a hidden window.
     maximize: vi.fn(() => { state.visible = true; }),
+    focus: vi.fn(),
     isVisible: () => state.visible,
     isDestroyed: () => state.destroyed,
     webContents: { on: vi.fn(add), once: vi.fn(add) },
@@ -31,11 +32,12 @@ describe('revealWhenPainted', () => {
     expect(win.maximize).not.toHaveBeenCalled();
   });
 
-  it('maximizes instead of showing a restored maximized window', () => {
+  it('maximizes and focuses a restored maximized window instead of showing it', () => {
     const { win, fire } = fakeWindow();
     revealWhenPainted(win as unknown as Win, { maximize: true });
     fire('ready-to-show');
     expect(win.maximize).toHaveBeenCalledTimes(1);
+    expect(win.focus).toHaveBeenCalledTimes(1);
     expect(win.show).not.toHaveBeenCalled();
   });
 
