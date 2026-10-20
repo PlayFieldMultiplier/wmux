@@ -29,7 +29,7 @@ import { guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTain
 import path from 'node:path';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { isBotRole, isCoordinatorBot } from '../../../shared/bot';
-import { SHARED_SURFACE, type BotToolName, type FactoryRefusal } from '../../../shared/botSurface';
+import { GUEST_TURN_SURFACE_REFUSAL, SHARED_SURFACE, type BotToolName, type FactoryRefusal } from '../../../shared/botSurface';
 import {
   BOT_POSTABLE_CARD_KINDS,
   GENERAL_THREAD,
@@ -327,6 +327,9 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     const prior = clientPostId ? writer.find(bot.workspaceId, (c) => c.clientPostId === clientPostId, { guests: true }) : null;
     let copied: { files: RoomFile[]; store: RoomFileStore } | null = null;
     if (Array.isArray(filePaths) && filePaths.length > 0 && !prior) {
+      // Files come from the repository or a worker's folder: not in a wake
+      // not known clean.
+      if (fromGuest) return refusal('not_now', `files: ${GUEST_TURN_SURFACE_REFUSAL}`);
       const c = await copyBotFiles(bot, filePaths as string[], deps);
       if (!c.ok) return c;
       copied = c;

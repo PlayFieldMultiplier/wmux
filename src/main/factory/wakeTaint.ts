@@ -594,8 +594,23 @@ export function factVisibleToBot(botId: string): (f: Fact) => boolean {
  *  started, or failed) and clean where none is (a router built without the
  *  factory, as in tests). */
 export function guestGateProvenance(botId: string): GuestProvenance {
-  if (!current) return trackerExpected ? 'unknown' : false;
+  if (!current) return untrackedGuest();
   return guestOfRunningWake(botId);
+}
+
+/** RoomWriter's turn probe (setGuestTurnProbe): whether a bot's card is
+ *  written outside a wake known clean; no running wake is not known clean. */
+export function guestTurnProbeOf(taint: Pick<WakeTaint, 'wakeGuest'>, runningWake: WakeTaintPorts['runningWake']): (botId: string) => boolean {
+  return (botId) => {
+    const running = runningWake(botId);
+    return running === null || taint.wakeGuest(running.item) !== false;
+  };
+}
+
+/** The provenance a reader without a tracker assumes: unknown where one is
+ *  expected, clean where none is (a router or store built alone, in tests). */
+export function untrackedGuest(): GuestProvenance {
+  return trackerExpected ? 'unknown' : false;
 }
 
 /** Why work wake `wakeId` asks for may not start or be saved, or null: the

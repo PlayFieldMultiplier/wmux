@@ -33,6 +33,7 @@ import { mintBotToken, mintCommanderToken, revokeCommanderToken } from './comman
 import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenHandoff';
 import { BOT_REPO_READ_TOOLS, botRepoReadDenyRules, evaluateBotRepoRead, grepOutputNamesProtected } from '../factory/botRepoRead';
 import { redactStoredSecretsDeep } from '../factory/secretRedaction';
+import { guestGateProvenance } from '../factory/wakeTaint';
 import { claudeNotFoundMessage } from '../factory/engineError';
 import type { BotBinding } from '../../shared/bot';
 import { SHARED_SURFACE } from '../../shared/botSurface';
@@ -1047,8 +1048,11 @@ export class ClaudeSdkAdapter implements BrainAdapter {
    *  rules keep protected files out of Grep / Glob results. */
   private applyRepoRead(options: Record<string, unknown>, root: string): void {
     const botId = this.bot?.binding.botId ?? '';
-    const decide = (toolName: string, input: unknown) =>
-      evaluateBotRepoRead(toolName, input && typeof input === 'object' ? (input as Record<string, unknown>) : {}, root);
+    const decide = (toolName: string, input: unknown): ReturnType<typeof evaluateBotRepoRead> => {
+      // Judged on each call: no repository read in a wake not known clean.
+      if (guestGateProvenance(botId) !== false) return { ok: false, reason: 'the repository is not read in a turn that comes from an external guest\'s message (or one wmux cannot tell the source of)' };
+      return evaluateBotRepoRead(toolName, input && typeof input === 'object' ? (input as Record<string, unknown>) : {}, root);
+    };
     const logDenied = (toolName: string, reason: string) =>
       console.warn('[factory] bot repository read denied:', JSON.stringify({ botId, tool: toolName, reason }));
     options.tools = [...BOT_REPO_READ_TOOLS];

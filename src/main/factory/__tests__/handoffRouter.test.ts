@@ -19,6 +19,7 @@ import {
   importLegacyMoaHandoffs,
   type HandoffTaintPort,
 } from '../handoffRouter';
+import { expectWakeTaint } from '../wakeTaint';
 import { runFactoryMigrations } from '../migrate';
 import { RoomWriter, writeFactCards, type FactoryRoomPorts } from '../roomWriter';
 import { TriggerEngine, botSeesFact } from '../triggerEngine';
@@ -917,6 +918,22 @@ describe('messages and room mentions (group rooms)', () => {
     expect(h.router.get(guestOut.result.handoffId)?.guestSourced).toBe(true);
     expect(h.router.get(cleanOut.result.handoffId)?.guestSourced).toBe(false);
     expect(sent).toEqual([[guestOut.result.handoffId, true], [cleanOut.result.handoffId, false]]);
+  });
+
+  it('without a tracker where one is expected, a send and a question are guest-sourced', async () => {
+    const a = bot('ws1', 'triage');
+    const lead = bot('ws1', 'lead');
+    const h = await harness([a, lead]);
+    expectWakeTaint();
+    try {
+      const sent = h.router.send(binding(a), { kind: 'dispatch', title: 'x', body: '' });
+      const asked = await h.router.askPerson(binding(a), { title: 'q', body: '' });
+      if (!sent.ok || !asked.ok) throw new Error('refused');
+      expect(h.router.get(sent.handoffId)?.guestSourced).toBe(true);
+      expect(h.router.get(asked.handoffId)?.guestSourced).toBe(true);
+    } finally {
+      expectWakeTaint(false);
+    }
   });
 
   it('a refused send says its provenance on the record, so the refusal does not wake its sender as unknown', async () => {

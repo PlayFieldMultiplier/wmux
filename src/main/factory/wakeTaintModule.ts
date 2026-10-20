@@ -5,7 +5,7 @@
 import path from 'node:path';
 import type { WakeItem } from '../../shared/wake';
 import { registerFactoryRpcModule } from './factoryHost';
-import { TAINT_FILENAME, WakeTaint, expectWakeTaint, setWakeTaint } from './wakeTaint';
+import { TAINT_FILENAME, WakeTaint, expectWakeTaint, guestTurnProbeOf, setWakeTaint } from './wakeTaint';
 import { expectGuestProbes, setFactGuestProbe, setGuestTurnProbe } from './roomWriter';
 import { getBotWorkflowStore } from './botWorkflow';
 
@@ -47,10 +47,7 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
       // A bot's card written in its running wake is stamped (RoomCard.origin)
       // unless that wake is known clean; a write outside a wake passes its
       // origin itself.
-      setGuestTurnProbe((botId) => {
-        const running = runningWake(botId);
-        return running !== null && taint.wakeGuest(running.item) !== false;
-      });
+      setGuestTurnProbe(guestTurnProbeOf(taint, runningWake));
       // A fact's system cards (a handoff's title or answer, a notice) are
       // stamped the same way, from the fact's own record.
       setFactGuestProbe((f) => taint.factGuest(f) !== false);

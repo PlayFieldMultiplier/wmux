@@ -38,6 +38,8 @@ import { botTokenBinding, isCommanderToken } from '../commanderTrust';
 import { botArgValue, botTokenFileArgValue, type BotBinding } from '../../../shared/bot';
 import type { BrainEvent } from '../BrainAdapter';
 import { botRepoReadDenyRules } from '../../factory/botRepoRead';
+import { WakeTaint, setWakeTaint } from '../../factory/wakeTaint';
+import type { WakeItem } from '../../../shared/wake';
 
 const BINDING: BotBinding = { workspaceId: 'ws-1', botId: 'bot-0a1b2c3d', role: 'verifier' };
 let dir = '';
@@ -293,6 +295,23 @@ describe('ClaudeSdkAdapter bot mode with a repository', () => {
     expect(await pre({ tool_name: 'mcp__wmux__room_post', tool_input: {} })).toEqual({});
     expect(warn.mock.calls.some((c) => String(c[0]).includes('bot repository read denied') && String(c[1]).includes('.env'))).toBe(true);
     warn.mockRestore();
+  });
+
+  it('a wake not known clean reads nothing from the repository, judged on each call', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const o = await optionsFor(repo);
+    let running: WakeItem | null = { id: 'w-1', botId: BINDING.botId, workspaceId: BINDING.workspaceId, reason: { kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c', text: 'hi' }, priority: 1, enqueuedAt: 1, attempts: 1, state: 'running' };
+    const runningWake = () => (running ? { item: running, startedAt: 1 } : null);
+    setWakeTaint(new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake }), runningWake);
+    try {
+      expect(await canUse(o)('Read', { file_path: 'src/a.ts' })).toMatchObject({ behavior: 'deny', message: expect.stringContaining('external guest') });
+      expect(await preHook(o)({ tool_name: 'Grep', tool_input: { pattern: 'a' } })).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+      running = { ...running, reason: { kind: 'human', text: 'hi', source: 'desktop' } };
+      expect(await canUse(o)('Read', { file_path: 'src/a.ts' })).toMatchObject({ behavior: 'allow' });
+    } finally {
+      setWakeTaint(null);
+      vi.restoreAllMocks();
+    }
   });
 
   it('canUseTool makes the same decision', async () => {

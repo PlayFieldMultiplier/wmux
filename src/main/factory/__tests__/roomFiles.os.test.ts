@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -287,16 +287,21 @@ describe('room_post files', () => {
     expect(stored()).toHaveLength(2);
   });
 
-  it('a post from a guest-sourced wake keeps its origin when the wake ends while its files are copied', async () => {
+  it('a wake not known clean attaches no files; a clean post keeps its provenance when a guest wake starts while its files are copied', async () => {
     let guestWake = true;
     setGuestTurnProbe(() => guestWake);
     try {
       const s = postSetup();
       write(path.join(repo(), 'out', 'notes.md'), '# Notes\n');
-      const deps: RoomHandlerDeps = { ...s.deps, fileRoots: async () => { guestWake = false; return { roots: [repo()], base: repo() }; } };
-      const r = await handleRoomPost({ kind: 'status', title: 'Notes', clientPostId: 'p-g', files: ['out/notes.md'] }, AS_BOT, deps) as { ok: true; card: RoomCard };
-      expect(r.card.origin).toBe('guest');
-      expect(s.writer.read(WS).cards).toEqual([]);
+      const roots = vi.fn(async () => ({ roots: [repo()], base: repo() }));
+      expect(await handleRoomPost({ kind: 'status', title: 'Notes', clientPostId: 'p-g', files: ['out/notes.md'] }, AS_BOT, { ...s.deps, fileRoots: roots }))
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('external guest') });
+      expect(roots).not.toHaveBeenCalled();
+      guestWake = false;
+      const deps: RoomHandlerDeps = { ...s.deps, fileRoots: async () => { guestWake = true; return { roots: [repo()], base: repo() }; } };
+      const r = await handleRoomPost({ kind: 'status', title: 'Notes', clientPostId: 'p-c', files: ['out/notes.md'] }, AS_BOT, deps) as { ok: true; card: RoomCard };
+      expect(r.card).not.toHaveProperty('origin');
+      expect(s.writer.read(WS).cards.map((c) => c.id)).toEqual([r.card.id]);
     } finally {
       setGuestTurnProbe(null);
     }

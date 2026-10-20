@@ -8,7 +8,7 @@ import type { Fact } from '../../../shared/facts';
 import type { Handoff } from '../../../shared/handoff';
 import type { LedgerEntry } from '../../../shared/ledger';
 import type { WakeItem } from '../../../shared/wake';
-import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, expectWakeTaint, factVisibleToBot, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, WakeTaint, expectWakeTaint, factVisibleToBot, guestTurnProbeOf, untrackedGuest, guestOfWake, guestTurnRefusal, runningWakeTainted, setWakeTaint, taskTainted, type WakeTaintPorts } from '../wakeTaint';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-taint-')); });
@@ -369,6 +369,24 @@ describe('guest provenance', () => {
     expectWakeTaint();
     try {
       expect(facts.filter(factVisibleToBot('bot-a')).map((f) => f.id)).toEqual(['f-pr']);
+    } finally {
+      expectWakeTaint(false);
+    }
+  });
+
+  it('the room\'s turn probe: a guest or unknown wake, or none running, is not known clean; untracked reads fail closed only where a tracker is expected', () => {
+    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
+    const t = make({ runningWake: () => running });
+    const probe = guestTurnProbeOf(t, () => running);
+    expect(probe('bot-a')).toBe(false);
+    running = { item: wake(guestReason), startedAt: 1 };
+    expect(probe('bot-a')).toBe(true);
+    running = null;
+    expect(probe('bot-a')).toBe(true);
+    expect(untrackedGuest()).toBe(false);
+    expectWakeTaint();
+    try {
+      expect(untrackedGuest()).toBe('unknown');
     } finally {
       expectWakeTaint(false);
     }

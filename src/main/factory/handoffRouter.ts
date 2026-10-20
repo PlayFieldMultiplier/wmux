@@ -98,7 +98,7 @@ import {
 } from '../../shared/handoff';
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, parseThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import { humanCardIdOfRun } from './humanMessage';
-import type { GuestProvenance, TaintMark } from './wakeTaint';
+import { untrackedGuest, type GuestProvenance, type TaintMark } from './wakeTaint';
 import {
   DECISION_LIMITS,
   clearThreadDecision,
@@ -1345,7 +1345,7 @@ export class HandoffRouter {
   private guestOf(h: Handoff): boolean {
     if (h.guestSourced === true) return true;
     const taint = this.opts.taint?.();
-    if (!taint?.handoffGuest) return false;
+    if (!taint?.handoffGuest) return untrackedGuest() !== false;
     try {
       return taint.handoffGuest(h.id) !== false;
     } catch {
@@ -1357,7 +1357,7 @@ export class HandoffRouter {
    *  without a tracker that says (a router built without one). */
   private runningGuest(botId: string): GuestProvenance {
     const taint = this.opts.taint?.();
-    if (!taint?.runningGuest) return false;
+    if (!taint?.runningGuest) return untrackedGuest();
     try {
       return taint.runningGuest(botId);
     } catch {
