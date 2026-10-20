@@ -292,6 +292,29 @@ describe('share offers — the receiver accepts (B’s offer path of POST /links
     expect(second.b.store.get(second.offerId)?.state).toBe('accepted');
   });
 
+  it('an answer naming a link that already exists is refused before the offer is claimed', async () => {
+    const { a, b, offerId } = await shared();
+    // Another proposal of A's, to another pane of B, waiting on B.
+    const other = crypto.randomUUID();
+    b.links.receiveProposal({ linkId: other, local: { kind: 'pane', workspaceId: 'ws-api', paneId: 'pane-2' }, remote: { hostId: A, kind: 'pane', workspaceId: 'ws-web', paneId: 'pane-a' }, allow: both });
+    const { request } = proposalFor(a, offerId);
+    // Even a store that could not take a claim back is never left claimed by it.
+    b.store.unclaim = () => { throw new Error('disk full'); };
+    expect(b.offers.acceptProposal(A, { ...request, linkId: other })).toMatchObject({ status: 409 });
+    expect(b.store.get(offerId)?.state).toBe('open');
+    expect(b.links.get(other)?.state).toBe('proposed-in');
+  });
+
+  it('recovery accepts only a link that fits the offer it claimed', async () => {
+    const { b, offerId } = await shared();
+    const other = crypto.randomUUID();
+    b.links.receiveProposal({ linkId: other, local: { kind: 'pane', workspaceId: 'ws-api', paneId: 'pane-2' }, remote: { hostId: A, kind: 'pane', workspaceId: 'ws-web', paneId: 'pane-a' }, allow: both });
+    b.store.claim(offerId, other);
+    b.offers.recover();
+    expect(b.links.get(other)?.state).toBe('proposed-in');
+    expect(b.store.get(offerId)?.state).toBe('open');
+  });
+
   it('startup recovery settles claimed offers by what links.json holds', async () => {
     const { a, b, offerId } = await shared();
     const { link } = proposalFor(a, offerId);

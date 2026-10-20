@@ -171,7 +171,7 @@ export class A2aOffers {
       if (rec.linkId !== proposal.linkId) return closed('used');
       const link = this.deps.links.get(proposal.linkId);
       if (link) {
-        if (link.remote.hostId !== peerHostId || !sameLocal(link, rec.end)) return closed('used');
+        if (link.remote.hostId !== peerHostId || !fitsOffer(link, rec)) return closed('used');
         // A retry: finish (or answer) the link the claim made.
         return this.finish(rec, link);
       }
@@ -183,6 +183,8 @@ export class A2aOffers {
     if (rec.state !== 'open') return closed(rec.endedReason ?? 'expired');
     const refused = this.check(rec, peerHostId, proposal);
     if (refused) return refused;
+    // An open offer has no link yet: a link by that id is another one, never this offer's.
+    if (this.deps.links.get(proposal.linkId)) return refuse(409, 'conflict');
 
     let claimed: A2aLinkOfferRecordV1;
     try {
@@ -367,7 +369,7 @@ export class A2aOffers {
       if (rec.side !== 'out' || rec.state !== 'claimed' || !rec.linkId) continue;
       const link = this.deps.links.get(rec.linkId);
       try {
-        if (!link || link.remote.hostId !== rec.hostId) this.changed(this.store.unclaim(rec.offerId));
+        if (!link || link.remote.hostId !== rec.hostId || !fitsOffer(link, rec)) this.changed(this.store.unclaim(rec.offerId));
         // A proposed-in link waits for the app's closed-pane pass (finish answers 503 till then).
         else if (link.state === 'proposed-in' || link.state === 'active') this.finish(rec, link);
         // The link was made and has ended since: the offer is spent, and owes its exposure back.
@@ -616,8 +618,11 @@ function cleanAllow(raw: unknown): { outbound: boolean; inbound: boolean } | nul
   return { outbound: raw['outbound'], inbound: raw['inbound'] };
 }
 
-function sameLocal(link: A2aLinkRecordV1, end: A2aExposedPane): boolean {
-  return link.local.kind === 'pane' && link.local.workspaceId === end.workspaceId && link.local.paneId === end.paneId;
+/** The link the other PC proposed for this share: its pane, and no direction the share did not offer. */
+function fitsOffer(link: A2aLinkRecordV1, rec: A2aLinkOfferRecordV1): boolean {
+  return link.proposer === 'remote' && link.local.kind === 'pane' && link.local.workspaceId === rec.end.workspaceId &&
+    link.local.paneId === rec.end.paneId && (link.allow.outbound || link.allow.inbound) &&
+    (!link.allow.outbound || rec.allow.outbound) && (!link.allow.inbound || rec.allow.inbound);
 }
 
 function refuse(status: number, error: A2aRemoteErrorCode): OfferRouteAnswer {

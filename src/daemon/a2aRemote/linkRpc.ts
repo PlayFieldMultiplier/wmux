@@ -189,6 +189,9 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
       throw new Error('a2a.remote.exposure.set: brain must be boolean');
     }
     const exposure = deps.exposures.set(hostId, { workspaceIds, paneIds, brain: params['brain'] === true });
+    // A human saved this list: shares to that PC owe nothing back, and a share it hides ends.
+    // First, so the links broken below cannot pay an older put-back over the list just saved.
+    deps.offers?.onExposureSetByHuman(hostId);
     // Hidden means unlinked: a live link from that PC to an end it can no
     // longer see breaks now (only links that PC proposed to this one).
     for (const rec of links.listByHost(hostId)) {
@@ -198,8 +201,6 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
         : deps.exposures.isPaneExposed(hostId, rec.local.workspaceId, rec.local.paneId ?? '');
       if (!stillShown) breakLink(rec, 'exposure-revoked');
     }
-    // A human saved this list: shares to that PC owe nothing back, and a share it hides ends.
-    deps.offers?.onExposureSetByHuman(hostId);
     return { exposure };
   });
 

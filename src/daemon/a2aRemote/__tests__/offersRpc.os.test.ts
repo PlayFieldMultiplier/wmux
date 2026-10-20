@@ -275,3 +275,52 @@ describe('a2a.remote.offers.decline', () => {
     expect(await rpc('a2a.remote.offers.decline', { offerId: OFFER })).toMatchObject({ ok: false, error: 'invalid-state' });
   });
 });
+
+describe('a2a.remote.exposure.set — a human save and share debts', () => {
+  it('a pane the human kept stays shown, even when the save breaks another link', async () => {
+    const A = '44444444-4444-4444-8444-444444444444';
+    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-offers-human-'));
+    try {
+      const base = { dir: sdir, scheduleHarden: (): void => undefined };
+      let ref: A2aOffers | null = null;
+      const sLinks = new LinkStore({ ...base, onTransition: (l) => ref?.onLinkTransition(l) });
+      const sExposures = new ExposureStore(base);
+      const sStore = new OfferStore(base);
+      const sOffers = new A2aOffers({
+        store: sStore,
+        links: sLinks,
+        exposures: sExposures,
+        isPeer: (h) => h === A,
+        isJoined: () => false,
+        features: () => new Set([A2A_FEATURE_LINK_OFFER]),
+        enqueue: () => undefined,
+        notifyLinkChange: () => undefined,
+        broadcast: () => undefined,
+        log: () => undefined,
+      });
+      ref = sOffers;
+      const handlers = new Map<string, (p: Record<string, unknown>) => Promise<unknown>>();
+      registerA2aLinkRpc((m, h) => handlers.set(m, h), {
+        links: sLinks,
+        exposures: sExposures,
+        panes: new ExposedPaneCache(),
+        remoteHosts: { get: () => undefined, credentialFor: () => null },
+        broadcast: () => undefined,
+        offers: sOffers,
+        client: (): JsonClient => ({ requestJson: async () => ({ status: 500, json: {} }) }),
+        log: () => undefined,
+      });
+      const made = sOffers.create({ hostId: A, end: { kind: 'pane', workspaceId: 'ws-api', workspaceName: 'API', paneId: 'pane-1', label: 'w1-1' }, allow: both });
+      if (!made.ok) throw new Error('create failed');
+      // The share ended but its put-back has not run yet (a crash in between).
+      sStore.end(made.offer.offerId, 'withdrawn', 'withdrawn');
+      sExposures.addPane(A, 'ws-api', 'pane-2');
+      sLinks.receiveProposal({ linkId: crypto.randomUUID(), local: { kind: 'pane', workspaceId: 'ws-api', paneId: 'pane-2' }, remote: { hostId: A, kind: 'pane', workspaceId: 'ws-web', paneId: 'pane-a' }, allow: both });
+      await handlers.get('a2a.remote.exposure.set')!({ hostId: A, workspaceIds: ['ws-api'], paneIds: { 'ws-api': ['pane-1'] } });
+      expect(sExposures.isPaneExposed(A, 'ws-api', 'pane-1')).toBe(true);
+      expect(sExposures.isPaneExposed(A, 'ws-api', 'pane-2')).toBe(false);
+    } finally {
+      fs.rmSync(sdir, { recursive: true, force: true });
+    }
+  });
+});
