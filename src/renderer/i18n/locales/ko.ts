@@ -321,6 +321,8 @@ export const ko = {
   'roster.stashedExited': '세션 종료됨',
   'roster.unstashAction': '레이아웃으로 꺼내기',
   'roster.recoverAction': '꺼내서 복구하기',
+  'roster.subagentsOne': '하위 에이전트 1개',
+  'roster.subagents': '하위 에이전트 {count}개',
   'workspace.close': '워크스페이스 닫기',
   'workspace.dismissQuestion': '질문 무시',
   'workspace.dismissQuestions': '질문 {count}개 무시',

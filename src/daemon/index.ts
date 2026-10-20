@@ -4153,6 +4153,10 @@ function registerRpcHandlers(
         const event: DaemonEvent = { type: 'agent.transcriptActivity', sessionId, data: { activity } };
         pipeServer.broadcast(event);
       },
+      emitSubagents: (sessionId, count) => {
+        const event: DaemonEvent = { type: 'agent.subagents', sessionId, data: { count } };
+        pipeServer.broadcast(event);
+      },
       onClaudeLine: (sessionId, path, line) => turnEnds.noteLine(sessionId, path, line),
       onClaudeGap: (sessionId) => turnEnds.noteGap(sessionId),
       afterTick: () => turnEnds.settle(),

@@ -1367,6 +1367,16 @@ export class DaemonNotificationRouter {
       }
     };
 
+    // How many subagents the pane's agent has running. Not an activity line:
+    // a hook-fed pane gets it too (its hooks never report subagents).
+    const onSubagents = (payload: { sessionId: string; count: number }) => {
+      try {
+        broadcastMetadataUpdate(this.getWindow(), { ptyId: payload.sessionId, subagents: payload.count });
+      } catch (err) {
+        console.warn('[DaemonNotificationRouter] subagent count error:', err);
+      }
+    };
+
     const onAgentProcessExit = (payload: { sessionId: string; slug?: string | null }) => {
       // The agent whose hooks owned the line is gone; the next one (a hookless
       // Codex in the same pane) may report from its transcript.
@@ -1417,6 +1427,8 @@ export class DaemonNotificationRouter {
           // agentStatus is cleared here: a dead pane must not keep advertising
           // a pending question on `pane_list`.
           pendingQuestion: '',
+          // Nor any subagent of its agent.
+          subagents: 0,
         });
         this.lastAgentEventAt.delete(payload.sessionId);
         this.lastAgentNameByPty.delete(payload.sessionId);
@@ -1504,6 +1516,7 @@ export class DaemonNotificationRouter {
     this.daemonClient.on('session:agentProcessExit', onAgentProcessExit);
     this.daemonClient.on('session:agentInterrupted', onAgentInterrupted);
     this.daemonClient.on('session:transcriptActivity', onTranscriptActivity);
+    this.daemonClient.on('session:subagents', onSubagents);
     this.daemonClient.on('session:restarted', onRestarted);
     this.daemonClient.on('supervision:changed', onSupervisionChanged);
     // A2A channels (a2a-channels U4) — project daemon-broadcast channel
@@ -1539,6 +1552,7 @@ export class DaemonNotificationRouter {
       () => this.daemonClient.off('session:agentProcessExit', onAgentProcessExit),
       () => this.daemonClient.off('session:agentInterrupted', onAgentInterrupted),
       () => this.daemonClient.off('session:transcriptActivity', onTranscriptActivity),
+      () => this.daemonClient.off('session:subagents', onSubagents),
       () => this.daemonClient.off('session:restarted', onRestarted),
       () => this.daemonClient.off('supervision:changed', onSupervisionChanged),
       () => this.daemonClient.off('channel:message', onChannelMessage),

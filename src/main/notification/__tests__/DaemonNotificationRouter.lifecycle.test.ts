@@ -78,6 +78,7 @@ interface CapturedListeners {
   prompt?: (payload: { sessionId: string; event: unknown }) => void;
   died?: (payload: { sessionId: string }) => void;
   transcript?: (payload: { sessionId: string; activity: string }) => void;
+  subagents?: (payload: { sessionId: string; count: number }) => void;
   processExit?: (payload: { sessionId: string; slug?: string | null }) => void;
 }
 
@@ -92,6 +93,7 @@ function makeRouter(opts: {
       if (event === 'session:prompt') captured.prompt = cb as CapturedListeners['prompt'];
       if (event === 'session:died') captured.died = cb as CapturedListeners['died'];
       if (event === 'session:transcriptActivity') captured.transcript = cb as CapturedListeners['transcript'];
+      if (event === 'session:subagents') captured.subagents = cb as CapturedListeners['subagents'];
       if (event === 'session:agentProcessExit') captured.processExit = cb as CapturedListeners['processExit'];
     }),
     off: vi.fn(),
@@ -838,6 +840,24 @@ describe('DaemonNotificationRouter — M1 side-effect replay', () => {
       broadcastMetadataUpdateMock.mockClear();
       captured.transcript!({ sessionId: 'pty-a', activity: '$ npm test' });
       expect(broadcastMetadataUpdateMock).toHaveBeenCalledWith(null, { ptyId: 'pty-a', activity: '$ npm test' });
+    } finally {
+      router.stop();
+    }
+  });
+
+  it('a subagent count reaches the row even for a pane whose hook owns the activity line', async () => {
+    const { router, captured } = makeRouter();
+    try {
+      captured.agent!({ sessionId: 'pty-a', event: activityEvent('Read') });
+      await flushMicrotasks();
+      broadcastMetadataUpdateMock.mockClear();
+      captured.subagents!({ sessionId: 'pty-a', count: 2 });
+      expect(broadcastMetadataUpdateMock).toHaveBeenLastCalledWith(null, { ptyId: 'pty-a', subagents: 2 });
+      captured.subagents!({ sessionId: 'pty-a', count: 0 });
+      expect(broadcastMetadataUpdateMock).toHaveBeenLastCalledWith(null, { ptyId: 'pty-a', subagents: 0 });
+      // A session that ends takes its subagent count with it.
+      captured.died!({ sessionId: 'pty-a' });
+      expect(broadcastMetadataUpdateMock).toHaveBeenCalledWith(null, expect.objectContaining({ ptyId: 'pty-a', subagents: 0, agentStatus: 'idle' }));
     } finally {
       router.stop();
     }

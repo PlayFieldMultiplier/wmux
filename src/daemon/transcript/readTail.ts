@@ -432,7 +432,7 @@ function normalizeMaxBytes(maxBytes: number | undefined): number {
 }
 
 /** Read exactly `length` bytes at `start`, returning only what was READ. */
-function readRange(transcriptPath: string, start: number, length: number): Buffer | null {
+export function readRange(transcriptPath: string, start: number, length: number): Buffer | null {
   if (length <= 0) return Buffer.alloc(0);
   let fd: number | null = null;
   try {

@@ -214,7 +214,8 @@ describe('TranscriptActivityWatcher — lifecycle', () => {
     append(h.file, claudeTool('a', 'Edit', { file_path: '/repo/x.ts' }));
     h.watcher.tick();
     expect(h.sent).toEqual([]);
-    expect(h.watcher.watchedSessions()).toEqual([]);
+    // Still read, but only for its subagent count (subagentCount.ts).
+    expect(h.watcher.watchedSessions()).toEqual(['pty-1']);
     h.watcher.noteHookSignal('pty-1', 'agent.session_start');
     h.watcher.tick();
     append(h.file, claudeTool('b', 'Edit', { file_path: '/repo/y.ts' }));

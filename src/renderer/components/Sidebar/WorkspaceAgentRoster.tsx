@@ -470,6 +470,11 @@ function WorkspaceAgentRoster({ workspaceId, pulsingPaneId, taskIds, renderTask,
             // #1481 — last activity rides the title line (muted) unless the
             // agent is blocked on a question, which keeps its own red line.
             const inlineActivity = !row.pendingQuestion ? row.activity : undefined;
+            // Subagents still at work: why a pane whose main turn ended may
+            // still read as running.
+            const subagentLabel = row.subagents
+              ? (row.subagents === 1 ? t('roster.subagentsOne') : t('roster.subagents', { count: row.subagents }))
+              : undefined;
             const elapsedMs = row.ptyId && (!row.remote || hostView) ? fleetIdleForMs(row.ptyId, stampCtx) : undefined;
             const elapsed = elapsedMs !== undefined && elapsedMs >= IDLE_SHOW_AFTER_MS ? formatIdle(elapsedMs) : undefined;
             const agentLabel = row.agentName || t('surface.terminal');
@@ -482,7 +487,7 @@ function WorkspaceAgentRoster({ workspaceId, pulsingPaneId, taskIds, renderTask,
               ? (exited ? t('roster.recoverAction') : t('roster.unstashAction'))
               : undefined;
             const stashedAgo = row.stashedAt ? timeAgo(row.stashedAt) : undefined;
-            const rowAriaLabel = [row.ptyId && unseenByPtyId[row.ptyId] ? t('sidebar.changedSinceSeen') : undefined, primary, agentLabel !== primary ? agentLabel : undefined, secondary, unverifiableLabel ?? statusLabel, elapsed, stashedAgo, detail, verb]
+            const rowAriaLabel = [row.ptyId && unseenByPtyId[row.ptyId] ? t('sidebar.changedSinceSeen') : undefined, primary, agentLabel !== primary ? agentLabel : undefined, secondary, unverifiableLabel ?? statusLabel, subagentLabel, elapsed, stashedAgo, detail, verb]
               .filter(Boolean)
               .join(', ');
             const rowTaskIds = firstRowOfPane.get(row.paneId) === index ? taskSplit.byPane.get(row.paneId) : undefined;
@@ -615,6 +620,14 @@ function WorkspaceAgentRoster({ workspaceId, pulsingPaneId, taskIds, renderTask,
                         <span className="flex-none text-[11px] text-[var(--text-muted)]">·</span>
                         <span className="max-w-[40%] flex-none truncate text-[11px] font-mono text-[var(--text-muted)]">
                           {secondary}
+                        </span>
+                      </>
+                    )}
+                    {subagentLabel && (
+                      <>
+                        <span className="flex-none text-[11px] text-[var(--text-muted)]">·</span>
+                        <span className="flex-none whitespace-nowrap text-[11px] text-[var(--text-muted)]" data-roster-subagents>
+                          {subagentLabel}
                         </span>
                       </>
                     )}

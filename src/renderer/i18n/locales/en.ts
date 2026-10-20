@@ -513,6 +513,9 @@ export const en = {
   'roster.stashedExited': 'Session ended',
   'roster.unstashAction': 'Bring back into the layout',
   'roster.recoverAction': 'Bring back and recover',
+  // The muted trailer on a roster row whose agent has subagents running.
+  'roster.subagentsOne': '1 subagent',
+  'roster.subagents': '{count} subagents',
   'workspace.close': 'Close workspace',
   'workspace.copyInfo': 'Copy session info',
   'workspace.copied': 'Copied!',
