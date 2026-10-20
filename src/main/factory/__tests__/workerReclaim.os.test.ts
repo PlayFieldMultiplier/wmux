@@ -1013,6 +1013,17 @@ describe('resume safety (review fixes)', () => {
     expect(stopAgent).not.toHaveBeenCalled();
   });
 
+  it('a record that cannot be written keeps a resumed worker\'s record as it was', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    await store.put({ taskId: 'wtask-abc-12345678', botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 't', threadId: 'task:x' as never, ended: 'completed', sessions: [{ sessionId: 'daemon-1', cwd: wt }], state: 'resumed', at: 1 });
+    vi.spyOn(store, 'put').mockRejectedValueOnce(new Error('disk full'));
+    const { ports: p, stopAgent } = reclaimPorts(store, [session()]);
+    expect(await reclaimWorker(p, row('completed'), 'completed')).toBeNull();
+    expect(stopAgent).not.toHaveBeenCalled();
+    // Still resumed, so its later stop ends its run in the bot's hours.
+    expect(store.get('wtask-abc-12345678')?.state).toBe('resumed');
+  });
+
   it('never evicts a resumed worker to stay under the record cap', async () => {
     const store = ReclaimedWorkers.at(dir);
     const rec = (i: number, state: 'stopped' | 'resumed') => ({ taskId: `wtask-n-${i}`, botId: BOT, ownerWorkspaceId: 'o', taskWorkspaceId: 't', title: 't', threadId: 'task:x' as never, ended: 'completed' as const, sessions: [], state, at: i });

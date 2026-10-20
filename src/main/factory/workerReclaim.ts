@@ -1058,11 +1058,12 @@ export async function reclaimWorker(
       ...(prior?.paneWorkspaceId ? { paneWorkspaceId: prior.paneWorkspaceId } : {}),
     };
     // On disk before anything is stopped: a stopped worker always has its
-    // conversation recorded. A write that fails stops nothing.
+    // conversation recorded. A write that fails stops nothing, and an
+    // earlier record (a resumed worker's, still running) stays as it was.
     try {
       await ports.store.put(rec);
     } catch (err) {
-      await ports.store.remove(entry.id).catch(() => undefined);
+      await (prior ? ports.store.put(prior) : ports.store.remove(entry.id)).catch(() => undefined);
       log(`[factory] reclaim: ${entry.id} not recorded, its worker keeps running: ${String(err)}`);
       return null;
     }
