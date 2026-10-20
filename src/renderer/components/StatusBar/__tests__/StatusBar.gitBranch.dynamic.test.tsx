@@ -10,7 +10,7 @@ import type { Pane, Workspace } from '../../../../shared/types';
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
-  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, key) => (key === 'then' ? undefined : stub()) });
+  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, key) => (key === 'then' ? undefined : key === 'onChanged' ? () => () => undefined : stub()) });
   (window as unknown as { electronAPI: unknown }).electronAPI = new Proxy({ platform: 'darwin' } as Record<string, unknown>, {
     get: (t, key: string) => (key in t ? t[key] : stub()),
   });

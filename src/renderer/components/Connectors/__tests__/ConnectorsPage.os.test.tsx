@@ -25,7 +25,9 @@ describe('Connectors page', () => {
     p.save = vi.fn(async () => ({ ok: true as const, connector: c }));
     await mount(p);
     await act(async () => button('Discover').click());
+    await act(async () => host.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
     const gmail = [...host.querySelectorAll('li')].find((li) => li.querySelector('h3')?.textContent === 'Gmail')!;
+    await act(async () => gmail.querySelector('summary')!.click());
     await act(async () => gmail.querySelector('button')!.click());
     const save = document.querySelector<HTMLButtonElement>('[data-testid="connection-save"]')!;
     expect(save.disabled).toBe(false);
@@ -44,7 +46,7 @@ describe('Connectors page', () => {
   it('keeps configured separate from authenticated and uses English labels', async () => {
     await mount(port());
     expect(host.textContent).toContain('Configured · not verified');
-    expect(host.textContent).toContain('local macOS/Linux terminal launch commands');
+    expect(host.textContent).toContain('choose which tools and agents may use it');
     expect(host.textContent).not.toContain('Connected');
   });
   it('requires confirmation and preserves stored keys on remove', async () => {
@@ -65,7 +67,9 @@ describe('Connectors page', () => {
   it('opens a catalog preset for review without saving it', async () => {
     const p = port(); await mount(p);
     await act(async () => button('Discover').click());
-    await act(async () => button('Configure').click());
+    const preset = [...host.querySelectorAll('li')].find((li) => li.querySelector('h2')?.textContent === 'GitHub (read-only)')!;
+    await act(async () => preset.closest('details')!.querySelector('summary')!.click());
+    await act(async () => preset.querySelector('button')!.click());
     expect(p.save).not.toHaveBeenCalled();
     expect((document.querySelector('[data-testid="connection-url"]') as HTMLInputElement).value).toContain('api.githubcopilot.com');
   });

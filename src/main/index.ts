@@ -1,5 +1,8 @@
 // Must stay the first import: turns off working-directory executable lookup (Windows) before any module runs.
 import '../shared/exeSearchGuard';
+import { registerPluginManagementHandlers } from './ipc/handlers/pluginManagement.handler';
+import { UiPluginManager } from './plugins/UiPluginManager';
+import { PLUGIN_MANAGEMENT_IPC } from '../shared/pluginManagement';
 import { warmLoginShellPath } from './claude/resolveClaudeExecutable';
 import { terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { randomUUID as phoneBrowserRequestId } from 'node:crypto';
@@ -679,6 +682,7 @@ markBoot('pipe-server-ctor-done');
 // read it through this binding.
 registerPrivilegedSchemes();
 let pluginHostLoader: PluginHostLoader | null = null;
+let uiPluginManager: UiPluginManager | null = null;
 const mcpRegistrar = new McpRegistrar();
 // Shared MCP broker (Option A, WMUX_MCP_BROKER=1; default OFF). Started on
 // ready BEFORE mcpRegistrar.register so the broker pipe is (or is about to
@@ -1191,6 +1195,7 @@ registerMcpPluginRpc(rpcRouter);
 // RpcRouter instance, so plugin-iframe RPCs hit the identical enforcement
 // stack as pipe clients. Registered once, outside the handler swap cycle.
 registerPluginHostHandlers(rpcRouter, () => pluginHostLoader, () => approvalQueue);
+registerPluginManagementHandlers(() => mainWindow, () => uiPluginManager);
 // Project config IPC (X5 wmux.json): discovery + trust gate. Renderer-only
 // surface — never exposed on the pipe RPC (external clients must not be able
 // to read project files or grant trust). Registered once, like plugin host.
@@ -2025,7 +2030,15 @@ app.on('ready', async () => {
   // a broken plugins dir must never block app boot.
   try {
     const loader = new PluginHostLoader(getPluginTrustStore());
-    await loader.loadAll();
+    const manager = new UiPluginManager({
+      loader, trust: getPluginTrustStore(), approval: () => approvalQueue,
+      pluginsDir: path.join(getWmuxHomeDir(), 'plugins'),
+      statePath: path.join(getWmuxHomeDir(), 'ui-plugins.json'),
+      catalogDir: app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'examples', 'plugins'),
+      changed: (name) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(PLUGIN_MANAGEMENT_IPC.changed, name); },
+    });
+    await manager.initialize();
+    uiPluginManager = manager;
     pluginHostLoader = loader;
     const failures = loader.listFailures();
     logLine('info', 'main', `plugin host: ${loader.list().length} plugin(s) loaded, ${failures.length} failed`);

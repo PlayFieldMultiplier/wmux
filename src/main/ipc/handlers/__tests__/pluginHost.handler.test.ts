@@ -33,6 +33,7 @@ function setup() {
   dispatch = vi.fn(async (): Promise<RpcResponse> => ({ id: 'x', ok: true, result: {} }));
   const router = { dispatch } as unknown as RpcRouter;
   const loader = {
+    getRevision: () => 0,
     get: (name: string) =>
       name === 'demo' ? { manifest: { name: 'demo', version: '1.0.0' } } : undefined,
   };
@@ -54,7 +55,7 @@ describe('plugins:rpc host workspace binding', () => {
     await rpc({}, 'demo', 'browser.navigate', { url: 'https://example.test' }, 'ws-host');
 
     const [request, opts] = dispatch.mock.calls[0] as DispatchArgs;
-    expect(opts).toEqual({ firstParty: true, hostedWorkspace: 'ws-host' });
+    expect(opts).toEqual({ firstParty: true, hostedWorkspace: 'ws-host', isCurrent: expect.any(Function) });
     // The params are forwarded verbatim: the binding is carried beside them, so
     // main can compare what the plugin asked for against where it lives.
     expect(request.params).toEqual({ url: 'https://example.test' });
@@ -67,7 +68,7 @@ describe('plugins:rpc host workspace binding', () => {
     await rpc({}, 'demo', 'browser.navigate', { hostedWorkspace: 'ws-forged' }, 'ws-host');
 
     const [request, opts] = dispatch.mock.calls[0] as DispatchArgs;
-    expect(opts).toEqual({ firstParty: true, hostedWorkspace: 'ws-host' });
+    expect(opts).toEqual({ firstParty: true, hostedWorkspace: 'ws-host', isCurrent: expect.any(Function) });
     // Still present in params — the router does not read it there, and
     // stripping it would hide a hostile plugin from the audit trail.
     expect(request.params).toEqual({ hostedWorkspace: 'ws-forged' });
@@ -82,7 +83,7 @@ describe('plugins:rpc host workspace binding', () => {
     // The key is present with a null value. Omitting it would make this
     // indistinguishable from a caller that is not the plugin host at all, and
     // the browser lane would then let the plugin name its own workspace.
-    expect(opts).toEqual({ firstParty: true, hostedWorkspace: null });
+    expect(opts).toEqual({ firstParty: true, hostedWorkspace: null, isCurrent: expect.any(Function) });
   });
 
   it('refuses a non-string host workspace instead of coercing it', async () => {

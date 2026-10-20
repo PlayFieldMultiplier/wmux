@@ -12,6 +12,9 @@ it('shows service prerequisites and prepares a disabled Gmail connection only on
   const configure = vi.fn();
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   await act(async () => root.render(<ServiceCatalog canConfigure onConfigure={configure} />));
+  expect(host.querySelectorAll('li')).toHaveLength(12);
+  expect(host.textContent).not.toContain('Developer Preview');
+  await act(async () => host.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
   expect(host.querySelectorAll('li')).toHaveLength(24);
   expect(host.textContent).toContain('Developer Preview');
   expect(configure).not.toHaveBeenCalled();

@@ -45,7 +45,7 @@ let root: Root;
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
   // Any preload call the mounted tree makes resolves to an empty result.
-  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, key) => (key === 'then' ? undefined : stub()) });
+  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, key) => (key === 'then' ? undefined : key === 'onChanged' ? () => () => undefined : stub()) });
   (window as unknown as { electronAPI: unknown }).electronAPI = new Proxy({ platform: 'darwin' } as Record<string, unknown>, {
     get: (t, key: string) => (key in t ? t[key] : stub()),
   });

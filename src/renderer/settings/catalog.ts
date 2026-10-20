@@ -14,6 +14,7 @@ export type SettingsTabId =
   | 'browser'
   | 'computer-use'
   | 'remote'
+  | 'plugins'
   | 'lanlink'
   | 'about';
 
@@ -59,7 +60,7 @@ export const SETTINGS_NAV_GROUPS: {
   {
     id: 'connections',
     labelKey: 'settings.navGroupConnections',
-    tabs: ['remote', 'lanlink'],
+    tabs: ['plugins', 'remote', 'lanlink'],
   },
   {
     id: 'about',
@@ -97,6 +98,7 @@ export function resolveSettingsTab(id: string | null | undefined): SettingsTabId
  * "언어" finds Language while the UI is still in English).
  */
 export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
+  { id: 'plugins', tab: 'plugins', labelKey: 'plugins.settings.title', descKey: 'plugins.settings.description', synonyms: 'connector extension install Gmail GitHub MCP 플러그인 커넥터 插件 wtyczki' },
   { id: 'language', tab: 'general', labelKey: 'settings.language', synonyms: 'locale 언어 language 日本語 中文 idioma' },
   { id: 'autoupdate', tab: 'general', labelKey: 'settings.autoUpdate', descKey: 'settings.autoUpdateDesc', synonyms: 'update upgrade version' },
   { id: 'checkupdate', tab: 'general', labelKey: 'settings.checkUpdate', synonyms: 'update now latest release' },

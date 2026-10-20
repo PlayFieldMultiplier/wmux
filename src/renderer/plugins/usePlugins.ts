@@ -7,60 +7,66 @@ interface PluginListState {
   loaded: boolean;
 }
 
-// Module-level cache: the loaded plugin set only changes on app restart
-// (B-1 core has no hot reload), so every host component shares one fetch.
+const EMPTY: PluginListState = { plugins: [], failures: [], loaded: false };
 let cache: PluginListState | null = null;
 let inflight: Promise<PluginListState> | null = null;
+let generation = 0;
+let unsubscribeRuntime: (() => void) | null = null;
+const listeners = new Set<(s: PluginListState) => void>();
 
 async function fetchPlugins(): Promise<PluginListState> {
-  if (!window.electronAPI?.plugins) return { plugins: [], failures: [], loaded: true };
+  if (!window.electronAPI?.plugins) return { ...EMPTY, loaded: true };
   if (cache) return cache;
   if (!inflight) {
-    inflight = window.electronAPI.plugins
-      .list()
-      .then((res) => {
-        cache = {
-          plugins: (res.plugins as PluginHostPluginSummary[]) ?? [],
-          failures: res.failures ?? [],
-          loaded: true,
-        };
-        return cache;
-      })
-      .catch(() => {
-        // Main not ready / handler swapped — treat as "no plugins" but do
-        // not cache, so a later mount retries.
-        inflight = null;
-        return { plugins: [], failures: [], loaded: true };
-      });
+    const epoch = generation;
+    inflight = window.electronAPI.plugins.list().then((res) => {
+      if (epoch !== generation) return listeners.size ? fetchPlugins() : EMPTY;
+      cache = { plugins: (res.plugins as PluginHostPluginSummary[]) ?? [], failures: res.failures ?? [], loaded: true };
+      return cache;
+    }).catch(() => {
+      if (epoch !== generation) return listeners.size ? fetchPlugins() : EMPTY;
+      inflight = null;
+      return { ...EMPTY, loaded: true };
+    });
   }
   return inflight;
 }
 
-// Subscribers re-rendered by refreshPlugins (trust status changes after an
-// approval prompt resolves).
-const listeners = new Set<(s: PluginListState) => void>();
-
-/** Drop the cache and re-fetch — call after a trust-status mutation. */
-export async function refreshPlugins(): Promise<void> {
-  cache = null;
-  inflight = null;
-  const s = await fetchPlugins();
-  for (const fn of listeners) {
-    try { fn(s); } catch { /* a broken subscriber must not block the rest */ }
+function publish(state: PluginListState): void {
+  for (const listener of listeners) {
+    try { listener(state); } catch { /* A closing host must not block others. */ }
   }
 }
 
-/** Loaded UI plugin summaries (empty until the one-shot IPC resolves). */
+/** Retire frames immediately; never let an older list remount a removed bundle. */
+export async function refreshPlugins(changedName?: string): Promise<void> {
+  const epoch = ++generation;
+  const previous = cache;
+  cache = null;
+  inflight = null;
+  if (changedName && previous) publish({ ...previous, plugins: previous.plugins.filter((plugin) => plugin.name !== changedName) });
+  const state = await fetchPlugins();
+  if (epoch === generation) publish(state);
+}
+
 export function usePlugins(): PluginListState {
-  const [state, setState] = useState<PluginListState>(
-    cache ?? { plugins: [], failures: [], loaded: false },
-  );
+  const [state, setState] = useState<PluginListState>(cache ?? EMPTY);
   useEffect(() => {
     let cancelled = false;
-    const onUpdate = (s: PluginListState) => { if (!cancelled) setState(s); };
-    listeners.add(onUpdate);
-    void fetchPlugins().then(onUpdate);
-    return () => { cancelled = true; listeners.delete(onUpdate); };
+    const update = (value: PluginListState) => { if (!cancelled) setState(value); };
+    if (listeners.size === 0) {
+      unsubscribeRuntime = window.electronAPI?.pluginManagement?.onChanged((name) => { void refreshPlugins(name); }) ?? null;
+    }
+    listeners.add(update);
+    void fetchPlugins().then(update);
+    return () => {
+      cancelled = true;
+      listeners.delete(update);
+      if (listeners.size === 0) {
+        unsubscribeRuntime?.(); unsubscribeRuntime = null;
+        generation++; cache = null; inflight = null;
+      }
+    };
   }, []);
   return state;
 }

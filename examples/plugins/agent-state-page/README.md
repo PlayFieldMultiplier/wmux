@@ -4,14 +4,19 @@ A small original UI plugin demonstrating a full rail page, workspace-scoped
 agent snapshots, live updates and jumping to a pane. No external assets or
 runtime dependencies are used. The example follows the repository's MIT license.
 
-Copy this directory into `~/.wmux/plugins/agent-state-page` (Windows:
+In Settings > Plugins > Discover, install **Agent status**, then review its
+permissions from Installed. Installation does not approve permissions. You can
+disable or uninstall the catalog copy there without restarting wmux.
+
+For manual installation, copy this directory into `~/.wmux/plugins/agent-state-page` (Windows:
 `%USERPROFILE%\.wmux\plugins\agent-state-page`), restart wmux, select **Agent
 status** in the rail, and review the permission prompt. For an isolated test
 instance, use that instance's suffixed `.wmux` directory instead.
 
 This requires a host implementing `ui.rail-page` and `agent.state.read`.
 Older hosts reject the manifest's unknown capabilities; this is not a plugin
-for those versions. Removing or replacing files is applied at app restart.
+for those versions. Manual file replacements are applied at app restart. Manually installed copies
+can be disabled in Settings; their folders are not deleted by the catalog.
 
 Permissions:
 

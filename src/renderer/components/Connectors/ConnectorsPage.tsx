@@ -1,3 +1,4 @@
+import { useOwnedDialog } from '../Settings/SettingsLayout';
 import ConnectorTerminal from './ConnectorTerminal';
 import ConnectorAuthorization from './ConnectorAuthorization';
 // Catalog behavior adapted from LibreChat (MIT), revision e081b566a42d3a83b8102157bd7806cf4ff63b17.
@@ -24,14 +25,16 @@ import type { ConnectorDraft, ConnectorView } from '../../../shared/botConnector
  * See LICENSE.LibreChat and docs/design/connector-adoption.md for provenance.
  * Stored configuration is deliberately not presented as verified connectivity.
  */
-export default function ConnectorsPage({ port = getBotConnectorPort() }: { port?: BotConnectorPort }) {
+export default function ConnectorsPage({ port = getBotConnectorPort(), embedded = false, selectedView }: { port?: BotConnectorPort; embedded?: boolean; selectedView?: 'mine' | 'discover' }) {
   const t = useT();
   const bots = useFactoryBots(null);
-  const [view, setView] = useState<'mine' | 'discover'>('mine');
+  const [localView, setView] = useState<'mine' | 'discover'>('mine');
+  const view = selectedView ?? localView;
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<ConnectorView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [storageUnavailable, setStorageUnavailable] = useState(false);
   const [revision, setRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
@@ -47,16 +50,18 @@ export default function ConnectorsPage({ port = getBotConnectorPort() }: { port?
   };
   const [removing, setRemoving] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ editing?: ConnectorView; initialDraft?: ConnectorDraft } | null>(null);
+  useOwnedDialog(embedded && dialog !== null);
   const reload = useCallback(() => setRevision((r) => r + 1), []);
   useEffect(() => getFactoryBotPort().subscribe(reload), [reload]);
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError(false);
+    setStorageUnavailable(false);
     if (!port.available) { setLoading(false); setError(true); return; }
     void port.list().then((r) => {
       if (!alive) return;
-      if (!r.ok || r.cannotStore) { setError(true); setItems([]); }
+      if (!r.ok || r.cannotStore) { setStorageUnavailable(r.ok && !!r.cannotStore); setError(true); setItems([]); }
       else setItems(r.connectors);
     }, () => { if (alive) { setError(true); setItems([]); } })
       .finally(() => { if (alive) setLoading(false); });
@@ -77,25 +82,25 @@ export default function ConnectorsPage({ port = getBotConnectorPort() }: { port?
     finally { setBusy(false); }
   };
   return (
-    <section className="flex h-full min-h-0 flex-col gap-5 overflow-y-auto p-7 text-[var(--text-main)]" aria-label={t('connectors.title')}>
+    <section className={embedded ? "flex flex-col gap-4 text-[var(--text-main)]" : "flex h-full min-h-0 flex-col gap-5 overflow-y-auto p-7 text-[var(--text-main)]"} aria-label={t('connectors.title')}>
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-[20px] font-semibold">{t('connectors.title')}</h1>
+        {embedded ? <h2 className="text-[13px] font-normal text-[var(--text-sub)]">{t('connectors.title')}</h2> : <h1 className="text-[20px] font-semibold">{t('connectors.title')}</h1>}
         <Button disabled={!port.available || busy || loading || error} onClick={() => setDialog({})}>{t('connectors.add')}</Button>
       </header>
-      <p className="text-[13px] text-[var(--text-sub)]">{t('connectors.scope')}</p>
+      <p className="text-[13px] text-[var(--text-sub)]">{t('connectors.quick.scope')}</p>
       <div className="flex flex-wrap items-center gap-3">
-        <SegmentedControl value={view} onValueChange={setView} ariaLabel={t('connectors.title')} options={[
+        {!selectedView && <SegmentedControl value={view} onValueChange={setView} ariaLabel={t('connectors.title')} options={[
           { value: 'mine', label: t('connectors.mine') }, { value: 'discover', label: t('connectors.discover') },
-        ]} />
+        ]} />}
         {view === 'mine' && <Input aria-label={t('connectors.search')} placeholder={t('connectors.search')} value={query} onChange={(e) => setQuery(e.target.value)} />}
       </div>
-      {error && <div role="alert" className="flex items-center gap-3 text-[var(--attention-text)]"><span>{t('connectors.error')}</span><Button onClick={reload}>{t('connectors.retry')}</Button></div>}
+      {error && <div role="alert" className="flex items-center gap-3 text-[var(--attention-text)]"><span>{t(storageUnavailable ? 'connectors.quick.storage' : 'connectors.error')}</span><Button onClick={reload}>{t('connectors.retry')}</Button></div>}
       {loading && <p role="status">{t('connectors.loading')}</p>}
-      {!loading && view === 'mine' && !error && <ul className="flex flex-col gap-2">
+      {!loading && view === 'mine' && !error && <ul className={embedded ? "divide-y divide-[var(--stroke)] rounded-xl border border-[var(--line)]" : "flex flex-col gap-2"}>
         {filtered.length === 0 && <li className="text-[var(--text-muted)]">{t('connectors.empty')}</li>}
         {filtered.map((c) => {
           const checked = checks[c.id]?.fingerprint === JSON.stringify(c) ? checks[c.id] : undefined;
-          return <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-[var(--chip-radius)] bg-[var(--hover-fill)] p-4">
+          return <li key={c.id} className={embedded ? "flex flex-wrap items-center gap-3 px-3.5 py-3" : "flex flex-wrap items-center gap-3 rounded-[var(--chip-radius)] bg-[var(--hover-fill)] p-4"}>
           <div className="min-w-0 flex-1"><h2 className="text-[14px] font-medium">{c.name}</h2><p className="text-[12px] text-[var(--text-sub)]">{c.purpose}</p><p className="text-[11px] text-[var(--text-muted)]">{t(c.missingKeys.length ? 'connectors.missing' : c.enabled ? 'connectors.configured' : 'connectors.disabled')}</p></div>
           {c.transport === 'http' && window.electronAPI?.connectorTerminal && window.electronAPI.platform !== 'win32' && <ConnectorTerminal id={c.id} enabled={c.enabled && (c.tools.mode === 'all' || c.tools.allowed.length > 0)} />}
           {c.transport === 'http' && <ConnectorAuthorization key={`${c.id}-${JSON.stringify(c)}`} id={c.id} endpoint={c.remote?.url} fingerprint={JSON.stringify(c)} onChange={() => setChecks((prev) => { const next = { ...prev }; delete next[c.id]; return next; })} />}
@@ -107,12 +112,12 @@ export default function ConnectorsPage({ port = getBotConnectorPort() }: { port?
           {removing !== c.id ? <Button disabled={busy} onClick={() => setRemoving(c.id)}>{t('connectors.remove')}</Button> : <div className="flex items-center gap-2"><span className="text-[12px]">{t('connectors.removeHint')}</span><Button disabled={busy} onClick={() => setRemoving(null)}>{t('connectors.cancel')}</Button><Button disabled={busy} onClick={() => void mutate(() => port.remove({ id: c.id, deleteKeys: false }))}>{t('connectors.confirm')}</Button></div>}
         </li>; })}
       </ul>}
-      {view === 'discover' && <><ul className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {CONNECTOR_PRESETS.map((p) => <li key={p.id} className="rounded-[var(--chip-radius)] bg-[var(--hover-fill)] p-4">
+      {view === 'discover' && <><ServiceCatalog port={port} embedded={embedded} canConfigure={port.available && !loading && !error} onConfigure={(initialDraft) => setDialog({ initialDraft })} /><details><summary>{t('connectors.quick.details')}</summary><ul className={embedded ? "divide-y divide-[var(--stroke)] rounded-xl border border-[var(--line)]" : "grid grid-cols-1 gap-3 lg:grid-cols-2"}>
+        {CONNECTOR_PRESETS.map((p) => <li key={p.id} className={embedded ? "px-3.5 py-3" : "rounded-[var(--chip-radius)] bg-[var(--hover-fill)] p-4"}>
           <h2 className="text-[14px] font-medium">{t(p.labelKey)}</h2><p className="my-3 text-[12px] text-[var(--text-sub)]">{t(p.hintKey)}</p>
           <Button disabled={!port.available || loading || error} onClick={() => setDialog({ initialDraft: p.draft })}>{t('connectors.configure')}</Button>
         </li>)}
-      </ul><ServiceCatalog canConfigure={port.available && !loading && !error} onConfigure={(initialDraft) => setDialog({ initialDraft })} /><RegistryCatalog canConfigure={port.available && !loading && !error} onConfigure={(initialDraft) => setDialog({ initialDraft })} /></>}
+      </ul><RegistryCatalog embedded={embedded} canConfigure={port.available && !loading && !error} onConfigure={(initialDraft) => setDialog({ initialDraft })} /></details></>}
       {dialog && <ConnectionDialog t={t} bots={bots} editing={dialog.editing} initialDraft={dialog.initialDraft} port={port} onClose={() => { setDialog(null); reload(); }} />}
     </section>
   );

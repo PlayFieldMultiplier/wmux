@@ -1,3 +1,4 @@
+import { PLUGIN_MANAGEMENT_IPC, type UiPluginInventory } from '../shared/pluginManagement';
 import { PLUGIN_FRAME_IPC } from '../shared/pluginHost';
 import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult } from '../shared/connectorTerminal';
 import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthAction, type ConnectorOAuthClient, type ConnectorOAuthResult } from '../shared/connectorOAuth';
@@ -1531,6 +1532,17 @@ const electronAPI = {
   },
   connectorChecks: {
     check: (id: string) => ipcRenderer.invoke(CONNECTOR_CHECK_IPC, id) as Promise<ConnectorCheckResult>,
+  },
+  pluginManagement: {
+    list: () => ipcRenderer.invoke(PLUGIN_MANAGEMENT_IPC.list) as Promise<UiPluginInventory>,
+    install: (id: string) => ipcRenderer.invoke(PLUGIN_MANAGEMENT_IPC.install, id) as Promise<void>,
+    setEnabled: (name: string, enabled: boolean) => ipcRenderer.invoke(PLUGIN_MANAGEMENT_IPC.enabled, name, enabled) as Promise<void>,
+    remove: (name: string) => ipcRenderer.invoke(PLUGIN_MANAGEMENT_IPC.remove, name) as Promise<void>,
+    onChanged: (callback: (name: string) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, name: string) => callback(name);
+      ipcRenderer.on(PLUGIN_MANAGEMENT_IPC.changed, listener);
+      return () => { ipcRenderer.removeListener(PLUGIN_MANAGEMENT_IPC.changed, listener); };
+    },
   },
   plugins: {
     frameReady: (pluginName: string, frameName: string, nonce: string) =>

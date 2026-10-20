@@ -1,11 +1,12 @@
 # Settings
 
-Settings is a full rail page (not a modal) with a searchable nav of 15 tabs grouped as general, Agents and Connections. UI preferences (theme, language, font size, scrollback, sidebar options) apply immediately and are saved to the profile's `session.json`.
+Settings is a full rail page (not a modal) with a searchable nav of 16 tabs grouped as general, Agents and Connections. UI preferences (theme, language, font size, scrollback, sidebar options) apply immediately and are saved to the profile's `session.json`.
 
 ## Sub-features
 
 - `settings-open` / `settings-close`: open from the More menu or ⌘,; close with "Close" or Escape (⌘, toggles).
-- `settings-nav`: tabs General, Appearance, Terminal, Keyboard, Notifications, Claude Code, Accounts, Factory, Roles & fan-out, Token usage, Browser, Computer use, Remote & phone, LAN, About.
+- `settings-nav`: tabs General, Appearance, Terminal, Keyboard, Notifications, Claude Code, Accounts, Bots, Roles & fan-out, Token usage, Browser, Computer use, Plugins, Remote & phone, LAN, About.
+- `settings-plugins`: Installed/Discover lists, explicit UI plugin approval, enable/disable, managed uninstall, and embedded connectors.
 - `settings-search`: "Search settings" with grouped results and an empty state.
 - `settings-theme`: Appearance › Theme radio cards (Tint, Paper, Mono, …).
 - `settings-language`: General › Language select (`en`, `ko`, `ja`, …).
@@ -49,6 +50,36 @@ Preconditions:
 - **Search.** Run `control-wmux click --testid settings-search`, `control-wmux type --text theme --testid settings-search`. `control-wmux wait-settle --testid settings-search-results` passes. `type` appends, so clear first (`control-wmux press --key Meta+a --testid settings-search`, `press --key Backspace`); a nonsense query such as `zzzqqq` shows `settings-search-empty` ("No settings match “zzzqqq”.").
 - **Proof.** `control-wmux screenshot --as settings-general` shows the Settings page with the General tab.
 - **Terminal engine.** Open Terminal, then `control-wmux select --label "Terminal engine" --value rust` and `control-wmux wait-settle`. Inspect `window.electronAPI.settings.getTerminalCore()` (read-only): `selected` becomes `rust` while a running Node host stays `node` and `restartRequired` is true. Read `~/.wmux<suffix>/terminal-core.json` independently. `stop` without purge, then `launch` with the same executable and suffix restarts both hosts; verify `host: daemon`, effective `rust`, and no restart required. Repeat with `--value node` to prove rollback. `restart` alone retains the daemon, so it proves reconnect rather than engine application. Hover the engine control before a screenshot to bring it into view.
+
+## Plugins lifecycle in an isolated profile
+
+Open `[data-settings-tab="plugins"]`, select the Discover radio, and install
+Agent status. Installed must show Not approved without a rail contribution.
+Click Review permissions to open, inspect the permission dialog, then Approve.
+Open must display the Agent status page. Return to Settings › Plugins and
+Disable: the rail contribution disappears. Restart with the driver and run
+doctor, then reopen Plugins: Disabled must persist. Independently read
+`~/.wmux<suffix>/ui-plugins.json`.
+
+Enable must preserve the explicit approval. Uninstall requires a second click
+after its confirmation appears (Cancel receives focus); verify the bundle under
+`~/.wmux<suffix>/plugins/agent-state-page` is gone. Reinstall must require fresh
+approval. Manual bundles have no Uninstall action. Capture the full window in
+Paper, and stop the owned app and daemon after the check.
+
+Connector credentials use the OS secure store even in an isolated profile.
+If it is unavailable, record save/connect flows as blocked; never bypass it or
+change Keychain access rules. Discover remains available for read-only browsing.
+
+In Discover, browser sign-in recipes show Connect without endpoint or client
+fields. Show advanced connections reveals recipes requiring provider setup;
+manual presets and registry browsing are under Details and manual setup.
+With an authorized test account and available secure storage, Connect must
+reuse the same endpoint or save a connection with no allowed tools or bot
+scope, show the existing recipient consent, open browser sign-in, then check
+the server automatically. A failed check must not show Connected and checked.
+Disconnect must discard any late check result. Do not count a disabled Connect
+button or a mocked OAuth test as a completed provider sign-in.
 
 ## Gotchas
 

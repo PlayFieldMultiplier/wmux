@@ -51,7 +51,7 @@ let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
-  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, k) => (k === 'then' ? undefined : stub()) });
+  const stub = (): unknown => new Proxy(() => Promise.resolve([]), { get: (_t, k) => (k === 'then' ? undefined : k === 'onChanged' ? () => () => undefined : stub()) });
   (window as unknown as { electronAPI: unknown }).electronAPI = new Proxy({ platform: 'win32' } as Record<string, unknown>, {
     get: (t, k: string) => (k in t ? t[k] : stub()),
   });
