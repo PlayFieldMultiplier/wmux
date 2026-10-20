@@ -67,6 +67,8 @@ describe('scanForTranscript', () => {
     const original = writeTranscript(path.join(home, 'user', '.claude', 'projects', '-synthetic-repo'));
     writeTranscript(path.join(root, '-synthetic-repo'));
     expect(scanForTranscript(ID, { CLAUDE_CONFIG_DIR: '' })).toEqual([original]);
+    // An unbound workspace's pane env leaves the variable out altogether.
+    expect(scanForTranscript(ID, {})).toEqual([original]);
   });
 
   it('refuses a same-named file OUTSIDE the projects root', () => {
