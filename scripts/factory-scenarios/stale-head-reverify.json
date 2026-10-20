@@ -171,21 +171,7 @@
               ]
             }
           ]
-        },
-        "triggers": [
-          {
-            "kind": "pr.opened",
-            "filter": {
-              "authorTrusted": true
-            }
-          },
-          {
-            "kind": "pr.head_moved",
-            "filter": {
-              "authorTrusted": true
-            }
-          }
-        ]
+        }
       }
     ]
   },
