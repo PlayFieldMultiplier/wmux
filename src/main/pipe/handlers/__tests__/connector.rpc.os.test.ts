@@ -127,6 +127,18 @@ describe('connector store', () => {
   it('parseStoredConnector needs an id and timestamps', () => {
     expect(parseStoredConnector({ ...draft(), offFor: [] })).toBeNull();
   });
+
+  it('preserves bot grants when legacy or malformed terminal policy is read', () => {
+    const raw = { ...draft(), id: 'con-12345678', createdAt: 1, updatedAt: 1, offFor: [B] };
+    const legacy = parseStoredConnector(raw);
+    expect(legacy?.scope).toEqual(raw.scope);
+    expect(legacy?.offFor).toEqual([B]);
+    expect(legacy?.terminalAccess).toBeUndefined();
+    const malformed = parseStoredConnector({ ...raw, terminalAccess: { mode: 'all' } });
+    expect(malformed?.terminalAccess?.mode).toBe('none');
+    expect(malformed?.scope).toEqual(raw.scope);
+    expect(malformed?.offFor).toEqual([B]);
+  });
 });
 
 describe('saving a connection', () => {

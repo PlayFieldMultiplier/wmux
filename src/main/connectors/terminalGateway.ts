@@ -13,6 +13,8 @@ interface Options {
   getConnector: () => Connector | undefined;
   headers: () => Promise<Record<string, string>>;
   authorizationRevision: () => number;
+  /** Host-bound live session and policy check. Never derived from MCP params. */
+  authorize: () => Promise<void>;
   ttlMs?: number;
 }
 /** One explicitly selected HTTP connection. Credentials never enter CLI configuration. */
@@ -41,6 +43,7 @@ export async function createTerminalGateway(options: Options): Promise<{ url: st
   };
   const upstream = async <T>(work: (client: Client, signal: AbortSignal) => Promise<T>): Promise<T> => {
     valid();
+    await options.authorize(); valid();
     const controller = new AbortController(); active.add(controller);
     const timeout = setTimeout(() => controller.abort(), 60_000);
     const client = new Client({ name: 'wmux-terminal-connector', version: '1.0.0' });
@@ -51,6 +54,7 @@ export async function createTerminalGateway(options: Options): Promise<{ url: st
           valid();
           if (new URL(input instanceof Request ? input.url : String(input)).href !== new URL(endpoint).href) throw new Error('Unexpected endpoint');
           const credentials = await options.headers(); valid();
+          await options.authorize(); valid();
           const headers = new Headers(init?.headers);
           for (const [name, value] of Object.entries(credentials)) headers.set(name, value);
           const response = await fetch(input, { ...init, headers, redirect: 'error', signal: controller.signal });
@@ -67,7 +71,7 @@ export async function createTerminalGateway(options: Options): Promise<{ url: st
       await client.connect(transport, { timeout: 15_000 });
       valid();
       const result = await work(client, controller.signal);
-      valid(); return result;
+      await options.authorize(); valid(); return result;
     } finally { clearTimeout(timeout); controller.abort(); active.delete(controller); await client.close().catch(() => undefined); }
   };
   const http = createServer(async (req, res) => {

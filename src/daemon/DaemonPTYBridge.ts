@@ -333,6 +333,8 @@ export class DaemonPTYBridge extends EventEmitter {
   private emptyShellPrompt = false;
   private completedShellCommand = false;
   private shellCommandRunning = false;
+  private shellSubmittedKeyRevision: number | undefined;
+  private shellCommandKeyRevision = 0;
   /**
    * At least one full activity window. A shorter one would let bytes banked
    * before a keystroke combine, inside the same 3 s measurement window, with
@@ -502,6 +504,11 @@ export class DaemonPTYBridge extends EventEmitter {
     // eslint-disable-next-line no-control-regex
     const clearsComposer = /[\x03\x15]/.test(data);
     if (forceSubmitted || hasSubmitBoundary) {
+      if (!this.shellCommandRunning) {
+        // A single write can contain Enter followed by queued history/draft
+        // input. One chunk revision cannot distinguish those trailing bytes.
+        this.shellSubmittedKeyRevision = /^[^\r\n]*[\r\n]$/.test(data) ? this.keyInputRevision : -1;
+      }
       this.draftPending = false;
       if (this.sessionId) this.emit('inputSubmitted', { sessionId: this.sessionId });
     } else if (clearsComposer) {
@@ -1752,8 +1759,17 @@ export class DaemonPTYBridge extends EventEmitter {
       if (event.code === 133 && promptLog) {
         const parsed = parseOsc133Payload(event.data, Date.now(), ringBuffer.totalBytesWritten);
         if (parsed) {
-          if (parsed.type === 'command_end') { this.completedShellCommand = this.shellCommandRunning; this.shellCommandRunning = false; }
-          if (parsed.type === 'command_start') { this.shellCommandRunning = true; this.completedShellCommand = false; this.emptyShellPrompt = false; }
+          if (parsed.type === 'command_end') {
+            // Input queued while a command runs can become history or a draft
+            // at the next prompt. Completion must not erase that invalidation.
+            this.completedShellCommand = this.shellCommandRunning && this.keyInputRevision === this.shellCommandKeyRevision;
+            this.shellCommandRunning = false;
+          }
+          if (parsed.type === 'command_start') {
+            this.shellCommandKeyRevision = this.shellSubmittedKeyRevision ?? this.keyInputRevision;
+            this.shellSubmittedKeyRevision = undefined;
+            this.shellCommandRunning = true; this.completedShellCommand = false; this.emptyShellPrompt = false;
+          }
           // The shell's foreground program changed hands: whatever episode was
           // open (an agent's, or the Enter that launched the next one) is over.
           if (parsed.type === 'command_start' || parsed.type === 'command_end') this.noteAgentEnded();
@@ -2121,6 +2137,8 @@ export class DaemonPTYBridge extends EventEmitter {
     this.keyInputRevision = 0;
     this.lastKeyInputAt = 0;
     this.shellCommandRunning = false;
+    this.shellSubmittedKeyRevision = undefined;
+    this.shellCommandKeyRevision = 0;
     this.emptyShellPrompt = false;
     this.completedShellCommand = false;
     this.settledStatus = null;

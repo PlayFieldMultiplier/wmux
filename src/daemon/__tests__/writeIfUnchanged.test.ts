@@ -27,6 +27,16 @@ function snapshot(s: ReturnType<typeof session>): WriteExpectation {
 }
 
 describe('writeIfUnchanged', () => {
+  it('fences even un-echoed keys, nonempty shell prompts and replaced incarnations', () => {
+    const s = session();
+    const expected = { ...snapshot(s), keyInputRevision: 2, incarnationId: 'one', requireEmptyShellPrompt: true as const };
+    const live = { ...s.live, keyInputRevision: 2, incarnationId: 'one', emptyShellPrompt: true };
+    expect(writeIfUnchanged({ ...live, keyInputRevision: 3 }, 'launch\r', expected)).toBe(false);
+    expect(writeIfUnchanged({ ...live, emptyShellPrompt: false }, 'launch\r', expected)).toBe(false);
+    expect(writeIfUnchanged({ ...live, incarnationId: 'two' }, 'launch\r', expected)).toBe(false);
+    expect(s.write).not.toHaveBeenCalled();
+    expect(writeIfUnchanged(live, 'launch\r', expected)).toBe(true);
+  });
   it('writes when the session is as the caller saw it', () => {
     const s = session();
     expect(writeIfUnchanged(s.live, 'claude\r', snapshot(s))).toBe(true);

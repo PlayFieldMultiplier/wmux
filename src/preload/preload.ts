@@ -1,6 +1,6 @@
 import { PLUGIN_MANAGEMENT_IPC, type UiPluginInventory } from '../shared/pluginManagement';
 import { PLUGIN_FRAME_IPC } from '../shared/pluginHost';
-import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult } from '../shared/connectorTerminal';
+import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult, type ConnectorTerminalContext } from '../shared/connectorTerminal';
 import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthAction, type ConnectorOAuthClient, type ConnectorOAuthResult } from '../shared/connectorOAuth';
 import { CONNECTOR_CATALOG_IPC, type ConnectorCatalogResult } from '../shared/connectorCatalog';
 import { CONNECTOR_CHECK_IPC, type ConnectorCheckResult } from '../shared/connectorCheck';
@@ -1541,7 +1541,8 @@ const electronAPI = {
   // iframe to main, where it dispatches through the shared RpcRouter with
   // clientName pinned to the plugin (full permission enforcement applies).
   connectorTerminal: {
-    launchCommand: (id: string, agent: 'claude' | 'codex') => ipcRenderer.invoke(CONNECTOR_TERMINAL_IPC, id, agent) as Promise<ConnectorTerminalResult>,
+    launch: (id: string, agent: 'claude' | 'codex', ptyId: string) => ipcRenderer.invoke(CONNECTOR_TERMINAL_IPC, id, agent, ptyId) as Promise<ConnectorTerminalResult>,
+    targets: () => ipcRenderer.invoke(`${CONNECTOR_TERMINAL_IPC}:targets`) as Promise<ConnectorTerminalContext | null>,
   },
   connectorOAuth: {
     action: (action: ConnectorOAuthAction, id: string, consentId?: string, client?: ConnectorOAuthClient) => ipcRenderer.invoke(CONNECTOR_OAUTH_IPC, action, id, consentId, client) as Promise<ConnectorOAuthResult>,

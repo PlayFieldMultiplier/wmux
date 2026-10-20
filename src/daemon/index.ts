@@ -5709,6 +5709,9 @@ function registerRpcHandlers(
     try {
       return {
         written: writeIfUnchanged({
+          keyInputRevision: managed.bridge.getKeyInputRevision(),
+          incarnationId: managed.meta.incarnationId,
+          emptyShellPrompt: managed.bridge.isEmptyShellPrompt(),
           ringBuffer: managed.ringBuffer,
           promptLog: managed.promptLog,
           write: (input) => {
@@ -5766,6 +5769,9 @@ function registerRpcHandlers(
       // The whole log's size, not just this page: daemon.writeIfUnchanged
       // compares against it.
       eventCount: managed.promptLog.size,
+      keyInputRevision: managed.bridge.getKeyInputRevision(),
+      incarnationId: managed.meta.incarnationId,
+      emptyShellPrompt: managed.bridge.isEmptyShellPrompt(),
       lastCompletedRange,
       totalBytesWritten,
       sessionFound: true,

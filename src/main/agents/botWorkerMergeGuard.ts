@@ -591,7 +591,7 @@ export function isBotWorkerSession(sessionId: string, dir: string = getWmuxDir()
 }
 
 /** A workspace a bot worker's session was recorded in (any, while unreadable). */
-function isBotWorkerWorkspace(workspaceId: string, dir: string): boolean {
+export function isBotWorkerWorkspace(workspaceId: string, dir: string = getWmuxDir()): boolean {
   const map = loadSessions(dir);
   if (unreadable !== null) return true;
   for (const r of map.values()) if (r.workspaceId === workspaceId) return true;

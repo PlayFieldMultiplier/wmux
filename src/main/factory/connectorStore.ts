@@ -7,9 +7,12 @@
 // dropped. A file that exists but cannot be read, or carries another
 // version, loads as no connections (fewer tools, never more) and is not
 // written over until the owner fixes or removes it.
+// Exception: a malformed terminal-access policy disables only terminal access;
+// it never discards an otherwise valid legacy bot grant.
 
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { noTerminalAccess, parseTerminalAccess } from '../../shared/connectorAccess';
 import {
   CONNECTOR_ID_RE,
   connectorSecretNames,
@@ -56,7 +59,12 @@ export function parseStoredConnector(raw: unknown, holds: (text: string) => bool
   if (typeof r.createdAt !== 'number' || typeof r.updatedAt !== 'number') return null;
   // A command was resolved to an absolute path when it was saved; a bare one
   // on disk was not written by main.
-  const shape = parseConnectorShape(raw);
+  // A malformed terminal policy fails closed independently, preserving existing
+  // bot grants. Owner-submitted malformed policies are still refused on save.
+  const invalidTerminalAccess = r.terminalAccess !== undefined && !parseTerminalAccess(r.terminalAccess);
+  if (invalidTerminalAccess) console.warn('[factory] connectors: invalid terminal access disabled; bot grants retained');
+  const shape = parseConnectorShape(invalidTerminalAccess
+    ? { ...r, terminalAccess: noTerminalAccess() } : raw);
   if (!shape.ok) return null;
   const c = shape.connector;
   if (c.stdio && !path.isAbsolute(c.stdio.command)) return null;
@@ -144,6 +152,7 @@ export class ConnectorStore {
     const offFor = c.scope.kind === 'all' ? (prior && prior.scope.kind === 'all' ? prior.offFor : []) : [];
     const next: Connector = {
       ...c,
+      terminalAccess: c.terminalAccess ?? prior?.terminalAccess ?? noTerminalAccess(),
       id: prior?.id ?? this.mintId(),
       offFor: [...offFor],
       createdAt: prior?.createdAt ?? at,
