@@ -3,7 +3,7 @@ import { spawnAgent, stopAgent } from './agentProcess';
 import { randomBytes } from 'node:crypto';
 // eslint's legacy node resolver does not understand package export maps.
 // eslint-disable-next-line import/no-unresolved
-import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client';
+import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import { BASE_CAPABILITIES, array, body, deadline, printable, record, string, type ChatAdapter, type ChatAdapterContext } from './adapter';
 
 export class OpenCodeChatAdapter implements ChatAdapter {
@@ -38,6 +38,9 @@ export class OpenCodeChatAdapter implements ChatAdapter {
       child.on('error', () => { reject(new Error('Unable to launch OpenCode')); context.disconnected('Unable to launch OpenCode'); });
       child.on('exit', () => { reject(new Error('OpenCode exited')); context.disconnected('OpenCode exited'); });
     }));
+    // Loaded on connect, not at daemon start: a daemon with no OpenCode chat never pays for the SDK.
+    // eslint-disable-next-line import/no-unresolved -- legacy node resolver can't read the package's export map
+    const { createOpencodeClient } = await import('@opencode-ai/sdk/v2/client');
     const client = this.client = createOpencodeClient({ baseUrl: url, directory: context.cwd, throwOnError: true,
       headers: { Authorization: `Basic ${Buffer.from(`wmux:${password}`).toString('base64')}` },
       fetch: (request) => fetch(request, { signal: this.abort.signal }),
