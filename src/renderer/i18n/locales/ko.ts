@@ -2985,6 +2985,7 @@ export const ko = {
   'firstRunWizard.agent.later': "나중에",
   'firstRunWizard.agent.backToSetup': "설정으로 돌아가기",
   'firstRunWizard.agent.guide.logTitle': "{name}: 터미널 탭",
+  'firstRunWizard.agent.guide.signedInBody': "로그인되었습니다. 터미널 탭에 남은 질문이 있으면 거기서 답한 뒤 설정으로 돌아가세요.",
   'firstRunWizard.agent.guide.installTitle': "{name} 설치 중",
   'firstRunWizard.agent.guide.installBody': "설치는 터미널 탭에서 진행됩니다. 끝나면 이 카드가 다시 확인합니다.",
   'firstRunWizard.agent.guide.claudeTitle': "{name} 로그인 중",

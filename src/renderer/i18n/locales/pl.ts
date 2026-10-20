@@ -3565,6 +3565,7 @@ export const pl = {
   'firstRunWizard.agent.later': "Później",
   'firstRunWizard.agent.backToSetup': "Wróć do konfiguracji",
   'firstRunWizard.agent.guide.logTitle': "{name}: karta terminala",
+  'firstRunWizard.agent.guide.signedInBody': "Zalogowano. Jeśli karta terminala jeszcze o coś pyta, odpowiedz tam, a potem wróć do konfiguracji.",
   'firstRunWizard.agent.guide.installTitle': "Instalowanie {name}",
   'firstRunWizard.agent.guide.installBody': "Instalacja działa w karcie terminala. Ta karta sprawdzi ponownie po jej zakończeniu.",
   'firstRunWizard.agent.guide.claudeTitle': "Logowanie do {name}",

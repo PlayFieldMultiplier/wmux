@@ -368,7 +368,8 @@ export function guideKeys(run: AgentRun): { title: string; body: string } {
       ? run.failure === 'network' ? 'firstRunWizard.agent.failedNetwork'
         : run.failure === 'permission' ? 'firstRunWizard.agent.failedPermission' : 'firstRunWizard.agent.failedUnknown'
       : run.phase === 'not-found' ? 'firstRunWizard.agent.notFound'
-        : run.phase === 'succeeded' ? 'firstRunWizard.agent.ready'
+        : run.phase === 'succeeded'
+          ? (run.kind === 'login' ? 'firstRunWizard.agent.guide.signedInBody' : 'firstRunWizard.agent.ready')
           : run.kind === 'login' ? 'firstRunWizard.agent.loginClosed' : 'firstRunWizard.agent.failedUnknown';
     return { title: 'firstRunWizard.agent.guide.logTitle', body };
   }

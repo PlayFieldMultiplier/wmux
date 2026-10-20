@@ -38,6 +38,7 @@ import { FOCUS_RING } from './focusRing';
 import { AgentReadyGroup, AgentSetupCorner, cornerRun, decideAgentPrimary } from './FirstRunAgentCards';
 import { refreshAgentStatus, useAgentSetup } from '../utils/agentSetupRuns';
 import { anyAgentReady, type AgentId } from '../../shared/agentSetup';
+import { FIRST_RUN_REOPEN_EVENT } from '../../shared/firstRun';
 
 // ─── Local type narrowing for electronAPI.firstRun ────────────────────────────
 //
@@ -322,11 +323,31 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   useEffect(() => {
     const before = seenRunning.current;
     seenRunning.current = runningIds;
-    const prev = new Set(before.split(',').filter(Boolean));
-    const started = runningIds.split(',').filter((key) => key && !prev.has(key));
-    if (started.length > 0) setAside(started[started.length - 1].split(':')[1] as AgentId);
-    else if (before && !runningIds) setAside(null);
+    const agentOf = (key: string) => key.split(':')[1] as AgentId;
+    const prev = before.split(',').filter(Boolean);
+    const now = runningIds.split(',').filter(Boolean);
+    const started = now.filter((key) => !prev.includes(key));
+    if (started.length > 0) {
+      setAside(agentOf(started[started.length - 1]));
+      return;
+    }
+    if (!prev.some((key) => !now.includes(key))) return;
+    // A run ended. Stay on a sign-in that just succeeded: the agent may still
+    // be asking its own questions in the tab (security notes, folder trust),
+    // and a dialog back over it would take the keyboard. Otherwise move to a
+    // run still going, or come back when none is.
+    setAside((cur) => {
+      const run = cur ? runs[cur] : undefined;
+      if (run && (run.phase === 'running' || (run.kind === 'login' && run.phase === 'succeeded'))) return cur;
+      return now.length > 0 ? agentOf(now[0]) : null;
+    });
   }, [runningIds]);
+  // The sidebar's "Set up" (or Settings) asks for the wizard itself.
+  useEffect(() => {
+    const back = () => setAside(null);
+    window.addEventListener(FIRST_RUN_REOPEN_EVENT, back);
+    return () => window.removeEventListener(FIRST_RUN_REOPEN_EVENT, back);
+  }, []);
   const stepAside = useCallback((agent: AgentId) => setAside(agent), []);
   const asideRun = aside ? runs[aside] ?? cornerRun(runs) : undefined;
   // An install the cards just saw: re-read the checklist so the rows that need

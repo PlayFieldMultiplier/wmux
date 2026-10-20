@@ -207,4 +207,31 @@ describe('FirstRunWizard agent ready step', () => {
     expect(byId('first-run-agent-corner')?.dataset.agent).toBe('claude');
     useStore.setState({ workspaces: prev.workspaces, activeWorkspaceId: prev.activeWorkspaceId });
   });
+
+  it('after a sign-in succeeds the corner stays: the agent may still be asking in its tab', async () => {
+    const loginNeeded: AgentSetupStatus = { ...ready('claude'), readiness: 'login-needed' };
+    const fr = installBridge([loginNeeded, notInstalled('codex')]);
+    fr.agentPlan.mockResolvedValue({
+      agent: 'claude',
+      install: { command: INSTALL, shell: 'user', officialPage: 'https://code.claude.com/docs/en/setup', missing: [] },
+      login: { command: "'/home/u/.local/bin/claude'", shell: 'user' },
+    });
+    let onData: ((id: string, data: string, replay: boolean) => void) | null = null;
+    (window as unknown as { electronAPI: { pty: Record<string, unknown> } }).electronAPI.pty.onData =
+      vi.fn((cb: typeof onData) => { onData = cb; return () => undefined; });
+    tab.open.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-1' });
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    await act(async () => { byId('first-run-agent-claude-login')?.click(); });
+    await settle();
+    expect(byId('first-run-agent-corner')).not.toBeNull();
+    // Signed in; the agent's own command line ends (the credential is there).
+    fr.agentStatus.mockResolvedValue([ready('claude'), notInstalled('codex')]);
+    await act(async () => { onData?.('pty-1', '\x1b]133;C\x07\x1b]133;D;0\x07', false); });
+    await settle();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(byId('first-run-agent-corner')?.textContent).toContain('Signed in');
+    await act(async () => { byId('first-run-agent-corner-back')?.click(); });
+    expect(byId('first-run-agent-claude')?.dataset.status).toBe('ok');
+  });
 });

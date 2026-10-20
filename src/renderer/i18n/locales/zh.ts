@@ -3175,6 +3175,7 @@ export const zh = {
   'firstRunWizard.agent.later': "稍后",
   'firstRunWizard.agent.backToSetup': "返回设置",
   'firstRunWizard.agent.guide.logTitle': "{name}：终端标签页",
+  'firstRunWizard.agent.guide.signedInBody': "已登录。如果终端标签页仍有提问，请在那里回答，然后返回设置。",
   'firstRunWizard.agent.guide.installTitle': "正在安装 {name}",
   'firstRunWizard.agent.guide.installBody': "安装在终端标签页中进行。完成后此卡片会再次检查。",
   'firstRunWizard.agent.guide.claudeTitle': "正在登录 {name}",

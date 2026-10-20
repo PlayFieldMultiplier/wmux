@@ -3591,6 +3591,7 @@ export const en = {
   'firstRunWizard.agent.later': "Later",
   'firstRunWizard.agent.backToSetup': "Back to setup",
   'firstRunWizard.agent.guide.logTitle': "{name}: the terminal tab",
+  'firstRunWizard.agent.guide.signedInBody': "Signed in. If the terminal tab still asks something, answer it there, then go back to setup.",
   'firstRunWizard.agent.guide.installTitle': "Installing {name}",
   'firstRunWizard.agent.guide.installBody': "The install runs in the terminal tab. This card checks again when it finishes.",
   'firstRunWizard.agent.guide.claudeTitle': "Signing in to {name}",
