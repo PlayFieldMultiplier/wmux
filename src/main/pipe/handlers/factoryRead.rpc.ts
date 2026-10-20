@@ -429,8 +429,10 @@ export async function handlePlanPropose(raw: unknown, ctx: RpcContext | undefine
   // newest anyway, botsModel.ts livePlanIds).
   if (!r.duplicate) {
     for (;;) {
+      // Main's own bookkeeping: a guest-sourced plan of the bot is closed too
+      // (its words go nowhere; only its state changes).
       const older = writer.find(bot.workspaceId, (c) => c.kind === 'plan' && c.state === 'open' && c.id !== card.id
-        && c.actor.kind === 'bot' && c.actor.botId === bot.botId);
+        && c.actor.kind === 'bot' && c.actor.botId === bot.botId, { guests: true });
       if (!older || !writer.setState(bot.workspaceId, older.id, 'resolved')) break;
     }
   }

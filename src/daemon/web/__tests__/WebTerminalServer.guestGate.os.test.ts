@@ -26,12 +26,12 @@ describe('guest bot gate', () => {
   let guests: { enabled: Mock<() => boolean>; resolve: Mock<GuestBotResolver['resolve']>; touch: Mock<(id: string) => void> };
   let devices: { resolve: Mock<WebDeviceResolver['resolve']>; mint: Mock<WebDeviceResolver['mint']> };
 
-  const start = async (opts: { host?: string; allowInput?: boolean } = {}) => {
+  const start = async (opts: { host?: string; allowInput?: boolean; desktop?: unknown } = {}) => {
     const sessionManager = Object.assign(new EventEmitter(), {
       getSession: () => undefined,
       listLiveSessions: () => [],
     }) as unknown as DaemonSessionManager;
-    const s = new WebTerminalServer({ sessionManager, devices, guests, log: () => undefined, assetsDir: os.tmpdir() });
+    const s = new WebTerminalServer({ sessionManager, devices, guests, log: () => undefined, assetsDir: os.tmpdir(), ...(opts.desktop ? { desktop: () => opts.desktop as never } : {}) });
     servers.push(s);
     await s.start({ port: 0, host: opts.host ?? '127.0.0.1', allowInput: opts.allowInput ?? true, allowUpload: false, allowTranscript: true });
     return s;
@@ -92,11 +92,16 @@ describe('guest bot gate', () => {
   });
 
   it('the guest route answers a guest credential with its scope', async () => {
-    const s = await start();
+    // Main answers for the conversation (an empty page past its end).
+    const desktop = { available: true, supports: () => true, request: vi.fn(async () => ({ workspaceId: SCOPE.workspaceId, threadId: SCOPE.threadId, cards: [], nextSinceSeq: 0, hasMore: false })) };
+    const s = await start({ desktop });
     const out = await call(s, GUEST_ROUTES.me, { headers: bearer(GUEST) });
     expect(out.status).toBe(200);
     expect(out.body).toMatchObject({ ok: true, guest: { name: 'Grok' }, conversation: SCOPE });
     expect(guests.touch).toHaveBeenCalledWith(GUEST_ID);
+    // Without the desktop, me is refused as a read would be.
+    const alone = await start();
+    expect((await call(alone, GUEST_ROUTES.me, { headers: bearer(GUEST) })).status).toBe(503);
   });
 
   it('the guest route takes no operator, device or peer credential', async () => {

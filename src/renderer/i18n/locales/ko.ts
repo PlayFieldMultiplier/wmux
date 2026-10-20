@@ -4508,6 +4508,7 @@ export const ko = {
   'botsPage.guest.workspaces': "게스트 워크스페이스: {names}",
   'botsPage.guest.workspacesNone': "아직 게스트 워크스페이스가 없습니다. 게스트는 게스트 워크스페이스의 대화에만 들어갈 수 있습니다.",
   'botsPage.guest.workspacesUnreadable': "게스트 워크스페이스 목록을 읽지 못해 어떤 게스트도 연결할 수 없습니다. wmux를 다시 시작하세요. 계속되면 factory/guest-workspaces.json 파일을 고쳐야 합니다.",
+  'botsPage.guest.workspacesRestored': "게스트 워크스페이스 목록을 백업에서 복원했습니다. 마지막으로 지정한 워크스페이스가 빠졌을 수 있으니 아래 목록을 확인하고 필요하면 다시 지정하세요.",
   'botsPage.guest.needsRevoke': "게스트 워크스페이스가 아님: 취소하세요",
   'botsPage.guest.notGuestWorkspace': "{workspace}은(는) 게스트 워크스페이스가 아닙니다.",
   'botsPage.guest.markWarning': "이 워크스페이스의 모든 내용은 게스트와 공유될 수 있습니다. 한 번 게스트 워크스페이스가 되면 모든 게스트를 취소해도 그대로 유지됩니다. 이 워크스페이스의 봇은 저장소와 코디네이터를 가질 수 없고, 여기서의 모든 턴은 게스트 규칙으로 실행되며(내 메시지도 마찬가지), 여기 있는 어떤 것도 다른 워크스페이스로 넘어가지 않습니다. 이 워크스페이스를 지금처럼 쓰려면 새 워크스페이스에서 게스트를 추가하세요.",

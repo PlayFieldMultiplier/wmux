@@ -50,7 +50,8 @@ export function defaultGuestWorkspacePorts(): GuestWorkspacePorts {
     flag: guestWorkspaceFlag,
     list: () => {
       const s = store();
-      return s && s.readable() ? { readable: true, workspaceIds: s.list().map((e) => e.workspaceId) } : { readable: false, workspaceIds: [] };
+      if (!s || !s.readable()) return { readable: false, workspaceIds: [] };
+      return { readable: true, workspaceIds: s.list().map((e) => e.workspaceId), ...(s.restoredFromBackup() ? { restored: true as const } : {}) };
     },
     flush: async () => {
       const s = store();
@@ -172,8 +173,11 @@ async function simple(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, meth
 }
 
 /** Revoke a guest; its wakes that have not run are dropped whatever the
- *  daemon answers (the owner asked for it to stop). */
+ *  daemon answers (the owner asked for it to stop): before the daemon is
+ *  asked, so none starts while it answers, and again after, for a wake
+ *  queued meanwhile. */
 export async function revokeGuestBot(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, guestId: string, drop: (guestId?: string) => number = dropQueuedGuestWakes): Promise<GuestBotSimpleResult> {
+  drop(guestId);
   const r = await simple(dc, GUEST_BOT_RPC.revoke, { guestId });
   drop(guestId);
   return r;
@@ -181,6 +185,8 @@ export async function revokeGuestBot(dc: Pick<DaemonClient, 'rpc' | 'isConnected
 
 /** Turn guest bots on or off; off drops every guest wake that has not run. */
 export async function setGuestBotsEnabled(dc: Pick<DaemonClient, 'rpc' | 'isConnected'> | null, enabled: boolean, drop: (guestId?: string) => number = dropQueuedGuestWakes): Promise<GuestBotSimpleResult> {
+  // Off: dropped before the daemon is asked and again after (as for a revoke).
+  if (!enabled) drop();
   const r = await simple(dc, GUEST_BOT_RPC.setEnabled, { enabled });
   if (!enabled) drop();
   return r;

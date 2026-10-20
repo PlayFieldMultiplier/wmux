@@ -245,6 +245,10 @@ describe('plan.propose', () => {
     expect(writer.get('ws-hq', first.card.id)?.state).toBe('resolved');
     expect(writer.get('ws-hq', other.id)?.state).toBe('open');
     expect(writer.get('ws-hq', second.card.id)?.state).toBe('open');
+    // The bot's older plan stamped guest-sourced is closed by a newer one too.
+    const stamped = writer.append({ workspaceId: 'ws-hq', threadId: 'plan:p-g', kind: 'plan', actor: { kind: 'bot', workspaceId: 'ws-hq', botId: MOA.id }, title: 'Older', state: 'open', origin: 'guest' })!;
+    await handlePlanPropose({ title: 'Plan three', items: [ITEM] }, ctxOf(MOA), d);
+    expect(writer.get('ws-hq', stamped.id)?.state).toBe('resolved');
   });
 
   it('needs the live, enabled bot behind the binding', async () => {

@@ -4967,6 +4967,7 @@ export const pl = {
   'botsPage.guest.workspaces': "Obszary robocze dla gości: {names}",
   'botsPage.guest.workspacesNone': "Nie ma jeszcze obszaru roboczego dla gości. Gość dołącza tylko do rozmowy w takim obszarze.",
   'botsPage.guest.workspacesUnreadable': "Nie udało się odczytać listy obszarów roboczych dla gości, więc żaden gość nie może się połączyć. Uruchom wmux ponownie; jeśli to nie pomoże, plik factory/guest-workspaces.json wymaga naprawy.",
+  'botsPage.guest.workspacesRestored': "Listę obszarów roboczych dla gości przywrócono z kopii zapasowej, więc może brakować ostatnio oznaczonego obszaru. Sprawdź listę poniżej i w razie potrzeby oznacz go ponownie.",
   'botsPage.guest.needsRevoke': "poza obszarem dla gości: unieważnij go",
   'botsPage.guest.notGuestWorkspace': "{workspace} nie jest obszarem roboczym dla gości.",
   'botsPage.guest.markWarning': "Wszystko w tym obszarze roboczym może trafić do jego gości. Obszar dla gości pozostaje nim na zawsze, nawet po unieważnieniu wszystkich gości: jego boty nie mają repozytorium ani Koordynatora, każda tura działa tam według zasad dla gości (także Twoje wiadomości), a nic z niego nie trafia do innych obszarów roboczych. Aby zachować ten obszar bez zmian, dodaj gościa w nowym obszarze roboczym.",

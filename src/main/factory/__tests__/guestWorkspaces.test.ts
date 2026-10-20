@@ -77,6 +77,27 @@ describe('GuestWorkspaceStore', () => {
     expect(fs.readFileSync(file(), 'utf8')).toBe(body);
   });
 
+  it('a file read from its backup says so, with a warning, and keeps the backup\'s flags', async () => {
+    const first = store();
+    first.load();
+    await first.add('ws-1');
+    await first.add('ws-2');
+    expect(fs.existsSync(`${file()}.bak`)).toBe(true);
+    fs.writeFileSync(file(), '{ not json');
+    const logs: string[] = [];
+    const s = new GuestWorkspaceStore({ file: file(), log: (m) => logs.push(m) });
+    s.load();
+    expect(s.restoredFromBackup()).toBe(true);
+    expect(s.flag('ws-1')).toBe(true);
+    expect(logs.some((m) => m.includes('backup'))).toBe(true);
+    // A clean read says nothing.
+    const clean = store();
+    await first.flush();
+    fs.writeFileSync(file(), JSON.stringify({ version: 1, workspaces: { 'ws-1': { since: '2026-10-20T00:00:00.000Z' } } }));
+    clean.load();
+    expect(clean.restoredFromBackup()).toBe(false);
+  });
+
   it('counts a room that already holds a guest card, never one that only quotes the word', () => {
     const rooms = path.join(dir, 'factory', 'rooms');
     fs.mkdirSync(rooms, { recursive: true });

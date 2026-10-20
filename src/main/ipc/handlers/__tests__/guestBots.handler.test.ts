@@ -54,6 +54,25 @@ describe('guest bot revoke and off switch', () => {
     await q.flush();
   });
 
+  it('a revoke and the off switch drop the wakes before the daemon is asked, so none starts meanwhile', async () => {
+    const q = queue();
+    guestWake(q, G1, 'c-1');
+    guestWake(q, G2, 'c-2');
+    const seen: Array<string | null> = [];
+    const dc = { isConnected: true, rpc: vi.fn(async () => {
+      const next = q.next('bot-0000aaaa');
+      seen.push(next?.reason.kind === 'guest' ? next.reason.guestId : null);
+      return { ok: true };
+    }) };
+    await revokeGuestBot(dc as never, G1);
+    await setGuestBotsEnabled(dc as never, false);
+    // While the daemon answered the revoke only G2's wake was left; while it
+    // answered the switch, none.
+    expect(seen).toEqual([G2, null]);
+    expect(q.queuedGuestWakes('bot-0000aaaa')).toBe(0);
+    await q.flush();
+  });
+
   it('turning guest bots off drops every guest wake; turning them on drops none', async () => {
     const q = queue();
     guestWake(q, G1, 'c-1');

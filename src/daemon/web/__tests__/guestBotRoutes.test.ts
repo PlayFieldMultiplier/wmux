@@ -120,6 +120,17 @@ describe('guest routes: reading', () => {
     });
   });
 
+  it('me is refused as a read would be: a conversation main does not answer for, or no desktop', async () => {
+    const d = desktop((c, p) => (c === GUEST_ROOM_CARDS_COMMAND ? cardsReply(p) : {}));
+    await guestRouteResponse(ctx({ desktop: d }));
+    expect(d.request).toHaveBeenCalledWith(GUEST_ROOM_CARDS_COMMAND, { ...SCOPE, sinceSeq: Number.MAX_SAFE_INTEGER, limit: 1 });
+    // Main refuses a conversation outside a guest workspace as not found.
+    expect(await guestRouteResponse(ctx({ desktop: desktop(() => ({ notFound: true })) }))).toMatchObject({ status: 404, body: { error: 'conversation-not-found' } });
+    expect(await guestRouteResponse(ctx({ desktop: desktop(() => ({ unavailable: true })) }))).toMatchObject({ status: 503, body: { error: 'rooms-unavailable' } });
+    expect(await guestRouteResponse(ctx({ desktop: null }))).toMatchObject({ status: 503, body: { error: 'desktop-unavailable' } });
+    expect(await guestRouteResponse(ctx({ desktop: desktop(() => ({}), [GUEST_ROOM_POST_COMMAND]) }))).toMatchObject({ status: 503, body: { error: 'rooms-unavailable' } });
+  });
+
   it('reads only the stored conversation, whatever the query says, and projects the cards', async () => {
     const d = desktop((_c, p) => cardsReply(p));
     const r = await guestRouteResponse(ctx({

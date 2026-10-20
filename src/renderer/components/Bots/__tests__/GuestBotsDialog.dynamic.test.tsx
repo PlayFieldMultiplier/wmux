@@ -116,6 +116,12 @@ describe('GuestBotsDialog — guest workspaces', () => {
     broken.list.mockImplementation(async () => ({ ok: true as const, guests: [], gates: GATES, workspaces: { readable: false, workspaceIds: [] } }));
     await open(broken);
     expect(q('[data-guest-workspaces-unreadable]')).not.toBeNull();
+    act(() => root.unmount());
+    root = createRoot(host);
+    const restored = fakePort();
+    restored.list.mockImplementation(async () => ({ ok: true as const, guests: [], gates: GATES, workspaces: { readable: true, workspaceIds: ['ws-1'], restored: true as const } }));
+    await open(restored);
+    expect(q('[data-guest-workspaces-restored]')?.textContent).toBe(en['botsPage.guest.workspacesRestored']);
   });
 });
 

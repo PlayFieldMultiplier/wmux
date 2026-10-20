@@ -4112,6 +4112,7 @@ export const zh = {
   'botsPage.guest.workspaces': "访客工作区：{names}",
   'botsPage.guest.workspacesNone': "还没有访客工作区。访客只能加入访客工作区中的对话。",
   'botsPage.guest.workspacesUnreadable': "无法读取访客工作区列表，因此任何访客都无法连接。请重启 wmux；如果仍然如此，需要修复 factory/guest-workspaces.json 文件。",
+  'botsPage.guest.workspacesRestored': "访客工作区列表已从备份恢复，你最后设定的工作区可能缺失。请检查下面的列表，必要时重新设定。",
   'botsPage.guest.needsRevoke': "不在访客工作区中：请撤销",
   'botsPage.guest.notGuestWorkspace': "{workspace} 不是访客工作区。",
   'botsPage.guest.markWarning': "此工作区中的任何内容都可能被分享给其访客。一旦成为访客工作区就会一直保持，即使撤销了所有访客：其中的机器人没有仓库和协调者，那里的每一轮都按访客规则运行（包括你自己的消息），其中的任何内容都不会进入你的其他工作区。若要保持此工作区不变，请在新工作区中添加访客。",

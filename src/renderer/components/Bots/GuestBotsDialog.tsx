@@ -210,6 +210,9 @@ export default function GuestBotsDialog({ t, conversations, onClose, workspaceNa
           {flagged && !flagged.readable && (
             <p role="alert" data-guest-workspaces-unreadable className="text-[var(--accent-red)]">{t('botsPage.guest.workspacesUnreadable')}</p>
           )}
+          {flagged?.readable && flagged.restored && (
+            <p role="status" data-guest-workspaces-restored className="text-[var(--accent-yellow)]">{t('botsPage.guest.workspacesRestored')}</p>
+          )}
           {flagged?.readable && (
             <p className="text-[var(--text-sub)]" data-guest-workspaces>
               {flagged.workspaceIds.length > 0

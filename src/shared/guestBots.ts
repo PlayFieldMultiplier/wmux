@@ -184,6 +184,9 @@ export interface GuestBotGates {
 export interface GuestWorkspaceList {
   readable: boolean;
   workspaceIds: string[];
+  /** The list was read from the backup of its last write: a workspace
+   *  flagged last may be missing from it. */
+  restored?: true;
 }
 
 export type GuestBotListResult =

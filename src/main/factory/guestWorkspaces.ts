@@ -60,6 +60,9 @@ export class GuestWorkspaceStore {
   private flags = new Map<string, string>();
   private readonly guestRooms = new Set<string>();
   private state: 'unloaded' | 'loaded' | 'unreadable' = 'unloaded';
+  /** The file itself could not be read and its backup was: a flag from the
+   *  last write may be missing. */
+  private restored = false;
   private readonly persister: FilePersister;
   private readonly now: () => number;
   private readonly log: (msg: string) => void;
@@ -76,8 +79,16 @@ export class GuestWorkspaceStore {
    *  throws. */
   load(): void {
     this.flags = new Map();
+    this.restored = false;
     try {
+      const own = this.primaryReadable();
       const raw = readVersionedFile(this.opts.file, GUEST_WORKSPACES_VERSION);
+      // The atomic reader falls back to the last write's backup: said, so
+      // the owner can check the list (the backup's flags hold meanwhile).
+      if (raw && !own) {
+        this.restored = true;
+        this.log(`${this.opts.file} could not be read; its backup was used, so a workspace flagged last may be missing`);
+      }
       if (raw) {
         const ws = raw.workspaces;
         if (!ws || typeof ws !== 'object' || Array.isArray(ws)) throw new Error('workspaces is not an object');
@@ -94,6 +105,21 @@ export class GuestWorkspaceStore {
       this.log(`${this.opts.file} is unreadable; every workspace counts as a guest workspace until it is fixed: ${String(err)}`);
     }
     this.scanRooms();
+  }
+
+  /** Whether the file itself (not its backup) parses as this version. */
+  private primaryReadable(): boolean {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.opts.file, 'utf8')) as unknown;
+      return !!raw && typeof raw === 'object' && (raw as { version?: unknown }).version === GUEST_WORKSPACES_VERSION;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The list was read from the backup of its last write (see load). */
+  restoredFromBackup(): boolean {
+    return this.restored;
   }
 
   /** The rooms that already hold a guest card (written before the flag

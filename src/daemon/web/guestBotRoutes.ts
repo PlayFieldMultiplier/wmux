@@ -4,6 +4,9 @@
 //   GET  /api/guest/v1/messages?sinceSeq=&limit=
 //   POST /api/guest/v1/messages   {clientMessageId, text, mentions?}
 //
+// `me` asks main about the conversation as a read does, and is refused the
+// same way when main would refuse the read.
+//
 // Reached only through the guest gate in WebTerminalServer.handle, which
 // runs right after the Host guard and before every other branch, so a guest
 // credential reaches nothing else and these routes accept nothing else. The
@@ -240,6 +243,11 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
   }
   const scope = who.scope;
   if (route === 'me') {
+    // The same per-request check as a read and a post: main answers for the
+    // conversation only in a guest workspace (an empty page asked past its
+    // end), and refuses the same way otherwise.
+    const refused = await meScopeRefusal(ctx, scope);
+    if (refused) return refused;
     return {
       status: 200,
       body: {
@@ -274,6 +282,23 @@ export async function guestRouteResponse(ctx: GuestRouteContext): Promise<GuestR
 }
 
 const revokedMidRequest = (): GuestRouteResponse => refuse(401, 'unauthorized');
+
+/** A refusal for `me` when main would refuse a read of the guest's
+ *  conversation, else null. */
+async function meScopeRefusal(ctx: GuestRouteContext, scope: GuestScope): Promise<GuestRouteResponse | null> {
+  const desktop = ctx.desktop;
+  if (!desktop) return refuse(503, 'desktop-unavailable');
+  if (!desktop.supports(GUEST_ROOM_CARDS_COMMAND)) return refuse(503, 'rooms-unavailable');
+  const answered = await ask(desktop, GUEST_ROOM_CARDS_COMMAND, {
+    workspaceId: scope.workspaceId, threadId: scope.threadId, sinceSeq: Number.MAX_SAFE_INTEGER, limit: 1,
+  });
+  if (!('reply' in answered)) return answered;
+  const r = answered.reply !== null && typeof answered.reply === 'object' ? answered.reply as Record<string, unknown> : {};
+  if (r.unavailable === true) return refuse(503, 'rooms-unavailable');
+  if (r.notFound === true) return refuse(404, 'conversation-not-found');
+  if (r.invalid === true) return refuse(400, 'invalid-request');
+  return null;
+}
 
 /** The guest's conversation from the moment it was added, messages only
  *  (guestSeesCard): what the owner and the bots said before, and wmux's own
