@@ -375,6 +375,8 @@ export interface FactoryOffStopped {
   /** Open bot tasks cancelled ("stopped by owner"). */
   tasks: number;
   ok: boolean;
+  /** Why the stop was partial, in main's words (a pane left running). */
+  message?: string;
 }
 
 /** FACTORY_SETTINGS_SET's body: the sender check, then the settings store.
@@ -411,7 +413,7 @@ export function factorySettingsSetHandler(
     let stoppedWork: FactoryOffStopped | undefined;
     if (stopping) {
       const r = await stopping;
-      if (r.workersStopped > 0 || r.tasksCancelled > 0 || !r.ok) stoppedWork = { workers: r.workersStopped, tasks: r.tasksCancelled, ok: r.ok };
+      if (r.workersStopped > 0 || r.tasksCancelled > 0 || !r.ok) stoppedWork = { workers: r.workersStopped, tasks: r.tasksCancelled, ok: r.ok, ...(!r.ok && r.message ? { message: r.message } : {}) };
     }
     if (!next) throw failure;
     return stoppedWork ? { ...next, stoppedWork } : next;

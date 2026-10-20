@@ -39,6 +39,7 @@
 // worktree removal, the Job Object of #2398).
 
 import { execFile } from 'node:child_process';
+import { UNKNOWN_ROOT_REFUSAL } from '../../shared/rpc';
 import { collectDescendants } from './treeKill';
 import { dmtfToUtcMicros, sameProcessStartTime } from '../phantomExit';
 import { tryProcessHandleApi, type ProcessHandle, type ProcessHandleApi } from '../../main/pty/winSnapshotNative';
@@ -114,8 +115,8 @@ function recordedStartUsable(recorded: string | undefined, platform: NodeJS.Plat
   return platform !== 'win32' || /^\d+$/.test(recorded) || dmtfToUtcMicros(recorded) !== null;
 }
 
-/** Why a pane's tree kill is refused now. */
-export const UNKNOWN_ROOT_REFUSAL = "this pane's process identity isn't known yet, so it was left running and its folder is kept; Close and keep folder closes the task without removing the folder";
+/** Why a pane's tree kill is refused now (shared/rpc.ts). */
+export { UNKNOWN_ROOT_REFUSAL };
 
 /**
  * Why a running pane's tree may not be killed now (#2388), or null: no start

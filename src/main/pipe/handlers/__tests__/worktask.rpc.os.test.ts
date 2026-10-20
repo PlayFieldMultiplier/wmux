@@ -364,6 +364,28 @@ describe('task.close', () => {
     });
   });
 
+  // #2388: Close and keep folder, the way out of a close that keeps refusing.
+  it('keepFolder: true closes the task keeping its folder, and nothing else is asked of the service', async () => {
+    const h = harness();
+    h.closeTask.mockResolvedValueOnce({ ok: true, taskId: TASK.id, archivePending: false, keptFolder: TASK.worktreePath });
+    expect(await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1', keepFolder: true })).toMatchObject({ ok: true, keptFolder: TASK.worktreePath });
+    expect(h.closeTask).toHaveBeenCalledTimes(1);
+    expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS, keepFolder: true, leftoverPath: TASK.worktreePath });
+  });
+
+  it('a detached task (kept earlier, even before a restart) only closes: nothing is removed', async () => {
+    const h = harness({ tasks: [{ ...TASK, status: 'closed', detachedAt: 1 }] });
+    await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1' });
+    expect(h.closeTask).toHaveBeenCalledWith({ taskId: TASK.id, verifiedWorkspaceId: CALLER_WS });
+  });
+
+  it('only a literal true keeps the folder', async () => {
+    const h = harness();
+    await h.call('task.close', { taskId: TASK.id, senderPtyId: 'pty-1', keepFolder: 'true' });
+    expect(h.closeTask).toHaveBeenCalledWith(expect.not.objectContaining({ keepFolder: true }));
+    expect(h.closeTask).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: TASK.worktreePath }));
+  });
+
   it('reports the unpushed-branch refusal from the close service', async () => {
     const h = harness();
     h.closeTask.mockResolvedValueOnce({ ok: false, taskId: TASK.id, reason: 'unpushed', error: '2 commits', aheadCount: 2 });
@@ -767,6 +789,15 @@ describe('task.close / task.pr approval gate', () => {
     );
   });
 
+  it('asks about keeping the folder, not removing it, for a keepFolder close', async () => {
+    const h = harness();
+    await h.call('task.close', { taskId: TASK.id, keepFolder: true }, COMMANDER);
+    const asked = h.requestApproval.mock.calls[0]?.[0] as { action: string; detail?: string; description?: string } | undefined;
+    expect(asked?.action).toBe('close');
+    expect(JSON.stringify(asked)).toMatch(/keep its folder/);
+    expect(JSON.stringify(asked)).not.toMatch(/remove the worktree/);
+  });
+
   it('leaves the reversible and read-only methods unprompted', async () => {
     for (const method of ['task.gate.run', 'task.adopt', 'task.git.status', 'task.git.log', 'task.gh.prView']) {
       const h = harness({ approval: 'declined' });
@@ -833,6 +864,24 @@ describe('task approval dedupe and cap', () => {
     answer.resolve?.('approved');
     expect(await a).toMatchObject({ ok: true });
     expect(await b).toMatchObject({ ok: true });
+  });
+
+  it('a close that keeps the folder never shares the prompt of one that removes it', async () => {
+    const answers: Array<(outcome: TaskApprovalOutcome) => void> = [];
+    const requestApproval = vi.fn(
+      () => new Promise<TaskApprovalOutcome>((resolve) => { answers.push(resolve); }),
+    );
+    const h = harness({ requestApproval });
+    const keep = h.call('task.close', { taskId: TASK.id, keepFolder: true }, COMMANDER);
+    const remove = h.call('task.close', { taskId: TASK.id }, COMMANDER);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(requestApproval).toHaveBeenCalledTimes(2);
+    answers[0]('approved');
+    answers[1]('declined');
+    expect(await keep).toMatchObject({ ok: true });
+    expect(await remove).toMatchObject({ ok: false, error: { code: 'NOT_AUTHORIZED' } });
+    expect(h.closeTask).toHaveBeenCalledTimes(1);
+    expect(h.closeTask).toHaveBeenCalledWith(expect.objectContaining({ keepFolder: true }));
   });
 
   it('refuses past the per-workspace cap instead of stacking dialogs', async () => {

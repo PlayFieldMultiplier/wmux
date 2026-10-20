@@ -1938,7 +1938,10 @@ record) and time since the agents finished. Row click / Enter / d = Open diff
 (the task diff surface); ⋮ also holds Open PR or Create PR (p), Jump to task
 (j) and Close task (Backspace). Create PR and Close confirm inline with Cancel
 first and focused; Close is the task close path and keeps a dirty or unpushed
-task with the reason. One close or PR runs per task at a time; the row says
+task with the reason. A refusal other than an unpushed branch carries one toast
+action, Close and keep folder (#2388): it closes the task, leaves its folder on
+disk as it is and names where; the sidebar's Close finished tasks, the task
+diff and the task cleanup list offer the same. One close or PR runs per task at a time; the row says
 "Closing…" / "Creating PR…" meanwhile. The section shows under All and Complete filters and in
 search (title, owner, branch); it is not drawn when empty. It is the second
 rendition of a finished task (the pane rows in Needs you are the first), so it

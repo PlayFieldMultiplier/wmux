@@ -56,7 +56,7 @@ import type { BotGroup } from '../../shared/botGroup';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
 import type { FactorySettings } from '../../shared/factorySettings';
-import { ROOM_LIMITS, dmThreadBot, dmThreadId, parseThreadId } from '../../shared/room';
+import { ROOM_LIMITS, dmThreadBot, dmThreadId, parseThreadId, taskThreadOf } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
@@ -973,6 +973,14 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         stopResumedTask: async (taskId) => {
           const p = getWorkerResumePorts();
           return p ? stopResumedWorker(p, taskId) : { stopped: 0, failed: 0, taskIds: [] };
+        },
+        // #2388: under the task's cancelled card, the pane the stop left
+        // running and why.
+        noteLeftRunning: (row, reason) => {
+          getRoomWriter()?.append({
+            workspaceId: row.ownerWorkspaceId, threadId: taskThreadOf(row), kind: 'fact', actor: { kind: 'system' },
+            title: `Left running: ${row.title || row.id}`, body: reason, refs: { taskId: row.id },
+          });
         },
       };
       setFactoryStopPorts(stopPorts);

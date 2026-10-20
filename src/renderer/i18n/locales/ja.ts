@@ -658,6 +658,7 @@ export const ja = {
   'worktask.cleanup.preserved': '未 commit の成果物を保存しました — diff から commit/PR するか破棄してから、もう一度閉じてください。',
   'worktask.cleanup.unpushed': 'push されていない commit が {count} 件あります — PR/push してから、もう一度閉じてください。',
   'worktask.cleanup.closeFailed': 'close に失敗しました: {error}',
+  'worktask.keepFolder.action': '閉じてフォルダーを残す',
   'worktask.keepFolder.done': 'タスクを閉じました。フォルダーは {path} に残してあります。',
 
   // ─── ワークスペース項目: タスク worktree 境界の警告 ───

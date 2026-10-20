@@ -611,6 +611,7 @@ export const de = {
   'worktask.cleanup.preserved': 'Nicht committete Artefakte bewahrt — aus dem diff committen/PR oder verwerfen, dann erneut schließen.',
   'worktask.cleanup.unpushed': 'Sie haben {count} nicht gepushte Commit(s) — PR/push, dann erneut schließen.',
   'worktask.cleanup.closeFailed': 'close fehlgeschlagen: {error}',
+  'worktask.keepFolder.action': 'Schließen und Ordner behalten',
   'worktask.keepFolder.done': 'Task geschlossen. Sein Ordner wurde unter {path} behalten.',
 
   // ─── Workspace item: task worktree boundary warning ───

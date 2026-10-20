@@ -614,6 +614,7 @@ export const bs = {
   'worktask.cleanup.preserved': 'Nekomitovani artefakti sačuvani — commit/PR iz diffa ili ih odbacite, pa zatvorite ponovo.',
   'worktask.cleanup.unpushed': 'Imate {count} nepush-ovanih commitova — PR/push, pa zatvorite ponovo.',
   'worktask.cleanup.closeFailed': 'close neuspješan: {error}',
+  'worktask.keepFolder.action': 'Zatvori i zadrži folder',
   'worktask.keepFolder.done': 'Zadatak zatvoren. Njegov folder je zadržan u {path}.',
 
   // ─── Stavka radnog prostora: upozorenje o granici worktree-a zadatka ───

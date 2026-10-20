@@ -209,6 +209,19 @@ describe('Terminal self-create through the per-surface lifecycle (#2398)', () =>
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
+  // #2388: a pane refused in a task folder whose removal did not finish
+  // showed "An unknown error occurred." under the banner.
+  it('a create refused in a folder whose removal is pending shows the refusal sentence', async () => {
+    const sentence = '/wt/a is inside /wt/a, a task folder whose removal did not finish; open the pane in another folder, or close its task again to finish the removal';
+    create.mockImplementationOnce(() => Promise.reject(new Error(`Error invoking remote method 'pty:create': Error: [UNKNOWN] ${sentence}`)));
+    mount();
+    await act(async () => { await Promise.resolve(); });
+    const alert = host.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('This terminal could not start.');
+    expect(alert?.textContent).toContain(sentence);
+    expect(alert?.textContent).not.toContain('An unknown error occurred.');
+  });
+
   it('a bound pane whose binding is cleared, and whose replacement is refused, still shows Retry', async () => {
     mount({ ptyId: 'pty-old' });
     expect(seenPtyIds.at(-1)).toBe('pty-old');

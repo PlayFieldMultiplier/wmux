@@ -49,6 +49,7 @@ import { markStoppedByOwner, unmarkStoppedByOwner } from '../deck/fanoutCallerNo
 import { getAgentSlots } from './agentSlots';
 import { forgetHeldFanouts } from './heldFanouts';
 import { dropQueuedHeldFanoutWakes } from './wakeQueue';
+import { UNKNOWN_ROOT_REFUSAL } from '../../shared/rpc';
 
 /** The ledger summary of a task the owner stopped. */
 export const STOPPED_BY_OWNER = 'stopped by owner';
@@ -116,6 +117,10 @@ export interface FactoryStopPorts {
    *  agent slot granted, not yet registered), or null when that cannot be
    *  told. Default: the factory's agent slots. */
   launchesInFlight?: (botId: string) => string[] | null;
+  /** A stop left a pane of `row` running, and why (#2388: its process
+   *  identity is not known, so its tree cannot be taken): the task's room
+   *  says so under its cancelled card. Absent: only the result says it. */
+  noteLeftRunning?: (row: LedgerEntry, reason: string) => void;
   log?: (msg: string) => void;
   now?: () => number;
 }
@@ -197,6 +202,22 @@ export function __resetFactoryStopForTesting(): void {
   stoppedWakes.clear();
   lateStops.clear();
   turnStops.clear();
+  leftRunningNoted.clear();
+}
+
+/** The tasks whose room was told a stop left a pane running: once each,
+ *  whichever stop met the refusal first (a re-stop meets it the same way). */
+const leftRunningNoted = new Set<string>();
+
+/** Tell `row`'s room that a stop left a pane running, and why, once. */
+function noteLeftRunningOnce(ports: FactoryStopPorts, row: LedgerEntry, reason: string, log: (m: string) => void): void {
+  if (leftRunningNoted.has(row.id)) return;
+  leftRunningNoted.add(row.id);
+  try {
+    ports.noteLeftRunning?.(row, reason);
+  } catch (err) {
+    log(`[factory] stop: the room was not told ${row.id} left a pane running: ${String(err)}`);
+  }
 }
 
 /** Whether a row is a bot task the owner stopped (Stop worker, Stop for one
@@ -229,10 +250,24 @@ function isWorkspacesLoading(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === WORKSPACES_LOADING;
 }
 
+/** Why a stopWorker failure left a pane running for good, or null: the
+ *  daemon refused its tree kill because the pane's process identity is not
+ *  known (#2388). A stop again is refused the same way, so it is said
+ *  instead of "stop again". */
+function leftRunningReason(err: unknown): string | null {
+  return String(err).includes(UNKNOWN_ROOT_REFUSAL) ? UNKNOWN_ROOT_REFUSAL : null;
+}
+
 /** The message of a partial stop: WORKSPACES_LOADING_MESSAGE when that was
- *  every failure, else `otherwise`. */
-function partialMessage(failures: number, loading: number, otherwise: string): string {
-  return failures > 0 && failures === loading ? WORKSPACES_LOADING_MESSAGE : otherwise;
+ *  every failure; the reason a pane was left running when there was one;
+ *  else `otherwise`. */
+function partialMessage(failures: number, loading: number, otherwise: string, leftRunning: { count: number; reason: string | null } = { count: 0, reason: null }): string {
+  if (failures > 0 && failures === loading) return WORKSPACES_LOADING_MESSAGE;
+  if (leftRunning.reason) {
+    const why = `Some work could not be stopped: ${leftRunning.reason}.`;
+    return failures > leftRunning.count ? `${why} Other work could not be stopped either; stop again to retry it.` : why;
+  }
+  return otherwise;
 }
 
 /** Stop one task: cancel its row, its gate and its worker. The physical
@@ -245,7 +280,7 @@ async function stopTask(
   botId: string | undefined,
   log: (m: string) => void,
   off = false,
-): Promise<{ cancelled: boolean; stopped: boolean; gate: boolean; failed: boolean; loading: boolean }> {
+): Promise<{ cancelled: boolean; stopped: boolean; gate: boolean; failed: boolean; loading: boolean; leftRunning?: string; leftRunningOnly?: boolean }> {
   markStoppedByOwner(row.id);
   let outcome: CancelOutcome = 'failed';
   try {
@@ -273,17 +308,25 @@ async function stopTask(
   let workerOk = true;
   let loading = false;
   let sessions = 0;
+  let leftRunning: string | null = null;
   try {
     sessions = await ports.stopWorker(row);
   } catch (err) {
     workerOk = false;
     loading = isWorkspacesLoading(err);
     sessions = stoppedBeforeFailure(err);
+    leftRunning = leftRunningReason(err);
     log(`[factory] stop: the worker of ${row.id} was not stopped: ${String(err)}`);
   }
+  if (leftRunning) noteLeftRunningOnce(ports, row, leftRunning, log);
   const failed = outcome === 'failed' || !workerOk || gateFailed;
   // Loading: the worker's stop was the only failure, and only for that.
-  return { cancelled: outcome === 'cancelled', stopped: sessions > 0, gate, failed, loading: loading && outcome !== 'failed' && !gateFailed };
+  // leftRunningOnly: likewise, a pane left running was the only failure.
+  const only = outcome !== 'failed' && !gateFailed;
+  return {
+    cancelled: outcome === 'cancelled', stopped: sessions > 0, gate, failed, loading: loading && only,
+    ...(leftRunning ? { leftRunning, leftRunningOnly: only } : {}),
+  };
 }
 
 /**
@@ -312,6 +355,8 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
   let failures = 0;
   // Failures that were only the app still loading its workspaces.
   let loadingFailures = 0;
+  // Failures that were only a pane left running, and why one was (#2388).
+  const leftRunning: { count: number; reason: string | null } = { count: 0, reason: null };
 
   // 1. Turns first: the wake is marked stopped at once (no further launch
   //    passes the fan-out check), then interrupted; a task its fan-out was
@@ -415,6 +460,10 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
     if (r.gate) gatesCancelled++;
     if (r.failed) failures++;
     if (r.loading) loadingFailures++;
+    if (r.leftRunning) {
+      if (r.leftRunningOnly) leftRunning.count++;
+      leftRunning.reason = r.leftRunning;
+    }
   }
   for (const row of retry) {
     // A gate an earlier stop could not cancel is cancelled now.
@@ -438,6 +487,12 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
     } catch (err) {
       failures++;
       if (isWorkspacesLoading(err)) loadingFailures++;
+      const why = leftRunningReason(err);
+      if (why) {
+        leftRunning.count++;
+        leftRunning.reason = why;
+        noteLeftRunningOnce(ports, row, why, log);
+      }
       if (stoppedBeforeFailure(err) > 0) stoppedTasks.add(row.id);
       log(`[factory] stop: the worker of ${row.id} was not stopped: ${String(err)}`);
     }
@@ -463,7 +518,7 @@ export async function stopFactoryWork(ports: FactoryStopPorts, scope: { botId?: 
   workersStopped += stoppedTasks.size;
   const counts = { botsInterrupted, workersStopped, tasksCancelled, gatesCancelled, ...(routinesPaused !== undefined ? { routinesPaused } : {}), ...(workflowsBlocked !== undefined ? { workflowsBlocked } : {}) };
   return failures > 0
-    ? { ok: false, ...counts, code: 'partial', message: partialMessage(failures, loadingFailures, 'Some work could not be stopped; stop again to retry.') }
+    ? { ok: false, ...counts, code: 'partial', message: partialMessage(failures, loadingFailures, 'Some work could not be stopped; stop again to retry.', leftRunning) }
     : { ok: true, ...counts };
 }
 
@@ -503,11 +558,14 @@ export async function stopFactoryTask(ports: FactoryStopPorts, taskId: string): 
   let failed = false;
   // The only failure was the app still loading its workspaces.
   let loading = false;
+  // A pane left running, and why (#2388).
+  let leftRunning: string | null = null;
   let otherFailure = false;
   if (isOpenBotTask(row)) {
     const r = await stopTask(ports, row, undefined, log);
     ({ stopped, cancelled, gate, failed, loading } = r);
-    otherFailure = failed && !loading;
+    leftRunning = r.leftRunning ?? null;
+    otherFailure = failed && !loading && !(leftRunning && r.leftRunningOnly);
   } else if (isRecentlyStopped(row, undefined, now - STOP_RETRY_MS)) {
     // Stopped before (this or a bot-wide stop): what that stop could not
     // reach — a gate it could not cancel, an agent that outlived it.
@@ -530,8 +588,10 @@ export async function stopFactoryTask(ports: FactoryStopPorts, taskId: string): 
       stopped = (await ports.stopWorker(row, { agentsOnly: true })) > 0;
     } catch (err) {
       failed = true;
+      leftRunning = leftRunningReason(err);
+      if (leftRunning) noteLeftRunningOnce(ports, row, leftRunning, log);
       if (isWorkspacesLoading(err)) loading = true;
-      else otherFailure = true;
+      else if (!leftRunning) otherFailure = true;
       stopped = stoppedBeforeFailure(err) > 0;
       log(`[factory] stop: the worker of ${row.id} was not stopped: ${String(err)}`);
     }
@@ -553,7 +613,12 @@ export async function stopFactoryTask(ports: FactoryStopPorts, taskId: string): 
   }
   const counts = { ...none, workersStopped: stopped ? 1 : 0, tasksCancelled: cancelled ? 1 : 0, gatesCancelled: gate ? 1 : 0 };
   return failed
-    ? { ok: false, ...counts, code: 'partial', message: loading && !otherFailure ? WORKSPACES_LOADING_MESSAGE : 'The worker could not be stopped; stop again to retry.' }
+    ? {
+      ok: false, ...counts, code: 'partial',
+      message: loading && !otherFailure && !leftRunning ? WORKSPACES_LOADING_MESSAGE
+        : leftRunning ? `The worker could not be stopped: ${leftRunning}.${otherFailure ? ' Other parts of it could not be stopped either; stop again to retry them.' : ''}`
+          : 'The worker could not be stopped; stop again to retry.',
+    }
     : { ok: true, ...counts };
 }
 

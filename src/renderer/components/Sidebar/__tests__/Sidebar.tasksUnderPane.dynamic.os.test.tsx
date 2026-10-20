@@ -360,6 +360,43 @@ describe('fan-out tasks under the pane — review fixes', () => {
     expect(useStore.getState().toasts.some((x) => x.level === 'info' && x.message === 'Task closed. Its folder was kept at /wt/m-t1.')).toBe(true);
   });
 
+  // #2388: Close finished keeps a task whose close was refused and says why;
+  // a refusal other than an unpushed branch offers Close and keep folder,
+  // which closes the task through task:close with keepFolder.
+  it('Close finished offers Close and keep folder for a refused close, not for an unpushed branch', async () => {
+    seed({ active: 'bee', status: { t1: 'complete', t2: 'complete' } });
+    const mission = (id: string) => ({ id: `m-${id}`, title: id, status: 'open', owner: { verifiedWorkspaceId: 'w1' } });
+    // Each task's finished agent is still its shell's running command (OSC
+    // 133): the close ends it, so the keep is not refused for it.
+    act(() => useStore.setState({ missionByPaneGroup: { t1: mission('t1'), t2: mission('t2') }, commandRunningByPtyId: { 'pty-t1': true, 'pty-t2': true }, toasts: [] } as never));
+    const close = vi.fn(async (taskId: string, _ws: string, opts?: { keepFolder?: boolean }) => {
+      if (opts?.keepFolder) return { ok: true, taskId, archivePending: false, keptFolder: `/wt/${taskId}` };
+      return taskId === 'm-t1'
+        ? { ok: false, taskId, reason: 'error', error: 'could not verify all processes exited' }
+        : { ok: false, taskId, reason: 'unpushed', error: '1 commit', aheadCount: 1 };
+    });
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.workTask = { close };
+    act(() => root.render(<Sidebar />));
+    act(() => { chip().click(); });
+    act(() => { (group('pane:w1:p1')!.querySelector('[data-task-group-menu]') as HTMLButtonElement).click(); });
+    act(() => { (document.querySelector('[data-close-finished]') as HTMLButtonElement).click(); });
+    const confirm = document.querySelector('[data-workspace-close-confirm]') as HTMLElement;
+    const go = [...confirm.querySelectorAll('button')].find((b) => b.textContent !== 'Cancel') as HTMLButtonElement;
+    await act(async () => { go.click(); for (let i = 0; i < 20; i++) await Promise.resolve(); });
+    expect(close).toHaveBeenCalledTimes(2);
+    const toasts = useStore.getState().toasts;
+    const refused = toasts.find((x) => /could not verify/.test(x.message));
+    const unpushed = toasts.find((x) => /unpushed/.test(x.message));
+    expect(refused?.action?.label).toBe('Close and keep folder');
+    expect(unpushed).toBeDefined();
+    expect(unpushed?.action).toBeUndefined();
+    expect(useStore.getState().workspaces.map((w) => w.id)).toContain('t1');
+    await act(async () => { refused!.action!.onClick(); for (let i = 0; i < 20; i++) await Promise.resolve(); });
+    expect(close).toHaveBeenLastCalledWith('m-t1', 'w1', { keepFolder: true });
+    expect(useStore.getState().workspaces.map((w) => w.id)).not.toContain('t1');
+    expect(useStore.getState().toasts.some((x) => x.message === 'Task closed. Its folder was kept at /wt/m-t1.')).toBe(true);
+  });
+
   it('drops a closed pane\'s fold state and all of a removed owner\'s', () => {
     seed();
     act(() => useStore.setState({ sidebarTaskGroupExpanded: { 'pane:w1:p1': true, 'pane:w1:p2': false, 'closedPane:w1': true, 'pane:bee:bp': true } } as never));

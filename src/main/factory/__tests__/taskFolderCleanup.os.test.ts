@@ -19,6 +19,7 @@ import {
   forgetKeptFolder,
   gitRepoInfo,
   holdTaskFolder,
+  holdTaskFolderToKeep,
   gitWorktreeRegistered,
   installTaskFolderCleanup,
   noteKeptFolderStopped,
@@ -34,6 +35,7 @@ import {
 } from '../taskFolderCleanup';
 import { ReclaimedWorkers, resumeWorker, type ReclaimedWorker, type WorkerResumePorts } from '../workerReclaim';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 
 // Every test here runs real git over real worktrees, several spawns in a
 // row; on a loaded CI runner (the Windows shard) one spawn can take a few
@@ -280,6 +282,21 @@ describe('review safeguards', () => {
 
   // #2388: a tree kill that left processes running has removed their
   // session already; only the stop's own record still names them.
+  // #2388: a pass hands each task the mission it read at its start; Close
+  // and keep folder may detach one before the pass reaches it.
+  it('a cleanup handed a mission read before Close and keep folder detached it leaves the folder', async () => {
+    const wt = await taskWorktree(new TaskWorktreeManager());
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    const kept = row('completed', { id: 'wtask-keep-00000009' });
+    (await holdTaskFolderToKeep(kept.id))(true);
+    expect(await cleanTaskFolder(ports(), kept, mission, [])).toBe('skipped');
+    expect(fs.existsSync(wt)).toBe(true);
+    // A keep whose close failed leaves the folder to the usual rules.
+    const open = row('completed', { id: 'wtask-keep-0000000a' });
+    (await holdTaskFolderToKeep(open.id))(false);
+    expect(await cleanTaskFolder(ports(), open, mission, [])).toBe('removed');
+  });
+
   it('waits while processes an earlier stop of the folder left still run, with no session left', async () => {
     const wt = await taskWorktree(new TaskWorktreeManager());
     const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
@@ -614,6 +631,48 @@ describe('the automatic pass and Settings › Bots', () => {
     expect(await cleanTaskFolders(p, [], { force: true })).toMatchObject({ removed: 1 });
     expect(fs.existsSync(extra.path)).toBe(false);
     expect(store.get(extra.taskId)?.state).toBe('removed');
+  });
+
+  // #2388: a pane a stop left running (its process identity unknown) keeps
+  // the folder in use; Clean up now says why, not only "still in use".
+  it('a folder held by a pane whose process identity is unknown is still in use, and Clean up now names why', async () => {
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-4', 'task-4');
+    fs.mkdirSync(scratch, { recursive: true });
+    const stopped = row('cancelled', {
+      id: 'wtask-left-00000004', summary: 'stopped by owner', updatedBy: { kind: 'system', workspaceId: 'ws-daemon' }, updatedAt: 49_000,
+      dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' },
+    });
+    const pane = { id: 'daemon-left', spawnCwd: scratch, pid: process.pid, state: 'attached' };
+    const p = ports({ listSessions: async () => [pane] }, new Map([[stopped.id, { folder: scratch }]]));
+    const res = await cleanTaskFolders(p, [stopped], { force: true });
+    expect(res).toMatchObject({ removed: 0, busy: 1, failed: 0 });
+    expect(res.notRemoved).toEqual([{ path: scratch, reason: `a pane of the task is still running: ${UNKNOWN_ROOT_REFUSAL}` }]);
+    expect(fs.existsSync(scratch)).toBe(true);
+    // A pane whose identity is known is in use too, with no reason to add.
+    const known = ports({ listSessions: async () => [{ ...pane, pidStartTime: 'Mon Oct 19 05:00:00 2026', pidCreatedAtFt: '133000000000000000' }] }, new Map([[stopped.id, { folder: scratch }]]));
+    expect(await cleanTaskFolders(known, [stopped], { force: true })).toEqual({ removed: 0, keptDirty: 0, busy: 1, failed: 0 });
+  });
+
+  // #2388: Close and keep folder detaches the task's mission; a folder a stop
+  // kept earlier is then the owner's, even once the ledger pruned the row.
+  it('Clean up now leaves a kept folder whose mission was detached, after its row is gone', async () => {
+    const scratch = path.join(wmuxDir, 'factory', 'bots', BOT, 'research', 'batch-5', 'task-5');
+    fs.mkdirSync(scratch, { recursive: true });
+    const stopped = row('cancelled', {
+      id: 'wtask-kept-00000005', summary: 'stopped by owner', updatedBy: { kind: 'system', workspaceId: 'ws-daemon' }, updatedAt: 49_000,
+      dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'research' },
+    });
+    const missions = new Map<string, TaskMission>([[stopped.id, { folder: scratch }]]);
+    const p = ports({}, missions);
+    await cleanTaskFolders(p, [stopped]);
+    expect(p.store.get(stopped.id)?.state).toBe('kept_stopped');
+    missions.set(stopped.id, { folder: scratch, detached: true });
+    expect(await cleanTaskFolders(p, [], { force: true })).toEqual({ removed: 0, keptDirty: 0, busy: 0, failed: 0 });
+    expect(fs.existsSync(scratch)).toBe(true);
+    // Missions that cannot be read leave it too.
+    const unread = { ...p, missions: async () => { throw new Error('daemon gone'); } };
+    expect(await cleanTaskFolders(unread, [], { force: true })).toEqual({ removed: 0, keptDirty: 0, busy: 0, failed: 0 });
+    expect(fs.existsSync(scratch)).toBe(true);
   });
 
   it('a removal of a kept folder that fails (EBUSY) stays found, is reported, and the next Clean up now finishes it', async () => {

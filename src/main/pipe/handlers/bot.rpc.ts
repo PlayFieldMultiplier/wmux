@@ -53,6 +53,7 @@ import type { Handoff } from '../../../shared/handoff';
 import type { WakeItem } from '../../../shared/wake';
 import { getRoomWriter, resolveRoomPorts, runningWake, runningWakeThread, wakeReplyTo } from '../../factory/roomWriter';
 import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
+import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 
 type Refusal = FactoryRefusal<'not_authorized' | 'not_started' | 'invalid_argument' | 'not_found' | 'not_running' | 'too_many_bots' | 'dropped' | 'not_owner_words' | 'not_a_repo' | 'repo_untrusted' | 'no_remote' | 'repo_mismatch' | 'stop_failed'>;
 
@@ -379,7 +380,12 @@ export function registerBotRpcHandlers(
       } catch (err) {
         return refuse('stop_failed', `Some of the bot's work could not be stopped (${String(err)}); it is off now. Delete it again to retry.`);
       }
-      if (!stopped.ok) return refuse('stop_failed', 'Some of the bot\'s work could not be stopped; it is off now. Delete it again to retry.');
+      if (!stopped.ok) {
+        // #2388: a pane left running says why (a delete again is refused the same way).
+        return refuse('stop_failed', stopped.message?.includes(UNKNOWN_ROOT_REFUSAL)
+          ? `${stopped.message} The bot is off now.`
+          : 'Some of the bot\'s work could not be stopped; it is off now. Delete it again to retry.');
+      }
     }
     if (!l.runtime.remove(botId, rawHue !== undefined ? { hue: rawHue as number } : {})) return refuse('not_found', `no bot ${botId}`);
     await removePorts.afterRemove?.(botId).catch((err) => console.warn(`[factory] bot.remove: ${botId} not fully forgotten: ${String(err)}`));

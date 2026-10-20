@@ -13,6 +13,7 @@ import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { WorkerStopPendingError } from '../factoryWiring';
+import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 import { STOPPED_BY_OWNER, STOPPED_WAKE_KEEP_MS, WORKSPACES_LOADING_MESSAGE, __lateStopCountForTesting, __resetFactoryStopForTesting, installLateStopSweep, isOpenBotTask, isStoppedByOwnerRow, isWakeStoppedByOwner, stopFactoryTask, stopFactoryWork, type FactoryStopPorts } from '../factoryStop';
 import { factorySettingsSetHandler, factoryStopHandler } from '../../ipc/handlers/factory.handler';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings, type FactorySettingsStore } from '../factorySettings';
@@ -186,6 +187,55 @@ describe('stopFactoryWork', () => {
     expect(await stopFactoryWork(r.p)).toMatchObject({ ok: false, code: 'partial', workersStopped: 1, message: WORKSPACES_LOADING_MESSAGE });
     expect(await stopFactoryTask(r.p, 't-pend-native')).toMatchObject({ ok: false, code: 'partial', workersStopped: 1, message: WORKSPACES_LOADING_MESSAGE });
     expect(await stopFactoryTask(r.p, 't-pend-wsl')).toMatchObject({ ok: false, code: 'partial', workersStopped: 0, message: WORKSPACES_LOADING_MESSAGE });
+  });
+
+  // #2388: a pane whose process identity is unknown cannot have its tree
+  // taken; the daemon refuses, and every stop again is refused the same way.
+  it('a pane left running (its identity unknown) says why on every stop, and under the task\'s room card once', async () => {
+    await task('t-unknown', LEAD);
+    const stopWorker = vi.fn(async (): Promise<number> => { throw new Error(UNKNOWN_ROOT_REFUSAL); });
+    const noteLeftRunning = vi.fn();
+    const r = ports({ stopWorker, noteLeftRunning });
+    const why = `Some work could not be stopped: ${UNKNOWN_ROOT_REFUSAL}.`;
+    expect(await stopFactoryWork(r.p, { botId: LEAD })).toMatchObject({ ok: false, code: 'partial', tasksCancelled: 1, message: why });
+    expect(noteLeftRunning).toHaveBeenCalledTimes(1);
+    expect(noteLeftRunning).toHaveBeenCalledWith(expect.objectContaining({ id: 't-unknown' }), UNKNOWN_ROOT_REFUSAL);
+    // The re-stops (agentsOnly) are refused the same way and say so.
+    expect(await stopFactoryWork(r.p, { botId: LEAD })).toMatchObject({ ok: false, code: 'partial', message: why });
+    expect(await stopFactoryTask(r.p, 't-unknown')).toMatchObject({ ok: false, code: 'partial', message: `The worker could not be stopped: ${UNKNOWN_ROOT_REFUSAL}.` });
+    expect(noteLeftRunning).toHaveBeenCalledTimes(1);
+    expect(why).toMatch(/the owner can close the task with Close and keep folder/);
+    expect(why).not.toMatch(/stop again/);
+  });
+
+  it('a refusal met first by a re-stop still tells the room, once', async () => {
+    await task('t-late', LEAD);
+    let refuse = false;
+    const stopWorker = vi.fn(async (): Promise<number> => {
+      if (!refuse) throw new WorkerStopPendingError(0, ['wsl']);
+      throw new Error(UNKNOWN_ROOT_REFUSAL);
+    });
+    const noteLeftRunning = vi.fn();
+    const r = ports({ stopWorker, noteLeftRunning });
+    expect(await stopFactoryWork(r.p, { botId: LEAD })).toMatchObject({ ok: false, message: WORKSPACES_LOADING_MESSAGE });
+    expect(noteLeftRunning).not.toHaveBeenCalled();
+    refuse = true;
+    expect(await stopFactoryTask(r.p, 't-late')).toMatchObject({ ok: false, message: `The worker could not be stopped: ${UNKNOWN_ROOT_REFUSAL}.` });
+    expect(await stopFactoryWork(r.p, { botId: LEAD })).toMatchObject({ ok: false, message: `Some work could not be stopped: ${UNKNOWN_ROOT_REFUSAL}.` });
+    expect(noteLeftRunning).toHaveBeenCalledTimes(1);
+    expect(noteLeftRunning).toHaveBeenCalledWith(expect.objectContaining({ id: 't-late' }), UNKNOWN_ROOT_REFUSAL);
+  });
+
+  it('a pane left running beside another failure names both', async () => {
+    await task('t-unknown', LEAD);
+    await task('t-broken', LEAD);
+    const stopWorker = vi.fn(async (entry: LedgerEntry): Promise<number> => {
+      throw new Error(entry.id === 't-unknown' ? UNKNOWN_ROOT_REFUSAL : 'daemon gone');
+    });
+    expect(await stopFactoryWork(ports({ stopWorker }).p)).toMatchObject({
+      ok: false, code: 'partial',
+      message: `Some work could not be stopped: ${UNKNOWN_ROOT_REFUSAL}. Other work could not be stopped either; stop again to retry it.`,
+    });
   });
 
   it('a loading stop beside another failure keeps the general message', async () => {
@@ -513,6 +563,15 @@ describe('"Run bots" off stops the work (factorySettingsSetHandler)', () => {
     // Nothing to stop, or a change that is not a switch-off: no stoppedWork.
     expect(await set(ok, { enabled: false })).not.toHaveProperty('stoppedWork');
     expect(stopWorker).toHaveBeenCalledTimes(2);
+  });
+
+  // #2388: the toast of a partial switch-off says why a pane was left running.
+  it('off: a pane left running (its identity unknown) is named in the answer', async () => {
+    await task('t-unknown', LEAD);
+    const s = settingsStore(true);
+    const r = ports({ stopWorker: vi.fn(async (): Promise<number> => { throw new Error(UNKNOWN_ROOT_REFUSAL); }) });
+    const res = await factorySettingsSetHandler(() => win, s.handle, () => r.p)(ok, { enabled: false });
+    expect(res).toMatchObject({ enabled: false, stoppedWork: { ok: false, tasks: 1, message: `Some work could not be stopped: ${UNKNOWN_ROOT_REFUSAL}.` } });
   });
 
   it('off then on at once: cancelled tasks stay cancelled, the stopped wake stays refused, on stops nothing, and work started after on runs', async () => {
