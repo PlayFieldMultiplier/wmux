@@ -97,10 +97,11 @@ export function workflowCardView(w: WorkflowView): WorkflowCardView {
   };
 }
 
-/** The workflows saved from these threads of one workspace, oldest first. */
-export function conversationWorkflows(workflows: readonly WorkflowView[], workspaceId: string, threads: readonly ThreadId[]): WorkflowView[] {
+/** The workflows saved from these threads, oldest first (each was read for
+ *  its own bot and workspace). */
+export function conversationWorkflows(workflows: readonly WorkflowView[], threads: readonly ThreadId[]): WorkflowView[] {
   return workflows
-    .filter((w) => w.workspaceId === workspaceId && threads.includes(w.threadId))
+    .filter((w) => threads.includes(w.threadId))
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 

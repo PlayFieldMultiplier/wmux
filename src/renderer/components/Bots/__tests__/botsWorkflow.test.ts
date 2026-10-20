@@ -64,8 +64,8 @@ describe('conversationWorkflows and withWorkflows', () => {
     const a = workflow({ id: 'wf-00000000000000000000000a', createdAt: 5 });
     const b = workflow({ id: 'wf-00000000000000000000000b', createdAt: 1 });
     const other = workflow({ id: 'wf-00000000000000000000000c', threadId: 'group:g1' as ThreadId });
-    expect(conversationWorkflows([a, other, b], 'w1', [DM]).map((w) => w.id)).toEqual([b.id, a.id]);
-    expect(conversationWorkflows([a], 'w2', [DM])).toEqual([]);
+    expect(conversationWorkflows([a, other, b], [DM]).map((w) => w.id)).toEqual([b.id, a.id]);
+    expect(conversationWorkflows([a], ['group:g1' as ThreadId])).toEqual([]);
   });
 
   it('places a card at the time it was saved, after the run it falls in', () => {

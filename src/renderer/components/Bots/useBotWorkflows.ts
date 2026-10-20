@@ -4,9 +4,12 @@
 // the one read (a revision only moves forward); a cancel refused because the
 // workflow moved on re-reads.
 // With no workflow port the list stays empty and there is no Cancel.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OwnerWorkflowCancelResult, WorkflowView } from '../../../shared/botWorkflow';
+import { GENERAL_THREAD, dmThreadId, type ThreadId } from '../../../shared/room';
 import { getFactoryBotPort, type FactoryBotPort } from '../Room/factoryPorts';
+import type { Conversation } from './botsModel';
+import { conversationWorkflows } from './botsWorkflow';
 
 export interface WorkflowOwner { botId: string; workspaceId: string }
 
@@ -66,4 +69,16 @@ export function useBotWorkflows(owners: readonly WorkflowOwner[], port?: Factory
     return r;
   }, [cancelPort]);
   return { workflows, ...(cancelPort ? { cancel } : {}) };
+}
+
+/** The workflows a conversation shows: a 1:1's bot's, saved from its 1:1
+ *  or General (where a wake with no conversation saves one); a group's
+ *  bots', saved from the group. */
+export function useConversationWorkflows(conversation: Conversation, port?: FactoryBotPort): ReturnType<typeof useBotWorkflows> {
+  const rows = conversation.kind === 'bot' ? [conversation.row] : conversation.bots;
+  const { workflows, cancel } = useBotWorkflows(rows.map((r) => ({ botId: r.bot.id, workspaceId: r.bot.workspaceId })), port);
+  const threads: ThreadId[] = conversation.kind === 'bot' ? [dmThreadId(conversation.row.bot.id), GENERAL_THREAD] : [conversation.threadId];
+  const key = threads.join('\u0000');
+  const shown = useMemo(() => conversationWorkflows(workflows, key.split('\u0000') as ThreadId[]), [workflows, key]);
+  return { workflows: shown, ...(cancel ? { cancel } : {}) };
 }
