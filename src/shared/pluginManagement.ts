@@ -16,6 +16,13 @@ export const UI_PLUGIN_CATALOG = [{
   license: 'MIT',
   version: '1.0.0',
   files: ['manifest.json', 'page.html', 'README.md', 'LICENSE'],
+}, {
+  id: 'office',
+  name: 'Office',
+  publisher: 'bluemas',
+  license: 'MIT',
+  version: '1.0.0',
+  files: ['manifest.json', 'index.html', 'office.js', 'layout.js', 'sprites.js', 'characters.png', 'furniture.png', 'README.md', 'LICENSE'],
 }] as const;
 
 export interface InstalledUiPlugin extends PluginHostPluginSummary {

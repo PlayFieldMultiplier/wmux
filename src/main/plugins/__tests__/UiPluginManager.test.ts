@@ -22,11 +22,24 @@ function setup() {
   const catalogDir = path.join(root, 'catalog');
   fs.mkdirSync(catalogDir);
   fs.cpSync(path.resolve('examples/plugins/agent-state-page'), path.join(catalogDir, 'agent-state-page'), { recursive: true });
+  fs.cpSync(path.resolve('examples/plugins/office'), path.join(catalogDir, 'office'), { recursive: true });
   const loader = new PluginHostLoader(trust, pluginsDir);
   const approval = new ApprovalQueue(trust, { openPrompt: vi.fn() });
   const options = { loader, trust, approval: () => approval, pluginsDir, catalogDir, statePath: path.join(root, 'ui-plugins.json'), changed: vi.fn() };
   return { root, options, loader, trust, approval, manager: new UiPluginManager(options) };
 }
+
+it('installs the Office bundle with its scripts and sprite sheets, ungranted until approved', async () => {
+  const test = setup();
+  await test.manager.initialize();
+  await test.manager.install('office');
+  expect((await test.manager.inventory()).plugins.find((plugin) => plugin.name === 'office')).toMatchObject({ managed: true, enabled: true, trustStatus: 'denied' });
+  for (const file of ['index.html', 'office.js', 'layout.js', 'sprites.js', 'characters.png', 'furniture.png']) {
+    expect(test.loader.resolveBundlePath('office', file)).not.toBeNull();
+  }
+  await test.manager.remove('office');
+  expect(test.loader.resolveBundlePath('office', 'index.html')).toBeNull();
+});
 
 it('installs without granting permissions, disables immediately and persists across restart', async () => {
   const test = setup();
