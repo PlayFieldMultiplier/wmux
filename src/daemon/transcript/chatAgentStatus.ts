@@ -41,6 +41,24 @@ export function transcriptTurnEnd(
   return undefined;
 }
 
+/**
+ * The state of the transcript's last turn, read back from its tail: `ended`
+ * when an end (a finished reply, `turn_complete`, an interrupt) is the last
+ * turn record, `open` when a prompt or work comes after the last end,
+ * `unknown` when the tail holds neither. Rows that are no turn of the
+ * session's own (a summary caveat, a subagent chip, a status note) are
+ * skipped, however many there are.
+ */
+export function transcriptTurnState(events: readonly TurnEvent[] | undefined): 'open' | 'ended' | 'unknown' {
+  if (!events) return 'unknown';
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (turnEndStatus(event)) return 'ended';
+    if (isNewerWork(event) || event.kind === 'user_text') return 'open';
+  }
+  return 'unknown';
+}
+
 /** Where a cancelled turn's transcript stood when the interrupt was written. */
 export interface TranscriptBoundary {
   /** The last event id in the tail at the write; undefined when the tail was empty or unreadable. */

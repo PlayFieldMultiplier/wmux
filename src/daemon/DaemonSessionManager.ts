@@ -1036,6 +1036,15 @@ export class DaemonSessionManager extends EventEmitter {
       meta.lastActivity = new Date().toISOString();
     });
 
+    // The agent's mid-turn state, kept on meta so it is persisted: a daemon
+    // that dies mid-turn leaves it set, and the next daemon's recovery reads
+    // it to continue that turn. daemon/index.ts persists on the event.
+    bridge.on('agentTurn', (payload: { sessionId: string; runningSince: number | null }) => {
+      if (payload.runningSince === null) delete meta.turnRunningSince;
+      else meta.turnRunningSince = payload.runningSince;
+      this.emit('session:agentTurn', payload);
+    });
+
     bridge.on('exit', (payload: { sessionId: string; exitCode: number | null; signal?: number }) => {
       // Shutdown-kill classification (reboot-reattach RCA 2026-07-02): an OS
       // shutdown kills PTY children before the daemon. Persisting those exits

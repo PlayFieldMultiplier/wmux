@@ -155,6 +155,20 @@ export interface DaemonSession {
    * resume (`--resume <id>`) on both the recovery pill and the supervised replay.
    */
   resumeBinding?: ResumeBinding;
+  /**
+   * When the pane's agent turn that is running now started (epoch ms), absent
+   * while no turn runs (DaemonPTYBridge.isAgentMidTurn). Persisted soon after
+   * each edge, so a record the daemon left behind when it died says whether
+   * its agent was mid-turn then. Read only by recovery, from the OLD record;
+   * never carried onto the recovered meta and never sent to clients raw.
+   */
+  turnRunningSince?: number;
+  /**
+   * A recovered pane whose continue prompt is still owed (its one-shot mark,
+   * not yet spent). Written only into the persisted state, so a daemon that
+   * dies again before the pane resumed still continues the turn.
+   */
+  resumeContinuePending?: true;
   /** Exact thread observed on this pane's owned Codex TUI relay. Never hook-derived. */
   codexRelayResume?: {threadId:string;cwd:string;codeHome:string;transcriptPath:string};
   /**
