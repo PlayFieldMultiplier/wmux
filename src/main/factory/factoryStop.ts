@@ -46,7 +46,7 @@
 import type { LedgerEntry } from '../../shared/ledger';
 import type { LedgerListFilter, LedgerUpdateInput, LedgerUpdateResult } from '../../daemon/ledger/TaskLedger';
 import { markStoppedByOwner, unmarkStoppedByOwner } from '../deck/fanoutCallerNotify';
-import { getAgentSlots } from './agentSlots';
+import { getAgentSlots, refreshSlotLiveness } from './agentSlots';
 import { forgetHeldFanouts } from './heldFanouts';
 import { dropQueuedHeldFanoutWakes } from './wakeQueue';
 import { UNKNOWN_ROOT_REFUSAL } from '../../shared/rpc';
@@ -318,6 +318,10 @@ async function stopTask(
     leftRunning = leftRunningReason(err);
     log(`[factory] stop: the worker of ${row.id} was not stopped: ${String(err)}`);
   }
+  // The slot holders read the daemon's sessions, and the last read may have
+  // seen this worker before its stop (the cancel above already told the
+  // window): one read that starts now shows what the stop left.
+  if (sessions > 0) void refreshSlotLiveness(Date.now());
   if (leftRunning) noteLeftRunningOnce(ports, row, leftRunning, log);
   const failed = outcome === 'failed' || !workerOk || gateFailed;
   // Loading: the worker's stop was the only failure, and only for that.
@@ -586,6 +590,7 @@ export async function stopFactoryTask(ports: FactoryStopPorts, taskId: string): 
     }
     try {
       stopped = (await ports.stopWorker(row, { agentsOnly: true })) > 0;
+      if (stopped) void refreshSlotLiveness(Date.now());
     } catch (err) {
       failed = true;
       leftRunning = leftRunningReason(err);

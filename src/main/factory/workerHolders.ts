@@ -455,8 +455,6 @@ export interface LiveHolders {
 let source: (() => HolderSnapshot) | null = null;
 let sourceKey: (() => readonly unknown[]) | null = null;
 let memo: { key: readonly unknown[]; value: LiveHolders } | null = null;
-/** The holders the last look answered with (a cap's, or a bot status's). */
-let lastLook: readonly WorkerHolder[] | null = null;
 
 /** Set by the worker lifecycle host: how to read a snapshot now, and the
  *  key of what it reads (holderInputs.ts's counter, ledger transitions,
@@ -468,7 +466,6 @@ export function setHolderSource(next: (() => HolderSnapshot) | null, key?: () =>
   source = next;
   sourceKey = next ? key ?? null : null;
   memo = null;
-  lastLook = null;
 }
 
 const sameKey = (a: readonly unknown[], b: readonly unknown[]): boolean => a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
@@ -483,7 +480,6 @@ export function liveHolders(): LiveHolders | null {
   }
   const snap = source();
   const value = { holders: computeHolders(snap), workspacesKnown: snap.workspaces !== null };
-  lastLook = value.holders;
   if (key) {
     const entry = { key, value };
     memo = entry;
@@ -496,19 +492,28 @@ export function liveHolders(): LiveHolders | null {
   return { holders: value.holders.slice(), workspacesKnown: value.workspacesKnown };
 }
 
-/** Called once a read of the daemon's sessions landed: calls `changed` when
- *  the holders that count now differ from those the last look before it
- *  answered with (whatever moved them meanwhile), or when no look came
- *  before. A read alone can move a holder (an agent seen gone, or at work
+/** Tells `changed` when one read of the daemon's sessions moved the
+ *  holders that count: `before` right before the read's answers are
+ *  published, `after` once they all are (a look between the two cannot hide
+ *  the move). A read alone can move a holder (an agent seen gone, or at work
  *  again) with nothing else to tell the window. */
-export function holdersMovedByRead(changed: () => void): void {
-  const before = lastLook;
-  let after: LiveHolders | null;
-  try {
-    after = liveHolders();
-  } catch {
-    return;
-  }
-  if (!after) return;
-  if (before === null || heldKey(before) !== heldKey(after.holders)) changed();
+export function holderReadNotice(changed: () => void): { before: () => void; after: () => void } {
+  const key = (): string | null => {
+    try {
+      const h = liveHolders();
+      return h ? heldKey(h.holders) : null;
+    } catch {
+      return null;
+    }
+  };
+  let baseline: string | null = null;
+  return {
+    before: () => {
+      baseline = key();
+    },
+    after: () => {
+      const now = key();
+      if (now !== null && now !== baseline) changed();
+    },
+  };
 }

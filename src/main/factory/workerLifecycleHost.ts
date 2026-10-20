@@ -73,7 +73,7 @@ import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLi
 import { AgentGoneFacts, setAgentGoneFacts } from './agentGoneFacts';
 import { getWorkerSlots, launchPaneOwner, setReclaimedPaneSource, taskOfPane } from './workerSlots';
 import { holderInputsRevision } from './holderInputs';
-import { holderCounts, holdersMovedByRead, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
+import { holderCounts, holderReadNotice, liveHolders, setHolderSource, type HolderSnapshot, type WorkerHolder } from './workerHolders';
 import { getVerdictedTasks } from './verdictedTasks';
 import { verdictedTaskIds } from './openBotWorkers';
 import type { FanOutService } from '../worktask/FanOutService';
@@ -177,6 +177,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   // (the mirror, read now) and those whose panes all run no agent any more
   // (the daemon's sessions, read at most every LIVENESS_REFRESH_MS; until
   // the first read, none). A cap check awaits a fresh read (refreshSlotLiveness).
+  const readNotice = holderReadNotice(changed);
   const taskLiveness = createTaskWorkspaceLiveness({
     entries: () => getWorkspaceMirror().getEntries(),
     // Asked with the daemon's recovery state: a read while it still restores
@@ -199,7 +200,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
     refreshMs: LIVENESS_REFRESH_MS,
     // The bot status the window shows counts these holders (openBotWorkers):
     // a read that moved one tells it.
-    onRead: () => holdersMovedByRead(changed),
+    beforePublish: readNotice.before,
+    onRead: readNotice.after,
   });
   // A task that runs again loses its fact: its row reopened (a resume of its
   // reclaimed worker and a new worker session clear it where they happen).
@@ -209,7 +211,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   const idle = taskLiveness.idle;
   // A cap check awaits a fresh read of the daemon's sessions first
   // (refreshSlotLiveness): what the holder set reads (workerHolders.ts).
-  setSlotLivenessRefresh(() => idle.fresh());
+  setSlotLivenessRefresh((since) => (since === undefined ? idle.fresh() : idle.since(since)));
   offs.push(() => setSlotLivenessRefresh(null));
   /** Whether a task's row is open (a reclaimed task can reopen: failed → working). */
   const taskOpen = (taskId: string): boolean => {

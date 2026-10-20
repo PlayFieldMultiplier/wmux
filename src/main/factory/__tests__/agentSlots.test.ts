@@ -268,6 +268,35 @@ describe('IdleSnapshot (#2255)', () => {
     expect([...idle.get()]).toEqual(['ws-a']);
   });
 
+  it('since(at) waits for a read that started at or after at, however recent the last one', async () => {
+    let now = 1_000_000;
+    let release: (() => void) | null = null;
+    let n = 0;
+    const read = vi.fn(async () => {
+      n += 1;
+      const mine = n;
+      if (mine === 1) await new Promise<void>((r) => { release = r; });
+      return new Set([`read-${mine}`]);
+    });
+    const idle = new IdleSnapshot(read, 10_000, () => now);
+    // A read in flight that started before the stop.
+    const first = idle.fresh();
+    now += 1_000;
+    const after = idle.since(now);
+    (release as (() => void) | null)?.();
+    await first;
+    await after;
+    expect(read).toHaveBeenCalledTimes(2);
+    expect([...idle.get()]).toEqual(['read-2']);
+    // Recent enough for fresh(), still read again for a later since().
+    now += 1_000;
+    await idle.since(now);
+    expect(read).toHaveBeenCalledTimes(3);
+    // A read already started after `at` answers it.
+    await idle.since(now);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
   it('tells onRead after each good read, once get() answers with it', async () => {
     let now = 1_000_000;
     let fail = false;

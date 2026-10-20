@@ -10,7 +10,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { holderInputsRevision } from '../holderInputs';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { computeHolders, holderCounts, holdersMovedByRead, liveHolders, setHolderSource, type HolderRecord, type HolderSnapshot, type WorkerHolder } from '../workerHolders';
+import { computeHolders, holderCounts, holderReadNotice, liveHolders, setHolderSource, type HolderRecord, type HolderSnapshot, type WorkerHolder } from '../workerHolders';
 import { AgentSlots, SLOT_ROW_GRACE_MS } from '../agentSlots';
 import { openBotWorkers } from '../openBotWorkers';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
@@ -777,7 +777,7 @@ describe('the earlier fixes hold through the set', () => {
   });
 });
 
-describe('a liveness read that moves a holder tells the window (holdersMovedByRead)', () => {
+describe('a liveness read that moves a holder tells the window (holderReadNotice)', () => {
   afterEach(() => setHolderSource(null));
   // A paused worker (stopped for its report): a read after the stop that
   // still sees its agent holds it; the next read, seeing it gone, frees it.
@@ -787,52 +787,55 @@ describe('a liveness read that moves a holder tells the window (holdersMovedByRe
   const seen = snapshot({ rows, records, agentSeen: new Set(['ws-p']), readAt: NOW - 30_000 });
   const gone = snapshot({ rows, records, readAt: NOW - 5_000 });
 
-  it('calls changed for a read that moved a holder since the last look, not for one that moved nothing', () => {
+  it('calls changed for a read that moved a holder, not for one that moved nothing', () => {
     let snap = seen;
     let calls = 0;
-    const changed = () => { calls++; };
+    const notice = holderReadNotice(() => { calls++; });
     setHolderSource(() => snap);
     expect(holderOf(liveHolders()?.holders ?? [], 'p')?.state).toBe('held');
-    holdersMovedByRead(changed);
+    notice.before();
+    notice.after();
     expect(calls).toBe(0);
+    notice.before();
     snap = gone;
-    holdersMovedByRead(changed);
+    notice.after();
     expect(calls).toBe(1);
-    holdersMovedByRead(changed);
+    notice.before();
+    notice.after();
     expect(calls).toBe(1);
   });
 
-  it('compares with the last look, not the last read: a worker that came and went between two reads is told', () => {
-    // Read A: no worker. A launch the window was told of: the status it read
-    // counted one. The worker exits before read B, which sees none again.
-    let snap = snapshot({ rows: [] });
+  it('a look between the publish and its notice does not hide the move', () => {
+    let snap = seen;
     let calls = 0;
-    const changed = () => { calls++; };
+    const notice = holderReadNotice(() => { calls++; });
     setHolderSource(() => snap);
-    holdersMovedByRead(changed);
-    expect(calls).toBe(1); // the first read: no look before it
-    snap = snapshot({ rows: [row('w')] });
-    expect(holderCounts(liveHolders()?.holders ?? [], BOT).bot).toBe(1);
-    snap = snapshot({ rows: [] });
-    holdersMovedByRead(changed);
-    expect(calls).toBe(2);
+    notice.before();
+    snap = gone;
+    // A cap check lands between the read's answers and the notice.
+    expect(holderOf(liveHolders()?.holders ?? [], 'p')?.state).toBe('free');
+    notice.after();
+    expect(calls).toBe(1);
   });
 
   it('a holder that goes from held to unknown still counts: no call', () => {
     let snap = snapshot({ rows: [row('w')] });
     let calls = 0;
+    const notice = holderReadNotice(() => { calls++; });
     setHolderSource(() => snap);
-    expect(holderOf(liveHolders()?.holders ?? [], 'w')?.state).toBe('held');
+    notice.before();
     snap = snapshot({ rows: [row('w')], read: 'stale' });
     expect(holderOf(computeHolders(snap), 'w')?.state).toBe('unknown');
-    holdersMovedByRead(() => { calls++; });
+    notice.after();
     expect(calls).toBe(0);
   });
 
   it('a holder set that cannot be read says nothing', () => {
     let calls = 0;
+    const notice = holderReadNotice(() => { calls++; });
     setHolderSource(() => { throw new Error('no snapshot'); });
-    holdersMovedByRead(() => { calls++; });
+    notice.before();
+    notice.after();
     expect(calls).toBe(0);
   });
 });
