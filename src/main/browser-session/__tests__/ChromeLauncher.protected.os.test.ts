@@ -155,6 +155,10 @@ const fetchMock = vi.fn(async (url: string): Promise<{ ok: boolean; text: () => 
 
 const denyAll: ChromeProtectionPlan = { matcher: () => ({ allows: () => false }) };
 
+// Teardown stops each test's Chrome with `dispose({ immediate: true })`, awaited:
+// a graceful dispose would leave its Browser.close and its 3 s fallback running
+// into the next test's shared fakes. The quitting tests cover the graceful path.
+
 beforeEach(() => {
   spawnMock.mockReset();
   state.portFiles = {};
@@ -207,7 +211,7 @@ describe('ChromeLauncher — protected profiles', () => {
     const probe = sockets.find((x) => x.sent.some((m) => m.method === 'Target.createTarget'));
     expect(probe?.sent.map((x) => x.method)).toEqual(['Target.setDiscoverTargets', 'Target.createTarget', 'Target.closeTarget']);
     expect(probe?.closed).toBe(true);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   });
 
   it('never adopts a running Chrome: closes it, waits for it to go, then launches', async () => {
@@ -225,7 +229,7 @@ describe('ChromeLauncher — protected profiles', () => {
     expect(sockets[0].sent.map((s) => s.method)).toContain('Browser.close');
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(launcher.currentPort()).toBe(18001);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   });
 
   it('never hands out a launch that was in flight when protection turned on', async () => {
@@ -246,7 +250,7 @@ describe('ChromeLauncher — protected profiles', () => {
     expect(first.kill).toHaveBeenCalled();
     expect((spawnMock.mock.calls[1][1] as string[]).some((a) => a.startsWith('--proxy-server='))).toBe(true);
     expect(launcher.isProtected()).toBe(true);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   }, 15_000);
 
   it('restarts a running Chrome when protection turns on, quitting it through Browser.close', async () => {
@@ -270,7 +274,7 @@ describe('ChromeLauncher — protected profiles', () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect((spawnMock.mock.calls[1][1] as string[]).some((a) => a.startsWith('--proxy-server='))).toBe(true);
     expect(launcher.isProtected()).toBe(true);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   });
 
   it('refuses a Chrome whose traffic does not reach the proxy, and stops it', async () => {
@@ -282,7 +286,7 @@ describe('ChromeLauncher — protected profiles', () => {
     expect(child.kill).toHaveBeenCalled();
     expect(launcher.isProtected()).toBe(false);
     expect(spawnMock).toHaveBeenCalledTimes(1); // refused at once, not polled to the deadline
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   });
 
   it('refuses at once when Chrome reports the probe failed to load (not routed), without waiting out a clock', async () => {
@@ -295,7 +299,7 @@ describe('ChromeLauncher — protected profiles', () => {
     await expect(launcher.ensureRunning()).rejects.toThrow(/policy_denied/);
     expect(Date.now() - t0).toBeLessThan(2_000);
     expect(child.kill).toHaveBeenCalled();
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   });
 
   it('accepts a routed Chrome that is slow to issue the probe (cold start past the old 5 s cutoff)', async () => {
@@ -304,7 +308,7 @@ describe('ChromeLauncher — protected profiles', () => {
     const launcher = new ChromeLauncher('/tmp/prot-h', { protection: () => denyAll });
     await expect(launcher.ensureRunning()).resolves.toBeGreaterThan(0);
     expect(launcher.isProtected()).toBe(true);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   }, 15_000);
 
   it('concurrent callers re-arm one download guard, not two', async () => {
@@ -316,7 +320,7 @@ describe('ChromeLauncher — protected profiles', () => {
     await Promise.all([launcher.ensureRunning(), launcher.ensureRunning(), launcher.ensureRunning()]);
     expect(guards()).toHaveLength(2);
     expect(guards().filter((g) => !g.closed)).toHaveLength(1);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   });
 
   it('closes the proxy when protection turns off', async () => {
@@ -341,7 +345,7 @@ describe('ChromeLauncher — protected profiles', () => {
       sock.once('error', () => resolve(true));
     });
     expect(refused).toBe(true);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   }, 15_000);
 
   it('force-stops a Chrome that will not exit when protection turns on', async () => {
@@ -362,7 +366,7 @@ describe('ChromeLauncher — protected profiles', () => {
     await launcher.ensureRunning();
     expect(first.kill).toHaveBeenCalledWith('SIGKILL');
     expect(launcher.isProtected()).toBe(true);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   }, 30_000);
 });
 
@@ -399,7 +403,7 @@ describe('ChromeLauncher — protected launch readiness', () => {
       expect(launcher.blockedHosts()).toEqual([]);
     } finally {
       upstream.close();
-      launcher.dispose();
+      await launcher.dispose({ immediate: true });
     }
   });
 });
@@ -551,7 +555,7 @@ describe('ChromeLauncher — recently blocked hosts (#2063)', () => {
     expect(launcher.blockedHosts()).toEqual([]);
     expect(await connectViaProxy('api.blocked.test:8443')).toContain('403');
     expect(launcher.blockedHosts().map((b) => `${b.host}:${b.port}`)).toEqual(['api.blocked.test:8443']);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   });
 
   it('the registry answers per profile and clears every list on a policy change', async () => {
@@ -574,6 +578,6 @@ describe('ChromeLauncher — recently blocked hosts (#2063)', () => {
     expect(registry.blockedHostsFor('other')).toEqual([]);
     registry.clearBlockedHosts();
     expect(registry.blockedHostsFor('default')).toEqual([]);
-    launcher.dispose();
+    await launcher.dispose({ immediate: true });
   });
 });
