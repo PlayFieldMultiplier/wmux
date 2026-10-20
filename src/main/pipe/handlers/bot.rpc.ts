@@ -568,9 +568,12 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
         send({ type: 'bots-changed' });
       });
       // Every settings write reschedules: switching the factory off, from any
-      // caller, cancels the running turns at once.
+      // caller, cancels the running turns at once. The window is told too:
+      // its Bots gate (ROOM_STATUS) is re-read on the push, so a switch
+      // written by any caller shows on the rail without a focus change.
       offSettings = onFactorySettingsChanged(() => {
         runtime?.kick();
+        send({ type: 'settings-changed' });
       });
       // A new usage reading moves the bots' quota lines: tell the window, at
       // most once per few seconds (live statusline samples come in bursts).

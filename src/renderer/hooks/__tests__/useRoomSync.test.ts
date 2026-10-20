@@ -144,6 +144,10 @@ describe('status', () => {
     setRoomsApiForTests(room.api);
     await refreshRoomStatus();
     expect(useStore.getState().roomStatus).toEqual({ running: true, enabled: true, hqWorkspaceId: null });
+    // The same answer again (every bot event re-reads it) keeps the object.
+    const first = useStore.getState().roomStatus;
+    await refreshRoomStatus();
+    expect(useStore.getState().roomStatus).toBe(first);
     room.raw.status.mockResolvedValueOnce({ ok: false, code: 'operator_only', message: 'no' } as never);
     await refreshRoomStatus();
     expect(useStore.getState().roomStatus).toBeNull();
@@ -151,6 +155,24 @@ describe('status', () => {
     useStore.getState().setRoomStatus({ running: true, enabled: true, hqWorkspaceId: null });
     await refreshRoomStatus();
     expect(useStore.getState().roomStatus).toBeNull();
+  });
+});
+
+describe('overlapping status reads', () => {
+  it('apply only the newest answer: an older one settling last does not undo it', async () => {
+    const room = fakeRoom(0);
+    setRoomsApiForTests(room.api);
+    let answerOlder: (v: unknown) => void = () => undefined;
+    room.raw.status
+      .mockImplementationOnce(() => new Promise((resolve) => { answerOlder = resolve; }) as never)
+      .mockResolvedValueOnce({ running: true, enabled: true, hqWorkspaceId: null });
+    const older = refreshRoomStatus();
+    await refreshRoomStatus();
+    expect(useStore.getState().roomStatus).toEqual({ running: true, enabled: true, hqWorkspaceId: null });
+    // The older read answers last, from before the bots were switched on.
+    answerOlder({ running: true, enabled: false, hqWorkspaceId: null });
+    await older;
+    expect(useStore.getState().roomStatus).toEqual({ running: true, enabled: true, hqWorkspaceId: null });
   });
 });
 
