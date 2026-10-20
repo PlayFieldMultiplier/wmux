@@ -104,6 +104,8 @@ async function listPeerHints(
     const exposed = h.role === 'joiner' && connected ? exposedOf(h.hostId) : null;
     const exposedPanes = exposed ? exposed.panes : null;
     let shown: number | null = null;
+    /** A whole shown workspace is counted from discover, which lists terminal panes only. */
+    let shownAtLeast = false;
     if (h.role === 'server') {
       try {
         const res = await dc.rpc('a2a.remote.exposure.get', { hostId: h.hostId }, { timeoutMs: PEER_HINT_RPC_TIMEOUT_MS });
@@ -114,6 +116,7 @@ async function listPeerHints(
         // lists only terminal panes, so a whole workspace it counts as empty
         // is unknown here, never "nothing shown".
         const whole = ids.filter((ws) => !Array.isArray(panes[ws]));
+        shownAtLeast = whole.length > 0;
         const count = whole.length ? await panesOf : () => 0;
         shown = whole.some((ws) => count(ws) === 0)
           ? null
@@ -128,7 +131,7 @@ async function listPeerHints(
     else if (h.role === 'server') {
       hint = shown === 0
         ? 'paired (it joined this PC); this PC shows it no pane yet (a person picks them on the Remote page), then a person on that PC requests the link'
-        : `paired (it joined this PC); ${shown === null ? 'no pane linked yet' : `this PC shows it ${plural(shown, 'pane')}, none linked yet`} (a person on that PC requests the link)`;
+        : `paired (it joined this PC); ${shown === null ? 'no pane linked yet' : `this PC shows it ${shownAtLeast ? 'at least ' : ''}${plural(shown, 'pane')}, none linked yet`} (a person on that PC requests the link)`;
     } else if (exposedPanes === 0 && exposed?.brain) {
       hint = 'paired; that PC shows its Moa but no pane to this one (a person can link Moa from the Remote page, or its owner ticks panes in Settings › LAN)';
     } else if (exposedPanes === 0) hint = 'paired; that PC shows no pane to this one yet (its owner ticks panes in Settings › LAN)';

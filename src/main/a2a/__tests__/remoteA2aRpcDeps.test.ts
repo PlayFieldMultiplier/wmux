@@ -94,7 +94,7 @@ describe('daemonRemoteA2aRpcDeps', () => {
       return {};
     });
     const [desk] = await daemonRemoteA2aRpcDeps(() => ({ rpc: whole })).listPeers!(undefined, Promise.resolve((ws: string) => (ws === 'ws' ? 3 : 0)));
-    expect(desk.hint).toMatch(/this PC shows it 3 panes, none linked/);
+    expect(desk.hint).toMatch(/this PC shows it at least 3 panes, none linked/);
     // Discover counts terminal panes only: a whole workspace it sees as empty is unknown, never "no pane".
     const [blank] = await daemonRemoteA2aRpcDeps(() => ({ rpc: whole })).listPeers!(undefined, none);
     expect(blank.hint).not.toMatch(/no pane yet/);
