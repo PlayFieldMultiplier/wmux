@@ -217,6 +217,7 @@ export default function AddSshPcDialog({ onClose, onAdded }: AddSshPcDialogProps
               <Checkbox checked={startAfterReboot} onCheckedChange={setStartAfterReboot} data-testid="remote-ssh-start-after-reboot" />
             </Field>
             <p className="wmux-remote-connect-note" data-testid="remote-ssh-consent">{t('remoteSsh.consent')}</p>
+            <p className="wmux-remote-connect-note" data-testid="remote-ssh-agent-messages">{t('remote.agentMessagesNote')}</p>
           </div>
         )}
         {step.kind === 'working' && (

@@ -18,4 +18,63 @@ describe('daemonRemoteA2aRpcDeps', () => {
     expect(await refusing.sendTask({ linkId: 'l', from: { workspaceId: 'w', name: 'w', paneId: 'p' }, title: '', text: 't' }))
       .toEqual({ ok: false, error: 'link-not-active' });
   });
+
+  it('listPeers: paired PCs without an active link, as counts and a hint, never a pane name or id', async () => {
+    const JOINED = 'host-joined';
+    const SERVED = 'host-served';
+    const LINKED = 'host-linked';
+    const link = (hostId: string, state: string, workspaceId = 'ws-a') => ({
+      linkId: `l-${hostId}-${state}`, state, local: { kind: 'pane', workspaceId, paneId: 'p-local' },
+      remote: { hostId, kind: 'pane', workspaceId: 'ws-remote', paneId: 'p-remote', label: 'remote-label' },
+    });
+    const rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'a2a.remote.hosts.status') {
+        return { hosts: [
+          { hostId: JOINED, name: 'mac-mini', role: 'joiner', state: 'connected', pending: 0, lastError: '10.0.0.9 refused' },
+          { hostId: SERVED, name: 'desk', role: 'server', state: 'connected', pending: 0 },
+          { hostId: LINKED, name: 'laptop', role: 'joiner', state: 'connected', pending: 0 },
+        ] };
+      }
+      if (method === 'a2a.remote.links.list') {
+        return { links: [link(LINKED, 'active'), link(SERVED, 'proposed-in'), link(JOINED, 'active', 'ws-other')] };
+      }
+      if (method === 'a2a.remote.hosts.exposed') {
+        // What the other PC chose to show; its unshown panes never reach this PC.
+        return params.hostId === JOINED
+          ? { ok: true, panes: [
+            { kind: 'pane', workspaceId: 'ws-shown', workspaceName: 'shown-ws', paneId: 'p-shown', label: 'shown-label', cwd: '/srv/app' },
+            { kind: 'brain', workspaceId: 'ws-hq', workspaceName: 'HQ' },
+          ] }
+          : { ok: true, panes: [] };
+      }
+      if (method === 'a2a.remote.exposure.get') {
+        return { exposure: { v: 1, hostId: SERVED, workspaceIds: ['ws-a'], paneIds: { 'ws-a': ['p-mine'] }, updatedAt: 'x' } };
+      }
+      return {};
+    });
+    const peers = await daemonRemoteA2aRpcDeps(() => ({ rpc })).listPeers!('ws-a');
+    expect(peers).toEqual([
+      { name: 'mac-mini', paired: true, connected: true, exposedPanes: 1, pendingLinks: 0, hint: expect.stringMatching(/shows 1 pane, none linked/) },
+      { name: 'desk', paired: true, connected: true, exposedPanes: null, pendingLinks: 1, hint: expect.stringMatching(/link request from that PC/) },
+    ]);
+    const text = JSON.stringify(peers);
+    for (const secret of [JOINED, SERVED, 'p-shown', 'shown-label', 'shown-ws', 'ws-shown', '/srv/app', 'p-mine', 'p-remote', 'remote-label', '10.0.0.9']) {
+      expect(text).not.toContain(secret);
+    }
+    // Only the PC this one joined is asked what it shows, and only under the short cap.
+    expect(rpc.mock.calls.filter((c) => c[0] === 'a2a.remote.hosts.exposed').map((c) => c[1])).toEqual([{ hostId: JOINED }]);
+  });
+
+  it('listPeers: a paired PC that shows nothing says so; no daemon lists nothing', async () => {
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'a2a.remote.hosts.status') return { hosts: [{ hostId: 'h', name: 'mac-mini', role: 'joiner', state: 'connected', pending: 0 }] };
+      if (method === 'a2a.remote.links.list') return { links: [] };
+      if (method === 'a2a.remote.hosts.exposed') return { ok: true, panes: [] };
+      return {};
+    });
+    expect(await daemonRemoteA2aRpcDeps(() => ({ rpc })).listPeers!()).toEqual([
+      { name: 'mac-mini', paired: true, connected: true, exposedPanes: 0, pendingLinks: 0, hint: expect.stringMatching(/shows no pane to this one/) },
+    ]);
+    expect(await daemonRemoteA2aRpcDeps(() => null).listPeers!()).toEqual([]);
+  });
 });
