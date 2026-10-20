@@ -353,3 +353,10 @@ client approval, unsupported auth grants or a local server are not claimed as
 ready-made recipes. No private ChatGPT/Claude service endpoint or credential is
 reused. Real account E2E remains a separate owner-authorized check; fixtures test
 confidential-client exchange, refresh, consent, destination pinning and secrecy.
+
+Public unauthenticated endpoint probes on 2026-10-20 returned 401 or 405 for
+23 service URLs. PayPal's documented Streamable HTTP sandbox path is `/http`,
+not the root or `/sse`; its OAuth metadata is reachable and advertises S256 and
+dynamic registration, but an unauthenticated initialize at `/http` returned 404.
+The PayPal recipe is retained as a documented setup recipe, not a verified
+working account connection. No real tokens or account data were used in probes.

@@ -18,7 +18,7 @@ it('ships distinct reviewed HTTPS recipes without automatic access', () => {
   }
 });
 it('keeps PayPal on sandbox and Supabase read-only by default', () => {
-  expect(CONNECTOR_SERVICES.find((s) => s.id === 'paypal')?.url).toBe('https://mcp.sandbox.paypal.com');
+  expect(CONNECTOR_SERVICES.find((s) => s.id === 'paypal')?.url).toBe('https://mcp.sandbox.paypal.com/http');
   expect(CONNECTOR_SERVICES.find((s) => s.id === 'supabase')?.url).toContain('read_only=true');
 });
 const client = { clientId: 'app', clientSecret: 'secret', issuer: 'https://issuer.example', tokenEndpoint: 'https://tokens.example/token', callbackPort: 42813, tokenAuthMethod: 'client_secret_post' };

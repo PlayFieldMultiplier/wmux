@@ -1,4 +1,5 @@
 export const ko = {
+  "connectors.services.setup.paypal": "샌드박스 전용입니다. 비인증 주소 확인에서 404가 반환됐습니다. 브라우저 로그인은 공식 문서에 안내되어 있지만, 사용 전에 PayPal 서버 가용성을 확인하세요.",
   "connectors.tools.title": "사용 가능한 도구",
   "connectors.tools.hint": "최대 64개 도구를 선택한 뒤 연결을 검토하고 저장하세요. 체크만으로 권한이 부여되지 않습니다. 도구 이름은 서버에서 제공하므로 허용 전에 동작을 확인하세요.",
   "connectors.tools.review": "도구 권한 검토",
@@ -20,7 +21,6 @@ export const ko = {
   "connectors.services.setup.google": "개발자 프리뷰 가입과 Google Cloud API 활성화가 필요합니다. OAuth 앱을 등록한 뒤 고급 로그인 설정에 입력하세요.",
   "connectors.services.setup.slack": "MCP가 활성화된 승인된 내부 또는 Marketplace Slack 앱이 필요합니다. 고급 로그인 설정에 OAuth 앱 정보를 입력하세요.",
   "connectors.services.setup.client": "제공업체에 커넥터를 등록하고 고급 로그인 설정에 OAuth 앱 정보를 입력하세요.",
-  "connectors.services.setup.token": "샌드박스 전용입니다. 제공업체 액세스 토큰을 발급받아 요청된 키로 저장하세요. 만료된 토큰은 교체해야 합니다.",
   "connectors.oauth.advanced": "고급 로그인 설정",
   "connectors.oauth.useClient": "등록한 OAuth 앱 사용",
   "connectors.oauth.clientHint": "아래 콜백 URL을 제공업체에 등록하세요. 공식 문서의 발급자와 토큰 엔드포인트를 사용하세요. 인증 정보는 로그인 성공 후 암호화되며 연결 JSON에는 저장되지 않습니다.",

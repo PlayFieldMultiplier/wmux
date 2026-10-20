@@ -1,4 +1,5 @@
 export const zh = {
+  "connectors.services.setup.paypal": "仅限沙盒。未认证的端点检查返回 404。官方文档说明支持浏览器登录，但使用前请向 PayPal 确认服务器可用性。",
   "connectors.tools.title": "可用工具",
   "connectors.tools.hint": "选择最多 64 个工具，然后检查并保存连接。勾选本身不授予访问权限。工具名称来自服务器，请先确认其作用。",
   "connectors.tools.review": "检查工具权限",
@@ -20,7 +21,6 @@ export const zh = {
   "connectors.services.setup.google": "需要开发者预览资格并启用 Google Cloud API。注册 OAuth 客户端后，在高级登录设置中输入。",
   "connectors.services.setup.slack": "需要启用 MCP 的已批准内部或 Marketplace Slack 应用。请在高级登录中输入 OAuth 客户端。",
   "connectors.services.setup.client": "向提供商注册连接器，并在高级登录中输入 OAuth 客户端。",
-  "connectors.services.setup.token": "仅限沙盒。获取服务商访问令牌并保存为所需密钥。令牌过期后需要更换。",
   "connectors.oauth.advanced": "高级登录",
   "connectors.oauth.useClient": "使用已注册的 OAuth 应用",
   "connectors.oauth.clientHint": "请向提供商注册以下回调地址。使用官方文档中的颁发者和令牌端点。凭据仅在登录成功后加密保存，不写入连接 JSON。",

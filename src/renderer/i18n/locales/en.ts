@@ -1,4 +1,5 @@
 export const en = {
+  "connectors.services.setup.paypal": "Sandbox only. The unauthenticated endpoint check returned 404. Browser sign-in is documented, but verify server availability with PayPal before relying on this connection.",
   "connectors.tools.title": "Available tools",
   "connectors.tools.hint": "Choose up to 64 tools, then review and save the connection. Checking boxes alone grants no access. Tool names come from the server; review their effects before allowing them.",
   "connectors.tools.review": "Review tool permissions",
@@ -20,7 +21,6 @@ export const en = {
   "connectors.services.setup.google": "Developer Preview membership and enabled Google Cloud APIs required. Register an OAuth client, then enter it under Advanced sign-in.",
   "connectors.services.setup.slack": "Requires an approved internal or Marketplace Slack app with MCP enabled. Enter its OAuth client under Advanced sign-in.",
   "connectors.services.setup.client": "Register a connector with the provider and enter its OAuth client under Advanced sign-in.",
-  "connectors.services.setup.token": "Sandbox only. Obtain a provider access token and save it as the requested key. Expired tokens must be replaced.",
   "connectors.oauth.advanced": "Advanced sign-in",
   "connectors.oauth.useClient": "Use my registered OAuth application",
   "connectors.oauth.clientHint": "Register the callback URL below with your provider. Use the issuer and token endpoint from its official documentation. Credentials are encrypted after successful sign-in; never saved in connection JSON.",

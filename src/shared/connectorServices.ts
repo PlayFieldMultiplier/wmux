@@ -10,7 +10,7 @@ export interface ConnectorService {
   category: 'communication' | 'productivity' | 'files' | 'development' | 'design' | 'business';
   url: string;
   documentation: string;
-  setup: 'oauth' | 'google' | 'slack' | 'client' | 'token';
+  setup: 'oauth' | 'google' | 'slack' | 'client' | 'paypal';
 }
 export const CONNECTOR_SERVICES: readonly ConnectorService[] = [
   {"id": "gmail", "name": "Gmail", "category": "communication", "url": "https://gmailmcp.googleapis.com/mcp/v1", "documentation": "https://developers.google.com/workspace/guides/configure-mcp-servers", "setup": "google"},
@@ -35,7 +35,7 @@ export const CONNECTOR_SERVICES: readonly ConnectorService[] = [
   {"id": "cloudflare", "name": "Cloudflare", "category": "development", "url": "https://mcp.cloudflare.com/mcp", "documentation": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/", "setup": "oauth"},
   {"id": "canva", "name": "Canva", "category": "design", "url": "https://mcp.canva.com/mcp", "documentation": "https://www.canva.dev/docs/apps/mcp/verify-app/", "setup": "oauth"},
   {"id": "hubspot", "name": "HubSpot", "category": "business", "url": "https://mcp.hubspot.com", "documentation": "https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server", "setup": "client"},
-  {"id": "paypal", "name": "PayPal Sandbox", "category": "business", "url": "https://mcp.sandbox.paypal.com", "documentation": "https://developer.paypal.com/ai-tools/mcp-server", "setup": "token"},
+  {"id": "paypal", "name": "PayPal Sandbox", "category": "business", "url": "https://mcp.sandbox.paypal.com/http", "documentation": "https://developer.paypal.com/ai-tools/mcp-server", "setup": "paypal"},
   {"id": "dropbox", "name": "Dropbox", "category": "files", "url": "https://mcp.dropbox.com/mcp", "documentation": "https://help.dropbox.com/integrations/connect-dropbox-mcp-server", "setup": "oauth"},
  ];
 
@@ -43,7 +43,7 @@ export const CONNECTOR_SERVICES: readonly ConnectorService[] = [
 export function serviceConnectorDraft(service: ConnectorService): ConnectorDraft {
   return {
     name: service.id, transport: 'http', remote: { url: service.url, headers: {} },
-    secrets: service.setup === 'token' ? [{ secret: 'PAYPAL_MCP_TOKEN', as: 'header', header: 'Authorization', scheme: 'bearer' }] : [], tools: { mode: 'listed', allowed: [] },
+    secrets: [], tools: { mode: 'listed', allowed: [] },
     scope: { kind: 'bots', botIds: [] },
     enabled: false,
   };

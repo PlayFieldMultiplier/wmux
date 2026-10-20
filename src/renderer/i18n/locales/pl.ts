@@ -1,4 +1,5 @@
 export const pl = {
+  "connectors.services.setup.paypal": "Tylko środowisko testowe. Sprawdzenie punktu bez uwierzytelnienia zwróciło 404. Dokumentacja opisuje logowanie w przeglądarce, ale przed użyciem potwierdź dostępność serwera PayPal.",
   "connectors.tools.title": "Dostępne narzędzia",
   "connectors.tools.hint": "Wybierz do 64 narzędzi, następnie przejrzyj i zapisz połączenie. Samo zaznaczenie nie przyznaje dostępu. Nazwy pochodzą z serwera; sprawdź działanie narzędzi przed zezwoleniem.",
   "connectors.tools.review": "Przejrzyj uprawnienia narzędzi",
@@ -20,7 +21,6 @@ export const pl = {
   "connectors.services.setup.google": "Wymagany dostęp Developer Preview i włączone API Google Cloud. Zarejestruj klienta OAuth i podaj go w zaawansowanych ustawieniach logowania.",
   "connectors.services.setup.slack": "Wymagana zatwierdzona aplikacja wewnętrzna lub Marketplace Slack z MCP. Podaj jej klienta OAuth w zaawansowanych ustawieniach.",
   "connectors.services.setup.client": "Zarejestruj konektor u dostawcy i podaj klienta OAuth w zaawansowanych ustawieniach.",
-  "connectors.services.setup.token": "Tylko środowisko testowe. Uzyskaj token dostawcy i zapisz go jako wymagany klucz. Wygasłe tokeny wymagają wymiany.",
   "connectors.oauth.advanced": "Zaawansowane logowanie",
   "connectors.oauth.useClient": "Użyj zarejestrowanej aplikacji OAuth",
   "connectors.oauth.clientHint": "Zarejestruj poniższy adres zwrotny u dostawcy. Użyj wystawcy i punktu tokenów z oficjalnej dokumentacji. Dane są szyfrowane po logowaniu, nie trafiają do pliku JSON połączenia.",
