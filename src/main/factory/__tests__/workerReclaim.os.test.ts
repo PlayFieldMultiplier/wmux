@@ -1052,6 +1052,24 @@ describe('resume safety (review fixes)', () => {
     expect(workerHoursDay(usage, NOW)).toBe(3);
   });
 
+  it('a first record written stopped at once ends the worker\'s first run in the bot\'s hours', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const usage = emptyUsage();
+    recordWorkerStart(usage, 'wtask-abc-12345678', 0);
+    const seen: string[] = [];
+    store.onStateChange = (rec, from, to, at) => {
+      seen.push(`${from}->${to}`);
+      recordWorkerStateChange(usage, rec.taskId, from, to, at);
+    };
+    // As the dead-pane sweep records a still-open task's worker found gone.
+    await store.put({ taskId: 'wtask-abc-12345678', botId: BOT, ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', title: 't', threadId: 'task:x' as never, ended: 'reported', sessions: [], state: 'stopped', at: 2 * HOUR_MS });
+    expect(seen).toEqual(['null->stopped']);
+    expect(workerHoursDay(usage, 5 * HOUR_MS)).toBe(2);
+    // The same state written again tells nothing.
+    await store.put({ ...(store.get('wtask-abc-12345678') as NonNullable<ReturnType<typeof store.get>>), at: 3 * HOUR_MS });
+    expect(seen).toHaveLength(1);
+  });
+
   it('never evicts a resumed worker to stay under the record cap', async () => {
     const store = ReclaimedWorkers.at(dir);
     const rec = (i: number, state: 'stopped' | 'resumed') => ({ taskId: `wtask-n-${i}`, botId: BOT, ownerWorkspaceId: 'o', taskWorkspaceId: 't', title: 't', threadId: 'task:x' as never, ended: 'completed' as const, sessions: [], state, at: i });

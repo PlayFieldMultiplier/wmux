@@ -261,7 +261,7 @@ export function recordWorkerEnd(usage: BotUsage, taskId: string, now: number): b
  *  under way (`stopping`, which the reclaim records before it signals, and
  *  which goes back to `resumed` when nothing was stopped) keeps counting.
  *  Worker time counts only while a worker runs. */
-export function recordWorkerStateChange(usage: BotUsage, taskId: string, _from: string, to: string, now: number): void {
+export function recordWorkerStateChange(usage: BotUsage, taskId: string, _from: string | null, to: string, now: number): void {
   if (to === 'resumed') recordWorkerStart(usage, taskId, now, { resumed: true });
   else if (to === 'stopped') recordWorkerEnd(usage, taskId, now);
 }

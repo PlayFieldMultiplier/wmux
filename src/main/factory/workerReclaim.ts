@@ -348,7 +348,9 @@ export class ReclaimedWorkers {
     const prior = this.records.get(rec.taskId);
     this.records.delete(rec.taskId);
     this.records.set(rec.taskId, rec);
-    if (prior && prior.state !== rec.state) this.notifyState(rec, prior.state, rec.state, at);
+    // A first record is a change too: one written `stopped` at once (no
+    // pane left to stop, a dead pane) ends its worker's first run.
+    if (prior?.state !== rec.state) this.notifyState(rec, prior?.state ?? null, rec.state, at);
     // Oldest first, never a live worker (resumed, or not yet stopped).
     for (const [id, r] of this.records) {
       if (this.records.size <= RECLAIMED_WORKERS_MAX) break;
@@ -368,11 +370,12 @@ export class ReclaimedWorkers {
     return this.persister.settled();
   }
 
-  /** Told of every state change made through setState (the agent budget
-   *  counts a resumed worker's run from these). */
-  onStateChange: ((rec: { taskId: string; botId: string }, from: ReclaimedWorker['state'], to: ReclaimedWorker['state'], at: number) => void) | null = null;
+  /** Told of every state change made through put, restore and setState,
+   *  a first record's included (`from` null), as of the time it happened
+   *  (the agent budget counts a worker's runs from these). */
+  onStateChange: ((rec: { taskId: string; botId: string }, from: ReclaimedWorker['state'] | null, to: ReclaimedWorker['state'], at: number) => void) | null = null;
 
-  private notifyState(r: ReclaimedWorker, from: ReclaimedWorker['state'], to: ReclaimedWorker['state'], at: number): void {
+  private notifyState(r: ReclaimedWorker, from: ReclaimedWorker['state'] | null, to: ReclaimedWorker['state'], at: number): void {
     try {
       this.onStateChange?.({ taskId: r.taskId, botId: r.botId }, from, to, at);
     } catch (err) {
