@@ -1,7 +1,8 @@
 // Owner-only workflow controls. Bot MCP retains read/create/advance only.
 import { ipcMain, type BrowserWindow } from 'electron';
 import { WORKFLOW_OWNER_IPC, workflowView, type OwnerWorkflowRequest, type OwnerWorkflowReadResult, type OwnerWorkflowCancelResult } from '../../../shared/botWorkflow';
-import { getBotWorkflowStore } from '../../factory/botWorkflow';
+import { BOT_EVENT } from '../../../shared/bot';
+import { getBotWorkflowStore, onBotWorkflowsChanged } from '../../factory/botWorkflow';
 import { isMainWindowSender } from '../mainWindowSender';
 import { wrapHandler } from '../wrapHandler';
 
@@ -46,7 +47,13 @@ export function registerWorkflowHandlers(getWindow: () => BrowserWindow | null):
   const handlers = workflowOwnerHandlers(getWindow);
   ipcMain.handle(WORKFLOW_OWNER_IPC.read, wrapHandler(WORKFLOW_OWNER_IPC.read, handlers.read));
   ipcMain.handle(WORKFLOW_OWNER_IPC.cancel, wrapHandler(WORKFLOW_OWNER_IPC.cancel, handlers.cancel));
+  // The Bots page re-reads its workflows on any bot event.
+  const offChanged = onBotWorkflowsChanged(() => {
+    const win = getWindow();
+    if (win && !win.isDestroyed()) win.webContents.send(BOT_EVENT, { type: 'bots-changed' });
+  });
   return () => {
+    offChanged();
     ipcMain.removeHandler(WORKFLOW_OWNER_IPC.read);
     ipcMain.removeHandler(WORKFLOW_OWNER_IPC.cancel);
   };

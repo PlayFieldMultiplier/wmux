@@ -456,6 +456,8 @@ calling bot's workflows, step states, and task/result bindings. Each readback
 includes `blockedReason` and `lastVerifiedResult` (both nullable). The latter
 is the last system-verified result recorded in the workflow, not a worker's
 unverified report or a promise that an in-flight task has finished.
+A result recorded from this version on carries `at`, the epoch-ms time its
+task's verified completion was recorded.
 
 The desktop owner can use `factory.readWorkflows({botId, workspaceId, workflowId?})`
 and `factory.cancelWorkflow({botId, workspaceId, workflowId, expectedRevision})`

@@ -44,7 +44,7 @@ export function workStateText(state: WorkState, t: T): string {
 
 /** The state's mark: a steady muted dot while it runs or waits for review,
  *  the needs-you dot, a success check, a danger cross; none when cancelled. */
-function StateMark({ state }: { state: WorkState }) {
+export function StateMark({ state }: { state: WorkState }) {
   if (state === 'cancelled') return null;
   if (state === 'done') {
     return (
@@ -63,7 +63,7 @@ function StateMark({ state }: { state: WorkState }) {
   return <span aria-hidden="true" className="wmux-bots-work-dot" style={{ background: state === 'needsYou' ? 'var(--attention)' : 'var(--text-muted)' }} />;
 }
 
-function stateClass(state: WorkState): string | undefined {
+export function stateClass(state: WorkState): string | undefined {
   if (state === 'needsYou') return 'text-[var(--attention-text)]';
   if (state === 'failed') return 'text-[var(--accent-red)]';
   return undefined;

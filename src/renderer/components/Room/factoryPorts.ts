@@ -42,6 +42,11 @@
 //     stopTask(taskId: string): Promise<FactoryStopResult>
 //         // IPC.FACTORY_STOP_TASK: one bot task's worker, its task
 //         // cancelled (optional)
+//     readWorkflows(req: OwnerWorkflowRequest): Promise<OwnerWorkflowReadResult>
+//         // factory:workflow:read: one bot's saved workflows (optional)
+//     cancelWorkflow(req: OwnerWorkflowCancelRequest): Promise<OwnerWorkflowCancelResult>
+//         // factory:workflow:cancel: stop a workflow's remaining steps;
+//         // a running step's worker is left running (optional)
 //   }
 //
 // `setFactoryBotPort` / `setFactorySettingsPort` replace a port outright
@@ -51,6 +56,7 @@ import type { BotEngine, BotProfile, BotStatus, BotWorkerAgent } from '../../../
 import type { BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import type { BotTaskView, FactoryTaskFolderCleanResult, FactoryTaskFolderUsage } from '../../../shared/botTask';
 import type { BotsPlanConsent } from '../../../shared/factorySettings';
+import type { OwnerWorkflowCancelRequest, OwnerWorkflowCancelResult, OwnerWorkflowReadResult, OwnerWorkflowRequest } from '../../../shared/botWorkflow';
 import type {
   FactoryBotAvatarPickResult,
   FactoryBotAvatarSetResult,
@@ -138,6 +144,11 @@ export interface FactoryBotPort {
   /** Absent: no engine choice here. The engines a bot's workers may run on,
    *  and which are installed. */
   workerAgents?(): Promise<BotWorkerAgentOption[]>;
+  /** Absent: no workflows here. One bot's saved workflows, as the owner. */
+  readWorkflows?(req: OwnerWorkflowRequest): Promise<OwnerWorkflowReadResult>;
+  /** Absent: no workflow Cancel here. Stops a workflow's remaining steps;
+   *  a step already running keeps its worker. */
+  cancelWorkflow?(req: OwnerWorkflowCancelRequest): Promise<OwnerWorkflowCancelResult>;
 }
 
 /** The factory settings the tab shows (main/factory/factorySettings.ts). */
@@ -196,6 +207,8 @@ interface FactoryBridge {
   workerAgents?: () => Promise<BotWorkerAgentOption[]>;
   taskFolderUsage?: () => Promise<FactoryTaskFolderUsage | null>;
   cleanTaskFolders?: () => Promise<FactoryTaskFolderCleanResult>;
+  readWorkflows?: (req: OwnerWorkflowRequest) => Promise<OwnerWorkflowReadResult>;
+  cancelWorkflow?: (req: OwnerWorkflowCancelRequest) => Promise<OwnerWorkflowCancelResult>;
 }
 
 function bridge(): FactoryBridge | null {
@@ -239,6 +252,8 @@ export function bridgeBotPort(): FactoryBotPort {
     ...(b.stopTask ? { stopTask: b.stopTask } : {}),
     ...(b.resumeWorker ? { resumeWorker: b.resumeWorker } : {}),
     ...(b.workerAgents ? { workerAgents: b.workerAgents } : {}),
+    ...(b.readWorkflows ? { readWorkflows: b.readWorkflows } : {}),
+    ...(b.cancelWorkflow ? { cancelWorkflow: b.cancelWorkflow } : {}),
   };
 }
 
