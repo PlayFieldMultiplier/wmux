@@ -140,7 +140,7 @@ import { inspectLaunchPresence } from './launchPresence';
 import { promptLineState } from '../shared/promptLineState';
 import { parseWriteExpectation, writeIfUnchanged } from './writeIfUnchanged';
 import { Watchdog } from './Watchdog';
-import { selectRecoverableSessions, startLeftoverShellReaps } from './recoverySelector';
+import { recoversInBackground, selectRecoverableSessions, startLeftoverShellReaps } from './recoverySelector';
 import { isShutdownKillExit, SHUTDOWN_KILL_RECLASSIFY_MS } from './shutdownKill';
 import {
   classifyReapIdentity,
@@ -168,6 +168,9 @@ import { installExitEvidence, noteExitReason, STATUS_CONTROL_C_EXIT } from './ex
 import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonSession, DaemonState } from './types';
 import { retireAdopted, withDiskOnlySessions } from './diskOnlySessions';
+import { stampHeld } from './heldSessions';
+import { suspendedListEntry } from './suspendedListEntry';
+import { createPromoteOnce, type PromoteResult } from './promoteOnce';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonDestroySessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
 import { gitDirMapperFor, gitWatchCwdFor } from './gitWatchCwd';
@@ -2943,10 +2946,29 @@ function registerRpcHandlers(
     stateWriter.saveImmediate(next);
   };
 
+  // #2398 — daemon.holdSession: a pane that attached without promoting (it is
+  // hidden) still holds this suspended session; keep it from aging out (see
+  // heldSessions.ts). Stamped on the record the next save writes; the save is
+  // debounced, so a boot that holds many panes writes once.
+  pipeServer.onRpc('daemon.holdSession', (params) => {
+    const ids = Array.isArray(params?.['ids']) ? (params['ids'] as unknown[]).filter((id): id is string => typeof id === 'string') : [];
+    const now = Date.now();
+    let stamped = 0;
+    for (const id of ids) {
+      const record = sessionManager.getPendingRecovery(id) ?? diskOnlySessions.find((s) => s.id === id);
+      if (stampHeld(record, now)) stamped++;
+    }
+    if (stamped > 0) stateWriter.saveDebounced(buildState(sessionManager));
+    return Promise.resolve({ ok: true, stamped });
+  });
+
   // daemon.attachSession
   pipeServer.onRpc('daemon.attachSession', async (params) => {
-    const p = params as unknown as DaemonSessionIdParams;
+    const p = params as unknown as DaemonSessionIdParams & { promote?: boolean };
     if (sessionManager.getPendingRecovery(p.id)) {
+      // #2398 — `promote: false` (a pane not on screen) leaves a pending
+      // recovery pending: nothing is spawned until the pane is shown.
+      if (p.promote === false) return { ok: false, pending: true };
       touchPendingRecovery(p.id);
       const result = await promoteOnce(p.id);
       if (!result.ok) throw new Error(result.error?.message || 'WSL recovery failed; retry after checking the target');
@@ -3364,22 +3386,15 @@ function registerRpcHandlers(
 
     // Fix B: when includeSuspended is requested, append cap-skipped suspended
     // sessions from the persisted state that aren't already in the active set.
+    // #2398 — with their exec and supervision (suspendedListEntry), so main's
+    // pty:reconnect and the renderer's reconcile start a cap-skipped unit
+    // instead of holding it as a plain shell.
     if (includeSuspended) {
       const activeIdSet = new Set(activeSessions.map((s: { id: string }) => s.id));
       const persistedState = stateWriter.load();
       const suspendedEntries = persistedState.sessions
         .filter((s) => s.state === 'suspended' && !activeIdSet.has(s.id))
-        .map((s) => ({
-          id: s.id,
-          // `cmd` as every live entry has it (pty:reconnect records and returns
-          // it after a promote, #2398); `shell` kept for older readers.
-          cmd: s.cmd,
-          shell: s.cmd,
-          state: 'suspended' as const,
-          cwd: s.cwd,
-          createdAt: s.createdAt,
-          lastActivity: s.lastActivity,
-        }));
+        .map((s) => suspendedListEntry(s, isUsableResumeBinding(s.resumeBinding) && bindingTranscriptLives(s.resumeBinding)));
       return reply([...activeSessions, ...suspendedEntries]);
     }
     return reply(activeSessions);
@@ -3390,10 +3405,7 @@ function registerRpcHandlers(
   // came back with its ptyId absent and reconcile destructively cleared it. This
   // lets the renderer spawn exactly the one session it still needs, keeping the
   // ptyId stable so scrollback restores from the daemon's ring buffer.
-  /** What a promote attempt answers — see `promoteSession`. */
-  type PromoteResult = { ok: boolean; alreadyActive?: boolean; error?: { code: string; message: string } };
-  const promotionInFlight = new Map<string, { operation: Promise<PromoteResult>; startFresh: boolean }>();
-  const promoteSession = async (rawParams: Record<string, unknown>) => {
+  const promoteSession = async (rawParams: Record<string, unknown>): Promise<PromoteResult> => {
     if (shuttingDown) return { ok: false, error: { code: 'SHUTTING_DOWN', message: 'Daemon is shutting down; retry after reconnect.' } };
     const params = (rawParams ?? {}) as Record<string, unknown>;
     const sessionId = typeof params['id'] === 'string' ? params['id'] : '';
@@ -3544,25 +3556,16 @@ function registerRpcHandlers(
       return { ok: false, error: { code: isWslCwdMissingError(err) ? 'CWD_MISSING' : 'SPAWN_FAILED', message: msg } };
     }
   };
-  const promoteOnce = (id: string, startFresh = false) => {
-    const existing = promotionInFlight.get(id);
-    // Same intent → one attempt, as before. A DIFFERENT intent must not be
-    // answered by the one already running: start-fresh exists because the
-    // ordinary promote fails, so handing back that promote's result would
-    // answer a question the user did not ask (#1305). Queue behind it instead —
-    // and if the one in flight happens to succeed, the idempotent
-    // already-active check makes the second a no-op.
-    if (existing && existing.startFresh === startFresh) return existing.operation;
-    const run = () => promoteSession({ id, fresh: startFresh });
-    const operation: Promise<PromoteResult> = (existing ? existing.operation.catch(() => undefined).then(run) : run())
-      .finally(() => {
-        if (promotionInFlight.get(id)?.operation === operation) promotionInFlight.delete(id);
-      });
-    promotionInFlight.set(id, { operation, startFresh });
-    return operation;
-  };
+  // #2398 — answers `joined` to a caller that joined the background start.
+  const promoteOnce = createPromoteOnce((p) => promoteSession(p), (id) => !!sessionManager.getSession(id));
+  sessionManager.on('session:died', (payload: { id: string }) => promoteOnce.forget(payload.id));
+  sessionManager.on('session:destroyed', (payload: { id: string }) => promoteOnce.forget(payload.id));
   pipeServer.onRpc('daemon.promoteSession', (params) => {
     const id = String(params?.id ?? '');
+    // #2398 — `joinOnly` (a stop key, a repaint): join an attempt in flight,
+    // never start one (see createPromoteOnce for the answer when none is).
+    // Not a retry, so the pending entry is not renewed.
+    if (params?.['joinOnly'] === true) return promoteOnce(id, false, 'rpc', true);
     // Before the attempt, so an attempt that fails on a path with no save
     // still records that the user is actively retrying this pane (#1305).
     touchPendingRecovery(id);
@@ -3571,14 +3574,22 @@ function registerRpcHandlers(
   // Defer cold WSL starts until RPC registration/event wiring can finish.
   // Independent panes recover concurrently; foreground attach shares the same
   // in-flight promotion. Exec units also resume when no GUI is attached.
+  // #2398 (owner decision §6-4) — only exec units and supervised sessions,
+  // which must run whether or not anyone looks at them. A plain WSL shell
+  // starts when its pane is first shown (the renderer's attach promotes it),
+  // so a cold start with many restored workspaces does not start one per
+  // pane nobody opened.
   setImmediate(() => {
     if (shuttingDown) return;
     const promotions: Array<Promise<unknown>> = [];
     try {
-      const pending = sessionManager.listSessions().filter(s => sessionManager.getPendingRecovery(s.id));
+      const pending = sessionManager.listSessions().filter(s => {
+        const placeholder = sessionManager.getPendingRecovery(s.id);
+        return !!placeholder && recoversInBackground(placeholder);
+      });
       const selected = selectRecoverableSessions(pending, Math.min(loadConfig().session.maxSessions, MAX_RECOVER_SESSIONS));
       for (const session of pending.filter(s => selected.recoverableIds.has(s.id))) {
-        promotions.push(promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err)));
+        promotions.push(promoteOnce(session.id, false, 'background').catch(err => log('error', `WSL background recovery ${session.id}:`, err)));
       }
     } catch (err) {
       log('error', 'WSL background recovery could not start:', err);

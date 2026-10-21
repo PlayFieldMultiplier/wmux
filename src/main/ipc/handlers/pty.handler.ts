@@ -1,6 +1,7 @@
 import { applyWmuxToolsToCommand, isWmuxToolsHint, locateWmuxMcpEntry } from '../../agents/toolSurfaceLaunch';
 import { codexConfigPath, codexHasWmuxServer } from '../../../shared/mcpRegistration';
 import { WSL_RPC_TIMEOUT_MS } from '../../../shared/wsl';
+import { heldReconnectAnswer, promoteOutcome, promoteStartedSession, suspendedReconnectAction } from '../../../shared/suspendedSession';
 import { app, ipcMain, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -1356,6 +1357,8 @@ export function registerPTYHandlers(
         // additive volatile runtime joined by the daemon's listSessions handler.
         supervision?: { restart: string; limit: unknown; status: 'armed' | 'stopped' };
         supervisionRuntime?: { status: 'armed' | 'stopped'; restartCount: number };
+        // An exec unit's command (#2398: read only for whether it is one).
+        exec?: unknown;
         // #1101 — origin identity for the orphaned-session list: the workspace
         // the session was spawned in (env-stamped by main force-stamps) and
         // the agent identity the daemon already derives for /api/sessions.
@@ -1433,6 +1436,10 @@ export function registerPTYHandlers(
                 },
               }
             : {}),
+          // #2398 — an exec unit, like a supervised session, starts whether
+          // or not its pane is shown (recoversInBackground): the reconcile
+          // must not hold a cap-skipped one as a plain shell.
+          ...(s.exec ? { exec: true as const } : {}),
           // X6 ② — carry the resume hint (agent slug) for the renderer pill.
           ...(s.resumeAgent ? { resumeAgent: s.resumeAgent } : {}),
           ...(s.resumeAgent && typeof s.resumeAgentOnScreen === 'boolean' ? { resumeAgentOnScreen: s.resumeAgentOnScreen } : {}),
@@ -1490,7 +1497,23 @@ export function registerPTYHandlers(
       return { success: false, error: res.error?.message ?? 'promote failed', cwdMissing: res.error?.code === 'CWD_MISSING' };
     }));
 
-    ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string) => {
+    // #2398 — pty:hold: the suspended sessions the renderer's panes hold
+    // without promoting them. The daemon stamps each as in use so the
+    // suspended TTL does not prune a session whose pane is merely unopened.
+    ipcMain.removeHandler(IPC.PTY_HOLD);
+    ipcMain.handle(IPC.PTY_HOLD, wrapHandler(IPC.PTY_HOLD, async (_event: Electron.IpcMainInvokeEvent, ids: unknown) => {
+      const held = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
+      if (held.length > 0) await daemonClient.rpc('daemon.holdSession', { ids: held });
+    }));
+
+    ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string, opts?: { promote?: boolean; joinOnly?: boolean }) => {
+      // #2398 — whether this reconnect started the session (promoted a
+      // suspended one) rather than attaching one that was running: a stop
+      // key that joined it has nothing of its own to stop there. Carried on
+      // every answer after the promote, a failed attach's included: the
+      // renderer's retry then finds the session running and must still know.
+      let promoted = false;
+      const startedHere = () => (promoted ? { promoted: true } : {});
       try {
         // #2398 — a cap-skipped session lives only in sessions.json, which
         // includeSuspended parses on the daemon thread: only an id the live
@@ -1508,6 +1531,8 @@ export function registerPTYHandlers(
           args?: string[];
           wslTarget?: WslTarget;
           resumeBinding?: ResumeBinding;
+          exec?: unknown;
+          supervision?: unknown;
         }>;
         if (!sessions.some(s => s.id === id)) {
           sessions = await daemonClient.rpc('daemon.listSessions', { includeSuspended: true }) as typeof sessions;
@@ -1527,17 +1552,49 @@ export function registerPTYHandlers(
           };
         }
 
+        // #2398 — what this caller may do with the session if it is (or, after
+        // a daemon restart since the list, is again) suspended; see below.
+        const action = suspendedReconnectAction(session, opts);
+        const listed = session;
+        const held = (why: string) => {
+          console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, ${why})`);
+          void daemonClient.rpc('daemon.holdSession', { ids: [id] }).catch((err: unknown) => {
+            console.warn(`[lifecycle] daemon.holdSession ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+          return heldReconnectAnswer(listed);
+        };
+
         if (session.state === 'suspended') {
+          // #2398 — a suspended session (cap-skipped, or a WSL placeholder)
+          // is promoted only when the caller says so (a shown pane, a raw
+          // write, a resume on start) or when the daemon starts it in the
+          // background anyway (an exec unit or supervised session: the promote
+          // below joins that start when one is in flight, or spawns the unit
+          // when none is, and `promoted` then reports it started; either way
+          // its pane attaches once it runs instead of staying deferred).
+          // A join-only caller (a stop key, a repaint) only joins a start in
+          // flight: it never spawns the unit, and finding none is held.
+          // Otherwise it is held: the id is kept, the daemon
+          // keeps the record from aging out, and the pane's first show
+          // reattaches with promote.
+          if (action === 'hold') return held('held');
           try {
-            const result = await daemonClient.rpc('daemon.promoteSession', { id }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; error?: { code?: string; message: string } };
+            const result = await daemonClient.rpc('daemon.promoteSession', { id, ...(action === 'join-only' ? { joinOnly: true } : {}) }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; alreadyActive?: boolean; joined?: boolean; notInFlight?: boolean; error?: { code?: string; message: string } };
+            const outcome = promoteOutcome(result);
+            if (outcome === 'held') return held('join-only, no start in flight');
             // #1305 — carry WHY it stayed pending, not just that it did. The
             // banner's Retry is the right and only offer for every other
             // failure; a missing directory additionally gets "start fresh".
-            if (!result.ok) return { success: false, recoveryPending: true, error: result.error?.message || 'WSL recovery failed. Check the target and retry.', cwdMissing: result.error?.code === 'CWD_MISSING' };
+            if (outcome === 'failed') return { success: false, recoveryPending: true, error: result.error?.message || 'WSL recovery failed. Check the target and retry.', cwdMissing: result.error?.code === 'CWD_MISSING' };
+            // From what the daemon did, not why this call was made: a join of
+            // the daemon's own background start did not start the unit (a
+            // stop key to it is a real stop request and is delivered), but a
+            // 'join' that found nothing in flight spawned it here.
+            promoted = promoteStartedSession(result);
             const refreshed = await daemonClient.rpc('daemon.listSessions', {}) as typeof sessions;
             session = refreshed.find(s => s.id === id) ?? session;
           } catch (err) {
-            return { success: false, recoveryPending: true, error: err instanceof Error ? err.message : String(err) };
+            return { success: false, recoveryPending: true, error: err instanceof Error ? err.message : String(err), ...startedHere() };
           }
         }
 
@@ -1581,7 +1638,11 @@ export function registerPTYHandlers(
         // Without this, attach+connect can return success while the
         // underlying socket is moments away from receiving its close
         // event, and every subsequent write silently disappears.
-        await daemonClient.rpc('daemon.attachSession', { id });
+        // #2398 — the attach promotes only as `action` says: a daemon that
+        // restarted since the list holds a WSL session as a pending recovery
+        // again, and a caller that may not start it leaves it pending (held).
+        const attached = await daemonClient.rpc('daemon.attachSession', { id, promote: action === 'promote' || action === 'join' }) as { pending?: boolean } | undefined;
+        if (attached?.pending) return held('pending again at attach');
         await daemonClient.connectSessionPipe(id, { forceFresh: true });
 
         // Health probe: confirm the freshly connected pipe is actually
@@ -1597,7 +1658,7 @@ export function registerPTYHandlers(
           // — it should retry, otherwise a live session gets replaced by an
           // empty one. transient:true signals "retry".
           console.log(`[lifecycle] pty.reconnect id=${id} result=fail code=pipe-not-writable (transient=true)`);
-          return { success: false, error: 'Session pipe not writable after reconnect', code: 'pipe-not-writable', transient: true };
+          return { success: false, error: 'Session pipe not writable after reconnect', code: 'pipe-not-writable', transient: true, ...startedHere() };
         }
 
         // Re-anchor the PID → ptyId identity map. A surviving shell keeps its
@@ -1620,7 +1681,7 @@ export function registerPTYHandlers(
         recordPtyShell(session.id, session.cmd);
         // The session's stored geometry: a hidden pane cannot measure its own,
         // so it adopts this one instead (see the reattach in useTerminal).
-        return { success: true, id: session.id, shell: session.cmd, cols: session.cols, rows: session.rows };
+        return { success: true, id: session.id, shell: session.cmd, cols: session.cols, rows: session.rows, ...startedHere() };
       } catch (err) {
         // RCA A1 — RPC threw (timeout, ECONNRESET, handler swap mid-call).
         // This is a transient infrastructure failure, NOT proof the session is
@@ -1628,7 +1689,7 @@ export function registerPTYHandlers(
         // the session.
         const msg = err instanceof Error ? err.message : String(err);
         console.log(`[lifecycle] pty.reconnect id=${id} result=fail code=rpc-error transient=true err=${msg}`);
-        return { success: false, error: msg, code: 'rpc-error', transient: true };
+        return { success: false, error: msg, code: 'rpc-error', transient: true, ...startedHere() };
       }
     }));
   } else {
@@ -1899,6 +1960,7 @@ export function registerPTYHandlers(
     ipcMain.removeHandler(IPC.PTY_CANCEL_CREATE);
     ipcMain.removeHandler(IPC.PTY_LIST);
     ipcMain.removeHandler(IPC.PTY_PROMOTE);
+    ipcMain.removeHandler(IPC.PTY_HOLD);
     ipcMain.removeHandler(IPC.PTY_RECONNECT);
     ipcMain.removeHandler(IPC.PTY_RESYNC);
     ipcMain.removeHandler(IPC.SUPERVISE_REARM);

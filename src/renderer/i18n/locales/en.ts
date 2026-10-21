@@ -1178,6 +1178,7 @@ export const en = {
   'terminal.reattaching': 'reattaching…',
   'terminal.createFailed': 'This terminal could not start.',
   'terminal.retryCreate': 'Try again',
+  'terminal.notStarted': 'Starts when opened',
   'retention.migratedNotice': 'This update pauses rendering for hidden panes (everything keeps running; panes catch up when shown). You can turn it off in Settings → Terminal.',
   'retention.migratedNoticeTurnOff': 'Turn off',
   // X8 — in-pane supervised-restart marker. The trailing hint is the Ctrl+C

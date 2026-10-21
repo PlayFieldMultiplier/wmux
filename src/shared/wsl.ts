@@ -5,6 +5,8 @@ import { execFile } from 'node:child_process';
 
 import { isWslShell, isLinuxCwd, validWslTarget, wslTargetArgs, type WslTarget } from './wslTarget';
 import { isUncOrDevicePath } from './cwdShape';
+import { WSL_PROBE_TIMEOUT_MS } from './wslTimeouts';
+export { WSL_PROBE_TIMEOUT_MS, WSL_RPC_TIMEOUT_MS } from './wslTimeouts';
 export { isWslShell, isLinuxCwd, validWslTarget, wslTargetArgs, type WslTarget } from './wslTarget';
 
 /**
@@ -51,8 +53,6 @@ export interface ResolvedWslCwd { cwd: string; target: WslTarget }
 export function isWslCwdMissingError(error: unknown): boolean {
   return error instanceof Error && (error as { wslCwdMissing?: boolean }).wslCwdMissing === true;
 }
-export const WSL_PROBE_TIMEOUT_MS = 60_000;
-export const WSL_RPC_TIMEOUT_MS = WSL_PROBE_TIMEOUT_MS + 15_000;
 type Probe = (args: string[]) => string | Promise<string>;
 // Coalesce concurrent probes only. Never cache directory validity across creates:
 // a project can be removed or the distro's default user changed between retries.

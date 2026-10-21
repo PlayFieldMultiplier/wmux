@@ -1,4 +1,6 @@
 import { sendRequest } from '../client';
+import { terminalWriteClientTimeoutMs } from '../../shared/terminalWriteBudget';
+import { isStopKey, nothingToStopMessage } from '../../shared/stopKeys';
 import { printResult, ensureOk, parseFlag, hasFlag } from '../utils';
 import { resolveSelfContext, getParentPidDefault, type SelfContext } from '../identity';
 import type { RpcMethod, RpcResponse } from '../../shared/rpc';
@@ -18,16 +20,54 @@ export function explicitTarget(args: string[]): string | undefined {
 export async function resolveExplicitTarget(value: string, rpc: Rpc): Promise<string> {
   const trimmed = value.trim();
   if (trimmed.charAt(0) !== '#') return value;
-  const response = await rpc('pane.resolveName', { name: trimmed });
+  const target = await resolvePaneName(trimmed, rpc);
+  if (typeof target.ptyId !== 'string' || !target.ptyId) {
+    throw new Error(`pane ${String(target.paneTag ?? trimmed)} has no local terminal`);
+  }
+  return target.ptyId;
+}
+
+async function resolvePaneName(name: string, rpc: Rpc): Promise<{ ptyId?: unknown; surfaceId?: unknown; paneTag?: unknown }> {
+  const response = await rpc('pane.resolveName', { name });
   if (!response.ok) throw new Error(response.error);
-  const res = response.result as { ok?: unknown; error?: unknown; target?: { ptyId?: unknown; paneTag?: unknown } } | null;
+  const res = response.result as { ok?: unknown; error?: unknown; target?: { ptyId?: unknown; surfaceId?: unknown; paneTag?: unknown } } | null;
   if (!res || res.ok !== true || !res.target) {
-    throw new Error(res && typeof res.error === 'string' ? res.error : `no pane named "${trimmed}"`);
+    throw new Error(res && typeof res.error === 'string' ? res.error : `no pane named "${name}"`);
   }
-  if (typeof res.target.ptyId !== 'string' || !res.target.ptyId) {
-    throw new Error(`pane ${String(res.target.paneTag ?? trimmed)} has no local terminal`);
+  return res.target;
+}
+
+/**
+ * A write's (send, send-key) explicit target: as resolveExplicitTarget, but
+ * a `#name` whose terminal has not started yet (#2398: a blank pane, no pty)
+ * goes by its surface, which main starts before writing, as it does for
+ * terminal_send. Main checks a surface against the caller's own workspace,
+ * so it needs that workspace: this CLI must run inside a wmux pane. It also
+ * sends the caller's own ptyId as `senderPtyId`, as the MCP server does: a
+ * main from before #2398 (the CLI shim picks the newest app's CLI while the
+ * old main still runs, right after an update) ignores `surfaceId` and would
+ * write into the active pane, often the caller's own; with `senderPtyId`
+ * it refuses that omitted-target write instead. A stop key (`stopKey`) never
+ * starts one: it is answered not running, as main answers it, from anywhere.
+ */
+export async function resolveExplicitWriteTarget(
+  value: string,
+  rpc: Rpc,
+  caller: () => Promise<{ ptyId?: string; workspaceId?: string }>,
+  stopKey = false,
+): Promise<Record<string, unknown>> {
+  const trimmed = value.trim();
+  if (trimmed.charAt(0) !== '#') return { ptyId: value };
+  const target = await resolvePaneName(trimmed, rpc);
+  if (typeof target.ptyId === 'string' && target.ptyId) return { ptyId: target.ptyId };
+  const tag = String(target.paneTag ?? trimmed);
+  if (typeof target.surfaceId !== 'string' || !target.surfaceId) throw new Error(`pane ${tag} has no local terminal`);
+  if (stopKey) throw new Error(nothingToStopMessage('input.sendKey'));
+  const { ptyId: senderPtyId, workspaceId } = await caller();
+  if (!workspaceId || !senderPtyId) {
+    throw new Error(`pane ${tag} has not started its terminal yet, and only a command run inside a wmux pane can start it: run it from one, or open the pane first`);
   }
-  return res.target.ptyId;
+  return { surfaceId: target.surfaceId, workspaceId, senderPtyId };
 }
 
 /**
@@ -97,9 +137,21 @@ export async function selfTargetWarning(target: Record<string, unknown>, rpc: Rp
 export async function resolveTargetParams(
   args: string[],
   mode: 'require-pty' | 'workspace-scope-ok',
+  /** The send-key's key: a stop key never starts a pane (resolveExplicitWriteTarget). */
+  key?: string,
 ): Promise<Record<string, unknown>> {
+  const selfContext = (): Promise<SelfContext> => resolveSelfContext({
+    sendRequest,
+    env: process.env,
+    ppid: process.ppid,
+    getParentPid: getParentPidDefault,
+  });
   const explicitPane = explicitTarget(args);
-  if (explicitPane) return { ptyId: await resolveExplicitTarget(explicitPane, sendRequest) };
+  if (explicitPane) {
+    // A read never starts a pane; a write starts one that has not started.
+    if (mode === 'workspace-scope-ok') return { ptyId: await resolveExplicitTarget(explicitPane, sendRequest) };
+    return resolveExplicitWriteTarget(explicitPane, sendRequest, selfContext, key !== undefined && isStopKey(key));
+  }
   // A target flag whose value went missing must not fall back to this pane: an
   // unquoted `--to #w1-2` loses its value to the shell (`#` starts a comment).
   for (const flag of ['--to', '--pane']) {
@@ -107,12 +159,7 @@ export async function resolveTargetParams(
   }
   if (hasFlag(args, '--active')) return {};
 
-  const ctx: SelfContext = await resolveSelfContext({
-    sendRequest,
-    env: process.env,
-    ppid: process.ppid,
-    getParentPid: getParentPidDefault,
-  });
+  const ctx = await selfContext();
   if (mode === 'require-pty' && !ctx.ptyId) return {};
   const params: Record<string, unknown> = {};
   if (ctx.ptyId) params.ptyId = ctx.ptyId;
@@ -136,9 +183,9 @@ export function stripInputFlags(args: string[]): string[] {
 }
 
 /** resolveTargetParams for a command: an unresolvable `#pane` exits with wmux's reason. */
-async function targetOrExit(args: string[], mode: 'require-pty' | 'workspace-scope-ok' = 'require-pty'): Promise<Record<string, unknown>> {
+async function targetOrExit(args: string[], mode: 'require-pty' | 'workspace-scope-ok' = 'require-pty', key?: string): Promise<Record<string, unknown>> {
   try {
-    return await resolveTargetParams(args, mode);
+    return await resolveTargetParams(args, mode, key);
   } catch (err) {
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -160,10 +207,14 @@ export async function handleInput(
         process.exit(1);
       }
       const target = await targetOrExit(args);
-      const params: Record<string, unknown> = { text, ...target };
+      // #2398 — the write may first start the pane's terminal: wait for that
+      // start and the delivery, and tell main the deadline so it never writes
+      // after this command has given up (shared/terminalWriteBudget.ts).
+      const writeTimeoutMs = terminalWriteClientTimeoutMs();
+      const params: Record<string, unknown> = { text, ...target, clientTimeoutMs: writeTimeoutMs };
       if (hasFlag(args, '--submit')) params.submit = true;
       if (hasFlag(args, '--raw')) params.raw = true;
-      response = await sendRequest('input.send', params);
+      response = await sendRequest('input.send', params, writeTimeoutMs);
       if (jsonMode) {
         printResult(response);
       } else {
@@ -183,8 +234,10 @@ export async function handleInput(
         console.error('Error: send-key requires <keystroke>');
         process.exit(1);
       }
-      const target = await targetOrExit(args);
-      response = await sendRequest('input.sendKey', { key, ...target });
+      const target = await targetOrExit(args, 'require-pty', key);
+      // #2398 — see send.
+      const keyTimeoutMs = terminalWriteClientTimeoutMs();
+      response = await sendRequest('input.sendKey', { key, ...target, clientTimeoutMs: keyTimeoutMs }, keyTimeoutMs);
       if (jsonMode) {
         printResult(response);
       } else {

@@ -25,6 +25,10 @@ vi.mock('../../identity', () => ({
 import { sendRequest } from '../../client';
 import { resolveSelfContext } from '../../identity';
 import { agentInPane, handleInput, stripInputFlags } from '../input';
+import { TERMINAL_START_BUDGET_MS, terminalWriteClientTimeoutMs } from '../../../shared/terminalWriteBudget';
+
+// #2398 — every write carries its deadline to main and waits as long.
+const deadline = terminalWriteClientTimeoutMs();
 
 const rpc = sendRequest as unknown as ReturnType<typeof vi.fn>;
 const selfContext = resolveSelfContext as unknown as ReturnType<typeof vi.fn>;
@@ -51,6 +55,7 @@ beforeEach(() => {
   selfContext.mockResolvedValue({ ptyId: 'pty-self', workspaceId: 'ws-self' });
   rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
     if (method === 'pane.resolveName') {
+      if (params.name === '#w1-3') return { ok: true, result: { ok: true, target: { surfaceId: 'surf-blank', paneTag: '#w1-3' } } };
       return params.name === '#w1-1'
         ? { ok: true, result: { ok: true, target: { ptyId: 'pty-other', paneTag: '#w1-1' } } }
         : { ok: true, result: { ok: false, reason: 'not_found', error: `no pane named "${String(params.name)}"` } };
@@ -76,14 +81,15 @@ describe('wmux send targets', () => {
   it('resolves --to #name to that pane and keeps the flag out of the text', async () => {
     await handleInput('send', ['hello', 'there', '--to', '#w1-1', '--submit'], false);
     expect(rpc).toHaveBeenCalledWith('pane.resolveName', { name: '#w1-1' });
-    expect(rpc).toHaveBeenCalledWith('input.send', { text: 'hello there', ptyId: 'pty-other', submit: true });
+    expect(rpc).toHaveBeenCalledWith('input.send',
+      { text: 'hello there', ptyId: 'pty-other', submit: true, clientTimeoutMs: deadline }, deadline);
     expect(selfContext).not.toHaveBeenCalled();
     expect(warnings()).toEqual([]);
   });
 
   it('takes a ptyId through --to or --pane unchanged', async () => {
     await handleInput('send', ['x', '--pane', 'daemon-9e8b7d2b'], false);
-    expect(rpc).toHaveBeenCalledWith('input.send', { text: 'x', ptyId: 'daemon-9e8b7d2b' });
+    expect(rpc).toHaveBeenCalledWith('input.send', { text: 'x', ptyId: 'daemon-9e8b7d2b', clientTimeoutMs: deadline }, deadline);
     expect(rpc).not.toHaveBeenCalledWith('pane.resolveName', expect.anything());
     expect(stripInputFlags(['a', '--to', '#w1-1', 'b', '--pane', 'p', '--submit'])).toEqual(['a', 'b']);
   });
@@ -97,6 +103,53 @@ describe('wmux send targets', () => {
     expect(selfContext).not.toHaveBeenCalled();
   });
 
+  // Second-model P3-3: a #name for a blank pane whose terminal has not
+  // started has no ptyId, and `wmux send` failed with "has no local
+  // terminal" where terminal_send starts it. It goes by its surface, with the
+  // caller's workspace main checks it against; a read never starts it.
+  it('sends to a #name whose terminal has not started by its surface, from inside a wmux pane', async () => {
+    await handleInput('send', ['x', '--to', '#w1-3'], false);
+    expect(rpc).toHaveBeenCalledWith('input.send',
+      { text: 'x', surfaceId: 'surf-blank', workspaceId: 'ws-self', senderPtyId: 'pty-self', clientTimeoutMs: deadline }, deadline);
+    await handleInput('send-key', ['enter', '--to', '#w1-3'], false);
+    expect(rpc).toHaveBeenCalledWith('input.sendKey',
+      { key: 'enter', surfaceId: 'surf-blank', workspaceId: 'ws-self', senderPtyId: 'pty-self', clientTimeoutMs: deadline }, deadline);
+    await expect(handleInput('read-screen', ['--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
+    expect(errSpy).toHaveBeenCalledWith('Error: pane #w1-3 has no local terminal');
+  });
+
+  it('outside a wmux pane, says why a #name whose terminal has not started cannot be started', async () => {
+    selfContext.mockResolvedValue({});
+    await expect(handleInput('send', ['x', '--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
+    expect(rpc).not.toHaveBeenCalledWith('input.send', expect.anything(), expect.anything());
+    expect(String(errSpy.mock.calls[0]?.[0])).toMatch(/pane #w1-3 has not started its terminal yet/);
+  });
+
+  // Review P3: right after an update the CLI shim can run the new CLI against
+  // the old main, which ignores surfaceId and writes the omitted target, the
+  // active pane (often the caller's own). senderPtyId makes that main refuse;
+  // without the caller's own ptyId nothing is sent.
+  // Mac review P3-4: a stop key to a pane whose terminal has not started was
+  // answered "only a command run inside a wmux pane can start it" from
+  // outside one. A stop key never starts anything: answered not running, as
+  // main answers it, without asking who the caller is or sending anything.
+  it('a stop key to a #name whose terminal has not started answers nothing to stop, from anywhere', async () => {
+    selfContext.mockResolvedValue({});
+    for (const key of ['ctrl+c', 'Escape']) {
+      errSpy.mockClear();
+      await expect(handleInput('send-key', [key, '--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
+      expect(errSpy).toHaveBeenCalledWith("Error: input.sendKey: the pane's terminal is not running — nothing to stop; nothing was written");
+    }
+    expect(selfContext).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalledWith('input.sendKey', expect.anything(), expect.anything());
+  });
+
+  it("a surface target carries the caller's senderPtyId, and is refused without one", async () => {
+    selfContext.mockResolvedValue({ workspaceId: 'ws-self' });
+    await expect(handleInput('send-key', ['enter', '--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
+    expect(rpc).not.toHaveBeenCalledWith('input.sendKey', expect.anything(), expect.anything());
+  });
+
   it('exits before typing anything when a #name does not resolve', async () => {
     await expect(handleInput('send', ['x', '--to', '#nope'], false)).rejects.toThrow(ExitCalled);
     expect(rpc).not.toHaveBeenCalledWith('input.send', expect.anything());
@@ -107,7 +160,8 @@ describe('wmux send targets', () => {
     agentPty = 'pty-self';
     await handleInput('send', ['note for the other agent', '--submit'], false);
     expect(rpc).toHaveBeenCalledWith('input.send',
-      { text: 'note for the other agent', ptyId: 'pty-self', workspaceId: 'ws-self', submit: true });
+      { text: 'note for the other agent', ptyId: 'pty-self', workspaceId: 'ws-self', submit: true, clientTimeoutMs: deadline },
+      deadline);
     expect(rpc).toHaveBeenCalledWith('pane.list', { workspaceId: 'ws-self' });
     const [warning] = warnings();
     expect(warning).toMatch(/your own pane #w1-2, where Codex CLI is running/);
@@ -121,6 +175,21 @@ describe('wmux send targets', () => {
     agentPty = 'pty-somewhere-else';
     await handleInput('send', ['echo hi', '--submit'], false);
     expect(warnings()).toEqual([]);
+  });
+
+  // Review item 3 — the CLI's generic 15 s deadline was shorter than the
+  // start a write may now wait on (a WSL pane's first start), so `wmux send`
+  // gave up, exited non-zero, and main still wrote: a retry typed it twice.
+  it('waits for a pane start and tells main its deadline, for send and send-key', async () => {
+    expect(deadline).toBeGreaterThan(TERMINAL_START_BUDGET_MS);
+    await handleInput('send', ['x', '--to', '#w1-1'], false);
+    await handleInput('send-key', ['enter', '--to', '#w1-1'], false);
+    const writes = rpc.mock.calls.filter((c: unknown[]) => c[0] === 'input.send' || c[0] === 'input.sendKey');
+    expect(writes).toHaveLength(2);
+    for (const [, params, timeoutMs] of writes) {
+      expect(timeoutMs).toBe(deadline);
+      expect((params as Record<string, unknown>).clientTimeoutMs).toBe(deadline);
+    }
   });
 
   it('reads the agent of a pane from a pane.list result', () => {

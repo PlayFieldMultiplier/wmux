@@ -35,13 +35,9 @@ import {
 } from '../../../shared/orchestratorRole';
 import { paneHeaderTailGap } from './paneChrome';
 import { RENAME_ACTIVE_TAB_EVENT } from '../../utils/commandActions';
+import { isTerminalSurfaceType } from './surfaceKinds';
 
-/** D2 — only a terminal surface can launch an agent, so only a terminal surface
- *  may claim a role-enforced model. An undefined `surfaceType` is a legacy
- *  terminal (the field postdates the original Surface shape). */
-export function isTerminalSurfaceType(surfaceType: string | undefined): boolean {
-  return surfaceType === undefined || surfaceType === 'terminal';
-}
+export { isTerminalSurfaceType };
 
 /**
  * D2 — may this pane display a "role-enforced launch" badge?

@@ -27,7 +27,7 @@
 
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
-import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
+import { resolvePtyOwnerWorkspace, resolveSurfaceOwnerWorkspace } from '../../workspace/ptyOwnership';
 import { botTokenBinding, commanderTokenWorkspace } from '../../deck/commanderTrust';
 import {
   loadWorkspaceDecision,
@@ -117,18 +117,24 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
     if (!tokenWorkspaceId) {
       throw new Error('deck.resolvePaneRoute: not a live commander session');
     }
-    const ptyId = params['ptyId'];
-    if (typeof ptyId !== 'string' || ptyId.length === 0) {
+    const rawPtyId = params['ptyId'];
+    const ptyId = typeof rawPtyId === 'string' && rawPtyId.length > 0 ? rawPtyId : '';
+    // #2398 — a pane whose terminal has not started has no pty yet: a raw
+    // write to it is routed by its surface, under the same rules below.
+    const rawSurfaceId = params['surfaceId'];
+    const surfaceId = !ptyId && typeof rawSurfaceId === 'string' && rawSurfaceId.length > 0 ? rawSurfaceId : '';
+    if (!ptyId && !surfaceId) {
       throw new Error('deck.resolvePaneRoute: missing required param "ptyId"');
     }
+    const target = ptyId ? `PTY "${ptyId}"` : `surface "${surfaceId}"`;
     // Same ownership oracle assertWorkspaceOwnsPty consults — mirror-first
     // with the renderer's live workspace tree as fallback/deny authority
     // (workspace/ptyOwnership.ts).
-    const owner = await resolvePtyOwnerWorkspace(getWindow, ptyId, {
-      expected: tokenWorkspaceId,
-    });
+    const owner = ptyId
+      ? await resolvePtyOwnerWorkspace(getWindow, ptyId, { expected: tokenWorkspaceId })
+      : await resolveSurfaceOwnerWorkspace(getWindow, surfaceId);
     if (typeof owner !== 'string' || owner.length === 0) {
-      throw new Error(`deck.resolvePaneRoute: no workspace owns PTY "${ptyId}"`);
+      throw new Error(`deck.resolvePaneRoute: no workspace owns ${target}`);
     }
     if (owner !== tokenWorkspaceId) {
       let ownTask = false;
@@ -140,8 +146,9 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
         // fail closed — a ledger we cannot read grants nothing.
       }
       // A bot's task whose row ended: the recorded pane of its reclaimed
-      // worker (the one a Resume opened, or its own), that pane only.
-      if (!ownTask) {
+      // worker (the one a Resume opened, or its own), that pane only — a
+      // recorded pty, so never a surface that has none.
+      if (!ownTask && ptyId) {
         const bot = botTokenBinding(token);
         try {
           ownTask = !!bot && (deps.isReclaimedWorkerPane ?? isReclaimedWorkerPane)(bot.botId, tokenWorkspaceId, owner, ptyId);
@@ -151,7 +158,7 @@ export function registerDeckRpc(router: RpcRouter, getWindow: GetWindow, deps: D
       }
       if (ownTask) return { workspaceId: tokenWorkspaceId };
       throw new Error(
-        `deck.resolvePaneRoute: PTY "${ptyId}" is outside this orchestrator's workspace`,
+        `deck.resolvePaneRoute: ${target} is outside this orchestrator's workspace`,
       );
     }
     return { workspaceId: owner };

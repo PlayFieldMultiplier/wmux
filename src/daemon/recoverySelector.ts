@@ -41,6 +41,9 @@ export function selectRecoverableSessions(
   };
 }
 
+// #2398 (owner decision §6-4) — shared with main's pty:reconnect.
+export { recoversInBackground } from '../shared/suspendedSession';
+
 /**
  * Stop the shells a previous daemon left running, a few sessions at a time.
  *

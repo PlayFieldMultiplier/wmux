@@ -14,6 +14,7 @@ import { stripCredentialValues } from '../shared/envFilter';
 import { isPidAlive } from './phantomExit';
 import { isUsableResumeBinding, isPlausibleResumeSessionId } from '../shared/agentResume';
 import { healCrossProviderBinding } from './transcript/healResumeBinding';
+import { suspendedClockMs } from './heldSessions';
 import { REMOTE_DURABLE_MARKER, REMOTE_DURABLE_TTL_HOURS } from '../shared/sshPcContract';
 
 /**
@@ -486,7 +487,9 @@ export class StateWriter {
         return now - pendingSince < pendingRecoveryTtlMs;
       }
       if (s.state === 'suspended') {
-        return sinceMs < this.suspendedTtlHours * 60 * 60 * 1000;
+        // #2398 — a suspended session a hidden pane holds is in use: its
+        // last hold counts like activity (heldSessions.ts).
+        return now - suspendedClockMs(s) < this.suspendedTtlHours * 60 * 60 * 1000;
       }
       if (s.state === 'detached') {
         // #557: exec/supervised units (X8 reboot-survival) are intentionally

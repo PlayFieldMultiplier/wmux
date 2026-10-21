@@ -64,7 +64,7 @@ describe('pty.handler PTY_PROMOTE — renderer→daemon hop', () => {
 
   it('carries the same code out of the reconnect path, where the banner is actually raised', () => {
     const start = source.indexOf("ipcMain.handle(IPC.PTY_RECONNECT");
-    const region = source.slice(start, start + 2500);
+    const region = source.slice(start, start + 7000);
     expect(region).toMatch(/recoveryPending: true[\s\S]*?cwdMissing: result\.error\?\.code === 'CWD_MISSING'/);
   });
 
@@ -190,12 +190,12 @@ describe('daemon.promoteSession — guards', () => {
   it('a client retry renews the pending entry but the boot background retry does not', () => {
     const rpcAt = source.indexOf("pipeServer.onRpc('daemon.promoteSession'");
     expect(rpcAt, 'daemon.promoteSession not registered').toBeGreaterThanOrEqual(0);
-    const rpcRegion = source.slice(rpcAt, rpcAt + 600);
+    const rpcRegion = source.slice(rpcAt, rpcAt + 1200);
     expect(rpcRegion).toMatch(/touchPendingRecovery\(id\)/);
     // Before the attempt: a promote that fails on a path with no save must
     // still have recorded that the user asked for this pane.
     expect(rpcRegion.indexOf('touchPendingRecovery(id)'))
-      .toBeLessThan(rpcRegion.indexOf('promoteOnce(id,'));
+      .toBeLessThan(rpcRegion.indexOf("promoteOnce(id, params?.['fresh']"));
 
     // The attach path is the other client-initiated entry point.
     const attachAt = source.indexOf("pipeServer.onRpc('daemon.attachSession'");
@@ -206,7 +206,7 @@ describe('daemon.promoteSession — guards', () => {
     const bootAt = source.indexOf('WSL background recovery');
     expect(bootAt, 'boot background recovery not found').toBeGreaterThan(rpcAt);
     const bootRegion = source.slice(source.lastIndexOf('setImmediate(', bootAt), bootAt);
-    expect(bootRegion).toMatch(/promoteOnce\(session\.id\)/);
+    expect(bootRegion).toMatch(/promoteOnce\(session\.id, false, 'background'\)/);
     expect(bootRegion).not.toMatch(/touchPendingRecovery/);
   });
 
@@ -221,5 +221,158 @@ describe('daemon.promoteSession — guards', () => {
     // (`reply` only wraps it when the caller asks `withRecovery`, #2393).
     expect(region).toMatch(/return reply\(activeSessions\);/);
     expect(region).toMatch(/withRecovery \? \{ sessions, recoveryDone: [^}]+\} : sessions/);
+  });
+});
+
+// #2398 — a hidden pane attaches without promoting: its suspended session is a
+// spawn, and a cold start with many restored workspaces spawned one per pane
+// nobody had opened. The pane promotes it when first shown.
+describe('attach without promote (#2398)', () => {
+  const handler = readSourceText(path.join(__dirname, '..', 'handlers', 'pty.handler.ts'));
+  const daemon = readSourceText(path.join(srcRoot, 'daemon', 'index.ts'));
+
+  it('pty:reconnect answers a suspended session deferred, before any promote, unless the action says promote', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 5000);
+    expect(region).toMatch(/opts\?: \{ promote\?: boolean; joinOnly\?: boolean \}/);
+    const heldAt = region.indexOf('const held = (');
+    const deferAt = region.indexOf("if (action === 'hold') return held(");
+    const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
+    expect(heldAt).toBeGreaterThan(0);
+    expect(deferAt).toBeGreaterThan(region.indexOf("session.state === 'suspended'"));
+    expect(deferAt).toBeGreaterThan(heldAt);
+    expect(deferAt).toBeLessThan(promoteAt);
+    // The answer itself: heldReconnectAnswer, behaviour-tested in shared.
+    expect(region.slice(heldAt, deferAt)).toMatch(/return heldReconnectAnswer\(listed\);/);
+  });
+
+  // Second-model P2-1 — a stop key (join-only) to an exec or supervised unit
+  // joins a start in flight but never spawns one: the daemon is asked
+  // join-only, and its "nothing in flight" is answered like a hold, not as a
+  // recovery failure (which would raise the Retry banner).
+  it('pty:reconnect asks the daemon join-only for a join-only caller and holds when nothing is in flight', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 9000);
+    const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
+    expect(region.slice(promoteAt, promoteAt + 200)).toMatch(/\{ id, \.\.\.\(action === 'join-only' \? \{ joinOnly: true \} : \{\}\) \}/);
+    // The mapping itself: promoteOutcome, behaviour-tested in shared.
+    const outcomeAt = region.indexOf('const outcome = promoteOutcome(result);');
+    const heldAt = region.indexOf("if (outcome === 'held') return held(");
+    expect(outcomeAt).toBeGreaterThan(promoteAt);
+    expect(heldAt).toBeGreaterThan(outcomeAt);
+    expect(heldAt).toBeLessThan(region.indexOf("if (outcome === 'failed') return"));
+  });
+
+  it('daemon.promoteSession answers a join-only call without starting or renewing anything', () => {
+    const start = daemon.indexOf("pipeServer.onRpc('daemon.promoteSession'");
+    const region = daemon.slice(start, start + 1200);
+    const joinOnlyAt = region.indexOf("if (params?.['joinOnly'] === true)");
+    expect(joinOnlyAt).toBeGreaterThan(0);
+    expect(joinOnlyAt).toBeLessThan(region.indexOf('touchPendingRecovery(id)'));
+    // The answer itself: createPromoteOnce, behaviour-tested in promoteOnce.test.ts.
+    expect(region).toMatch(/return promoteOnce\(id, false, 'rpc', true\);/);
+  });
+
+  // Second-model P3-1 — the attach promoted whatever the caller: a daemon
+  // restart between the list and the attach turns a live WSL session back
+  // into a pending recovery, and a hidden pane's attach then started it
+  // (with `promoted` unset). It promotes only as the action says, and a
+  // pending answer is held.
+  it('pty:reconnect attaches with promote only as the action says, and holds a session pending again', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 12000);
+    expect(region.indexOf('const action = suspendedReconnectAction(session, opts);'))
+      .toBeLessThan(region.indexOf("if (session.state === 'suspended')"));
+    expect(region).toMatch(/daemonClient\.rpc\('daemon\.attachSession', \{ id, promote: action === 'promote' \|\| action === 'join' \}\)/);
+    const attachAt = region.indexOf("daemonClient.rpc('daemon.attachSession'");
+    expect(region.slice(attachAt, attachAt + 400)).toMatch(/if \(attached\?\.pending\) return held\(/);
+  });
+
+  // Review item 2 — the reconnect asks the same predicate the daemon's boot
+  // promote uses, so an exec unit or supervised session the daemon starts in
+  // the background falls through to promoteSession (which joins that start)
+  // instead of leaving its pane deferred.
+  it('pty:reconnect reads exec and supervision, the fields recoversInBackground decides on', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 2500);
+    expect(region).toMatch(/exec\?: unknown;\s*supervision\?: unknown;/);
+    expect(handler).toMatch(/import \{ heldReconnectAnswer, promoteOutcome, promoteStartedSession, suspendedReconnectAction \} from '\.\.\/\.\.\/\.\.\/shared\/suspendedSession';/);
+  });
+
+  // Review item 1 — a held session is in use: every hold tells the daemon,
+  // which renews it against the suspended TTL.
+  it('a held reconnect tells the daemon the session is held, and pty:hold forwards the renderer holds', () => {
+    const heldAt = handler.indexOf('const held = (');
+    expect(handler.slice(heldAt, heldAt + 700)).toMatch(/daemonClient\.rpc\('daemon\.holdSession', \{ ids: \[id\] \}\)/);
+    const holdAt = handler.indexOf('ipcMain.handle(IPC.PTY_HOLD');
+    expect(holdAt).toBeGreaterThan(0);
+    expect(handler.slice(holdAt, holdAt + 500)).toMatch(/daemonClient\.rpc\('daemon\.holdSession', \{ ids: held \}\)/);
+    expect((handler.match(/removeHandler\(IPC\.PTY_HOLD\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Round-5 P3 — the reconnect answer says when it started the session, so a
+  // stop key that joined that attempt is not delivered into the new shell.
+  it('pty:reconnect answers promoted when it promoted a suspended session', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 9000);
+    const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
+    // Round 7: from what the daemon did (promoteStartedSession, unit-tested
+    // in shared), never from the action label.
+    expect(region.slice(promoteAt, promoteAt + 1600)).toMatch(/promoted = promoteStartedSession\(result\);/);
+    expect(region).not.toMatch(/promoted = suspendedReconnectAction/);
+    expect(handler).toMatch(/return \{ success: true, id: session\.id,[^\n]*\.\.\.startedHere\(\) \};/);
+  });
+
+  // Round-6 P3 — an attach that fails after the promote still says so: the
+  // renderer's retry attaches a session that runs by then.
+  it('pty:reconnect carries promoted on the failed attaches after a promote too', () => {
+    expect(handler).toMatch(/let promoted = false;\s*const startedHere = \(\) => \(promoted \? \{ promoted: true \} : \{\}\);\s*try \{/);
+    expect(handler).toMatch(/code: 'pipe-not-writable', transient: true, \.\.\.startedHere\(\) \};/);
+    expect(handler).toMatch(/code: 'rpc-error', transient: true, \.\.\.startedHere\(\) \};/);
+    expect(handler).toMatch(/recoveryPending: true, error: err instanceof Error \? err\.message : String\(err\), \.\.\.startedHere\(\) \};/);
+  });
+
+  it('daemon.holdSession stamps the pending recovery or disk-only record and saves', () => {
+    const start = daemon.indexOf("pipeServer.onRpc('daemon.holdSession'");
+    expect(start).toBeGreaterThan(0);
+    const region = daemon.slice(start, start + 800);
+    expect(region).toMatch(/sessionManager\.getPendingRecovery\(id\) \?\? diskOnlySessions\.find/);
+    expect(region).toMatch(/stampHeld\(record, now\)/);
+    expect(region).toMatch(/stateWriter\.saveDebounced\(buildState\(sessionManager\)\)/);
+  });
+
+  it('daemon.attachSession leaves a pending recovery pending with promote:false', () => {
+    const start = daemon.indexOf("pipeServer.onRpc('daemon.attachSession'");
+    const region = daemon.slice(start, start + 1200);
+    const deferAt = region.indexOf('if (p.promote === false) return');
+    expect(deferAt).toBeGreaterThan(0);
+    expect(deferAt).toBeLessThan(region.indexOf('promoteOnce(p.id)'));
+  });
+
+  it('the boot-time WSL background promote starts only exec units and supervised sessions', () => {
+    const start = daemon.indexOf('// Defer cold WSL starts until RPC registration');
+    const region = daemon.slice(start, start + 1500);
+    expect(region).toMatch(/recoversInBackground\(placeholder\)/);
+  });
+});
+
+// #2398 §6-4 option B: a hidden suspended session that would resume an agent
+// conversation is promoted at boot by the renderer when resume-on-start is on,
+// so the deferred answer and the suspended list carry its guarded binding.
+describe('resume on start for a suspended session (#2398 §6-4 option B)', () => {
+  const handler = readSourceText(path.join(__dirname, '..', 'handlers', 'pty.handler.ts'));
+  const daemon = readSourceText(path.join(srcRoot, 'daemon', 'index.ts'));
+
+  it('the deferred reconnect answer carries the session binding', () => {
+    const start = handler.indexOf('const held = (');
+    const region = handler.slice(start, start + 1200);
+    // heldReconnectAnswer carries it (behaviour-tested in shared).
+    expect(region).toMatch(/return heldReconnectAnswer\(listed\);/);
+  });
+
+  it('a cap-skipped suspended entry carries its binding only while its transcript lives', () => {
+    const start = daemon.indexOf('const suspendedEntries = persistedState.sessions');
+    const region = daemon.slice(start, start + 1400);
+    expect(region).toMatch(/isUsableResumeBinding\(s\.resumeBinding\) && bindingTranscriptLives\(s\.resumeBinding\)/);
   });
 });

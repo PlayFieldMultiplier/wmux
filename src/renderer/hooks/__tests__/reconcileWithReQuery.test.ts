@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolvePtyIdsToClear } from '../reconcileWithReQuery';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { heldSuspendedIds, holdsSuspendedSession, resolvePtyIdsToClear } from '../reconcileWithReQuery';
 
 // RCA A1/A9 partial-list reconcile guard. The bug: a single partial daemon
 // snapshot (mid-rehydrate) caused the reconcile to clear a live ptyId on the
@@ -65,5 +67,54 @@ describe('resolvePtyIdsToClear (RCA A1/A9 partial-list 2-strike guard)', () => {
     const toClear = await resolvePtyIdsToClear(['pty-1'], { reList, sleep, isCurrent: () => alive, log: noLog });
     expect(toClear.size).toBe(0);
     expect(reList).not.toHaveBeenCalled();
+  });
+});
+
+// #2398 — the startup reconcile promoted every suspended session it found,
+// on screen or not: a spawn per hidden pane at boot.
+describe('holdsSuspendedSession', () => {
+  it('holds a hidden pane’s suspended session (neither promoted nor cleared)', () => {
+    expect(holdsSuspendedSession({ shown: false, stashed: false, session: {} })).toBe(true);
+  });
+
+  it('promotes a shown pane’s, and a stashed pane’s as before', () => {
+    expect(holdsSuspendedSession({ shown: true, stashed: false, session: {} })).toBe(false);
+    expect(holdsSuspendedSession({ shown: false, stashed: true, session: {} })).toBe(false);
+  });
+
+  // Second-model P2-2: a graceful shutdown suspends exec units and supervised
+  // sessions too, and the recovery cap leaves the long-silent ones on disk.
+  // Held as plain shells, a `restart: always` service in a workspace nobody
+  // opened stayed down after a restart.
+  it('promotes a hidden pane’s exec unit or supervised session: they run unseen', () => {
+    expect(holdsSuspendedSession({ shown: false, stashed: false, session: { exec: true } })).toBe(false);
+    expect(holdsSuspendedSession({ shown: false, stashed: false, session: { supervision: { status: 'armed', restartCount: 0 } } })).toBe(false);
+  });
+});
+
+// #2398 review item 1 — a suspended session a pane holds without promoting it
+// is in use: the reconcile tells the daemon, which keeps it from aging out
+// under the suspended TTL. That covers panes that never mount (a workspace
+// outside the multiview grid), whose reconnect never runs.
+describe('heldSuspendedIds', () => {
+  it('names every examined binding the daemon lists suspended, and every pass hold, once', () => {
+    const listed = [
+      { id: 'pty-live', state: 'detached' },
+      { id: 'pty-wsl', state: 'suspended' },
+      { id: 'pty-not-ours', state: 'suspended' },
+    ];
+    expect(heldSuspendedIds(['pty-live', 'pty-wsl'], listed, ['pty-cap', 'pty-wsl'])).toEqual(['pty-wsl', 'pty-cap']);
+    expect(heldSuspendedIds(['pty-live'], listed, [])).toEqual([]);
+  });
+
+  it('the startup reconcile sends them to the daemon once a pass completes', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', '..', 'components', 'Layout', 'AppLayout.tsx'), 'utf-8');
+    const holdAt = source.indexOf('reconcile HOLDING suspended ptyId');
+    expect(source.slice(holdAt, holdAt + 300)).toMatch(/heldByPass\.push\(candidate\.ptyId\);\s*continue;/);
+    const sendAt = source.indexOf('const held = heldSuspendedIds(examinedPtyIds, listedPtys, heldByPass);');
+    expect(sendAt).toBeGreaterThan(holdAt);
+    expect(source.slice(sendAt, sendAt + 300)).toMatch(/window\.electronAPI\.pty\.hold\(held\)/);
+    // Only after a pass that was not aborted.
+    expect(source.slice(source.lastIndexOf('if (!signal?.aborted) {', sendAt), sendAt)).toMatch(/setPtysUnconfirmed/);
   });
 });

@@ -896,6 +896,7 @@ export const ko = {
   'terminal.reattaching': '다시 연결하는 중…',
   'terminal.createFailed': '이 터미널을 시작하지 못했습니다.',
   'terminal.retryCreate': '다시 시도',
+  'terminal.notStarted': '열면 시작됩니다',
   'retention.migratedNotice': '이번 업데이트부터 숨겨진 패널의 렌더링을 일시정지합니다 (모든 것은 계속 실행되며, 다시 표시될 때 따라잡습니다). Settings → Terminal에서 끌 수 있습니다.',
   'retention.migratedNoticeTurnOff': '끄기',
   'terminal.supervisedRestart': '[wmux] 감독 재시작 #{count} — 중지: 창 메뉴',

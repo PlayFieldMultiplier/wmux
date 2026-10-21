@@ -123,6 +123,7 @@ export const GATED_DELIVERY_DEADLINE_MARGIN_MS = 3_000;
 /** The MCP client's budget for a new-task `send_message`: outwaits main. */
 export const NEW_TASK_SEND_CLIENT_TIMEOUT_MS = 30_000;
 
-/** The MCP client's budget for `terminal_send` with `new_task`: the fresh
- *  context step plus the ordinary submit receipt. */
+/** The delivery part of the MCP client's budget for `terminal_send` with
+ *  `new_task`: the fresh context step plus the ordinary submit receipt. The
+ *  client adds the terminal start budget (terminalWriteBudget.ts, #2398). */
 export const TERMINAL_SEND_NEW_TASK_TIMEOUT_MS = 25_000;

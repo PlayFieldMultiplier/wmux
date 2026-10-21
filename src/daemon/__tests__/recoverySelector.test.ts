@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { selectRecoverableSessions, startLeftoverShellReaps } from '../recoverySelector';
+import { recoversInBackground, selectRecoverableSessions, startLeftoverShellReaps } from '../recoverySelector';
 import type { DaemonSession, DaemonSessionState } from '../types';
 import { deliberateSleep } from '../../test-utils/waitFor';
 
@@ -190,5 +190,18 @@ describe('startLeftoverShellReaps', () => {
       reap: async () => { throw new Error('kill failed'); },
     });
     await expect(Promise.all(done.values())).resolves.toEqual([undefined, undefined]);
+  });
+});
+
+// #2398 (owner decision §6-4) — the boot-time WSL background promote starts
+// only what must run unwatched; a plain shell starts when its pane is shown.
+describe('recoversInBackground', () => {
+  it('starts an exec unit and a supervised session', () => {
+    expect(recoversInBackground({ exec: { command: 'claude' } })).toBe(true);
+    expect(recoversInBackground({ supervision: { restart: 'on-failure', limit: { maxRestarts: 3, windowMs: 60_000 }, status: 'armed' } as never })).toBe(true);
+  });
+
+  it('leaves a plain shell for its pane to start', () => {
+    expect(recoversInBackground({})).toBe(false);
   });
 });

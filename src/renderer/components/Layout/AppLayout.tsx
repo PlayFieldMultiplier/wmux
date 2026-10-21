@@ -89,7 +89,8 @@ import { FIRST_RUN_REOPEN_EVENT } from '../../../shared/firstRun';
 import { isFileDrag } from '../../../shared/dragDrop';
 import { terminalRegistry, watchColdFramePersistence } from '../../hooks/useTerminal';
 import { clearPersistedColdFrames, restoreColdFrames } from '../../terminal/coldFrame';
-import { resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
+import { heldSuspendedIds, holdsSuspendedSession, resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
+import { isSurfaceShown } from '../../stores/selectors/surfaceShown';
 import { runWithProgressTimeout } from '../../hooks/reconcileProgressTimeout';
 import { createLateReconcileOnConnect } from '../../hooks/lateReconcileOnConnect';
 import { applyStartupReconcileFallback } from '../../hooks/startupReconcileFallback';
@@ -1290,12 +1291,14 @@ export default function AppLayout() {
         // does not cover: a single snapshot can be partial (daemon
         // mid-rehydrate), so clearing on the first cycle could destroy a live
         // session. We defer the destructive decision to a 2-strike re-query.
-        const absentCandidates: { paneId: string; surfaceId: string; ptyId: string; stashed: boolean }[] = [];
+        const absentCandidates: { workspaceId: string; paneId: string; surfaceId: string; ptyId: string; stashed: boolean }[] = [];
         // Every binding this pass looks at, and those it could not settle
         // (#2398, see the end of the pass).
         const examinedPtyIds: string[] = [];
         const unsettledPtyIds = new Set<string>();
-        const collect = (pane: PaneLeaf, stashed: boolean) => {
+        // #2398 — suspended sessions this pass holds instead of promoting.
+        const heldByPass: string[] = [];
+        const collect = (workspaceId: string, pane: PaneLeaf, stashed: boolean) => {
           if (signal?.aborted) return;
           for (const surface of pane.surfaces) {
             if (signal?.aborted) return;
@@ -1312,7 +1315,7 @@ export default function AppLayout() {
             } else if (preserveUnconfirmedOnEmpty && !deadPtys.has(surface.ptyId)) {
               console.warn(`[lifecycle] reconcile preserving unconfirmed ptyId=${surface.ptyId} surface=${surface.id} while live list is empty`);
             } else {
-              absentCandidates.push({ paneId: pane.id, surfaceId: surface.id, ptyId: surface.ptyId, stashed });
+              absentCandidates.push({ workspaceId, paneId: pane.id, surfaceId: surface.id, ptyId: surface.ptyId, stashed });
             }
           }
         };
@@ -1335,7 +1338,7 @@ export default function AppLayout() {
           const visibleIds = new Set(getLeafPanes(ws.rootPane).map((l) => l.id));
           for (const leaf of getWorkspaceLeafPanes(ws)) {
             if (signal?.aborted) return;
-            collect(leaf, !visibleIds.has(leaf.id));
+            collect(ws.id, leaf, !visibleIds.has(leaf.id));
           }
         }
         // Visible panes first, ACROSS workspaces. Promotion below competes for
@@ -1358,18 +1361,28 @@ export default function AppLayout() {
           const stillAbsent: typeof absentCandidates = [];
           if (window.electronAPI?.pty?.promote) {
             // Ask the daemon for suspended sessions that match our absent ptyIds.
-            const allRes = await invokeReconcile<{ id: string; state?: string }[]>(() =>
+            const allRes = await invokeReconcile<{ id: string; state?: string; exec?: true; supervision?: unknown }[]>(() =>
               window.electronAPI.pty.list({ includeSuspended: true }),
             );
-            const suspendedIds = new Set(
+            const suspendedById = new Map(
               allRes.ok
-                ? allRes.data.filter((s) => s.state === 'suspended').map((s) => s.id)
+                ? allRes.data.filter((s) => s.state === 'suspended').map((s) => [s.id, s] as const)
                 : [],
             );
             for (const candidate of absentCandidates) {
               if (signal?.aborted) break;
-              if (!suspendedIds.has(candidate.ptyId)) {
+              const suspended = suspendedById.get(candidate.ptyId);
+              if (!suspended) {
                 stillAbsent.push(candidate);
+                continue;
+              }
+              // #2398 — a hidden pane's suspended session is held: not
+              // promoted, not cleared; its pane promotes it when first shown.
+              // An exec unit or supervised session is promoted all the same.
+              const shown = isSurfaceShown(useStore.getState(), candidate.workspaceId, candidate.surfaceId);
+              if (holdsSuspendedSession({ shown, stashed: candidate.stashed, session: suspended })) {
+                console.log(`[lifecycle] reconcile HOLDING suspended ptyId=${candidate.ptyId} surface=${candidate.surfaceId} — pane hidden, promoted when first shown`);
+                heldByPass.push(candidate.ptyId);
                 continue;
               }
               // Try to promote this suspended session.
@@ -1398,8 +1411,11 @@ export default function AppLayout() {
           let secondSnapshot: { id: string; surfaceId?: string; createdAt?: string }[] | null = null;
           const toClear = await resolvePtyIdsToClear(firstAbsent, {
             reList: async () => {
-              const r = await invokeReconcile<{ id: string; surfaceId?: string; createdAt?: string }[]>(() => window.electronAPI.pty.list());
-              if (r.ok) secondSnapshot = r.data;
+              // #2398 — suspended sessions count as present (a held one, or one
+              // the first list raced), but are never a rebind target: a rebind
+              // goes to a session that is running.
+              const r = await invokeReconcile<{ id: string; surfaceId?: string; createdAt?: string; state?: string }[]>(() => window.electronAPI.pty.list({ includeSuspended: true }));
+              if (r.ok) secondSnapshot = r.data.filter((p) => p.state !== 'suspended');
               return r.ok
                 ? { ok: true, ids: new Set(r.data.map((p: { id: string }) => p.id)) }
                 : { ok: false };
@@ -1483,6 +1499,14 @@ export default function AppLayout() {
             false,
             { markedAtOrBefore: markSeqAtStart },
           );
+          // #2398 — every suspended session a pane still holds stays in use,
+          // so the suspended TTL never prunes one whose pane is merely
+          // unopened. Best effort, as at reportViewerVisibility: a stale
+          // preload may not expose it.
+          const held = heldSuspendedIds(examinedPtyIds, listedPtys, heldByPass);
+          if (held.length > 0 && typeof window.electronAPI?.pty?.hold === 'function') {
+            void window.electronAPI.pty.hold(held).catch((err: unknown) => console.warn('[lifecycle] reconcile pty.hold failed', err));
+          }
         }
         console.log(`[AppLayout] Reconcile cycle #${reconcileCycleRef.current} complete (${absentCandidates.length} absent candidate(s))`);
       } finally {

@@ -81,6 +81,20 @@ export async function resolvePtyRef(value: string | undefined, rpc: PaneNameRpc)
   return target.ptyId;
 }
 
+/**
+ * A raw write's ptyId parameter that may be a pane name → the pane's terminal
+ * ptyId, or (#2398) the surface id of a terminal that has not started yet:
+ * main starts its shell before writing. A read keeps resolvePtyRef, which
+ * never starts one.
+ */
+export async function resolveWritePtyRef(value: string | undefined, rpc: PaneNameRpc): Promise<{ ptyId?: string; surfaceId?: string }> {
+  const target = await resolvePaneRef(value, rpc);
+  if (!target) return { ptyId: value };
+  if (target.ptyId) return { ptyId: target.ptyId };
+  if (target.surfaceId) return { surfaceId: target.surfaceId };
+  throw new Error(`pane ${target.paneTag} has no local terminal`);
+}
+
 /** A paneId parameter that may be a pane name → the paneId. */
 export async function resolvePaneIdRef(value: string | undefined, rpc: PaneNameRpc, workspaceId?: string): Promise<string | undefined> {
   const target = await resolvePaneRef(value, rpc, workspaceId);

@@ -108,7 +108,7 @@ describe('useTerminal geometry of a hidden pane', { timeout: 60_000 }, () => {
       layoutSize = 0;
       setDaemonModeActive(true);
       await mount('p-hidden', false);
-      expect(reconnect).toHaveBeenCalledWith('p-hidden');
+      expect(reconnect).toHaveBeenCalledWith('p-hidden', { promote: true });
       expect(resize.mock.calls).toEqual([]);
     } finally {
       propose.mockRestore();
@@ -155,7 +155,7 @@ describe('useTerminal geometry of a hidden pane', { timeout: 60_000 }, () => {
       layoutSize = 800;
       setDaemonModeActive(true);
       await mount('p-shown', true);
-      expect(reconnect).toHaveBeenCalledWith('p-shown');
+      expect(reconnect).toHaveBeenCalledWith('p-shown', { promote: true });
       expect(resize).toHaveBeenCalledWith('p-shown', 90, 20);
     } finally {
       propose.mockRestore();

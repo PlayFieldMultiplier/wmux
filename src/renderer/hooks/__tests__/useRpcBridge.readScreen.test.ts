@@ -199,3 +199,25 @@ it('approval probes read only a settled current viewport, never scrollback or pa
     useStore.setState({ paneGate: previousGate });
   }
 });
+
+// #2398 review item 6 — an approval probe of a pane whose suspended session
+// was left unstarted (its pane hidden) reads nothing and never hydrates it:
+// hydrating reattaches, and that must not start the session.
+it('an approval probe of a deferred pane answers null without hydrating it', async () => {
+  const ptyId = 'approval-deferred';
+  const terminal = new Terminal({ cols: 80, rows: 3, scrollback: 100, allowProposedApi: true });
+  const previousGate = useStore.getState().paneGate;
+  const hydrate = vi.spyOn(terminalModule, 'hydrateTerminalForRead').mockResolvedValue(true);
+  useStore.setState({ paneGate: 'ready', ptyDeferredById: { [ptyId]: true } });
+  try {
+    await new Promise<void>((resolve) => terminal.write('stale frame', resolve));
+    (terminalRegistry as Map<string, unknown>).set(ptyId, terminal);
+    expect(await handleRpcMethod('input.readScreen', { ptyId, approvalScreen: true })).toBeNull();
+    expect(hydrate).not.toHaveBeenCalled();
+  } finally {
+    hydrate.mockRestore();
+    terminalRegistry.delete(ptyId);
+    terminal.dispose();
+    useStore.setState({ paneGate: previousGate, ptyDeferredById: {} });
+  }
+});

@@ -1,4 +1,5 @@
 import type { DeadPaneRecovery } from '../../shared/ptyRecovery';
+import type { ResumeBinding } from '../../shared/agentResume';
 
 /**
  * RCA A1 — reconnect a live daemon session with retry, distinguishing
@@ -26,6 +27,12 @@ import type { DeadPaneRecovery } from '../../shared/ptyRecovery';
 
 export interface ReconnectResult {
   success: boolean;
+  /**
+   * #2398 — this reconnect started the session (promoted a suspended one),
+   * also on a failed attach after the promote: the retry then attaches a
+   * session that runs, and must still report that this attempt started it.
+   */
+  promoted?: boolean;
   error?: string;
   transient?: boolean;
   recoveryPending?: boolean;
@@ -36,19 +43,36 @@ export interface ReconnectResult {
    */
   cwdMissing?: boolean;
   recovery?: DeadPaneRecovery;
+  /**
+   * #2398 — asked without promote (the pane is hidden) and the session is
+   * suspended: it stays suspended and the id is kept until the pane is shown.
+   */
+  deferred?: boolean;
+  /** With `deferred`: the suspended session's agent resume binding, if it has one. */
+  resumeAgent?: string;
+  resumeBinding?: ResumeBinding;
   /** The session's stored PTY geometry, reported on success. */
   cols?: number;
   rows?: number;
 }
 
-/** Why an attempt settled without a session pipe; absent once it attached. */
+/** Why an attempt settled without a session pipe; absent once it attached (except `promoted`). */
 export interface ReconnectSettleInfo {
+  /**
+   * #2398 — this attempt started the session (it was suspended): attached, or
+   * given up on after the start (rate limited, unconfirmed).
+   */
+  promoted?: boolean;
   cwdMissing?: boolean;
   rateLimited?: boolean;
   /** Retries ran out; the id is kept unconfirmed (#2398). */
   unconfirmed?: boolean;
   /** The daemon no longer has the id; a reconcile decides rebind or clear (#2398). */
   awaitingReconcile?: boolean;
+  /** Suspended and not promoted while the pane is hidden (#2398); first show promotes. */
+  deferred?: boolean;
+  /** With `deferred`: what the session would resume (resume-on-start, #2398 §6-4). */
+  resume?: { resumeAgent?: string; resumeBinding?: ResumeBinding };
 }
 
 export interface ReconnectDeps {
@@ -74,6 +98,8 @@ export interface ReconnectDeps {
    * requester registered), and the caller then clears as before.
    */
   requestReconcile?: (reason: string) => boolean;
+  /** #2398 — record whether the bound session was left suspended (deferred). */
+  setDeferred?: (id: string, deferred: boolean) => void;
   /** Sleep between retries. Injectable so tests don't wait real time. */
   sleep?: (ms: number) => Promise<void>;
   /** Optional structured logger. Defaults to console. */
@@ -115,6 +141,8 @@ export async function reconnectPtyWithRetry(
   const schedule = [...RECONNECT_BACKOFFS_MS, ...RATE_LIMIT_EXTRA_BACKOFFS_MS];
   let lastErr = '<no error>';
   let rateLimited = false;
+  // #2398 — any iteration of this attempt started the session.
+  let started = false;
   for (let attempt = 0; ; attempt++) {
     if (!isCurrent()) return null; // terminal unmounted mid-retry — stop, mutate nothing
     let result: ReconnectResult | undefined;
@@ -125,22 +153,40 @@ export async function reconnectPtyWithRetry(
       lastErr = err instanceof Error ? err.message : String(err);
       result = { success: false, transient: true, error: lastErr };
     }
+    if (result?.promoted) started = true;
     if (result?.success) {
       // A reconnect that settles after its terminal was replaced reports
       // nothing: its geometry must not resize the terminal current now.
       if (!isCurrent()) return null;
       deps.setUnconfirmed?.(ptyId, false);
-      deps.onRecoveryError?.(null);
+      deps.setDeferred?.(ptyId, false);
+      if (started) deps.onRecoveryError?.(null, { promoted: true });
+      else deps.onRecoveryError?.(null);
       return result.cols && result.rows ? { cols: result.cols, rows: result.rows } : null;
     }
     if (result?.recoveryPending) {
       if (isCurrent()) {
         deps.onRecoveryError?.(
           result.error || 'WSL recovery failed. Check the target and retry.',
-          { cwdMissing: result.cwdMissing === true },
+          { cwdMissing: result.cwdMissing === true, ...(started ? { promoted: true } : {}) },
         );
       }
       return null; // Keep the original id, binding and scrollback. Retry is explicit.
+    }
+    if (result?.deferred) {
+      // #2398 — a hidden pane's suspended session, left suspended on purpose:
+      // an answer, not a failure. Keep the id, never enter the back-off, and
+      // let the pane's first show reattach with promote.
+      if (isCurrent()) {
+        // The daemon holds it, so a binding kept unconfirmed is confirmed.
+        deps.setUnconfirmed?.(ptyId, false);
+        deps.setDeferred?.(ptyId, true);
+        const resume = result.resumeAgent || result.resumeBinding
+          ? { resume: { resumeAgent: result.resumeAgent, resumeBinding: result.resumeBinding } }
+          : {};
+        deps.onRecoveryError?.(null, { deferred: true, ...resume });
+      }
+      return null;
     }
     lastErr = result?.error ?? '<no error>';
     // #2398 — an unconfirmed binding was kept through a failed startup
@@ -160,7 +206,10 @@ export async function reconnectPtyWithRetry(
     // Permanent failure (daemon says the session is dead): clear now, no retry.
     if (result?.transient === false) {
       log('warn', `[useTerminal] pty.reconnect ${ptyId} permanent failure (${lastErr}) — clearing ptyId for self-create`);
-      if (isCurrent()) deps.clearPtyId(ptyId, result.recovery);
+      if (isCurrent()) {
+        deps.setDeferred?.(ptyId, false);
+        deps.clearPtyId(ptyId, result.recovery);
+      }
       return null;
     }
     if (isRateLimitedError(lastErr)) rateLimited = true;
@@ -180,7 +229,7 @@ export async function reconnectPtyWithRetry(
     log('error', `[useTerminal] pty.reconnect ${ptyId} still rate limited after ${schedule.length} retries (${lastErr}) — keeping ptyId`);
     if (isCurrent()) {
       deps.setUnconfirmed?.(ptyId, true);
-      deps.onRecoveryError?.('wmux is busy and could not reattach this terminal yet.', { rateLimited: true });
+      deps.onRecoveryError?.('wmux is busy and could not reattach this terminal yet.', { rateLimited: true, ...(started ? { promoted: true } : {}) });
     }
     return null;
   }
@@ -191,7 +240,7 @@ export async function reconnectPtyWithRetry(
   log('error', `[useTerminal] pty.reconnect ${ptyId} still failing after ${RECONNECT_BACKOFFS_MS.length} retries (${lastErr}) — keeping ptyId unconfirmed`);
   if (isCurrent()) {
     deps.setUnconfirmed?.(ptyId, true);
-    deps.onRecoveryError?.('wmux could not reattach this terminal yet.', { unconfirmed: true });
+    deps.onRecoveryError?.('wmux could not reattach this terminal yet.', { unconfirmed: true, ...(started ? { promoted: true } : {}) });
   }
   return null;
 }

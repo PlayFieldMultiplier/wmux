@@ -21,6 +21,8 @@
  * reconnectPtyWithRetry.ts.
  */
 
+import { recoversInBackground } from '../../shared/suspendedSession';
+
 export interface ReListResult {
   ok: boolean;
   /** The set of ptyIds the daemon reports alive, when ok. */
@@ -94,4 +96,41 @@ export async function resolvePtyIdsToClear(
     `[lifecycle] reconcile 2-strike: ${toClear.size}/${firstAbsent.length} candidate ptyId(s) absent from BOTH daemon snapshots → clear; ${firstAbsent.length - toClear.size} reappeared on re-query → preserved`,
   );
   return toClear;
+}
+
+/**
+ * #2398 — whether the reconcile holds a suspended session (cap-skipped, or a
+ * WSL placeholder) instead of promoting it: one on a pane nobody is looking
+ * at is neither promoted (that is a spawn per hidden pane at boot) nor
+ * cleared; its pane attaches without promoting and promotes it when first
+ * shown. A shown pane's, and a stashed pane's as before, is promoted, and so
+ * is an exec unit's or a supervised session's (owner decision §6-4: they run
+ * whether or not anyone looks at them).
+ */
+export function holdsSuspendedSession(candidate: {
+  /** In the workspace's stash, not its visible tree. */
+  stashed: boolean;
+  /** On screen in the sense that starts a shell (stores/selectors/surfaceShown.ts). */
+  shown: boolean;
+  /** The daemon's suspended entry: its exec and supervision. */
+  session: { exec?: unknown; supervision?: unknown };
+}): boolean {
+  return !candidate.shown && !candidate.stashed && !recoversInBackground(candidate.session);
+}
+
+/**
+ * #2398 — the suspended sessions this pass found a pane still holding without
+ * promoting them: bound to a session the daemon lists suspended (a WSL
+ * placeholder), or one the pass held (holdsSuspendedSession). The reconcile
+ * tells the daemon (pty.hold), which keeps them from aging out under the
+ * suspended TTL: a pane nobody opened is unopened, not gone, mounted or not
+ * (a workspace outside the multiview grid never reconnects its panes).
+ */
+export function heldSuspendedIds(
+  examinedPtyIds: readonly string[],
+  listed: ReadonlyArray<{ id: string; state?: string }>,
+  heldByPass: readonly string[],
+): string[] {
+  const suspended = new Set(listed.filter((s) => s.state === 'suspended').map((s) => s.id));
+  return [...new Set([...examinedPtyIds.filter((id) => suspended.has(id)), ...heldByPass])];
 }

@@ -84,6 +84,7 @@ import {
   rebindTerminalOutputWriter,
 } from '../terminal/terminalOutputScheduler';
 import { reconnectPtyWithRetry as reconnectPtyWithRetryImpl, type ReconnectSettleInfo } from './reconnectPtyWithRetry';
+import { resumesOnStart, type ResumeHint } from '../stores/selectors/surfaceShown';
 import { awaitsReconcile, requestReconcile } from './reconcileRequest';
 import { adoptTerminal, parkTerminal, restoreParkedViewport, type ParkedTerminal } from '../terminal/terminalPark';
 import { captureColdFrame, clearPersistedColdFrames, coldFrameFits, dropColdFrame, persistColdFrames, splitTrailingEscape, takeColdFrame, WarmFrameSwap, COLD_FRAME_MAX_ENTRIES, FULL_RESET, REPAINT_BEGIN, REPAINT_END, type ColdFrame } from '../terminal/coldFrame';
@@ -628,8 +629,29 @@ const hydrateRegistry = new Map<string, () => Promise<boolean>>();
 /** Longest a read waits for a painted cold frame to be swapped out. */
 const COLD_FRAME_READ_WAIT_MS = 3000;
 export async function hydrateTerminalForRead(ptyId: string): Promise<boolean> {
+  // #2398 — a session left suspended while its pane is hidden has no screen
+  // to hydrate, and a read must never start it.
+  if (useStore.getState().ptyDeferredById?.[ptyId]) return false;
   const fn = hydrateRegistry.get(ptyId);
   return fn ? await fn() : false;
+}
+
+// #2398 — a raw terminal write to a session main holds no pipe to (a hidden
+// pane's suspended session attached without promoting, say) attaches it the
+// way first showing the pane would: through that pane's own reattach, so the
+// replay lands once. Keyed by ptyId; registered per mounted terminal.
+const writeAttachRegistry = new Map<string, (promote: boolean) => Promise<boolean | void> | undefined>();
+/**
+ * Attach a mounted pane's session: 'unmounted' when no mounted pane holds it.
+ * `promote: false` (a stop key) never starts the session, whether the pane is
+ * shown or not: it attaches a live one, and answers 'not-running' for one the
+ * pane knows is not running (held suspended, or a WSL recovery waiting for
+ * its Retry) or that the daemon reports suspended.
+ */
+export async function attachForWrite(ptyId: string, promote = true): Promise<'unmounted' | 'attached' | 'not-running'> {
+  const fn = writeAttachRegistry.get(ptyId);
+  if (!fn) return 'unmounted';
+  return (await fn(promote)) === false ? 'not-running' : 'attached';
 }
 
 // Monotonic token source so each useTerminal instance gets a stable, unique key
@@ -651,9 +673,12 @@ let webglTokenSeq = 0;
 
 // RCA A1 — reconnect-with-retry policy lives in its own module so it can be
 // unit-tested without xterm/zustand/electron. Bound to the live deps here.
-function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecoveryError?: (message: string | null, info?: ReconnectSettleInfo) => void): Promise<{ cols: number; rows: number } | null> {
+function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecoveryError?: (message: string | null, info?: ReconnectSettleInfo) => void, promote = true, joinOnly = false): Promise<{ cols: number; rows: number } | null> {
   return reconnectPtyWithRetryImpl(ptyId, isCurrent, {
-    reconnect: (id) => window.electronAPI.pty.reconnect(id),
+    // #2398 — a hidden pane attaches without promoting a suspended session;
+    // a stop key (joinOnly) does not even start an exec or supervised unit.
+    reconnect: (id) => window.electronAPI.pty.reconnect(id, joinOnly ? { promote, joinOnly } : { promote }),
+    setDeferred: (id, deferred) => useStore.getState().setPtyDeferred?.(id, deferred),
     onRecoveryError,
     clearPtyId: (id, recovery) => useStore.getState().clearSurfacePtyIdByPty(id, recovery),
     setUnconfirmed: (id, unconfirmed) => useStore.getState().setPtysUnconfirmed([id], unconfirmed),
@@ -844,6 +869,13 @@ interface UseTerminalOptions {
    * Absent (the desktop) → the normal fit, unchanged.
    */
   fixedGeometry?: FixedGeometry | null;
+  /**
+   * #2398 — the surface is on screen in the sense that starts a shell
+   * (stores/selectors/surfaceShown.ts). False: a reattach leaves a suspended
+   * session suspended (deferred), and the first show promotes it. Defaults to
+   * true (a terminal outside a workspace surface).
+   */
+  surfaceShown?: boolean;
 }
 
 export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>, options: UseTerminalOptions) {
@@ -917,6 +949,13 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
   // True while the last settled reattach left this pane without a session
   // pipe (rate limited, WSL recovery pending). Also refuses the park.
   const reconnectPendingRef = useRef(false);
+  // #2398 — read by the reattach (keyed on ptyId alone): promote only while
+  // shown. deferredAttachRef: the last reattach left the session suspended.
+  const surfaceShown = options.surfaceShown ?? true;
+  const promoteRef = useRef(surfaceShown);
+  promoteRef.current = surfaceShown;
+  const deferredAttachRef = useRef(false);
+  const firstShowReattachRef = useRef<(() => Promise<void> | undefined) | null>(null);
   // #1002 — set by the main effect when this mount adopted a parked terminal.
   // Read by the daemon reattach effect (which runs later in the same commit)
   // to skip its active-at-mount reconnect: the session pipe never detached, so
@@ -1168,7 +1207,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // (dirty-raw-fallback via the flag) so doctor never double-counts.
       rpcSettled = true;
       st.viaRawFallback = true;
-      window.electronAPI.pty.reconnect(id).then((res) => {
+      // #2398 — a repaint never starts a session left suspended, an exec or
+      // supervised unit included (join-only).
+      window.electronAPI.pty.reconnect(id, { promote: false, joinOnly: true }).then((res) => {
         if (!res?.success) abortResync(`reconnect-failed${res?.code ? `:${res.code}` : ''}`);
       }).catch((err: unknown) => {
         abortResync(`reconnect-error:${err instanceof Error ? err.message : String(err)}`);
@@ -3690,27 +3731,101 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     let inFlight = false;
     reconnectInFlightRef.current = false;
     reconnectPendingRef.current = false;
+    deferredAttachRef.current = false;
     // A rate-limited (or, #2398, an exhausted) give-up keeps the session but no
     // daemon:connected is coming (the daemon never disconnected), so try again
     // on a slow timer until it attaches or this effect is torn down.
     let slowRetry: ReturnType<typeof setTimeout> | null = null;
-    const reattach = (reason: string) => {
-      if (inFlight) return;
+    // #2398 — the attempt in flight, and how a settle records a session left
+    // suspended while hidden (deferred): the first show promotes it, as does
+    // a raw write (through the registry); never the slow retry below, which
+    // is a back-off.
+    let current: Promise<void> | undefined;
+    // §6-4 option B: a deferred session that would resume an exact Claude
+    // Code or Codex conversation is promoted at boot, hidden or not, when
+    // resume-on-start is on (resumesOnStart, as a dead pane's create).
+    let resumeAtBoot = false;
+    // A WSL recovery that failed and waits for the user's Retry (the banner):
+    // nothing runs there, and only that Retry starts it.
+    let awaitingRetry = false;
+    // A stop key's attempt answers only the key: it never applies the pane's
+    // own rules. The pane's own triggers (a retry timer, a daemon reconnect,
+    // a restart) that arrive while it is in flight are folded into it, so
+    // its settle owes them those rules (resume on start included).
+    let stopKeyInFlight = false;
+    let paneOwed = false;
+    // The last of those triggers: a stop key's attempt is join-only, so one
+    // that left the session suspended did not do what the pane's own attempt
+    // does for an exec or supervised unit (start it), and it runs after.
+    let owedReason = '';
+    // What the stop key's own attempt found: suspended, or a recovery waiting
+    // for its Retry. Read before anything its settle starts can attach.
+    let stopKeyFoundNotRunning = false;
+    // Whether the last attempt to settle started the session (it promoted a
+    // suspended one): nothing ran there before it, so a stop key that joined
+    // it has nothing to stop.
+    let lastAttemptStarted = false;
+    // Torn down (unmount, or a new ptyId): an attempt or a queued retry of
+    // this run must no longer touch the pane's shared refs, which belong to
+    // the next run now.
+    let disposed = false;
+    const noteDeferred = (deferred: boolean, resume?: ResumeHint, armResume = true) => {
+      deferredAttachRef.current = deferred;
+      // No session pipe either: refuses the park, like a pending reattach.
+      if (deferred) reconnectPendingRef.current = true;
+      resumeAtBoot = armResume && deferred && resumesOnStart(resume, useStore.getState().claudeResumeOnStart === true);
+    };
+    const reattach = (reason: string): Promise<void> | undefined => {
+      // #2398 — a raw write must not settle on an attempt that leaves the
+      // session suspended: wait it out, then promote if it did. A stop key
+      // only waits it out: it never promotes.
+      if (disposed) return undefined;
+      if (inFlight) {
+        if (reason === 'stop-key') return current;
+        // The user's Retry (or Start fresh, which promoted first) is never
+        // dropped: an attempt that began before it can only answer the state
+        // it began in. It runs after that attempt only while still owed: the
+        // pane still has no session pipe (a recovery failure, a give-up, a
+        // suspended session). One that attached is not reconnected again,
+        // which would replay its scrollback twice and tear down the new pipe.
+        if (reason === 'manual-retry') return current?.then(() => (reconnectPendingRef.current ? reattach(reason) : undefined));
+        if (reason === 'raw-write') return current?.then(() => (deferredAttachRef.current ? reattach(reason) : undefined));
+        if (stopKeyInFlight) { paneOwed = true; owedReason = reason; }
+        return undefined;
+      }
+      current = attach(reason);
+      return current;
+    };
+    const attach = (reason: string) => {
+      // #2398 — a stop key (ctrl+c, escape) is never what starts a session:
+      // it attaches without promoting, shown pane or not, arms no resume on
+      // start, and leaves the pane's own retry schedule as it was.
+      const stopKey = reason === 'stop-key';
+      stopKeyInFlight = stopKey;
+      if (stopKey) stopKeyFoundNotRunning = false;
+      lastAttemptStarted = false;
       inFlight = true;
       reconnectInFlightRef.current = true;
-      if (slowRetry !== null) { clearTimeout(slowRetry); slowRetry = null; }
-      console.log(`[useTerminal] daemon reattach ptyId=${id} (${reason})`);
+      if (!stopKey && slowRetry !== null) { clearTimeout(slowRetry); slowRetry = null; }
+      // #2398 — promote only a pane on screen, for a raw write to it, or for
+      // its agent's resume on start; never for a stop key.
+      const promote = !stopKey && (promoteRef.current || reason === 'raw-write' || reason === 'resume-on-start');
+      console.log(`[useTerminal] daemon reattach ptyId=${id} (${reason}${promote ? '' : ', hidden'})`);
       revealTiming(id, 'reattach-start', `reason=${reason}`);
-      return reconnectPtyWithRetry(id, () => ptyIdRef.current === id && terminalRef.current !== null, (message, info) => {
+      return reconnectPtyWithRetry(id, () => !disposed && ptyIdRef.current === id && terminalRef.current !== null, (message, info) => {
         // A non-null message means the attempt settled WITHOUT a session pipe
         // (rate limited, WSL recovery pending); null means it attached —
         // unless it is waiting on the reconcile (#2398), which shows no banner.
         reconnectPendingRef.current = message !== null || info?.awaitingReconcile === true;
+        awaitingRetry = message !== null && !info?.rateLimited && !info?.unconfirmed;
+        noteDeferred(info?.deferred === true, info?.resume, !stopKey || paneOwed);
+        lastAttemptStarted = info?.promoted === true;
+        if (stopKey) stopKeyFoundNotRunning = info?.deferred === true || awaitingRetry || lastAttemptStarted;
         if ((info?.rateLimited || info?.unconfirmed || info?.awaitingReconcile) && slowRetry === null) {
           slowRetry = setTimeout(() => { slowRetry = null; void reattach('rate-limit-retry'); }, 8000 + Math.random() * 4000);
         }
         onRecoveryErrorRef.current?.(message, info);
-      })
+      }, promote, stopKey)
         .then((stored) => {
           revealTiming(id, 'reattach-resolved');
           // #882 — the daemon starts every managed session at `viewerVisible:
@@ -3748,9 +3863,48 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
           }
           sendResize(id, stored.cols, stored.rows);
         })
-        .finally(() => { inFlight = false; reconnectInFlightRef.current = false; });
+        // #2398 — shown while a hidden attempt was in flight (its first show
+        // found nothing to promote yet), or left suspended with a conversation
+        // to resume on start: promote now. After a stop key's attempt too: a
+        // pane shown now never stays suspended (its first-show rule, not the
+        // key's), while a hidden one is promoted only for a resume on start
+        // its own folded-in trigger armed.
+        .finally(() => {
+          const owed = stopKey && paneOwed && deferredAttachRef.current ? owedReason : '';
+          stopKeyInFlight = false;
+          paneOwed = false;
+          if (disposed) { inFlight = false; return; }
+          inFlight = false; reconnectInFlightRef.current = false;
+          // Unless the settle promotes it anyway (shown, or resume on start).
+          if (owed && ptyIdRef.current === id && !promoteRef.current && !resumeAtBoot) { void reattach(owed); return; }
+          promoteIfDue();
+        });
     };
+    const promoteIfDue = () => {
+      if (!deferredAttachRef.current || ptyIdRef.current !== id) return;
+      if (promoteRef.current) void reattach('first-show');
+      else if (resumeAtBoot) {
+        resumeAtBoot = false;
+        void reattach('resume-on-start');
+      }
+    };
+    // A stop key: false when nothing runs in the session (see attachForWrite).
+    // Answered from the key's own attempt: a pane shown meanwhile may promote
+    // the session at its settle, and the key must not land in that new shell.
+    const stopKeyAttach = async (): Promise<boolean> => {
+      if (deferredAttachRef.current || awaitingRetry) return false;
+      const joined = inFlight;
+      await reattach('stop-key');
+      // A joined attempt is the pane's own: it may have started the session
+      // (a shown pane promoting a suspended one), and the key must not land
+      // in the shell or agent that attempt just started.
+      if (joined) return !deferredAttachRef.current && !awaitingRetry && !lastAttemptStarted;
+      return !stopKeyFoundNotRunning;
+    };
+    const rawWriteReattach = (promote: boolean) => (promote ? reattach('raw-write') : stopKeyAttach());
+    writeAttachRegistry.set(id, rawWriteReattach);
     retryReconnectRef.current = () => reattach('manual-retry');
+    firstShowReattachRef.current = () => reattach('first-show');
     // Daemon already connected when we mounted: its daemon:connected fired before
     // the renderer could listen, so we reattach now off the module flag (set by
     // AppLayout's serialized startup before the pane gate opens).
@@ -3788,12 +3942,22 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       reattach('pty:restarted');
     });
     return () => {
+      disposed = true;
       retryReconnectRef.current = null;
+      firstShowReattachRef.current = null;
+      if (writeAttachRegistry.get(id) === rawWriteReattach) writeAttachRegistry.delete(id);
       if (slowRetry !== null) clearTimeout(slowRetry);
       if (off) off();
       offRestarted();
     };
   }, [ptyId]);
+
+  // #2398 — the first show of a pane whose suspended session was left
+  // suspended while hidden promotes it: the reattach effect above is keyed on
+  // ptyId, so nothing else re-runs it when the pane comes into view.
+  useEffect(() => {
+    if (surfaceShown && deferredAttachRef.current) void firstShowReattachRef.current?.();
+  }, [surfaceShown]);
 
   // Apply font/theme changes at runtime without recreating the terminal instance.
   // This preserves the scrollback buffer when the user tweaks visual settings.

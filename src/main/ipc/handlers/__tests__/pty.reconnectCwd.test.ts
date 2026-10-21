@@ -56,7 +56,7 @@ describe('PTY_RECONNECT carries dead-session recovery metadata (#650)', () => {
 describe('PTY_RECONNECT reports the session geometry (#1847)', () => {
   it('returns the stored cols/rows so a hidden pane can adopt them', () => {
     expect(RECONNECT).toMatch(/cols\?: number;\s+rows\?: number;/);
-    expect(RECONNECT).toMatch(/return \{ success: true, id: session\.id, shell: session\.cmd, cols: session\.cols, rows: session\.rows \}/);
+    expect(RECONNECT).toMatch(/return \{ success: true, id: session\.id, shell: session\.cmd, cols: session\.cols, rows: session\.rows[,} ]/);
   });
 });
 
@@ -78,7 +78,7 @@ describe('PTY_RECONNECT reports the session geometry (#1847)', () => {
  */
 describe('PTY_RECONNECT registers session:data before attachSession (source-level lock)', () => {
   const listenerIdx = RECONNECT.indexOf('setSessionDataListener(id, onSessionData)');
-  const attachIdx = RECONNECT.indexOf("daemon.attachSession', { id }");
+  const attachIdx = RECONNECT.indexOf("daemon.attachSession', { id");
 
   it('registers the session:data handler in the reconnect path', () => {
     expect(listenerIdx).toBeGreaterThan(-1);
@@ -116,8 +116,8 @@ describe('PTY_RECONNECT promotes a cap-skipped session instead of declaring it d
 
   it('a suspended entry goes down the promote branch, before any attach', () => {
     const suspendedAt = RECONNECT.indexOf("if (session.state === 'suspended')");
-    const promoteAt = RECONNECT.indexOf("daemonClient.rpc('daemon.promoteSession', { id }", suspendedAt);
-    const attachAt = RECONNECT.indexOf("daemon.attachSession', { id }");
+    const promoteAt = RECONNECT.indexOf("daemonClient.rpc('daemon.promoteSession', { id", suspendedAt);
+    const attachAt = RECONNECT.indexOf("daemon.attachSession', { id");
     expect(suspendedAt).toBeGreaterThan(-1);
     expect(promoteAt).toBeGreaterThan(suspendedAt);
     expect(attachAt).toBeGreaterThan(promoteAt);
@@ -127,7 +127,9 @@ describe('PTY_RECONNECT promotes a cap-skipped session instead of declaring it d
     const daemon = readFileSync(path.resolve(process.cwd(), 'src/daemon/index.ts'), 'utf8');
     const at = daemon.indexOf('if (includeSuspended) {');
     const mapper = daemon.slice(at, daemon.indexOf('return reply(', at));
-    expect(mapper).toMatch(/\.map\(\(s\) => \(\{[\s\S]*?cmd: s\.cmd,[\s\S]*?state: 'suspended' as const,/);
+    expect(mapper).toMatch(/\.map\(\(s\) => suspendedListEntry\(s,/);
+    const entry = readFileSync(path.resolve(process.cwd(), 'src/daemon/suspendedListEntry.ts'), 'utf8');
+    expect(entry).toMatch(/cmd: s\.cmd,[\s\S]*?state: 'suspended' as const,/);
     expect(RECONNECT).toMatch(/recordPtyShell\(session\.id, session\.cmd\)/);
   });
 });

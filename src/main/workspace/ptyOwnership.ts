@@ -150,15 +150,53 @@ export async function assertCallerMayAccessPty(
     await assertWorkspaceOwnsPty(getWindow, ptyId, expectedWorkspaceId, rpcName);
     return { lane: 'own' };
   } catch (ownErr) {
-    const viaTask = lane ? await resolveTaskOwnerAccess(getWindow, ptyId, lane).catch(() => null) : null;
+    const viaTask = lane
+      ? await resolveTaskOwnerAccess(getWindow, (expected) => resolvePtyOwnerWorkspace(getWindow, ptyId, { expected }), lane).catch(() => null)
+      : null;
     if (viaTask) return viaTask;
     throw ownErr;
   }
 }
 
+/**
+ * #2398 — the workspace holding `surfaceId` (stashed panes included). A
+ * terminal that has not started has a surface but no pty, so a raw write to it
+ * is addressed by surface. Always the renderer round-trip: the mirror carries
+ * ptys, not surfaces.
+ */
+export async function resolveSurfaceOwnerWorkspace(getWindow: GetWindow, surfaceId: string): Promise<string | null> {
+  return parseOwner(await sendToRenderer(getWindow, 'input.findOwnerWorkspace', { surfaceId }));
+}
+
+/**
+ * `assertCallerMayAccessPty` for a surface (#2398): the same two lanes — the
+ * caller's own workspace, or an open task it owns — with the surface's owner
+ * in place of the pty's. Throws when neither allows, including on any lookup
+ * failure on the owner lane.
+ */
+export async function assertCallerMayAccessSurface(
+  getWindow: GetWindow,
+  surfaceId: string,
+  expectedWorkspaceId: string,
+  rpcName: string,
+  lane: TaskOwnerLane | undefined,
+): Promise<PtyAccess> {
+  const owner = await resolveSurfaceOwnerWorkspace(getWindow, surfaceId);
+  if (owner === expectedWorkspaceId) return { lane: 'own' };
+  const viaTask = lane
+    ? await resolveTaskOwnerAccess(getWindow, async () => owner, lane).catch(() => null)
+    : null;
+  if (viaTask) return viaTask;
+  throw new Error(
+    `${rpcName}: surface "${surfaceId}" is not owned by workspace "${expectedWorkspaceId}" ` +
+      `(actual owner: ${owner ?? 'none'}). Cross-workspace terminal access is not allowed.`,
+  );
+}
+
 async function resolveTaskOwnerAccess(
   getWindow: GetWindow,
-  ptyId: string,
+  /** The target's owner; `expected` lets a mirror answer only an allow. */
+  ownerOf: (expected: readonly string[]) => Promise<string | null>,
   lane: TaskOwnerLane,
 ): Promise<PtyAccess | null> {
   let callerWorkspaceId = lane.commanderWorkspace ?? '';
@@ -168,7 +206,7 @@ async function resolveTaskOwnerAccess(
   if (!callerWorkspaceId) return null;
   const taskWorkspaces = lane.openTaskWorkspacesOf(callerWorkspaceId);
   if (taskWorkspaces.length === 0) return null;
-  const owner = await resolvePtyOwnerWorkspace(getWindow, ptyId, { expected: taskWorkspaces });
+  const owner = await ownerOf(taskWorkspaces);
   if (owner === null || owner === callerWorkspaceId || !taskWorkspaces.includes(owner)) return null;
   return { lane: 'task-owner', taskWorkspaceId: owner, callerWorkspaceId };
 }

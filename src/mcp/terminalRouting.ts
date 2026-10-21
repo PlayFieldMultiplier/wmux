@@ -206,12 +206,19 @@ async function resolveExternal(
 export async function resolveCommanderRoute(args: {
   token: string | undefined;
   explicitPtyId: string | undefined;
+  /**
+   * #2398 — a raw write to a named pane whose terminal has not started: no
+   * pty yet, so it is routed by its surface, under the same ownership rules.
+   */
+  explicitSurfaceId?: string;
   sendRpc: (method: string, params: Record<string, unknown>) => Promise<unknown>;
 }): Promise<TerminalRoute | null> {
-  const { token, explicitPtyId, sendRpc } = args;
-  if (!token || !explicitPtyId) return null;
+  const { token, explicitPtyId, explicitSurfaceId, sendRpc } = args;
+  if (!token || (!explicitPtyId && !explicitSurfaceId)) return null;
   try {
-    const result = await sendRpc('deck.resolvePaneRoute', { token, ptyId: explicitPtyId });
+    const result = await sendRpc('deck.resolvePaneRoute', explicitPtyId
+      ? { token, ptyId: explicitPtyId }
+      : { token, surfaceId: explicitSurfaceId });
     const workspaceId =
       result && typeof result === 'object' && 'workspaceId' in result
         ? (result as Record<string, unknown>)['workspaceId']

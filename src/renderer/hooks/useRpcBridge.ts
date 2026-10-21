@@ -46,6 +46,8 @@ import {
   handleBrowserTabsRpc,
 } from '../utils/browserTabs';
 import { terminalRegistry, hydrateTerminalForRead } from './useTerminal';
+import { ensurePtyStarted, ensureSurfacePty } from './surfacePtyCreate';
+import { isPaneDeferred, isSurfaceDeferred } from '../stores/selectors/surfaceShown';
 import { readPtyBufferLines, readPtyBufferTail, rowsBelowCursor, DEFAULT_READ_TAIL_LINES } from '../utils/terminalTail';
 import { terminalReadCoverage } from '../../shared/terminalReadCoverage';
 import {
@@ -62,7 +64,7 @@ import { publishA2aTask } from '../events/publisher';
 import { isReceiverPaneGone } from '../../shared/a2aOrphanedTask';
 import { isRemoteTaskId, type A2aRemoteTaskMarkerV1 } from '../../shared/a2aRemote';
 import { A2A_REMOTE_NOTIFY_METHOD, isRemoteWorkspaceId, localSideOf, remoteWorkspaceId, sanitizeRemoteText, type A2aRemoteDeliveryResult, type A2aRemoteHeldReason, type A2aRemoteTaskState } from '../../shared/a2aRemoteDelivery';
-import { resolvePaneAddress, activePaneTerminalPty, resolveUnaddressedDelivery, paneHasDetectedAgent, describeAmbiguousDelivery, wsMetadataMayStandIn, NO_AGENT_PANE_HINT, decideSameWsSend, decideReplyDelivery, REPLY_SUPPRESS_HINTS, submitReceiptFields, countRoundTrips, maxSideMessages, REPLY_ROUND_CAP, isTerminalPtyInLeaves, resolveSelfPaneIdentity, resolveSenderPaneAddress, resolvePaneRole, findLeafPanes, detectedAgentTuiSlug, type PaneAddress } from './a2aAddressing';
+import { resolvePaneAddress, activePaneTerminalPty, activePaneTerminalUnstarted, resolveUnaddressedDelivery, paneHasDetectedAgent, describeAmbiguousDelivery, wsMetadataMayStandIn, NO_AGENT_PANE_HINT, NO_TARGET_PTY_HINT, decideSameWsSend, decideReplyDelivery, REPLY_SUPPRESS_HINTS, submitReceiptFields, countRoundTrips, maxSideMessages, REPLY_ROUND_CAP, isTerminalPtyInLeaves, resolveSelfPaneIdentity, resolveSenderPaneAddress, resolvePaneRole, findLeafPanes, detectedAgentTuiSlug, type PaneAddress } from './a2aAddressing';
 import { resolveWorkspaceTarget } from './workspaceTargeting';
 import { destroyRemoteSessions, destroySurfaceRemoteSession, destroyWorkspaceRemoteSessions } from '../utils/remoteSessionTeardown';
 import { remoteAgentKey } from '../../shared/remoteHosts';
@@ -767,15 +769,23 @@ function deliveryLiveMeta(
 // pane_id / pinned task anchor nor `silent:false` overrides this: the `␤` fold
 // keeps a body on one line, but that line still runs once a shell gets Enter.
 function a2aTargetHasAgent(
-  targetWs: Pick<Workspace, 'rootPane' | 'metadata'>,
+  targetWs: Pick<Workspace, 'rootPane' | 'metadata' | 'activePaneId'>,
   pty: string | undefined,
 ): boolean {
   const s = useStore.getState();
+  // #2398 — a terminal that has not started runs no agent: blank, or bound to
+  // a suspended session its hidden pane left suspended (no writable pipe).
+  // Refused before any per-pane or workspace-metadata evidence, both carried
+  // over from before the restart, whether it was addressed or is the active
+  // pane an unaddressed delivery lands on.
+  const isDeferredPty = (id: string) => !!s.ptyDeferredById?.[id];
+  if (pty && isDeferredPty(pty)) return false;
+  const visible = findLeafPanes(targetWs.rootPane);
+  if (!pty && activePaneTerminalUnstarted(visible, targetWs.activePaneId, isDeferredPty)) return false;
   if (pty && paneHasDetectedAgent(pty, s.surfaceAgent, {
     agentAlive: s.agentAliveByPtyId,
     commandRunning: s.commandRunningByPtyId,
   })) return true;
-  const visible = findLeafPanes(targetWs.rootPane);
   return isLiveTuiAgent(targetWs.metadata)
     && wsMetadataMayStandIn(visible)
     && (!pty || isTerminalPtyInLeaves(visible, pty));
@@ -2038,6 +2048,10 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         // CLI table and external readers that ignore unknown fields are
         // unaffected.
         surfacePtyIds: l.surfaces.map((s) => s.ptyId).filter((id): id is string => Boolean(id)),
+        // #2398 — the pane's terminal has not started (its workspace was never
+        // shown): not running and not dead. Its shell starts when the pane is
+        // first shown, or on a raw terminal_send / terminal_send_key to it.
+        ...(isPaneDeferred(store, l) ? { deferred: true } : {}),
         // Part A: per-surface agent labels for this leaf. A split pane can hold
         // more than one terminal surface; each detected agent is listed so the
         // pane is individually addressable (gaps 1/8).
@@ -2590,6 +2604,13 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
 
   if (method === 'input.findOwnerWorkspace') {
     const ptyId = typeof params.ptyId === 'string' ? params.ptyId : '';
+    // #2398 — by surface, for a terminal that has not started (no pty yet):
+    // the same workspace-wide answer main's surface lanes check.
+    const surfaceId = typeof params.surfaceId === 'string' ? params.surfaceId : '';
+    if (!ptyId && surfaceId) {
+      const owner = store.workspaces.find((ws) => getWorkspaceLeafPanes(ws).some((leaf) => leaf.surfaces.some((s) => s.id === surfaceId)));
+      return { workspaceId: owner?.id ?? null };
+    }
     if (!ptyId) return { workspaceId: null };
     // #977 — workspace-wide. This is the gate main uses for input.send, so a
     // visible-tree walk would reject writes to a stashed agent as "PTY not
@@ -2615,6 +2636,20 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     return { workspaceId: null };
   }
 
+  if (method === 'surface.ensurePty') {
+    // #2398 (owner decision §6-6) — main asks this before a raw terminal write
+    // (input.send / input.sendKey) to a pane whose shell has not started:
+    // start it, then answer its ptyId. Reads never come here.
+    // By ptyId (main, after its access check on an explicit target): a pty
+    // left suspended while its pane is hidden is promoted first, except for
+    // a stop key (`promote: false`), which only attaches a live session.
+    if (typeof params.ptyId === 'string' && params.ptyId.length > 0) return ensurePtyStarted(params.ptyId, params.promote !== false);
+    const surfaceId = typeof params.surfaceId === 'string' ? params.surfaceId : '';
+    if (!surfaceId) return { error: 'surface.ensurePty: surfaceId or ptyId is required' };
+    const workspaceId = typeof params.workspaceId === 'string' && params.workspaceId.length > 0 ? params.workspaceId : undefined;
+    return ensureSurfacePty(surfaceId, workspaceId);
+  }
+
   if (method === 'input.readScreen') {
     // Workspace scoping: external MCP callers MUST pass workspaceId so reads
     // can't be hijacked into whichever workspace the user happens to focus.
@@ -2634,6 +2669,13 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
             (s) => s.id === activePane.activeSurfaceId,
           );
           ptyId = surface?.ptyId ?? null;
+          // #2398 — a terminal whose shell has not started (its pane was never
+          // shown, or its suspended session was left suspended while hidden)
+          // is not running, and it is not dead either. A read never starts
+          // it; a raw write does (main's input.send, via surface.ensurePty).
+          if (surface && isSurfaceDeferred(store, surface)) {
+            return { ptyId: surface.ptyId || '', text: '', deferred: true, deferredSurfaceId: surface.id };
+          }
         }
       }
     } else if (typeof params.workspaceId === 'string' && params.workspaceId.length > 0) {
@@ -2667,10 +2709,14 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     const below = (n: number) => (n > 0 ? { rowsBelowCursor: n } : {});
 
     const terminal = terminalRegistry.get(ptyId);
+    // #2398 — a suspended session its hidden pane attached without promoting
+    // has no screen to read yet (not running, and not dead), and the read
+    // must not hydrate it: hydrating reattaches.
+    const deferredRead = !!store.ptyDeferredById?.[ptyId];
     // Internal attention probe: a settled current grid only. Never substitute
     // scrollback, a parked frame, or a best-effort hydration after a timeout.
     if (raw.approvalScreen === true) {
-      if (!terminal || typeof params.ptyId !== 'string') return null;
+      if (!terminal || typeof params.ptyId !== 'string' || deferredRead) return null;
       const { cols, rows } = terminal;
       const settled = await hydrateTerminalForRead(ptyId).catch(() => false);
       if (!settled || terminalRegistry.get(ptyId) !== terminal || terminal.cols !== cols || terminal.rows !== rows) return null;
@@ -2678,6 +2724,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       const screenRows = Array.from({ length: rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '');
       return { ptyId, approvalScreen: true, rows: screenRows, cols, rowCount: rows };
     }
+    if (deferredRead) return { ptyId, text: '', deferred: true };
     if (!terminal) {
       // Cold-park fallback (TASK-9): the pane's terminal is unmounted (parked).
       // Read its grid from the daemon ring instead of returning empty — an agent
@@ -3299,9 +3346,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
                   stored: true,
                   notified: false,
                   reason: 'no_target_pty',
-                  hint:
-                    'The target workspace has no terminal pane to write to (its active pane may ' +
-                    'be a browser surface). The reply is stored; the receiver must poll a2a_task_query.',
+                  hint: `${NO_TARGET_PTY_HINT} The reply is stored; the receiver must poll a2a_task_query.`,
                 };
             }
           }
@@ -3590,9 +3635,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
             stored: true,
             notified: false,
             reason: 'no_target_pty',
-            hint:
-              'The target workspace has no terminal pane to write to (its active pane may ' +
-              'be a browser surface). The task is stored; the receiver must poll a2a_task_query.',
+            hint: `${NO_TARGET_PTY_HINT} The task is stored; the receiver must poll a2a_task_query.`,
           };
     } else if (silent) {
       delivery = { stored: true, notified: false, reason: 'silent' };

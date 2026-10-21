@@ -366,8 +366,8 @@ const electronAPI = {
       // WITH a WMUX_SURFACE_ID (Terminal self-create path); reconcile uses it to
       // rebind a stale ptyId to the surviving session after a reboot.
       // `workspaceId`/`agentName` (#1101): origin identity for the orphaned
-      // session list.
-      ipcRenderer.invoke(IPC.PTY_LIST, opts) as Promise<{ id: string; shell: string; surfaceId?: string; createdAt?: string; state?: string; cwd?: string; spawnCwd?: string; workspaceId?: string; agentName?: string; supervision?: { status: 'armed' | 'stopped'; restartCount: number }; resumeAgent?: AgentSlug; resumeAgentOnScreen?: boolean; resumeWasRunning?: boolean; resumeBinding?: ResumeBinding; commandRunning?: boolean; agentProcessAlive?: boolean; liveAgent?: AgentSlug }[]>,
+      // session list. `exec` (#2398): an exec unit.
+      ipcRenderer.invoke(IPC.PTY_LIST, opts) as Promise<{ id: string; shell: string; surfaceId?: string; createdAt?: string; state?: string; cwd?: string; spawnCwd?: string; workspaceId?: string; agentName?: string; supervision?: { status: 'armed' | 'stopped'; restartCount: number }; exec?: true; resumeAgent?: AgentSlug; resumeAgentOnScreen?: boolean; resumeWasRunning?: boolean; resumeBinding?: ResumeBinding; commandRunning?: boolean; agentProcessAlive?: boolean; liveAgent?: AgentSlug }[]>,
     // TASK-6 — per-pane agent RAM for the Fleet View cockpit. Given the ptyIds
     // currently shown as cards, returns { [ptyId]: { rss (bytes), image? } } by
     // walking each pane shell's descendant process tree from ONE CIM snapshot.
@@ -377,7 +377,7 @@ const electronAPI = {
     // process name (e.g. "claude.exe").
     resources: (ptyIds: string[]) =>
       ipcRenderer.invoke(IPC.PANE_RESOURCES, ptyIds) as Promise<Record<string, { rss: number; image?: string }>>,
-    reconnect: (id: string) =>
+    reconnect: (id: string, opts: { promote: boolean; joinOnly?: boolean }) =>
       // RCA A1 — `transient` distinguishes a recoverable failure (pipe not
       // writable yet, RPC threw during a handler-swap window) from a permanent
       // one (session genuinely dead). The renderer retries transient failures
@@ -385,7 +385,15 @@ const electronAPI = {
       // `cwdMissing` (#1305) rides the recoveryPending shape: the WSL directory
       // itself is gone, so Retry cannot succeed until it is restored and the
       // pane is offered a fresh start in the home directory instead.
-      ipcRenderer.invoke(IPC.PTY_RECONNECT, id) as Promise<{ success: boolean; id?: string; shell?: string; cols?: number; rows?: number; error?: string; code?: string; transient?: boolean; recoveryPending?: boolean; cwdMissing?: boolean; recovery?: DeadPaneRecovery }>,
+      // #2398 — `promote` is required: false (a hidden pane, a repaint) still
+      // attaches a live session but holds a suspended one, answered
+      // `deferred`; only true starts it. `joinOnly` (a stop key, a repaint)
+      // also never starts the exec or supervised unit a promote:false
+      // reconnect otherwise starts: it joins only a start in flight.
+      ipcRenderer.invoke(IPC.PTY_RECONNECT, id, opts) as Promise<{ success: boolean; id?: string; shell?: string; cols?: number; rows?: number; error?: string; code?: string; transient?: boolean; recoveryPending?: boolean; cwdMissing?: boolean; deferred?: boolean; promoted?: boolean; resumeAgent?: string; resumeBinding?: ResumeBinding; recovery?: DeadPaneRecovery }>,
+    // #2398 — the suspended sessions panes hold without promoting (their
+    // panes are hidden or not mounted): the daemon keeps them from aging out.
+    hold: (ids: string[]) => ipcRenderer.invoke(IPC.PTY_HOLD, ids) as Promise<void>,
     // Fix B — on-demand promote of a cap-skipped suspended session.
     // #1305 — `fresh` promotes it in the home directory WITHOUT resuming the
     // recorded conversation: the way out when its own directory is gone.

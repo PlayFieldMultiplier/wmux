@@ -1621,6 +1621,7 @@ export const zh = {
   'terminal.reattaching': '正在重新连接…',
   'terminal.createFailed': '此终端无法启动。',
   'terminal.retryCreate': '重试',
+  'terminal.notStarted': '打开时启动',
   'retention.migratedNotice': '此更新会在隐藏面板时暂停渲染（一切仍在运行；面板在显示时追赶画面）。可在「设置 → 终端」中关闭。',
   'retention.migratedNoticeTurnOff': '关闭',
   'terminal.supervisedRestart': '[wmux] 监管重启 #{count} — 停止：面板菜单',

@@ -252,3 +252,106 @@ describe('reconnectPtyWithRetry — an unconfirmed binding reported gone (#2398)
     expect(clearPtyId).toHaveBeenCalledWith('pty-kept', undefined);
   });
 });
+
+// #2398 — a hidden pane asks without promote; a suspended session answers
+// `deferred`. That is an answer, not a failure: the id is kept and nothing
+// enters the back-off (which would spend the whole schedule per hidden pane
+// and end every one of them exhausted).
+describe('reconnectPtyWithRetry — a deferred answer (#2398)', () => {
+  it('keeps the id, marks it deferred, and neither retries nor sleeps', async () => {
+    const clearPtyId = vi.fn();
+    const sleep = vi.fn(noSleep);
+    const setDeferred = vi.fn();
+    const setUnconfirmed = vi.fn();
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: false, deferred: true }));
+    const got = await reconnectPtyWithRetry('pty-suspended', alwaysCurrent, {
+      reconnect, clearPtyId, sleep, log: noLog, setDeferred, setUnconfirmed, onRecoveryError,
+    });
+    expect(got).toBeNull();
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(clearPtyId).not.toHaveBeenCalled();
+    expect(setDeferred).toHaveBeenCalledWith('pty-suspended', true);
+    expect(setUnconfirmed).toHaveBeenCalledWith('pty-suspended', false);
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { deferred: true });
+  });
+
+  it('a later attach clears the deferred mark', async () => {
+    const setDeferred = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: true }));
+    await reconnectPtyWithRetry('pty-suspended', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), sleep: noSleep, log: noLog, setDeferred });
+    expect(setDeferred).toHaveBeenCalledWith('pty-suspended', false);
+  });
+});
+
+// #2398 §6-4 option B: the deferred answer carries what the session would
+// resume, so the pane can resume it on start.
+describe('reconnectPtyWithRetry — a deferred answer with a resume binding', () => {
+  it('hands the binding to the settle callback', async () => {
+    const onRecoveryError = vi.fn();
+    const resumeBinding = { agent: 'claude', sessionId: '0c8f6a52-6c1b-4b6e-9a51-2f0d3c4b5a69', cwd: '/home/me/p', ts: 1 };
+    const reconnect = vi.fn(async () => ({ success: false, deferred: true, resumeBinding }));
+    await reconnectPtyWithRetry('pty-suspended', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), sleep: noSleep, log: noLog, onRecoveryError });
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { deferred: true, resume: { resumeAgent: undefined, resumeBinding } });
+  });
+});
+
+// #2398 round 5 — a stop key that joined the pane's own attempt must know
+// whether that attempt started the session (promoted a suspended one).
+describe('reconnectPtyWithRetry — an attach that started the session (#2398)', () => {
+  it('settles attached and says it promoted', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: true, promoted: true }));
+    await reconnectPtyWithRetry('pty-promoted', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { promoted: true });
+  });
+
+  // Round-6 P3: the promote succeeded, its attach failed transiently, and the
+  // retry attached the now running session without saying it was started.
+  it('says it promoted when an earlier try promoted and a retry attached', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn()
+      .mockResolvedValueOnce({ success: false, transient: true, promoted: true, error: 'Session pipe not writable after reconnect' })
+      .mockResolvedValueOnce({ success: true });
+    await reconnectPtyWithRetry('pty-promoted-retry', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(reconnect).toHaveBeenCalledTimes(2);
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { promoted: true });
+  });
+
+  // Round-7 P3: a give-up after the start (retries exhausted) still says
+  // this attempt started the session.
+  it('a give-up after a promote still says it promoted', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn()
+      .mockResolvedValueOnce({ success: false, transient: true, promoted: true, error: 'Session pipe not writable after reconnect' })
+      .mockResolvedValue({ success: false, transient: true, error: 'Session pipe not writable after reconnect' });
+    await reconnectPtyWithRetry('pty-promoted-gave-up', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenLastCalledWith('wmux could not reattach this terminal yet.', { unconfirmed: true, promoted: true });
+  });
+
+  it('a rate-limited give-up after a promote still says it promoted', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn()
+      .mockResolvedValueOnce({ success: false, transient: true, promoted: true, error: 'rate limit exceeded' })
+      .mockResolvedValue({ success: false, transient: true, error: 'rate limit exceeded' });
+    await reconnectPtyWithRetry('pty-promoted-busy', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenLastCalledWith('wmux is busy and could not reattach this terminal yet.', { rateLimited: true, promoted: true });
+  });
+
+  // Round-8 P3: the promote succeeded, then main's refresh threw and it
+  // answered recoveryPending: that settle still says this attempt started it.
+  it('a recovery failure after a promote still says it promoted', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: false, recoveryPending: true, promoted: true, error: 'listSessions failed' }));
+    await reconnectPtyWithRetry('pty-promoted-pending', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenLastCalledWith('listSessions failed', { cwdMissing: false, promoted: true });
+  });
+
+  it('an attach of a running session settles as before', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: true }));
+    await reconnectPtyWithRetry('pty-live', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenCalledWith(null);
+  });
+});

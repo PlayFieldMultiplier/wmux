@@ -86,6 +86,11 @@ export interface DaemonSession {
    */
   recoveryPendingSince?: string;
   /**
+   * #2398 — when a pane last held this suspended session without promoting it
+   * (its pane hidden). The suspended TTL counts it as use (heldSessions.ts).
+   */
+  heldAt?: string;
+  /**
    * #1103 — validated WSL distro selection (`['-d', '<name>']`), persisted so
    * every replay path (recovery, supervised restart, suspended promote) re-
    * spawns the SAME distro instead of silently booting the system default.
