@@ -80,7 +80,7 @@ import {
 import { getBotMcpServerInstructions, getWmuxMcpServerInstructions, resolveMcpServerVersion } from './serverMetadata';
 import { unlistToolsFromListing } from './listFilter';
 import { UNLISTED_TOOLS_SET } from '../shared/unlistedTools';
-import { fromAgentPath } from './wslPaths';
+import { fromAgentPath, toAgentFileParts } from './wslPaths';
 import type { RegisterWmuxToolsOptions, WmuxToolProfile } from './toolCatalog';
 
 /**
@@ -392,7 +392,7 @@ const SEND_MESSAGE_SHAPE = {
   data: z.record(z.string(), z.unknown()).optional().describe('Optional structured data (JSON)'),
   data_mime_type: z.string().optional().describe('MIME type for data (default: application/json)'),
   images: z.array(z.string()).min(1).max(4).optional().describe(
-    'Up to 4 PNG, JPEG or WebP files (5 MB each, 10 MB in all) to attach, by absolute path: from your pane\'s project folder or ~/.wmux/uploads/ only (copy a screenshot there first). ' +
+    'Up to 4 PNG, JPEG or WebP files (5 MB each, 10 MB in all) to attach, by absolute path: from your pane\'s project folder or the wmux uploads folder only (~/.wmux/uploads/ on the PC running wmux; from WSL, under /mnt/<drive>/), so copy a screenshot there first. ' +
       'The receiver gets its own copy and reads it by the path shown in the message. Works for a pane on another PC too; one whose wmux is older gets the text with a note instead.',
   ),
 };
@@ -2255,7 +2255,7 @@ const sendMessageHandler = async ({ to, pane_id, surface_id, title, task_id, mes
     for (const given of images) {
       const hostPath = fromAgentPath(given);
       if (!hostPath) {
-        return { content: [{ type: 'text' as const, text: `send_message: images: ${JSON.stringify(given)} is not a file wmux can open (give an absolute path under /mnt/<drive>/ or ~/.wmux/uploads/)` }], isError: true };
+        return { content: [{ type: 'text' as const, text: `send_message: images: ${JSON.stringify(given)} is not a file wmux can open (give an absolute path under /mnt/<drive>/, such as /mnt/c/Users/<you>/.wmux/uploads/)` }], isError: true };
       }
       hostPaths.push(hostPath);
     }
@@ -2298,10 +2298,12 @@ server.tool(
     const wsId = await requireWorkspaceId();
     // view: 'page' has main (and each task source) page and summarize, so a
     // list never carries full histories over any hop.
+    // A received image's path is this PC's: a WSL agent is given it under
+    // the drive mount (rewritten before callRpc renders the reply).
     return callRpc('a2a.task.query', {
       workspaceId: wsId, status, role, updatedSince: updated_since,
       view: 'page', taskId: task_id, messageId: message_id, limit, cursor,
-    });
+    }, undefined, (result) => toAgentFileParts(result));
   },
 );
 

@@ -698,7 +698,8 @@ export function useRpcBridge(): void {
 export async function deliverPtyNotification(
   targetWs: { rootPane: Pane; activePaneId: string; name: string; stashedPanes?: Workspace['stashedPanes'] },
   senderName: string,
-  message: string,
+  // A function builds the body for the pane actually chosen, at write time.
+  message: string | ((ptyId: string) => string),
   explicitPtyId?: string,
   operator = false,
   newTask?: NewTaskDelivery,
@@ -711,7 +712,7 @@ export async function deliverPtyNotification(
   if (ptyId) {
     return deliverA2aText(
       ptyId,
-      formatA2aMessage(senderName, targetWs.name, message, undefined, a2aFormatOptionsFor(ptyId)),
+      formatA2aMessage(senderName, targetWs.name, typeof message === 'function' ? message(ptyId) : message, undefined, a2aFormatOptionsFor(ptyId)),
       operator,
       newTask,
     );
@@ -1084,7 +1085,7 @@ async function handleRemoteTaskSend(params: RpcParams): Promise<A2aRemoteDeliver
   };
   const result = await writeRemoteDelivery({ ...t.metadata.to }, target, () => (isLiveTuiAgent(liveMeta)
     ? deliverPtyNudge(target.ws, (p) => buildA2aNudge(taskId, senderName, 'new', a2aFormatOptionsFor(p).multiline ? t.metadata.title : undefined) + imagesNudgeSuffix(images), pty, false, gated)
-    : deliverPtyNotification(target.ws, senderName, bodyWithImages(body, images)(pty), pty, false, gated)));
+    : deliverPtyNotification(target.ws, senderName, bodyWithImages(body, images), pty, false, gated)));
   if (result.ok === true && result.delivered) useStore.getState().markRemoteTaskDelivered(taskId);
   return result;
 }
@@ -1128,7 +1129,7 @@ async function handleRemoteNotify(params: RpcParams): Promise<A2aRemoteDeliveryR
   const liveMeta = deliveryLiveMeta(useStore.getState().surfaceAgent, target.pty, target.ws.metadata);
   return writeRemoteDelivery({ ...anchor, ptyId: target.pty }, target, () => (isLiveTuiAgent(liveMeta)
     ? deliverPtyNudge(target.ws, buildA2aNudge(task.id, senderName, 'reply') + imagesNudgeSuffix(images), target.pty, false)
-    : deliverPtyNotification(target.ws, senderName, bodyWithImages(text, images)(target.pty), target.pty, false)));
+    : deliverPtyNotification(target.ws, senderName, bodyWithImages(text, images), target.pty, false)));
 }
 
 // ---------------------------------------------------------------------------
@@ -3381,7 +3382,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
               if (!silentExplicit && isLiveTuiAgent(liveMeta)) {
                 write = await deliverPtyNudge(targetWs, buildA2aNudge(taskId, senderName, 'reply') + imagesNudgeSuffix(images), replyPty, operator);
               } else {
-                write = await deliverPtyNotification(targetWs, senderName, withImageFooter(message, images, panePathFor(replyPty)), replyPty, operator);
+                write = await deliverPtyNotification(targetWs, senderName, bodyWithImages(message, images), replyPty, operator);
                 mode = 'notification';
               }
             }
@@ -3671,7 +3672,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         // for a fresh conversation before the task lands (both modes).
         write = await deliverPtyNudge(target, (pty) => buildA2aNudge(newTaskId, fromName, 'new', a2aFormatOptionsFor(pty).multiline ? title : undefined) + imagesNudgeSuffix(images), explicitPty, operator, { taskId: newTaskId, ...gated });
       } else {
-        write = await deliverPtyNotification(target, fromName, withImageFooter(message, images, panePathFor(explicitPty)), explicitPty, operator, { taskId: newTaskId, ...gated });
+        write = await deliverPtyNotification(target, fromName, bodyWithImages(message, images), explicitPty, operator, { taskId: newTaskId, ...gated });
         mode = 'notification';
       }
       const wrotePty = write.ptyId;

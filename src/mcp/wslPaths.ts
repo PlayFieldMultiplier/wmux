@@ -147,3 +147,35 @@ export function wslPathToHost(
   }
   return { path: `\\\\wsl$\\${distro}${linuxPath.replace(/\//g, '\\')}` };
 }
+
+/**
+ * A task reply's file parts (`kind: 'file'`, as a2a_task_query returns them)
+ * with `metadata.path` and `file.uri` spelled for the WSL caller: the paths
+ * name this PC's received image copies, which a Linux agent opens under the
+ * drive mount. Rewrites the parsed reply in place; a no-op for a non-WSL
+ * caller.
+ */
+export function toAgentFileParts(value: unknown, env: NodeJS.ProcessEnv = process.env): void {
+  if (wslMountRoot(env) === null) return;
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 32 || !v || typeof v !== 'object') return;
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x, depth + 1);
+      return;
+    }
+    const o = v as Record<string, unknown>;
+    const meta = o.metadata as Record<string, unknown> | undefined;
+    if (o.kind === 'file' && meta && typeof meta === 'object' && typeof meta.path === 'string') {
+      const agentPath = toAgentPath(meta.path, env);
+      if (agentPath === meta.path) return;
+      meta.path = agentPath;
+      const file = o.file as Record<string, unknown> | undefined;
+      if (file && typeof file === 'object' && typeof file.uri === 'string') {
+        file.uri = `file://${agentPath.split('/').map(encodeURIComponent).join('/')}`;
+      }
+      return;
+    }
+    for (const x of Object.values(o)) walk(x, depth + 1);
+  };
+  walk(value, 0);
+}

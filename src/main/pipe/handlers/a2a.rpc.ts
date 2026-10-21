@@ -35,7 +35,7 @@ import {
 import type { OwningAnchor } from '../../pty/serverSidePidWalk';
 import { recordSentTask, recordTaskState, reopenedState, stateOfTask, workLinkFromSentTask } from '../../workLink/a2aProducer';
 import { noteTrackReply } from '../../deck/trackRecordFeed';
-import { A2A_BRAIN_ALIAS, isRemoteTaskId } from '../../../shared/a2aRemote';
+import { A2A_BRAIN_ALIAS, A2A_REMOTE_IMAGE_LIMITS, isRemoteTaskId } from '../../../shared/a2aRemote';
 import {
   isRemoteWorkspaceId,
   remoteWorkspaceId,
@@ -331,8 +331,7 @@ export const PEER_HINTS_DEADLINE_MS = 2_000;
 
 const REMOTE_QUEUED = { stored: true, notified: false, queued: true, reason: 'queued_for_remote_host' } as const;
 
-/** Images on one message (`A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE`). */
-const IMAGES_MAX = 4;
+const IMAGES_MAX = A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE;
 
 /** `images` of a send: undefined when absent, null when not a list of 1-4 absolute paths. */
 function imagePathsOf(v: unknown): string[] | undefined | null {
@@ -486,14 +485,21 @@ export function registerA2aRpc(
    * A local send's images, checked and kept by the daemon in
    * `~/.wmux/uploads/a2a/local` (the receiver reads those copies), as the
    * renderer's `attachments`. Never taken from the wire.
+   *
+   * Refused before anything is copied when the send cannot carry them: a
+   * background (`execute`) task is handed only the text, and a message with
+   * no text is refused by the renderer. A commander brain owns no pane, so its
+   * images come from the uploads folder only, as on the remote reply path.
    */
-  async function stageLocalImages(params: Record<string, unknown>): Promise<{ attachments?: A2aStagedImage[] } | { error: string }> {
+  async function stageLocalImages(params: Record<string, unknown>, ctx: RpcContext | undefined): Promise<{ attachments?: A2aStagedImage[] } | { error: string }> {
     const images = imagePathsOf(params.images);
     if (images === null) return { error: `a2a.task.send: images must be a list of up to ${IMAGES_MAX} absolute paths` };
     if (!images) return {};
+    if (params.execute === true) return { error: 'a2a.task.send: images cannot go with execute (the background task is given the text only)' };
+    if (typeof params.message !== 'string' || !params.message.trim()) return { error: 'a2a.task.send: a message with images needs text too' };
     if (!remote?.stageImages) return { error: 'a2a.task.send: images need the wmux daemon, which is not connected' };
     const workspaceId = typeof params.workspaceId === 'string' ? params.workspaceId : '';
-    const ptyId = await verifiedCallerPty(workspaceId, params.senderPtyId);
+    const ptyId = ctx?.commanderWorkspace ? undefined : await verifiedCallerPty(workspaceId, params.senderPtyId);
     const staged = await remote.stageImages({ paths: images, ...(ptyId ? { ptyId } : {}) })
       .catch((err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }));
     if (!staged.ok) return { error: `a2a.task.send: ${staged.error}` };
@@ -1246,6 +1252,12 @@ export function registerA2aRpc(
     const marked = refuseHandoffMarker('a2a.task.update', rawParams.message, ctx);
     if (marked) return marked;
     const params = withOperatorOrigin(rawParams, ctx);
+    // Only a reply on a remote task (replyRemote below) carries images; every
+    // other path here hands the renderer the text only.
+    if (params.images !== undefined && params.images !== null
+      && !(typeof params.status !== 'string' && typeof params.message === 'string' && remote && isRemoteTaskId(params.taskId))) {
+      return { error: 'a2a.task.update: images go only with a message (no status) on a task with another PC; on this PC, reply with a2a.task.send' };
+    }
     // A brain moves a remote task as its token-verified workspace (Moa: the
     // HQ), never a wire value: the state also goes to the other PC.
     if (ctx?.commanderWorkspace && remote && isRemoteTaskId(params.taskId)) params.workspaceId = ctx.commanderWorkspace;
@@ -1366,7 +1378,7 @@ export function registerA2aRpc(
     delete sendParams.commanderWorkspaceId;
     // Images reach the renderer only as main's checked copies (`attachments`).
     delete sendParams.images;
-    const staged = await stageLocalImages(params);
+    const staged = await stageLocalImages(params, ctx);
     if ('error' in staged) return { error: staged.error };
     if (staged.attachments) sendParams.attachments = staged.attachments;
     // A main-registered delivery check (deliveryGuards.ts), kept only on the

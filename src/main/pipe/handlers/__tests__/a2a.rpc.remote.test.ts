@@ -122,6 +122,28 @@ describe('a2a.task.send — images', () => {
     await call(router, 'a2a.task.send', { workspaceId: 'ws-a', to: 'ws-b', message: 'x', attachments: [{ path: '/etc/passwd', sha256: 'f'.repeat(64) }] });
     expect(rendererCalls('a2a.task.send').at(-1)?.attachments).toBeUndefined();
   });
+
+  it('a send that cannot carry the images is refused before anything is copied', async () => {
+    const router = setup();
+    const exec = await call(router, 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-b', message: 'run', execute: true, images: ['/p/a.png'] });
+    expect(exec.error).toMatch(/cannot go with execute/);
+    const empty = await call(router, 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-b', message: '  ', images: ['/p/a.png'] });
+    expect(empty.error).toMatch(/needs text/);
+    const update = await call(router, 'a2a.task.update', { workspaceId: 'ws-a', taskId: 'task-local', message: 'x', images: ['/p/a.png'] });
+    expect(update.error).toMatch(/images go only with/);
+    expect(remote.stageImages).not.toHaveBeenCalled();
+    expect(rendererCalls('a2a.task.send')).toEqual([]);
+    expect(rendererCalls('a2a.task.update')).toEqual([]);
+  });
+
+  it('a commander brain owns no pane: its local send stages from the uploads folder only', async () => {
+    const res = await setup().dispatch({
+      id: 'b', method: 'a2a.task.send', commanderToken: mintCommanderToken('ws-hq'),
+      params: { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-b', message: 'look', images: ['/p/a.png'] },
+    });
+    expect((res as { result: Record<string, unknown> }).result).toMatchObject({ ok: true });
+    expect(remote.stageImages).toHaveBeenCalledWith({ paths: ['/p/a.png'] });
+  });
 });
 
 describe('a2a.task.send — remote alias', () => {
