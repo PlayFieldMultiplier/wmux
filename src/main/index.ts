@@ -114,6 +114,7 @@ import { isHtmlPreviewContents, registerHtmlPreview } from './preview/previewHtm
 import { pageZoomKey, stepPageZoom } from '../shared/browserZoom';
 import { registerPluginHostHandlers } from './ipc/handlers/pluginHost.handler';
 import { registerProjectConfigHandlers } from './ipc/handlers/projectConfig.handler';
+import { getWorkspacePrepCards } from './worktask/workspacePrepCards';
 import { registerChannelLocalHandlers } from './ipc/handlers/channelLocal.handler';
 import { registerRemoteSurfaces } from './ipc/handlers/remoteRegistration';
 import { RemoteHostsStore } from './remote/RemoteHostsStore';
@@ -1200,6 +1201,10 @@ registerPluginManagementHandlers(() => mainWindow, () => uiPluginManager);
 // surface — never exposed on the pipe RPC (external clients must not be able
 // to read project files or grant trust). Registered once, like plugin host.
 registerProjectConfigHandlers();
+// "Preparing" cards reach whichever window is open now.
+getWorkspacePrepCards().setSink((card) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.WORKSPACE_PREP_EVENT, card);
+});
 // Renderer-only channel-mutation surface (D5). Lets the in-app channels UI
 // (create + composer post) mutate channel state — the pipe-facing a2a.channel
 // handler fails a no-senderPtyId mutation closed, and this ipcMain.handle

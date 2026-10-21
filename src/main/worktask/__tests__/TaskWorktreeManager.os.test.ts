@@ -277,6 +277,32 @@ describe('createWorktree — 브랜치 충돌 (§3)', () => {
     expect(rejected.error).toMatch(/branch already exists/);
     fs.rmSync(repoRoot, { recursive: true, force: true });
   });
+
+  it('names the worktree a kept start left on the branch, and what to do', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-repo-'));
+    const { TaskWorktreeManager } = await loadModule();
+    const git = makeGitFake((args) => {
+      if (args.includes('--show-toplevel')) return { stdout: `${repoRoot}\n` };
+      if (args.includes('--is-bare-repository')) return { stdout: 'false\n' };
+      if (args[0] === 'rev-parse' && args.includes('--verify')) return { stdout: 'exists\n' };
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return { stdout: `worktree ${repoRoot}\nHEAD 1\nbranch refs/heads/main\n\nworktree /wt/issue-7\nHEAD 2\nbranch refs/heads/issue-7-x\n\n` };
+      }
+      return { stdout: '' };
+    });
+    const mgr = new TaskWorktreeManager({ runGit: git });
+    const left = await mgr.preflight(repoRoot, 'issue-7-x', 'wtask-x-abcd1234', { checkBranchConflict: true, branch: 'issue-7-x' });
+    expect(left.ok).toBe(false);
+    if (left.ok) return;
+    expect(left.error).toContain('checked out in the worktree at /wt/issue-7');
+    expect(left.error).toContain('task cleanup list');
+    // The person's own branch in the main checkout is named as before.
+    const own = await mgr.preflight(repoRoot, 'main', 'wtask-x-abcd1235', { checkBranchConflict: true, branch: 'main' });
+    expect(own.ok).toBe(false);
+    if (own.ok) return;
+    expect(own.error).toBe('preflight: branch already exists: main');
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  });
 });
 
 describe('removeWorktree — dirty 보존 (§3)', () => {

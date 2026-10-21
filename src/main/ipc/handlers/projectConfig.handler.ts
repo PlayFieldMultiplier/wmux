@@ -15,6 +15,8 @@ import {
   type WorkspacePrepSettingsDeps,
 } from '../../project/workspacePrepSettings';
 import type { WorkspacePrepSaveResult, WorkspacePrepSettingsView } from '../../../shared/workspacePrepSettings';
+import { getWorkspacePrepCards } from '../../worktask/workspacePrepCards';
+import { isWorkspacePrepDecision } from '../../../shared/workspacePrepCard';
 
 function prepDeps(): WorkspacePrepSettingsDeps {
   const store = getProjectConfigStore();
@@ -96,7 +98,23 @@ export function registerProjectConfigHandlers(): () => void {
     return saveWorkspacePrepSettings(cwd, settings, hash, prepDeps());
   }));
 
+  ipcMain.removeHandler(IPC.WORKSPACE_PREP_LIST);
+  ipcMain.handle(IPC.WORKSPACE_PREP_LIST, wrapHandler(IPC.WORKSPACE_PREP_LIST, async () => getWorkspacePrepCards().list()));
+
+  ipcMain.removeHandler(IPC.WORKSPACE_PREP_DECIDE);
+  ipcMain.handle(IPC.WORKSPACE_PREP_DECIDE, wrapHandler(IPC.WORKSPACE_PREP_DECIDE, async (
+    _event: Electron.IpcMainInvokeEvent,
+    id: unknown,
+    decision: unknown,
+  ): Promise<{ ok: boolean }> => {
+    if (typeof id !== 'string' || id.length > 64) return { ok: false };
+    if (!isWorkspacePrepDecision(decision)) return { ok: false };
+    return { ok: getWorkspacePrepCards().decide(id, decision) };
+  }));
+
   return () => {
+    ipcMain.removeHandler(IPC.WORKSPACE_PREP_LIST);
+    ipcMain.removeHandler(IPC.WORKSPACE_PREP_DECIDE);
     ipcMain.removeHandler(IPC.PROJECT_CONFIG_GET);
     ipcMain.removeHandler(IPC.PROJECT_CONFIG_SET_TRUST);
     ipcMain.removeHandler(IPC.PROJECT_PREP_GET);

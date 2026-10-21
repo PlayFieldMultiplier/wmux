@@ -17,6 +17,7 @@ vi.mock('../../../project/ProjectConfigStore', () => ({
 }));
 
 import { addPreparedWorktree } from '../worktree.handler';
+import { WorkspacePrepCards } from '../../../worktask/workspacePrepCards';
 
 function g(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });
@@ -81,6 +82,17 @@ describe('addPreparedWorktree', () => {
     if (!res.ok) return;
     expect(res.prep).toMatchObject({ status: 'failed', error: 'exited with code 2' });
     expect(existsSync(res.worktreePath)).toBe(true);
+  });
+
+  it('with a card, answers at once and prepares under the card (Retry, no Start anyway)', async () => {
+    project.state = trusted({ copy: ['.env'], setup: 'node -e "process.exit(2)"' });
+    const cards = new WorkspacePrepCards();
+    const res = await addPreparedWorktree(repo, 'feat/e', { cards });
+    expect(res).toMatchObject({ ok: true, preparing: true });
+    await vi.waitFor(() => expect(cards.list()[0]?.status).toBe('failed'), { timeout: 10_000 });
+    expect(cards.list()[0]).toMatchObject({ title: 'feat/e', startsAgent: false, copied: 1 });
+    expect(cards.decide(cards.list()[0].id, 'start')).toBe(false);
+    expect(cards.decide(cards.list()[0].id, 'dismiss')).toBe(true);
   });
 
   it('adds nothing to the result when the project declares no preparation', async () => {

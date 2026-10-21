@@ -62,9 +62,11 @@ export function initialCopySelection(view: WorkspacePrepSettingsView): string[] 
 export default function WorkspacePrepDialog() {
   const t = useT();
   const wsId = useStore((s) => s.prepDialogWsId);
+  const cwdTarget = useStore((s) => s.prepDialogCwd);
   const setWsId = useStore((s) => s.setPrepDialogWsId);
   const ws = useStore((s) => (wsId ? s.workspaces.find((w) => w.id === wsId) : undefined));
-  const cwd = ws ? workspaceProbeCwd(ws) : undefined;
+  const cwd = cwdTarget ?? (ws ? workspaceProbeCwd(ws) : undefined);
+  const open = wsId !== null || cwdTarget !== null;
   // Read once per opening: a workspace whose cwd moves while the dialog is
   // open must not throw the edits away.
   const loadedFor = useRef<string | null>(null);
@@ -87,10 +89,10 @@ export default function WorkspacePrepDialog() {
     opening.current += 1;
     loadedFor.current = null;
     setLoad({ state: 'loading' });
-  }, [wsId]);
+  }, [wsId, cwdTarget]);
 
   useEffect(() => {
-    if (!wsId || !cwd || loadedFor.current !== null) return;
+    if (!open || !cwd || loadedFor.current !== null) return;
     loadedFor.current = cwd;
     const mine = opening.current;
     const live = () => opening.current === mine;
@@ -108,7 +110,7 @@ export default function WorkspacePrepDialog() {
       },
       () => { if (live()) setLoad({ state: 'error' }); },
     );
-  }, [wsId, cwd]);
+  }, [open, cwd]);
 
   const view = load.state === 'ready' ? load.view : undefined;
   // Files the project lists that this checkout does not have stay listed, so
@@ -121,7 +123,7 @@ export default function WorkspacePrepDialog() {
     return [...declared, ...view.candidates.filter((f) => !declared.includes(f))];
   }, [view]);
 
-  if (!wsId) return null;
+  if (!open) return null;
   const close = () => setWsId(null);
   const blocked = view?.saveBlocked;
 
@@ -134,7 +136,7 @@ export default function WorkspacePrepDialog() {
       // The folder that was read, not wherever the pane's shell is now.
       const r = await window.electronAPI.projectConfig.prepSave(loadedFor.current ?? cwd, settings, view.contentHash);
       if (r.ok) {
-        void probeProjectConfig(wsId);
+        if (wsId) void probeProjectConfig(wsId);
         close();
         return;
       }
@@ -251,7 +253,7 @@ export default function WorkspacePrepDialog() {
           {t('project.close')}
         </Button>
         {blocked === 'review-first' ? (
-          <Button size="md" variant="primary" onClick={() => { close(); useStore.getState().setProjectDialogWsId(wsId); }}>
+          <Button size="md" variant="primary" onClick={() => { close(); if (wsId) useStore.getState().setProjectDialogWsId(wsId); }}>
             {t('prep.review')}
           </Button>
         ) : (

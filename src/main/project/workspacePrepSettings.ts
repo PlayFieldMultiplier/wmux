@@ -150,7 +150,8 @@ function awaitsPrepReview(state: ProjectConfigState): boolean {
   return state.trust === 'trusted' && state.prepReviewed !== true && (f?.setup !== undefined || (f?.copy?.length ?? 0) > 0);
 }
 
-function saveBlock(state: ProjectConfigState): WorkspacePrepSettingsView['saveBlocked'] {
+/** Why this dialog cannot save over the file (undefined when it can). */
+export function saveBlock(state: ProjectConfigState): WorkspacePrepSettingsView['saveBlocked'] {
   if (!state.found) return undefined;
   if (state.invalid) return 'invalid';
   // 'denied' is sticky: the trust dialog is where it is lifted.

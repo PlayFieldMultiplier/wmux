@@ -13,6 +13,7 @@ import { useT } from '../../hooks/useT';
 import type { Toast, ToastLevel } from '../../stores/slices/toastSlice';
 import { focusNotificationTarget } from '../../hooks/useNotificationListener';
 import { prepNoticeToast } from '../../../shared/gitHandoff';
+import { prepCardToast, type WorkspacePrepCardStatus } from '../../../shared/workspacePrepCard';
 
 const AUTO_DISMISS_MS = 5_000;
 
@@ -137,6 +138,20 @@ export default function ToastContainer() {
   useEffect(() => {
     const off = window.electronAPI?.workspacePrepNotice?.on((notice) => {
       const toast = prepNoticeToast(notice);
+      if (toast) useStore.getState().pushToast({ level: 'warn', message: t(toast.key, toast.values) });
+    });
+    return () => off?.();
+  }, [t]);
+
+  // A "Preparing" card that failed, was skipped or left files out: a toast
+  // too, so it is seen from any page (the card in the sidebar is where to
+  // answer it).
+  useEffect(() => {
+    const seen = new Map<string, WorkspacePrepCardStatus>();
+    const off = window.electronAPI?.workspacePrep?.onCard((card) => {
+      const toast = prepCardToast(seen.get(card.id), card);
+      if (card.status === 'closed') seen.delete(card.id);
+      else seen.set(card.id, card.status);
       if (toast) useStore.getState().pushToast({ level: 'warn', message: t(toast.key, toast.values) });
     });
     return () => off?.();
