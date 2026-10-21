@@ -131,7 +131,33 @@ export interface HandoffStartRequest {
   force?: boolean;
 }
 
+/**
+ * What the new worktree's preparation left undone, for the start's toast:
+ * the project's setup did not run (`skipped`: its wmux.json is not approved
+ * or a part of it was rejected), or selected config files did not arrive.
+ * Counts only.
+ */
+export interface HandoffPrepNotice {
+  skipped?: 'untrusted' | 'stale' | 'denied' | 'malformed' | 'needs-review';
+  missing: number;
+  refused: number;
+}
+
+/** The toast a worktree's preparation notice reads as (renderer i18n key + values). */
+/** The toast text for a new worktree whose preparation did not run. */
+export function prepSkipKey(reason: string | undefined): 'git.prepMalformed' | 'git.prepNeedsReview' | 'git.prepSkipped' {
+  if (reason === 'malformed') return 'git.prepMalformed';
+  if (reason === 'needs-review') return 'git.prepNeedsReview';
+  return 'git.prepSkipped';
+}
+
+export function prepNoticeToast(n: HandoffPrepNotice): { key: ReturnType<typeof prepSkipKey> | 'git.prepGapsShort'; values?: Record<string, number> } | null {
+  if (n.skipped) return { key: prepSkipKey(n.skipped) };
+  if (n.missing + n.refused > 0) return { key: 'git.prepGapsShort', values: { missing: n.missing, refused: n.refused } };
+  return null;
+}
+
 export type HandoffStartResult =
-  | { ok: true; linkId: string; workspaceId: string; branch: string }
+  | { ok: true; linkId: string; workspaceId: string; branch: string; prep?: HandoffPrepNotice }
   | { ok: false; code: 'in-progress'; inProgress: HandoffInProgress }
   | { ok: false; code: 'invalid' | 'error'; message: string };

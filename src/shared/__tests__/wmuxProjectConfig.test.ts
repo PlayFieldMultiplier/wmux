@@ -501,3 +501,35 @@ describe('collectConfigCommands / countLayoutLeaves', () => {
     expect(countLayoutLeaves(config!.layout!)).toBe(3);
   });
 });
+
+describe('normalizeWmuxProjectConfig — fanout.copy / copyIntoAutomated', () => {
+  it('keeps a clean list, normalized to forward slashes and deduplicated', () => {
+    const cfg = normalizeWmuxProjectConfig({ fanout: { copy: ['.env', './.env', 'config\\local.json'], copyIntoAutomated: false } });
+    expect(cfg?.fanout).toEqual({ copy: ['.env', 'config/local.json'], copyIntoAutomated: false });
+  });
+
+  it.each([
+    ['../.ssh/id_rsa'],
+    ['/etc/passwd'],
+    ['C:\\secret'],
+    ['.git/config'],
+    ['.env*'],
+    ['.env:stream'],
+    ['.git./config'],
+    ['GIT~1/config'],
+    ['nul'],
+    ['sub/CON.txt'],
+    ['cfg /local.json'],
+    [''],
+  ])('rejects the whole list when one entry is %j', (bad) => {
+    const cfg = normalizeWmuxProjectConfig({ fanout: { copy: ['.env', bad], setup: 'npm ci' } });
+    expect(cfg?.fanout?.copy).toBeUndefined();
+    expect(cfg?.fanout?.invalidFields).toEqual(['copy']);
+    expect(cfg?.fanout?.setup).toBe('npm ci');
+  });
+
+  it('rejects a non-boolean copyIntoAutomated', () => {
+    const cfg = normalizeWmuxProjectConfig({ fanout: { copy: ['.env'], copyIntoAutomated: 'yes' } });
+    expect(cfg?.fanout).toEqual({ copy: ['.env'], invalidFields: ['copyIntoAutomated'] });
+  });
+});

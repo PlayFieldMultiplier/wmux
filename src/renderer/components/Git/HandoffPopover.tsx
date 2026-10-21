@@ -5,6 +5,7 @@
 // (then it lists the agent panes to pick from). Main does the rest
 // (src/main/git/handoff.ts): the work link, the gated, typing-held delivery of
 // a fixed reference.
+import { prepNoticeToast } from '../../../shared/gitHandoff';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../../hooks/useT';
 import { useStore } from '../../stores';
@@ -125,6 +126,9 @@ function HandoffPopoverBody({ open }: { open: GitHandoffOpen }): React.ReactElem
     }
     close();
     pushToast({ level: 'info', message: t('git.handoff.started', { kind: kindWord, ref: itemRef, branch: res.branch }) });
+    // The new worktree's preparation is never silent.
+    const notice = res.prep ? prepNoticeToast(res.prep) : null;
+    if (notice) pushToast({ level: 'warn', message: t(notice.key, notice.values) });
   };
 
   const pos = open.anchor

@@ -26,6 +26,7 @@ import {
   issueBranchName,
   sanitizeHandoffTitle,
   type HandoffInProgress,
+  type HandoffPrepNotice,
   type HandoffRef,
   type HandoffSendRequest,
   type HandoffSendResult,
@@ -269,6 +270,14 @@ export function handoffBranch(h: HandoffRef, suffix: () => string = () => random
   return h.kind === 'issue' ? issueBranchName(h.ref.number, h.ref.title) : `pr-${h.ref.number}-${suffix()}`;
 }
 
+/** Never silent: a skipped setup, or config files that did not arrive. */
+export function prepNoticeOf(result: FanOutResult, task: { configFiles?: { missing: number; refused: number } }): HandoffPrepNotice | undefined {
+  const skipped = result.setupSkipped && result.setupSkipped !== 'none-declared' ? result.setupSkipped : undefined;
+  const missing = task.configFiles?.missing ?? 0;
+  const refused = task.configFiles?.refused ?? 0;
+  return skipped || missing + refused > 0 ? { ...(skipped ? { skipped } : {}), missing, refused } : undefined;
+}
+
 export async function startHandoffWorktree(deps: HandoffDeps, raw: unknown): Promise<HandoffStartResult> {
   const req = (raw ?? {}) as Partial<Record<keyof HandoffStartRequest, unknown>>;
   const item = parseHandoffRef(req.item);
@@ -292,6 +301,9 @@ export async function startHandoffWorktree(deps: HandoffDeps, raw: unknown): Pro
       agentCmd: agent.cmd,
       worktree: true,
       verifiedWorkspaceId: workspaceId,
+      // A person started this issue: its worktree is prepared like one they
+      // opened by hand (config files copied by default).
+      prepOrigin: 'human',
     }).catch((err: unknown) => ({ ok: false, error: err instanceof Error ? err.message : String(err), tasks: [] }) as FanOutResult);
     const task = result.tasks?.find((t) => t.ok);
     if (!result.ok || !task || !task.workspaceId) {
@@ -305,7 +317,8 @@ export async function startHandoffWorktree(deps: HandoffDeps, raw: unknown): Pro
       ...(task.agent ? { agent: task.agent } : {}),
       ...(task.worktreePath ? { worktree: { path: task.worktreePath, ...(task.branch ? { branch: task.branch } : {}) } } : {}),
     }).catch(() => null);
-    return { ok: true, linkId: link?.id ?? '', workspaceId: task.workspaceId, branch: task.branch ?? branch };
+    const prep = prepNoticeOf(result, task);
+    return { ok: true, linkId: link?.id ?? '', workspaceId: task.workspaceId, branch: task.branch ?? branch, ...(prep ? { prep } : {}) };
   });
 }
 

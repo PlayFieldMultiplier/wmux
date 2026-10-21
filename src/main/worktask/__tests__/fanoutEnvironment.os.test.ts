@@ -17,6 +17,7 @@ import {
   releaseFanoutPorts,
   resolveFanoutSetup,
   runFanoutSetup,
+  bareRepoScriptHint,
   FANOUT_PORT_RESERVATION_TTL_MS,
 } from '../fanoutEnvironment';
 import { parseFanoutPortRange } from '../../../shared/wmuxProjectConfig';
@@ -221,4 +222,31 @@ describe('runFanoutSetup', () => {
     }
     expect(alive).toBe(false);
   }, 15000);
+});
+
+describe('bareRepoScriptHint (Windows does not search the current folder)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-hint-'));
+    fs.writeFileSync(path.join(dir, 'setup.cmd'), '@echo off\n');
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('names the .\\ form when a bare first word is a script in the worktree', () => {
+    expect(bareRepoScriptHint('setup.cmd', dir, 'win32')).toBe('use .\\setup.cmd to run a script from the repository');
+    expect(bareRepoScriptHint('setup && npm ci', dir, 'win32')).toBe('use .\\setup.cmd to run a script from the repository');
+  });
+
+  it('says nothing for a path, a tool on PATH, or another platform', () => {
+    expect(bareRepoScriptHint('.\\setup.cmd', dir, 'win32')).toBeUndefined();
+    expect(bareRepoScriptHint('npm ci', dir, 'win32')).toBeUndefined();
+    expect(bareRepoScriptHint('setup.cmd', dir, 'darwin')).toBeUndefined();
+  });
+
+  it('says nothing for a file Windows would open rather than run', () => {
+    fs.writeFileSync(path.join(dir, 'setup.sh'), '');
+    fs.writeFileSync(path.join(dir, 'build'), '');
+    expect(bareRepoScriptHint('setup.sh', dir, 'win32')).toBeUndefined();
+    expect(bareRepoScriptHint('build', dir, 'win32')).toBeUndefined();
+  });
 });

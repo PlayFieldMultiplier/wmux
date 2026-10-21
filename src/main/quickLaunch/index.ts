@@ -15,6 +15,7 @@
 //                      workspace nests under the picked one in the sidebar
 //                      without being stamped as a fan-out task.
 
+import { prepNoticeOf } from '../git/handoff';
 import { globalShortcut, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'fs';
@@ -124,8 +125,18 @@ export async function launchQuick(
       ...(agentChoice ? { agents: [agentChoice] } : {}),
       worktree: true,
       verifiedWorkspaceId: ws.id,
+      // One worktree a person asked for from the composer.
+      prepOrigin: 'human',
     });
-    if (result.ok) return { ok: true };
+    if (result.ok) {
+      // The composer closes on start: a skipped setup or files that did not
+      // arrive are said in the main window instead, never silent.
+      const task = result.tasks.find((t) => t.ok);
+      const notice = task ? prepNoticeOf(result, task) : undefined;
+      const win = deps.getMainWindow();
+      if (notice && win && !win.isDestroyed()) win.webContents.send(IPC.WORKSPACE_PREP_NOTICE, notice);
+      return { ok: true };
+    }
     return { ok: false, error: result.error ?? result.tasks.find((t) => t.error)?.error ?? 'The worktree could not be started.' };
   }
 

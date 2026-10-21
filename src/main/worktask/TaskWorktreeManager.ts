@@ -148,6 +148,10 @@ export interface TaskWorktreePlan {
    *  plain https or ssh address. Recorded on the task's ledger row
    *  (LedgerDispatch.originPin). */
   originPin?: string;
+  /** Set by the fan-out once createWorktree made the branch: the commit it
+   *  was created at, which a rollback deletes it at (never a branch that
+   *  existed before, which createWorktree refuses). */
+  createdBranchOid?: string;
 }
 
 export type PreflightResult =
@@ -155,7 +159,15 @@ export type PreflightResult =
   | { ok: false; error: string };
 
 export type CreateResult =
-  | { ok: true; worktreePath: string; branch: string; gitWorktreeDir?: string }
+  | {
+      ok: true;
+      worktreePath: string;
+      branch: string;
+      gitWorktreeDir?: string;
+      /** The commit the new branch was created at (read right after `-b`), so a
+       *  rollback can delete exactly that branch even when no base was given. */
+      branchOid?: string;
+    }
   | { ok: false; error: string };
 
 /**
@@ -728,12 +740,17 @@ export class TaskWorktreeManager {
         return { ok: false, error: `createWorktree: git worktree add failed: ${(err as Error).message}` };
       }
       const gitWorktreeDir = await this.worktreeGitDir(safePath);
+      const branchOid = await this.commitOf(`refs/heads/${safeBranch}`, plan.repoRoot);
       try {
         this.onCreated?.(plan.repoRoot);
       } catch {
         /* best-effort: never fails a created worktree */
       }
-      return { ok: true, worktreePath: safePath, branch: safeBranch, ...(gitWorktreeDir ? { gitWorktreeDir } : {}) };
+      return {
+        ok: true, worktreePath: safePath, branch: safeBranch,
+        ...(gitWorktreeDir ? { gitWorktreeDir } : {}),
+        ...(branchOid ? { branchOid } : {}),
+      };
     });
   }
 

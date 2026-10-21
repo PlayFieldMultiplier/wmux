@@ -91,7 +91,29 @@ export type PhoneWorktreeRequestError =
 export type PhoneWorktreeRefusal =
   | 'not-a-git-repo' | 'unborn-head' | 'branch-exists' | 'branch-namespace-blocked' | 'worktree-path-exists'
   | 'path-too-long' | 'submodules-unsupported' | 'git-filters-require-desktop' | 'git-operation-in-progress'
-  | 'git-operation-failed' | 'worktree-path-unsafe' | 'git-version-unsupported';
+  | 'git-operation-failed' | 'worktree-path-unsafe' | 'git-version-unsupported'
+  /** The worktree was made but its new workspace preparation (setup command) failed; it is kept for the desktop. */
+  | 'prep-failed';
+
+/**
+ * The new workspace preparation a `created` worktree went through (config
+ * files copied from the session's checkout, the project's setup command), as
+ * counts only: never a file name, its content or the command's output.
+ * Absent when the project declares none. A failed preparation is not
+ * `created`: it is `refused` with `prep-failed`.
+ */
+export interface PhoneWorktreePrep {
+  /** `skipped`: the project's wmux.json is not approved on the desktop (`reason`). */
+  status: 'ready' | 'skipped';
+  copied: number;
+  /** Selected files the session's checkout does not have. */
+  missing: number;
+  /** Selected files not copied: not a git-ignored plain file inside the checkout. */
+  refused: number;
+  /** Selected files the worktree already had (a recovered worktree prepared again). */
+  present: number;
+  reason?: 'untrusted' | 'stale' | 'denied' | 'malformed' | 'needs-review';
+}
 
 /** `GET …/git/worktree/<requestId>`. `none`: no receipt for this caller and id. */
 export type PhoneWorktreeReceiptState = 'pending' | 'created' | 'refused' | 'unknown' | 'none';
@@ -114,6 +136,8 @@ export interface PhoneWorktreeReceipt {
   cwd?: string;
   /** Last path segment, for display. */
   leaf?: string;
+  /** `created` only: the new workspace preparation, when the project declares one. */
+  prep?: PhoneWorktreePrep;
   /** `refused`: a PhoneWorktreeRefusal. `unknown`: `git-outcome-unknown`. */
   error?: PhoneWorktreeRefusal | 'git-outcome-unknown';
   /**

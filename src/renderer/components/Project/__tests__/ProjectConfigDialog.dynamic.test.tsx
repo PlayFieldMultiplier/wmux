@@ -67,6 +67,30 @@ describe('ProjectConfigDialog', () => {
     expect(decideProjectTrust).toHaveBeenCalledWith('ws-1', 'trusted', true);
   });
 
+  it('lists the setup command and the files it copies in the review, verbatim', () => {
+    act(() => useStore.setState({
+      projectConfigs: { 'ws-1': { ...config, config: { ...config.config, fanout: { setup: 'npm ci && cp x y', copy: ['.env', 'config/local.json'] } } } },
+    } as never));
+    act(() => root.render(createElement(ProjectConfigDialog)));
+    const section = container.querySelector('[data-testid="project-prep-review"]') as HTMLElement;
+    expect(section.textContent).toContain('npm ci && cp x y');
+    expect(section.textContent).toContain('.env, config/local.json');
+    expect(section.textContent).toContain('Only into workspaces you open');
+  });
+
+  it('asks to approve the setup and copy settings a legacy approval does not cover, keeping the unattended consent', () => {
+    vi.mocked(decideProjectTrust).mockClear();
+    act(() => useStore.setState({
+      projectConfigs: { 'ws-1': { ...config, trust: 'trusted', prepReviewed: false, unattended: true, config: { ...config.config, fanout: { copy: ['.env'], copyIntoAutomated: true } } } },
+    } as never));
+    act(() => root.render(createElement(ProjectConfigDialog)));
+    expect(container.querySelector('[data-testid="project-prep-review-needed"]')).not.toBeNull();
+    const primary = container.querySelector('.ui-btn-primary') as HTMLButtonElement;
+    expect(primary.textContent).toBe('Approve setup');
+    act(() => primary.click());
+    expect(decideProjectTrust).toHaveBeenCalledWith('ws-1', 'trusted', true);
+  });
+
   it('closes on Escape without deciding anything', () => {
     vi.mocked(decideProjectTrust).mockClear();
     act(() => root.render(createElement(ProjectConfigDialog)));

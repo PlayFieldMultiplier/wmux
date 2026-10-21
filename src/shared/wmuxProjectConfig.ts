@@ -67,6 +67,8 @@ export const PROJECT_FANOUT_PORT_MAX = 65535;
  * magnitude of headroom, and a wider window is a typo, not an intent.
  */
 export const PROJECT_FANOUT_MAX_RANGE_WIDTH = 512;
+/** Most config files one `fanout.copy` list may name. */
+export const PROJECT_FANOUT_MAX_COPY = 32;
 
 export interface WmuxProjectCommand {
   id: string;
@@ -94,9 +96,20 @@ export interface WmuxProjectFanout {
    * has trusted THESE wmux.json bytes — see ProjectConfigStore.
    */
   setup?: string;
+  /**
+   * Git-ignored files (project-relative, e.g. `.env`) copied from the source
+   * checkout into every new worktree before the setup command runs. Copied
+   * into worktrees a person opened; into bot and fan-out worktrees only when
+   * `copyIntoAutomated` is true. Same trust gate as `setup`.
+   */
+  copy?: string[];
+  /** Also copy `copy` into bot and fan-out worktrees (default false). */
+  copyIntoAutomated?: boolean;
   /** Fields the author wrote that failed validation and were dropped. */
-  invalidFields?: ('portRange' | 'setup')[];
+  invalidFields?: WmuxProjectFanoutField[];
 }
+
+export type WmuxProjectFanoutField = 'portRange' | 'setup' | 'copy' | 'copyIntoAutomated';
 
 export interface WmuxProjectLayoutLeaf {
   type: 'leaf';
@@ -198,6 +211,22 @@ export interface ProjectConfigState {
    * permission mode on reboot ONLY when the user gave this explicit consent.
    */
   unattended?: boolean;
+  /**
+   * Set while `trust === 'trusted'`: false when the grant was made before the
+   * trust dialog listed the new workspace preparation (the setup command and
+   * the copy settings), so it does not cover them: they are skipped with
+   * reason `needs-review` until the file is approved once more.
+   */
+  prepReviewed?: boolean;
+}
+
+/** A trusted project whose setup command or copy list waits for that one
+ *  re-approval (the badge stays visible, like any verdict to act on). */
+export function prepAwaitsReview(state: ProjectConfigState): boolean {
+  const f = state.config?.fanout;
+  // A rejected copy setting is reported as malformed first; approving would not help.
+  if (f?.invalidFields?.some((k) => k === 'copy' || k === 'copyIntoAutomated')) return false;
+  return state.trust === 'trusted' && state.prepReviewed !== true && ((f?.copy?.length ?? 0) > 0 || f?.setup !== undefined);
 }
 
 // ── Field validators ─────────────────────────────────────────────────────────
@@ -554,15 +583,60 @@ export function parseFanoutPortRange(input: unknown): FanoutPortRangeResult {
 }
 
 /**
- * Normalize the `fanout` section. The two fields are INDEPENDENT: a malformed
+ * A `fanout.copy` entry: a project-relative file path with no `..` segment,
+ * no absolute or drive prefix, no glob, no `:` (a Windows stream name),
+ * nothing inside `.git`, and no segment Windows would read as another name
+ * (see isUnsafeCopySegment). Normalized to forward slashes so
+ * the same file has one spelling on every platform.
+ */
+export function normFanoutCopyPath(input: unknown): string | undefined {
+  if (typeof input !== 'string') return undefined;
+  const trimmed = input.trim();
+  if (!isValidProjectRelativeCwd(trimmed)) return undefined;
+  if (/[*?[\]:\0]/.test(trimmed)) return undefined;
+  const normalized = trimmed.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+/g, '/').replace(/\/$/, '');
+  if (normalized.length === 0 || normalized === '.' || normalized.split('/').some(isUnsafeCopySegment)) return undefined;
+  return normalized;
+}
+
+/** Windows device names, which name a device in any folder and with any extension. */
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+
+/**
+ * A path segment that must never be copied to: `.` and `.git`, and the
+ * spellings Windows treats as another name for them or for a device (a
+ * trailing dot or space is dropped there, `GIT~1` is a short name).
+ */
+function isUnsafeCopySegment(seg: string): boolean {
+  if (seg === '.' || seg.toLowerCase() === '.git') return true;
+  if (/[. ]$/.test(seg) || /~\d/.test(seg)) return true;
+  return WINDOWS_DEVICE_NAME.test(seg);
+}
+
+function normalizeFanoutCopy(input: unknown): string[] | undefined {
+  if (!Array.isArray(input) || input.length > PROJECT_FANOUT_MAX_COPY) return undefined;
+  const out: string[] = [];
+  for (const entry of input) {
+    const norm = normFanoutCopyPath(entry);
+    if (norm === undefined) return undefined;
+    if (!out.includes(norm)) out.push(norm);
+  }
+  return out;
+}
+
+/**
+ * Normalize the `fanout` section. The fields normalize INDEPENDENTLY (what
+ * runs when one is rejected is decided by the consumer: the new workspace
+ * preparation runs nothing when any part it would run was rejected, see
+ * main/worktask/workspacePrep.ts). A malformed
  * `portRange` drops only the range, never the `setup` hook the user already
  * approved (and vice versa). Dropped fields are named in `invalidFields` so the
  * fan-out reports "declared but malformed" rather than staying silent.
  */
 function normalizeFanout(input: unknown): WmuxProjectFanout | undefined {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
-  const src = input as { portRange?: unknown; setup?: unknown };
-  const invalidFields: ('portRange' | 'setup')[] = [];
+  const src = input as { portRange?: unknown; setup?: unknown; copy?: unknown; copyIntoAutomated?: unknown };
+  const invalidFields: WmuxProjectFanoutField[] = [];
 
   let portRange: { min: number; max: number } | undefined;
   if (src.portRange !== undefined) {
@@ -578,10 +652,26 @@ function normalizeFanout(input: unknown): WmuxProjectFanout | undefined {
     else setup = cmd;
   }
 
-  if (portRange === undefined && setup === undefined && invalidFields.length === 0) return undefined;
+  // The copy list is all-or-nothing: copying half of what the author listed
+  // would start a worktree that looks ready and is not.
+  let copy: string[] | undefined;
+  if (src.copy !== undefined) {
+    copy = normalizeFanoutCopy(src.copy);
+    if (copy === undefined) invalidFields.push('copy');
+  }
+
+  let copyIntoAutomated: boolean | undefined;
+  if (src.copyIntoAutomated !== undefined) {
+    if (typeof src.copyIntoAutomated === 'boolean') copyIntoAutomated = src.copyIntoAutomated;
+    else invalidFields.push('copyIntoAutomated');
+  }
+
+  if (portRange === undefined && setup === undefined && copy === undefined && copyIntoAutomated === undefined && invalidFields.length === 0) return undefined;
   const out: WmuxProjectFanout = {};
   if (portRange !== undefined) out.portRange = portRange;
   if (setup !== undefined) out.setup = setup;
+  if (copy !== undefined && copy.length > 0) out.copy = copy;
+  if (copyIntoAutomated !== undefined) out.copyIntoAutomated = copyIntoAutomated;
   if (invalidFields.length > 0) out.invalidFields = invalidFields;
   return out;
 }

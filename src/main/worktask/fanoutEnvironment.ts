@@ -19,6 +19,8 @@
  */
 
 import * as net from 'node:net';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import type { ProjectConfigState } from '../../shared/wmuxProjectConfig';
 import { getExecEnv } from '../../shared/execEnv';
@@ -185,8 +187,10 @@ export async function assignFanoutPorts(
  *                       schema, so it never became a runnable command
  *   - untrusted / stale / denied — declared and well-formed, but the bytes are
  *                       not currently approved
+ *   - needs-review    — approved, but by a decision that never showed the setup
+ *                       command or the copy settings (workspacePrep.ts)
  */
-export type FanoutSetupSkipReason = 'none-declared' | 'malformed' | 'untrusted' | 'stale' | 'denied';
+export type FanoutSetupSkipReason = 'none-declared' | 'malformed' | 'untrusted' | 'stale' | 'denied' | 'needs-review';
 
 export type FanoutSetupResolution =
   | { run: true; command: string }
@@ -213,7 +217,47 @@ export function resolveFanoutSetup(state: ProjectConfigState | null | undefined)
   return { run: true, command: setup };
 }
 
-export type FanoutSetupRunResult = { ok: true } | { ok: false; error: string };
+/** Extensions cmd.exe runs as a program when the name has a path. */
+const WINDOWS_SCRIPT_EXTS = ['.cmd', '.bat', '.exe', '.com'];
+
+/**
+ * The hint for a setup that failed on Windows because its first word names a
+ * script in the worktree without a path (`setup.cmd`). wmux keeps Windows from
+ * searching the current folder for a command (NoDefaultCurrentDirectoryInExePath),
+ * so a script planted in a cloned repository can never stand in for a tool
+ * name; the project's own script is run as `.\setup.cmd`. Undefined when the
+ * first word has a path, is not in the worktree, or the platform is not Windows.
+ */
+export function bareRepoScriptHint(command: string, cwd: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform !== 'win32') return undefined;
+  const first = /^\s*"?([^\s"&|<>]+)/.exec(command)?.[1];
+  if (!first || /[\\/:]/.test(first)) return undefined;
+  // Only a name `.\name` would run: no hint for a file cmd.exe opens by
+  // association (`setup.sh`, `setup.ps1`) instead of running it.
+  const ext = path.extname(first).toLowerCase();
+  const names = ext ? (WINDOWS_SCRIPT_EXTS.includes(ext) ? [first] : []) : WINDOWS_SCRIPT_EXTS.map((e) => first + e);
+  for (const name of names) {
+    try {
+      if (fs.statSync(path.join(cwd, name)).isFile()) return `use .\\${name} to run a script from the repository`;
+    } catch {
+      // not this one
+    }
+  }
+  return undefined;
+}
+
+export type FanoutSetupRunResult =
+  | { ok: true }
+  | {
+      ok: false;
+      /** One line: what happened, with the output tail appended. */
+      error: string;
+      /** What happened without the output (exit code, signal, timeout). */
+      summary?: string;
+      /** The last output the command printed (the report tail, not capped to a line count). */
+      tail?: string;
+      timedOut?: true;
+    };
 
 /**
  * Run a resolved setup command inside `cwd` (the fresh worktree). The command
@@ -272,20 +316,25 @@ export async function runFanoutSetup(
     };
 
     child.on('error', (err) => {
-      settle({ ok: false, error: `failed to start: ${err.message}` });
+      const summary = `failed to start: ${err.message}`;
+      settle({ ok: false, error: summary, summary });
     });
 
     child.on('close', (code, signal) => {
       if (timedOut) {
-        settle({ ok: false, error: `timed out after ${timeoutMs}ms${detailSuffix(tail)}` });
+        const summary = `timed out after ${timeoutMs}ms`;
+        settle({ ok: false, error: `${summary}${detailSuffix(tail)}`, summary, tail, timedOut: true });
         return;
       }
       if (code === 0) {
         settle({ ok: true });
         return;
       }
-      const how = signal ? `killed by ${signal}` : `exited with code ${code}`;
-      settle({ ok: false, error: `${how}${detailSuffix(tail)}` });
+      const exited = signal ? `killed by ${signal}` : `exited with code ${code}`;
+      // A bare repo script on Windows is not found (see bareRepoScriptHint).
+      const hint = signal ? undefined : bareRepoScriptHint(command, cwd);
+      const how = hint ? `${exited} (${hint})` : exited;
+      settle({ ok: false, error: `${how}${detailSuffix(tail)}`, summary: how, tail });
     });
   });
 }

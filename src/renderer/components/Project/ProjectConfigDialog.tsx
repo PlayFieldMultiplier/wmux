@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { countLayoutLeaves, PROJECT_SUPERVISION_DEFAULT_BURST } from '../../../shared/wmuxProjectConfig';
+import { countLayoutLeaves, prepAwaitsReview, PROJECT_SUPERVISION_DEFAULT_BURST } from '../../../shared/wmuxProjectConfig';
 import type { WmuxProjectLayoutNode } from '../../../shared/wmuxProjectConfig';
 import { applyProjectLayoutFresh, decideProjectTrust, probeProjectConfig } from '../../utils/projectConfigProbe';
 import { runProjectCommand } from '../../utils/projectCommands';
@@ -89,6 +89,14 @@ export default function ProjectConfigDialog() {
   const trust = project.trust;
   const isTrusted = trust === 'trusted';
   const commands = project.config?.commands ?? [];
+  // New workspace setup: runs (and copies secrets) on the same grant, so the
+  // review lists it verbatim beside the commands and the layout.
+  const prepSetup = project.config?.fanout?.setup;
+  const prepCopy = project.config?.fanout?.copy ?? [];
+  const prepCopyAutomated = project.config?.fanout?.copyIntoAutomated === true;
+  // Trusted by a decision that never showed the setup command or the copy
+  // settings: they wait for this one re-approval (the rest stays approved).
+  const prepNeedsReview = prepAwaitsReview(project);
   const layout = project.config?.layout;
   const rows = layout ? layoutRows(layout) : [];
   // Leaves that would restore their captured permission mode on reboot — the
@@ -119,6 +127,15 @@ export default function ProjectConfigDialog() {
         closeLabel={t('project.close')}
       />
       <DialogBody>
+        {prepNeedsReview && (
+          <div className="ui-notice flex items-start gap-2.5 px-3.5 py-3 text-[13px] leading-5" data-testid="project-prep-review-needed">
+            <span className="shrink-0 pt-[3px]" style={{ color: 'var(--accent-yellow)' }} aria-hidden="true">
+              <IconWarning size={14} />
+            </span>
+            <span className="text-[var(--text-main)]">{t('project.prepReviewNotice')}</span>
+          </div>
+        )}
+
         {notice && (
           <div className="ui-notice flex items-start gap-2.5 px-3.5 py-3 text-[13px] leading-5">
             <span className="shrink-0 pt-[3px]" style={{ color: noticeColor }} aria-hidden="true">
@@ -190,6 +207,32 @@ export default function ProjectConfigDialog() {
           </section>
         )}
 
+        {(prepSetup !== undefined || prepCopy.length > 0) && (
+          <section data-testid="project-prep-review">
+            <p className="ui-group-label">{t('project.prepHeading')}</p>
+            <div className="ui-group">
+              {prepSetup !== undefined && (
+                <div className="ui-row">
+                  <div className="ui-row-text">
+                    <p className="ui-row-title font-mono !text-[12px] break-all">{prepSetup}</p>
+                    <p className="ui-row-detail">{t('project.prepSetup')}</p>
+                  </div>
+                </div>
+              )}
+              {prepCopy.length > 0 && (
+                <div className="ui-row">
+                  <div className="ui-row-text">
+                    <p className="ui-row-title font-mono !text-[12px] break-all">{prepCopy.join(', ')}</p>
+                    <p className="ui-row-detail">
+                      {t('project.prepCopy')} · {t(prepCopyAutomated ? 'project.prepCopyAutomated' : 'project.prepCopyHumanOnly')}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
         {!isTrusted && !project.invalid && unattendedRows.length > 0 && (
           <section className="ui-notice flex flex-col gap-2 px-3.5 py-3 text-[13px]">
             <p className="m-0 flex items-center gap-2 font-medium" style={{ color: 'var(--accent-yellow)' }}>
@@ -229,6 +272,16 @@ export default function ProjectConfigDialog() {
             <Button size="md" variant="secondary" onClick={close}>
               {t('project.close')}
             </Button>
+            {prepNeedsReview && (
+              <Button
+                size="md"
+                variant="primary"
+                // Same bytes, same unattended consent: only the setup and copy settings are newly approved.
+                onClick={() => { void decideProjectTrust(wsId, 'trusted', project.unattended === true); close(); }}
+              >
+                {t('project.approvePrep')}
+              </Button>
+            )}
           </>
         ) : (
           <>

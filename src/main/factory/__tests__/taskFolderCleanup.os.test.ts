@@ -28,6 +28,7 @@ import {
   parseMountInfo,
   removeEmptyResearchBatch,
   restoreTaskFolder,
+  ensureTaskFolderPrepared,
   taskFolderKind,
   taskFolderUsage,
   type TaskFolderPorts,
@@ -152,6 +153,75 @@ describe('cleanTaskFolder', () => {
     expect(p.store.get('wtask-abc-12345678')?.state).toBe('restored');
     // Only the path it was removed from.
     expect(await restoreTaskFolder(p, 'wtask-abc-12345678', path.join(dir, 'elsewhere'))).toBe(false);
+  });
+
+  it('prepares a worktree put back for a resume, and puts it away again when its setup fails', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr);
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    const calls: Array<[string, string]> = [];
+    let status = 'failed';
+    const p = ports({ prepare: async (_taskId, root, folder) => { calls.push([root, folder]); return { status, error: 'exited with code 1' }; } });
+    expect(await cleanTaskFolder(p, row('completed'), mission, [])).toBe('removed');
+
+    // The repository as git spells it (Windows: forward slashes, long names).
+    const recordedRoot = p.store.get('wtask-abc-12345678')?.repoRoot;
+    expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(false);
+    expect(calls).toEqual([[recordedRoot, wt]]);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(p.store.get('wtask-abc-12345678')?.state).toBe('removed');
+
+    status = 'ready';
+    let during: unknown;
+    const p2 = ports({ store: p.store, prepare: async () => { during = p.store.get('wtask-abc-12345678'); return { status }; } });
+    expect(await restoreTaskFolder(p2, 'wtask-abc-12345678', wt)).toBe(true);
+    // While the setup runs the folder reads as put back but not prepared, so
+    // a quit right now leaves the next resume to prepare it first.
+    expect(during).toMatchObject({ state: 'restored', prepFailed: true });
+    expect(p.store.get('wtask-abc-12345678')?.prepFailed).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(p.store.get('wtask-abc-12345678')?.state).toBe('restored');
+  });
+
+  it('a folder whose setup failed and could not be put away is prepared again before a resume uses it', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr);
+    const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
+    let status = 'failed';
+    const p = ports({
+      prepare: async () => ({ status, error: 'exited with code 1' }),
+      worktrees: { restoreWorktree: mgr.restoreWorktree.bind(mgr), removeWorktree: async (...a: Parameters<TaskWorktreeManager['removeWorktree']>) => (a[4]?.force ? { ok: false as const, error: 'held' } : mgr.removeWorktree(...a)) },
+    });
+    expect(await cleanTaskFolder(p, row('completed'), mission, [])).toBe('removed');
+    expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(false);
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(p.store.get('wtask-abc-12345678')).toMatchObject({ state: 'restored', prepFailed: true });
+    expect(await ensureTaskFolderPrepared(p, 'wtask-abc-12345678')).toBe(false);
+    status = 'ready';
+    expect(await ensureTaskFolderPrepared(p, 'wtask-abc-12345678')).toBe(true);
+    expect(p.store.get('wtask-abc-12345678')?.prepFailed).toBeUndefined();
+  });
+
+  it('a folder put back while its setup waits for a re-approval stays unprepared for the next resume', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr);
+    const p = ports({ prepare: async () => ({ status: 'skipped', reason: 'needs-review' }) });
+    expect(await cleanTaskFolder(p, row('completed'), { folder: wt, branch: 'wtask/perf-a-12345678' }, [])).toBe('removed');
+    expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(true);
+    expect(p.store.get('wtask-abc-12345678')).toMatchObject({ state: 'restored', prepFailed: true });
+  });
+
+  it('a cleanup pass keeps the not-prepared mark of a folder it cannot remove', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr);
+    const p = ports({ now: () => 10_000_000 });
+    const info = await gitRepoInfo(wt);
+    await p.store.put({ taskId: 'wtask-abc-12345678', kind: 'worktree', path: wt, state: 'restored', prepFailed: true, repoRoot: info!.repoRoot, repoHash: info!.repoHash, branch: 'wtask/perf-a-12345678', at: 1 });
+    // What a half-run setup leaves: a file git does not ignore.
+    fs.writeFileSync(path.join(wt, 'half-built.txt'), 'x');
+    await cleanTaskFolder(p, row('completed'), { folder: wt, branch: 'wtask/perf-a-12345678' }, []);
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(p.store.get('wtask-abc-12345678')).toMatchObject({ state: 'kept_dirty', prepFailed: true });
   });
 
   it('keeps a worktree with uncommitted changes, never removes it automatically, and Clean up now removes it once it is clean', async () => {

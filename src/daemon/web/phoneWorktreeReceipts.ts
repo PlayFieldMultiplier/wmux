@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { atomicWriteJSONSync } from '../util/atomicWrite';
 import {
   PHONE_WORKTREE_RECEIPT_TTL_MS, PHONE_WORKTREE_SLUG,
-  type PhoneWorktreeReceipt, type PhoneWorktreeRefusal,
+  type PhoneWorktreePrep, type PhoneWorktreeReceipt, type PhoneWorktreeRefusal,
 } from '../../shared/phoneGitV1';
 
 /**
@@ -32,7 +32,7 @@ export const PHONE_WORKTREE_RECEIPTS_PER_OWNER = 100;
 const MAX_ENTRIES = 2000;
 
 export type PhoneWorktreeOutcome =
-  | { state: 'created'; projectId: string; branch: string; base: string; cwd: string; leaf: string }
+  | { state: 'created'; projectId: string; branch: string; base: string; cwd: string; leaf: string; prep?: PhoneWorktreePrep }
   | { state: 'refused'; error: PhoneWorktreeRefusal }
   | { state: 'unknown'; error: 'git-outcome-unknown'; retryAfterMs?: number };
 
@@ -61,8 +61,18 @@ export class ReceiptCapacityError extends Error {}
 const REFUSALS: ReadonlySet<string> = new Set<PhoneWorktreeRefusal>([
   'not-a-git-repo', 'unborn-head', 'branch-exists', 'branch-namespace-blocked', 'worktree-path-exists',
   'path-too-long', 'submodules-unsupported', 'git-filters-require-desktop', 'git-operation-in-progress',
-  'git-operation-failed', 'worktree-path-unsafe', 'git-version-unsupported',
+  'git-operation-failed', 'worktree-path-unsafe', 'git-version-unsupported', 'prep-failed',
 ]);
+const PREP_REASONS: ReadonlySet<string> = new Set(['untrusted', 'stale', 'denied', 'malformed', 'needs-review']);
+const count = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 1000;
+
+function validPrep(v: unknown): boolean {
+  if (v === undefined) return true;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const p = v as Record<string, unknown>;
+  return (p.status === 'ready' || p.status === 'skipped') && count(p.copied) && count(p.missing) && count(p.refused) && count(p.present) &&
+    (p.reason === undefined || (typeof p.reason === 'string' && PREP_REASONS.has(p.reason)));
+}
 const str = (v: unknown, max = 4096) => typeof v === 'string' && v.length > 0 && v.length <= max;
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 
@@ -83,7 +93,7 @@ function validEntry(key: string, v: unknown): v is Entry {
   switch (e.state) {
     case 'pending': return true;
     case 'created': return str(e.projectId, 64) && str(e.branch, 128) && typeof e.base === 'string' &&
-      OID.test(e.base) && str(e.cwd) && str(e.leaf, 256);
+      OID.test(e.base) && str(e.cwd) && str(e.leaf, 256) && validPrep(e.prep);
     case 'refused': return typeof e.error === 'string' && REFUSALS.has(e.error);
     case 'unknown': return e.error === 'git-outcome-unknown' && (e.retryAfterMs === undefined || (Number.isSafeInteger(e.retryAfterMs) && (e.retryAfterMs as number) > 0));
     default: return false;

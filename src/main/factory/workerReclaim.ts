@@ -1636,6 +1636,10 @@ export interface WorkerResumePorts {
    *  research folder); true when it is there now. Absent: a removed folder
    *  refuses the resume. */
   restoreFolder?: (taskId: string, folder: string) => Promise<boolean>;
+  /** A folder on disk whose setup failed when it was put back is prepared
+   *  again first (taskFolderCleanup.ts ensureTaskFolderPrepared); false
+   *  refuses the resume. Absent: no check. */
+  folderPrepared?: (taskId: string) => Promise<boolean>;
   /** Hold the task's folder for the resume (taskFolderCleanup.ts
    *  holdTaskFolder): no cleanup removes it meanwhile. Returns the release. */
   holdFolder?: (taskId: string) => Promise<() => void>;
@@ -1903,6 +1907,9 @@ async function respawnOnce(
   // agent's per-folder conversation resumes there.
   if (!exists && ports.restoreFolder) exists = await ports.restoreFolder(rec.taskId, folder).catch(() => false);
   if (!exists) return refuse('worktree_gone', 'the task\'s worktree is gone, so there is no folder to resume the worker in; start a new task instead');
+  if (ports.folderPrepared && !(await ports.folderPrepared(rec.taskId).catch(() => false))) {
+    return refuse('not_now', 'the project\'s setup command failed in the task\'s worktree, so no agent was started there; fix the setup, then resume again');
+  }
   // Another pane already runs an agent in the worktree: a second process on
   // the same conversation is never started.
   const home = normalizeResumeCwd(folder);

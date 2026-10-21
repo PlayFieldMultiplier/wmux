@@ -6644,7 +6644,29 @@ Refusals found by the background job land in the receipt as `state:
 `worktree-path-exists`, `path-too-long` (over 260 characters),
 `not-a-git-repo` (including bare), `unborn-head`, `submodules-unsupported`,
 `git-filters-require-desktop`, `git-operation-in-progress`,
-`git-operation-failed`, `worktree-path-unsafe`, `git-version-unsupported`.
+`git-operation-failed`, `worktree-path-unsafe`, `git-version-unsupported`,
+`prep-failed` (below).
+
+**New workspace preparation.** When the session's project declares one in
+its `wmux.json` (`fanout.copy`, `fanout.setup`, approved on the desktop), the
+new worktree is prepared before the receipt leaves `pending`: the selected
+git-ignored config files are copied from the session's checkout, then the
+setup command runs (up to 5 minutes, so `pending` can last that long). A
+`created` receipt then carries `prep: {status, copied, missing, refused, present, reason?}`
+(`refused`: selected files that are not a git-ignored plain file inside the
+checkout, so they were not copied; `present`: files the worktree already had,
+as when a recovered worktree is prepared again):
+`status` is `ready`, or `skipped` with `reason` `untrusted`, `stale`,
+`denied`, `malformed` or `needs-review` (approved before the desktop showed
+its setup and copy settings, so they wait for one re-approval) when the
+desktop has not approved them (nothing ran). Only counts cross to the phone, never a file name, its content or the
+command's output. Every copied file stays git-ignored in the new worktree
+(one that would not is removed again), and the desktop's pre-commit secret
+check, which lives in the repository's shared hooks, covers the worktree once
+the desktop has installed it for that repository. Without a declared preparation `prep` is absent. A failed
+setup is not `created`: the receipt is `refused` with `prep-failed`, so no
+client opens a pane in it; the worktree is kept on the desktop, whose cleanup
+list shows it.
 
 **Receipt store.** A new file, `phone-worktree-receipts.json`, `version: 1`,
 mode 0600, written durably. Entries are keyed by a hash of (owner,

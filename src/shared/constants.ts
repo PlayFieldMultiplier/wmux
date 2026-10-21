@@ -805,6 +805,7 @@ export const IPC = {
   // user decision bound to the content hash the approval UI displayed.
   PROJECT_CONFIG_GET: 'project-config:get',
   PROJECT_CONFIG_SET_TRUST: 'project-config:set-trust',
+  WORKSPACE_PREP_NOTICE: 'workspace-prep:notice',
   // Remote workspace attach (see src/shared/remoteHosts.ts)
   REMOTE_HOSTS_LIST: 'remote:hosts:list',
   REMOTE_HOSTS_ADD: 'remote:hosts:add',

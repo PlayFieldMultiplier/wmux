@@ -117,6 +117,11 @@ export interface TaskFolderRecord {
   /** The ref that holds a detached HEAD's commits no other ref held
    *  (`refs/wmux/keep/<taskId>`), written before the worktree went. */
   keepRef?: string;
+  /** Put back for a resume and not prepared: its setup failed and it could
+   *  not be put away again, its setup is still running, or its setup did not
+   *  run (not approved). A resume prepares it once more before any agent
+   *  starts in it (ensureTaskFolderPrepared). */
+  prepFailed?: true;
   at: number;
 }
 
@@ -264,7 +269,13 @@ export interface TaskFolderPorts {
    *  stopped (a resumed worker stopped again). Absent: not known. */
   workerStoppedAt?: (taskId: string) => number | undefined;
   worktrees: {
-    removeWorktree(repoRoot: string, repoHash: string, worktreePath: string): Promise<{ ok: true } | { ok: false; error: string; dirty?: boolean }>;
+    removeWorktree(
+      repoRoot: string,
+      repoHash: string,
+      worktreePath: string,
+      beforeRemove?: (worktreePath: string) => Promise<void>,
+      opts?: { force?: boolean },
+    ): Promise<{ ok: true } | { ok: false; error: string; dirty?: boolean }>;
     restoreWorktree(repoRoot: string, repoHash: string, worktreePath: string, ref: string, detached?: boolean): Promise<{ ok: true } | { ok: false; error: string }>;
   };
   /** A worktree's main repository root, its hash (the manager's lock key)
@@ -283,6 +294,14 @@ export interface TaskFolderPorts {
   /** Default: gitWorktreeRegistered. */
   worktreeRegistered?: (repoRoot: string, folder: string) => Promise<boolean | null>;
   makeDir?: (dir: string) => Promise<void>;
+  /**
+   * The new workspace preparation for a worktree put back for a resume (the
+   * project's setup command; config files only when the project copies into
+   * bot workspaces). A failure puts the folder away again, so the worker is
+   * not resumed in a worktree whose dependencies never installed. Absent:
+   * none (tests).
+   */
+  prepare?: (taskId: string, repoRoot: string, worktreePath: string) => Promise<{ status: string; error?: string; reason?: string }>;
   exists?: (p: string) => boolean;
   now?: () => number;
   log?: (msg: string) => void;
@@ -654,6 +673,8 @@ async function cleanTaskFolderNow(
       const repoNow = kind === 'worktree' && !prior?.repoRoot ? await ports.repoInfo(mission.folder).catch(() => null) : null;
       await ports.store.put({
         taskId: entry.id, kind, path: mission.folder, state: 'kept_stopped',
+        // Still not prepared: the resume prepares it first.
+        ...(prior?.prepFailed ? { prepFailed: true as const } : {}),
         stopped: {
           botId,
           ...(entry.title ? { title: entry.title } : {}),
@@ -751,6 +772,7 @@ async function cleanTaskFolderNow(
     const learned = {
       repoRoot: rec.repoRoot, ...(rec.repoHash ? { repoHash: rec.repoHash } : {}), ...(rec.head ? { head: rec.head } : {}),
       ...(rec.keepRef ? { keepRef: rec.keepRef } : {}), ...(mission.branch ? { branch: mission.branch } : prior?.branch ? { branch: prior.branch } : {}),
+      ...(prior?.prepFailed ? { prepFailed: true as const } : {}),
     };
     const registered = await (ports.worktreeRegistered ?? gitWorktreeRegistered)(rec.repoRoot, mission.folder).catch(() => null);
     if (registered === null) {
@@ -789,6 +811,9 @@ async function cleanTaskFolderNow(
     taskId: entry.id, kind, path: mission.folder, repoRoot: repo.repoRoot, repoHash: repo.repoHash,
     ...(mission.branch ? { branch: mission.branch } : {}), ...(repo.head ? { head: repo.head } : {}),
     ...(kept ? { keepRef: kept } : prior?.keepRef ? { keepRef: prior.keepRef } : {}), ...stoppedMark, at: keptAt ?? now(),
+    // A folder kept on disk (dirty) is still not prepared: the resume
+    // prepares it first. Gone with the folder, the flag goes too.
+    ...(prior?.prepFailed ? { prepFailed: true as const } : {}),
   };
   // How to put it back is on disk before the folder goes.
   try {
@@ -798,7 +823,8 @@ async function cleanTaskFolderNow(
   }
   const r = await ports.worktrees.removeWorktree(repo.repoRoot, repo.repoHash, mission.folder).catch((err: unknown) => ({ ok: false as const, error: String(err) }));
   if (r.ok) {
-    await ports.store.put({ ...base, state: 'removed', at: now() }).catch(() => undefined);
+    const { prepFailed: _gone, ...removed } = base;
+    await ports.store.put({ ...removed, state: 'removed', at: now() }).catch(() => undefined);
     if (expired && prior) noteKeptFolderCleaned(ports, entry, prior, now(), log);
     ports.changed?.();
     return 'removed';
@@ -974,6 +1000,7 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
   const exists = ports.exists ?? defaultExists;
   if (exists(rec.path)) return false;
   const now = ports.now ?? Date.now;
+  let prepSkipped = false;
   if (rec.kind === 'research') {
     try {
       await (ports.makeDir ?? ((d: string) => fs.promises.mkdir(d, { recursive: true }).then(() => undefined)))(rec.path);
@@ -988,9 +1015,72 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
       (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} not put back: ${r.error}`);
       return false;
     }
+    if (ports.prepare) {
+      // On disk from here, and not prepared until the setup has run: a quit
+      // during the setup must not let the next resume use the folder as is
+      // (ensureTaskFolderPrepared prepares it again).
+      await ports.store.put({ ...rec, state: 'restored', prepFailed: true, at: now() }).catch(() => undefined);
+      const prep = await ports.prepare(taskId, rec.repoRoot, rec.path).catch((err: unknown) => ({ status: 'failed', error: String(err) }));
+      noteSkippedPrep(ports, taskId, prep);
+      prepSkipped = prep.status === 'skipped';
+      if (prep.status === 'failed') {
+        (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put away again: its setup failed: ${prep.error ?? 'unknown'}`);
+        // Nothing has worked in it since it was put back: what is there is
+        // the kept branch plus the setup's own output, so force is safe, and
+        // the record goes back to 'removed' for the next resume to try again.
+        const away = await ports.worktrees.removeWorktree(rec.repoRoot, rec.repoHash, rec.path, undefined, { force: true })
+          .catch((err: unknown) => ({ ok: false as const, error: String(err) }));
+        if (away.ok) {
+          await ports.store.put({ ...rec, at: now() }).catch(() => undefined);
+        } else {
+          // Still on disk, and still recorded as restored but not prepared,
+          // so a later cleanup pass sees it and a resume prepares it first.
+          (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} could not be put away again: ${away.error}`);
+        }
+        ports.changed?.();
+        return false;
+      }
+    }
   }
-  await ports.store.put({ ...rec, state: 'restored', at: now() }).catch(() => undefined);
+  const { prepFailed: _prepared, ...restored } = rec;
+  // A setup that did not run (not approved) leaves the folder unprepared, so
+  // the next resume after the approval prepares it.
+  await ports.store.put({ ...restored, ...(prepSkipped ? { prepFailed: true as const } : {}), state: 'restored', at: now() }).catch(() => undefined);
   ports.changed?.();
+  return true;
+}
+
+/** A preparation that did not run is never silent (trust revoked, the
+ *  project's wmux.json edited since it was approved, or its setup and copy
+ *  settings waiting for one re-approval). */
+function noteSkippedPrep(ports: TaskFolderPorts, taskId: string, prep: { status: string; reason?: string }): void {
+  if (prep.status !== 'skipped') return;
+  const why = prep.reason === 'needs-review'
+    ? 'its setup waits for one re-approval of wmux.json'
+    : `the project's wmux.json is ${prep.reason ?? 'not approved'}`;
+  (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put back without its setup: ${why}`);
+}
+
+/**
+ * Before a resume starts an agent in a folder that is on disk: one whose
+ * setup failed when it was put back (and stayed, see restoreTaskFolder) is
+ * prepared again. True when the folder may be used.
+ */
+export async function ensureTaskFolderPrepared(ports: TaskFolderPorts, taskId: string): Promise<boolean> {
+  const rec = ports.store.get(taskId);
+  if (!rec?.prepFailed) return true;
+  if (!ports.prepare || !rec.repoRoot) return false;
+  const prep = await ports.prepare(taskId, rec.repoRoot, rec.path).catch((err: unknown) => ({ status: 'failed', error: String(err) }));
+  noteSkippedPrep(ports, taskId, prep);
+  if (prep.status === 'failed') {
+    (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} not resumed: its setup failed again: ${prep.error ?? 'unknown'}`);
+    return false;
+  }
+  // A setup that did not run (not approved) leaves it unprepared: once the
+  // project is approved again, the next resume prepares it.
+  if (prep.status === 'skipped') return true;
+  const { prepFailed: _done, ...clean } = rec;
+  await ports.store.put({ ...clean, at: (ports.now ?? Date.now)() }).catch(() => undefined);
   return true;
 }
 

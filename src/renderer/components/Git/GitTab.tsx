@@ -28,6 +28,8 @@
 // Design contract (DESIGN.md): monochrome glyphs, branches and paths in mono,
 // diff counts green/red, and at most ONE accent point — the dot marking the
 // worktree the active pane is in. The section headers stay neutral.
+import { prepSkipKey } from '../../../shared/gitHandoff';
+import type { WorkspacePrepResult } from '../../../main/worktask/workspacePrep';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import type { StoreState } from '../../stores';
@@ -134,7 +136,7 @@ interface WorktreeBridge {
     | { ok: false; error: string }
   >;
   add: (repoPath: string, branch: string) => Promise<
-    { ok: true; worktreePath: string } | { ok: false; error: string }
+    { ok: true; worktreePath: string; prep?: WorkspacePrepResult } | { ok: false; error: string }
   >;
   remove: (repoPath: string, worktreePath: string) => Promise<
     { ok: true; worktreePath: string } | { ok: false; error: string }
@@ -552,6 +554,19 @@ export function GitTab({
         return;
       }
       setNewBranch('');
+      // The new worktree's preparation is always reported, never silent.
+      const prep = res.prep;
+      if (prep?.status === 'failed') {
+        // The last lines it printed say why, as on start from an issue.
+        const tail = prep.outputTail?.slice(-3).join(' · ').slice(-300);
+        pushToast({ level: 'warn', message: t('git.prepFailed', { error: [prep.error, tail].filter(Boolean).join(': ') }) });
+      } else if (prep?.status === 'skipped') {
+        pushToast({ level: 'warn', message: t(prepSkipKey(prep.reason)) });
+      } else if (prep?.status === 'ready' && prep.copy.missing + prep.copy.refused > 0) {
+        pushToast({ level: 'warn', message: t('git.prepGaps', { copied: prep.copy.copied, missing: prep.copy.missing, refused: prep.copy.refused }) });
+      } else if (prep?.status === 'ready' && prep.copy.copied > 0) {
+        pushToast({ level: 'info', message: t('git.prepReady', { copied: prep.copy.copied }) });
+      }
       void load(true);
     } catch (e) {
       pushToast({ level: 'warn', message: `${t('git.createFailed')}: ${e instanceof Error ? e.message : String(e)}` });

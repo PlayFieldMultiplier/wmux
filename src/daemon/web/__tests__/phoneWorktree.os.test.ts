@@ -12,6 +12,8 @@ import { PHONE_WORKTREE_RECEIPTS_FILE, PHONE_WORKTREE_RECEIPTS_PER_OWNER, PhoneW
 import { parseWorktreeCreateBody, PHONE_WORKTREE_RECEIPT_TTL_MS, PHONE_WORKTREE_RETRY_AFTER_MS } from '../../../shared/phoneGitV1';
 import { windowsDirectoryHold } from '../../../shared/directoryHold';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { phonePrepSummary, prepareNewWorktree } from '../../../main/worktask/workspacePrep';
+import type { ProjectConfigState } from '../../../shared/wmuxProjectConfig';
 
 const savedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
 let root: string;
@@ -111,6 +113,40 @@ describe('phone worktree creation', { timeout: 60_000 }, () => {
     expect(svc.receipt('device:other', 's1', requestId)).toEqual({ requestId, state: 'none' });
     expect(svc.receipt('operator', 's2', requestId)).toEqual({ requestId, state: 'none' });
     expect(service().receipt('operator', 's1', upper)).toEqual(first.receipt);
+  });
+
+  describe('new workspace preparation', () => {
+    const trusted = (fanout: Record<string, unknown>): ProjectConfigState => ({
+      found: true, root: repo, configPath: path.join(repo, 'wmux.json'), trust: 'trusted', contentHash: 'a'.repeat(64), config: { version: 1, fanout }, prepReviewed: true,
+    });
+    const preparing = (state: () => ProjectConfigState) => service({
+      prepare: async (sourceCwd, dir) => phonePrepSummary(await prepareNewWorktree({ sourceCwd, worktreePath: dir, origin: 'human' }, { getState: async () => state() })),
+    });
+
+    it('copies the session checkout\'s selected files before the receipt says created, with counts only', async () => {
+      commit(repo, { '.gitignore': '.env\n' });
+      fs.writeFileSync(path.join(repo, '.env'), 'SECRET=1\n');
+      const { receipt } = await create(preparing(() => trusted({ copy: ['.env', '.env.local'] })), repo, 'with-env');
+      expect(receipt).toMatchObject({ state: 'created', prep: { status: 'ready', copied: 1, missing: 1, refused: 0, present: 0 } });
+      expect(JSON.stringify(receipt)).not.toContain('SECRET');
+      expect(JSON.stringify(receipt)).not.toContain('.env');
+      expect(fs.readFileSync(path.join(phoneDir(repo, 'with-env'), '.env'), 'utf8')).toBe('SECRET=1\n');
+    });
+
+    it('ends a failed setup in the existing refused shape and keeps the worktree', async () => {
+      const { receipt } = await create(preparing(() => trusted({ setup: 'node -e "process.exit(4)"' })), repo, 'bad-setup');
+      expect(receipt).toMatchObject({ state: 'refused', error: 'prep-failed' });
+      expect(receipt.cwd).toBeUndefined();
+      expect(fs.existsSync(phoneDir(repo, 'bad-setup'))).toBe(true);
+      expect(audit).toEqual([['', 'prep-failed']]);
+    });
+
+    it('reports an unapproved config as skipped, running nothing', async () => {
+      const marker = path.join(root, 'prep-ran');
+      const { receipt } = await create(preparing(() => ({ ...trusted({ setup: `node -e "require('fs').writeFileSync(${JSON.stringify(marker)}, '1')"` }), trust: 'stale' })), repo, 'stale-cfg');
+      expect(receipt).toMatchObject({ state: 'created', prep: { status: 'skipped', reason: 'stale', copied: 0, missing: 0, refused: 0, present: 0 } });
+      expect(fs.existsSync(marker)).toBe(false);
+    });
   });
 
   it('runs the add with hooks, global attributes, transports and filter drivers switched off', async () => {
