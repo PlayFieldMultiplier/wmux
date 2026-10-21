@@ -60,6 +60,7 @@ describe('spawnInstallWaiter launch path (#1264)', () => {
     lockBudgetMs: 60_000,
     forceKillEligiblePids: [],
     forceKillGraceMs: 5_000,
+    setupSha256: 'ab'.repeat(32),
   });
 
   /** The directory the module mkdtemp'd, read off the definition it registered. */
@@ -189,7 +190,7 @@ describe('leaked waiter task registrations (#1283 review)', () => {
     expect(path.basename(spawnInstallWaiter({
       pids: [], setupExePath: 'C:\\Temp\\Setup.exe', installRoot: 'C:\\wmux',
       abortMarkerPath: 'C:\\Temp\\a.txt', readyMarkerPath: 'C:\\Temp\\r.tmp',
-      lockBudgetMs: 60_000, forceKillEligiblePids: [], forceKillGraceMs: 5_000,
+      lockBudgetMs: 60_000, forceKillEligiblePids: [], forceKillGraceMs: 5_000, setupSha256: 'ab'.repeat(32),
     }) as string)).toBe('wait-and-install-w.ps1');
 
     const deletes = execFileSyncMock.mock.calls.filter((c) => c[1][0] === '/Delete');

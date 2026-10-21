@@ -3342,6 +3342,9 @@ export const en = {
   'settings.latestVersion': 'Latest',
   'settings.updateReady': 'Update ready',
   'settings.updateEndsSessions': 'Installing closes every pane.',
+  'settings.updateVerifyFailed':
+    'The published update {version} could not be verified, so it was not installed. wmux tries again when the release changes.',
+  'settings.updatesOffForInstance': 'In-app updates are off for this copy of wmux because it runs with separate data.',
   'update.installFailed': 'The update could not be installed. {error}',
   'settings.checkFailed': 'Check failed',
   'settings.unknownError': 'Unknown error',
@@ -4004,6 +4007,10 @@ export const en = {
   'update.installNow': 'Install now',
   'update.refusedInstallBlocked':
     'The last update did not install: Windows blocked its installer (Smart App Control or an application control policy). Your current version is unchanged. Try again in a day or two, or install from the releases page once Windows allows it.',
+  'update.refusedInstallChanged':
+    'The last update did not install: its installer changed after wmux verified it, so it was not run. Your current version is unchanged. Check for updates again to download and install a fresh copy. Installing closes every pane.',
+  'update.refusedInstallUnreadable':
+    'The last update did not install: its installer could not be read to verify it, so it was not run. Your current version is unchanged. Check for updates again to verify and install it, or install from the releases page. Installing closes every pane.',
   'update.smartAppControlHold':
     "Windows Smart App Control will likely block this update's installer, so wmux stayed open and nothing changed. Try again in a day or two. Install anyway closes every pane; if Windows blocks the installer, reopen wmux and your current version will still be there.",
   'update.installAnyway': 'Install anyway',

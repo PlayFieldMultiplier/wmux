@@ -73,4 +73,30 @@ describe('SettingsPanel — update widget reads state on mount', () => {
     expect(checkIdx).toBeGreaterThan(-1);
     expect(checkIdx).toBeLessThan(installIdx);
   });
+
+  it('pulls the updater notice on mount, not only from events', () => {
+    // A failed verification is announced once per poll and the panel is
+    // mounted only while open; the instance-disabled state has no event.
+    expect(updateWidget()).toMatch(/electronAPI\?\.updater\?\.getNotice/);
+  });
+
+  it('orders the mount-time notice reply after any live updater event', () => {
+    const body = updateWidget();
+    // Every live subscription counts, and the reply goes through the pure rule.
+    expect(body.match(/liveUpdaterEvents\.current\+\+;/g)).toHaveLength(4);
+    expect(body).toMatch(/const requestedAt = liveUpdaterEvents\.current;/);
+    expect(body).toMatch(/verifyFailedAfterNotice\(\s*prev, notice\.verifyFailedVersion, requestedAt, liveUpdaterEvents\.current,/);
+  });
+
+  it('says a published update failed verification on its own line', () => {
+    const body = updateWidget();
+    expect(body).toMatch(/data\.code === 'verify-failed'/);
+    expect(body).toMatch(/t\('settings\.updateVerifyFailed', \{ version: verifyFailedVersion \}\)/);
+  });
+
+  it('says in-app updates are off for an instance with separate data, and offers no check', () => {
+    const body = updateWidget();
+    expect(body).toMatch(/settings\.updatesOffForInstance/);
+    expect(body).toMatch(/disabled=\{state === 'checking' \|\| state === 'downloading' \|\| instanceDisabled\}/);
+  });
 });

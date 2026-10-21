@@ -25,7 +25,7 @@
  *   - Autostart: a Run value whose target no longer exists (it names the
  *     versioned `app-X.Y.Z\wmux.exe`, which the next install deletes) is
  *     pointed at the running exe. A MISSING value is only created on the
- *     firstrun of a fresh install (no session.json yet). The same absence on an
+ *     firstrun of a fresh install (installProfile.ts). The same absence on an
  *     existing profile may be the user's opt-out, and must stick.
  *   - Shortcuts: only on the firstrun of a fresh install, and only the
  *     locations that are missing. A user who deleted a shortcut must not see
@@ -49,7 +49,7 @@ export type ShortcutLocation = 'Desktop' | 'StartMenu';
 export interface ReconcileProbe {
   /** Launched with `--squirrel-firstrun`: an install finished moments ago. */
   firstRun: boolean;
-  /** No session.json existed when this boot started: nobody has used wmux on this profile. */
+  /** Nobody had used wmux on this profile when this boot started (installProfile.isExistingProfile). */
   freshInstall: boolean;
   /** `<root>\bin\wmux.cmd` exists. */
   shimExists: boolean;
@@ -163,14 +163,6 @@ function createShortcuts(execPath: string, root: string, locations: ShortcutLoca
   const child = spawn(updateExe, args, { detached: true, stdio: 'ignore', windowsHide: true });
   child.on('error', (err) => console.warn('[postInstall] Update.exe --createShortcut failed:', err));
   child.unref();
-}
-
-/**
- * True when no session.json exists yet: nobody has used wmux on this profile.
- * Must be read before the boot's first session save creates the file.
- */
-export function isFreshProfile(userDataDir: string): boolean {
-  return !fs.existsSync(path.join(userDataDir, 'session.json'));
 }
 
 export interface ReconcileOptions {

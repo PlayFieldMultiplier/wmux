@@ -16,6 +16,7 @@ import {
   selectInstallRootPids,
   selectOwnTreePids,
   parseProcessRows,
+  selectDaemonPids,
   buildWaiterScript,
   buildWaiterVbsLauncher,
   buildScheduledTaskCreateArgs,
@@ -33,6 +34,8 @@ import {
 } from '../installTeardown';
 import {
   INSTALL_BLOCKED_BY_WINDOWS_REASON,
+  INSTALL_SETUP_CHANGED_REASON,
+  INSTALL_SETUP_UNREADABLE_REASON,
   isInstallBlockedByWindowsReason,
 } from '../../../shared/installAbortReasons';
 
@@ -45,6 +48,7 @@ const PLAN: WaiterPlan = {
   lockBudgetMs: 30_000,
   forceKillEligiblePids: [],
   forceKillGraceMs: 5_000,
+  setupSha256: 'ab'.repeat(32),
 };
 
 describe('isSafePsPathLiteral', () => {
@@ -127,6 +131,42 @@ describe('buildWaiterScript — ordering is the whole contract', () => {
   it('doubles apostrophes in every embedded path', () => {
     const s = buildWaiterScript({ ...PLAN, installRoot: "C:\\Users\\O'Connor\\wmux" }) ?? '';
     expect(s).toContain("$root = 'C:\\Users\\O''Connor\\wmux'");
+  });
+
+  it('re-hashes the installer after every wait and before starting it, holding it open across the start', () => {
+    const s = buildWaiterScript({ ...PLAN, setupSha256: 'AB'.repeat(32) }) ?? '';
+    const lockProbe = s.lastIndexOf('Test-RootLocked');
+    const hash = s.indexOf('ComputeHash($setupHold)');
+    const refuse = s.indexOf(`Write-InstallAbortMarker '${INSTALL_SETUP_CHANGED_REASON}'`);
+    const start = s.indexOf('Start-Process -FilePath $setup');
+    const release = s.indexOf('$setupHold.Close()', start);
+
+    expect(s).toContain(`$expectedSha = '${'ab'.repeat(32)}'`);
+    expect(hash).toBeGreaterThan(lockProbe);
+    expect(refuse).toBeGreaterThan(hash);
+    expect(start).toBeGreaterThan(refuse);
+    expect(release).toBeGreaterThan(start);
+    // Opened for read with read-only sharing: no writer while it is held.
+    expect(s).toContain("[System.IO.File]::Open($setup, 'Open', 'Read', 'Read')");
+  });
+
+  it('reports an installer it could not read apart from one whose bytes changed', () => {
+    const s = buildWaiterScript(PLAN) ?? '';
+    const unreadable = s.indexOf(`Write-InstallAbortMarker '${INSTALL_SETUP_UNREADABLE_REASON}'`);
+    const changed = s.indexOf(`Write-InstallAbortMarker '${INSTALL_SETUP_CHANGED_REASON}'`);
+    expect(unreadable).toBeGreaterThan(-1);
+    expect(changed).toBeGreaterThan(unreadable);
+    const noHash = s.indexOf('if (-not $actualSha) {');
+    expect(noHash).toBeGreaterThan(s.indexOf('ComputeHash($setupHold)'));
+    expect(noHash).toBeLessThan(unreadable);
+    expect(s.slice(unreadable, changed)).toContain('exit 8');
+    expect(s.slice(changed)).toContain('exit 7');
+  });
+
+  it('refuses to build without a well-formed installer digest', () => {
+    expect(buildWaiterScript({ ...PLAN, setupSha256: '' })).toBeNull();
+    expect(buildWaiterScript({ ...PLAN, setupSha256: 'ab'.repeat(31) })).toBeNull();
+    expect(buildWaiterScript({ ...PLAN, setupSha256: `${'ab'.repeat(31)}'x` })).toBeNull();
   });
 
   it('refuses to build on a line terminator or a bogus pid', () => {
@@ -283,20 +323,20 @@ describe('selectInstallRootPids', () => {
 describe('parseProcessRows', () => {
   it('parses the array form and the single-object form, carrying parentage', () => {
     expect(parseProcessRows('[{"ProcessId":1,"ParentProcessId":7,"ExecutablePath":"C:\\\\a.exe"}]')).toEqual([
-      { pid: 1, parentPid: 7, executablePath: 'C:\\a.exe' },
+      { pid: 1, parentPid: 7, executablePath: 'C:\\a.exe', commandLine: '' },
     ]);
     expect(parseProcessRows('{"ProcessId":2,"ParentProcessId":7,"ExecutablePath":"C:\\\\b.exe"}')).toEqual([
-      { pid: 2, parentPid: 7, executablePath: 'C:\\b.exe' },
+      { pid: 2, parentPid: 7, executablePath: 'C:\\b.exe', commandLine: '' },
     ]);
     // #980 — an absent or malformed parent reads as 0, which belongs to no
     // tree. Unreadable parentage can only make a process look FOREIGN, and a
     // foreign process is the one case it is safe to be wrong about: it gets
     // force-killed, which is what the old code did to everything anyway.
     expect(parseProcessRows('[{"ProcessId":3,"ExecutablePath":"C:\\\\c.exe"}]')).toEqual([
-      { pid: 3, parentPid: 0, executablePath: 'C:\\c.exe' },
+      { pid: 3, parentPid: 0, executablePath: 'C:\\c.exe', commandLine: '' },
     ]);
     expect(parseProcessRows('[{"ProcessId":4,"ParentProcessId":-1,"ExecutablePath":""}]')).toEqual([
-      { pid: 4, parentPid: 0, executablePath: '' },
+      { pid: 4, parentPid: 0, executablePath: '', commandLine: '' },
     ]);
   });
 
@@ -307,7 +347,31 @@ describe('parseProcessRows', () => {
     // A null ExecutablePath (access denied) still yields a row, with '' — which
     // selectInstallRootPids then filters out rather than treating as a match.
     expect(parseProcessRows('[{"ProcessId":9,"ParentProcessId":1,"ExecutablePath":null}]')).toEqual([
-      { pid: 9, parentPid: 1, executablePath: '' },
+      { pid: 9, parentPid: 1, executablePath: '', commandLine: '' },
+    ]);
+  });
+});
+
+describe('selectDaemonPids — the daemon by command line, not by pid file', () => {
+  const rows = [
+    { pid: 10, commandLine: '"C:\\wmux\\app-4.8.0\\wmux.exe"' },
+    { pid: 11, commandLine: '"C:\\wmux\\app-4.8.0\\wmux.exe" "C:\\wmux\\app-4.8.0\\resources\\app.asar\\.vite\\build\\daemon-bundle\\index.js"' },
+    { pid: 12, commandLine: '"C:\\wmux\\app-4.8.0\\wmux.exe" --type=renderer --daemon-bundle/index.js' },
+    { pid: 13, commandLine: '"C:\\wmux\\app-4.8.0\\wmux.exe" C:/wmux/daemon/index.js' },
+    { pid: 14, commandLine: '' },
+  ];
+
+  it('picks the daemon script layouts and nothing else', () => {
+    expect([...selectDaemonPids(rows, 10)].sort()).toEqual([11, 13]);
+  });
+
+  it('never classifies an unreadable command line as the daemon', () => {
+    expect(selectDaemonPids([{ pid: 14, commandLine: '' }], 1).size).toBe(0);
+  });
+
+  it('parseProcessRows carries the command line through', () => {
+    expect(parseProcessRows('[{"ProcessId":5,"ParentProcessId":1,"ExecutablePath":"C:\\\\w.exe","CommandLine":"w.exe daemon-bundle\\\\index.js"}]')).toEqual([
+      { pid: 5, parentPid: 1, executablePath: 'C:\\w.exe', commandLine: 'w.exe daemon-bundle\\index.js' },
     ]);
   });
 });
@@ -505,10 +569,11 @@ describe('buildWaiterScript — #1341 target-version stamp', () => {
     expect(s).toContain('function Write-InstallAbortMarker($reason) {');
     expect(s).not.toMatch(/Set-Content -LiteralPath \$marker -Value 'install-aborted/);
     const writes = (s.match(/Write-InstallAbortMarker /g) ?? []).length;
-    // interrupted sentinel + stuck handle + locked root + blocked-by-policy
-    // (#1525) + cannot-start + incomplete-install = 6 marker writes, all
+    // interrupted sentinel + stuck handle + locked root + installer
+    // unreadable + installer changed since verification + blocked-by-policy
+    // (#1525) + cannot-start + incomplete-install = 8 marker writes, all
     // stamped.
-    expect(writes).toBe(6);
+    expect(writes).toBe(8);
   });
 
   it('omits the stamp when the caller cannot name the target, instead of failing the build', () => {
@@ -601,6 +666,7 @@ describe('buildWaiterScript — the clock has to survive a long uptime (#980)', 
     lockBudgetMs: 60_000,
     forceKillEligiblePids: [],
     forceKillGraceMs: 5_000,
+    setupSha256: 'ab'.repeat(32),
   };
 
   it('uses a monotonic Stopwatch, never [Environment]::TickCount', () => {
@@ -643,6 +709,7 @@ describe('buildWaiterScript — one waiter per install root (#980, coderabbit)',
     lockBudgetMs: 60_000,
     forceKillEligiblePids: [],
     forceKillGraceMs: 5_000,
+    setupSha256: 'ab'.repeat(32),
   };
   const script = () => buildWaiterScript(plan)!;
 
@@ -710,6 +777,7 @@ describe('buildWaiterScript — post-exit install verification (#1046)', () => {
     lockBudgetMs: 60000,
     forceKillEligiblePids: [],
     forceKillGraceMs: 5_000,
+    setupSha256: 'ab'.repeat(32),
   };
   const script = (): string => buildWaiterScript(PLAN46) ?? '';
 

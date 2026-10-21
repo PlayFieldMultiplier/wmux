@@ -56,7 +56,12 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn, execFileSync, type ChildProcess } from 'child_process';
-import { INSTALL_BLOCKED_BY_WINDOWS_REASON } from '../../shared/installAbortReasons';
+import {
+  INSTALL_BLOCKED_BY_WINDOWS_REASON,
+  INSTALL_SETUP_CHANGED_REASON,
+  INSTALL_SETUP_UNREADABLE_REASON,
+} from '../../shared/installAbortReasons';
+import { classifyWmuxProcess } from '../squirrelTeardown';
 
 /**
  * Marker the waiter writes when it refuses to launch, relative to userData.
@@ -140,6 +145,13 @@ export interface WaiterPlan {
   /** How long an eligible pid gets before the waiter kills it. Short: see
    *  OWN_TREE_FORCE_KILL_GRACE_MS in AutoUpdater.ts for the reasoning. */
   forceKillGraceMs: number;
+  /**
+   * The SHA-256 (hex) the installer was verified under. The waiter hashes
+   * `setupExePath` again immediately before starting it and refuses on any
+   * difference: the app's own last check runs before the quit, and the
+   * waiter can sit in its lock wait for a minute after that.
+   */
+  setupSha256: string;
   /**
    * #1341 — the version this install is FOR, stamped into every marker the
    * waiter writes. Optional: a caller that cannot name the target (an adopted
@@ -303,6 +315,8 @@ export interface InstallRootProcess {
   /** 0 when the enumeration did not report one — treated as "not ours". */
   parentPid: number;
   executablePath: string;
+  /** '' when the enumeration did not report one (see selectDaemonPids). */
+  commandLine: string;
 }
 
 /** Parse `Get-CimInstance ... | ConvertTo-Json` rows. Tolerates the single-object form. */
@@ -334,9 +348,35 @@ export function parseProcessRows(stdout: string): InstallRootProcess[] {
       pid,
       parentPid,
       executablePath: typeof o.ExecutablePath === 'string' ? o.ExecutablePath : '',
+      commandLine: typeof o.CommandLine === 'string' ? o.CommandLine : '',
     });
   }
   return out;
+}
+
+/**
+ * The daemon's pids, identified by command line the same way
+ * squirrelTeardown's classifier does (the daemon script path in a
+ * `wmux.exe <script.js>` command line).
+ *
+ * The install path spares the daemon it is connected to from every kill
+ * list: it is taken down by `daemon.shutdown`, which suspends its sessions and
+ * flushes their scrollback first, and a taskkill in the middle of that loses
+ * the scrollback. When the updater cannot learn that daemon's pid, a
+ * daemon-shaped command line among its own children is the fallback (see
+ * AutoUpdater.performInstall). A daemon-shaped process alone proves nothing
+ * about which daemon it is. An unreadable command line ('') classifies as an
+ * app, never as the daemon.
+ */
+export function selectDaemonPids(
+  rows: ReadonlyArray<{ pid: number; commandLine: string }>,
+  ownPid: number,
+): Set<number> {
+  return new Set(
+    rows
+      .filter((r) => classifyWmuxProcess({ pid: r.pid, commandLine: r.commandLine }, ownPid) === 'daemon')
+      .map((r) => r.pid),
+  );
 }
 
 /**
@@ -567,6 +607,17 @@ export function buildScheduledTaskDeleteArgs(taskName: string): string[] {
  * The waiter script. Pure so its ordering guarantees are unit-testable — the
  * one property that matters is that Setup.exe is never started before both the
  * handle waits and the lock probe have passed.
+ *
+ * Exit codes (the one list; tests and diagnostics refer here):
+ *   0  the installer ran (or was still running at the verification deadline)
+ *   2  refused: the install root stayed locked
+ *   3  refused: a process under the install root would not exit
+ *   4  refused: the installer could not be started (missing, or Start-Process
+ *      failed, including a Windows application-control block)
+ *   5  yielded: another waiter already owns this install root (#980)
+ *   6  the installer exited but left an incomplete installation (#1046)
+ *   7  refused: the installer no longer matched its verified SHA-256
+ *   8  refused: the installer could not be opened or read to verify it
  */
 export function buildWaiterScript(plan: WaiterPlan, launchStampPath?: string): string | null {
   const paths = [plan.setupExePath, plan.installRoot, plan.abortMarkerPath, plan.readyMarkerPath];
@@ -581,6 +632,9 @@ export function buildWaiterScript(plan: WaiterPlan, launchStampPath?: string): s
   // or run with a nonsensical grace window.
   if (!plan.forceKillEligiblePids.every((p) => Number.isInteger(p) && p > 0)) return null;
   if (!Number.isInteger(plan.forceKillGraceMs) || plan.forceKillGraceMs <= 0) return null;
+  // Same posture again: without a well-formed digest there is nothing to
+  // re-verify against, so no waiter is built at all.
+  if (!/^[a-f0-9]{64}$/i.test(plan.setupSha256)) return null;
   // #1056 — optional execution-proof stamp. Stricter than isSafePsPathLiteral
   // on purpose: this path also rides through a cmd.exe trampoline command
   // line, where a double quote is structural. Optional, so the suites'
@@ -863,11 +917,41 @@ export function buildWaiterScript(plan: WaiterPlan, launchStampPath?: string): s
     // A verified installer can still be gone by now — quarantined by AV,
     // swept by a temp cleaner. Under SilentlyContinue that failure is invisible
     // and the script would exit 0, leaving a user who just watched wmux quit
-    // with no update and no explanation on the next boot.
+    // with no update and no explanation on the next boot. A missing file takes
+    // the cannot-start branch below without reaching Start-Process, so nothing
+    // that was not hashed is ever started.
     `$started = $true`,
     `$setupProc = $null`,
     `$startErr = $null`,
-    `try { $setupProc = Start-Process -FilePath $setup -PassThru -ErrorAction Stop } catch { $started = $false; $startErr = $_.Exception }`,
+    `if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { $started = $false }`,
+    `else {`,
+    // Re-verify the bytes as the last step before running them. The app's
+    // final check runs before it quits; the waits above can take a minute
+    // after that, with the file in a user-writable temp dir. The file is held
+    // open with read-only sharing from the hash until the process has
+    // started, so nothing can rewrite it in between: the bytes that run are
+    // the bytes that were hashed. A file that cannot be opened or read is
+    // not run either, under its own reason: nothing says its bytes changed.
+    `  $expectedSha = ${psQuote(plan.setupSha256.toLowerCase())}`,
+    `  $setupHold = $null`,
+    `  $actualSha = $null`,
+    `  try {`,
+    `    $setupHold = [System.IO.File]::Open($setup, 'Open', 'Read', 'Read')`,
+    `    $actualSha = ([System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($setupHold)) -replace '-', '').ToLowerInvariant()`,
+    `  } catch { }`,
+    `  if (-not $actualSha) {`,
+    `    if ($setupHold) { try { $setupHold.Close() } catch { } }`,
+    `    Write-InstallAbortMarker ${psQuote(INSTALL_SETUP_UNREADABLE_REASON)}`,
+    `    exit 8`,
+    `  }`,
+    `  if ($actualSha -ne $expectedSha) {`,
+    `    if ($setupHold) { try { $setupHold.Close() } catch { } }`,
+    `    Write-InstallAbortMarker ${psQuote(INSTALL_SETUP_CHANGED_REASON)}`,
+    `    exit 7`,
+    `  }`,
+    `  try { $setupProc = Start-Process -FilePath $setup -PassThru -ErrorAction Stop } catch { $started = $false; $startErr = $_.Exception }`,
+    `  try { $setupHold.Close() } catch { }`,
+    `}`,
     `if (-not $started) {`,
     // #1525 — name the one failure the user cannot retry their way out of
     // right now: Windows refusing to run the installer at all. 4551 is
@@ -959,11 +1043,13 @@ export interface InstallRootSurvey {
   pids: number[];
   /** Of those, our own descendants. They exit with `app.quit()`. */
   ownTree: Set<number>;
+  /** Of those, every daemon-shaped command line (ours or not). */
+  daemonPids: Set<number>;
 }
 
 /** Enumerate, best-effort. win32-only; never throws into the update path. */
 export function collectInstallRootProcesses(installRoot: string): InstallRootSurvey {
-  const empty: InstallRootSurvey = { pids: [], ownTree: new Set() };
+  const empty: InstallRootSurvey = { pids: [], ownTree: new Set(), daemonPids: new Set() };
   if (process.platform !== 'win32') return empty;
   try {
     const systemRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -976,7 +1062,7 @@ export function collectInstallRootProcesses(installRoot: string): InstallRootSur
       powershell,
       [
         '-NoProfile', '-NonInteractive', '-Command',
-        `Get-CimInstance Win32_Process -Filter "Name='${exeName}'" -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,ExecutablePath | ConvertTo-Json -Compress`,
+        `Get-CimInstance Win32_Process -Filter "Name='${exeName}'" -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress`,
       ],
       { encoding: 'utf-8', timeout: 10_000, windowsHide: true },
     );
@@ -988,7 +1074,10 @@ export function collectInstallRootProcesses(installRoot: string): InstallRootSur
     const ownTree = new Set(
       [...selectOwnTreePids(rows, process.pid)].filter((p) => under.has(p)),
     );
-    return { pids, ownTree };
+    const daemonPids = new Set(
+      [...selectDaemonPids(rows, process.pid)].filter((p) => under.has(p)),
+    );
+    return { pids, ownTree, daemonPids };
   } catch {
     return empty;
   }
@@ -1465,11 +1554,13 @@ export function spawnInstallWaiter(plan: WaiterPlan): string | null {
 /**
  * The daemon's pid, or null when it cannot be read.
  *
- * Only used to EXCLUDE it from the force-kill list — the daemon is taken down
- * gracefully so it can flush scrollback first. A null here therefore fails in
- * the safe direction on the install path (the daemon gets force-killed like
- * anything else, losing a flush but not the install), which is why this does
- * not reach for the launcher's verify-before-kill machinery.
+ * Only used to EXCLUDE it from the force-kill lists — the daemon is taken down
+ * gracefully so it can flush scrollback first. It is one of two sources: the
+ * install-root survey also identifies the daemon by command line
+ * (selectDaemonPids), so an unreadable pid file no longer puts the daemon on
+ * a kill list. Neither source can spare a process that is not the daemon,
+ * which is why this does not reach for the launcher's verify-before-kill
+ * machinery.
  */
 export function readDaemonPid(wmuxDir: string): number | null {
   try {

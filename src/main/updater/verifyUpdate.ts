@@ -14,6 +14,7 @@
  */
 
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { normalizeVersion } from '../../shared/updateVersion';
 
 export interface UpdateManifest {
   version: string;
@@ -31,10 +32,9 @@ export type ManifestResult =
   | { ok: true; manifest: UpdateManifest }
   | { ok: false; reason: string };
 
-/** Strip a leading "v" so "v2.14.0" and "2.14.0" compare equal. */
-export function normalizeVersion(v: string): string {
-  return v.trim().replace(/^v/i, '');
-}
+// Shared with the renderer, which compares the feed's and the manifest's
+// spellings of the same version (Settings › Updates).
+export { normalizeVersion } from '../../shared/updateVersion';
 
 /**
  * Only https downloads from github.com (the release host) are accepted. The
@@ -157,28 +157,77 @@ export function parseArtifactName(name: string): ParsedArtifactName | null {
 }
 
 /**
- * True when `candidate` is a strictly newer release than `current`, comparing
- * the numeric MAJOR.MINOR.PATCH core only.
+ * Strict semver 2.0.0: MAJOR.MINOR.PATCH, an optional `-prerelease` of
+ * dot-separated identifiers, an optional `+build`. Numeric parts carry no
+ * leading zeros. Kept as one expression so the feed check and the version
+ * comparison below agree on what a version is.
+ */
+const SEMVER_RE =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
+interface ParsedSemver {
+  core: [number, number, number];
+  /** Prerelease identifiers; empty for a release. */
+  prerelease: string[];
+}
+
+function parseSemver(v: string): ParsedSemver | null {
+  const m = SEMVER_RE.exec(normalizeVersion(v));
+  if (!m) return null;
+  return {
+    core: [Number(m[1]), Number(m[2]), Number(m[3])],
+    prerelease: m[4] ? m[4].split('.') : [],
+  };
+}
+
+/**
+ * The update feed's `name`, accepted only when it is a strict semver with an
+ * optional leading `v` (release tags are `vX.Y.Z`). The name becomes the
+ * pending version: it is compared against the manifest, stamped into the
+ * install marker and shown in Settings, so anything else is an error rather
+ * than something to make sense of. Returns the name unchanged, or null.
+ */
+export function parseFeedVersion(name: unknown): string | null {
+  if (typeof name !== 'string' || name.length > 64) return null;
+  const bare = name.startsWith('v') ? name.slice(1) : name;
+  return SEMVER_RE.test(bare) ? name : null;
+}
+
+/** Semver precedence of two prerelease identifiers. */
+function compareIdentifier(a: string, b: string): number {
+  const an = /^\d+$/.test(a);
+  const bn = /^\d+$/.test(b);
+  if (an && bn) return Number(a) - Number(b);
+  // A numeric identifier ranks below an alphanumeric one.
+  if (an !== bn) return an ? -1 : 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * True when `candidate` is a strictly newer release than `current`, by semver
+ * precedence: the numeric core first, then the prerelease. A release outranks
+ * any prerelease of the same core (3.46.0 > 3.46.0-beta.2), prereleases
+ * compare identifier by identifier (beta.2 > beta.1, beta.10 > beta.2), and
+ * build metadata is ignored.
  *
- * A prerelease or build suffix on either side is ignored, so 3.46.0-rc.1 and
- * 3.46.0 compare equal. Anything that does not read as three numbers answers
- * FALSE, which is the conservative side: the caller treats such an artifact as
- * ordinary garbage on the normal sweep schedule instead of keeping it around.
+ * Anything that does not parse as semver answers FALSE, which is the
+ * conservative side: the caller treats such an artifact as ordinary garbage
+ * on the normal sweep schedule instead of keeping it around.
  */
 export function isVersionNewer(candidate: string, current: string): boolean {
-  const core = (v: string): number[] | null => {
-    // A prerelease/build suffix is read past, not rejected. Requiring a bare
-    // X.Y.Z on BOTH sides meant a nightly or rc build of wmux — where
-    // app.getVersion() carries a suffix — answered false for every artifact
-    // and silently switched this whole mechanism off.
-    const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(normalizeVersion(v));
-    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-  };
-  const a = core(candidate);
-  const b = core(current);
+  const a = parseSemver(candidate);
+  const b = parseSemver(current);
   if (!a || !b) return false;
   for (let i = 0; i < 3; i++) {
-    if (a[i] !== b[i]) return a[i] > b[i];
+    if (a.core[i] !== b.core[i]) return a.core[i] > b.core[i];
   }
-  return false;
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    return a.prerelease.length === 0 && b.prerelease.length > 0;
+  }
+  const n = Math.min(a.prerelease.length, b.prerelease.length);
+  for (let i = 0; i < n; i++) {
+    const c = compareIdentifier(a.prerelease[i], b.prerelease[i]);
+    if (c !== 0) return c > 0;
+  }
+  return a.prerelease.length > b.prerelease.length;
 }

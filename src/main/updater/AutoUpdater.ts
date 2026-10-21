@@ -16,7 +16,7 @@ import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { lstat, readdir, stat, unlink } from 'node:fs/promises';
 import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { IPC } from '../../shared/constants';
+import { IPC, dataSuffix } from '../../shared/constants';
 import {
   artifactTempName,
   digestsEqual,
@@ -24,6 +24,7 @@ import {
   isVersionNewer,
   normalizeVersion,
   parseArtifactName,
+  parseFeedVersion,
   sanitizeArtifactFileName,
   TEMP_ARTIFACT_PREFIX,
   validateManifest,
@@ -45,6 +46,14 @@ import {
   waitForWaiterHeartbeat,
 } from './installTeardown';
 import { findInstallIntegrityGap } from './installIntegrity';
+import { requestRendererSessionSave } from '../quit/rendererSessionSave';
+import {
+  clearVerifyFailure,
+  readVerifyFailure,
+  verifyFailurePath,
+  writeVerifyFailure,
+  type VerifyFailure,
+} from './verifyFailureStore';
 import { assessSmartAppControlBlock } from './smartAppControl';
 
 const REPO = 'openwong2kim/wmux';
@@ -61,6 +70,13 @@ const MANIFEST_URL = `https://github.com/${REPO}/releases/latest/download/${MANI
 
 // 업데이트 자동 확인 간격 (30분)
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+// The feed reply and the manifest are a few hundred bytes each. One that has
+// not arrived complete within this is stuck, not slow.
+const METADATA_REQUEST_TIMEOUT_MS = 30_000;
+// The installer download has no total deadline (its size and the link speed
+// vary too much), only this one: abort once no bytes have arrived for it.
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
 // Once quitAndInstall() is called, terminating this process is Squirrel's job
 // and takes about a second. If we are still running after this, ShipIt is
@@ -139,6 +155,64 @@ const TEMP_ARTIFACT_MISMATCH_DELETE_AFTER_MS = TEMP_ARTIFACT_MAX_AGE_MS;
 const isUpdaterSupported =
   process.platform === 'win32' || (isDarwin && process.arch === 'arm64');
 
+/**
+ * An instance with a data suffix (WMUX_DATA_SUFFIX: '-dev' for an unpackaged
+ * build, '-portable' for a macOS copy run outside Applications, any test or
+ * bench isolation) keeps its own userData and daemon, so it is not the
+ * installed copy an in-app update replaces. The updater does nothing there.
+ * Read at call time, never at module load: index.ts sets the suffix in
+ * appInit, after this module is evaluated.
+ */
+function updatesOffForInstance(): boolean {
+  return dataSuffix() !== '' && !updaterAllowedUnderSuffix();
+}
+
+/**
+ * TEST-ONLY switch for live-testing the updater from an isolated instance:
+ * WMUX_UPDATER_ALLOW_SUFFIX=1 re-enables check, download and verification
+ * under a data suffix. Install is refused under a suffix regardless (see
+ * performInstall), and the startup temp sweeps stay off. Not a user setting.
+ */
+function updaterAllowedUnderSuffix(): boolean {
+  return process.env.WMUX_UPDATER_ALLOW_SUFFIX === '1';
+}
+
+/**
+ * The whole installer arrived and its SHA-256 is not the one the manifest
+ * published. Distinct from a transport failure: fetching the same artifact
+ * again gives the same bytes, so this one is remembered (verifyFailureStore).
+ */
+class InstallerDigestMismatchError extends Error {
+  constructor(message: string, readonly asset: InstallerAssetIdentity) {
+    super(message);
+  }
+}
+
+/**
+ * What the download server said about the bytes it served: its ETag and
+ * Content-Length (null when absent). A re-uploaded asset under the same
+ * release and manifest digest gets a new ETag; the GitHub release-asset host
+ * (release-assets.githubusercontent.com, Azure blob storage) sends one.
+ */
+interface InstallerAssetIdentity {
+  etag: string | null;
+  contentLength: number | null;
+}
+
+function headerValue(headers: Record<string, string | string[]> | undefined, name: string): string | null {
+  const raw = headers?.[name];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function assetIdentity(headers: Record<string, string | string[]> | undefined): InstallerAssetIdentity {
+  const length = Number(headerValue(headers, 'content-length'));
+  return {
+    etag: headerValue(headers, 'etag'),
+    contentLength: Number.isSafeInteger(length) && length > 0 ? length : null,
+  };
+}
+
 interface UpdateInfo {
   name: string;
   notes: string;
@@ -187,19 +261,21 @@ export interface AutoUpdaterHooks {
    */
   onInstallRequiresFullShutdown: () => void;
   /**
-   * The daemon's pid, or null when it cannot be determined.
+   * Which daemon this app is connected to. Read without asking the daemon
+   * anything: the pid comes from what was recorded when the connection was
+   * made, so a daemon too busy to answer at install time is still known.
    *
    * Injected rather than read here so this module stays free of the daemon
    * config import: pulling `daemon/config` into the updater crashed the
    * electron-mocked unit tests at module load, and the updater has no other
    * reason to know where `~/.wmux` lives.
    *
-   * Used only to EXCLUDE the daemon from the force-kill list — it gets the
-   * graceful shutdown so it can flush scrollback. A null therefore fails safe:
-   * the daemon is force-killed like anything else, costing a flush but not the
-   * install.
+   * Used only to EXCLUDE that daemon from the force-kill lists — it is the
+   * one the full-shutdown branch stops gracefully, so it can flush
+   * scrollback. Any other daemon under the install root is not stopped by
+   * anything and stays on the kill list.
    */
-  getDaemonPid: () => number | null;
+  getDaemon: () => DaemonIdentity;
   /**
    * The persisted auto-update toggle, read straight from session.json (#1250).
    *
@@ -214,6 +290,16 @@ export interface AutoUpdaterHooks {
    * A null/undefined means "nothing persisted" and leaves the default.
    */
   readAutoUpdateEnabled?: () => boolean | null;
+}
+
+/** What main knows about its daemon (see AutoUpdaterHooks.getDaemon). */
+export interface DaemonIdentity {
+  /** A daemon client is connected right now. */
+  connected: boolean;
+  /** The pid recorded when that connection was made; null when not connected or none was reported. */
+  connectedPid: number | null;
+  /** daemon.pid, the fallback; null when it cannot be read. */
+  pidFilePid: number | null;
 }
 
 export class AutoUpdater {
@@ -246,6 +332,9 @@ export class AutoUpdater {
   // resolves (never throws) on failure, so without this a second call would
   // launch the installer twice.
   private isInstalling = false;
+  // The published (version, sha256) whose installer failed verification —
+  // see verifyFailureStore.ts. `undefined` until first read from userData.
+  private verifyFailure: VerifyFailure | null | undefined = undefined;
 
   constructor(getWindow: () => BrowserWindow | null, hooks: AutoUpdaterHooks) {
     this.getWindow = getWindow;
@@ -259,6 +348,8 @@ export class AutoUpdater {
     // module evaluation, before the window exists at all.
     ipcMain.handle(IPC.UPDATE_TAKE_REFUSED_INSTALL, () => this.takeRefusedInstall());
     ipcMain.handle(IPC.UPDATE_GET_PENDING_INSTALL, () => this.getPendingInstall());
+    // Same pull, same reason: Settings › Updates is mounted only while open.
+    ipcMain.handle(IPC.UPDATE_GET_NOTICE, () => this.getNotice());
     // #1250 — same class of bug as #866, one channel over. The renderer sends
     // the persisted auto-update toggle during loadSession (~1s in), and it
     // sends with ipcRenderer.send — fire-and-forget. A listener registered in
@@ -302,16 +393,22 @@ export class AutoUpdater {
       return;
     }
 
-    // #1283 review — sweep waiter task registrations a previous update failed
-    // to clean up (a `/Create` that timed out after the server committed, a
-    // `/Delete` that failed). They carry no trigger so they cannot fire on
-    // their own, but they point at a `%TEMP%` path the installer has since
-    // invalidated and they are litter in the user's task list. Startup is
-    // where this belongs: the quit path is the one place blocking costs the
-    // user something.
-    if (process.platform === 'win32') sweepStaleWaiterTasks();
-
-    void this.sweepStaleArtifacts();
+    const suffix = dataSuffix();
+    if (suffix) {
+      if (!updaterAllowedUnderSuffix()) {
+        console.log(
+          `[AutoUpdater] in-app updates are off for this instance: WMUX_DATA_SUFFIX="${suffix}" gives it its own data, ` +
+          'so it is not the installed copy an update replaces. No checks, downloads, installs or temp sweeps.',
+        );
+        return;
+      }
+      console.log(
+        `[AutoUpdater] WMUX_UPDATER_ALLOW_SUFFIX=1 (test-only): checking, downloading and verifying under WMUX_DATA_SUFFIX="${suffix}"; ` +
+        'install stays refused and temp sweeps stay off',
+      );
+    } else {
+      this.sweepAtStartup();
+    }
 
     // #866: if the last install was refused because the install root never
     // cleared, the waiter left a marker instead of running Setup.exe. The
@@ -326,6 +423,24 @@ export class AutoUpdater {
 
     // 이후 주기적 확인
     this.checkTimer = setInterval(() => this.check(), CHECK_INTERVAL_MS);
+  }
+
+  /**
+   * Startup housekeeping in temp and the task list. Only for the instance that
+   * owns the installation: an instance with a data suffix shares temp with
+   * the installed one and must not delete what that one is using.
+   */
+  private sweepAtStartup(): void {
+    // #1283 review — sweep waiter task registrations a previous update failed
+    // to clean up (a `/Create` that timed out after the server committed, a
+    // `/Delete` that failed). They carry no trigger so they cannot fire on
+    // their own, but they point at a `%TEMP%` path the installer has since
+    // invalidated and they are litter in the user's task list. Startup is
+    // where this belongs: the quit path is the one place blocking costs the
+    // user something.
+    if (process.platform === 'win32') sweepStaleWaiterTasks();
+
+    void this.sweepStaleArtifacts();
   }
 
   /**
@@ -608,6 +723,7 @@ export class AutoUpdater {
     // Defense in depth: never poll the update feed on an unsupported platform,
     // even if a caller invokes check() directly.
     if (!isUpdaterSupported) return;
+    if (updatesOffForInstance()) return;
     // The auto-update toggle silences BACKGROUND polls only. A manual
     // "check for updates" press (oneShot) is an explicit user request and
     // must work with the toggle off — otherwise the toggle bricks the only
@@ -623,6 +739,12 @@ export class AutoUpdater {
 
     try {
       const update = await this.fetchUpdate();
+      // A failed-verification record only stands while that same version is
+      // what the feed offers; nothing offered, or another version, ends it.
+      const failure = this.getVerifyFailure();
+      if (failure && (!update || normalizeVersion(update.name) !== normalizeVersion(failure.version))) {
+        this.setVerifyFailure(null);
+      }
       if (update) {
         const isNewVersion = this.pendingUpdate?.name !== update.name;
         this.pendingUpdate = update;
@@ -673,6 +795,7 @@ export class AutoUpdater {
    */
   private async downloadUpdate(): Promise<void> {
     if (!isUpdaterSupported) return;
+    if (updatesOffForInstance()) return;
     // #1250: the enabled gate in check() runs when the poll STARTS. The
     // renderer's toggle (or the boot read) can land between that start and
     // this dispatch — fetchUpdate is awaited — and a background download must
@@ -687,22 +810,39 @@ export class AutoUpdater {
     this.isDownloading = true;
 
     let tempPath: string | null = null;
+    let manifest: UpdateManifest | null = null;
     try {
       const manifestRaw = await this.fetchManifest();
       const validated = validateManifest(manifestRaw, pending.name);
       if (!validated.ok) {
         throw new Error(`update manifest rejected: ${validated.reason}`);
       }
+      manifest = validated.manifest;
       // #995: this machine may already hold a verified installer for exactly
       // this version (an aborted install, or a restart before the user pressed
       // Restart). Re-verify it against the manifest we just fetched and reuse
       // it rather than pulling the same ~150 MB down again.
       tempPath = await this.adoptExistingArtifact(validated.manifest);
       if (!tempPath) {
+        // This exact artifact already failed verification: downloading it
+        // again fails the same way, ~150 MB every 30 minutes. Wait for it to
+        // change: a new manifest digest, or the same digest with the asset
+        // itself re-uploaded (a new ETag, checked with a HEAD request). A
+        // manual "check for updates" still retries at once.
+        const failure = this.getVerifyFailure();
+        if (failure && !this.oneShotInstall && this.isRecordedFailure(failure, validated.manifest)) {
+          if (!(await this.assetChangedSince(failure, validated.manifest.url))) {
+            console.warn(`[AutoUpdater] ${pending.name} failed verification before and neither its manifest nor its asset changed — not downloading it again`);
+            this.sendVerifyFailed(pending.name);
+            return;
+          }
+          console.log(`[AutoUpdater] the ${pending.name} installer asset changed since it failed verification — downloading it again`);
+        }
         tempPath = await this.downloadAndVerify(validated.manifest, (percent) => {
           this.sendToRenderer(IPC.UPDATE_DOWNLOAD, { status: 'downloading', percent });
         });
       }
+      if (this.getVerifyFailure()) this.setVerifyFailure(null);
       if (this.pendingUpdate?.name !== pending.name) {
         // A newer release superseded this download mid-flight (check() replaced
         // pendingUpdate). Committing it would let a one-shot install restart the
@@ -739,66 +879,170 @@ export class AutoUpdater {
       }
       this.downloadedPath = null;
       this.downloadedSha = null;
-      this.sendToRenderer(IPC.UPDATE_ERROR, {
-        status: 'error',
-        message: `Update could not be downloaded or verified: ${message}`,
-      });
+      if (err instanceof InstallerDigestMismatchError && manifest) {
+        this.setVerifyFailure({ version: manifest.version, sha256: manifest.sha256, ...err.asset });
+        this.sendVerifyFailed(pending.name);
+      } else {
+        this.sendToRenderer(IPC.UPDATE_ERROR, {
+          status: 'error',
+          message: `Update could not be downloaded or verified: ${message}`,
+        });
+      }
     } finally {
       this.isDownloading = false;
     }
   }
 
-  private fetchUpdate(): Promise<UpdateInfo | null> {
-    return new Promise((resolve, reject) => {
-      const request = net.request(UPDATE_SERVER);
-      let body = '';
+  /**
+   * Whether the installer asset was replaced since `failure` was recorded, by
+   * a HEAD request: a different ETag, or (with no ETag on either side) a
+   * different Content-Length. Anything inconclusive (a failed request, no
+   * identity recorded or returned) answers false and the record holds until
+   * the next poll asks again.
+   */
+  private async assetChangedSince(failure: VerifyFailure, url: string): Promise<boolean> {
+    if (failure.etag === null && failure.contentLength === null) return false;
+    try {
+      const { statusCode, headers } = await this.requestText(url, 'installer asset', 'HEAD');
+      if (statusCode !== 200) return false;
+      const now = assetIdentity(headers);
+      if (failure.etag !== null && now.etag !== null) return now.etag !== failure.etag;
+      if (failure.contentLength !== null && now.contentLength !== null) return now.contentLength !== failure.contentLength;
+      return false;
+    } catch (err) {
+      console.warn('[AutoUpdater] could not check the installer asset for changes:', err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }
 
-      request.on('response', (response) => {
-        // 204 = no update available
-        if (response.statusCode === 204) {
-          resolve(null);
-          return;
-        }
-        if (response.statusCode !== 200) {
-          reject(new Error(`Update server returned ${response.statusCode}`));
-          return;
-        }
-        response.on('data', (chunk) => { body += chunk.toString(); });
-        response.on('end', () => {
-          try {
-            const data = JSON.parse(body) as UpdateInfo;
-            resolve(data);
-          } catch {
-            reject(new Error('Invalid JSON from update server'));
-          }
-        });
-      });
+  private isRecordedFailure(failure: VerifyFailure, manifest: UpdateManifest): boolean {
+    return normalizeVersion(failure.version) === normalizeVersion(manifest.version) &&
+      digestsEqual(failure.sha256, manifest.sha256);
+  }
 
-      request.on('error', (err) => reject(err));
-      request.end();
+  private getVerifyFailure(): VerifyFailure | null {
+    if (this.verifyFailure === undefined) {
+      this.verifyFailure = readVerifyFailure(verifyFailurePath(app.getPath('userData')));
+    }
+    return this.verifyFailure;
+  }
+
+  /** Kept in memory and in userData, so a restart does not pay for it again. */
+  private setVerifyFailure(record: VerifyFailure | null): void {
+    this.verifyFailure = record;
+    const file = verifyFailurePath(app.getPath('userData'));
+    if (record) writeVerifyFailure(file, record);
+    else clearVerifyFailure(file);
+  }
+
+  /** The version goes out normalized, the same spelling getNotice uses. */
+  private sendVerifyFailed(version: string): void {
+    this.sendToRenderer(IPC.UPDATE_ERROR, {
+      status: 'error',
+      code: 'verify-failed',
+      releaseName: normalizeVersion(version),
+      message: `The installer published for ${version} does not match its published checksum, so it was not used. wmux tries again when the release changes.`,
     });
   }
 
+  /**
+   * What Settings › Updates says even when no event reached it (it is mounted
+   * only while open). A failed-verification record for a version that is no
+   * longer newer than the running one is stale (the user updated another
+   * way) and is not reported.
+   */
+  private getNotice(): { instanceDisabled: boolean; verifyFailedVersion: string | null } {
+    const failure = this.getVerifyFailure();
+    return {
+      instanceDisabled: updatesOffForInstance(),
+      verifyFailedVersion:
+        failure && isVersionNewer(failure.version, app.getVersion()) ? normalizeVersion(failure.version) : null,
+    };
+  }
+
+  private async fetchUpdate(): Promise<UpdateInfo | null> {
+    const { statusCode, text } = await this.requestText(UPDATE_SERVER, 'update server');
+    // 204 = no update available
+    if (statusCode === 204) return null;
+    if (statusCode !== 200) throw new Error(`Update server returned ${statusCode}`);
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error('Invalid JSON from update server');
+    }
+    const info = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+    // The name becomes the pending version: matched against the manifest,
+    // stamped into the install marker, shown in Settings. Only a strict
+    // semver is accepted as one.
+    const name = parseFeedVersion(info.name);
+    if (name === null) {
+      throw new Error(`update server named an invalid version: ${JSON.stringify(info.name ?? null).slice(0, 80)}`);
+    }
+    return {
+      name,
+      notes: typeof info.notes === 'string' ? info.notes : '',
+      url: typeof info.url === 'string' ? info.url : '',
+    };
+  }
+
   /** Fetch the CI-published update manifest (raw JSON; validated by caller). */
-  private fetchManifest(): Promise<unknown> {
+  private async fetchManifest(): Promise<unknown> {
+    const { statusCode, text } = await this.requestText(MANIFEST_URL, 'update manifest server');
+    if (statusCode !== 200) throw new Error(`update manifest server returned ${statusCode}`);
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error('invalid JSON in update manifest');
+    }
+  }
+
+  /**
+   * GET a small document (the feed reply, the manifest). Settles exactly once,
+   * on every way a request can end: a request error, a response error, a
+   * response aborted mid-body, or no complete reply within
+   * METADATA_REQUEST_TIMEOUT_MS. A non-200 status settles at once and aborts
+   * the request rather than reading the body.
+   *
+   * The settling matters beyond this request: check() and downloadUpdate()
+   * hold isChecking / isDownloading until it does, and every later check is
+   * skipped while they are set. A dropped connection that was never settled
+   * stopped all checks until the app restarted.
+   */
+  private requestText(
+    url: string,
+    label: string,
+    method: 'GET' | 'HEAD' = 'GET',
+  ): Promise<{ statusCode: number; text: string; headers: Record<string, string | string[]> }> {
     return new Promise((resolve, reject) => {
-      const request = net.request(MANIFEST_URL);
-      let body = '';
+      const request = method === 'GET' ? net.request(url) : net.request({ method, url });
+      let settled = false;
+      const settle = (finish: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        finish();
+      };
+      const timer = setTimeout(() => {
+        settle(() => reject(new Error(`${label} did not answer within ${METADATA_REQUEST_TIMEOUT_MS / 1000}s`)));
+        request.abort();
+      }, METADATA_REQUEST_TIMEOUT_MS);
+
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
-          reject(new Error(`update manifest server returned ${response.statusCode}`));
+          settle(() => resolve({ statusCode: response.statusCode, text: '', headers: response.headers }));
+          // The body is not read; abort so the connection is released
+          // instead of left holding an unconsumed response.
+          request.abort();
           return;
         }
-        response.on('data', (chunk) => { body += chunk.toString(); });
-        response.on('end', () => {
-          try {
-            resolve(JSON.parse(body));
-          } catch {
-            reject(new Error('invalid JSON in update manifest'));
-          }
-        });
+        let text = '';
+        response.on('data', (chunk) => { text += chunk.toString(); });
+        response.on('end', () => settle(() => resolve({ statusCode: 200, text, headers: response.headers })));
+        response.on('aborted', () => settle(() => reject(new Error(`${label} connection dropped mid-response`))));
+        response.on('error', (err) => settle(() => reject(err instanceof Error ? err : new Error(String(err)))));
       });
-      request.on('error', (err) => reject(err));
+      request.on('error', (err) => settle(() => reject(err)));
       request.end();
     });
   }
@@ -827,9 +1071,15 @@ export class AutoUpdater {
       const hash = createHash('sha256');
       const out = createWriteStream(dest);
       let settled = false;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const clearIdle = () => {
+        if (idleTimer !== null) clearTimeout(idleTimer);
+        idleTimer = null;
+      };
       const fail = (err: Error) => {
         if (settled) return;
         settled = true;
+        clearIdle();
         // The caller only learns the temp path on resolve, so a failed or
         // sha-mismatched partial download must be removed HERE or it stays on
         // disk forever (and a tampered artifact would linger in temp). Wait for
@@ -840,18 +1090,37 @@ export class AutoUpdater {
       };
 
       const request = net.request(manifest.url);
+      // No-progress deadline, re-armed by every chunk. A ~150 MB download has
+      // no sensible total deadline, but a connection that delivers nothing for
+      // this long is stalled, and an unsettled download holds isDownloading.
+      const armIdle = () => {
+        clearIdle();
+        idleTimer = setTimeout(() => {
+          fail(new Error(`installer download stalled: no data for ${DOWNLOAD_IDLE_TIMEOUT_MS / 1000}s`));
+          request.abort();
+        }, DOWNLOAD_IDLE_TIMEOUT_MS);
+      };
+      armIdle();
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
           fail(new Error(`installer download returned ${response.statusCode}`));
+          // Same as requestText: the body is not read, so release the request.
+          request.abort();
           return;
         }
-        const totalRaw = (response as { headers?: Record<string, string | string[]> }).headers?.['content-length'];
-        const totalStr = Array.isArray(totalRaw) ? totalRaw[0] : totalRaw;
-        const total = totalStr ? parseInt(String(totalStr), 10) : NaN;
+        const headers = (response as { headers?: Record<string, string | string[]> }).headers;
+        const totalStr = headerValue(headers, 'content-length');
+        const total = totalStr ? parseInt(totalStr, 10) : NaN;
+        // Recorded with a digest mismatch, so a later poll can tell a
+        // re-uploaded asset from the same bytes (assetChangedSince).
+        const asset = assetIdentity(headers);
         let received = 0;
         let sentIndeterminate = false;
 
+        armIdle();
         response.on('data', (chunk: Buffer) => {
+          if (settled) return;
+          armIdle();
           hash.update(chunk);
           out.write(chunk);
           received += chunk.length;
@@ -865,6 +1134,8 @@ export class AutoUpdater {
           }
         });
         response.on('end', () => {
+          clearIdle();
+          if (settled) return;
           out.end(() => {
             if (settled) return;
             const actual = hash.digest('hex');
@@ -872,10 +1143,11 @@ export class AutoUpdater {
               settled = true;
               resolve(dest);
             } else {
-              fail(new Error(`sha256 mismatch: expected ${manifest.sha256}, got ${actual}`));
+              fail(new InstallerDigestMismatchError(`sha256 mismatch: expected ${manifest.sha256}, got ${actual}`, asset));
             }
           });
         });
+        response.on('aborted', () => fail(new Error('installer download connection dropped mid-transfer')));
         response.on('error', (err) => fail(err instanceof Error ? err : new Error(String(err))));
       });
       request.on('error', (err) => fail(err instanceof Error ? err : new Error(String(err))));
@@ -889,6 +1161,8 @@ export class AutoUpdater {
       if (process.env.NODE_ENV === 'development' || !isUpdaterSupported) {
         return { status: 'not-available' };
       }
+      // Not "up to date": nothing was checked. Settings says why (getNotice).
+      if (updatesOffForInstance()) return { status: 'disabled' };
       // Don't await — fire and forget, results come via IPC events. A manual
       // press is a one-shot "update now": auto-install once verified.
       this.check(true);
@@ -924,6 +1198,19 @@ export class AutoUpdater {
       console.log(`[AutoUpdater] install ignored on ${process.platform} — no in-app installer for this platform.`);
       return;
     }
+    // Always, even under the test-only WMUX_UPDATER_ALLOW_SUFFIX: the install
+    // replaces whatever lives under this executable's root and takes the
+    // daemon down with it, and an instance with its own data is not the copy
+    // that may do that.
+    if (dataSuffix()) {
+      console.log(`[AutoUpdater] install refused: this instance runs with WMUX_DATA_SUFFIX="${dataSuffix()}"`);
+      this.sendToRenderer(IPC.UPDATE_ERROR, {
+        status: 'error',
+        source: 'install',
+        message: 'In-app install is off for this instance because it runs with separate data (WMUX_DATA_SUFFIX). Update the installed wmux instead.',
+      });
+      return;
+    }
     // Both guards below used to return with only a console.log. Nothing reached
     // the renderer, so a press that hit one of them looked identical to a press
     // that did nothing at all — which is exactly how a stalled install
@@ -951,12 +1238,13 @@ export class AutoUpdater {
     }
     this.isInstalling = true;
 
+    // Bounded like before-quit's save: a renderer that never answers would
+    // otherwise hold isInstalling forever, and every later Install would be
+    // refused as "already in progress".
     const win = this.getWindow();
     if (win && !win.isDestroyed() && !win.webContents.isCrashed()) {
       try {
-        await win.webContents.executeJavaScript(
-          `try { window.dispatchEvent(new Event('beforeunload')); } catch(e) {}`
-        );
+        await requestRendererSessionSave(win.webContents);
         await new Promise(resolve => setTimeout(resolve, 500));
         console.log('[AutoUpdater] Session save triggered before update install');
       } catch {
@@ -1105,14 +1393,29 @@ export class AutoUpdater {
     // wait list, so sparing them cannot let the installer start early.
     //
     // The daemon is spared for its own, older reason: the full-shutdown branch
-    // flushes its scrollback first. A null daemon pid still fails safe — it is
-    // force-killed like anything else foreign, costing a flush but not the
-    // install — unless it is one of our descendants, in which case app.quit()
-    // is already taking it down.
+    // stops it with daemon.shutdown, which suspends its sessions and flushes
+    // their scrollback first. Only the daemon that branch stops is spared,
+    // from BOTH kill lists: the one this app is connected to, by the pid
+    // recorded at connect. Any other daemon under the root (an orphan,
+    // another data dir's daemon) is stopped by nothing, so sparing it would
+    // hold the root until the waiter refuses; it stays on a kill list.
+    // When that pid is not known:
+    //   - connected without one: every daemon-shaped command line is spared,
+    //     since one of them is the daemon the shutdown stops and nothing
+    //     tells which;
+    //   - not connected: the pid file's daemon, or with no pid file a
+    //     daemon-shaped command line among our own children (our daemon is
+    //     our child when this app spawned it).
+    const daemon = this.hooks.getDaemon();
     const survey = collectInstallRootProcesses(installRoot);
     const pids = survey.pids;
-    const daemonPid = this.hooks.getDaemonPid();
-    const forceKillPids = pids.filter((p) => p !== daemonPid && !survey.ownTree.has(p));
+    const isDaemon = (p: number): boolean => {
+      if (daemon.connected && daemon.connectedPid !== null) return p === daemon.connectedPid;
+      if (daemon.connected) return p === daemon.pidFilePid || survey.daemonPids.has(p);
+      if (daemon.pidFilePid !== null) return p === daemon.pidFilePid;
+      return survey.daemonPids.has(p) && survey.ownTree.has(p);
+    };
+    const forceKillPids = pids.filter((p) => !isDaemon(p) && !survey.ownTree.has(p));
     // #1084 — the OTHER half of survey.ownTree: pids we spare from the
     // immediate force-kill above because app.quit() is about to ask them to
     // exit on their own, but that is not the same as the daemon's exemption.
@@ -1122,7 +1425,7 @@ export class AutoUpdater {
     // real machine showed a bare "wmux" process stuck at 0% CPU well past
     // when app.quit() was called — the waiter should not sit out the full
     // INSTALL_LOCK_BUDGET_MS and refuse over it; it can just finish the job.
-    const forceKillEligiblePids = pids.filter((p) => p !== daemonPid && survey.ownTree.has(p));
+    const forceKillEligiblePids = pids.filter((p) => !isDaemon(p) && survey.ownTree.has(p));
 
     // ORDER MATTERS, and it is the reverse of the obvious one.
     //
@@ -1145,6 +1448,10 @@ export class AutoUpdater {
       lockBudgetMs: INSTALL_LOCK_BUDGET_MS,
       forceKillEligiblePids,
       forceKillGraceMs: OWN_TREE_FORCE_KILL_GRACE_MS,
+      // The waiter hashes the installer once more right before starting it.
+      // Never empty here (verifyArtifactStillMatches refuses without it); an
+      // empty one would make the waiter build fail closed.
+      setupSha256: this.downloadedSha ?? '',
       // #1341 — stamp the marker with what we are installing, so the version
       // that boots out of it can tell "this install finished" from "the waiter
       // has not cleared the marker yet". Empty when the artifact was adopted
@@ -1195,7 +1502,7 @@ export class AutoUpdater {
       `[AutoUpdater] install handoff: waiter=${waiterPath} watching ${pids.length} process(es) under ${installRoot}; ` +
       `force-killed ${killed.length}/${forceKillPids.length} foreign, ` +
       `${survey.ownTree.size} of our own left to app.quit(), ` +
-      `daemon pid ${daemonPid ?? 'unknown'} left to the graceful shutdown`,
+      `daemon pid ${pids.filter(isDaemon).join(',') || 'not found'} left to the graceful shutdown`,
     );
 
     // Sessions do NOT survive this install. The daemon holds the install root

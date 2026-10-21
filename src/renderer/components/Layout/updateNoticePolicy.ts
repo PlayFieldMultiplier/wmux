@@ -8,6 +8,7 @@
  */
 
 import type { ElectronAPI } from '../../../preload/preload';
+import { refusedInstallKind } from '../../../shared/installAbortReasons';
 
 /**
  * Payload of IPC.UPDATE_ERROR as the renderer sees it — derived from the
@@ -75,4 +76,20 @@ export function isSmartAppControlHold(data: UpdateErrorData): boolean {
 export function truncateReason(reason: string, max = 200): string {
   const trimmed = reason.trim();
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max - 1)}…`;
+}
+
+/**
+ * The boot notice for a refused install's marker reason. Reasons that have a
+ * sentence of their own get it; any other reason (including one written by an
+ * older build) gets the generic notice with the reason as its detail.
+ */
+export function refusedInstallNotice(reason: string): { key: string; vars?: Record<string, string> } {
+  switch (refusedInstallKind(reason)) {
+    // #1525 — the generic copy says "run the installer from the releases
+    // page", the same file Windows just refused to run.
+    case 'blocked-by-windows': return { key: 'update.refusedInstallBlocked' };
+    case 'setup-changed': return { key: 'update.refusedInstallChanged' };
+    case 'setup-unreadable': return { key: 'update.refusedInstallUnreadable' };
+    default: return { key: 'update.refusedInstall', vars: { detail: truncateReason(reason) } };
+  }
 }

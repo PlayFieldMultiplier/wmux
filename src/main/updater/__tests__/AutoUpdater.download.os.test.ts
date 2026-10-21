@@ -16,7 +16,7 @@ const GOOD_SHA = createHash('sha256').update(INSTALLER_BODY).digest('hex');
 /**
  * Quit hooks every AutoUpdater requires (see AutoUpdaterHooks).
  *
- * `getDaemonPid` returns 4243, which is one of the two pids the mocked
+ * `getDaemon` reports 4243 as connected, which is one of the two pids the mocked
  * enumeration reports. That is deliberate: it is what lets a test see the
  * daemon being EXCLUDED from the force-kill list (it gets the graceful
  * shutdown instead). A null here would silently pass the exclusion assertion
@@ -27,48 +27,102 @@ function quitHooks() {
     onBeforeInstallQuit: vi.fn(),
     onInstallQuitAborted: vi.fn(),
     onInstallRequiresFullShutdown: vi.fn(),
-    getDaemonPid: vi.fn((): number | null => 4243),
+    getDaemon: vi.fn(() => ({ connected: true, connectedPid: 4243 as number | null, pidFilePid: 4243 as number | null })),
   };
 }
 
 const realPlatform = process.platform;
+// The test setup gives every suite WMUX_DATA_SUFFIX='-vitest', and the updater
+// does nothing under a data suffix. Each load clears it unless a test asks for
+// one; this puts it back.
+const realDataSuffix = process.env.WMUX_DATA_SUFFIX;
+const realAllowSuffix = process.env.WMUX_UPDATER_ALLOW_SUFFIX;
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 afterEach(() => {
   Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  restoreEnv('WMUX_DATA_SUFFIX', realDataSuffix);
+  restoreEnv('WMUX_UPDATER_ALLOW_SUFFIX', realAllowSuffix);
   vi.resetModules();
   vi.useRealTimers();
 });
 
 interface Sent { channel: string; data: Record<string, unknown>; }
 
+/** The failed-verification record (verifyFailureStore.VerifyFailure). */
+interface Record_ { version: string; sha256: string; etag: string | null; contentLength: number | null }
+
 /** A file parked in the fake temp dir (#995 adoption paths). */
 interface TempFile { body: Buffer; mtimeMs?: number; isFile?: boolean }
 
+/**
+ * How one kind of request ends. 'ok' serves it normally; 'stall' never answers
+ * at all; 'stall-body' answers 200 and sends part of the body, then nothing;
+ * 'aborted' / 'error' send part of the body and then drop the connection the
+ * way Electron's IncomingMessage reports it; 'http-404' answers 404 and would
+ * send its body only if someone read it.
+ */
+type NetMode = 'ok' | 'stall' | 'stall-body' | 'aborted' | 'error' | 'http-404';
+interface NetModes { feed?: NetMode; manifest?: NetMode; download?: NetMode }
+
 /** Load AutoUpdater (win32) with a URL-routing net mock, fs mocked, window capture. */
 async function loadWin32(
-  { sha = GOOD_SHA, tempFiles = {} }: { sha?: string; tempFiles?: Record<string, TempFile> } = {},
+  {
+    sha = GOOD_SHA,
+    tempFiles = {},
+    appVersion = FAKE_VERSION,
+    net: netModes = {},
+    dataSuffix = '',
+    verifyFailure = null,
+  }: {
+    sha?: string;
+    tempFiles?: Record<string, TempFile>;
+    appVersion?: string;
+    net?: NetModes;
+    dataSuffix?: string;
+    verifyFailure?: Record_ | null;
+  } = {},
 ) {
   vi.resetModules();
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  if (dataSuffix) process.env.WMUX_DATA_SUFFIX = dataSuffix;
+  else delete process.env.WMUX_DATA_SUFFIX;
 
   // Mutable so a test can bump the offered release mid-run (supersede paths).
-  const feed = { version: NEW_VERSION };
+  // `etag` is what the installer asset is served with (a re-upload changes it).
+  const feed = { version: NEW_VERSION, sha, etag: '"0x1"' as string | null };
   const requestUrls: string[] = [];
   const ipcHandlers = new Map<string, (...a: unknown[]) => unknown>();
   const openPath = vi.fn(async (_p: string) => '');
 
   // Route net.request by URL: feed → update JSON, manifest → manifest JSON,
   // download → 200 with Content-Length + body chunk.
-  const request = vi.fn((url: string) => {
-    requestUrls.push(url);
+  const aborted: string[] = [];
+  const heads: string[] = [];
+  const request = vi.fn((arg: string | { method: string; url: string }) => {
+    const url = typeof arg === 'string' ? arg : arg.url;
+    const method = typeof arg === 'string' ? 'GET' : arg.method;
+    if (method === 'HEAD') heads.push(url);
+    else requestUrls.push(url);
     const cbs: Record<string, (arg: unknown) => void> = {};
+    const kind = url.includes('update.electronjs.org') ? 'feed'
+      : url.includes('update-manifest.json') ? 'manifest' : 'download';
+    const mode = netModes[kind] ?? 'ok';
     const req = {
       on(ev: string, cb: (arg: unknown) => void) { cbs[ev] = cb; return req; },
+      abort() { aborted.push(url); },
       end() {
         Promise.resolve().then(() => {
-          if (url.includes('update.electronjs.org')) {
+          if (method === 'HEAD') {
+            respondHead(cbs, INSTALLER_BODY);
+          } else if (mode !== 'ok') {
+            misbehave(cbs, mode);
+          } else if (url.includes('update.electronjs.org')) {
             respondJson(cbs, { name: feed.version, notes: 'notes', url: DL_URL });
           } else if (url.includes('update-manifest.json')) {
-            respondJson(cbs, { version: feed.version, setupExe: `wmux-${feed.version}.Setup.exe`, sha256: sha, url: DL_URL });
+            respondJson(cbs, { version: feed.version, setupExe: `wmux-${feed.version}.Setup.exe`, sha256: feed.sha, url: DL_URL });
           } else {
             respondBody(cbs, INSTALLER_BODY);
           }
@@ -77,6 +131,18 @@ async function loadWin32(
     };
     return req;
   });
+
+  function misbehave(cbs: Record<string, (a: unknown) => void>, mode: NetMode) {
+    if (mode === 'stall') return;
+    const dataCbs: Record<string, (a: unknown) => void> = {};
+    const resp = { statusCode: mode === 'http-404' ? 404 : 200, headers: {}, on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
+    cbs['response']?.(resp);
+    Promise.resolve().then(() => {
+      dataCbs['data']?.(Buffer.from('{"par'));
+      if (mode === 'aborted') dataCbs['aborted']?.(undefined);
+      if (mode === 'error') dataCbs['error']?.(new Error('net::ERR_CONNECTION_RESET'));
+    });
+  }
 
   function respondJson(cbs: Record<string, (a: unknown) => void>, obj: unknown) {
     const dataCbs: Record<string, (a: unknown) => void> = {};
@@ -87,9 +153,18 @@ async function loadWin32(
       dataCbs['end']?.(undefined);
     });
   }
+  function assetHeaders(body: Buffer): Record<string, string[]> {
+    return { 'content-length': [String(body.length)], ...(feed.etag ? { etag: [feed.etag] } : {}) };
+  }
+  function respondHead(cbs: Record<string, (a: unknown) => void>, body: Buffer) {
+    const dataCbs: Record<string, (a: unknown) => void> = {};
+    const resp = { statusCode: 200, headers: assetHeaders(body), on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
+    cbs['response']?.(resp);
+    Promise.resolve().then(() => { dataCbs['end']?.(undefined); });
+  }
   function respondBody(cbs: Record<string, (a: unknown) => void>, body: Buffer) {
     const dataCbs: Record<string, (a: unknown) => void> = {};
-    const resp = { statusCode: 200, headers: { 'content-length': [String(body.length)] }, on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
+    const resp = { statusCode: 200, headers: assetHeaders(body), on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
     cbs['response']?.(resp);
     Promise.resolve().then(() => {
       dataCbs['data']?.(body);
@@ -165,6 +240,7 @@ async function loadWin32(
     collectInstallRootProcesses: vi.fn((_root: string) => ({
       pids: [4242, 4243, 4244],
       ownTree: new Set([4244]),
+      daemonPids: new Set<number>(),
     })),
     terminatePids: vi.fn((pids: readonly number[]): number[] => [...pids]),
     spawnInstallWaiter: vi.fn((_plan: { setupExePath: string }): string | null =>
@@ -183,6 +259,17 @@ async function loadWin32(
   };
   vi.doMock('../installTeardown', () => teardown);
 
+  // The failed-verification record lives in userData; '/tmp' here is not a
+  // place to write it, so it is held in memory.
+  const verifyStore = {
+    record: verifyFailure as Record_ | null,
+    verifyFailurePath: (dir: string) => `${dir}/update-verify-failed.json`,
+    readVerifyFailure: vi.fn((_file: string) => verifyStore.record),
+    writeVerifyFailure: vi.fn((_file: string, rec: Record_) => { verifyStore.record = rec; }),
+    clearVerifyFailure: vi.fn((_file: string) => { verifyStore.record = null; }),
+  };
+  vi.doMock('../verifyFailureStore', () => verifyStore);
+
   // #1525 — the pre-quit Smart App Control check spawns reg.exe/PowerShell
   // for real, and the machine running the suite may be enforcing SAC. Pinned
   // to "not enforcing" so these flows never depend on the host's policy.
@@ -195,7 +282,7 @@ async function loadWin32(
   const quit = vi.fn();
   vi.doMock('electron', () => ({
     autoUpdater: {},
-    app: { getVersion: () => FAKE_VERSION, getPath: () => '/tmp', quit, isPackaged: true },
+    app: { getVersion: () => appVersion, getPath: () => '/tmp', quit, isPackaged: true },
     ipcMain: {
       on: vi.fn(),
       handle: (ch: string, cb: (...a: unknown[]) => unknown) => { ipcHandlers.set(ch, cb); },
@@ -207,7 +294,7 @@ async function loadWin32(
   }));
 
   const mod = await import('../AutoUpdater');
-  return { AutoUpdater: mod.AutoUpdater, requestUrls, ipcHandlers, sent, openPath, quit, win, feed, unlinkMock, teardown, tempFiles };
+  return { AutoUpdater: mod.AutoUpdater, requestUrls, ipcHandlers, sent, openPath, quit, win, feed, unlinkMock, teardown, tempFiles, aborted, verifyStore, heads };
 }
 
 /** Flush queued microtasks so the chained net responses (feed→manifest→download) settle. */
@@ -292,6 +379,9 @@ describe('AutoUpdater two-step flow (win32)', () => {
     expect(quit).toHaveBeenCalledTimes(1);
     // The daemon is spared the force-kill; it gets the graceful shutdown.
     expect(teardown.terminatePids).toHaveBeenCalledWith([4242]);
+    // The waiter re-hashes the installer against the digest it was verified under.
+    const plan = teardown.spawnInstallWaiter.mock.calls[0][0] as { setupSha256?: string };
+    expect(plan.setupSha256).toBe(GOOD_SHA);
   });
 
   it('rejects on sha256 mismatch: emits error, no downloaded path, install is a no-op', async () => {
@@ -379,6 +469,25 @@ describe('AutoUpdater two-step flow (win32)', () => {
     // have cleared the intent so a later background download can't auto-restart.
     expect(quit).not.toHaveBeenCalled();
     expect(internals.oneShotInstall).toBe(false);
+  });
+
+  it('a renderer that never answers the pre-install save does not hold the install', async () => {
+    // The save used to be awaited unbounded: a hung renderer left isInstalling
+    // set for good, and every later Install answered "already in progress".
+    const { AutoUpdater, ipcHandlers, quit, win, teardown } = await loadWin32();
+    win.webContents.executeJavaScript = vi.fn(() => new Promise<undefined>(() => { /* never answers */ }));
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+    await backgroundCheck(updater);
+    await flush();
+
+    vi.useFakeTimers();
+    const install = ipcHandlers.get(IPC.UPDATE_INSTALL)!();
+    await vi.advanceTimersByTimeAsync(3_000 + 500);
+    await install;
+
+    expect(teardown.spawnInstallWaiter).toHaveBeenCalledTimes(1);
+    expect(quit).toHaveBeenCalledTimes(1);
   });
 
   it('a failed one-shot download does not restart the app (install intent cleared)', async () => {
@@ -625,5 +734,375 @@ describe('AutoUpdater temp artifact reuse (win32)', () => {
     const swept = unlinkMock.mock.calls.map((c) => String(c[0]));
     expect(swept.some((p) => p.includes(alreadyInstalled))).toBe(true);
     expect(swept.some((p) => p.includes(pending))).toBe(false);
+  });
+
+  it('on a prerelease build, the sweep keeps the staged installer for the matching release', async () => {
+    // 9.9.10 is newer than 9.9.10-beta.1, so its installer is the pending one
+    // and is held on the 7-day floor rather than swept as if already installed.
+    const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    const release = `wmux-update-${NEW_VERSION}-1-wmux-${NEW_VERSION}.Setup.exe`;
+    const { AutoUpdater, unlinkMock, win } = await loadWin32({
+      appVersion: `${NEW_VERSION}-beta.1`,
+      tempFiles: { [release]: { body: INSTALLER_BODY, mtimeMs: threeDaysAgo } },
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    updater.start();
+    await flush();
+
+    expect(unlinkMock.mock.calls.some((c) => String(c[0]).includes(release))).toBe(false);
+  });
+});
+
+/**
+ * A check or a download that never settles holds isChecking / isDownloading
+ * forever, and every later check is skipped while either is set: one dropped
+ * connection used to stop updates until the app was restarted.
+ */
+describe('AutoUpdater requests always settle (win32)', () => {
+  interface Internals {
+    isChecking: boolean;
+    isDownloading: boolean;
+    check: (oneShot?: boolean) => Promise<void>;
+  }
+  const errors = (sent: Sent[]) => sent.filter((s) => s.channel === IPC.UPDATE_ERROR);
+
+  for (const mode of ['aborted', 'error'] as const) {
+    it(`a feed reply that ends in '${mode}' mid-body settles the check, and the next check runs`, async () => {
+      const { AutoUpdater, requestUrls, sent, win } = await loadWin32({ net: { feed: mode } });
+      const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+      await updater.check();
+      expect(updater.isChecking).toBe(false);
+      expect(errors(sent)).toHaveLength(1);
+
+      const before = requestUrls.length;
+      await updater.check();
+      expect(requestUrls.length).toBe(before + 1);
+    });
+  }
+
+  it('a feed request that never answers is aborted after 30 s and the check settles', async () => {
+    vi.useFakeTimers();
+    const { AutoUpdater, sent, win, aborted } = await loadWin32({ net: { feed: 'stall' } });
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    const pending = updater.check();
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(updater.isChecking).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending;
+
+    expect(updater.isChecking).toBe(false);
+    expect(aborted.some((u) => u.includes('update.electronjs.org'))).toBe(true);
+    expect(String(errors(sent)[0]?.data.message)).toContain('did not answer');
+  });
+
+  it('a stalled manifest request releases the download guard', async () => {
+    vi.useFakeTimers();
+    const { AutoUpdater, sent, win, aborted } = await loadWin32({ net: { manifest: 'stall-body' } });
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    await updater.check();
+    await flush();
+    expect(updater.isDownloading).toBe(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flush();
+
+    expect(updater.isDownloading).toBe(false);
+    expect(aborted.some((u) => u.includes('update-manifest.json'))).toBe(true);
+    expect(errors(sent)).toHaveLength(1);
+  });
+
+  it('a download that stops delivering bytes is aborted after the idle timeout and cleaned up', async () => {
+    vi.useFakeTimers();
+    const { AutoUpdater, sent, win, aborted, unlinkMock } = await loadWin32({ net: { download: 'stall-body' } });
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    await updater.check();
+    await flush();
+    expect(updater.isDownloading).toBe(true);
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(updater.isDownloading).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+
+    expect(updater.isDownloading).toBe(false);
+    expect(aborted).toContain(DL_URL);
+    expect(unlinkMock.mock.calls.some((c) => String(c[0]).includes('wmux-update-'))).toBe(true);
+    expect(String(errors(sent)[0]?.data.message)).toContain('stalled');
+  });
+
+  it('a download dropped mid-transfer releases the download guard', async () => {
+    const { AutoUpdater, sent, win } = await loadWin32({ net: { download: 'aborted' } });
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    await updater.check();
+    await flush();
+
+    expect(updater.isDownloading).toBe(false);
+    expect(String(errors(sent)[0]?.data.message)).toContain('dropped');
+  });
+
+  it('rejects a feed version that is not strict semver', async () => {
+    const { AutoUpdater, feed, requestUrls, sent, win } = await loadWin32();
+    feed.version = 'latest';
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    await updater.check();
+    await flush();
+
+    expect(String(errors(sent)[0]?.data.message)).toContain('invalid version');
+    expect(requestUrls.some((u) => u.includes('update-manifest.json'))).toBe(false);
+  });
+});
+
+/**
+ * A verified-hash mismatch used to delete the file and fetch the same ~150 MB
+ * again on every 30-minute poll, silently. The failed (version, sha256) is now
+ * remembered and nothing is downloaded until the manifest changes.
+ */
+describe('AutoUpdater after a failed verification (win32)', () => {
+  const BAD_SHA = 'a'.repeat(64);
+  // What a mismatching download of the mock asset records.
+  const RECORD: Record_ = { version: NEW_VERSION, sha256: BAD_SHA, etag: '"0x1"', contentLength: INSTALLER_BODY.length };
+  const downloads = (urls: string[]) => urls.filter((u) => u === DL_URL).length;
+  const verifyFailedErrors = (sent: Sent[]) =>
+    sent.filter((s) => s.channel === IPC.UPDATE_ERROR && s.data.code === 'verify-failed');
+  const backgroundCheck = (updater: unknown) =>
+    (updater as { check: (oneShot?: boolean) => Promise<void> }).check();
+
+  it('records the mismatch and does not download the same artifact again', async () => {
+    const { AutoUpdater, requestUrls, sent, win, verifyStore } = await loadWin32({ sha: BAD_SHA });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+    expect(downloads(requestUrls)).toBe(1);
+    expect(verifyStore.record).toEqual(RECORD);
+    expect(verifyFailedErrors(sent)).toHaveLength(1);
+
+    await backgroundCheck(updater);
+    await flush();
+    expect(downloads(requestUrls)).toBe(1);
+    // Still said, on every poll: the Settings line comes from these.
+    expect(verifyFailedErrors(sent)).toHaveLength(2);
+    expect(verifyFailedErrors(sent)[1].data.releaseName).toBe(NEW_VERSION);
+  });
+
+  it('names the version in one spelling on the event and in the mount read', async () => {
+    // The feed names releases by tag; Settings compares this against it.
+    const { AutoUpdater, feed, ipcHandlers, sent, win } = await loadWin32({ sha: BAD_SHA });
+    feed.version = `v${NEW_VERSION}`;
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(verifyFailedErrors(sent)[0]?.data.releaseName).toBe(NEW_VERSION);
+    expect(await ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
+      instanceDisabled: false,
+      verifyFailedVersion: NEW_VERSION,
+    });
+  });
+
+  it('downloads again when the asset was re-uploaded under the same manifest (a new ETag)', async () => {
+    // The manifest digest was right and the asset was wrong: the fix is a
+    // re-upload, which keeps (version, sha256) and changes the asset's ETag.
+    const { AutoUpdater, feed, heads, requestUrls, sent, win, verifyStore } = await loadWin32({ sha: GOOD_SHA, verifyFailure: { ...RECORD, sha256: GOOD_SHA } });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+    expect(heads).toEqual([DL_URL]);
+    expect(downloads(requestUrls)).toBe(0); // same ETag: still held
+
+    feed.etag = '"0x2"';
+    await backgroundCheck(updater);
+    await flush();
+    expect(downloads(requestUrls)).toBe(1);
+    expect(verifyStore.record).toBeNull();
+    expect(sent.map((s) => `${s.channel}:${s.data.status}`)).toContain(`${IPC.UPDATE_AVAILABLE}:downloaded`);
+  });
+
+  it('with no ETag, a different Content-Length counts as a re-upload', async () => {
+    const { AutoUpdater, requestUrls, win } = await loadWin32({
+      verifyFailure: { ...RECORD, sha256: GOOD_SHA, etag: null, contentLength: INSTALLER_BODY.length + 1 },
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(downloads(requestUrls)).toBe(1);
+  });
+
+  it('a record from an earlier run holds too (it is read from userData)', async () => {
+    const { AutoUpdater, requestUrls, win } = await loadWin32({
+      sha: BAD_SHA,
+      verifyFailure: RECORD,
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(requestUrls.some((u) => u.includes('update-manifest.json'))).toBe(true);
+    expect(downloads(requestUrls)).toBe(0);
+  });
+
+  it('downloads again once the manifest publishes a different sha256, and clears the record', async () => {
+    const { AutoUpdater, feed, requestUrls, sent, win, verifyStore } = await loadWin32({ sha: BAD_SHA });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    await backgroundCheck(updater);
+    await flush();
+
+    feed.sha = GOOD_SHA;
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(downloads(requestUrls)).toBe(2);
+    expect(verifyStore.record).toBeNull();
+    expect(sent.map((s) => `${s.channel}:${s.data.status}`)).toContain(`${IPC.UPDATE_AVAILABLE}:downloaded`);
+  });
+
+  it('a different version on the feed ends the record', async () => {
+    const { AutoUpdater, feed, win, verifyStore } = await loadWin32({
+      verifyFailure: RECORD,
+    });
+    feed.version = '9.9.11';
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(verifyStore.record).toBeNull();
+  });
+
+  it('a manual check for updates still retries the download', async () => {
+    const { AutoUpdater, ipcHandlers, requestUrls, win } = await loadWin32({
+      sha: BAD_SHA,
+      verifyFailure: RECORD,
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+
+    await ipcHandlers.get(IPC.UPDATE_CHECK)!();
+    await flush();
+
+    expect(downloads(requestUrls)).toBe(1);
+  });
+
+  it('Settings can read the notice on mount, and a stale record is not reported', async () => {
+    const fresh = await loadWin32({ verifyFailure: RECORD });
+    new fresh.AutoUpdater(() => fresh.win as never, quitHooks());
+    expect(await fresh.ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
+      instanceDisabled: false,
+      verifyFailedVersion: NEW_VERSION,
+    });
+
+    // The user is already on that version (updated another way).
+    const stale = await loadWin32({ appVersion: NEW_VERSION, verifyFailure: RECORD });
+    new stale.AutoUpdater(() => stale.win as never, quitHooks());
+    expect(await stale.ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
+      instanceDisabled: false,
+      verifyFailedVersion: null,
+    });
+  });
+});
+
+/**
+ * An instance with a data suffix has its own data and is not the installed
+ * copy an update replaces: no checks, downloads, installs or temp sweeps.
+ */
+describe('AutoUpdater under a data suffix (win32)', () => {
+  const staleName = `wmux-update-${FAKE_VERSION}-1-wmux-${FAKE_VERSION}.Setup.exe`;
+  const staleArtifact = () => ({ [staleName]: { body: INSTALLER_BODY, mtimeMs: Date.now() - 3 * 24 * 60 * 60 * 1000 } });
+
+  it('does nothing: no scheduled check, no sweep, and a manual check reports disabled', async () => {
+    vi.useFakeTimers();
+    const { AutoUpdater, ipcHandlers, requestUrls, unlinkMock, win, teardown } = await loadWin32({
+      dataSuffix: '-dev',
+      tempFiles: staleArtifact(),
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+
+    expect(requestUrls).toEqual([]);
+    expect(unlinkMock).not.toHaveBeenCalled();
+    expect(teardown.sweepStaleWaiterTasks).not.toHaveBeenCalled();
+    expect(await ipcHandlers.get(IPC.UPDATE_CHECK)!()).toEqual({ status: 'disabled' });
+    expect(requestUrls).toEqual([]);
+    expect(await ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
+      instanceDisabled: true,
+      verifyFailedVersion: null,
+    });
+    updater.stop();
+  });
+
+  it('refuses to install, even with a verified installer staged', async () => {
+    const staged = `wmux-update-${NEW_VERSION}-1-wmux-${NEW_VERSION}.Setup.exe`;
+    const { AutoUpdater, ipcHandlers, quit, sent, win, teardown } = await loadWin32({
+      dataSuffix: '-portable',
+      tempFiles: { [staged]: { body: INSTALLER_BODY } },
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+    const internals = updater as unknown as {
+      downloadedPath: string | null;
+      downloadedSha: string | null;
+      pendingUpdate: { name: string; notes: string; url: string } | null;
+    };
+    internals.downloadedPath = `/tmp/${staged}`;
+    internals.downloadedSha = GOOD_SHA;
+    internals.pendingUpdate = { name: NEW_VERSION, notes: 'n', url: DL_URL };
+
+    await ipcHandlers.get(IPC.UPDATE_INSTALL)!();
+    await flush();
+
+    expect(teardown.spawnInstallWaiter).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    const err = sent.find((s) => s.channel === IPC.UPDATE_ERROR);
+    expect(err?.data.source).toBe('install');
+    expect(String(err?.data.message)).toContain('off for this instance');
+  });
+
+  it('WMUX_UPDATER_ALLOW_SUFFIX=1 re-enables check, download and verify, but never install or sweeps', async () => {
+    process.env.WMUX_UPDATER_ALLOW_SUFFIX = '1';
+    const { AutoUpdater, ipcHandlers, quit, sent, unlinkMock, win, teardown } = await loadWin32({
+      dataSuffix: '-dev',
+      tempFiles: staleArtifact(),
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+    await flush();
+    expect(unlinkMock).not.toHaveBeenCalled();
+    expect(teardown.sweepStaleWaiterTasks).not.toHaveBeenCalled();
+
+    await (updater as unknown as { check: () => Promise<void> }).check();
+    await flush();
+    expect(sent.map((s) => `${s.channel}:${s.data.status}`)).toContain(`${IPC.UPDATE_AVAILABLE}:downloaded`);
+
+    await ipcHandlers.get(IPC.UPDATE_INSTALL)!();
+    await flush();
+    expect(teardown.spawnInstallWaiter).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    updater.stop();
+  });
+});
+
+describe('AutoUpdater releases a request it does not read (win32)', () => {
+  it('aborts a non-200 feed, manifest or installer response instead of leaving it unread', async () => {
+    for (const kind of ['feed', 'manifest', 'download'] as const) {
+      const { AutoUpdater, aborted, win } = await loadWin32({ net: { [kind]: 'http-404' } });
+      const updater = new AutoUpdater(() => win as never, quitHooks());
+
+      await (updater as unknown as { check: () => Promise<void> }).check();
+      await flush();
+
+      const url = kind === 'feed' ? 'update.electronjs.org' : kind === 'manifest' ? 'update-manifest.json' : DL_URL;
+      expect(aborted.some((u) => u.includes(url)), kind).toBe(true);
+    }
   });
 });

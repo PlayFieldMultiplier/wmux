@@ -322,6 +322,10 @@ export const IPC = {
   // the user. Pulled by an always-mounted surface for the same reason the
   // refused-install notice is: the push fires once, into the Settings panel.
   UPDATE_GET_PENDING_INSTALL: 'update:get-pending-install',
+  // Read what Settings › Updates must say even when no event reached it:
+  // in-app updates are off for this instance (a data suffix), or the
+  // published update failed verification and is not retried until it changes.
+  UPDATE_GET_NOTICE: 'update:get-notice',
   // Settings sync (renderer → main)
   TOAST_ENABLED: 'settings:toast-enabled',
   // #516 — renderer mirrors the muted notification categories so the

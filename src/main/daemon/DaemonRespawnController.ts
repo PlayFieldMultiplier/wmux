@@ -237,6 +237,17 @@ export class DaemonRespawnController {
     return this.bootstrapping || this.respawning;
   }
 
+  /**
+   * The pid of the daemon behind the connected client, as recorded when the
+   * connection was made: the pid its connect-time ping reported, else the
+   * launcher's. Null while no client is connected, or when neither reported
+   * one. Refreshed by every (re)connect. Readers that must not depend on the
+   * daemon answering an RPC right now (the updater's install path) use this.
+   */
+  get connectedDaemonPid(): number | null {
+    return this.client !== null && this.client.isConnected ? this.connectedDaemon.pid : null;
+  }
+
   /** Current active client, or null when in local-only fallback. */
   getClient(): DaemonClient | null {
     return this.client;

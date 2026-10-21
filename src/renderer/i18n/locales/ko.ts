@@ -2801,6 +2801,9 @@ export const ko = {
   'settings.latestVersion': '최신 버전',
   'settings.updateReady': '업데이트 준비 완료',
   'settings.updateEndsSessions': '설치하면 모든 판이 닫힙니다.',
+  'settings.updateVerifyFailed':
+    '게시된 업데이트 {version}을(를) 검증하지 못해 설치하지 않았습니다. 릴리스가 바뀌면 wmux가 다시 시도합니다.',
+  'settings.updatesOffForInstance': '이 wmux는 별도 데이터로 실행 중이라 앱 내 업데이트가 꺼져 있습니다.',
   'update.installFailed': '업데이트를 설치하지 못했습니다. {error}',
   'settings.checkFailed': '확인 실패',
   'settings.unknownError': '알 수 없는 오류',
@@ -3371,6 +3374,10 @@ export const ko = {
   'update.installNow': '지금 설치',
   'update.refusedInstallBlocked':
     '지난 업데이트가 설치되지 않았습니다. Windows가 설치 프로그램을 차단했습니다(스마트 앱 컨트롤 또는 애플리케이션 제어 정책). 현재 버전은 그대로입니다. 하루이틀 뒤에 다시 시도하거나, Windows가 허용하면 릴리스 페이지에서 설치하세요.',
+  'update.refusedInstallChanged':
+    '마지막 업데이트가 설치되지 않았습니다. 설치 파일이 검증 후 바뀌어 실행하지 않았습니다. 현재 버전은 그대로입니다. 업데이트를 다시 확인하면 새 설치 파일을 내려받아 설치합니다. 설치하면 모든 판이 닫힙니다.',
+  'update.refusedInstallUnreadable':
+    '마지막 업데이트가 설치되지 않았습니다. 검증하려던 설치 파일을 읽을 수 없어 실행하지 않았습니다. 현재 버전은 그대로입니다. 업데이트를 다시 확인하면 설치 파일을 검증한 뒤 설치하며, 릴리스 페이지에서 설치할 수도 있습니다. 설치하면 모든 판이 닫힙니다.',
   'update.smartAppControlHold':
     'Windows 스마트 앱 컨트롤이 이 업데이트의 설치 프로그램을 차단할 가능성이 높아 wmux를 종료하지 않았고 아무것도 바뀌지 않았습니다. 하루이틀 뒤에 다시 시도하세요. 그래도 설치하면 모든 판이 닫히며, Windows가 설치 프로그램을 차단해도 wmux를 다시 열면 현재 버전이 그대로 남아 있습니다.',
   'update.installAnyway': '그래도 설치',

@@ -3315,6 +3315,9 @@ export const pl = {
   'settings.latestVersion': 'Najnowsza',
   'settings.updateReady': 'Aktualizacja gotowa',
   'settings.updateEndsSessions': 'Instalacja zamyka każdy panel.',
+  'settings.updateVerifyFailed':
+    'Nie udało się zweryfikować opublikowanej aktualizacji {version}, więc nie została zainstalowana. wmux spróbuje ponownie, gdy wydanie się zmieni.',
+  'settings.updatesOffForInstance': 'Aktualizacje w aplikacji są wyłączone dla tej kopii wmux, ponieważ działa ona z osobnymi danymi.',
   'update.installFailed': 'Nie udało się zainstalować aktualizacji. {error}',
   'settings.checkFailed': 'Sprawdzanie nie powiodło się',
   'settings.unknownError': 'Nieznany błąd',
@@ -3979,6 +3982,10 @@ export const pl = {
   'update.installNow': 'Zainstaluj teraz',
   'update.refusedInstallBlocked':
     'Ostatnia aktualizacja się nie zainstalowała: Windows zablokował jej instalator (Smart App Control lub zasady kontroli aplikacji). Obecna wersja pozostaje bez zmian. Spróbuj ponownie za dzień lub dwa albo zainstaluj ze strony wydań, gdy Windows na to pozwoli.',
+  'update.refusedInstallChanged':
+    'Ostatnia aktualizacja nie została zainstalowana: jej instalator zmienił się po weryfikacji przez wmux, więc nie został uruchomiony. Bieżąca wersja pozostała bez zmian. Ponowne sprawdzenie aktualizacji pobierze i zainstaluje nową kopię. Instalacja zamyka każdy panel.',
+  'update.refusedInstallUnreadable':
+    'Ostatnia aktualizacja nie została zainstalowana: nie udało się odczytać jej instalatora w celu weryfikacji, więc nie został uruchomiony. Bieżąca wersja pozostała bez zmian. Ponowne sprawdzenie aktualizacji zweryfikuje i zainstaluje instalator; można też zainstalować ze strony wydań. Instalacja zamyka każdy panel.',
   'update.smartAppControlHold':
     'Windows Smart App Control prawdopodobnie zablokuje instalator tej aktualizacji, więc wmux pozostał otwarty i nic się nie zmieniło. Spróbuj ponownie za dzień lub dwa. Instalacja mimo to zamyka wszystkie panele; jeśli Windows zablokuje instalator, otwórz wmux ponownie, a obecna wersja nadal tam będzie.',
   'update.installAnyway': 'Zainstaluj mimo to',

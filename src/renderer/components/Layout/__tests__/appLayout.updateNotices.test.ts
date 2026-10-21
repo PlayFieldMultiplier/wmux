@@ -169,7 +169,9 @@ describe('AppLayout — update notices are pulled, not pushed', () => {
     // the case where persisting would give wrong advice.
     const body = hookBody('useRefusedInstallNotice');
     expect(body).toMatch(/persist:\s*true/);
-    expect(body).toMatch(/update\.refusedInstall'\s*,\s*\{\s*detail:\s*truncateReason\(reason\)/);
+    // The reason reaches the generic copy as its detail through
+    // refusedInstallNotice (unit-tested in updateNoticePolicy.test.ts).
+    expect(body).toMatch(/const notice = refusedInstallNotice\(reason\);\s*return t\(notice\.key, notice\.vars\);/);
     // And the default copy has somewhere for that reason to land.
     expect(en['update.refusedInstall']).toContain('{detail}');
   });
@@ -186,9 +188,10 @@ describe('AppLayout — update notices are pulled, not pushed', () => {
   it('names a Windows-blocked installer with its own sentence, not the generic refusal (#1525)', () => {
     // The generic copy says "run the installer from the releases page" — the
     // same file Windows just refused to run.
+    // The mapping lives in updateNoticePolicy.refusedInstallNotice, where it
+    // is unit-tested; the hook must go through it.
     const body = hookBody('useRefusedInstallNotice');
-    expect(body).toMatch(/isInstallBlockedByWindowsReason\(reason\)/);
-    expect(body).toMatch(/update\.refusedInstallBlocked/);
+    expect(body).toMatch(/refusedInstallNotice\(reason\)/);
     expect(en['update.refusedInstallBlocked']).toMatch(/Windows blocked/);
   });
 

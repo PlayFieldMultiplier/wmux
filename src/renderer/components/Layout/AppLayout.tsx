@@ -14,8 +14,7 @@ import { EmptyLeafFunnel } from './EmptyLeafFunnel';
 import { selectProjectCwdSignature } from '../../stores/selectors/appLayout';
 import { selectInboxOwnsApprovals } from '../../stores/selectors/approvalInbox';
 import { selectPcRailPersisted } from '../../stores/selectors/pcRail';
-import { shouldShowInstallError, shouldReannounceAfterError, isSmartAppControlHold, truncateReason } from './updateNoticePolicy';
-import { isInstallBlockedByWindowsReason } from '../../../shared/installAbortReasons';
+import { shouldShowInstallError, shouldReannounceAfterError, isSmartAppControlHold, refusedInstallNotice } from './updateNoticePolicy';
 import { hooksLaunchCheck, nextFirstBootSurface } from './firstBootSequence';
 import { markPrWakeNoticeSeen, prWakeNoticePending, showPrWakeNoticeOnce } from '../../hooks/prWakeNotice';
 import { openModalLayerCount, subscribeModalLayers } from '../ui/modalLayer';
@@ -566,10 +565,12 @@ function useRefusedInstallNotice(
           persist: true,
           // #1525 — Windows refusing to run the installer gets its own
           // sentence: the generic one's "run the installer from the releases
-          // page" is the same file Windows just blocked.
-          message: isInstallBlockedByWindowsReason(reason)
-            ? t('update.refusedInstallBlocked')
-            : t('update.refusedInstall', { detail: truncateReason(reason) }),
+          // page" is the same file Windows just blocked. So do the waiter's
+          // pre-start re-hash refusals (refusedInstallNotice).
+          message: (() => {
+            const notice = refusedInstallNotice(reason);
+            return t(notice.key, notice.vars);
+          })(),
         });
       })
       .catch((err) => {

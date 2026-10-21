@@ -901,6 +901,9 @@ export const zh = {
   'settings.latestVersion': '最新版本',
   'settings.updateReady': '更新已准备就绪',
   'settings.updateEndsSessions': '安装会关闭所有窗格。',
+  'settings.updateVerifyFailed':
+    '无法验证已发布的更新 {version}，因此未安装。发布内容变更后 wmux 会再次尝试。',
+  'settings.updatesOffForInstance': '此 wmux 副本使用独立数据运行，因此应用内更新已关闭。',
   'update.installFailed': '无法安装更新。{error}',
   'settings.checkFailed': '检查失败',
   'settings.unknownError': '未知错误',
@@ -3422,6 +3425,10 @@ export const zh = {
   'update.installNow': '立即安装',
   'update.refusedInstallBlocked':
     '上次更新未安装：Windows 阻止了其安装程序（智能应用控制或应用程序控制策略）。当前版本保持不变。请在一两天后重试，或在 Windows 允许后从 releases 页面安装。',
+  'update.refusedInstallChanged':
+    '上次更新未安装：安装程序在 wmux 验证后发生了变化，因此未运行。当前版本保持不变。再次检查更新会下载并安装新的副本。安装会关闭所有窗格。',
+  'update.refusedInstallUnreadable':
+    '上次更新未安装：无法读取安装程序进行验证，因此未运行。当前版本保持不变。再次检查更新会验证并安装它，也可以从发布页面安装。安装会关闭所有窗格。',
   'update.smartAppControlHold':
     'Windows 智能应用控制很可能会阻止此更新的安装程序，因此 wmux 保持打开，未做任何更改。请在一两天后重试。仍然安装会关闭所有窗格；如果 Windows 阻止了安装程序，重新打开 wmux 即可，当前版本仍会保留。',
   'update.installAnyway': '仍然安装',

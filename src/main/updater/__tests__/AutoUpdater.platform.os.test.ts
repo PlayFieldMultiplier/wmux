@@ -37,7 +37,10 @@ function quitHooks() {
     onBeforeInstallQuit: vi.fn(),
     onInstallQuitAborted: vi.fn(),
     onInstallRequiresFullShutdown: vi.fn(),
-    getDaemonPid: vi.fn((): number | null => null),
+    // Not connected, no pid file: the install knows nothing about its daemon.
+    getDaemon: vi.fn((): { connected: boolean; connectedPid: number | null; pidFilePid: number | null } => (
+      { connected: false, connectedPid: null, pidFilePid: null }
+    )),
   };
 }
 
@@ -51,9 +54,15 @@ const realPlatform = process.platform;
 const realArch = process.arch;
 const tempDirs: string[] = [];
 
+// The test setup gives every suite WMUX_DATA_SUFFIX='-vitest', and the updater
+// does nothing under a data suffix; each load clears it and this restores it.
+const realDataSuffix = process.env.WMUX_DATA_SUFFIX;
+
 afterEach(() => {
   Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   Object.defineProperty(process, 'arch', { value: realArch, configurable: true });
+  if (realDataSuffix === undefined) delete process.env.WMUX_DATA_SUFFIX;
+  else process.env.WMUX_DATA_SUFFIX = realDataSuffix;
   vi.resetModules();
   vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
@@ -80,6 +89,7 @@ async function loadForPlatform(
   vi.resetModules();
   Object.defineProperty(process, 'platform', { value: platform, configurable: true });
   Object.defineProperty(process, 'arch', { value: arch, configurable: true });
+  delete process.env.WMUX_DATA_SUFFIX;
 
   const requestUrls: string[] = [];
   const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -95,6 +105,7 @@ async function loadForPlatform(
     const cbs: Record<string, (arg: unknown) => void> = {};
     const req = {
       on(ev: string, cb: (arg: unknown) => void) { cbs[ev] = cb; return req; },
+      abort: vi.fn(),
       end() {
         // Async response so check()'s promise settles like the real path.
         Promise.resolve().then(() => {
@@ -153,6 +164,7 @@ async function loadForPlatform(
     collectInstallRootProcesses: vi.fn((_root: string) => ({
       pids: [4242],
       ownTree: new Set<number>(),
+      daemonPids: new Set<number>(),
     })),
     terminatePids: vi.fn((pids: readonly number[]): number[] => [...pids]),
     spawnInstallWaiter: vi.fn((_plan: { setupExePath: string; pids: number[] }): string | null =>
@@ -557,8 +569,9 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
     loaded.teardown.collectInstallRootProcesses.mockReturnValue({
       pids: [4242, 4243, 4244, 4245],
       ownTree: new Set([4244, 4245]),
+      daemonPids: new Set<number>(),
     });
-    const hooks = { ...quitHooks(), getDaemonPid: vi.fn(() => 4243 as number | null) };
+    const hooks = { ...quitHooks(), getDaemon: vi.fn(() => ({ connected: true, connectedPid: 4243 as number | null, pidFilePid: 4243 as number | null })) };
     const { installHandler } = await downloadUpdateFor(loaded, hooks);
 
     await installHandler();
@@ -581,8 +594,9 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
     loaded.teardown.collectInstallRootProcesses.mockReturnValue({
       pids: [4242, 4243],
       ownTree: new Set<number>(),
+      daemonPids: new Set<number>(),
     });
-    // The pid file was unreadable (quitHooks' getDaemonPid returns null).
+    // Not connected and the pid file was unreadable (quitHooks' getDaemon).
     // Sparing a daemon we cannot identify would leave the root locked;
     // force-killing it costs a scrollback flush, which is the cheaper failure.
     const { installHandler } = await downloadUpdateFor(loaded);
@@ -590,6 +604,109 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
     await installHandler();
 
     expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242, 4243]);
+  });
+
+  it('win32: a daemon found by command line is on neither kill list, even with no pid file', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    // 4243 is the daemon, spawned by this main process (so it is in ownTree),
+    // and neither a connection nor daemon.pid names it (quitHooks' getDaemon).
+    // Without the command-line match it lands in forceKillEligiblePids and
+    // the waiter tree-kills it 5 s in, cutting its suspend and flush short.
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4244],
+      ownTree: new Set([4243, 4244]),
+      daemonPids: new Set([4243]),
+    });
+    const { installHandler } = await downloadUpdateFor(loaded);
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242]);
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as unknown as {
+      pids: number[];
+      forceKillEligiblePids: number[];
+    };
+    expect(plan.forceKillEligiblePids).toEqual([4244]);
+    // Still waited for: the installer may not start until it has exited.
+    expect(plan.pids).toContain(4243);
+  });
+
+  it('win32: a daemon-shaped process that is not the connected daemon stays on the kill list', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    // 4250 runs the daemon script from the installed exe but is not the
+    // daemon this app is connected to (4243, reported by daemon.ping through
+    // the async hook): an orphan, or another data dir's daemon. Nothing stops
+    // it, so sparing it would hold the root until the waiter refuses.
+    // 4251 is the same, but a child of ours; with the connected pid known it
+    // is not spared either.
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4244, 4250, 4251],
+      ownTree: new Set([4243, 4244, 4251]),
+      daemonPids: new Set([4243, 4250, 4251]),
+    });
+    const hooks = { ...quitHooks(), getDaemon: vi.fn(() => ({ connected: true, connectedPid: 4243 as number | null, pidFilePid: null as number | null })) };
+    const { installHandler } = await downloadUpdateFor(loaded, hooks);
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242, 4250]);
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as unknown as {
+      forceKillEligiblePids: number[];
+    };
+    expect(plan.forceKillEligiblePids).toEqual([4244, 4251]);
+  });
+
+  it('win32: with no connected pid, only a daemon-shaped child of ours is spared', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4250],
+      ownTree: new Set([4243]),
+      daemonPids: new Set([4243, 4250]),
+    });
+    const { installHandler } = await downloadUpdateFor(loaded); // not connected, no pid file
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242, 4250]);
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as unknown as {
+      forceKillEligiblePids: number[];
+    };
+    expect(plan.forceKillEligiblePids).toEqual([]);
+  });
+
+  it('win32: the connected daemon is spared by its recorded pid, outside ownTree and with no pid file', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    // The daemon outlived an earlier app run, so it is not our child (not in
+    // ownTree), daemon.pid is gone, and it may be too busy to answer a ping
+    // now: the pid recorded when this app connected still names it.
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4244],
+      ownTree: new Set([4244]),
+      daemonPids: new Set([4243]),
+    });
+    const hooks = { ...quitHooks(), getDaemon: vi.fn(() => ({ connected: true, connectedPid: 4243 as number | null, pidFilePid: null as number | null })) };
+    const { installHandler } = await downloadUpdateFor(loaded, hooks);
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242]);
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as unknown as { forceKillEligiblePids: number[] };
+    expect(plan.forceKillEligiblePids).toEqual([4244]);
+  });
+
+  it('win32: connected with no recorded pid, every daemon-shaped process is spared', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4250],
+      ownTree: new Set<number>(),
+      daemonPids: new Set([4243, 4250]),
+    });
+    const hooks = { ...quitHooks(), getDaemon: vi.fn(() => ({ connected: true, connectedPid: null as number | null, pidFilePid: null as number | null })) };
+    const { installHandler } = await downloadUpdateFor(loaded, hooks);
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242]);
   });
 
   it('win32: a quit that never happens is reported and unlatched, not silent (#980)', async () => {
