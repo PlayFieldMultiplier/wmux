@@ -1117,11 +1117,11 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-plugins-detail-body { max-width: 760px; display: flex; flex-direction: column; gap: 20px; }
 .wmux-plugins-detail-title { margin: 0; font-size: var(--text-display-size); font-weight: var(--title-weight); color: var(--text-main); }
 .wmux-plugins-description { margin: 0; max-width: 620px; font-size: 13px; line-height: 1.55; color: var(--text-main); }
-.wmux-plugins-perm { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-main); }
-.wmux-plugins-perm-mark { display: inline-flex; flex: none; color: var(--text-sub); }
+.wmux-plugins-perm { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text-main); }
+.wmux-plugins-perm-mark { display: inline-flex; flex: none; margin-top: 2px; color: var(--text-sub); }
 .wmux-plugins-perm[data-granted="false"] { color: var(--text-sub); }
 .wmux-plugins-perm[data-granted="false"] .wmux-plugins-perm-mark { color: var(--text-muted); }
-.wmux-plugins-perm-cap { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-muted); }
+.wmux-plugins-perm-cap { margin-left: 8px; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-muted); }
 .wmux-plugins-muted { margin: 0; font-size: 12px; color: var(--text-muted); }
 .wmux-plugins-alert { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 13px; color: var(--text-sub); }
 /* A narrow sheet stacks the list over the detail. */

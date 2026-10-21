@@ -216,8 +216,7 @@ function PluginDetail({ row, busy, known, removing, onRemoving, mutate }: {
       <ul className="flex flex-col gap-2">
         {pluginPermissionLines(capabilities).map((line) => <li key={`${line.capability}:${line.granted}`} className="wmux-plugins-perm" data-granted={line.granted ? 'true' : 'false'}>
           <span className="wmux-plugins-perm-mark" aria-hidden="true">{line.granted ? <IconCheck size={14} /> : <Icon size={14}><circle cx="7" cy="7" r="4.7" /><path d="M3.8 10.2 10.2 3.8" /></Icon>}</span>
-          <span>{line.labelKey ? t(line.labelKey) : line.capability}</span>
-          {line.labelKey && <span className="wmux-plugins-perm-cap">{line.capability}</span>}
+          <span className="min-w-0">{line.labelKey ? t(line.labelKey) : line.capability}{line.labelKey && <span className="wmux-plugins-perm-cap">{line.capability}</span>}</span>
         </li>)}
       </ul>
     </div>

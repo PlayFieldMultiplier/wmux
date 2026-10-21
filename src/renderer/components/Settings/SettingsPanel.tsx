@@ -86,7 +86,7 @@ import { FanoutPresetsSection } from './FanoutPresetsSection';
 import { A2aRemoteSection } from './A2aRemoteSection';
 import { terminalFontFamilyCss } from '../../utils/terminalFont';
 import { hasBareFunctionKeyBinding } from '../../utils/functionKeyBinding';
-import { Icon, IconGrid, IconX, IconCheck, IconChevron, IconExternalLink, IconBrowser, IconComputer, IconUsers, IconRobot, IconRemoteDevices, IconPlus, IconWarning } from '../icons';
+import { Icon, IconPuzzle, IconX, IconCheck, IconChevron, IconExternalLink, IconBrowser, IconComputer, IconUsers, IconRobot, IconRemoteDevices, IconPlus, IconWarning } from '../icons';
 import { TabComputerUse } from './ComputerUseSection';
 import { QuickLaunchSection } from './QuickLaunchSection';
 import PairedDevicesModal from '../StatusBar/PairedDevicesModal';
@@ -5372,7 +5372,7 @@ export default function SettingsPanel({ initialTab }: { initialTab?: string }) {
     tokens:               { label: t('settings.tabTokens'),        icon: <IconAgents /> },
     browser:              { label: t('settings.tabBrowser'),       icon: <IconBrowser /> },
     'computer-use':       { label: t('settings.tabComputerUse'),   icon: <IconComputer /> },
-    plugins:              { label: t('plugins.settings.title'), icon: <IconGrid /> },
+    plugins:              { label: t('plugins.settings.title'), icon: <IconPuzzle /> },
     remote:               { label: t('settings.tabRemote'),        icon: <IconRemoteDevices /> },
     lanlink:              { label: t('settings.tabLan'),           icon: <IconLanLink /> },
     about:                { label: t('settings.tabAbout'),         icon: <IconAbout /> },
