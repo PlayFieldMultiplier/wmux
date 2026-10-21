@@ -223,7 +223,14 @@ import { terminateRunningAppInstances } from './squirrelTeardown';
 import * as autostart from './autostart';
 import * as cliShim from './cliShim';
 import * as shortcutHygiene from './shortcutHygiene';
-import { isFreshProfile, runPostInstallReconcile } from './postInstallReconcile';
+import { runPostInstallReconcile } from './postInstallReconcile';
+import {
+  hookUserDataDir,
+  isExistingProfile,
+  markProfileActive,
+  markProfileUninstalled,
+  planInstallHook,
+} from './installProfile';
 import { requestRendererSessionSave } from './quit/rendererSessionSave';
 import {
   refreshStatuslineScriptAtBoot,
@@ -309,12 +316,33 @@ if (process.platform === 'win32') {
       } catch { /* best-effort */ }
     }
 
+    // Where this profile's userData is: the hook runs before appInit applies
+    // WMUX_DATA_SUFFIX, so installProfile adds it the same way.
+    let hookUserData: string | null = null;
+    try { hookUserData = hookUserDataDir(app.getPath('userData'), process.env); } catch { /* best-effort */ }
+
     if (squirrelCmd === '--squirrel-install') {
+      // Every in-app update is a Squirrel full install, so this branch runs on
+      // updates too, not only on a first install. A profile that already uses
+      // wmux keeps the autostart and Desktop shortcut choices its user made;
+      // see installProfile.ts.
+      let existingProfile = false;
+      try { existingProfile = hookUserData !== null && isExistingProfile(hookUserData); } catch { /* best-effort */ }
+      const hookPlan = planInstallHook(existingProfile);
+      console.log(
+        `[Squirrel] install hook: ${existingProfile ? 'existing profile (update)' : 'first install'} — ` +
+        `autostart ${hookPlan.autostart}, shortcuts ${hookPlan.shortcutLocations}`,
+      );
+
       // Register Windows startup entry so wmux survives reboot. Autostart
-      // defaults ON at install time; users can turn it off in Settings →
+      // defaults ON at a first install; users can turn it off in Settings →
       // General (Settings toggle + squirrel-updated both go through
-      // ./autostart, which treats the Run key as the source of truth).
-      try { autostart.enableAutostart(process.execPath); } catch { /* best-effort */ }
+      // ./autostart, which treats the Run key as the source of truth). On an
+      // existing profile only the path is refreshed, and only if it is on.
+      try {
+        if (hookPlan.autostart === 'enable') autostart.enableAutostart(process.execPath);
+        else autostart.refreshAutostartEntry(process.execPath);
+      } catch { /* best-effort */ }
 
       // X4: drop the `wmux` CLI shim into <root>\bin and register it on the
       // user PATH. Internally best-effort — never blocks the install.
@@ -325,7 +353,7 @@ if (process.platform === 'win32') {
       let installIcon: string | null = null;
       try { installIcon = shortcutHygiene.stageRootIcon(process.execPath); } catch { /* best-effort */ }
 
-      const installShortcutArgs = ['--createShortcut', target, '--shortcut-locations', 'Desktop,StartMenu'];
+      const installShortcutArgs = ['--createShortcut', target, '--shortcut-locations', hookPlan.shortcutLocations];
       if (installIcon) installShortcutArgs.push('--icon', installIcon);
       spawn(updateExe, installShortcutArgs, { detached: true, windowsHide: true })
         .on('close', () => {
@@ -356,7 +384,10 @@ if (process.platform === 'win32') {
       let updateIcon: string | null = null;
       try { updateIcon = shortcutHygiene.stageRootIcon(process.execPath); } catch { /* best-effort */ }
 
-      const updateShortcutArgs = ['--createShortcut', target];
+      // Start Menu only, named explicitly: an update must not bring back a
+      // Desktop shortcut the user deleted (same rule as the install branch on
+      // an existing profile).
+      const updateShortcutArgs = ['--createShortcut', target, '--shortcut-locations', 'StartMenu'];
       if (updateIcon) updateShortcutArgs.push('--icon', updateIcon);
       spawn(updateExe, updateShortcutArgs, { detached: true, windowsHide: true })
         .on('close', () => {
@@ -374,6 +405,10 @@ if (process.platform === 'win32') {
     } else if (squirrelCmd === '--squirrel-uninstall') {
       // Remove startup registry entry
       try { autostart.disableAutostart(); } catch { /* best-effort */ }
+
+      // userData outlives the uninstall, so say so in it: a later install is
+      // a first install again (autostart on, Desktop shortcut).
+      try { if (hookUserData !== null) markProfileUninstalled(hookUserData); } catch { /* best-effort */ }
 
       // X4: remove the CLI shim + strip <root>\bin from the user PATH.
       try { cliShim.uninstallCliShim(process.execPath); } catch { /* best-effort */ }
@@ -1903,10 +1938,15 @@ app.on('ready', async () => {
 
   // Windows: redo whatever a cancelled Squirrel install hook left undone (CLI
   // shim, autostart, shortcuts). See postInstallReconcile.ts. `freshInstall`
-  // must be read here, before this boot's first session save creates the file.
+  // must be read here, before this boot's first session save creates the file
+  // and before the profile marker below is written. It is the install hook's
+  // own question (installProfile.ts), so both give the same answer.
   if (process.platform === 'win32' && app.isPackaged) {
     const firstRun = process.argv.includes('--squirrel-firstrun');
-    const freshInstall = isFreshProfile(app.getPath('userData'));
+    const freshInstall = !isExistingProfile(app.getPath('userData'));
+    // The marker the next install hook reads to tell an update from a first
+    // install. userData survives Setup.exe's wipe of the install root.
+    markProfileActive(app.getPath('userData'));
     // getPath throws when the shell folder cannot be resolved; unknown means
     // "do not create a Desktop shortcut", never "stop booting".
     let desktopDir: string | undefined;

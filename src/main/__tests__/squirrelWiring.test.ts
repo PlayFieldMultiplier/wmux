@@ -116,6 +116,38 @@ describe('Squirrel firstrun fix — index.ts wiring invariants', () => {
     );
   });
 
+  // Every in-app update is a Squirrel full install, so --squirrel-install runs
+  // on updates too. It used to turn autostart on and create the Desktop
+  // shortcut unconditionally; the decision now comes from installProfile.
+  it('the --squirrel-install branch decides autostart and shortcuts from the profile, not unconditionally', () => {
+    const installPos = indexSrc.indexOf("squirrelCmd === '--squirrel-install'");
+    const updatedPos = indexSrc.indexOf("squirrelCmd === '--squirrel-updated'");
+    expect(installPos).toBeGreaterThan(0);
+    const installBranch = indexSrc.slice(installPos, updatedPos);
+    expect(installBranch).toMatch(/planInstallHook\(existingProfile\)/);
+    expect(installBranch).toMatch(/isExistingProfile\(hookUserData\)/);
+    expect(installBranch).toMatch(/if \(hookPlan\.autostart === 'enable'\) autostart\.enableAutostart\(process\.execPath\);\s*else autostart\.refreshAutostartEntry\(process\.execPath\);/);
+    expect(installBranch).toMatch(/'--shortcut-locations', hookPlan\.shortcutLocations/);
+    expect(installBranch).not.toMatch(/'Desktop,StartMenu'/);
+  });
+
+  it('the --squirrel-updated branch names Start Menu only, never the Desktop', () => {
+    const updatedPos = indexSrc.indexOf("squirrelCmd === '--squirrel-updated'");
+    const uninstallPos = indexSrc.indexOf("squirrelCmd === '--squirrel-uninstall'");
+    const updatedBranch = indexSrc.slice(updatedPos, uninstallPos);
+    expect(updatedBranch).toMatch(/\['--createShortcut', target, '--shortcut-locations', 'StartMenu'\]/);
+  });
+
+  it('the uninstall hook marks the profile, and a normal boot marks it active after reading it', () => {
+    const uninstallPos = indexSrc.indexOf("squirrelCmd === '--squirrel-uninstall'");
+    const obsoletePos = indexSrc.indexOf("squirrelCmd === '--squirrel-obsolete'");
+    expect(indexSrc.slice(uninstallPos, obsoletePos)).toMatch(/markProfileUninstalled\(hookUserData\)/);
+    const readPos = indexSrc.indexOf("const freshInstall = !isExistingProfile(app.getPath('userData'));");
+    const markPos = indexSrc.indexOf("markProfileActive(app.getPath('userData'));");
+    expect(readPos).toBeGreaterThan(obsoletePos);
+    expect(markPos).toBeGreaterThan(readPos);
+  });
+
   it('the predicate classifies by exact membership, never a startsWith prefix', () => {
     // The most realistic regression is moving the logic into squirrel.ts and
     // using `startsWith('--squirrel-')` there — which would re-swallow firstrun.
