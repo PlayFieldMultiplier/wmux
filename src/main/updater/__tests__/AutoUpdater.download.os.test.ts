@@ -51,6 +51,9 @@ afterEach(() => {
 
 interface Sent { channel: string; data: Record<string, unknown>; }
 
+/** The failed-verification record (verifyFailureStore.VerifyFailure). */
+interface Record_ { version: string; sha256: string; etag: string | null; contentLength: number | null }
+
 /** A file parked in the fake temp dir (#995 adoption paths). */
 interface TempFile { body: Buffer; mtimeMs?: number; isFile?: boolean }
 
@@ -79,7 +82,7 @@ async function loadWin32(
     appVersion?: string;
     net?: NetModes;
     dataSuffix?: string;
-    verifyFailure?: { version: string; sha256: string } | null;
+    verifyFailure?: Record_ | null;
   } = {},
 ) {
   vi.resetModules();
@@ -88,7 +91,8 @@ async function loadWin32(
   else delete process.env.WMUX_DATA_SUFFIX;
 
   // Mutable so a test can bump the offered release mid-run (supersede paths).
-  const feed = { version: NEW_VERSION, sha };
+  // `etag` is what the installer asset is served with (a re-upload changes it).
+  const feed = { version: NEW_VERSION, sha, etag: '"0x1"' as string | null };
   const requestUrls: string[] = [];
   const ipcHandlers = new Map<string, (...a: unknown[]) => unknown>();
   const openPath = vi.fn(async (_p: string) => '');
@@ -96,8 +100,12 @@ async function loadWin32(
   // Route net.request by URL: feed → update JSON, manifest → manifest JSON,
   // download → 200 with Content-Length + body chunk.
   const aborted: string[] = [];
-  const request = vi.fn((url: string) => {
-    requestUrls.push(url);
+  const heads: string[] = [];
+  const request = vi.fn((arg: string | { method: string; url: string }) => {
+    const url = typeof arg === 'string' ? arg : arg.url;
+    const method = typeof arg === 'string' ? 'GET' : arg.method;
+    if (method === 'HEAD') heads.push(url);
+    else requestUrls.push(url);
     const cbs: Record<string, (arg: unknown) => void> = {};
     const kind = url.includes('update.electronjs.org') ? 'feed'
       : url.includes('update-manifest.json') ? 'manifest' : 'download';
@@ -107,7 +115,9 @@ async function loadWin32(
       abort() { aborted.push(url); },
       end() {
         Promise.resolve().then(() => {
-          if (mode !== 'ok') {
+          if (method === 'HEAD') {
+            respondHead(cbs, INSTALLER_BODY);
+          } else if (mode !== 'ok') {
             misbehave(cbs, mode);
           } else if (url.includes('update.electronjs.org')) {
             respondJson(cbs, { name: feed.version, notes: 'notes', url: DL_URL });
@@ -143,9 +153,18 @@ async function loadWin32(
       dataCbs['end']?.(undefined);
     });
   }
+  function assetHeaders(body: Buffer): Record<string, string[]> {
+    return { 'content-length': [String(body.length)], ...(feed.etag ? { etag: [feed.etag] } : {}) };
+  }
+  function respondHead(cbs: Record<string, (a: unknown) => void>, body: Buffer) {
+    const dataCbs: Record<string, (a: unknown) => void> = {};
+    const resp = { statusCode: 200, headers: assetHeaders(body), on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
+    cbs['response']?.(resp);
+    Promise.resolve().then(() => { dataCbs['end']?.(undefined); });
+  }
   function respondBody(cbs: Record<string, (a: unknown) => void>, body: Buffer) {
     const dataCbs: Record<string, (a: unknown) => void> = {};
-    const resp = { statusCode: 200, headers: { 'content-length': [String(body.length)] }, on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
+    const resp = { statusCode: 200, headers: assetHeaders(body), on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
     cbs['response']?.(resp);
     Promise.resolve().then(() => {
       dataCbs['data']?.(body);
@@ -243,10 +262,10 @@ async function loadWin32(
   // The failed-verification record lives in userData; '/tmp' here is not a
   // place to write it, so it is held in memory.
   const verifyStore = {
-    record: verifyFailure as { version: string; sha256: string } | null,
+    record: verifyFailure as Record_ | null,
     verifyFailurePath: (dir: string) => `${dir}/update-verify-failed.json`,
     readVerifyFailure: vi.fn((_file: string) => verifyStore.record),
-    writeVerifyFailure: vi.fn((_file: string, rec: { version: string; sha256: string }) => { verifyStore.record = rec; }),
+    writeVerifyFailure: vi.fn((_file: string, rec: Record_) => { verifyStore.record = rec; }),
     clearVerifyFailure: vi.fn((_file: string) => { verifyStore.record = null; }),
   };
   vi.doMock('../verifyFailureStore', () => verifyStore);
@@ -275,7 +294,7 @@ async function loadWin32(
   }));
 
   const mod = await import('../AutoUpdater');
-  return { AutoUpdater: mod.AutoUpdater, requestUrls, ipcHandlers, sent, openPath, quit, win, feed, unlinkMock, teardown, tempFiles, aborted, verifyStore };
+  return { AutoUpdater: mod.AutoUpdater, requestUrls, ipcHandlers, sent, openPath, quit, win, feed, unlinkMock, teardown, tempFiles, aborted, verifyStore, heads };
 }
 
 /** Flush queued microtasks so the chained net responses (feed→manifest→download) settle. */
@@ -845,6 +864,8 @@ describe('AutoUpdater requests always settle (win32)', () => {
  */
 describe('AutoUpdater after a failed verification (win32)', () => {
   const BAD_SHA = 'a'.repeat(64);
+  // What a mismatching download of the mock asset records.
+  const RECORD: Record_ = { version: NEW_VERSION, sha256: BAD_SHA, etag: '"0x1"', contentLength: INSTALLER_BODY.length };
   const downloads = (urls: string[]) => urls.filter((u) => u === DL_URL).length;
   const verifyFailedErrors = (sent: Sent[]) =>
     sent.filter((s) => s.channel === IPC.UPDATE_ERROR && s.data.code === 'verify-failed');
@@ -858,7 +879,7 @@ describe('AutoUpdater after a failed verification (win32)', () => {
     await backgroundCheck(updater);
     await flush();
     expect(downloads(requestUrls)).toBe(1);
-    expect(verifyStore.record).toEqual({ version: NEW_VERSION, sha256: BAD_SHA });
+    expect(verifyStore.record).toEqual(RECORD);
     expect(verifyFailedErrors(sent)).toHaveLength(1);
 
     await backgroundCheck(updater);
@@ -885,10 +906,41 @@ describe('AutoUpdater after a failed verification (win32)', () => {
     });
   });
 
+  it('downloads again when the asset was re-uploaded under the same manifest (a new ETag)', async () => {
+    // The manifest digest was right and the asset was wrong: the fix is a
+    // re-upload, which keeps (version, sha256) and changes the asset's ETag.
+    const { AutoUpdater, feed, heads, requestUrls, sent, win, verifyStore } = await loadWin32({ sha: GOOD_SHA, verifyFailure: { ...RECORD, sha256: GOOD_SHA } });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+    expect(heads).toEqual([DL_URL]);
+    expect(downloads(requestUrls)).toBe(0); // same ETag: still held
+
+    feed.etag = '"0x2"';
+    await backgroundCheck(updater);
+    await flush();
+    expect(downloads(requestUrls)).toBe(1);
+    expect(verifyStore.record).toBeNull();
+    expect(sent.map((s) => `${s.channel}:${s.data.status}`)).toContain(`${IPC.UPDATE_AVAILABLE}:downloaded`);
+  });
+
+  it('with no ETag, a different Content-Length counts as a re-upload', async () => {
+    const { AutoUpdater, requestUrls, win } = await loadWin32({
+      verifyFailure: { ...RECORD, sha256: GOOD_SHA, etag: null, contentLength: INSTALLER_BODY.length + 1 },
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(downloads(requestUrls)).toBe(1);
+  });
+
   it('a record from an earlier run holds too (it is read from userData)', async () => {
     const { AutoUpdater, requestUrls, win } = await loadWin32({
       sha: BAD_SHA,
-      verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA },
+      verifyFailure: RECORD,
     });
     const updater = new AutoUpdater(() => win as never, quitHooks());
 
@@ -916,7 +968,7 @@ describe('AutoUpdater after a failed verification (win32)', () => {
 
   it('a different version on the feed ends the record', async () => {
     const { AutoUpdater, feed, win, verifyStore } = await loadWin32({
-      verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA },
+      verifyFailure: RECORD,
     });
     feed.version = '9.9.11';
     const updater = new AutoUpdater(() => win as never, quitHooks());
@@ -930,7 +982,7 @@ describe('AutoUpdater after a failed verification (win32)', () => {
   it('a manual check for updates still retries the download', async () => {
     const { AutoUpdater, ipcHandlers, requestUrls, win } = await loadWin32({
       sha: BAD_SHA,
-      verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA },
+      verifyFailure: RECORD,
     });
     const updater = new AutoUpdater(() => win as never, quitHooks());
     updater.start();
@@ -942,7 +994,7 @@ describe('AutoUpdater after a failed verification (win32)', () => {
   });
 
   it('Settings can read the notice on mount, and a stale record is not reported', async () => {
-    const fresh = await loadWin32({ verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA } });
+    const fresh = await loadWin32({ verifyFailure: RECORD });
     new fresh.AutoUpdater(() => fresh.win as never, quitHooks());
     expect(await fresh.ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
       instanceDisabled: false,
@@ -950,7 +1002,7 @@ describe('AutoUpdater after a failed verification (win32)', () => {
     });
 
     // The user is already on that version (updated another way).
-    const stale = await loadWin32({ appVersion: NEW_VERSION, verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA } });
+    const stale = await loadWin32({ appVersion: NEW_VERSION, verifyFailure: RECORD });
     new stale.AutoUpdater(() => stale.win as never, quitHooks());
     expect(await stale.ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
       instanceDisabled: false,

@@ -182,7 +182,36 @@ function updaterAllowedUnderSuffix(): boolean {
  * published. Distinct from a transport failure: fetching the same artifact
  * again gives the same bytes, so this one is remembered (verifyFailureStore).
  */
-class InstallerDigestMismatchError extends Error {}
+class InstallerDigestMismatchError extends Error {
+  constructor(message: string, readonly asset: InstallerAssetIdentity) {
+    super(message);
+  }
+}
+
+/**
+ * What the download server said about the bytes it served: its ETag and
+ * Content-Length (null when absent). A re-uploaded asset under the same
+ * release and manifest digest gets a new ETag; the GitHub release-asset host
+ * (release-assets.githubusercontent.com, Azure blob storage) sends one.
+ */
+interface InstallerAssetIdentity {
+  etag: string | null;
+  contentLength: number | null;
+}
+
+function headerValue(headers: Record<string, string | string[]> | undefined, name: string): string | null {
+  const raw = headers?.[name];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function assetIdentity(headers: Record<string, string | string[]> | undefined): InstallerAssetIdentity {
+  const length = Number(headerValue(headers, 'content-length'));
+  return {
+    etag: headerValue(headers, 'etag'),
+    contentLength: Number.isSafeInteger(length) && length > 0 ? length : null,
+  };
+}
 
 interface UpdateInfo {
   name: string;
@@ -786,15 +815,18 @@ export class AutoUpdater {
       tempPath = await this.adoptExistingArtifact(validated.manifest);
       if (!tempPath) {
         // This exact artifact already failed verification: downloading it
-        // again fails the same way, ~150 MB every 30 minutes. Wait for the
-        // manifest to change. A manual "check for updates" is the one retry
-        // left to the user (a mismatch from a corrupted transfer would
-        // otherwise hold until the next release).
+        // again fails the same way, ~150 MB every 30 minutes. Wait for it to
+        // change: a new manifest digest, or the same digest with the asset
+        // itself re-uploaded (a new ETag, checked with a HEAD request). A
+        // manual "check for updates" still retries at once.
         const failure = this.getVerifyFailure();
         if (failure && !this.oneShotInstall && this.isRecordedFailure(failure, validated.manifest)) {
-          console.warn(`[AutoUpdater] ${pending.name} failed verification before and its manifest is unchanged — not downloading it again`);
-          this.sendVerifyFailed(pending.name);
-          return;
+          if (!(await this.assetChangedSince(failure, validated.manifest.url))) {
+            console.warn(`[AutoUpdater] ${pending.name} failed verification before and neither its manifest nor its asset changed — not downloading it again`);
+            this.sendVerifyFailed(pending.name);
+            return;
+          }
+          console.log(`[AutoUpdater] the ${pending.name} installer asset changed since it failed verification — downloading it again`);
         }
         tempPath = await this.downloadAndVerify(validated.manifest, (percent) => {
           this.sendToRenderer(IPC.UPDATE_DOWNLOAD, { status: 'downloading', percent });
@@ -838,7 +870,7 @@ export class AutoUpdater {
       this.downloadedPath = null;
       this.downloadedSha = null;
       if (err instanceof InstallerDigestMismatchError && manifest) {
-        this.setVerifyFailure({ version: manifest.version, sha256: manifest.sha256 });
+        this.setVerifyFailure({ version: manifest.version, sha256: manifest.sha256, ...err.asset });
         this.sendVerifyFailed(pending.name);
       } else {
         this.sendToRenderer(IPC.UPDATE_ERROR, {
@@ -848,6 +880,28 @@ export class AutoUpdater {
       }
     } finally {
       this.isDownloading = false;
+    }
+  }
+
+  /**
+   * Whether the installer asset was replaced since `failure` was recorded, by
+   * a HEAD request: a different ETag, or (with no ETag on either side) a
+   * different Content-Length. Anything inconclusive (a failed request, no
+   * identity recorded or returned) answers false and the record holds until
+   * the next poll asks again.
+   */
+  private async assetChangedSince(failure: VerifyFailure, url: string): Promise<boolean> {
+    if (failure.etag === null && failure.contentLength === null) return false;
+    try {
+      const { statusCode, headers } = await this.requestText(url, 'installer asset', 'HEAD');
+      if (statusCode !== 200) return false;
+      const now = assetIdentity(headers);
+      if (failure.etag !== null && now.etag !== null) return now.etag !== failure.etag;
+      if (failure.contentLength !== null && now.contentLength !== null) return now.contentLength !== failure.contentLength;
+      return false;
+    } catch (err) {
+      console.warn('[AutoUpdater] could not check the installer asset for changes:', err instanceof Error ? err.message : String(err));
+      return false;
     }
   }
 
@@ -945,9 +999,13 @@ export class AutoUpdater {
    * skipped while they are set. A dropped connection that was never settled
    * stopped all checks until the app restarted.
    */
-  private requestText(url: string, label: string): Promise<{ statusCode: number; text: string }> {
+  private requestText(
+    url: string,
+    label: string,
+    method: 'GET' | 'HEAD' = 'GET',
+  ): Promise<{ statusCode: number; text: string; headers: Record<string, string | string[]> }> {
     return new Promise((resolve, reject) => {
-      const request = net.request(url);
+      const request = method === 'GET' ? net.request(url) : net.request({ method, url });
       let settled = false;
       const settle = (finish: () => void) => {
         if (settled) return;
@@ -962,7 +1020,7 @@ export class AutoUpdater {
 
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
-          settle(() => resolve({ statusCode: response.statusCode, text: '' }));
+          settle(() => resolve({ statusCode: response.statusCode, text: '', headers: response.headers }));
           // The body is not read; abort so the connection is released
           // instead of left holding an unconsumed response.
           request.abort();
@@ -970,7 +1028,7 @@ export class AutoUpdater {
         }
         let text = '';
         response.on('data', (chunk) => { text += chunk.toString(); });
-        response.on('end', () => settle(() => resolve({ statusCode: 200, text })));
+        response.on('end', () => settle(() => resolve({ statusCode: 200, text, headers: response.headers })));
         response.on('aborted', () => settle(() => reject(new Error(`${label} connection dropped mid-response`))));
         response.on('error', (err) => settle(() => reject(err instanceof Error ? err : new Error(String(err)))));
       });
@@ -1040,9 +1098,12 @@ export class AutoUpdater {
           request.abort();
           return;
         }
-        const totalRaw = (response as { headers?: Record<string, string | string[]> }).headers?.['content-length'];
-        const totalStr = Array.isArray(totalRaw) ? totalRaw[0] : totalRaw;
-        const total = totalStr ? parseInt(String(totalStr), 10) : NaN;
+        const headers = (response as { headers?: Record<string, string | string[]> }).headers;
+        const totalStr = headerValue(headers, 'content-length');
+        const total = totalStr ? parseInt(totalStr, 10) : NaN;
+        // Recorded with a digest mismatch, so a later poll can tell a
+        // re-uploaded asset from the same bytes (assetChangedSince).
+        const asset = assetIdentity(headers);
         let received = 0;
         let sentIndeterminate = false;
 
@@ -1072,7 +1133,7 @@ export class AutoUpdater {
               settled = true;
               resolve(dest);
             } else {
-              fail(new InstallerDigestMismatchError(`sha256 mismatch: expected ${manifest.sha256}, got ${actual}`));
+              fail(new InstallerDigestMismatchError(`sha256 mismatch: expected ${manifest.sha256}, got ${actual}`, asset));
             }
           });
         });

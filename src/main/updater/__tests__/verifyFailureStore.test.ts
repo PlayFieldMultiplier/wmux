@@ -16,7 +16,7 @@ describe('verifyFailureStore', () => {
 
   it('round-trips a record and clears it', () => {
     const file = verifyFailurePath(dir);
-    const record = { version: '4.9.0', sha256: 'ab'.repeat(32) };
+    const record = { version: '4.9.0', sha256: 'ab'.repeat(32), etag: '"0x8DF2F2D168056B6"', contentLength: 151_000_000 };
     expect(readVerifyFailure(file)).toBeNull();
 
     writeVerifyFailure(file, record);
@@ -25,6 +25,12 @@ describe('verifyFailureStore', () => {
     clearVerifyFailure(file);
     expect(readVerifyFailure(file)).toBeNull();
     expect(() => clearVerifyFailure(file)).not.toThrow();
+  });
+
+  it('reads a record without asset identity (or a malformed one) with nulls', () => {
+    const file = verifyFailurePath(dir);
+    fs.writeFileSync(file, JSON.stringify({ version: '4.9.0', sha256: 'ab'.repeat(32), etag: 7, contentLength: -1 }));
+    expect(readVerifyFailure(file)).toEqual({ version: '4.9.0', sha256: 'ab'.repeat(32), etag: null, contentLength: null });
   });
 
   it('reads a malformed file as no record', () => {

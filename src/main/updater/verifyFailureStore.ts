@@ -2,8 +2,9 @@
  * The published update whose installer failed hash verification, kept in
  * userData so the updater does not fetch the same ~150 MB again every 30
  * minutes (and after every restart) only to fail the same way. The record is
- * the (version, sha256) the manifest published; a manifest with anything else
- * is a different artifact and is downloaded as usual.
+ * the (version, sha256) the manifest published, plus the asset's ETag and
+ * Content-Length as served; a manifest with anything else, or the same
+ * manifest over a re-uploaded asset, is downloaded again.
  *
  * Its own module, not inline fs calls in AutoUpdater: the updater's suites
  * mock `node:fs` with only the stream functions the download path uses, and
@@ -17,6 +18,10 @@ export const VERIFY_FAILURE_FILE = 'update-verify-failed.json';
 export interface VerifyFailure {
   version: string;
   sha256: string;
+  /** The download response's ETag, or null when it had none. */
+  etag: string | null;
+  /** The download response's Content-Length, or null when it had none. */
+  contentLength: number | null;
 }
 
 export function verifyFailurePath(userDataDir: string): string {
@@ -29,7 +34,12 @@ export function readVerifyFailure(filePath: string): VerifyFailure | null {
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
     if (typeof raw.version !== 'string' || typeof raw.sha256 !== 'string') return null;
     if (!/^[a-f0-9]{64}$/i.test(raw.sha256)) return null;
-    return { version: raw.version, sha256: raw.sha256 };
+    const etag = typeof raw.etag === 'string' && raw.etag.length > 0 ? raw.etag : null;
+    const contentLength =
+      typeof raw.contentLength === 'number' && Number.isSafeInteger(raw.contentLength) && raw.contentLength > 0
+        ? raw.contentLength
+        : null;
+    return { version: raw.version, sha256: raw.sha256, etag, contentLength };
   } catch {
     return null;
   }
