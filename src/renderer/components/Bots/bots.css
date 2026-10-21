@@ -801,3 +801,12 @@
   padding: 12px;
 }
 .wmux-bots-file-image img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+/* An HTML page fills the body on a white page, as a browser draws it: a
+   frame is transparent, and a page written for white would be unreadable
+   on a dark theme. */
+.wmux-bots-file-html { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.wmux-bots-file-html .wmux-bots-file-note { margin: 0; padding: 6px 16px 8px; }
+.wmux-bots-file-html iframe { display: block; flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; color-scheme: light; }
+/* Preview / Code, in the file panel's 44px header and above a chat's html
+   block: the segmented track, compact. */
+.wmux-html-view-toggle .ui-segment { min-height: 20px; padding: 0 8px; font-size: 11px; }

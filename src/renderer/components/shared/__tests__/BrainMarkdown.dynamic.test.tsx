@@ -394,6 +394,36 @@ describe('renderBrainMarkdown richCode (the Bots chat)', () => {
     expect(container.querySelector('[data-brain-md-code-rich]')).toBeNull();
     expect(container.querySelector('pre[data-brain-md-code]')?.className).toContain('border');
   });
+
+  it('an html block with htmlPreview: Code first, Preview in a sandboxed frame; other blocks and the option off keep no toggle', () => {
+    const source = '```html\n<p>hi</p><script>alert(1)</script>\n```';
+    act(() => {
+      root.render(createElement('div', null, renderBrainMarkdown(source, { richCode: true, htmlPreview: true })));
+    });
+    const block = container.querySelector('[data-brain-md-code-rich]')!;
+    expect(block.getAttribute('data-brain-md-code-view')).toBe('code');
+    expect(block.querySelector('pre')?.textContent).toBe('<p>hi</p><script>alert(1)</script>');
+    expect(block.querySelector('iframe')).toBeNull();
+    const [preview, code] = [...block.querySelectorAll<HTMLButtonElement>('[data-testid="brain-md-html-view"] [role="radio"]')];
+    act(() => preview.click());
+    const frame = block.querySelector('iframe')!;
+    expect(frame.getAttribute('sandbox')).toBe('');
+    expect(frame.getAttribute('referrerpolicy')).toBe('no-referrer');
+    expect(frame.getAttribute('srcdoc')).toContain('Content-Security-Policy');
+    expect(block.querySelector('[data-brain-md-html-note]')).not.toBeNull();
+    expect(block.querySelector('pre')).toBeNull();
+    act(() => code.click());
+    expect(block.querySelector('iframe')).toBeNull();
+
+    act(() => {
+      root.render(createElement('div', null, renderBrainMarkdown(source, { richCode: true })));
+    });
+    expect(container.querySelector('[data-testid="brain-md-html-view"]')).toBeNull();
+    act(() => {
+      root.render(createElement('div', null, renderBrainMarkdown('```ts\nconst a = 1;\n```', { richCode: true, htmlPreview: true })));
+    });
+    expect(container.querySelector('[data-testid="brain-md-html-view"]')).toBeNull();
+  });
 });
 
 describe('renderBrainMarkdown strictEmphasis (worker text in the Bots chat)', () => {

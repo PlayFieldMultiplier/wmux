@@ -11,6 +11,7 @@ import type { RoomsApi } from '../../../hooks/useRoomSync';
 import { useStore } from '../../../stores';
 
 import BotsFilePanel, { CardFiles, type OpenRoomFile } from '../BotsFiles';
+import { FILE_TEXT_SHOWN_MAX } from '../botsFileView';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -155,11 +156,44 @@ describe('BotsFilePanel', () => {
     expect(png.view()).toBe('image');
   });
 
-  it('an HTML page and an SVG source never become markup: the page reads as text, the SVG only as an <img>', async () => {
-    const page = await panel(file('page.html', 'text/html'), { text: '<p>hi</p><a href="https://x.test/">l</a>' });
+  it('an HTML page shows rendered in a sandboxed frame, never as markup in the app; Code shows its source', async () => {
+    const html = '<p>hi</p><a href="https://x.test/">l</a><script>alert(1)</script><img src="https://example.com/x.png">';
+    const page = await panel(file('page.html', 'text/html'), { text: html });
+    expect(page.view()).toBe('html');
+    const frame = page.el.querySelector('iframe')!;
+    expect(frame.getAttribute('sandbox')).toBe('');
+    expect(frame.getAttribute('referrerpolicy')).toBe('no-referrer');
+    expect(frame.getAttribute('title')).toBe('botsPage.html.frame(page.html)');
+    const doc = new DOMParser().parseFromString(frame.getAttribute('srcdoc')!, 'text/html');
+    expect(doc.head.firstElementChild?.getAttribute('http-equiv')).toBe('Content-Security-Policy');
+    expect(doc.head.firstElementChild?.getAttribute('content')).toContain("default-src 'none'");
+    expect(page.el.querySelector('[data-bots-file-note="links-off"]')?.textContent).toBe('botsPage.html.linksOff');
+    // Nothing of the page is in the app's own document.
+    expect(page.el.querySelector('.wmux-bots-file-body p:not([data-bots-file-note]), .wmux-bots-file-body a, .wmux-bots-file-body script, .wmux-bots-file-body img')).toBeNull();
+
+    const toggle = page.el.querySelector('[data-testid="bots-file-html-view"]')!;
+    const [preview, code] = [...toggle.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(preview.getAttribute('aria-checked')).toBe('true');
+    act(() => code.click());
     expect(page.view()).toBe('text');
-    expect(page.el.querySelector('pre')?.textContent).toBe('<p>hi</p><a href="https://x.test/">l</a>');
-    expect(page.el.querySelector('iframe, .wmux-bots-file-body p:not([data-bots-file-note]), .wmux-bots-file-body a')).toBeNull();
+    expect(page.el.querySelector('pre')?.textContent).toBe(html);
+    expect(page.el.querySelector('iframe')).toBeNull();
+    act(() => preview.click());
+    expect(page.view()).toBe('html');
+  });
+
+  it('an HTML page past the panel text size shows as its source only, with no toggle', async () => {
+    const big = `<p>${'x'.repeat(FILE_TEXT_SHOWN_MAX)}</p>`;
+    const page = await panel(file('big.html', 'text/html', big.length), { text: big });
+    expect(page.view()).toBe('text');
+    expect(page.el.querySelector('iframe, [data-testid="bots-file-html-view"]')).toBeNull();
+    expect(page.el.querySelector('[data-bots-file-note="cut"]')).not.toBeNull();
+  });
+
+  it('an SVG source never becomes markup: only an <img>', async () => {
+    const svg = await panel(file('chart.svg', 'image/svg+xml'), { text: '<svg xmlns="http://www.w3.org/2000/svg"/>' });
+    expect(svg.view()).toBe('image');
+    expect(svg.el.querySelector('.wmux-bots-file-body svg, iframe')).toBeNull();
   });
 
   it('a PDF and anything else neither text nor a picture get their name, size and Save a copy', async () => {

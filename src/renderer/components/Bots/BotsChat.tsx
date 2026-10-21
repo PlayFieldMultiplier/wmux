@@ -2491,6 +2491,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   const markdown = useMemo((): MarkdownOptions => ({
     links: true,
     richCode: true,
+    htmlPreview: true,
     // Worker and bot text carries code-like runs (2**31): `*` between
     // letters or digits is never emphasis here.
     strictEmphasis: true,
