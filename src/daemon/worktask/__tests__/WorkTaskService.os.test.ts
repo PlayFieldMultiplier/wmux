@@ -919,15 +919,22 @@ describe('J3 §2 prUrl — 비단조·closed 단독 허용·형식 검증', () =
     const mr = 'https://gitlab.example.com/group/sub/proj/-/merge_requests/7';
     expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: mr })).ok).toBe(true);
     expect(svc.getTask(taskId)?.prUrl).toBe(mr);
+    const withPort = 'https://gitlab.example.com:8443/group/proj/-/merge_requests/7';
+    expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: withPort })).ok).toBe(true);
+    expect(svc.getTask(taskId)?.prUrl).toBe(withPort);
     for (const bad of [
       'http://gitlab.example.com/group/proj/-/merge_requests/7',
       'https://gitlab.example.com/proj/-/merge_requests/7',
       'https://gitlab.example.com/group/proj/-/issues/7',
       'https://gitlab.example.com/group/proj/-/merge_requests/7?x=1',
+      'https://gitlab.example.com/group/proj/-/merge_requests/7#note_1',
+      'https://user:pw@gitlab.example.com/group/proj/-/merge_requests/7',
+      'https://evil.example@gitlab.example.com/group/proj/-/merge_requests/7',
+      `https://gitlab.example.com/${'g/'.repeat(1100)}proj/-/merge_requests/7`,
     ]) {
-      expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: bad })).ok).toBe(false);
+      expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: bad })).ok, bad.slice(0, 80)).toBe(false);
     }
-    expect(svc.getTask(taskId)?.prUrl).toBe(mr);
+    expect(svc.getTask(taskId)?.prUrl).toBe(withPort);
   });
 
   it('동일 prUrl 재쓰기는 append 없는 멱등 no-op이다', async () => {

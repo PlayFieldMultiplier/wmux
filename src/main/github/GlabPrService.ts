@@ -492,11 +492,12 @@ export function glabMergeAnswer(stdout: string, url: string): PrWriteResult {
 
 /** A failed `glab api` call glab answered as a sign-out. Only its own stderr
  *  counts (the error message holds the command line, project path
- *  included): a 401, or "Unauthenticated." as glab prints for a host it
- *  holds no token for. A 403 is no sign-out. */
+ *  included), and only glab's status words: `401 Unauthorized`, `HTTP 401`,
+ *  or "Unauthenticated." as glab prints for a host it holds no token for. A
+ *  bare 401 (a URL's `team-401%2F`) is not one, and a 403 is no sign-out. */
 export function glabApiSignedOut(err: unknown): boolean {
   const stderr = (err as { stderr?: unknown })?.stderr;
-  return typeof stderr === 'string' && (/\b401\b/.test(stderr) || stderr.includes('Unauthenticated.'));
+  return typeof stderr === 'string' && /\b401 Unauthorized\b|\bHTTP 401\b|Unauthenticated\./.test(stderr);
 }
 
 /** A merge request's iid and web URL from its REST answer, or null. The URL

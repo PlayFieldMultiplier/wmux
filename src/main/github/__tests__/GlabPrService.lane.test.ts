@@ -8,6 +8,7 @@ import {
   GLAB_CI_CONFIG_CHECK,
   GLAB_CI_CONFIG_UNVERIFIED_CHECK,
   GlabPrService,
+  glabApiSignedOut,
   glabAuthFailure,
   glabCiConfigTouched,
   glabMergeBlock,
@@ -389,5 +390,19 @@ describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
     expect(await svcOf(async () => ({ stdout: JSON.stringify({ username: 'Me' }) })).loginOrSignOut('gitlab.example.com', '/wmux')).toEqual({ login: 'me' });
     const partial = svcOf(async () => ({ stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'complexity' }] }) }));
     expect(await partial.watchGraphql('/wmux', KEY, 'q', {})).toEqual({ ok: false, code: 'error', message: 'complexity' });
+  });
+});
+
+describe('glabApiSignedOut', () => {
+  const fail = (stderr: string, message = 'Command failed') => Object.assign(new Error(message), { stderr });
+  it('reads glab\'s status words in stderr only', () => {
+    expect(glabApiSignedOut(fail('glab: 401 Unauthorized (HTTP 401)'))).toBe(true);
+    expect(glabApiSignedOut(fail('GET https://gitlab.example.com/api/v4/user: 401 {message: 401 Unauthorized}'))).toBe(true);
+    expect(glabApiSignedOut(fail('request failed (HTTP 401)'))).toBe(true);
+    expect(glabApiSignedOut(fail('   ERROR  \n  Unauthenticated.  \n'))).toBe(true);
+    // A bare 401 in a URL is not glab's answer, nor is the command line.
+    expect(glabApiSignedOut(fail('Post "https://gitlab.example.com/api/v4/projects/team-401%2Fproj/merge_requests": EOF'))).toBe(false);
+    expect(glabApiSignedOut(fail('dial tcp: i/o timeout', 'Command failed: glab api -f title=401 Unauthorized'))).toBe(false);
+    expect(glabApiSignedOut(fail('glab: 403 Forbidden (HTTP 403)'))).toBe(false);
   });
 });

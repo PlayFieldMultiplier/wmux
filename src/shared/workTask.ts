@@ -180,9 +180,18 @@ export const WORKTASK_PR_URL_RE = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\
 /**
  * prUrl's GitLab shape: a merge request page, `https://{host}/{group/…/project}/-/merge_requests/{iid}`
  * (task_pr on a GitLab remote — any host, as self-managed GitLab is common).
- * Whole URL, https only, plain path segments.
+ * Whole URL, https only, plain path segments; no userinfo, query or fragment.
  */
 export const WORKTASK_MR_URL_RE = /^https:\/\/[\w.-]+(?::\d{1,5})?(?:\/[\w.-]+){2,}\/-\/merge_requests\/\d+$/;
+
+/** Longest prUrl the daemon stores (workLink's URL cap). */
+export const WORKTASK_PR_URL_MAX = 2048;
+
+/** A prUrl the daemon may store: a GitHub PR or a GitLab merge request page,
+ *  at most WORKTASK_PR_URL_MAX characters. */
+export function isWorktaskPrUrl(url: string): boolean {
+  return url.length <= WORKTASK_PR_URL_MAX && (WORKTASK_PR_URL_RE.test(url) || WORKTASK_MR_URL_RE.test(url));
+}
 
 /** 미션 채널 topic 앵커 접두(§3) — 고아 reconcile의 유일 마킹. */
 export const MISSION_TOPIC_PREFIX = 'wmux:mission:';

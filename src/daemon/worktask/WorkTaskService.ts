@@ -33,8 +33,8 @@ import {
   WORKTASK_CLOSED_GC_MS,
   WORKTASK_IDEMPOTENCY_CAP,
   WORKTASK_MAX_OPEN_PER_WORKSPACE,
-  WORKTASK_PR_URL_RE,
-  WORKTASK_MR_URL_RE,
+  WORKTASK_PR_URL_MAX,
+  isWorktaskPrUrl,
   missionTopicFor,
   normalizeWorktreePath,
   taskIdFromMissionTopic,
@@ -583,12 +583,13 @@ export class WorkTaskService {
       }
 
       // prUrl format gate (J3 §2, review G5): a GitHub PR URL or a GitLab merge
-      // request page (WORKTASK_MR_URL_RE) only. prUrl is non-monotonic, with no
-      // write-once guard, so its format is the only wire defence.
-      if (input.prUrl !== undefined && !WORKTASK_PR_URL_RE.test(input.prUrl) && !WORKTASK_MR_URL_RE.test(input.prUrl)) {
+      // request page only, length-capped (isWorktaskPrUrl). prUrl is
+      // non-monotonic, with no write-once guard, so its format is the only
+      // wire defence.
+      if (input.prUrl !== undefined && !isWorktaskPrUrl(input.prUrl)) {
         return {
           ok: false,
-          error: `task.mission.update: prUrl must match https://github.com/{owner}/{repo}/pull/{n} or https://{host}/{project}/-/merge_requests/{n}`,
+          error: `task.mission.update: prUrl must match https://github.com/{owner}/{repo}/pull/{n} or https://{host}/{project}/-/merge_requests/{n} (at most ${WORKTASK_PR_URL_MAX} characters)`,
         };
       }
 

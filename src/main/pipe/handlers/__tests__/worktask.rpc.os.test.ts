@@ -840,6 +840,36 @@ describe('task.pr branch-tip binding', () => {
     expect(String((res as { error: { message: string } }).error.message)).toContain('abc1234');
     expect(h.createPr).not.toHaveBeenCalled();
   });
+
+  function urlHarness(urls: string[]) {
+    let n = 0;
+    return harness({
+      exec: (async (_cmd, args) => {
+        if (args[0] === 'rev-parse') return { stdout: 'abc1234\n', stderr: '', code: 0 };
+        if (args.join(' ') === 'remote get-url --push origin') {
+          const url = urls[Math.min(n, urls.length - 1)] ?? '';
+          n += 1;
+          return { stdout: `${url}\n`, stderr: '', code: 0 };
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }) as WorktaskExec,
+    });
+  }
+
+  it('names origin\'s push host and project in the dialog', async () => {
+    const h = urlHarness(['git@gitlab.example.com:group/proj.git']);
+    expect(await h.call('task.pr', { taskId: TASK.id }, COMMANDER)).toMatchObject({ ok: true });
+    expect(h.requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      effect: expect.stringContaining('to gitlab.example.com/group/proj and open'),
+    }));
+  });
+
+  it('refuses when origin\'s push URL changed while the approval was on screen', async () => {
+    const h = urlHarness(['git@gitlab.example.com:group/proj.git', 'git@gitlab.example.com:other/proj.git']);
+    const res = await h.call('task.pr', { taskId: TASK.id }, COMMANDER);
+    expect(res).toMatchObject({ ok: false, error: { code: 'ABORTED' } });
+    expect(h.createPr).not.toHaveBeenCalled();
+  });
 });
 
 // ── One question, asked once; and a bounded queue ──────────────────────────

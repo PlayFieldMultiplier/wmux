@@ -19,13 +19,20 @@
  *
  * fork 워크플로(§7·CL9): origin remote 부재는 명시 에러(자동 추측 금지).
  *
- * GitLab: when origin's host is not GitHub's (hostLane.isGitlabRepoKey), the
- * same steps run with glab — the gate is `glab --version` plus a `user` read
- * (a definite sign-out → gh-unauth, a host that did not answer → a transient
- * error), the base is the project's default branch, and the merge request is
- * opened over REST inside origin's project (GlabPrService.createMergeRequest).
- * Re-entry returns the open MR for that source → target. The push is the
- * GitHub path's. Forks and drafts are not handled, as on GitHub.
+ * GitLab: when origin's push host is not GitHub's (hostLane.isGitlabRepoKey),
+ * the same steps run with glab — the gate is `glab --version` plus a `user`
+ * read (a definite sign-out → gh-unauth, a host that did not answer → a
+ * transient error), the base is the project's default branch, and the merge
+ * request is opened over REST inside origin's project
+ * (GlabPrService.createMergeRequest). Re-entry returns the open MR for that
+ * source → target. The push is the GitHub path's. Forks and drafts are not
+ * handled, as on GitHub. A host the glab gate refuses may still be GitHub
+ * (Enterprise on its own domain, an ssh alias), so the gh path runs next; if
+ * gh cannot reach that repository either, the glab refusal is the answer.
+ *
+ * Both paths refuse a branch name `git check-ref-format --branch` does not
+ * return unchanged, or one with `:`, `+`, `^`, `~`, `@{` or a leading `-`,
+ * before anything is pushed (a refspec, never a name).
  */
 
 import { execFile } from 'node:child_process';
@@ -133,18 +140,35 @@ export class TaskPrService {
   }
 
   async createPr(input: CreatePrInput): Promise<CreatePrResult> {
-    const { taskId, verifiedWorkspaceId, worktreePath, branch, title } = input;
+    const { worktreePath, branch, title } = input;
     const body = input.body && input.body.length > 0 ? input.body : `wmux fan-out task: ${title}`;
 
+    const badBranch = await this.branchRefusal(worktreePath, branch);
+    if (badBranch) return badBranch;
+
     // A GitLab origin takes the glab path. No origin, or a URL that names no
-    // host/project, stays on the gh path below, which refuses it as before.
+    // host/project, stays on the gh path, which refuses it as before. A host
+    // glab refuses goes on to gh (it may be GitHub on its own domain).
     const key = await this.originKey(worktreePath);
-    if (key && isGitlabRepoKey(key)) return this.createMr(input, key, body);
+    if (key && isGitlabRepoKey(key)) {
+      const refused = await this.glabGate(worktreePath, key, branch);
+      if (!refused) return this.createMr(input, key, body);
+      return this.createGh(input, body, refused);
+    }
+    return this.createGh(input, body);
+  }
+
+  /** The gh path. With `glabRefusal` (the glab gate refused a non-GitHub
+   *  host), a gh that is missing, signed out or cannot read the repository
+   *  answers that refusal instead, before anything is pushed. */
+  private async createGh(input: CreatePrInput, body: string, glabRefusal?: CreatePrResult): Promise<CreatePrResult> {
+    const { taskId, verifiedWorkspaceId, worktreePath, branch, title } = input;
 
     // ── ① gh 게이트: 버전 + 인증(G3 — 버전≠인증) ──
     try {
       await this.gh(['--version'], worktreePath);
     } catch {
+      if (glabRefusal) return glabRefusal;
       return {
         ok: false,
         reason: 'gh-missing',
@@ -155,12 +179,20 @@ export class TaskPrService {
     try {
       await this.gh(['auth', 'status'], worktreePath);
     } catch {
+      if (glabRefusal) return glabRefusal;
       return {
         ok: false,
         reason: 'gh-unauth',
         error: 'GitHub CLI is not signed in — run `gh auth login` and try again.',
         browseFallback: `또는 브라우저에서 브랜치 ${branch}로 직접 PR을 생성하세요`,
       };
+    }
+    // After a glab refusal, gh must see the repository before anything is pushed.
+    let earlyBase: string | undefined;
+    if (glabRefusal) {
+      const seen = await this.ghDefaultBranch(worktreePath);
+      if (!seen.ok || !seen.base) return glabRefusal;
+      earlyBase = seen.base;
     }
 
     // ── ② dirty 검사(CX7): 미커밋 변경은 PR에 안 들어감 → 차단 + 커밋 안내 ──
@@ -203,14 +235,14 @@ export class TaskPrService {
     // base = repo default(CL4·[J2대조]4 — fan-out 원본 브랜치 미기록이라 default 조회).
     // F6: 조회 실패·빈 값이면 'main' 추측 대신 명시 에러(엉뚱한 base로 PR 여는 것 방지).
     let base: string;
-    try {
-      const { stdout } = await this.gh(
-        ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
-        worktreePath,
-      );
-      base = stdout.trim();
-    } catch (err) {
-      return { ok: false, reason: 'pr-failed', error: `Could not determine the base branch (repo default): ${errMsg(err)}` };
+    if (earlyBase !== undefined) {
+      base = earlyBase;
+    } else {
+      const read = await this.ghDefaultBranch(worktreePath);
+      if (!read.ok) {
+        return { ok: false, reason: 'pr-failed', error: `Could not determine the base branch (repo default): ${read.error}` };
+      }
+      base = read.base;
     }
     if (!base) {
       return { ok: false, reason: 'pr-failed', error: 'Could not determine the base branch (empty response) — origin has no defaultBranchRef.' };
@@ -249,24 +281,49 @@ export class TaskPrService {
     return this.finalize(taskId, verifiedWorkspaceId, worktreePath, branch, prUrl, false);
   }
 
-  /** origin's remote key (`host/…/project`, lowercased), or null. */
+  /** The repo default branch as gh reads it (`''` when it has none). */
+  private async ghDefaultBranch(worktreePath: string): Promise<{ ok: true; base: string } | { ok: false; error: string }> {
+    try {
+      const { stdout } = await this.gh(
+        ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
+        worktreePath,
+      );
+      return { ok: true, base: stdout.trim() };
+    } catch (err) {
+      return { ok: false, error: errMsg(err) };
+    }
+  }
+
+  /** A refusal when `branch` is not a plain branch name: a refspec character
+   *  (`git push origin -- +x` force-pushes), a leading `-`, or a name git
+   *  does not hand back unchanged (`@{-1}` expands). Null when it is fine. */
+  private async branchRefusal(worktreePath: string, branch: string): Promise<CreatePrResult | null> {
+    const refusal: CreatePrResult = { ok: false, reason: 'error', error: `Not a plain branch name: ${JSON.stringify(branch)} — nothing was pushed.` };
+    if (!branch || branch.startsWith('-') || /[:+^~]|@\{/.test(branch)) return refusal;
+    try {
+      const { stdout } = await this.git(['check-ref-format', '--branch', branch], worktreePath);
+      return stdout.trim() === branch ? null : refusal;
+    } catch {
+      return refusal;
+    }
+  }
+
+  /** origin's push remote key (`host/…/project`, lowercased), or null: the
+   *  push and the merge request name the same project. */
   private async originKey(worktreePath: string): Promise<string | null> {
     try {
-      const { stdout } = await this.git(['remote', 'get-url', 'origin'], worktreePath);
+      const { stdout } = await this.git(['remote', 'get-url', '--push', 'origin'], worktreePath);
       return parseRemoteKey(stdout);
     } catch {
       return null;
     }
   }
 
-  /** The GitLab path: createPr's steps with glab, inside origin's project. */
-  private async createMr(input: CreatePrInput, key: string, body: string): Promise<CreatePrResult> {
-    const { taskId, verifiedWorkspaceId, worktreePath, branch, title } = input;
+  /** The glab gate: installed, then signed in on origin's host. Only glab's
+   *  own 401 / "Unauthenticated." is a sign-out; a host that did not answer
+   *  is transient and says so. Null when glab may go on. */
+  private async glabGate(worktreePath: string, key: string, branch: string): Promise<CreatePrResult | null> {
     const host = key.split('/')[0];
-
-    // ── ① glab gate: installed, then signed in on origin's host. Only glab's
-    // own 401 / "Unauthenticated." is a sign-out; a host that did not answer
-    // is transient and says so.
     try {
       await this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', ['--version'], {
         cwd: worktreePath,
@@ -294,6 +351,14 @@ export class TaskPrService {
     if (!login) {
       return { ok: false, reason: 'error', error: `GitLab on ${host} could not be reached just now — try again.` };
     }
+    return null;
+  }
+
+  /** The GitLab path, after glabGate: createPr's steps with glab, inside
+   *  origin's project. */
+  private async createMr(input: CreatePrInput, key: string, body: string): Promise<CreatePrResult> {
+    const { taskId, verifiedWorkspaceId, worktreePath, branch, title } = input;
+    const host = key.split('/')[0];
 
     // ── ② dirty 검사(CX7) — as on the gh path.
     try {
