@@ -270,7 +270,9 @@ describe('attach without promote (#2398)', () => {
     const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
     const region = handler.slice(start, start + 9000);
     const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
-    expect(region.slice(promoteAt, promoteAt + 800)).toMatch(/promoted = true;/);
+    // Round 7: only this caller's promote counts, never a join of the
+    // daemon's background start of an exec or supervised unit.
+    expect(region.slice(promoteAt, promoteAt + 1200)).toMatch(/promoted = suspendedReconnectAction\(session, opts\) === 'promote';/);
     expect(handler).toMatch(/return \{ success: true, id: session\.id,[^\n]*\.\.\.startedHere\(\) \};/);
   });
 

@@ -420,6 +420,26 @@ describe('a stop key that joins the pane\'s own attempt (#2398)', { timeout: 60_
     expect(answer).toBe('not-running');
   });
 
+  // Round 7: a hidden pane's exec or supervised unit the daemon recovers in
+  // the background. The pane's promote:false attach joins that start (main
+  // does not say it started it): a stop key that joined it is delivered.
+  it('answers attached for a unit the daemon started in the background', async () => {
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async () => {
+      await new Promise<void>((r) => { release = r; });
+      return { success: true };
+    });
+    setDaemonModeActive(true);
+    await render('p-joined-unit', false);
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    let pending: Promise<void> = Promise.resolve();
+    await act(async () => { pending = attachForWrite('p-joined-unit', false).then((a) => { answer = a; }); });
+    await act(async () => { release(); await pending; });
+    expect(promoteFlags()).toEqual([false]);
+    expect(answer).toBe('attached');
+  });
+
   it('answers attached when that attempt attached a running session', async () => {
     let release: () => void = () => undefined;
     reconnect.mockImplementation(async () => {

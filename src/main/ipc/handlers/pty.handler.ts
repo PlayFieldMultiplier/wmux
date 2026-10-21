@@ -1576,7 +1576,11 @@ export function registerPTYHandlers(
             // banner's Retry is the right and only offer for every other
             // failure; a missing directory additionally gets "start fresh".
             if (!result.ok) return { success: false, recoveryPending: true, error: result.error?.message || 'WSL recovery failed. Check the target and retry.', cwdMissing: result.error?.code === 'CWD_MISSING' };
-            promoted = true;
+            // Only a promote this caller asked for started the session. A
+            // join of the daemon's own background start did not: that unit
+            // runs whatever the caller does, so a stop key to it is a real
+            // stop request and is delivered.
+            promoted = suspendedReconnectAction(session, opts) === 'promote';
             const refreshed = await daemonClient.rpc('daemon.listSessions', {}) as typeof sessions;
             session = refreshed.find(s => s.id === id) ?? session;
           } catch (err) {

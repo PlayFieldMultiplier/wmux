@@ -20,8 +20,12 @@ describe('suspended session reconnect action', () => {
   // boot whatever its pane does; holding it left that pane deferred on a
   // session that was running. The reconnect joins the start instead.
   it('promotes an exec unit or a supervised session even from a hidden pane', () => {
-    expect(suspendedReconnectAction({ exec: { command: 'npm run dev' } }, { promote: false })).toBe('promote');
-    expect(suspendedReconnectAction({ supervision: { restart: 'always' } }, { promote: false })).toBe('promote');
-    expect(suspendedReconnectAction({ supervision: { restart: 'always' } }, undefined)).toBe('promote');
+    // 'join': promoted to join the daemon's own start, which this call did
+    // not cause (round 7: a stop key to such a unit is delivered).
+    expect(suspendedReconnectAction({ exec: { command: 'npm run dev' } }, { promote: false })).toBe('join');
+    expect(suspendedReconnectAction({ supervision: { restart: 'always' } }, { promote: false })).toBe('join');
+    expect(suspendedReconnectAction({ supervision: { restart: 'always' } }, undefined)).toBe('join');
+    // A caller that asks starts it itself, unit or not.
+    expect(suspendedReconnectAction({ exec: { command: 'npm run dev' } }, { promote: true })).toBe('promote');
   });
 });

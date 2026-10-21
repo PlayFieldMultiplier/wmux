@@ -14,16 +14,19 @@ export function recoversInBackground(session: { exec?: unknown; supervision?: un
 }
 
 /**
- * What pty:reconnect does with a suspended session: promote it only when the
- * caller asks for that explicitly (a shown pane, a raw write, a resume on
- * start), or when the daemon is starting it in the background anyway (the
- * promote then joins that one); otherwise hold it — attached to nothing, kept
- * in use, and answered `deferred`. A reconnect that does not say (a repaint
- * fallback, a read) never starts a session.
+ * What pty:reconnect does with a suspended session: 'promote' — the caller
+ * asks for that explicitly (a shown pane, a raw write, a resume on start),
+ * and this call starts it; 'join' — the caller did not ask, but the daemon
+ * is starting it in the background anyway (an exec unit or supervised
+ * session), so the call promotes only to join that start and starts nothing
+ * itself; 'hold' — otherwise: attached to nothing, kept in use, and answered
+ * `deferred`. A reconnect that does not say (a repaint fallback, a read)
+ * never starts a session.
  */
 export function suspendedReconnectAction(
   session: { exec?: unknown; supervision?: unknown },
   opts: { promote?: boolean } | undefined,
-): 'promote' | 'hold' {
-  return opts?.promote === true || recoversInBackground(session) ? 'promote' : 'hold';
+): 'promote' | 'join' | 'hold' {
+  if (opts?.promote === true) return 'promote';
+  return recoversInBackground(session) ? 'join' : 'hold';
 }
