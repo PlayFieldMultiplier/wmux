@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+// @wmux-lane unit
+// (`win32` below is a stubbed `electronAPI.platform` fed to pure path code; nothing reaches the OS.)
 //
 // Cross-host A2A: main's RemoteA2aBridge hands a task another host sent to the
 // renderer with `remoteMarker` / `remoteFrom`. It must land on exactly the
