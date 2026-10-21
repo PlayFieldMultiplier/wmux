@@ -62,6 +62,7 @@ import { pruneDaemonPidMapAtConnect } from './pty/pidMap';
 import { registerAllHandlers } from './ipc/registerHandlers';
 import { registerConnectorTerminalHandlers } from './ipc/handlers/connectorTerminal.handler';
 import { registerConnectorOAuthHandlers } from './ipc/handlers/connectorOAuth.handler';
+import { setWorkerGatewayOAuth } from './connectors/workerGateway';
 import { registerConnectorCatalogHandlers } from './ipc/handlers/connectorCatalog.handler';
 import { registerConnectorCheckHandlers } from './ipc/handlers/connectorCheck.handler';
 import { RpcRouter } from './pipe/RpcRouter';
@@ -840,6 +841,8 @@ registerSessionHandlers(() => daemonClient?.isConnected === true);
 // OAuth consent and terminal gateway leases belong to the app, not a daemon
 // connection. Keep them alive across registerAllHandlers teardown/reconnect.
 const connectorOAuth = registerConnectorOAuthHandlers(() => mainWindow);
+// Bots' workers reach signed-in connections only through main's gateway.
+setWorkerGatewayOAuth(connectorOAuth.service);
 const cleanupConnectorTerminal = registerConnectorTerminalHandlers(() => mainWindow, connectorOAuth.service, () => daemonClient);
 const cleanupConnectorChecks = registerConnectorCheckHandlers(() => mainWindow, connectorOAuth.service);
 const cleanupConnectorCatalog = registerConnectorCatalogHandlers(() => mainWindow);

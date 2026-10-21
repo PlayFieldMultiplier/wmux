@@ -811,6 +811,30 @@ describe('a research task (scratch folder, no worktree)', () => {
     await settled(store);
   });
 
+  it('with a signed-in connection, its idle pane is closed and the worker starts again in a new one (new gateway leases)', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const research = row('completed', { dispatch: { origin: { kind: 'bot', botId: BOT }, preset: RESEARCH_PRESET, gatewayConnectors: ['notion'] } });
+    const rpc = async () => ({ ok: true, tasks: [{ id: research.id, outputDir: wt }] });
+    const { ports } = reclaimPorts(store, [session()], { worktreeOf: (entry) => taskFolderFromMissions(rpc, entry) });
+    await reclaimWorker(ports, research, 'completed');
+    const typeLine = vi.fn(() => true);
+    const closePane = vi.fn(async () => undefined);
+    const respawn = vi.fn(async () => ({ ok: true as const, workspaceId: 'ws-new', sessionId: 'daemon-9' }));
+    const gatewayTask = (taskId: string) => taskId === research.id;
+    // A running agent there is left alone.
+    const busy = await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: true })], typeLine, closePane, respawn, gatewayTask, now: () => 9_000 }, research.id, { kind: 'owner' });
+    expect(busy).toMatchObject({ ok: false, code: 'already_running' });
+    // Without a way to close the pane, nothing is typed into it.
+    expect(await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: false, commandRunning: false })], typeLine, respawn, gatewayTask, now: () => 9_000 }, research.id, { kind: 'owner' }))
+      .toMatchObject({ ok: false, code: 'not_now' });
+    const fresh = await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: false, commandRunning: false })], typeLine, closePane, respawn, gatewayTask, now: () => 9_000 }, research.id, { kind: 'owner' });
+    expect(fresh).toMatchObject({ ok: true, sessionId: 'daemon-9', workspaceId: 'ws-new' });
+    expect(closePane).toHaveBeenCalledWith('daemon-1');
+    expect(typeLine).not.toHaveBeenCalled();
+    expect(respawn).toHaveBeenCalledTimes(1);
+    await settled(store);
+  });
+
   it('a bot does not start the worker of a task the owner stopped again; the owner can', async () => {
     const store = ReclaimedWorkers.at(dir);
     await reclaimWorker(reclaimPorts(store, [session()], { row: () => row('review_requested'), turnEnded: () => true }).ports, row('review_requested'), 'reported');

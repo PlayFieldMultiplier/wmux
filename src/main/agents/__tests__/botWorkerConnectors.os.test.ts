@@ -386,6 +386,75 @@ describe('the grant carries a connection\'s keys to its own launch only', () => 
   });
 });
 
+describe('a task with signed-in connections (main\'s gateway)', () => {
+  const notion = con({
+    id: 'con-0000000c', name: 'notion', remote: { url: 'https://mcp.notion.example/mcp', headers: {} }, secrets: [],
+    tools: { mode: 'listed', allowed: ['read_page'] },
+  });
+  const BEARER_NAME = 'CONNECTOR_0000000C_TOKEN';
+  const BRIDGE = '/opt/wmux/resources/cli-bundle/wmux-bridge.mjs';
+  const SANDBOX = { enabled: true, failIfUnavailable: true, network: { allowedDomains: [], deniedDomains: ['*'] }, credentials: { envVars: [{ name: BEARER_NAME, mode: 'deny' }] } };
+  const gateway = { routes: { notion: { url: 'http://127.0.0.1:43123/mcp', envName: BEARER_NAME } }, sandbox: SANDBOX };
+  const opts = () => ({ initialCommand: LINE, fanoutTaskOf: 'ws-owner', cwd: dir, workspaceId: 'ws-task' });
+  const guardWith = (launch: Parameters<typeof withBotWorkerMergeGuard>[3], extra: Record<string, unknown> = {}) => {
+    const release = beginBotWorkerSpawn('ws-owner', dir, { botId: 'bot-0000000a', taskId: 't-1', connectors: [notion, files], gatewayConnectors: ['notion'] });
+    try {
+      return withBotWorkerMergeGuard(opts(), botWorkerForCreate(opts(), { dir, isBotTaskWorkspace: () => false }), { ...deps(), bridge: () => BRIDGE, ...extra }, launch);
+    } finally {
+      release();
+    }
+  };
+
+  it('reaches the gateway by its loopback URL and a bearer named from the env, with no web, no network and only the report tools', () => {
+    const guarded = guardWith({ gateway })!;
+    const w = wordsOf(guarded.initialCommand!);
+    // No user settings: wmux's hooks come in its own file.
+    expect(guarded.initialCommand).toContain('--setting-sources=project');
+    const mcp = readJson(w.mcp).mcpServers;
+    expect(mcp.wmux.args).toEqual([ENTRY, '--core']);
+    expect(mcp.notion).toEqual({ type: 'http', url: 'http://127.0.0.1:43123/mcp', headers: { Authorization: `Bearer \${${BEARER_NAME}}` } });
+    // A stdio sibling never sees the bearer.
+    expect(mcp.files.args).toEqual(expect.arrayContaining(['-u', BEARER_NAME]));
+    expect(mcp.files.args.indexOf(BEARER_NAME)).toBeLessThan(mcp.files.args.indexOf('/usr/local/bin/npx'));
+    const settings = readJson(w.settings);
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining(['WebFetch', 'WebSearch']));
+    expect(settings.permissions.allow).toContain('mcp__notion');
+    expect(settings.permissions.allow).not.toContain('mcp__notion__read_page');
+    expect(settings.sandbox).toEqual(SANDBOX);
+    const wmuxGate = (settings.hooks.PreToolUse as Array<{ matcher: string }>).find((g) => g.matcher.startsWith('^mcp__wmux__'))!;
+    const refused = new RegExp(wmuxGate.matcher);
+    for (const tool of ['task_push', 'browser_navigate', 'terminal_send', 'send_message', 'a2a_broadcast', 'fanout_start']) expect(refused.test(`mcp__wmux__${tool}`), tool).toBe(true);
+    for (const tool of ['ledger_update', 'channel_post']) expect(refused.test(`mcp__wmux__${tool}`), tool).toBe(false);
+    expect(refused.test('mcp__notion__read_page')).toBe(false);
+    expect(settings.hooks.Stop[0].hooks[0].command).toBe(`node "${BRIDGE}" Stop`);
+    // The record names the bearer (to keep it out of later stdio servers), never a value.
+    expect(guardedLaunchOf(guarded).launch).toMatchObject({ level: 'core', settingSources: 'project', connectionKeys: ['FILES_API_TOKEN', BEARER_NAME] });
+  });
+
+  it('refuses a launch whose opened leases are not the task\'s, a gateway for a task without one, and a missing hook bridge', () => {
+    expect(() => guardWith({})).toThrow(/not opened/);
+    expect(() => guardWith({ gateway: { ...gateway, routes: {} } })).toThrow(/not opened/);
+    expect(() => guardWith({ gateway: { ...gateway, routes: { ...gateway.routes, other: gateway.routes.notion } } })).toThrow(/not opened/);
+    expect(() => guardWith({ gateway, wsl: true })).toThrow(/WSL/);
+    const plain = beginBotWorkerSpawn('ws-owner', dir, { botId: 'bot-0000000a', taskId: 't-2', connectors: [files] });
+    try {
+      expect(() => withBotWorkerMergeGuard(opts(), botWorkerForCreate(opts(), { dir, isBotTaskWorkspace: () => false }), deps(), { gateway })).toThrow(/without signed-in/);
+    } finally {
+      plain();
+    }
+    expect(() => guardWith({ gateway }, { bridge: () => null })).toThrow(/hook bridge/);
+  });
+
+  it('starts again only in a new pane: a re-fire or a typed resume is refused', () => {
+    const guarded = guardWith({ gateway })!;
+    noteBotWorkerSession('pty-g', 'ws-task', dir, guardedLaunchOf(guarded));
+    reloadBotWorkerSessionsForTests();
+    const gated = { ...deps(), sessionGatewayTask: () => true, sessionConnectors: () => [notion] };
+    expect(() => guardRefireLine('pty-g', LINE, gated)).toThrow(/new pane/);
+    expect(() => guardSessionLaunch('pty-g', 'claude --resume 11111111-2222-3333-4444-555555555555', gated)).toThrow(/new pane/);
+  });
+});
+
 describe('startup prune', () => {
   it('removes old files no session names, keeps named and fresh ones', () => {
     const guarded = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: dir }, { workspaceId: 'ws-task', strict: false }, deps())!;

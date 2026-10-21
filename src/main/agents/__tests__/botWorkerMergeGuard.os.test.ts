@@ -432,7 +432,12 @@ describe('bot worker sessions survive a restart', () => {
 describe('pty:create applies the guard (source-level lock)', () => {
   it('both create paths guard after the lineage stamp and before the session pin', () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), 'src/main/ipc/handlers/pty.handler.ts'), 'utf8');
-    const line = 'const staged = await stageCreate(options, botWorker);';
+    // The daemon path also hands over its signed-in connections' leases,
+    // bound to the session id and closed when the create rolls back.
+    expect(src).toContain('staged = await stageCreate(options, botWorker, gateway?.launch);');
+    expect(src).toMatch(/gateway\?\.open\.bind\(sessionId\);/);
+    expect(src).toMatch(/undoLocal: \(\) => \{[^}]*gateway\?\.open\.close\(\);/);
+    const line = 'await stageCreate(options, botWorker';
     expect(src.split(line).length - 1).toBe(2);
     // The stages, in order: quota, the tool level (or, for a bot worker's
     // claude line, the guard's own wmux server), codex guard, merge guard, pin.

@@ -20,7 +20,7 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, botWorkerLaunchTask, botWorkerSessionRecord, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, withBotWorkerMergeGuard, type BotWorkerCreate } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, botWorkerLaunchTask, botWorkerSessionRecord, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, taskConnectors, taskGatewayNames, withBotWorkerMergeGuard, type BotWorkerCreate, type WorkerGatewayLaunch } from '../../agents/botWorkerMergeGuard';
 import { isPlainCmdLaunchLine, namesClaude } from '../../../shared/botWorkerGuard';
 import { namesCodex } from '../../../shared/codexWorkerGuard';
 import { getMcpTarget } from '../../../shared/mcpTargets';
@@ -39,6 +39,7 @@ import { resolveWslWorkerGit, withWslWorkerGit } from '../../agents/wslWorkerGit
 import { withDaemonCreateRollback } from './daemonCreateRollback';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getWmuxDir } from '../../../daemon/config';
+import { getWorkerGateways, watchWorkerGatewaySessions, workerGatewaySandbox, type WorkerGatewayOpen } from '../../connectors/workerGateway';
 import { scheduleInitialCommand } from './scheduleInitialCommand';
 import { verifyLaunchLine, type LaunchLineRead } from './verifyLaunchLine';
 import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS } from '../../worktask/fanoutLaunchProbe';
@@ -216,7 +217,7 @@ function registeredClaudeLevel(): string | null {
  * its wmux level) instead of being spliced on its own, and the hint is
  * dropped. Returns what the guarded launch carried, for its session record.
  */
-async function stageCreate(options: PtyCreateOptions | undefined, botWorker: BotWorkerCreate | null): Promise<{ options: PtyCreateOptions | undefined; launch: ReturnType<typeof guardedLaunchOf> & ReturnType<typeof launchOfCodex> & { conversation?: ReturnType<typeof launchedConversation> } }> {
+async function stageCreate(options: PtyCreateOptions | undefined, botWorker: BotWorkerCreate | null, gateway?: WorkerGatewayLaunch): Promise<{ options: PtyCreateOptions | undefined; launch: ReturnType<typeof guardedLaunchOf> & ReturnType<typeof launchOfCodex> & { conversation?: ReturnType<typeof launchedConversation> } }> {
   // A fan-out line's prompt argument was built for the platform; the pane's
   // shell decides its form (a WSL pane runs bash).
   const shellPath = createShell(options);
@@ -242,7 +243,7 @@ async function stageCreate(options: PtyCreateOptions | undefined, botWorker: Bot
   } else {
     staged = withWmuxTools(staged);
   }
-  const guarded = withBotWorkerMergeGuard(await guardCodexBotWorker(staged, botWorker), botWorker, {}, { wsl, ...(level ? { level } : {}) });
+  const guarded = withBotWorkerMergeGuard(await guardCodexBotWorker(staged, botWorker), botWorker, {}, { wsl, ...(level ? { level } : {}), ...(gateway ? { gateway } : {}) });
   // A bot worker's line in a cmd.exe pane is read by cmd's own rules.
   if (botWorker && process.platform === 'win32' && isCmdShellPath(shellPath) && guarded?.initialCommand && !isPlainCmdLaunchLine(guarded.initialCommand)) {
     throw new Error('PTY_CREATE: a bot\'s worker line for a Command Prompt pane holds characters cmd would read as more than one command');
@@ -252,6 +253,38 @@ async function stageCreate(options: PtyCreateOptions | undefined, botWorker: Bot
   // that line starts it in (workerReclaim.ts: a resume with no hook-recorded mode).
   const conversation = botWorker && pinned?.initialCommand ? launchedConversation(splitModelEnvMarker(pinned.initialCommand).command) : null;
   return { options: pinned, launch: { ...launchOfCodex(guarded), ...guardedLaunchOf(guarded), ...(conversation ? { conversation } : {}) } };
+}
+
+/** A bot worker create's signed-in connections (main/connectors/
+ *  workerGateway.ts): one gateway lease each, opened before the launch files
+ *  are written (they name the leases' URLs), with the worker's sandbox block.
+ *  Null for a create that carries none; throws (nothing opened) when they
+ *  cannot all be opened. */
+async function openCreateGateway(botWorker: BotWorkerCreate | null, options: PtyCreateOptions | undefined): Promise<{ open: WorkerGatewayOpen; launch: WorkerGatewayLaunch } | null> {
+  const names = botWorker ? taskGatewayNames(botWorker) : [];
+  if (!botWorker || names.length === 0) return null;
+  const connectors = taskConnectors(botWorker).filter((c) => names.includes(c.name));
+  const spawn = botWorker.spawns?.[0];
+  if (!spawn || connectors.length !== names.length) throw new Error('PTY_CREATE: a signed-in connection of the task is not among its connections');
+  const cwd = typeof options?.cwd === 'string' && options.cwd ? options.cwd : '';
+  if (!cwd) throw new Error('PTY_CREATE: no folder for a worker with a signed-in connection');
+  const registry = getWorkerGateways();
+  if (!registry) throw new Error('PTY_CREATE: signed-in connections are not running');
+  const open = await registry.open({ botId: spawn.botId, taskId: spawn.taskId, connectors });
+  try {
+    // Every name the pane's env may hold: unset for the worker's commands.
+    const names = [
+      ...Object.keys(open.env), ...Object.values(ENV_KEYS), FANOUT_TASK_PORT_ENV, 'WMUX_PTY_ID', 'CLAUDE_CONFIG_DIR',
+      ...taskConnectors(botWorker).flatMap((c) => c.secrets.map((s) => s.secret)),
+    ];
+    const env: Record<string, string | undefined> = { ...globalThis.process.env, ...(options?.env ?? {}) };
+    for (const n of names) if (typeof n === 'string' && !(n in env)) env[n] = '';
+    const sandbox = workerGatewaySandbox({ cwd, tmpDir: options?.env?.TMPDIR, wmuxDir: getWmuxDir(), env });
+    return { open, launch: { routes: open.routes, sandbox } };
+  } catch (err) {
+    open.close();
+    throw err;
+  }
 }
 
 /** A guarded codex launch's folder and repository, for its session record. */
@@ -535,9 +568,23 @@ export function registerPTYHandlers(
       const botWorker = botWorkerForCreate(options);
       // A bot worker's named secrets, from its single-use grant: they go to
       // the daemon apart from `env` (DaemonCreateSessionParams.secretEnv).
-      const secretEnv = secretEnvForCreate(options, botWorker);
+      const grantEnv = secretEnvForCreate(options, botWorker);
       const grantedCwd = options?.cwd;
-      const staged = await stageCreate(options, botWorker);
+      // Its signed-in connections' gateway leases: their bearers join the
+      // same spawn-only field; they close if this create does not finish.
+      const gateway = await openCreateGateway(botWorker, options);
+      const secretEnv = gateway ? { ...(grantEnv ?? {}), ...gateway.open.env } : grantEnv;
+      const failCreate = (message: string): Error => {
+        gateway?.open.close();
+        return new Error(message);
+      };
+      let staged: Awaited<ReturnType<typeof stageCreate>>;
+      try {
+        staged = await stageCreate(options, botWorker, gateway?.launch);
+      } catch (err) {
+        gateway?.open.close();
+        throw err;
+      }
       options = staged.options;
 
       // X8 exec-style unit: a supervised wmux.json leaf runs its command as the
@@ -558,13 +605,13 @@ export function registerPTYHandlers(
       const cwdResolution = resolvePtyCreateCwdForShell(options?.cwd, options?.recoveryCwds, shell);
       // A bot's worker starts in the folder its rules or settings were checked in.
       const codexCwdRefusal = guardedCodexCwdRefusal(options, cwdResolution) ?? guardedClaudeCwdRefusal(staged.launch, cwdResolution);
-      if (codexCwdRefusal) throw new Error(codexCwdRefusal);
+      if (codexCwdRefusal) throw failCreate(codexCwdRefusal);
       // #2388: a task folder whose removal did not finish is locked.
       const pendingRefusal = pendingRemovalRefusal(cwdResolution.safeCwd);
-      if (pendingRefusal) throw new Error(pendingRefusal);
+      if (pendingRefusal) throw failCreate(pendingRefusal);
       if (secretEnv) {
         const refusal = secretCreateCwdRefusal(grantedCwd, cwdResolution);
-        if (refusal) throw new Error(refusal);
+        if (refusal) throw failCreate(refusal);
       }
       const safeCwd = cwdResolution.safeCwd;
       let effectiveCwd = safeCwd ?? (isWslShell(shell) ? '~' : homedir());
@@ -587,6 +634,8 @@ export function registerPTYHandlers(
       // Generate a unique session ID
       const crypto = require('crypto');
       const sessionId = `daemon-${crypto.randomUUID().slice(0, 8)}`;
+      // The leases are this pane's: they end with its session.
+      gateway?.open.bind(sessionId);
       logCwdResolution(sessionId, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       // Recorded before the session exists, so a restart always knows it.
       if (botWorker) {
@@ -719,6 +768,7 @@ export function registerPTYHandlers(
         undoLocal: () => {
           daemonClient.disconnectSessionPipe(sessionId).catch(() => undefined);
           forgetPtyShell(sessionId);
+          gateway?.open.close();
         },
       }, async () => {
         result = await daemonClient.rpc('daemon.createSession', {
@@ -1812,6 +1862,8 @@ export function registerPTYHandlers(
     };
     daemonClient.on('session:died', onDaemonSessionDied);
   }
+  // A bot worker's gateway leases end with its session or the daemon.
+  const offWorkerGatewaySessions = useDaemon && daemonClient ? watchWorkerGatewaySessions(daemonClient) : null;
 
   // X8 — supervised restart forwarder. A SEPARATE listener from session:died on
   // purpose: a restart re-created the SAME session id with a fresh PTY, so it
@@ -1923,6 +1975,7 @@ export function registerPTYHandlers(
       if (onDaemonSessionDied) {
         daemonClient.removeListener('session:died', onDaemonSessionDied);
       }
+      offWorkerGatewaySessions?.();
       if (onDaemonSessionRestarted) {
         daemonClient.removeListener('session:restarted', onDaemonSessionRestarted);
       }

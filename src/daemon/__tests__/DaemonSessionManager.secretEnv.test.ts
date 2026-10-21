@@ -54,6 +54,17 @@ describe('DaemonSessionManager secretEnv', () => {
     expect(JSON.stringify(manager.getSession('worker-1')?.meta)).not.toContain(VALUE);
   });
 
+  it('takes a connection gateway bearer (main/connectors/workerGateway.ts) like a secret: spawn env only, never listed or replayed', () => {
+    const BEARER = 'lease_bearer_Abc123_xyz789_0000000000000000';
+    manager.createSession({ id: 'worker-g', cmd: '/bin/bash', cwd: os.tmpdir(), env: { PATH: '/usr/bin' }, secretEnv: { CONNECTOR_1A2B3C4D_TOKEN: BEARER } });
+    expect(spawned.at(-1)?.opts.env?.CONNECTOR_1A2B3C4D_TOKEN).toBe(BEARER);
+    expect(JSON.stringify(manager.listSessions())).not.toContain(BEARER);
+    const meta = manager.listSessions().find((s) => s.id === 'worker-g');
+    manager.destroySession('worker-g');
+    manager.createSession({ id: 'worker-g', cmd: meta!.cmd, cwd: meta!.cwd, env: meta!.env });
+    expect(spawned.at(-1)?.opts.env?.CONNECTOR_1A2B3C4D_TOKEN).toBeUndefined();
+  });
+
   it('a replay of the persisted meta spawns without the secrets', () => {
     manager.createSession({ id: 'worker-2', cmd: '/bin/bash', cwd: os.tmpdir(), env: { PATH: '/usr/bin' }, secretEnv: { NPM_TOKEN: VALUE } });
     const meta = manager.listSessions().find((s) => s.id === 'worker-2');

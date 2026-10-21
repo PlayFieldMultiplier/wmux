@@ -22,6 +22,21 @@ export class ConnectorOAuth {
   private revisions = new Map<string, number>();
   revision(id: string): number { return this.revisions.get(id) ?? 0; }
   private active = new Map<string, AbortController>();
+  /** One non-interactive refresh per connection, shared by every caller. */
+  private refreshing = new Map<string, Promise<OAuthRecord>>();
+  private revisionListeners = new Set<(id: string) => void>();
+  /** Told after a connection's sign-in is replaced or removed (its revision
+   *  went up): what was granted on the old one is void. */
+  onRevision(listener: (id: string) => void): () => void {
+    this.revisionListeners.add(listener);
+    return () => { this.revisionListeners.delete(listener); };
+  }
+  private bumpRevision(id: string): void {
+    this.revisions.set(id, this.revision(id) + 1);
+    for (const listener of [...this.revisionListeners]) {
+      try { listener(id); } catch { /* a listener never blocks a sign-out */ }
+    }
+  }
   constructor(private options: Options) {}
   private connector(id: string): Connector {
     const c = this.options.getConnector(id);
@@ -74,7 +89,7 @@ export class ConnectorOAuth {
   disconnect(id: string): ConnectorOAuthResult {
     this.revoked.add(id);
     this.endpoints.delete(id);
-    this.revisions.set(id, this.revision(id) + 1);
+    this.bumpRevision(id);
     this.cancel(id);
     try { this.options.store.remove(id); return { status: 'signed-out' }; }
     catch { return { status: 'failed' }; }
@@ -93,8 +108,30 @@ export class ConnectorOAuth {
     const saved = this.options.store.read(id, c.remote!.url);
     if (!saved) return undefined;
     if (saved.expiresAt > Date.now() + 30_000) return saved.tokens.access_token;
+    // Callers that find a refresh under way wait for it instead of failing:
+    // several bot workers' gateways may hold the same connection.
+    const pending = this.refreshing.get(id);
+    if (pending) return (await pending).tokens.access_token;
     if (this.active.has(id) || this.active.size >= 4) throw new Error('Authorization busy');
-    return (await this.run(id, false, saved)).tokens.access_token;
+    const refresh = this.run(id, false, saved);
+    this.refreshing.set(id, refresh);
+    try { return (await refresh).tokens.access_token; }
+    finally { if (this.refreshing.get(id) === refresh) this.refreshing.delete(id); }
+  }
+  /** Whether a sign-in is stored for the connection: 'unknown' when the
+   *  secure store cannot be read now. Never starts a sign-in. */
+  hasRecord(id: string): boolean | 'unknown' {
+    let c: Connector;
+    try { c = this.connector(id); } catch { return false; }
+    if (this.revoked.has(id)) return false;
+    try {
+      if (!this.options.store.available()) return 'unknown';
+      return !!this.options.store.read(id, c.remote!.url);
+    } catch { return 'unknown'; }
+  }
+  /** Whether an interactive sign-in waits on the owner's consent. */
+  awaitingConsent(id: string): boolean {
+    return this.consent.has(id);
   }
   private async run(id: string, interactive: boolean, saved?: OAuthRecord, suppliedClient = saved?.suppliedClient): Promise<OAuthRecord> {
     if (suppliedClient && !parseConnectorOAuthClient(suppliedClient)) throw new Error('Invalid OAuth client');
@@ -235,7 +272,7 @@ export class ConnectorOAuth {
       const record: OAuthRecord = { endpoint, redirectUrl, client, tokens, expiresAt, ...(suppliedClient ? { suppliedClient } : {}) };
       this.options.store.write(id, record);
       this.revoked.delete(id);
-      if (interactive) this.revisions.set(id, this.revision(id) + 1);
+      if (interactive) this.bumpRevision(id);
       return record;
     } finally {
       this.consent.delete(id);

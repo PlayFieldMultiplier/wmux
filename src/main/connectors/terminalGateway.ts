@@ -16,6 +16,11 @@ interface Options {
   /** Host-bound live session and policy check. Never derived from MCP params. */
   authorize: () => Promise<void>;
   ttlMs?: number;
+  /** The MCP client name upstream sees (default: the terminal's). */
+  clientName?: string;
+  /** Told once a tools/list reached the gateway (a bot worker's lease
+   *  clock, main/connectors/workerGateway.ts). */
+  onListTools?: () => void;
 }
 /** One explicitly selected HTTP connection. Credentials never enter CLI configuration. */
 export async function createTerminalGateway(options: Options): Promise<{ url: string; token: string; close: () => void }> {
@@ -46,7 +51,7 @@ export async function createTerminalGateway(options: Options): Promise<{ url: st
     await options.authorize(); valid();
     const controller = new AbortController(); active.add(controller);
     const timeout = setTimeout(() => controller.abort(), 60_000);
-    const client = new Client({ name: 'wmux-terminal-connector', version: '1.0.0' });
+    const client = new Client({ name: options.clientName ?? 'wmux-terminal-connector', version: '1.0.0' });
     try {
       const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
         reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 100, maxReconnectionDelay: 100, reconnectionDelayGrowFactor: 1 },
@@ -91,6 +96,7 @@ export async function createTerminalGateway(options: Options): Promise<{ url: st
       for await (const chunk of req) { bytes += chunk.length; if (bytes > 1024 * 1024) throw new Error('Request too large'); chunks.push(Buffer.from(chunk)); }
       const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       server.setRequestHandler(ListToolsRequestSchema, async () => {
+        try { options.onListTools?.(); } catch { /* a clock never blocks the list */ }
         try {
           return await upstream(async (client, signal) => {
             const tools: Awaited<ReturnType<Client['listTools']>>['tools'] = [];

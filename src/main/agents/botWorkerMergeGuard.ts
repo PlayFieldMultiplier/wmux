@@ -48,6 +48,8 @@ import {
   contentFileName,
   spliceWorkerLaunch,
   workerWmuxLevel,
+  type WorkerGatewayRoute,
+  type WorkerGatewaySettings,
   type WorkerWmuxLevel,
 } from '../../shared/botWorkerMcp';
 import type { Connector } from '../../shared/botConnector';
@@ -87,11 +89,17 @@ export interface BotWorkerGuardDeps {
    *  no user settings and runs wmux's hooks on that bridge, not on the
    *  shared ~/.wmux/hooks copy the installed app keeps. */
   isolatedBridge?: () => string | null;
+  /** This build's own hook bridge (default: found from this module), for a
+   *  worker that must load no user settings (a signed-in connection's). */
+  bridge?: () => string | null;
   /** The level of the owner's registered claude wmux server, if any. */
   registeredLevel?: () => string | null;
   /** A recorded session's connections now (default: its task's, from the
    *  ledger, that are still its bot's in the library). */
   sessionConnectors?: (workspaceId: string) => Connector[];
+  /** Whether a recorded session's task has signed-in connections (default:
+   *  its ledger row). */
+  sessionGatewayTask?: (workspaceId: string) => boolean;
   /** A re-fire's or resume's other folders the line may start in (the pane's
    *  live and spawn folders), checked with the recorded one. */
   folders?: readonly string[];
@@ -129,6 +137,9 @@ export interface BotSpawnIdentity {
   /** The task's connections as main resolved them when the fan-out was
    *  accepted (a later edit of the library does not change this launch). */
   connectors?: Connector[];
+  /** Which of them go through main's gateway (signed-in connections, decided
+   *  when the fan-out was accepted; main/connectors/workerGateway.ts). */
+  gatewayConnectors?: string[];
 }
 const inflightSpawnIdentities = new Map<string, BotSpawnIdentity[]>();
 const spawnKey = (ownerWorkspaceId: string, cwd: string): string => `${ownerWorkspaceId}\u0000${path.resolve(cwd)}`;
@@ -139,7 +150,12 @@ export function beginBotWorkerSpawn(ownerWorkspaceId: string, cwd: string, ident
   const key = spawnKey(ownerWorkspaceId, cwd);
   inflightBotSpawns.set(key, (inflightBotSpawns.get(key) ?? 0) + 1);
   const mark = identity
-    ? { botId: identity.botId, taskId: identity.taskId, ...(identity.connectors && identity.connectors.length > 0 ? { connectors: identity.connectors } : {}) }
+    ? {
+      botId: identity.botId,
+      taskId: identity.taskId,
+      ...(identity.connectors && identity.connectors.length > 0 ? { connectors: identity.connectors } : {}),
+      ...(identity.gatewayConnectors && identity.gatewayConnectors.length > 0 ? { gatewayConnectors: [...identity.gatewayConnectors] } : {}),
+    }
     : null;
   if (mark) inflightSpawnIdentities.set(key, [...(inflightSpawnIdentities.get(key) ?? []), mark]);
   let released = false;
@@ -285,8 +301,9 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   deps: BotWorkerGuardDeps = {},
   /** `wsl`: the pane's shell is WSL (its launches keep the worker settings
    *  file alone, and take no connections). `level`: the wmux level a role
-   *  binding asked for. */
-  launch: { wsl?: boolean; level?: string } = {},
+   *  binding asked for. `gateway`: the task's signed-in connections, opened
+   *  for this create (pty.handler.ts). */
+  launch: { wsl?: boolean; level?: string; gateway?: WorkerGatewayLaunch } = {},
 ): T | undefined {
   if (!options || !worker) return options;
   const connectors = taskConnectors(worker);
@@ -308,10 +325,22 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   if (launch.wsl && connectors.length > 0) throw guardError('PTY_CREATE', 'a task with connections does not run in a WSL shell');
   const cwd = typeof options.cwd === 'string' && options.cwd ? path.resolve(options.cwd) : '';
   if (!launch.wsl && !cwd) throw guardError('PTY_CREATE', 'no folder to check the worker\'s settings in');
-  const level = workerWmuxLevel(launch.level, (deps.registeredLevel ?? defaultRegisteredLevel)());
+  // Signed-in connections reach only the fan-out launch that opened them,
+  // and every one the task names must have been opened.
+  const gatewayNames = taskGatewayNames(worker);
+  if (gatewayNames.length > 0) {
+    const routed = launch.gateway ? Object.keys(launch.gateway.routes) : [];
+    if (launch.wsl || gatewayNames.some((n) => !routed.includes(n)) || routed.some((n) => !gatewayNames.includes(n))) {
+      throw guardError('PTY_CREATE', 'a signed-in connection of the task was not opened for this launch');
+    }
+  } else if (launch.gateway) {
+    throw guardError('PTY_CREATE', 'a gateway was opened for a task without signed-in connections');
+  }
+  // A worker with a signed-in connection gets the narrow wmux surface.
+  const level = launch.gateway ? 'core' : workerWmuxLevel(launch.level, (deps.registeredLevel ?? defaultRegisteredLevel)());
   const plan: LaunchPlan = launch.wsl
     ? { kind: 'legacy', level }
-    : { kind: 'strict', connectors, level, cwd };
+    : { kind: 'strict', connectors, level, cwd, ...(launch.gateway ? { gateway: launch.gateway } : {}) };
   const guarded = guardLaunchLine('PTY_CREATE', options.initialCommand, deps, plan);
   const next = guarded.line === options.initialCommand ? { ...options } : { ...options, initialCommand: guarded.line };
   launchOfCreate.set(next, { ...(guarded.files ? { launch: guarded.files, cwd } : {}), ...(launch.wsl ? { wsl: true } : {}) });
@@ -339,6 +368,22 @@ export function guardedLaunchOf(options: object | undefined): { launch?: BotWork
 
 /** The connections the in-flight fan-out spawn of this create carries: one
  *  set, or the create is refused when its in-flight spawns disagree. */
+/** The signed-in connections (names) a create's in-flight spawns agree on
+ *  ([] for any other create); throws when they disagree. */
+export function taskGatewayNames(worker: { strict: boolean; spawns?: Array<{ gatewayConnectors?: string[] }> }): string[] {
+  if (!worker.strict || !worker.spawns || worker.spawns.length === 0) return [];
+  const sets = worker.spawns.map((s) => [...(s.gatewayConnectors ?? [])].sort());
+  if (sets.some((cs) => JSON.stringify(cs) !== JSON.stringify(sets[0]))) throw guardError('PTY_CREATE', 'two task spawns in one folder name different signed-in connections');
+  return sets[0];
+}
+
+/** What a create carries for its task's signed-in connections: the routes
+ *  main opened and the worker's sandbox block. */
+export interface WorkerGatewayLaunch {
+  routes: Readonly<Record<string, WorkerGatewayRoute>>;
+  sandbox: Record<string, unknown>;
+}
+
 /** The connections a create's in-flight spawns agree on ([] for any other
  *  create); throws when they disagree. */
 export function taskConnectors(worker: { strict: boolean; spawns?: Array<{ connectors?: Connector[] }> }): Connector[] {
@@ -375,7 +420,7 @@ function guardError(where: string, why: string): Error {
  *  checked first. */
 type LaunchPlan =
   | { kind: 'legacy'; level: WorkerWmuxLevel }
-  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel; cwd: string; folders?: readonly string[]; strayKeys?: readonly string[] };
+  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel; cwd: string; folders?: readonly string[]; strayKeys?: readonly string[]; gateway?: WorkerGatewayLaunch };
 
 function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, plan: LaunchPlan): { line: string; files?: BotWorkerLaunchFiles } {
   const dir = deps.dir ?? getWmuxDir();
@@ -423,9 +468,15 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
   if (unsafe) throw guardError(where, `the worker's folder has Claude settings a bot's worker does not start with (${unsafe})`);
   const entry = (deps.mcpEntry ?? defaultMcpEntry)();
   if (!entry) throw guardError(where, 'the wmux MCP bundle was not found, so the worker could not report');
+  // A worker with a signed-in connection loads no user settings (one could
+  // widen its sandbox): wmux's hooks come in its own settings file instead.
+  const ownBridge = plan.gateway
+    ? (deps.isolatedBridge ?? defaultIsolatedBridge)() ?? (deps.bridge ?? defaultBridge)()
+    : (deps.isolatedBridge ?? defaultIsolatedBridge)();
+  if (plan.gateway && !ownBridge) throw guardError(where, 'wmux\'s hook bridge was not found, so a worker with a signed-in connection could not report');
   let files: BotWorkerLaunchFiles;
   try {
-    files = writeWorkerLaunchFiles(dir, entry, plan.level, plan.connectors, plan.strayKeys, (deps.isolatedBridge ?? defaultIsolatedBridge)());
+    files = writeWorkerLaunchFiles(dir, entry, plan.level, plan.connectors, plan.strayKeys, ownBridge, plan.gateway);
   } catch (err) {
     throw guardError(where, `the worker's MCP and rules files could not be written: ${String(err)}`);
   }
@@ -437,12 +488,16 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
 /** A worker launch's two files under `<dir>/factory/` (0600, folders 0700),
  *  named by their content, and each stdio connection's run folder with its
  *  empty npm user config. They hold names and paths only. */
-export function writeWorkerLaunchFiles(dir: string, entry: string, level: WorkerWmuxLevel, connectors: readonly Connector[], strayKeys: readonly string[] = [], ownBridge: string | null = null): BotWorkerLaunchFiles {
+export function writeWorkerLaunchFiles(dir: string, entry: string, level: WorkerWmuxLevel, connectors: readonly Connector[], strayKeys: readonly string[] = [], ownBridge: string | null = null, gateway?: WorkerGatewayLaunch): BotWorkerLaunchFiles {
   const factory = path.join(dir, 'factory');
   const { runDir, npmrc } = prepareConnectorRunDirs(dir, connectors);
-  const mcp = `${JSON.stringify(buildWorkerMcpConfig({ entry, level, connectors, runDir, npmrc, strayKeys }), null, 2)}\n`;
-  const connectionKeys = [...new Set([...connectors.flatMap((c) => c.secrets.map((s) => s.secret)), ...strayKeys])];
-  const settings = `${JSON.stringify(buildWorkerSettings(connectors, ownBridge ? bridgeHookGroups(ownBridge) : undefined), null, 2)}\n`;
+  const mcp = `${JSON.stringify(buildWorkerMcpConfig({ entry, level, connectors, runDir, npmrc, strayKeys, ...(gateway ? { gateway: gateway.routes } : {}) }), null, 2)}\n`;
+  // The gateway bearers are in the pane's env too: recorded with the keys, so
+  // a later launch keeps them out of every stdio server.
+  const bearers = Object.values(gateway?.routes ?? {}).map((r) => r.envName);
+  const connectionKeys = [...new Set([...connectors.flatMap((c) => c.secrets.map((s) => s.secret)), ...strayKeys, ...bearers])];
+  const gatewaySettings: WorkerGatewaySettings | undefined = gateway ? { names: Object.keys(gateway.routes), sandbox: gateway.sandbox } : undefined;
+  const settings = `${JSON.stringify(buildWorkerSettings(connectors, ownBridge ? bridgeHookGroups(ownBridge) : undefined, gatewaySettings), null, 2)}\n`;
   return {
     settingsFile: writeContentFile(path.join(factory, 'worker-settings'), settings),
     mcpConfigFile: writeContentFile(path.join(factory, 'worker-mcp'), mcp),
@@ -457,6 +512,11 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
 /** This build's hook bridge in an isolated instance, else null. */
 function defaultIsolatedBridge(): string | null {
   return dataSuffix() !== '' ? findBridgeSourceFrom(__dirname) : null;
+}
+
+/** This build's hook bridge, in any instance. */
+function defaultBridge(): string | null {
+  return findBridgeSourceFrom(__dirname);
 }
 
 /** Each stdio connection's run folder under `<dir>/factory/connector-run/`
@@ -626,6 +686,11 @@ function recordedPlan(where: string, sessionId: string, deps: BotWorkerGuardDeps
   const rec = loadSessions(deps.dir ?? getWmuxDir()).get(sessionId);
   if (rec?.wsl) return { kind: 'legacy', level: rec.launch?.level ?? workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()) };
   if (!rec?.cwd) throw guardError(where, 'the session has no folder on record to check the worker\'s settings in');
+  // A running shell cannot take a new gateway lease in its env: such a task
+  // starts again only in a new pane (workerReclaim.ts respawns it).
+  if (rec.launch && (deps.sessionGatewayTask ?? ledgerTaskHasGateway)(rec.workspaceId)) {
+    throw guardError(where, 'a task with a signed-in connection starts again only in a new pane');
+  }
   return {
     kind: 'strict',
     connectors: rec.launch ? (deps.sessionConnectors ?? ledgerTaskConnectors)(rec.workspaceId) : [],
@@ -635,6 +700,16 @@ function recordedPlan(where: string, sessionId: string, deps: BotWorkerGuardDeps
     // The first launch's keys are still in the pane's environment.
     ...(rec.launch?.connectionKeys ? { strayKeys: rec.launch.connectionKeys } : {}),
   };
+}
+
+/** Whether the task of a task workspace was started with signed-in
+ *  connections (its ledger row). An unreadable ledger counts as yes. */
+export function ledgerTaskHasGateway(workspaceId: string): boolean {
+  try {
+    return (getTaskLedger().findByTaskWorkspace(workspaceId)?.dispatch?.gatewayConnectors?.length ?? 0) > 0;
+  } catch {
+    return true;
+  }
 }
 
 /** A task's connections now: the ones it was started with (its ledger row)
