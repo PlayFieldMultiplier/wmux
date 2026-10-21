@@ -184,7 +184,7 @@ export function DeckDecisionCard({
               data-decision-option
               disabled={submitting}
               onClick={() => void submit(opt)}
-              className={`h-[26px] px-2 rounded-md text-[12px] text-[color-mix(in_srgb,var(--text-main)_70%,transparent)] bg-[var(--selection)] hover:bg-[var(--selection-hover)] hover:text-[var(--text-main)] transition-colors disabled:opacity-40 ${FOCUS_RING}`}
+              className={`h-[26px] px-2 rounded-md text-[12px] text-[color-mix(in_srgb,var(--text-main)_70%,transparent)] bg-[var(--selection)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)] hover:text-[var(--text-main)] transition-colors disabled:opacity-40 ${FOCUS_RING}`}
             >
               {opt}
             </button>

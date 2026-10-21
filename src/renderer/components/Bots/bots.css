@@ -475,7 +475,7 @@
   color: var(--text-main);
   vertical-align: middle;
 }
-.wmux-bots-ref-chip:hover { background: var(--selection-hover); }
+.wmux-bots-ref-chip:hover { background: var(--selection-hover); --text-muted: var(--text-subtle); }
 .wmux-bots-thread-summary {
   display: inline-flex;
   align-items: center;
@@ -558,7 +558,7 @@
   font-size: 13px;
   color: var(--text-sub);
 }
-.wmux-bots-suggestion:hover { background: var(--selection-hover); color: var(--text-main); }
+.wmux-bots-suggestion:hover { background: var(--selection-hover); --text-muted: var(--text-subtle); color: var(--text-main); }
 
 .wmux-bots-composer { flex-shrink: 0; padding: 4px 20px 16px; }
 /* The composer: one rounded pill — "+" on the left, the text, send on the
@@ -768,7 +768,7 @@
   color: var(--text-main);
   font-size: 12px;
 }
-.wmux-bots-file-chip:hover { background: var(--selection-hover); }
+.wmux-bots-file-chip:hover { background: var(--selection-hover); --text-muted: var(--text-subtle); }
 .wmux-bots-file-chip.is-open { background: var(--selection-emphasis); }
 .wmux-bots-file-glyph { display: inline-flex; flex-shrink: 0; color: var(--text-muted); }
 .wmux-bots-file-name { min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

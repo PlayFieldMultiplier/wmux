@@ -298,7 +298,7 @@ function ThreadChip({ threadId, t, onPick, taskTitle, requestTitle }: { threadId
       data-bots-thread-chip={threadId}
       onClick={() => onPick(threadId)}
       title={ref ? t('botsPage.showThread', { thread: label }) : `${t('botsPage.showThread', { thread: label })} · ${threadRef(threadId, t)}`}
-      className={`inline-flex h-[20px] max-w-full items-center gap-1 px-1.5 rounded-[var(--chip-radius)] bg-[var(--selection)] ${ref ? 'font-mono' : ''} text-[11px] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] ${FOCUS_RING}`}
+      className={`inline-flex h-[20px] max-w-full items-center gap-1 px-1.5 rounded-[var(--chip-radius)] bg-[var(--selection)] ${ref ? 'font-mono' : ''} text-[11px] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)] ${FOCUS_RING}`}
     >
       {/^pr:/.test(threadId) && <RefIcon kind="pr" />}
       {/^issue:/.test(threadId) && <RefIcon kind="issue" />}

@@ -143,7 +143,7 @@
   text-transform: inherit;
   letter-spacing: inherit;
 }
-.wmux-pc-switcher:hover { background: var(--selection-hover); }
+.wmux-pc-switcher:hover { background: var(--selection-hover); --text-muted: var(--text-subtle); }
 .wmux-pc-switcher-name { text-transform: none; letter-spacing: normal; }
 /* Needs-you of the computers not on screen: the attention number badge. */
 .wmux-pc-switcher-badge {
@@ -202,7 +202,7 @@
   box-shadow: none;
 }
 .wmux-sidebar .sidebar-row.sidebar-row-needs:hover {
-  background: var(--selection-hover);
+  background: var(--selection-hover); --text-muted: var(--text-subtle);
 }
 .wmux-sidebar .sidebar-row-active.sidebar-row-needs,
 .wmux-sidebar .sidebar-row-active.sidebar-row-needs:hover {
@@ -1026,7 +1026,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-schedule-prompt::placeholder { color: var(--text-muted); }
 .wmux-schedule-chips { position: relative; display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
 .wmux-schedule-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; max-width: 260px; padding: 0 8px; border-radius: 8px; background: var(--selection); font-size: 12px; color: var(--text-main); }
-.wmux-schedule-chip:hover, .wmux-schedule-chip[aria-expanded="true"] { background: var(--selection-hover); }
+.wmux-schedule-chip:hover, .wmux-schedule-chip[aria-expanded="true"] { background: var(--selection-hover); --text-muted: var(--text-subtle); }
 .wmux-schedule-chip > svg { flex: none; color: var(--text-sub); }
 .wmux-schedule-chip[data-invalid="true"] { color: var(--accent-red); }
 .wmux-schedule-chip-caret { display: inline-flex; color: var(--text-muted); transform: rotate(90deg); }
@@ -1187,7 +1187,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-fleet-board-cards { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow-y: auto; }
 .wmux-board .wmux-fleet-board .wmux-fleet-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; min-height: 0; padding: 10px 12px; border-radius: 10px; background: var(--selection-subtle); }
 .wmux-board .wmux-fleet-board .wmux-fleet-card:hover { background: var(--selection); }
-.wmux-board .wmux-fleet-board .wmux-fleet-card[aria-selected="true"] { background: var(--selection-hover); }
+.wmux-board .wmux-fleet-board .wmux-fleet-card[aria-selected="true"] { background: var(--selection-hover); --text-muted: var(--text-subtle); }
 .wmux-fleet-board .wmux-fleet-status { grid-column: 1; grid-row: 1; min-width: 0; overflow: hidden; }
 .wmux-fleet-board .wmux-fleet-status > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wmux-fleet-board .wmux-fleet-action { grid-column: 2; grid-row: 1; margin-right: 52px; }
@@ -2087,7 +2087,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 }
 
 .ui-icon-btn { color: color-mix(in srgb, var(--text-main) 50%, transparent); }
-.ui-icon-btn:hover:not(:disabled) { background: var(--selection-hover); color: var(--text-main); }
+.ui-icon-btn:hover:not(:disabled) { background: var(--selection-hover); --text-muted: var(--text-subtle); color: var(--text-main); }
 .ui-icon-btn:active:not(:disabled) { background: var(--selection-emphasis); }
 .ui-icon-btn-active,
 .ui-icon-btn-active:hover:not(:disabled) {
@@ -2099,7 +2099,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
   border-radius: 6px;
   color: color-mix(in srgb, var(--text-main) 50%, transparent);
 }
-.ui-toggle:hover:not(:disabled) { background: var(--selection-hover); color: var(--text-main); }
+.ui-toggle:hover:not(:disabled) { background: var(--selection-hover); --text-muted: var(--text-subtle); color: var(--text-main); }
 .ui-toggle-on,
 .ui-toggle-on:hover:not(:disabled) {
   background: var(--selection-emphasis);
@@ -2122,7 +2122,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 }
 .ui-chip-boxless:hover:not(:disabled),
 .ui-chip-boxless[aria-expanded='true'] {
-  background: var(--selection-hover);
+  background: var(--selection-hover); --text-muted: var(--text-subtle);
   border-color: transparent;
   box-shadow: none;
   color: var(--text-main);
@@ -2658,7 +2658,7 @@ html[data-glass] .wmux-frame-row > .wmux-shell-body {
 .wmux-chatv2-find { box-shadow: inset 0 -1px 0 var(--stroke); }
 .wmux-chatv2-user { background: var(--selection); }
 .wmux-chatv2-btn { border-radius: var(--chip-radius); background: var(--selection); box-shadow: none; }
-.wmux-chatv2-btn:not([data-variant="primary"]):hover:not(:disabled) { background: var(--selection-hover); }
+.wmux-chatv2-btn:not([data-variant="primary"]):hover:not(:disabled) { background: var(--selection-hover); --text-muted: var(--text-subtle); }
 .wmux-chatv2-btn[data-variant="primary"],
 .wmux-chatv2-send { background: var(--primary-fill); color: var(--primary-ink); box-shadow: none; }
 
@@ -2729,7 +2729,7 @@ html[data-glass] .wmux-frame-row > .wmux-shell-body {
 .wmux-git-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; max-width: 100%; padding: 0 10px; border-radius: var(--chip-radius, 9999px); box-shadow: inset 0 0 0 1px var(--line); font-size: 12px; color: var(--text-sub); }
 .wmux-git-chip:hover { background: var(--hover-fill); color: var(--text-main); }
 .wmux-git-chip[aria-pressed='true'] { background: var(--selection); box-shadow: none; color: var(--text-main); }
-.wmux-git-chip[aria-pressed='true']:hover { background: var(--selection-hover); }
+.wmux-git-chip[aria-pressed='true']:hover { background: var(--selection-hover); --text-muted: var(--text-subtle); }
 .wmux-git-chip[data-state='empty']:not([aria-pressed='true']) { opacity: .5; }
 .wmux-git-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wmux-git-chip-count { color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -2750,9 +2750,9 @@ html[data-glass] .wmux-frame-row > .wmux-shell-body {
 .wmux-git-tagged-row { position: relative; }
 .wmux-git-tagged-row > .wmux-git-item .wmux-git-item-meta { padding-right: 104px; }
 .wmux-git-repo-tag { position: absolute; right: 8px; bottom: 7px; max-width: 96px; height: 16px; padding: 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: var(--chip-radius, 6px); background: var(--selection); font-size: 11px; line-height: 16px; color: var(--text-sub); }
-.wmux-git-repo-tag:hover { background: var(--selection-hover); color: var(--text-main); }
+.wmux-git-repo-tag:hover { background: var(--selection-hover); --text-muted: var(--text-subtle); color: var(--text-main); }
 .wmux-git-repo-tag[aria-pressed='true'] { color: var(--text-main); }
-.wmux-git-item[aria-current='true'] + .wmux-git-repo-tag { background: var(--selection-hover); }
+.wmux-git-item[aria-current='true'] + .wmux-git-repo-tag { background: var(--selection-hover); --text-muted: var(--text-subtle); }
 .wmux-git-detail-head { position: sticky; top: 0; z-index: 1; display: flex; flex-direction: column; gap: 6px; padding: 12px 0 12px; background: var(--bg-base); border-bottom: 1px solid var(--line); }
 .wmux-git-detail-titlerow { display: flex; align-items: flex-start; gap: 12px; }
 .wmux-git-detail-title { flex: 1; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; line-height: 22px; color: var(--text-main); overflow-wrap: anywhere; }
@@ -2920,7 +2920,7 @@ html[data-glass] .wmux-frame-row > .wmux-shell-body {
   font-size: 11px;
   color: var(--text-sub);
 }
-.wmux-git-action:hover:not(:disabled) { background: var(--selection-hover); color: var(--text-main); }
+.wmux-git-action:hover:not(:disabled) { background: var(--selection-hover); --text-muted: var(--text-subtle); color: var(--text-main); }
 .wmux-git-action:disabled { opacity: .4; }
 .wmux-git-action-danger:hover:not(:disabled) { color: var(--accent-red); }
 
