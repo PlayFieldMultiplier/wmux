@@ -1343,6 +1343,7 @@ export const ko = {
   'botsPage.apply.more': "외 {count}개",
   'botsPage.apply.dirty': "적용 안 함: {files}에 커밋하지 않은 변경이 있어요. 먼저 커밋하거나 stash 해 주세요.",
   'botsPage.apply.mergeInProgress': "적용 안 함: 체크아웃이 merge·rebase·cherry-pick·revert 중이에요.",
+  'botsPage.apply.diverged': "적용 안 함: 작업이 시작된 뒤 체크아웃에서 이 파일들이 바뀌어 변경을 깔끔하게 적용할 수 없어요. 작업 브랜치를 머지해 주세요.",
   'botsPage.apply.noRepo': "적용 안 함: 이 봇에 저장소 폴더가 없어요.",
   'botsPage.apply.refused': "적용 안 함: {message}",
   'botsPage.worker.resumeName': "{name} 이어서 하기",

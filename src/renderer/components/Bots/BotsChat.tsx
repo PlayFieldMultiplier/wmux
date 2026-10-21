@@ -583,11 +583,12 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
     return c.actor.kind === 'human' ? `${t('room.actor.you')}: ${title}` : title;
   };
   const refChip = view.refUrl ? ctx.markdown.linkChip?.(view.refUrl, null) : null;
-  // The newest folded card offering Resume, and the newest task end that
-  // can be applied to the checkout: their buttons stay on the card.
+  // The newest folded card offering Resume, and the newest task of the work
+  // that can be applied to the checkout (its end card may stand in the
+  // conversation itself, outside the fold): their buttons stay on the card.
   const { apply, resume } = ctx;
   const newest = (of: (c: RoomCardData) => string | null): string | null => [...work.all].reverse().map(of).find((id) => id !== null) ?? null;
-  const applyId = apply ? newest((c) => cardApplyTaskId(c, apply.applicable)) : null;
+  const applyId = apply ? newest((c) => (c.refs?.taskId && apply.applicable(c.refs.taskId) ? c.refs.taskId : null)) : null;
   const resumeId = resume ? newest((c) => cardResumeTaskId(c, resume.resumable)) : null;
   return (
     <div
@@ -1242,6 +1243,7 @@ export function applyResultText(r: FactoryTaskApplyResult, t: T): string {
   switch (r.code) {
     case 'dirty': return t('botsPage.apply.dirty', { files: applyPathList(r.paths ?? [], t) });
     case 'merge_in_progress': return t('botsPage.apply.mergeInProgress');
+    case 'diverged': return t('botsPage.apply.diverged');
     case 'no_repo': return t('botsPage.apply.noRepo');
     default: return t('botsPage.apply.refused', { message: r.message });
   }

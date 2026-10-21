@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { applyTaskToCheckout, parseRawDiff, type TaskApplyPorts } from '../taskApply';
+import { applyTaskToCheckout, parseFilterNames, parseRawDiff, pinnedFilterArgs, type TaskApplyPorts } from '../taskApply';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd(), getPath: () => '/tmp' }, dialog: {}, ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, nativeImage: {} }));
 
@@ -18,6 +18,13 @@ let dir: string;
 let repo: string;
 let wt: string;
 let base: string;
+
+/** Ten lines; `lines(2, 'x')` has line 2 replaced. */
+function lines(...edits: Array<[number, string]>): string {
+  const out = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
+  for (const [n, text] of edits) out[n - 1] = text;
+  return `${out.join('\n')}\n`;
+}
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -58,14 +65,16 @@ beforeEach(() => {
   write(repo, 'a.txt', 'a\n');
   write(repo, 'b.txt', 'b\n');
   write(repo, 'gone.txt', 'gone\n');
+  write(repo, 'm.txt', lines());
   git(repo, 'add', '.');
   git(repo, 'commit', '-qm', 'base');
   base = git(repo, 'rev-parse', 'HEAD');
-  // The worker's worktree, on its task branch: edits a.txt, adds new/n.txt,
-  // removes gone.txt.
+  // The worker's worktree, on its task branch: edits a.txt and line 2 of
+  // m.txt, adds new/n.txt, removes gone.txt.
   git(repo, 'worktree', 'add', '-q', '-b', BRANCH, wt);
   write(wt, 'a.txt', 'a from the task\n');
   write(wt, 'new/n.txt', 'new\n');
+  write(wt, 'm.txt', lines([2, 'line 2 from the task']));
   fs.rmSync(path.join(wt, 'gone.txt'));
   git(wt, 'add', '-A');
   git(wt, 'commit', '-qm', 'task');
@@ -81,7 +90,7 @@ describe('applyTaskToCheckout', () => {
     // An unrelated uncommitted change does not stop it.
     write(repo, 'b.txt', 'b, the owner\'s edit\n');
     const r = await applyTaskToCheckout(ports(), TASK);
-    expect(r).toEqual({ ok: true, changed: ['a.txt'], created: ['new/n.txt'], removed: ['gone.txt'] });
+    expect(r).toEqual({ ok: true, changed: ['a.txt', 'm.txt'], created: ['new/n.txt'], removed: ['gone.txt'] });
     expect(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8')).toBe('a from the task\n');
     expect(fs.readFileSync(path.join(repo, 'new/n.txt'), 'utf8')).toBe('new\n');
     expect(fs.existsSync(path.join(repo, 'gone.txt'))).toBe(false);
@@ -91,7 +100,7 @@ describe('applyTaskToCheckout', () => {
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(repo, 'symbolic-ref', 'HEAD')).toBe('refs/heads/main');
     const status = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: repo, encoding: 'utf8' });
-    expect(status.split('\n').filter(Boolean).sort()).toEqual([' D gone.txt', ' M a.txt', ' M b.txt', '?? new/n.txt']);
+    expect(status.split('\n').filter(Boolean).sort()).toEqual([' D gone.txt', ' M a.txt', ' M b.txt', ' M m.txt', '?? new/n.txt']);
   });
 
   it('refuses when a path the task changed has uncommitted changes, lists it, and writes nothing', async () => {
@@ -102,6 +111,35 @@ describe('applyTaskToCheckout', () => {
     expect(r.ok ? [] : [...(r.paths ?? [])].sort()).toEqual(['a.txt', 'new/n.txt']);
     expect(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8')).toBe('the owner\'s own edit\n');
     expect(fs.existsSync(path.join(repo, 'gone.txt'))).toBe(true);
+  });
+
+  it('applies the task\'s patch, not its files: the checkout\'s own commits since the base are kept', async () => {
+    // The owner pulled an upstream change to another part of m.txt.
+    write(repo, 'm.txt', lines([9, 'line 9 from upstream']));
+    git(repo, 'commit', '-qam', 'upstream');
+    const r = await applyTaskToCheckout(ports(), TASK);
+    expect(r).toMatchObject({ ok: true, changed: ['a.txt', 'm.txt'] });
+    expect(fs.readFileSync(path.join(repo, 'm.txt'), 'utf8')).toBe(lines([2, 'line 2 from the task'], [9, 'line 9 from upstream']));
+  });
+
+  it('refuses a patch that no longer applies (diverged) and writes nothing; says so when the checkout already has it', async () => {
+    write(repo, 'm.txt', lines([2, 'line 2 from upstream']));
+    git(repo, 'commit', '-qam', 'upstream');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'diverged' });
+    expect(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8')).toBe('a\n');
+    expect(fs.existsSync(path.join(repo, 'new/n.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(repo, 'gone.txt'))).toBe(true);
+    // The task merged and pulled: nothing to apply.
+    git(repo, 'reset', '-q', '--hard', base);
+    git(repo, 'merge', '-q', '--ff-only', BRANCH);
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'no_changes' });
+  });
+
+  it('refuses an untracked file standing where a new file\'s folder goes, and lists it', async () => {
+    write(repo, 'new', 'a file of the owner\'s\n');
+    const r = await applyTaskToCheckout(ports(), TASK);
+    expect(r).toMatchObject({ ok: false, code: 'dirty', paths: ['new'] });
+    expect(fs.readFileSync(path.join(repo, 'new'), 'utf8')).toBe('a file of the owner\'s\n');
   });
 
   it('refuses an unknown task, a malformed id and a task that is not a bot\'s', async () => {
@@ -160,6 +198,45 @@ describe('factoryTaskApplyHandler', () => {
     const ok = await h({ sender: webContents, senderFrame: mainFrame }, { taskId: TASK });
     expect(row).toHaveBeenCalledWith(TASK);
     expect(ok).toMatchObject({ ok: false, code: 'unknown_task' });
+  });
+});
+
+describe('content filters', () => {
+  it('reads the drivers check-attr names', () => {
+    expect(parseFilterNames('a.bin\0filter\0lfs\0b.txt\0filter\0unspecified\0c.txt\0filter\0evil\0')).toEqual(['lfs', 'evil']);
+  });
+
+  it('pins each driver to the owner\'s own definition, or to none; the repository\'s never counts', () => {
+    const entries = [
+      { scope: 'global', key: 'filter.lfs.smudge', value: 'git-lfs smudge -- %f' },
+      { scope: 'global', key: 'filter.lfs.required', value: 'true' },
+      { scope: 'local', key: 'filter.evil.smudge', value: 'touch pwned' },
+    ];
+    expect(pinnedFilterArgs(['lfs', 'evil'], entries)).toEqual([
+      '-c', 'filter.lfs.smudge=git-lfs smudge -- %f', '-c', 'filter.lfs.clean=', '-c', 'filter.lfs.process=', '-c', 'filter.lfs.required=true',
+      '-c', 'filter.evil.smudge=', '-c', 'filter.evil.clean=', '-c', 'filter.evil.process=', '-c', 'filter.evil.required=false',
+    ]);
+  });
+
+  it('a driver the repository config defines after the check does not run on the apply', async () => {
+    // The checkout's attributes name a driver for the task's files; the
+    // shared config gains a program for it only between the check and the
+    // write (as a live worker could), simulated by a git wrapper.
+    write(repo, '.gitattributes', '*.txt filter=evil\n');
+    git(repo, 'add', '.gitattributes');
+    git(repo, 'commit', '-qm', 'attributes');
+    const marker = path.join(dir, 'pwned');
+    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
+    const racing: NonNullable<TaskApplyPorts['git']> = async (args, cwd, env, opts) => {
+      if (args.includes('apply') && !args.includes('--check')) {
+        execFileSync('git', ['config', 'filter.evil.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
+      }
+      return realGit(args, cwd, env, opts);
+    };
+    const r = await applyTaskToCheckout(ports({ git: racing }), TASK);
+    expect(r).toMatchObject({ ok: true });
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.readFileSync(path.join(repo, 'new/n.txt'), 'utf8')).toBe('new\n');
   });
 });
 

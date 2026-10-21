@@ -4,8 +4,8 @@
 // owner's checkout (the bot's repository folder, its profile's `repoPath`)
 // never sees it unless the owner merges or checks the files out by hand. The
 // owner's Apply (FACTORY_TASK_APPLY, main window only — a bot or a worker
-// cannot reach it) writes the files the task changed into that checkout, as
-// unstaged changes the owner reviews with git like any other:
+// cannot reach it) applies the task's changes to that checkout, as unstaged
+// changes the owner reviews with git like any other:
 //
 //   - which task, base and head: main's records only. The ledger row (a bot
 //     task that reported or completed, with the base commit main recorded at
@@ -15,26 +15,36 @@
 //   - which checkout: the bot's repository folder, and only when it is the
 //     top of a checkout of the very repository the task's worktree was made
 //     in (the common git dir main recorded at dispatch).
-//   - what is written: `git diff --raw base head` names the paths; `git
-//     restore --source=<head> --worktree` writes them and removes the ones
-//     the task deleted. The index, HEAD and the branch are never touched.
+//   - what is written: the task's patch (`git diff --binary base head`),
+//     applied to the working tree with `git apply` — never whole files, so
+//     what the checkout changed since the task started (a pull) is kept
+//     where the patch does not touch it, and a patch that no longer applies
+//     is refused (`diverged`), nothing written. The index, HEAD and the
+//     branch are never touched.
 //   - refused: a path with uncommitted (or untracked, or ignored) changes
-//     in the checkout — listed — a merge, rebase, cherry-pick or revert in
-//     progress, a submodule change, a repository config that makes a read
-//     run a program (workerGit.ts), and more than TASK_APPLY_MAX_FILES files.
+//     in the checkout — listed, with a file standing where a new file's
+//     folder goes — a merge, rebase, cherry-pick or revert in progress, a
+//     submodule change, a repository config that makes a read run a program
+//     (workerGit.ts), and more than TASK_APPLY_MAX_FILES files.
+//   - content filters: a worker can write the shared repository config
+//     between the check and the write, so every filter driver the touched
+//     paths name (in the checkout's attributes or the task head's) is pinned
+//     on the apply's command line to the owner's own definition (system or
+//     global config), or to none.
 //
 // git runs with a fixed argv, no shell, its git dir and work tree named
 // explicitly (a `core.worktree` in the shared config cannot move the
 // writes), no fsmonitor, hooks from an empty folder, and literal pathspecs.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { LedgerEntry } from '../../shared/ledger';
 import type { FactoryTaskApplyRefusal, FactoryTaskApplyResult } from '../../shared/botTask';
 import { isPlainTaskBranchName } from '../../shared/taskGitRelay';
 import { defaultGit, taskGitDirTarget, type TaskPushGit } from '../worktask/taskPush';
 import { recordedTaskGitCommonDir } from '../worktask/taskGitCommonDir';
-import { workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
+import { workerGitPreflight, workerGitSafeArgs, type GitConfigEntry } from '../worktask/workerGit';
 
 /** The most files one Apply writes. */
 export const TASK_APPLY_MAX_FILES = 1000;
@@ -112,6 +122,56 @@ export function parseStatusPaths(stdout: string): string[] {
 function touches(dirty: string, changed: string): boolean {
   const d = dirty.replace(/\/$/, '');
   return d === changed || changed.startsWith(`${d}/`) || d.startsWith(`${changed}/`);
+}
+
+/** `git check-attr -z` output → the filter drivers it names. Pure. */
+export function parseFilterNames(stdout: string): string[] {
+  const parts = stdout.split('\0');
+  const names = new Set<string>();
+  for (let i = 0; i + 2 < parts.length; i += 3) {
+    const value = parts[i + 2];
+    if (parts[i + 1] === 'filter' && value && !['unspecified', 'unset', 'set'].includes(value)) names.add(value);
+  }
+  return [...names];
+}
+
+/** `-c` options that pin each filter driver to the owner's own definition
+ *  (system or global config), or to no program: what the repository's own
+ *  config says at the moment git runs is never used. Pure. */
+export function pinnedFilterArgs(names: readonly string[], entries: readonly GitConfigEntry[]): string[] {
+  const out: string[] = [];
+  for (const name of names) {
+    const own = (key: string) => {
+      const hits = entries.filter((e) => (e.scope === 'system' || e.scope === 'global') && e.key === `filter.${name.toLowerCase()}.${key}`);
+      return hits.length > 0 ? hits[hits.length - 1].value : undefined;
+    };
+    for (const key of ['smudge', 'clean', 'process']) out.push('-c', `filter.${name}.${key}=${own(key) ?? ''}`);
+    out.push('-c', `filter.${name}.required=${own('required') ?? 'false'}`);
+  }
+  return out;
+}
+
+/** The folders a new path needs that the checkout has as something else (a
+ *  file or a link where `notes/` goes for `notes/todo.md`). */
+function blockedParents(top: string, created: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const p of created) {
+    const segs = p.split('/');
+    for (let i = 1; i < segs.length; i++) {
+      const parent = segs.slice(0, i).join('/');
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(path.join(top, parent));
+      } catch {
+        break;
+      }
+      if (!st.isDirectory()) {
+        out.add(parent);
+        break;
+      }
+    }
+  }
+  return [...out];
 }
 
 /** Paths in batches that keep one command line short (Windows caps it). */
@@ -217,36 +277,52 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
   if (changes.length > TASK_APPLY_MAX_FILES) return refuse('too_many', `The task changed ${changes.length} files, more than Apply writes (${TASK_APPLY_MAX_FILES}); merge its branch with git.`);
   const sub = changes.find((c) => c.srcMode === '160000' || c.dstMode === '160000');
   if (sub) return refuse('submodule', `The task changes the submodule ${sub.path}; merge its branch with git.`);
-  const writes = changes.filter((c) => c.status !== 'D').map((c) => c.path);
-  // A path the task removed that is not in the checkout either: nothing to do.
-  const removals = changes.filter((c) => c.status === 'D' && present(path.join(top, c.path))).map((c) => c.path);
-  const touched = [...writes, ...removals];
-  if (touched.length === 0) return refuse('no_changes', 'Your checkout already matches the task.');
+  const touched = changes.map((c) => c.path);
+  const created = changes.filter((c) => c.status === 'A').map((c) => c.path);
 
-  // Anything uncommitted at those paths stops it (untracked and ignored too).
+  // Anything uncommitted at those paths stops it (untracked and ignored
+  // too), and so does an untracked file where a new file's folder goes.
   const dirty: string[] = [];
-  for (const batch of chunks(touched)) {
+  for (const batch of chunks([...touched, ...blockedParents(top, created)])) {
     const st = await run(['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all', '--ignored=matching', '--', ...batch]);
     if (st.code !== 0) return refuse('git_failed', `git status failed: ${st.stderr.trim().slice(0, 300)}`);
     for (const p of parseStatusPaths(st.stdout)) if (touched.some((c) => touches(p, c)) && !dirty.includes(p)) dirty.push(p);
   }
   if (dirty.length > 0) return refuse('dirty', `Your checkout has uncommitted changes in ${dirty.length === 1 ? 'a file' : 'files'} the task changed.`, dirty);
 
-  // What the checkout tracks now, to tell a changed file from a new one.
-  const tracked = new Set<string>();
-  for (const batch of chunks(writes)) {
-    const ls = await run(['ls-files', '-z', '--', ...batch]);
-    if (ls.code !== 0) return refuse('git_failed', `git ls-files failed: ${ls.stderr.trim().slice(0, 300)}`);
-    for (const p of ls.stdout.split('\0')) if (p) tracked.add(p);
-  }
+  // The filter drivers the touched paths name, now and in the task's head.
+  const filters = new Set<string>();
   for (const batch of chunks(touched)) {
-    const r = await run(['restore', `--source=${head}`, '--worktree', '--', ...batch]);
-    if (r.code !== 0) return refuse('git_failed', `git restore failed: ${r.stderr.trim().slice(0, 300)}`);
+    for (const source of [[], [`--source=${head}`]]) {
+      const ca = await run(['check-attr', '-z', ...source, 'filter', '--', ...batch]);
+      if (ca.code !== 0) return refuse('git_failed', `git check-attr failed: ${ca.stderr.trim().slice(0, 300)}`);
+      for (const name of parseFilterNames(ca.stdout)) filters.add(name);
+    }
+  }
+  const pinned = pinnedFilterArgs([...filters], pre.entries);
+
+  // The task's patch, applied to the working tree only.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-apply-'));
+  try {
+    const patch = path.join(tmp, 'task.patch');
+    const made = await run(['diff', '--binary', '--full-index', '--no-renames', '--no-ext-diff', '--no-textconv', '--no-color', `--output=${patch}`, base, head]);
+    if (made.code !== 0) return refuse('git_failed', `git diff failed: ${made.stderr.trim().slice(0, 300)}`);
+    const apply = (extra: string[]) => run([...pinned, 'apply', ...extra, patch]);
+    const check = await apply(['--check']);
+    if (check.code !== 0) {
+      const applied = await apply(['--check', '--reverse']);
+      if (applied.code === 0) return refuse('no_changes', 'Your checkout already has the task\'s changes.');
+      return refuse('diverged', 'Your checkout changed these files since the task started, so its changes no longer apply cleanly. Merge the task branch with git instead.');
+    }
+    const r = await apply([]);
+    if (r.code !== 0) return refuse('git_failed', `git apply failed: ${r.stderr.trim().slice(0, 300)}`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
   return {
     ok: true,
-    changed: writes.filter((p) => tracked.has(p)),
-    created: writes.filter((p) => !tracked.has(p)),
-    removed: removals,
+    changed: changes.filter((c) => c.status !== 'A' && c.status !== 'D').map((c) => c.path),
+    created,
+    removed: changes.filter((c) => c.status === 'D').map((c) => c.path),
   };
 }

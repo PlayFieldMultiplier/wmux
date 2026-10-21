@@ -1922,6 +1922,7 @@ export const zh = {
   'botsPage.apply.more': "等另外 {count} 个",
   'botsPage.apply.dirty': "未应用：{files} 有未提交的改动。请先提交或 stash。",
   'botsPage.apply.mergeInProgress': "未应用：你的检出正在进行 merge、rebase、cherry-pick 或 revert。",
+  'botsPage.apply.diverged': "未应用：任务开始后你的检出改动了这些文件，任务的改动已无法干净应用。请改为合并任务分支。",
   'botsPage.apply.noRepo': "未应用：这个机器人没有仓库文件夹。",
   'botsPage.apply.refused': "未应用：{message}",
   'botsPage.worker.resumeName': "恢复 {name}",
