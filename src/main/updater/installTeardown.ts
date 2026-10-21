@@ -358,13 +358,14 @@ export function parseProcessRows(stdout: string): InstallRootProcess[] {
  * squirrelTeardown's classifier does (the daemon script path in a
  * `wmux.exe <script.js>` command line).
  *
- * The install path has to spare the daemon from every kill list: it is taken
- * down by `daemon.shutdown`, which suspends its sessions and flushes their
- * scrollback first, and a taskkill in the middle of that loses the scrollback.
- * The pid file was the only way the updater knew which process that was, so
- * an unreadable daemon.pid put the daemon on a kill list. The command line
- * does not depend on that file. An unreadable command line ('') classifies as
- * an app, never as the daemon.
+ * The install path spares the daemon it is connected to from every kill
+ * list: it is taken down by `daemon.shutdown`, which suspends its sessions and
+ * flushes their scrollback first, and a taskkill in the middle of that loses
+ * the scrollback. When the updater cannot learn that daemon's pid, a
+ * daemon-shaped command line among its own children is the fallback (see
+ * AutoUpdater.performInstall). A daemon-shaped process alone proves nothing
+ * about which daemon it is. An unreadable command line ('') classifies as an
+ * app, never as the daemon.
  */
 export function selectDaemonPids(
   rows: ReadonlyArray<{ pid: number; commandLine: string }>,
@@ -1024,7 +1025,7 @@ export interface InstallRootSurvey {
   pids: number[];
   /** Of those, our own descendants. They exit with `app.quit()`. */
   ownTree: Set<number>;
-  /** Of those, the daemon, by command line. Never force-killed. */
+  /** Of those, every daemon-shaped command line (ours or not). */
   daemonPids: Set<number>;
 }
 

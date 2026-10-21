@@ -232,19 +232,21 @@ export interface AutoUpdaterHooks {
    */
   onInstallRequiresFullShutdown: () => void;
   /**
-   * The daemon's pid, or null when it cannot be determined.
+   * The pid of the daemon this app is connected to, or null when it cannot
+   * be determined. main asks the daemon itself (daemon.ping reports its pid)
+   * and falls back to the pid file.
    *
    * Injected rather than read here so this module stays free of the daemon
    * config import: pulling `daemon/config` into the updater crashed the
    * electron-mocked unit tests at module load, and the updater has no other
    * reason to know where `~/.wmux` lives.
    *
-   * Used only to EXCLUDE the daemon from the force-kill lists — it gets the
-   * graceful shutdown so it can flush scrollback. Not the only source: the
-   * install-root survey also recognizes the daemon by its command line, so a
-   * null here no longer puts the daemon on a kill list.
+   * Used only to EXCLUDE that daemon from the force-kill lists — it is the
+   * one the full-shutdown branch stops gracefully, so it can flush
+   * scrollback. Any other daemon under the install root is not stopped by
+   * anything and stays on the kill list.
    */
-  getDaemonPid: () => number | null;
+  getDaemonPid: () => number | null | Promise<number | null>;
   /**
    * The persisted auto-update toggle, read straight from session.json (#1250).
    *
@@ -1315,15 +1317,19 @@ export class AutoUpdater {
     //
     // The daemon is spared for its own, older reason: the full-shutdown branch
     // stops it with daemon.shutdown, which suspends its sessions and flushes
-    // their scrollback first. It is recognized by its pid file OR by its
-    // command line (survey.daemonPids), and spared from BOTH kill lists. With
-    // the pid file alone, an unreadable daemon.pid put the daemon in
-    // forceKillEligiblePids (it is our child, so it is in ownTree) and the
-    // waiter tree-killed it 5 s in, cutting its suspend short.
+    // their scrollback first. Only the daemon that branch stops is spared,
+    // from BOTH kill lists: the one this app is connected to (getDaemonPid),
+    // or, when that cannot be determined, a daemon-shaped command line among
+    // our own children (survey.daemonPids within ownTree). Without the second
+    // rule an unknown pid put our daemon in forceKillEligiblePids and the
+    // waiter tree-killed it 5 s in. Any other daemon under the root (an
+    // orphan, another data dir's daemon) is stopped by nothing, so sparing it
+    // would hold the root until the waiter refuses; it stays on a kill list.
+    const daemonPid = await this.hooks.getDaemonPid();
     const survey = collectInstallRootProcesses(installRoot);
     const pids = survey.pids;
-    const daemonPid = this.hooks.getDaemonPid();
-    const isDaemon = (p: number) => p === daemonPid || survey.daemonPids.has(p);
+    const isDaemon = (p: number) =>
+      p === daemonPid || (daemonPid === null && survey.daemonPids.has(p) && survey.ownTree.has(p));
     const forceKillPids = pids.filter((p) => !isDaemon(p) && !survey.ownTree.has(p));
     // #1084 — the OTHER half of survey.ownTree: pids we spare from the
     // immediate force-kill above because app.quit() is about to ask them to

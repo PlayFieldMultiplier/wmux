@@ -37,7 +37,7 @@ function quitHooks() {
     onBeforeInstallQuit: vi.fn(),
     onInstallQuitAborted: vi.fn(),
     onInstallRequiresFullShutdown: vi.fn(),
-    getDaemonPid: vi.fn((): number | null => null),
+    getDaemonPid: vi.fn((): number | null | Promise<number | null> => null),
   };
 }
 
@@ -625,6 +625,49 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
     expect(plan.forceKillEligiblePids).toEqual([4244]);
     // Still waited for: the installer may not start until it has exited.
     expect(plan.pids).toContain(4243);
+  });
+
+  it('win32: a daemon-shaped process that is not the connected daemon stays on the kill list', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    // 4250 runs the daemon script from the installed exe but is not the
+    // daemon this app is connected to (4243, reported by daemon.ping through
+    // the async hook): an orphan, or another data dir's daemon. Nothing stops
+    // it, so sparing it would hold the root until the waiter refuses.
+    // 4251 is the same, but a child of ours; with the connected pid known it
+    // is not spared either.
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4244, 4250, 4251],
+      ownTree: new Set([4243, 4244, 4251]),
+      daemonPids: new Set([4243, 4250, 4251]),
+    });
+    const hooks = { ...quitHooks(), getDaemonPid: vi.fn(async () => 4243 as number | null) };
+    const { installHandler } = await downloadUpdateFor(loaded, hooks);
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242, 4250]);
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as unknown as {
+      forceKillEligiblePids: number[];
+    };
+    expect(plan.forceKillEligiblePids).toEqual([4244, 4251]);
+  });
+
+  it('win32: with no connected pid, only a daemon-shaped child of ours is spared', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4250],
+      ownTree: new Set([4243]),
+      daemonPids: new Set([4243, 4250]),
+    });
+    const { installHandler } = await downloadUpdateFor(loaded); // getDaemonPid → null
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242, 4250]);
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as unknown as {
+      forceKillEligiblePids: number[];
+    };
+    expect(plan.forceKillEligiblePids).toEqual([]);
   });
 
   it('win32: a quit that never happens is reported and unlatched, not silent (#980)', async () => {

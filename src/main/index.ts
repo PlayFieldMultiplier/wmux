@@ -621,7 +621,18 @@ const autoUpdater = new AutoUpdater(() => mainWindow, {
   // out of it. Flip the same flag the tray's "Shut down wmux" item uses so
   // before-quit takes the daemon.shutdown branch instead of detaching.
   onInstallRequiresFullShutdown: () => { fullShutdownRequested = true; },
-  getDaemonPid: () => readDaemonPid(getWmuxDir()),
+  // The daemon this app is connected to, by its own answer: the install spares
+  // exactly that one from its kill lists, because before-quit's full shutdown
+  // stops exactly that one. The pid file is the fallback when it cannot ask.
+  getDaemonPid: async () => {
+    if (daemonClient?.isConnected) {
+      try {
+        const pong = (await daemonClient.rpc('daemon.ping', {}, { timeoutMs: 2_000 })) as { pid?: unknown };
+        if (typeof pong?.pid === 'number' && Number.isSafeInteger(pong.pid) && pong.pid > 0) return pong.pid;
+      } catch { /* not answering — fall back to the pid file */ }
+    }
+    return readDaemonPid(getWmuxDir());
+  },
   // #1250: seed the updater's enabled flag from session.json. The renderer
   // sends the toggle during loadSession, but that send races this module's
   // own ready sequence; a locked session.json can stop it from ever arriving.
