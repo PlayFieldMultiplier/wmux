@@ -168,7 +168,7 @@ export async function reconnectPtyWithRetry(
       if (isCurrent()) {
         deps.onRecoveryError?.(
           result.error || 'WSL recovery failed. Check the target and retry.',
-          { cwdMissing: result.cwdMissing === true },
+          { cwdMissing: result.cwdMissing === true, ...(started ? { promoted: true } : {}) },
         );
       }
       return null; // Keep the original id, binding and scrollback. Retry is explicit.

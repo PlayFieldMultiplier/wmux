@@ -206,7 +206,7 @@ describe('daemon.promoteSession — guards', () => {
     const bootAt = source.indexOf('WSL background recovery');
     expect(bootAt, 'boot background recovery not found').toBeGreaterThan(rpcAt);
     const bootRegion = source.slice(source.lastIndexOf('setImmediate(', bootAt), bootAt);
-    expect(bootRegion).toMatch(/promoteOnce\(session\.id\)/);
+    expect(bootRegion).toMatch(/promoteOnce\(session\.id, false, 'background'\)/);
     expect(bootRegion).not.toMatch(/touchPendingRecovery/);
   });
 

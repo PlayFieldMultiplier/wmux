@@ -339,6 +339,15 @@ describe('reconnectPtyWithRetry — an attach that started the session (#2398)',
     expect(onRecoveryError).toHaveBeenLastCalledWith('wmux is busy and could not reattach this terminal yet.', { rateLimited: true, promoted: true });
   });
 
+  // Round-8 P3: the promote succeeded, then main's refresh threw and it
+  // answered recoveryPending: that settle still says this attempt started it.
+  it('a recovery failure after a promote still says it promoted', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: false, recoveryPending: true, promoted: true, error: 'listSessions failed' }));
+    await reconnectPtyWithRetry('pty-promoted-pending', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenLastCalledWith('listSessions failed', { cwdMissing: false, promoted: true });
+  });
+
   it('an attach of a running session settles as before', async () => {
     const onRecoveryError = vi.fn();
     const reconnect = vi.fn(async () => ({ success: true }));

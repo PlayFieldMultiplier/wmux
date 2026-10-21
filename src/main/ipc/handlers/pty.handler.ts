@@ -1551,8 +1551,10 @@ export function registerPTYHandlers(
           // is promoted only when the caller says so (a shown pane, a raw
           // write, a resume on start) or when the daemon starts it in the
           // background anyway (an exec unit or supervised session: the promote
-          // below joins that one, so its pane attaches once it runs instead of
-          // staying deferred). Otherwise it is held: the id is kept, the daemon
+          // below joins that start when one is in flight, or spawns the unit
+          // when none is, and `promoted` then reports it started; either way
+          // its pane attaches once it runs instead of staying deferred).
+          // Otherwise it is held: the id is kept, the daemon
           // keeps the record from aging out, and the pane's first show
           // reattaches with promote.
           if (suspendedReconnectAction(session, opts) === 'hold') {

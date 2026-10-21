@@ -22,10 +22,10 @@ describe('promoteOnce', () => {
     expect(promoteSession).toHaveBeenCalledTimes(1);
   });
 
-  it('a second call while the first is in flight joins it and is told so', async () => {
+  it('a call while the boot background start is in flight joins it and is told so', async () => {
     const { promoteSession, settle } = controlled();
     const promoteOnce = createPromoteOnce(promoteSession);
-    const background = promoteOnce('s1');
+    const background = promoteOnce('s1', false, 'background');
     const caller = promoteOnce('s1');
     settle(0, { ok: true, alreadyActive: false });
     expect(await background).toEqual({ ok: true, alreadyActive: false });
@@ -33,10 +33,24 @@ describe('promoteOnce', () => {
     expect(promoteSession).toHaveBeenCalledTimes(1);
   });
 
+  // Round-8 P3: a raw write's promote spawned the unit; a concurrent stop
+  // key's promote:false reconnect joined it and, marked joined, was delivered
+  // into the unit just started.
+  it("a call that joins another caller's promote is not marked joined: that caller started it", async () => {
+    const { promoteSession, settle } = controlled();
+    const promoteOnce = createPromoteOnce(promoteSession);
+    const rawWrite = promoteOnce('s1');
+    const stopKey = promoteOnce('s1');
+    settle(0, { ok: true, alreadyActive: false });
+    expect(await rawWrite).toEqual({ ok: true, alreadyActive: false });
+    expect(await stopKey).toEqual({ ok: true, alreadyActive: false });
+    expect(promoteSession).toHaveBeenCalledTimes(1);
+  });
+
   it('a call after a failed attempt settled starts its own (nothing to join)', async () => {
     const { promoteSession, settle } = controlled();
     const promoteOnce = createPromoteOnce(promoteSession);
-    const background = promoteOnce('s1');
+    const background = promoteOnce('s1', false, 'background');
     settle(0, { ok: false, error: { code: 'SPAWN_FAILED', message: 'distro busy' } });
     await background;
     const caller = promoteOnce('s1');

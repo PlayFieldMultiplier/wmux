@@ -3559,7 +3559,7 @@ function registerRpcHandlers(
       return { ok: false, error: { code: isWslCwdMissingError(err) ? 'CWD_MISSING' : 'SPAWN_FAILED', message: msg } };
     }
   };
-  // #2398 — answers `joined` to a caller that joined an attempt in flight.
+  // #2398 — answers `joined` to a caller that joined the background start.
   const promoteOnce = createPromoteOnce((p) => promoteSession(p));
   pipeServer.onRpc('daemon.promoteSession', (params) => {
     const id = String(params?.id ?? '');
@@ -3586,7 +3586,7 @@ function registerRpcHandlers(
       });
       const selected = selectRecoverableSessions(pending, Math.min(loadConfig().session.maxSessions, MAX_RECOVER_SESSIONS));
       for (const session of pending.filter(s => selected.recoverableIds.has(s.id))) {
-        promotions.push(promoteOnce(session.id).catch(err => log('error', `WSL background recovery ${session.id}:`, err)));
+        promotions.push(promoteOnce(session.id, false, 'background').catch(err => log('error', `WSL background recovery ${session.id}:`, err)));
       }
     } catch (err) {
       log('error', 'WSL background recovery could not start:', err);
