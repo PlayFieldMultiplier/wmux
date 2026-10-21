@@ -127,7 +127,9 @@ describe('PTY_RECONNECT promotes a cap-skipped session instead of declaring it d
     const daemon = readFileSync(path.resolve(process.cwd(), 'src/daemon/index.ts'), 'utf8');
     const at = daemon.indexOf('if (includeSuspended) {');
     const mapper = daemon.slice(at, daemon.indexOf('return reply(', at));
-    expect(mapper).toMatch(/\.map\(\(s\) => \(\{[\s\S]*?cmd: s\.cmd,[\s\S]*?state: 'suspended' as const,/);
+    expect(mapper).toMatch(/\.map\(\(s\) => suspendedListEntry\(s,/);
+    const entry = readFileSync(path.resolve(process.cwd(), 'src/daemon/suspendedListEntry.ts'), 'utf8');
+    expect(entry).toMatch(/cmd: s\.cmd,[\s\S]*?state: 'suspended' as const,/);
     expect(RECONNECT).toMatch(/recordPtyShell\(session\.id, session\.cmd\)/);
   });
 });

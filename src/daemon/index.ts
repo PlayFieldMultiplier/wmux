@@ -165,6 +165,7 @@ import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonSession, DaemonState } from './types';
 import { retireAdopted, withDiskOnlySessions } from './diskOnlySessions';
 import { stampHeld } from './heldSessions';
+import { suspendedListEntry } from './suspendedListEntry';
 import { createPromoteOnce, type PromoteResult } from './promoteOnce';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonDestroySessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
@@ -3373,31 +3374,15 @@ function registerRpcHandlers(
 
     // Fix B: when includeSuspended is requested, append cap-skipped suspended
     // sessions from the persisted state that aren't already in the active set.
-    // #2398 — they carry no exec or supervision, so main's pty:reconnect holds
-    // them ('hold'), matching the boot background start, which never starts
-    // them either (it covers pending-recovery placeholders only).
+    // #2398 — with their exec and supervision (suspendedListEntry), so main's
+    // pty:reconnect and the renderer's reconcile start a cap-skipped unit
+    // instead of holding it as a plain shell.
     if (includeSuspended) {
       const activeIdSet = new Set(activeSessions.map((s: { id: string }) => s.id));
       const persistedState = stateWriter.load();
       const suspendedEntries = persistedState.sessions
         .filter((s) => s.state === 'suspended' && !activeIdSet.has(s.id))
-        .map((s) => ({
-          id: s.id,
-          // `cmd` as every live entry has it (pty:reconnect records and returns
-          // it after a promote, #2398); `shell` kept for older readers.
-          cmd: s.cmd,
-          shell: s.cmd,
-          state: 'suspended' as const,
-          cwd: s.cwd,
-          createdAt: s.createdAt,
-          lastActivity: s.lastActivity,
-          // #2398 §6-4 option B: its agent's resume binding, under the same
-          // guard as a live pane's durable one (its transcript still exists),
-          // so a hidden pane can resume it on start.
-          ...(isUsableResumeBinding(s.resumeBinding) && bindingTranscriptLives(s.resumeBinding)
-            ? { resumeBinding: s.resumeBinding }
-            : {}),
-        }));
+        .map((s) => suspendedListEntry(s, isUsableResumeBinding(s.resumeBinding) && bindingTranscriptLives(s.resumeBinding)));
       return reply([...activeSessions, ...suspendedEntries]);
     }
     return reply(activeSessions);

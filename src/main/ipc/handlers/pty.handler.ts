@@ -1357,6 +1357,8 @@ export function registerPTYHandlers(
         // additive volatile runtime joined by the daemon's listSessions handler.
         supervision?: { restart: string; limit: unknown; status: 'armed' | 'stopped' };
         supervisionRuntime?: { status: 'armed' | 'stopped'; restartCount: number };
+        // An exec unit's command (#2398: read only for whether it is one).
+        exec?: unknown;
         // #1101 — origin identity for the orphaned-session list: the workspace
         // the session was spawned in (env-stamped by main force-stamps) and
         // the agent identity the daemon already derives for /api/sessions.
@@ -1434,6 +1436,10 @@ export function registerPTYHandlers(
                 },
               }
             : {}),
+          // #2398 — an exec unit, like a supervised session, starts whether
+          // or not its pane is shown (recoversInBackground): the reconcile
+          // must not hold a cap-skipped one as a plain shell.
+          ...(s.exec ? { exec: true as const } : {}),
           // X6 ② — carry the resume hint (agent slug) for the renderer pill.
           ...(s.resumeAgent ? { resumeAgent: s.resumeAgent } : {}),
           ...(s.resumeAgent && typeof s.resumeAgentOnScreen === 'boolean' ? { resumeAgentOnScreen: s.resumeAgentOnScreen } : {}),

@@ -74,12 +74,21 @@ describe('resolvePtyIdsToClear (RCA A1/A9 partial-list 2-strike guard)', () => {
 // on screen or not: a spawn per hidden pane at boot.
 describe('holdsSuspendedSession', () => {
   it('holds a hidden pane’s suspended session (neither promoted nor cleared)', () => {
-    expect(holdsSuspendedSession({ shown: false, stashed: false })).toBe(true);
+    expect(holdsSuspendedSession({ shown: false, stashed: false, session: {} })).toBe(true);
   });
 
   it('promotes a shown pane’s, and a stashed pane’s as before', () => {
-    expect(holdsSuspendedSession({ shown: true, stashed: false })).toBe(false);
-    expect(holdsSuspendedSession({ shown: false, stashed: true })).toBe(false);
+    expect(holdsSuspendedSession({ shown: true, stashed: false, session: {} })).toBe(false);
+    expect(holdsSuspendedSession({ shown: false, stashed: true, session: {} })).toBe(false);
+  });
+
+  // Second-model P2-2: a graceful shutdown suspends exec units and supervised
+  // sessions too, and the recovery cap leaves the long-silent ones on disk.
+  // Held as plain shells, a `restart: always` service in a workspace nobody
+  // opened stayed down after a restart.
+  it('promotes a hidden pane’s exec unit or supervised session: they run unseen', () => {
+    expect(holdsSuspendedSession({ shown: false, stashed: false, session: { exec: true } })).toBe(false);
+    expect(holdsSuspendedSession({ shown: false, stashed: false, session: { supervision: { status: 'armed', restartCount: 0 } } })).toBe(false);
   });
 });
 

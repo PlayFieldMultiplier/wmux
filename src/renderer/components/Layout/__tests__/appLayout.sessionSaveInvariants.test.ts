@@ -199,7 +199,7 @@ describe('AppLayout — axis A session-save invariants', () => {
       // session the daemon never had.
       expect(region).toMatch(/pty\.list\(\{ includeSuspended: true \}\)/);
       expect(region).toMatch(/state === 'suspended'/);
-      expect(region).toMatch(/if \(!suspendedIds\.has\(candidate\.ptyId\)\) \{[\s\S]*?stillAbsent\.push\(candidate\);/);
+      expect(region).toMatch(/const suspended = suspendedById\.get\(candidate\.ptyId\);\s*if \(!suspended\) \{[\s\S]*?stillAbsent\.push\(candidate\);/);
     });
 
     it('keeps a FAILED promote on the clear path (cap hit / spawn error)', () => {

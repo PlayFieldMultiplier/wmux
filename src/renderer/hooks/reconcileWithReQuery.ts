@@ -21,6 +21,8 @@
  * reconnectPtyWithRetry.ts.
  */
 
+import { recoversInBackground } from '../../shared/suspendedSession';
+
 export interface ReListResult {
   ok: boolean;
   /** The set of ptyIds the daemon reports alive, when ok. */
@@ -101,15 +103,19 @@ export async function resolvePtyIdsToClear(
  * WSL placeholder) instead of promoting it: one on a pane nobody is looking
  * at is neither promoted (that is a spawn per hidden pane at boot) nor
  * cleared; its pane attaches without promoting and promotes it when first
- * shown. A shown pane's, and a stashed pane's as before, is promoted.
+ * shown. A shown pane's, and a stashed pane's as before, is promoted, and so
+ * is an exec unit's or a supervised session's (owner decision §6-4: they run
+ * whether or not anyone looks at them).
  */
 export function holdsSuspendedSession(candidate: {
   /** In the workspace's stash, not its visible tree. */
   stashed: boolean;
   /** On screen in the sense that starts a shell (stores/selectors/surfaceShown.ts). */
   shown: boolean;
+  /** The daemon's suspended entry: its exec and supervision. */
+  session: { exec?: unknown; supervision?: unknown };
 }): boolean {
-  return !candidate.shown && !candidate.stashed;
+  return !candidate.shown && !candidate.stashed && !recoversInBackground(candidate.session);
 }
 
 /**

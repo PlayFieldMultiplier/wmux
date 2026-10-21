@@ -1360,24 +1360,26 @@ export default function AppLayout() {
           const stillAbsent: typeof absentCandidates = [];
           if (window.electronAPI?.pty?.promote) {
             // Ask the daemon for suspended sessions that match our absent ptyIds.
-            const allRes = await invokeReconcile<{ id: string; state?: string }[]>(() =>
+            const allRes = await invokeReconcile<{ id: string; state?: string; exec?: true; supervision?: unknown }[]>(() =>
               window.electronAPI.pty.list({ includeSuspended: true }),
             );
-            const suspendedIds = new Set(
+            const suspendedById = new Map(
               allRes.ok
-                ? allRes.data.filter((s) => s.state === 'suspended').map((s) => s.id)
+                ? allRes.data.filter((s) => s.state === 'suspended').map((s) => [s.id, s] as const)
                 : [],
             );
             for (const candidate of absentCandidates) {
               if (signal?.aborted) break;
-              if (!suspendedIds.has(candidate.ptyId)) {
+              const suspended = suspendedById.get(candidate.ptyId);
+              if (!suspended) {
                 stillAbsent.push(candidate);
                 continue;
               }
               // #2398 — a hidden pane's suspended session is held: not
               // promoted, not cleared; its pane promotes it when first shown.
+              // An exec unit or supervised session is promoted all the same.
               const shown = isSurfaceShown(useStore.getState(), candidate.workspaceId, candidate.surfaceId);
-              if (holdsSuspendedSession({ shown, stashed: candidate.stashed })) {
+              if (holdsSuspendedSession({ shown, stashed: candidate.stashed, session: suspended })) {
                 console.log(`[lifecycle] reconcile HOLDING suspended ptyId=${candidate.ptyId} surface=${candidate.surfaceId} — pane hidden, promoted when first shown`);
                 heldByPass.push(candidate.ptyId);
                 continue;
