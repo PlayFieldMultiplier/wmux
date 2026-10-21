@@ -125,6 +125,7 @@ describe('listMissionsBatch', () => {
       let calls = 0;
       while (asked.length > 0) {
         calls += 1;
+        expect(calls).toBeLessThan(20);
         const reply = listMissionsBatch({ verifiedWorkspaceIds: asked }, heavy);
         // What the daemon writes on the control pipe for this reply.
         const line = JSON.stringify({ id: 'req-1', ok: true, result: reply });
@@ -166,7 +167,9 @@ describe('listMissionsBatch', () => {
         let asked = ids;
         const answered: string[] = [];
         let tooLarge: { code: string; chars?: number } | null = null;
-        while (asked.length > 0) {
+        for (let round = 0; asked.length > 0; round += 1) {
+          // A reply that settles nobody would re-ask forever.
+          expect(round).toBeLessThan(10);
           const reply = listMissionsBatch({ verifiedWorkspaceIds: asked }, list);
           expect(lineOf(reply)).toBeLessThanOrEqual(MISSION_LIST_REPLY_MAX_CHARS);
           if (!reply.ok) throw new Error('refused');
