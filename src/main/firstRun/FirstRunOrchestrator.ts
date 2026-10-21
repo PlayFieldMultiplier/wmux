@@ -10,6 +10,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { app } from 'electron';
 import type { BrowserWindow } from 'electron';
 
@@ -27,9 +28,21 @@ import type {
   FirstRunCheckResult,
   RegisterMcpResult,
 } from '../../shared/firstRun';
-import type { AgentSetupStatus } from '../../shared/agentSetup';
+import { AGENT_IDS, type AgentId, type AgentSetupStatus } from '../../shared/agentSetup';
+import {
+  agentExecutableNames,
+  agentInstallMethod,
+  agentLoginCommand,
+  shellSyntax,
+  type AgentSetupPlan,
+  type SetAgentPathResult,
+} from '../../shared/agentInstall';
+import { isExecutableFile } from '../claude/resolveClaudeExecutable';
+import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
 
 const MARKER_FILENAME = '.first-run';
+/** Paths the user typed in an agent card ("installed but not found"). */
+const AGENT_PATHS_FILENAME = 'agent-paths.json';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const NOOP = (chunk: string): void => { void chunk; };
 
@@ -70,7 +83,7 @@ function buildLocalSource(ptyManager: PTYManager, ptyBridge: PTYBridge, ptyId: s
 
 export class FirstRunOrchestrator {
   private detector = new ClaudeDetector();
-  private agentDetector = new AgentSetupDetector();
+  private agentDetector = new AgentSetupDetector({ override: (agent) => this.readAgentPaths()[agent] ?? null });
   private runner = new SampleTaskRunner();
   private activeAbort: AbortController | null = null;
 
@@ -98,6 +111,103 @@ export class FirstRunOrchestrator {
    */
   async agentStatus(): Promise<AgentSetupStatus[]> {
     return this.agentDetector.detectAll();
+  }
+
+  /**
+   * What the card can offer for one agent: the bundled install line (and any
+   * program it needs that is missing here) and, once installed, the sign-in
+   * line for the exact executable the card shows.
+   */
+  async agentPlan(agent: AgentId, paneShell?: string): Promise<AgentSetupPlan> {
+    const method = agentInstallMethod(agent, process.platform);
+    if (!method) throw new Error(`first-run: no install line for ${agent}`);
+    const env = this.agentDetector.probeEnvFor(process.execPath);
+    const missing = method.requires.filter((name) => !this.onPath(name, env));
+    const executable = this.agentDetector.resolveExecutable(agent);
+    return {
+      agent,
+      install: { command: method.command, shell: method.shell, officialPage: method.officialPage, missing },
+      // The sign-in line is typed into the pane's shell, so it is quoted for that
+      // shell: PowerShell on Windows; on macOS/Linux the shell the pane spawns
+      // (the renderer's explicit choice, else $SHELL, as pty creation does),
+      // which may be pwsh too.
+      login: executable
+        ? { command: agentLoginCommand(executable, method.shell === 'powershell' ? 'powershell' : shellSyntax(paneShell || process.env.SHELL)), shell: method.shell }
+        : null,
+    };
+  }
+
+  /**
+   * Remember a path the user typed for an agent wmux did not find, after
+   * checking it names that agent and runs (`--version`). `null` forgets it.
+   */
+  async setAgentPath(agent: AgentId, input: string | null): Promise<SetAgentPathResult> {
+    // One save at a time, each merged into what is on disk when it writes, so
+    // two cards saving at once never drop each other's path.
+    const run = this.agentPathsQueue.then(() => this.applyAgentPath(agent, input));
+    this.agentPathsQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private agentPathsQueue: Promise<void> = Promise.resolve();
+
+  private async applyAgentPath(agent: AgentId, input: string | null): Promise<SetAgentPathResult> {
+    if (input === null) {
+      const paths = this.readAgentPaths();
+      delete paths[agent];
+      await this.writeAgentPaths(paths);
+      return { ok: true };
+    }
+    const p = input.trim().replace(/^"(.*)"$/, '$1');
+    if (!path.isAbsolute(p)) return { ok: false, reason: 'not-absolute' };
+    if (!isExecutableFile(p)) return { ok: false, reason: 'not-found' };
+    if (!agentExecutableNames(agent).includes(path.basename(p).toLowerCase())) {
+      return { ok: false, reason: 'wrong-program' };
+    }
+    if ((await this.agentDetector.readVersion(p)) === null) return { ok: false, reason: 'does-not-run' };
+    const paths = this.readAgentPaths();
+    paths[agent] = p;
+    await this.writeAgentPaths(paths);
+    return { ok: true };
+  }
+
+  private onPath(name: string, env: NodeJS.ProcessEnv): boolean {
+    const raw = env.PATH ?? env.Path ?? '';
+    const dirs = [...raw.split(path.delimiter), '/usr/bin', '/bin'].filter((d) => path.isAbsolute(d));
+    return dirs.some((d) => isExecutableFile(path.join(d, name)));
+  }
+
+  private agentPathsPath(): string {
+    return path.join(app.getPath('userData'), AGENT_PATHS_FILENAME);
+  }
+
+  /** Sync and tiny: read on every detect so a change applies at once. */
+  private readAgentPaths(): Partial<Record<AgentId, string>> {
+    const file = this.agentPathsPath();
+    let text: string;
+    try {
+      text = fsSync.readFileSync(file, 'utf8');
+    } catch {
+      // The atomic write moves the old file to `.bak` just before putting the
+      // new one in place; a read in that moment gets the previous paths.
+      try { text = fsSync.readFileSync(`${file}.bak`, 'utf8'); } catch { return {}; }
+    }
+    try {
+      const raw = JSON.parse(text) as Record<string, unknown>;
+      const out: Partial<Record<AgentId, string>> = {};
+      for (const agent of AGENT_IDS) {
+        const v = raw?.[agent];
+        if (typeof v === 'string' && path.isAbsolute(v)) out[agent] = v;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeAgentPaths(paths: Partial<Record<AgentId, string>>): Promise<void> {
+    // Atomic: a detect reading it mid-write must never see half a file.
+    await atomicWriteJSON(this.agentPathsPath(), paths);
   }
 
   async complete(): Promise<void> {

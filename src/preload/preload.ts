@@ -59,7 +59,8 @@ import type {
   RegisterMcpResult,
   SampleTaskStartPayload,
 } from '../shared/firstRun';
-import type { AgentSetupStatus } from '../shared/agentSetup';
+import type { AgentId, AgentSetupStatus } from '../shared/agentSetup';
+import type { AgentSetupPlan, SetAgentPathResult } from '../shared/agentInstall';
 import { isFileDrag } from '../shared/dragDrop';
 import { parseWindowsBuildNumber } from '../shared/platform';
 import type { NotificationCategory } from '../shared/types';
@@ -273,7 +274,7 @@ const electronAPI = {
     // wmux.json leaf — `exec` runs the command as the pane's ROOT process and
     // `supervision` arms the daemon's PaneSupervisor (daemon mode only; the
     // local branch ignores them with a one-time warning toast).
-    create: (options?: { shell?: string; cwd?: string; recoveryCwds?: Pick<DeadPaneRecovery, 'spawnCwd' | 'cwd' | 'sourceSessionId'>; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; wslAccountLoginEnvKey?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean }; fanoutTaskOf?: string; fanoutOrigin?: import('../shared/fanoutOrigin').FanoutOrigin; secretGrant?: string; fanoutLaunch?: { taskId: string; gen: number } }) =>
+    create: (options?: { shell?: string; cwd?: string; recoveryCwds?: Pick<DeadPaneRecovery, 'spawnCwd' | 'cwd' | 'sourceSessionId'>; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; wslAccountLoginEnvKey?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'; ignoreAccountBinding?: boolean; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean }; fanoutTaskOf?: string; fanoutOrigin?: import('../shared/fanoutOrigin').FanoutOrigin; secretGrant?: string; fanoutLaunch?: { taskId: string; gen: number } }) =>
       ipcRenderer.invoke(IPC.PTY_CREATE, options),
     write: (id: string, data: string) => {
       ipcRenderer.send(IPC.PTY_WRITE, id, data);
@@ -1733,6 +1734,10 @@ const electronAPI = {
     reopen: () => ipcRenderer.invoke(IPC.FIRST_RUN_REOPEN) as Promise<FirstRunCheckResult>,
     registerMcp: () => ipcRenderer.invoke(IPC.FIRST_RUN_REGISTER_MCP) as Promise<RegisterMcpResult>,
     agentStatus: () => ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_STATUS) as Promise<AgentSetupStatus[]>,
+    agentPlan: (agent: AgentId, paneShell?: string) =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_PLAN, agent, paneShell) as Promise<AgentSetupPlan>,
+    setAgentPath: (agent: AgentId, input: string | null) =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_SET_PATH, agent, input) as Promise<SetAgentPathResult>,
     startSampleTask: (payload: SampleTaskStartPayload) =>
       ipcRenderer.invoke(IPC.FIRST_RUN_START_SAMPLE_TASK, payload) as Promise<void>,
     onSampleTaskReady: (callback: () => void) => {

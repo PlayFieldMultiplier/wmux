@@ -773,6 +773,10 @@ export const IPC = {
   FIRST_RUN_START_SAMPLE_TASK: 'first-run:start-sample-task',
   /** Agent-ready step: installed / version / signed in, per agent (spawns probes). */
   FIRST_RUN_AGENT_STATUS: 'first-run:agent-status',
+  /** Agent-ready step: the bundled install line and the sign-in line for one agent. */
+  FIRST_RUN_AGENT_PLAN: 'first-run:agent-plan',
+  /** Agent-ready step: remember (or forget) a typed path for an agent wmux did not find. */
+  FIRST_RUN_AGENT_SET_PATH: 'first-run:agent-set-path',
   // First-run wizard event channels (renderer-side `on()` listeners)
   FIRST_RUN_SAMPLE_TASK_READY: 'first-run:sample-task-ready',
   FIRST_RUN_SAMPLE_TASK_TIMEOUT: 'first-run:sample-task-timeout',

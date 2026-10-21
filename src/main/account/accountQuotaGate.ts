@@ -22,6 +22,9 @@ export interface QuotaLaunchOptions {
   workspaceId?: string;
   env?: Record<string, string>;
   initialCommand?: string;
+  /** Agent-setup panes: they sign in to the default account the first-run
+   *  card detects, so no rotation (see pty.handler PtyCreateOptions). */
+  ignoreAccountBinding?: boolean;
 }
 
 export interface AccountQuotaGateDeps {
@@ -48,7 +51,7 @@ export async function withAccountQuota<T extends QuotaLaunchOptions>(
   options: T | undefined,
   deps: AccountQuotaGateDeps = {},
 ): Promise<T | undefined> {
-  if (!options?.initialCommand) return options;
+  if (!options?.initialCommand || options.ignoreAccountBinding === true) return options;
   const { marker, command } = splitModelEnvMarker(options.initialCommand);
   const stem = launchStem(command);
   if (stem === 'agy') return withAgyAccountQuota(options, { prepareLaunch: deps.prepareAgyLaunch });

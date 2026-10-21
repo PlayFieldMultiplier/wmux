@@ -16,6 +16,7 @@ import { withFreshWindowsPath } from '../../shared/windowsPathEnv';
 import { killProcessTree } from '../../daemon/automation/treeKill';
 import {
   agentCandidates,
+  isExecutableFile,
   liveResolveEnv,
   resolveAgentExecutableWith,
 } from '../claude/resolveClaudeExecutable';
@@ -54,6 +55,13 @@ export type ProbeRunner = (
 export interface AgentSetupDetectorDeps {
   /** Executable for an agent, or null. Defaults to the shared resolver over `env()`. */
   resolve?: (agent: AgentId, env: NodeJS.ProcessEnv) => string | null;
+  /**
+   * A path the user typed in the card ("installed but not found"). Used first,
+   * and only while it still points at an executable file.
+   */
+  override?: (agent: AgentId) => string | null;
+  /** Is `p` an executable file? Guards the override. */
+  isFile?: (p: string) => boolean;
   /** Candidate list shown when nothing was found. */
   candidates?: (agent: AgentId, env: NodeJS.ProcessEnv) => string[];
   run?: ProbeRunner;
@@ -181,6 +189,8 @@ export function readLoginState(agent: AgentId, result: ProbeResult): boolean | n
 
 export class AgentSetupDetector {
   private readonly resolve: (agent: AgentId, env: NodeJS.ProcessEnv) => string | null;
+  private readonly override: (agent: AgentId) => string | null;
+  private readonly isFile: (p: string) => boolean;
   private readonly candidates: (agent: AgentId, env: NodeJS.ProcessEnv) => string[];
   private readonly run: ProbeRunner;
   private readonly env: () => NodeJS.ProcessEnv;
@@ -195,6 +205,8 @@ export class AgentSetupDetector {
     // is running is found (and its node launcher can find node) without a restart.
     this.env = deps.env ?? (() => withFreshWindowsPath(process.env));
     this.resolve = deps.resolve ?? ((agent, env) => resolveAgentExecutableWith(liveResolveEnv(env), agent));
+    this.override = deps.override ?? (() => null);
+    this.isFile = deps.isFile ?? isExecutableFile;
     this.candidates = deps.candidates ?? ((agent, env) => agentCandidates(liveResolveEnv(env), agent));
     this.run = deps.run ?? execProbe;
     this.platform = deps.platform ?? process.platform;
@@ -211,14 +223,46 @@ export class AgentSetupDetector {
     return this.inflight;
   }
 
+  /** The executable the card would probe and sign in with, or null. */
+  resolveExecutable(agent: AgentId, env: NodeJS.ProcessEnv = this.env()): string | null {
+    try {
+      const chosen = this.override(agent);
+      if (chosen && this.isFile(chosen)) return chosen;
+    } catch {
+      /* unreadable override: fall back to the search */
+    }
+    try {
+      return this.resolve(agent, env);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The probe environment for `executable` (scrubbed, fresh PATH). */
+  probeEnvFor(executable: string): NodeJS.ProcessEnv {
+    return buildProbeEnv(this.env(), executable, this.platform);
+  }
+
+  /** `x.y.z` from `<executable> --version`, or null when it does not run. */
+  async readVersion(executable: string): Promise<string | null> {
+    const result = await this.probe(executable, this.probeEnvFor(executable), ['--version']);
+    return result.code === 0 ? parseAgentVersion(result.stdout) : null;
+  }
+
+  private probe(executable: string, probeEnv: NodeJS.ProcessEnv, args: readonly string[]): Promise<ProbeResult> {
+    const launch = resolveClaudeLaunch(executable, { args, platform: this.platform });
+    return this.run(launch.command, launch.args, {
+      env: launch.env ? { ...probeEnv, ...launch.env } : probeEnv,
+      // Never an opened repo: a project folder's config must not change the answer.
+      cwd: this.homedir(),
+      timeoutMs: this.timeoutMs,
+      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    });
+  }
+
   async detect(agent: AgentId): Promise<AgentSetupStatus> {
     const env = this.env();
-    let executable: string | null = null;
-    try {
-      executable = this.resolve(agent, env);
-    } catch {
-      executable = null;
-    }
+    const executable = this.resolveExecutable(agent, env);
     if (!executable) {
       let candidates: string[] = [];
       try {
@@ -238,16 +282,7 @@ export class AgentSetupDetector {
     }
 
     const probeEnv = buildProbeEnv(env, executable, this.platform);
-    const probe = (args: readonly string[]): Promise<ProbeResult> => {
-      const launch = resolveClaudeLaunch(executable as string, { args, platform: this.platform });
-      return this.run(launch.command, launch.args, {
-        env: launch.env ? { ...probeEnv, ...launch.env } : probeEnv,
-        // Never an opened repo: a project folder's config must not change the answer.
-        cwd: this.homedir(),
-        timeoutMs: this.timeoutMs,
-        ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-      });
-    };
+    const probe = (args: readonly string[]): Promise<ProbeResult> => this.probe(executable, probeEnv, args);
 
     const [versionResult, statusResult] = await Promise.all([
       probe(['--version']),
