@@ -80,7 +80,7 @@ import { postGuestMessage, setGuestPostHandler } from './guestMessage';
 import { humanCardIdOfRun, postHumanMessage } from './humanMessage';
 import { phoneBot } from './phoneBot';
 import { redactStoredSecrets } from './secretRedaction';
-import { ghIssueService, splitRepoKey } from '../github/GhIssueService';
+import { splitRepoKey } from '../github/GhIssueService';
 import { MORNING_SCHEDULE_FILENAME, MORNING_SCHEDULE_ID, MorningSchedule, localDay } from './morningSchedule';
 import { fireMorningReport } from './morningReport';
 import { VERDICTED_TASKS_FILENAME, VerdictedTasks, installVerifyTaskClose, setVerdictedTasks } from './verdictedTasks';
@@ -763,7 +763,8 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       bots = [];
     }
     const { host, cwd } = ownerLoginTarget(bots);
-    const login = await ghIssueService.signedInLogin(host, cwd).catch(() => null);
+    const { signedInLogin } = await import('../github/hostLane');
+    const login = await signedInLogin(host, cwd).catch(() => null);
     if (login) ownerLogin = login;
   };
 

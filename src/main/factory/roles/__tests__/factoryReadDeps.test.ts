@@ -10,11 +10,13 @@ const { gh, ghIssues, glab, glabIssues } = vi.hoisted(() => {
   const ghIssues = {
     listIssues: vi.fn(async () => ({ ok: true as const, issues: ['gh-issue'] })),
     issueDetail: vi.fn(async () => ({ ok: true as const, detail: 'gh-detail' })),
+    signedInLogin: vi.fn(async () => 'gh-owner'),
   };
   const glab = {
     laneFacts: vi.fn(async () => ({ ok: true as const, value: 'glab-mr' })),
     defaultBranchCi: vi.fn(async () => ({ error: 'glab ci' })),
     connection: vi.fn(async () => ({ ok: true as const })),
+    loginOnHost: vi.fn(async () => 'glab-owner'),
   };
   const glabIssues = {
     listIssues: vi.fn(async () => ({ ok: true as const, issues: ['glab-issue'] })),
@@ -29,6 +31,7 @@ vi.mock('../../../github/GlabPrService', async (actual) => ({ ...(await actual<o
 vi.mock('../../../github/GlabIssueService', async (actual) => ({ ...(await actual<object>()), glabIssueService: glabIssues }));
 
 import { factoryReadDeps } from '../index';
+import { signedInLogin } from '../../../github/hostLane';
 
 const GL = 'gitlab.example.com/group/proj';
 const GH = 'github.com/o/r';
@@ -55,5 +58,14 @@ describe('factoryReadDeps host switch', () => {
     expect(await d.ciRollup('/r', GH)).toEqual({ error: 'gh graphql' });
     expect(await d.hostReady?.({ repoPath: '/r', repoKey: GH, workspaceId: 'ws-1' })).toBeNull();
     expect(glab.connection).not.toHaveBeenCalled();
+  });
+});
+
+describe('owner login by host', () => {
+  it('reads the owner with gh on GitHub and with glab on any other host', async () => {
+    expect(await signedInLogin('github.com', '/r')).toBe('gh-owner');
+    expect(ghIssues.signedInLogin).toHaveBeenCalledWith('github.com', '/r');
+    expect(await signedInLogin('gitlab.example.com', '/r')).toBe('glab-owner');
+    expect(glab.loginOnHost).toHaveBeenCalledWith('gitlab.example.com', '/r');
   });
 });

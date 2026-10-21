@@ -2,11 +2,13 @@
 // gh (GhPrReviewService), every other host to glab (GlabPrService) — the
 // split PrProvider makes for the Git page (isGithubHost). Callers: the bot
 // reads (roles/index.ts), pr_verdict (prVerdictHost.ts) and the merge lane's
-// ports (factory/laneGh.ts), and the task gate's merged-branch evidence
-// (factory/factoryWiring.ts).
+// ports (factory/laneGh.ts), the task gate's merged-branch evidence
+// (factory/factoryWiring.ts), and the owner's login (mergeLaneHost.ts,
+// factoryWiring.ts).
 
 import type { PrLaneFacts, PrReviewRead } from '../../shared/prReview';
 import { isGithubHost } from './PrProvider';
+import { ghIssueService } from './GhIssueService';
 import { ghPrReviewService } from './GhPrReviewService';
 import { glabPrService } from './GlabPrService';
 
@@ -29,4 +31,9 @@ export function mergedOfBranch(cwd: string, key: string, branch: string, base: s
 /** The repository's default branch, read from the key's host. */
 export function defaultBranch(cwd: string, key: string): Promise<PrReviewRead<string>> {
   return isGitlabRepoKey(key) ? glabPrService.defaultBranch(cwd, key) : ghPrReviewService.defaultBranch(cwd, key);
+}
+
+/** The login the host's CLI signs in as on `host` now, lowercased, or null. */
+export function signedInLogin(host: string, cwd: string): Promise<string | null> {
+  return isGithubHost(host) ? ghIssueService.signedInLogin(host, cwd) : glabPrService.loginOnHost(host, cwd);
 }

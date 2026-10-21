@@ -825,8 +825,16 @@ export class GlabPrService implements PrProvider {
    *  cached, so an account switch stops the next merge. */
   async currentLogin(repoPath: string, key: string): Promise<string | null> {
     try {
-      const project = GlabPrService.project(key);
-      const { stdout } = await this.api(project.host, ['user'], repoPath);
+      return await this.loginOnHost(GlabPrService.project(key).host, repoPath);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The login glab signs in as on `host` now, lowercased, or null. */
+  async loginOnHost(host: string, cwd: string): Promise<string | null> {
+    try {
+      const { stdout } = await this.api(host, ['user'], cwd);
       return text(rec(JSON.parse(stdout))?.username).toLowerCase() || null;
     } catch {
       return null;
