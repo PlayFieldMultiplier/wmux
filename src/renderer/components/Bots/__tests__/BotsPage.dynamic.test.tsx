@@ -940,7 +940,17 @@ describe('Bots page', () => {
     expect(shown('[data-bots-thread-panel]')).toEqual(['c4', 'c5']);
     expect(shown('[data-bots-messages]')).toHaveLength(5);
     // Its composer posts into the thread.
-    expect(q<HTMLTextAreaElement>('[data-bots-thread-panel] [data-testid="bots-composer-input"]')?.placeholder).toBe('Reply in thread');
+    const reply = q<HTMLTextAreaElement>('[data-bots-thread-panel] [data-testid="bots-composer-input"]')!;
+    expect(reply.placeholder).toBe('Reply in thread');
+    // With no bot picked the reply names none: main settles who gets it (the
+    // coordinator as lead, any bot waiting there, else every bot).
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(reply, 'Looks good');
+      reply.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { q('[data-bots-thread-panel] [data-testid="bots-composer-send"]')!.click(); });
+    expect(posted.at(-1)).toMatchObject({ workspaceId: 'w1', threadId: 'pr:github.com/acme/api#1', title: 'Looks good' });
+    expect(posted.at(-1)?.mentions).toBeUndefined();
     act(() => q('[data-bots-thread-close]')!.click());
     expect(q('[data-bots-thread-panel]')).toBeNull();
   });

@@ -781,8 +781,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   photo-only message) and a click opens one fitted in a dialog. A 1:1
   message is addressed to that bot alone. A group's message goes to every
   bot of the group (they may answer each other) — or, in a group with a
-  coordinator, to that coordinator alone, which hands the work on (owner
-  decision 2026-10-21) — unless bots are picked: the **recipients control**
+  coordinator that is on and not paused, to that coordinator (and to any
+  bot waiting on the owner's answer in that thread), which hands the work
+  on (owner decision 2026-10-21) — unless bots are picked: the **recipients control**
   right above the pill, a 24px chip "To: everyone ▾" ("받는 봇: 모두 ▾";
   "To: <lead> ▾" in a group with a coordinator, without a fill since it is
   the default; "To: <names>" in the `--selection-emphasis` fill once some

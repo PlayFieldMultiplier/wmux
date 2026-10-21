@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { factDedupeKey, type Fact, type FactDraft } from '../../../shared/facts';
 import { HANDOFF_LIMITS } from '../../../shared/handoff';
-import type { ThreadId } from '../../../shared/room';
+import type { RoomCard, ThreadId } from '../../../shared/room';
 import { WAKE_LIMITS, type WakeItem } from '../../../shared/wake';
 import { WakeQueue, wakeQueuePath } from '../wakeQueue';
 import { clearThreadDecision, loadThreadDecision, loadWorkspaceDecisions, raiseThreadDecisionIfFree, resolveThreadDecision } from '../../deck/deckDecisionStore';
@@ -1588,5 +1588,51 @@ describe('a room with a coordinator: the owner talks to it, and the work it disp
     expect(pointer).toMatchObject({ title: 'Finished: Verify PR #5', replyTo: posted.card.id });
     // Nobody else was woken by the owner's message.
     expect(h.wakes.filter((w) => w.botId !== coordinator.id).map((w) => [w.botId, w.reason.kind])).toEqual([[reviewer.id, 'handoff']]);
+  });
+
+  it('an unpicked reply in a thread the group\'s work opened goes to the coordinator as lead and to the bot waiting there; it closes no question elsewhere', async () => {
+    const coordinator = bot('ws1', 'moa', { template: 'coordinator' });
+    const dev = bot('ws1', 'lead');
+    const rev = bot('ws1', 'verifier');
+    const h = await harness([coordinator, dev, rev]);
+    const GROUP = 'group:grp-0000abcd' as ThreadId;
+    h.ports.groups = { byThread: (ws, th) => (ws === 'ws1' && th === GROUP ? { id: 'grp-0000abcd', workspaceId: 'ws1', name: 'Ship', memberIds: [coordinator.id, dev.id, rev.id], threadId: GROUP, createdAt: 1, updatedAt: 1 } : null) };
+    const OPERATOR: RpcContext = { origin: 'local', operator: true, firstParty: true };
+    const deps = { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir };
+    const asked = await handleRoomPost({ workspaceId: 'ws1', threadId: GROUP, title: 'Add a --version flag' }, OPERATOR, deps) as { ok: true; card: { id: string } };
+    // The coordinator takes it in the group and opens the work's thread.
+    h.wake.thread = GROUP;
+    h.wake.id = { wakeId: 'w-lead', attempt: 1, runId: `run-${asked.card.id}` } as Harness['wake']['id'];
+    const d = h.router.send(binding(coordinator), { kind: 'dispatch', toBotId: dev.id, title: 'Add the flag', body: 'b' });
+    if (!d.ok) throw new Error('dispatch failed');
+    await h.router.idle();
+    const work = h.router.get(d.handoffId)!.threadId;
+    expect(work).toBe(`handoff:${d.handoffId}`);
+    const elsewhere = await h.router.askPerson(binding(coordinator), { title: 'Which repo next?', body: '', threadId: 'task:other' });
+    // The developer asks the owner a free-text question there.
+    h.wake.thread = work;
+    h.wake.id = { wakeId: 'w-dev', attempt: 1, handoffId: d.handoffId };
+    const q = await h.router.askPerson(binding(dev), { title: 'Which flag name?', body: '' });
+    if (!q.ok || !elsewhere.ok) throw new Error('asks failed');
+    h.wake.thread = null;
+    h.wake.id = null;
+    now += 10;
+    const before = h.wakes.length;
+    const reply = await handleRoomPost({ workspaceId: 'ws1', threadId: work, title: 'Use --version' }, OPERATOR, deps) as { ok: true; card: RoomCard };
+    expect(reply.card.refs?.botIds).toEqual([coordinator.id, dev.id]);
+    expect(reply.card.routed).toEqual({ lead: coordinator.id, waiting: [dev.id] });
+    const woke = h.wakes.slice(before);
+    const flags = (w: (typeof woke)[number]) => (w.reason.kind === 'human' ? [w.reason.room, w.reason.lead, w.reason.roomWide] : null);
+    expect(woke.map((w) => [w.botId, w.threadId, flags(w)])).toEqual([[coordinator.id, work, [true, true, undefined]], [dev.id, work, [true, undefined, undefined]]]);
+    // Typed approval reads the words as the room's (approvals.ts onFact).
+    const replyFacts = h.facts.filter((f) => f.kind === 'human.message' && f.payload?.cardId === reply.card.id);
+    expect(replyFacts.map((f) => [f.ref?.botId, f.payload?.lead])).toEqual([[coordinator.id, true], [dev.id, true]]);
+    // The developer's question there is answered; the coordinator's question
+    // in another thread stays open.
+    const item = (w: (typeof woke)[number]) => ({ reason: w.reason, workspaceId: w.workspaceId, threadId: w.threadId, enqueuedAt: now });
+    expect(await h.router.closeAnsweredInChat(coordinator.id, item(woke[0]))).toEqual([]);
+    expect(await h.router.closeAnsweredInChat(dev.id, item(woke[1]))).toEqual([q.handoffId]);
+    expect(h.router.get(elsewhere.handoffId)?.status).toBe('delivered');
+    expect(h.wakes.some((w) => w.botId === rev.id)).toBe(false);
   });
 });

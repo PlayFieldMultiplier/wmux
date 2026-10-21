@@ -131,7 +131,7 @@ export const COMMON_WAKES: readonly string[] = [
 export const FINISHING: readonly string[] = [
   'A wake ends when its output is posted and the handoffs it needs are sent: then end the turn.',
   'Waiting is ending the turn. The next fact, handoff, gate result or owner message wakes you with what changed.',
-  'When a wake brings nothing that needs an output, end the turn without posting (a bot that mentioned you is owed a reply). Ending without posting means ending with no text either: words you end a turn on the owner\'s message with are posted as your message (except on a message to a room without a coordinator, where only room_post speaks), so silence is an empty ending, not a line saying you stay silent.',
+  'When a wake brings nothing that needs an output, end the turn without posting (a bot that mentioned you is owed a reply). Ending without posting means ending with no text either: words you end a turn on the owner\'s message with are posted as your message (except on a message every bot of a room without a coordinator got, where only room_post speaks), so silence is an empty ending, not a line saying you stay silent.',
 ];
 
 function bullet(lines: readonly string[]): string {

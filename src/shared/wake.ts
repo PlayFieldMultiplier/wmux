@@ -19,8 +19,10 @@ export type WakeReason =
    *  alone got it (humanMessage.ts). `roomWide`: the message named no bot
    *  and this bot got it only as one of every bot of a room without a
    *  coordinator, so its closing text is not posted (BotRuntime.ts): it
-   *  speaks with room_post or not at all. */
-  | { kind: 'human'; text: string; source: 'desktop' | 'phone'; clientMessageId?: string; runId?: string; room?: true; lead?: true; roomWide?: true }
+   *  speaks with room_post or not at all. `roomAnswerer`, on such a wake:
+   *  the room's oldest bot, which answers a greeting or a question to
+   *  everyone when no other bot's job covers it. */
+  | { kind: 'human'; text: string; source: 'desktop' | 'phone'; clientMessageId?: string; runId?: string; room?: true; lead?: true; roomWide?: true; roomAnswerer?: string }
   | { kind: 'schedule'; scheduleId: string }
   | { kind: 'manual'; by: 'human' }
   /** One firing of the bot's own routine (shared/botRoutine.ts). `dueAt`

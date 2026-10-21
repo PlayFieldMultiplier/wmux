@@ -1252,13 +1252,11 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     () => (conversation.kind === 'bot' ? [conversation.row.bot.id] : [...new Set([...picks.picked, ...typed])].filter((id) => roomCandidates.some((r) => r.bot.id === id))),
     [conversation, picks.picked, typed, roomCandidates],
   );
-  // Nobody picked: the group's own thread goes to its coordinator, else to
-  // every bot of it (main's rule); a thread it started names the same bots,
-  // since main reads a thread other than the group's as the workspace's.
-  const mentions: string[] = useMemo(
-    () => (conversation.kind === 'room' && picked.length === 0 && threadId !== conversation.threadId ? (lead ? [lead.bot.id] : roomCandidates.map((r) => r.bot.id)) : picked),
-    [conversation, picked, threadId, roomCandidates, lead],
-  );
+  // Nobody picked: no mentions, in the group's own thread or one it
+  // started. Main settles who gets it (humanMessage.ts): the group's
+  // coordinator with any bot waiting on the owner in that thread, else
+  // every bot of the group.
+  const mentions: string[] = picked;
   // A group with no bot on takes no message (main would read a thread's
   // unaddressed reply as the whole workspace's).
   const refusal = readOnly ? t('botsPage.pausedComposer')

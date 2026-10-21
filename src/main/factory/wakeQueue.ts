@@ -122,6 +122,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
       if (r.room !== undefined && r.room !== true) return null;
       if (r.lead !== undefined && r.lead !== true) return null;
       if (r.roomWide !== undefined && r.roomWide !== true) return null;
+      if (r.roomAnswerer !== undefined && !boundedId(r.roomAnswerer)) return null;
       return {
         kind: 'human',
         text: r.text,
@@ -131,6 +132,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
         ...(r.room === true ? { room: true as const } : {}),
         ...(r.lead === true ? { lead: true as const } : {}),
         ...(r.roomWide === true ? { roomWide: true as const } : {}),
+        ...(r.roomAnswerer !== undefined ? { roomAnswerer: r.roomAnswerer as string } : {}),
       };
     }
     case 'schedule':

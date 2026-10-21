@@ -181,7 +181,7 @@ describe('room.post', () => {
     const runId = `run-${r.card.id}`;
     expect(s.wakes).toEqual([lead, verifier].map((b) => ({
       botId: b.id, workspaceId: 'ws1',
-      reason: { kind: 'human', text: 'Please look at #5', source: 'desktop', clientMessageId: r.card.id, runId, room: true, roomWide: true },
+      reason: { kind: 'human', text: 'Please look at #5', source: 'desktop', clientMessageId: r.card.id, runId, room: true, roomWide: true, roomAnswerer: lead.id },
       priority: 0, threadId: 'general', overCap: true,
     })));
     // Same client id: the same card, no second fact or wake.
@@ -267,7 +267,7 @@ describe('room.post', () => {
     // the retry wakes them as the room's bots whatever it names itself.
     bots.push(bot('ws1', 'moa', { template: 'coordinator' }));
     full.clear();
-    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode', mentions: [issue.id] }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true, card: { routed: 'room' } });
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode', mentions: [issue.id] }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true, card: { routed: {} } });
     const flags = (w: (typeof s.wakes)[number]) => (w.reason.kind === 'human' ? [w.reason.room, w.reason.roomWide, w.reason.lead] : null);
     expect(s.wakes.map((w) => [w.botId, flags(w)])).toEqual([[dev.id, [true, true, undefined]], [issue.id, [true, true, undefined]]]);
     // An untagged message in a room with a coordinator wakes the coordinator
@@ -277,7 +277,7 @@ describe('room.post', () => {
     expect(next).toMatchObject({ ok: true, addressees: [{ botId: coordinator.id }], card: { refs: { botIds: [coordinator.id], botId: coordinator.id } } });
     expect(s.wakes.slice(2).map((w) => [w.botId, flags(w)])).toEqual([[coordinator.id, [undefined, undefined, true]]]);
     expect(s.facts.at(-1)).toMatchObject({ ref: { botId: coordinator.id }, payload: { lead: true } });
-    expect(next.card.routed).toBe('lead');
+    expect(next.card.routed).toEqual({ lead: coordinator.id });
     // Its retry is the coordinator's again, as its card recorded, even with
     // other fields and a template changed since.
     full.add(coordinator.id);
@@ -328,6 +328,53 @@ describe('room.post', () => {
     const many = Array.from({ length: 17 }, () => bot('ws3', 'lead'));
     const group = humanAddressees({ listEnabled: () => [...many].reverse() } as unknown as FactoryRoomPorts['bots'], 'ws3', { members: many.map((b) => b.id) });
     expect(group.bots.map((b) => b.id)).toEqual(many.slice(0, 16).map((b) => b.id));
+  });
+
+  it('humanAddressees: a coordinator that is off or parked (by the owner, or for an error) is no lead; a budget park still is; a lone coordinator is its room\'s lead', () => {
+    const dev = bot('ws1', 'lead', { createdAt: 1 });
+    const issue = bot('ws1', 'triage', { createdAt: 2 });
+    const lead = bot('ws1', 'moa', { template: 'coordinator', createdAt: 3 });
+    const ports = { listEnabled: () => [dev, issue, lead] } as unknown as FactoryRoomPorts['bots'];
+    expect(humanAddressees(ports, 'ws1', {})).toEqual({ bots: [lead], room: false, lead: true });
+    for (const reason of ['human', 'error'] as const) {
+      lead.parked = { reason, at: 1 };
+      expect(humanAddressees(ports, 'ws1', {}), reason).toEqual({ bots: [dev, issue, lead], room: true });
+    }
+    lead.parked = { reason: 'budget', at: 1 };
+    expect(humanAddressees(ports, 'ws1', {})).toEqual({ bots: [lead], room: false, lead: true });
+    delete lead.parked;
+    lead.enabled = false;
+    expect(humanAddressees(ports, 'ws1', {})).toEqual({ bots: [dev, issue], room: true });
+    lead.enabled = true;
+    // Its room holds only it.
+    const alone = { listEnabled: () => [lead] } as unknown as FactoryRoomPorts['bots'];
+    expect(humanAddressees(alone, 'ws1', {})).toEqual({ bots: [lead], room: false, lead: true });
+    // The bots waiting on the owner follow the lead, oldest first.
+    expect(humanAddressees(ports, 'ws1', { waiting: [issue.id, dev.id] })).toEqual({ bots: [lead, dev, issue], room: false, lead: true });
+  });
+
+  it('an unpicked message reaches a bot waiting on the owner in its thread as addressed; the room\'s first bot answers a room-wide one', async () => {
+    const dev = bot('ws1', 'lead', { createdAt: 1 });
+    const issue = bot('ws1', 'triage', { createdAt: 2 });
+    const lead = bot('ws1', 'moa', { template: 'coordinator', createdAt: 3 });
+    const bots = [dev, issue, lead];
+    const s = setup(bots);
+    const flags = (w: (typeof s.wakes)[number]) => (w.reason.kind === 'human' ? [w.reason.room, w.reason.lead, w.reason.roomWide, w.reason.roomAnswerer] : null);
+    // The issue bot asked the owner something in General.
+    s.writer.post({ workspaceId: 'ws1', kind: 'question', actor: { kind: 'bot', workspaceId: 'ws1', botId: issue.id }, title: 'Which label?', state: 'open' });
+    const r = await handleRoomPost({ workspaceId: 'ws1', title: 'bug' }, OPERATOR, s.deps) as { card: RoomCard };
+    expect(r.card.routed).toEqual({ lead: lead.id, waiting: [issue.id] });
+    expect(s.wakes.map((w) => [w.botId, flags(w)])).toEqual([[lead.id, [true, true, undefined, undefined]], [issue.id, [true, undefined, undefined, undefined]]]);
+    // A parked coordinator: every bot, the waiting one as addressed, the
+    // others room-wide with the room's first bot as the default answerer.
+    lead.parked = { reason: 'human', at: 1 };
+    const wide = await handleRoomPost({ workspaceId: 'ws1', title: 'anyone?' }, OPERATOR, s.deps) as { card: RoomCard };
+    expect(wide.card.routed).toEqual({ waiting: [issue.id] });
+    expect(s.wakes.slice(2).map((w) => [w.botId, flags(w)])).toEqual([
+      [dev.id, [true, undefined, true, dev.id]],
+      [issue.id, [true, undefined, undefined, undefined]],
+      [lead.id, [true, undefined, true, dev.id]],
+    ]);
   });
 
   describe('a group chat\'s thread (owner decision 2026-10-15)', () => {
