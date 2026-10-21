@@ -490,13 +490,10 @@ function ghEdit(ctx, a) {
         if (!b) throw new HarnessError(`no origin branch under ${a.fromBranch}`);
         pr.headRefName = b.name;
         pr.headSha = b.sha;
-        // `filesFromBranch`: the PR lists the branch's own changes, with
-        // their change types, as GitHub does.
+        // `filesFromBranch`: the PR lists the branch's own changes, as
+        // GitHub does.
         if (a.filesFromBranch === true) {
-          const rows = git(['diff', '--name-status', '--no-renames', `main...${b.sha}`], ctx.repo.origin).split('\n').filter(Boolean).map((l) => l.split('\t'));
-          const TYPE = { A: 'ADDED', M: 'MODIFIED', D: 'DELETED' };
-          pr.files = rows.map((r) => r[1]);
-          pr.changeTypes = Object.fromEntries(rows.map((r) => [r[1], TYPE[r[0]] ?? 'MODIFIED']));
+          pr.files = git(['diff', '--name-only', '--no-renames', `main...${b.sha}`], ctx.repo.origin).split('\n').filter(Boolean);
         }
       } else if (!pr.headSha) {
         pr.headSha = git(['rev-parse', 'HEAD'], ctx.repo.seed);

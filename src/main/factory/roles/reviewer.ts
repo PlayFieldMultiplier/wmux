@@ -2,7 +2,6 @@
 // powers and outputs only (common.ts).
 
 import type { TemplateDefinition } from './common';
-import { DOCS_ONLY_RULE } from '../../../shared/docsChange';
 import { botRepoGitToolName } from '../botRepoGit';
 
 const GIT_DIFF = botRepoGitToolName('git_diff');
@@ -10,28 +9,28 @@ const GIT_SHOW = botRepoGitToolName('git_show');
 
 /** When a head is read and graded without a worker. */
 const NO_GATE_GRADES =
-  `a change no gate grades: docs-only (${DOCS_ONLY_RULE}), or any change in a repository whose base declares no gate (no wmux.json verify script and no npm lint or test script in package.json on the base)`;
+  'a head whose base branch declares no gate (no wmux.json verify script, and no npm lint or test script in package.json on the PR\'s base branch)';
 
 export const REVIEWER_TEMPLATE: TemplateDefinition = {
   template: 'reviewer',
   defaultJob:
     'You review pull request heads, only when asked: a handoff, a mention or the owner\'s message names the PR (and the head, when it gives one). Requests are what wake you; PR events (opened, a new push, a failed check) are facts you read with pr_read when a request needs them. For each head you are asked about you produce one verdict, pass or fail, and its weight matches the change. '
-    + `For ${NO_GATE_GRADES}, you read the diff yourself and record the verdict on that reading, with no worker: wmux checks the file list and the base's gate itself before it records it. `
-    + 'Every other head\'s verdict rests on a gate wmux itself ran on exactly that commit: a verify worker checks the head out detached, reads the change and reports, then wmux runs the repository gate — chosen from the base branch — on that commit and records it. That record is your evidence. In this version a pass means the code gate is green at this SHA (or no gate grades the change) and the reading of the diff found nothing wrong; UI recipes are outside it, and your verdict card says so.',
+    + `For ${NO_GATE_GRADES}, you read the diff yourself and record the verdict on that reading, with no worker: wmux reads the base branch's gate itself before it records it. `
+    + 'Every other head\'s verdict rests on a gate wmux itself ran on exactly that commit, a docs-only change included (a docs file can be what the gate checks): a verify worker checks the head out detached, reads the change and reports, then wmux runs the repository gate — chosen from the base branch — on that commit and records it. That record is your evidence. In this version a pass means the code gate is green at this SHA (or the repository declares none) and the reading of the diff found nothing wrong; UI recipes are outside it, and your verdict card says so.',
   powers: {
-    pr_read: 'read a pull request fresh: its head SHA, base branch, files, labels and checks. Its files tell you which kind of review a head needs.',
+    pr_read: 'read a pull request fresh: its head SHA, base branch, files, labels and checks.',
     verdict_read: 'read the verdicts already recorded on a pull request, to see whether this head has yours.',
-    fanout_start: 'start one verify worker, for a head a gate grades, with preset "verify" and checkout {sha: the head, fetch_ref: "pull/<n>/head"}; its prompt says what to look at in this change.',
-    pr_verdict: 'record your verdict on one head: prNumber, headSha, verdict (pass or fail), a summary, and evidence {taskId} — the verify task whose recorded gate it rests on — or evidence {reading: true} for a change no gate grades, which you read yourself. wmux checks the evidence the way the merge lane will, and a refusal names the reason; gate-required means the change needs a verify worker.',
+    fanout_start: 'start one verify worker, for a head a gate grades (a docs-only one too: its worker reads it and runs no tests of its own), with preset "verify" and checkout {sha: the head, fetch_ref: "pull/<n>/head"}; its prompt says what to look at in this change.',
+    pr_verdict: 'record your verdict on one head: prNumber, headSha, verdict (pass or fail), a summary, and evidence {taskId} — the verify task whose recorded gate it rests on — or evidence {reading: true} for a head whose base branch declares no gate, which you read yourself. wmux checks the evidence the way the merge lane will, and a refusal names the reason; gate-required means the head needs a verify worker.',
     ledger_update: 'settle the verify task after recording: completed when its gate passed, failed when it did not.',
     terminal_read: 'read the verify worker\'s pane when its report is unclear.',
     ask_person: 'ask the owner when a head cannot be graded (dependencies will not install, the gate cannot run).',
   },
   repoRead:
-    `to understand the code a change touches, to see whether the base declares a gate (package.json scripts, wmux.json), and to tell a verify worker what to look at. ${GIT_DIFF} (base: origin/<base branch>, head: the head SHA) and ${GIT_SHOW} read the head itself when it is in the repository, as every commit a worker of this repository made is. Your own reading decides a change no gate grades; for every other change the verify task's gate decides the verdict.`,
+    `to understand the code a change touches, to see whether the PR's base branch declares a gate (${GIT_SHOW} of package.json and wmux.json at origin/<base branch>), and to tell a verify worker what to look at. ${GIT_DIFF} (base: origin/<base branch>, head: the head SHA) and ${GIT_SHOW} read the head itself when it is in the repository, as every commit a worker of this repository made is. Your own reading decides a head whose base declares no gate; for every other head the verify task's gate decides the verdict.`,
   outputs: [
     'A `status` card when you start a verify worker: "verifying #<n> at <sha>", with the task id.',
-    'Exactly one `pr_verdict` per head, and a `verdict` card beside it: pass or fail, the gate command and exit code at the SHA with the task id (or that no gate grades the change and you read it), and what the reading found.',
+    'Exactly one `pr_verdict` per head, and a `verdict` card beside it: pass or fail, the gate command and exit code at the SHA with the task id (or that the repository declares no gate and you read it), and what the reading found.',
     'A `status` card when a verdict cannot be recorded, carrying the refusal reason.',
   ],
   wakes: [

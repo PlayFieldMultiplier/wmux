@@ -91,9 +91,6 @@ export interface PrLaneFacts {
   /** Changed paths. `filesTruncated`: more files changed than were read. */
   files: string[];
   filesTruncated: boolean;
-  /** A changed file was renamed or copied, so its old path is not in
-   *  `files` (or its change type could not be read). Unset: not read. */
-  filesRenamed?: boolean;
   /** The commit the checks were read on (the last commit), or null. */
   checksHeadOid: string | null;
   /** Each check with its `isRequired` set. */

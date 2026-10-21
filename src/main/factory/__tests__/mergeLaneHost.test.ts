@@ -167,6 +167,22 @@ describe('MergeLaneHost', () => {
     expect(await rig({ settings: { laneAutoMerge: true }, facts: { ...FACTS, author: 'stranger' }, ownerLogin: async () => null }).host.ruleCheck(req)).toContain('author-trusted:external-author');
   });
 
+  it('a reading-only PASS is checked against origin/<the PR base> read now, and only then', async () => {
+    const BASE = 'd'.repeat(40);
+    const reading: PrVerdictRecord = { ...PASS, evidence: { taskId: 'reading-only', gateHeadSha: HEAD, reading: 'no-gate', baseRef: 'origin/main', baseSha: BASE } };
+    const reads: Array<[string, string]> = [];
+    const at = (sha: string | null) => rig({ verdicts: [reading], originBranchSha: async (repo, branch) => { reads.push([repo, branch]); return sha; } });
+    const settings = { ...DEFAULT_FACTORY_SETTINGS, enabled: true };
+    expect((await at(BASE).host.laneContext(KEY, '/repo', FACTS, [reading], [leadTask], settings)).baseSha).toBe(BASE);
+    expect(reads).toEqual([['/repo', 'main']]);
+    const req = { repoKey: KEY, repoPath: '/repo', prNumber: 3, headSha: HEAD, tainted: false };
+    expect(await at('e'.repeat(40)).host.ruleCheck(req)).toBe('verifier-pass-at-head:base-moved');
+    // No reading-only verdict: the base is not read.
+    reads.length = 0;
+    expect((await at(BASE).host.laneContext(KEY, '/repo', FACTS, [PASS], [leadTask], settings)).baseSha).toBeNull();
+    expect(reads).toEqual([]);
+  });
+
   it('authorBots counts every bot whose worker has the head branch, on any repository', async () => {
     const r = rig({ authorBotsOnBranch: async () => [verifier.id] });
     const ctx = await r.host.laneContext(KEY, '/repo', FACTS, [PASS], [leadTask], { ...DEFAULT_FACTORY_SETTINGS, enabled: true });

@@ -53,19 +53,22 @@ export interface PrVerdictPrincipal {
  *  the row, never this claim alone.
  *
  *  A reading-only verdict (`reading` set) rests on no task: the bot read the
- *  change itself and main found, when it recorded the verdict, that no gate
- *  grades it — every changed file is docs or content (`docs-only`, which the
- *  merge lane checks again on its own read of the PR), or the repository
- *  declares no gate on its base (`no-gate`). Its `taskId` is
- *  READING_EVIDENCE_TASK_ID, which names no ledger row, so a build that does
- *  not know `reading` still reads the record and never counts it. */
+ *  change itself, and main found, when it recorded the verdict, that the
+ *  repository declares no gate on the PR's base branch (`no-gate`): `baseRef`
+ *  (`origin/<base branch>`) at `baseSha`, the commit main read the gate
+ *  from. The merge lane counts it only while that ref is still at
+ *  `baseSha`. Its `taskId` is READING_EVIDENCE_TASK_ID, which names no ledger
+ *  row, so a build that does not know `reading` still reads the record and
+ *  never counts it. */
 export interface PrVerdictEvidence {
   taskId: string;
   gateHeadSha: string;
   reading?: PrVerdictReadingBasis;
+  baseRef?: string;
+  baseSha?: string;
 }
 
-export type PrVerdictReadingBasis = 'docs-only' | 'no-gate';
+export type PrVerdictReadingBasis = 'no-gate';
 
 /** The `taskId` of a reading-only verdict's evidence. */
 export const READING_EVIDENCE_TASK_ID = 'reading-only';
@@ -125,10 +128,13 @@ export type PrVerdictRefusalCode =
   | 'gate-skipped'
   /** A PASS whose evidence gate failed (the lane's reason). */
   | 'gate-failed'
-  /** A reading-only verdict on a change a gate grades: it touches more than
-   *  docs and content, and the repository declares a gate (or wmux cannot
-   *  tell whether it does). Start a verify worker. */
-  | 'gate-required';
+  /** A reading-only verdict where a gate grades the change: the PR's base
+   *  branch declares one (or wmux cannot tell whether it does, or cannot
+   *  read that branch). Start a verify worker. */
+  | 'gate-required'
+  /** A reading-only verdict whose base branch moved (or the PR now targets
+   *  another one) since main read its gate (the lane's reason). */
+  | 'base-moved';
 
 export type PrVerdictResult =
   | { ok: true; record: PrVerdictRecord }
@@ -169,7 +175,9 @@ export function isPrVerdictRecord(v: unknown): v is PrVerdictRecord {
       && (v.evidence === undefined || (isRecord(v.evidence)
         && isId(v.evidence.taskId)
         && typeof v.evidence.gateHeadSha === 'string' && COMMIT_SHA_RE.test(v.evidence.gateHeadSha)
-        && (v.evidence.reading === undefined || v.evidence.reading === 'docs-only' || v.evidence.reading === 'no-gate')));
+        && (v.evidence.reading === undefined || (v.evidence.reading === 'no-gate'
+          && typeof v.evidence.baseRef === 'string' && v.evidence.baseRef.length <= 250
+          && typeof v.evidence.baseSha === 'string' && COMMIT_SHA_RE.test(v.evidence.baseSha)))));
   return principalOk
     && typeof v.repoKey === 'string' && v.repoKey.length > 0
     && isPrNumber(v.prNumber)

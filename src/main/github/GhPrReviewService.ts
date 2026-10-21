@@ -92,7 +92,7 @@ export const LANE_PR_QUERY = `query($owner: String!, $repo: String!, $number: In
       mergedAt mergeCommit { oid }
       author { login }
       labels(first: 50) { totalCount nodes { name } }
-      files(first: 100) { totalCount nodes { path changeType } }
+      files(first: 100) { totalCount nodes { path } }
       commits(last: 1) {
         nodes {
           commit {
@@ -235,8 +235,6 @@ export function mapLaneFacts(raw: unknown): PrLaneFacts | null {
     labelsTruncated: truncated(pr.labels, labelNodes.length) || labels.length !== labelNodes.length,
     files,
     filesTruncated: truncated(pr.files, fileNodes.length) || files.length !== fileNodes.length,
-    // A rename or copy lists only its new path; an unreadable type may be one.
-    filesRenamed: fileNodes.some((f) => !/^(ADDED|CHANGED|MODIFIED|DELETED)$/.test(str((f as { changeType?: unknown } | null)?.changeType))),
     checksHeadOid: typeof commit?.oid === 'string' ? commit.oid : null,
     checks,
     // No rollup at all (no checks ever ran) reads as nothing truncated.

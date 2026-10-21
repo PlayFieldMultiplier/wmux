@@ -110,8 +110,8 @@ Layers: `regression` (`runs: 1`, every factory change) and `workflow`
    `repo: {"gate": false}` makes a scratch repo that declares no gate (no
    package.json). `worker.fileExt` names the extension of the file a
    committing worker adds (default `txt`). An `addPr` with
-   `"filesFromBranch": true` lists the branch's own changed files, with
-   their change types, as the PR's files.
+   `"filesFromBranch": true` lists the branch's own changed files as the
+   PR's files.
    `env` sets `WMUX_TEST_*` knobs for the instance (main honours them only
    on an isolated instance). A `post` without `to` or `mentions` goes to every
    bot of the room, so every bot a group scenario declares needs a stub

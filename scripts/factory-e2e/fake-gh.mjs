@@ -175,7 +175,7 @@ function lanePrNode(pr, key) {
     author: { login: pr.author },
     url: `https://${key}/pull/${pr.number}`,
     labels: { totalCount: (pr.labels ?? []).length, nodes: (pr.labels ?? []).map((name) => ({ name })) },
-    files: { totalCount: (pr.files ?? []).length, nodes: (pr.files ?? []).map((p) => ({ path: p, changeType: pr.changeTypes?.[p] ?? 'MODIFIED' })) },
+    files: { totalCount: (pr.files ?? []).length, nodes: (pr.files ?? []).map((p) => ({ path: p })) },
     commits: { nodes: [{ commit: { oid: pr.headSha, statusCheckRollup: { contexts: { totalCount: checkNodes(pr).length, nodes: checkNodes(pr) } } } }] },
   };
 }

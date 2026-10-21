@@ -308,44 +308,64 @@ describe('verify.recordVerdict — bot path', () => {
 });
 
 describe('verify.recordVerdict — reading-only bot verdicts (no worker)', () => {
-  const READ_INPUT = { ...INPUT, summary: 'read the docs change', evidence: { reading: true } };
-  const docs = { ...FACTS, files: ['docs/guide.html', 'README.md'], filesTruncated: false, filesRenamed: false } as PrLaneFacts;
-  const code = { ...FACTS, files: ['src/app.py', 'README.md'], filesTruncated: false, filesRenamed: false } as PrLaneFacts;
-  const readingSetup = (facts: PrLaneFacts, baseGate: NonNullable<VerifyRpcDeps['bot']>['baseGate'], guestWake: () => boolean | 'unknown' = () => false) => setup({
+  const READ_INPUT = { ...INPUT, summary: 'read the change', evidence: { reading: true } };
+  const MAIN = 'd'.repeat(40);
+  const REL = 'e'.repeat(40);
+  const docs = { ...FACTS, baseRefName: 'main', files: ['docs/guide.html', 'README.md'], filesTruncated: false } as PrLaneFacts;
+  const code = { ...FACTS, baseRefName: 'main', files: ['src/app.py'], filesTruncated: false } as PrLaneFacts;
+  type BaseGate = NonNullable<NonNullable<VerifyRpcDeps['bot']>['baseGate']>;
+  const refs = {
+    'rev-parse --verify --quiet refs/remotes/origin/main^{commit}': MAIN,
+    'rev-parse --verify --quiet refs/remotes/origin/release/2^{commit}': REL,
+  };
+  const readingSetup = (facts: PrLaneFacts, baseGate: BaseGate, guestWake: () => boolean | 'unknown' = () => false) => setup({
     repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
     readPr: async () => facts,
     bot: { guestWake, profile: () => verifierProfile(), ledgerRow: () => null, baseGate },
-  });
+  }, refs);
 
-  it('a docs-only change is recorded on reading alone, without asking for the base gate', async () => {
-    const baseGate = vi.fn(async () => ({ kind: 'declared' as const, command: 'npm test' }));
-    const { call, record } = readingSetup(docs, baseGate);
-    const r = await call(READ_INPUT, BOT_CTX);
-    expect(r).toMatchObject({ ok: true, record: { verdict: 'pass', evidence: { taskId: 'reading-only', gateHeadSha: HEAD, reading: 'docs-only' } } });
+  it('a base branch that declares no gate: recorded, naming that branch and the commit its gate was read at', async () => {
+    const baseGate = vi.fn<BaseGate>(async () => ({ kind: 'none' }));
+    const { call, record } = readingSetup(code, baseGate);
+    expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({
+      ok: true,
+      record: { verdict: 'pass', evidence: { taskId: 'reading-only', gateHeadSha: HEAD, reading: 'no-gate', baseRef: 'origin/main', baseSha: MAIN } },
+    });
     expect(record).toHaveBeenCalledTimes(1);
-    expect(baseGate).not.toHaveBeenCalled();
+    // The gate is read at the resolved commit, not at a ref that may move.
+    expect(baseGate).toHaveBeenCalledWith('/repo', MAIN);
   });
 
-  it('a code change is recorded on reading only where the base declares no gate', async () => {
-    const none = readingSetup(code, async () => ({ kind: 'none' }));
-    expect(await none.call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: true, record: { evidence: { reading: 'no-gate' } } });
-    for (const g of [{ kind: 'declared' as const, command: 'npm run lint + npm test' }, { kind: 'unknown' as const, detail: 'package.json on origin/main could not be parsed' }]) {
-      const { call, record } = readingSetup(code, async () => g);
-      expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required' });
+  it('a docs-only change in a repository with a gate is refused: the gate may check docs too', async () => {
+    const { call, record } = readingSetup(docs, async () => ({ kind: 'declared', command: 'bash scripts/verify.sh' }));
+    expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required', message: expect.stringContaining('docs-only change or not') });
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('the gate is read from the PR\'s own base branch: a PR into release/2 that declares a gate is refused while main has none', async () => {
+    const baseGate = vi.fn<BaseGate>(async (_repo, at) => (at === REL ? { kind: 'declared', command: 'npm test' } : { kind: 'none' }));
+    const intoRelease = { ...code, baseRefName: 'release/2' } as PrLaneFacts;
+    const { call, record } = readingSetup(intoRelease, baseGate);
+    expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required', message: expect.stringContaining('origin/release/2') });
+    expect(baseGate).toHaveBeenCalledWith('/repo', REL);
+    expect(record).not.toHaveBeenCalled();
+    // The same PR into main records.
+    expect(await readingSetup(code, baseGate).call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: true, record: { evidence: { baseRef: 'origin/main', baseSha: MAIN } } });
+  });
+
+  it('an unknown gate, or a base branch not in the repository, is refused', async () => {
+    const unknown = readingSetup(code, async () => ({ kind: 'unknown', detail: 'package.json on the base could not be parsed' }));
+    expect(await unknown.call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required' });
+    for (const baseRefName of ['gone', '-x', 'a..b']) {
+      const { call, record } = readingSetup({ ...code, baseRefName } as PrLaneFacts, async () => ({ kind: 'none' }));
+      expect(await call(READ_INPUT, BOT_CTX), baseRefName).toMatchObject({ ok: false, code: 'gate-required' });
       expect(record).not.toHaveBeenCalled();
-    }
-  });
-
-  it('a truncated or renamed file list is not docs-only', async () => {
-    for (const f of [{ ...docs, filesTruncated: true }, { ...docs, filesRenamed: true }, { ...docs, filesRenamed: undefined }]) {
-      const { call } = readingSetup(f as PrLaneFacts, async () => ({ kind: 'declared', command: 'npm test' }));
-      expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required' });
     }
   });
 
   it('a wake not known clean records no reading-only verdict either', async () => {
     for (const g of [true, 'unknown'] as const) {
-      const { call, record } = readingSetup(docs, async () => ({ kind: 'none' }), () => g);
+      const { call, record } = readingSetup(code, async () => ({ kind: 'none' }), () => g);
       expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'surface' });
       expect(record).not.toHaveBeenCalled();
     }
@@ -353,7 +373,7 @@ describe('verify.recordVerdict — reading-only bot verdicts (no worker)', () =>
 
   it('reading evidence takes exactly {reading: true}', async () => {
     for (const evidence of [{ reading: false }, { reading: true, taskId: TASK }, { reading: 'yes' }]) {
-      const { call } = readingSetup(docs, async () => ({ kind: 'none' }));
+      const { call } = readingSetup(code, async () => ({ kind: 'none' }));
       expect(await call({ ...READ_INPUT, evidence }, BOT_CTX)).toMatchObject({ ok: false, code: 'evidence-missing' });
     }
   });

@@ -115,13 +115,16 @@ const cap = (text: string): string => (text.length > BOT_REPO_GIT_OUTPUT_MAX
 
 const errText = (r: { stderr: string }): string => r.stderr.trim().split('\n')[0]?.slice(0, 200) ?? '';
 
-/** A rev that is a commit in the repository's object store, or the reason. */
-async function commitRefusal(root: string, rev: string, run: GitRead): Promise<string | null> {
-  const r = await run(['cat-file', '-e', `${rev}^{commit}`], root);
-  if (r.code === 0) return null;
+/** The commit a rev names in the repository's object store, resolved once
+ *  (every later git call of the tool uses this SHA, so a ref that moves
+ *  meanwhile changes nothing), or the reason it names none. */
+async function resolveCommit(root: string, rev: string, run: GitRead): Promise<{ sha: string } | { reason: string }> {
+  const r = await run(['rev-parse', '--verify', '--quiet', `${rev}^{commit}`], root);
+  const sha = r.stdout.trim();
+  if (r.code === 0 && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha)) return { sha };
   // The config check refused before git ran: say why.
-  if (r.stderr.startsWith('the repository\'s git config')) return r.stderr.slice(0, 300);
-  return `${rev} is not a commit in this repository's object store (a branch or pull request that was never fetched here is not; a verify worker fetches it)`;
+  if (r.stderr.startsWith('the repository\'s git config')) return { reason: r.stderr.slice(0, 300) };
+  return { reason: `${rev} is not a commit in this repository's object store (a branch or pull request that was never fetched here is not; a verify worker fetches it)` };
 }
 
 /** git_show: one file at a commit, or the listing of a folder there. */
@@ -130,9 +133,9 @@ export async function gitShow(root: string, input: { rev?: unknown; path?: unkno
   if (bad) return { ok: false, reason: bad };
   const rev = input.rev as string;
   const file = input.path as string;
-  const missing = await commitRefusal(root, rev, run);
-  if (missing) return { ok: false, reason: missing };
-  const object = `${rev}:${file}`;
+  const commit = await resolveCommit(root, rev, run);
+  if ('reason' in commit) return { ok: false, reason: commit.reason };
+  const object = `${commit.sha}:${file}`;
   const type = await run(['cat-file', '-t', object], root);
   if (type.code !== 0) return { ok: false, reason: `${file} does not exist at ${rev}` };
   const kind = type.stdout.trim();
@@ -140,17 +143,18 @@ export async function gitShow(root: string, input: { rev?: unknown; path?: unkno
     const ls = await run(['ls-tree', '--name-only', '-z', object], root);
     if (ls.code !== 0) return { ok: false, reason: `the folder ${file} at ${rev} could not be listed: ${errText(ls)}` };
     const names = ls.stdout.split('\0').filter(Boolean).filter((n) => protectedPatternOf(n) === null);
-    return { ok: true, text: cap(`${object} (folder)\n${names.join('\n')}`) };
+    return { ok: true, text: cap(`${rev}:${file} at ${commit.sha} (folder)\n${names.join('\n')}`) };
   }
   if (kind !== 'blob') return { ok: false, reason: `${file} at ${rev} is a ${kind || 'non-file object'}, not a file` };
   const size = await run(['cat-file', '-s', object], root);
   const bytes = Number.parseInt(size.stdout.trim(), 10);
   if (size.code !== 0 || !Number.isSafeInteger(bytes)) return { ok: false, reason: `${file} at ${rev} could not be read` };
-  if (bytes > BLOB_READ_MAX) return { ok: true, text: `${object} (${bytes} bytes): too large to show` };
+  const shown = `${rev}:${file} at ${commit.sha}`;
+  if (bytes > BLOB_READ_MAX) return { ok: true, text: `${shown} (${bytes} bytes): too large to show` };
   const blob = await run(['cat-file', 'blob', object], root);
   if (blob.code !== 0) return { ok: false, reason: `${file} at ${rev} could not be read: ${errText(blob)}` };
-  if (blob.stdout.slice(0, 8000).includes('\0')) return { ok: true, text: `${object} (${bytes} bytes): a binary file` };
-  return { ok: true, text: cap(`${object} (${bytes} bytes)\n${blob.stdout}`) };
+  if (blob.stdout.slice(0, 8000).includes('\0')) return { ok: true, text: `${shown} (${bytes} bytes): a binary file` };
+  return { ok: true, text: cap(`${shown} (${bytes} bytes)\n${blob.stdout}`) };
 }
 
 /** git_diff: what head changed since it left base (base...head), as
@@ -170,11 +174,13 @@ export async function gitDiff(
   }
   const base = input.base as string;
   const head = input.head as string;
-  for (const rev of [base, head]) {
-    const missing = await commitRefusal(root, rev, run);
-    if (missing) return { ok: false, reason: missing };
-  }
-  const range = `${base}...${head}`;
+  // Each rev resolved once: the name-status run and the patch run read the
+  // same two commits.
+  const b = await resolveCommit(root, base, run);
+  if ('reason' in b) return { ok: false, reason: b.reason };
+  const h = await resolveCommit(root, head, run);
+  if ('reason' in h) return { ok: false, reason: h.reason };
+  const range = `${b.sha}...${h.sha}`;
   // A submodule is one line, never its files' diff (diff.submodule=diff
   // would show files inside it that no protected-path check sees).
   const flags = ['--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--submodule=short'];
@@ -186,7 +192,7 @@ export async function gitDiff(
   for (let i = 0; i + 1 < parts.length; i += 2) if (parts[i]) rows.push({ status: parts[i], file: parts[i + 1] });
   const hidden = rows.filter((r) => protectedPatternOf(r.file) !== null);
   const lines = rows.map((r) => `${r.status}\t${r.file}${protectedPatternOf(r.file) !== null ? '  (protected: not shown)' : ''}`);
-  const head1 = `${range}: ${rows.length} file${rows.length === 1 ? '' : 's'} changed\n${lines.join('\n')}`;
+  const head1 = `${base}...${head} (${range}): ${rows.length} file${rows.length === 1 ? '' : 's'} changed\n${lines.join('\n')}`;
   if (rows.length === hidden.length) return { ok: true, text: cap(head1) };
   const exclude = [...new Set(hidden.map((r) => `:(exclude,literal)${r.file}`))];
   const patch = await run(['diff', ...flags, range, '--', ...(scope.length > 0 ? scope : ['.']), ...exclude], root);

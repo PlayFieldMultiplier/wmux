@@ -3,7 +3,7 @@
   "layer": "regression",
   "runs": 1,
   "model": "stub",
-  "description": "A repository with no gate; the lead's worker commits one .md file and its PR opens. The reviewer reads it and records a reading-only verdict (evidence {reading: true}) with no verify worker: main records it as docs-only, and the lane counts it and posts a ready-to-merge card. Nothing is installed.",
+  "description": "A repository with no gate; the lead's worker commits one .md file and its PR opens. The reviewer reads it and records a reading-only verdict (evidence {reading: true}) with no verify worker: main finds no gate on origin/main and records that commit, and the lane counts it and posts a ready-to-merge card. Nothing is installed.",
   "setup": {
     "repo": {
       "gate": false
@@ -211,6 +211,6 @@
     ],
     "pr": 1,
     "verifier": "verifier",
-    "reading": "docs-only"
+    "reading": "no-gate"
   }
 }

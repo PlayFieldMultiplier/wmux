@@ -47,7 +47,7 @@ describe('real git', () => {
     const r = await gitDiff(repo, { base: 'main', head });
     expect(r.ok).toBe(true);
     const text = r.ok ? r.text : '';
-    expect(text).toContain(`main...${head}: 2 files changed`);
+    expect(text).toMatch(new RegExp(`^main\\.\\.\\.${head} \\([0-9a-f]{40}\\.\\.\\.${head}\\): 2 files changed`));
     expect(text).toContain('A\tdocs/guide.md');
     expect(text).toContain('A\t.env  (protected: not shown)');
     expect(text).toContain('+Hello.');

@@ -3,107 +3,107 @@
   "schemaVersion": 1,
   "scenario": "reviewer-reads-docs-no-worker",
   "run": 1,
-  "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+  "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
   "botKeys": {
-   "lead": "bot-f1d69d2a",
-   "verifier": "bot-022f5b36"
+   "lead": "bot-4d28a083",
+   "verifier": "bot-c1ffa0d9"
   },
   "injected": [
    {
     "label": "ask-lead",
     "kind": "card",
-    "id": "c-mvi40htc15f45d3ce3",
+    "id": "c-mviepqy15e6bb02239",
     "threadId": "general",
-    "at": 1792586995184
+    "at": 1792604969636
    }
   ],
   "actions": [
    {
-    "at": 1792586938432,
+    "at": 1792604909315,
     "do": "waitFor",
     "label": "repo watch baseline",
     "ok": true,
-    "doneAt": 1792586995176
+    "doneAt": 1792604969636
    },
    {
-    "at": 1792586995184,
+    "at": 1792604969636,
     "do": "post",
     "label": "ask-lead",
     "result": {
      "ok": true,
      "card": {
       "version": 1,
-      "id": "c-mvi40htc15f45d3ce3",
+      "id": "c-mviepqy15e6bb02239",
       "seq": 1,
-      "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+      "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
       "threadId": "general",
       "kind": "human",
-      "at": 1792586995248,
+      "at": 1792604969641,
       "actor": {
        "kind": "human"
       },
       "title": "Note",
       "body": "Please add the note.",
       "refs": {
-       "botId": "bot-f1d69d2a",
+       "botId": "bot-4d28a083",
        "botIds": [
-        "bot-f1d69d2a"
+        "bot-4d28a083"
        ]
       }
      },
      "addressee": {
-      "botId": "bot-f1d69d2a",
+      "botId": "bot-4d28a083",
       "role": "lead"
      },
-     "wakeId": "w-mvi40hto-022e9347",
+     "wakeId": "w-mviepqy4-0f927e3a",
      "addressees": [
       {
-       "botId": "bot-f1d69d2a",
+       "botId": "bot-4d28a083",
        "role": "lead",
-       "wakeId": "w-mvi40hto-022e9347"
+       "wakeId": "w-mviepqy4-0f927e3a"
       }
      ]
     }
    },
    {
-    "at": 1792586995340,
+    "at": 1792604969654,
     "do": "waitFor",
     "label": "worker pushed its branch",
     "ok": true,
-    "doneAt": 1792587011690
+    "doneAt": 1792604979710
    },
    {
-    "at": 1792587011690,
+    "at": 1792604979710,
     "do": "gh",
     "op": "addPr"
    },
    {
-    "at": 1792587011802,
+    "at": 1792604979759,
     "do": "waitFor",
     "label": "pr.opened",
     "ok": true,
-    "doneAt": 1792587055588
+    "doneAt": 1792605029573
    },
    {
-    "at": 1792587055588,
+    "at": 1792605029573,
     "do": "waitFor",
     "label": "verdict recorded",
     "ok": true,
-    "doneAt": 1792587062196
+    "doneAt": 1792605035114
    },
    {
-    "at": 1792587062197,
+    "at": 1792605035114,
     "do": "waitFor",
     "label": "lane outcome",
     "ok": true,
-    "doneAt": 1792587062719
+    "doneAt": 1792605035116
    },
    {
-    "at": 1792587062720,
+    "at": 1792605035116,
     "do": "waitFor",
     "label": "quiet",
     "ok": true,
-    "doneAt": 1792587065756
+    "doneAt": 1792605038139
    }
   ],
   "harnessErrors": [],
@@ -191,95 +191,95 @@
   },
   "timeouts": [],
   "saved": {
-   "pr1Head": "c22512ff9118c19ad253c08b359737d73d70d179",
-   "pr1Branch": "wtask/docs-add-a-note-tgcdv17m"
+   "pr1Head": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0",
+   "pr1Branch": "wtask/docs-add-a-note-7iqsmnpc"
   },
   "launches": [
    {
     "ok": true,
-    "runId": "2026-10-21T12-48-46-verify-f9c325a1",
-    "evidenceDir": "/checkout/.claude/skills/verify-wmux/evidence/2026-10-21T12-48-46-verify-f9c325a1"
+    "runId": "2026-10-21T17-48-27-verify-f9423261",
+    "evidenceDir": "/checkout/.claude/skills/verify-wmux/evidence/2026-10-21T17-48-27-verify-f9423261"
    }
   ],
   "records": [],
   "facts": [
    {
-    "id": "f-0mvi40htc-4496bf2746ba",
+    "id": "f-0mviepqy1-e39a9a0c16a4",
     "seq": 1,
     "kind": "human.message",
-    "at": 1792586995248,
-    "dedupeKey": "human.message:c-mvi40htc15f45d3ce3:bot-f1d69d2a",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "at": 1792604969641,
+    "dedupeKey": "human.message:c-mviepqy15e6bb02239:bot-4d28a083",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "ref": {
-     "botId": "bot-f1d69d2a",
-     "messageId": "c-mvi40htc15f45d3ce3:bot-f1d69d2a"
+     "botId": "bot-4d28a083",
+     "messageId": "c-mviepqy15e6bb02239:bot-4d28a083"
     },
     "actor": {
      "kind": "human"
     },
     "payload": {
      "text": "Please add the note.",
-     "cardId": "c-mvi40htc15f45d3ce3",
+     "cardId": "c-mviepqy15e6bb02239",
      "threadId": "general",
      "source": "desktop"
     }
    },
    {
-    "id": "f-0mvi40vzo-2676269b37f5",
+    "id": "f-0mviepzn8-e90cb39d3286",
     "seq": 2,
     "kind": "task.done",
-    "at": 1792587013620,
-    "dedupeKey": "task.done:wtask-mvi40pfc-tgcdv17m",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "at": 1792604980916,
+    "dedupeKey": "task.done:wtask-mviepv48-7iqsmnpc",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "ref": {
-     "taskId": "wtask-mvi40pfc-tgcdv17m",
-     "botId": "bot-f1d69d2a"
+     "taskId": "wtask-mviepv48-7iqsmnpc",
+     "botId": "bot-4d28a083"
     },
     "actor": {
      "kind": "system"
     },
     "payload": {
-     "taskWorkspaceId": "ws-62ffbd01-1e08-4b67-93bd-420a534b4c0d",
+     "taskWorkspaceId": "ws-04185192-c055-41eb-8552-5b1e531280f6",
      "title": "docs: add a note",
      "status": "review_requested",
      "from": "working",
      "by": "worker",
-     "summary": "fake worker: review_requested for wtask-mvi40pfc-tgcdv17m"
+     "summary": "fake worker: review_requested for wtask-mviepv48-7iqsmnpc"
     }
    },
    {
-    "id": "f-0mvi41ddo-34ec532fa782",
+    "id": "f-0mvieqihg-95074aff0ec6",
     "seq": 3,
     "kind": "bot.notice",
-    "at": 1792587036156,
-    "dedupeKey": "bot.notice:bot-f1d69d2a:worker.started:wtask-mvi40pfc-tgcdv17m",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "at": 1792605005332,
+    "dedupeKey": "bot.notice:bot-4d28a083:worker.started:wtask-mviepv48-7iqsmnpc",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "ref": {
-     "botId": "bot-f1d69d2a",
-     "messageId": "worker.started:wtask-mvi40pfc-tgcdv17m",
-     "taskId": "wtask-mvi40pfc-tgcdv17m"
+     "botId": "bot-4d28a083",
+     "messageId": "worker.started:wtask-mviepv48-7iqsmnpc",
+     "taskId": "wtask-mviepv48-7iqsmnpc"
     },
     "actor": {
      "kind": "system"
     },
     "payload": {
      "topic": "worker.started",
-     "title": "Your worker for \"docs: add a note\" started (task wtask-mvi40pfc-tgcdv17m).",
+     "title": "Your worker for \"docs: add a note\" started (task wtask-mviepv48-7iqsmnpc).",
      "body": "It reports in its ledger row; you are woken when it finishes or needs input.",
      "threadId": "general",
      "guest": false
     }
    },
    {
-    "id": "f-0mvi41s1g-dd30a25b45db",
+    "id": "f-0mvier10a-4762d454d540",
     "seq": 4,
     "kind": "pr.opened",
-    "at": 1792587055156,
+    "at": 1792605029338,
     "dedupeKey": "pr.opened:github.com/acme/app#1",
     "repoKey": "github.com/acme/app",
     "ref": {
      "pr": 1,
-     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+     "headSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0"
     },
     "actor": {
      "kind": "github",
@@ -288,7 +288,7 @@
     "payload": {
      "author": "octo",
      "title": "docs: add a note",
-     "headRefName": "wtask/docs-add-a-note-tgcdv17m",
+     "headRefName": "wtask/docs-add-a-note-7iqsmnpc",
      "isCrossRepository": false,
      "isDraft": false,
      "labels": [],
@@ -297,15 +297,15 @@
     }
    },
    {
-    "id": "f-0mvi41s1g-8e116cdac378",
+    "id": "f-0mvier10a-9fc71200eef9",
     "seq": 5,
     "kind": "ci.green",
-    "at": 1792587055156,
-    "dedupeKey": "ci.green:github.com/acme/app#1:c22512ff9118c19ad253c08b359737d73d70d179",
+    "at": 1792605029338,
+    "dedupeKey": "ci.green:github.com/acme/app#1:5095c1aa5eec221119b35e1090d8b5ed77b3cfc0",
     "repoKey": "github.com/acme/app",
     "ref": {
      "pr": 1,
-     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+     "headSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0"
     },
     "actor": {
      "kind": "github",
@@ -314,7 +314,7 @@
     "payload": {
      "author": "octo",
      "title": "docs: add a note",
-     "headRefName": "wtask/docs-add-a-note-tgcdv17m",
+     "headRefName": "wtask/docs-add-a-note-7iqsmnpc",
      "isCrossRepository": false,
      "isDraft": false,
      "labels": [],
@@ -323,76 +323,76 @@
     }
    },
    {
-    "id": "f-0mvi41x8f-e1c28d3a4015",
+    "id": "f-0mvier538-3fd9f1e561d8",
     "seq": 6,
     "kind": "verdict.recorded",
-    "at": 1792587061887,
-    "dedupeKey": "verdict.recorded:github.com/acme/app#1:c22512ff9118c19ad253c08b359737d73d70d179:bot-022f5b36",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "at": 1792605034628,
+    "dedupeKey": "verdict.recorded:github.com/acme/app#1:5095c1aa5eec221119b35e1090d8b5ed77b3cfc0:bot-c1ffa0d9",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "repoKey": "github.com/acme/app",
     "ref": {
      "pr": 1,
-     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
-     "botId": "bot-022f5b36",
+     "headSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0",
+     "botId": "bot-c1ffa0d9",
      "taskId": "reading-only"
     },
     "actor": {
      "kind": "bot",
-     "id": "bot-022f5b36"
+     "id": "bot-c1ffa0d9"
     },
     "payload": {
      "verdict": "pass",
      "summary": "Read the change: one Markdown note, nothing wrong.",
      "agent": "bot:verifier",
-     "gateHeadSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+     "gateHeadSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0"
     }
    }
   ],
   "wakes": [
    {
-    "id": "w-mvi40hto-022e9347",
-    "botId": "bot-f1d69d2a",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "id": "w-mviepqy4-0f927e3a",
+    "botId": "bot-4d28a083",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "reason": {
      "kind": "human",
      "text": "Please add the note.",
      "source": "desktop",
-     "clientMessageId": "c-mvi40htc15f45d3ce3",
-     "runId": "run-c-mvi40htc15f45d3ce3"
+     "clientMessageId": "c-mviepqy15e6bb02239",
+     "runId": "run-c-mviepqy15e6bb02239"
     },
     "threadId": "general",
     "priority": 0,
-    "enqueuedAt": 1792586995260,
+    "enqueuedAt": 1792604969644,
     "attempts": 1,
     "state": "done"
    },
    {
-    "id": "w-mvi40wk5-722b9873",
-    "botId": "bot-f1d69d2a",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "id": "w-mviepzqu-f5fd9322",
+    "botId": "bot-4d28a083",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "reason": {
      "kind": "facts",
      "factIds": [
-      "task.gated:wtask-mvi40pfc-tgcdv17m@3"
+      "task.gated:wtask-mviepv48-7iqsmnpc@3"
      ],
      "trigger": {
       "kind": "task.done"
      }
     },
-    "threadId": "task:wtask-mvi40pfc-tgcdv17m",
+    "threadId": "task:wtask-mviepv48-7iqsmnpc",
     "priority": 1,
-    "enqueuedAt": 1792587014357,
+    "enqueuedAt": 1792604981046,
     "attempts": 1,
     "state": "done"
    },
    {
-    "id": "w-mvi41s1j-5101166c",
-    "botId": "bot-022f5b36",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "id": "w-mvier10a-5d7edbb3",
+    "botId": "bot-c1ffa0d9",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "reason": {
      "kind": "facts",
      "factIds": [
-      "f-0mvi41s1g-dd30a25b45db"
+      "f-0mvier10a-4762d454d540"
      ],
      "trigger": {
       "kind": "pr.opened",
@@ -403,7 +403,7 @@
     },
     "threadId": "pr:github.com/acme/app#1",
     "priority": 2,
-    "enqueuedAt": 1792587055159,
+    "enqueuedAt": 1792605029338,
     "attempts": 1,
     "state": "done"
    }
@@ -412,8 +412,8 @@
   "bots": [
    {
     "version": 1,
-    "id": "bot-f1d69d2a",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "id": "bot-4d28a083",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "role": "lead",
     "template": "developer",
     "name": "Lead",
@@ -423,9 +423,9 @@
      "args": [
       "/checkout/scripts/acp-stub.mjs",
       "--script",
-      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/stub/lead.json",
+      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/stub/lead.json",
       "--log",
-      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/logs/stub-lead.jsonl"
+      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/logs/stub-lead.jsonl"
      ]
     },
     "workerAgent": {
@@ -454,17 +454,17 @@
     },
     "repo": {
      "repoKey": "github.com/acme/app",
-     "repoPath": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app"
+     "repoPath": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app"
     },
     "hue": 5,
     "enabled": true,
-    "createdAt": 1792586938373,
-    "updatedAt": 1792586938373
+    "createdAt": 1792604909311,
+    "updatedAt": 1792604909311
    },
    {
     "version": 1,
-    "id": "bot-022f5b36",
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "id": "bot-c1ffa0d9",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "role": "verifier",
     "template": "reviewer",
     "name": "Verifier",
@@ -474,9 +474,9 @@
      "args": [
       "/checkout/scripts/acp-stub.mjs",
       "--script",
-      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/stub/verifier.json",
+      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/stub/verifier.json",
       "--log",
-      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/logs/stub-verifier.jsonl"
+      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/logs/stub-verifier.jsonl"
      ]
     },
     "workerAgent": {
@@ -499,24 +499,24 @@
     },
     "repo": {
      "repoKey": "github.com/acme/app",
-     "repoPath": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app"
+     "repoPath": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app"
     },
     "hue": 2,
     "enabled": true,
-    "createdAt": 1792586938411,
-    "updatedAt": 1792586938411
+    "createdAt": 1792604909314,
+    "updatedAt": 1792604909314
    }
   ],
   "ledger": [
    {
     "schemaVersion": 1,
-    "id": "wtask-mvi40pfc-tgcdv17m",
-    "taskWorkspaceId": "ws-62ffbd01-1e08-4b67-93bd-420a534b4c0d",
-    "ownerWorkspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "id": "wtask-mviepv48-7iqsmnpc",
+    "taskWorkspaceId": "ws-04185192-c055-41eb-8552-5b1e531280f6",
+    "ownerWorkspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "title": "docs: add a note",
     "status": "review_requested",
     "rev": 3,
-    "updatedAt": 1792587014353,
+    "updatedAt": 1792604981045,
     "updatedBy": {
      "kind": "system",
      "workspaceId": "ws-daemon"
@@ -524,27 +524,27 @@
     "dispatch": {
      "origin": {
       "kind": "bot",
-      "botId": "bot-f1d69d2a",
+      "botId": "bot-4d28a083",
       "tainted": false,
       "guest": false
      },
      "preset": "default",
      "repoKey": "github.com/acme/app",
-     "gitCommonDir": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app/.git",
-     "gitWorktreeDir": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app/.git/worktrees/docs-add-a-note-tgcdv17m",
+     "gitCommonDir": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app/.git",
+     "gitWorktreeDir": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app/.git/worktrees/docs-add-a-note-7iqsmnpc",
      "originPin": "ssh://git@github.com/acme/app.git",
-     "baseOid": "9f1ed557290370cf7385e9f80458497c006c66ad"
+     "baseOid": "40acf3f95caef6923bf0e2d52738b163a3c36356"
     },
-    "summary": "fake worker: review_requested for wtask-mvi40pfc-tgcdv17m",
+    "summary": "fake worker: review_requested for wtask-mviepv48-7iqsmnpc",
     "reportedAtRev": 2,
     "gate": {
      "exitCode": 0,
      "tail": "this project declares no verify script and no npm lint/test scripts, so there is no gate to run",
-     "at": 1792587014352,
+     "at": 1792604981045,
      "command": "none",
      "recordedBy": "system",
      "skipped": "no_gate_command",
-     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+     "headSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0",
      "reportRev": 2
     }
    }
@@ -554,61 +554,63 @@
     "version": 2,
     "repoKey": "github.com/acme/app",
     "prNumber": 1,
-    "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+    "headSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0",
     "verdict": "pass",
     "principal": {
-     "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
-     "botId": "bot-022f5b36",
+     "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
+     "botId": "bot-c1ffa0d9",
      "agent": "bot:verifier"
     },
     "evidence": {
      "taskId": "reading-only",
-     "gateHeadSha": "c22512ff9118c19ad253c08b359737d73d70d179",
-     "reading": "docs-only"
+     "gateHeadSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0",
+     "reading": "no-gate",
+     "baseRef": "origin/main",
+     "baseSha": "40acf3f95caef6923bf0e2d52738b163a3c36356"
     },
     "summary": "Read the change: one Markdown note, nothing wrong.",
-    "at": 1792587061887
+    "at": 1792605034628
    }
   ],
   "effects": null,
   "cards": [
    {
     "version": 1,
-    "id": "c-mvi40htc15f45d3ce3",
+    "id": "c-mviepqy15e6bb02239",
     "seq": 1,
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "threadId": "general",
     "kind": "human",
-    "at": 1792586995248,
+    "at": 1792604969641,
     "actor": {
      "kind": "human"
     },
     "title": "Note",
     "body": "Please add the note.",
     "refs": {
-     "botId": "bot-f1d69d2a",
+     "botId": "bot-4d28a083",
      "botIds": [
-      "bot-f1d69d2a"
+      "bot-4d28a083"
      ]
     }
    },
    {
     "version": 1,
-    "id": "c-mvi40vzw3bf750cd17",
+    "id": "c-mviepzn94b61f11293",
     "seq": 2,
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
-    "threadId": "task:wtask-mvi40pfc-tgcdv17m",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
+    "threadId": "task:wtask-mviepv48-7iqsmnpc",
     "kind": "fact",
-    "at": 1792587013620,
+    "at": 1792604980916,
     "actor": {
      "kind": "system"
     },
     "title": "Task reported \u00b7 in review: docs: add a note",
-    "body": "fake worker: review_requested for wtask-mvi40pfc-tgcdv17m",
+    "body": "fake worker: review_requested for wtask-mviepv48-7iqsmnpc",
     "refs": {
-     "taskId": "wtask-mvi40pfc-tgcdv17m",
-     "botId": "bot-f1d69d2a",
-     "factId": "f-0mvi40vzo-2676269b37f5"
+     "taskId": "wtask-mviepv48-7iqsmnpc",
+     "botId": "bot-4d28a083",
+     "factId": "f-0mviepzn8-e90cb39d3286"
     },
     "closes": true,
     "notice": {
@@ -620,12 +622,12 @@
    },
    {
     "version": 1,
-    "id": "c-mvi40wk439bcffa1a0",
+    "id": "c-mviepzqt34bcc32911",
     "seq": 3,
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
-    "threadId": "task:wtask-mvi40pfc-tgcdv17m",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
+    "threadId": "task:wtask-mviepv48-7iqsmnpc",
     "kind": "fact",
-    "at": 1792587014356,
+    "at": 1792604981045,
     "actor": {
      "kind": "system"
     },
@@ -637,88 +639,62 @@
       "reason": "no_gate_command"
      }
     },
-    "clientPostId": "task.gated:wtask-mvi40pfc-tgcdv17m@3"
+    "clientPostId": "task.gated:wtask-mviepv48-7iqsmnpc@3"
    },
    {
     "version": 1,
-    "id": "c-mvi41x8n21bd140028",
+    "id": "c-mvier53937438ab2e1",
     "seq": 4,
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "threadId": "pr:github.com/acme/app#1",
     "kind": "fact",
-    "at": 1792587061887,
+    "at": 1792605034628,
     "actor": {
      "kind": "system"
     },
-    "title": "Verdict pass for #1 at c22512f by Verifier",
+    "title": "Verdict pass for #1 at 5095c1a by Verifier",
     "body": "Read the change: one Markdown note, nothing wrong.",
     "refs": {
      "pr": 1,
-     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+     "headSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0",
      "taskId": "reading-only",
-     "botId": "bot-022f5b36",
-     "factId": "f-0mvi41x8f-e1c28d3a4015"
+     "botId": "bot-c1ffa0d9",
+     "factId": "f-0mvier538-3fd9f1e561d8"
     },
     "notice": {
      "code": "verdict.recorded",
      "args": {
       "verdict": "pass",
       "pr": 1,
-      "sha": "c22512f",
+      "sha": "5095c1a",
       "bot": "Verifier"
      }
     }
    },
    {
     "version": 1,
-    "id": "c-mvi41xh21d4c38b51e",
+    "id": "c-mvier54g05c8430414",
     "seq": 5,
-    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "workspaceId": "ws-226a544f-cf5a-4cfa-af59-7817b420860c",
     "threadId": "pr:github.com/acme/app#1",
     "kind": "status",
-    "at": 1792587062198,
+    "at": 1792605034672,
     "actor": {
      "kind": "system"
     },
-    "title": "Ready to merge #1 at c22512f: every lane predicate passed",
-    "body": "Verified by bot-022f5b36 at c22512f; CI green.\nLane auto-merge is off: merge it from the PR when you are ready.",
+    "title": "Ready to merge #1 at 5095c1a: every lane predicate passed",
+    "body": "Verified by bot-c1ffa0d9 at 5095c1a; CI green.\nLane auto-merge is off: merge it from the PR when you are ready.",
     "refs": {
      "pr": 1
     },
-    "clientPostId": "lane-ready:github.com/acme/app#1:c22512ff9118c19ad253c08b359737d73d70d179"
+    "clientPostId": "lane-ready:github.com/acme/app#1:5095c1aa5eec221119b35e1090d8b5ed77b3cfc0"
    }
   ],
   "stub": {},
   "workers": [
    {
-    "at": 1792586933767,
-    "pid": 40647,
-    "cwd": "/home/user",
-    "event": "start",
-    "taskId": null,
-    "agent": "claude",
-    "rulesPresent": false,
-    "strict": false,
-    "mcpServers": null,
-    "allow": [],
-    "codexMcp": {
-     "featuresOff": [],
-     "serversOff": [],
-     "tables": []
-    },
-    "args": [
-     "--version"
-    ]
-   },
-   {
-    "at": 1792586933768,
-    "pid": 40647,
-    "cwd": "/home/user",
-    "event": "no-task-id"
-   },
-   {
-    "at": 1792586933830,
-    "pid": 40648,
+    "at": 1792604909087,
+    "pid": 23435,
     "cwd": "/home/user",
     "event": "start",
     "taskId": null,
@@ -739,14 +715,40 @@
     ]
    },
    {
-    "at": 1792586933830,
-    "pid": 40648,
+    "at": 1792604909087,
+    "pid": 23435,
     "cwd": "/home/user",
     "event": "no-task-id"
    },
    {
-    "at": 1792586934126,
-    "pid": 40650,
+    "at": 1792604909087,
+    "pid": 23434,
+    "cwd": "/home/user",
+    "event": "start",
+    "taskId": null,
+    "agent": "claude",
+    "rulesPresent": false,
+    "strict": false,
+    "mcpServers": null,
+    "allow": [],
+    "codexMcp": {
+     "featuresOff": [],
+     "serversOff": [],
+     "tables": []
+    },
+    "args": [
+     "--version"
+    ]
+   },
+   {
+    "at": 1792604909087,
+    "pid": 23434,
+    "cwd": "/home/user",
+    "event": "no-task-id"
+   },
+   {
+    "at": 1792604909460,
+    "pid": 23437,
     "cwd": "/home/user",
     "event": "start",
     "taskId": null,
@@ -766,17 +768,17 @@
     ]
    },
    {
-    "at": 1792586934127,
-    "pid": 40650,
+    "at": 1792604909460,
+    "pid": 23437,
     "cwd": "/home/user",
     "event": "no-task-id"
    },
    {
-    "at": 1792587008888,
-    "pid": 42916,
-    "cwd": "/home/user/.wmux-verify-f9c325a1/worktrees/11face08056f/docs-add-a-note-tgcdv17m",
+    "at": 1792604978361,
+    "pid": 24467,
+    "cwd": "/home/user/.wmux-verify-f9423261/worktrees/d658bcbf42fd/docs-add-a-note-7iqsmnpc",
     "event": "start",
-    "taskId": "wtask-mvi40pfc-tgcdv17m",
+    "taskId": "wtask-mviepv48-7iqsmnpc",
     "agent": "claude",
     "rulesPresent": false,
     "strict": true,
@@ -791,9 +793,9 @@
     },
     "args": [
      "--session-id",
-     "c15cd59e-08a2-4721-ac89-474c768265e0",
-     "--settings=/home/user/.wmux-verify-f9c325a1/factory/worker-settings/c47239d2316f.json",
-     "--mcp-config=/home/user/.wmux-verify-f9c325a1/factory/worker-mcp/bd53da141c3b.json",
+     "7c9d4cb5-5fd8-4978-a109-eeec94b55a4d",
+     "--settings=/home/user/.wmux-verify-f9423261/factory/worker-settings/c47239d2316f.json",
+     "--mcp-config=/home/user/.wmux-verify-f9423261/factory/worker-mcp/bd53da141c3b.json",
      "--strict-mcp-config",
      "--setting-sources=project",
      "--model",
@@ -807,30 +809,30 @@
     ]
    },
    {
-    "at": 1792587011582,
-    "pid": 42916,
-    "cwd": "/home/user/.wmux-verify-f9c325a1/worktrees/11face08056f/docs-add-a-note-tgcdv17m",
+    "at": 1792604979212,
+    "pid": 24467,
+    "cwd": "/home/user/.wmux-verify-f9423261/worktrees/d658bcbf42fd/docs-add-a-note-7iqsmnpc",
     "event": "commit",
     "add": 0,
     "commit": 0,
     "push": 0,
     "pushErr": "",
-    "branch": "wtask/docs-add-a-note-tgcdv17m",
-    "head": "c22512ff9118c19ad253c08b359737d73d70d179"
+    "branch": "wtask/docs-add-a-note-7iqsmnpc",
+    "head": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0"
    },
    {
-    "at": 1792587013632,
-    "pid": 42916,
-    "cwd": "/home/user/.wmux-verify-f9c325a1/worktrees/11face08056f/docs-add-a-note-tgcdv17m",
+    "at": 1792604980919,
+    "pid": 24467,
+    "cwd": "/home/user/.wmux-verify-f9423261/worktrees/d658bcbf42fd/docs-add-a-note-7iqsmnpc",
     "event": "ledger_update",
     "ok": true,
-    "text": "{\n  \"ok\": true,\n  \"entry\": {\n    \"schemaVersion\": 1,\n    \"id\": \"wtask-mvi40pfc-tgcdv17m\",\n    \"taskWorkspaceId\": \"ws-62ffbd01-1e08-4b67-93bd-420a534b4c0d\",\n    \"ownerWorkspaceId\": \"ws-7d409530-f9e4-494d-99be-071d574f2e42\",\n    \"title\": \"docs: add a note\",\n    \"status\": \"review_requested\",\n    \"rev\": 2,\n    \"updatedAt\": 1792587013620,\n    \"updatedBy\": {\n      \"kind\": \"worker\",\n      \"workspaceId\": \"ws-62ffbd01-1e08-4b67-93bd-420a534b4c0d\"\n    },\n    \"dispatch\": {\n      \"origin\": {\n        \"kind\": \"bot\",\n        \"botId\": \"bot-f1d69d2a\",\n        \"tainted\": false,\n        \"guest\": false\n      },\n      \"preset\": \"default\",\n      \"repoKey\": \"github.com/acme/app\",\n      \"gitCommonDir\": \"/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app/.git\","
+    "text": "{\n  \"ok\": true,\n  \"entry\": {\n    \"schemaVersion\": 1,\n    \"id\": \"wtask-mviepv48-7iqsmnpc\",\n    \"taskWorkspaceId\": \"ws-04185192-c055-41eb-8552-5b1e531280f6\",\n    \"ownerWorkspaceId\": \"ws-226a544f-cf5a-4cfa-af59-7817b420860c\",\n    \"title\": \"docs: add a note\",\n    \"status\": \"review_requested\",\n    \"rev\": 2,\n    \"updatedAt\": 1792604980916,\n    \"updatedBy\": {\n      \"kind\": \"worker\",\n      \"workspaceId\": \"ws-04185192-c055-41eb-8552-5b1e531280f6\"\n    },\n    \"dispatch\": {\n      \"origin\": {\n        \"kind\": \"bot\",\n        \"botId\": \"bot-4d28a083\",\n        \"tainted\": false,\n        \"guest\": false\n      },\n      \"preset\": \"default\",\n      \"repoKey\": \"github.com/acme/app\",\n      \"gitCommonDir\": \"/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app/.git\","
    }
   ],
   "gh": {
    "calls": [
     {
-     "at": 1792586935729,
+     "at": 1792604909648,
      "argv": [
       "api",
       "--hostname",
@@ -844,7 +846,7 @@
      "exit": 0
     },
     {
-     "at": 1792586995006,
+     "at": 1792604969275,
      "argv": [
       "api",
       "graphql",
@@ -857,12 +859,12 @@
       "-f",
       "repo=app"
      ],
-     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app",
      "handled": true,
      "exit": 0
     },
     {
-     "at": 1792587004225,
+     "at": 1792604974928,
      "argv": [
       "repo",
       "view",
@@ -871,26 +873,26 @@
       "--jq",
       ".defaultBranchRef.name"
      ],
-     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app",
      "handled": false,
      "exit": 1,
      "error": "fake-gh: unsupported repo"
     },
     {
-     "at": 1792587005995,
+     "at": 1792604975194,
      "argv": [
       "pr",
       "view",
       "--json",
       "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
      ],
-     "cwd": "/home/user/.wmux-verify-f9c325a1/worktrees/11face08056f/docs-add-a-note-tgcdv17m",
+     "cwd": "/home/user/.wmux-verify-f9423261/worktrees/d658bcbf42fd/docs-add-a-note-7iqsmnpc",
      "handled": true,
      "exit": 1,
-     "error": "no pull requests found for branch \"wtask/docs-add-a-note-tgcdv17m\""
+     "error": "no pull requests found for branch \"wtask/docs-add-a-note-7iqsmnpc\""
     },
     {
-     "at": 1792587010940,
+     "at": 1792604979070,
      "argv": [
       "repo",
       "view",
@@ -906,7 +908,7 @@
      "error": "fake-gh: unsupported repo"
     },
     {
-     "at": 1792587013758,
+     "at": 1792604980952,
      "argv": [
       "repo",
       "view",
@@ -914,13 +916,13 @@
       "--json",
       "defaultBranchRef"
      ],
-     "cwd": "/home/user/.wmux-verify-f9c325a1",
+     "cwd": "/home/user/.wmux-verify-f9423261",
      "handled": false,
      "exit": 1,
      "error": "fake-gh: unsupported repo"
     },
     {
-     "at": 1792587055146,
+     "at": 1792605029336,
      "argv": [
       "api",
       "graphql",
@@ -933,12 +935,12 @@
       "-f",
       "repo=app"
      ],
-     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app",
      "handled": true,
      "exit": 0
     },
     {
-     "at": 1792587061706,
+     "at": 1792605034561,
      "argv": [
       "api",
       "graphql",
@@ -953,12 +955,12 @@
       "-F",
       "number=1"
      ],
-     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app",
      "handled": true,
      "exit": 0
     },
     {
-     "at": 1792587061873,
+     "at": 1792605034587,
      "argv": [
       "api",
       "graphql",
@@ -973,12 +975,12 @@
       "-F",
       "number=1"
      ],
-     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app",
      "handled": true,
      "exit": 0
     },
     {
-     "at": 1792587062078,
+     "at": 1792605034652,
      "argv": [
       "api",
       "graphql",
@@ -993,7 +995,7 @@
       "-F",
       "number=1"
      ],
-     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-hYcyZG/app",
      "handled": true,
      "exit": 0
     }
@@ -1008,24 +1010,21 @@
         "isDraft": false,
         "baseRefName": "main",
         "labels": [],
-        "createdAt": "2026-10-21T12:50:11.691Z",
+        "createdAt": "2026-10-21T17:49:39.711Z",
         "checks": "SUCCESS",
         "requiredChecks": [
          "build"
         ],
         "files": [
-         "worker-wtask-mvi40pfc-tgcdv17m.md"
+         "worker-wtask-mviepv48-7iqsmnpc.md"
         ],
         "mergeStateStatus": "CLEAN",
         "mergeable": "MERGEABLE",
         "author": "octo",
         "number": 1,
         "title": "docs: add a note",
-        "headRefName": "wtask/docs-add-a-note-tgcdv17m",
-        "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
-        "changeTypes": {
-         "worker-wtask-mvi40pfc-tgcdv17m.md": "ADDED"
-        }
+        "headRefName": "wtask/docs-add-a-note-7iqsmnpc",
+        "headSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0"
        }
       ],
       "issues": []
@@ -1046,7 +1045,7 @@
      "path": "verdicts.0.evidence",
      "value": {
       "taskId": "wtask-x",
-      "gateHeadSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+      "gateHeadSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0"
      }
     }
    ]
@@ -1065,11 +1064,11 @@
       "dispatch": {
        "origin": {
         "kind": "bot",
-        "botId": "bot-022f5b36"
+        "botId": "bot-c1ffa0d9"
        },
        "preset": "verify",
        "checkout": {
-        "sha": "c22512ff9118c19ad253c08b359737d73d70d179",
+        "sha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0",
         "detached": true
        }
       }
@@ -1119,7 +1118,7 @@
       "at": 1,
       "ref": {
        "pr": 1,
-       "headSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+       "headSha": "5095c1aa5eec221119b35e1090d8b5ed77b3cfc0"
       },
       "payload": {
        "reason": "verifier-pass-at-head:gate-required"

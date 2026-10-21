@@ -48,6 +48,9 @@ describe('revs and paths', () => {
   });
 });
 
+const FULL = 'abc1234'.padEnd(40, '0');
+const BASE = 'b'.repeat(40);
+
 describe('gitShow', () => {
   it('refuses a bad rev or path before running git', async () => {
     for (const input of [{ rev: '--output=x', path: 'README.md' }, { rev: SHA, path: '../x' }, { rev: SHA, path: '.env' }, { rev: SHA, path: '/etc/hosts' }]) {
@@ -57,24 +60,25 @@ describe('gitShow', () => {
     }
   });
 
-  it('reads a file at a commit with a fixed argv', async () => {
+  it('resolves the rev once and reads the file at that commit, with a fixed argv', async () => {
     const { run, calls } = fakeGit([
-      [`cat-file -e ${SHA}^{commit}`, {}],
-      [`cat-file -t ${SHA}:docs/a.md`, { stdout: 'blob\n' }],
-      [`cat-file -s ${SHA}:docs/a.md`, { stdout: '5\n' }],
-      [`cat-file blob ${SHA}:docs/a.md`, { stdout: '# Hi\n' }],
+      [`rev-parse --verify --quiet ${SHA}^{commit}`, { stdout: `${FULL}\n` }],
+      [`cat-file -t ${FULL}:docs/a.md`, { stdout: 'blob\n' }],
+      [`cat-file -s ${FULL}:docs/a.md`, { stdout: '5\n' }],
+      [`cat-file blob ${FULL}:docs/a.md`, { stdout: '# Hi\n' }],
     ]);
-    expect(await gitShow(ROOT, { rev: SHA, path: 'docs/a.md' }, run)).toEqual({ ok: true, text: `${SHA}:docs/a.md (5 bytes)\n# Hi\n` });
-    expect(calls.every((c) => c[0] === 'cat-file')).toBe(true);
+    expect(await gitShow(ROOT, { rev: SHA, path: 'docs/a.md' }, run)).toEqual({ ok: true, text: `${SHA}:docs/a.md at ${FULL} (5 bytes)\n# Hi\n` });
+    expect(calls.filter((c) => c[0] === 'rev-parse')).toHaveLength(1);
+    expect(calls.slice(1).every((c) => c[0] === 'cat-file' && c[c.length - 1].startsWith(`${FULL}:`))).toBe(true);
   });
 
   it('a folder lists its entries without the protected ones', async () => {
     const { run } = fakeGit([
-      [`cat-file -e ${SHA}^{commit}`, {}],
-      [`cat-file -t ${SHA}:cfg`, { stdout: 'tree\n' }],
-      [`ls-tree --name-only -z ${SHA}:cfg`, { stdout: 'app.json\0.env\0id_rsa\0' }],
+      [`rev-parse --verify --quiet ${SHA}^{commit}`, { stdout: FULL }],
+      [`cat-file -t ${FULL}:cfg`, { stdout: 'tree\n' }],
+      [`ls-tree --name-only -z ${FULL}:cfg`, { stdout: 'app.json\0.env\0id_rsa\0' }],
     ]);
-    expect(await gitShow(ROOT, { rev: SHA, path: 'cfg' }, run)).toEqual({ ok: true, text: `${SHA}:cfg (folder)\napp.json` });
+    expect(await gitShow(ROOT, { rev: SHA, path: 'cfg' }, run)).toEqual({ ok: true, text: `${SHA}:cfg at ${FULL} (folder)\napp.json` });
   });
 
   it('a commit not in the object store says so', async () => {
@@ -85,10 +89,10 @@ describe('gitShow', () => {
   it('caps the output', async () => {
     const big = 'x'.repeat(BOT_REPO_GIT_OUTPUT_MAX + 500);
     const { run } = fakeGit([
-      [`cat-file -e ${SHA}^{commit}`, {}],
-      [`cat-file -t ${SHA}:big.txt`, { stdout: 'blob' }],
-      [`cat-file -s ${SHA}:big.txt`, { stdout: String(big.length) }],
-      [`cat-file blob ${SHA}:big.txt`, { stdout: big }],
+      [`rev-parse --verify --quiet ${SHA}^{commit}`, { stdout: FULL }],
+      [`cat-file -t ${FULL}:big.txt`, { stdout: 'blob' }],
+      [`cat-file -s ${FULL}:big.txt`, { stdout: String(big.length) }],
+      [`cat-file blob ${FULL}:big.txt`, { stdout: big }],
     ]);
     const r = await gitShow(ROOT, { rev: SHA, path: 'big.txt' }, run);
     expect(r.ok && r.text.length).toBeLessThan(BOT_REPO_GIT_OUTPUT_MAX + 200);
@@ -97,11 +101,13 @@ describe('gitShow', () => {
 });
 
 describe('gitDiff', () => {
+  const RANGE = `${BASE}...${FULL}`;
   const both = (extra: Array<[string, { code?: number; stdout?: string }]>) => fakeGit([
-    ['cat-file -e origin/main^{commit}', {}],
-    [`cat-file -e ${SHA}^{commit}`, {}],
+    ['rev-parse --verify --quiet origin/main^{commit}', { stdout: BASE }],
+    [`rev-parse --verify --quiet ${SHA}^{commit}`, { stdout: FULL }],
     ...extra,
   ]);
+  const FLAGS = 'diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short';
 
   it('refuses bad revs and paths before running git', async () => {
     for (const input of [{ base: '-x', head: SHA }, { base: 'origin/main', head: 'a..b' }, { base: 'origin/main', head: SHA, paths: ['../etc'] }, { base: 'origin/main', head: SHA, paths: 'docs' }]) {
@@ -111,14 +117,18 @@ describe('gitDiff', () => {
     }
   });
 
-  it('names every changed file and leaves protected ones out of the patch', async () => {
+  it('resolves each rev once; both runs read the same two commits; protected files stay out of the patch', async () => {
     const { run, calls } = both([
-      ['diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short --name-status', { stdout: 'A\0docs/a.md\0M\0.env\0' }],
-      ['diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short origin/main', { stdout: '+# a\n' }],
+      [`${FLAGS} --name-status`, { stdout: 'A\0docs/a.md\0M\0.env\0' }],
+      [`${FLAGS} ${RANGE}`, { stdout: '+# a\n' }],
     ]);
     const r = await gitDiff(ROOT, { base: 'origin/main', head: SHA }, run);
-    expect(r).toEqual({ ok: true, text: `origin/main...${SHA}: 2 files changed\nA\tdocs/a.md\nM\t.env  (protected: not shown)\n\n+# a\n` });
-    expect(calls[calls.length - 1]).toEqual(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--submodule=short', `origin/main...${SHA}`, '--', '.', ':(exclude,literal).env']);
+    expect(r).toEqual({ ok: true, text: `origin/main...${SHA} (${RANGE}): 2 files changed\nA\tdocs/a.md\nM\t.env  (protected: not shown)\n\n+# a\n` });
+    expect(calls.filter((c) => c[0] === 'rev-parse')).toHaveLength(2);
+    const diffs = calls.filter((c) => c[0] === 'diff');
+    expect(diffs).toHaveLength(2);
+    for (const d of diffs) expect(d).toContain(RANGE);
+    expect(diffs[1]).toEqual(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--submodule=short', RANGE, '--', '.', ':(exclude,literal).env']);
   });
 
   it('paths are literal pathspecs', async () => {
@@ -129,8 +139,8 @@ describe('gitDiff', () => {
 
   it('caps the patch', async () => {
     const { run } = both([
-      ['diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short --name-status', { stdout: 'M\0a.md\0' }],
-      ['diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short origin/main', { stdout: '+'.repeat(BOT_REPO_GIT_OUTPUT_MAX * 2) }],
+      [`${FLAGS} --name-status`, { stdout: 'M\0a.md\0' }],
+      [`${FLAGS} ${RANGE}`, { stdout: '+'.repeat(BOT_REPO_GIT_OUTPUT_MAX * 2) }],
     ]);
     const r = await gitDiff(ROOT, { base: 'origin/main', head: SHA }, run);
     expect(r.ok && r.text.endsWith(`[output cut at ${BOT_REPO_GIT_OUTPUT_MAX} characters]`)).toBe(true);

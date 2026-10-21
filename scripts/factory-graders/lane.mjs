@@ -76,7 +76,8 @@ export function reviewerReadsNoWorker(snap, expect) {
   const took = opened && facts[0] ? `${Math.round((facts[0].at - opened.at) / 100) / 10}s from pr.opened to the verdict` : 'no timing';
   return [
     criterion('verdict_fact', facts.length === 1 && facts[0].ref?.botId === vid, `${facts.length} verdict.recorded fact(s) at ${String(head).slice(0, 7)}; ${took}`),
-    criterion('reading_only_pass', !!rec && rec.version === 2 && rec.verdict === 'pass' && rec.evidence?.reading === expect.reading && rec.evidence?.gateHeadSha === head,
+    criterion('reading_only_pass', !!rec && rec.version === 2 && rec.verdict === 'pass' && rec.evidence?.reading === expect.reading && rec.evidence?.gateHeadSha === head
+      && rec.evidence?.baseRef === 'origin/main' && /^[0-9a-f]{40}$/.test(String(rec.evidence?.baseSha)),
       rec ? `${rec.verdict}, evidence ${JSON.stringify(rec.evidence)}` : 'no verdict by the verifier'),
     criterion('no_verify_worker', verifierTasks.length === 0 && installs.length === 0, `${verifierTasks.length} task(s) by the verifier, ${installs.length} install(s)`),
     criterion('ready_card_in_pr_thread', ready.length === 1 && ready[0].title.includes(String(head).slice(0, 7)), ready.map((c) => c.title).join(' | ') || 'none'),

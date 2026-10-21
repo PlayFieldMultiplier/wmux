@@ -60,6 +60,8 @@ import type { BotDirectoryApi } from './triggerEngine';
 import type { RoomWriter } from './roomWriter';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { guestSide } from './guestWorkspaces';
+import { originBranchSha } from './verifyPreset';
+import { git } from '../git/git';
 
 /** The facts that can complete a PR's case. */
 export const LANE_FACT_KINDS: ReadonlySet<Fact['kind']> = new Set(['verdict.recorded', 'ci.green', 'pr.head_moved', 'pr.labelled']);
@@ -96,6 +98,9 @@ export interface LaneHostPorts {
   ownerLogin: (host: string, repoPath: string) => Promise<string | null>;
   /** The gh login a merge would go out as now, or null. */
   currentLogin: (repo: { key: string; path: string }) => Promise<string | null>;
+  /** `origin/<branch>` in the repository now, or null: what a reading-only
+   *  verdict's base is checked against. Absent: null (none counts). */
+  originBranchSha?: (repoPath: string, branch: string) => Promise<string | null>;
   effects: Pick<MoaEffectStore, 'enqueueLane' | 'get'>;
   /** The gh login each lane effect was evaluated under, kept across
    *  restarts (default: memory only). */
@@ -371,6 +376,9 @@ export class MergeLaneHost {
     } catch {
       evidenceRows = null;
     }
+    // A reading-only verdict counts while its base branch has not moved.
+    const reads = (verdicts ?? []).some((v) => v.evidence?.reading !== undefined);
+    const baseSha = reads ? await (this.ports.originBranchSha?.(repoPath, facts.baseRefName) ?? Promise.resolve(null)).catch(() => null) : null;
     return {
       trustedAuthors,
       // Bound when a bot task's branch is the head branch.
@@ -384,6 +392,7 @@ export class MergeLaneHost {
       // whatever the switch reads by the time the executor gets here.
       botVerdictsOnly: true,
       evidenceRows,
+      baseSha,
     };
   }
 
@@ -734,6 +743,7 @@ async function productionHost(deps: FactoryHostDeps): Promise<{ host: MergeLaneH
     // or a login that changed, is seen.
     ownerLogin: (h, cwd) => hostLane.signedInLogin(h, cwd),
     currentLogin: laneGh.currentGhLogin,
+    originBranchSha: (repoPath, branch) => originBranchSha(git, repoPath, branch),
     effects,
     logins: fileLaneLogins(path.join(wmuxDir, 'factory', LANE_LOGINS_FILENAME)),
     run: (id) => executor.run(id),

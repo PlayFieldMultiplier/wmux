@@ -348,22 +348,22 @@ describe('verifier-pass-at-head with botVerdictsOnly (evidence binding)', () => 
     expect(reasonOf(botCtx({ evidenceRows: rows(elsewhere) }))).toBe('evidence-mismatch');
   });
 
-  it('on: a reading-only PASS counts for a docs-only change on this read, or where main found no gate', () => {
-    const reading = (basis: 'docs-only' | 'no-gate', over: Partial<PrVerdictRecord> = {}) => botVerdict({ evidence: { taskId: 'reading-only', gateHeadSha: head, reading: basis }, ...over });
-    const docsFacts = openWithRequired({ files: ['docs/guide.html', 'README.md'], filesRenamed: false });
-    const docsCtx = (v: PrVerdictRecord) => ctx(docsFacts, { botVerdictsOnly: true, verdicts: [v], evidenceRows: new Map() });
-    const docsReason = (v: PrVerdictRecord, f = docsFacts) => evaluateMergeLane(f, { ...docsCtx(v), expectHead: f.headRefOid }).failures.find((x) => x.predicate === 'verifier-pass-at-head')?.reason;
-    expect(evaluateMergeLane(docsFacts, docsCtx(reading('docs-only'))).ok).toBe(true);
-    expect(evaluateMergeLane(docsFacts, docsCtx(reading('docs-only'))).verifiedBy).not.toHaveProperty('taskId');
-    // Re-checked on the lane's own read: a code file, a rename, a cut list.
-    expect(docsReason(reading('docs-only'), openWithRequired({ files: ['docs/guide.html', 'src/x.ts'], filesRenamed: false }))).toBe('gate-required');
-    expect(docsReason(reading('docs-only'), openWithRequired({ files: ['docs/guide.html'], filesRenamed: true }))).toBe('gate-required');
-    expect(docsReason(reading('docs-only'), openWithRequired({ files: ['docs/guide.html'], filesRenamed: false, filesTruncated: true }))).toBe('gate-required');
-    // no-gate: main's finding when it recorded the verdict.
-    expect(evaluateMergeLane(facts, botCtx({ verdicts: [reading('no-gate')], evidenceRows: new Map() })).ok).toBe(true);
-    // Bound to a bot and to the head.
-    expect(reasonOf(botCtx({ verdicts: [reading('no-gate', { principal: { workspaceId: 'ws-verifier', ptyId: 'pty-1', agent: 'claude' } })] }))).toBe('evidence-mismatch');
-    expect(reasonOf(botCtx({ verdicts: [botVerdict({ evidence: { taskId: 'reading-only', gateHeadSha: 'c'.repeat(40), reading: 'no-gate' } })] }))).toBe('evidence-mismatch');
+  it('on: a reading-only PASS counts only while the PR\'s base branch is still where main read its gate', () => {
+    const BASE = 'd'.repeat(40);
+    const reading = (over: Partial<NonNullable<PrVerdictRecord['evidence']>> = {}, rec: Partial<PrVerdictRecord> = {}) =>
+      botVerdict({ evidence: { taskId: 'reading-only', gateHeadSha: head, reading: 'no-gate', baseRef: `origin/${facts.baseRefName}`, baseSha: BASE, ...over }, ...rec });
+    const at = (v: PrVerdictRecord, baseSha: string | null) => botCtx({ verdicts: [v], evidenceRows: new Map(), baseSha });
+    expect(evaluateMergeLane(facts, at(reading(), BASE)).ok).toBe(true);
+    expect(evaluateMergeLane(facts, at(reading(), BASE)).verifiedBy).not.toHaveProperty('taskId');
+    // The base moved, cannot be read, or the PR now targets another branch.
+    expect(reasonOf(at(reading(), 'e'.repeat(40)))).toBe('base-moved');
+    expect(reasonOf(at(reading(), null))).toBe('base-moved');
+    expect(reasonOf(at(reading({ baseRef: 'origin/release/2' }), BASE))).toBe('base-moved');
+    expect(reasonOf(at(reading({ baseSha: undefined }), BASE))).toBe('base-moved');
+    // Bound to a bot and to the head; any other basis never counts.
+    expect(reasonOf(at(reading({}, { principal: { workspaceId: 'ws-verifier', ptyId: 'pty-1', agent: 'claude' } }), BASE))).toBe('evidence-mismatch');
+    expect(reasonOf(at(reading({ gateHeadSha: 'c'.repeat(40) }), BASE))).toBe('evidence-mismatch');
+    expect(reasonOf(at(reading({ reading: 'docs-only' as never }), BASE))).toBe('gate-required');
   });
 
   it('on: a failing or killed gate refuses', () => {
