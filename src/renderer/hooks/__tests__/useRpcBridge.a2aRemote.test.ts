@@ -309,6 +309,13 @@ describe('images on a delivered task', () => {
     ]);
   });
 
+  it('peer text that is only control bytes still delivers its images, with no text', async () => {
+    expect(await send({ message: '\x1b[2J\x07', remoteImages: [IMG] })).toMatchObject({ delivered: true });
+    expect(useStore.getState().getTask(RT)!.history[0].parts).toEqual([
+      { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: IMG.sha256, path: IMG.path } },
+    ]);
+  });
+
   it('a pasted body names each image the way the pane reads it (a WSL pane on Windows: /mnt/c)', async () => {
     (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.platform = 'win32';
     const wsl = target();

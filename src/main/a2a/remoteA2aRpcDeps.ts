@@ -74,6 +74,7 @@ export function daemonRemoteA2aRpcDeps(
       if (isRecord(res) && res.ok === true && Array.isArray(res.images)) return { ok: true, images: res.images as A2aStagedImage[] };
       return { ok: false, error: isRecord(res) && typeof res.error === 'string' ? res.error : 'unavailable' };
     },
+    discardImages: async (input) => getDaemonClient()?.rpc(A2A_REMOTE_RPC.discardImages, { ...input }),
     listPeers: async (workspaceId, panesOf) => {
       const dc = getDaemonClient();
       return dc ? listPeerHints(dc, workspaceId, (hostId) => exposedOf(dc, hostId), panesOf) : [];

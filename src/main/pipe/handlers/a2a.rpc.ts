@@ -287,7 +287,9 @@ export interface RemoteA2aRpcDeps {
    * Check and keep an agent's images for a pane on this PC (`a2a.attachments.stage`):
    * from `ptyId`'s folders when main verified that pane, else `~/.wmux/uploads` only.
    */
-  stageImages?: (input: { paths: string[]; ptyId?: string }) => Promise<{ ok: true; images: A2aStagedImage[] } | { ok: false; error: string }>;
+  stageImages?: (input: { paths: string[]; ptyId?: string; workspaceId?: string }) => Promise<{ ok: true; images: A2aStagedImage[] } | { ok: false; error: string }>;
+  /** Remove local copies this call created for a send the renderer then refused (`a2a.attachments.discard`). */
+  discardImages?: (input: { sha256s: string[] }) => Promise<unknown>;
   /**
    * Paired PCs with no active link in the workspace (every workspace when
    * omitted). `panesOf` counts a local workspace's panes, from discover's own list.
@@ -333,12 +335,17 @@ const REMOTE_QUEUED = { stored: true, notified: false, queued: true, reason: 'qu
 
 const IMAGES_MAX = A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE;
 
-/** `images` of a send: undefined when absent, null when not a list of 1-4 absolute paths. */
+/**
+ * `images` of a send: undefined when absent, null when not a list of 1-4
+ * absolute paths. A Windows device path (`\\?\`, `\\.\`) is never one; a
+ * share path is left to the daemon, which takes it only on a share a root is on.
+ */
 function imagePathsOf(v: unknown): string[] | undefined | null {
   if (v === undefined || v === null) return undefined;
   if (!Array.isArray(v) || v.length === 0 || v.length > IMAGES_MAX) return null;
   const isAbs = (p: string): boolean => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\');
-  return v.every((p) => typeof p === 'string' && p.length > 0 && p.length <= 4096 && isAbs(p)) ? (v as string[]) : null;
+  const device = (p: string): boolean => /^[\\/]{2}[?.][\\/]/.test(p);
+  return v.every((p) => typeof p === 'string' && p.length > 0 && p.length <= 4096 && isAbs(p) && !device(p)) ? (v as string[]) : null;
 }
 const REMOTE_STATES: ReadonlySet<string> = new Set(['working', 'input-required', 'completed', 'failed', 'canceled']);
 
@@ -427,6 +434,7 @@ export function registerA2aRpc(
         delivery: REMOTE_QUEUED,
         // What Moa reads right after sending: the wait is not the operator's decision.
         next: 'You are woken when the other Moa replies or completes it; a2a_task_query shows remoteReceipt delivered/read once it arrives. Do not raise a decision card about waiting: end your turn.',
+        ...(res.note ? { note: res.note } : {}),
       };
     }
     const workspaceId = typeof params.workspaceId === 'string' ? params.workspaceId : '';
@@ -500,7 +508,7 @@ export function registerA2aRpc(
     if (!remote?.stageImages) return { error: 'a2a.task.send: images need the wmux daemon, which is not connected' };
     const workspaceId = typeof params.workspaceId === 'string' ? params.workspaceId : '';
     const ptyId = ctx?.commanderWorkspace ? undefined : await verifiedCallerPty(workspaceId, params.senderPtyId);
-    const staged = await remote.stageImages({ paths: images, ...(ptyId ? { ptyId } : {}) })
+    const staged = await remote.stageImages({ paths: images, ...(ptyId ? { ptyId, workspaceId } : {}) })
       .catch((err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }));
     if (!staged.ok) return { error: `a2a.task.send: ${staged.error}` };
     return { attachments: staged.images };
@@ -1381,6 +1389,11 @@ export function registerA2aRpc(
     const staged = await stageLocalImages(params, ctx);
     if ('error' in staged) return { error: staged.error };
     if (staged.attachments) sendParams.attachments = staged.attachments;
+    // A copy made for this send alone goes again when the send is refused.
+    const discardStaged = (): void => {
+      const fresh = (staged.attachments ?? []).filter((a) => a.created === true).map((a) => a.sha256);
+      if (fresh.length > 0 && remote?.discardImages) void remote.discardImages({ sha256s: fresh }).catch(() => undefined);
+    };
     // A main-registered delivery check (deliveryGuards.ts), kept only on the
     // operator lane. It can only add a refusal, never skip a check.
     if (ctx?.operator === true && typeof params.deliveryGuardKey === 'string' && params.gatedDelivery === true) {
@@ -1409,7 +1422,10 @@ export function registerA2aRpc(
     // A reply may reopen an ended task: commit that in the daemon first.
     if (params.taskId && params.execute !== true) {
       const prepared = await prepareReopen('a2a.task.send', sendParams);
-      if ('response' in prepared) return prepared.response;
+      if ('response' in prepared) {
+        discardStaged();
+        return prepared.response;
+      }
       sendParams = prepared.params;
     }
     // A NEW task's delivery may run the target pane's fresh-context step
@@ -1430,6 +1446,8 @@ export function registerA2aRpc(
             timeoutMs: gatedNewTask ? GATED_NEW_TASK_SEND_MAIN_TIMEOUT_MS : NEW_TASK_SEND_MAIN_TIMEOUT_MS,
           })
         : await sendToRenderer(getWindow, 'a2a.task.send', sendParams);
+    // Only an explicit refusal: a send that timed out here may still have been delivered.
+    if (isRecord(result) && typeof result.error === 'string') discardStaged();
 
     // 데몬 정본 미러-생성(신규 태스크 브랜치에서만 — 렌더러가 task 스냅샷 동반).
     // 실패는 soft-degrade: 이후 전이가 'task not found'로 렌더러 폴백을 탄다.

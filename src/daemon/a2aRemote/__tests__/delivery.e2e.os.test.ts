@@ -372,8 +372,15 @@ describe('cross-host delivery, end to end', () => {
     expect(staged.images[0].path).toBe(path.join(a.dir, 'uploads', 'a2a', 'local', `${staged.images[0].sha256}.png`));
     // The pane's own folder, but only for a terminal of the sender's workspace.
     fs.mkdirSync(path.join(a.dir, 'proj'));
-    fs.writeFileSync(path.join(a.dir, 'proj', 'ui.png'), shot);
-    expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-a' })).toMatchObject({ ok: true });
+    fs.writeFileSync(path.join(a.dir, 'proj', 'ui.png'), pngBytes(12, 7, 2));
+    const fromPane = (await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-a' })) as {
+      ok: boolean;
+      images: Array<{ path: string; sha256: string; created?: boolean }>;
+    };
+    expect(fromPane).toMatchObject({ ok: true, images: [{ created: true }] });
+    // Its send was refused: the copy goes; nothing open names it.
+    expect(await a.rpc(A2A_REMOTE_RPC.discardImages, { sha256s: [fromPane.images[0].sha256] })).toEqual({ ok: true, removed: 1 });
+    expect(fs.existsSync(fromPane.images[0].path)).toBe(false);
     expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-other' })).toMatchObject({ ok: false });
     // Outside the allowed folders: refused with a reason the agent can act on.
     fs.writeFileSync(path.join(a.dir, 'elsewhere.png'), shot);

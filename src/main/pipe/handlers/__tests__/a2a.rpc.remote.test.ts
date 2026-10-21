@@ -76,6 +76,7 @@ beforeEach(() => {
       ok: true,
       images: i.paths.map((_p, n) => ({ path: `/home/u/.wmux/uploads/a2a/local/${String(n).repeat(64)}.png`, sha256: String(n).repeat(64), mediaType: 'image/png', bytes: 10, width: 1, height: 1, name: 'x.png' })),
     })),
+    discardImages: vi.fn(async () => ({ ok: true, removed: 1 })),
     listPeers: vi.fn(async () => []),
   };
   sendToRendererMock.mockImplementation(async (_w: unknown, method: string) => {
@@ -107,7 +108,7 @@ describe('a2a.task.send — images', () => {
       workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-b', message: 'look', images: ['/p/a.png'],
       attachments: [{ path: '/etc/passwd', sha256: 'f'.repeat(64) }], remoteImages: [{ path: '/etc/shadow', sha256: 'e'.repeat(64) }],
     });
-    expect(remote.stageImages).toHaveBeenCalledWith({ paths: ['/p/a.png'], ptyId: 'pty-a' });
+    expect(remote.stageImages).toHaveBeenCalledWith({ paths: ['/p/a.png'], ptyId: 'pty-a', workspaceId: 'ws-a' });
     const [sent] = rendererCalls('a2a.task.send');
     expect(sent.attachments).toEqual([expect.objectContaining({ path: `/home/u/.wmux/uploads/a2a/local/${'0'.repeat(64)}.png` })]);
     expect(sent.remoteImages).toBeUndefined();
@@ -134,6 +135,29 @@ describe('a2a.task.send — images', () => {
     expect(remote.stageImages).not.toHaveBeenCalled();
     expect(rendererCalls('a2a.task.send')).toEqual([]);
     expect(rendererCalls('a2a.task.update')).toEqual([]);
+  });
+
+  it('a copy made for a send the renderer refused goes again; one an earlier message made stays', async () => {
+    remote.stageImages.mockResolvedValueOnce({
+      ok: true,
+      images: [
+        { path: '/u/a2a/local/a.png', sha256: 'a'.repeat(64), mediaType: 'image/png', bytes: 1, width: 1, height: 1, name: 'a.png', created: true },
+        { path: '/u/a2a/local/b.png', sha256: 'b'.repeat(64), mediaType: 'image/png', bytes: 1, width: 1, height: 1, name: 'b.png' },
+      ],
+    });
+    sendToRendererMock.mockImplementation(async (_w: unknown, method: string) => {
+      if (method === 'pane.list') return [{ id: 'pane-a', surfacePtyIds: ['pty-a'] }];
+      return { error: 'a2a.task.send: target workspace not found' };
+    });
+    const res = await call(setup(), 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-z', message: 'look', images: ['/p/a.png', '/p/b.png'] });
+    expect(res.error).toMatch(/not found/);
+    expect(remote.discardImages).toHaveBeenCalledWith({ sha256s: ['a'.repeat(64)] });
+  });
+
+  it('refuses a Windows device path before anything is read', async () => {
+    const res = await call(setup(), 'a2a.task.send', { workspaceId: 'ws-a', to: 'ws-b', message: 'x', images: ['\\\\?\\C:\\x.png'] });
+    expect(res.error).toMatch(/absolute paths/);
+    expect(remote.stageImages).not.toHaveBeenCalled();
   });
 
   it('a commander brain owns no pane: its local send stages from the uploads folder only', async () => {
@@ -229,6 +253,13 @@ describe('a2a.task.send — Moa to another PC\'s Moa (brain link)', () => {
     expect(remote.sendTask).toHaveBeenCalledWith({ linkId: LINK, from: { workspaceId: 'ws-hq', name: 'Moa' }, title: 'T', text: 'check the build' });
     expect(String(res.next)).toContain('Do not raise a decision card about waiting');
     expect(rendererCalls('a2a.task.send')).toEqual([]);
+  });
+
+  it('Moa is told when its images were left out for an older PC', async () => {
+    remote.listTargets.mockResolvedValue([brainTarget]);
+    remote.sendTask.mockResolvedValueOnce({ ok: true, taskId: RT, note: 'The other PC\'s wmux does not take images' });
+    const res = await brainCall(setup(), { to: BRAIN_ALIAS, message: 'see', images: ['/u/a.png'] }, asBrain('ws-hq'));
+    expect(res).toMatchObject({ ok: true, note: 'The other PC\'s wmux does not take images' });
   });
 
   it('another workspace\'s brain, or a pane caller, cannot send on the brain link', async () => {

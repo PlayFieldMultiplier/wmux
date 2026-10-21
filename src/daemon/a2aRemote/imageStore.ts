@@ -59,7 +59,7 @@ const EXT: Record<A2aRemoteImageMediaType, string> = { 'image/png': 'png', 'imag
 
 export type ImageNotReceived = 'missing' | 'invalid' | 'full';
 
-export type StoredImage = { ok: true; path: string; info: A2aImageInfo } | { ok: false; reason: ImageNotReceived };
+export type StoredImage = { ok: true; path: string; info: A2aImageInfo; created?: true } | { ok: false; reason: ImageNotReceived };
 
 export interface A2aImageStoreOptions {
   /** `<wmuxDir>/a2a` */
@@ -155,7 +155,19 @@ export class A2aImageStore {
     const existing = await this.received(LOCAL_FOLDER, ref);
     if (existing) return existing;
     await this.evictLocal(bytes.length, inUse);
-    return this.storeReceived(LOCAL_FOLDER, ref, bytes);
+    const stored = await this.storeReceived(LOCAL_FOLDER, ref, bytes);
+    return stored.ok ? { ...stored, created: true } : stored;
+  }
+
+  /** Remove the local copy of `sha` (whatever its type); whether one was there. */
+  async discardLocal(sha: string): Promise<boolean> {
+    if (!A2A_SHA256_RE.test(sha)) return false;
+    let removed = false;
+    for (const ext of Object.values(EXT)) {
+      // eslint-disable-next-line no-await-in-loop -- three names at most
+      if (await unlinkQuiet(path.join(this.root, LOCAL_FOLDER, `${sha}.${ext}`))) removed = true;
+    }
+    return removed;
   }
 
   /**

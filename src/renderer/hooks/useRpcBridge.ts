@@ -72,6 +72,7 @@ import {
   localSideOf,
   parseDeliveredImages,
   remoteWorkspaceId,
+  sanitizeRemoteMessage,
   sanitizeRemoteText,
   withImageFooter,
   type A2aDeliveredImage,
@@ -1034,7 +1035,9 @@ async function handleRemoteTaskSend(params: RpcParams): Promise<A2aRemoteDeliver
     const rawMessage = typeof params.message === 'string' ? params.message : '';
     const images = parseDeliveredImages(params.remoteImages);
     let message: string;
-    try { message = rawMessage || images.length === 0 ? validateMessage(sanitizeRemoteText(rawMessage)) : ''; } catch (e) {
+    const clean = sanitizeRemoteMessage(rawMessage);
+    // Nothing left to say but images: they still go, with no text.
+    try { message = !clean.trim() && images.length > 0 ? '' : validateMessage(clean); } catch (e) {
       return { error: `a2a.task.send: ${e instanceof Error ? e.message : 'invalid'}` };
     }
     const toWsId = typeof params.to === 'string' ? params.to : '';
@@ -1071,7 +1074,7 @@ async function handleRemoteTaskSend(params: RpcParams): Promise<A2aRemoteDeliver
   // Peer text, filtered again right before the pane write (the daemon filtered it on receipt).
   const senderName = sanitizeRemoteText(t.metadata.from.name);
   const firstPart = t.history[0]?.parts.find((p) => p.kind === 'text');
-  const body = sanitizeRemoteText(firstPart && firstPart.kind === 'text' ? firstPart.text : '');
+  const body = sanitizeRemoteMessage(firstPart && firstPart.kind === 'text' ? firstPart.text : '');
   // This PC's own image files (main reads them off the daemon ledger), ending the paste.
   const images = deliveredImagesOf(t.history[0]?.parts);
   const liveMeta = deliveryLiveMeta(store.surfaceAgent, pty, target.ws.metadata);
@@ -1122,7 +1125,7 @@ async function handleRemoteNotify(params: RpcParams): Promise<A2aRemoteDeliveryR
   if ('held' in target) return { ok: true, delivered: false, held: target.held };
   const msg = task.history.find((h) => h.messageId === messageId);
   const part = msg?.parts.find((p) => p.kind === 'text');
-  const text = sanitizeRemoteText(part && part.kind === 'text' ? part.text : '');
+  const text = sanitizeRemoteMessage(part && part.kind === 'text' ? part.text : '');
   const images = deliveredImagesOf(msg?.parts);
   if (!text && images.length === 0) return { error: `${A2A_REMOTE_NOTIFY_METHOD}: the reply has no text` };
   const senderName = sanitizeRemoteText(task.metadata[side === 'from' ? 'to' : 'from'].name);

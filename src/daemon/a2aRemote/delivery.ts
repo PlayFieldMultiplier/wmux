@@ -493,9 +493,27 @@ export class A2aRemoteDelivery {
         // eslint-disable-next-line no-await-in-loop -- a handful of small writes
         const stored = await store.putLocal(r.bytes, r.info, (sha) => inUse.has(sha));
         if (!stored.ok) return { ok: false, error: 'unavailable: the image folder is full; try again later' };
-        out.push({ path: stored.path, sha256: r.sha256, mediaType: r.info.mediaType, bytes: r.bytes.length, width: r.info.width, height: r.info.height, name: r.name });
+        out.push({
+          path: stored.path, sha256: r.sha256, mediaType: r.info.mediaType, bytes: r.bytes.length, width: r.info.width, height: r.info.height, name: r.name,
+          ...(stored.created ? { created: true } : {}),
+        });
       }
       return { ok: true, images: out };
+    });
+
+    // The local send those copies were made for was refused: they go, unless
+    // something still open names them.
+    onRpc(A2A_REMOTE_RPC.discardImages, async (p) => {
+      const store = this.images;
+      const shas = Array.isArray(p['sha256s']) ? p['sha256s'].filter((s): s is string => typeof s === 'string').slice(0, A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) : [];
+      if (!store) return { ok: true, removed: 0 };
+      const inUse = this.openImages();
+      let removed = 0;
+      for (const sha of shas) {
+        // eslint-disable-next-line no-await-in-loop -- a handful of unlinks
+        if (!inUse.has(sha) && (await store.discardLocal(sha))) removed += 1;
+      }
+      return { ok: true, removed };
     });
 
     onRpc(A2A_REMOTE_RPC.state, async (p) => {

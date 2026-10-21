@@ -41,11 +41,18 @@ export const A2A_REMOTE_RPC = Object.freeze({
    */
   read: 'a2a.remote.read',
   /**
-   * `{ paths: string[], ptyId? }` → `{ ok: true, images: A2aStagedImage[] } | { ok: false, error }`:
-   * an agent's images for a pane on this PC, checked (the pane's folders, else
-   * `~/.wmux/uploads` only), stripped and kept in `~/.wmux/uploads/a2a/local`.
+   * `{ paths: string[], ptyId?, workspaceId? }` → `{ ok: true, images: A2aStagedImage[] } | { ok: false, error }`:
+   * an agent's images for a pane on this PC, checked (the folders of `ptyId`
+   * when it is a live terminal of `workspaceId`, else `~/.wmux/uploads`
+   * only), stripped and kept in `~/.wmux/uploads/a2a/local`.
    */
   stageImages: 'a2a.attachments.stage',
+  /**
+   * `{ sha256s: string[] }` → `{ ok: true, removed: number }`: the send those
+   * copies were made for was refused; each goes unless a task that has not
+   * ended, or an open record, names it.
+   */
+  discardImages: 'a2a.attachments.discard',
 } as const);
 
 /** One image `A2A_REMOTE_RPC.stageImages` kept: `path` is what the receiving agent reads. */
@@ -58,6 +65,8 @@ export interface A2aStagedImage {
   height: number;
   /** The source file's name. */
   name: string;
+  /** This call wrote the copy (it was not here for an earlier message). */
+  created?: boolean;
 }
 
 /**
@@ -130,6 +139,16 @@ export function sanitizeRemoteText(raw: string): string {
     .replace(/\r\n?/g, '\n')
     // eslint-disable-next-line no-control-regex -- stripping controls is the point
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+}
+
+/**
+ * A message body a peer sent, as `sanitizeRemoteText` makes it, and with no
+ * line that starts like wmux's own lines (`[wmux] ...`, the image footer):
+ * such a line is quoted (`> [wmux] ...`), also where a single-line pane shows
+ * a newline as ␤. So a footer naming paths is always this PC's.
+ */
+export function sanitizeRemoteMessage(raw: string): string {
+  return sanitizeRemoteText(raw).replace(/(^|␤)([ \t]*)(?=\[wmux\])/gim, '$1$2> ');
 }
 
 // ─── Daemon RPC payloads ────────────────────────────────────────────────────

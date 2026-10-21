@@ -15,7 +15,7 @@ import {
   type A2aRemoteTaskMarkerV1,
   type HostId,
 } from '../../shared/a2aRemote';
-import { A2A_REMOTE_INBOUND_EVENT, remoteWorkspaceId, sanitizeRemoteText, type A2aRemoteInboundEvent } from '../../shared/a2aRemoteDelivery';
+import { A2A_REMOTE_INBOUND_EVENT, remoteWorkspaceId, sanitizeRemoteMessage, type A2aRemoteInboundEvent } from '../../shared/a2aRemoteDelivery';
 import { isTaskState, type Message, type Part } from '../../shared/types';
 import type { A2aImageStore, ImageNotReceived } from './imageStore';
 import type { A2aTaskService } from '../a2a/A2aTaskService';
@@ -84,7 +84,7 @@ export async function acceptInbound(
   // Peer text is pasted into a terminal later: control characters and escape
   // sequences go here, before anything is stored (and again before the write).
   const env: A2aRemoteEnvelope =
-    typeof parsed.envelope.text === 'string' ? { ...parsed.envelope, text: sanitizeRemoteText(parsed.envelope.text) } : parsed.envelope;
+    typeof parsed.envelope.text === 'string' ? { ...parsed.envelope, text: sanitizeRemoteMessage(parsed.envelope.text) } : parsed.envelope;
   // A message with images may have no text (an image-only reply).
   if ((env.kind === 'task' || env.kind === 'reply') && !env.text && !env.images) return fail('bad-request');
 
