@@ -88,7 +88,7 @@ export const LANE_PR_QUERY = `query($owner: String!, $repo: String!, $number: In
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       number title state isDraft isCrossRepository mergeable mergeStateStatus
-      headRefOid headRefName baseRefName baseRefOid
+      headRefOid headRefName baseRefName baseRef { target { oid } }
       mergedAt mergeCommit { oid }
       author { login }
       labels(first: 50) { totalCount nodes { name } }
@@ -225,7 +225,8 @@ export function mapLaneFacts(raw: unknown): PrLaneFacts | null {
     headRefOid: pr.headRefOid,
     headRefName: str(pr.headRefName),
     baseRefName: str(pr.baseRefName),
-    baseRefOid: str(pr.baseRefOid) || null,
+    // The base branch's tip now (PullRequest.baseRefOid can lag it).
+    baseRefOid: str((pr.baseRef as { target?: { oid?: unknown } } | null)?.target?.oid) || null,
     author: str((pr.author as { login?: unknown } | null)?.login) || null,
     ...(str(pr.mergeStateStatus) ? { mergeStateStatus: str(pr.mergeStateStatus) } : {}),
     ...(typeof pr.title === 'string' ? { title: pr.title } : {}),

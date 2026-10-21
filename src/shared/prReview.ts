@@ -76,8 +76,10 @@ export interface PrLaneFacts {
   headRefOid: string;
   headRefName: string;
   baseRefName: string;
-  /** The base branch's tip as the forge sees it now (GitHub's baseRefOid,
-   *  GitLab's diffRefs.startSha), or null/absent when not read. */
+  /** The base branch's current tip as the forge reports it in this read
+   *  (GitHub: baseRef.target.oid; GitLab: the target branch's commit), or
+   *  null/absent when not read. Not GitHub's PullRequest.baseRefOid, which
+   *  is a snapshot taken when the PR last synced. */
   baseRefOid?: string | null;
   /** Null for a deleted ("ghost") account. */
   author: string | null;
