@@ -27,6 +27,7 @@ import { PinnedClientError } from '../pinnedClient';
 import { A2A_REQUEST_BODY_MAX, requestBodyMax } from '../server';
 
 const HOST = '11111111-1111-4111-8111-111111111111';
+const OTHER = '33333333-3333-4333-8333-333333333333';
 const quiet = (): void => undefined;
 
 /** A structurally valid PNG of `w` x `h` with `pad` bytes of IDAT. */
@@ -62,6 +63,8 @@ describe('imageRoots / readImageSource', () => {
     expect(imageRoots(os.homedir(), uploads)).toEqual([uploads]);
     expect(imageRoots(path.parse(dir).root, uploads)).toEqual([uploads]);
     expect(imageRoots('relative/dir', uploads)).toEqual([uploads]);
+    // A folder holding the home folder (`/Users`) opens all of it: not a root either.
+    expect(imageRoots(path.dirname(os.homedir()), uploads)).toEqual([uploads]);
   });
 
   it('reads a file inside a root and refuses everything around it', async () => {
@@ -107,13 +110,13 @@ describe('A2aImageStore', () => {
     const s = store();
     const img = png(3, 3);
     await s.stage(HOST, sha256(img), img);
-    expect(s.has(HOST, sha256(img))).toBe(true);
+    expect(await s.has(HOST, sha256(img))).toBe(true);
     const got = await s.claim(HOST, refOf(img));
     expect(got).toMatchObject({ ok: true, path: path.join(dir, 'uploads', 'a2a', HOST, `${sha256(img)}.png`), info: { width: 3, height: 3 } });
     expect(fs.existsSync(path.join(dir, 'a2a', 'blobs-in', HOST, sha256(img)))).toBe(false);
     // Again (a resend): the received file answers.
     expect(await s.claim(HOST, refOf(img))).toMatchObject({ ok: true });
-    expect(s.has(HOST, sha256(img))).toBe(true);
+    expect(await s.has(HOST, sha256(img))).toBe(true);
     expect(await s.claim(HOST, refOf(png(4, 4)))).toEqual({ ok: false, reason: 'missing' });
   });
 
@@ -156,6 +159,19 @@ describe('A2aImageStore', () => {
     expect(fs.existsSync(operatorFile)).toBe(true);
   });
 
+  it('replaces a received file whose bytes were changed, instead of standing for them', async () => {
+    const s = store();
+    const img = png(2, 2);
+    const got = await s.storeReceived(HOST, refOf(img), img);
+    const file = got.ok ? got.path : '';
+    fs.writeFileSync(file, png(3, 3));
+    expect(await s.has(HOST, sha256(img))).toBe(false);
+    expect(await s.received(HOST, refOf(img))).toBeNull();
+    expect(fs.existsSync(file)).toBe(false);
+    expect(await s.storeReceived(HOST, refOf(img), img)).toMatchObject({ ok: true, path: file });
+    expect(fs.readFileSync(file).equals(img)).toBe(true);
+  });
+
   it('refuses bytes that do not match their ref', async () => {
     const s = store();
     const img = png(2, 2);
@@ -175,10 +191,12 @@ describe('blob routes', () => {
     s = new A2aImageStore({ a2aDir: path.join(dir, 'a2a'), uploadsRoot: path.join(dir, 'uploads') });
     owed.length = 0;
     const table = new A2aRouteTable();
-    registerImageRoutes(table, { store: s, outbox: { pending: () => owed.map((r) => structuredClone(r)) }, log: quiet });
+    registerImageRoutes(table, { store: s, outbox: { pending: (hostId) => owed.filter((r) => r.hostId === hostId).map((r) => structuredClone(r)) }, log: quiet });
     server = http.createServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://x');
-      void table.handle(req, res, url, url.pathname, { peerId: 'p', hostId: HOST, name: 'A' });
+      // The peer is named by a test header here (the real listener authenticates it).
+      const hostId = req.headers['x-test-host'] === 'other' ? OTHER : HOST;
+      void table.handle(req, res, url, url.pathname, { peerId: 'p', hostId, name: 'A' });
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     port = (server.address() as AddressInfo).port;
@@ -188,10 +206,12 @@ describe('blob routes', () => {
     await new Promise((r) => server.close(r));
   });
 
-  function send(method: string, sha: string, body?: Buffer, chunked = false): Promise<{ status: number; body: Buffer }> {
+  function send(method: string, sha: string, body?: Buffer, chunked = false, other = false): Promise<{ status: number; body: Buffer }> {
     return new Promise((resolve, reject) => {
+      const headers: Record<string, string | number> = chunked ? { 'Transfer-Encoding': 'chunked' } : body ? { 'Content-Length': body.length } : {};
+      if (other) headers['x-test-host'] = 'other';
       const req = http.request(
-        { host: '127.0.0.1', port, method, path: `${A2A_ROUTES.blobs}/${sha}`, headers: chunked ? { 'Transfer-Encoding': 'chunked' } : body ? { 'Content-Length': body.length } : {} },
+        { host: '127.0.0.1', port, method, path: `${A2A_ROUTES.blobs}/${sha}`, headers },
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (c: Buffer) => chunks.push(c));
@@ -218,7 +238,7 @@ describe('blob routes', () => {
   it('keeps a checked upload and refuses a wrong hash or a non-image', async () => {
     const img = png(5, 5);
     expect((await send('PUT', sha256(img), img)).status).toBe(200);
-    expect(s.has(HOST, sha256(img))).toBe(true);
+    expect(await s.has(HOST, sha256(img))).toBe(true);
     expect((await send('PUT', sha256(png(6, 6)), img)).status).toBe(400);
     const html = Buffer.from('<html>png</html>');
     expect((await send('PUT', sha256(html), html)).status).toBe(400);
@@ -229,7 +249,7 @@ describe('blob routes', () => {
     const res = await send('PUT', sha256(tooBig), tooBig, true);
     // 413, or the connection cut right after it.
     expect([413, -1]).toContain(res.status);
-    expect(s.has(HOST, sha256(tooBig))).toBe(false);
+    expect(await s.has(HOST, sha256(tooBig))).toBe(false);
   });
 
   it('serves an image only while an open record owes it to that peer', async () => {
@@ -243,6 +263,17 @@ describe('blob routes', () => {
     const got = await send('GET', sha256(img));
     expect(got.status).toBe(200);
     expect(got.body.equals(img)).toBe(true);
+    // Owed to HOST, not to another paired PC.
+    expect((await send('GET', sha256(img), undefined, false, true)).status).toBe(404);
+  });
+
+  it('answers an upload it already holds before reading its body', async () => {
+    const img = png(5, 5);
+    await s.storeReceived(HOST, refOf(img), img);
+    // A wrong body: never read, so never judged.
+    const res = await send('PUT', sha256(img), Buffer.from('not the image'));
+    expect([200, -1]).toContain(res.status);
+    expect(fs.existsSync(path.join(dir, 'a2a', 'blobs-in', HOST, sha256(img)))).toBe(false);
   });
 });
 
@@ -393,6 +424,17 @@ describe('receiving images by pull (this PC joined the sender)', () => {
     const parts = tasks.getTask(remoteTaskId(linkId, 'm-1'))!.history[0].parts;
     expect(parts).toEqual([{ kind: 'text', text: 'see' }, { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: sha256(img), bytes: img.length, notReceived: 'missing' } }]);
     expect(attempts.size).toBe(0);
+  });
+
+  it('does not count a pull this PC aborted (its stream ended)', async () => {
+    const linkId = activeLink({ workspaceId: 'ws-a', paneId: 'pane-a' }, { workspaceId: 'ws-b', paneId: 'pane-b' });
+    const img = png(2, 2);
+    const pull: ImagePull = async () => ({ ok: false, permanent: false, detail: 'aborted', aborted: true });
+    for (let i = 0; i < PULL_MAX_ATTEMPTS + 2; i++) {
+      // eslint-disable-next-line no-await-in-loop -- one redelivery at a time
+      expect(await acceptInbound(envOf(linkId, [refOf(img)]), { hostId: HOST, pull }, deps)).toEqual({ ok: false, error: 'unavailable' });
+    }
+    expect(tasks.getTask(remoteTaskId(linkId, 'm-1'))).toBeUndefined();
   });
 
   it('gives up at once on a permanent failure, and refuses images on a state envelope', async () => {

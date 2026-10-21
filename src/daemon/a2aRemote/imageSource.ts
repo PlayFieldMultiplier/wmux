@@ -35,16 +35,16 @@ const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.
 
 /**
  * The folders an agent may attach from. The sender pane's spawn folder counts
- * unless it is the home folder or a filesystem root (that would open every
- * picture the user has); with no verified pane (`spawnCwd` undefined) only the
- * uploads folder does. A spawn folder this daemon cannot open as a folder of
+ * unless the home folder is inside it or is it (home itself, `/Users`, a
+ * filesystem root: that would open every picture the user has); with no
+ * verified pane (`spawnCwd` undefined) only the uploads folder does. A spawn folder this daemon cannot open as a folder of
  * its own (a WSL pane's Linux path on Windows) is not a root either.
  */
 export function imageRoots(spawnCwd: string | undefined, uploadsRoot: string, home: string = os.homedir()): string[] {
   const roots = [uploadsRoot];
   if (!spawnCwd || !path.isAbsolute(spawnCwd)) return roots;
   const resolved = path.resolve(spawnCwd);
-  if (resolved === path.parse(resolved).root || samePath(resolved, path.resolve(home))) return roots;
+  if (resolved === path.parse(resolved).root || containsOrIs(resolved, path.resolve(home))) return roots;
   if (process.platform === 'win32' && !/^(?:[A-Za-z]:[\\/]|\\\\)/.test(spawnCwd)) return roots;
   roots.push(resolved);
   return roots;
@@ -153,8 +153,14 @@ async function realpathOrNull(p: string): Promise<string | null> {
   }
 }
 
-function samePath(a: string, b: string): boolean {
-  return process.platform === 'win32' || process.platform === 'darwin' ? a.toLowerCase() === b.toLowerCase() : a === b;
+/** `inner` is `outer` or below it (case-insensitively where the file system usually is). */
+function containsOrIs(outer: string, inner: string): boolean {
+  const fold = process.platform === 'win32' || process.platform === 'darwin';
+  const o = fold ? outer.toLowerCase() : outer;
+  const i = fold ? inner.toLowerCase() : inner;
+  if (o === i) return true;
+  const rel = path.relative(o, i);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 /** Read to the end, or null past `max` (a file that grows after its stat is never read whole). */

@@ -327,13 +327,14 @@ describe('cross-host delivery, end to end', () => {
   });
 
   it('each PC learns what the other takes, in both roles, and still knows it after a restart', async () => {
-    const b = await makePc('PC-B', { features: ['images.1', 'link-offer.1'] });
+    // B can keep images (an uploads folder); A advertises offers only.
+    const b = await makePc('PC-B', { images: true });
     const a = await makePc('PC-A', { features: ['link-offer.1'] });
     await pair(a, b);
     // A joined B: B's stream hello tells A; A's stream header tells B.
     await until(() => a.delivery.liveFeatures(b.hostId)?.has('images.1') === true);
     await until(() => b.delivery.liveFeatures(a.hostId)?.has('link-offer.1') === true);
-    expect(a.delivery.status()).toMatchObject([{ hostId: b.hostId, role: 'joiner', features: ['images.1', 'link-offer.1'] }]);
+    expect(a.delivery.status()).toMatchObject([{ hostId: b.hostId, role: 'joiner', features: ['link-offer.1', 'images.1'] }]);
     expect(b.delivery.peerFeatures(a.hostId)?.has('images.1')).toBe(false);
     // A new daemon on A, before B's stream is back: the last seen answer.
     const restarted = new A2aRemoteDelivery({
@@ -432,6 +433,14 @@ describe('cross-host delivery, end to end', () => {
     expect(b.delivery.outbox.pending(a.hostId).find((r) => r.envelope.kind === 'task')?.envelope.images).toEqual([
       { sha256: crypto.createHash('sha256').update(img).digest('hex'), mediaType: 'image/png', bytes: img.length },
     ]);
+  });
+
+  it('a PC with no image store does not advertise images.1, even when told to', async () => {
+    const b = await makePc('PC-B', { features: ['link-offer.1', 'images.1'] });
+    const a = await makePc('PC-A', { images: true });
+    await pair(a, b);
+    await until(() => a.delivery.liveFeatures(b.hostId) !== undefined);
+    expect([...(a.delivery.liveFeatures(b.hostId) ?? [])]).toEqual(['link-offer.1']);
   });
 
   it('an older PC (no images.1) gets the text with a note instead of refs it would drop', async () => {

@@ -67,7 +67,7 @@ export interface InboundImages {
  * the peer is the SERVER this PC joined, and the image must be fetched from
  * it. A failure that `permanent` marks will not change on a retry.
  */
-export type ImagePull = (ref: A2aRemoteImageRef) => Promise<{ ok: true; bytes: Buffer } | { ok: false; permanent: boolean; detail: string }>;
+export type ImagePull = (ref: A2aRemoteImageRef) => Promise<{ ok: true; bytes: Buffer } | { ok: false; permanent: boolean; detail: string; aborted?: boolean }>;
 
 /** Transient pull failures of one image before it counts as not received (and the text is delivered anyway). */
 export const PULL_MAX_ATTEMPTS = 3;
@@ -304,6 +304,8 @@ async function pullOne(
   const res = await peer.pull(ref);
   if (res.ok) return images.store.storeReceived(peer.hostId, ref, res.bytes);
   const key = pullKey(peer.hostId, env, ref);
+  // This PC stopped the fetch (its stream ended, or it is shutting down): not an attempt.
+  if (res.aborted) return { ok: false, reason: 'missing' };
   // A permanent failure needs no more attempts.
   const n = res.permanent ? PULL_MAX_ATTEMPTS : (images.pullAttempts.get(key) ?? 0) + 1;
   images.pullAttempts.set(key, n);

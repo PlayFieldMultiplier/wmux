@@ -139,11 +139,19 @@ export class A2aImageStore {
 
   // --- server: uploads from a joiner ----------------------------------------
 
-  /** Whether `hostId`'s image is here already, uploaded or received (a PUT then reads nothing new). */
-  has(hostId: HostId, sha: string): boolean {
+  /**
+   * Whether `hostId`'s image is here already with these exact bytes, uploaded
+   * or received (a PUT then needs no body). A hit refreshes the file's time,
+   * so an upload a resend still needs is not the oldest one a full share drops.
+   */
+  async has(hostId: HostId, sha: string): Promise<boolean> {
     if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) return false;
-    if (isRegular(path.join(this.stagingDir(hostId), sha))) return true;
-    return this.findStored(hostId, sha) !== null;
+    const candidates = [path.join(this.stagingDir(hostId), sha), ...Object.values(EXT).map((ext) => path.join(this.root, hostId, `${sha}.${ext}`))];
+    for (const full of candidates) {
+      // eslint-disable-next-line no-await-in-loop -- at most four small checks
+      if (await this.holds(full, sha)) return true;
+    }
+    return false;
   }
 
   /**
@@ -183,14 +191,22 @@ export class A2aImageStore {
 
   // --- receiver -------------------------------------------------------------
 
-  /** The received file for `ref`, when it is here with the right size (its time refreshed). */
+  /**
+   * The received file for `ref`, when it is here with exactly its bytes (its
+   * time refreshed). A file under that name with other bytes (something
+   * rewrote it) is removed, so the image is taken again instead of standing
+   * for content it no longer holds.
+   */
   async received(folder: string, ref: A2aRemoteImageRef): Promise<StoredImage | null> {
     if (!this.validFolder(folder) || !A2A_SHA256_RE.test(ref.sha256)) return null;
     const full = path.join(this.root, folder, `${ref.sha256}.${EXT[ref.mediaType]}`);
     const bytes = await readRegular(full);
     if (!bytes) return null;
     const info = checkImageBytes(ref, bytes);
-    if (!info) return null;
+    if (!info) {
+      await unlinkQuiet(full);
+      return null;
+    }
     const t = new Date(this.now());
     await fs.promises.utimes(full, t, t).catch(() => undefined);
     return { ok: true, path: full, info };
@@ -269,48 +285,40 @@ export class A2aImageStore {
     return folder === LOCAL_FOLDER || isHostId(folder);
   }
 
-  private findStored(hostId: HostId, sha: string): string | null {
-    for (const ext of Object.values(EXT)) {
-      const full = path.join(this.root, hostId, `${sha}.${ext}`);
-      if (isRegular(full)) return full;
-    }
-    return null;
+  /** `full` is a regular file whose bytes hash to `sha` (its time is refreshed). */
+  private async holds(full: string, sha: string): Promise<boolean> {
+    const bytes = await readRegular(full);
+    if (!bytes || sha256(bytes) !== sha) return false;
+    const t = new Date(this.now());
+    await fs.promises.utimes(full, t, t).catch(() => undefined);
+    return true;
   }
 
-  /** Write `name` in `dir` unless a regular file is there already; temp + rename, 0600. */
+  /**
+   * Write `name` in `dir` (its content's hash is the name's first 64 hex),
+   * unless a regular file with those bytes is there already; temp + rename,
+   * 0600. A file under the name with other bytes is replaced.
+   */
   private async writeOnce(dir: string, name: string, bytes: Buffer): Promise<void> {
     await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
     const final = path.join(dir, name);
-    if (isRegular(final)) {
-      const t = new Date(this.now());
-      await fs.promises.utimes(final, t, t).catch(() => undefined);
-      return;
-    }
-    const sha = BLOB_RE.test(name) ? name : name.slice(0, 64);
+    const sha = name.slice(0, 64);
+    if (await this.holds(final, sha)) return;
     const temp = path.join(dir, `.${sha}.${crypto.randomBytes(4).toString('hex')}.part`);
     try {
       await fs.promises.writeFile(temp, bytes, { mode: 0o600, flag: 'wx' });
       await fs.promises.rename(temp, final);
     } catch (err) {
       await unlinkQuiet(temp);
-      // Another write of the same content got there first (Windows refuses a
-      // rename onto an existing file): the name holds these bytes.
-      if (isRegular(final)) return;
+      // A concurrent write of the same content can win the rename (Windows
+      // fails one on a sharing violation): the name then holds these bytes.
+      if (await this.holds(final, sha)) return;
       throw err;
     }
   }
 }
 
 // --- fs helpers ---------------------------------------------------------------
-
-function isRegular(p: string): boolean {
-  try {
-    const st = fs.lstatSync(p);
-    return st.isFile() && !st.isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
 
 /** A regular file's bytes (never through a link), or null. */
 async function readRegular(p: string): Promise<Buffer | null> {

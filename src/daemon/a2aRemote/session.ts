@@ -405,14 +405,24 @@ export class JoinerSession {
         this.setState('disconnected', 'unauthorized');
         return 'retry';
       }
-      // Busy (too many uploads at once there): not this message's failure.
-      if (answer.status === 429) return 'retry';
+      // Busy (too many uploads at once there): not counted as a failure, but
+      // the message's time budget still runs.
+      if (answer.status === 429) return this.uploadBusy(rec);
       if (answer.status === 413 || answer.status === 400) {
         return this.giveUpImages(rec, `the other PC refused an image (HTTP ${answer.status})`);
       }
       return this.uploadFailed(rec, `HTTP ${answer.status}`);
     }
     return 'ok';
+  }
+
+  private uploadBusy(rec: A2aOutboxRecordV1): Promise<'next' | 'retry'> | 'retry' {
+    const now = Date.now();
+    const prev = this.uploadFailures.get(rec.seq);
+    const entry = { count: prev?.count ?? 0, since: prev?.since ?? now, last: prev?.last ?? 'the other PC is busy' };
+    this.uploadFailures.set(rec.seq, entry);
+    if (now - entry.since < IMAGE_UPLOAD_MAX_MS) return 'retry';
+    return this.giveUpImages(rec, `the images could not be uploaded within ${IMAGE_UPLOAD_MAX_MS / 60_000} minutes (the other PC stayed busy)`);
   }
 
   private uploadFailed(rec: A2aOutboxRecordV1, reason: string): Promise<'next' | 'retry'> | 'retry' {
@@ -456,7 +466,8 @@ export class JoinerSession {
         err instanceof PinnedClientError &&
         ((err.code === 'http' && err.status !== undefined && err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 429) ||
           err.code === 'protocol');
-      return { ok: false, permanent, detail: err instanceof PinnedClientError ? err.code : errMsg(err) };
+      const aborted = signal.aborted || (err instanceof PinnedClientError && err.code === 'aborted');
+      return { ok: false, permanent: permanent && !aborted, detail: err instanceof PinnedClientError ? err.code : errMsg(err), ...(aborted ? { aborted: true } : {}) };
     }
   }
 

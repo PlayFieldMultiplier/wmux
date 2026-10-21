@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import {
+  A2A_FEATURE_IMAGES,
   A2A_REMOTE_IMAGE_LIMITS,
   A2A_REMOTE_PROTOCOL,
   parseA2aRemoteImageRefs,
@@ -120,6 +121,8 @@ export class A2aRemoteDelivery {
   readonly peerFeatureStore: PeerFeatureStore;
   /** Image files of messages; null when `uploadsRoot` is not given. */
   readonly images: A2aImageStore | null;
+  /** What this PC advertises (`deps.features`, without `images.1` when it has no image store). */
+  private readonly features: readonly string[] | undefined;
   /** Failed image fetches from the servers this PC joined (`InboundImages.pullAttempts`). */
   private readonly pullAttempts = new Map<string, number>();
   private readonly deps: A2aRemoteDeliveryDeps;
@@ -134,6 +137,8 @@ export class A2aRemoteDelivery {
     this.outbox = new OutboxStore({ dir: deps.dir, log: deps.log, onEnqueue: (rec) => this.onEnqueue(rec), onAck: (recs) => this.onAck(recs) });
     this.peerFeatureStore = new PeerFeatureStore({ dir: deps.dir, log: deps.log });
     this.images = deps.uploadsRoot ? new A2aImageStore({ a2aDir: deps.dir, uploadsRoot: deps.uploadsRoot, log: deps.log }) : null;
+    // `images.1` is a promise to take images: only with somewhere to keep them.
+    this.features = deps.features?.filter((f) => f !== A2A_FEATURE_IMAGES || this.images !== null);
     this.hub = new A2aStreamHub({
       outbox: this.outbox,
       accept: (env, peer) => this.acceptFromJoiner(env, peer),
@@ -143,7 +148,7 @@ export class A2aRemoteDelivery {
         this.peerFeatureStore.record(hostId, 'asJoiner', features);
         deps.offers?.onPeerFeatures(hostId, features);
       },
-      ...(deps.features ? { features: deps.features } : {}),
+      ...(this.features ? { features: this.features } : {}),
       ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
       log: deps.log,
     });
@@ -512,7 +517,7 @@ export class A2aRemoteDelivery {
       reconcileLinks: () => this.reconcileLinks(hostId),
       onStatus: (status) => this.deps.broadcast({ type: 'a2a.remote.hosts.status', sessionId: '', data: status }),
       onServerFeatures: (features) => this.peerFeatureStore.record(hostId, 'asServer', features),
-      ...(this.deps.features ? { features: this.deps.features } : {}),
+      ...(this.features ? { features: this.features } : {}),
       ...(this.deps.timing ? { timing: this.deps.timing } : {}),
       ...(this.deps.client ? { client: this.deps.client } : {}),
       log: this.deps.log,
