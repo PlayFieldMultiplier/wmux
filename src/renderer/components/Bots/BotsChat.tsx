@@ -564,9 +564,16 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
   const { work, delegatorId, continuation, runEnd } = item;
   const { t } = ctx;
   const opts = ctx.work;
+  // A task's own thread (its worker's cards, linked from the conversation
+  // that started it) is named by the task's title.
+  const { requestTitle, taskTitle } = ctx;
+  const titleOf = useCallback(
+    (th: ThreadId) => requestTitle(th) ?? (th.startsWith('task:') ? taskTitle(th.slice(5)) : null),
+    [requestTitle, taskTitle],
+  );
   const view = useMemo(
-    () => workView(work, { delegatorId, waits: opts?.waits ?? (() => false), tasks: opts?.tasks, requestTitle: ctx.requestTitle, prUrl: opts?.prUrl }),
-    [work, delegatorId, opts, ctx.requestTitle],
+    () => workView(work, { delegatorId, waits: opts?.waits ?? (() => false), tasks: opts?.tasks, requestTitle: titleOf, prUrl: opts?.prUrl }),
+    [work, delegatorId, opts, titleOf],
   );
   const party = (botId: string) => ({ kind: 'bot' as const, workspaceId: work.workspaceId, botId });
   const face = delegatorId ? botFace(delegatorId, ctx) : null;
@@ -576,9 +583,12 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
     return c.actor.kind === 'human' ? `${t('room.actor.you')}: ${title}` : title;
   };
   const refChip = view.refUrl ? ctx.markdown.linkChip?.(view.refUrl, null) : null;
-  // The newest task end folded in that can be applied to the checkout.
-  const apply = ctx.apply;
-  const applyId = apply ? [...work.all].reverse().map((c) => cardApplyTaskId(c, apply.applicable)).find((id) => id !== null) ?? null : null;
+  // The newest folded card offering Resume, and the newest task end that
+  // can be applied to the checkout: their buttons stay on the card.
+  const { apply, resume } = ctx;
+  const newest = (of: (c: RoomCardData) => string | null): string | null => [...work.all].reverse().map(of).find((id) => id !== null) ?? null;
+  const applyId = apply ? newest((c) => cardApplyTaskId(c, apply.applicable)) : null;
+  const resumeId = resume ? newest((c) => cardResumeTaskId(c, resume.resumable)) : null;
   return (
     <div
       className={`wmux-bots-msg${continuation ? ' is-continuation' : ''}`}
@@ -602,7 +612,9 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
           textOf={textOf}
           refChip={refChip}
           onOpenThread={() => ctx.onThread(work.workspaceId, work.threadId)}
-          {...(applyId && apply ? { action: <WorkApply run={() => apply.run(applyId)} t={t} /> } : {})}
+          {...((applyId && apply) || (resumeId && resume) ? {
+            action: <WorkActions t={t} {...(applyId && apply ? { apply: () => apply.run(applyId) } : {})} {...(resumeId && resume ? { resume: () => resume.run(resumeId) } : {})} />,
+          } : {})}
         />
       </div>
     </div>
@@ -1235,12 +1247,29 @@ export function applyResultText(r: FactoryTaskApplyResult, t: T): string {
   }
 }
 
-/** A work card's Apply: the button, and its outcome under it. */
-function WorkApply({ run, t }: { run: () => Promise<FactoryTaskApplyResult>; t: T }) {
+/** A work card's Resume and Apply, and the Apply's outcome under them. */
+function WorkActions({ apply, resume, t }: { apply?: () => Promise<FactoryTaskApplyResult>; resume?: () => Promise<void>; t: T }) {
   const [applied, setApplied] = useState<FactoryTaskApplyResult | null>(null);
+  const [resuming, setResuming] = useState(false);
   return (
-    <div className="mt-1.5 flex flex-col items-start gap-0.5" data-bots-work-apply>
-      <ApplyButton run={run} t={t} onResult={setApplied} />
+    <div className="mt-1.5 flex flex-col items-start gap-0.5" data-bots-work-actions>
+      <div className="flex items-center gap-2">
+        {resume && (
+          <Button
+            size="sm"
+            variant="secondary"
+            data-bots-card-resume
+            disabled={resuming}
+            onClick={() => {
+              setResuming(true);
+              void resume().finally(() => setResuming(false));
+            }}
+          >
+            {t('botsPage.worker.resume')}
+          </Button>
+        )}
+        {apply && <ApplyButton run={apply} t={t} onResult={setApplied} />}
+      </div>
       {applied && <ApplyResultLine result={applied} t={t} />}
     </div>
   );

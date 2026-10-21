@@ -120,8 +120,16 @@ export function taskThreadOf(entry: { id: string; dispatch?: { threadId?: string
  *  issue or handoff thread, or `task:<id>` already). `dispatch.threadId` may
  *  also be a thread taskThreadOf already gave (a reclaim record's). */
 export function taskLifecycleThreadOf(entry: { id: string; dispatch?: { threadId?: string } }): ThreadId {
+  return taskLifecycleLinkOf(entry) ? (`task:${entry.id}` as ThreadId) : taskThreadOf(entry);
+}
+
+/** The 1:1 or group chat a task's lifecycle cards were moved out of
+ *  (taskLifecycleThreadOf), or undefined. The cards link it
+ *  (`refs.threadId`), so the task's own thread reads as work that
+ *  conversation started: one folded work card there (shared/botsWork.ts). */
+export function taskLifecycleLinkOf(entry: { id: string; dispatch?: { threadId?: string } }): ThreadId | undefined {
   const thread = taskThreadOf(entry);
-  return dmThreadBot(thread) || groupThreadGroup(thread) ? (`task:${entry.id}` as ThreadId) : thread;
+  return dmThreadBot(thread) || groupThreadGroup(thread) ? thread : undefined;
 }
 
 export type CardKind =

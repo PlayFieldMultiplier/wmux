@@ -653,7 +653,7 @@ describe('a reported task whose worker sat idle (refused or failed gate)', () =>
     expect(reclaimedWorkerState(rec)).toBe('resumable');
     expect(note.mock.calls.map((c) => c[2])).toEqual(['Worker paused (resumable): perf-A']);
     // Its stable code (worded in the reader's language) and the task its Resume acts on.
-    expect(note.mock.calls[0].slice(4)).toEqual([{ code: 'worker.pausedResumable', args: { title: 'perf-A' } }, 'wtask-abc-12345678']);
+    expect(note.mock.calls[0].slice(4)).toEqual([{ code: 'worker.pausedResumable', args: { title: 'perf-A' } }, 'wtask-abc-12345678', undefined]);
     // Its workspace stays open (closing it would cancel the task).
     expect(clearVerdict(rec, true, 'ws-elsewhere')).toBe('keep');
     // The task completes later: the record follows the end, with no second stop and no second card.
@@ -734,7 +734,7 @@ describe('an open task whose worker sat idle for hours without reporting', () =>
     expect(rec).toMatchObject({ ended: 'reported', endRev: 3 });
     expect(reclaimedWorkerState(rec)).toBe('resumable');
     expect(clearVerdict(rec, true, 'ws-elsewhere')).toBe('keep');
-    expect(note.mock.calls[0].slice(4)).toEqual([{ code: 'worker.openIdlePausedResumable', args: { title: 'perf-A' } }, current.id]);
+    expect(note.mock.calls[0].slice(4)).toEqual([{ code: 'worker.openIdlePausedResumable', args: { title: 'perf-A' } }, current.id, undefined]);
     expect(noticeBot).toHaveBeenCalledTimes(1);
     expect(noticeBot.mock.calls[0][0]).toMatchObject({ botId: BOT, workspaceId: 'ws-owner', topic: 'worker.paused', taskId: current.id, threadId: `task:${current.id}` });
     expect(String(noticeBot.mock.calls[0][0].body)).toContain('worker_resume');
@@ -882,12 +882,15 @@ describe('worker lifecycle cards stay out of the conversation that started the t
       const rec = await reclaimWorker(ports, entry, 'completed');
       expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.doneResumable' });
       expect(note.mock.calls[0][1]).toBe(`task:${entry.id}`);
+      // It links the conversation, which folds the task thread into one work card.
+      expect(note.mock.calls[0][6]).toBe(origin);
       // The record keeps the task's thread for its other uses.
       expect(rec?.threadId).toBe(origin);
       const resumed = vi.fn();
       await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: false })], typeLine: () => true, now: () => 9_000, note: resumed }, entry.id, { kind: 'owner' });
       expect(resumed.mock.calls[0][4]).toMatchObject({ code: 'worker.resumed' });
       expect(resumed.mock.calls[0][1]).toBe(`task:${entry.id}`);
+      expect(resumed.mock.calls[0][6]).toBe(origin);
       await settled(store);
     });
   }
@@ -899,6 +902,7 @@ describe('worker lifecycle cards stay out of the conversation that started the t
     const { ports, note } = reclaimPorts(store, [session()]);
     await reclaimWorker(ports, entry, 'completed');
     expect(note.mock.calls[0][1]).toBe(pr);
+    expect(note.mock.calls[0][6]).toBeUndefined();
   });
 
   it('a reported task paused in a group: its paused card lands in task:<id>', async () => {
@@ -908,6 +912,7 @@ describe('worker lifecycle cards stay out of the conversation that started the t
     await reclaimWorker(ports, entry, 'reported');
     expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.pausedResumable' });
     expect(note.mock.calls[0][1]).toBe(`task:${entry.id}`);
+    expect(note.mock.calls[0][6]).toBe(GROUP);
     await settled(store);
   });
 });
