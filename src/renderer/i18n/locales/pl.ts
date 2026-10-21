@@ -4095,7 +4095,7 @@ export const pl = {
   'prepCard.keep': 'Zachowaj',
   'prepCard.openCleanup': 'Otwórz listę porządkowania zadań',
   'prepCard.expired': 'Nie uruchomiono: brak odpowiedzi w ciągu 30 minut. Nic nie usunięto; odrzuć lub zachowaj.',
-  'prepCard.discardRefused': 'Nie odrzucono: {path} ma zmiany poza skopiowanymi plikami i wynikiem przygotowania. Usuń go z listy porządkowania zadań.',
+  'prepCard.discardRefused': 'Nie odrzucono: {path} zmienił się po nieudanym przygotowaniu. Usuń go z listy porządkowania zadań.',
   'prepCard.discardFailed': 'Nie udało się odrzucić. Usuń go z listy porządkowania zadań.',
   'prepCard.toastFailed': 'Przygotowanie {title} nie powiodło się. Odpowiedz na jego karcie Przygotowanie na pasku bocznym.',
   'prepCard.toastSkipped': 'Pominięto przygotowanie {title}. Powód jest na jego karcie na pasku bocznym.',

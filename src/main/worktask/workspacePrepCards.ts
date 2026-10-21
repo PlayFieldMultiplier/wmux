@@ -56,9 +56,18 @@ export class WorkspacePrepCards {
   /** Ended cards kept until dismissed: a renderer that mounts later (a
    *  collapsed sidebar opened, a reload) still draws them. */
   private readonly kept = new Set<string>();
+  /** Failed cards no start waits on any more, oldest first. */
+  private readonly expired = new Set<string>();
   private sink: Sink = () => undefined;
 
-  constructor(private readonly opts: { now?: () => number; decisionTtlMs?: number } = {}) {}
+  constructor(
+    private readonly opts: {
+      now?: () => number;
+      decisionTtlMs?: number;
+      /** Marks a project once its copy suggestion was shown, so it is made once. */
+      suggestions?: CopySuggestionStore;
+    } = {},
+  ) {}
 
   setSink(sink: Sink): void {
     this.sink = sink;
@@ -129,14 +138,35 @@ export class WorkspacePrepCards {
         };
         this.waiting.set(id, settle);
       }),
-      mark: (next) => publish(next),
+      mark: (next) => {
+        publish(next);
+        if (next.expired) this.noteExpired(id);
+      },
       close: () => {
         this.waiting.get(id)?.('dismiss');
-        if (lingers(card)) this.keep(id);
-        else this.cards.delete(id);
-        try { this.sink({ ...card, status: 'closed', updatedAt: now() }); } catch { /* best-effort */ }
+        this.expired.delete(id);
+        const kept = lingers(card);
+        if (kept) {
+          this.keep(id);
+          // Shown now (it stays until dismissed): not made again.
+          if (card.suggestCopy) this.opts.suggestions?.add(card.suggestCopy.root);
+        } else {
+          this.cards.delete(id);
+        }
+        try { this.sink({ ...card, status: 'closed', ...(kept ? {} : { gone: true }), updatedAt: now() }); } catch { /* best-effort */ }
       },
     };
+  }
+
+  /** Expired cards each hold a waiter for a late answer: past the cap the
+   *  oldest is closed (kept as it is, as Keep would). */
+  private noteExpired(id: string): void {
+    this.expired.add(id);
+    for (const old of this.expired) {
+      if (this.expired.size <= MAX_KEPT_CARDS) break;
+      this.expired.delete(old);
+      this.waiting.get(old)?.('dismiss');
+    }
   }
 
   private keep(id: string): void {
@@ -153,8 +183,13 @@ export class WorkspacePrepCards {
   decide(id: string, decision: WorkspacePrepDecision): boolean {
     if (this.kept.has(id)) {
       if (decision !== 'dismiss') return false;
+      const card = this.cards.get(id);
       this.kept.delete(id);
       this.cards.delete(id);
+      // Every window drops it, not only the one it was dismissed in.
+      if (card) {
+        try { this.sink({ ...card, status: 'closed', gone: true, updatedAt: (this.opts.now ?? Date.now)() }); } catch { /* best-effort */ }
+      }
       return true;
     }
     const card = this.cards.get(id);
@@ -172,7 +207,7 @@ export class WorkspacePrepCards {
 let shared: WorkspacePrepCards | null = null;
 
 export function getWorkspacePrepCards(): WorkspacePrepCards {
-  return (shared ??= new WorkspacePrepCards());
+  return (shared ??= new WorkspacePrepCards({ suggestions: fileCopySuggestionStore() }));
 }
 
 /** Remove a worktree whose preparation failed. Refused (with its folder)
@@ -274,15 +309,17 @@ export function fileCopySuggestionStore(file: string = path.join(getWmuxHomeDir(
 /**
  * The suggestion for a worktree a person opened, made once per project: when
  * the project copies no config files yet (`fanout.copy` never set) and its
- * checkout has `.env` files a worktree does not get. Marks the project as
- * suggested. Undefined otherwise.
+ * checkout has `.env` files a worktree does not get. Undefined otherwise. The
+ * project is marked once a card has shown it (WorkspacePrepCards.close), so a
+ * start that fails before any card, or a card whose setup failed, does not
+ * use it up.
  */
-export async function takeCopySuggestion(
+export async function copySuggestionFor(
   state: ProjectConfigState,
   sourceCwd: string,
   store: CopySuggestionStore,
   listCandidates: (root: string) => Promise<string[]> = listCopyCandidates,
-): Promise<{ cwd: string; count: number } | undefined> {
+): Promise<{ cwd: string; count: number; root: string } | undefined> {
   if (state.config?.fanout?.copy !== undefined || state.config?.fanout?.invalidFields?.includes('copy')) return undefined;
   // Not where New workspace setup could save it (the file waits for review).
   if (saveBlock(state)) return undefined;
@@ -291,6 +328,5 @@ export async function takeCopySuggestion(
   if (store.has(key)) return undefined;
   const count = (await listCandidates(root).catch(() => [])).filter(isDefaultCopyCandidate).length;
   if (count === 0) return undefined;
-  store.add(key);
-  return { cwd: sourceCwd, count };
+  return { cwd: sourceCwd, count, root: key };
 }

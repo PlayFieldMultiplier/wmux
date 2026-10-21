@@ -2,12 +2,13 @@
 // runs it again, Start anyway is offered only where an agent starts, Discard
 // removes only what wmux made, and an unanswered card stops the wait but
 // deletes nothing. The copy suggestion is made once.
+import * as path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 import {
   WorkspacePrepCards,
   runWithPrepCard,
-  takeCopySuggestion,
+  copySuggestionFor,
   type CopySuggestionStore,
   type WorkspacePrepCard,
 } from '../workspacePrepCards';
@@ -125,27 +126,51 @@ describe('WorkspacePrepCards', () => {
   });
 });
 
-describe('takeCopySuggestion', () => {
+describe('copySuggestionFor', () => {
   const memory = (): CopySuggestionStore & { roots: string[] } => {
     const roots: string[] = [];
     return { roots, has: (r) => roots.includes(r), add: (r) => { roots.push(r); } };
   };
 
-  it('is made once per project, only when copying was never configured and a .env exists', async () => {
+  it('is made until a card has shown it, only when copying was never configured and a .env exists', async () => {
     const store = memory();
     const list = async () => ['.env', '.env.example', 'secret.key'];
-    expect(await takeCopySuggestion({ found: false }, '/repo', store, list)).toEqual({ cwd: '/repo', count: 1 });
-    expect(await takeCopySuggestion({ found: false }, '/repo', store, list)).toBeUndefined();
+    const suggestion = await copySuggestionFor({ found: false }, '/repo', store, list);
+    expect(suggestion).toEqual({ cwd: '/repo', count: 1, root: path.resolve('/repo') });
+    if (!suggestion) return;
+    const cards = new WorkspacePrepCards({ suggestions: store });
+    // A card whose setup failed never showed it: not used up.
+    const unseen = cards.begin('a', true, { suggestCopy: suggestion });
+    unseen.result(failed);
+    unseen.close();
+    expect(store.roots).toEqual([]);
+    expect(cards.list()).toEqual([]);
+    const shown = cards.begin('b', true, { suggestCopy: suggestion });
+    shown.result({ ...ready, copy: { copied: 0, missing: 0, present: 0, refused: 0 } });
+    shown.close();
+    expect(store.roots).toEqual([path.resolve('/repo')]);
+    expect(await copySuggestionFor({ found: false }, '/repo', store, list)).toBeUndefined();
     const configured = { found: true, configPath: '/other/wmux.json', config: { version: 1 as const, fanout: { copy: [] as string[] } } };
-    expect(await takeCopySuggestion({ ...configured, config: { version: 1, fanout: { copy: ['.env'] } } }, '/other', store, list)).toBeUndefined();
-    expect(await takeCopySuggestion({ found: false }, '/none', store, async () => ['secret.key'])).toBeUndefined();
+    expect(await copySuggestionFor({ ...configured, config: { version: 1, fanout: { copy: ['.env'] } } }, '/other', store, list)).toBeUndefined();
+    expect(await copySuggestionFor({ found: false }, '/none', store, async () => ['secret.key'])).toBeUndefined();
+  });
+
+  it('a kept card dismissed in one window is dropped in every window', () => {
+    const { cards, events } = cardsWithLog();
+    const card = cards.begin('a', true);
+    card.result({ ...ready });
+    card.close();
+    expect(events.at(-1)).toMatchObject({ status: 'closed' });
+    expect(events.at(-1)?.gone).toBeUndefined();
+    expect(cards.decide(card.id, 'dismiss')).toBe(true);
+    expect(events.at(-1)).toMatchObject({ status: 'closed', gone: true });
   });
 
   it('is not made for a project whose wmux.json waits for review, and stays unmade', async () => {
     const store = memory();
     const list = async () => ['.env'];
     const denied = { found: true, configPath: '/r/wmux.json', trust: 'denied' as const, config: { version: 1 as const } };
-    expect(await takeCopySuggestion(denied, '/r', store, list)).toBeUndefined();
+    expect(await copySuggestionFor(denied, '/r', store, list)).toBeUndefined();
     expect(store.roots).toEqual([]);
   });
 });

@@ -3487,7 +3487,7 @@ export const ko = {
   'prepCard.keep': '유지',
   'prepCard.openCleanup': '작업 정리 목록 열기',
   'prepCard.expired': '시작 안 됨: 30분 안에 응답이 없었습니다. 아무것도 지우지 않았습니다. 버리거나 유지하세요.',
-  'prepCard.discardRefused': '버리지 않음: {path}에 복사한 파일과 준비 출력 외의 변경이 있습니다. 작업 정리 목록에서 제거하세요.',
+  'prepCard.discardRefused': '버리지 않음: 준비가 실패한 뒤 {path}가 바뀌었습니다. 작업 정리 목록에서 제거하세요.',
   'prepCard.discardFailed': '버리지 못했습니다. 작업 정리 목록에서 제거하세요.',
   'prepCard.toastFailed': '{title}의 준비가 실패했습니다. 사이드바의 준비 카드에서 응답하세요.',
   'prepCard.toastSkipped': '{title}의 준비를 건너뛰었습니다. 이유는 사이드바의 준비 카드에 있습니다.',

@@ -33,7 +33,7 @@ import {
   fileCopySuggestionStore,
   getWorkspacePrepCards,
   runWithPrepCard,
-  takeCopySuggestion,
+  copySuggestionFor,
   type CopySuggestionStore,
   type WorkspacePrepCards,
 } from '../../worktask/workspacePrepCards';
@@ -291,7 +291,7 @@ export async function addPreparedWorktree(
   // the card for Retry (no agent starts here, so there is no Start anyway).
   const state = await getState(repoPath).catch((): ProjectConfigState => ({ found: false }));
   const plan = resolveWorkspacePrep(state, 'human');
-  const suggestCopy = opts.suggestions ? await takeCopySuggestion(state, repoPath, opts.suggestions).catch(() => undefined) : undefined;
+  const suggestCopy = opts.suggestions ? await copySuggestionFor(state, repoPath, opts.suggestions).catch(() => undefined) : undefined;
   if (!workspacePrepHasWork(plan) && !suggestCopy) return added;
   const card = opts.cards.begin(branch, false, suggestCopy ? { suggestCopy } : {});
   void runWithPrepCard(card, (onProgress) => run(onProgress)).catch(() => card.close());

@@ -3531,7 +3531,7 @@ export const zh = {
   'prepCard.keep': '保留',
   'prepCard.openCleanup': '打开任务清理列表',
   'prepCard.expired': '未启动：30 分钟内没有回应。没有删除任何内容；可以丢弃或保留。',
-  'prepCard.discardRefused': '未丢弃：{path} 中有复制的文件和准备输出以外的更改。请从任务清理列表中移除它。',
+  'prepCard.discardRefused': '未丢弃：准备失败后 {path} 有了更改。请从任务清理列表中移除它。',
   'prepCard.discardFailed': '无法丢弃。请从任务清理列表中移除它。',
   'prepCard.toastFailed': '{title} 的准备失败。请在侧边栏的准备卡片上回应。',
   'prepCard.toastSkipped': '已跳过 {title} 的准备。原因见侧边栏的准备卡片。',

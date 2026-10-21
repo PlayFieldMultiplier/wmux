@@ -22,7 +22,7 @@ export function applyPrepCardEvent(cards: WorkspacePrepCard[], ev: WorkspacePrep
   const at = cards.findIndex((c) => c.id === ev.id);
   if (ev.status === 'closed') {
     if (at === -1) return cards;
-    return lingers(cards[at]) ? cards : cards.filter((c) => c.id !== ev.id);
+    return lingers(cards[at]) && !ev.gone ? cards : cards.filter((c) => c.id !== ev.id);
   }
   if (at === -1) return [...cards, ev];
   const next = cards.slice();
@@ -45,13 +45,18 @@ export default function WorkspacePrepCards() {
   useEffect(() => {
     if (typeof api?.onCard !== 'function' || typeof api.list !== 'function') return;
     let live = true;
+    // Ended while the list below was read: not put back by its answer.
+    const ended = new Set<string>();
     const off = api.onCard((ev) => {
+      if (ev.status === 'closed' && ev.gone) ended.add(ev.id);
       // The clock starts from this event, not from when the list mounted.
       setNow(Date.now());
       setCards((prev) => applyPrepCardEvent(prev, ev));
     });
     // A reload draws the cards that are still open.
-    void api.list().then((open) => { if (live) setCards((prev) => open.reduce(applyPrepCardEvent, prev)); }, () => undefined);
+    void api.list().then((open) => {
+      if (live) setCards((prev) => open.filter((c) => !ended.has(c.id)).reduce(applyPrepCardEvent, prev));
+    }, () => undefined);
     return () => {
       live = false;
       if (typeof off === 'function') off();

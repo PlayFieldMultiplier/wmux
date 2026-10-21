@@ -4120,7 +4120,7 @@ export const en = {
   'prepCard.keep': 'Keep',
   'prepCard.openCleanup': 'Open task cleanup list',
   'prepCard.expired': 'Not started: no answer within 30 minutes. Nothing was deleted; discard it or keep it.',
-  'prepCard.discardRefused': 'Not discarded: {path} has changes beyond the copied files and the setup output. Remove it from the task cleanup list.',
+  'prepCard.discardRefused': 'Not discarded: {path} changed after its setup failed. Remove it from the task cleanup list.',
   'prepCard.discardFailed': 'Could not discard it. Remove it from the task cleanup list.',
   'prepCard.toastFailed': 'Setup failed in {title}. Answer on its Preparing card in the sidebar.',
   'prepCard.toastSkipped': 'Setup skipped in {title}. Its Preparing card in the sidebar says why.',

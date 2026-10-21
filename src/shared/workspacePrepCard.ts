@@ -45,7 +45,10 @@ export interface WorkspacePrepCard {
    * offers to open New workspace setup for this folder; nothing is copied
    * until the person saves there.
    */
-  suggestCopy?: { cwd: string; count: number };
+  suggestCopy?: { cwd: string; count: number; root: string };
+  /** status 'closed': main no longer has the card (not kept for reading,
+   *  or dismissed after it was). */
+  gone?: boolean;
   updatedAt: number;
 }
 
@@ -55,7 +58,9 @@ export type WorkspacePrepDecision = 'retry' | 'start' | 'discard' | 'dismiss';
 /** Cards kept after their preparation ended: a skip, a gap or the
  *  suggestion, which the person should read before dismissing it. */
 export function lingers(card: WorkspacePrepCard): boolean {
-  return card.status === 'skipped' || card.suggestCopy !== undefined || (card.status === 'ready' && card.missing + card.refused > 0);
+  if (card.status === 'skipped') return true;
+  // Not a failed or running one: its buttons answer a wait that is over.
+  return card.status === 'ready' && (card.suggestCopy !== undefined || card.missing + card.refused > 0);
 }
 
 export type PrepCardToastKey =

@@ -46,12 +46,15 @@ describe('card list rules', () => {
   it('keeps a skip, a gap or a suggestion after main closes it, drops a clean one', () => {
     expect(lingers(card({ status: 'skipped', reason: 'stale' }))).toBe(true);
     expect(lingers(card({ status: 'ready', missing: 1 }))).toBe(true);
-    expect(lingers(card({ status: 'ready', suggestCopy: { cwd: '/repo', count: 1 } }))).toBe(true);
+    expect(lingers(card({ status: 'ready', suggestCopy: { cwd: '/repo', count: 1, root: '/repo' } }))).toBe(true);
     expect(lingers(card({ status: 'ready' }))).toBe(false);
     const open = applyPrepCardEvent([], card({ status: 'ready' }));
     expect(applyPrepCardEvent(open, card({ status: 'closed' }))).toEqual([]);
     const gap = applyPrepCardEvent([], card({ status: 'ready', missing: 1 }));
     expect(applyPrepCardEvent(gap, card({ status: 'closed' }))).toHaveLength(1);
+    expect(applyPrepCardEvent(gap, card({ status: 'closed', gone: true }))).toEqual([]);
+    // A failed card is never kept: its buttons answer a wait that is over.
+    expect(lingers(card({ status: 'failed', suggestCopy: { cwd: '/repo', count: 1, root: '/repo' } }))).toBe(false);
     expect(clock(83_000)).toBe('1:23');
   });
 
@@ -128,8 +131,8 @@ describe('WorkspacePrepCards', () => {
 
   it('the one-time suggestion opens New workspace setup for that folder', async () => {
     await act(async () => root.render(createElement(WorkspacePrepCards)));
-    act(() => emit(card({ status: 'ready', suggestCopy: { cwd: '/repo', count: 1 } })));
-    act(() => emit(card({ status: 'closed', suggestCopy: { cwd: '/repo', count: 1 } })));
+    act(() => emit(card({ status: 'ready', suggestCopy: { cwd: '/repo', count: 1, root: '/repo' } })));
+    act(() => emit(card({ status: 'closed', suggestCopy: { cwd: '/repo', count: 1, root: '/repo' } })));
     expect(container.querySelector('[data-testid="workspace-prep-suggest"]')).not.toBeNull();
     act(() => [...container.querySelectorAll('button')].find((b) => b.textContent === 'Choose files…')!.click());
     expect(useStore.getState().prepDialogCwd).toBe('/repo');

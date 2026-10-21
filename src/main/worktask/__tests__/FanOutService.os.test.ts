@@ -1438,6 +1438,29 @@ describe('new workspace preparation on fan-out worktrees', () => {
     expect((await started).tasks[0].preservedWorktree).toBe(wt);
   });
 
+  it('with a card, Discard never deletes a copied config file the person edited there', async () => {
+    const { repo, worktrees } = realRepo();
+    const cards = new WorkspacePrepCards();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: makeRendererFake().port,
+      worktrees,
+      prepCards: cards,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { copy: ['.env'], setup: 'node -e "process.exit(4)"' } } }),
+    });
+    const started = svc.start(baseReq({ repoPath: repo, titles: ['issue-11'], prepOrigin: 'human' }));
+    await vi.waitFor(() => expect(cards.list()[0]?.status).toBe('failed'), { timeout: 10_000 });
+    const wt = (worktrees.createWorktree as ReturnType<typeof vi.fn>).mock.calls[0][0].worktreePath as string;
+    // git ignores .env, so only its size and time say it was edited.
+    fs.writeFileSync(path.join(wt, '.env'), 'SECRET=mine-and-longer\n');
+    const id = cards.list()[0].id;
+    expect(cards.decide(id, 'discard')).toBe(true);
+    await vi.waitFor(() => expect(cards.list()[0]?.discardRefused).toBe(wt), { timeout: 10_000 });
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled();
+    cards.decide(id, 'dismiss');
+    await started;
+  });
+
   it('with a card, an unanswered failure stops waiting and deletes nothing; the card stays', async () => {
     const { repo, worktrees } = realRepo();
     const cards = new WorkspacePrepCards({ decisionTtlMs: 50 });

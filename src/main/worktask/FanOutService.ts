@@ -71,7 +71,7 @@ import {
 } from './workspacePrep';
 import {
   runWithPrepCard,
-  takeCopySuggestion,
+  copySuggestionFor,
   type CopySuggestionStore,
   WORKSPACE_PREP_DECISION_TTL_MS,
   type PrepCardDiscard,
@@ -430,14 +430,23 @@ export const FANOUT_PREP_REVIEW_WARNING =
 export const FANOUT_COPY_BLOCKED_WARNING =
   "the repository's config files (fanout.copy) were not copied into these worktrees: copying into bot and fan-out workspaces is off for this project";
 
-/** What a person could have changed in a worktree: its HEAD, and every
- *  tracked or untracked change git does not ignore (copied config files are
- *  ignored). Null when git cannot say. */
-async function worktreeChanges(dir: string): Promise<string | null> {
+/** What a person could have changed in a worktree: its HEAD, every tracked
+ *  or untracked change git does not ignore, and the size and time of each
+ *  copied config file (ignored, so git does not see an edit to one). Null
+ *  when git cannot say. */
+async function worktreeChanges(dir: string, copiedFiles: string[] = []): Promise<string | null> {
   const head = await git(['rev-parse', 'HEAD'], dir);
   const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], dir);
   if (head.code !== 0 || status.code !== 0) return null;
-  return `${head.stdout.trim()}\0${status.stdout}`;
+  const copies = copiedFiles.map((file) => {
+    try {
+      const st = fs.lstatSync(file);
+      return `${st.size}:${st.mtimeMs}`;
+    } catch {
+      return '-';
+    }
+  });
+  return `${head.stdout.trim()}\0${status.stdout}\0${copies.join(',')}`;
 }
 
 /** The last lines a setup printed, for a failure report. */
@@ -1271,7 +1280,7 @@ export class FanOutService {
     copyBlocked?: true;
     setupSkipped?: FanoutSetupSkipReason;
     portRangeInvalid?: true;
-    suggestCopy?: { cwd: string; count: number };
+    suggestCopy?: { cwd: string; count: number; root: string };
   }> {
     const empty = { ports: new Array<number | undefined>(count).fill(undefined) };
     if (!this.project) return empty;
@@ -1306,7 +1315,7 @@ export class FanOutService {
     const rangeReport = portRangeInvalid ? { portRangeInvalid: true as const } : {};
     // Once per project, on a worktree a person opened (only with a card to show it on).
     const suggestCopy = origin === 'human' && this.prepCards && this.copySuggestions
-      ? await takeCopySuggestion(state, repoPath, this.copySuggestions).catch(() => undefined)
+      ? await copySuggestionFor(state, repoPath, this.copySuggestions).catch(() => undefined)
       : undefined;
     const suggestion = suggestCopy ? { suggestCopy } : {};
     // Nothing declared reports nothing; a declared preparation that does not
@@ -1366,7 +1375,7 @@ export class FanOutService {
     /** Why the project's declared preparation did not run (shown on the card). */
     prepSkipped?: WorkspacePrepSkipReason;
     /** The one-time "Copy this file too?" suggestion (human origin only). */
-    suggestCopy?: { cwd: string; count: number };
+    suggestCopy?: { cwd: string; count: number; root: string };
     /** Orchestrator role for this task's pane (absent = unroled). */
     role?: string;
     /** The task branch's name (absent = wtask/{slug}-{id}). */
@@ -1602,8 +1611,10 @@ export class FanOutService {
       // never deleted).
       let leftBySetup: string | null | undefined;
       let discardOutcome: string | undefined;
+      const copyDest = ctx.copy ? worktreeProjectDir(cardPlan.repoRoot, ctx.copy.projectRoot, cardPlan.worktreePath) : undefined;
+      const copiedFiles = ctx.copy && copyDest ? ctx.copy.files.map((f) => path.join(copyDest, f)) : [];
       const discard: PrepCardDiscard = async () => {
-        const now = await worktreeChanges(cardPlan.worktreePath);
+        const now = await worktreeChanges(cardPlan.worktreePath, copiedFiles);
         if (leftBySetup == null || now === null || now !== leftBySetup) return { removed: false, path: cardPlan.worktreePath };
         const rolledBack = await this.rollbackTaskWorktree(cardPlan, ctx);
         discardOutcome = rolledBack.outcome;
@@ -1638,7 +1649,7 @@ export class FanOutService {
           const run = () => runFanoutSetup(setupCommand, cardPlan.worktreePath, taskEnv);
           const r = gates ? await gates.withPermit(run) : await run();
           if (r.ok) return { status: 'ready', copy, setupRan: true };
-          if (leftBySetup === undefined) leftBySetup = await worktreeChanges(cardPlan.worktreePath);
+          if (leftBySetup === undefined) leftBySetup = await worktreeChanges(cardPlan.worktreePath, copiedFiles);
           const outputTail = setupTail(r.tail);
           return {
             status: 'failed', copy, setupRan: true, error: r.summary ?? r.error,
@@ -1728,7 +1739,7 @@ export class FanOutService {
       if (!slot.ok) {
         discardTempDir();
         const error = `not launched: ${slot.reason}`;
-        const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+        const rolledBack = await this.rollbackUnlessPrepared(plan, ctx, preparedByCard);
         await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
         return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
       }
@@ -1762,7 +1773,7 @@ export class FanOutService {
       releaseSlot();
       discardTempDir();
       const error = `not launched: ${refusal}`;
-      const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+      const rolledBack = await this.rollbackUnlessPrepared(plan, ctx, preparedByCard);
       await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
       return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
     }
@@ -1783,7 +1794,7 @@ export class FanOutService {
       releaseSlot();
       discardTempDir();
       const error = `not launched: ${(err as Error).message}`;
-      const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+      const rolledBack = await this.rollbackUnlessPrepared(plan, ctx, preparedByCard);
       await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
       return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
     }
@@ -1817,7 +1828,7 @@ export class FanOutService {
         releaseSlot();
         discardTempDir();
         const error = 'not launched: a secret it names is not stored any more';
-        const rolledBack = await this.rollbackTaskWorktree(plan, ctx);
+        const rolledBack = await this.rollbackUnlessPrepared(plan, ctx, preparedByCard);
         await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, outcome: rolledBack.outcome });
         return { ...base, error, ...(rolledBack.removed ? {} : preserved) };
       }
@@ -2439,6 +2450,18 @@ export class FanOutService {
     } catch (err) {
       console.warn(`[fanout] ${taskId}: ledger row for a task that did not launch not written: ${String(err)}`);
     }
+  }
+
+  /** A worktree prepared under a card may hold what the person wrote while
+   *  it waited on them: it is never force-removed, only kept (the task
+   *  cleanup list removes it, refusing uncommitted changes). */
+  private async rollbackUnlessPrepared(
+    plan: TaskWorktreePlan | undefined,
+    ctx: { baseOid?: string; checkout?: { sha: string } },
+    preparedByCard: boolean,
+  ): Promise<{ removed: boolean; outcome?: string }> {
+    if (preparedByCard && plan) return { removed: false, outcome: `; worktree kept at ${plan.worktreePath}` };
+    return this.rollbackTaskWorktree(plan, ctx);
   }
 
   /**
