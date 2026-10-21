@@ -770,7 +770,10 @@ export class GlabPrService implements PrProvider {
       return partial ? { ok: false, code: 'error', message: partial } : { ok: true, value: raw };
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { ok: false, code: 'cli-missing', message: 'GitLab CLI (glab) is not installed' };
-      if (host && glabAuthFailure(err) === 'signed-out') {
+      // `glab api` with no token (or a refused one) for the host prints
+      // "Unauthenticated.", which the auth-status wording does not cover.
+      const e = err as { stderr?: string; message?: string };
+      if (host && (glabAuthFailure(err) === 'signed-out' || /\bunauthenticated\b/i.test(`${e?.stderr ?? ''}\n${e?.message ?? ''}`))) {
         return { ok: false, code: 'unauthenticated', message: `GitLab CLI is not authenticated for ${host} — run \`glab auth login --hostname ${host}\`` };
       }
       return { ok: false, code: 'error', message: glabErrorText(err) };

@@ -357,6 +357,9 @@ describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
     expect(await missing.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'cli-missing' });
     const out = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'glab: 401 Unauthorized (HTTP 401)' }); });
     expect(await out.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'unauthenticated' });
+    // What glab 1.108 prints for a host it holds no token for.
+    const anon = svcOf(async () => { throw Object.assign(new Error('Command failed'), { stderr: '   ERROR  \n  Unauthenticated.  \n' }); });
+    expect(await anon.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'unauthenticated' });
     const down = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'dial tcp: i/o timeout' }); });
     expect(await down.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'error' });
     const partial = svcOf(async () => ({ stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'complexity' }] }) }));
