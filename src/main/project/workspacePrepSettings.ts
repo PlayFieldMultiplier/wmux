@@ -22,6 +22,7 @@ import { git as runGit, type GitResult } from '../git/git';
 import {
   WMUX_PROJECT_CONFIG_FILENAME,
   PROJECT_CONFIG_MAX_FILE_BYTES,
+  PROJECT_FANOUT_MAX_COPY,
   normFanoutCopyPath,
   normalizeWmuxProjectConfig,
   parseFanoutPortRange,
@@ -97,9 +98,11 @@ export async function listCopyCandidates(root: string, gitRun: NonNullable<Works
       continue;
     }
     out.push(rel);
-    if (out.length >= WORKSPACE_PREP_MAX_CANDIDATES) break;
   }
-  return out.sort((a, b) => Number(isDefaultCopyCandidate(b)) - Number(isDefaultCopyCandidate(a)) || a.localeCompare(b));
+  // Sorted before the cap, so a `.env` deep in a big tree is never cut.
+  return out
+    .sort((a, b) => Number(isDefaultCopyCandidate(b)) - Number(isDefaultCopyCandidate(a)) || a.localeCompare(b))
+    .slice(0, WORKSPACE_PREP_MAX_CANDIDATES);
 }
 
 function sha256Hex(buf: Buffer): string {
@@ -116,16 +119,29 @@ async function locate(cwd: string, deps: WorkspacePrepSettingsDeps): Promise<{ s
   return { state, dir: path.resolve(top.stdout.trim()) };
 }
 
-/** True when the file can run something besides what this section edits. */
-function hasOtherRunnables(config: WmuxProjectConfig | undefined): boolean {
+/**
+ * True when an unapproved file can run something: commands, a layout, or a
+ * setup command somebody else wrote. A one-line field is no place to review
+ * a shell command (a long tail or a newline hides in it), so such a file is
+ * reviewed in the trust dialog, which shows it verbatim, before this section
+ * may save over it.
+ */
+function hasRunnables(config: WmuxProjectConfig | undefined): boolean {
   if (!config) return false;
-  return config.layout !== undefined || (config.commands?.length ?? 0) > 0;
+  return config.layout !== undefined || (config.commands?.length ?? 0) > 0 || config.fanout?.setup !== undefined;
+}
+
+/** The live bytes are the approved ones (not just a cached verdict). */
+function trustedNow(state: ProjectConfigState, liveHash: string | undefined): boolean {
+  return state.trust === 'trusted' && liveHash !== undefined && state.contentHash === liveHash;
 }
 
 function saveBlock(state: ProjectConfigState): WorkspacePrepSettingsView['saveBlocked'] {
   if (!state.found) return undefined;
   if (state.invalid) return 'invalid';
-  if (state.trust !== 'trusted' && hasOtherRunnables(state.config)) return 'review-first';
+  // 'denied' is sticky: the trust dialog is where it is lifted.
+  if (state.trust === 'denied') return 'review-first';
+  if (state.trust !== 'trusted' && hasRunnables(state.config)) return 'review-first';
   return undefined;
 }
 
@@ -165,6 +181,7 @@ export function parseWorkspacePrepSettings(raw: unknown): WorkspacePrepSettings 
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const r = raw as Record<string, unknown>;
   if (!Array.isArray(r.copy) || typeof r.setup !== 'string' || typeof r.portRange !== 'string' || typeof r.copyIntoAutomated !== 'boolean') return undefined;
+  if (r.copy.length > PROJECT_FANOUT_MAX_COPY) return undefined;
   const copy: string[] = [];
   for (const entry of r.copy) {
     const norm = normFanoutCopyPath(entry);
@@ -214,9 +231,10 @@ export async function saveWorkspacePrepSettings(
     }
     // Re-checked against the bytes about to be replaced, not the view the
     // renderer had: never approve commands the user has not reviewed.
-    const state = found.state.found ? found.state : { found: true };
+    const state: ProjectConfigState = found.state.found ? found.state : { found: true };
     const config = normalizeWmuxProjectConfig(doc);
-    if (state.trust !== 'trusted' && hasOtherRunnables(config)) return { ok: false, error: 'review-first' };
+    if (state.trust === 'denied') return { ok: false, error: 'review-first' };
+    if (!trustedNow(state, liveHash) && hasRunnables(config)) return { ok: false, error: 'review-first' };
   }
 
   const prevFanout = doc.fanout && typeof doc.fanout === 'object' && !Array.isArray(doc.fanout) ? { ...(doc.fanout as Record<string, unknown>) } : {};
@@ -243,10 +261,14 @@ export async function saveWorkspacePrepSettings(
     return { ok: false, error: 'write-failed', detail: (err as NodeJS.ErrnoException).code ?? 'unknown' };
   }
   const contentHash = sha256Hex(bytes);
-  const root = found.state.root ?? found.dir;
+  // The trust key is the root the store finds from this cwd (it keeps a
+  // symlinked spelling git's top resolves away), read back from the file
+  // just written.
+  const after = await deps.getState(cwd).catch((): ProjectConfigState => ({ found: false }));
+  const root = after.found && after.contentHash === contentHash && after.root ? after.root : found.state.root ?? found.dir;
   // The unattended reboot consent was given for the layout, which this save
   // does not touch: it carries over only from bytes that were trusted.
-  const unattended = liveHash !== undefined && found.state.trust === 'trusted' ? await deps.unattendedFor(root, liveHash) : false;
+  const unattended = trustedNow(found.state, liveHash) && liveHash !== undefined ? await deps.unattendedFor(root, liveHash) : false;
   await deps.setTrusted(root, contentHash, unattended);
   return { ok: true, contentHash };
 }

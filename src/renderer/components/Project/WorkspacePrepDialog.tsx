@@ -10,7 +10,7 @@
 //
 // Built from ui/ like ProjectConfigDialog: grouped rows, one primary.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { workspaceProbeCwd, probeProjectConfig } from '../../utils/projectConfigProbe';
@@ -25,7 +25,29 @@ import Field from '../ui/Field';
 import Input from '../ui/Input';
 import Switch from '../ui/Switch';
 import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
-import { IconWarning } from '../icons';
+import { IconChevron, IconWarning } from '../icons';
+import { useFieldWiring } from '../ui/Field';
+import { PROJECT_FANOUT_MAX_COPY } from '../../../shared/wmuxProjectConfig';
+
+/** The setup command over several lines: a shell line can hold a newline, and
+ *  a one-line input would hide (and drop) it. ui-input styling, Field-wired. */
+function SetupField(props: { value: string; onChange: (v: string) => void; placeholder: string; disabled: boolean }) {
+  const wiring = useFieldWiring();
+  return (
+    <textarea
+      id={wiring.id}
+      aria-describedby={wiring['aria-describedby']}
+      className="ui-input font-mono text-[12px] w-full min-h-[56px] resize-y"
+      value={props.value}
+      onChange={(e) => props.onChange(e.target.value)}
+      placeholder={props.placeholder}
+      spellCheck={false}
+      disabled={props.disabled}
+      rows={2}
+      data-testid="prep-setup-input"
+    />
+  );
+}
 
 type Load = { state: 'loading' } | { state: 'error' } | { state: 'ready'; view: WorkspacePrepSettingsView };
 
@@ -42,6 +64,9 @@ export default function WorkspacePrepDialog() {
   const setWsId = useStore((s) => s.setPrepDialogWsId);
   const ws = useStore((s) => (wsId ? s.workspaces.find((w) => w.id === wsId) : undefined));
   const cwd = ws ? workspaceProbeCwd(ws) : undefined;
+  // Read once per opening: a workspace whose cwd moves while the dialog is
+  // open must not throw the edits away.
+  const loadedFor = useRef<string | null>(null);
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [copy, setCopy] = useState<string[]>([]);
@@ -53,7 +78,9 @@ export default function WorkspacePrepDialog() {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!wsId || !cwd) return;
+    if (!wsId) { loadedFor.current = null; return; }
+    if (!cwd || loadedFor.current !== null) return;
+    loadedFor.current = cwd;
     let live = true;
     setLoad({ state: 'loading' });
     setSaveError(null);
@@ -144,7 +171,8 @@ export default function WorkspacePrepDialog() {
                           checked={copy.includes(file)}
                           onCheckedChange={(on) => toggle(file, on)}
                           aria-label={file}
-                          disabled={!!blocked}
+                          // At most PROJECT_FANOUT_MAX_COPY files, as wmux.json accepts.
+                          disabled={!!blocked || (!copy.includes(file) && copy.length >= PROJECT_FANOUT_MAX_COPY)}
                         />
                         <div className="ui-row-text">
                           <p className="ui-row-title font-mono !text-[12px] break-all">{file}</p>
@@ -160,15 +188,7 @@ export default function WorkspacePrepDialog() {
 
             <section>
               <Field label={t('prep.setupLabel')} description={t('prep.setupDesc')} layout="stacked">
-                <Input
-                  value={setup}
-                  onChange={(e) => setSetup(e.target.value)}
-                  placeholder={view.suggestedSetup ?? ''}
-                  className="font-mono text-[12px] w-full"
-                  spellCheck={false}
-                  disabled={!!blocked}
-                  data-testid="prep-setup-input"
-                />
+                <SetupField value={setup} onChange={setSetup} placeholder={view.suggestedSetup ?? ''} disabled={!!blocked} />
               </Field>
               {setup.trim() === '' && view.suggestedSetup && !blocked && (
                 <Button size="sm" variant="ghost" className="mt-2" onClick={() => setSetup(view.suggestedSetup ?? '')}>
@@ -179,7 +199,10 @@ export default function WorkspacePrepDialog() {
 
             <section>
               <Button size="sm" variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced((v) => !v)}>
-                {t('prep.advanced')}
+                <span className="inline-flex items-center gap-1">
+                  <span aria-hidden="true" style={{ transform: advanced ? 'rotate(90deg)' : 'none' }} className="inline-flex"><IconChevron size={12} /></span>
+                  {t('prep.advanced')}
+                </span>
               </Button>
               {advanced && (
                 <div className="ui-group mt-2">
