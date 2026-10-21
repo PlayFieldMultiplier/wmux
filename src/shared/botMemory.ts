@@ -41,6 +41,9 @@ export const BOT_MEMORY_IPC = {
   clear: 'factory:memory:clear',
 } as const;
 
+// Adapted from NousResearch/hermes-agent@146963666 (tools/memory_tool.py, tools/memory_tool_store.py), MIT:
+// the two targets, the add/replace/remove actions by a unique substring, the
+// notes limit and the "§" entry delimiter below.
 export const MEMORY_TARGETS = ['memory', 'user'] as const;
 export type MemoryTarget = typeof MEMORY_TARGETS[number];
 

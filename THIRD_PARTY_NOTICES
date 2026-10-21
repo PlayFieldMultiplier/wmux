@@ -12124,13 +12124,80 @@ Hermes Agent
 License: MIT License
 Repository: https://github.com/NousResearch/hermes-agent
 
-Copyright (c) 2024 Nous Research
+Copyright (c) 2025 Nous Research
 
 The lifecycle shape for promoted browser flows: usage counters kept
 beside the artifact rather than inside the cache that produced it, and
 an idle ladder that archives before it deletes so a forgotten entry is
 recoverable rather than gone. wmux applies it to promoted browser_replay
-flows with its own thresholds and its own file layout. No code was taken.
+flows with its own thresholds and its own file layout. No code was taken
+for it.
+
+Bots, from its source at commit 146963666b488742c41624025cb3c589d87fbc77:
+- Bot memory (adapted): two bounded stores, the bot's own notes and a
+  profile of the owner, kept as entries separated by a "§" line, with a
+  2,200-character notes limit, add/replace/remove of an entry found by a
+  unique substring, and a refusal over the limit that returns the entries
+  for consolidation (tools/memory_tool.py, tools/memory_tool_store.py).
+  The check of memory text for instruction overrides, concealment,
+  secret exfiltration and invisible characters follows the categories of
+  tools/threat_patterns.py. wmux files: src/shared/botMemory.ts,
+  src/main/factory/botMemory.ts, src/main/factory/memoryGuard.ts.
+- Skill guidance (adapted): the order "update the skill in use, then a
+  broader one, then add a reference file, a new skill last", and what a
+  skill should not hold (agent/background_review.py). wmux files:
+  src/main/factory/roles/common.ts, src/mcp/botSkills.ts.
+- Ideas only, no code taken: marking a skill stale after a period without
+  use (agent/curator.py); a bot searching its own past conversation
+  (tools/session_search_tool.py); a command permission ladder that
+  refuses by default, with a floor of always-refused commands
+  (tools/approval*.py).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+
+OpenClaw
+License: MIT License
+Repository: https://github.com/openclaw/openclaw
+
+Copyright (c) 2026 OpenClaw Foundation
+
+An "always allow" for a scheduled job that holds only for the job's
+current configuration, so editing the job resets it. No code was taken
+for it.
+
+Bots, from its source at commit f12a8dee2397d059ae58a1a68d97b5a9c8091842:
+- Command reviewer (adapted): a small model asked about one shell command,
+  answering only with one JSON verdict of decision, risk and a one-sentence
+  rationale, where an allow counts only at low or medium risk; the output
+  schema line of the system prompt follows its wording
+  (src/agents/exec-auto-reviewer.prompt.ts, src/agents/exec-auto-reviewer.ts).
+  wmux file: src/main/factory/botCommandReviewer.ts.
+- Ideas only, no code taken: ending a turn that repeats the same tool call
+  with the same result, or alternates between two such calls
+  (src/agents/tool-loop-detection.ts); a set of stdin-only filter commands
+  with per-command option checks, refusal by default, and refusal in a
+  turn the owner did not start (src/infra/exec-safe-bin-*.ts,
+  docs/tools/permission-modes.md); one-time scheduled runs and a local
+  HH:MM quiet window for repeating ones (src/cron,
+  src/infra/heartbeat-active-hours.ts).
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -12300,10 +12367,6 @@ OpenBot (MIT License) - https://github.com/CopilotKit/OpenBot
 Bot-to-bot handoffs routed by the system rather than the model, with a
 depth cap and a per-run cap that refuse instead of truncating, an always
 available ask_person exit, and refusals that are recorded.
-
-OpenClaw (MIT License) - https://github.com/openclaw/openclaw
-An "always allow" for a scheduled job that holds only for the job's
-current configuration, so editing the job resets it.
 
 Paperclip (MIT License) - https://github.com/paperclipai/paperclip
 Agents that wake on events through a queue that merges duplicate wakes,

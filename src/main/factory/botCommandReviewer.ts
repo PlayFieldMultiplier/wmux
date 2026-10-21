@@ -169,6 +169,8 @@ export const BOT_COMMAND_REVIEWER_LIMITS = Object.freeze({
   HOOK_TIMEOUT_S: 30,
 });
 
+// Adapted from openclaw/openclaw@f12a8dee2 (src/agents/exec-auto-reviewer.prompt.ts), MIT: the
+// one-JSON-object answer and its output schema line.
 /** The reviewer's fixed system prompt. */
 export const BOT_COMMAND_REVIEWER_SYSTEM_PROMPT = [
   'You review one shell command for wmux before it runs. A bot (an AI agent) wants to run it in its own folder. The command is not on the bot\'s list of known commands, so your judgment decides whether it runs.',
@@ -200,6 +202,8 @@ export interface ReviewRequest {
   argv: string[][];
 }
 
+// Adapted from openclaw/openclaw@f12a8dee2 (src/agents/exec-auto-reviewer.ts), MIT: the verdict of
+// decision, risk and rationale, an allow counting only below high risk.
 export type ReviewRisk = 'low' | 'medium' | 'high';
 
 export interface ReviewVerdict {
