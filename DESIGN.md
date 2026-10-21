@@ -180,7 +180,12 @@ reads as a second, differently tinted panel.
   range stops at 90% (`GLASS_MAX_COVERAGE`), above which the glass no longer
   reads as glass: a theme that needs more, or whose muted text misses 3:1
   even opaque, is opaque on Windows as if glass were Off (material none, a
-  solid caption strip), while the setting keeps the user's level. Nothing is
+  solid caption strip), while the setting keeps the user's level. A theme
+  whose opaque `--text-muted` misses 3:1 at the cap may carry a glass-only
+  muted value (`WINDOWS_GLASS_MUTED`): the opaque one moved by lightness only,
+  the least step that lets the gate pass on Soft and Clear. The gate judges
+  that value, and it paints only under `html[data-glass][data-platform="win32"]`,
+  so macOS and glass Off keep the opaque token. Apart from that nothing is
   pinned per theme, so a token change moves a theme in or out of glass on its
   own. Where the legibility minimum sits above both floors, Soft and Clear
   get the same frame coverage. The level the window last showed is saved
@@ -1803,6 +1808,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-21 | A bot's HTML file and an `html` block in the Bots chat get **Preview / Code** (a compact segmented control), not the preview tab's View source | The preview tab is a page opened to be read, so the source is a detour behind one button. Here the two views are peers in one place: a page opens as Preview, a chat block as Code, and one control switches either way |
 | 2026-10-21 | Owner decision: Windows keeps the sheet's frame-side corner rounded. Maximized, the corner beside the rail and the titlebar keeps `--sheet-radius` with the hairline on the top and rail side; only the corners on the screen's edges are square. Under window glass the sheet's edge is a 10% text ink, not the opaque `--sheet-edge` | Maximized Windows rail pages showed a right angle where macOS and the terminal view show a curve, and the rail met the sidebar with no hairline. Over translucent acrylic the opaque hairline read lighter than the frame on tinted backdrops and vanished on light ones (measured on Windows 11, Paper) |
 | 2026-10-21 | Owner decision: every theme's muted text (`--text-muted`, `--text-subtle`) reads at ≥3:1 and secondary text (`--text-sub`, `--text-sub2`) at ≥4.5:1 on its own surfaces: the sheet, the sidebar column, the frame and rail, and the row hover over the sheet and the column. Paper, Mono, Mono Light, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Nightowl and Void were lifted by HSL lightness only, the least that clears every surface; their hue and saturation stay. Where a hand-pinned `--text-subtle` would have sunk below the lifted muted, it now derives from muted and sub like every other theme (Catppuccin takes Overlay2). `themeTextContrast.test.ts` pins the floors | Muted text on ten built-in themes fell under 3:1 even on the theme's own opaque sidebar (Void 1.66, Catppuccin 2.60), so labels, counts and metadata were hard to read |
+| 2026-10-22 | Owner decision: Windows glass gives muted text a glass-only value. On Paper, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Gruvbox Dark Hard and Void, `--text-muted` under `html[data-glass][data-platform="win32"]` is the opaque token moved by lightness only, the least step that passes the coverage gate; the gate judges that value, and the worst-backdrop model is unchanged. macOS and glass Off keep the opaque token. Mono, Mono Light and Nightowl stay opaque on Windows (their `--text-sub` misses 4.5:1 at the cap) | After the opaque contrast lift, eleven themes were still opaque on Windows because muted text sized for the opaque sidebar missed 3:1 over the worst backdrop even at 90% coverage |
 
 ### Desktop conversation view
 
