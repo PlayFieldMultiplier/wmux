@@ -2,6 +2,8 @@
 import { Fragment, useState } from 'react';
 import { t } from '../../i18n';
 import { closesFence, fenceOpenLength } from '../../../shared/markdownFence';
+import SandboxedHtmlFrame from './SandboxedHtml';
+import SegmentedControl from '../ui/SegmentedControl';
 
 // ─── Command Deck — orchestrator prose markdown (dep-free subset) ────────────
 //
@@ -38,6 +40,10 @@ export interface MarkdownOptions {
    *  boundary), a muted language label, a Copy that shows on hover or focus,
    *  and a 320px cap that scrolls inside. Off: the plain block. */
   richCode?: boolean;
+  /** With `richCode`: an ```html block gets Preview / Code (Code first, as
+   *  a chat block is often a snippet); Preview draws it in a sandboxed
+   *  frame (SandboxedHtml.tsx), within the 320px cap. */
+  htmlPreview?: boolean;
   /** Draw a link as something else (the Bots chat's PR and issue chips);
    *  null keeps the plain link. Only with `links`. */
   linkChip?: (url: string, label: string | null) => React.ReactNode | null;
@@ -87,30 +93,69 @@ function plainText(text: string, key: string, opts: MarkdownOptions): React.Reac
   return out;
 }
 
-/** A fenced code block with its language label and Copy (richCode). */
-function RichCodeBlock({ code, lang }: { code: string; lang: string }): React.ReactElement {
+/** The largest ```html block Preview draws (the Bots file panel's text size). */
+export const HTML_BLOCK_PREVIEW_MAX = 512 * 1024;
+
+/** A fenced code block with its language label and Copy (richCode). An
+ *  html block with `htmlPreview` carries them on a row above it, with
+ *  Preview / Code: Code first, Preview drawn in a sandboxed frame at the
+ *  block's 320px cap. */
+function RichCodeBlock({ code, lang, htmlPreview }: { code: string; lang: string; htmlPreview?: boolean }): React.ReactElement {
   const [copied, setCopied] = useState(false);
+  const [view, setView] = useState<'code' | 'preview'>('code');
+  const previewable = !!htmlPreview && /^x?html?$/i.test(lang) && code.length <= HTML_BLOCK_PREVIEW_MAX;
+  const copy = (
+    <button
+      type="button"
+      data-brain-md-code-copy
+      aria-label={t('botsPage.chat.copyCode')}
+      title={t('botsPage.chat.copyCode')}
+      onClick={() => {
+        void navigator.clipboard?.writeText(code).then(() => setCopied(true)).catch(() => undefined);
+      }}
+      onBlur={() => setCopied(false)}
+      className="pointer-events-auto h-[22px] rounded-[6px] px-1.5 text-[11px] text-[var(--text-sub)] opacity-0 hover:bg-[var(--hover-fill)] focus-visible:opacity-100 group-hover:opacity-100"
+    >
+      {copied ? t('botsPage.chat.copied') : t('botsPage.chat.copyCode')}
+    </button>
+  );
+  const label = lang && <span data-brain-md-code-lang className="text-[11px] text-[var(--text-muted)]">{lang}</span>;
+  const pre = (
+    <pre className="max-h-[320px] overflow-auto rounded-lg px-3 py-2 pr-20 font-mono text-[12px] leading-relaxed whitespace-pre bg-[color-mix(in_srgb,var(--text-main)_5%,transparent)] text-[var(--text-sub)]">
+      {code}
+    </pre>
+  );
+  if (previewable) {
+    return (
+      <div data-brain-md-code data-brain-md-code-rich data-brain-md-code-view={view} className="group relative my-1">
+        <div className="flex items-center justify-end gap-1.5 pb-1">
+          {label}
+          {copy}
+          <SegmentedControl<'code' | 'preview'>
+            value={view}
+            onValueChange={setView}
+            ariaLabel={t('botsPage.html.view')}
+            className="wmux-html-view-toggle"
+            data-testid="brain-md-html-view"
+            options={[
+              { value: 'preview', label: t('botsPage.html.preview') },
+              { value: 'code', label: t('botsPage.html.code') },
+            ]}
+          />
+        </div>
+        {view === 'preview'
+          ? <SandboxedHtmlFrame html={code} title={t('botsPage.html.blockFrame')} className="block h-[320px] w-full rounded-lg border-0 bg-white [color-scheme:light]" />
+          : pre}
+      </div>
+    );
+  }
   return (
     <div data-brain-md-code data-brain-md-code-rich className="group relative my-1">
       <div className="pointer-events-none absolute right-1.5 top-1 flex items-center gap-1.5">
-        {lang && <span data-brain-md-code-lang className="text-[11px] text-[var(--text-muted)]">{lang}</span>}
-        <button
-          type="button"
-          data-brain-md-code-copy
-          aria-label={t('botsPage.chat.copyCode')}
-          title={t('botsPage.chat.copyCode')}
-          onClick={() => {
-            void navigator.clipboard?.writeText(code).then(() => setCopied(true)).catch(() => undefined);
-          }}
-          onBlur={() => setCopied(false)}
-          className="pointer-events-auto h-[22px] rounded-[6px] px-1.5 text-[11px] text-[var(--text-sub)] opacity-0 hover:bg-[var(--hover-fill)] focus-visible:opacity-100 group-hover:opacity-100"
-        >
-          {copied ? t('botsPage.chat.copied') : t('botsPage.chat.copyCode')}
-        </button>
+        {label}
+        {copy}
       </div>
-      <pre className="max-h-[320px] overflow-auto rounded-lg px-3 py-2 pr-20 font-mono text-[12px] leading-relaxed whitespace-pre bg-[color-mix(in_srgb,var(--text-main)_5%,transparent)] text-[var(--text-sub)]">
-        {code}
-      </pre>
+      {pre}
     </div>
   );
 }
@@ -380,7 +425,7 @@ function renderBlocks(source: string, opts: MarkdownOptions, depth: number, budg
       }
       i++; // skip the closing fence (or run past the end)
       if (opts.richCode) {
-        out.push(<RichCodeBlock key={out.length} code={codeLines.join('\n')} lang={lang} />);
+        out.push(<RichCodeBlock key={out.length} code={codeLines.join('\n')} lang={lang} htmlPreview={opts.htmlPreview} />);
         continue;
       }
       out.push(

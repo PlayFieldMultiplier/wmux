@@ -7,7 +7,8 @@
 // panel beside the chat (BotsFilePanel), one side panel at a time, as a
 // thread or a worker's terminal. Main serves the stored copy only
 // (ROOM_FILE_READ), never a path; Save a copy asks main for a save dialog
-// (ROOM_FILE_SAVE).
+// (ROOM_FILE_SAVE). An HTML page opens rendered in a sandboxed frame, with
+// Preview / Code in the header.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RoomCard as RoomCardData } from '../../../shared/room';
@@ -18,11 +19,16 @@ import { roomsApi, type RoomsApi } from '../../hooks/useRoomSync';
 import { FOCUS_RING } from '../focusRing';
 import { IconFile, IconImage, IconX } from '../icons';
 import Button from '../ui/Button';
+import SegmentedControl from '../ui/SegmentedControl';
+import SandboxedHtmlFrame from '../shared/SandboxedHtml';
 import { renderBrainMarkdownWhole, type MarkdownOptions } from '../shared/BrainMarkdown';
-import { FILE_MARKDOWN_SHOWN_MAX, fileGlyph, fileViewKind, shownText, svgImageSource } from './botsFileView';
+import { FILE_MARKDOWN_SHOWN_MAX, fileGlyph, fileViewKind, htmlPreviewable, shownText, svgImageSource } from './botsFileView';
 import { svgDrawsTooMuch } from '../../utils/svgDrawing';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
+
+/** How an HTML page shows: rendered, or its source. */
+type HtmlView = 'preview' | 'code';
 
 /** The file a side panel shows, and the chip that opened it (focus goes
  *  back there when the panel closes). */
@@ -103,16 +109,30 @@ function MarkdownView({ text, t, total }: { text: string; t: T; total: number })
   return <div className="wmux-bots-file-markdown wmux-bots-prose" data-bots-file-view="markdown">{nodes}</div>;
 }
 
+/** Whether a read file shows the Preview / Code toggle: an HTML page main
+ *  sent as text, within the panel's text size. */
+function htmlToggles(read: RoomFileReadResult | null): boolean {
+  return !!read?.ok && fileViewKind(read.file) === 'html' && read.text !== undefined && htmlPreviewable(read.text);
+}
+
 /** The file itself, by its kind and what main sent (text or a data URL):
- *  markdown formatted as in the chat, a picture as an <img>, any other text
- *  (an HTML page too) as plain text, and anything else its name, its size
- *  and Save a copy. */
-function FileBody({ read, t }: { read: Extract<RoomFileReadResult, { ok: true }>; t: T }) {
+ *  markdown formatted as in the chat, an HTML page rendered in a sandboxed
+ *  frame (or its source, by the header's toggle or past the panel's text
+ *  size), a picture as an <img>, any other text as plain text, and anything
+ *  else its name, its size and Save a copy. */
+function FileBody({ read, t, htmlView }: { read: Extract<RoomFileReadResult, { ok: true }>; t: T; htmlView: HtmlView }) {
   const { file, text, dataUrl } = read;
   const kind = fileViewKind(file);
   // Counting an SVG's drawing parses it: once per read, not per render.
   const svgSrc = useMemo(() => (kind === 'svg' && read.text !== undefined && !svgDrawsTooMuch(read.text) ? svgImageSource(read) : null), [kind, read]);
   if (kind === 'markdown' && text !== undefined) return <div className="wmux-bots-file-scroll"><MarkdownView text={text} t={t} total={file.bytes} /></div>;
+  if (text !== undefined && htmlView === 'preview' && htmlToggles(read)) {
+    return (
+      <div className="wmux-bots-file-html" data-bots-file-view="html">
+        <SandboxedHtmlFrame html={text} title={t('botsPage.html.frame', { name: file.name })} />
+      </div>
+    );
+  }
   if (kind === 'svg') {
     const src = svgSrc;
     if (src) return <div className="wmux-bots-file-image" data-bots-file-view="image"><img src={src} alt={file.name} /></div>;
@@ -142,10 +162,12 @@ export default function BotsFilePanel({ open, api, t, onClose, style }: {
   const bridge = api === undefined ? roomsApi() : api;
   const [read, setRead] = useState<RoomFileReadResult | null>(null);
   const [saving, setSaving] = useState(false);
+  const [htmlView, setHtmlView] = useState<HtmlView>('preview');
   const asideRef = useRef<HTMLElement>(null);
   useEffect(() => {
     let live = true;
     setRead(null);
+    setHtmlView('preview');
     const get = bridge?.fileRead;
     if (!get) {
       setRead({ ok: false, error: t('botsPage.file.unavailable') });
@@ -213,6 +235,19 @@ export default function BotsFilePanel({ open, api, t, onClose, style }: {
           <span className="min-w-0 truncate text-[13px] font-[var(--title-weight,500)] text-[var(--text-main)]" title={file.name}>{file.name}</span>
           <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-muted)]">{`· ${formatPreviewBytes(file.bytes)}`}</span>
         </span>
+        {htmlToggles(read) && (
+          <SegmentedControl<HtmlView>
+            value={htmlView}
+            onValueChange={setHtmlView}
+            ariaLabel={t('botsPage.html.view')}
+            className="wmux-html-view-toggle"
+            data-testid="bots-file-html-view"
+            options={[
+              { value: 'preview', label: t('botsPage.html.preview') },
+              { value: 'code', label: t('botsPage.html.code') },
+            ]}
+          />
+        )}
         {bridge?.fileSave && (
           <Button size="sm" variant="secondary" data-bots-file-save disabled={saving} onClick={() => void save()}>
             {t('botsPage.file.save')}
@@ -236,7 +271,7 @@ export default function BotsFilePanel({ open, api, t, onClose, style }: {
         ) : !read.ok ? (
           <FileNote testId="error" status>{t('botsPage.file.error', { error: read.error })}</FileNote>
         ) : (
-          <FileBody read={read} t={t} />
+          <FileBody read={read} t={t} htmlView={htmlView} />
         )}
       </div>
     </aside>

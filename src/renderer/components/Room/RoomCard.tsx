@@ -216,7 +216,7 @@ export function RoomCard({ card, workspaceId, t, bots, replyToCard, decisionApi,
           </div>
           {showBody && (
             <div data-card-body className={`mt-1 text-[13px] leading-relaxed text-[var(--text-sub)] break-words ${foldable && !expanded ? 'line-clamp-6' : ''}`}>
-              {renderBrainMarkdown(body, { links: true, richCode: true })}
+              {renderBrainMarkdown(body, { links: true, richCode: true, htmlPreview: true })}
             </div>
           )}
           {body && (card.kind === 'fact' || foldable) && (

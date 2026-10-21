@@ -3,20 +3,24 @@
 // Pure helpers for BotsFiles.tsx: which view a file gets (by its media type,
 // the name's extension when the type is generic), and how much text the
 // panel draws. Main serves the room's stored copy only (ROOM_FILE_READ):
-// text as UTF-8 text, everything else as a data URL. An HTML page reads as
-// its text; an SVG shows only as an <img>; a file that is neither text nor
-// a picture gets Save a copy.
+// text as UTF-8 text, everything else as a data URL. An HTML page shows
+// rendered, inert in a sandboxed frame (shared/SandboxedHtml.tsx), with its
+// source a toggle away; past the panel's text size it shows as its source
+// only. An SVG shows only as an <img>; a file that is neither text nor a
+// picture gets Save a copy.
 
 import type { RoomFile } from '../../../shared/roomFiles';
 
-export type FileViewKind = 'markdown' | 'text' | 'image' | 'svg' | 'other';
+export type FileViewKind = 'markdown' | 'html' | 'text' | 'image' | 'svg' | 'other';
 
 const MARKDOWN_EXT = /\.(?:md|markdown|mdx)$/i;
 const IMAGE_EXT = /\.(?:png|jpe?g|gif|webp)$/i;
-const TEXT_EXT = /\.(?:txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|xml|html?|diff|patch|sh|bash|zsh|ps1|bat|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|hpp|cs|js|jsx|mjs|cjs|ts|tsx|css|scss|sql|graphql|proto|env|cfg|conf)$/i;
+const HTML_EXT = /\.html?$/i;
+const HTML_TYPES = new Set(['text/html', 'application/xhtml+xml']);
+const TEXT_EXT = /\.(?:txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|xml|diff|patch|sh|bash|zsh|ps1|bat|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|hpp|cs|js|jsx|mjs|cjs|ts|tsx|css|scss|sql|graphql|proto|env|cfg|conf)$/i;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const TEXT_TYPES = new Set([
-  'application/json', 'application/xml', 'application/xhtml+xml', 'application/javascript', 'application/x-javascript',
+  'application/json', 'application/xml', 'application/javascript', 'application/x-javascript',
   'application/typescript', 'application/x-yaml', 'application/yaml', 'application/toml',
   'application/x-sh', 'application/sql', 'application/x-ndjson',
 ]);
@@ -27,6 +31,7 @@ export function fileViewKind(file: Pick<RoomFile, 'name' | 'mediaType'>): FileVi
   if (type === 'text/markdown' || type === 'text/x-markdown' || MARKDOWN_EXT.test(file.name)) return 'markdown';
   if (type === 'image/svg+xml' || /\.svg$/i.test(file.name)) return 'svg';
   if (IMAGE_TYPES.has(type) || (type === 'application/octet-stream' && IMAGE_EXT.test(file.name))) return 'image';
+  if (HTML_TYPES.has(type) || HTML_EXT.test(file.name)) return 'html';
   if (type.startsWith('text/') || TEXT_TYPES.has(type) || /\+(?:json|xml)$/.test(type) || TEXT_EXT.test(file.name)) return 'text';
   return 'other';
 }
@@ -40,6 +45,12 @@ export function fileGlyph(kind: FileViewKind): 'image' | 'file' {
  *  that would stall the page). Past it the panel says so and offers Save a
  *  copy for the whole file. */
 export const FILE_TEXT_SHOWN_MAX = 512 * 1024;
+
+/** Whether an HTML page is small enough to show rendered (the panel's
+ *  text size); a longer one shows as its source only. */
+export function htmlPreviewable(text: string): boolean {
+  return text.length <= FILE_TEXT_SHOWN_MAX;
+}
 
 /** Characters of markdown the panel draws formatted (every inline mark is
  *  an element); a longer document reads as text. */
