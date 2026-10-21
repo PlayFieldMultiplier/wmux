@@ -603,7 +603,10 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   the room knows it — that opens that thread beside the chat, else the page
   on GitHub. Code blocks have a fill and no border (one boundary), a muted
   language label, a Copy that shows on hover or focus, and a 320px cap that
-  scrolls inside. **A card that waits on the owner stays a distinct card
+  scrolls inside. An `html` block carries them on a row above it with a
+  compact **Preview / Code** segmented control, Code first (a block is often
+  a snippet); Preview draws the page in a sandboxed frame at the same cap,
+  on white, with one muted line under it: links are off. **A card that waits on the owner stays a distinct card
   inside its run:** an open question is the room's own question card,
   answered in place; a plan, a proposal, an approval, a key or a login
   request waiting on the owner sits in a 14px-radius card whose only
@@ -711,6 +714,11 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   terminal is resized once. A bot worker's launch line clears the screen
   before it runs, so the panel starts at the agent's own screen. Under a 720px chat area the panel covers the chat until Close.
   One side panel at a time: a worker's or a thread's.
+  A file a bot attached opens in that side panel from its chip (44px header:
+  the name, "· its size", Save a copy, Close). An HTML file opens as Preview,
+  the same Preview / Code control in the header before Save a copy, the page
+  sandboxed on white with the links-off line under it; past the panel's text
+  size it is its source only, with no control.
   Another conversation closes it. The worker's terminal has one mount:
   while the panel shows it, Workspaces does not. A worker that also holds a
   browser or an editor stays on Workspaces (their state would not survive
@@ -1747,6 +1755,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-21 | The share starts from the pane's menu: **Share this pane with <PC>…** (or **with another PC…** when several joined this one), shown only while a PC has joined. Its dialog names what that PC will see (the pane, its agent, repo and folder), two direction boxes ticked by default, one muted line on what happens next, and Share as the one primary; a reason it cannot share (older wmux, not connected, already linked, already shared with Withdraw) is a muted line, never a colour. When the other PC accepts, a toast says so and the link row names its pane; Unlink hides the pane again unless it was shown before the share or the list was saved since | One action on the sharing PC replaces ticking the pane in Panes to show and accepting a request. The checklist stays for showing panes without a share, with a hint pointing at the menu |
 | 2026-10-21 | Owner decision: Plugins is a rail page (after Git) with a puzzle-piece glyph — a mantle catalog list (Signature, Catalog, Installed, Connectors) beside one detail with the permission list and one primary per state; Signature is a catalog data flag (Office today). Connectors lose their rail item and become the page's Connectors row; the `connectors` route redirects there. Settings › Plugins keeps only a link. Plugin rail items get their catalog glyph instead of the Workspaces one | One home for everything that extends wmux; the signature plugin is seen first; the rail drops an item |
 | 2026-10-21 | Owner decision: a muted "Agent not set up · Set up" row at the sidebar's foot while no agent is ready (built by #2535) | The user who chose Later in the setup wizard keeps one quiet way back to it |
+| 2026-10-21 | A bot's HTML file and an `html` block in the Bots chat get **Preview / Code** (a compact segmented control), not the preview tab's View source | The preview tab is a page opened to be read, so the source is a detour behind one button. Here the two views are peers in one place: a page opens as Preview, a chat block as Code, and one control switches either way |
 
 ### Desktop conversation view
 
