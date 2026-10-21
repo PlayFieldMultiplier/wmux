@@ -771,6 +771,7 @@ async function cleanTaskFolderNow(
     const learned = {
       repoRoot: rec.repoRoot, ...(rec.repoHash ? { repoHash: rec.repoHash } : {}), ...(rec.head ? { head: rec.head } : {}),
       ...(rec.keepRef ? { keepRef: rec.keepRef } : {}), ...(mission.branch ? { branch: mission.branch } : prior?.branch ? { branch: prior.branch } : {}),
+      ...(prior?.prepFailed ? { prepFailed: true as const } : {}),
     };
     const registered = await (ports.worktreeRegistered ?? gitWorktreeRegistered)(rec.repoRoot, mission.folder).catch(() => null);
     if (registered === null) {
@@ -1066,6 +1067,9 @@ export async function ensureTaskFolderPrepared(ports: TaskFolderPorts, taskId: s
     (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} not resumed: its setup failed again: ${prep.error ?? 'unknown'}`);
     return false;
   }
+  // A setup that did not run (not approved) leaves it unprepared: once the
+  // project is approved again, the next resume prepares it.
+  if (prep.status === 'skipped') return true;
   const { prepFailed: _done, ...clean } = rec;
   await ports.store.put({ ...clean, at: (ports.now ?? Date.now)() }).catch(() => undefined);
   return true;
