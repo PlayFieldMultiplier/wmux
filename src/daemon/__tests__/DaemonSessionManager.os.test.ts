@@ -922,6 +922,48 @@ describe('DaemonSessionManager', () => {
       expect(modes?.preamble(total - 4)).toBe('');
     });
 
+    it("★ a recovered pane keeps none of the dead program's screen modes, however it entered the alternate screen", () => {
+      // The dead process (here a TUI that used the legacy ?1047 switch) armed
+      // mouse tracking, bracketed paste, a hidden cursor and a scroll region.
+      // The fresh process spawned by recovery owns none of that: once the seam
+      // is in the ring the tracker must report power-on state, so no later
+      // replay window (ring wrap, /api/stream tail) re-asserts any of it.
+      const restored = '\x1b[?1047h\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h\x1b[?25l\x1b[1;20r'
+        + 'frame line\r\n'.repeat(50);
+      manager.createSession({
+        id: 'rec-modes-legacy',
+        cmd: 'cmd.exe',
+        cwd: '.',
+        scrollbackData: Buffer.from(restored, 'utf8'),
+        deferOutput: true,
+      });
+      const managed = manager.getSession('rec-modes-legacy');
+      const modes = managed?.bridge.outputModes;
+      expect(modes?.altScreen).toBe(false);
+      for (const mode of [1000, 1003, 1006, 2004]) expect(modes?.isSet(mode)).toBe(false);
+      expect(modes?.isSet(25)).toBe(true);
+      const total = managed?.ringBuffer.totalBytesWritten ?? 0;
+      expect(modes?.preamble(0)).toBe('');
+      expect(modes?.preamble(total - 4)).toBe('');
+    });
+
+    it("★ a live session (no recovery) keeps its program's alternate screen for a reattach", () => {
+      // App restart while the daemon and the program kept running: the
+      // alternate screen belongs to the still-running program, so nothing may
+      // reset it. No seam is written without restored scrollback.
+      manager.createSession({ id: 'live-alt', cmd: 'cmd.exe', cwd: '.' });
+      const frame = '\x1b[?1049h\x1b[?1003h\x1b[2J\x1b[Htui frame';
+      lastMockPty?.simulateData(frame);
+      const managed = manager.getSession('live-alt');
+      const modes = managed?.bridge.outputModes;
+      expect(managed?.ringBuffer.readAll().toString()).toBe(frame);
+      expect(modes?.altScreen).toBe(true);
+      expect(modes?.isSet(1003)).toBe(true);
+      // A window that no longer holds the entry re-asserts the alt screen.
+      const total = managed?.ringBuffer.totalBytesWritten ?? 0;
+      expect(modes?.preamble(total)).toContain('\x1b[?1049h');
+    });
+
     // #1464: the replay decision reads process.platform when the unmute timer
     // FIRES, so a platform override has to span the resize AND the timers.
     // Sessions are created on the host platform first — createSession has its
