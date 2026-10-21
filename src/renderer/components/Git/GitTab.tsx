@@ -28,7 +28,7 @@
 // Design contract (DESIGN.md): monochrome glyphs, branches and paths in mono,
 // diff counts green/red, and at most ONE accent point — the dot marking the
 // worktree the active pane is in. The section headers stay neutral.
-import { prepSkipKey } from '../../utils/prepNotice';
+import { prepSkipKey } from '../../../shared/gitHandoff';
 import type { WorkspacePrepResult } from '../../../main/worktask/workspacePrep';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useStore } from '../../stores';

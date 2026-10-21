@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { countLayoutLeaves, PROJECT_SUPERVISION_DEFAULT_BURST } from '../../../shared/wmuxProjectConfig';
+import { countLayoutLeaves, prepAwaitsReview, PROJECT_SUPERVISION_DEFAULT_BURST } from '../../../shared/wmuxProjectConfig';
 import type { WmuxProjectLayoutNode } from '../../../shared/wmuxProjectConfig';
 import { applyProjectLayoutFresh, decideProjectTrust, probeProjectConfig } from '../../utils/projectConfigProbe';
 import { runProjectCommand } from '../../utils/projectCommands';
@@ -96,7 +96,7 @@ export default function ProjectConfigDialog() {
   const prepCopyAutomated = project.config?.fanout?.copyIntoAutomated === true;
   // Trusted by a decision that never showed the setup command or the copy
   // settings: they wait for this one re-approval (the rest stays approved).
-  const prepNeedsReview = isTrusted && project.prepReviewed !== true && (prepCopy.length > 0 || prepSetup !== undefined);
+  const prepNeedsReview = prepAwaitsReview(project);
   const layout = project.config?.layout;
   const rows = layout ? layoutRows(layout) : [];
   // Leaves that would restore their captured permission mode on reboot — the

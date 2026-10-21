@@ -117,9 +117,10 @@ export interface TaskFolderRecord {
   /** The ref that holds a detached HEAD's commits no other ref held
    *  (`refs/wmux/keep/<taskId>`), written before the worktree went. */
   keepRef?: string;
-  /** Put back for a resume, its setup failed, and it could not be put away
-   *  again: a resume prepares it once more before any agent starts in it
-   *  (ensureTaskFolderPrepared). */
+  /** Put back for a resume and not prepared: its setup failed and it could
+   *  not be put away again, its setup is still running, or its setup did not
+   *  run (not approved). A resume prepares it once more before any agent
+   *  starts in it (ensureTaskFolderPrepared). */
   prepFailed?: true;
   at: number;
 }

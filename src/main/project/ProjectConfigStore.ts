@@ -246,7 +246,7 @@ export class ProjectConfigStore {
     // trusted — a 'stale' record's consent was for old content, so the funnel
     // must not restore permissions against a file the user hasn't re-reviewed.
     const unattended = trust === 'trusted' && record?.unattended === true;
-    // Only meaningful while trusted: whether the grant covers the copy settings.
+    // Only meaningful while trusted: whether the grant covers the setup command and the copy settings.
     const prepReviewed = trust === 'trusted' ? record?.prepReviewed === true : undefined;
 
     return {

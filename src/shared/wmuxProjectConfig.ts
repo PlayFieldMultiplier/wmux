@@ -224,6 +224,8 @@ export interface ProjectConfigState {
  *  re-approval (the badge stays visible, like any verdict to act on). */
 export function prepAwaitsReview(state: ProjectConfigState): boolean {
   const f = state.config?.fanout;
+  // A rejected copy setting is reported as malformed first; approving would not help.
+  if (f?.invalidFields?.some((k) => k === 'copy' || k === 'copyIntoAutomated')) return false;
   return state.trust === 'trusted' && state.prepReviewed !== true && ((f?.copy?.length ?? 0) > 0 || f?.setup !== undefined);
 }
 
