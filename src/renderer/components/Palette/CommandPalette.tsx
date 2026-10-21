@@ -635,6 +635,21 @@ export default function CommandPalette() {
       }
     }
 
+    // New workspace setup (wmux.json `fanout`): reachable before the project
+    // has a wmux.json at all, since saving it is what creates one.
+    if (activeWorkspaceId) {
+      items.push({
+        id: 'project-workspace-prep',
+        label: t('palette.cmd.workspacePrep'),
+        category: 'command' as PaletteCategory,
+        icon: <IconCommand />,
+        action: () => {
+          useStore.getState().setPrepDialogWsId(activeWorkspaceId);
+          setVisible(false);
+        },
+      });
+    }
+
     // Layout template commands
     for (const tmpl of layoutTemplates) {
       items.push({

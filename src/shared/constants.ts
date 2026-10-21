@@ -806,6 +806,8 @@ export const IPC = {
   PROJECT_CONFIG_GET: 'project-config:get',
   PROJECT_CONFIG_SET_TRUST: 'project-config:set-trust',
   WORKSPACE_PREP_NOTICE: 'workspace-prep:notice',
+  PROJECT_PREP_GET: 'project-config:prep-get',
+  PROJECT_PREP_SAVE: 'project-config:prep-save',
   // Remote workspace attach (see src/shared/remoteHosts.ts)
   REMOTE_HOSTS_LIST: 'remote:hosts:list',
   REMOTE_HOSTS_ADD: 'remote:hosts:add',

@@ -74,6 +74,10 @@ export interface ProjectConfigSlice {
   projectDialogWsId: string | null;
   setProjectDialogWsId: (workspaceId: string | null) => void;
 
+  /** Workspace whose "New workspace setup" dialog is open. */
+  prepDialogWsId: string | null;
+  setPrepDialogWsId: (workspaceId: string | null) => void;
+
   /**
    * Replace `workspaceId`'s pane tree with the trusted project layout.
    * Trust is re-checked HERE (not just at the call site) so no code path can
@@ -182,6 +186,12 @@ export const createProjectConfigSlice: StateCreator<
 
   setProjectDialogWsId: (workspaceId) => set((draft: StoreState) => {
     draft.projectDialogWsId = workspaceId;
+  }),
+
+  prepDialogWsId: null,
+
+  setPrepDialogWsId: (workspaceId) => set((draft: StoreState) => {
+    draft.prepDialogWsId = workspaceId;
   }),
 
   applyProjectLayout: (workspaceId) => {
