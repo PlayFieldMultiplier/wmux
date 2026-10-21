@@ -3746,9 +3746,15 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // A WSL recovery that failed and waits for the user's Retry (the banner):
     // nothing runs there, and only that Retry starts it.
     let awaitingRetry = false;
-    // A first show that arrived while an attempt was in flight: that attempt's
-    // settle promotes, even when it is a stop key's.
-    let shownMidAttempt = false;
+    // A stop key's attempt answers only the key: it never applies the pane's
+    // own rules. The pane's own triggers (a retry timer, a daemon reconnect,
+    // a restart) that arrive while it is in flight are folded into it, so
+    // its settle owes them those rules (resume on start included).
+    let stopKeyInFlight = false;
+    let paneOwed = false;
+    // What the stop key's own attempt found: suspended, or a recovery waiting
+    // for its Retry. Read before anything its settle starts can attach.
+    let stopKeyFoundNotRunning = false;
     const noteDeferred = (deferred: boolean, resume?: ResumeHint, armResume = true) => {
       deferredAttachRef.current = deferred;
       // No session pipe either: refuses the park, like a pending reattach.
@@ -3761,8 +3767,13 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // only waits it out: it never promotes.
       if (inFlight) {
         if (reason === 'stop-key') return current;
-        if (reason === 'first-show') shownMidAttempt = true;
-        return reason === 'raw-write' ? current?.then(() => (deferredAttachRef.current ? reattach(reason) : undefined)) : undefined;
+        // The user's Retry (or Start fresh, which promoted first) is never
+        // dropped: an attempt that began before it can only answer the state
+        // it began in.
+        if (reason === 'manual-retry') return current?.then(() => reattach(reason));
+        if (reason === 'raw-write') return current?.then(() => (deferredAttachRef.current ? reattach(reason) : undefined));
+        if (stopKeyInFlight) paneOwed = true;
+        return undefined;
       }
       current = attach(reason);
       return current;
@@ -3772,6 +3783,8 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // it attaches without promoting, shown pane or not, arms no resume on
       // start, and leaves the pane's own retry schedule as it was.
       const stopKey = reason === 'stop-key';
+      stopKeyInFlight = stopKey;
+      if (stopKey) stopKeyFoundNotRunning = false;
       inFlight = true;
       reconnectInFlightRef.current = true;
       if (!stopKey && slowRetry !== null) { clearTimeout(slowRetry); slowRetry = null; }
@@ -3786,7 +3799,8 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // unless it is waiting on the reconcile (#2398), which shows no banner.
         reconnectPendingRef.current = message !== null || info?.awaitingReconcile === true;
         awaitingRetry = message !== null && !info?.rateLimited && !info?.unconfirmed;
-        noteDeferred(info?.deferred === true, info?.resume, !stopKey);
+        noteDeferred(info?.deferred === true, info?.resume, !stopKey || paneOwed);
+        if (stopKey) stopKeyFoundNotRunning = info?.deferred === true || awaitingRetry;
         if ((info?.rateLimited || info?.unconfirmed || info?.awaitingReconcile) && slowRetry === null) {
           slowRetry = setTimeout(() => { slowRetry = null; void reattach('rate-limit-retry'); }, 8000 + Math.random() * 4000);
         }
@@ -3831,12 +3845,15 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         })
         // #2398 — shown while a hidden attempt was in flight (its first show
         // found nothing to promote yet), or left suspended with a conversation
-        // to resume on start: promote now.
+        // to resume on start: promote now. After a stop key's attempt too: a
+        // pane shown now never stays suspended (its first-show rule, not the
+        // key's), while a hidden one is promoted only for a resume on start
+        // its own folded-in trigger armed.
         .finally(() => {
           inFlight = false; reconnectInFlightRef.current = false;
-          const shown = shownMidAttempt;
-          shownMidAttempt = false;
-          if (!stopKey || shown) promoteIfDue();
+          stopKeyInFlight = false;
+          paneOwed = false;
+          promoteIfDue();
         });
     };
     const promoteIfDue = () => {
@@ -3848,10 +3865,14 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       }
     };
     // A stop key: false when nothing runs in the session (see attachForWrite).
+    // Answered from the key's own attempt: a pane shown meanwhile may promote
+    // the session at its settle, and the key must not land in that new shell.
     const stopKeyAttach = async (): Promise<boolean> => {
       if (deferredAttachRef.current || awaitingRetry) return false;
+      const joined = inFlight;
       await reattach('stop-key');
-      return !deferredAttachRef.current && !awaitingRetry;
+      if (joined) return !deferredAttachRef.current && !awaitingRetry;
+      return !stopKeyFoundNotRunning;
     };
     const rawWriteReattach = (promote: boolean) => (promote ? reattach('raw-write') : stopKeyAttach());
     writeAttachRegistry.set(id, rawWriteReattach);

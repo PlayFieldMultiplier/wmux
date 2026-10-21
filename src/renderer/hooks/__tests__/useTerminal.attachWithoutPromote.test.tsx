@@ -24,6 +24,9 @@ vi.mock('@xterm/addon-webgl', () => ({
 type ReconnectAnswer = { success: boolean; deferred?: boolean; recoveryPending?: boolean; transient?: boolean; error?: string; resumeAgent?: string; resumeBinding?: { agent: string; sessionId: string; cwd: string } };
 const reconnect = vi.fn<(id: string, opts?: { promote?: boolean }) => Promise<ReconnectAnswer>>(async () => ({ success: true }));
 const unsub = () => () => undefined;
+// The pane's own triggers, fired by hand: a supervised restart, its Retry.
+let restarted: ((payload: { ptyId: string; restartCount: number; exitCode: number | null }) => void) | null = null;
+let retryConnection: (() => Promise<void> | undefined) | null = null;
 
 beforeAll(() => {
   installCanvas2dStub();
@@ -33,7 +36,8 @@ beforeAll(() => {
       platform: 'linux',
       windowsBuildNumber: null,
       pty: {
-        onData: unsub, onExit: unsub, onFlushComplete: unsub, onRestarted: unsub,
+        onData: unsub, onExit: unsub, onFlushComplete: unsub,
+        onRestarted: (cb: typeof restarted) => { restarted = cb; return () => undefined; },
         resize: vi.fn(async () => undefined), reconnect,
         setViewerVisibility: vi.fn(),
         write: vi.fn(async () => undefined),
@@ -76,20 +80,24 @@ afterEach(() => {
 
 const settle = () => act(async () => { await deliberateSleep(50, 'lets the reattach settle under act; nothing polled'); });
 
+type UseTerminal = typeof import('../useTerminal').useTerminal;
+/** One component type for the whole test, so a later render() re-renders the
+ *  same mounted terminal (shown/hidden) instead of remounting it. */
+function Harness({ useTerminal, ptyId, surfaceShown }: { useTerminal: UseTerminal; ptyId: string; surfaceShown: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  retryConnection = useTerminal(ref, { ptyId, isVisible: surfaceShown, surfaceShown }).retryConnection;
+  return <div ref={ref} style={{ width: '100%', height: '100%' }} />;
+}
+
 async function render(ptyId: string, surfaceShown: boolean): Promise<void> {
   const { useTerminal } = await import('../useTerminal');
-  function Harness() {
-    const ref = useRef<HTMLDivElement>(null);
-    useTerminal(ref, { ptyId, isVisible: surfaceShown, surfaceShown });
-    return <div ref={ref} style={{ width: '100%', height: '100%' }} />;
-  }
   if (!root) {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
   }
   const r = root;
-  await act(async () => { r.render(<Harness />); });
+  await act(async () => { r.render(<Harness useTerminal={useTerminal} ptyId={ptyId} surfaceShown={surfaceShown} />); });
   await settle();
 }
 
@@ -224,6 +232,96 @@ describe('reattach of a hidden pane (#2398)', { timeout: 60_000 }, () => {
 // whose record binds an exact Claude Code / Codex conversation is still
 // promoted at boot while hidden when the setting is on; anything else waits
 // for the pane's first show.
+// Re-review P2: a stop key's attempt does not apply the pane's own rules, and
+// the pane's triggers that arrive while it is in flight are folded into it.
+// Its settle must apply them: a pane shown during it, or whose own trigger
+// (a restart, a retry timer) was folded in, is not left suspended.
+describe('the pane\'s own rules after a stop key\'s attempt (#2398)', { timeout: 60_000 }, () => {
+  const exact = { agent: 'claude', sessionId: '0c8f6a52-6c1b-4b6e-9a51-2f0d3c4b5a69', cwd: '/home/me/p' };
+
+  /** Live at mount; then a stop key's attach (promote:false) that waits for release() and finds it suspended. */
+  async function stopKeyInFlight(ptyId: string, extra: Partial<ReconnectAnswer> = {}) {
+    setDaemonModeActive(true);
+    await render(ptyId, false);
+    expect(promoteFlags()).toEqual([false]);
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async (_id, opts) => {
+      if (opts?.promote !== false) return { success: true };
+      await new Promise<void>((r) => { release = r; });
+      return { success: false, deferred: true, ...extra };
+    });
+    const { attachForWrite } = await import('../useTerminal');
+    const result: { answer?: string } = {};
+    let pending: Promise<void> = Promise.resolve();
+    await act(async () => { pending = attachForWrite(ptyId, false).then((a) => { result.answer = a; }); });
+    const settleIt = async () => {
+      // Only the first held attach waits; anything after answers at once.
+      reconnect.mockImplementation(async (_id, opts) => (opts?.promote === false ? { success: false, deferred: true, ...extra } : { success: true }));
+      await act(async () => { release(); await pending; });
+      await settle();
+    };
+    return { result, settleIt };
+  }
+
+  it('a pane shown while it is in flight is promoted exactly once when it settles suspended', async () => {
+    const { result, settleIt } = await stopKeyInFlight('p-shown-mid');
+    await render('p-shown-mid', true);
+    await settleIt();
+    expect(promoteFlags()).toEqual([false, false, true]);
+    expect(result.answer).toBe('not-running');
+    expect(useStore.getState().ptyDeferredById['p-shown-mid']).toBeUndefined();
+  });
+
+  it('a pane that stays hidden is not promoted: the key still starts nothing', async () => {
+    useStore.setState({ claudeResumeOnStart: true });
+    const { result, settleIt } = await stopKeyInFlight('p-hidden-mid', { resumeBinding: exact });
+    await settleIt();
+    expect(promoteFlags()).toEqual([false, false]);
+    expect(result.answer).toBe('not-running');
+    expect(useStore.getState().ptyDeferredById['p-hidden-mid']).toBe(true);
+  });
+
+  it("a hidden pane's own trigger folded into it still resumes its agent on start", async () => {
+    useStore.setState({ claudeResumeOnStart: true });
+    const { settleIt } = await stopKeyInFlight('p-folded', { resumeBinding: exact });
+    // A supervised restart arrives mid-attempt: dropped as a reattach of its own.
+    act(() => { restarted?.({ ptyId: 'p-folded', restartCount: 1, exitCode: 0 }); });
+    await settleIt();
+    expect(promoteFlags()).toEqual([false, false, true]);
+  });
+});
+
+// Re-review P3: Start fresh promotes, then asks the pane to retry. A retry that
+// arrived while another attempt was in flight was dropped, and that attempt
+// settled on the recovery failure it began with: the pane kept answering stop
+// keys "not running" over a live session.
+describe('a Retry during an attempt in flight (#2398)', { timeout: 60_000 }, () => {
+  it('runs after it instead of being dropped', async () => {
+    reconnect.mockImplementation(async () => ({ success: false, recoveryPending: true, error: 'WSL recovery failed' }));
+    setDaemonModeActive(true);
+    await render('p-fresh', true);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async () => {
+      await new Promise<void>((r) => { release = r; });
+      return { success: false, recoveryPending: true, error: 'WSL recovery failed' };
+    });
+    // Another attempt is in flight (a supervised restart) when Start fresh lands.
+    act(() => { restarted?.({ ptyId: 'p-fresh', restartCount: 1, exitCode: 0 }); });
+    expect(reconnect).toHaveBeenCalledTimes(2);
+    let retried: Promise<void> | undefined;
+    act(() => { retried = retryConnection?.(); });
+    reconnect.mockImplementation(async () => ({ success: true }));
+    await act(async () => { release(); await retried; });
+    await settle();
+    expect(reconnect).toHaveBeenCalledTimes(3);
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    await act(async () => { answer = await attachForWrite('p-fresh', false); });
+    expect(answer).toBe('attached');
+  });
+});
+
 describe('resume on start for a hidden suspended session (#2398 §6-4 option B)', { timeout: 60_000 }, () => {
   const exact = { agent: 'claude', sessionId: '0c8f6a52-6c1b-4b6e-9a51-2f0d3c4b5a69', cwd: '/home/me/p' };
   const suspendedWith = (extra: Partial<ReconnectAnswer>) => async (_id: string, opts?: { promote?: boolean }): Promise<ReconnectAnswer> =>
