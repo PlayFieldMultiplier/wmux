@@ -6,7 +6,10 @@
 //   routine.set     a bot, for itself only (the binding names it), and only in
 //                   a turn on the owner's words (their message, or their
 //                   answer to its question): a routine is a standing
-//                   instruction the owner gave. Idempotent by clientRoutineId
+//                   instruction the owner gave. Never from a conversation
+//                   that took in outside text (conversationMarks.ts): the
+//                   owner's words in it do not make what it read clean.
+//                   Idempotent by clientRoutineId
 //                   (default `wake:<wakeId>:r<n>` from the running wake).
 //   routine.list    a bot: its own; the operator: one bot's (botId) or all.
 //   routine.pause   a bot: pause or resume its own, at any time.
@@ -28,6 +31,7 @@ import { BOT_EVENT, BOT_RPC, type BotEventPayload } from '../../../shared/bot';
 import { ROUTINE_RPC, ROUTINE_LIMITS, type RoutineSetParams } from '../../../shared/botRoutine';
 import type { RpcContext } from '../../../shared/rpc';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryRouter } from '../../factory/factoryHost';
+import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationTainted } from '../../factory/conversationMarks';
 import { RoutineStore, getRoutineStore, routinesPath, scheduleLabel, setRoutineStore } from '../../factory/routines';
 import { getBotDirectory } from '../../factory/botStore';
 import { getWakeQueue, currentWakeItem } from '../../factory/wakeQueue';
@@ -73,6 +77,9 @@ export interface RoutineHandlerDeps {
   ownerWords?: (botId: string) => boolean;
   /** The guest provenance of the bot's running wake. Default: wakeTaint.ts. */
   guestWake?: (botId: string) => GuestProvenance;
+  /** Whether the bot's live conversation took in outside text (none: yes).
+   *  Default: conversationMarks.ts. */
+  conversationTainted?: (botId: string) => boolean;
   /** The default idempotency key of a routine set in the running turn. */
   defaultKey?: (botId: string) => string | undefined;
   stop?: (botId: string) => Promise<{ ok: boolean; workersStopped: number; gatesCancelled: number; routinesPaused?: number; code?: string; message?: string }>;
@@ -90,6 +97,9 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     // The owner's answer to a guest-sourced question is guest-sourced too:
     // a routine runs later as clean work, so none is saved from it.
     if ((deps.guestWake ?? guestOfRunningWake)(bot.botId) !== false) return refuse('not_authorized', GUEST_TURN_STARTS_NO_WORKERS);
+    // A routine runs later as clean work: none is saved from a conversation
+    // that took in outside text, whatever the owner answered in it.
+    if ((deps.conversationTainted ?? conversationTainted)(bot.botId) !== false) return refuse('not_authorized', TAINTED_CONVERSATION_SAVES_NOTHING);
     const p = obj(raw) as Partial<RoutineSetParams>;
     const key = p.clientRoutineId ?? deps.defaultKey?.(bot.botId);
     return store.set({ botId: bot.botId, workspaceId: bot.workspaceId }, { ...(p as RoutineSetParams), ...(key ? { clientRoutineId: key } : {}) });

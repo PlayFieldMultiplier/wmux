@@ -99,6 +99,10 @@ export interface BotSessionRecord {
    *  tainted. A record without it is of unknown history and resumes
    *  tainted. */
   tainted?: boolean;
+  /** The conversation's signed-in mark (conversationMarks.ts): a wake run
+   *  in it carried a signed-in task's fact. A record without it reads as
+   *  signed in unless it is recorded clean (`tainted: false`). */
+  signedIn?: boolean;
   updatedAt: number;
 }
 
@@ -138,6 +142,7 @@ export class BotSessionStore {
         ...(repoPath !== undefined ? { repoPath } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(typeof r.tainted === 'boolean' ? { tainted: r.tainted } : {}),
+        ...(typeof r.signedIn === 'boolean' ? { signedIn: r.signedIn } : {}),
         updatedAt: r.updatedAt as number,
       });
     }
@@ -312,6 +317,10 @@ export interface BotRuntimePorts {
   /** Whether a wake was started from outside text (wakeTaint.ts
    *  wakeTainted). Absent: every wake counts as tainted. */
   wakeTainted?: (item: WakeItem) => boolean;
+  /** Whether a wake carried a fact of a task that used a signed-in
+   *  connection (wakeTaint.ts wakeSignedIn). Absent: one only when the
+   *  wake's taint cannot be told either (no wakeTainted). */
+  wakeSignedIn?: (item: WakeItem) => boolean;
 }
 
 /** Told when a bot is removed (its notes go, botMemory.ts). */
@@ -336,8 +345,20 @@ export function notifyBotRemoved(botId: string): void {
   }
 }
 
-const CLEAN_MARKS: ConversationMarks = { tainted: false };
-const UNKNOWN_MARKS: ConversationMarks = { tainted: true };
+const CLEAN_MARKS: ConversationMarks = { tainted: false, signedIn: false };
+const UNKNOWN_MARKS: ConversationMarks = { tainted: true, signedIn: true };
+/** A guest's conversation of its own: tainted, and never signed in (a
+ *  guest-sourced wake starts no workers, so no signed-in task reports to
+ *  it). */
+const GUEST_MARKS: ConversationMarks = { tainted: true, signedIn: false };
+
+/** A saved session's marks. A record from before a mark reads as marked
+ *  unless it is recorded clean: a tainted one may hold a signed-in task's
+ *  data. Pure. */
+export function savedMarks(rec: Pick<BotSessionRecord, 'tainted' | 'signedIn'>): ConversationMarks {
+  const tainted = rec.tainted ?? true;
+  return { tainted, signedIn: rec.signedIn ?? tainted };
+}
 
 /** Longest the runtime waits at launch for the modules its wake prompts
  *  read from; past it, a module that failed to start holds no bot. */
@@ -461,7 +482,7 @@ export class BotRuntime {
     const live = this.live.get(botId);
     const rec = this.deps.sessions.get(botId);
     if (!live || live.ephemeral || !rec) return;
-    this.deps.sessions.set(botId, { ...rec, tainted: m.tainted });
+    this.deps.sessions.set(botId, { ...rec, tainted: m.tainted, signedIn: m.signedIn });
   }
 
   // ── status ────────────────────────────────────────────────────────────────
@@ -754,6 +775,15 @@ export class BotRuntime {
     if (!ports.wakeTainted) return true;
     try {
       return ports.wakeTainted(item) !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  private wakeSignedIn(item: WakeItem): boolean {
+    if (!ports.wakeSignedIn) return !ports.wakeTainted;
+    try {
+      return ports.wakeSignedIn(item) !== false;
     } catch {
       return true;
     }
@@ -1088,8 +1118,8 @@ export class BotRuntime {
     const live: LiveSession = { adapter: spawned.adapter, engineKey, attached: false, ...(opts.ephemeral ? { ephemeral: true } : {}) };
     this.live.set(profile.id, live);
     // A guest's conversation of its own counts as tainted; a resumed one
-    // carries its record's mark (none recorded: unknown).
-    startConversation(profile.id, opts.ephemeral ? UNKNOWN_MARKS : saved ? { tainted: saved.tainted ?? true } : CLEAN_MARKS);
+    // carries its record's marks (none recorded: unknown).
+    startConversation(profile.id, opts.ephemeral ? GUEST_MARKS : saved ? savedMarks(saved) : CLEAN_MARKS);
     return { ok: true, live };
   }
 
@@ -1167,6 +1197,8 @@ export class BotRuntime {
       }
       if (run) run.adapter = s.live.adapter;
       if (!s.live.ephemeral && this.wakeTainted(item)) markConversation(botId, 'tainted');
+      // What a signed-in task's worker read reaches this conversation now.
+      if (!s.live.ephemeral && this.wakeSignedIn(item)) markConversation(botId, 'signedIn');
       const photos = this.wakePhotos(profile, item);
       const result = await this.drive(s.live, this.prompt(profile, item) + photos.note, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
       // A failed turn that reached the model cost as much as a finished one.
@@ -1183,7 +1215,7 @@ export class BotRuntime {
         if (sessionId && !s.live.ephemeral) {
           const accountId = s.live.adapter.conversationAccountId;
           const m = conversationMarks(botId) ?? UNKNOWN_MARKS;
-          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, model: modelPin(profile), tainted: m.tainted, updatedAt: this.now() });
+          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, model: modelPin(profile), tainted: m.tainted, signedIn: m.signedIn, updatedAt: this.now() });
         }
         // A reply to the owner the bot wrote as plain text instead of a
         // room_post would reach nobody: it becomes the bot's card, while the

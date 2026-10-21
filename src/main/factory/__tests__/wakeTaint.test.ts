@@ -274,6 +274,37 @@ describe('WakeTaint', () => {
   });
 });
 
+describe('a wake carrying a signed-in task\'s fact', () => {
+  const facts = (ids: string[]) => ({ kind: 'facts' as const, factIds: ids, trigger: { kind: 'task.done' } as never });
+  const gateway = (id: string): LedgerEntry => ({ id, dispatch: { origin: { kind: 'bot', botId: 'bot-a', tainted: true }, gatewayConnectors: ['notion'] } } as unknown as LedgerEntry);
+
+  it('is signed in by the task row main wrote at a gateway fan-out; any other fact or wake is not', () => {
+    const t = make({}, [fact('f-gw', 'task.done', { taskId: 'wtask-gw' }), fact('f-plain', 'task.done', { taskId: 'wtask-plain' }), fact('f-pr', 'pr.opened'), fact('f-idle', 'pane.idle', { taskId: 'wtask-gw' })], [], [gateway('wtask-gw'), row('wtask-plain', true)]);
+    expect(t.wakeSignedIn(wake(facts(['f-gw'])))).toBe(true);
+    expect(t.wakeSignedIn(wake(facts(['f-idle'])))).toBe(true);
+    expect(t.wakeSignedIn(wake(facts(['f-pr', 'f-gw'])))).toBe(true);
+    // The task id main gives a bot's own task wake.
+    expect(t.wakeSignedIn(wake(facts(['task.done:wtask-gw@3'])))).toBe(true);
+    expect(t.wakeSignedIn(wake(facts(['task.done:wtask-plain@3'])))).toBe(false);
+    // A PR, a plain task: tainted, not signed in.
+    expect(t.wakeSignedIn(wake(facts(['f-pr', 'f-plain'])))).toBe(false);
+    expect(t.wakeSignedIn(wake({ kind: 'human', text: 'hi', source: 'desktop' }))).toBe(false);
+    expect(t.wakeSignedIn(wake({ kind: 'held_fanout', heldId: 'h', heldAt: 1, titles: ['x'], tainted: false }))).toBe(false);
+    // Names only an owner's or another origin's task: not a bot's gateway task.
+    const owner = make({}, [], [], [{ id: 'wtask-own', dispatch: { origin: { kind: 'human' }, gatewayConnectors: ['notion'] } } as unknown as LedgerEntry]);
+    expect(owner.wakeSignedIn(wake(facts(['task.done:wtask-own@1'])))).toBe(false);
+  });
+
+  it('a task fact that cannot be told is signed in: its row gone or unreadable, a fact not found, the log unreadable', () => {
+    expect(make().wakeSignedIn(wake(facts(['task.done:wtask-gone@1'])))).toBe(true);
+    expect(make({ taskRow: () => { throw new Error('x'); } }).wakeSignedIn(wake(facts(['task.done:wtask-gw@1'])))).toBe(true);
+    expect(make().wakeSignedIn(wake(facts(['f-missing'])))).toBe(true);
+    expect(make({ facts: () => { throw new Error('x'); } }).wakeSignedIn(wake(facts(['f-gw'])))).toBe(true);
+    // A workflow's ready wake names no task.
+    expect(make().wakeSignedIn(wake(facts([`workflow.ready:wf-${'a'.repeat(24)}@1`])))).toBe(false);
+  });
+});
+
 describe('handoffs follow the sender\'s conversation', () => {
   it('a handoff sent in a clean wake from a conversation that ran a tainted wake is tainted', () => {
     let conversationTainted = true;
@@ -292,7 +323,7 @@ describe('handoffs follow the sender\'s conversation', () => {
   it('by default reads the conversation mark the runtime keeps', () => {
     const running = { item: { ...wake({ kind: 'human', text: 'hi', source: 'desktop' }), botId: 'bot-c' }, startedAt: 0 };
     const t = make({ runningWake: () => running });
-    startConversation('bot-c', { tainted: true });
+    startConversation('bot-c', { tainted: true, signedIn: false });
     try {
       expect(t.markSent('h-c1', 'bot-c')).toBe(true);
     } finally {

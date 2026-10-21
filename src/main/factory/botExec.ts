@@ -8,8 +8,10 @@
 //
 // Bash, in order:
 //   1. attended — the wake running now is the owner's own (a message or the
-//      run button) and known clean (wakeTaint.ts runningWakeAttended); any
-//      other wake, none, or one that cannot be told is refused;
+//      run button) and known clean, in a conversation known clean (not
+//      tainted or signed-in, conversationMarks.ts; wakeTaint.ts
+//      runningWakeAttended); any other wake, none, or one that cannot be
+//      told is refused;
 //   2. the floor (botCommandFloor.ts) — refused whatever the owner allowed;
 //   3. the list (botCommandAllow.ts) — the built-in read-only commands and
 //      the owner's rules for this bot (botCommandRules.ts) are allowed;
@@ -38,6 +40,7 @@ import { decideBotCommand, type BotCommandRule } from './botCommandAllow';
 import { BOT_COMMAND_REVIEWER_LIMITS, reviewerRefusal, type BotCommandReviewer, type ReviewCode, type ReviewFolder, type ReviewOutcome } from './botCommandReviewer';
 import { checkBotFolderPath, type BotFolderDeps } from './botFolderPath';
 import { redactStoredSecrets } from './secretRedaction';
+import { conversationMarks, signedInRefusal } from './conversationMarks';
 
 /** The built-in tools a bot that runs commands holds besides Read. */
 export const BOT_EXEC_TOOLS: readonly string[] = ['Bash', 'Write', 'Edit'];
@@ -87,6 +90,15 @@ export function sanitizeBashInput(input: Record<string, unknown>): Record<string
 const UNATTENDED = 'commands and file edits run only in a turn the owner started (their message or the run button)';
 const SWITCHED_OFF = 'the owner switched this bot\'s commands off';
 
+/** Why an unattended call is refused: a conversation that holds data from a
+ *  signed-in task, or outside text, says so. */
+function unattendedReason(botId: string): string {
+  const m = conversationMarks(botId);
+  if (m?.signedIn) return signedInRefusal('run commands or edit files');
+  if (m?.tainted) return 'this conversation has taken in outside text, so commands and file edits do not run in it';
+  return UNATTENDED;
+}
+
 /** The refusal of a call made while the owner's switch is off. */
 export function botExecSwitchedOff(command?: string): BotExecDecision {
   return { ok: false, layer: 'off', reason: SWITCHED_OFF, ...(command !== undefined ? { command } : {}) };
@@ -113,7 +125,7 @@ export function evaluateBotExecTool(toolName: string, input: Record<string, unkn
     attended = false;
   }
   if (toolName === 'Bash') {
-    if (!attended) return { ok: false, layer: 'attended', reason: UNATTENDED, command: typeof input.command === 'string' ? input.command.slice(0, 200) : undefined };
+    if (!attended) return { ok: false, layer: 'attended', reason: unattendedReason(ctx.botId), command: typeof input.command === 'string' ? input.command.slice(0, 200) : undefined };
     let rules: readonly BotCommandRule[] = [];
     try {
       rules = ctx.rules();
@@ -130,7 +142,7 @@ export function evaluateBotExecTool(toolName: string, input: Record<string, unkn
     // commandLineToRun), never as the model wrote it.
     return { ok: true, layer: d.matched === 'rule' ? 'rule' : d.layer, input: { ...sanitizeBashInput(input), command: d.run }, command: d.command };
   }
-  if (!attended) return { ok: false, layer: 'attended', reason: UNATTENDED };
+  if (!attended) return { ok: false, layer: 'attended', reason: unattendedReason(ctx.botId) };
   const r = checkBotFolderPath(input.file_path, ctx.botDir, ctx.fs);
   if (!r.ok) return { ok: false, layer: 'path', reason: `${String(input.file_path)}: ${r.reason}` };
   return { ok: true, layer: 'path', input: { ...input, file_path: r.real } };

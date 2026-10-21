@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { Fact } from '../../shared/facts';
 import { APPROVALS_FILENAME, APPROVAL_LIMITS, ApprovalService, getApprovalService, registerApprovalRpc, setApprovalService } from './approvals';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
+import { conversationTainted } from './conversationMarks';
 
 registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
   // Why the store did not start: bots asking for approval are told, so the
@@ -44,7 +45,8 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
             const room = roomWake(resolveRoomPorts(), botId);
             return {
               wakeId: item.id, attempt: Math.max(1, item.attempts), threadId: item.threadId ?? null,
-              tainted: taint ? taint.wakeTainted(item) : true, guest: taint ? taint.wakeGuest(item) : 'unknown', ownerWords: item.reason.kind === 'human',
+              // Text an earlier wake brought into the conversation is still in it.
+              tainted: (taint ? taint.wakeTainted(item) : true) || conversationTainted(botId), guest: taint ? taint.wakeGuest(item) : 'unknown', ownerWords: item.reason.kind === 'human',
               ...(room?.wakeId === item.id && room.ownerCardId ? { ownerCardId: room.ownerCardId } : {}),
             };
           },

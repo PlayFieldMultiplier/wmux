@@ -58,7 +58,7 @@ function rig() {
     guestWake: () => false,
     tainted: () => false,
     wakeReason: () => ({ kind: 'human', text: 'call me Kim', source: 'desktop' }),
-    conversation: () => ({ tainted: false }),
+    conversation: () => ({ tainted: false, signedIn: false }),
     propose: (bot, change) => svc.proposeOwnerProfile(bot, change),
   };
   const propose = (params: Record<string, unknown>) => handleMemoryUpdate({ target: 'user', ...params }, asBot, deps);

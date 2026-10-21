@@ -7,10 +7,19 @@
 //
 //   tainted      a wake run in it was started from outside text, or could
 //                not be told clean (wakeTaint.ts wakeTainted)
+//   signedIn     a wake run in it carried a fact of a task that used a
+//                signed-in connection (wakeTaint.ts wakeSignedIn): what the
+//                worker read with the owner's sign-in is in this
+//                conversation. Always tainted too.
 //
-// Readers: memory.update (nothing is saved from a tainted conversation) and
-// the handoff marks (wakeTaint.ts markSent / markForward: what a bot sends
-// from one is tainted). The runtime starts a conversation's mark when it
+// Readers: memory.update (nothing is saved from a tainted conversation), the
+// handoff marks (wakeTaint.ts markSent / markForward: what a bot sends from
+// one is tainted), the standing instructions (routine.set, job_set and
+// workflow.create are refused from a tainted one), the attended check of a
+// bot's commands and file edits (wakeTaint.ts runningWakeAttended), and the
+// ways out of a signed-in one (signedInRefusal: fan-outs, worker messages
+// and resumes but to its signed-in tasks, handoffs, mentions, and posts
+// outside the bot's own 1:1). The runtime starts a conversation's mark when it
 // spawns one (clean when fresh, from the saved session record when resumed,
 // set for a guest's conversation of its own) and ends it when it ends the
 // session. A mark is only ever set, never cleared, until the conversation
@@ -19,6 +28,7 @@
 
 export interface ConversationMarks {
   tainted: boolean;
+  signedIn: boolean;
 }
 
 const marks = new Map<string, ConversationMarks>();
@@ -26,7 +36,7 @@ let listener: ((botId: string, marks: ConversationMarks) => void) | null = null;
 
 /** A conversation starts (or is resumed) for `botId`. */
 export function startConversation(botId: string, init: ConversationMarks): void {
-  marks.set(botId, { tainted: init.tainted });
+  marks.set(botId, { tainted: init.tainted || init.signedIn, signedIn: init.signedIn });
 }
 
 /** The bot's conversation ended. */
@@ -34,11 +44,13 @@ export function endConversation(botId: string): void {
   marks.delete(botId);
 }
 
-/** Set one mark on the bot's live conversation (none: nothing to mark). */
+/** Set one mark on the bot's live conversation (none: nothing to mark). A
+ *  signed-in one is tainted as well. */
 export function markConversation(botId: string, mark: keyof ConversationMarks): void {
   const m = marks.get(botId);
   if (!m || m[mark]) return;
   m[mark] = true;
+  if (mark === 'signedIn') m.tainted = true;
   try {
     listener?.(botId, { ...m });
   } catch (err) {
@@ -51,6 +63,29 @@ export function conversationMarks(botId: string): ConversationMarks | null {
   const m = marks.get(botId);
   return m ? { ...m } : null;
 }
+
+/** Whether the bot's live conversation holds data from a signed-in task;
+ *  a bot with no live conversation reads as yes (a bot's call runs inside
+ *  its turn, which always has one). */
+export function conversationSignedIn(botId: string): boolean {
+  return marks.get(botId)?.signedIn !== false;
+}
+
+/** Whether the bot's live conversation has taken in outside text; a bot
+ *  with no live conversation reads as yes. */
+export function conversationTainted(botId: string): boolean {
+  return marks.get(botId)?.tainted !== false;
+}
+
+/** What a bot is told when a conversation holding data from a signed-in
+ *  task asks to move it somewhere: `what` names the refused act. */
+export function signedInRefusal(what: string): string {
+  return `this conversation holds data from a signed-in task, so it can't ${what}; reply to the owner in your 1:1 instead`;
+}
+
+/** What a bot is told when a tainted conversation asks to save work that
+ *  runs later (a routine, a job, a workflow). */
+export const TAINTED_CONVERSATION_SAVES_NOTHING = 'this conversation has taken in outside text, so it saves nothing that runs later, even on the owner\'s words; ask the owner to set it from a new conversation';
 
 /** Told when a mark is set (the runtime saves it with the session record). */
 export function setConversationMarkListener(fn: ((botId: string, marks: ConversationMarks) => void) | null): void {

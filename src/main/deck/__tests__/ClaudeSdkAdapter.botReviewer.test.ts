@@ -36,6 +36,7 @@ import type { BrainEvent } from '../BrainAdapter';
 import type { BotBinding } from '../../../shared/bot';
 import type { BotClaudeAuth } from '../../factory/claudeApiKey';
 import { WakeTaint, setWakeTaint } from '../../factory/wakeTaint';
+import { __resetConversationMarksForTesting, startConversation } from '../../factory/conversationMarks';
 import { BotCommandRulesStore, __setBotCommandRulesStoreForTesting, botCommandRulesPath } from '../../factory/botCommandRules';
 import { BOT_COMMAND_REVIEWER_LIMITS, BOT_COMMAND_REVIEWER_SYSTEM_PROMPT, __resetBotCommandReviewerBudgetForTesting, reviewerUserMessage } from '../../factory/botCommandReviewer';
 import type { WakeItem, WakeReason } from '../../../shared/wake';
@@ -55,6 +56,8 @@ beforeEach(() => {
   fs.mkdirSync(botDir, { recursive: true });
   const runningWake = () => (running ? { item: running, startedAt: 1 } : null);
   setWakeTaint(new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake }), runningWake);
+  // The bot's own conversation, clean (conversationMarks.ts).
+  startConversation(BINDING.botId, { tainted: false, signedIn: false });
   __setBotCommandRulesStoreForTesting(new BotCommandRulesStore(botCommandRulesPath(dir)));
   __resetBotCommandReviewerBudgetForTesting();
   running = wake({ kind: 'human', text: 'run it', source: 'desktop' });
@@ -63,6 +66,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   setWakeTaint(null);
+  __resetConversationMarksForTesting();
   __setBotCommandRulesStoreForTesting(null);
   running = null;
   vi.restoreAllMocks();

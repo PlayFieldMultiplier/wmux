@@ -14,7 +14,9 @@
 //                 else every bot of the room; in a group chat's thread, its
 //                 members or those it names). Addressing is a field, never
 //                 text: an `@name` in a card wakes nobody. Posts are
-//                 idempotent by clientPostId.
+//                 idempotent by clientPostId. A bot whose conversation holds
+//                 data from a signed-in task (conversationMarks.ts) posts
+//                 only in its own 1:1, and mentions no bot.
 //   room.read     a bot: its own room (a Coordinator-template bot, by its live
 //                 profile: any room); the operator: any room, and may record
 //                 its read position (markThroughSeq).
@@ -29,6 +31,7 @@
 import fs from 'node:fs';
 import { guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
+import { conversationSignedIn, signedInRefusal } from '../../factory/conversationMarks';
 import path from 'node:path';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { isBotRole, isCoordinatorBot } from '../../../shared/bot';
@@ -36,6 +39,7 @@ import { GUEST_TURN_SURFACE_REFUSAL, SHARED_SURFACE, type BotToolName, type Fact
 import {
   BOT_POSTABLE_CARD_KINDS,
   GENERAL_THREAD,
+  dmThreadId,
   ROOM_EVENT,
   ROOM_LIMITS,
   ROOM_RPC,
@@ -147,6 +151,9 @@ export interface RoomHandlerDeps {
   /** The guest provenance of the bot's running wake. Default: wakeTaint.ts's
    *  tracker (guestOfRunningWake). */
   guestWake?: (botId: string) => GuestProvenance;
+  /** Whether the bot's live conversation holds data from a signed-in task
+   *  (none: yes). Default: conversationMarks.ts. */
+  signedIn?: (botId: string) => boolean;
 }
 
 /** Where a bot's `files` may come from, and what a relative path means. */
@@ -318,6 +325,12 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     const threadRefused = botThreadRefusal(ports, bot, pinned);
     if (threadRefused) return refusal('invalid', threadRefused);
     const threadId = pinned ?? wakeThread ?? GENERAL_THREAD;
+    // What a signed-in task read stays in this conversation: it is told to
+    // the owner in the bot's own 1:1, and to no other bot.
+    if ((deps.signedIn ?? conversationSignedIn)(bot.botId) !== false) {
+      if (threadId !== dmThreadId(bot.botId)) return refusal('not_now', signedInRefusal('post outside your 1:1 with the owner'));
+      if (mentions?.some((m) => m !== bot.botId)) return refusal('not_now', signedInRefusal('mention another bot'));
+    }
     const wake = runningWake(ports, bot.botId);
     // Decided now, before the file copy waits: the card keeps its wake's
     // provenance even if that wake ends meanwhile.

@@ -22,7 +22,7 @@ function rig(over: Partial<WorkerMessagePorts> = {}) {
   const rows = new Map([['wtask-a1', row()], ['wtask-b2', row({ id: 'wtask-b2', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000b' } } })], ['wtask-c3', row({ id: 'wtask-c3', status: 'completed' })]]);
   const submit = vi.fn(async () => true);
   const livePane = vi.fn(async (ws: string) => (ws === 'ws-task' ? 'pty-1' : null));
-  const ports: WorkerMessagePorts = { row: (id) => rows.get(id) ?? null, livePane, submit, botName: () => 'Wmux Dev', now: () => now, senderTainted: () => false, senderWakeId: () => 'w-1', guestOfWake: () => false, ...over };
+  const ports: WorkerMessagePorts = { row: (id) => rows.get(id) ?? null, livePane, submit, botName: () => 'Wmux Dev', now: () => now, senderTainted: () => false, senderConversationTainted: () => false, senderSignedIn: () => false, senderWakeId: () => 'w-1', guestOfWake: () => false, ...over };
   const limiter = new WorkerMessageLimiter();
   return {
     ports, limiter, submit, livePane, rows,
@@ -176,9 +176,24 @@ describe('worker_message and outside text (review fixes, PR #2164)', () => {
       expect(await r.send('wtask-g1', 'x')).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('signed-in connection') });
       expect(r.submit).not.toHaveBeenCalled();
     }
-    // A task without one is not asked about the conversation.
+    // A task without one started from outside text takes it from such a
+    // conversation; one started clean does not (the conversation's mark
+    // counts as the wake's).
     const plain = rig({ senderConversationTainted: () => true });
-    expect(await plain.send('wtask-a1', 'x')).toMatchObject({ ok: true });
+    plain.rows.set('wtask-e5', row({ id: 'wtask-e5', dispatch: { origin: { kind: 'bot', botId: BOT, tainted: true } } }));
+    expect(await plain.send('wtask-e5', 'x')).toMatchObject({ ok: true });
+    expect(await plain.send('wtask-a1', 'x')).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('conversation carried outside text') });
+  });
+
+  it('a conversation that holds data from a signed-in task writes to no worker of another task', async () => {
+    const r = rig({ senderSignedIn: () => true, senderConversationTainted: () => true });
+    r.rows.set('wtask-e5', row({ id: 'wtask-e5', dispatch: { origin: { kind: 'bot', botId: BOT, tainted: true } } }));
+    expect(await r.send('wtask-e5', 'here is what it found')).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task') });
+    expect(r.submit).not.toHaveBeenCalled();
+    // Its default reads the conversation's marks: no live conversation is refused.
+    const none = rig({ senderSignedIn: undefined });
+    none.rows.set('wtask-e5', row({ id: 'wtask-e5', dispatch: { origin: { kind: 'bot', botId: BOT, tainted: true } } }));
+    expect(await none.send('wtask-e5', 'x')).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('signed-in task') });
   });
 
   it('a wake on an answer whose question was pruned is handled like outside text (the running tracker decides)', async () => {

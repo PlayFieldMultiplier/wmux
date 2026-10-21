@@ -33,7 +33,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { BotBudget } from '../../shared/bot';
 import { parseThreadId, type ThreadId } from '../../shared/room';
-import { WAKE_LIMITS, type HeldFanoutArgs, type WakeItem } from '../../shared/wake';
+import { WAKE_LIMITS, isHeldWakeKind, type HeldFanoutArgs, type HeldWakeKind, type WakeItem } from '../../shared/wake';
 import { FANOUT_MAX_TASKS, FANOUT_PROMPT_MAX_BYTES } from '../../shared/workTask';
 import { workerSlotsFull } from './budget';
 import { onHolderInputsChanged } from './holderInputs';
@@ -74,6 +74,9 @@ export interface HeldFanout {
    *  record reads as unknown unless clean. */
   guest?: boolean;
   handoffId?: string;
+  /** A signed-in request's: the reason kind of the wake that asked for it
+   *  (its `tainted` is that wake's own mark, fanout.rpc.ts). */
+  wakeKind?: HeldWakeKind;
 }
 
 export type HoldInput = Omit<HeldFanout, 'id' | 'heldAt' | 'titles' | 'count' | 'fingerprint' | 'args'> & { args: HeldFanoutArgs };
@@ -206,6 +209,7 @@ function parseHeld(raw: unknown): HeldFanout | null {
     ...(args ? { args } : {}), fingerprint: r.fingerprint, ...(threadId ? { threadId } : {}), tainted: r.tainted,
     ...(typeof r.guest === 'boolean' ? { guest: r.guest } : {}),
     ...(typeof r.handoffId === 'string' ? { handoffId: r.handoffId } : {}),
+    ...(isHeldWakeKind(r.wakeKind) ? { wakeKind: r.wakeKind } : {}),
   };
 }
 
@@ -270,6 +274,7 @@ export class HeldFanouts {
       tainted: input.tainted,
       ...(typeof input.guest === 'boolean' ? { guest: input.guest } : {}),
       ...(input.handoffId ? { handoffId: input.handoffId } : {}),
+      ...(input.wakeKind ? { wakeKind: input.wakeKind } : {}),
     };
     // The same request refused again (a retry from the same thread and
     // handoff) is held once, as the latest.
@@ -468,6 +473,7 @@ export class HeldFanouts {
           kind: 'held_fanout', heldId: h.id, heldAt: h.heldAt, titles: h.titles,
           ...(h.args ? { args: h.args } : {}), fingerprint: h.fingerprint, tainted: h.tainted,
           ...(typeof h.guest === 'boolean' ? { guest: h.guest } : {}), ...(h.handoffId ? { handoffId: h.handoffId } : {}),
+          ...(h.wakeKind ? { wakeKind: h.wakeKind } : {}),
         },
         priority: 1,
         ...(h.threadId ? { threadId: h.threadId } : {}),

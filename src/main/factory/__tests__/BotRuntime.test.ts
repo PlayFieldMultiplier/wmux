@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrainAdapter, BrainEvent, BrainSendOptions, BrainStartOptions } from '../../deck/BrainAdapter';
-import { BotRuntime, BotSessionStore, type BotRuntimeDeps, CONTEXT_WAIT_MS, onBotRemoved, isImageApiError, ROOM_RUN_STAGGER_MS, TRANSIENT_RETRY_BASE_MS, TRANSIENT_RETRY_MAX, botSessionsPath, isTransientEngineError, roomRunOf, setBotRuntimePorts, usageLimitNoticeOf, usageLimitParkUntil, USAGE_LIMIT_MIN_PARK_MS, __resetBotRuntimePortsForTesting } from '../BotRuntime';
+import { BOT_SESSIONS_VERSION, BotRuntime, BotSessionStore, savedMarks, type BotRuntimeDeps, CONTEXT_WAIT_MS, onBotRemoved, isImageApiError, ROOM_RUN_STAGGER_MS, TRANSIENT_RETRY_BASE_MS, TRANSIENT_RETRY_MAX, botSessionsPath, isTransientEngineError, roomRunOf, setBotRuntimePorts, usageLimitNoticeOf, usageLimitParkUntil, USAGE_LIMIT_MIN_PARK_MS, __resetBotRuntimePortsForTesting } from '../BotRuntime';
 import type { BotEngineFactory, BotEngineSpawnInput } from '../botEngines';
 import { BotStore, botsFilePath } from '../botStore';
 import { WakeQueue, wakeQueuePath } from '../wakeQueue';
@@ -1376,11 +1376,11 @@ describe('conversation marks and removal', () => {
     const id = createBot(r);
     must(r.runtime.wake(id, { text: 'one' }));
     await settle(10);
-    expect(conversationMarks(id)).toEqual({ tainted: false });
+    expect(conversationMarks(id)).toEqual({ tainted: false, signedIn: false });
     expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-1', tainted: false });
     r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'routine', routineId: 'r-abcdefgh', dueAt: clock }, priority: 2 });
     await settle(10);
-    expect(conversationMarks(id)).toEqual({ tainted: true });
+    expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: false });
     expect(r.sessions.get(id)).toMatchObject({ tainted: true });
 
     r.runtime.dispose();
@@ -1390,7 +1390,7 @@ describe('conversation marks and removal', () => {
     must(again.runtime.wake(id, { text: 'two' }));
     await settle(10);
     expect(again.adapters[0].started?.resumeSessionId).toBe('sess-1');
-    expect(conversationMarks(id)).toEqual({ tainted: true });
+    expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: false });
 
     // No saved conversation: the next one is fresh and clean.
     again.sessions.delete(id);
@@ -1402,7 +1402,7 @@ describe('conversation marks and removal', () => {
     must(again.runtime.wake(id, { text: 'three' }));
     await settle(10);
     expect(again.adapters[1].started?.resumeSessionId).toBeUndefined();
-    expect(conversationMarks(id)).toEqual({ tainted: false });
+    expect(conversationMarks(id)).toEqual({ tainted: false, signedIn: false });
   });
 
   it('a mark set mid-turn is saved at once; a saved conversation with no mark resumes tainted, and so does every wake without the taint port', async () => {
@@ -1421,11 +1421,55 @@ describe('conversation marks and removal', () => {
     must(r.runtime.wake(old, { text: 'one' }));
     await settle(10);
     expect(r.adapters.at(-1)?.started?.resumeSessionId).toBe('sess-old');
-    expect(conversationMarks(old)).toEqual({ tainted: true });
+    expect(conversationMarks(old)).toEqual({ tainted: true, signedIn: true });
     const fresh = createBot(r);
     must(r.runtime.wake(fresh, { text: 'one' }));
     await settle(10);
-    expect(conversationMarks(fresh)).toEqual({ tainted: true });
+    expect(conversationMarks(fresh)).toEqual({ tainted: true, signedIn: true });
+  });
+
+  it('a wake carrying a signed-in task\'s fact marks the conversation signed in, saved with its record; a resume carries it', async () => {
+    setBotRuntimePorts({ wakeTainted: () => true, wakeSignedIn: (item) => item.reason.kind === 'routine' });
+    const r = rig({ mode: 'ok' });
+    const id = createBot(r);
+    must(r.runtime.wake(id, { text: 'one' }));
+    await settle(10);
+    expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: false });
+    expect(r.sessions.get(id)).toMatchObject({ tainted: true, signedIn: false });
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'routine', routineId: 'r-abcdefgh', dueAt: clock }, priority: 2 });
+    await settle(10);
+    expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: true });
+    expect(r.sessions.get(id)).toMatchObject({ tainted: true, signedIn: true });
+    // Set mid-turn, a mark is saved at once (a failed turn's resume still carries it).
+    const other = createBot(r);
+    must(r.runtime.wake(other, { text: 'one' }));
+    await settle(10);
+    expect(r.sessions.get(other)).toMatchObject({ tainted: true, signedIn: false });
+    markConversation(other, 'signedIn');
+    expect(r.sessions.get(other)).toMatchObject({ tainted: true, signedIn: true });
+    r.runtime.dispose();
+    await r.sessions.flush();
+    const again = rig({ mode: 'ok', load: true });
+    must(again.runtime.wake(id, { text: 'two' }));
+    await settle(10);
+    expect(again.adapters[0].started?.resumeSessionId).toBe('sess-1');
+    expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: true });
+  });
+
+  it('a sessions.json record from before the signed-in mark reads as signed in unless it is recorded clean', () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wp2-sessions-legacy-')), 'sessions.json');
+    fs.writeFileSync(file, JSON.stringify({ version: BOT_SESSIONS_VERSION, sessions: {
+      'bot-tainted': { sessionId: 's-1', tainted: true, updatedAt: 1 },
+      'bot-clean': { sessionId: 's-2', tainted: false, updatedAt: 1 },
+      'bot-unmarked': { sessionId: 's-3', updatedAt: 1 },
+      'bot-new': { sessionId: 's-4', tainted: true, signedIn: false, updatedAt: 1 },
+    } }));
+    const store = new BotSessionStore(file);
+    store.load();
+    expect(savedMarks(store.get('bot-tainted')!)).toEqual({ tainted: true, signedIn: true });
+    expect(savedMarks(store.get('bot-clean')!)).toEqual({ tainted: false, signedIn: false });
+    expect(savedMarks(store.get('bot-unmarked')!)).toEqual({ tainted: true, signedIn: true });
+    expect(savedMarks(store.get('bot-new')!)).toEqual({ tainted: true, signedIn: false });
   });
 
   it('tells the removal listeners once a bot is removed', () => {

@@ -72,6 +72,7 @@ import { fanoutTaskShortId } from '../../shared/fanoutCallerNudge';
 import type { WorkerSlots } from './workerSlots';
 import { getAgentSlots, type AgentSlots } from './agentSlots';
 import type { BotNoticeInput } from './botNotices';
+import { signedInRefusal } from './conversationMarks';
 
 export const RECLAIMED_WORKERS_FILENAME = 'reclaimed-workers.json';
 export const RECLAIMED_WORKERS_VERSION = 1 as const;
@@ -1674,6 +1675,11 @@ export interface WorkerResumePorts {
   /** Whether the bot's live conversation has taken in outside text
    *  (unknown: true). */
   senderConversationTainted?: (botId: string) => boolean;
+  /** Whether the bot's live conversation holds data from a signed-in task:
+   *  it then starts no worker of another task again. Absent: not asked
+   *  (main's reads conversationMarks.ts, where no live conversation counts
+   *  as yes). */
+  senderSignedIn?: (botId: string) => boolean;
   /** Whether the bot's running wake carried outside text (unknown: true). A
    *  bot's message from such a wake goes only to a task recorded as started
    *  from outside text. */
@@ -1838,8 +1844,14 @@ async function resumeOnce(
       && ((ports.senderTainted?.(by.botId) ?? true) !== false || (ports.senderConversationTainted?.(by.botId) ?? true) !== false)) {
       return refuse('not_now', 'a task with a signed-in connection resumes only from a wake and conversation that took in no outside text; the owner can resume it');
     }
-    if (text && (ports.taskTainted?.(taskId) ?? true) === false && (ports.senderTainted?.(by.botId) ?? true) !== false) {
-      return refuse('not_now', 'a message from a wake that carried outside text goes only to a task started from outside text; resume without a message, or write it from a clean wake');
+    // What a signed-in task read stays in this conversation: no other
+    // worker starts again from it.
+    if (ports.gatewayTask?.(taskId) !== true && ports.senderSignedIn?.(by.botId) === true) {
+      return refuse('not_now', signedInRefusal('resume a worker of another task'));
+    }
+    if (text && (ports.taskTainted?.(taskId) ?? true) === false
+      && ((ports.senderTainted?.(by.botId) ?? true) !== false || (ports.senderConversationTainted?.(by.botId) ?? true) !== false)) {
+      return refuse('not_now', 'a message from a wake or conversation that carried outside text goes only to a task started from outside text; resume without a message, or write it from a clean wake and conversation');
     }
     let budget: string | null = null;
     try {

@@ -70,7 +70,7 @@ import type { BotWorkflow } from '../../shared/botWorkflow';
 import type { WakeItem, WakeReason } from '../../shared/wake';
 import { taskIdOfFactId } from './wakePrompt';
 import { factInIsland, isGuestWorkspace } from './guestWorkspaces';
-import { conversationMarks } from './conversationMarks';
+import { conversationMarks, conversationTainted } from './conversationMarks';
 
 /** Facts whose payload is GitHub-authored text. */
 export const OUTSIDE_TEXT_FACT_KINDS: ReadonlySet<FactKind> = new Set<FactKind>([
@@ -369,6 +369,45 @@ export class WakeTaint {
     return false;
   }
 
+  /** Whether a wake carried a fact of a task that used a signed-in
+   *  connection: its ledger row's `dispatch.gatewayConnectors`, which only a
+   *  bot's fan-out through main's gateway writes (fanout.rpc.ts). Its
+   *  result is what the worker read with the owner's sign-in. A task fact
+   *  whose row cannot be read, and a fact that cannot be found, count as
+   *  one. Only a `facts` wake carries task facts. */
+  wakeSignedIn(item: Pick<WakeItem, 'reason'>): boolean {
+    const reason = item.reason;
+    if (reason.kind !== 'facts') return false;
+    const ids = Array.isArray(reason.factIds) ? reason.factIds : [];
+    let found: Fact[];
+    try {
+      found = this.ports.facts(ids);
+    } catch {
+      return true;
+    }
+    const byId = new Map(found.map((f) => [f.id, f]));
+    return ids.some((id) => {
+      const f = byId.get(id);
+      if (f) {
+        if (!TASK_FACT_KINDS.has(f.kind)) return false;
+        return !f.ref?.taskId || this.taskIdSignedIn(f.ref.taskId);
+      }
+      const taskId = taskIdOfFactId(id);
+      if (taskId) return this.taskIdSignedIn(taskId);
+      return !/^workflow\.ready:wf-[a-f0-9]{24}@[1-9][0-9]*$/.test(id);
+    });
+  }
+
+  private taskIdSignedIn(taskId: string): boolean {
+    let row: LedgerEntry | null;
+    try {
+      row = this.ports.taskRow(taskId);
+    } catch {
+      return true;
+    }
+    return !row || taskSignedIn(row);
+  }
+
   /** A task's dispatch mark; an unknown task is tainted. */
   private taskIdTainted(taskId: string): boolean {
     let row: LedgerEntry | null;
@@ -571,6 +610,12 @@ export function taskTainted(row: Pick<LedgerEntry, 'dispatch'>): boolean {
   return origin.kind === 'bot' ? origin.tainted !== false : origin.tainted === true;
 }
 
+/** Whether a ledger row's task used a signed-in connection: a bot's task
+ *  main started through its gateway (fanout.rpc.ts records the names). */
+export function taskSignedIn(row: Pick<LedgerEntry, 'dispatch'>): boolean {
+  return row.dispatch?.origin.kind === 'bot' && (row.dispatch.gatewayConnectors?.length ?? 0) > 0;
+}
+
 /** A ledger row's guest provenance: its dispatch's own mark, else false
  *  for a task main recorded clean and unknown for any other. */
 export function taskGuest(row: Pick<LedgerEntry, 'dispatch'>): GuestProvenance {
@@ -702,15 +747,17 @@ export function runningWakeTainted(botId: string): boolean {
 export const ATTENDED_WAKE_KINDS: ReadonlySet<WakeReason['kind']> = new Set<WakeReason['kind']>(['human', 'manual']);
 
 /** Whether the wake `botId` is running now is attended: its reason is one
- *  of ATTENDED_WAKE_KINDS and it is known clean. False when it cannot be
- *  told (no tracker, no running wake, an error). */
+ *  of ATTENDED_WAKE_KINDS, it is known clean, and so is the conversation it
+ *  runs in (a tainted or signed-in one never is, conversationMarks.ts).
+ *  False when it cannot be told (no tracker, no running wake, no live
+ *  conversation, an error). */
 export function runningWakeAttended(botId: string): boolean {
   const c = current;
   if (!c) return false;
   try {
     const item = c.runningWake(botId)?.item;
     if (!item || !ATTENDED_WAKE_KINDS.has(item.reason.kind)) return false;
-    return c.taint.wakeTainted(item) === false;
+    return c.taint.wakeTainted(item) === false && conversationTainted(botId) === false;
   } catch {
     return false;
   }

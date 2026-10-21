@@ -859,6 +859,21 @@ describe('a research task (scratch folder, no worktree)', () => {
     await settled(store);
   });
 
+  it('a conversation that holds data from a signed-in task resumes no worker of another task; the owner still can', async () => {
+    const TASK = 'wtask-abc-12345678';
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    const respawn = vi.fn(async () => ({ ok: true as const, workspaceId: 'ws-new', sessionId: 'daemon-9' }));
+    const base = { store, listSessions: async () => [] as never[], typeLine: vi.fn(() => true), respawn, gatewayTask: () => false, taskTainted: () => true, senderTainted: () => false, senderConversationTainted: () => true, now: () => 9_000 };
+    for (const message of [undefined, 'go on']) {
+      expect(await resumeWorker({ ...base, senderSignedIn: () => true }, TASK, { kind: 'bot', botId: BOT }, message))
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task') });
+    }
+    expect(respawn).not.toHaveBeenCalled();
+    expect(await resumeWorker({ ...base, senderSignedIn: () => true }, TASK, { kind: 'owner' })).toMatchObject({ ok: true, sessionId: 'daemon-9' });
+    await settled(store);
+  });
+
   it('a bot does not start the worker of a task the owner stopped again; the owner can', async () => {
     const store = ReclaimedWorkers.at(dir);
     await reclaimWorker(reclaimPorts(store, [session()], { row: () => row('review_requested'), turnEnded: () => true }).ports, row('review_requested'), 'reported');

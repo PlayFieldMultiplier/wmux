@@ -3,7 +3,9 @@
 // (main/factory/handoffRouter.ts) decides addressee, thread, attribution and
 // chain limits; these handlers only gate the caller (design §13 rules 1–2):
 //
-//   handoff.send    a bot (the sender is its binding, never a param).
+//   handoff.send    a bot (the sender is its binding, never a param), not
+//                   from a conversation that holds data from a signed-in
+//                   task (conversationMarks.ts).
 //   ask.person      a bot; every role holds it.
 //   handoff.answer  the operator.
 //   handoff.list    the operator.
@@ -27,6 +29,7 @@ import {
 } from '../../factory/handoffRouter';
 import { getRoomWriter, resolveRoomPorts, type FactoryRoomPorts } from '../../factory/roomWriter';
 import { getWakeTaint } from '../../factory/wakeTaint';
+import { conversationSignedIn, signedInRefusal } from '../../factory/conversationMarks';
 import { factoryCaller, refusal } from './room.rpc';
 
 function params(raw: unknown): Record<string, unknown> {
@@ -39,12 +42,18 @@ function notStarted(): FactoryRefusal<'not_started'> {
 
 export interface HandoffHandlerDeps {
   router: () => HandoffRouter | null;
+  /** Whether the bot's live conversation holds data from a signed-in task
+   *  (none: yes). Default: conversationMarks.ts. */
+  signedIn?: (botId: string) => boolean;
 }
 
 export function handleHandoffSend(raw: unknown, ctx: RpcContext | undefined, deps: HandoffHandlerDeps): unknown {
   const caller = factoryCaller(ctx);
   if ('ok' in caller) return caller;
   if (caller.kind !== 'bot') return refusal('bot_only', 'handoff.send is sent by a bot; the owner writes in the room');
+  // What a signed-in task read stays in this conversation: no other bot is
+  // handed it.
+  if ((deps.signedIn ?? conversationSignedIn)(caller.bot.botId) !== false) return refusal('not_now', signedInRefusal('hand work to another bot'));
   const router = deps.router();
   if (!router) return notStarted();
   return router.send(caller.bot, params(raw) as unknown as HandoffSendParams);

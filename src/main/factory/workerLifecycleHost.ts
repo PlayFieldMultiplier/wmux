@@ -10,7 +10,7 @@ import { gatewayLossNotice, gatewayReadyRefusal, gatewayShapeRefusal, gatewayTas
 import { checkConnector } from '../connectors/checkConnector';
 import { probeBotExecSupport } from './botExecSandbox';
 import { resolveClaudeExecutable } from '../claude/resolveClaudeExecutable';
-import { conversationMarks } from './conversationMarks';
+import { conversationMarks, conversationSignedIn } from './conversationMarks';
 import type { BrowserWindow } from 'electron';
 import type { DaemonClient } from '../DaemonClient';
 import { dmThreadId, parseThreadId, type CardNotice, type ThreadId } from '../../shared/room';
@@ -694,6 +694,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       // A task with signed-in connections starts again only in a new pane.
       gatewayTask: (taskId) => gatewayNames(taskId).length > 0,
       senderConversationTainted: (botId) => conversationMarks(botId)?.tainted !== false,
+      senderSignedIn: conversationSignedIn,
       senderTainted: runningWakeTainted,
       stoppedByOwner: (taskId) => {
         const row = ledger.get(taskId);
