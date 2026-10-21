@@ -4482,7 +4482,6 @@ export const en = {
   // Command Deck Phase 2 — the Orchestrator brain (Agent SDK).
   // Command Deck P3b — the reboot-recovery greeting card.
   'deck.decisionEyebrow': 'Decision needed',
-  'deck.decisionHandoffElsewhere': "Moa proposed a hand-off here. Answer it in Moa's panel.",
   'deck.decisionResolve': 'Resolve',
   'deck.decisionPlaceholder': 'Type your answer…',
   'deck.decisionAnswerLabel': 'Your answer to the question',

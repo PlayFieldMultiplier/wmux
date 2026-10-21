@@ -3890,7 +3890,6 @@ export const zh = {
   'sidebar.fleetTipAgentsOnly': '{name}（仅统计智能体，工单在 Fleet 中统计）',
   'strip.needsYouTooltip': '跳转到需要你的面板',
   'deck.decisionEyebrow': '需要决策',
-  'deck.decisionHandoffElsewhere': "Moa 在此提议了移交。请在 Moa 的面板中回答。",
   'deck.decisionResolve': '解决',
   'deck.decisionPlaceholder': '输入你的回答…',
   'deck.decisionAnswerLabel': '你对这个问题的回答',

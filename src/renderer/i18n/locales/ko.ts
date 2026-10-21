@@ -3932,7 +3932,6 @@ export const ko = {
   // 커맨드 데크 Phase 2 — agent 두뇌(Agent SDK).
   // 커맨드 데크 P3b — 재부팅 복구 인사 카드.
   'deck.decisionEyebrow': '결정 필요',
-  'deck.decisionHandoffElsewhere': "Moa가 여기로 넘기기를 제안했습니다. Moa 패널에서 답하세요.",
   'deck.decisionResolve': '답하기',
   'deck.decisionPlaceholder': '답을 입력하세요…',
   'deck.decisionAnswerLabel': '질문에 대한 내 답',
