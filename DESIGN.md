@@ -560,6 +560,28 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   profile?", "Change this in your profile?" or "Remove this from your
   profile?", the exact entry fenced, replace showing Now and Becomes),
   approved on the card only, as a skill is.
+- **Commands (2026-10-21):** under Memory, only where the bot runs
+  commands at all (a Claude SDK bot, the OS sandbox present, a new enough
+  Claude Code), a Commands row: first "Let this bot run commands" with a
+  Switch (on by default; off, the bot holds none of the command tools) and
+  a muted hint; then Recent, main's decisions newest first, 20 at a time
+  with a muted Show more: the command or path on a main-text mono line,
+  under it one muted line — Allowed, or Refused in the danger red (the
+  word only), the time, the tool, where it was decided (a reviewer
+  verdict with its risk and rationale) and main's reason. A command that
+  needs an owner rule (not on the list, a script, or refused by the
+  reviewer; never a built-in or the floor, never a line holding two such
+  commands) carries a muted Always allow that adds a rule for exactly that
+  command, after one caution-yellow line (every rule: a program not on
+  the list may run code from files in the bot's folder), "This lets the
+  bot run code from files in its folder, which the bot can change. It
+  still runs in the sandbox: no network, and no files outside the bot's
+  folder.", with Allow anyway and Cancel. A rule covers only a line that
+  is that one command, with no redirect. Main's refusal shows as one red
+  line. The reviewer itself is one factory-wide switch in Settings ›
+  Bots, "Review unlisted bot commands" (on by default).
+  Last, Your rules, one mono line each with a muted Remove that acts at
+  once; empty lists are one muted line. No fills, no chips.
 - **Messages are bubbles in runs (owner decision 2026-10-14, the reference
   messenger's look; replaces the same day's flat rows):** a bot's messages
   on the left in soft `--selection-subtle` bubbles (18px radius, fill only,

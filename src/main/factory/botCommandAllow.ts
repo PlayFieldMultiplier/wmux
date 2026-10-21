@@ -17,12 +17,22 @@
 // further: a command not on the list makes it `unlisted`, with the line as
 // it would run and its words, for the reviewer (botCommandReviewer.ts).
 
-import { commandFloor, commandLineToRun, normalizeCommand, parseCommandLine, type FloorContext, type SimpleCommand } from './botCommandFloor';
+import { commandFloor, commandLineToRun, commandName, normalizeCommand, parseCommandLine, type FloorContext, type Pipeline, type SimpleCommand } from './botCommandFloor';
 
-/** One owner rule: the command's leading words, and whether more may follow. */
+/** One owner rule: the command's leading words, and whether more may follow.
+ *  A rule applies only to a line that is that one command, with no other
+ *  command and no redirect (decideBotCommand). */
 export interface BotCommandRule {
   argv: string[];
   anyArgs?: boolean;
+}
+
+/** Python started by an owner rule runs isolated (`-I`): no PYTHON*
+ *  variables, no user site, and the script's folder not on the import path. */
+const PYTHON_RE = /^python(\d+(\.\d+)*)?$/;
+
+function isolatePython(pipelines: readonly Pipeline[]): Pipeline[] {
+  return pipelines.map((p) => p.map((c) => (PYTHON_RE.test(commandName(c.argv[0] ?? '')) && c.argv[1] !== '-I' ? { ...c, argv: [c.argv[0], '-I', ...c.argv.slice(1)] } : c)));
 }
 
 type ArgCheck = (args: readonly string[]) => string | null;
@@ -136,6 +146,12 @@ export const BUILTIN_COMMANDS: ReadonlyMap<string, ArgCheck> = new Map<string, A
   ['git', gitCheck],
 ]);
 
+/** Whether `name` is on the built-in list (its checks stay; no owner rule
+ *  may name it, botCommandRules.ts). Pure. */
+export function isBuiltinCommandName(name: string): boolean {
+  return BUILTIN_COMMANDS.has(name);
+}
+
 /** Commands that may read a pipe's output (`... | sort | head -5`). */
 export const STDIN_FILTERS: ReadonlySet<string> = new Set(['cat', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'grep', 'egrep', 'fgrep', 'rg']);
 
@@ -153,6 +169,19 @@ export function ruleMatches(rule: BotCommandRule, argv: readonly string[]): bool
   return rule.anyArgs === true || argv.length === rule.argv.length;
 }
 
+/** The words of each pipeline head that neither the built-in list nor
+ *  `rules` allow: what an owner rule would have to name for the line to be
+ *  on the list (a command after a pipe is never allowed by a rule). Pure. */
+export function unlistedHeads(pipelines: readonly Pipeline[], rules: readonly BotCommandRule[]): string[][] {
+  const out: string[][] = [];
+  for (const p of pipelines) {
+    const head = p[0];
+    if (!head || rules.some((rule) => ruleMatches(rule, head.argv)) || builtinRefusal(head) === null) continue;
+    if (!out.some((argv) => argv.length === head.argv.length && argv.every((w, k) => w === head.argv[k]))) out.push([...head.argv]);
+  }
+  return out;
+}
+
 /** A known pipe filter's refusal of its arguments or input, or null. */
 function filterRefusal(cmd: SimpleCommand): string | null {
   const name = cmd.argv[0];
@@ -163,7 +192,9 @@ function filterRefusal(cmd: SimpleCommand): string | null {
 export type CommandDecision =
   /** `run`: the line as it runs (commandLineToRun). */
   | { ok: true; layer: 'allowlist'; command: string; run: string; matched: 'builtin' | 'rule' }
-  | { ok: false; layer: 'parse' | 'floor'; command: string; reason: string }
+  /** `script`: an owner rule names the command, but the line holds other
+   *  commands or a redirect, which a rule never covers. */
+  | { ok: false; layer: 'parse' | 'floor' | 'script'; command: string; reason: string }
   /** Past the floor but not on the list: `run` is the line as it would run,
    *  `argv` each command's words, and `offList` the words of the commands
    *  neither the built-in list nor an owner rule allowed, for the reviewer. */
@@ -193,6 +224,11 @@ export function decideBotCommand(line: unknown, ctx: FloorContext & { rules: rea
   // floor's, even after a command that is merely not on the list.
   let viaRule = false;
   let offList: string | null = null;
+  let alone: string | null = null;
+  // A rule covers a line that is its one command with no redirect at all:
+  // otherwise one line could rewrite a file and then run it, or feed the
+  // program a file of commands (`sqlite3 db < q.sql`).
+  const single = parsed.pipelines.length === 1 && parsed.pipelines[0].length === 1 && parsed.pipelines[0][0].redirects.length === 0;
   for (const p of parsed.pipelines) {
     for (let k = 0; k < p.length; k++) {
       const cmd = p[k];
@@ -212,8 +248,11 @@ export function decideBotCommand(line: unknown, ctx: FloorContext & { rules: rea
         continue;
       }
       if (ctx.rules.some((rule) => ruleMatches(rule, cmd.argv))) {
-        viaRule = true;
-        continue;
+        if (single) {
+          viaRule = true;
+          continue;
+        }
+        alone ??= `the owner's rule for ${name} covers it only alone on its line, with no other command and no redirect`;
       }
       if (!BUILTIN_COMMANDS.has(name)) {
         offList ??= `${name} is not on the built-in list`;
@@ -224,6 +263,7 @@ export function decideBotCommand(line: unknown, ctx: FloorContext & { rules: rea
       if (r) return { ok: false, layer: 'floor', command, reason: r };
     }
   }
+  if (alone) return { ok: false, layer: 'script', command, reason: alone };
   if (offList) return unlisted(offList);
-  return { ok: true, layer: 'allowlist', command, run: commandLineToRun(parsed.pipelines, parsed.joins), matched: viaRule ? 'rule' : 'builtin' };
+  return { ok: true, layer: 'allowlist', command, run: commandLineToRun(viaRule ? isolatePython(parsed.pipelines) : parsed.pipelines, parsed.joins), matched: viaRule ? 'rule' : 'builtin' };
 }
