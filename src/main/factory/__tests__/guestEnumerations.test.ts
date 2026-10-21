@@ -110,6 +110,7 @@ const ROOM_READ_CALLERS: Record<string, Why> = {
   'src/main/factory/factoryWiring.ts#wakeImagesOf': { kind: 'one-workspace', why: 'the woken bot\'s own room' },
   'src/main/factory/guestMessage.ts#postGuestMessage': { kind: 'one-workspace', why: 'the guest\'s own flagged workspace' },
   'src/main/factory/handoffRouter.ts#HandoffRouter.closeOwnQuestion': { kind: 'one-workspace', why: 'the question\'s own room' },
+  'src/main/factory/handoffRouter.ts#HandoffRouter.ownerCardThread': { kind: 'one-workspace', why: 'the owner card of the sender\'s own run, in its own room' },
   'src/main/factory/handoffRouter.ts#HandoffRouter.pointToThread': { kind: 'one-workspace', why: 'the coordinator\'s own room (never a guest workspace)' },
   'src/main/factory/handoffRouter.ts#HandoffRouter.questionCardId': { kind: 'one-workspace', why: 'the asking bot\'s own room' },
   'src/main/factory/handoffRouter.ts#HandoffRouter.requestCardOf': { kind: 'one-workspace', why: 'the opening hop\'s own room' },

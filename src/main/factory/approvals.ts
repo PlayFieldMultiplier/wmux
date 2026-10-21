@@ -612,7 +612,7 @@ export class ApprovalService {
     if (!profile || !profile.enabled || profile.workspaceId !== bot.workspaceId) return refuse('not_bot', 'this bot is not running in the factory');
     const repoKey = normalizeRepoKey(profile.repo?.repoKey);
     const repoPath = profile.repo?.repoPath ?? '';
-    if (!repoKey || !repoPath) return refuse('no_repo', 'this bot has no repository to act on');
+    if (!repoKey || !repoPath) return refuse('no_repo', 'this bot has no repository to act on: hand the request to a bot of this workspace that has the repository (handoff_send), which asks for it');
 
     // One request per (bot, key): a retried turn gets the first one back.
     const clientRequestId = typeof raw.clientRequestId === 'string' ? raw.clientRequestId : this.nextOrdinal(bot.botId, wake);

@@ -107,6 +107,25 @@ describe('buildWakePrompt — group rooms and routines', () => {
     expect(buildWakePrompt({ item: routine, profile: { ...profile, template: 'coordinator', role: 'moa' }, roster: team })).toContain('Other bots in this room');
   });
 
+  it('a coordinator with no repository of its own is told which bots have one, or that none does', () => {
+    const lead = { ...profile, template: 'coordinator' as const, role: 'moa' as const };
+    delete (lead as Partial<BotProfile>).repo;
+    const dev = rosterEntry({ id: 'bot-00000002', name: 'Dev', role: 'lead', template: 'developer', repo: { repoKey: 'github.com/acme/app', repoPath: '/r' } });
+    expect(dev.repo).toBe('github.com/acme/app');
+    const scout = rosterEntry({ id: 'bot-00000003', name: 'Scout', role: 'lead', template: 'researcher' });
+    const wake = item({ kind: 'human', text: 'Review PR #4', source: 'desktop', lead: true });
+    const withHolder = buildWakePrompt({ item: wake, profile: lead, roster: [dev, scout] });
+    expect(withHolder).toContain('You have no repository of your own; Dev (bot-00000002) works on github.com/acme/app. pr_read, issue_read and ci_read read that repository for you.');
+    expect(withHolder).toContain('goes with handoff_send to a bot that has the repository.');
+    const none = buildWakePrompt({ item: wake, profile: lead, roster: [scout] });
+    expect(none).toContain('No bot in this workspace has a repository');
+    expect(none).toContain('tell them so in one line and ask them to set a repository on a bot\'s profile');
+    // A coordinator with its own repository, or any other bot, gets neither.
+    const own = buildWakePrompt({ item: wake, profile: { ...lead, repo: { repoKey: 'github.com/acme/app', repoPath: '/r' } }, roster: [scout] });
+    expect(own).not.toMatch(/no repository of your own|No bot in this workspace has a repository/);
+    expect(buildWakePrompt({ item: wake, profile: { ...profile, repo: undefined }, roster: [scout] })).not.toMatch(/No bot in this workspace has a repository/);
+  });
+
   it('a held fan-out\'s wake carries its arguments, fenced, and the key to start it with', () => {
     const args = { titles: ['verify #7'], preset: 'verify', prompt: 'look ``` here', checkout: { sha: 'a'.repeat(40), fetch_ref: 'pull/7/head' } };
     const text = buildWakePrompt({ item: item({ kind: 'held_fanout', heldId: 'held-1', heldAt: Date.UTC(2026, 9, 19, 9), titles: ['verify #7'], args, tainted: false }), profile });

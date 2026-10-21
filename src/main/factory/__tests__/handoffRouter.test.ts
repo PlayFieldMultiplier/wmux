@@ -1590,6 +1590,40 @@ describe('a room with a coordinator: the owner talks to it, and the work it disp
     expect(h.wakes.filter((w) => w.botId !== coordinator.id).map((w) => [w.botId, w.reason.kind])).toEqual([[reviewer.id, 'handoff']]);
   });
 
+  it('work on the owner\'s message sent into a PR\'s thread: its pointer lands where the owner asked, from the run, whatever the bot names', async () => {
+    const coordinator = bot('ws1', 'moa', { template: 'coordinator' });
+    const reviewer = bot('ws1', 'verifier');
+    const h = await harness([coordinator, reviewer]);
+    const OPERATOR: RpcContext = { origin: 'local', operator: true, firstParty: true };
+    const posted = await handleRoomPost({ workspaceId: 'ws1', title: 'Is PR #42 good to go?' }, OPERATOR, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir }) as { ok: true; card: { id: string } };
+    const PR = 'pr:github.com/acme/app#42' as ThreadId;
+    // The coordinator's turn on it sends the review into the PR's thread.
+    h.wake.thread = 'general';
+    h.wake.id = { wakeId: 'w-owner', attempt: 1, runId: `run-${posted.card.id}` } as Harness['wake']['id'];
+    const d = h.router.send(binding(coordinator), { kind: 'dispatch', toBotId: reviewer.id, title: 'Verify PR #42', body: 'pass or fail', threadId: PR, refs: { pr: 42 } });
+    if (!d.ok) throw new Error('dispatch failed');
+    expect(h.router.get(d.handoffId)).toMatchObject({ threadId: PR, askedIn: 'general' });
+    expect(h.router.get(d.handoffId)?.opensThread).toBeUndefined();
+    // Kept across a restart.
+    const again = await harness([coordinator, reviewer]);
+    expect(again.router.get(d.handoffId)?.askedIn).toBe('general');
+    // The reviewer's result: the coordinator reports in the PR's thread and
+    // General gets the one-line pointer to it, under the owner's message.
+    h.wake.thread = null;
+    h.wake.id = { wakeId: 'w-gated', attempt: 1, handoffId: d.handoffId, reasonKind: 'facts' } as Harness['wake']['id'];
+    const r = h.router.send(binding(reviewer), { kind: 'result', title: 'PR #42 passes', body: '' });
+    expect(r).toMatchObject({ ok: true, to: { botId: coordinator.id } });
+    expect(h.wakes.filter((w) => w.botId === coordinator.id && w.reason.kind === 'handoff').map((w) => w.threadId)).toEqual([PR]);
+    const pointers = h.rooms.read('ws1', { threadId: 'general' }).cards.filter((c) => c.actor.kind === 'system' && c.refs?.threadId === PR);
+    expect(pointers).toEqual([expect.objectContaining({ title: 'Finished: Verify PR #42', replyTo: posted.card.id })]);
+    // A bot's own dispatch outside the owner's run records no askedIn.
+    h.wake.id = { wakeId: 'w-own', attempt: 1 } as Harness['wake']['id'];
+    h.wake.thread = 'general';
+    const own = h.router.send(binding(coordinator), { kind: 'dispatch', toBotId: reviewer.id, title: 'Verify PR #43', body: '', threadId: 'pr:github.com/acme/app#43' as ThreadId });
+    if (!own.ok) throw new Error('dispatch failed');
+    expect(h.router.get(own.handoffId)?.askedIn).toBeUndefined();
+  });
+
   it('an unpicked reply in a thread the group\'s work opened goes to the coordinator as lead and to the bot waiting there; it closes no question elsewhere', async () => {
     const coordinator = bot('ws1', 'moa', { template: 'coordinator' });
     const dev = bot('ws1', 'lead');

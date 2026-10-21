@@ -1,7 +1,7 @@
 // Handoff graders: dispatch / result callbacks, chain limits, questions to
 // the owner, the owner's corrections, and the HQ bot's morning output.
 
-import { arr, botCards, botId, cardsOfKind, criterion, factsOfKind, handoffsOfKind, injected, stubTools, parseToolText, wakesOf } from './common.mjs';
+import { arr, botCards, botId, cardsOfKind, criterion, factsOfKind, handoffsOfKind, injected, stubEvents, stubTools, parseToolText, wakesOf } from './common.mjs';
 
 /** 8. callback-exactly-once. */
 export function callbackExactlyOnce(snap, expect) {
@@ -329,5 +329,48 @@ export function botWorkerCodexEngine(snap, expect) {
     criterion('guarded_line', after('-a') === 'never' && after('-s') === 'workspace-write' && !!start && after('-C') === start.cwd && args.includes('--')
       && !args.some((a) => /danger-full-access|--yolo|--dangerously/.test(a)), args.slice(0, 16).join(' ').slice(0, 300)),
     criterion('reported_as_itself', reports.length >= 1 && reports.every((r) => r.ok === true), reports.map((r) => `${r.ok}:${String(r.text ?? '').slice(0, 80)}`).join(' | ') || 'no report from the worker'),
+  ];
+}
+
+/** coordinator-report-where-asked: work on the owner's message sent into a
+ *  PR's thread records where the owner asked (askedIn, from the run), the
+ *  coordinator reports in the PR's thread, and General gets one Finished
+ *  pointer to it, replying to the owner's message. */
+export function coordinatorReportWhereAsked(snap, expect) {
+  const lead = botId(snap, expect.lead);
+  const msg = injected(snap, expect.message);
+  const dispatch = handoffsOfKind(snap, 'dispatch').find((h) => h.from?.botId === lead) ?? null;
+  const result = handoffsOfKind(snap, 'result').find((h) => h.replyTo === dispatch?.id) ?? null;
+  const leadWakes = wakesOf(snap, expect.lead);
+  const report = botCards(snap, expect.lead).filter((c) => c.kind === 'report');
+  const pointers = arr(snap.cards).filter((c) => c.actor?.kind === 'system' && c.refs?.threadId === expect.thread && c.threadId !== expect.thread);
+  return [
+    criterion('lead_alone_woken_by_owner', leadWakes.some((w) => w.reason?.kind === 'human' && w.reason.lead === true)
+      && arr(snap.wakes).filter((w) => w.reason?.kind === 'human').length === 1, leadWakes.map((w) => w.reason?.kind).join(', ') || 'no wake'),
+    criterion('dispatch_in_pr_thread_asked_in_general', !!dispatch && dispatch.threadId === expect.thread && dispatch.askedIn === 'general' && dispatch.opensThread === undefined,
+      JSON.stringify(dispatch ? { threadId: dispatch.threadId, askedIn: dispatch.askedIn, opensThread: dispatch.opensThread } : null)),
+    criterion('result_back_to_lead', !!result && result.to?.botId === lead && result.pointed === true, JSON.stringify(result ? { to: result.to, pointed: result.pointed } : null)),
+    criterion('lead_reported_in_pr_thread', report.length === 1 && report[0].threadId === expect.thread, report.map((c) => c.threadId).join(', ') || 'no report'),
+    criterion('one_pointer_in_general', pointers.length === 1 && pointers[0].threadId === 'general' && /^Finished: /.test(pointers[0].title) && pointers[0].replyTo === msg?.id,
+      pointers.map((c) => `${c.threadId}:${c.title}:${c.replyTo}`).join(' | ') || 'no pointer'),
+  ];
+}
+
+/** coordinator-without-repo: a coordinator with no repository is told which
+ *  bot works on the workspace's, and hands the pull request work to it. */
+export function coordinatorWithoutRepo(snap, expect) {
+  const lead = botId(snap, expect.lead);
+  const dev = botId(snap, expect.developer);
+  const prompts = stubEvents(snap, expect.lead, 'prompt').map((e) => String(e.text ?? ''));
+  const first = prompts[0] ?? '';
+  const dispatch = handoffsOfKind(snap, 'dispatch').find((h) => h.from?.botId === lead) ?? null;
+  const devWakes = wakesOf(snap, expect.developer).filter((w) => w.reason?.kind === 'handoff');
+  return [
+    criterion('lead_has_no_repo', arr(snap.bots).some((b) => b.id === lead && !b.repo) && arr(snap.bots).some((b) => b.id === dev && b.repo?.repoKey === expect.repoKey),
+      JSON.stringify(arr(snap.bots).map((b) => ({ id: b.id, repo: b.repo?.repoKey ?? null })))),
+    criterion('wake_names_the_repo_holder', first.includes('You have no repository of your own;') && first.includes(`(${dev}) works on ${expect.repoKey}`) && !first.includes('No bot in this workspace has a repository'),
+      first.slice(first.indexOf('no repository') - 40, first.indexOf('no repository') + 200) || 'no such line'),
+    criterion('handed_to_the_repo_holder', !!dispatch && dispatch.to?.botId === dev && dispatch.status !== 'refused', JSON.stringify(dispatch ? { to: dispatch.to, status: dispatch.status } : null)),
+    criterion('developer_woken', devWakes.length === 1 && devWakes[0].state === 'done', devWakes.map((w) => w.state).join(', ') || 'no wake'),
   ];
 }
