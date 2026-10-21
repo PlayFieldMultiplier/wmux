@@ -113,6 +113,39 @@ describe('prepareA2aImage — JPEG', () => {
     expect(prepareA2aImage(u8([0xff, 0xd8], app0, sof0(10, 10), sos, scan))).toEqual({ ok: false, reason: 'malformed' });
     expect(prepareA2aImage(u8([0xff, 0xd8], app0, eoi))).toEqual({ ok: false, reason: 'malformed' });
   });
+
+  it('walks a progressive file: two scans, a table between them, and fill bytes before a marker', () => {
+    const dht = seg(0xc4, [0, ...new Array(16).fill(0)]);
+    const sof2 = seg(0xc2, [8, ...be16(30), ...be16(40), 1, 1, 0x11, 0]);
+    const src = u8([0xff, 0xd8], app0, dqt, sof2, sos, scan, [0xff, 0xff], dht, sos, scan, com, eoi);
+    const out = prepareA2aImage(src);
+    expect(out).toMatchObject({ ok: true, info: { width: 40, height: 30 } });
+    // Fill bytes stay with the scan they follow (valid JPEG); the comment goes.
+    expect(out.ok && Array.from(out.bytes)).toEqual(Array.from(u8([0xff, 0xd8], app0, dqt, sof2, sos, scan, [0xff, 0xff], dht, sos, scan, eoi)));
+  });
+
+  it('refuses a second frame header (a small claim must not hide a huge one)', () => {
+    expect(inspectA2aImage(u8([0xff, 0xd8], sof0(60_000, 60_000), sof0(10, 10), sos, scan, eoi))).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('drops content-credential and MPF segments, keeping an ICC profile', () => {
+    const app11 = seg(0xeb, [...'JP'].map((c) => c.charCodeAt(0)).concat([0, 0, 1, 2]));
+    const mpf = seg(0xe2, [...'MPF\0'].map((c) => c.charCodeAt(0)).concat([0x4d, 0x4d, 0, 42]));
+    const icc = seg(0xe2, [...'ICC_PROFILE\0'].map((c) => c.charCodeAt(0)).concat([1, 1, 9, 9]));
+    const out = prepareA2aImage(u8([0xff, 0xd8], app0, icc, mpf, app11, dqt, sof0(8, 8), sos, scan, eoi, [0xff, 0xd8, 0xff, 0xd9]));
+    expect(out.ok && Array.from(out.bytes)).toEqual(Array.from(u8([0xff, 0xd8], app0, icc, dqt, sof0(8, 8), sos, scan, eoi)));
+  });
+});
+
+describe('inspectA2aImage — what a receiver takes', () => {
+  it('refuses bytes after the container end (a polyglot), which a sender never leaves', () => {
+    expect(inspectA2aImage(u8(PNG_SIG, ihdr(2, 2), idat, iend, 'PK'))).toEqual({ ok: false, reason: 'malformed' });
+    expect(inspectA2aImage(u8([0xff, 0xd8], dqt, sof0(2, 2), sos, scan, eoi, '<html>'))).toEqual({ ok: false, reason: 'malformed' });
+    expect(inspectA2aImage(u8(webp(vp8l(2, 2)), 'xx'))).toEqual({ ok: false, reason: 'malformed' });
+    // What the strip produces is always taken.
+    const sent = prepareA2aImage(u8(PNG_SIG, ihdr(2, 2), text, idat, iend, 'PK'));
+    expect(sent.ok && inspectA2aImage(sent.bytes)).toMatchObject({ ok: true });
+  });
 });
 
 describe('prepareA2aImage — WebP', () => {
@@ -123,6 +156,19 @@ describe('prepareA2aImage — WebP', () => {
     const out = prepareA2aImage(src);
     expect(out).toMatchObject({ ok: true, info: { mediaType: 'image/webp', width: 300, height: 200 } });
     expect(out.ok && Array.from(out.bytes)).toEqual(Array.from(webp(vp8x(0x10, 300, 200), vp8l(300, 200))));
+  });
+
+  it('reads a lossy VP8 frame header', () => {
+    const vp8 = riffChunk('VP8 ', [0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a, 0x40, 0x01, 0xf0, 0x00, 0, 0]);
+    expect(inspectA2aImage(webp(vp8))).toEqual({ ok: true, info: { mediaType: 'image/webp', width: 320, height: 240 } });
+  });
+
+  it('refuses a still VP8X whose image data is not the canvas size, or has none', () => {
+    expect(inspectA2aImage(webp(vp8x(0, 1, 1), vp8l(16_000, 16_000)))).toEqual({ ok: false, reason: 'malformed' });
+    expect(inspectA2aImage(webp(vp8x(0, 4, 4)))).toEqual({ ok: false, reason: 'malformed' });
+    expect(inspectA2aImage(webp(vp8x(0, 4, 4), riffChunk('ALPH', [0, 0]), vp8l(4, 4)))).toMatchObject({ ok: true });
+    // An animation has no top-level image data: the canvas is the size.
+    expect(inspectA2aImage(webp(vp8x(0x02, 4, 4), riffChunk('ANIM', [0, 0, 0, 0, 0, 0])))).toMatchObject({ ok: true });
   });
 
   it('reads a simple lossless WebP and refuses a chunk running past the RIFF', () => {

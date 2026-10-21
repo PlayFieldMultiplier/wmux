@@ -9,15 +9,24 @@
 //
 // The sender also strips metadata (`prepareA2aImage`), because a photo
 // forwarded from a phone can carry its GPS position:
-//   PNG  — `eXIf`, `tEXt`, `iTXt` (XMP lives here) and `zTXt` chunks;
-//   JPEG — APP1 (Exif, XMP), APP13 (IPTC) and COM segments; an Exif
-//          Orientation other than 1 is kept as a one-tag Exif segment, so
-//          the picture still shows the right way up;
+//   PNG  — `eXIf`, `tEXt`, `iTXt` (XMP lives here), `zTXt` and `caBX`
+//          (content credentials) chunks;
+//   JPEG — APP1 (Exif, XMP), APP11 (content credentials), APP13 (IPTC),
+//          APP2 MPF (it points at images after the end, which are dropped)
+//          and COM segments; an Exif Orientation other than 1 is kept as a
+//          one-tag Exif segment, so the picture still shows the right way up;
 //   WebP — `EXIF` and `XMP ` chunks, with the VP8X flags and the RIFF size
 //          rewritten to match.
-// Anything after the container's end (PNG `IEND`, JPEG EOI, the RIFF size)
-// is dropped too. A container that does not parse is refused, never sent as
-// it was. The hash the envelope carries is of the stripped bytes.
+// A PNG or WebP Exif orientation is dropped with the rest: few decoders read
+// one there. Anything after the container's end (PNG `IEND`, JPEG EOI, the
+// RIFF size) is dropped too, and a RECEIVED image with bytes after its end is
+// refused (a sender never leaves them). A container that does not parse is
+// refused, never sent as it was. The hash the envelope carries is of the
+// stripped bytes.
+//
+// The declared size must be the one a decoder uses: a JPEG with a second
+// frame header, or a WebP whose VP8X canvas and image data disagree, is
+// refused rather than checked by its smaller claim.
 
 import { A2A_REMOTE_IMAGE_LIMITS, type A2aRemoteImageMediaType } from './a2aRemote';
 
@@ -82,7 +91,7 @@ function parse(bytes: Uint8Array, strip: boolean): A2aImagePrepared {
 
 // --- PNG ----------------------------------------------------------------------
 
-const PNG_METADATA = new Set(['eXIf', 'tEXt', 'iTXt', 'zTXt']);
+const PNG_METADATA = new Set(['eXIf', 'tEXt', 'iTXt', 'zTXt', 'caBX']);
 
 function parsePng(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: number; height: number } | null {
   const keep: Array<[number, number]> = [[0, 8]];
@@ -106,6 +115,7 @@ function parsePng(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: nu
     at = end;
     if (type === 'IEND') break;
   }
+  if (!strip && at !== b.length) return null;
   return { bytes: strip ? concat(b, keep) : b, width, height };
 }
 
@@ -113,8 +123,8 @@ function parsePng(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: nu
 
 /** Start-of-frame markers (C4 DHT, C8 JPG and CC DAC are not frames). */
 const SOF = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
-/** Segments the sender drops: APP1 (Exif / XMP), APP13 (IPTC), COM. */
-const JPEG_METADATA = new Set([0xe1, 0xed, 0xfe]);
+/** Segments the sender drops: APP1 (Exif / XMP), APP11 (JUMBF / C2PA), APP13 (IPTC), COM. APP2 MPF is dropped by its tag. */
+const JPEG_METADATA = new Set([0xe1, 0xeb, 0xed, 0xfe]);
 
 function parseJpeg(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: number; height: number } | null {
   const parts: Uint8Array[] = [b.subarray(0, 2)];
@@ -134,6 +144,7 @@ function parseJpeg(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
     }
     if (marker === 0xd9) {
       parts.push(b.subarray(at, at + 2));
+      at += 2;
       break;
     }
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
@@ -146,15 +157,18 @@ function parseJpeg(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
     const end = at + 2 + len;
     if (len < 2 || end > b.length) return null;
     if (SOF.has(marker)) {
-      if (len < 7) return null;
+      // One frame: a second header would let a small claim hide the real size.
+      if (len < 7 || width !== 0) return null;
       height = u16be(b, at + 5);
       width = u16be(b, at + 7);
+      if (width === 0 || height === 0) return null;
     }
     if (marker === 0xe1 && strip) {
       const o = exifOrientation(b.subarray(at + 4, end));
       if (o !== null) orientation = o;
     }
-    if (strip && JPEG_METADATA.has(marker)) {
+    const mpf = marker === 0xe2 && len >= 6 && ascii(b, at + 4, 4) === 'MPF\0';
+    if (strip && (JPEG_METADATA.has(marker) || mpf)) {
       // Before the first frame or scan: where an Exif segment belongs.
       if (orientation !== 1 && !orientationWritten) {
         parts.push(orientationSegment(orientation));
@@ -177,6 +191,7 @@ function parseJpeg(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
     }
   }
   if (width === 0 || height === 0) return null;
+  if (!strip && at !== b.length) return null;
   return { bytes: strip ? join(parts) : b, width, height };
 }
 
@@ -220,9 +235,21 @@ function orientationSegment(orientation: number): Uint8Array {
 // --- WebP ---------------------------------------------------------------------
 
 const WEBP_METADATA = new Set(['EXIF', 'XMP ']);
-/** VP8X flag bits of the EXIF and XMP chunks. */
+/** VP8X flag bits of the EXIF and XMP chunks, and of an animation. */
 const VP8X_EXIF = 0x08;
 const VP8X_XMP = 0x04;
+const VP8X_ANIMATION = 0x02;
+
+/** The size a `VP8 ` / `VP8L` chunk's own header declares, or null when it is malformed. */
+function webpImageSize(fourcc: string, data: Uint8Array): { width: number; height: number } | null {
+  if (fourcc === 'VP8 ') {
+    if (data.length < 10 || data[3] !== 0x9d || data[4] !== 0x01 || data[5] !== 0x2a) return null;
+    return { width: (data[6] | (data[7] << 8)) & 0x3fff, height: (data[8] | (data[9] << 8)) & 0x3fff };
+  }
+  if (data.length < 5 || data[0] !== 0x2f) return null;
+  const bits = data[1] | (data[2] << 8) | (data[3] << 16) | (data[4] << 24);
+  return { width: 1 + (bits & 0x3fff), height: 1 + ((bits >>> 14) & 0x3fff) };
+}
 
 function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: number; height: number } | null {
   const riff = u32le(b, 4);
@@ -234,6 +261,9 @@ function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
   let height = 0;
   let vp8x: Uint8Array | null = null;
   let firstChunk = true;
+  /** A still VP8X image: its image chunk must declare the canvas size. */
+  let checkImage = false;
+  let imageSeen = false;
   while (at < end) {
     if (at + 8 > end) return null;
     const fourcc = ascii(b, at, 4);
@@ -246,19 +276,20 @@ function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
         if (size < 10) return null;
         width = 1 + (data[4] | (data[5] << 8) | (data[6] << 16));
         height = 1 + (data[7] | (data[8] << 8) | (data[9] << 16));
-      } else if (fourcc === 'VP8 ') {
-        if (size < 10 || data[3] !== 0x9d || data[4] !== 0x01 || data[5] !== 0x2a) return null;
-        width = (data[6] | (data[7] << 8)) & 0x3fff;
-        height = (data[8] | (data[9] << 8)) & 0x3fff;
-      } else if (fourcc === 'VP8L') {
-        if (size < 5 || data[0] !== 0x2f) return null;
-        const bits = data[1] | (data[2] << 8) | (data[3] << 16) | (data[4] << 24);
-        width = 1 + (bits & 0x3fff);
-        height = 1 + ((bits >>> 14) & 0x3fff);
+        checkImage = (data[0] & VP8X_ANIMATION) === 0;
+      } else if (fourcc === 'VP8 ' || fourcc === 'VP8L') {
+        const dims = webpImageSize(fourcc, data);
+        if (!dims) return null;
+        ({ width, height } = dims);
+        imageSeen = true;
       } else {
         return null;
       }
       firstChunk = false;
+    } else if (checkImage && !imageSeen && (fourcc === 'VP8 ' || fourcc === 'VP8L')) {
+      const dims = webpImageSize(fourcc, data);
+      if (!dims || dims.width !== width || dims.height !== height) return null;
+      imageSeen = true;
     }
     if (!(strip && WEBP_METADATA.has(fourcc))) {
       const chunk = b.slice(at, next);
@@ -267,8 +298,8 @@ function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
     }
     at = next;
   }
-  if (firstChunk) return null;
-  if (!strip) return { bytes: b, width, height };
+  if (firstChunk || (checkImage && !imageSeen)) return null;
+  if (!strip) return end === b.length ? { bytes: b, width, height } : null;
   if (vp8x) vp8x[8] &= ~(VP8X_EXIF | VP8X_XMP) & 0xff;
   const body = join(chunks);
   const head = new Uint8Array(12);

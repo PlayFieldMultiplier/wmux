@@ -22,7 +22,7 @@ export interface PeerFeatureRecord {
   asJoiner?: string[];
   /** What its stream `hello` advertised (this PC is its joiner). */
   asServer?: string[];
-  seenAt: string;
+  changedAt: string;
 }
 
 interface PeerFeaturesFileV1 {
@@ -83,7 +83,7 @@ export class PeerFeatureStore {
     if (prev && sameList(prev[role], list)) return;
     // Memory always takes it (it is what the peer said); a failed write is
     // caught up by the next change.
-    this.hosts = { ...this.hosts, [hostId]: { ...prev, [role]: list, seenAt: new Date(this.now()).toISOString() } };
+    this.hosts = { ...this.hosts, [hostId]: { ...prev, [role]: list, changedAt: new Date(this.now()).toISOString() } };
     this.persist();
   }
 
@@ -118,8 +118,8 @@ function coerceFile(raw: unknown): PeerFeaturesFileV1 | null {
   if (!isPlainObject(raw) || raw['v'] !== 1 || !isPlainObject(raw['hosts'])) return null;
   const hosts: Record<HostId, PeerFeatureRecord> = {};
   for (const [hostId, rec] of Object.entries(raw['hosts'])) {
-    if (!isHostId(hostId) || !isPlainObject(rec) || !isIsoString(rec['seenAt'])) return null;
-    const out: PeerFeatureRecord = { seenAt: rec['seenAt'] };
+    if (!isHostId(hostId) || !isPlainObject(rec) || !isIsoString(rec['changedAt'])) return null;
+    const out: PeerFeatureRecord = { changedAt: rec['changedAt'] };
     for (const role of ['asJoiner', 'asServer'] as const) {
       if (rec[role] === undefined) continue;
       if (!Array.isArray(rec[role])) return null;

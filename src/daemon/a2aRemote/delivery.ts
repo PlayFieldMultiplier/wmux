@@ -176,7 +176,7 @@ export class A2aRemoteDelivery {
   }
 
   /** Both roles' features from the streams since this daemon started; undefined when neither came up. */
-  private liveFeatures(hostId: HostId): ReadonlySet<string> | undefined {
+  liveFeatures(hostId: HostId): ReadonlySet<string> | undefined {
     const asServer = this.sessions.get(hostId)?.session.features();
     const asJoiner = this.hub.featuresOf(hostId);
     if (!asServer && !asJoiner) return undefined;
@@ -221,6 +221,8 @@ export class A2aRemoteDelivery {
       if (wanted.has(hostId) && host && host.fingerprint256 === entry.fingerprint && host.port === entry.port) continue;
       this.sessions.delete(hostId);
       void entry.session.stop();
+      // Left that PC, and it is not one of ours either: what it took no longer matters.
+      if (!wanted.has(hostId) && !this.deps.peers.list().some((p) => p.hostId === hostId && !p.revokedAt)) this.peerFeatureStore.forget(hostId);
     }
     for (const host of hosts) {
       if (this.sessions.has(host.hostId)) continue;
