@@ -214,3 +214,36 @@ it('still revokes known endpoint changes when the credential directory cannot be
   f.manager.reconcile();
   listing.mockRestore(); expect(f.store.ids()).toEqual([]);
 });
+
+it('shares one refresh between concurrent callers, never opening a browser for it', async () => {
+  const f = await fixture(); await f.manager.connect(f.id);
+  const saved = f.store.read(f.id, `${f.origin}/mcp`)!;
+  f.store.write(f.id, { ...saved, expiresAt: 0 }); f.setMode('delay');
+  f.setOpen(async () => { throw new Error('Unexpected browser'); });
+  const first = f.manager.accessToken(f.id);
+  const second = f.manager.accessToken(f.id);
+  await vi.waitFor(() => expect(f.refreshes()).toBe(1), { timeout: 10_000 });
+  f.release();
+  expect(await first).toBe('access-token-1');
+  expect(await second).toBe('access-token-1');
+  expect(f.refreshes()).toBe(1);
+});
+
+it('says whether a sign-in is stored and tells listeners when one is replaced or removed', async () => {
+  const f = await fixture();
+  const bumped: string[] = [];
+  const off = f.manager.onRevision((id) => bumped.push(id));
+  expect(f.manager.hasRecord(f.id)).toBe(false);
+  await f.manager.connect(f.id);
+  expect(f.manager.hasRecord(f.id)).toBe(true);
+  expect(bumped).toEqual([f.id]);
+  f.manager.disconnect(f.id);
+  expect(f.manager.hasRecord(f.id)).toBe(false);
+  expect(bumped).toEqual([f.id, f.id]);
+  off();
+  await f.manager.connect(f.id);
+  expect(bumped).toHaveLength(2);
+  const unavailable = vi.spyOn(f.store, 'available').mockReturnValue(false);
+  expect(f.manager.hasRecord(f.id)).toBe('unknown');
+  unavailable.mockRestore();
+});

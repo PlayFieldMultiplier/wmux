@@ -1654,6 +1654,13 @@ export interface WorkerResumePorts {
   /** Whether the task was started from outside text (its dispatch taint;
    *  unknown counts as true). */
   taskTainted?: (taskId: string) => boolean;
+  /** Whether the task has signed-in connections: its worker then starts
+   *  again only in a new pane (a running shell cannot take a new gateway
+   *  lease), so a live pane of it is closed first. */
+  gatewayTask?: (taskId: string) => boolean;
+  /** Whether the bot's live conversation has taken in outside text
+   *  (unknown: true). */
+  senderConversationTainted?: (botId: string) => boolean;
   /** Whether the bot's running wake carried outside text (unknown: true). A
    *  bot's message from such a wake goes only to a task recorded as started
    *  from outside text. */
@@ -1812,6 +1819,12 @@ async function resumeOnce(
   const stopped = (): boolean => stopMark(rec.botId, rec.taskId) !== mark;
   if (by.kind === 'bot') {
     const text = typeof message === 'string' ? message.trim() : '';
+    // A task with signed-in connections resumes only as it is started: from
+    // a wake, and a conversation, that took in no outside text.
+    if (ports.gatewayTask?.(taskId) === true
+      && ((ports.senderTainted?.(by.botId) ?? true) !== false || (ports.senderConversationTainted?.(by.botId) ?? true) !== false)) {
+      return refuse('not_now', 'a task with a signed-in connection resumes only from a wake and conversation that took in no outside text; the owner can resume it');
+    }
     if (text && (ports.taskTainted?.(taskId) ?? true) === false && (ports.senderTainted?.(by.botId) ?? true) !== false) {
       return refuse('not_now', 'a message from a wake that carried outside text goes only to a task started from outside text; resume without a message, or write it from a clean wake');
     }
@@ -1832,6 +1845,26 @@ async function resumeOnce(
   if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   const live = sessions.find((s) => s.id === pane.sessionId);
   if (!live) return respawnOnce(ports, rec, pane, line, sessions, by, message, onLaunched, stopped, stillOk);
+  // A task with signed-in connections: its idle pane goes, and the worker
+  // starts again in a new one with new gateway leases.
+  if (ports.gatewayTask?.(rec.taskId) === true) {
+    if (live.agentProcessAlive === true || live.commandRunning === true) {
+      return refuse('already_running', 'an agent or another command is running in the worker\'s pane');
+    }
+    // A pane whose state is not known is not closed (as the in-place path
+    // below does not type into one).
+    if (live.agentProcessAlive !== false && live.recoveredAgentUnconfirmed !== true && live.commandRunning !== false) {
+      return refuse('unknown_state', 'what runs in the worker\'s pane cannot be told; close it, then resume');
+    }
+    if (!ports.closePane) return refuse('not_now', 'a task with a signed-in connection resumes only in a new pane, and its old pane cannot be closed here');
+    try {
+      await ports.closePane(pane.sessionId);
+    } catch (err) {
+      return refuse('not_now', `the worker's old pane could not be closed: ${String(err)}`);
+    }
+    if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
+    return respawnOnce(ports, rec, pane, line, sessions.filter((s) => s.id !== pane.sessionId), by, message, onLaunched, stopped, stillOk);
+  }
   // Both the folder the pane was started in and the one its shell is in now
   // (a `cd` moves where a typed line runs) must be the task folder.
   const here = [live.spawnCwd, live.cwd].filter((d): d is string => typeof d === 'string' && d.length > 0);

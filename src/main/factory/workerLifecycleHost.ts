@@ -5,7 +5,12 @@
 // the wiring module once every factory module is up; kept apart so that
 // module's imports stay free of the event bus and the pane status handler.
 
-import { getConnectorStore } from './connectorStore';
+import { getConnectorStore, onConnectorLibraryChanged } from './connectorStore';
+import { gatewayLossNotice, gatewayReadyRefusal, gatewayShapeRefusal, gatewayTasksCutByRestart, getWorkerGateways, installWorkerGateway, isTaskEnded, workerGatewayOAuth } from '../connectors/workerGateway';
+import { checkConnector } from '../connectors/checkConnector';
+import { probeBotExecSupport } from './botExecSandbox';
+import { resolveClaudeExecutable } from '../claude/resolveClaudeExecutable';
+import { conversationMarks } from './conversationMarks';
 import type { BrowserWindow } from 'electron';
 import type { DaemonClient } from '../DaemonClient';
 import { dmThreadId, parseThreadId, type CardNotice, type ThreadId } from '../../shared/room';
@@ -33,7 +38,7 @@ import { runningWakeTainted } from './wakeTaint';
 import { installReportNudge, submitToWorkerPane } from './workerReportNudge';
 import { setWorkerLivePane } from './workerMessage';
 import { endedTaskNotice, setEndedTaskReportSink } from './endedTaskReport';
-import { noticeBot } from './botNotices';
+import { noticeBot, type BotNoticeInput } from './botNotices';
 import { getFactLog } from './factLog';
 import { getWakeQueue } from './wakeQueue';
 import {
@@ -146,9 +151,55 @@ function note(workspaceId: string, threadId: ThreadId, title: string, body: stri
 }
 
 /** Start everything; returns the stop. */
+/** A restart of main ended every gateway lease: told once per process. */
+let restartCutsTold = false;
+
+/** The gateway leases of bots' workers with signed-in connections
+ *  (main/connectors/workerGateway.ts), on the factory's stores: a lease is
+ *  checked against the library, the task's row and the bot on every call,
+ *  and closed when the task ends or the library changes. The open tasks a
+ *  restart of main cut off are told once. */
+function startWorkerGateway(ledger: ReturnType<typeof getTaskLedger>): () => void {
+  const tell = (n: BotNoticeInput | null): void => {
+    if (n) noticeBot({ factLog: getFactLog, wakes: getWakeQueue }, n);
+  };
+  const off = installWorkerGateway({
+    connector: (id) => getConnectorStore()?.get(id) ?? null,
+    forBot: (botId) => getConnectorStore()?.forBot(botId) ?? [],
+    taskOpen: (taskId) => !isTaskEnded(ledger.get(taskId)?.status),
+    botMayRun: (botId) => {
+      const bot = getBotStore()?.get(botId);
+      return !!bot && bot.enabled && !bot.parked && getFactorySettings().enabled === true;
+    },
+    notice: ({ taskId, connectorName, reason }) => {
+      const entry = ledger.get(taskId);
+      if (entry) tell(gatewayLossNotice(entry, connectorName, reason, Date.now()));
+    },
+  });
+  const offTransition = ledger.onTransition((t) => {
+    if (isTaskEnded(t.to)) getWorkerGateways()?.closeTask(t.entry.id);
+  });
+  const offLibrary = onConnectorLibraryChanged(() => { getWorkerGateways()?.libraryChanged(); });
+  if (!restartCutsTold) {
+    restartCutsTold = true;
+    const at = Date.now();
+    for (const { entry, names } of gatewayTasksCutByRestart(ledger.list({}))) {
+      for (const name of names) tell(gatewayLossNotice(entry, name, 'restart', at));
+    }
+  }
+  return () => {
+    offLibrary();
+    offTransition();
+    off();
+  };
+}
+
 export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
   const offs: Array<() => void> = [];
   const ledger = getTaskLedger();
+  // A task's signed-in connections (its ledger row).
+  const gatewayNames = (taskId: string): string[] => ledger.get(taskId)?.dispatch?.gatewayConnectors ?? [];
+  offs.push(startWorkerGateway(ledger));
   /** The reclaim record, once loaded below (the slot count reads it). */
   let reclaimedStore: ReclaimedWorkers | null = null;
   const daemon = (): DaemonClient | null => deps.getDaemonClient?.() ?? null;
@@ -588,6 +639,23 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
           if (connectors.length < named.length) {
             console.log('[factory] resume: connections left out (gone or no longer this bot\'s)', { taskId: input.taskId, names: named.filter((n) => !connectors.some((c) => c.name === n)) });
           }
+          // Signed-in connections: checked again, as at the fan-out, before
+          // new leases are opened (the gates of who may resume ran already).
+          const signedIn = gatewayNames(input.taskId);
+          if (signedIn.length > 0) {
+            const gateway = connectors.filter((c) => signedIn.includes(c.name));
+            const refusal = gatewayShapeRefusal({
+              connectors: gateway, all: connectors, platform: process.platform,
+              preset: ledger.get(input.taskId)?.dispatch?.preset, wakeTainted: false, conversationTainted: false,
+            }) ?? (gateway.length < signedIn.length ? 'a signed-in connection of the task is off, removed or no longer this bot\'s' : null)
+              ?? await gatewayReadyRefusal({
+                connectors: gateway,
+                oauth: workerGatewayOAuth(),
+                sandbox: () => probeBotExecSupport(resolveClaudeExecutable()),
+                listTools: (c, headers) => checkConnector(c, headers),
+              });
+            if (refusal) return { ok: false as const, message: refusal };
+          }
           const r = await svc.spawnBotTaskPane({
             ownerWorkspaceId: input.ownerWorkspaceId,
             botId: input.botId,
@@ -599,6 +667,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
             // Unknown taint counts as tainted.
             tainted: ledger.get(input.taskId)?.dispatch?.origin.tainted !== false,
             ...(connectors.length > 0 ? { connectors } : {}),
+            // Its signed-in connections get new gateway leases in the new pane.
+            ...(gatewayNames(input.taskId).length > 0 ? { gatewayConnectors: gatewayNames(input.taskId) } : {}),
           });
           return 'error' in r ? { ok: false as const, message: r.error } : { ok: true as const, workspaceId: r.workspaceId, sessionId: r.ptyId };
         },
@@ -618,6 +688,9 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       // A bot's message from a wake that carried outside text goes only to a
       // task started from outside text (unknown counts as outside text).
       taskTainted: (taskId) => ledger.get(taskId)?.dispatch?.origin.tainted !== false,
+      // A task with signed-in connections starts again only in a new pane.
+      gatewayTask: (taskId) => gatewayNames(taskId).length > 0,
+      senderConversationTainted: (botId) => conversationMarks(botId)?.tainted !== false,
       senderTainted: runningWakeTainted,
       stoppedByOwner: (taskId) => {
         const row = ledger.get(taskId);

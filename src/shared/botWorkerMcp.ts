@@ -66,6 +66,35 @@ export interface WorkerMcpInput {
   /** Other connection keys the worker's environment may hold (a re-fire's
    *  first launch had them): kept out of every stdio server too. */
   strayKeys?: readonly string[];
+  /** The task's signed-in connections, by name: each goes through main's
+   *  loopback gateway (main/connectors/workerGateway.ts), never to the
+   *  service itself. */
+  gateway?: Readonly<Record<string, WorkerGatewayRoute>>;
+}
+
+/** A signed-in connection's way in for one worker: main's loopback gateway
+ *  and the env name its lease bearer travels under. */
+export interface WorkerGatewayRoute {
+  url: string;
+  envName: string;
+}
+
+/** What a worker with a signed-in connection launches with on top of the
+ *  worker rules: the OS sandbox block for its commands (no network, no home
+ *  folder, no credentials in their env; botExecSandbox.ts), no web tools, and
+ *  one PreToolUse gate on every tool call (main/agents/workerToolGate.ts: an
+ *  allowlist by name: Bash, TodoWrite and the task's tools; no built-in file
+ *  tool). */
+export interface WorkerGatewaySettings {
+  /** The gateway connections' names (server-level allow only: the gateway
+   *  holds the owner's tool list). */
+  names: readonly string[];
+  /** Claude's `sandbox` settings block. */
+  sandbox: Record<string, unknown>;
+  /** The gate's hook command (it refuses when it cannot run). */
+  gateCommand: string;
+  /** The gate hook's timeout in seconds (a hook past it does not block). */
+  gateTimeout: number;
 }
 
 /** A WSL pane's `--mcp-config` document: this build's wmux server, run in
@@ -79,14 +108,26 @@ export function buildWslWorkerMcpConfig(runtime: string, entry: string, level: W
 
 /** The `--mcp-config` document. Pure. */
 export function buildWorkerMcpConfig(input: WorkerMcpInput): { mcpServers: Record<string, unknown> } {
+  const bearers = Object.values(input.gateway ?? {}).map((r) => r.envName);
+  const wmuxArgs = input.level === 'core' ? [input.entry, '--core'] : [input.entry];
   const servers: Record<string, unknown> = {
-    wmux: { type: 'stdio', command: 'node', args: input.level === 'core' ? [input.entry, '--core'] : [input.entry] },
+    // The gateway bearers are taken out of wmux's own server's environment too.
+    wmux: bearers.length > 0
+      ? { type: 'stdio', command: '/usr/bin/env', args: [...bearers.flatMap((k) => ['-u', k]), 'node', ...wmuxArgs] }
+      : { type: 'stdio', command: 'node', args: wmuxArgs },
   };
   const keysOf = (c: Connector) => c.secrets.map((s) => s.secret);
   for (const c of input.connectors) {
+    const route = input.gateway?.[c.name];
+    if (route) {
+      // Main's gateway, with the lease bearer claude fills in from the env.
+      servers[c.name] = { type: 'http', url: route.url, headers: { Authorization: `Bearer \${${route.envName}}` } };
+      continue;
+    }
     if (c.transport === 'stdio' && c.stdio) {
-      // The other connections' keys are taken out of its environment.
-      const others = [...new Set([...input.connectors.filter((o) => o !== c).flatMap(keysOf), ...(input.strayKeys ?? [])])].filter((k) => !keysOf(c).includes(k));
+      // The other connections' keys (and every gateway bearer) are taken out
+      // of its environment.
+      const others = [...new Set([...input.connectors.filter((o) => o !== c).flatMap(keysOf), ...(input.strayKeys ?? []), ...bearers])].filter((k) => !keysOf(c).includes(k));
       servers[c.name] = {
         type: 'stdio',
         command: '/usr/bin/env',
@@ -112,12 +153,17 @@ export function buildWorkerSettings(
   /** wmux's own hook groups by event (an isolated instance's worker, which
    *  loads no user settings: setupHooks.bridgeHookGroups). */
   wmuxHooks?: Record<string, ReadonlyArray<{ matcher: string; hooks: ReadonlyArray<{ type: 'command'; command: string }> }>>,
+  /** The task has signed-in connections (WorkerGatewaySettings). */
+  gateway?: WorkerGatewaySettings,
 ): Record<string, unknown> {
   const allow: string[] = [];
   const deny: string[] = [...BOT_WORKER_DENY];
-  const hooks: Array<{ matcher: string; hooks: Array<{ type: 'command'; command: string }> }> = [];
+  const hooks: Array<{ matcher: string; hooks: Array<{ type: 'command'; command: string; timeout?: number }> }> = [];
   for (const c of connectors) {
-    if (c.tools.mode === 'all') {
+    if (gateway?.names.includes(c.name)) {
+      // The gateway lists and calls only the owner's picked tools.
+      allow.push(`mcp__${c.name}`);
+    } else if (c.tools.mode === 'all') {
       allow.push(`mcp__${c.name}`);
       deny.push(...c.tools.blocked.map((t) => `mcp__${c.name}__${t}`));
     } else {
@@ -131,12 +177,18 @@ export function buildWorkerSettings(
       });
     }
   }
+  if (gateway) {
+    deny.push('WebFetch', 'WebSearch');
+    // First: every call passes the gate, whatever else allows it.
+    hooks.unshift({ matcher: '.*', hooks: [{ type: 'command', command: gateway.gateCommand, timeout: gateway.gateTimeout }] });
+  }
   const byEvent: Record<string, unknown[]> = {};
   for (const [event, groups] of Object.entries(wmuxHooks ?? {})) byEvent[event] = groups.map((g) => ({ matcher: g.matcher, hooks: g.hooks.map((h) => ({ ...h })) }));
   if (hooks.length > 0) byEvent.PreToolUse = [...hooks, ...(byEvent.PreToolUse ?? [])];
   return {
     permissions: { ...(allow.length > 0 ? { allow } : {}), deny },
     ...(Object.keys(byEvent).length > 0 ? { disableAllHooks: false, hooks: byEvent } : {}),
+    ...(gateway ? { sandbox: gateway.sandbox } : {}),
   };
 }
 
@@ -157,17 +209,19 @@ const SUBSTITUTION = /\$\(|`|<\(|>\(/;
  * `--`, any other settings, MCP config or strict flag, or a path that cannot
  * be quoted. Pure.
  */
-export function spliceWorkerLaunch(fullCommand: string, settingsPath: string, mcpPath: string, settingSources?: 'project'): string | null {
+export function spliceWorkerLaunch(fullCommand: string, settingsPath: string, mcpPath: string, settingSources?: 'project' | 'none'): string | null {
   const { marker, command } = splitModelEnvMarker(fullCommand);
   if (!isQuotable(settingsPath) || !isQuotable(mcpPath)) return null;
   const rest = stripPromptFileArgument(command);
-  const spliced = ` --settings="${settingsPath}" --mcp-config="${mcpPath}" --strict-mcp-config${settingSources ? ` --setting-sources=${settingSources}` : ''}`;
+  // `none`: an empty list, so claude loads no user, project or local settings.
+  const sources = settingSources === 'none' ? '' : settingSources;
+  const spliced = ` --settings="${settingsPath}" --mcp-config="${mcpPath}" --strict-mcp-config${settingSources ? ` --setting-sources=${sources}` : ''}`;
   // Our own flags, already spliced, hold paths (a Windows one has `\`).
   if (SUBSTITUTION.test(rest) || !isSingleCommand(rest) || argumentsMayExpand(rest.split(spliced).join(''))) return null;
   const tokens = tokenize(command);
   if (tokens.length === 0 || !isClaudeLauncher(tokens[0].value)) return null;
   if (tokens.some((t) => t.value === '--')) return null;
-  const ours = [`--settings=${settingsPath}`, `--mcp-config=${mcpPath}`, '--strict-mcp-config', ...(settingSources ? [`--setting-sources=${settingSources}`] : [])];
+  const ours = [`--settings=${settingsPath}`, `--mcp-config=${mcpPath}`, '--strict-mcp-config', ...(settingSources ? [`--setting-sources=${sources}`] : [])];
   const flagged = tokens.slice(1).filter((t) => /^--(settings|mcp-config|strict-mcp-config|setting-sources)(=|$)/.test(t.value));
   if (flagged.length > 0) {
     const same = flagged.length === ours.length && ours.every((w, i) => tokens[1 + i]?.value === w);

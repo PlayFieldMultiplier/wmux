@@ -49,14 +49,22 @@ export function secretForms(value: string): string[] {
 
 type RedactedEntries = ReadonlyArray<{ name: string; value: string }>;
 
-/** Each source's values: the secret store's, and the bots' Claude API key
- *  (claudeApiKey.ts), so neither replaces the other's. */
-const sources = new Map<'store' | 'claudeApiKey', RedactedEntries>();
+/** Each source's values: the secret store's, the bots' Claude API key
+ *  (claudeApiKey.ts) and the bearers of bot workers' connection gateways
+ *  (main/connectors/workerGateway.ts), so none replaces another's. */
+const sources = new Map<'store' | 'claudeApiKey' | 'connectorLeases', RedactedEntries>();
 
 /** Replace the set of values matched (the secret store calls this on load,
  *  set and delete). */
 export function setRedactedSecrets(entries: RedactedEntries): void {
   sources.set('store', entries);
+  rebuildNeedles();
+}
+
+/** Replace the connection gateway bearers matched (workerGateway.ts): a
+ *  bearer is not a stored value, so the store's set never holds it. */
+export function setRedactedConnectorLeases(entries: RedactedEntries): void {
+  sources.set('connectorLeases', entries);
   rebuildNeedles();
 }
 

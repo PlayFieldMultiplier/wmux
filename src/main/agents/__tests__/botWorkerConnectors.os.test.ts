@@ -16,6 +16,7 @@ import {
   guardSessionLaunch,
   guardedLaunchOf,
   noteBotWorkerSession,
+  pinClaudeLauncher,
   pruneWorkerLaunchFiles,
   reloadBotWorkerSessionsForTests,
   withBotWorkerMergeGuard,
@@ -29,6 +30,7 @@ import { SecretStore, setSecretStore } from '../../factory/secretStore';
 import { ConnectorStore, setConnectorStore } from '../../factory/connectorStore';
 import { __resetSecretGrantsForTesting, mintSecretGrant, resolveSecretGrant, setSecretGrantSource } from '../../factory/secretGrants';
 import { toWslPath } from '../../../shared/imagePaste';
+import { WORKER_GATE_TIMEOUT_S } from '../workerToolGate';
 
 const ENTRY = '/opt/wmux/mcp/index.js';
 const LINE = `claude --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`;
@@ -242,6 +244,12 @@ describe('the session record carries the launch', () => {
     expect(spliceWorkerLaunch(spliceWorkerLaunch(LINE, S, M)!, S, M, 'project')).toBeNull();
     expect(spliceWorkerLaunch('claude --setting-sources=user', S, M)).toBeNull();
     expect(spliceWorkerLaunch('claude --setting-sources user', S, M, 'project')).toBeNull();
+    // `none`: an empty list (no user, project or local settings), its own launch too.
+    const none = spliceWorkerLaunch(LINE, S, M, 'none')!;
+    expect(none).toBe(`claude --settings="${S}" --mcp-config="${M}" --strict-mcp-config --setting-sources= --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`);
+    expect(spliceWorkerLaunch(none, S, M, 'none')).toBe(none);
+    expect(spliceWorkerLaunch(none, S, M, 'project')).toBeNull();
+    expect(spliceWorkerLaunch(once, S, M, 'none')).toBeNull();
   });
 
   it('a re-fire or resume carries the task\'s connections that are still the bot\'s, and leaves out the rest', () => {
@@ -383,6 +391,123 @@ describe('the grant carries a connection\'s keys to its own launch only', () => 
       setConnectorStore(null);
       setSecretStore(null);
     }
+  });
+});
+
+// Signed-in connections reach workers on macOS and Linux only.
+describe.skipIf(process.platform === 'win32')('a task with signed-in connections (main\'s gateway)', () => {
+  const notion = con({
+    id: 'con-0000000c', name: 'notion', remote: { url: 'https://mcp.notion.example/mcp', headers: {} }, secrets: [],
+    tools: { mode: 'listed', allowed: ['read_page'] },
+  });
+  const BEARER_NAME = 'CONNECTOR_0000000C_TOKEN';
+  const BRIDGE = '/opt/wmux/resources/cli-bundle/wmux-bridge.mjs';
+  const CLAUDE = '/Users/me/.local/bin/claude';
+  const SANDBOX = { enabled: true, failIfUnavailable: true, network: { allowedDomains: [], deniedDomains: ['*'] }, credentials: { envVars: [{ name: BEARER_NAME, mode: 'deny' }] } };
+  const RUNTIME = '/Applications/wmux.app/Contents/MacOS/wmux';
+  const gateway = () => ({ routes: { notion: { url: 'http://127.0.0.1:43123/mcp', envName: BEARER_NAME } }, sandbox: SANDBOX, runtime: RUNTIME, claudeExe: CLAUDE });
+  const opts = () => ({ initialCommand: LINE, fanoutTaskOf: 'ws-owner', cwd: dir, workspaceId: 'ws-task' });
+  const guardWith = (launch: Parameters<typeof withBotWorkerMergeGuard>[3], extra: Record<string, unknown> = {}, connectors: Connector[] = [notion]) => {
+    const release = beginBotWorkerSpawn('ws-owner', dir, { botId: 'bot-0000000a', taskId: 't-1', connectors, gatewayConnectors: ['notion'] });
+    try {
+      return withBotWorkerMergeGuard(opts(), botWorkerForCreate(opts(), { dir, isBotTaskWorkspace: () => false }), { ...deps(), bridge: () => BRIDGE, ...extra }, launch);
+    } finally {
+      release();
+    }
+  };
+
+  it('reaches the gateway by its loopback URL and a bearer named from the env, runs the checked claude, with no web, no network and every call through the gate', () => {
+    const guarded = guardWith({ gateway: gateway() })!;
+    const w = wordsOf(guarded.initialCommand!);
+    expect(guarded.initialCommand!.startsWith(`${CLAUDE} `)).toBe(true);
+    // No user, project or local settings: only its own file (wmux's hooks
+    // and the gate are in it).
+    expect(guarded.initialCommand).toContain(' --setting-sources= ');
+    expect(guarded.initialCommand).not.toMatch(/--setting-sources=\S/);
+    const mcp = readJson(w.mcp).mcpServers;
+    // wmux's own server runs without the bearer in its environment.
+    expect(mcp.wmux).toEqual({ type: 'stdio', command: '/usr/bin/env', args: ['-u', BEARER_NAME, 'node', ENTRY, '--core'] });
+    expect(mcp.notion).toEqual({ type: 'http', url: 'http://127.0.0.1:43123/mcp', headers: { Authorization: `Bearer \${${BEARER_NAME}}` } });
+    expect(Object.keys(mcp).sort()).toEqual(['notion', 'wmux']);
+    const settings = readJson(w.settings);
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining(['WebFetch', 'WebSearch']));
+    expect(settings.permissions.allow).toContain('mcp__notion');
+    expect(settings.permissions.allow).not.toContain('mcp__notion__read_page');
+    expect(settings.sandbox).toEqual(SANDBOX);
+    // First PreToolUse group: every tool call runs the launch's gate script,
+    // on wmux's own runtime by its absolute path, with an explicit timeout.
+    const first = settings.hooks.PreToolUse[0];
+    expect(first.matcher).toBe('.*');
+    expect(first.hooks[0].timeout).toBe(WORKER_GATE_TIMEOUT_S);
+    const gate = new RegExp(`^ELECTRON_RUN_AS_NODE=1 "${RUNTIME}" "([^"]+)" \\|\\| exit 2$`).exec(first.hooks[0].command)![1];
+    expect(path.isAbsolute(gate) && gate.startsWith(path.join(dir, 'factory', 'worker-hooks'))).toBe(true);
+    const script = fs.readFileSync(gate, 'utf8');
+    expect(script).toContain('"prefixes":["mcp__notion__"]');
+    expect(script).toContain('"tools":["Bash","TodoWrite","mcp__wmux__ledger_update"]');
+    expect(settings.hooks.Stop[0].hooks[0].command).toBe(`node "${BRIDGE}" Stop`);
+    // The record names the bearer (to keep it out of later stdio servers), never a value.
+    expect(guardedLaunchOf(guarded).launch).toMatchObject({ level: 'core', settingSources: 'none', connectionKeys: [BEARER_NAME] });
+  });
+
+  it('keeps a bearer out of a stdio server\'s environment (pure)', () => {
+    const doc = buildWorkerMcpConfig({
+      entry: ENTRY, level: 'core', connectors: [notion, files], runDir: (c) => `/d/run/${c.id}`, npmrc: (c) => `/d/run/${c.id}/npmrc`,
+      gateway: { notion: { url: 'http://127.0.0.1:43123/mcp', envName: BEARER_NAME } },
+    });
+    const args = (doc.mcpServers.files as { args: string[] }).args;
+    expect(args).toEqual(expect.arrayContaining(['-u', BEARER_NAME]));
+    expect(args.indexOf(BEARER_NAME)).toBeLessThan(args.indexOf('/usr/local/bin/npx'));
+  });
+
+  it('refuses a launch whose opened leases are not the task\'s, a gateway for a task without one, another connection beside one, and a missing hook bridge', () => {
+    expect(() => guardWith({})).toThrow(/not opened/);
+    expect(() => guardWith({ gateway: { ...gateway(), routes: {} } })).toThrow(/not opened/);
+    expect(() => guardWith({ gateway: { ...gateway(), routes: { ...gateway().routes, other: gateway().routes.notion } } })).toThrow(/not opened/);
+    expect(() => guardWith({ gateway: gateway(), wsl: true })).toThrow(/WSL/);
+    expect(() => guardWith({ gateway: gateway() }, {}, [notion, files])).toThrow(/only signed-in/);
+    const plain = beginBotWorkerSpawn('ws-owner', dir, { botId: 'bot-0000000a', taskId: 't-2', connectors: [files] });
+    try {
+      expect(() => withBotWorkerMergeGuard(opts(), botWorkerForCreate(opts(), { dir, isBotTaskWorkspace: () => false }), deps(), { gateway: gateway() })).toThrow(/without signed-in/);
+    } finally {
+      plain();
+    }
+    expect(() => guardWith({ gateway: gateway() }, { bridge: () => null })).toThrow(/hook bridge/);
+  });
+
+  it('refuses a claude it cannot pin to the checked binary', () => {
+    expect(() => guardWith({ gateway: { ...gateway(), claudeExe: 'claude' } })).toThrow(/checked on/);
+    expect(() => guardWith({ gateway: { ...gateway(), claudeExe: '/opt/$(x)/claude' } })).toThrow(/checked on/);
+    expect(() => guardWith({ gateway: { ...gateway(), claudeExe: '/usr/bin/node' } })).toThrow(/checked on/);
+  });
+
+  it('refuses a gate runtime that is not an absolute path', () => {
+    expect(() => guardWith({ gateway: { ...gateway(), runtime: 'node' } })).toThrow(/cannot be quoted/);
+  });
+
+  it('starts again only in a new pane: a re-fire or a typed resume is refused', () => {
+    const guarded = guardWith({ gateway: gateway() })!;
+    noteBotWorkerSession('pty-g', 'ws-task', dir, guardedLaunchOf(guarded));
+    reloadBotWorkerSessionsForTests();
+    // The record keeps that it loads no settings but its own.
+    const read = readBotWorkerSessions(dir);
+    expect('sessions' in read && read.sessions.get('pty-g')?.launch?.settingSources).toBe('none');
+    const gated = { ...deps(), sessionGatewayTask: () => true, sessionConnectors: () => [notion] };
+    expect(() => guardRefireLine('pty-g', LINE, gated)).toThrow(/new pane/);
+    expect(() => guardSessionLaunch('pty-g', 'claude --resume 11111111-2222-3333-4444-555555555555', gated)).toThrow(/new pane/);
+  });
+});
+
+describe('pinClaudeLauncher (pure)', () => {
+  const EXE = '/Users/me/.local/bin/claude';
+  it('replaces the launcher word only, keeping a model-env marker and the rest of the line', () => {
+    expect(pinClaudeLauncher(LINE, EXE)).toBe(`${EXE} --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`);
+    expect(pinClaudeLauncher(`${MODEL_ENV_MARKER}${LINE}`, EXE)).toBe(`${MODEL_ENV_MARKER}${EXE} --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`);
+  });
+  it('refuses a line that does not start with claude and an exe that is not a plain absolute claude path', () => {
+    expect(pinClaudeLauncher('codex exec x', EXE)).toBeNull();
+    expect(pinClaudeLauncher('"claude" -p x', EXE)).toBeNull();
+    expect(pinClaudeLauncher(LINE, 'claude')).toBeNull();
+    expect(pinClaudeLauncher(LINE, '/opt/my dir/claude')).toBeNull();
   });
 });
 

@@ -122,6 +122,12 @@ import { getBotStore } from '../../factory/botStore';
 import { withBotWorkerAgent } from '../../../shared/botWorkerAgent';
 import { parseSecretNames, secretNamesRefusal } from '../../factory/secretGrants';
 import { getConnectorStore, isConnectionKey, type ConnectorStore } from '../../factory/connectorStore';
+import { gatewayConnectorsOf, gatewayReadyRefusal, gatewayShapeRefusal, workerGatewayOAuth, type GatewayOAuth } from '../../connectors/workerGateway';
+import { conversationMarks } from '../../factory/conversationMarks';
+import { probeBotExecSupport } from '../../factory/botExecSandbox';
+import { checkConnector } from '../../connectors/checkConnector';
+import type { ConnectorCheckResult } from '../../../shared/connectorCheck';
+import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
 import { CONNECTOR_LIMITS, CONNECTOR_NAME_RE, CONNECTOR_WORKER_AGENTS, type Connector } from '../../../shared/botConnector';
 import { codexConnectorRefusal } from '../../../shared/codexWorkerGuard';
 import { BOT_SECRET_LIMITS } from '../../../shared/botSecret';
@@ -692,6 +698,18 @@ export interface FanOutRpcDeps {
   connectors?: () => ConnectorStore | null;
   /** The platform workers run on (default: this process's). */
   workerPlatform?: NodeJS.Platform;
+  /** The connections' OAuth service, for signed-in connections (default:
+   *  main/connectors/workerGateway.ts workerGatewayOAuth). */
+  gatewayOAuth?: () => GatewayOAuth | null;
+  /** Whether a worker can run in the command sandbox (default: the bot
+   *  command sandbox probe on the claude on PATH). */
+  gatewaySandbox?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** Whether the bot's live conversation has taken in outside text
+   *  (default: conversationMarks.ts; no conversation counts as yes). */
+  conversationTainted?: (botId: string) => boolean;
+  /** A signed-in connection's tool list from the service, with its token
+   *  (default: checkConnector.ts). */
+  gatewayListTools?: (c: Connector, headers: Record<string, string>) => Promise<ConnectorCheckResult>;
   /** The wmux data folder a bot's research scratch folders go under
    *  (default: getWmuxDir()). Injected in tests. */
   wmuxDir?: () => string;
@@ -1375,6 +1393,10 @@ export function registerFanOutRpc(
     // resolved here are what each worker launches with, whatever the library
     // says later; their keys go to each worker with the task's other secrets.
     let connectors: Connector[] | undefined;
+    // Its signed-in connections, and whether the asking wake had taken in
+    // outside text before them (such a wake gets none).
+    let gatewayConnectors: Connector[] = [];
+    let gatewayWakeTainted = true;
     if (params['connectors'] !== undefined) {
       if (!bot) return deny('INVALID_ARGUMENT', 'task.fanout.start accepts connectors only from a factory bot');
       const raw = params['connectors'];
@@ -1391,9 +1413,16 @@ export function registerFanOutRpc(
       const unknown = (raw as string[]).filter((n) => !mine.some((c) => c.name === n));
       if (unknown.length > 0) return deny('INVALID_ARGUMENT', `not one of your connections: ${unknown.join(', ')} (your wake prompt lists them)`);
       connectors = (raw as string[]).map((n) => mine.find((c) => c.name === n)!);
+      // The ones signed in (an OAuth record): through main's gateway only
+      // (main/connectors/workerGateway.ts), each with a bearer in the task's
+      // env. The wake's own taint is read before this task's connections mark it.
+      const split = gatewayConnectorsOf(connectors, (deps.gatewayOAuth ?? workerGatewayOAuth)());
+      if ('refusal' in split) return deny('FAILED_PRECONDITION', split.refusal);
+      gatewayConnectors = split.gateway;
+      gatewayWakeTainted = botWakeTainted;
       const keys = [...new Set(connectors.flatMap((c) => c.secrets.map((s) => s.secret)))];
-      if (keys.length + (secretNames?.length ?? 0) > BOT_SECRET_LIMITS.NAMES_PER_FANOUT) {
-        return deny('INVALID_ARGUMENT', `a task carries at most ${BOT_SECRET_LIMITS.NAMES_PER_FANOUT} keys, its connections' included`);
+      if (keys.length + (secretNames?.length ?? 0) + gatewayConnectors.length > BOT_SECRET_LIMITS.NAMES_PER_FANOUT) {
+        return deny('INVALID_ARGUMENT', `a task carries at most ${BOT_SECRET_LIMITS.NAMES_PER_FANOUT} keys, its connections' (and one per signed-in connection) included`);
       }
       if (keys.length > 0) {
         const missing = secretNamesRefusal(keys);
@@ -1549,6 +1578,19 @@ export function registerFanOutRpc(
         return deny('FAILED_PRECONDITION', `this bot has no repository to fan out in (set its repo); a question that needs no code runs with preset "${RESEARCH_PRESET}"`);
       }
     }
+    // A task with signed-in connections: macOS and Linux, only signed-in
+    // connections, a clean wake and conversation, the research preset, the
+    // owner's picked tools (workerGateway.ts).
+    const gatewayRefusal = gatewayShapeRefusal({
+      connectors: gatewayConnectors,
+      all: connectors ?? [],
+      platform: deps.workerPlatform ?? process.platform,
+      preset: botPresetName,
+      wakeTainted: gatewayWakeTainted,
+      conversationTainted: gatewayConnectors.length > 0 && !!bot
+        && (deps.conversationTainted ?? ((id: string) => conversationMarks(id)?.tainted !== false))(bot.botId),
+    });
+    if (gatewayRefusal) return deny('FAILED_PRECONDITION', gatewayRefusal);
 
     // ── Global caps (live + rolling hour), reserved in this same tick ────
     // Over a cap is a refusal, never a queued prompt: with approval off by
@@ -1682,6 +1724,21 @@ export function registerFanOutRpc(
         return deny('FAILED_PRECONDITION', refusal);
       }
     }
+    // Signed-in connections: each signed in now (a refresh, never a sign-in)
+    // and the worker's command sandbox available, or nothing starts.
+    if (gatewayConnectors.length > 0) {
+      const notReady = await gatewayReadyRefusal({
+        connectors: gatewayConnectors,
+        oauth: (deps.gatewayOAuth ?? workerGatewayOAuth)(),
+        sandbox: deps.gatewaySandbox ?? (() => probeBotExecSupport(resolveClaudeExecutable())),
+        listTools: deps.gatewayListTools ?? ((c, headers) => checkConnector(c, headers)),
+      });
+      if (notReady) {
+        pending.delete(key);
+        guards.release(key);
+        return deny('FAILED_PRECONDITION', notReady);
+      }
+    }
     // An owner's code task: the repository its origin names, read from the
     // root the tasks are made in. None for a local-path origin.
     const ownerRepoKey = worktree && !bot ? await originRepoKeyOf(callerRepoRoot) : null;
@@ -1747,6 +1804,7 @@ export function registerFanOutRpc(
       ...(ownerRepoKey ? { repoKey: ownerRepoKey } : {}),
       ...(bot && secretNames ? { secretNames } : {}),
       ...(bot && connectors ? { connectors } : {}),
+      ...(bot && gatewayConnectors.length > 0 ? { gatewayConnectors: gatewayConnectors.map((c) => c.name) } : {}),
     };
     const presetName = selection.kind === 'preset' ? selection.preset.name : undefined;
 

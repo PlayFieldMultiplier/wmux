@@ -192,6 +192,11 @@ export interface LedgerDispatch {
   handoffId?: string;
   /** A bot's task: the connections its worker was started with (names). */
   connectors?: string[];
+  /** A bot's task: which of `connectors` go through main's gateway (signed-in
+   *  connections, main/connectors/workerGateway.ts; all of them, when any).
+   *  Such a task runs only with the research preset, takes messages and
+   *  resumes only from a clean wake, and starts again only in a new pane. */
+  gatewayConnectors?: string[];
   /** Completion criteria for a research task, set only by main at dispatch
    *  (never by a worker): what the worker's evidence should show. A task's
    *  no-changes skip is known only after its run, so such a task has none;

@@ -1,5 +1,5 @@
 /** Read-only MCP discovery. A successful check does not grant tools to a session. */
 export const CONNECTOR_CHECK_IPC = 'connectors:check';
 export type ConnectorCheckResult =
-  | { status: 'ready'; toolCount: number; toolNames?: string[]; checkedAt: number }
+  | { status: 'ready'; toolCount: number; toolNames?: string[]; /** The tools the server marks `readOnlyHint: true` (a hint, never a grant). */ readOnlyToolNames?: string[]; checkedAt: number }
   | { status: 'auth-required' | 'missing-key' | 'unsupported' | 'unavailable' | 'timeout' | 'failed' | 'changed' | 'busy' };
