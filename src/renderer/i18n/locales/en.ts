@@ -4001,9 +4001,9 @@ export const en = {
   'update.refusedInstallBlocked':
     'The last update did not install: Windows blocked its installer (Smart App Control or an application control policy). Your current version is unchanged. Try again in a day or two, or install from the releases page once Windows allows it.',
   'update.refusedInstallChanged':
-    'The last update did not install: its installer changed after wmux verified it, so it was not run. Your current version is unchanged. Check for updates again to download a fresh copy.',
+    'The last update did not install: its installer changed after wmux verified it, so it was not run. Your current version is unchanged. Check for updates again to download and install a fresh copy. Installing closes every pane.',
   'update.refusedInstallUnreadable':
-    'The last update did not install: its installer could not be read to verify it, so it was not run. Your current version is unchanged. Try again, or install from the releases page.',
+    'The last update did not install: its installer could not be read to verify it, so it was not run. Your current version is unchanged. Check for updates again to verify and install it, or install from the releases page. Installing closes every pane.',
   'update.smartAppControlHold':
     "Windows Smart App Control will likely block this update's installer, so wmux stayed open and nothing changed. Try again in a day or two. Install anyway closes every pane; if Windows blocks the installer, reopen wmux and your current version will still be there.",
   'update.installAnyway': 'Install anyway',
