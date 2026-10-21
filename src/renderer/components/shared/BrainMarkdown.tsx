@@ -1,8 +1,8 @@
 // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/features/sessions/ui/AgentTranscript.tsx), MIT License, Copyright (c) 2026 Nick
-import { Fragment, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { t } from '../../i18n';
 import { closesFence, fenceOpenLength } from '../../../shared/markdownFence';
-import SandboxedHtmlFrame from './SandboxedHtml';
+import SandboxedHtmlFrame, { sandboxedHtmlDocument } from './SandboxedHtml';
 import SegmentedControl from '../ui/SegmentedControl';
 
 // ─── Command Deck — orchestrator prose markdown (dep-free subset) ────────────
@@ -103,7 +103,9 @@ export const HTML_BLOCK_PREVIEW_MAX = 512 * 1024;
 function RichCodeBlock({ code, lang, htmlPreview }: { code: string; lang: string; htmlPreview?: boolean }): React.ReactElement {
   const [copied, setCopied] = useState(false);
   const [view, setView] = useState<'code' | 'preview'>('code');
-  const previewable = !!htmlPreview && /^x?html?$/i.test(lang) && code.length <= HTML_BLOCK_PREVIEW_MAX;
+  const wanted = !!htmlPreview && /^x?html?$/i.test(lang) && code.length <= HTML_BLOCK_PREVIEW_MAX;
+  // A block that cannot be made inert keeps its source only, with no toggle.
+  const doc = useMemo(() => (wanted ? sandboxedHtmlDocument(code) : null), [wanted, code]);
   const copy = (
     <button
       type="button"
@@ -125,7 +127,7 @@ function RichCodeBlock({ code, lang, htmlPreview }: { code: string; lang: string
       {code}
     </pre>
   );
-  if (previewable) {
+  if (doc !== null) {
     return (
       <div data-brain-md-code data-brain-md-code-rich data-brain-md-code-view={view} className="group relative my-1">
         <div className="flex items-center justify-end gap-1.5 pb-1">
@@ -143,9 +145,16 @@ function RichCodeBlock({ code, lang, htmlPreview }: { code: string; lang: string
             ]}
           />
         </div>
-        {view === 'preview'
-          ? <SandboxedHtmlFrame html={code} title={t('botsPage.html.blockFrame')} className="block h-[320px] w-full rounded-lg border-0 bg-white [color-scheme:light]" />
-          : pre}
+        {view === 'preview' ? (
+          <>
+            <SandboxedHtmlFrame srcDoc={doc} title={t('botsPage.html.blockFrame')} className="block h-[320px] w-full rounded-lg border-0 bg-white [color-scheme:light]" />
+            <p data-brain-md-html-note className="mt-1 text-[11px] text-[var(--text-muted)]">{t('botsPage.html.linksOff')}</p>
+          </>
+        ) : (
+          <pre className="max-h-[320px] overflow-auto rounded-lg px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre bg-[color-mix(in_srgb,var(--text-main)_5%,transparent)] text-[var(--text-sub)]">
+            {code}
+          </pre>
+        )}
       </div>
     );
   }

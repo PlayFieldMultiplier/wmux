@@ -4771,6 +4771,7 @@ export const ko = {
   'botsPage.html.code': "코드",
   'botsPage.html.frame': "{name} 미리보기",
   'botsPage.html.blockFrame': "HTML 블록 미리보기",
+  'botsPage.html.linksOff': "이 미리보기에서는 링크가 작동하지 않습니다",
   'botsPage.chat.replyPlaceholder': "스레드에 답장",
   'botsPage.chat.events': "이벤트 {count}개",
   'botsPage.chat.botWorking': "{name} 작업 중",

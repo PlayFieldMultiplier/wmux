@@ -5270,6 +5270,7 @@ export const en = {
   'botsPage.html.code': "Code",
   'botsPage.html.frame': "Preview of {name}",
   'botsPage.html.blockFrame': "Preview of the HTML block",
+  'botsPage.html.linksOff': "Links are disabled in this preview",
   'botsPage.chat.replyPlaceholder': "Reply in thread",
   'botsPage.chat.events': "{count} events",
   'botsPage.chat.botWorking': "{name} working",

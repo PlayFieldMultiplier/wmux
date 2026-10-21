@@ -4408,6 +4408,7 @@ export const zh = {
   'botsPage.html.code': "代码",
   'botsPage.html.frame': "{name} 的预览",
   'botsPage.html.blockFrame': "HTML 代码块预览",
+  'botsPage.html.linksOff': "此预览中的链接已停用",
   'botsPage.chat.replyPlaceholder': "在话题中回复",
   'botsPage.chat.events': "{count} 个事件",
   'botsPage.chat.botWorking': "{name} 正在工作",

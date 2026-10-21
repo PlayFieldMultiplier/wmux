@@ -167,6 +167,7 @@ describe('BotsFilePanel', () => {
     const doc = new DOMParser().parseFromString(frame.getAttribute('srcdoc')!, 'text/html');
     expect(doc.head.firstElementChild?.getAttribute('http-equiv')).toBe('Content-Security-Policy');
     expect(doc.head.firstElementChild?.getAttribute('content')).toContain("default-src 'none'");
+    expect(page.el.querySelector('[data-bots-file-note="links-off"]')?.textContent).toBe('botsPage.html.linksOff');
     // Nothing of the page is in the app's own document.
     expect(page.el.querySelector('.wmux-bots-file-body p:not([data-bots-file-note]), .wmux-bots-file-body a, .wmux-bots-file-body script, .wmux-bots-file-body img')).toBeNull();
 

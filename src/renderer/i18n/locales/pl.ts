@@ -5230,6 +5230,7 @@ export const pl = {
   'botsPage.html.code': "Kod",
   'botsPage.html.frame': "Podgląd {name}",
   'botsPage.html.blockFrame': "Podgląd bloku HTML",
+  'botsPage.html.linksOff': "Linki są wyłączone w tym podglądzie",
   'botsPage.chat.replyPlaceholder': "Odpowiedz w wątku",
   'botsPage.chat.events': "Zdarzenia: {count}",
   'botsPage.chat.botWorking': "{name} pracuje",

@@ -20,7 +20,7 @@ import { FOCUS_RING } from '../focusRing';
 import { IconFile, IconImage, IconX } from '../icons';
 import Button from '../ui/Button';
 import SegmentedControl from '../ui/SegmentedControl';
-import SandboxedHtmlFrame from '../shared/SandboxedHtml';
+import SandboxedHtmlFrame, { sandboxedHtmlDocument } from '../shared/SandboxedHtml';
 import { renderBrainMarkdownWhole, type MarkdownOptions } from '../shared/BrainMarkdown';
 import { FILE_MARKDOWN_SHOWN_MAX, fileGlyph, fileViewKind, htmlPreviewable, shownText, svgImageSource } from './botsFileView';
 import { svgDrawsTooMuch } from '../../utils/svgDrawing';
@@ -109,10 +109,12 @@ function MarkdownView({ text, t, total }: { text: string; t: T; total: number })
   return <div className="wmux-bots-file-markdown wmux-bots-prose" data-bots-file-view="markdown">{nodes}</div>;
 }
 
-/** Whether a read file shows the Preview / Code toggle: an HTML page main
- *  sent as text, within the panel's text size. */
-function htmlToggles(read: RoomFileReadResult | null): boolean {
-  return !!read?.ok && fileViewKind(read.file) === 'html' && read.text !== undefined && htmlPreviewable(read.text);
+/** A read HTML page as the preview frame's document: main sent it as text,
+ *  it is within the panel's text size and it could be made inert. Null
+ *  otherwise (it shows as its source, with no toggle). */
+function htmlPreviewDocument(read: RoomFileReadResult | null): string | null {
+  if (!read?.ok || fileViewKind(read.file) !== 'html' || read.text === undefined || !htmlPreviewable(read.text)) return null;
+  return sandboxedHtmlDocument(read.text);
 }
 
 /** The file itself, by its kind and what main sent (text or a data URL):
@@ -120,16 +122,17 @@ function htmlToggles(read: RoomFileReadResult | null): boolean {
  *  frame (or its source, by the header's toggle or past the panel's text
  *  size), a picture as an <img>, any other text as plain text, and anything
  *  else its name, its size and Save a copy. */
-function FileBody({ read, t, htmlView }: { read: Extract<RoomFileReadResult, { ok: true }>; t: T; htmlView: HtmlView }) {
+function FileBody({ read, t, htmlView, htmlDoc }: { read: Extract<RoomFileReadResult, { ok: true }>; t: T; htmlView: HtmlView; htmlDoc: string | null }) {
   const { file, text, dataUrl } = read;
   const kind = fileViewKind(file);
   // Counting an SVG's drawing parses it: once per read, not per render.
   const svgSrc = useMemo(() => (kind === 'svg' && read.text !== undefined && !svgDrawsTooMuch(read.text) ? svgImageSource(read) : null), [kind, read]);
   if (kind === 'markdown' && text !== undefined) return <div className="wmux-bots-file-scroll"><MarkdownView text={text} t={t} total={file.bytes} /></div>;
-  if (text !== undefined && htmlView === 'preview' && htmlToggles(read)) {
+  if (htmlDoc !== null && htmlView === 'preview') {
     return (
       <div className="wmux-bots-file-html" data-bots-file-view="html">
-        <SandboxedHtmlFrame html={text} title={t('botsPage.html.frame', { name: file.name })} />
+        <SandboxedHtmlFrame srcDoc={htmlDoc} title={t('botsPage.html.frame', { name: file.name })} />
+        <FileNote testId="links-off">{t('botsPage.html.linksOff')}</FileNote>
       </div>
     );
   }
@@ -163,6 +166,8 @@ export default function BotsFilePanel({ open, api, t, onClose, style }: {
   const [read, setRead] = useState<RoomFileReadResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [htmlView, setHtmlView] = useState<HtmlView>('preview');
+  // Parsing a page (up to the panel's text size) is once per read.
+  const htmlDoc = useMemo(() => htmlPreviewDocument(read), [read]);
   const asideRef = useRef<HTMLElement>(null);
   useEffect(() => {
     let live = true;
@@ -235,7 +240,7 @@ export default function BotsFilePanel({ open, api, t, onClose, style }: {
           <span className="min-w-0 truncate text-[13px] font-[var(--title-weight,500)] text-[var(--text-main)]" title={file.name}>{file.name}</span>
           <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-muted)]">{`· ${formatPreviewBytes(file.bytes)}`}</span>
         </span>
-        {htmlToggles(read) && (
+        {htmlDoc !== null && (
           <SegmentedControl<HtmlView>
             value={htmlView}
             onValueChange={setHtmlView}
@@ -271,7 +276,7 @@ export default function BotsFilePanel({ open, api, t, onClose, style }: {
         ) : !read.ok ? (
           <FileNote testId="error" status>{t('botsPage.file.error', { error: read.error })}</FileNote>
         ) : (
-          <FileBody read={read} t={t} htmlView={htmlView} />
+          <FileBody read={read} t={t} htmlView={htmlView} htmlDoc={htmlDoc} />
         )}
       </div>
     </aside>

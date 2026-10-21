@@ -6,7 +6,7 @@
 // read the frame's attributes and its document; the live smoke shows a script
 // blocked and an image refused in Electron.
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import SandboxedHtmlFrame, { SANDBOXED_HTML_CSP, sandboxedHtmlDocument } from '../SandboxedHtml';
@@ -24,9 +24,21 @@ function firstHeadChild(doc: string): Element | null {
   return parse(doc).head.firstElementChild;
 }
 
+/** The srcdoc for a page that can be previewed. */
+function docOf(html: string): string {
+  const doc = sandboxedHtmlDocument(html);
+  expect(doc).not.toBeNull();
+  return doc!;
+}
+
+/** A link the frame would act on as a resource hint. */
+function hints(doc: Document): string[] {
+  return [...doc.querySelectorAll('link')].map((l) => l.getAttribute('rel') ?? '').filter((rel) => /preconnect|dns-prefetch|prefetch|prerender|preload/i.test(rel));
+}
+
 describe('sandboxedHtmlDocument', () => {
   it('puts the CSP meta first in the head, ahead of anything the page could load', () => {
-    const doc = sandboxedHtmlDocument('<!doctype html><html lang="ko"><head><link rel="stylesheet" href="https://x.test/a.css"></head><body><img src="https://example.com/x.png"></body></html>');
+    const doc = docOf('<!doctype html><html lang="ko"><head><link rel="stylesheet" href="https://x.test/a.css"></head><body><img src="https://example.com/x.png"></body></html>');
     const meta = firstHeadChild(doc);
     expect(meta?.tagName).toBe('META');
     expect(meta?.getAttribute('http-equiv')).toBe('Content-Security-Policy');
@@ -38,13 +50,13 @@ describe('sandboxedHtmlDocument', () => {
 
   it('a fragment, a comment before the head or a fake head in an attribute still gets the meta first', () => {
     for (const html of ['<p>hi</p>', '<!-- <head> --><img src="https://x.test/p.gif">', '<div title="<head>"><img src=https://x.test/p.gif></div>', '']) {
-      const meta = firstHeadChild(sandboxedHtmlDocument(html));
+      const meta = firstHeadChild(docOf(html));
       expect(meta?.getAttribute('http-equiv')).toBe('Content-Security-Policy');
     }
   });
 
   it('drops resource hints and the page\'s own http-equiv metas, keeping its stylesheet links and other metas', () => {
-    const doc = parse(sandboxedHtmlDocument([
+    const doc = parse(docOf([
       '<head>',
       '<link rel="preconnect" href="https://a.test">',
       '<link rel="DNS-Prefetch" href="//b.test">',
@@ -68,6 +80,49 @@ describe('sandboxedHtmlDocument', () => {
     expect(doc.body.textContent).toBe('hi');
   });
 
+  it('markup that parses differently once written back is checked again: no hint survives the frame\'s own parse', () => {
+    const vectors = [
+      '<form><math><mtext></form><form><mglyph><style></math><link rel=preconnect href=https://x.test>',
+      '<math><mtext><table><mglyph><style><link rel=preconnect href=https://x.test></style></table></mtext></math>',
+      '<svg></p><style><a id="</style><link rel=preconnect href=https://x.test>">',
+      '<form><math><mtext></form><form><mglyph><style></math><meta http-equiv=refresh content="0;url=https://x.test/">',
+    ];
+    // The first vector is live in this parser: one strip-and-write leaves a
+    // real hint behind for the frame's parse.
+    const once = parse(vectors[0]);
+    for (const link of once.querySelectorAll('link')) link.remove();
+    expect(hints(parse(once.documentElement.outerHTML))).toEqual(['preconnect']);
+    for (const html of vectors) {
+      const doc = sandboxedHtmlDocument(html);
+      expect(doc).not.toBeNull();
+      const frame = parse(doc!);
+      expect(hints(frame)).toEqual([]);
+      const metas = [...frame.querySelectorAll('meta[http-equiv]')];
+      expect(metas.map((m) => m.getAttribute('content'))).toEqual([SANDBOXED_HTML_CSP]);
+      expect(frame.head.firstElementChild).toBe(metas[0]);
+      // And it stays that way: the written page is a fixed point.
+      expect(sandboxedHtmlDocument(doc!)).toBe(doc);
+    }
+  });
+
+  it('a page that never settles is refused (null: shown as source only)', () => {
+    const real = DOMParser.prototype.parseFromString;
+    // Every parse grows a fresh hint, as markup that mutates on each round would.
+    const spy = vi.spyOn(DOMParser.prototype, 'parseFromString').mockImplementation(function (this: DOMParser, source: string, type: DOMParserSupportedType) {
+      const doc = real.call(this, source, type);
+      const link = doc.createElement('link');
+      link.setAttribute('rel', 'preconnect');
+      link.setAttribute('href', 'https://x.test');
+      doc.body.append(link);
+      return doc;
+    });
+    try {
+      expect(sandboxedHtmlDocument('<p>hi</p>')).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('the policy loads nothing from the network: no default, data: images and fonts, inline styles', () => {
     expect(SANDBOXED_HTML_CSP).toContain("default-src 'none'");
     expect(SANDBOXED_HTML_CSP).toContain('img-src data:');
@@ -82,7 +137,7 @@ describe('SandboxedHtmlFrame', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const root = createRoot(el);
-    act(() => root.render(<SandboxedHtmlFrame html={'<p>hi</p><script>window.parent.ran = 1</script>'} title="Preview of page.html" />));
+    act(() => root.render(<SandboxedHtmlFrame srcDoc={docOf('<p>hi</p><script>window.parent.ran = 1</script>')} title="Preview of page.html" />));
     cleanups.push(() => { act(() => root.unmount()); el.remove(); });
     const frame = el.querySelector('iframe')!;
     expect(frame.hasAttribute('sandbox')).toBe(true);

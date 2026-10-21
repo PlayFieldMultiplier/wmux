@@ -410,6 +410,7 @@ describe('renderBrainMarkdown richCode (the Bots chat)', () => {
     expect(frame.getAttribute('sandbox')).toBe('');
     expect(frame.getAttribute('referrerpolicy')).toBe('no-referrer');
     expect(frame.getAttribute('srcdoc')).toContain('Content-Security-Policy');
+    expect(block.querySelector('[data-brain-md-html-note]')).not.toBeNull();
     expect(block.querySelector('pre')).toBeNull();
     act(() => code.click());
     expect(block.querySelector('iframe')).toBeNull();
