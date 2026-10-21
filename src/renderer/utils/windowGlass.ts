@@ -128,7 +128,13 @@ function windowsCoverage(
   return last.coverage.value;
 }
 
-function sync(root: HTMLElement, systemDark: boolean, last: SyncState, onAppearance?: (appearance: 'dark' | 'light') => void): void {
+function sync(
+  root: HTMLElement,
+  systemDark: boolean,
+  last: SyncState,
+  onAppearance?: (appearance: 'dark' | 'light') => void,
+  onGlassLevel?: (level: WindowGlassLevel) => void,
+): void {
   const style = getComputedStyle(root);
   const platform = window.electronAPI?.platform;
   const windowsBuild = window.electronAPI?.windowsBuildNumber ?? null;
@@ -168,21 +174,24 @@ function sync(root: HTMLElement, systemDark: boolean, last: SyncState, onAppeara
   if (win32 && level !== last.level) {
     last.level = level;
     window.electronAPI?.window?.setGlass?.({ level, ...(overlayColors() ?? {}) });
+    onGlassLevel?.(level);
   }
 }
 
 /**
  * Keep `data-glass` and the app's appearance in step with the theme, the glass
  * level and the appearance. `onAppearance` hears the theme's polarity on every
- * sync, for the session save.
+ * sync, and `onGlassLevel` each level sent to main on Windows ('off' while the
+ * theme blocks glass), both for the session save.
  */
 export function installWindowGlass(
   root: HTMLElement = document.documentElement,
   onAppearance?: (appearance: 'dark' | 'light') => void,
+  onGlassLevel?: (level: WindowGlassLevel) => void,
 ): () => void {
   const scheme = window.matchMedia?.('(prefers-color-scheme: dark)');
   const last: SyncState = { appearance: null, level: null, coverage: null };
-  const run = () => sync(root, scheme ? scheme.matches : true, last, onAppearance);
+  const run = () => sync(root, scheme ? scheme.matches : true, last, onAppearance, onGlassLevel);
   run();
   const observer = new MutationObserver(run);
   observer.observe(root, { attributes: true, attributeFilter: ['data-theme', 'style', 'data-glass-level'] });

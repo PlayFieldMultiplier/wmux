@@ -172,8 +172,11 @@ reads as a second, differently tinted panel.
   even opaque, is opaque on Windows as if glass were Off (material none, a
   solid caption strip), while the setting keeps the user's level. Nothing is
   pinned per theme, so a token change moves a theme in or out of glass on its
-  own. Where the legibility minimum sits above both floors (around 80–85% for
-  the themes that pass), Soft and Clear get the same frame coverage. On
+  own. Where the legibility minimum sits above both floors, Soft and Clear
+  get the same frame coverage. The level the window last showed is saved
+  (`windowGlassEffective`, beside the user's level), so main starts a theme
+  that blocks glass opaque instead of showing acrylic until the renderer
+  loads. On
   Windows the level switches the material at
   runtime: Off sets the material to none, the opaque frame background and
   a solid `titleBarOverlay` strip; Soft or Clear sets acrylic, a transparent

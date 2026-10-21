@@ -32,6 +32,8 @@ function paint(tokens: Record<string, string>): void {
   for (const [name, value] of Object.entries(tokens)) document.documentElement.style.setProperty(name, value);
 }
 
+const heardLevels: string[] = [];
+
 function mount(level: string, tokens: Record<string, string>, windowsBuildNumber: number | null, systemDark: boolean): () => void {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     platform: 'win32',
@@ -44,7 +46,7 @@ function mount(level: string, tokens: Record<string, string>, windowsBuildNumber
   const root = document.documentElement;
   paint(tokens);
   root.setAttribute('data-glass-level', level);
-  const stop = installWindowGlass(root);
+  const stop = installWindowGlass(root, undefined, (sent) => heardLevels.push(sent));
   installed.push(stop);
   return stop;
 }
@@ -53,6 +55,7 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
   installed.splice(0).forEach((stop) => stop());
+  heardLevels.length = 0;
   setAppearance.mockReset();
   setGlass.mockReset();
   const root = document.documentElement;
@@ -158,6 +161,15 @@ describe('installWindowGlass coverage on Windows', () => {
     expect(document.documentElement.getAttribute('data-glass')).toBe('dark');
     expect(inline('--glass-frame')).toBe('82%');
     expect(setGlass).toHaveBeenLastCalledWith(expect.objectContaining({ level: 'soft' }));
+    stop();
+  });
+
+  it('reports each level sent to main for the session save, Off while the look blocks glass', async () => {
+    const stop = mount('soft', MURKY, 26200, true);
+    expect(heardLevels).toEqual(['off']);
+    paint(TINT);
+    await flush();
+    expect(heardLevels).toEqual(['off', 'soft']);
     stop();
   });
 
