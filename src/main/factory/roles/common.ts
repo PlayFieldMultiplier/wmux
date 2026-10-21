@@ -59,6 +59,8 @@ export const COMMON_POWERS: Readonly<Record<string, string>> = {
   workflow_read: 'inspect your saved plans and their task/result bindings, including any blocked step that needs review.',
   workflow_advance: 'start at most one ready step from a saved plan with this wake idempotency key; a verified predecessor result unlocks the next step, while ambiguous dispatches remain blocked.',
   stop_my_work: 'stop your own running workers and saved workflows, and pause your routines, when the owner asks you to stop.',
+  // Adapted from NousResearch/hermes-agent@146963666 (agent/background_review.py), MIT: the update-before-add
+  // order and what a skill should not hold.
   skill_propose: 'write down a procedure you learned as a skill (SKILL.md), or update one you have; it loads only once the owner approves its card. Propose one only after the owner corrected how you work, or after a task of yours failed and then succeeded; routine work gets none. Update before you add: patch the skill you just used, else extend a broader one, else add a reference file to one; a new skill comes last. Keep a skill to the reusable procedure or lesson; task progress, one-off facts, secrets and what the repository already holds belong elsewhere.',
   skill_read: 'read one of your approved skills (the wake block lists them; with no name it lists them all) before work it covers.',
   memory_update: 'keep a short note for your later sessions: your own (target memory, saved at once) or about the owner (target user, which waits for the owner\'s approval card); both load when a session starts, and the owner sees them.',

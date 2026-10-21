@@ -9,6 +9,8 @@
 // control codes). A match is refused whole, never edited. Key-shaped values
 // are refused and stored secret values masked by botMemory.ts.
 
+// Adapted from NousResearch/hermes-agent@146963666 (tools/threat_patterns.py), MIT: the categories of this
+// table, the curl/wget secret-variable pattern and the invisible characters.
 const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // Overriding instructions.
   [/\b(?:ignore|disregard|forget|override|bypass)\b[^\n.]{0,40}\b(?:instructions?|prompts?|guidelines|directives)\b/i,
