@@ -13,12 +13,24 @@
 //             | { verifiedWorkspaceId, ok: true, tasks }       (the single form's reply)
 //             | { verifiedWorkspaceId, ok: false, error }> }   (that owner only)
 //
-// The reply is built under a size budget (MISSION_LIST_BATCH_MAX_CHARS). An
-// owner that did not fit comes back as `{ ok: false, error: { code:
-// 'DEFERRED' } }`, and listMissionsByOwner asks for it again in a follow-up
-// batch. The first owner a reply reaches is always answered, so every call
-// makes progress and an owner whose list alone is over the budget is
-// answered alone.
+// Reply size: the daemon -> main control pipe drops a line longer than
+// DAEMON_CONTROL_LINE_MAX_CHARS and the request then times out with no error,
+// and a reply carries every task of every owner it answers (closed tasks
+// until their 7-day GC; detached ones stay). So the daemon builds the reply
+// to two limits:
+//   - a soft budget (MISSION_LIST_BATCH_MAX_CHARS) for the answered owners.
+//     Owners past it come back DEFERRED and listMissionsByOwner asks for them
+//     again in a follow-up batch. The first owner a reply reaches is always
+//     settled (answered, or REPLY_TOO_LARGE below), so every call makes
+//     progress.
+//   - a hard ceiling for the whole line (MISSION_LIST_REPLY_MAX_CHARS),
+//     counted with the entries of the owners it does not answer. An owner
+//     whose answer could not share a line with a full batch of them
+//     (MISSION_LIST_OWNER_MAX_CHARS in daemon/worktask/missionListBatch.ts)
+//     comes back REPLY_TOO_LARGE, with the size of its single-form reply, and
+//     never holds up the owners after it. listMissionsByOwner reads that owner
+//     with the single form when that reply fits a line, and otherwise leaves
+//     its cached missions as they are.
 //
 // Who may batch: only main's own reads and the renderer operator. The daemon
 // refuses a batch that carries a `senderPtyId`, and main's pipe router refuses
@@ -31,34 +43,41 @@
 // single-form call per owner, so a stale daemon that outlived an app update
 // keeps working until it is replaced.
 
+import { DAEMON_CONTROL_LINE_MAX_CHARS } from './daemonControlLine';
+
 /**
  * Most owners one batched call may name. Above it the daemon refuses the call
  * (callers chunk). It bounds the work one request can ask for; the reply's
- * size is bounded by MISSION_LIST_BATCH_MAX_CHARS. 128 keeps a ~100-workspace
+ * size is bounded by the limits below. 128 keeps a ~100-workspace
  * window to one call.
  */
 export const MISSION_LIST_BATCH_MAX = 128;
 
 /**
- * Size budget, in JSON characters, for the answered owners of one batched
- * reply. The daemon -> main control pipe drops a line longer than 1 MB
- * (DaemonClient MAX_LINE_BUFFER, compared against the decoded string's
- * length, the unit JSON.stringify's length counts too), and the request then
- * times out with no error. A reply carries every task of every owner it
- * answers, closed tasks included until their 7-day GC, so without a budget a
- * large window could cross that line on every pass and its missions would
- * never refresh. 256K is a quarter of the line: the rest covers the envelope
- * and up to MISSION_LIST_BATCH_MAX deferred entries (under 200 characters each).
- * A WorkTask serializes to roughly 0.4-1K, so one reply still holds several
- * hundred tasks. The one owner a reply always answers may exceed it; that
- * reply is then the size of the owner's single-form reply, which has always
- * had the same 1 MB ceiling (256 open tasks plus any closed ones; not
- * bounded below the line, as before).
+ * Soft budget, in JSON characters, for the answered owners of one batched
+ * reply. 256K is a quarter of a control-pipe line. A WorkTask serializes to
+ * roughly 0.4-1K, so one reply still holds several hundred tasks; a window
+ * with more than that takes a follow-up batch or two.
  */
 export const MISSION_LIST_BATCH_MAX_CHARS = 256 * 1024;
 
-/** Per-owner code for an owner left out of a batch reply by the size budget. */
+/**
+ * Hard ceiling for a whole reply line, in characters. It leaves the control
+ * pipe's 1 MB 64K of slack, because DaemonClient checks its buffer after
+ * appending a whole read and the read that ends this line can carry the start
+ * of the next one, and 1K for the `{ id, ok, result }` envelope.
+ */
+export const MISSION_LIST_REPLY_MAX_CHARS = DAEMON_CONTROL_LINE_MAX_CHARS - 64 * 1024 - 1024;
+
+/** Longest owner id a batch answers; a longer one is refused for itself. */
+export const MISSION_LIST_ID_MAX_CHARS = 256;
+
+/** Per-owner code for an owner left out of a reply by the soft budget: ask again. */
 export const MISSION_LIST_DEFERRED = 'DEFERRED';
+
+/** Per-owner code for an owner whose answer cannot share a line with the
+ *  rest of a batch (`error.chars`: its single-form reply's length). */
+export const MISSION_LIST_REPLY_TOO_LARGE = 'REPLY_TOO_LARGE';
 
 /** One `task.mission.list` call: the daemon's reply, transport envelope removed. */
 export type MissionListCall = (params: Record<string, unknown>) => Promise<unknown>;
@@ -75,9 +94,15 @@ function isOldDaemonRefusal(reply: unknown): boolean {
   return r.ok === false && r.error?.code === 'NOT_AUTHORIZED';
 }
 
-function isDeferred(entry: object): boolean {
-  const error = (entry as { ok?: unknown; error?: { code?: unknown } | null }).error;
-  return (entry as { ok?: unknown }).ok === false && error?.code === MISSION_LIST_DEFERRED;
+function errorCode(entry: object): unknown {
+  if ((entry as { ok?: unknown }).ok !== false) return undefined;
+  return (entry as { error?: { code?: unknown } | null }).error?.code;
+}
+
+/** The single-form reply length a REPLY_TOO_LARGE entry reports, or null. */
+function singleFormChars(entry: object): number | null {
+  const chars = (entry as { error?: { chars?: unknown } | null }).error?.chars;
+  return typeof chars === 'number' && Number.isFinite(chars) ? chars : null;
 }
 
 /**
@@ -85,7 +110,8 @@ function isDeferred(entry: object): boolean {
  * MISSION_LIST_BATCH_MAX owners, plus a follow-up batch for the owners a
  * reply deferred over its size budget. Returns owner -> that owner's reply in
  * the single form's shape (`{ ok: true, tasks }`, or `{ ok: false, error }`).
- * An owner whose read failed in transport is absent. Never throws.
+ * An owner whose read failed in transport, or whose missions are too large
+ * for any reply line, is absent. Never throws.
  */
 export async function listMissionsByOwner(
   call: MissionListCall,
@@ -94,6 +120,13 @@ export async function listMissionsByOwner(
   const out = new Map<string, unknown>();
   let pending = [...new Set(owners.filter((o) => typeof o === 'string' && o.length > 0))];
   let batchUnsupported = false;
+  const readSingle = async (owner: string): Promise<void> => {
+    try {
+      out.set(owner, await call({ verifiedWorkspaceId: owner }));
+    } catch {
+      /* this owner only; the next pass retries */
+    }
+  };
   while (pending.length > 0) {
     const chunk = pending.slice(0, MISSION_LIST_BATCH_MAX);
     const rest = pending.slice(MISSION_LIST_BATCH_MAX);
@@ -111,16 +144,27 @@ export async function listMissionsByOwner(
       if (results) {
         const asked = new Set(chunk);
         const deferred = new Set<string>();
+        const alone: string[] = [];
         for (const entry of results) {
           if (!entry || typeof entry !== 'object') continue;
           const owner = (entry as { verifiedWorkspaceId?: unknown }).verifiedWorkspaceId;
           if (typeof owner !== 'string' || !asked.has(owner)) continue;
-          if (isDeferred(entry)) deferred.add(owner);
-          else out.set(owner, entry);
+          const code = errorCode(entry);
+          if (code === MISSION_LIST_DEFERRED) {
+            deferred.add(owner);
+          } else if (code === MISSION_LIST_REPLY_TOO_LARGE) {
+            // The single form answers it on a line of its own when that fits;
+            // past the line it would only time out, so its cache stays.
+            const chars = singleFormChars(entry);
+            if (chars !== null && chars <= MISSION_LIST_REPLY_MAX_CHARS) alone.push(owner);
+          } else {
+            out.set(owner, entry);
+          }
         }
+        for (const owner of alone) await readSingle(owner);
         const again = [...deferred].filter((o) => !out.has(o));
-        // The daemon answers at least one owner per reply; a reply that
-        // answered none would loop forever, so its owners wait for the next pass.
+        // The daemon settles at least one owner per reply; a reply that
+        // settled none would loop forever, so its owners wait for the next pass.
         if (again.length < chunk.length) pending = [...again, ...rest];
         continue;
       }
@@ -130,13 +174,7 @@ export async function listMissionsByOwner(
       if (!isOldDaemonRefusal(reply)) continue;
       batchUnsupported = true;
     }
-    for (const owner of chunk) {
-      try {
-        out.set(owner, await call({ verifiedWorkspaceId: owner }));
-      } catch {
-        /* this owner only; the next pass retries */
-      }
-    }
+    for (const owner of chunk) await readSingle(owner);
   }
   return out;
 }

@@ -16,9 +16,12 @@ import {
   MISSION_LIST_BATCH_MAX,
   MISSION_LIST_BATCH_MAX_CHARS,
   MISSION_LIST_DEFERRED,
+  MISSION_LIST_ID_MAX_CHARS,
+  MISSION_LIST_REPLY_MAX_CHARS,
+  MISSION_LIST_REPLY_TOO_LARGE,
 } from '../../shared/missionListBatch';
 
-type ErrorReply = { ok: false; error: { code: string; message: string } };
+type ErrorReply = { ok: false; error: { code: string; message: string; chars?: number } };
 
 export type MissionListBatchEntry =
   | { verifiedWorkspaceId: string; ok: true; tasks: WorkTask[] }
@@ -28,18 +31,54 @@ export type MissionListBatchReply = { ok: true; results: MissionListBatchEntry[]
 
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 
+const badId = (verifiedWorkspaceId: string): MissionListBatchEntry => ({
+  verifiedWorkspaceId,
+  ok: false,
+  error: { code: 'NOT_AUTHORIZED', message: 'task.mission.list: a server-resolved verifiedWorkspaceId is required' },
+});
+
 const deferred = (verifiedWorkspaceId: string): MissionListBatchEntry => ({
   verifiedWorkspaceId,
   ok: false,
   error: { code: MISSION_LIST_DEFERRED, message: 'task.mission.list: past this reply size budget, ask again' },
 });
 
+const tooLarge = (verifiedWorkspaceId: string, chars: number): MissionListBatchEntry => ({
+  verifiedWorkspaceId,
+  ok: false,
+  error: {
+    code: MISSION_LIST_REPLY_TOO_LARGE,
+    message: 'task.mission.list: this owner alone is too large for a batch reply; use the single form',
+    chars,
+  },
+});
+
+/** Characters one entry adds to the reply line (its JSON and a comma). */
+const entryChars = (entry: MissionListBatchEntry): number => JSON.stringify(entry).length + 1;
+
+/** The most a reply entry that answers no owner can take: the longest of the
+ *  three, with the longest id a batch echoes and a 9-digit size. */
+const MAX_STUB_CHARS = Math.max(
+  entryChars(badId('x'.repeat(MISSION_LIST_ID_MAX_CHARS))),
+  entryChars(deferred('x'.repeat(MISSION_LIST_ID_MAX_CHARS))),
+  entryChars(tooLarge('x'.repeat(MISSION_LIST_ID_MAX_CHARS), 999_999_999)),
+);
+
+/**
+ * The largest answer one owner can have in a batch: what is left of a reply
+ * line after the entries of a full batch's other owners. Over it the owner is
+ * REPLY_TOO_LARGE for every batch, wherever it sits, so it never shares a
+ * line it would push past the cap, and never holds up the owners after it.
+ */
+export const MISSION_LIST_OWNER_MAX_CHARS = MISSION_LIST_REPLY_MAX_CHARS - MISSION_LIST_BATCH_MAX * MAX_STUB_CHARS;
+
 /**
  * Answer a `task.mission.list` request that carries `verifiedWorkspaceIds`.
- * Owners are answered in order while their tasks fit `budgetChars` (JSON
- * characters, see MISSION_LIST_BATCH_MAX_CHARS); the rest come back DEFERRED
- * for the caller to ask again. The first owner is always answered, so an
- * owner over the budget on its own gets a reply of its own.
+ * Owners are answered in order while their answers fit `budgetChars` (see
+ * MISSION_LIST_BATCH_MAX_CHARS) and the whole line stays within
+ * MISSION_LIST_REPLY_MAX_CHARS; the rest come back DEFERRED for the caller to
+ * ask again. The first owner is always answered unless its answer is over
+ * MISSION_LIST_OWNER_MAX_CHARS, in which case it is REPLY_TOO_LARGE.
  */
 export function listMissionsBatch(
   params: Record<string, unknown>,
@@ -82,16 +121,16 @@ export function listMissionsBatch(
   }
   const results: MissionListBatchEntry[] = [];
   const seen = new Set<string>();
+  // Every entry is reserved at the size of an entry that answers nobody; an
+  // answered owner then adds the difference.
+  let lineLeft = MISSION_LIST_REPLY_MAX_CHARS - ids.length * MAX_STUB_CHARS;
   let used = 0;
   let answered = 0;
   for (const id of ids) {
-    if (!nonEmpty(id)) {
+    if (!nonEmpty(id) || id.length > MISSION_LIST_ID_MAX_CHARS) {
       // This entry only: the same refusal the single form gives a missing id.
-      results.push({
-        verifiedWorkspaceId: typeof id === 'string' ? id : '',
-        ok: false,
-        error: { code: 'NOT_AUTHORIZED', message: 'task.mission.list: a server-resolved verifiedWorkspaceId is required' },
-      });
+      // An overlong id is not echoed, so no entry outgrows MAX_STUB_CHARS.
+      results.push(badId(typeof id === 'string' && id.length <= MISSION_LIST_ID_MAX_CHARS ? id : ''));
       continue;
     }
     if (seen.has(id)) continue;
@@ -101,14 +140,20 @@ export function listMissionsBatch(
       continue;
     }
     const tasks = listMissions(id);
-    const size = JSON.stringify(tasks).length;
-    if (answered > 0 && used + size > budgetChars) {
+    const entry: MissionListBatchEntry = { verifiedWorkspaceId: id, ok: true, tasks };
+    const size = entryChars(entry);
+    if (size > MISSION_LIST_OWNER_MAX_CHARS) {
+      results.push(tooLarge(id, JSON.stringify({ ok: true, verifiedWorkspaceId: id, tasks }).length));
+      continue;
+    }
+    if ((answered > 0 && used + size > budgetChars) || size - MAX_STUB_CHARS > lineLeft) {
       results.push(deferred(id));
       continue;
     }
+    lineLeft -= size - MAX_STUB_CHARS;
     used += size;
     answered += 1;
-    results.push({ verifiedWorkspaceId: id, ok: true, tasks });
+    results.push(entry);
   }
   return { ok: true, results };
 }

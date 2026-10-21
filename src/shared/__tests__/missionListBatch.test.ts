@@ -3,8 +3,14 @@
 // daemon that predates the batch.
 
 import { describe, it, expect, vi } from 'vitest';
-import { listMissionsByOwner, MISSION_LIST_BATCH_MAX, type MissionListCall } from '../missionListBatch';
-import { listMissionsBatch } from '../../daemon/worktask/missionListBatch';
+import {
+  listMissionsByOwner,
+  MISSION_LIST_BATCH_MAX,
+  MISSION_LIST_REPLY_MAX_CHARS,
+  type MissionListCall,
+} from '../missionListBatch';
+import { listMissionsBatch, MISSION_LIST_OWNER_MAX_CHARS } from '../../daemon/worktask/missionListBatch';
+import { DAEMON_CONTROL_LINE_MAX_CHARS } from '../daemonControlLine';
 import type { WorkTask } from '../workTask';
 
 const tasksOf = (owner: string): WorkTask[] =>
@@ -166,6 +172,54 @@ describe('listMissionsByOwner', () => {
       const out = await listMissionsByOwner(call, owners(3));
       expect(call).toHaveBeenCalledTimes(1);
       expect(out.size).toBe(0);
+    });
+  });
+
+  // Round-1 review P2: one owner near the line must not hold up the owners
+  // after it. It is settled on its own (REPLY_TOO_LARGE), and read with the
+  // single form only when that reply fits a line.
+  describe('one owner too large to share a batch reply', () => {
+    /** 1000 tasks for `owner` whose batch entry is `target` characters or up to 1000 below. */
+    const ownerOfSize = (owner: string, target: number): WorkTask[] => {
+      const make = (len: number): WorkTask[] =>
+        Array.from({ length: 1000 }, (_, i) => ({
+          id: `t-${owner}-${i}`,
+          title: 'h'.repeat(len),
+          status: 'open',
+          owner: { verifiedWorkspaceId: owner },
+        })) as unknown as WorkTask[];
+      const entry = (t: WorkTask[]): number => JSON.stringify({ verifiedWorkspaceId: owner, ok: true, tasks: t }).length + 1;
+      return make(Math.floor((target - entry(make(0))) / 1000));
+    };
+
+    it.each([
+      ['first', 0, 'fits a single-form line', MISSION_LIST_OWNER_MAX_CHARS + 10_000],
+      ['in the middle', 50, 'fits a single-form line', MISSION_LIST_OWNER_MAX_CHARS + 10_000],
+      ['first', 0, 'is past any line', DAEMON_CONTROL_LINE_MAX_CHARS - 20_000],
+      ['in the middle', 50, 'is past any line', DAEMON_CONTROL_LINE_MAX_CHARS - 20_000],
+    ] as const)('heavy owner %s (index %i) whose list %s: every other owner refreshes', async (_w, at, fit, size) => {
+      const ids = owners(100);
+      const heavyId = ids[at];
+      const heavy = ownerOfSize(heavyId, size);
+      const fitsLine = JSON.stringify({ ok: true, verifiedWorkspaceId: heavyId, tasks: heavy }).length <= MISSION_LIST_REPLY_MAX_CHARS;
+      expect(fitsLine).toBe(fit === 'fits a single-form line');
+      const list = (o: string): WorkTask[] => (o === heavyId ? heavy : tasksOf(o));
+      const call = vi.fn<MissionListCall>(async (p) => {
+        if (p.verifiedWorkspaceIds !== undefined) return listMissionsBatch(p, list);
+        const id = p.verifiedWorkspaceId as string;
+        return { ok: true, verifiedWorkspaceId: id, tasks: list(id) };
+      });
+      const out = await listMissionsByOwner(call, ids);
+      for (const id of ids) if (id !== heavyId) expect((out.get(id) as { tasks: unknown }).tasks).toEqual(tasksOf(id));
+      const singles = call.mock.calls.filter((c) => c[0].verifiedWorkspaceId !== undefined).map((c) => c[0].verifiedWorkspaceId);
+      if (fitsLine) {
+        expect(singles).toEqual([heavyId]);
+        expect((out.get(heavyId) as { tasks: unknown[] }).tasks).toHaveLength(1000);
+      } else {
+        // Its single-form reply would be dropped and time out: not asked, cache kept.
+        expect(singles).toEqual([]);
+        expect(out.has(heavyId)).toBe(false);
+      }
     });
   });
 });

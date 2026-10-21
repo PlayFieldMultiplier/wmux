@@ -3,8 +3,13 @@
 // pane caller.
 
 import { describe, it, expect, vi } from 'vitest';
-import { listMissionsBatch } from '../missionListBatch';
-import { MISSION_LIST_BATCH_MAX, MISSION_LIST_BATCH_MAX_CHARS } from '../../../shared/missionListBatch';
+import { listMissionsBatch, MISSION_LIST_OWNER_MAX_CHARS } from '../missionListBatch';
+import {
+  MISSION_LIST_BATCH_MAX,
+  MISSION_LIST_BATCH_MAX_CHARS,
+  MISSION_LIST_REPLY_MAX_CHARS,
+} from '../../../shared/missionListBatch';
+import { DAEMON_CONTROL_LINE_MAX_CHARS } from '../../../shared/daemonControlLine';
 import type { WorkTask } from '../../../shared/workTask';
 
 function task(id: string, owner: string): WorkTask {
@@ -74,7 +79,9 @@ describe('listMissionsBatch', () => {
     /** `n` tasks for `owner`, each about `pad` characters of title. */
     const bulky = (owner: string, n: number, pad: number): WorkTask[] =>
       Array.from({ length: n }, (_, i) => ({ ...task(`${owner}-t${i}`, owner), title: 'x'.repeat(pad) }));
-    const sizeOf = (tasks: WorkTask[]): number => JSON.stringify(tasks).length;
+    /** What one answered owner adds to the reply (its entry and a comma). */
+    const sizeOf = (tasks: WorkTask[]): number =>
+      JSON.stringify({ verifiedWorkspaceId: tasks[0].owner.verifiedWorkspaceId, ok: true, tasks }).length + 1;
 
     it('answers owners in order while they fit and defers the rest', () => {
       const lists: Record<string, WorkTask[]> = { a: bulky('a', 3, 100), b: bulky('b', 3, 100), c: bulky('c', 3, 100) };
@@ -100,15 +107,18 @@ describe('listMissionsBatch', () => {
     });
 
     it('with the default budget, a full batch of heavy owners stays well under the 1 MB control-pipe line', () => {
-      // 128 owners x 20 tasks with long titles and paths: ~3 MB if sent whole.
+      // 128 owners x 20 tasks with long titles and paths: ~1.4 MB if sent whole.
       const heavy = (owner: string): WorkTask[] =>
         Array.from({ length: 20 }, (_, i) => ({
           ...task(`${owner}-t${i}`, owner),
           title: 'y'.repeat(200),
           branch: `wmux/task-${owner}-${i}`,
-          worktreePath: `C:\Users\someone\.wmux\worktrees\${'r'.repeat(60)}\task-${i}`,
+          worktreePath: ['C:', 'Users', 'someone', '.wmux', 'worktrees', 'r'.repeat(60), `task-${i}`].join('\\'),
           paneGroupId: `ws-task-${owner}-${i}`,
         })) as WorkTask[];
+      expect(heavy('o')[3].worktreePath).toBe(`C:\\Users\\someone\\.wmux\\worktrees\\${'r'.repeat(60)}\\task-3`);
+      const whole = JSON.stringify(Array.from({ length: MISSION_LIST_BATCH_MAX }, (_, i) => heavy(`o${i}`))).length;
+      expect(whole).toBeGreaterThan(DAEMON_CONTROL_LINE_MAX_CHARS);
       const ids = Array.from({ length: MISSION_LIST_BATCH_MAX }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
       let asked = ids;
       const answered: string[] = [];
@@ -119,13 +129,82 @@ describe('listMissionsBatch', () => {
         // What the daemon writes on the control pipe for this reply.
         const line = JSON.stringify({ id: 'req-1', ok: true, result: reply });
         expect(line.length).toBeLessThan(MISSION_LIST_BATCH_MAX_CHARS + 64 * 1024);
-        expect(line.length).toBeLessThan(1024 * 1024);
+        expect(line.length).toBeLessThanOrEqual(MISSION_LIST_REPLY_MAX_CHARS);
         if (!reply.ok) throw new Error('refused');
         answered.push(...reply.results.filter((r) => r.ok).map((r) => r.verifiedWorkspaceId));
         asked = reply.results.filter((r) => !r.ok).map((r) => r.verifiedWorkspaceId);
       }
       expect(calls).toBeGreaterThan(1);
       expect(answered).toEqual(ids);
+    });
+
+    describe('hard ceiling: one owner near the control-pipe line', () => {
+      const ids = Array.from({ length: MISSION_LIST_BATCH_MAX }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+      /** What the daemon writes on the control pipe for `reply`. */
+      const lineOf = (reply: unknown): number => JSON.stringify({ id: 'req-12345', ok: true, result: reply }).length;
+      /** 1000 tasks for `owner` whose batch entry is `target` characters or up to 1000 below. */
+      const ownerOfSize = (owner: string, target: number): WorkTask[] => {
+        const make = (len: number): WorkTask[] =>
+          Array.from({ length: 1000 }, (_, i) => ({ ...task(`${owner}-t${i}`, owner), title: 'h'.repeat(len) }));
+        const entry = (t: WorkTask[]): number => JSON.stringify({ verifiedWorkspaceId: owner, ok: true, tasks: t }).length + 1;
+        return make(Math.floor((target - entry(make(0))) / 1000));
+      };
+
+      it('the ceiling sits under the line and leaves room for a full batch of the other owners', () => {
+        expect(MISSION_LIST_REPLY_MAX_CHARS).toBeLessThan(DAEMON_CONTROL_LINE_MAX_CHARS);
+        expect(MISSION_LIST_OWNER_MAX_CHARS).toBeLessThan(MISSION_LIST_REPLY_MAX_CHARS);
+        expect(MISSION_LIST_OWNER_MAX_CHARS).toBeGreaterThan(MISSION_LIST_REPLY_MAX_CHARS - 128 * 1024);
+      });
+
+      it.each([
+        ['first', 0],
+        ['in the middle', 64],
+      ] as const)('an owner over it %s is REPLY_TOO_LARGE and every other owner still refreshes', (_where, at) => {
+        const heavyId = ids[at];
+        const heavy = ownerOfSize(heavyId, DAEMON_CONTROL_LINE_MAX_CHARS - 20_000);
+        const list = (o: string): WorkTask[] => (o === heavyId ? heavy : [task(`${o}-t`, o)]);
+        let asked = ids;
+        const answered: string[] = [];
+        let tooLarge: { code: string; chars?: number } | null = null;
+        while (asked.length > 0) {
+          const reply = listMissionsBatch({ verifiedWorkspaceIds: asked }, list);
+          expect(lineOf(reply)).toBeLessThanOrEqual(MISSION_LIST_REPLY_MAX_CHARS);
+          if (!reply.ok) throw new Error('refused');
+          for (const r of reply.results) {
+            if (r.ok) answered.push(r.verifiedWorkspaceId);
+            else if (r.error.code === 'REPLY_TOO_LARGE') tooLarge = r.error;
+          }
+          asked = reply.results.filter((r) => !r.ok && r.error.code === 'DEFERRED').map((r) => r.verifiedWorkspaceId);
+        }
+        expect(answered).toEqual(ids.filter((id) => id !== heavyId));
+        // It carries the size of the owner's single-form reply.
+        expect(tooLarge?.chars).toBe(JSON.stringify({ ok: true, verifiedWorkspaceId: heavyId, tasks: heavy }).length);
+      });
+
+      it('an owner just under it, first in a full batch, shares the line with every other entry and stays under the cap', () => {
+        const heavyId = ids[0];
+        const heavy = ownerOfSize(heavyId, MISSION_LIST_OWNER_MAX_CHARS);
+        // The other owners' ids are as long as a batch echoes, so their
+        // DEFERRED entries are as large as they get.
+        const others = Array.from({ length: MISSION_LIST_BATCH_MAX - 1 }, (_, i) => `${String(i).padStart(4, '0')}${'w'.repeat(252)}`);
+        const reply = listMissionsBatch(
+          { verifiedWorkspaceIds: [heavyId, ...others] },
+          (o) => (o === heavyId ? heavy : [task(`${o.slice(0, 4)}-t`, o)]),
+        );
+        expect(reply.ok).toBe(true);
+        if (!reply.ok) return;
+        expect(reply.results[0].ok).toBe(true);
+        expect(reply.results.slice(1).every((r) => !r.ok && r.error.code === 'DEFERRED')).toBe(true);
+        expect(lineOf(reply)).toBeLessThanOrEqual(MISSION_LIST_REPLY_MAX_CHARS);
+      });
+
+      it('an id longer than a batch echoes is refused for itself, not echoed', () => {
+        const reply = listMissionsBatch({ verifiedWorkspaceIds: ['ws-a', 'q'.repeat(10_000)] }, listMissions);
+        expect(reply.ok && reply.results.map((r) => [r.verifiedWorkspaceId, r.ok])).toEqual([
+          ['ws-a', true],
+          ['', false],
+        ]);
+      });
     });
   });
 });
