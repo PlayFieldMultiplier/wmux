@@ -79,6 +79,13 @@ export function isCoordinatorBot(profile: { template?: BotTemplate; role: BotRol
   return !!profile && botTemplate(profile) === 'coordinator';
 }
 
+/** Whether the bot takes a turn on what it is sent now: enabled, and not
+ *  parked by the owner or for an error (BotRuntime skips such a bot until it
+ *  is resumed; a budget park still runs the owner's messages). Pure. */
+export function botTakesTurns(profile: Pick<BotProfile, 'enabled' | 'parked'> | null | undefined): boolean {
+  return !!profile && profile.enabled && (!profile.parked || profile.parked.reason === 'budget');
+}
+
 /** The bot's new piece of work handed off from its own 1:1 or a group chat
  *  opens a request thread there (main/factory/handoffRouter.ts), which the
  *  conversation shows folded into one work card (shared/botsWork.ts): the
