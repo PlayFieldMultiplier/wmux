@@ -999,6 +999,7 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
   const exists = ports.exists ?? defaultExists;
   if (exists(rec.path)) return false;
   const now = ports.now ?? Date.now;
+  let prepSkipped = false;
   if (rec.kind === 'research') {
     try {
       await (ports.makeDir ?? ((d: string) => fs.promises.mkdir(d, { recursive: true }).then(() => undefined)))(rec.path);
@@ -1020,6 +1021,7 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
       await ports.store.put({ ...rec, state: 'restored', prepFailed: true, at: now() }).catch(() => undefined);
       const prep = await ports.prepare(taskId, rec.repoRoot, rec.path).catch((err: unknown) => ({ status: 'failed', error: String(err) }));
       noteSkippedPrep(ports, taskId, prep);
+      prepSkipped = prep.status === 'skipped';
       if (prep.status === 'failed') {
         (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put away again: its setup failed: ${prep.error ?? 'unknown'}`);
         // Nothing has worked in it since it was put back: what is there is
@@ -1040,16 +1042,22 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
     }
   }
   const { prepFailed: _prepared, ...restored } = rec;
-  await ports.store.put({ ...restored, state: 'restored', at: now() }).catch(() => undefined);
+  // A setup that did not run (not approved) leaves the folder unprepared, so
+  // the next resume after the approval prepares it.
+  await ports.store.put({ ...restored, ...(prepSkipped ? { prepFailed: true as const } : {}), state: 'restored', at: now() }).catch(() => undefined);
   ports.changed?.();
   return true;
 }
 
-/** A preparation that did not run is never silent (trust revoked, or the
- *  project's wmux.json edited since it was approved). */
+/** A preparation that did not run is never silent (trust revoked, the
+ *  project's wmux.json edited since it was approved, or its setup and copy
+ *  settings waiting for one re-approval). */
 function noteSkippedPrep(ports: TaskFolderPorts, taskId: string, prep: { status: string; reason?: string }): void {
   if (prep.status !== 'skipped') return;
-  (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put back without its setup: the project's wmux.json is ${prep.reason ?? 'not approved'}`);
+  const why = prep.reason === 'needs-review'
+    ? 'its setup waits for one re-approval of wmux.json'
+    : `the project's wmux.json is ${prep.reason ?? 'not approved'}`;
+  (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put back without its setup: ${why}`);
 }
 
 /**

@@ -212,11 +212,19 @@ export interface ProjectConfigState {
    */
   unattended?: boolean;
   /**
-   * Set while `trust === 'trusted'`: false when the grant predates the copy
-   * settings (`fanout.copy`, `fanout.copyIntoAutomated`) and so does not
-   * cover them; their copying waits for a new approval.
+   * Set while `trust === 'trusted'`: false when the grant was made before the
+   * trust dialog listed the new workspace preparation (the setup command and
+   * the copy settings), so it does not cover them: they are skipped with
+   * reason `needs-review` until the file is approved once more.
    */
   prepReviewed?: boolean;
+}
+
+/** A trusted project whose setup command or copy list waits for that one
+ *  re-approval (the badge stays visible, like any verdict to act on). */
+export function prepAwaitsReview(state: ProjectConfigState): boolean {
+  const f = state.config?.fanout;
+  return state.trust === 'trusted' && state.prepReviewed !== true && ((f?.copy?.length ?? 0) > 0 || f?.setup !== undefined);
 }
 
 // ── Field validators ─────────────────────────────────────────────────────────

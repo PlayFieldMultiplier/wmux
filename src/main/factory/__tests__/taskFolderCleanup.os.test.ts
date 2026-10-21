@@ -202,6 +202,15 @@ describe('cleanTaskFolder', () => {
     expect(p.store.get('wtask-abc-12345678')?.prepFailed).toBeUndefined();
   });
 
+  it('a folder put back while its setup waits for a re-approval stays unprepared for the next resume', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr);
+    const p = ports({ prepare: async () => ({ status: 'skipped', reason: 'needs-review' }) });
+    expect(await cleanTaskFolder(p, row('completed'), { folder: wt, branch: 'wtask/perf-a-12345678' }, [])).toBe('removed');
+    expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(true);
+    expect(p.store.get('wtask-abc-12345678')).toMatchObject({ state: 'restored', prepFailed: true });
+  });
+
   it('a cleanup pass keeps the not-prepared mark of a folder it cannot remove', async () => {
     const mgr = new TaskWorktreeManager();
     const wt = await taskWorktree(mgr);

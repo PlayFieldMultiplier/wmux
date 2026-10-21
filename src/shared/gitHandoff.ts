@@ -143,6 +143,15 @@ export interface HandoffPrepNotice {
   refused: number;
 }
 
+/** The toast a worktree's preparation notice reads as (renderer i18n key + values). */
+export function prepNoticeToast(n: HandoffPrepNotice): { key: 'git.prepMalformed' | 'git.prepNeedsReview' | 'git.prepSkipped' | 'git.prepGapsShort'; values?: Record<string, number> } | null {
+  if (n.skipped === 'malformed') return { key: 'git.prepMalformed' };
+  if (n.skipped === 'needs-review') return { key: 'git.prepNeedsReview' };
+  if (n.skipped) return { key: 'git.prepSkipped' };
+  if (n.missing + n.refused > 0) return { key: 'git.prepGapsShort', values: { missing: n.missing, refused: n.refused } };
+  return null;
+}
+
 export type HandoffStartResult =
   | { ok: true; linkId: string; workspaceId: string; branch: string; prep?: HandoffPrepNotice }
   | { ok: false; code: 'in-progress'; inProgress: HandoffInProgress }

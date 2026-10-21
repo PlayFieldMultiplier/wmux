@@ -409,12 +409,12 @@ export const FANOUT_DEPENDENCY_WAIT_MS = 12 * 60 * 60 * 1000;
  *  set it. `review_requested` is the worker's own "done, gate passed". */
 const DEPENDENCY_DONE_STATUSES: readonly string[] = ['review_requested', 'completed'];
 
-/** Said once per fan-out when the project lists config files but keeps them
- *  out of fan-out and bot worktrees (the default). */
 /** Said once when the project's setup and copy settings wait for one re-approval. */
 export const FANOUT_PREP_REVIEW_WARNING =
   "the repository's setup command and copy settings (fanout.setup, fanout.copy) did not run: approve wmux.json once more in its trust dialog to run them";
 
+/** Said once per fan-out when the project lists config files but keeps them
+ *  out of fan-out and bot worktrees (the default). */
 export const FANOUT_COPY_BLOCKED_WARNING =
   "the repository's config files (fanout.copy) were not copied into these worktrees: copying into bot and fan-out workspaces is off for this project";
 

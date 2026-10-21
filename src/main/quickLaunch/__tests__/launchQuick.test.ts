@@ -45,6 +45,14 @@ describe('launchQuick', () => {
     expect(req.roles).toBeUndefined();
   });
 
+  it('says a skipped setup in the main window, since the composer closes on start', async () => {
+    const send = vi.fn();
+    h.startGuiFanOut.mockResolvedValueOnce({ ok: true, setupSkipped: 'needs-review', tasks: [{ index: 0, title: 't', ok: true }] });
+    const win = { isDestroyed: () => false, webContents: { send } };
+    await launchQuick({ prompt: 'fix it', workspaceId: 'ws-1', agent: { kind: 'agent', agent: 'codex' }, checkout: 'worktree' }, { ...deps, getMainWindow: () => win as never });
+    expect(send).toHaveBeenCalledWith('workspace-prep:notice', { skipped: 'needs-review', missing: 0, refused: 0 });
+  });
+
   it('starts a worktree task on a role', async () => {
     await launchQuick({ prompt: 'review', workspaceId: 'ws-1', agent: { kind: 'role', role: 'Reviewer' }, checkout: 'worktree' }, deps);
     expect(h.startGuiFanOut.mock.calls[0][1]).toMatchObject({ roles: ['Reviewer'] });

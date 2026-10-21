@@ -1,4 +1,5 @@
 // Adapted from MonoCode (hardbeat920/monocode@6bd432ca, src/app/shell/Sidebar.tsx), MIT License, Copyright (c) 2026 Nick
+import { prepAwaitsReview } from '../../../shared/wmuxProjectConfig';
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, memo } from 'react';
 import type { GitSyncStatus, PrStatus, WorkspaceMetadata } from '../../../shared/types';
 import { useStore } from '../../stores';
@@ -1412,9 +1413,9 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
                     type="button"
                     tabIndex={innerTab}
                     data-workspace-action="project-badge"
-                    className={`text-[10px] leading-none flex-shrink-0 font-mono cursor-pointer hover:underline ${projectState.trust === 'trusted' ? restHiddenNameLine : ''}`}
+                    className={`text-[10px] leading-none flex-shrink-0 font-mono cursor-pointer hover:underline ${projectState.trust === 'trusted' && !prepAwaitsReview(projectState) ? restHiddenNameLine : ''}`}
                     style={{
-                      color: projectState.trust === 'trusted'
+                      color: projectState.trust === 'trusted' && !prepAwaitsReview(projectState)
                         ? 'var(--accent-blue)'
                         : projectState.trust === 'denied'
                           ? 'var(--text-muted)'

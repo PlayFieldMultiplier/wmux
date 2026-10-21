@@ -61,10 +61,11 @@ export interface ProjectTrustRecord {
   /** When the unattended consent was last set (audit; ms). */
   unattendedDecidedAt?: number;
   /**
-   * The decision was made with the config-file copy settings (`fanout.copy`,
-   * `fanout.copyIntoAutomated`) on screen. A record written before those
-   * settings existed lacks it: the trust dialog never showed them, so such a
-   * record does not cover them (the rest of the file keeps its approval).
+   * The decision was made with the new workspace preparation on screen (the
+   * setup command and the copy settings, `fanout.setup` / `fanout.copy` /
+   * `fanout.copyIntoAutomated`). A record written before the trust dialog
+   * listed them lacks it and does not cover them: they are skipped with
+   * reason `needs-review` (commands and layout keep their approval).
    */
   prepReviewed?: true;
 }
@@ -315,11 +316,11 @@ export class ProjectConfigStore {
       if (!exists && Object.keys(db.projects).length >= this.entryCap) {
         throw new Error('Project trust DB is full');
       }
-      // The trust dialog shows the copy settings now, so every new decision covers them.
+      // The trust dialog lists the setup command and the copy settings now, so every new decision covers them.
       const record: ProjectTrustRecord = { status, contentHash, decidedAt: now, prepReviewed: true };
       if (status === 'trusted' && unattended === true) {
         record.unattended = true;
-        // Re-approving the same bytes (the copy settings) keeps when the
+        // Re-approving the same bytes (the setup and copy settings) keeps when the
         // unattended consent itself was given.
         const prev = exists ? db.projects[key] : undefined;
         const same = prev?.status === 'trusted' && prev.contentHash === contentHash && prev.unattended === true;

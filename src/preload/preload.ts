@@ -1558,6 +1558,15 @@ const electronAPI = {
     setTrust: (root: string, decision: 'trusted' | 'denied' | 'clear', contentHash?: string, unattended?: boolean) =>
       ipcRenderer.invoke(IPC.PROJECT_CONFIG_SET_TRUST, root, decision, contentHash, unattended === true) as Promise<{ ok: boolean }>,
   },
+  // A new worktree's preparation notice from main (a Quick Launch worktree,
+  // whose composer closes on start): shown as a toast in this window.
+  workspacePrepNotice: {
+    on: (cb: (notice: import('../shared/gitHandoff').HandoffPrepNotice) => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, notice: import('../shared/gitHandoff').HandoffPrepNotice) => cb(notice);
+      ipcRenderer.on(IPC.WORKSPACE_PREP_NOTICE, listener);
+      return () => { ipcRenderer.removeListener(IPC.WORKSPACE_PREP_NOTICE, listener); };
+    },
+  },
   // Plugin host (B-1). `list` returns loaded UI plugin summaries + load
   // failures; `rpc` forwards a host-validated bridge request from a plugin
   // iframe to main, where it dispatches through the shared RpcRouter with
