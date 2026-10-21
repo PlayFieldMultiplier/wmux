@@ -76,7 +76,7 @@ import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
 import { PresenceDot, botActionsFor, botPresence } from '../Room/BotChips';
 import { deliveryLine, deliveryTaken, photoPostParams, roomLead, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
-import { actorLabel, botKindLabel, cardResumeTaskId, cardTone, isRefThread, kindLabel, onceText, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
+import { actorLabel, botKindLabel, cardApplyTaskId, cardResumeTaskId, cardTone, isRefThread, kindLabel, onceText, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, delegatesFromConversation, normalizeBotJob, type BotPresence, type BotProfile as BotProfileData } from '../../../shared/bot';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import { pickFolderDialog, templateJob } from '../Settings/FactoryTab';
@@ -87,7 +87,7 @@ import BotsWorkerTree, { TaskVerification, treeRowLabel } from './BotsWorkerTree
 import { loadWholeThread } from './useBots';
 import { loadRoomActors } from '../../hooks/useRoomSync';
 import { useShallow } from 'zustand/react/shallow';
-import type { BotTaskView } from '../../../shared/botTask';
+import type { BotTaskView, FactoryTaskApplyResult } from '../../../shared/botTask';
 import { botCanDo } from './botsProfile';
 import { BotConnections } from './BotConnections';
 import { BotRecipeChecklist } from './BotRecipes';
@@ -371,6 +371,11 @@ interface RowCtx {
    *  (absent: none, as while the bots are off): whether the task's worker
    *  is resumable now, and the resume. */
   resume?: { resumable: (taskId: string) => boolean; run: (taskId: string) => Promise<void> };
+  /** Apply to my checkout on a code task's end card (absent: none, as while
+   *  the bots are off): whether the task can be applied, and the Apply.
+   *  `folded`: the tasks a work card in this conversation stands for; their
+   *  Apply is on that card only. */
+  apply?: { applicable: (taskId: string) => boolean; run: (taskId: string) => Promise<FactoryTaskApplyResult>; folded?: ReadonlySet<string> };
   /** What a work card reads (absent: no work cards): which cards wait on
    *  the owner, the bots' tasks, and the pull request a task opened. */
   work?: { waits: (card: RoomCardData) => boolean; tasks: readonly BotTaskView[]; prUrl: (taskId: string) => string | null };
@@ -564,9 +569,16 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
   const { work, delegatorId, continuation, runEnd } = item;
   const { t } = ctx;
   const opts = ctx.work;
+  // A task's own thread (its worker's cards, linked from the conversation
+  // that started it) is named by the task's title.
+  const { requestTitle, taskTitle } = ctx;
+  const titleOf = useCallback(
+    (th: ThreadId) => requestTitle(th) ?? (th.startsWith('task:') ? taskTitle(th.slice(5)) : null),
+    [requestTitle, taskTitle],
+  );
   const view = useMemo(
-    () => workView(work, { delegatorId, waits: opts?.waits ?? (() => false), tasks: opts?.tasks, requestTitle: ctx.requestTitle, prUrl: opts?.prUrl }),
-    [work, delegatorId, opts, ctx.requestTitle],
+    () => workView(work, { delegatorId, waits: opts?.waits ?? (() => false), tasks: opts?.tasks, requestTitle: titleOf, prUrl: opts?.prUrl }),
+    [work, delegatorId, opts, titleOf],
   );
   const party = (botId: string) => ({ kind: 'bot' as const, workspaceId: work.workspaceId, botId });
   const face = delegatorId ? botFace(delegatorId, ctx) : null;
@@ -576,6 +588,13 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
     return c.actor.kind === 'human' ? `${t('room.actor.you')}: ${title}` : title;
   };
   const refChip = view.refUrl ? ctx.markdown.linkChip?.(view.refUrl, null) : null;
+  // The newest folded card offering Resume, and the newest task of the work
+  // that can be applied to the checkout (its end card may stand in the
+  // conversation itself, outside the fold): their buttons stay on the card.
+  const { apply, resume } = ctx;
+  const newest = (of: (c: RoomCardData) => string | null): string | null => [...work.all].reverse().map(of).find((id) => id !== null) ?? null;
+  const applyId = apply ? newest((c) => (c.refs?.taskId && apply.applicable(c.refs.taskId) ? c.refs.taskId : null)) : null;
+  const resumeId = resume ? newest((c) => cardResumeTaskId(c, resume.resumable)) : null;
   return (
     <div
       className={`wmux-bots-msg${continuation ? ' is-continuation' : ''}`}
@@ -599,6 +618,9 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
           textOf={textOf}
           refChip={refChip}
           onOpenThread={() => ctx.onThread(work.workspaceId, work.threadId)}
+          {...((applyId && apply) || (resumeId && resume) ? {
+            action: <WorkActions t={t} {...(applyId && apply ? { apply: () => apply.run(applyId) } : {})} {...(resumeId && resume ? { resume: () => resume.run(resumeId) } : {})} />,
+          } : {})}
         />
       </div>
     </div>
@@ -622,13 +644,19 @@ function SystemGroup({ cards, thread, ctx }: { cards: RoomCardData[]; thread?: T
   const hide = summary ? thread!.threadId : ctx.hideThread;
   const resume = ctx.resume;
   const resumeOf = (c: RoomCardData): string | null => (resume ? cardResumeTaskId(c, resume.resumable) : null);
-  // A run holding a card with a Resume shows its lines, so the button shows.
-  if (cards.length === 1 || open || cards.some((c) => resumeOf(c) !== null)) {
+  const apply = ctx.apply;
+  const applyOf = (c: RoomCardData): string | null => {
+    const id = apply ? cardApplyTaskId(c, apply.applicable) : null;
+    return id && !apply?.folded?.has(id) ? id : null;
+  };
+  // A run holding a card with a Resume or an Apply shows its lines, so the button shows.
+  if (cards.length === 1 || open || cards.some((c) => resumeOf(c) !== null || applyOf(c) !== null)) {
     return (
       <div data-bots-system-group={cards.length > 1 ? cards.length : undefined}>
         {cards.map((c) => {
           const taskId = resumeOf(c);
-          return <SystemLine key={c.id} card={c} t={t} onThread={onThread} now={ctx.now} botNames={ctx.botNames} taskTitle={ctx.taskTitle} requestTitle={ctx.requestTitle} hideThread={hide} onResume={taskId && resume ? () => resume.run(taskId) : undefined} />;
+          const applyId = applyOf(c);
+          return <SystemLine key={c.id} card={c} t={t} onThread={onThread} now={ctx.now} botNames={ctx.botNames} taskTitle={ctx.taskTitle} requestTitle={ctx.requestTitle} hideThread={hide} onResume={taskId && resume ? () => resume.run(taskId) : undefined} onApply={applyId && apply ? () => apply.run(applyId) : undefined} />;
         })}
         {summary}
         {open && (
@@ -1122,9 +1150,10 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: pare
  *  result, a task's end, an error), as a centred line with its body folded
  *  to two lines under Show more (by height: a markdown list does not
  *  line-clamp). */
-function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestTitle, hideThread, onResume }: { card: RoomCardData; t: T; onThread: (id: ThreadId) => void; now?: number; botNames?: readonly string[]; taskTitle?: TaskTitleOf; requestTitle?: RequestTitleOf; hideThread?: ThreadId; onResume?: () => Promise<void> }) {
+function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestTitle, hideThread, onResume, onApply }: { card: RoomCardData; t: T; onThread: (id: ThreadId) => void; now?: number; botNames?: readonly string[]; taskTitle?: TaskTitleOf; requestTitle?: RequestTitleOf; hideThread?: ThreadId; onResume?: () => Promise<void>; onApply?: () => Promise<FactoryTaskApplyResult> }) {
   const [expanded, setExpanded] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [applied, setApplied] = useState<FactoryTaskApplyResult | null>(null);
   const { title, body } = ownerCardText(card, botNames, undefined, t);
   const foldable = body.length > SYSTEM_FOLD_CHARS || body.includes('\n');
   const word = card.kind === 'refusal' || card.kind === 'budget' ? kindLabel(card.kind, t) : null;
@@ -1145,8 +1174,9 @@ function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestT
             {renderBrainMarkdown(body, { links: true, richCode: true, strictEmphasis: true })}
           </div>
         )}
-        {(foldable || chip || onResume) && (
+        {(foldable || chip || onResume || onApply) && (
           <div className={`mt-0.5 flex items-center ${align} gap-2`}>
+            {onApply && <ApplyButton run={onApply} t={t} onResult={setApplied} />}
             {onResume && (
               <Button
                 size="sm"
@@ -1169,7 +1199,98 @@ function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestT
             {chip && <ThreadChip threadId={card.threadId} t={t} onPick={onThread} taskTitle={taskTitle} requestTitle={requestTitle} />}
           </div>
         )}
+        {applied && <ApplyResultLine result={applied} t={t} />}
       </div>
+    </div>
+  );
+}
+
+/** Apply to my checkout: a secondary button that writes the task's changes
+ *  into the bot's repository folder, unstaged (main/factory/taskApply.ts);
+ *  its outcome goes to `onResult`. */
+function ApplyButton({ run, t, onResult }: { run: () => Promise<FactoryTaskApplyResult>; t: T; onResult: (r: FactoryTaskApplyResult) => void }) {
+  const [applying, setApplying] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      data-bots-card-apply
+      disabled={applying}
+      onClick={() => {
+        setApplying(true);
+        void run()
+          .then(onResult, (err: unknown) => onResult({ ok: false, code: 'git_failed', message: String(err) }))
+          .finally(() => setApplying(false));
+      }}
+    >
+      {t('botsPage.apply.action')}
+    </Button>
+  );
+}
+
+/** At most this many paths are named in an Apply's result line. */
+const APPLY_NAMED_MAX = 6;
+
+/** Paths as one list in the reader's language: the first few, then "and N more". */
+function applyPathList(paths: readonly string[], t: T): string {
+  const named = paths.slice(0, APPLY_NAMED_MAX).join(', ');
+  return paths.length > APPLY_NAMED_MAX ? `${named} ${t('botsPage.apply.more', { count: paths.length - APPLY_NAMED_MAX })}` : named;
+}
+
+/** An Apply's outcome in the reader's language: the files written and how
+ *  to undo them, or why nothing was written. Pure. */
+export function applyResultText(r: FactoryTaskApplyResult, t: T): string {
+  if (r.ok) {
+    const files = [
+      ...r.changed,
+      ...r.created.map((path) => t('botsPage.apply.fileNew', { path })),
+      ...r.removed.map((path) => t('botsPage.apply.fileRemoved', { path })),
+    ];
+    return `${t('botsPage.apply.done', { files: applyPathList(files, t) })} ${t(r.created.length > 0 ? 'botsPage.apply.undoNew' : 'botsPage.apply.undo')}`;
+  }
+  switch (r.code) {
+    case 'dirty': return t('botsPage.apply.dirty', { files: applyPathList(r.paths ?? [], t) });
+    case 'merge_in_progress': return t('botsPage.apply.mergeInProgress');
+    case 'diverged': return t('botsPage.apply.diverged');
+    case 'filtered': return t('botsPage.apply.filtered', { files: applyPathList(r.paths ?? [], t) });
+    case 'no_repo': return t('botsPage.apply.noRepo');
+    default: return t('botsPage.apply.refused', { message: r.message });
+  }
+}
+
+/** A work card's Resume and Apply, and the Apply's outcome under them. */
+function WorkActions({ apply, resume, t }: { apply?: () => Promise<FactoryTaskApplyResult>; resume?: () => Promise<void>; t: T }) {
+  const [applied, setApplied] = useState<FactoryTaskApplyResult | null>(null);
+  const [resuming, setResuming] = useState(false);
+  return (
+    <div className="mt-1.5 flex flex-col items-start gap-0.5" data-bots-work-actions>
+      <div className="flex items-center gap-2">
+        {resume && (
+          <Button
+            size="sm"
+            variant="secondary"
+            data-bots-card-resume
+            disabled={resuming}
+            onClick={() => {
+              setResuming(true);
+              void resume().finally(() => setResuming(false));
+            }}
+          >
+            {t('botsPage.worker.resume')}
+          </Button>
+        )}
+        {apply && <ApplyButton run={apply} t={t} onResult={setApplied} />}
+      </div>
+      {applied && <ApplyResultLine result={applied} t={t} />}
+    </div>
+  );
+}
+
+/** The line under an Apply: what it wrote (muted), or why it did not (red). */
+function ApplyResultLine({ result, t }: { result: FactoryTaskApplyResult; t: T }) {
+  return (
+    <div data-bots-apply-result={result.ok ? 'ok' : result.code} role="status" className={`mt-0.5 text-left text-[12px] leading-relaxed break-words ${result.ok ? 'text-[var(--text-sub)]' : 'text-[var(--accent-red)]'}`}>
+      {applyResultText(result, t)}
     </div>
   );
 }
@@ -2213,8 +2334,9 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
    *  card's Undo (absent: neither); its act and remove: the profile's
    *  Resume and Delete bot. */
   jobPort?: Pick<FactoryBotPort, 'update' | 'workerAgents'> & BotAdminPort;
-  /** The bot port's resumeWorker: a done worker's Resume (absent: none). */
-  resumePort?: Pick<FactoryBotPort, 'resumeWorker'>;
+  /** The bot port's resumeWorker: a done worker's Resume (absent: none);
+   *  its applyTask: a code task's Apply to my checkout (absent: none). */
+  resumePort?: Pick<FactoryBotPort, 'resumeWorker' | 'applyTask'>;
   /** Opens a bot's 1:1 (absent: no link). */
   onOpenBot?: (botId: string) => void;
   /** A group chat's pill: rename it, change its bots or delete it (absent:
@@ -2541,7 +2663,19 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     resumable: (taskId) => taskRows.some((row) => (row.tasks ?? []).some((task) => task.taskId === taskId && task.worker === 'resumable')),
     run: resumeShown,
   }), [readOnly, resumePort, taskRows, resumeShown]);
-  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown, ...(conversation.kind === 'bot' ? { selfBot: conversation.row.bot.id } : {}), ...(cardResume ? { resume: cardResume } : {}), work: workCtx, onOpenFile, shownFileId: openFile?.file.id ?? null };
+  // Apply to my checkout on a code task's end card: any bot's task (a
+  // coordinator's 1:1 shows the end of work another bot did), reported or
+  // done, with commits, of a bot with a repository folder.
+  const applyTask = resumePort?.applyTask;
+  // The tasks this conversation's work cards stand for.
+  const foldedTasks = useMemo(() => new Set([...work.values()].flatMap((w) => w.all.map((c) => c.refs?.taskId).filter((id): id is string => !!id))), [work]);
+  const cardApply = useMemo((): RowCtx['apply'] => (readOnly || !applyTask ? undefined : {
+    applicable: (taskId) => bots.some((row) => !!row.bot.repo?.repoPath && (row.tasks ?? []).some((task) => task.taskId === taskId
+      && (task.status === 'review_requested' || task.status === 'completed') && !task.verification && task.gate?.skipped !== 'no_changes')),
+    run: applyTask,
+    folded: foldedTasks,
+  }), [readOnly, applyTask, bots, foldedTasks]);
+  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown, ...(conversation.kind === 'bot' ? { selfBot: conversation.row.bot.id } : {}), ...(cardResume ? { resume: cardResume } : {}), ...(cardApply ? { apply: cardApply } : {}), work: workCtx, onOpenFile, shownFileId: openFile?.file.id ?? null };
   // The open thread is read whole, from its first card (the cached room
   // timeline holds only its newest page), and shown from every card read
   // for the room — not only this conversation's.

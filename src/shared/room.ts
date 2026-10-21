@@ -113,6 +113,25 @@ export function taskThreadOf(entry: { id: string; dispatch?: { threadId?: string
   return taskOriginThread(entry.dispatch?.threadId) ?? (`task:${entry.id}` as ThreadId);
 }
 
+/** The thread of a task worker's lifecycle cards (paused, resumed, done,
+ *  slot freed): the task's own `task:<id>` when the task was started from a
+ *  1:1 or a group chat — that conversation reads the task's result, not its
+ *  worker's comings and goings — else the task's thread (taskThreadOf: a PR,
+ *  issue or handoff thread, or `task:<id>` already). `dispatch.threadId` may
+ *  also be a thread taskThreadOf already gave (a reclaim record's). */
+export function taskLifecycleThreadOf(entry: { id: string; dispatch?: { threadId?: string } }): ThreadId {
+  return taskLifecycleLinkOf(entry) ? (`task:${entry.id}` as ThreadId) : taskThreadOf(entry);
+}
+
+/** The 1:1 or group chat a task's lifecycle cards were moved out of
+ *  (taskLifecycleThreadOf), or undefined. The cards link it
+ *  (`refs.threadId`), so the task's own thread reads as work that
+ *  conversation started: one folded work card there (shared/botsWork.ts). */
+export function taskLifecycleLinkOf(entry: { id: string; dispatch?: { threadId?: string } }): ThreadId | undefined {
+  const thread = taskThreadOf(entry);
+  return dmThreadBot(thread) || groupThreadGroup(thread) ? thread : undefined;
+}
+
 export type CardKind =
   | 'fact'            // system-written from a Fact (compact)
   | 'dispatch' | 'status' | 'triage' | 'verdict' | 'report' | 'plan' | 'proposal' | 'opinion'   // bot outputs (typed)

@@ -484,6 +484,9 @@ export const IPC = {
   // The owner resumes the stopped worker of an ended bot task
   // (main/factory/workerReclaim.ts); main window only.
   FACTORY_WORKER_RESUME: 'factory:worker:resume',
+  // The owner applies a bot task's changes to the bot's repository folder,
+  // unstaged (main/factory/taskApply.ts); main window only.
+  FACTORY_TASK_APPLY: 'factory:task:apply',
   // Whether the default bot engine (Claude) can run here, checked without a
   // model turn, and the Claude sign-in (shared/factoryEngine.ts); main window only.
   FACTORY_ENGINE_READINESS: 'factory:engine:readiness',
