@@ -311,11 +311,12 @@ describe('Remote page', () => {
     expect(useStore.getState().appRoute).toBe('workspaces');
   });
 
-  it('keeps a hold for Moa out of Needs you, as a quiet line', async () => {
+  it('shows a Moa hold an older daemon reports as a Needs you row for an ended link', async () => {
     stub([], { held: [held('rt-moa', 'brain-unavailable')] });
     await render();
-    expect($('[data-remote-needs]')).toBeNull();
-    expect($('[data-remote-moa-hold="rt-moa"]')?.textContent).toContain('Work from office-win is on hold');
+    const row = $('[data-remote-needs] [data-task-id="rt-moa"]')!;
+    expect(row.textContent).toContain('Work from office-win is on hold');
+    expect(row.querySelector('[data-testid="a2a-delivery-reason"]')?.textContent).toBe('The link to that PC has ended.');
   });
 
   it('removing a PC says when the other PC was not told, and which side is left on a partial failure', async () => {

@@ -162,6 +162,24 @@ export interface A2aRemoteStateInput {
 
 export type A2aRemoteHeldReason = NonNullable<A2aRemoteTaskMarkerV1['held']>;
 
+/** Hold reasons earlier versions wrote for this PC's Moa, which is gone. */
+const LEGACY_MOA_HELD_REASONS: ReadonlySet<string> = new Set(['brain-unavailable', 'brain-delivery-pending']);
+
+/**
+ * A hold reason as stored or sent by any version. A Moa hold is still
+ * accepted (an older main, an older daemon log) and read as
+ * `link-not-active`: the Moa link it waited on has ended, so it waits on a
+ * person like any other hold.
+ */
+export function readHeldReason(held: string): A2aRemoteHeldReason {
+  return LEGACY_MOA_HELD_REASONS.has(held) ? 'link-not-active' : (held as A2aRemoteHeldReason);
+}
+
+/** True for a hold reason only earlier versions wrote (a Moa hold). */
+export function isLegacyHeldReason(held: string): boolean {
+  return LEGACY_MOA_HELD_REASONS.has(held);
+}
+
 /**
  * One message the peer sent into an existing task (a reply, or a state
  * change), owed a delivery to our local pane: replies are written to the

@@ -3079,8 +3079,6 @@ export const zh = {
   'a2aDelivery.reason.pane-missing': "目标窗格已不存在。",
   'a2aDelivery.reason.occupant-changed': "该窗格现在是另一个代理。",
   'a2aDelivery.reason.link-not-active': "与该 PC 的链接已结束。",
-  'a2aDelivery.reason.brain-delivery-pending': "发给 Moa:尚不支持向 Moa 投递。",
-  'a2aDelivery.reason.brain-unavailable': "发给 Moa:Moa 已关闭或尚未就绪。Moa 就绪后会立即投递。",
   'a2aDelivery.reason.delivery-unconfirmed': "已开始粘贴但未得到确认。它可能已在窗格中:请确认后再发送。",
   'a2aDelivery.reason.no-agent': "该窗格一直没有可接收的代理。",
   'a2aDelivery.retry': "交给当前代理",

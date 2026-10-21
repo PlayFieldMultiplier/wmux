@@ -3065,8 +3065,6 @@ export const pl = {
   'a2aDelivery.reason.pane-missing': "Panel docelowy już nie istnieje.",
   'a2aDelivery.reason.occupant-changed': "W tym panelu jest teraz inny agent.",
   'a2aDelivery.reason.link-not-active': "Połączenie z tym komputerem zostało zakończone.",
-  'a2aDelivery.reason.brain-delivery-pending': "Do Moa: dostarczanie do Moa nie jest jeszcze dostępne.",
-  'a2aDelivery.reason.brain-unavailable': "Do Moa: Moa jest wyłączona lub niegotowa. Zostanie dostarczone, gdy tylko Moa będzie gotowa.",
   'a2aDelivery.reason.delivery-unconfirmed': "Wklejanie rozpoczęto, ale go nie potwierdzono. Może już być w panelu: sprawdź przed ponownym wysłaniem.",
   'a2aDelivery.reason.no-agent': "W tym panelu stale nie było agenta, który mógłby to przyjąć.",
   'a2aDelivery.retry': "Wyślij do obecnego agenta",

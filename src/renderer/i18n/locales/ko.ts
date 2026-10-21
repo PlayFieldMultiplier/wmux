@@ -2563,8 +2563,6 @@ export const ko = {
   'a2aDelivery.reason.pane-missing': "보낼 판이 없어졌습니다.",
   'a2aDelivery.reason.occupant-changed': "그 판에 다른 에이전트가 있습니다.",
   'a2aDelivery.reason.link-not-active': "그 PC와의 연결이 끝났습니다.",
-  'a2aDelivery.reason.brain-delivery-pending': "Moa 앞: Moa 전달은 아직 지원하지 않습니다.",
-  'a2aDelivery.reason.brain-unavailable': "Moa 앞: Moa가 꺼져 있거나 준비되지 않았습니다. Moa가 준비되면 바로 전달합니다.",
   'a2aDelivery.reason.delivery-unconfirmed': "붙여넣기를 시작했지만 확인되지 않았습니다. 이미 판에 들어갔을 수 있으니 확인 후 다시 전달하세요.",
   'a2aDelivery.reason.no-agent': "그 판에 받을 에이전트가 계속 없었습니다.",
   'a2aDelivery.retry': "현재 에이전트에게 전달",
