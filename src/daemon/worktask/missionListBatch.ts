@@ -59,8 +59,13 @@ const tooLarge = (verifiedWorkspaceId: string, chars: number): MissionListBatchE
 /** Characters one entry adds to the reply line (its JSON and a comma). */
 const entryChars = (entry: MissionListBatchEntry): number => JSON.stringify(entry).length + 1;
 
+/** An id's length as the reply writes it: a quote, a backslash or a control
+ *  character takes 2-6 characters there. */
+const echoedChars = (id: string): number => JSON.stringify(id).length - 2;
+
 /** The most a reply entry that answers no owner can take: the longest of the
- *  three, with the longest id a batch echoes and a 9-digit size. */
+ *  three, with the longest id a batch echoes (MISSION_LIST_ID_MAX_CHARS
+ *  escaped characters, which an id of plain ones reaches) and a 9-digit size. */
 const MAX_STUB_CHARS = Math.max(
   entryChars(badId('x'.repeat(MISSION_LIST_ID_MAX_CHARS))),
   entryChars(deferred('x'.repeat(MISSION_LIST_ID_MAX_CHARS))),
@@ -130,10 +135,10 @@ export function listMissionsBatch(
   let used = 0;
   let answered = 0;
   for (const id of ids) {
-    if (!nonEmpty(id) || id.length > MISSION_LIST_ID_MAX_CHARS) {
+    if (!nonEmpty(id) || echoedChars(id) > MISSION_LIST_ID_MAX_CHARS) {
       // This entry only: the same refusal the single form gives a missing id.
       // An overlong id is not echoed, so no entry outgrows MAX_STUB_CHARS.
-      results.push(badId(typeof id === 'string' && id.length <= MISSION_LIST_ID_MAX_CHARS ? id : ''));
+      results.push(badId(typeof id === 'string' && echoedChars(id) <= MISSION_LIST_ID_MAX_CHARS ? id : ''));
       continue;
     }
     if (seen.has(id)) continue;
@@ -146,7 +151,9 @@ export function listMissionsBatch(
     const entry: MissionListBatchEntry = { verifiedWorkspaceId: id, ok: true, tasks };
     const size = entryChars(entry);
     if (size > MISSION_LIST_OWNER_MAX_CHARS) {
-      results.push(tooLarge(id, JSON.stringify({ ok: true, verifiedWorkspaceId: id, tasks }).length));
+      // Its single-form reply has the same members in another order, so it
+      // is this entry less the comma.
+      results.push(tooLarge(id, size - 1));
       continue;
     }
     if ((answered > 0 && used + size > budgetChars) || size - MAX_STUB_CHARS > lineLeft) {

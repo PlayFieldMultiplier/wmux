@@ -72,7 +72,8 @@ export const MISSION_LIST_BATCH_MAX_CHARS = 256 * 1024;
  */
 export const MISSION_LIST_REPLY_MAX_CHARS = DAEMON_CONTROL_LINE_MAX_CHARS - 64 * 1024 - 1024;
 
-/** Longest owner id a batch answers; a longer one is refused for itself. */
+/** Longest owner id a batch answers, counted as it is written in the reply
+ *  (JSON-escaped, without its quotes); a longer one is refused for itself. */
 export const MISSION_LIST_ID_MAX_CHARS = 256;
 
 /** Per-owner code for an owner left out of a reply by the soft budget: ask again. */

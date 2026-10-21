@@ -202,6 +202,42 @@ describe('listMissionsBatch', () => {
         expect(lineOf(reply)).toBeLessThanOrEqual(MISSION_LIST_REPLY_MAX_CHARS);
       });
 
+      it('ids that grow when escaped are measured as written: a full batch of them stays under the cap', () => {
+        const heavyId = ids[0];
+        const heavy = ownerOfSize(heavyId, MISSION_LIST_OWNER_MAX_CHARS);
+        // 256 characters that JSON writes as 2-6 each: the unescaped length
+        // passes a plain length check, the written one is up to 6x longer.
+        const nasty = Array.from({ length: MISSION_LIST_BATCH_MAX - 1 }, (_, i) =>
+          `${String(i).padStart(4, '0')}${'"\\\u0001'.repeat(84)}`);
+        expect(nasty[0].length).toBe(256);
+        const reply = listMissionsBatch({ verifiedWorkspaceIds: [heavyId, ...nasty] }, (o) => (o === heavyId ? heavy : []));
+        expect(reply.ok).toBe(true);
+        if (!reply.ok) return;
+        expect(reply.results[0].ok).toBe(true);
+        // Refused for themselves and not echoed, so their entries stay small.
+        expect(reply.results.slice(1).every((r) => !r.ok && r.verifiedWorkspaceId === '')).toBe(true);
+        expect(lineOf(reply)).toBeLessThanOrEqual(MISSION_LIST_REPLY_MAX_CHARS);
+      });
+
+      it('an id at the limit as written is answered; one escaped character past it is not', () => {
+        const atLimit = `${'a'.repeat(254)}"`; // written as 256: the quote takes 2
+        const past = `${'a'.repeat(255)}"`; // written as 257
+        const reply = listMissionsBatch({ verifiedWorkspaceIds: [atLimit, past] }, listMissions);
+        expect(reply.ok && reply.results.map((r) => [r.verifiedWorkspaceId, r.ok])).toEqual([
+          [atLimit, true],
+          ['', false],
+        ]);
+      });
+
+      it('a REPLY_TOO_LARGE owner reports its single-form reply length', () => {
+        const heavyId = ids[0];
+        const heavy = ownerOfSize(heavyId, DAEMON_CONTROL_LINE_MAX_CHARS - 20_000);
+        const reply = listMissionsBatch({ verifiedWorkspaceIds: [heavyId] }, () => heavy);
+        expect(reply.ok && !reply.results[0].ok && reply.results[0].error.chars).toBe(
+          JSON.stringify({ ok: true, verifiedWorkspaceId: heavyId, tasks: heavy }).length,
+        );
+      });
+
       it('an id longer than a batch echoes is refused for itself, not echoed', () => {
         const reply = listMissionsBatch({ verifiedWorkspaceIds: ['ws-a', 'q'.repeat(10_000)] }, listMissions);
         expect(reply.ok && reply.results.map((r) => [r.verifiedWorkspaceId, r.ok])).toEqual([
