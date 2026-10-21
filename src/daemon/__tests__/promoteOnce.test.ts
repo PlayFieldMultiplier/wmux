@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createPromoteOnce, type PromoteResult } from '../promoteOnce';
+import { promoteStartedSession } from '../../shared/suspendedSession';
 
 /** A promoteSession whose attempts settle when the test says. */
 function controlled() {
@@ -89,6 +90,59 @@ describe('promoteOnce', () => {
       await background;
       expect(await stopKey).toEqual({ ok: true, alreadyActive: false, joined: true });
       expect(promoteSession).toHaveBeenCalledTimes(1);
+    });
+
+    // Mac review P3-1: the reconcile's promote of a cap-skipped unit finished
+    // between a stop key's list (suspended) and its join-only call. "Running"
+    // was answered as already active, main attached, and the ctrl+c landed in
+    // the unit that call had just started.
+    it("nothing in flight but running: a start another caller just ran is answered as that caller's", async () => {
+      const { promoteSession, settle } = controlled();
+      let running = false;
+      const promoteOnce = createPromoteOnce(promoteSession, () => running);
+      const reconcile = promoteOnce('s1');
+      settle(0, { ok: true, alreadyActive: false });
+      await reconcile;
+      running = true;
+      const answer = await promoteOnce('s1', false, 'rpc', true);
+      expect(answer).toEqual({ ok: true, alreadyActive: false });
+      expect(promoteStartedSession(answer)).toBe(true);
+      expect(promoteSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('nothing in flight but running: the boot background start, or a start not run here, is running', async () => {
+      const { promoteSession, settle } = controlled();
+      const promoteOnce = createPromoteOnce(promoteSession, () => true);
+      const background = promoteOnce('s1', false, 'background');
+      settle(0, { ok: true, alreadyActive: false });
+      await background;
+      expect(await promoteOnce('s1', false, 'rpc', true)).toEqual({ ok: true, alreadyActive: true });
+      // Boot recovery started s2 without an attempt here.
+      expect(await promoteOnce('s2', false, 'rpc', true)).toEqual({ ok: true, alreadyActive: true });
+      expect(promoteStartedSession({ ok: true, alreadyActive: true })).toBe(false);
+    });
+
+    it('forgets who started a session once it leaves', async () => {
+      const { promoteSession, settle } = controlled();
+      const promoteOnce = createPromoteOnce(promoteSession, () => true);
+      const caller = promoteOnce('s1');
+      settle(0, { ok: true, alreadyActive: false });
+      await caller;
+      promoteOnce.forget('s1');
+      expect(await promoteOnce('s1', false, 'rpc', true)).toEqual({ ok: true, alreadyActive: true });
+    });
+
+    it('a failed or already-active attempt records no starter', async () => {
+      const { promoteSession, settle } = controlled();
+      const promoteOnce = createPromoteOnce(promoteSession, () => true);
+      const failed = promoteOnce('s1');
+      settle(0, { ok: false, error: { code: 'SPAWN_FAILED', message: 'x' } });
+      await failed;
+      const active = promoteOnce('s2');
+      settle(1, { ok: true, alreadyActive: true });
+      await active;
+      expect(await promoteOnce('s1', false, 'rpc', true)).toEqual({ ok: true, alreadyActive: true });
+      expect(await promoteOnce('s2', false, 'rpc', true)).toEqual({ ok: true, alreadyActive: true });
     });
 
     it("joins another caller's promote unmarked: that caller started it", async () => {

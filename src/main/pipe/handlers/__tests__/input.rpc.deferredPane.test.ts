@@ -243,7 +243,20 @@ describe('a raw write by ptyId to a session with no pipe (#2398)', () => {
     expect(res.ok).toBe(false);
     expect(writeToSession).toHaveBeenNthCalledWith(1, 'pty-closing', 'echo hi');
     expect(JSON.stringify(res)).toContain('may already be on its input line');
+    expect(JSON.stringify(res)).toContain('not submitted');
     expect(JSON.stringify(res)).not.toContain('not delivered');
+  });
+
+  // Mac review P3-5: a raw write's text with a line break in it may have run
+  // part of it already; "not submitted" would be false.
+  it('a written text with a line break is not called unsubmitted', async () => {
+    const { router, writeToSession } = setupDaemon({ pipeOpen: true });
+    writeToSession.mockImplementationOnce(() => true).mockImplementation(() => false);
+    renderer();
+    const res = await router.dispatch({ id: '13', method: 'input.send', params: { text: 'echo a\recho b', raw: true, submit: true, ptyId: 'pty-closing', workspaceId: 'ws-ext' } });
+    expect(res.ok).toBe(false);
+    expect(JSON.stringify(res)).toContain('may have been partly submitted');
+    expect(JSON.stringify(res)).not.toContain('not submitted');
   });
 });
 

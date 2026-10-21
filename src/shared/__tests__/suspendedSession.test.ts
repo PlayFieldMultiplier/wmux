@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { promoteStartedSession, recoversInBackground, suspendedReconnectAction } from '../suspendedSession';
+import { heldReconnectAnswer, promoteOutcome, promoteStartedSession, recoversInBackground, suspendedReconnectAction } from '../suspendedSession';
 import { recoversInBackground as daemonRecoversInBackground } from '../../daemon/recoverySelector';
 
 // #2398 — one predicate decides which suspended sessions start on their own:
@@ -51,5 +51,23 @@ describe('promoteStartedSession', () => {
 
   it('an older daemon that cannot say counts as started (a stop key is refused)', () => {
     expect(promoteStartedSession({ ok: true })).toBe(true);
+  });
+});
+
+// Mac review P3-2: main's mapping of the daemon's promote answer was pinned
+// by source scans only.
+describe('pty:reconnect on the promote answer', () => {
+  it('a join-only call with nothing in flight is held, never a failed recovery', () => {
+    expect(promoteOutcome({ ok: false, notInFlight: true })).toBe('held');
+    expect(promoteOutcome({ ok: false })).toBe('failed');
+    expect(promoteOutcome({ ok: true, alreadyActive: true } as { ok: boolean })).toBe('attach');
+    expect(promoteOutcome({ ok: true })).toBe('attach');
+  });
+
+  it('the held answer is deferred, with the resume hint and binding only when the session has them', () => {
+    const binding = { agent: 'claude', sessionId: 'x', cwd: '/p' };
+    expect(heldReconnectAnswer({})).toEqual({ success: false, deferred: true });
+    expect(heldReconnectAnswer({ resumeAgent: 'claude', resumeBinding: binding }))
+      .toEqual({ success: false, deferred: true, resumeAgent: 'claude', resumeBinding: binding });
   });
 });

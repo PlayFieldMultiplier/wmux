@@ -63,6 +63,7 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { reclaimedWorkerWorkspaces } from '../../factory/workerReclaim';
 import { hasRedactedSecrets, redactStoredSecrets } from '../../factory/secretRedaction';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
+import { STOP_KEYS, nothingToStopMessage } from '../../../shared/stopKeys';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -653,7 +654,7 @@ export function startClock(windowMs: number, now: () => number = Date.now): Star
 
 /** The not-running answer to a stop key (ctrl+c, escape): nothing is started for it. */
 function nothingToStop(method: string): Error {
-  return new Error(`${method}: the pane's terminal is not running — nothing to stop; nothing was written`);
+  return new Error(nothingToStopMessage(method));
 }
 
 /**
@@ -873,7 +874,7 @@ function assertNotKillingAGateHeldPane(
  * Everything else stays blocked, digits and Enter and the arrows included: those
  * SELECT an option, which is the misfire `approval_press` exists to replace.
  */
-const APPROVAL_BLOCK_EXEMPT_KEYS: ReadonlySet<string> = new Set(['ctrl+c', 'escape']);
+const APPROVAL_BLOCK_EXEMPT_KEYS: ReadonlySet<string> = STOP_KEYS;
 
 /** The live facts the raw-input guard reads. Injected in tests. */
 export interface ApprovalInputGate {
@@ -1456,7 +1457,10 @@ export function registerInputRpc(
     // was delivered sends it again and types it twice. Only the text's own
     // chunks count: a new task's fresh-context command (`body` false) is not
     // the text, and is all that is on the line if the text's write fails.
+    // Written text that held a line break (a raw write's, say) may have run
+    // part of it already, so it is not called unsubmitted.
     let chunksWritten = 0;
+    let wroteLineBreak = false;
     const writeChunk = (data: string, body = true): void => {
       noteInterruptInput?.(ptyId, data);
       const instance = ptyManager.get(ptyId);
@@ -1468,14 +1472,17 @@ export function registerInputRpc(
           // #2398 — no pipe took it: never answered as written.
           if (dc.writeToSession(ptyId, data) === false) {
             throw new Error(chunksWritten > 0
-              ? `input.send: the session "${ptyId}" pipe closed after part of this write was delivered — the text may already be on its input line, not submitted; read the pane before sending it again`
+              ? `input.send: the session "${ptyId}" pipe closed after part of this write was delivered — the text may already be on its input line, ${wroteLineBreak ? 'and may have been partly submitted' : 'not submitted'}; read the pane before sending it again`
               : `input.send: the session "${ptyId}" has no open pipe — the text was not delivered`);
           }
         } else {
           throw new Error(`input.send: PTY not found — id="${ptyId}"`);
         }
       }
-      if (body) chunksWritten++;
+      if (body) {
+        chunksWritten++;
+        if (/[\r\n]/.test(data)) wroteLineBreak = true;
+      }
     };
 
     // submit=true commits the text with an Enter (carriage return — the

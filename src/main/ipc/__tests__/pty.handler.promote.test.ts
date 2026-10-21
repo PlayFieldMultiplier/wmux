@@ -242,7 +242,8 @@ describe('attach without promote (#2398)', () => {
     expect(deferAt).toBeGreaterThan(region.indexOf("session.state === 'suspended'"));
     expect(deferAt).toBeGreaterThan(heldAt);
     expect(deferAt).toBeLessThan(promoteAt);
-    expect(region.slice(heldAt, deferAt)).toMatch(/return \{\s*success: false,\s*deferred: true,/);
+    // The answer itself: heldReconnectAnswer, behaviour-tested in shared.
+    expect(region.slice(heldAt, deferAt)).toMatch(/return heldReconnectAnswer\(listed\);/);
   });
 
   // Second-model P2-1 — a stop key (join-only) to an exec or supervised unit
@@ -254,9 +255,12 @@ describe('attach without promote (#2398)', () => {
     const region = handler.slice(start, start + 9000);
     const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
     expect(region.slice(promoteAt, promoteAt + 200)).toMatch(/\{ id, \.\.\.\(action === 'join-only' \? \{ joinOnly: true \} : \{\}\) \}/);
-    const notInFlightAt = region.indexOf("if (result.notInFlight) return held(");
-    expect(notInFlightAt).toBeGreaterThan(promoteAt);
-    expect(notInFlightAt).toBeLessThan(region.indexOf('if (!result.ok) return'));
+    // The mapping itself: promoteOutcome, behaviour-tested in shared.
+    const outcomeAt = region.indexOf('const outcome = promoteOutcome(result);');
+    const heldAt = region.indexOf("if (outcome === 'held') return held(");
+    expect(outcomeAt).toBeGreaterThan(promoteAt);
+    expect(heldAt).toBeGreaterThan(outcomeAt);
+    expect(heldAt).toBeLessThan(region.indexOf("if (outcome === 'failed') return"));
   });
 
   it('daemon.promoteSession answers a join-only call without starting or renewing anything', () => {
@@ -265,7 +269,8 @@ describe('attach without promote (#2398)', () => {
     const joinOnlyAt = region.indexOf("if (params?.['joinOnly'] === true)");
     expect(joinOnlyAt).toBeGreaterThan(0);
     expect(joinOnlyAt).toBeLessThan(region.indexOf('touchPendingRecovery(id)'));
-    expect(region).toMatch(/await promoteOnce\(id, false, 'rpc', true\)/);
+    // The answer itself: createPromoteOnce, behaviour-tested in promoteOnce.test.ts.
+    expect(region).toMatch(/return promoteOnce\(id, false, 'rpc', true\);/);
   });
 
   // Second-model P3-1 — the attach promoted whatever the caller: a daemon
@@ -291,7 +296,7 @@ describe('attach without promote (#2398)', () => {
     const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
     const region = handler.slice(start, start + 2500);
     expect(region).toMatch(/exec\?: unknown;\s*supervision\?: unknown;/);
-    expect(handler).toMatch(/import \{ promoteStartedSession, suspendedReconnectAction \} from '\.\.\/\.\.\/\.\.\/shared\/suspendedSession';/);
+    expect(handler).toMatch(/import \{ heldReconnectAnswer, promoteOutcome, promoteStartedSession, suspendedReconnectAction \} from '\.\.\/\.\.\/\.\.\/shared\/suspendedSession';/);
   });
 
   // Review item 1 — a held session is in use: every hold tells the daemon,
@@ -313,7 +318,7 @@ describe('attach without promote (#2398)', () => {
     const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
     // Round 7: from what the daemon did (promoteStartedSession, unit-tested
     // in shared), never from the action label.
-    expect(region.slice(promoteAt, promoteAt + 1200)).toMatch(/promoted = promoteStartedSession\(result\);/);
+    expect(region.slice(promoteAt, promoteAt + 1600)).toMatch(/promoted = promoteStartedSession\(result\);/);
     expect(region).not.toMatch(/promoted = suspendedReconnectAction/);
     expect(handler).toMatch(/return \{ success: true, id: session\.id,[^\n]*\.\.\.startedHere\(\) \};/);
   });
@@ -361,7 +366,8 @@ describe('resume on start for a suspended session (#2398 §6-4 option B)', () =>
   it('the deferred reconnect answer carries the session binding', () => {
     const start = handler.indexOf('const held = (');
     const region = handler.slice(start, start + 1200);
-    expect(region).toMatch(/deferred: true,[\s\S]*?resumeBinding: listed\.resumeBinding/);
+    // heldReconnectAnswer carries it (behaviour-tested in shared).
+    expect(region).toMatch(/return heldReconnectAnswer\(listed\);/);
   });
 
   it('a cap-skipped suspended entry carries its binding only while its transcript lives', () => {

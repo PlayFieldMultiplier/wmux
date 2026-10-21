@@ -51,3 +51,35 @@ export function suspendedReconnectAction(
   if (!recoversInBackground(session)) return 'hold';
   return opts?.joinOnly === true ? 'join-only' : 'join';
 }
+
+/**
+ * #2398 — how pty:reconnect goes on from daemon.promoteSession's answer:
+ * 'held' — a join-only call found no start in flight and the session not
+ * running: answered like a hold, never as a failed recovery (which would
+ * raise the pane's Retry banner for a key); 'failed' — the start failed and
+ * the recovery stays pending; 'attach' — the session runs.
+ */
+export function promoteOutcome(result: { ok: boolean; notInFlight?: boolean }): 'held' | 'failed' | 'attach' {
+  if (result.notInFlight === true) return 'held';
+  return result.ok ? 'attach' : 'failed';
+}
+
+/**
+ * pty:reconnect's answer for a suspended session it holds: not attached,
+ * not failed, with the session's guarded resume binding (the daemon
+ * surfaces it only while its transcript lives), so the renderer can promote
+ * it at boot after all when resume-on-start would bring that agent back.
+ */
+export function heldReconnectAnswer<B>(session: { resumeAgent?: string; resumeBinding?: B }): {
+  success: false;
+  deferred: true;
+  resumeAgent?: string;
+  resumeBinding?: B;
+} {
+  return {
+    success: false,
+    deferred: true,
+    ...(session.resumeAgent ? { resumeAgent: session.resumeAgent } : {}),
+    ...(session.resumeBinding ? { resumeBinding: session.resumeBinding } : {}),
+  };
+}

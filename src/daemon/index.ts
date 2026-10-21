@@ -3545,17 +3545,15 @@ function registerRpcHandlers(
     }
   };
   // #2398 — answers `joined` to a caller that joined the background start.
-  const promoteOnce = createPromoteOnce((p) => promoteSession(p));
-  pipeServer.onRpc('daemon.promoteSession', async (params) => {
+  const promoteOnce = createPromoteOnce((p) => promoteSession(p), (id) => !!sessionManager.getSession(id));
+  sessionManager.on('session:died', (payload: { id: string }) => promoteOnce.forget(payload.id));
+  sessionManager.on('session:destroyed', (payload: { id: string }) => promoteOnce.forget(payload.id));
+  pipeServer.onRpc('daemon.promoteSession', (params) => {
     const id = String(params?.id ?? '');
     // #2398 — `joinOnly` (a stop key, a repaint): join an attempt in flight,
-    // never start one. With none in flight, a session that runs (an attempt
-    // just finished) is answered as running; any other is left as it was.
+    // never start one (see createPromoteOnce for the answer when none is).
     // Not a retry, so the pending entry is not renewed.
-    if (params?.['joinOnly'] === true) {
-      const joined = await promoteOnce(id, false, 'rpc', true);
-      return joined.notInFlight && sessionManager.getSession(id) ? { ok: true, alreadyActive: true } : joined;
-    }
+    if (params?.['joinOnly'] === true) return promoteOnce(id, false, 'rpc', true);
     // Before the attempt, so an attempt that fails on a path with no save
     // still records that the user is actively retrying this pane (#1305).
     touchPendingRecovery(id);

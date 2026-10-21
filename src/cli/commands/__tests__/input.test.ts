@@ -129,6 +129,21 @@ describe('wmux send targets', () => {
   // the old main, which ignores surfaceId and writes the omitted target, the
   // active pane (often the caller's own). senderPtyId makes that main refuse;
   // without the caller's own ptyId nothing is sent.
+  // Mac review P3-4: a stop key to a pane whose terminal has not started was
+  // answered "only a command run inside a wmux pane can start it" from
+  // outside one. A stop key never starts anything: answered not running, as
+  // main answers it, without asking who the caller is or sending anything.
+  it('a stop key to a #name whose terminal has not started answers nothing to stop, from anywhere', async () => {
+    selfContext.mockResolvedValue({});
+    for (const key of ['ctrl+c', 'Escape']) {
+      errSpy.mockClear();
+      await expect(handleInput('send-key', [key, '--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
+      expect(errSpy).toHaveBeenCalledWith("Error: input.sendKey: the pane's terminal is not running — nothing to stop; nothing was written");
+    }
+    expect(selfContext).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalledWith('input.sendKey', expect.anything(), expect.anything());
+  });
+
   it("a surface target carries the caller's senderPtyId, and is refused without one", async () => {
     selfContext.mockResolvedValue({ workspaceId: 'ws-self' });
     await expect(handleInput('send-key', ['enter', '--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);

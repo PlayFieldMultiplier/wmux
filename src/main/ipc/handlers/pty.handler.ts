@@ -1,7 +1,7 @@
 import { applyWmuxToolsToCommand, isWmuxToolsHint, locateWmuxMcpEntry } from '../../agents/toolSurfaceLaunch';
 import { codexConfigPath, codexHasWmuxServer } from '../../../shared/mcpRegistration';
 import { WSL_RPC_TIMEOUT_MS } from '../../../shared/wsl';
-import { promoteStartedSession, suspendedReconnectAction } from '../../../shared/suspendedSession';
+import { heldReconnectAnswer, promoteOutcome, promoteStartedSession, suspendedReconnectAction } from '../../../shared/suspendedSession';
 import { app, ipcMain, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -1561,15 +1561,7 @@ export function registerPTYHandlers(
           void daemonClient.rpc('daemon.holdSession', { ids: [id] }).catch((err: unknown) => {
             console.warn(`[lifecycle] daemon.holdSession ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
           });
-          // With the session's guarded resume binding (the daemon surfaces
-          // it only while its transcript lives): the renderer promotes it at
-          // boot after all when resume-on-start would bring that agent back.
-          return {
-            success: false,
-            deferred: true,
-            ...(listed.resumeAgent ? { resumeAgent: listed.resumeAgent } : {}),
-            ...(listed.resumeBinding ? { resumeBinding: listed.resumeBinding } : {}),
-          };
+          return heldReconnectAnswer(listed);
         };
 
         if (session.state === 'suspended') {
@@ -1588,11 +1580,12 @@ export function registerPTYHandlers(
           if (action === 'hold') return held('held');
           try {
             const result = await daemonClient.rpc('daemon.promoteSession', { id, ...(action === 'join-only' ? { joinOnly: true } : {}) }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; alreadyActive?: boolean; joined?: boolean; notInFlight?: boolean; error?: { code?: string; message: string } };
-            if (result.notInFlight) return held('join-only, no start in flight');
+            const outcome = promoteOutcome(result);
+            if (outcome === 'held') return held('join-only, no start in flight');
             // #1305 — carry WHY it stayed pending, not just that it did. The
             // banner's Retry is the right and only offer for every other
             // failure; a missing directory additionally gets "start fresh".
-            if (!result.ok) return { success: false, recoveryPending: true, error: result.error?.message || 'WSL recovery failed. Check the target and retry.', cwdMissing: result.error?.code === 'CWD_MISSING' };
+            if (outcome === 'failed') return { success: false, recoveryPending: true, error: result.error?.message || 'WSL recovery failed. Check the target and retry.', cwdMissing: result.error?.code === 'CWD_MISSING' };
             // From what the daemon did, not why this call was made: a join of
             // the daemon's own background start did not start the unit (a
             // stop key to it is a real stop request and is delivered), but a

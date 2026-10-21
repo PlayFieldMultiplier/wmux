@@ -1,5 +1,6 @@
 import { sendRequest } from '../client';
 import { terminalWriteClientTimeoutMs } from '../../shared/terminalWriteBudget';
+import { isStopKey, nothingToStopMessage } from '../../shared/stopKeys';
 import { printResult, ensureOk, parseFlag, hasFlag } from '../utils';
 import { resolveSelfContext, getParentPidDefault, type SelfContext } from '../identity';
 import type { RpcMethod, RpcResponse } from '../../shared/rpc';
@@ -46,12 +47,14 @@ async function resolvePaneName(name: string, rpc: Rpc): Promise<{ ptyId?: unknow
  * main from before #2398 (the CLI shim picks the newest app's CLI while the
  * old main still runs, right after an update) ignores `surfaceId` and would
  * write into the active pane, often the caller's own; with `senderPtyId`
- * it refuses that omitted-target write instead.
+ * it refuses that omitted-target write instead. A stop key (`stopKey`) never
+ * starts one: it is answered not running, as main answers it, from anywhere.
  */
 export async function resolveExplicitWriteTarget(
   value: string,
   rpc: Rpc,
   caller: () => Promise<{ ptyId?: string; workspaceId?: string }>,
+  stopKey = false,
 ): Promise<Record<string, unknown>> {
   const trimmed = value.trim();
   if (trimmed.charAt(0) !== '#') return { ptyId: value };
@@ -59,6 +62,7 @@ export async function resolveExplicitWriteTarget(
   if (typeof target.ptyId === 'string' && target.ptyId) return { ptyId: target.ptyId };
   const tag = String(target.paneTag ?? trimmed);
   if (typeof target.surfaceId !== 'string' || !target.surfaceId) throw new Error(`pane ${tag} has no local terminal`);
+  if (stopKey) throw new Error(nothingToStopMessage('input.sendKey'));
   const { ptyId: senderPtyId, workspaceId } = await caller();
   if (!workspaceId || !senderPtyId) {
     throw new Error(`pane ${tag} has not started its terminal yet, and only a command run inside a wmux pane can start it: run it from one, or open the pane first`);
@@ -133,6 +137,8 @@ export async function selfTargetWarning(target: Record<string, unknown>, rpc: Rp
 export async function resolveTargetParams(
   args: string[],
   mode: 'require-pty' | 'workspace-scope-ok',
+  /** The send-key's key: a stop key never starts a pane (resolveExplicitWriteTarget). */
+  key?: string,
 ): Promise<Record<string, unknown>> {
   const selfContext = (): Promise<SelfContext> => resolveSelfContext({
     sendRequest,
@@ -144,7 +150,7 @@ export async function resolveTargetParams(
   if (explicitPane) {
     // A read never starts a pane; a write starts one that has not started.
     if (mode === 'workspace-scope-ok') return { ptyId: await resolveExplicitTarget(explicitPane, sendRequest) };
-    return resolveExplicitWriteTarget(explicitPane, sendRequest, selfContext);
+    return resolveExplicitWriteTarget(explicitPane, sendRequest, selfContext, key !== undefined && isStopKey(key));
   }
   // A target flag whose value went missing must not fall back to this pane: an
   // unquoted `--to #w1-2` loses its value to the shell (`#` starts a comment).
@@ -177,9 +183,9 @@ export function stripInputFlags(args: string[]): string[] {
 }
 
 /** resolveTargetParams for a command: an unresolvable `#pane` exits with wmux's reason. */
-async function targetOrExit(args: string[], mode: 'require-pty' | 'workspace-scope-ok' = 'require-pty'): Promise<Record<string, unknown>> {
+async function targetOrExit(args: string[], mode: 'require-pty' | 'workspace-scope-ok' = 'require-pty', key?: string): Promise<Record<string, unknown>> {
   try {
-    return await resolveTargetParams(args, mode);
+    return await resolveTargetParams(args, mode, key);
   } catch (err) {
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -228,7 +234,7 @@ export async function handleInput(
         console.error('Error: send-key requires <keystroke>');
         process.exit(1);
       }
-      const target = await targetOrExit(args);
+      const target = await targetOrExit(args, 'require-pty', key);
       // #2398 — see send.
       const keyTimeoutMs = terminalWriteClientTimeoutMs();
       response = await sendRequest('input.sendKey', { key, ...target, clientTimeoutMs: keyTimeoutMs }, keyTimeoutMs);
