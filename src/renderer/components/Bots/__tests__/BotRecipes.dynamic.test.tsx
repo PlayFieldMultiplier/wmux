@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+// @wmux-lane unit
+// 'win32' here is only the platform prop the checklist is given; nothing
+// reads the OS.
 // Bot recipes: every recipe's text exists in en, ko, pl and zh and makes a
 // job the bot store keeps; Add bot's Recipe select prefills the job and
 // sends the recipe with its template; the profile's checklist shows each

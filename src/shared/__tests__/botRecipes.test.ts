@@ -1,3 +1,6 @@
+// @wmux-lane unit
+// 'win32' here is only the platform value the pure checklist takes; nothing
+// reads the OS.
 // The recipe catalog's shape, and where each of a recipe's connections
 // stands for one bot (the profile's checklist).
 import { describe, expect, it } from 'vitest';
