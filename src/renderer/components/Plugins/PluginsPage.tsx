@@ -38,6 +38,9 @@ export default function PluginsPage() {
   const [query, setQuery] = useState('');
   const [inventory, setInventory] = useState<UiPluginInventory>({ plugins: [], failures: [] });
   const [loading, setLoading] = useState(true);
+  // Until one list has arrived nothing is known to be installed, so Install
+  // waits (main would refuse a bundle that is already there).
+  const [known, setKnown] = useState(false);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -48,7 +51,7 @@ export default function PluginsPage() {
     setLoading(true);
     try {
       const result = await window.electronAPI.pluginManagement.list();
-      if (epoch === generation.current) { setInventory(result); setFailed(false); }
+      if (epoch === generation.current) { setInventory(result); setKnown(true); setFailed(false); }
     } catch { if (epoch === generation.current) setFailed(true); }
     finally { if (epoch === generation.current) setLoading(false); }
   }, []);
@@ -101,7 +104,7 @@ export default function PluginsPage() {
     const stateKey = PLUGIN_STATE_LABEL_KEYS[row.state];
     return <button key={row.id} type="button" data-plugin-row={row.id} aria-current={current ? 'true' : undefined}
       className={`wmux-plugins-row ${FOCUS_RING}`} onClick={() => select(row.id)}>
-      <span className="wmux-plugins-tile" data-signature={row.catalog?.signature ? 'true' : undefined} aria-hidden="true"><PluginGlyph name={row.id} /></span>
+      <span className="wmux-plugins-tile" data-signature={row.catalog?.signature ? 'true' : undefined} aria-hidden="true"><PluginGlyph glyph={row.catalog?.glyph} /></span>
       <span className="wmux-plugins-row-text">
         <span className="wmux-plugins-row-name">{rowName(row, t)}</span>
         <span className="wmux-plugins-row-tagline">{rowTagline(row, t)}</span>
@@ -147,19 +150,19 @@ export default function PluginsPage() {
       {inventory.failures.map((failure) => <p key={failure.name} role="status" className="wmux-plugins-muted px-2 pt-3">{t('plugins.settings.loadFailed', { name: failure.name })}</p>)}
     </section>
     {connectorsSelected
-      ? <section className="wmux-plugins-connectors" aria-label={t('connectors.title')}><ConnectorsPage /></section>
+      ? <div className="wmux-plugins-connectors"><ConnectorsPage /></div>
       : <section className="wmux-plugins-detail" aria-label={t('plugins.page.detail')}>
         {failed && <div role="alert" className="wmux-plugins-alert"><span>{t('plugins.settings.failed')}</span><Button onClick={() => void reload()}>{t('connectors.retry')}</Button></div>}
         {selected
-          ? <PluginDetail row={selected} busy={busy || loading} removing={removing === selected.id}
+          ? <PluginDetail row={selected} busy={busy || loading} known={known} removing={removing === selected.id}
             onRemoving={(on) => setRemoving(on ? selected.id : null)} mutate={mutate} />
           : loading && <p role="status" className="wmux-plugins-muted">{t('connectors.loading')}</p>}
       </section>}
   </div>;
 }
 
-function PluginDetail({ row, busy, removing, onRemoving, mutate }: {
-  row: PluginRow; busy: boolean; removing: boolean;
+function PluginDetail({ row, busy, known, removing, onRemoving, mutate }: {
+  row: PluginRow; busy: boolean; known: boolean; removing: boolean;
   onRemoving: (on: boolean) => void;
   mutate: (action: () => Promise<unknown>) => Promise<void>;
 }) {
@@ -167,18 +170,18 @@ function PluginDetail({ row, busy, removing, onRemoving, mutate }: {
   const plugin = row.installed;
   const entry = row.catalog;
   const credit = entry
-    ? [entry.publisher, entry.license, plugin?.version ?? entry.version].join(' · ')
+    ? [entry.publisher, entry.license, plugin?.version || entry.version].join(' · ')
     : [row.id, plugin?.version].filter(Boolean).join(' · ');
   const description = entry ? t(entry.hintKey) : plugin?.description;
   const capabilities = plugin?.capabilities ?? entry?.capabilities ?? [];
   const { primary, secondary } = pluginActions(row);
   const run: Record<PluginAction, () => void> = {
-    install: () => void mutate(() => window.electronAPI.pluginManagement.install(row.id)),
+    install: () => void act(() => window.electronAPI.pluginManagement.install(row.id)),
     readme: () => { if (entry) void window.electronAPI.shell?.openExternal?.(entry.readme)?.catch?.(() => undefined); },
-    approve: () => void mutate(() => window.electronAPI.plugins.requestApproval(row.id)),
+    approve: () => void act(() => window.electronAPI.plugins.requestApproval(row.id)),
     open: () => useStore.getState().setAppRoute(`plugin:${row.id}`),
-    enable: () => void mutate(() => window.electronAPI.pluginManagement.setEnabled(row.id, true)),
-    disable: () => void mutate(() => window.electronAPI.pluginManagement.setEnabled(row.id, false)),
+    enable: () => void act(() => window.electronAPI.pluginManagement.setEnabled(row.id, true)),
+    disable: () => void act(() => window.electronAPI.pluginManagement.setEnabled(row.id, false)),
     uninstall: () => onRemoving(true),
   };
   const labels: Record<PluginAction, string> = {
@@ -186,7 +189,19 @@ function PluginDetail({ row, busy, removing, onRemoving, mutate }: {
     open: t('plugins.settings.open'), enable: t('connectors.enable'), disable: t('connectors.disable'), uninstall: t('plugins.settings.uninstall'),
   };
   // Turning a broken bundle on or off is refused by main; say so by disabling.
-  const blocked = (action: PluginAction) => busy || ((action === 'enable' || action === 'disable') && !!plugin?.invalid);
+  const blocked = (action: PluginAction) => busy || (action === 'install' && !known)
+    || ((action === 'enable' || action === 'disable') && !!plugin?.invalid);
+  // An action that swaps the buttons (Install, Review, Enable, Uninstall)
+  // takes the focused one away: hand focus to the new primary, not the body.
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (busy || !refocus.current) return;
+    if (document.activeElement && document.activeElement !== document.body) { refocus.current = false; return; }
+    const next = actionsRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])');
+    if (next) { next.focus(); refocus.current = false; }
+  }, [busy, row.state, removing]);
+  const act = (action: () => Promise<unknown>) => { refocus.current = true; return mutate(action); };
   return <div className="wmux-plugins-detail-body" data-plugin-detail={row.id}>
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -210,9 +225,9 @@ function PluginDetail({ row, busy, removing, onRemoving, mutate }: {
       ? <div className="flex flex-wrap items-center gap-2">
         <span className="text-[12px] text-[var(--text-sub)]">{t('plugins.settings.removeHint')}</span>
         <Button autoFocus disabled={busy} onClick={() => onRemoving(false)}>{t('connectors.cancel')}</Button>
-        <Button variant="danger" disabled={busy} onClick={() => void mutate(() => window.electronAPI.pluginManagement.remove(row.id))}>{t('plugins.settings.uninstall')}</Button>
+        <Button variant="danger" disabled={busy} onClick={() => void act(() => window.electronAPI.pluginManagement.remove(row.id))}>{t('plugins.settings.uninstall')}</Button>
       </div>
-      : <div className="flex flex-wrap items-center gap-2">
+      : <div ref={actionsRef} className="flex flex-wrap items-center gap-2">
         {primary && <Button variant="primary" disabled={blocked(primary)} onClick={run[primary]}>{labels[primary]}</Button>}
         {secondary.map((action) => <Button key={action} disabled={blocked(action)} onClick={run[action]}>{labels[action]}</Button>)}
       </div>}

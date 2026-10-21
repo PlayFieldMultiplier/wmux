@@ -166,7 +166,7 @@ export const ko = {
   'plugins.page.noteAvailable': "설치만으로는 아무 권한도 주지 않습니다. 권한을 검토하기 전까지 열리지 않습니다.",
   'plugins.page.noteInstalled': "설치했습니다. 권한을 검토하기 전에는 아무것도 읽을 수 없습니다.",
   'plugins.page.noteApproved': "승인했습니다. 레일에 아이콘이 있습니다.",
-  'plugins.page.noteDisabled': "사용 중지했습니다. 레일에서 아이콘이 빠지고 승인은 유지됩니다.",
+  'plugins.page.noteDisabled': "사용 중지했습니다. 레일에서 아이콘이 빠졌습니다.",
   'plugins.page.whatItCanDo': "할 수 있는 일",
   'plugins.page.cap.railPage': "레일에 페이지 추가",
   'plugins.page.cap.sidebar': "사이드바에 패널 추가",

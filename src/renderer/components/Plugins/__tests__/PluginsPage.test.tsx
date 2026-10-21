@@ -56,6 +56,8 @@ it('installs without auto-approval, then reviews permissions on request', async 
   expect(host.textContent).toContain(en['plugins.page.noteAvailable']);
   await act(async () => button('Install').click());
   expect(api.install).toHaveBeenCalledExactlyOnceWith('office');
+  // The clicked button is gone; focus lands on the new primary, not the body.
+  expect(document.activeElement?.textContent).toBe('Review permissions to open');
   expect(requestApproval).not.toHaveBeenCalled();
   expect(row('office').textContent).toContain('Not approved');
   await act(async () => button('Review permissions to open').click());
@@ -70,10 +72,19 @@ it('opens, disables and re-enables an approved plugin', async () => {
   await act(async () => button('Disable').click());
   expect(api.setEnabled).toHaveBeenCalledExactlyOnceWith('office', false);
   act(() => root.unmount());
-  await mount([{ ...office, trustStatus: 'trusted', enabled: false }]);
+  const second = await mount([{ ...office, trustStatus: 'trusted', enabled: false }]);
   expect(row('office').textContent).toContain('Off');
   expect(hasButton('Open')).toBe(false);
   await act(async () => button('Enable').click());
+  expect(second.api.setEnabled).toHaveBeenCalledExactlyOnceWith('office', true);
+});
+
+it('blocks Enable and Disable for a bundle that failed validation', async () => {
+  await mount([{ ...office, invalid: true }]);
+  expect(button('Uninstall').disabled).toBe(false);
+  act(() => root.unmount());
+  await mount([{ ...office, invalid: true, enabled: false }]);
+  expect(button('Enable').disabled).toBe(true);
 });
 
 it('requires confirmation to remove a catalog bundle', async () => {
@@ -113,6 +124,24 @@ it('shows the Connectors content when the connectors row is selected', async () 
   await mount([]);
   expect(row('connectors').getAttribute('aria-current')).toBe('true');
   expect(host.querySelector('[data-connectors-page]')).not.toBeNull();
+});
+
+it('walks the rows with the arrow keys, selecting as it goes', async () => {
+  await mount([]);
+  row('office').focus();
+  await act(async () => row('office').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
+  expect(document.activeElement).toBe(row('agent-state-page'));
+  expect(useStore.getState().pluginsSelection).toBe('agent-state-page');
+  await act(async () => row('agent-state-page').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+  expect(useStore.getState().pluginsSelection).toBe('connectors');
+});
+
+it('keeps Install waiting until the inventory has been read once', async () => {
+  vi.stubGlobal('electronAPI', { pluginManagement: { list: vi.fn(async () => { throw new Error('down'); }), onChanged: () => () => undefined }, plugins: { list: vi.fn(async () => ({ plugins: [], failures: [] })) } });
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root.render(<PluginsPage />));
+  expect(button('Install').disabled).toBe(true);
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
 });
 
 it('filters rows by the search field', async () => {

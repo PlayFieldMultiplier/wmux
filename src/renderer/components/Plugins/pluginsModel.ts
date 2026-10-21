@@ -54,8 +54,12 @@ export function pluginSections(
   matches: (row: PluginRow) => boolean = () => true,
 ): PluginSections {
   const byName = new Map(plugins.map((plugin) => [plugin.name, plugin]));
-  const catalogIds = new Set(catalog.map((entry) => entry.id));
-  const catalogRows = catalog.map((entry): PluginRow => {
+  // A bundle installed by hand under a catalog id is not that catalog entry:
+  // it keeps its own name and manifest under Installed, and the entry (which
+  // cannot be installed over it) is not listed.
+  const handHeld = new Set(plugins.filter((plugin) => !plugin.managed).map((plugin) => plugin.name));
+  const catalogIds = new Set(catalog.map((entry) => entry.id).filter((id) => !handHeld.has(id)));
+  const catalogRows = catalog.filter((entry) => catalogIds.has(entry.id)).map((entry): PluginRow => {
     const installed = byName.get(entry.id);
     return { id: entry.id, catalog: entry, installed, state: pluginEntryState(installed) };
   }).filter(matches);

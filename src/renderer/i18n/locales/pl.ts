@@ -166,7 +166,7 @@ export const pl = {
   'plugins.page.noteAvailable': "Instalacja nie przyznaje żadnych uprawnień. Wtyczka pozostaje zamknięta, dopóki nie przejrzysz jej uprawnień.",
   'plugins.page.noteInstalled': "Zainstalowano. Nic nie odczyta, dopóki nie przejrzysz jej uprawnień.",
   'plugins.page.noteApproved': "Zatwierdzono. Jej ikona jest na pasku.",
-  'plugins.page.noteDisabled': "Wyłączono. Jej ikony nie ma na pasku; zgoda zostaje zachowana.",
+  'plugins.page.noteDisabled': "Wyłączono. Jej ikony nie ma na pasku.",
   'plugins.page.whatItCanDo': "Co może robić",
   'plugins.page.cap.railPage': "Dodaje stronę do paska",
   'plugins.page.cap.sidebar': "Dodaje panel do paska bocznego",

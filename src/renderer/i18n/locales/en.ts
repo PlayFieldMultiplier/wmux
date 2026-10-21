@@ -166,7 +166,7 @@ export const en = {
   'plugins.page.noteAvailable': "Installing grants nothing. It stays closed until you review its permissions.",
   'plugins.page.noteInstalled': "Installed. It cannot read anything until you review its permissions.",
   'plugins.page.noteApproved': "Approved. Its icon is on the rail.",
-  'plugins.page.noteDisabled': "Disabled. Its icon is off the rail; your approval is kept.",
+  'plugins.page.noteDisabled': "Disabled. Its icon is off the rail.",
   'plugins.page.whatItCanDo': "What it can do",
   'plugins.page.cap.railPage': "Add a page to the rail",
   'plugins.page.cap.sidebar': "Add a panel to the sidebar",

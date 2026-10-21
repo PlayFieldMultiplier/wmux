@@ -35,7 +35,7 @@ const rail = () => container.querySelector<HTMLDivElement>('[data-sidebar-rail]'
 const navIds = () => [...container.querySelectorAll('[data-sidebar-nav]')].map((el) => el.getAttribute('data-sidebar-nav'));
 
 describe('sidebar icon rail', () => {
-  it('lists only pages — Workspaces, Bots, Fleet, Schedules, Remote and Git — each named', async () => {
+  it('lists only pages — Workspaces, Bots, Fleet, Schedules, Remote, Git and Plugins — each named', async () => {
     await act(async () => root.render(<MiniSidebar rail collapsed={false} />));
     // Search & commands is a palette (the titlebar pill), not a page.
     expect(navIds()).toEqual(['home', 'bots', 'fleet', 'schedules', 'remote', 'git', 'plugins']);

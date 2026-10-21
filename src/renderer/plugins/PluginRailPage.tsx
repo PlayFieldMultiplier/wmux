@@ -3,7 +3,7 @@ import { usePlugins, refreshPlugins } from './usePlugins';
 import PluginFrame from './PluginFrame';
 import { useStore } from '../stores';
 import { useT } from '../hooks/useT';
-import { PluginGlyph } from './pluginGlyph';
+import { catalogGlyph, PluginGlyph } from './pluginGlyph';
 import { FOCUS_RING } from '../components/focusRing';
 
 export function PluginRailNavigation({ compact }: { compact: boolean }) {
@@ -18,7 +18,7 @@ export function PluginRailNavigation({ compact }: { compact: boolean }) {
       data-sidebar-nav={`plugin:${p.name}`} title={p.contributes.railPage?.title}
       aria-label={p.contributes.railPage?.title} aria-current={route === `plugin:${p.name}` ? 'page' : undefined}
       onClick={() => useStore.getState().setAppRoute(`plugin:${p.name}`)}>
-      <span className="wmux-nav-icon" aria-hidden="true"><PluginGlyph name={p.name} size={16} /></span>
+      <span className="wmux-nav-icon" aria-hidden="true"><PluginGlyph glyph={catalogGlyph(p.name)} size={16} /></span>
       {!compact && <span className="wmux-nav-label min-w-0 flex-1 truncate text-left">{p.contributes.railPage?.title}</span>}
     </button>
   ))}</>;

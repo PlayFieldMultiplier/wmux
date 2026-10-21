@@ -7,9 +7,13 @@ const GLYPHS: Record<UiPluginGlyph, ComponentType<{ size?: number }>> = {
   pulse: IconPulse,
 };
 
-/** The glyph a catalog entry names; a bundle outside the catalog gets the package. */
-export function PluginGlyph({ name, size = 16 }: { name: string; size?: number }) {
-  const glyph = UI_PLUGIN_CATALOG.find((entry) => entry.id === name)?.glyph;
+/** The glyph the catalog names for a bundle called `name`, if any. */
+export function catalogGlyph(name: string): UiPluginGlyph | undefined {
+  return UI_PLUGIN_CATALOG.find((entry) => entry.id === name)?.glyph;
+}
+
+/** A catalog entry's glyph; a bundle outside the catalog gets the package. */
+export function PluginGlyph({ glyph, size = 16 }: { glyph: UiPluginGlyph | undefined; size?: number }) {
   const Glyph = glyph ? GLYPHS[glyph] : IconPackage;
   return <Glyph size={size} />;
 }

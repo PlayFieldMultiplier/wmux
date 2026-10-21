@@ -25,6 +25,12 @@ describe('pluginSections', () => {
     expect(sections.installed.map((row) => row.id)).toEqual(['hand-made']);
   });
 
+  it('never dresses a bundle installed by hand as the catalog entry it shares a name with', () => {
+    const sections = pluginSections([entry('star', true)], [installed('star', { managed: false })]);
+    expect(sections.signature).toEqual([]);
+    expect(sections.installed.map((row) => [row.id, row.catalog])).toEqual([['star', undefined]]);
+  });
+
   it('filters every section with the same predicate', () => {
     const sections = pluginSections([entry('star', true), entry('plain', false)], [installed('hand-made')], (row) => row.id.startsWith('s'));
     expect(sections).toEqual({ signature: [expect.objectContaining({ id: 'star' })], catalog: [], installed: [] });

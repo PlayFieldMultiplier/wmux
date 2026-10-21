@@ -372,8 +372,6 @@ export function IconBrowser({ size = 14 }: { size?: number }) {
   );
 }
 
-/** Git branch — two nodes on a trunk with a branch line. Opens the Git surface
- *  (worktrees + PRs) in the center pane. */
 /** Drawn on a 24 grid and scaled onto the shared 14 grid at the same stroke. */
 function Icon24({ children, size }: { children: React.ReactNode; size: number }) {
   return <Icon size={size}><g transform="scale(0.58333)" strokeWidth="2.23">{children}</g></Icon>;
@@ -404,6 +402,8 @@ export function IconPlug({ size = 14 }: { size?: number }) {
   return <Icon size={size}><path d="M5 1v4m6-4v4M3 5h10v2a5 5 0 0 1-5 5v3M3 5v2a5 5 0 0 0 5 5" /></Icon>;
 }
 
+/** Git branch — two nodes on a trunk with a branch line. Opens the Git surface
+ *  (worktrees + PRs) in the center pane. */
 export function IconGitBranch({ size = 14 }: { size?: number }) {
   return (
     <Icon size={size}>
