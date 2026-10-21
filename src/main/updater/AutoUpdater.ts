@@ -16,7 +16,7 @@ import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { lstat, readdir, stat, unlink } from 'node:fs/promises';
 import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { IPC } from '../../shared/constants';
+import { IPC, dataSuffix } from '../../shared/constants';
 import {
   artifactTempName,
   digestsEqual,
@@ -47,6 +47,13 @@ import {
 } from './installTeardown';
 import { findInstallIntegrityGap } from './installIntegrity';
 import { requestRendererSessionSave } from '../quit/rendererSessionSave';
+import {
+  clearVerifyFailure,
+  readVerifyFailure,
+  verifyFailurePath,
+  writeVerifyFailure,
+  type VerifyFailure,
+} from './verifyFailureStore';
 import { assessSmartAppControlBlock } from './smartAppControl';
 
 const REPO = 'openwong2kim/wmux';
@@ -147,6 +154,35 @@ const TEMP_ARTIFACT_MISMATCH_DELETE_AFTER_MS = TEMP_ARTIFACT_MAX_AGE_MS;
 // single GitHub release's assets.
 const isUpdaterSupported =
   process.platform === 'win32' || (isDarwin && process.arch === 'arm64');
+
+/**
+ * An instance with a data suffix (WMUX_DATA_SUFFIX: '-dev' for an unpackaged
+ * build, '-portable' for a macOS copy run outside Applications, any test or
+ * bench isolation) keeps its own userData and daemon, so it is not the
+ * installed copy an in-app update replaces. The updater does nothing there.
+ * Read at call time, never at module load: index.ts sets the suffix in
+ * appInit, after this module is evaluated.
+ */
+function updatesOffForInstance(): boolean {
+  return dataSuffix() !== '' && !updaterAllowedUnderSuffix();
+}
+
+/**
+ * TEST-ONLY switch for live-testing the updater from an isolated instance:
+ * WMUX_UPDATER_ALLOW_SUFFIX=1 re-enables check, download and verification
+ * under a data suffix. Install is refused under a suffix regardless (see
+ * performInstall), and the startup temp sweeps stay off. Not a user setting.
+ */
+function updaterAllowedUnderSuffix(): boolean {
+  return process.env.WMUX_UPDATER_ALLOW_SUFFIX === '1';
+}
+
+/**
+ * The whole installer arrived and its SHA-256 is not the one the manifest
+ * published. Distinct from a transport failure: fetching the same artifact
+ * again gives the same bytes, so this one is remembered (verifyFailureStore).
+ */
+class InstallerDigestMismatchError extends Error {}
 
 interface UpdateInfo {
   name: string;
@@ -255,6 +291,9 @@ export class AutoUpdater {
   // resolves (never throws) on failure, so without this a second call would
   // launch the installer twice.
   private isInstalling = false;
+  // The published (version, sha256) whose installer failed verification —
+  // see verifyFailureStore.ts. `undefined` until first read from userData.
+  private verifyFailure: VerifyFailure | null | undefined = undefined;
 
   constructor(getWindow: () => BrowserWindow | null, hooks: AutoUpdaterHooks) {
     this.getWindow = getWindow;
@@ -268,6 +307,8 @@ export class AutoUpdater {
     // module evaluation, before the window exists at all.
     ipcMain.handle(IPC.UPDATE_TAKE_REFUSED_INSTALL, () => this.takeRefusedInstall());
     ipcMain.handle(IPC.UPDATE_GET_PENDING_INSTALL, () => this.getPendingInstall());
+    // Same pull, same reason: Settings › Updates is mounted only while open.
+    ipcMain.handle(IPC.UPDATE_GET_NOTICE, () => this.getNotice());
     // #1250 — same class of bug as #866, one channel over. The renderer sends
     // the persisted auto-update toggle during loadSession (~1s in), and it
     // sends with ipcRenderer.send — fire-and-forget. A listener registered in
@@ -311,16 +352,22 @@ export class AutoUpdater {
       return;
     }
 
-    // #1283 review — sweep waiter task registrations a previous update failed
-    // to clean up (a `/Create` that timed out after the server committed, a
-    // `/Delete` that failed). They carry no trigger so they cannot fire on
-    // their own, but they point at a `%TEMP%` path the installer has since
-    // invalidated and they are litter in the user's task list. Startup is
-    // where this belongs: the quit path is the one place blocking costs the
-    // user something.
-    if (process.platform === 'win32') sweepStaleWaiterTasks();
-
-    void this.sweepStaleArtifacts();
+    const suffix = dataSuffix();
+    if (suffix) {
+      if (!updaterAllowedUnderSuffix()) {
+        console.log(
+          `[AutoUpdater] in-app updates are off for this instance: WMUX_DATA_SUFFIX="${suffix}" gives it its own data, ` +
+          'so it is not the installed copy an update replaces. No checks, downloads, installs or temp sweeps.',
+        );
+        return;
+      }
+      console.log(
+        `[AutoUpdater] WMUX_UPDATER_ALLOW_SUFFIX=1 (test-only): checking, downloading and verifying under WMUX_DATA_SUFFIX="${suffix}"; ` +
+        'install stays refused and temp sweeps stay off',
+      );
+    } else {
+      this.sweepAtStartup();
+    }
 
     // #866: if the last install was refused because the install root never
     // cleared, the waiter left a marker instead of running Setup.exe. The
@@ -335,6 +382,24 @@ export class AutoUpdater {
 
     // 이후 주기적 확인
     this.checkTimer = setInterval(() => this.check(), CHECK_INTERVAL_MS);
+  }
+
+  /**
+   * Startup housekeeping in temp and the task list. Only for the instance that
+   * owns the installation: an instance with a data suffix shares temp with
+   * the installed one and must not delete what that one is using.
+   */
+  private sweepAtStartup(): void {
+    // #1283 review — sweep waiter task registrations a previous update failed
+    // to clean up (a `/Create` that timed out after the server committed, a
+    // `/Delete` that failed). They carry no trigger so they cannot fire on
+    // their own, but they point at a `%TEMP%` path the installer has since
+    // invalidated and they are litter in the user's task list. Startup is
+    // where this belongs: the quit path is the one place blocking costs the
+    // user something.
+    if (process.platform === 'win32') sweepStaleWaiterTasks();
+
+    void this.sweepStaleArtifacts();
   }
 
   /**
@@ -617,6 +682,7 @@ export class AutoUpdater {
     // Defense in depth: never poll the update feed on an unsupported platform,
     // even if a caller invokes check() directly.
     if (!isUpdaterSupported) return;
+    if (updatesOffForInstance()) return;
     // The auto-update toggle silences BACKGROUND polls only. A manual
     // "check for updates" press (oneShot) is an explicit user request and
     // must work with the toggle off — otherwise the toggle bricks the only
@@ -632,6 +698,12 @@ export class AutoUpdater {
 
     try {
       const update = await this.fetchUpdate();
+      // A failed-verification record only stands while that same version is
+      // what the feed offers; nothing offered, or another version, ends it.
+      const failure = this.getVerifyFailure();
+      if (failure && (!update || normalizeVersion(update.name) !== normalizeVersion(failure.version))) {
+        this.setVerifyFailure(null);
+      }
       if (update) {
         const isNewVersion = this.pendingUpdate?.name !== update.name;
         this.pendingUpdate = update;
@@ -682,6 +754,7 @@ export class AutoUpdater {
    */
   private async downloadUpdate(): Promise<void> {
     if (!isUpdaterSupported) return;
+    if (updatesOffForInstance()) return;
     // #1250: the enabled gate in check() runs when the poll STARTS. The
     // renderer's toggle (or the boot read) can land between that start and
     // this dispatch — fetchUpdate is awaited — and a background download must
@@ -696,22 +769,36 @@ export class AutoUpdater {
     this.isDownloading = true;
 
     let tempPath: string | null = null;
+    let manifest: UpdateManifest | null = null;
     try {
       const manifestRaw = await this.fetchManifest();
       const validated = validateManifest(manifestRaw, pending.name);
       if (!validated.ok) {
         throw new Error(`update manifest rejected: ${validated.reason}`);
       }
+      manifest = validated.manifest;
       // #995: this machine may already hold a verified installer for exactly
       // this version (an aborted install, or a restart before the user pressed
       // Restart). Re-verify it against the manifest we just fetched and reuse
       // it rather than pulling the same ~150 MB down again.
       tempPath = await this.adoptExistingArtifact(validated.manifest);
       if (!tempPath) {
+        // This exact artifact already failed verification: downloading it
+        // again fails the same way, ~150 MB every 30 minutes. Wait for the
+        // manifest to change. A manual "check for updates" is the one retry
+        // left to the user (a mismatch from a corrupted transfer would
+        // otherwise hold until the next release).
+        const failure = this.getVerifyFailure();
+        if (failure && !this.oneShotInstall && this.isRecordedFailure(failure, validated.manifest)) {
+          console.warn(`[AutoUpdater] ${pending.name} failed verification before and its manifest is unchanged — not downloading it again`);
+          this.sendVerifyFailed(pending.name);
+          return;
+        }
         tempPath = await this.downloadAndVerify(validated.manifest, (percent) => {
           this.sendToRenderer(IPC.UPDATE_DOWNLOAD, { status: 'downloading', percent });
         });
       }
+      if (this.getVerifyFailure()) this.setVerifyFailure(null);
       if (this.pendingUpdate?.name !== pending.name) {
         // A newer release superseded this download mid-flight (check() replaced
         // pendingUpdate). Committing it would let a one-shot install restart the
@@ -748,13 +835,62 @@ export class AutoUpdater {
       }
       this.downloadedPath = null;
       this.downloadedSha = null;
-      this.sendToRenderer(IPC.UPDATE_ERROR, {
-        status: 'error',
-        message: `Update could not be downloaded or verified: ${message}`,
-      });
+      if (err instanceof InstallerDigestMismatchError && manifest) {
+        this.setVerifyFailure({ version: manifest.version, sha256: manifest.sha256 });
+        this.sendVerifyFailed(pending.name);
+      } else {
+        this.sendToRenderer(IPC.UPDATE_ERROR, {
+          status: 'error',
+          message: `Update could not be downloaded or verified: ${message}`,
+        });
+      }
     } finally {
       this.isDownloading = false;
     }
+  }
+
+  private isRecordedFailure(failure: VerifyFailure, manifest: UpdateManifest): boolean {
+    return normalizeVersion(failure.version) === normalizeVersion(manifest.version) &&
+      digestsEqual(failure.sha256, manifest.sha256);
+  }
+
+  private getVerifyFailure(): VerifyFailure | null {
+    if (this.verifyFailure === undefined) {
+      this.verifyFailure = readVerifyFailure(verifyFailurePath(app.getPath('userData')));
+    }
+    return this.verifyFailure;
+  }
+
+  /** Kept in memory and in userData, so a restart does not pay for it again. */
+  private setVerifyFailure(record: VerifyFailure | null): void {
+    this.verifyFailure = record;
+    const file = verifyFailurePath(app.getPath('userData'));
+    if (record) writeVerifyFailure(file, record);
+    else clearVerifyFailure(file);
+  }
+
+  private sendVerifyFailed(version: string): void {
+    this.sendToRenderer(IPC.UPDATE_ERROR, {
+      status: 'error',
+      code: 'verify-failed',
+      releaseName: version,
+      message: `The installer published for ${version} does not match its published checksum, so it was not used. wmux tries again when the release changes.`,
+    });
+  }
+
+  /**
+   * What Settings › Updates says even when no event reached it (it is mounted
+   * only while open). A failed-verification record for a version that is no
+   * longer newer than the running one is stale (the user updated another
+   * way) and is not reported.
+   */
+  private getNotice(): { instanceDisabled: boolean; verifyFailedVersion: string | null } {
+    const failure = this.getVerifyFailure();
+    return {
+      instanceDisabled: updatesOffForInstance(),
+      verifyFailedVersion:
+        failure && isVersionNewer(failure.version, app.getVersion()) ? failure.version : null,
+    };
   }
 
   private async fetchUpdate(): Promise<UpdateInfo | null> {
@@ -928,7 +1064,7 @@ export class AutoUpdater {
               settled = true;
               resolve(dest);
             } else {
-              fail(new Error(`sha256 mismatch: expected ${manifest.sha256}, got ${actual}`));
+              fail(new InstallerDigestMismatchError(`sha256 mismatch: expected ${manifest.sha256}, got ${actual}`));
             }
           });
         });
@@ -946,6 +1082,8 @@ export class AutoUpdater {
       if (process.env.NODE_ENV === 'development' || !isUpdaterSupported) {
         return { status: 'not-available' };
       }
+      // Not "up to date": nothing was checked. Settings says why (getNotice).
+      if (updatesOffForInstance()) return { status: 'disabled' };
       // Don't await — fire and forget, results come via IPC events. A manual
       // press is a one-shot "update now": auto-install once verified.
       this.check(true);
@@ -979,6 +1117,19 @@ export class AutoUpdater {
       // installer built for another OS. The install paths below are
       // unreachable here.
       console.log(`[AutoUpdater] install ignored on ${process.platform} — no in-app installer for this platform.`);
+      return;
+    }
+    // Always, even under the test-only WMUX_UPDATER_ALLOW_SUFFIX: the install
+    // replaces whatever lives under this executable's root and takes the
+    // daemon down with it, and an instance with its own data is not the copy
+    // that may do that.
+    if (dataSuffix()) {
+      console.log(`[AutoUpdater] install refused: this instance runs with WMUX_DATA_SUFFIX="${dataSuffix()}"`);
+      this.sendToRenderer(IPC.UPDATE_ERROR, {
+        status: 'error',
+        source: 'install',
+        message: 'In-app install is off for this instance because it runs with separate data (WMUX_DATA_SUFFIX). Update the installed wmux instead.',
+      });
       return;
     }
     // Both guards below used to return with only a console.log. Nothing reached

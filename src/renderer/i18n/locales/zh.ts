@@ -901,6 +901,9 @@ export const zh = {
   'settings.latestVersion': '最新版本',
   'settings.updateReady': '更新已准备就绪',
   'settings.updateEndsSessions': '安装会关闭所有窗格。',
+  'settings.updateVerifyFailed':
+    '无法验证已发布的更新 {version}，因此未安装。发布内容变更后 wmux 会再次尝试。',
+  'settings.updatesOffForInstance': '此 wmux 副本使用独立数据运行，因此应用内更新已关闭。',
   'update.installFailed': '无法安装更新。{error}',
   'settings.checkFailed': '检查失败',
   'settings.unknownError': '未知错误',

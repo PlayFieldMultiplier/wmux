@@ -3335,6 +3335,9 @@ export const en = {
   'settings.latestVersion': 'Latest',
   'settings.updateReady': 'Update ready',
   'settings.updateEndsSessions': 'Installing closes every pane.',
+  'settings.updateVerifyFailed':
+    'The published update {version} could not be verified, so it was not installed. wmux tries again when the release changes.',
+  'settings.updatesOffForInstance': 'In-app updates are off for this copy of wmux because it runs with separate data.',
   'update.installFailed': 'The update could not be installed. {error}',
   'settings.checkFailed': 'Check failed',
   'settings.unknownError': 'Unknown error',

@@ -2794,6 +2794,9 @@ export const ko = {
   'settings.latestVersion': '최신 버전',
   'settings.updateReady': '업데이트 준비 완료',
   'settings.updateEndsSessions': '설치하면 모든 판이 닫힙니다.',
+  'settings.updateVerifyFailed':
+    '게시된 업데이트 {version}을(를) 검증하지 못해 설치하지 않았습니다. 릴리스가 바뀌면 wmux가 다시 시도합니다.',
+  'settings.updatesOffForInstance': '이 wmux는 별도 데이터로 실행 중이라 앱 내 업데이트가 꺼져 있습니다.',
   'update.installFailed': '업데이트를 설치하지 못했습니다. {error}',
   'settings.checkFailed': '확인 실패',
   'settings.unknownError': '알 수 없는 오류',

@@ -2009,6 +2009,12 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.UPDATE_GET_PENDING_INSTALL) as Promise<
         { version: string; currentVersion: string } | null
       >,
+    // What Settings › Updates says without an event: updates off for this
+    // instance (data suffix), or a published update that failed verification.
+    getNotice: () =>
+      ipcRenderer.invoke(IPC.UPDATE_GET_NOTICE) as Promise<
+        { instanceDisabled: boolean; verifyFailedVersion: string | null }
+      >,
     onUpdateAvailable: (callback: (data: { status: string; releaseName?: string }) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, data: { status: string; releaseName?: string }) =>
         callback(data);
@@ -2021,8 +2027,8 @@ const electronAPI = {
       ipcRenderer.on(IPC.UPDATE_NOT_AVAILABLE, listener);
       return () => { ipcRenderer.removeListener(IPC.UPDATE_NOT_AVAILABLE, listener); };
     },
-    onUpdateError: (callback: (data: { status: string; message: string; source?: 'install'; code?: 'in-progress' | 'smart-app-control' }) => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, data: { status: string; message: string; source?: 'install'; code?: 'in-progress' | 'smart-app-control' }) =>
+    onUpdateError: (callback: (data: { status: string; message: string; source?: 'install'; code?: 'in-progress' | 'smart-app-control' | 'verify-failed'; releaseName?: string }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: { status: string; message: string; source?: 'install'; code?: 'in-progress' | 'smart-app-control' | 'verify-failed'; releaseName?: string }) =>
         callback(data);
       ipcRenderer.on(IPC.UPDATE_ERROR, listener);
       return () => { ipcRenderer.removeListener(IPC.UPDATE_ERROR, listener); };

@@ -51,9 +51,15 @@ const realPlatform = process.platform;
 const realArch = process.arch;
 const tempDirs: string[] = [];
 
+// The test setup gives every suite WMUX_DATA_SUFFIX='-vitest', and the updater
+// does nothing under a data suffix; each load clears it and this restores it.
+const realDataSuffix = process.env.WMUX_DATA_SUFFIX;
+
 afterEach(() => {
   Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   Object.defineProperty(process, 'arch', { value: realArch, configurable: true });
+  if (realDataSuffix === undefined) delete process.env.WMUX_DATA_SUFFIX;
+  else process.env.WMUX_DATA_SUFFIX = realDataSuffix;
   vi.resetModules();
   vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
@@ -80,6 +86,7 @@ async function loadForPlatform(
   vi.resetModules();
   Object.defineProperty(process, 'platform', { value: platform, configurable: true });
   Object.defineProperty(process, 'arch', { value: arch, configurable: true });
+  delete process.env.WMUX_DATA_SUFFIX;
 
   const requestUrls: string[] = [];
   const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -611,7 +618,7 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
     await installHandler();
 
     expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242]);
-    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as {
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as unknown as {
       pids: number[];
       forceKillEligiblePids: number[];
     };

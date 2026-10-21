@@ -3308,6 +3308,9 @@ export const pl = {
   'settings.latestVersion': 'Najnowsza',
   'settings.updateReady': 'Aktualizacja gotowa',
   'settings.updateEndsSessions': 'Instalacja zamyka każdy panel.',
+  'settings.updateVerifyFailed':
+    'Nie udało się zweryfikować opublikowanej aktualizacji {version}, więc nie została zainstalowana. wmux spróbuje ponownie, gdy wydanie się zmieni.',
+  'settings.updatesOffForInstance': 'Aktualizacje w aplikacji są wyłączone dla tej kopii wmux, ponieważ działa ona z osobnymi danymi.',
   'update.installFailed': 'Nie udało się zainstalować aktualizacji. {error}',
   'settings.checkFailed': 'Sprawdzanie nie powiodło się',
   'settings.unknownError': 'Nieznany błąd',

@@ -32,8 +32,19 @@ function quitHooks() {
 }
 
 const realPlatform = process.platform;
+// The test setup gives every suite WMUX_DATA_SUFFIX='-vitest', and the updater
+// does nothing under a data suffix. Each load clears it unless a test asks for
+// one; this puts it back.
+const realDataSuffix = process.env.WMUX_DATA_SUFFIX;
+const realAllowSuffix = process.env.WMUX_UPDATER_ALLOW_SUFFIX;
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 afterEach(() => {
   Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  restoreEnv('WMUX_DATA_SUFFIX', realDataSuffix);
+  restoreEnv('WMUX_UPDATER_ALLOW_SUFFIX', realAllowSuffix);
   vi.resetModules();
   vi.useRealTimers();
 });
@@ -59,13 +70,24 @@ async function loadWin32(
     tempFiles = {},
     appVersion = FAKE_VERSION,
     net: netModes = {},
-  }: { sha?: string; tempFiles?: Record<string, TempFile>; appVersion?: string; net?: NetModes } = {},
+    dataSuffix = '',
+    verifyFailure = null,
+  }: {
+    sha?: string;
+    tempFiles?: Record<string, TempFile>;
+    appVersion?: string;
+    net?: NetModes;
+    dataSuffix?: string;
+    verifyFailure?: { version: string; sha256: string } | null;
+  } = {},
 ) {
   vi.resetModules();
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  if (dataSuffix) process.env.WMUX_DATA_SUFFIX = dataSuffix;
+  else delete process.env.WMUX_DATA_SUFFIX;
 
   // Mutable so a test can bump the offered release mid-run (supersede paths).
-  const feed = { version: NEW_VERSION };
+  const feed = { version: NEW_VERSION, sha };
   const requestUrls: string[] = [];
   const ipcHandlers = new Map<string, (...a: unknown[]) => unknown>();
   const openPath = vi.fn(async (_p: string) => '');
@@ -89,7 +111,7 @@ async function loadWin32(
           } else if (url.includes('update.electronjs.org')) {
             respondJson(cbs, { name: feed.version, notes: 'notes', url: DL_URL });
           } else if (url.includes('update-manifest.json')) {
-            respondJson(cbs, { version: feed.version, setupExe: `wmux-${feed.version}.Setup.exe`, sha256: sha, url: DL_URL });
+            respondJson(cbs, { version: feed.version, setupExe: `wmux-${feed.version}.Setup.exe`, sha256: feed.sha, url: DL_URL });
           } else {
             respondBody(cbs, INSTALLER_BODY);
           }
@@ -217,6 +239,17 @@ async function loadWin32(
   };
   vi.doMock('../installTeardown', () => teardown);
 
+  // The failed-verification record lives in userData; '/tmp' here is not a
+  // place to write it, so it is held in memory.
+  const verifyStore = {
+    record: verifyFailure as { version: string; sha256: string } | null,
+    verifyFailurePath: (dir: string) => `${dir}/update-verify-failed.json`,
+    readVerifyFailure: vi.fn((_file: string) => verifyStore.record),
+    writeVerifyFailure: vi.fn((_file: string, rec: { version: string; sha256: string }) => { verifyStore.record = rec; }),
+    clearVerifyFailure: vi.fn((_file: string) => { verifyStore.record = null; }),
+  };
+  vi.doMock('../verifyFailureStore', () => verifyStore);
+
   // #1525 — the pre-quit Smart App Control check spawns reg.exe/PowerShell
   // for real, and the machine running the suite may be enforcing SAC. Pinned
   // to "not enforcing" so these flows never depend on the host's policy.
@@ -241,7 +274,7 @@ async function loadWin32(
   }));
 
   const mod = await import('../AutoUpdater');
-  return { AutoUpdater: mod.AutoUpdater, requestUrls, ipcHandlers, sent, openPath, quit, win, feed, unlinkMock, teardown, tempFiles, aborted };
+  return { AutoUpdater: mod.AutoUpdater, requestUrls, ipcHandlers, sent, openPath, quit, win, feed, unlinkMock, teardown, tempFiles, aborted, verifyStore };
 }
 
 /** Flush queued microtasks so the chained net responses (feed→manifest→download) settle. */
@@ -801,5 +834,191 @@ describe('AutoUpdater requests always settle (win32)', () => {
 
     expect(String(errors(sent)[0]?.data.message)).toContain('invalid version');
     expect(requestUrls.some((u) => u.includes('update-manifest.json'))).toBe(false);
+  });
+});
+
+/**
+ * A verified-hash mismatch used to delete the file and fetch the same ~150 MB
+ * again on every 30-minute poll, silently. The failed (version, sha256) is now
+ * remembered and nothing is downloaded until the manifest changes.
+ */
+describe('AutoUpdater after a failed verification (win32)', () => {
+  const BAD_SHA = 'a'.repeat(64);
+  const downloads = (urls: string[]) => urls.filter((u) => u === DL_URL).length;
+  const verifyFailedErrors = (sent: Sent[]) =>
+    sent.filter((s) => s.channel === IPC.UPDATE_ERROR && s.data.code === 'verify-failed');
+  const backgroundCheck = (updater: unknown) =>
+    (updater as { check: (oneShot?: boolean) => Promise<void> }).check();
+
+  it('records the mismatch and does not download the same artifact again', async () => {
+    const { AutoUpdater, requestUrls, sent, win, verifyStore } = await loadWin32({ sha: BAD_SHA });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+    expect(downloads(requestUrls)).toBe(1);
+    expect(verifyStore.record).toEqual({ version: NEW_VERSION, sha256: BAD_SHA });
+    expect(verifyFailedErrors(sent)).toHaveLength(1);
+
+    await backgroundCheck(updater);
+    await flush();
+    expect(downloads(requestUrls)).toBe(1);
+    // Still said, on every poll: the Settings line comes from these.
+    expect(verifyFailedErrors(sent)).toHaveLength(2);
+    expect(verifyFailedErrors(sent)[1].data.releaseName).toBe(NEW_VERSION);
+  });
+
+  it('a record from an earlier run holds too (it is read from userData)', async () => {
+    const { AutoUpdater, requestUrls, win } = await loadWin32({
+      sha: BAD_SHA,
+      verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA },
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(requestUrls.some((u) => u.includes('update-manifest.json'))).toBe(true);
+    expect(downloads(requestUrls)).toBe(0);
+  });
+
+  it('downloads again once the manifest publishes a different sha256, and clears the record', async () => {
+    const { AutoUpdater, feed, requestUrls, sent, win, verifyStore } = await loadWin32({ sha: BAD_SHA });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    await backgroundCheck(updater);
+    await flush();
+
+    feed.sha = GOOD_SHA;
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(downloads(requestUrls)).toBe(2);
+    expect(verifyStore.record).toBeNull();
+    expect(sent.map((s) => `${s.channel}:${s.data.status}`)).toContain(`${IPC.UPDATE_AVAILABLE}:downloaded`);
+  });
+
+  it('a different version on the feed ends the record', async () => {
+    const { AutoUpdater, feed, win, verifyStore } = await loadWin32({
+      verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA },
+    });
+    feed.version = '9.9.11';
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(verifyStore.record).toBeNull();
+  });
+
+  it('a manual check for updates still retries the download', async () => {
+    const { AutoUpdater, ipcHandlers, requestUrls, win } = await loadWin32({
+      sha: BAD_SHA,
+      verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA },
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+
+    await ipcHandlers.get(IPC.UPDATE_CHECK)!();
+    await flush();
+
+    expect(downloads(requestUrls)).toBe(1);
+  });
+
+  it('Settings can read the notice on mount, and a stale record is not reported', async () => {
+    const fresh = await loadWin32({ verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA } });
+    new fresh.AutoUpdater(() => fresh.win as never, quitHooks());
+    expect(await fresh.ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
+      instanceDisabled: false,
+      verifyFailedVersion: NEW_VERSION,
+    });
+
+    // The user is already on that version (updated another way).
+    const stale = await loadWin32({ appVersion: NEW_VERSION, verifyFailure: { version: NEW_VERSION, sha256: BAD_SHA } });
+    new stale.AutoUpdater(() => stale.win as never, quitHooks());
+    expect(await stale.ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
+      instanceDisabled: false,
+      verifyFailedVersion: null,
+    });
+  });
+});
+
+/**
+ * An instance with a data suffix has its own data and is not the installed
+ * copy an update replaces: no checks, downloads, installs or temp sweeps.
+ */
+describe('AutoUpdater under a data suffix (win32)', () => {
+  const staleName = `wmux-update-${FAKE_VERSION}-1-wmux-${FAKE_VERSION}.Setup.exe`;
+  const staleArtifact = () => ({ [staleName]: { body: INSTALLER_BODY, mtimeMs: Date.now() - 3 * 24 * 60 * 60 * 1000 } });
+
+  it('does nothing: no scheduled check, no sweep, and a manual check reports disabled', async () => {
+    vi.useFakeTimers();
+    const { AutoUpdater, ipcHandlers, requestUrls, unlinkMock, win, teardown } = await loadWin32({
+      dataSuffix: '-dev',
+      tempFiles: staleArtifact(),
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+
+    expect(requestUrls).toEqual([]);
+    expect(unlinkMock).not.toHaveBeenCalled();
+    expect(teardown.sweepStaleWaiterTasks).not.toHaveBeenCalled();
+    expect(await ipcHandlers.get(IPC.UPDATE_CHECK)!()).toEqual({ status: 'disabled' });
+    expect(requestUrls).toEqual([]);
+    expect(await ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
+      instanceDisabled: true,
+      verifyFailedVersion: null,
+    });
+    updater.stop();
+  });
+
+  it('refuses to install, even with a verified installer staged', async () => {
+    const staged = `wmux-update-${NEW_VERSION}-1-wmux-${NEW_VERSION}.Setup.exe`;
+    const { AutoUpdater, ipcHandlers, quit, sent, win, teardown } = await loadWin32({
+      dataSuffix: '-portable',
+      tempFiles: { [staged]: { body: INSTALLER_BODY } },
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+    const internals = updater as unknown as {
+      downloadedPath: string | null;
+      downloadedSha: string | null;
+      pendingUpdate: { name: string; notes: string; url: string } | null;
+    };
+    internals.downloadedPath = `/tmp/${staged}`;
+    internals.downloadedSha = GOOD_SHA;
+    internals.pendingUpdate = { name: NEW_VERSION, notes: 'n', url: DL_URL };
+
+    await ipcHandlers.get(IPC.UPDATE_INSTALL)!();
+    await flush();
+
+    expect(teardown.spawnInstallWaiter).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    const err = sent.find((s) => s.channel === IPC.UPDATE_ERROR);
+    expect(err?.data.source).toBe('install');
+    expect(String(err?.data.message)).toContain('off for this instance');
+  });
+
+  it('WMUX_UPDATER_ALLOW_SUFFIX=1 re-enables check, download and verify, but never install or sweeps', async () => {
+    process.env.WMUX_UPDATER_ALLOW_SUFFIX = '1';
+    const { AutoUpdater, ipcHandlers, quit, sent, unlinkMock, win, teardown } = await loadWin32({
+      dataSuffix: '-dev',
+      tempFiles: staleArtifact(),
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+    await flush();
+    expect(unlinkMock).not.toHaveBeenCalled();
+    expect(teardown.sweepStaleWaiterTasks).not.toHaveBeenCalled();
+
+    await (updater as unknown as { check: () => Promise<void> }).check();
+    await flush();
+    expect(sent.map((s) => `${s.channel}:${s.data.status}`)).toContain(`${IPC.UPDATE_AVAILABLE}:downloaded`);
+
+    await ipcHandlers.get(IPC.UPDATE_INSTALL)!();
+    await flush();
+    expect(teardown.spawnInstallWaiter).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    updater.stop();
   });
 });

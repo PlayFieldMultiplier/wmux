@@ -1582,11 +1582,21 @@ function UpdateStatus() {
   useEffect(() => { releaseNameRef.current = releaseName; }, [releaseName]);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [percent, setPercent] = useState<number | null>(null);
+  // In-app updates are off for this instance (it runs with a data suffix).
+  const [instanceDisabled, setInstanceDisabled] = useState(false);
+  // The published release whose installer failed verification; main does not
+  // download it again until the release changes, and this line says so.
+  const [verifyFailedVersion, setVerifyFailedVersion] = useState<string | null>(null);
   // Updater-not-configured in dev is expected; don't spam toasts for UNKNOWN.
   const { invoke: ipcInvoke } = useIpc({ silent: ['UNKNOWN'] });
 
   useEffect(() => {
     const removeAvailable = window.electronAPI.updater.onUpdateAvailable((data) => {
+      // Another release, or this one verified after all: the failure line no
+      // longer describes what is on offer.
+      setVerifyFailedVersion((prev) => (
+        prev && (data.status === 'downloaded' || (data.releaseName && data.releaseName !== prev)) ? null : prev
+      ));
       if (data.status === 'downloaded') {
         setState('downloaded');
         if (data.releaseName) setReleaseName(data.releaseName);
@@ -1617,8 +1627,15 @@ function UpdateStatus() {
     });
     const removeNotAvailable = window.electronAPI.updater.onUpdateNotAvailable(() => {
       setState('not-available');
+      setVerifyFailedVersion(null);
     });
     const removeError = window.electronAPI.updater.onUpdateError((data) => {
+      // Said by its own line below, not as a generic failure with main's text.
+      if (data.code === 'verify-failed') {
+        setState('idle');
+        setVerifyFailedVersion(data.releaseName || null);
+        return;
+      }
       setState('error');
       setErrorMsg(data.message || '');
     });
@@ -1649,6 +1666,21 @@ function UpdateStatus() {
     return () => { cancelled = true; };
   }, []);
 
+  // Same pull, for what no event may have reached this panel with.
+  useEffect(() => {
+    const read = window.electronAPI?.updater?.getNotice;
+    if (!read) return; // stale preload / tests
+    let cancelled = false;
+    void read()
+      .then((notice) => {
+        if (cancelled) return;
+        setInstanceDisabled(notice.instanceDisabled);
+        if (notice.verifyFailedVersion) setVerifyFailedVersion((prev) => prev ?? notice.verifyFailedVersion);
+      })
+      .catch(() => { /* the widget still works from live events */ });
+    return () => { cancelled = true; };
+  }, []);
+
   const handleCheck = async () => {
     setState('checking');
     const result = await ipcInvoke(() => window.electronAPI.updater.checkForUpdates());
@@ -1656,8 +1688,13 @@ function UpdateStatus() {
     // On an unsupported platform (or in dev) the handler answers 'not-available'
     // directly and no UPDATE_NOT_AVAILABLE event ever follows — without this the
     // widget would sit in 'checking' forever.
-    if ((result.data as { status?: string } | undefined)?.status === 'not-available') {
+    const status = (result.data as { status?: string } | undefined)?.status;
+    if (status === 'not-available') {
       setState('not-available');
+    } else if (status === 'disabled') {
+      // Nothing was checked: this instance does not update itself.
+      setState('idle');
+      setInstanceDisabled(true);
     }
   };
 
@@ -1719,6 +1756,20 @@ function UpdateStatus() {
           {state === 'error' && errorMsg && (
             <span className="ui-field-description font-mono">{errorMsg}</span>
           )}
+          {instanceDisabled && (
+            <span className="ui-field-description" data-update-instance-disabled>
+              {t('settings.updatesOffForInstance')}
+            </span>
+          )}
+          {verifyFailedVersion && !instanceDisabled && (
+            <span
+              className="ui-field-description"
+              style={{ color: 'var(--accent-yellow)' }}
+              data-update-verify-failed
+            >
+              {t('settings.updateVerifyFailed', { version: verifyFailedVersion })}
+            </span>
+          )}
           {/* #866: the Windows install has to run against a dead tree, so the
               daemon goes down with the app and live panes do not survive it.
               Said before the button is pressed, not after — the old copy
@@ -1751,7 +1802,7 @@ function UpdateStatus() {
           <Button
             variant="secondary"
             onClick={handleCheck}
-            disabled={state === 'checking' || state === 'downloading'}
+            disabled={state === 'checking' || state === 'downloading' || instanceDisabled}
             data-settings-check-update
           >
             {t('settings.checkUpdate')}
