@@ -1703,10 +1703,12 @@ export default function AppLayout() {
 
   // ─── First-run wizard: reopen contract for SettingsPanel (T8b) ───────
   // T8b's "Open setup wizard" button dispatches FIRST_RUN_REOPEN_EVENT on
-  // window. No payload. AppLayout listens here and switches the wizard into
-  // mode='reopen' (D9: sample task disabled).
+  // window. No payload. AppLayout listens here and opens the wizard in
+  // mode='reopen' (D9: sample task disabled); an already-open wizard keeps its mode.
   useEffect(() => {
-    const handler = () => setShowFirstRunWizard('reopen');
+    // Already open (the sidebar's "Set up" while first-run setup stepped aside
+    // to its corner card): keep its mode; the wizard itself comes back.
+    const handler = () => setShowFirstRunWizard((cur) => cur ?? 'reopen');
     window.addEventListener(FIRST_RUN_REOPEN_EVENT, handler);
     return () => window.removeEventListener(FIRST_RUN_REOPEN_EVENT, handler);
   }, []);
