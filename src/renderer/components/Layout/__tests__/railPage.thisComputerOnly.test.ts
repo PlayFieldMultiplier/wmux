@@ -4,7 +4,7 @@ import { t } from '../../../i18n';
 
 describe('thisComputerOnlyLine', () => {
   it('names the selected computer on Fleet, Schedules and Git', () => {
-    for (const route of ['fleet', 'schedules', 'git', 'connectors']) {
+    for (const route of ['fleet', 'schedules', 'git', 'plugins']) {
       expect(thisComputerOnlyLine(route, 'office-mac', t)).toBe("This computer · office-mac isn't shown here yet");
     }
   });

@@ -1,0 +1,128 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import PluginsPage from '../PluginsPage';
+import { en } from '../../../i18n/locales/en';
+import { useStore } from '../../../stores';
+import type { InstalledUiPlugin } from '../../../../shared/pluginManagement';
+
+vi.mock('../../../hooks/useT', () => ({ useT: () => (key: keyof typeof en) => en[key] ?? key }));
+vi.mock('../../Connectors/ConnectorsPage', () => ({ default: () => <div data-connectors-page /> }));
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+let root: Root;
+let host: HTMLDivElement;
+beforeEach(() => { useStore.setState({ pluginsSelection: null, appRoute: 'plugins' }); });
+afterEach(() => { act(() => root?.unmount()); host?.remove(); vi.unstubAllGlobals(); });
+function button(text: string, scope: ParentNode = host) {
+  const result = [...scope.querySelectorAll('button')].find((item) => item.textContent === text);
+  if (!result) throw new Error(`Missing ${text}`);
+  return result;
+}
+const hasButton = (text: string) => [...host.querySelectorAll('button')].some((item) => item.textContent === text);
+const row = (id: string) => host.querySelector<HTMLButtonElement>(`[data-plugin-row="${id}"]`)!;
+const office: InstalledUiPlugin = { name: 'office', version: '1.0.0', enabled: true, managed: true,
+  trustStatus: 'unconfirmed', capabilities: ['ui.rail-page', 'agent.state.read', 'pane.read'], activationEvents: [],
+  contributes: { railPage: { title: 'Office', entry: 'index.html' } } };
+async function mount(initial: InstalledUiPlugin[]) {
+  let plugins = initial;
+  const requestApproval = vi.fn(async () => ({ approved: false }));
+  const api = {
+    list: vi.fn(async () => ({ plugins, failures: [] })), onChanged: vi.fn(() => () => undefined),
+    install: vi.fn(async () => { plugins = [office]; }), remove: vi.fn(async () => { plugins = []; }), setEnabled: vi.fn(async () => undefined),
+  };
+  vi.stubGlobal('electronAPI', { pluginManagement: api, plugins: { list: api.list, requestApproval } });
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root.render(<PluginsPage />));
+  return { api, requestApproval };
+}
+
+it('lists Signature before Catalog, then Connectors, from the catalog data', async () => {
+  await mount([]);
+  const headings = [...host.querySelectorAll('[data-plugins-section]')].map((item) => item.getAttribute('data-plugins-section'));
+  expect(headings).toEqual(['signature', 'catalog', 'connectors']);
+  const rows = [...host.querySelectorAll('[data-plugin-row]')].map((item) => item.getAttribute('data-plugin-row'));
+  expect(rows).toEqual(['office', 'agent-state-page', 'connectors']);
+  // The first row opens selected, with its Signature chip and credit.
+  expect(row('office').getAttribute('aria-current')).toBe('true');
+  expect(host.querySelector('[data-plugin-signature-chip]')).not.toBeNull();
+  expect(host.textContent).toContain('bluemas · MIT · 1.0.0');
+  expect(host.textContent).toContain(en['plugins.page.cap.noTerminal']);
+  expect(host.querySelector('[data-installed-section]')).toBeNull();
+});
+
+it('installs without auto-approval, then reviews permissions on request', async () => {
+  const { api, requestApproval } = await mount([]);
+  expect(host.textContent).toContain(en['plugins.page.noteAvailable']);
+  await act(async () => button('Install').click());
+  expect(api.install).toHaveBeenCalledExactlyOnceWith('office');
+  expect(requestApproval).not.toHaveBeenCalled();
+  expect(row('office').textContent).toContain('Not approved');
+  await act(async () => button('Review permissions to open').click());
+  expect(requestApproval).toHaveBeenCalledExactlyOnceWith('office');
+});
+
+it('opens, disables and re-enables an approved plugin', async () => {
+  const { api } = await mount([{ ...office, trustStatus: 'trusted' }]);
+  expect(row('office').textContent).toContain('On');
+  await act(async () => button('Open').click());
+  expect(useStore.getState().appRoute).toBe('plugin:office');
+  await act(async () => button('Disable').click());
+  expect(api.setEnabled).toHaveBeenCalledExactlyOnceWith('office', false);
+  act(() => root.unmount());
+  await mount([{ ...office, trustStatus: 'trusted', enabled: false }]);
+  expect(row('office').textContent).toContain('Off');
+  expect(hasButton('Open')).toBe(false);
+  await act(async () => button('Enable').click());
+});
+
+it('requires confirmation to remove a catalog bundle', async () => {
+  const { api } = await mount([office]);
+  await act(async () => button('Uninstall').click());
+  expect(api.remove).not.toHaveBeenCalled();
+  expect(button('Cancel')).toBe(document.activeElement);
+  await act(async () => button('Uninstall').click());
+  expect(api.remove).toHaveBeenCalledExactlyOnceWith('office');
+  expect(row('office').textContent).not.toContain('Not approved');
+});
+
+it('lists a bundle installed by hand under Installed and offers no file deletion', async () => {
+  const { api } = await mount([{ ...office, name: 'hand-made', managed: false, contributes: { railPage: { title: 'Hand made', entry: 'index.html' } } }]);
+  expect(host.querySelector('[data-plugins-section="installed"]')).not.toBeNull();
+  await act(async () => row('hand-made').click());
+  expect(hasButton('Uninstall')).toBe(false);
+  expect(host.textContent).toContain(en['plugins.settings.manual']);
+  await act(async () => button('Disable').click());
+  expect(api.setEnabled).toHaveBeenCalledExactlyOnceWith('hand-made', false);
+  expect(api.remove).not.toHaveBeenCalled();
+});
+
+it('shows each catalog entry under its own name, tagline and publisher', async () => {
+  await mount([]);
+  expect(row('office').textContent).toContain(en['plugins.page.officeTagline']);
+  expect(row('agent-state-page').textContent).toContain(en['plugins.page.agentStatusTagline']);
+  await act(async () => row('agent-state-page').click());
+  expect(useStore.getState().pluginsSelection).toBe('agent-state-page');
+  expect(host.textContent).toContain(en['plugins.settings.agentStatusHint']);
+  expect(host.textContent).toContain('wmux · MIT · 1.0.0');
+  expect(host.querySelector('[data-plugin-signature-chip]')).toBeNull();
+});
+
+it('shows the Connectors content when the connectors row is selected', async () => {
+  useStore.getState().setAppRoute('connectors');
+  await mount([]);
+  expect(row('connectors').getAttribute('aria-current')).toBe('true');
+  expect(host.querySelector('[data-connectors-page]')).not.toBeNull();
+});
+
+it('filters rows by the search field', async () => {
+  await mount([]);
+  const input = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    setter.call(input, 'status');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const rows = [...host.querySelectorAll('[data-plugin-row]')].map((item) => item.getAttribute('data-plugin-row'));
+  expect(rows).toEqual(['agent-state-page']);
+});

@@ -8,12 +8,25 @@ export const PLUGIN_MANAGEMENT_IPC = {
   changed: 'plugins:changed',
 } as const;
 
-/** Curated, shipped originals only. IDs never resolve arbitrary paths or URLs. */
+/** Glyphs a catalog entry may name for its rail item and Plugins page tile. */
+export type UiPluginGlyph = 'office' | 'pulse';
+
+/**
+ * Curated, shipped originals only. IDs never resolve arbitrary paths or URLs.
+ * `signature` entries head the Plugins page; `capabilities` mirror each
+ * bundle's manifest (pinned by a test) so an entry not yet installed can say
+ * what it would be allowed to do.
+ */
 export const UI_PLUGIN_CATALOG = [{
   id: 'agent-state-page',
   name: 'Agent status',
   titleKey: 'plugins.settings.agentStatus',
   hintKey: 'plugins.settings.agentStatusHint',
+  taglineKey: 'plugins.page.agentStatusTagline',
+  signature: false,
+  glyph: 'pulse',
+  capabilities: ['ui.rail-page', 'agent.state.read', 'pane.read'],
+  readme: 'https://github.com/openwong2kim/wmux/blob/main/examples/plugins/agent-state-page/README.md',
   publisher: 'wmux',
   license: 'MIT',
   version: '1.0.0',
@@ -23,11 +36,18 @@ export const UI_PLUGIN_CATALOG = [{
   name: 'Office',
   titleKey: 'plugins.settings.office',
   hintKey: 'plugins.settings.officeHint',
+  taglineKey: 'plugins.page.officeTagline',
+  signature: true,
+  glyph: 'office',
+  capabilities: ['ui.rail-page', 'agent.state.read', 'pane.read'],
+  readme: 'https://github.com/openwong2kim/wmux/blob/main/examples/plugins/office/README.md',
   publisher: 'bluemas',
   license: 'MIT',
   version: '1.0.0',
   files: ['manifest.json', 'index.html', 'office.js', 'layout.js', 'sprites.js', 'characters.png', 'furniture.png', 'README.md', 'LICENSE'],
 }] as const;
+
+export type UiPluginCatalogEntry = typeof UI_PLUGIN_CATALOG[number];
 
 export interface InstalledUiPlugin extends PluginHostPluginSummary {
   enabled: boolean;

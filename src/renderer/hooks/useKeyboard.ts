@@ -556,6 +556,7 @@ export function useKeyboard() {
       toggleFleetView: () => { store.getState().toggleFleetView(); },
       toggleCompanyView: () => { store.getState().toggleCompanyView(); },
       toggleBotsView: () => { store.getState().toggleBotsView(); },
+      togglePluginsView: () => { store.getState().togglePluginsView(); },
       // Back to single view.
       clearMultiview: () => { store.getState().clearMultiview(); },
       // Browser panel in a new horizontal split. forceNew keeps the

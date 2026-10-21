@@ -367,6 +367,11 @@ export default function CommandPalette() {
         action: () => { useStore.getState().openBotsPage(); setVisible(false); },
       },
       {
+        label: t('palette.cmd.openPlugins'),
+        shortcut: 'togglePluginsView',
+        action: () => { useStore.getState().setAppRoute('plugins'); setVisible(false); },
+      },
+      {
         label: t('palette.cmd.openFleetView'),
         shortcut: 'toggleFleetView',
         action: () => { useStore.getState().setFleetViewVisible(true); setVisible(false); },

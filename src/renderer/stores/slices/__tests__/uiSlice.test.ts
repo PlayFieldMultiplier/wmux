@@ -909,6 +909,21 @@ describe('UISlice — rail route', () => {
     expect(mirrors()).toEqual({ fleet: false, schedules: false, settings: false });
   });
 
+  it('lands the connectors route on Plugins with the Connectors row selected', () => {
+    store.getState().setAppRoute('connectors');
+    expect(store.getState().appRoute).toBe('plugins');
+    expect(store.getState().pluginsSelection).toBe('connectors');
+    // Already on Plugins with another entry picked, a deep link still moves the selection.
+    store.getState().setPluginsSelection('office');
+    store.getState().setAppRoute('connectors');
+    expect(store.getState().appRoute).toBe('plugins');
+    expect(store.getState().pluginsSelection).toBe('connectors');
+    store.getState().togglePluginsView();
+    expect(store.getState().appRoute).toBe('workspaces');
+    store.getState().togglePluginsView();
+    expect(store.getState().appRoute).toBe('plugins');
+  });
+
   it('closing a page that is not shown leaves the current page alone', () => {
     store.getState().setAppRoute('remote');
     store.getState().setFleetViewVisible(false);
