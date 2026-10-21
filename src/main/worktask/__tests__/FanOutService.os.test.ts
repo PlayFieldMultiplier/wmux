@@ -1383,6 +1383,81 @@ describe('new workspace preparation on fan-out worktrees', () => {
     expect(res.tasks[0].prepOnCard).toBe(true);
   });
 
+  it('with a card, Discard removes the worktree and the branch it made, and the issue starts again', async () => {
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(metaRoot, 'src-')));
+    const g = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    g(repo, 'init', '-q');
+    g(repo, '-c', 'user.email=a@b.c', '-c', 'user.name=a', 'commit', '-q', '--allow-empty', '-m', 'init');
+    const mode = path.join(metaRoot, 'mode-d');
+    fs.writeFileSync(mode, 'fail');
+    const hook = path.join(metaRoot, 'hook-d.js');
+    fs.writeFileSync(hook, `if (require('fs').readFileSync(${JSON.stringify(mode)}, 'utf8') === 'fail') process.exit(1)`);
+    const cards = new WorkspacePrepCards();
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees: new TaskWorktreeManager(),
+      prepCards: cards,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { setup: `node ${JSON.stringify(hook)}` } } }),
+    });
+    const req = (key: string) => baseReq({ idempotencyKey: key, repoPath: repo, titles: ['issue-8-x'], branches: ['issue-8-x'], prepOrigin: 'human' });
+    const first = svc.start(req('fo-discard-1'));
+    await vi.waitFor(() => expect(cards.list()[0]?.status).toBe('failed'), { timeout: 10_000 });
+    expect(cards.list()[0].canDiscard).toBe(true);
+    expect(cards.decide(cards.list()[0].id, 'discard')).toBe(true);
+    const [task] = (await first).tasks;
+    expect(task).toMatchObject({ ok: false, setupFailed: true });
+    expect(task.preservedWorktree).toBeUndefined();
+    expect(() => g(repo, 'rev-parse', '--verify', '--quiet', 'refs/heads/issue-8-x')).toThrow();
+    fs.writeFileSync(mode, 'ok');
+    expect((await svc.start(req('fo-discard-2'))).tasks[0].ok).toBe(true);
+  });
+
+  it('with a card, Discard never deletes a worktree with changes the person made, and names it', async () => {
+    const { repo, worktrees } = realRepo();
+    const cards = new WorkspacePrepCards();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: makeRendererFake().port,
+      worktrees,
+      prepCards: cards,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { copy: ['.env'], setup: 'node -e "process.exit(4)"' } } }),
+    });
+    const started = svc.start(baseReq({ repoPath: repo, titles: ['issue-9'], prepOrigin: 'human' }));
+    await vi.waitFor(() => expect(cards.list()[0]?.status).toBe('failed'), { timeout: 10_000 });
+    const wt = (worktrees.createWorktree as ReturnType<typeof vi.fn>).mock.calls[0][0].worktreePath as string;
+    // The copied .env is not a change; a file the person wrote is.
+    fs.writeFileSync(path.join(wt, 'notes.txt'), 'mine');
+    const id = cards.list()[0].id;
+    expect(cards.decide(id, 'discard')).toBe(true);
+    await vi.waitFor(() => expect(cards.list()[0]?.discardRefused).toBe(wt));
+    expect(fs.readFileSync(path.join(wt, 'notes.txt'), 'utf8')).toBe('mine');
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled();
+    expect(cards.decide(id, 'dismiss')).toBe(true);
+    expect((await started).tasks[0].preservedWorktree).toBe(wt);
+  });
+
+  it('with a card, an unanswered failure stops waiting and deletes nothing; the card stays', async () => {
+    const { repo, worktrees } = realRepo();
+    const cards = new WorkspacePrepCards({ decisionTtlMs: 50 });
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees,
+      prepCards: cards,
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { setup: 'node -e "process.exit(6)"' } } }),
+    });
+    const [task] = (await svc.start(baseReq({ repoPath: repo, titles: ['issue-10'], prepOrigin: 'human' }))).tasks;
+    expect(task).toMatchObject({ ok: false, setupFailed: true });
+    expect(fs.existsSync(task.preservedWorktree!)).toBe(true);
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled();
+    expect(worktrees.deleteBranchIfAt).not.toHaveBeenCalled();
+    expect(renderer.spawned).toHaveLength(0);
+    expect(cards.list()[0]).toMatchObject({ status: 'failed', expired: true });
+  });
+
   it('with a card, Dismiss leaves the worktree as it is and starts no agent', async () => {
     const { repo, worktrees } = realRepo();
     const renderer = makeRendererFake();

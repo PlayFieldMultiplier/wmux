@@ -29,6 +29,16 @@ export interface WorkspacePrepCard {
   error?: string;
   outputTail?: string[];
   timedOut?: boolean;
+  /** status 'failed': Discard removes the worktree and the branch this
+   *  attempt made (start from an issue, Quick Launch). */
+  canDiscard?: boolean;
+  /** status 'failed': no answer came in time, so nothing waits to start an
+   *  agent any more. Nothing was deleted; Discard or keep it. */
+  expired?: boolean;
+  /** A Discard refused because the worktree has changes beyond the copied
+   *  files and the setup's output: the folder, to remove from the task
+   *  cleanup list instead. */
+  discardRefused?: string;
   /**
    * The one-time suggestion: this project copies no config files yet, and
    * its checkout has `.env` files a new worktree does not get. The card
@@ -39,4 +49,34 @@ export interface WorkspacePrepCard {
   updatedAt: number;
 }
 
-export type WorkspacePrepDecision = 'retry' | 'start' | 'dismiss';
+/** retry / start (anyway) / discard (remove the worktree) / dismiss (keep it). */
+export type WorkspacePrepDecision = 'retry' | 'start' | 'discard' | 'dismiss';
+
+/** Cards kept after their preparation ended: a skip, a gap or the
+ *  suggestion, which the person should read before dismissing it. */
+export function lingers(card: WorkspacePrepCard): boolean {
+  return card.status === 'skipped' || card.suggestCopy !== undefined || (card.status === 'ready' && card.missing + card.refused > 0);
+}
+
+export type PrepCardToastKey =
+  | 'prepCard.toastFailed'
+  | 'prepCard.toastSkipped'
+  | 'prepCard.toastGaps';
+
+/**
+ * The toast for a card that changed to something the person must see, so it
+ * is never missed while the sidebar is out of sight (another page, or
+ * collapsed). The card stays the place to answer. Null for no toast.
+ */
+export function prepCardToast(
+  before: WorkspacePrepCardStatus | undefined,
+  card: WorkspacePrepCard,
+): { key: PrepCardToastKey; values: Record<string, string | number> } | null {
+  if (card.status === before) return null;
+  if (card.status === 'failed') return { key: 'prepCard.toastFailed', values: { title: card.title } };
+  if (card.status === 'skipped') return { key: 'prepCard.toastSkipped', values: { title: card.title } };
+  if (card.status === 'ready' && card.missing + card.refused > 0) {
+    return { key: 'prepCard.toastGaps', values: { title: card.title, missing: card.missing, refused: card.refused } };
+  }
+  return null;
+}

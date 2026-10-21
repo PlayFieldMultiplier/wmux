@@ -69,7 +69,15 @@ import {
   type WorkspacePrepResult,
   type WorkspacePrepSkipReason,
 } from './workspacePrep';
-import { runWithPrepCard, takeCopySuggestion, type CopySuggestionStore, type WorkspacePrepCards } from './workspacePrepCards';
+import {
+  runWithPrepCard,
+  takeCopySuggestion,
+  type CopySuggestionStore,
+  WORKSPACE_PREP_DECISION_TTL_MS,
+  type PrepCardDiscard,
+  type WorkspacePrepCards,
+} from './workspacePrepCards';
+import { git } from '../git/git';
 import { workerTempEnv } from './fanoutTempDir';
 import { inheritTaskAutonomy } from './taskAutonomy';
 import { getFanOutGuards, type FanOutGuards } from './fanoutGuards';
@@ -421,6 +429,16 @@ export const FANOUT_PREP_REVIEW_WARNING =
  *  out of fan-out and bot worktrees (the default). */
 export const FANOUT_COPY_BLOCKED_WARNING =
   "the repository's config files (fanout.copy) were not copied into these worktrees: copying into bot and fan-out workspaces is off for this project";
+
+/** What a person could have changed in a worktree: its HEAD, and every
+ *  tracked or untracked change git does not ignore (copied config files are
+ *  ignored). Null when git cannot say. */
+async function worktreeChanges(dir: string): Promise<string | null> {
+  const head = await git(['rev-parse', 'HEAD'], dir);
+  const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], dir);
+  if (head.code !== 0 || status.code !== 0) return null;
+  return `${head.stdout.trim()}\0${status.stdout}`;
+}
 
 /** The last lines a setup printed, for a failure report. */
 function setupTail(tail: string | undefined): string[] | undefined {
@@ -1572,40 +1590,75 @@ export class FanOutService {
     // worktree에서 에이전트를 띄우면 그 사실을 발견하는 데 한 턴을 태운다.
     // A worktree a person opened, with a card to show it on: the preparation
     // runs under the card, and a failed setup waits for the person's answer
-    // (Retry in place, Start anyway, or leave it) instead of rolling back.
+    // (Retry in place, Start anyway, or Discard) instead of rolling back. No
+    // answer in time starts nothing and deletes nothing.
     let preparedByCard = false;
     if (ctx.prepOrigin === 'human' && this.prepCards && plan && (ctx.copy || ctx.setupCommand !== undefined || ctx.prepSkipped || ctx.suggestCopy)) {
       const cardPlan = plan;
-      const card = this.prepCards.begin(ctx.title, true, ctx.suggestCopy ? { suggestCopy: ctx.suggestCopy } : {});
+      const card = this.prepCards.begin(ctx.title, true, { canDiscard: true, ...(ctx.suggestCopy ? { suggestCopy: ctx.suggestCopy } : {}) });
       base.prepOnCard = true;
-      let copy: WorkspaceCopyResult = { copied: 0, missing: 0, present: 0, refused: 0 };
-      if (ctx.copy) {
-        card.progress({ phase: 'copying', copy });
-        copy = await this.copyConfigFiles(ctx.copy, cardPlan);
-        base.configFiles = copy;
+      // The worktree as the first failed setup left it: Discard removes it
+      // only while nothing beyond that changed (the person's own edits are
+      // never deleted).
+      let leftBySetup: string | null | undefined;
+      let discardOutcome: string | undefined;
+      const discard: PrepCardDiscard = async () => {
+        const now = await worktreeChanges(cardPlan.worktreePath);
+        if (leftBySetup == null || now === null || now !== leftBySetup) return { removed: false, path: cardPlan.worktreePath };
+        const rolledBack = await this.rollbackTaskWorktree(cardPlan, ctx);
+        discardOutcome = rolledBack.outcome;
+        return rolledBack.removed ? { removed: true } : { removed: false, path: cardPlan.worktreePath };
+      };
+      let outcome: Awaited<ReturnType<typeof runWithPrepCard>>;
+      try {
+        let copy: WorkspaceCopyResult = { copied: 0, missing: 0, present: 0, refused: 0 };
+        if (ctx.copy) {
+          card.progress({ phase: 'copying', copy });
+          copy = await this.copyConfigFiles(ctx.copy, cardPlan);
+          base.configFiles = copy;
+        }
+        const skipped = ctx.prepSkipped;
+        let attempt = 0;
+        outcome = await runWithPrepCard(card, async (onProgress): Promise<WorkspacePrepResult> => {
+          if (skipped) return { status: 'skipped', reason: skipped, copy, setupRan: false };
+          let setupCommand = ctx.setupCommand;
+          // A retry runs what wmux.json says now, and only while it is still
+          // approved: the file can change while the card waits.
+          if (attempt++ > 0 && this.project) {
+            const fresh = await this.project.getState(ctx.repoPath).catch(() => null);
+            const again = resolveWorkspacePrep(fresh, 'human');
+            if (!fresh || again.skipped) {
+              return { status: 'failed', copy, setupRan: false, error: `wmux.json is not approved any more (${again.skipped ?? 'unreadable'})` };
+            }
+            setupCommand = again.setup;
+          }
+          if (setupCommand === undefined) return { status: 'ready', copy, setupRan: false };
+          onProgress({ phase: 'setup', copy, setupStartedAt: Date.now(), setupTimeoutMs: FANOUT_SETUP_TIMEOUT_MS });
+          const gates = getSharedTaskGateRunner();
+          const run = () => runFanoutSetup(setupCommand, cardPlan.worktreePath, taskEnv);
+          const r = gates ? await gates.withPermit(run) : await run();
+          if (r.ok) return { status: 'ready', copy, setupRan: true };
+          if (leftBySetup === undefined) leftBySetup = await worktreeChanges(cardPlan.worktreePath);
+          const outputTail = setupTail(r.tail);
+          return {
+            status: 'failed', copy, setupRan: true, error: r.summary ?? r.error,
+            ...(r.timedOut ? { timedOut: true as const } : {}),
+            ...(outputTail ? { outputTail } : {}),
+          };
+        }, { discard });
+      } catch (err) {
+        card.close();
+        throw err;
       }
-      const setupCommand = ctx.setupCommand;
-      const skipped = ctx.prepSkipped;
-      const outcome = await runWithPrepCard(card, async (onProgress): Promise<WorkspacePrepResult> => {
-        if (skipped) return { status: 'skipped', reason: skipped, copy, setupRan: false };
-        if (setupCommand === undefined) return { status: 'ready', copy, setupRan: false };
-        onProgress({ phase: 'setup', copy, setupStartedAt: Date.now(), setupTimeoutMs: FANOUT_SETUP_TIMEOUT_MS });
-        const gates = getSharedTaskGateRunner();
-        const run = () => runFanoutSetup(setupCommand, cardPlan.worktreePath, taskEnv);
-        const r = gates ? await gates.withPermit(run) : await run();
-        if (r.ok) return { status: 'ready', copy, setupRan: true };
-        const outputTail = setupTail(r.tail);
-        return {
-          status: 'failed', copy, setupRan: true, error: r.summary ?? r.error,
-          ...(r.timedOut ? { timedOut: true as const } : {}),
-          ...(outputTail ? { outputTail } : {}),
-        };
-      });
-      if (outcome.next === 'dismiss') {
-        // Left as it is, for the person to look at; no agent starts in it.
+      if (outcome.next !== 'start') {
+        // No agent starts in it. Discard removed it; otherwise it is left as
+        // it is for the person to look at (the card of an expired wait still
+        // takes Discard).
         discardTempDir();
-        const error = `worktree setup hook failed: ${outcome.last.error ?? 'unknown'}; the worktree was left as it is`;
-        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error });
+        const discarded = outcome.next === 'discarded';
+        const why = outcome.next === 'expired' ? `no answer within ${Math.round(WORKSPACE_PREP_DECISION_TTL_MS / 60_000)} minutes; ` : '';
+        const error = `worktree setup hook failed: ${outcome.last.error ?? 'unknown'}; ${why}${discarded ? 'discarded' : 'the worktree was left as it is'}`;
+        await this.compensate(taskId, ctx.verifiedWorkspaceId, plan, { title: ctx.title, reason: error, ...(discarded && discardOutcome ? { outcome: discardOutcome } : {}) });
         const { port: _heldPort, ...withoutPort } = base;
         return {
           ...withoutPort,
@@ -1613,7 +1666,7 @@ export class FanOutService {
           error,
           ...(outcome.last.timedOut ? { setupTimedOut: true as const } : {}),
           ...(outcome.last.outputTail ? { setupOutputTail: outcome.last.outputTail } : {}),
-          preservedWorktree: plan.worktreePath,
+          ...(discarded ? {} : { preservedWorktree: plan.worktreePath }),
         };
       }
       preparedByCard = true;

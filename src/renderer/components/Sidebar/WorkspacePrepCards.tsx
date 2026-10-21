@@ -13,12 +13,9 @@ import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { IconCheck, IconWarning, IconX } from '../icons';
 import Button from '../ui/Button';
-import type { WorkspacePrepCard, WorkspacePrepDecision } from '../../../shared/workspacePrepCard';
+import { lingers, type WorkspacePrepCard, type WorkspacePrepDecision } from '../../../shared/workspacePrepCard';
 
-/** Cards kept after main closed them: a skip or a gap the person should read. */
-export function lingers(card: WorkspacePrepCard): boolean {
-  return card.status === 'skipped' || card.suggestCopy !== undefined || (card.status === 'ready' && card.missing + card.refused > 0);
-}
+export { lingers };
 
 /** Fold one event into the list main's events describe. */
 export function applyPrepCardEvent(cards: WorkspacePrepCard[], ev: WorkspacePrepCard): WorkspacePrepCard[] {
@@ -46,12 +43,19 @@ export default function WorkspacePrepCards() {
   const api = window.electronAPI?.workspacePrep;
 
   useEffect(() => {
-    if (!api) return;
+    if (typeof api?.onCard !== 'function' || typeof api.list !== 'function') return;
     let live = true;
-    const off = api.onCard((ev) => setCards((prev) => applyPrepCardEvent(prev, ev)));
+    const off = api.onCard((ev) => {
+      // The clock starts from this event, not from when the list mounted.
+      setNow(Date.now());
+      setCards((prev) => applyPrepCardEvent(prev, ev));
+    });
     // A reload draws the cards that are still open.
     void api.list().then((open) => { if (live) setCards((prev) => open.reduce(applyPrepCardEvent, prev)); }, () => undefined);
-    return () => { live = false; off(); };
+    return () => {
+      live = false;
+      if (typeof off === 'function') off();
+    };
   }, [api]);
 
   const ticking = cards.some((c) => c.status === 'running' && c.phase === 'setup');
@@ -66,7 +70,11 @@ export default function WorkspacePrepCards() {
   const decide = (id: string, d: WorkspacePrepDecision) => {
     void api?.decide(id, d).catch(() => undefined);
   };
-  const forget = (id: string) => setCards((prev) => prev.filter((c) => c.id !== id));
+  // Main keeps an ended card until it is dismissed here.
+  const forget = (id: string) => {
+    setCards((prev) => prev.filter((c) => c.id !== id));
+    decide(id, 'dismiss');
+  };
 
   return (
     <div className="px-2 pb-1 space-y-0.5" data-testid="workspace-prep-cards" aria-live="polite">
@@ -107,13 +115,35 @@ export default function WorkspacePrepCards() {
                     {card.outputTail.slice(-6).join('\n')}
                   </pre>
                 )}
+                {card.status === 'failed' && card.expired && (
+                  <p className="m-0 mt-1 text-[13px] text-[var(--text-sub)]" data-testid="workspace-prep-expired">{t('prepCard.expired')}</p>
+                )}
+                {card.status === 'failed' && card.discardRefused !== undefined && (
+                  <p className="m-0 mt-1 text-[13px] text-[var(--text-sub)] break-all" data-testid="workspace-prep-refused">
+                    {card.discardRefused ? t('prepCard.discardRefused', { path: card.discardRefused }) : t('prepCard.discardFailed')}
+                  </p>
+                )}
                 {card.status === 'failed' && (
-                  <div className="flex gap-1.5 mt-1.5">
-                    <Button size="sm" variant="secondary" onClick={() => decide(card.id, 'retry')}>{t('prepCard.retry')}</Button>
-                    {card.startsAgent && (
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {!card.expired && (
+                      <Button size="sm" variant="secondary" onClick={() => decide(card.id, 'retry')}>{t('prepCard.retry')}</Button>
+                    )}
+                    {card.startsAgent && !card.expired && (
                       <Button size="sm" variant="secondary" onClick={() => decide(card.id, 'start')}>{t('prepCard.startAnyway')}</Button>
                     )}
-                    <Button size="sm" variant="ghost" onClick={() => decide(card.id, 'dismiss')}>{t('prepCard.dismiss')}</Button>
+                    {card.canDiscard && card.discardRefused === undefined && (
+                      <Button size="sm" variant="secondary" onClick={() => decide(card.id, 'discard')}>{t('prepCard.discard')}</Button>
+                    )}
+                    {card.discardRefused !== undefined && (
+                      <Button size="sm" variant="secondary" onClick={() => useStore.getState().setWorktaskCleanupVisible(true)}>{t('prepCard.openCleanup')}</Button>
+                    )}
+                    {/* Keep it as it is: always on the Git page, and once a
+                        start stopped waiting or a discard was refused. */}
+                    {(!card.canDiscard || card.expired || card.discardRefused !== undefined) && (
+                      <Button size="sm" variant="ghost" onClick={() => decide(card.id, 'dismiss')}>
+                        {t(card.canDiscard ? 'prepCard.keep' : 'prepCard.dismiss')}
+                      </Button>
+                    )}
                   </div>
                 )}
                 {card.suggestCopy && card.status !== 'running' && (

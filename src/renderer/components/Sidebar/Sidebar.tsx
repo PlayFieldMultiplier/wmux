@@ -579,7 +579,8 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
             (with a zero count and, when expanded, an empty line) — it does not
             return null. Coexists with the worktree badge (⊕): the badge is the
             low-level fact, this section is the higher-level concept. */}
-        <WorkspacePrepCards />
+        {/* Main's cards of this desktop only; a web viewer has none. */}
+        {!readOnly && <WorkspacePrepCards />}
         <MissionsSection />
         {/* A1/A2: 각 항목에 id + 안정 콜백만 내린다. 콜백은 모두 id 인자를 받는
             스토어 액션/useCallback 핸들러라 렌더마다 새로 만들어지지 않아

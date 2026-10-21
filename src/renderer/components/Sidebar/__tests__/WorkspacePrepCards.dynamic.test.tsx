@@ -9,6 +9,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { WorkspacePrepCard } from '../../../../shared/workspacePrepCard';
 import WorkspacePrepCards, { applyPrepCardEvent, clock, lingers } from '../WorkspacePrepCards';
+import { prepCardToast } from '../../../../shared/workspacePrepCard';
 import { useStore } from '../../../stores';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -53,6 +54,14 @@ describe('card list rules', () => {
     expect(applyPrepCardEvent(gap, card({ status: 'closed' }))).toHaveLength(1);
     expect(clock(83_000)).toBe('1:23');
   });
+
+  it('toasts a failure, a skip or a gap once, as it happens', () => {
+    expect(prepCardToast('running', card({ status: 'failed' }))?.key).toBe('prepCard.toastFailed');
+    expect(prepCardToast('failed', card({ status: 'failed', expired: true }))).toBeNull();
+    expect(prepCardToast(undefined, card({ status: 'skipped', reason: 'stale' }))?.key).toBe('prepCard.toastSkipped');
+    expect(prepCardToast('running', card({ status: 'ready', missing: 1 }))?.key).toBe('prepCard.toastGaps');
+    expect(prepCardToast('running', card({ status: 'ready' }))).toBeNull();
+  });
 });
 
 describe('WorkspacePrepCards', () => {
@@ -79,6 +88,36 @@ describe('WorkspacePrepCards', () => {
     await act(async () => root.render(createElement(WorkspacePrepCards)));
     act(() => emit(card({ status: 'skipped', reason: 'needs-review' })));
     expect(container.querySelector('[data-testid="workspace-prep-card"]')?.textContent).toContain('need one review');
+  });
+
+  it('a start that made the worktree offers Discard; once it stopped waiting, Discard or Keep', async () => {
+    await act(async () => root.render(createElement(WorkspacePrepCards)));
+    act(() => emit(card({ status: 'failed', canDiscard: true, error: 'x' })));
+    const names = () => [...container.querySelectorAll('button')].map((b) => b.textContent);
+    expect(names()).toEqual(['Retry', 'Start anyway', 'Discard']);
+    act(() => [...container.querySelectorAll('button')].find((b) => b.textContent === 'Discard')!.click());
+    expect(decide).toHaveBeenCalledWith('c1', 'discard');
+    act(() => emit(card({ status: 'failed', canDiscard: true, expired: true, error: 'x' })));
+    expect(names()).toEqual(['Discard', 'Keep']);
+    expect(container.querySelector('[data-testid="workspace-prep-expired"]')).not.toBeNull();
+  });
+
+  it('a refused Discard names the folder and points to the task cleanup list', async () => {
+    await act(async () => root.render(createElement(WorkspacePrepCards)));
+    act(() => emit(card({ status: 'failed', canDiscard: true, discardRefused: '/wt/issue-12', error: 'x' })));
+    expect(container.querySelector('[data-testid="workspace-prep-refused"]')?.textContent).toContain('/wt/issue-12');
+    const buttons = [...container.querySelectorAll('button')];
+    expect(buttons.map((b) => b.textContent)).toEqual(['Retry', 'Start anyway', 'Open task cleanup list', 'Keep']);
+    act(() => buttons.find((b) => b.textContent === 'Open task cleanup list')!.click());
+    expect(useStore.getState().worktaskCleanupVisible).toBe(true);
+  });
+
+  it('dismissing a card kept for reading tells main to forget it', async () => {
+    await act(async () => root.render(createElement(WorkspacePrepCards)));
+    act(() => emit(card({ status: 'skipped', reason: 'stale' })));
+    act(() => [...container.querySelectorAll('button')].find((b) => b.textContent === 'Dismiss')!.click());
+    expect(decide).toHaveBeenCalledWith('c1', 'dismiss');
+    expect(container.querySelector('[data-testid="workspace-prep-card"]')).toBeNull();
   });
 
   it('offers no Start anyway where no agent starts', async () => {
