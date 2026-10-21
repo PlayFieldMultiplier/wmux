@@ -20,11 +20,20 @@ import { useMemo } from 'react';
 /** What the page may load: inline styles, data: images and fonts, nothing else. */
 export const SANDBOXED_HTML_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:";
 
+/** `<link rel>` tokens that ask the browser to reach a host ahead of use. */
+const RESOURCE_HINTS = new Set(['preconnect', 'dns-prefetch', 'prefetch', 'prerender', 'preload', 'modulepreload']);
+
 /** The page as the frame's srcdoc: parsed inertly (DOMParser runs no script
- *  and loads nothing) and written back with the CSP meta first in its head,
- *  so the policy is in force before anything in the page could load. */
+ *  and loads nothing), without its resource hints or its own http-equiv
+ *  metas, and written back with the CSP meta first in its head, so the
+ *  policy is in force before anything in the page could load. */
 export function sandboxedHtmlDocument(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  for (const link of doc.querySelectorAll('link[rel]')) {
+    const rel = (link.getAttribute('rel') ?? '').toLowerCase().split(/\s+/);
+    if (rel.some((token) => RESOURCE_HINTS.has(token))) link.remove();
+  }
+  for (const own of doc.querySelectorAll('meta[http-equiv]')) own.remove();
   const meta = doc.createElement('meta');
   meta.setAttribute('http-equiv', 'Content-Security-Policy');
   meta.setAttribute('content', SANDBOXED_HTML_CSP);

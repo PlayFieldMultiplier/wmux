@@ -43,6 +43,31 @@ describe('sandboxedHtmlDocument', () => {
     }
   });
 
+  it('drops resource hints and the page\'s own http-equiv metas, keeping its stylesheet links and other metas', () => {
+    const doc = parse(sandboxedHtmlDocument([
+      '<head>',
+      '<link rel="preconnect" href="https://a.test">',
+      '<link rel="DNS-Prefetch" href="//b.test">',
+      '<link rel="prefetch" href="https://c.test/x">',
+      '<link rel="prerender" href="https://d.test/">',
+      '<link rel=" Preload  " as="image" href="https://e.test/i.png">',
+      '<link rel="modulepreload" href="https://f.test/m.js">',
+      '<link rel="stylesheet preconnect" href="https://g.test/s.css">',
+      '<link rel="stylesheet" href="https://h.test/s.css">',
+      '<link rel="icon" href="https://i.test/f.ico">',
+      '<meta http-equiv="refresh" content="0;url=https://j.test/">',
+      '<meta http-equiv="Content-Security-Policy" content="img-src *">',
+      '<meta charset="utf-8"><meta name="viewport" content="width=device-width">',
+      '</head><body><link rel="preconnect" href="https://k.test"><p>hi</p></body>',
+    ].join('')));
+    expect([...doc.querySelectorAll('link')].map((l) => l.getAttribute('href'))).toEqual(['https://h.test/s.css', 'https://i.test/f.ico']);
+    const httpEquiv = [...doc.querySelectorAll('meta[http-equiv]')];
+    expect(httpEquiv.map((m) => m.getAttribute('content'))).toEqual([SANDBOXED_HTML_CSP]);
+    expect(doc.head.firstElementChild).toBe(httpEquiv[0]);
+    expect(doc.querySelectorAll('meta[charset], meta[name="viewport"]').length).toBe(2);
+    expect(doc.body.textContent).toBe('hi');
+  });
+
   it('the policy loads nothing from the network: no default, data: images and fonts, inline styles', () => {
     expect(SANDBOXED_HTML_CSP).toContain("default-src 'none'");
     expect(SANDBOXED_HTML_CSP).toContain('img-src data:');
