@@ -102,6 +102,7 @@ async function loadForPlatform(
     const cbs: Record<string, (arg: unknown) => void> = {};
     const req = {
       on(ev: string, cb: (arg: unknown) => void) { cbs[ev] = cb; return req; },
+      abort: vi.fn(),
       end() {
         // Async response so check()'s promise settles like the real path.
         Promise.resolve().then(() => {

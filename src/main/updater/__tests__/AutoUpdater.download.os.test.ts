@@ -58,9 +58,10 @@ interface TempFile { body: Buffer; mtimeMs?: number; isFile?: boolean }
  * How one kind of request ends. 'ok' serves it normally; 'stall' never answers
  * at all; 'stall-body' answers 200 and sends part of the body, then nothing;
  * 'aborted' / 'error' send part of the body and then drop the connection the
- * way Electron's IncomingMessage reports it.
+ * way Electron's IncomingMessage reports it; 'http-404' answers 404 and would
+ * send its body only if someone read it.
  */
-type NetMode = 'ok' | 'stall' | 'stall-body' | 'aborted' | 'error';
+type NetMode = 'ok' | 'stall' | 'stall-body' | 'aborted' | 'error' | 'http-404';
 interface NetModes { feed?: NetMode; manifest?: NetMode; download?: NetMode }
 
 /** Load AutoUpdater (win32) with a URL-routing net mock, fs mocked, window capture. */
@@ -124,7 +125,7 @@ async function loadWin32(
   function misbehave(cbs: Record<string, (a: unknown) => void>, mode: NetMode) {
     if (mode === 'stall') return;
     const dataCbs: Record<string, (a: unknown) => void> = {};
-    const resp = { statusCode: 200, headers: {}, on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
+    const resp = { statusCode: mode === 'http-404' ? 404 : 200, headers: {}, on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
     cbs['response']?.(resp);
     Promise.resolve().then(() => {
       dataCbs['data']?.(Buffer.from('{"par'));
@@ -1036,5 +1037,20 @@ describe('AutoUpdater under a data suffix (win32)', () => {
     expect(teardown.spawnInstallWaiter).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();
     updater.stop();
+  });
+});
+
+describe('AutoUpdater releases a request it does not read (win32)', () => {
+  it('aborts a non-200 feed, manifest or installer response instead of leaving it unread', async () => {
+    for (const kind of ['feed', 'manifest', 'download'] as const) {
+      const { AutoUpdater, aborted, win } = await loadWin32({ net: { [kind]: 'http-404' } });
+      const updater = new AutoUpdater(() => win as never, quitHooks());
+
+      await (updater as unknown as { check: () => Promise<void> }).check();
+      await flush();
+
+      const url = kind === 'feed' ? 'update.electronjs.org' : kind === 'manifest' ? 'update-manifest.json' : DL_URL;
+      expect(aborted.some((u) => u.includes(url)), kind).toBe(true);
+    }
   });
 });

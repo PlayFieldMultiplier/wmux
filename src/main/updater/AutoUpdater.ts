@@ -937,8 +937,8 @@ export class AutoUpdater {
    * GET a small document (the feed reply, the manifest). Settles exactly once,
    * on every way a request can end: a request error, a response error, a
    * response aborted mid-body, or no complete reply within
-   * METADATA_REQUEST_TIMEOUT_MS. A non-200 status settles at once without
-   * reading the body.
+   * METADATA_REQUEST_TIMEOUT_MS. A non-200 status settles at once and aborts
+   * the request rather than reading the body.
    *
    * The settling matters beyond this request: check() and downloadUpdate()
    * hold isChecking / isDownloading until it does, and every later check is
@@ -963,6 +963,9 @@ export class AutoUpdater {
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
           settle(() => resolve({ statusCode: response.statusCode, text: '' }));
+          // The body is not read; abort so the connection is released
+          // instead of left holding an unconsumed response.
+          request.abort();
           return;
         }
         let text = '';
@@ -1033,6 +1036,8 @@ export class AutoUpdater {
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
           fail(new Error(`installer download returned ${response.statusCode}`));
+          // Same as requestText: the body is not read, so release the request.
+          request.abort();
           return;
         }
         const totalRaw = (response as { headers?: Record<string, string | string[]> }).headers?.['content-length'];
