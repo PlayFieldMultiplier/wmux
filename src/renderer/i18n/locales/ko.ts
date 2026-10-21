@@ -2448,7 +2448,6 @@ export const ko = {
   'a2aLink.moaOnlyNote': "Moa는 다른 PC의 Moa와만 연결됩니다. 그 PC의 판은 표시하지 않습니다.",
   'a2aLink.paneOnlyNote': "판은 판과만 연결되므로 그 PC가 보여 주는 다른 항목은 뺐습니다.",
   'settings.a2aExposureMoa': "이 PC의 Moa 공개",
-  'settings.a2aExposureMoaDesc': "그 PC의 Moa가 이 PC의 Moa에 연결을 요청할 수 있습니다.",
   'settings.a2aExposureMoaOff': "이 PC에서 Moa가 꺼져 있습니다.",
   'a2aLink.menu': "다른 PC의 판과 연결…",
   'a2aLink.title': "다른 PC의 판과 연결",
@@ -2563,8 +2562,6 @@ export const ko = {
   'a2aDelivery.reason.pane-missing': "보낼 판이 없어졌습니다.",
   'a2aDelivery.reason.occupant-changed': "그 판에 다른 에이전트가 있습니다.",
   'a2aDelivery.reason.link-not-active': "그 PC와의 연결이 끝났습니다.",
-  'a2aDelivery.reason.brain-delivery-pending': "Moa 앞: Moa 전달은 아직 지원하지 않습니다.",
-  'a2aDelivery.reason.brain-unavailable': "Moa 앞: Moa가 꺼져 있거나 준비되지 않았습니다. Moa가 준비되면 바로 전달합니다.",
   'a2aDelivery.reason.delivery-unconfirmed': "붙여넣기를 시작했지만 확인되지 않았습니다. 이미 판에 들어갔을 수 있으니 확인 후 다시 전달하세요.",
   'a2aDelivery.reason.no-agent': "그 판에 받을 에이전트가 계속 없었습니다.",
   'a2aDelivery.retry': "현재 에이전트에게 전달",
@@ -3935,7 +3932,6 @@ export const ko = {
   // 커맨드 데크 Phase 2 — agent 두뇌(Agent SDK).
   // 커맨드 데크 P3b — 재부팅 복구 인사 카드.
   'deck.decisionEyebrow': '결정 필요',
-  'deck.decisionHandoffElsewhere': "Moa가 여기로 넘기기를 제안했습니다. Moa 패널에서 답하세요.",
   'deck.decisionResolve': '답하기',
   'deck.decisionPlaceholder': '답을 입력하세요…',
   'deck.decisionAnswerLabel': '질문에 대한 내 답',

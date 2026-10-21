@@ -2975,7 +2975,6 @@ export const en = {
   'a2aLink.moaOnlyNote': "Moa links only with another PC's Moa; that PC's panes are left out.",
   'a2aLink.paneOnlyNote': "A pane links only with a pane, so anything else that PC shows is left out.",
   'settings.a2aExposureMoa': "Show this PC's Moa",
-  'settings.a2aExposureMoaDesc': "That PC's Moa may ask to link with this PC's Moa.",
   'settings.a2aExposureMoaOff': "Moa is off on this PC.",
   'a2aLink.menu': "Link with a pane on another PC…",
   'a2aLink.title': "Link with a pane on another PC",
@@ -3090,8 +3089,6 @@ export const en = {
   'a2aDelivery.reason.pane-missing': "The pane it was meant for is gone.",
   'a2aDelivery.reason.occupant-changed': "Another agent is in that pane now.",
   'a2aDelivery.reason.link-not-active': "The link to that PC has ended.",
-  'a2aDelivery.reason.brain-delivery-pending': "For Moa: delivery to Moa is not available yet.",
-  'a2aDelivery.reason.brain-unavailable': "For Moa: Moa is off or not ready. It is delivered as soon as Moa is.",
   'a2aDelivery.reason.delivery-unconfirmed': "A paste was started but never confirmed. It may already be in the pane: check before sending again.",
   'a2aDelivery.reason.no-agent': "The pane kept having no agent to take it.",
   'a2aDelivery.retry': "Send to the current agent",
@@ -4485,7 +4482,6 @@ export const en = {
   // Command Deck Phase 2 — the Orchestrator brain (Agent SDK).
   // Command Deck P3b — the reboot-recovery greeting card.
   'deck.decisionEyebrow': 'Decision needed',
-  'deck.decisionHandoffElsewhere': "Moa proposed a hand-off here. Answer it in Moa's panel.",
   'deck.decisionResolve': 'Resolve',
   'deck.decisionPlaceholder': 'Type your answer…',
   'deck.decisionAnswerLabel': 'Your answer to the question',

@@ -2950,7 +2950,6 @@ export const pl = {
   'a2aLink.moaOnlyNote': "Moa łączy się tylko z Moa innego komputera; panele pominięto.",
   'a2aLink.paneOnlyNote': "Panel łączy się tylko z panelem, więc pozostałe pozycje tego komputera są pominięte.",
   'settings.a2aExposureMoa': "Pokaż Moa tego komputera",
-  'settings.a2aExposureMoaDesc': "Moa tamtego komputera może poprosić o połączenie z Moa tego komputera.",
   'settings.a2aExposureMoaOff': "Moa jest wyłączony na tym komputerze.",
   'a2aLink.menu': "Połącz z panelem na innym komputerze…",
   'a2aLink.title': "Połącz z panelem na innym komputerze",
@@ -3065,8 +3064,6 @@ export const pl = {
   'a2aDelivery.reason.pane-missing': "Panel docelowy już nie istnieje.",
   'a2aDelivery.reason.occupant-changed': "W tym panelu jest teraz inny agent.",
   'a2aDelivery.reason.link-not-active': "Połączenie z tym komputerem zostało zakończone.",
-  'a2aDelivery.reason.brain-delivery-pending': "Do Moa: dostarczanie do Moa nie jest jeszcze dostępne.",
-  'a2aDelivery.reason.brain-unavailable': "Do Moa: Moa jest wyłączona lub niegotowa. Zostanie dostarczone, gdy tylko Moa będzie gotowa.",
   'a2aDelivery.reason.delivery-unconfirmed': "Wklejanie rozpoczęto, ale go nie potwierdzono. Może już być w panelu: sprawdź przed ponownym wysłaniem.",
   'a2aDelivery.reason.no-agent': "W tym panelu stale nie było agenta, który mógłby to przyjąć.",
   'a2aDelivery.retry': "Wyślij do obecnego agenta",
@@ -4457,7 +4454,6 @@ export const pl = {
   // Command Deck Phase 2 — the Orchestrator brain (Agent SDK).
   // Command Deck P3b — the reboot-recovery greeting card.
   'deck.decisionEyebrow': 'Wymagana decyzja',
-  'deck.decisionHandoffElsewhere': "Moa zaproponowała tu przekazanie. Odpowiedz w panelu Moa.",
   'deck.decisionResolve': 'Rozstrzygnij',
   'deck.decisionPlaceholder': 'Wpisz swoją odpowiedź…',
   'deck.decisionAnswerLabel': 'Twoja odpowiedź na pytanie',
