@@ -1453,9 +1453,11 @@ export function registerInputRpc(
     // text write and the trailing-\r submit so both hit the same session.
     // #2398 — a pipe that closes after the text went in (before the submit's
     // Enter) leaves that text on the line: said so, or a caller told nothing
-    // was delivered sends it again and types it twice.
+    // was delivered sends it again and types it twice. Only the text's own
+    // chunks count: a new task's fresh-context command (`body` false) is not
+    // the text, and is all that is on the line if the text's write fails.
     let chunksWritten = 0;
-    const writeChunk = (data: string): void => {
+    const writeChunk = (data: string, body = true): void => {
       noteInterruptInput?.(ptyId, data);
       const instance = ptyManager.get(ptyId);
       if (instance) {
@@ -1473,7 +1475,7 @@ export function registerInputRpc(
           throw new Error(`input.send: PTY not found — id="${ptyId}"`);
         }
       }
-      chunksWritten++;
+      if (body) chunksWritten++;
     };
 
     // submit=true commits the text with an Enter (carriage return — the
@@ -1521,7 +1523,7 @@ export function registerInputRpc(
         // lock; check again right before anything is typed.
         await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.send');
         try {
-          fresh = await runFreshContextOn(ptyId, binding, receiptWs, writeChunk);
+          fresh = await runFreshContextOn(ptyId, binding, receiptWs, (data) => writeChunk(data, false));
         } catch (err) {
           if (!(err instanceof FreshContextTimeout)) throw err;
           throw new Error(

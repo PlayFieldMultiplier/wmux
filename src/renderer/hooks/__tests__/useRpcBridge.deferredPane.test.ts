@@ -186,10 +186,14 @@ describe('a bound pane whose suspended session was left suspended', () => {
     // not say it started it, so the stop key is delivered to the unit.
     reconnect.mockResolvedValueOnce({ success: true });
     expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-unit', promote: false })).toEqual({ ptyId: 'pty-2398-unit' });
+    // Review P3: a join-only that joined a unit's start which then failed has
+    // nothing running to stop, as the mounted path answers it.
+    reconnect.mockResolvedValueOnce({ success: false, recoveryPending: true, error: 'WSL recovery failed' });
+    expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-unit-failed', promote: false })).toEqual({ notRunning: true });
     // Join-only, every one: an exec or supervised unit whose background start
     // failed or never covered it is not spawned for the key (main answers
     // it deferred, above).
-    expect(reconnect.mock.calls.map(([, opts]) => opts)).toEqual(Array(5).fill({ promote: false, joinOnly: true }));
+    expect(reconnect.mock.calls.map(([, opts]) => opts)).toEqual(Array(6).fill({ promote: false, joinOnly: true }));
     expect(create).not.toHaveBeenCalled();
   });
 

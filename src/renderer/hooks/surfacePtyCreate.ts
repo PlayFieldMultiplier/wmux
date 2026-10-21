@@ -165,7 +165,9 @@ export async function ensurePtyStarted(ptyId: string, promote = true): Promise<E
   // Started by the attempt this reconnect joined (`promoted`: another
   // caller's promote, a raw write's say): nothing of the key's to stop, as
   // on the mounted path.
-  if (!promote && (res.deferred === true || res.code === 'session-dead' || res.promoted === true)) return { notRunning: true };
+  // A join-only that joined a start which then failed (recoveryPending): the
+  // unit is not running, as the mounted path answers it (awaitingRetry).
+  if (!promote && (res.deferred === true || res.code === 'session-dead' || res.promoted === true || res.recoveryPending === true)) return { notRunning: true };
   if (!res.success) return { error: `the pane's session could not be attached: ${res.error ?? 'unknown error'}` };
   useStore.getState().setPtyDeferred(ptyId, false);
   return { ptyId };

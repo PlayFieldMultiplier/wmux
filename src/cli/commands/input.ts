@@ -41,12 +41,17 @@ async function resolvePaneName(name: string, rpc: Rpc): Promise<{ ptyId?: unknow
  * a `#name` whose terminal has not started yet (#2398: a blank pane, no pty)
  * goes by its surface, which main starts before writing, as it does for
  * terminal_send. Main checks a surface against the caller's own workspace,
- * so it needs that workspace: this CLI must run inside a wmux pane.
+ * so it needs that workspace: this CLI must run inside a wmux pane. It also
+ * sends the caller's own ptyId as `senderPtyId`, as the MCP server does: a
+ * main from before #2398 (the CLI shim picks the newest app's CLI while the
+ * old main still runs, right after an update) ignores `surfaceId` and would
+ * write into the active pane, often the caller's own; with `senderPtyId`
+ * it refuses that omitted-target write instead.
  */
 export async function resolveExplicitWriteTarget(
   value: string,
   rpc: Rpc,
-  callerWorkspace: () => Promise<string | undefined>,
+  caller: () => Promise<{ ptyId?: string; workspaceId?: string }>,
 ): Promise<Record<string, unknown>> {
   const trimmed = value.trim();
   if (trimmed.charAt(0) !== '#') return { ptyId: value };
@@ -54,11 +59,11 @@ export async function resolveExplicitWriteTarget(
   if (typeof target.ptyId === 'string' && target.ptyId) return { ptyId: target.ptyId };
   const tag = String(target.paneTag ?? trimmed);
   if (typeof target.surfaceId !== 'string' || !target.surfaceId) throw new Error(`pane ${tag} has no local terminal`);
-  const workspaceId = await callerWorkspace();
-  if (!workspaceId) {
+  const { ptyId: senderPtyId, workspaceId } = await caller();
+  if (!workspaceId || !senderPtyId) {
     throw new Error(`pane ${tag} has not started its terminal yet, and only a command run inside a wmux pane can start it: run it from one, or open the pane first`);
   }
-  return { surfaceId: target.surfaceId, workspaceId };
+  return { surfaceId: target.surfaceId, workspaceId, senderPtyId };
 }
 
 /**
@@ -139,7 +144,7 @@ export async function resolveTargetParams(
   if (explicitPane) {
     // A read never starts a pane; a write starts one that has not started.
     if (mode === 'workspace-scope-ok') return { ptyId: await resolveExplicitTarget(explicitPane, sendRequest) };
-    return resolveExplicitWriteTarget(explicitPane, sendRequest, async () => (await selfContext()).workspaceId);
+    return resolveExplicitWriteTarget(explicitPane, sendRequest, selfContext);
   }
   // A target flag whose value went missing must not fall back to this pane: an
   // unquoted `--to #w1-2` loses its value to the shell (`#` starts a comment).

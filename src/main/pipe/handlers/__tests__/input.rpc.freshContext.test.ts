@@ -40,6 +40,8 @@ interface PaneOptions {
   handoff?: boolean;
   /** A human key lands on the approval gate's screen read with this index. */
   humanKeyOnGateRead?: number;
+  /** The session pipe closes once `/clear` has landed: the text's write fails. */
+  pipeClosesAfterClear?: boolean;
 }
 
 const DIALOG = [' Bash command', '', '   touch probe.txt', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No'].join('\n');
@@ -53,6 +55,7 @@ function scriptedPane(opts: PaneOptions = {}) {
   let clock = 5_000_000;
   let lastKeyAt = clock - 60_000;
   let gateReads = 0;
+  let pipeClosed = false;
   const screen = (): string => [...transcript, '', '──────────', `> ${composer}`].join('\n');
   const dc = {
     isConnected: true,
@@ -70,6 +73,7 @@ function scriptedPane(opts: PaneOptions = {}) {
       ...(opts.handoff ? { hasDraft: composer !== '', keyInputIdleMs: clock - lastKeyAt } : {}),
     })),
     writeToSession: (_id: string, data: string) => {
+      if (pipeClosed) return false;
       writes.push(data);
       revision += 1;
       lastKeyAt = clock;
@@ -80,6 +84,7 @@ function scriptedPane(opts: PaneOptions = {}) {
           if (!opts.clearNeverLands) {
             transcript = [];
             if (opts.hooks) receipt = { at: clock, agent: 'claude', source: 'clear' };
+            if (opts.pipeClosesAfterClear) pipeClosed = true;
           }
           if (opts.clearNeverLands) return true;
         } else if (composer) {
@@ -178,6 +183,20 @@ describe('input.send newTask (#1680)', () => {
       .map(([, , params]) => (params as { tail_lines?: number; endAtCursor?: boolean }));
     expect(tails).toContainEqual(expect.objectContaining({ tail_lines: 200, endAtCursor: true }));
     expect(tails).toContainEqual(expect.objectContaining({ tail_lines: 20, endAtCursor: true }));
+  });
+
+  // #2398 review P3: the fresh-context command's chunks were counted as the
+  // text's, so a pipe that closed after `/clear` landed was answered "the
+  // text may already be on its input line" when only `/clear` was there.
+  it('a pipe that closes after the clear says the text was not delivered', async () => {
+    const { router, writes } = scriptedPane({ binding: FRESH, hooks: true, pipeClosesAfterClear: true });
+    const res = await send(router, { text: 'build the parser', submit: true, newTask: true });
+    expect(res.ok).toBe(false);
+    expect(writes).toEqual(['/clear', '\r']);
+    if (!res.ok) {
+      expect(res.error).toMatch(/the text was not delivered/);
+      expect(res.error).not.toMatch(/may already be on its input line/);
+    }
   });
 
   it('a human key landing while the command is typed fails the send with nothing more written', async () => {

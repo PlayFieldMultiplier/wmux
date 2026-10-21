@@ -110,10 +110,10 @@ describe('wmux send targets', () => {
   it('sends to a #name whose terminal has not started by its surface, from inside a wmux pane', async () => {
     await handleInput('send', ['x', '--to', '#w1-3'], false);
     expect(rpc).toHaveBeenCalledWith('input.send',
-      { text: 'x', surfaceId: 'surf-blank', workspaceId: 'ws-self', clientTimeoutMs: deadline }, deadline);
+      { text: 'x', surfaceId: 'surf-blank', workspaceId: 'ws-self', senderPtyId: 'pty-self', clientTimeoutMs: deadline }, deadline);
     await handleInput('send-key', ['enter', '--to', '#w1-3'], false);
     expect(rpc).toHaveBeenCalledWith('input.sendKey',
-      { key: 'enter', surfaceId: 'surf-blank', workspaceId: 'ws-self', clientTimeoutMs: deadline }, deadline);
+      { key: 'enter', surfaceId: 'surf-blank', workspaceId: 'ws-self', senderPtyId: 'pty-self', clientTimeoutMs: deadline }, deadline);
     await expect(handleInput('read-screen', ['--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
     expect(errSpy).toHaveBeenCalledWith('Error: pane #w1-3 has no local terminal');
   });
@@ -123,6 +123,16 @@ describe('wmux send targets', () => {
     await expect(handleInput('send', ['x', '--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
     expect(rpc).not.toHaveBeenCalledWith('input.send', expect.anything(), expect.anything());
     expect(String(errSpy.mock.calls[0]?.[0])).toMatch(/pane #w1-3 has not started its terminal yet/);
+  });
+
+  // Review P3: right after an update the CLI shim can run the new CLI against
+  // the old main, which ignores surfaceId and writes the omitted target, the
+  // active pane (often the caller's own). senderPtyId makes that main refuse;
+  // without the caller's own ptyId nothing is sent.
+  it("a surface target carries the caller's senderPtyId, and is refused without one", async () => {
+    selfContext.mockResolvedValue({ workspaceId: 'ws-self' });
+    await expect(handleInput('send-key', ['enter', '--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
+    expect(rpc).not.toHaveBeenCalledWith('input.sendKey', expect.anything(), expect.anything());
   });
 
   it('exits before typing anything when a #name does not resolve', async () => {
