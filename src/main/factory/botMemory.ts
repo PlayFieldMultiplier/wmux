@@ -20,6 +20,10 @@
 // when they load, so a file edited by hand never carries an instruction into
 // a session. Paths are built here
 // from a checked bot id; nothing a caller sends is ever a path.
+//
+// Adapted from NousResearch/hermes-agent@146963666 (tools/memory_tool_store.py), MIT: the store format
+// (entries between delimiter lines), the change by a unique substring and the
+// refusal over the limit that returns the entries for consolidation.
 
 import fs from 'node:fs';
 import path from 'node:path';

@@ -371,13 +371,60 @@ const BORROWED_SOURCES = [
     name: 'Hermes Agent',
     license: 'MIT License',
     repo: 'https://github.com/NousResearch/hermes-agent',
-    copyright: 'Copyright (c) 2024 Nous Research',
+    copyright: 'Copyright (c) 2025 Nous Research',
     what:
       'The lifecycle shape for promoted browser flows: usage counters kept\n' +
       'beside the artifact rather than inside the cache that produced it, and\n' +
       'an idle ladder that archives before it deletes so a forgotten entry is\n' +
       'recoverable rather than gone. wmux applies it to promoted browser_replay\n' +
-      'flows with its own thresholds and its own file layout. No code was taken.',
+      'flows with its own thresholds and its own file layout. No code was taken\n' +
+      'for it.\n' +
+      '\n' +
+      'Bots, from its source at commit 146963666b488742c41624025cb3c589d87fbc77:\n' +
+      '- Bot memory (adapted): two bounded stores, the bot\'s own notes and a\n' +
+      '  profile of the owner, kept as entries separated by a "§" line, with a\n' +
+      '  2,200-character notes limit, add/replace/remove of an entry found by a\n' +
+      '  unique substring, and a refusal over the limit that returns the entries\n' +
+      '  for consolidation (tools/memory_tool.py, tools/memory_tool_store.py).\n' +
+      '  The check of memory text for instruction overrides, concealment,\n' +
+      '  secret exfiltration and invisible characters follows the categories of\n' +
+      '  tools/threat_patterns.py. wmux files: src/shared/botMemory.ts,\n' +
+      '  src/main/factory/botMemory.ts, src/main/factory/memoryGuard.ts.\n' +
+      '- Skill guidance (adapted): the order "update the skill in use, then a\n' +
+      '  broader one, then add a reference file, a new skill last", and what a\n' +
+      '  skill should not hold (agent/background_review.py). wmux files:\n' +
+      '  src/main/factory/roles/common.ts, src/mcp/botSkills.ts.\n' +
+      '- Ideas only, no code taken: marking a skill stale after a period without\n' +
+      '  use (agent/curator.py); a bot searching its own past conversation\n' +
+      '  (tools/session_search_tool.py); a command permission ladder that\n' +
+      '  refuses by default, with a floor of always-refused commands\n' +
+      '  (tools/approval*.py).',
+  },
+  {
+    name: 'OpenClaw',
+    license: 'MIT License',
+    repo: 'https://github.com/openclaw/openclaw',
+    copyright: 'Copyright (c) 2026 OpenClaw Foundation',
+    what:
+      'An "always allow" for a scheduled job that holds only for the job\'s\n' +
+      'current configuration, so editing the job resets it. No code was taken\n' +
+      'for it.\n' +
+      '\n' +
+      'Bots, from its source at commit f12a8dee2397d059ae58a1a68d97b5a9c8091842:\n' +
+      '- Command reviewer (adapted): a small model asked about one shell command,\n' +
+      '  answering only with one JSON verdict of decision, risk and a one-sentence\n' +
+      '  rationale, where an allow counts only at low or medium risk; the output\n' +
+      '  schema line of the system prompt follows its wording\n' +
+      '  (src/agents/exec-auto-reviewer.prompt.ts, src/agents/exec-auto-reviewer.ts).\n' +
+      '  wmux file: src/main/factory/botCommandReviewer.ts.\n' +
+      '- Ideas only, no code taken: ending a turn that repeats the same tool call\n' +
+      '  with the same result, or alternates between two such calls\n' +
+      '  (src/agents/tool-loop-detection.ts); a set of stdin-only filter commands\n' +
+      '  with per-command option checks, refusal by default, and refusal in a\n' +
+      '  turn the owner did not start (src/infra/exec-safe-bin-*.ts,\n' +
+      '  docs/tools/permission-modes.md); one-time scheduled runs and a local\n' +
+      '  HH:MM quiet window for repeating ones (src/cron,\n' +
+      '  src/infra/heartbeat-active-hours.ts).',
   },
   {
     name: 'skill-forge',
@@ -508,13 +555,6 @@ const INSPIRED_BY = [
     what: 'Bot-to-bot handoffs routed by the system rather than the model, with a\n' +
       'depth cap and a per-run cap that refuse instead of truncating, an always\n' +
       'available ask_person exit, and refusals that are recorded.',
-  },
-  {
-    name: 'OpenClaw',
-    license: 'MIT License',
-    repo: 'https://github.com/openclaw/openclaw',
-    what: 'An "always allow" for a scheduled job that holds only for the job\'s\n' +
-      'current configuration, so editing the job resets it.',
   },
   {
     name: 'Paperclip',

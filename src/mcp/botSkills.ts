@@ -18,6 +18,8 @@ registerToolModule({
       ...(await deps.callRpc(method, params)),
     });
 
+    // Adapted from NousResearch/hermes-agent@146963666 (agent/background_review.py), MIT: the
+    // update-before-add order and what a skill should not hold.
     host.tool(
       'skill_propose',
       'Write a skill: a reusable procedure or lesson for one kind of your work (steps, checks, pitfalls); never task progress, a one-off fact, a secret, or what the repository already says. '
