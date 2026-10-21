@@ -672,6 +672,8 @@ async function cleanTaskFolderNow(
       const repoNow = kind === 'worktree' && !prior?.repoRoot ? await ports.repoInfo(mission.folder).catch(() => null) : null;
       await ports.store.put({
         taskId: entry.id, kind, path: mission.folder, state: 'kept_stopped',
+        // Still not prepared: the resume prepares it first.
+        ...(prior?.prepFailed ? { prepFailed: true as const } : {}),
         stopped: {
           botId,
           ...(entry.title ? { title: entry.title } : {}),
@@ -807,6 +809,9 @@ async function cleanTaskFolderNow(
     taskId: entry.id, kind, path: mission.folder, repoRoot: repo.repoRoot, repoHash: repo.repoHash,
     ...(mission.branch ? { branch: mission.branch } : {}), ...(repo.head ? { head: repo.head } : {}),
     ...(kept ? { keepRef: kept } : prior?.keepRef ? { keepRef: prior.keepRef } : {}), ...stoppedMark, at: keptAt ?? now(),
+    // A folder kept on disk (dirty) is still not prepared: the resume
+    // prepares it first. Gone with the folder, the flag goes too.
+    ...(prior?.prepFailed ? { prepFailed: true as const } : {}),
   };
   // How to put it back is on disk before the folder goes.
   try {
@@ -816,7 +821,8 @@ async function cleanTaskFolderNow(
   }
   const r = await ports.worktrees.removeWorktree(repo.repoRoot, repo.repoHash, mission.folder).catch((err: unknown) => ({ ok: false as const, error: String(err) }));
   if (r.ok) {
-    await ports.store.put({ ...base, state: 'removed', at: now() }).catch(() => undefined);
+    const { prepFailed: _gone, ...removed } = base;
+    await ports.store.put({ ...removed, state: 'removed', at: now() }).catch(() => undefined);
     if (expired && prior) noteKeptFolderCleaned(ports, entry, prior, now(), log);
     ports.changed?.();
     return 'removed';

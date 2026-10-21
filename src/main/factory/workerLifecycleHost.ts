@@ -71,6 +71,8 @@ import { getProjectConfigStore } from '../project/ProjectConfigStore';
 import { TaskFolders, ensureTaskFolderPrepared, forgetKeptFolder, gitRepoInfo, holdTaskFolder, installTaskFolderCleanup, noteKeptFolderStopped, restoreTaskFolder, setTaskFolderPorts, type KeptFolderCleaned, type TaskMission } from './taskFolderCleanup';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { gatedSetup } from '../worktask/gatedSetup';
+import { git as runGit } from '../git/git';
+import * as fs from 'node:fs';
 import { STOPPED_BY_OWNER } from './factoryStop';
 import { getFanOutGuards, setDormantRefresh, taskOfWorkspace } from '../worktask/fanoutGuards';
 import { createTaskWorkspaceLiveness, parseSessionRead } from './taskWorkspaceLiveness';
@@ -114,6 +116,17 @@ const FOLDER_KICK_MIN_MS = 10_000;
  *  a bot's folder is recorded in the cleanup's own store before it goes, and
  *  a half-removed one is finished from that record (taskFolderCleanup). */
 const folderWorktrees = new TaskWorktreeManager();
+
+/** Whether two folders belong to one repository (the same common git dir). */
+async function sameRepository(a: string, b: string): Promise<boolean> {
+  const dir = async (cwd: string) => {
+    const r = await runGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);
+    if (r.code !== 0) return null;
+    try { return fs.realpathSync.native(r.stdout.trim()); } catch { return null; }
+  };
+  const [x, y] = await Promise.all([dir(a), dir(b)]);
+  return x !== null && x === y;
+}
 
 /** The renderer's workspace.close answers this fast or not at all. */
 const CLOSE_TIMEOUT_MS = 10_000;
@@ -487,9 +500,12 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       // The project is read where the bot's fan-out read it: its profile's
       // repository (a linked worktree keeps its own wmux.json and trust),
       // else the main checkout the folder belongs to.
-      prepare: (taskId: string, repoRoot: string, worktreePath: string) => {
+      prepare: async (taskId: string, repoRoot: string, worktreePath: string) => {
         const botId = ledger.get(taskId)?.dispatch?.origin.botId;
-        const sourceCwd = (botId ? getBotStore()?.get(botId)?.repo?.repoPath : undefined) || repoRoot;
+        const botRepo = botId ? getBotStore()?.get(botId)?.repo?.repoPath : undefined;
+        // Only while the bot still acts on this folder's repository (its repo
+        // can be changed after the task ran).
+        const sourceCwd = botRepo && await sameRepository(botRepo, repoRoot) ? botRepo : repoRoot;
         return prepareNewWorktree(
           { sourceCwd, worktreePath, origin: 'automated' },
           { getState: (cwd) => getProjectConfigStore().getState(cwd), runSetup: gatedSetup },

@@ -200,6 +200,19 @@ describe('cleanTaskFolder', () => {
     expect(p.store.get('wtask-abc-12345678')?.prepFailed).toBeUndefined();
   });
 
+  it('a cleanup pass keeps the not-prepared mark of a folder it cannot remove', async () => {
+    const mgr = new TaskWorktreeManager();
+    const wt = await taskWorktree(mgr);
+    const p = ports({ now: () => 10_000_000 });
+    const info = await gitRepoInfo(wt);
+    await p.store.put({ taskId: 'wtask-abc-12345678', kind: 'worktree', path: wt, state: 'restored', prepFailed: true, repoRoot: info!.repoRoot, repoHash: info!.repoHash, branch: 'wtask/perf-a-12345678', at: 1 });
+    // What a half-run setup leaves: a file git does not ignore.
+    fs.writeFileSync(path.join(wt, 'half-built.txt'), 'x');
+    await cleanTaskFolder(p, row('completed'), { folder: wt, branch: 'wtask/perf-a-12345678' }, []);
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(p.store.get('wtask-abc-12345678')).toMatchObject({ state: 'kept_dirty', prepFailed: true });
+  });
+
   it('keeps a worktree with uncommitted changes, never removes it automatically, and Clean up now removes it once it is clean', async () => {
     const mgr = new TaskWorktreeManager();
     const wt = await taskWorktree(mgr);
