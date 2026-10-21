@@ -1243,7 +1243,7 @@ registerMcpPluginRpc(rpcRouter);
 // Plugin host IPC (B-1): plugins:list + the iframe bridge forwarder. Same
 // RpcRouter instance, so plugin-iframe RPCs hit the identical enforcement
 // stack as pipe clients. Registered once, outside the handler swap cycle.
-registerPluginHostHandlers(rpcRouter, () => pluginHostLoader, () => approvalQueue);
+registerPluginHostHandlers(rpcRouter, () => pluginHostLoader, () => approvalQueue, (name) => uiPluginManager?.isManaged(name) === true);
 registerPluginManagementHandlers(() => mainWindow, () => uiPluginManager);
 // Project config IPC (X5 wmux.json): discovery + trust gate. Renderer-only
 // surface — never exposed on the pipe RPC (external clients must not be able
