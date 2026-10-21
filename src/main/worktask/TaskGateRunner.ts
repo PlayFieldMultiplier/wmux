@@ -446,6 +446,13 @@ export interface TaskGateRunnerOptions {
  *  its base. */
 export type GateSkipReason = 'deps_missing' | 'no_gate_command' | 'gate_unavailable' | 'no_changes';
 
+/** What a repository declares as its gate on its base (TaskGateRunner.baseGate):
+ *  the command the runner would run, none at all, or unknown. */
+export type BaseGate =
+  | { kind: 'declared'; command: string }
+  | { kind: 'none' }
+  | { kind: 'unknown'; detail: string };
+
 export type GateRunResult =
   /** The gate ran to a verdict. `result.exitCode === 0` is the only pass.
    *  `newLintErrors`: the errors the task added, when the eslint step failed
@@ -950,6 +957,41 @@ export class TaskGateRunner {
     else if (typeof scripts['lint'] === 'string') steps.push(step([npmBin(), 'run', 'lint']));
     if (typeof scripts['test'] === 'string') steps.push(step([npmBin(), 'test']));
     return { steps };
+  }
+
+  /**
+   * Whether a repository declares a gate, as a verify task's gate from
+   * `baseRef` would find it, read without a worktree: a trusted wmux.json
+   * `verify` at `repoRoot`, else the lint/test scripts of package.json on
+   * `baseRef`. `none` only when the runner would record `no_gate_command`
+   * for a head that keeps the base's scripts: no verify script, none of the
+   * npm scripts on the base, and none in the checkout at `repoRoot` either
+   * (noGateVerdict's parent check). Anything it cannot read is `unknown`.
+   */
+  async baseGate(repoRoot: string, baseRef: string): Promise<BaseGate> {
+    if (!BASE_REF_RE.test(baseRef)) return { kind: 'unknown', detail: `'${baseRef.slice(0, 80)}' is not a ref name the gate runner reads` };
+    const declared = await this.declaredVerifyCommand(repoRoot);
+    if (declared !== null) {
+      return VERIFY_COMMAND_SPELLINGS.includes(declared)
+        ? { kind: 'declared', command: `bash ${GATE_VERIFY_SCRIPT}` }
+        : { kind: 'unknown', detail: `wmux.json declares '${GATE_PROJECT_COMMAND_ID}' as a command the gate runner will not execute` };
+    }
+    let raw: string | null;
+    try {
+      raw = await this.readBaseFile(repoRoot, baseRef, 'package.json');
+    } catch (err) {
+      return { kind: 'unknown', detail: err instanceof Error ? err.message : String(err) };
+    }
+    const base = raw === null ? {} : scriptsOf(raw);
+    if (base === null) return { kind: 'unknown', detail: `package.json on ${baseRef} could not be parsed` };
+    const steps = GATE_NPM_SCRIPTS.filter((s) => typeof base[s] === 'string');
+    if (steps.length > 0) return { kind: 'declared', command: steps.map((s) => (s === 'lint' ? 'npm run lint' : 'npm test')).join(' + ') };
+    const local = this.readPackageScripts(repoRoot);
+    if (local === null) return { kind: 'unknown', detail: `the package.json in ${repoRoot} could not be read or parsed` };
+    if (GATE_NPM_SCRIPTS.some((s) => typeof local[s] === 'string')) {
+      return { kind: 'unknown', detail: `${baseRef} declares no npm lint/test script but the checkout at ${repoRoot} does` };
+    }
+    return { kind: 'none' };
   }
 
   /** The trusted project's `verify` command string, or null when there is none

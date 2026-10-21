@@ -186,6 +186,21 @@
           }
         ]
       }
+    },
+    {
+      "files": [
+        "src/main/factory/botRepoGitServer.ts"
+      ],
+      "rules": {
+        "import/no-unresolved": [
+          "error",
+          {
+            "ignore": [
+              "^@modelcontextprotocol/sdk/server/mcp\\.js$"
+            ]
+          }
+        ]
+      }
     }
   ]
 }

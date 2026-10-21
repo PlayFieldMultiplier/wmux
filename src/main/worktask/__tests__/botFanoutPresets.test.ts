@@ -107,3 +107,24 @@ describe('bot fan-out presets', () => {
     expect(composeBotWorkerPrompt('repro', '')).toContain('open a DRAFT pull request (`gh pr create --draft --head <your branch>`)');
   });
 });
+
+describe('the verify worker is told what the base gate is', () => {
+  const prompt = (gate?: Parameters<typeof composeBotWorkerPrompt>[4]) => composeBotWorkerPrompt('verify', '', { sha: SHA, detached: true }, 'github.com/o/r', gate);
+
+  it('no gate on the base: read and report, no install', () => {
+    const p = prompt({ kind: 'none' });
+    expect(p).toMatch(/declares no gate on its base[\s\S]*Install nothing and run no test suite/);
+    expect(p).not.toMatch(/npm ci/);
+  });
+
+  it('a declared gate is named, with the install it needs', () => {
+    const p = prompt({ kind: 'declared', command: 'npm run lint + npm test' });
+    expect(p).toContain('wmux runs `npm run lint + npm test` on this commit');
+    expect(p).toMatch(/npm ci/);
+  });
+
+  it('a docs-only change is read, not installed, whatever the gate; an unknown gate says so', () => {
+    expect(prompt()).toMatch(/the change is docs-only: read it and report; install nothing and run no test suite/);
+    expect(prompt()).toContain('wmux could not tell which one ahead of time');
+  });
+});

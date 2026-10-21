@@ -61,6 +61,20 @@ describe('mapLaneFacts', () => {
     expect(f?.checks.find((c) => c.name === 'CodeRabbit')).toMatchObject({ bucket: 'pass', isRequired: false });
   });
 
+  it('asks for each file\'s change type; a rename, a copy or an unread type marks filesRenamed', () => {
+    expect(LANE_PR_QUERY).toContain('files(first: 100) { totalCount nodes { path changeType } }');
+    const withTypes = (types: unknown[]) => {
+      const { raw, pr } = readPr('lane-pr1858.json');
+      const nodes = (pr.files as unknown as { nodes: Array<Record<string, unknown>> }).nodes;
+      nodes.forEach((n, i) => { n.changeType = types[i % types.length]; });
+      return mapLaneFacts(raw)?.filesRenamed;
+    };
+    expect(withTypes(['ADDED', 'MODIFIED', 'DELETED', 'CHANGED'])).toBe(false);
+    expect(withTypes(['ADDED', 'RENAMED'])).toBe(true);
+    expect(withTypes(['COPIED'])).toBe(true);
+    expect(withTypes([undefined])).toBe(true);
+  });
+
   it('reads isRequired per node and fails closed on counts', () => {
     const { raw, pr } = readPr('lane-pr1858.json');
     const rollup = pr.commits.nodes[0].commit.statusCheckRollup;

@@ -22,7 +22,8 @@ import type { LedgerEntry } from '../../shared/ledger';
 import type { BotProfile } from '../../shared/bot';
 import { taskThreadOf, type CardNotice, type ThreadId } from '../../shared/room';
 import type { WakeReason } from '../../shared/wake';
-import { newLintErrorsText, type GateRunInput, type GateRunResult } from '../worktask/TaskGateRunner';
+import { getSharedTaskGateRunner, newLintErrorsText, type BaseGate, type GateRunInput, type GateRunResult } from '../worktask/TaskGateRunner';
+import { git } from '../git/git';
 
 /** The fact id a recorded verify gate wakes its bot with. */
 export function verifyGateFactId(taskId: string, rev: number): string {
@@ -259,4 +260,19 @@ export async function originDefaultRef(git: Git, repoPath: string): Promise<stri
     /* unresolved */
   }
   return null;
+}
+
+/** The gate a bot's repository declares on origin's default branch
+ *  (TaskGateRunner.baseGate, on the shared runner), or unknown when the
+ *  runner is not up or the branch cannot be resolved. Never throws. */
+export async function repoBaseGate(repoPath: string, run: Git = git): Promise<BaseGate> {
+  const runner = getSharedTaskGateRunner();
+  if (!runner) return { kind: 'unknown', detail: 'the task gate runner is not up yet' };
+  const baseRef = await originDefaultRef(run, repoPath);
+  if (!baseRef) return { kind: 'unknown', detail: 'origin\'s default branch could not be resolved' };
+  try {
+    return await runner.baseGate(repoPath, baseRef);
+  } catch (err) {
+    return { kind: 'unknown', detail: err instanceof Error ? err.message : String(err) };
+  }
 }

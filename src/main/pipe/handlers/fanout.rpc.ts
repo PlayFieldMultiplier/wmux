@@ -134,6 +134,11 @@ import { BOT_SECRET_LIMITS } from '../../../shared/botSecret';
 import { botCwd, getBotRuntime } from '../../factory/BotRuntime';
 import { getWmuxDir } from '../../../daemon/config';
 import { RESEARCH_PRESET } from '../../../shared/ledger';
+import type { BaseGate } from '../../worktask/TaskGateRunner';
+import { repoBaseGate } from '../../factory/verifyPreset';
+
+/** The bot preset whose worker grades a PR head (botFanoutPresets.ts). */
+const VERIFY_PRESET = 'verify';
 import { GENERAL_THREAD, parseThreadId, prThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
 import { normalizeRepoKey } from '../../../shared/repoKey';
 import { isOriginPin } from '../../../shared/originPin';
@@ -694,6 +699,9 @@ export interface FanOutRpcDeps {
   /** A bot's repository: read its default branch for the workers' push
    *  rules (agents/botWorkerDefaultBranch). Injected in tests. */
   botDefaultBranch?: (repoRoot: string) => Promise<DefaultBranchNote>;
+  /** The gate a bot's repository declares on its base, for a verify
+   *  worker's prompt (default: factory/verifyPreset.ts repoBaseGate). */
+  botBaseGate?: (repoPath: string) => Promise<BaseGate>;
   /** The connection library (default: the running one). */
   connectors?: () => ConnectorStore | null;
   /** The platform workers run on (default: this process's). */
@@ -1190,11 +1198,21 @@ export function registerFanOutRpc(
       || service.statusOf(key).state !== 'unknown'
       || pending.has(key)
       || terminal.has(key);
+    // A bot's verify worker is told the gate its repository declares on its
+    // base (botFanoutPresets.ts VERIFY_PROMPT): read here too, for the same
+    // reason. Not read in time: the prompt says wmux could not tell.
+    let verifyGate: BaseGate | undefined;
+    const readVerifyGate = async (): Promise<void> => {
+      if (typeof params['preset'] !== 'string' || fanoutPresetKey(params['preset']) !== fanoutPresetKey(VERIFY_PRESET)) return;
+      const repoPath = bot ? (deps.bot ?? defaultBotPort)()?.profile(bot.botId)?.repo?.repoPath : undefined;
+      if (repoPath) verifyGate = await (deps.botBaseGate ?? repoBaseGate)(repoPath);
+    };
     if (!keyKnown) {
       try {
         await Promise.all([
           bot ? withinMs((deps.bot ?? defaultBotPort)()?.refreshLiveness?.(), LIVENESS_WAIT_MS) : undefined,
           refreshDormantTaskWorkspaces(LIVENESS_WAIT_MS),
+          bot ? withinMs(readVerifyGate(), LIVENESS_WAIT_MS) : undefined,
         ]);
       } catch {
         /* the caps count what is known */
@@ -1568,7 +1586,7 @@ export function registerFanOutRpc(
       if (checkoutRefusal) return deny('INVALID_ARGUMENT', checkoutRefusal);
       // The preset's worker prompt goes ahead of the bot's own, and every
       // task's effective prompt must still fit the cap.
-      const composed = composeBotWorkerPrompt(botPresetName, sharedPrompt, checkout, botProfile?.repo?.repoKey);
+      const composed = composeBotWorkerPrompt(botPresetName, sharedPrompt, checkout, botProfile?.repo?.repoKey, botPresetName === VERIFY_PRESET ? verifyGate : undefined);
       const tooLong = parsed.taskPrompts.some((own) =>
         Buffer.byteLength(own ? `${composed}\n\n${own}` : composed, 'utf8') > FANOUT_PROMPT_MAX_BYTES);
       if (tooLong) return deny('INVALID_ARGUMENT', `a task prompt with the ${botPresetName} preset's worker prompt exceeds ${FANOUT_PROMPT_MAX_BYTES} bytes`);

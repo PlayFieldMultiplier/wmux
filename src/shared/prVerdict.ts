@@ -50,11 +50,25 @@ export interface PrVerdictPrincipal {
 
 /** What a v2 verdict rests on: the verify task whose system-recorded gate ran
  *  at the head. The merge lane resolves `taskId` to its ledger row and checks
- *  the row, never this claim alone. */
+ *  the row, never this claim alone.
+ *
+ *  A reading-only verdict (`reading` set) rests on no task: the bot read the
+ *  change itself and main found, when it recorded the verdict, that no gate
+ *  grades it — every changed file is docs or content (`docs-only`, which the
+ *  merge lane checks again on its own read of the PR), or the repository
+ *  declares no gate on its base (`no-gate`). Its `taskId` is
+ *  READING_EVIDENCE_TASK_ID, which names no ledger row, so a build that does
+ *  not know `reading` still reads the record and never counts it. */
 export interface PrVerdictEvidence {
   taskId: string;
   gateHeadSha: string;
+  reading?: PrVerdictReadingBasis;
 }
+
+export type PrVerdictReadingBasis = 'docs-only' | 'no-gate';
+
+/** The `taskId` of a reading-only verdict's evidence. */
+export const READING_EVIDENCE_TASK_ID = 'reading-only';
 
 /**
  * One verdict. v1 records (pane verifiers, before bots) are still read; a v2
@@ -110,7 +124,11 @@ export type PrVerdictRefusalCode =
   /** The evidence gate was a recorded skip (the lane's reason). */
   | 'gate-skipped'
   /** A PASS whose evidence gate failed (the lane's reason). */
-  | 'gate-failed';
+  | 'gate-failed'
+  /** A reading-only verdict on a change a gate grades: it touches more than
+   *  docs and content, and the repository declares a gate (or wmux cannot
+   *  tell whether it does). Start a verify worker. */
+  | 'gate-required';
 
 export type PrVerdictResult =
   | { ok: true; record: PrVerdictRecord }
@@ -150,7 +168,8 @@ export function isPrVerdictRecord(v: unknown): v is PrVerdictRecord {
       && (p.ptyId !== undefined || p.botId !== undefined)
       && (v.evidence === undefined || (isRecord(v.evidence)
         && isId(v.evidence.taskId)
-        && typeof v.evidence.gateHeadSha === 'string' && COMMIT_SHA_RE.test(v.evidence.gateHeadSha)));
+        && typeof v.evidence.gateHeadSha === 'string' && COMMIT_SHA_RE.test(v.evidence.gateHeadSha)
+        && (v.evidence.reading === undefined || v.evidence.reading === 'docs-only' || v.evidence.reading === 'no-gate')));
   return principalOk
     && typeof v.repoKey === 'string' && v.repoKey.length > 0
     && isPrNumber(v.prNumber)

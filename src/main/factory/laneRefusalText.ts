@@ -53,6 +53,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'evidence-unreadable': 'The verify tasks\' records could not be read',
   'gate-failed': 'The verify gate failed',
   'gate-skipped': 'The verify gate was skipped, so nothing ran',
+  'gate-required': 'The PASS rests on reading alone, but the change is not docs-only and the repository has a gate',
   'evidence-mismatch': 'The PASS is not backed by a matching verify task',
   'verdict-no-evidence': 'The PASS names no verify task',
   // The lane host.

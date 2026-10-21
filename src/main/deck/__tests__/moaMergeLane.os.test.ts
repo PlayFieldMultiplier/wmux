@@ -330,9 +330,40 @@ describe('verifier-pass-at-head with botVerdictsOnly (evidence binding)', () => 
   });
 
   it('on: a skipped gate is not a pass, even with exit 0', () => {
-    const skipped = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: head } });
+    const skipped = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_changes', headSha: head } });
     expect(reasonOf(botCtx({ evidenceRows: rows(skipped) }))).toBe('gate-skipped');
     expect(verdictEvidenceCheck(botVerdict(), rows(skipped))).toBe('gate-skipped');
+    // The head dropped the gate its base declares: recorded as a failed `none`.
+    const dropped = row({ gate: { exitCode: 1, tail: '', at: 1, command: 'none', recordedBy: 'system', headSha: head } });
+    expect(verdictEvidenceCheck(botVerdict(), rows(dropped))).toBe('gate-skipped');
+    const noGateRed = row({ gate: { exitCode: 1, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: head } });
+    expect(verdictEvidenceCheck(botVerdict(), rows(noGateRed))).toBe('gate-skipped');
+  });
+
+  it('on: the no_gate_command record (no gate declared on the base) counts as the gate', () => {
+    const noGate = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: head } });
+    expect(evaluateMergeLane(facts, botCtx({ evidenceRows: rows(noGate) })).ok).toBe(true);
+    // Still bound to the head it ran on.
+    const elsewhere = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: 'c'.repeat(40) } });
+    expect(reasonOf(botCtx({ evidenceRows: rows(elsewhere) }))).toBe('evidence-mismatch');
+  });
+
+  it('on: a reading-only PASS counts for a docs-only change on this read, or where main found no gate', () => {
+    const reading = (basis: 'docs-only' | 'no-gate', over: Partial<PrVerdictRecord> = {}) => botVerdict({ evidence: { taskId: 'reading-only', gateHeadSha: head, reading: basis }, ...over });
+    const docsFacts = openWithRequired({ files: ['docs/guide.html', 'README.md'], filesRenamed: false });
+    const docsCtx = (v: PrVerdictRecord) => ctx(docsFacts, { botVerdictsOnly: true, verdicts: [v], evidenceRows: new Map() });
+    const docsReason = (v: PrVerdictRecord, f = docsFacts) => evaluateMergeLane(f, { ...docsCtx(v), expectHead: f.headRefOid }).failures.find((x) => x.predicate === 'verifier-pass-at-head')?.reason;
+    expect(evaluateMergeLane(docsFacts, docsCtx(reading('docs-only'))).ok).toBe(true);
+    expect(evaluateMergeLane(docsFacts, docsCtx(reading('docs-only'))).verifiedBy).not.toHaveProperty('taskId');
+    // Re-checked on the lane's own read: a code file, a rename, a cut list.
+    expect(docsReason(reading('docs-only'), openWithRequired({ files: ['docs/guide.html', 'src/x.ts'], filesRenamed: false }))).toBe('gate-required');
+    expect(docsReason(reading('docs-only'), openWithRequired({ files: ['docs/guide.html'], filesRenamed: true }))).toBe('gate-required');
+    expect(docsReason(reading('docs-only'), openWithRequired({ files: ['docs/guide.html'], filesRenamed: false, filesTruncated: true }))).toBe('gate-required');
+    // no-gate: main's finding when it recorded the verdict.
+    expect(evaluateMergeLane(facts, botCtx({ verdicts: [reading('no-gate')], evidenceRows: new Map() })).ok).toBe(true);
+    // Bound to a bot and to the head.
+    expect(reasonOf(botCtx({ verdicts: [reading('no-gate', { principal: { workspaceId: 'ws-verifier', ptyId: 'pty-1', agent: 'claude' } })] }))).toBe('evidence-mismatch');
+    expect(reasonOf(botCtx({ verdicts: [botVerdict({ evidence: { taskId: 'reading-only', gateHeadSha: 'c'.repeat(40), reading: 'no-gate' } })] }))).toBe('evidence-mismatch');
   });
 
   it('on: a failing or killed gate refuses', () => {

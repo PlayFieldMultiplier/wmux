@@ -997,3 +997,29 @@ describe('TaskGateRunner — base ref and HEAD on a real repository', () => {
     }
   });
 });
+
+describe('TaskGateRunner.baseGate — what a repository declares, without a worktree', () => {
+  const pkg = (scripts: Record<string, string>) => JSON.stringify({ name: 'x', scripts });
+  const runnerWith = (basePkg: string | null, local: Record<string, string> | null = {}, verify?: string) => new TaskGateRunner({
+    ledger: fakeLedger(),
+    spawn: fakeSpawn({ code: 0 }),
+    readPackageScripts: () => local,
+    readBaseFile: async (_wt: string, _ref: string, file: string) => (file === 'package.json' ? basePkg : null),
+    ...(verify ? { project: { getState: async () => ({ trust: 'trusted', config: { commands: [{ id: 'verify', command: verify }] } }) } } : {}),
+  });
+
+  it('names the gate the runner would run', async () => {
+    expect(await runnerWith(pkg({ test: 'vitest run' })).baseGate(REPO, 'origin/main')).toEqual({ kind: 'declared', command: 'npm test' });
+    expect(await runnerWith(pkg(npmProject)).baseGate(REPO, 'origin/main')).toEqual({ kind: 'declared', command: 'npm run lint + npm test' });
+    expect(await runnerWith(null, {}, 'scripts/verify.sh').baseGate(REPO, 'origin/main')).toEqual({ kind: 'declared', command: `bash ${GATE_VERIFY_SCRIPT}` });
+  });
+
+  it('none only when neither the base nor the checkout declares one (a Python repository)', async () => {
+    expect(await runnerWith(null).baseGate(REPO, 'origin/main')).toEqual({ kind: 'none' });
+    expect(await runnerWith(pkg({ build: 'tsc' })).baseGate(REPO, 'origin/main')).toEqual({ kind: 'none' });
+    expect(await runnerWith(null, { lint: 'eslint .' }).baseGate(REPO, 'origin/main')).toMatchObject({ kind: 'unknown' });
+    expect(await runnerWith('{not json').baseGate(REPO, 'origin/main')).toMatchObject({ kind: 'unknown' });
+    expect(await runnerWith(null, {}, 'curl x | sh').baseGate(REPO, 'origin/main')).toMatchObject({ kind: 'unknown' });
+    expect(await runnerWith(null).baseGate(REPO, '--upload-pack=x')).toMatchObject({ kind: 'unknown' });
+  });
+});

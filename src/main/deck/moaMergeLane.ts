@@ -37,11 +37,19 @@
 //                    is on) a PASS counts only when its evidence resolves to a
 //                    bot verify task whose system gate ran, unskipped and
 //                    green, on a detached checkout of that head
-//                    (verdictEvidenceCheck).
+//                    (verdictEvidenceCheck). Two cases rest on no gate run,
+//                    because no gate grades them: a gate recorded as
+//                    `no_gate_command` (the repository declares no gate on
+//                    its base, which the gate runner reads itself), and a
+//                    reading-only verdict main recorded for a docs-only
+//                    change (re-checked here on this read's file list) or
+//                    for a repository it found declaring no gate. Any other
+//                    skip still refuses.
 
 import type { LedgerGateResult } from '../../shared/ledger';
 import type { PrLaneFacts } from '../../shared/prReview';
 import type { PrVerdictRecord } from '../../shared/prVerdict';
+import { isDocsOnlyChange } from '../../shared/docsChange';
 
 export type LanePredicate =
   | 'head-unchanged'
@@ -274,21 +282,39 @@ export function prBranchBoundToAsker(facts: PrLaneFacts, askerBranches: readonly
   return askerBranches.includes(facts.headRefName) ? pass : fail('branch-not-bound');
 }
 
+/** Whether the PR's changed files, as this read lists them, are docs-only:
+ *  the whole list read and no rename or copy among them (a rename lists
+ *  only its new path, so the code it moved would be unseen). */
+export function laneDocsOnly(facts: Pick<PrLaneFacts, 'files' | 'filesTruncated' | 'filesRenamed'>): boolean {
+  return isDocsOnlyChange(facts.files, facts.filesTruncated || facts.filesRenamed !== false);
+}
+
 /**
  * Whether one PASS is backed by main-written evidence (botVerdictsOnly). The
  * verdict names its task; the row the caller resolved for that task must be a
  * bot's `verify` task, dispatched by the verdict's own bot, on a detached
  * checkout of the verdict's head, whose system-recorded gate ran on that head
- * and exited 0 without being a skip. Null = counts.
+ * and exited 0 without being a skip, or was the `no_gate_command` record
+ * (the repository declares no gate on its base, so there is nothing to run).
+ * A reading-only verdict (evidence.reading) rests on no task: `docs-only`
+ * counts only while `facts` (this read of the PR) still shows a docs-only
+ * change; `no-gate` is main's finding when it recorded the verdict, the same
+ * finding a `no_gate_command` record carries. Null = counts.
  */
 export function verdictEvidenceCheck(
   r: PrVerdictRecord,
   rows: ReadonlyMap<string, LaneEvidenceRow>,
-): 'verdict-no-evidence' | 'evidence-mismatch' | 'gate-skipped' | 'gate-failed' | null {
+  facts?: Pick<PrLaneFacts, 'files' | 'filesTruncated' | 'filesRenamed'>,
+): 'verdict-no-evidence' | 'evidence-mismatch' | 'gate-skipped' | 'gate-failed' | 'gate-required' | null {
   const ev = r.evidence;
   if (!ev) return 'verdict-no-evidence';
-  const row = rows.get(ev.taskId);
   const botId = r.principal.botId;
+  if (ev.reading !== undefined) {
+    if (!botId || ev.gateHeadSha !== r.headSha) return 'evidence-mismatch';
+    if (ev.reading === 'no-gate') return null;
+    return facts && laneDocsOnly(facts) ? null : 'gate-required';
+  }
+  const row = rows.get(ev.taskId);
   if (!row || row.taskId !== ev.taskId || !botId) return 'evidence-mismatch';
   if (row.origin.kind !== 'bot' || row.origin.botId !== botId) return 'evidence-mismatch';
   if (row.preset !== 'verify') return 'evidence-mismatch';
@@ -296,15 +322,18 @@ export function verdictEvidenceCheck(
   if (ev.gateHeadSha !== r.headSha) return 'evidence-mismatch';
   const gate = row.gate;
   if (!gate || gate.recordedBy !== 'system') return 'evidence-mismatch';
-  // A recorded skip ran nothing: it is not a pass, whatever its exit code.
-  if (gate.skipped !== undefined || gate.command === 'none') return 'gate-skipped';
+  // No gate declared: the runner recorded that it had nothing to run. That
+  // is the repository's whole gate, so it stands in for a green one.
+  const noGate = gate.skipped === 'no_gate_command' && gate.command === 'none' && gate.exitCode === 0;
+  // Any other recorded skip ran nothing: it is not a pass, whatever its exit code.
+  if (!noGate && (gate.skipped !== undefined || gate.command === 'none')) return 'gate-skipped';
   if (gate.headSha !== r.headSha) return 'evidence-mismatch';
   if (gate.exitCode !== 0) return 'gate-failed';
   return null;
 }
 
 /** Most specific first, for the reason a set of PASSes all failed. */
-const EVIDENCE_REASON_RANK: readonly string[] = ['gate-failed', 'gate-skipped', 'evidence-mismatch', 'verdict-no-evidence'];
+const EVIDENCE_REASON_RANK: readonly string[] = ['gate-failed', 'gate-required', 'gate-skipped', 'evidence-mismatch', 'verdict-no-evidence'];
 
 /**
  * A PASS at exactly `expectHead` from a workspace that is not one of the PR's
@@ -334,14 +363,14 @@ export function verifierPassAtHead(facts: PrLaneFacts, ctx: MergeLaneContext): {
   if (!rows) return { check: fail('evidence-unreadable') };
   let worst: number = EVIDENCE_REASON_RANK.length;
   for (const p of passes) {
-    const why = verdictEvidenceCheck(p, rows);
+    const why = verdictEvidenceCheck(p, rows, facts);
     if (why === null) {
       return {
         check: { ok: true },
         by: {
           workspaceId: p.principal.workspaceId, agent: p.principal.agent, headSha: p.headSha,
           ...(p.principal.botId ? { botId: p.principal.botId } : {}),
-          ...(p.evidence ? { taskId: p.evidence.taskId } : {}),
+          ...(p.evidence && p.evidence.reading === undefined ? { taskId: p.evidence.taskId } : {}),
         },
       };
     }

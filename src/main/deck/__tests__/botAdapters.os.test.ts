@@ -363,6 +363,34 @@ describe('ClaudeSdkAdapter bot mode with a repository', () => {
     }
   });
 
+  it('a repository bot holds git_show and git_diff as an in-process server, gated like the built-in reads', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let running: WakeItem | null = { id: 'w-1', botId: BINDING.botId, workspaceId: BINDING.workspaceId, reason: { kind: 'human', text: 'hi', source: 'desktop' }, priority: 0, enqueuedAt: 1, attempts: 1, state: 'running' };
+    const runningWake = () => (running ? { item: running, startedAt: 1 } : null);
+    setWakeTaint(new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake }), runningWake);
+    try {
+      const o = await optionsFor(repo);
+      const servers = o.mcpServers as Record<string, { type: string; name?: string; instance?: unknown }>;
+      expect(Object.keys(servers).sort()).toEqual(['wmux', 'wmux_repo']);
+      expect(servers.wmux_repo).toMatchObject({ type: 'sdk', name: 'wmux_repo' });
+      expect(servers.wmux_repo.instance).toBeTruthy();
+      // Never auto-allowed: every call goes through main's decision.
+      expect(o.allowedTools).toEqual(expect.not.arrayContaining(['mcp__wmux_repo__git_show', 'mcp__wmux_repo__git_diff']));
+      expect(String(o.systemPrompt)).toContain('mcp__wmux_repo__git_diff');
+      expect(await canUse(o)('mcp__wmux_repo__git_diff', { base: 'origin/main', head: 'abc1234' })).toMatchObject({ behavior: 'allow' });
+      expect(await preHook(o)({ tool_name: 'mcp__wmux_repo__git_show', tool_input: { rev: 'abc1234', path: 'a' } })).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+      // A guest's wake: refused by the guest gate, like Read.
+      running = { ...running, reason: { kind: 'guest', guestId: '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b', guestName: 'G', cardId: 'c', text: 'hi' } };
+      expect(await canUse(o)('mcp__wmux_repo__git_diff', { base: 'origin/main', head: 'abc1234' })).toMatchObject({ behavior: 'deny', message: expect.stringContaining('external guest') });
+      expect(await guestHook(o)({ tool_name: 'mcp__wmux_repo__git_show', tool_input: {} })).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+      // Without a repository there is no such server.
+      expect(Object.keys((await optionsFor(undefined)).mcpServers as object)).toEqual(['wmux']);
+    } finally {
+      setWakeTaint(null);
+      vi.restoreAllMocks();
+    }
+  });
+
   it('canUseTool makes the same decision', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const can = canUse(await optionsFor(repo));

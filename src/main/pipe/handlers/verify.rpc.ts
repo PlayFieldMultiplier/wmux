@@ -25,12 +25,23 @@
 // with the lane's own reason, so nothing is recorded that cannot count. A
 // recorded verdict closes its verify task (factory/verdictedTasks.ts); so
 // does one refused because the PR head moved past the task's checkout.
+//
+// A bot may instead record a reading-only verdict (`evidence: {reading:
+// true}`): it read the change itself and started no worker. Main records it
+// only for a change no gate grades, found from its own reads, never from the
+// bot's word: every file of the fresh PR read is docs or content
+// (moaMergeLane.ts laneDocsOnly, `docs-only`), or else the repository
+// declares no gate on its base (TaskGateRunner.baseGate, `no-gate`). Any
+// other change is refused `gate-required`: it needs a verify worker. The
+// guest checks are the same as for a task verdict.
 
 import type { RpcRouter } from '../RpcRouter';
 import {
   PR_VERDICT_ID_MAX,
   PR_VERDICT_RPC,
+  READING_EVIDENCE_TASK_ID,
   parsePrVerdictInput,
+  type PrVerdictReadingBasis,
   type PrVerdictRecord,
   type PrVerdictResult,
 } from '../../../shared/prVerdict';
@@ -38,7 +49,9 @@ import type { PrLaneFacts } from '../../../shared/prReview';
 import type { BotBinding, BotProfile } from '../../../shared/bot';
 import type { RpcContext } from '../../../shared/rpc';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { verdictEvidenceCheck, type LaneEvidenceRow } from '../../deck/moaMergeLane';
+import { laneDocsOnly, verdictEvidenceCheck, type LaneEvidenceRow } from '../../deck/moaMergeLane';
+import type { BaseGate } from '../../worktask/TaskGateRunner';
+import { repoBaseGate } from '../../factory/verifyPreset';
 import { getBotDirectory } from '../../factory/botStore';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { closeVerifyTask, isBotVerifyTask } from '../../factory/verdictedTasks';
@@ -68,6 +81,9 @@ export interface VerifyBotPorts {
   /** The guest provenance of the bot's running wake (wakeTaint.ts). Missing:
    *  the running tracker's. */
   guestWake?: (botId: string) => GuestProvenance;
+  /** The gate the repository declares on its base, for a reading-only
+   *  verdict. Missing: repoBaseGate (the shared gate runner's). */
+  baseGate?: (repoPath: string) => Promise<BaseGate>;
 }
 
 const defaultBotPorts: VerifyBotPorts = {
@@ -91,11 +107,21 @@ export function laneEvidenceRowOf(row: LedgerEntry): LaneEvidenceRow {
   };
 }
 
-function botEvidenceOf(raw: unknown): { taskId: string } | null {
+function botEvidenceOf(raw: unknown): { taskId: string } | { reading: true } | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
-  if (Object.keys(r).some((k) => k !== 'taskId')) return null;
+  const keys = Object.keys(r);
+  if (keys.length === 1 && r.reading === true) return { reading: true };
+  if (keys.some((k) => k !== 'taskId')) return null;
   return typeof r.taskId === 'string' && r.taskId.length > 0 && r.taskId.length <= PR_VERDICT_ID_MAX ? { taskId: r.taskId } : null;
+}
+
+/** Why a reading-only verdict cannot rest on reading alone, from what the
+ *  repository declares as its gate. */
+function gateRequiredMessage(gate: Exclude<BaseGate, { kind: 'none' }>): string {
+  return gate.kind === 'declared'
+    ? `the change is not docs-only and the repository's gate is \`${gate.command}\`: start a verify worker at the head`
+    : `the change is not docs-only and wmux cannot tell whether the repository has a gate (${gate.detail.slice(0, 200)}): start a verify worker at the head`;
 }
 
 /** The bot path of verify.recordVerdict (see the header). */
@@ -109,7 +135,7 @@ export async function recordBotVerdict(
   if (!parsed.ok) return { ok: false, code: 'invalid', message: `${parsed.field ? `${parsed.field}: ` : ''}${parsed.message}` };
   const input = parsed.value;
   const evidence = botEvidenceOf(rawEvidence);
-  if (!evidence) return { ok: false, code: 'evidence-missing', message: 'evidence must be {taskId}: the verify task this verdict rests on' };
+  if (!evidence) return { ok: false, code: 'evidence-missing', message: 'evidence must be {taskId} (the verify task this verdict rests on) or {reading: true} (a change no gate grades, read by you)' };
   const ports = deps.bot ?? defaultBotPorts;
   // A verdict is merge evidence: no wake that is not known clean records one.
   const guestRefusal = (): PrVerdictResult | null => ((ports.guestWake ?? guestOfRunningWake)(bot.botId) !== false
@@ -137,7 +163,7 @@ export async function recordBotVerdict(
   if (facts.number !== input.prNumber) return { ok: false, code: 'pr-read-failed', message: 'GitHub answered for another pull request' };
   let row: LedgerEntry | null;
   try {
-    row = ports.ledgerRow(evidence.taskId);
+    row = 'taskId' in evidence ? ports.ledgerRow(evidence.taskId) : null;
   } catch {
     row = null;
   }
@@ -160,6 +186,39 @@ export async function recordBotVerdict(
       await ports.closeVerifyTask?.(row.id, bot.botId, `PR head moved past ${input.headSha.slice(0, 7)}; no verdict recorded`).catch(() => false);
     }
     return { ok: false, code: 'head-mismatch', message: 'the pull request has another head than headSha; verify the current head' };
+  }
+  if ('reading' in evidence) {
+    let basis: PrVerdictReadingBasis = 'docs-only';
+    if (!laneDocsOnly(facts)) {
+      let gate: BaseGate;
+      try {
+        gate = await (ports.baseGate ?? repoBaseGate)(repoPath);
+      } catch (err) {
+        gate = { kind: 'unknown', detail: err instanceof Error ? err.message : String(err) };
+      }
+      if (gate.kind !== 'none') return { ok: false, code: 'gate-required', message: gateRequiredMessage(gate) };
+      basis = 'no-gate';
+    }
+    const reading: PrVerdictRecord = {
+      version: 2,
+      repoKey,
+      prNumber: input.prNumber,
+      headSha: input.headSha,
+      verdict: input.verdict,
+      principal: { workspaceId: bot.workspaceId, botId: bot.botId, agent: BOT_VERDICT_AGENT },
+      evidence: { taskId: READING_EVIDENCE_TASK_ID, gateHeadSha: input.headSha, reading: basis },
+      summary: input.summary,
+      at: (deps.now ?? Date.now)(),
+    };
+    if (!unchanged()) {
+      return { ok: false, code: 'not-attributed', message: 'this bot changed while the verdict was being checked' };
+    }
+    // The lane's own check, on the same read: what is recorded can count.
+    const readingWhy = verdictEvidenceCheck(reading, new Map(), facts);
+    if (readingWhy !== null) {
+      return { ok: false, code: readingWhy === 'verdict-no-evidence' ? 'evidence-missing' : readingWhy, message: 'the merge lane would not count this reading-only verdict' };
+    }
+    return saveBotVerdict(reading, guestRefusal, deps);
   }
   if (!row) return { ok: false, code: 'evidence-missing', message: `no task ${evidence.taskId} in the task ledger` };
   const record: PrVerdictRecord = {
@@ -186,7 +245,12 @@ export async function recordBotVerdict(
         : 'the task is not this bot\'s verify task on a detached checkout of headSha with a system gate run at headSha';
     return { ok: false, code: why === 'verdict-no-evidence' ? 'evidence-missing' : why, message };
   }
-  // Judged again after the reads, in the tick that writes.
+  return saveBotVerdict(record, guestRefusal, deps);
+}
+
+/** The bot path's write: the guest check judged again after the reads, in
+ *  the tick that writes, then the record. */
+async function saveBotVerdict(record: PrVerdictRecord, guestRefusal: () => PrVerdictResult | null, deps: VerifyRpcDeps): Promise<PrVerdictResult> {
   const refusedLate = guestRefusal();
   if (refusedLate) return refusedLate;
   try {
