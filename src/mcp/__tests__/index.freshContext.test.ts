@@ -77,6 +77,16 @@ describe('terminal_send / terminal_send_key wait for the terminal start (#2398)'
     expect(key).toMatch(/callRpc\('input\.sendKey', params, terminalWriteClientTimeoutMs\(\)\)/);
   });
 
+  // #2398 review item 3 — main is told each deadline and starts a pane only
+  // within it, so a write it completes never lands after the client gave up.
+  it('both tell main the deadline they wait', () => {
+    const send = between("'terminal_send',", "'terminal_send_key',");
+    expect(send).toMatch(/base\.clientTimeoutMs = terminalWriteClientTimeoutMs\(TERMINAL_SEND_NEW_TASK_TIMEOUT_MS\);/);
+    expect(send).toMatch(/base\.clientTimeoutMs = terminalWriteClientTimeoutMs\(\);/);
+    const key = between("'terminal_send_key',", 'server.tool(');
+    expect(key).toMatch(/params\.clientTimeoutMs = terminalWriteClientTimeoutMs\(\);/);
+  });
+
   it('both route a pane that has not started by its surface, through the commander route too', () => {
     for (const handler of [between("'terminal_send',", "'terminal_send_key',"), between("'terminal_send_key',", 'server.tool(')]) {
       expect(handler).toMatch(/resolveTerminalRouteBound\(ref\.ptyId, ref\.surfaceId\)/);

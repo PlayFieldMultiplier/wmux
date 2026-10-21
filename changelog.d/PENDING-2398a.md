@@ -10,4 +10,9 @@
   one past the restore limit) in a workspace you have not opened likewise
   starts when its pane is first shown. Agents see such a pane as not started
   (not as ended): reading it starts nothing, a message to it is stored for the
-  receiver to poll, and typing into it with `terminal_send` starts it first.
+  receiver to poll, and typing into it with `terminal_send` or `wmux send`
+  starts it first (both wait for that start, so a slow WSL start does not
+  time out and get typed twice). `ctrl+c` or `escape` sent to it starts
+  nothing and answers that nothing is running. A suspended session is no
+  longer discarded after the 7-day suspended limit just because its pane was
+  never opened.

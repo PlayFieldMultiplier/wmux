@@ -1,4 +1,5 @@
 import { sendRequest } from '../client';
+import { terminalWriteClientTimeoutMs } from '../../shared/terminalWriteBudget';
 import { printResult, ensureOk, parseFlag, hasFlag } from '../utils';
 import { resolveSelfContext, getParentPidDefault, type SelfContext } from '../identity';
 import type { RpcMethod, RpcResponse } from '../../shared/rpc';
@@ -160,10 +161,14 @@ export async function handleInput(
         process.exit(1);
       }
       const target = await targetOrExit(args);
-      const params: Record<string, unknown> = { text, ...target };
+      // #2398 — the write may first start the pane's terminal: wait for that
+      // start and the delivery, and tell main the deadline so it never writes
+      // after this command has given up (shared/terminalWriteBudget.ts).
+      const writeTimeoutMs = terminalWriteClientTimeoutMs();
+      const params: Record<string, unknown> = { text, ...target, clientTimeoutMs: writeTimeoutMs };
       if (hasFlag(args, '--submit')) params.submit = true;
       if (hasFlag(args, '--raw')) params.raw = true;
-      response = await sendRequest('input.send', params);
+      response = await sendRequest('input.send', params, writeTimeoutMs);
       if (jsonMode) {
         printResult(response);
       } else {
@@ -184,7 +189,9 @@ export async function handleInput(
         process.exit(1);
       }
       const target = await targetOrExit(args);
-      response = await sendRequest('input.sendKey', { key, ...target });
+      // #2398 — see send.
+      const keyTimeoutMs = terminalWriteClientTimeoutMs();
+      response = await sendRequest('input.sendKey', { key, ...target, clientTimeoutMs: keyTimeoutMs }, keyTimeoutMs);
       if (jsonMode) {
         printResult(response);
       } else {

@@ -25,6 +25,10 @@ vi.mock('../../identity', () => ({
 import { sendRequest } from '../../client';
 import { resolveSelfContext } from '../../identity';
 import { agentInPane, handleInput, stripInputFlags } from '../input';
+import { TERMINAL_START_BUDGET_MS, terminalWriteClientTimeoutMs } from '../../../shared/terminalWriteBudget';
+
+// #2398 — every write carries its deadline to main and waits as long.
+const deadline = terminalWriteClientTimeoutMs();
 
 const rpc = sendRequest as unknown as ReturnType<typeof vi.fn>;
 const selfContext = resolveSelfContext as unknown as ReturnType<typeof vi.fn>;
@@ -76,14 +80,15 @@ describe('wmux send targets', () => {
   it('resolves --to #name to that pane and keeps the flag out of the text', async () => {
     await handleInput('send', ['hello', 'there', '--to', '#w1-1', '--submit'], false);
     expect(rpc).toHaveBeenCalledWith('pane.resolveName', { name: '#w1-1' });
-    expect(rpc).toHaveBeenCalledWith('input.send', { text: 'hello there', ptyId: 'pty-other', submit: true });
+    expect(rpc).toHaveBeenCalledWith('input.send',
+      { text: 'hello there', ptyId: 'pty-other', submit: true, clientTimeoutMs: deadline }, deadline);
     expect(selfContext).not.toHaveBeenCalled();
     expect(warnings()).toEqual([]);
   });
 
   it('takes a ptyId through --to or --pane unchanged', async () => {
     await handleInput('send', ['x', '--pane', 'daemon-9e8b7d2b'], false);
-    expect(rpc).toHaveBeenCalledWith('input.send', { text: 'x', ptyId: 'daemon-9e8b7d2b' });
+    expect(rpc).toHaveBeenCalledWith('input.send', { text: 'x', ptyId: 'daemon-9e8b7d2b', clientTimeoutMs: deadline }, deadline);
     expect(rpc).not.toHaveBeenCalledWith('pane.resolveName', expect.anything());
     expect(stripInputFlags(['a', '--to', '#w1-1', 'b', '--pane', 'p', '--submit'])).toEqual(['a', 'b']);
   });
@@ -107,7 +112,8 @@ describe('wmux send targets', () => {
     agentPty = 'pty-self';
     await handleInput('send', ['note for the other agent', '--submit'], false);
     expect(rpc).toHaveBeenCalledWith('input.send',
-      { text: 'note for the other agent', ptyId: 'pty-self', workspaceId: 'ws-self', submit: true });
+      { text: 'note for the other agent', ptyId: 'pty-self', workspaceId: 'ws-self', submit: true, clientTimeoutMs: deadline },
+      deadline);
     expect(rpc).toHaveBeenCalledWith('pane.list', { workspaceId: 'ws-self' });
     const [warning] = warnings();
     expect(warning).toMatch(/your own pane #w1-2, where Codex CLI is running/);
@@ -121,6 +127,21 @@ describe('wmux send targets', () => {
     agentPty = 'pty-somewhere-else';
     await handleInput('send', ['echo hi', '--submit'], false);
     expect(warnings()).toEqual([]);
+  });
+
+  // Review item 3 — the CLI's generic 15 s deadline was shorter than the
+  // start a write may now wait on (a WSL pane's first start), so `wmux send`
+  // gave up, exited non-zero, and main still wrote: a retry typed it twice.
+  it('waits for a pane start and tells main its deadline, for send and send-key', async () => {
+    expect(deadline).toBeGreaterThan(TERMINAL_START_BUDGET_MS);
+    await handleInput('send', ['x', '--to', '#w1-1'], false);
+    await handleInput('send-key', ['enter', '--to', '#w1-1'], false);
+    const writes = rpc.mock.calls.filter((c: unknown[]) => c[0] === 'input.send' || c[0] === 'input.sendKey');
+    expect(writes).toHaveLength(2);
+    for (const [, params, timeoutMs] of writes) {
+      expect(timeoutMs).toBe(deadline);
+      expect((params as Record<string, unknown>).clientTimeoutMs).toBe(deadline);
+    }
   });
 
   it('reads the agent of a pane from a pane.list result', () => {

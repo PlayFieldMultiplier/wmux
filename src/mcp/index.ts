@@ -1838,10 +1838,13 @@ server.tool(
     // #2398 — the write may first start the pane's terminal: the deadline
     // covers that start, then the delivery (terminalWriteBudget.ts). A new
     // task may also wait out the pane's fresh-context step (#1680).
+    // Main is told the deadline (clientTimeoutMs) and never writes past it.
     if (new_task) {
       base.newTask = true;
+      base.clientTimeoutMs = terminalWriteClientTimeoutMs(TERMINAL_SEND_NEW_TASK_TIMEOUT_MS);
       return callRpc('input.send', base, terminalWriteClientTimeoutMs(TERMINAL_SEND_NEW_TASK_TIMEOUT_MS));
     }
+    base.clientTimeoutMs = terminalWriteClientTimeoutMs();
     return callRpc('input.send', base, terminalWriteClientTimeoutMs());
   },
 );
@@ -1863,7 +1866,8 @@ server.tool(
     const senderPtyId = getTaskSenderPtyId();
     if (senderPtyId) params.senderPtyId = senderPtyId;
     addCallerPtyId(params);
-    // #2398 — see terminal_send: the start, then the delivery.
+    // #2398 — see terminal_send: the start, then the delivery, and main told.
+    params.clientTimeoutMs = terminalWriteClientTimeoutMs();
     const result = await callRpc('input.sendKey', params, terminalWriteClientTimeoutMs());
     // Say plainly what `ok` covers. The RPC confirms DELIVERY of a keystroke and
     // nothing more, but callers read a bare `{ok:true}` from an Enter press as

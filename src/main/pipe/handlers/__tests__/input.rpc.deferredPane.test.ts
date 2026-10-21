@@ -7,7 +7,7 @@ import { RpcRouter } from '../../RpcRouter';
 import { registerInputRpc } from '../input.rpc';
 import type { PTYManager } from '../../../pty/PTYManager';
 import { WSL_RPC_TIMEOUT_MS } from '../../../../shared/wsl';
-import { TERMINAL_START_BUDGET_MS, TERMINAL_WRITE_DELIVERY_BUDGET_MS, terminalWriteClientTimeoutMs } from '../../../../shared/terminalWriteBudget';
+import { TERMINAL_START_BUDGET_MS, TERMINAL_WRITE_DELIVERY_BUDGET_MS, terminalStartWindowMs, terminalWriteClientTimeoutMs } from '../../../../shared/terminalWriteBudget';
 import { mintCommanderToken, __resetCommanderTrustForTesting } from '../../../deck/commanderTrust';
 
 const { sendToRendererMock } = vi.hoisted(() => ({ sendToRendererMock: vi.fn() }));
@@ -97,6 +97,20 @@ describe('a raw write to a pane that has not started (#2398)', () => {
     expect(ensureCalls()).toHaveLength(0);
   });
 
+  // Review item 4 — on the surface path too: the active pane, or a named one.
+  it('a stop key to a pane that has not started starts nothing and says there is nothing to stop', async () => {
+    renderer();
+    const { router, writeMock } = setup();
+    const active = await router.dispatch({ id: '20', method: 'input.sendKey', params: { key: 'ctrl+c', workspaceId: 'ws-ext' } });
+    const named = await router.dispatch({ id: '21', method: 'input.sendKey', params: { key: 'escape', surfaceId: 'surf-named', workspaceId: 'ws-ext' } });
+    for (const res of [active, named]) {
+      expect(res.ok).toBe(false);
+      expect(JSON.stringify(res)).toContain('nothing to stop');
+    }
+    expect(ensureCalls()).toHaveLength(0);
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
   it('input.readScreen passes the deferred report through and starts nothing', async () => {
     renderer();
     const { router } = setup();
@@ -164,6 +178,28 @@ describe('a raw write by ptyId to a session with no pipe (#2398)', () => {
       expect(JSON.stringify(res)).toContain('nothing was written');
     }
     expect(writeToSession).not.toHaveBeenCalled();
+  });
+
+  // Review item 4 — ctrl+c / escape stop something running; a session with
+  // no pipe runs nothing, so they never attach (promote) it.
+  it('a stop key to a session with no pipe starts nothing and says there is nothing to stop', async () => {
+    const { router, writeToSession, attach } = setupDaemon({ pipeOpen: false });
+    renderer(attach);
+    for (const key of ['ctrl+c', 'escape']) {
+      const res = await router.dispatch({ id: key, method: 'input.sendKey', params: { key, ptyId: 'pty-suspended', workspaceId: 'ws-ext' } });
+      expect(res.ok).toBe(false);
+      expect(JSON.stringify(res)).toContain('nothing to stop');
+    }
+    expect(ensureCalls()).toHaveLength(0);
+    expect(writeToSession).not.toHaveBeenCalled();
+  });
+
+  it('a stop key to a live session is still delivered', async () => {
+    const { router, writeToSession } = setupDaemon({ pipeOpen: true });
+    renderer();
+    const res = await router.dispatch({ id: '19', method: 'input.sendKey', params: { key: 'ctrl+c', ptyId: 'pty-live', workspaceId: 'ws-ext' } });
+    expect(res.ok).toBe(true);
+    expect(writeToSession).toHaveBeenCalledWith('pty-live', '\x03');
   });
 
   it('a write no pipe takes is never answered as delivered', async () => {
@@ -239,10 +275,39 @@ describe('a raw write by surface follows the pty lanes (#2398)', () => {
     rendererOwning('ws-task');
     const { router, writeMock } = setupWithLedger(['ws-task']);
     const token = mintCommanderToken('ws-commander');
-    const res = await router.dispatch({ id: '14', method: 'input.sendKey', params: { key: 'ctrl+c', surfaceId: 'surf-task', workspaceId: 'ws-commander' }, commanderToken: token } as never);
+    const res = await router.dispatch({ id: '14', method: 'input.send', params: { text: 'run the tests', surfaceId: 'surf-task', workspaceId: 'ws-commander' }, commanderToken: token } as never);
     expect(res.ok).toBe(true);
     expect(ensureCalls()[0][2]).toEqual({ surfaceId: 'surf-task', workspaceId: 'ws-task' });
-    expect(writeMock).toHaveBeenCalledWith('pty-task', '\x03');
+    expect(writeMock).toHaveBeenCalledWith('pty-task', expect.any(String));
+  });
+
+  // Review item 5 — the owner lane's text refusals depend only on the text:
+  // a write they refuse never starts the pane first.
+  it("a commander's raw or control-character write to a task surface is refused before anything starts", async () => {
+    rendererOwning('ws-task');
+    const { router, writeMock } = setupWithLedger(['ws-task']);
+    const token = mintCommanderToken('ws-commander');
+    const raw = await router.dispatch({ id: '16', method: 'input.send', params: { text: 'x', raw: true, surfaceId: 'surf-task', workspaceId: 'ws-commander' }, commanderToken: token } as never);
+    expect(raw.ok).toBe(false);
+    expect(JSON.stringify(raw)).toContain('raw writes are not allowed on a delegated task pane');
+    const ctl = await router.dispatch({ id: '17', method: 'input.send', params: { text: 'a\x1bb', surfaceId: 'surf-task', workspaceId: 'ws-commander' }, commanderToken: token } as never);
+    expect(ctl.ok).toBe(false);
+    expect(JSON.stringify(ctl)).toContain('control characters are not allowed');
+    expect(ensureCalls()).toHaveLength(0);
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  // Review item 4 — a stop key to a task pane that never started has nothing
+  // to stop; starting the worker's shell to deliver ctrl+c to it is backwards.
+  it("a commander's stop key to a task surface that has not started starts nothing", async () => {
+    rendererOwning('ws-task');
+    const { router, writeMock } = setupWithLedger(['ws-task']);
+    const token = mintCommanderToken('ws-commander');
+    const res = await router.dispatch({ id: '18', method: 'input.sendKey', params: { key: 'ctrl+c', surfaceId: 'surf-task', workspaceId: 'ws-commander' }, commanderToken: token } as never);
+    expect(res.ok).toBe(false);
+    expect(JSON.stringify(res)).toContain('nothing to stop');
+    expect(ensureCalls()).toHaveLength(0);
+    expect(writeMock).not.toHaveBeenCalled();
   });
 
   it('a surface of a workspace the caller has no lane to is refused before anything starts', async () => {
@@ -252,6 +317,46 @@ describe('a raw write by surface follows the pty lanes (#2398)', () => {
     expect(res.ok).toBe(false);
     expect(JSON.stringify(res)).toContain('Cross-workspace terminal access is not allowed');
     expect(ensureCalls()).toHaveLength(0);
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+});
+
+// Review item 3 — main's start window was its own fixed budget, whatever the
+// caller waited: a CLI on its generic 15 s deadline gave up, and main still
+// wrote, so a retry typed it twice. The caller now sends its deadline and main
+// starts only within what that deadline leaves after the delivery.
+describe("the start window honors the caller's deadline (#2398)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
+
+  it('cuts the start budget to the deadline minus the delivery, and keeps the budget without one', () => {
+    expect(terminalStartWindowMs(undefined, TERMINAL_WRITE_DELIVERY_BUDGET_MS)).toBe(TERMINAL_START_BUDGET_MS);
+    expect(terminalStartWindowMs(Number.NaN, TERMINAL_WRITE_DELIVERY_BUDGET_MS)).toBe(TERMINAL_START_BUDGET_MS);
+    expect(terminalStartWindowMs(15_000, TERMINAL_WRITE_DELIVERY_BUDGET_MS)).toBe(5_000);
+    expect(terminalStartWindowMs(terminalWriteClientTimeoutMs(), TERMINAL_WRITE_DELIVERY_BUDGET_MS)).toBe(TERMINAL_START_BUDGET_MS);
+    expect(terminalStartWindowMs(10 * TERMINAL_START_BUDGET_MS, TERMINAL_WRITE_DELIVERY_BUDGET_MS)).toBe(TERMINAL_START_BUDGET_MS);
+  });
+
+  it('asks the renderer to start only within the caller deadline', async () => {
+    renderer();
+    const { router } = setup();
+    await router.dispatch({ id: '22', method: 'input.send', params: { text: 'x', workspaceId: 'ws-ext', clientTimeoutMs: 15_000 } });
+    expect((ensureCalls()[0][3] as { timeoutMs: number }).timeoutMs).toBeLessThanOrEqual(5_000);
+  });
+
+  it('a start that outlasts the caller deadline writes nothing', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    renderer(() => {
+      vi.setSystemTime(Date.now() + 6_000);
+      return { ptyId: 'pty-started' };
+    });
+    const { router, writeMock } = setup();
+    const send = await router.dispatch({ id: '23', method: 'input.send', params: { text: 'echo once', workspaceId: 'ws-ext', clientTimeoutMs: 15_000 } });
+    expect(send.ok).toBe(false);
+    expect(JSON.stringify(send)).toContain('nothing was written');
+    const key = await router.dispatch({ id: '24', method: 'input.sendKey', params: { key: 'enter', workspaceId: 'ws-ext', clientTimeoutMs: 15_000 } });
+    expect(key.ok).toBe(false);
+    expect(JSON.stringify(key)).toContain('nothing was written');
     expect(writeMock).not.toHaveBeenCalled();
   });
 });

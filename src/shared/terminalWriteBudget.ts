@@ -25,9 +25,26 @@ export const TERMINAL_START_BUDGET_MS = WSL_RPC_TIMEOUT_MS + 5_000;
 export const TERMINAL_WRITE_DELIVERY_BUDGET_MS = 10_000;
 
 /**
- * The MCP client's deadline for a raw write: the start phase, then the
- * delivery (`deliveryBudgetMs`: a new-task send's is longer).
+ * A client's deadline for a raw write that lets a terminal start in full: the
+ * start phase, then the delivery (`deliveryBudgetMs`: a new-task send's is
+ * longer). The MCP server and the CLI wait this long and send it as the
+ * write's `clientTimeoutMs`.
  */
 export function terminalWriteClientTimeoutMs(deliveryBudgetMs: number = TERMINAL_WRITE_DELIVERY_BUDGET_MS): number {
   return TERMINAL_START_BUDGET_MS + deliveryBudgetMs;
+}
+
+/**
+ * How long main may spend starting a pane for one raw write: the start
+ * budget, cut to what the caller's own deadline (`clientTimeoutMs`, sent with
+ * the write) leaves after the delivery. Main stops there with nothing written,
+ * so whatever deadline a caller keeps (MCP, CLI, any later one), a write main
+ * completes still lands inside it. A caller that sends none gets the start
+ * budget.
+ */
+export function terminalStartWindowMs(clientTimeoutMs: unknown, deliveryBudgetMs: number): number {
+  if (typeof clientTimeoutMs !== 'number' || !Number.isFinite(clientTimeoutMs) || clientTimeoutMs <= 0) {
+    return TERMINAL_START_BUDGET_MS;
+  }
+  return Math.min(TERMINAL_START_BUDGET_MS, clientTimeoutMs - deliveryBudgetMs);
 }

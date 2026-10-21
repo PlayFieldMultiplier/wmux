@@ -16,7 +16,8 @@ import type { BotBinding } from '../../../shared/bot';
 import type { PTYManager } from '../../pty/PTYManager';
 import type { DaemonClient } from '../../DaemonClient';
 import { sendToRenderer } from './_bridge';
-import { TERMINAL_START_BUDGET_MS } from '../../../shared/terminalWriteBudget';
+import { TERMINAL_WRITE_DELIVERY_BUDGET_MS, terminalStartWindowMs } from '../../../shared/terminalWriteBudget';
+import { TERMINAL_SEND_NEW_TASK_TIMEOUT_MS } from '../../../shared/freshContext';
 import { sanitizePtyText } from '../../../shared/types';
 import {
   formatBracketedPastePayload,
@@ -593,7 +594,7 @@ async function resolveActivePtyId(getWindow: GetWindow, callerWs?: string): Prom
   const scoped = callerWs ? { workspaceId: callerWs } : {};
   const result = await sendToRenderer(getWindow, 'input.readScreen', scoped);
   // #2398 — the active pane's terminal has not started: a read must not start
-  // it (input.send / input.sendKey do, through resolveWriteTargetPtyId).
+  // it (input.send / input.sendKey do, through resolveWriteTarget and startDeferredSurface).
   if (deferredSurfaceOf(result)) {
     throw new Error(`input: ${DEFERRED_TERMINAL_TEXT}`);
   }
@@ -625,28 +626,34 @@ function deferredSurfaceOf(result: unknown): string | null {
 
 /**
  * #2398 — the start phase of one raw write (shared/terminalWriteBudget.ts):
- * every start it waits on gets only what is left of TERMINAL_START_BUDGET_MS
+ * every start it waits on gets only what is left of its window — the start
+ * budget, cut to what the caller's own deadline leaves after the delivery —
  * from the write's arrival, and once it is spent the write stops with nothing
- * written. The MCP client waits for this budget plus the delivery, so a write
- * main completes always lands while its caller still waits for the answer;
- * one main gives up on is never written later behind the caller's retry.
+ * written. A write main completes so always lands while its caller still waits
+ * for the answer; one main gives up on is never written later behind the
+ * caller's retry.
  */
 export interface StartClock {
-  /** What is left of the start budget; throws (nothing written) once spent. */
+  /** What is left of the start window; throws (nothing written) once spent. */
   left: (method: string) => number;
 }
 
-export function startClock(now: () => number = Date.now): StartClock {
-  const startBy = now() + TERMINAL_START_BUDGET_MS;
+export function startClock(windowMs: number, now: () => number = Date.now): StartClock {
+  const startBy = now() + windowMs;
   return {
     left: (method) => {
       const left = startBy - now();
       if (left <= 0) {
-        throw new Error(`${method}: the pane's terminal took longer to start than a write may wait — nothing was written; send it again`);
+        throw new Error(`${method}: the pane's terminal took longer to start than this write may wait — nothing was written; send it again`);
       }
       return left;
     },
   };
+}
+
+/** The not-running answer to a stop key (ctrl+c, escape): nothing is started for it. */
+function nothingToStop(method: string): Error {
+  return new Error(`${method}: the pane's terminal is not running — nothing to stop; nothing was written`);
 }
 
 /**
@@ -667,28 +674,32 @@ async function startDeferredSurface(getWindow: GetWindow, method: string, surfac
 }
 
 /**
- * The pty a raw write (input.send / input.sendKey) goes to: the explicit
- * `ptyId`; else an explicit `surfaceId` (a pane name that resolved to a
- * terminal that has not started), checked against the caller's lanes like a
- * pty; else the caller's active pane. A pane whose shell has not started is
- * started first — the one read-side difference from resolveActivePtyId.
+ * Where a raw write (input.send / input.sendKey) goes, resolved without
+ * starting anything: a pty (the explicit `ptyId`, or the caller's active
+ * pane's), or a terminal surface that has not started (an explicit
+ * `surfaceId` — a pane name that resolved to one — checked against the
+ * caller's lanes like a pty, or the active pane's). The caller runs its pure
+ * refusals first and only then starts a surface (startDeferredSurface).
  */
-async function resolveWriteTargetPtyId(
+type WriteTarget =
+  | { kind: 'pty'; ptyId: string }
+  | { kind: 'surface'; surfaceId: string; workspaceId: string; access: PtyAccess };
+
+async function resolveWriteTarget(
   getWindow: GetWindow,
   method: 'input.send' | 'input.sendKey',
   params: Record<string, unknown>,
   callerWs: string | undefined,
   lane: TaskOwnerLane | undefined,
-  clock: StartClock,
-): Promise<string> {
-  if (typeof params['ptyId'] === 'string' && params['ptyId'].length > 0) return params['ptyId'];
+): Promise<WriteTarget> {
+  if (typeof params['ptyId'] === 'string' && params['ptyId'].length > 0) return { kind: 'pty', ptyId: params['ptyId'] };
   if (typeof params['surfaceId'] === 'string' && params['surfaceId'].length > 0) {
     if (!callerWs) throw new Error(`${method}: "surfaceId" needs the caller's "workspaceId"`);
     const surfaceId = params['surfaceId'];
-    // The same lanes as a pty, decided before anything starts: the caller's
-    // own workspace, or an open task it owns (a commander's or bot's worker).
+    // The same lanes as a pty: the caller's own workspace, or an open task it
+    // owns (a commander's or bot's worker).
     const access = await assertCallerMayAccessSurface(getWindow, surfaceId, callerWs, method, lane);
-    return startDeferredSurface(getWindow, method, surfaceId, access.lane === 'task-owner' ? access.taskWorkspaceId : callerWs, clock);
+    return { kind: 'surface', surfaceId, workspaceId: access.lane === 'task-owner' ? access.taskWorkspaceId : callerWs, access };
   }
   const senderPtyId = typeof params['senderPtyId'] === 'string' ? params['senderPtyId'] : '';
   const decision = decideTerminalOmittedTarget(senderPtyId);
@@ -699,8 +710,7 @@ async function resolveWriteTargetPtyId(
   const result = await sendToRenderer(getWindow, 'input.readScreen', scoped);
   const deferredSurfaceId = deferredSurfaceOf(result);
   if (deferredSurfaceId) {
-    const ws = callerWs ?? '';
-    return startDeferredSurface(getWindow, method, deferredSurfaceId, ws, clock);
+    return { kind: 'surface', surfaceId: deferredSurfaceId, workspaceId: callerWs ?? '', access: { lane: 'own' } };
   }
   if (
     result !== null &&
@@ -708,7 +718,7 @@ async function resolveWriteTargetPtyId(
     typeof (result as Record<string, unknown>)['ptyId'] === 'string' &&
     (result as Record<string, string>)['ptyId'].length > 0
   ) {
-    return (result as Record<string, string>)['ptyId'];
+    return { kind: 'pty', ptyId: (result as Record<string, string>)['ptyId'] };
   }
   throw new Error('input: could not resolve active ptyId from renderer');
 }
@@ -1295,11 +1305,13 @@ export function registerInputRpc(
    * must be writable afterwards or nothing is written. Asked only after the
    * caller's access to the pty was checked.
    */
-  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock): Promise<void> => {
+  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock, mayStart: boolean): Promise<void> => {
     if (ptyManager.get(ptyId)) return;
     const dc = getDaemonClient?.();
     // Only on a positive "no pipe": a client that cannot say leaves it as is.
     if (!dc?.isConnected || dc.isSessionPipeWritable?.(ptyId) !== false) return;
+    // A stop key never starts a pane: there is nothing running to stop.
+    if (!mayStart) throw nothingToStop(method);
     const res = await sendToRenderer(getWindow, 'surface.ensurePty', { ptyId }, { timeoutMs: clock.left(method) });
     clock.left(method);
     if (res !== null && typeof res === 'object' && typeof (res as Record<string, unknown>)['error'] === 'string') {
@@ -1347,9 +1359,23 @@ export function registerInputRpc(
       throw new Error('input.send: "newTask" needs "submit": true and cannot be combined with "raw"');
     }
 
-    const clock = startClock();
+    const clock = startClock(terminalStartWindowMs(
+      params['clientTimeoutMs'],
+      newTask ? TERMINAL_SEND_NEW_TASK_TIMEOUT_MS : TERMINAL_WRITE_DELIVERY_BUDGET_MS,
+    ));
     const sendLane = taskOwnerLane(params, ctx);
-    const ptyId = await resolveWriteTargetPtyId(getWindow, 'input.send', params, callerWs, sendLane, clock);
+    const refuseTaskPaneText = (access: PtyAccess): void => {
+      if (access.lane !== 'task-owner') return;
+      const refusal = taskPaneTextRefusal(text, params['raw'] === true);
+      if (refusal) throw new Error(`input.send: ${refusal}`);
+    };
+    // #2398 — the pure refusals come before anything starts: a pane is never
+    // started for a write that is refused anyway.
+    const target = await resolveWriteTarget(getWindow, 'input.send', params, callerWs, sendLane);
+    if (target.kind === 'surface') refuseTaskPaneText(target.access);
+    const ptyId = target.kind === 'pty'
+      ? target.ptyId
+      : await startDeferredSurface(getWindow, 'input.send', target.surfaceId, target.workspaceId, clock);
 
     const access = await assertCallerMayAccessPty(
       getWindow,
@@ -1358,12 +1384,8 @@ export function registerInputRpc(
       'input.send',
       sendLane,
     );
-    await startIfSuspended('input.send', ptyId, clock);
 
-    if (access.lane === 'task-owner') {
-      const refusal = taskPaneTextRefusal(text, params['raw'] === true);
-      if (refusal) throw new Error(`input.send: ${refusal}`);
-    }
+    refuseTaskPaneText(access);
 
     assertNotKillingAGateHeldPane(
       access.lane === 'task-owner' ? access.callerWorkspaceId : callerWs,
@@ -1373,6 +1395,7 @@ export function registerInputRpc(
     );
 
     await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.send');
+    await startIfSuspended('input.send', ptyId, clock, true);
 
     let safeText = params['raw'] === true ? text : sanitizePtyText(text);
 
@@ -1635,9 +1658,16 @@ export function registerInputRpc(
     // The owner lane covers only the two keys that stop an agent. Every other
     // key selects or submits something, and a delegated pane is not the
     // owner's to drive by keystroke.
-    const keyLane = APPROVAL_BLOCK_EXEMPT_KEYS.has(key) ? taskOwnerLane(params, ctx) : undefined;
-    const clock = startClock();
-    const ptyId = await resolveWriteTargetPtyId(getWindow, 'input.sendKey', params, callerWs, keyLane, clock);
+    const stopKey = APPROVAL_BLOCK_EXEMPT_KEYS.has(key);
+    const keyLane = stopKey ? taskOwnerLane(params, ctx) : undefined;
+    const clock = startClock(terminalStartWindowMs(params['clientTimeoutMs'], TERMINAL_WRITE_DELIVERY_BUDGET_MS));
+    // #2398 — a stop key never starts a pane that has not started: nothing
+    // runs there to stop.
+    const target = await resolveWriteTarget(getWindow, 'input.sendKey', params, callerWs, keyLane);
+    if (target.kind === 'surface' && stopKey) throw nothingToStop('input.sendKey');
+    const ptyId = target.kind === 'pty'
+      ? target.ptyId
+      : await startDeferredSurface(getWindow, 'input.sendKey', target.surfaceId, target.workspaceId, clock);
 
     const access = await assertCallerMayAccessPty(
       getWindow,
@@ -1646,7 +1676,6 @@ export function registerInputRpc(
       'input.sendKey',
       keyLane,
     );
-    await startIfSuspended('input.sendKey', ptyId, clock);
 
     // Ctrl+D arrives here as its escape sequence, so the same guard applies.
     assertNotKillingAGateHeldPane(
@@ -1662,6 +1691,8 @@ export function registerInputRpc(
     if (!APPROVAL_BLOCK_EXEMPT_KEYS.has(key)) {
       await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.sendKey');
     }
+    // After every refusal: attach (promoting) a session with no pipe here.
+    await startIfSuspended('input.sendKey', ptyId, clock, !stopKey);
 
     noteInterruptInput?.(ptyId, sequence);
     const instance = ptyManager.get(ptyId);
