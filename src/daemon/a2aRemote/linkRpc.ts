@@ -458,7 +458,7 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
       offers.expire();
       const rec = offers.store.get(offerId);
       if (!rec || rec.side !== 'in') return { ok: false, error: 'unknown-offer' };
-      if (rec.state !== 'open') return offerClosed(rec.endedReason ?? 'expired');
+      if (rec.state !== 'open') return offerClosed(closedReason(rec));
       const local = endArg(params['local']);
       const allow = params['allow'];
       if (!local || local.kind !== 'pane' || !isPlainObject(allow) || typeof allow['outbound'] !== 'boolean' || typeof allow['inbound'] !== 'boolean') {
@@ -569,7 +569,7 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
       const offerId = str(params, 'offerId');
       const rec = offers.store.get(offerId);
       if (!rec || rec.side !== 'in') return { ok: false, error: 'unknown-offer' };
-      if (rec.state !== 'open') return offerClosed(rec.endedReason ?? 'expired');
+      if (rec.state !== 'open') return offerClosed(closedReason(rec));
       if (rec.pendingLinkId && links.get(rec.pendingLinkId)?.state === 'proposed-out') {
         return { ok: false, error: 'invalid-state', message: 'an answer to this share is still unsettled; use Check' };
       }
@@ -608,6 +608,11 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
         deps.log('error', `[a2a-remote] could not drop proposal ${linkId}: ${errMsg(err)}`);
       }
     }
+  }
+
+  /** Why an answered share is closed: an accepted one was used, like the sharer says. */
+  function closedReason(rec: A2aLinkOfferRecordV1): A2aOfferEndReason {
+    return rec.state === 'accepted' ? 'used' : rec.endedReason ?? 'expired';
   }
 
   function offerClosed(reason: A2aOfferEndReason): A2aRemoteOfferResult {

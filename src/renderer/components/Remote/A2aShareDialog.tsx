@@ -202,10 +202,13 @@ export default function A2aShareDialog({ workspaceId, paneId, onClose }: A2aShar
 
   const onWithdraw = useCallback(async () => {
     if (!api?.offersWithdraw || !existing) return;
-    setBusy(true);
+    setBusy(true); setOutcome(null);
     try {
-      await api.offersWithdraw(existing.offerId);
+      const r = await api.offersWithdraw(existing.offerId);
+      if (!r.ok) setOutcome({ ok: false, error: 'withdraw' });
       void refreshA2aRemote();
+    } catch {
+      setOutcome({ ok: false, error: 'withdraw' });
     } finally {
       setBusy(false);
     }

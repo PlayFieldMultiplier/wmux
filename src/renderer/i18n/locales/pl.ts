@@ -2950,6 +2950,7 @@ export const pl = {
   'a2aShare.error.bad-request': "Ten panel nie jest już otwarty.",
   'a2aShare.error.conflict': "Nie można teraz udostępnić tego panelu temu komputerowi.",
   'a2aShare.error.unavailable': "Nie udało się teraz udostępnić. Spróbuj ponownie.",
+  'a2aShare.error.withdraw': "Nie udało się wycofać udostępnienia. Mogło już zostać przyjęte lub zakończone.",
   'a2aDelivery.sectionTitle': "Wiadomości między komputerami",
   'a2aDelivery.pcs': "Sparowane komputery",
   'a2aDelivery.state.connected': "Połączono",

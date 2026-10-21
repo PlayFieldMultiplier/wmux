@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
 import type { Workspace } from '../../../shared/types';
 import type { AgentSlug } from '../../../shared/events';
@@ -156,6 +157,8 @@ export interface A2aShareRowProps {
   pcName: string;
   busy: boolean;
   onWithdraw: () => void;
+  /** Why the last Withdraw failed, under the row. */
+  error?: ReactNode;
   t: T;
 }
 
@@ -177,6 +180,7 @@ export function A2aShareRow(p: A2aShareRowProps) {
           <UiButton variant="ghost" size="sm" disabled={p.busy} onClick={p.onWithdraw} data-testid="a2a-share-row-withdraw">{t('a2aShare.withdraw')}</UiButton>
         </span>
       )}
+      {p.error}
     </li>
   );
 }

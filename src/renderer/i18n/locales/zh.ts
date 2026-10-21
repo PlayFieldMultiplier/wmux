@@ -2989,6 +2989,7 @@ export const zh = {
   'a2aShare.error.bad-request': "此窗格已不再打开。",
   'a2aShare.error.conflict': "现在无法与那台电脑共享此窗格。",
   'a2aShare.error.unavailable': "现在无法共享，请重试。",
+  'a2aShare.error.withdraw': "无法撤回此共享。它可能已被接受或已结束。",
   'a2aDelivery.sectionTitle': "PC 之间的消息",
   'a2aDelivery.pcs': "已配对的 PC",
   'a2aDelivery.state.connected': "已连接",

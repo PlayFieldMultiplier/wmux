@@ -2975,6 +2975,7 @@ export const en = {
   'a2aShare.error.bad-request': "This pane is not open any more.",
   'a2aShare.error.conflict': "This pane cannot be shared with that PC right now.",
   'a2aShare.error.unavailable': "This PC could not share it right now. Try again.",
+  'a2aShare.error.withdraw': "This share could not be withdrawn. It may have been accepted or ended already.",
   'a2aDelivery.sectionTitle': "Messages between PCs",
   'a2aDelivery.pcs': "Paired PCs",
   'a2aDelivery.state.connected': "Connected",

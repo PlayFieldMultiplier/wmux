@@ -261,6 +261,13 @@ describe('a2a.remote.offers.accept — retries keep one answer', () => {
 });
 
 describe('a2a.remote.offers.decline', () => {
+  it('an accept or decline of a share already accepted says it was used', async () => {
+    store.markAccepted(OFFER, crypto.randomUUID());
+    expect(await accept()).toEqual({ ok: false, error: 'offer-closed', reason: 'used' });
+    expect(await rpc('a2a.remote.offers.decline', { offerId: OFFER })).toEqual({ ok: false, error: 'offer-closed', reason: 'used' });
+    expect(calls).toEqual([]);
+  });
+
   it('ends the offer here and tells the sharer', async () => {
     script = async () => ({ status: 200, json: { ok: true, state: 'declined' } });
     expect(await rpc('a2a.remote.offers.decline', { offerId: OFFER })).toMatchObject({ ok: true, offer: { state: 'declined' } });

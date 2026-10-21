@@ -410,7 +410,7 @@ export default function RemotePage() {
     : !a2aStatus.enabled ? t('remotePage.a2aOff')
       : a2aStatus.listening ? t('remotePage.a2aListening', { port: a2aStatus.port })
         : t('remotePage.a2aError', { error: a2aStatus.lastError ?? t('remotePage.unknown') });
-  const dialogOpen = !!(connect || linkDialog || exposure);
+  const dialogOpen = !!(connect || linkDialog || exposure || offerDialog);
   const isConfirming = (kind: NonNullable<Confirm>['kind'], id: string) => confirming?.kind === kind && confirming.id === id;
   const rowError = (key: string) => (error?.key === key ? <p className="wmux-remote-row-error" role="alert">{error.message}</p> : null);
   const statusCell = (word: StatusWord, live: boolean, since: number | null) => (
@@ -489,6 +489,7 @@ export default function RemotePage() {
             pcName={pc.name}
             busy={busy === o.offerId}
             onWithdraw={() => a2a?.offersWithdraw && void linkCall(o.offerId, () => a2a.offersWithdraw(o.offerId))}
+            error={rowError(o.offerId)}
             t={t}
           />
         )),

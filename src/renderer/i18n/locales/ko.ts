@@ -2448,6 +2448,7 @@ export const ko = {
   'a2aShare.error.bad-request': "이 판이 더 이상 열려 있지 않습니다.",
   'a2aShare.error.conflict': "지금은 이 판을 그 PC와 공유할 수 없습니다.",
   'a2aShare.error.unavailable': "지금은 공유할 수 없습니다. 다시 시도하세요.",
+  'a2aShare.error.withdraw': "공유를 거둘 수 없습니다. 이미 수락되었거나 끝났을 수 있습니다.",
   'a2aDelivery.sectionTitle': "PC 간 메시지",
   'a2aDelivery.pcs': "연결한 PC",
   'a2aDelivery.state.connected': "연결됨",

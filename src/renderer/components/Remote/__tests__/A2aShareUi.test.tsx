@@ -109,6 +109,13 @@ describe('A2aShareDialogView', () => {
     expect([...body.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')].map((c) => c.disabled)).toEqual([true, true]);
   });
 
+  it('a Withdraw that failed is said in the dialog', () => {
+    const body = render(createElement(A2aShareDialogView, props({ block: 'shared', outcome: { ok: false, error: 'withdraw' } })));
+    const line = body.querySelector('[data-testid="a2a-share-outcome"]')!;
+    expect(line.textContent).toBe('a2aShare.error.withdraw');
+    expect(line.getAttribute('data-tone')).toBe('danger');
+  });
+
   it('after sharing it says what happens next and offers no second share', () => {
     const body = render(createElement(A2aShareDialogView, props({ outcome: { ok: true } })));
     expect(body.querySelector('[data-testid="a2a-share-outcome"]')?.textContent).toBe('a2aShare.shared(LAPTOP)');
