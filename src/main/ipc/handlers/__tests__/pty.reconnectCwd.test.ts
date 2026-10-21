@@ -78,7 +78,7 @@ describe('PTY_RECONNECT reports the session geometry (#1847)', () => {
  */
 describe('PTY_RECONNECT registers session:data before attachSession (source-level lock)', () => {
   const listenerIdx = RECONNECT.indexOf('setSessionDataListener(id, onSessionData)');
-  const attachIdx = RECONNECT.indexOf("daemon.attachSession', { id }");
+  const attachIdx = RECONNECT.indexOf("daemon.attachSession', { id");
 
   it('registers the session:data handler in the reconnect path', () => {
     expect(listenerIdx).toBeGreaterThan(-1);
@@ -117,7 +117,7 @@ describe('PTY_RECONNECT promotes a cap-skipped session instead of declaring it d
   it('a suspended entry goes down the promote branch, before any attach', () => {
     const suspendedAt = RECONNECT.indexOf("if (session.state === 'suspended')");
     const promoteAt = RECONNECT.indexOf("daemonClient.rpc('daemon.promoteSession', { id", suspendedAt);
-    const attachAt = RECONNECT.indexOf("daemon.attachSession', { id }");
+    const attachAt = RECONNECT.indexOf("daemon.attachSession', { id");
     expect(suspendedAt).toBeGreaterThan(-1);
     expect(promoteAt).toBeGreaterThan(suspendedAt);
     expect(attachAt).toBeGreaterThan(promoteAt);

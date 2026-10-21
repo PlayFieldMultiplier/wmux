@@ -1451,6 +1451,10 @@ export function registerInputRpc(
 
     // Route one chunk to the local PTYManager, else the daemon. Shared by the
     // text write and the trailing-\r submit so both hit the same session.
+    // #2398 — a pipe that closes after the text went in (before the submit's
+    // Enter) leaves that text on the line: said so, or a caller told nothing
+    // was delivered sends it again and types it twice.
+    let chunksWritten = 0;
     const writeChunk = (data: string): void => {
       noteInterruptInput?.(ptyId, data);
       const instance = ptyManager.get(ptyId);
@@ -1461,12 +1465,15 @@ export function registerInputRpc(
         if (dc?.isConnected) {
           // #2398 — no pipe took it: never answered as written.
           if (dc.writeToSession(ptyId, data) === false) {
-            throw new Error(`input.send: the session "${ptyId}" has no open pipe — the text was not delivered`);
+            throw new Error(chunksWritten > 0
+              ? `input.send: the session "${ptyId}" pipe closed after part of this write was delivered — the text may already be on its input line, not submitted; read the pane before sending it again`
+              : `input.send: the session "${ptyId}" has no open pipe — the text was not delivered`);
           }
         } else {
           throw new Error(`input.send: PTY not found — id="${ptyId}"`);
         }
       }
+      chunksWritten++;
     };
 
     // submit=true commits the text with an Enter (carriage return — the

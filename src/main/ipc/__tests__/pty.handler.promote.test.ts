@@ -238,7 +238,8 @@ describe('attach without promote (#2398)', () => {
     const heldAt = region.indexOf('const held = (');
     const deferAt = region.indexOf("if (action === 'hold') return held(");
     const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
-    expect(heldAt).toBeGreaterThan(region.indexOf("session.state === 'suspended'"));
+    expect(heldAt).toBeGreaterThan(0);
+    expect(deferAt).toBeGreaterThan(region.indexOf("session.state === 'suspended'"));
     expect(deferAt).toBeGreaterThan(heldAt);
     expect(deferAt).toBeLessThan(promoteAt);
     expect(region.slice(heldAt, deferAt)).toMatch(/return \{\s*success: false,\s*deferred: true,/);
@@ -265,6 +266,21 @@ describe('attach without promote (#2398)', () => {
     expect(joinOnlyAt).toBeGreaterThan(0);
     expect(joinOnlyAt).toBeLessThan(region.indexOf('touchPendingRecovery(id)'));
     expect(region).toMatch(/await promoteOnce\(id, false, 'rpc', true\)/);
+  });
+
+  // Second-model P3-1 — the attach promoted whatever the caller: a daemon
+  // restart between the list and the attach turns a live WSL session back
+  // into a pending recovery, and a hidden pane's attach then started it
+  // (with `promoted` unset). It promotes only as the action says, and a
+  // pending answer is held.
+  it('pty:reconnect attaches with promote only as the action says, and holds a session pending again', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 12000);
+    expect(region.indexOf('const action = suspendedReconnectAction(session, opts);'))
+      .toBeLessThan(region.indexOf("if (session.state === 'suspended')"));
+    expect(region).toMatch(/daemonClient\.rpc\('daemon\.attachSession', \{ id, promote: action === 'promote' \|\| action === 'join' \}\)/);
+    const attachAt = region.indexOf("daemonClient.rpc('daemon.attachSession'");
+    expect(region.slice(attachAt, attachAt + 400)).toMatch(/if \(attached\?\.pending\) return held\(/);
   });
 
   // Review item 2 — the reconnect asks the same predicate the daemon's boot
@@ -345,7 +361,7 @@ describe('resume on start for a suspended session (#2398 §6-4 option B)', () =>
   it('the deferred reconnect answer carries the session binding', () => {
     const start = handler.indexOf('const held = (');
     const region = handler.slice(start, start + 1200);
-    expect(region).toMatch(/deferred: true,[\s\S]*?resumeBinding: suspended\.resumeBinding/);
+    expect(region).toMatch(/deferred: true,[\s\S]*?resumeBinding: listed\.resumeBinding/);
   });
 
   it('a cap-skipped suspended entry carries its binding only while its transcript lives', () => {

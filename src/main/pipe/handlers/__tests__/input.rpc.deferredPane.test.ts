@@ -231,6 +231,20 @@ describe('a raw write by ptyId to a session with no pipe (#2398)', () => {
     expect(text.ok).toBe(false);
     expect(JSON.stringify(text)).toContain('not delivered');
   });
+
+  // Second-model P3-5: the text went in, then the pipe closed before the
+  // submit's Enter. Answered "not delivered", a caller retried and typed the
+  // text twice.
+  it('a pipe that closes after the text went in says the text may be on the line', async () => {
+    const { router, writeToSession } = setupDaemon({ pipeOpen: true });
+    writeToSession.mockImplementationOnce(() => true).mockImplementation(() => false);
+    renderer();
+    const res = await router.dispatch({ id: '12', method: 'input.send', params: { text: 'echo hi', submit: true, ptyId: 'pty-closing', workspaceId: 'ws-ext' } });
+    expect(res.ok).toBe(false);
+    expect(writeToSession).toHaveBeenNthCalledWith(1, 'pty-closing', 'echo hi');
+    expect(JSON.stringify(res)).toContain('may already be on its input line');
+    expect(JSON.stringify(res)).not.toContain('not delivered');
+  });
 });
 
 // Review P2: the MCP client gave a write its 10 s default while main waited up

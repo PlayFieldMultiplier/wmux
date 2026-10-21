@@ -1552,6 +1552,26 @@ export function registerPTYHandlers(
           };
         }
 
+        // #2398 — what this caller may do with the session if it is (or, after
+        // a daemon restart since the list, is again) suspended; see below.
+        const action = suspendedReconnectAction(session, opts);
+        const listed = session;
+        const held = (why: string) => {
+          console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, ${why})`);
+          void daemonClient.rpc('daemon.holdSession', { ids: [id] }).catch((err: unknown) => {
+            console.warn(`[lifecycle] daemon.holdSession ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+          // With the session's guarded resume binding (the daemon surfaces
+          // it only while its transcript lives): the renderer promotes it at
+          // boot after all when resume-on-start would bring that agent back.
+          return {
+            success: false,
+            deferred: true,
+            ...(listed.resumeAgent ? { resumeAgent: listed.resumeAgent } : {}),
+            ...(listed.resumeBinding ? { resumeBinding: listed.resumeBinding } : {}),
+          };
+        };
+
         if (session.state === 'suspended') {
           // #2398 — a suspended session (cap-skipped, or a WSL placeholder)
           // is promoted only when the caller says so (a shown pane, a raw
@@ -1565,23 +1585,6 @@ export function registerPTYHandlers(
           // Otherwise it is held: the id is kept, the daemon
           // keeps the record from aging out, and the pane's first show
           // reattaches with promote.
-          const action = suspendedReconnectAction(session, opts);
-          const suspended = session;
-          const held = (why: string) => {
-            console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, ${why})`);
-            void daemonClient.rpc('daemon.holdSession', { ids: [id] }).catch((err: unknown) => {
-              console.warn(`[lifecycle] daemon.holdSession ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
-            });
-            // With the session's guarded resume binding (the daemon surfaces
-            // it only while its transcript lives): the renderer promotes it at
-            // boot after all when resume-on-start would bring that agent back.
-            return {
-              success: false,
-              deferred: true,
-              ...(suspended.resumeAgent ? { resumeAgent: suspended.resumeAgent } : {}),
-              ...(suspended.resumeBinding ? { resumeBinding: suspended.resumeBinding } : {}),
-            };
-          };
           if (action === 'hold') return held('held');
           try {
             const result = await daemonClient.rpc('daemon.promoteSession', { id, ...(action === 'join-only' ? { joinOnly: true } : {}) }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; alreadyActive?: boolean; joined?: boolean; notInFlight?: boolean; error?: { code?: string; message: string } };
@@ -1642,7 +1645,11 @@ export function registerPTYHandlers(
         // Without this, attach+connect can return success while the
         // underlying socket is moments away from receiving its close
         // event, and every subsequent write silently disappears.
-        await daemonClient.rpc('daemon.attachSession', { id });
+        // #2398 — the attach promotes only as `action` says: a daemon that
+        // restarted since the list holds a WSL session as a pending recovery
+        // again, and a caller that may not start it leaves it pending (held).
+        const attached = await daemonClient.rpc('daemon.attachSession', { id, promote: action === 'promote' || action === 'join' }) as { pending?: boolean } | undefined;
+        if (attached?.pending) return held('pending again at attach');
         await daemonClient.connectSessionPipe(id, { forceFresh: true });
 
         // Health probe: confirm the freshly connected pipe is actually

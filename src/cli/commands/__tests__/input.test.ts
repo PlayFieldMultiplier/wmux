@@ -55,6 +55,7 @@ beforeEach(() => {
   selfContext.mockResolvedValue({ ptyId: 'pty-self', workspaceId: 'ws-self' });
   rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
     if (method === 'pane.resolveName') {
+      if (params.name === '#w1-3') return { ok: true, result: { ok: true, target: { surfaceId: 'surf-blank', paneTag: '#w1-3' } } };
       return params.name === '#w1-1'
         ? { ok: true, result: { ok: true, target: { ptyId: 'pty-other', paneTag: '#w1-1' } } }
         : { ok: true, result: { ok: false, reason: 'not_found', error: `no pane named "${String(params.name)}"` } };
@@ -100,6 +101,28 @@ describe('wmux send targets', () => {
     expect(rpc).not.toHaveBeenCalledWith('input.send', expect.anything());
     expect(rpc).not.toHaveBeenCalledWith('input.sendKey', expect.anything());
     expect(selfContext).not.toHaveBeenCalled();
+  });
+
+  // Second-model P3-3: a #name for a blank pane whose terminal has not
+  // started has no ptyId, and `wmux send` failed with "has no local
+  // terminal" where terminal_send starts it. It goes by its surface, with the
+  // caller's workspace main checks it against; a read never starts it.
+  it('sends to a #name whose terminal has not started by its surface, from inside a wmux pane', async () => {
+    await handleInput('send', ['x', '--to', '#w1-3'], false);
+    expect(rpc).toHaveBeenCalledWith('input.send',
+      { text: 'x', surfaceId: 'surf-blank', workspaceId: 'ws-self', clientTimeoutMs: deadline }, deadline);
+    await handleInput('send-key', ['enter', '--to', '#w1-3'], false);
+    expect(rpc).toHaveBeenCalledWith('input.sendKey',
+      { key: 'enter', surfaceId: 'surf-blank', workspaceId: 'ws-self', clientTimeoutMs: deadline }, deadline);
+    await expect(handleInput('read-screen', ['--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
+    expect(errSpy).toHaveBeenCalledWith('Error: pane #w1-3 has no local terminal');
+  });
+
+  it('outside a wmux pane, says why a #name whose terminal has not started cannot be started', async () => {
+    selfContext.mockResolvedValue({});
+    await expect(handleInput('send', ['x', '--to', '#w1-3'], false)).rejects.toThrow(ExitCalled);
+    expect(rpc).not.toHaveBeenCalledWith('input.send', expect.anything(), expect.anything());
+    expect(String(errSpy.mock.calls[0]?.[0])).toMatch(/pane #w1-3 has not started its terminal yet/);
   });
 
   it('exits before typing anything when a #name does not resolve', async () => {

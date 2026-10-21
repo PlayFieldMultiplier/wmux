@@ -19,16 +19,46 @@ export function explicitTarget(args: string[]): string | undefined {
 export async function resolveExplicitTarget(value: string, rpc: Rpc): Promise<string> {
   const trimmed = value.trim();
   if (trimmed.charAt(0) !== '#') return value;
-  const response = await rpc('pane.resolveName', { name: trimmed });
+  const target = await resolvePaneName(trimmed, rpc);
+  if (typeof target.ptyId !== 'string' || !target.ptyId) {
+    throw new Error(`pane ${String(target.paneTag ?? trimmed)} has no local terminal`);
+  }
+  return target.ptyId;
+}
+
+async function resolvePaneName(name: string, rpc: Rpc): Promise<{ ptyId?: unknown; surfaceId?: unknown; paneTag?: unknown }> {
+  const response = await rpc('pane.resolveName', { name });
   if (!response.ok) throw new Error(response.error);
-  const res = response.result as { ok?: unknown; error?: unknown; target?: { ptyId?: unknown; paneTag?: unknown } } | null;
+  const res = response.result as { ok?: unknown; error?: unknown; target?: { ptyId?: unknown; surfaceId?: unknown; paneTag?: unknown } } | null;
   if (!res || res.ok !== true || !res.target) {
-    throw new Error(res && typeof res.error === 'string' ? res.error : `no pane named "${trimmed}"`);
+    throw new Error(res && typeof res.error === 'string' ? res.error : `no pane named "${name}"`);
   }
-  if (typeof res.target.ptyId !== 'string' || !res.target.ptyId) {
-    throw new Error(`pane ${String(res.target.paneTag ?? trimmed)} has no local terminal`);
+  return res.target;
+}
+
+/**
+ * A write's (send, send-key) explicit target: as resolveExplicitTarget, but
+ * a `#name` whose terminal has not started yet (#2398: a blank pane, no pty)
+ * goes by its surface, which main starts before writing, as it does for
+ * terminal_send. Main checks a surface against the caller's own workspace,
+ * so it needs that workspace: this CLI must run inside a wmux pane.
+ */
+export async function resolveExplicitWriteTarget(
+  value: string,
+  rpc: Rpc,
+  callerWorkspace: () => Promise<string | undefined>,
+): Promise<Record<string, unknown>> {
+  const trimmed = value.trim();
+  if (trimmed.charAt(0) !== '#') return { ptyId: value };
+  const target = await resolvePaneName(trimmed, rpc);
+  if (typeof target.ptyId === 'string' && target.ptyId) return { ptyId: target.ptyId };
+  const tag = String(target.paneTag ?? trimmed);
+  if (typeof target.surfaceId !== 'string' || !target.surfaceId) throw new Error(`pane ${tag} has no local terminal`);
+  const workspaceId = await callerWorkspace();
+  if (!workspaceId) {
+    throw new Error(`pane ${tag} has not started its terminal yet, and only a command run inside a wmux pane can start it: run it from one, or open the pane first`);
   }
-  return res.target.ptyId;
+  return { surfaceId: target.surfaceId, workspaceId };
 }
 
 /**
@@ -99,8 +129,18 @@ export async function resolveTargetParams(
   args: string[],
   mode: 'require-pty' | 'workspace-scope-ok',
 ): Promise<Record<string, unknown>> {
+  const selfContext = (): Promise<SelfContext> => resolveSelfContext({
+    sendRequest,
+    env: process.env,
+    ppid: process.ppid,
+    getParentPid: getParentPidDefault,
+  });
   const explicitPane = explicitTarget(args);
-  if (explicitPane) return { ptyId: await resolveExplicitTarget(explicitPane, sendRequest) };
+  if (explicitPane) {
+    // A read never starts a pane; a write starts one that has not started.
+    if (mode === 'workspace-scope-ok') return { ptyId: await resolveExplicitTarget(explicitPane, sendRequest) };
+    return resolveExplicitWriteTarget(explicitPane, sendRequest, async () => (await selfContext()).workspaceId);
+  }
   // A target flag whose value went missing must not fall back to this pane: an
   // unquoted `--to #w1-2` loses its value to the shell (`#` starts a comment).
   for (const flag of ['--to', '--pane']) {
@@ -108,12 +148,7 @@ export async function resolveTargetParams(
   }
   if (hasFlag(args, '--active')) return {};
 
-  const ctx: SelfContext = await resolveSelfContext({
-    sendRequest,
-    env: process.env,
-    ppid: process.ppid,
-    getParentPid: getParentPidDefault,
-  });
+  const ctx = await selfContext();
   if (mode === 'require-pty' && !ctx.ptyId) return {};
   const params: Record<string, unknown> = {};
   if (ctx.ptyId) params.ptyId = ctx.ptyId;
