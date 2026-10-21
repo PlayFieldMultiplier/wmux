@@ -914,6 +914,22 @@ describe('J3 §2 prUrl — 비단조·closed 단독 허용·형식 검증', () =
     expect(svc.getTask(taskId)?.prUrl).toBeUndefined();
   });
 
+  it('accepts a GitLab merge request page, and refuses other GitLab-looking URLs', async () => {
+    const { svc, taskId } = await started();
+    const mr = 'https://gitlab.example.com/group/sub/proj/-/merge_requests/7';
+    expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: mr })).ok).toBe(true);
+    expect(svc.getTask(taskId)?.prUrl).toBe(mr);
+    for (const bad of [
+      'http://gitlab.example.com/group/proj/-/merge_requests/7',
+      'https://gitlab.example.com/proj/-/merge_requests/7',
+      'https://gitlab.example.com/group/proj/-/issues/7',
+      'https://gitlab.example.com/group/proj/-/merge_requests/7?x=1',
+    ]) {
+      expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: bad })).ok).toBe(false);
+    }
+    expect(svc.getTask(taskId)?.prUrl).toBe(mr);
+  });
+
   it('동일 prUrl 재쓰기는 append 없는 멱등 no-op이다', async () => {
     const { svc, taskId } = await started();
     await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: PR1 });

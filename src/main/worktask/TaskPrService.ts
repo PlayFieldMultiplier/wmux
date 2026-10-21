@@ -18,17 +18,31 @@
  * 5분 TTL 공백 제거(CX8).
  *
  * fork 워크플로(§7·CL9): origin remote 부재는 명시 에러(자동 추측 금지).
+ *
+ * GitLab: when origin's host is not GitHub's (hostLane.isGitlabRepoKey), the
+ * same steps run with glab — the gate is `glab --version` plus a `user` read
+ * (a definite sign-out → gh-unauth, a host that did not answer → a transient
+ * error), the base is the project's default branch, and the merge request is
+ * opened over REST inside origin's project (GlabPrService.createMergeRequest).
+ * Re-entry returns the open MR for that source → target. The push is the
+ * GitHub path's. Forks and drafts are not handled, as on GitHub.
  */
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { WORKTASK_PR_URL_RE } from '../../shared/workTask';
 import { getExecEnv } from '../../shared/execEnv';
+import { parseRemoteKey } from '../github/PrProvider';
+import { isGitlabRepoKey } from '../github/hostLane';
+import { GLAB_ENV, glabPrService, type GlabPrService } from '../github/GlabPrService';
 
 const execFileAsync = promisify(execFile);
 
 const GH_TIMEOUT_MS = 20_000;
 const GIT_TIMEOUT_MS = 60_000;
+
+/** The glab side of the GitLab path (GlabPrService; injected in tests). */
+export type PrGlabPort = Pick<GlabPrService, 'loginOrSignOut' | 'defaultBranch' | 'createMergeRequest' | 'openMergeRequestOf'>;
 
 /** gh를 대화형으로 절대 멈추지 않게 하는 환경(로그인 프롬프트·pager 봉쇄). */
 const GH_ENV = { ...getExecEnv(), GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat', NO_COLOR: '1' };
@@ -54,6 +68,7 @@ export interface TaskPrServiceOptions {
   daemon: PrDaemonPort;
   cache?: PrCachePort;
   exec?: PrExec;
+  glab?: PrGlabPort;
 }
 
 export interface CreatePrInput {
@@ -75,6 +90,8 @@ export type CreatePrResult =
       recovered?: boolean;
       /** prUrl 데몬 커밋 실패(비치명 — PR 자체는 성립). */
       commitPending?: boolean;
+      /** GitLab only: the merge request's iid (`!n`); prUrl is its page. */
+      mrIid?: number;
     }
   | {
       ok: false;
@@ -88,11 +105,13 @@ export class TaskPrService {
   private readonly daemon: PrDaemonPort;
   private readonly cache: PrCachePort | undefined;
   private readonly exec: PrExec;
+  private readonly glab: PrGlabPort;
 
   constructor(opts: TaskPrServiceOptions) {
     this.daemon = opts.daemon;
     this.cache = opts.cache;
     this.exec = opts.exec ?? (execFileAsync as unknown as PrExec);
+    this.glab = opts.glab ?? glabPrService;
   }
 
   private gh(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
@@ -116,6 +135,11 @@ export class TaskPrService {
   async createPr(input: CreatePrInput): Promise<CreatePrResult> {
     const { taskId, verifiedWorkspaceId, worktreePath, branch, title } = input;
     const body = input.body && input.body.length > 0 ? input.body : `wmux fan-out task: ${title}`;
+
+    // A GitLab origin takes the glab path. No origin, or a URL that names no
+    // host/project, stays on the gh path below, which refuses it as before.
+    const key = await this.originKey(worktreePath);
+    if (key && isGitlabRepoKey(key)) return this.createMr(input, key, body);
 
     // ── ① gh 게이트: 버전 + 인증(G3 — 버전≠인증) ──
     try {
@@ -225,6 +249,98 @@ export class TaskPrService {
     return this.finalize(taskId, verifiedWorkspaceId, worktreePath, branch, prUrl, false);
   }
 
+  /** origin's remote key (`host/…/project`, lowercased), or null. */
+  private async originKey(worktreePath: string): Promise<string | null> {
+    try {
+      const { stdout } = await this.git(['remote', 'get-url', 'origin'], worktreePath);
+      return parseRemoteKey(stdout);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The GitLab path: createPr's steps with glab, inside origin's project. */
+  private async createMr(input: CreatePrInput, key: string, body: string): Promise<CreatePrResult> {
+    const { taskId, verifiedWorkspaceId, worktreePath, branch, title } = input;
+    const host = key.split('/')[0];
+
+    // ── ① glab gate: installed, then signed in on origin's host. Only glab's
+    // own 401 / "Unauthenticated." is a sign-out; a host that did not answer
+    // is transient and says so.
+    try {
+      await this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', ['--version'], {
+        cwd: worktreePath,
+        timeout: GH_TIMEOUT_MS,
+        env: GLAB_ENV,
+        windowsHide: true,
+      });
+    } catch {
+      return {
+        ok: false,
+        reason: 'gh-missing',
+        error: 'GitLab CLI (glab) is not installed.',
+        browseFallback: `Or push the branch ${branch} and open the merge request in GitLab in the browser`,
+      };
+    }
+    const login = await this.glab.loginOrSignOut(host, worktreePath);
+    if (login && 'signedOut' in login) {
+      return {
+        ok: false,
+        reason: 'gh-unauth',
+        error: `GitLab CLI is not signed in to ${host} — run \`glab auth login --hostname ${host}\` and try again.`,
+        browseFallback: `Or open the merge request for the branch ${branch} in GitLab in the browser`,
+      };
+    }
+    if (!login) {
+      return { ok: false, reason: 'error', error: `GitLab on ${host} could not be reached just now — try again.` };
+    }
+
+    // ── ② dirty 검사(CX7) — as on the gh path.
+    try {
+      const { stdout } = await this.git(['status', '--porcelain'], worktreePath);
+      if (stdout.trim().length > 0) {
+        return {
+          ok: false,
+          reason: 'dirty',
+          error: 'The worktree has uncommitted changes — they would not be in the merge request. Commit them first.',
+        };
+      }
+    } catch (err) {
+      return { ok: false, reason: 'error', error: `git status failed: ${errMsg(err)}` };
+    }
+
+    // ── ③ push — the gh path's push (origin was read above).
+    try {
+      await this.git(['push', '-u', 'origin', '--', branch], worktreePath);
+    } catch (err) {
+      return { ok: false, reason: 'push-failed', error: `git push failed: ${errMsg(err)}` };
+    }
+
+    // base = the project's default branch; unreadable is an error, never a guess.
+    const base = await this.glab.defaultBranch(worktreePath, key);
+    if (!base.ok) {
+      return { ok: false, reason: 'pr-failed', error: `Could not determine the base branch (project default): ${base.message}` };
+    }
+
+    // ── ④ the merge request, then re-entry: an open MR for this source → target.
+    const created = await this.glab.createMergeRequest(worktreePath, key, { source: branch, target: base.value, title, description: body });
+    if (created.ok) {
+      return this.finalize(taskId, verifiedWorkspaceId, worktreePath, branch, created.url, false, created.iid);
+    }
+    const existing = await this.glab.openMergeRequestOf(worktreePath, key, branch, base.value);
+    if (existing) {
+      return this.finalize(taskId, verifiedWorkspaceId, worktreePath, branch, existing.url, true, existing.iid);
+    }
+    if (created.signedOut) {
+      return {
+        ok: false,
+        reason: 'gh-unauth',
+        error: `GitLab CLI is not signed in to ${host} — run \`glab auth login --hostname ${host}\` and try again.`,
+      };
+    }
+    return { ok: false, reason: 'pr-failed', error: `Opening the merge request failed: ${created.message}` };
+  }
+
   /** 기존 PR URL 조회(멱등 재진입). 없으면 null. */
   private async recoverExistingPr(worktreePath: string, branch: string): Promise<string | null> {
     try {
@@ -247,6 +363,7 @@ export class TaskPrService {
     branch: string,
     prUrl: string,
     recovered: boolean,
+    mrIid?: number,
   ): Promise<CreatePrResult> {
     let commitPending = false;
     try {
@@ -270,6 +387,7 @@ export class TaskPrService {
       prUrl,
       ...(recovered ? { recovered: true } : {}),
       ...(commitPending ? { commitPending: true } : {}),
+      ...(mrIid !== undefined ? { mrIid } : {}),
     };
   }
 }

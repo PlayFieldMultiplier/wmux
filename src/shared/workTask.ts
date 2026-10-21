@@ -177,6 +177,13 @@ export const WORKTASK_CLOSED_GC_MS = 7 * 24 * 60 * 60 * 1000;
  */
 export const WORKTASK_PR_URL_RE = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/;
 
+/**
+ * prUrl's GitLab shape: a merge request page, `https://{host}/{group/…/project}/-/merge_requests/{iid}`
+ * (task_pr on a GitLab remote — any host, as self-managed GitLab is common).
+ * Whole URL, https only, plain path segments.
+ */
+export const WORKTASK_MR_URL_RE = /^https:\/\/[\w.-]+(?::\d{1,5})?(?:\/[\w.-]+){2,}\/-\/merge_requests\/\d+$/;
+
 /** 미션 채널 topic 앵커 접두(§3) — 고아 reconcile의 유일 마킹. */
 export const MISSION_TOPIC_PREFIX = 'wmux:mission:';
 
