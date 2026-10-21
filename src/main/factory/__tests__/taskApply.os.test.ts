@@ -417,6 +417,54 @@ describe('where and how git apply runs', () => {
     expect(r.stdout.toString('utf8')).toMatch(/^git version/);
   });
 
+  it('applies in a shallow (depth 1) checkout', async () => {
+    write(repo, 'a.txt', 'a, second commit\n');
+    git(repo, 'commit', '-qam', 'second');
+    const sh = path.join(dir, 'shallow');
+    git(dir, 'clone', '-q', '--depth', '1', `file://${repo.replace(/\\/g, '/')}`, sh);
+    git(sh, 'config', 'core.autocrlf', 'false');
+    expect(fs.existsSync(path.join(sh, '.git', 'shallow'))).toBe(true);
+    const shBase = git(sh, 'rev-parse', 'HEAD');
+    const shWt = path.join(dir, 'shallow-wt');
+    git(sh, 'worktree', 'add', '-q', '-b', BRANCH, shWt);
+    write(shWt, 'new.txt', 'new in a shallow task\n');
+    git(shWt, 'add', '-A');
+    git(shWt, 'commit', '-qm', 'task');
+    const p2 = ports({
+      row: () => row({ dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default', baseOid: shBase, gitCommonDir: fs.realpathSync.native(path.join(sh, '.git')) } }),
+      botRepoPath: () => sh,
+    });
+    expect(await applyTaskToCheckout(p2, TASK)).toMatchObject({ ok: true, created: ['new.txt'] });
+    expect(fs.readFileSync(path.join(sh, 'new.txt'), 'utf8')).toBe('new in a shallow task\n');
+  });
+
+  it('git\'s own GIT_DEFAULT_HASH in the owner\'s environment does not change the private git dir of a sha1 repository', async () => {
+    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
+    // The owner's environment says sha256; what main sets wins.
+    const ownerEnv = { GIT_DEFAULT_HASH: 'sha256' };
+    const p2 = ports({
+      git: (args, cwd, env, opts) => realGit(args, cwd, { ...ownerEnv, ...env }, opts),
+      gitRaw: (args, cwd, env, input) => defaultRawGit(args, cwd, { ...ownerEnv, ...env }, input),
+    });
+    expect(await applyTaskToCheckout(p2, TASK)).toMatchObject({ ok: true });
+  });
+
+  it('the owner\'s global attributes file holds for the task\'s files', async () => {
+    const attrs = path.join(dir, 'owner-attributes');
+    fs.writeFileSync(attrs, '*.txt eol=crlf\n');
+    const globalConfig = path.join(dir, 'owner-gitconfig');
+    fs.writeFileSync(globalConfig, `[core]\n\tattributesFile = ${attrs.replace(/\\/g, '/')}\n`);
+    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
+    // The owner's global config; the private git dir's own empty one wins there.
+    const ownerEnv = { GIT_CONFIG_GLOBAL: globalConfig };
+    const p2 = ports({
+      git: (args, cwd, env, opts) => realGit(args, cwd, { ...ownerEnv, ...env }, opts),
+      gitRaw: (args, cwd, env, input) => defaultRawGit(args, cwd, { ...ownerEnv, ...env }, input),
+    });
+    expect(await applyTaskToCheckout(p2, TASK)).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(repo, 'new/n.txt'), 'utf8')).toBe('new\r\n');
+  });
+
   it('reads the object format from the repository\'s own config only', () => {
     expect(repoObjectFormat([{ scope: 'global', key: 'extensions.objectformat', value: 'sha256' }])).toBe('sha1');
     expect(repoObjectFormat([{ scope: 'local', key: 'extensions.objectformat', value: 'SHA256' }])).toBe('sha256');

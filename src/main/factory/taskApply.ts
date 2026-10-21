@@ -316,6 +316,11 @@ function chunks(paths: readonly string[], maxChars = 8000, maxCount = 200): stri
 /** A regular file's bytes, at most `max` (no link followed, never a FIFO
  *  or a device), or null when it is not one. */
 function readRegularFile(p: string, max: number): Buffer | null {
+  return readRegularFileStat(p, max)?.bytes ?? null;
+}
+
+/** readRegularFile with the file's stat, taken on the same open file. */
+function readRegularFileStat(p: string, max: number): { bytes: Buffer; stat: fs.Stats } | null {
   const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
   let fd: number;
   try {
@@ -333,7 +338,7 @@ function readRegularFile(p: string, max: number): Buffer | null {
       if (n === 0) break;
       got += n;
     }
-    return buf.subarray(0, got);
+    return { bytes: buf.subarray(0, got), stat: st };
   } catch {
     return null;
   } finally {
@@ -465,22 +470,22 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
     if (init.code !== 0) return refuse('git_failed', `git init failed: ${init.stderr.trim().slice(0, 300)}`);
     fs.mkdirSync(path.join(privateDir, 'objects', 'info'), { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(privateDir, 'objects', 'info', 'alternates'), `${path.join(common, 'objects')}\n`, { mode: 0o600 });
+    // A shallow repository's boundary commits (object ids only): without
+    // them its oldest parents read as missing commits.
+    const shallow = readRegularFile(path.join(common, 'shallow'), 64 * 1024 * 1024);
+    if (shallow !== null) fs.writeFileSync(path.join(privateDir, 'shallow'), shallow, { mode: 0o600 });
     const attributes = readRegularFile(path.join(common, 'info', 'attributes'), 1024 * 1024);
     if (attributes !== null) {
       fs.mkdirSync(path.join(privateDir, 'info'), { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(privateDir, 'info', 'attributes'), attributes, { mode: 0o600 });
     }
     if (present(path.join(gitDir, 'index'))) {
-      const index = readRegularFile(path.join(gitDir, 'index'), INDEX_MAX_BYTES);
+      const index = readRegularFileStat(path.join(gitDir, 'index'), INDEX_MAX_BYTES);
       if (index === null) return refuse('git_failed', 'Your checkout\'s index could not be read.');
-      fs.writeFileSync(path.join(privateDir, 'index'), index, { mode: 0o600 });
-      // Its own times kept: git judges a racily clean entry against them.
-      try {
-        const st = fs.lstatSync(path.join(gitDir, 'index'));
-        fs.utimesSync(path.join(privateDir, 'index'), st.atime, st.mtime);
-      } catch {
-        return refuse('git_failed', 'Your checkout\'s index could not be read.');
-      }
+      fs.writeFileSync(path.join(privateDir, 'index'), index.bytes, { mode: 0o600 });
+      // Its own times kept (those of the very file read): git judges a
+      // racily clean entry against them.
+      fs.utimesSync(path.join(privateDir, 'index'), index.stat.atime, index.stat.mtime);
       // A split index names its shared part by file.
       for (const name of fs.readdirSync(gitDir).filter((n) => /^sharedindex\.[0-9a-f]+$/.test(n))) {
         const part = readRegularFile(path.join(gitDir, name), INDEX_MAX_BYTES);
@@ -514,8 +519,10 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
     // The head is a commit of the task: it descends from the base.
     const kind = await text(['cat-file', '-t', head]);
     if (kind.code !== 0 || kind.stdout.trim() !== 'commit') return refuse('no_branch', `The task branch ${branch} does not name a commit.`);
+    // Exit 1: not an ancestor; anything else is git failing to tell.
     const lineage = await text(['merge-base', '--is-ancestor', base, head]);
-    if (lineage.code !== 0) return refuse('foreign_head', `The task branch ${branch} does not start from the commit the task started from.`);
+    if (lineage.code === 1) return refuse('foreign_head', `The task branch ${branch} does not start from the commit the task started from.`);
+    if (lineage.code !== 0) return refuse('git_failed', `git merge-base failed: ${said(lineage)}`);
 
     // Plumbing: no diff setting of the owner's changes what it reports.
     const diff = await text(['diff-tree', '-r', '-z', '--no-renames', '--no-abbrev', base, head]);
