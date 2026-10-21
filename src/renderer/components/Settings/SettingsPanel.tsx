@@ -111,6 +111,7 @@ import { MAX_WORKSPACE_IDLE_DAYS, MIN_WORKSPACE_IDLE_DAYS } from '../../../share
 import { sendWorkspaceSettleIdleDays } from '../../hooks/useWorkspaceSettleBridge';
 import { FactoryTab } from './FactoryTab';
 import { matchesShortcutQuery } from './shortcutSearch';
+import { runStarAction } from '../../utils/starPrompt';
 import { verifyFailedAfterAvailable, verifyFailedAfterNotice, verifyFailedDisplayVersion } from './updateVerifyNotice';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -5251,8 +5252,45 @@ function TabAbout() {
           <IconExternalLink />
           <span>{t('settings.githubRepo')}</span>
         </a>
+        <StarWmuxRow />
       </SettingsSection>
     </div>
+  );
+}
+
+/**
+ * "Star wmux on GitHub": always here, whatever the sidebar prompt's state.
+ * The same action as the sidebar row (gh when signed in, else the repository
+ * page), and it ends that prompt too.
+ */
+function StarWmuxRow() {
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<'starred' | 'failed' | null>(null);
+  const star = async () => {
+    if (busy) return;
+    setBusy(true);
+    setResult(null);
+    const outcome = await runStarAction();
+    setBusy(false);
+    if (outcome === 'starred' || outcome === 'failed') setResult(outcome);
+  };
+  return (
+    <SettingRow id="stargithub" label={t('starPrompt.settingsLabel')} description={t('starPrompt.settingsDescription')}>
+      {result === 'starred' ? (
+        <span role="status" className="text-[12px] text-[color:var(--text-sub)]">{t('starPrompt.thanks')}</span>
+      ) : (
+        <span className="flex items-center gap-2">
+          {/* Neither gh nor the browser worked: a muted reason, never a colour. */}
+          {result === 'failed' && (
+            <span role="status" className="text-[12px] text-[color:var(--text-sub)]">{t('starPrompt.failed')}</span>
+          )}
+          <Button onClick={() => { void star(); }} disabled={busy} data-testid="settings-star-github">
+            {t('starPrompt.starShort')}
+          </Button>
+        </span>
+      )}
+    </SettingRow>
   );
 }
 
