@@ -187,6 +187,10 @@ export interface BotProfile {
   /** The template the bot was made from. Absent only on a profile written
    *  before templates; the store fills it from `role` on read (botTemplate). */
   template?: BotTemplate;
+  /** The recipe "Add bot" started it from (shared/botRecipes.ts). Display
+   *  only: its profile lists what the recipe's connections still need. It
+   *  grants nothing and is never updated. */
+  recipe?: string;
   /** Display name, e.g. "Wmux Dev". */
   name: string;
   /** What the bot does, in the owner's words (normalizeBotJob). Part of its
