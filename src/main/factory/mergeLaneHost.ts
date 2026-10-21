@@ -54,6 +54,7 @@ import type { MoaEffectStore } from '../deck/moaEffectStore';
 import { factFromMergeEffect } from './factIngest';
 import { formatLaneRefusal } from './laneRefusalText';
 import { normalizeRepoKey } from './repoWatch';
+import { trustedAuthorsOn } from '../github/hostLane';
 import { taskTainted } from './wakeTaint';
 import type { ApprovalMergeHost, StoredApproval } from './approvals';
 import type { BotDirectoryApi } from './triggerEngine';
@@ -347,10 +348,11 @@ export class MergeLaneHost {
   ): Promise<Omit<MergeLaneContext, 'expectHead'>> {
     // The owner's own login is trusted only for a head a bot task of this
     // factory produced (not a repro worker's); every other author must be
-    // in the settings' list. An unreadable login trusts nobody extra.
+    // in the settings' list (on a GitLab repo, its `host/username` entries
+    // only: trustedAuthorsOn). An unreadable login trusts nobody extra.
     const botMade = tasks.some((t) => t.dispatch?.origin?.kind === 'bot') && !tasks.some((t) => t.dispatch?.preset === 'repro');
     const owner = botMade ? await this.ports.ownerLogin(host(repoKey), repoPath).catch(() => null) : null;
-    const trustedAuthors = [...new Set([...settings.trustedAuthors, ...(owner ? [owner] : [])].map((a) => a.toLowerCase()))];
+    const trustedAuthors = [...new Set([...trustedAuthorsOn(repoKey, settings.trustedAuthors), ...(owner ? [owner] : [])].map((a) => a.toLowerCase()))];
     let authorWorkspaces: string[] | null = null;
     try {
       authorWorkspaces = await this.ports.authorWorkspaces(repoPath, facts.headRefName, tasks);
@@ -543,7 +545,7 @@ export class MergeLaneHost {
       this.card(bots, repoKey, prNumber, `lane-refused:${repoKey}#${prNumber}:${headSha}:${tag}`, {
         kind: 'refusal',
         title: `Merge refused for #${prNumber} at ${sha7(headSha)}`,
-        body: formatLaneRefusal(reason.slice(0, 500)).slice(0, 2000),
+        body: formatLaneRefusal(reason.slice(0, 500), repoKey).slice(0, 2000),
       });
     };
     if (!held) {

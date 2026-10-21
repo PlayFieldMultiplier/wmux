@@ -41,6 +41,7 @@ import { REPO_WATCH_FILENAME, RepoWatch, normalizeRepoKey, type WatchGraphql } f
 import { gitlabWatchReader, type GitlabWatchPorts } from './repoWatchGitlab';
 import { factThreadId } from './roomWriter';
 import { factInIsland } from './guestWorkspaces';
+import { isGitlabRepoKey, trustedAuthorsOn } from '../github/hostLane';
 
 // ── Ports (shapes of design §14; the real ones are wired by the factory host) ─
 
@@ -73,6 +74,8 @@ export interface FactoryTrustApi {
   trustedAuthors(): string[];
   /** The signed-in owner's login, or null when unknown. */
   ownerLogin(): string | null;
+  /** The owner's login on a GitLab host, or null when unknown (missing: none). */
+  ownerLoginOn?(host: string): string | null;
 }
 
 export interface FactoryTriggerPorts {
@@ -141,14 +144,22 @@ function lower(xs: readonly unknown[]): string[] {
   return xs.filter((x): x is string => typeof x === 'string' && x.length > 0).map((x) => x.toLowerCase());
 }
 
-/** Whether payload.author is trusted. Unknown author or no trust source → no. */
+/** Whether payload.author is trusted. Unknown author or no trust source → no.
+ *  On a GitLab repo the author is a GitLab username: only `host/username`
+ *  entries of that host and the owner's login on that host match it. */
 export function authorIsTrusted(fact: Fact, trust: FactoryTrustApi | undefined): boolean {
   const author = fact.payload?.author;
   if (!trust || typeof author !== 'string' || !author) return false;
   let trusted: string[];
   try {
-    const owner = trust.ownerLogin();
-    trusted = lower([...trust.trustedAuthors(), ...(owner ? [owner] : [])]);
+    const key = normalizeRepoKey(fact.repoKey);
+    if (key && isGitlabRepoKey(key)) {
+      const owner = trust.ownerLoginOn?.(key.split('/')[0]) ?? null;
+      trusted = [...trustedAuthorsOn(key, trust.trustedAuthors()), ...lower(owner ? [owner] : [])];
+    } else {
+      const owner = trust.ownerLogin();
+      trusted = lower([...trust.trustedAuthors(), ...(owner ? [owner] : [])]);
+    }
   } catch {
     return false;
   }

@@ -21,6 +21,10 @@ describe('laneRefusalText', () => {
     expect(laneRefusalSentence('required-checks-green:required-check-fail')).toBe('A required check did not pass');
     expect(laneRefusalSentence('blocked-draft')).toBe('GitHub blocked the merge');
     expect(laneRefusalSentence('identity-changed')).toBe('The GitHub login changed since the check');
+    // A GitLab repo's sentences name GitLab.
+    expect(laneRefusalSentence('identity-changed', 'gitlab.example.com/group/app')).toBe('The GitLab login changed since the check');
+    expect(laneRefusalSentence('blocked-draft', 'gitlab.example.com/group/app')).toBe('GitLab blocked the merge');
+    expect(laneRefusalLine('checks-truncated', 'github.com/acme/app')).toBe('GitHub listed too many checks to read them all');
     expect(laneRefusalSentence('nobody-knows')).toBeNull();
     // Only the table's own entries count, never an object's inherited names.
     expect(laneRefusalSentence('constructor')).toBeNull();

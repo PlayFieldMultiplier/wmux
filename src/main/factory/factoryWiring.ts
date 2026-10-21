@@ -81,6 +81,7 @@ import { humanCardIdOfRun, postHumanMessage } from './humanMessage';
 import { phoneBot } from './phoneBot';
 import { redactStoredSecrets } from './secretRedaction';
 import { splitRepoKey } from '../github/GhIssueService';
+import { isGitlabRepoKey } from '../github/hostLane';
 import { MORNING_SCHEDULE_FILENAME, MORNING_SCHEDULE_ID, MorningSchedule, localDay } from './morningSchedule';
 import { fireMorningReport } from './morningReport';
 import { VERDICTED_TASKS_FILENAME, VerdictedTasks, installVerifyTaskClose, setVerdictedTasks } from './verdictedTasks';
@@ -234,22 +235,38 @@ export function routedFactLog(
 const OWNER_LOGIN_REFRESH_MS = 10 * 60_000;
 
 /** The host and a working directory for `gh` from the bots' repos
- *  (github.com and the home dir when no bot names one). */
+ *  (github.com and the home dir when no bot names one). A GitLab repo is
+ *  skipped: its login is not a GitHub one (gitlabLoginTargets). */
 export function ownerLoginTarget(bots: readonly Pick<BotProfile, 'repo'>[]): { host: string; cwd: string } {
   for (const b of bots) {
     const key = normalizeRepoKey(b.repo?.repoKey);
-    const parts = key ? splitRepoKey(key) : null;
+    const parts = key && !isGitlabRepoKey(key) ? splitRepoKey(key) : null;
     if (parts && b.repo?.repoPath) return { host: parts.host, cwd: b.repo.repoPath };
   }
   return { host: 'github.com', cwd: os.homedir() };
 }
 
+/** Each GitLab host of the bots' repos, with a working directory for glab
+ *  (the first bot's repo on it). */
+export function gitlabLoginTargets(bots: readonly Pick<BotProfile, 'repo'>[]): Array<{ host: string; cwd: string }> {
+  const out = new Map<string, string>();
+  for (const b of bots) {
+    const key = normalizeRepoKey(b.repo?.repoKey);
+    if (!key || !isGitlabRepoKey(key) || !b.repo?.repoPath) continue;
+    const host = key.split('/')[0];
+    if (!out.has(host)) out.set(host, b.repo.repoPath);
+  }
+  return [...out].map(([host, cwd]) => ({ host, cwd }));
+}
+
 /** Who counts as a trusted author: the settings' logins, plus the owner's gh
- *  login unless the Verifier is off for the owner's own PRs. */
-export function factoryTrust(settings: () => FactorySettings, ownerLogin: () => string | null): FactoryTrustApi {
+ *  login (glab's on a GitLab host) unless the Verifier is off for the
+ *  owner's own PRs. */
+export function factoryTrust(settings: () => FactorySettings, ownerLogin: () => string | null, ownerLoginOn: (host: string) => string | null = () => null): FactoryTrustApi {
   return {
     trustedAuthors: () => settings().trustedAuthors,
     ownerLogin: () => (settings().verifierOnOwnerPrs === false ? null : ownerLogin()),
+    ownerLoginOn: (host) => (settings().verifierOnOwnerPrs === false ? null : ownerLoginOn(host)),
   };
 }
 
@@ -751,6 +768,8 @@ function uiLocaleNow(): string {
 export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Partial<Pick<FactoryHostDeps, 'getDaemonClient' | 'getMainWindow' | 'fanOutService'>>): FactoryModuleHandle {
   const settings = (): FactorySettings => getFactorySettings();
   let ownerLogin: string | null = null;
+  /** The owner's glab login per GitLab host, refreshed with ownerLogin. */
+  const gitlabLogins = new Map<string, string>();
   let loginTimer: NodeJS.Timeout | null = null;
   let disposed = false;
   // A worker lifecycle host comes (below, on start): its holder set ends the
@@ -767,6 +786,10 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     const { signedInLogin } = await import('../github/hostLane');
     const login = await signedInLogin(host, cwd).catch(() => null);
     if (login) ownerLogin = login;
+    for (const target of gitlabLoginTargets(bots)) {
+      const on = await signedInLogin(target.host, target.cwd).catch(() => null);
+      if (on) gitlabLogins.set(target.host, on);
+    }
   };
 
   const cursor = new TriggerCursor(path.join(deps.wmuxDir(), 'factory', TRIGGER_CURSOR_FILENAME));
@@ -778,7 +801,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     return routed.view;
   };
   const bots = (): BotDirectoryApi | undefined => getBotDirectory() ?? undefined;
-  const trust = factoryTrust(settings, () => ownerLogin);
+  const trust = factoryTrust(settings, () => ownerLogin, (host) => gitlabLogins.get(host) ?? null);
 
   setFactoryTriggerPorts(() => ({
     factLog: triggerLog(),

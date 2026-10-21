@@ -362,6 +362,11 @@ describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
     expect(await anon.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'unauthenticated' });
     const down = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'dial tcp: i/o timeout' }); });
     expect(await down.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'error' });
+    // The command line (a project path like api-403) is not glab's answer, and a 403 is no sign-out.
+    const blip = svcOf(async () => { throw Object.assign(new Error('Command failed: glab api --hostname gitlab.example.com graphql -f fullPath=group/api-403'), { stderr: 'dial tcp: i/o timeout' }); });
+    expect(await blip.watchGraphql('/wmux', 'gitlab.example.com/group/api-403', 'q', {})).toMatchObject({ ok: false, code: 'error' });
+    const forbidden = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'glab: 403 Forbidden (HTTP 403)' }); });
+    expect(await forbidden.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'error' });
     const partial = svcOf(async () => ({ stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'complexity' }] }) }));
     expect(await partial.watchGraphql('/wmux', KEY, 'q', {})).toEqual({ ok: false, code: 'error', message: 'complexity' });
   });

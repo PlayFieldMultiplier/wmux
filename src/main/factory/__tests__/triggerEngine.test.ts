@@ -96,6 +96,29 @@ describe('trigger matching', () => {
     expect(matchingTrigger(v, fact('ci.failed', { repoKey: KEY, payload: { author: 'mallory' } }), trust)).toBeNull();
   });
 
+  it('authorTrusted on a GitLab repo: a GitLab account named like a trusted GitHub login is not trusted', () => {
+    const GL = 'gitlab.example.com/group/app';
+    const triage = bot('bot-00000001', 'triage', { repo: { repoKey: GL, repoPath: '/repo' } });
+    const issue = (author: string) => fact('issue.opened', { repoKey: GL, ref: { issue: 1 }, payload: { author } });
+    const glTrust: FactoryTrustApi = {
+      trustedAuthors: () => ['Alice', 'gitlab.example.com/Carol', 'other.example.com/dave'],
+      ownerLogin: () => 'owner',
+      ownerLoginOn: (host) => (host === 'gitlab.example.com' ? 'me-on-gitlab' : null),
+    };
+    // A plain entry and the GitHub owner login are GitHub names.
+    expect(matchingTrigger(triage, issue('alice'), glTrust)).toBeNull();
+    expect(matchingTrigger(triage, issue('owner'), glTrust)).toBeNull();
+    // The owner's login on this host, and a `host/username` entry of this host.
+    expect(matchingTrigger(triage, issue('ME-on-gitlab'), glTrust)?.kind).toBe('issue.opened');
+    expect(matchingTrigger(triage, issue('carol'), glTrust)?.kind).toBe('issue.opened');
+    expect(matchingTrigger(triage, issue('dave'), glTrust)).toBeNull();
+    // No readable login on the host: the owner is not trusted.
+    expect(matchingTrigger(triage, issue('me-on-gitlab'), { ...glTrust, ownerLoginOn: () => null })).toBeNull();
+    expect(matchingTrigger(triage, issue('me-on-gitlab'), trust)).toBeNull();
+    // GitHub is unchanged: a plain entry still matches there.
+    expect(matchingTrigger(bot('bot-00000002', 'triage'), fact('issue.opened', { repoKey: KEY, ref: { issue: 1 }, payload: { author: 'alice' } }), glTrust)?.kind).toBe('issue.opened');
+  });
+
   it('botIdNot: a bot never triggers on its own verdict (explicit id, or self)', () => {
     const v = bot('bot-00000001', 'verifier', { triggers: [{ kind: 'verdict.recorded', filter: { botIdNot: 'self' } }] });
     const verdict = (botId: string) => fact('verdict.recorded', { repoKey: KEY, ref: { pr: 1, headSha: 'h', botId } });

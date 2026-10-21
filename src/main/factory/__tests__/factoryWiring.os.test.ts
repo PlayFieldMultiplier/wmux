@@ -26,6 +26,7 @@ import {
   isBotOwnedTaskFact,
   isTaskLifecycleFact,
   ownerLoginTarget,
+  gitlabLoginTargets,
   resolveFactsFrom,
   routedFactLog,
   runningWakeOf,
@@ -569,8 +570,20 @@ describe('trust', () => {
     expect(factoryTrust(settings(), () => null).trustedAuthors()).toEqual(['alice']);
   });
   it('gh is asked on the host of a bot repo, in that repo', () => {
-    expect(ownerLoginTarget([{ repo: { repoKey: 'ghe.example.com/o/r', repoPath: '/w/r' } }])).toEqual({ host: 'ghe.example.com', cwd: '/w/r' });
+    expect(ownerLoginTarget([{ repo: { repoKey: 'acme.ghe.com/o/r', repoPath: '/w/r' } }])).toEqual({ host: 'acme.ghe.com', cwd: '/w/r' });
     expect(ownerLoginTarget([]).host).toBe('github.com');
+  });
+  it('a GitLab repo is no gh target; glab is asked once per GitLab host', () => {
+    const bots = [
+      { repo: { repoKey: 'gitlab.example.com/g/a', repoPath: '/w/a' } },
+      { repo: { repoKey: 'gitlab.example.com/g/b', repoPath: '/w/b' } },
+      { repo: { repoKey: 'github.com/o/r', repoPath: '/w/r' } },
+    ];
+    expect(ownerLoginTarget(bots)).toEqual({ host: 'github.com', cwd: '/w/r' });
+    expect(gitlabLoginTargets(bots)).toEqual([{ host: 'gitlab.example.com', cwd: '/w/a' }]);
+    const trust = factoryTrust(settings(), () => 'me', (h) => (h === 'gitlab.example.com' ? 'me-gl' : null));
+    expect(trust.ownerLoginOn?.('gitlab.example.com')).toBe('me-gl');
+    expect(factoryTrust(settings({ verifierOnOwnerPrs: false }), () => 'me', () => 'me-gl').ownerLoginOn?.('gitlab.example.com')).toBeNull();
   });
 });
 

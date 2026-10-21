@@ -160,6 +160,9 @@ export interface WatchIssue {
 export interface WatchSnapshot {
   prs: WatchPr[];
   prTotal: number;
+  /** The open PRs alone, when prTotal counts others too (GitLab's locked
+   *  MRs): the MAX_OPEN_PRS cap counts these. */
+  openTotal?: number;
   /** Closed / merged PRs, newest update first: number → 'CLOSED' | 'MERGED'. */
   recent: Record<string, string>;
   issues: WatchIssue[];
@@ -336,7 +339,7 @@ export interface RepoDiff {
  * baseline: the snapshot is recorded and nothing is emitted. Pure.
  */
 export function diffRepo(prev: RepoWatchState | undefined, snap: WatchSnapshot, repoKey: string, now: number): RepoDiff {
-  const capped = snap.prTotal > REPO_WATCH_LIMITS.MAX_OPEN_PRS;
+  const capped = (snap.openTotal ?? snap.prTotal) > REPO_WATCH_LIMITS.MAX_OPEN_PRS;
   const prsComplete = !capped && snap.prs.length >= snap.prTotal;
   const issuesComplete = snap.issues.length >= snap.issueTotal;
   const next: RepoWatchState = {
@@ -689,6 +692,8 @@ export class RepoWatch {
 
   private async poll(loop: Loop): Promise<PollOutcome> {
     const { repoKey, repoPath } = loop.repo;
+    // Every host that is not GitHub's goes to glab, as in the rest of the
+    // factory (hostLane.ts), a GitHub Enterprise server on its own domain too.
     if (isGitlabRepoKey(repoKey)) return this.pollGitlab(loop);
     const parts = splitRepoKey(repoKey);
     const outcome: PollOutcome = { ok: false, calls: 0, emitted: 0, baseline: false, cost: null };
@@ -760,7 +765,7 @@ export class RepoWatch {
       else if (r === 'error') failed++;
     }
     if (diff.capRising) {
-      const r = this.refuse(loop.repo, { reason: 'open_prs', limit: REPO_WATCH_LIMITS.MAX_OPEN_PRS, openPrs: snapshot.prTotal });
+      const r = this.refuse(loop.repo, { reason: 'open_prs', limit: REPO_WATCH_LIMITS.MAX_OPEN_PRS, openPrs: snapshot.openTotal ?? snapshot.prTotal });
       outcome.emitted += r.appended;
       failed += r.failed;
     }

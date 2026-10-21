@@ -24,7 +24,7 @@ const TARGET = 'd'.repeat(40);
 interface Job { status: string; allowFailure?: boolean }
 interface Pipeline { sha: string; status: string; type?: string; jobs?: Job[]; more?: boolean }
 interface MrSpec { iid: number; head: string; pipeline?: Pipeline | null; labels?: string[]; labelCount?: number; state?: string }
-interface Spec { open: MrSpec[]; locked?: MrSpec[]; merged?: number[]; closed?: number[]; issues?: Array<{ iid: number; labels?: string[]; createdAt?: number }> }
+interface Spec { open: MrSpec[]; locked?: MrSpec[]; merged?: number[]; closed?: number[]; issues?: Array<{ iid: number; labels?: string[]; createdAt?: number; confidential?: boolean }> }
 
 function mrNode(m: MrSpec) {
   const p = m.pipeline;
@@ -51,7 +51,7 @@ function answer(s: Spec) {
         issues: {
           count: (s.issues ?? []).length,
           nodes: (s.issues ?? []).map((i) => ({
-            iid: String(i.iid), title: `I ${i.iid}`, createdAt: new Date(i.createdAt ?? T0 - 86_400_000).toISOString(), author: { username: 'someone' },
+            iid: String(i.iid), title: `I ${i.iid}`, createdAt: new Date(i.createdAt ?? T0 - 86_400_000).toISOString(), confidential: i.confidential ?? false, author: { username: 'someone' },
             labels: { count: (i.labels ?? []).length, nodes: (i.labels ?? []).map((title) => ({ title })) },
           })),
         },
@@ -139,16 +139,19 @@ describe('GitLab watch mapping', () => {
   it('reads string iids, counts and label titles; folds locked MRs into the open set', () => {
     const m = mapGitlabWatchAnswer(answer({
       open: [{ iid: 4, head: HEAD, labels: ['b', 'a'] }, { iid: 5, head: HEAD2, labels: ['x'], labelCount: 30 }],
-      locked: [{ iid: 3, head: HEAD }],
+      locked: [{ iid: 3, head: HEAD }, { iid: 4, head: HEAD }],
       merged: [2], closed: [1],
-      issues: [{ iid: 9, labels: ['bug'] }],
+      issues: [{ iid: 9, labels: ['bug'] }, { iid: 10, confidential: true }],
     }));
     expect(m?.snapshot.prs.map((p) => [p.number, p.state, p.labels, p.labelsTruncated, p.mergeStateStatus, p.isCrossRepository])).toEqual([
       [4, 'OPEN', ['a', 'b'], false, 'CLEAN', false],
       [5, 'OPEN', ['x'], true, 'CLEAN', false],
       [3, 'LOCKED', [], false, 'CLEAN', false],
     ]);
+    // MR 4, read in both lists, counts once; the open-PR cap counts open MRs only.
     expect(m?.snapshot.prTotal).toBe(3);
+    expect(m?.snapshot.openTotal).toBe(2);
+    expect(m?.snapshot.issueTotal).toBe(1);
     expect(m?.snapshot.recent).toEqual({ 1: 'CLOSED', 2: 'MERGED' });
     expect(m?.snapshot.issues.map((i) => [i.number, i.labels])).toEqual([[9, ['bug']]]);
     expect(mapGitlabWatchAnswer({ data: { project: null } })).toBeNull();
@@ -204,6 +207,44 @@ describe('RepoWatch on a GitLab repo', () => {
     expect(kinds(facts)).toEqual(['ci.green:1']);
   });
 
+  it('a baseline records an unconfirmed merged-results verdict as pending, and confirms it later', async () => {
+    const MERGE2 = 'e'.repeat(40);
+    const spec: Spec = { open: [
+      { iid: 1, head: HEAD, pipeline: { sha: MERGE, status: 'SUCCESS', type: 'MERGED_RESULT' } },
+      { iid: 2, head: HEAD2, pipeline: { sha: MERGE2, status: 'SUCCESS', type: 'MERGED_RESULT' } },
+    ] };
+    const glab = fakeGlab(() => spec, { [MERGE]: [TARGET, HEAD], [MERGE2]: [TARGET, HEAD2] });
+    const facts = fakeFacts();
+    const w = makeWatch(glab, facts);
+    await w.start();
+    // One parent read per poll: MR 1 is confirmed, MR 2 is not, so it is pending.
+    expect(await w.pollNow(KEY)).toMatchObject({ ok: true, baseline: true, calls: 2 });
+    expect(w.stateOf(KEY)?.prs['1'].checks).toBe('pass');
+    expect(w.stateOf(KEY)?.prs['2'].checks).toBe('pending');
+    await w.pollNow(KEY);
+    expect(glab.parentReads).toEqual([MERGE, MERGE2]);
+    expect(kinds(facts)).toEqual(['ci.green:2']);
+  });
+
+  it('a commit whose parents never read does not take every poll\'s read', async () => {
+    const OTHER_MERGE = 'e'.repeat(40);
+    let spec: Spec = { open: [] };
+    const glab = fakeGlab(() => spec, { [OTHER_MERGE]: [TARGET, HEAD2] });
+    const facts = fakeFacts();
+    const w = makeWatch(glab, facts);
+    await w.start();
+    await w.pollNow(KEY);
+    now += 60_000;
+    spec = { open: [
+      { iid: 1, head: HEAD, pipeline: { sha: MERGE, status: 'SUCCESS', type: 'MERGED_RESULT' } },
+      { iid: 2, head: HEAD2, pipeline: { sha: OTHER_MERGE, status: 'SUCCESS', type: 'MERGED_RESULT' } },
+    ] };
+    await w.pollNow(KEY);
+    await w.pollNow(KEY);
+    expect(glab.parentReads).toEqual([MERGE, OTHER_MERGE]);
+    expect(kinds(facts)).toEqual(['pr.opened:1', 'pr.opened:2', 'ci.green:2']);
+  });
+
   it('a merged-results pipeline whose parents miss the head stays pending, and its parents are read once', async () => {
     let spec: Spec = { open: [{ iid: 1, head: HEAD, pipeline: null }] };
     const glab = fakeGlab(() => spec, { [MERGE]: [TARGET, HEAD2] });
@@ -246,6 +287,20 @@ describe('RepoWatch on a GitLab repo', () => {
     const first = timers.find((t) => t.ms === 0 && !t.cleared);
     first?.fn();
     await vi.waitFor(() => expect(timers.some((t) => t.ms === REPO_WATCH_LIMITS.GITLAB_BACKOFF_MS)).toBe(true), { timeout: 5_000 });
+  });
+
+  it('a network blip is an ordinary failure: no backoff, the next poll in a minute', async () => {
+    const glab = fakeGlab(() => ({ ok: false, code: 'error', message: 'dial tcp: i/o timeout' }));
+    const log = vi.fn();
+    const w = makeWatch(glab, fakeFacts(), { log });
+    await w.start();
+    const out = await w.pollNow(KEY);
+    expect(out).toMatchObject({ ok: false, error: 'dial tcp: i/o timeout' });
+    expect(out?.retryAt).toBeUndefined();
+    timers.find((t) => t.ms === 0 && !t.cleared)?.fn();
+    await vi.waitFor(() => expect(glab.calls).toHaveLength(2), { timeout: 5_000 });
+    expect(timers.some((t) => t.ms === REPO_WATCH_LIMITS.GITLAB_BACKOFF_MS)).toBe(false);
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('routes by host: a GitLab key never reaches the gh read, a GitHub key never the glab one', async () => {

@@ -155,10 +155,10 @@ export function approvalView(r: StoredApproval): ApprovalView {
   delete view.refusalText;
   delete view.ruleSkippedText;
   delete view.ruleSkippedCondition;
-  const refusalText = r.refusal ? laneRefusalLine(r.refusal) : '';
+  const refusalText = r.refusal ? laneRefusalLine(r.refusal, r.repoKey) : '';
   // A skip names its first unmet condition only (firstRuleSkip).
   const skip = r.ruleSkipped ? firstRuleSkip(laneRefusalCodes(r.ruleSkipped)) : null;
-  const ruleSkippedText = skip ? laneRefusalLine(skip.code) : '';
+  const ruleSkippedText = skip ? laneRefusalLine(skip.code, r.repoKey) : '';
   return {
     ...(view as ApprovalView),
     ...(refusalText ? { refusalText } : {}),
@@ -1381,7 +1381,7 @@ export class ApprovalService {
     this.changed(next.workspaceId);
     // A merge that ran is told with the merged PR (onMerged, on its fact).
     if (next.state === 'refused') {
-      this.tellDecided(next, `Not merged: ${subject(next)} (${laneRefusalLine(next.refusal ?? '') || 'refused'}).`, next.refusal === 'head-moved' ? 'Its head moved since the request: ask again for the new head.' : undefined);
+      this.tellDecided(next, `Not merged: ${subject(next)} (${laneRefusalLine(next.refusal ?? '', next.repoKey) || 'refused'}).`, next.refusal === 'head-moved' ? 'Its head moved since the request: ask again for the new head.' : undefined);
     }
   }
 

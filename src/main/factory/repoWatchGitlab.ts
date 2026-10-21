@@ -15,8 +15,10 @@
 // head, with every job that may not fail passed. A merged-results pipeline
 // runs on GitLab's merge of the head into the target, so its verdict counts
 // only once the head is one of that commit's parents: a REST read, at most
-// GITLAB_WATCH_LIMITS.PARENT_READS per poll, remembered by commit; an MR
-// still unconfirmed is pending and asked again next poll.
+// GITLAB_WATCH_LIMITS.PARENT_READS per poll, remembered by commit (a
+// commit whose read failed waits PARENT_RETRY_POLLS polls); an MR still
+// unconfirmed is pending and asked again next poll. A confidential issue is
+// not read.
 //
 // A missing glab or a definite sign-out answers `backoff`: the watch waits
 // REPO_WATCH_LIMITS.GITLAB_BACKOFF_MS before asking again.
@@ -32,8 +34,10 @@ export const GITLAB_WATCH_LIMITS = {
   LOCKED: 20,
   /** Merge-commit parent reads per poll. */
   PARENT_READS: 1,
-  /** Merge commits whose parents are remembered. */
+  /** Merge commits whose parents (or failed read) are remembered. */
   PARENTS_KEPT: 512,
+  /** Polls a commit whose parents could not be read waits before another read. */
+  PARENT_RETRY_POLLS: 10,
 } as const;
 
 const MR_FIELDS = `iid title createdAt state draft diffHeadSha sourceBranch sourceProjectId targetProjectId detailedMergeStatus conflicts
@@ -57,7 +61,7 @@ export const GITLAB_WATCH_QUERY = `query($fullPath: ID!) {
     closed: mergeRequests(state: closed, first: ${REPO_WATCH_LIMITS.RECENT_CLOSED}, sort: UPDATED_DESC) { nodes { iid } }
     issues(state: opened, first: ${REPO_WATCH_LIMITS.PAGE}, sort: UPDATED_DESC) {
       count
-      nodes { iid title createdAt author { username } labels(first: ${REPO_WATCH_LIMITS.LABELS}) { count nodes { title } } }
+      nodes { iid title createdAt confidential author { username } labels(first: ${REPO_WATCH_LIMITS.LABELS}) { count nodes { title } } }
     }
   }
 }`;
@@ -210,7 +214,7 @@ function mapMrPage(conn: unknown, paged: boolean): MrPage | null {
 /** GITLAB_WATCH_QUERY's answer as a snapshot (first page only), or null when
  *  it is not one. A merged-results verdict is left pending in the snapshot
  *  and listed in `unconfirmed`. */
-export function mapGitlabWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; next: string | null; unconfirmed: UnconfirmedChecks[] } | null {
+export function mapGitlabWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; next: string | null; openRead: number; unconfirmed: UnconfirmedChecks[] } | null {
   const project = rec(rec(rec(raw)?.data)?.project);
   if (!project) return null;
   const open = mapMrPage(project.open, true);
@@ -228,15 +232,20 @@ export function mapGitlabWatchAnswer(raw: unknown): { snapshot: WatchSnapshot; n
   }
   const seen = new Set(open.prs.map((p) => p.number));
   const lockedPrs = locked.prs.filter((p) => !seen.has(p.number));
+  // A confidential issue is not read (unreadable counts as confidential).
+  const issueNodes = issues.nodes.filter((n) => rec(n)?.confidential === false);
   return {
     snapshot: {
       prs: [...open.prs, ...lockedPrs],
-      prTotal: open.total + locked.total,
+      // An MR read in both lists (it moved between them) counts once.
+      prTotal: open.total + locked.total - (locked.prs.length - lockedPrs.length),
+      openTotal: open.total,
       recent,
-      issues: issues.nodes.flatMap((n) => { const i = mapIssue(n); return i ? [i] : []; }),
-      issueTotal: issues.count,
+      issues: issueNodes.flatMap((n) => { const i = mapIssue(n); return i ? [i] : []; }),
+      issueTotal: Math.max(0, issues.count - (issues.nodes.length - issueNodes.length)),
     },
     next: open.hasNext ? open.cursor : null,
+    openRead: open.prs.length,
     unconfirmed: [...open.unconfirmed, ...locked.unconfirmed.filter((u) => !seen.has(u.pr))],
   };
 }
@@ -251,20 +260,40 @@ export type GitlabWatchRead =
   | { ok: true; snapshot: WatchSnapshot; calls: number }
   | { ok: false; message: string; calls: number; backoff: boolean };
 
+/** Merge-commit parents read so far, the commits whose read failed (by the
+ *  poll it failed in), and the poll count. */
+export interface ParentMemo {
+  parents: Map<string, string[]>;
+  failed: Map<string, number>;
+  poll: number;
+}
+
+function remember<V>(m: Map<string, V>, key: string, value: V): void {
+  m.delete(key);
+  m.set(key, value);
+  while (m.size > GITLAB_WATCH_LIMITS.PARENTS_KEPT) {
+    const oldest = m.keys().next().value;
+    if (oldest === undefined) break;
+    m.delete(oldest);
+  }
+}
+
 /**
  * One poll of a GitLab project: the snapshot, with each merged-results
- * verdict settled. A verdict of a baseline, or one the saved state already
- * holds for the same head, is kept without a read; any other is confirmed by its merge commit's
- * parents (`parents`: remembered across polls, at most PARENT_READS new
- * reads per poll) or left pending.
+ * verdict settled. A verdict the saved state already holds for the same head
+ * is kept without a read; any other is confirmed by its merge commit's
+ * parents (`memo`: remembered across polls, at most PARENT_READS new reads
+ * per poll, a failed commit skipped for PARENT_RETRY_POLLS polls) or left
+ * pending, a baseline's too.
  */
 export async function readGitlabSnapshot(
   ports: GitlabWatchPorts,
   repoPath: string,
   repoKey: string,
   prev: RepoWatchState | undefined,
-  parents: Map<string, string[]>,
+  memo: ParentMemo,
 ): Promise<GitlabWatchRead> {
+  memo.poll++;
   const vars = { fullPath: repoKey.split('/').slice(1).join('/') };
   let calls = 1;
   const fail = (r: Exclude<GitlabWatchAnswer, { ok: true }>): GitlabWatchRead => ({
@@ -275,14 +304,15 @@ export async function readGitlabSnapshot(
   const first = mapGitlabWatchAnswer(read.value);
   if (!first) return { ok: false, message: 'unexpected answer', calls, backoff: false };
   const { snapshot, unconfirmed } = first;
-  if (first.next && snapshot.prs.length < REPO_WATCH_LIMITS.MAX_OPEN_PRS) {
+  // The open-PR cap counts open MRs only, not the locked ones read beside them.
+  if (first.next && first.openRead < REPO_WATCH_LIMITS.MAX_OPEN_PRS) {
     calls++;
     const page = await ports.graphql(repoPath, repoKey, GITLAB_WATCH_PAGE_QUERY, { ...vars, after: first.next });
     if (!page.ok) return fail(page);
     const more = mapGitlabWatchPage(page.value);
     if (!more) return { ok: false, message: 'unexpected answer', calls, backoff: false };
     const seen = new Set(snapshot.prs.map((p) => p.number));
-    const added = more.prs.filter((p) => !seen.has(p.number)).slice(0, REPO_WATCH_LIMITS.MAX_OPEN_PRS - snapshot.prs.length);
+    const added = more.prs.filter((p) => !seen.has(p.number)).slice(0, REPO_WATCH_LIMITS.MAX_OPEN_PRS - first.openRead);
     snapshot.prs.push(...added);
     const kept = new Set(added.map((p) => p.number));
     unconfirmed.push(...more.unconfirmed.filter((u) => kept.has(u.pr)));
@@ -292,27 +322,25 @@ export async function readGitlabSnapshot(
     const pr = snapshot.prs.find((p) => p.number === u.pr);
     if (!pr) continue;
     const was = prev?.prs[String(u.pr)];
-    // A baseline emits nothing: its verdicts are recorded as read, as a
-    // GitHub baseline records a head already green, so none is announced
-    // later just because its parents were read later.
-    if (!prev || (was && was.headSha === pr.headSha && was.checks === u.verdict)) {
+    if (was && was.headSha === pr.headSha && was.checks === u.verdict) {
       pr.checks = u.verdict;
       continue;
     }
-    let known = parents.get(u.pipelineSha);
-    if (!known && reads > 0) {
+    let known = memo.parents.get(u.pipelineSha);
+    const failedAt = memo.failed.get(u.pipelineSha);
+    const cooling = failedAt !== undefined && memo.poll - failedAt < GITLAB_WATCH_LIMITS.PARENT_RETRY_POLLS;
+    if (!known && !cooling && reads > 0) {
       reads--;
       calls++;
       const got = await ports.commitParents(repoPath, repoKey, u.pipelineSha);
-      // An unreadable commit (no parents) is asked again next poll.
+      // An unreadable commit (no parents) waits, so it does not take every
+      // poll's read from the other MRs.
       if (got.length > 0) {
         known = got;
-        parents.set(u.pipelineSha, got);
-        while (parents.size > GITLAB_WATCH_LIMITS.PARENTS_KEPT) {
-          const oldest = parents.keys().next().value;
-          if (oldest === undefined) break;
-          parents.delete(oldest);
-        }
+        memo.failed.delete(u.pipelineSha);
+        remember(memo.parents, u.pipelineSha, got);
+      } else {
+        remember(memo.failed, u.pipelineSha, memo.poll);
       }
     }
     if (known?.includes(pr.headSha)) pr.checks = u.verdict;
@@ -326,6 +354,6 @@ export type GitlabWatchReader = (repoPath: string, repoKey: string, prev: RepoWa
 /** The reader over these ports; the merge commits' parents it reads are
  *  remembered for its life. */
 export function gitlabWatchReader(ports: GitlabWatchPorts): GitlabWatchReader {
-  const parents = new Map<string, string[]>();
-  return (repoPath, repoKey, prev) => readGitlabSnapshot(ports, repoPath, repoKey, prev, parents);
+  const memo: ParentMemo = { parents: new Map(), failed: new Map(), poll: 0 };
+  return (repoPath, repoKey, prev) => readGitlabSnapshot(ports, repoPath, repoKey, prev, memo);
 }
