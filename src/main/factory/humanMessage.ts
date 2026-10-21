@@ -117,9 +117,11 @@ export function parseMentions(raw: unknown): string[] | null {
  *  the bot named by `toBotId` (the phone's bot) when it is enabled, else the
  *  `to` role's bot, else the room's — the group's, with `members` — oldest
  *  coordinator that takes turns (botTakesTurns), followed by the bots
- *  `waiting` on the owner there, else every enabled bot of the room (of the
- *  group), oldest first (at most ROOM_LIMITS.MENTIONS_MAX). `room` is true
- *  for the last only, `lead` for the coordinator's. Pure over the
+ *  `waiting` on the owner there, else those waiting bots and then every
+ *  enabled bot of the room (of the group), oldest first (at most
+ *  ROOM_LIMITS.MENTIONS_MAX). A waiting bot is any enabled bot of the
+ *  workspace, in the group or not: the owner may be answering it. `room` is
+ *  true for the last only, `lead` for the coordinator's. Pure over the
  *  directory. */
 export function humanAddressees(
   bots: FactoryRoomPorts['bots'] | undefined,
@@ -140,17 +142,18 @@ export function humanAddressees(
     return { bots: bot ? [bot] : [], room: false };
   }
   const members = addressing.members ? new Set(addressing.members) : null;
-  const inRoom = enabled.filter((b) => b.workspaceId === workspaceId && (!members || members.has(b.id))).sort(byAge);
-  // A room with a coordinator talks to it: it decides who else works. The
-  // bots waiting on the owner in the thread hear their answer too.
+  const inWorkspace = enabled.filter((b) => b.workspaceId === workspaceId).sort(byAge);
+  const inRoom = inWorkspace.filter((b) => !members || members.has(b.id));
+  // The bots waiting on the owner in the thread hear their answer, whether
+  // or not they are in the group.
+  const waitingIds = new Set(addressing.waiting ?? []);
+  const waiting = inWorkspace.filter((b) => waitingIds.has(b.id));
+  // A room with a coordinator talks to it: it decides who else works.
   const lead = inRoom.find((b) => isCoordinatorBot(b) && botTakesTurns(b));
-  if (lead) {
-    const waiting = new Set(addressing.waiting ?? []);
-    return { bots: [lead, ...inRoom.filter((b) => b !== lead && waiting.has(b.id))].slice(0, ROOM_LIMITS.MENTIONS_MAX), room: false, lead: true };
-  }
-  // At most MENTIONS_MAX, the oldest: the card names every addressee
-  // (refs.botIds), and a retry wakes from that list.
-  return { bots: inRoom.slice(0, ROOM_LIMITS.MENTIONS_MAX), room: true };
+  if (lead) return { bots: [lead, ...waiting.filter((b) => b !== lead)].slice(0, ROOM_LIMITS.MENTIONS_MAX), room: false, lead: true };
+  // At most MENTIONS_MAX, the waiting bots first, then the oldest: the card
+  // names every addressee (refs.botIds), and a retry wakes from that list.
+  return { bots: [...waiting, ...inRoom.filter((b) => !waitingIds.has(b.id))].slice(0, ROOM_LIMITS.MENTIONS_MAX), room: true };
 }
 
 /** The run every wake of an owner message shares. */
@@ -225,8 +228,9 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
   // card's routing when the message named no bot (RoomCard.routed): this
   // bot is the room's coordinator (`lead`), one waiting on the owner there
   // (addressed), or one of every bot of a room without a coordinator
-  // (`roomWide`, with the room's first bot as `roomAnswerer`).
-  const wake = (card: RoomCard, to: BotProfile, said: string, several: boolean, routed: RoomCard['routed'], first: string | undefined): string | undefined => {
+  // (`roomWide`, with the routing's answerer as `roomAnswerer`).
+  const wake = (card: RoomCard, to: BotProfile, said: string, several: boolean, routed: RoomCard['routed']): string | undefined => {
+    const first = routed?.answerer;
     const waiting = routed?.waiting?.includes(to.id) === true;
     const asLead = !!routed?.lead && routed.lead === to.id;
     const roomWide = !!routed && !routed.lead && !waiting && several;
@@ -298,9 +302,13 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     : { mentions: input.mentions, toBotId: input.toBotId, to: input.to, waiting: waitingIds };
   const { bots: to, room, lead } = humanAddressees(ports.bots, workspaceId, addressing);
   const waitingTo = to.filter((b) => waitingIds.includes(b.id)).map((b) => b.id);
+  // Who answers a greeting or a question to the whole room: the first bot
+  // not waiting there that takes turns, else the first that does (a parked
+  // bot answers nothing, and the others would leave it to it).
+  const answerer = (to.find((b) => !waitingTo.includes(b.id) && botTakesTurns(b)) ?? to.find((b) => botTakesTurns(b)))?.id;
   const routed: RoomCard['routed'] = lead
     ? { lead: to[0].id, ...(waitingTo.length > 0 ? { waiting: waitingTo } : {}) }
-    : room ? (waitingTo.length > 0 ? { waiting: waitingTo } : {}) : undefined;
+    : room ? { ...(waitingTo.length > 0 ? { waiting: waitingTo } : {}), ...(answerer ? { answerer } : {}) } : undefined;
   // A guest workspace is an island: a message in one names only its own
   // bots, and one elsewhere names none of a guest workspace's (desktop,
   // phone and the operator's room.post all come through here).
@@ -347,7 +355,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     for (const id of ids) {
       const bot = safeGet(ports, id);
       if (!bot || !bot.enabled || crossesGuestBoundary(workspaceId, bot.workspaceId)) continue;
-      const wakeId = wake(card, bot, said, ids.length > 1, card.routed, ids[0]);
+      const wakeId = wake(card, bot, said, ids.length > 1, card.routed);
       results.push({ botId: bot.id, role: bot.role, ...(wakeId ? { wakeId } : {}) });
     }
     return results.length > 0 ? answer(card, results, true) : r;
@@ -373,7 +381,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     } catch (err) {
       console.warn('[factory] rooms: human.message fact not written', err);
     }
-    const wakeId = wake(card, bot, text, to.length > 1, routed, to[0]?.id);
+    const wakeId = wake(card, bot, text, to.length > 1, routed);
     results.push({ botId: bot.id, role: bot.role, ...(wakeId ? { wakeId } : {}) });
   }
   return answer(card, results, false);
@@ -395,13 +403,17 @@ function safeGet(ports: Partial<FactoryRoomPorts>, botId: string): BotProfile | 
 }
 
 /** The bots waiting on the owner in a thread: the authors of its open
- *  questions and approval requests, oldest first. */
+ *  questions and approval requests asked since the owner last spoke there
+ *  (words that answered nothing then do not keep a bot waiting forever),
+ *  oldest first. */
 function waitingOnOwner(writer: RoomWriter, workspaceId: string, threadId: ThreadId): string[] {
   const ids: string[] = [];
   try {
-    // A scan, newest first: the matcher collects and never stops it.
+    // A scan, newest first, that stops at the owner's previous message there.
     writer.find(workspaceId, (c) => {
-      if (c.threadId === threadId && (c.kind === 'question' || c.kind === 'approval') && c.state === 'open' && c.actor.kind === 'bot') ids.unshift(c.actor.botId);
+      if (c.threadId !== threadId) return false;
+      if (c.kind === 'human' && c.actor.kind === 'human') return true;
+      if ((c.kind === 'question' || c.kind === 'approval') && c.state === 'open' && c.actor.kind === 'bot') ids.unshift(c.actor.botId);
       return false;
     }, { guests: true });
   } catch {

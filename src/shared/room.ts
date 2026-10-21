@@ -198,10 +198,12 @@ export interface RoomCard {
    *  bot (main/factory/humanMessage.ts). `lead`: the room's coordinator it
    *  went to; absent, it went to every bot of a room without one.
    *  `waiting`: the bots that were waiting on the owner in its thread (an
-   *  open question or approval request of theirs), woken as addressed. A
-   *  retry of its clientPostId wakes the missing addressees the same way.
-   *  Never set by a room.post param. */
-  routed?: { lead?: string; waiting?: string[] };
+   *  open question or approval request of theirs since the owner last
+   *  spoke there), woken as addressed. `answerer`, with no lead: the bot
+   *  that answers a greeting or a question to everyone (the first addressee
+   *  that takes turns). A retry of its clientPostId wakes the missing
+   *  addressees the same way. Never set by a room.post param. */
+  routed?: { lead?: string; waiting?: string[]; answerer?: string };
   /** Main-written, bot cards only: the files the bot attached with
    *  room_post `files`, as stored copies (shared/roomFiles.ts). */
   files?: RoomFile[];

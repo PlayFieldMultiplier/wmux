@@ -1117,12 +1117,13 @@ function threadLinked(cards: readonly RoomCard[], threadId: ThreadId, of: (t: un
 /** A human card's routing (RoomCard.routed), or undefined. */
 function sanitizeRouted(raw: unknown): RoomCard['routed'] {
   if (!raw || typeof raw !== 'object') return undefined;
-  const r = raw as { lead?: unknown; waiting?: unknown };
+  const r = raw as { lead?: unknown; waiting?: unknown; answerer?: unknown };
   const lead = typeof r.lead === 'string' && BOT_ID_RE.test(r.lead) ? r.lead : undefined;
+  const answerer = typeof r.answerer === 'string' && BOT_ID_RE.test(r.answerer) ? r.answerer : undefined;
   const waiting = Array.isArray(r.waiting)
     ? [...new Set(r.waiting.filter((id): id is string => typeof id === 'string' && BOT_ID_RE.test(id)))].slice(0, ROOM_LIMITS.MENTIONS_MAX)
     : [];
-  return { ...(lead ? { lead } : {}), ...(waiting.length > 0 ? { waiting } : {}) };
+  return { ...(lead ? { lead } : {}), ...(waiting.length > 0 ? { waiting } : {}), ...(answerer ? { answerer } : {}) };
 }
 
 /** Keep `max` cards: open ones first, then the newest; seq order kept. */
