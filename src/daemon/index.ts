@@ -165,7 +165,7 @@ import { RingBuffer } from './RingBuffer';
 import { GitContextWatcher } from '../main/pty/gitContextWatch';
 import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
-import { installExitEvidence, noteExitReason, STATUS_CONTROL_C_EXIT } from './exitEvidence';
+import { installExitEvidence, noteExitReason } from './exitEvidence';
 import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonSession, DaemonState } from './types';
 import { retireAdopted, withDiskOnlySessions } from './diskOnlySessions';
@@ -5929,7 +5929,8 @@ function registerRpcHandlers(
       pid: process.pid,
       uptime,
       sessions: sessions.length,
-      // #2398: pane shells in the kill-on-close job, and ones it could not take.
+      // #2398: how pane shells join the kill-on-close job ('inherit': the
+      // daemon is in it), shells in it, and ones it could not take.
       paneJob: paneJob.stats(),
       // Sessions with a running PTY (attached or detached). An upgrade over SSH
       // restarts the daemon only when this is 0.
@@ -8147,6 +8148,11 @@ async function main(): Promise<void> {
     process.exit(lockHeldByLiveDaemon && process.env[DAEMON_SUPERVISED_ENV] === '1' ? DAEMON_EXIT_ALREADY_RUNNING : 1);
   }
   markDaemonBoot('lock-acquired');
+  // #2398: the daemon joins its kill-on-close job before it spawns anything,
+  // so every process it creates, pane shells first, is in the job from
+  // CreateProcess (paneJob.ts). After the lock: a daemon that lost it exits
+  // without shutdown(), and must not take what it spawned with it.
+  paneJob.enter();
 
   // Cache boot ID early (async) so buildState() never needs to block
   await initBootId();
@@ -9813,13 +9819,12 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => { onExitSignal('SIGINT'); void doShutdown('SIGINT'); });
   if (process.platform === 'win32') {
     // Ctrl+Break. With no listener Windows ends the process with
-    // STATUS_CONTROL_C_EXIT; a listener suppresses that, so this one logs and
-    // then exits with the same code. Only a daemon run in a console (a
-    // foreground `wmux daemon`) can receive it — the launcher's is detached.
-    process.on('SIGBREAK', () => {
-      onExitSignal('SIGBREAK');
-      process.exit(STATUS_CONTROL_C_EXIT);
-    });
+    // STATUS_CONTROL_C_EXIT; a listener suppresses that, so it takes the same
+    // clean exit as Ctrl+C, which disarms the pane job first (#2398): a plain
+    // process.exit here would end everything the panes started. Only a daemon
+    // run in a console (a foreground `wmux daemon`) can receive it — the
+    // launcher's is detached.
+    process.on('SIGBREAK', () => { onExitSignal('SIGBREAK'); void doShutdown('SIGBREAK'); });
   }
 
   // Last-resort synchronous save on process exit — registered on ALL platforms.

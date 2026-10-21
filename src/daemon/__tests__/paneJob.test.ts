@@ -1,8 +1,9 @@
 // #2398 — the daemon's kill-on-close job for pane shells (paneJob.ts), against
-// a fake kernel32: one job made lazily on the first pane, every pane's shell
-// assigned once it is proven, through the handle that assigns it, to be the
-// daemon's own fresh child, refusals logged once and never thrown, a clean
-// exit disarming it. The real job on Windows: paneJob.os.test.ts.
+// a fake kernel32: the daemon joining it at startup so every shell is in it
+// from creation; where that is refused, every pane's shell assigned once it is
+// proven, through the handle that assigns it, to be the daemon's own fresh
+// child; refusals logged once and never thrown; a clean exit disarming it.
+// The real job on Windows: paneJob.os.test.ts.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,6 +35,7 @@ function fakeNative(overrides: Partial<JobNative> = {}, who: Record<number, Who>
   const native: JobNative = {
     createJob: vi.fn(() => { calls.push('create'); return { job: 7n }; }),
     setKillOnClose: vi.fn((job: bigint, kill: boolean) => { calls.push(`kill:${job}:${kill}`); return 0; }),
+    assignSelf: vi.fn((job: bigint) => { calls.push(`self:${job}`); return 0; }),
     open: vi.fn((pid: number) => ({ handle: handleOf(pid) })),
     identify: vi.fn((handle: bigint) => {
       const pid = Number(handle / 10n);
@@ -56,7 +58,96 @@ function paneJob(native: JobNative | null, opts: { log?: Log } = {}) {
 
 const warnings = (log: Log) => log.mock.calls.filter(([level]) => level === 'warn');
 
-describe('createPaneJob', () => {
+describe('createPaneJob, the daemon in the job', () => {
+  it('makes the job at startup and puts the daemon in it, before any pane', () => {
+    const log = newLog();
+    const { native, calls } = fakeNative();
+    const job = paneJob(native, { log });
+    job.enter();
+    expect(calls).toEqual(['create', 'self:7']);
+    expect(job.stats()).toEqual({ mode: 'inherit', contained: 0, failed: 0 });
+    expect(warnings(log)).toHaveLength(0);
+  });
+
+  it('counts each pane shell as contained without opening it again', () => {
+    // Created from inside the job, a shell is a member from CreateProcess:
+    // nothing is opened by pid, so no reused pid can be touched.
+    const { native, calls } = fakeNative();
+    const job = paneJob(native);
+    job.enter();
+    expect(job.spawnMark()).toBeNull();
+    job.contain(101, null);
+    job.contain(102, null);
+    expect(calls).toEqual(['create', 'self:7']);
+    expect(native.open).not.toHaveBeenCalled();
+    expect(native.now).not.toHaveBeenCalled();
+    expect(job.stats()).toEqual({ mode: 'inherit', contained: 2, failed: 0 });
+  });
+
+  it('joins once, however often it is asked', () => {
+    const { native, calls } = fakeNative();
+    const job = paneJob(native);
+    job.enter();
+    job.enter();
+    expect(calls).toEqual(['create', 'self:7']);
+  });
+
+  it('falls back to assigning each shell when the daemon cannot join, logging it once', () => {
+    // An outer job that refuses nesting, or Windows older than 8.
+    const log = newLog();
+    const { native, calls } = fakeNative({ assignSelf: vi.fn(() => 5) });
+    const job = paneJob(native, { log });
+    job.enter();
+    expect(job.stats().mode).toBe('per-pane');
+    expect(job.spawnMark()).toBe(MARK);
+    job.contain(101, MARK);
+    expect(calls).toEqual(['create', 'assign:7:1010']);
+    expect(job.stats()).toEqual({ mode: 'per-pane', contained: 1, failed: 0 });
+    expect(warnings(log)).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('could not join the job (error 5)'));
+  });
+
+  it('falls back to assigning each shell when joining throws, without turning the job off', () => {
+    const log = newLog();
+    const { native } = fakeNative({ assignSelf: vi.fn(() => { throw new Error('boom'); }) });
+    const job = paneJob(native, { log });
+    expect(() => job.enter()).not.toThrow();
+    job.contain(101, MARK);
+    expect(native.assign).toHaveBeenCalledWith(7n, 1010n);
+    expect(job.stats()).toEqual({ mode: 'per-pane', contained: 1, failed: 0 });
+    expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('joining the job threw (boom)'));
+  });
+
+  it('is off when the job cannot be made at startup', () => {
+    for (const createJob of [vi.fn(() => ({ error: 8 })), vi.fn(() => { throw new Error('boom'); })]) {
+      const { native } = fakeNative({ createJob });
+      const job = paneJob(native);
+      expect(() => job.enter()).not.toThrow();
+      job.contain(101, MARK);
+      expect(native.assignSelf).not.toHaveBeenCalled();
+      expect(native.open).not.toHaveBeenCalled();
+      expect(createJob).toHaveBeenCalledOnce();
+      expect(job.stats().mode).toBe('off');
+    }
+  });
+
+  it('disarms the joined job on a clean exit', () => {
+    const { native, calls } = fakeNative();
+    const job = paneJob(native);
+    job.enter();
+    job.contain(101, null);
+    job.disarm();
+    expect(calls).toEqual(['create', 'self:7', 'kill:7:false']);
+  });
+
+  it('does nothing where there is no native job', () => {
+    const job = paneJob(null);
+    expect(() => job.enter()).not.toThrow();
+    expect(job.stats()).toEqual({ mode: 'off', contained: 0, failed: 0 });
+  });
+});
+
+describe('createPaneJob, per pane (the daemon could not join)', () => {
   it('makes one job on the first pane and assigns every pane shell to it', () => {
     const { native, calls, closed } = fakeNative();
     const job = paneJob(native);
@@ -66,7 +157,7 @@ describe('createPaneJob', () => {
     job.contain(102, MARK);
     expect(calls).toEqual(['create', 'assign:7:1010', 'assign:7:1020']);
     expect(closed).toEqual([1010n, 1020n]);
-    expect(job.stats()).toEqual({ contained: 2, failed: 0 });
+    expect(job.stats()).toEqual({ mode: 'per-pane', contained: 2, failed: 0 });
   });
 
   it('identifies the shell through the handle it assigns, never by pid again', () => {
@@ -87,7 +178,7 @@ describe('createPaneJob', () => {
     const { native, closed } = fakeNative({ assign: vi.fn(() => 5) });
     const job = paneJob(native, { log });
     expect(() => { job.contain(101, MARK); job.contain(102, MARK); }).not.toThrow();
-    expect(job.stats()).toEqual({ contained: 0, failed: 2 });
+    expect(job.stats()).toEqual({ mode: 'per-pane', contained: 0, failed: 2 });
     expect(closed).toEqual([1010n, 1020n]);
     expect(warnings(log)).toHaveLength(1);
     expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('error 5'));
@@ -105,7 +196,7 @@ describe('createPaneJob', () => {
     expect(native.assign).not.toHaveBeenCalled();
     // The process stayed pinned through the check and was let go after it.
     expect(closed).toEqual([1010n, 1020n]);
-    expect(job.stats()).toEqual({ contained: 0, failed: 2 });
+    expect(job.stats()).toEqual({ mode: 'per-pane', contained: 0, failed: 2 });
     expect(warnings(log)).toHaveLength(1);
     expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('parent is pid 9999'));
   });
@@ -117,7 +208,7 @@ describe('createPaneJob', () => {
     const job = paneJob(native);
     job.contain(101, MARK);
     expect(native.assign).not.toHaveBeenCalled();
-    expect(job.stats()).toEqual({ contained: 0, failed: 1 });
+    expect(job.stats()).toEqual({ mode: 'per-pane', contained: 0, failed: 1 });
   });
 
   it('never assigns a process it cannot identify, or one with no spawn mark', () => {
@@ -127,7 +218,7 @@ describe('createPaneJob', () => {
     job.contain(101, MARK);
     job.contain(102, null);
     expect(native.assign).not.toHaveBeenCalled();
-    expect(job.stats()).toEqual({ contained: 0, failed: 2 });
+    expect(job.stats()).toEqual({ mode: 'per-pane', contained: 0, failed: 2 });
     expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('status 0xc0000022'));
   });
 
@@ -147,7 +238,7 @@ describe('createPaneJob', () => {
     const job = paneJob(null);
     expect(job.spawnMark()).toBeNull();
     expect(() => { job.contain(101, null); job.disarm(); }).not.toThrow();
-    expect(job.stats()).toEqual({ contained: 0, failed: 0 });
+    expect(job.stats()).toEqual({ mode: 'off', contained: 0, failed: 0 });
   });
 
   it('ignores a pid that is not a real one', () => {
@@ -201,6 +292,29 @@ describe('createPaneJob', () => {
     expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('disarming threw (boom)'));
   });
 
+  it('a disarm that fails is logged with its error and tried once more', () => {
+    const log = newLog();
+    const setKillOnClose = vi.fn().mockReturnValueOnce(31).mockReturnValueOnce(0);
+    const { native } = fakeNative({ setKillOnClose });
+    const job = paneJob(native, { log });
+    job.enter();
+    job.disarm();
+    expect(setKillOnClose.mock.calls).toEqual([[7n, false], [7n, false]]);
+    expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('could not disarm the job (error 31); trying once more'));
+    expect(log).toHaveBeenLastCalledWith('info', '[pane-job] disarmed for a clean exit');
+  });
+
+  it('a disarm that fails twice says the panes\' programs end with the daemon', () => {
+    const log = newLog();
+    const setKillOnClose = vi.fn().mockReturnValueOnce(31).mockReturnValueOnce(6);
+    const { native } = fakeNative({ setKillOnClose });
+    const job = paneJob(native, { log });
+    job.contain(101, MARK);
+    job.disarm();
+    expect(setKillOnClose).toHaveBeenCalledTimes(2);
+    expect(warnings(log)).toHaveLength(2);
+    expect(log).toHaveBeenLastCalledWith('warn', expect.stringMatching(/error 6\).*end with the daemon/));
+  });
 
   it('disarms on a clean exit: kill-on-close is cleared, and no later shell joins', () => {
     const { native, calls } = fakeNative();
@@ -260,6 +374,29 @@ describe('daemon wiring', () => {
     expect(between).not.toContain('disposeAll');
     expect(disarm).toBeLessThan(body.search(/\bawait\b/));
     expect(disarm).toBeLessThan(body.indexOf('sessionManager.disposeAll();'));
+  });
+
+  it('joins the job at startup, once the lock is held and before any session can spawn', () => {
+    // A daemon that lost the lock exits without shutdown(): still armed, the
+    // job would take what it spawned. Joined late, a shell would escape.
+    const daemon = src('index.ts');
+    const main = daemon.slice(daemon.indexOf('async function main('));
+    const lock = main.indexOf("markDaemonBoot('lock-acquired');");
+    const enter = main.indexOf('paneJob.enter();');
+    expect(lock).toBeGreaterThan(main.indexOf('await acquireLock()'));
+    expect(enter).toBeGreaterThan(lock);
+    expect(enter).toBeLessThan(main.indexOf('await initBootId();'));
+    expect(enter).toBeLessThan(main.indexOf('new DaemonSessionManager('));
+    expect(daemon.match(/paneJob\.enter\(\)/g)).toHaveLength(1);
+  });
+
+  it('takes the clean exit, which disarms the job, on Ctrl+Break as on Ctrl+C', () => {
+    const daemon = src('index.ts');
+    const at = daemon.indexOf("process.on('SIGBREAK'");
+    const handler = daemon.slice(at, daemon.indexOf('\n', at));
+    expect(handler).toContain("void doShutdown('SIGBREAK');");
+    expect(handler).not.toContain('process.exit');
+    expect(daemon).toContain("process.on('SIGINT', () => { onExitSignal('SIGINT'); void doShutdown('SIGINT'); });");
   });
 
   it('contains only node-pty pane shells, at registration, against the mark taken before the spawn', () => {

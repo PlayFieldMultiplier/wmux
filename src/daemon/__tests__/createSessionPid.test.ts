@@ -151,7 +151,7 @@ describe('createSessionAsync registers only a PTY whose pid is known (#2398)', (
 
   it('hands the pane job the shell pid with the mark read before the spawn', async () => {
     const contain = vi.fn();
-    manager.setPaneJob({ spawnMark: () => 55n, contain, disarm: vi.fn(), stats: () => ({ contained: 0, failed: 0 }) });
+    manager.setPaneJob({ enter: vi.fn(), spawnMark: () => 55n, contain, disarm: vi.fn(), stats: () => ({ mode: 'per-pane', contained: 0, failed: 0 }) });
     const pending = manager.createSessionAsync({ id: 'jobbed', cmd: process.execPath, cwd: process.cwd() });
     await flush();
     spawned[0].connect(9090);
@@ -163,10 +163,11 @@ describe('createSessionAsync registers only a PTY whose pid is known (#2398)', (
     // #2398 review: a throw out of registerSession used to reject the create
     // while the shell kept running with no session to reach it.
     manager.setPaneJob({
+      enter: vi.fn(),
       spawnMark: () => null,
       contain: () => { throw new Error('native call failed'); },
       disarm: vi.fn(),
-      stats: () => ({ contained: 0, failed: 0 }),
+      stats: () => ({ mode: 'per-pane', contained: 0, failed: 0 }),
     });
     const pending = manager.createSessionAsync({ id: 'leak', cmd: process.execPath, cwd: process.cwd() });
     await flush();
