@@ -431,13 +431,15 @@ export const FANOUT_COPY_BLOCKED_WARNING =
   "the repository's config files (fanout.copy) were not copied into these worktrees: copying into bot and fan-out workspaces is off for this project";
 
 /** What a person could have changed in a worktree: its HEAD, every tracked
- *  or untracked change git does not ignore, and the size and time of each
- *  copied config file (ignored, so git does not see an edit to one). Null
- *  when git cannot say. */
+ *  or untracked change, the ignored files and folders present (a `.env`
+ *  written by hand; a folder the setup filled is one entry), and the size and
+ *  time of each copied config file (ignored, so git does not see an edit to
+ *  one). Null when git cannot say. */
 async function worktreeChanges(dir: string, copiedFiles: string[] = []): Promise<string | null> {
   const head = await git(['rev-parse', 'HEAD'], dir);
   const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], dir);
-  if (head.code !== 0 || status.code !== 0) return null;
+  const ignored = await git(['status', '--porcelain=v1', '-z', '--ignored=traditional', '--untracked-files=normal'], dir);
+  if (head.code !== 0 || status.code !== 0 || ignored.code !== 0) return null;
   const copies = copiedFiles.map((file) => {
     try {
       const st = fs.lstatSync(file);
@@ -446,7 +448,7 @@ async function worktreeChanges(dir: string, copiedFiles: string[] = []): Promise
       return '-';
     }
   });
-  return `${head.stdout.trim()}\0${status.stdout}\0${copies.join(',')}`;
+  return `${head.stdout.trim()}\0${status.stdout}\0${ignored.stdout}\0${copies.join(',')}`;
 }
 
 /** The last lines a setup printed, for a failure report. */
@@ -2452,9 +2454,10 @@ export class FanOutService {
     }
   }
 
-  /** A worktree prepared under a card may hold what the person wrote while
-   *  it waited on them: it is never force-removed, only kept (the task
-   *  cleanup list removes it, refusing uncommitted changes). */
+  /** A worktree prepared under a card (which may have waited on the person,
+   *  who may have written there) is never force-removed by a later failure
+   *  of the same start, only kept (the task cleanup list removes it, refusing
+   *  uncommitted changes). */
   private async rollbackUnlessPrepared(
     plan: TaskWorktreePlan | undefined,
     ctx: { baseOid?: string; checkout?: { sha: string } },

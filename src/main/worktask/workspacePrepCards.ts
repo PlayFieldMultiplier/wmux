@@ -174,7 +174,11 @@ export class WorkspacePrepCards {
     for (const old of this.kept) {
       if (this.kept.size <= MAX_KEPT_CARDS) break;
       this.kept.delete(old);
+      const card = this.cards.get(old);
       this.cards.delete(old);
+      if (card) {
+        try { this.sink({ ...card, status: 'closed', gone: true, updatedAt: (this.opts.now ?? Date.now)() }); } catch { /* best-effort */ }
+      }
     }
   }
 

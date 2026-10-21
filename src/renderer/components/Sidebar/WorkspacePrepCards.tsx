@@ -151,7 +151,7 @@ export default function WorkspacePrepCards() {
                     )}
                   </div>
                 )}
-                {card.suggestCopy && card.status !== 'running' && (
+                {card.suggestCopy && lingers(card) && (
                   <p className="m-0 mt-1 text-[13px] text-[var(--text-sub)]" data-testid="workspace-prep-suggest">
                     {t('prepCard.suggestCopy', { count: card.suggestCopy.count })}
                   </p>
