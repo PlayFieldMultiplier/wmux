@@ -16,6 +16,7 @@ import {
 } from '../../project/workspacePrepSettings';
 import type { WorkspacePrepSaveResult, WorkspacePrepSettingsView } from '../../../shared/workspacePrepSettings';
 import { getWorkspacePrepCards } from '../../worktask/workspacePrepCards';
+import { isWorkspacePrepDecision } from '../../../shared/workspacePrepCard';
 
 function prepDeps(): WorkspacePrepSettingsDeps {
   const store = getProjectConfigStore();
@@ -107,7 +108,7 @@ export function registerProjectConfigHandlers(): () => void {
     decision: unknown,
   ): Promise<{ ok: boolean }> => {
     if (typeof id !== 'string' || id.length > 64) return { ok: false };
-    if (decision !== 'retry' && decision !== 'start' && decision !== 'dismiss') return { ok: false };
+    if (!isWorkspacePrepDecision(decision)) return { ok: false };
     return { ok: getWorkspacePrepCards().decide(id, decision) };
   }));
 

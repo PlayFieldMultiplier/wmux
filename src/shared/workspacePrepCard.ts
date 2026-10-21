@@ -53,7 +53,14 @@ export interface WorkspacePrepCard {
 }
 
 /** retry / start (anyway) / discard (remove the worktree) / dismiss (keep it). */
-export type WorkspacePrepDecision = 'retry' | 'start' | 'discard' | 'dismiss';
+export const WORKSPACE_PREP_DECISIONS = ['retry', 'start', 'discard', 'dismiss'] as const;
+export type WorkspacePrepDecision = typeof WORKSPACE_PREP_DECISIONS[number];
+
+/** The one check every boundary uses, so a new decision cannot be left out
+ *  of one of them. Pure. */
+export function isWorkspacePrepDecision(value: unknown): value is WorkspacePrepDecision {
+  return typeof value === 'string' && (WORKSPACE_PREP_DECISIONS as readonly string[]).includes(value);
+}
 
 /** Cards kept after their preparation ended: a skip, a gap or the
  *  suggestion, which the person should read before dismissing it. */
