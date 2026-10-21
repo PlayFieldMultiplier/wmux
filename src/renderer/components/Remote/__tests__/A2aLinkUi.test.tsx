@@ -6,9 +6,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act, createElement, type ReactElement } from 'react';
-import type { A2aExposedPane, A2aLinkRecordV1 } from '../../../../shared/a2aRemote';
+import type { A2aExposedPane, A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../../shared/a2aRemote';
 import { A2aLinkDialogView, type A2aLinkDialogViewProps } from '../A2aLinkDialog';
-import { A2aLinkRequestRow, A2aLinkRow, type A2aLinkRequestRowProps, type A2aLinkRowProps } from '../A2aLinksPanel';
+import { A2aLinkRequestRow, A2aLinkRow, A2aOfferRow, type A2aLinkRequestRowProps, type A2aLinkRowProps } from '../A2aLinksPanel';
 import { autoPickPane, rankExposedPanes, remoteAlias, repoMismatch } from '../a2aLinkModel';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -358,5 +358,77 @@ describe('A2aLinkRow', () => {
     const body = render(inList(createElement(A2aLinkRow, rowProps({ confirming: true, onUnlink }))));
     act(() => (body.querySelector('[data-testid="a2a-link-row"] .ui-btn-danger') as HTMLButtonElement).click());
     expect(onUnlink).toHaveBeenCalledOnce();
+  });
+});
+
+describe('A2aOfferRow (a pane another PC shared)', () => {
+  const offer = (o: Partial<A2aLinkOfferRecordV1> = {}): A2aLinkOfferRecordV1 => ({
+    v: 1, offerId: '33333333-3333-4333-8333-333333333333', side: 'in', hostId: HOST,
+    end: { kind: 'pane', workspaceId: 'w', workspaceName: 'API', paneId: 'p1', label: 'w1-1(claude)', agent: 'claude', gitRemote: 'x/o/api' },
+    allow: { outbound: true, inbound: false }, state: 'open',
+    createdAt: new Date(1_000).toISOString(), updatedAt: new Date(1_000).toISOString(), expiresAt: new Date(1_000 + 30 * 60_000).toISOString(), ...o,
+  });
+
+  it('names the shared pane as that PC reports it, with the evidence; no pane picker on the row', () => {
+    const onAccept = vi.fn();
+    const onDecline = vi.fn();
+    const body = render(inList(createElement(A2aOfferRow, {
+      offer: offer(), pcName: 'DESK', fingerprint: '3F:9A:12:C0:7B:E4:91:0D', now: 1_000, primary: true, busy: false, onAccept, onDecline, t,
+    })));
+    const row = body.querySelector('[data-testid="a2a-offer-request"]')!;
+    expect(row.textContent).toContain('remotePage.needs.offerSentence(DESK,API/w1-1(claude))');
+    expect(row.textContent).toContain('remotePage.needs.reported(DESK)');
+    expect(row.textContent).toContain('3F:9A:12:C0:7B:E4…');
+    expect(row.textContent).toContain('a2aLink.dirSend');
+    expect(row.querySelector('[data-testid="a2a-offer-expires"]')?.textContent).toBe('remotePage.needs.offerExpires(30)');
+    expect(row.querySelector('select, [role="listbox"]')).toBeNull();
+    const accept = row.querySelector('[data-testid="a2a-offer-accept"]') as HTMLButtonElement;
+    expect(accept.className).toContain('ui-btn-primary');
+    act(() => accept.click());
+    expect(onAccept).toHaveBeenCalledOnce();
+  });
+});
+
+describe('A2aLinkDialogView accepting a shared pane', () => {
+  it('fixes the other PC and its pane, says the names are its report, and accepts', () => {
+    const shared = pane('p1', 'x/o/api');
+    const onPropose = vi.fn();
+    const body = render(createElement(A2aLinkDialogView, dialogProps({
+      panes: rankExposedPanes([shared], 'x/o/api'), selected: shared, offer: { pc: 'DESK', outbound: true, inbound: true }, onPropose,
+    })));
+    expect(body.textContent).toContain('a2aOffer.title(DESK)');
+    expect(body.querySelector('[role="radiogroup"]')).toBeNull();
+    expect(body.querySelector('[data-testid="a2a-offer-reported"]')?.textContent).toBe('a2aLink.reportedBy(DESK)');
+    const button = body.querySelector('[data-testid="a2a-link-propose"]') as HTMLButtonElement;
+    expect(button.textContent).toBe('a2aLink.accept');
+    act(() => button.click());
+    expect(onPropose).toHaveBeenCalledOnce();
+  });
+
+  it('a direction the other PC did not offer cannot be ticked', () => {
+    const shared = pane('p1');
+    const body = render(createElement(A2aLinkDialogView, dialogProps({
+      panes: rankExposedPanes([shared], null), selected: shared, receive: false, offer: { pc: 'DESK', outbound: true, inbound: false },
+    })));
+    const boxes = [...body.querySelectorAll('[role="checkbox"]')] as HTMLButtonElement[];
+    expect(boxes.map((b) => b.disabled)).toEqual([false, true]);
+  });
+
+  it('accepted here but still waiting on an older PC’s human says sent, not linked', () => {
+    const shared = pane('p1');
+    const body = render(createElement(A2aLinkDialogView, dialogProps({
+      panes: rankExposedPanes([shared], null), selected: shared, offer: { pc: 'DESK', outbound: true, inbound: true },
+      outcome: { ok: true, waiting: true },
+    })));
+    expect(body.querySelector('[data-testid="a2a-link-outcome"]')?.textContent).toBe('a2aLink.sent');
+  });
+
+  it('a closed share says so', () => {
+    const shared = pane('p1');
+    const body = render(createElement(A2aLinkDialogView, dialogProps({
+      panes: rankExposedPanes([shared], null), selected: shared, offer: { pc: 'DESK', outbound: true, inbound: true },
+      outcome: { ok: false, error: 'offer-closed' },
+    })));
+    expect(body.querySelector('[data-testid="a2a-link-outcome"]')?.textContent).toBe('a2aLink.error.offer-closed');
   });
 });

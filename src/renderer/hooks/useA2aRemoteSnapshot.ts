@@ -123,18 +123,31 @@ export function useA2aRemoteSnapshot(): void {
   }, []);
 }
 
+/** Offers already announced, so a re-sent or re-opened one is not toasted twice. */
+const toastedOffers = new Set<string>();
+
 /**
- * A link request from another PC waits on this PC's human: say so once, with
- * a jump to the Remote page where the request card is.
+ * A link request, or a pane another PC shared, waits on this PC's human: say
+ * so once, with a jump to the Remote page where its card is. Review only: the
+ * names in it are the other PC's report.
  */
 export function useA2aLinkRequestToast(t: (key: string) => string): void {
   useEffect(() => {
     const api = window.electronAPI?.a2aRemote;
     if (!api?.onLinkEvent) return;
     return api.onLinkEvent((event) => {
-      if (event.type !== 'a2a.remote.link.proposed') return;
+      let message: string;
+      if (event.type === 'a2a.remote.link.proposed') message = t('a2aLink.requestToast');
+      // The other PC accepted a share: say so at once, its link row names the pane it chose.
+      else if (event.type === 'a2a.remote.offer.changed' && event.side === 'out' && event.state === 'accepted' && !toastedOffers.has(event.offerId)) {
+        toastedOffers.add(event.offerId);
+        message = t('a2aShare.acceptedToast');
+      } else if (event.type === 'a2a.remote.offer.changed' && event.side === 'in' && event.state === 'open' && !toastedOffers.has(event.offerId)) {
+        toastedOffers.add(event.offerId);
+        message = t('a2aOffer.toast');
+      } else return;
       useStore.getState().pushToast({
-        message: t('a2aLink.requestToast'),
+        message,
         level: 'info',
         action: { label: t('a2aLink.requestToastOpen'), onClick: () => useStore.getState().setAppRoute('remote') },
       });

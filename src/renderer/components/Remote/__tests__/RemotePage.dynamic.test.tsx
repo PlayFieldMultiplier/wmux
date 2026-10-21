@@ -103,7 +103,7 @@ beforeEach(() => {
   };
   useStore.setState({
     remoteWorkspaces: [], workspaces: [ws as never], moa: null, appRoute: 'remote',
-    a2aRemote: { links: [], hosts: [], held: [], joined: [], peers: [], loaded: false },
+    a2aRemote: { links: [], offers: [], hosts: [], held: [], joined: [], peers: [], loaded: false },
   });
 });
 afterEach(() => {

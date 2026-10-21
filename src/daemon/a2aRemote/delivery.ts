@@ -202,7 +202,12 @@ export class A2aRemoteDelivery {
   }
 
   status(): A2aRemoteHostStatus[] {
-    const out: A2aRemoteHostStatus[] = [...this.sessions.values()].map((s) => s.session.current());
+    // A PC that joined this one may also be one this PC joined: its features come from its stream either way.
+    const out: A2aRemoteHostStatus[] = [...this.sessions.values()].map((s) => {
+      const row = s.session.current();
+      const features = this.hub.featuresOf(row.hostId);
+      return features ? { ...row, features: [...features] } : row;
+    });
     const joined = new Set(out.map((s) => s.hostId));
     for (const peer of this.deps.peers.list()) {
       if (peer.revokedAt || joined.has(peer.hostId)) continue;

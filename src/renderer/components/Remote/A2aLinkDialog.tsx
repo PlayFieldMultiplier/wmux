@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { A2A_BRAIN_ALIAS, type A2aEndpointKind, type A2aExposedPane, type A2aRemoteHostRecordV1 } from '../../../shared/a2aRemote';
+import { A2A_BRAIN_ALIAS, type A2aEndpointKind, type A2aExposedPane, type A2aLinkOfferRecordV1, type A2aRemoteHostRecordV1 } from '../../../shared/a2aRemote';
 import type { A2aRemoteCallError } from '../../../shared/rpc';
 import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
+import { isShadowWorkspaceId } from '../../../shared/pcRail';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
@@ -21,7 +22,10 @@ import { buildPaneSnapshot } from '../../hooks/useA2aRemoteSnapshot';
 // The joiner's matching flow: pick a PC this PC joined, pick one of the panes
 // it exposes to us (same repo first, as recommended), choose the directions,
 // send the proposal. Opened for this PC's Moa instead, it lists only that
-// PC's Moa: v1 links like with like. The other PC's human accepts it there. The view is pure
+// PC's Moa: v1 links like with like. The other PC's human accepts it there.
+// Opened on a pane another PC shared (`offer`), the PC and its pane are fixed
+// and this PC's human picks its own pane and accepts; the directions start as
+// offered and can only be narrowed. The view is pure
 // (props only) so it renders under renderToStaticMarkup in a node test.
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -46,7 +50,10 @@ export interface A2aLinkDialogViewProps {
   onReceive: (v: boolean) => void;
   busy: boolean;
   /** `uncertain`: sent, no answer — it may have reached that PC; Check settles it. */
-  outcome: { ok: true } | { ok: false; error: A2aRemoteCallError; uncertain?: boolean } | null;
+  /** `waiting`: accepted here, the other PC (an older wmux) still has its human accept. */
+  outcome: { ok: true; waiting?: boolean } | { ok: false; error: A2aRemoteCallError | 'unknown-offer'; uncertain?: boolean } | null;
+  /** Accepting a pane `pc` shared: no PC picker, and only the directions it offered can be ticked. */
+  offer?: { pc: string; outbound: boolean; inbound: boolean };
   onPropose: () => void;
   onClose: () => void;
   /** Opened without a pane (the Remote page): which of this PC's panes to link. */
@@ -68,7 +75,8 @@ export function A2aLinkDialogView(p: A2aLinkDialogViewProps) {
   const choices = p.panes?.filter((r) => r.pane.kind === p.localKind) ?? null;
   const hiddenOther = (p.panes?.length ?? 0) - (choices?.length ?? 0);
   const canSend = !!p.selected && p.selected.kind === p.localKind && (p.send || p.receive) && !p.busy && !p.outcome?.ok;
-  const hostName = p.hosts.find((h) => h.hostId === p.hostId)?.name ?? '';
+  const hostName = p.hosts.find((h) => h.hostId === p.hostId)?.name ?? p.offer?.pc ?? '';
+  const offerMode = !!p.offer;
 
   // PC picker: a radio group, so one Tab stop (the checked PC, else the
   // first); arrows move and select, wrapping; Home/End jump to the ends.
@@ -117,8 +125,8 @@ export function A2aLinkDialogView(p: A2aLinkDialogViewProps) {
   return (
     <Dialog onClose={p.onClose} width={560} data-testid="a2a-link-dialog">
       <DialogHeader
-        title={t(brainMode ? 'a2aLink.moaTitle' : 'a2aLink.title')}
-        description={t(brainMode ? 'a2aLink.moaDescription' : 'a2aLink.description', { pane: p.localName })}
+        title={offerMode ? t('a2aOffer.title', { pc: hostName }) : t(brainMode ? 'a2aLink.moaTitle' : 'a2aLink.title')}
+        description={offerMode ? t('a2aOffer.description', { pc: hostName }) : t(brainMode ? 'a2aLink.moaDescription' : 'a2aLink.description', { pane: p.localName })}
         closeLabel={t('a2aLink.close')}
       />
       <DialogBody className="flex flex-col gap-3">
@@ -134,7 +142,9 @@ export function A2aLinkDialogView(p: A2aLinkDialogViewProps) {
             </Select>
           </label>
         )}
-        {p.hosts.length === 0 ? (
+        {offerMode ? (
+          <p className="wmux-a2a-note" data-testid="a2a-offer-reported">{t('a2aLink.reportedBy', { pc: hostName })}</p>
+        ) : p.hosts.length === 0 ? (
           <p className="wmux-a2a-note" data-testid="a2a-link-no-hosts">{t('a2aLink.noHosts')}</p>
         ) : (
           <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={t('a2aLink.pc')}>
@@ -224,11 +234,11 @@ export function A2aLinkDialogView(p: A2aLinkDialogViewProps) {
         {p.selected && (
           <div className="flex flex-col gap-2">
             <label className="flex items-center gap-2 text-[13px]">
-              <Checkbox checked={p.send} onCheckedChange={p.onSend} aria-label={t('a2aLink.send')} />
+              <Checkbox checked={p.send} onCheckedChange={p.onSend} disabled={offerMode && !p.offer?.outbound} aria-label={t('a2aLink.send')} />
               {t('a2aLink.send')}
             </label>
             <label className="flex items-center gap-2 text-[13px]">
-              <Checkbox checked={p.receive} onCheckedChange={p.onReceive} aria-label={t('a2aLink.receive')} />
+              <Checkbox checked={p.receive} onCheckedChange={p.onReceive} disabled={offerMode && !p.offer?.inbound} aria-label={t('a2aLink.receive')} />
               {t('a2aLink.receive')}
             </label>
           </div>
@@ -240,7 +250,7 @@ export function A2aLinkDialogView(p: A2aLinkDialogViewProps) {
         )}
         {p.outcome && (
           <p className="wmux-a2a-note" data-tone={p.outcome.ok ? undefined : 'danger'} data-testid="a2a-link-outcome">
-            {p.outcome.ok ? t('a2aLink.sent') : p.outcome.uncertain ? t('a2aLink.uncertain') : t(`a2aLink.error.${p.outcome.error}`)}
+            {p.outcome.ok ? t(offerMode && !p.outcome.waiting ? 'a2aOffer.accepted' : 'a2aLink.sent') : p.outcome.uncertain ? t('a2aLink.uncertain') : t(`a2aLink.error.${p.outcome.error}`)}
           </p>
         )}
       </DialogBody>
@@ -248,7 +258,7 @@ export function A2aLinkDialogView(p: A2aLinkDialogViewProps) {
         <UiButton variant="ghost" size="md" onClick={p.onClose}>{p.outcome?.ok || (p.outcome && p.outcome.uncertain) ? t('a2aLink.done') : t('a2aLink.cancel')}</UiButton>
         {!p.outcome?.ok && !(p.outcome && p.outcome.uncertain) && (
           <UiButton variant="primary" size="md" disabled={!canSend} onClick={p.onPropose} data-testid="a2a-link-propose">
-            {p.busy ? t('a2aLink.sending') : t('a2aLink.propose')}
+            {p.busy ? t('a2aLink.sending') : t(offerMode ? 'a2aLink.accept' : 'a2aLink.propose')}
           </UiButton>
         )}
       </DialogFooter>
@@ -267,32 +277,74 @@ export interface A2aLinkDialogProps {
   local?: LocalEnd;
   /** Start on this PC (otherwise the only one, when there is one). */
   initialHostId?: string;
+  /** Accept this pane another PC shared: its PC and pane are fixed, this PC's pane is picked. */
+  offer?: A2aLinkOfferRecordV1;
   onClose: () => void;
 }
 
-export default function A2aLinkDialog({ local: fixed, initialHostId, onClose }: A2aLinkDialogProps) {
+export default function A2aLinkDialog({ local: fixed, initialHostId, offer, onClose }: A2aLinkDialogProps) {
+  const t = useT();
   // This PC's panes, for the picker shown when no end was handed in. The
   const workspaces = useStore((s) => s.workspaces);
   const paneLabels = useStore((s) => s.paneLabel);
   const agents = useStore((s) => s.surfaceAgent);
-  const localChoices = useMemo(() => (fixed ? undefined : workspaces
-    .flatMap((ws) => getWorkspaceLeafPanes(ws).map((leaf) => ({
-      key: `${ws.id}/${leaf.id}`,
-      label: `${ws.name} / ${leafDisplayName(paneLabels, ws, leaf, activeAgentSlug(agents, leaf))}`,
-    })))), [fixed, workspaces, paneLabels, agents]);
+  // Accepting a share: this PC's panes on the shared pane's repo come first.
+  const sharedRepo = offer?.end.gitRemote ?? null;
+  const [localRepos, setLocalRepos] = useState<Record<string, string>>({});
+  const cwdByKey = useMemo(() => {
+    if (!sharedRepo) return {};
+    const out: Record<string, string> = {};
+    for (const w of buildPaneSnapshot({ workspaces, surfaceAgent: agents }).workspaces) {
+      for (const pane of w.panes) if (pane.cwd) out[`${w.id}/${pane.paneId}`] = pane.cwd;
+    }
+    return out;
+  }, [sharedRepo, workspaces, agents]);
+  const cwdKey = JSON.stringify(cwdByKey);
+  useEffect(() => {
+    let live = true;
+    const repoKey = window.electronAPI?.github?.repoKey;
+    if (!repoKey || !sharedRepo) return;
+    void Promise.all(Object.entries(cwdByKey).map(async ([key, cwd]) => [key, (await repoKey(cwd).catch(() => null))?.key ?? null] as const))
+      .then((pairs) => {
+        if (!live) return;
+        const next: Record<string, string> = {};
+        for (const [key, repo] of pairs) if (repo) next[key] = repo;
+        setLocalRepos(next);
+      });
+    return () => { live = false; };
+    // cwdKey stands in for cwdByKey (a new object whenever the store changes).
+  }, [cwdKey, sharedRepo]);
+  const localChoices = useMemo(() => {
+    if (fixed) return undefined;
+    // This PC's own panes only: a shadow workspace shows another PC's.
+    const all = workspaces.filter((ws) => !isShadowWorkspaceId(ws.id)).flatMap((ws) => getWorkspaceLeafPanes(ws).map((leaf) => {
+      const key = `${ws.id}/${leaf.id}`;
+      const same = !!sharedRepo && localRepos[key] === sharedRepo;
+      return { key, same, label: `${ws.name} / ${leafDisplayName(paneLabels, ws, leaf, activeAgentSlug(agents, leaf))}${same ? ` · ${t('a2aLink.recommended')}` : ''}` };
+    }));
+    return [...all.filter((c) => c.same), ...all.filter((c) => !c.same)];
+  }, [fixed, workspaces, paneLabels, agents, sharedRepo, localRepos, t]);
   const [pickedKey, setPickedKey] = useState<string | null>(() => {
     if (fixed) return null;
     const s = useStore.getState();
     const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
     return ws?.activePaneId ? `${ws.id}/${ws.activePaneId}` : null;
   });
+  // The only pane here on the shared repo is picked, unless the person picked
+  // one, the focused pane is on it, or an answer is already out (it names its pane).
+  const [touched, setTouched] = useState(false);
+  const [answered, setAnswered] = useState(false);
+  useEffect(() => {
+    if (touched || answered || !localChoices) return;
+    const same = localChoices.filter((c) => c.same);
+    if (same.length === 1 && !same.some((c) => c.key === pickedKey)) setPickedKey(same[0].key);
+  }, [localChoices, touched, answered, pickedKey]);
   const localKey = localChoices?.some((c) => c.key === pickedKey) ? pickedKey : localChoices?.[0]?.key ?? null;
   const end: LocalEnd = fixed ?? (localKey
     ? { kind: 'pane', workspaceId: localKey.split('/')[0], paneId: localKey.slice(localKey.indexOf('/') + 1) }
     : { kind: 'pane', workspaceId: '', paneId: '' });
   const workspaceId = end.workspaceId;
   const paneId = end.kind === 'pane' ? end.paneId : '';
-  const t = useT();
   const api = window.electronAPI?.a2aRemote;
   // My pane as the snapshot describes it (label, cwd), from the live store.
   const local = useStore(useShallow((s) => {
@@ -308,8 +360,11 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, onClose }: 
   const [exposed, setExposed] = useState<A2aExposedPane[] | null>(null);
   const [panesError, setPanesError] = useState<A2aRemoteCallError | null>(null);
   const [selected, setSelected] = useState<A2aExposedPane | null>(null);
-  const [send, setSend] = useState(true);
-  const [receive, setReceive] = useState(true);
+  // An offer's directions are the most it allows: start there, narrow only.
+  const [send, setSendRaw] = useState(offer ? offer.allow.outbound : true);
+  const [receive, setReceiveRaw] = useState(offer ? offer.allow.inbound : true);
+  const setSend = useCallback((v: boolean) => setSendRaw(v && (!offer || offer.allow.outbound)), [offer]);
+  const setReceive = useCallback((v: boolean) => setReceiveRaw(v && (!offer || offer.allow.inbound)), [offer]);
   const [myRemote, setMyRemote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<A2aLinkDialogViewProps['outcome']>(null);
@@ -319,11 +374,12 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, onClose }: 
     void api?.hostsList().then((r) => {
       if (!live || !Array.isArray(r?.hosts)) return;
       setHosts(r.hosts);
-      if (initialHostId && r.hosts.some((h) => h.hostId === initialHostId)) setHostId(initialHostId);
+      const want = offer?.hostId ?? initialHostId;
+      if (want && r.hosts.some((h) => h.hostId === want)) setHostId(want);
       else if (r.hosts.length === 1) setHostId(r.hosts[0].hostId);
     }).catch(() => undefined);
     return () => { live = false; };
-  }, [api, initialHostId]);
+  }, [api, initialHostId, offer?.hostId]);
 
   const cwd = local.cwd;
   useEffect(() => {
@@ -334,6 +390,12 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, onClose }: 
   }, [cwd]);
 
   useEffect(() => {
+    // An offer names the one pane: nothing to list from that PC.
+    if (offer) {
+      setExposed([offer.end]);
+      setSelected(offer.end);
+      return;
+    }
     if (!api || !hostId) return;
     let live = true;
     setExposed(null); setPanesError(null); setSelected(null); setOutcome(null);
@@ -343,7 +405,7 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, onClose }: 
       else setPanesError(r.error);
     }).catch(() => { if (live) setPanesError('failed'); });
     return () => { live = false; };
-  }, [api, hostId]);
+  }, [api, hostId, offer]);
 
   const ranked = useMemo(() => (exposed ? rankExposedPanes(exposed, myRemote) : null), [exposed, myRemote]);
   // One choice, or one on my repo: picked already, the person only confirms.
@@ -351,6 +413,28 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, onClose }: 
   useEffect(() => {
     if (autoPane) setSelected((cur) => cur ?? autoPane);
   }, [autoPane]);
+
+  const onAcceptOffer = useCallback(async () => {
+    if (!api?.offersAccept || !offer || end.kind !== 'pane' || !local.found) return;
+    // The pane shown beside the result is the one this answer names, whatever sorts first later.
+    setAnswered(true);
+    setPickedKey(`${end.workspaceId}/${end.paneId}`);
+    setBusy(true); setOutcome(null);
+    try {
+      const r = await api.offersAccept({
+        offerId: offer.offerId,
+        local: { kind: 'pane', workspaceId, paneId, label: local.label, workspaceName: local.workspaceName, ...(myRemote ? { gitRemote: myRemote } : {}) },
+        allow: { outbound: send, inbound: receive },
+      });
+      setOutcome(r.ok
+        ? { ok: true, ...(r.link?.state === 'active' ? {} : { waiting: true }) }
+        : { ok: false, error: r.error, ...(r.uncertain ? { uncertain: true } : {}) });
+    } catch {
+      setOutcome({ ok: false, error: 'failed' });
+    } finally {
+      setBusy(false);
+    }
+  }, [api, offer, end.kind, local, workspaceId, paneId, myRemote, send, receive]);
 
   const onPropose = useCallback(async () => {
     if (!api || !hostId || !selected || !local.found) return;
@@ -406,9 +490,10 @@ export default function A2aLinkDialog({ local: fixed, initialHostId, onClose }: 
       onReceive={setReceive}
       busy={busy}
       outcome={outcome}
-      onPropose={() => void onPropose()}
+      onPropose={() => void (offer ? onAcceptOffer() : onPropose())}
       onClose={onClose}
-      {...(localChoices ? { localChoices, localKey: localKey ?? '', onPickLocal: setPickedKey } : {})}
+      {...(offer ? { offer: { pc: hosts.find((h) => h.hostId === offer.hostId)?.name ?? '', outbound: offer.allow.outbound, inbound: offer.allow.inbound } } : {})}
+      {...(localChoices ? { localChoices, localKey: localKey ?? '', onPickLocal: (key: string) => { setTouched(true); setPickedKey(key); } } : {})}
       t={t}
     />
   );
