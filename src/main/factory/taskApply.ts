@@ -165,16 +165,16 @@ function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
 }
 
 /** One `git diff --raw -z` entry. */
-export interface RawChange { status: string; srcMode: string; dstMode: string; path: string }
+export interface RawChange { status: string; srcMode: string; dstMode: string; path: string; srcOid?: string; dstOid?: string }
 
 /** `git diff --raw -z --no-renames` output → its entries. Pure. */
 export function parseRawDiff(stdout: string): RawChange[] {
   const parts = stdout.split('\0');
   const out: RawChange[] = [];
   for (let i = 0; i + 1 < parts.length; i += 2) {
-    const m = /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ ([A-Z])\d*$/.exec(parts[i]);
+    const m = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])\d*$/.exec(parts[i]);
     if (!m) break;
-    out.push({ srcMode: m[1], dstMode: m[2], status: m[3], path: parts[i + 1] });
+    out.push({ srcMode: m[1], dstMode: m[2], srcOid: m[3], dstOid: m[4], status: m[5], path: parts[i + 1] });
   }
   return out;
 }
@@ -233,6 +233,13 @@ export function modesApplied(top: string, changes: readonly RawChange[], opts: {
     if (opts.fileMode && !link && st.isFile() && ((st.mode & 0o111) !== 0) !== (c.dstMode === '100755')) return false;
   }
   return true;
+}
+
+/** Whether every change only flips a file's executable bit (the same
+ *  content). Pure. */
+export function onlyExecBitChanges(changes: readonly RawChange[]): boolean {
+  const regular = (m: string) => m === '100644' || m === '100755';
+  return changes.length > 0 && changes.every((c) => c.status === 'M' && c.srcMode !== c.dstMode && regular(c.srcMode) && regular(c.dstMode) && !!c.srcOid && c.srcOid === c.dstOid);
 }
 
 /** A boolean git setting as the scopes leave it (`fallback` when unset). Pure. */
@@ -551,6 +558,9 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
     // pulled): say so before anything else. A reverse check passes
     // whatever the modes are, so they are read from the files.
     const modes = { fileMode: configBool(pre.entries, 'core.filemode', platform !== 'win32'), symlinks: configBool(pre.entries, 'core.symlinks', platform !== 'win32') };
+    // A task that only makes files executable has nothing to write where git
+    // does not track the bit (Windows' default).
+    if (!modes.fileMode && onlyExecBitChanges(changes)) return refuse('no_changes', 'Nothing to write: this checkout does not track the executable bit.');
     if ((await apply(['--check', '--reverse'])).code === 0 && modesApplied(top, changes, modes)) {
       return refuse('no_changes', 'Your checkout already has the task\'s changes.');
     }

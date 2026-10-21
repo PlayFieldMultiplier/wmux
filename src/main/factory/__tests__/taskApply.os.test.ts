@@ -282,6 +282,15 @@ describe('where and how git apply runs', () => {
     expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'no_changes' });
   });
 
+  it('a task that only makes a file executable, in a checkout that does not track the bit, says there is nothing to write', async () => {
+    git(repo, 'config', 'core.filemode', 'false');
+    git(wt, 'reset', '-q', '--hard', base);
+    // The bit set in the task's commit itself, whatever the platform.
+    git(wt, 'update-index', '--chmod=+x', 'b.txt');
+    git(wt, 'commit', '-qm', 'chmod');
+    expect(await applyTaskToCheckout(ports(), TASK)).toEqual({ ok: false, code: 'no_changes', message: 'Nothing to write: this checkout does not track the executable bit.' });
+  });
+
   it('refuses a task that changes a .gitattributes', async () => {
     write(wt, 'sub/.gitattributes', '*.txt text\n');
     git(wt, 'add', '-A');
@@ -497,8 +506,8 @@ describe('parseRawDiff', () => {
   it('reads each entry\'s modes, status and path', () => {
     const z = ':100644 100644 aaaa bbbb M\0a b.txt\0:000000 160000 0000 cccc A\0sub\0';
     expect(parseRawDiff(z)).toEqual([
-      { srcMode: '100644', dstMode: '100644', status: 'M', path: 'a b.txt' },
-      { srcMode: '000000', dstMode: '160000', status: 'A', path: 'sub' },
+      { srcMode: '100644', dstMode: '100644', srcOid: 'aaaa', dstOid: 'bbbb', status: 'M', path: 'a b.txt' },
+      { srcMode: '000000', dstMode: '160000', srcOid: '0000', dstOid: 'cccc', status: 'A', path: 'sub' },
     ]);
   });
 });
