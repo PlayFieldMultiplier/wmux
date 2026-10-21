@@ -458,7 +458,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   opens. A group's name pill opens the same dialog to rename it, change its
   bots, or Delete group (asked in place: its messages stay saved, the row
   goes). A group with nothing said yet reads "Write the first message:
-  every bot here answers and introduces itself." Nobody greets first in a
+  every bot here answers and introduces itself.", or, in a group with a
+  coordinator, "Write the first message: it goes to <lead>, who leads this
+  group and hands the work on." Nobody greets first in a
   group and no "joined" line is drawn: each bot the owner's first message
   reaches introduces itself in its answer (its wake asks it to; no canned
   card), and a bot's greeting stays in its 1:1. A room the owner had
@@ -778,13 +780,15 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   owner's sent card shows them as thumbnails above its words (none for a
   photo-only message) and a click opens one fitted in a dialog. A 1:1
   message is addressed to that bot alone. A group's message goes to every
-  bot of the group (they may answer each other; a coordinator is a bot like
-  any other, its job saying it leads — owner decision 2026-10-15) unless
-  bots are picked: the **recipients control** right above the pill, a 24px
-  chip "To: everyone ▾" ("받는 봇: 모두 ▾"; "To: <names>" in the
-  `--selection-emphasis` fill once some are picked) that opens a checkbox
-  per bot of the group (the "+" menu's popover place) with one muted line:
-  none ticked goes to everyone, and the picks reset after each send. An `@`
+  bot of the group (they may answer each other) — or, in a group with a
+  coordinator, to that coordinator alone, which hands the work on (owner
+  decision 2026-10-21) — unless bots are picked: the **recipients control**
+  right above the pill, a 24px chip "To: everyone ▾" ("받는 봇: 모두 ▾";
+  "To: <lead> ▾" in a group with a coordinator, without a fill since it is
+  the default; "To: <names>" in the `--selection-emphasis` fill once some
+  are picked) that opens a checkbox per bot of the group (the "+" menu's
+  popover place) with one muted line: none ticked goes to everyone (to the
+  lead, in a group with one), and the picks reset after each send. An `@`
   and a group bot's name anywhere in the message ticks that bot too, and an
   `@` naming no bot of the group is plain text (owner decision
   2026-10-15). A reply in a thread the group started goes to the picked
@@ -1803,6 +1807,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-21 | A bot's HTML file and an `html` block in the Bots chat get **Preview / Code** (a compact segmented control), not the preview tab's View source | The preview tab is a page opened to be read, so the source is a detour behind one button. Here the two views are peers in one place: a page opens as Preview, a chat block as Code, and one control switches either way |
 | 2026-10-21 | Owner decision: Windows keeps the sheet's frame-side corner rounded. Maximized, the corner beside the rail and the titlebar keeps `--sheet-radius` with the hairline on the top and rail side; only the corners on the screen's edges are square. Under window glass the sheet's edge is a 10% text ink, not the opaque `--sheet-edge` | Maximized Windows rail pages showed a right angle where macOS and the terminal view show a curve, and the rail met the sidebar with no hairline. Over translucent acrylic the opaque hairline read lighter than the frame on tinted backdrops and vanished on light ones (measured on Windows 11, Paper) |
 | 2026-10-21 | Owner decision: every theme's muted text (`--text-muted`, `--text-subtle`) reads at ≥3:1 and secondary text (`--text-sub`, `--text-sub2`) at ≥4.5:1 on its own surfaces: the sheet, the sidebar column, the frame and rail, and the row hover over the sheet and the column. Paper, Mono, Mono Light, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Nightowl and Void were lifted by HSL lightness only, the least that clears every surface; their hue and saturation stay. Where a hand-pinned `--text-subtle` would have sunk below the lifted muted, it now derives from muted and sub like every other theme (Catppuccin takes Overlay2). `themeTextContrast.test.ts` pins the floors | Muted text on ten built-in themes fell under 3:1 even on the theme's own opaque sidebar (Void 1.66, Catppuccin 2.60), so labels, counts and metadata were hard to read |
+| 2026-10-21 | Orchestrator decision (owner direction, recommended option): in a room or group chat with an enabled coordinator, an owner message that names no bot goes to that coordinator alone, which hands the work on; a message that picks bots goes to exactly those, and a room or group without a coordinator still reaches every bot. The recipients chip reads "To: <lead> ▾" (no fill: it is the default) and its muted line and the empty group's line name the lead. Amends Group chats and Composer; reverses, for a group with a coordinator, the 2026-10-15 group chat row's "the coordinator-only routing of an untagged room message is gone" | Woken together, every bot answered one message (four answers, some saying they had nothing to add), the coordinator restated what the others had just posted, and the work it promised to report never came back to it because it had not dispatched it. The chip names the lead, so the owner can see who gets the message, which was the reason the earlier routing was dropped |
 
 ### Desktop conversation view
 

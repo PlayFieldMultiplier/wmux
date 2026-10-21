@@ -121,6 +121,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
       if (r.runId !== undefined && !boundedId(r.runId)) return null;
       if (r.room !== undefined && r.room !== true) return null;
       if (r.lead !== undefined && r.lead !== true) return null;
+      if (r.roomWide !== undefined && r.roomWide !== true) return null;
       return {
         kind: 'human',
         text: r.text,
@@ -129,6 +130,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
         ...(r.runId !== undefined ? { runId: r.runId as string } : {}),
         ...(r.room === true ? { room: true as const } : {}),
         ...(r.lead === true ? { lead: true as const } : {}),
+        ...(r.roomWide === true ? { roomWide: true as const } : {}),
       };
     }
     case 'schedule':

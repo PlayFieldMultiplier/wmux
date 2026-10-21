@@ -1557,3 +1557,36 @@ describe('a guest workspace is an island (handoffs, mentions, their cards)', () 
   });
 });
 
+
+describe('a room with a coordinator: the owner talks to it, and the work it dispatches comes back to it', () => {
+  it('an untagged owner message wakes the coordinator alone; a review it dispatches reports back to it, pointed to from where the owner asked', async () => {
+    const coordinator = bot('ws1', 'moa');
+    const reviewer = bot('ws1', 'verifier');
+    const dev = bot('ws1', 'lead');
+    const issue = bot('ws1', 'triage');
+    const h = await harness([coordinator, reviewer, dev, issue]);
+    const OPERATOR: RpcContext = { origin: 'local', operator: true, firstParty: true };
+    const posted = await handleRoomPost({ workspaceId: 'ws1', title: 'Review PR #5 please' }, OPERATOR, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir }) as { ok: true; card: { id: string } };
+    expect(posted.ok).toBe(true);
+    expect(h.wakes.map((w) => [w.botId, w.reason.kind === 'human' && w.reason.lead])).toEqual([[coordinator.id, true]]);
+    // The coordinator's turn on it dispatches the review.
+    h.wake.thread = 'general';
+    h.wake.id = { wakeId: 'w-owner', attempt: 1, runId: `run-${posted.card.id}` } as Harness['wake']['id'];
+    const d = h.router.send(binding(coordinator), { kind: 'dispatch', toBotId: reviewer.id, title: 'Verify PR #5', body: 'pass or fail at the head', refs: { pr: 5 } });
+    if (!d.ok) throw new Error('dispatch failed');
+    // The reviewer's verify task wake (the gate recorded) answers the dispatch.
+    h.wake.thread = null;
+    h.wake.id = { wakeId: 'w-gated', attempt: 1, handoffId: d.handoffId, reasonKind: 'facts' } as Harness['wake']['id'];
+    const r = h.router.send(binding(reviewer), { kind: 'result', title: 'PR #5 passes', body: 'gate green at abc1234' });
+    expect(r).toMatchObject({ ok: true, to: { botId: coordinator.id } });
+    // The result wakes the coordinator, in the dispatch's thread, to report.
+    const back = h.wakes.filter((w) => w.botId === coordinator.id && w.reason.kind === 'handoff');
+    expect(back).toHaveLength(1);
+    expect(back[0].threadId).toBe(h.router.get(d.handoffId)?.threadId);
+    // And a pointer to that thread lands in General, under the owner's message.
+    const pointer = h.rooms.read('ws1').cards.find((c) => c.threadId === 'general' && c.actor.kind === 'system' && c.refs?.threadId === h.router.get(d.handoffId)?.threadId);
+    expect(pointer).toMatchObject({ title: 'Finished: Verify PR #5', replyTo: posted.card.id });
+    // Nobody else was woken by the owner's message.
+    expect(h.wakes.filter((w) => w.botId !== coordinator.id).map((w) => [w.botId, w.reason.kind])).toEqual([[reviewer.id, 'handoff']]);
+  });
+});

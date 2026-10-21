@@ -11,10 +11,19 @@
 //              in any workspace — a 1:1 conversation is a message with one;
 //   toBotId    one bot by id (the phone's bot), when it is enabled;
 //   to         a legacy role (the phone's `moa`): that role's bot there;
-//   neither    the room: every enabled bot of the workspace (the oldest
-//              ROOM_LIMITS.MENTIONS_MAX). No bot is picked for the owner
-//              (owner decision 2026-10-15: a coordinator is a bot like any
-//              other; its job says it leads).
+//   neither    the room: its coordinator when one is enabled there (the
+//              oldest; the team's lead hands the work on with handoff_send,
+//              so the delegates' results come back to it), else every
+//              enabled bot of the workspace (the oldest
+//              ROOM_LIMITS.MENTIONS_MAX). This reverses the room-wide wake of
+//              2026-10-15 ("a coordinator is a bot like any other") for a
+//              room that has a coordinator: woken together, every bot
+//              answered one message and none of the work came back to the
+//              coordinator to report.
+//
+// A wake a bot got only because it is in a room without a coordinator
+// (`roomWide`) does not post the bot's closing text: a bot that has
+// something of its own to say posts it with room_post (BotRuntime.ts).
 //
 // A message posted in a bot's 1:1 thread (`dm:<botId>`) is for that bot
 // alone, whatever else it names; the bot must live in that room. Its wake is
@@ -24,7 +33,8 @@
 // `group:<id>`, or `general` for a group made from the room) is for the
 // group's members: those it `mentions` (every one a member, else the post
 // is refused), else the bot `toBotId` or `to` names (as above), else every
-// enabled member (the oldest MENTIONS_MAX). A group thread with no live
+// enabled member (the oldest MENTIONS_MAX) — or, when the group has an
+// enabled coordinator, that coordinator alone. A group thread with no live
 // group takes no post.
 //
 // The card keeps the addressees main settled on (`refs.botIds`, and
@@ -43,7 +53,7 @@
 // record for HUMAN_RETRY_WINDOW_MS).
 
 import type { BotProfile, BotRole } from '../../shared/bot';
-import { BOT_ID_RE, isBotRole } from '../../shared/bot';
+import { BOT_ID_RE, isBotRole, isCoordinatorBot } from '../../shared/bot';
 import type { FactDraft } from '../../shared/facts';
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, type RoomCard, type ThreadId } from '../../shared/room';
 import { capBody, type FactoryRoomPorts, type RoomWriter } from './roomWriter';
@@ -96,14 +106,15 @@ export function parseMentions(raw: unknown): string[] | null {
 /** Who one owner message in a workspace's room is for (see the header):
  *  the mentioned bots that exist and are enabled (in the order named), else
  *  the bot named by `toBotId` (the phone's bot) when it is enabled, else the
- *  `to` role's bot, else every enabled bot of the room — of the group, with
- *  `members` — oldest first (at most ROOM_LIMITS.MENTIONS_MAX). `room` is
- *  true for the last only. Pure over the directory. */
+ *  `to` role's bot, else the room's — the group's, with `members` — oldest
+ *  enabled coordinator, else every enabled bot of the room (of the group),
+ *  oldest first (at most ROOM_LIMITS.MENTIONS_MAX). `room` is true for the
+ *  last only, `lead` for the coordinator. Pure over the directory. */
 export function humanAddressees(
   bots: FactoryRoomPorts['bots'] | undefined,
   workspaceId: string,
   addressing: { mentions?: readonly string[]; toBotId?: string; to?: unknown; members?: readonly string[] },
-): { bots: BotProfile[]; room: boolean } {
+): { bots: BotProfile[]; room: boolean; lead?: true } {
   const enabled = enabledBots(bots);
   if (addressing.mentions && addressing.mentions.length > 0) {
     const byId = new Map(enabled.map((b) => [b.id, b]));
@@ -119,6 +130,9 @@ export function humanAddressees(
   }
   const members = addressing.members ? new Set(addressing.members) : null;
   const inRoom = enabled.filter((b) => b.workspaceId === workspaceId && (!members || members.has(b.id))).sort(byAge);
+  // A room with a coordinator talks to it: it decides who else works.
+  const lead = inRoom.find((b) => isCoordinatorBot(b));
+  if (lead) return { bots: [lead], room: false, lead: true };
   // At most MENTIONS_MAX, the oldest: the card names every addressee
   // (refs.botIds), and a retry wakes from that list.
   return { bots: inRoom.slice(0, ROOM_LIMITS.MENTIONS_MAX), room: true };
@@ -192,8 +206,10 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     ? input.wakeText
     : typeof input.body === 'string' && input.body.trim() ? input.body : input.title).trim();
   // `several`: the message went to more than one bot, each of which sees
-  // the others' answers to it in its wake (wakeContext.ts).
-  const wake = (card: RoomCard, to: BotProfile, said: string, several: boolean): string | undefined => {
+  // the others' answers to it in its wake (wakeContext.ts). `mode`: how a
+  // message that named no bot reached this one — as the room's coordinator
+  // (`lead`), or as one of every bot of a room without one (`room`).
+  const wake = (card: RoomCard, to: BotProfile, said: string, several: boolean, mode: 'lead' | 'room' | null): string | undefined => {
     try {
       return ports.wakes?.enqueue({
         botId: to.id,
@@ -208,6 +224,8 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
           clientMessageId: card.id,
           runId: humanRunId(card.id),
           ...(several ? { room: true as const } : {}),
+          ...(mode === 'lead' ? { lead: true as const } : {}),
+          ...(mode === 'room' && several ? { roomWide: true as const } : {}),
         },
         priority: 0,
         // Pinned to the card's thread, General included: the addressee sees
@@ -253,7 +271,8 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
   const addressing = dmBot ? { mentions: [dmBot] }
     : group ? { mentions: input.mentions, toBotId: input.toBotId, to: input.to, members: group.memberIds }
     : { mentions: input.mentions, toBotId: input.toBotId, to: input.to };
-  const { bots: to } = humanAddressees(ports.bots, workspaceId, addressing);
+  const { bots: to, room, lead } = humanAddressees(ports.bots, workspaceId, addressing);
+  const mode = lead ? 'lead' as const : room ? 'room' as const : null;
   // A guest workspace is an island: a message in one names only its own
   // bots, and one elsewhere names none of a guest workspace's (desktop,
   // phone and the operator's room.post all come through here).
@@ -292,11 +311,15 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     const fromCard = (card.body?.trim() ? card.body : card.title).trim();
     // The retry's whole message when the card holds its capped copy.
     const said = input.wakeText?.trim() && card.body !== undefined && capBody(redactStoredSecrets(input.wakeText)) === card.body ? input.wakeText.trim() : fromCard;
+    // A message that named no bot keeps the mode it was posted with: its
+    // coordinator alone, or every bot of the room it named.
+    const unnamed = !dmBot && !input.mentions?.length && input.toBotId === undefined && input.to === undefined;
+    const retryMode = !unnamed ? null : ids.length === 1 && isCoordinatorBot(safeGet(ports, ids[0])) ? 'lead' as const : 'room' as const;
     const results: HumanAddresseeResult[] = [];
     for (const id of ids) {
       const bot = safeGet(ports, id);
       if (!bot || !bot.enabled || crossesGuestBoundary(workspaceId, bot.workspaceId)) continue;
-      const wakeId = wake(card, bot, said, ids.length > 1);
+      const wakeId = wake(card, bot, said, ids.length > 1, retryMode);
       results.push({ botId: bot.id, role: bot.role, ...(wakeId ? { wakeId } : {}) });
     }
     return results.length > 0 ? answer(card, results, true) : r;
@@ -313,14 +336,16 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
       ref: { botId: bot.id, messageId: `${card.id}:${bot.id}` },
       actor: { kind: 'human' },
       // Processed whole, shortened last.
-      payload: { text: capBody(redactStoredSecrets(text), HUMAN_FACT_TEXT_MAX), cardId: card.id, threadId, source },
+      // `lead`: the words were to the whole room, which its coordinator alone
+      // got (typed approval still reads them as the room's).
+      payload: { text: capBody(redactStoredSecrets(text), HUMAN_FACT_TEXT_MAX), cardId: card.id, threadId, source, ...(lead ? { lead: true } : {}) },
     };
     try {
       ports.factLog?.append(draft);
     } catch (err) {
       console.warn('[factory] rooms: human.message fact not written', err);
     }
-    const wakeId = wake(card, bot, text, to.length > 1);
+    const wakeId = wake(card, bot, text, to.length > 1, mode);
     results.push({ botId: bot.id, role: bot.role, ...(wakeId ? { wakeId } : {}) });
   }
   return answer(card, results, false);
