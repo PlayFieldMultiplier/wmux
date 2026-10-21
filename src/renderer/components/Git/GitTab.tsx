@@ -557,7 +557,9 @@ export function GitTab({
       // The new worktree's preparation is always reported, never silent.
       const prep = res.prep;
       if (prep?.status === 'failed') {
-        pushToast({ level: 'warn', message: t('git.prepFailed', { error: prep.error ?? '' }) });
+        // The last lines it printed say why, as on start from an issue.
+        const tail = prep.outputTail?.slice(-3).join(' · ');
+        pushToast({ level: 'warn', message: t('git.prepFailed', { error: [prep.error, tail].filter(Boolean).join(': ') }) });
       } else if (prep?.status === 'skipped') {
         pushToast({ level: 'warn', message: t(prepSkipKey(prep.reason)) });
       } else if (prep?.status === 'ready' && prep.copy.missing + prep.copy.refused > 0) {
