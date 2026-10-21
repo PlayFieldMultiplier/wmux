@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { applyTaskToCheckout, filteredPaths, isDivergedApply, lineEndingArgs, parseRawDiff, type TaskApplyPorts } from '../taskApply';
+import { applyTaskToCheckout, filteredPaths, isDivergedApply, lineEndingArgs, parseRawDiff, privateGitInitArgs, type TaskApplyPorts } from '../taskApply';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd(), getPath: () => '/tmp' }, dialog: {}, ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, nativeImage: {} }));
 
@@ -276,6 +276,11 @@ describe('the patch and the owner\'s settings', () => {
     expect(isDivergedApply('error: new/n.txt: already exists in working directory')).toBe(true);
     expect(isDivergedApply('error: gone.txt: No such file or directory')).toBe(true);
     expect(isDivergedApply('error: corrupt patch at line 7')).toBe(false);
+  });
+
+  it('names the object format to git init only for a sha256 repository (git before 2.29 has no flag)', () => {
+    expect(privateGitInitArgs('sha1', '/t/git')).toEqual(['init', '-q', '--bare', '--template=', '/t/git']);
+    expect(privateGitInitArgs('sha256', '/t/git')).toEqual(['init', '-q', '--bare', '--template=', '--object-format=sha256', '/t/git']);
   });
 
   it('passes only the owner\'s line ending settings, last value winning', () => {

@@ -158,6 +158,13 @@ export function isDivergedApply(stderr: string): boolean {
   return /patch does not apply|already exists in working directory|does not exist|No such file or directory/.test(stderr);
 }
 
+/** `git init` of main's private git dir for the apply: the repository's
+ *  object format named only when it is not the default, since
+ *  `--object-format` needs git 2.29. Pure. */
+export function privateGitInitArgs(objectFormat: string, dir: string): string[] {
+  return ['init', '-q', '--bare', '--template=', ...(objectFormat === 'sha1' ? [] : [`--object-format=${objectFormat}`]), dir];
+}
+
 /** The folders a new path needs that the checkout has as something else (a
  *  file or a link where `notes/` goes for `notes/todo.md`). */
 function blockedParents(top: string, created: readonly string[]): string[] {
@@ -312,7 +319,7 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
     const emptyConfig = path.join(tmp, 'empty-config');
     fs.writeFileSync(emptyConfig, '');
     const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyConfig };
-    const init = await git(['init', '-q', '--bare', '--template=', `--object-format=${objectFormat}`, privateDir], tmp, env);
+    const init = await git(privateGitInitArgs(objectFormat, privateDir), tmp, env);
     if (init.code !== 0) return refuse('git_failed', `git init failed: ${init.stderr.trim().slice(0, 300)}`);
     const eol = lineEndingArgs(pre.entries);
     const apply = (extra: string[]) => git([`--git-dir=${privateDir}`, `--work-tree=${top}`, ...safe, ...eol, 'apply', '--whitespace=nowarn', ...extra, patch], top, env);
