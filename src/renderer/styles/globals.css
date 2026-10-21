@@ -1234,38 +1234,11 @@ html[data-glass="light"][data-glass-level="clear"] {
   --glass-frame: 0%;
   --glass-sheet: 3%;
 }
-/* Windows 11 acrylic is a different material from the macOS one, so it has
- * its own numbers. Each rule carries `data-platform`, so it outranks the
- * macOS rule of the same case above. Dark acrylic is already deep, so a dark
- * look paints a little more than on macOS to keep its own tone: about 34%
- * Soft and 16% Clear over the sidebar. Strongly hued looks keep the macOS
- * numbers. Light acrylic reads grey, the opposite of the milky macOS
- * material, so a light look paints much more of its own colour to stay
- * clean: about 60% Soft and 40% Clear. */
-html[data-glass][data-platform="win32"] {
-  --glass-frame: 30%;
-  --glass-sheet: 6%;
-}
-html[data-glass][data-platform="win32"][data-glass-level="clear"] {
-  --glass-frame: 12%;
-  --glass-sheet: 5%;
-}
-html[data-glass][data-platform="win32"]:is([data-theme="stars-and-stripes"], [data-theme="red-dynasty"], [data-theme="catppuccin-mocha"]) {
-  --glass-frame: 55%;
-  --glass-sheet: 20%;
-}
-html[data-glass][data-platform="win32"]:is([data-theme="stars-and-stripes"], [data-theme="red-dynasty"], [data-theme="catppuccin-mocha"])[data-glass-level="clear"] {
-  --glass-frame: 35%;
-  --glass-sheet: 12%;
-}
-html[data-glass="light"][data-platform="win32"] {
-  --glass-frame: 55%;
-  --glass-sheet: 10%;
-}
-html[data-glass="light"][data-platform="win32"][data-glass-level="clear"] {
-  --glass-frame: 35%;
-  --glass-sheet: 8%;
-}
+/* Windows 11 acrylic has no fixed numbers here: the renderer derives the
+ * coverage from the look's tokens so its text stays legible over any
+ * backdrop, and sets `--glass-frame` and `--glass-sheet` inline on <html> in
+ * the same pass that sets `data-glass` (utils/windowGlass.ts and
+ * glassCoverage.ts). Inline, they outrank the macOS rules above. */
 html[data-glass],
 html[data-glass] body,
 html[data-glass] #root {

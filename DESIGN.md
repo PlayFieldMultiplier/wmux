@@ -157,10 +157,24 @@ reads as a second, differently tinted panel.
   about 29% Soft / 14% Clear; strongly hued themes (Stars & Stripes, Red
   Dynasty, Catppuccin) about 64% / 43% so their colour survives the grey
   material; light themes, whose material is milkier, about 14% / 3%.
-  Windows has its own numbers, because acrylic is a different material:
-  dark themes about 34% / 16%; strongly hued themes the macOS 64% / 43%;
-  light themes, whose acrylic reads grey rather than milky, about 60% / 40%
-  so they stay clean. On Windows the level switches the material at
+  Windows derives its numbers at runtime from each theme's tokens
+  (`utils/glassCoverage.ts`), because there the text must stay legible over
+  whatever is behind the window. The frame and the sidebar are composited
+  over the worst backdrop (pure white behind a dark theme, pure black behind
+  a light one), modelling the acrylic as fully see-through: real acrylic
+  blurs and tints, so this is a conservative bound, not a measurement. The
+  frame coverage rises in 1% steps from the level's floor (dark 30% Soft /
+  12% Clear, light 55% / 35%; the sheet stays at 6% / 5% dark, 10% / 8%
+  light) to the smallest value where `--text-main` and `--text-sub` keep
+  4.5:1 and `--text-muted` 3:1 against both the frame and the sidebar. The
+  range stops at 90% (`GLASS_MAX_COVERAGE`), above which the glass no longer
+  reads as glass: a theme that needs more, or whose muted text misses 3:1
+  even opaque, is opaque on Windows as if glass were Off (material none, a
+  solid caption strip), while the setting keeps the user's level. Today that
+  leaves glass on Tint (82%), Zinc (84%), Graphite (85%), Amber Line (82%),
+  Hinomaru (80%) and Taegeuk (81%), with Soft and Clear the same frame
+  coverage because the legibility minimum is above both floors; every other
+  built-in theme is opaque on Windows. On Windows the level switches the material at
   runtime: Off sets the material to none, the opaque frame background and
   a solid `titleBarOverlay` strip; Soft or Clear sets acrylic, a transparent
   background and a transparent strip (a solid one would sit as a band behind
@@ -1768,6 +1782,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-16 | Owner decision: a bot's profile shows Today — each of its limits (turns per hour and day, worker time, running workers, the queue) with what is used of it, and one line on top naming the first that stops it, in a fixed order | A bot has four separate limits plus a queue cap, and the owner could not tell which stopped it: the reviewer had 26 turns left but no worker time and a full queue, and looked simply stuck. The limits stay as they are; they are made visible |
 | 2026-10-18 | Owner decision: photos in Bots messages, from the desktop composer and the phone. A muted picture button beside "+", staged chips and sent thumbnails in Chat view's 2026-09-25 grammar, the full photo in a dialog; no new colour or control style | The owner sends screenshots and photos to bots from the phone; the bot sees the photo itself in its turn, and the desktop draws what was sent the way Chat view already does |
 | 2026-10-20 | Owner decision: window glass on Windows 11 (acrylic). Windows 11 22H2+ gets the acrylic backdrop under the same Off / Soft / Clear setting, switched at runtime, with its own coverage numbers (light looks paint more so acrylic does not read grey) and a transparent caption-button strip; Windows 10, older Windows 11 builds and Linux stay opaque, and the setting says why there. Amends Window glass | A live prototype on Windows 11 showed acrylic blurring the desktop much like macOS vibrancy, staying on while unfocused, with clean caption buttons over a transparent strip; Mica read almost opaque. |
+| 2026-10-21 | Owner decision: Windows glass keeps text legible over any backdrop. On Windows the frame and sheet coverage is derived from each theme's tokens so the secondary text keeps 4.5:1 and the muted text 3:1 (primary 4.5:1) in both the frame and the sidebar over a pure white (dark theme) or pure black (light theme) backdrop seen fully through the acrylic; a theme that cannot within 90% coverage is opaque on Windows. macOS keeps its fixed numbers. Amends Window glass | Measured on Windows 11 build 26200 with a white window behind wmux: the dark Tint sidebar composited to #666668 and the secondary text dropped to about 2.3:1, so the owner could not read the sidebar or titlebar. The fixed numbers assumed dark acrylic stays deep, which it does not over a light backdrop |
 | 2026-10-21 | Owner decision: a pane is linked across PCs by one share from the PC that accepts connections. On the receiving PC the share is a Needs you row of its own (no pane picker on the row; Accept… opens the link dialog with the other PC's pane fixed), counted with link requests, neutral apart from the one attention hairline and badge | Pairing, ticking the pane, a request from the other PC and an accept there took two machine switches; a share is the sharing PC's consent, and the receiver's Accept is its own. The dialog keeps "no pane picker on a request" for the row |
 | 2026-10-21 | The share starts from the pane's menu: **Share this pane with <PC>…** (or **with another PC…** when several joined this one), shown only while a PC has joined. Its dialog names what that PC will see (the pane, its agent, repo and folder), two direction boxes ticked by default, one muted line on what happens next, and Share as the one primary; a reason it cannot share (older wmux, not connected, already linked, already shared with Withdraw) is a muted line, never a colour. When the other PC accepts, a toast says so and the link row names its pane; Unlink hides the pane again unless it was shown before the share or the list was saved since | One action on the sharing PC replaces ticking the pane in Panes to show and accepting a request. The checklist stays for showing panes without a share, with a hint pointing at the menu |
 | 2026-10-21 | Owner decision: Plugins is a rail page (after Git) with a puzzle-piece glyph — a mantle catalog list (Signature, Catalog, Installed, Connectors) beside one detail with the permission list and one primary per state; Signature is a catalog data flag (Office today). Connectors lose their rail item and become the page's Connectors row; the `connectors` route redirects there. Settings › Plugins keeps only a link. Plugin rail items get their catalog glyph instead of the Workspaces one | One home for everything that extends wmux; the signature plugin is seen first; the rail drops an item |
