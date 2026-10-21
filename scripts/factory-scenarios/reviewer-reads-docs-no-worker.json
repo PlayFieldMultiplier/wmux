@@ -1,0 +1,216 @@
+{
+  "name": "reviewer-reads-docs-no-worker",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A repository with no gate; the lead's worker commits one .md file and its PR opens. The reviewer reads it and records a reading-only verdict (evidence {reading: true}) with no verify worker: main records it as docs-only, and the lane counts it and posts a ready-to-merge card. Nothing is installed.",
+  "setup": {
+    "repo": {
+      "gate": false
+    },
+    "worker": {
+      "commit": true,
+      "delayMs": 1500,
+      "fileExt": "md"
+    },
+    "bots": [
+      {
+        "key": "lead",
+        "role": "lead",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "capture": {
+                    "key": "idempotency_key \"(wake:[^\"]+)\""
+                  }
+                },
+                {
+                  "tool": "fanout_start",
+                  "args": {
+                    "idempotency_key": "{{key}}",
+                    "titles": [
+                      "docs: add a note"
+                    ],
+                    "prompt": "Add one Markdown note to the repository.",
+                    "preset": "default"
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "noted"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "verifier",
+        "role": "verifier",
+        "repo": true,
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "pr_read",
+                  "args": {
+                    "pr_number": 1
+                  },
+                  "save": {
+                    "head": "\"head(?:Sha|RefOid)\": \"([0-9a-f]{40})\""
+                  }
+                },
+                {
+                  "tool": "pr_verdict",
+                  "args": {
+                    "pr_number": 1,
+                    "head_sha": "{{head}}",
+                    "verdict": "pass",
+                    "summary": "Read the change: one Markdown note, nothing wrong.",
+                    "evidence": {
+                      "reading": true
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "say": "nothing to do"
+                }
+              ]
+            }
+          ]
+        },
+        "triggers": [
+          {
+            "kind": "pr.opened",
+            "filter": {
+              "authorTrusted": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "waitFor",
+      "label": "repo watch baseline",
+      "cond": {
+        "repoWatch": {
+          "repo": "github.com/acme/app"
+        }
+      },
+      "timeoutMs": 100000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "ask-lead",
+      "post": {
+        "title": "Note",
+        "body": "Please add the note.",
+        "to": "lead"
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "worker pushed its branch",
+      "cond": {
+        "workers": {
+          "event": "commit"
+        }
+      },
+      "timeoutMs": 180000,
+      "required": true
+    },
+    {
+      "do": "gh",
+      "op": "addPr",
+      "fromBranch": "wtask/",
+      "filesFromBranch": true,
+      "pr": {
+        "number": 1,
+        "title": "docs: add a note",
+        "author": "octo",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+          "build"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "pr.opened",
+      "cond": {
+        "facts": {
+          "kind": "pr.opened"
+        }
+      },
+      "timeoutMs": 100000
+    },
+    {
+      "do": "waitFor",
+      "label": "verdict recorded",
+      "cond": {
+        "facts": {
+          "kind": "verdict.recorded"
+        }
+      },
+      "timeoutMs": 300000
+    },
+    {
+      "do": "waitFor",
+      "label": "lane outcome",
+      "cond": {
+        "any": [
+          {
+            "facts": {
+              "kind": "merge.refused"
+            }
+          },
+          {
+            "cards": {
+              "kind": "status",
+              "threadPrefix": "pr:"
+            }
+          }
+        ]
+      },
+      "timeoutMs": 120000
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 3000
+      },
+      "timeoutMs": 60000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "ledger",
+      "verdicts",
+      "ghCalls",
+      "workers"
+    ],
+    "pr": 1,
+    "verifier": "verifier",
+    "reading": "docs-only"
+  }
+}

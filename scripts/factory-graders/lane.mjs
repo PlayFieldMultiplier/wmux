@@ -60,6 +60,30 @@ export function laneReadyCard(snap, expect) {
   ];
 }
 
+/** reviewer-reads-docs-no-worker: a reading-only PASS on a change no gate
+ *  grades, recorded with no verify worker, counted by the lane. */
+export function reviewerReadsNoWorker(snap, expect) {
+  const n = expect.pr ?? 1;
+  const head = snap.saved?.[`pr${n}Head`];
+  const vid = botId(snap, expect.verifier);
+  const facts = factsOfKind(snap, 'verdict.recorded').filter((f) => f.ref?.pr === n && f.ref?.headSha === head);
+  const rec = arr(snap.verdicts).find((v) => v.prNumber === n && v.headSha === head && v.principal?.botId === vid) ?? null;
+  const verifierTasks = arr(snap.ledger).filter((e) => e.dispatch?.origin?.botId === vid);
+  const installs = arr(snap.workers).filter((e) => e.event === 'deps');
+  const ready = cardsOfKind(snap, 'status').filter((c) => c.actor?.kind === 'system' && c.threadId === `pr:github.com/acme/app#${n}` && /ready to merge/i.test(c.title));
+  const refused = factsOfKind(snap, 'merge.refused').filter((f) => f.ref?.pr === n);
+  const opened = factsOfKind(snap, 'pr.opened').find((f) => f.ref?.pr === n);
+  const took = opened && facts[0] ? `${Math.round((facts[0].at - opened.at) / 100) / 10}s from pr.opened to the verdict` : 'no timing';
+  return [
+    criterion('verdict_fact', facts.length === 1 && facts[0].ref?.botId === vid, `${facts.length} verdict.recorded fact(s) at ${String(head).slice(0, 7)}; ${took}`),
+    criterion('reading_only_pass', !!rec && rec.version === 2 && rec.verdict === 'pass' && rec.evidence?.reading === expect.reading && rec.evidence?.gateHeadSha === head,
+      rec ? `${rec.verdict}, evidence ${JSON.stringify(rec.evidence)}` : 'no verdict by the verifier'),
+    criterion('no_verify_worker', verifierTasks.length === 0 && installs.length === 0, `${verifierTasks.length} task(s) by the verifier, ${installs.length} install(s)`),
+    criterion('ready_card_in_pr_thread', ready.length === 1 && ready[0].title.includes(String(head).slice(0, 7)), ready.map((c) => c.title).join(' | ') || 'none'),
+    criterion('not_refused', refused.length === 0, refused.map((f) => f.payload?.reason).join(' | ') || 'none'),
+  ];
+}
+
 /** 16. stale-head-reverify. */
 export function staleHeadReverify(snap, expect) {
   const n = expect.pr ?? 1;

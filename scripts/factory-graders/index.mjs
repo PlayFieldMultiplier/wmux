@@ -41,6 +41,7 @@ export const GRADERS = {
   'researcher-dispatch-real': content.researcherDispatchReal,
   'lane-ready-card': lane.laneReadyCard,
   'lane-owner-login-trusted': lane.laneReadyCard,
+  'reviewer-reads-docs-no-worker': lane.reviewerReadsNoWorker,
   'human-correction-plan-decline': handoffs.humanCorrectionPlanDecline,
   'interrupted-wake-after-restart': wakes.interruptedAfterRestart,
   'repowatch-baseline-first-poll': lane.repoWatchBaseline,

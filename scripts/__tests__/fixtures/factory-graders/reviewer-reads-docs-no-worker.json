@@ -1,0 +1,1132 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "reviewer-reads-docs-no-worker",
+  "run": 1,
+  "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+  "botKeys": {
+   "lead": "bot-f1d69d2a",
+   "verifier": "bot-022f5b36"
+  },
+  "injected": [
+   {
+    "label": "ask-lead",
+    "kind": "card",
+    "id": "c-mvi40htc15f45d3ce3",
+    "threadId": "general",
+    "at": 1792586995184
+   }
+  ],
+  "actions": [
+   {
+    "at": 1792586938432,
+    "do": "waitFor",
+    "label": "repo watch baseline",
+    "ok": true,
+    "doneAt": 1792586995176
+   },
+   {
+    "at": 1792586995184,
+    "do": "post",
+    "label": "ask-lead",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mvi40htc15f45d3ce3",
+      "seq": 1,
+      "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1792586995248,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Note",
+      "body": "Please add the note.",
+      "refs": {
+       "botId": "bot-f1d69d2a",
+       "botIds": [
+        "bot-f1d69d2a"
+       ]
+      }
+     },
+     "addressee": {
+      "botId": "bot-f1d69d2a",
+      "role": "lead"
+     },
+     "wakeId": "w-mvi40hto-022e9347",
+     "addressees": [
+      {
+       "botId": "bot-f1d69d2a",
+       "role": "lead",
+       "wakeId": "w-mvi40hto-022e9347"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1792586995340,
+    "do": "waitFor",
+    "label": "worker pushed its branch",
+    "ok": true,
+    "doneAt": 1792587011690
+   },
+   {
+    "at": 1792587011690,
+    "do": "gh",
+    "op": "addPr"
+   },
+   {
+    "at": 1792587011802,
+    "do": "waitFor",
+    "label": "pr.opened",
+    "ok": true,
+    "doneAt": 1792587055588
+   },
+   {
+    "at": 1792587055588,
+    "do": "waitFor",
+    "label": "verdict recorded",
+    "ok": true,
+    "doneAt": 1792587062196
+   },
+   {
+    "at": 1792587062197,
+    "do": "waitFor",
+    "label": "lane outcome",
+    "ok": true,
+    "doneAt": 1792587062719
+   },
+   {
+    "at": 1792587062720,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1792587065756
+   }
+  ],
+  "harnessErrors": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ledger": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvals": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "timeouts": [],
+  "saved": {
+   "pr1Head": "c22512ff9118c19ad253c08b359737d73d70d179",
+   "pr1Branch": "wtask/docs-add-a-note-tgcdv17m"
+  },
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-21T12-48-46-verify-f9c325a1",
+    "evidenceDir": "/checkout/.claude/skills/verify-wmux/evidence/2026-10-21T12-48-46-verify-f9c325a1"
+   }
+  ],
+  "records": [],
+  "facts": [
+   {
+    "id": "f-0mvi40htc-4496bf2746ba",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1792586995248,
+    "dedupeKey": "human.message:c-mvi40htc15f45d3ce3:bot-f1d69d2a",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "ref": {
+     "botId": "bot-f1d69d2a",
+     "messageId": "c-mvi40htc15f45d3ce3:bot-f1d69d2a"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Please add the note.",
+     "cardId": "c-mvi40htc15f45d3ce3",
+     "threadId": "general",
+     "source": "desktop"
+    }
+   },
+   {
+    "id": "f-0mvi40vzo-2676269b37f5",
+    "seq": 2,
+    "kind": "task.done",
+    "at": 1792587013620,
+    "dedupeKey": "task.done:wtask-mvi40pfc-tgcdv17m",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "ref": {
+     "taskId": "wtask-mvi40pfc-tgcdv17m",
+     "botId": "bot-f1d69d2a"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "taskWorkspaceId": "ws-62ffbd01-1e08-4b67-93bd-420a534b4c0d",
+     "title": "docs: add a note",
+     "status": "review_requested",
+     "from": "working",
+     "by": "worker",
+     "summary": "fake worker: review_requested for wtask-mvi40pfc-tgcdv17m"
+    }
+   },
+   {
+    "id": "f-0mvi41ddo-34ec532fa782",
+    "seq": 3,
+    "kind": "bot.notice",
+    "at": 1792587036156,
+    "dedupeKey": "bot.notice:bot-f1d69d2a:worker.started:wtask-mvi40pfc-tgcdv17m",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "ref": {
+     "botId": "bot-f1d69d2a",
+     "messageId": "worker.started:wtask-mvi40pfc-tgcdv17m",
+     "taskId": "wtask-mvi40pfc-tgcdv17m"
+    },
+    "actor": {
+     "kind": "system"
+    },
+    "payload": {
+     "topic": "worker.started",
+     "title": "Your worker for \"docs: add a note\" started (task wtask-mvi40pfc-tgcdv17m).",
+     "body": "It reports in its ledger row; you are woken when it finishes or needs input.",
+     "threadId": "general",
+     "guest": false
+    }
+   },
+   {
+    "id": "f-0mvi41s1g-dd30a25b45db",
+    "seq": 4,
+    "kind": "pr.opened",
+    "at": 1792587055156,
+    "dedupeKey": "pr.opened:github.com/acme/app#1",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+    },
+    "actor": {
+     "kind": "github",
+     "id": "octo"
+    },
+    "payload": {
+     "author": "octo",
+     "title": "docs: add a note",
+     "headRefName": "wtask/docs-add-a-note-tgcdv17m",
+     "isCrossRepository": false,
+     "isDraft": false,
+     "labels": [],
+     "mergeStateStatus": "CLEAN",
+     "checks": "pass"
+    }
+   },
+   {
+    "id": "f-0mvi41s1g-8e116cdac378",
+    "seq": 5,
+    "kind": "ci.green",
+    "at": 1792587055156,
+    "dedupeKey": "ci.green:github.com/acme/app#1:c22512ff9118c19ad253c08b359737d73d70d179",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+    },
+    "actor": {
+     "kind": "github",
+     "id": "octo"
+    },
+    "payload": {
+     "author": "octo",
+     "title": "docs: add a note",
+     "headRefName": "wtask/docs-add-a-note-tgcdv17m",
+     "isCrossRepository": false,
+     "isDraft": false,
+     "labels": [],
+     "mergeStateStatus": "CLEAN",
+     "checks": "pass"
+    }
+   },
+   {
+    "id": "f-0mvi41x8f-e1c28d3a4015",
+    "seq": 6,
+    "kind": "verdict.recorded",
+    "at": 1792587061887,
+    "dedupeKey": "verdict.recorded:github.com/acme/app#1:c22512ff9118c19ad253c08b359737d73d70d179:bot-022f5b36",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "repoKey": "github.com/acme/app",
+    "ref": {
+     "pr": 1,
+     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+     "botId": "bot-022f5b36",
+     "taskId": "reading-only"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-022f5b36"
+    },
+    "payload": {
+     "verdict": "pass",
+     "summary": "Read the change: one Markdown note, nothing wrong.",
+     "agent": "bot:verifier",
+     "gateHeadSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mvi40hto-022e9347",
+    "botId": "bot-f1d69d2a",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "reason": {
+     "kind": "human",
+     "text": "Please add the note.",
+     "source": "desktop",
+     "clientMessageId": "c-mvi40htc15f45d3ce3",
+     "runId": "run-c-mvi40htc15f45d3ce3"
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1792586995260,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvi40wk5-722b9873",
+    "botId": "bot-f1d69d2a",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "task.gated:wtask-mvi40pfc-tgcdv17m@3"
+     ],
+     "trigger": {
+      "kind": "task.done"
+     }
+    },
+    "threadId": "task:wtask-mvi40pfc-tgcdv17m",
+    "priority": 1,
+    "enqueuedAt": 1792587014357,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvi41s1j-5101166c",
+    "botId": "bot-022f5b36",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "reason": {
+     "kind": "facts",
+     "factIds": [
+      "f-0mvi41s1g-dd30a25b45db"
+     ],
+     "trigger": {
+      "kind": "pr.opened",
+      "filter": {
+       "authorTrusted": true
+      }
+     }
+    },
+    "threadId": "pr:github.com/acme/app#1",
+    "priority": 2,
+    "enqueuedAt": 1792587055159,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": null,
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-f1d69d2a",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "role": "lead",
+    "template": "developer",
+    "name": "Lead",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/user/.local/node/bin/node",
+     "args": [
+      "/checkout/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/stub/lead.json",
+      "--log",
+      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/logs/stub-lead.jsonl"
+     ]
+    },
+    "workerAgent": {
+     "agent": "claude",
+     "model": "opus"
+    },
+    "triggers": [
+     {
+      "kind": "task.done"
+     },
+     {
+      "kind": "task.failed"
+     },
+     {
+      "kind": "task.input_required"
+     },
+     {
+      "kind": "merge.refused"
+     }
+    ],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app"
+    },
+    "hue": 5,
+    "enabled": true,
+    "createdAt": 1792586938373,
+    "updatedAt": 1792586938373
+   },
+   {
+    "version": 1,
+    "id": "bot-022f5b36",
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "role": "verifier",
+    "template": "reviewer",
+    "name": "Verifier",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/user/.local/node/bin/node",
+     "args": [
+      "/checkout/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/stub/verifier.json",
+      "--log",
+      "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/logs/stub-verifier.jsonl"
+     ]
+    },
+    "workerAgent": {
+     "agent": "claude",
+     "model": "opus"
+    },
+    "triggers": [
+     {
+      "kind": "pr.opened",
+      "filter": {
+       "authorTrusted": true
+      }
+     }
+    ],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app"
+    },
+    "hue": 2,
+    "enabled": true,
+    "createdAt": 1792586938411,
+    "updatedAt": 1792586938411
+   }
+  ],
+  "ledger": [
+   {
+    "schemaVersion": 1,
+    "id": "wtask-mvi40pfc-tgcdv17m",
+    "taskWorkspaceId": "ws-62ffbd01-1e08-4b67-93bd-420a534b4c0d",
+    "ownerWorkspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "title": "docs: add a note",
+    "status": "review_requested",
+    "rev": 3,
+    "updatedAt": 1792587014353,
+    "updatedBy": {
+     "kind": "system",
+     "workspaceId": "ws-daemon"
+    },
+    "dispatch": {
+     "origin": {
+      "kind": "bot",
+      "botId": "bot-f1d69d2a",
+      "tainted": false,
+      "guest": false
+     },
+     "preset": "default",
+     "repoKey": "github.com/acme/app",
+     "gitCommonDir": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app/.git",
+     "gitWorktreeDir": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app/.git/worktrees/docs-add-a-note-tgcdv17m",
+     "originPin": "ssh://git@github.com/acme/app.git",
+     "baseOid": "9f1ed557290370cf7385e9f80458497c006c66ad"
+    },
+    "summary": "fake worker: review_requested for wtask-mvi40pfc-tgcdv17m",
+    "reportedAtRev": 2,
+    "gate": {
+     "exitCode": 0,
+     "tail": "this project declares no verify script and no npm lint/test scripts, so there is no gate to run",
+     "at": 1792587014352,
+     "command": "none",
+     "recordedBy": "system",
+     "skipped": "no_gate_command",
+     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+     "reportRev": 2
+    }
+   }
+  ],
+  "verdicts": [
+   {
+    "version": 2,
+    "repoKey": "github.com/acme/app",
+    "prNumber": 1,
+    "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+    "verdict": "pass",
+    "principal": {
+     "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+     "botId": "bot-022f5b36",
+     "agent": "bot:verifier"
+    },
+    "evidence": {
+     "taskId": "reading-only",
+     "gateHeadSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+     "reading": "docs-only"
+    },
+    "summary": "Read the change: one Markdown note, nothing wrong.",
+    "at": 1792587061887
+   }
+  ],
+  "effects": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mvi40htc15f45d3ce3",
+    "seq": 1,
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1792586995248,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Note",
+    "body": "Please add the note.",
+    "refs": {
+     "botId": "bot-f1d69d2a",
+     "botIds": [
+      "bot-f1d69d2a"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mvi40vzw3bf750cd17",
+    "seq": 2,
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "threadId": "task:wtask-mvi40pfc-tgcdv17m",
+    "kind": "fact",
+    "at": 1792587013620,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Task reported \u00b7 in review: docs: add a note",
+    "body": "fake worker: review_requested for wtask-mvi40pfc-tgcdv17m",
+    "refs": {
+     "taskId": "wtask-mvi40pfc-tgcdv17m",
+     "botId": "bot-f1d69d2a",
+     "factId": "f-0mvi40vzo-2676269b37f5"
+    },
+    "closes": true,
+    "notice": {
+     "code": "task.reported",
+     "args": {
+      "title": "docs: add a note"
+     }
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mvi40wk439bcffa1a0",
+    "seq": 3,
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "threadId": "task:wtask-mvi40pfc-tgcdv17m",
+    "kind": "fact",
+    "at": 1792587014356,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Gate skipped (no_gate_command): task left open",
+    "body": "this project declares no verify script and no npm lint/test scripts, so there is no gate to run",
+    "notice": {
+     "code": "gate.skipped",
+     "args": {
+      "reason": "no_gate_command"
+     }
+    },
+    "clientPostId": "task.gated:wtask-mvi40pfc-tgcdv17m@3"
+   },
+   {
+    "version": 1,
+    "id": "c-mvi41x8n21bd140028",
+    "seq": 4,
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "fact",
+    "at": 1792587061887,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Verdict pass for #1 at c22512f by Verifier",
+    "body": "Read the change: one Markdown note, nothing wrong.",
+    "refs": {
+     "pr": 1,
+     "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+     "taskId": "reading-only",
+     "botId": "bot-022f5b36",
+     "factId": "f-0mvi41x8f-e1c28d3a4015"
+    },
+    "notice": {
+     "code": "verdict.recorded",
+     "args": {
+      "verdict": "pass",
+      "pr": 1,
+      "sha": "c22512f",
+      "bot": "Verifier"
+     }
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mvi41xh21d4c38b51e",
+    "seq": 5,
+    "workspaceId": "ws-7d409530-f9e4-494d-99be-071d574f2e42",
+    "threadId": "pr:github.com/acme/app#1",
+    "kind": "status",
+    "at": 1792587062198,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Ready to merge #1 at c22512f: every lane predicate passed",
+    "body": "Verified by bot-022f5b36 at c22512f; CI green.\nLane auto-merge is off: merge it from the PR when you are ready.",
+    "refs": {
+     "pr": 1
+    },
+    "clientPostId": "lane-ready:github.com/acme/app#1:c22512ff9118c19ad253c08b359737d73d70d179"
+   }
+  ],
+  "stub": {},
+  "workers": [
+   {
+    "at": 1792586933767,
+    "pid": 40647,
+    "cwd": "/home/user",
+    "event": "start",
+    "taskId": null,
+    "agent": "claude",
+    "rulesPresent": false,
+    "strict": false,
+    "mcpServers": null,
+    "allow": [],
+    "codexMcp": {
+     "featuresOff": [],
+     "serversOff": [],
+     "tables": []
+    },
+    "args": [
+     "--version"
+    ]
+   },
+   {
+    "at": 1792586933768,
+    "pid": 40647,
+    "cwd": "/home/user",
+    "event": "no-task-id"
+   },
+   {
+    "at": 1792586933830,
+    "pid": 40648,
+    "cwd": "/home/user",
+    "event": "start",
+    "taskId": null,
+    "agent": "claude",
+    "rulesPresent": false,
+    "strict": false,
+    "mcpServers": null,
+    "allow": [],
+    "codexMcp": {
+     "featuresOff": [],
+     "serversOff": [],
+     "tables": []
+    },
+    "args": [
+     "auth",
+     "status",
+     "--json"
+    ]
+   },
+   {
+    "at": 1792586933830,
+    "pid": 40648,
+    "cwd": "/home/user",
+    "event": "no-task-id"
+   },
+   {
+    "at": 1792586934126,
+    "pid": 40650,
+    "cwd": "/home/user",
+    "event": "start",
+    "taskId": null,
+    "agent": "codex",
+    "rulesPresent": false,
+    "strict": false,
+    "mcpServers": null,
+    "allow": [],
+    "codexMcp": {
+     "featuresOff": [],
+     "serversOff": [],
+     "tables": []
+    },
+    "args": [
+     "login",
+     "status"
+    ]
+   },
+   {
+    "at": 1792586934127,
+    "pid": 40650,
+    "cwd": "/home/user",
+    "event": "no-task-id"
+   },
+   {
+    "at": 1792587008888,
+    "pid": 42916,
+    "cwd": "/home/user/.wmux-verify-f9c325a1/worktrees/11face08056f/docs-add-a-note-tgcdv17m",
+    "event": "start",
+    "taskId": "wtask-mvi40pfc-tgcdv17m",
+    "agent": "claude",
+    "rulesPresent": false,
+    "strict": true,
+    "mcpServers": [
+     "wmux"
+    ],
+    "allow": [],
+    "codexMcp": {
+     "featuresOff": [],
+     "serversOff": [],
+     "tables": []
+    },
+    "args": [
+     "--session-id",
+     "c15cd59e-08a2-4721-ac89-474c768265e0",
+     "--settings=/home/user/.wmux-verify-f9c325a1/factory/worker-settings/c47239d2316f.json",
+     "--mcp-config=/home/user/.wmux-verify-f9c325a1/factory/worker-mcp/bd53da141c3b.json",
+     "--strict-mcp-config",
+     "--setting-sources=project",
+     "--model",
+     "opus",
+     "# Task worker\n\nYou are a task worker dispatched by a factory bot. Your worktree is a fresh branch from origin's default branch.\n\nWhat you can do here: implement the task below within the files it name",
+     "--dangerously-skip-permissions",
+     "--allowedTools",
+     "mcp__wmux__ledger_update,mcp__wmux__task_push,mcp__wmux__task_fetch,mcp__wmux__channel_read,mcp__wmux__channel_unread,mcp__wmux__channel_ack,mcp__wmux__a2a_task_query,mcp__wmux__a2a_whoami",
+     "--disallowedTools",
+     "mcp__wmux__fanout_start,mcp__wmux__terminal_send,mcp__wmux__terminal_send_key,mcp__wmux__send_message,mcp__wmux__a2a_task_send,mcp__wmux__surface_new,mcp__wmux__pane_split,mcp__wmux__browser_*"
+    ]
+   },
+   {
+    "at": 1792587011582,
+    "pid": 42916,
+    "cwd": "/home/user/.wmux-verify-f9c325a1/worktrees/11face08056f/docs-add-a-note-tgcdv17m",
+    "event": "commit",
+    "add": 0,
+    "commit": 0,
+    "push": 0,
+    "pushErr": "",
+    "branch": "wtask/docs-add-a-note-tgcdv17m",
+    "head": "c22512ff9118c19ad253c08b359737d73d70d179"
+   },
+   {
+    "at": 1792587013632,
+    "pid": 42916,
+    "cwd": "/home/user/.wmux-verify-f9c325a1/worktrees/11face08056f/docs-add-a-note-tgcdv17m",
+    "event": "ledger_update",
+    "ok": true,
+    "text": "{\n  \"ok\": true,\n  \"entry\": {\n    \"schemaVersion\": 1,\n    \"id\": \"wtask-mvi40pfc-tgcdv17m\",\n    \"taskWorkspaceId\": \"ws-62ffbd01-1e08-4b67-93bd-420a534b4c0d\",\n    \"ownerWorkspaceId\": \"ws-7d409530-f9e4-494d-99be-071d574f2e42\",\n    \"title\": \"docs: add a note\",\n    \"status\": \"review_requested\",\n    \"rev\": 2,\n    \"updatedAt\": 1792587013620,\n    \"updatedBy\": {\n      \"kind\": \"worker\",\n      \"workspaceId\": \"ws-62ffbd01-1e08-4b67-93bd-420a534b4c0d\"\n    },\n    \"dispatch\": {\n      \"origin\": {\n        \"kind\": \"bot\",\n        \"botId\": \"bot-f1d69d2a\",\n        \"tainted\": false,\n        \"guest\": false\n      },\n      \"preset\": \"default\",\n      \"repoKey\": \"github.com/acme/app\",\n      \"gitCommonDir\": \"/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app/.git\","
+   }
+  ],
+  "gh": {
+   "calls": [
+    {
+     "at": 1792586935729,
+     "argv": [
+      "api",
+      "--hostname",
+      "github.com",
+      "user",
+      "--jq",
+      ".login"
+     ],
+     "cwd": "/home/user",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1792586995006,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti\u2026",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app"
+     ],
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1792587004225,
+     "argv": [
+      "repo",
+      "view",
+      "--json",
+      "defaultBranchRef",
+      "--jq",
+      ".defaultBranchRef.name"
+     ],
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "handled": false,
+     "exit": 1,
+     "error": "fake-gh: unsupported repo"
+    },
+    {
+     "at": 1792587005995,
+     "argv": [
+      "pr",
+      "view",
+      "--json",
+      "number,state,isDraft,url,mergeable,statusCheckRollup,headRefOid"
+     ],
+     "cwd": "/home/user/.wmux-verify-f9c325a1/worktrees/11face08056f/docs-add-a-note-tgcdv17m",
+     "handled": true,
+     "exit": 1,
+     "error": "no pull requests found for branch \"wtask/docs-add-a-note-tgcdv17m\""
+    },
+    {
+     "at": 1792587010940,
+     "argv": [
+      "repo",
+      "view",
+      "github.com/acme/app",
+      "--json",
+      "defaultBranchRef",
+      "--jq",
+      ".defaultBranchRef.name"
+     ],
+     "cwd": "/tmp",
+     "handled": false,
+     "exit": 1,
+     "error": "fake-gh: unsupported repo"
+    },
+    {
+     "at": 1792587013758,
+     "argv": [
+      "repo",
+      "view",
+      "github.com/acme/app",
+      "--json",
+      "defaultBranchRef"
+     ],
+     "cwd": "/home/user/.wmux-verify-f9c325a1",
+     "handled": false,
+     "exit": 1,
+     "error": "fake-gh: unsupported repo"
+    },
+    {
+     "at": 1792587055146,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!) {\n  rateLimit { cost remaining }\n  repository(owner: $owner, name: $repo) {\n    open: pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {\n      totalCount\n      pageInfo { hasNextPage endCursor }\n      nodes { number ti\u2026",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app"
+     ],
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1792587061706,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      \u2026",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1792587061873,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      \u2026",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "handled": true,
+     "exit": 0
+    },
+    {
+     "at": 1792587062078,
+     "argv": [
+      "api",
+      "graphql",
+      "--hostname",
+      "github.com",
+      "-f",
+      "query=query($owner: String!, $repo: String!, $number: Int!) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $number) {\n      number title state isDraft isCrossRepository mergeable mergeStateStatus\n      headRefOid headRefName baseRefName\n      mergedAt mergeCommit { oid }\n      \u2026",
+      "-f",
+      "owner=acme",
+      "-f",
+      "repo=app",
+      "-F",
+      "number=1"
+     ],
+     "cwd": "/tmp/wmux-fsmoke-reviewer-reads-docs-no-w-x8RFLm/app",
+     "handled": true,
+     "exit": 0
+    }
+   ],
+   "state": {
+    "login": "octo",
+    "repos": {
+     "github.com/acme/app": {
+      "prs": [
+       {
+        "state": "OPEN",
+        "isDraft": false,
+        "baseRefName": "main",
+        "labels": [],
+        "createdAt": "2026-10-21T12:50:11.691Z",
+        "checks": "SUCCESS",
+        "requiredChecks": [
+         "build"
+        ],
+        "files": [
+         "worker-wtask-mvi40pfc-tgcdv17m.md"
+        ],
+        "mergeStateStatus": "CLEAN",
+        "mergeable": "MERGEABLE",
+        "author": "octo",
+        "number": 1,
+        "title": "docs: add a note",
+        "headRefName": "wtask/docs-add-a-note-tgcdv17m",
+        "headSha": "c22512ff9118c19ad253c08b359737d73d70d179",
+        "changeTypes": {
+         "worker-wtask-mvi40pfc-tgcdv17m.md": "ADDED"
+        }
+       }
+      ],
+      "issues": []
+     }
+    }
+   }
+  }
+ },
+ "fail": [
+  {
+   "why": "the verdict rests on a verify task, not on reading",
+   "failing": [
+    "reading_only_pass"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "verdicts.0.evidence",
+     "value": {
+      "taskId": "wtask-x",
+      "gateHeadSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the reviewer started a verify worker",
+   "failing": [
+    "no_verify_worker"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "ledger",
+     "value": {
+      "id": "wtask-v",
+      "dispatch": {
+       "origin": {
+        "kind": "bot",
+        "botId": "bot-022f5b36"
+       },
+       "preset": "verify",
+       "checkout": {
+        "sha": "c22512ff9118c19ad253c08b359737d73d70d179",
+        "detached": true
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "why": "a worker installed dependencies",
+   "failing": [
+    "no_verify_worker"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "workers",
+     "value": {
+      "event": "deps",
+      "nodeModules": true
+     }
+    }
+   ]
+  },
+  {
+   "why": "no ready card",
+   "failing": [
+    "ready_card_in_pr_thread"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.4"
+    }
+   ]
+  },
+  {
+   "why": "the lane refused the merge",
+   "failing": [
+    "not_refused"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "facts",
+     "value": {
+      "kind": "merge.refused",
+      "at": 1,
+      "ref": {
+       "pr": 1,
+       "headSha": "c22512ff9118c19ad253c08b359737d73d70d179"
+      },
+      "payload": {
+       "reason": "verifier-pass-at-head:gate-required"
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

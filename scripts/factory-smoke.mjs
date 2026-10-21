@@ -178,19 +178,23 @@ function git(args, cwd, env = {}) {
 
 const GIT_ID = ['-c', 'user.name=factory-smoke', '-c', 'user.email=factory-smoke@example.invalid'];
 
-/** A bare "GitHub" repo plus the bot's clone of it over the ssh stand-in. */
+/** A bare "GitHub" repo plus the bot's clone of it over the ssh stand-in.
+ *  `setup.repo: {gate: false}`: a repository that declares no gate (no
+ *  package.json, as a Python project's checkout would be to wmux). */
 function makeRepo(ctx) {
   const origin = path.join(ctx.tmp, 'origin.git');
   const seed = path.join(ctx.tmp, 'seed');
   const work = path.join(ctx.tmp, 'app');
   git(['init', '-q', '--bare', '-b', 'main', origin], ctx.tmp);
   git(['init', '-q', '-b', 'main', seed], ctx.tmp);
-  fs.writeFileSync(path.join(seed, 'package.json'), `${JSON.stringify({
-    name: 'factory-smoke-app',
-    version: '1.0.0',
-    private: true,
-    scripts: { lint: 'node -e "process.exit(0)"', test: 'node -e "process.exit(0)"' },
-  }, null, 2)}\n`);
+  if (ctx.sc.setup?.repo?.gate !== false) {
+    fs.writeFileSync(path.join(seed, 'package.json'), `${JSON.stringify({
+      name: 'factory-smoke-app',
+      version: '1.0.0',
+      private: true,
+      scripts: { lint: 'node -e "process.exit(0)"', test: 'node -e "process.exit(0)"' },
+    }, null, 2)}\n`);
+  }
   fs.writeFileSync(path.join(seed, 'README.md'), '# factory smoke scratch repo\n');
   fs.writeFileSync(path.join(seed, '.gitignore'), 'node_modules/\n');
   git(['add', '-A'], seed);
@@ -268,6 +272,7 @@ function prepare(ctx) {
     `export FACTORY_E2E_WORKER_DELAY_MS="${Number(worker.delayMs ?? 1500)}"`,
     `export FACTORY_E2E_WORKER_STATUS="${worker.status ?? 'review_requested'}"`,
     `export FACTORY_E2E_WORKER_COMMIT="${worker.commit ? '1' : '0'}"`,
+    `export FACTORY_E2E_WORKER_FILE_EXT="${/^[a-z0-9]{1,8}$/.test(String(worker.fileExt ?? '')) ? worker.fileExt : 'txt'}"`,
     // A scenario's test knobs (main honours them only on an isolated instance).
     ...Object.entries(sc.setup?.env ?? {})
       .filter(([k, v]) => /^WMUX_TEST_[A-Z0-9_]+$/.test(k) && /^[A-Za-z0-9_.:-]{0,200}$/.test(String(v)))
@@ -485,6 +490,14 @@ function ghEdit(ctx, a) {
         if (!b) throw new HarnessError(`no origin branch under ${a.fromBranch}`);
         pr.headRefName = b.name;
         pr.headSha = b.sha;
+        // `filesFromBranch`: the PR lists the branch's own changes, with
+        // their change types, as GitHub does.
+        if (a.filesFromBranch === true) {
+          const rows = git(['diff', '--name-status', '--no-renames', `main...${b.sha}`], ctx.repo.origin).split('\n').filter(Boolean).map((l) => l.split('\t'));
+          const TYPE = { A: 'ADDED', M: 'MODIFIED', D: 'DELETED' };
+          pr.files = rows.map((r) => r[1]);
+          pr.changeTypes = Object.fromEntries(rows.map((r) => [r[1], TYPE[r[0]] ?? 'MODIFIED']));
+        }
       } else if (!pr.headSha) {
         pr.headSha = git(['rev-parse', 'HEAD'], ctx.repo.seed);
         pr.headRefName ??= 'feature';

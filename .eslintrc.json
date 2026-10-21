@@ -189,14 +189,15 @@
     },
     {
       "files": [
-        "src/main/factory/botRepoGitServer.ts"
+        "src/main/factory/botRepoGitServer.ts",
+        "src/main/factory/__tests__/botRepoGit.os.test.ts"
       ],
       "rules": {
         "import/no-unresolved": [
           "error",
           {
             "ignore": [
-              "^@modelcontextprotocol/sdk/server/mcp\\.js$"
+              "^@modelcontextprotocol/sdk/(?:server/mcp|client/index|inMemory)\\.js$"
             ]
           }
         ]
