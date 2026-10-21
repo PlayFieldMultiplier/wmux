@@ -157,6 +157,31 @@ describe('DaemonRespawnController.bootstrap', () => {
     expect(h.events).toEqual([]);
   });
 
+  it('records the connected daemon pid from the connect-time ping, without asking again', async () => {
+    const h = makeHarness({ config: { healthIntervalMs: 0 } });
+    const c1 = new FakeDaemonClient();
+    c1.rpcImpl = async () => ({ status: 'ok', pid: 5678 });
+    h.clientQueue.push(c1);
+
+    await h.controller.bootstrap();
+    // A daemon too busy to answer later does not change what is known.
+    c1.rpcImpl = async () => { throw new Error('RPC timeout: daemon.ping'); };
+    expect(h.controller.connectedDaemonPid).toBe(5678);
+
+    c1.fireDisconnect();
+    expect(h.controller.connectedDaemonPid).toBeNull();
+  });
+
+  it('falls back to the launcher pid when the ping reports none', async () => {
+    const h = makeHarness({ config: { healthIntervalMs: 0 } });
+    const c1 = new FakeDaemonClient();
+    h.clientQueue.push(c1);
+
+    await h.controller.bootstrap();
+
+    expect(h.controller.connectedDaemonPid).toBe(1234);
+  });
+
   it('returns null and logs when control pipe connect fails', async () => {
     const h = makeHarness();
     const c1 = new FakeDaemonClient();

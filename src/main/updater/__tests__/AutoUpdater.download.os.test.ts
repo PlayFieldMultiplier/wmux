@@ -16,7 +16,7 @@ const GOOD_SHA = createHash('sha256').update(INSTALLER_BODY).digest('hex');
 /**
  * Quit hooks every AutoUpdater requires (see AutoUpdaterHooks).
  *
- * `getDaemonPid` returns 4243, which is one of the two pids the mocked
+ * `getDaemon` reports 4243 as connected, which is one of the two pids the mocked
  * enumeration reports. That is deliberate: it is what lets a test see the
  * daemon being EXCLUDED from the force-kill list (it gets the graceful
  * shutdown instead). A null here would silently pass the exclusion assertion
@@ -27,7 +27,7 @@ function quitHooks() {
     onBeforeInstallQuit: vi.fn(),
     onInstallQuitAborted: vi.fn(),
     onInstallRequiresFullShutdown: vi.fn(),
-    getDaemonPid: vi.fn((): number | null => 4243),
+    getDaemon: vi.fn(() => ({ connected: true, connectedPid: 4243 as number | null, pidFilePid: 4243 as number | null })),
   };
 }
 

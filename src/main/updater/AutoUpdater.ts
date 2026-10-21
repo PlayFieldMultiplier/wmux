@@ -261,9 +261,9 @@ export interface AutoUpdaterHooks {
    */
   onInstallRequiresFullShutdown: () => void;
   /**
-   * The pid of the daemon this app is connected to, or null when it cannot
-   * be determined. main asks the daemon itself (daemon.ping reports its pid)
-   * and falls back to the pid file.
+   * Which daemon this app is connected to. Read without asking the daemon
+   * anything: the pid comes from what was recorded when the connection was
+   * made, so a daemon too busy to answer at install time is still known.
    *
    * Injected rather than read here so this module stays free of the daemon
    * config import: pulling `daemon/config` into the updater crashed the
@@ -275,7 +275,7 @@ export interface AutoUpdaterHooks {
    * scrollback. Any other daemon under the install root is not stopped by
    * anything and stays on the kill list.
    */
-  getDaemonPid: () => number | null | Promise<number | null>;
+  getDaemon: () => DaemonIdentity;
   /**
    * The persisted auto-update toggle, read straight from session.json (#1250).
    *
@@ -290,6 +290,16 @@ export interface AutoUpdaterHooks {
    * A null/undefined means "nothing persisted" and leaves the default.
    */
   readAutoUpdateEnabled?: () => boolean | null;
+}
+
+/** What main knows about its daemon (see AutoUpdaterHooks.getDaemon). */
+export interface DaemonIdentity {
+  /** A daemon client is connected right now. */
+  connected: boolean;
+  /** The pid recorded when that connection was made; null when not connected or none was reported. */
+  connectedPid: number | null;
+  /** daemon.pid, the fallback; null when it cannot be read. */
+  pidFilePid: number | null;
 }
 
 export class AutoUpdater {
@@ -1385,18 +1395,26 @@ export class AutoUpdater {
     // The daemon is spared for its own, older reason: the full-shutdown branch
     // stops it with daemon.shutdown, which suspends its sessions and flushes
     // their scrollback first. Only the daemon that branch stops is spared,
-    // from BOTH kill lists: the one this app is connected to (getDaemonPid),
-    // or, when that cannot be determined, a daemon-shaped command line among
-    // our own children (survey.daemonPids within ownTree). Without the second
-    // rule an unknown pid put our daemon in forceKillEligiblePids and the
-    // waiter tree-killed it 5 s in. Any other daemon under the root (an
-    // orphan, another data dir's daemon) is stopped by nothing, so sparing it
-    // would hold the root until the waiter refuses; it stays on a kill list.
-    const daemonPid = await this.hooks.getDaemonPid();
+    // from BOTH kill lists: the one this app is connected to, by the pid
+    // recorded at connect. Any other daemon under the root (an orphan,
+    // another data dir's daemon) is stopped by nothing, so sparing it would
+    // hold the root until the waiter refuses; it stays on a kill list.
+    // When that pid is not known:
+    //   - connected without one: every daemon-shaped command line is spared,
+    //     since one of them is the daemon the shutdown stops and nothing
+    //     tells which;
+    //   - not connected: the pid file's daemon, or with no pid file a
+    //     daemon-shaped command line among our own children (our daemon is
+    //     our child when this app spawned it).
+    const daemon = this.hooks.getDaemon();
     const survey = collectInstallRootProcesses(installRoot);
     const pids = survey.pids;
-    const isDaemon = (p: number) =>
-      p === daemonPid || (daemonPid === null && survey.daemonPids.has(p) && survey.ownTree.has(p));
+    const isDaemon = (p: number): boolean => {
+      if (daemon.connected && daemon.connectedPid !== null) return p === daemon.connectedPid;
+      if (daemon.connected) return p === daemon.pidFilePid || survey.daemonPids.has(p);
+      if (daemon.pidFilePid !== null) return p === daemon.pidFilePid;
+      return survey.daemonPids.has(p) && survey.ownTree.has(p);
+    };
     const forceKillPids = pids.filter((p) => !isDaemon(p) && !survey.ownTree.has(p));
     // #1084 — the OTHER half of survey.ownTree: pids we spare from the
     // immediate force-kill above because app.quit() is about to ask them to

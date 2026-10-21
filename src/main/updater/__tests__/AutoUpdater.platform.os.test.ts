@@ -37,7 +37,10 @@ function quitHooks() {
     onBeforeInstallQuit: vi.fn(),
     onInstallQuitAborted: vi.fn(),
     onInstallRequiresFullShutdown: vi.fn(),
-    getDaemonPid: vi.fn((): number | null | Promise<number | null> => null),
+    // Not connected, no pid file: the install knows nothing about its daemon.
+    getDaemon: vi.fn((): { connected: boolean; connectedPid: number | null; pidFilePid: number | null } => (
+      { connected: false, connectedPid: null, pidFilePid: null }
+    )),
   };
 }
 
@@ -568,7 +571,7 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
       ownTree: new Set([4244, 4245]),
       daemonPids: new Set<number>(),
     });
-    const hooks = { ...quitHooks(), getDaemonPid: vi.fn(() => 4243 as number | null) };
+    const hooks = { ...quitHooks(), getDaemon: vi.fn(() => ({ connected: true, connectedPid: 4243 as number | null, pidFilePid: 4243 as number | null })) };
     const { installHandler } = await downloadUpdateFor(loaded, hooks);
 
     await installHandler();
@@ -593,7 +596,7 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
       ownTree: new Set<number>(),
       daemonPids: new Set<number>(),
     });
-    // The pid file was unreadable (quitHooks' getDaemonPid returns null).
+    // Not connected and the pid file was unreadable (quitHooks' getDaemon).
     // Sparing a daemon we cannot identify would leave the root locked;
     // force-killing it costs a scrollback flush, which is the cheaper failure.
     const { installHandler } = await downloadUpdateFor(loaded);
@@ -606,7 +609,7 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
   it('win32: a daemon found by command line is on neither kill list, even with no pid file', async () => {
     const loaded = await loadForPlatform('win32', downloadRoutes);
     // 4243 is the daemon, spawned by this main process (so it is in ownTree),
-    // and daemon.pid could not be read (quitHooks' getDaemonPid returns null).
+    // and neither a connection nor daemon.pid names it (quitHooks' getDaemon).
     // Without the command-line match it lands in forceKillEligiblePids and
     // the waiter tree-kills it 5 s in, cutting its suspend and flush short.
     loaded.teardown.collectInstallRootProcesses.mockReturnValue({
@@ -641,7 +644,7 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
       ownTree: new Set([4243, 4244, 4251]),
       daemonPids: new Set([4243, 4250, 4251]),
     });
-    const hooks = { ...quitHooks(), getDaemonPid: vi.fn(async () => 4243 as number | null) };
+    const hooks = { ...quitHooks(), getDaemon: vi.fn(() => ({ connected: true, connectedPid: 4243 as number | null, pidFilePid: null as number | null })) };
     const { installHandler } = await downloadUpdateFor(loaded, hooks);
 
     await installHandler();
@@ -660,7 +663,7 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
       ownTree: new Set([4243]),
       daemonPids: new Set([4243, 4250]),
     });
-    const { installHandler } = await downloadUpdateFor(loaded); // getDaemonPid → null
+    const { installHandler } = await downloadUpdateFor(loaded); // not connected, no pid file
 
     await installHandler();
 
@@ -669,6 +672,41 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
       forceKillEligiblePids: number[];
     };
     expect(plan.forceKillEligiblePids).toEqual([]);
+  });
+
+  it('win32: the connected daemon is spared by its recorded pid, outside ownTree and with no pid file', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    // The daemon outlived an earlier app run, so it is not our child (not in
+    // ownTree), daemon.pid is gone, and it may be too busy to answer a ping
+    // now: the pid recorded when this app connected still names it.
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4244],
+      ownTree: new Set([4244]),
+      daemonPids: new Set([4243]),
+    });
+    const hooks = { ...quitHooks(), getDaemon: vi.fn(() => ({ connected: true, connectedPid: 4243 as number | null, pidFilePid: null as number | null })) };
+    const { installHandler } = await downloadUpdateFor(loaded, hooks);
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242]);
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as unknown as { forceKillEligiblePids: number[] };
+    expect(plan.forceKillEligiblePids).toEqual([4244]);
+  });
+
+  it('win32: connected with no recorded pid, every daemon-shaped process is spared', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4250],
+      ownTree: new Set<number>(),
+      daemonPids: new Set([4243, 4250]),
+    });
+    const hooks = { ...quitHooks(), getDaemon: vi.fn(() => ({ connected: true, connectedPid: null as number | null, pidFilePid: null as number | null })) };
+    const { installHandler } = await downloadUpdateFor(loaded, hooks);
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242]);
   });
 
   it('win32: a quit that never happens is reported and unlatched, not silent (#980)', async () => {
