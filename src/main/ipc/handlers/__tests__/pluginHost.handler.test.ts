@@ -98,7 +98,7 @@ describe('plugins:rpc host workspace binding', () => {
 describe('plugins:list', () => {
   async function list(isManaged?: (name: string) => boolean) {
     handlers.clear();
-    const loader = { summaries: async () => [{ name: 'office' }, { name: 'hand-made' }], listFailures: () => [] };
+    const loader = { summaries: async () => [{ name: 'office' }, { name: 'agent-state-page' }], listFailures: () => [] };
     registerPluginHostHandlers({ dispatch: vi.fn() } as unknown as RpcRouter, () => loader as never, undefined, isManaged);
     const handler = handlers.get(IPC.PLUGINS_LIST);
     expect(handler, 'plugins:list handler was never registered').toBeDefined();
@@ -106,9 +106,9 @@ describe('plugins:list', () => {
   }
 
   it('says which bundles the catalog installed, from the install ledger and not the name', async () => {
-    // A bundle placed by hand under a catalog id is not the catalog's.
-    const res = await list((name) => name === 'hand-made');
-    expect(res.plugins.map((p) => [p.name, p.managed])).toEqual([['office', false], ['hand-made', true]]);
+    // Both names are catalog ids: `office` was placed by hand, `agent-state-page` installed by the catalog.
+    const res = await list((name) => name === 'agent-state-page');
+    expect(res.plugins.map((p) => [p.name, p.managed])).toEqual([['office', false], ['agent-state-page', true]]);
   });
 
   it('calls nothing catalog-installed when no ledger is wired', async () => {

@@ -249,8 +249,8 @@ navigates through it.
   commands) opens Plugins with that row selected — one redirect in the route
   layer, not a second page. A UI plugin's rail page (any whose trust is not
   denied) follows the built-in ones under a short `--line` hairline, with the
-  glyph its catalog entry names (a package for a bundle the catalog does not
-  name). Settings is a page too,
+  glyph its catalog entry names (a package for a bundle the catalog did not
+  install, even one placed by hand under a catalog id). Settings is a page too,
   opened from the rail's More menu or ⌘,.
 - **The rail's foot** holds one `⋯` **More** button (named "More",
   `aria-haspopup="menu"`). Its menu, beside the rail and level with the
