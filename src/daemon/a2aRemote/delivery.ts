@@ -164,15 +164,24 @@ export class A2aRemoteDelivery {
   }
 
   /**
-   * What `hostId`'s build takes: what it advertised to this PC in either role
-   * on a stream since this daemon started, else what it last advertised
-   * before (`peer-features.json`). Undefined: never seen.
+   * What `hostId`'s build takes: what it advertised most recently, in either
+   * role, on a stream since this daemon started or before
+   * (`peer-features.json`; every advertisement is recorded there). Undefined:
+   * never seen.
    */
   peerFeatures(hostId: HostId): ReadonlySet<string> | undefined {
-    const live = this.liveFeatures(hostId);
-    if (live) return live;
-    const seen = this.peerFeatureStore.get(hostId);
-    return seen ? new Set([...(seen.asJoiner ?? []), ...(seen.asServer ?? [])]) : undefined;
+    const seen = this.peerFeatureStore.newest(hostId);
+    return seen ? new Set(seen) : undefined;
+  }
+
+  /**
+   * What `hostId` advertised on its own stream to this PC (it is our joiner)
+   * since this daemon started. A share offer gates on this one: before that
+   * stream is up, an offer would show the pane while its envelope could only
+   * wait, and perhaps expire, in the outbox.
+   */
+  offerFeatures(hostId: HostId): ReadonlySet<string> | undefined {
+    return this.hub.featuresOf(hostId);
   }
 
   /** Both roles' features from the streams since this daemon started; undefined when neither came up. */

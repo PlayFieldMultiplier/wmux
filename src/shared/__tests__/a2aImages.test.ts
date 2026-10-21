@@ -94,6 +94,22 @@ describe('prepareA2aImage — PNG', () => {
     expect(inspectA2aImage(u8(PNG_SIG, ihdr(16_000, 16_000), idat, iend))).toEqual({ ok: false, reason: 'dimensions' });
     expect(inspectA2aImage(u8(PNG_SIG, ihdr(16_384, 2_000), idat, iend))).toMatchObject({ ok: true });
   });
+
+  it('keeps only what a decoder draws with: an unknown ancillary chunk goes too', () => {
+    const gps = pngChunk('gpsL', [...'lat=37.5'].map((c) => c.charCodeAt(0)));
+    const phys = pngChunk('pHYs', [0, 0, 0x0b, 0x13, 0, 0, 0x0b, 0x13, 1]);
+    const iccp = pngChunk('iCCP', [...'icc\0\0'].map((c) => c.charCodeAt(0)).concat([0x78, 0x9c]));
+    const plte = pngChunk('PLTE', [0, 0, 0]);
+    const trns = pngChunk('tRNS', [0]);
+    const out = prepareA2aImage(u8(PNG_SIG, ihdr(4, 4), iccp, gps, plte, trns, phys, idat, iend));
+    expect(out.ok && Array.from(out.bytes)).toEqual(Array.from(u8(PNG_SIG, ihdr(4, 4), iccp, plte, trns, idat, iend)));
+  });
+
+  it('refuses an APNG, sent or received', () => {
+    const actl = pngChunk('acTL', [0, 0, 0, 2, 0, 0, 0, 0]);
+    expect(prepareA2aImage(u8(PNG_SIG, ihdr(4, 4), actl, idat, iend))).toEqual({ ok: false, reason: 'animated' });
+    expect(inspectA2aImage(u8(PNG_SIG, ihdr(4, 4), actl, idat, iend))).toEqual({ ok: false, reason: 'animated' });
+  });
 });
 
 describe('prepareA2aImage — JPEG', () => {
@@ -137,6 +153,32 @@ describe('prepareA2aImage — JPEG', () => {
   });
 });
 
+describe('prepareA2aImage — JPEG keep list', () => {
+  const gpsApp = (marker: number, tag: string): Uint8Array => seg(marker, [...`${tag}\0lat=37.5;lon=127.0`].map((c) => c.charCodeAt(0)));
+
+  it('drops every APPn but JFIF, ICC and Adobe: vendor GPS in APP4, APP6 (GoPro GPMF) and APP15 goes', () => {
+    const adobe = seg(0xee, [...'Adobe'].map((c) => c.charCodeAt(0)).concat([0, 100, 0, 0, 0, 0, 1]));
+    const src = u8([0xff, 0xd8], app0, gpsApp(0xe4, 'VENDOR'), gpsApp(0xe6, 'GoPro'), adobe, gpsApp(0xef, 'X'), gpsApp(0xe0, 'JFXX'), dqt, sof0(8, 8), sos, scan, eoi);
+    const out = prepareA2aImage(src);
+    expect(out.ok && Array.from(out.bytes)).toEqual(Array.from(u8([0xff, 0xd8], app0, adobe, dqt, sof0(8, 8), sos, scan, eoi)));
+    expect(out.ok && Buffer.from(out.bytes).includes('lat=37.5')).toBe(false);
+  });
+
+  it('removes the JFIF thumbnail, which may show what a crop removed', () => {
+    const withThumb = seg(0xe0, [...'JFIF\0'].map((c) => c.charCodeAt(0)).concat([1, 1, 0, 0, 1, 0, 1, 1, 1, 0xaa, 0xbb, 0xcc]));
+    const out = prepareA2aImage(u8([0xff, 0xd8], withThumb, dqt, sof0(8, 8), sos, scan, eoi));
+    expect(out.ok && Array.from(out.bytes)).toEqual(Array.from(u8([0xff, 0xd8], app0, dqt, sof0(8, 8), sos, scan, eoi)));
+  });
+
+  it('refuses markers of modes a viewer does not draw, and more than 64 scans', () => {
+    const dhp = seg(0xde, [8, 0, 8, 0, 8, 1, 1, 0x11, 0]);
+    expect(prepareA2aImage(u8([0xff, 0xd8], dhp, dqt, sof0(8, 8), sos, scan, eoi))).toEqual({ ok: false, reason: 'malformed' });
+    const scans = (n: number): Uint8Array => u8(...new Array(n).fill(u8(sos, scan)));
+    expect(inspectA2aImage(u8([0xff, 0xd8], dqt, sof0(8, 8), scans(64), eoi))).toMatchObject({ ok: true });
+    expect(inspectA2aImage(u8([0xff, 0xd8], dqt, sof0(8, 8), scans(65), eoi))).toEqual({ ok: false, reason: 'malformed' });
+  });
+});
+
 describe('inspectA2aImage — what a receiver takes', () => {
   it('refuses bytes after the container end (a polyglot), which a sender never leaves', () => {
     expect(inspectA2aImage(u8(PNG_SIG, ihdr(2, 2), idat, iend, 'PK'))).toEqual({ ok: false, reason: 'malformed' });
@@ -167,8 +209,20 @@ describe('prepareA2aImage — WebP', () => {
     expect(inspectA2aImage(webp(vp8x(0, 1, 1), vp8l(16_000, 16_000)))).toEqual({ ok: false, reason: 'malformed' });
     expect(inspectA2aImage(webp(vp8x(0, 4, 4)))).toEqual({ ok: false, reason: 'malformed' });
     expect(inspectA2aImage(webp(vp8x(0, 4, 4), riffChunk('ALPH', [0, 0]), vp8l(4, 4)))).toMatchObject({ ok: true });
-    // An animation has no top-level image data: the canvas is the size.
-    expect(inspectA2aImage(webp(vp8x(0x02, 4, 4), riffChunk('ANIM', [0, 0, 0, 0, 0, 0])))).toMatchObject({ ok: true });
+  });
+
+  it('keeps only image data, alpha and the colour profile, whatever else a writer adds', () => {
+    const iccp = riffChunk('ICCP', [9, 9, 9, 9]);
+    const alph = riffChunk('ALPH', [0, 0]);
+    const gps = riffChunk('GPSx', [...'lat=37.5'].map((c) => c.charCodeAt(0)));
+    const out = prepareA2aImage(webp(vp8x(0x20 | 0x10 | 0x08, 4, 4), iccp, gps, alph, vp8l(4, 4), riffChunk('EXIF', [1, 2])));
+    expect(out.ok && Array.from(out.bytes)).toEqual(Array.from(webp(vp8x(0x20 | 0x10, 4, 4), iccp, alph, vp8l(4, 4))));
+  });
+
+  it('refuses an animation, by its VP8X flag or by its chunks', () => {
+    const anim = riffChunk('ANIM', [0, 0, 0, 0, 0, 0]);
+    expect(prepareA2aImage(webp(vp8x(0x02, 4, 4), anim))).toEqual({ ok: false, reason: 'animated' });
+    expect(inspectA2aImage(webp(vp8x(0, 4, 4), anim, vp8l(4, 4)))).toEqual({ ok: false, reason: 'animated' });
   });
 
   it('reads a simple lossless WebP and refuses a chunk running past the RIFF', () => {

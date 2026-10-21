@@ -82,7 +82,7 @@ async function makePc(name: string, opts: { advertise?: string[]; routeOffers?: 
     exposures,
     isPeer: (h) => peers.list().some((p) => p.hostId === h && !p.revokedAt),
     isJoined: (h) => remoteHosts.get(h) !== undefined,
-    features: (h) => delivery?.hub.featuresOf(h),
+    features: (h) => delivery?.offerFeatures(h),
     enqueue: (h, env) => void delivery!.outbox.enqueue(h, env),
     notifyLinkChange: (...args) => delivery?.notifyLinkChange(...args),
     broadcast: quiet,
@@ -211,6 +211,27 @@ describe('share offers, end to end', () => {
     expect(await share(b, a)).toEqual({ ok: false, error: 'receiver-unsupported' });
     expect(b.exposures.isPaneExposed(a.hostId, 'ws-api', 'pane-1')).toBe(false);
     expect(b.delivery.outbox.openCount(a.hostId)).toBe(0);
+  });
+
+  it('a PC that only joined the other has no stream from it yet: its share is refused as not connected', async () => {
+    const b = await makePc('PC-B', { advertise: [A2A_FEATURE_LINK_OFFER] });
+    const a = await makePc('PC-A', { advertise: [A2A_FEATURE_LINK_OFFER] });
+    await pair(a, b);
+    // B pairs with A too, but keeps the result where its daemon never dials it.
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-offer-e2e-'));
+    dirs.push(elsewhere);
+    const res = await joinRemoteHost(a.server.beginPairing().invite, {
+      self: () => b.server.ensureIdentity(),
+      selfName: b.name,
+      remoteHosts: new RemoteHostStore({ dir: elsewhere }),
+      timeouts: FAST,
+    });
+    expect(res.ok).toBe(true);
+    // A's session to B is up and has B's hello; B has no stream to A.
+    await until(() => a.delivery.liveFeatures(b.hostId)?.has(A2A_FEATURE_LINK_OFFER) === true);
+    expect(await a.rpc('a2a.remote.offers.create', { hostId: b.hostId, end: A_PANE, allow: both })).toEqual({ ok: false, error: 'not-connected' });
+    expect(a.exposures.isPaneExposed(b.hostId, 'ws-web', 'pane-a')).toBe(false);
+    expect(a.delivery.outbox.openCount(b.hostId)).toBe(0);
   });
 
   it('an older sharer’s listener takes the answer as an ordinary proposal for its human', async () => {

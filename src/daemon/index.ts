@@ -9315,8 +9315,7 @@ async function main(): Promise<void> {
       isJoined: (hostId) => a2aRemoteHosts.get(hostId) !== undefined,
       // No share is accepted before the app has ended the shares of panes that closed while it was away.
       appReady: () => a2aExposedPanes.isReconciled(),
-      // Either stream counts, as in the hosts status the share dialog reads.
-      features: (hostId) => a2aDelivery?.liveFeatures(hostId),
+      features: (hostId) => a2aDelivery?.offerFeatures(hostId),
       enqueue: (hostId, envelope) => {
         if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
         a2aDelivery.outbox.enqueue(hostId, envelope);

@@ -11,19 +11,31 @@ import { isIsoString, isPlainObject, loadStore, storeUnavailable, type StoreLog 
  * after a daemon restart until the peer reconnects; a sender that must know
  * whether the peer takes something (images) reads the last seen ones here.
  *
+ * The answer is the role advertised most recently (`newest`), never a union:
+ * after the peer moves to a build that takes less, the role it reconnected
+ * in says so, and the other role's older list no longer counts.
+ *
  * Only a hint about what the other build understands: never an authorization.
  * Corrupt file: start empty (every peer unseen) and keep the original.
  */
 
 export const PEER_FEATURES_FILE = 'peer-features.json';
 
+/** One role's last advertisement. */
+export interface PeerFeatureSeen {
+  features: string[];
+  /** When it was last advertised, changed or not. */
+  seenAt: string;
+}
+
 export interface PeerFeatureRecord {
   /** What it advertised on its stream to this PC (it is our joiner). */
-  asJoiner?: string[];
+  asJoiner?: PeerFeatureSeen;
   /** What its stream `hello` advertised (this PC is its joiner). */
-  asServer?: string[];
-  changedAt: string;
+  asServer?: PeerFeatureSeen;
 }
+
+type Role = 'asJoiner' | 'asServer';
 
 interface PeerFeaturesFileV1 {
   v: 1;
@@ -75,16 +87,31 @@ export class PeerFeatureStore {
     return rec ? structuredClone(rec) : undefined;
   }
 
-  /** `hostId` just advertised `features` in `role`. Written only when it changed; a failed write is logged, not thrown. */
-  record(hostId: HostId, role: 'asJoiner' | 'asServer', features: readonly string[]): void {
+  /** The features of the role `hostId` advertised most recently; undefined when it was never seen. */
+  newest(hostId: HostId): string[] | undefined {
+    const rec = this.hosts[hostId];
+    const latest = rec ? newestOf(rec) : undefined;
+    return latest ? [...latest.features] : undefined;
+  }
+
+  /**
+   * `hostId` just advertised `features` in `role`. Memory always takes it.
+   * The file is written only when the answer it gives would change: the list
+   * changed, or the role now answers instead of the other role's different
+   * list. A failed write is logged, not thrown.
+   */
+  record(hostId: HostId, role: Role, features: readonly string[]): void {
     if (!isHostId(hostId)) return;
     const list = parseA2aFeatures(features.join(','));
     const prev = this.hosts[hostId];
-    if (prev && sameList(prev[role], list)) return;
-    // Memory always takes it (it is what the peer said); a failed write is
-    // caught up by the next change.
-    this.hosts = { ...this.hosts, [hostId]: { ...prev, [role]: list, changedAt: new Date(this.now()).toISOString() } };
-    this.persist();
+    const mine = prev?.[role];
+    const other = prev?.[role === 'asJoiner' ? 'asServer' : 'asJoiner'];
+    // Strictly after the other role, so the newest is never a tie.
+    const at = Math.max(this.now(), other ? Date.parse(other.seenAt) + 1 : 0);
+    const changed = !mine || !sameList(mine.features, list);
+    const overtakes = !changed && other !== undefined && !sameList(other.features, list) && Date.parse(other.seenAt) > Date.parse(mine.seenAt);
+    this.hosts = { ...this.hosts, [hostId]: { ...prev, [role]: { features: list, seenAt: new Date(at).toISOString() } } };
+    if (changed || overtakes) this.persist();
   }
 
   /** The pairing with `hostId` ended: forget it. */
@@ -110,21 +137,29 @@ export class PeerFeatureStore {
   }
 }
 
-function sameList(a: readonly string[] | undefined, b: readonly string[]): boolean {
-  return a !== undefined && a.length === b.length && a.every((x, i) => x === b[i]);
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+function newestOf(rec: PeerFeatureRecord): PeerFeatureSeen | undefined {
+  const { asJoiner: j, asServer: s } = rec;
+  if (!j || !s) return j ?? s;
+  return Date.parse(j.seenAt) >= Date.parse(s.seenAt) ? j : s;
 }
 
 function coerceFile(raw: unknown): PeerFeaturesFileV1 | null {
   if (!isPlainObject(raw) || raw['v'] !== 1 || !isPlainObject(raw['hosts'])) return null;
   const hosts: Record<HostId, PeerFeatureRecord> = {};
   for (const [hostId, rec] of Object.entries(raw['hosts'])) {
-    if (!isHostId(hostId) || !isPlainObject(rec) || !isIsoString(rec['changedAt'])) return null;
-    const out: PeerFeatureRecord = { changedAt: rec['changedAt'] };
+    if (!isHostId(hostId) || !isPlainObject(rec)) return null;
+    const out: PeerFeatureRecord = {};
     for (const role of ['asJoiner', 'asServer'] as const) {
-      if (rec[role] === undefined) continue;
-      if (!Array.isArray(rec[role])) return null;
-      out[role] = parseA2aFeatures((rec[role] as unknown[]).join(','));
+      const seen = rec[role];
+      if (seen === undefined) continue;
+      if (!isPlainObject(seen) || !Array.isArray(seen['features']) || !isIsoString(seen['seenAt'])) return null;
+      out[role] = { features: parseA2aFeatures((seen['features'] as unknown[]).join(',')), seenAt: seen['seenAt'] };
     }
+    if (!out.asJoiner && !out.asServer) return null;
     hosts[hostId] = out;
   }
   return { v: 1, hosts };

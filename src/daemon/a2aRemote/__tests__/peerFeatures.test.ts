@@ -19,13 +19,22 @@ function tmp(): string {
 }
 const quiet = (): void => undefined;
 
-function delivery(dir: string): A2aRemoteDelivery {
+interface World {
+  peers: Array<{ hostId: string; revokedAt?: string }>;
+  joined: string[];
+}
+
+function delivery(dir: string, world: World = { peers: [], joined: [] }): A2aRemoteDelivery {
   const deps = {
     dir,
     links: { list: () => [] },
     taskService: {},
-    peers: { list: () => [] },
-    remoteHosts: { list: () => [], get: () => undefined, credentialFor: () => null },
+    peers: { list: () => world.peers },
+    remoteHosts: {
+      list: () => world.joined.map((hostId) => ({ hostId, fingerprint256: 'f', port: 1, addresses: ['127.0.0.1'] })),
+      get: (h: string) => (world.joined.includes(h) ? { hostId: h } : undefined),
+      credentialFor: () => null,
+    },
     broadcast: quiet,
     refreshLink: async () => null,
     log: quiet,
@@ -50,7 +59,24 @@ describe('PeerFeatureStore', () => {
     store.record(HOST, 'asServer', ['images.1', 'link-offer.1']);
     expect(writes).toHaveLength(2);
     const again = new PeerFeatureStore({ dir, scheduleHarden: quiet });
-    expect(again.get(HOST)).toMatchObject({ asJoiner: ['link-offer.1'], asServer: ['images.1', 'link-offer.1'] });
+    expect(again.get(HOST)).toMatchObject({ asJoiner: { features: ['link-offer.1'] }, asServer: { features: ['images.1', 'link-offer.1'] } });
+  });
+
+  it('answers from the role advertised last: a downgrade in one role is not hidden by the other', () => {
+    const dir = tmp();
+    let t = Date.parse('2026-10-22T00:00:00Z');
+    const now = (): number => (t += 1000);
+    const store = new PeerFeatureStore({ dir, now, scheduleHarden: quiet });
+    store.record(HOST, 'asServer', ['images.1', 'link-offer.1']);
+    store.record(HOST, 'asJoiner', ['images.1', 'link-offer.1']);
+    // The peer moved to a build without images; its stream to us came back first.
+    store.record(HOST, 'asJoiner', ['link-offer.1']);
+    expect(store.newest(HOST)).toEqual(['link-offer.1']);
+    expect(new PeerFeatureStore({ dir, now, scheduleHarden: quiet }).newest(HOST)).toEqual(['link-offer.1']);
+    // Back on a build with images: the unchanged server list now answers, after a restart too.
+    store.record(HOST, 'asServer', ['images.1', 'link-offer.1']);
+    expect(store.newest(HOST)).toEqual(['images.1', 'link-offer.1']);
+    expect(new PeerFeatureStore({ dir, now, scheduleHarden: quiet }).newest(HOST)).toEqual(['images.1', 'link-offer.1']);
   });
 
   it('starts empty on a corrupt file and keeps the original aside', () => {
@@ -72,5 +98,35 @@ describe('A2aRemoteDelivery.peerFeatures', () => {
     const second = delivery(dir);
     expect(second.hub.featuresOf(HOST)).toBeUndefined();
     expect([...(second.peerFeatures(HOST) ?? [])]).toEqual(['images.1']);
+  });
+
+  it('forgets a PC revoked here unless this PC also joined it', () => {
+    const world: World = { peers: [{ hostId: HOST }], joined: [HOST] };
+    const d = delivery(tmp(), world);
+    d.peerFeatureStore.record(HOST, 'asJoiner', ['images.1']);
+    d.onPeerRevoked(HOST);
+    expect(d.peerFeatures(HOST)).toBeDefined();
+    world.joined = [];
+    d.onPeerRevoked(HOST);
+    expect(d.peerFeatures(HOST)).toBeUndefined();
+  });
+
+  it('forgets a PC this one left when it is not paired the other way', async () => {
+    const world: World = { peers: [{ hostId: HOST }], joined: [HOST] };
+    const d = delivery(tmp(), world);
+    d.syncSessions();
+    d.peerFeatureStore.record(HOST, 'asServer', ['images.1']);
+    // Left, but it still joins this PC: kept.
+    world.joined = [];
+    d.syncSessions();
+    expect(d.peerFeatures(HOST)).toBeDefined();
+    // Joined again and left again, now unpaired both ways: forgotten.
+    world.joined = [HOST];
+    d.syncSessions();
+    world.joined = [];
+    world.peers = [{ hostId: HOST, revokedAt: '2026-10-22T00:00:00Z' }];
+    d.syncSessions();
+    expect(d.peerFeatures(HOST)).toBeUndefined();
+    await d.stop();
   });
 });

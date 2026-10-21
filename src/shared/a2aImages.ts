@@ -8,21 +8,29 @@
 // `A2A_REMOTE_IMAGE_LIMITS.MAX_EDGE` / `MAX_PIXELS` is refused instead.
 //
 // The sender also strips metadata (`prepareA2aImage`), because a photo
-// forwarded from a phone can carry its GPS position:
-//   PNG  — `eXIf`, `tEXt`, `iTXt` (XMP lives here), `zTXt` and `caBX`
-//          (content credentials) chunks;
-//   JPEG — APP1 (Exif, XMP), APP11 (content credentials), APP13 (IPTC),
-//          APP2 MPF (it points at images after the end, which are dropped)
-//          and COM segments; an Exif Orientation other than 1 is kept as a
-//          one-tag Exif segment, so the picture still shows the right way up;
-//   WebP — `EXIF` and `XMP ` chunks, with the VP8X flags and the RIFF size
-//          rewritten to match.
+// forwarded from a phone or a camera can carry its GPS position, and vendors
+// put it in places no list of metadata names covers. So the strip is a keep
+// list: what a decoder needs to draw the picture, and its colour profile.
+// Everything else goes:
+//   PNG  — kept: IHDR, PLTE, tRNS, IDAT, IEND, and the colour chunks iCCP,
+//          sRGB, gAMA, cHRM and cICP (fixed numbers or a profile);
+//   JPEG — kept: SOI, APP0 JFIF (its thumbnail removed), APP2 ICC profile,
+//          APP14 Adobe (the colour transform), DQT, DHT, DAC, DRI, the frame
+//          header, the scans with their data, and EOI; an Exif Orientation
+//          other than 1 is rebuilt as a one-tag Exif segment, so the picture
+//          still shows the right way up;
+//   WebP — kept: VP8X, VP8, VP8L, ALPH and ICCP, with the VP8X flags and the
+//          RIFF size rewritten to match.
 // A PNG or WebP Exif orientation is dropped with the rest: few decoders read
 // one there. Anything after the container's end (PNG `IEND`, JPEG EOI, the
 // RIFF size) is dropped too, and a RECEIVED image with bytes after its end is
-// refused (a sender never leaves them). A container that does not parse is
-// refused, never sent as it was. The hash the envelope carries is of the
-// stripped bytes.
+// refused (a sender never leaves them). A container that does not parse, and
+// a JPEG marker outside the keep list that is not metadata (hierarchical or
+// lossless JPEG), is refused, never sent as it was. The hash the envelope
+// carries is of the stripped bytes.
+//
+// Screenshots are still images, so an animation (APNG, animated WebP) is
+// refused, and so is a JPEG of more than `JPEG_MAX_SCANS` scans.
 //
 // The declared size must be the one a decoder uses: a JPEG with a second
 // frame header, or a WebP whose VP8X canvas and image data disagree, is
@@ -39,6 +47,8 @@ export interface A2aImageInfo {
 export type A2aImageRefusal =
   /** Not PNG, JPEG or WebP by its leading bytes. */
   | 'unsupported'
+  /** An animation (APNG, animated WebP): only still images are taken. */
+  | 'animated'
   /** The container does not parse. */
   | 'malformed'
   /** The header declares more pixels than a message may carry. */
@@ -74,12 +84,13 @@ export function prepareA2aImage(bytes: Uint8Array): A2aImagePrepared {
 function parse(bytes: Uint8Array, strip: boolean): A2aImagePrepared {
   const type = sniffA2aImage(bytes);
   if (!type) return { ok: false, reason: 'unsupported' };
-  let out: { bytes: Uint8Array; width: number; height: number } | null;
+  let out: Parsed;
   try {
     out = type === 'image/png' ? parsePng(bytes, strip) : type === 'image/jpeg' ? parseJpeg(bytes, strip) : parseWebp(bytes, strip);
   } catch {
     out = null;
   }
+  if (out === 'animated') return { ok: false, reason: 'animated' };
   if (!out) return { ok: false, reason: 'malformed' };
   const { width, height } = out;
   if (width < 1 || height < 1) return { ok: false, reason: 'malformed' };
@@ -89,11 +100,17 @@ function parse(bytes: Uint8Array, strip: boolean): A2aImagePrepared {
   return { ok: true, bytes: out.bytes, info: { mediaType: type, width, height } };
 }
 
+/** A parsed container (stripped when asked), an animation, or null when it does not parse. */
+type Parsed = { bytes: Uint8Array; width: number; height: number } | 'animated' | null;
+
 // --- PNG ----------------------------------------------------------------------
 
-const PNG_METADATA = new Set(['eXIf', 'tEXt', 'iTXt', 'zTXt', 'caBX']);
+/** What the strip keeps: the chunks a decoder draws with, and the colour ones. */
+const PNG_KEEP = new Set(['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND', 'iCCP', 'sRGB', 'gAMA', 'cHRM', 'cICP']);
+/** APNG: its control chunk, and the frames. */
+const PNG_ANIMATION = new Set(['acTL', 'fcTL', 'fdAT']);
 
-function parsePng(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: number; height: number } | null {
+function parsePng(b: Uint8Array, strip: boolean): Parsed {
   const keep: Array<[number, number]> = [[0, 8]];
   let at = 8;
   let width = 0;
@@ -111,7 +128,8 @@ function parsePng(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: nu
       height = u32be(b, at + 12);
       first = false;
     }
-    if (!(strip && PNG_METADATA.has(type))) keep.push([at, end]);
+    if (PNG_ANIMATION.has(type)) return 'animated';
+    if (!strip || PNG_KEEP.has(type)) keep.push([at, end]);
     at = end;
     if (type === 'IEND') break;
   }
@@ -123,14 +141,35 @@ function parsePng(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: nu
 
 /** Start-of-frame markers (C4 DHT, C8 JPG and CC DAC are not frames). */
 const SOF = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
-/** Segments the sender drops: APP1 (Exif / XMP), APP11 (JUMBF / C2PA), APP13 (IPTC), COM. APP2 MPF is dropped by its tag. */
-const JPEG_METADATA = new Set([0xe1, 0xeb, 0xed, 0xfe]);
+/** Table and scan segments a decoder reads: DHT, DAC, DQT, DRI, SOS (and the frames above). */
+const JPEG_TABLES = new Set([0xc4, 0xcc, 0xdb, 0xdd, 0xda]);
+/** More scans than any progressive encoder writes; each one is another decoding pass. */
+export const JPEG_MAX_SCANS = 64;
 
-function parseJpeg(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: number; height: number } | null {
+/** APP0 JFIF, APP2 ICC profile or APP14 Adobe: the APPn segments the strip keeps. */
+function keptApp(marker: number, b: Uint8Array, at: number, len: number): boolean {
+  if (marker === 0xe0) return len >= 16 && ascii(b, at + 4, 5) === 'JFIF\0';
+  if (marker === 0xe2) return len >= 14 && ascii(b, at + 4, 12) === 'ICC_PROFILE\0';
+  if (marker === 0xee) return len >= 7 && ascii(b, at + 4, 5) === 'Adobe';
+  return false;
+}
+
+/** APP0 JFIF without its thumbnail (a preview that may show what a crop removed). */
+function jfifWithoutThumbnail(b: Uint8Array, at: number): Uint8Array {
+  const seg = b.slice(at, at + 18);
+  seg[2] = 0;
+  seg[3] = 16;
+  seg[16] = 0;
+  seg[17] = 0;
+  return seg;
+}
+
+function parseJpeg(b: Uint8Array, strip: boolean): Parsed {
   const parts: Uint8Array[] = [b.subarray(0, 2)];
   let at = 2;
   let width = 0;
   let height = 0;
+  let scans = 0;
   let orientation = 1;
   let orientationWritten = false;
   for (;;) {
@@ -156,6 +195,10 @@ function parseJpeg(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
     const len = u16be(b, at + 2);
     const end = at + 2 + len;
     if (len < 2 || end > b.length) return null;
+    const app = (marker >= 0xe0 && marker <= 0xef) || marker === 0xfe;
+    // DNL, DHP, EXP, JPG and JPGn belong to JPEG modes a viewer does not
+    // draw (hierarchical, lossless, JPEG-LS): not stripped around, refused.
+    if (!app && !SOF.has(marker) && !JPEG_TABLES.has(marker)) return null;
     if (SOF.has(marker)) {
       // One frame: a second header would let a small claim hide the real size.
       if (len < 7 || width !== 0) return null;
@@ -163,19 +206,19 @@ function parseJpeg(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
       width = u16be(b, at + 7);
       if (width === 0 || height === 0) return null;
     }
+    if (marker === 0xda && ++scans > JPEG_MAX_SCANS) return null;
     if (marker === 0xe1 && strip) {
       const o = exifOrientation(b.subarray(at + 4, end));
       if (o !== null) orientation = o;
     }
-    const mpf = marker === 0xe2 && len >= 6 && ascii(b, at + 4, 4) === 'MPF\0';
-    if (strip && (JPEG_METADATA.has(marker) || mpf)) {
-      // Before the first frame or scan: where an Exif segment belongs.
-      if (orientation !== 1 && !orientationWritten) {
-        parts.push(orientationSegment(orientation));
-        orientationWritten = true;
-      }
-    } else {
+    if (!strip || !app) {
       parts.push(b.subarray(at, end));
+    } else if (keptApp(marker, b, at, len)) {
+      parts.push(marker === 0xe0 ? jfifWithoutThumbnail(b, at) : b.subarray(at, end));
+    } else if (orientation !== 1 && !orientationWritten) {
+      // In place of the Exif segment it came from, before the frame.
+      parts.push(orientationSegment(orientation));
+      orientationWritten = true;
     }
     at = end;
     if (marker === 0xda) {
@@ -234,10 +277,11 @@ function orientationSegment(orientation: number): Uint8Array {
 
 // --- WebP ---------------------------------------------------------------------
 
-const WEBP_METADATA = new Set(['EXIF', 'XMP ']);
-/** VP8X flag bits of the EXIF and XMP chunks, and of an animation. */
-const VP8X_EXIF = 0x08;
-const VP8X_XMP = 0x04;
+/** What the strip keeps: the header, the image data, its alpha and the colour profile. */
+const WEBP_KEEP = new Set(['VP8X', 'VP8 ', 'VP8L', 'ALPH', 'ICCP']);
+/** VP8X flag bits the strip keeps (ICC profile, alpha), and the one of an animation. */
+const VP8X_ICC = 0x20;
+const VP8X_ALPHA = 0x10;
 const VP8X_ANIMATION = 0x02;
 
 /** The size a `VP8 ` / `VP8L` chunk's own header declares, or null when it is malformed. */
@@ -251,7 +295,7 @@ function webpImageSize(fourcc: string, data: Uint8Array): { width: number; heigh
   return { width: 1 + (bits & 0x3fff), height: 1 + ((bits >>> 14) & 0x3fff) };
 }
 
-function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: number; height: number } | null {
+function parseWebp(b: Uint8Array, strip: boolean): Parsed {
   const riff = u32le(b, 4);
   const end = 8 + riff;
   if (riff < 4 || riff % 2 !== 0 || end > b.length) return null;
@@ -261,7 +305,7 @@ function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
   let height = 0;
   let vp8x: Uint8Array | null = null;
   let firstChunk = true;
-  /** A still VP8X image: its image chunk must declare the canvas size. */
+  /** A VP8X image: its image chunk must declare the canvas size. */
   let checkImage = false;
   let imageSeen = false;
   while (at < end) {
@@ -271,12 +315,14 @@ function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
     const next = at + 8 + size + (size % 2);
     if (next > end) return null;
     const data = b.subarray(at + 8, at + 8 + size);
+    if (fourcc === 'ANIM' || fourcc === 'ANMF') return 'animated';
     if (firstChunk) {
       if (fourcc === 'VP8X') {
         if (size < 10) return null;
         width = 1 + (data[4] | (data[5] << 8) | (data[6] << 16));
         height = 1 + (data[7] | (data[8] << 8) | (data[9] << 16));
-        checkImage = (data[0] & VP8X_ANIMATION) === 0;
+        if ((data[0] & VP8X_ANIMATION) !== 0) return 'animated';
+        checkImage = true;
       } else if (fourcc === 'VP8 ' || fourcc === 'VP8L') {
         const dims = webpImageSize(fourcc, data);
         if (!dims) return null;
@@ -291,7 +337,7 @@ function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
       if (!dims || dims.width !== width || dims.height !== height) return null;
       imageSeen = true;
     }
-    if (!(strip && WEBP_METADATA.has(fourcc))) {
+    if (!strip || WEBP_KEEP.has(fourcc)) {
       const chunk = b.slice(at, next);
       if (fourcc === 'VP8X') vp8x = chunk;
       chunks.push(chunk);
@@ -300,7 +346,7 @@ function parseWebp(b: Uint8Array, strip: boolean): { bytes: Uint8Array; width: n
   }
   if (firstChunk || (checkImage && !imageSeen)) return null;
   if (!strip) return end === b.length ? { bytes: b, width, height } : null;
-  if (vp8x) vp8x[8] &= ~(VP8X_EXIF | VP8X_XMP) & 0xff;
+  if (vp8x) vp8x[8] &= VP8X_ICC | VP8X_ALPHA;
   const body = join(chunks);
   const head = new Uint8Array(12);
   head.set(b.subarray(0, 4), 0);
