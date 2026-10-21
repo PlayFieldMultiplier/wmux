@@ -232,12 +232,13 @@ export const GLAB_CI_CONFIG_CHECK = 'ci-config-changed';
 export const GLAB_CI_CONFIG_UNVERIFIED_CHECK = 'ci-config-unverified';
 
 /** A changed path that can change the MR's pipeline: the project's CI config
- *  file (its own path, when it lives in this repository), the default
- *  `.gitlab-ci.yml`, or anything under `.gitlab/` (local includes, templates). */
+ *  file (its own path, when it lives in this repository), anything under
+ *  `.gitlab/`, or any YAML file — a local `include:` can live anywhere, so
+ *  every YAML change is treated as one. */
 export function glabCiConfigTouched(path: string, ciConfigPath: string): boolean {
   const p = path.replace(/^\.\//, '');
   const own = ciConfigPath.includes('@') || ciConfigPath.includes('://') ? '' : ciConfigPath.replace(/^\.\//, '');
-  return p === '.gitlab-ci.yml' || p.startsWith('.gitlab/') || (own !== '' && p === own);
+  return /\.ya?ml$/i.test(p) || p.startsWith('.gitlab/') || (own !== '' && p === own);
 }
 
 /** The default branch's name. */
@@ -464,10 +465,11 @@ export function glabMergeFailure(err: unknown): PrWriteResult {
   const e = err as { stderr?: string; message?: string };
   const full = (e?.stderr || e?.message || String(err)).trim();
   // The status is read from the whole output (glab may print a deprecation
-  // notice first): its `(HTTP nnn)`, else a code on the last line.
+  // notice first), and only from its `(HTTP nnn)`: a bare number can be the
+  // MR's iid inside a network error's URL.
   const lines = full.split('\n').map((l) => l.trim()).filter(Boolean);
   const last = lines[lines.length - 1] ?? '';
-  const status = /\(HTTP (\d{3})\)/.exec(full)?.[1] ?? /\b(\d{3})\b/.exec(last)?.[1] ?? '';
+  const status = /\(HTTP (\d{3})\)/.exec(full)?.[1] ?? '';
   const message = last.slice(0, 300);
   if (status === '409') return { ok: false, code: 'moved', message: 'the merge request has new commits since it was shown; review them first' };
   if (status === '405' || status === '406' || status === '422') return { ok: false, code: 'blocked', reason: 'blocked', message: `GitLab would not merge it now: ${message}` };
@@ -499,8 +501,9 @@ export type GlabConnection = PrGate | { ok: false; reason: 'unreachable'; messag
 export function glabAuthFailure(err: unknown): GlabAuthProbe {
   const e = err as { stdout?: string; stderr?: string; message?: string; killed?: boolean; signal?: string | null };
   if (e?.killed || e?.signal) return 'unreachable';
-  const out = `${e?.stdout ?? ''}\n${e?.stderr ?? ''}\n${e?.message ?? ''}`;
-  return /\b40[13]\b|has not been authenticated|no token|not logged in/i.test(out) ? 'signed-out' : 'unreachable';
+  // glab wraps long lines, so the wording is matched on collapsed whitespace.
+  const out = `${e?.stdout ?? ''}\n${e?.stderr ?? ''}\n${e?.message ?? ''}`.replace(/\s+/g, ' ');
+  return /\b40[13]\b|has not been authenticated|no gitlab instances have been authenticated|no token|not logged in/i.test(out) ? 'signed-out' : 'unreachable';
 }
 
 // ── 서비스 본체 ───────────────────────────────────────────────────────────────

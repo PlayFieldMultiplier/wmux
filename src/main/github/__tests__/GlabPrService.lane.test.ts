@@ -130,8 +130,9 @@ describe('mapGlabLaneFacts', () => {
     expect(glabCiConfigTouched('.gitlab-ci.yml', '.gitlab-ci.yml')).toBe(true);
     expect(glabCiConfigTouched('.gitlab/ci/test.yml', '.gitlab-ci.yml')).toBe(true);
     expect(glabCiConfigTouched('ci/main.yml', 'ci/main.yml')).toBe(true);
-    expect(glabCiConfigTouched('ci/main.yml', 'ci/main.yml@group/other')).toBe(false);
-    expect(glabCiConfigTouched('src/gitlab-ci.yml', '.gitlab-ci.yml')).toBe(false);
+    // A local include can live anywhere, so any YAML change counts.
+    expect(glabCiConfigTouched('ci/test.yaml', '.gitlab-ci.yml')).toBe(true);
+    expect(glabCiConfigTouched('src/a.ts', '.gitlab-ci.yml')).toBe(false);
     const touched = mapGlabLaneFacts(mrAnswer({ diffStats: [{ path: 'src/a.ts' }, { path: 'ci/main.yml' }] }, {}, 'ci/main.yml'), 'h');
     if (!touched) throw new Error('unmapped');
     expect(touched.checks.at(-1)).toEqual({ name: GLAB_CI_CONFIG_CHECK, workflow: 'wmux', bucket: 'fail', link: '', isRequired: true });
@@ -278,12 +279,15 @@ describe('merge', () => {
     expect(stderr.length).toBeGreaterThan(300);
     expect(glabMergeFailure(Object.assign(new Error('exit 1'), { stderr }))).toMatchObject({ ok: false, code: 'moved' });
     expect(glabMergeFailure(Object.assign(new Error('exit 1'), { stderr: stderr.replace('409', '405') }))).toMatchObject({ ok: false, code: 'blocked' });
+    // A network error naming MR 409 in its URL is not a 409 answer.
+    const reset = 'glab: Put "https://gitlab.example.com/api/v4/projects/1/merge_requests/409/merge": connection reset by peer';
+    expect(glabMergeFailure(Object.assign(new Error('exit 1'), { stderr: reset }))).toMatchObject({ ok: false, code: 'error' });
   });
 
   it('GitLab\'s own refusals: 409 is a moved head, 405 cannot merge; anything else stays an error', async () => {
     const fail = (stderr: string) => makeService((args) => (isGraphql(args) ? mrAnswer() : Object.assign(new Error('exit 1'), { stderr })));
     expect(await fail('glab: SHA does not match HEAD of source branch (HTTP 409)').svc.merge('/repo', KEY, 7, req)).toMatchObject({ ok: false, code: 'moved' });
-    expect(await fail('glab: 405 Method Not Allowed').svc.merge('/repo', KEY, 7, req)).toMatchObject({ ok: false, code: 'blocked', reason: 'blocked' });
+    expect(await fail('glab: 405 Method Not Allowed (HTTP 405)').svc.merge('/repo', KEY, 7, req)).toMatchObject({ ok: false, code: 'blocked', reason: 'blocked' });
     expect(await fail('connection reset').svc.merge('/repo', KEY, 7, req)).toMatchObject({ ok: false, code: 'error' });
   });
 
@@ -311,6 +315,8 @@ describe('connection', () => {
     expect(glabAuthFailure(authFail('X gitlab.example.com has not been authenticated with glab; run `glab auth login`'))).toBe('signed-out');
     expect(glabAuthFailure(authFail('API call failed: GET https://gitlab.example.com/api/v4/user: dial tcp: lookup gitlab.example.com: no such host'))).toBe('unreachable');
     expect(glabAuthFailure(Object.assign(new Error('timed out'), { killed: true }))).toBe('unreachable');
+    // A machine that never signed in to any host, with glab's line wrap.
+    expect(glabAuthFailure(authFail('No GitLab instances have been\nauthenticated with glab; run `glab auth login` to authenticate'))).toBe('signed-out');
 
     let auth: Error | null = authFail('dial tcp: i/o timeout');
     const { svc, calls } = makeService((args) => (args[0] === 'auth' && auth ? auth : {}));
