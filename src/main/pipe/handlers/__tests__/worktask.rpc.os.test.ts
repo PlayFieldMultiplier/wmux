@@ -408,6 +408,8 @@ describe('task.pr', () => {
       branch: TASK.branch,
       title: TASK.title,
       body: 'why',
+      // The default exec answers no push URL: an unknown target, approved as such.
+      pushTarget: '',
     });
     expect(res).toMatchObject({ ok: true, prUrl: 'https://example.test/pr/1' });
   });
@@ -861,7 +863,8 @@ describe('task.pr branch-tip binding', () => {
     expect(await h.call('task.pr', { taskId: TASK.id }, COMMANDER)).toMatchObject({ ok: true });
     expect(h.requestApproval).toHaveBeenCalledWith(expect.objectContaining({
       effect: expect.stringContaining('to gitlab.example.com/group/proj and open'),
-    }));
+    }));    // The approved target goes to the service, which re-reads it before the push.
+    expect(h.createPr).toHaveBeenCalledWith(expect.objectContaining({ pushTarget: 'gitlab.example.com/group/proj' }));
   });
 
   it('refuses when origin\'s push URL changed while the approval was on screen', async () => {

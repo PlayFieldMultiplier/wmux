@@ -27,12 +27,16 @@
  * (GlabPrService.createMergeRequest). Re-entry returns the open MR for that
  * source → target. The push is the GitHub path's. Forks and drafts are not
  * handled, as on GitHub. A host the glab gate refuses may still be GitHub
- * (Enterprise on its own domain, an ssh alias), so the gh path runs next; if
- * gh cannot reach that repository either, the glab refusal is the answer.
+ * (Enterprise on its own domain, an ssh alias), so the gh path runs next,
+ * pinned to origin's repository (`-R`; an ssh alias resolved by `ssh -G`), so
+ * another remote is never the one gh reads; if gh cannot read that
+ * repository either, the glab refusal is the answer.
  *
  * Both paths refuse a branch name `git check-ref-format --branch` does not
- * return unchanged, or one with `:`, `+`, `^`, `~`, `@{` or a leading `-`,
- * before anything is pushed (a refspec, never a name).
+ * return unchanged, or one with `:`, `+`, `^`, `~`, `@{`, a leading `-` or
+ * `refs/`, before anything is pushed (a refspec, never a name). Right before
+ * the push both re-read origin's push URL and refuse one that is not the
+ * approved (`pushTarget`) or first-read one.
  */
 
 import { execFile } from 'node:child_process';
@@ -87,6 +91,10 @@ export interface CreatePrInput {
   title: string;
   /** PR 본문(선택 — 기본 자동 1줄). */
   body?: string;
+  /** origin's push host/project a human approved (`''` when it named none).
+   *  The push is refused when origin's push URL reads otherwise right
+   *  before it. */
+  pushTarget?: string;
 }
 
 export type CreatePrResult =
@@ -150,19 +158,71 @@ export class TaskPrService {
     // host/project, stays on the gh path, which refuses it as before. A host
     // glab refuses goes on to gh (it may be GitHub on its own domain).
     const key = await this.originKey(worktreePath);
+    const target = input.pushTarget ?? key ?? '';
+    const moved = this.targetMoved(target, key ?? '');
+    if (moved) return moved;
     if (key && isGitlabRepoKey(key)) {
       const refused = await this.glabGate(worktreePath, key, branch);
-      if (!refused) return this.createMr(input, key, body);
-      return this.createGh(input, body, refused);
+      if (!refused) return this.createMr(input, key, body, target);
+      const ghRepo = await this.ghRepoOf(worktreePath, key);
+      if (!ghRepo) return refused;
+      return this.createGh(input, body, target, { glabRefusal: refused, ghRepo });
     }
-    return this.createGh(input, body);
+    return this.createGh(input, body, target);
   }
 
-  /** The gh path. With `glabRefusal` (the glab gate refused a non-GitHub
-   *  host), a gh that is missing, signed out or cannot read the repository
-   *  answers that refusal instead, before anything is pushed. */
-  private async createGh(input: CreatePrInput, body: string, glabRefusal?: CreatePrResult): Promise<CreatePrResult> {
+  /** The refusal when origin's push URL (`now`) is not the one `target`
+   *  names; null when it is. */
+  private targetMoved(target: string, now: string): CreatePrResult | null {
+    if (target === now) return null;
+    return {
+      ok: false,
+      reason: 'error',
+      error:
+        `origin's push URL changed (${target || 'unknown'} → ${now || 'unknown'}), so where it was approved to go is not ` +
+        'where it would go — nothing was pushed; read the new state and ask again',
+    };
+  }
+
+  /** Re-read origin's push URL right before a push: the refusal when it is
+   *  no longer `target`, else null. */
+  private async pushTargetMoved(worktreePath: string, target: string): Promise<CreatePrResult | null> {
+    return this.targetMoved(target, (await this.originKey(worktreePath)) ?? '');
+  }
+
+  /** origin's key as gh names it (`-R`): a dotless ssh alias resolved to its
+   *  real host with `ssh -G` (as gh itself does). Null when it cannot be. */
+  private async ghRepoOf(worktreePath: string, key: string): Promise<string | null> {
+    const [host, ...rest] = key.split('/');
+    if (host.includes('.')) return key;
+    if (!/^[a-z0-9][\w.-]*$/i.test(host)) return null;
+    try {
+      const { stdout } = await this.exec(process.platform === 'win32' ? 'ssh.exe' : 'ssh', ['-G', host], {
+        cwd: worktreePath,
+        timeout: GH_TIMEOUT_MS,
+        env: getExecEnv(),
+        windowsHide: true,
+      });
+      const real = /^hostname\s+(\S+)\s*$/im.exec(stdout)?.[1]?.toLowerCase() ?? '';
+      return /^[a-z0-9][\w.-]*\.[\w.-]+$/.test(real) ? [real, ...rest].join('/') : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The gh path. After a glab refusal of a non-GitHub host, every gh call
+   *  names `ghRepo` (origin's repository), and a gh that is missing, signed
+   *  out or cannot read it answers that refusal instead, before anything is
+   *  pushed. */
+  private async createGh(
+    input: CreatePrInput,
+    body: string,
+    target: string,
+    fallback?: { glabRefusal: CreatePrResult; ghRepo: string },
+  ): Promise<CreatePrResult> {
     const { taskId, verifiedWorkspaceId, worktreePath, branch, title } = input;
+    const glabRefusal = fallback?.glabRefusal;
+    const ghRepo = fallback?.ghRepo;
 
     // ── ① gh 게이트: 버전 + 인증(G3 — 버전≠인증) ──
     try {
@@ -190,7 +250,7 @@ export class TaskPrService {
     // After a glab refusal, gh must see the repository before anything is pushed.
     let earlyBase: string | undefined;
     if (glabRefusal) {
-      const seen = await this.ghDefaultBranch(worktreePath);
+      const seen = await this.ghDefaultBranch(worktreePath, ghRepo);
       if (!seen.ok || !seen.base) return glabRefusal;
       earlyBase = seen.base;
     }
@@ -226,6 +286,8 @@ export class TaskPrService {
 
     // ── ③ push -u origin -- {branch}(execFile argv + `--` 세퍼레이터 — F6: 브랜치명이
     // 옵션으로 오인되는 표면 차단). 이미 존재(fast-forward)면 무해 통과.
+    const movedBeforePush = await this.pushTargetMoved(worktreePath, target);
+    if (movedBeforePush) return movedBeforePush;
     try {
       await this.git(['push', '-u', 'origin', '--', branch], worktreePath);
     } catch (err) {
@@ -238,7 +300,7 @@ export class TaskPrService {
     if (earlyBase !== undefined) {
       base = earlyBase;
     } else {
-      const read = await this.ghDefaultBranch(worktreePath);
+      const read = await this.ghDefaultBranch(worktreePath, ghRepo);
       if (!read.ok) {
         return { ok: false, reason: 'pr-failed', error: `Could not determine the base branch (repo default): ${read.error}` };
       }
@@ -252,13 +314,13 @@ export class TaskPrService {
     let prUrl = '';
     try {
       const { stdout } = await this.gh(
-        ['pr', 'create', '--head', branch, '--base', base, '--title', title, '--body', body],
+        ['pr', 'create', ...(ghRepo ? ['-R', ghRepo] : []), '--head', branch, '--base', base, '--title', title, '--body', body],
         worktreePath,
       );
       prUrl = extractPrUrl(stdout);
     } catch (createErr) {
       // 멱등 재진입(CX5+G4): 기존 PR을 조회해 URL 회수로 수렴.
-      const recovered = await this.recoverExistingPr(worktreePath, branch);
+      const recovered = await this.recoverExistingPr(worktreePath, branch, ghRepo);
       if (recovered) {
         return this.finalize(taskId, verifiedWorkspaceId, worktreePath, branch, recovered, true);
       }
@@ -267,7 +329,7 @@ export class TaskPrService {
 
     if (!prUrl || !WORKTASK_PR_URL_RE.test(prUrl)) {
       // 출력 파싱 실패 — 재진입 조회로 URL 회수 시도.
-      const recovered = await this.recoverExistingPr(worktreePath, branch);
+      const recovered = await this.recoverExistingPr(worktreePath, branch, ghRepo);
       if (recovered) {
         return this.finalize(taskId, verifiedWorkspaceId, worktreePath, branch, recovered, true);
       }
@@ -281,11 +343,12 @@ export class TaskPrService {
     return this.finalize(taskId, verifiedWorkspaceId, worktreePath, branch, prUrl, false);
   }
 
-  /** The repo default branch as gh reads it (`''` when it has none). */
-  private async ghDefaultBranch(worktreePath: string): Promise<{ ok: true; base: string } | { ok: false; error: string }> {
+  /** The repo default branch as gh reads it (`''` when it has none), of
+   *  `repo` when named, else the repository gh picks from the remotes. */
+  private async ghDefaultBranch(worktreePath: string, repo?: string): Promise<{ ok: true; base: string } | { ok: false; error: string }> {
     try {
       const { stdout } = await this.gh(
-        ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
+        ['repo', 'view', ...(repo ? [repo] : []), '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
         worktreePath,
       );
       return { ok: true, base: stdout.trim() };
@@ -299,7 +362,7 @@ export class TaskPrService {
    *  does not hand back unchanged (`@{-1}` expands). Null when it is fine. */
   private async branchRefusal(worktreePath: string, branch: string): Promise<CreatePrResult | null> {
     const refusal: CreatePrResult = { ok: false, reason: 'error', error: `Not a plain branch name: ${JSON.stringify(branch)} — nothing was pushed.` };
-    if (!branch || branch.startsWith('-') || /[:+^~]|@\{/.test(branch)) return refusal;
+    if (!branch || branch.startsWith('-') || branch.startsWith('refs/') || /[:+^~]|@\{/.test(branch)) return refusal;
     try {
       const { stdout } = await this.git(['check-ref-format', '--branch', branch], worktreePath);
       return stdout.trim() === branch ? null : refusal;
@@ -356,7 +419,7 @@ export class TaskPrService {
 
   /** The GitLab path, after glabGate: createPr's steps with glab, inside
    *  origin's project. */
-  private async createMr(input: CreatePrInput, key: string, body: string): Promise<CreatePrResult> {
+  private async createMr(input: CreatePrInput, key: string, body: string, target: string): Promise<CreatePrResult> {
     const { taskId, verifiedWorkspaceId, worktreePath, branch, title } = input;
     const host = key.split('/')[0];
 
@@ -375,6 +438,8 @@ export class TaskPrService {
     }
 
     // ── ③ push — the gh path's push (origin was read above).
+    const movedBeforePush = await this.pushTargetMoved(worktreePath, target);
+    if (movedBeforePush) return movedBeforePush;
     try {
       await this.git(['push', '-u', 'origin', '--', branch], worktreePath);
     } catch (err) {
@@ -407,10 +472,10 @@ export class TaskPrService {
   }
 
   /** 기존 PR URL 조회(멱등 재진입). 없으면 null. */
-  private async recoverExistingPr(worktreePath: string, branch: string): Promise<string | null> {
+  private async recoverExistingPr(worktreePath: string, branch: string, repo?: string): Promise<string | null> {
     try {
       const { stdout } = await this.gh(
-        ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url'],
+        ['pr', 'list', ...(repo ? ['-R', repo] : []), '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url'],
         worktreePath,
       );
       const url = stdout.trim();

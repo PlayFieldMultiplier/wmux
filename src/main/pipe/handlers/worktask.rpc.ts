@@ -906,6 +906,8 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
       branch: task.branch,
       title: task.title,
       ...(body !== undefined ? { body } : {}),
+      // The service re-reads it right before the push and refuses another.
+      pushTarget: targetBefore,
     });
   });
 
