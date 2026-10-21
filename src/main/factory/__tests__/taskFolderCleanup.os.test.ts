@@ -164,8 +164,10 @@ describe('cleanTaskFolder', () => {
     const p = ports({ prepare: async (_taskId, root, folder) => { calls.push([root, folder]); return { status, error: 'exited with code 1' }; } });
     expect(await cleanTaskFolder(p, row('completed'), mission, [])).toBe('removed');
 
+    // The repository as git spells it (Windows: forward slashes, long names).
+    const recordedRoot = p.store.get('wtask-abc-12345678')?.repoRoot;
     expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(false);
-    expect(calls).toEqual([[repo, wt]]);
+    expect(calls).toEqual([[recordedRoot, wt]]);
     expect(fs.existsSync(wt)).toBe(false);
     expect(p.store.get('wtask-abc-12345678')?.state).toBe('removed');
 
