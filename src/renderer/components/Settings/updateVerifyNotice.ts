@@ -27,3 +27,24 @@ export function verifyFailedAfterAvailable(
 export function verifyFailedDisplayVersion(version: string): string {
   return normalizeVersion(version);
 }
+
+/**
+ * The line's version after the mount-time getNotice reply.
+ *
+ * The reply is a snapshot taken when the request went out; a live updater
+ * event that arrived while it was in flight is fresher. `requestedAt` is the
+ * live-event count when the request was sent, `eventsNow` the count when the
+ * reply lands: any event in between wins, and the reply leaves the line as
+ * the events set it. Without that, an `available` for a newer release could
+ * clear the line and the late reply bring back a failure for an update that
+ * is fine.
+ */
+export function verifyFailedAfterNotice(
+  prev: string | null,
+  replyVersion: string | null,
+  requestedAt: number,
+  eventsNow: number,
+): string | null {
+  if (eventsNow !== requestedAt) return prev;
+  return prev ?? (replyVersion ? verifyFailedDisplayVersion(replyVersion) : null);
+}

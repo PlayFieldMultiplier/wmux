@@ -80,6 +80,14 @@ describe('SettingsPanel — update widget reads state on mount', () => {
     expect(updateWidget()).toMatch(/electronAPI\?\.updater\?\.getNotice/);
   });
 
+  it('orders the mount-time notice reply after any live updater event', () => {
+    const body = updateWidget();
+    // Every live subscription counts, and the reply goes through the pure rule.
+    expect(body.match(/liveUpdaterEvents\.current\+\+;/g)).toHaveLength(4);
+    expect(body).toMatch(/const requestedAt = liveUpdaterEvents\.current;/);
+    expect(body).toMatch(/verifyFailedAfterNotice\(\s*prev, notice\.verifyFailedVersion, requestedAt, liveUpdaterEvents\.current,/);
+  });
+
   it('says a published update failed verification on its own line', () => {
     const body = updateWidget();
     expect(body).toMatch(/data\.code === 'verify-failed'/);

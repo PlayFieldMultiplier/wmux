@@ -111,7 +111,7 @@ import { MAX_WORKSPACE_IDLE_DAYS, MIN_WORKSPACE_IDLE_DAYS } from '../../../share
 import { sendWorkspaceSettleIdleDays } from '../../hooks/useWorkspaceSettleBridge';
 import { FactoryTab } from './FactoryTab';
 import { matchesShortcutQuery } from './shortcutSearch';
-import { verifyFailedAfterAvailable, verifyFailedDisplayVersion } from './updateVerifyNotice';
+import { verifyFailedAfterAvailable, verifyFailedAfterNotice, verifyFailedDisplayVersion } from './updateVerifyNotice';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1588,11 +1588,15 @@ function UpdateStatus() {
   // The published release whose installer failed verification; main does not
   // download it again until the release changes, and this line says so.
   const [verifyFailedVersion, setVerifyFailedVersion] = useState<string | null>(null);
+  // Live updater events seen so far, to order the mount-time getNotice reply
+  // against them.
+  const liveUpdaterEvents = useRef(0);
   // Updater-not-configured in dev is expected; don't spam toasts for UNKNOWN.
   const { invoke: ipcInvoke } = useIpc({ silent: ['UNKNOWN'] });
 
   useEffect(() => {
     const removeAvailable = window.electronAPI.updater.onUpdateAvailable((data) => {
+      liveUpdaterEvents.current++;
       // Another release, or this one verified after all: the failure line no
       // longer describes what is on offer.
       setVerifyFailedVersion((prev) => verifyFailedAfterAvailable(prev, data));
@@ -1621,14 +1625,17 @@ function UpdateStatus() {
       }
     });
     const removeProgress = window.electronAPI.updater.onUpdateProgress((data) => {
+      liveUpdaterEvents.current++;
       setState('downloading');
       setPercent(typeof data.percent === 'number' ? data.percent : null);
     });
     const removeNotAvailable = window.electronAPI.updater.onUpdateNotAvailable(() => {
+      liveUpdaterEvents.current++;
       setState('not-available');
       setVerifyFailedVersion(null);
     });
     const removeError = window.electronAPI.updater.onUpdateError((data) => {
+      liveUpdaterEvents.current++;
       // Said by its own line below, not as a generic failure with main's text.
       if (data.code === 'verify-failed') {
         setState('idle');
@@ -1670,12 +1677,16 @@ function UpdateStatus() {
     const read = window.electronAPI?.updater?.getNotice;
     if (!read) return; // stale preload / tests
     let cancelled = false;
+    // A live event that lands while this is in flight is fresher than the
+    // reply (verifyFailedAfterNotice).
+    const requestedAt = liveUpdaterEvents.current;
     void read()
       .then((notice) => {
         if (cancelled) return;
         setInstanceDisabled(notice.instanceDisabled);
-        const failed = notice.verifyFailedVersion;
-        if (failed) setVerifyFailedVersion((prev) => prev ?? verifyFailedDisplayVersion(failed));
+        setVerifyFailedVersion((prev) => verifyFailedAfterNotice(
+          prev, notice.verifyFailedVersion, requestedAt, liveUpdaterEvents.current,
+        ));
       })
       .catch(() => { /* the widget still works from live events */ });
     return () => { cancelled = true; };
