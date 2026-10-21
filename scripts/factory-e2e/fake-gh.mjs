@@ -31,6 +31,9 @@ import { spawnSync } from 'node:child_process';
 import { lockGhState, writeGhStateFile } from './gh-state-lock.mjs';
 
 const STATE = process.env.FACTORY_E2E_GH_STATE;
+/** The scratch repo's bare origin: a PR's base tip is read from it on every
+ *  request, as GitHub reports the branch's commit now. */
+const ORIGIN = process.env.FACTORY_E2E_GH_ORIGIN;
 const LOG = process.env.FACTORY_E2E_GH_LOG;
 const argv = process.argv.slice(2);
 
@@ -158,6 +161,14 @@ function watchPrNode(pr) {
   };
 }
 
+/** The commit `branch` points at in the origin now, or null. */
+function baseTip(branch) {
+  if (!ORIGIN || !/^[A-Za-z0-9._/-]{1,200}$/.test(branch)) return null;
+  const r = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`], { cwd: ORIGIN, encoding: 'utf8' });
+  const sha = r.status === 0 ? r.stdout.trim() : '';
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
 function lanePrNode(pr, key) {
   return {
     number: pr.number,
@@ -170,7 +181,7 @@ function lanePrNode(pr, key) {
     headRefOid: pr.headSha,
     headRefName: pr.headRefName,
     baseRefName: pr.baseRefName ?? 'main',
-    baseRefOid: pr.baseRefOid ?? null,
+    baseRef: { target: { oid: baseTip(pr.baseRefName ?? 'main') } },
     mergedAt: pr.mergedAt ?? null,
     mergeCommit: pr.mergeCommit ? { oid: pr.mergeCommit } : null,
     author: { login: pr.author },

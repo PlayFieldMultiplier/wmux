@@ -266,6 +266,7 @@ function prepare(ctx) {
     'unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN',
     `export FACTORY_E2E_GH_STATE="${ctx.ghState}"`,
     `export FACTORY_E2E_GH_LOG="${ctx.ghLog}"`,
+    ...(ctx.repo ? [`export FACTORY_E2E_GH_ORIGIN="${ctx.repo.origin}"`] : []),
     `export FACTORY_E2E_WORKER_LOG="${ctx.workerLog}"`,
     `export FACTORY_E2E_MCP_BUNDLE="${MCP_BUNDLE}"`,
     `export FACTORY_E2E_NODE="${NODE}"`,
@@ -499,10 +500,11 @@ function ghEdit(ctx, a) {
         pr.headSha = git(['rev-parse', 'HEAD'], ctx.repo.seed);
         pr.headRefName ??= 'feature';
       }
-      // GitHub keeps every PR head at refs/pull/<n>/head, and reports the
-      // base branch's tip.
+      // GitHub keeps every PR head at refs/pull/<n>/head. The fake reads the
+      // base tip live (fake-gh.mjs baseTip); the one at this point is saved
+      // for the graders.
       git(['update-ref', `refs/pull/${pr.number}/head`, pr.headSha], ctx.repo.origin);
-      pr.baseRefOid ??= git(['rev-parse', `refs/heads/${pr.baseRefName}`], ctx.repo.origin);
+      ctx.saved[`pr${pr.number}Base`] = git(['rev-parse', `refs/heads/${pr.baseRefName}`], ctx.repo.origin);
       repo.prs.push(pr);
       ctx.saved[`pr${pr.number}Head`] = pr.headSha;
       ctx.saved[`pr${pr.number}Branch`] = pr.headRefName;

@@ -69,8 +69,8 @@ registerToolModule({
     host.tool(
       'pr_verdict',
       'Record your verdict on one PR head. evidence.task_id is the verify task (preset "verify", detached at head_sha) whose gate wmux recorded at that SHA: '
-        + 'a pass needs that gate green; a fail may rest on a red one. evidence.reading=true records your own reading instead, for a change no gate grades '
-        + '(docs-only, or a repository with no gate). wmux re-reads the PR head and checks the evidence the way the merge lane will; '
+        + 'a pass needs that gate green; a fail may rest on a red one. evidence.reading=true records your own reading instead, only when the PR\'s base branch '
+        + 'declares no gate (a docs-only change in a repository with a gate still needs a verify task). wmux re-reads the PR head and checks the evidence the way the merge lane will; '
         + 'a refusal names the reason (head-mismatch, evidence-mismatch, gate-skipped, gate-failed, gate-required, ...).',
       {
         pr_number: PR_NUMBER,

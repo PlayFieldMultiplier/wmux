@@ -77,7 +77,8 @@ export function reviewerReadsNoWorker(snap, expect) {
   return [
     criterion('verdict_fact', facts.length === 1 && facts[0].ref?.botId === vid, `${facts.length} verdict.recorded fact(s) at ${String(head).slice(0, 7)}; ${took}`),
     criterion('reading_only_pass', !!rec && rec.version === 2 && rec.verdict === 'pass' && rec.evidence?.reading === expect.reading && rec.evidence?.gateHeadSha === head
-      && rec.evidence?.baseRef === 'origin/main' && /^[0-9a-f]{40}$/.test(String(rec.evidence?.baseSha)),
+      // Bound to the base commit the forge reported for the PR.
+      && rec.evidence?.baseRef === 'origin/main' && !!snap.saved?.[`pr${n}Base`] && rec.evidence?.baseSha === snap.saved?.[`pr${n}Base`],
       rec ? `${rec.verdict}, evidence ${JSON.stringify(rec.evidence)}` : 'no verdict by the verifier'),
     criterion('no_verify_worker', verifierTasks.length === 0 && installs.length === 0, `${verifierTasks.length} task(s) by the verifier, ${installs.length} install(s)`),
     criterion('ready_card_in_pr_thread', ready.length === 1 && ready[0].title.includes(String(head).slice(0, 7)), ready.map((c) => c.title).join(' | ') || 'none'),
