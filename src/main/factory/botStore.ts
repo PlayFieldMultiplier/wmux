@@ -282,6 +282,7 @@ export function parseRemovedBot(raw: unknown): RemovedBot | null {
     ...(avatar ? { avatar } : {}),
     ...(hue !== undefined ? { hue } : {}),
     removedAt: raw.removedAt as number,
+    ...(Number.isSafeInteger(raw.clearedAt) ? { clearedAt: raw.clearedAt as number } : {}),
   };
 }
 
@@ -802,6 +803,19 @@ export class BotStore implements BotDirectoryApi {
     });
     this.removed = this.removed.filter((r) => r.id !== botId);
     if (tomb) this.removed = [...this.removed, tomb].slice(-REMOVED_BOTS_MAX);
+    this.changed();
+    return true;
+  }
+
+  /** Take a removed bot's 1:1 out of the Archive (`clearedAt`); its
+   *  tombstone stays, so the cards it wrote keep its name. False when no
+   *  tombstone of that id is kept. */
+  clearRemoved(botId: string): boolean {
+    const tomb = this.removed.find((r) => r.id === botId);
+    if (!tomb) return false;
+    if (tomb.clearedAt !== undefined) return true;
+    const at = this.now();
+    this.removed = this.removed.map((r) => (r.id === botId ? { ...r, clearedAt: at } : r));
     this.changed();
     return true;
   }

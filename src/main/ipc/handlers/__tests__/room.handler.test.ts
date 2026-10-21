@@ -139,11 +139,16 @@ describe('room.handler', () => {
   });
 
   it('a removed bot keeps its name, picture, colour slot and workspace (its 1:1), marked removed', async () => {
-    const s = setup({ removed: [{ id: 'bot-0000000d', workspaceId: WS, role: 'lead', template: 'developer', name: 'Developer', hue: 2, removedAt: 5 }] });
+    const s = setup({ removed: [
+      { id: 'bot-0000000d', workspaceId: WS, role: 'lead', template: 'developer', name: 'Developer', hue: 2, removedAt: 5 },
+      { id: 'bot-0000000e', workspaceId: WS, role: 'lead', name: 'Cleared', removedAt: 5, clearedAt: 9 },
+    ] });
     dirs.push(s.dir);
     expect(await s.call(IPC.ROOM_ACTORS)).toEqual({ actors: {
       'bot-00000001': { role: 'verifier', name: 'Verifier' },
       'bot-0000000d': { role: 'lead', name: 'Developer', removed: true, hue: 2, workspaceId: WS },
+      // Out of the Archive: still named on its cards.
+      'bot-0000000e': { role: 'lead', name: 'Cleared', removed: true, cleared: true, workspaceId: WS },
     } });
   });
 

@@ -19,16 +19,17 @@
 // A bot added here wakes once on its own (`greetNewBot`, wake reason
 // `intro`): it greets the owner and asks what to do, with choices.
 //
-// `createTeamFromFolder` is "Add team": the five bots of TEAM_TEMPLATES in
-// one workspace, the coordinator first, on one repository resolved once,
-// names checked (and refused when taken) before any bot is made.
+// `createTeamFromFolder` is "Add team": the bots of TEAM_TEMPLATES the
+// workspace does not have yet (all five for a new team), the coordinator
+// first, on one repository resolved once, names checked (and refused when
+// taken) before any bot is made.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { BotProfile } from '../../shared/bot';
-import { normalizeBotName, isCoordinatorBot } from '../../shared/bot';
-import { TEAM_TEMPLATES, type FactoryBotCreateResult, type FactoryBotCreateTeamResult, type FactoryBotRepoSuggestion } from '../../shared/botCreate';
+import type { BotProfile, BotTemplate } from '../../shared/bot';
+import { normalizeBotName } from '../../shared/bot';
+import { TEAM_TEMPLATES, teamTemplatesPresent, type FactoryBotCreateResult, type FactoryBotCreateTeamResult, type FactoryBotRepoSuggestion } from '../../shared/botCreate';
 import { BOTS_MAX } from './botStore';
 import type { WakeItem } from '../../shared/wake';
 import { normalizeRepoKey } from '../../shared/repoKey';
@@ -181,7 +182,9 @@ export async function botRepoFromFolder(
   return resolved;
 }
 
-/** "Add team": the five team bots, coordinator first, one repository. */
+/** "Add team": the team bots the workspace is missing, coordinator first,
+ *  one repository. A whole team already there makes nothing (ok, `bots`
+ *  empty). */
 export async function createTeamFromFolder(
   store: BotStore | null,
   req: unknown,
@@ -192,30 +195,36 @@ export async function createTeamFromFolder(
   const workspaceId = r.workspaceId;
   if (typeof workspaceId !== 'string' || workspaceId.length === 0) return { ok: false, code: 'invalid_argument', message: 'workspaceId must be a workspace id' };
   const raw = r.names && typeof r.names === 'object' && !Array.isArray(r.names) ? (r.names as Record<string, unknown>) : {};
-  const names: string[] = [];
-  for (const template of TEAM_TEMPLATES) {
-    const name = normalizeBotName(raw[template]);
-    if (!name) return { ok: false, code: 'invalid_argument', message: `the ${template} needs a name` };
-    names.push(name);
-  }
-  // Checked before the repository is read and again after it (a bot added
+  // The templates to make: those no bot of the workspace has yet. Read
+  // before the repository is resolved and again after it (a bot added
   // meanwhile counts).
-  const refusal = (): FactoryBotCreateTeamResult | null => {
+  const missing = (): BotTemplate[] => {
+    const present = teamTemplatesPresent(store.list({ workspaceId }));
+    return TEAM_TEMPLATES.filter((tpl) => !present.includes(tpl));
+  };
+  const named = (templates: readonly BotTemplate[]): FactoryBotCreateTeamResult | string[] => {
+    const out: string[] = [];
+    for (const template of templates) {
+      const name = normalizeBotName(raw[template]);
+      if (!name) return { ok: false, code: 'invalid_argument', message: `the ${template} needs a name` };
+      out.push(name);
+    }
+    return out;
+  };
+  const refusal = (names: readonly string[]): FactoryBotCreateTeamResult | null => {
     const key = (n: string) => n.toLocaleLowerCase();
-    const here = store.list({ workspaceId });
-    const taken = new Set(here.map((b) => key(b.name)));
+    const taken = new Set(store.list({ workspaceId }).map((b) => key(b.name)));
     const seen = new Set<string>();
     for (const name of names) {
       if (taken.has(key(name)) || seen.has(key(name))) return { ok: false, code: 'name_taken', message: `${name} is already a bot's name in this workspace` };
       seen.add(key(name));
     }
-    if (here.some((b) => b.enabled && isCoordinatorBot(b))) {
-      return { ok: false, code: 'has_lead', message: 'This workspace already has a coordinator: add the other bots one by one.' };
-    }
-    if (store.list().length + TEAM_TEMPLATES.length > BOTS_MAX) return { ok: false, code: 'too_many_bots', message: `at most ${BOTS_MAX} bots` };
+    if (store.list().length + names.length > BOTS_MAX) return { ok: false, code: 'too_many_bots', message: `at most ${BOTS_MAX} bots` };
     return null;
   };
-  const early = refusal();
+  const firstNames = named(missing());
+  if (!Array.isArray(firstNames)) return firstNames;
+  const early = refusal(firstNames);
   if (early) return early;
   // One repository for all five, resolved once, as "Add bot" resolves it.
   let repo = workspaceRepo(store, workspaceId) ?? undefined;
@@ -229,20 +238,24 @@ export async function createTeamFromFolder(
     }
     repo = current ?? resolved.repo;
   }
-  const late = refusal();
+  const templates = missing();
+  const names = named(templates);
+  if (!Array.isArray(names)) return names;
+  const late = refusal(names);
   if (late) return late;
+  const skipped = TEAM_TEMPLATES.filter((tpl) => !templates.includes(tpl));
   // Made in one go, with no await between them: nothing else is added in between.
   const bots: BotProfile[] = [];
-  for (const [i, template] of TEAM_TEMPLATES.entries()) {
+  for (const [i, template] of templates.entries()) {
     const made = store.create({ workspaceId, template, name: names[i], ...(repo ? { repo } : {}) });
     if (!made.ok) {
-      // All five or none: the ones made in this call go again.
+      // All the missing ones or none: the ones made in this call go again.
       for (const b of bots) store.remove(b.id);
       return { ok: false, code: made.code === 'too_many_bots' ? 'too_many_bots' : 'invalid_argument', message: made.message };
     }
     bots.push(made.bot);
   }
-  return { ok: true, bots };
+  return { ok: true, bots, ...(skipped.length > 0 ? { skipped } : {}) };
 }
 
 /** Queue a new bot's first wake (`intro`: greet the owner, ask what to do
@@ -267,7 +280,9 @@ export interface BotRepoSuggestDeps extends BotRepoDeps {
 }
 
 /** The workspace's current folder as main tracks it: its active pane's shell
- *  cwd, else the first of its other panes that has one. Never a path the
+ *  cwd, else the first of its other panes that has one, else the folder the
+ *  workspace mirror records for it (a workspace whose panes have reported
+ *  no cwd yet still has the one it was last seen in). Never a path the
  *  renderer sends with the request. */
 export function workspaceFolder(
   workspaceId: string,
@@ -281,7 +296,8 @@ export function workspaceFolder(
     const cwd = cwdOf(ptyId);
     if (cwd && path.isAbsolute(cwd)) return cwd;
   }
-  return null;
+  const recorded = entry.metadata?.cwd;
+  return recorded && path.isAbsolute(recorded) ? recorded : null;
 }
 
 /** `p` with the home folder shortened to `~`. */

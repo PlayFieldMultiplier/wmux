@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import { dialog, ipcMain, nativeImage, type BrowserWindow, type OpenDialogOptions } from 'electron';
 import { IPC } from '../../../shared/constants';
-import { BOT_ID_RE, type BotProfile, type BotStatus } from '../../../shared/bot';
+import { BOT_ID_RE, isCoordinatorBot, type BotProfile, type BotStatus } from '../../../shared/bot';
 import { wrapHandler } from '../wrapHandler';
 import { getBotStore } from '../../factory/botStore';
 import { getBotRuntime } from '../../factory/BotRuntime';
@@ -24,6 +24,7 @@ import { getWakeQueue } from '../../factory/wakeQueue';
 import type {
   FactoryBotAvatarPickResult,
   FactoryBotAvatarSetResult,
+  FactoryBotClearRemovedResult,
   FactoryBotCreateResult,
   FactoryBotCreateTeamResult,
   FactoryBotRepoSuggestion,
@@ -283,9 +284,9 @@ export function factoryBotCreateHandler(
   };
 }
 
-/** FACTORY_BOT_CREATE_TEAM's body: the sender check, the five bots, then
- *  the coordinator's greeting only (five greetings at once would flood the
- *  owner). */
+/** FACTORY_BOT_CREATE_TEAM's body: the sender check, the team's missing
+ *  bots, then the coordinator's greeting only, when it was made here (five
+ *  greetings at once would flood the owner). */
 export function factoryBotCreateTeamHandler(
   getWindow: () => BrowserWindow | null,
   deps: BotRepoDeps & { store?: typeof getBotStore; greet?: (bot: BotProfile) => void } = {},
@@ -293,7 +294,8 @@ export function factoryBotCreateTeamHandler(
   return async (e, req) => {
     if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'operator_only', message: 'only the main window may add bots' };
     const r = await createTeamFromFolder((deps.store ?? getBotStore)(), req, deps);
-    if (r.ok) (deps.greet ?? greetAddedBot)(r.bots[0]);
+    const lead = r.ok ? r.bots.find((b) => isCoordinatorBot(b)) : undefined;
+    if (lead) (deps.greet ?? greetAddedBot)(lead);
     return r;
   };
 }
@@ -365,6 +367,22 @@ export function factoryBotSetAvatarHandler(
     const saved = s.setAvatar(r.botId, r.avatar);
     if (saved.ok) return { ok: true, bot: saved.bot };
     return { ok: false, code: saved.code === 'not_found' ? 'not_found' : 'invalid_argument', message: saved.message };
+  };
+}
+
+/** FACTORY_BOT_CLEAR_REMOVED's body: the sender check, then the deleted
+ *  bot's 1:1 leaves the Archive (botStore.ts clearRemoved). */
+export function factoryBotClearRemovedHandler(
+  getWindow: () => BrowserWindow | null,
+  store: typeof getBotStore = getBotStore,
+): (e: { sender?: unknown; senderFrame?: unknown }, req: unknown) => FactoryBotClearRemovedResult {
+  return (e, req) => {
+    if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'operator_only', message: 'only the main window may change the Archive' };
+    const s = store();
+    if (!s) return { ok: false, code: 'not_started', message: 'The factory is not running.' };
+    const r = req && typeof req === 'object' && !Array.isArray(req) ? (req as Record<string, unknown>) : {};
+    if (typeof r.botId !== 'string' || !BOT_ID_RE.test(r.botId)) return { ok: false, code: 'invalid_argument', message: 'botId must be a bot id' };
+    return s.clearRemoved(r.botId) ? { ok: true } : { ok: false, code: 'not_found', message: `no deleted bot ${r.botId}` };
   };
 }
 
@@ -478,6 +496,7 @@ export function registerFactoryHandlers(
     IPC.FACTORY_BOT_PICK_AVATAR,
     IPC.FACTORY_BOT_SET_AVATAR,
     IPC.FACTORY_BOT_SUGGEST_REPO,
+    IPC.FACTORY_BOT_CLEAR_REMOVED,
     IPC.FACTORY_STOP_ALL,
     IPC.FACTORY_STOP_BOT,
     IPC.FACTORY_STOP_TASK,
@@ -525,6 +544,8 @@ export function registerFactoryHandlers(
   ipcMain.handle(IPC.FACTORY_BOT_SET_AVATAR, wrapHandler(IPC.FACTORY_BOT_SET_AVATAR, factoryBotSetAvatarHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_BOT_SUGGEST_REPO, wrapHandler(IPC.FACTORY_BOT_SUGGEST_REPO, factoryBotSuggestRepoHandler(getWindow, suggestDeps)));
+
+  ipcMain.handle(IPC.FACTORY_BOT_CLEAR_REMOVED, wrapHandler(IPC.FACTORY_BOT_CLEAR_REMOVED, factoryBotClearRemovedHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_STOP_ALL, wrapHandler(IPC.FACTORY_STOP_ALL, factoryStopHandler(getWindow, 'all')));
 

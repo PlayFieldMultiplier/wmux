@@ -30,6 +30,8 @@
 //         // IPC.FACTORY_BOT_SET_AVATAR: save or clear a bot's picture (optional)
 //     suggestBotRepo(workspaceId: string): Promise<FactoryBotRepoSuggestion>
 //         // IPC.FACTORY_BOT_SUGGEST_REPO: the repository "Add bot" offers (optional)
+//     clearRemovedBot(botId: string): Promise<FactoryBotClearRemovedResult>
+//         // IPC.FACTORY_BOT_CLEAR_REMOVED: a deleted bot's 1:1 leaves the Archive (optional)
 //     getSettings(): Promise<FactorySettingsView>
 //         // IPC.FACTORY_SETTINGS_GET
 //     setSettings(patch: Partial<FactorySettingsView>): Promise<FactorySettingsView | null>
@@ -64,6 +66,7 @@ import type {
   FactoryBotCreateTeamRequest,
   FactoryBotCreateTeamResult,
   FactoryBotCreateResult,
+  FactoryBotClearRemovedResult,
   FactoryBotRepoSuggestion,
 } from '../../../shared/botCreate';
 
@@ -130,6 +133,9 @@ export interface FactoryBotPort {
   setAvatar?(botId: string, avatar: string | null): Promise<FactoryBotAvatarSetResult>;
   /** Absent: "Add bot" suggests no repository (the owner picks a folder). */
   suggestRepo?(workspaceId: string): Promise<FactoryBotRepoSuggestion>;
+  /** Absent: the Archive keeps every deleted bot's 1:1. Takes one out (its
+   *  messages and its name on them stay). */
+  clearRemoved?(botId: string): Promise<FactoryBotClearRemovedResult>;
   /** Absent: no stop here. Interrupts every bot turn, cancels running gates
    *  and stops every bot worker. */
   stopAll?(): Promise<FactoryStopResult>;
@@ -203,6 +209,7 @@ interface FactoryBridge {
   pickBotAvatar?: () => Promise<FactoryBotAvatarPickResult>;
   setBotAvatar?: (botId: string, avatar: string | null) => Promise<FactoryBotAvatarSetResult>;
   suggestBotRepo?: (workspaceId: string) => Promise<FactoryBotRepoSuggestion>;
+  clearRemovedBot?: (botId: string) => Promise<FactoryBotClearRemovedResult>;
   getSettings?: () => Promise<FactorySettingsView>;
   setSettings?: (patch: Partial<FactorySettingsView>) => Promise<FactorySettingsView | null>;
   stopAll?: () => Promise<FactoryStopResult>;
@@ -252,6 +259,7 @@ export function bridgeBotPort(): FactoryBotPort {
     ...(b.pickBotAvatar ? { pickAvatar: b.pickBotAvatar } : {}),
     ...(b.setBotAvatar ? { setAvatar: b.setBotAvatar } : {}),
     ...(b.suggestBotRepo ? { suggestRepo: b.suggestBotRepo } : {}),
+    ...(b.clearRemovedBot ? { clearRemoved: b.clearRemovedBot } : {}),
     ...(b.stopAll ? { stopAll: b.stopAll } : {}),
     ...(b.stopBot ? { stopBot: b.stopBot } : {}),
     ...(b.stopTask ? { stopTask: b.stopTask } : {}),

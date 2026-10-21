@@ -122,6 +122,23 @@
   color: var(--text-muted);
 }
 .wmux-bots-tree-toggle:hover { background: var(--hover-fill); color: var(--text-main); }
+
+/* Archive (owner decision 2026-10-21): the deleted bots' kept 1:1s at the
+   list's foot, under one muted fold — the word, the count and a chevron —
+   with no fill or rule of its own; the rows under it are the list's rows. */
+.wmux-bots-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  margin-top: 8px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.wmux-bots-archive-toggle:hover { background: var(--hover-fill); color: var(--text-main); }
 .wmux-bots-tree {
   display: flex;
   flex-direction: column;

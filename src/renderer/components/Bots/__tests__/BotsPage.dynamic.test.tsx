@@ -185,7 +185,7 @@ async function render(node: React.ReactNode) {
 }
 
 describe('Bots page', () => {
-  it('a deleted bot\'s 1:1 stays reachable at the bottom, muted and marked (removed), read-only with no composer', async () => {
+  it('a deleted bot\'s 1:1 sits under Archive at the bottom, folded, muted and marked (removed), read-only with no composer', async () => {
     const GONE = 'bot-0000000d';
     const gone = { role: 'lead' as BotRole, name: 'Old', removed: true as const, workspaceId: 'w1', hue: 2 };
     cards.push(
@@ -195,9 +195,17 @@ describe('Bots page', () => {
     const withActors = api();
     withActors.actors = vi.fn(async () => ({ actors: { [GONE]: gone } })) as unknown as RoomsApi['actors'];
     setRoomsApiForTests(withActors);
+    const clearRemoved = vi.fn(async () => ({ ok: true as const }));
+    setFactoryBotPort({ ...port, clearRemoved } as unknown as FactoryBotPort);
     seedRooms(true);
     act(() => useStore.setState({ roomActors: { [GONE]: gone } } as never));
     await render(<BotsPage />);
+    // Folded: the live list ends on a live conversation, then Archive with its count.
+    expect(rowIds()).not.toContain(`bot:${GONE}`);
+    const toggle = q('[data-bots-archive-toggle]')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.textContent).toBe('Archive1');
+    act(() => toggle.click());
     expect(rowIds().at(-1)).toBe(`bot:${GONE}`);
     const row = q(`[data-bots-row="bot:${GONE}"]`)!;
     expect(row.getAttribute('data-bots-removed')).toBe('true');
@@ -209,6 +217,15 @@ describe('Bots page', () => {
     expect(q('[data-testid="bots-composer-send"]')).toBeNull();
     expect(q('[data-bots-removed-note]')?.textContent).toContain('This bot was deleted');
     expect(q<HTMLButtonElement>('[data-bots-pill]')!.disabled).toBe(true);
+    // Remove from Archive asks in place, then the chat leaves the list for good.
+    act(() => q<HTMLButtonElement>('[data-testid="bots-archive-clear"]')!.click());
+    expect(q('[data-testid="bots-archive-clear-confirm-row"]')?.textContent).toContain('Remove Old from the Archive?');
+    withActors.actors = vi.fn(async () => ({ actors: { [GONE]: { ...gone, cleared: true as const } } })) as unknown as RoomsApi['actors'];
+    await act(async () => { q<HTMLButtonElement>('[data-testid="bots-archive-clear-confirm"]')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(clearRemoved).toHaveBeenCalledWith(GONE);
+    expect(rowIds()).not.toContain(`bot:${GONE}`);
+    expect(q('[data-bots-archive-toggle]')).toBeNull();
   });
 
   it('with every bot deleted, a kept 1:1 still lists (no first-bot screen), its room read from the actors', async () => {
@@ -221,8 +238,9 @@ describe('Bots page', () => {
     setRoomsApiForTests(withActors);
     seedRooms(true);
     await render(<BotsPage />);
-    for (let i = 0; i < 5 && !q(`[data-bots-row="bot:${GONE}"]`); i++) await act(async () => { await Promise.resolve(); });
+    for (let i = 0; i < 5 && !q('[data-bots-archive-toggle]'); i++) await act(async () => { await Promise.resolve(); });
     expect(withActors.actors).toHaveBeenCalled();
+    act(() => q('[data-bots-archive-toggle]')!.click());
     expect(rowIds()).toContain(`bot:${GONE}`);
     expect(q('[data-bots-chat]')).not.toBeNull();
   });
@@ -378,14 +396,18 @@ describe('Bots page', () => {
     expect(q('[data-bots-team-notice]')).toBeNull();
   });
 
-  it('"+" offers Add team while the chosen workspace has no coordinator', async () => {
+  it('"+" › Add team opens the team form; a workspace with a coordinator is offered its missing roles', async () => {
     seedRooms();
     setFactoryBotPort({ ...port, create: vi.fn(), createTeam: vi.fn() } as unknown as FactoryBotPort);
     await render(<BotsPage />);
-    openAddBot();
+    act(() => q('[data-bots-add]')!.click());
+    act(() => q('[data-bots-add-team]')!.click());
     await act(async () => { await Promise.resolve(); });
-    expect(document.querySelector('[data-testid="bots-add-bot"] [data-testid="factory-add-team"]')).not.toBeNull();
-    // A workspace with a coordinator already: no Add team.
+    const form = document.querySelector('[data-testid="bots-add-bot"] [data-testid="factory-add-bot"]')!;
+    expect(form.getAttribute('data-mode')).toBe('team');
+    expect(form.querySelector('[data-testid="factory-add-bot-name"]')).toBeNull();
+    expect(form.querySelector('[data-testid="factory-add-team"]')).not.toBeNull();
+    // A workspace with a coordinator already: Add team fills the rest in.
     act(() => root.unmount());
     root = createRoot(container);
     bots = [...bots, { ...botRow('bot-0000000f', 'lead', 'w1', 4, 'Boss'), bot: { ...botRow('bot-0000000f', 'lead', 'w1', 4, 'Boss').bot, template: 'coordinator' } }];
@@ -393,7 +415,7 @@ describe('Bots page', () => {
     await render(<BotsPage />);
     openAddBot();
     await act(async () => { await Promise.resolve(); });
-    expect(document.querySelector('[data-testid="bots-add-bot"] [data-testid="factory-add-team"]')).toBeNull();
+    expect(document.querySelector('[data-testid="bots-add-bot"] [data-testid="factory-add-team"]')).not.toBeNull();
   });
 
   it('first screen: an engine that cannot sign in says why, offers Log in to Claude, and Start waits until it can', async () => {
