@@ -41,6 +41,7 @@ import { DAY_MS, type TrustReadResult } from '../../factory/trustMetrics';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
 import { isGithubHost, type PrGate } from '../../github/PrProvider';
+import { botReviewHost } from '../../worktask/botFanoutPresets';
 
 // ── Limits ─────────────────────────────────────────────────────────────────
 
@@ -286,6 +287,9 @@ export async function handlePrRead(raw: unknown, ctx: RpcContext | undefined, de
       author: f.author,
       headSha: f.headRefOid,
       headRefName: f.headRefName,
+      // The ref a verify worker's checkout fetches the head from: the one
+      // fan-out accepts for this host (fanout.rpc.ts parseCheckout).
+      fetchRef: `${botReviewHost(scope.repoKey) === 'gitlab' ? 'merge-requests' : 'pull'}/${f.number}/head`,
       baseRefName: f.baseRefName,
       isCrossRepository: f.isCrossRepository,
       mergeStateStatus: f.mergeStateStatus ?? null,

@@ -20,7 +20,7 @@ export const REVIEWER_TEMPLATE: TemplateDefinition = {
   powers: {
     pr_read: 'read a pull request fresh: its head SHA, base branch, files, labels and checks.',
     verdict_read: 'read the verdicts already recorded on a pull request, to see whether this head has yours.',
-    fanout_start: 'start one verify worker, for a head a gate grades (a docs-only one too: its worker reads it and runs no tests of its own), with preset "verify" and checkout {sha: the head, fetch_ref: "pull/<n>/head"}; its prompt says what to look at in this change.',
+    fanout_start: 'start one verify worker, for a head a gate grades (a docs-only one too: its worker reads it and runs no tests of its own), with preset "verify" and checkout {sha: the head, fetch_ref: the fetchRef pr_read gives (pull/<n>/head on GitHub, merge-requests/<n>/head on GitLab)}; its prompt says what to look at in this change.',
     pr_verdict: 'record your verdict on one head: prNumber, headSha, verdict (pass or fail), a summary, and evidence {taskId} — the verify task whose recorded gate it rests on — or evidence {reading: true} for a head whose base branch declares no gate, which you read yourself. wmux checks the evidence the way the merge lane will, and a refusal names the reason; gate-required means the head needs a verify worker.',
     ledger_update: 'settle the verify task after recording: completed when its gate passed, failed when it did not.',
     terminal_read: 'read the verify worker\'s pane when its report is unclear.',
