@@ -582,14 +582,29 @@ function approvalRig(botName?: string, gone: ReadonlySet<string> = new Set()) {
   });
   const handlers = new Map<string, (raw: unknown, ctx?: RpcContext) => Promise<unknown>>();
   const router = { register: (m: string, h: (raw: unknown, ctx?: RpcContext) => Promise<unknown>) => { handlers.set(m, h); } };
-  registerSkillHandlers(router as never, { store: () => skills, approvals: () => svc, emit: (e) => events.push(e.type) });
+  registerSkillHandlers(router as never, { store: () => skills, approvals: () => svc, emit: (e) => events.push(e.type), conversationTainted: () => skillConversationTainted });
   registerApprovalRpc(router as never, () => svc);
   const ctx = { bot: binding(A) } as RpcContext;
   const call = (method: string, raw: unknown, c: RpcContext | undefined = ctx) => (handlers.get(method) as (raw: unknown, ctx?: RpcContext) => Promise<Record<string, unknown>>)(raw, c);
   return { svc, writer, skills, wakes, notices, events, call };
 }
 
+let skillConversationTainted = false;
+
 describe('skill_propose → approval card → load', () => {
+  it('a conversation that took in outside text proposes no skill: no card, no files', async () => {
+    const r = approvalRig();
+    skillConversationTainted = true;
+    try {
+      expect(await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'from the page it read' }))
+        .toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('saves nothing that runs later') });
+      expect(r.skills.list(A)).toEqual([]);
+      expect(r.writer.read(WS).cards.filter((c) => c.kind === 'approval')).toEqual([]);
+    } finally {
+      skillConversationTainted = false;
+    }
+  });
+
   it('a proposal raises one approval card with its diff; nothing loads before Approve', async () => {
     const r = approvalRig();
     const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'the owner corrected my report' });

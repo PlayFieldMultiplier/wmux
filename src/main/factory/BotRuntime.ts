@@ -100,8 +100,8 @@ export interface BotSessionRecord {
    *  tainted. */
   tainted?: boolean;
   /** The conversation's signed-in mark (conversationMarks.ts): a wake run
-   *  in it carried a signed-in task's fact. A record without it reads as
-   *  signed in unless it is recorded clean (`tainted: false`). */
+   *  in it carried a signed-in task's fact. A record without it predates
+   *  signed-in tasks reaching a conversation, and reads as not signed in. */
   signedIn?: boolean;
   updatedAt: number;
 }
@@ -352,12 +352,13 @@ const UNKNOWN_MARKS: ConversationMarks = { tainted: true, signedIn: true };
  *  provenance can). */
 const GUEST_MARKS: ConversationMarks = { tainted: true, signedIn: false };
 
-/** A saved session's marks. A record from before a mark reads as marked
- *  unless it is recorded clean: a tainted one may hold a signed-in task's
- *  data. Pure. */
+/** A saved session's marks. A record from before the taint mark reads as
+ *  tainted; one from before the signed-in mark as not signed in (no release
+ *  let a signed-in task report to a conversation before that mark was
+ *  saved). Pure. */
 export function savedMarks(rec: Pick<BotSessionRecord, 'tainted' | 'signedIn'>): ConversationMarks {
   const tainted = rec.tainted ?? true;
-  return { tainted, signedIn: rec.signedIn ?? tainted };
+  return { tainted: tainted || rec.signedIn === true, signedIn: rec.signedIn ?? false };
 }
 
 /** Longest the runtime waits at launch for the modules its wake prompts

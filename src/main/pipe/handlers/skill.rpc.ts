@@ -29,9 +29,10 @@ import type { RpcContext } from '../../../shared/rpc';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle, type FactoryRouter } from '../../factory/factoryHost';
 import { BotSkillStore, getBotSkillStore, installWorkerSkills, setBotSkillStore } from '../../factory/botSkills';
 import { getApprovalService, type ApprovalService, type ApprovalSkillHost } from '../../factory/approvals';
+import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationTainted } from '../../factory/conversationMarks';
 import { isMainWindowSender } from '../../ipc/mainWindowSender';
 
-type Refusal = { ok: false; code: 'not_bot' | 'not_started' | 'invalid'; message: string };
+type Refusal = { ok: false; code: 'not_bot' | 'not_started' | 'invalid' | 'not_authorized'; message: string };
 
 function refuse(code: Refusal['code'], message: string): Refusal {
   return { ok: false, code, message };
@@ -50,6 +51,9 @@ export interface SkillHandlerDeps {
   /** The owner archived a skill: one system card in the bot's conversation.
    *  Best effort. */
   noteArchived?: (botId: string, name: string) => void;
+  /** Whether the bot's live conversation took in outside text (none: yes).
+   *  Missing: conversationMarks.ts. */
+  conversationTainted?: (botId: string) => boolean;
 }
 
 /** The card an Archive posts in the bot's conversation thread: worded from
@@ -75,6 +79,9 @@ export function registerSkillHandlers(router: Pick<FactoryRouter, 'register'>, d
     const approvals = deps.approvals();
     if (!store || !approvals) return NOT_STARTED;
     const bot = ctx.bot;
+    // A skill loads in every later wake and in the bot's workers: none is
+    // proposed from a conversation that took in outside text.
+    if ((deps.conversationTainted ?? conversationTainted)(bot.botId) !== false) return refuse('not_authorized', TAINTED_CONVERSATION_SAVES_NOTHING);
     const p = obj(raw);
     const prep = store.prepareProposal(bot.botId, { name: p.name, content: p.content, references: p.references, reason: p.reason });
     if (!prep.ok) return prep;

@@ -798,7 +798,7 @@ describe('a research task (scratch folder, no worktree)', () => {
 
     // In its own pane.
     const typeLine = vi.fn(() => true);
-    const inPane = await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: false, commandRunning: false })], typeLine, now: () => 9_000 }, research.id, { kind: 'bot', botId: BOT });
+    const inPane = await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: false, commandRunning: false })], typeLine, senderSignedIn: () => false, now: () => 9_000 }, research.id, { kind: 'bot', botId: BOT });
     expect(inPane).toMatchObject({ ok: true, sessionId: 'daemon-1', resumeSessionId: UUID });
     expect(typeLine).toHaveBeenCalledWith('daemon-1', `claude --resume ${UUID} --dangerously-skip-permissions`);
 
@@ -844,7 +844,7 @@ describe('a research task (scratch folder, no worktree)', () => {
     const store = ReclaimedWorkers.at(dir);
     await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
     const respawn = vi.fn(async () => ({ ok: true as const, workspaceId: 'ws-new', sessionId: 'daemon-9' }));
-    const base = { store, listSessions: async () => [] as never[], typeLine: vi.fn(() => true), respawn, gatewayTask: () => true, taskTainted: () => true, now: () => 9_000 };
+    const base = { store, listSessions: async () => [] as never[], typeLine: vi.fn(() => true), respawn, gatewayTask: () => true, taskTainted: () => true, senderSignedIn: () => false, now: () => 9_000 };
     for (const sender of [
       { senderTainted: () => true, senderConversationTainted: () => false },
       { senderTainted: () => false, senderConversationTainted: () => true },
@@ -869,6 +869,8 @@ describe('a research task (scratch folder, no worktree)', () => {
       expect(await resumeWorker({ ...base, senderSignedIn: () => true }, TASK, { kind: 'bot', botId: BOT }, message))
         .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task') });
     }
+    // Not known: refused the same way.
+    expect(await resumeWorker(base, TASK, { kind: 'bot', botId: BOT })).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task') });
     expect(respawn).not.toHaveBeenCalled();
     expect(await resumeWorker({ ...base, senderSignedIn: () => true }, TASK, { kind: 'owner' })).toMatchObject({ ok: true, sessionId: 'daemon-9' });
     await settled(store);
@@ -940,7 +942,7 @@ describe('resumeWorker', () => {
   }
   function resumePorts(store: ReclaimedWorkers, live: WorkerSessionInfo[], over: Partial<WorkerResumePorts> = {}) {
     const typeLine = vi.fn(() => true);
-    const ports: WorkerResumePorts = { store, listSessions: async () => live, typeLine, now: () => 9_000, ...over };
+    const ports: WorkerResumePorts = { store, listSessions: async () => live, typeLine, now: () => 9_000, senderSignedIn: () => false, ...over };
     return { ports, typeLine };
   }
 
@@ -1051,7 +1053,7 @@ describe('resume safety (review fixes)', () => {
   }
   const dead = (over: Partial<WorkerSessionInfo> = {}) => session({ agentProcessAlive: false, ...over });
   const ports = (store: ReclaimedWorkers, live: WorkerSessionInfo[], over: Partial<WorkerResumePorts> = {}): WorkerResumePorts =>
-    ({ store, listSessions: async () => live, typeLine: vi.fn(() => true), ...over });
+    ({ store, listSessions: async () => live, typeLine: vi.fn(() => true), senderSignedIn: () => false, ...over });
 
   it('refuses a pane whose shell moved out of the task folder, or whose state cannot be told', async () => {
     const store = await reclaimedStore();
@@ -1310,7 +1312,7 @@ describe('reclaim state and reopen (review fixes, PR #2164)', () => {
   it('a bot\'s message from a wake that carried outside text goes only to a task started from outside text', async () => {
     const store = ReclaimedWorkers.at(dir);
     await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
-    const base = { store, listSessions: async () => [dead()], typeLine: vi.fn(() => true) };
+    const base = { store, listSessions: async () => [dead()], typeLine: vi.fn(() => true), senderSignedIn: () => false };
     const clean = { ...base, taskTainted: () => false, senderTainted: () => true };
     expect(await resumeWorker(clean, ID, { kind: 'bot', botId: BOT }, 'do it')).toMatchObject({ ok: false, code: 'not_now' });
     expect(base.typeLine).not.toHaveBeenCalled();
@@ -1380,6 +1382,7 @@ describe('reclaim and resume races (review fixes, second pass)', () => {
       listSessions: () => new Promise((resolve) => { releases.push(() => resolve([dead(), dead({ id: 'daemon-2' })])); }),
       // A budget of one worker: the other resume under way counts.
       botWorkerRefusal: (_botId, starting) => (starting >= 1 ? 'concurrent_workers' : null),
+      senderSignedIn: () => false,
     };
     const first = resumeWorker(ports, ID, { kind: 'bot', botId: BOT });
     const second = await resumeWorker(ports, 'wtask-def-12345678', { kind: 'bot', botId: BOT });

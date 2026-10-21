@@ -1421,6 +1421,8 @@ describe('conversation marks and removal', () => {
     must(r.runtime.wake(old, { text: 'one' }));
     await settle(10);
     expect(r.adapters.at(-1)?.started?.resumeSessionId).toBe('sess-old');
+    // The record reads as not signed in; a wake with no taint port is not
+    // known clean of a signed-in task's fact either.
     expect(conversationMarks(old)).toEqual({ tainted: true, signedIn: true });
     const fresh = createBot(r);
     must(r.runtime.wake(fresh, { text: 'one' }));
@@ -1471,20 +1473,22 @@ describe('conversation marks and removal', () => {
     expect(conversationMarks(id)).toBeNull();
   });
 
-  it('a sessions.json record from before the signed-in mark reads as signed in unless it is recorded clean', () => {
+  it('a sessions.json record from before the signed-in mark keeps its taint and reads as not signed in', () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wp2-sessions-legacy-')), 'sessions.json');
     fs.writeFileSync(file, JSON.stringify({ version: BOT_SESSIONS_VERSION, sessions: {
       'bot-tainted': { sessionId: 's-1', tainted: true, updatedAt: 1 },
       'bot-clean': { sessionId: 's-2', tainted: false, updatedAt: 1 },
       'bot-unmarked': { sessionId: 's-3', updatedAt: 1 },
       'bot-new': { sessionId: 's-4', tainted: true, signedIn: false, updatedAt: 1 },
+      'bot-signed': { sessionId: 's-5', tainted: true, signedIn: true, updatedAt: 1 },
     } }));
     const store = new BotSessionStore(file);
     store.load();
-    expect(savedMarks(store.get('bot-tainted')!)).toEqual({ tainted: true, signedIn: true });
+    expect(savedMarks(store.get('bot-tainted')!)).toEqual({ tainted: true, signedIn: false });
     expect(savedMarks(store.get('bot-clean')!)).toEqual({ tainted: false, signedIn: false });
-    expect(savedMarks(store.get('bot-unmarked')!)).toEqual({ tainted: true, signedIn: true });
+    expect(savedMarks(store.get('bot-unmarked')!)).toEqual({ tainted: true, signedIn: false });
     expect(savedMarks(store.get('bot-new')!)).toEqual({ tainted: true, signedIn: false });
+    expect(savedMarks(store.get('bot-signed')!)).toEqual({ tainted: true, signedIn: true });
   });
 
   it('tells the removal listeners once a bot is removed', () => {

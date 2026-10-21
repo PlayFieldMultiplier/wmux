@@ -61,6 +61,7 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { closeVerifyTask, isBotVerifyTask } from '../../factory/verdictedTasks';
 import { bodyOf, resolvePaneCaller, type PaneCallerDeps } from '../paneCaller';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { conversationSignedIn, signedInRefusal } from '../../factory/conversationMarks';
 
 export interface VerifyRpcDeps extends PaneCallerDeps {
   /** The remote key of the repo a cwd belongs to, or null. */
@@ -85,6 +86,9 @@ export interface VerifyBotPorts {
   /** The guest provenance of the bot's running wake (wakeTaint.ts). Missing:
    *  the running tracker's. */
   guestWake?: (botId: string) => GuestProvenance;
+  /** Whether the bot's live conversation holds data from a signed-in task
+   *  (none: yes). Missing: conversationMarks.ts. */
+  signedIn?: (botId: string) => boolean;
   /** The gate the repository declares at a base commit, for a reading-only
    *  verdict. Missing: repoBaseGate (the shared gate runner's). */
   baseGate?: (repoPath: string, at: string) => Promise<BaseGate>;
@@ -146,6 +150,11 @@ export async function recordBotVerdict(
     ? { ok: false, code: 'surface', message: GUEST_TURN_STARTS_NO_WORKERS } : null);
   const refusedAtEntry = guestRefusal();
   if (refusedAtEntry) return refusedAtEntry;
+  // A verdict's summary can reach the forge: none from a conversation that
+  // holds data from a signed-in task.
+  if ((ports.signedIn ?? conversationSignedIn)(bot.botId) !== false) {
+    return { ok: false, code: 'surface', message: signedInRefusal('record a verdict', bot.botId) };
+  }
   let profile: BotProfile | null;
   try {
     profile = ports.profile(bot.botId);

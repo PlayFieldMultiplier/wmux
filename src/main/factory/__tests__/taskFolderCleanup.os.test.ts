@@ -1374,6 +1374,7 @@ describe('resume after removal', () => {
       store, listSessions: async () => [], typeLine: vi.fn(() => true), respawn,
       restoreFolder: (taskId, folder) => restoreTaskFolder(folderPorts, taskId, folder),
       holdFolder: holdTaskFolder,
+      senderSignedIn: () => false,
     };
     expect(await resumeWorker(p, 'wtask-abc-12345678', { kind: 'bot', botId: BOT })).toMatchObject({ ok: true, workspaceId: 'ws-new' });
     expect(respawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: wt }));

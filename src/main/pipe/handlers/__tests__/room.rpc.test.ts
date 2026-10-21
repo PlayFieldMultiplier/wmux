@@ -576,6 +576,20 @@ describe('a turn that ended with plain text: its words become the bot\'s card (r
     return { ...s, since, text, cards };
   }
 
+  it('a conversation that holds data from a signed-in task: the owner\'s message in General is answered in the bot\'s 1:1', async () => {
+    const dev = bot('ws1', 'maintainer');
+    const r = rig([dev], 'general' as ThreadId);
+    const res = await postTurnText(dev, { id: 'w-1' }, 'Here is the summary.\nThree pages, two owners.', r.since, { ...r.deps, signedIn: () => true }) as { ok: boolean };
+    expect(res.ok).toBe(true);
+    expect(r.cards()).toEqual([]);
+    expect(r.writer.read('ws1', { threadId: `dm:${dev.id}` as ThreadId }).cards).toEqual([expect.objectContaining({
+      kind: 'status', threadId: `dm:${dev.id}`, title: 'Here is the summary.', body: 'Three pages, two owners.', actor: { kind: 'bot', workspaceId: 'ws1', botId: dev.id },
+    })]);
+    // Handed over again, still one card.
+    await postTurnText(dev, { id: 'w-1' }, 'Here is the summary.', r.since, { ...r.deps, signedIn: () => true });
+    expect(r.writer.read('ws1', { threadId: `dm:${dev.id}` as ThreadId }).cards).toHaveLength(1);
+  });
+
   it('a 1:1: the words are one status card from the bot in its thread; the first line is the title', async () => {
     const dev = bot('ws1', 'maintainer');
     const r = rig([dev], `dm:${dev.id}` as ThreadId);
@@ -813,6 +827,29 @@ describe('a bot whose conversation holds data from a signed-in task', () => {
     // The default reads the conversation's marks: none live is not known clean.
     expect(await handleRoomPost({ kind: 'status', title: 'summary', threadId: 'general' }, asBot(lead), { ...s.deps, signedIn: undefined })).toMatchObject({ ok: false, code: 'not_now' });
     expect(s.writer.read('ws1').cards.map((c) => c.threadId)).toEqual([dm]);
+  });
+
+  it('another bot reads none of its 1:1, by thread or by search; it reads its own, and the owner reads both', async () => {
+    const a = bot('ws1', 'lead');
+    const b = bot('ws1', 'lead');
+    const s = setup([a, b]);
+    const dmA = `dm:${a.id}`;
+    s.wake.thread = dmA;
+    s.wake.id = { wakeId: 'w-a', attempt: 1 };
+    expect(await handleRoomPost({ kind: 'status', title: 'Page summary', body: 'quarterly figures' }, asBot(a), s.deps)).toMatchObject({ ok: true, card: { threadId: dmA } });
+    s.wake.thread = 'general';
+    s.wake.id = { wakeId: 'w-b', attempt: 1 };
+    expect(await handleRoomPost({ kind: 'status', title: 'General note', body: 'quarterly plan' }, asBot(b), s.deps)).toMatchObject({ ok: true });
+    // B: by thread refused, unthreaded and search leave A's 1:1 out.
+    expect(handleRoomRead({ threadId: dmA }, asBot(b), s.deps)).toMatchObject({ ok: false, code: 'not_yours' });
+    expect((handleRoomRead({}, asBot(b), s.deps) as { cards: Array<{ threadId: string }> }).cards.map((c) => c.threadId)).toEqual(['general']);
+    expect((handleRoomSearch({ query: 'quarterly' }, asBot(b), s.deps) as { hits: Array<{ threadId: string }> }).hits.map((h) => h.threadId)).toEqual(['general']);
+    // A reads its own.
+    expect((handleRoomRead({ threadId: dmA }, asBot(a), s.deps) as { cards: Array<{ title: string }> }).cards.map((c) => c.title)).toEqual(['Page summary']);
+    expect((handleRoomSearch({ query: 'quarterly' }, asBot(a), s.deps) as { hits: unknown[] }).hits).toHaveLength(2);
+    // The owner's views are unchanged.
+    expect((handleRoomRead({ workspaceId: 'ws1', threadId: dmA }, OPERATOR, s.deps) as { cards: unknown[] }).cards).toHaveLength(1);
+    expect((handleRoomSearch({ workspaceId: 'ws1', query: 'quarterly' }, OPERATOR, s.deps) as { hits: unknown[] }).hits).toHaveLength(2);
   });
 
   it('hands no work to another bot; it may still ask the owner', async () => {

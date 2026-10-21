@@ -1675,10 +1675,8 @@ export interface WorkerResumePorts {
   /** Whether the bot's live conversation has taken in outside text
    *  (unknown: true). */
   senderConversationTainted?: (botId: string) => boolean;
-  /** Whether the bot's live conversation holds data from a signed-in task:
-   *  it then starts no worker of another task again. Absent: not asked
-   *  (main's reads conversationMarks.ts, where no live conversation counts
-   *  as yes). */
+  /** Whether the bot's live conversation holds data from a signed-in task
+   *  (unknown: true): it then starts no worker of another task again. */
   senderSignedIn?: (botId: string) => boolean;
   /** Whether the bot's running wake carried outside text (unknown: true). A
    *  bot's message from such a wake goes only to a task recorded as started
@@ -1846,7 +1844,7 @@ async function resumeOnce(
     }
     // What a signed-in task read stays in this conversation: no other
     // worker starts again from it.
-    if (ports.gatewayTask?.(taskId) !== true && ports.senderSignedIn?.(by.botId) === true) {
+    if (ports.gatewayTask?.(taskId) !== true && (ports.senderSignedIn?.(by.botId) ?? true) !== false) {
       return refuse('not_now', signedInRefusal('resume a worker of another task', by.botId));
     }
     if (text && (ports.taskTainted?.(taskId) ?? true) === false

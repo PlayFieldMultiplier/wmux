@@ -685,6 +685,15 @@ function threadTitle(threadId: ThreadId): string {
   return threadId === GENERAL_THREAD ? 'General' : threadId;
 }
 
+/** A card of another bot's 1:1 than `reader`'s (none: no reader, nothing
+ *  hidden). What one bot says with the owner there is not another bot's to
+ *  read. */
+function hiddenDm(card: Pick<RoomCard, 'threadId'>, reader: string | undefined): boolean {
+  if (reader === undefined) return false;
+  const owner = dmThreadBot(card.threadId);
+  return owner !== null && owner !== reader;
+}
+
 export class RoomWriter {
   private readonly rooms = new Map<string, RoomState>();
   private readonly now: () => number;
@@ -999,11 +1008,12 @@ export class RoomWriter {
    *  unless `guests` is set: only the owner's views, the guest's own read and
    *  the guest's own (tainted) wake ask for them, so a bot never reads a
    *  guest's words by accident in a turn whose work may merge. */
-  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean } = {}): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean } {
+  /** `dmReader`: a bot reading; another bot's 1:1 cards are left out. */
+  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean; dmReader?: string } = {}): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean } {
     const state = this.room(workspaceId);
     if (!state) return { cards: [], nextSinceSeq: 0, hasMore: false };
     const limit = Math.max(1, Math.min(ROOM_LIMITS.PAGE, Math.floor(opts.limit ?? ROOM_LIMITS.PAGE)));
-    const visible = opts.guests === true ? state.cards : state.cards.filter((c) => !isGuestSourcedCard(c));
+    const visible = state.cards.filter((c) => (opts.guests === true || !isGuestSourcedCard(c)) && !hiddenDm(c, opts.dmReader));
     const scoped = opts.threadId === undefined ? visible : visible.filter((c) => c.threadId === opts.threadId);
     const since = typeof opts.sinceSeq === 'number' && Number.isFinite(opts.sinceSeq) ? opts.sinceSeq : null;
     // Every reader (bots, the renderer's room.read, the phone's room routes)
@@ -1021,8 +1031,8 @@ export class RoomWriter {
    *  first, at most `limit` (≤ SEARCH_MAX), only those with seq < `before`
    *  when given. Matched on the redacted text, so a stored bot secret is
    *  never found by its value. Guest cards are left out unless `guests` is
-   *  set, as in `read`. */
-  search(workspaceId: string, terms: readonly string[], opts: { before?: number; limit?: number; guests?: boolean } = {}): { hits: RoomSearchHit[]; nextBefore: number; hasMore: boolean } {
+   *  set, as in `read`, and so are another bot's 1:1 cards for `dmReader`. */
+  search(workspaceId: string, terms: readonly string[], opts: { before?: number; limit?: number; guests?: boolean; dmReader?: string } = {}): { hits: RoomSearchHit[]; nextBefore: number; hasMore: boolean } {
     const state = this.room(workspaceId);
     const before = typeof opts.before === 'number' && Number.isFinite(opts.before) ? opts.before : Infinity;
     if (!state || terms.length === 0) return { hits: [], nextBefore: 0, hasMore: false };
@@ -1033,6 +1043,7 @@ export class RoomWriter {
       const c = state.cards[i];
       if (c.seq >= before) continue;
       if (isGuestSourcedCard(c) && opts.guests !== true) continue;
+      if (hiddenDm(c, opts.dmReader)) continue;
       const title = redactStoredSecrets(c.title);
       const text = c.body ? `${title}\n${redactStoredSecrets(c.body)}` : title;
       const snippet = matchSnippet(text, terms);

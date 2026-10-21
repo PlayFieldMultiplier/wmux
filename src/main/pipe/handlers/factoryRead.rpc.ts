@@ -39,6 +39,7 @@ import type { BotDirectoryApi } from '../../factory/botStore';
 import type { RoomWriter } from '../../factory/roomWriter';
 import { DAY_MS, type TrustReadResult } from '../../factory/trustMetrics';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationTainted } from '../../factory/conversationMarks';
 import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
 import { isGithubHost, type PrGate } from '../../github/PrProvider';
 import { botReviewHost } from '../../worktask/botFanoutPresets';
@@ -94,6 +95,9 @@ export interface FactoryReadDeps {
   /** The guest provenance of a bot's running wake (wakeTaint.ts); default
    *  the running tracker. */
   guestWake?: (botId: string) => GuestProvenance;
+  /** Whether a bot's live conversation took in outside text (none: yes);
+   *  default conversationMarks.ts. */
+  conversationTainted?: (botId: string) => boolean;
   /** Why the scope's host cannot be read now (a GitLab host without a
    *  usable glab: `host_not_connected`, or `read_failed` when it could not
    *  be reached just now), or null; createHostSetupGate. Absent: always
@@ -461,6 +465,9 @@ export async function handlePlanPropose(raw: unknown, ctx: RpcContext | undefine
   }
   // The owner's answer to a plan wakes its bot to start the work.
   if ((deps.guestWake ?? guestOfRunningWake)(bot.botId) !== false) return refusal('not_authorized', `plan.propose: ${GUEST_TURN_STARTS_NO_WORKERS}`);
+  // A plan the owner approves starts work later: none from a conversation
+  // that took in outside text.
+  if ((deps.conversationTainted ?? conversationTainted)(bot.botId) !== false) return refusal('not_authorized', `plan.propose: ${TAINTED_CONVERSATION_SAVES_NOTHING}`);
   const anyWorkspace = isCoordinatorBot(own);
   const p = params(raw);
   const L = FACTORY_READ_LIMITS;

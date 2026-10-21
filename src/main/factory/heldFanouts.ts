@@ -75,7 +75,8 @@ export interface HeldFanout {
   guest?: boolean;
   handoffId?: string;
   /** A signed-in request's: the reason kind of the wake that asked for it
-   *  (its `tainted` is that wake's own mark, fanout.rpc.ts). */
+   *  (its `tainted` is that wake's own mark, fanout.rpc.ts). Recorded for
+   *  recipe schedules; nothing reads it yet. */
   wakeKind?: HeldWakeKind;
 }
 

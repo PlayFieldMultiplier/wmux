@@ -133,7 +133,7 @@ function row(over: Partial<LedgerEntry> = {}): LedgerEntry {
 function botSetup(r: LedgerEntry | null = row(), profile: BotProfile | null = verifierProfile(), over: Partial<VerifyRpcDeps> = {}) {
   return setup({
     repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
-    bot: { guestWake: () => false, profile: (id) => (id === BOT.botId ? profile : null), ledgerRow: (id) => (r && id === r.id ? r : null) },
+    bot: { signedIn: () => false, guestWake: () => false, profile: (id) => (id === BOT.botId ? profile : null), ledgerRow: (id) => (r && id === r.id ? r : null) },
     ...over,
   });
 }
@@ -156,16 +156,22 @@ describe('verify.recordVerdict — bot path', () => {
 
   it('a wake not known clean records no verdict, judged again after the PR read', async () => {
     for (const g of [true, 'unknown'] as const) {
-      const { call, record } = botSetup(row(), verifierProfile(), { bot: { guestWake: () => g, profile: () => verifierProfile(), ledgerRow: () => row() } });
+      const { call, record } = botSetup(row(), verifierProfile(), { bot: { signedIn: () => false, guestWake: () => g, profile: () => verifierProfile(), ledgerRow: () => row() } });
       expect(await call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'surface', message: expect.stringContaining('external guest') });
       expect(record).not.toHaveBeenCalled();
     }
     let guest: boolean | 'unknown' = false;
     const { call, record } = botSetup(row(), verifierProfile(), {
-      bot: { guestWake: () => guest, profile: () => verifierProfile(), ledgerRow: () => row() },
+      bot: { signedIn: () => false, guestWake: () => guest, profile: () => verifierProfile(), ledgerRow: () => row() },
       readPr: async () => { guest = 'unknown'; return FACTS; },
     });
     expect(await call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'surface' });
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a conversation that holds data from a signed-in task records no verdict (its summary can reach the forge)', async () => {
+    const { call, record } = botSetup(row(), verifierProfile(), { bot: { signedIn: () => true, guestWake: () => false, profile: () => verifierProfile(), ledgerRow: () => row() } });
+    expect(await call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'surface', message: expect.stringContaining('holds data from a signed-in task, so it can\'t record a verdict') });
     expect(record).not.toHaveBeenCalled();
   });
 
@@ -241,7 +247,7 @@ describe('verify.recordVerdict — bot path', () => {
     const withCloser = (r: LedgerEntry | null) => setup({
       repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
       readPr: moved,
-      bot: { guestWake: () => false, profile: (id) => (id === BOT.botId ? verifierProfile() : null), ledgerRow: (id) => (r && id === r.id ? r : null), closeVerifyTask: closer },
+      bot: { signedIn: () => false, guestWake: () => false, profile: (id) => (id === BOT.botId ? verifierProfile() : null), ledgerRow: (id) => (r && id === r.id ? r : null), closeVerifyTask: closer },
     });
     const stale = withCloser(row());
     expect(await stale.call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'head-mismatch' });
@@ -261,7 +267,7 @@ describe('verify.recordVerdict — bot path', () => {
     // A recorded verdict does not close here (the record hook does), and a closer that fails changes no answer.
     const ok = setup({
       repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
-      bot: { guestWake: () => false, profile: () => verifierProfile(), ledgerRow: () => row(), closeVerifyTask: closer },
+      bot: { signedIn: () => false, guestWake: () => false, profile: () => verifierProfile(), ledgerRow: () => row(), closeVerifyTask: closer },
     });
     expect(await ok.call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: true });
     expect(closes).toEqual([]);
@@ -271,7 +277,7 @@ describe('verify.recordVerdict — bot path', () => {
       const changed = setup({
         repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
         readPr: moved,
-        bot: { guestWake: () => false, profile: () => (reads++ === 0 ? verifierProfile() : after), ledgerRow: () => row(), closeVerifyTask: closer },
+        bot: { signedIn: () => false, guestWake: () => false, profile: () => (reads++ === 0 ? verifierProfile() : after), ledgerRow: () => row(), closeVerifyTask: closer },
       });
       expect(await changed.call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'head-mismatch' });
     }
@@ -279,7 +285,7 @@ describe('verify.recordVerdict — bot path', () => {
     const failing = setup({
       repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
       readPr: moved,
-      bot: { guestWake: () => false, profile: () => verifierProfile(), ledgerRow: () => row(), closeVerifyTask: async () => { throw new Error('ledger'); } },
+      bot: { signedIn: () => false, guestWake: () => false, profile: () => verifierProfile(), ledgerRow: () => row(), closeVerifyTask: async () => { throw new Error('ledger'); } },
     });
     expect(await failing.call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'head-mismatch' });
   });
@@ -289,7 +295,7 @@ describe('verify.recordVerdict — bot path', () => {
       let calls = 0;
       const { call, record } = setup({
         repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
-        bot: { guestWake: () => false, profile: () => (calls++ === 0 ? verifierProfile() : after), ledgerRow: () => row() },
+        bot: { signedIn: () => false, guestWake: () => false, profile: () => (calls++ === 0 ? verifierProfile() : after), ledgerRow: () => row() },
       });
       expect(await call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'not-attributed' });
       expect(record).not.toHaveBeenCalled();
@@ -321,7 +327,7 @@ describe('verify.recordVerdict — reading-only bot verdicts (no worker)', () =>
   const readingSetup = (facts: PrLaneFacts, baseGate: BaseGate, guestWake: () => boolean | 'unknown' = () => false) => setup({
     repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
     readPr: async () => facts,
-    bot: { guestWake, profile: () => verifierProfile(), ledgerRow: () => null, baseGate },
+    bot: { signedIn: () => false, guestWake, profile: () => verifierProfile(), ledgerRow: () => null, baseGate },
   }, refs);
 
   it('a base branch that declares no gate: recorded, naming that branch and the commit its gate was read at', async () => {
