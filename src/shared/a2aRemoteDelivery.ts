@@ -219,27 +219,6 @@ export function localSideOf(task: Pick<Task, 'metadata'>): 'from' | 'to' {
   return isRemoteWorkspaceId(task.metadata.from.workspaceId) ? 'to' : 'from';
 }
 
-/**
- * A remote task on a brain link: its local side is this PC's Moa. Read from
- * the endpoint kind the daemon stored on the marker, never inferred from the
- * task's shape. Delivered as an event that wakes Moa, never to a terminal.
- */
-export function isBrainRemoteTask(task: Pick<Task, 'metadata'>): boolean {
-  return (task.metadata.remote as A2aRemoteTaskMarkerV1 | undefined)?.kind === 'brain';
-}
-
-/**
- * The other PC's name as it may appear in text that wakes Moa: a host-name
- * token, else `remote-pc`. The peer picks its own name, so nothing else of
- * it reaches a prompt.
- */
-export function canonicalPcName(name: unknown): string {
-  return typeof name === 'string' && /^[A-Za-z0-9._-]{1,63}$/.test(name) ? name : 'remote-pc';
-}
-
-/** A held reason that waits for Moa, not for a person. */
-export const BRAIN_UNAVAILABLE: A2aRemoteHeldReason = 'brain-unavailable';
-
 // ─── Renderer delivery result ───────────────────────────────────────────────
 
 /**
