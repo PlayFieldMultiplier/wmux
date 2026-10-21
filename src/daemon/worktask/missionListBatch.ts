@@ -12,7 +12,11 @@
 // same rule for a client that reaches the daemon pipe directly.
 
 import type { WorkTask } from '../../shared/workTask';
-import { MISSION_LIST_BATCH_MAX } from '../../shared/missionListBatch';
+import {
+  MISSION_LIST_BATCH_MAX,
+  MISSION_LIST_BATCH_MAX_CHARS,
+  MISSION_LIST_DEFERRED,
+} from '../../shared/missionListBatch';
 
 type ErrorReply = { ok: false; error: { code: string; message: string } };
 
@@ -24,10 +28,23 @@ export type MissionListBatchReply = { ok: true; results: MissionListBatchEntry[]
 
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 
-/** Answer a `task.mission.list` request that carries `verifiedWorkspaceIds`. */
+const deferred = (verifiedWorkspaceId: string): MissionListBatchEntry => ({
+  verifiedWorkspaceId,
+  ok: false,
+  error: { code: MISSION_LIST_DEFERRED, message: 'task.mission.list: past this reply size budget, ask again' },
+});
+
+/**
+ * Answer a `task.mission.list` request that carries `verifiedWorkspaceIds`.
+ * Owners are answered in order while their tasks fit `budgetChars` (JSON
+ * characters, see MISSION_LIST_BATCH_MAX_CHARS); the rest come back DEFERRED
+ * for the caller to ask again. The first owner is always answered, so an
+ * owner over the budget on its own gets a reply of its own.
+ */
 export function listMissionsBatch(
   params: Record<string, unknown>,
   listMissions: (verifiedWorkspaceId: string) => WorkTask[],
+  budgetChars: number = MISSION_LIST_BATCH_MAX_CHARS,
 ): MissionListBatchReply {
   if (nonEmpty(params['senderPtyId'])) {
     return {
@@ -65,6 +82,8 @@ export function listMissionsBatch(
   }
   const results: MissionListBatchEntry[] = [];
   const seen = new Set<string>();
+  let used = 0;
+  let answered = 0;
   for (const id of ids) {
     if (!nonEmpty(id)) {
       // This entry only: the same refusal the single form gives a missing id.
@@ -77,7 +96,19 @@ export function listMissionsBatch(
     }
     if (seen.has(id)) continue;
     seen.add(id);
-    results.push({ verifiedWorkspaceId: id, ok: true, tasks: listMissions(id) });
+    if (answered > 0 && used >= budgetChars) {
+      results.push(deferred(id));
+      continue;
+    }
+    const tasks = listMissions(id);
+    const size = JSON.stringify(tasks).length;
+    if (answered > 0 && used + size > budgetChars) {
+      results.push(deferred(id));
+      continue;
+    }
+    used += size;
+    answered += 1;
+    results.push({ verifiedWorkspaceId: id, ok: true, tasks });
   }
   return { ok: true, results };
 }
