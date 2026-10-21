@@ -995,6 +995,12 @@ describe('factory settings', () => {
       .toEqual({ kind: 'acp', command: 'hermes', args: ['acp'] });
   });
 
+  it('a trusted author may be a GitLab account written host/username', () => {
+    const base = { ...DEFAULT_FACTORY_SETTINGS, trustedAuthors: [], morning: { hour: 9, weekdays: [] } };
+    expect(mergeFactorySettings(base, { trustedAuthors: ['alice', 'gitlab.example.com/carol.b', 'gitlab.example.com/a/b', '/x', 'host/'] }).trustedAuthors)
+      .toEqual(['alice', 'gitlab.example.com/carol.b']);
+  });
+
   it('turning bots on needs the plan consent: refused without it, taken with it (main\'s time), and bots on from before it stay on', async () => {
     const s = new FactorySettingsStore(factorySettingsPath(dir));
     s.load();

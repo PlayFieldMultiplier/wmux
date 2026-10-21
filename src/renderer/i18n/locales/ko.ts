@@ -1847,7 +1847,7 @@ export const ko = {
   'settings.factory.offStopFailed': "봇은 꺼졌지만 실행 중인 작업을 멈추지 못했어요.",
   'settings.factory.offStopRetry': "다시 시도",
   'settings.factory.trustedAuthors': "신뢰하는 작성자",
-  'settings.factory.trustedAuthorsDesc': "검증 봇이 확인할 PR 작성자의 GitHub 로그인(쉼표로 구분).",
+  'settings.factory.trustedAuthorsDesc': "검증 봇이 확인할 PR 작성자의 GitHub 로그인(쉼표로 구분). GitLab 작성자는 host/username 형식으로 적습니다.",
   'settings.factory.morning': "아침 보고",
   'settings.factory.morningDesc': "대장이 팀 아침 보고를 올리는 시간.",
   'settings.factory.morningHour': "시각",

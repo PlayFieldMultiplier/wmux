@@ -491,6 +491,15 @@ export function glabMergeAnswer(stdout: string, url: string): PrWriteResult {
   return state === 'merged' ? { ok: true, url } : { ok: false, code: 'error', message: `GitLab answered the merge without merging it (state: ${state || 'unreadable'})` };
 }
 
+/** A failed `glab api` call glab answered as a sign-out. Only its own stderr
+ *  counts (the error message holds the command line, project path
+ *  included): a 401, or "Unauthenticated." as glab prints for a host it
+ *  holds no token for. A 403 is no sign-out. */
+export function glabApiSignedOut(err: unknown): boolean {
+  const stderr = (err as { stderr?: unknown })?.stderr;
+  return typeof stderr === 'string' && (/\b401\b/.test(stderr) || stderr.includes('Unauthenticated.'));
+}
+
 /** `glab auth status`'s outcome for one host. */
 export type GlabAuthProbe = 'ok' | 'signed-out' | 'unreachable';
 
@@ -757,6 +766,36 @@ export class GlabPrService implements PrProvider {
     }
   }
 
+  /** One GraphQL read for the factory repo watch (factory/repoWatchGitlab.ts
+   *  owns the query and its mapping) on the key's host; never cached. A
+   *  missing glab or a definite sign-out is told apart, so the watch backs
+   *  off. Any GraphQL error, even beside data, fails the read. */
+  async watchGraphql(repoPath: string, key: string, query: string, vars: Record<string, string>): Promise<PrReviewRead<unknown> | { ok: false; code: 'cli-missing' | 'unauthenticated'; message: string }> {
+    let host = '';
+    try {
+      host = GlabPrService.project(key).host;
+      const raw = await this.graphql(host, query, vars, repoPath);
+      const partial = glabGraphqlError(raw);
+      return partial ? { ok: false, code: 'error', message: partial } : { ok: true, value: raw };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { ok: false, code: 'cli-missing', message: 'GitLab CLI (glab) is not installed' };
+      if (host && glabApiSignedOut(err)) {
+        return { ok: false, code: 'unauthenticated', message: `GitLab CLI is not authenticated for ${host} — run \`glab auth login --hostname ${host}\`` };
+      }
+      return { ok: false, code: 'error', message: glabErrorText(err) };
+    }
+  }
+
+  /** The parents of commit `sha` in the key's project ([] when unreadable):
+   *  the merged-results check of the factory repo watch. */
+  async commitParentsOf(cwd: string, key: string, sha: string): Promise<string[]> {
+    try {
+      return await this.commitParents(GlabPrService.project(key), sha, cwd);
+    } catch {
+      return [];
+    }
+  }
+
   private async commitParents(project: { host: string; path: string }, sha: string, cwd: string): Promise<string[]> {
     if (!/^[0-9a-f]{40}$/.test(sha)) return [];
     try {
@@ -840,6 +879,18 @@ export class GlabPrService implements PrProvider {
       return text(rec(JSON.parse(stdout))?.username).toLowerCase() || null;
     } catch {
       return null;
+    }
+  }
+
+  /** loginOnHost, telling a definite sign-out (glabApiSignedOut) apart from
+   *  any other failure (null: a timeout, a network error, a missing glab). */
+  async loginOrSignOut(host: string, cwd: string): Promise<{ login: string } | { signedOut: true } | null> {
+    try {
+      const { stdout } = await this.api(host, ['user'], cwd);
+      const login = text(rec(JSON.parse(stdout))?.username).toLowerCase();
+      return login ? { login } : null;
+    } catch (err) {
+      return glabApiSignedOut(err) ? { signedOut: true } : null;
     }
   }
 

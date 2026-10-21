@@ -350,6 +350,9 @@ describe('MergeLaneHost', () => {
     expect(ctx.trustedAuthors).toEqual([]);
     // The settings' list stays trusted whatever produced the head.
     expect((await r.host.laneContext(KEY, '/repo', FACTS, [PASS], [], { ...r.state.settings, trustedAuthors: ['Octo'] })).trustedAuthors).toEqual(['octo']);
+    // On a GitLab repo a plain entry is a GitHub login: only `host/username` entries of its host count.
+    const gl = { ...r.state.settings, trustedAuthors: ['Octo', 'gitlab.example.com/Carol', 'other.example.com/dave'] };
+    expect((await r.host.laneContext('gitlab.example.com/group/app', '/repo', FACTS, [PASS], [], gl)).trustedAuthors).toEqual(['carol']);
   });
 
   it('a refusal card names each reason in plain words, never the raw code', async () => {

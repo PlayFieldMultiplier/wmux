@@ -52,6 +52,7 @@ import {
   type ThreadSummary,
 } from '../../shared/room';
 import { normalizeRepoKey } from './repoWatch';
+import { isGitlabRepoKey } from '../github/hostLane';
 import { formatLaneRefusal } from './laneRefusalText';
 import { redactStoredSecrets, redactStoredSecretsDeep } from './secretRedaction';
 import type { BotDirectoryApi, FactLogApi, WakeSinkApi } from './triggerEngine';
@@ -1358,7 +1359,8 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
       const pr = fact.ref?.pr;
       return {
         workspaces: factRooms(fact, bots), threadId: prThread(fact), kind: 'fact',
-        title: `PR #${pr ?? '?'} ${fact.kind === 'pr.merged' ? 'merged' : 'closed'}${str(p.title) ? `: ${str(p.title)}` : ''}`,
+        // A GitLab merge request is `MR !n`.
+        title: `${fact.repoKey && isGitlabRepoKey(fact.repoKey) ? `MR !${pr ?? '?'}` : `PR #${pr ?? '?'}`} ${fact.kind === 'pr.merged' ? 'merged' : 'closed'}${str(p.title) ? `: ${str(p.title)}` : ''}`,
         refs: baseRefs, closes: true,
         ...(typeof pr === 'number' ? { notice: { code: fact.kind, args: { pr, ...(str(p.title) ? { title: str(p.title) } : {}) } } } : {}),
       };
@@ -1374,7 +1376,7 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
       // owner is asked to approve that PR (mergeLaneHost.ts refuse).
       if (p.cardHeld === true) return null;
       // The reasons in the owner's words; the fact keeps the raw codes.
-      const body = capBody(formatLaneRefusal(typeof p.reason === 'string' ? p.reason : ''), 2000);
+      const body = capBody(formatLaneRefusal(typeof p.reason === 'string' ? p.reason : '', fact.repoKey), 2000);
       return {
         workspaces: factRooms(fact, bots), threadId: prThread(fact), kind: 'refusal',
         title: `Merge refused for #${fact.ref?.pr ?? '?'} at ${sha7(fact.ref?.headSha)}`,

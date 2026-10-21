@@ -2348,7 +2348,7 @@ export const en = {
   'settings.factory.offStopFailed': "Bots are off, but their running work could not be stopped.",
   'settings.factory.offStopRetry': "Try again",
   'settings.factory.trustedAuthors': "Trusted authors",
-  'settings.factory.trustedAuthorsDesc': "GitHub logins whose pull requests the Verifier checks, separated by commas.",
+  'settings.factory.trustedAuthorsDesc': "GitHub logins whose pull requests the Verifier checks, separated by commas. Write a GitLab author as host/username.",
   'settings.factory.morning': "Morning report",
   'settings.factory.morningDesc': "When the Coordinator posts the team's morning report.",
   'settings.factory.morningHour': "Hour",

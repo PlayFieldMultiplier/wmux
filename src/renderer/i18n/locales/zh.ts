@@ -2406,7 +2406,7 @@ export const zh = {
   'settings.factory.offStopFailed': "机器人已关闭，但无法停止它们正在运行的工作。",
   'settings.factory.offStopRetry': "重试",
   'settings.factory.trustedAuthors': "受信任的作者",
-  'settings.factory.trustedAuthorsDesc': "验证者检查其拉取请求的 GitHub 登录名，用逗号分隔。",
+  'settings.factory.trustedAuthorsDesc': "验证者检查其拉取请求的 GitHub 登录名，用逗号分隔。GitLab 作者请写成 host/username。",
   'settings.factory.morning': "晨报",
   'settings.factory.morningDesc': "协调者发布团队晨报的时间。",
   'settings.factory.morningHour': "时间",

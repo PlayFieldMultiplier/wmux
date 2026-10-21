@@ -37,3 +37,18 @@ export function defaultBranch(cwd: string, key: string): Promise<PrReviewRead<st
 export function signedInLogin(host: string, cwd: string): Promise<string | null> {
   return isGithubHost(host) ? ghIssueService.signedInLogin(host, cwd) : glabPrService.loginOnHost(host, cwd);
 }
+
+/** The trusted-author entries (factory settings) that can name an author on
+ *  this repo, lowercased. A plain entry is a GitHub login, so on a GitLab
+ *  repo only an entry written `host/username` for its own host counts (as
+ *  the username): a GitLab account named like a trusted GitHub login is not
+ *  trusted. Elsewhere every entry counts, as before. */
+export function trustedAuthorsOn(repoKey: string, entries: readonly string[]): string[] {
+  const all = entries.filter((e) => typeof e === 'string' && e.length > 0).map((e) => e.toLowerCase());
+  if (!isGitlabRepoKey(repoKey)) return all;
+  const prefix = `${repoKey.split('/')[0].toLowerCase()}/`;
+  return all.flatMap((e) => {
+    const user = e.startsWith(prefix) ? e.slice(prefix.length) : '';
+    return user && !user.includes('/') ? [user] : [];
+  });
+}

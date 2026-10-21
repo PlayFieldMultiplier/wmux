@@ -42,6 +42,8 @@ export {
 const WORKSPACE_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
 /** GitHub login shape. */
 const GH_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+/** A GitLab account as `host/username` (hostLane.ts trustedAuthorsOn). */
+const HOST_USER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252}[A-Za-z0-9])?\/[A-Za-z0-9_.][A-Za-z0-9_.-]{0,254}$/;
 const TRUSTED_AUTHORS_MAX = 50;
 
 function cloneDefaults(): FactorySettings {
@@ -68,7 +70,7 @@ export function mergeFactorySettings(base: FactorySettings, raw: unknown): Facto
   if (r.hqWorkspaceId === null) out.hqWorkspaceId = null;
   else if (typeof r.hqWorkspaceId === 'string' && WORKSPACE_ID_RE.test(r.hqWorkspaceId)) out.hqWorkspaceId = r.hqWorkspaceId;
   if (Array.isArray(r.trustedAuthors)) {
-    const logins = r.trustedAuthors.filter((a): a is string => typeof a === 'string' && GH_LOGIN_RE.test(a));
+    const logins = r.trustedAuthors.filter((a): a is string => typeof a === 'string' && (GH_LOGIN_RE.test(a) || HOST_USER_RE.test(a)));
     out.trustedAuthors = [...new Set(logins)].slice(0, TRUSTED_AUTHORS_MAX);
   }
   if (r.morning && typeof r.morning === 'object' && !Array.isArray(r.morning)) {

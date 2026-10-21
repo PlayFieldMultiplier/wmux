@@ -344,3 +344,34 @@ describe('mergedOfBranch / defaultBranch', () => {
     expect(await svc.mergedOfBranch('/wmux', KEY, '-x', 'main')).toMatchObject({ ok: false });
   });
 });
+
+describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
+  const svcOf = (exec: (cmd: string, args: string[]) => Promise<{ stdout: string }>) => new GlabPrService(() => 1000, exec as never);
+
+  it('names the host, and tells a missing glab and a sign-out from other failures', async () => {
+    const seen: string[][] = [];
+    const ok = svcOf(async (_c, args) => { seen.push(args); return { stdout: JSON.stringify({ data: { project: {} } }) }; });
+    expect(await ok.watchGraphql('/wmux', KEY, 'query { x }', { fullPath: 'group/sub/proj' })).toEqual({ ok: true, value: { data: { project: {} } } });
+    expect(seen[0].slice(0, 4)).toEqual(['api', '--hostname', 'gitlab.example.com', 'graphql']);
+    const missing = svcOf(async () => { throw Object.assign(new Error('spawn glab ENOENT'), { code: 'ENOENT' }); });
+    expect(await missing.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'cli-missing' });
+    const out = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'glab: 401 Unauthorized (HTTP 401)' }); });
+    expect(await out.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'unauthenticated' });
+    // What glab 1.108 prints for a host it holds no token for.
+    const anon = svcOf(async () => { throw Object.assign(new Error('Command failed'), { stderr: '   ERROR  \n  Unauthenticated.  \n' }); });
+    expect(await anon.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'unauthenticated' });
+    const down = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'dial tcp: i/o timeout' }); });
+    expect(await down.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'error' });
+    // The command line (a project path like api-403) is not glab's answer, and a 403 is no sign-out.
+    const blip = svcOf(async () => { throw Object.assign(new Error('Command failed: glab api --hostname gitlab.example.com graphql -f fullPath=group/api-403'), { stderr: 'dial tcp: i/o timeout' }); });
+    expect(await blip.watchGraphql('/wmux', 'gitlab.example.com/group/api-403', 'q', {})).toMatchObject({ ok: false, code: 'error' });
+    const forbidden = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'glab: 403 Forbidden (HTTP 403)' }); });
+    expect(await forbidden.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'error' });
+    // The owner login read tells a sign-out from a blip the same way.
+    expect(await out.loginOrSignOut('gitlab.example.com', '/wmux')).toEqual({ signedOut: true });
+    expect(await down.loginOrSignOut('gitlab.example.com', '/wmux')).toBeNull();
+    expect(await svcOf(async () => ({ stdout: JSON.stringify({ username: 'Me' }) })).loginOrSignOut('gitlab.example.com', '/wmux')).toEqual({ login: 'me' });
+    const partial = svcOf(async () => ({ stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'complexity' }] }) }));
+    expect(await partial.watchGraphql('/wmux', KEY, 'q', {})).toEqual({ ok: false, code: 'error', message: 'complexity' });
+  });
+});

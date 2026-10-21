@@ -2325,7 +2325,7 @@ export const pl = {
   'settings.factory.offStopFailed': "Boty są wyłączone, ale nie udało się zatrzymać ich trwającej pracy.",
   'settings.factory.offStopRetry': "Spróbuj ponownie",
   'settings.factory.trustedAuthors': "Zaufani autorzy",
-  'settings.factory.trustedAuthorsDesc': "Loginy GitHub, których pull requesty sprawdza Weryfikator, oddzielone przecinkami.",
+  'settings.factory.trustedAuthorsDesc': "Loginy GitHub, których pull requesty sprawdza Weryfikator, oddzielone przecinkami. Autora z GitLab wpisz jako host/username.",
   'settings.factory.morning': "Poranny raport",
   'settings.factory.morningDesc': "Kiedy Koordynator publikuje poranny raport zespołu.",
   'settings.factory.morningHour': "Godzina",
