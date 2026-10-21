@@ -620,8 +620,9 @@ export function deriveFullPalette(tokens: UIThemeTokens): FullCssPalette {
 // drifted silently (a built-in theme rendered differently from "custom based on
 // that built-in"). Capturing them here makes themes.ts the single source of
 // truth: deriveBuiltinPalette() reproduces every shipped [data-theme] block
-// EXACTLY (locked by themeParity.test.ts). The values are byte-identical to what
-// already ships — this changes NO built-in's on-screen appearance.
+// EXACTLY (locked by themeParity.test.ts). The values were captured
+// byte-identical to what shipped; textSubtle/textSub2 have since been lifted or
+// dropped where text contrast required it (themeTextContrast.test.ts).
 //
 // These apply to BUILT-IN rendering only. Custom themes intentionally derive
 // purely from their 11 editable tokens (deriveFullPalette) so a user's live
