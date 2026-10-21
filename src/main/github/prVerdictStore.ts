@@ -12,9 +12,13 @@
 // Every read goes to disk (the merge lane reads fresh before each try), waits
 // for the appends queued before it, and reads the primary file: never a
 // fallback to an older generation while the primary exists, which may predate
-// the newest FAIL. No file is empty; anything else that does not parse into
-// valid records throws. Writes are serialized in-process and go through
-// atomicWriteJSON. Nothing is created until the first verdict is recorded.
+// the newest FAIL. No file is empty; a file that does not parse throws. An
+// entry that is not a valid record is skipped on read and kept as it is on
+// write (another build may have written it), except that one which could be a
+// FAIL for the PR read (anything but a plain "pass") makes that read throw:
+// a FAIL nobody can read must still block. Writes are serialized in-process
+// and go through atomicWriteJSON. Nothing is created until the first verdict
+// is recorded.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -48,7 +52,15 @@ export class PrVerdictStore {
   /** Every record for one PR, read from disk now. Throws when unreadable. */
   async list(repoKey: string, prNumber: number): Promise<PrVerdictRecord[]> {
     await this.writes;
-    return (await this.readAll()).filter((r) => r.repoKey === repoKey && r.prNumber === prNumber);
+    const { valid, invalid } = await this.readAll();
+    const mayBlock = invalid.some((e) => {
+      const o = e && typeof e === 'object' ? (e as Record<string, unknown>) : null;
+      // Another PR's entry, by what it says, cannot block this one.
+      const other = !!o && ((typeof o.repoKey === 'string' && o.repoKey !== repoKey) || (typeof o.prNumber === 'number' && o.prNumber !== prNumber));
+      return !other && o?.verdict !== 'pass';
+    });
+    if (mayBlock) throw new Error('invalid verdict entry');
+    return valid.filter((r) => r.repoKey === repoKey && r.prNumber === prNumber);
   }
 
   /** Append one record (and prune stale heads). Throws when the file is
@@ -56,7 +68,7 @@ export class PrVerdictStore {
   record(rec: PrVerdictRecord): Promise<void> {
     if (!isPrVerdictRecord(rec)) return Promise.reject(new Error('invalid verdict record'));
     const run = this.writes.then(async () => {
-      const all = await this.readAll();
+      const { valid: all, invalid } = await this.readAll();
       all.push(asV2(rec));
       const newest = new Map<string, number>();
       const failed = new Set<string>();
@@ -66,7 +78,7 @@ export class PrVerdictStore {
       }
       const cutoff = this.now() - PR_VERDICT_RETENTION_MS;
       const kept = all.filter((r) => failed.has(headKey(r)) || (newest.get(headKey(r)) ?? 0) >= cutoff);
-      await atomicWriteJSON(this.file, { version: 2, verdicts: kept });
+      await atomicWriteJSON(this.file, { version: 2, verdicts: [...kept, ...invalid] });
       for (const listener of [...recordedListeners]) {
         try { listener(asV2(rec)); } catch { /* a listener never breaks the store */ }
       }
@@ -75,16 +87,16 @@ export class PrVerdictStore {
     return run;
   }
 
-  private async readAll(): Promise<PrVerdictRecord[]> {
+  private async readAll(): Promise<{ valid: PrVerdictRecord[]; invalid: unknown[] }> {
     // atomicWriteJSON moves the primary to `.bak` before the new file lands:
     // with no primary, `.bak` is the last committed generation (a write under
     // way, or one a crash cut short), never something older than it.
     const raw = await readIfExists(this.file) ?? await readIfExists(`${this.file}.bak`);
-    if (raw === null) return [];
+    if (raw === null) return { valid: [], invalid: [] };
     const saved = JSON.parse(raw) as { version?: unknown; verdicts?: unknown };
     if (!saved || (saved.version !== 1 && saved.version !== 2) || !Array.isArray(saved.verdicts)) throw new Error('invalid verdict storage');
-    if (!saved.verdicts.every(isPrVerdictRecord)) throw new Error('invalid verdict entry');
-    return (saved.verdicts as PrVerdictRecord[]).map(asV2);
+    const entries = saved.verdicts as unknown[];
+    return { valid: entries.filter(isPrVerdictRecord).map(asV2), invalid: entries.filter((e) => !isPrVerdictRecord(e)) };
   }
 }
 

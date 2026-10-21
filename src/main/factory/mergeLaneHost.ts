@@ -60,6 +60,8 @@ import type { BotDirectoryApi } from './triggerEngine';
 import type { RoomWriter } from './roomWriter';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { guestSide } from './guestWorkspaces';
+import { repoBaseGate } from './verifyPreset';
+import type { BaseGate } from '../worktask/TaskGateRunner';
 
 /** The facts that can complete a PR's case. */
 export const LANE_FACT_KINDS: ReadonlySet<Fact['kind']> = new Set(['verdict.recorded', 'ci.green', 'pr.head_moved', 'pr.labelled']);
@@ -96,6 +98,10 @@ export interface LaneHostPorts {
   ownerLogin: (host: string, repoPath: string) => Promise<string | null>;
   /** The gh login a merge would go out as now, or null. */
   currentLogin: (repo: { key: string; path: string }) => Promise<string | null>;
+  /** The gate the repository declares at a commit, read again when a
+   *  reading-only verdict's base tip has moved since it was recorded.
+   *  Absent: not read (such a verdict does not count). */
+  baseGate?: (repoPath: string, at: string) => Promise<BaseGate>;
   effects: Pick<MoaEffectStore, 'enqueueLane' | 'get'>;
   /** The gh login each lane effect was evaluated under, kept across
    *  restarts (default: memory only). */
@@ -371,6 +377,15 @@ export class MergeLaneHost {
     } catch {
       evidenceRows = null;
     }
+    // A reading-only verdict taken at an older base tip still counts when
+    // the base's new tip declares no gate either: read it there once.
+    const tip = facts.baseRefOid ?? null;
+    const moved = !!tip && (verdicts ?? []).some((v) => v.evidence?.reading !== undefined && v.evidence.baseSha !== tip);
+    let noGateBase: string | null = null;
+    if (moved && tip && this.ports.baseGate) {
+      const gate = await this.ports.baseGate(repoPath, tip).catch(() => null);
+      if (gate?.kind === 'none') noGateBase = tip;
+    }
     return {
       trustedAuthors,
       // Bound when a bot task's branch is the head branch.
@@ -384,6 +399,7 @@ export class MergeLaneHost {
       // whatever the switch reads by the time the executor gets here.
       botVerdictsOnly: true,
       evidenceRows,
+      noGateBase,
     };
   }
 
@@ -734,6 +750,7 @@ async function productionHost(deps: FactoryHostDeps): Promise<{ host: MergeLaneH
     // or a login that changed, is seen.
     ownerLogin: (h, cwd) => hostLane.signedInLogin(h, cwd),
     currentLogin: laneGh.currentGhLogin,
+    baseGate: (repoPath, at) => repoBaseGate(repoPath, at),
     effects,
     logins: fileLaneLogins(path.join(wmuxDir, 'factory', LANE_LOGINS_FILENAME)),
     run: (id) => executor.run(id),

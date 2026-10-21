@@ -16,9 +16,11 @@
 //     (the PR head), every other preset branches a fresh wtask/ branch from
 //     origin's default branch.
 //
-//   verify    the PR head, detached. The worker installs dependencies, reads
-//             the change against its base and reports findings in its ledger
-//             summary. Main then runs the repository gate on that exact
+//   verify    the PR head, detached. The worker reads the change against its
+//             base and reports findings in its ledger summary; it installs
+//             dependencies and runs checks only when the base declares a gate
+//             (main says which command, TaskGateRunner.baseGate) and the
+//             change is not docs-only. Main then runs the repository gate on that exact
 //             commit, with the gate chosen from the base branch, and records
 //             it (main/factory/verifyGate.ts) — that record, not the worker's
 //             word, is what a verdict rests on.
@@ -50,6 +52,8 @@ import type { FanoutWorkerPermissionMode } from '../../shared/workerLaunch';
 import { FANOUT_MAX_TASKS } from '../../shared/workTask';
 import { normalizeRepoKey } from '../../shared/repoKey';
 import { isGithubHost } from '../github/PrProvider';
+import { DOCS_ONLY_RULE } from '../../shared/docsChange';
+import type { BaseGate } from './TaskGateRunner';
 
 export type BotFanoutPresetName = 'verify' | 'repro' | 'maintain' | 'default' | 'research';
 
@@ -69,6 +73,8 @@ export interface BotPresetPromptContext {
   checkout?: BotPresetCheckout;
   /** Unset: github (a bot with no recorded repository host). */
   reviewHost?: BotReviewHost;
+  /** The gate the repository declares on its base (verify). Unset: unknown. */
+  gate?: BaseGate;
 }
 
 export interface BotFanoutPreset {
@@ -133,20 +139,33 @@ export function botReviewHost(repoKey: string | undefined): BotReviewHost | unde
 
 const review = (ctx: BotPresetPromptContext): ReviewRequestLines => REVIEW_REQUEST[ctx.reviewHost ?? 'github'];
 
+/** What the verify worker installs and runs, from the gate its base declares. */
+function verifyGateLines(gate: BaseGate | undefined): string[] {
+  if (gate?.kind === 'none') {
+    return [
+      '- This repository declares no gate on its base (no wmux.json verify script, no npm lint or test script), so wmux will run nothing after you report. Install nothing and run no test suite: read the change and report what you found.',
+    ];
+  }
+  const command = gate?.kind === 'declared' ? `\`${gate.command}\`` : 'the repository gate (wmux could not tell which one ahead of time)';
+  return [
+    `- After you report, wmux runs ${command} on this commit, so install the dependencies that gate needs (for a Node project, a real \`npm ci\`), whatever the change is. Run checks yourself for what a code change touches.`,
+  ];
+}
+
 const VERIFY_PROMPT = (ctx: BotPresetPromptContext): string => [
   '# Verify worker',
   '',
   `You are a verify worker. Your worktree is commit ${ctx.checkout?.sha ?? '(the PR head)'} checked out detached: the exact head of a pull request a factory verifier bot is grading.`,
   '',
   'What you can do here:',
-  '- Install the dependencies the repository gate needs (for a Node project, a real `npm ci`).',
-  '- Read the change against its base: `git log` and `git diff` between the merge base with origin\'s default branch and HEAD.',
-  '- Run checks to understand the change (typecheck, lint, tests for what it touches).',
+  '- Read the change against its base first: `git log` and `git diff --name-status` between the merge base with origin\'s default branch and HEAD, then the diff itself.',
+  `- When ${DOCS_ONLY_RULE}, the change is docs-only: read it and run no test suite yourself.`,
+  ...verifyGateLines(ctx.gate),
   '',
   'What you hand back:',
-  '- Your findings go in the summary of your ledger row (status review_requested): what the change does, what you ran and what it showed, anything that looks wrong, with file:line.',
-  '- The tree stays at this commit exactly as checked out, with dependencies installed: once you report, wmux runs the repository gate on this commit, with the gate taken from the base branch, and records it as the evidence for the verdict.',
-  '- If dependencies cannot be installed or the change cannot be read, report input_required and say what is missing.',
+  '- Your findings go in the summary of your ledger row (status review_requested): what the change does, what you ran (if anything) and what it showed, anything that looks wrong, with file:line.',
+  '- The tree stays at this commit exactly as checked out: once you report, wmux runs the repository gate on this commit, with the gate taken from the base branch, and records it as the evidence for the verdict.',
+  '- If a gate needs dependencies that cannot be installed, or the change cannot be read, report input_required and say what is missing.',
 ].join('\n');
 
 const REPRO_PROMPT = (ctx: BotPresetPromptContext): string => [
@@ -294,11 +313,11 @@ export function botPresetCheckoutRefusal(name: string, checkout: BotPresetChecko
 
 /** The prompt a bot's worker receives: the preset's, then the bot's own. The
  *  bot repository's key picks the review request's CLI (botReviewHost). */
-export function composeBotWorkerPrompt(name: string, botPrompt: string, checkout?: BotPresetCheckout, repoKey?: string): string {
+export function composeBotWorkerPrompt(name: string, botPrompt: string, checkout?: BotPresetCheckout, repoKey?: string, gate?: BaseGate): string {
   const preset = botFanoutPreset(name);
   if (!preset) return botPrompt;
   const reviewHost = botReviewHost(repoKey);
-  const head = preset.workerPrompt({ ...(checkout ? { checkout } : {}), ...(reviewHost ? { reviewHost } : {}) });
+  const head = preset.workerPrompt({ ...(checkout ? { checkout } : {}), ...(reviewHost ? { reviewHost } : {}), ...(gate ? { gate } : {}) });
   const own = botPrompt.trim();
   return own ? `${head}\n\n## Your task\n\n${own}` : head;
 }

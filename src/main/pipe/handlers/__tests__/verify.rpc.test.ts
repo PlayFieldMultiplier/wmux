@@ -199,7 +199,8 @@ describe('verify.recordVerdict — bot path', () => {
       ['a gate the worker wrote', row({ gate: gate({ recordedBy: 'worker' }) }), BOT_INPUT, 'evidence-mismatch'],
       ['a gate on another head', row({ gate: gate({ headSha: 'c'.repeat(40) }) }), BOT_INPUT, 'evidence-mismatch'],
       ['a gate on a dirty tree (no head)', row({ gate: gate({ headSha: undefined }) }), BOT_INPUT, 'evidence-mismatch'],
-      ['a recorded skip', row({ gate: gate({ skipped: 'no_gate_command', command: 'none' }) }), BOT_INPUT, 'gate-skipped'],
+      ['a recorded no_changes skip', row({ gate: gate({ skipped: 'no_changes', command: 'none' }) }), BOT_INPUT, 'gate-skipped'],
+      ['a gate the head dropped (command none, exit 1)', row({ gate: gate({ command: 'none', exitCode: 1 }) }), BOT_INPUT, 'gate-skipped'],
       ['a PASS on a red gate', row({ gate: gate({ exitCode: 1 }) }), BOT_INPUT, 'gate-failed'],
       ['a PASS on a killed gate', row({ gate: gate({ exitCode: null }) }), BOT_INPUT, 'gate-failed'],
     ];
@@ -214,7 +215,7 @@ describe('verify.recordVerdict — bot path', () => {
     const fail = { ...BOT_INPUT, verdict: 'fail', summary: 'tests fail at head' };
     const red = botSetup(row({ gate: gate({ exitCode: 2 }) }));
     expect(await red.call(fail, BOT_CTX)).toMatchObject({ ok: true, record: { verdict: 'fail', evidence: { taskId: TASK, gateHeadSha: HEAD } } });
-    expect(await botSetup(row({ gate: gate({ skipped: 'no_gate_command', command: 'none' }) })).call(fail, BOT_CTX)).toMatchObject({ code: 'gate-skipped' });
+    expect(await botSetup(row({ gate: gate({ skipped: 'no_changes', command: 'none' }) })).call(fail, BOT_CTX)).toMatchObject({ code: 'gate-skipped' });
     expect(await botSetup(row({ gate: undefined })).call(fail, BOT_CTX)).toMatchObject({ code: 'evidence-mismatch' });
   });
 
@@ -298,5 +299,92 @@ describe('verify.recordVerdict — bot path', () => {
   it('the store failing is a refusal, not a throw', async () => {
     const { call } = botSetup(row(), verifierProfile(), { record: async () => { throw new Error('disk'); } });
     expect(await call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'store-error' });
+  });
+
+  it('a PASS on the no_gate_command record (the repository declares no gate) is recorded', async () => {
+    const noGate = row({ gate: gate({ skipped: 'no_gate_command', command: 'none', exitCode: 0 }) });
+    expect(await botSetup(noGate).call(BOT_INPUT, BOT_CTX)).toMatchObject({ ok: true, record: { verdict: 'pass', evidence: { taskId: TASK } } });
+  });
+});
+
+describe('verify.recordVerdict — reading-only bot verdicts (no worker)', () => {
+  const READ_INPUT = { ...INPUT, summary: 'read the change', evidence: { reading: true } };
+  const MAIN = 'd'.repeat(40);
+  const REL = 'e'.repeat(40);
+  const docs = { ...FACTS, baseRefName: 'main', baseRefOid: MAIN, files: ['docs/guide.html', 'README.md'], filesTruncated: false } as PrLaneFacts;
+  const code = { ...FACTS, baseRefName: 'main', baseRefOid: MAIN, files: ['src/app.py'], filesTruncated: false } as PrLaneFacts;
+  type BaseGate = NonNullable<NonNullable<VerifyRpcDeps['bot']>['baseGate']>;
+  const refs = {
+    'rev-parse --verify --quiet refs/remotes/origin/main^{commit}': MAIN,
+    'rev-parse --verify --quiet refs/remotes/origin/release/2^{commit}': REL,
+  };
+  const readingSetup = (facts: PrLaneFacts, baseGate: BaseGate, guestWake: () => boolean | 'unknown' = () => false) => setup({
+    repoKeyOf: async (p: string) => (p === '/repo' ? 'github.com/o/r' : null),
+    readPr: async () => facts,
+    bot: { guestWake, profile: () => verifierProfile(), ledgerRow: () => null, baseGate },
+  }, refs);
+
+  it('a base branch that declares no gate: recorded, naming that branch and the commit its gate was read at', async () => {
+    const baseGate = vi.fn<BaseGate>(async () => ({ kind: 'none' }));
+    const { call, record } = readingSetup(code, baseGate);
+    expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({
+      ok: true,
+      record: { verdict: 'pass', evidence: { taskId: 'reading-only', gateHeadSha: HEAD, reading: 'no-gate', baseRef: 'origin/main', baseSha: MAIN } },
+    });
+    expect(record).toHaveBeenCalledTimes(1);
+    // The gate is read at the resolved commit, not at a ref that may move.
+    expect(baseGate).toHaveBeenCalledWith('/repo', MAIN);
+  });
+
+  it('a docs-only change in a repository with a gate is refused: the gate may check docs too', async () => {
+    const { call, record } = readingSetup(docs, async () => ({ kind: 'declared', command: 'bash scripts/verify.sh' }));
+    expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required', message: expect.stringContaining('docs-only change or not') });
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('the gate is read from the PR\'s own base branch: a PR into release/2 that declares a gate is refused while main has none', async () => {
+    const baseGate = vi.fn<BaseGate>(async (_repo, at) => (at === REL ? { kind: 'declared', command: 'npm test' } : { kind: 'none' }));
+    const intoRelease = { ...code, baseRefName: 'release/2', baseRefOid: REL } as PrLaneFacts;
+    const { call, record } = readingSetup(intoRelease, baseGate);
+    expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required', message: expect.stringContaining('origin/release/2') });
+    expect(baseGate).toHaveBeenCalledWith('/repo', REL);
+    expect(record).not.toHaveBeenCalled();
+    // The same PR into main records.
+    expect(await readingSetup(code, baseGate).call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: true, record: { evidence: { baseRef: 'origin/main', baseSha: MAIN } } });
+  });
+
+  it('a stale local copy of the base is refused: a gate added on the forge since the last fetch would go unread', async () => {
+    const baseGate = vi.fn<BaseGate>(async () => ({ kind: 'none' }));
+    for (const baseRefOid of ['f'.repeat(40), null, undefined]) {
+      const { call, record } = readingSetup({ ...code, baseRefOid } as PrLaneFacts, baseGate);
+      expect(await call(READ_INPUT, BOT_CTX), String(baseRefOid)).toMatchObject({ ok: false, code: 'gate-required', message: expect.stringContaining('not the base tip') });
+      expect(record).not.toHaveBeenCalled();
+    }
+    expect(baseGate).not.toHaveBeenCalled();
+  });
+
+  it('an unknown gate, or a base branch not in the repository, is refused', async () => {
+    const unknown = readingSetup(code, async () => ({ kind: 'unknown', detail: 'package.json on the base could not be parsed' }));
+    expect(await unknown.call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required' });
+    for (const baseRefName of ['gone', '-x', 'a..b']) {
+      const { call, record } = readingSetup({ ...code, baseRefName } as PrLaneFacts, async () => ({ kind: 'none' }));
+      expect(await call(READ_INPUT, BOT_CTX), baseRefName).toMatchObject({ ok: false, code: 'gate-required' });
+      expect(record).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a wake not known clean records no reading-only verdict either', async () => {
+    for (const g of [true, 'unknown'] as const) {
+      const { call, record } = readingSetup(code, async () => ({ kind: 'none' }), () => g);
+      expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'surface' });
+      expect(record).not.toHaveBeenCalled();
+    }
+  });
+
+  it('reading evidence takes exactly {reading: true}', async () => {
+    for (const evidence of [{ reading: false }, { reading: true, taskId: TASK }, { reading: 'yes' }]) {
+      const { call } = readingSetup(code, async () => ({ kind: 'none' }));
+      expect(await call({ ...READ_INPUT, evidence }, BOT_CTX)).toMatchObject({ ok: false, code: 'evidence-missing' });
+    }
   });
 });

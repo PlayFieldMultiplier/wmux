@@ -50,11 +50,30 @@ export interface PrVerdictPrincipal {
 
 /** What a v2 verdict rests on: the verify task whose system-recorded gate ran
  *  at the head. The merge lane resolves `taskId` to its ledger row and checks
- *  the row, never this claim alone. */
+ *  the row, never this claim alone.
+ *
+ *  A reading-only verdict (`reading` set) rests on no task: the bot read the
+ *  change itself, and main found, when it recorded the verdict, that the
+ *  repository declares no gate on the PR's base branch (`no-gate`): `baseRef`
+ *  (`origin/<base branch>`) at `baseSha`, the commit main read the gate
+ *  from. The merge lane counts it only while that ref is still at
+ *  `baseSha`. Its `taskId` is READING_EVIDENCE_TASK_ID, which names no ledger
+ *  row, so a build that does not know `reading` still reads the record and
+ *  never counts it. */
 export interface PrVerdictEvidence {
   taskId: string;
   gateHeadSha: string;
+  /** PrVerdictReadingBasis when this build wrote it; any other string is
+   *  read (records outlive builds) and never counts. */
+  reading?: string;
+  baseRef?: string;
+  baseSha?: string;
 }
+
+export type PrVerdictReadingBasis = 'no-gate';
+
+/** The `taskId` of a reading-only verdict's evidence. */
+export const READING_EVIDENCE_TASK_ID = 'reading-only';
 
 /**
  * One verdict. v1 records (pane verifiers, before bots) are still read; a v2
@@ -110,7 +129,14 @@ export type PrVerdictRefusalCode =
   /** The evidence gate was a recorded skip (the lane's reason). */
   | 'gate-skipped'
   /** A PASS whose evidence gate failed (the lane's reason). */
-  | 'gate-failed';
+  | 'gate-failed'
+  /** A reading-only verdict where a gate grades the change: the PR's base
+   *  branch declares one (or wmux cannot tell whether it does, or cannot
+   *  read that branch). Start a verify worker. */
+  | 'gate-required'
+  /** A reading-only verdict whose base branch moved (or the PR now targets
+   *  another one) since main read its gate (the lane's reason). */
+  | 'base-moved';
 
 export type PrVerdictResult =
   | { ok: true; record: PrVerdictRecord }
@@ -150,7 +176,13 @@ export function isPrVerdictRecord(v: unknown): v is PrVerdictRecord {
       && (p.ptyId !== undefined || p.botId !== undefined)
       && (v.evidence === undefined || (isRecord(v.evidence)
         && isId(v.evidence.taskId)
-        && typeof v.evidence.gateHeadSha === 'string' && COMMIT_SHA_RE.test(v.evidence.gateHeadSha)));
+        && typeof v.evidence.gateHeadSha === 'string' && COMMIT_SHA_RE.test(v.evidence.gateHeadSha)
+        // Structural only: what a reading-only basis is worth is the merge
+        // lane's call (verdictEvidenceCheck), so a record another build wrote
+        // never makes the whole file unreadable.
+        && (v.evidence.reading === undefined || typeof v.evidence.reading === 'string')
+        && (v.evidence.baseRef === undefined || typeof v.evidence.baseRef === 'string')
+        && (v.evidence.baseSha === undefined || typeof v.evidence.baseSha === 'string')));
   return principalOk
     && typeof v.repoKey === 'string' && v.repoKey.length > 0
     && isPrNumber(v.prNumber)

@@ -118,6 +118,13 @@ describe('role reads — who may call', () => {
     expect(await handlePrRead({ prNumber: 7 }, ctxOf(MOA), d)).toMatchObject({ ok: false, code: 'no_repo' });
   });
 
+  it('pr_read names the head ref a verify checkout fetches for the repository\'s host', async () => {
+    expect(await handlePrRead({ prNumber: 7 }, ctxOf(VERIFIER), deps())).toMatchObject({ ok: true, pr: { fetchRef: 'pull/7/head' } });
+    // A GitLab repository: its merge request's head ref (what fan-out accepts there).
+    const gitlab = deps({ repoKeyOf: async (p) => (p === '/repo/a' ? 'gitlab.example.com/group/sub/proj' : null) });
+    expect(await handlePrRead({ prNumber: 7 }, ctxOf(VERIFIER), gitlab)).toMatchObject({ ok: true, pr: { fetchRef: 'merge-requests/7/head' } });
+  });
+
   it('the Coordinator read is the live profile\'s template, not the role tag', async () => {
     const promoted = BOTS.map((b) => (b.id === VERIFIER.id ? { ...b, template: 'coordinator' as const } : b.id === MOA.id ? { ...b, template: 'developer' as const } : b));
     const d = deps({ bots: () => ({ listEnabled: () => promoted, get: (id) => promoted.find((b) => b.id === id) ?? null }) });

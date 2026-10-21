@@ -124,7 +124,7 @@ describe('bot prompts (job, powers and outputs)', () => {
     // What a bot does itself and what a worker is for, as powers.
     expect(rolePrompt(profile('developer'))).toContain('you answer questions, read code (Read, Grep, Glob) and read PR, issue and CI status (pr_read, issue_read, ci_read) yourself, in the turn. A worker (fanout_start) is for what those cannot do: changing code, or running commands, tests and builds');
     expect(rolePrompt(profile('developer', { repo: undefined }))).toContain('A worker (fanout_start) is for what those cannot do: reading or changing code, or running commands, tests and builds');
-    expect(line(profile('reviewer'))[0]).toMatch(/Your own reading informs, the verify task's gate decides the verdict\./);
+    expect(line(profile('reviewer'))[0]).toMatch(/Your own reading decides a head whose base declares no gate; for every other head the verify task's gate decides the verdict\./);
   });
 
   it('a bot tells its workers to bring in fresh main with task_fetch, never a git fetch of their own', () => {
@@ -133,6 +133,16 @@ describe('bot prompts (job, powers and outputs)', () => {
     }
     expect(rolePrompt({ ...profile('custom'), template: 'custom', role: 'maintainer' })).toContain('task_fetch');
     expect(rolePrompt(profile('developer'))).toContain('A PR that conflicts with the default branch goes back to its worker (worker_message, or worker_resume once it ended): run task_fetch, run the `git fetch` line it returns, then `git merge origin/<default branch>`');
+  });
+
+  it('the reviewer reads a head whose base declares no gate itself; a docs-only head in a gated repository gets a worker', () => {
+    const prompt = rolePrompt(profile('reviewer'));
+    const wake = prompt.split('\n').find((l) => l.startsWith('- A handoff, a mention or the owner\'s message asking you to verify a PR')) ?? '';
+    expect(wake).toMatch(/When it is a head whose base branch declares no gate[^:]*: read the diff with mcp__wmux_repo__git_diff, record pr_verdict with evidence \{reading: true\} and post the verdict card, in this turn/);
+    expect(wake).toMatch(/Every other head, or one mcp__wmux_repo__git_diff cannot read, or a gate-required refusal: start one verify worker/);
+    expect(prompt).toMatch(/a docs-only change included \(a docs file can be what the gate checks\)/);
+    expect(prompt).toMatch(/fanout_start: start one verify worker, for a head a gate grades \(a docs-only one too/);
+    expect(prompt).toMatch(/pr_verdict: .*evidence \{reading: true\} for a head whose base branch declares no gate/);
   });
 
   it('each template words its own work', () => {
