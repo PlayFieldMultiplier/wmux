@@ -640,17 +640,18 @@ export async function hydrateTerminalForRead(ptyId: string): Promise<boolean> {
 // pane's suspended session attached without promoting, say) attaches it the
 // way first showing the pane would: through that pane's own reattach, so the
 // replay lands once. Keyed by ptyId; registered per mounted terminal.
-const writeAttachRegistry = new Map<string, (promote: boolean) => Promise<void> | undefined>();
+const writeAttachRegistry = new Map<string, (promote: boolean) => Promise<boolean | void> | undefined>();
 /**
- * Attach a mounted pane's session; false when no mounted pane holds it.
- * `promote: false` (a stop key) attaches a live session and leaves a
- * suspended one suspended (the pane is then marked deferred).
+ * Attach a mounted pane's session: 'unmounted' when no mounted pane holds it.
+ * `promote: false` (a stop key) never starts the session, whether the pane is
+ * shown or not: it attaches a live one, and answers 'not-running' for one the
+ * pane knows is not running (held suspended, or a WSL recovery waiting for
+ * its Retry) or that the daemon reports suspended.
  */
-export async function attachForWrite(ptyId: string, promote = true): Promise<boolean> {
+export async function attachForWrite(ptyId: string, promote = true): Promise<'unmounted' | 'attached' | 'not-running'> {
   const fn = writeAttachRegistry.get(ptyId);
-  if (!fn) return false;
-  await fn(promote);
-  return true;
+  if (!fn) return 'unmounted';
+  return (await fn(promote)) === false ? 'not-running' : 'attached';
 }
 
 // Monotonic token source so each useTerminal instance gets a stable, unique key
@@ -3742,11 +3743,17 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // Code or Codex conversation is promoted at boot, hidden or not, when
     // resume-on-start is on (resumesOnStart, as a dead pane's create).
     let resumeAtBoot = false;
-    const noteDeferred = (deferred: boolean, resume?: ResumeHint) => {
+    // A WSL recovery that failed and waits for the user's Retry (the banner):
+    // nothing runs there, and only that Retry starts it.
+    let awaitingRetry = false;
+    // A first show that arrived while an attempt was in flight: that attempt's
+    // settle promotes, even when it is a stop key's.
+    let shownMidAttempt = false;
+    const noteDeferred = (deferred: boolean, resume?: ResumeHint, armResume = true) => {
       deferredAttachRef.current = deferred;
       // No session pipe either: refuses the park, like a pending reattach.
       if (deferred) reconnectPendingRef.current = true;
-      resumeAtBoot = deferred && resumesOnStart(resume, useStore.getState().claudeResumeOnStart === true);
+      resumeAtBoot = armResume && deferred && resumesOnStart(resume, useStore.getState().claudeResumeOnStart === true);
     };
     const reattach = (reason: string): Promise<void> | undefined => {
       // #2398 — a raw write must not settle on an attempt that leaves the
@@ -3754,18 +3761,23 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // only waits it out: it never promotes.
       if (inFlight) {
         if (reason === 'stop-key') return current;
+        if (reason === 'first-show') shownMidAttempt = true;
         return reason === 'raw-write' ? current?.then(() => (deferredAttachRef.current ? reattach(reason) : undefined)) : undefined;
       }
       current = attach(reason);
       return current;
     };
     const attach = (reason: string) => {
+      // #2398 — a stop key (ctrl+c, escape) is never what starts a session:
+      // it attaches without promoting, shown pane or not, arms no resume on
+      // start, and leaves the pane's own retry schedule as it was.
+      const stopKey = reason === 'stop-key';
       inFlight = true;
       reconnectInFlightRef.current = true;
-      if (slowRetry !== null) { clearTimeout(slowRetry); slowRetry = null; }
+      if (!stopKey && slowRetry !== null) { clearTimeout(slowRetry); slowRetry = null; }
       // #2398 — promote only a pane on screen, for a raw write to it, or for
-      // its agent's resume on start.
-      const promote = promoteRef.current || reason === 'raw-write' || reason === 'resume-on-start';
+      // its agent's resume on start; never for a stop key.
+      const promote = !stopKey && (promoteRef.current || reason === 'raw-write' || reason === 'resume-on-start');
       console.log(`[useTerminal] daemon reattach ptyId=${id} (${reason}${promote ? '' : ', hidden'})`);
       revealTiming(id, 'reattach-start', `reason=${reason}`);
       return reconnectPtyWithRetry(id, () => ptyIdRef.current === id && terminalRef.current !== null, (message, info) => {
@@ -3773,7 +3785,8 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // (rate limited, WSL recovery pending); null means it attached —
         // unless it is waiting on the reconcile (#2398), which shows no banner.
         reconnectPendingRef.current = message !== null || info?.awaitingReconcile === true;
-        noteDeferred(info?.deferred === true, info?.resume);
+        awaitingRetry = message !== null && !info?.rateLimited && !info?.unconfirmed;
+        noteDeferred(info?.deferred === true, info?.resume, !stopKey);
         if ((info?.rateLimited || info?.unconfirmed || info?.awaitingReconcile) && slowRetry === null) {
           slowRetry = setTimeout(() => { slowRetry = null; void reattach('rate-limit-retry'); }, 8000 + Math.random() * 4000);
         }
@@ -3819,7 +3832,12 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // #2398 — shown while a hidden attempt was in flight (its first show
         // found nothing to promote yet), or left suspended with a conversation
         // to resume on start: promote now.
-        .finally(() => { inFlight = false; reconnectInFlightRef.current = false; promoteIfDue(); });
+        .finally(() => {
+          inFlight = false; reconnectInFlightRef.current = false;
+          const shown = shownMidAttempt;
+          shownMidAttempt = false;
+          if (!stopKey || shown) promoteIfDue();
+        });
     };
     const promoteIfDue = () => {
       if (!deferredAttachRef.current || ptyIdRef.current !== id) return;
@@ -3829,7 +3847,13 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         void reattach('resume-on-start');
       }
     };
-    const rawWriteReattach = (promote: boolean) => reattach(promote ? 'raw-write' : 'stop-key');
+    // A stop key: false when nothing runs in the session (see attachForWrite).
+    const stopKeyAttach = async (): Promise<boolean> => {
+      if (deferredAttachRef.current || awaitingRetry) return false;
+      await reattach('stop-key');
+      return !deferredAttachRef.current && !awaitingRetry;
+    };
+    const rawWriteReattach = (promote: boolean) => (promote ? reattach('raw-write') : stopKeyAttach());
     writeAttachRegistry.set(id, rawWriteReattach);
     retryReconnectRef.current = () => reattach('manual-retry');
     firstShowReattachRef.current = () => reattach('first-show');

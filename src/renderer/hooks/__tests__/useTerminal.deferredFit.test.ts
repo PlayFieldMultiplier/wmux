@@ -165,7 +165,7 @@ describe('#1255 — every fit() apply site is floor-gated, every recovery re-ass
     expect(resync).toMatch(/sendResize\(ptyId, dims\.cols, dims\.rows\)/);
     // Anchor on the reattach log line itself — plain "daemon reattach" also
     // appears in unrelated comments above this effect.
-    const reattach = src.slice(src.indexOf('[useTerminal] daemon reattach ptyId='), src.indexOf('[useTerminal] daemon reattach ptyId=') + 2200);
+    const reattach = src.slice(src.indexOf('[useTerminal] daemon reattach ptyId='), src.indexOf('[useTerminal] daemon reattach ptyId=') + 2600);
     expect(reattach).toMatch(/proposedSafeDimensions\(fitAddonRef\.current, containerRef\.current\)/);
     expect(reattach).toMatch(/sendResize\(id, dims\.cols, dims\.rows\)/);
   });

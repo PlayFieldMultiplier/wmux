@@ -21,7 +21,7 @@ vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: class { constructor() { throw new Error('no WebGL in jsdom'); } },
 }));
 
-type ReconnectAnswer = { success: boolean; deferred?: boolean; transient?: boolean; error?: string; resumeAgent?: string; resumeBinding?: { agent: string; sessionId: string; cwd: string } };
+type ReconnectAnswer = { success: boolean; deferred?: boolean; recoveryPending?: boolean; transient?: boolean; error?: string; resumeAgent?: string; resumeBinding?: { agent: string; sessionId: string; cwd: string } };
 const reconnect = vi.fn<(id: string, opts?: { promote?: boolean }) => Promise<ReconnectAnswer>>(async () => ({ success: true }));
 const unsub = () => () => undefined;
 
@@ -128,9 +128,9 @@ describe('reattach of a hidden pane (#2398)', { timeout: 60_000 }, () => {
     setDaemonModeActive(true);
     await render('p-written', false);
     const { attachForWrite } = await import('../useTerminal');
-    let started = false;
+    let started: string | undefined;
     await act(async () => { started = await attachForWrite('p-written'); });
-    expect(started).toBe(true);
+    expect(started).toBe('attached');
     expect(promoteFlags()).toEqual([false, true]);
     expect(useStore.getState().ptyDeferredById['p-written']).toBeUndefined();
   });
@@ -142,11 +142,58 @@ describe('reattach of a hidden pane (#2398)', { timeout: 60_000 }, () => {
     setDaemonModeActive(true);
     await render('p-stop', false);
     const { attachForWrite } = await import('../useTerminal');
-    let attached = false;
-    await act(async () => { attached = await attachForWrite('p-stop', false); });
-    expect(attached).toBe(true);
-    expect(promoteFlags()).toEqual([false, false]);
+    let answer: string | undefined;
+    await act(async () => { answer = await attachForWrite('p-stop', false); });
+    // Known held: no second reconnect, answered not running.
+    expect(promoteFlags()).toEqual([false]);
+    expect(answer).toBe('not-running');
     expect(useStore.getState().ptyDeferredById['p-stop']).toBe(true);
+  });
+
+  // Re-review P2: the stop key's attempt took the pane's own promote rule, so
+  // on a SHOWN pane it reconnected with promote — a commander's ctrl+c could
+  // start a session.
+  it('a stop key on a shown pane reattaches without promoting', async () => {
+    setDaemonModeActive(true);
+    await render('p-shown-stop', true);
+    expect(promoteFlags()).toEqual([true]);
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    await act(async () => { answer = await attachForWrite('p-shown-stop', false); });
+    expect(promoteFlags()).toEqual([true, false]);
+    expect(answer).toBe('attached');
+  });
+
+  // Re-review P2 scenario: a shown WSL pane whose recovery failed waits for its
+  // Retry; a stop key acted as that Retry click and started the distro.
+  it('a stop key on a shown pane waiting for its recovery Retry answers not running and starts nothing', async () => {
+    reconnect.mockImplementation(async () => ({ success: false, recoveryPending: true, error: 'WSL recovery failed' } as ReconnectAnswer));
+    setDaemonModeActive(true);
+    await render('p-retry', true);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    await act(async () => { answer = await attachForWrite('p-retry', false); });
+    await settle();
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(answer).toBe('not-running');
+  });
+
+  // Re-review P3: a stop key whose attach finds the session suspended must not
+  // be what arms resume on start either.
+  it('a stop key that finds the session suspended arms no resume on start', async () => {
+    useStore.setState({ claudeResumeOnStart: true });
+    const exact = { agent: 'claude', sessionId: '0c8f6a52-6c1b-4b6e-9a51-2f0d3c4b5a69', cwd: '/home/me/p' };
+    setDaemonModeActive(true);
+    await render('p-stop-resume', false);
+    expect(promoteFlags()).toEqual([false]);
+    reconnect.mockImplementation(async (_id, opts) => (opts?.promote === false ? { success: false, deferred: true, resumeBinding: exact } : { success: true }));
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    await act(async () => { answer = await attachForWrite('p-stop-resume', false); });
+    await settle();
+    expect(promoteFlags()).toEqual([false, false]);
+    expect(answer).toBe('not-running');
   });
 
   // Review item 6 — a read (pane.search, input.readScreen, an approval probe)

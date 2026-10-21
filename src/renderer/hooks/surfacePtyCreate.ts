@@ -154,9 +154,9 @@ export async function ensurePtyStarted(ptyId: string, promote = true): Promise<E
   // detached and running across an app restart), but never start one. The
   // daemon's answer tells them apart: a suspended session comes back
   // deferred, a dead one dead, and either has nothing running to stop.
-  if (await attachForWrite(ptyId, promote)) {
-    return !promote && useStore.getState().ptyDeferredById?.[ptyId] ? { notRunning: true } : { ptyId };
-  }
+  const mounted = await attachForWrite(ptyId, promote);
+  if (mounted === 'not-running') return { notRunning: true };
+  if (mounted === 'attached') return { ptyId };
   const res = await window.electronAPI.pty.reconnect(ptyId, { promote });
   if (!promote && (res.deferred === true || res.code === 'session-dead')) return { notRunning: true };
   if (!res.success) return { error: `the pane's session could not be attached: ${res.error ?? 'unknown error'}` };
