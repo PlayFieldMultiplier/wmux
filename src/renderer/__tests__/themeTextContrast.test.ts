@@ -39,11 +39,13 @@ describe('theme text contrast', () => {
     }
   });
 
-  // The tiers stay a ladder: lifting muted must not leave subtle at or below it.
-  it.each(ids)('%s: on the sheet, contrast rises from muted to subtle to sub', (id) => {
+  // The tiers stay a ladder: lifting muted must not leave subtle at or below it,
+  // nor subtle at or above sub2.
+  it.each(ids)('%s: on the sheet, contrast rises from muted to subtle to sub and sub2', (id) => {
     const p = deriveBuiltinPalette(id);
     const on = (c: string) => getContrastRatio(c, p.bgBase);
     expect(on(p.textSubtle), `${id} subtle vs muted`).toBeGreaterThan(on(p.textMuted));
     expect(on(p.textSub), `${id} sub vs subtle`).toBeGreaterThan(on(p.textSubtle));
+    expect(on(p.textSub2), `${id} sub2 vs subtle`).toBeGreaterThan(on(p.textSubtle));
   });
 });

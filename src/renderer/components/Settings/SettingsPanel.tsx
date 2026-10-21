@@ -2825,9 +2825,9 @@ const TOKEN_INSPECT_ROLE: Record<UITokenSpec['key'], TokenRole> = {
  * exact-matching the 10 UI tokens. Returns null when it matches none (fully
  * hand-tuned). Used to label the header and as the per-token "overridden" base.
  * A copy saved before a preset's text tokens were lifted for contrast
- * (PRE_CONTRAST_LIFT_TEXT) still matches that preset.
+ * (PRE_CONTRAST_LIFT_TEXT) still matches that preset, as its legacy variant.
  */
-export function detectBasePreset(colors: CustomThemeColors): BuiltinThemeId | null {
+export function detectBaseMatch(colors: CustomThemeColors): { preset: BuiltinThemeId; colors: CustomThemeColors } | null {
   for (const { value } of BASE_ON_OPTIONS) {
     const current = builtinToCustom(value);
     const legacy = PRE_CONTRAST_LIFT_TEXT[value];
@@ -2835,10 +2835,23 @@ export function detectBasePreset(colors: CustomThemeColors): BuiltinThemeId | nu
       const same = UI_TOKEN_GROUPS.every((g) =>
         g.tokens.every(({ key }) => colors[key].toUpperCase() === preset[key].toUpperCase()),
       );
-      if (same) return value;
+      if (same) return { preset: value, colors: preset };
     }
   }
   return null;
+}
+
+export function detectBasePreset(colors: CustomThemeColors): BuiltinThemeId | null {
+  return detectBaseMatch(colors)?.preset ?? null;
+}
+
+/**
+ * The colours the per-token "overridden" dots compare against: the variant
+ * the live colours matched (so an untouched legacy copy shows no overrides),
+ * else the chosen preset.
+ */
+export function baseColorsFor(colors: CustomThemeColors, chosen: BuiltinThemeId): CustomThemeColors {
+  return detectBaseMatch(colors)?.colors ?? builtinToCustom(chosen);
 }
 
 function CustomThemeEditor() {
@@ -2860,7 +2873,7 @@ function CustomThemeEditor() {
   // If the live colors exactly match a built-in (e.g. just reseeded), keep the
   // comparison base in sync so nothing reads as "overridden" right after a reset.
   const effectiveBase = detected ?? basePreset;
-  const baseColors = useMemo(() => builtinToCustom(effectiveBase), [effectiveBase]);
+  const baseColors = useMemo(() => baseColorsFor(customThemeColors, effectiveBase), [customThemeColors, effectiveBase]);
   const baseLabel = BASE_ON_OPTIONS.find((o) => o.value === effectiveBase)?.label ?? effectiveBase;
 
   // Surface-aware contrast: each text/accent token vs bgBase/bgSurface/bgMantle.
