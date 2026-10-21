@@ -216,7 +216,7 @@ export interface ProjectConfigState {
    * settings (`fanout.copy`, `fanout.copyIntoAutomated`) and so does not
    * cover them; their copying waits for a new approval.
    */
-  copyReviewed?: boolean;
+  prepReviewed?: boolean;
 }
 
 // ── Field validators ─────────────────────────────────────────────────────────

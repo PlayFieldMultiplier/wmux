@@ -11,7 +11,6 @@ import { execFileSync } from 'node:child_process';
 import {
   FanOutService,
   FANOUT_COPY_BLOCKED_WARNING,
-  FANOUT_COPY_REVIEW_WARNING,
   buildInitialCommand,
   workerLaunchCommand,
   firstRunStuckSummary,
@@ -1055,6 +1054,7 @@ describe('T2 per-repo fan-out environment (ports + setup hook)', () => {
         found: true,
         root: '/repo',
         trust: 'trusted',
+        prepReviewed: true,
         config: { version: 1, fanout: { portRange: { min: 39100, max: 39120 } } },
       }),
     });
@@ -1068,6 +1068,29 @@ describe('T2 per-repo fan-out environment (ports + setup hook)', () => {
     for (const [k, t] of res.tasks.entries()) {
       expect(renderer.spawned[k]?.env?.WMUX_TASK_PORT).toBe(String(t.port));
     }
+  });
+
+  it('never runs a setup hook under an approval that never showed it, and says so', async () => {
+    const daemon = makeDaemonFake();
+    const renderer = makeRendererFake();
+    const worktrees = makeWorktreesFake();
+    const marker = path.join(metaRoot, 'legacy-hook-ran');
+    const svc = new FanOutService({
+      daemon: daemon.port,
+      renderer: renderer.port,
+      worktrees,
+      project: makeProjectFake({
+        found: true,
+        root: '/repo',
+        trust: 'trusted',
+        prepReviewed: false,
+        config: { version: 1, fanout: { setup: `node -e "require('fs').writeFileSync('${marker}','x')"` } },
+      }),
+    });
+    const res = await svc.start(baseReq());
+    expect(res.setupSkipped).toBe('needs-review');
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(res.tasks.every((t) => t.ok)).toBe(true);
   });
 
   it('never runs a setup hook from an untrusted wmux.json, and says so', async () => {
@@ -1109,6 +1132,7 @@ describe('T2 per-repo fan-out environment (ports + setup hook)', () => {
         found: true,
         root: '/repo',
         trust: 'trusted',
+        prepReviewed: true,
         config: { version: 1, fanout: { invalidFields: ['portRange'] } },
       }),
     });
@@ -1156,6 +1180,7 @@ describe('T2 per-repo fan-out environment (ports + setup hook)', () => {
         found: true,
         root: '/repo',
         trust: 'trusted',
+        prepReviewed: true,
         config: {
           version: 1,
           fanout: { portRange: { min: 39200, max: 39220 }, setup: `node ${JSON.stringify(hookScript)}` },
@@ -1220,7 +1245,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
       daemon: makeDaemonFake().port,
       renderer: renderer.port,
       worktrees,
-      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', copyReviewed: true, config: { version: 1, fanout: { copy: ['.env'] } } }),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { copy: ['.env'] } } }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
     expect(res.ok).toBe(true);
@@ -1236,7 +1261,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
       daemon: makeDaemonFake().port,
       renderer: renderer.port,
       worktrees,
-      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', copyReviewed: true, config: { version: 1, fanout: { copy: ['.env', '.env.gone'], copyIntoAutomated: true } } }),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { copy: ['.env', '.env.gone'], copyIntoAutomated: true } } }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
     expect(res.ok).toBe(true);
@@ -1252,7 +1277,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
       daemon: makeDaemonFake().port,
       renderer: makeRendererFake().port,
       worktrees,
-      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', copyReviewed: true, config: { version: 1, fanout: { copy: ['.env'] } } }),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { copy: ['.env'] } } }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['issue-1'], prepOrigin: 'human' }));
     expect(res.ok).toBe(true);
@@ -1267,7 +1292,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
       daemon: makeDaemonFake().port,
       renderer: renderer.port,
       worktrees,
-      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', copyReviewed: true, config: { version: 1, fanout: { copy: ['.env'], setup: 'node -e "console.log(\'step one\'); process.exit(3)"' } } }),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { copy: ['.env'], setup: 'node -e "console.log(\'step one\'); process.exit(3)"' } } }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['issue-2'], prepOrigin: 'human' }));
     const [task] = res.tasks;
@@ -1279,7 +1304,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
     expect(renderer.spawned).toHaveLength(0);
   });
 
-  it('copies nothing under an approval that predates the copy settings, says why, and still runs the setup', async () => {
+  it('runs and copies nothing under an approval that predates the setup and copy settings, and says why', async () => {
     const { repo, worktrees } = realRepo();
     const marker = path.join(metaRoot, 'setup-ran');
     const hook = path.join(metaRoot, 'mark.js');
@@ -1289,16 +1314,15 @@ describe('new workspace preparation on fan-out worktrees', () => {
       renderer: makeRendererFake().port,
       worktrees,
       project: makeProjectFake({
-        found: true, root: repo, trust: 'trusted', copyReviewed: false,
+        found: true, root: repo, trust: 'trusted', prepReviewed: false,
         config: { version: 1, fanout: { copy: ['.env'], copyIntoAutomated: true, setup: `node ${JSON.stringify(hook)}` } },
       }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
     expect(res.ok).toBe(true);
-    expect(res.copyNeedsReview).toBe(true);
-    expect(res.warnings).toContain(FANOUT_COPY_REVIEW_WARNING);
+    expect(res.setupSkipped).toBe('needs-review');
     expect(fs.existsSync(path.join(res.tasks[0].worktreePath!, '.env'))).toBe(false);
-    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it('copies nothing from a config changed since approval', async () => {

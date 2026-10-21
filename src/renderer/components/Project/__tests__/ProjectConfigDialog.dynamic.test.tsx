@@ -78,15 +78,15 @@ describe('ProjectConfigDialog', () => {
     expect(section.textContent).toContain('Only into workspaces you open');
   });
 
-  it('asks to approve copy settings a legacy approval does not cover, keeping the unattended consent', () => {
+  it('asks to approve the setup and copy settings a legacy approval does not cover, keeping the unattended consent', () => {
     vi.mocked(decideProjectTrust).mockClear();
     act(() => useStore.setState({
-      projectConfigs: { 'ws-1': { ...config, trust: 'trusted', copyReviewed: false, unattended: true, config: { ...config.config, fanout: { copy: ['.env'], copyIntoAutomated: true } } } },
+      projectConfigs: { 'ws-1': { ...config, trust: 'trusted', prepReviewed: false, unattended: true, config: { ...config.config, fanout: { copy: ['.env'], copyIntoAutomated: true } } } },
     } as never));
     act(() => root.render(createElement(ProjectConfigDialog)));
-    expect(container.querySelector('[data-testid="project-copy-review"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="project-prep-review-needed"]')).not.toBeNull();
     const primary = container.querySelector('.ui-btn-primary') as HTMLButtonElement;
-    expect(primary.textContent).toBe('Approve copy settings');
+    expect(primary.textContent).toBe('Approve setup');
     act(() => primary.click());
     expect(decideProjectTrust).toHaveBeenCalledWith('ws-1', 'trusted', true);
   });

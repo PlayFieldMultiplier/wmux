@@ -117,7 +117,7 @@ describe('phone worktree creation', { timeout: 60_000 }, () => {
 
   describe('new workspace preparation', () => {
     const trusted = (fanout: Record<string, unknown>): ProjectConfigState => ({
-      found: true, root: repo, configPath: path.join(repo, 'wmux.json'), trust: 'trusted', contentHash: 'a'.repeat(64), config: { version: 1, fanout }, copyReviewed: true,
+      found: true, root: repo, configPath: path.join(repo, 'wmux.json'), trust: 'trusted', contentHash: 'a'.repeat(64), config: { version: 1, fanout }, prepReviewed: true,
     });
     const preparing = (state: () => ProjectConfigState) => service({
       prepare: async (sourceCwd, dir) => phonePrepSummary(await prepareNewWorktree({ sourceCwd, worktreePath: dir, origin: 'human' }, { getState: async () => state() })),

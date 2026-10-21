@@ -40,7 +40,7 @@ describe('addPreparedWorktree', () => {
   afterEach(() => rmSync(base, { recursive: true, force: true }));
 
   const trusted = (fanout: NonNullable<ProjectConfigState['config']>['fanout'], trust: ProjectConfigState['trust'] = 'trusted'): ProjectConfigState => ({
-    found: true, root: repo, configPath: join(repo, 'wmux.json'), trust, contentHash: 'a'.repeat(64), config: { version: 1, fanout }, copyReviewed: true,
+    found: true, root: repo, configPath: join(repo, 'wmux.json'), trust, contentHash: 'a'.repeat(64), config: { version: 1, fanout }, prepReviewed: true,
   });
 
   it('copies the selected files and runs the setup command in the new worktree', async () => {
@@ -60,6 +60,16 @@ describe('addPreparedWorktree', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.prep).toMatchObject({ status: 'skipped', reason: 'stale' });
+    expect(existsSync(join(res.worktreePath, '.env'))).toBe(false);
+    expect(existsSync(join(res.worktreePath, 'setup-ran'))).toBe(false);
+  });
+
+  it('runs and copies nothing under an approval that never showed the setup or copy settings', async () => {
+    project.state = { ...trusted({ copy: ['.env'], setup: 'node -e "require(\'fs\').writeFileSync(\'setup-ran\', \'1\')"' }), prepReviewed: false };
+    const res = await addPreparedWorktree(repo, 'feat/legacy');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.prep).toMatchObject({ status: 'skipped', reason: 'needs-review' });
     expect(existsSync(join(res.worktreePath, '.env'))).toBe(false);
     expect(existsSync(join(res.worktreePath, 'setup-ran'))).toBe(false);
   });

@@ -300,7 +300,7 @@ export interface TaskFolderPorts {
    * not resumed in a worktree whose dependencies never installed. Absent:
    * none (tests).
    */
-  prepare?: (taskId: string, repoRoot: string, worktreePath: string) => Promise<{ status: string; error?: string; reason?: string; copySkipped?: string }>;
+  prepare?: (taskId: string, repoRoot: string, worktreePath: string) => Promise<{ status: string; error?: string; reason?: string }>;
   exists?: (p: string) => boolean;
   now?: () => number;
   log?: (msg: string) => void;
@@ -1047,8 +1047,7 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
 
 /** A preparation that did not run is never silent (trust revoked, or the
  *  project's wmux.json edited since it was approved). */
-function noteSkippedPrep(ports: TaskFolderPorts, taskId: string, prep: { status: string; reason?: string; copySkipped?: string }): void {
-  if (prep.copySkipped) (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put back without its config files: the project's copy settings need review`);
+function noteSkippedPrep(ports: TaskFolderPorts, taskId: string, prep: { status: string; reason?: string }): void {
   if (prep.status !== 'skipped') return;
   (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put back without its setup: the project's wmux.json is ${prep.reason ?? 'not approved'}`);
 }

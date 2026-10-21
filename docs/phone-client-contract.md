@@ -6655,12 +6655,11 @@ setup command runs (up to 5 minutes, so `pending` can last that long). A
 `created` receipt then carries `prep: {status, copied, missing, refused, present, reason?}`
 (`refused`: selected files that are not a git-ignored plain file inside the
 checkout, so they were not copied; `present`: files the worktree already had,
-as when a recovered worktree is prepared again; `copyNeedsReview: true`:
-nothing was copied because the project's copy settings were approved before
-they were shown and need a review on the desktop):
+as when a recovered worktree is prepared again):
 `status` is `ready`, or `skipped` with `reason` `untrusted`, `stale`,
-`denied` or `malformed` when the desktop has not approved the file (nothing
-ran). Only counts cross to the phone, never a file name, its content or the
+`denied`, `malformed` or `needs-review` (approved before the desktop showed
+its setup and copy settings, so they wait for one re-approval) when the
+desktop has not approved them (nothing ran). Only counts cross to the phone, never a file name, its content or the
 command's output. Every copied file stays git-ignored in the new worktree
 (one that would not is removed again), and the desktop's pre-commit secret
 check, which lives in the repository's shared hooks, covers the worktree once

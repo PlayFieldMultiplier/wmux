@@ -45,9 +45,6 @@ export interface WorkspacePrepPlan {
   copy: string[];
   /** Copy is declared but not allowed for this origin (automated, toggle off). */
   copyBlocked?: true;
-  /** Copy is declared, but the approval predates the copy settings: they need
-   *  a review before anything is copied (the setup keeps its approval). */
-  copySkipped?: 'needs-review';
   /** Setup command to run (absent = none declared). */
   setup?: string;
   /**
@@ -80,13 +77,12 @@ export function resolveWorkspacePrep(
   // A rejected part means the author asked for something that is not going to
   // happen; running only the rest would hand over a half-prepared worktree.
   if (copyInvalid || (!setup.run && setup.reason === 'malformed')) return { copy: [], skipped: 'malformed' };
+  // A grant made before the trust dialog showed the setup command and the
+  // copy settings (no review mark) does not approve them: one re-approval.
+  if ((declaredCopy.length > 0 || setup.run) && state.prepReviewed !== true) return { copy: [], skipped: 'needs-review' };
 
   const plan: WorkspacePrepPlan = { copy: [] };
-  // Only a grant that carries the copy-review mark covers copying (trusted
-  // states always say which; anything else is treated as not covered).
-  if (declaredCopy.length > 0 && state.copyReviewed !== true) {
-    plan.copySkipped = 'needs-review';
-  } else if (declaredCopy.length > 0) {
+  if (declaredCopy.length > 0) {
     if (origin === 'automated' && fanout?.copyIntoAutomated !== true) plan.copyBlocked = true;
     else plan.copy = [...declaredCopy];
   }
@@ -96,7 +92,7 @@ export function resolveWorkspacePrep(
 
 /** True when the plan does anything at all (or reports a skip). */
 export function workspacePrepHasWork(plan: WorkspacePrepPlan): boolean {
-  return plan.copy.length > 0 || plan.setup !== undefined || plan.skipped !== undefined || plan.copyBlocked === true || plan.copySkipped !== undefined;
+  return plan.copy.length > 0 || plan.setup !== undefined || plan.skipped !== undefined || plan.copyBlocked === true;
 }
 
 export interface WorkspaceCopyResult {
@@ -128,8 +124,6 @@ export interface WorkspacePrepResult {
   reason?: WorkspacePrepSkipReason;
   copy: WorkspaceCopyResult;
   copyBlocked?: true;
-  /** The copy settings need a review (see WorkspacePrepPlan.copySkipped). */
-  copySkipped?: 'needs-review';
   setupRan: boolean;
   /** status 'failed': the setup command's failure (exit code, signal, timeout). */
   error?: string;
@@ -335,10 +329,9 @@ export async function runWorkspacePrep(input: RunWorkspacePrepInput, deps: Works
   const base = {
     copy: { ...EMPTY_COPY }, setupRan: false,
     ...(plan.copyBlocked ? { copyBlocked: true as const } : {}),
-    ...(plan.copySkipped ? { copySkipped: plan.copySkipped } : {}),
   };
   if (plan.skipped) return { ...base, status: 'skipped', reason: plan.skipped };
-  if (plan.copy.length === 0 && plan.setup === undefined) return { ...base, status: plan.copySkipped ? 'ready' : 'none' };
+  if (plan.copy.length === 0 && plan.setup === undefined) return { ...base, status: 'none' };
 
   const now = deps.now ?? Date.now;
   const report = (progress: WorkspacePrepProgress): void => {
@@ -428,6 +421,5 @@ export function phonePrepSummary(result: WorkspacePrepResult): PhoneWorktreePrep
   if (result.status === 'skipped') return { status: 'skipped', copied: 0, missing: 0, refused: 0, present: 0, ...(result.reason ? { reason: result.reason } : {}) };
   return {
     status: 'ready', copied: result.copy.copied, missing: result.copy.missing, refused: result.copy.refused, present: result.copy.present,
-    ...(result.copySkipped ? { copyNeedsReview: true as const } : {}),
   };
 }

@@ -5,6 +5,7 @@
 // (then it lists the agent panes to pick from). Main does the rest
 // (src/main/git/handoff.ts): the work link, the gated, typing-held delivery of
 // a fixed reference.
+import { prepSkipKey } from '../../utils/prepNotice';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../../hooks/useT';
 import { useStore } from '../../stores';
@@ -127,9 +128,7 @@ function HandoffPopoverBody({ open }: { open: GitHandoffOpen }): React.ReactElem
     pushToast({ level: 'info', message: t('git.handoff.started', { kind: kindWord, ref: itemRef, branch: res.branch }) });
     // The new worktree's preparation is never silent.
     if (res.prep?.skipped) {
-      pushToast({ level: 'warn', message: t(res.prep.skipped === 'malformed' ? 'git.prepMalformed' : 'git.prepSkipped') });
-    } else if (res.prep?.copyNeedsReview) {
-      pushToast({ level: 'warn', message: t('git.prepCopyReview') });
+      pushToast({ level: 'warn', message: t(prepSkipKey(res.prep.skipped)) });
     } else if (res.prep && res.prep.missing + res.prep.refused > 0) {
       pushToast({ level: 'warn', message: t('git.prepGapsShort', { missing: res.prep.missing, refused: res.prep.refused }) });
     }

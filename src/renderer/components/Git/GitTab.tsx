@@ -28,6 +28,7 @@
 // Design contract (DESIGN.md): monochrome glyphs, branches and paths in mono,
 // diff counts green/red, and at most ONE accent point — the dot marking the
 // worktree the active pane is in. The section headers stay neutral.
+import { prepSkipKey } from '../../utils/prepNotice';
 import type { WorkspacePrepResult } from '../../../main/worktask/workspacePrep';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useStore } from '../../stores';
@@ -557,11 +558,8 @@ export function GitTab({
       const prep = res.prep;
       if (prep?.status === 'failed') {
         pushToast({ level: 'warn', message: t('git.prepFailed', { error: prep.error ?? '' }) });
-        if (prep.copySkipped) pushToast({ level: 'warn', message: t('git.prepCopyReview') });
       } else if (prep?.status === 'skipped') {
-        pushToast({ level: 'warn', message: t(prep.reason === 'malformed' ? 'git.prepMalformed' : 'git.prepSkipped') });
-      } else if (prep?.copySkipped) {
-        pushToast({ level: 'warn', message: t('git.prepCopyReview') });
+        pushToast({ level: 'warn', message: t(prepSkipKey(prep.reason)) });
       } else if (prep?.status === 'ready' && prep.copy.missing + prep.copy.refused > 0) {
         pushToast({ level: 'warn', message: t('git.prepGaps', { copied: prep.copy.copied, missing: prep.copy.missing, refused: prep.copy.refused }) });
       } else if (prep?.status === 'ready' && prep.copy.copied > 0) {

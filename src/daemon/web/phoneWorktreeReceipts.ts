@@ -63,7 +63,7 @@ const REFUSALS: ReadonlySet<string> = new Set<PhoneWorktreeRefusal>([
   'path-too-long', 'submodules-unsupported', 'git-filters-require-desktop', 'git-operation-in-progress',
   'git-operation-failed', 'worktree-path-unsafe', 'git-version-unsupported', 'prep-failed',
 ]);
-const PREP_REASONS: ReadonlySet<string> = new Set(['untrusted', 'stale', 'denied', 'malformed']);
+const PREP_REASONS: ReadonlySet<string> = new Set(['untrusted', 'stale', 'denied', 'malformed', 'needs-review']);
 const count = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 1000;
 
 function validPrep(v: unknown): boolean {
@@ -71,7 +71,6 @@ function validPrep(v: unknown): boolean {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const p = v as Record<string, unknown>;
   return (p.status === 'ready' || p.status === 'skipped') && count(p.copied) && count(p.missing) && count(p.refused) && count(p.present) &&
-    (p.copyNeedsReview === undefined || p.copyNeedsReview === true) &&
     (p.reason === undefined || (typeof p.reason === 'string' && PREP_REASONS.has(p.reason)));
 }
 const str = (v: unknown, max = 4096) => typeof v === 'string' && v.length > 0 && v.length <= max;

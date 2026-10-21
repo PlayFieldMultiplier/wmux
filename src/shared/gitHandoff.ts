@@ -138,9 +138,7 @@ export interface HandoffStartRequest {
  * Counts only.
  */
 export interface HandoffPrepNotice {
-  skipped?: 'untrusted' | 'stale' | 'denied' | 'malformed';
-  /** The copy settings need a review before anything is copied. */
-  copyNeedsReview?: true;
+  skipped?: 'untrusted' | 'stale' | 'denied' | 'malformed' | 'needs-review';
   missing: number;
   refused: number;
 }

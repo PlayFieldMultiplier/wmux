@@ -185,8 +185,10 @@ export async function assignFanoutPorts(
  *                       schema, so it never became a runnable command
  *   - untrusted / stale / denied — declared and well-formed, but the bytes are
  *                       not currently approved
+ *   - needs-review    — approved, but by a decision that never showed the setup
+ *                       command or the copy settings (workspacePrep.ts)
  */
-export type FanoutSetupSkipReason = 'none-declared' | 'malformed' | 'untrusted' | 'stale' | 'denied';
+export type FanoutSetupSkipReason = 'none-declared' | 'malformed' | 'untrusted' | 'stale' | 'denied' | 'needs-review';
 
 export type FanoutSetupResolution =
   | { run: true; command: string }

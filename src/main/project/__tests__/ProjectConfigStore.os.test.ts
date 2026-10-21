@@ -118,10 +118,10 @@ describe('getState — config + trust evaluation', () => {
     // What an older wmux wrote: no copy-review mark.
     fs.writeFileSync(trustPath, JSON.stringify({ schemaVersion: 1, projects: { [normalizeProjectRoot(proj)]: { status: 'trusted', contentHash: hash, decidedAt: 1 } } }));
     const legacy = await makeStore().getState(proj);
-    expect(legacy).toMatchObject({ trust: 'trusted', copyReviewed: false });
+    expect(legacy).toMatchObject({ trust: 'trusted', prepReviewed: false });
     const store = makeStore();
     await store.setDecision(proj, 'trusted', hash, false);
-    expect(await store.getState(proj)).toMatchObject({ trust: 'trusted', copyReviewed: true });
+    expect(await store.getState(proj)).toMatchObject({ trust: 'trusted', prepReviewed: true });
   });
 
   it('demotes to stale when the file changes after trust', async () => {

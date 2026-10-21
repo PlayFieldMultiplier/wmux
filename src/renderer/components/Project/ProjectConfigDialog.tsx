@@ -94,9 +94,9 @@ export default function ProjectConfigDialog() {
   const prepSetup = project.config?.fanout?.setup;
   const prepCopy = project.config?.fanout?.copy ?? [];
   const prepCopyAutomated = project.config?.fanout?.copyIntoAutomated === true;
-  // Trusted before the copy settings existed: the grant never covered them,
-  // so they wait for this re-approval (the rest of the file stays approved).
-  const copyNeedsReview = isTrusted && project.copyReviewed !== true && prepCopy.length > 0;
+  // Trusted by a decision that never showed the setup command or the copy
+  // settings: they wait for this one re-approval (the rest stays approved).
+  const prepNeedsReview = isTrusted && project.prepReviewed !== true && (prepCopy.length > 0 || prepSetup !== undefined);
   const layout = project.config?.layout;
   const rows = layout ? layoutRows(layout) : [];
   // Leaves that would restore their captured permission mode on reboot — the
@@ -127,12 +127,12 @@ export default function ProjectConfigDialog() {
         closeLabel={t('project.close')}
       />
       <DialogBody>
-        {copyNeedsReview && (
-          <div className="ui-notice flex items-start gap-2.5 px-3.5 py-3 text-[13px] leading-5" data-testid="project-copy-review">
+        {prepNeedsReview && (
+          <div className="ui-notice flex items-start gap-2.5 px-3.5 py-3 text-[13px] leading-5" data-testid="project-prep-review-needed">
             <span className="shrink-0 pt-[3px]" style={{ color: 'var(--accent-yellow)' }} aria-hidden="true">
               <IconWarning size={14} />
             </span>
-            <span className="text-[var(--text-main)]">{t('project.copyReviewNotice')}</span>
+            <span className="text-[var(--text-main)]">{t('project.prepReviewNotice')}</span>
           </div>
         )}
 
@@ -272,14 +272,14 @@ export default function ProjectConfigDialog() {
             <Button size="md" variant="secondary" onClick={close}>
               {t('project.close')}
             </Button>
-            {copyNeedsReview && (
+            {prepNeedsReview && (
               <Button
                 size="md"
                 variant="primary"
-                // Same bytes, same unattended consent: only the copy settings are newly approved.
+                // Same bytes, same unattended consent: only the setup and copy settings are newly approved.
                 onClick={() => { void decideProjectTrust(wsId, 'trusted', project.unattended === true); close(); }}
               >
-                {t('project.approveCopy')}
+                {t('project.approvePrep')}
               </Button>
             )}
           </>
