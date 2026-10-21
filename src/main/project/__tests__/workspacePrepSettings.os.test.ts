@@ -27,7 +27,8 @@ const settings = (over: Partial<{ copy: string[]; setup: string; portRange: stri
 });
 
 beforeEach(() => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-prepset-')));
+  // The long form of the path (Windows CI's temp dir is an 8.3 short name).
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-prepset-')));
   repo = path.join(tmp, 'repo');
   fs.mkdirSync(repo);
   g(repo, 'init', '-q');
