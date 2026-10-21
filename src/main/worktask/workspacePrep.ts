@@ -412,6 +412,6 @@ export async function prepareNewWorktree(input: PrepareNewWorktreeInput, deps: P
 export function phonePrepSummary(result: WorkspacePrepResult): PhoneWorktreePrep | 'failed' | undefined {
   if (result.status === 'none') return undefined;
   if (result.status === 'failed') return 'failed';
-  if (result.status === 'skipped') return { status: 'skipped', copied: 0, missing: 0, refused: 0, ...(result.reason ? { reason: result.reason } : {}) };
-  return { status: 'ready', copied: result.copy.copied, missing: result.copy.missing, refused: result.copy.refused };
+  if (result.status === 'skipped') return { status: 'skipped', copied: 0, missing: 0, refused: 0, present: 0, ...(result.reason ? { reason: result.reason } : {}) };
+  return { status: 'ready', copied: result.copy.copied, missing: result.copy.missing, refused: result.copy.refused, present: result.copy.present };
 }

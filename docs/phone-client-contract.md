@@ -6652,9 +6652,10 @@ its `wmux.json` (`fanout.copy`, `fanout.setup`, approved on the desktop), the
 new worktree is prepared before the receipt leaves `pending`: the selected
 git-ignored config files are copied from the session's checkout, then the
 setup command runs (up to 5 minutes, so `pending` can last that long). A
-`created` receipt then carries `prep: {status, copied, missing, refused, reason?}`
+`created` receipt then carries `prep: {status, copied, missing, refused, present, reason?}`
 (`refused`: selected files that are not a git-ignored plain file inside the
-checkout, so they were not copied):
+checkout, so they were not copied; `present`: files the worktree already had,
+as when a recovered worktree is prepared again):
 `status` is `ready`, or `skipped` with `reason` `untrusted`, `stale`,
 `denied` or `malformed` when the desktop has not approved the file (nothing
 ran). Only counts cross to the phone, never a file name, its content or the

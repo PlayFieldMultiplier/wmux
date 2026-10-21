@@ -161,7 +161,7 @@ describe('cleanTaskFolder', () => {
     const mission = { folder: wt, branch: 'wtask/perf-a-12345678' };
     const calls: Array<[string, string]> = [];
     let status = 'failed';
-    const p = ports({ prepare: async (root, folder) => { calls.push([root, folder]); return { status, error: 'exited with code 1' }; } });
+    const p = ports({ prepare: async (_taskId, root, folder) => { calls.push([root, folder]); return { status, error: 'exited with code 1' }; } });
     expect(await cleanTaskFolder(p, row('completed'), mission, [])).toBe('removed');
 
     expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(false);
@@ -170,8 +170,14 @@ describe('cleanTaskFolder', () => {
     expect(p.store.get('wtask-abc-12345678')?.state).toBe('removed');
 
     status = 'ready';
-    expect(await restoreTaskFolder(p, 'wtask-abc-12345678', wt)).toBe(true);
-    expect(calls).toHaveLength(2);
+    let during: unknown;
+    const p2 = ports({ store: p.store, prepare: async () => { during = p.store.get('wtask-abc-12345678'); return { status }; } });
+    expect(await restoreTaskFolder(p2, 'wtask-abc-12345678', wt)).toBe(true);
+    // While the setup runs the folder reads as put back but not prepared, so
+    // a quit right now leaves the next resume to prepare it first.
+    expect(during).toMatchObject({ state: 'restored', prepFailed: true });
+    expect(p.store.get('wtask-abc-12345678')?.prepFailed).toBeUndefined();
+    expect(calls).toHaveLength(1);
     expect(p.store.get('wtask-abc-12345678')?.state).toBe('restored');
   });
 

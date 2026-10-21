@@ -110,6 +110,8 @@ export interface PhoneWorktreePrep {
   missing: number;
   /** Selected files not copied: not a git-ignored plain file inside the checkout. */
   refused: number;
+  /** Selected files the worktree already had (a recovered worktree prepared again). */
+  present: number;
   reason?: 'untrusted' | 'stale' | 'denied' | 'malformed';
 }
 

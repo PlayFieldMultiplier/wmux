@@ -938,6 +938,7 @@ export class FanOutService {
         lateBase.warning,
         lateEnv.setupSkipped ? `task ${k + 1}: the repository's new workspace preparation did not run (${lateEnv.setupSkipped})` : undefined,
         lateEnv.portRangeInvalid ? `task ${k + 1}: the repository's fanout.portRange is invalid, so no WMUX_TASK_PORT was assigned` : undefined,
+        lateEnv.copyBlocked ? `task ${k + 1}: ${FANOUT_COPY_BLOCKED_WARNING}` : undefined,
       ];
       for (const w of late) if (w) addWarning(result, w);
       let r: FanOutTaskResult | undefined;

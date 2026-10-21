@@ -300,7 +300,7 @@ export interface TaskFolderPorts {
    * not resumed in a worktree whose dependencies never installed. Absent:
    * none (tests).
    */
-  prepare?: (repoRoot: string, worktreePath: string) => Promise<{ status: string; error?: string }>;
+  prepare?: (taskId: string, repoRoot: string, worktreePath: string) => Promise<{ status: string; error?: string; reason?: string }>;
   exists?: (p: string) => boolean;
   now?: () => number;
   log?: (msg: string) => void;
@@ -1007,21 +1007,27 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
       return false;
     }
     if (ports.prepare) {
-      const prep = await ports.prepare(rec.repoRoot, rec.path).catch((err: unknown) => ({ status: 'failed', error: String(err) }));
+      // On disk from here, and not prepared until the setup has run: a quit
+      // during the setup must not let the next resume use the folder as is
+      // (ensureTaskFolderPrepared prepares it again).
+      await ports.store.put({ ...rec, state: 'restored', prepFailed: true, at: now() }).catch(() => undefined);
+      const prep = await ports.prepare(taskId, rec.repoRoot, rec.path).catch((err: unknown) => ({ status: 'failed', error: String(err) }));
+      noteSkippedPrep(ports, taskId, prep);
       if (prep.status === 'failed') {
         (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put away again: its setup failed: ${prep.error ?? 'unknown'}`);
         // Nothing has worked in it since it was put back: what is there is
         // the kept branch plus the setup's own output, so force is safe, and
-        // the record stays 'removed' for the next resume to try again.
+        // the record goes back to 'removed' for the next resume to try again.
         const away = await ports.worktrees.removeWorktree(rec.repoRoot, rec.repoHash, rec.path, undefined, { force: true })
           .catch((err: unknown) => ({ ok: false as const, error: String(err) }));
-        if (!away.ok) {
-          // Still on disk: recorded as restored so a later cleanup pass
-          // sees it as this task's folder again, not as nothing.
+        if (away.ok) {
+          await ports.store.put({ ...rec, at: now() }).catch(() => undefined);
+        } else {
+          // Still on disk, and still recorded as restored but not prepared,
+          // so a later cleanup pass sees it and a resume prepares it first.
           (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} could not be put away again: ${away.error}`);
-          await ports.store.put({ ...rec, state: 'restored', prepFailed: true, at: now() }).catch(() => undefined);
-          ports.changed?.();
         }
+        ports.changed?.();
         return false;
       }
     }
@@ -1030,6 +1036,13 @@ export async function restoreTaskFolder(ports: TaskFolderPorts, taskId: string, 
   await ports.store.put({ ...restored, state: 'restored', at: now() }).catch(() => undefined);
   ports.changed?.();
   return true;
+}
+
+/** A preparation that did not run is never silent (trust revoked, or the
+ *  project's wmux.json edited since it was approved). */
+function noteSkippedPrep(ports: TaskFolderPorts, taskId: string, prep: { status: string; reason?: string }): void {
+  if (prep.status !== 'skipped') return;
+  (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} put back without its setup: the project's wmux.json is ${prep.reason ?? 'not approved'}`);
 }
 
 /**
@@ -1041,7 +1054,8 @@ export async function ensureTaskFolderPrepared(ports: TaskFolderPorts, taskId: s
   const rec = ports.store.get(taskId);
   if (!rec?.prepFailed) return true;
   if (!ports.prepare || !rec.repoRoot) return false;
-  const prep = await ports.prepare(rec.repoRoot, rec.path).catch((err: unknown) => ({ status: 'failed', error: String(err) }));
+  const prep = await ports.prepare(taskId, rec.repoRoot, rec.path).catch((err: unknown) => ({ status: 'failed', error: String(err) }));
+  noteSkippedPrep(ports, taskId, prep);
   if (prep.status === 'failed') {
     (ports.log ?? ((m: string) => console.warn(m)))(`[factory] worktree of ${taskId} not resumed: its setup failed again: ${prep.error ?? 'unknown'}`);
     return false;

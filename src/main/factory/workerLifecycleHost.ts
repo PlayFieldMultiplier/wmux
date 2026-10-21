@@ -484,10 +484,17 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       repoInfo: gitRepoInfo,
       // A resumed bot worker's folder is prepared again (it was removed with
       // its ignored files, node_modules included).
-      prepare: (repoRoot: string, worktreePath: string) => prepareNewWorktree(
-        { sourceCwd: repoRoot, worktreePath, origin: 'automated' },
-        { getState: (cwd) => getProjectConfigStore().getState(cwd), runSetup: gatedSetup },
-      ),
+      // The project is read where the bot's fan-out read it: its profile's
+      // repository (a linked worktree keeps its own wmux.json and trust),
+      // else the main checkout the folder belongs to.
+      prepare: (taskId: string, repoRoot: string, worktreePath: string) => {
+        const botId = ledger.get(taskId)?.dispatch?.origin.botId;
+        const sourceCwd = (botId ? getBotStore()?.get(botId)?.repo?.repoPath : undefined) || repoRoot;
+        return prepareNewWorktree(
+          { sourceCwd, worktreePath, origin: 'automated' },
+          { getState: (cwd) => getProjectConfigStore().getState(cwd), runSetup: gatedSetup },
+        );
+      },
       gateRunning: (taskId: string) => getSharedTaskGateRunner()?.isRunning(taskId) === true,
       changed,
       // A kept folder removed after its TTL: one card in the task's thread

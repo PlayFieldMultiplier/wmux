@@ -70,7 +70,7 @@ function validPrep(v: unknown): boolean {
   if (v === undefined) return true;
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const p = v as Record<string, unknown>;
-  return (p.status === 'ready' || p.status === 'skipped') && count(p.copied) && count(p.missing) && count(p.refused) &&
+  return (p.status === 'ready' || p.status === 'skipped') && count(p.copied) && count(p.missing) && count(p.refused) && count(p.present) &&
     (p.reason === undefined || (typeof p.reason === 'string' && PREP_REASONS.has(p.reason)));
 }
 const str = (v: unknown, max = 4096) => typeof v === 'string' && v.length > 0 && v.length <= max;
