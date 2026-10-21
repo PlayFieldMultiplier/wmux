@@ -11,7 +11,7 @@ import type { DaemonConfig } from '../../types';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { A2aRemoteController } from '../controller';
-import { A2aRemoteDelivery } from '../delivery';
+import { A2aRemoteDelivery, shareOfferFeatures } from '../delivery';
 import { ExposedPaneCache } from '../exposedPanes';
 import { ExposureStore } from '../exposureStore';
 import { joinRemoteHost } from '../joiner';
@@ -82,7 +82,7 @@ async function makePc(name: string, opts: { advertise?: string[]; routeOffers?: 
     exposures,
     isPeer: (h) => peers.list().some((p) => p.hostId === h && !p.revokedAt),
     isJoined: (h) => remoteHosts.get(h) !== undefined,
-    features: (h) => delivery?.offerFeatures(h),
+    features: shareOfferFeatures(() => delivery),
     enqueue: (h, env) => void delivery!.outbox.enqueue(h, env),
     notifyLinkChange: (...args) => delivery?.notifyLinkChange(...args),
     broadcast: quiet,

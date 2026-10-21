@@ -24,10 +24,12 @@
 // A PNG or WebP Exif orientation is dropped with the rest: few decoders read
 // one there. Anything after the container's end (PNG `IEND`, JPEG EOI, the
 // RIFF size) is dropped too, and a RECEIVED image with bytes after its end is
-// refused (a sender never leaves them). A container that does not parse, and
-// a JPEG marker outside the keep list that is not metadata (hierarchical or
-// lossless JPEG), is refused, never sent as it was. The hash the envelope
-// carries is of the stripped bytes.
+// refused (a sender never leaves them). A container that does not parse is
+// refused, never sent as it was, and so is a JPEG in a mode a viewer does not
+// draw: only baseline, extended and progressive frames (SOF0, SOF1, SOF2 and
+// their arithmetic-coded SOF9, SOF10) are taken, never a lossless,
+// differential (hierarchical) or JPEG-LS one, nor their other markers. The
+// hash the envelope carries is of the stripped bytes.
 //
 // Screenshots are still images, so an animation (APNG, animated WebP) is
 // refused, and so is a JPEG of more than `JPEG_MAX_SCANS` scans.
@@ -139,8 +141,12 @@ function parsePng(b: Uint8Array, strip: boolean): Parsed {
 
 // --- JPEG ---------------------------------------------------------------------
 
-/** Start-of-frame markers (C4 DHT, C8 JPG and CC DAC are not frames). */
-const SOF = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+/**
+ * The frames taken: baseline (C0), extended (C1), progressive (C2) and their
+ * arithmetic-coded forms (C9, CA). Lossless (C3, CB), differential (C5-C7,
+ * CD-CF) and every other frame type is refused.
+ */
+const SOF = new Set([0xc0, 0xc1, 0xc2, 0xc9, 0xca]);
 /** Table and scan segments a decoder reads: DHT, DAC, DQT, DRI, SOS (and the frames above). */
 const JPEG_TABLES = new Set([0xc4, 0xcc, 0xdb, 0xdd, 0xda]);
 /** More scans than any progressive encoder writes; each one is another decoding pass. */
@@ -196,8 +202,8 @@ function parseJpeg(b: Uint8Array, strip: boolean): Parsed {
     const end = at + 2 + len;
     if (len < 2 || end > b.length) return null;
     const app = (marker >= 0xe0 && marker <= 0xef) || marker === 0xfe;
-    // DNL, DHP, EXP, JPG and JPGn belong to JPEG modes a viewer does not
-    // draw (hierarchical, lossless, JPEG-LS): not stripped around, refused.
+    // Any other marker (a lossless or differential frame, DNL, DHP, EXP,
+    // JPG, JPGn) belongs to a JPEG mode a viewer does not draw: refused.
     if (!app && !SOF.has(marker) && !JPEG_TABLES.has(marker)) return null;
     if (SOF.has(marker)) {
       // One frame: a second header would let a small claim hide the real size.

@@ -82,6 +82,17 @@ export const NO_AGENT_SUMMARY = 'The linked pane on the receiving PC has no agen
 const STATES: ReadonlySet<string> = new Set(['working', 'input-required', 'completed', 'failed', 'canceled']);
 const TERMINAL_LINK: ReadonlySet<string> = new Set(['revoked', 'broken']);
 
+/**
+ * The `features` a share offer (`A2aOffers`) gates on: what `hostId`
+ * advertised on its own stream to this PC (it is our joiner) since this
+ * daemon started. Before that stream is up an offer would show the pane while
+ * its envelope could only wait, and perhaps expire, in the outbox, so the
+ * offer is refused as not connected. The daemon and its tests wire this one.
+ */
+export function shareOfferFeatures(delivery: () => A2aRemoteDelivery | null): (hostId: HostId) => ReadonlySet<string> | undefined {
+  return (hostId) => delivery()?.hub.featuresOf(hostId);
+}
+
 export class A2aRemoteDelivery {
   readonly outbox: OutboxStore;
   readonly hub: A2aStreamHub;
@@ -174,15 +185,6 @@ export class A2aRemoteDelivery {
     return seen ? new Set(seen) : undefined;
   }
 
-  /**
-   * What `hostId` advertised on its own stream to this PC (it is our joiner)
-   * since this daemon started. A share offer gates on this one: before that
-   * stream is up, an offer would show the pane while its envelope could only
-   * wait, and perhaps expire, in the outbox.
-   */
-  offerFeatures(hostId: HostId): ReadonlySet<string> | undefined {
-    return this.hub.featuresOf(hostId);
-  }
 
   /** Both roles' features from the streams since this daemon started; undefined when neither came up. */
   liveFeatures(hostId: HostId): ReadonlySet<string> | undefined {

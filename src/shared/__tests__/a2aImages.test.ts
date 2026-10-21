@@ -173,6 +173,13 @@ describe('prepareA2aImage — JPEG keep list', () => {
   it('refuses markers of modes a viewer does not draw, and more than 64 scans', () => {
     const dhp = seg(0xde, [8, 0, 8, 0, 8, 1, 1, 0x11, 0]);
     expect(prepareA2aImage(u8([0xff, 0xd8], dhp, dqt, sof0(8, 8), sos, scan, eoi))).toEqual({ ok: false, reason: 'malformed' });
+    // Lossless (SOF3) and differential (SOF5) frames, sent or received.
+    const frame = (marker: number): Uint8Array => seg(marker, [8, ...be16(8), ...be16(8), 1, 1, 0x11, 0]);
+    for (const marker of [0xc3, 0xc5]) {
+      expect(prepareA2aImage(u8([0xff, 0xd8], dqt, frame(marker), sos, scan, eoi))).toEqual({ ok: false, reason: 'malformed' });
+      expect(inspectA2aImage(u8([0xff, 0xd8], dqt, frame(marker), sos, scan, eoi))).toEqual({ ok: false, reason: 'malformed' });
+    }
+    expect(inspectA2aImage(u8([0xff, 0xd8], dqt, frame(0xc9), sos, scan, eoi))).toMatchObject({ ok: true });
     const scans = (n: number): Uint8Array => u8(...new Array(n).fill(u8(sos, scan)));
     expect(inspectA2aImage(u8([0xff, 0xd8], dqt, sof0(8, 8), scans(64), eoi))).toMatchObject({ ok: true });
     expect(inspectA2aImage(u8([0xff, 0xd8], dqt, sof0(8, 8), scans(65), eoi))).toEqual({ ok: false, reason: 'malformed' });
