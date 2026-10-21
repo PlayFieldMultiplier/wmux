@@ -648,8 +648,12 @@ function ago(at: number, now: number): string {
   return `${Math.round(mins / 60)} h ago`;
 }
 
+/** `Name (template, repo host/owner/repo) = id`: the repository a bot works
+ *  on (a normalized key, botRepo) so the bot reading the roster can send
+ *  repository work to the bot that has that one. */
 function rosterLine(b: WakeRosterEntry): string {
-  return `${oneLineName(b.name)}${b.template ? ` (${b.template})` : ''} = ${b.botId}`;
+  const about = [b.template, b.repo ? `repo ${b.repo}` : undefined].filter(Boolean).join(', ');
+  return `${oneLineName(b.name)}${about ? ` (${about})` : ''} = ${b.botId}`;
 }
 
 function oneLineName(name: string): string {

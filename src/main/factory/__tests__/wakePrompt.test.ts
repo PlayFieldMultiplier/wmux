@@ -117,6 +117,12 @@ describe('buildWakePrompt — group rooms and routines', () => {
     const withHolder = buildWakePrompt({ item: wake, profile: lead, roster: [dev, scout] });
     expect(withHolder).toContain('You have no repository of your own; Dev (bot-00000002) works on github.com/acme/app. pr_read, issue_read and ci_read read that repository for you.');
     expect(withHolder).toContain('goes with handoff_send to a bot that has the repository.');
+    // The roster names each bot's repository, for any reader: a coordinator
+    // with its own one still sees which bot works on another.
+    expect(withHolder).toContain('Dev (developer, repo github.com/acme/app) = bot-00000002; Scout (researcher) = bot-00000003');
+    const ownLead = buildWakePrompt({ item: wake, profile: { ...lead, repo: { repoKey: 'github.com/acme/web', repoPath: '/w' } }, roster: [dev, scout] });
+    expect(ownLead).toContain('Dev (developer, repo github.com/acme/app) = bot-00000002');
+    expect(buildWakePrompt({ item: wake, profile, roster: [rosterEntry({ id: 'bot-00000006', name: 'Bare', role: 'lead', repo: { repoKey: 'github.com/acme/app', repoPath: '/r' } })] })).toContain('Bare (developer, repo github.com/acme/app) = bot-00000006');
     // Bots on two repositories: no claim about which one pr_read reads.
     const other = rosterEntry({ id: 'bot-00000004', name: 'Ops', role: 'lead', template: 'developer', repo: { repoKey: 'github.com/acme/ops', repoPath: '/o' } });
     const two = buildWakePrompt({ item: wake, profile: lead, roster: [dev, other] });

@@ -50,6 +50,7 @@ const BOT_LIST_CALLERS: Record<string, Why> = {
   'src/main/factory/approvals.ts#ApprovalService.noRule': { kind: 'closed', why: 'reviewers on a repository; a guest workspace has none' },
   'src/main/factory/approvals.ts#ApprovalService.onMerged': { kind: 'guest-skip', why: 'repo-keyed watchers skip guest workspaces' },
   'src/main/factory/approvals.ts#ApprovalService.onOwnerCard': { kind: 'closed', why: 'the room\'s own bots, of a request no guest wake can make' },
+  'src/main/factory/approvals.ts#ApprovalService.request': { kind: 'one-workspace', why: 'whether the asking bot\'s own workspace has a bot with a repository, for its refusal\'s wording' },
   'src/main/factory/botCreate.ts#botRepoFromFolder': { kind: 'one-workspace', why: 'the repository of the workspace a bot is added to' },
   'src/main/factory/botCreate.ts#missing': { kind: 'one-workspace', why: 'the team roles the workspace a team is added to already has' },
   'src/main/factory/botCreate.ts#refusal':{ kind: 'one-workspace', why: 'names in the workspace a team is added to; BotStore.create holds the rules' },
