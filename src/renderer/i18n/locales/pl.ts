@@ -1822,6 +1822,7 @@ export const pl = {
   'botsPage.apply.dirty': "Nie zastosowano: niezatwierdzone zmiany w {files}. Najpierw je zatwierdź lub odłóż (stash).",
   'botsPage.apply.mergeInProgress': "Nie zastosowano: w checkoucie trwa merge, rebase, cherry-pick lub revert.",
   'botsPage.apply.diverged': "Nie zastosowano: od startu zadania checkout zmienił te pliki, więc jego zmiany nie nakładają się czysto. Scal gałąź zadania.",
+  'botsPage.apply.filtered': "Nie zastosowano: checkout przepuszcza {files} przez filtr treści (np. Git LFS). Scal gałąź zadania.",
   'botsPage.apply.noRepo': "Nie zastosowano: ten bot nie ma folderu repozytorium.",
   'botsPage.apply.refused': "Nie zastosowano: {message}",
   'botsPage.worker.resumeName': "Wznów {name}",

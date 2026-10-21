@@ -1845,6 +1845,7 @@ export const en = {
   'botsPage.apply.dirty': "Not applied: uncommitted changes in {files}. Commit or stash them first.",
   'botsPage.apply.mergeInProgress': "Not applied: your checkout is in the middle of a merge, rebase, cherry-pick or revert.",
   'botsPage.apply.diverged': "Not applied: your checkout changed these files since the task started, so its changes no longer apply cleanly. Merge the task branch instead.",
+  'botsPage.apply.filtered': "Not applied: your checkout runs {files} through a content filter (such as Git LFS). Merge the task branch instead.",
   'botsPage.apply.noRepo': "Not applied: this bot has no repository folder.",
   'botsPage.apply.refused': "Not applied: {message}",
   'botsPage.worker.resumeName': "Resume {name}",

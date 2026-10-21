@@ -97,12 +97,12 @@ export type FactoryTaskFolderCleanResult =
 export type FactoryTaskApplyRefusal =
   | 'operator_only' | 'invalid_argument' | 'not_started'
   | 'unknown_task' | 'not_ready' | 'no_repo' | 'other_repo' | 'no_base' | 'no_branch' | 'foreign_head' | 'no_changes'
-  | 'merge_in_progress' | 'dirty' | 'diverged' | 'config_refused' | 'submodule' | 'too_many' | 'busy' | 'git_failed';
+  | 'merge_in_progress' | 'dirty' | 'diverged' | 'filtered' | 'config_refused' | 'submodule' | 'too_many' | 'busy' | 'git_failed';
 
 /** What Apply to my checkout did: the task's changes written into the bot's
- *  repository folder, unstaged — `changed` (tracked there before), `created`
- *  (new there) and `removed` paths — or why nothing was written (`paths`:
- *  the uncommitted ones on `dirty`). */
+ *  repository folder, unstaged — the `changed`, `created` and `removed`
+ *  paths — or why nothing was written (`paths`: the uncommitted ones on
+ *  `dirty`, the filtered ones on `filtered`). */
 export type FactoryTaskApplyResult =
   | { ok: true; changed: string[]; created: string[]; removed: string[] }
   | { ok: false; code: FactoryTaskApplyRefusal; message: string; paths?: string[] };

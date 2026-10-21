@@ -15,22 +15,26 @@
 //   - which checkout: the bot's repository folder, and only when it is the
 //     top of a checkout of the very repository the task's worktree was made
 //     in (the common git dir main recorded at dispatch).
-//   - what is written: the task's patch (`git diff --binary base head`),
+//   - what is written: the task's patch (plumbing `git diff-tree -p
+//     --binary base head`, so no diff setting of the owner's reshapes it),
 //     applied to the working tree with `git apply` — never whole files, so
 //     what the checkout changed since the task started (a pull) is kept
 //     where the patch does not touch it, and a patch that no longer applies
-//     is refused (`diverged`), nothing written. The index, HEAD and the
-//     branch are never touched.
+//     is refused (`diverged`), nothing written. A checkout that already has
+//     the patch says so. The index, HEAD and the branch are never touched.
 //   - refused: a path with uncommitted (or untracked, or ignored) changes
 //     in the checkout — listed, with a file standing where a new file's
 //     folder goes — a merge, rebase, cherry-pick or revert in progress, a
 //     submodule change, a repository config that makes a read run a program
 //     (workerGit.ts), and more than TASK_APPLY_MAX_FILES files.
-//   - content filters: a worker can write the shared repository config
-//     between the check and the write, so every filter driver the touched
-//     paths name (in the checkout's attributes or the task head's) is pinned
-//     on the apply's command line to the owner's own definition (system or
-//     global config), or to none.
+//   - content filters: a worker can write the shared repository's config
+//     and `info/attributes` between any check and the write. So `git apply`
+//     runs against a private, empty git dir of main's (with the checkout as
+//     its work tree), no system or global config, and only the owner's line
+//     ending settings (`core.autocrlf`, `core.eol`, `core.safecrlf`) passed
+//     in: no filter driver is defined there, so none can run. A touched path
+//     the checkout gives a filter (Git LFS) is refused (`filtered`): what it
+//     holds is not the file itself.
 //
 // git runs with a fixed argv, no shell, its git dir and work tree named
 // explicitly (a `core.worktree` in the shared config cannot move the
@@ -124,31 +128,34 @@ function touches(dirty: string, changed: string): boolean {
   return d === changed || changed.startsWith(`${d}/`) || d.startsWith(`${changed}/`);
 }
 
-/** `git check-attr -z` output → the filter drivers it names. Pure. */
-export function parseFilterNames(stdout: string): string[] {
+/** `git check-attr -z filter` output → the paths it gives a filter driver
+ *  (any value but unspecified, unset or set). Pure. */
+export function filteredPaths(stdout: string): string[] {
   const parts = stdout.split('\0');
-  const names = new Set<string>();
+  const out: string[] = [];
   for (let i = 0; i + 2 < parts.length; i += 3) {
     const value = parts[i + 2];
-    if (parts[i + 1] === 'filter' && value && !['unspecified', 'unset', 'set'].includes(value)) names.add(value);
-  }
-  return [...names];
-}
-
-/** `-c` options that pin each filter driver to the owner's own definition
- *  (system or global config), or to no program: what the repository's own
- *  config says at the moment git runs is never used. Pure. */
-export function pinnedFilterArgs(names: readonly string[], entries: readonly GitConfigEntry[]): string[] {
-  const out: string[] = [];
-  for (const name of names) {
-    const own = (key: string) => {
-      const hits = entries.filter((e) => (e.scope === 'system' || e.scope === 'global') && e.key === `filter.${name.toLowerCase()}.${key}`);
-      return hits.length > 0 ? hits[hits.length - 1].value : undefined;
-    };
-    for (const key of ['smudge', 'clean', 'process']) out.push('-c', `filter.${name}.${key}=${own(key) ?? ''}`);
-    out.push('-c', `filter.${name}.required=${own('required') ?? 'false'}`);
+    if (parts[i + 1] === 'filter' && value && !['unspecified', 'unset', 'set'].includes(value)) out.push(parts[i]);
   }
   return out;
+}
+
+/** The owner's line ending settings, as `-c` options for an apply that
+ *  reads no repository config of its own (the last value of each key across
+ *  the scopes, as git reads it). Pure. */
+export function lineEndingArgs(entries: readonly GitConfigEntry[]): string[] {
+  const out: string[] = [];
+  for (const key of ['core.autocrlf', 'core.eol', 'core.safecrlf']) {
+    const hits = entries.filter((e) => e.key === key);
+    if (hits.length > 0) out.push('-c', `${key}=${hits[hits.length - 1].value}`);
+  }
+  return out;
+}
+
+/** A `git apply` failure that means the checkout no longer matches the
+ *  patch. Pure. */
+export function isDivergedApply(stderr: string): boolean {
+  return /patch does not apply|already exists in working directory|does not exist|No such file or directory/.test(stderr);
 }
 
 /** The folders a new path needs that the checkout has as something else (a
@@ -270,8 +277,10 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
   const lineage = await run(['merge-base', '--is-ancestor', base, head]);
   if (lineage.code !== 0) return refuse('foreign_head', `The task branch ${branch} does not start from the commit the task started from.`);
 
-  const diff = await run(['diff', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff', base, head]);
-  if (diff.code !== 0) return refuse('git_failed', `git diff failed: ${diff.stderr.trim().slice(0, 300)}`);
+  // Plumbing: no diff setting of the owner's (renames, prefixes, relative
+  // paths) changes what it reports.
+  const diff = await run(['diff-tree', '-r', '-z', '--no-renames', '--no-abbrev', base, head]);
+  if (diff.code !== 0) return refuse('git_failed', `git diff-tree failed: ${diff.stderr.trim().slice(0, 300)}`);
   const changes = parseRawDiff(diff.stdout);
   if (changes.length === 0) return refuse('no_changes', 'The task changed no files.');
   if (changes.length > TASK_APPLY_MAX_FILES) return refuse('too_many', `The task changed ${changes.length} files, more than Apply writes (${TASK_APPLY_MAX_FILES}); merge its branch with git.`);
@@ -280,42 +289,56 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
   const touched = changes.map((c) => c.path);
   const created = changes.filter((c) => c.status === 'A').map((c) => c.path);
 
-  // Anything uncommitted at those paths stops it (untracked and ignored
-  // too), and so does an untracked file where a new file's folder goes.
-  const dirty: string[] = [];
-  for (const batch of chunks([...touched, ...blockedParents(top, created)])) {
-    const st = await run(['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all', '--ignored=matching', '--', ...batch]);
-    if (st.code !== 0) return refuse('git_failed', `git status failed: ${st.stderr.trim().slice(0, 300)}`);
-    for (const p of parseStatusPaths(st.stdout)) if (touched.some((c) => touches(p, c)) && !dirty.includes(p)) dirty.push(p);
-  }
-  if (dirty.length > 0) return refuse('dirty', `Your checkout has uncommitted changes in ${dirty.length === 1 ? 'a file' : 'files'} the task changed.`, dirty);
-
-  // The filter drivers the touched paths name, now and in the task's head.
-  const filters = new Set<string>();
+  // A path the checkout runs through a content filter (Git LFS) holds
+  // something other than the file: not applied here.
+  const filtered: string[] = [];
   for (const batch of chunks(touched)) {
-    for (const source of [[], [`--source=${head}`]]) {
-      const ca = await run(['check-attr', '-z', ...source, 'filter', '--', ...batch]);
-      if (ca.code !== 0) return refuse('git_failed', `git check-attr failed: ${ca.stderr.trim().slice(0, 300)}`);
-      for (const name of parseFilterNames(ca.stdout)) filters.add(name);
-    }
+    const ca = await run(['check-attr', '-z', 'filter', '--', ...batch]);
+    if (ca.code !== 0) return refuse('git_failed', `git check-attr failed: ${ca.stderr.trim().slice(0, 300)}`);
+    filtered.push(...filteredPaths(ca.stdout));
   }
-  const pinned = pinnedFilterArgs([...filters], pre.entries);
+  if (filtered.length > 0) return refuse('filtered', 'The task changes files your checkout runs through a content filter (such as Git LFS); merge its branch with git.', filtered);
 
-  // The task's patch, applied to the working tree only.
+  const objectFormat = pre.entries.filter((e) => e.key === 'extensions.objectformat').pop()?.value.toLowerCase() ?? 'sha1';
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-apply-'));
   try {
+    // The task's patch, by plumbing.
     const patch = path.join(tmp, 'task.patch');
-    const made = await run(['diff', '--binary', '--full-index', '--no-renames', '--no-ext-diff', '--no-textconv', '--no-color', `--output=${patch}`, base, head]);
-    if (made.code !== 0) return refuse('git_failed', `git diff failed: ${made.stderr.trim().slice(0, 300)}`);
-    const apply = (extra: string[]) => run([...pinned, 'apply', ...extra, patch]);
+    const made = await run(['diff-tree', '-r', '-p', '--binary', '--full-index', '--no-renames', `--output=${patch}`, base, head]);
+    if (made.code !== 0) return refuse('git_failed', `git diff-tree failed: ${made.stderr.trim().slice(0, 300)}`);
+    // git apply against main's own empty git dir: none of the repository's
+    // config or attributes files, and no system or global config.
+    const privateDir = path.join(tmp, 'git');
+    const emptyConfig = path.join(tmp, 'empty-config');
+    fs.writeFileSync(emptyConfig, '');
+    const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyConfig };
+    const init = await git(['init', '-q', '--bare', '--template=', `--object-format=${objectFormat}`, privateDir], tmp, env);
+    if (init.code !== 0) return refuse('git_failed', `git init failed: ${init.stderr.trim().slice(0, 300)}`);
+    const eol = lineEndingArgs(pre.entries);
+    const apply = (extra: string[]) => git([`--git-dir=${privateDir}`, `--work-tree=${top}`, ...safe, ...eol, 'apply', '--whitespace=nowarn', ...extra, patch], top, env);
+    const said = (r: { stderr: string }) => r.stderr.split(tmp).join('').trim().slice(0, 300);
+
+    // Already in the checkout (a second Apply, or the task merged and
+    // pulled): say so before anything else.
+    if ((await apply(['--check', '--reverse'])).code === 0) return refuse('no_changes', 'Your checkout already has the task\'s changes.');
+
+    // Anything uncommitted at those paths stops it (untracked and ignored
+    // too), and so does an untracked file where a new file's folder goes.
+    const dirty: string[] = [];
+    for (const batch of chunks([...touched, ...blockedParents(top, created)])) {
+      const st = await run(['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all', '--ignored=matching', '--', ...batch]);
+      if (st.code !== 0) return refuse('git_failed', `git status failed: ${st.stderr.trim().slice(0, 300)}`);
+      for (const p of parseStatusPaths(st.stdout)) if (touched.some((c) => touches(p, c)) && !dirty.includes(p)) dirty.push(p);
+    }
+    if (dirty.length > 0) return refuse('dirty', `Your checkout has uncommitted changes in ${dirty.length === 1 ? 'a file' : 'files'} the task changed.`, dirty);
+
     const check = await apply(['--check']);
     if (check.code !== 0) {
-      const applied = await apply(['--check', '--reverse']);
-      if (applied.code === 0) return refuse('no_changes', 'Your checkout already has the task\'s changes.');
-      return refuse('diverged', 'Your checkout changed these files since the task started, so its changes no longer apply cleanly. Merge the task branch with git instead.');
+      if (isDivergedApply(check.stderr)) return refuse('diverged', 'Your checkout changed these files since the task started, so its changes no longer apply cleanly. Merge the task branch with git instead.');
+      return refuse('git_failed', `git apply failed: ${said(check)}`);
     }
     const r = await apply([]);
-    if (r.code !== 0) return refuse('git_failed', `git apply failed: ${r.stderr.trim().slice(0, 300)}`);
+    if (r.code !== 0) return refuse('git_failed', `git apply failed: ${said(r)}`);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -369,8 +369,10 @@ interface RowCtx {
    *  is resumable now, and the resume. */
   resume?: { resumable: (taskId: string) => boolean; run: (taskId: string) => Promise<void> };
   /** Apply to my checkout on a code task's end card (absent: none, as while
-   *  the bots are off): whether the task can be applied, and the Apply. */
-  apply?: { applicable: (taskId: string) => boolean; run: (taskId: string) => Promise<FactoryTaskApplyResult> };
+   *  the bots are off): whether the task can be applied, and the Apply.
+   *  `folded`: the tasks a work card in this conversation stands for; their
+   *  Apply is on that card only. */
+  apply?: { applicable: (taskId: string) => boolean; run: (taskId: string) => Promise<FactoryTaskApplyResult>; folded?: ReadonlySet<string> };
   /** What a work card reads (absent: no work cards): which cards wait on
    *  the owner, the bots' tasks, and the pull request a task opened. */
   work?: { waits: (card: RoomCardData) => boolean; tasks: readonly BotTaskView[]; prUrl: (taskId: string) => string | null };
@@ -640,7 +642,10 @@ function SystemGroup({ cards, thread, ctx }: { cards: RoomCardData[]; thread?: T
   const resume = ctx.resume;
   const resumeOf = (c: RoomCardData): string | null => (resume ? cardResumeTaskId(c, resume.resumable) : null);
   const apply = ctx.apply;
-  const applyOf = (c: RoomCardData): string | null => (apply ? cardApplyTaskId(c, apply.applicable) : null);
+  const applyOf = (c: RoomCardData): string | null => {
+    const id = apply ? cardApplyTaskId(c, apply.applicable) : null;
+    return id && !apply?.folded?.has(id) ? id : null;
+  };
   // A run holding a card with a Resume or an Apply shows its lines, so the button shows.
   if (cards.length === 1 || open || cards.some((c) => resumeOf(c) !== null || applyOf(c) !== null)) {
     return (
@@ -1244,6 +1249,7 @@ export function applyResultText(r: FactoryTaskApplyResult, t: T): string {
     case 'dirty': return t('botsPage.apply.dirty', { files: applyPathList(r.paths ?? [], t) });
     case 'merge_in_progress': return t('botsPage.apply.mergeInProgress');
     case 'diverged': return t('botsPage.apply.diverged');
+    case 'filtered': return t('botsPage.apply.filtered', { files: applyPathList(r.paths ?? [], t) });
     case 'no_repo': return t('botsPage.apply.noRepo');
     default: return t('botsPage.apply.refused', { message: r.message });
   }
@@ -2646,11 +2652,14 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   // coordinator's 1:1 shows the end of work another bot did), reported or
   // done, with commits, of a bot with a repository folder.
   const applyTask = resumePort?.applyTask;
+  // The tasks this conversation's work cards stand for.
+  const foldedTasks = useMemo(() => new Set([...work.values()].flatMap((w) => w.all.map((c) => c.refs?.taskId).filter((id): id is string => !!id))), [work]);
   const cardApply = useMemo((): RowCtx['apply'] => (readOnly || !applyTask ? undefined : {
     applicable: (taskId) => bots.some((row) => !!row.bot.repo?.repoPath && (row.tasks ?? []).some((task) => task.taskId === taskId
       && (task.status === 'review_requested' || task.status === 'completed') && !task.verification && task.gate?.skipped !== 'no_changes')),
     run: applyTask,
-  }), [readOnly, applyTask, bots]);
+    folded: foldedTasks,
+  }), [readOnly, applyTask, bots, foldedTasks]);
   const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown, ...(conversation.kind === 'bot' ? { selfBot: conversation.row.bot.id } : {}), ...(cardResume ? { resume: cardResume } : {}), ...(cardApply ? { apply: cardApply } : {}), work: workCtx, onOpenFile, shownFileId: openFile?.file.id ?? null };
   // The open thread is read whole, from its first card (the cached room
   // timeline holds only its newest page), and shown from every card read

@@ -1650,6 +1650,8 @@ describe('Bots page', () => {
     cards.push(
       card({ workspaceId: 'w1', threadId: `task:${taskId}`, actor: { kind: 'system' }, kind: 'fact', title: 'Worker paused (resumable): Add a flag', refs: { taskId, threadId: dm }, notice: { code: 'worker.pausedResumable', args: { title: 'Add a flag' } }, at: 600 }),
       card({ workspaceId: 'w1', threadId: `task:${taskId}`, actor: { kind: 'system' }, kind: 'fact', title: 'Worker resumed: Add a flag', refs: { taskId, threadId: dm }, notice: { code: 'worker.resumed', args: { title: 'Add a flag', by: 'owner', where: 'newPane' } }, at: 700 }),
+      // The task's end stays in the 1:1 itself.
+      card({ workspaceId: 'w1', threadId: dm, actor: { kind: 'system' }, kind: 'fact', title: 'Task reported · in review: Add a flag', refs: { taskId }, notice: { code: 'task.reported', args: { title: 'Add a flag' } }, at: 800 }),
     );
     seedRooms();
     act(() => useStore.setState({ roomThreads: { hq: [], w1: [{ threadId: `task:${taskId}`, title: 'Worker paused', lastAt: 700, lastSeq: 99, cardCount: 2, openQuestions: 0, lastKind: 'fact', status: 'open', unread: null, firstAt: 600, dmBotId: LEAD }] } } as never));
@@ -1665,6 +1667,11 @@ describe('Bots page', () => {
     expect(work.querySelector('[data-bots-work-title]')?.textContent).toBe('Add a flag');
     // Its cards are its steps, not lines in the conversation.
     expect([...document.querySelectorAll('[data-bots-bubble="system"]')].some((l) => l.textContent?.includes('Worker paused'))).toBe(false);
+    // Apply is on the work card only, not again on the task's end line.
+    const ended = [...document.querySelectorAll('[data-bots-bubble="system"]')].find((l) => l.textContent?.includes('Task reported'))!;
+    expect(ended).toBeTruthy();
+    expect(ended.querySelector('[data-bots-card-apply]')).toBeNull();
+    expect(document.querySelectorAll('[data-bots-card-apply]')).toHaveLength(1);
     await act(async () => { (work.querySelector('[data-bots-card-apply]') as HTMLButtonElement).click(); });
     expect(applyTask).toHaveBeenCalledWith(taskId);
     expect(work.querySelector('[data-bots-apply-result="ok"]')?.textContent).toContain('a.txt');

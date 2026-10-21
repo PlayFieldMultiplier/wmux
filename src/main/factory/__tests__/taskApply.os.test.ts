@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { applyTaskToCheckout, parseFilterNames, parseRawDiff, pinnedFilterArgs, type TaskApplyPorts } from '../taskApply';
+import { applyTaskToCheckout, filteredPaths, isDivergedApply, lineEndingArgs, parseRawDiff, type TaskApplyPorts } from '../taskApply';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd(), getPath: () => '/tmp' }, dialog: {}, ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, nativeImage: {} }));
 
@@ -202,34 +202,24 @@ describe('factoryTaskApplyHandler', () => {
 });
 
 describe('content filters', () => {
-  it('reads the drivers check-attr names', () => {
-    expect(parseFilterNames('a.bin\0filter\0lfs\0b.txt\0filter\0unspecified\0c.txt\0filter\0evil\0')).toEqual(['lfs', 'evil']);
+  it('reads the paths check-attr gives a filter driver', () => {
+    expect(filteredPaths('a.bin\0filter\0lfs\0b.txt\0filter\0unspecified\0c.txt\0filter\0x=y\0d\0filter\0set\0')).toEqual(['a.bin', 'c.txt']);
   });
 
-  it('pins each driver to the owner\'s own definition, or to none; the repository\'s never counts', () => {
-    const entries = [
-      { scope: 'global', key: 'filter.lfs.smudge', value: 'git-lfs smudge -- %f' },
-      { scope: 'global', key: 'filter.lfs.required', value: 'true' },
-      { scope: 'local', key: 'filter.evil.smudge', value: 'touch pwned' },
-    ];
-    expect(pinnedFilterArgs(['lfs', 'evil'], entries)).toEqual([
-      '-c', 'filter.lfs.smudge=git-lfs smudge -- %f', '-c', 'filter.lfs.clean=', '-c', 'filter.lfs.process=', '-c', 'filter.lfs.required=true',
-      '-c', 'filter.evil.smudge=', '-c', 'filter.evil.clean=', '-c', 'filter.evil.process=', '-c', 'filter.evil.required=false',
-    ]);
-  });
-
-  it('a driver the repository config defines after the check does not run on the apply', async () => {
-    // The checkout's attributes name a driver for the task's files; the
-    // shared config gains a program for it only between the check and the
-    // write (as a live worker could), simulated by a git wrapper.
-    write(repo, '.gitattributes', '*.txt filter=evil\n');
-    git(repo, 'add', '.gitattributes');
-    git(repo, 'commit', '-qm', 'attributes');
-    const marker = path.join(dir, 'pwned');
+  it('a driver the shared repository gains while the apply runs never runs, by info/attributes or a name with "="', async () => {
+    // A live worker writes the shared git dir between the checks and the
+    // write; simulated by a git wrapper right before the apply.
+    const marker = path.join(dir, 'pwned').replace(/\\/g, '/');
     const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
     const racing: NonNullable<TaskApplyPorts['git']> = async (args, cwd, env, opts) => {
       if (args.includes('apply') && !args.includes('--check')) {
+        fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
+        fs.writeFileSync(path.join(repo, '.git', 'info', 'attributes'), '*.txt filter=evil\nm.txt filter=x=y\n');
+        const attrs = path.join(dir, 'attrs');
+        fs.writeFileSync(attrs, '* filter=evil\n');
+        execFileSync('git', ['config', 'core.attributesFile', attrs], { cwd: repo });
         execFileSync('git', ['config', 'filter.evil.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
+        execFileSync('git', ['config', 'filter.x=y.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
       }
       return realGit(args, cwd, env, opts);
     };
@@ -237,6 +227,64 @@ describe('content filters', () => {
     expect(r).toMatchObject({ ok: true });
     expect(fs.existsSync(marker)).toBe(false);
     expect(fs.readFileSync(path.join(repo, 'new/n.txt'), 'utf8')).toBe('new\n');
+    expect(fs.readFileSync(path.join(repo, 'm.txt'), 'utf8')).toBe(lines([2, 'line 2 from the task']));
+  });
+
+  it('refuses a path the checkout runs through a content filter (Git LFS), and lists it', async () => {
+    write(repo, '.gitattributes', 'new/** filter=lfs diff=lfs merge=lfs -text\n');
+    git(repo, 'add', '.gitattributes');
+    git(repo, 'commit', '-qm', 'lfs');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'filtered', paths: ['new/n.txt'] });
+    expect(fs.existsSync(path.join(repo, 'new/n.txt'))).toBe(false);
+  });
+});
+
+describe('the patch and the owner\'s settings', () => {
+  it('a diff or apply setting of the owner\'s does not reshape the patch', async () => {
+    git(repo, 'config', 'diff.noprefix', 'true');
+    git(repo, 'config', 'diff.mnemonicPrefix', 'true');
+    git(repo, 'config', 'apply.whitespace', 'error');
+    // A new file in a folder, with trailing whitespace.
+    write(wt, 'deep/er/ws.txt', 'trailing   \n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-qm', 'more');
+    const r = await applyTaskToCheckout(ports(), TASK);
+    expect(r).toMatchObject({ ok: true, created: ['deep/er/ws.txt', 'new/n.txt'] });
+    expect(fs.readFileSync(path.join(repo, 'deep/er/ws.txt'), 'utf8')).toBe('trailing   \n');
+    expect(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8')).toBe('a from the task\n');
+  });
+
+  it('a checkout on autocrlf keeps its CRLF lines', async () => {
+    git(repo, 'config', 'core.autocrlf', 'true');
+    // The checkout as git wrote it on autocrlf: every line CRLF.
+    fs.writeFileSync(path.join(repo, 'm.txt'), lines().replace(/\n/g, '\r\n'));
+    // The index as such a checkout records it (the same blob, this file's stat).
+    git(repo, 'add', 'm.txt');
+    expect(git(repo, 'status', '--porcelain', '--', 'm.txt')).toBe('');
+    const r = await applyTaskToCheckout(ports(), TASK);
+    expect(r).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(repo, 'm.txt'), 'utf8')).toBe(lines([2, 'line 2 from the task']).replace(/\n/g, '\r\n'));
+  });
+
+  it('a second Apply says the checkout already has the changes', async () => {
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true });
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'no_changes', message: 'Your checkout already has the task\'s changes.' });
+  });
+
+  it('only a mismatch is diverged; other apply errors are reported as they are', () => {
+    expect(isDivergedApply('error: patch failed: m.txt:1\nerror: m.txt: patch does not apply')).toBe(true);
+    expect(isDivergedApply('error: new/n.txt: already exists in working directory')).toBe(true);
+    expect(isDivergedApply('error: gone.txt: No such file or directory')).toBe(true);
+    expect(isDivergedApply('error: corrupt patch at line 7')).toBe(false);
+  });
+
+  it('passes only the owner\'s line ending settings, last value winning', () => {
+    expect(lineEndingArgs([
+      { scope: 'global', key: 'core.autocrlf', value: 'input' },
+      { scope: 'local', key: 'core.autocrlf', value: 'true' },
+      { scope: 'local', key: 'filter.evil.smudge', value: 'x' },
+      { scope: 'global', key: 'core.eol', value: 'lf' },
+    ])).toEqual(['-c', 'core.autocrlf=true', '-c', 'core.eol=lf']);
   });
 });
 
