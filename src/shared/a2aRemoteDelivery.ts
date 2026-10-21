@@ -40,7 +40,25 @@ export const A2A_REMOTE_RPC = Object.freeze({
    * `read` receipt.
    */
   read: 'a2a.remote.read',
+  /**
+   * `{ paths: string[], ptyId? }` → `{ ok: true, images: A2aStagedImage[] } | { ok: false, error }`:
+   * an agent's images for a pane on this PC, checked (the pane's folders, else
+   * `~/.wmux/uploads` only), stripped and kept in `~/.wmux/uploads/a2a/local`.
+   */
+  stageImages: 'a2a.attachments.stage',
 } as const);
+
+/** One image `A2A_REMOTE_RPC.stageImages` kept: `path` is what the receiving agent reads. */
+export interface A2aStagedImage {
+  path: string;
+  sha256: string;
+  mediaType: string;
+  bytes: number;
+  width: number;
+  height: number;
+  /** The source file's name. */
+  name: string;
+}
 
 /**
  * Renderer method main's RemoteA2aBridge calls for one reply/state item the
@@ -142,6 +160,8 @@ export interface A2aRemoteSendTaskInput {
   from: { workspaceId: string; name: string; paneId?: string; ptyId?: string };
   title: string;
   text: string;
+  /** Absolute paths of images to attach (`images.1`); read from the sender pane's folders only. */
+  images?: string[];
 }
 
 export interface A2aRemoteReplyInput {
@@ -149,6 +169,13 @@ export interface A2aRemoteReplyInput {
   /** The caller's workspace: must be the task's LOCAL side. */
   workspaceId: string;
   text: string;
+  /** Absolute paths of images to attach, as on a new task. */
+  images?: string[];
+  /**
+   * The caller's pane, as main verified it: whose folders `images` may come
+   * from. Absent (no verified pane): only `~/.wmux/uploads`.
+   */
+  ptyId?: string;
 }
 
 export interface A2aRemoteStateInput {

@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import {
+  A2A_REMOTE_IMAGE_LIMITS,
   A2A_REMOTE_PROTOCOL,
+  parseA2aRemoteImageRefs,
   type A2aLinkRecordV1,
   type A2aOutboxRecordV1,
   type A2aRemoteDeliverResponse,
@@ -11,14 +14,19 @@ import {
 } from '../../shared/a2aRemote';
 import { A2A_REMOTE_RPC, type A2aRemoteHeldReason } from '../../shared/a2aRemoteDelivery';
 import type { A2aRemoteHostStatus, A2aRemoteHostsStatusResult } from '../../shared/rpc';
+import { prepareA2aImage, type A2aImageInfo, type A2aImageRefusal } from '../../shared/a2aImages';
+import { TERMINAL_STATES } from '../../shared/types';
 import type { A2aTaskService } from '../a2a/A2aTaskService';
 import { failTasksForLink, expireHeld, rejectHeld, type HeldDeps } from './held';
 import { remoteTaskId } from './ids';
-import { acceptInbound, type InboundDeps } from './inbound';
+import { A2aImageStore, sha256 } from './imageStore';
+import { registerImageRoutes } from './imageRoutes';
+import { imageRoots, imageSourceMessage, readImageSource } from './imageSource';
+import { acceptInbound, type ImagePull, type InboundDeps } from './inbound';
 import type { NotifyLinkChange } from './linkRpc';
 import type { LinkStore } from './linkStore';
 import type { A2aOffers } from './offers';
-import { aliasTable, linkAlias, listRemoteTargets, sendRemoteReply, sendRemoteState, sendRemoteTask, syncRemoteTask, type OutboundDeps } from './outbound';
+import { aliasTable, imageRefsOf, linkAlias, listRemoteTargets, sendRemoteReply, sendRemoteState, sendRemoteTask, syncRemoteTask, type OutboundDeps, type PreparedImage } from './outbound';
 import { OutboxStore } from './outboxStore';
 import { PeerFeatureStore } from './peerFeatureStore';
 import type { A2aRouteTable } from './routes';
@@ -63,6 +71,13 @@ export interface A2aRemoteDeliveryDeps {
   offers?: A2aOffers;
   /** Optional features this PC advertises: on its streams to the servers it joined, and in its own streams' `hello`. */
   features?: readonly string[];
+  /**
+   * `<wmux dir>/uploads`: images on messages (`images.1`) are received into
+   * its `a2a/` folder and may be attached from it. Absent: no images either way.
+   */
+  uploadsRoot?: string;
+  /** The spawn folder of a pane, by its pty id: the folder its agent may attach images from. */
+  spawnCwdOf?: (ptyId: string) => string | undefined;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   /** Test seams. */
   timing?: Partial<SessionTiming>;
@@ -103,6 +118,10 @@ export class A2aRemoteDelivery {
   readonly hub: A2aStreamHub;
   /** What each paired PC last advertised, kept across restarts (see `peerFeatures`). */
   readonly peerFeatureStore: PeerFeatureStore;
+  /** Image files of messages; null when `uploadsRoot` is not given. */
+  readonly images: A2aImageStore | null;
+  /** Failed image fetches from the servers this PC joined (`InboundImages.pullAttempts`). */
+  private readonly pullAttempts = new Map<string, number>();
   private readonly deps: A2aRemoteDeliveryDeps;
   private readonly sessions = new Map<HostId, { session: JoinerSession; fingerprint: string; port: number }>();
   /** Server-side status, last announced. */
@@ -114,9 +133,10 @@ export class A2aRemoteDelivery {
     this.deps = deps;
     this.outbox = new OutboxStore({ dir: deps.dir, log: deps.log, onEnqueue: (rec) => this.onEnqueue(rec), onAck: (recs) => this.onAck(recs) });
     this.peerFeatureStore = new PeerFeatureStore({ dir: deps.dir, log: deps.log });
+    this.images = deps.uploadsRoot ? new A2aImageStore({ a2aDir: deps.dir, uploadsRoot: deps.uploadsRoot, log: deps.log }) : null;
     this.hub = new A2aStreamHub({
       outbox: this.outbox,
-      accept: (env, peer) => this.accept(env, peer),
+      accept: (env, peer) => this.acceptFromJoiner(env, peer),
       serves: (hostId) => !deps.remoteHosts.get(hostId),
       onStatus: (hostId) => this.announceServed(hostId),
       onFeatures: (hostId, features) => {
@@ -141,9 +161,22 @@ export class A2aRemoteDelivery {
     return aliasTable(this.deps.links.list(), (h) => this.hostName(h)).get(link.linkId) ?? linkAlias(link, this.hostName(link.remote.hostId));
   }
 
-  /** Apply one envelope from an authenticated peer host. */
-  accept(envelope: unknown, peer: { hostId: HostId }): Promise<A2aRemoteDeliverResponse> {
+  /** Apply one envelope from an authenticated peer host (`pull`: the server this PC joined, which holds its images). */
+  accept(envelope: unknown, peer: { hostId: HostId; pull?: ImagePull }): Promise<A2aRemoteDeliverResponse> {
     return acceptInbound(envelope, peer, this.inboundDeps());
+  }
+
+  /**
+   * An envelope a joiner posted. Refused for good: the images it uploaded
+   * for it will never be claimed, so they go now rather than at the TTL.
+   */
+  private async acceptFromJoiner(envelope: unknown, peer: { hostId: HostId }): Promise<A2aRemoteDeliverResponse> {
+    const res = await this.accept(envelope, peer);
+    if (!res.ok && res.error !== 'unavailable' && res.error !== 'attachment-missing' && this.images && isPlainObject(envelope)) {
+      const refs = parseA2aRemoteImageRefs(envelope['images']);
+      if (refs) await this.images.discardStaged(peer.hostId, refs);
+    }
+    return res;
   }
 
   /** `notifyLinkChange` of the link RPCs: the other PC hears about it through the outbox. */
@@ -201,6 +234,7 @@ export class A2aRemoteDelivery {
 
   registerRoutes(table: A2aRouteTable): void {
     this.hub.register(table);
+    if (this.images) registerImageRoutes(table, { store: this.images, outbox: this.outbox, log: this.deps.log });
   }
 
   // --- lifecycle ------------------------------------------------------------
@@ -301,6 +335,31 @@ export class A2aRemoteDelivery {
     }
     // Expiry, put-backs still owed, and claims a restart (or the app's absence) left unfinished.
     this.deps.offers?.recover();
+    await this.maintainImages().catch((err: unknown) => this.deps.log('warn', `[a2a-remote] image upkeep failed: ${errMsg(err)}`));
+  }
+
+  /** Received images past their retention, unclaimed uploads, and sender copies nothing can resend any more. */
+  private async maintainImages(): Promise<void> {
+    if (!this.images) return;
+    await this.images.sweep();
+    const referenced = new Set<string>();
+    for (const task of this.deps.taskService.listRemote()) {
+      const marker = task.metadata.remote as { messageId?: string; sent?: string[] } | undefined;
+      const ended = (TERMINAL_STATES as readonly string[]).includes(task.status.state);
+      for (const m of task.history) {
+        // An ended task's message already sent will never be sent again.
+        if (ended && (m.messageId === marker?.messageId || (marker?.sent ?? []).includes(m.messageId))) continue;
+        for (const ref of imageRefsOf(m)) referenced.add(ref.sha256);
+      }
+    }
+    for (const rec of this.openRecords()) for (const ref of rec.envelope.images ?? []) referenced.add(ref.sha256);
+    await this.images.gcOutgoing(referenced);
+  }
+
+  /** Every record still owed to any host. */
+  private openRecords(): A2aOutboxRecordV1[] {
+    const hosts = new Set<HostId>([...this.deps.remoteHosts.list().map((h) => h.hostId), ...this.deps.peers.list().map((p) => p.hostId)]);
+    return [...hosts].flatMap((h) => this.outbox.pending(h));
   }
 
   // --- RPC ------------------------------------------------------------------
@@ -352,6 +411,8 @@ export class A2aRemoteDelivery {
 
     onRpc(A2A_REMOTE_RPC.sendTask, async (p) => {
       const from = isPlainObject(p['from']) ? p['from'] : null;
+      const images = imagePaths(p['images']);
+      if (images === null) return { ok: false, error: 'bad-request: images must be a list of paths' };
       // A pane sender names its pane; Moa (a brain link) has none. sendRemoteTask
       // checks it against the link's local end.
       if (!from || typeof from['workspaceId'] !== 'string' || (from['paneId'] !== undefined && typeof from['paneId'] !== 'string') || typeof p['text'] !== 'string') {
@@ -367,12 +428,41 @@ export class A2aRemoteDelivery {
         },
         title: str(p, 'title'),
         text: p['text'],
+        ...(images ? { images } : {}),
       });
     });
 
     onRpc(A2A_REMOTE_RPC.reply, async (p) => {
       if (typeof p['text'] !== 'string') return { ok: false, error: 'bad-request: text is required' };
-      return sendRemoteReply(this.outboundDeps(), { taskId: str(p, 'taskId'), workspaceId: str(p, 'workspaceId'), text: p['text'] });
+      const images = imagePaths(p['images']);
+      if (images === null) return { ok: false, error: 'bad-request: images must be a list of paths' };
+      return sendRemoteReply(this.outboundDeps(), {
+        taskId: str(p, 'taskId'),
+        workspaceId: str(p, 'workspaceId'),
+        text: p['text'],
+        ...(images ? { images } : {}),
+        ...(typeof p['ptyId'] === 'string' && isSafeId(p['ptyId']) ? { ptyId: p['ptyId'] } : {}),
+      });
+    });
+
+    // An agent's images for a pane on THIS PC: checked and kept like a
+    // remote send's, in `uploads/a2a/local`, whose paths the receiver reads.
+    onRpc(A2A_REMOTE_RPC.stageImages, async (p) => {
+      const images = imagePaths(p['paths']);
+      if (!images) return { ok: false, error: 'bad-request: paths must be a non-empty list of paths' };
+      const ptyId = typeof p['ptyId'] === 'string' && isSafeId(p['ptyId']) ? p['ptyId'] : undefined;
+      const read = await this.readImages(images, ptyId);
+      const store = this.images;
+      if (!read.ok) return read;
+      if (!store) return { ok: false, error: 'unavailable: this PC cannot send images' };
+      const out: Array<{ path: string; sha256: string; mediaType: string; bytes: number; width: number; height: number; name: string }> = [];
+      for (const r of read.images) {
+        // eslint-disable-next-line no-await-in-loop -- a handful of small writes
+        const stored = await store.putLocal(r.bytes, r.info);
+        if (!stored.ok) return { ok: false, error: 'unavailable: the image folder is full; try again later' };
+        out.push({ path: stored.path, sha256: r.sha256, mediaType: r.info.mediaType, bytes: r.bytes.length, width: r.info.width, height: r.info.height, name: r.name });
+      }
+      return { ok: true, images: out };
     });
 
     onRpc(A2A_REMOTE_RPC.state, async (p) => {
@@ -417,7 +507,8 @@ export class A2aRemoteDelivery {
       credential: () => this.deps.remoteHosts.credentialFor(hostId),
       outbox: this.outbox,
       accept: (env, peer) => this.accept(env, peer),
-      onRefused: (rec, code) => this.onRefused(rec, code),
+      onRefused: (rec, code, detail) => this.onRefused(rec, code, detail),
+      ...(this.images ? { images: this.images } : {}),
       reconcileLinks: () => this.reconcileLinks(hostId),
       onStatus: (status) => this.deps.broadcast({ type: 'a2a.remote.hosts.status', sessionId: '', data: status }),
       onServerFeatures: (features) => this.peerFeatureStore.record(hostId, 'asServer', features),
@@ -437,13 +528,14 @@ export class A2aRemoteDelivery {
     }
   }
 
-  /** The other PC refused a message for good: the task it carried fails here. */
-  private async onRefused(rec: A2aOutboxRecordV1, code: A2aRemoteErrorCode): Promise<void> {
+  /** The other PC refused a message for good (or its images could not be sent): the task it carried fails here. */
+  private async onRefused(rec: A2aOutboxRecordV1, code: A2aRemoteErrorCode, detail?: string): Promise<void> {
     this.deps.log('warn', `[a2a-remote] ${rec.hostId} refused ${rec.envelope.kind} on link ${rec.envelope.linkId}: ${code}`);
     this.deps.offers?.onRefused(rec.hostId, rec.envelope, code);
     const taskId = taskOfEnvelope(rec.envelope, remoteTaskId);
     if (!taskId || !this.deps.taskService.getTask(taskId)) return;
-    await this.deps.taskService.forceFailRemote({ taskId, reason: `refused by the other PC: ${code}`, forced: 'remote_refused' });
+    const reason = code === 'attachment-failed' ? `not sent to the other PC: ${detail ?? 'its images could not be uploaded'}` : `refused by the other PC: ${code}`;
+    await this.deps.taskService.forceFailRemote({ taskId, reason, forced: 'remote_refused' });
   }
 
   private onEnqueue(rec: A2aOutboxRecordV1): void {
@@ -527,16 +619,105 @@ export class A2aRemoteDelivery {
       aliasFor: (l) => this.aliasFor(l),
       ...(this.deps.localWorkspaceName ? { localWorkspaceName: this.deps.localWorkspaceName } : {}),
       ...(this.deps.offers ? { offers: this.deps.offers } : {}),
+      ...(this.images ? { images: { store: this.images, pullAttempts: this.pullAttempts } } : {}),
     };
   }
 
   private outboundDeps(): OutboundDeps {
-    return { linkStore: this.deps.links, taskService: this.deps.taskService, outbox: this.outbox, aliasFor: (l) => this.aliasFor(l) };
+    const store = this.images;
+    return {
+      linkStore: this.deps.links,
+      taskService: this.deps.taskService,
+      outbox: this.outbox,
+      aliasFor: (l) => this.aliasFor(l),
+      peerFeatures: (hostId) => this.peerFeatures(hostId),
+      ...(store
+        ? {
+          images: {
+            prepare: (paths, ptyId) => this.prepareOutgoing(paths, ptyId),
+            hasOutgoing: async (sha) => (await store.readOutgoing(sha)) !== null,
+          },
+        }
+        : {}),
+    };
+  }
+
+  /** Read, check and strip the images an agent named, all or none (a refusal names the one at fault). */
+  private async readImages(
+    paths: readonly string[],
+    ptyId: string | undefined,
+  ): Promise<{ ok: true; images: Array<{ bytes: Buffer; info: A2aImageInfo; sha256: string; name: string }> } | { ok: false; error: string }> {
+    const store = this.images;
+    if (!store) return { ok: false, error: 'unavailable: this PC cannot send images' };
+    if (paths.length > A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) {
+      return { ok: false, error: `bad-request: at most ${A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE} images on one message` };
+    }
+    // No verified pane: only the uploads folder.
+    const roots = imageRoots(ptyId ? this.deps.spawnCwdOf?.(ptyId) : undefined, store.uploadsRoot);
+    const out: Array<{ bytes: Buffer; info: A2aImageInfo; sha256: string; name: string }> = [];
+    let total = 0;
+    for (const [i, given] of paths.entries()) {
+      const label = `images[${i}] ${JSON.stringify(given.length > 200 ? `${given.slice(0, 200)}…` : given)}`;
+      // eslint-disable-next-line no-await-in-loop -- one file at a time
+      const read = await readImageSource(given, roots);
+      if (!read.ok) return { ok: false, error: `bad-request: ${label}: ${imageSourceMessage(read.reason)}` };
+      const prepared = prepareA2aImage(read.bytes);
+      if (!prepared.ok) return { ok: false, error: `bad-request: ${label}: ${IMAGE_REFUSAL[prepared.reason]}` };
+      const bytes = Buffer.from(prepared.bytes.buffer, prepared.bytes.byteOffset, prepared.bytes.byteLength);
+      total += bytes.length;
+      if (total > A2A_REMOTE_IMAGE_LIMITS.MESSAGE_MAX_BYTES) {
+        return { ok: false, error: `bad-request: the images of one message may total ${A2A_REMOTE_IMAGE_LIMITS.MESSAGE_MAX_BYTES / (1024 * 1024)} MB` };
+      }
+      const hash = sha256(bytes);
+      // The same picture named twice is sent once.
+      if (out.some((o) => o.sha256 === hash)) continue;
+      out.push({ bytes, info: prepared.info, sha256: hash, name: path.basename(given) });
+    }
+    return { ok: true, images: out };
+  }
+
+  /** The images of a message to another PC, kept as sender copies for the peer. */
+  private async prepareOutgoing(paths: readonly string[], ptyId: string | undefined): Promise<{ ok: true; images: PreparedImage[] } | { ok: false; error: string }> {
+    const read = await this.readImages(paths, ptyId);
+    const store = this.images;
+    if (!read.ok) return read;
+    if (!store) return { ok: false, error: 'unavailable: this PC cannot send images' };
+    const out: PreparedImage[] = [];
+    for (const r of read.images) {
+      try {
+        // eslint-disable-next-line no-await-in-loop -- a handful of small writes
+        await store.putOutgoing(r.bytes);
+      } catch (err) {
+        return { ok: false, error: `unavailable: an image could not be kept for sending (${errMsg(err)})` };
+      }
+      out.push({
+        ref: { sha256: r.sha256, mediaType: r.info.mediaType, bytes: r.bytes.length },
+        name: r.name,
+        path: store.outgoingPath(r.sha256),
+        width: r.info.width,
+        height: r.info.height,
+      });
+    }
+    return { ok: true, images: out };
   }
 
   private heldDeps(): HeldDeps {
     return { taskService: this.deps.taskService, linkStore: this.deps.links, outbox: this.outbox };
   }
+}
+
+const IMAGE_REFUSAL: Record<A2aImageRefusal, string> = {
+  unsupported: 'only PNG, JPEG and WebP images can be attached',
+  malformed: 'the image is damaged, or its bytes are not the format they claim',
+  dimensions: `the image is larger than ${A2A_REMOTE_IMAGE_LIMITS.MAX_EDGE} px on a side or ${A2A_REMOTE_IMAGE_LIMITS.MAX_PIXELS / 1_000_000} megapixels`,
+};
+
+/** `images` / `paths` of an RPC: undefined when absent, null when malformed (not a list of up to 4 non-empty strings). */
+function imagePaths(v: unknown): string[] | undefined | null {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v) || v.length === 0 || v.length > A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) return null;
+  if (!v.every((x) => typeof x === 'string' && x.length > 0 && x.length <= 4096)) return null;
+  return v as string[];
 }
 
 /** The task a reply / state record is about; null for any other kind. */

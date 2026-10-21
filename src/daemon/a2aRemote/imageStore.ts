@@ -1,0 +1,375 @@
+// ─── Image files of cross-PC A2A messages (`images.1`) ─────────────────────
+//
+// Four folders, each owned by this store, 0700, files 0600, written to a
+// temp name with `wx` and renamed into place:
+//
+//   <wmuxDir>/uploads/a2a/<hostId>/<sha256>.<ext>  images received from that
+//       PC: what the receiving agent reads by path. Content-addressed, so a
+//       message received twice writes nothing new (the file's time is
+//       refreshed instead). Kept A2A_IMAGE_RETAIN_MS by mtime.
+//   <wmuxDir>/uploads/a2a/local/<sha256>.<ext>  images an agent on THIS PC
+//       sent to another pane here (a2a.attachments.stage), same retention.
+//   <wmuxDir>/a2a/blobs/<sha256>  the sender's copy of what it queued for
+//       another PC: the bytes the envelope's hash names, kept while a ledger
+//       message still refers to them (the outbound sync may rebuild an
+//       envelope from the ledger at any time), served to a joiner by GET.
+//   <wmuxDir>/a2a/blobs-in/<hostId>/<sha256>  bytes a joiner uploaded (PUT)
+//       ahead of the envelope that names them. Moved into the received
+//       folder once that envelope passes the link checks; dropped when the
+//       envelope is refused for good, when the peer's share is full (its own
+//       oldest go first) and after STAGING_TTL_MS.
+//
+// The `uploads/a2a` folder is inside `~/.wmux/uploads`, the folder
+// `browser_file_upload` already allows, as the phone's photos are. Nothing in
+// these folders is ever opened, decoded or run by wmux; an extension comes
+// from the sniffed bytes only and no name from a peer ever reaches a path.
+// The sweeps match only the names this store writes.
+//
+// Quotas: one PC's received folder holds at most RECEIVED_HOST_MAX_FILES /
+// RECEIVED_HOST_MAX_BYTES, all of `uploads/a2a` at most
+// RECEIVED_TOTAL_MAX_BYTES. A full store refuses (the image is reported as
+// not received); it never evicts a received image. Paired PCs can fill the
+// total between them: it is bounded, and the retention frees it.
+
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { A2A_SHA256_RE, isHostId, type A2aRemoteImageMediaType, type A2aRemoteImageRef, type HostId } from '../../shared/a2aRemote';
+import { inspectA2aImage, type A2aImageInfo } from '../../shared/a2aImages';
+
+const DAY_MS = 24 * 3600_000;
+/** How long a received (or locally sent) image file stays: a held task may wait days for a person. */
+export const A2A_IMAGE_RETAIN_MS = 7 * DAY_MS;
+/** An upload no envelope claimed within this long is dropped. */
+export const STAGING_TTL_MS = 3600_000;
+/** One peer's staging share (two full messages). */
+export const STAGING_PEER_MAX_BYTES = 20 * 1024 * 1024;
+export const RECEIVED_HOST_MAX_FILES = 100;
+export const RECEIVED_HOST_MAX_BYTES = 200 * 1024 * 1024;
+export const RECEIVED_TOTAL_MAX_BYTES = 1024 * 1024 * 1024;
+/** A sender copy no ledger message refers to is dropped after this long. */
+const OUTGOING_GRACE_MS = 3600_000;
+
+export const LOCAL_FOLDER = 'local';
+const STORED_RE = /^([0-9a-f]{64})\.(png|jpg|webp)$/;
+const BLOB_RE = /^[0-9a-f]{64}$/;
+const TEMP_RE = /^\.[0-9a-f]{64}\.[0-9a-f]{8}\.part$/;
+
+const EXT: Record<A2aRemoteImageMediaType, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+
+export type ImageNotReceived = 'missing' | 'invalid' | 'full';
+
+export type StoredImage = { ok: true; path: string; info: A2aImageInfo } | { ok: false; reason: ImageNotReceived };
+
+export interface A2aImageStoreOptions {
+  /** `<wmuxDir>/a2a` */
+  a2aDir: string;
+  /** `<wmuxDir>/uploads` */
+  uploadsRoot: string;
+  now?: () => number;
+  log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+}
+
+/** Bytes match a ref: exact size, hash, and a well-formed image of the named type. */
+export function checkImageBytes(ref: A2aRemoteImageRef, bytes: Buffer): A2aImageInfo | null {
+  if (bytes.length !== ref.bytes || sha256(bytes) !== ref.sha256) return null;
+  const check = inspectA2aImage(bytes);
+  return check.ok && check.info.mediaType === ref.mediaType ? check.info : null;
+}
+
+export function sha256(bytes: Uint8Array): string {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+export class A2aImageStore {
+  private readonly opts: A2aImageStoreOptions;
+  private readonly now: () => number;
+
+  constructor(opts: A2aImageStoreOptions) {
+    this.opts = opts;
+    this.now = opts.now ?? Date.now;
+  }
+
+  /** `uploads/a2a` */
+  get root(): string {
+    return path.join(this.opts.uploadsRoot, 'a2a');
+  }
+
+  get uploadsRoot(): string {
+    return this.opts.uploadsRoot;
+  }
+
+  // --- sender ---------------------------------------------------------------
+
+  /** Keep the bytes this PC queued for another PC. */
+  async putOutgoing(bytes: Buffer): Promise<string> {
+    const sha = sha256(bytes);
+    await this.writeOnce(this.outgoingDir(), sha, bytes);
+    return sha;
+  }
+
+  /** Where the sender copy of `sha` is kept. */
+  outgoingPath(sha: string): string {
+    return path.join(this.outgoingDir(), sha);
+  }
+
+  /** The sender copy, or null (swept, never written). */
+  async readOutgoing(sha: string): Promise<Buffer | null> {
+    if (!A2A_SHA256_RE.test(sha)) return null;
+    return readRegular(path.join(this.outgoingDir(), sha));
+  }
+
+  /** Drop sender copies no ledger message (`referenced`) refers to, past a grace period. */
+  async gcOutgoing(referenced: ReadonlySet<string>): Promise<number> {
+    let dropped = 0;
+    const cutoff = this.now() - OUTGOING_GRACE_MS;
+    for (const { name, full, st } of await listFiles(this.outgoingDir())) {
+      if (TEMP_RE.test(name) && st.mtimeMs < cutoff) await unlinkQuiet(full);
+      if (!BLOB_RE.test(name) || referenced.has(name) || st.mtimeMs >= cutoff) continue;
+      if (await unlinkQuiet(full)) dropped += 1;
+    }
+    return dropped;
+  }
+
+  /** Keep an image an agent sent to a pane on this PC; its path is what the receiver reads. */
+  async putLocal(bytes: Buffer, info: A2aImageInfo): Promise<StoredImage> {
+    const ref: A2aRemoteImageRef = { sha256: sha256(bytes), mediaType: info.mediaType, bytes: bytes.length };
+    return this.storeReceived(LOCAL_FOLDER, ref, bytes);
+  }
+
+  // --- server: uploads from a joiner ----------------------------------------
+
+  /** Whether `hostId`'s image is here already, uploaded or received (a PUT then reads nothing new). */
+  has(hostId: HostId, sha: string): boolean {
+    if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) return false;
+    if (isRegular(path.join(this.stagingDir(hostId), sha))) return true;
+    return this.findStored(hostId, sha) !== null;
+  }
+
+  /**
+   * Keep an upload until its envelope comes. The bytes are a well-formed
+   * image under that hash (checked by the caller). Over the peer's share,
+   * its own oldest uploads go first; one upload never exceeds the share.
+   */
+  async stage(hostId: HostId, sha: string, bytes: Buffer): Promise<void> {
+    if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) throw new Error('a2a images: bad staging key');
+    const dir = this.stagingDir(hostId);
+    const held = (await listFiles(dir)).filter((f) => BLOB_RE.test(f.name)).sort((a, b) => a.st.mtimeMs - b.st.mtimeMs);
+    let total = held.reduce((n, f) => n + f.st.size, 0);
+    for (const f of held) {
+      if (total + bytes.length <= STAGING_PEER_MAX_BYTES) break;
+      if (await unlinkQuiet(f.full)) total -= f.st.size;
+    }
+    await this.writeOnce(dir, sha, bytes);
+  }
+
+  /** An envelope from `hostId` passed the link checks: move its upload into the received folder. */
+  async claim(hostId: HostId, ref: A2aRemoteImageRef): Promise<StoredImage> {
+    const existing = await this.received(hostId, ref);
+    if (existing) return existing;
+    const staged = path.join(this.stagingDir(hostId), ref.sha256);
+    const bytes = await readRegular(staged);
+    if (!bytes) return { ok: false, reason: 'missing' };
+    const stored = await this.storeReceived(hostId, ref, bytes);
+    if (stored.ok || stored.reason === 'invalid') await unlinkQuiet(staged);
+    return stored;
+  }
+
+  /** The envelope naming these uploads was refused for good: they will never be claimed. */
+  async discardStaged(hostId: HostId, refs: readonly A2aRemoteImageRef[]): Promise<void> {
+    if (!isHostId(hostId)) return;
+    for (const ref of refs) if (A2A_SHA256_RE.test(ref.sha256)) await unlinkQuiet(path.join(this.stagingDir(hostId), ref.sha256));
+  }
+
+  // --- receiver -------------------------------------------------------------
+
+  /** The received file for `ref`, when it is here with the right size (its time refreshed). */
+  async received(folder: string, ref: A2aRemoteImageRef): Promise<StoredImage | null> {
+    if (!this.validFolder(folder) || !A2A_SHA256_RE.test(ref.sha256)) return null;
+    const full = path.join(this.root, folder, `${ref.sha256}.${EXT[ref.mediaType]}`);
+    const bytes = await readRegular(full);
+    if (!bytes) return null;
+    const info = checkImageBytes(ref, bytes);
+    if (!info) return null;
+    const t = new Date(this.now());
+    await fs.promises.utimes(full, t, t).catch(() => undefined);
+    return { ok: true, path: full, info };
+  }
+
+  /** Check and keep received bytes under the receiver's own name. */
+  async storeReceived(folder: string, ref: A2aRemoteImageRef, bytes: Buffer): Promise<StoredImage> {
+    if (!this.validFolder(folder)) return { ok: false, reason: 'invalid' };
+    const info = checkImageBytes(ref, bytes);
+    if (!info) return { ok: false, reason: 'invalid' };
+    const existing = await this.received(folder, ref);
+    if (existing) return existing;
+    await this.sweepReceived();
+    const hostHeld = await measure(path.join(this.root, folder));
+    const totalHeld = await this.measureAll();
+    if (
+      hostHeld.files + 1 > RECEIVED_HOST_MAX_FILES ||
+      hostHeld.bytes + bytes.length > RECEIVED_HOST_MAX_BYTES ||
+      totalHeld + bytes.length > RECEIVED_TOTAL_MAX_BYTES
+    ) {
+      return { ok: false, reason: 'full' };
+    }
+    const name = `${ref.sha256}.${EXT[ref.mediaType]}`;
+    try {
+      await this.writeOnce(path.join(this.root, folder), name, bytes);
+    } catch (err) {
+      this.opts.log?.('warn', `[a2a-remote] an image was not stored: ${err instanceof Error ? err.message : String(err)}`);
+      return { ok: false, reason: 'full' };
+    }
+    return { ok: true, path: path.join(this.root, folder, name), info };
+  }
+
+  // --- upkeep ---------------------------------------------------------------
+
+  /** Drop received images past the retention, stale temp files and unclaimed uploads. */
+  async sweep(): Promise<void> {
+    await this.sweepReceived();
+    const cutoff = this.now() - STAGING_TTL_MS;
+    for (const host of await listDirs(path.join(this.opts.a2aDir, 'blobs-in'))) {
+      for (const f of await listFiles(host)) {
+        if ((BLOB_RE.test(f.name) || TEMP_RE.test(f.name)) && f.st.mtimeMs < cutoff) await unlinkQuiet(f.full);
+      }
+    }
+  }
+
+  private async sweepReceived(): Promise<void> {
+    const cutoff = this.now() - A2A_IMAGE_RETAIN_MS;
+    const tempCutoff = this.now() - STAGING_TTL_MS;
+    for (const dir of await listDirs(this.root)) {
+      if (!this.validFolder(path.basename(dir))) continue;
+      for (const f of await listFiles(dir)) {
+        if ((STORED_RE.test(f.name) && f.st.mtimeMs < cutoff) || (TEMP_RE.test(f.name) && f.st.mtimeMs < tempCutoff)) await unlinkQuiet(f.full);
+      }
+    }
+  }
+
+  private async measureAll(): Promise<number> {
+    let bytes = 0;
+    for (const dir of await listDirs(this.root)) {
+      if (this.validFolder(path.basename(dir))) bytes += (await measure(dir)).bytes;
+    }
+    return bytes;
+  }
+
+  // --- internals ------------------------------------------------------------
+
+  private outgoingDir(): string {
+    return path.join(this.opts.a2aDir, 'blobs');
+  }
+
+  private stagingDir(hostId: HostId): string {
+    return path.join(this.opts.a2aDir, 'blobs-in', hostId);
+  }
+
+  private validFolder(folder: string): boolean {
+    return folder === LOCAL_FOLDER || isHostId(folder);
+  }
+
+  private findStored(hostId: HostId, sha: string): string | null {
+    for (const ext of Object.values(EXT)) {
+      const full = path.join(this.root, hostId, `${sha}.${ext}`);
+      if (isRegular(full)) return full;
+    }
+    return null;
+  }
+
+  /** Write `name` in `dir` unless a regular file is there already; temp + rename, 0600. */
+  private async writeOnce(dir: string, name: string, bytes: Buffer): Promise<void> {
+    await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+    const final = path.join(dir, name);
+    if (isRegular(final)) {
+      const t = new Date(this.now());
+      await fs.promises.utimes(final, t, t).catch(() => undefined);
+      return;
+    }
+    const sha = BLOB_RE.test(name) ? name : name.slice(0, 64);
+    const temp = path.join(dir, `.${sha}.${crypto.randomBytes(4).toString('hex')}.part`);
+    try {
+      await fs.promises.writeFile(temp, bytes, { mode: 0o600, flag: 'wx' });
+      await fs.promises.rename(temp, final);
+    } catch (err) {
+      await unlinkQuiet(temp);
+      // Another write of the same content got there first (Windows refuses a
+      // rename onto an existing file): the name holds these bytes.
+      if (isRegular(final)) return;
+      throw err;
+    }
+  }
+}
+
+// --- fs helpers ---------------------------------------------------------------
+
+function isRegular(p: string): boolean {
+  try {
+    const st = fs.lstatSync(p);
+    return st.isFile() && !st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** A regular file's bytes (never through a link), or null. */
+async function readRegular(p: string): Promise<Buffer | null> {
+  try {
+    const st = await fs.promises.lstat(p);
+    if (!st.isFile() || st.isSymbolicLink()) return null;
+    return await fs.promises.readFile(p);
+  } catch {
+    return null;
+  }
+}
+
+async function listFiles(dir: string): Promise<Array<{ name: string; full: string; st: fs.Stats }>> {
+  let names: string[];
+  try {
+    names = await fs.promises.readdir(dir);
+  } catch {
+    return [];
+  }
+  const out: Array<{ name: string; full: string; st: fs.Stats }> = [];
+  for (const name of names) {
+    const full = path.join(dir, name);
+    try {
+      const st = await fs.promises.lstat(full);
+      if (st.isFile()) out.push({ name, full, st });
+    } catch {
+      // vanished between readdir and lstat
+    }
+  }
+  return out;
+}
+
+async function listDirs(dir: string): Promise<string[]> {
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isDirectory()).map((e) => path.join(dir, e.name));
+}
+
+/** Files and bytes this store wrote in `dir` (other names are not ours to count). */
+async function measure(dir: string): Promise<{ files: number; bytes: number }> {
+  let files = 0;
+  let bytes = 0;
+  for (const f of await listFiles(dir)) {
+    if (!STORED_RE.test(f.name)) continue;
+    files += 1;
+    bytes += f.st.size;
+  }
+  return { files, bytes };
+}
+
+async function unlinkQuiet(p: string): Promise<boolean> {
+  try {
+    await fs.promises.unlink(p);
+    return true;
+  } catch {
+    return false;
+  }
+}

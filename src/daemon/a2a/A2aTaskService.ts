@@ -1222,12 +1222,22 @@ function addInboxItem(task: Task, messageId: string, kind: A2aRemoteInboxItem['k
 }
 
 /** The text parts of a history's first message, joined — the "body" a remote id dedupes on. */
+/**
+ * What makes two copies of a message "the same body": its text, and the
+ * hashes of the images it carries (a remote message's file parts), so one
+ * id resent with other images is a conflict, not a duplicate.
+ */
 function firstMessageText(history: Message[]): string {
   const first = history[0];
   if (!first || !Array.isArray(first.parts)) return '';
-  return first.parts
+  const text = first.parts
     .map((p) => (p && p.kind === 'text' && typeof p.text === 'string' ? p.text : ''))
     .join('');
+  const images = first.parts
+    .map((p) => (p && p.kind === 'file' && typeof p.metadata?.['sha256'] === 'string' ? p.metadata['sha256'] : ''))
+    .filter((h) => h)
+    .sort();
+  return images.length > 0 ? `${text}\0images:${images.join(',')}` : text;
 }
 
 /** delivered < read: a receipt only ever moves forward. */

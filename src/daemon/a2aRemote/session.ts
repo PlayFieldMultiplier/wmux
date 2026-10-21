@@ -7,12 +7,14 @@ import {
   type A2aRemoteErrorCode,
   type A2aRemoteEnvelope,
   type A2aRemoteHostRecordV1,
+  type A2aRemoteImageRef,
   type HostId,
   type PeerCredential,
 } from '../../shared/a2aRemote';
 import type { A2aRemoteHostStatus } from '../../shared/rpc';
 import type { OutboxStore } from './outboxStore';
 import { PinnedClientError, PinnedTlsClient, type PinnedClientOptions, type PinnedSseEvent } from './pinnedClient';
+import type { ImagePull } from './inbound';
 import { formatCursorId } from './streamHub';
 import { errMsg, isPlainObject } from './storeFile';
 
@@ -72,10 +74,25 @@ export const DEFAULT_SESSION_TIMING: SessionTiming = {
   requestMs: 15_000,
 };
 
-/** What a session needs from a pinned client (a seam for tests). */
+/** What a session needs from a pinned client (a seam for tests). The byte transfers carry images (`images.1`). */
 export interface SessionClient {
   requestJson(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }>;
   openStream(path: string, opts: { signal: AbortSignal; lastEventId?: string; features?: readonly string[] }): AsyncGenerator<PinnedSseEvent, void, undefined>;
+  putBytes?(path: string, body: Buffer, timeoutMs: number): Promise<{ status: number; json: unknown }>;
+  getBytes?(path: string, opts: { maxBytes: number; timeoutMs: number; signal?: AbortSignal }): Promise<Buffer>;
+}
+
+/** Failed uploads of one message's images (each one sent and not answered, or refused for now) before the message is given up. */
+export const IMAGE_UPLOAD_MAX_FAILURES = 4;
+/** How long a message may keep failing its image uploads before it is given up. */
+export const IMAGE_UPLOAD_MAX_MS = 10 * 60_000;
+
+/**
+ * The budget of one image transfer: 10 s plus the time the bytes take at
+ * 1 Mbit/s, at most 2 minutes. (The other PC itself allows a request 30 s.)
+ */
+export function imageTransferBudgetMs(bytes: number): number {
+  return Math.min(120_000, 10_000 + Math.ceil((bytes * 8) / 1_000));
 }
 
 export interface JoinerSessionDeps {
@@ -86,10 +103,12 @@ export interface JoinerSessionDeps {
   onConnected?: (address: string) => void;
   credential: () => PeerCredential | null;
   outbox: Pick<OutboxStore, 'epoch' | 'head' | 'openCount' | 'markSent' | 'markOutcomeUnknown' | 'refuse' | 'ack'>;
-  /** Apply one server -> joiner envelope (`acceptInbound`). */
-  accept: (envelope: unknown, peer: { hostId: HostId }) => Promise<A2aRemoteDeliverResponse>;
-  /** The server refused a record for good: end what it was about. */
-  onRefused: (record: A2aOutboxRecordV1, code: A2aRemoteErrorCode) => void | Promise<void>;
+  /** Apply one server -> joiner envelope (`acceptInbound`); `pull` fetches an image it names from the server. */
+  accept: (envelope: unknown, peer: { hostId: HostId; pull?: ImagePull }) => Promise<A2aRemoteDeliverResponse>;
+  /** The server refused a record for good (or its images could not be sent): end what it was about. */
+  onRefused: (record: A2aOutboxRecordV1, code: A2aRemoteErrorCode, detail?: string) => void | Promise<void>;
+  /** This PC's copies of the images it queued (`A2aImageStore.readOutgoing`). */
+  images?: { readOutgoing(sha256: string): Promise<Buffer | null> };
   /** The stream came up (or 5 minutes passed): fold the server's view of our links in. */
   reconcileLinks: () => Promise<void>;
   onStatus: (status: A2aRemoteHostStatus) => void;
@@ -123,6 +142,8 @@ export class JoinerSession {
   private loop: Promise<void> | null = null;
   /** What the server's latest stream `hello` advertised; undefined until one arrived. */
   private serverFeatures: string[] | undefined;
+  /** Failed image uploads per outbox seq, since the first failure (in memory). */
+  private readonly uploadFailures = new Map<number, { count: number; since: number; last: string }>();
 
   constructor(deps: JoinerSessionDeps) {
     this.deps = deps;
@@ -219,7 +240,11 @@ export class JoinerSession {
             void this.reconcile();
             this.kick();
           } else if (ev.event === 'message') {
-            const applied = await this.applyStreamEvent(client, ev);
+            // An image fetch inside the apply takes as long as its bytes do:
+            // no event arrives meanwhile, so liveness waits for the apply.
+            if (liveness) clearTimeout(liveness);
+            const applied = await this.applyStreamEvent(client, ev, abort.signal);
+            alive();
             if (!applied) break; // our side failed: redial and get it again
           }
         }
@@ -242,7 +267,7 @@ export class JoinerSession {
   }
 
   /** Apply one stream event; ack it once the ledger holds it. False: retry later. */
-  private async applyStreamEvent(client: SessionClient, ev: PinnedSseEvent): Promise<boolean> {
+  private async applyStreamEvent(client: SessionClient, ev: PinnedSseEvent, signal: AbortSignal): Promise<boolean> {
     const data = ev.data;
     if (!isPlainObject(data) || !isPlainObject(data['cursor']) || !isPlainObject(data['envelope'])) {
       this.deps.log('warn', `[a2a-remote] ${this.deps.hostId}: malformed stream event dropped`);
@@ -252,7 +277,7 @@ export class JoinerSession {
     if (typeof cursor['epoch'] !== 'string' || typeof cursor['seq'] !== 'number') return true;
     let result: A2aRemoteDeliverResponse;
     try {
-      result = await this.deps.accept(data['envelope'], { hostId: this.deps.hostId });
+      result = await this.deps.accept(data['envelope'], { hostId: this.deps.hostId, pull: (ref) => this.pull(client, ref, signal) });
     } catch (err) {
       this.deps.log('warn', `[a2a-remote] ${this.deps.hostId}: applying a stream event failed: ${errMsg(err)}`);
       return false;
@@ -303,6 +328,10 @@ export class JoinerSession {
       this.deps.log('warn', `[a2a-remote] ${hostId}: outbox write failed: ${errMsg(err)}`);
       return 'retry';
     }
+    if (rec.envelope.images && rec.envelope.images.length > 0) {
+      const uploaded = await this.uploadImages(client, rec);
+      if (uploaded !== 'ok') return uploaded;
+    }
     let answer: { status: number; json: unknown };
     try {
       answer = await client.requestJson('POST', A2A_ROUTES.messages, rec.envelope);
@@ -320,12 +349,14 @@ export class JoinerSession {
     const body = isPlainObject(answer.json) ? answer.json : null;
     if (body?.['ok'] === true) this.reached();
     if (body?.['ok'] === true) {
+      this.uploadFailures.delete(rec.seq);
       // An ack we could not record here: back off (the server dedupes the resend).
       return this.tryOutbox(() => this.deps.outbox.ack(hostId, { epoch: this.deps.outbox.epoch, seq: rec.seq })) ? 'next' : 'retry';
     }
     const code = typeof body?.['error'] === 'string' ? (body['error'] as A2aRemoteErrorCode) : null;
     if (code && TERMINAL_REFUSALS.has(code)) {
       if (!this.tryOutbox(() => this.deps.outbox.refuse(hostId, rec.seq, code))) return 'retry';
+      this.uploadFailures.delete(rec.seq);
       try {
         await this.deps.onRefused(rec, code);
       } catch (err) {
@@ -334,8 +365,99 @@ export class JoinerSession {
       if (code === 'unknown-link' || code === 'link-not-active') void this.reconcile();
       return 'next';
     }
+    // Uploaded, yet not there: counts against the message's upload budget.
+    if (code === 'attachment-missing') return this.uploadFailed(rec, 'the other PC did not keep an uploaded image');
     if (code === 'unauthorized') this.setState('disconnected', 'unauthorized');
     return 'retry';
+  }
+
+  /**
+   * Upload a message's images before its envelope (the server answers
+   * `attachment-missing` for one it does not hold). Unreachable is retried
+   * like any send. An upload that was sent and failed counts; after
+   * IMAGE_UPLOAD_MAX_FAILURES of them, or IMAGE_UPLOAD_MAX_MS since the
+   * first, the message is given up (`attachment-failed`) so one slow link
+   * never holds the rest of the queue behind it. A refusal that resending
+   * cannot change (too large, not an image) and a sender copy that is gone
+   * give it up at once.
+   */
+  private async uploadImages(client: SessionClient, rec: A2aOutboxRecordV1): Promise<'ok' | 'next' | 'retry' | 'stop'> {
+    const images = rec.envelope.images ?? [];
+    if (!client.putBytes || !this.deps.images) return this.giveUpImages(rec, 'this PC cannot upload images');
+    for (const ref of images) {
+      // eslint-disable-next-line no-await-in-loop -- one upload at a time to one host
+      const bytes = await this.deps.images.readOutgoing(ref.sha256);
+      if (!bytes) return this.giveUpImages(rec, "this PC's copy of an image is gone");
+      let answer: { status: number; json: unknown };
+      try {
+        // eslint-disable-next-line no-await-in-loop -- one upload at a time to one host
+        answer = await client.putBytes(`${A2A_ROUTES.blobs}/${ref.sha256}`, bytes, imageTransferBudgetMs(bytes.length));
+      } catch (err) {
+        if (err instanceof PinnedClientError && err.code === 'fingerprint-mismatch') {
+          this.identityChanged(err.message);
+          return 'stop';
+        }
+        if (err instanceof PinnedClientError && !err.sent) return 'retry';
+        return this.uploadFailed(rec, err instanceof PinnedClientError ? err.code : errMsg(err));
+      }
+      if (answer.status === 200) continue;
+      if (answer.status === 401) {
+        this.setState('disconnected', 'unauthorized');
+        return 'retry';
+      }
+      // Busy (too many uploads at once there): not this message's failure.
+      if (answer.status === 429) return 'retry';
+      if (answer.status === 413 || answer.status === 400) {
+        return this.giveUpImages(rec, `the other PC refused an image (HTTP ${answer.status})`);
+      }
+      return this.uploadFailed(rec, `HTTP ${answer.status}`);
+    }
+    return 'ok';
+  }
+
+  private uploadFailed(rec: A2aOutboxRecordV1, reason: string): Promise<'next' | 'retry'> | 'retry' {
+    const now = Date.now();
+    const prev = this.uploadFailures.get(rec.seq);
+    const entry = { count: (prev?.count ?? 0) + 1, since: prev?.since ?? now, last: reason };
+    this.uploadFailures.set(rec.seq, entry);
+    this.deps.log('warn', `[a2a-remote] ${this.deps.hostId}: image upload for #${rec.seq} failed (${reason}), ${entry.count} of ${IMAGE_UPLOAD_MAX_FAILURES}`);
+    if (entry.count < IMAGE_UPLOAD_MAX_FAILURES && now - entry.since < IMAGE_UPLOAD_MAX_MS) return 'retry';
+    return this.giveUpImages(
+      rec,
+      `the images could not be uploaded after ${entry.count} tries (last: ${reason}); the other PC allows one upload 30 seconds, ` +
+        'so a link slower than about 1.4 Mbit/s cannot carry a 5 MB image',
+    );
+  }
+
+  /** The message cannot carry its images: refuse it here (`attachment-failed`) and end its task with why. */
+  private async giveUpImages(rec: A2aOutboxRecordV1, detail: string): Promise<'next' | 'retry'> {
+    if (!this.tryOutbox(() => this.deps.outbox.refuse(this.deps.hostId, rec.seq, 'attachment-failed'))) return 'retry';
+    this.uploadFailures.delete(rec.seq);
+    this.deps.log('warn', `[a2a-remote] ${this.deps.hostId}: #${rec.seq} given up: ${detail}`);
+    try {
+      await this.deps.onRefused(rec, 'attachment-failed', detail);
+    } catch (err) {
+      this.deps.log('warn', `[a2a-remote] ${this.deps.hostId}: ending a refused message's task failed: ${errMsg(err)}`);
+    }
+    return 'next';
+  }
+
+  /**
+   * Fetch one image a stream envelope named. Permanent: the server no longer
+   * owes it (404), refused the request, or sent more than the ref says.
+   */
+  private async pull(client: SessionClient, ref: A2aRemoteImageRef, signal: AbortSignal): ReturnType<ImagePull> {
+    if (!client.getBytes) return { ok: false, permanent: true, detail: 'this PC cannot fetch images' };
+    try {
+      const bytes = await client.getBytes(`${A2A_ROUTES.blobs}/${ref.sha256}`, { maxBytes: ref.bytes, timeoutMs: imageTransferBudgetMs(ref.bytes), signal });
+      return { ok: true, bytes };
+    } catch (err) {
+      const permanent =
+        err instanceof PinnedClientError &&
+        ((err.code === 'http' && err.status !== undefined && err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 429) ||
+          err.code === 'protocol');
+      return { ok: false, permanent, detail: err instanceof PinnedClientError ? err.code : errMsg(err) };
+    }
   }
 
   /**

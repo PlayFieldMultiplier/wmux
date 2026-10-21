@@ -1,8 +1,13 @@
 import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import {
   A2A_BRAIN_ALIAS,
+  A2A_FEATURE_IMAGES,
   A2A_REMOTE_BODY_MAX,
+  A2A_REMOTE_IMAGE_LIMITS,
   A2A_REMOTE_PROTOCOL,
+  isA2aRemoteImageMediaType,
+  type A2aRemoteImageRef,
   type A2aLinkRecordV1,
   type A2aRemoteReceipt,
   type A2aRemoteEnvelope,
@@ -18,7 +23,7 @@ import {
   type A2aRemoteTarget,
   type A2aRemoteTaskState,
 } from '../../shared/a2aRemoteDelivery';
-import type { Message, Task } from '../../shared/types';
+import type { Message, Part, Task } from '../../shared/types';
 import type { A2aTaskService } from '../a2a/A2aTaskService';
 import type { LinkStore } from './linkStore';
 import type { OutboxStore } from './outboxStore';
@@ -30,7 +35,27 @@ import { remoteTaskId } from './ids';
  * daemon's RPC handlers (wiring step) are thin parses around these.
  */
 
-export type OutboundResult = { ok: true; taskId: string } | { ok: false; error: string };
+/** `note`: what the sender should know about how it went (images omitted for an older peer). */
+export type OutboundResult = { ok: true; taskId: string; note?: string } | { ok: false; error: string };
+
+/** One image ready to leave: checked, stripped, kept in the sender store. */
+export interface PreparedImage {
+  ref: A2aRemoteImageRef;
+  /** The source file's name, for this PC's own ledger only (never sent). */
+  name: string;
+  /** The sender copy. */
+  path: string;
+  width: number;
+  height: number;
+}
+
+/** The sender side of images (`images.1`). */
+export interface OutboundImages {
+  /** Read the images an agent named from its pane's folders (`ptyId`, else uploads only), check, strip and keep them. */
+  prepare(paths: readonly string[], ptyId: string | undefined): Promise<{ ok: true; images: PreparedImage[] } | { ok: false; error: string }>;
+  /** Whether the sender copy of an image is still here. */
+  hasOutgoing(sha256: string): Promise<boolean>;
+}
 
 export interface OutboundDeps {
   linkStore: Pick<LinkStore, 'get' | 'list' | 'checkMessage'>;
@@ -38,6 +63,10 @@ export interface OutboundDeps {
   outbox: Pick<OutboxStore, 'enqueue'>;
   /** Display alias of a link's remote pane (see `linkAlias`). */
   aliasFor: (link: A2aLinkRecordV1) => string;
+  /** Absent: a message naming images is refused. */
+  images?: OutboundImages;
+  /** What the other PC takes (`A2aRemoteDelivery.peerFeatures`); undefined when it was never seen. */
+  peerFeatures?: (hostId: string) => ReadonlySet<string> | undefined;
   now?: () => number;
   /** Test seam for envelope messageIds (defaults to a random UUID). */
   mintId?: () => string;
@@ -116,7 +145,9 @@ export async function sendRemoteTask(deps: OutboundDeps, input: A2aRemoteSendTas
   }
   const check = deps.linkStore.checkMessage(link.linkId, link.version, link.remote.hostId, 'outbound', 'task');
   if (!check.ok) return { ok: false, error: check.error };
-  const sizeErr = bodyError(input.text);
+  const att = await attachImages(deps, link, input.images, input.from.ptyId, input.text);
+  if (!att.ok) return att;
+  const sizeErr = bodyError(att.text, att.images.length > 0);
   if (sizeErr) return { ok: false, error: sizeErr };
 
   const messageId = mint(deps);
@@ -124,20 +155,20 @@ export async function sendRemoteTask(deps: OutboundDeps, input: A2aRemoteSendTas
   const marker: A2aRemoteTaskMarkerV1 = { v: 1, linkId: link.linkId, hostId: link.remote.hostId, messageId, direction: 'outbound', kind: link.local.kind };
   const created = await deps.taskService.createTask({
     id: taskId,
-    title: input.title || input.text.slice(0, 100),
+    title: input.title || att.text.slice(0, 100) || countImages(att.images.length),
     from: { ...input.from },
     to: { workspaceId: remoteWorkspaceId(link.linkId), name: deps.aliasFor(link) },
-    history: [textMessage(messageId, 'user', input.text)],
+    history: [ledgerMessage(messageId, 'user', att.text, att.images)],
     remote: marker,
   });
   if (!created.ok) return { ok: false, error: created.error };
   try {
-    deps.outbox.enqueue(link.remote.hostId, envelope(deps, link, messageId, { kind: 'task', text: input.text }));
+    deps.outbox.enqueue(link.remote.hostId, envelope(deps, link, messageId, { kind: 'task', text: att.text, ...imagesField(att.images.map((i) => i.ref)) }));
   } catch (err) {
     await deps.taskService.cancelTask({ taskId, callerWorkspaceId: input.from.workspaceId });
     return { ok: false, error: `unavailable: could not queue the task (${errText(err)})` };
   }
-  return { ok: true, taskId };
+  return { ok: true, taskId, ...(att.note ? { note: att.note } : {}) };
 }
 
 /**
@@ -154,7 +185,9 @@ export async function sendRemoteReply(deps: OutboundDeps, input: A2aRemoteReplyI
   }
   const check = deps.linkStore.checkMessage(link.linkId, link.version, link.remote.hostId, 'outbound', 'reply', undefined, { onThisLink: true });
   if (!check.ok) return { ok: false, error: check.error };
-  const sizeErr = bodyError(input.text);
+  const att = await attachImages(deps, link, input.images, input.ptyId, input.text);
+  if (!att.ok) return att;
+  const sizeErr = bodyError(att.text, att.images.length > 0);
   if (sizeErr) return { ok: false, error: sizeErr };
 
   const messageId = mint(deps);
@@ -162,18 +195,18 @@ export async function sendRemoteReply(deps: OutboundDeps, input: A2aRemoteReplyI
     taskId: task.id,
     linkId: link.linkId,
     actorWorkspaceId: input.workspaceId,
-    message: textMessage(messageId, localSide === 'from' ? 'user' : 'agent', input.text),
+    message: ledgerMessage(messageId, localSide === 'from' ? 'user' : 'agent', att.text, att.images),
   });
   if (!appended.ok) return { ok: false, error: appended.error };
   // The ledger holds the reply now; queueing it is the sync's job, which the
   // daemon also re-runs on start and periodically if this attempt fails.
   const synced = await syncRemoteTask(deps, task.id);
   if (!synced.ok) deps.log?.('warn', `[a2a-remote] reply on ${task.id} stored, queueing deferred: ${synced.error}`);
-  return { ok: true, taskId: task.id };
+  return { ok: true, taskId: task.id, ...(att.note ? { note: att.note } : {}) };
 }
 
 /** What the outbound sync needs: the ledger (read + bookkeeping), the link gate and the outbox. */
-export type StateDeps = Pick<OutboundDeps, 'linkStore' | 'outbox' | 'now' | 'mintId'> & {
+export type StateDeps = Pick<OutboundDeps, 'linkStore' | 'outbox' | 'now' | 'mintId' | 'images'> & {
   taskService: Pick<A2aTaskService, 'getTask' | 'markRemote'>;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 };
@@ -234,9 +267,11 @@ export async function syncRemoteTask(
   try {
     for (const m of task.history) {
       if (m.role !== ours || m.messageId === marker.messageId || (marker.sent ?? []).includes(m.messageId)) continue;
-      const text = m.parts.map((p) => (p.kind === 'text' ? p.text : '')).join('');
-      if (!text) continue;
-      deps.outbox.enqueue(link.remote.hostId, envelope(deps, link, m.messageId, { kind: 'reply', taskId: task.id, text }));
+      // eslint-disable-next-line no-await-in-loop -- recorded in order
+      const body = await replyBody(deps, m);
+      // A reply may be images only; one with neither is not sent.
+      if (!body.text && body.images.length === 0) continue;
+      deps.outbox.enqueue(link.remote.hostId, envelope(deps, link, m.messageId, { kind: 'reply', taskId: task.id, text: body.text, ...imagesField(body.images) }));
       // eslint-disable-next-line no-await-in-loop -- recorded in order
       await deps.taskService.markRemote({ taskId: task.id, sent: m.messageId });
       queued += 1;
@@ -289,7 +324,7 @@ function envelope(
   deps: Pick<OutboundDeps, 'now'>,
   link: A2aLinkRecordV1,
   messageId: string,
-  body: Pick<A2aRemoteEnvelope, 'kind' | 'taskId' | 'text' | 'state' | 'receipt'>,
+  body: Pick<A2aRemoteEnvelope, 'kind' | 'taskId' | 'text' | 'state' | 'receipt' | 'images'>,
 ): A2aRemoteEnvelope {
   return {
     protocol: A2A_REMOTE_PROTOCOL,
@@ -301,12 +336,108 @@ function envelope(
   };
 }
 
-function textMessage(messageId: string, role: Message['role'], text: string): Message {
-  return { kind: 'message', messageId, role, parts: [{ kind: 'text', text }] };
+/** A message for this PC's ledger: the text, then one file part per image (its sender copy). */
+function ledgerMessage(messageId: string, role: Message['role'], text: string, images: readonly PreparedImage[]): Message {
+  const parts: Part[] = text || images.length === 0 ? [{ kind: 'text', text }] : [];
+  for (const i of images) {
+    parts.push({
+      kind: 'file',
+      file: { name: i.name, mimeType: i.ref.mediaType, uri: pathToFileURL(i.path).href },
+      metadata: { sha256: i.ref.sha256, bytes: i.ref.bytes, width: i.width, height: i.height },
+    });
+  }
+  return { kind: 'message', messageId, role, parts };
 }
 
-function bodyError(text: string): string | null {
-  if (typeof text !== 'string' || text.length === 0) return 'bad-request: empty message';
+/** The refs of a ledger message's images (file parts with a hash, not marked as not received), in order. */
+export function imageRefsOf(m: Message): A2aRemoteImageRef[] {
+  const out: A2aRemoteImageRef[] = [];
+  for (const p of m.parts) {
+    if (p.kind !== 'file' || p.metadata?.['notReceived'] !== undefined) continue;
+    const sha256 = p.metadata?.['sha256'];
+    const bytes = p.metadata?.['bytes'];
+    const mediaType = p.file.mimeType;
+    if (typeof sha256 !== 'string' || typeof bytes !== 'number' || !isA2aRemoteImageMediaType(mediaType)) continue;
+    out.push({ sha256, mediaType, bytes });
+  }
+  return out;
+}
+
+/**
+ * A reply as it goes to the peer, rebuilt from the ledger: its text, and the
+ * images whose sender copy is still here. One that is gone is dropped with a
+ * note in the text instead.
+ */
+async function replyBody(deps: Pick<StateDeps, 'images'>, m: Message): Promise<{ text: string; images: A2aRemoteImageRef[] }> {
+  const text = m.parts.map((p) => (p.kind === 'text' ? p.text : '')).join('');
+  const refs = imageRefsOf(m);
+  if (refs.length === 0) return { text, images: [] };
+  const images: A2aRemoteImageRef[] = [];
+  for (const ref of refs) {
+    // eslint-disable-next-line no-await-in-loop -- a handful of stats
+    if (deps.images && (await deps.images.hasOutgoing(ref.sha256))) images.push(ref);
+  }
+  const lost = refs.length - images.length;
+  if (lost === 0) return { text, images };
+  return { text: withNote(text, `[${countImages(lost)} omitted: this PC no longer has ${lost === 1 ? 'it' : 'them'}]`), images };
+}
+
+type Attached = { ok: true; text: string; images: PreparedImage[]; note?: string } | { ok: false; error: string };
+
+/**
+ * The images of an outgoing message. The other PC must take them
+ * (`images.1`): one that does not gets the text with a note instead (an
+ * older build would drop the refs unseen), and one never seen is refused,
+ * since nothing says which of the two it is.
+ */
+async function attachImages(
+  deps: Pick<OutboundDeps, 'images' | 'peerFeatures'>,
+  link: A2aLinkRecordV1,
+  paths: readonly string[] | undefined,
+  ptyId: string | undefined,
+  text: string,
+): Promise<Attached> {
+  if (!paths || paths.length === 0) return { ok: true, text, images: [] };
+  if (paths.length > A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) {
+    return { ok: false, error: `bad-request: at most ${A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE} images on one message` };
+  }
+  if (!deps.images) return { ok: false, error: 'unavailable: this PC cannot send images' };
+  const features = deps.peerFeatures?.(link.remote.hostId);
+  if (!features) {
+    return {
+      ok: false,
+      error:
+        'unavailable: the other PC has not connected to this one since they were paired, so it is not known whether its wmux takes images; ' +
+        'send again once it has connected, or send without images',
+    };
+  }
+  const n = countImages(paths.length);
+  if (!features.has(A2A_FEATURE_IMAGES)) {
+    return {
+      ok: true,
+      text: withNote(text, `[${n} omitted: the receiving PC's wmux does not take images]`),
+      images: [],
+      note: `The other PC's wmux does not take images: the text was sent with a note that ${n} ${paths.length === 1 ? 'was' : 'were'} omitted.`,
+    };
+  }
+  const prepared = await deps.images.prepare(paths, ptyId);
+  return prepared.ok ? { ok: true, text, images: prepared.images } : prepared;
+}
+
+function withNote(text: string, note: string): string {
+  return text ? `${text}\n\n${note}` : note;
+}
+
+function countImages(n: number): string {
+  return n === 1 ? '1 image' : `${n} images`;
+}
+
+function imagesField(images: readonly A2aRemoteImageRef[]): { images?: A2aRemoteImageRef[] } {
+  return images.length > 0 ? { images: [...images] } : {};
+}
+
+function bodyError(text: string, hasImages = false): string | null {
+  if (typeof text !== 'string' || (text.length === 0 && !hasImages)) return 'bad-request: empty message';
   return Buffer.byteLength(text, 'utf8') > A2A_REMOTE_BODY_MAX ? 'too-large' : null;
 }
 
