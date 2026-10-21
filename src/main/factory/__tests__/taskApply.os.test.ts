@@ -465,6 +465,34 @@ describe('where and how git apply runs', () => {
     expect(fs.readFileSync(path.join(repo, 'new/n.txt'), 'utf8')).toBe('new\r\n');
   });
 
+  it('a git stopped by a signal, or one that never started, is no answer: merge-base reports git_failed, not foreign_head', async () => {
+    const stopped = await defaultRawGit(['-c', 'alias.hang=!sleep 30', 'hang'], dir, {}, undefined, 200);
+    expect(stopped.code).toBe(128);
+    expect(stopped.stderr).toMatch(/stopped/);
+    const missing = await defaultRawGit(['version'], path.join(dir, 'no-such-folder'), {});
+    expect(missing.code).toBe(128);
+    const failing: TaskApplyRawGit = async (args, cwd, env, input) => (args.includes('merge-base') ? { code: 128, stdout: Buffer.alloc(0), stderr: 'git was stopped (SIGTERM)' } : defaultRawGit(args, cwd, env, input));
+    expect(await applyTaskToCheckout(ports({ gitRaw: failing }), TASK)).toMatchObject({ ok: false, code: 'git_failed' });
+  });
+
+  it('a git apply --numstat that fails is reported as it is, not as a changed history', async () => {
+    const failing: TaskApplyRawGit = async (args, cwd, env, input) => (args.includes('--numstat') ? { code: 128, stdout: Buffer.alloc(0), stderr: 'fatal: something else' } : defaultRawGit(args, cwd, env, input));
+    expect(await applyTaskToCheckout(ports({ gitRaw: failing }), TASK)).toEqual({ ok: false, code: 'git_failed', message: 'git apply --numstat failed: fatal: something else' });
+    // A real mismatch still says so.
+    const other: TaskApplyRawGit = async (args, cwd, env, input) => (args.includes('--numstat') ? { code: 0, stdout: Buffer.from('1\t0\tsomewhere/else.txt\0'), stderr: '' } : defaultRawGit(args, cwd, env, input));
+    expect(await applyTaskToCheckout(ports({ gitRaw: other }), TASK)).toMatchObject({ ok: false, code: 'git_failed', message: 'The task\'s history changed while it was read; try again.' });
+  });
+
+  it('an index whose times cannot be kept is refused without naming main\'s folder', async () => {
+    const utimes = vi.spyOn(fs, 'utimesSync').mockImplementationOnce(() => { throw new Error(`EPERM: ${path.join(dir, 'wmux', 'factory', 'apply')}`); });
+    try {
+      const r = await applyTaskToCheckout(ports(), TASK);
+      expect(r).toEqual({ ok: false, code: 'git_failed', message: 'Your checkout\'s index could not be read.' });
+    } finally {
+      utimes.mockRestore();
+    }
+  });
+
   it('reads the object format from the repository\'s own config only', () => {
     expect(repoObjectFormat([{ scope: 'global', key: 'extensions.objectformat', value: 'sha256' }])).toBe('sha1');
     expect(repoObjectFormat([{ scope: 'local', key: 'extensions.objectformat', value: 'SHA256' }])).toBe('sha256');

@@ -105,13 +105,13 @@ const PATCH_MAX_BYTES = 256 * 1024 * 1024;
 
 /** Main's git, as taskPush's (no shell, a clean env), with raw output and
  *  stdin. */
-export const defaultRawGit: TaskApplyRawGit = (args, cwd, extra, input) => new Promise((resolve) => {
+export const defaultRawGit = (args: string[], cwd: string, extra: Record<string, string>, input?: Buffer, timeoutMs: number = TASK_PUSH_TIMEOUT_MS): Promise<{ code: number; stdout: Buffer; stderr: string }> => new Promise((resolve) => {
   const out: Buffer[] = [];
   let size = 0;
   let err = '';
   let over = false;
   const child = spawn('git', args, { cwd, env: { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  const timer = setTimeout(() => child.kill(), TASK_PUSH_TIMEOUT_MS);
+  const timer = setTimeout(() => child.kill(), timeoutMs);
   child.stdout.on('data', (d: Buffer) => {
     size += d.length;
     if (size > PATCH_MAX_BYTES) {
@@ -126,12 +126,15 @@ export const defaultRawGit: TaskApplyRawGit = (args, cwd, extra, input) => new P
   });
   child.on('error', (e) => {
     clearTimeout(timer);
-    resolve({ code: 1, stdout: Buffer.alloc(0), stderr: String(e) });
+    // Git never ran: not one of its own answers (128, as git's fatal).
+    resolve({ code: 128, stdout: Buffer.alloc(0), stderr: String(e) });
   });
   child.on('close', (code, signal) => {
     clearTimeout(timer);
     if (over) return resolve({ code: 1, stdout: Buffer.alloc(0), stderr: 'the patch is too large' });
-    resolve({ code: code ?? 1, stdout: Buffer.concat(out), stderr: signal ? `${err}git was stopped (${signal})` : err });
+    // A git stopped by a signal gave no answer: 128, never a 1 a caller reads
+    // as one (merge-base's "not an ancestor").
+    resolve({ code: signal || code === null ? 128 : code, stdout: Buffer.concat(out), stderr: signal ? `${err}git was stopped (${signal})` : err });
   });
   child.stdin.on('error', () => undefined);
   child.stdin.end(input ?? Buffer.alloc(0));
@@ -485,7 +488,11 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
       fs.writeFileSync(path.join(privateDir, 'index'), index.bytes, { mode: 0o600 });
       // Its own times kept (those of the very file read): git judges a
       // racily clean entry against them.
-      fs.utimesSync(path.join(privateDir, 'index'), index.stat.atime, index.stat.mtime);
+      try {
+        fs.utimesSync(path.join(privateDir, 'index'), index.stat.atime, index.stat.mtime);
+      } catch {
+        return refuse('git_failed', 'Your checkout\'s index could not be read.');
+      }
       // A split index names its shared part by file.
       for (const name of fs.readdirSync(gitDir).filter((n) => /^sharedindex\.[0-9a-f]+$/.test(n))) {
         const part = readRegularFile(path.join(gitDir, name), INDEX_MAX_BYTES);
@@ -552,11 +559,12 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
     if (made.code !== 0) return refuse('git_failed', `git diff-tree failed: ${said(made)}`);
     const patch = made.stdout;
     const numstat = await priv(['apply', '--numstat', '-z'], patch);
-    const inPatch = numstat.code === 0 ? patchPaths(numstat.stdout.toString('utf8')) : null;
+    if (numstat.code !== 0) return refuse('git_failed', `git apply --numstat failed: ${said(numstat)}`);
+    const inPatch = patchPaths(numstat.stdout.toString('utf8'));
     // A type change (a file made a link) is a deletion and a creation of one
     // path in a patch: the paths compare as sets.
-    const patchSet = new Set(inPatch ?? []);
-    if (!inPatch || patchSet.size !== new Set(touched).size || [...patchSet].some((p) => !touched.includes(p)) || patchHasGitlink(patch)) {
+    const patchSet = new Set(inPatch);
+    if (patchSet.size !== new Set(touched).size || [...patchSet].some((p) => !touched.includes(p)) || patchHasGitlink(patch)) {
       return refuse('git_failed', 'The task\'s history changed while it was read; try again.');
     }
     const apply = (extra: string[]) => priv(['apply', '--whitespace=nowarn', ...extra], patch);
