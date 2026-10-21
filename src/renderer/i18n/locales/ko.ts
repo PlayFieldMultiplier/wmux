@@ -3449,6 +3449,7 @@ export const ko = {
   'prep.copyEmpty': '이 체크아웃에는 복사할 git-ignore 파일이 없습니다.',
   'prep.copyMissing': '이 체크아웃에 없음',
   'prep.copyNote': 'git-ignore 파일이라 새 worktree는 git에서 받지 못합니다. 이 컴퓨터 안에서만, 직접 연 워크스페이스에만 복사합니다.',
+  'prep.copyNoteAutomated': 'git-ignore 파일이라 새 worktree는 git에서 받지 못합니다. 이 컴퓨터 안에서만, 직접 연 워크스페이스와 봇·팬아웃 워크스페이스에 복사합니다.',
   'prep.setupLabel': '준비 명령 실행',
   'prep.setupDesc': '새 worktree마다 에이전트가 시작되기 전에 최대 5분 동안 실행합니다.',
   'prep.useSuggested': '{command} 사용',

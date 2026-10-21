@@ -125,7 +125,8 @@ export default function WorkspacePrepDialog() {
     setSaveError(null);
     const settings: WorkspacePrepSettings = { copy, setup, portRange: portRange.trim(), copyIntoAutomated };
     try {
-      const r = await window.electronAPI.projectConfig.prepSave(cwd, settings, view.contentHash);
+      // The folder that was read, not wherever the pane's shell is now.
+      const r = await window.electronAPI.projectConfig.prepSave(loadedFor.current ?? cwd, settings, view.contentHash);
       if (r.ok) {
         void probeProjectConfig(wsId);
         close();
@@ -190,7 +191,7 @@ export default function WorkspacePrepDialog() {
                   })}
                 </div>
               )}
-              <p className="mt-2 mb-0 text-[12px] text-[var(--text-sub)]">{t('prep.copyNote')}</p>
+              <p className="mt-2 mb-0 text-[12px] text-[var(--text-sub)]">{t(copyIntoAutomated ? 'prep.copyNoteAutomated' : 'prep.copyNote')}</p>
             </section>
 
             <section>
@@ -250,7 +251,7 @@ export default function WorkspacePrepDialog() {
         ) : (
           view && !blocked && (
             // In flight it is not the primary (DESIGN: Dialogs & forms).
-            <Button size="md" variant={saving ? 'secondary' : 'primary'} onClick={() => { void save(); }} data-testid="prep-save">
+            <Button size="md" variant={saving ? 'secondary' : 'primary'} onClick={() => { void save(); }} disabled={saving} data-testid="prep-save">
               {t('prep.save')}
             </Button>
           )

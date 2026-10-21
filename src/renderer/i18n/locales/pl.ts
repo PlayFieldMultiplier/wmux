@@ -4057,6 +4057,7 @@ export const pl = {
   'prep.copyEmpty': 'W tym checkoucie nie ma plików ignorowanych przez git do skopiowania.',
   'prep.copyMissing': 'Brak w tym checkoucie',
   'prep.copyNote': 'Są ignorowane przez git, więc nowy worktree nie dostaje ich z gita. Kopiowane tylko na tym komputerze i tylko do obszarów otwartych przez Ciebie.',
+  'prep.copyNoteAutomated': 'Są ignorowane przez git, więc nowy worktree nie dostaje ich z gita. Kopiowane tylko na tym komputerze, do obszarów otwartych przez Ciebie oraz obszarów botów i fan-outu.',
   'prep.setupLabel': 'Uruchom polecenie przygotowania',
   'prep.setupDesc': 'Uruchamiane w każdym nowym worktree przed startem agenta, maksymalnie przez 5 minut.',
   'prep.useSuggested': 'Użyj {command}',

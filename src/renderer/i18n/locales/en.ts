@@ -4082,6 +4082,7 @@ export const en = {
   'prep.copyEmpty': 'This checkout has no git-ignored files to copy.',
   'prep.copyMissing': 'Not in this checkout',
   'prep.copyNote': 'Git-ignored, so a new worktree does not get them from git. Copied only on this computer, and only into workspaces you open.',
+  'prep.copyNoteAutomated': 'Git-ignored, so a new worktree does not get them from git. Copied only on this computer, into workspaces you open and into bot and fan-out workspaces.',
   'prep.setupLabel': 'Run setup command',
   'prep.setupDesc': 'Runs in each new worktree before its agent starts, for up to 5 minutes.',
   'prep.useSuggested': 'Use {command}',

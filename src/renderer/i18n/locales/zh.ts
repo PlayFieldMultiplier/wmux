@@ -3493,6 +3493,7 @@ export const zh = {
   'prep.copyEmpty': '此检出中没有可复制的 git 忽略文件。',
   'prep.copyMissing': '此检出中不存在',
   'prep.copyNote': '这些文件被 git 忽略，新 worktree 无法从 git 获得。仅在本机复制，且仅复制到你打开的工作区。',
+  'prep.copyNoteAutomated': '这些文件被 git 忽略，新 worktree 无法从 git 获得。仅在本机复制，复制到你打开的工作区以及机器人和 fan-out 工作区。',
   'prep.setupLabel': '运行准备命令',
   'prep.setupDesc': '在每个新 worktree 中、其代理启动之前运行，最长 5 分钟。',
   'prep.useSuggested': '使用 {command}',

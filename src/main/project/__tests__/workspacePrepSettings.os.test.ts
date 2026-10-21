@@ -136,8 +136,21 @@ describe('save', () => {
     const view = await readWorkspacePrepSettings(repo, deps);
     const r = await saveWorkspacePrepSettings(repo, settings({ copy: [], setup: '' }), view.contentHash, deps);
     expect(r.ok).toBe(true);
-    expect(JSON.parse(fs.readFileSync(path.join(repo, 'wmux.json'), 'utf8'))).toEqual({ version: 1, fanout: { copyIntoAutomated: false } });
+    expect(JSON.parse(fs.readFileSync(path.join(repo, 'wmux.json'), 'utf8'))).toEqual({ version: 1, fanout: { copy: [] } });
     expect((await store.getState(repo)).trust).toBe('trusted');
+    // "Copy nothing" is remembered: the .env defaults are not ticked again.
+    expect((await readWorkspacePrepSettings(repo, deps)).copyUnset).toBe(false);
+  });
+
+  it('leaves the one re-approval of an old grant to the trust dialog', async () => {
+    fs.writeFileSync(path.join(repo, 'wmux.json'), JSON.stringify({ version: 1, fanout: { setup: 'npm ci' } }));
+    const hash = (await store.getState(repo)).contentHash!;
+    // An older wmux's record: trusted, without the review mark.
+    fs.writeFileSync(path.join(tmp, 'trust.json'), JSON.stringify({ schemaVersion: 1, projects: { [repo]: { status: 'trusted', contentHash: hash, decidedAt: 1 } } }));
+    store = new ProjectConfigStore(path.join(tmp, 'trust.json'));
+    const view = await readWorkspacePrepSettings(repo, deps);
+    expect(view.saveBlocked).toBe('review-first');
+    expect(await saveWorkspacePrepSettings(repo, settings(), view.contentHash, deps)).toEqual({ ok: false, error: 'review-first' });
   });
 
   it('rejects input that would not read back as asked', () => {

@@ -136,13 +136,34 @@ function trustedNow(state: ProjectConfigState, liveHash: string | undefined): bo
   return state.trust === 'trusted' && liveHash !== undefined && state.contentHash === liveHash;
 }
 
+/** Trusted by a decision that never listed the setup command or the copy
+ *  list (no review mark): that one re-approval happens in the trust dialog,
+ *  which shows them verbatim, not here. */
+function awaitsPrepReview(state: ProjectConfigState): boolean {
+  const f = state.config?.fanout;
+  return state.trust === 'trusted' && state.prepReviewed !== true && (f?.setup !== undefined || (f?.copy?.length ?? 0) > 0);
+}
+
 function saveBlock(state: ProjectConfigState): WorkspacePrepSettingsView['saveBlocked'] {
   if (!state.found) return undefined;
   if (state.invalid) return 'invalid';
   // 'denied' is sticky: the trust dialog is where it is lifted.
   if (state.trust === 'denied') return 'review-first';
   if (state.trust !== 'trusted' && hasRunnables(state.config)) return 'review-first';
+  if (awaitsPrepReview(state)) return 'review-first';
   return undefined;
+}
+
+/** Whether the file names `fanout.copy` at all (an empty list is a choice:
+ *  copy nothing, so the `.env` defaults are not ticked again). */
+function copyKeyPresent(configPath: string | undefined): boolean {
+  if (!configPath) return false;
+  try {
+    const doc = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { fanout?: { copy?: unknown } };
+    return doc?.fanout !== null && typeof doc?.fanout === 'object' && doc.fanout.copy !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 function settingsOf(config: WmuxProjectConfig | undefined): WorkspacePrepSettings {
@@ -169,7 +190,7 @@ export async function readWorkspacePrepSettings(cwd: string, deps: WorkspacePrep
     ...(state.found && state.contentHash ? { contentHash: state.contentHash } : {}),
     exists: state.found === true,
     settings,
-    copyUnset: state.config?.fanout?.copy === undefined,
+    copyUnset: state.config?.fanout?.copy === undefined && !copyKeyPresent(state.found ? state.configPath : undefined),
     candidates,
     ...(suggestedSetup ? { suggestedSetup } : {}),
     ...(blocked ? { saveBlocked: blocked } : {}),
@@ -233,8 +254,10 @@ export async function saveWorkspacePrepSettings(
     // renderer had: never approve commands the user has not reviewed.
     const state: ProjectConfigState = found.state.found ? found.state : { found: true };
     const config = normalizeWmuxProjectConfig(doc);
+    if (state.invalid) return { ok: false, error: 'invalid' };
     if (state.trust === 'denied') return { ok: false, error: 'review-first' };
     if (!trustedNow(state, liveHash) && hasRunnables(config)) return { ok: false, error: 'review-first' };
+    if (awaitsPrepReview(state)) return { ok: false, error: 'review-first' };
   }
 
   const prevFanout = doc.fanout && typeof doc.fanout === 'object' && !Array.isArray(doc.fanout) ? { ...(doc.fanout as Record<string, unknown>) } : {};
@@ -242,14 +265,15 @@ export async function saveWorkspacePrepSettings(
   for (const key of ['copy', 'setup', 'portRange', 'copyIntoAutomated']) delete fanout[key];
   if (input.portRange) fanout.portRange = input.portRange;
   if (input.setup) fanout.setup = input.setup;
-  if (input.copy.length > 0) fanout.copy = input.copy;
+  // An empty list is kept: "copy nothing" is remembered as a choice.
+  fanout.copy = input.copy;
   if (input.copyIntoAutomated) fanout.copyIntoAutomated = true;
   if (Object.keys(fanout).length > 0) doc.fanout = fanout;
   else delete doc.fanout;
 
   // Nothing left to declare: an explicit "copy nothing into bot and fan-out
   // workspaces" keeps the file a valid wmux.json (an empty one is not).
-  if (normalizeWmuxProjectConfig(doc) === undefined && Object.keys(doc).every((k) => k === 'version')) {
+  if (normalizeWmuxProjectConfig(doc) === undefined) {
     doc.fanout = { copyIntoAutomated: false };
   }
   // The result must read back as exactly what was asked for.
