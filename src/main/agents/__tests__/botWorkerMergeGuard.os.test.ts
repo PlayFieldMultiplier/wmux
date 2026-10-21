@@ -438,7 +438,7 @@ describe('pty:create applies the guard (source-level lock)', () => {
     expect(src).toMatch(/gateway\?\.open\.bind\(sessionId\);/);
     expect(src).toMatch(/undoLocal: \(\) => \{[^}]*gateway\?\.open\.close\(\);/);
     // The steps between the open and the daemon create that can throw close them too.
-    expect(src).toMatch(/closingLeases\(\(\) => \{\n\s+if \(botWorker\) \{[\s\S]*?recordFanoutTaskPane\(options, sessionId\);\n\s+\}\);/);
+    expect(src).toMatch(/closingLeases\(\(\) => \{\s+if \(botWorker\) \{[\s\S]*?recordFanoutTaskPane\(options, sessionId\);\s+\}\);/);
     expect(src).toContain('const resolvedEnv = closingLeases(() => resolveSpawnEnv(');
     const line ='await stageCreate(options, botWorker';
     expect(src.split(line).length - 1).toBe(2);
