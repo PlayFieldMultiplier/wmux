@@ -141,7 +141,7 @@ reads as a second, differently tinted panel.
 - **Terminal geometry is untouched** by the frame: margin changes, a sidebar
   collapse, maximize and fullscreen each refit the terminals once, never per
   frame.
-- **Window glass (macOS and Windows 11, every theme, `--theme-glass: 1`):**
+- **Window glass (macOS on every theme, Windows 11 on every theme that stays legible, `--theme-glass: 1`):**
   on macOS the window gets the `sidebar` vibrancy material behind a
   transparent background; on Windows 11 22H2 and later (build 22621+) it gets
   the acrylic backdrop the same way. The
