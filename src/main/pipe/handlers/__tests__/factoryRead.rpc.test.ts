@@ -244,8 +244,8 @@ describe('GitLab host gate', () => {
     const ask = vi.fn();
     const ready = createHostSetupGate({ gate, ask });
     const scope = { repoPath: '/repo/a', repoKey: GL, workspaceId: 'ws-a' };
-    expect(await ready(scope)).toContain('not connected');
-    expect(await ready({ ...scope, workspaceId: 'ws-b' })).toContain('not connected');
+    expect((await ready(scope))?.message).toContain('not connected');
+    expect(await ready({ ...scope, workspaceId: 'ws-b' })).toMatchObject({ code: 'host_not_connected' });
     expect(ask).toHaveBeenCalledTimes(1);
     ok = true;
     expect(await ready(scope)).toBeNull();
@@ -253,14 +253,26 @@ describe('GitLab host gate', () => {
     expect(await handlePrRead({ prNumber: 7 }, ctxOf(VERIFIER), d)).toMatchObject({ ok: true, repoKey: GL });
     expect(d.readPr).toHaveBeenCalledWith('/repo/a', GL, 7);
     ok = false;
-    expect(await ready(scope)).toContain('not connected');
+    expect((await ready(scope))?.message).toContain('not connected');
     expect(ask).toHaveBeenCalledTimes(2);
   });
 
-  it('a gate that throws reads as not connected', async () => {
+  it('a host not reached just now (or a gate that throws) is a transient read_failed: no card, nothing kept', async () => {
     const ask = vi.fn();
-    const ready = createHostSetupGate({ gate: async () => { throw new Error('spawn failed'); }, ask });
-    expect(await ready({ repoPath: '/repo/a', repoKey: GL, workspaceId: 'ws-a' })).toContain('could not be run');
+    let blip = true;
+    const ready = createHostSetupGate({
+      gate: async () => (blip ? { ok: false as const, reason: 'unreachable' as const, message: 'GitLab on gitlab.example.com could not be reached just now' } : { ok: false as const, reason: 'unauthenticated' as const, message: 'signed out' }),
+      ask,
+    });
+    const scope = { repoPath: '/repo/a', repoKey: GL, workspaceId: 'ws-a' };
+    expect(await ready(scope)).toMatchObject({ code: 'read_failed', message: expect.stringContaining('could not be reached') });
+    expect(await handlePrRead({ prNumber: 7 }, ctxOf(VERIFIER), glDeps({ hostReady: ready }))).toMatchObject({ ok: false, code: 'read_failed' });
+    expect(ask).not.toHaveBeenCalled();
+    blip = false;
+    expect(await ready(scope)).toMatchObject({ code: 'host_not_connected' });
+    expect(ask).toHaveBeenCalledTimes(1);
+    const thrown = createHostSetupGate({ gate: async () => { throw new Error('spawn failed'); }, ask });
+    expect(await thrown(scope)).toMatchObject({ code: 'read_failed' });
     expect(ask).toHaveBeenCalledTimes(1);
   });
 });

@@ -2,7 +2,8 @@
 // gh (GhPrReviewService), every other host to glab (GlabPrService) — the
 // split PrProvider makes for the Git page (isGithubHost). Callers: the bot
 // reads (roles/index.ts), pr_verdict (prVerdictHost.ts) and the merge lane's
-// ports (factory/laneGh.ts).
+// ports (factory/laneGh.ts), and the task gate's merged-branch evidence
+// (factory/factoryWiring.ts).
 
 import type { PrLaneFacts, PrReviewRead } from '../../shared/prReview';
 import { isGithubHost } from './PrProvider';
@@ -18,4 +19,14 @@ export function isGitlabRepoKey(key: string): boolean {
 /** The lane facts of PR (or MR iid) `n`, read fresh from the key's host. */
 export function readLaneFacts(repoPath: string, key: string, n: number): Promise<PrReviewRead<PrLaneFacts>> {
   return isGitlabRepoKey(key) ? glabPrService.laneFacts(repoPath, key, n) : ghPrReviewService.laneFacts(repoPath, key, n);
+}
+
+/** PRs (MRs) merged from `branch` into `base`, read from the key's host. */
+export function mergedOfBranch(cwd: string, key: string, branch: string, base: string): Promise<PrReviewRead<Array<{ pr: number; base: string; headSha: string; cross: boolean }>>> {
+  return isGitlabRepoKey(key) ? glabPrService.mergedOfBranch(cwd, key, branch, base) : ghPrReviewService.mergedOfBranch(cwd, key, branch, base);
+}
+
+/** The repository's default branch, read from the key's host. */
+export function defaultBranch(cwd: string, key: string): Promise<PrReviewRead<string>> {
+  return isGitlabRepoKey(key) ? glabPrService.defaultBranch(cwd, key) : ghPrReviewService.defaultBranch(cwd, key);
 }

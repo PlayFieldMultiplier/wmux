@@ -2,9 +2,16 @@
 // PrLaneFacts), the default-branch CI read, the login, and the squash merge
 // with its head checks (exec mocked, as in GlabPrService.test).
 import { describe, it, expect, vi } from 'vitest';
+import { requiredChecksGreen } from '../../deck/moaMergeLane';
+import { reconcileMergeEffect } from '../../deck/moaEffectStore';
 import {
+  GLAB_CI_CONFIG_CHECK,
+  GLAB_CI_CONFIG_UNVERIFIED_CHECK,
   GlabPrService,
+  glabAuthFailure,
+  glabCiConfigTouched,
   glabMergeBlock,
+  glabMergeFailure,
   glabMergeState,
   glabSquashSubject,
   mapGlabCiRollup,
@@ -16,10 +23,11 @@ const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const MERGE_REF = 'c'.repeat(40);
 
-function mrAnswer(over: Record<string, unknown> = {}, pipeline: Record<string, unknown> | null = {}) {
+function mrAnswer(over: Record<string, unknown> = {}, pipeline: Record<string, unknown> | null = {}, ciConfigPathOrDefault = '.gitlab-ci.yml') {
   return {
     data: {
       project: {
+        ciConfigPathOrDefault,
         mergeRequest: {
           iid: '7', title: 'feat: x', state: 'opened', draft: false, sourceBranch: 'wtask/x', targetBranch: 'main',
           diffHeadSha: HEAD, sourceProjectId: 10, targetProjectId: 10, conflicts: false, detailedMergeStatus: 'MERGEABLE',
@@ -27,7 +35,7 @@ function mrAnswer(over: Record<string, unknown> = {}, pipeline: Record<string, u
           labels: { pageInfo: { hasNextPage: false }, nodes: [{ title: 'bug' }, { title: 'needs-windows-verify' }] },
           diffStatsSummary: { fileCount: 2 }, diffStats: [{ path: 'src/a.ts' }, { path: 'README.md' }],
           headPipeline: pipeline === null ? null : {
-            sha: HEAD, mergeRequestEventType: 'DETACHED',
+            sha: HEAD, status: 'SUCCESS', mergeRequestEventType: 'DETACHED',
             jobs: {
               pageInfo: { hasNextPage: false },
               nodes: [
@@ -79,7 +87,6 @@ describe('mapGlabLaneFacts', () => {
 
   it('states, forks, truncation and a missing pipeline', () => {
     expect(mapGlabLaneFacts(mrAnswer({ state: 'merged', mergeCommitSha: OTHER }), 'h')).toMatchObject({ state: 'MERGED', mergeCommitOid: OTHER });
-    expect(mapGlabLaneFacts(mrAnswer({ state: 'locked' }), 'h')?.state).toBe('CLOSED');
     expect(mapGlabLaneFacts(mrAnswer({ sourceProjectId: 11 }), 'h')?.isCrossRepository).toBe(true);
     expect(mapGlabLaneFacts(mrAnswer({ sourceProjectId: null }), 'h')?.isCrossRepository).toBe(true);
     expect(mapGlabLaneFacts(mrAnswer({ diffStatsSummary: { fileCount: 500 } }), 'h')?.filesTruncated).toBe(true);
@@ -102,11 +109,48 @@ describe('mapGlabLaneFacts', () => {
   it('glabMergeBlock: only required jobs hold a merge, and a pipeline of another commit is still to come', () => {
     const f = mapGlabLaneFacts(mrAnswer(), 'h');
     if (!f) throw new Error('unmapped');
-    expect(glabMergeBlock(f)).toBeNull();
-    expect(glabMergeBlock({ ...f, checks: f.checks.map((c) => (c.name === 'test' ? { ...c, bucket: 'fail' as const } : c)) })).toBe('checks-failing');
-    expect(glabMergeBlock({ ...f, checksHeadOid: OTHER })).toBe('checks-pending');
-    expect(glabMergeBlock({ ...f, isDraft: true })).toBe('draft');
-    expect(glabMergeBlock({ ...f, mergeStateStatus: 'BLOCKED' })).toBe('blocked');
+    expect(glabMergeBlock(f, 'SUCCESS')).toBeNull();
+    expect(glabMergeBlock({ ...f, checks: f.checks.map((c) => (c.name === 'test' ? { ...c, bucket: 'fail' as const } : c)) }, 'SUCCESS')).toBe('checks-failing');
+    expect(glabMergeBlock({ ...f, checksHeadOid: OTHER }, 'SUCCESS')).toBe('checks-pending');
+    expect(glabMergeBlock({ ...f, isDraft: true }, 'SUCCESS')).toBe('draft');
+    expect(glabMergeBlock({ ...f, mergeStateStatus: 'BLOCKED' }, 'SUCCESS')).toBe('blocked');
+  });
+
+  it('glabMergeBlock: the head pipeline must be SUCCESS and its jobs read whole', () => {
+    const f = mapGlabLaneFacts(mrAnswer(), 'h');
+    if (!f) throw new Error('unmapped');
+    expect(glabMergeBlock(f, 'RUNNING')).toBe('checks-pending');
+    expect(glabMergeBlock(f, 'FAILED')).toBe('checks-failing');
+    expect(glabMergeBlock(f, 'SKIPPED')).toBe('checks-pending');
+    expect(glabMergeBlock(f, null)).toBe('checks-pending');
+    expect(glabMergeBlock({ ...f, checksTruncated: true }, 'SUCCESS')).toBe('unknown');
+  });
+
+  it('an MR that changes its own CI config carries a failing required check, so neither the lane nor the merge takes its jobs as evidence', () => {
+    expect(glabCiConfigTouched('.gitlab-ci.yml', '.gitlab-ci.yml')).toBe(true);
+    expect(glabCiConfigTouched('.gitlab/ci/test.yml', '.gitlab-ci.yml')).toBe(true);
+    expect(glabCiConfigTouched('ci/main.yml', 'ci/main.yml')).toBe(true);
+    expect(glabCiConfigTouched('ci/main.yml', 'ci/main.yml@group/other')).toBe(false);
+    expect(glabCiConfigTouched('src/gitlab-ci.yml', '.gitlab-ci.yml')).toBe(false);
+    const touched = mapGlabLaneFacts(mrAnswer({ diffStats: [{ path: 'src/a.ts' }, { path: 'ci/main.yml' }] }, {}, 'ci/main.yml'), 'h');
+    if (!touched) throw new Error('unmapped');
+    expect(touched.checks.at(-1)).toEqual({ name: GLAB_CI_CONFIG_CHECK, workflow: 'wmux', bucket: 'fail', link: '', isRequired: true });
+    expect(requiredChecksGreen(touched, HEAD)).toMatchObject({ ok: false });
+    expect(glabMergeBlock(touched, 'SUCCESS')).toBe('checks-failing');
+    // The same MR without the config change passes both.
+    const clean = mapGlabLaneFacts(mrAnswer({}, {}, 'ci/main.yml'), 'h');
+    if (!clean) throw new Error('unmapped');
+    expect(requiredChecksGreen(clean, HEAD)).toMatchObject({ ok: true });
+    expect(glabMergeBlock(clean, 'SUCCESS')).toBeNull();
+    // Files not all read: the change cannot be ruled out.
+    const unread = mapGlabLaneFacts(mrAnswer({ diffStatsSummary: { fileCount: 500 } }), 'h');
+    expect(unread?.checks.at(-1)).toMatchObject({ name: GLAB_CI_CONFIG_UNVERIFIED_CHECK, bucket: 'fail', isRequired: true });
+  });
+
+  it('locked is a merge in progress: neither open nor final, so the executor settles it as uncertain', () => {
+    const f = mapGlabLaneFacts(mrAnswer({ state: 'locked' }), 'h');
+    expect(f?.state).toBe('LOCKED');
+    expect(reconcileMergeEffect({ expectHead: HEAD, attempt: 0 }, f)).toEqual({ status: 'uncertain', reason: 'unknown-state' });
   });
 });
 
@@ -130,6 +174,11 @@ describe('laneFacts', () => {
     expect(calls[1]).toEqual(['api', '--hostname', 'gitlab.example.com', `projects/group%2Fsub%2Fproj/repository/commits/${MERGE_REF}`]);
     parents.mockReturnValue({ parent_ids: [OTHER, OTHER] });
     expect(await svc.laneFacts('/repo', KEY, 7)).toMatchObject({ ok: true, value: { checksHeadOid: MERGE_REF } });
+  });
+
+  it('a GraphQL error beside data is a read error too', async () => {
+    const { svc } = makeService(() => ({ ...mrAnswer(), errors: [{ message: 'labels: timeout' }] }));
+    expect(await svc.laneFacts('/repo', KEY, 7)).toEqual({ ok: false, code: 'error', message: 'labels: timeout' });
   });
 
   it('a GraphQL error or a key that is no project is a read error', async () => {
@@ -188,6 +237,25 @@ describe('merge', () => {
     ]);
   });
 
+  it('a PUT that exits 0 without a merged MR is an error (the executor records it uncertain)', async () => {
+    for (const answer of [{ state: 'opened' }, { state: 'locked' }, 'not json']) {
+      const { svc } = makeService((args) => (isGraphql(args) ? mrAnswer() : answer));
+      expect(await svc.merge('/repo', KEY, 7, req)).toMatchObject({ ok: false, code: 'error' });
+    }
+  });
+
+  it('a locked MR is not refused: its merge may still land', async () => {
+    const { svc, calls } = makeService(() => mrAnswer({ state: 'locked' }));
+    expect(await svc.merge('/repo', KEY, 7, req)).toMatchObject({ ok: false, code: 'error' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('refuses an MR whose head pipeline is not SUCCESS', async () => {
+    const { svc, calls } = makeService(() => mrAnswer({}, { status: 'RUNNING' }));
+    expect(await svc.merge('/repo', KEY, 7, req)).toMatchObject({ ok: false, code: 'blocked', reason: 'checks-pending' });
+    expect(calls).toHaveLength(1);
+  });
+
   it('refuses a head that moved before writing anything', async () => {
     const { svc, calls } = makeService(() => mrAnswer({ diffHeadSha: OTHER }, { sha: OTHER }));
     expect(await svc.merge('/repo', KEY, 7, req)).toMatchObject({ ok: false, code: 'moved', headRefOid: OTHER });
@@ -202,6 +270,14 @@ describe('merge', () => {
     const denied = makeService(() => mrAnswer());
     expect(await denied.svc.merge('/repo', KEY, 7, req, () => 'revoked')).toMatchObject({ ok: false, code: 'invalid' });
     for (const m of [closed, conflicted, denied]) expect(m.calls).toHaveLength(1);
+  });
+
+  it('reads the status from glab 1.108\'s whole stderr: the deprecation notice first, then a long 409', () => {
+    const stderr = 'DEPRECATION WARNING: The environment variable NO_PROMPT has been deprecated and will be removed in future releases. Use GLAB_NO_PROMPT instead.\n'
+      + `glab: SHA does not match HEAD of source branch: ${'x'.repeat(200)} (HTTP 409)\n`;
+    expect(stderr.length).toBeGreaterThan(300);
+    expect(glabMergeFailure(Object.assign(new Error('exit 1'), { stderr }))).toMatchObject({ ok: false, code: 'moved' });
+    expect(glabMergeFailure(Object.assign(new Error('exit 1'), { stderr: stderr.replace('409', '405') }))).toMatchObject({ ok: false, code: 'blocked' });
   });
 
   it('GitLab\'s own refusals: 409 is a moved head, 405 cannot merge; anything else stays an error', async () => {
@@ -224,5 +300,41 @@ describe('currentLogin', () => {
     expect(calls[0]).toEqual(['api', '--hostname', 'gitlab.example.com', 'user']);
     const broken = makeService(() => new Error('401'));
     expect(await broken.svc.currentLogin('/repo', KEY)).toBeNull();
+  });
+});
+
+describe('connection', () => {
+  const authFail = (stderr: string) => Object.assign(new Error('exit 1'), { stderr });
+
+  it('only a definite sign-out or a missing glab is not connected; a blip is unreachable and not kept', async () => {
+    expect(glabAuthFailure(authFail('x gitlab.example.com: API call failed: GET https://gitlab.example.com/api/v4/user: 401 {message: 401 Unauthorized}'))).toBe('signed-out');
+    expect(glabAuthFailure(authFail('X gitlab.example.com has not been authenticated with glab; run `glab auth login`'))).toBe('signed-out');
+    expect(glabAuthFailure(authFail('API call failed: GET https://gitlab.example.com/api/v4/user: dial tcp: lookup gitlab.example.com: no such host'))).toBe('unreachable');
+    expect(glabAuthFailure(Object.assign(new Error('timed out'), { killed: true }))).toBe('unreachable');
+
+    let auth: Error | null = authFail('dial tcp: i/o timeout');
+    const { svc, calls } = makeService((args) => (args[0] === 'auth' && auth ? auth : {}));
+    expect(await svc.connection('/repo', 'gitlab.example.com')).toMatchObject({ ok: false, reason: 'unreachable' });
+    // Not cached: the next read asks again, and a recovered host reads.
+    auth = null;
+    expect(await svc.connection('/repo', 'gitlab.example.com')).toEqual({ ok: true });
+    expect(calls.filter((a) => a[0] === 'auth')).toHaveLength(2);
+    // The Git page keeps its two blocked states.
+    const blip = makeService((args) => (args[0] === 'auth' ? authFail('connection reset') : {}));
+    expect(await blip.svc.gate('/repo', 'gitlab.example.com')).toMatchObject({ ok: false, reason: 'unauthenticated', message: expect.stringContaining('could not be reached') });
+  });
+});
+
+describe('mergedOfBranch / defaultBranch', () => {
+  it('lists the MRs merged from a branch into its base, and reads the default branch', async () => {
+    const { svc, calls } = makeService((args) => (isGraphql(args)
+      ? { data: { project: { repository: { rootRef: 'main' } } } }
+      : [{ iid: 4, target_branch: 'main', sha: HEAD, source_project_id: 1, target_project_id: 1 }, { iid: 5, target_branch: 'main', sha: OTHER, source_project_id: 2, target_project_id: 1 }, { iid: 'x' }]));
+    expect(await svc.mergedOfBranch('/wmux', KEY, 'wtask/a b', 'main')).toEqual({
+      ok: true, value: [{ pr: 4, base: 'main', headSha: HEAD, cross: false }, { pr: 5, base: 'main', headSha: OTHER, cross: true }],
+    });
+    expect(calls[0][3]).toBe('projects/group%2Fsub%2Fproj/merge_requests?state=merged&source_branch=wtask%2Fa+b&target_branch=main&per_page=20');
+    expect(await svc.defaultBranch('/wmux', KEY)).toEqual({ ok: true, value: 'main' });
+    expect(await svc.mergedOfBranch('/wmux', KEY, '-x', 'main')).toMatchObject({ ok: false });
   });
 });

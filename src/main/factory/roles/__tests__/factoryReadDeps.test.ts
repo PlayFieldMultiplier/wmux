@@ -14,7 +14,7 @@ const { gh, ghIssues, glab, glabIssues } = vi.hoisted(() => {
   const glab = {
     laneFacts: vi.fn(async () => ({ ok: true as const, value: 'glab-mr' })),
     defaultBranchCi: vi.fn(async () => ({ error: 'glab ci' })),
-    gate: vi.fn(async () => ({ ok: true as const })),
+    connection: vi.fn(async () => ({ ok: true as const })),
   };
   const glabIssues = {
     listIssues: vi.fn(async () => ({ ok: true as const, issues: ['glab-issue'] })),
@@ -54,6 +54,6 @@ describe('factoryReadDeps host switch', () => {
     expect(await d.issueDetail('/r', 4, GH)).toEqual({ ok: true, detail: 'gh-detail' });
     expect(await d.ciRollup('/r', GH)).toEqual({ error: 'gh graphql' });
     expect(await d.hostReady?.({ repoPath: '/r', repoKey: GH, workspaceId: 'ws-1' })).toBeNull();
-    expect(glab.gate).not.toHaveBeenCalled();
+    expect(glab.connection).not.toHaveBeenCalled();
   });
 });

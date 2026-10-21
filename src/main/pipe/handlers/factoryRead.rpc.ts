@@ -94,8 +94,10 @@ export interface FactoryReadDeps {
    *  the running tracker. */
   guestWake?: (botId: string) => GuestProvenance;
   /** Why the scope's host cannot be read now (a GitLab host without a
-   *  usable glab), or null; createHostSetupGate. Absent: always readable. */
-  hostReady?: (scope: RepoScope) => Promise<string | null>;
+   *  usable glab: `host_not_connected`, or `read_failed` when it could not
+   *  be reached just now), or null; createHostSetupGate. Absent: always
+   *  readable. */
+  hostReady?: (scope: RepoScope) => Promise<HostNotReady | null>;
 }
 
 // ── Caller and repo scope ──────────────────────────────────────────────────
@@ -196,15 +198,21 @@ function readFailed(r: { message: string; code?: string }): FactoryRefusal<'read
   return refusal(r.code === 'rate-limited' ? 'rate_limited' : 'read_failed', r.message.slice(0, 300));
 }
 
-/** The one refusal of a read whose host is not connected, or null. */
-async function hostNotConnected(scope: RepoScope, deps: Pick<FactoryReadDeps, 'hostReady'>): Promise<FactoryRefusal<'host_not_connected'> | null> {
+export interface HostNotReady { code: 'host_not_connected' | 'read_failed'; message: string }
+
+/** The one refusal of a read whose host cannot be read now, or null. */
+async function hostNotConnected(scope: RepoScope, deps: Pick<FactoryReadDeps, 'hostReady'>): Promise<FactoryRefusal<HostNotReady['code']> | null> {
   const why = deps.hostReady ? await deps.hostReady(scope).catch(() => null) : null;
-  return why ? refusal('host_not_connected', why) : null;
+  return why ? refusal(why.code, why.message) : null;
 }
 
+/** A host's gate: PrGate, or a host that could not be reached just now. */
+export type HostGate = PrGate | { ok: false; reason: 'unreachable'; message: string };
+
 export interface HostSetupGatePorts {
-  /** glab's gate for a host (GlabPrService.gate, TTL-cached there). */
-  gate: (repoPath: string, host: string) => Promise<PrGate>;
+  /** glab's connection to a host (GlabPrService.connection, which caches
+   *  only definite answers). */
+  gate: (repoPath: string, host: string) => Promise<HostGate>;
   /** Ask the owner, in a workspace's room, to connect GitLab on `host`;
    *  `why` is the gate's message. */
   ask: (workspaceId: string, host: string, why: string) => void;
@@ -212,25 +220,28 @@ export interface HostSetupGatePorts {
 
 /**
  * FactoryReadDeps.hostReady for GitLab remotes: null for a GitHub host or a
- * GitLab host glab can read; otherwise the bot's refusal text, and the owner
- * is asked to connect that host once — not per read, bot or workspace —
- * until the gate passes again (a later failure asks again).
+ * GitLab host glab can read. A definite missing glab or sign-out is the
+ * bot's `host_not_connected` refusal, and the owner is asked to connect that
+ * host once — not per read, bot or workspace — until the gate passes again
+ * (a later failure asks again). A host not reached just now (or a gate that
+ * threw) is a transient `read_failed`: nobody is asked, nothing is kept.
  */
-export function createHostSetupGate(ports: HostSetupGatePorts): (scope: RepoScope) => Promise<string | null> {
+export function createHostSetupGate(ports: HostSetupGatePorts): (scope: RepoScope) => Promise<HostNotReady | null> {
   const asked = new Set<string>();
   return async (scope) => {
     const host = scope.repoKey.split('/')[0] ?? '';
     if (!host || isGithubHost(host)) return null;
-    let gate: PrGate;
+    let gate: HostGate;
     try {
       gate = await ports.gate(scope.repoPath, host);
     } catch {
-      gate = { ok: false, reason: 'cli-missing', message: 'the GitLab CLI (glab) could not be run' };
+      gate = { ok: false, reason: 'unreachable', message: 'the GitLab CLI (glab) could not be run just now' };
     }
     if (gate.ok) {
       asked.delete(host);
       return null;
     }
+    if (gate.reason === 'unreachable') return { code: 'read_failed', message: `${gate.message}; try again later.` };
     if (!asked.has(host)) {
       asked.add(host);
       try {
@@ -239,8 +250,11 @@ export function createHostSetupGate(ports: HostSetupGatePorts): (scope: RepoScop
         /* the refusal still tells the bot */
       }
     }
-    return `GitLab on ${host} is not connected in wmux (${gate.message}). The owner has been asked to connect it; `
-      + 'merge requests, issues and CI can be read once they have. Do not retry this read or ask the owner about it again.';
+    return {
+      code: 'host_not_connected',
+      message: `GitLab on ${host} is not connected in wmux (${gate.message}). The owner has been asked to connect it; `
+        + 'merge requests, issues and CI can be read once they have. Do not retry this read or ask the owner about it again.',
+    };
   };
 }
 

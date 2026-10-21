@@ -113,7 +113,7 @@ export function factoryReadDeps(): FactoryReadDeps {
     trust: trustOf,
     rooms: getRoomWriter,
     postKey: (botId) => wakeOrdinals.next(runningWake(resolveRoomPorts(), botId), 'post'),
-    hostReady: createHostSetupGate({ gate: (repoPath, host) => glabPrService.gate(repoPath, host), ask: askGitlabSetup }),
+    hostReady: createHostSetupGate({ gate: (repoPath, host) => glabPrService.connection(repoPath, host), ask: askGitlabSetup }),
   };
 }
 
