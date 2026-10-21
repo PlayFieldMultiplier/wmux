@@ -19,6 +19,8 @@
  */
 
 import * as net from 'node:net';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import type { ProjectConfigState } from '../../shared/wmuxProjectConfig';
 import { getExecEnv } from '../../shared/execEnv';
@@ -215,6 +217,33 @@ export function resolveFanoutSetup(state: ProjectConfigState | null | undefined)
   return { run: true, command: setup };
 }
 
+/** Extensions Windows runs a bare script name with. */
+const WINDOWS_SCRIPT_EXTS = ['', '.cmd', '.bat', '.exe', '.com', '.ps1'];
+
+/**
+ * The hint for a setup that failed on Windows because its first word names a
+ * script in the worktree without a path (`setup.cmd`). wmux keeps Windows from
+ * searching the current folder for a command (NoDefaultCurrentDirectoryInExePath),
+ * so a script planted in a cloned repository can never stand in for a tool
+ * name; the project's own script is run as `.\setup.cmd`. Undefined when the
+ * first word has a path, is not in the worktree, or the platform is not Windows.
+ */
+export function bareRepoScriptHint(command: string, cwd: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform !== 'win32') return undefined;
+  const first = /^\s*"?([^\s"&|<>]+)/.exec(command)?.[1];
+  if (!first || /[\\/:]/.test(first)) return undefined;
+  for (const ext of WINDOWS_SCRIPT_EXTS) {
+    const name = path.extname(first) && ext ? null : first + ext;
+    if (!name) continue;
+    try {
+      if (fs.statSync(path.join(cwd, name)).isFile()) return `use .\\${name} to run a script from the repository`;
+    } catch {
+      // not this one
+    }
+  }
+  return undefined;
+}
+
 export type FanoutSetupRunResult =
   | { ok: true }
   | {
@@ -299,7 +328,10 @@ export async function runFanoutSetup(
         settle({ ok: true });
         return;
       }
-      const how = signal ? `killed by ${signal}` : `exited with code ${code}`;
+      const exited = signal ? `killed by ${signal}` : `exited with code ${code}`;
+      // A bare repo script on Windows is not found (see bareRepoScriptHint).
+      const hint = signal ? undefined : bareRepoScriptHint(command, cwd);
+      const how = hint ? `${exited} (${hint})` : exited;
       settle({ ok: false, error: `${how}${detailSuffix(tail)}`, summary: how, tail });
     });
   });
