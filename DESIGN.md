@@ -135,9 +135,15 @@ reads as a second, differently tinted panel.
   corners) with a 1px `--sheet-edge` hairline along the curve, and that
   line is the one seam. With the sidebar hidden the pane column drops both,
   leaving the sheet's own edge as the only boundary.
-- **Native fullscreen** (any platform) and **maximized on Windows** (whose
-  maximized windows have square corners): the sheet drops its margins and
+- **Native fullscreen** (any platform): the sheet drops its margins and
   radius. The rail stays.
+- **Maximized on Windows** (whose maximized windows have square corners): the
+  sheet drops its margins and the corners on the screen's edges are square.
+  The one corner beside the rail and the titlebar meets the frame, not the
+  screen, so it keeps `--sheet-radius`, with the hairline and the faint
+  shadow along the top and the rail side, as in a windowed window (mirrored
+  when the sidebar is docked right). Every rail page and the Workspaces page
+  show the same corner: the sheet clips them all.
 - **Terminal geometry is untouched** by the frame: margin changes, a sidebar
   collapse, maximize and fullscreen each refit the terminals once, never per
   frame.
@@ -152,6 +158,10 @@ reads as a second, differently tinted panel.
   `--glass-frame` of `--frame-bg` over the material and the sheet adds
   `--glass-sheet` of the mantle under the sidebar; the panes and every
   terminal stay opaque, so the hero never changes with the wallpaper. The
+  sheet's edge is then an ink of the text colour (10%), not the opaque
+  `--sheet-edge`: over a translucent frame an opaque hairline reads lighter
+  than the frame on a dark or tinted backdrop and vanishes on a light one,
+  while the ink keeps the same step over any backdrop. The
   user picks Off, Soft (default) or Clear in Settings › Appearance ›
   Interface. Coverage of the sidebar, frame and sheet stacked: dark themes
   about 29% Soft / 14% Clear; strongly hued themes (Stars & Stripes, Red
@@ -1773,6 +1783,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-21 | Owner decision: Plugins is a rail page (after Git) with a puzzle-piece glyph — a mantle catalog list (Signature, Catalog, Installed, Connectors) beside one detail with the permission list and one primary per state; Signature is a catalog data flag (Office today). Connectors lose their rail item and become the page's Connectors row; the `connectors` route redirects there. Settings › Plugins keeps only a link. Plugin rail items get their catalog glyph instead of the Workspaces one | One home for everything that extends wmux; the signature plugin is seen first; the rail drops an item |
 | 2026-10-21 | Owner decision: a muted "Agent not set up · Set up" row at the sidebar's foot while no agent is ready (built by #2535) | The user who chose Later in the setup wizard keeps one quiet way back to it |
 | 2026-10-21 | A bot's HTML file and an `html` block in the Bots chat get **Preview / Code** (a compact segmented control), not the preview tab's View source | The preview tab is a page opened to be read, so the source is a detour behind one button. Here the two views are peers in one place: a page opens as Preview, a chat block as Code, and one control switches either way |
+| 2026-10-21 | Owner decision: Windows keeps the sheet's frame-side corner rounded. Maximized, the corner beside the rail and the titlebar keeps `--sheet-radius` with the hairline on the top and rail side; only the corners on the screen's edges are square. Under window glass the sheet's edge is a 10% text ink, not the opaque `--sheet-edge` | Maximized Windows rail pages showed a right angle where macOS and the terminal view show a curve, and the rail met the sidebar with no hairline. Over translucent acrylic the opaque hairline read lighter than the frame on tinted backdrops and vanished on light ones (measured on Windows 11, Paper) |
 
 ### Desktop conversation view
 
