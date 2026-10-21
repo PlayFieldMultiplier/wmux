@@ -53,6 +53,8 @@ beforeEach(() => {
   wt = path.join(dir, 'wt');
   fs.mkdirSync(repo);
   git(repo, 'init', '-q', '-b', 'main');
+  // Files read back byte for byte, whatever the runner's global autocrlf.
+  git(repo, 'config', 'core.autocrlf', 'false');
   write(repo, 'a.txt', 'a\n');
   write(repo, 'b.txt', 'b\n');
   write(repo, 'gone.txt', 'gone\n');
