@@ -67,6 +67,16 @@ describe('initialCopySelection', () => {
 });
 
 describe('WorkspacePrepDialog', () => {
+  it('a cwd that moves while the read is pending still fills the dialog from that read', async () => {
+    let resolve: (v: WorkspacePrepSettingsView) => void = () => undefined;
+    prepGet.mockReturnValue(new Promise<WorkspacePrepSettingsView>((r) => { resolve = r; }));
+    await act(async () => root.render(createElement(WorkspacePrepDialog)));
+    act(() => useStore.setState({ workspaces: [{ id: 'ws-1', name: 'repo', metadata: { cwd: '/repo/sub' } }] } as never));
+    await act(async () => resolve({ ...baseView, exists: true, contentHash: 'a'.repeat(64) }));
+    expect(prepGet).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[data-testid="prep-copy-list"]')).not.toBeNull();
+  });
+
   it('saves the default selection, the suggested setup and the toggle off, with the shown hash', async () => {
     const panel = await open({ ...baseView, exists: true, contentHash: 'a'.repeat(64) });
     const boxes = [...panel.querySelectorAll('[data-testid="prep-copy-list"] [role="checkbox"]')];
