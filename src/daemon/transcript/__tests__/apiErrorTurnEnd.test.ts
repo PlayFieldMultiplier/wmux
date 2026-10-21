@@ -46,6 +46,28 @@ describe('apiErrorFromTranscriptLine', () => {
 });
 
 describe('ApiErrorTurnEnds', () => {
+  it('keeps the error as the turn end when a teammate message starts the next turn, at the entry time', () => {
+    const g = gate({ start: TURN_OPENED_AT });
+    g.turnEnds.noteHookSignal('pty-1', 'agent.user_prompt_submit');
+    g.advance(JUST_AFTER_ENTRY - TURN_OPENED_AT);
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', apiError('rate_limit', "You've hit your limit · resets 3pm"));
+    // Agent Teams: a teammate's queued message starts the lead's next turn at
+    // once, and that turn writes on. Neither is the errored turn going on.
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', JSON.stringify({
+      type: 'user', uuid: 'w1', timestamp: '2026-10-17T02:31:37.660Z', isSidechain: false,
+      message: { role: 'user', content: 'Another Claude session sent a message:\n<teammate-message teammate_id="sleeper">\ndone\n</teammate-message>' },
+    }));
+    g.turnEnds.noteLine('pty-1', '/t.jsonl', reply);
+    g.advance(GRACE_MS);
+    g.turnEnds.settle();
+    expect(g.sent).toHaveLength(1);
+    expect(g.sent[0].payload).toMatchObject({
+      error: 'rate_limit',
+      wmux_turn_reason: 'api_error',
+      wmux_turn_ended_at: Date.parse('2026-10-17T02:31:37.645Z'),
+    });
+  });
+
   it('closes the current open turn with the stop_failure the hook would have sent, once', () => {
     const g = gate({ start: TURN_OPENED_AT });
     // The previous turn's Stop, then this turn's prompt: neither speaks for its end.
@@ -64,7 +86,11 @@ describe('ApiErrorTurnEnds', () => {
       kind: 'agent.stop_failure', agent: 'claude', agentSessionId: 's', cwd: '/w', ptyId: 'pty-1',
       ts: Date.parse('2026-10-17T02:31:37.700Z') + GRACE_MS,
       // rate_limit + the notice: the usage-limit registry reads exactly these.
-      payload: { error: 'rate_limit', last_assistant_message: "You've hit your limit · resets 3pm" },
+      payload: {
+        error: 'rate_limit', last_assistant_message: "You've hit your limit · resets 3pm",
+        // Sent after the fact: the turn ended when the entry was written.
+        wmux_turn_reason: 'api_error', wmux_turn_ended_at: Date.parse('2026-10-17T02:31:37.645Z'),
+      },
     }]);
   });
 

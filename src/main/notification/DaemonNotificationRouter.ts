@@ -1370,6 +1370,29 @@ export class DaemonNotificationRouter {
       }
     };
 
+    // A lead turn an Agent Teams teammate's message woke (#2494): Claude Code
+    // fires no UserPromptSubmit for it, so the daemon read its start from the
+    // lead transcript. The same reopen as the first tool after a Stop, for a
+    // turn that may run no tool at all: without it the latch, still held from
+    // the human's prompt, mutes the byte heuristic and the pane reads finished.
+    // Only on a finished turn; a running turn or a dialog keeps its status.
+    const onTeammateWake = (payload: { sessionId: string }) => {
+      try {
+        if (!TURN_ENDED_STATUSES.has(getLastBroadcastAgentStatus(payload.sessionId) ?? '')) return;
+        const agent = this.lastAgentNameByPty.get(payload.sessionId);
+        const slug = agent ? agentDisplayToSlug(agent) : undefined;
+        this.getHookRouter?.()?.noteHookTurnStart(payload.sessionId, this.now(), slug ?? null);
+        broadcastMetadataUpdate(this.getWindow(), {
+          ptyId: payload.sessionId,
+          agentStatus: 'running',
+          hookKind: 'agent.teammate_wake',
+          ...(agent ? { agentName: agent, agentSlug: slug ?? null } : {}),
+        });
+      } catch (err) {
+        console.warn('[DaemonNotificationRouter] teammate wake error:', err);
+      }
+    };
+
     const onTranscriptActivity = (payload: { sessionId: string; activity: string }) => {
       if (this.hookActivityPanes.has(payload.sessionId)) return;
       try {
@@ -1529,6 +1552,7 @@ export class DaemonNotificationRouter {
     this.daemonClient.on('session:agentInterrupted', onAgentInterrupted);
     this.daemonClient.on('session:transcriptActivity', onTranscriptActivity);
     this.daemonClient.on('session:teammates', onTeammates);
+    this.daemonClient.on('session:teammateWake', onTeammateWake);
     this.daemonClient.on('session:subagents', onSubagents);
     this.daemonClient.on('session:restarted', onRestarted);
     this.daemonClient.on('supervision:changed', onSupervisionChanged);
@@ -1566,6 +1590,7 @@ export class DaemonNotificationRouter {
       () => this.daemonClient.off('session:agentInterrupted', onAgentInterrupted),
       () => this.daemonClient.off('session:transcriptActivity', onTranscriptActivity),
       () => this.daemonClient.off('session:teammates', onTeammates),
+      () => this.daemonClient.off('session:teammateWake', onTeammateWake),
       () => this.daemonClient.off('session:subagents', onSubagents),
       () => this.daemonClient.off('session:restarted', onRestarted),
       () => this.daemonClient.off('supervision:changed', onSupervisionChanged),

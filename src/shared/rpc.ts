@@ -1123,6 +1123,11 @@ export interface DaemonEvent {
     // finds one; nothing when none works.
     //   agent.teammates → null
     | 'agent.teammates'
+    // A lead turn an Agent Teams teammate's message woke, which Claude Code
+    // starts without a UserPromptSubmit (#2494). Read from the lead transcript
+    // (daemon/transcript/teammateWake) once per entry; `at` is the entry's time.
+    //   agent.teammateWake → { at: number }
+    | 'agent.teammateWake'
     // How many subagents the agent has running, read from its transcript
     // (daemon/transcript/subagentCount). Sent on change; 0 when the watch
     // ends, so a stale count never sticks.
