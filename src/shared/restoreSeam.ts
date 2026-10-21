@@ -36,7 +36,7 @@ export function restoreSeam(rows: number): string {
   // Clamp defensively: a hostile/corrupt rows value must not build a
   // megabyte of newlines (bounds mirror what any real pane can be).
   const r = Math.min(512, Math.max(1, Math.trunc(rows) || 1));
-  return `${DEAD_PROCESS_MODE_RESETS}\x1b[0m\x1b[${r};1H${'\n'.repeat(r)}\x1b[H`;
+  return `${DEAD_PROCESS_MODE_RESETS}\x1b[${r};1H${'\n'.repeat(r)}\x1b[H`;
 }
 
 /**
@@ -76,4 +76,7 @@ const DEAD_PROCESS_MODE_RESETS =
   '\x1b[?1004l\x1b[?2004l' + // focus reports, bracketed paste
   '\x1b[?1l\x1b[?7h\x1b[?25h' + // cursor keys normal, autowrap on, cursor visible
   '\x1b>' + // DECKPNM: numeric keypad
+  // SGR reset before the round trip: a replay chunk boundary inside it would
+  // otherwise render one blank alternate frame on the dead program's colours.
+  '\x1b[0m' +
   '\x1b[<99u\x1b[?47h\x1b[<99u\x1b[?47l'; // kitty flags popped on the main, then the alternate screen

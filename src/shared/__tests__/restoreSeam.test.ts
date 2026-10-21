@@ -160,6 +160,14 @@ describe('restoreSeam', () => {
     expect(await flags()).toBe('\x1b[?1u');
   });
 
+  it('resets SGR and leaves every alternate screen before the kitty round trip, and finishes it before parking the cursor', () => {
+    const seam = restoreSeam(24);
+    const at = (s: string) => seam.indexOf(s);
+    expect(at('\x1b[?47l')).toBeLessThan(at('\x1b[0m'));
+    expect(at('\x1b[0m')).toBeLessThan(at('\x1b[<99u\x1b[?47h\x1b[<99u\x1b[?47l'));
+    expect(seam.lastIndexOf('\x1b[?47l')).toBeLessThan(at('\x1b[24;1H'));
+  });
+
   it('clamps hostile row counts', () => {
     expect(restoreSeam(0)).toBe(restoreSeam(1));
     expect(restoreSeam(-5)).toBe(restoreSeam(1));
