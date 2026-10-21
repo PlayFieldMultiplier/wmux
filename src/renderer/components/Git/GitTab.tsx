@@ -557,6 +557,7 @@ export function GitTab({
       const prep = res.prep;
       if (prep?.status === 'failed') {
         pushToast({ level: 'warn', message: t('git.prepFailed', { error: prep.error ?? '' }) });
+        if (prep.copySkipped) pushToast({ level: 'warn', message: t('git.prepCopyReview') });
       } else if (prep?.status === 'skipped') {
         pushToast({ level: 'warn', message: t(prep.reason === 'malformed' ? 'git.prepMalformed' : 'git.prepSkipped') });
       } else if (prep?.copySkipped) {

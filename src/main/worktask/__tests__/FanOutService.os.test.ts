@@ -1220,7 +1220,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
       daemon: makeDaemonFake().port,
       renderer: renderer.port,
       worktrees,
-      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', config: { version: 1, fanout: { copy: ['.env'] } } }),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', copyReviewed: true, config: { version: 1, fanout: { copy: ['.env'] } } }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
     expect(res.ok).toBe(true);
@@ -1236,7 +1236,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
       daemon: makeDaemonFake().port,
       renderer: renderer.port,
       worktrees,
-      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', config: { version: 1, fanout: { copy: ['.env', '.env.gone'], copyIntoAutomated: true } } }),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', copyReviewed: true, config: { version: 1, fanout: { copy: ['.env', '.env.gone'], copyIntoAutomated: true } } }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
     expect(res.ok).toBe(true);
@@ -1252,7 +1252,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
       daemon: makeDaemonFake().port,
       renderer: makeRendererFake().port,
       worktrees,
-      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', config: { version: 1, fanout: { copy: ['.env'] } } }),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', copyReviewed: true, config: { version: 1, fanout: { copy: ['.env'] } } }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['issue-1'], prepOrigin: 'human' }));
     expect(res.ok).toBe(true);
@@ -1267,7 +1267,7 @@ describe('new workspace preparation on fan-out worktrees', () => {
       daemon: makeDaemonFake().port,
       renderer: renderer.port,
       worktrees,
-      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', config: { version: 1, fanout: { copy: ['.env'], setup: 'node -e "console.log(\'step one\'); process.exit(3)"' } } }),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', copyReviewed: true, config: { version: 1, fanout: { copy: ['.env'], setup: 'node -e "console.log(\'step one\'); process.exit(3)"' } } }),
     });
     const res = await svc.start(baseReq({ repoPath: repo, titles: ['issue-2'], prepOrigin: 'human' }));
     const [task] = res.tasks;

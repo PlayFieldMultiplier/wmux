@@ -15,7 +15,7 @@ import {
 import type { ProjectConfigState, ProjectTrustState, WmuxProjectFanout } from '../../../shared/wmuxProjectConfig';
 
 function stateWith(fanout: WmuxProjectFanout, trust: ProjectTrustState = 'trusted'): ProjectConfigState {
-  return { found: true, root: '/repo', configPath: '/repo/wmux.json', contentHash: 'a'.repeat(64), trust, config: { version: 1, fanout } };
+  return { found: true, root: '/repo', configPath: '/repo/wmux.json', contentHash: 'a'.repeat(64), trust, config: { version: 1, fanout }, ...(trust === 'trusted' ? { copyReviewed: true } : {}) };
 }
 
 describe('resolveWorkspacePrep', () => {

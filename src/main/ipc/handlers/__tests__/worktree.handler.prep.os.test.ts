@@ -40,7 +40,7 @@ describe('addPreparedWorktree', () => {
   afterEach(() => rmSync(base, { recursive: true, force: true }));
 
   const trusted = (fanout: NonNullable<ProjectConfigState['config']>['fanout'], trust: ProjectConfigState['trust'] = 'trusted'): ProjectConfigState => ({
-    found: true, root: repo, configPath: join(repo, 'wmux.json'), trust, contentHash: 'a'.repeat(64), config: { version: 1, fanout },
+    found: true, root: repo, configPath: join(repo, 'wmux.json'), trust, contentHash: 'a'.repeat(64), config: { version: 1, fanout }, copyReviewed: true,
   });
 
   it('copies the selected files and runs the setup command in the new worktree', async () => {

@@ -319,7 +319,11 @@ export class ProjectConfigStore {
       const record: ProjectTrustRecord = { status, contentHash, decidedAt: now, copyReviewed: true };
       if (status === 'trusted' && unattended === true) {
         record.unattended = true;
-        record.unattendedDecidedAt = now;
+        // Re-approving the same bytes (the copy settings) keeps when the
+        // unattended consent itself was given.
+        const prev = exists ? db.projects[key] : undefined;
+        const same = prev?.status === 'trusted' && prev.contentHash === contentHash && prev.unattended === true;
+        record.unattendedDecidedAt = same && prev?.unattendedDecidedAt !== undefined ? prev.unattendedDecidedAt : now;
       }
       db.projects[key] = record;
     });

@@ -82,8 +82,9 @@ export function resolveWorkspacePrep(
   if (copyInvalid || (!setup.run && setup.reason === 'malformed')) return { copy: [], skipped: 'malformed' };
 
   const plan: WorkspacePrepPlan = { copy: [] };
-  const copyKeys = declaredCopy.length > 0 || fanout?.copyIntoAutomated !== undefined;
-  if (copyKeys && state.copyReviewed === false) {
+  // Only a grant that carries the copy-review mark covers copying (trusted
+  // states always say which; anything else is treated as not covered).
+  if (declaredCopy.length > 0 && state.copyReviewed !== true) {
     plan.copySkipped = 'needs-review';
   } else if (declaredCopy.length > 0) {
     if (origin === 'automated' && fanout?.copyIntoAutomated !== true) plan.copyBlocked = true;

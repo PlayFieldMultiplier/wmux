@@ -96,8 +96,7 @@ export default function ProjectConfigDialog() {
   const prepCopyAutomated = project.config?.fanout?.copyIntoAutomated === true;
   // Trusted before the copy settings existed: the grant never covered them,
   // so they wait for this re-approval (the rest of the file stays approved).
-  const copyNeedsReview = isTrusted && project.copyReviewed === false
-    && (prepCopy.length > 0 || project.config?.fanout?.copyIntoAutomated !== undefined);
+  const copyNeedsReview = isTrusted && project.copyReviewed !== true && prepCopy.length > 0;
   const layout = project.config?.layout;
   const rows = layout ? layoutRows(layout) : [];
   // Leaves that would restore their captured permission mode on reboot — the
