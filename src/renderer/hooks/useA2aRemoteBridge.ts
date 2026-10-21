@@ -8,8 +8,8 @@ import type { A2aRemoteFeed } from '../stores/slices/a2aRemoteSlice';
  */
 export const A2A_HELD_POLL_MS = 30_000;
 
-type FeedList = 'links' | 'hosts' | 'held' | 'joined' | 'peers';
-const FEED_LISTS: readonly FeedList[] = ['links', 'hosts', 'held', 'joined', 'peers'];
+type FeedList = 'links' | 'offers' | 'hosts' | 'held' | 'joined' | 'peers';
+const FEED_LISTS: readonly FeedList[] = ['links', 'offers', 'hosts', 'held', 'joined', 'peers'];
 
 /**
  * Refreshes started, and per list the newest refresh whose answer was
@@ -17,14 +17,14 @@ const FEED_LISTS: readonly FeedList[] = ['links', 'hosts', 'held', 'joined', 'pe
  * refresh still in flight drop its links and hosts.
  */
 let started = 0;
-const appliedAt: Record<FeedList, number> = { links: 0, hosts: 0, held: 0, joined: 0, peers: 0 };
+const appliedAt: Record<FeedList, number> = { links: 0, offers: 0, hosts: 0, held: 0, joined: 0, peers: 0 };
 
 /** Forget everything read so far: the daemon is gone, so nothing in it can be acted on. */
 export function resetA2aRemote(): void {
   // A read still in flight from before the reset must not bring it back.
   const generation = ++started;
   for (const key of FEED_LISTS) appliedAt[key] = generation;
-  useStore.getState().setA2aRemote({ links: [], hosts: [], held: [], joined: [], peers: [], loaded: false });
+  useStore.getState().setA2aRemote({ links: [], offers: [], hosts: [], held: [], joined: [], peers: [], loaded: false });
 }
 
 /**
@@ -55,6 +55,7 @@ export async function refreshA2aRemote(only?: 'held'): Promise<void> {
     read(api.heldList, (v) => { if (Array.isArray(v?.tasks)) patch.held = v.tasks; }),
     ...(only === 'held' ? [] : [
       read(api.linksList, (v) => { if (Array.isArray(v?.links)) patch.links = v.links; }),
+      read(api.offersList, (v) => { if (Array.isArray(v?.offers)) patch.offers = v.offers; }),
       read(api.hostsStatus, (v) => { if (Array.isArray(v?.hosts)) patch.hosts = v.hosts; }),
       read(api.hostsList, (v) => { if (Array.isArray(v?.hosts)) patch.joined = v.hosts; }),
       read(api.peersList, (v) => {

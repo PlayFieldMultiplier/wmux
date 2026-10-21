@@ -717,6 +717,13 @@ export const IPC = {
   A2A_REMOTE_LINKS_REVOKE: 'a2aRemote:links:revoke',
   A2A_REMOTE_LINKS_REFRESH: 'a2aRemote:links:refresh',
   A2A_REMOTE_LINK_EVENT: 'a2aRemote:link-event',
+  // Share offers received from another PC: list, accept with one of this PC's panes, decline.
+  A2A_REMOTE_OFFERS_LIST: 'a2aRemote:offers:list',
+  A2A_REMOTE_OFFERS_ACCEPT: 'a2aRemote:offers:accept',
+  A2A_REMOTE_OFFERS_DECLINE: 'a2aRemote:offers:decline',
+  // Sharing one of this PC's panes with a PC that joined this one, and taking it back.
+  A2A_REMOTE_OFFERS_CREATE: 'a2aRemote:offers:create',
+  A2A_REMOTE_OFFERS_WITHDRAW: 'a2aRemote:offers:withdraw',
   // Delivery: per-PC connection state, and remote work held for a person.
   A2A_REMOTE_HOSTS_STATUS: 'a2aRemote:hosts:status',
   A2A_REMOTE_HOST_STATUS_EVENT: 'a2aRemote:host-status-event',

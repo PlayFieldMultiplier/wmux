@@ -343,3 +343,29 @@ describe('receipts', () => {
   });
 });
 
+
+describe('acceptInbound — share offers ride a link envelope', () => {
+  const offerEnv = (state: 'offer' | 'offer-withdrawn'): A2aRemoteEnvelope => env(crypto.randomUUID(), {
+    kind: 'link',
+    linkVersion: 0,
+    text: undefined,
+    link: { state, version: 0 },
+    offer: state === 'offer'
+      ? { end: { kind: 'pane', workspaceId: 'ws-x', workspaceName: 'X', paneId: 'pane-x' }, allow: { outbound: true, inbound: true }, ttlMs: 60_000 }
+      : { reason: 'withdrawn' },
+  });
+
+  it('goes to the offer handler before any link-store check', async () => {
+    const applyInbound = vi.fn(() => ({ ok: true as const, duplicate: false }));
+    const e = offerEnv('offer');
+    expect(await acceptInbound(e, peer, { ...deps, offers: { applyInbound } })).toEqual({ ok: true, duplicate: false });
+    expect(applyInbound).toHaveBeenCalledWith(expect.objectContaining({ linkId: e.linkId, offer: e.offer }), peer);
+    await acceptInbound(offerEnv('offer-withdrawn'), peer, { ...deps, offers: { applyInbound } });
+    expect(applyInbound).toHaveBeenCalledTimes(2);
+  });
+
+  it('without an offer handler (an older build) it is an unknown link, refused without throwing', async () => {
+    expect(await acceptInbound(offerEnv('offer'), peer, deps)).toEqual({ ok: false, error: 'unknown-link' });
+    expect(await acceptInbound(offerEnv('offer-withdrawn'), peer, deps)).toEqual({ ok: false, error: 'unknown-link' });
+  });
+});

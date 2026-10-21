@@ -1,7 +1,15 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
-import type { A2aRemoteHostStatus, A2aRemoteLinkEvent, A2aRemoteLinkProposeParams } from '../../../shared/rpc';
+import type {
+  A2aRemoteExposureGetResult,
+  A2aRemoteHostStatus,
+  A2aRemoteLinkEvent,
+  A2aRemoteLinkProposeParams,
+  A2aRemoteOfferAcceptParams,
+  A2aRemoteOfferEvent,
+  A2aRemoteOfferShareParams,
+} from '../../../shared/rpc';
 import { wrapHandler } from '../wrapHandler';
 import type { DaemonClient } from '../../DaemonClient';
 import { detectRemote } from '../../github/PrProvider';
@@ -17,7 +25,8 @@ const publisher = new A2aExposurePublisher({
   log: (msg) => console.warn(`[a2a-remote] ${msg}`),
 });
 
-const LINK_EVENTS: ReadonlySet<string> = new Set(['a2a.remote.link.proposed', 'a2a.remote.link.changed']);
+// Share offer nudges ride the link channel: the renderer re-reads both lists.
+const LINK_EVENTS: ReadonlySet<string> = new Set(['a2a.remote.link.proposed', 'a2a.remote.link.changed', 'a2a.remote.offer.changed']);
 
 /** How long a call made before the daemon connected waits for it (the
  *  renderer reads the Remote feed at start, racing the boot connect). */
@@ -88,15 +97,17 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
     [IPC.A2A_REMOTE_EXPOSURE_GET, async (hostId) => (await client()).a2aRemoteExposureGet(str(hostId))],
     [
       IPC.A2A_REMOTE_EXPOSURE_SET,
-      async (hostId, workspaceIds, paneIds, brain) => {
+      async (hostId, workspaceIds, paneIds, brain, expected) => {
         const result = await (await clientNow()).a2aRemoteExposureSet(
           str(hostId),
           Array.isArray(workspaceIds) ? workspaceIds.filter((w): w is string => typeof w === 'string') : [],
           (paneIds ?? {}) as Record<string, string[]>,
           brain === true,
+          // The daemon compares it field by field; anything else means "no list saved".
+          expected === undefined ? undefined : (expected as A2aRemoteExposureGetResult['exposure']),
         );
         // A newly exposed workspace's panes must be listed before the other PC looks.
-        await publisher.republish();
+        if (!result.conflict) await publisher.republish();
         return result;
       },
     ],
@@ -107,6 +118,35 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
     [IPC.A2A_REMOTE_LINKS_REJECT, async (linkId) => (await clientNow()).a2aRemoteLinkAction('reject', str(linkId))],
     [IPC.A2A_REMOTE_LINKS_REVOKE, async (linkId) => (await clientNow()).a2aRemoteLinkAction('revoke', str(linkId))],
     [IPC.A2A_REMOTE_LINKS_REFRESH, async (linkId) => (await clientNow()).a2aRemoteLinkAction('refresh', str(linkId))],
+    [IPC.A2A_REMOTE_OFFERS_LIST, async () => (await client()).a2aRemoteOffersList()],
+    [
+      IPC.A2A_REMOTE_OFFERS_ACCEPT,
+      async (params) => {
+        const p = (params ?? {}) as A2aRemoteOfferAcceptParams;
+        // This PC's end must be a pane in this PC's own tree, whatever the renderer sent.
+        if (typeof p.local?.workspaceId !== 'string' || typeof p.local?.paneId !== 'string' || !publisher.hasPane(p.local.workspaceId, p.local.paneId)) {
+          return { ok: false, error: 'bad-request', message: 'that pane is not open on this PC' };
+        }
+        return (await clientNow()).a2aRemoteOfferAccept(p);
+      },
+    ],
+    [IPC.A2A_REMOTE_OFFERS_DECLINE, async (offerId) => (await clientNow()).a2aRemoteOfferDecline(str(offerId))],
+    [
+      IPC.A2A_REMOTE_OFFERS_CREATE,
+      async (params) => {
+        const p = (params ?? {}) as A2aRemoteOfferShareParams;
+        const c = await clientNow();
+        // What the other PC sees comes from this PC's own tree, never from the renderer's words.
+        const end = await publisher.candidateFor(str(p.workspaceId), str(p.paneId));
+        if (!end) return { ok: false, error: 'bad-request', message: 'that pane is not open on this PC' };
+        const allow = { outbound: p.allow?.outbound === true, inbound: p.allow?.inbound === true };
+        const result = await c.a2aRemoteOfferCreate({ hostId: str(p.hostId), end, allow });
+        // The pane is listed to that PC too (GET /exposed) once the snapshot is republished.
+        if (result.ok) await publisher.republish();
+        return result;
+      },
+    ],
+    [IPC.A2A_REMOTE_OFFERS_WITHDRAW, async (offerId) => (await clientNow()).a2aRemoteOfferWithdraw(str(offerId))],
     [IPC.A2A_REMOTE_HOSTS_STATUS, async () => (await client()).rpc('a2a.remote.hosts.status', {})],
     [IPC.A2A_REMOTE_HELD_LIST, async () => (await client()).rpc(A2A_REMOTE_RPC.held, {})],
     [
@@ -135,7 +175,7 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
     if (LINK_EVENTS.has(event.type)) channel = IPC.A2A_REMOTE_LINK_EVENT;
     else if (event.type === 'a2a.remote.hosts.status') channel = IPC.A2A_REMOTE_HOST_STATUS_EVENT;
     else return;
-    const payload = event.data as A2aRemoteLinkEvent | A2aRemoteHostStatus;
+    const payload = event.data as A2aRemoteLinkEvent | A2aRemoteOfferEvent | A2aRemoteHostStatus;
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(channel, payload);
     }

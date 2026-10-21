@@ -580,6 +580,11 @@ export type RpcMethod =
   | 'a2a.remote.held'
   | 'a2a.remote.rejectHeld'
   | 'a2a.remote.hosts.status'
+  | 'a2a.remote.offers.list'
+  | 'a2a.remote.offers.create'
+  | 'a2a.remote.offers.withdraw'
+  | 'a2a.remote.offers.accept'
+  | 'a2a.remote.offers.decline'
   | 'a2a.resolve.identity'
   | 'a2a.whoami'
   | 'a2a.discover'
@@ -915,6 +920,11 @@ export const ALL_RPC_METHODS = [
   'a2a.remote.held',
   'a2a.remote.rejectHeld',
   'a2a.remote.hosts.status',
+  'a2a.remote.offers.list',
+  'a2a.remote.offers.create',
+  'a2a.remote.offers.withdraw',
+  'a2a.remote.offers.accept',
+  'a2a.remote.offers.decline',
   'a2a.resolve.identity',
   'a2a.whoami',
   'a2a.discover',
@@ -1142,6 +1152,8 @@ export interface DaemonEvent {
     // proposal arrived or a link changed state. Re-read the link list.
     | 'a2a.remote.link.proposed'
     | 'a2a.remote.link.changed'
+    // A share offer was made, received or settled (`A2aRemoteOfferEvent`). Re-read the offer list.
+    | 'a2a.remote.offer.changed'
     // Cross-host A2A delivery (`sessionId` ''). `a2a.remote.inbound`: a peer's
     // task landed in the ledger, undelivered — main's RemoteA2aBridge re-pulls
     // `a2a.remote.pending` (a nudge; the pull is the guarantee). `data` is
@@ -1528,8 +1540,11 @@ import type {
   A2aEndpointKind,
   A2aExposedPane,
   A2aExposureV1,
+  A2aLinkOfferRecordV1,
   A2aLinkRecordV1,
   A2aLinkState,
+  A2aOfferEndReason,
+  A2aOfferState,
   A2aPeerRecordV1,
   A2aRemoteErrorCode,
   A2aRemoteHostRecordV1,
@@ -1641,6 +1656,71 @@ export type A2aRemoteLinkEvent =
   | { type: 'a2a.remote.link.changed'; linkId: string; state: A2aLinkState };
 
 /**
+ * Daemon -> app nudge about a share offer (`DaemonEvent.data`): one was
+ * shared, received, accepted or ended. `linkId` names the link an accepted
+ * offer made. A nudge only: re-read `a2a.remote.offers.list`.
+ */
+export interface A2aRemoteOfferEvent {
+  type: 'a2a.remote.offer.changed';
+  offerId: string;
+  side: 'out' | 'in';
+  state: A2aOfferState;
+  linkId?: string;
+}
+
+/** `a2a.remote.offers.list` — this PC's shares and the ones it received. */
+export interface A2aRemoteOffersListResult {
+  offers: A2aLinkOfferRecordV1[];
+}
+
+/** Why a share could not be made (`a2a.remote.offers.create`). */
+export type A2aRemoteOfferCreateError =
+  /** That PC did not join this one (or its pairing was revoked). */
+  | 'not-paired'
+  /** That PC has not connected since this PC's wmux started, so what it supports is unknown. */
+  | 'not-connected'
+  /** That PC runs a wmux without share offers. */
+  | 'receiver-unsupported'
+  /** The pane already has a live link with that PC. */
+  | 'already-linked'
+  | 'bad-request'
+  | 'conflict'
+  | 'unavailable';
+
+/** `a2a.remote.offers.create`. `existing`: the pane was already shared with that PC; nothing new was sent. */
+export type A2aRemoteOfferCreateResult =
+  | { ok: true; offer: A2aLinkOfferRecordV1; existing?: true }
+  | { ok: false; error: A2aRemoteOfferCreateError; message?: string };
+
+/** The renderer's share request (`IPC.A2A_REMOTE_OFFERS_CREATE`): main adds the pane's display fields. */
+export interface A2aRemoteOfferShareParams {
+  hostId: string;
+  workspaceId: string;
+  paneId: string;
+  allow: { outbound: boolean; inbound: boolean };
+}
+
+/** `a2a.remote.offers.accept`: this PC's pane to link the shared one with, and the directions (only narrower than offered). */
+export interface A2aRemoteOfferAcceptParams {
+  offerId: string;
+  local: { kind: 'pane'; workspaceId: string; paneId: string; label?: string; workspaceName?: string; gitRemote?: string };
+  allow: { outbound: boolean; inbound: boolean };
+}
+
+/** `a2a.remote.offers.withdraw` / `.decline` / `.accept`. */
+export type A2aRemoteOfferResult =
+  | { ok: true; offer: A2aLinkOfferRecordV1; link?: A2aLinkRecordV1 }
+  | {
+      ok: false;
+      error: A2aRemoteCallError | 'unknown-offer';
+      message?: string;
+      /** For `offer-closed`: why the sharer no longer takes it. */
+      reason?: A2aOfferEndReason;
+      /** Sent, no answer: it may have reached that PC; Check settles it. */
+      uncertain?: true;
+    };
+
+/**
  * One paired PC's delivery connection (`a2a.remote.hosts.status`, and the
  * daemon event of the same name). `joiner`: this PC dials that one (it is in
  * the remote-host store); `server`: that PC dials this one. Connected means
@@ -1658,6 +1738,12 @@ export interface A2aRemoteHostStatus {
   /** ISO time the stream last came up. */
   connectedAt?: string;
   lastError?: string;
+  /**
+   * What that PC advertised on its latest stream to this one
+   * (`A2A_FEATURES_HEADER`), whichever role this row has. Absent until it
+   * connects after this PC's wmux started.
+   */
+  features?: string[];
 }
 
 /** `a2a.remote.hosts.status` */
@@ -1693,6 +1779,11 @@ export interface A2aRemoteExposureListResult {
 /** `a2a.remote.exposure.get` — null when nothing is exposed to that PC. */
 export interface A2aRemoteExposureGetResult {
   exposure: A2aExposureV1 | null;
+}
+
+/** `a2a.remote.exposure.set`: `conflict` when the saved list was not the `expected` one (nothing written). */
+export interface A2aRemoteExposureSetResult extends A2aRemoteExposureGetResult {
+  conflict?: true;
 }
 
 /**

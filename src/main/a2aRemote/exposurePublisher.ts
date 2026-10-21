@@ -1,11 +1,13 @@
-import type { A2aLinkRecordV1 } from '../../shared/a2aRemote';
+import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../shared/a2aRemote';
 import type {
   A2aExposureCandidate,
   A2aRemoteLinksListResult,
   A2aRemoteExposureListResult,
+  A2aRemoteOffersListResult,
   A2aRemotePaneGoneParams,
   A2aRemotePaneSnapshot,
 } from '../../shared/rpc';
+import { isShadowWorkspaceId } from '../../shared/pcRail';
 
 /**
  * Main's half of cross-host exposure. The renderer sends its whole pane tree
@@ -30,9 +32,11 @@ import type {
 
 export interface ExposurePublisherClient {
   a2aRemoteExposureList(): Promise<A2aRemoteExposureListResult>;
-  a2aRemoteExposurePublish(panes: A2aExposureCandidate[]): Promise<unknown>;
+  a2aRemoteExposurePublish(panes: A2aExposureCandidate[], reconciled?: boolean): Promise<unknown>;
   a2aRemotePaneGone(params: A2aRemotePaneGoneParams): Promise<unknown>;
   a2aRemoteLinksList(): Promise<A2aRemoteLinksListResult>;
+  /** Absent on a client that predates share offers. */
+  a2aRemoteOffersList?(): Promise<A2aRemoteOffersListResult>;
 }
 
 /** How long Moa may be "not known right now" before it counts as gone. */
@@ -82,7 +86,7 @@ export function diffGonePanes(prev: A2aRemotePaneSnapshot, next: A2aRemotePaneSn
  * current tree: the link list is the truth, so a notice lost while the daemon
  * was away is found again here.
  */
-export function goneForLinks(links: A2aLinkRecordV1[], tree: A2aRemotePaneSnapshot): A2aRemotePaneGoneParams[] {
+export function goneForLinks(links: Array<Pick<A2aLinkRecordV1, 'state' | 'local'>>, tree: A2aRemotePaneSnapshot): A2aRemotePaneGoneParams[] {
   const ws = new Set(tree.workspaces.map((w) => w.id));
   const paneWs = new Map<string, string>();
   for (const w of tree.workspaces) for (const p of w.panes) paneWs.set(p.paneId, w.id);
@@ -105,6 +109,18 @@ export function goneForLinks(links: A2aLinkRecordV1[], tree: A2aRemotePaneSnapsh
     else out.push({ workspaceId: l.local.workspaceId, paneId: l.local.paneId, reason: 'pane-closed' });
   }
   return out;
+}
+
+/**
+ * The same for this PC's open shares: a shared pane that closed or moved
+ * while the daemon (or the app) was away must end its share, which the
+ * other PC can otherwise still accept.
+ */
+export function goneForOffers(offers: A2aLinkOfferRecordV1[], tree: A2aRemotePaneSnapshot): A2aRemotePaneGoneParams[] {
+  const live = offers
+    .filter((o) => o.side === 'out' && (o.state === 'open' || o.state === 'claimed') && o.end.kind === 'pane')
+    .map((o): Pick<A2aLinkRecordV1, 'state' | 'local'> => ({ state: 'active', local: { kind: 'pane', workspaceId: o.end.workspaceId, paneId: o.end.paneId } }));
+  return goneForLinks(live, tree);
 }
 
 export class A2aExposurePublisher {
@@ -141,6 +157,26 @@ export class A2aExposurePublisher {
       if (prev) for (const g of diffGonePanes(prev, next)) this.pending.set(goneKey(g), g);
       await this.publishNow();
     });
+  }
+
+  /**
+   * One pane of the renderer's latest tree as the other PC would see it
+   * (names, agent, cwd, repo key), for a share; null when it is not open.
+   */
+  async candidateFor(workspaceId: string, paneId: string): Promise<A2aExposureCandidate | null> {
+    // Only this PC's own panes: a shadow workspace shows another PC's.
+    if (isShadowWorkspaceId(workspaceId)) return null;
+    const tree = this.raw ?? this.last;
+    const w = tree?.workspaces.find((x) => x.id === workspaceId);
+    const p = w?.panes.find((x) => x.paneId === paneId);
+    return w && p ? this.candidate(w, p) : null;
+  }
+
+  /** Is `paneId` a pane of `workspaceId` in the renderer's latest tree (and this PC's own, not a shadow of another PC's)? */
+  hasPane(workspaceId: string, paneId: string): boolean {
+    if (isShadowWorkspaceId(workspaceId)) return false;
+    const tree = this.raw ?? this.last;
+    return !!tree?.workspaces.some((w) => w.id === workspaceId && w.panes.some((p) => p.paneId === paneId));
   }
 
   /** Re-publish the last snapshot (exposure settings changed, or the daemon reconnected). */
@@ -183,6 +219,24 @@ export class A2aExposurePublisher {
     return { ...rest, brain: kept };
   }
 
+  private async candidate(
+    w: A2aRemotePaneSnapshot['workspaces'][number],
+    p: A2aRemotePaneSnapshot['workspaces'][number]['panes'][number],
+  ): Promise<A2aExposureCandidate> {
+    const gitRemote = p.cwd ? await this.deps.repoKey(p.cwd).catch(() => null) : null;
+    return {
+      kind: 'pane',
+      workspaceId: w.id,
+      workspaceName: w.name,
+      paneId: p.paneId,
+      ...(p.label ? { label: p.label } : {}),
+      ...(p.agent ? { agent: p.agent } : {}),
+      ...(p.cwd ? { cwd: p.cwd } : {}),
+      ...(gitRemote ? { gitRemote } : {}),
+      ...(p.gitBranch ? { gitBranch: p.gitBranch } : {}),
+    };
+  }
+
   private enqueue(job: () => Promise<void>): Promise<void> {
     this.chain = this.chain.then(job).catch((err: unknown) => this.deps.log(`publish failed: ${errMsg(err)}`));
     return this.chain;
@@ -218,7 +272,25 @@ export class A2aExposurePublisher {
     } catch (err) {
       this.deps.log(`links read failed: ${errMsg(err)}`);
     }
+    // Shares may be accepted only once this pass read them and every notice landed.
+    let offersRead = false;
+    try {
+      const offers = client.a2aRemoteOffersList ? (await client.a2aRemoteOffersList()).offers : [];
+      for (const g of goneForOffers(offers ?? [], this.last)) this.pending.set(goneKey(g), g);
+      offersRead = true;
+    } catch (err) {
+      this.deps.log(`offers read failed: ${errMsg(err)}`);
+    }
     await this.flushGone(client);
+    const reconciled = offersRead && this.pending.size === 0;
+    // A shares read that failed is tried again, or shares stay unacceptable until the next change.
+    if (!offersRead && !this.retryArmed) {
+      this.retryArmed = true;
+      this.setTimer(() => {
+        this.retryArmed = false;
+        void this.republish();
+      }, A2A_GONE_RETRY_MS);
+    }
     const { exposures } = await client.a2aRemoteExposureList();
     const exposed = new Set((exposures ?? []).flatMap((e) => e.workspaceIds));
     const panes: A2aExposureCandidate[] = [];
@@ -228,22 +300,9 @@ export class A2aExposurePublisher {
     }
     for (const w of this.last.workspaces) {
       if (!exposed.has(w.id)) continue;
-      for (const p of w.panes) {
-        const gitRemote = p.cwd ? await this.deps.repoKey(p.cwd).catch(() => null) : null;
-        panes.push({
-          kind: 'pane',
-          workspaceId: w.id,
-          workspaceName: w.name,
-          paneId: p.paneId,
-          ...(p.label ? { label: p.label } : {}),
-          ...(p.agent ? { agent: p.agent } : {}),
-          ...(p.cwd ? { cwd: p.cwd } : {}),
-          ...(gitRemote ? { gitRemote } : {}),
-          ...(p.gitBranch ? { gitBranch: p.gitBranch } : {}),
-        });
-      }
+      for (const p of w.panes) panes.push(await this.candidate(w, p));
     }
-    await client.a2aRemoteExposurePublish(panes);
+    await client.a2aRemoteExposurePublish(panes, reconciled);
   }
 }
 

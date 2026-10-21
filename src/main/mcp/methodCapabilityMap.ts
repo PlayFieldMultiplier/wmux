@@ -497,6 +497,12 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'a2a.remote.held': { capability: 'wmux.internal' },
   'a2a.remote.rejectHeld': { capability: 'wmux.internal' },
   'a2a.remote.hosts.status': { capability: 'wmux.internal' },
+  // Share offers: only this PC's human shares, accepts or declines one.
+  'a2a.remote.offers.list': { capability: 'wmux.internal' },
+  'a2a.remote.offers.create': { capability: 'wmux.internal' },
+  'a2a.remote.offers.withdraw': { capability: 'wmux.internal' },
+  'a2a.remote.offers.accept': { capability: 'wmux.internal' },
+  'a2a.remote.offers.decline': { capability: 'wmux.internal' },
 
   // --- A2A (agent-to-agent) ---
   'a2a.resolve.identity': { capability: 'a2a.read',    riskClass: 'a2a' },

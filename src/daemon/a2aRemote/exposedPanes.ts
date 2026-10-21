@@ -26,9 +26,22 @@ export interface ExposureCheck {
 
 export class ExposedPaneCache {
   private panes: A2aExposedPane[] = [];
+  private reconciled = false;
 
-  /** Replace the snapshot. Malformed entries are dropped. Returns how many were kept. */
-  publish(raw: unknown): number {
+  /**
+   * The app's latest publish said it had first ended every share whose pane
+   * closed or moved (read them, and every notice landed). False until the
+   * app publishes after this daemon started.
+   */
+  isReconciled(): boolean {
+    return this.reconciled;
+  }
+
+  /**
+   * Replace the snapshot. Malformed entries are dropped. Returns how many
+   * were kept. `reconciled`: see `isReconciled`.
+   */
+  publish(raw: unknown, reconciled = false): number {
     const list = Array.isArray(raw) ? raw : [];
     const next: A2aExposedPane[] = [];
     const seen = new Set<string>();
@@ -42,6 +55,7 @@ export class ExposedPaneCache {
       next.push(pane);
     }
     this.panes = next;
+    this.reconciled = reconciled;
     return next.length;
   }
 

@@ -1,6 +1,8 @@
 import type http from 'node:http';
 import {
+  A2A_FEATURES_HEADER,
   A2A_ROUTES,
+  parseA2aFeatures,
   type A2aRemoteDeliverResponse,
   type A2aRemoteErrorCode,
   type A2aStreamCursor,
@@ -47,6 +49,8 @@ export interface A2aStreamHubDeps {
   serves?: (hostId: HostId) => boolean;
   /** A peer's stream came up or went down. */
   onStatus?: (hostId: HostId, connected: boolean) => void;
+  /** A peer's stream came up advertising these features (possibly none). */
+  onFeatures?: (hostId: HostId, features: string[]) => void;
   heartbeatMs?: number;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
@@ -72,6 +76,7 @@ const STATUS_OF: Record<A2aRemoteErrorCode, number> = {
   'stale-link-version': 409,
   'too-large': 413,
   unavailable: 503,
+  'offer-closed': 409,
 };
 
 /** `<epoch>:<seq>` → cursor; null when it is not one. */
@@ -91,6 +96,12 @@ export function formatCursorId(c: A2aStreamCursor): string {
 export class A2aStreamHub {
   private readonly deps: A2aStreamHubDeps;
   private readonly streams = new Map<HostId, Stream>();
+  /**
+   * What each peer advertised on its latest stream open. In memory: a daemon
+   * restart forgets it until the peer reconnects, and every reconnect
+   * replaces it (a peer that went back to an older build advertises less).
+   */
+  private readonly features = new Map<HostId, ReadonlySet<string>>();
 
   constructor(deps: A2aStreamHubDeps) {
     this.deps = deps;
@@ -137,6 +148,11 @@ export class A2aStreamHub {
     if (stream) this.flush(hostId, stream);
   }
 
+  /** What `hostId` advertised on its latest stream, or undefined when it has not connected since this daemon started. */
+  featuresOf(hostId: HostId): ReadonlySet<string> | undefined {
+    return this.features.get(hostId);
+  }
+
   isConnected(hostId: HostId): boolean {
     return this.streams.has(hostId);
   }
@@ -147,6 +163,7 @@ export class A2aStreamHub {
 
   /** End `hostId`'s stream (its pairing was revoked). */
   close(hostId: HostId): void {
+    this.features.delete(hostId);
     this.streams.get(hostId)?.res.end();
   }
 
@@ -164,6 +181,8 @@ export class A2aStreamHub {
       clearInterval(prev.timer);
       prev.res.end();
     }
+    const advertised = parseA2aFeatures(req.headers[A2A_FEATURES_HEADER]);
+    this.features.set(hostId, new Set(advertised));
     const epoch = this.deps.outbox.epoch;
     const resume = parseCursorId(req.headers['last-event-id']);
     if (resume && resume.epoch === epoch) {
@@ -197,6 +216,7 @@ export class A2aStreamHub {
       }
     });
     this.deps.onStatus?.(hostId, true);
+    this.deps.onFeatures?.(hostId, advertised);
     this.flush(hostId, stream);
   }
 

@@ -25,6 +25,16 @@ describe('methodCapabilityMap totality', () => {
   });
 });
 
+describe('methodCapabilityMap — cross-PC share offers', () => {
+  it('only this PC’s own app reaches the share offer RPCs', () => {
+    const offerMethods = ALL_RPC_METHODS.filter((m) => m.startsWith('a2a.remote.offers.'));
+    expect(offerMethods.sort()).toEqual([
+      'a2a.remote.offers.accept', 'a2a.remote.offers.create', 'a2a.remote.offers.decline', 'a2a.remote.offers.list', 'a2a.remote.offers.withdraw',
+    ]);
+    for (const m of offerMethods) expect(METHOD_CAPABILITY[m].capability).toBe('wmux.internal');
+  });
+});
+
 describe('methodCapabilityMap capability validity', () => {
   it('every non-null, non-internal capability appears in KNOWN_CAPABILITIES', () => {
     const known = new Set(listKnownCapabilities());

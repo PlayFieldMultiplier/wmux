@@ -74,7 +74,7 @@ export const DEFAULT_SESSION_TIMING: SessionTiming = {
 /** What a session needs from a pinned client (a seam for tests). */
 export interface SessionClient {
   requestJson(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }>;
-  openStream(path: string, opts: { signal: AbortSignal; lastEventId?: string }): AsyncGenerator<PinnedSseEvent, void, undefined>;
+  openStream(path: string, opts: { signal: AbortSignal; lastEventId?: string; features?: readonly string[] }): AsyncGenerator<PinnedSseEvent, void, undefined>;
 }
 
 export interface JoinerSessionDeps {
@@ -92,6 +92,8 @@ export interface JoinerSessionDeps {
   /** The stream came up (or 5 minutes passed): fold the server's view of our links in. */
   reconcileLinks: () => Promise<void>;
   onStatus: (status: A2aRemoteHostStatus) => void;
+  /** Optional features this PC advertises on every stream open (`A2A_FEATURES_HEADER`). */
+  features?: readonly string[];
   timing?: Partial<SessionTiming>;
   /** Test seam; default `new PinnedTlsClient(opts)`. */
   client?: (opts: PinnedClientOptions) => SessionClient;
@@ -191,6 +193,7 @@ export class JoinerSession {
         for await (const ev of client.openStream(A2A_ROUTES.stream, {
           signal: abort.signal,
           ...(this.lastEventId !== undefined ? { lastEventId: this.lastEventId } : {}),
+          ...(this.deps.features && this.deps.features.length > 0 ? { features: this.deps.features } : {}),
         })) {
           alive();
           if (ev.event === 'hello') {

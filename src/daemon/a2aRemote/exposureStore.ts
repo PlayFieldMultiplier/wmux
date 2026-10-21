@@ -47,6 +47,8 @@ export class ExposureStore {
   private readonly scheduleHarden: (filePath: string) => void;
   private readonly exposures = new Map<HostId, A2aExposureV1>();
   private writable = true;
+  /** A narrowing `removePane` stands in memory but its write failed (see `saveUnsaved`). */
+  private unsaved = false;
 
   constructor(opts: ExposureStoreOptions) {
     this.filePath = path.join(opts.dir, EXPOSURE_FILE);
@@ -105,6 +107,80 @@ export class ExposureStore {
       throw err;
     }
     return structuredClone(rec);
+  }
+
+  /**
+   * Show one pane to `hostId` for a share, leaving everything else as it is.
+   * Already shown (an explicit list holding it, or the every-pane form): no
+   * write. A new workspace is added with an explicit one-pane list, never the
+   * every-pane form. A failed write rolls back (this widens).
+   */
+  addPane(hostId: HostId, workspaceId: string, paneId: string): { added: boolean; addedWorkspace: boolean } {
+    this.assertWritable();
+    if (!isHostId(hostId)) throw new Error('exposure: invalid hostId');
+    if (!workspaceId || !paneId) throw new Error('exposure: workspaceId and paneId are required');
+    if (this.isPaneExposed(hostId, workspaceId, paneId)) return { added: false, addedWorkspace: false };
+    const previous = this.exposures.get(hostId);
+    const addedWorkspace = !previous?.workspaceIds.includes(workspaceId);
+    const paneIds = { ...(previous?.paneIds ?? {}) };
+    paneIds[workspaceId] = [...(paneIds[workspaceId] ?? []), paneId];
+    const rec: A2aExposureV1 = {
+      v: A2A_REMOTE_RECORD_V,
+      hostId,
+      workspaceIds: addedWorkspace ? [...(previous?.workspaceIds ?? []), workspaceId] : [...previous!.workspaceIds],
+      paneIds,
+      ...(previous?.brain ? { brain: true } : {}),
+      updatedAt: new Date(this.now()).toISOString(),
+    };
+    this.exposures.set(hostId, rec);
+    try {
+      this.persist();
+    } catch (err) {
+      if (previous) this.exposures.set(hostId, previous);
+      else this.exposures.delete(hostId);
+      throw err;
+    }
+    return { added: true, addedWorkspace };
+  }
+
+  /**
+   * Put back what `addPane` added: drop the pane from its explicit list, and
+   * the workspace too when `dropWorkspace` and no pane of it is left listed.
+   * A workspace in the every-pane form (which no wmux UI writes; only a
+   * hand-edited file has it) cannot lose one pane, so it is dropped whole:
+   * putting a share back only ever narrows. A failed write keeps the
+   * in-memory effect and still throws.
+   */
+  removePane(hostId: HostId, workspaceId: string, paneId: string, dropWorkspace: boolean): void {
+    this.assertWritable();
+    const rec = this.exposures.get(hostId);
+    if (!rec || !rec.workspaceIds.includes(workspaceId)) return;
+    const everyPane = !rec.paneIds || !Object.hasOwn(rec.paneIds, workspaceId);
+    const listed = everyPane ? [] : rec.paneIds![workspaceId];
+    const left = listed.filter((p) => p !== paneId);
+    const dropWs = everyPane || (dropWorkspace && left.length === 0);
+    if (left.length === listed.length && !dropWs) return;
+    const paneIds = { ...(rec.paneIds ?? {}) };
+    if (dropWs) delete paneIds[workspaceId];
+    else paneIds[workspaceId] = left;
+    this.exposures.set(hostId, {
+      ...rec,
+      workspaceIds: dropWs ? rec.workspaceIds.filter((w) => w !== workspaceId) : rec.workspaceIds,
+      paneIds,
+      updatedAt: new Date(this.now()).toISOString(),
+    });
+    try {
+      this.persist();
+    } catch (err) {
+      this.unsaved = true;
+      throw err;
+    }
+  }
+
+  /** Write what a failed `removePane` left only in memory. Throws when it still does not land. */
+  saveUnsaved(): void {
+    this.assertWritable();
+    if (this.unsaved) this.persist();
   }
 
   /** Expose nothing to `hostId`. Returns false when nothing was exposed. */
@@ -182,6 +258,7 @@ export class ExposureStore {
   private persist(): void {
     const file: ExposureFileV1 = { v: A2A_REMOTE_RECORD_V, exposures: [...this.exposures.values()] };
     this.write(this.filePath, file);
+    this.unsaved = false;
     this.scheduleHarden(this.filePath);
   }
 

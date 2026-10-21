@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../../stores';
 import RemotePage, { REMOTE_PAGE_POLL_MS } from '../RemotePage';
-import type { A2aLinkRecordV1 } from '../../../../shared/a2aRemote';
+import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../../shared/a2aRemote';
 import type { A2aRemoteHostStatus } from '../../../../shared/rpc';
 import type { Task } from '../../../../shared/types';
 
@@ -37,6 +37,7 @@ const held = (id: string, reason = 'pane-missing'): Task => ({
 }) as unknown as Task;
 
 interface A2aSeed {
+  offers?: A2aLinkOfferRecordV1[];
   links?: A2aLinkRecordV1[];
   hosts?: A2aRemoteHostStatus[];
   held?: Task[];
@@ -62,6 +63,8 @@ function stub(devices: unknown[], a2a: A2aSeed = {}, extra: { remoteHosts?: unkn
     a2aRemote: {
       status: vi.fn(async () => ({ enabled: true, port: 45660, listening: true, hostId: 'me', name: 'MacBook', fingerprint256: 'A7:0D:5E:91:C2:38:4B:F0', lastError: null })),
       linksList: vi.fn(async () => ({ links: a2a.links ?? [] })),
+      offersList: vi.fn(async () => ({ offers: a2a.offers ?? [] })),
+      offersWithdraw: vi.fn(async () => ({ ok: false, error: 'invalid-state' })),
       hostsStatus: vi.fn(async () => ({ hosts: a2a.hosts ?? [] })),
       heldList: vi.fn(async () => ({ tasks: a2a.held ?? [] })),
       hostsList: vi.fn(async () => ({
@@ -103,7 +106,7 @@ beforeEach(() => {
   };
   useStore.setState({
     remoteWorkspaces: [], workspaces: [ws as never], moa: null, appRoute: 'remote',
-    a2aRemote: { links: [], hosts: [], held: [], joined: [], peers: [], loaded: false },
+    a2aRemote: { links: [], offers: [], hosts: [], held: [], joined: [], peers: [], loaded: false },
   });
 });
 afterEach(() => {
@@ -168,6 +171,34 @@ describe('Remote page', () => {
       expect(useStore.getState().appRoute).toBe('remote');
     }
     useStore.setState({ commandPaletteVisible: false, notificationPanelVisible: false });
+  });
+
+  it('Escape belongs to the open accept dialog of a shared pane, not the page', async () => {
+    const offer: A2aLinkOfferRecordV1 = {
+      v: 1, offerId: '33333333-3333-4333-8333-333333333333', side: 'in', hostId: HOST,
+      end: { kind: 'pane', workspaceId: 'rw', workspaceName: 'Web', paneId: 'rp', label: 'claude' }, allow: { outbound: true, inbound: true },
+      state: 'open', createdAt: '', updatedAt: '', expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    };
+    stub([], { offers: [offer], hosts: [{ hostId: HOST, name: 'DESK', role: 'joiner', state: 'connected', pending: 0 }] });
+    await render();
+    await act(async () => { $<HTMLButtonElement>('[data-testid="a2a-offer-accept"]')!.click(); });
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    act(() => { $('#remote-page-title')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+    expect(useStore.getState().appRoute).toBe('remote');
+  });
+
+  it('a failed Withdraw on a share row says why under that row', async () => {
+    const share: A2aLinkOfferRecordV1 = {
+      v: 1, offerId: '44444444-4444-4444-8444-444444444444', side: 'out', hostId: PEER_HOST,
+      end: { kind: 'pane', workspaceId: 'w1', workspaceName: 'api', paneId: 'p1', label: 'build' }, allow: { outbound: true, inbound: true },
+      state: 'open', createdAt: '', updatedAt: '', expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    };
+    stub([], { offers: [share], hosts: [{ hostId: PEER_HOST, name: 'office-win', role: 'server', state: 'connected', pending: 0 }] });
+    await render();
+    const row = $('[data-testid="a2a-share-row"]')!;
+    await act(async () => { row.querySelector<HTMLButtonElement>('[data-testid="a2a-share-row-withdraw"]')!.click(); });
+    expect(api.a2aRemote.offersWithdraw).toHaveBeenCalledWith(share.offerId);
+    expect($('[data-testid="a2a-share-row"] [role="alert"]')?.textContent).toBe('The link is no longer waiting for that.');
   });
 
   it('revokes only on the second click', async () => {

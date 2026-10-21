@@ -9,7 +9,7 @@ import { useStore } from '../../../stores';
 import MiniSidebar from '../MiniSidebar';
 import { selectRemoteNeedsYou } from '../../../stores/slices/a2aRemoteSlice';
 import { A2A_HELD_POLL_MS, refreshA2aRemote, useA2aRemoteBridge } from '../../../hooks/useA2aRemoteBridge';
-import type { A2aLinkRecordV1 } from '../../../../shared/a2aRemote';
+import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../../shared/a2aRemote';
 import type { A2aRemoteHostStatus } from '../../../../shared/rpc';
 import type { Task } from '../../../../shared/types';
 
@@ -62,7 +62,7 @@ beforeEach(() => {
   root = createRoot(container);
   useStore.setState({
     appRoute: 'workspaces', readOnly: false, sidebarVisible: true, schedulesAvailable: false, moa: null,
-    a2aRemote: { links: [], hosts: [], held: [], joined: [], peers: [], loaded: false },
+    a2aRemote: { links: [], offers: [], hosts: [], held: [], joined: [], peers: [], loaded: false },
   });
 });
 afterEach(() => {
@@ -83,9 +83,31 @@ describe('Remote rail badge', () => {
         // Holds for Moa clear by themselves: not counted.
         held: [task(), task('occupant-changed'), task('brain-delivery-pending'), task('brain-unavailable')],
         hosts: [host('identity-changed'), host('disconnected')],
+        offers: [],
         joined: [], peers: [], loaded: true,
       },
     })).toBe(4);
+  });
+
+  it('counts a pane another PC shared while it waits here, not this PC’s own shares or ended ones', () => {
+    const offer = (o: Partial<A2aLinkOfferRecordV1>): A2aLinkOfferRecordV1 => ({
+      v: 1, offerId: crypto.randomUUID(), side: 'in', hostId: '11111111-1111-4111-8111-111111111111',
+      end: { kind: 'pane', workspaceId: 'w', workspaceName: 'API', paneId: 'p' }, allow: { outbound: true, inbound: true },
+      state: 'open', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(), ...o,
+    });
+    expect(selectRemoteNeedsYou({
+      a2aRemote: {
+        links: [], held: [], hosts: [], joined: [], peers: [], loaded: true,
+        offers: [
+          offer({}),
+          offer({ pendingLinkId: '44444444-4444-4444-8444-444444444444' }),
+          offer({ side: 'out' }),
+          offer({ state: 'declined', endedReason: 'declined' }),
+          offer({ expiresAt: new Date(Date.now() - 1).toISOString() }),
+        ],
+      },
+    })).toBe(2);
   });
 
   it('follows the bridge: one read at start, then a re-read on each nudge', async () => {

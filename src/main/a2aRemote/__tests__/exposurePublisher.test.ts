@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { A2aExposureCandidate, A2aRemotePaneGoneParams, A2aRemotePaneSnapshot } from '../../../shared/rpc';
-import { A2A_BRAIN_GRACE_MS, A2aExposurePublisher, coercePaneSnapshot, diffGonePanes, goneForLinks } from '../exposurePublisher';
-import type { A2aLinkRecordV1 } from '../../../shared/a2aRemote';
+import { A2A_BRAIN_GRACE_MS, A2aExposurePublisher, coercePaneSnapshot, diffGonePanes, goneForLinks, goneForOffers } from '../exposurePublisher';
+import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
 
 const snap = (ws: Array<[string, string[]]>): A2aRemotePaneSnapshot => ({
   workspaces: ws.map(([id, panes]) => ({ id, name: `name-${id}`, panes: panes.map((paneId) => ({ paneId, cwd: `/repo/${paneId}` })) })),
@@ -56,6 +56,16 @@ describe('A2aExposurePublisher', () => {
     // The last workspace really closed.
     await pub.accept({ workspaces: [], sessionRestored: true });
     expect(gone).toEqual([{ workspaceId: 'w1', reason: 'workspace-gone' }]);
+  });
+
+  it('a pane of another PC’s shadow workspace is never one of this PC’s panes', async () => {
+    const { pub } = rig(['w1']);
+    const shadow = 'shadow:11111111-1111-4111-8111-111111111111:w9';
+    await pub.accept(snap([['w1', ['a']], [shadow, ['z']]]));
+    expect(pub.hasPane('w1', 'a')).toBe(true);
+    expect(pub.hasPane(shadow, 'z')).toBe(false);
+    expect(await pub.candidateFor(shadow, 'z')).toBeNull();
+    expect(await pub.candidateFor('w1', 'a')).toMatchObject({ workspaceId: 'w1', paneId: 'a' });
   });
 
   it('publishes nothing while nothing is exposed', async () => {
@@ -229,5 +239,78 @@ describe('A2aExposurePublisher Moa blips', () => {
     await b.pub.accept(tree('present'));
     await b.pub.accept(tree('off'));
     expect(b.gone).toEqual([{ workspaceId: 'hq', reason: 'workspace-gone', endpoint: 'brain' }]);
+  });
+});
+
+describe('goneForOffers', () => {
+  const offer = (o: Partial<A2aLinkOfferRecordV1>): A2aLinkOfferRecordV1 => ({
+    v: 1, offerId: '33333333-3333-4333-8333-333333333333', side: 'out', hostId: '11111111-1111-4111-8111-111111111111',
+    end: { kind: 'pane', workspaceId: 'ws1', workspaceName: 'API', paneId: 'p1' }, allow: { outbound: true, inbound: true },
+    state: 'open', createdAt: '', updatedAt: '', expiresAt: '', ...o,
+  });
+  const tree = { workspaces: [{ id: 'ws1', name: 'API', panes: [{ paneId: 'p2' }] }, { id: 'ws2', name: 'Web', panes: [{ paneId: 'p3' }] }] };
+
+  it('ends the open shares whose pane closed, moved or lost its workspace while the daemon was away', () => {
+    expect(goneForOffers([offer({})], tree)).toEqual([{ workspaceId: 'ws1', paneId: 'p1', reason: 'pane-closed' }]);
+    expect(goneForOffers([offer({ end: { kind: 'pane', workspaceId: 'ws1', workspaceName: 'API', paneId: 'p3' } })], tree)).toEqual([{ workspaceId: 'ws1', paneId: 'p3', reason: 'pane-moved' }]);
+    expect(goneForOffers([offer({ end: { kind: 'pane', workspaceId: 'ws9', workspaceName: 'X', paneId: 'p9' } })], tree)).toEqual([{ workspaceId: 'ws9', reason: 'workspace-gone' }]);
+  });
+
+  it('leaves live panes, ended shares and received offers alone', () => {
+    expect(goneForOffers([offer({ end: { kind: 'pane', workspaceId: 'ws1', workspaceName: 'API', paneId: 'p2' } })], tree)).toEqual([]);
+    expect(goneForOffers([offer({ state: 'withdrawn', endedReason: 'withdrawn' }), offer({ side: 'in' })], tree)).toEqual([]);
+  });
+});
+
+describe('A2aExposurePublisher — shares are acceptable only after the reconnect pass', () => {
+  const tree: A2aRemotePaneSnapshot = { workspaces: [{ id: 'w1', name: 'API', panes: [{ paneId: 'p2' }] }] };
+  const share: A2aLinkOfferRecordV1 = {
+    v: 1, offerId: '33333333-3333-4333-8333-333333333333', side: 'out', hostId: 'h',
+    end: { kind: 'pane', workspaceId: 'w1', workspaceName: 'API', paneId: 'p1' }, allow: { outbound: true, inbound: true },
+    state: 'open', createdAt: '', updatedAt: '', expiresAt: '',
+  };
+  function rig(o: { offers?: () => Promise<{ offers: A2aLinkOfferRecordV1[] }>; goneFails?: boolean }) {
+    const flags: Array<boolean | undefined> = [];
+    const gone: A2aRemotePaneGoneParams[] = [];
+    const client = {
+      a2aRemoteExposureList: vi.fn(async () => ({ exposures: [] })),
+      a2aRemoteExposurePublish: vi.fn(async (_p: A2aExposureCandidate[], reconciled?: boolean) => void flags.push(reconciled)),
+      a2aRemotePaneGone: vi.fn(async (p: A2aRemotePaneGoneParams) => {
+        if (o.goneFails) throw new Error('daemon busy');
+        gone.push(p);
+      }),
+      a2aRemoteLinksList: vi.fn(async () => ({ links: [] })),
+      ...(o.offers ? { a2aRemoteOffersList: vi.fn(o.offers) } : {}),
+    };
+    const timers: Array<() => void> = [];
+    const pub = new A2aExposurePublisher({ client: () => client, repoKey: async () => null, log: () => undefined, setTimer: (fn) => void timers.push(fn) });
+    return { pub, flags, gone, timers };
+  }
+
+  it('says reconciled once the shares were read and their gone notices landed', async () => {
+    const { pub, flags, gone } = rig({ offers: async () => ({ offers: [share] }) });
+    await pub.accept(tree);
+    expect(gone).toEqual([{ workspaceId: 'w1', paneId: 'p1', reason: 'pane-closed' }]);
+    expect(flags).toEqual([true]);
+  });
+
+  it('a shares read that failed is tried again, and the retry can say reconciled', async () => {
+    let fail = true;
+    const { pub, flags, timers } = rig({ offers: async () => { if (fail) throw new Error('busy'); return { offers: [] }; } });
+    await pub.accept(tree);
+    expect(flags).toEqual([false]);
+    expect(timers).toHaveLength(1);
+    fail = false;
+    timers[0]();
+    await vi.waitFor(() => expect(flags).toEqual([false, true]), { timeout: 5_000 });
+  });
+
+  it('not when the shares could not be read, or a notice did not land', async () => {
+    const unread = rig({ offers: async () => { throw new Error('no daemon'); } });
+    await unread.pub.accept(tree);
+    expect(unread.flags).toEqual([false]);
+    const unsent = rig({ offers: async () => ({ offers: [share] }), goneFails: true });
+    await unsent.pub.accept(tree);
+    expect(unsent.flags).toEqual([false]);
   });
 });

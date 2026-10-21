@@ -14,14 +14,14 @@ import type { WebDeviceSummary, WebTerminalInfo } from '../../../shared/web';
 import type { RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary } from '../../../shared/remoteHosts';
 import { remoteAttachmentKey } from '../../../shared/remoteHosts';
 import type { LanLinkPeerSummary } from '../../../shared/lanlink';
-import type { A2aLinkRecordV1 } from '../../../shared/a2aRemote';
+import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
 import type { A2aRemoteHostStatus, A2aRemoteStatus } from '../../../shared/rpc';
 import { buildRemoteEntries, paneNamesByPty, serverReach, type RemoteEntry, type ServerReach } from './remoteEntries';
 import { selectRemoteInbox } from '../../stores/selectors/remoteInbox';
-import { heldNeedsPerson, heldReason, selectRemoteNeedsYou } from '../../stores/slices/a2aRemoteSlice';
+import { heldNeedsPerson, heldReason, offerWaitsOnYou, selectRemoteNeedsYou } from '../../stores/slices/a2aRemoteSlice';
 import { refreshA2aRemote } from '../../hooks/useA2aRemoteBridge';
 import { buildPaneSnapshot } from '../../hooks/useA2aRemoteSnapshot';
-import { A2aLinkRequestRow, A2aLinkRow, type LocalNames } from './A2aLinksPanel';
+import { A2aLinkRequestRow, A2aLinkRow, A2aOfferRow, A2aShareRow, type LocalNames } from './A2aLinksPanel';
 import { A2aHeldRow, A2aIdentityRow, heldPeer } from './A2aDeliveryPanel';
 import A2aLinkDialog from './A2aLinkDialog';
 import RemoteConnectDialog, { type ConnectTab } from './RemoteConnectDialog';
@@ -119,6 +119,8 @@ export default function RemotePage() {
   const [sshStates, setSshStates] = useState<Record<string, SshTunnelState>>({});
   const [linkDialog, setLinkDialog] = useState<{ hostId: string } | null>(null);
   const [exposure, setExposure] = useState<{ hostId: string; name: string } | null>(null);
+  /** The pane another PC shared that this PC's human is accepting (the link dialog). */
+  const [offerDialog, setOfferDialog] = useState<A2aLinkOfferRecordV1 | null>(null);
   const [confirming, setConfirming] = useState<Confirm>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
@@ -222,6 +224,7 @@ export default function RemotePage() {
   }, [feed]);
   const pcName = useCallback((hostId: string) => pcs.find((p) => p.hostId === hostId)?.name ?? hostId.slice(0, 6), [pcs]);
   const requests = feed.links.filter((l) => l.state === 'proposed-in');
+  const offers = feed.offers.filter((o) => offerWaitsOnYou(o, now));
   // Holds for Moa clear by themselves: a quiet line, not a Needs you row.
   const personHeld = feed.held.filter(heldNeedsPerson);
   const moaHeld = feed.held.filter((x) => !heldNeedsPerson(x));
@@ -407,7 +410,7 @@ export default function RemotePage() {
     : !a2aStatus.enabled ? t('remotePage.a2aOff')
       : a2aStatus.listening ? t('remotePage.a2aListening', { port: a2aStatus.port })
         : t('remotePage.a2aError', { error: a2aStatus.lastError ?? t('remotePage.unknown') });
-  const dialogOpen = !!(connect || linkDialog || exposure);
+  const dialogOpen = !!(connect || linkDialog || exposure || offerDialog);
   const isConfirming = (kind: NonNullable<Confirm>['kind'], id: string) => confirming?.kind === kind && confirming.id === id;
   const rowError = (key: string) => (error?.key === key ? <p className="wmux-remote-row-error" role="alert">{error.message}</p> : null);
   const statusCell = (word: StatusWord, live: boolean, since: number | null) => (
@@ -477,6 +480,19 @@ export default function RemotePage() {
           t={t}
         />
       )),
+      ...feed.offers
+        .filter((o) => o.side === 'out' && (o.state === 'open' || o.state === 'claimed') && o.hostId === pc.hostId)
+        .map((o) => (
+          <A2aShareRow
+            key={o.offerId}
+            offer={o}
+            pcName={pc.name}
+            busy={busy === o.offerId}
+            onWithdraw={() => a2a?.offersWithdraw && void linkCall(o.offerId, () => a2a.offersWithdraw(o.offerId))}
+            error={rowError(o.offerId)}
+            t={t}
+          />
+        )),
     ];
   });
   const hostRows: ReactNode[] = hostEntries.flatMap((h) => {
@@ -731,6 +747,20 @@ export default function RemotePage() {
                   t={t}
                 />
               ))}
+              {offers.map((o, i) => (
+                <A2aOfferRow
+                  key={o.offerId}
+                  offer={o}
+                  pcName={pcName(o.hostId)}
+                  fingerprint={pcs.find((p) => p.hostId === o.hostId)?.fingerprint ?? null}
+                  now={now}
+                  primary={requests.length === 0 && i === 0}
+                  busy={busy === o.offerId}
+                  onAccept={() => setOfferDialog(o)}
+                  onDecline={() => a2a?.offersDecline && void linkCall(o.offerId, () => a2a.offersDecline(o.offerId))}
+                  t={t}
+                />
+              ))}
               {personHeld.map((task) => (
                 <A2aHeldRow
                   key={task.id}
@@ -759,7 +789,7 @@ export default function RemotePage() {
                 />
               ))}
             </ul>
-            {error && (requests.some((l) => l.linkId === error.key) || feed.held.some((x) => x.id === error.key)) && (
+            {error && (requests.some((l) => l.linkId === error.key) || offers.some((o) => o.offerId === error.key) || feed.held.some((x) => x.id === error.key)) && (
               <p className="wmux-remote-row-error" role="alert">{error.message}</p>
             )}
           </section>
@@ -812,6 +842,9 @@ export default function RemotePage() {
           initialHostId={linkDialog.hostId}
           onClose={() => { setLinkDialog(null); void refresh(); }}
         />
+      )}
+      {offerDialog && (
+        <A2aLinkDialog offer={offerDialog} onClose={() => { setOfferDialog(null); void refresh(); }} />
       )}
       {exposure && (
         <Dialog onClose={() => setExposure(null)} width={520} data-testid="remote-exposure">

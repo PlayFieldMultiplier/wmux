@@ -107,8 +107,10 @@ import { ExposureStore } from './a2aRemote/exposureStore';
 import { ExposedPaneCache } from './a2aRemote/exposedPanes';
 import { createA2aRoutes } from './a2aRemote/routes';
 import { registerA2aLinkRpc } from './a2aRemote/linkRpc';
+import { A2aOffers } from './a2aRemote/offers';
+import { OfferStore } from './a2aRemote/offerStore';
 import { A2aRemoteDelivery } from './a2aRemote/delivery';
-import { isRemoteTaskId } from '../shared/a2aRemote';
+import { A2A_FEATURE_LINK_OFFER, isRemoteTaskId } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
 import { AppendOnlyLog } from './eventlog/AppendOnlyLog';
@@ -9205,11 +9207,38 @@ async function main(): Promise<void> {
     const a2aPeers = new A2aPeerStore({ dir: a2aDir, log: a2aLog });
     // The delivery layer (below) ends a link's tasks on every link transition.
     let a2aDelivery: A2aRemoteDelivery | null = null;
-    const a2aLinks = new LinkStore({ dir: a2aDir, log: a2aLog, onTransition: (l) => a2aDelivery?.onLinkTransition(l) });
+    // Share offers settle with the links they make (built below, once the stores exist).
+    let a2aOffers: A2aOffers | null = null;
+    const a2aLinks = new LinkStore({
+      dir: a2aDir,
+      log: a2aLog,
+      onTransition: (l) => {
+        a2aDelivery?.onLinkTransition(l);
+        a2aOffers?.onLinkTransition(l);
+      },
+    });
     const a2aExposures = new ExposureStore({ dir: a2aDir, log: a2aLog });
     const a2aExposedPanes = new ExposedPaneCache();
     const a2aRemoteHosts = new RemoteHostStore({ dir: a2aDir, log: a2aLog });
-    const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures }, a2aLog);
+    const a2aOffersRef = new A2aOffers({
+      store: new OfferStore({ dir: a2aDir, log: a2aLog }),
+      links: a2aLinks,
+      exposures: a2aExposures,
+      isPeer: (hostId) => a2aPeers.list().some((p) => p.hostId === hostId && !p.revokedAt),
+      isJoined: (hostId) => a2aRemoteHosts.get(hostId) !== undefined,
+      // No share is accepted before the app has ended the shares of panes that closed while it was away.
+      appReady: () => a2aExposedPanes.isReconciled(),
+      features: (hostId) => a2aDelivery?.hub.featuresOf(hostId),
+      enqueue: (hostId, envelope) => {
+        if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
+        a2aDelivery.outbox.enqueue(hostId, envelope);
+      },
+      notifyLinkChange: (...args) => a2aDelivery?.notifyLinkChange(...args),
+      broadcast: (event) => pipeServer.broadcast({ type: event.type, sessionId: '', data: event }),
+      log: a2aLog,
+    });
+    a2aOffers = a2aOffersRef;
+    const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);
     const a2aCascade = (hostId: string): void => {
       a2aForgetHost(hostId);
       a2aDelivery?.onPeerRevoked(hostId);
@@ -9223,6 +9252,7 @@ async function main(): Promise<void> {
         panes: a2aExposedPanes,
         links: a2aLinks,
         broadcast: a2aBroadcast,
+        offers: a2aOffersRef,
         expireProposals: () => {
           for (const l of a2aLinks.expireProposals()) a2aBroadcast({ type: 'a2a.remote.link.changed', linkId: l.linkId, state: l.state });
         },
@@ -9263,6 +9293,7 @@ async function main(): Promise<void> {
         broadcast: a2aBroadcast,
         // Accept / reject / revoke / broken reach the other PC through the outbox.
         notifyLinkChange: (...args) => a2aDelivery?.notifyLinkChange(...args),
+        offers: a2aOffersRef,
         log: a2aLog,
       },
     );
@@ -9278,12 +9309,17 @@ async function main(): Promise<void> {
         remoteHosts: a2aRemoteHosts,
         broadcast: (event) => pipeServer.broadcast(event),
         refreshLink: (linkId) => (refresh ? refresh({ linkId }) : Promise.resolve(null)),
+        offers: a2aOffersRef,
+        // This build shows and accepts share offers: tell the servers it joins.
+        features: [A2A_FEATURE_LINK_OFFER],
         log: a2aLog,
       });
       a2aDelivery.registerRoutes(a2aRoutes);
       a2aDelivery.registerRpc(onA2aRpc);
       a2aDelivery.start();
       a2aDeliveryRef = a2aDelivery;
+      // A share that was mid-accept when the daemon stopped is settled by links.json.
+      a2aOffersRef.recover();
     } else {
       log('warn', '[a2a-remote] task ledger unavailable: messages between PCs are not carried this run');
     }

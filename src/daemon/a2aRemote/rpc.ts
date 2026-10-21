@@ -40,10 +40,15 @@ export interface A2aRemoteRpcDeps {
  * one does not hide the other.
  */
 export function forgetHostCascade(
-  stores: { links: { forgetHost(hostId: HostId): number }; exposures: { forgetHost(hostId: HostId): boolean } },
+  stores: { links: { forgetHost(hostId: HostId): number }; exposures: { forgetHost(hostId: HostId): boolean }; offers?: { forgetHost(hostId: HostId): void } },
   log: (level: 'info' | 'warn' | 'error', msg: string) => void,
 ): (hostId: HostId) => void {
   return (hostId) => {
+    try {
+      stores.offers?.forgetHost(hostId);
+    } catch (err) {
+      log('error', `[a2a-remote] revoke cascade: offers for ${hostId}: ${errMsg(err)}`);
+    }
     try {
       stores.links.forgetHost(hostId);
     } catch (err) {

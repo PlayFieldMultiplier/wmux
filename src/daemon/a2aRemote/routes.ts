@@ -20,7 +20,8 @@ import { errMsg, isPlainObject, isSafeId } from './storeFile';
 /**
  * The authenticated `/api/a2a/*` routes behind the A2A listener (layers 2-3):
  * what this host exposes to the calling peer, and the link proposal, status
- * and revoke routes the joiner drives. `A2aServer` has already refused
+ * and revoke routes the joiner drives, plus the two ends of a share offer (a
+ * proposal naming it, and its decline). `A2aServer` has already refused
  * browsers, authenticated the peer and handled pair/unpair/hello.
  *
  * A small method + path-pattern table so the delivery routes (messages,
@@ -53,6 +54,11 @@ export interface A2aRouteDeps {
   expireProposals?: () => void;
   /** Daemon -> app nudge (`pipeServer.broadcast`). */
   broadcast: (event: A2aRemoteLinkEvent) => void;
+  /** Share offers: a proposal naming an offer, and the other PC's decline. */
+  offers?: {
+    acceptProposal(peerHostId: string, proposal: A2aLinkProposeRequest): { status: number; body: unknown };
+    decline(peerHostId: string, offerId: string): { status: number; body: unknown };
+  };
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -156,6 +162,13 @@ export function createA2aRoutes(deps: A2aRouteDeps): A2aRouteTable {
     }
     const proposal = parseProposal(body);
     if (!proposal) return refuse(res, 400, 'bad-request');
+    // An answer to this PC's share: decided by the offer it names, before the
+    // duplicate-id check below (a retry of the same link is not a conflict).
+    if (proposal.offerId && deps.offers) {
+      const answer = deps.offers.acceptProposal(peer.hostId, proposal);
+      if (answer.status === 200) deps.log('info', `[a2a-remote] host ${peer.hostId} accepted offer ${proposal.offerId}`);
+      return sendJson(res, answer.status, answer.body);
+    }
     // Like with like only (no Moa <-> pane in v1), and the receiver's end
     // must be one this peer may see right now: exposed to it AND live in the
     // app's latest snapshot (a closed pane or a replaced HQ is refused). Same
@@ -209,6 +222,13 @@ export function createA2aRoutes(deps: A2aRouteDeps): A2aRouteTable {
     sendJson(res, 200, { ok: true, state: ended.state });
   });
 
+  table.add('POST', `${A2A_ROUTES.offers}/:offerId${A2A_ROUTES.offerDeclineSuffix}`, ({ res, params, peer }) => {
+    const offerId = params['offerId'];
+    if (!deps.offers || !offerId || !UUID_RE.test(offerId)) return refuse(res, 404, 'bad-request', 'not found');
+    const answer = deps.offers.decline(peer.hostId, offerId);
+    sendJson(res, answer.status, answer.body);
+  });
+
   /** The end is in what this peer can see right now: exposed AND present in the app's latest snapshot. */
   function mayLinkTo(peer: WebA2aPeer, to: A2aLinkProposeRequest['to']): boolean {
     return isVisibleEnd(deps.panes, deps.exposures, peer.hostId, to);
@@ -234,8 +254,9 @@ export function createA2aRoutes(deps: A2aRouteDeps): A2aRouteTable {
 /** Strict shape check of `A2aLinkProposeRequest`; the link store re-validates ids and names. */
 function parseProposal(raw: unknown): A2aLinkProposeRequest | null {
   if (!isPlainObject(raw)) return null;
-  const { linkId, from, to, allow } = raw;
+  const { linkId, from, to, allow, offerId } = raw;
   if (typeof linkId !== 'string' || !UUID_RE.test(linkId)) return null;
+  if (offerId !== undefined && (typeof offerId !== 'string' || !UUID_RE.test(offerId))) return null;
   if (!isPlainObject(from) || !isSafeEnd(from)) return null;
   if (!isPlainObject(to) || !isSafeEnd(to)) return null;
   if (!isPlainObject(allow) || typeof allow['outbound'] !== 'boolean' || typeof allow['inbound'] !== 'boolean') return null;
@@ -245,6 +266,7 @@ function parseProposal(raw: unknown): A2aLinkProposeRequest | null {
   const gitRemote = optional(from['gitRemote']);
   return {
     linkId,
+    ...(typeof offerId === 'string' ? { offerId } : {}),
     from: {
       ...endOf(from),
       ...(label !== undefined ? { label } : {}),
