@@ -27,6 +27,8 @@ import type { ResumeBinding } from '../../shared/agentResume';
 
 export interface ReconnectResult {
   success: boolean;
+  /** #2398 — with `success`: this reconnect started the session (promoted a suspended one). */
+  promoted?: boolean;
   error?: string;
   transient?: boolean;
   recoveryPending?: boolean;
@@ -50,8 +52,10 @@ export interface ReconnectResult {
   rows?: number;
 }
 
-/** Why an attempt settled without a session pipe; absent once it attached. */
+/** Why an attempt settled without a session pipe; absent once it attached (except `promoted`). */
 export interface ReconnectSettleInfo {
+  /** #2398 — attached, and this attempt started the session (it was suspended). */
+  promoted?: boolean;
   cwdMissing?: boolean;
   rateLimited?: boolean;
   /** Retries ran out; the id is kept unconfirmed (#2398). */
@@ -146,7 +150,8 @@ export async function reconnectPtyWithRetry(
       if (!isCurrent()) return null;
       deps.setUnconfirmed?.(ptyId, false);
       deps.setDeferred?.(ptyId, false);
-      deps.onRecoveryError?.(null);
+      if (result.promoted) deps.onRecoveryError?.(null, { promoted: true });
+      else deps.onRecoveryError?.(null);
       return result.cols && result.rows ? { cols: result.cols, rows: result.rows } : null;
     }
     if (result?.recoveryPending) {

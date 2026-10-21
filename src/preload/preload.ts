@@ -366,7 +366,7 @@ const electronAPI = {
       // #2398 — `promote` is required: false (a hidden pane, a repaint) still
       // attaches a live session but holds a suspended one, answered
       // `deferred`; only true starts it.
-      ipcRenderer.invoke(IPC.PTY_RECONNECT, id, opts) as Promise<{ success: boolean; id?: string; shell?: string; cols?: number; rows?: number; error?: string; code?: string; transient?: boolean; recoveryPending?: boolean; cwdMissing?: boolean; deferred?: boolean; resumeAgent?: string; resumeBinding?: ResumeBinding; recovery?: DeadPaneRecovery }>,
+      ipcRenderer.invoke(IPC.PTY_RECONNECT, id, opts) as Promise<{ success: boolean; id?: string; shell?: string; cols?: number; rows?: number; error?: string; code?: string; transient?: boolean; recoveryPending?: boolean; cwdMissing?: boolean; deferred?: boolean; promoted?: boolean; resumeAgent?: string; resumeBinding?: ResumeBinding; recovery?: DeadPaneRecovery }>,
     // #2398 — the suspended sessions panes hold without promoting (their
     // panes are hidden or not mounted): the daemon keeps them from aging out.
     hold: (ids: string[]) => ipcRenderer.invoke(IPC.PTY_HOLD, ids) as Promise<void>,

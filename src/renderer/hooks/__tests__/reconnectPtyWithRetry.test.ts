@@ -296,3 +296,21 @@ describe('reconnectPtyWithRetry — a deferred answer with a resume binding', ()
     expect(onRecoveryError).toHaveBeenCalledWith(null, { deferred: true, resume: { resumeAgent: undefined, resumeBinding } });
   });
 });
+
+// #2398 round 5 — a stop key that joined the pane's own attempt must know
+// whether that attempt started the session (promoted a suspended one).
+describe('reconnectPtyWithRetry — an attach that started the session (#2398)', () => {
+  it('settles attached and says it promoted', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: true, promoted: true }));
+    await reconnectPtyWithRetry('pty-promoted', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { promoted: true });
+  });
+
+  it('an attach of a running session settles as before', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn(async () => ({ success: true }));
+    await reconnectPtyWithRetry('pty-live', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenCalledWith(null);
+  });
+});

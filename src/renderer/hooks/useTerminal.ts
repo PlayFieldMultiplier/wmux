@@ -3755,6 +3755,14 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // What the stop key's own attempt found: suspended, or a recovery waiting
     // for its Retry. Read before anything its settle starts can attach.
     let stopKeyFoundNotRunning = false;
+    // Whether the last attempt to settle started the session (it promoted a
+    // suspended one): nothing ran there before it, so a stop key that joined
+    // it has nothing to stop.
+    let lastAttemptStarted = false;
+    // Torn down (unmount, or a new ptyId): an attempt or a queued retry of
+    // this run must no longer touch the pane's shared refs, which belong to
+    // the next run now.
+    let disposed = false;
     const noteDeferred = (deferred: boolean, resume?: ResumeHint, armResume = true) => {
       deferredAttachRef.current = deferred;
       // No session pipe either: refuses the park, like a pending reattach.
@@ -3765,12 +3773,16 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // #2398 — a raw write must not settle on an attempt that leaves the
       // session suspended: wait it out, then promote if it did. A stop key
       // only waits it out: it never promotes.
+      if (disposed) return undefined;
       if (inFlight) {
         if (reason === 'stop-key') return current;
         // The user's Retry (or Start fresh, which promoted first) is never
         // dropped: an attempt that began before it can only answer the state
-        // it began in.
-        if (reason === 'manual-retry') return current?.then(() => reattach(reason));
+        // it began in. It runs after that attempt only while still owed: the
+        // pane still has no session pipe (a recovery failure, a give-up, a
+        // suspended session). One that attached is not reconnected again,
+        // which would replay its scrollback twice and tear down the new pipe.
+        if (reason === 'manual-retry') return current?.then(() => (reconnectPendingRef.current ? reattach(reason) : undefined));
         if (reason === 'raw-write') return current?.then(() => (deferredAttachRef.current ? reattach(reason) : undefined));
         if (stopKeyInFlight) paneOwed = true;
         return undefined;
@@ -3793,14 +3805,15 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       const promote = !stopKey && (promoteRef.current || reason === 'raw-write' || reason === 'resume-on-start');
       console.log(`[useTerminal] daemon reattach ptyId=${id} (${reason}${promote ? '' : ', hidden'})`);
       revealTiming(id, 'reattach-start', `reason=${reason}`);
-      return reconnectPtyWithRetry(id, () => ptyIdRef.current === id && terminalRef.current !== null, (message, info) => {
+      return reconnectPtyWithRetry(id, () => !disposed && ptyIdRef.current === id && terminalRef.current !== null, (message, info) => {
         // A non-null message means the attempt settled WITHOUT a session pipe
         // (rate limited, WSL recovery pending); null means it attached —
         // unless it is waiting on the reconcile (#2398), which shows no banner.
         reconnectPendingRef.current = message !== null || info?.awaitingReconcile === true;
         awaitingRetry = message !== null && !info?.rateLimited && !info?.unconfirmed;
         noteDeferred(info?.deferred === true, info?.resume, !stopKey || paneOwed);
-        if (stopKey) stopKeyFoundNotRunning = info?.deferred === true || awaitingRetry;
+        lastAttemptStarted = info?.promoted === true;
+        if (stopKey) stopKeyFoundNotRunning = info?.deferred === true || awaitingRetry || lastAttemptStarted;
         if ((info?.rateLimited || info?.unconfirmed || info?.awaitingReconcile) && slowRetry === null) {
           slowRetry = setTimeout(() => { slowRetry = null; void reattach('rate-limit-retry'); }, 8000 + Math.random() * 4000);
         }
@@ -3850,9 +3863,10 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // key's), while a hidden one is promoted only for a resume on start
         // its own folded-in trigger armed.
         .finally(() => {
-          inFlight = false; reconnectInFlightRef.current = false;
           stopKeyInFlight = false;
           paneOwed = false;
+          if (disposed) { inFlight = false; return; }
+          inFlight = false; reconnectInFlightRef.current = false;
           promoteIfDue();
         });
     };
@@ -3871,7 +3885,10 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       if (deferredAttachRef.current || awaitingRetry) return false;
       const joined = inFlight;
       await reattach('stop-key');
-      if (joined) return !deferredAttachRef.current && !awaitingRetry;
+      // A joined attempt is the pane's own: it may have started the session
+      // (a shown pane promoting a suspended one), and the key must not land
+      // in the shell or agent that attempt just started.
+      if (joined) return !deferredAttachRef.current && !awaitingRetry && !lastAttemptStarted;
       return !stopKeyFoundNotRunning;
     };
     const rawWriteReattach = (promote: boolean) => (promote ? reattach('raw-write') : stopKeyAttach());
@@ -3915,6 +3932,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       reattach('pty:restarted');
     });
     return () => {
+      disposed = true;
       retryReconnectRef.current = null;
       firstShowReattachRef.current = null;
       if (writeAttachRegistry.get(id) === rawWriteReattach) writeAttachRegistry.delete(id);

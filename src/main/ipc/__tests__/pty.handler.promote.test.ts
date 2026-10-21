@@ -264,6 +264,16 @@ describe('attach without promote (#2398)', () => {
     expect((handler.match(/removeHandler\(IPC\.PTY_HOLD\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
+  // Round-5 P3 — the reconnect answer says when it started the session, so a
+  // stop key that joined that attempt is not delivered into the new shell.
+  it('pty:reconnect answers promoted when it promoted a suspended session', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 9000);
+    const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
+    expect(region.slice(promoteAt, promoteAt + 800)).toMatch(/promoted = true;/);
+    expect(handler).toMatch(/return \{ success: true, id: session\.id,[^\n]*\.\.\.\(promoted \? \{ promoted: true \} : \{\}\) \};/);
+  });
+
   it('daemon.holdSession stamps the pending recovery or disk-only record and saves', () => {
     const start = daemon.indexOf("pipeServer.onRpc('daemon.holdSession'");
     expect(start).toBeGreaterThan(0);

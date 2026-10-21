@@ -21,7 +21,7 @@ vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: class { constructor() { throw new Error('no WebGL in jsdom'); } },
 }));
 
-type ReconnectAnswer = { success: boolean; deferred?: boolean; recoveryPending?: boolean; transient?: boolean; error?: string; resumeAgent?: string; resumeBinding?: { agent: string; sessionId: string; cwd: string } };
+type ReconnectAnswer = { success: boolean; promoted?: boolean; deferred?: boolean; recoveryPending?: boolean; transient?: boolean; error?: string; resumeAgent?: string; resumeBinding?: { agent: string; sessionId: string; cwd: string } };
 const reconnect = vi.fn<(id: string, opts?: { promote?: boolean }) => Promise<ReconnectAnswer>>(async () => ({ success: true }));
 const unsub = () => () => undefined;
 // The pane's own triggers, fired by hand: a supervised restart, its Retry.
@@ -89,15 +89,18 @@ function Harness({ useTerminal, ptyId, surfaceShown }: { useTerminal: UseTermina
   return <div ref={ref} style={{ width: '100%', height: '100%' }} />;
 }
 
-async function render(ptyId: string, surfaceShown: boolean): Promise<void> {
+let mountKey = 0;
+/** `remount`: a new component instance (a pane moved in the tree), not a re-render. */
+async function render(ptyId: string, surfaceShown: boolean, opts: { remount?: boolean } = {}): Promise<void> {
   const { useTerminal } = await import('../useTerminal');
   if (!root) {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
   }
+  if (opts.remount) mountKey++;
   const r = root;
-  await act(async () => { r.render(<Harness useTerminal={useTerminal} ptyId={ptyId} surfaceShown={surfaceShown} />); });
+  await act(async () => { r.render(<Harness key={mountKey} useTerminal={useTerminal} ptyId={ptyId} surfaceShown={surfaceShown} />); });
   await settle();
 }
 
@@ -319,6 +322,132 @@ describe('a Retry during an attempt in flight (#2398)', { timeout: 60_000 }, () 
     let answer: string | undefined;
     await act(async () => { answer = await attachForWrite('p-fresh', false); });
     expect(answer).toBe('attached');
+  });
+});
+
+// Round-5 P2: a queued Retry ran whatever the attempt before it found. One
+// that had attached was reconnected again: its scrollback replayed twice and
+// main's forceFresh tore down the pipe that had just gone live.
+describe('a queued Retry runs only while still owed (#2398)', { timeout: 60_000 }, () => {
+  /** A shown pane behind its Retry banner, with a restart's attempt held in flight and a Retry queued behind it. */
+  async function retryQueuedBehindAttempt(ptyId: string, inFlightAnswer: ReconnectAnswer) {
+    reconnect.mockImplementation(async () => ({ success: false, recoveryPending: true, error: 'WSL recovery failed' }));
+    setDaemonModeActive(true);
+    await render(ptyId, true);
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async () => {
+      await new Promise<void>((r) => { release = r; });
+      return inFlightAnswer;
+    });
+    act(() => { restarted?.({ ptyId, restartCount: 1, exitCode: 0 }); });
+    let retried: Promise<void> | undefined;
+    act(() => { retried = retryConnection?.(); });
+    reconnect.mockImplementation(async () => ({ success: true }));
+    await act(async () => { release(); await retried; });
+    await settle();
+  }
+
+  it('an attempt in flight that attached leaves nothing to retry', async () => {
+    await retryQueuedBehindAttempt('p-attached', { success: true });
+    expect(reconnect).toHaveBeenCalledTimes(2);
+  });
+
+  it('an attempt in flight that settled on the old failure still retries', async () => {
+    await retryQueuedBehindAttempt('p-stale', { success: false, recoveryPending: true, error: 'WSL recovery failed' });
+    expect(reconnect).toHaveBeenCalledTimes(3);
+  });
+
+  it('a Retry queued behind a stop key whose settle promotes the shown pane does not attach it twice', async () => {
+    setDaemonModeActive(true);
+    await render('p-promote-then-retry', false);
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async (_id, opts) => {
+      if (opts?.promote !== false) return { success: true };
+      await new Promise<void>((r) => { release = r; });
+      return { success: false, deferred: true };
+    });
+    const { attachForWrite } = await import('../useTerminal');
+    let pending: Promise<unknown> = Promise.resolve();
+    await act(async () => { pending = attachForWrite('p-promote-then-retry', false); });
+    await render('p-promote-then-retry', true);
+    let retried: Promise<void> | undefined;
+    act(() => { retried = retryConnection?.(); });
+    await act(async () => { release(); await pending; await retried; });
+    await settle();
+    // Mount, the stop key's attach, the first-show promote: no fourth.
+    expect(promoteFlags()).toEqual([false, false, true]);
+  });
+
+  // Round-5 P3: a Retry queued in one run (ptyId) ran after the pane was bound
+  // to another, reconnecting the old id and resetting the new run's flags.
+  it('a Retry queued before the pane is rebound never runs for the old id', async () => {
+    reconnect.mockImplementation(async () => ({ success: false, recoveryPending: true, error: 'WSL recovery failed' }));
+    setDaemonModeActive(true);
+    await render('p-old', true);
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async (id) => {
+      if (id !== 'p-old') return { success: true };
+      await new Promise<void>((r) => { release = r; });
+      return { success: false, recoveryPending: true, error: 'WSL recovery failed' };
+    });
+    act(() => { restarted?.({ ptyId: 'p-old', restartCount: 1, exitCode: 0 }); });
+    act(() => { void retryConnection?.(); });
+    await render('p-new', true);
+    await act(async () => { release(); });
+    await settle();
+    expect(reconnect.mock.calls.map(([id]) => id)).toEqual(['p-old', 'p-old', 'p-new']);
+  });
+});
+
+// Round-5 P3: a stop key that joins the pane's own attempt answered from the
+// state after it. A shown pane's attempt that started its suspended session
+// answered 'attached', and the key landed in the shell or agent just started.
+describe('a stop key that joins the pane\'s own attempt (#2398)', { timeout: 60_000 }, () => {
+  it('answers not running when that attempt started the session', async () => {
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async () => {
+      await new Promise<void>((r) => { release = r; });
+      return { success: true, promoted: true };
+    });
+    setDaemonModeActive(true);
+    await render('p-joined-start', true);
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    let pending: Promise<void> = Promise.resolve();
+    await act(async () => { pending = attachForWrite('p-joined-start', false).then((a) => { answer = a; }); });
+    await act(async () => { release(); await pending; });
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(answer).toBe('not-running');
+  });
+
+  it('answers attached when that attempt attached a running session', async () => {
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async () => {
+      await new Promise<void>((r) => { release = r; });
+      return { success: true };
+    });
+    setDaemonModeActive(true);
+    await render('p-joined-live', true);
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    let pending: Promise<void> = Promise.resolve();
+    await act(async () => { pending = attachForWrite('p-joined-live', false).then((a) => { answer = a; }); });
+    await act(async () => { release(); await pending; });
+    expect(answer).toBe('attached');
+  });
+});
+
+// Round-5 P3: the stable harness re-renders; a pane moved in the tree is a
+// remount. A deferred pane remounted shown attaches at mount with promote.
+describe('a deferred pane remounted (#2398)', { timeout: 60_000 }, () => {
+  it('remounted shown, it promotes at mount', async () => {
+    reconnect.mockImplementation(async (_id, opts) => (opts?.promote === false ? { success: false, deferred: true } : { success: true }));
+    setDaemonModeActive(true);
+    await render('p-remount', false);
+    expect(useStore.getState().ptyDeferredById['p-remount']).toBe(true);
+    await render('p-remount', true, { remount: true });
+    expect(promoteFlags()).toEqual([false, true]);
+    expect(useStore.getState().ptyDeferredById['p-remount']).toBeUndefined();
   });
 });
 

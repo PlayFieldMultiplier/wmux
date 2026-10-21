@@ -1525,6 +1525,10 @@ export function registerPTYHandlers(
           sessions = await daemonClient.rpc('daemon.listSessions', { includeSuspended: true }) as typeof sessions;
         }
         let session = sessions.find(s => s.id === id);
+        // #2398 — whether this reconnect started the session (promoted a
+        // suspended one) rather than attaching one that was running: a stop
+        // key that joined it has nothing of its own to stop there.
+        let promoted = false;
         if (!session || session.state === 'dead') {
           // RCA A1 — permanent failure: the daemon authoritatively reports the
           // session as absent or dead. Safe for the renderer to clear the
@@ -1569,6 +1573,7 @@ export function registerPTYHandlers(
             // banner's Retry is the right and only offer for every other
             // failure; a missing directory additionally gets "start fresh".
             if (!result.ok) return { success: false, recoveryPending: true, error: result.error?.message || 'WSL recovery failed. Check the target and retry.', cwdMissing: result.error?.code === 'CWD_MISSING' };
+            promoted = true;
             const refreshed = await daemonClient.rpc('daemon.listSessions', {}) as typeof sessions;
             session = refreshed.find(s => s.id === id) ?? session;
           } catch (err) {
@@ -1655,7 +1660,7 @@ export function registerPTYHandlers(
         recordPtyShell(session.id, session.cmd);
         // The session's stored geometry: a hidden pane cannot measure its own,
         // so it adopts this one instead (see the reattach in useTerminal).
-        return { success: true, id: session.id, shell: session.cmd, cols: session.cols, rows: session.rows };
+        return { success: true, id: session.id, shell: session.cmd, cols: session.cols, rows: session.rows, ...(promoted ? { promoted: true } : {}) };
       } catch (err) {
         // RCA A1 — RPC threw (timeout, ECONNRESET, handler swap mid-call).
         // This is a transient infrastructure failure, NOT proof the session is
