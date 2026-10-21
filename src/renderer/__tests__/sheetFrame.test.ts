@@ -18,12 +18,52 @@ const css = fs.readdirSync(stylesDir).filter((name) => name.endsWith('.css'))
 
 type Specificity = [number, number, number];
 
+/** Split a selector list on its top-level commas. */
+function splitList(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    if (list[i] === '(') depth += 1;
+    else if (list[i] === ')') depth -= 1;
+    else if (list[i] === ',' && depth === 0) { out.push(list.slice(start, i)); start = i + 1; }
+  }
+  out.push(list.slice(start));
+  return out;
+}
+
+/**
+ * Selectors Level 4 specificity: `:is()`, `:not()` and `:has()` count as their
+ * most specific argument, `:where()` counts nothing, any other functional
+ * pseudo-class counts as one class.
+ */
 function specificity(selector: string): Specificity {
-  const s = selector.replace(/::?[\w-]+\([^)]*\)/g, ' ');
+  const total: Specificity = [0, 0, 0];
+  let s = '';
+  for (let i = 0; i < selector.length; i += 1) {
+    const fn = /^:(is|not|has|where|[\w-]+)\(/.exec(selector.slice(i));
+    if (!fn || selector[i - 1] === ':') { s += selector[i]; continue; }
+    let depth = 0;
+    let j = i + fn[0].length - 1;
+    for (; j < selector.length; j += 1) {
+      if (selector[j] === '(') depth += 1;
+      else if (selector[j] === ')' && --depth === 0) break;
+    }
+    const arg = selector.slice(i + fn[0].length, j);
+    if (['is', 'not', 'has'].includes(fn[1])) {
+      const max = splitList(arg).map(specificity).sort((a, b) => compare(b, a))[0];
+      max.forEach((n, k) => { total[k] += n; });
+    } else if (fn[1] !== 'where') {
+      total[1] += 1;
+    }
+    s += ' ';
+    i = j;
+  }
   const ids = (s.match(/#[\w-]+/g) ?? []).length;
-  const classes = (s.match(/\.[\w-]+|\[[^\]]+\]|:[\w-]+/g) ?? []).length;
-  const types = (s.replace(/\[[^\]]+\]/g, ' ').match(/(?:^|[\s>+~])[a-z][\w-]*/gi) ?? []).length;
-  return [ids, classes, types];
+  const classes = (s.match(/\.[\w-]+|\[[^\]]+\]|(?<!:):[\w-]+/g) ?? []).length;
+  const types = (s.replace(/\[[^\]]+\]/g, ' ').match(/(?:^|[\s>+~])[a-z][\w-]*/gi) ?? []).length
+    + (s.match(/::[\w-]+/g) ?? []).length;
+  return [total[0] + ids, total[1] + classes, total[2] + types];
 }
 
 const SIDES = ['top', 'right', 'bottom', 'left'] as const;
@@ -159,6 +199,12 @@ describe('sheet frame per window shape', () => {
         expect(s.radius).toBe('0');
       }
     }
+  });
+
+  it('counts :not() and :is() as their most specific argument', () => {
+    expect(specificity('html[data-platform="win32"][data-maximized]:not([data-fullscreen]) .wmux-frame-row > .wmux-shell-body')).toEqual([0, 5, 1]);
+    expect(specificity(':root:is([data-theme="a"], #b)')).toEqual([1, 1, 0]);
+    expect(specificity('html:where(.a) .b')).toEqual([0, 1, 1]);
   });
 
   it('keys the flush rule on the corners attribute, not on the platform', () => {
