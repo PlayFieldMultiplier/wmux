@@ -1061,6 +1061,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         botRepoPath: (botId) => getBotDirectory()?.get(botId)?.repo?.repoPath,
         taskBranch: async (entry) => (await taskMissionFromMissions(daemonRpc(daemon), entry))?.branch ?? null,
         noHooksDir: path.join(deps.wmuxDir(), 'factory', 'no-hooks'),
+        scratchDir: path.join(deps.wmuxDir(), 'factory', 'apply'),
       });
       offTasks.push(installLateStopSweep({ ...stopPorts, onTransition: (fn) => ledger.onTransition(fn) }));
       offTasks.push(ledger.onTransition((t) => {

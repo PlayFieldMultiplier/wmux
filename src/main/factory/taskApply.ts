@@ -31,24 +31,31 @@
 //     and `info/attributes` between any check and the write. So `git apply`
 //     runs against a private, empty git dir of main's (with the checkout as
 //     its work tree), no system or global config, and only the owner's line
-//     ending settings (`core.autocrlf`, `core.eol`, `core.safecrlf`) passed
-//     in: no filter driver is defined there, so none can run. A touched path
+//     ending settings (`core.autocrlf`, `core.eol`, `core.safecrlf`,
+//     `core.attributesFile`) passed in: no filter driver is defined there, so
+//     none can run. The repository's `info/attributes` is copied in for its
+//     line endings (attributes run nothing without a driver). A touched path
 //     the checkout gives a filter (Git LFS) is refused (`filtered`): what it
-//     holds is not the file itself.
+//     holds is not the file itself; so is a task that changes a
+//     `.gitattributes`.
+//   - that private git dir lives under main's own folder (`<wmux>/factory`,
+//     0700), never the shared temp folder a sandboxed worker can write, and
+//     the patch reaches git apply on stdin, never as a file.
 //
 // git runs with a fixed argv, no shell, its git dir and work tree named
 // explicitly (a `core.worktree` in the shared config cannot move the
 // writes), no fsmonitor, hooks from an empty folder, and literal pathspecs.
 
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import type { LedgerEntry } from '../../shared/ledger';
 import type { FactoryTaskApplyRefusal, FactoryTaskApplyResult } from '../../shared/botTask';
 import { isPlainTaskBranchName } from '../../shared/taskGitRelay';
-import { defaultGit, taskGitDirTarget, type TaskPushGit } from '../worktask/taskPush';
+import { getExecEnv } from '../../shared/execEnv';
+import { defaultGit, taskGitDirTarget, TASK_PUSH_TIMEOUT_MS, type TaskPushGit } from '../worktask/taskPush';
 import { recordedTaskGitCommonDir } from '../worktask/taskGitCommonDir';
-import { workerGitPreflight, workerGitSafeArgs, type GitConfigEntry } from '../worktask/workerGit';
+import { workerGitEnv, workerGitPreflight, workerGitSafeArgs, type GitConfigEntry } from '../worktask/workerGit';
 
 /** The most files one Apply writes. */
 export const TASK_APPLY_MAX_FILES = 1000;
@@ -69,10 +76,56 @@ export interface TaskApplyPorts {
   taskBranch: (entry: LedgerEntry) => Promise<string | null>;
   /** An empty folder for `core.hooksPath`. */
   noHooksDir: string;
+  /** Main's own folder for an Apply's private git dir
+   *  (`<wmux>/factory/apply`), never the shared temp folder. */
+  scratchDir: string;
   /** Test seam (default: taskPush's git, no shell). */
   git?: TaskPushGit;
+  /** Test seam: git with raw output and `input` on stdin (the patch's
+   *  making and its applies). */
+  gitRaw?: TaskApplyRawGit;
   platform?: NodeJS.Platform;
 }
+
+/** Runs git with `env` added and `input` on stdin; resolves with the exit
+ *  code, raw stdout and stderr, never throws. */
+export type TaskApplyRawGit = (args: string[], cwd: string, env: Record<string, string>, input?: Buffer) => Promise<{ code: number; stdout: Buffer; stderr: string }>;
+
+/** The most a patch may be. */
+const PATCH_MAX_BYTES = 256 * 1024 * 1024;
+
+/** Main's git, as taskPush's (no shell, a clean env), with raw output and
+ *  stdin. */
+export const defaultRawGit: TaskApplyRawGit = (args, cwd, extra, input) => new Promise((resolve) => {
+  const out: Buffer[] = [];
+  let size = 0;
+  let err = '';
+  let over = false;
+  const child = spawn('git', args, { cwd, env: { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const timer = setTimeout(() => child.kill(), TASK_PUSH_TIMEOUT_MS);
+  child.stdout.on('data', (d: Buffer) => {
+    size += d.length;
+    if (size > PATCH_MAX_BYTES) {
+      over = true;
+      child.kill();
+      return;
+    }
+    out.push(d);
+  });
+  child.stderr.on('data', (d: Buffer) => {
+    if (err.length < 64 * 1024) err += d.toString('utf8');
+  });
+  child.on('error', (e) => {
+    clearTimeout(timer);
+    resolve({ code: 1, stdout: Buffer.alloc(0), stderr: String(e) });
+  });
+  child.on('close', (code) => {
+    clearTimeout(timer);
+    resolve(over ? { code: 1, stdout: Buffer.alloc(0), stderr: 'the patch is too large' } : { code: code ?? 1, stdout: Buffer.concat(out), stderr: err });
+  });
+  child.stdin.on('error', () => undefined);
+  child.stdin.end(input ?? Buffer.alloc(0));
+});
 
 let shared: TaskApplyPorts | null = null;
 export function setTaskApplyPorts(p: TaskApplyPorts | null): void {
@@ -149,7 +202,36 @@ export function lineEndingArgs(entries: readonly GitConfigEntry[]): string[] {
     const hits = entries.filter((e) => e.key === key);
     if (hits.length > 0) out.push('-c', `${key}=${hits[hits.length - 1].value}`);
   }
+  // The owner's own attributes file (system or global), never one the
+  // repository's config names.
+  const attrs = entries.filter((e) => e.key === 'core.attributesfile' && (e.scope === 'system' || e.scope === 'global'));
+  if (attrs.length > 0) out.push('-c', `core.attributesFile=${attrs[attrs.length - 1].value}`);
   return out;
+}
+
+/** The repository's object format, from its own config only (a sha256
+ *  repository says so in `extensions.objectformat`). Pure. */
+export function repoObjectFormat(entries: readonly GitConfigEntry[]): string {
+  const own = entries.filter((e) => (e.scope === 'local' || e.scope === 'worktree') && e.key === 'extensions.objectformat');
+  return own.length > 0 ? own[own.length - 1].value.toLowerCase() : 'sha1';
+}
+
+/** Whether the checkout already carries each mode change of the task (a
+ *  reverse check of a patch passes whatever the modes are). */
+function modesApplied(top: string, changes: readonly RawChange[]): boolean {
+  for (const c of changes) {
+    if (c.status !== 'M' && c.status !== 'T') continue;
+    if (c.srcMode === c.dstMode) continue;
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(path.join(top, c.path));
+    } catch {
+      return false;
+    }
+    const mode = st.isSymbolicLink() ? '120000' : (st.mode & 0o111) !== 0 ? '100755' : '100644';
+    if (mode !== c.dstMode) return false;
+  }
+  return true;
 }
 
 /** A `git apply` failure that means the checkout no longer matches the
@@ -204,6 +286,17 @@ function chunks(paths: readonly string[], maxChars = 8000, maxCount = 200): stri
   }
   if (cur.length > 0) out.push(cur);
   return out;
+}
+
+/** A small regular file's bytes (no link), or null. */
+function readRegularFile(p: string, max = 1024 * 1024): Buffer | null {
+  try {
+    const st = fs.lstatSync(p);
+    if (!st.isFile() || st.size > max) return null;
+    return fs.readFileSync(p);
+  } catch {
+    return null;
+  }
 }
 
 /** Whether anything is at `p` (a dangling link counts). */
@@ -297,37 +390,51 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
   const created = changes.filter((c) => c.status === 'A').map((c) => c.path);
 
   // A path the checkout runs through a content filter (Git LFS) holds
-  // something other than the file: not applied here.
-  const filtered: string[] = [];
+  // something other than the file, and a changed .gitattributes changes
+  // how every other path is written: neither is applied here.
+  const filtered: string[] = touched.filter((p) => path.posix.basename(p) === '.gitattributes');
   for (const batch of chunks(touched)) {
     const ca = await run(['check-attr', '-z', 'filter', '--', ...batch]);
     if (ca.code !== 0) return refuse('git_failed', `git check-attr failed: ${ca.stderr.trim().slice(0, 300)}`);
-    filtered.push(...filteredPaths(ca.stdout));
+    for (const p of filteredPaths(ca.stdout)) if (!filtered.includes(p)) filtered.push(p);
   }
-  if (filtered.length > 0) return refuse('filtered', 'The task changes files your checkout runs through a content filter (such as Git LFS); merge its branch with git.', filtered);
+  if (filtered.length > 0) return refuse('filtered', 'The task changes files your checkout runs through a content filter (such as Git LFS), or its attributes; merge its branch with git.', filtered);
 
-  const objectFormat = pre.entries.filter((e) => e.key === 'extensions.objectformat').pop()?.value.toLowerCase() ?? 'sha1';
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-apply-'));
+  const objectFormat = repoObjectFormat(pre.entries);
+  const raw = ports.gitRaw ?? defaultRawGit;
+  // The task's patch, by plumbing, kept in memory.
+  const made = await raw(['--git-dir=' + gitDir, `--work-tree=${top}`, ...safe, 'diff-tree', '-r', '-p', '--binary', '--full-index', '--no-renames', base, head], top, {});
+  if (made.code !== 0) return refuse('git_failed', `git diff-tree failed: ${made.stderr.trim().slice(0, 300)}`);
+  const patch = made.stdout;
+  // Main's own folder, not the shared temp folder.
+  fs.mkdirSync(ports.scratchDir, { recursive: true, mode: 0o700 });
+  const tmp = fs.mkdtempSync(path.join(ports.scratchDir, 'apply-'));
   try {
-    // The task's patch, by plumbing.
-    const patch = path.join(tmp, 'task.patch');
-    const made = await run(['diff-tree', '-r', '-p', '--binary', '--full-index', '--no-renames', `--output=${patch}`, base, head]);
-    if (made.code !== 0) return refuse('git_failed', `git diff-tree failed: ${made.stderr.trim().slice(0, 300)}`);
+    fs.chmodSync(tmp, 0o700);
     // git apply against main's own empty git dir: none of the repository's
-    // config or attributes files, and no system or global config.
+    // config, no system or global config; the repository's info/attributes
+    // copied in for its line endings (no driver exists here to run).
     const privateDir = path.join(tmp, 'git');
     const emptyConfig = path.join(tmp, 'empty-config');
-    fs.writeFileSync(emptyConfig, '');
-    const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyConfig };
+    fs.writeFileSync(emptyConfig, '', { mode: 0o600 });
+    const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyConfig, GIT_DEFAULT_HASH: objectFormat, LC_ALL: 'C' };
     const init = await git(privateGitInitArgs(objectFormat, privateDir), tmp, env);
     if (init.code !== 0) return refuse('git_failed', `git init failed: ${init.stderr.trim().slice(0, 300)}`);
+    const attributes = readRegularFile(path.join(common, 'info', 'attributes'));
+    if (attributes !== null) {
+      fs.mkdirSync(path.join(privateDir, 'info'), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(privateDir, 'info', 'attributes'), attributes, { mode: 0o600 });
+    }
     const eol = lineEndingArgs(pre.entries);
-    const apply = (extra: string[]) => git([`--git-dir=${privateDir}`, `--work-tree=${top}`, ...safe, ...eol, 'apply', '--whitespace=nowarn', ...extra, patch], top, env);
+    const apply = (extra: string[]) => raw([`--git-dir=${privateDir}`, `--work-tree=${top}`, ...safe, ...eol, 'apply', '--whitespace=nowarn', ...extra], top, env, patch);
     const said = (r: { stderr: string }) => r.stderr.split(tmp).join('').trim().slice(0, 300);
 
     // Already in the checkout (a second Apply, or the task merged and
-    // pulled): say so before anything else.
-    if ((await apply(['--check', '--reverse'])).code === 0) return refuse('no_changes', 'Your checkout already has the task\'s changes.');
+    // pulled): say so before anything else. A reverse check passes
+    // whatever the modes are, so a mode change is read from the files.
+    if ((await apply(['--check', '--reverse'])).code === 0 && modesApplied(top, changes)) {
+      return refuse('no_changes', 'Your checkout already has the task\'s changes.');
+    }
 
     // Anything uncommitted at those paths stops it (untracked and ignored
     // too), and so does an untracked file where a new file's folder goes.
@@ -347,7 +454,13 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
     const r = await apply([]);
     if (r.code !== 0) return refuse('git_failed', `git apply failed: ${said(r)}`);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    // A cleanup that fails leaves a folder under main's own; it never turns
+    // an apply that landed into an error.
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    } catch {
+      /* best effort */
+    }
   }
   return {
     ok: true,

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { applyTaskToCheckout, filteredPaths, isDivergedApply, lineEndingArgs, parseRawDiff, privateGitInitArgs, type TaskApplyPorts } from '../taskApply';
+import { applyTaskToCheckout, defaultRawGit, filteredPaths, isDivergedApply, lineEndingArgs, parseRawDiff, privateGitInitArgs, repoObjectFormat, type TaskApplyPorts, type TaskApplyRawGit } from '../taskApply';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd(), getPath: () => '/tmp' }, dialog: {}, ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, nativeImage: {} }));
 
@@ -50,6 +50,7 @@ function ports(over: Partial<TaskApplyPorts> = {}): TaskApplyPorts {
     botRepoPath: () => repo,
     taskBranch: async () => BRANCH,
     noHooksDir: path.join(dir, 'no-hooks'),
+    scratchDir: path.join(dir, 'wmux', 'factory', 'apply'),
     ...over,
   };
 }
@@ -210,8 +211,7 @@ describe('content filters', () => {
     // A live worker writes the shared git dir between the checks and the
     // write; simulated by a git wrapper right before the apply.
     const marker = path.join(dir, 'pwned').replace(/\\/g, '/');
-    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
-    const racing: NonNullable<TaskApplyPorts['git']> = async (args, cwd, env, opts) => {
+    const racing: TaskApplyRawGit = async (args, cwd, env, input) => {
       if (args.includes('apply') && !args.includes('--check')) {
         fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
         fs.writeFileSync(path.join(repo, '.git', 'info', 'attributes'), '*.txt filter=evil\nm.txt filter=x=y\n');
@@ -221,9 +221,9 @@ describe('content filters', () => {
         execFileSync('git', ['config', 'filter.evil.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
         execFileSync('git', ['config', 'filter.x=y.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
       }
-      return realGit(args, cwd, env, opts);
+      return defaultRawGit(args, cwd, env, input);
     };
-    const r = await applyTaskToCheckout(ports({ git: racing }), TASK);
+    const r = await applyTaskToCheckout(ports({ gitRaw: racing }), TASK);
     expect(r).toMatchObject({ ok: true });
     expect(fs.existsSync(marker)).toBe(false);
     expect(fs.readFileSync(path.join(repo, 'new/n.txt'), 'utf8')).toBe('new\n');
@@ -236,6 +236,96 @@ describe('content filters', () => {
     git(repo, 'commit', '-qm', 'lfs');
     expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'filtered', paths: ['new/n.txt'] });
     expect(fs.existsSync(path.join(repo, 'new/n.txt'))).toBe(false);
+  });
+});
+
+describe('where and how git apply runs', () => {
+  it('its private git dir is under main\'s own folder (0700), the patch comes on stdin, and git speaks C', async () => {
+    const seen: Array<{ gitDir: string; mode: number; input: number; lc?: string; args: string[] }> = [];
+    const spy: TaskApplyRawGit = async (args, cwd, env, input) => {
+      const gd = args.find((a) => a.startsWith('--git-dir='))?.slice(10) ?? '';
+      if (args.includes('apply')) seen.push({ gitDir: gd, mode: fs.statSync(path.dirname(gd)).mode & 0o777, input: input?.length ?? 0, lc: env.LC_ALL, args });
+      return defaultRawGit(args, cwd, env, input);
+    };
+    const scratch = path.join(dir, 'wmux', 'factory', 'apply');
+    expect(await applyTaskToCheckout(ports({ gitRaw: spy }), TASK)).toMatchObject({ ok: true });
+    expect(seen.length).toBeGreaterThan(0);
+    for (const call of seen) {
+      expect(path.relative(scratch, call.gitDir).startsWith('..')).toBe(false);
+      if (process.platform !== 'win32') expect(call.mode).toBe(0o700);
+      expect(call.input).toBeGreaterThan(0);
+      expect(call.lc).toBe('C');
+      // No patch file named on the command line.
+      expect(call.args.some((a) => a.endsWith('.patch'))).toBe(false);
+    }
+    // Nothing is left behind.
+    expect(fs.readdirSync(scratch)).toEqual([]);
+  });
+
+  it('the owner\'s line endings in the repository\'s info/attributes still hold for the task\'s files', async () => {
+    write(wt, 'run.bat', 'echo hi\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-qm', 'bat');
+    fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.git', 'info', 'attributes'), '*.bat text eol=crlf\n');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(repo, 'run.bat'), 'utf8')).toBe('echo hi\r\n');
+  });
+
+  it.skipIf(process.platform === 'win32')('a task that only makes a file executable is applied, not taken for already applied', async () => {
+    git(wt, 'reset', '-q', '--hard', base);
+    fs.chmodSync(path.join(wt, 'b.txt'), 0o755);
+    git(wt, 'add', 'b.txt');
+    git(wt, 'commit', '-qm', 'chmod');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true, changed: ['b.txt'] });
+    expect(fs.statSync(path.join(repo, 'b.txt')).mode & 0o111).not.toBe(0);
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'no_changes' });
+  });
+
+  it('refuses a task that changes a .gitattributes', async () => {
+    write(wt, 'sub/.gitattributes', '*.txt text\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-qm', 'attrs');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'filtered', paths: ['sub/.gitattributes'] });
+  });
+
+  it('a cleanup that fails does not turn a landed apply into an error', async () => {
+    const rm = vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => { throw new Error('busy'); });
+    try {
+      expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true });
+    } finally {
+      rm.mockRestore();
+    }
+  });
+
+  it('applies in a sha256 repository', async () => {
+    const r2 = path.join(dir, 'r256');
+    const w2 = path.join(dir, 'w256');
+    fs.mkdirSync(r2);
+    try {
+      git(r2, 'init', '-q', '-b', 'main', '--object-format=sha256');
+    } catch {
+      return; // this git has no sha256
+    }
+    git(r2, 'config', 'core.autocrlf', 'false');
+    write(r2, 'a.txt', 'a\n');
+    git(r2, 'add', '.');
+    git(r2, 'commit', '-qm', 'base');
+    const b2 = git(r2, 'rev-parse', 'HEAD');
+    git(r2, 'worktree', 'add', '-q', '-b', BRANCH, w2);
+    write(w2, 'a.txt', 'a from the task\n');
+    git(w2, 'commit', '-qam', 'task');
+    const p2 = ports({
+      row: () => row({ dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default', baseOid: b2, gitCommonDir: fs.realpathSync.native(path.join(r2, '.git')) } }),
+      botRepoPath: () => r2,
+    });
+    expect(await applyTaskToCheckout(p2, TASK)).toMatchObject({ ok: true, changed: ['a.txt'] });
+    expect(fs.readFileSync(path.join(r2, 'a.txt'), 'utf8')).toBe('a from the task\n');
+  });
+
+  it('reads the object format from the repository\'s own config only', () => {
+    expect(repoObjectFormat([{ scope: 'global', key: 'extensions.objectformat', value: 'sha256' }])).toBe('sha1');
+    expect(repoObjectFormat([{ scope: 'local', key: 'extensions.objectformat', value: 'SHA256' }])).toBe('sha256');
   });
 });
 
@@ -290,6 +380,12 @@ describe('the patch and the owner\'s settings', () => {
       { scope: 'local', key: 'filter.evil.smudge', value: 'x' },
       { scope: 'global', key: 'core.eol', value: 'lf' },
     ])).toEqual(['-c', 'core.autocrlf=true', '-c', 'core.eol=lf']);
+    // The owner's own attributes file, never one the repository names.
+    expect(lineEndingArgs([
+      { scope: 'system', key: 'core.autocrlf', value: 'true' },
+      { scope: 'global', key: 'core.attributesfile', value: '~/.gitattributes' },
+      { scope: 'local', key: 'core.attributesfile', value: '/tmp/evil' },
+    ])).toEqual(['-c', 'core.autocrlf=true', '-c', 'core.attributesFile=~/.gitattributes']);
   });
 });
 
