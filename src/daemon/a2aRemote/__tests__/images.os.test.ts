@@ -257,12 +257,38 @@ describe('blob routes', () => {
   let port: number;
   let s: A2aImageStore;
   const owed: A2aOutboxRecordV1[] = [];
+  /** Waits the store's answers can be held on (a slow disk), and the transfer budget. */
+  const hold: { has?: Promise<void>; read?: Promise<void>; budgetMs?: number } = {};
 
   beforeEach(async () => {
     s = new A2aImageStore({ a2aDir: path.join(dir, 'a2a'), uploadsRoot: path.join(dir, 'uploads') });
     owed.length = 0;
+    delete hold.has;
+    delete hold.read;
+    delete hold.budgetMs;
     const table = new A2aRouteTable();
-    registerImageRoutes(table, { store: s, outbox: { pending: (hostId) => owed.filter((r) => r.hostId === hostId).map((r) => structuredClone(r)) }, log: quiet });
+    const store = {
+      has: async (h: string, sha: string) => {
+        const wait = hold.has;
+        delete hold.has;
+        await wait;
+        return s.has(h, sha);
+      },
+      mayHave: (h: string, sha: string) => s.mayHave(h, sha),
+      stage: (h: string, sha: string, b: Buffer) => s.stage(h, sha, b),
+      readOutgoing: async (sha: string) => {
+        const wait = hold.read;
+        delete hold.read;
+        await wait;
+        return s.readOutgoing(sha);
+      },
+    };
+    registerImageRoutes(table, {
+      store,
+      outbox: { pending: (hostId) => owed.filter((r) => r.hostId === hostId).map((r) => structuredClone(r)) },
+      log: quiet,
+      transferBudgetMs: (bytes) => hold.budgetMs ?? bytes,
+    });
     server = http.createServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://x');
       // The peer is named by a test header here (the real listener authenticates it).
@@ -336,6 +362,104 @@ describe('blob routes', () => {
     expect(got.body.equals(img)).toBe(true);
     // Owed to HOST, not to another paired PC.
     expect((await send('GET', sha256(img), undefined, false, true)).status).toBe(404);
+  });
+
+  const owe = (img: Buffer): void => {
+    owed.push({
+      v: 1, epoch: 'e', seq: owed.length + 1, hostId: HOST, state: 'pending', attempts: 0, createdAt: 'x', updatedAt: 'x',
+      envelope: { protocol: A2A_REMOTE_PROTOCOL, linkId: 'l', linkVersion: 2, messageId: `m${owed.length}`, kind: 'task', text: 't', images: [refOf(img)], sentAt: 'x' },
+    });
+  };
+
+  /** A request whose body is started but never finished: it holds the peer's upload slot. */
+  function stalledPut(sha: string): http.ClientRequest {
+    const req = http.request({ host: '127.0.0.1', port, method: 'PUT', path: `${A2A_ROUTES.blobs}/${sha}`, headers: { 'Content-Length': 2 * 1024 * 1024 } });
+    req.on('error', () => undefined);
+    req.write(Buffer.alloc(1024));
+    return req;
+  }
+
+  it('drains the body of a 400 and of a 429, so each answer arrives whole', async () => {
+    const body = Buffer.alloc(1024 * 1024, 1);
+    const bad = await send('PUT', 'not-a-hash', body);
+    expect(bad.status).toBe(400);
+    const img = png(9, 9);
+    hold.has = new Promise<void>(() => undefined);
+    const first = stalledPut(sha256(img));
+    await vi.waitFor(() => expect(hold.has).toBeUndefined());
+    const busy = await send('PUT', sha256(png(10, 10)), body);
+    expect(busy.status).toBe(429);
+    expect(JSON.parse(busy.body.toString('utf8'))).toEqual({ ok: false, error: 'unavailable' });
+    first.destroy();
+  });
+
+  it('gives an upload slot back when the client leaves mid-request', async () => {
+    const img = png(5, 5);
+    await s.storeReceived(HOST, refOf(img), img);
+    hold.has = new Promise<void>(() => undefined);
+    const gone = stalledPut(sha256(img));
+    await vi.waitFor(() => expect(hold.has).toBeUndefined());
+    gone.destroy();
+    await vi.waitFor(async () => expect((await send('PUT', sha256(img), img)).status).toBe(200));
+  });
+
+  it('gives a download slot back when the client leaves mid-request, and cuts a reader past its budget', async () => {
+    const img = png(7, 7);
+    await s.putOutgoing(img);
+    owe(img);
+    hold.read = new Promise<void>(() => undefined);
+    const gone = http.get({ host: '127.0.0.1', port, path: `${A2A_ROUTES.blobs}/${sha256(img)}` });
+    gone.on('error', () => undefined);
+    await vi.waitFor(() => expect(hold.read).toBeUndefined());
+    gone.destroy();
+    await vi.waitFor(async () => expect((await send('GET', sha256(img))).status).toBe(200));
+
+    // A reader that stops reading a large image is cut at its budget, and the slot is free again.
+    const big = png(64, 64, A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES - 4096, 3);
+    await s.putOutgoing(big);
+    owe(big);
+    hold.budgetMs = 200;
+    const slow = http.get({ host: '127.0.0.1', port, path: `${A2A_ROUTES.blobs}/${sha256(big)}` }, (res) => res.pause());
+    slow.on('error', () => undefined);
+    await new Promise((r) => setTimeout(r, 400));
+    hold.budgetMs = 60_000;
+    expect((await send('GET', sha256(img))).status).toBe(200);
+    slow.destroy();
+  });
+
+  it('answers HEAD by name and size, without reading the file or refreshing its time', async () => {
+    const img = png(5, 5);
+    const stored = await s.storeReceived(HOST, refOf(img), img);
+    if (!stored.ok) throw new Error('not stored');
+    const old = new Date(Date.now() - 3 * 24 * 3600_000);
+    fs.utimesSync(stored.path, old, old);
+    expect((await send('HEAD', sha256(img))).status).toBe(200);
+    expect(Math.round(fs.statSync(stored.path).mtimeMs / 1000)).toBe(Math.round(old.getTime() / 1000));
+  });
+
+  it('keeps the connection usable after draining a full upload it already holds', async () => {
+    const img = png(64, 64, 1536 * 1024, 7);
+    await s.storeReceived(HOST, refOf(img), img);
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    try {
+      const once = (method: string, body?: Buffer): Promise<{ status: number; reused: boolean }> =>
+        new Promise((resolve, reject) => {
+          const req = http.request(
+            { host: '127.0.0.1', port, method, agent, path: `${A2A_ROUTES.blobs}/${sha256(img)}`, headers: body ? { 'Content-Length': body.length } : {} },
+            (res) => {
+              res.resume();
+              res.on('end', () => resolve({ status: res.statusCode ?? 0, reused: req.reusedSocket }));
+            },
+          );
+          req.on('error', reject);
+          req.end(body);
+        });
+      expect(await once('PUT', img)).toEqual({ status: 200, reused: false });
+      // The same socket answers the next request: nothing was left unread on it.
+      expect(await once('HEAD')).toEqual({ status: 200, reused: true });
+    } finally {
+      agent.destroy();
+    }
   });
 
   it('says by HEAD whether it holds an image, and answers a full upload of one it holds with a clean 200', async () => {

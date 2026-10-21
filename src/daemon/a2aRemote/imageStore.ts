@@ -34,7 +34,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { A2A_SHA256_RE, isHostId, type A2aRemoteImageMediaType, type A2aRemoteImageRef, type HostId } from '../../shared/a2aRemote';
+import { A2A_REMOTE_IMAGE_LIMITS, A2A_SHA256_RE, isHostId, type A2aRemoteImageMediaType, type A2aRemoteImageRef, type HostId } from '../../shared/a2aRemote';
 import { inspectA2aImage, type A2aImageInfo } from '../../shared/a2aImages';
 
 const DAY_MS = 24 * 3600_000;
@@ -104,7 +104,7 @@ export class A2aImageStore {
   /** Keep the bytes this PC queued for another PC. */
   async putOutgoing(bytes: Buffer): Promise<string> {
     const sha = sha256(bytes);
-    await this.writeOnce(this.outgoingDir(), sha, bytes);
+    await this.outgoing(() => this.writeOnce(this.outgoingDir(), sha, bytes));
     return sha;
   }
 
@@ -126,6 +126,11 @@ export class A2aImageStore {
    * refreshed, or now referenced) keeps it.
    */
   async gcOutgoing(referenced: () => ReadonlySet<string>): Promise<number> {
+    // One at a time with putOutgoing: a copy being written is never swept under it.
+    return this.outgoing(() => this.sweepOutgoing(referenced));
+  }
+
+  private async sweepOutgoing(referenced: () => ReadonlySet<string>): Promise<number> {
     let dropped = 0;
     const cutoff = this.now() - OUTGOING_GRACE_MS;
     const listed = referenced();
@@ -153,7 +158,12 @@ export class A2aImageStore {
     return this.storeReceived(LOCAL_FOLDER, ref, bytes);
   }
 
-  /** Remove local copies nothing open refers to, oldest first, until `incoming` more bytes fit. */
+  /**
+   * Remove local copies nothing open refers to, oldest first, until
+   * `incoming` more bytes fit. When even removing all of them would not make
+   * it fit (the rest of the store is full), nothing is removed: the send is
+   * refused as full either way.
+   */
   private async evictLocal(incoming: number, inUse: (sha: string) => boolean): Promise<void> {
     await this.sweepReceived();
     const dir = path.join(this.root, LOCAL_FOLDER);
@@ -161,10 +171,15 @@ export class A2aImageStore {
     let files = held.length;
     let bytes = held.reduce((n, f) => n + f.st.size, 0);
     let total = await this.measureAll();
-    for (const f of held) {
-      const fits = files + 1 <= RECEIVED_HOST_MAX_FILES && bytes + incoming <= RECEIVED_HOST_MAX_BYTES && total + incoming <= RECEIVED_TOTAL_MAX_BYTES;
-      if (fits) return;
-      if (inUse(f.name.slice(0, 64))) continue;
+    const fits = (): boolean =>
+      files + 1 <= RECEIVED_HOST_MAX_FILES && bytes + incoming <= RECEIVED_HOST_MAX_BYTES && total + incoming <= RECEIVED_TOTAL_MAX_BYTES;
+    if (fits()) return;
+    const removable = held.filter((f) => !inUse(f.name.slice(0, 64)));
+    const freed = removable.reduce((n, f) => n + f.st.size, 0);
+    const best = { files: files - removable.length, bytes: bytes - freed, total: total - freed };
+    if (!(best.files + 1 <= RECEIVED_HOST_MAX_FILES && best.bytes + incoming <= RECEIVED_HOST_MAX_BYTES && best.total + incoming <= RECEIVED_TOTAL_MAX_BYTES)) return;
+    for (const f of removable) {
+      if (fits()) return;
       // eslint-disable-next-line no-await-in-loop -- one file at a time
       if (!(await unlinkQuiet(f.full))) continue;
       files -= 1;
@@ -186,6 +201,22 @@ export class A2aImageStore {
     for (const full of candidates) {
       // eslint-disable-next-line no-await-in-loop -- at most four small checks
       if (await this.holds(full, sha)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a file under `sha` is here for `hostId` (uploaded or received),
+   * by name and size only: no read, no hash, no time refreshed (a question
+   * is not a use). The bytes are checked when an envelope claims them.
+   */
+  async mayHave(hostId: HostId, sha: string): Promise<boolean> {
+    if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) return false;
+    const candidates = [path.join(this.stagingDir(hostId), sha), ...Object.values(EXT).map((ext) => path.join(this.root, hostId, `${sha}.${ext}`))];
+    for (const full of candidates) {
+      // eslint-disable-next-line no-await-in-loop -- at most four stats
+      const st = await lstatOrNull(full);
+      if (st?.isFile() && st.size > 0 && st.size <= A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES) return true;
     }
     return false;
   }
@@ -308,6 +339,15 @@ export class A2aImageStore {
   }
 
   // --- internals ------------------------------------------------------------
+
+  private outgoingQueue: Promise<unknown> = Promise.resolve();
+
+  /** Run `fn` after every earlier sender-copy write or sweep has settled. */
+  private outgoing<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.outgoingQueue.then(fn, fn);
+    this.outgoingQueue = run.catch(() => undefined);
+    return run;
+  }
 
   private outgoingDir(): string {
     return path.join(this.opts.a2aDir, 'blobs');

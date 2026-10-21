@@ -1,4 +1,5 @@
 import type http from 'node:http';
+import { finished } from 'node:stream/promises';
 import { A2A_REMOTE_IMAGE_LIMITS, A2A_ROUTES, A2A_SHA256_RE, type HostId } from '../../shared/a2aRemote';
 import { inspectA2aImage } from '../../shared/a2aImages';
 import type { A2aImageStore } from './imageStore';
@@ -13,18 +14,21 @@ import { errMsg } from './storeFile';
  * The image routes of cross-host A2A (`images.1`), on the SERVER side. The
  * joiner dials either way, so it both pushes and pulls:
  *
- *   HEAD /api/a2a/blobs/:sha256 — whether that image is here already with
- *       those bytes (uploaded or received): 200, else 404. The joiner asks
- *       first and uploads only on a 404.
+ *   HEAD /api/a2a/blobs/:sha256 — whether a file under that hash is here
+ *       already (uploaded or received): 200, else 404; 503 while the peer's
+ *       upload slot is taken (the joiner then just uploads). By name and
+ *       size only, never hashed and never refreshing a file's time: the
+ *       bytes are checked when an envelope claims them, and a file that
+ *       does not match is removed then, so the next attempt uploads again.
  *   PUT /api/a2a/blobs/:sha256 — the joiner uploads one image ahead of the
  *       envelope that names it. Raw bytes, at most one image's size (counted
  *       as they arrive, whatever Content-Length said), hash and image
  *       structure checked, kept in that peer's staging share. Already here
  *       with those bytes: 200. At most one upload per peer and four in all at
  *       a time (each is held in memory), else 429. Every early answer reads
- *       the body to its end first (one image at most, discarded): a socket
- *       closed on unread bytes is reset, and the client then loses the
- *       answer as well.
+ *       the body to its end first, counting and discarding it (one image at
+ *       most, within DRAIN_MS): a socket closed on unread bytes is reset, and
+ *       the client then loses the answer as well.
  *   GET /api/a2a/blobs/:sha256 — the joiner fetches an image an envelope on
  *       its stream named: only while this PC still owes that peer such an
  *       envelope (an open outbox record names the hash); otherwise 404, so a
@@ -35,11 +39,15 @@ import { errMsg } from './storeFile';
 
 /** Transfers held in memory at once, uploads and downloads each. */
 const MAX_UPLOADS = 4;
+/** How long an early answer waits for the body it discards. */
+const DRAIN_MS = 30_000;
 
 export interface A2aImageRouteDeps {
-  store: Pick<A2aImageStore, 'has' | 'stage' | 'readOutgoing'>;
+  store: Pick<A2aImageStore, 'has' | 'mayHave' | 'stage' | 'readOutgoing'>;
   outbox: Pick<OutboxStore, 'pending'>;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
+  /** Test seam; defaults to `imageTransferBudgetMs`. */
+  transferBudgetMs?: (bytes: number) => number;
 }
 
 export function registerImageRoutes(table: A2aRouteTable, deps: A2aImageRouteDeps): void {
@@ -47,11 +55,24 @@ export function registerImageRoutes(table: A2aRouteTable, deps: A2aImageRouteDep
   const uploads = slots();
   const downloads = slots();
 
+  const budget = deps.transferBudgetMs ?? imageTransferBudgetMs;
+
   table.add('HEAD', pattern, async ({ res, params, peer }) => {
     const sha = params['sha256'] ?? '';
-    const held = A2A_SHA256_RE.test(sha) && (await deps.store.has(peer.hostId, sha));
-    res.writeHead(held ? 200 : 404, { 'Cache-Control': 'no-store' });
-    res.end();
+    const release = uploads.take(peer.hostId);
+    if (!release) {
+      res.writeHead(503, { 'Cache-Control': 'no-store' });
+      res.end();
+      return;
+    }
+    res.once('close', release);
+    try {
+      const held = A2A_SHA256_RE.test(sha) && (await deps.store.mayHave(peer.hostId, sha));
+      res.writeHead(held ? 200 : 404, { 'Cache-Control': 'no-store' });
+      res.end();
+    } finally {
+      release();
+    }
   });
 
   table.add('PUT', pattern, async ({ req, res, params, peer }) => {
@@ -59,6 +80,8 @@ export function registerImageRoutes(table: A2aRouteTable, deps: A2aImageRouteDep
     if (!A2A_SHA256_RE.test(sha)) return drainThenAnswer(req, res, 400, { ok: false, error: 'bad-request' });
     const release = uploads.take(peer.hostId);
     if (!release) return drainThenAnswer(req, res, 429, { ok: false, error: 'unavailable' });
+    // Before any wait: a client gone mid-request still gives the slot back.
+    res.once('close', release);
     try {
       if (await deps.store.has(peer.hostId, sha)) return await drainThenAnswer(req, res, 200, { ok: true });
       const body = await readBodyBytes(req, A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES);
@@ -81,6 +104,7 @@ export function registerImageRoutes(table: A2aRouteTable, deps: A2aImageRouteDep
     if (!A2A_SHA256_RE.test(sha)) return sendJson(res, 400, { ok: false, error: 'bad-request' });
     const release = downloads.take(peer.hostId);
     if (!release) return sendJson(res, 429, { ok: false, error: 'unavailable' });
+    res.once('close', release);
     try {
       const owed = deps.outbox.pending(peer.hostId).some((r) => r.envelope.images?.some((i) => i.sha256 === sha) === true);
       const bytes = owed ? await deps.store.readOutgoing(sha) : null;
@@ -91,12 +115,11 @@ export function registerImageRoutes(table: A2aRouteTable, deps: A2aImageRouteDep
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
       });
-      // A reader too slow for the budget gives its slot back.
-      res.setTimeout(imageTransferBudgetMs(bytes.length), () => res.destroy());
-      await new Promise<void>((resolve) => {
-        res.once('close', resolve);
-        res.end(bytes);
-      });
+      // A reader too slow for the budget is cut, which gives its slot back.
+      const timer = setTimeout(() => res.destroy(), budget(bytes.length));
+      res.end(bytes);
+      await finished(res).catch(() => undefined);
+      clearTimeout(timer);
     } finally {
       release();
     }
@@ -126,13 +149,39 @@ function slots(): { take(hostId: HostId): (() => void) | null } {
 }
 
 /**
- * Read the body to its end (one image at most, discarded), then answer on a
- * connection that stays good. A body past that size is answered and cut.
+ * Read the body to its end, counting and discarding it, then answer on a
+ * connection that stays good. A body past one image, or one that has not
+ * ended within DRAIN_MS, is answered and cut. Nothing is buffered.
  */
 async function drainThenAnswer(req: http.IncomingMessage, res: http.ServerResponse, status: number, body: unknown): Promise<void> {
-  const drained = await readBodyBytes(req, A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES).then((b) => b !== 'too-large', () => false);
-  if (!drained) return answerAndClose(req, res, status, body);
+  if (!(await discardBody(req, A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES, DRAIN_MS))) return answerAndClose(req, res, status, body);
   sendJson(res, status, body);
+}
+
+/** True once the body ended within `max` bytes and `ms`; false past either, or on a read error. */
+function discardBody(req: http.IncomingMessage, max: number, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let size = 0;
+    let settled = false;
+    const done = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      req.off('data', onData);
+      if (!ok) req.pause();
+      resolve(ok);
+    };
+    const onData = (chunk: Buffer): void => {
+      size += chunk.length;
+      if (size > max) done(false);
+    };
+    const timer = setTimeout(() => done(false), ms);
+    req.on('data', onData);
+    req.once('end', () => done(size <= max));
+    req.once('error', () => done(false));
+    req.once('close', () => done(req.complete && size <= max));
+    req.resume();
+  });
 }
 
 /** Answer without reading the rest of the body, then cut the connection. */
