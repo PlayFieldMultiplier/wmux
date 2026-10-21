@@ -27,7 +27,7 @@ import {
 import { commandChoosesModel } from '../../../shared/orchestratorRole';
 import { FIRST_RUN_CLEAN_READS } from '../agentFirstRun';
 import type { FanOutDaemonPort, FanOutRendererPort } from '../FanOutService';
-import type { TaskWorktreePlan } from '../TaskWorktreeManager';
+import { TaskWorktreeManager, type TaskWorktreePlan } from '../TaskWorktreeManager';
 import type { ProjectConfigState } from '../../../shared/wmuxProjectConfig';
 import { clearFanoutPortReservationsForTest } from '../fanoutEnvironment';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
@@ -1323,6 +1323,37 @@ describe('new workspace preparation on fan-out worktrees', () => {
     expect(res.setupSkipped).toBe('needs-review');
     expect(fs.existsSync(path.join(res.tasks[0].worktreePath!, '.env'))).toBe(false);
     expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('a failed setup rolls back its own branch even with no origin to branch from, so starting again works', async () => {
+    // No origin: the base is unknown and the branch starts at HEAD (the case
+    // where the rollback used to keep it, blocking the next start).
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(metaRoot, 'src-')));
+    const g = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    g(repo, 'init', '-q');
+    g(repo, '-c', 'user.email=a@b.c', '-c', 'user.name=a', 'commit', '-q', '--allow-empty', '-m', 'init');
+    // A branch the person already had is never touched.
+    g(repo, 'branch', 'mine');
+    const mineAt = g(repo, 'rev-parse', 'refs/heads/mine');
+    const mode = path.join(metaRoot, 'mode');
+    fs.writeFileSync(mode, 'fail');
+    const hook = path.join(metaRoot, 'hook3.js');
+    fs.writeFileSync(hook, `if (require('fs').readFileSync(${JSON.stringify(mode)}, 'utf8') === 'fail') process.exit(1)`);
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: renderer.port,
+      worktrees: new TaskWorktreeManager(),
+      project: makeProjectFake({ found: true, root: repo, trust: 'trusted', prepReviewed: true, config: { version: 1, fanout: { setup: `node ${JSON.stringify(hook)}` } } }),
+    });
+    const req = (key: string) => baseReq({ idempotencyKey: key, repoPath: repo, titles: ['issue-7-x'], branches: ['issue-7-x'], prepOrigin: 'human' });
+    const first = await svc.start(req('fo-retry-1'));
+    expect(first.tasks[0].setupFailed).toBe(true);
+    expect(() => g(repo, 'rev-parse', '--verify', '--quiet', 'refs/heads/issue-7-x')).toThrow();
+    fs.writeFileSync(mode, 'ok');
+    const second = await svc.start(req('fo-retry-2'));
+    expect(second.tasks[0].ok).toBe(true);
+    expect(g(repo, 'rev-parse', 'refs/heads/mine')).toBe(mineAt);
   });
 
   it('copies nothing from a config changed since approval', async () => {

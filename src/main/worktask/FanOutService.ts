@@ -1425,6 +1425,7 @@ export class FanOutService {
       }
       base.worktreePath = plan.worktreePath;
       gitWorktreeDir = created.gitWorktreeDir;
+      if (!ctx.checkout && created.branchOid) plan.createdBranchOid = created.branchOid;
       if (!ctx.checkout) base.branch = plan.branch;
       cwd = plan.worktreePath;
       metaDir = plan.metaDir;
@@ -2327,9 +2328,12 @@ export class FanOutService {
         console.warn(`[fanout] meta dir ${plan.metaDir} not removed: ${String(err)}`);
       }
       if (ctx.checkout) return { removed: true, outcome: '; its worktree was removed' };
-      if (!ctx.baseOid) return { removed: true, outcome: `; its worktree was removed, branch ${plan.branch} kept (its base commit is unknown)` };
+      // The branch this spawn created, at the commit it was created at: with
+      // no base (branched from HEAD) that commit was read right after it.
+      const createdAt = ctx.baseOid ?? plan.createdBranchOid;
+      if (!createdAt) return { removed: true, outcome: `; its worktree was removed, branch ${plan.branch} kept (its base commit is unknown)` };
       const branch = await this.worktrees
-        .deleteBranchIfAt(plan.repoRoot, plan.repoHash, plan.branch, ctx.baseOid)
+        .deleteBranchIfAt(plan.repoRoot, plan.repoHash, plan.branch, createdAt)
         .catch((err: unknown) => ({ ok: false as const, error: String(err) }));
       if (!branch.ok) {
         console.warn(`[fanout] branch ${plan.branch} kept: ${branch.error}`);
