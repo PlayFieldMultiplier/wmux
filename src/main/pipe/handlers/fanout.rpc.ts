@@ -125,6 +125,8 @@ import { getConnectorStore, isConnectionKey, type ConnectorStore } from '../../f
 import { gatewayConnectorsOf, gatewayReadyRefusal, gatewayShapeRefusal, workerGatewayOAuth, type GatewayOAuth } from '../../connectors/workerGateway';
 import { conversationMarks } from '../../factory/conversationMarks';
 import { probeBotExecSupport } from '../../factory/botExecSandbox';
+import { checkConnector } from '../../connectors/checkConnector';
+import type { ConnectorCheckResult } from '../../../shared/connectorCheck';
 import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
 import { CONNECTOR_LIMITS, CONNECTOR_NAME_RE, CONNECTOR_WORKER_AGENTS, type Connector } from '../../../shared/botConnector';
 import { codexConnectorRefusal } from '../../../shared/codexWorkerGuard';
@@ -705,6 +707,9 @@ export interface FanOutRpcDeps {
   /** Whether the bot's live conversation has taken in outside text
    *  (default: conversationMarks.ts; no conversation counts as yes). */
   conversationTainted?: (botId: string) => boolean;
+  /** A signed-in connection's tool list from the service, with its token
+   *  (default: checkConnector.ts). */
+  gatewayListTools?: (c: Connector, headers: Record<string, string>) => Promise<ConnectorCheckResult>;
   /** The wmux data folder a bot's research scratch folders go under
    *  (default: getWmuxDir()). Injected in tests. */
   wmuxDir?: () => string;
@@ -1573,20 +1578,19 @@ export function registerFanOutRpc(
         return deny('FAILED_PRECONDITION', `this bot has no repository to fan out in (set its repo); a question that needs no code runs with preset "${RESEARCH_PRESET}"`);
       }
     }
-    // A task with signed-in connections: macOS and Linux, a clean wake, the
-    // research preset, the owner's picked tools (workerGateway.ts).
+    // A task with signed-in connections: macOS and Linux, only signed-in
+    // connections, a clean wake and conversation, the research preset, the
+    // owner's picked tools (workerGateway.ts).
     const gatewayRefusal = gatewayShapeRefusal({
       connectors: gatewayConnectors,
+      all: connectors ?? [],
       platform: deps.workerPlatform ?? process.platform,
       preset: botPresetName,
       wakeTainted: gatewayWakeTainted,
+      conversationTainted: gatewayConnectors.length > 0 && !!bot
+        && (deps.conversationTainted ?? ((id: string) => conversationMarks(id)?.tainted !== false))(bot.botId),
     });
     if (gatewayRefusal) return deny('FAILED_PRECONDITION', gatewayRefusal);
-    // Its conversation's mark: a task started after outside text reached the
-    // conversation (an earlier connection's result among it) is recorded as
-    // such, and gets read tools only (this release has no other).
-    const gatewayPreTainted = gatewayConnectors.length > 0 && !!bot
-      && (deps.conversationTainted ?? ((id: string) => conversationMarks(id)?.tainted !== false))(bot.botId);
 
     // ── Global caps (live + rolling hour), reserved in this same tick ────
     // Over a cap is a refusal, never a queued prompt: with approval off by
@@ -1727,6 +1731,7 @@ export function registerFanOutRpc(
         connectors: gatewayConnectors,
         oauth: (deps.gatewayOAuth ?? workerGatewayOAuth)(),
         sandbox: deps.gatewaySandbox ?? (() => probeBotExecSupport(resolveClaudeExecutable())),
+        listTools: deps.gatewayListTools ?? ((c, headers) => checkConnector(c, headers)),
       });
       if (notReady) {
         pending.delete(key);
@@ -1799,7 +1804,7 @@ export function registerFanOutRpc(
       ...(ownerRepoKey ? { repoKey: ownerRepoKey } : {}),
       ...(bot && secretNames ? { secretNames } : {}),
       ...(bot && connectors ? { connectors } : {}),
-      ...(bot && gatewayConnectors.length > 0 ? { gatewayConnectors: gatewayConnectors.map((c) => c.name), gatewayPreTainted } : {}),
+      ...(bot && gatewayConnectors.length > 0 ? { gatewayConnectors: gatewayConnectors.map((c) => c.name) } : {}),
     };
     const presetName = selection.kind === 'preset' ? selection.preset.name : undefined;
 

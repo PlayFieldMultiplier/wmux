@@ -35,6 +35,8 @@ import {
   BOT_WORKER_SESSIONS_VERSION,
   buildBotWorkerSettings,
   botWorkerSessionsPath,
+  isClaudeLauncher,
+  isQuotable,
   namesClaude,
   readBotWorkerSessions,
   workerProjectSettingsRefusal,
@@ -53,7 +55,9 @@ import {
   type WorkerWmuxLevel,
 } from '../../shared/botWorkerMcp';
 import type { Connector } from '../../shared/botConnector';
-import type { PermissionMode } from '../../shared/agentResume';
+import { tokenize, type PermissionMode } from '../../shared/agentResume';
+import { splitModelEnvMarker } from '../../shared/workerLaunch';
+import { workerToolGateScript } from './workerToolGate';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getConnectorStore } from '../factory/connectorStore';
 import { launchesCodex, namesCodex } from '../../shared/codexWorkerGuard';
@@ -333,6 +337,9 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
     if (launch.wsl || gatewayNames.some((n) => !routed.includes(n)) || routed.some((n) => !gatewayNames.includes(n))) {
       throw guardError('PTY_CREATE', 'a signed-in connection of the task was not opened for this launch');
     }
+    // Every connection of such a task goes through the gateway: another one
+    // would run outside the sandbox.
+    if (connectors.length !== gatewayNames.length) throw guardError('PTY_CREATE', 'a task with a signed-in connection carries only signed-in connections');
   } else if (launch.gateway) {
     throw guardError('PTY_CREATE', 'a gateway was opened for a task without signed-in connections');
   }
@@ -341,7 +348,11 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   const plan: LaunchPlan = launch.wsl
     ? { kind: 'legacy', level }
     : { kind: 'strict', connectors, level, cwd, ...(launch.gateway ? { gateway: launch.gateway } : {}) };
-  const guarded = guardLaunchLine('PTY_CREATE', options.initialCommand, deps, plan);
+  // A worker with a signed-in connection runs the claude its sandbox support
+  // was checked on, by its absolute path.
+  const line = launch.gateway ? pinClaudeLauncher(options.initialCommand, launch.gateway.claudeExe) : options.initialCommand;
+  if (line === null) throw guardError('PTY_CREATE', 'the launch line cannot run the claude the sandbox was checked on');
+  const guarded = guardLaunchLine('PTY_CREATE', line, deps, plan);
   const next = guarded.line === options.initialCommand ? { ...options } : { ...options, initialCommand: guarded.line };
   launchOfCreate.set(next, { ...(guarded.files ? { launch: guarded.files, cwd } : {}), ...(launch.wsl ? { wsl: true } : {}) });
   return next;
@@ -368,6 +379,18 @@ export function guardedLaunchOf(options: object | undefined): { launch?: BotWork
 
 /** The connections the in-flight fan-out spawn of this create carries: one
  *  set, or the create is refused when its in-flight spawns disagree. */
+/** `fullCommand` with its claude launcher replaced by `exe` (an absolute path
+ *  with no character a shell reads, naming claude), keeping a leading
+ *  model-env marker; null when the line does not start with claude. Pure. */
+export function pinClaudeLauncher(fullCommand: string, exe: string): string | null {
+  if (!/^\/[A-Za-z0-9._/-]+$/.test(exe) || !isClaudeLauncher(exe)) return null;
+  const { marker, command } = splitModelEnvMarker(fullCommand);
+  const tokens = tokenize(command);
+  if (tokens.length === 0 || tokens[0].quoted || !isClaudeLauncher(tokens[0].value)) return null;
+  const start = command.length - command.trimStart().length;
+  return `${marker}${command.slice(0, start)}${exe}${command.slice(tokens[0].end)}`;
+}
+
 /** The signed-in connections (names) a create's in-flight spawns agree on
  *  ([] for any other create); throws when they disagree. */
 export function taskGatewayNames(worker: { strict: boolean; spawns?: Array<{ gatewayConnectors?: string[] }> }): string[] {
@@ -382,6 +405,12 @@ export function taskGatewayNames(worker: { strict: boolean; spawns?: Array<{ gat
 export interface WorkerGatewayLaunch {
   routes: Readonly<Record<string, WorkerGatewayRoute>>;
   sandbox: Record<string, unknown>;
+  /** The folders the worker's file tools may use: its task folder, then its
+   *  temp folder (workerToolGate.ts). */
+  roots: readonly string[];
+  /** The claude binary the sandbox support was checked on: the launch line
+   *  runs exactly it (absolute, no characters a shell would read). */
+  claudeExe: string;
 }
 
 /** The connections a create's in-flight spawns agree on ([] for any other
@@ -496,7 +525,14 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
   // a later launch keeps them out of every stdio server.
   const bearers = Object.values(gateway?.routes ?? {}).map((r) => r.envName);
   const connectionKeys = [...new Set([...connectors.flatMap((c) => c.secrets.map((s) => s.secret)), ...strayKeys, ...bearers])];
-  const gatewaySettings: WorkerGatewaySettings | undefined = gateway ? { names: Object.keys(gateway.routes), sandbox: gateway.sandbox } : undefined;
+  // A worker with a signed-in connection: every tool call through the gate
+  // (workerToolGate.ts), which refuses when it cannot run.
+  let gatewaySettings: WorkerGatewaySettings | undefined;
+  if (gateway) {
+    const gate = writeContentFile(path.join(factory, 'worker-hooks'), workerToolGateScript({ roots: gateway.roots, connections: Object.keys(gateway.routes) }), '.cjs');
+    if (!isQuotable(gate)) throw new Error('the tool gate\'s path cannot be quoted');
+    gatewaySettings = { names: Object.keys(gateway.routes), sandbox: gateway.sandbox, gateCommand: `node "${gate}" || exit 2` };
+  }
   const settings = `${JSON.stringify(buildWorkerSettings(connectors, ownBridge ? bridgeHookGroups(ownBridge) : undefined, gatewaySettings), null, 2)}\n`;
   return {
     settingsFile: writeContentFile(path.join(factory, 'worker-settings'), settings),
@@ -532,9 +568,9 @@ export function prepareConnectorRunDirs(dir: string, connectors: readonly Connec
   return { runDir, npmrc };
 }
 
-function writeContentFile(folder: string, content: string): string {
+function writeContentFile(folder: string, content: string, ext = '.json'): string {
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const file = path.join(folder, contentFileName(content));
+  const file = path.join(folder, contentFileName(content).replace(/\.json$/, ext));
   try {
     if (fs.readFileSync(file, 'utf8') === content) {
       // In use again: the startup prune keeps it.

@@ -151,7 +151,7 @@ ${botWorkerAgentPromptNote(agent)}`
     : '';
   // A task with a signed-in connection (main/connectors/workerGateway.ts).
   const signedIn = gateway && connectors.length > 0
-    ? '- This task works only from its connections: web search and fetch are off, your commands run with no network, and of the wmux tools only `ledger_update` and `channel_post` answer. Report what you found with `ledger_update`.\n'
+    ? '- This task works only from its connections: web search and fetch are off, your commands run with no network, your file tools reach only this folder and its temp folder, and of the wmux tools only `ledger_update` answers. Report what you found with `ledger_update`.\n'
     : '';
   return `
 - Your task: \`task_id\` **${taskId}**, \`expected_rev\` **1** right now (or leave \`task_id\` out: wmux reports on the task of your own workspace). Your mission channel: \`${channelId}\`.
@@ -402,10 +402,8 @@ export interface FanOutRequest {
    *  Ignored for any caller but a bot. */
   connectors?: Connector[];
   /** Which of `connectors` go through main's gateway (signed-in connections,
-   *  main/connectors/workerGateway.ts), and whether the asking wake or its
-   *  conversation had taken in outside text (LedgerDispatch). */
+   *  main/connectors/workerGateway.ts): all of them, when any. */
   gatewayConnectors?: string[];
-  gatewayPreTainted?: boolean;
 }
 
 /** How long a dependent task may wait before it is dropped. A dependency whose
@@ -892,7 +890,7 @@ export class FanOutService {
       ...(req.awaitLaunchSlot ? { awaitLaunchSlot: req.awaitLaunchSlot } : {}),
       ...(req.secretNames && req.secretNames.length > 0 ? { secretNames: req.secretNames } : {}),
       ...(req.connectors && req.connectors.length > 0 ? { connectors: req.connectors } : {}),
-      ...(req.gatewayConnectors && req.gatewayConnectors.length > 0 ? { gatewayConnectors: req.gatewayConnectors, gatewayPreTainted: req.gatewayPreTainted === true } : {}),
+      ...(req.gatewayConnectors && req.gatewayConnectors.length > 0 ? { gatewayConnectors: req.gatewayConnectors } : {}),
       workerMode,
       requester,
       ...(prepOrigin === 'human' ? { prepOrigin } : {}),
@@ -1200,7 +1198,7 @@ export class FanOutService {
         ...(req.awaitLaunchSlot ? { awaitLaunchSlot: req.awaitLaunchSlot } : {}),
         ...(req.secretNames && req.secretNames.length > 0 ? { secretNames: req.secretNames } : {}),
         ...(req.connectors && req.connectors.length > 0 ? { connectors: req.connectors } : {}),
-        ...(req.gatewayConnectors && req.gatewayConnectors.length > 0 ? { gatewayConnectors: req.gatewayConnectors, gatewayPreTainted: req.gatewayPreTainted === true } : {}),
+        ...(req.gatewayConnectors && req.gatewayConnectors.length > 0 ? { gatewayConnectors: req.gatewayConnectors } : {}),
         workerMode,
         requester,
         taskNote: taskGraphNote(k, graph, done),
@@ -1359,7 +1357,6 @@ export class FanOutService {
     connectors?: Connector[];
     /** See FanOutRequest.gatewayConnectors. */
     gatewayConnectors?: string[];
-    gatewayPreTainted?: boolean;
   }, slotGuard: { settle: () => void }): Promise<FanOutTaskResult> {
     const base: FanOutTaskResult = { index: ctx.index, title: ctx.title, ok: false };
     if (ctx.agentChoice) base.agent = ctx.agentChoice.agent;
@@ -1884,7 +1881,7 @@ export class FanOutService {
                 ...(ctx.handoffId ? { handoffId: ctx.handoffId } : {}),
                 ...(ctx.workflow ? { workflow: ctx.workflow } : {}),
                 ...(connectors.length > 0 ? { connectors: connectors.map((c) => c.name) } : {}),
-                ...(gatewayConnectors.length > 0 ? { gatewayConnectors, gatewayPreTainted: ctx.gatewayPreTainted !== false } : {}),
+                ...(gatewayConnectors.length > 0 ? { gatewayConnectors } : {}),
                 ...(ctx.preset === 'research' ? { criteria: [...DEFAULT_RESEARCH_CRITERIA] } : {}),
               },
             }

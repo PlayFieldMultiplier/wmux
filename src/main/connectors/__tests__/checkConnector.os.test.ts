@@ -20,7 +20,7 @@ async function serve(mode: 'ok' | 'auth' | 'redirect' | 'slow' | 'cycle' | 'larg
     if (!('id' in msg)) { res.writeHead(202); res.end(); return; }
     const result = msg.method === 'initialize'
       ? { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1' } }
-      : { tools: [{ name: 'read_mail', inputSchema: { type: 'object' } }], ...(mode === 'cycle' ? { nextCursor: 'repeat' } : {}) };
+      : { tools: [{ name: 'read_mail', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }, { name: 'send_mail', inputSchema: { type: 'object' }, annotations: { readOnlyHint: false } }], ...(mode === 'cycle' ? { nextCursor: 'repeat' } : {}) };
     res.writeHead(200, { 'Content-Type': 'application/json' }); res.end((mode === 'large' ? ' '.repeat(3 * 1024 * 1024) : '') + JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }));
   });
   servers.push(s); await new Promise<void>((resolve) => s.listen(0, '127.0.0.1', resolve));
@@ -31,7 +31,7 @@ describe('MCP connector discovery against a live local HTTP server', () => {
   it('initializes and lists tools without executing a tool', async () => {
     const { c, methods, headers } = await serve();
     const r = await checkConnector(c, { Authorization: 'Bearer local-test-only' });
-    expect(r).toMatchObject({ status: 'ready', toolCount: 1 });
+    expect(r).toMatchObject({ status: 'ready', toolCount: 2, toolNames: ['read_mail', 'send_mail'], readOnlyToolNames: ['read_mail'] });
     expect(methods).toContain('initialize'); expect(methods).toContain('tools/list');
     expect(methods).not.toContain('tools/call'); expect(headers).toContain('Bearer local-test-only');
   });

@@ -40,6 +40,8 @@ import { withDaemonCreateRollback } from './daemonCreateRollback';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getWmuxDir } from '../../../daemon/config';
 import { getWorkerGateways, watchWorkerGatewaySessions, workerGatewaySandbox, type WorkerGatewayOpen } from '../../connectors/workerGateway';
+import { probeBotExecSupport } from '../../factory/botExecSandbox';
+import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
 import { scheduleInitialCommand } from './scheduleInitialCommand';
 import { verifyLaunchLine, type LaunchLineRead } from './verifyLaunchLine';
 import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS } from '../../worktask/fanoutLaunchProbe';
@@ -270,6 +272,10 @@ async function openCreateGateway(botWorker: BotWorkerCreate | null, options: Pty
   if (!cwd) throw new Error('PTY_CREATE: no folder for a worker with a signed-in connection');
   const registry = getWorkerGateways();
   if (!registry) throw new Error('PTY_CREATE: signed-in connections are not running');
+  // The worker runs exactly the claude its command sandbox is checked on.
+  const claudeExe = resolveClaudeExecutable();
+  const support = await probeBotExecSupport(claudeExe);
+  if (!claudeExe || !support.ok) throw new Error(`PTY_CREATE: a worker with a signed-in connection runs only in the command sandbox, which is not available (${support.ok ? 'no claude executable' : support.reason})`);
   const open = await registry.open({ botId: spawn.botId, taskId: spawn.taskId, connectors });
   try {
     // Every name the pane's env may hold: unset for the worker's commands.
@@ -279,8 +285,10 @@ async function openCreateGateway(botWorker: BotWorkerCreate | null, options: Pty
     ];
     const env: Record<string, string | undefined> = { ...globalThis.process.env, ...(options?.env ?? {}) };
     for (const n of names) if (typeof n === 'string' && !(n in env)) env[n] = '';
-    const sandbox = workerGatewaySandbox({ cwd, tmpDir: options?.env?.TMPDIR, wmuxDir: getWmuxDir(), env });
-    return { open, launch: { routes: open.routes, sandbox } };
+    const tmpDir = options?.env?.TMPDIR;
+    const sandbox = workerGatewaySandbox({ cwd, tmpDir, wmuxDir: getWmuxDir(), env });
+    const roots = [cwd, ...(tmpDir && path.isAbsolute(tmpDir) ? [tmpDir] : [])];
+    return { open, launch: { routes: open.routes, sandbox, roots, claudeExe } };
   } catch (err) {
     open.close();
     throw err;

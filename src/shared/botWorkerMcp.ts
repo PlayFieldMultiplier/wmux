@@ -79,20 +79,19 @@ export interface WorkerGatewayRoute {
   envName: string;
 }
 
-/** The only wmux tools a worker with a signed-in connection may call: it
- *  reports its task and posts in its own thread, nothing else. */
-export const WORKER_GATEWAY_WMUX_TOOLS: readonly string[] = ['ledger_update', 'channel_post'];
-
 /** What a worker with a signed-in connection launches with on top of the
  *  worker rules: the OS sandbox block for its commands (no network, no home
  *  folder, no credentials in their env; botExecSandbox.ts), no web tools, and
- *  of the wmux tools only WORKER_GATEWAY_WMUX_TOOLS. */
+ *  one PreToolUse gate on every tool call (main/agents/workerToolGate.ts: an
+ *  allowlist, the file tools confined to the task folder). */
 export interface WorkerGatewaySettings {
   /** The gateway connections' names (server-level allow only: the gateway
    *  holds the owner's tool list). */
   names: readonly string[];
   /** Claude's `sandbox` settings block. */
   sandbox: Record<string, unknown>;
+  /** The gate's hook command (it refuses when it cannot run). */
+  gateCommand: string;
 }
 
 /** A WSL pane's `--mcp-config` document: this build's wmux server, run in
@@ -106,11 +105,15 @@ export function buildWslWorkerMcpConfig(runtime: string, entry: string, level: W
 
 /** The `--mcp-config` document. Pure. */
 export function buildWorkerMcpConfig(input: WorkerMcpInput): { mcpServers: Record<string, unknown> } {
+  const bearers = Object.values(input.gateway ?? {}).map((r) => r.envName);
+  const wmuxArgs = input.level === 'core' ? [input.entry, '--core'] : [input.entry];
   const servers: Record<string, unknown> = {
-    wmux: { type: 'stdio', command: 'node', args: input.level === 'core' ? [input.entry, '--core'] : [input.entry] },
+    // The gateway bearers are taken out of wmux's own server's environment too.
+    wmux: bearers.length > 0
+      ? { type: 'stdio', command: '/usr/bin/env', args: [...bearers.flatMap((k) => ['-u', k]), 'node', ...wmuxArgs] }
+      : { type: 'stdio', command: 'node', args: wmuxArgs },
   };
   const keysOf = (c: Connector) => c.secrets.map((s) => s.secret);
-  const bearers = Object.values(input.gateway ?? {}).map((r) => r.envName);
   for (const c of input.connectors) {
     const route = input.gateway?.[c.name];
     if (route) {
@@ -173,10 +176,8 @@ export function buildWorkerSettings(
   }
   if (gateway) {
     deny.push('WebFetch', 'WebSearch');
-    hooks.push({
-      matcher: `^mcp__wmux__(?!(${WORKER_GATEWAY_WMUX_TOOLS.join('|')})$).*`,
-      hooks: [{ type: 'command', command: 'echo \'wmux: a task with a signed-in connection uses only its report tools\' >&2; exit 2' }],
-    });
+    // First: every call passes the gate, whatever else allows it.
+    hooks.unshift({ matcher: '.*', hooks: [{ type: 'command', command: gateway.gateCommand }] });
   }
   const byEvent: Record<string, unknown[]> = {};
   for (const [event, groups] of Object.entries(wmuxHooks ?? {})) byEvent[event] = groups.map((g) => ({ matcher: g.matcher, hooks: g.hooks.map((h) => ({ ...h })) }));

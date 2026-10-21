@@ -160,6 +160,27 @@ describe('worker_message and outside text (review fixes, PR #2164)', () => {
     expect(await tainted.send('wtask-e5', 'look at the issue')).toEqual({ ok: true, status: 'delivered', taskId: 'wtask-e5' });
   });
 
+  it('a task with a signed-in connection takes messages only from a clean wake and a clean conversation, however it was started', async () => {
+    const gw = (origin: { tainted?: boolean }) => row({ id: 'wtask-g1', dispatch: { origin: { kind: 'bot', botId: BOT, ...origin }, gatewayConnectors: ['notion'] } } as Partial<LedgerEntry>);
+    const clean = rig({ senderConversationTainted: () => false });
+    clean.rows.set('wtask-g1', gw({ tainted: false }));
+    expect(await clean.send('wtask-g1', 'read the next page')).toEqual({ ok: true, status: 'delivered', taskId: 'wtask-g1' });
+    for (const over of [
+      { senderConversationTainted: () => true },
+      { senderConversationTainted: () => { throw new Error('no marks'); } },
+      { senderTainted: () => true, senderConversationTainted: () => false },
+    ] as Array<Partial<WorkerMessagePorts>>) {
+      const r = rig(over);
+      // Recorded as started from outside text changes nothing for it.
+      r.rows.set('wtask-g1', gw({ tainted: true }));
+      expect(await r.send('wtask-g1', 'x')).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('signed-in connection') });
+      expect(r.submit).not.toHaveBeenCalled();
+    }
+    // A task without one is not asked about the conversation.
+    const plain = rig({ senderConversationTainted: () => true });
+    expect(await plain.send('wtask-a1', 'x')).toMatchObject({ ok: true });
+  });
+
   it('a wake on an answer whose question was pruned is handled like outside text (the running tracker decides)', async () => {
     const answer = (id: string, replyTo: string): Handoff => ({
       version: 1, id, runId: 'run-1', threadId: 'general', depth: 0, hopsInRun: 1, from: { kind: 'human' }, to: { kind: 'bot', workspaceId: 'ws-1', botId: BOT },

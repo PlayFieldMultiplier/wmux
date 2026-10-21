@@ -42,6 +42,8 @@ import path from 'node:path';
 import type { Connector } from '../../shared/botConnector';
 import type { LedgerEntry } from '../../shared/ledger';
 import { botSandboxSettings } from '../factory/botExecSandbox';
+import { CONNECTOR_SERVICES } from '../../shared/connectorServices';
+import type { ConnectorCheckResult } from '../../shared/connectorCheck';
 import { taskThreadOf } from '../../shared/room';
 import type { BotNoticeInput } from '../factory/botNotices';
 import { createTerminalGateway } from './terminalGateway';
@@ -50,7 +52,8 @@ import { setRedactedConnectorLeases } from '../factory/secretRedaction';
 
 export const WORKER_GATEWAY_LIMITS = {
   /** Leases open at once: the factory's worker cap (3) times the most
-   *  connections one task carries (8). */
+   *  connections one task carries (8). A lease not yet bound to a session
+   *  holds its slot too, until it is bound or FIRST_LIST_MS closes it. */
   LEASES_MAX: 24,
   /** A lease no tools/list reached within this long is closed: a worker's
    *  claude reads its tools at start, and a cold start (first-run checks, a
@@ -78,28 +81,52 @@ export type GatewayCloseReason = 'session' | 'task' | 'rollback' | 'unused' | 'd
 
 const NOTICE_REASONS: ReadonlySet<GatewayCloseReason> = new Set(['expired', 'signed_out', 'changed']);
 
+/** Whether a connection is a sign-in service of the catalog (its endpoint is
+ *  a CONNECTOR_SERVICES one, and it holds no key of its own): such a
+ *  connection reaches a worker only through the gateway, never directly. */
+export function isSignInService(c: Pick<Connector, 'transport' | 'remote' | 'secrets'>): boolean {
+  if (c.transport !== 'http' || !c.remote || c.secrets.length > 0) return false;
+  if (Object.keys(c.remote.headers).some((h) => /authorization|cookie/i.test(h))) return false;
+  return CONNECTOR_SERVICES.some((s) => s.url === c.remote!.url);
+}
+
 /** Which of a bot task's connections go through the gateway: the HTTP ones
- *  with a stored sign-in. A connection whose sign-in cannot be read now is a
- *  refusal (it is never sent without one). Pure but for the OAuth reads. */
+ *  with a stored sign-in. A connection whose sign-in cannot be read now, and
+ *  a catalog sign-in service with no sign-in, are refusals (neither is ever
+ *  sent without one). Pure but for the OAuth reads. */
 export function gatewayConnectorsOf(connectors: readonly Connector[], oauth: Pick<GatewayOAuth, 'hasRecord'> | null): { gateway: Connector[] } | { refusal: string } {
   const gateway: Connector[] = [];
   for (const c of connectors) {
     if (c.transport !== 'http') continue;
-    const rec = oauth ? oauth.hasRecord(c.id) : false;
+    const rec = oauth ? oauth.hasRecord(c.id) : (isSignInService(c) ? 'unknown' : false);
     if (rec === 'unknown') return { refusal: `the sign-in of ${c.name} cannot be read now (the system keychain is locked or unavailable); try again later` };
     if (rec) gateway.push(c);
+    else if (isSignInService(c)) return { refusal: `${c.name} is not signed in: ask the owner to sign in to it in Plugins › Connectors` };
   }
   return { gateway };
 }
 
 /** Why a bot task may not take these signed-in connections, from what the
- *  request says (macOS and Linux only, the research preset only, each
- *  connection's tools picked by the owner, a turn that did not start from
- *  outside text), or null. Pure. */
-export function gatewayShapeRefusal(input: { connectors: readonly Connector[]; platform: NodeJS.Platform; preset: string | undefined; wakeTainted: boolean }): string | null {
+ *  request says, or null: macOS and Linux only; every connection of the task
+ *  a signed-in one (another would run outside the sandbox); a wake, and a
+ *  conversation, that took in no outside text (until each call is approved,
+ *  the tools cannot be told apart by what they do); the research preset
+ *  only; each connection's tools picked by the owner. Pure. */
+export function gatewayShapeRefusal(input: {
+  connectors: readonly Connector[];
+  /** Every connection the task names. */
+  all: readonly Connector[];
+  platform: NodeJS.Platform;
+  preset: string | undefined;
+  wakeTainted: boolean;
+  conversationTainted: boolean;
+}): string | null {
   if (input.connectors.length === 0) return null;
   if (input.platform === 'win32') return 'signed-in connections do not reach workers on Windows yet; start the task without them';
+  const others = input.all.filter((c) => !input.connectors.some((g) => g.id === c.id));
+  if (others.length > 0) return `a task with a signed-in connection carries only signed-in connections; start ${others.map((c) => c.name).join(', ')} in a task of its own`;
   if (input.wakeTainted) return 'this turn started from outside text (or as a researcher), and such a turn cannot use a signed-in connection; ask the owner to start it from their own message';
+  if (input.conversationTainted) return 'this conversation has taken in outside text, and a signed-in connection is used only from a conversation that has not; ask the owner to start it in a new conversation';
   if (input.preset !== 'research') return 'a task with a signed-in connection runs only with preset "research" (no repository, no push)';
   for (const c of input.connectors) {
     if (c.tools.mode !== 'listed' || c.tools.allowed.length === 0) {
@@ -115,11 +142,14 @@ export interface GatewayReadyInput {
   /** Whether workers can run in the command sandbox (botExecSandbox.ts
    *  probeBotExecSupport). */
   sandbox: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** The service's own tool list now, with the token (checkConnector.ts). */
+  listTools: (c: Connector, headers: Record<string, string>) => Promise<ConnectorCheckResult>;
 }
 
 /** Why the signed-in connections cannot be used now, or null: each is
- *  signed in (a refresh when due, never a sign-in) and the command sandbox
- *  is available. */
+ *  signed in (a refresh when due, never a sign-in), every tool the owner
+ *  picked is one the service marks read-only (a second layer: the owner's
+ *  list stays what is served), and the command sandbox is available. */
 export async function gatewayReadyRefusal(input: GatewayReadyInput): Promise<string | null> {
   if (input.connectors.length === 0) return null;
   if (!input.oauth) return 'signed-in connections are not running';
@@ -132,6 +162,16 @@ export async function gatewayReadyRefusal(input: GatewayReadyInput): Promise<str
       token = undefined;
     }
     if (!token) return `${c.name} needs the owner to sign in again: ask them to sign in to it in Plugins › Connectors`;
+    let listed: ConnectorCheckResult;
+    try {
+      listed = await input.listTools(c, { ...(c.remote?.headers ?? {}), Authorization: `Bearer ${token}` });
+    } catch {
+      listed = { status: 'failed' };
+    }
+    if (listed.status !== 'ready') return `the tools of ${c.name} could not be listed now (${listed.status}); try again later`;
+    const readOnly = new Set(listed.readOnlyToolNames ?? []);
+    const writes = c.tools.mode === 'listed' ? c.tools.allowed.filter((t) => !readOnly.has(t)) : ['(all tools)'];
+    if (writes.length > 0) return `a signed-in connection gives workers read-only tools only, and ${c.name} does not mark these read-only: ${writes.join(', ')}; ask the owner to leave them out of its tools`;
   }
   let support: { ok: true } | { ok: false; reason: string };
   try {
@@ -390,6 +430,9 @@ export class WorkerGatewayRegistry {
 
 // ── The worker's command sandbox ───────────────────────────────────────────
 
+/** The files in a worker's folder claude reads as its own configuration. */
+export const WORKER_FOLDER_CONFIG_NAMES: readonly string[] = ['.claude', '.mcp.json', 'CLAUDE.md', 'CLAUDE.local.md'];
+
 /** Claude's `sandbox` block for a worker with a signed-in connection: the
  *  bot command sandbox (botExecSandbox.ts: no network, no home folder, every
  *  variable but a harmless few unset for its commands, the bearers among
@@ -399,7 +442,10 @@ export class WorkerGatewayRegistry {
 export function workerGatewaySandbox(input: { cwd: string; tmpDir?: string; wmuxDir: string; env: Readonly<Record<string, string | undefined>> }): Record<string, unknown> {
   const base = botSandboxSettings({ botDir: input.cwd, wmuxDir: input.wmuxDir, env: input.env });
   const dirs = [path.resolve(input.cwd), ...(input.tmpDir && path.isAbsolute(input.tmpDir) ? [path.resolve(input.tmpDir)] : [])];
-  return { ...base, filesystem: { ...(base.filesystem as Record<string, unknown>), allowWrite: dirs, allowRead: dirs } };
+  // What claude reads from its folder (project settings, MCP servers,
+  // memory) is never written by the worker's commands.
+  const denyWrite = WORKER_FOLDER_CONFIG_NAMES.map((n) => path.join(dirs[0], n));
+  return { ...base, filesystem: { ...(base.filesystem as Record<string, unknown>), allowWrite: dirs, allowRead: dirs, denyWrite } };
 }
 
 // ── Telling the bot ────────────────────────────────────────────────────────

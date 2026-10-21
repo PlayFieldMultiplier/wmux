@@ -45,6 +45,7 @@ export async function checkConnector(
   try {
     await client.connect(transport, { timeout: timeoutMs });
     const names = new Set<string>();
+    const readOnly = new Set<string>();
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < 16; page++) {
@@ -52,9 +53,10 @@ export async function checkConnector(
       for (const tool of result.tools) {
         if (tool.name.length > 128 || names.size >= 1024) return { status: 'failed' };
         names.add(tool.name);
+        if (tool.annotations?.readOnlyHint === true) readOnly.add(tool.name);
       }
       cursor = result.nextCursor;
-      if (!cursor) return { status: 'ready', toolCount: names.size, toolNames: [...names], checkedAt: Date.now() };
+      if (!cursor) return { status: 'ready', toolCount: names.size, toolNames: [...names], readOnlyToolNames: [...readOnly], checkedAt: Date.now() };
       if (cursors.has(cursor)) return { status: 'failed' };
       cursors.add(cursor);
     }

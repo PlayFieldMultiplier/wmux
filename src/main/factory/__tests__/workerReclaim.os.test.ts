@@ -835,6 +835,26 @@ describe('a research task (scratch folder, no worktree)', () => {
     await settled(store);
   });
 
+  it('with a signed-in connection, a bot resumes it only from a clean wake and a clean conversation', async () => {
+    const TASK = 'wtask-abc-12345678';
+    const store = ReclaimedWorkers.at(dir);
+    await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
+    const respawn = vi.fn(async () => ({ ok: true as const, workspaceId: 'ws-new', sessionId: 'daemon-9' }));
+    const base = { store, listSessions: async () => [] as never[], typeLine: vi.fn(() => true), respawn, gatewayTask: () => true, taskTainted: () => true, now: () => 9_000 };
+    for (const sender of [
+      { senderTainted: () => true, senderConversationTainted: () => false },
+      { senderTainted: () => false, senderConversationTainted: () => true },
+      { senderTainted: () => false },
+    ]) {
+      // With a message or without one.
+      expect(await resumeWorker({ ...base, ...sender }, TASK, { kind: 'bot', botId: BOT })).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('signed-in connection') });
+      expect(await resumeWorker({ ...base, ...sender }, TASK, { kind: 'bot', botId: BOT }, 'go on')).toMatchObject({ ok: false, code: 'not_now' });
+    }
+    expect(respawn).not.toHaveBeenCalled();
+    expect(await resumeWorker({ ...base, senderTainted: () => false, senderConversationTainted: () => false }, TASK, { kind: 'bot', botId: BOT })).toMatchObject({ ok: true, sessionId: 'daemon-9' });
+    await settled(store);
+  });
+
   it('a bot does not start the worker of a task the owner stopped again; the owner can', async () => {
     const store = ReclaimedWorkers.at(dir);
     await reclaimWorker(reclaimPorts(store, [session()], { row: () => row('review_requested'), turnEnded: () => true }).ports, row('review_requested'), 'reported');

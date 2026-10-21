@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -11,6 +12,7 @@ import {
   gatewayReadyRefusal,
   gatewayShapeRefusal,
   gatewayTasksCutByRestart,
+  isSignInService,
   workerGatewayEnvName,
   workerGatewaySandbox,
   type GatewayOAuth,
@@ -197,6 +199,25 @@ describe('WorkerGatewayRegistry', () => {
     await expect(r.registry.open({ botId: 'bot-00000001', taskId: 'wtask-1', connectors: [{ ...r.connector()!, updatedAt: 2 }] })).rejects.toThrow(/changed/);
   });
 
+  it('stops the first-list clock only for a list that passed every authorization check', async () => {
+    const up = await upstream();
+    const connector = connectorAt(up.url);
+    const cleared: unknown[] = [];
+    const registry = new WorkerGatewayRegistry({
+      oauth: () => fakeOAuth(), connector: () => connector, forBot: () => [connector], taskOpen: () => true, botMayRun: () => true,
+      platform: 'darwin', redact: () => undefined,
+      setTimer: (_fn, ms) => `timer-${ms}`, clearTimer: (h) => { cleared.push(h); },
+    });
+    cleanups.push(() => registry.dispose());
+    const open = await registry.open({ botId: 'bot-00000001', taskId: 'wtask-1', connectors: [connector] });
+    const client = await clientFor(open.routes.notion.url, open.env[open.routes.notion.envName]);
+    await expect(client.listTools()).rejects.toThrow();
+    expect(cleared).not.toContain(`timer-${WORKER_GATEWAY_LIMITS.FIRST_LIST_MS}`);
+    open.bind('daemon-0000aaaa');
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['read_page']);
+    expect(cleared).toContain(`timer-${WORKER_GATEWAY_LIMITS.FIRST_LIST_MS}`);
+  });
+
   it('closes a lease no tools/list reached in time, quietly', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
@@ -215,34 +236,50 @@ describe('WorkerGatewayRegistry', () => {
 describe('accepting a task with signed-in connections', () => {
   const c = connectorAt('https://mcp.example.com/mcp');
 
-  it('routes only the connections with a stored sign-in, and refuses one it cannot read', () => {
+  it('routes only the connections with a stored sign-in, and refuses one it cannot read or a catalog service never signed in', () => {
     const plain = { ...c, id: 'con-00000002', name: 'plain' };
     const stdio: Connector = { ...c, id: 'con-00000003', name: 'files', transport: 'stdio', remote: undefined, stdio: { command: '/bin/x', args: [], env: {} } };
     const oauth = { hasRecord: (id: string) => id === c.id };
     expect(gatewayConnectorsOf([c, plain, stdio], oauth)).toEqual({ gateway: [c] });
     expect(gatewayConnectorsOf([c], { hasRecord: () => 'unknown' })).toHaveProperty('refusal');
     expect(gatewayConnectorsOf([c], null)).toEqual({ gateway: [] });
+    // A sign-in service of the catalog with no sign-in is never sent directly.
+    const notion = { ...c, id: 'con-00000004', name: 'notion', remote: { url: 'https://mcp.notion.com/mcp', headers: {} } };
+    expect(isSignInService(notion)).toBe(true);
+    expect(isSignInService({ ...notion, secrets: [{ secret: 'X_TOKEN', as: 'header' as const, header: 'Authorization', scheme: 'bearer' as const }] })).toBe(false);
+    expect(gatewayConnectorsOf([notion], { hasRecord: () => false })).toEqual({ refusal: expect.stringMatching(/not signed in/) });
+    expect(gatewayConnectorsOf([notion], null)).toHaveProperty('refusal');
   });
 
-  it('takes them only on macOS and Linux, from a clean wake, as research, with tools picked', () => {
-    const ok = { connectors: [c], platform: 'darwin' as const, preset: 'research', wakeTainted: false };
+  it('takes them only on macOS and Linux, all signed in, from a clean wake and conversation, as research, with tools picked', () => {
+    const ok = { connectors: [c], all: [c], platform: 'darwin' as const, preset: 'research', wakeTainted: false, conversationTainted: false };
     expect(gatewayShapeRefusal(ok)).toBeNull();
     expect(gatewayShapeRefusal({ ...ok, platform: 'win32' })).toMatch(/Windows/);
+    const files: Connector = { ...c, id: 'con-00000003', name: 'files', transport: 'stdio', remote: undefined, stdio: { command: '/bin/x', args: [], env: {} } };
+    expect(gatewayShapeRefusal({ ...ok, all: [c, files] })).toMatch(/only signed-in connections.*files/);
     expect(gatewayShapeRefusal({ ...ok, wakeTainted: true })).toMatch(/outside text/);
+    expect(gatewayShapeRefusal({ ...ok, conversationTainted: true })).toMatch(/conversation/);
     expect(gatewayShapeRefusal({ ...ok, preset: 'default' })).toMatch(/research/);
     expect(gatewayShapeRefusal({ ...ok, preset: undefined })).toMatch(/research/);
-    expect(gatewayShapeRefusal({ ...ok, connectors: [{ ...c, tools: { mode: 'all', blocked: [] } }] })).toMatch(/tools/);
-    expect(gatewayShapeRefusal({ ...ok, connectors: [{ ...c, tools: { mode: 'listed', allowed: [] } }] })).toMatch(/tools/);
-    expect(gatewayShapeRefusal({ ...ok, connectors: [] })).toBeNull();
+    expect(gatewayShapeRefusal({ ...ok, connectors: [{ ...c, tools: { mode: 'all', blocked: [] } }], all: [] })).toMatch(/tools/);
+    expect(gatewayShapeRefusal({ ...ok, connectors: [{ ...c, tools: { mode: 'listed', allowed: [] } }], all: [] })).toMatch(/tools/);
+    expect(gatewayShapeRefusal({ ...ok, connectors: [], all: [files] })).toBeNull();
   });
 
-  it('needs a sign-in that refreshes now and the command sandbox', async () => {
+  it('needs a sign-in that refreshes now, read-only tools as the service marks them, and the command sandbox', async () => {
     const sandboxOk = async () => ({ ok: true as const });
-    expect(await gatewayReadyRefusal({ connectors: [c], oauth: fakeOAuth(), sandbox: sandboxOk })).toBeNull();
-    expect(await gatewayReadyRefusal({ connectors: [c], oauth: fakeOAuth(null), sandbox: sandboxOk })).toMatch(/sign in again/);
-    expect(await gatewayReadyRefusal({ connectors: [c], oauth: { ...fakeOAuth(), awaitingConsent: () => true }, sandbox: sandboxOk })).toMatch(/waiting/);
-    expect(await gatewayReadyRefusal({ connectors: [c], oauth: fakeOAuth(), sandbox: async () => ({ ok: false, reason: 'macOS sandbox-exec is missing' }) })).toMatch(/sandbox-exec/);
-    expect(await gatewayReadyRefusal({ connectors: [c], oauth: null, sandbox: sandboxOk })).toMatch(/not running/);
+    const readOnly = vi.fn(async () => ({ status: 'ready' as const, toolCount: 2, toolNames: ['read_page', 'delete_page'], readOnlyToolNames: ['read_page'], checkedAt: 1 }));
+    const base = { connectors: [c], sandbox: sandboxOk, listTools: readOnly };
+    expect(await gatewayReadyRefusal({ ...base, oauth: fakeOAuth() })).toBeNull();
+    expect(readOnly).toHaveBeenCalledWith(c, { Authorization: `Bearer ${VENDOR_TOKEN}` });
+    expect(await gatewayReadyRefusal({ ...base, oauth: fakeOAuth(null) })).toMatch(/sign in again/);
+    expect(await gatewayReadyRefusal({ ...base, oauth: { ...fakeOAuth(), awaitingConsent: () => true } })).toMatch(/waiting/);
+    expect(await gatewayReadyRefusal({ ...base, oauth: fakeOAuth(), sandbox: async () => ({ ok: false, reason: 'macOS sandbox-exec is missing' }) })).toMatch(/sandbox-exec/);
+    expect(await gatewayReadyRefusal({ ...base, oauth: null })).toMatch(/not running/);
+    // A picked tool the service does not mark read-only (or a list that cannot be read).
+    const picksWrite = { ...c, tools: { mode: 'listed' as const, allowed: ['read_page', 'delete_page'] } };
+    expect(await gatewayReadyRefusal({ ...base, connectors: [picksWrite], oauth: fakeOAuth() })).toMatch(/read-only.*delete_page/);
+    expect(await gatewayReadyRefusal({ ...base, oauth: fakeOAuth(), listTools: async () => ({ status: 'timeout' as const }) })).toMatch(/could not be listed/);
   });
 });
 
@@ -251,14 +288,16 @@ describe('the worker sandbox and the bot notices', () => {
     const sandbox = workerGatewaySandbox({ cwd: '/tmp/research/t1', tmpDir: '/tmp/wtmp/t1', wmuxDir: '/home/u/.wmux', env: { PATH: '/usr/bin', CONNECTOR_1A2B3C4D_TOKEN: '', GH_TOKEN: 'x' } }) as {
       enabled: boolean; failIfUnavailable: boolean; allowUnsandboxedCommands: boolean;
       network: { deniedDomains: string[]; allowedDomains: string[]; allowUnixSockets: string[]; allowLocalBinding: boolean };
-      filesystem: { allowWrite: string[]; allowRead: string[] };
+      filesystem: { allowWrite: string[]; allowRead: string[]; denyWrite: string[] };
       credentials: { envVars: Array<{ name: string; mode: string }> };
     };
     expect(sandbox.enabled && sandbox.failIfUnavailable).toBe(true);
     expect(sandbox.allowUnsandboxedCommands).toBe(false);
     expect(sandbox.network).toMatchObject({ allowedDomains: [], deniedDomains: ['*'], allowUnixSockets: [], allowLocalBinding: false });
-    expect(sandbox.filesystem.allowWrite).toEqual(['/tmp/research/t1', '/tmp/wtmp/t1']);
-    expect(sandbox.filesystem.allowRead).toEqual(['/tmp/research/t1', '/tmp/wtmp/t1']);
+    const dirs = [path.resolve('/tmp/research/t1'), path.resolve('/tmp/wtmp/t1')];
+    expect(sandbox.filesystem.allowWrite).toEqual(dirs);
+    expect(sandbox.filesystem.allowRead).toEqual(dirs);
+    expect(sandbox.filesystem.denyWrite).toEqual(['.claude', '.mcp.json', 'CLAUDE.md', 'CLAUDE.local.md'].map((n) => path.join(dirs[0], n)));
     const unset = sandbox.credentials.envVars.map((v) => v.name);
     expect(unset).toContain('CONNECTOR_1A2B3C4D_TOKEN');
     expect(unset).toContain('GH_TOKEN');

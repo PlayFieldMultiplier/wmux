@@ -25,6 +25,7 @@ import { BOT_WORKER_MESSAGE_LIMITS, type BotWorkerMessageResult } from '../../sh
 import type { LedgerEntry } from '../../shared/ledger';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfWake, runningWakeTainted, type GuestProvenance } from './wakeTaint';
 import { currentWakeId } from './wakeQueue';
+import { conversationMarks } from './conversationMarks';
 
 export const WORKER_MESSAGE_TASK_RE = /^wtask-[A-Za-z0-9_-]{1,80}$/;
 
@@ -44,6 +45,9 @@ export interface WorkerMessagePorts {
   /** Whether the bot's running wake carried outside text (unknown: true).
    *  Default: the wake taint tracker. */
   senderTainted?: (botId: string) => boolean;
+  /** Whether the bot's live conversation has taken in outside text (none:
+   *  true). Default: conversationMarks.ts. */
+  senderConversationTainted?: (botId: string) => boolean;
   /** The id of the wake the bot is running now. Default: wakeQueue.ts. */
   senderWakeId?: (botId: string) => string | null;
   /** A wake's guest provenance by id. Default: wakeTaint.ts guestOfWake. */
@@ -125,6 +129,18 @@ export async function deliverWorkerMessage(
   const guestRefusal = (): string | null => (!senderWake || guestOf(senderWake) !== false ? GUEST_TURN_STARTS_NO_WORKERS : null);
   const guest = guestRefusal();
   if (guest) return refuse('not_now', guest);
+  // A worker with a signed-in connection is steered only as it is started:
+  // from a wake, and a conversation, that took in no outside text.
+  if ((row.dispatch?.gatewayConnectors?.length ?? 0) > 0) {
+    let clean = false;
+    try {
+      clean = (ports.senderTainted ?? runningWakeTainted)(botId) === false
+        && (ports.senderConversationTainted ?? ((id: string) => conversationMarks(id)?.tainted !== false))(botId) === false;
+    } catch {
+      clean = false;
+    }
+    if (!clean) return refuse('not_now', 'a task with a signed-in connection takes messages only from a wake and conversation that took in no outside text');
+  }
   if (origin.tainted === false) {
     let tainted = true;
     try {

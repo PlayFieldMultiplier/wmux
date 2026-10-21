@@ -6,7 +6,11 @@
 // module's imports stay free of the event bus and the pane status handler.
 
 import { getConnectorStore, onConnectorLibraryChanged } from './connectorStore';
-import { gatewayLossNotice, gatewayTasksCutByRestart, getWorkerGateways, installWorkerGateway, isTaskEnded } from '../connectors/workerGateway';
+import { gatewayLossNotice, gatewayReadyRefusal, gatewayShapeRefusal, gatewayTasksCutByRestart, getWorkerGateways, installWorkerGateway, isTaskEnded, workerGatewayOAuth } from '../connectors/workerGateway';
+import { checkConnector } from '../connectors/checkConnector';
+import { probeBotExecSupport } from './botExecSandbox';
+import { resolveClaudeExecutable } from '../claude/resolveClaudeExecutable';
+import { conversationMarks } from './conversationMarks';
 import type { BrowserWindow } from 'electron';
 import type { DaemonClient } from '../DaemonClient';
 import { dmThreadId, parseThreadId, type CardNotice, type ThreadId } from '../../shared/room';
@@ -635,6 +639,23 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
           if (connectors.length < named.length) {
             console.log('[factory] resume: connections left out (gone or no longer this bot\'s)', { taskId: input.taskId, names: named.filter((n) => !connectors.some((c) => c.name === n)) });
           }
+          // Signed-in connections: checked again, as at the fan-out, before
+          // new leases are opened (the gates of who may resume ran already).
+          const signedIn = gatewayNames(input.taskId);
+          if (signedIn.length > 0) {
+            const gateway = connectors.filter((c) => signedIn.includes(c.name));
+            const refusal = gatewayShapeRefusal({
+              connectors: gateway, all: connectors, platform: process.platform,
+              preset: ledger.get(input.taskId)?.dispatch?.preset, wakeTainted: false, conversationTainted: false,
+            }) ?? (gateway.length < signedIn.length ? 'a signed-in connection of the task is off, removed or no longer this bot\'s' : null)
+              ?? await gatewayReadyRefusal({
+                connectors: gateway,
+                oauth: workerGatewayOAuth(),
+                sandbox: () => probeBotExecSupport(resolveClaudeExecutable()),
+                listTools: (c, headers) => checkConnector(c, headers),
+              });
+            if (refusal) return { ok: false as const, message: refusal };
+          }
           const r = await svc.spawnBotTaskPane({
             ownerWorkspaceId: input.ownerWorkspaceId,
             botId: input.botId,
@@ -669,6 +690,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       taskTainted: (taskId) => ledger.get(taskId)?.dispatch?.origin.tainted !== false,
       // A task with signed-in connections starts again only in a new pane.
       gatewayTask: (taskId) => gatewayNames(taskId).length > 0,
+      senderConversationTainted: (botId) => conversationMarks(botId)?.tainted !== false,
       senderTainted: runningWakeTainted,
       stoppedByOwner: (taskId) => {
         const row = ledger.get(taskId);

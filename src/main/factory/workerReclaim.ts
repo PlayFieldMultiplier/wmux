@@ -1658,6 +1658,9 @@ export interface WorkerResumePorts {
    *  again only in a new pane (a running shell cannot take a new gateway
    *  lease), so a live pane of it is closed first. */
   gatewayTask?: (taskId: string) => boolean;
+  /** Whether the bot's live conversation has taken in outside text
+   *  (unknown: true). */
+  senderConversationTainted?: (botId: string) => boolean;
   /** Whether the bot's running wake carried outside text (unknown: true). A
    *  bot's message from such a wake goes only to a task recorded as started
    *  from outside text. */
@@ -1816,6 +1819,12 @@ async function resumeOnce(
   const stopped = (): boolean => stopMark(rec.botId, rec.taskId) !== mark;
   if (by.kind === 'bot') {
     const text = typeof message === 'string' ? message.trim() : '';
+    // A task with signed-in connections resumes only as it is started: from
+    // a wake, and a conversation, that took in no outside text.
+    if (ports.gatewayTask?.(taskId) === true
+      && ((ports.senderTainted?.(by.botId) ?? true) !== false || (ports.senderConversationTainted?.(by.botId) ?? true) !== false)) {
+      return refuse('not_now', 'a task with a signed-in connection resumes only from a wake and conversation that took in no outside text; the owner can resume it');
+    }
     if (text && (ports.taskTainted?.(taskId) ?? true) === false && (ports.senderTainted?.(by.botId) ?? true) !== false) {
       return refuse('not_now', 'a message from a wake that carried outside text goes only to a task started from outside text; resume without a message, or write it from a clean wake');
     }

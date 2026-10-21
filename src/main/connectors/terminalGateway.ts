@@ -96,9 +96,8 @@ export async function createTerminalGateway(options: Options): Promise<{ url: st
       for await (const chunk of req) { bytes += chunk.length; if (bytes > 1024 * 1024) throw new Error('Request too large'); chunks.push(Buffer.from(chunk)); }
       const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       server.setRequestHandler(ListToolsRequestSchema, async () => {
-        try { options.onListTools?.(); } catch { /* a clock never blocks the list */ }
         try {
-          return await upstream(async (client, signal) => {
+          const listed = await upstream(async (client, signal) => {
             const tools: Awaited<ReturnType<Client['listTools']>>['tools'] = [];
             let cursor: string | undefined; const cursors = new Set<string>();
             for (let page = 0; page < 16; page++) {
@@ -112,6 +111,9 @@ export async function createTerminalGateway(options: Options): Promise<{ url: st
             }
             throw new Error('Too many pages');
           });
+          // Only a list that passed every authorization check counts.
+          try { options.onListTools?.(); } catch { /* a clock never blocks the list */ }
+          return listed;
         } catch { throw new Error('Connector unavailable. Check its authorization and configuration in wmux.'); }
       });
       server.setRequestHandler(CallToolRequestSchema, async (request) => {
