@@ -7,7 +7,9 @@
 // - `sandbox=""`: no scripts, no same origin (an opaque origin, so it cannot
 //   reach the app's document or its `electronAPI`), no forms, no popups, no
 //   top navigation. Main's frame guard (attachPluginFrameNavigation) refuses
-//   any navigation the frame itself starts, a link or a refresh included.
+//   any navigation the frame itself starts, a link or a refresh included;
+//   the srcdoc load itself does not reach that guard (checked on Electron
+//   41.10.6; a preview that turns blank after an upgrade starts there).
 // - A Content-Security-Policy meta as the head's first element: nothing
 //   loads from anywhere but the page itself (inline styles, data: images
 //   and fonts), so no network request and no tracking pixel.
