@@ -26,10 +26,12 @@
 //   - The hook's own time, not its arrival. The next woken turn's entry is
 //     written milliseconds after the Stop fires, often before the daemon has
 //     ingested that Stop; the entry then waits for it.
-//   - After that Stop is applied. HookIngest tells this module about a hook
-//     before it applies the hook to the pane, in one synchronous call; a turn
-//     opened inside it would be closed by the very Stop it follows, so a
-//     decision a hook makes runs once that call has returned.
+//   - After that Stop is applied. A turn end is taken from the Stop the daemon
+//     broadcasts, not from the hook's arrival: the completion alarm can hold a
+//     Stop for its window (a turn that had working signals, every StopFailure),
+//     and a turn opened before the held Stop lands would be closed by it. Even
+//     then the broadcast is mid-call (HookIngest records the ended turn after
+//     it), so a decision a turn end makes runs once that call has returned.
 //   - Once per entry. Entries are keyed by their uuid, so a replay of the
 //     window before the watcher's offset, a re-subscribe or a second reader
 //     never opens the turn twice. A daemon restart starts with no turn end
@@ -75,6 +77,24 @@ export function teammateWakeFromTranscriptLine(line: string): TeammateWake | nul
   const at = typeof o.timestamp === 'string' ? Date.parse(o.timestamp) : NaN;
   if (typeof o.uuid !== 'string' || !o.uuid || !Number.isFinite(at)) return null;
   return { uuid: o.uuid, at };
+}
+
+/** The parts of a broadcast agent event (HookAgentEventData) that tell a turn end. */
+export interface TurnEndEvent {
+  status: string;
+  decision?: string;
+  signal: { kind: string; ts: number };
+}
+
+/**
+ * When a broadcast agent event ended the pane's turn, the time its hook fired.
+ * A Stop that still projects running (background agents left) ends nothing,
+ * and neither does a vetoed or still pending delivery.
+ */
+export function turnEndAt(data: TurnEndEvent): number | undefined {
+  if (data.signal.kind !== 'agent.stop' && data.signal.kind !== 'agent.stop_failure') return undefined;
+  if (data.status === 'running' || data.decision === 'veto' || data.decision === 'pending') return undefined;
+  return Number.isFinite(data.signal.ts) ? data.signal.ts : undefined;
 }
 
 export interface TeammateWakeDeps {
@@ -128,15 +148,18 @@ export class TeammateWakes {
     this.decide(sessionId, p);
   }
 
-  /** Every resolved hook signal for the session; `ts` is when the hook fired. */
+  /** A turn end the daemon applied and broadcast (see turnEndAt); `at` is when its hook fired. */
+  noteTurnEnd(sessionId: string, at: number): void {
+    const s = this.pane(sessionId);
+    s.endAt = at;
+    if (s.pending) this.defer(() => { if (this.panes.get(sessionId) === s) this.decide(sessionId, s); });
+  }
+
+  /** Every resolved hook signal for the session; `ts` is when the hook fired. Turn ends come through noteTurnEnd. */
   noteHookSignal(sessionId: string, kind: string, ts?: number): void {
     const p = this.panes.get(sessionId);
     const at = typeof ts === 'number' && Number.isFinite(ts) ? ts : Date.now();
-    if (kind === 'agent.stop' || kind === 'agent.stop_failure') {
-      const s = this.pane(sessionId);
-      s.endAt = at;
-      if (s.pending) this.defer(() => { if (this.panes.get(sessionId) === s) this.decide(sessionId, s); });
-    } else if (kind === 'agent.user_prompt_submit') {
+    if (kind === 'agent.user_prompt_submit') {
       const s = this.pane(sessionId);
       s.startAt = at;
       // A prompt after the entry starts the turn itself.

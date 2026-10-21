@@ -185,7 +185,7 @@ import { checkNativeTranscriptPath } from './transcript/providers';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
 import { ApiErrorTurnEnds, stopFailureSignal } from './transcript/apiErrorTurnEnd';
-import { TeammateWakes } from './transcript/teammateWake';
+import { TeammateWakes, turnEndAt } from './transcript/teammateWake';
 import { TranscriptDiscovery, DISCOVERABLE_AGENT } from './transcript/TranscriptDiscovery';
 import { admitCodexCapture, gateCodexStop } from './transcript/codexCapture';
 import { CodexCwdBinder, codexLiveFor, describeCodexPane, readProcessStartMs, type CodexPaneFacts } from './transcript/codexRolloutByCwd';
@@ -4849,6 +4849,10 @@ function registerRpcHandlers(
         detectionAgreementLog?.noteHook(sessionId, data, { provisionalStop: codexStopUnconfirmed });
         const event: DaemonEvent = { type: 'agent.event', sessionId, data };
         pipeServer.broadcast(event);
+        // #2494 — a woken lead turn waits for the turn end it follows to be
+        // applied, held Stops included (see teammateWake.ts).
+        const turnEnd = turnEndAt(data);
+        if (turnEnd !== undefined) teammateWakes?.noteTurnEnd(sessionId, turnEnd);
         // Phone liveness header. The desktop reads pane state off this same
         // broadcast; the phone has no pipe, so the web server gets the projected
         // state (non-recording, coalesced, watchers only — see

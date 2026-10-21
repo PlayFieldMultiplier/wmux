@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TeammateWakes, teammateWakeFromTranscriptLine } from '../teammateWake';
+import { TeammateWakes, teammateWakeFromTranscriptLine, turnEndAt } from '../teammateWake';
 
 // Replays a live Agent Teams capture (Claude Code 2.1.304, #2494): the lead's
 // hooks with their fire times and the lead transcript's entries, text shortened.
@@ -20,7 +20,10 @@ const WAKE_2 = userLine('u-wake-2', '20:04:21.951', wakeText('{"type":"idle_noti
 function rig(opts: { reader?: boolean; mayOpen?: boolean } = {}) {
   const emit = vi.fn();
   const wakes = new TeammateWakes({ isReader: () => opts.reader ?? true, mayOpen: () => opts.mayOpen ?? true, emit });
-  const hook = (kind: string, t: string): void => wakes.noteHookSignal('pty-1', kind, ms(t));
+  // A Stop reaches the module once the daemon applied and broadcast it (turnEndAt).
+  const hook = (kind: string, t: string): void => (kind === 'agent.stop'
+    ? wakes.noteTurnEnd('pty-1', ms(t))
+    : wakes.noteHookSignal('pty-1', kind, ms(t)));
   const line = (l: string): void => wakes.noteLine('pty-1', PATH, l);
   return { wakes, emit, hook, line };
 }
@@ -34,6 +37,19 @@ describe('teammateWakeFromTranscriptLine', () => {
     expect(teammateWakeFromTranscriptLine(userLine('u-s', '20:04:14.879', wakeText('x'), { isSidechain: true }))).toBeNull();
     expect(teammateWakeFromTranscriptLine(userLine('u-q', '20:04:14.879', 'why does <teammate-message> show up?'))).toBeNull();
     expect(teammateWakeFromTranscriptLine(JSON.stringify({ type: 'assistant', uuid: 'a', timestamp: '2026-10-20T20:04:14.879Z', message: { content: wakeText('x') } }))).toBeNull();
+  });
+});
+
+describe('turnEndAt', () => {
+  it('reads a delivered Stop or StopFailure that closed the turn, and nothing else', () => {
+    const at = ms('20:04:21.936');
+    expect(turnEndAt({ status: 'complete', decision: 'internal', signal: { kind: 'agent.stop', ts: at } })).toBe(at);
+    expect(turnEndAt({ status: 'error', signal: { kind: 'agent.stop_failure', ts: at } })).toBe(at);
+    // Background agents left: the turn is still open.
+    expect(turnEndAt({ status: 'running', signal: { kind: 'agent.stop', ts: at } })).toBeUndefined();
+    expect(turnEndAt({ status: 'complete', decision: 'veto', signal: { kind: 'agent.stop', ts: at } })).toBeUndefined();
+    expect(turnEndAt({ status: 'complete', decision: 'pending', signal: { kind: 'agent.stop', ts: at } })).toBeUndefined();
+    expect(turnEndAt({ status: 'running', signal: { kind: 'agent.user_prompt_submit', ts: at } })).toBeUndefined();
   });
 });
 
@@ -61,18 +77,18 @@ describe('TeammateWakes — the live capture', () => {
   });
 
   it('opens a waiting entry only after its Stop is applied, never before it', async () => {
-    // HookIngest nudges this module, then applies the Stop to the bridge and
-    // broadcasts it, in one synchronous call. A wake sent inside the nudge
-    // would be closed by that very Stop.
+    // The daemon hands the turn end over from inside its broadcast, before
+    // HookIngest has finished with that Stop. A wake sent inside that call
+    // would race the Stop it follows.
     const order: string[] = [];
     const wakes = new TeammateWakes({ isReader: () => true, mayOpen: () => true, emit: () => { order.push('wake'); } });
     wakes.noteHookSignal('pty-1', 'agent.user_prompt_submit', ms('20:03:49.169'));
-    wakes.noteHookSignal('pty-1', 'agent.stop', ms('20:03:57.365'));
+    wakes.noteTurnEnd('pty-1', ms('20:03:57.365'));
     await Promise.resolve();
     wakes.noteLine('pty-1', PATH, WAKE_1);
     wakes.noteLine('pty-1', PATH, WAKE_2);
     order.length = 0;
-    wakes.noteHookSignal('pty-1', 'agent.stop', ms('20:04:21.936'));
+    wakes.noteTurnEnd('pty-1', ms('20:04:21.936'));
     order.push('stop applied');
     await Promise.resolve();
     expect(order).toEqual(['stop applied', 'wake']);
