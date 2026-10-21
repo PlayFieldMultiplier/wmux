@@ -7,6 +7,7 @@ import {
   type A2aRemoteErrorCode,
   type A2aStreamCursor,
   type A2aStreamEvent,
+  type A2aStreamHello,
   type HostId,
 } from '../../shared/a2aRemote';
 import type { OutboxStore } from './outboxStore';
@@ -28,7 +29,8 @@ import { errMsg, isPlainObject } from './storeFile';
  *                            owed — safe, the receiver dedupes by message key.
  *   POST /api/a2a/ack      — the joiner has applied the stream up to a cursor.
  *
- * Wire events: `event: hello` (stream is up, carries the outbox epoch),
+ * Wire events: `event: hello` (stream is up, carries the outbox epoch and
+ * what this PC takes, `A2aStreamHello`),
  * `event: heartbeat` every `heartbeatMs`, and plain `message` events carrying
  * an `A2aStreamEvent` with `id: <epoch>:<seq>`. The heartbeat is an EVENT, not
  * an SSE comment: the joiner's parser drops comments, so a comment could not
@@ -51,6 +53,8 @@ export interface A2aStreamHubDeps {
   onStatus?: (hostId: HostId, connected: boolean) => void;
   /** A peer's stream came up advertising these features (possibly none). */
   onFeatures?: (hostId: HostId, features: string[]) => void;
+  /** What THIS PC takes, told to every joiner in the stream's `hello` (`A2aStreamHello.features`). */
+  features?: readonly string[];
   heartbeatMs?: number;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
@@ -77,6 +81,9 @@ const STATUS_OF: Record<A2aRemoteErrorCode, number> = {
   'too-large': 413,
   unavailable: 503,
   'offer-closed': 409,
+  'attachment-missing': 409,
+  // Never answered by a peer (the sender records it); here for completeness.
+  'attachment-failed': 400,
 };
 
 /** `<epoch>:<seq>` → cursor; null when it is not one. */
@@ -198,7 +205,8 @@ export class A2aStreamHub {
       'Cache-Control': 'no-store',
       Connection: 'keep-alive',
     });
-    res.write(`event: hello\ndata: ${JSON.stringify({ epoch })}\n\n`);
+    const hello: A2aStreamHello = { epoch, ...(this.deps.features && this.deps.features.length > 0 ? { features: [...this.deps.features] } : {}) };
+    res.write(`event: hello\ndata: ${JSON.stringify(hello)}\n\n`);
     const heartbeatMs = this.deps.heartbeatMs ?? STREAM_HEARTBEAT_MS;
     const timer = setInterval(() => {
       if (!res.writableEnded) res.write('event: heartbeat\ndata: {}\n\n');

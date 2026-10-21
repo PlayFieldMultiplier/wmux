@@ -112,7 +112,7 @@ import { createA2aRoutes } from './a2aRemote/routes';
 import { registerA2aLinkRpc } from './a2aRemote/linkRpc';
 import { A2aOffers } from './a2aRemote/offers';
 import { OfferStore } from './a2aRemote/offerStore';
-import { A2aRemoteDelivery } from './a2aRemote/delivery';
+import { A2aRemoteDelivery, shareOfferFeatures } from './a2aRemote/delivery';
 import { A2A_FEATURE_LINK_OFFER, isRemoteTaskId } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
@@ -9315,7 +9315,7 @@ async function main(): Promise<void> {
       isJoined: (hostId) => a2aRemoteHosts.get(hostId) !== undefined,
       // No share is accepted before the app has ended the shares of panes that closed while it was away.
       appReady: () => a2aExposedPanes.isReconciled(),
-      features: (hostId) => a2aDelivery?.hub.featuresOf(hostId),
+      features: shareOfferFeatures(() => a2aDelivery),
       enqueue: (hostId, envelope) => {
         if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
         a2aDelivery.outbox.enqueue(hostId, envelope);

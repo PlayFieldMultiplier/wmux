@@ -76,6 +76,12 @@ export const A2A_ROUTES = Object.freeze({
   /** POST — the joiner declines a share offer. Path: /api/a2a/offers/:offerId/decline */
   offers: '/api/a2a/offers',
   offerDeclineSuffix: '/decline',
+  /**
+   * Image bytes of a message (`images.1`), by SHA-256: `PUT` — the joiner
+   * uploads one before posting the envelope that names it; `GET` — the joiner
+   * fetches one the server's stream named. Path: /api/a2a/blobs/:sha256
+   */
+  blobs: '/api/a2a/blobs',
 } as const);
 
 /**
@@ -93,6 +99,12 @@ export const A2A_REMOTE_DEFAULT_PORT = 45660;
 export const A2A_FEATURES_HEADER = 'x-wmux-a2a-features';
 /** The joiner shows and accepts share offers (`link.state: 'offer'`). */
 export const A2A_FEATURE_LINK_OFFER = 'link-offer.1';
+/**
+ * The PC takes images on `task` / `reply` envelopes (`A2aRemoteEnvelope.images`)
+ * and serves the blob routes. A sender whose peer lacks it sends the text with
+ * an omitted-images note instead: an older receiver would drop the refs unseen.
+ */
+export const A2A_FEATURE_IMAGES = 'images.1';
 const FEATURE_RE = /^[a-z0-9][a-z0-9.-]{0,31}$/;
 const FEATURES_MAX = 16;
 
@@ -595,7 +607,83 @@ export interface A2aRemoteEnvelope {
   offer?: A2aOfferPayload;
   /** For 'receipt' (with `taskId`). */
   receipt?: A2aRemoteReceipt;
+  /**
+   * For 'task' / 'reply', only to a peer that advertises `A2A_FEATURE_IMAGES`:
+   * the images the message carries. The bytes travel on `A2A_ROUTES.blobs`,
+   * never in the envelope (see `A2aRemoteImageRef`).
+   */
+  images?: A2aRemoteImageRef[];
   sentAt: string;
+}
+
+// ─── Images on messages (`images.1`) ────────────────────────────────────────
+
+/** The image formats a message may carry, decided by the bytes, never by a name. */
+export type A2aRemoteImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp';
+
+export const A2A_REMOTE_IMAGE_MEDIA_TYPES: readonly A2aRemoteImageMediaType[] = Object.freeze(['image/png', 'image/jpeg', 'image/webp']);
+
+/**
+ * One image of a message. `sha256` names the bytes and binds them to the
+ * envelope: the receiver checks the hash, the exact size and the sniffed type
+ * of what it fetched. No name and no path ever cross the wire; the receiver
+ * picks its own.
+ */
+export interface A2aRemoteImageRef {
+  /** 64 lowercase hex. */
+  sha256: string;
+  mediaType: A2aRemoteImageMediaType;
+  bytes: number;
+}
+
+export const A2A_REMOTE_IMAGE_LIMITS = Object.freeze({
+  /** Bytes of one image. */
+  IMAGE_MAX_BYTES: 5 * 1024 * 1024,
+  /** Images on one message. */
+  PER_MESSAGE: 4,
+  /** Bytes of all images on one message. */
+  MESSAGE_MAX_BYTES: 10 * 1024 * 1024,
+  /** Longest edge, px, read from the header (nothing is decoded). */
+  MAX_EDGE: 16_384,
+  /** Pixels (width x height), read from the header. */
+  MAX_PIXELS: 40_000_000,
+});
+
+export const A2A_SHA256_RE = /^[0-9a-f]{64}$/;
+
+export function isA2aRemoteImageMediaType(v: unknown): v is A2aRemoteImageMediaType {
+  return typeof v === 'string' && (A2A_REMOTE_IMAGE_MEDIA_TYPES as readonly string[]).includes(v);
+}
+
+/**
+ * The `images` of an envelope: undefined when absent, null when malformed or
+ * over a limit (count, one image, the total, a repeated hash). Unknown fields
+ * of a ref are dropped.
+ */
+export function parseA2aRemoteImageRefs(raw: unknown): A2aRemoteImageRef[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) return null;
+  const out: A2aRemoteImageRef[] = [];
+  const seen = new Set<string>();
+  let total = 0;
+  for (const r of raw) {
+    if (typeof r !== 'object' || r === null || Array.isArray(r)) return null;
+    const { sha256, mediaType, bytes } = r as Record<string, unknown>;
+    if (typeof sha256 !== 'string' || !A2A_SHA256_RE.test(sha256) || seen.has(sha256)) return null;
+    if (!isA2aRemoteImageMediaType(mediaType)) return null;
+    if (typeof bytes !== 'number' || !Number.isInteger(bytes) || bytes < 1 || bytes > A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES) return null;
+    total += bytes;
+    if (total > A2A_REMOTE_IMAGE_LIMITS.MESSAGE_MAX_BYTES) return null;
+    seen.add(sha256);
+    out.push({ sha256, mediaType, bytes });
+  }
+  return out;
+}
+
+/** The `data` of the stream's `event: hello`. `features`: what the SERVER takes (absent from older builds). */
+export interface A2aStreamHello {
+  epoch: string;
+  features?: string[];
 }
 
 export type A2aRemoteErrorCode =
@@ -612,7 +700,17 @@ export type A2aRemoteErrorCode =
   | 'protocol'
   | 'unavailable'
   /** The share offer a proposal answers is no longer open. */
-  | 'offer-closed';
+  | 'offer-closed'
+  /**
+   * An envelope names an image the receiver does not hold yet (its upload
+   * was lost): not terminal, the joiner uploads it again and resends.
+   */
+  | 'attachment-missing'
+  /**
+   * Recorded by the SENDER, never answered by a peer: the images of a
+   * message could not be uploaded within the attempt and time budget.
+   */
+  | 'attachment-failed';
 
 export type A2aRemoteDeliverResponse =
   | { ok: true; taskId?: string; duplicate: boolean }

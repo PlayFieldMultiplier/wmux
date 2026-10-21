@@ -20,6 +20,7 @@ import type { LinkStore } from './linkStore';
 import type { A2aOffers } from './offers';
 import { aliasTable, linkAlias, listRemoteTargets, sendRemoteReply, sendRemoteState, sendRemoteTask, syncRemoteTask, type OutboundDeps } from './outbound';
 import { OutboxStore } from './outboxStore';
+import { PeerFeatureStore } from './peerFeatureStore';
 import type { A2aRouteTable } from './routes';
 import { addressPromoter } from './remoteHostStore';
 import { JoinerSession, taskOfEnvelope, type SessionClient, type SessionTiming } from './session';
@@ -60,7 +61,7 @@ export interface A2aRemoteDeliveryDeps {
   localWorkspaceName?: (workspaceId: string) => string | undefined;
   /** Share offers: received as link envelopes, refused by older builds, ended when a peer stops supporting them. */
   offers?: A2aOffers;
-  /** Optional features this PC advertises on its streams to the servers it joined. */
+  /** Optional features this PC advertises: on its streams to the servers it joined, and in its own streams' `hello`. */
   features?: readonly string[];
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   /** Test seams. */
@@ -81,9 +82,27 @@ export const NO_AGENT_SUMMARY = 'The linked pane on the receiving PC has no agen
 const STATES: ReadonlySet<string> = new Set(['working', 'input-required', 'completed', 'failed', 'canceled']);
 const TERMINAL_LINK: ReadonlySet<string> = new Set(['revoked', 'broken']);
 
+/**
+ * The `features` a share offer (`A2aOffers`) gates on: what `hostId`
+ * advertised on its own stream to this PC (it is our joiner), while that
+ * stream is up. Without it (never up since this daemon started, or closed
+ * since: the hub keeps the last features after a stream ends) an offer would
+ * show the pane while its envelope could only wait, and perhaps expire, in
+ * the outbox, so the offer is refused as not connected. The daemon and its
+ * tests wire this one.
+ */
+export function shareOfferFeatures(delivery: () => A2aRemoteDelivery | null): (hostId: HostId) => ReadonlySet<string> | undefined {
+  return (hostId) => {
+    const hub = delivery()?.hub;
+    return hub?.isConnected(hostId) ? hub.featuresOf(hostId) : undefined;
+  };
+}
+
 export class A2aRemoteDelivery {
   readonly outbox: OutboxStore;
   readonly hub: A2aStreamHub;
+  /** What each paired PC last advertised, kept across restarts (see `peerFeatures`). */
+  readonly peerFeatureStore: PeerFeatureStore;
   private readonly deps: A2aRemoteDeliveryDeps;
   private readonly sessions = new Map<HostId, { session: JoinerSession; fingerprint: string; port: number }>();
   /** Server-side status, last announced. */
@@ -94,12 +113,17 @@ export class A2aRemoteDelivery {
   constructor(deps: A2aRemoteDeliveryDeps) {
     this.deps = deps;
     this.outbox = new OutboxStore({ dir: deps.dir, log: deps.log, onEnqueue: (rec) => this.onEnqueue(rec), onAck: (recs) => this.onAck(recs) });
+    this.peerFeatureStore = new PeerFeatureStore({ dir: deps.dir, log: deps.log });
     this.hub = new A2aStreamHub({
       outbox: this.outbox,
       accept: (env, peer) => this.accept(env, peer),
       serves: (hostId) => !deps.remoteHosts.get(hostId),
       onStatus: (hostId) => this.announceServed(hostId),
-      onFeatures: (hostId, features) => deps.offers?.onPeerFeatures(hostId, features),
+      onFeatures: (hostId, features) => {
+        this.peerFeatureStore.record(hostId, 'asJoiner', features);
+        deps.offers?.onPeerFeatures(hostId, features);
+      },
+      ...(deps.features ? { features: deps.features } : {}),
       ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
       log: deps.log,
     });
@@ -152,6 +176,27 @@ export class A2aRemoteDelivery {
   /** The pairing with `hostId` was revoked here: drop its stream. */
   onPeerRevoked(hostId: HostId): void {
     this.hub.close(hostId);
+    if (!this.deps.remoteHosts.get(hostId)) this.peerFeatureStore.forget(hostId);
+  }
+
+  /**
+   * What `hostId`'s build takes: what it advertised most recently, in either
+   * role, on a stream since this daemon started or before
+   * (`peer-features.json`; every advertisement is recorded there). Undefined:
+   * never seen.
+   */
+  peerFeatures(hostId: HostId): ReadonlySet<string> | undefined {
+    const seen = this.peerFeatureStore.newest(hostId);
+    return seen ? new Set(seen) : undefined;
+  }
+
+
+  /** Both roles' features from the streams since this daemon started; undefined when neither came up. */
+  liveFeatures(hostId: HostId): ReadonlySet<string> | undefined {
+    const asServer = this.sessions.get(hostId)?.session.features();
+    const asJoiner = this.hub.featuresOf(hostId);
+    if (!asServer && !asJoiner) return undefined;
+    return new Set([...(asServer ?? []), ...(asJoiner ?? [])]);
   }
 
   registerRoutes(table: A2aRouteTable): void {
@@ -192,6 +237,8 @@ export class A2aRemoteDelivery {
       if (wanted.has(hostId) && host && host.fingerprint256 === entry.fingerprint && host.port === entry.port) continue;
       this.sessions.delete(hostId);
       void entry.session.stop();
+      // Left that PC, and it is not one of ours either: what it took no longer matters.
+      if (!wanted.has(hostId) && !this.deps.peers.list().some((p) => p.hostId === hostId && !p.revokedAt)) this.peerFeatureStore.forget(hostId);
     }
     for (const host of hosts) {
       if (this.sessions.has(host.hostId)) continue;
@@ -202,10 +249,11 @@ export class A2aRemoteDelivery {
   }
 
   status(): A2aRemoteHostStatus[] {
-    // A PC that joined this one may also be one this PC joined: its features come from its stream either way.
+    // A PC that joined this one may also be one this PC joined: what it
+    // advertised on either stream counts (its server `hello` and its joiner header).
     const out: A2aRemoteHostStatus[] = [...this.sessions.values()].map((s) => {
       const row = s.session.current();
-      const features = this.hub.featuresOf(row.hostId);
+      const features = this.liveFeatures(row.hostId);
       return features ? { ...row, features: [...features] } : row;
     });
     const joined = new Set(out.map((s) => s.hostId));
@@ -374,6 +422,7 @@ export class A2aRemoteDelivery {
       onRefused: (rec, code) => this.onRefused(rec, code),
       reconcileLinks: () => this.reconcileLinks(hostId),
       onStatus: (status) => this.deps.broadcast({ type: 'a2a.remote.hosts.status', sessionId: '', data: status }),
+      onServerFeatures: (features) => this.peerFeatureStore.record(hostId, 'asServer', features),
       ...(this.deps.features ? { features: this.deps.features } : {}),
       ...(this.deps.timing ? { timing: this.deps.timing } : {}),
       ...(this.deps.client ? { client: this.deps.client } : {}),

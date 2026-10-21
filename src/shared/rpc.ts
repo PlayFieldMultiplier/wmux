@@ -1744,9 +1744,9 @@ export interface A2aRemoteHostStatus {
   connectedAt?: string;
   lastError?: string;
   /**
-   * What that PC advertised on its latest stream to this one
-   * (`A2A_FEATURES_HEADER`), whichever role this row has. Absent until it
-   * connects after this PC's wmux started.
+   * What that PC advertised on its latest streams with this one, in either
+   * role: as a joiner (`A2A_FEATURES_HEADER`) and as a server (the stream
+   * `hello`). Absent until one connects after this PC's wmux started.
    */
   features?: string[];
 }

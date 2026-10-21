@@ -11,7 +11,7 @@ import type { DaemonConfig } from '../../types';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { A2aRemoteController } from '../controller';
-import { A2aRemoteDelivery } from '../delivery';
+import { A2aRemoteDelivery, shareOfferFeatures } from '../delivery';
 import { ExposedPaneCache } from '../exposedPanes';
 import { ExposureStore } from '../exposureStore';
 import { joinRemoteHost } from '../joiner';
@@ -82,7 +82,7 @@ async function makePc(name: string, opts: { advertise?: string[]; routeOffers?: 
     exposures,
     isPeer: (h) => peers.list().some((p) => p.hostId === h && !p.revokedAt),
     isJoined: (h) => remoteHosts.get(h) !== undefined,
-    features: (h) => delivery?.hub.featuresOf(h),
+    features: shareOfferFeatures(() => delivery),
     enqueue: (h, env) => void delivery!.outbox.enqueue(h, env),
     notifyLinkChange: (...args) => delivery?.notifyLinkChange(...args),
     broadcast: quiet,
@@ -209,6 +209,41 @@ describe('share offers, end to end', () => {
     await pair(a, b);
     await until(() => b.delivery.hub.featuresOf(a.hostId) !== undefined);
     expect(await share(b, a)).toEqual({ ok: false, error: 'receiver-unsupported' });
+    expect(b.exposures.isPaneExposed(a.hostId, 'ws-api', 'pane-1')).toBe(false);
+    expect(b.delivery.outbox.openCount(a.hostId)).toBe(0);
+  });
+
+  it('a PC that only joined the other has no stream from it yet: its share is refused as not connected', async () => {
+    const b = await makePc('PC-B', { advertise: [A2A_FEATURE_LINK_OFFER] });
+    const a = await makePc('PC-A', { advertise: [A2A_FEATURE_LINK_OFFER] });
+    await pair(a, b);
+    // B pairs with A too, but keeps the result where its daemon never dials it.
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-offer-e2e-'));
+    dirs.push(elsewhere);
+    const res = await joinRemoteHost(a.server.beginPairing().invite, {
+      self: () => b.server.ensureIdentity(),
+      selfName: b.name,
+      remoteHosts: new RemoteHostStore({ dir: elsewhere }),
+      timeouts: FAST,
+    });
+    expect(res.ok).toBe(true);
+    // A's session to B is up and has B's hello; B has no stream to A.
+    await until(() => a.delivery.liveFeatures(b.hostId)?.has(A2A_FEATURE_LINK_OFFER) === true);
+    expect(await a.rpc('a2a.remote.offers.create', { hostId: b.hostId, end: A_PANE, allow: both })).toEqual({ ok: false, error: 'not-connected' });
+    expect(a.exposures.isPaneExposed(b.hostId, 'ws-web', 'pane-a')).toBe(false);
+    expect(a.delivery.outbox.openCount(b.hostId)).toBe(0);
+  });
+
+  it('a share to a PC whose stream has closed is refused as not connected', async () => {
+    const b = await makePc('PC-B');
+    const a = await makePc('PC-A', { advertise: [A2A_FEATURE_LINK_OFFER] });
+    await pair(a, b);
+    await until(() => b.delivery.hub.featuresOf(a.hostId)?.has(A2A_FEATURE_LINK_OFFER) === true);
+    // A goes away: its stream to B closes, and B still remembers what it took.
+    await a.delivery.stop();
+    await until(() => !b.delivery.hub.isConnected(a.hostId));
+    expect(b.delivery.hub.featuresOf(a.hostId)?.has(A2A_FEATURE_LINK_OFFER)).toBe(true);
+    expect(await share(b, a)).toEqual({ ok: false, error: 'not-connected' });
     expect(b.exposures.isPaneExposed(a.hostId, 'ws-api', 'pane-1')).toBe(false);
     expect(b.delivery.outbox.openCount(a.hostId)).toBe(0);
   });

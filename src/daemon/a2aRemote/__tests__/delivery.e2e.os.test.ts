@@ -74,7 +74,7 @@ type ClientHook = (opts: PinnedClientOptions) => SessionClient;
 
 async function makePc(
   name: string,
-  opts: { dir?: string; port?: number; client?: ClientHook; render?: (method: string) => Promise<unknown> } = {},
+  opts: { dir?: string; port?: number; client?: ClientHook; render?: (method: string) => Promise<unknown>; features?: string[] } = {},
 ): Promise<Pc> {
   const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-deliv-'));
   if (!opts.dir) dirs.push(dir);
@@ -138,6 +138,7 @@ async function makePc(
     heartbeatMs: 200,
     syncMs: 50,
     ...(opts.client ? { client: opts.client } : {}),
+    ...(opts.features ? { features: opts.features } : {}),
   });
   const realAccept = delivery.accept.bind(delivery);
   delivery.accept = (env, peer) => {
@@ -291,6 +292,30 @@ describe('cross-host delivery, end to end', () => {
     await until(() => a.delivery.outbox.pending(b.hostId).length === 0 && b.delivery.outbox.pending(a.hostId).length === 0);
     expect(a.delivery.status()).toMatchObject([{ hostId: b.hostId, role: 'joiner', state: 'connected', pending: 0 }]);
     expect(b.delivery.status()).toMatchObject([{ hostId: a.hostId, role: 'server', state: 'connected' }]);
+  });
+
+  it('each PC learns what the other takes, in both roles, and still knows it after a restart', async () => {
+    const b = await makePc('PC-B', { features: ['images.1', 'link-offer.1'] });
+    const a = await makePc('PC-A', { features: ['link-offer.1'] });
+    await pair(a, b);
+    // A joined B: B's stream hello tells A; A's stream header tells B.
+    await until(() => a.delivery.liveFeatures(b.hostId)?.has('images.1') === true);
+    await until(() => b.delivery.liveFeatures(a.hostId)?.has('link-offer.1') === true);
+    expect(a.delivery.status()).toMatchObject([{ hostId: b.hostId, role: 'joiner', features: ['images.1', 'link-offer.1'] }]);
+    expect(b.delivery.peerFeatures(a.hostId)?.has('images.1')).toBe(false);
+    // A new daemon on A, before B's stream is back: the last seen answer.
+    const restarted = new A2aRemoteDelivery({
+      dir: path.join(a.dir, 'a2a'),
+      links: a.links,
+      taskService: a.tasks,
+      peers: a.peers,
+      remoteHosts: a.remoteHosts,
+      broadcast: () => undefined,
+      refreshLink: async () => null,
+      log: () => undefined,
+    });
+    expect(restarted.liveFeatures(b.hostId)).toBeUndefined();
+    expect([...(restarted.peerFeatures(b.hostId) ?? [])].sort()).toEqual(['images.1', 'link-offer.1']);
   });
 
   it('roaming: a session that gets through at a later address dials it first from then on', async () => {
