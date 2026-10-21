@@ -1851,6 +1851,11 @@ async function resumeOnce(
     if (live.agentProcessAlive === true || live.commandRunning === true) {
       return refuse('already_running', 'an agent or another command is running in the worker\'s pane');
     }
+    // A pane whose state is not known is not closed (as the in-place path
+    // below does not type into one).
+    if (live.agentProcessAlive !== false && live.recoveredAgentUnconfirmed !== true && live.commandRunning !== false) {
+      return refuse('unknown_state', 'what runs in the worker\'s pane cannot be told; close it, then resume');
+    }
     if (!ports.closePane) return refuse('not_now', 'a task with a signed-in connection resumes only in a new pane, and its old pane cannot be closed here');
     try {
       await ports.closePane(pane.sessionId);

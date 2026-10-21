@@ -586,6 +586,15 @@ export function registerPTYHandlers(
         gateway?.open.close();
         return new Error(message);
       };
+      // A step before the daemon create that throws closes the leases too.
+      const closingLeases = <T>(step: () => T): T => {
+        try {
+          return step();
+        } catch (err) {
+          gateway?.open.close();
+          throw err;
+        }
+      };
       let staged: Awaited<ReturnType<typeof stageCreate>>;
       try {
         staged = await stageCreate(options, botWorker, gateway?.launch);
@@ -646,14 +655,16 @@ export function registerPTYHandlers(
       gateway?.open.bind(sessionId);
       logCwdResolution(sessionId, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       // Recorded before the session exists, so a restart always knows it.
-      if (botWorker) {
-        const launchTask = botWorkerLaunchTask(botWorker);
-        noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...launchTask });
-        // A new worker session for the task (a respawn or a resume): its agent runs again.
-        if (launchTask.taskId) noteTaskWorkerLaunched(launchTask.taskId);
-      }
-      // A fan-out task pane's task and launch generation, bot or owner.
-      recordFanoutTaskPane(options, sessionId);
+      closingLeases(() => {
+        if (botWorker) {
+          const launchTask = botWorkerLaunchTask(botWorker);
+          noteBotWorkerSession(sessionId, botWorker.workspaceId, undefined, { ...staged.launch, ...launchTask });
+          // A new worker session for the task (a respawn or a resume): its agent runs again.
+          if (launchTask.taskId) noteTaskWorkerLaunched(launchTask.taskId);
+        }
+        // A fan-out task pane's task and launch generation, bot or owner.
+        recordFanoutTaskPane(options, sessionId);
+      });
 
       // Identity env vars for the spawned shell. The daemon's
       // `buildSafeChildEnv` passes WMUX_WORKSPACE_ID / WMUX_SURFACE_ID
@@ -745,7 +756,7 @@ export function registerPTYHandlers(
       // env is assembled HERE in main, finds tools installed after main started —
       // native-terminal freshness. No-op off win32 / on failure. (Recovery replays
       // the persisted create-time env verbatim; refreshing that is a follow-up.)
-      const resolvedEnv = resolveSpawnEnv(withFreshWindowsPath(globalThis.process.env), options?.env, identity, getShellUtf8Locale(), envPolicy, accountEnv);
+      const resolvedEnv = closingLeases(() => resolveSpawnEnv(withFreshWindowsPath(globalThis.process.env), options?.env, identity, getShellUtf8Locale(), envPolicy, accountEnv));
       // #2231 — a fan-out task pane in WSL on a Windows-drive worktree: Linux
       // git gets the worktree's gitdir by its Linux path (wslWorkerGit.ts).
       if ((botWorker || options?.fanoutTaskOf) && isWslShell(shell) && safeCwd) {

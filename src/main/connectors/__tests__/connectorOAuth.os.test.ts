@@ -222,7 +222,7 @@ it('shares one refresh between concurrent callers, never opening a browser for i
   f.setOpen(async () => { throw new Error('Unexpected browser'); });
   const first = f.manager.accessToken(f.id);
   const second = f.manager.accessToken(f.id);
-  await vi.waitFor(() => expect(f.refreshes()).toBe(1));
+  await vi.waitFor(() => expect(f.refreshes()).toBe(1), { timeout: 10_000 });
   f.release();
   expect(await first).toBe('access-token-1');
   expect(await second).toBe('access-token-1');

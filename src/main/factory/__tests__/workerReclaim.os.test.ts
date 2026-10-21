@@ -824,6 +824,10 @@ describe('a research task (scratch folder, no worktree)', () => {
     // A running agent there is left alone.
     const busy = await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: true })], typeLine, closePane, respawn, gatewayTask, now: () => 9_000 }, research.id, { kind: 'owner' });
     expect(busy).toMatchObject({ ok: false, code: 'already_running' });
+    // A pane whose state is not known is not closed.
+    expect(await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: undefined, commandRunning: undefined })], typeLine, closePane, respawn, gatewayTask, now: () => 9_000 }, research.id, { kind: 'owner' }))
+      .toMatchObject({ ok: false, code: 'unknown_state' });
+    expect(closePane).not.toHaveBeenCalled();
     // Without a way to close the pane, nothing is typed into it.
     expect(await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: false, commandRunning: false })], typeLine, respawn, gatewayTask, now: () => 9_000 }, research.id, { kind: 'owner' }))
       .toMatchObject({ ok: false, code: 'not_now' });

@@ -437,7 +437,10 @@ describe('pty:create applies the guard (source-level lock)', () => {
     expect(src).toContain('staged = await stageCreate(options, botWorker, gateway?.launch);');
     expect(src).toMatch(/gateway\?\.open\.bind\(sessionId\);/);
     expect(src).toMatch(/undoLocal: \(\) => \{[^}]*gateway\?\.open\.close\(\);/);
-    const line = 'await stageCreate(options, botWorker';
+    // The steps between the open and the daemon create that can throw close them too.
+    expect(src).toMatch(/closingLeases\(\(\) => \{\n\s+if \(botWorker\) \{[\s\S]*?recordFanoutTaskPane\(options, sessionId\);\n\s+\}\);/);
+    expect(src).toContain('const resolvedEnv = closingLeases(() => resolveSpawnEnv(');
+    const line ='await stageCreate(options, botWorker';
     expect(src.split(line).length - 1).toBe(2);
     // The stages, in order: quota, the tool level (or, for a bot worker's
     // claude line, the guard's own wmux server), codex guard, merge guard, pin.
