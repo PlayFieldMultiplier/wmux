@@ -1,5 +1,376 @@
 ## [Unreleased]
 
+## [4.8.0] — 2026-10-21
+
+### Added
+
+- **Pane-bound Codex launch on Windows.** `wmux codex` connects a native Codex TUI to the shared app-server through its own pane relay, allowing MCP calls to resolve the originating pane instead of inheriting the daemon starter's identity. (#2207)
+
+- **A bot can attach the files it made to its room card.** When a bot posts a
+  card, it can now include up to eight files it made: a report, a spec, a diff.
+  wmux checks that each file comes from the bot's repository, one of its own
+  task folders or its bot folder, and keeps a copy with the card. That copy is
+  still there after the task folder is cleaned up. Before, those files stayed
+  in a task folder that was removed a week after the task ended, and nothing
+  in the Bots page pointed to them. (#2435)
+
+- **Open the files a bot made from its message.** When a bot attaches files
+  to a message, each one shows as a chip under it, with its name and size.
+  Click a chip to open the file beside the chat. Markdown is formatted as in
+  the chat, and pictures show as pictures. Other text files, including
+  HTML pages and code, show as plain text. Any other kind of file shows its
+  name and size. Save a copy puts the file wherever you choose. Before, a
+  bot's files stayed in its working folder, out of reach from the Bots page.
+
+- **The Git page finds the repositories inside a workspace folder that is not one.** A workspace root holding several repos in subfolders (frontend, services, infra) used to show "No open workspace is in a git repository." Now the repos up to two levels below it are listed in All repos and the repo menu, each as its own group, and following that workspace says how many repos its subfolders hold. (#2438)
+
+- **An outside agent can join one Bots conversation as a guest bot.** On the Bots page, "…" → Guest bots creates a guest with a name and one conversation and shows its token once. The guest reads that conversation's messages from the moment it was added (never what came before) and posts to it only, through `/api/guest/v1/messages` on the remote-access server, and can wake that conversation's bots. The feature is off by default, needs TLS or a loopback bind, and Revoke takes effect at once. (#2463)
+
+- **Guests join only guest workspaces.** Guest bots dialog → "Make … a guest workspace" flags a workspace for guests, and it stays one: anything in it can be shared with its guests, its bots have no repository and no Coordinator, every turn there runs under guest rules (in a conversation of its own, starting or saving no work, your own messages too), and nothing in it reaches your other workspaces, nor anything of theirs it. To keep a workspace as it is, add the guest in a new one. (#2463)
+
+- **Saved sequential bot workflows.** Bots can persist up to eight ordered code steps, resume from verified task results after restart, and pass the verified predecessor commit to the next worker. Uncertain or failed steps block dependent work instead of dispatching it again. (#2464)
+
+- **The sidebar shows how many subagents an agent has running.** An agent row
+  now ends with a muted count such as "2 subagents" while its Claude Code or
+  Codex agent has subagents at work, so a pane that still shows as running
+  after its main turn ended says why. (#2472)
+
+- **Close and keep folder.** When a task close keeps refusing, for example because a pane's process could not be identified, the refusal now offers Close and keep folder: in the task diff, on Fleet's review row, in the sidebar's Close finished tasks and in the task cleanup list. It closes the task and leaves its folder on disk as it is, and no cleanup removes that folder later. It is the owner's control only; bots cannot use it. (#2473)
+
+- **Owner controls for saved workflows.** The desktop owner API can cancel one workflow's remaining advancement and inspect its blocking reason and last recorded verified result, preserving any already-dispatched worker and its evidence. (#2474)
+
+- **Resume a paused bot worker from the phone.** A worker that wmux paused to
+  free its agent slot could only be resumed from the room card's Resume
+  button in wmux. The phone app can now resume it too, with the same checks
+  and the same agent slot. Paused worker cards say when Resume is available,
+  and a repeated tap never starts the worker twice.
+
+- **Workflow cards in Bots conversations.** A bot's saved workflow shows as a card in the conversation it was saved from. The card shows the step it is on, why it stopped in plain words, and the last verified result: which step, what was verified (checks passed on a commit, or a merged pull request), and when. **Cancel workflow** asks once in place, then stops the steps that have not started. A step already running keeps its worker, and the card says so. (#2483)
+
+- **Connectors page.** Manage connections, browse the public MCP registry, sign in to compatible HTTP services, and prepare local Claude or Codex sessions with selected tools. (#2488)
+
+- **Service setup catalog.** Find 24 documented service recipes alongside GitHub and filesystem presets, review provider prerequisites, configure registered OAuth apps, and choose discovered tools before saving access. (#2488)
+
+- **UI plugin rail pages.** Approved plugins can open a full page from the navigation rail and display workspace-scoped agent status through a permissioned snapshot API. An original MIT-licensed example demonstrates state updates and pane navigation. (#2492)
+
+- **Window glass on Windows 11.** On Windows 11 version 22H2 and later, the window frame and the sidebar now let the desktop show through, blurred, with the same Off, Soft and Clear choices macOS already had (Settings › Appearance › Interface › Window glass). Changing the level takes effect right away, with no restart. The tint follows the theme, so dark themes get dark glass and light themes get light glass. Panes and terminals stay solid. Windows 10 and earlier Windows 11 builds keep a solid window, and the setting there explains why. Linux is unchanged. (#2496)
+
+- **Unified Plugins settings.** Installed and Discover views bring service connectors and UI plugins together. Install the curated Agent status page, explicitly review its permissions, and enable, disable or uninstall it. Disabled state survives restart, and reinstalling requires fresh approval. (#2508)
+
+- **Choose where connectors are available.** Set terminal access to off, all ordinary panes, selected workspaces or selected panes, with exclusions. Bots access and tool permissions remain separate. Start a supported agent in a selected idle shell from the connection page. (#2518)
+
+- Bots can search their room's earlier conversation by words (`room_search`), so a bot looks something up instead of asking you to repeat it (#2520)
+
+- Bots can set one-time reminders ("remind me Friday at 9"), and repeating routines can keep quiet hours so they don't wake a bot overnight (#2521)
+
+- A bot's skills now show when each was last used, and skills unused for 30 days are tagged Stale and sorted first, so you can see which to archive (#2524)
+
+- Bots can run on a Claude API key instead of your subscription: save the key under Settings › Bots, check the connection, and see which sign-in your bots actually used. If the subscription refuses a bot's request, the bot stops and suggests switching (#2525)
+
+- Each bot keeps a small memory of notes it can see and you can clear in its profile, and all bots share a short profile about you; changes to your profile only apply after you approve them on a card (#2526)
+
+- **Multi-file UI plugin bundles.** Curated plugins can declare separate scripts and images for installation. The installer preserves README and LICENSE files, validates bundle paths and size, and retains the existing permission review. (#2527)
+
+- **wmux can tell whether Claude Code and Codex are installed and signed in.**
+  The first-run wizard's new agent cards read this. It comes from each
+  agent's own status command (`claude auth status`, `codex login status`),
+  reduced to yes or no, so wmux never reads a credential. A check that hangs
+  or prints something unexpected is reported as "could not tell", never as
+  signed out. Codex is now found where its installers put it, also on Windows
+  and in a custom npm folder. (#2528)
+
+- The Office rail page by @bluemas is in the plugin catalog: Settings › Plugins › Discover installs it, and it shows the current workspace's agents as employees in a pixel-art office. It reads agent state only and needs your approval before it opens.
+
+- **Groundwork for sharing a pane with another PC in one step.** The background service can now carry a "share" of one pane from the PC that accepts connections to a PC that joined it, and turn the other PC's accept into an active link at once, only for that pane and within the directions offered. A share shows just that pane to that PC, ends by itself after an hour, and hides the pane again when it ends without a link or when the link it made ends. Older builds on either side keep working as before. The buttons to share and accept arrive in the next two changes. (#2530)
+
+- On macOS and Linux, a bot can run small read-only commands and write files in its own folder, inside a sandbox with no network and no access to your home folder, instead of starting a worker terminal for every small task (#2531)
+
+- **Accept a pane another PC shared with this one.** When the PC this one joined shares a pane, a notice says so and the Remote page lists it under Needs you, with the other PC's pane, how long the share stays open and the directions offered. Accept picks one of this PC's own panes to link it with (panes on the same repository come first) and can only narrow the directions; Decline ends it. Before, linking two panes took a proposal from this PC and an accept on the other. (#2532)
+
+- **Install or sign in to Claude Code and Codex from wmux, in a terminal tab
+  you can see.** Behind the first-run wizard's new agent cards: Install shows
+  the agent vendor's own installer line, bundled with wmux and never
+  downloaded, and runs it in a visible tab only when you click. Neither
+  installer needs administrator rights. Log in starts the agent's own sign-in,
+  so you choose the method. wmux notices when the install or sign-in is done.
+  If it fails, it says whether the download or a folder permission was the
+  cause. If an install finishes but wmux can't find it, you can point wmux at
+  the program. (#2533)
+
+- **Share a pane with a PC that joined this one, in one step.** The pane menu has **Share this pane with *PC*…**: it shows that pane, and only that pane, to the chosen PC and offers it as a link within the directions you tick. The other PC accepts with one of its own panes, and the link is active at once on both; a notice says so here, and **Unlink** ends the link and hides the pane again. Until it is accepted, the share sits under that PC on the Remote page with **Withdraw**, and it ends by itself after an hour. Before, the PC that accepts connections had to tick the pane in Panes to show and then accept a request from the other PC. (#2534)
+
+- **The setup wizard starts with "Agent ready": Claude Code and Codex, each
+  ready, waiting for a sign-in, or not installed.** Install shows the exact
+  line it will run and runs it only when you click Run, in a terminal tab you
+  can see. Log in opens the agent's own sign-in there. While that tab is in
+  use, the wizard moves to a small card in the corner that explains what the
+  agent is asking (its first-run setup, whether to trust the folder) and never
+  answers for you. One ready agent is enough to go on; with none, choose
+  Later. If something fails, the card says why and offers the official
+  install page. (#2535)
+
+- **"Agent not set up" in the sidebar.** If you choose Later with no agent
+  ready, a quiet line at the foot of the sidebar stays until one is, and
+  takes you back to setup. (#2535)
+
+- **New worktrees come ready to run.** A worktree now gets the project's
+  selected git-ignored config files (`fanout.copy` in `wmux.json`, for example
+  `.env`) and its setup command (`fanout.setup`, for example `npm ci`) before
+  its agent starts, on every path that creates one: the Git page, start from
+  an issue, Quick Launch, a phone request, fan-out tasks and bot workers.
+  Before, only fan-out ran the setup command and nothing copied files. Files
+  are copied into worktrees you open; bot and fan-out worktrees get them only
+  with `fanout.copyIntoAutomated`. Nothing runs or is copied until you approve
+  the file, a copy always stays git-ignored, and a failed setup starts no
+  agent. The trust review now shows the setup command and the copy list.
+  (#2536)
+
+- **Plugins have their own page.** A Plugins item on the rail, after Git, opens a catalog. The Signature section comes first and holds Office. Below it are the rest of the catalog, any bundles installed by hand, and Connectors. Pick a plugin to see who made it, what it may read, and the one next step for its state: Install, Review permissions to open, Open or Enable. Uninstall still asks before it deletes anything. Installing still grants no permissions. Open Plugins is also in the command palette, and its shortcut can be set in Settings › Keyboard. (#2537)
+
+- A small reviewer model can approve a bot's plain file commands (copy, move, make a folder, compare files and the like) inside its own folder; anything else a bot wants to run needs your rule (#2538)
+
+### Changed
+
+- **Research and no-changes bot tasks show what backs them.** These tasks skip the code check, so they used to finish looking done with nothing to show. A research task now carries fixed completion criteria from the moment it starts, the worker attaches evidence to its report, and the task row says Not verified when evidence is missing, or how many items are verified when only some are. Each new report replaces the previous evidence, so an older report's grade never carries over. (#2461)
+
+- **Terminal panes may be one or two columns narrower than before 4.7.0.** The fit that stopped the last row being cut off (#2329) also stopped counting the pane's padding as width, so a pane now shows only the columns that fully fit. (#2466)
+
+- **Quick launch uses less memory while you are not using it.** The quick-launch composer used to be built in the background at every start, so it took memory even if you never pressed its shortcut. It is now built the first time you press the shortcut, so the first press after starting wmux may take a moment (about a quarter of a second). Later presses open it instantly, as before. Turning quick launch off in Settings now also frees the composer, including any unsent prompt in it. (#2490)
+
+- **The sheet sits flush on Windows 11.** On Windows 11 the panel that holds the sidebar and the panes now meets the window's edges and keeps its rounded corners, as on macOS. Before, it sat 8px inside the right and bottom edges on every Windows version. Windows 10 and Linux, whose window corners are square, keep the margin. (#2500)
+
+- **A maximized Windows window fills edge to edge.** Maximized on Windows, the sheet now drops its margin and its rounded corners, as in fullscreen, since a maximized window has square corners. (#2500)
+
+- **Worker time counts only while a worker runs.** A worker paused for its report, or stopped after sitting idle, no longer adds to its bot's worker time while it is paused; resuming it starts the clock again. A bot's "worker hours per day" limit now counts only the time its workers actually ran. (#2501)
+
+- **Simpler service sign-in.** Compatible connectors offer Connect, browser consent and automatic server verification after authorization. Advanced client registration and manual setup remain available separately; connecting does not grant tool or bot access. (#2508)
+
+- **Agents can tell why another PC is not reachable yet.** `a2a_discover` now adds a `remotePeers` list for PCs paired over Cross-PC A2A that have no link yet: whether each is connected, how many panes it shows this PC, how many link requests wait for a person, and one line naming the missing step. It carries counts only, never another PC's pane names. Before, an unpaired PC, a paired PC that showed nothing and a PC that was shown but not linked all looked the same to an agent. (#2515)
+
+- A bot's worker time now counts until its worker has actually stopped, not just until its task ends. (#2516)
+
+- **The background service uses less memory when no chat is open.** It no longer loads the chat providers' libraries at start; they load when a chat session first connects. (#2517)
+
+- Load connector SDK modules on first use instead of at application startup, while retaining immediate credential cleanup. (#2518)
+
+- **No more Moa wording left over from the removed Moa feature.** A
+  Coordinator bot's role now reads "Coordinator" instead of "Moa", and a bot
+  created from the legacy coordinator role without a name is named
+  "Coordinator". Settings › LAN › Panes to show no longer lists a "Show this
+  PC's Moa" row that could never be ticked (it still shows, so it can be
+  unticked, when an earlier version saved it). The Remote page's empty state,
+  the pane link note and the PR review guide's "new commits" notice no longer
+  mention Moa, and the cross-PC A2A guide drops its "Linking Moa" section.
+
+- **One re-approval for an existing setup command.** If your project's
+  `wmux.json` already has a `fanout.setup` command, the first new worktree
+  after this update skips it and asks you to approve the file once more
+  ("Approve setup" in the wmux.json dialog), which now lists the setup
+  command and the files to copy. After that it runs as before. (#2536)
+
+- **Connectors moved onto the Plugins page.** The Connectors rail item is gone. Connectors are now a row on the Plugins page, and links to Connectors open that row. Settings › Plugins now only links to the new page. (#2537)
+
+- **Plugin rail icons.** A plugin's rail icon is now its own glyph instead of the Workspaces icon. A plugin outside the catalog gets a generic package glyph. (#2537)
+
+### Fixed
+
+- **Codex skills in chat on Windows.** The chat's skills menu now lists a Codex account's skills on native Windows when wmux's managed Codex app-server is installed for that account; before, it always said they were unavailable. (#2207)
+
+- **A Codex pane without Codex hooks keeps showing as running while it
+  thinks.** Before, a long stretch of reasoning with no tool calls let the
+  running dot go out after about two minutes, although Codex was still working.
+  (#2319)
+
+- **A daemon that dies now leaves a record of why.** On Windows the background
+  daemon could disappear with nothing in any log, so a crash looked the same
+  as any other disconnect. The daemon now logs one line on every exit it can
+  see (the exit code, the reason, and where `process.exit` was called), and
+  wmux logs the daemon's exit code when it goes, named in plain words, for
+  example `0xC0000005 (access violation)`. That is the only record of a native
+  crash. Fatal-error reports are written to the instance's `crash-reports`
+  folder without the environment, and pruned at startup to the newest 10,
+  none older than 14 days. (#2426)
+
+- **A slow start no longer opens a second shell beside panes that are still
+  running.** When the background daemon took a long time to answer at
+  startup, wmux forgot which session each pane belonged to and started a new
+  shell in many of them, next to the one still alive. It now keeps each
+  pane's session, shows a muted "reattaching…" note until it reconnects, and
+  only starts a new shell once it knows the old one is gone. A pane whose
+  shell could not start now shows why, with a Retry button, instead of
+  staying blank. (#2430)
+
+- **Very wide markdown tables no longer slow a message down.** A short
+  table with hundreds of columns could build tens of thousands of cells. Its
+  cells now count toward the renderer's limit, and a table past it is cut.
+
+- **Sending from the phone to an idle Codex pane no longer fails with "input not provably empty".** Codex 0.163 can leave the model and folder line under its input box blank; wmux now recognises the empty input box from the hint line instead. A half-typed draft is still never sent into. (#2437)
+
+- **Bot workers on a GitLab repository open a merge request.** A bot's worker
+  could push its branch to a GitLab repository but was always told to open the
+  review with `gh pr create`, which does not work there. Workers now follow the
+  repository's host, as the Git page does: GitHub repositories keep
+  `gh pr create`, and GitLab repositories (gitlab.com or self-hosted) get
+  `glab mr create` and a merge request. The worker guard covers `glab` the way
+  it covers `gh`: merges go through the merge lane, the branch is pushed by
+  wmux, and public GitLab acts are the owner's.
+
+- **Agent detection follows the current terminal session.** Fresh process and hook evidence can identify agents without a startup banner, while delayed evidence from an earlier session and incidental product-name text no longer claim a pane or produce stale alerts. (#2440)
+
+- **Failed work keeps its failure alert.** A delayed completion or dialog event no longer replaces an error during the confirmation window, and cancelled or replaced timers cannot announce an obsolete result. (#2441)
+
+- **Bots receive worker reports when verification is interrupted.** Unexpected check or accounting errors no longer strand the owner notification, and late results from a stopped host cannot update the task. Unverified work stays open for repair and retry. (#2442)
+
+- **A bot waiting for a worker slot is no longer reported as out of
+  budget.** Before, a bot whose workers filled every slot (its own, or the
+  slots all bots share) was reported as having exhausted its budget, and the
+  coordinator asked you to raise a budget that was fine. The room now says
+  the bot is waiting for a worker slot, the coordinator is not woken for it,
+  and a real budget limit in the same hour is still reported. The bots also
+  see how many worker slots are free. (#2443)
+
+- **A bot's work that waited for a worker slot is no longer lost.** Before,
+  when every worker slot was in use, a bot's request to start workers was
+  simply refused, and the bot was never told when a slot freed, so work such
+  as a reviewer's follow-up could quietly drop. wmux now keeps the request
+  (a few per bot, across a restart) and wakes the bot with it once a slot
+  frees, so the bot starts it then. Stopping or turning off the bot drops
+  what it was keeping. (#2444)
+
+- **A stalled WSL distro can no longer slow wmux's own file access.** The
+  branch shown for panes in a WSL home folder is now read by a small helper
+  process per distro, so a share that stops answering only delays that
+  distro's panes (by at most a few seconds) instead of tying up wmux. Panes
+  that close or change folder no longer wait behind it, a repository created
+  in an open pane is picked up even if its first read times out, and a
+  worktree pointed at another repository follows it. (#2445)
+
+- IPC error notifications and terminal creation failure reasons now follow the selected language instead of always showing Korean fallback text. (#2446)
+
+- Approval dialogs already on screen can now be detected when agent identification arrives late, without treating old terminal history as a new request. (#2447)
+
+- **Very large PR and issue bodies, chat messages and markdown files render quickly.** Bodies with many links, collapsed sections or tables no longer take seconds to draw or fail to render, and a very large table is shown up to a limit and marked as cut. (#2448)
+
+- **Closing a task no longer leaves its folder half-removed or its panes'
+  processes behind.** A pane whose shell identity could not be confirmed is
+  left running and its folder is kept, with a message saying so, instead of
+  ending the pane and orphaning what it started. wmux now retries reading
+  that identity right after a pane starts, so this rarely happens. A folder
+  pending removal cannot be used to start a new pane, including after a
+  restart, and wmux checks it again before deleting it. When a task's
+  repository is gone, closing the task stops what runs in its folder, keeps
+  the folder and says where it is. When a bot task ends, the processes
+  its worker started are stopped along with its panes. On macOS and Linux,
+  processes paused during a close are resumed only if the close paused them.
+  (#2451)
+
+- Bots are notified when a desktop restart interrupts a worker before its launch command is delivered and startup recovery can prove that the worker never started. Cold-daemon recovery and ambiguous launches remain open for recovery or inspection. (#2453)
+
+- **A bot worker refused because of its data folder now says so in every shell.** When the wmux data folder's path cannot be passed to a worker, the room card names the folder as the cause in PowerShell, Git Bash and WSL panes too, instead of naming Command Prompt. (#2455)
+
+- **A Codex pane waiting on an approval now shows "needs you" instead of running.** Without the Codex approval hook, wmux reads Codex's "Action Required" window title, and the pane returns to running or idle once the approval is answered, including with Codex's y/p keys. (#2456)
+
+- **A bot worker that went quiet without reporting no longer holds its agent slot for good.** A worker whose task was still working or waiting on its bot kept its slot however long it sat idle, until someone updated the task by hand. After two hours with no turn, no typing and no task update, and with you not watching it, its Claude is now paused to free the slot. The task stays as it was, a card in the task's thread offers Resume, and the bot that started it is told so it can resume the worker or settle the task. A worker in the middle of a turn, or waiting on an approval you can still answer, is never paused. (#2457)
+
+- **A bot that starts a held fan-out itself is not woken for it again.** When a bot retried a fan-out held for a worker slot from another turn (such as one answering a message) and it started, the held request and its queued wake stayed, so the bot later got a turn for work already running. (#2459)
+
+- **The Bots first screen clears a missing or broken Claude Code instead of a dead end.** When Claude Code is not installed, the first screen offers **Install Claude Code**, which opens the official setup page, and **Check again**. wmux never installs it for you. The readiness check also runs a short `claude --version` with no model call. A binary that is present but broken now blocks Start, where before it passed the check and failed on the first turn. (#2460)
+
+- **A bot stopped by a setup problem shows what to do.** A bot parked because Claude Code is missing, signed out, or broken shows a card in your language with a **Fix** button (install, log in, or resume) and the raw message behind a details toggle. Before, it showed the generic "stopped with error" and the English message. This includes a sign-in that lapses mid-turn. **Log in** signs in to the account that bot runs on, and switches to the terminal tab it opens. (#2460)
+
+- **A bot's fan-out waits for a slot when wmux's live fan-out cap is full.** A bot's fan-out could be refused because the owner's own fan-outs filled the 8 live fan-out slots across wmux. That refusal was lost, and nothing woke the bot when a slot freed. The request is now held like a full bot or factory slot. The bot is woken with it once a live slot frees, and the card says whose slots are full. (#2462)
+
+- **One freed worker slot wakes one waiting bot fan-out.** With two bot fan-outs waiting for a slot, a freed slot could wake both bots a few seconds apart. The second bot then hit the full cap again and spent a turn on it. A slot handed to a waiting fan-out now stays taken until that bot's turn starts its workers or ends. (#2462)
+
+- **The "waiting for a slot" card promises an automatic start only when the fan-out is actually waiting.** A batch too large for the bot's worker slots is refused, not held, and its card no longer says it will start by itself. (#2462)
+
+- **A resumed worker from an older build is counted once.** When such a worker's pane sat in a workspace no task names, the worker caps counted it twice, so bots could be refused a slot that was actually free. wmux now reads which task a pane belongs to in one place for every check. (#2465)
+
+- **The file preview shows an SVG that draws too much as its source text.** An SVG whose nested `<use>` or embedded SVG would draw far more than its size suggests opens as text, the same way the Bots file panel shows one. Other SVGs still show as pictures. (#2466)
+
+- **A pane whose shell exited while the app had stopped receiving daemon events now shows as exited.** When the daemon drops the app's event subscription under load and the app subscribes again, it now ends any pane whose shell exited in between, the way a live exit does: the exit marker appears, and a killed shell keeps its tab. Before, such a pane kept looking alive until the app was restarted. A working directory that changed in between is also picked up again. (#2467)
+
+- **Events come back reliably after the daemon drops the app's event subscription.** The daemon no longer accepts a resubscribe while the connection still holds the backlog that caused the drop (it would have dropped it again on the next event while reporting success); the app subscribes again once the backlog has drained. (#2469)
+
+- **Pane state is corrected from a read taken after the app is subscribed to daemon events again.** When the daemon refuses the app's resubscribe for a moment (its connection still backed up) and the app retries, the pane resync now waits for the accepted retry, so a shell that exited or a folder that changed in between is no longer missed. Resyncs run one at a time, so a pane is never ended twice. (#2470)
+
+- **An agent that was working when the background service restarted picks
+  its task back up.** With "Resume Claude Code and Codex panes automatically
+  on start" on, a Claude Code or Codex pane that was in the middle of a turn
+  now resumes with a prompt to continue it. Before, it came back idle and the
+  work stopped. (#2471)
+
+- **A stop that leaves a pane running now says why.** When a pane's process could not be identified, Stop all, a bot's Stop, Stop worker and turning bots off said only that some work could not be stopped, and stopping again failed the same way. They now give the reason. A card under the task's cancelled card says the same, and Settings › Bots › Clean up now names the folder that pane holds. (#2473)
+
+- **A pane refused in a task folder whose removal did not finish shows why.** Its banner said "An unknown error occurred."; it now shows the refusal and how to proceed. (#2473)
+
+- **Reliable factory smoke checks.** The code-gate scenario now commits a real change, research completion checks use notice codes and evidence counts, and the taint scenario explicitly wakes its verifier. (#2477)
+
+- Factory smoke scenarios explicitly wake their verifier on trusted pull-request events, so lane and approval checks reach their verdicts. (#2478)
+
+- Factory smoke workers are identifiable to native process stopping, allowing head-change verification to run sequentially with a single worker slot. (#2479)
+
+- **A bot task that changed nothing now says what its report proved.** When a bot's code task makes no commits, its "Gate skipped (the task made no changes)" card now opens with the report's evidence, "Evidence recorded (1 of 2 verified)" or "Not verified", instead of saying nothing about it. Found by the Windows live check of #2461. (#2480)
+
+- **Honest worker stop status.** When a stop cannot find its worker, keep its slot in use until the worker is confirmed gone, explain how to check it, and post one follow-up when the slot is free, with Resume when the conversation was kept. Retried checks and app restarts do not repeat the notices. (#2481)
+
+- **A pane reads as running while its Agent Teams teammate works.** When a Claude Code lead's turn ended but an in-process teammate was still working, the pane and its workspace showed no running dot. They now stay running until the teammate finishes. (#2484)
+
+- **The Git page also finds repositories in the folder your agent works in.** When a pane's shell sat in a folder with no repos (often home) while the agent worked in a folder holding repos, the Git page listed none of them. Those repos now show in the repo menu and All repos, and a repo found in both folders is listed once. The header says where they were found: below the agent's folder (named), below this folder, or both. The "Not a git repository" note no longer appears above repos that are listed. The profile's starting folder and the global starting directory are still not scanned. (#2438)
+
+- **Bots appears on the rail as soon as the bots are switched on.** When something other than Settings › Bots turned the bots on, such as a script, the Bots item stayed hidden until the wmux window lost and regained focus. It now appears right away, and it also goes away right away when the bots are switched off. (#2487)
+
+- **The Git page and repo lookup now open only local folders and mapped
+  drives; network share paths are not opened directly.** A folder given as a
+  share path, or reached through a link to one, is no longer read by the Git
+  page, the file tree or the previews; mapped network drives and a WSL
+  distro's folders still work. A pane's folder follows the same rule: a
+  working-directory report from another host, such as an `ssh` session inside
+  the pane, no longer moves it, and a session restored with a share path as
+  its folder starts in home. (#2491)
+
+- **Plugin approval and packaged loading.** Permission prompts show every capability group, and packaged plugin frames retain their isolated content security policy so their bundled scripts can run. (#2492)
+
+- **Panes past the recovery limit stay saved for the next launch.** With more than 40 panes to restore, wmux restores the 40 most recent and keeps the rest for later. The first ordinary save after starting erased the rest instead, so they were lost. They now stay saved until a later launch restores them or they expire. (#2495)
+
+- **A bot's worker list shows what a reported task proved.** In the Bots list, a worker row whose task reported without code changes now shows the same evidence note as the working rail ("Not verified" or "Evidence attached 1/2"). Before, a task waiting on review kept its worker and never reached the rail, so the note was nowhere to be seen. Found by the Windows live check of #2461. (#2498)
+
+- **Two no-changes gate cards no longer look the same.** A "Gate skipped (the task made no changes)" card now names its task: "Gate skipped for C4 check the API (the task made no changes): task left open". (#2498)
+
+- **On macOS, restarting wmux no longer counts as a reboot after the system clock was synced.** The boot ID now comes from the per-boot `kern.bootsessionuuid` instead of the boot time, which moves with every clock sync, so restart once again cleans up shells a crashed daemon left behind. (#2499)
+
+- **Fullscreen with the sidebar on the right.** The sheet no longer keeps an 8px margin on its left side in fullscreen when the sidebar is docked on the right. (#2500)
+
+- **A released worker slot stays released.** When a bot's worker was stopped, its slot no longer reads as in use again for a few seconds before settling, and a bot profile left open now shows the slot free right away; before, it could keep showing the worker's slot in use until the profile was reopened. This covers workers in WSL panes too. (#2501)
+
+- **Plugin pages stay on their bundle.** Internal navigation reconnects the page, refused links keep the current page usable, and event updates resume after reload. Pages that cannot initialize show a translated retry message. (#2502)
+
+- **A pane no longer misses an Agent Teams teammate that started right after the last check.** The teammate folder is listed again until its timestamp has settled, so a teammate added in the same filesystem tick as the previous listing is still seen. (#2503)
+
+- **Chrome profiles keep sign-ins that rely on the browser session across restarts.** A sign-in made without "stay signed in" in a wmux Chrome profile now survives quitting and reopening wmux, and a change to the pane's site protection; before, the agent Chrome started without restoring its last session and was stopped with a signal, so Chrome dropped those cookies every time. The built-in browser still drops them on restart, so use the Chrome backend for those sign-ins. (#2505)
+
+- **On Windows, restarting wmux no longer counts as a reboot after the system clock was synced or a boot-time read failed.** The boot ID now comes from the per-boot counter in the registry instead of the boot time, which moves with clock syncs, so restart once again cleans up shells a crashed daemon left behind. (#2506)
+
+- **Retry unavailable sign-in.** Temporary authorization-service failures can be retried without reopening the connection page. (#2508)
+
+- **Continue on another account works on Windows.** Moving a pane's Claude conversation to another account now relaunches it on that account. Before, on Windows it stopped Claude and then gave up with "the shell is busy" while the pane sat at an idle prompt. A pane that really is still running something is refused as before, and now within the intended few seconds rather than close to a minute. (#2509)
+
+- **A pane continued on another account keeps that account's conversation.** After moving a Claude conversation to another account, the pane switched back to the original account's copy a few seconds after relaunching. Chat view and the resume pill then showed the original, and a second move copied the original too, losing everything said on the account in between. The pane now stays on the copy in the account it runs on. (#2511)
+
+- **A new window opens in its theme's colour.** On Windows with window glass Off, a new wmux window no longer shows a blank light grey for up to a couple of seconds before the theme appears; it is shown once it has something to show. With a light theme the window no longer paints the dark default theme before the light one loads, on any platform or glass level. (#2513)
+
+- **The two kinds of PC pairing say they are separate.** Settings › LAN › Cross-PC A2A says it is a separate pairing from the PC rail and Remote connections, and Add a PC over SSH and a workspace-share connection say that agent messages between PCs use Cross-PC A2A. Before, a PC added over SSH looked connected, but its agents could not message each other and nothing said why. (#2515)
+
+- A bot no longer burns its turns repeating the same failing tool call: the turn stops after three identical failures in a row, and the bot retries in a fresh session (#2519)
+
+- Settings › Plugins › Discover shows each catalog entry's own name, description and publisher instead of the Agent status text for every entry.
+
+- **Panes to show no longer undoes a share.** A tick saved while a share was showing a pane keeps that pane shown instead of overwriting the list with an older copy. (#2534)
+
+### Security
+
+- **Explicit connector authorization.** Confirm the receiving connection and sign-in server before authorization; keep credentials encrypted and revoke access on connection changes. (#2488)
+
 ## [4.7.0] — 2026-10-19
 
 ### Added
