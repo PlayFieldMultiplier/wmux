@@ -1,5 +1,5 @@
 diff --git a/node_modules/node-pty/lib/windowsConoutConnection.js b/node_modules/node-pty/lib/windowsConoutConnection.js
-index 66da02a..217af4c 100644
+index 66da02a..a7e1fb0 100644
 --- a/node_modules/node-pty/lib/windowsConoutConnection.js
 +++ b/node_modules/node-pty/lib/windowsConoutConnection.js
 @@ -2,42 +2,6 @@
@@ -45,7 +45,7 @@ index 66da02a..217af4c 100644
  Object.defineProperty(exports, "__esModule", { value: true });
  exports.ConoutConnection = void 0;
  var worker_threads_1 = require("worker_threads");
-@@ -50,40 +14,114 @@ var eventEmitter2_1 = require("./eventEmitter2");
+@@ -50,40 +14,128 @@ var eventEmitter2_1 = require("./eventEmitter2");
   * the timer has started.
   */
  var FLUSH_DATA_INTERVAL = 1000;
@@ -95,10 +95,13 @@ index 66da02a..217af4c 100644
 +                console.warn('Unexpected ConoutWorkerMessage', message);
 +        }
 +    });
++    // An error is always followed by the worker's exit, which reports both.
++    var crashError;
 +    worker.on('error', function (error) {
 +        if (sharedWorker !== worker) {
 +            return;
 +        }
++        crashError = error;
 +        connections.forEach(function (connection) { return connection._fail(error); });
 +    });
 +    worker.on('exit', function (code) {
@@ -115,6 +118,17 @@ index 66da02a..217af4c 100644
 +        // that ends its pty.
 +        var open = Array.from(connections.values());
 +        connections.clear();
++        if (open.length > 0) {
++            // It ends the output of every pty it drained at once, each with
++            // an exit that has no code, so say why in one place.
++            var message = "Conout worker exited unexpectedly (code ".concat(code, "), ending the output of ").concat(open.length, " pty connection(s)");
++            if (crashError) {
++                console.error(message, crashError);
++            }
++            else {
++                console.error(message);
++            }
++        }
 +        open.forEach(function (connection) { return connection._fail(new Error("Conout worker exited before connecting (code ".concat(code, ")"))); });
 +    });
 +    return worker;
@@ -186,7 +200,7 @@ index 66da02a..217af4c 100644
      }
      Object.defineProperty(ConoutConnection.prototype, "onReady", {
          get: function () { return this._onReady.event; },
-@@ -95,6 +133,15 @@ var ConoutConnection = /** @class */ (function () {
+@@ -95,6 +147,15 @@ var ConoutConnection = /** @class */ (function () {
          enumerable: false,
          configurable: true
      });
@@ -202,7 +216,7 @@ index 66da02a..217af4c 100644
      ConoutConnection.prototype.dispose = function () {
          if (!this._useConptyDll && this._isDisposed) {
              return;
-@@ -114,18 +161,9 @@ var ConoutConnection = /** @class */ (function () {
+@@ -114,18 +175,9 @@ var ConoutConnection = /** @class */ (function () {
          this._drainTimeout = setTimeout(function () { return _this._destroySocket(); }, FLUSH_DATA_INTERVAL);
      };
      ConoutConnection.prototype._destroySocket = function () {
@@ -225,10 +239,10 @@ index 66da02a..217af4c 100644
 \ No newline at end of file
 +//# sourceMappingURL=windowsConoutConnection.js.map
 diff --git a/node_modules/node-pty/lib/worker/conoutSocketWorker.js b/node_modules/node-pty/lib/worker/conoutSocketWorker.js
-index 92e16da..ed4b31a 100644
+index 92e16da..cf0b8da 100644
 --- a/node_modules/node-pty/lib/worker/conoutSocketWorker.js
 +++ b/node_modules/node-pty/lib/worker/conoutSocketWorker.js
-@@ -6,17 +6,115 @@ Object.defineProperty(exports, "__esModule", { value: true });
+@@ -6,17 +6,127 @@ Object.defineProperty(exports, "__esModule", { value: true });
  var worker_threads_1 = require("worker_threads");
  var net_1 = require("net");
  var conout_1 = require("../shared/conout");
@@ -315,6 +329,11 @@ index 92e16da..ed4b31a 100644
 +            return;
 +        }
 +        drain.ended = true;
++        // Ended before any client connected: one may still come and take
++        // what the pipe left, so the drain stays. On the ConPTY DLL path a
++        // pty killed before READY never connects one (kill() disposes only
++        // on output data), so its drain is held until shutdown. That leak is
++        // known and accepted: one drain, where upstream held a whole worker.
 +        if (drain.connected && drain.clients.size === 0) {
 +            finishDrain(id);
 +        }
@@ -325,12 +344,19 @@ index 92e16da..ed4b31a 100644
 +    // Raw bytes: the pty's output socket decodes them, so this one thread does
 +    // not decode and re-encode every pty's output.
 +    conoutSocket.connect(conoutPipeName, function () {
-+        drain.server.listen((0, conout_1.getWorkerPipeName)(conoutPipeName), function () {
-+            if (drains.get(id) !== drain) {
-+                return;
-+            }
-+            parentPort.postMessage({ type: 1 /* ConoutWorkerMessage.READY */, id: id });
-+        });
++        // Outside the message handler's try/catch: a throw here would end the
++        // worker and every pty's drain with it. It fails this drain only.
++        try {
++            drain.server.listen((0, conout_1.getWorkerPipeName)(conoutPipeName), function () {
++                if (drains.get(id) !== drain) {
++                    return;
++                }
++                parentPort.postMessage({ type: 1 /* ConoutWorkerMessage.READY */, id: id });
++            });
++        }
++        catch (error) {
++            fail(error);
++        }
 +    });
 +}
 +parentPort.on('message', function (message) {

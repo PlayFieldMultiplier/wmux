@@ -52,7 +52,7 @@ interface DrainWorker {
   worker: Worker;
   replies: Reply[];
   exited: boolean;
-  open: (id: number, conoutPipeName?: string) => void;
+  open: (id: number, conoutPipeName?: string | object) => void;
   reply: (id: number) => Promise<Reply>;
 }
 
@@ -177,6 +177,27 @@ describe.runIf(process.platform === 'win32')('node-pty conout drain worker (patc
     await vi.waitFor(() => expect(outA.bytes().toString()).toBe('still here'), { timeout: 10_000 });
     expect(drain.exited).toBe(false);
     expect(drain.replies.filter((reply) => reply.id === 1)).toEqual([{ type: READY, id: 1 }]);
+  });
+
+  it('fails only the drain whose pipe connect callback throws, and keeps draining the others', async () => {
+    const drain = startWorker();
+    const a = await fakeConout();
+    const b = await fakeConout();
+    drain.open(1, a.name);
+    await drain.reply(1);
+    const outA = collect(await connectOutput(a));
+
+    // That callback runs outside the message handler. listen() reports every
+    // pipe name failure through 'error', never by throwing, so the one throw
+    // reachable there is naming the worker pipe: connect() takes these
+    // options, but they cannot become a string ("".concat throws).
+    drain.open(2, { path: b.name, toString: 0 });
+    expect(await drain.reply(2)).toEqual({ type: ERROR, id: 2, error: expect.any(String) });
+    expect(await isListening(b)).toBe(false);
+
+    await flushed(await a.peer, 'still here');
+    await vi.waitFor(() => expect(outA.bytes().toString()).toBe('still here'), { timeout: 10_000 });
+    expect(drain.exited).toBe(false);
   });
 
   it('holds back only the pty whose reader is paused', async () => {

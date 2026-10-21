@@ -198,6 +198,35 @@ describe('node-pty conout drain (patched)', () => {
     expect(second.terminated).toBe(true);
   });
 
+  it('logs one line when the worker dies under live connections, and none when it ends with the last one', () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      open(2);
+      const first = FakeWorker.instances[0];
+      const [idA, idB] = first.posted.map((m) => m.id);
+      first.emit('message', { type: 1, id: idA });
+      first.emit('message', { type: 1, id: idB });
+      // A crash: 'error' and then 'exit', one line for both.
+      first.emit('error', new Error('isolate gone'));
+      first.emit('exit', 1);
+      expect(logged).toHaveBeenCalledOnce();
+      expect(String(logged.mock.calls[0][0])).toMatch(/2 pty/);
+      expect(logged.mock.calls[0].map(String).join(' ')).toContain('isolate gone');
+
+      // The worker ending with its last connection is not a crash.
+      logged.mockClear();
+      const [c] = open(1);
+      const second = FakeWorker.instances[1];
+      c.dispose();
+      vi.advanceTimersByTime(1000);
+      expect(second.terminated).toBe(true);
+      second.emit('exit', 1);
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   it('does not fail the new worker\'s connections over an error from the worker it replaced', () => {
     open(1);
     const first = FakeWorker.instances[0];
