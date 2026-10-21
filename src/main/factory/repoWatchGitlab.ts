@@ -284,7 +284,9 @@ function remember<V>(m: Map<string, V>, key: string, value: V): void {
  * is kept without a read; any other is confirmed by its merge commit's
  * parents (`memo`: remembered across polls, at most PARENT_READS new reads
  * per poll, a failed commit skipped for PARENT_RETRY_POLLS polls) or left
- * pending, a baseline's too.
+ * pending, a baseline's too. A baseline's unconfirmed pipeline is kept in
+ * the MR's state (unconfirmedSha): confirmed later, its verdict is recorded
+ * without a ci fact, as a GitHub baseline records a head already green.
  */
 export async function readGitlabSnapshot(
   ports: GitlabWatchPorts,
@@ -326,6 +328,9 @@ export async function readGitlabSnapshot(
       pr.checks = u.verdict;
       continue;
     }
+    // The pipeline the baseline saw unconfirmed on this head: what it says
+    // was already so then, so confirming it later announces nothing.
+    const held = !prev || (was !== undefined && was.headSha === pr.headSha && was.unconfirmedSha === u.pipelineSha);
     let known = memo.parents.get(u.pipelineSha);
     const failedAt = memo.failed.get(u.pipelineSha);
     const cooling = failedAt !== undefined && memo.poll - failedAt < GITLAB_WATCH_LIMITS.PARENT_RETRY_POLLS;
@@ -343,7 +348,12 @@ export async function readGitlabSnapshot(
         remember(memo.failed, u.pipelineSha, memo.poll);
       }
     }
-    if (known?.includes(pr.headSha)) pr.checks = u.verdict;
+    if (known?.includes(pr.headSha)) {
+      pr.checks = u.verdict;
+      if (prev && held) pr.checksHeld = true;
+    } else if (held && !known) {
+      pr.unconfirmedSha = u.pipelineSha;
+    }
   }
   return { ok: true, snapshot, calls };
 }
@@ -352,8 +362,16 @@ export async function readGitlabSnapshot(
 export type GitlabWatchReader = (repoPath: string, repoKey: string, prev: RepoWatchState | undefined) => Promise<GitlabWatchRead>;
 
 /** The reader over these ports; the merge commits' parents it reads are
- *  remembered for its life. */
+ *  remembered for its life, per repo (so a failed commit's wait counts that
+ *  repo's polls, however many repos are watched). */
 export function gitlabWatchReader(ports: GitlabWatchPorts): GitlabWatchReader {
-  const memo: ParentMemo = { parents: new Map(), failed: new Map(), poll: 0 };
-  return (repoPath, repoKey, prev) => readGitlabSnapshot(ports, repoPath, repoKey, prev, memo);
+  const memos = new Map<string, ParentMemo>();
+  return (repoPath, repoKey, prev) => {
+    let memo = memos.get(repoKey);
+    if (!memo) {
+      memo = { parents: new Map(), failed: new Map(), poll: 0 };
+      memos.set(repoKey, memo);
+    }
+    return readGitlabSnapshot(ports, repoPath, repoKey, prev, memo);
+  };
 }

@@ -27,6 +27,7 @@ import {
   isTaskLifecycleFact,
   ownerLoginTarget,
   gitlabLoginTargets,
+  refreshGitlabLogins,
   resolveFactsFrom,
   routedFactLog,
   runningWakeOf,
@@ -584,6 +585,14 @@ describe('trust', () => {
     const trust = factoryTrust(settings(), () => 'me', (h) => (h === 'gitlab.example.com' ? 'me-gl' : null));
     expect(trust.ownerLoginOn?.('gitlab.example.com')).toBe('me-gl');
     expect(factoryTrust(settings({ verifierOnOwnerPrs: false }), () => 'me', () => 'me-gl').ownerLoginOn?.('gitlab.example.com')).toBeNull();
+  });
+  it('a GitLab sign-out forgets the host\'s owner login; a network failure keeps it', async () => {
+    const logins = new Map([['gitlab.example.com', 'me-gl'], ['other.example.com', 'me-other']]);
+    const targets = [{ host: 'gitlab.example.com', cwd: '/w/a' }, { host: 'other.example.com', cwd: '/w/b' }];
+    await refreshGitlabLogins(targets, logins, async (host) => (host === 'gitlab.example.com' ? { signedOut: true as const } : null));
+    expect([...logins]).toEqual([['other.example.com', 'me-other']]);
+    await refreshGitlabLogins(targets, logins, async (host) => ({ login: `${host}-me` }));
+    expect(logins.get('gitlab.example.com')).toBe('gitlab.example.com-me');
   });
 });
 

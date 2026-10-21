@@ -367,6 +367,10 @@ describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
     expect(await blip.watchGraphql('/wmux', 'gitlab.example.com/group/api-403', 'q', {})).toMatchObject({ ok: false, code: 'error' });
     const forbidden = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'glab: 403 Forbidden (HTTP 403)' }); });
     expect(await forbidden.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'error' });
+    // The owner login read tells a sign-out from a blip the same way.
+    expect(await out.loginOrSignOut('gitlab.example.com', '/wmux')).toEqual({ signedOut: true });
+    expect(await down.loginOrSignOut('gitlab.example.com', '/wmux')).toBeNull();
+    expect(await svcOf(async () => ({ stdout: JSON.stringify({ username: 'Me' }) })).loginOrSignOut('gitlab.example.com', '/wmux')).toEqual({ login: 'me' });
     const partial = svcOf(async () => ({ stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'complexity' }] }) }));
     expect(await partial.watchGraphql('/wmux', KEY, 'q', {})).toEqual({ ok: false, code: 'error', message: 'complexity' });
   });

@@ -68,6 +68,9 @@ export interface WatchedPrState {
   labelsTruncated?: boolean;
   state: string;
   author: string | null;
+  /** GitLab: the merged-results pipeline the baseline saw on this head, its
+   *  verdict not yet confirmed (repoWatchGitlab.ts). */
+  unconfirmedSha?: string;
 }
 
 export interface WatchedIssueState {
@@ -146,6 +149,11 @@ export interface WatchPr {
   labels: string[];
   labelsTruncated: boolean;
   checks: WatchChecks;
+  /** GitLab: see WatchedPrState.unconfirmedSha. */
+  unconfirmedSha?: string;
+  /** GitLab: `checks` was already the verdict at the baseline, confirmed
+   *  only now: recorded without a ci fact. */
+  checksHeld?: boolean;
 }
 
 export interface WatchIssue {
@@ -324,6 +332,7 @@ function prStateOf(pr: WatchPr): WatchedPrState {
   return {
     headSha: pr.headSha, checks: pr.checks, labels: pr.labels, state: pr.state, author: pr.author,
     ...(pr.labelsTruncated ? { labelsTruncated: true } : {}),
+    ...(pr.unconfirmedSha ? { unconfirmedSha: pr.unconfirmedSha } : {}),
   };
 }
 
@@ -378,7 +387,7 @@ export function diffRepo(prev: RepoWatchState | undefined, snap: WatchSnapshot, 
       // red when first seen still yields its ci fact.
       checksBefore = 'pending';
     } else {
-      checksBefore = was.checks;
+      checksBefore = pr.checksHeld ? pr.checks : was.checks;
     }
     // A label list cut short on either side cannot tell an added label from
     // one that was not read before.
@@ -513,7 +522,8 @@ function isPrState(v: unknown): v is WatchedPrState {
     && (v.checks === 'pass' || v.checks === 'fail' || v.checks === 'pending')
     && isLabels(v.labels) && typeof v.state === 'string'
     && (v.author === null || typeof v.author === 'string')
-    && (v.labelsTruncated === undefined || typeof v.labelsTruncated === 'boolean');
+    && (v.labelsTruncated === undefined || typeof v.labelsTruncated === 'boolean')
+    && (v.unconfirmedSha === undefined || (typeof v.unconfirmedSha === 'string' && v.unconfirmedSha.length > 0));
 }
 
 function isIssueState(v: unknown): v is WatchedIssueState {

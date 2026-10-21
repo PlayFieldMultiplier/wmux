@@ -259,6 +259,20 @@ export function gitlabLoginTargets(bots: readonly Pick<BotProfile, 'repo'>[]): A
   return [...out].map(([host, cwd]) => ({ host, cwd }));
 }
 
+/** Refresh the owner's glab login on each GitLab host: a definite sign-out
+ *  forgets the host's login, any other failure keeps the last one read. */
+export async function refreshGitlabLogins(
+  targets: ReadonlyArray<{ host: string; cwd: string }>,
+  logins: Map<string, string>,
+  read: (host: string, cwd: string) => Promise<{ login: string } | { signedOut: true } | null>,
+): Promise<void> {
+  for (const { host, cwd } of targets) {
+    const r = await read(host, cwd).catch(() => null);
+    if (r && 'login' in r) logins.set(host, r.login);
+    else if (r) logins.delete(host);
+  }
+}
+
 /** Who counts as a trusted author: the settings' logins, plus the owner's gh
  *  login (glab's on a GitLab host) unless the Verifier is off for the
  *  owner's own PRs. */
@@ -786,10 +800,8 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     const { signedInLogin } = await import('../github/hostLane');
     const login = await signedInLogin(host, cwd).catch(() => null);
     if (login) ownerLogin = login;
-    for (const target of gitlabLoginTargets(bots)) {
-      const on = await signedInLogin(target.host, target.cwd).catch(() => null);
-      if (on) gitlabLogins.set(target.host, on);
-    }
+    const { glabPrService } = await import('../github/GlabPrService');
+    await refreshGitlabLogins(gitlabLoginTargets(bots), gitlabLogins, (h, c) => glabPrService.loginOrSignOut(h, c));
   };
 
   const cursor = new TriggerCursor(path.join(deps.wmuxDir(), 'factory', TRIGGER_CURSOR_FILENAME));

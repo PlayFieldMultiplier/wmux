@@ -207,7 +207,7 @@ describe('RepoWatch on a GitLab repo', () => {
     expect(kinds(facts)).toEqual(['ci.green:1']);
   });
 
-  it('a baseline records an unconfirmed merged-results verdict as pending, and confirms it later', async () => {
+  it('a baseline records an unconfirmed merged-results verdict as pending, and confirms it later without announcing it', async () => {
     const MERGE2 = 'e'.repeat(40);
     const spec: Spec = { open: [
       { iid: 1, head: HEAD, pipeline: { sha: MERGE, status: 'SUCCESS', type: 'MERGED_RESULT' } },
@@ -220,10 +220,33 @@ describe('RepoWatch on a GitLab repo', () => {
     // One parent read per poll: MR 1 is confirmed, MR 2 is not, so it is pending.
     expect(await w.pollNow(KEY)).toMatchObject({ ok: true, baseline: true, calls: 2 });
     expect(w.stateOf(KEY)?.prs['1'].checks).toBe('pass');
-    expect(w.stateOf(KEY)?.prs['2'].checks).toBe('pending');
+    expect(w.stateOf(KEY)?.prs['2']).toMatchObject({ checks: 'pending', unconfirmedSha: MERGE2 });
     await w.pollNow(KEY);
     expect(glab.parentReads).toEqual([MERGE, MERGE2]);
-    expect(kinds(facts)).toEqual(['ci.green:2']);
+    // Green already at the baseline: recorded, not announced.
+    expect(w.stateOf(KEY)?.prs['2'].checks).toBe('pass');
+    expect(w.stateOf(KEY)?.prs['2'].unconfirmedSha).toBeUndefined();
+    expect(facts.appended).toEqual([]);
+  });
+
+  it('a failed parent read waits ten polls of its own repo, however many repos are watched', async () => {
+    const KEY2 = 'gitlab.example.com/group/other';
+    let spec: Spec = { open: [] };
+    const glab = fakeGlab(() => spec);
+    const w = makeWatch(glab, fakeFacts(), { bots: [bot('bot-00000001'), bot('bot-00000002', KEY2)] });
+    await w.start();
+    await w.pollNow(KEY);
+    await w.pollNow(KEY2);
+    spec = { open: [{ iid: 1, head: HEAD, pipeline: { sha: MERGE, status: 'SUCCESS', type: 'MERGED_RESULT' } }] };
+    await w.pollNow(KEY);
+    expect(glab.parentReads).toEqual([MERGE]);
+    // Another repo's polls do not shorten this repo's wait.
+    for (let i = 0; i < 12; i++) await w.pollNow(KEY2);
+    glab.parentReads.length = 0;
+    for (let i = 0; i < 9; i++) await w.pollNow(KEY);
+    expect(glab.parentReads).toEqual([]);
+    await w.pollNow(KEY);
+    expect(glab.parentReads).toEqual([MERGE]);
   });
 
   it('a commit whose parents never read does not take every poll\'s read', async () => {

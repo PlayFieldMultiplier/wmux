@@ -491,6 +491,15 @@ export function glabMergeAnswer(stdout: string, url: string): PrWriteResult {
   return state === 'merged' ? { ok: true, url } : { ok: false, code: 'error', message: `GitLab answered the merge without merging it (state: ${state || 'unreadable'})` };
 }
 
+/** A failed `glab api` call glab answered as a sign-out. Only its own stderr
+ *  counts (the error message holds the command line, project path
+ *  included): a 401, or "Unauthenticated." as glab prints for a host it
+ *  holds no token for. A 403 is no sign-out. */
+export function glabApiSignedOut(err: unknown): boolean {
+  const stderr = (err as { stderr?: unknown })?.stderr;
+  return typeof stderr === 'string' && (/\b401\b/.test(stderr) || stderr.includes('Unauthenticated.'));
+}
+
 /** `glab auth status`'s outcome for one host. */
 export type GlabAuthProbe = 'ok' | 'signed-out' | 'unreachable';
 
@@ -770,11 +779,7 @@ export class GlabPrService implements PrProvider {
       return partial ? { ok: false, code: 'error', message: partial } : { ok: true, value: raw };
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { ok: false, code: 'cli-missing', message: 'GitLab CLI (glab) is not installed' };
-      // Only glab's own output tells a sign-out (the error message holds the
-      // command line, project path included): a 401, or "Unauthenticated."
-      // as glab prints for a host it holds no token for. A 403 is no sign-out.
-      const stderr = (err as { stderr?: unknown })?.stderr;
-      if (host && typeof stderr === 'string' && (/\b401\b/.test(stderr) || stderr.includes('Unauthenticated.'))) {
+      if (host && glabApiSignedOut(err)) {
         return { ok: false, code: 'unauthenticated', message: `GitLab CLI is not authenticated for ${host} — run \`glab auth login --hostname ${host}\`` };
       }
       return { ok: false, code: 'error', message: glabErrorText(err) };
@@ -874,6 +879,18 @@ export class GlabPrService implements PrProvider {
       return text(rec(JSON.parse(stdout))?.username).toLowerCase() || null;
     } catch {
       return null;
+    }
+  }
+
+  /** loginOnHost, telling a definite sign-out (glabApiSignedOut) apart from
+   *  any other failure (null: a timeout, a network error, a missing glab). */
+  async loginOrSignOut(host: string, cwd: string): Promise<{ login: string } | { signedOut: true } | null> {
+    try {
+      const { stdout } = await this.api(host, ['user'], cwd);
+      const login = text(rec(JSON.parse(stdout))?.username).toLowerCase();
+      return login ? { login } : null;
+    } catch (err) {
+      return glabApiSignedOut(err) ? { signedOut: true } : null;
     }
   }
 
