@@ -44,7 +44,8 @@ describe('listMissionsBatch', () => {
     const spy = vi.fn(listMissions);
     const reply = listMissionsBatch({ senderPtyId: 'pty-1', verifiedWorkspaceIds: ['ws-a', 'ws-b'] }, spy);
     expect(reply.ok).toBe(false);
-    if (!reply.ok) expect(reply.error.code).toBe('NOT_AUTHORIZED');
+    // Its own code: NOT_AUTHORIZED is how a daemon without the batch refuses it.
+    if (!reply.ok) expect(reply.error.code).toBe('BATCH_NOT_ALLOWED');
     expect(spy).not.toHaveBeenCalled();
   });
 

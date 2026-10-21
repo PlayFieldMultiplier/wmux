@@ -101,6 +101,16 @@ describe('listMissionsByOwner', () => {
     expect(out.size).toBe(0);
   });
 
+  it('a caller refused the batch (BATCH_NOT_ALLOWED) is not read as an old daemon', async () => {
+    const call = vi.fn<MissionListCall>(async () => ({
+      ok: false,
+      error: { code: 'BATCH_NOT_ALLOWED', message: 'operator only' },
+    }));
+    const out = await listMissionsByOwner(call, owners(10));
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(out.size).toBe(0);
+  });
+
   it('keeps only the owners it asked for', async () => {
     const call = vi.fn<MissionListCall>(async () => ({
       ok: true,

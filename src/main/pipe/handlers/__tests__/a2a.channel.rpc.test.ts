@@ -464,6 +464,13 @@ describe('a2a.channel.rpc — mutating routing (capability a2a.channel.send)', (
   // forward() pin only the single verifiedWorkspaceId, so the array must be
   // the operator's alone or a pane agent could list any owner's missions.
   describe('the batched task.mission.list (verifiedWorkspaceIds) is operator-only', () => {
+    /** input.findOwnerWorkspace lookups since the router was set up. */
+    const findOwnerCalls = (): number =>
+      vi.mocked(sendToRenderer).mock.calls.filter((c) => c[1] === 'input.findOwnerWorkspace').length;
+    beforeEach(() => {
+      vi.mocked(sendToRenderer).mockClear();
+    });
+
     it('forwards the operator\'s batch to the daemon as sent', async () => {
       const daemon = makeFakeDaemon((method, p) => {
         expect(method).toBe('task.mission.list');
@@ -478,9 +485,13 @@ describe('a2a.channel.rpc — mutating routing (capability a2a.channel.send)', (
       expect(res.ok && (res.result as { ok: boolean }).ok).toBe(true);
     });
 
+    // Each refusal carries BATCH_NOT_ALLOWED, the new gate's own code: the
+    // ownerScoped gate further down refuses a no-PTY wire read too, but as
+    // NOT_AUTHORIZED, which a caller would read as a daemon without the batch.
     it.each([
       ['a pane agent with a resolvable senderPtyId', { senderPtyId: 'pty-S' }, undefined],
       ['a wire caller with no senderPtyId', {}, undefined],
+      ['an in-process first-party caller that is not the operator', {}, { firstParty: true }],
       ['the plugin host (first-party, not the operator)', {}, { firstParty: true, hostedWorkspace: 'ws-plugin' }],
     ] as const)('refuses %s and never asks the daemon', async (_label, extra, opts) => {
       const daemon = makeFakeDaemon(() => ({ ok: true, results: [] }));
@@ -494,9 +505,11 @@ describe('a2a.channel.rpc — mutating routing (capability a2a.channel.send)', (
       if (res.ok) {
         const r = res.result as { ok: boolean; error?: { code: string } };
         expect(r.ok).toBe(false);
-        expect(r.error?.code).toBe('NOT_AUTHORIZED');
+        expect(r.error?.code).toBe('BATCH_NOT_ALLOWED');
       }
       expect(rpcSpy).not.toHaveBeenCalled();
+      // Refused before the caller's pane is resolved through the renderer.
+      expect(findOwnerCalls()).toBe(0);
     });
 
     it('refuses a workspace-bound commander', async () => {
@@ -509,7 +522,7 @@ describe('a2a.channel.rpc — mutating routing (capability a2a.channel.send)', (
           id: 'mb-3', method: 'task.mission.list', commanderToken: token,
           params: { verifiedWorkspaceIds: [SENDER_WS, 'ws-victim'] },
         });
-        expect(res.ok && (res.result as { ok: boolean }).ok).toBe(false);
+        expect(res.ok && (res.result as { error?: { code: string } }).error?.code).toBe('BATCH_NOT_ALLOWED');
         expect(rpcSpy).not.toHaveBeenCalled();
       } finally {
         revokeCommanderToken(token);

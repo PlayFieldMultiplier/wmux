@@ -32,10 +32,13 @@
 //     with the single form when that reply fits a line, and otherwise leaves
 //     its cached missions as they are.
 //
-// Who may batch: only main's own reads and the renderer operator. The daemon
-// refuses a batch that carries a `senderPtyId`, and main's pipe router refuses
-// one from any caller that is not the operator (a2a.channel.rpc.ts), so a pane
-// agent can never use it to read another workspace's missions.
+// Who may batch: only main's own reads and the renderer operator. Main's pipe
+// router refuses a batch from any caller that is not the operator
+// (a2a.channel.rpc.ts), so a pane agent, commander or plugin reaching main
+// cannot use it to read another workspace's missions. The daemon also refuses
+// a batch that carries a `senderPtyId`; that is a consistency guard, not a
+// boundary: a client on the daemon pipe can name any owner with the single
+// form anyway (the #113 same-user ceiling).
 //
 // Version skew: a daemon that predates the batch answers it the way it answers
 // any request without `verifiedWorkspaceId` (NOT_AUTHORIZED, no `results`).
@@ -78,6 +81,12 @@ export const MISSION_LIST_DEFERRED = 'DEFERRED';
 /** Per-owner code for an owner whose answer cannot share a line with the
  *  rest of a batch (`error.chars`: its single-form reply's length). */
 export const MISSION_LIST_REPLY_TOO_LARGE = 'REPLY_TOO_LARGE';
+
+/** Whole-call code for a batch from a caller that may not batch (a pane
+ *  caller at the daemon, anyone but the operator at main's router). Distinct
+ *  from NOT_AUTHORIZED, which is how a daemon without the batch refuses it,
+ *  so it is never read as that daemon. */
+export const MISSION_LIST_BATCH_NOT_ALLOWED = 'BATCH_NOT_ALLOWED';
 
 /** One `task.mission.list` call: the daemon's reply, transport envelope removed. */
 export type MissionListCall = (params: Record<string, unknown>) => Promise<unknown>;

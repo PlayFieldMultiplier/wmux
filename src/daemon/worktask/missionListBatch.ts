@@ -5,16 +5,19 @@
 // Identity: the single form trusts a pre-stamped `verifiedWorkspaceId`
 // verbatim (stampChannelCaller rule 1, the documented #113 same-user ceiling),
 // and its producers are main's own reads and main's pipe router. The batch
-// applies the same rule to every id, and adds one: a request that carries a
-// `senderPtyId` names a pane caller, which may read its own workspace only, so
-// it is refused whole rather than answered for owners it does not hold. Main's
-// router already refuses a batch from anyone but the operator; this is the
-// same rule for a client that reaches the daemon pipe directly.
+// applies the same rule to every id. The boundary is main's router, which
+// takes a batch from the operator alone. A request that also carries a
+// `senderPtyId` names a pane caller, which the single form would scope to its
+// own workspace, so it is refused whole (BATCH_NOT_ALLOWED) rather than
+// answered for other owners. That keeps the daemon consistent with the
+// router; it is not a boundary of its own, since a client on the daemon pipe
+// can name any owner with the single form anyway (the #113 ceiling).
 
 import type { WorkTask } from '../../shared/workTask';
 import {
   MISSION_LIST_BATCH_MAX,
   MISSION_LIST_BATCH_MAX_CHARS,
+  MISSION_LIST_BATCH_NOT_ALLOWED,
   MISSION_LIST_DEFERRED,
   MISSION_LIST_ID_MAX_CHARS,
   MISSION_LIST_REPLY_MAX_CHARS,
@@ -89,7 +92,7 @@ export function listMissionsBatch(
     return {
       ok: false,
       error: {
-        code: 'NOT_AUTHORIZED',
+        code: MISSION_LIST_BATCH_NOT_ALLOWED,
         message: 'task.mission.list: a pane caller (senderPtyId) cannot read several owners at once',
       },
     };
