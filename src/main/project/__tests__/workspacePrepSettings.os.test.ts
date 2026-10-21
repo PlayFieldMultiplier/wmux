@@ -15,6 +15,7 @@ import {
   suggestSetupCommand,
   type WorkspacePrepSettingsDeps,
 } from '../workspacePrepSettings';
+import { WORKSPACE_PREP_MAX_CANDIDATES } from '../../../shared/workspacePrepSettings';
 
 let tmp: string;
 let repo: string;
@@ -53,6 +54,16 @@ afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 describe('candidates and suggestion', () => {
   it('lists ignored plain files, .env first, never an ignored folder', async () => {
     expect(await listCopyCandidates(repo)).toEqual(['.env', '.env.local', 'secret.key']);
+  });
+
+  it('keeps a declared file inside the cap ahead of a crowd of ignored files', async () => {
+    fs.appendFileSync(path.join(repo, '.gitignore'), '*.log\nzz-local.yml\n');
+    for (let i = 0; i < WORKSPACE_PREP_MAX_CANDIDATES + 5; i++) fs.writeFileSync(path.join(repo, `a${String(i).padStart(3, '0')}.log`), '');
+    fs.writeFileSync(path.join(repo, 'zz-local.yml'), 'x\n');
+    const list = await listCopyCandidates(repo, undefined, ['zz-local.yml']);
+    expect(list).toHaveLength(WORKSPACE_PREP_MAX_CANDIDATES);
+    expect(list[0]).toBe('zz-local.yml');
+    expect(list.slice(1, 3)).toEqual(['.env', '.env.local']);
   });
 
   it('suggests the install command for the lockfile', () => {

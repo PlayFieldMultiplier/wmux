@@ -80,10 +80,14 @@ export function suggestSetupCommand(root: string): string | undefined {
 /**
  * Git-ignored plain files under `root`, project-relative with forward
  * slashes: what a new worktree would not get from git. Ignored directories
- * (node_modules, build output) are collapsed by git and left out. `.env*`
- * come first.
+ * (node_modules, build output) are collapsed by git and left out. Files the
+ * copy list already declares come first, then `.env*`.
  */
-export async function listCopyCandidates(root: string, gitRun: NonNullable<WorkspacePrepSettingsDeps['git']> = runGit): Promise<string[]> {
+export async function listCopyCandidates(
+  root: string,
+  gitRun: NonNullable<WorkspacePrepSettingsDeps['git']> = runGit,
+  declared: readonly string[] = [],
+): Promise<string[]> {
   const r = await gitRun(['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory'], root);
   if (r.code !== 0) return [];
   const out: string[] = [];
@@ -99,9 +103,11 @@ export async function listCopyCandidates(root: string, gitRun: NonNullable<Works
     }
     out.push(rel);
   }
-  // Sorted before the cap, so a `.env` deep in a big tree is never cut.
+  // Sorted before the cap, so a declared file or a `.env` deep in a big tree
+  // is never cut (a cut declared file would read as missing).
+  const rank = (f: string) => (declared.includes(f) ? 2 : isDefaultCopyCandidate(f) ? 1 : 0);
   return out
-    .sort((a, b) => Number(isDefaultCopyCandidate(b)) - Number(isDefaultCopyCandidate(a)) || a.localeCompare(b))
+    .sort((a, b) => rank(b) - rank(a) || a.localeCompare(b))
     .slice(0, WORKSPACE_PREP_MAX_CANDIDATES);
 }
 
@@ -182,7 +188,7 @@ export async function readWorkspacePrepSettings(cwd: string, deps: WorkspacePrep
   if (!found) return { exists: false, settings: empty, copyUnset: true, candidates: [], saveBlocked: 'no-project' };
   const { state, dir } = found;
   const settings = settingsOf(state.config);
-  const candidates = await listCopyCandidates(dir, deps.git ?? runGit);
+  const candidates = await listCopyCandidates(dir, deps.git ?? runGit, settings.copy);
   const suggestedSetup = suggestSetupCommand(dir);
   const blocked = saveBlock(state);
   return {
