@@ -184,6 +184,11 @@ describe('laneFacts', () => {
     const { svc, calls } = makeService((args) => (isGraphql(args) ? mrAnswer() : branch()));
     expect(await svc.laneFacts('/repo', KEY, 7)).toMatchObject({ ok: true, value: { baseRefOid: TIP } });
     expect(calls[1]).toEqual(['api', '--hostname', 'gitlab.example.com', 'projects/group%2Fsub%2Fproj/repository/branches/main']);
+    const SHA256 = 'e'.repeat(64);
+    branch.mockReturnValue({ name: 'main', commit: { id: SHA256 } });
+    expect(await svc.laneFacts('/repo', KEY, 7)).toMatchObject({ ok: true, value: { baseRefOid: SHA256 } });
+    branch.mockReturnValue({ name: 'main', commit: { id: 'not-a-sha' } });
+    expect(await svc.laneFacts('/repo', KEY, 7)).toMatchObject({ ok: true, value: { baseRefOid: null } });
     branch.mockReturnValue(new Error('404'));
     expect(await svc.laneFacts('/repo', KEY, 7)).toMatchObject({ ok: true, value: { baseRefOid: null } });
   });

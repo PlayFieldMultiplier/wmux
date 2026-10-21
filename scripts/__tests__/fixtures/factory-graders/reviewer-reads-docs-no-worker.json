@@ -192,7 +192,8 @@
   "timeouts": [],
   "saved": {
    "pr1Head": "7fd84900b65b28f7901bdaf499cfb3a361cd27aa",
-   "pr1Branch": "wtask/docs-add-a-note-kbg3qyzh"
+   "pr1Branch": "wtask/docs-add-a-note-kbg3qyzh",
+   "pr1Base": "ee5544b23cc1ff5017cd8769abd5372a7d7c564d"
   },
   "launches": [
    {
@@ -1024,8 +1025,7 @@
         "number": 1,
         "title": "docs: add a note",
         "headRefName": "wtask/docs-add-a-note-kbg3qyzh",
-        "headSha": "7fd84900b65b28f7901bdaf499cfb3a361cd27aa",
-        "baseRefOid": "ee5544b23cc1ff5017cd8769abd5372a7d7c564d"
+        "headSha": "7fd84900b65b28f7901bdaf499cfb3a361cd27aa"
        }
       ],
       "issues": []

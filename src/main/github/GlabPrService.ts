@@ -740,8 +740,10 @@ export class GlabPrService implements PrProvider {
   async laneFacts(repoPath: string, key: string, iid: number): Promise<PrReviewRead<PrLaneFacts>> {
     const r = await this.readLane(repoPath, key, iid);
     if (!r.ok) return r;
-    // The target branch's tip now (the MR's diff refs can lag it): what a
-    // reading-only verdict is bound to. Unreadable: null, which refuses one.
+    // Two calls: the MR query cannot name the target branch's commit (its
+    // diff refs lag it), so the branch is read after it; that later read is
+    // the fresher one, and it is what a reading-only verdict is bound to.
+    // Unreadable: null, which refuses one.
     const facts = r.value.facts;
     return { ok: true, value: { ...facts, baseRefOid: await this.branchTip(GlabPrService.project(key), facts.baseRefName, repoPath) } };
   }
@@ -804,7 +806,8 @@ export class GlabPrService implements PrProvider {
     try {
       const { stdout } = await this.api(project.host, [`projects/${encodeURIComponent(project.path)}/repository/branches/${encodeURIComponent(name)}`], cwd);
       const id = rec(rec(JSON.parse(stdout))?.commit)?.id;
-      return typeof id === 'string' && /^[0-9a-f]{40}$/.test(id) ? id : null;
+      // SHA-1 or SHA-256 object ids, as verify.rpc checks a base commit.
+      return typeof id === 'string' && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(id) ? id : null;
     } catch {
       return null;
     }
