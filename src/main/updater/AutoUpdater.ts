@@ -24,6 +24,7 @@ import {
   isVersionNewer,
   normalizeVersion,
   parseArtifactName,
+  parseFeedVersion,
   sanitizeArtifactFileName,
   TEMP_ARTIFACT_PREFIX,
   validateManifest,
@@ -61,6 +62,13 @@ const MANIFEST_URL = `https://github.com/${REPO}/releases/latest/download/${MANI
 
 // 업데이트 자동 확인 간격 (30분)
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+// The feed reply and the manifest are a few hundred bytes each. One that has
+// not arrived complete within this is stuck, not slow.
+const METADATA_REQUEST_TIMEOUT_MS = 30_000;
+// The installer download has no total deadline (its size and the link speed
+// vary too much), only this one: abort once no bytes have arrived for it.
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
 // Once quitAndInstall() is called, terminating this process is Squirrel's job
 // and takes about a second. If we are still running after this, ShipIt is
@@ -748,57 +756,82 @@ export class AutoUpdater {
     }
   }
 
-  private fetchUpdate(): Promise<UpdateInfo | null> {
-    return new Promise((resolve, reject) => {
-      const request = net.request(UPDATE_SERVER);
-      let body = '';
-
-      request.on('response', (response) => {
-        // 204 = no update available
-        if (response.statusCode === 204) {
-          resolve(null);
-          return;
-        }
-        if (response.statusCode !== 200) {
-          reject(new Error(`Update server returned ${response.statusCode}`));
-          return;
-        }
-        response.on('data', (chunk) => { body += chunk.toString(); });
-        response.on('end', () => {
-          try {
-            const data = JSON.parse(body) as UpdateInfo;
-            resolve(data);
-          } catch {
-            reject(new Error('Invalid JSON from update server'));
-          }
-        });
-      });
-
-      request.on('error', (err) => reject(err));
-      request.end();
-    });
+  private async fetchUpdate(): Promise<UpdateInfo | null> {
+    const { statusCode, text } = await this.requestText(UPDATE_SERVER, 'update server');
+    // 204 = no update available
+    if (statusCode === 204) return null;
+    if (statusCode !== 200) throw new Error(`Update server returned ${statusCode}`);
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error('Invalid JSON from update server');
+    }
+    const info = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+    // The name becomes the pending version: matched against the manifest,
+    // stamped into the install marker, shown in Settings. Only a strict
+    // semver is accepted as one.
+    const name = parseFeedVersion(info.name);
+    if (name === null) {
+      throw new Error(`update server named an invalid version: ${JSON.stringify(info.name ?? null).slice(0, 80)}`);
+    }
+    return {
+      name,
+      notes: typeof info.notes === 'string' ? info.notes : '',
+      url: typeof info.url === 'string' ? info.url : '',
+    };
   }
 
   /** Fetch the CI-published update manifest (raw JSON; validated by caller). */
-  private fetchManifest(): Promise<unknown> {
+  private async fetchManifest(): Promise<unknown> {
+    const { statusCode, text } = await this.requestText(MANIFEST_URL, 'update manifest server');
+    if (statusCode !== 200) throw new Error(`update manifest server returned ${statusCode}`);
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error('invalid JSON in update manifest');
+    }
+  }
+
+  /**
+   * GET a small document (the feed reply, the manifest). Settles exactly once,
+   * on every way a request can end: a request error, a response error, a
+   * response aborted mid-body, or no complete reply within
+   * METADATA_REQUEST_TIMEOUT_MS. A non-200 status settles at once without
+   * reading the body.
+   *
+   * The settling matters beyond this request: check() and downloadUpdate()
+   * hold isChecking / isDownloading until it does, and every later check is
+   * skipped while they are set. A dropped connection that was never settled
+   * stopped all checks until the app restarted.
+   */
+  private requestText(url: string, label: string): Promise<{ statusCode: number; text: string }> {
     return new Promise((resolve, reject) => {
-      const request = net.request(MANIFEST_URL);
-      let body = '';
+      const request = net.request(url);
+      let settled = false;
+      const settle = (finish: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        finish();
+      };
+      const timer = setTimeout(() => {
+        settle(() => reject(new Error(`${label} did not answer within ${METADATA_REQUEST_TIMEOUT_MS / 1000}s`)));
+        request.abort();
+      }, METADATA_REQUEST_TIMEOUT_MS);
+
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
-          reject(new Error(`update manifest server returned ${response.statusCode}`));
+          settle(() => resolve({ statusCode: response.statusCode, text: '' }));
           return;
         }
-        response.on('data', (chunk) => { body += chunk.toString(); });
-        response.on('end', () => {
-          try {
-            resolve(JSON.parse(body));
-          } catch {
-            reject(new Error('invalid JSON in update manifest'));
-          }
-        });
+        let text = '';
+        response.on('data', (chunk) => { text += chunk.toString(); });
+        response.on('end', () => settle(() => resolve({ statusCode: 200, text })));
+        response.on('aborted', () => settle(() => reject(new Error(`${label} connection dropped mid-response`))));
+        response.on('error', (err) => settle(() => reject(err instanceof Error ? err : new Error(String(err)))));
       });
-      request.on('error', (err) => reject(err));
+      request.on('error', (err) => settle(() => reject(err)));
       request.end();
     });
   }
@@ -827,9 +860,15 @@ export class AutoUpdater {
       const hash = createHash('sha256');
       const out = createWriteStream(dest);
       let settled = false;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const clearIdle = () => {
+        if (idleTimer !== null) clearTimeout(idleTimer);
+        idleTimer = null;
+      };
       const fail = (err: Error) => {
         if (settled) return;
         settled = true;
+        clearIdle();
         // The caller only learns the temp path on resolve, so a failed or
         // sha-mismatched partial download must be removed HERE or it stays on
         // disk forever (and a tampered artifact would linger in temp). Wait for
@@ -840,6 +879,17 @@ export class AutoUpdater {
       };
 
       const request = net.request(manifest.url);
+      // No-progress deadline, re-armed by every chunk. A ~150 MB download has
+      // no sensible total deadline, but a connection that delivers nothing for
+      // this long is stalled, and an unsettled download holds isDownloading.
+      const armIdle = () => {
+        clearIdle();
+        idleTimer = setTimeout(() => {
+          fail(new Error(`installer download stalled: no data for ${DOWNLOAD_IDLE_TIMEOUT_MS / 1000}s`));
+          request.abort();
+        }, DOWNLOAD_IDLE_TIMEOUT_MS);
+      };
+      armIdle();
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
           fail(new Error(`installer download returned ${response.statusCode}`));
@@ -851,7 +901,10 @@ export class AutoUpdater {
         let received = 0;
         let sentIndeterminate = false;
 
+        armIdle();
         response.on('data', (chunk: Buffer) => {
+          if (settled) return;
+          armIdle();
           hash.update(chunk);
           out.write(chunk);
           received += chunk.length;
@@ -865,6 +918,8 @@ export class AutoUpdater {
           }
         });
         response.on('end', () => {
+          clearIdle();
+          if (settled) return;
           out.end(() => {
             if (settled) return;
             const actual = hash.digest('hex');
@@ -876,6 +931,7 @@ export class AutoUpdater {
             }
           });
         });
+        response.on('aborted', () => fail(new Error('installer download connection dropped mid-transfer')));
         response.on('error', (err) => fail(err instanceof Error ? err : new Error(String(err))));
       });
       request.on('error', (err) => fail(err instanceof Error ? err : new Error(String(err))));

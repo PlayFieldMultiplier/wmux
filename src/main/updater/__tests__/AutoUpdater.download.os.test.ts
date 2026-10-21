@@ -43,13 +43,23 @@ interface Sent { channel: string; data: Record<string, unknown>; }
 /** A file parked in the fake temp dir (#995 adoption paths). */
 interface TempFile { body: Buffer; mtimeMs?: number; isFile?: boolean }
 
+/**
+ * How one kind of request ends. 'ok' serves it normally; 'stall' never answers
+ * at all; 'stall-body' answers 200 and sends part of the body, then nothing;
+ * 'aborted' / 'error' send part of the body and then drop the connection the
+ * way Electron's IncomingMessage reports it.
+ */
+type NetMode = 'ok' | 'stall' | 'stall-body' | 'aborted' | 'error';
+interface NetModes { feed?: NetMode; manifest?: NetMode; download?: NetMode }
+
 /** Load AutoUpdater (win32) with a URL-routing net mock, fs mocked, window capture. */
 async function loadWin32(
   {
     sha = GOOD_SHA,
     tempFiles = {},
     appVersion = FAKE_VERSION,
-  }: { sha?: string; tempFiles?: Record<string, TempFile>; appVersion?: string } = {},
+    net: netModes = {},
+  }: { sha?: string; tempFiles?: Record<string, TempFile>; appVersion?: string; net?: NetModes } = {},
 ) {
   vi.resetModules();
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
@@ -62,14 +72,21 @@ async function loadWin32(
 
   // Route net.request by URL: feed → update JSON, manifest → manifest JSON,
   // download → 200 with Content-Length + body chunk.
+  const aborted: string[] = [];
   const request = vi.fn((url: string) => {
     requestUrls.push(url);
     const cbs: Record<string, (arg: unknown) => void> = {};
+    const kind = url.includes('update.electronjs.org') ? 'feed'
+      : url.includes('update-manifest.json') ? 'manifest' : 'download';
+    const mode = netModes[kind] ?? 'ok';
     const req = {
       on(ev: string, cb: (arg: unknown) => void) { cbs[ev] = cb; return req; },
+      abort() { aborted.push(url); },
       end() {
         Promise.resolve().then(() => {
-          if (url.includes('update.electronjs.org')) {
+          if (mode !== 'ok') {
+            misbehave(cbs, mode);
+          } else if (url.includes('update.electronjs.org')) {
             respondJson(cbs, { name: feed.version, notes: 'notes', url: DL_URL });
           } else if (url.includes('update-manifest.json')) {
             respondJson(cbs, { version: feed.version, setupExe: `wmux-${feed.version}.Setup.exe`, sha256: sha, url: DL_URL });
@@ -81,6 +98,18 @@ async function loadWin32(
     };
     return req;
   });
+
+  function misbehave(cbs: Record<string, (a: unknown) => void>, mode: NetMode) {
+    if (mode === 'stall') return;
+    const dataCbs: Record<string, (a: unknown) => void> = {};
+    const resp = { statusCode: 200, headers: {}, on(ev: string, cb: (a: unknown) => void) { dataCbs[ev] = cb; return resp; } };
+    cbs['response']?.(resp);
+    Promise.resolve().then(() => {
+      dataCbs['data']?.(Buffer.from('{"par'));
+      if (mode === 'aborted') dataCbs['aborted']?.(undefined);
+      if (mode === 'error') dataCbs['error']?.(new Error('net::ERR_CONNECTION_RESET'));
+    });
+  }
 
   function respondJson(cbs: Record<string, (a: unknown) => void>, obj: unknown) {
     const dataCbs: Record<string, (a: unknown) => void> = {};
@@ -211,7 +240,7 @@ async function loadWin32(
   }));
 
   const mod = await import('../AutoUpdater');
-  return { AutoUpdater: mod.AutoUpdater, requestUrls, ipcHandlers, sent, openPath, quit, win, feed, unlinkMock, teardown, tempFiles };
+  return { AutoUpdater: mod.AutoUpdater, requestUrls, ipcHandlers, sent, openPath, quit, win, feed, unlinkMock, teardown, tempFiles, aborted };
 }
 
 /** Flush queued microtasks so the chained net responses (feed→manifest→download) settle. */
@@ -646,5 +675,108 @@ describe('AutoUpdater temp artifact reuse (win32)', () => {
     await flush();
 
     expect(unlinkMock.mock.calls.some((c) => String(c[0]).includes(release))).toBe(false);
+  });
+});
+
+/**
+ * A check or a download that never settles holds isChecking / isDownloading
+ * forever, and every later check is skipped while either is set: one dropped
+ * connection used to stop updates until the app was restarted.
+ */
+describe('AutoUpdater requests always settle (win32)', () => {
+  interface Internals {
+    isChecking: boolean;
+    isDownloading: boolean;
+    check: (oneShot?: boolean) => Promise<void>;
+  }
+  const errors = (sent: Sent[]) => sent.filter((s) => s.channel === IPC.UPDATE_ERROR);
+
+  for (const mode of ['aborted', 'error'] as const) {
+    it(`a feed reply that ends in '${mode}' mid-body settles the check, and the next check runs`, async () => {
+      const { AutoUpdater, requestUrls, sent, win } = await loadWin32({ net: { feed: mode } });
+      const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+      await updater.check();
+      expect(updater.isChecking).toBe(false);
+      expect(errors(sent)).toHaveLength(1);
+
+      const before = requestUrls.length;
+      await updater.check();
+      expect(requestUrls.length).toBe(before + 1);
+    });
+  }
+
+  it('a feed request that never answers is aborted after 30 s and the check settles', async () => {
+    vi.useFakeTimers();
+    const { AutoUpdater, sent, win, aborted } = await loadWin32({ net: { feed: 'stall' } });
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    const pending = updater.check();
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(updater.isChecking).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending;
+
+    expect(updater.isChecking).toBe(false);
+    expect(aborted.some((u) => u.includes('update.electronjs.org'))).toBe(true);
+    expect(String(errors(sent)[0]?.data.message)).toContain('did not answer');
+  });
+
+  it('a stalled manifest request releases the download guard', async () => {
+    vi.useFakeTimers();
+    const { AutoUpdater, sent, win, aborted } = await loadWin32({ net: { manifest: 'stall-body' } });
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    await updater.check();
+    await flush();
+    expect(updater.isDownloading).toBe(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flush();
+
+    expect(updater.isDownloading).toBe(false);
+    expect(aborted.some((u) => u.includes('update-manifest.json'))).toBe(true);
+    expect(errors(sent)).toHaveLength(1);
+  });
+
+  it('a download that stops delivering bytes is aborted after the idle timeout and cleaned up', async () => {
+    vi.useFakeTimers();
+    const { AutoUpdater, sent, win, aborted, unlinkMock } = await loadWin32({ net: { download: 'stall-body' } });
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    await updater.check();
+    await flush();
+    expect(updater.isDownloading).toBe(true);
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(updater.isDownloading).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+
+    expect(updater.isDownloading).toBe(false);
+    expect(aborted).toContain(DL_URL);
+    expect(unlinkMock.mock.calls.some((c) => String(c[0]).includes('wmux-update-'))).toBe(true);
+    expect(String(errors(sent)[0]?.data.message)).toContain('stalled');
+  });
+
+  it('a download dropped mid-transfer releases the download guard', async () => {
+    const { AutoUpdater, sent, win } = await loadWin32({ net: { download: 'aborted' } });
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    await updater.check();
+    await flush();
+
+    expect(updater.isDownloading).toBe(false);
+    expect(String(errors(sent)[0]?.data.message)).toContain('dropped');
+  });
+
+  it('rejects a feed version that is not strict semver', async () => {
+    const { AutoUpdater, feed, requestUrls, sent, win } = await loadWin32();
+    feed.version = 'latest';
+    const updater = new AutoUpdater(() => win as never, quitHooks()) as unknown as Internals;
+
+    await updater.check();
+    await flush();
+
+    expect(String(errors(sent)[0]?.data.message)).toContain('invalid version');
+    expect(requestUrls.some((u) => u.includes('update-manifest.json'))).toBe(false);
   });
 });
