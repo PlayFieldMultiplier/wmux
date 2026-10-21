@@ -92,7 +92,8 @@ import { git } from '../git/git';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../worktask/stopSessionsInDir';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
-import { originDefaultRef, taskFolderFromMissions, worktreeFromMissions } from './verifyPreset';
+import { originDefaultRef, taskFolderFromMissions, taskMissionFromMissions, worktreeFromMissions } from './verifyPreset';
+import { setTaskApplyPorts } from './taskApply';
 import { completeCheckedTask, completeMergedTask, completeResearchTask, gateCardNoted, installTaskGate, recordNoChangesGate, worktreeHeadMerged } from './taskGate';
 import { liveNoChangesCheck } from './noChangesCheck';
 import { TaskBranchCache, setBotTaskSources } from './botTasks';
@@ -1051,6 +1052,14 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         },
       };
       setFactoryStopPorts(stopPorts);
+      // The owner's Apply to my checkout: a bot task's changes, unstaged, in
+      // the bot's repository folder (taskApply.ts).
+      setTaskApplyPorts({
+        row: (taskId) => ledger.get(taskId),
+        botRepoPath: (botId) => getBotDirectory()?.get(botId)?.repo?.repoPath,
+        taskBranch: async (entry) => (await taskMissionFromMissions(daemonRpc(daemon), entry))?.branch ?? null,
+        noHooksDir: path.join(deps.wmuxDir(), 'factory', 'no-hooks'),
+      });
       offTasks.push(installLateStopSweep({ ...stopPorts, onTransition: (fn) => ledger.onTransition(fn) }));
       offTasks.push(ledger.onTransition((t) => {
         if (t.entry.dispatch?.origin.kind === 'bot') pushBotsChanged();
@@ -1076,6 +1085,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       }
       setBotTaskSources(null);
       setFactoryStopPorts(null);
+      setTaskApplyPorts(null);
       offVerdicts?.();
       setVerdictedTasks(null);
       morning.dispose();

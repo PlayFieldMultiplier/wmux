@@ -1346,6 +1346,9 @@ const electronAPI = {
     // The owner resumes the stopped worker of an ended bot task.
     resumeWorker: (taskId: string) =>
       ipcRenderer.invoke(IPC.FACTORY_WORKER_RESUME, { taskId }) as Promise<import('../main/factory/workerReclaim').WorkerResumeResult>,
+    // The owner applies a bot task's changes to the bot's repository folder, unstaged.
+    applyTask: (taskId: string) =>
+      ipcRenderer.invoke(IPC.FACTORY_TASK_APPLY, { taskId }) as Promise<import('../shared/botTask').FactoryTaskApplyResult>,
     // Can the default bot engine (Claude) run here? Checked without a model turn.
     factoryEngineReadiness: () =>
       ipcRenderer.invoke(IPC.FACTORY_ENGINE_READINESS) as Promise<import('../shared/factoryEngine').FactoryEngineReadiness>,

@@ -102,9 +102,11 @@ export interface BotsWorkCardProps {
   /** The PR or issue chip, when the work is about one. */
   refChip?: React.ReactNode;
   onOpenThread: () => void;
+  /** An action under the foot (Apply to my checkout for a code task). */
+  action?: React.ReactNode;
 }
 
-export default function BotsWorkCard({ work, view, t, faceOf, nameOf, textOf, refChip, onOpenThread }: BotsWorkCardProps): React.ReactElement {
+export default function BotsWorkCard({ work, view, t, faceOf, nameOf, textOf, refChip, onOpenThread, action }: BotsWorkCardProps): React.ReactElement {
   const key = workKey(work);
   const [open, setOpen] = useState(() => expanded.has(key));
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -158,6 +160,7 @@ export default function BotsWorkCard({ work, view, t, faceOf, nameOf, textOf, re
           </button>
         )}
       </div>
+      {action}
       {open && (
         <div id={stepsId} className="wmux-bots-work-steps" data-bots-work-steps>
           <ol aria-label={t('botsPage.work.stepsLabel', { title: view.title ?? t('room.thread.handoff') })}>

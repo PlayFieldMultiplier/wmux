@@ -56,7 +56,7 @@
 
 import type { BotEngine, BotProfile, BotStatus, BotWorkerAgent } from '../../../shared/bot';
 import type { BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
-import type { BotTaskView, FactoryTaskFolderCleanResult, FactoryTaskFolderUsage } from '../../../shared/botTask';
+import type { BotTaskView, FactoryTaskApplyResult, FactoryTaskFolderCleanResult, FactoryTaskFolderUsage } from '../../../shared/botTask';
 import type { BotsPlanConsent, ClaudeAuthMode } from '../../../shared/factorySettings';
 import type { OwnerWorkflowCancelRequest, OwnerWorkflowCancelResult, OwnerWorkflowReadResult, OwnerWorkflowRequest } from '../../../shared/botWorkflow';
 import type {
@@ -147,6 +147,9 @@ export interface FactoryBotPort {
   /** Absent: no resume here. Relaunch the stopped worker of an ended task
    *  with the same conversation (main/factory/workerReclaim.ts). */
   resumeWorker?(taskId: string): Promise<{ ok: boolean; message?: string; workspaceId?: string; code?: string; cap?: number }>;
+  /** Absent: no Apply here. Writes a bot task's changes into the bot's
+   *  repository folder, unstaged (main/factory/taskApply.ts). */
+  applyTask?(taskId: string): Promise<FactoryTaskApplyResult>;
   /** Absent: no engine choice here. The engines a bot's workers may run on,
    *  and which are installed. */
   workerAgents?(): Promise<BotWorkerAgentOption[]>;
@@ -216,6 +219,7 @@ interface FactoryBridge {
   stopBot?: (botId: string) => Promise<FactoryStopResult>;
   stopTask?: (taskId: string) => Promise<FactoryStopResult>;
   resumeWorker?: (taskId: string) => Promise<{ ok: boolean; message?: string; workspaceId?: string; code?: string; cap?: number }>;
+  applyTask?: (taskId: string) => Promise<FactoryTaskApplyResult>;
   workerAgents?: () => Promise<BotWorkerAgentOption[]>;
   taskFolderUsage?: () => Promise<FactoryTaskFolderUsage | null>;
   cleanTaskFolders?: () => Promise<FactoryTaskFolderCleanResult>;
@@ -264,6 +268,7 @@ export function bridgeBotPort(): FactoryBotPort {
     ...(b.stopBot ? { stopBot: b.stopBot } : {}),
     ...(b.stopTask ? { stopTask: b.stopTask } : {}),
     ...(b.resumeWorker ? { resumeWorker: b.resumeWorker } : {}),
+    ...(b.applyTask ? { applyTask: b.applyTask } : {}),
     ...(b.workerAgents ? { workerAgents: b.workerAgents } : {}),
     ...(b.readWorkflows ? { readWorkflows: b.readWorkflows } : {}),
     ...(b.cancelWorkflow ? { cancelWorkflow: b.cancelWorkflow } : {}),
