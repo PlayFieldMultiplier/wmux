@@ -119,3 +119,49 @@ describe('JoinerSession status', () => {
     expect(stream).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe('JoinerSession server features', () => {
+  function withHello(data: unknown): { session: JoinerSession; seen: string[][] } {
+    const seen: string[][] = [];
+    const client: SessionClient = {
+      requestJson: async () => ({ status: 200, json: { ok: true, acked: 0 } }),
+      openStream: async function* (_p, { signal }) {
+        yield { event: 'hello', data };
+        await new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }));
+      },
+    };
+    const session = new JoinerSession({
+      hostId: HOST,
+      host: () => ({ v: 1, hostId: HOST, name: 'B', addresses: ['127.0.0.1'], port: 1, fingerprint256: 'AB', peerId: 'p', createdAt: 'x' }),
+      credential: () => ({ peerId: '22222222-2222-4222-8222-222222222222', secret: 'a'.repeat(43) }),
+      outbox: { epoch: 'e', head: () => undefined, openCount: () => 0, markSent: () => record(), markOutcomeUnknown: () => record(), ack: () => 0, refuse: () => record() },
+      accept: async () => ({ ok: true, duplicate: false }),
+      onRefused: () => undefined,
+      reconcileLinks: async () => undefined,
+      onStatus: () => undefined,
+      onServerFeatures: (f) => seen.push(f),
+      timing: { backoffMinMs: 100, backoffMaxMs: 400, livenessMs: 60_000 },
+      client: () => client,
+      log: () => undefined,
+    });
+    sessions.push(session);
+    return { session, seen };
+  }
+
+  it("keeps what the server's hello advertised, well-formed tokens only", async () => {
+    const { session, seen } = withHello({ epoch: 'e', features: ['images.1', 'link-offer.1', 'Bad Token'] });
+    expect(session.features()).toBeUndefined();
+    session.start();
+    await vi.waitFor(() => expect(seen).toHaveLength(1), { timeout: 5_000 });
+    expect(seen[0]).toEqual(['images.1', 'link-offer.1']);
+    expect(session.features()).toEqual(['images.1', 'link-offer.1']);
+    expect(session.current().features).toEqual(['images.1', 'link-offer.1']);
+  });
+
+  it('reads a hello without features (an older server) as taking none', async () => {
+    const { session, seen } = withHello({ epoch: 'e' });
+    session.start();
+    await vi.waitFor(() => expect(seen).toHaveLength(1), { timeout: 5_000 });
+    expect(session.features()).toEqual([]);
+  });
+});

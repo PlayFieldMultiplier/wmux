@@ -13,6 +13,8 @@ import {
   normalizeFingerprint256,
   parseInvite,
   parsePeerCredential,
+  parseA2aRemoteImageRefs,
+  A2A_REMOTE_IMAGE_LIMITS,
 } from '../a2aRemote';
 
 const FP = Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0').toUpperCase()).join(':');
@@ -185,5 +187,28 @@ describe('parseA2aFeatures', () => {
     expect(parseA2aFeatures('bad token,\u001b[31m,-lead,' + 'a'.repeat(40))).toEqual([]);
     expect(parseA2aFeatures(Array.from({ length: 40 }, (_, i) => `f${i}`).join(','))).toHaveLength(16);
     expect(parseA2aFeatures('x'.repeat(2000))).toEqual([]);
+  });
+});
+
+describe('parseA2aRemoteImageRefs', () => {
+  const ref = (n: number, bytes = 100): Record<string, unknown> => ({ sha256: n.toString(16).padStart(64, '0'), mediaType: 'image/png', bytes });
+
+  it('takes up to the count and byte limits, dropping unknown fields', () => {
+    expect(parseA2aRemoteImageRefs(undefined)).toBeUndefined();
+    expect(parseA2aRemoteImageRefs([{ ...ref(1), name: '../../x.sh', path: '/etc/passwd' }])).toEqual([ref(1)]);
+    const four = [1, 2, 3, 4].map((n) => ref(n, A2A_REMOTE_IMAGE_LIMITS.MESSAGE_MAX_BYTES / 4));
+    expect(parseA2aRemoteImageRefs(four)).toHaveLength(4);
+  });
+
+  it('refuses a malformed list or one over a limit', () => {
+    expect(parseA2aRemoteImageRefs([])).toBeNull();
+    expect(parseA2aRemoteImageRefs({})).toBeNull();
+    expect(parseA2aRemoteImageRefs([1, 2, 3, 4, 5].map((n) => ref(n)))).toBeNull();
+    expect(parseA2aRemoteImageRefs([ref(1), ref(1)])).toBeNull();
+    expect(parseA2aRemoteImageRefs([ref(1, A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES + 1)])).toBeNull();
+    expect(parseA2aRemoteImageRefs([1, 2, 3].map((n) => ref(n, A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES)))).toBeNull();
+    expect(parseA2aRemoteImageRefs([{ ...ref(1), mediaType: 'image/gif' }])).toBeNull();
+    expect(parseA2aRemoteImageRefs([{ ...ref(1), sha256: 'A'.repeat(64) }])).toBeNull();
+    expect(parseA2aRemoteImageRefs([{ ...ref(1), bytes: 0 }])).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import {
   A2A_ROUTES,
   formatPeerCredential,
+  parseA2aFeatures,
   type A2aOutboxRecordV1,
   type A2aRemoteDeliverResponse,
   type A2aRemoteErrorCode,
@@ -94,6 +95,8 @@ export interface JoinerSessionDeps {
   onStatus: (status: A2aRemoteHostStatus) => void;
   /** Optional features this PC advertises on every stream open (`A2A_FEATURES_HEADER`). */
   features?: readonly string[];
+  /** The server's stream `hello` said what it takes (none, from an older build). */
+  onServerFeatures?: (features: string[]) => void;
   timing?: Partial<SessionTiming>;
   /** Test seam; default `new PinnedTlsClient(opts)`. */
   client?: (opts: PinnedClientOptions) => SessionClient;
@@ -118,6 +121,8 @@ export class JoinerSession {
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private wakeStream: (() => void) | null = null;
   private loop: Promise<void> | null = null;
+  /** What the server's latest stream `hello` advertised; undefined until one arrived. */
+  private serverFeatures: string[] | undefined;
 
   constructor(deps: JoinerSessionDeps) {
     this.deps = deps;
@@ -127,7 +132,17 @@ export class JoinerSession {
   }
 
   current(): A2aRemoteHostStatus {
-    return { ...this.status, name: this.deps.host()?.name ?? this.status.name, pending: this.deps.outbox.openCount(this.deps.hostId) };
+    return {
+      ...this.status,
+      name: this.deps.host()?.name ?? this.status.name,
+      pending: this.deps.outbox.openCount(this.deps.hostId),
+      ...(this.serverFeatures ? { features: [...this.serverFeatures] } : {}),
+    };
+  }
+
+  /** What the server advertised on this session's latest stream; undefined before the first `hello`. */
+  features(): readonly string[] | undefined {
+    return this.serverFeatures;
   }
 
   start(): void {
@@ -197,6 +212,8 @@ export class JoinerSession {
         })) {
           alive();
           if (ev.event === 'hello') {
+            this.serverFeatures = parseA2aFeatures(isPlainObject(ev.data) && Array.isArray(ev.data['features']) ? ev.data['features'] : '');
+            this.deps.onServerFeatures?.([...this.serverFeatures]);
             this.streamBackoff = 0;
             this.setState('connected');
             void this.reconcile();
