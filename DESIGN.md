@@ -581,10 +581,15 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   connected by it. It grants nothing. A bot made from one has a Recipe row
   in its profile, above its connections: the recipe's name in the main
   text, then one line per service it needs — the name (main text once
-  connected, muted otherwise) and its state as a muted text button
-  (Connected, Sign in needed or Token needed, Not given to this bot, Tools
-  not picked, macOS and Linux only) that opens Plugins › Connectors — and,
-  while one is not connected, one muted hint. No colour: a state is words.
+  ready, muted otherwise) and its state as a muted text button (Checking…
+  until the library and its sign-in are read, Sign in needed or Token
+  needed, Not given to this bot, Tools not picked, Ready to try — "· with a
+  key" for a keyed connection — or macOS and Linux only) that opens
+  Plugins › Connectors — then, while one has a step left, one muted hint,
+  and once one is ready, one muted line saying wmux checks again when a
+  worker starts (read-only tools, the command sandbox) and the bot says in
+  the chat why if not. No colour: a state is words. No recipe offers a
+  schedule while a signed-in task can run only once per bot conversation.
   The first-run panel offers the same form under its repository line, as
   the muted text button "Start from a recipe…".
 - **Commands (2026-10-21):** under Memory, only where the bot runs

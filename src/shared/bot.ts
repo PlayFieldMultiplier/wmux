@@ -189,7 +189,8 @@ export interface BotProfile {
   template?: BotTemplate;
   /** The recipe "Add bot" started it from (shared/botRecipes.ts). Display
    *  only: its profile lists what the recipe's connections still need. It
-   *  grants nothing and is never updated. */
+   *  grants nothing and is never updated. An id this build does not know is
+   *  kept and not shown. */
   recipe?: string;
   /** Display name, e.g. "Wmux Dev". */
   name: string;

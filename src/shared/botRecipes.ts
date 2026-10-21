@@ -18,15 +18,13 @@
 // with its write tools blocked. A recipe never mixes it with a sign-in
 // service, since a task with a signed-in connection carries no other kind.
 //
-// A bot sets its own routines, and only on the owner's words
-// (main/pipe/handlers/routine.rpc.ts turnOnOwnerWords), so a suggested
-// schedule is never set here: the job asks the bot to offer it in its
-// greeting and to set it once the owner picks it.
+// No recipe offers a schedule yet: a signed-in task's result marks the bot's
+// conversation as having taken in outside text, and the gateway then refuses
+// the next signed-in task in it, so a routine would run once.
 
 import type { BotTemplate } from './bot';
 import type { Connector, ConnectorPresetId } from './botConnector';
 import { connectorsForBot } from './botConnector';
-import type { RoutineSchedule } from './botRoutine';
 import { CONNECTOR_SERVICES } from './connectorServices';
 
 /** A connection a recipe needs: a CONNECTOR_SERVICES id, or a preset id. */
@@ -39,18 +37,16 @@ export interface BotRecipe {
   /** i18n key of its one-line description. */
   hintKey: string;
   /** i18n key of what the job asks for; the full job adds the shared
-   *  how-to-work lines (renderer botRecipeView.ts recipeJob). */
+   *  how-to-work lines (renderer Bots/BotRecipes.tsx recipeJob). */
   jobKey: string;
   /** The template the bot is made from. Never 'researcher': its tasks are
    *  always counted as started from outside text, which the gateway refuses. */
   template: BotTemplate;
   /** The connections it needs, in the order they are listed. */
   connectors: readonly BotRecipeConnector[];
-  /** When the job suggests the bot run on its own (offered, never set here). */
-  suggestedSchedule?: RoutineSchedule;
 }
 
-function recipe(id: string, connectors: readonly BotRecipeConnector[], suggestedSchedule?: RoutineSchedule): BotRecipe {
+function recipe(id: string, connectors: readonly BotRecipeConnector[]): BotRecipe {
   return {
     id,
     titleKey: `botRecipes.${id}.title`,
@@ -59,32 +55,33 @@ function recipe(id: string, connectors: readonly BotRecipeConnector[], suggested
     // Custom: no template default moves the bot's model or grants a power.
     template: 'custom',
     connectors,
-    ...(suggestedSchedule ? { suggestedSchedule } : {}),
   };
 }
-
-const WEEKDAYS = [1, 2, 3, 4, 5];
-const at = (hour: number, minute: number, weekdays: number[]): RoutineSchedule => ({ kind: 'daily', hour, minute, weekdays });
 
 /** One-click sign-in services first, then the GitHub preset, then the
  *  services that need the owner's own OAuth client. */
 export const BOT_RECIPES: readonly BotRecipe[] = [
-  recipe('notionMeetingDigest', ['notion'], at(9, 0, [1])),
-  recipe('notionStalePages', ['notion'], at(16, 0, [5])),
+  recipe('notionMeetingDigest', ['notion']),
+  recipe('notionStalePages', ['notion']),
   recipe('figmaHandoff', ['figma']),
   recipe('canvaCopyCheck', ['canva']),
-  recipe('linearStandup', ['linear'], at(9, 0, WEEKDAYS)),
-  recipe('atlassianSprint', ['atlassian'], at(9, 0, [1])),
-  recipe('asanaDueSoon', ['asana'], at(8, 30, WEEKDAYS)),
-  recipe('githubWeek', ['github'], at(9, 0, [1])),
-  recipe('gmailTriage', ['gmail'], at(8, 0, WEEKDAYS)),
-  recipe('meetingPrep', ['google-calendar', 'gmail'], at(8, 0, WEEKDAYS)),
+  recipe('linearStandup', ['linear']),
+  recipe('atlassianSprint', ['atlassian']),
+  recipe('asanaDueSoon', ['asana']),
+  recipe('githubWeek', ['github']),
+  recipe('gmailTriage', ['gmail']),
+  recipe('meetingPrep', ['google-calendar', 'gmail']),
   recipe('freeSlots', ['google-calendar']),
-  recipe('sheetReport', ['google-sheets'], at(9, 0, [1])),
+  recipe('sheetReport', ['google-sheets']),
   recipe('driveStaleFiles', ['google-drive']),
-  recipe('slackCatchUp', ['slack'], at(9, 0, WEEKDAYS)),
-  recipe('slackDecisions', ['slack'], at(16, 0, [5])),
+  recipe('slackCatchUp', ['slack']),
+  recipe('slackDecisions', ['slack']),
 ];
+
+/** The shape of a recipe id as a profile stores it. An id of this shape
+ *  that this build does not know is kept (a newer build wrote it) and
+ *  simply not shown. */
+export const BOT_RECIPE_ID_RE = /^[a-z][A-Za-z0-9]{0,39}$/;
 
 /** The presets a recipe may name, with their display names. */
 const PRESET_NAMES: Readonly<Partial<Record<ConnectorPresetId, string>>> = { github: 'GitHub' };
@@ -120,54 +117,74 @@ export function connectorServes(id: BotRecipeConnector, c: Pick<Connector, 'tran
   return id in PRESET_NAMES && c.preset === id;
 }
 
+/** Whether a connection is signed in rather than keyed: a catalog endpoint
+ *  over http with no keys and no credential header, the test main's gateway
+ *  applies (main/connectors/workerGateway.ts isSignInService). Pure. */
+export function connectorSignsIn(c: Pick<Connector, 'transport' | 'remote' | 'secrets'>): boolean {
+  if (c.transport !== 'http' || !c.remote || c.secrets.length > 0) return false;
+  if (Object.keys(c.remote.headers).some((h) => /authorization|cookie/i.test(h))) return false;
+  return CONNECTOR_SERVICES.some((s) => s.url === c.remote!.url);
+}
+
 /** Where one of a recipe's connections stands for one bot, as its next step:
  *  platform    Windows: no connection reaches a bot's worker there yet.
- *  signIn      the library has none, or it is not signed in (a service) or
- *              its key is not stored (the GitHub preset).
- *  checking    its sign-in is being read.
+ *  checking    the library or a sign-in is still being read.
+ *  signIn      the library has none, or it is not signed in (a sign-in
+ *              service) or its key is not stored (a keyed connection).
  *  notForBot   it is off, or not given to this bot.
- *  toolsNotPicked  a service with no tools picked (a worker gets only the
- *              tools the owner picked), or a preset listing none.
- *  connected   it applies to this bot, ready for a worker. */
-export type RecipeConnectorState = 'platform' | 'signIn' | 'checking' | 'notForBot' | 'toolsNotPicked' | 'connected';
+ *  toolsNotPicked  no tools picked: a signed-in connection serves only the
+ *              tools the owner listed, and a keyed one listing none has none.
+ *  ready       nothing left here. Main still checks at the worker's start
+ *              (each picked tool marked read-only by the service, the
+ *              command sandbox), so this is "ready to try", not a promise. */
+export type RecipeConnectorState = 'platform' | 'checking' | 'signIn' | 'notForBot' | 'toolsNotPicked' | 'ready';
 
 /** How far along each state is: the best of a service's connections wins. */
 const PROGRESS: Readonly<Record<RecipeConnectorState, number>> = {
-  platform: -1, signIn: 0, checking: 1, notForBot: 2, toolsNotPicked: 3, connected: 4,
+  platform: -1, signIn: 0, checking: 1, notForBot: 2, toolsNotPicked: 3, ready: 4,
 };
 
 export interface RecipeConnectorContext {
-  library: readonly (Connector & { missingKeys?: readonly string[] })[];
+  /** The library; null while it is still being read. */
+  library: readonly (Connector & { missingKeys?: readonly string[] })[] | null;
   botId: string;
   platform: string | undefined;
-  /** A service connection's sign-in: true signed in, false not, undefined
+  /** A signed-in connection's sign-in: true signed in, false not, undefined
    *  not read yet. */
   signedIn: (connectorId: string) => boolean | undefined;
 }
 
+export interface RecipeConnectorRow {
+  id: BotRecipeConnector;
+  name: string;
+  state: RecipeConnectorState;
+  /** How the connection that state is about authenticates (absent: there
+   *  is none yet). */
+  via?: 'signIn' | 'key';
+}
+
 /** One connection's state for a bot. Pure. */
-export function recipeConnectorState(id: BotRecipeConnector, ctx: RecipeConnectorContext): RecipeConnectorState {
-  if (ctx.platform === 'win32') return 'platform';
-  const isService = CONNECTOR_SERVICES.some((s) => s.id === id);
-  let best: RecipeConnectorState = 'signIn';
+export function recipeConnectorState(id: BotRecipeConnector, ctx: RecipeConnectorContext): Omit<RecipeConnectorRow, 'id' | 'name'> {
+  if (ctx.platform === 'win32') return { state: 'platform' };
+  if (!ctx.library) return { state: 'checking' };
+  let best: Omit<RecipeConnectorRow, 'id' | 'name'> = { state: 'signIn' };
   for (const c of ctx.library) {
     if (!connectorServes(id, c)) continue;
-    const signed = isService ? ctx.signedIn(c.id) : (c.missingKeys ?? []).length === 0;
+    const via = connectorSignsIn(c) ? 'signIn' as const : 'key' as const;
+    const signed = via === 'signIn' ? ctx.signedIn(c.id) : (c.missingKeys ?? []).length === 0;
     let state: RecipeConnectorState;
     if (signed === false) state = 'signIn';
     else if (signed === undefined) state = 'checking';
     else if (connectorsForBot([c], ctx.botId).length === 0) state = 'notForBot';
-    else if (c.tools.mode === 'listed' ? c.tools.allowed.length === 0 : isService) state = 'toolsNotPicked';
-    else state = 'connected';
-    if (PROGRESS[state] > PROGRESS[best]) best = state;
+    else if (c.tools.mode === 'listed' ? c.tools.allowed.length === 0 : via === 'signIn') state = 'toolsNotPicked';
+    else state = 'ready';
+    // The first connection found replaces "none yet" even at the same step.
+    if (best.via === undefined || PROGRESS[state] > PROGRESS[best.state]) best = { state, via };
   }
   return best;
 }
 
 /** Each connection a recipe needs, its name and its state for one bot. Pure. */
-export function recipeChecklist(
-  r: Pick<BotRecipe, 'connectors'>,
-  ctx: RecipeConnectorContext,
-): { id: BotRecipeConnector; name: string; state: RecipeConnectorState }[] {
-  return r.connectors.map((id) => ({ id, name: recipeConnectorName(id) ?? id, state: recipeConnectorState(id, ctx) }));
+export function recipeChecklist(r: Pick<BotRecipe, 'connectors'>, ctx: RecipeConnectorContext): RecipeConnectorRow[] {
+  return r.connectors.map((id) => ({ id, name: recipeConnectorName(id) ?? id, ...recipeConnectorState(id, ctx) }));
 }

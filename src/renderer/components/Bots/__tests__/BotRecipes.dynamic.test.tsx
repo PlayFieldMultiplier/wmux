@@ -22,7 +22,6 @@ import { setFactoryBotPort, type FactoryBotPort } from '../../Room/factoryPorts'
 import type { BotConnectorPort } from '../../Room/botConnectors';
 import { AddBotForm } from '../../Settings/FactoryTab';
 import { BotRecipeChecklist, recipeJob } from '../BotRecipes';
-import { routineScheduleText } from '../../Schedules/BotRoutines';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -35,7 +34,8 @@ describe('the recipe catalog in every shipped language', () => {
 
   it('has each recipe\'s title, hint and job, and the shared lines, in en, ko, pl and zh', () => {
     const keys = [
-      'botRecipes.common.work', 'botRecipes.common.refused', 'botRecipes.common.schedule',
+      'botRecipes.common.work', 'botRecipes.common.refused',
+      'botsPage.profile.recipeState.ready', 'botsPage.profile.recipeState.readyKey', 'botsPage.profile.recipeReadyNote',
       ...BOT_RECIPES.flatMap((r) => [r.titleKey, r.hintKey, r.jobKey]),
     ];
     for (const [loc, dict] of Object.entries(LOCALES)) {
@@ -43,7 +43,7 @@ describe('the recipe catalog in every shipped language', () => {
     }
   });
 
-  it('makes a job the bot store keeps, naming its connections and offering its schedule, in every language', () => {
+  it('makes a job the bot store keeps, naming its connections and offering no schedule, in every language', () => {
     for (const loc of Object.keys(LOCALES) as Locale[]) {
       setLocale(loc);
       for (const r of BOT_RECIPES) {
@@ -54,8 +54,8 @@ describe('the recipe catalog in every shipped language', () => {
         expect(job).toContain('Bash');
         expect(job).not.toMatch(/\{[a-z]+\}/);
         for (const id of r.connectors) expect(job).toContain(recipeConnectorName(id));
-        if (r.suggestedSchedule) expect(job).toContain(routineScheduleText(r.suggestedSchedule));
-        expect(job.split('\n\n')).toHaveLength(r.suggestedSchedule ? 4 : 3);
+        expect(job.split('\n\n')).toHaveLength(3);
+        expect(job).not.toMatch(/routine|09:00/i);
       }
     }
   });
@@ -97,7 +97,9 @@ describe('BotRecipeChecklist', () => {
     const bot = { id: BOT, recipe: 'meetingPrep', template: 'custom' as const, role: 'lead' as const };
     await act(async () => root.render(<BotRecipeChecklist bot={bot} t={t} port={connectorPort([calendar, gmail])} oauthStatus={oauthStatus} platform="darwin" />));
     const state = (id: string) => host.querySelector(`[data-recipe-connector="${id}"]`)?.getAttribute('data-state');
-    expect(state('google-calendar')).toBe('connected');
+    expect(state('google-calendar')).toBe('ready');
+    expect(host.querySelector('[data-testid="bot-recipe-state-google-calendar"]')!.textContent).toBe(en['botsPage.profile.recipeState.ready']);
+    expect(host.querySelector('[data-recipe-ready-note]')).not.toBeNull();
     expect(state('gmail')).toBe('signIn');
     expect(host.textContent).toContain(en['botRecipes.meetingPrep.title']);
     expect(host.querySelector('[data-testid="bot-recipe-state-gmail"]')!.textContent).toBe(`${en['botsPage.profile.recipeState.signIn']} · ${en['botsPage.profile.recipeOwnClient']}`);
@@ -105,6 +107,39 @@ describe('BotRecipeChecklist', () => {
     await act(async () => (host.querySelector('[data-testid="bot-recipe-state-gmail"]') as HTMLButtonElement).click());
     expect(useStore.getState().appRoute).toBe('plugins');
     expect(useStore.getState().pluginsSelection).toBe('connectors');
+  });
+
+  it('reads "Checking…" until the library is read, never a sign-in it has not seen', async () => {
+    let answer: (r: { ok: true; connectors: ConnectorView[] }) => void = () => undefined;
+    const port = { ...connectorPort([]), list: () => new Promise((resolve) => { answer = resolve; }) } as unknown as BotConnectorPort;
+    const bot = { id: BOT, recipe: 'notionMeetingDigest', template: 'custom' as const, role: 'lead' as const };
+    await act(async () => root.render(<BotRecipeChecklist bot={bot} t={t} port={port} oauthStatus={vi.fn()} platform="darwin" />));
+    expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('checking');
+    expect(host.textContent).not.toContain(en['botsPage.profile.recipeState.signIn']);
+    await act(async () => answer({ ok: true, connectors: [] }));
+    expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('signIn');
+  });
+
+  it('reads a busy sign-in again, and without the sign-in bridge says sign in needed instead of checking', async () => {
+    vi.useFakeTimers();
+    try {
+      const c = connector('notion', { id: 'con-000000d1', enabled: true, scope: { kind: 'bots', botIds: [BOT] }, tools: { mode: 'listed', allowed: ['notion-search'] } });
+      const answers: ConnectorOAuthStatus[] = ['busy', 'authorized'];
+      const oauthStatus = vi.fn(async () => ({ status: answers.shift() ?? 'authorized' }));
+      const bot = { id: BOT, recipe: 'notionMeetingDigest', template: 'custom' as const, role: 'lead' as const };
+      await act(async () => root.render(<BotRecipeChecklist bot={bot} t={t} port={connectorPort([c])} oauthStatus={oauthStatus} platform="darwin" />));
+      expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('checking');
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(oauthStatus).toHaveBeenCalledTimes(2);
+      expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('ready');
+      act(() => root.unmount());
+      root = createRoot(host);
+      await act(async () => root.render(<BotRecipeChecklist bot={bot} t={t} port={connectorPort([c])} oauthStatus={undefined} platform="darwin" />));
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('signIn');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('says macOS and Linux only on Windows, and nothing for a bot without a recipe or no longer of its template', async () => {
@@ -120,6 +155,26 @@ describe('BotRecipeChecklist', () => {
 });
 
 describe('Add bot\'s Recipe select', () => {
+  it('a template chip pressed after a recipe sends that template and no recipe', async () => {
+    const create = vi.fn(async (_req: FactoryBotCreateRequest) => ({ ok: false as const, code: 'invalid_argument' as const, message: 'stop' }));
+    const port = { available: true, list: async () => [], subscribe: () => () => undefined, act: async () => ({ ok: true }), create } as unknown as FactoryBotPort;
+    await act(async () => root.render(<AddBotForm t={t} port={port} rows={[]} workspaces={[{ id: 'ws-a', name: 'App' }] as never} defaultWorkspaceId="ws-a" pickFolder={async () => null} onDone={() => undefined} />));
+    const select = host.querySelector('[data-testid="factory-add-bot-recipe"]') as HTMLSelectElement;
+    await act(async () => { select.value = 'githubWeek'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => (host.querySelector('[data-template="developer"]') as HTMLButtonElement).click());
+    expect(select.value).toBe('');
+    const name = host.querySelector('[data-testid="factory-add-bot-name"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Dev');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => (host.querySelector('[data-testid="factory-add-bot-submit"]') as HTMLButtonElement).click());
+    const req = create.mock.calls[0][0];
+    expect(req.template).toBe('developer');
+    expect(req).not.toHaveProperty('recipe');
+    expect(req.job).toBe(t('botsPage.templateJob.developer'));
+  });
+
   it('prefills the job, clears a template chip, and sends the recipe with its template', async () => {
     const create = vi.fn(async (_req: FactoryBotCreateRequest) => ({ ok: false as const, code: 'invalid_argument' as const, message: 'stop' }));
     const port = { available: true, list: async () => [], subscribe: () => () => undefined, act: async () => ({ ok: true }), create } as unknown as FactoryBotPort;

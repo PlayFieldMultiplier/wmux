@@ -73,7 +73,7 @@ import { emptyUsage, pruneUsage, sanitizeUsage, type BotUsage } from './budget';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
 import { LEGACY_TRIAGE_TRIGGERS, LEGACY_VERIFIER_TRIGGERS, defaultTriggers } from './roleDefaults';
 import { parseBotAvatar } from './botAvatar';
-import { botRecipe } from '../../shared/botRecipes';
+import { BOT_RECIPE_ID_RE, botRecipe } from '../../shared/botRecipes';
 import { validateBotWorkerAgent } from '../../shared/botWorkerAgent';
 import { BOT_BRAIN_MODEL_MAX, validateBotBrainModel, validateFanoutModel } from '../../shared/fanoutPreset';
 import { ROLE_BINDING_MODEL_MAX } from '../../shared/orchestratorRole';
@@ -319,8 +319,9 @@ export function parseBotProfile(raw: unknown): BotProfile | null {
     workspaceId: r.workspaceId as string,
     role: r.role,
     template,
-    // A recipe this build does not know is dropped (it only drew a list).
-    ...(botRecipe(r.recipe) ? { recipe: r.recipe as string } : {}),
+    // A recipe id this build does not know is kept (a newer build wrote it,
+    // and a save here must not erase it); the profile just does not show it.
+    ...(typeof r.recipe === 'string' && BOT_RECIPE_ID_RE.test(r.recipe) ? { recipe: r.recipe } : {}),
     name,
     ...(job ? { job } : {}),
     engine,

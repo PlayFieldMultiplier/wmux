@@ -4,9 +4,10 @@
 // connections that job needs; it grants nothing. Add bot shows a Recipe
 // select over the template chips, with one muted line on what the recipe
 // reads and what it needs. The bot keeps the recipe's id, and its profile
-// lists each of those connections with where it stands — connected, sign in
-// needed, not given to this bot, tools not picked, or macOS and Linux only —
-// each a link to Plugins › Connectors, where the owner sets it up.
+// lists each of those connections with where it stands — checking, sign in
+// (or key) needed, not given to this bot, tools not picked, ready to try, or
+// macOS and Linux only — each a link to Plugins › Connectors, where the owner
+// sets it up.
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../../stores';
 import { FOCUS_RING } from '../focusRing';
@@ -18,15 +19,15 @@ import {
   BOT_RECIPES,
   botRecipe,
   connectorServes,
+  connectorSignsIn,
   recipeChecklist,
   recipeConnectorName,
   recipeConnectorNeedsOwnClient,
   recipeNeedsOwnClient,
   type BotRecipe,
-  type RecipeConnectorState,
+  type RecipeConnectorRow,
 } from '../../../shared/botRecipes';
 import { CONNECTOR_SERVICES } from '../../../shared/connectorServices';
-import { routineScheduleText } from '../Schedules/BotRoutines';
 import { getBotConnectorPort, useBotConnectors, type BotConnectorPort } from '../Room/botConnectors';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -37,17 +38,15 @@ function connectionNames(r: Pick<BotRecipe, 'connectors'>): string {
 }
 
 /** The job a recipe prefills, in the owner's language: what it asks for,
- *  then how to work (the research preset, its connections only, reads only,
- *  writes drafted in the chat), what to say when a worker is refused, and,
- *  with a suggested schedule, the offer to make in the greeting. Pure. */
+ *  then how to work (the research preset, its connections only, files
+ *  through Bash, reads only, writes drafted in the chat) and what to say
+ *  when a worker is refused. Pure. */
 export function recipeJob(r: BotRecipe, t: T): string {
-  const parts = [
+  return [
     t(r.jobKey),
     t('botRecipes.common.work', { connections: connectionNames(r) }),
     t('botRecipes.common.refused'),
-  ];
-  if (r.suggestedSchedule) parts.push(t('botRecipes.common.schedule', { schedule: routineScheduleText(r.suggestedSchedule) }));
-  return parts.join('\n\n');
+  ].join('\n\n');
 }
 
 /** The recipe groups of the picker, in catalog order: one-click sign-in,
@@ -101,7 +100,7 @@ export function RecipePicker({ value, onChange, t, platform }: {
 }
 
 /** A sign-in status as the checklist reads it: signed in, not, or not
- *  known yet (busy). Pure. */
+ *  known yet (busy: read again). Pure. */
 export function signedInOf(status: ConnectorOAuthStatus | undefined): boolean | undefined {
   if (status === undefined || status === 'busy') return undefined;
   return status === 'authorized';
@@ -114,27 +113,39 @@ function oauthBridge(): OAuthAction | undefined {
   return api?.connectorOAuth?.action;
 }
 
-/** The sign-in status of each library connection a recipe names (catalog
- *  services only), read again whenever one of them changes. */
-function useSignIns(r: BotRecipe, library: readonly ConnectorView[], status: OAuthAction | undefined): Record<string, ConnectorOAuthStatus> {
+/** How long a busy sign-in waits before it is read again, and how often. */
+const BUSY_REREAD_MS = 1500;
+const BUSY_REREADS = 8;
+
+/** The sign-in status of each signed-in connection a recipe names, read
+ *  again whenever one of them changes, and again while main answers busy
+ *  (a refresh in flight). Without the sign-in bridge every one reads
+ *  'unavailable': not signed in, never "checking" for good. */
+function useSignIns(r: BotRecipe, library: readonly ConnectorView[] | null, status: OAuthAction | undefined): Record<string, ConnectorOAuthStatus> {
   const services = useMemo(
-    () => library.filter((c) => r.connectors.some((id) => CONNECTOR_SERVICES.some((s) => s.id === id) && connectorServes(id, c))),
+    () => (library ?? []).filter((c) => connectorSignsIn(c) && r.connectors.some((id) => connectorServes(id, c))),
     [library, r],
   );
   const key = services.map((c) => `${c.id}:${c.updatedAt}`).join(',');
   const [statuses, setStatuses] = useState<Record<string, ConnectorOAuthStatus>>({});
+  const [rereads, setRereads] = useState(0);
+  useEffect(() => setRereads(0), [key]);
   useEffect(() => {
-    if (!status || services.length === 0) return undefined;
-    let live = true;
-    for (const c of services) {
-      status('status', c.id).then(
-        (res) => { if (live) setStatuses((cur) => ({ ...cur, [c.id]: res.status })); },
-        () => { if (live) setStatuses((cur) => ({ ...cur, [c.id]: 'unavailable' })); },
-      );
+    if (services.length === 0) return undefined;
+    if (!status) {
+      setStatuses(Object.fromEntries(services.map((c) => [c.id, 'unavailable' as const])));
+      return undefined;
     }
-    return () => { live = false; };
+    let live = true;
+    let timer: number | undefined;
+    void Promise.all(services.map((c) => status('status', c.id).then((res) => res.status, () => 'unavailable' as const))).then((read) => {
+      if (!live) return;
+      setStatuses((cur) => ({ ...cur, ...Object.fromEntries(services.map((c, i) => [c.id, read[i]])) }));
+      if (read.includes('busy') && rereads < BUSY_REREADS) timer = window.setTimeout(() => setRereads((n) => n + 1), BUSY_REREAD_MS);
+    });
+    return () => { live = false; if (timer !== undefined) window.clearTimeout(timer); };
     // `key` names the connections and their versions; `services` follows it.
-  }, [key, status]);
+  }, [key, status, rereads]);
   return statuses;
 }
 
@@ -142,10 +153,13 @@ function openConnectors(): void {
   useStore.getState().setAppRoute('connectors');
 }
 
-/** The state word of one checklist row. A preset's sign-in is its key. */
-function stateLabel(id: string, state: RecipeConnectorState, t: T): string {
-  if (state === 'signIn' && !CONNECTOR_SERVICES.some((s) => s.id === id)) return t('botsPage.profile.recipeState.keyNeeded');
-  return t(`botsPage.profile.recipeState.${state}`);
+/** The state word of one checklist row: a keyed connection (the GitHub
+ *  preset, or a service set up with a key) needs its key, not a sign-in. */
+function stateLabel(row: RecipeConnectorRow, t: T): string {
+  const keyed = row.via === 'key' || (row.via === undefined && !CONNECTOR_SERVICES.some((s) => s.id === row.id));
+  if (row.state === 'signIn' && keyed) return t('botsPage.profile.recipeState.keyNeeded');
+  if (row.state === 'ready' && row.via === 'key') return t('botsPage.profile.recipeState.readyKey');
+  return t(`botsPage.profile.recipeState.${row.state}`);
 }
 
 /** The profile's Recipe row: the recipe's name, then one line per
@@ -172,10 +186,14 @@ function RecipeChecklist({ bot, recipe: r, t, port = getBotConnectorPort(), oaut
   oauthStatus?: OAuthAction;
   platform?: string;
 }): React.ReactElement {
-  const { connectors } = useBotConnectors(port);
-  const statuses = useSignIns(r, connectors, oauthStatus);
+  const { connectors, loaded } = useBotConnectors(port);
+  // Until the library is read nothing is known: "Checking…", never a
+  // "Sign in needed" that flips a moment later. A build without the library
+  // reads as an empty one.
+  const library = !port.available ? [] : loaded ? connectors : null;
+  const statuses = useSignIns(r, library, oauthStatus);
   const os = platform ?? (globalThis as { electronAPI?: { platform?: string } }).electronAPI?.platform;
-  const rows = recipeChecklist(r, { library: connectors, botId: bot.id, platform: os, signedIn: (id) => signedInOf(statuses[id]) });
+  const rows = recipeChecklist(r, { library, botId: bot.id, platform: os, signedIn: (id) => signedInOf(statuses[id]) });
   return (
     <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-recipe={r.id}>
       <span className="w-[112px] shrink-0 text-[var(--text-muted)]">{t('botsPage.profile.recipe')}</span>
@@ -183,11 +201,11 @@ function RecipeChecklist({ bot, recipe: r, t, port = getBotConnectorPort(), oaut
         <p className="truncate text-[var(--text-main)]">{t(r.titleKey)}</p>
         <ul className="space-y-0.5">
           {rows.map((row) => {
-            const label = stateLabel(row.id, row.state, t);
-            const ownClient = row.state === 'signIn' && recipeConnectorNeedsOwnClient(row.id);
+            const label = stateLabel(row, t);
+            const ownClient = row.state === 'signIn' && row.via !== 'key' && recipeConnectorNeedsOwnClient(row.id);
             return (
               <li key={row.id} data-recipe-connector={row.id} data-state={row.state} className="flex items-baseline gap-2">
-                <span className={`min-w-0 truncate ${row.state === 'connected' ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)]'}`}>{row.name}</span>
+                <span className={`min-w-0 truncate ${row.state === 'ready' ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)]'}`}>{row.name}</span>
                 <button
                   type="button"
                   data-testid={`bot-recipe-state-${row.id}`}
@@ -201,7 +219,8 @@ function RecipeChecklist({ bot, recipe: r, t, port = getBotConnectorPort(), oaut
             );
           })}
         </ul>
-        {rows.some((row) => row.state !== 'connected') && <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">{t('botsPage.profile.recipeHint')}</p>}
+        {rows.some((row) => row.state !== 'ready' && row.state !== 'checking' && row.state !== 'platform') && <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">{t('botsPage.profile.recipeHint')}</p>}
+        {rows.some((row) => row.state === 'ready') && <p data-recipe-ready-note className="mt-0.5 text-[11px] text-[var(--text-muted)]">{t('botsPage.profile.recipeReadyNote')}</p>}
       </div>
     </div>
   );
