@@ -263,10 +263,11 @@ describe('room.post', () => {
     const enqueue = s.ports.wakes!.enqueue;
     s.ports.wakes = { enqueue: (i) => (full.has(i.botId) ? null : enqueue(i)) };
     expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'queue_full' });
-    // A bot joins before the retry: the first card still names its two.
+    // A bot joins before the retry: the first card still names its two, and
+    // the retry wakes them as the room's bots whatever it names itself.
     bots.push(bot('ws1', 'moa', { template: 'coordinator' }));
     full.clear();
-    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode' }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true });
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Hi', clientPostId: 'cm-mode', mentions: [issue.id] }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true, card: { routed: 'room' } });
     const flags = (w: (typeof s.wakes)[number]) => (w.reason.kind === 'human' ? [w.reason.room, w.reason.roomWide, w.reason.lead] : null);
     expect(s.wakes.map((w) => [w.botId, flags(w)])).toEqual([[dev.id, [true, true, undefined]], [issue.id, [true, true, undefined]]]);
     // An untagged message in a room with a coordinator wakes the coordinator
@@ -276,14 +277,20 @@ describe('room.post', () => {
     expect(next).toMatchObject({ ok: true, addressees: [{ botId: coordinator.id }], card: { refs: { botIds: [coordinator.id], botId: coordinator.id } } });
     expect(s.wakes.slice(2).map((w) => [w.botId, flags(w)])).toEqual([[coordinator.id, [undefined, undefined, true]]]);
     expect(s.facts.at(-1)).toMatchObject({ ref: { botId: coordinator.id }, payload: { lead: true } });
-    // Its retry is the coordinator's again.
+    expect(next.card.routed).toBe('lead');
+    // Its retry is the coordinator's again, as its card recorded, even with
+    // other fields and a template changed since.
     full.add(coordinator.id);
     expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Again', clientPostId: 'cm-lead-2' }, OPERATOR, s.deps)).toMatchObject({ ok: false, code: 'queue_full' });
     full.clear();
-    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Again', clientPostId: 'cm-lead-2' }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true });
+    coordinator.template = 'developer';
+    expect(await handleRoomPost({ workspaceId: 'ws1', title: 'Again', clientPostId: 'cm-lead-2', mentions: [dev.id] }, OPERATOR, s.deps)).toMatchObject({ ok: true, duplicate: true });
+    coordinator.template = 'coordinator';
     expect(s.wakes.slice(3).map((w) => [w.botId, flags(w)])).toEqual([[coordinator.id, [undefined, undefined, true]]]);
-    // Mentions still wake exactly the bots named, the coordinator left out.
-    await handleRoomPost({ workspaceId: 'ws1', title: 'You two', mentions: [dev.id, issue.id] }, OPERATOR, s.deps);
+    // Mentions still wake exactly the bots named, the coordinator left out;
+    // the card records no routing.
+    const named = await handleRoomPost({ workspaceId: 'ws1', title: 'You two', mentions: [dev.id, issue.id] }, OPERATOR, s.deps) as { card: RoomCard };
+    expect(named.card.routed).toBeUndefined();
     expect(s.wakes.slice(4).map((w) => [w.botId, flags(w)])).toEqual([[dev.id, [true, undefined, undefined]], [issue.id, [true, undefined, undefined]]]);
   });
 

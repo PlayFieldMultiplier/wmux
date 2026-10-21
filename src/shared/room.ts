@@ -194,6 +194,12 @@ export interface RoomCard {
   /** Main-written, `human` cards only: the photos the owner sent with the
    *  message (shared/roomAttachments.ts). Never set by a room.post param. */
   attachments?: RoomAttachment[];
+  /** Main-written, `human` cards only: how a message that named no bot was
+   *  routed (main/factory/humanMessage.ts) — to the room's coordinator
+   *  alone (`lead`), or to every bot of a room without one (`room`). A
+   *  retry of its clientPostId wakes the missing addressees the same way.
+   *  Never set by a room.post param. */
+  routed?: 'lead' | 'room';
   /** Main-written, bot cards only: the files the bot attached with
    *  room_post `files`, as stored copies (shared/roomFiles.ts). */
   files?: RoomFile[];

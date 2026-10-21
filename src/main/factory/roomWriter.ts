@@ -536,6 +536,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
   const jobChange = c.kind === 'job_changed' ? sanitizeJobChange(c.jobChange) : undefined;
   const notice = actor.kind === 'system' ? sanitizeNotice(c.notice) : undefined;
   const attachments = c.kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(c.attachments) : undefined;
+  const routed = c.kind === 'human' && actor.kind === 'human' && (c.routed === 'lead' || c.routed === 'room') ? c.routed : undefined;
   const files = actor.kind === 'bot' ? parseRoomFiles(c.files) : undefined;
   const guest = c.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(c.guest) : undefined;
   // A guest card that does not say whose it is is not a card of this room.
@@ -560,6 +561,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(c.greeting === true && c.kind === 'question' ? { greeting: true as const } : {}),
     ...(notice ? { notice } : {}),
     ...(attachments ? { attachments } : {}),
+    ...(routed ? { routed } : {}),
     ...(files ? { files } : {}),
     ...(guest ? { guest } : {}),
     ...(c.origin === 'guest' ? { origin: 'guest' as const } : {}),
@@ -610,6 +612,8 @@ export interface RoomCardInput {
   /** The owner's `human` cards only (RoomCard.attachments): photos already
    *  in the room's store. */
   attachments?: RoomCard['attachments'];
+  /** The owner's `human` cards only (RoomCard.routed). */
+  routed?: RoomCard['routed'];
   /** Bot cards only (RoomCard.files): files already in the room's file
    *  store (roomFiles.ts). */
   files?: RoomCard['files'];
@@ -841,6 +845,7 @@ export class RoomWriter {
     const jobChange = input.kind === 'job_changed' ? sanitizeJobChange(redactStoredSecretsDeep(input.jobChange)) : undefined;
     const notice = actor.kind === 'system' ? sanitizeNotice(redactStoredSecretsDeep(input.notice)) : undefined;
     const attachments = input.kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(input.attachments) : undefined;
+    const routed = input.kind === 'human' && actor.kind === 'human' && (input.routed === 'lead' || input.routed === 'room') ? input.routed : undefined;
     const files = actor.kind === 'bot' ? parseRoomFiles(input.files) : undefined;
     const guest = input.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(input.guest) : undefined;
     if (input.kind === 'guest' && !guest) return null;
@@ -867,6 +872,7 @@ export class RoomWriter {
       ...(input.greeting === true && input.kind === 'question' ? { greeting: true as const } : {}),
       ...(notice ? { notice } : {}),
       ...(attachments ? { attachments } : {}),
+      ...(routed ? { routed } : {}),
       ...(files ? { files } : {}),
       ...(guest ? { guest } : {}),
       ...(fromGuestTurn ? { origin: 'guest' as const } : {}),

@@ -297,6 +297,7 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     ...(input.replyTo ? { replyTo: input.replyTo } : {}),
     ...(input.clientPostId ? { clientPostId: input.clientPostId } : {}),
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    ...(mode ? { routed: mode } : {}),
   });
   if (!r.ok) return r;
   const card = r.card;
@@ -311,10 +312,10 @@ export function postHumanMessage(writer: RoomWriter, ports: Partial<FactoryRoomP
     const fromCard = (card.body?.trim() ? card.body : card.title).trim();
     // The retry's whole message when the card holds its capped copy.
     const said = input.wakeText?.trim() && card.body !== undefined && capBody(redactStoredSecrets(input.wakeText)) === card.body ? input.wakeText.trim() : fromCard;
-    // A message that named no bot keeps the mode it was posted with: its
+    // The mode the message was posted with, as its card recorded it (the
+    // retry's own fields and the bots' templates now play no part): its
     // coordinator alone, or every bot of the room it named.
-    const unnamed = !dmBot && !input.mentions?.length && input.toBotId === undefined && input.to === undefined;
-    const retryMode = !unnamed ? null : ids.length === 1 && isCoordinatorBot(safeGet(ports, ids[0])) ? 'lead' as const : 'room' as const;
+    const retryMode = card.routed ?? null;
     const results: HumanAddresseeResult[] = [];
     for (const id of ids) {
       const bot = safeGet(ports, id);
