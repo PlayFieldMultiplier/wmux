@@ -23,9 +23,12 @@
  * Which process a pid names is checked before it is assigned. node-pty closes
  * its handle on the shell as soon as the shell exits, so a shell that exits at
  * once can free its pid before the session registers, and the pid can then
- * name another process. The job opens the pid and, while that handle pins it,
- * requires the process to be the daemon's own child created no earlier than
- * the spawn began. Observed on Windows 11 with node-pty 1.2.0-beta.15, for the
+ * name another process. The job opens the pid and, through that one handle
+ * (which pins the process, so the pid cannot change hands meanwhile), requires
+ * the process to be the daemon's own child created no earlier than the spawn
+ * began: the parent pid from NtQueryInformationProcess, the creation time from
+ * GetProcessTimes. Nothing is looked up by pid again and no process snapshot is
+ * taken, so a recovery burst of panes costs a few syscalls each. Observed on Windows 11 with node-pty 1.2.0-beta.15, for the
  * in-box ConPTY and the bundled conpty.dll alike: the shell's parent is the
  * daemon (CreateProcess runs in the daemon), and conhost.exe/OpenConsole.exe is
  * its sibling, not its parent. The creation time rules out a process that
@@ -52,29 +55,20 @@
  * skipped by the caller.
  */
 
-import { tryProcessCreatedAt, tryProcessHandleApi } from '../main/pty/winSnapshotNative';
-
 export interface JobNative {
   /** A new unnamed job, or null (with the error code) when it cannot be made. */
   createJob(): { job: bigint } | { error: number };
   /** Set KILL_ON_JOB_CLOSE (always with BREAKAWAY_OK). 0 on success, else the error code. */
   setKillOnClose(job: bigint, kill: boolean): number;
-  /**
-   * Open a process to assign it. While the handle is open the pid cannot be
-   * handed to another process, so whatever is read about the pid names this one.
-   */
+  /** Open a process to identify and assign it. */
   open(pid: number): { handle: bigint } | { error: number };
+  /** Parent pid and creation time (FILETIME) of an opened process, read through its handle. */
+  identify(handle: bigint): { ppid: number; createdAt: bigint } | { error: string };
   /** Assign an opened process. 0 on success, else the error code. */
   assign(job: bigint, handle: bigint): number;
   close(handle: bigint): void;
-}
-
-/** Who a pid is, read while the job holds a handle on it. */
-export interface ShellIdentity {
   /** The system clock creation times are stamped in (FILETIME, 100 ns units). */
   now(): bigint;
-  /** The parent pid and creation time of a live process, or null when either cannot be read. */
-  read(pid: number): { ppid: number; createdAt: bigint } | null;
 }
 
 export interface PaneJob {
@@ -99,8 +93,21 @@ const EXTENDED_LIMIT_INFORMATION = 9;
 export const EXTENDED_LIMIT_INFORMATION_SIZE = 144;
 /** Offset of BasicLimitInformation.LimitFlags in that struct. */
 const LIMIT_FLAGS_OFFSET = 16;
-/** PROCESS_SET_QUOTA | PROCESS_TERMINATE, what AssignProcessToJobObject needs. */
-const ASSIGN_ACCESS = 0x0100 | 0x0001;
+/**
+ * PROCESS_SET_QUOTA | PROCESS_TERMINATE, what AssignProcessToJobObject needs,
+ * and PROCESS_QUERY_LIMITED_INFORMATION for the identity reads.
+ */
+const OPEN_ACCESS = 0x0100 | 0x0001 | 0x1000;
+/** ProcessBasicInformation. */
+const PROCESS_BASIC_INFORMATION_CLASS = 0;
+/**
+ * sizeof(PROCESS_BASIC_INFORMATION) on 64-bit Windows (x64 and arm64 share the
+ * layout): ExitStatus (4, padded to 8), PebBaseAddress, AffinityMask,
+ * BasePriority (4, padded to 8), UniqueProcessId, InheritedFromUniqueProcessId.
+ */
+export const PROCESS_BASIC_INFORMATION_SIZE = 48;
+/** Offset of InheritedFromUniqueProcessId, the parent pid. */
+export const PARENT_PID_OFFSET = 40;
 
 /** The limit block SetInformationJobObject takes, with only LimitFlags set. */
 export function extendedLimitInformation(kill: boolean): Buffer {
@@ -116,9 +123,12 @@ interface Kernel32 {
   AssignProcessToJobObject(job: bigint, process: bigint): number;
   CloseHandle(handle: bigint): number;
   GetLastError(): number;
+  GetProcessTimes(handle: bigint, creation: Buffer, exit: Buffer, kernel: Buffer, user: Buffer): number;
+  GetSystemTimeAsFileTime(out: Buffer): void;
+  NtQueryInformationProcess(handle: bigint, infoClass: number, info: Buffer, length: number, returned: null): number;
 }
 
-/** The kernel32 calls through koffi, or null where they cannot be loaded. */
+/** The kernel32 and ntdll calls through koffi, or null where they cannot be loaded. */
 export function loadJobNative(warn: (message: string) => void): JobNative | null {
   if (process.platform !== 'win32') return null;
   if (process.arch !== 'x64' && process.arch !== 'arm64') return null;
@@ -128,6 +138,7 @@ export function loadJobNative(warn: (message: string) => void): JobNative | null
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const koffi = require('koffi') as { load(name: string): { func(name: string, result: string, args: string[]): unknown } };
     const kernel32 = koffi.load('kernel32.dll');
+    const ntdll = koffi.load('ntdll.dll');
     k = {
       CreateJobObjectW: kernel32.func('CreateJobObjectW', 'int64', ['void *', 'void *']) as Kernel32['CreateJobObjectW'],
       SetInformationJobObject: kernel32.func('SetInformationJobObject', 'int', ['int64', 'int', 'void *', 'uint32']) as Kernel32['SetInformationJobObject'],
@@ -135,6 +146,9 @@ export function loadJobNative(warn: (message: string) => void): JobNative | null
       AssignProcessToJobObject: kernel32.func('AssignProcessToJobObject', 'int', ['int64', 'int64']) as Kernel32['AssignProcessToJobObject'],
       CloseHandle: kernel32.func('CloseHandle', 'int', ['int64']) as Kernel32['CloseHandle'],
       GetLastError: kernel32.func('GetLastError', 'uint32', []) as Kernel32['GetLastError'],
+      GetProcessTimes: kernel32.func('GetProcessTimes', 'int', ['int64', 'void *', 'void *', 'void *', 'void *']) as Kernel32['GetProcessTimes'],
+      GetSystemTimeAsFileTime: kernel32.func('GetSystemTimeAsFileTime', 'void', ['void *']) as Kernel32['GetSystemTimeAsFileTime'],
+      NtQueryInformationProcess: ntdll.func('NtQueryInformationProcess', 'int32', ['int64', 'int', 'void *', 'uint32', 'void *']) as Kernel32['NtQueryInformationProcess'],
     };
   } catch (err) {
     warn(`koffi load failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -157,35 +171,29 @@ export function loadJobNative(warn: (message: string) => void): JobNative | null
     },
     setKillOnClose: setLimits,
     open(pid) {
-      const handle = BigInt(k.OpenProcess(ASSIGN_ACCESS, 0, pid));
+      const handle = BigInt(k.OpenProcess(OPEN_ACCESS, 0, pid));
       return handle === 0n ? { error: k.GetLastError() || -1 } : { handle };
+    },
+    identify(handle) {
+      const basic = Buffer.alloc(PROCESS_BASIC_INFORMATION_SIZE);
+      const status = k.NtQueryInformationProcess(handle, PROCESS_BASIC_INFORMATION_CLASS, basic, basic.length, null);
+      if (status !== 0) return { error: `NtQueryInformationProcess status 0x${(status >>> 0).toString(16)}` };
+      const creation = Buffer.alloc(8);
+      if (!k.GetProcessTimes(handle, creation, Buffer.alloc(8), Buffer.alloc(8), Buffer.alloc(8))) {
+        return { error: `GetProcessTimes error ${k.GetLastError()}` };
+      }
+      return { ppid: Number(basic.readBigUInt64LE(PARENT_PID_OFFSET)), createdAt: creation.readBigUInt64LE(0) };
     },
     assign: (job, handle) => (k.AssignProcessToJobObject(job, handle) ? 0 : k.GetLastError() || -1),
     close(handle) {
       k.CloseHandle(handle);
     },
-  };
-}
-
-/** Parent and creation time through winSnapshotNative, or null off Windows / without koffi. */
-export function loadShellIdentity(): ShellIdentity | null {
-  const api = tryProcessHandleApi();
-  if (!api) return null;
-  return {
     // GetSystemTimeAsFileTime: the same coarse clock process creation times
     // are stamped in, so a shell created after a mark never reads as earlier.
-    now: () => api.now(),
-    read(pid) {
-      const createdAt = tryProcessCreatedAt(pid);
-      if (createdAt === null) return null;
-      let table;
-      try {
-        table = api.processTable();
-      } catch {
-        return null;
-      }
-      const row = table.find((p) => p.pid === pid);
-      return row ? { ppid: row.ppid, createdAt } : null;
+    now() {
+      const out = Buffer.alloc(8);
+      k.GetSystemTimeAsFileTime(out);
+      return out.readBigUInt64LE(0);
     },
   };
 }
@@ -194,16 +202,12 @@ export function createPaneJob(opts: {
   log: (level: 'info' | 'warn', message: string) => void;
   /** Tests inject a fake; null disables the job (non-Windows, koffi missing). */
   native?: () => JobNative | null;
-  /** Tests inject a fake; null disables the job. */
-  identity?: () => ShellIdentity | null;
   /** The pid a pane shell's parent must be. Defaults to this process. */
   daemonPid?: number;
 }): PaneJob {
   const loadNative = opts.native ?? (() => loadJobNative((m) => opts.log('warn', `[pane-job] ${m}`)));
-  const loadIdentity = opts.identity ?? loadShellIdentity;
   const daemonPid = opts.daemonPid ?? process.pid;
   let native: JobNative | null | undefined;
-  let identity: ShellIdentity | null | undefined;
   let job: bigint | null = null;
   let disabled = false;
   let armed = true;
@@ -214,19 +218,17 @@ export function createPaneJob(opts: {
 
   const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-  const identityOrNull = (): ShellIdentity | null => {
-    if (identity === undefined) identity = loadIdentity();
-    return identity;
+  const nativeOrNull = (): JobNative | null => {
+    if (native === undefined) native = loadNative();
+    if (!native) disabled = true;
+    return native;
   };
 
   const ensureJob = (): bigint | null => {
     if (job !== null || disabled) return job;
-    native = loadNative();
-    if (!native || !identityOrNull()) {
-      disabled = true;
-      return null;
-    }
-    const made = native.createJob();
+    const n = nativeOrNull();
+    if (!n) return null;
+    const made = n.createJob();
     if ('error' in made) {
       disabled = true;
       opts.log('warn', `[pane-job] could not create the job (error ${made.error}); pane shells are not tied to the daemon`);
@@ -257,7 +259,7 @@ export function createPaneJob(opts: {
     spawnMark() {
       if (disabled) return null;
       try {
-        return identityOrNull()?.now() ?? null;
+        return nativeOrNull()?.now() ?? null;
       } catch (err) {
         fail('reading the clock', err);
         return null;
@@ -267,7 +269,7 @@ export function createPaneJob(opts: {
       if (!armed || disabled || !Number.isInteger(pid) || pid <= 0) return;
       try {
         const j = ensureJob();
-        if (j === null || !native || !identity) return;
+        if (j === null || !native) return;
         if (spawnMark === null) {
           refuse(pid, 'mark', 'its spawn time is unknown');
           return;
@@ -278,9 +280,9 @@ export function createPaneJob(opts: {
           return;
         }
         try {
-          // The open handle pins the pid, so this reads the process assign takes.
-          const who = identity.read(pid);
-          if (!who) refuse(pid, 'unread', 'its parent and creation time cannot be read');
+          // Read through the handle assign takes, never by pid again.
+          const who = native.identify(opened.handle);
+          if ('error' in who) refuse(pid, 'unread', `its parent and creation time cannot be read (${who.error})`);
           else if (who.ppid !== daemonPid) refuse(pid, 'parent', `its parent is pid ${who.ppid}, not the daemon`);
           else if (who.createdAt < spawnMark) refuse(pid, 'created', 'it was created before the spawn');
           else {

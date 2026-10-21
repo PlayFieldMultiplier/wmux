@@ -1,8 +1,8 @@
 // #2398 — the daemon's kill-on-close job for pane shells (paneJob.ts), against
 // a fake kernel32: one job made lazily on the first pane, every pane's shell
-// assigned once it is proven to be the daemon's own fresh child, refusals
-// logged once and never thrown, a clean exit disarming it.
-// The real job on Windows: paneJob.os.test.ts.
+// assigned once it is proven, through the handle that assigns it, to be the
+// daemon's own fresh child, refusals logged once and never thrown, a clean
+// exit disarming it. The real job on Windows: paneJob.os.test.ts.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,47 +11,47 @@ import {
   createPaneJob,
   extendedLimitInformation,
   EXTENDED_LIMIT_INFORMATION_SIZE,
+  PARENT_PID_OFFSET,
+  PROCESS_BASIC_INFORMATION_SIZE,
   type JobNative,
-  type ShellIdentity,
 } from '../paneJob';
 
 const DAEMON = 4000;
 const MARK = 1_000n;
 
-function fakeNative(overrides: Partial<JobNative> = {}) {
+type Who = { ppid: number; createdAt: bigint } | { error: string };
+
+/** The fake's handle for a pid: never equal to the pid, so a pid passed where a handle belongs shows. */
+const handleOf = (pid: number): bigint => BigInt(pid) * 10n;
+
+/**
+ * Every opened process reads as the daemon's child created after MARK, unless
+ * `who` says otherwise for its pid.
+ */
+function fakeNative(overrides: Partial<JobNative> = {}, who: Record<number, Who> = {}) {
   const calls: string[] = [];
   const closed: bigint[] = [];
   const native: JobNative = {
     createJob: vi.fn(() => { calls.push('create'); return { job: 7n }; }),
     setKillOnClose: vi.fn((job: bigint, kill: boolean) => { calls.push(`kill:${job}:${kill}`); return 0; }),
-    open: vi.fn((pid: number) => ({ handle: BigInt(pid) })),
+    open: vi.fn((pid: number) => ({ handle: handleOf(pid) })),
+    identify: vi.fn((handle: bigint) => {
+      const pid = Number(handle / 10n);
+      return pid in who ? who[pid] : { ppid: DAEMON, createdAt: MARK + 1n };
+    }),
     assign: vi.fn((job: bigint, handle: bigint) => { calls.push(`assign:${job}:${handle}`); return 0; }),
     close: vi.fn((handle: bigint) => { closed.push(handle); }),
+    now: vi.fn(() => MARK),
     ...overrides,
   };
   return { native, calls, closed };
 }
 
-type Who = { ppid: number; createdAt: bigint } | null;
-
-/** Every pid reads as the daemon's child, created after MARK, unless listed. */
-function fakeIdentity(who: Record<number, Who> = {}): ShellIdentity {
-  return {
-    now: () => MARK,
-    read: (pid) => (pid in who ? who[pid] : { ppid: DAEMON, createdAt: MARK + 1n }),
-  };
-}
-
 const newLog = () => vi.fn<(level: 'info' | 'warn', message: string) => void>();
 type Log = ReturnType<typeof newLog>;
 
-function paneJob(native: JobNative | null, opts: { log?: Log; identity?: ShellIdentity | null } = {}) {
-  return createPaneJob({
-    log: opts.log ?? newLog(),
-    native: () => native,
-    identity: () => (opts.identity === undefined ? fakeIdentity() : opts.identity),
-    daemonPid: DAEMON,
-  });
+function paneJob(native: JobNative | null, opts: { log?: Log } = {}) {
+  return createPaneJob({ log: opts.log ?? newLog(), native: () => native, daemonPid: DAEMON });
 }
 
 const warnings = (log: Log) => log.mock.calls.filter(([level]) => level === 'warn');
@@ -64,9 +64,22 @@ describe('createPaneJob', () => {
     expect(job.spawnMark()).toBe(MARK);
     job.contain(101, MARK);
     job.contain(102, MARK);
-    expect(calls).toEqual(['create', 'assign:7:101', 'assign:7:102']);
-    expect(closed).toEqual([101n, 102n]);
+    expect(calls).toEqual(['create', 'assign:7:1010', 'assign:7:1020']);
+    expect(closed).toEqual([1010n, 1020n]);
     expect(job.stats()).toEqual({ contained: 2, failed: 0 });
+  });
+
+  it('identifies the shell through the handle it assigns, never by pid again', () => {
+    // A pid looked up a second time can name another process by then, and a
+    // machine-wide process snapshot per pane blocked the daemon for ~20 ms
+    // each through a cold-start burst. Only open() may see the pid.
+    const { native } = fakeNative();
+    const job = paneJob(native);
+    job.contain(101, MARK);
+    expect(native.open).toHaveBeenCalledWith(101);
+    expect(native.identify).toHaveBeenCalledExactlyOnceWith(1010n);
+    expect(native.assign).toHaveBeenCalledWith(7n, 1010n);
+    expect(native.close).toHaveBeenCalledWith(1010n);
   });
 
   it('leaves a shell it cannot take running, logging each kind of refusal once', () => {
@@ -75,23 +88,23 @@ describe('createPaneJob', () => {
     const job = paneJob(native, { log });
     expect(() => { job.contain(101, MARK); job.contain(102, MARK); }).not.toThrow();
     expect(job.stats()).toEqual({ contained: 0, failed: 2 });
-    expect(closed).toEqual([101n, 102n]);
+    expect(closed).toEqual([1010n, 1020n]);
     expect(warnings(log)).toHaveLength(1);
     expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('error 5'));
   });
 
   it('never assigns a pid whose process the daemon did not spawn (a pid reused after the shell exited)', () => {
     const log = newLog();
-    const { native, closed } = fakeNative();
-    const job = paneJob(native, {
-      log,
-      identity: fakeIdentity({ 101: { ppid: 9999, createdAt: MARK + 1n }, 102: { ppid: 9999, createdAt: MARK + 2n } }),
+    const { native, closed } = fakeNative({}, {
+      101: { ppid: 9999, createdAt: MARK + 1n },
+      102: { ppid: 9999, createdAt: MARK + 2n },
     });
+    const job = paneJob(native, { log });
     job.contain(101, MARK);
     job.contain(102, MARK);
     expect(native.assign).not.toHaveBeenCalled();
-    // The pid stayed pinned through the check and was let go after it.
-    expect(closed).toEqual([101n, 102n]);
+    // The process stayed pinned through the check and was let go after it.
+    expect(closed).toEqual([1010n, 1020n]);
     expect(job.stats()).toEqual({ contained: 0, failed: 2 });
     expect(warnings(log)).toHaveLength(1);
     expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('parent is pid 9999'));
@@ -100,20 +113,22 @@ describe('createPaneJob', () => {
   it('never assigns a process created before the spawn, though it names the daemon as parent', () => {
     // Windows never re-parents an orphan: a process whose parent died before
     // this daemon got that pid still names it.
-    const { native } = fakeNative();
-    const job = paneJob(native, { identity: fakeIdentity({ 101: { ppid: DAEMON, createdAt: MARK - 1n } }) });
+    const { native } = fakeNative({}, { 101: { ppid: DAEMON, createdAt: MARK - 1n } });
+    const job = paneJob(native);
     job.contain(101, MARK);
     expect(native.assign).not.toHaveBeenCalled();
     expect(job.stats()).toEqual({ contained: 0, failed: 1 });
   });
 
-  it('never assigns a pid it cannot identify, or one with no spawn mark', () => {
-    const { native } = fakeNative();
-    const job = paneJob(native, { identity: fakeIdentity({ 101: null }) });
+  it('never assigns a process it cannot identify, or one with no spawn mark', () => {
+    const log = newLog();
+    const { native } = fakeNative({}, { 101: { error: 'NtQueryInformationProcess status 0xc0000022' } });
+    const job = paneJob(native, { log });
     job.contain(101, MARK);
     job.contain(102, null);
     expect(native.assign).not.toHaveBeenCalled();
     expect(job.stats()).toEqual({ contained: 0, failed: 2 });
+    expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('status 0xc0000022'));
   });
 
   it('stays off when the job cannot be made, without trying again per pane', () => {
@@ -130,16 +145,8 @@ describe('createPaneJob', () => {
 
   it('does nothing where there is no native job (macOS, Linux, koffi missing)', () => {
     const job = paneJob(null);
-    expect(() => { job.contain(101, job.spawnMark()); job.disarm(); }).not.toThrow();
-    expect(job.stats()).toEqual({ contained: 0, failed: 0 });
-  });
-
-  it('does nothing without a way to identify the shell', () => {
-    const { native } = fakeNative();
-    const job = paneJob(native, { identity: null });
     expect(job.spawnMark()).toBeNull();
-    job.contain(101, null);
-    expect(native.createJob).not.toHaveBeenCalled();
+    expect(() => { job.contain(101, null); job.disarm(); }).not.toThrow();
     expect(job.stats()).toEqual({ contained: 0, failed: 0 });
   });
 
@@ -156,6 +163,7 @@ describe('createPaneJob', () => {
   it.each([
     ['createJob', { createJob: vi.fn(boom) }, 0],
     ['open', { open: vi.fn(boom) }, 1],
+    ['identify', { identify: vi.fn(boom) }, 1],
     ['assign', { assign: vi.fn(boom) }, 1],
     ['close', { close: vi.fn(boom) }, 1],
   ] as Array<[string, Partial<JobNative>, number]>)(
@@ -174,16 +182,13 @@ describe('createPaneJob', () => {
     },
   );
 
-  it('an identity read or clock that throws is contained the same way', () => {
+  it('a clock that throws gives no mark and turns the job off', () => {
     const log = newLog();
-    const { native } = fakeNative();
-    const job = paneJob(native, {
-      log,
-      identity: { now: () => { throw new Error('clock'); }, read: () => { throw new Error('read'); } },
-    });
+    const { native } = fakeNative({ now: vi.fn(boom) });
+    const job = paneJob(native, { log });
     expect(job.spawnMark()).toBeNull();
     expect(() => job.contain(101, MARK)).not.toThrow();
-    expect(native.assign).not.toHaveBeenCalled();
+    expect(native.open).not.toHaveBeenCalled();
     expect(warnings(log)).toHaveLength(1);
   });
 
@@ -196,13 +201,14 @@ describe('createPaneJob', () => {
     expect(log).toHaveBeenCalledWith('warn', expect.stringContaining('disarming threw (boom)'));
   });
 
+
   it('disarms on a clean exit: kill-on-close is cleared, and no later shell joins', () => {
     const { native, calls } = fakeNative();
     const job = paneJob(native);
     job.contain(101, MARK);
     job.disarm();
     job.contain(102, MARK);
-    expect(calls).toEqual(['create', 'assign:7:101', 'kill:7:false']);
+    expect(calls).toEqual(['create', 'assign:7:1010', 'kill:7:false']);
   });
 
   it('disarming before any pane started has nothing to do', () => {
@@ -222,6 +228,16 @@ describe('extendedLimitInformation', () => {
     expect(extendedLimitInformation(false).readUInt32LE(16)).toBe(0x800);
     const rest = Buffer.concat([armed.subarray(0, 16), armed.subarray(20)]);
     expect(rest.every((byte) => byte === 0)).toBe(true);
+  });
+});
+
+describe('PROCESS_BASIC_INFORMATION', () => {
+  it('is read as the 64-bit layout, the parent pid in its last pointer-sized field', () => {
+    // ExitStatus+pad, PebBaseAddress, AffinityMask, BasePriority+pad,
+    // UniqueProcessId, InheritedFromUniqueProcessId: six 8-byte slots on x64
+    // and arm64 alike. The OS test proves it against a real child.
+    expect(PROCESS_BASIC_INFORMATION_SIZE).toBe(6 * 8);
+    expect(PARENT_PID_OFFSET).toBe(5 * 8);
   });
 });
 

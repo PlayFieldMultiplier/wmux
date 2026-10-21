@@ -51,18 +51,26 @@ function startPing(): number {
 }
 
 /**
- * Runs a stand-in daemon that contains a ping it spawns itself, or, given
- * `stranger`, that pid instead. Resolves with the pid it was asked to contain
- * once the stand-in has exited.
+ * Runs a stand-in daemon that contains a ping it spawns itself, a shell it
+ * spawns through node-pty's ConPTY (`pty`), or, given `stranger`, that pid
+ * instead. Resolves with the pid it was asked to contain once the stand-in has
+ * exited.
  */
-function runStandIn(opts: { disarm?: boolean; stranger?: number } = {}): Promise<number> {
-  const script = `
+function runStandIn(opts: { disarm?: boolean; stranger?: number; pty?: boolean } = {}): Promise<number> {
+  const script = `(async () => {
     const { createPaneJob } = require(${JSON.stringify(compiled)});
     const { spawn } = require('node:child_process');
     const job = createPaneJob({ log: (level, m) => console.error(level, m) });
     const mark = job.spawnMark();
     let pid = ${opts.stranger ?? 0};
-    if (!pid) {
+    if (${opts.pty ? 'true' : 'false'}) {
+      // A pane shell as the daemon spawns it. node-pty 1.2.0-beta reports
+      // the pid once the ConPTY output pipe connects.
+      const shell = require('node-pty').spawn('cmd.exe', [], { useConpty: true, cols: 80, rows: 24 });
+      const deadline = Date.now() + 10000;
+      while (!shell.pid && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      pid = shell.pid;
+    } else if (!pid) {
       const child = spawn('ping', ['-n', '60', '127.0.0.1'], { stdio: 'ignore', detached: true });
       child.unref();
       pid = child.pid;
@@ -77,7 +85,7 @@ function runStandIn(opts: { disarm?: boolean; stranger?: number } = {}): Promise
     ${opts.disarm ? 'job.disarm();' : ''}
     // No clean shutdown: the process ends and its job handle closes with it.
     process.exit(0);
-  `;
+  })();`;
   return new Promise((resolve, reject) => {
     const standIn = spawn(process.execPath, ['-e', script], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -122,6 +130,11 @@ describe.runIf(process.platform === 'win32')('pane job on Windows', () => {
   it('keeps a contained process when the job was disarmed for a clean exit', async () => {
     const pid = await runStandIn({ disarm: true });
     expect(await waitGone(pid, 1500)).toBe(false);
+  }, 30_000);
+
+  it('contains a shell spawned through ConPTY: its parent is the daemon, not conhost', async () => {
+    const pid = await runStandIn({ pty: true });
+    expect(await waitGone(pid, 5000)).toBe(true);
   }, 30_000);
 
   it('never takes a pid the daemon did not spawn, so it outlives the daemon', async () => {
