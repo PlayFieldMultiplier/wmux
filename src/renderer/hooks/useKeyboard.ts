@@ -23,7 +23,7 @@ import { OPEN_MENTION_PICKER_EVENT } from '../utils/agentMentionInsert';
 import { isChatV2Covering } from '../components/ChatV2/coverage';
 import { showWorkspaces } from '../utils/showWorkspaces';
 import { toggleFileTreePanel } from '../components/FileTree/fileTreeToggle';
-import { listedWorkspaces, refuseWorkspaceClose } from '../components/Moa/moaHqGuard';
+import { refuseWorkspaceClose } from '../components/Moa/moaHqGuard';
 import { selectShortcutWorkspaces } from '../components/Sidebar/workspaceFilter';
 import {
   openMultiTask,
@@ -253,11 +253,12 @@ export function createPrefixActions(deps: PrefixActionDeps): Record<string, () =
       state.closePane(ws.activePaneId);
     },
     newWorkspace: () => { store.getState().addWorkspace(); },
-    // Cycles the operator's workspaces only: Moa's HQ is not in the list.
+    // Cycles the sidebar's listed workspaces, the same list the digits number:
+    // Moa's HQ and a bot's workers (botTasks.ts) are not in it.
     nextWorkspace: () => {
       const state = store.getState();
       const { activeWorkspaceId } = state;
-      const workspaces = listedWorkspaces(state.workspaces);
+      const workspaces = selectShortcutWorkspaces(state);
       const currentIdx = workspaces.findIndex((w) => w.id === activeWorkspaceId);
       const next = workspaces[(currentIdx + 1) % workspaces.length];
       if (!next || next.id === activeWorkspaceId) return;
@@ -267,9 +268,9 @@ export function createPrefixActions(deps: PrefixActionDeps): Record<string, () =
     prevWorkspace: () => {
       const state = store.getState();
       const { activeWorkspaceId } = state;
-      const workspaces = listedWorkspaces(state.workspaces);
+      const workspaces = selectShortcutWorkspaces(state);
       const currentIdx = workspaces.findIndex((w) => w.id === activeWorkspaceId);
-      // From the HQ (not in the list), back to the last one.
+      // From an unlisted workspace (the HQ, a bot worker), back to the last one.
       const prev = workspaces[currentIdx === -1 ? workspaces.length - 1 : (currentIdx - 1 + workspaces.length) % workspaces.length];
       if (!prev || prev.id === activeWorkspaceId) return;
       store.getState().setActiveWorkspace(prev.id);
