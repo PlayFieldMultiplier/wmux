@@ -326,8 +326,9 @@ type Workspaces = readonly { id: string; name: string }[];
 const NO_LIST_PORT: FactoryBotPort = { available: false, list: async () => [], subscribe: () => () => undefined, act: async () => ({ ok: false }) };
 
 export interface AddBotFormProps {
-  /** Called with the new bot after it was added (a team: its lead, and the
-   *  whole team), and with nothing on Cancel. */
+  /** Called with the new bot after it was added (a team: the lead made
+   *  here, or none when the lead was there already, and the whole team, its
+   *  lead first), and with nothing on Cancel. */
   onDone: (bot?: BotProfile, team?: readonly BotProfile[]) => void;
   /** The rest default to the app's own: the bot port, its bots, the store's
    *  workspaces (the active one first picked) and the folder dialog. */
@@ -703,7 +704,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
               size="sm"
               variant="ghost"
               data-testid="factory-add-team"
-              title={teamHint}
+              title={teamLine}
               onClick={() => (props.botsOff ? setConfirmOn('team') : void addTeam(false))}
               disabled={busy}
             >
