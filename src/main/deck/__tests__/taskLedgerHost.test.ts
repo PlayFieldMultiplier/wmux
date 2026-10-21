@@ -92,6 +92,23 @@ describe('createWorkTaskReconciler', () => {
     for (const id of owners) expect(ledger.get(`wtask-${id}`)?.ownerWorkspaceId).toBe(id);
   });
 
+  it('a listing that throws (no daemon client) skips the pass and leaves the ledger as it was', async () => {
+    const before = ledger.list();
+    let calls = 0;
+    const reconcile = createWorkTaskReconciler({
+      candidateOwners: () => ['ws-parent', 'ws-other'],
+      missionList: async () => {
+        calls += 1;
+        throw new Error('DaemonClient not connected');
+      },
+    });
+    await expect(reconcile()).resolves.toBeUndefined();
+    // One failed batch, not one failed call per owner.
+    expect(calls).toBe(1);
+    expect(ledger.list()).toEqual(before);
+    expect(ledger.get('wtask-1')?.status).toBe('working');
+  });
+
   it('on a daemon without the batch, falls back to one call per owner', async () => {
     const calls: Array<Record<string, unknown>> = [];
     const reconcile = createWorkTaskReconciler({
