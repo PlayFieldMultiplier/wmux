@@ -3797,6 +3797,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       const stopKey = reason === 'stop-key';
       stopKeyInFlight = stopKey;
       if (stopKey) stopKeyFoundNotRunning = false;
+      lastAttemptStarted = false;
       inFlight = true;
       reconnectInFlightRef.current = true;
       if (!stopKey && slowRetry !== null) { clearTimeout(slowRetry); slowRetry = null; }

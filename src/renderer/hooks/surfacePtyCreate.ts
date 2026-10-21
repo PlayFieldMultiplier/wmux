@@ -158,7 +158,10 @@ export async function ensurePtyStarted(ptyId: string, promote = true): Promise<E
   if (mounted === 'not-running') return { notRunning: true };
   if (mounted === 'attached') return { ptyId };
   const res = await window.electronAPI.pty.reconnect(ptyId, { promote });
-  if (!promote && (res.deferred === true || res.code === 'session-dead')) return { notRunning: true };
+  // Started by this reconnect (an exec or supervised unit the daemon was still
+  // starting in the background, which the attach joined): nothing of the
+  // key's to stop, as on the mounted path.
+  if (!promote && (res.deferred === true || res.code === 'session-dead' || res.promoted === true)) return { notRunning: true };
   if (!res.success) return { error: `the pane's session could not be attached: ${res.error ?? 'unknown error'}` };
   useStore.getState().setPtyDeferred(ptyId, false);
   return { ptyId };

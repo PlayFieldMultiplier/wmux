@@ -27,7 +27,11 @@ import type { ResumeBinding } from '../../shared/agentResume';
 
 export interface ReconnectResult {
   success: boolean;
-  /** #2398 — with `success`: this reconnect started the session (promoted a suspended one). */
+  /**
+   * #2398 — this reconnect started the session (promoted a suspended one),
+   * also on a failed attach after the promote: the retry then attaches a
+   * session that runs, and must still report that this attempt started it.
+   */
   promoted?: boolean;
   error?: string;
   transient?: boolean;
@@ -134,6 +138,8 @@ export async function reconnectPtyWithRetry(
   const schedule = [...RECONNECT_BACKOFFS_MS, ...RATE_LIMIT_EXTRA_BACKOFFS_MS];
   let lastErr = '<no error>';
   let rateLimited = false;
+  // #2398 — any iteration of this attempt started the session.
+  let started = false;
   for (let attempt = 0; ; attempt++) {
     if (!isCurrent()) return null; // terminal unmounted mid-retry — stop, mutate nothing
     let result: ReconnectResult | undefined;
@@ -144,13 +150,14 @@ export async function reconnectPtyWithRetry(
       lastErr = err instanceof Error ? err.message : String(err);
       result = { success: false, transient: true, error: lastErr };
     }
+    if (result?.promoted) started = true;
     if (result?.success) {
       // A reconnect that settles after its terminal was replaced reports
       // nothing: its geometry must not resize the terminal current now.
       if (!isCurrent()) return null;
       deps.setUnconfirmed?.(ptyId, false);
       deps.setDeferred?.(ptyId, false);
-      if (result.promoted) deps.onRecoveryError?.(null, { promoted: true });
+      if (started) deps.onRecoveryError?.(null, { promoted: true });
       else deps.onRecoveryError?.(null);
       return result.cols && result.rows ? { cols: result.cols, rows: result.rows } : null;
     }

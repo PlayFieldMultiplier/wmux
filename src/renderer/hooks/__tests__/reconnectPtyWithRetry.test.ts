@@ -307,6 +307,18 @@ describe('reconnectPtyWithRetry — an attach that started the session (#2398)',
     expect(onRecoveryError).toHaveBeenCalledWith(null, { promoted: true });
   });
 
+  // Round-6 P3: the promote succeeded, its attach failed transiently, and the
+  // retry attached the now running session without saying it was started.
+  it('says it promoted when an earlier try promoted and a retry attached', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn()
+      .mockResolvedValueOnce({ success: false, transient: true, promoted: true, error: 'Session pipe not writable after reconnect' })
+      .mockResolvedValueOnce({ success: true });
+    await reconnectPtyWithRetry('pty-promoted-retry', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(reconnect).toHaveBeenCalledTimes(2);
+    expect(onRecoveryError).toHaveBeenCalledWith(null, { promoted: true });
+  });
+
   it('an attach of a running session settles as before', async () => {
     const onRecoveryError = vi.fn();
     const reconnect = vi.fn(async () => ({ success: true }));

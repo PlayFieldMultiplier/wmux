@@ -271,7 +271,16 @@ describe('attach without promote (#2398)', () => {
     const region = handler.slice(start, start + 9000);
     const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
     expect(region.slice(promoteAt, promoteAt + 800)).toMatch(/promoted = true;/);
-    expect(handler).toMatch(/return \{ success: true, id: session\.id,[^\n]*\.\.\.\(promoted \? \{ promoted: true \} : \{\}\) \};/);
+    expect(handler).toMatch(/return \{ success: true, id: session\.id,[^\n]*\.\.\.startedHere\(\) \};/);
+  });
+
+  // Round-6 P3 — an attach that fails after the promote still says so: the
+  // renderer's retry attaches a session that runs by then.
+  it('pty:reconnect carries promoted on the failed attaches after a promote too', () => {
+    expect(handler).toMatch(/let promoted = false;\s*const startedHere = \(\) => \(promoted \? \{ promoted: true \} : \{\}\);\s*try \{/);
+    expect(handler).toMatch(/code: 'pipe-not-writable', transient: true, \.\.\.startedHere\(\) \};/);
+    expect(handler).toMatch(/code: 'rpc-error', transient: true, \.\.\.startedHere\(\) \};/);
+    expect(handler).toMatch(/recoveryPending: true, error: err instanceof Error \? err\.message : String\(err\), \.\.\.startedHere\(\) \};/);
   });
 
   it('daemon.holdSession stamps the pending recovery or disk-only record and saves', () => {

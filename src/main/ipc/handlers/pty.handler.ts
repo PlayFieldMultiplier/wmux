@@ -1501,6 +1501,13 @@ export function registerPTYHandlers(
     }));
 
     ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string, opts?: { promote?: boolean }) => {
+      // #2398 — whether this reconnect started the session (promoted a
+      // suspended one) rather than attaching one that was running: a stop
+      // key that joined it has nothing of its own to stop there. Carried on
+      // every answer after the promote, a failed attach's included: the
+      // renderer's retry then finds the session running and must still know.
+      let promoted = false;
+      const startedHere = () => (promoted ? { promoted: true } : {});
       try {
         // #2398 — a cap-skipped session lives only in sessions.json, which
         // includeSuspended parses on the daemon thread: only an id the live
@@ -1525,10 +1532,6 @@ export function registerPTYHandlers(
           sessions = await daemonClient.rpc('daemon.listSessions', { includeSuspended: true }) as typeof sessions;
         }
         let session = sessions.find(s => s.id === id);
-        // #2398 — whether this reconnect started the session (promoted a
-        // suspended one) rather than attaching one that was running: a stop
-        // key that joined it has nothing of its own to stop there.
-        let promoted = false;
         if (!session || session.state === 'dead') {
           // RCA A1 — permanent failure: the daemon authoritatively reports the
           // session as absent or dead. Safe for the renderer to clear the
@@ -1577,7 +1580,7 @@ export function registerPTYHandlers(
             const refreshed = await daemonClient.rpc('daemon.listSessions', {}) as typeof sessions;
             session = refreshed.find(s => s.id === id) ?? session;
           } catch (err) {
-            return { success: false, recoveryPending: true, error: err instanceof Error ? err.message : String(err) };
+            return { success: false, recoveryPending: true, error: err instanceof Error ? err.message : String(err), ...startedHere() };
           }
         }
 
@@ -1637,7 +1640,7 @@ export function registerPTYHandlers(
           // — it should retry, otherwise a live session gets replaced by an
           // empty one. transient:true signals "retry".
           console.log(`[lifecycle] pty.reconnect id=${id} result=fail code=pipe-not-writable (transient=true)`);
-          return { success: false, error: 'Session pipe not writable after reconnect', code: 'pipe-not-writable', transient: true };
+          return { success: false, error: 'Session pipe not writable after reconnect', code: 'pipe-not-writable', transient: true, ...startedHere() };
         }
 
         // Re-anchor the PID → ptyId identity map. A surviving shell keeps its
@@ -1660,7 +1663,7 @@ export function registerPTYHandlers(
         recordPtyShell(session.id, session.cmd);
         // The session's stored geometry: a hidden pane cannot measure its own,
         // so it adopts this one instead (see the reattach in useTerminal).
-        return { success: true, id: session.id, shell: session.cmd, cols: session.cols, rows: session.rows, ...(promoted ? { promoted: true } : {}) };
+        return { success: true, id: session.id, shell: session.cmd, cols: session.cols, rows: session.rows, ...startedHere() };
       } catch (err) {
         // RCA A1 — RPC threw (timeout, ECONNRESET, handler swap mid-call).
         // This is a transient infrastructure failure, NOT proof the session is
@@ -1668,7 +1671,7 @@ export function registerPTYHandlers(
         // the session.
         const msg = err instanceof Error ? err.message : String(err);
         console.log(`[lifecycle] pty.reconnect id=${id} result=fail code=rpc-error transient=true err=${msg}`);
-        return { success: false, error: msg, code: 'rpc-error', transient: true };
+        return { success: false, error: msg, code: 'rpc-error', transient: true, ...startedHere() };
       }
     }));
   } else {

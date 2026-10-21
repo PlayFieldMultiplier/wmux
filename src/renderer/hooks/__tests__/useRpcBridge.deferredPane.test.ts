@@ -177,7 +177,12 @@ describe('a bound pane whose suspended session was left suspended', () => {
     expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-held', promote: false })).toEqual({ notRunning: true });
     reconnect.mockResolvedValueOnce({ success: false, code: 'session-dead', transient: false, error: 'Session not found or dead' });
     expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-gone', promote: false })).toEqual({ notRunning: true });
-    expect(reconnect.mock.calls.map(([, opts]) => opts)).toEqual([{ promote: false }, { promote: false }, { promote: false }]);
+    // Round-6 P3: an exec or supervised unit the daemon was still starting in
+    // the background: the attach joined that start, so the key has nothing
+    // of its own to stop (as on the mounted path).
+    reconnect.mockResolvedValueOnce({ success: true, promoted: true });
+    expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-unit', promote: false })).toEqual({ notRunning: true });
+    expect(reconnect.mock.calls.map(([, opts]) => opts)).toEqual([{ promote: false }, { promote: false }, { promote: false }, { promote: false }]);
     expect(create).not.toHaveBeenCalled();
   });
 
