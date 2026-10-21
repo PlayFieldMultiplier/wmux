@@ -66,6 +66,13 @@ describe('A2aHeldRow', () => {
     const legacy = render(createElement(A2aHeldRow, heldProps(heldTask('brain-delivery-pending'))));
     expect(legacy.querySelector('[data-testid="a2a-delivery-reason"]')?.textContent).toBe('a2aDelivery.reason.link-not-active');
     expect(legacy.querySelector('[data-testid="a2a-delivery-retry"]')).not.toBeNull();
+
+    // A brain-link hold names no local pane, so it can only be sent back.
+    const paneless = heldTask('brain-unavailable');
+    delete (paneless.metadata.to as { paneId?: string }).paneId;
+    const brain = render(createElement(A2aHeldRow, heldProps(paneless)));
+    expect(brain.querySelector('[data-testid="a2a-delivery-retry"]')).toBeNull();
+    expect(brain.querySelector('[data-testid="a2a-delivery-reject"]')).not.toBeNull();
   });
 });
 

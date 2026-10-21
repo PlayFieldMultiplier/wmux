@@ -1,5 +1,6 @@
 import { heldReason } from '../../stores/slices/a2aRemoteSlice';
 import type { Task } from '../../../shared/types';
+import { localSideOf } from '../../../shared/a2aRemoteDelivery';
 import UiButton from '../ui/Button';
 import { timeAgo } from '../../utils/timeAgo';
 
@@ -47,9 +48,12 @@ export function A2aHeldRow({ task, now, busy, onRetry, onReject, t }: A2aHeldRow
         <UiButton variant="ghost" size="md" disabled={busy} onClick={onReject} data-testid="a2a-delivery-reject">
           {t('remotePage.needs.sendBack')}
         </UiButton>
-        <UiButton variant="secondary" size="md" disabled={busy} onClick={onRetry} data-testid="a2a-delivery-retry">
-          {t('remotePage.needs.deliver')}
-        </UiButton>
+        {/* A task that names no local pane (an old brain-link hold) can only be sent back. */}
+        {task.metadata[localSideOf(task)]?.paneId && (
+          <UiButton variant="secondary" size="md" disabled={busy} onClick={onRetry} data-testid="a2a-delivery-retry">
+            {t('remotePage.needs.deliver')}
+          </UiButton>
+        )}
       </div>
     </li>
   );
