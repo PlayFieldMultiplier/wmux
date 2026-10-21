@@ -77,8 +77,8 @@ const CLOSE_REFUSAL: RefusalCopy = {
 const PR_REFUSAL: RefusalCopy = {
   nothing: 'No pull request was opened.',
   next: {
-    'gh-missing': 'the GitHub CLI is not installed on this machine; this is a human step',
-    'gh-unauth': 'the GitHub CLI is not authenticated; this is a human step',
+    'gh-missing': 'the GitHub CLI (gh), which task_pr opens PRs with, is not installed on this machine; this is a human step (on a GitLab repository, the owner opens the MR)',
+    'gh-unauth': 'the GitHub CLI (gh), which task_pr opens PRs with, is not signed in; this is a human step (on a GitLab repository, the owner opens the MR)',
     dirty: "the worktree has uncommitted changes — they would not be in the PR; have the worker commit them",
     'no-origin': 'the repository has no origin remote; this is a human step',
   },

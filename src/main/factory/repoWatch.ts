@@ -20,6 +20,10 @@
 // breaker: a rate-limited poll is retried when the breaker reopens, not
 // sooner. A repo no enabled bot watches any more is dropped with its state,
 // so watching it again starts from a new baseline.
+//
+// A GitLab repo key (hostLane.ts) is read with glab instead
+// (repoWatchGitlab.ts) into the same snapshot, diffed and emitted the same
+// way; a missing glab or a sign-out waits GITLAB_BACKOFF_MS before the next read.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,6 +35,8 @@ import type { FactDraft } from '../../shared/facts';
 import type { BotProfile } from '../../shared/bot';
 import type { BotDirectoryApi, FactLogApi } from './triggerEngine';
 import { guestSide } from './guestWorkspaces';
+import { isGitlabRepoKey } from '../github/hostLane';
+import type { GitlabWatchReader } from './repoWatchGitlab';
 
 export const REPO_WATCH_FILENAME = 'repo-watch.json';
 
@@ -45,6 +51,8 @@ export const REPO_WATCH_LIMITS = {
   /** Issues kept in the state when the open-issue read was not complete. */
   MAX_KEPT_ISSUES: 2000,
   TITLE_MAX: 200,
+  /** The wait after a missing glab or a GitLab sign-out. */
+  GITLAB_BACKOFF_MS: 5 * 60_000,
 } as const;
 
 /** The method name a watch_cap refusal carries (`bot.refused` keys need one). */
@@ -459,6 +467,8 @@ export interface RepoWatchPorts {
   facts: Pick<FactLogApi, 'append'>;
   bots: Pick<BotDirectoryApi, 'listEnabled'>;
   graphql: WatchGraphql;
+  /** The read of a GitLab repo key; missing = a GitLab repo is not read. */
+  gitlab?: GitlabWatchReader;
   /** `<wmuxDir>/factory/repo-watch.json` */
   stateFile: string;
   /** factory settings `enabled`; false = nothing is watched (and the state
@@ -522,6 +532,8 @@ export class RepoWatch {
   private repos: Record<string, RepoWatchState> = {};
   private loops = new Map<string, Loop>();
   private overCapNoted = new Set<string>();
+  /** GitLab repos backing off after a missing glab or a sign-out (noted once). */
+  private gitlabBlocked = new Set<string>();
   private reconcileTimer: unknown = null;
   private writes: Promise<void> = Promise.resolve();
   private started = false;
@@ -608,6 +620,7 @@ export class RepoWatch {
       if (keys.has(key)) continue;
       this.stopLoop(loop);
       this.loops.delete(key);
+      this.gitlabBlocked.delete(key);
     }
     for (const key of Object.keys(this.repos)) {
       if (!keys.has(key)) {
@@ -676,6 +689,7 @@ export class RepoWatch {
 
   private async poll(loop: Loop): Promise<PollOutcome> {
     const { repoKey, repoPath } = loop.repo;
+    if (isGitlabRepoKey(repoKey)) return this.pollGitlab(loop);
     const parts = splitRepoKey(repoKey);
     const outcome: PollOutcome = { ok: false, calls: 0, emitted: 0, baseline: false, cost: null };
     if (!parts) return { ...outcome, error: 'not a GitHub repo key' };
@@ -702,9 +716,42 @@ export class RepoWatch {
       this.log(`poll of ${repoKey} failed`, err);
       return { ...outcome, error: err instanceof Error ? err.message : String(err) };
     }
+    return this.settle(loop, first.snapshot, outcome);
+  }
+
+  /** A poll of a GitLab repo (repoWatchGitlab.ts). A missing glab or a
+   *  sign-out is noted once and asked again after GITLAB_BACKOFF_MS. */
+  private async pollGitlab(loop: Loop): Promise<PollOutcome> {
+    const { repoKey, repoPath } = loop.repo;
+    const outcome: PollOutcome = { ok: false, calls: 0, emitted: 0, baseline: false, cost: null };
+    if (!this.ports.gitlab) return { ...outcome, error: 'GitLab repos are not read' };
+    let read: Awaited<ReturnType<GitlabWatchReader>>;
+    try {
+      read = await this.ports.gitlab(repoPath, repoKey, this.repos[repoKey]);
+    } catch (err) {
+      this.log(`poll of ${repoKey} failed`, err);
+      return { ...outcome, error: err instanceof Error ? err.message : String(err) };
+    }
+    outcome.calls = read.calls;
+    if (!read.ok) {
+      if (!read.backoff) return { ...outcome, error: read.message };
+      if (!this.gitlabBlocked.has(repoKey)) {
+        this.gitlabBlocked.add(repoKey);
+        this.log(`${repoKey} not read: ${read.message}`);
+      }
+      return { ...outcome, retryAt: this.now() + REPO_WATCH_LIMITS.GITLAB_BACKOFF_MS, error: read.message };
+    }
+    this.gitlabBlocked.delete(repoKey);
+    return this.settle(loop, read.snapshot, outcome);
+  }
+
+  /** Diff a poll's snapshot against the saved state, append its facts, and
+   *  save the new state once they all landed. */
+  private settle(loop: Loop, snapshot: WatchSnapshot, outcome: PollOutcome): PollOutcome {
+    const { repoKey } = loop.repo;
     if (loop.stopped || this.disposed) return outcome;
     const prev = this.repos[repoKey];
-    const diff = diffRepo(prev, first.snapshot, repoKey, this.now());
+    const diff = diffRepo(prev, snapshot, repoKey, this.now());
     outcome.baseline = !prev;
     let failed = 0;
     for (const draft of diff.drafts) {
@@ -713,7 +760,7 @@ export class RepoWatch {
       else if (r === 'error') failed++;
     }
     if (diff.capRising) {
-      const r = this.refuse(loop.repo, { reason: 'open_prs', limit: REPO_WATCH_LIMITS.MAX_OPEN_PRS, openPrs: first.snapshot.prTotal });
+      const r = this.refuse(loop.repo, { reason: 'open_prs', limit: REPO_WATCH_LIMITS.MAX_OPEN_PRS, openPrs: snapshot.prTotal });
       outcome.emitted += r.appended;
       failed += r.failed;
     }

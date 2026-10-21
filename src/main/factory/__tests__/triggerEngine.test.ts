@@ -294,6 +294,29 @@ describe('module seam', () => {
     await mod.dispose();
     expect(mod.running).toEqual({ engine: null, watch: null });
   });
+
+  it('a GitLab repo is watched through the glab port, never the gh one', async () => {
+    const GL = 'gitlab.example.com/group/app';
+    const graphql = vi.fn(async () => ({ ok: false as const, code: 'error' as const, message: 'offline' }));
+    const gitlab = {
+      graphql: vi.fn(async () => ({ ok: false as const, code: 'error' as const, message: 'offline' })),
+      commitParents: vi.fn(async () => []),
+    };
+    setFactoryTriggerPorts(() => ({
+      factLog: { append: () => null, subscribe: () => () => undefined, readSince: () => ({ facts: [], cursor: null }) },
+      wakes: { enqueue: () => null },
+      bots: { listEnabled: () => [bot('bot-00000001', 'verifier', { repo: { repoKey: GL, repoPath: '/repo' } })], get: () => null },
+      graphql,
+      gitlab,
+    }));
+    const mod = createTriggerModule({ wmuxDir: () => dir });
+    await mod.start();
+    expect(mod.running.watch?.watching()).toEqual([GL]);
+    await vi.waitFor(() => expect(gitlab.graphql).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(gitlab.graphql.mock.calls[0]).toMatchObject(['/repo', GL, expect.any(String), { fullPath: 'group/app' }]);
+    expect(graphql).not.toHaveBeenCalled();
+    await mod.dispose();
+  });
 });
 
 describe('botSeesFact: the Coordinator reach follows the template', () => {

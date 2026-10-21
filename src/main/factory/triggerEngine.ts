@@ -38,6 +38,7 @@ import type { WakeItem, WakeReason } from '../../shared/wake';
 import { GENERAL_THREAD, type ThreadId } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
 import { REPO_WATCH_FILENAME, RepoWatch, normalizeRepoKey, type WatchGraphql } from './repoWatch';
+import { gitlabWatchReader, type GitlabWatchPorts } from './repoWatchGitlab';
 import { factThreadId } from './roomWriter';
 import { factInIsland } from './guestWorkspaces';
 
@@ -84,6 +85,8 @@ export interface FactoryTriggerPorts {
   factoryEnabled?: () => boolean;
   /** The gh read of the repo watch; default GhPrReviewService.watchGraphql. */
   graphql?: WatchGraphql;
+  /** The glab reads of the repo watch on a GitLab repo; default GlabPrService. */
+  gitlab?: GitlabWatchPorts;
 }
 
 type PortsResolver = () => Partial<FactoryTriggerPorts> | null;
@@ -271,6 +274,15 @@ async function defaultGraphql(): Promise<WatchGraphql> {
   return (repoPath, key, query, vars) => ghPrReviewService.watchGraphql(repoPath, key, query, vars);
 }
 
+/** The default glab reads, imported lazily as the gh one is. */
+async function defaultGitlab(): Promise<GitlabWatchPorts> {
+  const { glabPrService } = await import('../github/GlabPrService');
+  return {
+    graphql: (repoPath, key, query, vars) => glabPrService.watchGraphql(repoPath, key, query, vars),
+    commitParents: (repoPath, key, sha) => glabPrService.commitParentsOf(repoPath, key, sha),
+  };
+}
+
 export function createTriggerModule(deps: Pick<FactoryHostDeps, 'wmuxDir'>, resolve: () => FactoryTriggerPorts | null = resolvePorts) {
   let engine: TriggerEngine | null = null;
   let watch: RepoWatch | null = null;
@@ -284,6 +296,7 @@ export function createTriggerModule(deps: Pick<FactoryHostDeps, 'wmuxDir'>, reso
         return;
       }
       const graphql = ports.graphql ?? (await defaultGraphql());
+      const gitlab = ports.gitlab ?? (await defaultGitlab());
       if (disposed) return;
       engine = new TriggerEngine(ports);
       engine.start();
@@ -291,6 +304,7 @@ export function createTriggerModule(deps: Pick<FactoryHostDeps, 'wmuxDir'>, reso
         facts: ports.factLog,
         bots: ports.bots,
         graphql,
+        gitlab: gitlabWatchReader(gitlab),
         stateFile: path.join(deps.wmuxDir(), 'factory', REPO_WATCH_FILENAME),
         ...(ports.factoryEnabled ? { enabled: ports.factoryEnabled } : {}),
       });

@@ -96,6 +96,7 @@ import { factFromMergeEffect } from './factIngest';
 import { fenceFor } from '../../shared/markdownFence';
 import { redactStoredSecrets } from './secretRedaction';
 import { normalizeRepoKey } from './repoWatch';
+import { isGitlabRepoKey } from '../github/hostLane';
 import { laneRefusalCodes, laneRefusalLine } from './laneRefusalText';
 import { wakeReplyTo, type RoomWriter } from './roomWriter';
 import type { BotNoticeInput } from './botNotices';
@@ -433,10 +434,15 @@ const ACTION_TITLE: Readonly<Record<ApprovalAction, string>> = {
   owner_profile: 'Change',
 };
 
+/** A PR as its host names it: a GitLab merge request is `MR !n`. */
+function prName(repoKey: string, n: number): string {
+  return isGitlabRepoKey(repoKey) ? `MR !${n}` : `PR #${n}`;
+}
+
 function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'issueNumber' | 'skill'>): string {
   if (r.skill) return `${r.skill.name} ${r.skill.version}`;
   if (r.action === 'owner_profile') return 'your profile';
-  if (r.prNumber !== undefined) return `PR #${r.prNumber}`;
+  if (r.prNumber !== undefined) return prName(r.repoKey, r.prNumber);
   if (r.issueNumber !== undefined) return `issue #${r.issueNumber}`;
   return r.repoKey;
 }
@@ -622,16 +628,16 @@ export class ApprovalService {
       try {
         facts = await this.ports.readPr(repoPath, repoKey, prNumber);
       } catch (err) {
-        return refuse('read_failed', `PR #${prNumber} could not be read: ${String(err)}`.slice(0, 300));
+        return refuse('read_failed', `${prName(repoKey, prNumber)} could not be read: ${String(err)}`.slice(0, 300));
       }
-      if (facts.number !== prNumber || facts.state !== 'OPEN') return refuse('not_open', `PR #${prNumber} is not open`);
+      if (facts.number !== prNumber || facts.state !== 'OPEN') return refuse('not_open', `${prName(repoKey, prNumber)} is not open`);
       headSha = facts.headRefOid;
       // The same head already asked about and not settled: that request.
       const same = [...this.requests.values()].find((r) => r.action === 'merge' && r.repoKey === repoKey && r.prNumber === prNumber && r.headSha === headSha
         && (r.state === 'pending' || r.state === 'approved'));
       if (same) return { ok: true, request: botApprovalView(same, readerGuest), duplicate: true };
       const login = await this.ports.ghLogin({ key: repoKey, path: repoPath }).catch(() => null);
-      if (!login) return refuse('read_failed', 'the gh login could not be read');
+      if (!login) return refuse('read_failed', `the ${isGitlabRepoKey(repoKey) ? 'glab' : 'gh'} login could not be read`);
       ghLogin = login.toLowerCase();
     }
     // Re-read the wake after the awaits: a request outlives no turn, and
@@ -1431,7 +1437,7 @@ export class ApprovalService {
     const pr = f.ref?.pr;
     if (!repoKey || typeof pr !== 'number') return;
     const how = f.kind === 'pr.merged'
-      ? 'on GitHub'
+      ? `on ${isGitlabRepoKey(repoKey) ? 'GitLab' : 'GitHub'}`
       : f.payload?.approvedBy === 'lane' ? 'by the merge lane' : f.payload?.approvedBy === 'rule' ? 'by a rule the owner set' : 'with the owner\'s approval';
     const told = new Map<string, { workspaceId: string; threadId: ThreadId }>();
     const add = (botId: string, workspaceId: string, threadId: ThreadId): void => {
@@ -1464,7 +1470,7 @@ export class ApprovalService {
     for (const [botId, at] of told) {
       this.notice({
         botId, workspaceId: at.workspaceId, key: `pr.merged:${repoKey}#${pr}`, topic: 'pr.merged',
-        title: `PR #${pr} merged ${how}.`,
+        title: `${prName(repoKey, pr)} merged ${how}.`,
         body: 'It is done: do not ask the owner to approve or merge it again.',
         threadId: at.threadId, repoKey, pr,
       });

@@ -344,3 +344,22 @@ describe('mergedOfBranch / defaultBranch', () => {
     expect(await svc.mergedOfBranch('/wmux', KEY, '-x', 'main')).toMatchObject({ ok: false });
   });
 });
+
+describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
+  const svcOf = (exec: (cmd: string, args: string[]) => Promise<{ stdout: string }>) => new GlabPrService(() => 1000, exec as never);
+
+  it('names the host, and tells a missing glab and a sign-out from other failures', async () => {
+    const seen: string[][] = [];
+    const ok = svcOf(async (_c, args) => { seen.push(args); return { stdout: JSON.stringify({ data: { project: {} } }) }; });
+    expect(await ok.watchGraphql('/wmux', KEY, 'query { x }', { fullPath: 'group/sub/proj' })).toEqual({ ok: true, value: { data: { project: {} } } });
+    expect(seen[0].slice(0, 4)).toEqual(['api', '--hostname', 'gitlab.example.com', 'graphql']);
+    const missing = svcOf(async () => { throw Object.assign(new Error('spawn glab ENOENT'), { code: 'ENOENT' }); });
+    expect(await missing.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'cli-missing' });
+    const out = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'glab: 401 Unauthorized (HTTP 401)' }); });
+    expect(await out.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'unauthenticated' });
+    const down = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'dial tcp: i/o timeout' }); });
+    expect(await down.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'error' });
+    const partial = svcOf(async () => ({ stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'complexity' }] }) }));
+    expect(await partial.watchGraphql('/wmux', KEY, 'q', {})).toEqual({ ok: false, code: 'error', message: 'complexity' });
+  });
+});
