@@ -67,12 +67,13 @@ export const ROSTER_JOB_MAX = 80;
 /** A bot as the roster lists it. Pure. */
 export function rosterEntry(b: Pick<BotProfile, 'id' | 'name' | 'role' | 'job' | 'template' | 'repo'>): WakeRosterEntry {
   const line = (b.job ?? '').split('\n').map((l) => l.trim()).find((l) => l.length > 0);
+  const repo = botRepo(b);
   return {
     botId: b.id,
     name: b.name || b.role,
     template: botTemplate(b),
     ...(line ? { job: line.length > ROSTER_JOB_MAX ? `${line.slice(0, ROSTER_JOB_MAX - 1)}…` : line } : {}),
-    ...(botRepo(b) ? { repo: botRepo(b)!.repoKey } : {}),
+    ...(repo ? { repo: repo.repoKey } : {}),
   };
 }
 

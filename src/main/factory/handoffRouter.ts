@@ -1199,7 +1199,9 @@ export class HandoffRouter {
       actor: { kind: 'system' },
       title: `${how === 'stopped' ? 'Stopped' : 'Finished'}: ${root.payload.title}`,
       notice: { code: how === 'stopped' ? 'thread.stopped' : 'thread.finished', args: { title: root.payload.title } },
-      refs: { handoffId: result.id, threadId: root.threadId },
+      // Where the owner asked for work in a thread no conversation opened:
+      // marked, so the pointer does not tie that thread to this one.
+      refs: { handoffId: result.id, threadId: root.threadId, ...(root.opensThread !== true ? { pointer: 'askedIn' as const } : {}) },
       ...(this.guestOf(root) || this.guestOf(result) ? { origin: 'guest' as const } : {}),
     }, ownerCard && ownerCard.threadId === saidIn && ownerCard.kind === 'human' ? { replyTo: ownerCard.id } : undefined);
     // Written once per result: the mark is on the result itself.

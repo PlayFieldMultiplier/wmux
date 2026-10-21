@@ -481,6 +481,7 @@ export function sanitizeRefs(value: unknown): RoomCard['refs'] | undefined {
     if (ids.length > 0) out.botIds = ids;
   }
   if (isBotSecretName(r.secretName)) out.secretName = r.secretName;
+  if (r.pointer === 'askedIn') out.pointer = 'askedIn';
   // The subject thread a card links (an approval card's PR thread).
   const linked = parseThreadId(r.threadId);
   if (linked) out.threadId = linked;
@@ -1105,15 +1106,17 @@ function threadLinked(cards: readonly RoomCard[], threadId: ThreadId, of: (t: un
   // A pointer card in a conversation ties to it only a thread wmux opened
   // for one piece of work (`handoff:`), as the room views read it
   // (shared/botsWork.ts): a long-lived subject's thread (a PR's) a pointer
-  // links stays the room's. A card in the thread itself that links the
-  // conversation (an opening hop, a task's lifecycle card) still ties it.
+  // links stays the room's, and so does a thread another conversation
+  // opened that the owner followed up on from here (an askedIn pointer). A
+  // card in the thread itself that links the conversation (an opening hop,
+  // a task's lifecycle card) still ties it.
   const pointed = threadId.startsWith('handoff:');
   for (const c of cards) {
     if (c.actor.kind !== 'system') continue;
     if (c.threadId === threadId) {
       const linked = of(c.refs?.threadId);
       if (linked) return linked;
-    } else if (pointed && c.refs?.threadId === threadId) {
+    } else if (pointed && c.refs?.threadId === threadId && c.refs.pointer !== 'askedIn') {
       const from = of(c.threadId);
       if (from) return from;
     }

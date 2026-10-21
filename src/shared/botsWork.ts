@@ -64,7 +64,8 @@ export function dmStartedThreads(cards: readonly RoomCard[], threads: ThreadsByW
     if (c.actor.kind !== 'system') continue;
     const inDm = dmThreadBot(c.threadId);
     const linked = c.refs?.threadId;
-    if (inDm && linked?.startsWith('handoff:')) {
+    // An askedIn pointer links work another conversation opened: not this one's.
+    if (inDm && linked?.startsWith('handoff:') && c.refs?.pointer !== 'askedIn') {
       out.set(threadKeyOf({ workspaceId: c.workspaceId, threadId: linked }), inDm);
       continue;
     }
@@ -93,7 +94,7 @@ export function groupStartedThreads(cards: readonly RoomCard[], threads: Threads
     if (c.actor.kind !== 'system') continue;
     const inGroup = groupThreadGroup(c.threadId) ? c.threadId : null;
     const linked = c.refs?.threadId;
-    if (inGroup && linked?.startsWith('handoff:')) {
+    if (inGroup && linked?.startsWith('handoff:') && c.refs?.pointer !== 'askedIn') {
       out.set(threadKeyOf({ workspaceId: c.workspaceId, threadId: linked }), inGroup);
       continue;
     }
