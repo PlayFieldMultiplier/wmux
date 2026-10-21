@@ -84,13 +84,18 @@ const TERMINAL_LINK: ReadonlySet<string> = new Set(['revoked', 'broken']);
 
 /**
  * The `features` a share offer (`A2aOffers`) gates on: what `hostId`
- * advertised on its own stream to this PC (it is our joiner) since this
- * daemon started. Before that stream is up an offer would show the pane while
- * its envelope could only wait, and perhaps expire, in the outbox, so the
- * offer is refused as not connected. The daemon and its tests wire this one.
+ * advertised on its own stream to this PC (it is our joiner), while that
+ * stream is up. Without it (never up since this daemon started, or closed
+ * since: the hub keeps the last features after a stream ends) an offer would
+ * show the pane while its envelope could only wait, and perhaps expire, in
+ * the outbox, so the offer is refused as not connected. The daemon and its
+ * tests wire this one.
  */
 export function shareOfferFeatures(delivery: () => A2aRemoteDelivery | null): (hostId: HostId) => ReadonlySet<string> | undefined {
-  return (hostId) => delivery()?.hub.featuresOf(hostId);
+  return (hostId) => {
+    const hub = delivery()?.hub;
+    return hub?.isConnected(hostId) ? hub.featuresOf(hostId) : undefined;
+  };
 }
 
 export class A2aRemoteDelivery {

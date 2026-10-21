@@ -234,6 +234,20 @@ describe('share offers, end to end', () => {
     expect(a.delivery.outbox.openCount(b.hostId)).toBe(0);
   });
 
+  it('a share to a PC whose stream has closed is refused as not connected', async () => {
+    const b = await makePc('PC-B');
+    const a = await makePc('PC-A', { advertise: [A2A_FEATURE_LINK_OFFER] });
+    await pair(a, b);
+    await until(() => b.delivery.hub.featuresOf(a.hostId)?.has(A2A_FEATURE_LINK_OFFER) === true);
+    // A goes away: its stream to B closes, and B still remembers what it took.
+    await a.delivery.stop();
+    await until(() => !b.delivery.hub.isConnected(a.hostId));
+    expect(b.delivery.hub.featuresOf(a.hostId)?.has(A2A_FEATURE_LINK_OFFER)).toBe(true);
+    expect(await share(b, a)).toEqual({ ok: false, error: 'not-connected' });
+    expect(b.exposures.isPaneExposed(a.hostId, 'ws-api', 'pane-1')).toBe(false);
+    expect(b.delivery.outbox.openCount(a.hostId)).toBe(0);
+  });
+
   it('an older sharer’s listener takes the answer as an ordinary proposal for its human', async () => {
     const b = await makePc('PC-B', { routeOffers: false });
     const a = await makePc('PC-A', { advertise: [A2A_FEATURE_LINK_OFFER] });
