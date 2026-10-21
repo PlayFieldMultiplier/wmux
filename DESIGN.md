@@ -600,6 +600,27 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   profile?", "Change this in your profile?" or "Remove this from your
   profile?", the exact entry fenced, replace showing Now and Becomes),
   approved on the card only, as a skill is.
+- **Recipes (2026-10-21):** Add bot has a Recipe row above "Start from": a
+  native Select (None, then the recipes in three groups — sign in with one
+  click, an access token, your own OAuth client). A recipe sets the Custom
+  template and prefills the job by the chips' rule (it replaces only its
+  own prefill); a chip pressed after it clears it. Under it one muted line:
+  what it does, which services it reads, "needs your own OAuth client"
+  where it does, "macOS and Linux only" on Windows, and that nothing is
+  connected by it. It grants nothing. A bot made from one has a Recipe row
+  in its profile, above its connections: the recipe's name in the main
+  text, then one line per service it needs — the name (main text once
+  ready, muted otherwise) and its state as a muted text button (Checking…
+  until the library and its sign-in are read, Sign in needed or Token
+  needed, Not given to this bot, Tools not picked, Ready to try — "· with a
+  key" for a keyed connection — or macOS and Linux only) that opens
+  Plugins › Connectors — then, while one has a step left, one muted hint,
+  and once one is ready, one muted line saying wmux checks again when a
+  worker starts (read-only tools, the command sandbox) and the bot says in
+  the chat why if not. No colour: a state is words. No recipe offers a
+  schedule while a signed-in task can run only once per bot conversation.
+  The first-run panel offers the same form under its repository line, as
+  the muted text button "Start from a recipe…".
 - **Commands (2026-10-21):** under Memory, only where the bot runs
   commands at all (a Claude SDK bot, the OS sandbox present, a new enough
   Claude Code), a Commands row: first "Let this bot run commands" with a

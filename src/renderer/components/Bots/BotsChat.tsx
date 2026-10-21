@@ -90,6 +90,7 @@ import { useShallow } from 'zustand/react/shallow';
 import type { BotTaskView } from '../../../shared/botTask';
 import { botCanDo } from './botsProfile';
 import { BotConnections } from './BotConnections';
+import { BotRecipeChecklist } from './BotRecipes';
 import { BotSkills } from './BotSkills';
 import { BotMemory } from './BotMemory';
 import { BotCommands } from './BotCommands';
@@ -2076,7 +2077,8 @@ function ProfileState({ row, t }: { row: FactoryBotRow; t: T }) {
  *  workspace, repo, the model it thinks on, what its workers run on and
  *  their model, on/off, what it used today of each limit (and what stops
  *  it, with Resume when parked), its routines
- *  (read-only), its connections, then what it can do (the shared powers,
+ *  (read-only), the recipe it was added from and what its connections still
+ *  need, its connections, then what it can do (the shared powers,
  *  read-only), whom it reports to, its workers now, and Pause and Stop. */
 function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPort }: { row: FactoryBotRow; workers: readonly BotWorker[]; workspaceName: string; t: T; stopPort: BotsStopPort; jobPort?: Pick<FactoryBotPort, 'update' | 'workerAgents'>; adminPort?: BotAdminPort }) {
   const routines = (useBotRoutines()?.routines ?? []).filter((r) => r.botId === row.bot.id);
@@ -2106,6 +2108,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
           </ul>
         </div>
       )}
+      <BotRecipeChecklist bot={row.bot} t={t} />
       <BotConnections row={row} t={t} />
       <BotSkills row={row} t={t} />
       <BotMemory row={row} t={t} />
