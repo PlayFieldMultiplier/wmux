@@ -62,6 +62,21 @@ describe('real git', () => {
     expect(await gitShow(repo, { rev: 'f'.repeat(40), path: 'README.md' })).toMatchObject({ ok: false, reason: expect.stringContaining('not a commit') });
   });
 
+  it('a partial clone (a read could fetch) or a content filter in the repository config refuses every read', async () => {
+    const other = path.join(tmp, 'partial');
+    fs.mkdirSync(other);
+    run(['init', '-q', '-b', 'main'], other);
+    fs.writeFileSync(path.join(other, 'a.md'), 'a\n');
+    run(['add', '-A'], other);
+    run(['commit', '-q', '-m', 'a'], other);
+    run(['config', 'remote.origin.promisor', 'true'], other);
+    expect(await gitShow(other, { rev: 'main', path: 'a.md' })).toMatchObject({ ok: false, reason: expect.stringContaining('partial clone') });
+    run(['config', '--unset', 'remote.origin.promisor'], other);
+    expect(await gitShow(other, { rev: 'main', path: 'a.md' })).toMatchObject({ ok: true });
+    run(['config', 'filter.x.smudge', 'cat'], other);
+    expect(await gitDiff(other, { base: 'main', head: 'main' })).toMatchObject({ ok: false });
+  });
+
   it('the in-process server lists both tools and answers a call; a refusal answers an error result', async () => {
     let refuse: string | null = null;
     const cfg = createBotRepoGitServer(repo, () => refuse);

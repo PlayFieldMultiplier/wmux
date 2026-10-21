@@ -161,6 +161,11 @@ export const GATE_VERIFY_SCRIPT = 'scripts/verify.sh';
  *  the script. */
 export const GATE_NPM_SCRIPTS = ['lint', 'test'] as const;
 
+/** Why a project whose wmux.json declares a verify command nobody approved
+ *  has no runnable gate (and is not a project without one). */
+const UNAPPROVED_VERIFY_DETAIL =
+  `this project's wmux.json declares a '${GATE_PROJECT_COMMAND_ID}' command that is not approved (approve wmux.json in its trust dialog), so its gate cannot run`;
+
 /** The spellings of GATE_VERIFY_SCRIPT a wmux.json may use for its `verify`
  *  command. Compared literally; anything else is refused. */
 const VERIFY_COMMAND_SPELLINGS: readonly string[] = [
@@ -976,6 +981,7 @@ export class TaskGateRunner {
         ? { kind: 'declared', command: `bash ${GATE_VERIFY_SCRIPT}` }
         : { kind: 'unknown', detail: `wmux.json declares '${GATE_PROJECT_COMMAND_ID}' as a command the gate runner will not execute` };
     }
+    if (await this.unapprovedVerifyDeclared(repoRoot)) return { kind: 'unknown', detail: UNAPPROVED_VERIFY_DETAIL };
     let raw: string | null;
     try {
       raw = await this.readBaseFile(repoRoot, baseRef, 'package.json');
@@ -992,6 +998,22 @@ export class TaskGateRunner {
       return { kind: 'unknown', detail: `${baseRef} declares no npm lint/test script but the checkout at ${repoRoot} does` };
     }
     return { kind: 'none' };
+  }
+
+  /** Whether the project's wmux.json declares a `verify` command the owner
+   *  has not approved (untrusted, stale or denied): a gate exists that the
+   *  runner may not run, which is not "no gate". A read that fails counts as
+   *  declared. */
+  private async unapprovedVerifyDeclared(configRoot: string): Promise<boolean> {
+    if (!this.project) return false;
+    let state: { trust?: string; config?: { commands?: { id: string; command: string }[] } };
+    try {
+      state = await this.project.getState(configRoot);
+    } catch {
+      return true;
+    }
+    if (state?.trust === undefined || state.trust === 'trusted') return false;
+    return (state.config?.commands ?? []).some((c) => c.id === GATE_PROJECT_COMMAND_ID);
   }
 
   /** The trusted project's `verify` command string, or null when there is none
@@ -1381,6 +1403,11 @@ export class TaskGateRunner {
     const parentRoot = input.projectRoot ?? worktreePath;
     const headSha = await this.pinnedHead(worktreePath, before);
     const pinned = headSha ? { headSha } : {};
+    // A verify script the owner has not approved is a gate that cannot run
+    // yet, never a waiver: the merge lane counts `no_gate_command` as the gate.
+    if (await this.unapprovedVerifyDeclared(parentRoot)) {
+      return { ok: true, status: 'skipped', taskId, skipped: 'gate_unavailable', detail: UNAPPROVED_VERIFY_DETAIL };
+    }
     if (path.resolve(parentRoot) !== path.resolve(worktreePath)) {
       const parentScripts = this.readPackageScripts(parentRoot);
       if (parentScripts === null) {

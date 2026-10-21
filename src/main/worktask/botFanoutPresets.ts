@@ -148,7 +148,7 @@ function verifyGateLines(gate: BaseGate | undefined): string[] {
   }
   const command = gate?.kind === 'declared' ? `\`${gate.command}\`` : 'the repository gate (wmux could not tell which one ahead of time)';
   return [
-    `- After you report, wmux runs ${command} on this commit. When the change needs it, install the dependencies that gate needs (for a Node project, a real \`npm ci\`) and run checks for what the change touches.`,
+    `- After you report, wmux runs ${command} on this commit, so install the dependencies that gate needs (for a Node project, a real \`npm ci\`), whatever the change is. Run checks yourself for what a code change touches.`,
   ];
 }
 
@@ -159,7 +159,7 @@ const VERIFY_PROMPT = (ctx: BotPresetPromptContext): string => [
   '',
   'What you can do here:',
   '- Read the change against its base first: `git log` and `git diff --name-status` between the merge base with origin\'s default branch and HEAD, then the diff itself.',
-  `- When ${DOCS_ONLY_RULE}, the change is docs-only: read it and report; install nothing and run no test suite.`,
+  `- When ${DOCS_ONLY_RULE}, the change is docs-only: read it and run no test suite yourself.`,
   ...verifyGateLines(ctx.gate),
   '',
   'What you hand back:',

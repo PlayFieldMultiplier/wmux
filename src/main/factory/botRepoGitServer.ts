@@ -5,8 +5,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { runWorkerGitRead } from '../worktask/workerGit';
-import { BOT_REPO_GIT_PATHS_MAX, BOT_REPO_GIT_SERVER, gitDiff, gitShow, type GitRead, type GitToolResult } from './botRepoGit';
+import { BOT_REPO_GIT_PATHS_MAX, BOT_REPO_GIT_SERVER, gitDiff, gitShow, repoGitRead, type GitRead, type GitToolResult } from './botRepoGit';
 
 /**
  * The in-process MCP server a repository-reading bot's session holds:
@@ -14,7 +13,7 @@ import { BOT_REPO_GIT_PATHS_MAX, BOT_REPO_GIT_SERVER, gitDiff, gitShow, type Git
  * guest check, a second lock behind the session's tool gate); a reason
  * refuses it.
  */
-export function createBotRepoGitServer(root: string, refusal: () => string | null, run: GitRead = runWorkerGitRead) {
+export function createBotRepoGitServer(root: string, refusal: () => string | null, run: GitRead = repoGitRead) {
   const server = new McpServer({ name: BOT_REPO_GIT_SERVER, version: '1.0.0' });
   const answer = async (fn: () => Promise<GitToolResult>) => {
     let r: GitToolResult;

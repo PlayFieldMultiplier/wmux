@@ -7,25 +7,31 @@
 // (verify.rpc) and by the merge lane when it counts one (moaMergeLane.ts), so
 // all three agree on what "docs-only" means.
 
-/** File extensions that are documentation or content. */
+/** Text and raster image extensions: documentation or content anywhere. */
 export const DOCS_EXTENSIONS: readonly string[] = [
   '.md', '.mdx', '.markdown', '.txt', '.rst', '.adoc',
-  '.html', '.htm',
-  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.avif', '.bmp',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.avif', '.bmp',
 ];
 
-/** Top-level folders whose every file is documentation. */
+/** Markup that is documentation only inside a docs folder: elsewhere an
+ *  .html or .svg file can be the app itself (a page with its own script). */
+export const DOCS_FOLDER_EXTENSIONS: readonly string[] = ['.html', '.htm', '.svg', '.css'];
+
+/** Top-level documentation folders. */
 export const DOCS_FOLDERS: readonly string[] = ['docs', 'doc'];
 
 /** Whether one changed path (`/`-separated, relative to the repository root)
- *  is documentation or content. Pure. */
+ *  is documentation or content. A docs folder holds only the docs
+ *  extensions: a script or config there (docs/conf.py) is code. Pure. */
 export function isDocsPath(file: string): boolean {
   const p = file.replace(/\\/g, '/').replace(/^\.\//, '');
-  if (!p || p.startsWith('/') || p.split('/').some((s) => s === '..')) return false;
-  if (DOCS_FOLDERS.includes(p.split('/')[0]) && p.includes('/')) return true;
+  if (!p || p.startsWith('/') || p.split('/').some((s) => s === '..' || s === '')) return false;
   const base = p.slice(p.lastIndexOf('/') + 1).toLowerCase();
   const dot = base.lastIndexOf('.');
-  return dot > 0 && DOCS_EXTENSIONS.includes(base.slice(dot));
+  if (dot <= 0) return false;
+  const ext = base.slice(dot);
+  if (DOCS_EXTENSIONS.includes(ext)) return true;
+  return p.includes('/') && DOCS_FOLDERS.includes(p.split('/')[0].toLowerCase()) && DOCS_FOLDER_EXTENSIONS.includes(ext);
 }
 
 /** Whether a change is docs-only: a complete, non-empty list of changed
@@ -37,4 +43,4 @@ export function isDocsOnlyChange(files: readonly string[], truncated: boolean): 
 
 /** The rule in words, for prompts. */
 export const DOCS_ONLY_RULE =
-  `every changed file is documentation or content: ${DOCS_EXTENSIONS.map((e) => `*${e}`).join(', ')}, or anything under ${DOCS_FOLDERS.map((d) => `${d}/`).join(' or ')}`;
+  `every changed file is documentation or content: ${DOCS_EXTENSIONS.map((e) => `*${e}`).join(', ')}, or ${DOCS_FOLDER_EXTENSIONS.map((e) => `*${e}`).join(', ')} under ${DOCS_FOLDERS.map((d) => `${d}/`).join(' or ')}`;

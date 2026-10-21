@@ -1022,4 +1022,24 @@ describe('TaskGateRunner.baseGate — what a repository declares, without a work
     expect(await runnerWith(null, {}, 'curl x | sh').baseGate(REPO, 'origin/main')).toMatchObject({ kind: 'unknown' });
     expect(await runnerWith(null).baseGate(REPO, '--upload-pack=x')).toMatchObject({ kind: 'unknown' });
   });
+
+  it('a verify script in a wmux.json nobody approved is a gate that cannot run: unknown, and the runner records no waiver', async () => {
+    for (const trust of ['untrusted', 'stale', 'denied']) {
+      const project = { getState: async () => ({ trust, config: { commands: [{ id: 'verify', command: 'scripts/verify.sh' }] } }) };
+      const runner = new TaskGateRunner({
+        ledger: fakeLedger(), spawn: fakeSpawn({ code: 0 }), readPackageScripts: () => ({}),
+        readBaseFile: async () => null, project, depsState: () => 'ok', readHead: async () => null,
+      });
+      expect(await runner.baseGate(REPO, 'origin/main'), trust).toMatchObject({ kind: 'unknown', detail: expect.stringContaining('not approved') });
+      const r = await runner.run({ taskId: 'wtask-1', worktreePath: WT, systemWorkspaceId: 'ws-daemon', projectRoot: REPO, gateBaseRef: 'origin/main' });
+      expect(r, trust).toMatchObject({ ok: true, status: 'skipped', skipped: 'gate_unavailable' });
+      expect('recorded' in r && r.recorded).toBeFalsy();
+    }
+    // An unapproved wmux.json without a verify command chooses nothing: still no gate.
+    const plain = new TaskGateRunner({
+      ledger: fakeLedger(), spawn: fakeSpawn({ code: 0 }), readPackageScripts: () => ({}), readBaseFile: async () => null,
+      project: { getState: async () => ({ trust: 'untrusted', config: { commands: [{ id: 'dev', command: 'npm run dev' }] } }) },
+    });
+    expect(await plain.baseGate(REPO, 'origin/main')).toEqual({ kind: 'none' });
+  });
 });

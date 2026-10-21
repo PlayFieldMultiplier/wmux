@@ -123,8 +123,13 @@ describe('the verify worker is told what the base gate is', () => {
     expect(p).toMatch(/npm ci/);
   });
 
-  it('a docs-only change is read, not installed, whatever the gate; an unknown gate says so', () => {
-    expect(prompt()).toMatch(/the change is docs-only: read it and report; install nothing and run no test suite/);
+  it('wherever a gate runs after the report, the worker installs what it needs, docs-only or not', () => {
+    // main sends a worker only for a head its gate grades: a gate that finds
+    // no node_modules is skipped (deps_missing) and nothing can pass.
+    for (const p of [prompt(), prompt({ kind: 'declared', command: 'npm test' })]) {
+      expect(p).toMatch(/install the dependencies that gate needs \(for a Node project, a real `npm ci`\), whatever the change is/);
+      expect(p).toMatch(/the change is docs-only: read it and run no test suite yourself/);
+    }
     expect(prompt()).toContain('wmux could not tell which one ahead of time');
   });
 });

@@ -113,12 +113,12 @@ describe('gitDiff', () => {
 
   it('names every changed file and leaves protected ones out of the patch', async () => {
     const { run, calls } = both([
-      ['diff --no-color --no-ext-diff --no-textconv --no-renames --name-status', { stdout: 'A\0docs/a.md\0M\0.env\0' }],
-      ['diff --no-color --no-ext-diff --no-textconv --no-renames origin/main', { stdout: '+# a\n' }],
+      ['diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short --name-status', { stdout: 'A\0docs/a.md\0M\0.env\0' }],
+      ['diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short origin/main', { stdout: '+# a\n' }],
     ]);
     const r = await gitDiff(ROOT, { base: 'origin/main', head: SHA }, run);
     expect(r).toEqual({ ok: true, text: `origin/main...${SHA}: 2 files changed\nA\tdocs/a.md\nM\t.env  (protected: not shown)\n\n+# a\n` });
-    expect(calls[calls.length - 1]).toEqual(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', `origin/main...${SHA}`, '--', '.', ':(exclude,literal).env']);
+    expect(calls[calls.length - 1]).toEqual(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--submodule=short', `origin/main...${SHA}`, '--', '.', ':(exclude,literal).env']);
   });
 
   it('paths are literal pathspecs', async () => {
@@ -129,8 +129,8 @@ describe('gitDiff', () => {
 
   it('caps the patch', async () => {
     const { run } = both([
-      ['diff --no-color --no-ext-diff --no-textconv --no-renames --name-status', { stdout: 'M\0a.md\0' }],
-      ['diff --no-color --no-ext-diff --no-textconv --no-renames origin/main', { stdout: '+'.repeat(BOT_REPO_GIT_OUTPUT_MAX * 2) }],
+      ['diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short --name-status', { stdout: 'M\0a.md\0' }],
+      ['diff --no-color --no-ext-diff --no-textconv --no-renames --submodule=short origin/main', { stdout: '+'.repeat(BOT_REPO_GIT_OUTPUT_MAX * 2) }],
     ]);
     const r = await gitDiff(ROOT, { base: 'origin/main', head: SHA }, run);
     expect(r.ok && r.text.endsWith(`[output cut at ${BOT_REPO_GIT_OUTPUT_MAX} characters]`)).toBe(true);

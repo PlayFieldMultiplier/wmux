@@ -19,8 +19,9 @@
 //     (BOT_REPO_SECRET_PATTERNS): its content is not shown at any commit;
 //   - each pathspec is `:(literal)`, protected files changed in a diff are
 //     named but excluded from the patch (`:(exclude,literal)`);
-//   - git runs through runWorkerGitRead (the repository config may set no
-//     content filter), with no external diff and no textconv;
+//   - git runs through repoGitRead (the repository config may set no
+//     content filter and no partial clone, so no read fetches), with no
+//     external diff, no textconv and a submodule shown as one line;
 //   - output is capped (BOT_REPO_GIT_OUTPUT_MAX characters).
 // The tools are an in-process MCP server of the bot's own SDK session
 // (botRepoGitServer.ts, held by ClaudeSdkAdapter), never on the wmux MCP
@@ -29,7 +30,8 @@
 // names do not start with mcp__wmux__, so the guest gate refuses them; the
 // handler checks again).
 
-import { runWorkerGitRead } from '../worktask/workerGit';
+import { git } from '../git/git';
+import { workerGitPreflight } from '../worktask/workerGit';
 import { protectedPatternOf } from './botRepoRead';
 
 /** The in-process MCP server's name; its tools are mcp__wmux_repo__<tool>. */
@@ -90,6 +92,21 @@ export function pathRefusal(p: unknown): string | null {
 
 export type GitRead = (args: string[], cwd: string) => Promise<{ code: number; stdout: string; stderr: string }>;
 
+/** Config that makes a read fetch: a partial clone fetches a missing object
+ *  from its promisor remote, through whatever transport config names. */
+const LAZY_FETCH_KEY = /^(?:extensions\.partialclone|remote\..+\.promisor)$/;
+
+/** Main's git for these reads: the repository config may set no content
+ *  filter (runWorkerGitRead's check) and make no read fetch. Never throws. */
+export async function repoGitRead(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  const run = (a: string[]) => git(a, cwd);
+  const pre = await workerGitPreflight(run, 'read');
+  if (!pre.ok) return { stdout: '', stderr: pre.error, code: 1 };
+  const lazy = pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && LAZY_FETCH_KEY.test(e.key));
+  if (lazy) return { stdout: '', stderr: `the repository's git config sets ${lazy.key} (a partial clone): these reads never fetch`, code: 1 };
+  return run(args);
+}
+
 export type GitToolResult = { ok: true; text: string } | { ok: false; reason: string };
 
 const cap = (text: string): string => (text.length > BOT_REPO_GIT_OUTPUT_MAX
@@ -101,13 +118,14 @@ const errText = (r: { stderr: string }): string => r.stderr.trim().split('\n')[0
 /** A rev that is a commit in the repository's object store, or the reason. */
 async function commitRefusal(root: string, rev: string, run: GitRead): Promise<string | null> {
   const r = await run(['cat-file', '-e', `${rev}^{commit}`], root);
-  return r.code === 0
-    ? null
-    : `${rev} is not a commit in this repository's object store (a branch or pull request that was never fetched here is not; a verify worker fetches it)`;
+  if (r.code === 0) return null;
+  // The config check refused before git ran: say why.
+  if (r.stderr.startsWith('the repository\'s git config')) return r.stderr.slice(0, 300);
+  return `${rev} is not a commit in this repository's object store (a branch or pull request that was never fetched here is not; a verify worker fetches it)`;
 }
 
 /** git_show: one file at a commit, or the listing of a folder there. */
-export async function gitShow(root: string, input: { rev?: unknown; path?: unknown }, run: GitRead = runWorkerGitRead): Promise<GitToolResult> {
+export async function gitShow(root: string, input: { rev?: unknown; path?: unknown }, run: GitRead = repoGitRead): Promise<GitToolResult> {
   const bad = revRefusal(input.rev) ?? pathRefusal(input.path);
   if (bad) return { ok: false, reason: bad };
   const rev = input.rev as string;
@@ -140,7 +158,7 @@ export async function gitShow(root: string, input: { rev?: unknown; path?: unkno
 export async function gitDiff(
   root: string,
   input: { base?: unknown; head?: unknown; paths?: unknown },
-  run: GitRead = runWorkerGitRead,
+  run: GitRead = repoGitRead,
 ): Promise<GitToolResult> {
   const badRev = revRefusal(input.base) ?? revRefusal(input.head);
   if (badRev) return { ok: false, reason: badRev };
@@ -157,7 +175,9 @@ export async function gitDiff(
     if (missing) return { ok: false, reason: missing };
   }
   const range = `${base}...${head}`;
-  const flags = ['--no-color', '--no-ext-diff', '--no-textconv', '--no-renames'];
+  // A submodule is one line, never its files' diff (diff.submodule=diff
+  // would show files inside it that no protected-path check sees).
+  const flags = ['--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--submodule=short'];
   const scope = (paths as string[]).map((p) => `:(literal)${p}`);
   const names = await run(['diff', ...flags, '--name-status', '-z', range, '--', ...scope], root);
   if (names.code !== 0) return { ok: false, reason: `git diff ${range} failed: ${errText(names)}` };
