@@ -12,6 +12,9 @@
 //    single-MR GET only (one call per MR). So one GraphQL call reads every
 //    listed MR's head pipeline at once; if it fails (an old self-managed
 //    schema, a timeout) the list still shows, with no dot (checks null).
+//  - the factory's reads and merge (laneFacts, defaultBranchCi, merge,
+//    currentLogin) name the project and host on every call (`--hostname`,
+//    the remote key's path), as GlabIssueService does, never the cwd's repo.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -24,6 +27,8 @@ import {
   type PrSummary,
   type PrComment,
 } from './PrProvider';
+import { mergeBlock, type MergeBlock, type PrCheck, type PrCheckBucket, type PrLaneFacts, type PrMergeRequest, type PrReviewHead, type PrReviewRead, type PrWriteResult } from '../../shared/prReview';
+import type { CiRollup } from '../pipe/handlers/factoryRead.rpc';
 
 const execFileAsync = promisify(execFile);
 
@@ -57,7 +62,7 @@ function cacheKey(repoPath: string): string {
 type Exec = (
   cmd: string,
   args: string[],
-  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean },
+  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; maxBuffer?: number },
 ) => Promise<{ stdout: string }>;
 
 // ── GitLab REST 페이로드 매핑(순수, 테스트용 export) ─────────────────────────
@@ -190,6 +195,243 @@ export function mapGlabNotes(notes: GlabNote[], mrUrl: string): PrComment[] {
   }
   out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return out;
+}
+
+// ── The factory's merge request reads and merge (pure halves) ───────────────
+
+/** Reads and the merge name the project on every call; a big MR's file list
+ *  is long. */
+const FACTORY_TIMEOUT_MS = 15_000;
+const FACTORY_MAX_BUFFER = 8 * 1024 * 1024;
+/** Changed paths kept per read (the GitHub lane read's page). */
+const LANE_FILES = 100;
+/** Jobs read on the default branch (FACTORY_READ_LIMITS.CI_CHECKS). */
+const CI_JOBS = 50;
+
+/** host and project path (group/…/project) of a GitLab remote key, or null. */
+export function glabProjectOfKey(key: string): { host: string; path: string } | null {
+  const parts = key.split('/');
+  if (parts.length < 3 || parts.some((p) => !/^[\w.-]+$/.test(p) || p === '.' || p === '..')) return null;
+  return { host: parts[0], path: parts.slice(1).join('/') };
+}
+
+/**
+ * One merge request's lane facts (PrLaneFacts) in one answer, so its head,
+ * labels, files and head pipeline belong to one moment. A retried job counts
+ * by its latest run only.
+ */
+export const GLAB_LANE_MR_QUERY = `query($fullPath: ID!, $iid: String!) { project(fullPath: $fullPath) { mergeRequest(iid: $iid) { iid title state draft sourceBranch targetBranch diffHeadSha sourceProjectId targetProjectId conflicts detailedMergeStatus mergedAt mergeCommitSha author { username } labels(first: 50) { pageInfo { hasNextPage } nodes { title } } diffStatsSummary { fileCount } diffStats { path } headPipeline { sha mergeRequestEventType jobs(first: 100, retried: false) { pageInfo { hasNextPage } nodes { name status allowFailure webPath startedAt finishedAt stage { name } } } } } } }`;
+
+/** The default branch's name. */
+export const GLAB_ROOT_REF_QUERY = 'query($fullPath: ID!) { project(fullPath: $fullPath) { repository { rootRef } } }';
+
+/** The head commit of `ref` and its newest pipeline on that ref. */
+export const GLAB_CI_QUERY = `query($fullPath: ID!, $ref: String!) { project(fullPath: $fullPath) { repository { tree(ref: $ref) { lastCommit { sha committedDate pipelines(ref: $ref, first: 1) { nodes { status jobs(first: ${CI_JOBS}, retried: false) { count nodes { name status allowFailure } } } } } } } } }`;
+
+type Rec = Record<string, unknown>;
+const rec = (v: unknown): Rec | null => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Rec) : null);
+const text = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/** The first GraphQL error's message, or null. */
+export function glabGraphqlError(raw: unknown): string | null {
+  const errors = rec(raw)?.errors;
+  const first = Array.isArray(errors) ? rec(errors[0]) : null;
+  return first && typeof first.message === 'string' ? first.message.slice(0, 300) : null;
+}
+
+function glabErrorText(err: unknown): string {
+  const e = err as { stderr?: string; message?: string };
+  return (e?.stderr || e?.message || String(err)).trim().slice(0, 300);
+}
+
+/** A job's bucket. A manual job allowed to fail is optional (skipping); one
+ *  that is not holds the pipeline (pending). */
+export function glabJobBucket(status: unknown, allowFailure: boolean): PrCheckBucket {
+  switch (text(status).toUpperCase()) {
+    case 'SUCCESS':
+      return 'pass';
+    case 'FAILED':
+      return 'fail';
+    case 'CANCELED':
+    case 'CANCELING':
+      return 'cancel';
+    case 'SKIPPED':
+      return 'skipping';
+    case 'MANUAL':
+      return allowFailure ? 'skipping' : 'pending';
+    default:
+      return 'pending';
+  }
+}
+
+/** GitLab's detailedMergeStatus (and conflicts) in the GitHub words the lane
+ *  and mergeBlock read: mergeable MERGEABLE/CONFLICTING/UNKNOWN and
+ *  mergeStateStatus CLEAN/DIRTY/BEHIND/DRAFT/UNSTABLE/BLOCKED/UNKNOWN. Any
+ *  status not named here (approvals missing, discussions open, CI must pass,
+ *  a policy) is BLOCKED. */
+export function glabMergeState(detailed: unknown, conflicts: unknown): { mergeable: string; mergeStateStatus: string } {
+  const d = text(detailed).toUpperCase();
+  const computing = d === '' || d === 'CHECKING' || d === 'UNCHECKED' || d === 'PREPARING';
+  const mergeable = conflicts === true || d === 'CONFLICT' ? 'CONFLICTING' : computing ? 'UNKNOWN' : 'MERGEABLE';
+  const mergeStateStatus = d === 'MERGEABLE' ? 'CLEAN'
+    : d === 'CONFLICT' ? 'DIRTY'
+      : d === 'NEED_REBASE' ? 'BEHIND'
+        : d === 'DRAFT_STATUS' ? 'DRAFT'
+          : d === 'CI_STILL_RUNNING' ? 'UNSTABLE'
+            : computing ? 'UNKNOWN' : 'BLOCKED';
+  return { mergeable, mergeStateStatus };
+}
+
+/** GLAB_LANE_MR_QUERY's answer → PrLaneFacts (the MR's iid is its number),
+ *  or null when it is not a merge request. `checksHeadOid` is the head
+ *  pipeline's commit: a merged-results pipeline's is a merge commit, which
+ *  laneFacts resolves to the head it tested. */
+export function mapGlabLaneFacts(raw: unknown, host: string): PrLaneFacts | null {
+  const mr = rec(rec(rec(rec(raw)?.data)?.project)?.mergeRequest);
+  const number = Number(mr?.iid);
+  if (!mr || !Number.isSafeInteger(number) || number < 1 || typeof mr.diffHeadSha !== 'string' || !mr.diffHeadSha) return null;
+  const rawState = text(mr.state).toLowerCase();
+  const state = rawState === 'opened' ? 'OPEN' : rawState === 'merged' ? 'MERGED' : rawState === 'closed' || rawState === 'locked' ? 'CLOSED' : rawState.toUpperCase();
+  const labelsConn = rec(mr.labels);
+  const labelNodes = Array.isArray(labelsConn?.nodes) ? (labelsConn.nodes as unknown[]) : [];
+  const labels = labelNodes.map((l) => text(rec(l)?.title)).filter(Boolean);
+  const stats = Array.isArray(mr.diffStats) ? (mr.diffStats as unknown[]) : null;
+  const paths = (stats ?? []).map((s) => text(rec(s)?.path)).filter(Boolean);
+  const fileCount = rec(mr.diffStatsSummary)?.fileCount;
+  const pipeline = rec(mr.headPipeline);
+  const jobsConn = rec(pipeline?.jobs);
+  const jobNodes = Array.isArray(jobsConn?.nodes) ? (jobsConn.nodes as unknown[]) : [];
+  const checks = jobNodes.flatMap((n): PrCheck[] => {
+    const j = rec(n);
+    const name = text(j?.name);
+    if (!j || !name) return [];
+    const allowFailure = j.allowFailure === true;
+    const webPath = text(j.webPath);
+    return [{
+      name,
+      workflow: text(rec(j.stage)?.name),
+      bucket: glabJobBucket(j.status, allowFailure),
+      link: webPath.startsWith('/') ? `https://${host}${webPath}` : '',
+      ...(text(j.startedAt) ? { startedAt: text(j.startedAt) } : {}),
+      ...(text(j.finishedAt) ? { completedAt: text(j.finishedAt) } : {}),
+      // A job allowed to fail does not fail its pipeline: not required.
+      isRequired: !allowFailure,
+    }];
+  });
+  const sourceId = mr.sourceProjectId;
+  const targetId = mr.targetProjectId;
+  return {
+    number,
+    state,
+    isDraft: mr.draft === true,
+    // Unreadable project ids count as a fork (GitHub's mapping does the same).
+    isCrossRepository: !(typeof sourceId === 'number' && sourceId === targetId),
+    headRefOid: mr.diffHeadSha,
+    headRefName: text(mr.sourceBranch),
+    baseRefName: text(mr.targetBranch),
+    author: text(rec(mr.author)?.username) || null,
+    ...glabMergeState(mr.detailedMergeStatus, mr.conflicts),
+    ...(typeof mr.title === 'string' ? { title: mr.title } : {}),
+    mergedAt: text(mr.mergedAt) || null,
+    mergeCommitOid: text(mr.mergeCommitSha) || null,
+    labels,
+    // An unreadable page flag is not proof that every label was read.
+    labelsTruncated: rec(labelsConn?.pageInfo)?.hasNextPage !== false || labels.length !== labelNodes.length,
+    files: paths.slice(0, LANE_FILES),
+    filesTruncated: stats === null || paths.length > LANE_FILES || paths.length !== stats.length
+      || (typeof fileCount === 'number' && fileCount > paths.length),
+    checksHeadOid: text(pipeline?.sha) || null,
+    checks,
+    // No pipeline at all reads as nothing truncated.
+    checksTruncated: pipeline ? rec(jobsConn?.pageInfo)?.hasNextPage !== false || checks.length !== jobNodes.length : false,
+  };
+}
+
+/** The head pipeline ran on a merge ref (merged results, a merge train): its
+ *  commit is GitLab's merge of the head into the target. */
+export function glabPipelineOnMergeRef(raw: unknown): boolean {
+  const t = text(rec(rec(rec(rec(rec(raw)?.data)?.project)?.mergeRequest)?.headPipeline)?.mergeRequestEventType).toUpperCase();
+  return t === 'MERGED_RESULT' || t === 'MERGE_TRAIN';
+}
+
+/** A job's state in the CI rollup's (GitHub's) words: a failure allowed to
+ *  fail is NEUTRAL, so the read's failing list leaves it out. */
+export function glabCiCheckState(status: unknown, allowFailure: boolean): string {
+  switch (text(status).toUpperCase()) {
+    case 'SUCCESS':
+      return 'SUCCESS';
+    case 'FAILED':
+      return allowFailure ? 'NEUTRAL' : 'FAILURE';
+    case 'CANCELED':
+    case 'CANCELING':
+      return 'CANCELLED';
+    case 'SKIPPED':
+      return 'SKIPPED';
+    case 'MANUAL':
+      return allowFailure ? 'SKIPPED' : 'PENDING';
+    case 'RUNNING':
+      return 'IN_PROGRESS';
+    default:
+      return 'QUEUED';
+  }
+}
+
+/** GLAB_CI_QUERY's answer → CiRollup: the branch head and its newest
+ *  pipeline on the branch (none yet: state null, no checks). Null when the
+ *  answer names no commit. */
+export function mapGlabCiRollup(raw: unknown, branch: string): CiRollup | null {
+  const commit = rec(rec(rec(rec(rec(rec(raw)?.data)?.project)?.repository)?.tree)?.lastCommit);
+  if (!commit || typeof commit.sha !== 'string' || !commit.sha) return null;
+  const nodes = rec(commit.pipelines)?.nodes;
+  const pipeline = Array.isArray(nodes) ? rec(nodes[0]) : null;
+  const jobs = rec(pipeline?.jobs);
+  const jobNodes = Array.isArray(jobs?.nodes) ? (jobs.nodes as unknown[]) : [];
+  const checks = jobNodes.flatMap((n) => {
+    const j = rec(n);
+    return j && text(j.name) ? [{ name: text(j.name), state: glabCiCheckState(j.status, j.allowFailure === true) }] : [];
+  });
+  const rollup = pipeline ? mapGlabPipelineStatus(text(pipeline.status)) : null;
+  return {
+    branch,
+    headSha: commit.sha,
+    committedAt: text(commit.committedDate) || null,
+    state: rollup === 'passing' ? 'SUCCESS' : rollup === 'failing' ? 'FAILURE' : rollup === 'pending' ? 'PENDING' : null,
+    checks,
+    checksTotal: typeof jobs?.count === 'number' ? jobs.count : checks.length,
+  };
+}
+
+/** Why a merge request cannot be squash-merged now, from a fresh lane read,
+ *  in mergeBlock's terms. Only jobs that may not fail hold it (GitLab passes
+ *  a pipeline over an allowed failure), and jobs of another commit's
+ *  pipeline say nothing of this head: the head's pipeline is still to come. */
+export function glabMergeBlock(f: PrLaneFacts): MergeBlock | null {
+  const head: PrReviewHead = {
+    number: f.number, title: f.title ?? '', url: '', state: f.state, isDraft: f.isDraft,
+    headRefOid: f.headRefOid, headRefName: f.headRefName, baseRefName: f.baseRefName,
+    mergeable: f.mergeable ?? 'UNKNOWN', mergeStateStatus: f.mergeStateStatus ?? 'UNKNOWN',
+  };
+  const block = mergeBlock(head, f.checks.filter((c) => c.isRequired === true));
+  if (block) return block;
+  return f.checks.length > 0 && f.checksHeadOid !== f.headRefOid ? 'checks-pending' : null;
+}
+
+/** The squash commit's subject when none is given: the title and the MR
+ *  reference (`!n`; `#n` names an issue on GitLab). */
+export function glabSquashSubject(title: string, iid: number): string {
+  const t = title.replace(/\s+/g, ' ').trim() || `Merge request !${iid}`;
+  return `${t} (!${iid})`;
+}
+
+/** A failed merge PUT → the write result. GitLab answers 409 when the head is
+ *  not the `sha` sent, and 405/406/422 when the MR cannot merge now: neither
+ *  merged anything. Any other failure may have, so it stays an error. */
+export function glabMergeFailure(err: unknown): PrWriteResult {
+  const e = err as { stderr?: string; message?: string };
+  const message = (e?.stderr || e?.message || String(err)).trim().slice(0, 300);
+  if (/\b409\b/.test(message)) return { ok: false, code: 'moved', message: 'the merge request has new commits since it was shown; review them first' };
+  if (/\b(?:405|406|422)\b/.test(message)) return { ok: false, code: 'blocked', reason: 'blocked', message: `GitLab would not merge it now: ${message}` };
+  return { ok: false, code: 'error', message };
 }
 
 // ── 서비스 본체 ───────────────────────────────────────────────────────────────
@@ -368,6 +610,125 @@ export class GlabPrService implements PrProvider {
       const e = err as { stderr?: string; message?: string };
       return { ok: false, error: (e.stderr || e.message || String(err)).slice(0, 300) };
     }
+  }
+
+  // ── The factory's reads and merge (named project, never cached) ──────────
+
+  private api(host: string, args: string[], cwd: string): Promise<{ stdout: string }> {
+    return this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', ['api', '--hostname', host, ...args], {
+      cwd,
+      timeout: FACTORY_TIMEOUT_MS,
+      env: GLAB_ENV,
+      windowsHide: true,
+      maxBuffer: FACTORY_MAX_BUFFER,
+    });
+  }
+
+  private async graphql(host: string, query: string, vars: Record<string, string>, cwd: string): Promise<unknown> {
+    const fields = Object.entries(vars).flatMap(([k, v]) => ['-f', `${k}=${v}`]);
+    const { stdout } = await this.api(host, ['graphql', '-f', `query=${query}`, ...fields], cwd);
+    return JSON.parse(stdout) as unknown;
+  }
+
+  private static project(key: string): { host: string; path: string } {
+    const project = glabProjectOfKey(key);
+    if (!project) throw new Error(`not a GitLab group/project remote: ${key}`);
+    return project;
+  }
+
+  /** The lane read of merge request `iid` (GLAB_LANE_MR_QUERY): always
+   *  fresh. A merged-results pipeline's merge commit counts as the head's
+   *  pipeline when the head is one of its parents. */
+  async laneFacts(repoPath: string, key: string, iid: number): Promise<PrReviewRead<PrLaneFacts>> {
+    try {
+      const project = GlabPrService.project(key);
+      const raw = await this.graphql(project.host, GLAB_LANE_MR_QUERY, { fullPath: project.path, iid: String(iid) }, repoPath);
+      const facts = mapGlabLaneFacts(raw, project.host);
+      if (!facts) throw new Error(glabGraphqlError(raw) ?? `could not read merge request !${iid}`);
+      if (facts.checksHeadOid && facts.checksHeadOid !== facts.headRefOid && glabPipelineOnMergeRef(raw)) {
+        const parents = await this.commitParents(project, facts.checksHeadOid, repoPath);
+        if (parents.includes(facts.headRefOid)) return { ok: true, value: { ...facts, checksHeadOid: facts.headRefOid } };
+      }
+      return { ok: true, value: facts };
+    } catch (err) {
+      return { ok: false, code: 'error', message: glabErrorText(err) };
+    }
+  }
+
+  private async commitParents(project: { host: string; path: string }, sha: string, cwd: string): Promise<string[]> {
+    if (!/^[0-9a-f]{40}$/.test(sha)) return [];
+    try {
+      const { stdout } = await this.api(project.host, [`projects/${encodeURIComponent(project.path)}/repository/commits/${sha}`], cwd);
+      const parents = rec(JSON.parse(stdout))?.parent_ids;
+      return Array.isArray(parents) ? parents.filter((p): p is string => typeof p === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** The default branch's head and its newest pipeline there (two reads:
+   *  the branch name, then its head with the pipeline). */
+  async defaultBranchCi(repoPath: string, key: string): Promise<CiRollup | { error: string }> {
+    try {
+      const project = GlabPrService.project(key);
+      const root = await this.graphql(project.host, GLAB_ROOT_REF_QUERY, { fullPath: project.path }, repoPath);
+      const branch = text(rec(rec(rec(rec(root)?.data)?.project)?.repository)?.rootRef);
+      if (!branch) return { error: glabGraphqlError(root) ?? 'the default branch could not be read' };
+      const raw = await this.graphql(project.host, GLAB_CI_QUERY, { fullPath: project.path, ref: branch }, repoPath);
+      return mapGlabCiRollup(raw, branch) ?? { error: glabGraphqlError(raw) ?? 'the default branch could not be read' };
+    } catch (err) {
+      return { error: glabErrorText(err) };
+    }
+  }
+
+  /** The login glab signs in as on the key's host now, lowercased; never
+   *  cached, so an account switch stops the next merge. */
+  async currentLogin(repoPath: string, key: string): Promise<string | null> {
+    try {
+      const project = GlabPrService.project(key);
+      const { stdout } = await this.api(project.host, ['user'], repoPath);
+      return text(rec(JSON.parse(stdout))?.username).toLowerCase() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Squash-merge merge request `iid` at `req.expectHead`, as the GitHub
+   * merge does: a fresh read right before it refuses another head (`moved`)
+   * or an MR that cannot merge now (glabMergeBlock), `authorize` is asked
+   * last, and the PUT sends `sha` so GitLab itself refuses a head that moved
+   * in between (409). An empty subject takes the title and `!iid`.
+   */
+  async merge(repoPath: string, key: string, iid: number, req: PrMergeRequest, authorize?: () => string | null): Promise<PrWriteResult> {
+    let project: { host: string; path: string };
+    try {
+      project = GlabPrService.project(key);
+    } catch (err) {
+      return { ok: false, code: 'invalid', message: glabErrorText(err) };
+    }
+    const read = await this.laneFacts(repoPath, key, iid);
+    if (!read.ok) return { ok: false, code: 'error', message: read.message };
+    const f = read.value;
+    if (f.state !== 'OPEN') return { ok: false, code: 'blocked', reason: 'not-open', message: 'the merge request is not open' };
+    if (f.headRefOid !== req.expectHead) {
+      return { ok: false, code: 'moved', message: 'the merge request has new commits since it was shown; review them first', headRefOid: f.headRefOid };
+    }
+    const block = glabMergeBlock(f);
+    if (block) return { ok: false, code: 'blocked', reason: block, message: `the merge request cannot be merged now (${block})` };
+    const denied = authorize?.() ?? null;
+    if (denied) return { ok: false, code: 'invalid', message: `the merge is not authorized now (${denied})` };
+    const subject = req.subject.trim() || glabSquashSubject(f.title ?? '', iid);
+    try {
+      await this.api(project.host, [
+        '-X', 'PUT', `projects/${encodeURIComponent(project.path)}/merge_requests/${iid}/merge`,
+        // `=` forms: a subject starting with "-" stays a value.
+        '-f', `sha=${req.expectHead}`, '-F', 'squash=true', '-f', `squash_commit_message=${subject}`,
+      ], repoPath);
+    } catch (err) {
+      return glabMergeFailure(err);
+    }
+    return { ok: true, url: `https://${project.host}/${project.path}/-/merge_requests/${iid}` };
   }
 
   private evict(cache: Map<string, unknown>): void {
