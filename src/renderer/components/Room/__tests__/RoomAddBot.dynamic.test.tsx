@@ -312,6 +312,30 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: '/src/picked' });
   });
 
+  it('None is the owner\'s too: it survives a switch, and A→B→A without a hand edit follows each workspace', async () => {
+    const sug = (root: string): FactoryBotRepoSuggestion => ({ ok: true, repoKey: `github.com/acme/${root}`, root: `/r/${root}`, displayRoot: `/r/${root}`, inherited: false });
+    const { port, create } = formPort([], async (ws) => sug(ws === WS ? 'app' : 'api'));
+    await renderForm(port, []);
+    const ws = q<HTMLSelectElement>('factory-add-bot-workspace')!;
+    const choose = async (id: string) => act(async () => {
+      ws.value = id;
+      ws.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(q('factory-add-bot-repo')!.textContent).toBe('acme/app·/r/app');
+    await choose('ws-b');
+    expect(q('factory-add-bot-repo')!.textContent).toBe('acme/api·/r/api');
+    await choose(WS);
+    expect(q('factory-add-bot-repo')!.textContent).toBe('acme/app·/r/app');
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-repo-none')!.click());
+    expect(q('factory-add-bot-no-repo')).not.toBeNull();
+    await choose('ws-b');
+    expect(q('factory-add-bot-no-repo')).not.toBeNull();
+    expect(q('factory-add-bot-repo')).toBeNull();
+    await typeInto('factory-add-bot-name', 'Dev');
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: 'ws-b', name: 'Dev' });
+  });
+
   it('asks again when the workspace\'s folder changes', async () => {
     useStore.setState({ workspaces: [{ id: WS, name: 'App', metadata: { cwd: '/a' } }] as never, activeWorkspaceId: WS });
     const { port, suggestRepo } = formPort([], async () => ({ ok: false, code: 'not_a_repo' }));
@@ -431,8 +455,9 @@ describe('Add team', () => {
     await act(async () => q<HTMLButtonElement>('factory-add-team')!.click());
     expect(createTeam).toHaveBeenCalledWith({
       workspaceId: WS,
+      // All five named (a role gone meanwhile still has one); main uses the missing ones'.
       names: {
-        researcher: 'botsPage.teamName.researcher', developer: 'botsPage.teamName.developer 2',
+        coordinator: 'botsPage.teamName.coordinator', researcher: 'botsPage.teamName.researcher', developer: 'botsPage.teamName.developer 2',
         issue: 'botsPage.teamName.issue', reviewer: 'botsPage.teamName.reviewer',
       },
     });

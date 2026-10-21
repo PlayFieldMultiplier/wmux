@@ -435,16 +435,18 @@ export function teamNames(t: T): Record<string, string> {
 }
 
 /** What "Add team" makes in a workspace: the team templates none of its
- *  bots has yet (`missing`; main skips the `present` ones by the same rule),
- *  each named in the owner's language, with a number when a bot there
- *  already has that name ("Developer 2"). Pure. */
+ *  enabled bots has yet (`missing`; main skips the `present` ones by the
+ *  same rule). Every template is named in the owner's language, with a
+ *  number when a bot there already has that name ("Developer 2"): main uses
+ *  the missing ones' names, and a role gone meanwhile still has one. The
+ *  missing ones are named first. Pure. */
 export function teamPlan(rows: readonly FactoryBotRow[], workspaceId: string, t: T): { missing: BotTemplate[]; present: BotTemplate[]; names: Record<string, string> } {
   const here = rows.filter((r) => r.bot.workspaceId === workspaceId).map((r) => r.bot);
   const present = teamTemplatesPresent(here);
   const missing = TEAM_TEMPLATES.filter((tpl) => !present.includes(tpl));
   const taken = new Set(here.map((b) => b.name.toLocaleLowerCase()));
   const names: Record<string, string> = {};
-  for (const tpl of missing) {
+  for (const tpl of [...missing, ...present]) {
     const base = t(`botsPage.teamName.${tpl}`);
     let name = base;
     for (let n = 2; taken.has(name.toLocaleLowerCase()); n++) name = `${base} ${n}`;

@@ -13,8 +13,8 @@
 // has no repository yet. The profile itself goes through BotStore.create,
 // the same validation and defaults as `bot.create`. `suggestBotRepo` is what
 // "Add bot" offers before that: the sibling's repo, else the workspace's
-// current folder as main itself tracks it (the active pane's shell cwd),
-// resolved like a picked folder.
+// current folder (the active pane's shell cwd main tracks, else the folder
+// the workspace mirror records), resolved like a picked folder.
 //
 // A bot added here wakes once on its own (`greetNewBot`, wake reason
 // `intro`): it greets the owner and asks what to do, with choices.
@@ -279,11 +279,13 @@ export interface BotRepoSuggestDeps extends BotRepoDeps {
   homeDir?: string;
 }
 
-/** The workspace's current folder as main tracks it: its active pane's shell
- *  cwd, else the first of its other panes that has one, else the folder the
- *  workspace mirror records for it (a workspace whose panes have reported
- *  no cwd yet still has the one it was last seen in). Never a path the
- *  renderer sends with the request. */
+/** The workspace's current folder: its active pane's shell cwd as main
+ *  tracks it, else the first of its other panes that has one, else the
+ *  folder the workspace mirror records for it (`metadata.cwd`, which the
+ *  renderer fills from its panes and pushes with the mirror), so a
+ *  workspace whose panes have reported no cwd yet still has the one it was
+ *  last seen in. Never a path sent with the suggestion request itself, and
+ *  always resolved and checked like a picked folder. */
 export function workspaceFolder(
   workspaceId: string,
   entries: WorkspaceListEntry[] | null,

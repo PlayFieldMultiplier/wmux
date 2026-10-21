@@ -61,15 +61,16 @@ export const TEAM_TEMPLATES: readonly BotTemplate[] = ['coordinator', 'researche
 
 /** IPC.FACTORY_BOT_CREATE_TEAM: the team's missing bots in one workspace,
  *  on one repository (as "Add bot" resolves it), named by the renderer (in
- *  the owner's language). A team template one of the workspace's bots
- *  already has is skipped (teamTemplatesPresent), so it fills a partial team
- *  in. Refused, before any bot is made, when a name to use is not one the
+ *  the owner's language). A team template one of the workspace's enabled
+ *  bots already has is skipped (teamTemplatesPresent), so it fills a partial
+ *  team in. Refused, before any bot is made, when a name to use is not one the
  *  store keeps or is taken (twice in the team, or by a bot of the
  *  workspace). The missing ones are all made or none. Only a coordinator
  *  made here greets the owner. */
 export interface FactoryBotCreateTeamRequest {
   workspaceId: string;
-  /** One name per team template (only the missing ones' are used). */
+  /** One name per team template (only the missing ones' are used; the
+   *  renderer sends all five, so a role gone meanwhile still has one). */
   names: Record<string, string>;
   /** As FactoryBotCreateRequest.repoFolder. */
   repoFolder?: string;
@@ -79,13 +80,14 @@ export type FactoryBotCreateTeamResult =
   /** `bots`: the ones made, in TEAM_TEMPLATES order (none when the team was
    *  whole); `skipped`: the templates the workspace already had. */
   | { ok: true; bots: BotProfile[]; skipped?: BotTemplate[] }
-  | { ok: false; code: FactoryBotCreateCode | 'has_lead' | 'name_taken'; message: string };
+  | { ok: false; code: FactoryBotCreateCode | 'name_taken'; message: string };
 
-/** The team templates some bot of a workspace already has (by its
- *  template, a legacy profile's from its role), in TEAM_TEMPLATES order.
- *  Main and the renderer read the same rule. Pure. */
-export function teamTemplatesPresent(bots: readonly Pick<BotProfile, 'role' | 'template'>[]): BotTemplate[] {
-  return TEAM_TEMPLATES.filter((tpl) => bots.some((b) => botTemplate(b) === tpl));
+/** The team templates some enabled bot of a workspace already has (by its
+ *  template, a legacy profile's from its role), in TEAM_TEMPLATES order. A
+ *  bot that is off does not fill its role (it would not answer). Main and
+ *  the renderer read the same rule. Pure. */
+export function teamTemplatesPresent(bots: readonly Pick<BotProfile, 'role' | 'template' | 'enabled'>[]): BotTemplate[] {
+  return TEAM_TEMPLATES.filter((tpl) => bots.some((b) => b.enabled && botTemplate(b) === tpl));
 }
 
 /** IPC.FACTORY_BOT_CLEAR_REMOVED: take a deleted bot's 1:1 out of the Bots

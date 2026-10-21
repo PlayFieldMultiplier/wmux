@@ -42,7 +42,7 @@ import Popover from '../ui/Popover';
 import { getFactoryBotPort, getFactorySettingsPort, type FactoryBotPort, type FactoryBotRow, type FactorySettingsPort } from '../Room/factoryPorts';
 import Dialog, { DialogBody, DialogHeader } from '../ui/Dialog';
 import Input from '../ui/Input';
-import { AddBotForm, AddBotRepoRow, addBotBlockedReason, pickFolderDialog, teamNames, useAddBotRepo } from '../Settings/FactoryTab';
+import { AddBotForm, AddBotRepoRow, addBotBlockedReason, pickFolderDialog, teamNames, teamPlan, useAddBotRepo } from '../Settings/FactoryTab';
 import { TEAM_TEMPLATES } from '../../../shared/botCreate';
 import { PresenceDot, botPresence } from '../Room/BotChips';
 import { actorLabel, formatCardTime } from '../Room/roomFormat';
@@ -56,7 +56,7 @@ import { showWorkspaces } from '../../utils/showWorkspaces';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine'
 import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';
-import { BOT_NAME_MAX, normalizeBotName, type BotProfile } from '../../../shared/bot';
+import { BOT_NAME_MAX, isCoordinatorBot, normalizeBotName, type BotProfile } from '../../../shared/bot';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
 import { allRoomCards, botConversationId, conversationCards, groupConversationId, groupViewCards, roomCardsByWorkspace, type Conversation } from './botsModel';
 import BotsGroupDialog, { type GroupDialogStart } from './BotsGroupDialog';
@@ -227,10 +227,12 @@ function openClaudeInstallPage(): void {
  *  Bots › First run). The page is reached with the bots on; Start adds the
  *  bot to the current workspace (turning the bots on first only if they went
  *  off meanwhile). */
-function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine, onStarted, onTeam }: {
+function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine, onStarted, onTeam, rows = [] }: {
   t: T;
   workspace: { id: string; name: string } | null;
   botPort: FactoryBotPort;
+  /** The bots main lists (none enabled here): Add team names around them. */
+  rows?: readonly FactoryBotRow[];
   settings: FactorySettingsPort;
   /** The plan consent, asked when turning the bots on needs it. */
   confirmOn: () => Promise<boolean>;
@@ -256,6 +258,7 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
   // same readiness as Start, and its lead's chat opens.
   const teamable = !busy && !!workspace && !!botPort.createTeam && !engineText && !engineUnanswered;
   const names = teamNames(t);
+  const plan = teamPlan(rows, workspace?.id ?? '', t);
 
   const start = async () => {
     if (!startable || !typed || !workspace) return;
@@ -286,12 +289,15 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
         if (r === 'declined') return;
         if (r !== 'on') { setError(t('settings.factory.notStarted')); return; }
       }
-      const r = await botPort.createTeam({ workspaceId: workspace.id, names, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
-      if (r.ok) {
+      const r = await botPort.createTeam({ workspaceId: workspace.id, names: plan.names, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
+      if (!r.ok) setError(r.message || t('settings.factory.addTeamFailed'));
+      else if (r.bots.length === 0) setError(t('settings.factory.addTeamWhole'));
+      else {
         onTeam(r.bots);
-        onStarted(r.bots[0]);
+        // Only a lead made here greets: its chat opens, starting.
+        const lead = r.bots.find((b) => isCoordinatorBot(b));
+        if (lead) onStarted(lead);
       }
-      else setError(r.message || t('settings.factory.addTeamFailed'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -630,9 +636,9 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   const q = query.trim().toLowerCase();
   const shown = q ? rows.filter((r) => r.title.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)) : rows;
   const { live: shownLive, archived: shownArchived } = splitArchive(shown);
-  // Archive's fold: null follows the page (open while searching or while one
-  // of its chats is open), a toggle decides it from then on.
-  const [archiveOpen, setArchiveOpen] = useState<boolean | null>(null);
+  // Archive's fold: folded until toggled, and open while searching or while
+  // one of its chats is open (DESIGN.md › Bots › Archive), toggled or not.
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const [threadAsk, setThreadAsk] = useState<{ conversationId: string; workspaceId: string; threadId: ThreadId; nonce: number } | null>(null);
   const select = (id: string) => {
@@ -813,12 +819,13 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
         engine={enginePort}
         onStarted={started}
         onTeam={onTeam}
+        rows={bots}
       />
     );
   } else if (status && (listed || bots.length > 0 || !!pending)) {
     // (Before the bot list is read, nothing: an empty list is not "no bot".)
     const paused = !on;
-    const archiveShown = archiveOpen ?? (!!q || shownArchived.some((a) => a.c.id === selected?.c.id));
+    const archiveShown = archiveOpen || !!q || shownArchived.some((a) => a.c.id === selected?.c.id);
     const renderEntry = (r: (typeof rows)[number]) => {
       const tree = r.c.kind === 'bot' ? r.c.tree : [];
       const botId = r.c.kind === 'bot' ? r.c.row.bot.id : '';
@@ -945,7 +952,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
             {shownLive.map(renderEntry)}
             {shownArchived.length > 0 && (
               <>
-                <ArchiveToggle t={t} count={shownArchived.length} expanded={archiveShown} onToggle={() => setArchiveOpen(!archiveShown)} />
+                <ArchiveToggle t={t} count={shownArchived.length} expanded={archiveShown} onToggle={() => setArchiveOpen((v) => !v)} />
                 {archiveShown && <div id="bots-archive" data-bots-archive>{shownArchived.map(renderEntry)}</div>}
               </>
             )}

@@ -228,6 +228,40 @@ describe('Bots page', () => {
     expect(q('[data-bots-archive-toggle]')).toBeNull();
   });
 
+  it('Archive opens by itself while searching and while one of its chats is open, toggled or not', async () => {
+    const GONE = 'bot-0000000d';
+    const gone = { role: 'lead' as BotRole, name: 'Old', removed: true as const, workspaceId: 'w1', hue: 2 };
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', GONE), title: 'Here, wrapping up', threadId: `dm:${GONE}`, at: 510 }));
+    const withActors = api();
+    withActors.actors = vi.fn(async () => ({ actors: { [GONE]: gone } })) as unknown as RoomsApi['actors'];
+    setRoomsApiForTests(withActors);
+    seedRooms(true);
+    act(() => useStore.setState({ roomActors: { [GONE]: gone } } as never));
+    await render(<BotsPage />);
+    const expanded = () => q('[data-bots-archive-toggle]')!.getAttribute('aria-expanded');
+    expect(expanded()).toBe('false');
+    // Searching: the matching archived chat shows.
+    act(() => q('[data-bots-search-toggle]')!.click());
+    const search = q<HTMLInputElement>('[data-bots-search]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'Old');
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(expanded()).toBe('true');
+    expect(rowIds()).toEqual([`bot:${GONE}`]);
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, '');
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(expanded()).toBe('false');
+    // Its chat open: folding it does not hide the open chat's row.
+    act(() => q('[data-bots-archive-toggle]')!.click());
+    act(() => q<HTMLElement>(`[data-bots-row="bot:${GONE}"]`)!.click());
+    act(() => q('[data-bots-archive-toggle]')!.click());
+    expect(expanded()).toBe('true');
+    expect(rowIds()).toContain(`bot:${GONE}`);
+  });
+
   it('with every bot deleted, a kept 1:1 still lists (no first-bot screen), its room read from the actors', async () => {
     const GONE = 'bot-0000000d';
     const gone = { role: 'lead' as BotRole, name: 'Old', removed: true as const, workspaceId: 'w1', hue: 2 };
@@ -356,6 +390,27 @@ describe('Bots page', () => {
     await act(async () => { await Promise.resolve(); });
     expect(settings.set).toHaveBeenCalledWith(ON_WITH_CONSENT);
     expect(createTeam).toHaveBeenCalledWith({ workspaceId: 'w1', names: { coordinator: 'Lead', researcher: 'Research', developer: 'Developer', issue: 'Issues', reviewer: 'Reviewer' } });
+    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
+  });
+
+  it('first screen: a team answer with nothing made says so and opens nothing; the lead opens wherever it is in the answer', async () => {
+    bots = [];
+    seedRooms();
+    act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
+    const lead = { ...botRow('bot-0000000e', 'lead', 'w1', 9, 'Lead').bot, template: 'coordinator' as const };
+    const dev = { ...botRow('bot-0000000f', 'lead', 'w1', 10, 'Developer').bot, template: 'developer' as const };
+    const createTeam = vi.fn()
+      .mockResolvedValueOnce({ ok: true, bots: [], skipped: ['coordinator', 'researcher', 'developer', 'issue', 'reviewer'] })
+      .mockResolvedValueOnce({ ok: true, bots: [dev, lead] });
+    setFactoryBotPort({ ...port, create: vi.fn(), createTeam } as unknown as FactoryBotPort);
+    await render(<BotsPage engine={{}} />);
+    const team = q<HTMLButtonElement>('[data-bots-first-team]')!;
+    await act(async () => { team.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(q('[data-bots-first-error]')?.textContent).toBe('This workspace already has the whole team.');
+    expect(q('[data-bots-chat]')).toBeNull();
+    await act(async () => { team.click(); });
+    await act(async () => { await Promise.resolve(); });
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
   });
 

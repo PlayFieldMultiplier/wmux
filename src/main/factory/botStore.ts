@@ -34,7 +34,9 @@
 // A removed bot leaves a tombstone (`removed`, shared/bot.ts RemovedBot: its
 // id, name, role, picture and colour slot), so the cards it wrote keep its
 // name and face after a restart. A build without it drops the list on its
-// next write; bots.json stays version 1.
+// next write; bots.json stays version 1. A tombstone's `clearedAt` (its 1:1
+// taken out of the Bots page's Archive) is dropped by an older build on its
+// next write, so after a downgrade those 1:1s show in the Archive again.
 
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';

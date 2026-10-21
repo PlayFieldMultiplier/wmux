@@ -13,7 +13,7 @@ vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() 
 import { BotStore, botsFilePath } from '../botStore';
 import { botRepoFromFolder, createBotFromFolder, createTeamFromFolder, greetNewBot, homeShortPath, resolveBotRepo, suggestBotRepo, workspaceFolder, workspaceRepo } from '../botCreate';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../factorySettings';
-import { factoryBotCreateHandler, factoryBotCreateTeamHandler, factoryBotSuggestRepoHandler, factorySettingsSetHandler } from '../../ipc/handlers/factory.handler';
+import { factoryBotClearRemovedHandler, factoryBotCreateHandler, factoryBotCreateTeamHandler, factoryBotSuggestRepoHandler, factorySettingsSetHandler } from '../../ipc/handlers/factory.handler';
 import type { WorkspaceListEntry } from '../../../shared/workspaceMirror';
 import type { FactorySettingsStore } from '../factorySettings';
 import type { GitResult } from '../../git/git';
@@ -470,6 +470,15 @@ describe('"Add team"', () => {
     expect(store.list({ workspaceId: 'ws-4' })).toHaveLength(5);
   });
 
+  it('a bot that is off does not fill its role: a disabled lead gets a new one, named apart', async () => {
+    const off = store.create({ workspaceId: 'ws-6', template: 'coordinator', name: 'Boss' });
+    if (!off.ok) throw new Error('create');
+    store.update(off.bot.id, { enabled: false });
+    const r = await createTeamFromFolder(store, { workspaceId: 'ws-6', names: { ...names, coordinator: 'Boss 2' } });
+    expect(r.ok && r.bots.map((b) => b.template)).toEqual(['coordinator', 'researcher', 'developer', 'issue', 'reviewer']);
+    expect(r).not.toHaveProperty('skipped');
+  });
+
   it('all five or none: a create refused midway takes back the ones made', async () => {
     const real = store.create.bind(store);
     let n = 0;
@@ -494,5 +503,27 @@ describe('"Add team"', () => {
     store.create({ workspaceId: 'ws-2', template: 'coordinator', name: 'Boss' });
     expect(await handler({ sender: webContents, senderFrame: mainFrame }, { workspaceId: 'ws-2', names })).toMatchObject({ ok: true, skipped: ['coordinator'] });
     expect(greet).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Archive: FACTORY_BOT_CLEAR_REMOVED', () => {
+  const mainFrame = { id: 'top' };
+  const webContents = { mainFrame };
+  const win = { isDestroyed: () => false, webContents } as unknown as Electron.BrowserWindow;
+
+  it('answers only the main window, checks the id, and marks a kept tombstone', () => {
+    const made = store.create({ workspaceId: 'ws-1', name: 'Gone' });
+    if (!made.ok) throw new Error('create');
+    store.remove(made.bot.id);
+    const handler = factoryBotClearRemovedHandler(() => win, () => store);
+    expect(handler({ sender: {}, senderFrame: mainFrame }, { botId: made.bot.id })).toMatchObject({ ok: false, code: 'operator_only' });
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, { botId: '../x' })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, null)).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, { botId: 'bot-0000ffff' })).toMatchObject({ ok: false, code: 'not_found' });
+    expect(factoryBotClearRemovedHandler(() => win, () => null)({ sender: webContents, senderFrame: mainFrame }, { botId: made.bot.id }))
+      .toMatchObject({ ok: false, code: 'not_started' });
+    expect(store.listRemoved()[0].clearedAt).toBeUndefined();
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, { botId: made.bot.id })).toEqual({ ok: true });
+    expect(store.listRemoved()[0].clearedAt).toEqual(expect.any(Number));
   });
 });
