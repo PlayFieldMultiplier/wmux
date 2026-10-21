@@ -20,9 +20,9 @@
 //
 // Version skew: a daemon that predates the batch answers it the way it answers
 // any request without `verifiedWorkspaceId` (NOT_AUTHORIZED, no `results`).
-// listMissionsByOwner reads a reply without `results` as that daemon and falls
-// back to one single-form call per owner, so a stale daemon that outlived an
-// app update keeps working until it is replaced.
+// listMissionsByOwner reads that refusal as that daemon and falls back to one
+// single-form call per owner, so a stale daemon that outlived an app update
+// keeps working until it is replaced.
 
 /**
  * Most owners one batched call may name. Above it the daemon refuses the call
@@ -42,6 +42,12 @@ function batchResults(reply: unknown): unknown[] | null {
   if (!reply || typeof reply !== 'object') return null;
   const r = reply as { ok?: unknown; results?: unknown };
   return r.ok === true && Array.isArray(r.results) ? r.results : null;
+}
+
+function isOldDaemonRefusal(reply: unknown): boolean {
+  if (!reply || typeof reply !== 'object') return false;
+  const r = reply as { ok?: unknown; error?: { code?: unknown } | null };
+  return r.ok === false && r.error?.code === 'NOT_AUTHORIZED';
 }
 
 /**
@@ -78,7 +84,10 @@ export async function listMissionsByOwner(
         }
         continue;
       }
-      // No `results`: a daemon that predates the batch.
+      // A daemon that predates the batch reads only `verifiedWorkspaceId`, so
+      // it refuses the batch as NOT_AUTHORIZED. Any other refusal (the mission
+      // log unavailable, say) would come back the same from each owner's call.
+      if (!isOldDaemonRefusal(reply)) continue;
       batchUnsupported = true;
     }
     for (const owner of chunk) {

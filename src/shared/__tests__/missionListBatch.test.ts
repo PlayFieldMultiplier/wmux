@@ -83,6 +83,18 @@ describe('listMissionsByOwner', () => {
     expect(out.size).toBe(0);
   });
 
+  it('any other whole-call refusal skips the chunk instead of falling back to N calls', async () => {
+    // A current daemon whose mission log is unavailable refuses before the
+    // batch is read; each owner's call would be refused the same way.
+    const call = vi.fn<MissionListCall>(async () => ({
+      ok: false,
+      error: { code: 'NOT_AVAILABLE', message: 'task.mission.list: mission log unavailable' },
+    }));
+    const out = await listMissionsByOwner(call, owners(10));
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(out.size).toBe(0);
+  });
+
   it('keeps only the owners it asked for', async () => {
     const call = vi.fn<MissionListCall>(async () => ({
       ok: true,
