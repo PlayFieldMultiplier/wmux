@@ -467,6 +467,13 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
       const index = readRegularFile(path.join(gitDir, 'index'), INDEX_MAX_BYTES);
       if (index === null) return refuse('git_failed', 'Your checkout\'s index could not be read.');
       fs.writeFileSync(path.join(privateDir, 'index'), index, { mode: 0o600 });
+      // Its own times kept: git judges a racily clean entry against them.
+      try {
+        const st = fs.lstatSync(path.join(gitDir, 'index'));
+        fs.utimesSync(path.join(privateDir, 'index'), st.atime, st.mtime);
+      } catch {
+        return refuse('git_failed', 'Your checkout\'s index could not be read.');
+      }
       // A split index names its shared part by file.
       for (const name of fs.readdirSync(gitDir).filter((n) => /^sharedindex\.[0-9a-f]+$/.test(n))) {
         const part = readRegularFile(path.join(gitDir, name), INDEX_MAX_BYTES);
@@ -480,6 +487,22 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
       return { code: r.code, stdout: r.stdout.toString('utf8'), stderr: r.stderr };
     };
     const said = (r: { stderr: string }) => r.stderr.split(tmp).join('').trim().slice(0, 300);
+    /** Whether a tracked file's content in the work tree is its index blob
+     *  (a regular file, hashed with the checkout's line endings). */
+    const sameAsIndex = async (p: string): Promise<boolean> => {
+      const staged = await text(['ls-files', '-s', '-z', '--', p]);
+      const m = /^(\d{6}) ([0-9a-f]+) 0\t/.exec(staged.stdout);
+      if (staged.code !== 0 || !m || m[1] === '120000') return false;
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(path.join(top, p));
+      } catch {
+        return false;
+      }
+      if (!st.isFile()) return false;
+      const hashed = await text(['hash-object', `--path=${p}`, '--', path.join(top, p)]);
+      return hashed.code === 0 && hashed.stdout.trim() === m[2];
+    };
 
     // The head is a commit of the task: it descends from the base.
     const kind = await text(['cat-file', '-t', head]);
@@ -516,7 +539,10 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
     const patch = made.stdout;
     const numstat = await priv(['apply', '--numstat', '-z'], patch);
     const inPatch = numstat.code === 0 ? patchPaths(numstat.stdout.toString('utf8')) : null;
-    if (!inPatch || inPatch.length !== touched.length || inPatch.some((p) => !touched.includes(p)) || patchHasGitlink(patch)) {
+    // A type change (a file made a link) is a deletion and a creation of one
+    // path in a patch: the paths compare as sets.
+    const patchSet = new Set(inPatch ?? []);
+    if (!inPatch || patchSet.size !== new Set(touched).size || [...patchSet].some((p) => !touched.includes(p)) || patchHasGitlink(patch)) {
       return refuse('git_failed', 'The task\'s history changed while it was read; try again.');
     }
     const apply = (extra: string[]) => priv(['apply', '--whitespace=nowarn', ...extra], patch);
@@ -538,17 +564,16 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
       if (!dirty.includes(p)) dirty.push(p);
     };
     const tracked = new Set<string>();
-    // The private index copy's stat data brought up to date (files whose
-    // stat changed are re-hashed here, where no filter exists); its exit
-    // says only that some file differs, which diff-files then names.
-    await text(['update-index', '-q', '--unmerged', '--refresh']);
     for (const batch of chunks(touched)) {
       const staged = checkoutHead ? await text(['diff-index', '--cached', '-z', '--name-only', checkoutHead, '--', ...batch]) : await text(['ls-files', '-z', '--', ...batch]);
       if (staged.code !== 0) return refuse('git_failed', `git diff-index failed: ${said(staged)}`);
       for (const p of staged.stdout.split('\0')) if (p) add(p);
+      // Stat-dirty entries are named too; each is hashed here (where no
+      // filter exists, the touched paths only) and counts when its content
+      // differs from the index.
       const changed = await text(['diff-files', '-z', '--name-only', '--', ...batch]);
       if (changed.code !== 0) return refuse('git_failed', `git diff-files failed: ${said(changed)}`);
-      for (const p of changed.stdout.split('\0')) if (p) add(p);
+      for (const p of changed.stdout.split('\0')) if (p && !(await sameAsIndex(p))) add(p);
     }
     const looked = [...touched, ...blockedParents(top, created)];
     for (const batch of chunks(looked)) {

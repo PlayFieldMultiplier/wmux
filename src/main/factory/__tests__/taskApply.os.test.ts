@@ -345,6 +345,35 @@ describe('where and how git apply runs', () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
+  it('attributes planted in the shared info/attributes before the copy name a driver that does not exist there: refused, nothing runs', async () => {
+    const marker = path.join(dir, 'pwned-planted').replace(/\\/g, '/');
+    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
+    const racing: NonNullable<TaskApplyPorts['git']> = async (args, cwd, env, opts) => {
+      const r = await realGit(args, cwd, env, opts);
+      if (args.includes('HEAD') && args.includes('rev-parse')) {
+        fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
+        fs.writeFileSync(path.join(repo, '.git', 'info', 'attributes'), '* filter=evil\n');
+        execFileSync('git', ['config', 'filter.evil.clean', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
+        execFileSync('git', ['config', 'filter.evil.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
+      }
+      return r;
+    };
+    expect(await applyTaskToCheckout(ports({ git: racing }), TASK)).toMatchObject({ ok: false, code: 'filtered' });
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('applies a task that turns a file into a link', async () => {
+    git(wt, 'reset', '-q', '--hard', base);
+    fs.rmSync(path.join(wt, 'b.txt'));
+    fs.symlinkSync('a.txt', path.join(wt, 'b.txt'));
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-qm', 'link');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true, changed: ['b.txt'] });
+    expect(fs.lstatSync(path.join(repo, 'b.txt')).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(path.join(repo, 'b.txt'))).toBe('a.txt');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'no_changes' });
+  });
+
   it('refuses a partial clone: git would fetch a missing object from its promisor remote', async () => {
     git(repo, 'config', 'remote.origin.promisor', 'true');
     expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'config_refused' });
