@@ -148,4 +148,43 @@ describe('createSessionAsync registers only a PTY whose pid is known (#2398)', (
     await Promise.all([replacement, b]);
     expect(spawned).toHaveLength(3);
   });
+
+  it('hands the pane job the shell pid with the mark read before the spawn', async () => {
+    const contain = vi.fn();
+    manager.setPaneJob({ enter: vi.fn(), spawnMark: () => 55n, contain, disarm: vi.fn(), stats: () => ({ mode: 'per-pane', contained: 0, failed: 0 }) });
+    const pending = manager.createSessionAsync({ id: 'jobbed', cmd: process.execPath, cwd: process.cwd() });
+    await flush();
+    spawned[0].connect(9090);
+    await pending;
+    expect(contain).toHaveBeenCalledWith(9090, 55n);
+  });
+
+  it('kills the shell it just spawned when registering the session throws, and registers nothing', async () => {
+    // #2398 review: a throw out of registerSession used to reject the create
+    // while the shell kept running with no session to reach it.
+    manager.setPaneJob({
+      enter: vi.fn(),
+      spawnMark: () => null,
+      contain: () => { throw new Error('native call failed'); },
+      disarm: vi.fn(),
+      stats: () => ({ mode: 'per-pane', contained: 0, failed: 0 }),
+    });
+    const pending = manager.createSessionAsync({ id: 'leak', cmd: process.execPath, cwd: process.cwd() });
+    await flush();
+    spawned[0].connect(9191);
+    await expect(pending).rejects.toThrow('native call failed');
+    expect(spawned[0].kill).toHaveBeenCalled();
+    expect(manager.getSession('leak')).toBeUndefined();
+    expect(created).toHaveLength(0);
+  });
+
+  it('drops a half-registered session and kills its shell when registration throws late', async () => {
+    manager.on('session:created', () => { throw new Error('listener failed'); });
+    const pending = manager.createSessionAsync({ id: 'late-throw', cmd: process.execPath, cwd: process.cwd() });
+    await flush();
+    spawned[0].connect(9292);
+    await expect(pending).rejects.toThrow('listener failed');
+    expect(spawned[0].kill).toHaveBeenCalled();
+    expect(manager.getSession('late-throw')).toBeUndefined();
+  });
 });

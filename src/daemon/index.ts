@@ -17,6 +17,7 @@ import { persistCodexThreadOwner, invalidateCodexThreadOwner, trackCodexPaneOwne
 import { codexCdOperand, recoverCodexPane, withCodexRemote } from './web/recoverCodexPane';
 import { CodexRelayUnavailableError } from './web/codexTuiRelay';
 import { paneCodexSettings } from './web/paneCodexSettings';
+import { createPaneJob } from './paneJob';
 import { CodexPaneRelays, paneCodexHome } from './web/codexPaneRelays';
 import { createCodexAccountStatusReader } from './web/codexAccountStatus';
 import { buildAgentLaunch, installedAgentLaunchOptions, pinnedAgentLaunch } from './web/agentLaunch';
@@ -164,7 +165,7 @@ import { RingBuffer } from './RingBuffer';
 import { GitContextWatcher } from '../main/pty/gitContextWatch';
 import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
-import { installExitEvidence, noteExitReason, STATUS_CONTROL_C_EXIT } from './exitEvidence';
+import { installExitEvidence, noteExitReason } from './exitEvidence';
 import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonSession, DaemonState } from './types';
 import { retireAdopted, withDiskOnlySessions } from './diskOnlySessions';
@@ -444,6 +445,8 @@ const codexSharedRuntime = createCodexSharedRuntime({
   notice: (paneId, title, body) => broadcastCodexNotice?.(paneId, title, body),
   log: (level, message) => log(level, message),
 });
+// #2398: one kill-on-close job for every pane shell this daemon spawns.
+const paneJob = createPaneJob({ log: (level, message) => log(level, message) });
 const codexPaneRelays = new CodexPaneRelays(undefined,()=>log('warn','[phone] Codex relay cleanup failed'),
   (id,owner)=>persistCodexRelayState?.(id,owner),
   {
@@ -5926,6 +5929,9 @@ function registerRpcHandlers(
       pid: process.pid,
       uptime,
       sessions: sessions.length,
+      // #2398: how pane shells join the kill-on-close job ('inherit': the
+      // daemon is in it), shells in it, and ones it could not take.
+      paneJob: paneJob.stats(),
       // Sessions with a running PTY (attached or detached). An upgrade over SSH
       // restarts the daemon only when this is 0.
       liveSessions: sessionManager.listLiveSessions().length,
@@ -7890,6 +7896,12 @@ async function shutdown(
 ): Promise<{ stateSaved: boolean }> {
   if (shuttingDown) return { stateSaved: false };
   shuttingDown = true;
+  // #2398: a clean exit keeps what panes started on purpose (paneJob.ts).
+  // Disarmed here, where the exit is decided: every caller's kill budget (the
+  // tray's full shutdown, Quit and Stop Sessions, an update, the 10s guard
+  // below) can end the phases that follow, and a kill-on-close job still armed
+  // then would take every pane's tree with it.
+  paneJob.disarm();
   noteExitReason(`shutdown (${signal})`);
   gateFlag?.stop();
   stopPushRecovery?.();
@@ -8136,6 +8148,11 @@ async function main(): Promise<void> {
     process.exit(lockHeldByLiveDaemon && process.env[DAEMON_SUPERVISED_ENV] === '1' ? DAEMON_EXIT_ALREADY_RUNNING : 1);
   }
   markDaemonBoot('lock-acquired');
+  // #2398: the daemon joins its kill-on-close job before it spawns anything,
+  // so every process it creates, pane shells first, is in the job from
+  // CreateProcess (paneJob.ts). After the lock: a daemon that lost it exits
+  // without shutdown(), and must not take what it spawned with it.
+  paneJob.enter();
 
   // Cache boot ID early (async) so buildState() never needs to block
   await initBootId();
@@ -8177,6 +8194,8 @@ async function main(): Promise<void> {
 
   const sessionManager = new DaemonSessionManager();
   sessionManager.setConfig(config);
+  // #2398: pane shells end with the daemon when it crashes or is killed.
+  sessionManager.setPaneJob(paneJob);
   // Opt-in, local-only detection agreement log — see
   // daemon/diagnostics/detectionAgreementLog.ts. Built before any session can
   // emit; the hook authority is read lazily because HookIngest is created later
@@ -9800,13 +9819,12 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => { onExitSignal('SIGINT'); void doShutdown('SIGINT'); });
   if (process.platform === 'win32') {
     // Ctrl+Break. With no listener Windows ends the process with
-    // STATUS_CONTROL_C_EXIT; a listener suppresses that, so this one logs and
-    // then exits with the same code. Only a daemon run in a console (a
-    // foreground `wmux daemon`) can receive it — the launcher's is detached.
-    process.on('SIGBREAK', () => {
-      onExitSignal('SIGBREAK');
-      process.exit(STATUS_CONTROL_C_EXIT);
-    });
+    // STATUS_CONTROL_C_EXIT; a listener suppresses that, so it takes the same
+    // clean exit as Ctrl+C, which disarms the pane job first (#2398): a plain
+    // process.exit here would end everything the panes started. Only a daemon
+    // run in a console (a foreground `wmux daemon`) can receive it — the
+    // launcher's is detached.
+    process.on('SIGBREAK', () => { onExitSignal('SIGBREAK'); void doShutdown('SIGBREAK'); });
   }
 
   // Last-resort synchronous save on process exit — registered on ALL platforms.

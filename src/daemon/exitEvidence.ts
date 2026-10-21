@@ -45,9 +45,6 @@ export interface ExitEvidenceOptions {
   now?: () => number;
 }
 
-/** What Windows ends a process with on Ctrl+C / Ctrl+Break when nothing handles it. */
-export const STATUS_CONTROL_C_EXIT = 0xc000013a;
-
 /** Node's report file name: `report.<YYYYMMDD>.<HHMMSS>.<pid>.<tid>.<seq>.json`. */
 const REPORT_FILE = /^report\.\d{8}\.\d{6}\.\d+\.\d+\.\d+\.json$/;
 const REPORTS_KEPT = 10;
