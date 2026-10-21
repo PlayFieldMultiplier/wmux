@@ -34,6 +34,7 @@ import {
 } from '../installTeardown';
 import {
   INSTALL_BLOCKED_BY_WINDOWS_REASON,
+  INSTALL_SETUP_CHANGED_REASON,
   isInstallBlockedByWindowsReason,
 } from '../../../shared/installAbortReasons';
 
@@ -46,6 +47,7 @@ const PLAN: WaiterPlan = {
   lockBudgetMs: 30_000,
   forceKillEligiblePids: [],
   forceKillGraceMs: 5_000,
+  setupSha256: 'ab'.repeat(32),
 };
 
 describe('isSafePsPathLiteral', () => {
@@ -128,6 +130,29 @@ describe('buildWaiterScript — ordering is the whole contract', () => {
   it('doubles apostrophes in every embedded path', () => {
     const s = buildWaiterScript({ ...PLAN, installRoot: "C:\\Users\\O'Connor\\wmux" }) ?? '';
     expect(s).toContain("$root = 'C:\\Users\\O''Connor\\wmux'");
+  });
+
+  it('re-hashes the installer after every wait and before starting it, holding it open across the start', () => {
+    const s = buildWaiterScript({ ...PLAN, setupSha256: 'AB'.repeat(32) }) ?? '';
+    const lockProbe = s.lastIndexOf('Test-RootLocked');
+    const hash = s.indexOf('ComputeHash($setupHold)');
+    const refuse = s.indexOf(`Write-InstallAbortMarker '${INSTALL_SETUP_CHANGED_REASON}'`);
+    const start = s.indexOf('Start-Process -FilePath $setup');
+    const release = s.indexOf('$setupHold.Close()', start);
+
+    expect(s).toContain(`$expectedSha = '${'ab'.repeat(32)}'`);
+    expect(hash).toBeGreaterThan(lockProbe);
+    expect(refuse).toBeGreaterThan(hash);
+    expect(start).toBeGreaterThan(refuse);
+    expect(release).toBeGreaterThan(start);
+    // Opened for read with read-only sharing: no writer while it is held.
+    expect(s).toContain("[System.IO.File]::Open($setup, 'Open', 'Read', 'Read')");
+  });
+
+  it('refuses to build without a well-formed installer digest', () => {
+    expect(buildWaiterScript({ ...PLAN, setupSha256: '' })).toBeNull();
+    expect(buildWaiterScript({ ...PLAN, setupSha256: 'ab'.repeat(31) })).toBeNull();
+    expect(buildWaiterScript({ ...PLAN, setupSha256: `${'ab'.repeat(31)}'x` })).toBeNull();
   });
 
   it('refuses to build on a line terminator or a bogus pid', () => {
@@ -530,10 +555,10 @@ describe('buildWaiterScript — #1341 target-version stamp', () => {
     expect(s).toContain('function Write-InstallAbortMarker($reason) {');
     expect(s).not.toMatch(/Set-Content -LiteralPath \$marker -Value 'install-aborted/);
     const writes = (s.match(/Write-InstallAbortMarker /g) ?? []).length;
-    // interrupted sentinel + stuck handle + locked root + blocked-by-policy
-    // (#1525) + cannot-start + incomplete-install = 6 marker writes, all
-    // stamped.
-    expect(writes).toBe(6);
+    // interrupted sentinel + stuck handle + locked root + installer changed
+    // since verification + blocked-by-policy (#1525) + cannot-start +
+    // incomplete-install = 7 marker writes, all stamped.
+    expect(writes).toBe(7);
   });
 
   it('omits the stamp when the caller cannot name the target, instead of failing the build', () => {
@@ -626,6 +651,7 @@ describe('buildWaiterScript — the clock has to survive a long uptime (#980)', 
     lockBudgetMs: 60_000,
     forceKillEligiblePids: [],
     forceKillGraceMs: 5_000,
+    setupSha256: 'ab'.repeat(32),
   };
 
   it('uses a monotonic Stopwatch, never [Environment]::TickCount', () => {
@@ -668,6 +694,7 @@ describe('buildWaiterScript — one waiter per install root (#980, coderabbit)',
     lockBudgetMs: 60_000,
     forceKillEligiblePids: [],
     forceKillGraceMs: 5_000,
+    setupSha256: 'ab'.repeat(32),
   };
   const script = () => buildWaiterScript(plan)!;
 
@@ -735,6 +762,7 @@ describe('buildWaiterScript — post-exit install verification (#1046)', () => {
     lockBudgetMs: 60000,
     forceKillEligiblePids: [],
     forceKillGraceMs: 5_000,
+    setupSha256: 'ab'.repeat(32),
   };
   const script = (): string => buildWaiterScript(PLAN46) ?? '';
 

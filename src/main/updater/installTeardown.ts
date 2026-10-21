@@ -56,7 +56,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn, execFileSync, type ChildProcess } from 'child_process';
-import { INSTALL_BLOCKED_BY_WINDOWS_REASON } from '../../shared/installAbortReasons';
+import {
+  INSTALL_BLOCKED_BY_WINDOWS_REASON,
+  INSTALL_SETUP_CHANGED_REASON,
+} from '../../shared/installAbortReasons';
 import { classifyWmuxProcess } from '../squirrelTeardown';
 
 /**
@@ -141,6 +144,13 @@ export interface WaiterPlan {
   /** How long an eligible pid gets before the waiter kills it. Short: see
    *  OWN_TREE_FORCE_KILL_GRACE_MS in AutoUpdater.ts for the reasoning. */
   forceKillGraceMs: number;
+  /**
+   * The SHA-256 (hex) the installer was verified under. The waiter hashes
+   * `setupExePath` again immediately before starting it and refuses on any
+   * difference: the app's own last check runs before the quit, and the
+   * waiter can sit in its lock wait for a minute after that.
+   */
+  setupSha256: string;
   /**
    * #1341 — the version this install is FOR, stamped into every marker the
    * waiter writes. Optional: a caller that cannot name the target (an adopted
@@ -609,6 +619,9 @@ export function buildWaiterScript(plan: WaiterPlan, launchStampPath?: string): s
   // or run with a nonsensical grace window.
   if (!plan.forceKillEligiblePids.every((p) => Number.isInteger(p) && p > 0)) return null;
   if (!Number.isInteger(plan.forceKillGraceMs) || plan.forceKillGraceMs <= 0) return null;
+  // Same posture again: without a well-formed digest there is nothing to
+  // re-verify against, so no waiter is built at all.
+  if (!/^[a-f0-9]{64}$/i.test(plan.setupSha256)) return null;
   // #1056 — optional execution-proof stamp. Stricter than isSafePsPathLiteral
   // on purpose: this path also rides through a cmd.exe trampoline command
   // line, where a double quote is structural. Optional, so the suites'
@@ -891,11 +904,35 @@ export function buildWaiterScript(plan: WaiterPlan, launchStampPath?: string): s
     // A verified installer can still be gone by now — quarantined by AV,
     // swept by a temp cleaner. Under SilentlyContinue that failure is invisible
     // and the script would exit 0, leaving a user who just watched wmux quit
-    // with no update and no explanation on the next boot.
+    // with no update and no explanation on the next boot. A missing file takes
+    // the cannot-start branch below without reaching Start-Process, so nothing
+    // that was not hashed is ever started.
     `$started = $true`,
     `$setupProc = $null`,
     `$startErr = $null`,
-    `try { $setupProc = Start-Process -FilePath $setup -PassThru -ErrorAction Stop } catch { $started = $false; $startErr = $_.Exception }`,
+    `if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { $started = $false }`,
+    `else {`,
+    // Re-verify the bytes as the last step before running them. The app's
+    // final check runs before it quits; the waits above can take a minute
+    // after that, with the file in a user-writable temp dir. The file is held
+    // open with read-only sharing from the hash until the process has
+    // started, so nothing can rewrite it in between: the bytes that run are
+    // the bytes that were hashed. Unreadable reads as a mismatch.
+    `  $expectedSha = ${psQuote(plan.setupSha256.toLowerCase())}`,
+    `  $setupHold = $null`,
+    `  $actualSha = $null`,
+    `  try {`,
+    `    $setupHold = [System.IO.File]::Open($setup, 'Open', 'Read', 'Read')`,
+    `    $actualSha = ([System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($setupHold)) -replace '-', '').ToLowerInvariant()`,
+    `  } catch { }`,
+    `  if ($actualSha -ne $expectedSha) {`,
+    `    if ($setupHold) { try { $setupHold.Close() } catch { } }`,
+    `    Write-InstallAbortMarker ${psQuote(INSTALL_SETUP_CHANGED_REASON)}`,
+    `    exit 7`,
+    `  }`,
+    `  try { $setupProc = Start-Process -FilePath $setup -PassThru -ErrorAction Stop } catch { $started = $false; $startErr = $_.Exception }`,
+    `  try { $setupHold.Close() } catch { }`,
+    `}`,
     `if (-not $started) {`,
     // #1525 — name the one failure the user cannot retry their way out of
     // right now: Windows refusing to run the installer at all. 4551 is

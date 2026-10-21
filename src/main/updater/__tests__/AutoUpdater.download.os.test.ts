@@ -326,6 +326,9 @@ describe('AutoUpdater two-step flow (win32)', () => {
     expect(quit).toHaveBeenCalledTimes(1);
     // The daemon is spared the force-kill; it gets the graceful shutdown.
     expect(teardown.terminatePids).toHaveBeenCalledWith([4242]);
+    // The waiter re-hashes the installer against the digest it was verified under.
+    const plan = teardown.spawnInstallWaiter.mock.calls[0][0] as { setupSha256?: string };
+    expect(plan.setupSha256).toBe(GOOD_SHA);
   });
 
   it('rejects on sha256 mismatch: emits error, no downloaded path, install is a no-op', async () => {

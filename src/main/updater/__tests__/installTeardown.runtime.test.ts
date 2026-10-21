@@ -11,7 +11,8 @@
 // process against afterEach teardown — an earlier detached version of this file
 // produced inverted, timing-dependent results that said nothing about the code.
 // Exit codes are the contract: 0 = installer launched, 2 = refused,
-// 5 = another waiter already owns this install root (#980).
+// 5 = another waiter already owns this install root (#980), 7 = the installer
+// no longer matched its verified digest and was not run.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -32,6 +33,7 @@ import {
 import {
   INSTALL_BLOCKED_BY_WINDOWS_PREFIX,
   INSTALL_BLOCKED_BY_WINDOWS_REASON,
+  INSTALL_SETUP_CHANGED_REASON,
 } from '../../../shared/installAbortReasons';
 
 const onWindows = process.platform === 'win32';
@@ -39,6 +41,11 @@ const PS = path.join(
   process.env.SystemRoot || 'C:\\Windows',
   'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
 );
+
+/** The waiter re-hashes the installer before starting it, so a plan carries its real digest. */
+function shaOf(file: string): string {
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
 
 function q(p: string): string {
   return `'${p.replace(/'/g, "''")}'`;
@@ -159,6 +166,7 @@ describe.skipIf(!onWindows)('install waiter (real processes, real locks)', () =>
   ): WaiterPlan => ({
     pids, setupExePath: fakeSetup, installRoot: root, abortMarkerPath: abortMarker,
     readyMarkerPath: readyMarker, lockBudgetMs, forceKillEligiblePids, forceKillGraceMs,
+    setupSha256: shaOf(fakeSetup),
   });
 
   function runWaiter(timeoutMs: number): { status: number | null; timedOut: boolean } {
@@ -346,11 +354,38 @@ describe.skipIf(!onWindows)('install waiter (real processes, real locks)', () =>
     expect(collectInstallRootPids(root)).toEqual([]);
   }, 30_000);
 
+  it('does not run an installer whose bytes changed after it was verified', () => {
+    fs.writeFileSync(path.join(root, 'Update.exe'), 'x');
+    fs.writeFileSync(path.join(root, 'app-1.0.0', 'icudtl.dat'), 'x');
+    // The plan carries the digest of the original; the file is then rewritten,
+    // as anything running as the user could do while the waiter waits.
+    writeWaiter(plan([], 5_000));
+    fs.writeFileSync(fakeSetup, `@echo off\r\necho other > "${setupStamp}"\r\n`);
+
+    expect(runWaiter(60_000).status).toBe(7);
+    expect(fs.existsSync(setupStamp)).toBe(false);
+    expect(fs.readFileSync(abortMarker, 'utf-8')).toContain(INSTALL_SETUP_CHANGED_REASON);
+  }, 120_000);
+
+  it('runs the installer when its bytes still match the verified digest', () => {
+    fs.writeFileSync(path.join(root, 'Update.exe'), 'x');
+    fs.writeFileSync(path.join(root, 'app-1.0.0', 'icudtl.dat'), 'x');
+    writeWaiter(plan([], 5_000));
+
+    expect(runWaiter(60_000).status).toBe(0);
+    const stampDeadline = Date.now() + 20_000;
+    while (Date.now() < stampDeadline && !fs.existsSync(setupStamp)) {
+      execFileSync(PS, ['-NoProfile', '-Command', 'Start-Sleep -Milliseconds 200'], { windowsHide: true });
+    }
+    expect(fs.existsSync(setupStamp)).toBe(true);
+    expect(fs.existsSync(abortMarker)).toBe(false);
+  }, 120_000);
+
   it('#1525 — an ordinary launch failure keeps the generic reason and exit 4', () => {
-    // A missing installer makes the REAL Start-Process fail through the same
-    // Win32Exception path a Smart App Control block takes (code 2 instead of
-    // 4551) — so this proves the new classification leaves every non-policy
-    // failure exactly as it was.
+    // A missing installer keeps the reason and exit code it always had. Since
+    // the pre-start re-hash it takes the cannot-start branch without reaching
+    // Start-Process (nothing unhashed is ever started); the classification of
+    // a real Start-Process failure is pinned by the lifted-block tests below.
     writeWaiter({ ...plan([], 5_000), setupExePath: path.join(sandbox, 'missing-setup.exe') });
     expect(runWaiter(60_000).status).toBe(4);
     const marker = fs.readFileSync(abortMarker, 'utf-8');
@@ -373,7 +408,7 @@ describe.skipIf(!onWindows)('#1525 — the waiter names an application-control b
     const s = buildWaiterScript({
       pids: [], setupExePath: 'C:\\t\\Setup.exe', installRoot: 'C:\\t\\root',
       abortMarkerPath: 'C:\\t\\abort.txt', readyMarkerPath: 'C:\\t\\ready.tmp',
-      lockBudgetMs: 1_000, forceKillEligiblePids: [], forceKillGraceMs: 1_000,
+      lockBudgetMs: 1_000, forceKillEligiblePids: [], forceKillGraceMs: 1_000, setupSha256: 'ab'.repeat(32),
     }) ?? '';
     const from = s.indexOf('  $blockedByPolicy = $false');
     const to = s.indexOf('  exit 4');
@@ -488,6 +523,7 @@ describe.skipIf(!onWindows)('concurrent waiters (#980)', () => {
       lockBudgetMs: 90_000,
       forceKillEligiblePids: [],
       forceKillGraceMs: 5_000,
+      setupSha256: shaOf(fakeSetup),
     });
 
     // Waiter A: async, long budget — parked in WaitForExit holding the mutex.
@@ -591,6 +627,7 @@ describe.skipIf(!onWindows)('waiter transport (#1056 — the REAL spawnInstallWa
     pids: [], setupExePath: fakeSetup, installRoot: root,
     abortMarkerPath: marker, readyMarkerPath: path.join(sandbox, 'ready-transport.tmp'),
     lockBudgetMs: 2_000, forceKillEligiblePids: [], forceKillGraceMs: 5_000,
+    setupSha256: shaOf(fakeSetup),
   });
 
   function sleep200(): void {
@@ -835,6 +872,7 @@ describe.skipIf(!onWindows)('#1264 — the waiter must outlive the app that spaw
       lockBudgetMs: 60_000,
       forceKillEligiblePids: [],
       forceKillGraceMs: 5_000,
+      setupSha256: shaOf(fakeSetup),
     };
     const body = buildWaiterScript(plan, stamp);
     expect(body).not.toBeNull();

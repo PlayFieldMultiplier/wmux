@@ -27,3 +27,13 @@ export const INSTALL_BLOCKED_BY_WINDOWS_REASON =
 export function isInstallBlockedByWindowsReason(reason: string): boolean {
   return reason.trim().startsWith(INSTALL_BLOCKED_BY_WINDOWS_PREFIX);
 }
+
+/**
+ * Written when the installer's SHA-256, taken immediately before it would be
+ * started, no longer matches the digest the update was verified under. The
+ * installer is not run. Shown through the generic refused-install notice,
+ * which already says the current version is unchanged and to try again.
+ * Single line, no apostrophes: it is embedded in the generated PowerShell.
+ */
+export const INSTALL_SETUP_CHANGED_REASON =
+  'install-aborted: the installer changed after it was verified, so it was not run';

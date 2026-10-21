@@ -1206,6 +1206,10 @@ export class AutoUpdater {
       lockBudgetMs: INSTALL_LOCK_BUDGET_MS,
       forceKillEligiblePids,
       forceKillGraceMs: OWN_TREE_FORCE_KILL_GRACE_MS,
+      // The waiter hashes the installer once more right before starting it.
+      // Never empty here (verifyArtifactStillMatches refuses without it); an
+      // empty one would make the waiter build fail closed.
+      setupSha256: this.downloadedSha ?? '',
       // #1341 — stamp the marker with what we are installing, so the version
       // that boots out of it can tell "this install finished" from "the waiter
       // has not cleared the marker yet". Empty when the artifact was adopted
