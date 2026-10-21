@@ -111,6 +111,7 @@ import { MAX_WORKSPACE_IDLE_DAYS, MIN_WORKSPACE_IDLE_DAYS } from '../../../share
 import { sendWorkspaceSettleIdleDays } from '../../hooks/useWorkspaceSettleBridge';
 import { FactoryTab } from './FactoryTab';
 import { matchesShortcutQuery } from './shortcutSearch';
+import { verifyFailedAfterAvailable, verifyFailedDisplayVersion } from './updateVerifyNotice';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1594,9 +1595,7 @@ function UpdateStatus() {
     const removeAvailable = window.electronAPI.updater.onUpdateAvailable((data) => {
       // Another release, or this one verified after all: the failure line no
       // longer describes what is on offer.
-      setVerifyFailedVersion((prev) => (
-        prev && (data.status === 'downloaded' || (data.releaseName && data.releaseName !== prev)) ? null : prev
-      ));
+      setVerifyFailedVersion((prev) => verifyFailedAfterAvailable(prev, data));
       if (data.status === 'downloaded') {
         setState('downloaded');
         if (data.releaseName) setReleaseName(data.releaseName);
@@ -1633,7 +1632,7 @@ function UpdateStatus() {
       // Said by its own line below, not as a generic failure with main's text.
       if (data.code === 'verify-failed') {
         setState('idle');
-        setVerifyFailedVersion(data.releaseName || null);
+        setVerifyFailedVersion(data.releaseName ? verifyFailedDisplayVersion(data.releaseName) : null);
         return;
       }
       setState('error');
@@ -1675,7 +1674,8 @@ function UpdateStatus() {
       .then((notice) => {
         if (cancelled) return;
         setInstanceDisabled(notice.instanceDisabled);
-        if (notice.verifyFailedVersion) setVerifyFailedVersion((prev) => prev ?? notice.verifyFailedVersion);
+        const failed = notice.verifyFailedVersion;
+        if (failed) setVerifyFailedVersion((prev) => prev ?? verifyFailedDisplayVersion(failed));
       })
       .catch(() => { /* the widget still works from live events */ });
     return () => { cancelled = true; };

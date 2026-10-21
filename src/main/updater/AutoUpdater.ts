@@ -871,11 +871,12 @@ export class AutoUpdater {
     else clearVerifyFailure(file);
   }
 
+  /** The version goes out normalized, the same spelling getNotice uses. */
   private sendVerifyFailed(version: string): void {
     this.sendToRenderer(IPC.UPDATE_ERROR, {
       status: 'error',
       code: 'verify-failed',
-      releaseName: version,
+      releaseName: normalizeVersion(version),
       message: `The installer published for ${version} does not match its published checksum, so it was not used. wmux tries again when the release changes.`,
     });
   }
@@ -891,7 +892,7 @@ export class AutoUpdater {
     return {
       instanceDisabled: updatesOffForInstance(),
       verifyFailedVersion:
-        failure && isVersionNewer(failure.version, app.getVersion()) ? failure.version : null,
+        failure && isVersionNewer(failure.version, app.getVersion()) ? normalizeVersion(failure.version) : null,
     };
   }
 

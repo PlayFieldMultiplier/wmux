@@ -868,6 +868,22 @@ describe('AutoUpdater after a failed verification (win32)', () => {
     expect(verifyFailedErrors(sent)[1].data.releaseName).toBe(NEW_VERSION);
   });
 
+  it('names the version in one spelling on the event and in the mount read', async () => {
+    // The feed names releases by tag; Settings compares this against it.
+    const { AutoUpdater, feed, ipcHandlers, sent, win } = await loadWin32({ sha: BAD_SHA });
+    feed.version = `v${NEW_VERSION}`;
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    await backgroundCheck(updater);
+    await flush();
+
+    expect(verifyFailedErrors(sent)[0]?.data.releaseName).toBe(NEW_VERSION);
+    expect(await ipcHandlers.get(IPC.UPDATE_GET_NOTICE)!()).toEqual({
+      instanceDisabled: false,
+      verifyFailedVersion: NEW_VERSION,
+    });
+  });
+
   it('a record from an earlier run holds too (it is read from userData)', async () => {
     const { AutoUpdater, requestUrls, win } = await loadWin32({
       sha: BAD_SHA,

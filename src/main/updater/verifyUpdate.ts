@@ -14,6 +14,7 @@
  */
 
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { normalizeVersion } from '../../shared/updateVersion';
 
 export interface UpdateManifest {
   version: string;
@@ -31,10 +32,9 @@ export type ManifestResult =
   | { ok: true; manifest: UpdateManifest }
   | { ok: false; reason: string };
 
-/** Strip a leading "v" so "v2.14.0" and "2.14.0" compare equal. */
-export function normalizeVersion(v: string): string {
-  return v.trim().replace(/^v/i, '');
-}
+// Shared with the renderer, which compares the feed's and the manifest's
+// spellings of the same version (Settings › Updates).
+export { normalizeVersion } from '../../shared/updateVersion';
 
 /**
  * Only https downloads from github.com (the release host) are accepted. The
