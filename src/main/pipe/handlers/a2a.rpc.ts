@@ -288,8 +288,6 @@ export interface RemoteA2aRpcDeps {
    * from `ptyId`'s folders when main verified that pane, else `~/.wmux/uploads` only.
    */
   stageImages?: (input: { paths: string[]; ptyId?: string; workspaceId?: string }) => Promise<{ ok: true; images: A2aStagedImage[] } | { ok: false; error: string }>;
-  /** Remove local copies this call created for a send the renderer then refused (`a2a.attachments.discard`). */
-  discardImages?: (input: { sha256s: string[] }) => Promise<unknown>;
   /**
    * Paired PCs with no active link in the workspace (every workspace when
    * omitted). `panesOf` counts a local workspace's panes, from discover's own list.
@@ -1389,11 +1387,8 @@ export function registerA2aRpc(
     const staged = await stageLocalImages(params, ctx);
     if ('error' in staged) return { error: staged.error };
     if (staged.attachments) sendParams.attachments = staged.attachments;
-    // A copy made for this send alone goes again when the send is refused.
-    const discardStaged = (): void => {
-      const fresh = (staged.attachments ?? []).filter((a) => a.created === true).map((a) => a.sha256);
-      if (fresh.length > 0 && remote?.discardImages) void remote.discardImages({ sha256s: fresh }).catch(() => undefined);
-    };
+    // A send the renderer then refuses leaves its copies in the local folder,
+    // which makes room from copies nothing open names (the daemon's eviction).
     // A main-registered delivery check (deliveryGuards.ts), kept only on the
     // operator lane. It can only add a refusal, never skip a check.
     if (ctx?.operator === true && typeof params.deliveryGuardKey === 'string' && params.gatedDelivery === true) {
@@ -1422,10 +1417,7 @@ export function registerA2aRpc(
     // A reply may reopen an ended task: commit that in the daemon first.
     if (params.taskId && params.execute !== true) {
       const prepared = await prepareReopen('a2a.task.send', sendParams);
-      if ('response' in prepared) {
-        discardStaged();
-        return prepared.response;
-      }
+      if ('response' in prepared) return prepared.response;
       sendParams = prepared.params;
     }
     // A NEW task's delivery may run the target pane's fresh-context step
@@ -1446,8 +1438,6 @@ export function registerA2aRpc(
             timeoutMs: gatedNewTask ? GATED_NEW_TASK_SEND_MAIN_TIMEOUT_MS : NEW_TASK_SEND_MAIN_TIMEOUT_MS,
           })
         : await sendToRenderer(getWindow, 'a2a.task.send', sendParams);
-    // Only an explicit refusal: a send that timed out here may still have been delivered.
-    if (isRecord(result) && typeof result.error === 'string') discardStaged();
 
     // 데몬 정본 미러-생성(신규 태스크 브랜치에서만 — 렌더러가 task 스냅샷 동반).
     // 실패는 soft-degrade: 이후 전이가 'task not found'로 렌더러 폴백을 탄다.

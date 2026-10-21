@@ -159,7 +159,7 @@ export class A2aImageStore {
     return stored.ok ? { ...stored, created: true } : stored;
   }
 
-  /** Remove the local copy of `sha` (whatever its type); whether one was there. */
+  /** Remove the local copy of `sha` (whatever its type), one this PC just wrote; whether one was there. */
   async discardLocal(sha: string): Promise<boolean> {
     if (!A2A_SHA256_RE.test(sha)) return false;
     let removed = false;

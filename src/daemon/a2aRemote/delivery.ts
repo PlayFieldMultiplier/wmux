@@ -489,31 +489,20 @@ export class A2aRemoteDelivery {
       // A full folder makes room from copies nothing open names (never this message's own).
       const inUse = this.openImages();
       for (const r of read.images) inUse.add(r.sha256);
+      // All or none: a copy this call wrote goes again when a later one fails.
+      const created: string[] = [];
       for (const r of read.images) {
         // eslint-disable-next-line no-await-in-loop -- a handful of small writes
         const stored = await store.putLocal(r.bytes, r.info, (sha) => inUse.has(sha));
-        if (!stored.ok) return { ok: false, error: 'unavailable: the image folder is full; try again later' };
-        out.push({
-          path: stored.path, sha256: r.sha256, mediaType: r.info.mediaType, bytes: r.bytes.length, width: r.info.width, height: r.info.height, name: r.name,
-          ...(stored.created ? { created: true } : {}),
-        });
+        if (!stored.ok) {
+          // eslint-disable-next-line no-await-in-loop -- at most three unlinks
+          for (const sha of created) await store.discardLocal(sha);
+          return { ok: false, error: 'unavailable: the image folder is full; try again later' };
+        }
+        if (stored.created) created.push(r.sha256);
+        out.push({ path: stored.path, sha256: r.sha256, mediaType: r.info.mediaType, bytes: r.bytes.length, width: r.info.width, height: r.info.height, name: r.name });
       }
       return { ok: true, images: out };
-    });
-
-    // The local send those copies were made for was refused: they go, unless
-    // something still open names them.
-    onRpc(A2A_REMOTE_RPC.discardImages, async (p) => {
-      const store = this.images;
-      const shas = Array.isArray(p['sha256s']) ? p['sha256s'].filter((s): s is string => typeof s === 'string').slice(0, A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) : [];
-      if (!store) return { ok: true, removed: 0 };
-      const inUse = this.openImages();
-      let removed = 0;
-      for (const sha of shas) {
-        // eslint-disable-next-line no-await-in-loop -- a handful of unlinks
-        if (!inUse.has(sha) && (await store.discardLocal(sha))) removed += 1;
-      }
-      return { ok: true, removed };
     });
 
     onRpc(A2A_REMOTE_RPC.state, async (p) => {

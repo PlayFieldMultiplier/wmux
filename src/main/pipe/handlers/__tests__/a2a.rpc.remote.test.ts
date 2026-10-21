@@ -76,7 +76,6 @@ beforeEach(() => {
       ok: true,
       images: i.paths.map((_p, n) => ({ path: `/home/u/.wmux/uploads/a2a/local/${String(n).repeat(64)}.png`, sha256: String(n).repeat(64), mediaType: 'image/png', bytes: 10, width: 1, height: 1, name: 'x.png' })),
     })),
-    discardImages: vi.fn(async () => ({ ok: true, removed: 1 })),
     listPeers: vi.fn(async () => []),
   };
   sendToRendererMock.mockImplementation(async (_w: unknown, method: string) => {
@@ -135,23 +134,6 @@ describe('a2a.task.send — images', () => {
     expect(remote.stageImages).not.toHaveBeenCalled();
     expect(rendererCalls('a2a.task.send')).toEqual([]);
     expect(rendererCalls('a2a.task.update')).toEqual([]);
-  });
-
-  it('a copy made for a send the renderer refused goes again; one an earlier message made stays', async () => {
-    remote.stageImages.mockResolvedValueOnce({
-      ok: true,
-      images: [
-        { path: '/u/a2a/local/a.png', sha256: 'a'.repeat(64), mediaType: 'image/png', bytes: 1, width: 1, height: 1, name: 'a.png', created: true },
-        { path: '/u/a2a/local/b.png', sha256: 'b'.repeat(64), mediaType: 'image/png', bytes: 1, width: 1, height: 1, name: 'b.png' },
-      ],
-    });
-    sendToRendererMock.mockImplementation(async (_w: unknown, method: string) => {
-      if (method === 'pane.list') return [{ id: 'pane-a', surfacePtyIds: ['pty-a'] }];
-      return { error: 'a2a.task.send: target workspace not found' };
-    });
-    const res = await call(setup(), 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-z', message: 'look', images: ['/p/a.png', '/p/b.png'] });
-    expect(res.error).toMatch(/not found/);
-    expect(remote.discardImages).toHaveBeenCalledWith({ sha256s: ['a'.repeat(64)] });
   });
 
   it('refuses a Windows device path before anything is read', async () => {

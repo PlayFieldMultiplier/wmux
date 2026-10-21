@@ -47,12 +47,6 @@ export const A2A_REMOTE_RPC = Object.freeze({
    * only), stripped and kept in `~/.wmux/uploads/a2a/local`.
    */
   stageImages: 'a2a.attachments.stage',
-  /**
-   * `{ sha256s: string[] }` → `{ ok: true, removed: number }`: the send those
-   * copies were made for was refused; each goes unless a task that has not
-   * ended, or an open record, names it.
-   */
-  discardImages: 'a2a.attachments.discard',
 } as const);
 
 /** One image `A2A_REMOTE_RPC.stageImages` kept: `path` is what the receiving agent reads. */
@@ -65,8 +59,6 @@ export interface A2aStagedImage {
   height: number;
   /** The source file's name. */
   name: string;
-  /** This call wrote the copy (it was not here for an earlier message). */
-  created?: boolean;
 }
 
 /**
@@ -148,7 +140,20 @@ export function sanitizeRemoteText(raw: string): string {
  * a newline as ␤. So a footer naming paths is always this PC's.
  */
 export function sanitizeRemoteMessage(raw: string): string {
-  return sanitizeRemoteText(raw).replace(/(^|␤)([ \t]*)(?=\[wmux\])/gim, '$1$2> ');
+  return quoteWmuxLines(sanitizeRemoteText(raw));
+}
+
+/**
+ * Quote (`> `) every line of `text` that reads as starting with `[wmux]`:
+ * judged with format characters (zero-width, bidi) removed and NFKC applied
+ * (fullwidth brackets and letters), after any whitespace or space separator.
+ * Lines are split at newlines and at ␤, a single-line pane's newline.
+ */
+export function quoteWmuxLines(text: string): string {
+  return text
+    .split(/(\n|␤)/)
+    .map((part, i) => (i % 2 === 0 && /^[\s\p{Z}]*\[wmux\]/iu.test(part.replace(/\p{Cf}/gu, '').normalize('NFKC')) ? `> ${part}` : part))
+    .join('');
 }
 
 // ─── Daemon RPC payloads ────────────────────────────────────────────────────

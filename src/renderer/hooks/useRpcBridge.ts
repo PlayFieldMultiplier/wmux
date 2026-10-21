@@ -72,6 +72,7 @@ import {
   localSideOf,
   parseDeliveredImages,
   remoteWorkspaceId,
+  quoteWmuxLines,
   sanitizeRemoteMessage,
   sanitizeRemoteText,
   withImageFooter,
@@ -892,7 +893,9 @@ function panePathFor(ptyId: string | null | undefined): (path: string) => string
 
 /** A pasted body with the images' footer, in the spelling of the pane it goes to. */
 function bodyWithImages(text: string, images: readonly A2aDeliveredImage[]): (ptyId: string) => string {
-  return (ptyId) => withImageFooter(text, images, panePathFor(ptyId));
+  // Above a footer, no line of the body may pass for one of its lines.
+  const body = images.length > 0 ? quoteWmuxLines(text) : text;
+  return (ptyId) => withImageFooter(body, images, panePathFor(ptyId));
 }
 
 export function buildA2aNudge(taskId: string, senderName: string, kind: 'new' | 'reply', title?: string): string {
