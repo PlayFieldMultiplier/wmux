@@ -558,7 +558,7 @@ export function GitTab({
       const prep = res.prep;
       if (prep?.status === 'failed') {
         // The last lines it printed say why, as on start from an issue.
-        const tail = prep.outputTail?.slice(-3).join(' · ');
+        const tail = prep.outputTail?.slice(-3).join(' · ').slice(-300);
         pushToast({ level: 'warn', message: t('git.prepFailed', { error: [prep.error, tail].filter(Boolean).join(': ') }) });
       } else if (prep?.status === 'skipped') {
         pushToast({ level: 'warn', message: t(prepSkipKey(prep.reason)) });

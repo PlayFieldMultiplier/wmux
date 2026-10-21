@@ -242,4 +242,11 @@ describe('bareRepoScriptHint (Windows does not search the current folder)', () =
     expect(bareRepoScriptHint('npm ci', dir, 'win32')).toBeUndefined();
     expect(bareRepoScriptHint('setup.cmd', dir, 'darwin')).toBeUndefined();
   });
+
+  it('says nothing for a file Windows would open rather than run', () => {
+    fs.writeFileSync(path.join(dir, 'setup.sh'), '');
+    fs.writeFileSync(path.join(dir, 'build'), '');
+    expect(bareRepoScriptHint('setup.sh', dir, 'win32')).toBeUndefined();
+    expect(bareRepoScriptHint('build', dir, 'win32')).toBeUndefined();
+  });
 });

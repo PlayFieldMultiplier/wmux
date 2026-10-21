@@ -217,8 +217,8 @@ export function resolveFanoutSetup(state: ProjectConfigState | null | undefined)
   return { run: true, command: setup };
 }
 
-/** Extensions Windows runs a bare script name with. */
-const WINDOWS_SCRIPT_EXTS = ['', '.cmd', '.bat', '.exe', '.com', '.ps1'];
+/** Extensions cmd.exe runs as a program when the name has a path. */
+const WINDOWS_SCRIPT_EXTS = ['.cmd', '.bat', '.exe', '.com'];
 
 /**
  * The hint for a setup that failed on Windows because its first word names a
@@ -232,9 +232,11 @@ export function bareRepoScriptHint(command: string, cwd: string, platform: NodeJ
   if (platform !== 'win32') return undefined;
   const first = /^\s*"?([^\s"&|<>]+)/.exec(command)?.[1];
   if (!first || /[\\/:]/.test(first)) return undefined;
-  for (const ext of WINDOWS_SCRIPT_EXTS) {
-    const name = path.extname(first) && ext ? null : first + ext;
-    if (!name) continue;
+  // Only a name `.\name` would run: no hint for a file cmd.exe opens by
+  // association (`setup.sh`, `setup.ps1`) instead of running it.
+  const ext = path.extname(first).toLowerCase();
+  const names = ext ? (WINDOWS_SCRIPT_EXTS.includes(ext) ? [first] : []) : WINDOWS_SCRIPT_EXTS.map((e) => first + e);
+  for (const name of names) {
     try {
       if (fs.statSync(path.join(cwd, name)).isFile()) return `use .\\${name} to run a script from the repository`;
     } catch {
