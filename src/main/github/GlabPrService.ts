@@ -222,7 +222,7 @@ export function glabProjectOfKey(key: string): { host: string; path: string } | 
  * labels, files and head pipeline belong to one moment. A retried job counts
  * by its latest run only.
  */
-export const GLAB_LANE_MR_QUERY = `query($fullPath: ID!, $iid: String!) { project(fullPath: $fullPath) { ciConfigPathOrDefault mergeRequest(iid: $iid) { iid title state draft sourceBranch targetBranch diffHeadSha diffRefs { startSha } sourceProjectId targetProjectId conflicts detailedMergeStatus mergedAt mergeCommitSha author { username } labels(first: 50) { pageInfo { hasNextPage } nodes { title } } diffStatsSummary { fileCount } diffStats { path } headPipeline { sha status mergeRequestEventType jobs(first: 100, retried: false) { pageInfo { hasNextPage } nodes { name status allowFailure webPath startedAt finishedAt stage { name } } } } } } }`;
+export const GLAB_LANE_MR_QUERY = `query($fullPath: ID!, $iid: String!) { project(fullPath: $fullPath) { ciConfigPathOrDefault mergeRequest(iid: $iid) { iid title state draft sourceBranch targetBranch diffHeadSha sourceProjectId targetProjectId conflicts detailedMergeStatus mergedAt mergeCommitSha author { username } labels(first: 50) { pageInfo { hasNextPage } nodes { title } } diffStatsSummary { fileCount } diffStats { path } headPipeline { sha status mergeRequestEventType jobs(first: 100, retried: false) { pageInfo { hasNextPage } nodes { name status allowFailure webPath startedAt finishedAt stage { name } } } } } } }`;
 
 /** The synthetic required check that fails while an MR changes which jobs
  *  run: the jobs are the MR head's own CI config, so a required job set is
@@ -354,8 +354,6 @@ export function mapGlabLaneFacts(raw: unknown, host: string): PrLaneFacts | null
     headRefOid: mr.diffHeadSha,
     headRefName: text(mr.sourceBranch),
     baseRefName: text(mr.targetBranch),
-    // The target branch's tip the MR's diff was taken against.
-    baseRefOid: text(rec(mr.diffRefs)?.startSha) || null,
     author: text(rec(mr.author)?.username) || null,
     ...glabMergeState(mr.detailedMergeStatus, mr.conflicts),
     ...(typeof mr.title === 'string' ? { title: mr.title } : {}),
@@ -741,7 +739,11 @@ export class GlabPrService implements PrProvider {
    *  pipeline when the head is one of its parents. */
   async laneFacts(repoPath: string, key: string, iid: number): Promise<PrReviewRead<PrLaneFacts>> {
     const r = await this.readLane(repoPath, key, iid);
-    return r.ok ? { ok: true, value: r.value.facts } : r;
+    if (!r.ok) return r;
+    // The target branch's tip now (the MR's diff refs can lag it): what a
+    // reading-only verdict is bound to. Unreadable: null, which refuses one.
+    const facts = r.value.facts;
+    return { ok: true, value: { ...facts, baseRefOid: await this.branchTip(GlabPrService.project(key), facts.baseRefName, repoPath) } };
   }
 
   /** laneFacts with the head pipeline's status (the merge's gate reads it).
@@ -793,6 +795,18 @@ export class GlabPrService implements PrProvider {
       return await this.commitParents(GlabPrService.project(key), sha, cwd);
     } catch {
       return [];
+    }
+  }
+
+  /** The commit branch `name` points at now, or null when it cannot be read. */
+  private async branchTip(project: { host: string; path: string }, name: string, cwd: string): Promise<string | null> {
+    if (!name) return null;
+    try {
+      const { stdout } = await this.api(project.host, [`projects/${encodeURIComponent(project.path)}/repository/branches/${encodeURIComponent(name)}`], cwd);
+      const id = rec(rec(JSON.parse(stdout))?.commit)?.id;
+      return typeof id === 'string' && /^[0-9a-f]{40}$/.test(id) ? id : null;
+    } catch {
+      return null;
     }
   }
 

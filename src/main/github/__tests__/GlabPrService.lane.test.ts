@@ -161,7 +161,8 @@ describe('laneFacts', () => {
     const r = await svc.laneFacts('/repo', KEY, 7);
     expect(r).toMatchObject({ ok: true, value: { number: 7, headRefOid: HEAD } });
     await svc.laneFacts('/repo', KEY, 7);
-    expect(calls).toHaveLength(2);
+    // Each read: the MR, then its target branch's tip.
+    expect(calls).toHaveLength(4);
     expect(calls[0].slice(0, 4)).toEqual(['api', '--hostname', 'gitlab.example.com', 'graphql']);
     expect(calls[0]).toContain('fullPath=group/sub/proj');
     expect(calls[0]).toContain('iid=7');
@@ -175,6 +176,16 @@ describe('laneFacts', () => {
     expect(calls[1]).toEqual(['api', '--hostname', 'gitlab.example.com', `projects/group%2Fsub%2Fproj/repository/commits/${MERGE_REF}`]);
     parents.mockReturnValue({ parent_ids: [OTHER, OTHER] });
     expect(await svc.laneFacts('/repo', KEY, 7)).toMatchObject({ ok: true, value: { checksHeadOid: MERGE_REF } });
+  });
+
+  it('the base tip is the target branch\'s commit now; unreadable, it is null and the read still succeeds', async () => {
+    const TIP = 'd'.repeat(40);
+    const branch = vi.fn((): unknown => ({ name: 'main', commit: { id: TIP } }));
+    const { svc, calls } = makeService((args) => (isGraphql(args) ? mrAnswer() : branch()));
+    expect(await svc.laneFacts('/repo', KEY, 7)).toMatchObject({ ok: true, value: { baseRefOid: TIP } });
+    expect(calls[1]).toEqual(['api', '--hostname', 'gitlab.example.com', 'projects/group%2Fsub%2Fproj/repository/branches/main']);
+    branch.mockReturnValue(new Error('404'));
+    expect(await svc.laneFacts('/repo', KEY, 7)).toMatchObject({ ok: true, value: { baseRefOid: null } });
   });
 
   it('a GraphQL error beside data is a read error too', async () => {
