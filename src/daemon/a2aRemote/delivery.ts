@@ -27,7 +27,7 @@ import { acceptInbound, type ImagePull, type InboundDeps } from './inbound';
 import type { NotifyLinkChange } from './linkRpc';
 import type { LinkStore } from './linkStore';
 import type { A2aOffers } from './offers';
-import { aliasTable, imageRefsOf, linkAlias, listRemoteTargets, sendRemoteReply, sendRemoteState, sendRemoteTask, syncRemoteTask, type OutboundDeps, type PreparedImage } from './outbound';
+import { aliasTable, imageRefsOf, linkAlias, listRemoteTargets, sendRemoteReply, sendRemoteState, sendRemoteTask, syncRemoteTask, type ImageCaller, type OutboundDeps, type PreparedImage } from './outbound';
 import { OutboxStore } from './outboxStore';
 import { PeerFeatureStore } from './peerFeatureStore';
 import type { A2aRouteTable } from './routes';
@@ -77,8 +77,13 @@ export interface A2aRemoteDeliveryDeps {
    * its `a2a/` folder and may be attached from it. Absent: no images either way.
    */
   uploadsRoot?: string;
-  /** The spawn folder of a pane, by its pty id: the folder its agent may attach images from. */
-  spawnCwdOf?: (ptyId: string) => string | undefined;
+  /**
+   * The spawn folder of a pane, by its pty id: the folder its agent may
+   * attach images from. Undefined unless that terminal belongs to
+   * `workspaceId` (the sender's, as main verified it): this daemon knows a
+   * terminal's workspace, not its pane.
+   */
+  spawnCwdOf?: (ptyId: string, workspaceId: string) => string | undefined;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   /** Test seams. */
   timing?: Partial<SessionTiming>;
@@ -347,6 +352,11 @@ export class A2aRemoteDelivery {
   private async maintainImages(): Promise<void> {
     if (!this.images) return;
     await this.images.sweep();
+    await this.images.gcOutgoing(() => this.resendableImages());
+  }
+
+  /** Sender copies a resend may still need: a ledger message that may be sent (again), or an open record. */
+  private resendableImages(): Set<string> {
     const referenced = new Set<string>();
     for (const task of this.deps.taskService.listRemote()) {
       const marker = task.metadata.remote as { messageId?: string; sent?: string[] } | undefined;
@@ -358,7 +368,22 @@ export class A2aRemoteDelivery {
       }
     }
     for (const rec of this.openRecords()) for (const ref of rec.envelope.images ?? []) referenced.add(ref.sha256);
-    await this.images.gcOutgoing(referenced);
+    return referenced;
+  }
+
+  /** Images a task that has not ended names, or an open record carries: a local copy of one is never evicted. */
+  private openImages(): Set<string> {
+    const out = new Set<string>();
+    for (const task of this.deps.taskService.listOpen()) {
+      for (const m of task.history) {
+        for (const p of m.parts) {
+          const sha = p.kind === 'file' ? p.metadata?.['sha256'] : undefined;
+          if (typeof sha === 'string') out.add(sha);
+        }
+      }
+    }
+    for (const rec of this.openRecords()) for (const ref of rec.envelope.images ?? []) out.add(ref.sha256);
+    return out;
   }
 
   /** Every record still owed to any host. */
@@ -456,14 +481,17 @@ export class A2aRemoteDelivery {
       const images = imagePaths(p['paths']);
       if (!images) return { ok: false, error: 'bad-request: paths must be a non-empty list of paths' };
       const ptyId = typeof p['ptyId'] === 'string' && isSafeId(p['ptyId']) ? p['ptyId'] : undefined;
-      const read = await this.readImages(images, ptyId);
+      const read = await this.readImages(images, { ptyId, workspaceId: str(p, 'workspaceId') });
       const store = this.images;
       if (!read.ok) return read;
       if (!store) return { ok: false, error: 'unavailable: this PC cannot send images' };
       const out: Array<{ path: string; sha256: string; mediaType: string; bytes: number; width: number; height: number; name: string }> = [];
+      // A full folder makes room from copies nothing open names (never this message's own).
+      const inUse = this.openImages();
+      for (const r of read.images) inUse.add(r.sha256);
       for (const r of read.images) {
         // eslint-disable-next-line no-await-in-loop -- a handful of small writes
-        const stored = await store.putLocal(r.bytes, r.info);
+        const stored = await store.putLocal(r.bytes, r.info, (sha) => inUse.has(sha));
         if (!stored.ok) return { ok: false, error: 'unavailable: the image folder is full; try again later' };
         out.push({ path: stored.path, sha256: r.sha256, mediaType: r.info.mediaType, bytes: r.bytes.length, width: r.info.width, height: r.info.height, name: r.name });
       }
@@ -639,7 +667,7 @@ export class A2aRemoteDelivery {
       ...(store
         ? {
           images: {
-            prepare: (paths, ptyId) => this.prepareOutgoing(paths, ptyId),
+            prepare: (paths, caller) => this.prepareOutgoing(paths, caller),
             hasOutgoing: async (sha) => (await store.readOutgoing(sha)) !== null,
           },
         }
@@ -650,15 +678,15 @@ export class A2aRemoteDelivery {
   /** Read, check and strip the images an agent named, all or none (a refusal names the one at fault). */
   private async readImages(
     paths: readonly string[],
-    ptyId: string | undefined,
+    caller: ImageCaller,
   ): Promise<{ ok: true; images: Array<{ bytes: Buffer; info: A2aImageInfo; sha256: string; name: string }> } | { ok: false; error: string }> {
     const store = this.images;
     if (!store) return { ok: false, error: 'unavailable: this PC cannot send images' };
     if (paths.length > A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) {
       return { ok: false, error: `bad-request: at most ${A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE} images on one message` };
     }
-    // No verified pane: only the uploads folder.
-    const roots = imageRoots(ptyId ? this.deps.spawnCwdOf?.(ptyId) : undefined, store.uploadsRoot);
+    // No verified pane, or a terminal of another workspace: only the uploads folder.
+    const roots = imageRoots(caller.ptyId ? this.deps.spawnCwdOf?.(caller.ptyId, caller.workspaceId) : undefined, store.uploadsRoot);
     const out: Array<{ bytes: Buffer; info: A2aImageInfo; sha256: string; name: string }> = [];
     let total = 0;
     for (const [i, given] of paths.entries()) {
@@ -682,8 +710,8 @@ export class A2aRemoteDelivery {
   }
 
   /** The images of a message to another PC, kept as sender copies for the peer. */
-  private async prepareOutgoing(paths: readonly string[], ptyId: string | undefined): Promise<{ ok: true; images: PreparedImage[] } | { ok: false; error: string }> {
-    const read = await this.readImages(paths, ptyId);
+  private async prepareOutgoing(paths: readonly string[], caller: ImageCaller): Promise<{ ok: true; images: PreparedImage[] } | { ok: false; error: string }> {
+    const read = await this.readImages(paths, caller);
     const store = this.images;
     if (!read.ok) return read;
     if (!store) return { ok: false, error: 'unavailable: this PC cannot send images' };
@@ -713,6 +741,7 @@ export class A2aRemoteDelivery {
 
 const IMAGE_REFUSAL: Record<A2aImageRefusal, string> = {
   unsupported: 'only PNG, JPEG and WebP images can be attached',
+  animated: 'animated images cannot be attached; attach a still image',
   malformed: 'the image is damaged, or its bytes are not the format they claim',
   dimensions: `the image is larger than ${A2A_REMOTE_IMAGE_LIMITS.MAX_EDGE} px on a side or ${A2A_REMOTE_IMAGE_LIMITS.MAX_PIXELS / 1_000_000} megapixels`,
 };

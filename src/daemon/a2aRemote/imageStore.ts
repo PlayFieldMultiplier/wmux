@@ -119,22 +119,58 @@ export class A2aImageStore {
     return readRegular(path.join(this.outgoingDir(), sha));
   }
 
-  /** Drop sender copies no ledger message (`referenced`) refers to, past a grace period. */
-  async gcOutgoing(referenced: ReadonlySet<string>): Promise<number> {
+  /**
+   * Drop sender copies no ledger message or open record (`referenced`, read
+   * fresh) refers to, past a grace period. Each one is looked at again just
+   * before it goes: a send that reused it since the listing (its time
+   * refreshed, or now referenced) keeps it.
+   */
+  async gcOutgoing(referenced: () => ReadonlySet<string>): Promise<number> {
     let dropped = 0;
     const cutoff = this.now() - OUTGOING_GRACE_MS;
+    const listed = referenced();
     for (const { name, full, st } of await listFiles(this.outgoingDir())) {
       if (TEMP_RE.test(name) && st.mtimeMs < cutoff) await unlinkQuiet(full);
-      if (!BLOB_RE.test(name) || referenced.has(name) || st.mtimeMs >= cutoff) continue;
+      if (!BLOB_RE.test(name) || listed.has(name) || st.mtimeMs >= cutoff) continue;
+      // eslint-disable-next-line no-await-in-loop -- one file at a time
+      const now = await lstatOrNull(full);
+      if (!now || now.mtimeMs >= cutoff || referenced().has(name)) continue;
       if (await unlinkQuiet(full)) dropped += 1;
     }
     return dropped;
   }
 
-  /** Keep an image an agent sent to a pane on this PC; its path is what the receiver reads. */
-  async putLocal(bytes: Buffer, info: A2aImageInfo): Promise<StoredImage> {
+  /**
+   * Keep an image an agent sent to a pane on this PC; its path is what the
+   * receiver reads. This folder is this PC's own, so when it is full its
+   * oldest files that nothing still open refers to (`inUse`) make room.
+   */
+  async putLocal(bytes: Buffer, info: A2aImageInfo, inUse: (sha: string) => boolean): Promise<StoredImage> {
     const ref: A2aRemoteImageRef = { sha256: sha256(bytes), mediaType: info.mediaType, bytes: bytes.length };
+    const existing = await this.received(LOCAL_FOLDER, ref);
+    if (existing) return existing;
+    await this.evictLocal(bytes.length, inUse);
     return this.storeReceived(LOCAL_FOLDER, ref, bytes);
+  }
+
+  /** Remove local copies nothing open refers to, oldest first, until `incoming` more bytes fit. */
+  private async evictLocal(incoming: number, inUse: (sha: string) => boolean): Promise<void> {
+    await this.sweepReceived();
+    const dir = path.join(this.root, LOCAL_FOLDER);
+    const held = (await listFiles(dir)).filter((f) => STORED_RE.test(f.name)).sort((a, b) => a.st.mtimeMs - b.st.mtimeMs);
+    let files = held.length;
+    let bytes = held.reduce((n, f) => n + f.st.size, 0);
+    let total = await this.measureAll();
+    for (const f of held) {
+      const fits = files + 1 <= RECEIVED_HOST_MAX_FILES && bytes + incoming <= RECEIVED_HOST_MAX_BYTES && total + incoming <= RECEIVED_TOTAL_MAX_BYTES;
+      if (fits) return;
+      if (inUse(f.name.slice(0, 64))) continue;
+      // eslint-disable-next-line no-await-in-loop -- one file at a time
+      if (!(await unlinkQuiet(f.full))) continue;
+      files -= 1;
+      bytes -= f.st.size;
+      total -= f.st.size;
+    }
   }
 
   // --- server: uploads from a joiner ----------------------------------------
@@ -319,6 +355,14 @@ export class A2aImageStore {
 }
 
 // --- fs helpers ---------------------------------------------------------------
+
+async function lstatOrNull(p: string): Promise<fs.Stats | null> {
+  try {
+    return await fs.promises.lstat(p);
+  } catch {
+    return null;
+  }
+}
 
 /** A regular file's bytes (never through a link), or null. */
 async function readRegular(p: string): Promise<Buffer | null> {

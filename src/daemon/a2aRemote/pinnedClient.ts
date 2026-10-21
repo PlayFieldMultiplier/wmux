@@ -171,6 +171,12 @@ export class PinnedTlsClient {
     return { status, json: parseJsonOrNull(answer.toString('utf8')) };
   }
 
+  /** The status of a `HEAD` (no body), within `timeoutMs`. */
+  async headStatus(path: string, timeoutMs: number): Promise<number> {
+    const { status } = await this.request('HEAD', path, undefined, { accept: 'application/json', timeoutMs });
+    return status;
+  }
+
   /**
    * Download raw bytes (`GET`): at most `maxBytes`, within `timeoutMs`,
    * abandoned when `signal` aborts. A status other than 200 throws `http`

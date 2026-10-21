@@ -39,6 +39,12 @@ import { remoteTaskId } from './ids';
 export type OutboundResult = { ok: true; taskId: string; note?: string } | { ok: false; error: string };
 
 /** One image ready to leave: checked, stripped, kept in the sender store. */
+/** Who attaches: its pane's terminal (main-verified), and the workspace it must belong to. */
+export interface ImageCaller {
+  ptyId?: string | undefined;
+  workspaceId: string;
+}
+
 export interface PreparedImage {
   ref: A2aRemoteImageRef;
   /** The source file's name, for this PC's own ledger only (never sent). */
@@ -51,8 +57,12 @@ export interface PreparedImage {
 
 /** The sender side of images (`images.1`). */
 export interface OutboundImages {
-  /** Read the images an agent named from its pane's folders (`ptyId`, else uploads only), check, strip and keep them. */
-  prepare(paths: readonly string[], ptyId: string | undefined): Promise<{ ok: true; images: PreparedImage[] } | { ok: false; error: string }>;
+  /**
+   * Read the images an agent named, check, strip and keep them: from its
+   * pane's folders when `ptyId` is a terminal of `workspaceId`, else from the
+   * uploads folder only.
+   */
+  prepare(paths: readonly string[], caller: ImageCaller): Promise<{ ok: true; images: PreparedImage[] } | { ok: false; error: string }>;
   /** Whether the sender copy of an image is still here. */
   hasOutgoing(sha256: string): Promise<boolean>;
 }
@@ -145,7 +155,7 @@ export async function sendRemoteTask(deps: OutboundDeps, input: A2aRemoteSendTas
   }
   const check = deps.linkStore.checkMessage(link.linkId, link.version, link.remote.hostId, 'outbound', 'task');
   if (!check.ok) return { ok: false, error: check.error };
-  const att = await attachImages(deps, link, input.images, input.from.ptyId, input.text);
+  const att = await attachImages(deps, link, input.images, { ptyId: input.from.ptyId, workspaceId: input.from.workspaceId }, input.text);
   if (!att.ok) return att;
   const sizeErr = bodyError(att.text, att.images.length > 0);
   if (sizeErr) return { ok: false, error: sizeErr };
@@ -185,7 +195,7 @@ export async function sendRemoteReply(deps: OutboundDeps, input: A2aRemoteReplyI
   }
   const check = deps.linkStore.checkMessage(link.linkId, link.version, link.remote.hostId, 'outbound', 'reply', undefined, { onThisLink: true });
   if (!check.ok) return { ok: false, error: check.error };
-  const att = await attachImages(deps, link, input.images, input.ptyId, input.text);
+  const att = await attachImages(deps, link, input.images, { ptyId: input.ptyId, workspaceId: input.workspaceId }, input.text);
   if (!att.ok) return att;
   const sizeErr = bodyError(att.text, att.images.length > 0);
   if (sizeErr) return { ok: false, error: sizeErr };
@@ -394,7 +404,7 @@ async function attachImages(
   deps: Pick<OutboundDeps, 'images' | 'peerFeatures'>,
   link: A2aLinkRecordV1,
   paths: readonly string[] | undefined,
-  ptyId: string | undefined,
+  caller: ImageCaller,
   text: string,
 ): Promise<Attached> {
   if (!paths || paths.length === 0) return { ok: true, text, images: [] };
@@ -420,7 +430,7 @@ async function attachImages(
       note: `The other PC's wmux does not take images: the text was sent with a note that ${n} ${paths.length === 1 ? 'was' : 'were'} omitted.`,
     };
   }
-  const prepared = await deps.images.prepare(paths, ptyId);
+  const prepared = await deps.images.prepare(paths, caller);
   return prepared.ok ? { ok: true, text, images: prepared.images } : prepared;
 }
 

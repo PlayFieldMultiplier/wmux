@@ -89,6 +89,46 @@ describe('imageRoots / readImageSource', () => {
     expect(await readImageSource(path.join(proj, 'big.png'), roots)).toEqual({ ok: false, reason: 'size' });
   });
 
+  it('a spawn folder that resolves to home, or to a folder holding it, is not a root (a link or a junction)', async () => {
+    const home = path.join(dir, 'home');
+    fs.mkdirSync(path.join(home, 'Pictures'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'Pictures', 'me.png'), png(2, 2));
+    const uploads = path.join(home, '.wmux', 'uploads');
+    fs.mkdirSync(uploads, { recursive: true });
+    const toHome = path.join(dir, 'proj-home');
+    const toAbove = path.join(dir, 'proj-above');
+    fs.symlinkSync(home, toHome, 'junction');
+    fs.symlinkSync(dir, toAbove, 'junction');
+    for (const [root, file] of [[toHome, path.join(toHome, 'Pictures', 'me.png')], [toAbove, path.join(toAbove, 'home', 'Pictures', 'me.png')]]) {
+      const roots = imageRoots(root, uploads, home);
+      // The spelling passes the cheap check; what it resolves to does not.
+      expect(roots).toContain(root);
+      expect(await readImageSource(file, roots, home)).toEqual({ ok: false, reason: 'outside' });
+    }
+    // The uploads folder inside home still is one.
+    fs.writeFileSync(path.join(uploads, 'ok.png'), png(2, 2));
+    expect(await readImageSource(path.join(uploads, 'ok.png'), imageRoots(toHome, uploads, home), home)).toMatchObject({ ok: true });
+  });
+
+  it('refuses a path outside every root before touching the file system', async () => {
+    const proj = path.join(dir, 'proj');
+    fs.mkdirSync(proj);
+    const lstat = vi.spyOn(fs.promises, 'lstat');
+    try {
+      expect(await readImageSource(path.join(dir, 'elsewhere', 'none.png'), [proj])).toEqual({ ok: false, reason: 'outside' });
+      expect(lstat).not.toHaveBeenCalled();
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('refuses a device path, and a share no root is on, by its spelling', async () => {
+    const roots = [path.join(dir, 'proj')];
+    expect(await readImageSource('\\\\?\\C:\\x.png', roots)).toEqual({ ok: false, reason: 'outside' });
+    expect(await readImageSource('\\\\.\\C:\\x.png', roots)).toEqual({ ok: false, reason: 'outside' });
+    expect(await readImageSource('\\\\server\\share\\x.png', roots)).toEqual({ ok: false, reason: 'outside' });
+  });
+
   it.skipIf(process.platform === 'win32')('refuses a link out of the root and a hard link', async () => {
     const proj = path.join(dir, 'proj');
     const other = path.join(dir, 'other');
@@ -170,6 +210,37 @@ describe('A2aImageStore', () => {
     expect(fs.existsSync(file)).toBe(false);
     expect(await s.storeReceived(HOST, refOf(img), img)).toMatchObject({ ok: true, path: file });
     expect(fs.readFileSync(file).equals(img)).toBe(true);
+  });
+
+  it('makes room in the local folder from its oldest copies nothing open names', async () => {
+    const s = store();
+    const kept = png(3, 3, 4, 255);
+    const keptAt = await s.putLocal(kept, { mediaType: 'image/png', width: 3, height: 3 }, () => false);
+    if (!keptAt.ok) throw new Error('first local copy not kept');
+    const anHourAgo = new Date(Date.now() - 3600_000);
+    fs.utimesSync(keptAt.path, anHourAgo, anHourAgo);
+    const inUse = (sha: string): boolean => sha === sha256(kept);
+    for (let i = 0; i < 101; i += 1) {
+      const img = png(3, 3, 4 + i, i);
+      // eslint-disable-next-line no-await-in-loop -- in order, oldest first
+      const got = await s.putLocal(img, { mediaType: 'image/png', width: 3, height: 3 }, inUse);
+      expect(got.ok).toBe(true);
+    }
+    const names = fs.readdirSync(path.join(dir, 'uploads', 'a2a', 'local'));
+    expect(names).toHaveLength(100);
+    // The oldest of all is still named by an open task: kept.
+    expect(fs.existsSync(keptAt.path)).toBe(true);
+  });
+
+  it('keeps a sender copy that a send reused after the listing', async () => {
+    const s = store(() => Date.now() + 2 * 3600_000);
+    const img = png(4, 4);
+    const sha = await s.putOutgoing(img);
+    let calls = 0;
+    // Not referenced when listed; referenced by the time it would go.
+    expect(await s.gcOutgoing(() => (calls++ === 0 ? new Set<string>() : new Set([sha])))).toBe(0);
+    expect(await s.readOutgoing(sha)).not.toBeNull();
+    expect(await s.gcOutgoing(() => new Set<string>())).toBe(1);
   });
 
   it('refuses bytes that do not match their ref', async () => {
@@ -267,12 +338,16 @@ describe('blob routes', () => {
     expect((await send('GET', sha256(img), undefined, false, true)).status).toBe(404);
   });
 
-  it('answers an upload it already holds before reading its body', async () => {
-    const img = png(5, 5);
+  it('says by HEAD whether it holds an image, and answers a full upload of one it holds with a clean 200', async () => {
+    const img = png(64, 64, 1536 * 1024, 7);
+    expect((await send('HEAD', sha256(img))).status).toBe(404);
     await s.storeReceived(HOST, refOf(img), img);
-    // A wrong body: never read, so never judged.
-    const res = await send('PUT', sha256(img), Buffer.from('not the image'));
-    expect([200, -1]).toContain(res.status);
+    expect((await send('HEAD', sha256(img))).status).toBe(200);
+    expect((await send('HEAD', sha256(img), undefined, false, true)).status).toBe(404);
+    // The whole body is read (and discarded) before the answer: no reset, on any OS.
+    const res = await send('PUT', sha256(img), img);
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body.toString('utf8'))).toEqual({ ok: true });
     expect(fs.existsSync(path.join(dir, 'a2a', 'blobs-in', HOST, sha256(img)))).toBe(false);
   });
 });
@@ -459,18 +534,22 @@ describe('JoinerSession image uploads', () => {
     for (const x of sessions.splice(0)) await x.stop();
   });
 
-  it('gives up a message whose uploads keep timing out, and the next message still goes', async () => {
-    const img = png(2, 2);
-    const records: A2aOutboxRecordV1[] = [1, 2].map((seq) => ({
+  const img = png(2, 2);
+  /** Two replies to one host, the first carrying an image. */
+  function replies(): A2aOutboxRecordV1[] {
+    return [1, 2].map((seq) => ({
       v: 1, epoch: 'e', seq, hostId: HOST, state: 'pending', attempts: 0, createdAt: new Date().toISOString(), updatedAt: 'x',
       envelope: {
         protocol: A2A_REMOTE_PROTOCOL, linkId: 'l', linkVersion: 2, messageId: `m${seq}`, kind: 'reply', taskId: 't', text: `r${seq}`,
         ...(seq === 1 ? { images: [refOf(img)] } : {}), sentAt: 'x',
       },
     }));
+  }
+
+  /** A session over `records`, posting through `bytes` (the image transfers); what it posted and refused. */
+  function run(records: A2aOutboxRecordV1[], bytes: Pick<SessionClient, 'putBytes' | 'headStatus'>): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }> } {
     const posted: string[] = [];
     const refused: Array<{ seq: number; code: string; detail?: string }> = [];
-    let puts = 0;
     const client: SessionClient = {
       requestJson: async (_m, p, body) => {
         if (p === A2A_ROUTES.messages) posted.push((body as { messageId: string }).messageId);
@@ -480,10 +559,7 @@ describe('JoinerSession image uploads', () => {
         yield { event: 'hello', data: { epoch: 'e', features: ['images.1'] } };
         await new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }));
       },
-      putBytes: async () => {
-        puts += 1;
-        throw new PinnedClientError('timeout', 'no answer within 30000ms', { sent: true });
-      },
+      ...bytes,
     };
     const open = (): A2aOutboxRecordV1[] => records.filter((r) => r.state === 'pending');
     const session = new JoinerSession({
@@ -517,8 +593,38 @@ describe('JoinerSession image uploads', () => {
     });
     sessions.push(session);
     session.start();
+    return { posted, refused };
+  }
+
+  it('gives up a message whose uploads keep timing out, and the next message still goes', async () => {
+    let puts = 0;
+    const { posted, refused } = run(replies(), {
+      putBytes: async () => {
+        puts += 1;
+        throw new PinnedClientError('timeout', 'no answer within 30000ms', { sent: true });
+      },
+    });
     await vi.waitFor(() => expect(posted).toEqual(['m2']), { timeout: 10_000 });
     expect(puts).toBe(IMAGE_UPLOAD_MAX_FAILURES);
     expect(refused).toEqual([{ seq: 1, code: 'attachment-failed', detail: expect.stringContaining('30 seconds') }]);
+  });
+
+  it('asks first and does not upload an image the other PC already holds', async () => {
+    let puts = 0;
+    const asked: string[] = [];
+    const { posted, refused } = run(replies(), {
+      headStatus: async (p) => {
+        asked.push(p);
+        return 200;
+      },
+      putBytes: async () => {
+        puts += 1;
+        return { status: 200, json: { ok: true } };
+      },
+    });
+    await vi.waitFor(() => expect(posted).toEqual(['m1', 'm2']), { timeout: 10_000 });
+    expect(asked).toEqual([`${A2A_ROUTES.blobs}/${sha256(img)}`]);
+    expect(puts).toBe(0);
+    expect(refused).toEqual([]);
   });
 });

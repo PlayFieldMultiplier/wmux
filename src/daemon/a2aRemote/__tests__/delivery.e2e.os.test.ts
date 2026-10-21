@@ -161,6 +161,8 @@ async function makePc(
     ...(opts.client ? { client: opts.client } : {}),
     ...(opts.features ? { features: opts.features } : {}),
     ...(opts.images ? { uploadsRoot: path.join(dir, 'uploads'), features: ['link-offer.1', 'images.1'] } : {}),
+    // One terminal, `pty-a`, of workspace `ws-a`, spawned in `<dir>/proj`.
+    spawnCwdOf: (ptyId: string, workspaceId: string) => (ptyId === 'pty-a' && workspaceId === 'ws-a' ? path.join(dir, 'proj') : undefined),
   });
   const realAccept = delivery.accept.bind(delivery);
   delivery.accept = (env, peer) => {
@@ -368,6 +370,11 @@ describe('cross-host delivery, end to end', () => {
     };
     expect(staged).toMatchObject({ ok: true, images: [{ width: 12, height: 7 }] });
     expect(staged.images[0].path).toBe(path.join(a.dir, 'uploads', 'a2a', 'local', `${staged.images[0].sha256}.png`));
+    // The pane's own folder, but only for a terminal of the sender's workspace.
+    fs.mkdirSync(path.join(a.dir, 'proj'));
+    fs.writeFileSync(path.join(a.dir, 'proj', 'ui.png'), shot);
+    expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-a' })).toMatchObject({ ok: true });
+    expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-other' })).toMatchObject({ ok: false });
     // Outside the allowed folders: refused with a reason the agent can act on.
     fs.writeFileSync(path.join(a.dir, 'elsewhere.png'), shot);
     expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'elsewhere.png')] })).toMatchObject({

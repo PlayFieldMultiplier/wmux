@@ -839,6 +839,11 @@ export class A2aTaskService {
     return out;
   }
 
+  /** Every task that has not ended, local or remote. */
+  listOpen(): Task[] {
+    return [...this.tasks.values()].filter((t) => !(TERMINAL_STATES as readonly string[]).includes(t.status.state));
+  }
+
   /** Every remote task, ended or not (the outbound sync walks these). */
   listRemote(): Task[] {
     return [...this.tasks.values()].filter((t) => remoteMarkerOf(t) !== undefined);

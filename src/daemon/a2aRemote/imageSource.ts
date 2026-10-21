@@ -4,6 +4,13 @@
 // taken only from an allowed folder, with the checks the Bots room file store
 // makes (main/factory/roomFiles.ts `copyIn`), asynchronously because the
 // daemon serves every pane on one event loop:
+//   - before any file system call, the path as written is inside a root (as
+//     given or as resolved), and it is not a device path (`\\?\`, `\\.\`)
+//     or a share no root is on (`\\server\share`);
+//   - a root counts only by what it resolves to: not the home folder or a
+//     folder holding it (compared by device and inode, so a link, a junction,
+//     an 8.3 name or a macOS firmlink spelling of home is caught), and not
+//     the top of a file system (a drive, a volume, a mount point);
 //   - its real path (every link in its folders resolved) is strictly inside
 //     the real path of an allowed root (exact case on Windows);
 //   - below that root, no segment is hidden (starts with `.`: `.git`, `.ssh`,
@@ -51,10 +58,13 @@ export function imageRoots(spawnCwd: string | undefined, uploadsRoot: string, ho
 }
 
 /** Read one image file an agent named, or say why not. */
-export async function readImageSource(source: string, roots: readonly string[]): Promise<ImageSourceRead> {
+export async function readImageSource(source: string, roots: readonly string[], home: string = os.homedir()): Promise<ImageSourceRead> {
   if (!path.isAbsolute(source)) return { ok: false, reason: 'relative' };
   if (process.platform === 'win32' && namesWin32Stream(source)) return { ok: false, reason: 'not-file' };
-  const realRoots = (await Promise.all(roots.filter((r) => path.isAbsolute(r)).map(realpathOrNull))).filter((r): r is string => r !== null);
+  const realRoots = await safeRealRoots(roots, home);
+  // Nothing outside the roots, and no device or foreign share, ever reaches the file system.
+  if (process.platform === 'win32' && shareOrDevice(source, realRoots)) return { ok: false, reason: 'outside' };
+  if (!lexicallyInside(source, [...roots, ...realRoots])) return { ok: false, reason: 'outside' };
   let lst: fs.Stats;
   try {
     lst = await fs.promises.lstat(source);
@@ -135,6 +145,87 @@ export function imageSourceMessage(reason: ImageSourceRefusal): string {
     case 'changed':
       return 'the file changed while it was read; try again';
   }
+}
+
+/**
+ * The real paths of the roots that may be read from: not home or a folder
+ * holding it, and not the top of a file system. Compared by device and inode,
+ * so no spelling of home (a link or junction to it, an 8.3 name, a firmlink
+ * path) passes.
+ */
+async function safeRealRoots(roots: readonly string[], home: string): Promise<string[]> {
+  const homeChain = await ancestorIds(home);
+  const out: string[] = [];
+  for (const root of roots) {
+    if (!path.isAbsolute(root)) continue;
+    // eslint-disable-next-line no-await-in-loop -- two roots at most
+    const real = await realpathOrNull(root);
+    // eslint-disable-next-line no-await-in-loop
+    const st = real ? await statOrNull(real) : null;
+    if (!real || !st?.isDirectory()) continue;
+    if (homeChain.has(idOf(st))) continue;
+    // eslint-disable-next-line no-await-in-loop
+    if (await isFileSystemTop(real, st)) continue;
+    out.push(real);
+  }
+  return out;
+}
+
+/** Device and inode of home's real path and of every folder above it. */
+async function ancestorIds(home: string): Promise<Set<string>> {
+  const ids = new Set<string>();
+  let at = (await realpathOrNull(home)) ?? path.resolve(home);
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop -- a handful of levels
+    const st = await statOrNull(at);
+    if (st) ids.add(idOf(st));
+    const up = path.dirname(at);
+    if (up === at) return ids;
+    at = up;
+  }
+}
+
+/** A drive or file system root, or a mount point (its parent is on another device). */
+async function isFileSystemTop(real: string, st: fs.Stats): Promise<boolean> {
+  const up = path.dirname(real);
+  if (up === real) return true;
+  const parent = await statOrNull(up);
+  return !parent || parent.dev !== st.dev;
+}
+
+function idOf(st: fs.Stats): string {
+  return `${st.dev}:${st.ino}`;
+}
+
+async function statOrNull(p: string): Promise<fs.Stats | null> {
+  try {
+    return await fs.promises.stat(p);
+  } catch {
+    return null;
+  }
+}
+
+/** A Windows device path, or a UNC path on a share no root is on. */
+function shareOrDevice(source: string, realRoots: readonly string[]): boolean {
+  if (!/^[\\/]{2}/.test(source)) return false;
+  if (/^[\\/]{2}[?.][\\/]/.test(source)) return true;
+  const share = (p: string): string | null => {
+    const m = /^[\\/]{2}([^\\/]+)[\\/]+([^\\/]+)/.exec(p);
+    return m ? `${m[1]}\\${m[2]}`.toLowerCase() : null;
+  };
+  const mine = share(source);
+  return mine === null || !realRoots.some((r) => share(r) === mine);
+}
+
+/** `source`, as written, is strictly inside one of `roots` (case-folded where the file system usually is). */
+function lexicallyInside(source: string, roots: readonly string[]): boolean {
+  const fold = process.platform === 'win32' || process.platform === 'darwin';
+  const norm = (p: string): string => (fold ? path.resolve(p).toLowerCase() : path.resolve(p));
+  const target = norm(source);
+  return roots.some((r) => {
+    const rel = path.relative(norm(r), target);
+    return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+  });
 }
 
 function containingRel(realRoots: readonly string[], real: string): string | null {

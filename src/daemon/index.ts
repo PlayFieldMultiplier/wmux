@@ -9401,7 +9401,11 @@ async function main(): Promise<void> {
         // messages: tell the servers it joins, and the joiners in its hello.
         features: [A2A_FEATURE_LINK_OFFER, A2A_FEATURE_IMAGES],
         uploadsRoot: path.join(wmuxDir, 'uploads'),
-        spawnCwdOf: (ptyId) => sessionManager.getSession(ptyId)?.meta.spawnCwd,
+        // A live terminal of the sender's workspace (stamped at spawn by main), else none.
+        spawnCwdOf: (ptyId, workspaceId) => {
+          const meta = sessionManager.listLiveSessions().find((m) => m.id === ptyId);
+          return workspaceId && meta?.env?.[ENV_KEYS.WORKSPACE_ID] === workspaceId ? meta.spawnCwd : undefined;
+        },
         log: a2aLog,
       });
       a2aDelivery.registerRoutes(a2aRoutes);

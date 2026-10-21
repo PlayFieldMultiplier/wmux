@@ -79,6 +79,7 @@ export interface SessionClient {
   requestJson(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }>;
   openStream(path: string, opts: { signal: AbortSignal; lastEventId?: string; features?: readonly string[] }): AsyncGenerator<PinnedSseEvent, void, undefined>;
   putBytes?(path: string, body: Buffer, timeoutMs: number): Promise<{ status: number; json: unknown }>;
+  headStatus?(path: string, timeoutMs: number): Promise<number>;
   getBytes?(path: string, opts: { maxBytes: number; timeoutMs: number; signal?: AbortSignal }): Promise<Buffer>;
 }
 
@@ -373,7 +374,8 @@ export class JoinerSession {
 
   /**
    * Upload a message's images before its envelope (the server answers
-   * `attachment-missing` for one it does not hold). Unreachable is retried
+   * `attachment-missing` for one it does not hold). Each is asked about first
+   * (HEAD): one the other PC already holds is not sent again. Unreachable is retried
    * like any send. An upload that was sent and failed counts; after
    * IMAGE_UPLOAD_MAX_FAILURES of them, or IMAGE_UPLOAD_MAX_MS since the
    * first, the message is given up (`attachment-failed`) so one slow link
@@ -390,6 +392,13 @@ export class JoinerSession {
       if (!bytes) return this.giveUpImages(rec, "this PC's copy of an image is gone");
       let answer: { status: number; json: unknown };
       try {
+        // eslint-disable-next-line no-await-in-loop -- one question at a time to one host
+        const held = client.headStatus ? await client.headStatus(`${A2A_ROUTES.blobs}/${ref.sha256}`, this.timing.requestMs) : 404;
+        if (held === 200) continue;
+        if (held === 401) {
+          this.setState('disconnected', 'unauthorized');
+          return 'retry';
+        }
         // eslint-disable-next-line no-await-in-loop -- one upload at a time to one host
         answer = await client.putBytes(`${A2A_ROUTES.blobs}/${ref.sha256}`, bytes, imageTransferBudgetMs(bytes.length));
       } catch (err) {
