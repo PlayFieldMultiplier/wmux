@@ -137,7 +137,7 @@ function bindSurfacePty(surfaceId: string, ptyId: string): void {
   }
 }
 
-export type EnsureSurfacePtyResult = { ptyId: string } | { error: string };
+export type EnsureSurfacePtyResult = { ptyId: string } | { error: string } | { notRunning: true };
 
 /**
  * `surface.ensurePty` by ptyId (#2398) — main asks this, after its access
@@ -148,9 +148,17 @@ export type EnsureSurfacePtyResult = { ptyId: string } | { error: string };
  * through the mounted pane's own reattach (so its replay lands once), else
  * directly. Main checks the pipe afterwards; this answers a refusal it saw.
  */
-export async function ensurePtyStarted(ptyId: string): Promise<EnsureSurfacePtyResult> {
-  if (await attachForWrite(ptyId)) return { ptyId };
-  const res = await window.electronAPI.pty.reconnect(ptyId, { promote: true });
+export async function ensurePtyStarted(ptyId: string, promote = true): Promise<EnsureSurfacePtyResult> {
+  // `promote: false` — a stop key (ctrl+c, escape): attach a live session main
+  // has no pipe to (a pane that never mounted keeps its daemon session
+  // detached and running across an app restart), but never start one. The
+  // daemon's answer tells them apart: a suspended session comes back
+  // deferred, a dead one dead, and either has nothing running to stop.
+  if (await attachForWrite(ptyId, promote)) {
+    return !promote && useStore.getState().ptyDeferredById?.[ptyId] ? { notRunning: true } : { ptyId };
+  }
+  const res = await window.electronAPI.pty.reconnect(ptyId, { promote });
+  if (!promote && (res.deferred === true || res.code === 'session-dead')) return { notRunning: true };
   if (!res.success) return { error: `the pane's session could not be attached: ${res.error ?? 'unknown error'}` };
   useStore.getState().setPtyDeferred(ptyId, false);
   return { ptyId };

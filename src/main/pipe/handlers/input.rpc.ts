@@ -1305,15 +1305,21 @@ export function registerInputRpc(
    * must be writable afterwards or nothing is written. Asked only after the
    * caller's access to the pty was checked.
    */
-  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock, mayStart: boolean): Promise<void> => {
+  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock, promote: boolean): Promise<void> => {
     if (ptyManager.get(ptyId)) return;
     const dc = getDaemonClient?.();
     // Only on a positive "no pipe": a client that cannot say leaves it as is.
     if (!dc?.isConnected || dc.isSessionPipeWritable?.(ptyId) !== false) return;
-    // A stop key never starts a pane: there is nothing running to stop.
-    if (!mayStart) throw nothingToStop(method);
-    const res = await sendToRenderer(getWindow, 'surface.ensurePty', { ptyId }, { timeoutMs: clock.left(method) });
+    // No pipe here says nothing about the session: a pane that never mounted
+    // (a workspace outside the multiview grid) leaves its live session
+    // detached after an app restart. A stop key (`promote: false`) attaches
+    // that one and stops it; only a session the daemon reports suspended or
+    // dead has nothing running to stop, and it is never started for the key.
+    const res = await sendToRenderer(getWindow, 'surface.ensurePty', { ptyId, promote }, { timeoutMs: clock.left(method) });
     clock.left(method);
+    if (res !== null && typeof res === 'object' && (res as Record<string, unknown>)['notRunning'] === true) {
+      throw nothingToStop(method);
+    }
     if (res !== null && typeof res === 'object' && typeof (res as Record<string, unknown>)['error'] === 'string') {
       throw new Error(`${method}: ${(res as Record<string, string>)['error']}`);
     }

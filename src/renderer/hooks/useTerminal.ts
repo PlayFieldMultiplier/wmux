@@ -640,12 +640,16 @@ export async function hydrateTerminalForRead(ptyId: string): Promise<boolean> {
 // pane's suspended session attached without promoting, say) attaches it the
 // way first showing the pane would: through that pane's own reattach, so the
 // replay lands once. Keyed by ptyId; registered per mounted terminal.
-const writeAttachRegistry = new Map<string, () => Promise<void> | undefined>();
-/** Attach (promoting) a mounted pane's session; false when no mounted pane holds it. */
-export async function attachForWrite(ptyId: string): Promise<boolean> {
+const writeAttachRegistry = new Map<string, (promote: boolean) => Promise<void> | undefined>();
+/**
+ * Attach a mounted pane's session; false when no mounted pane holds it.
+ * `promote: false` (a stop key) attaches a live session and leaves a
+ * suspended one suspended (the pane is then marked deferred).
+ */
+export async function attachForWrite(ptyId: string, promote = true): Promise<boolean> {
   const fn = writeAttachRegistry.get(ptyId);
   if (!fn) return false;
-  await fn();
+  await fn(promote);
   return true;
 }
 
@@ -3746,8 +3750,12 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     };
     const reattach = (reason: string): Promise<void> | undefined => {
       // #2398 — a raw write must not settle on an attempt that leaves the
-      // session suspended: wait it out, then promote if it did.
-      if (inFlight) return reason === 'raw-write' ? current?.then(() => (deferredAttachRef.current ? reattach(reason) : undefined)) : undefined;
+      // session suspended: wait it out, then promote if it did. A stop key
+      // only waits it out: it never promotes.
+      if (inFlight) {
+        if (reason === 'stop-key') return current;
+        return reason === 'raw-write' ? current?.then(() => (deferredAttachRef.current ? reattach(reason) : undefined)) : undefined;
+      }
       current = attach(reason);
       return current;
     };
@@ -3821,7 +3829,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         void reattach('resume-on-start');
       }
     };
-    const rawWriteReattach = () => reattach('raw-write');
+    const rawWriteReattach = (promote: boolean) => reattach(promote ? 'raw-write' : 'stop-key');
     writeAttachRegistry.set(id, rawWriteReattach);
     retryReconnectRef.current = () => reattach('manual-retry');
     firstShowReattachRef.current = () => reattach('first-show');

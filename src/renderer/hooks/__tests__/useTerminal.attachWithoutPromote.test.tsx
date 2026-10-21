@@ -135,6 +135,20 @@ describe('reattach of a hidden pane (#2398)', { timeout: 60_000 }, () => {
     expect(useStore.getState().ptyDeferredById['p-written']).toBeUndefined();
   });
 
+  // Re-review P2: a stop key reaches a mounted pane's session through the
+  // pane's own reattach, without promoting: a suspended one stays suspended.
+  it('a stop key to a hidden suspended session reattaches without promoting it', async () => {
+    reconnect.mockImplementation(async (_id, opts) => (opts?.promote === false ? { success: false, deferred: true } : { success: true }));
+    setDaemonModeActive(true);
+    await render('p-stop', false);
+    const { attachForWrite } = await import('../useTerminal');
+    let attached = false;
+    await act(async () => { attached = await attachForWrite('p-stop', false); });
+    expect(attached).toBe(true);
+    expect(promoteFlags()).toEqual([false, false]);
+    expect(useStore.getState().ptyDeferredById['p-stop']).toBe(true);
+  });
+
   // Review item 6 — a read (pane.search, input.readScreen, an approval probe)
   // hydrates a dirty pane through a resync reconnect, which asked for no
   // promote flag and so promoted: reading a hidden pane started its session.

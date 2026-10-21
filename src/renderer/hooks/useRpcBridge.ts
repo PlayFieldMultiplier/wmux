@@ -2630,8 +2630,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // (input.send / input.sendKey) to a pane whose shell has not started:
     // start it, then answer its ptyId. Reads never come here.
     // By ptyId (main, after its access check on an explicit target): a pty
-    // left suspended while its pane is hidden is promoted first.
-    if (typeof params.ptyId === 'string' && params.ptyId.length > 0) return ensurePtyStarted(params.ptyId);
+    // left suspended while its pane is hidden is promoted first, except for
+    // a stop key (`promote: false`), which only attaches a live session.
+    if (typeof params.ptyId === 'string' && params.ptyId.length > 0) return ensurePtyStarted(params.ptyId, params.promote !== false);
     const surfaceId = typeof params.surfaceId === 'string' ? params.surfaceId : '';
     if (!surfaceId) return { error: 'surface.ensurePty: surfaceId or ptyId is required' };
     const workspaceId = typeof params.workspaceId === 'string' && params.workspaceId.length > 0 ? params.workspaceId : undefined;

@@ -149,7 +149,7 @@ describe('a raw write by ptyId to a session with no pipe (#2398)', () => {
     expect(res.ok).toBe(true);
     const methods = sendToRendererMock.mock.calls.map((c: unknown[]) => c[1]);
     expect(methods.indexOf('input.findOwnerWorkspace')).toBeLessThan(methods.indexOf('surface.ensurePty'));
-    expect(ensureCalls()[0][2]).toEqual({ ptyId: 'pty-suspended' });
+    expect(ensureCalls()[0][2]).toEqual({ ptyId: 'pty-suspended', promote: true });
     expect(writeToSession).toHaveBeenCalledWith('pty-suspended', '\x0c');
   });
 
@@ -180,18 +180,37 @@ describe('a raw write by ptyId to a session with no pipe (#2398)', () => {
     expect(writeToSession).not.toHaveBeenCalled();
   });
 
-  // Review item 4 — ctrl+c / escape stop something running; a session with
-  // no pipe runs nothing, so they never attach (promote) it.
-  it('a stop key to a session with no pipe starts nothing and says there is nothing to stop', async () => {
-    const { router, writeToSession, attach } = setupDaemon({ pipeOpen: false });
-    renderer(attach);
+  // Review item 4 — ctrl+c / escape stop something running: a suspended
+  // session runs nothing, so they never start (promote) it.
+  it('a stop key to a suspended session with no pipe starts nothing and says there is nothing to stop', async () => {
+    const { router, writeToSession } = setupDaemon({ pipeOpen: false });
+    renderer(() => ({ notRunning: true }));
     for (const key of ['ctrl+c', 'escape']) {
       const res = await router.dispatch({ id: key, method: 'input.sendKey', params: { key, ptyId: 'pty-suspended', workspaceId: 'ws-ext' } });
       expect(res.ok).toBe(false);
       expect(JSON.stringify(res)).toContain('nothing to stop');
     }
-    expect(ensureCalls()).toHaveLength(0);
+    expect(ensureCalls().map((c: unknown[]) => c[2])).toEqual([
+      { ptyId: 'pty-suspended', promote: false },
+      { ptyId: 'pty-suspended', promote: false },
+    ]);
     expect(writeToSession).not.toHaveBeenCalled();
+  });
+
+  // Re-review P2: no pipe here is not "not running". After an app restart
+  // the daemon keeps every session running, detached; a pane that never
+  // mounts (a task workspace outside the multiview grid) never reattaches.
+  // A commander's ctrl+c to that runaway worker was answered "not running"
+  // and the worker kept going.
+  it('a stop key to a live session with no pipe attaches it without promoting and delivers the key', async () => {
+    const { router, writeToSession, attach } = setupDaemon({ pipeOpen: false });
+    renderer(attach);
+    for (const [key, seq] of [['ctrl+c', '\x03'], ['escape', '\x1b']] as const) {
+      const res = await router.dispatch({ id: key, method: 'input.sendKey', params: { key, ptyId: 'pty-detached', workspaceId: 'ws-ext' } });
+      expect(res.ok).toBe(true);
+      expect(writeToSession).toHaveBeenCalledWith('pty-detached', seq);
+    }
+    expect(ensureCalls()[0][2]).toEqual({ ptyId: 'pty-detached', promote: false });
   });
 
   it('a stop key to a live session is still delivered', async () => {

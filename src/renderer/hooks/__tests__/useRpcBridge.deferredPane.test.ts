@@ -164,6 +164,23 @@ describe('a bound pane whose suspended session was left suspended', () => {
     expect(reconnect).toHaveBeenCalledWith('pty-2398-held', { promote: true });
   });
 
+  // Re-review P2: a stop key (ctrl+c, escape) to a session main has no pipe
+  // to asks without promote. A live session (detached since an app restart,
+  // its pane never mounted) is attached and answered; a suspended or dead one
+  // has nothing running to stop and is never started for the key.
+  it('a stop key attaches a live session without promoting, and answers a suspended or dead one not running', async () => {
+    useStore.setState({ ptyDeferredById: {} });
+    const reconnect = vi.fn(async (_id: string, _opts: { promote: boolean }) => ({ success: true } as Record<string, unknown>));
+    (window.electronAPI.pty as unknown as { reconnect: typeof reconnect }).reconnect = reconnect;
+    expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-live', promote: false })).toEqual({ ptyId: 'pty-2398-live' });
+    reconnect.mockResolvedValueOnce({ success: false, deferred: true });
+    expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-held', promote: false })).toEqual({ notRunning: true });
+    reconnect.mockResolvedValueOnce({ success: false, code: 'session-dead', transient: false, error: 'Session not found or dead' });
+    expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-gone', promote: false })).toEqual({ notRunning: true });
+    expect(reconnect.mock.calls.map(([, opts]) => opts)).toEqual([{ promote: false }, { promote: false }, { promote: false }]);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('an attach the daemon refuses is answered as a refusal', async () => {
     const reconnect = vi.fn(async () => ({ success: false, error: 'session cap reached' }));
     (window.electronAPI.pty as unknown as { reconnect: typeof reconnect }).reconnect = reconnect;
