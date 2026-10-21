@@ -61,6 +61,7 @@ import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandl
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
 import { enabledBotsIncludingGuest, getBotDirectory, getBotStore } from './botStore';
+import { endRunsOfEndedRows, setWorkerStopsConfirmed } from './workerRunEnds';
 import { getFactorySettings } from './factorySettings';
 import { onBotHook, type BotHookEvent } from './botHooks';
 import { normalizeRepoKey } from './repoWatch';
@@ -751,6 +752,9 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   let ownerLogin: string | null = null;
   let loginTimer: NodeJS.Timeout | null = null;
   let disposed = false;
+  // A worker lifecycle host comes (below, on start): its holder set ends the
+  // bots' worker runs, so from now on no row end does (workerRunEnds.ts).
+  if (deps.getDaemonClient) setWorkerStopsConfirmed(true);
   const refreshLogin = async (): Promise<void> => {
     let bots: BotProfile[] = [];
     try {
@@ -883,7 +887,27 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     }
   };
 
-  return {
+  /** No holder set ends the bots' worker runs: the row's end does again,
+   *  and the rows that ended meanwhile end theirs now (workerRunEnds.ts). */
+  const handBackWorkerRuns = (): void => {
+    setWorkerStopsConfirmed(false);
+    const store = getBotStore();
+    if (!store) return;
+    try {
+      endRunsOfEndedRows({
+        bots: () => store.list({}).map((b) => b.id),
+        usageOf: (botId) => store.usageOf(botId),
+        mutateUsage: (botId, fn) => store.mutateUsage(botId, fn),
+        row: (taskId) => getTaskLedger().get(taskId),
+      }, Date.now());
+    } catch (err) {
+      console.warn(`[factory] worker runs of ended tasks not ended: ${String(err)}`);
+    }
+  };
+  // Set once the worker lifecycle host's import is on its way.
+  let lifecycleComing = false;
+
+  const handle: FactoryModuleHandle = {
     start() {
       if (disposed) return;
       // Verify tasks whose bot verdict is recorded stop counting as workers
@@ -978,12 +1002,16 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       offTasks.push(() => clearImmediate(gateTimer));
       // A worker's life after its answer: the report nudge, the reclaim of an
       // ended task's worker and its resume, the agent budget.
+      if (deps.getDaemonClient) lifecycleComing = true;
       if (deps.getDaemonClient) void import('./workerLifecycleHost')
         .then((m) => {
           if (disposed) return;
           offTasks.push(m.startWorkerLifecycle({ wmuxDir: deps.wmuxDir, getDaemonClient: deps.getDaemonClient, getMainWindow: deps.getMainWindow, fanOutService: deps.fanOutService }));
         })
-        .catch((err) => console.warn(`[factory] worker lifecycle not started: ${String(err)}`));
+        .catch((err) => {
+          console.warn(`[factory] worker lifecycle not started: ${String(err)}`);
+          handBackWorkerRuns();
+        });
       setBotTaskSources({
         rows: () => ledger.list({}),
         workerState: (taskId) => reclaimedWorkerState(getWorkerResumePorts()?.store.get(taskId) ?? null),
@@ -1038,6 +1066,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     },
     dispose() {
       disposed = true;
+      setWorkerStopsConfirmed(false);
       for (const off of offTasks.splice(0)) {
         try {
           off();
@@ -1061,6 +1090,18 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       cursor.flush();
     },
   };
+  // A start that failed before the lifecycle host was on its way leaves no
+  // holder set to end the runs.
+  const startAll = handle.start;
+  handle.start = () => {
+    try {
+      return startAll?.();
+    } catch (err) {
+      if (!lifecycleComing) handBackWorkerRuns();
+      throw err;
+    }
+  };
+  return handle;
 }
 
 registerFactoryRpcModule('wiring', (_router, deps) => createFactoryWiring(deps));

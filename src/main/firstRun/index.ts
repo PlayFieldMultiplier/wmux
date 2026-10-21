@@ -13,6 +13,14 @@ import { IPC } from '../../shared/constants';
 import { wrapHandler } from '../ipc/wrapHandler';
 import type { FirstRunOrchestrator } from './FirstRunOrchestrator';
 import type { SampleTaskStartPayload } from '../../shared/firstRun';
+import { AGENT_IDS, type AgentId } from '../../shared/agentSetup';
+
+function requireAgentId(value: unknown): AgentId {
+  if (typeof value !== 'string' || !(AGENT_IDS as readonly string[]).includes(value)) {
+    throw new Error('first-run: unknown agent');
+  }
+  return value as AgentId;
+}
 
 export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): () => void {
   ipcMain.removeHandler(IPC.FIRST_RUN_CHECK);
@@ -41,6 +49,33 @@ export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): ()
   ipcMain.handle(
     IPC.FIRST_RUN_REOPEN,
     wrapHandler(IPC.FIRST_RUN_REOPEN, async () => orchestrator.reopen()),
+  );
+
+  ipcMain.removeHandler(IPC.FIRST_RUN_AGENT_STATUS);
+  ipcMain.handle(
+    IPC.FIRST_RUN_AGENT_STATUS,
+    wrapHandler(IPC.FIRST_RUN_AGENT_STATUS, async () => orchestrator.agentStatus()),
+  );
+
+  ipcMain.removeHandler(IPC.FIRST_RUN_AGENT_PLAN);
+  ipcMain.handle(
+    IPC.FIRST_RUN_AGENT_PLAN,
+    wrapHandler(IPC.FIRST_RUN_AGENT_PLAN, async (_event: IpcMainInvokeEvent, agent: unknown, paneShell: unknown) =>
+      orchestrator.agentPlan(
+        requireAgentId(agent),
+        typeof paneShell === 'string' && paneShell.length <= 4096 ? paneShell : undefined,
+      )),
+  );
+
+  ipcMain.removeHandler(IPC.FIRST_RUN_AGENT_SET_PATH);
+  ipcMain.handle(
+    IPC.FIRST_RUN_AGENT_SET_PATH,
+    wrapHandler(IPC.FIRST_RUN_AGENT_SET_PATH, async (_event: IpcMainInvokeEvent, agent: unknown, input: unknown) => {
+      if (input !== null && (typeof input !== 'string' || input.length > 4096)) {
+        throw new Error('FIRST_RUN_AGENT_SET_PATH: invalid path');
+      }
+      return orchestrator.setAgentPath(requireAgentId(agent), input);
+    }),
   );
 
   ipcMain.removeHandler(IPC.FIRST_RUN_REGISTER_MCP);
@@ -82,6 +117,9 @@ export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): ()
     ipcMain.removeHandler(IPC.FIRST_RUN_DISMISS);
     ipcMain.removeHandler(IPC.FIRST_RUN_REOPEN);
     ipcMain.removeHandler(IPC.FIRST_RUN_REGISTER_MCP);
+    ipcMain.removeHandler(IPC.FIRST_RUN_AGENT_STATUS);
+    ipcMain.removeHandler(IPC.FIRST_RUN_AGENT_PLAN);
+    ipcMain.removeHandler(IPC.FIRST_RUN_AGENT_SET_PATH);
     ipcMain.removeHandler(IPC.FIRST_RUN_START_SAMPLE_TASK);
   };
 }

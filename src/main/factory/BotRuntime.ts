@@ -54,7 +54,8 @@ import type { BrainAdapter, BrainEvent, BrainImage } from '../deck/BrainAdapter'
 import { USAGE_LIMIT_UNKNOWN_HOLD_MS, findClaudeUsageLimitNotice, parseUsageLimitReset, usageLimitHoldEndsAt } from '../../shared/usageLimit';
 import { emitBotHook } from './botHooks';
 import type { BotEngineFactory } from './botEngines';
-import { classifyEngineError, type EngineErrorCode } from './engineError';
+import { SUBSCRIPTION_REFUSED_GUIDANCE, classifyEngineError, isSubscriptionRefusal, type EngineErrorCode } from './engineError';
+import { botClaudeAuthMode } from '../../shared/factorySettings';
 import type { BotStore } from './botStore';
 import {
   budgetLeft, checkTurn, costUsdDay, hourlyCap, nextTurnAllowedAt, recordCost, recordTurn, runningWorkers, turnsUsedDay, turnsUsedHour, unrecordTurn,
@@ -76,6 +77,7 @@ import {
 } from './wakePrompt';
 import type { WakeQueue } from './wakeQueue';
 import { redactStoredSecrets } from './secretRedaction';
+import { conversationMarks, endConversation, markConversation, setConversationMarkListener, startConversation, type ConversationMarks } from './conversationMarks';
 
 // ── sessions.json ───────────────────────────────────────────────────────────
 
@@ -93,6 +95,10 @@ export interface BotSessionRecord {
    *  conversation's last model whenever no --model is given; a record
    *  without it predates it. */
   model?: string | null;
+  /** The conversation's mark (conversationMarks.ts): a wake run in it was
+   *  tainted. A record without it is of unknown history and resumes
+   *  tainted. */
+  tainted?: boolean;
   updatedAt: number;
 }
 
@@ -131,6 +137,7 @@ export class BotSessionStore {
         ...(accountId !== undefined ? { accountId } : {}),
         ...(repoPath !== undefined ? { repoPath } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(typeof r.tainted === 'boolean' ? { tainted: r.tainted } : {}),
         updatedAt: r.updatedAt as number,
       });
     }
@@ -302,7 +309,35 @@ export interface BotRuntimePorts {
    *  routines) have started. Until then no turn starts, for at most
    *  CONTEXT_WAIT_MS. Absent: ready. */
   contextReady?: () => boolean;
+  /** Whether a wake was started from outside text (wakeTaint.ts
+   *  wakeTainted). Absent: every wake counts as tainted. */
+  wakeTainted?: (item: WakeItem) => boolean;
 }
+
+/** Told when a bot is removed (its notes go, botMemory.ts). */
+const removedListeners = new Set<(botId: string) => void>();
+
+/** Subscribe to bot removals; returns the unsubscribe. */
+export function onBotRemoved(listener: (botId: string) => void): () => void {
+  removedListeners.add(listener);
+  return () => {
+    removedListeners.delete(listener);
+  };
+}
+
+/** Tell every removal listener; one that throws is logged. */
+export function notifyBotRemoved(botId: string): void {
+  for (const listener of [...removedListeners]) {
+    try {
+      listener(botId);
+    } catch (err) {
+      console.warn(`[factory] bot ${botId} removed: a listener failed: ${String(err)}`);
+    }
+  }
+}
+
+const CLEAN_MARKS: ConversationMarks = { tainted: false };
+const UNKNOWN_MARKS: ConversationMarks = { tainted: true };
 
 /** Longest the runtime waits at launch for the modules its wake prompts
  *  read from; past it, a module that failed to start holds no bot. */
@@ -416,6 +451,17 @@ export class BotRuntime {
       return t;
     });
     this.clearTimer = deps.clearTimer ?? ((h) => clearTimeout(h as NodeJS.Timeout));
+    setConversationMarkListener((botId, m) => this.saveMarks(botId, m));
+  }
+
+  /** A mark set on a bot's own (not a guest's) conversation goes into its
+   *  saved session record at once, so a resume after a turn that failed or
+   *  a restart still carries it. */
+  private saveMarks(botId: string, m: ConversationMarks): void {
+    const live = this.live.get(botId);
+    const rec = this.deps.sessions.get(botId);
+    if (!live || live.ephemeral || !rec) return;
+    this.deps.sessions.set(botId, { ...rec, tainted: m.tainted });
   }
 
   // ── status ────────────────────────────────────────────────────────────────
@@ -673,7 +719,10 @@ export class BotRuntime {
     this.deps.sessions.delete(botId);
     this.lastError.delete(botId);
     const removed = this.deps.store.remove(botId, opts);
-    if (removed) this.lifecycle(botId, 'removed');
+    if (removed) {
+      this.lifecycle(botId, 'removed');
+      notifyBotRemoved(botId);
+    }
     return removed;
   }
 
@@ -701,6 +750,15 @@ export class BotRuntime {
     for (const botId of [...this.live.keys()]) this.endSession(botId);
   }
 
+  private wakeTainted(item: WakeItem): boolean {
+    if (!ports.wakeTainted) return true;
+    try {
+      return ports.wakeTainted(item) !== false;
+    } catch {
+      return true;
+    }
+  }
+
   private wakeGuest(item: WakeItem): boolean | 'unknown' {
     if (!ports.wakeGuest) return item.reason.kind === 'guest';
     try {
@@ -714,6 +772,7 @@ export class BotRuntime {
     const live = this.live.get(botId);
     if (!live) return;
     this.live.delete(botId);
+    endConversation(botId);
     try {
       live.adapter.dispose();
     } catch {
@@ -1028,6 +1087,9 @@ export class BotRuntime {
     });
     const live: LiveSession = { adapter: spawned.adapter, engineKey, attached: false, ...(opts.ephemeral ? { ephemeral: true } : {}) };
     this.live.set(profile.id, live);
+    // A guest's conversation of its own counts as tainted; a resumed one
+    // carries its record's mark (none recorded: unknown).
+    startConversation(profile.id, opts.ephemeral ? UNKNOWN_MARKS : saved ? { tainted: saved.tainted ?? true } : CLEAN_MARKS);
     return { ok: true, live };
   }
 
@@ -1104,6 +1166,7 @@ export class BotRuntime {
         return;
       }
       if (run) run.adapter = s.live.adapter;
+      if (!s.live.ephemeral && this.wakeTainted(item)) markConversation(botId, 'tainted');
       const photos = this.wakePhotos(profile, item);
       const result = await this.drive(s.live, this.prompt(profile, item) + photos.note, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
       // A failed turn that reached the model cost as much as a finished one.
@@ -1119,7 +1182,8 @@ export class BotRuntime {
         const sessionId = result.sessionId ?? s.live.adapter.sessionId;
         if (sessionId && !s.live.ephemeral) {
           const accountId = s.live.adapter.conversationAccountId;
-          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, model: modelPin(profile), updatedAt: this.now() });
+          const m = conversationMarks(botId) ?? UNKNOWN_MARKS;
+          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, model: modelPin(profile), tainted: m.tainted, updatedAt: this.now() });
         }
         // A reply to the owner the bot wrote as plain text instead of a
         // room_post would reach nobody: it becomes the bot's card, while the
@@ -1253,8 +1317,16 @@ export class BotRuntime {
     // interrupted (R8) instead of replaying it.
     if (this.disposed) return;
     const limitNotice = outcome === 'failed' || outcome === 'engine' ? usageLimitNoticeOf(message) : null;
-    const retryIn = outcome === 'failed' && limitNotice === null ? this.transientRetryDelay(item.id, message) : null;
-    const finalAttempt = outcome !== 'failed' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
+    // The subscription refused a Claude bot's request: no retry changes
+    // that. The bot parks and the owner is told to switch Bots to an API key
+    // (said in its lastError and the room's error card).
+    const subscriptionRefused = limitNotice === null && (outcome === 'failed' || outcome === 'engine')
+      && profile.engine.kind === 'claude-sdk' && botClaudeAuthMode(this.deps.settings()) === 'subscription'
+      && isSubscriptionRefusal(message);
+    // Neither does a missing API key.
+    const noRetry = subscriptionRefused || classifyEngineError(message) === 'api_key_missing';
+    const retryIn = outcome === 'failed' && limitNotice === null && !noRetry ? this.transientRetryDelay(item.id, message) : null;
+    const finalAttempt = outcome !== 'failed' || noRetry || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
     // Spent network retries stay counted until the wake ends, so the
     // ordinary retry after them does not earn a fresh set.
     if (retryIn === null && finalAttempt) {
@@ -1306,19 +1378,20 @@ export class BotRuntime {
       // logged in · Please run /login") gets the same code as the engine's
       // own refusal, so the parked bot shows its Fix card; any other failed
       // turn keeps no code.
-      const classified = classifyEngineError(message);
+      const classified: EngineErrorCode = subscriptionRefused ? 'subscription_refused' : classifyEngineError(message);
       const code = outcome === 'engine' || classified !== 'other' ? classified : undefined;
+      const shown = subscriptionRefused ? `${SUBSCRIPTION_REFUSED_GUIDANCE} Claude said: ${message}` : message;
       // Signed out on a registered account: the card names it (main's own
       // sign-in may be fine).
       const account = code === 'not_logged_in' ? this.accountName(profile) : null;
-      this.lastError.set(botId, { message: message.slice(0, 500), at, ...(code ? { code } : {}), ...(account ? { account } : {}) });
-      const giveUp = outcome === 'engine' || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
+      this.lastError.set(botId, { message: shown.slice(0, 500), at, ...(code ? { code } : {}), ...(account ? { account } : {}) });
+      const giveUp = outcome === 'engine' || noRetry || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
       if (!giveUp) {
         this.deps.queue.retry(item.id);
       } else {
         this.deps.queue.park(item.id);
         if (this.deps.store.get(botId)) this.deps.store.setParked(botId, { reason: 'error', at });
-        emitBotHook({ type: 'bot.error', botId, workspaceId: profile.workspaceId, message: message.slice(0, 500), wakeId: item.id, at });
+        emitBotHook({ type: 'bot.error', botId, workspaceId: profile.workspaceId, message: shown.slice(0, 500), wakeId: item.id, at });
       }
     }
     this.pushStatus(botId);
@@ -1350,6 +1423,7 @@ export class BotRuntime {
       }
     }
     for (const botId of [...this.live.keys()]) this.endSession(botId);
+    setConversationMarkListener(null);
   }
 }
 

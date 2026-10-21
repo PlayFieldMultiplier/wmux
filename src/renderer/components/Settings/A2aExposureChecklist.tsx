@@ -42,22 +42,26 @@ export function A2aExposureChecklistView(p: A2aExposureChecklistViewProps) {
   return (
     <div className="flex flex-col gap-2" data-testid="a2a-exposure-checklist">
       <p className="wmux-a2a-note">{t('settings.a2aExposureDesc', { name: p.pcName })}</p>
-      <ul className="wmux-a2a-list">
-        <li className="wmux-a2a-row" data-testid="a2a-exposure-moa">
-          <label className="wmux-a2a-row-line">
-            <Checkbox
-              checked={p.exposure.brain === true}
-              disabled={p.busy || (!p.moaAvailable && p.exposure.brain !== true)}
-              onCheckedChange={p.onToggleBrain}
-              aria-label={t('settings.a2aExposureMoa')}
-            />
-            <span className="truncate" style={{ fontWeight: 500 }}>{t('settings.a2aExposureMoa')}</span>
-          </label>
-          <span className="wmux-a2a-meta" style={{ paddingLeft: 24 }}>
-            {t(p.moaAvailable ? 'settings.a2aExposureMoaDesc' : 'settings.a2aExposureMoaOff')}
-          </span>
-        </li>
-      </ul>
+      {/* Moa was removed, so this PC has none to show: the row stays only so
+          an exposure an earlier version saved can still be unticked. */}
+      {(p.moaAvailable || p.exposure.brain === true) && (
+        <ul className="wmux-a2a-list">
+          <li className="wmux-a2a-row" data-testid="a2a-exposure-moa">
+            <label className="wmux-a2a-row-line">
+              <Checkbox
+                checked={p.exposure.brain === true}
+                disabled={p.busy || (!p.moaAvailable && p.exposure.brain !== true)}
+                onCheckedChange={p.onToggleBrain}
+                aria-label={t('settings.a2aExposureMoa')}
+              />
+              <span className="truncate" style={{ fontWeight: 500 }}>{t('settings.a2aExposureMoa')}</span>
+            </label>
+            <span className="wmux-a2a-meta" style={{ paddingLeft: 24 }}>
+              {t(p.moaAvailable ? 'settings.a2aExposureMoaDesc' : 'settings.a2aExposureMoaOff')}
+            </span>
+          </li>
+        </ul>
+      )}
       {p.workspaces.length === 0 ? (
         <p className="wmux-a2a-note">{t('settings.a2aExposureEmpty')}</p>
       ) : (

@@ -1820,6 +1820,49 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .ui-media.wmux-welcome-statusline-clip > video,
 .ui-media.wmux-welcome-statusline-clip > img { object-position: bottom center; }
 .wmux-welcome-running-dot { width: 6px; height: 6px; border-radius: 9999px; background: var(--accent-cursor, var(--accent)); }
+/* Agent ready step: the confirmed install line, row actions, the
+ * "installed but not found" candidate list and path field. */
+.wmux-agent-setup-line { display: block; margin-top: 6px; padding: 6px 8px; white-space: pre-wrap; }
+.wmux-agent-setup-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.wmux-agent-setup-cmd { display: flex; align-items: center; gap: 6px; margin-top: 6px; min-width: 0; }
+.wmux-agent-setup-cmd > code { flex: 1; min-width: 0; padding: 4px 6px; }
+.wmux-agent-setup-paths { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; max-height: 120px; overflow: auto; }
+.wmux-agent-setup-path { display: flex; gap: 6px; margin-top: 8px; }
+.wmux-agent-setup-path > input { flex: 1; min-width: 0; }
+/* Sidebar foot: "Agent not set up · Set up" (owner-approved slot, 2026-10-21).
+ * Neutral text, no fill; only the glyph carries the caution colour. */
+.wmux-agent-not-ready {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 8px;
+  padding: 4px 8px;
+  min-height: 24px;
+  border-radius: 6px;
+  color: var(--text-sub);
+  font-size: 12px;
+  text-align: left;
+}
+.wmux-agent-not-ready:hover { background: var(--hover-fill); color: var(--text-main); }
+.wmux-agent-not-ready-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wmux-agent-not-ready-action { color: var(--text-main); white-space: nowrap; }
+/* The wizard while a setup pane is in use: non-modal, in the window's corner
+ * like the keyboard cheat sheet, so the terminal keeps the keyboard. */
+.wmux-agent-setup-corner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: var(--z-cheatsheet);
+  width: min(340px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--bg-base);
+  border: 1px solid color-mix(in srgb, var(--text-main) 10%, transparent);
+  box-shadow: var(--shadow-modal);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .ui-switch, .ui-switch-knob, .ui-checkbox, .ui-select > select, .ui-segment { transition: none; }

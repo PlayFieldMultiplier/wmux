@@ -5,19 +5,29 @@ import { agentRow } from '../../../shared/agentIdentity';
 import { ipcMain, type BrowserWindow } from 'electron';
 import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult } from '../../../shared/connectorTerminal';
 import { CONNECTOR_ID_RE } from '../../../shared/botConnector';
-import { getConnectorStore } from '../../factory/connectorStore';
+import { getConnectorStore, onConnectorLibraryChanged } from '../../factory/connectorStore';
 import { getSecretStore } from '../../factory/secretStore';
 import type { ConnectorOAuth } from '../../connectors/connectorOAuth';
-import { createTerminalGateway } from '../../connectors/terminalGateway';
+import type { createTerminalGateway } from '../../connectors/terminalGateway';
 import { isMainWindowSender } from '../mainWindowSender';
 import { wrapHandler } from '../wrapHandler';
+import type { DaemonClient } from '../../DaemonClient';
+import { bindTerminalSession, terminalContext } from '../../connectors/terminalSession';
 
-export function registerConnectorTerminalHandlers(getWindow: () => BrowserWindow | null, oauth: ConnectorOAuth): () => void {
+export function registerConnectorTerminalHandlers(getWindow: () => BrowserWindow | null, source: ConnectorOAuth | (() => Promise<ConnectorOAuth>), getDaemon: () => DaemonClient | null = () => null): () => void {
   const leases = new Set<() => void>();
+  const closeAll = () => { for (const close of leases) close(); };
+  const unsubscribeLibrary = onConnectorLibraryChanged(closeAll);
   let pending = 0; let disposed = false;
+  ipcMain.removeHandler(`${CONNECTOR_TERMINAL_IPC}:targets`);
+  ipcMain.handle(`${CONNECTOR_TERMINAL_IPC}:targets`, wrapHandler(`${CONNECTOR_TERMINAL_IPC}:targets`, async (event) => {
+    if (!isMainWindowSender(event, getWindow()) || disposed) return null;
+    try { return await terminalContext(getWindow); } catch { return null; }
+  }));
   ipcMain.removeHandler(CONNECTOR_TERMINAL_IPC);
-  ipcMain.handle(CONNECTOR_TERMINAL_IPC, wrapHandler(CONNECTOR_TERMINAL_IPC, async (event, id: unknown, agent: unknown): Promise<ConnectorTerminalResult> => {
+  ipcMain.handle(CONNECTOR_TERMINAL_IPC, wrapHandler(CONNECTOR_TERMINAL_IPC, async (event, id: unknown, agent: unknown, ptyId: unknown): Promise<ConnectorTerminalResult> => {
     if (!isMainWindowSender(event, getWindow()) || disposed || process.platform === 'win32' || typeof id !== 'string' || !CONNECTOR_ID_RE.test(id)
+      || typeof ptyId !== 'string' || ptyId.length > 128 || !ptyId.startsWith('daemon-')
       || (typeof agent !== 'string' || !agentRow(agent)?.connectorLaunch) || leases.size + pending >= 8) return { ok: false };
     pending++;
     let launch: ReturnType<typeof createTerminalLaunch> | undefined;
@@ -25,6 +35,9 @@ export function registerConnectorTerminalHandlers(getWindow: () => BrowserWindow
     try {
       const selected = getConnectorStore()?.get(id);
       if (!selected?.enabled || selected.transport !== 'http' || (selected.tools.mode === 'listed' && !selected.tools.allowed.length)) return { ok: false };
+      const session = await bindTerminalSession(id, ptyId, getWindow, getDaemon);
+      const oauth = typeof source === 'function' ? await source() : source;
+      const { createTerminalGateway } = await import('../../connectors/terminalGateway');
       const fingerprint = JSON.stringify(selected);
       const headers = async () => {
         if (JSON.stringify(getConnectorStore()?.get(id)) !== fingerprint) throw new Error('Connection changed');
@@ -41,17 +54,27 @@ export function registerConnectorTerminalHandlers(getWindow: () => BrowserWindow
         return result;
       };
       await headers();
-      gateway = await createTerminalGateway({ getConnector: () => getConnectorStore()?.get(id) ?? undefined, headers, authorizationRevision: () => oauth.revision(id) });
+      let markUsed = () => { /* installed before the agent can use the lease */ };
+      gateway = await createTerminalGateway({ getConnector: () => getConnectorStore()?.get(id) ?? undefined, headers, authorizationRevision: () => oauth.revision(id), authorize: async () => { await session.authorize(); markUsed(); } });
       if (disposed) throw new Error('Closed');
       launch = createTerminalLaunch(path.join(getWmuxDir(), 'connector-launches'), agent, id, gateway.url, gateway.token);
       const launchFile = launch;
       const lease = gateway;
-      const expiry = setTimeout(() => release(), 3600_000); expiry.unref();
-      const release = () => { clearTimeout(expiry); lease.close(); leases.delete(release); try { launchFile.close(); } catch { /* expired credentials no longer authorize */ } };
+      let stopWatching = () => { /* watcher is installed before launch */ };
+      let expiry = setTimeout(() => release(), 120_000); expiry.unref();
+      let released = false;
+      const release = () => { if (released) return; released = true; clearTimeout(expiry); stopWatching(); lease.close(); leases.delete(release); try { launchFile.close(); } catch { /* expired credentials no longer authorize */ } };
       leases.add(release);
-      return { ok: true, command: launch.command };
+      let used = false;
+      markUsed = () => { if (used || released) return; used = true; clearTimeout(expiry); expiry = setTimeout(release, 3600_000); expiry.unref(); };
+      stopWatching = session.watch(release);
+      try {
+        await session.ready();
+        if (disposed || released || JSON.stringify(getConnectorStore()?.get(id)) !== fingerprint || !await session.write(launch.command)) throw new Error('Launch refused');
+      } catch (error) { release(); throw error; }
+      return { ok: true };
     } catch { gateway?.close(); try { launch?.close(); } catch { /* closed lease */ } return { ok: false }; }
     finally { pending--; }
   }));
-  return () => { disposed = true; for (const close of leases) close(); ipcMain.removeHandler(CONNECTOR_TERMINAL_IPC); };
+  return () => { disposed = true; closeAll(); unsubscribeLibrary(); ipcMain.removeHandler(CONNECTOR_TERMINAL_IPC); ipcMain.removeHandler(`${CONNECTOR_TERMINAL_IPC}:targets`); };
 }

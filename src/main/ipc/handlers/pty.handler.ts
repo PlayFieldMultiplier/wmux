@@ -131,6 +131,12 @@ interface PtyCreateSupervisionInput {
 
 type PtyCreateOptions = {
   wslAccountLoginEnvKey?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME';
+  /**
+   * Agent-setup panes (first-run "Agent ready" cards) only: spawn without the
+   * workspace's bound-account env, so an install or sign-in targets the same
+   * default config dir the card's detection reads.
+   */
+  ignoreAccountBinding?: boolean;
   shell?: string;
   cwd?: string;
   /** Dead-session replacement candidates. WSL validates inside its distro;
@@ -671,7 +677,7 @@ export function registerPTYHandlers(
       // and layer it between baseline and profile. A manual profile
       // CLAUDE_CONFIG_DIR still wins (see resolveSpawnEnv). A bound dir that was
       // deleted on disk falls back to the default credential + a one-line warn.
-      const accountEnv = options?.workspaceId
+      const accountEnv = options?.workspaceId && options.ignoreAccountBinding !== true
         ? getAccountStore().resolveWorkspaceAccountEnv(options.workspaceId, (acc) =>
             console.warn(
               `[account] pane ${sessionId}: bound account "${acc.name}" (${acc.vendor}) configDir missing on disk ` +
@@ -913,7 +919,7 @@ export function registerPTYHandlers(
       // a spawn option. exec/supervision are daemon-only (handled above) and
       // must not reach ptyManager.create, so build a clean spawn-options object
       // from only the local-relevant fields instead of spreading the payload.
-      const { initialCommand, cols, rows, workspaceId, surfaceId, env, spawnKind, wslAccountLoginEnvKey } = options ?? {};
+      const { initialCommand, cols, rows, workspaceId, surfaceId, env, spawnKind, wslAccountLoginEnvKey, ignoreAccountBinding } = options ?? {};
       // #1103 — same distro injection as the daemon branch, so both modes
       // boot the same WSL distro for the same setting.
       const wslArgs = wslDistroArgs(shell, getDefaultWslDistro());
@@ -921,7 +927,7 @@ export function registerPTYHandlers(
       const wslTaskGit = (botWorker || options?.fanoutTaskOf) && isWslShell(shell) && safeCwd
         ? await resolveWslWorkerGit(safeCwd, wslArgs?.[1] ?? null).catch(() => null)
         : null;
-      const instance = await ptyManager.createAsync({ shell, ...(wslArgs ? { shellArgs: wslArgs } : {}), cols, rows, workspaceId, surfaceId, env, cwd: effectiveCwd, spawnKind, wslAccountLoginEnvKey, ...(wslTaskGit ? { wslTaskGit } : {}) });
+      const instance = await ptyManager.createAsync({ shell, ...(wslArgs ? { shellArgs: wslArgs } : {}), cols, rows, workspaceId, surfaceId, env, cwd: effectiveCwd, spawnKind, wslAccountLoginEnvKey, ...(ignoreAccountBinding === true ? { ignoreAccountBinding: true } : {}), ...(wslTaskGit ? { wslTaskGit } : {}) });
       logCwdResolution(instance.id, cwdResolution.incomingCwd, safeCwd, cwdResolution.source);
       if (botWorker) {
         const launchTask = botWorkerLaunchTask(botWorker);

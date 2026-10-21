@@ -373,7 +373,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   }, [open, api, applyPairStatus]);
 
   /** Connect one pasted piece; the line it leaves for the message. */
-  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string }> => {
+  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string; share?: boolean }> => {
     if (kindOf(text) === 'a2a') {
       const r = await invite.join(text);
       if (!r) return { ok: false, text: t('remote.pairFailed') };
@@ -393,7 +393,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       const res = parsed.kind === 'pair'
         ? await remote.hostsPair(parsed.origin, parsed.code)
         : await remote.hostsAdd(parsed.url);
-      if (res.ok) return { ok: true, text: t('remotePage.connect.hostAdded', { name: res.host.label }) };
+      if (res.ok) return { ok: true, text: t('remotePage.connect.hostAdded', { name: res.host.label }), share: true };
       return { ok: false, text: 'reason' in res ? pairReasonMessage(t, res.reason, res.attemptsLeft) : res.error };
     } catch {
       return { ok: false, text: t('remote.pairFailed') };
@@ -413,6 +413,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
     const lines: string[] = [];
     const left: string[] = [];
     let host: string | null = null;
+    let shared = false;
     try {
       for (const part of parts) {
         const r = await connectOne(part);
@@ -420,17 +421,20 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         lines.push(r.text);
         if (!r.ok) left.push(part);
         if (r.hostId) host = r.hostId;
+        if (r.share) shared = true;
       }
     } finally {
       if (mounted.current) setBusy(false);
     }
+    // A workspace share alone is not an A2A pairing: say where agent messages are set up.
+    if (shared && !host) lines.push(t('remote.agentMessagesNote'));
     if (left.length !== parts.length) {
       setPaste(left.join('\n'));
       if (left.length === 0) setMasked(false);
     }
     if (host) setLinkHost(host);
     setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n') });
-  }, [paste, connectOne]);
+  }, [paste, connectOne, t]);
 
   if (tab === null) return null;
   const working = busy || invite.joinBusy;

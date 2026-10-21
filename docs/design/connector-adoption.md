@@ -218,15 +218,17 @@ are tested separately.
 
 ## Explicit ordinary-terminal launch
 
-A configured, enabled HTTP connection with selected tools can prepare a Claude
-Code or Codex launch command. The user pastes it into a new local macOS/Linux
-shell. This does not mutate an existing agent or global CLI settings, add worker
-guards, enable permission bypass, or invoke a model from wmux. Each command adds
+A configured, enabled HTTP connection with selected tools and explicit terminal
+access can start Claude Code or Codex in an owner-selected local macOS/Linux
+shell. Main checks live ownership, the access policy and positive idle-shell
+evidence before writing the private launch command. The command is not copied
+to the clipboard or returned over IPC. This does not mutate an existing agent
+or global CLI settings, add worker guards, or enable permission bypass. Each launch adds
 an instance-local MCP server under a connection-specific wmux namespace. Upstream
 API keys, access tokens and refresh tokens never enter the command or CLI config.
 
 A loopback MCP gateway requires a random 256-bit bearer header valid for one hour
-while wmux remains open. The copied command names a private, single-use launcher;
+while wmux remains open. The host-written command names a private, single-use launcher;
 it contains no gateway bearer. The launcher passes the bearer through a dedicated
 environment variable, referenced by a private Claude JSON config or Codex's
 bearer_token_env_var. It deletes itself before exec; lease expiry and app cleanup
@@ -234,8 +236,7 @@ remove the configuration directory. These files are owner-only (directory 0700,
 JSON 0600, launcher 0700). Same-OS-user processes can still inspect private files
 or agent environments: this is not an OS sandbox boundary. Before first use, the
 launcher must itself be treated as a temporary authority and not shared.
-Clipboard contents are cleared after a minute using the existing ephemeral
-clipboard API. Up to eight gateways may be active. The gateway rejects foreign
+Up to eight gateways may be active. The gateway rejects foreign
 Host, browser Origin, unexpected paths and non-POST requests; bounds request
 size, response size and concurrency; and verifies the saved connection and
 OAuth revocation revision before upstream access and result delivery. All
@@ -271,13 +272,14 @@ metadata compatibility is not provider account E2E evidence.
 
 ## Authorization boundaries and limitations
 
-The gateway requires its own bearer header. Its URL, IPC response, copied command
+The gateway requires its own bearer header. Its URL, IPC response, launch command
 and CLI arguments do not contain that bearer. A private single-use launcher
 provides it through an environment variable. Tests verify file permissions,
 argument contents, consumption of the launcher and isolation between leases.
 The bearer is present in the agent's environment: an environment dump can put it
 in a transcript. Processes running as the same OS user are not isolated by this
-design. Native pane creation and process-bound revocation are not implemented;
+design. Native pane creation is not implemented. Host-bound session revocation
+and terminal scope checks are described in [Connector access scopes](connector-access-scopes.md);
 a lease lasts up to one hour.
 
 OAuth discovery, registration, exchange and refresh use a bounded native HTTP(S)

@@ -12,9 +12,21 @@ export const PLUGIN_MANAGEMENT_IPC = {
 export const UI_PLUGIN_CATALOG = [{
   id: 'agent-state-page',
   name: 'Agent status',
+  titleKey: 'plugins.settings.agentStatus',
+  hintKey: 'plugins.settings.agentStatusHint',
   publisher: 'wmux',
   license: 'MIT',
   version: '1.0.0',
+  files: ['manifest.json', 'page.html', 'README.md', 'LICENSE'],
+}, {
+  id: 'office',
+  name: 'Office',
+  titleKey: 'plugins.settings.office',
+  hintKey: 'plugins.settings.officeHint',
+  publisher: 'bluemas',
+  license: 'MIT',
+  version: '1.0.0',
+  files: ['manifest.json', 'index.html', 'office.js', 'layout.js', 'sprites.js', 'characters.png', 'furniture.png', 'README.md', 'LICENSE'],
 }] as const;
 
 export interface InstalledUiPlugin extends PluginHostPluginSummary {

@@ -1,4 +1,6 @@
 import { normalizeUrl } from '../../../shared/connectorUrl';
+import { noTerminalAccess, type ConnectorTerminalAccess } from '../../../shared/connectorAccess';
+import ConnectorAccess from '../Connectors/ConnectorAccess';
 // ─── The connection dialog — add or edit one library connection ────────────
 //
 // Opened from Settings › Bots › Connections and from a bot's profile. A
@@ -49,6 +51,7 @@ interface Form {
   tools: string;
   scope: 'all' | 'bots' | 'none';
   botIds: string[];
+  terminalAccess: ConnectorTerminalAccess;
   enabled: boolean;
 }
 
@@ -69,6 +72,7 @@ function formOf(d: ConnectorDraft, presetId: string): Form {
     tools: (d.tools.mode === 'all' ? d.tools.blocked : d.tools.allowed).join('\n'),
     scope: d.scope.kind === 'bots' && d.scope.botIds.length === 0 ? 'none' : d.scope.kind,
     botIds: d.scope.kind === 'bots' ? [...d.scope.botIds] : [],
+    terminalAccess: d.terminalAccess ?? noTerminalAccess(),
     enabled: d.enabled,
   };
 }
@@ -102,6 +106,7 @@ export function draftOf(f: Form, id?: string): ConnectorDraft {
     secrets,
     tools: f.toolMode === 'all' ? { mode: 'all', blocked: toolNames } : { mode: 'listed', allowed: toolNames },
     scope: f.scope === 'all' ? { kind: 'all' } : { kind: 'bots', botIds: f.scope === 'none' ? [] : [...f.botIds] },
+    terminalAccess: f.terminalAccess,
     enabled: f.enabled,
   };
 }
@@ -133,11 +138,11 @@ export function ConnectionDialog({ t, bots, editing, initialDraft, presetBotId, 
   const pickPreset = (id: string) => {
     if (id === 'custom') {
       const f = formOf(customConnectorDraft(), 'custom');
-      setForm({ ...f, scope: form.scope, botIds: form.botIds });
+      setForm({ ...f, scope: form.scope, botIds: form.botIds, terminalAccess: form.terminalAccess });
       return;
     }
     const p = CONNECTOR_PRESETS.find((x) => x.id === id);
-    if (p) setForm({ ...formOf(p.draft, id), scope: form.scope, botIds: form.botIds });
+    if (p) setForm({ ...formOf(p.draft, id), scope: form.scope, botIds: form.botIds, terminalAccess: form.terminalAccess });
   };
 
   const clearValues = () => setForm((cur) => ({ ...cur, keys: cur.keys.map((k) => ({ ...k, value: '' })) }));
@@ -301,6 +306,8 @@ export function ConnectionDialog({ t, bots, editing, initialDraft, presetBotId, 
               <textarea data-testid="connection-tools" aria-label={t('settings.factory.connections.tools')} rows={3} value={form.tools} spellCheck={false} onChange={(e) => set('tools', e.target.value)} onKeyDown={(e) => e.stopPropagation()} className={area} />
             </div>
           </Field>
+          {editing && !editing.terminalAccess && <p className="text-[11px] text-[var(--text-sub)]">{t('connectors.access.legacy')}</p>}
+          <ConnectorAccess value={form.terminalAccess} onChange={(value) => set('terminalAccess', value)} />
           <Field label={t('settings.factory.connections.scope')} layout="stacked">
             <div className="flex flex-col gap-1.5">
               <SegmentedControl

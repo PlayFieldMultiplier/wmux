@@ -111,6 +111,58 @@ export interface AgentTerminalChatSpec {
 }
 
 /**
+ * How the first-run "Agent ready" card finds, checks and signs in an agent
+ * (src/main/firstRun/AgentSetupDetector.ts, resolveClaudeExecutable
+ * `agentCandidates`). Paths are segments, joined per platform.
+ */
+export interface AgentSetupSpec {
+  /** Executable name searched for on PATH and in the install folders. */
+  readonly binary: string;
+  /** Where the agent's own native installer puts it. `home` = the user's home
+   *  folder; otherwise the environment variable naming the base folder. */
+  readonly native: {
+    readonly posix: readonly string[];
+    readonly win32: { readonly root: 'home' | 'LOCALAPPDATA'; readonly path: readonly string[] };
+  };
+  /** The npm package (scope and name segments) and, on Windows, its
+   *  spawnable entrypoints (the `.cmd` shim npm puts on PATH is not). */
+  readonly npm: {
+    readonly package: readonly string[];
+    readonly winEntries: readonly (readonly string[])[];
+    /** Also look for the package next to a `<binary>.cmd` shim in any PATH
+     *  folder (a custom npm prefix). */
+    readonly besideShim?: true;
+  };
+  /**
+   * The documented status subcommand that says whether the agent is signed in.
+   * `json-logged-in`: JSON with a `loggedIn` boolean that agrees with the exit
+   * code (0 / 1). `exit-code`: 0 is signed in, 1 with `signedOutText` in the
+   * output is signed out.
+   */
+  readonly loginStatus:
+    | { readonly args: readonly string[]; readonly read: 'json-logged-in' }
+    | { readonly args: readonly string[]; readonly read: 'exit-code'; readonly signedOutText: string };
+  /** Below this version the card says "update recommended" (never forced). */
+  readonly updateFloor: string;
+  /**
+   * The vendor's documented native installer, verbatim, with where it was
+   * copied from. Bundled with the app, never fetched (src/shared/agentInstall.ts).
+   * `posix` runs in the user's own shell; `win32` in PowerShell. `requires`
+   * lists programs the line calls that are checked before it is offered.
+   */
+  readonly install: {
+    readonly posix: { readonly command: string; readonly requires: readonly string[] };
+    readonly win32: { readonly command: string };
+    readonly source: string;
+    /** Opened when an install fails or cannot run here. */
+    readonly officialPage: string;
+  };
+  /** The agent's own first-run screens have a guide card
+   *  (src/shared/claudeFirstRun.ts `claudeSetupScreen`). */
+  readonly firstRunScreens?: 'claude';
+}
+
+/**
  * One registry row. Every field after `display` is optional and declares a
  * capability; its comment names the consumer that reads it.
  */
@@ -181,6 +233,8 @@ export interface AgentIdentityRow {
    *  (agentTitleRules RUNNING_TITLE; DaemonPTYBridge noteCodexTitleSpinner).
    *  Claude's spinner has its own path in the bridge, so it is not listed. */
   readonly titleRunning?: true;
+  /** First-run "Agent ready" card; see {@link AgentSetupSpec}. */
+  readonly setup?: AgentSetupSpec;
 }
 
 /**
@@ -219,6 +273,28 @@ export const AGENT_IDENTITIES = [
     rewindPicker: true,
     tokenUsage: true,
     modelCatalog: true,
+    setup: {
+      binary: 'claude',
+      // Native installer: https://code.claude.com/docs/en/setup (~/.local/bin).
+      native: { posix: ['.local', 'bin', 'claude'], win32: { root: 'home', path: ['.local', 'bin', 'claude.exe'] } },
+      npm: { package: ['@anthropic-ai', 'claude-code'], winEntries: [['bin', 'claude.exe'], ['cli.js']] },
+      // `claude auth status --help`: "--json  Output as JSON (default)".
+      // Measured on 2.1.305: exit 0 + "loggedIn": true / exit 1 + false.
+      loginStatus: { args: ['auth', 'status', '--json'], read: 'json-logged-in' },
+      // The interrupt / Stop hook findings the hook bridge is built on
+      // (src/shared/hooks/interruptKeystroke.ts, HookSignalRouter.ts).
+      updateFloor: '2.1.236',
+      // https://code.claude.com/docs/en/setup, "Native Install (Recommended)":
+      // macOS, Linux, WSL / Windows PowerShell ("You do not need to run as
+      // Administrator"). Checked 2026-10-21.
+      install: {
+        posix: { command: 'curl -fsSL https://claude.ai/install.sh | bash', requires: ['curl', 'bash'] },
+        win32: { command: 'irm https://claude.ai/install.ps1 | iex' },
+        source: 'https://code.claude.com/docs/en/setup',
+        officialPage: 'https://code.claude.com/docs/en/setup',
+      },
+      firstRunScreens: 'claude',
+    },
   },
   {
     slug: 'codex',
@@ -242,6 +318,32 @@ export const AGENT_IDENTITIES = [
     tokenUsage: true,
     modelCatalog: true,
     titleRunning: true,
+    setup: {
+      binary: 'codex',
+      // Standalone installers: https://chatgpt.com/codex/install.sh
+      // (`$HOME/.local/bin`) and https://chatgpt.com/codex/install.ps1
+      // (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`).
+      native: {
+        posix: ['.local', 'bin', 'codex'],
+        win32: { root: 'LOCALAPPDATA', path: ['Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe'] },
+      },
+      npm: { package: ['@openai', 'codex'], winEntries: [['bin', 'codex.js']], besideShim: true },
+      // `codex login --help`: "status  Show login status". Measured on
+      // codex-cli 0.163.0: exit 0 signed in, exit 1 + "Not logged in".
+      loginStatus: { args: ['login', 'status'], read: 'exit-code', signedOutText: 'not logged in' },
+      // One background server per account, which pane identity relies on
+      // (src/mcp/codexThreadIdentity.ts).
+      updateFloor: '0.157.0',
+      // https://github.com/openai/codex README, "Mac or Linux" / "Windows"
+      // (also https://learn.chatgpt.com/docs/codex/cli). `-ExecutionPolicy
+      // ByPass` is the vendor's own text, kept verbatim. Checked 2026-10-21.
+      install: {
+        posix: { command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh', requires: ['curl', 'sh'] },
+        win32: { command: 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"' },
+        source: 'https://github.com/openai/codex#readme',
+        officialPage: 'https://learn.chatgpt.com/docs/codex/cli',
+      },
+    },
   },
   {
     slug: 'gemini',

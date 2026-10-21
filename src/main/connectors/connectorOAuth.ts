@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { auth, type OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
+import type { OAuthClientProvider, OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { OAuthClientInformationMixed, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { isConnectorUrl, type Connector } from '../../shared/botConnector';
 import { parseConnectorOAuthClient, type ConnectorOAuthClient, type ConnectorOAuthResult } from '../../shared/connectorOAuth';
@@ -121,6 +121,10 @@ export class ConnectorOAuth {
     const issuerRequirements = new Map<string, boolean>();
     const state = randomBytes(32).toString('base64url');
     try {
+      // Keep lightweight credential reconciliation synchronous at startup, but
+      // evaluate the SDK only when an authorization/refresh actually needs it.
+      const { auth } = await import('@modelcontextprotocol/sdk/client/auth.js');
+      valid();
       if (interactive) callback = await createOAuthCallback(state, controller.signal, (issuer) => {
         const metadata = discovery?.authorizationServerMetadata;
         if (!metadata?.issuer) return false;

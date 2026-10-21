@@ -606,6 +606,7 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'bot.interrupt':     { capability: 'wmux.internal' },
   'room.post':         { capability: 'wmux.internal' },
   'room.read':         { capability: 'wmux.internal' },
+  'room.search':       { capability: 'wmux.internal' },
   'room.threads':      { capability: 'wmux.internal' },
   'room.resolve':      { capability: 'wmux.internal' },
   'handoff.send':      { capability: 'wmux.internal' },
@@ -636,6 +637,7 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'botLogin.request':    { capability: 'wmux.internal' },
   'skill.propose':       { capability: 'wmux.internal' },
   'skill.read':          { capability: 'wmux.internal' },
+  'memory.update':       { capability: 'wmux.internal' },
 
   // --- Task lifecycle (pipe/handlers/worktask.rpc.ts) ---
   // The reads answer "what did this task produce"; the writes run the task's

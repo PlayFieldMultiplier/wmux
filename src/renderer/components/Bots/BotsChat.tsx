@@ -89,6 +89,7 @@ import type { BotTaskView } from '../../../shared/botTask';
 import { botCanDo } from './botsProfile';
 import { BotConnections } from './BotConnections';
 import { BotSkills } from './BotSkills';
+import { BotMemory } from './BotMemory';
 import { BotToday } from './BotToday';
 import { BrainModelLine, WorkerModelLine } from './BotModelLines';
 import { stopBotSummary, useWorkerStopUnfinished, type BotsStopPort } from './botsStop';
@@ -2044,7 +2045,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
           <span className="w-[112px] shrink-0 text-[var(--text-muted)]">{t('botsPage.profile.routines')}</span>
           <ul className="min-w-0 flex-1 space-y-0.5">
             {routines.map((r) => (
-              <li key={r.id} data-bot-routine={r.id} className={`truncate ${r.state === 'paused' ? 'text-[var(--text-muted)]' : 'text-[var(--text-main)]'}`}>
+              <li key={r.id} data-bot-routine={r.id} className={`truncate ${r.state !== 'active' ? 'text-[var(--text-muted)]' : 'text-[var(--text-main)]'}`}>
                 {`${r.title} · ${routineScheduleText(r.schedule)} · ${routineStateText(r)}`}
               </li>
             ))}
@@ -2053,6 +2054,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
       )}
       <BotConnections row={row} t={t} />
       <BotSkills row={row} t={t} />
+      <BotMemory row={row} t={t} />
       <div className="mt-1 border-t border-[var(--stroke)] pt-1">
         <div className="flex items-baseline gap-3 py-1 text-[12px]" data-bots-profile-can-do>
           <span className="w-[112px] shrink-0 text-[var(--text-muted)]">{t('botsPage.profile.canDo')}</span>

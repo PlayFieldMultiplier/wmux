@@ -44,6 +44,7 @@ export const WORKER_FRESH_MAIN =
 export const COMMON_POWERS: Readonly<Record<string, string>> = {
   room_post: 'post one typed card into your workspace\'s room; the card kind is the output it carries. To speak to other bots, put their bot ids in mentions: each one is woken once. To hand the owner files you or your workers made (a report, a spec, a diff), list their paths in files; the owner opens them from the card.',
   room_read: 'read your room or one thread of it, oldest first, paging with since_seq.',
+  room_search: 'search your room\'s earlier cards by words, newest first, before asking the owner to repeat something; read around a hit with room_read.',
   handoff_send: 'hand work to another bot or report back on work handed to you; to_bot_id names one bot in any workspace, and wmux wakes it.',
   ask_person: 'put a question to the owner as a question card (and on their phone), with options when the answer is a choice; their answer wakes you.',
   question_close: 'close one of your own open questions once it needs no answer (the owner answered in chat, its subject is done); a new question of yours in the same thread replaces the open one by itself.',
@@ -57,8 +58,9 @@ export const COMMON_POWERS: Readonly<Record<string, string>> = {
   workflow_read: 'inspect your saved plans and their task/result bindings, including any blocked step that needs review.',
   workflow_advance: 'start at most one ready step from a saved plan with this wake idempotency key; a verified predecessor result unlocks the next step, while ambiguous dispatches remain blocked.',
   stop_my_work: 'stop your own running workers and saved workflows, and pause your routines, when the owner asks you to stop.',
-  skill_propose: 'write down a procedure you learned as a skill (SKILL.md), or update one you have; it loads only once the owner approves its card. Propose one only after the owner corrected how you work, or after a task of yours failed and then succeeded; routine work gets none.',
+  skill_propose: 'write down a procedure you learned as a skill (SKILL.md), or update one you have; it loads only once the owner approves its card. Propose one only after the owner corrected how you work, or after a task of yours failed and then succeeded; routine work gets none. Update before you add: patch the skill you just used, else extend a broader one, else add a reference file to one; a new skill comes last. Keep a skill to the reusable procedure or lesson; task progress, one-off facts, secrets and what the repository already holds belong elsewhere.',
   skill_read: 'read one of your approved skills (the wake block lists them; with no name it lists them all) before work it covers.',
+  memory_update: 'keep a short note for your later sessions: your own (target memory, saved at once) or about the owner (target user, which waits for the owner\'s approval card); both load when a session starts, and the owner sees them.',
   fanout_start: 'start workers in fresh worktrees of your repository: each implements, gates and reports in its ledger row, and the preset decides what it is for ("default" to implement and open a pull request, "repro" to reproduce an issue, "verify" to grade one PR head, "maintain" to keep the feature map current). A question that needs no code takes preset "research": a scratch folder instead of a worktree, so it runs without a repository too. ' + WORKER_FRESH_MAIN,
   ledger_update: `settle a task you have read: completed once its system gate passed, failed or cancelled otherwise, input_required to send it back with a note. ${NO_CHANGES_SETTLE}`,
   terminal_read: 'read the pane of a worker you started when its ledger row or question needs more context.',
@@ -116,7 +118,8 @@ export const COMMON_WAKES: readonly string[] = [
   'When the owner asks you (or every bot) to stop: stop_my_work, then one line saying what you stopped.',
   'A mention by another bot: it spoke to you in the room, so answer it there with a short card or act on it; stay silent only when it asks nothing and closes an exchange. Mention it back only when it must act or answer. A message handoff: act on it or answer that bot; when it needs nothing from you, end the turn.',
   'A routine firing: do what the routine says and post what you found.',
-  'After the owner corrected how you work, or after a task of yours failed and then succeeded: record the procedure with skill_propose, updating the skill it belongs to when you have one. Routine work gets no skill.',
+  'After the owner corrected how you work, or after a task of yours failed and then succeeded: record the procedure with skill_propose, patching the skill you used or the one it belongs to before you make a new one. Routine work gets no skill.',
+  'When the owner corrects you, states a preference, or you learn a fact about the environment that is not obvious: save it in one line with memory_update (about the owner: target user, which the owner approves on a card). Task progress, what the repository or the room already holds, and secrets stay out of it.',
   'A dispatch (from the coordinator, or sent on by wmux with the previous bot\'s result): do your part. When it is done, send one `result` (no reply_to needed, also from the wake of the task that finished it): wmux passes it to the next bot or back to the coordinator. Outside a relay the result goes back to whoever handed you the work.',
   'Work another bot handed you is reported to the owner by that bot: your outcome goes in the `result` only. Post no status or report card of your own about that outcome in its thread; the owner would read the same news twice. A question only the owner can answer still goes through ask_person.',
 ];

@@ -88,6 +88,7 @@ export default function ConnectorsPage({ port = getBotConnectorPort(), embedded 
         <Button disabled={!port.available || busy || loading || error} onClick={() => setDialog({})}>{t('connectors.add')}</Button>
       </header>
       <p className="text-[13px] text-[var(--text-sub)]">{t('connectors.quick.scope')}</p>
+      {window.electronAPI?.platform === 'win32' && <p className="text-[12px] text-[var(--text-sub)]">{t('connectors.access.platform')}</p>}
       <div className="flex flex-wrap items-center gap-3">
         {!selectedView && <SegmentedControl value={view} onValueChange={setView} ariaLabel={t('connectors.title')} options={[
           { value: 'mine', label: t('connectors.mine') }, { value: 'discover', label: t('connectors.discover') },
@@ -102,7 +103,7 @@ export default function ConnectorsPage({ port = getBotConnectorPort(), embedded 
           const checked = checks[c.id]?.fingerprint === JSON.stringify(c) ? checks[c.id] : undefined;
           return <li key={c.id} className={embedded ? "flex flex-wrap items-center gap-3 px-3.5 py-3" : "flex flex-wrap items-center gap-3 rounded-[var(--chip-radius)] bg-[var(--hover-fill)] p-4"}>
           <div className="min-w-0 flex-1"><h2 className="text-[14px] font-medium">{c.name}</h2><p className="text-[12px] text-[var(--text-sub)]">{c.purpose}</p><p className="text-[11px] text-[var(--text-muted)]">{t(c.missingKeys.length ? 'connectors.missing' : c.enabled ? 'connectors.configured' : 'connectors.disabled')}</p></div>
-          {c.transport === 'http' && window.electronAPI?.connectorTerminal && window.electronAPI.platform !== 'win32' && <ConnectorTerminal id={c.id} enabled={c.enabled && (c.tools.mode === 'all' || c.tools.allowed.length > 0)} />}
+          {c.transport === 'http' && window.electronAPI?.connectorTerminal && window.electronAPI.platform !== 'win32' && <ConnectorTerminal id={c.id} enabled={c.enabled && !!c.terminalAccess && c.terminalAccess.mode !== 'none' && (c.tools.mode === 'all' || c.tools.allowed.length > 0)} />}
           {c.transport === 'http' && <ConnectorAuthorization key={`${c.id}-${JSON.stringify(c)}`} id={c.id} endpoint={c.remote?.url} fingerprint={JSON.stringify(c)} onChange={() => setChecks((prev) => { const next = { ...prev }; delete next[c.id]; return next; })} />}
           <div role="status" className="text-[12px] text-[var(--text-sub)]">{checked && (checked.result ? checked.result.status === 'ready' ? t('connectors.checkReady', { count: checked.result.toolCount }) : t(`connectors.check.${checked.result.status}`) : t('connectors.checking'))}</div>
           <Button disabled={busy || !c.enabled || c.transport !== 'http' || (!!checked && !checked.result) || !window.electronAPI?.connectorChecks} onClick={() => void check(c)}>{t('connectors.check')}</Button>

@@ -43,6 +43,9 @@ import { BotStore, botsFilePath, getBotDirectory } from '../../../factory/botSto
 import { getWakeQueue } from '../../../factory/wakeQueue';
 import { getBotRuntime } from '../../../factory/BotRuntime';
 import { factorySettingsPath, getFactorySettingsStore } from '../../../factory/factorySettings';
+import { getBotStore } from '../../../factory/botStore';
+import { recordWorkerStart } from '../../../factory/budget';
+import { setWorkerStopsConfirmed } from '../../../factory/workerRunEnds';
 
 type Handler = (params: Record<string, unknown>, ctx?: RpcContext) => Promise<unknown>;
 
@@ -474,6 +477,32 @@ describe('bot-runtime module', () => {
     await mod.dispose();
     expect(getBotRuntime()).toBeNull();
     expect(ledgerMock.listeners.size).toBe(0);
+  });
+
+  it('a task\'s row ending leaves its worker run open while a holder set ends runs, and ends it without one', async () => {
+    fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+    fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: true }));
+    const { router, handlers } = captureRouter();
+    const deps = { wmuxDir: () => dir, getMainWindow: () => null } as unknown as FactoryHostDeps;
+    const mod = botRuntimeModule(router, deps, { engines: () => ({ ok: true, adapter: new OkAdapter() }) });
+    await mod.start();
+    try {
+      const created = (await (handlers.get('bot.create') as Handler)({ workspaceId: 'ws-1', role: 'verifier' }, OPERATOR)) as { bot: { id: string } };
+      const botId = created.bot.id;
+      const store = getBotStore() as BotStore;
+      const end = (id: string, to: string) => {
+        store.mutateUsage(botId, (u) => recordWorkerStart(u, id, Date.now() - 60_000));
+        for (const l of ledgerMock.listeners) l({ entry: { id, rev: 2, ownerWorkspaceId: 'ws-1', dispatch: { origin: { kind: 'bot', botId } } }, from: 'working', to, by: { kind: 'worker' } });
+        return store.usageOf(botId).workers.find((w) => w.taskId === id)?.endedAt;
+      };
+      setWorkerStopsConfirmed(true);
+      for (const to of ['review_requested', 'completed', 'failed', 'cancelled']) expect(end(`t-${to}`, to)).toBeUndefined();
+      setWorkerStopsConfirmed(false);
+      expect(end('t-off', 'completed')).toBeDefined();
+    } finally {
+      setWorkerStopsConfirmed(false);
+      await mod.dispose();
+    }
   });
 
   it('the factory switched off through the settings store cancels a running turn and ends its session', async () => {

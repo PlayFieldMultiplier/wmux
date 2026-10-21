@@ -349,7 +349,7 @@ export interface BotStatus {
     message: string;
     at: number;
     /** A stable cause when the park came from engine_unavailable (engineError.ts). */
-    code?: 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'other';
+    code?: 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'other';
     /** `not_logged_in` on a registered account (not the default sign-in):
      *  that account's name. */
     account?: string;
@@ -478,6 +478,8 @@ export interface BotSetJobParams {
  *    (shared/botConnector.ts);
  *  - `groups-changed`: the owner's group chats changed (shared/botGroup.ts);
  *  - `skills-changed`: a bot's skills changed (shared/botSkill.ts);
+ *  - `memory-changed`: a bot's notes or the owner's profile changed
+ *    (shared/botMemory.ts);
  *  - `settings-changed`: the factory settings changed (the bots switched
  *    on or off, from any caller). */
 export type BotEventPayload =
@@ -489,6 +491,7 @@ export type BotEventPayload =
   | { type: 'connectors-changed' }
   | { type: 'groups-changed' }
   | { type: 'skills-changed'; botId?: string }
+  | { type: 'memory-changed'; botId?: string }
   | { type: 'settings-changed' };
 
 export const BOT_EVENT = 'bot.event';

@@ -9,6 +9,12 @@ import Button from '../ui/Button';
 import SegmentedControl from '../ui/SegmentedControl';
 import { SettingsSection, useOwnedDialog } from './SettingsLayout';
 
+/** Publisher and licence of a catalog-installed bundle, from its catalog entry. */
+function catalogCredit(name: string): string {
+  const entry = UI_PLUGIN_CATALOG.find((item) => item.id === name);
+  return entry ? ` · ${entry.publisher} · ${entry.license}` : '';
+}
+
 export default function PluginsSection() {
   const t = useT();
   const [view, setView] = useState<'mine' | 'discover'>('mine');
@@ -59,7 +65,7 @@ export default function PluginsSection() {
           <Badge>{t(!plugin.enabled ? 'connectors.disabled' : plugin.trustStatus === 'trusted' ? 'plugins.settings.ready' : 'plugins.settings.notApproved')}</Badge>
         </div>
         <p className="mt-1 text-[12px] text-[var(--text-sub)]">{plugin.description}</p>
-        <p className="mt-1 text-[11px] text-[var(--text-sub)]">{plugin.name} · {plugin.version}{plugin.managed ? ' · wmux · MIT' : ''}</p>
+        <p className="mt-1 text-[11px] text-[var(--text-sub)]">{plugin.name} · {plugin.version}{plugin.managed ? catalogCredit(plugin.name) : ''}</p>
         <details className="mt-2 text-[12px] text-[var(--text-sub)]"><summary>{t('plugins.settings.permissions')}</summary><ul className="mt-1 list-inside list-disc">{plugin.capabilities.map((capability) => <li key={capability}>{capability}</li>)}</ul></details>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {plugin.enabled && plugin.trustStatus !== 'trusted' && <Button disabled={busy || loading} onClick={() => void mutate(async () => {
@@ -77,9 +83,9 @@ export default function PluginsSection() {
         </div>
         {!plugin.managed && <p className="mt-2 text-[12px] text-[var(--text-sub)]">{t('plugins.settings.manual')}</p>}
       </div>)}
-      {view === 'discover' && UI_PLUGIN_CATALOG.map((entry) => <div key={entry.id} className="px-3.5 py-3">
-        <div className="flex items-center justify-between gap-3"><span className="text-[14px]">{t('plugins.settings.agentStatus')}</span><Button disabled={busy || loading || inventory.plugins.some((plugin) => plugin.name === entry.id)} onClick={() => void mutate(async () => { await window.electronAPI.pluginManagement.install(entry.id); setView('mine'); })}>{t(inventory.plugins.some((plugin) => plugin.name === entry.id) ? 'plugins.settings.installed' : 'plugins.settings.install')}</Button></div>
-        <p className="mt-1 text-[12px] text-[var(--text-sub)]">{t('plugins.settings.agentStatusHint')}</p>
+      {view === 'discover' && UI_PLUGIN_CATALOG.map((entry) => <div key={entry.id} data-catalog-entry={entry.id} className="px-3.5 py-3">
+        <div className="flex items-center justify-between gap-3"><span className="text-[14px]">{t(entry.titleKey)}</span><Button disabled={busy || loading || inventory.plugins.some((plugin) => plugin.name === entry.id)} onClick={() => void mutate(async () => { await window.electronAPI.pluginManagement.install(entry.id); setView('mine'); })}>{t(inventory.plugins.some((plugin) => plugin.name === entry.id) ? 'plugins.settings.installed' : 'plugins.settings.install')}</Button></div>
+        <p className="mt-1 text-[12px] text-[var(--text-sub)]">{t(entry.hintKey)}</p>
         <p className="mt-1 text-[11px] text-[var(--text-sub)]">{entry.publisher} · {entry.license} · {entry.version}</p>
       </div>)}
       {inventory.failures.map((failure) => <p key={failure.name} role="status" className="px-3.5 py-3 text-[12px] text-[var(--text-sub)]">{t('plugins.settings.loadFailed', { name: failure.name })}</p>)}

@@ -15,6 +15,7 @@ import WorkspaceItem from './WorkspaceItem';
 import HostWorkspaceList from './HostWorkspaceList';
 import { PcSwitcherTitle } from './PcSwitcher';
 import OrphanSessions from './OrphanSessions';
+import AgentNotReadyRow from './AgentNotReadyRow';
 import ArchivedWorkspaces from './ArchivedWorkspaces';
 import MissionsSection from './MissionsSection';
 import type { Workspace } from '../../../shared/types';
@@ -647,6 +648,10 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
 
       {/* Plugin sidebar panels (B-1 ui.sidebar contribution point) */}
       {!readOnly && <PluginPanels />}
+
+      {/* Neither agent is ready (the user chose "Later" in setup): one muted
+          row that reopens the setup wizard. Renders nothing otherwise. */}
+      {!readOnly && <AgentNotReadyRow />}
 
       {/* Footer — when docked right, mirror the row so the collapse arrow sits
           on the inner edge facing the content area (issue #151). */}

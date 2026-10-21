@@ -33,6 +33,7 @@ import { getFanOutGuards } from '../worktask/fanoutGuards';
 import { isTaskGateReport } from '../factory/taskGate';
 import { STOPPED_BY_OWNER } from '../factory/factoryStop';
 import { WakeQueue, getWakeQueue } from '../factory/wakeQueue';
+import { WORKER_ENDED } from '../factory/workerRunEnds';
 import { getTaskLedger } from './taskLedgerHost';
 
 export interface FanoutCallerEvent {
@@ -136,8 +137,6 @@ const BOT_TASK_WAKE: Readonly<Partial<Record<string, 'task.done' | 'task.failed'
   cancelled: 'task.failed',
   input_required: 'task.input_required',
 };
-
-const WORKER_ENDED: ReadonlySet<string> = new Set(['review_requested', 'completed', 'failed', 'cancelled']);
 
 /** Tasks the owner stopped (factory/factoryStop.ts), newest last, bounded. */
 const STOPPED_BY_OWNER_MAX = 1000;

@@ -116,7 +116,7 @@ export function A2aRemoteView(props: A2aRemoteViewProps) {
 
   return (
     <>
-      <SettingsSection title={t('settings.a2aRemote')} data-testid="a2a-remote-section">
+      <SettingsSection title={t('settings.a2aRemote')} description={t('settings.a2aRemoteSeparate')} data-testid="a2a-remote-section">
         <SettingRow label={t('settings.a2aRemoteEnable')} description={t('settings.a2aRemoteEnableDesc')}>
           <Switch
             checked={status.enabled}

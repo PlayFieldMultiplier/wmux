@@ -173,8 +173,10 @@ reads as a second, differently tinted panel.
   any light theme, custom ones included. With glass Off the app returns to
   the system appearance, and glass is only installed once the saved theme
   and level are loaded, so a launch never flips the appearance twice.
-- `BrowserWindow.backgroundColor` follows the default look so the first
-  frame never flashes white; no native menu bar is visible
+- `BrowserWindow.backgroundColor` and the page's pre-theme paint follow the
+  saved theme's polarity, and the opaque Windows window is shown once it has
+  painted, so the first frame is never the system's blank colour or the
+  other polarity; no native menu bar is visible
   (`autoHideMenuBar`; accelerators keep working).
 
 ## Titlebar
@@ -494,7 +496,7 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   its routines, its connections — each library connection that applies to
   it, an every-bot one with a switch that turns it off for this bot alone,
   a picked one with Edit and Remove from this bot, then Add connection and
-  Manage (Settings › Bots › Connections); its skills (Skills, below); then, read-only, what it can do in the owner's words — one phrase per power of
+  Manage (Settings › Bots › Connections); its skills and memory (Skills, Memory, below); then, read-only, what it can do in the owner's words — one phrase per power of
   the shared surface, plus a Coordinator's reads in every workspace, never
   per-bot settings — whom it reports to (You), and its workers now; last,
   Pause — a neutral secondary that parks the bot at once, with no confirm
@@ -521,7 +523,12 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   or after "approved 1.0.0" the muted note that it changed since approval
   and does not load until the bot proposes it again);
   an approved skill's name is in the main text colour, every other one
-  muted, and the description is the row's tooltip. Each one not archived
+  muted, and the description is the row's tooltip. An approved skill adds,
+  muted, when the bot last read it ("last used 3d ago", or "not used
+  yet"); one approved and unused for 30 days carries a neutral **Stale**
+  tag (`--selection`, `--chip-radius`, 11px; no colour — it still loads,
+  its tooltip says so) and stale ones sort first, longest unused first, so
+  the owner can archive them. Each one not archived
   has a muted text button, Archive, which acts at once (a skill is
   proposed again by the bot, never restored by hand); a failure is one red
   line under the list. With none, one muted line says when a bot proposes
@@ -533,6 +540,20 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   Approve and Deny do, then the change as a `diff` code block (removed
   lines `- `, added `+ `), always whole: a proposal whose change would not
   fit the card is refused to the bot, never cut.
+- **Memory (2026-10-21):** under Skills, a Memory row shows what the bot
+  keeps for its later sessions in two lists: its own notes, and About you
+  (the owner's profile, shared by every bot). Each list's muted title
+  carries how much of its limit is used ("312 of 2200 characters"); its
+  entries are main-text lines, each with a muted Remove that acts at once;
+  a list with entries has a muted Clear that asks in place (InlineConfirm,
+  the solid red only on its confirm, which says whose sessions start
+  without it). An empty list is one muted line; a muted hint under both
+  says changes apply from the bot's next session; a failure is one red
+  line. There is no Add or Edit: a bot writes its own notes, and a change
+  to About you comes as an approval card (its title "Add this to your
+  profile?", "Change this in your profile?" or "Remove this from your
+  profile?", the exact entry fenced, replace showing Now and Becomes),
+  approved on the card only, as a skill is.
 - **Messages are bubbles in runs (owner decision 2026-10-14, the reference
   messenger's look; replaces the same day's flat rows):** a bot's messages
   on the left in soft `--selection-subtle` bubbles (18px radius, fill only,

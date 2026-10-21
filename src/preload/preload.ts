@@ -1,6 +1,6 @@
 import { PLUGIN_MANAGEMENT_IPC, type UiPluginInventory } from '../shared/pluginManagement';
 import { PLUGIN_FRAME_IPC } from '../shared/pluginHost';
-import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult } from '../shared/connectorTerminal';
+import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult, type ConnectorTerminalContext } from '../shared/connectorTerminal';
 import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthAction, type ConnectorOAuthClient, type ConnectorOAuthResult } from '../shared/connectorOAuth';
 import { CONNECTOR_CATALOG_IPC, type ConnectorCatalogResult } from '../shared/connectorCatalog';
 import { CONNECTOR_CHECK_IPC, type ConnectorCheckResult } from '../shared/connectorCheck';
@@ -19,6 +19,7 @@ import { BOT_SECRET_IPC } from '../shared/botSecret';
 import { CONNECTOR_IPC } from '../shared/botConnector';
 import { GUEST_BOT_IPC } from '../shared/guestBots';
 import { BOT_SKILL_IPC } from '../shared/botSkill';
+import { BOT_MEMORY_IPC } from '../shared/botMemory';
 import { BOT_GROUP_IPC } from '../shared/botGroup';
 import type { PaneLabelRejection } from '../shared/paneLabelRules';
 import { CHROME_PANE_IPC, type ChromePaneBindings } from '../shared/chromePaneBinding';
@@ -58,6 +59,8 @@ import type {
   RegisterMcpResult,
   SampleTaskStartPayload,
 } from '../shared/firstRun';
+import type { AgentId, AgentSetupStatus } from '../shared/agentSetup';
+import type { AgentSetupPlan, SetAgentPathResult } from '../shared/agentInstall';
 import { isFileDrag } from '../shared/dragDrop';
 import { parseWindowsBuildNumber } from '../shared/platform';
 import type { NotificationCategory } from '../shared/types';
@@ -271,7 +274,7 @@ const electronAPI = {
     // wmux.json leaf — `exec` runs the command as the pane's ROOT process and
     // `supervision` arms the daemon's PaneSupervisor (daemon mode only; the
     // local branch ignores them with a one-time warning toast).
-    create: (options?: { shell?: string; cwd?: string; recoveryCwds?: Pick<DeadPaneRecovery, 'spawnCwd' | 'cwd' | 'sourceSessionId'>; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; wslAccountLoginEnvKey?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean }; fanoutTaskOf?: string; fanoutOrigin?: import('../shared/fanoutOrigin').FanoutOrigin; secretGrant?: string; fanoutLaunch?: { taskId: string; gen: number } }) =>
+    create: (options?: { shell?: string; cwd?: string; recoveryCwds?: Pick<DeadPaneRecovery, 'spawnCwd' | 'cwd' | 'sourceSessionId'>; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; wslAccountLoginEnvKey?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'; ignoreAccountBinding?: boolean; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean }; fanoutTaskOf?: string; fanoutOrigin?: import('../shared/fanoutOrigin').FanoutOrigin; secretGrant?: string; fanoutLaunch?: { taskId: string; gen: number } }) =>
       ipcRenderer.invoke(IPC.PTY_CREATE, options),
     write: (id: string, data: string) => {
       ipcRenderer.send(IPC.PTY_WRITE, id, data);
@@ -1293,6 +1296,16 @@ const electronAPI = {
     getSettings: () => ipcRenderer.invoke(IPC.FACTORY_SETTINGS_GET) as Promise<import('../shared/factorySettings').FactorySettings>,
     setSettings: (patch: Partial<import('../shared/factorySettings').FactorySettings>) =>
       ipcRenderer.invoke(IPC.FACTORY_SETTINGS_SET, patch) as Promise<import('../shared/factorySettings').FactorySettings | null>,
+    // How bots sign in to Claude (Settings › Bots): the saved API key's
+    // status (set, last four characters), never the key; the key goes out
+    // once, in setKey.
+    claudeAuth: {
+      status: () => ipcRenderer.invoke(IPC.FACTORY_CLAUDE_AUTH_STATUS) as Promise<import('../main/factory/claudeApiKey').ClaudeApiKeyStatus | null>,
+      setKey: (key: string) =>
+        ipcRenderer.invoke(IPC.FACTORY_CLAUDE_KEY_SET, { key }) as Promise<import('../main/factory/claudeApiKey').ClaudeApiKeySetResult | { ok: false; code: string; message: string }>,
+      removeKey: () => ipcRenderer.invoke(IPC.FACTORY_CLAUDE_KEY_REMOVE) as Promise<{ ok: boolean; status?: import('../main/factory/claudeApiKey').ClaudeApiKeyStatus }>,
+      check: () => ipcRenderer.invoke(IPC.FACTORY_CLAUDE_KEY_CHECK) as Promise<import('../main/factory/claudeApiKey').ClaudeApiKeyCheck | { ok: false; code: string; message: string }>,
+    },
     // The owner's stop of running bot work: every bot, or one bot.
     stopAll: () => ipcRenderer.invoke(IPC.FACTORY_STOP_ALL) as Promise<import('../main/factory/factoryStop').FactoryStopResult>,
     stopBot: (botId: string) =>
@@ -1353,6 +1366,16 @@ const electronAPI = {
       list: (botId: string) => ipcRenderer.invoke(BOT_SKILL_IPC.list, { botId }) as Promise<import('../shared/botSkill').SkillListResult>,
       archive: (req: import('../shared/botSkill').SkillArchiveRequest) =>
         ipcRenderer.invoke(BOT_SKILL_IPC.archive, req) as Promise<import('../shared/botSkill').SkillArchiveResult>,
+    },
+    // A bot's notes and the owner's profile (renderer/components/Bots/
+    // BotMemory.tsx): read, and the owner's Remove and Clear; changes arrive
+    // as BOT_EVENT {type:'memory-changed'}.
+    memory: {
+      read: (botId: string) => ipcRenderer.invoke(BOT_MEMORY_IPC.read, { botId }) as Promise<import('../shared/botMemory').MemoryReadResult>,
+      remove: (req: import('../shared/botMemory').MemoryRemoveRequest) =>
+        ipcRenderer.invoke(BOT_MEMORY_IPC.remove, req) as Promise<import('../shared/botMemory').MemorySimpleResult>,
+      clear: (req: import('../shared/botMemory').MemoryClearRequest) =>
+        ipcRenderer.invoke(BOT_MEMORY_IPC.clear, req) as Promise<import('../shared/botMemory').MemorySimpleResult>,
     },
     // Guest bots (renderer/components/Bots/guestBots.ts): an outside agent's
     // token comes back once, from create; nothing reads one back.
@@ -1547,7 +1570,8 @@ const electronAPI = {
   // iframe to main, where it dispatches through the shared RpcRouter with
   // clientName pinned to the plugin (full permission enforcement applies).
   connectorTerminal: {
-    launchCommand: (id: string, agent: 'claude' | 'codex') => ipcRenderer.invoke(CONNECTOR_TERMINAL_IPC, id, agent) as Promise<ConnectorTerminalResult>,
+    launch: (id: string, agent: 'claude' | 'codex', ptyId: string) => ipcRenderer.invoke(CONNECTOR_TERMINAL_IPC, id, agent, ptyId) as Promise<ConnectorTerminalResult>,
+    targets: () => ipcRenderer.invoke(`${CONNECTOR_TERMINAL_IPC}:targets`) as Promise<ConnectorTerminalContext | null>,
   },
   connectorOAuth: {
     action: (action: ConnectorOAuthAction, id: string, consentId?: string, client?: ConnectorOAuthClient) => ipcRenderer.invoke(CONNECTOR_OAUTH_IPC, action, id, consentId, client) as Promise<ConnectorOAuthResult>,
@@ -1715,6 +1739,11 @@ const electronAPI = {
     dismiss: () => ipcRenderer.invoke(IPC.FIRST_RUN_DISMISS) as Promise<void>,
     reopen: () => ipcRenderer.invoke(IPC.FIRST_RUN_REOPEN) as Promise<FirstRunCheckResult>,
     registerMcp: () => ipcRenderer.invoke(IPC.FIRST_RUN_REGISTER_MCP) as Promise<RegisterMcpResult>,
+    agentStatus: () => ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_STATUS) as Promise<AgentSetupStatus[]>,
+    agentPlan: (agent: AgentId, paneShell?: string) =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_PLAN, agent, paneShell) as Promise<AgentSetupPlan>,
+    setAgentPath: (agent: AgentId, input: string | null) =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_SET_PATH, agent, input) as Promise<SetAgentPathResult>,
     startSampleTask: (payload: SampleTaskStartPayload) =>
       ipcRenderer.invoke(IPC.FIRST_RUN_START_SAMPLE_TASK, payload) as Promise<void>,
     onSampleTaskReady: (callback: () => void) => {

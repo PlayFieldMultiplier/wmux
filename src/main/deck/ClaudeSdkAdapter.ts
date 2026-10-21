@@ -27,6 +27,7 @@ import { pathToFileURL } from 'url';
 import { app } from 'electron';
 import { getWmuxDir } from '../../daemon/config';
 import { loadCommanderMemory, getMemoryRootDir } from './commanderMemory';
+import { loadBotMemory } from '../factory/botMemory';
 import { getAccountStore } from '../account/accountStore';
 import { resolveBackgroundLaunch, type BackgroundLaunch } from '../account/backgroundLaunchAccount';
 import { mintBotToken, mintCommanderToken, revokeCommanderToken } from './commanderTrust';
@@ -35,6 +36,7 @@ import { BOT_REPO_READ_TOOLS, botRepoReadDenyRules, evaluateBotRepoRead, grepOut
 import { redactStoredSecretsDeep } from '../factory/secretRedaction';
 import { guestGateProvenance } from '../factory/wakeTaint';
 import { claudeNotFoundMessage } from '../factory/engineError';
+import type { BotClaudeAuth } from '../factory/claudeApiKey';
 import type { BotBinding } from '../../shared/bot';
 import { GUEST_SAFE_BUILTIN_TOOLS, GUEST_TURN_SURFACE_REFUSAL, SHARED_SURFACE } from '../../shared/botSurface';
 import { evaluateCommanderToolPermission } from './commanderToolSandbox';
@@ -50,6 +52,39 @@ import {
   createNormalizeState,
   normalizeSdkMessage,
 } from './BrainAdapter';
+
+/** What a bot on a Claude API key never inherits: every variable under
+ *  these prefixes (any provider, endpoint, credential, header or host-managed
+ *  setting claude reads), plus the one Bedrock credential outside them, so
+ *  the key reaches Anthropic's API only. Matched ignoring case (Windows env
+ *  names are). wmux's own values (`launch.env`) are applied after. */
+export const BOT_API_KEY_CLEARED_PREFIXES: readonly string[] = ['ANTHROPIC_', 'CLAUDE_CODE_', '_CLAUDE_CODE_'];
+export const BOT_API_KEY_CLEARED_NAMES: readonly string[] = ['AWS_BEARER_TOKEN_BEDROCK'];
+
+/** Whether an inherited variable is dropped for a bot on an API key. Pure. */
+export function clearedForBotApiKey(name: string): boolean {
+  const upper = name.toUpperCase();
+  return BOT_API_KEY_CLEARED_NAMES.includes(upper) || BOT_API_KEY_CLEARED_PREFIXES.some((p) => upper.startsWith(p));
+}
+
+/** The claude config folder a bot on an API key runs on: wmux's own, empty
+ *  of the owner's config. claude reads its global config (and its `env`
+ *  block, applied after ours) from `<CLAUDE_CONFIG_DIR>/.claude.json` when
+ *  that variable is set, never `~/.claude.json`, so nothing the owner (or a
+ *  tool) wrote there can send the key elsewhere. */
+export function botApiKeyConfigDir(wmuxDir: string): string {
+  return path.join(wmuxDir, 'factory', 'claude-api-config');
+}
+
+/** Create it (0700) and return it. Throws when it cannot be. */
+export function ensureBotApiKeyConfigDir(wmuxDir: string): string {
+  const dir = botApiKeyConfigDir(wmuxDir);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch { /* Windows: ACLs, not modes */ }
+  return dir;
+}
 
 // ─── Injectable SDK seam ─────────────────────────────────────────────────────
 
@@ -272,12 +307,25 @@ export interface ClaudeSdkAdapterDeps {
    *  (mintBotToken) handed to the MCP child in a fresh 0600 file per turn
    *  (never the environment), the MCP server in `--bot=<role>` mode, no
    *  built-in tools at all (`tools: []`), every permission prompt denied, no
-   *  filesystem settings and no memory, and `cwd` as the session's working
-   *  directory (the bot's own empty folder). `allowedTools` should be the
+   *  filesystem settings, its own memory only (factory/botMemory.ts), and
+   *  `cwd` as the session's working directory (the bot's own empty folder). `allowedTools` should be the
    *  role's MCP tools; `fullPower` is ignored. With `repoRoot` the session
    *  also holds Read, Grep and Glob, each call decided by main inside that
-   *  repository (factory/botRepoRead.ts). */
-  bot?: { binding: BotBinding; cwd: string; wmuxDir?: string; repoRoot?: string };
+   *  repository (factory/botRepoRead.ts). `auth` says how the bot signs in
+   *  to Claude, read on every turn (absent: the subscription), and
+   *  `onAuthSeen` is told the sign-in the session reported (factory/
+   *  claudeApiKey.ts). */
+  bot?: BotDeps;
+}
+
+/** Bot mode's deps (ClaudeSdkAdapterDeps.bot). */
+export interface BotDeps {
+  binding: BotBinding;
+  cwd: string;
+  wmuxDir?: string;
+  repoRoot?: string;
+  auth?: () => BotClaudeAuth;
+  onAuthSeen?: (apiKeySource: string) => void;
 }
 
 // ─── Permission defaults (D2) ────────────────────────────────────────────────
@@ -788,7 +836,15 @@ export class ClaudeSdkAdapter implements BrainAdapter {
    *  workspace (M1.5 confinement). */
   private readonly _commanderToken: string;
   /** Bot mode (see ClaudeSdkAdapterDeps.bot). */
-  private readonly bot?: { binding: BotBinding; cwd: string; wmuxDir?: string; repoRoot?: string };
+  private readonly bot?: BotDeps;
+  /** Bot mode: how this turn signs in (resolved at its start). */
+  private _turnAuth: BotClaudeAuth = { mode: 'subscription' };
+  /** Bot mode on an API key: this turn's own claude config folder. */
+  private _turnConfigDir: string | null = null;
+  /** Bot mode: the sign-in this conversation runs on. Its transcript lives
+   *  in that sign-in's config folder, so a turn on the other one starts a
+   *  new conversation. Undefined: not known yet (a saved one). */
+  private _conversationAuthMode: 'subscription' | 'apiKey' | undefined = undefined;
   /** Bot mode: the current turn's token hand-off file, removed when the turn ends. */
   private _handoff: BotTokenHandoff | null = null;
 
@@ -804,11 +860,15 @@ export class ClaudeSdkAdapter implements BrainAdapter {
     this.model = deps.model;
     this.effort = deps.effort;
     this.maxTurns = deps.maxTurns ?? DEFAULT_MAX_TURNS;
-    this.profile = deps.profile;
+    // A bot never takes an endpoint profile: its sign-in is the owner's bot
+    // setting alone (an API key must reach Anthropic, nowhere else).
+    this.profile = this.bot ? undefined : deps.profile;
     // Default loader layers both partitions for THIS workspace (M1c). Bound to
     // deps.workspaceId at construction so the brain only ever sees its own
-    // workspace's memory plus the shared global partition.
-    this.loadMemory = deps.loadMemory ?? (this.bot ? () => '' : () => loadCommanderMemory({ workspaceId: deps.workspaceId }));
+    // workspace's memory plus the shared global partition. A bot loads its
+    // own notes and the owner's profile instead (factory/botMemory.ts).
+    const bot = this.bot;
+    this.loadMemory = deps.loadMemory ?? (bot ? () => loadBotMemory(bot.wmuxDir, bot.binding) : () => loadCommanderMemory({ workspaceId: deps.workspaceId }));
     this._workspaceId = this.bot ? this.bot.binding.workspaceId : deps.workspaceId;
     this._memoryRoot = deps.memoryRoot;
     // An empty binding registers an unroutable token — fail closed rather
@@ -853,12 +913,20 @@ export class ClaudeSdkAdapter implements BrainAdapter {
    * Build the spawn environment. Forces subscription auth by DROPPING
    * ANTHROPIC_API_KEY (Options.env replaces the child env, so we spread
    * process.env then unset the key). A GLM/Z.ai profile injects the compatible
-   * base-url / auth-token overrides.
+   * base-url / auth-token overrides. A bot the owner set to a Claude API key
+   * gets the saved key instead (this turn's `_turnAuth`); nothing else does.
    */
   private buildEnv(launch: Extract<BackgroundLaunch, { kind: 'run' }>): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = { ...process.env };
-    // Zero-API: never let an ambient key flip the session onto metered API auth.
-    delete env.ANTHROPIC_API_KEY;
+    const apiKeyBot = !!this.bot && this._turnAuth.mode === 'apiKey';
+    if (apiKeyBot) {
+      // The owner's key goes to Anthropic's own API only: nothing inherited
+      // that could pick another provider, endpoint or credential survives.
+      for (const name of Object.keys(env)) if (clearedForBotApiKey(name)) delete env[name];
+    } else {
+      // Zero-API: never let an ambient key flip the session onto metered API auth.
+      delete env.ANTHROPIC_API_KEY;
+    }
     // Multi-account (M0): the orchestrator brain is a claude spawn that bypasses
     // the PTY path, so it applies the account send() resolved for this turn
     // (the binding, or the account quota rotation chose) — otherwise it
@@ -868,6 +936,13 @@ export class ClaudeSdkAdapter implements BrainAdapter {
     // when no account env was applied (default credential). Used to stamp limit
     // events (M3 §1a).
     this._launchAccountId = launch.accountId;
+    if (apiKeyBot && this._turnAuth.mode === 'apiKey') {
+      // wmux's own config folder, over any account's: accounts are
+      // subscription sign-ins.
+      if (this._turnConfigDir) env.CLAUDE_CONFIG_DIR = this._turnConfigDir;
+      env.ANTHROPIC_API_KEY = this._turnAuth.apiKey;
+      return env;
+    }
     if (this.profile?.baseUrl) env.ANTHROPIC_BASE_URL = this.profile.baseUrl;
     if (this.profile?.authToken) env.ANTHROPIC_AUTH_TOKEN = this.profile.authToken;
     return env;
@@ -1031,6 +1106,9 @@ export class ClaudeSdkAdapter implements BrainAdapter {
         env: {
           ELECTRON_RUN_AS_NODE: '1',
           ...(process.env.WMUX_DATA_SUFFIX ? { WMUX_DATA_SUFFIX: process.env.WMUX_DATA_SUFFIX } : {}),
+          // The session's API key stays in the session: the MCP child would
+          // otherwise inherit it from claude.
+          ...(this._turnAuth.mode === 'apiKey' ? { ANTHROPIC_API_KEY: '' } : {}),
         },
       },
     };
@@ -1183,6 +1261,39 @@ export class ClaudeSdkAdapter implements BrainAdapter {
     // fleet-context injection must not double up).
     const prompt = this.composePrompt(text);
 
+    // A bot signs in as the owner chose for bots, read now so a change in
+    // Settings applies from this turn; an API key that is not usable here
+    // ends the turn before anything spawns (never the subscription instead).
+    if (this.bot) {
+      try {
+        this._turnAuth = this.bot.auth?.() ?? { mode: 'subscription' };
+      } catch (err) {
+        this._turnAuth = { mode: 'refused', message: err instanceof Error ? err.message : String(err) };
+      }
+      if (this._turnAuth.mode === 'refused') {
+        yield { type: 'error', message: this._turnAuth.message };
+        return;
+      }
+      this._turnConfigDir = null;
+      if (this._turnAuth.mode === 'apiKey') {
+        try {
+          this._turnConfigDir = ensureBotApiKeyConfigDir(this.bot.wmuxDir ?? getWmuxDir());
+        } catch (err) {
+          yield { type: 'error', message: `the bots' Claude config folder could not be created: ${err instanceof Error ? err.message : String(err)}` };
+          return;
+        }
+      }
+      // A conversation begun on the other sign-in lives in the other config
+      // folder: start a new one rather than resume what claude cannot find.
+      // (A saved one of unknown sign-in is tried, and falls back to a fresh
+      // one the same way any dead saved id does.)
+      if (this._sessionId && this._conversationAuthMode !== undefined && this._conversationAuthMode !== this._turnAuth.mode) {
+        this._sessionId = null;
+        this._resumeUnvalidated = false;
+        this._conversationAccountId = undefined;
+      }
+    }
+
     // At most two attempts: the first may run against a DISK-SEEDED session id
     // (P3a) that the claude side no longer knows (transcript GC'd, moved
     // machine, corrupt store). When that turn dies before producing ANY event,
@@ -1203,12 +1314,13 @@ export class ClaudeSdkAdapter implements BrainAdapter {
       // account under "Switch accounts by quota"; a resumed one stays where
       // its transcript is. Out of quota → a clear error instead of a spawn
       // that dies on a quota error. A profile with its own auth token does not
-      // sign in with the account, so its quota is not checked.
+      // sign in with the account, so its quota is not checked. A bot on an
+      // API key uses no account (its own config folder, buildEnv).
       this._launching = true;
       this._interruptedWhileLaunching = false;
       let launch: BackgroundLaunch;
       try {
-        launch = await resolveBackgroundLaunch(this._workspaceId, 'claude', {
+        launch = this.bot && this._turnAuth.mode === 'apiKey' ? { kind: 'run', env: {}, accountId: null } : await resolveBackgroundLaunch(this._workspaceId, 'claude', {
           resuming: !!this._sessionId,
           conversationAccountId: this._conversationAccountId,
           checkQuota: !this.profile?.authToken,
@@ -1226,6 +1338,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
         return;
       }
       if (!this._sessionId) this._conversationAccountId = launch.accountId;
+      if (this.bot && this._turnAuth.mode !== 'refused' && (!this._sessionId || this._conversationAuthMode === undefined)) this._conversationAuthMode = this._turnAuth.mode;
       try {
         const options = this.buildOptions(launch);
         turnLaunchAccountId = this._launchAccountId;
@@ -1267,6 +1380,12 @@ export class ClaudeSdkAdapter implements BrainAdapter {
       let stopForTools = false;
       try {
         outer: for await (const msg of handle) {
+          if (this.bot?.onAuthSeen && (msg as RawSdkMessage).type === 'system' && (msg as RawSdkMessage).subtype === 'init') {
+            const source = (msg as RawSdkMessage).apiKeySource;
+            if (typeof source === 'string') {
+              try { this.bot.onAuthSeen(source); } catch { /* status only */ }
+            }
+          }
           let events = normalizeSdkMessage(msg as RawSdkMessage, state);
           const noTools = guard?.observe(msg as RawSdkMessage) ?? null;
           if (noTools) {

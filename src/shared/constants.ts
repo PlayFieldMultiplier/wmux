@@ -488,6 +488,13 @@ export const IPC = {
   // (main/factory/taskFolderCleanup.ts); main window only.
   FACTORY_TASK_FOLDERS_USAGE: 'factory:taskFolders:usage',
   FACTORY_TASK_FOLDERS_CLEAN: 'factory:taskFolders:clean',
+  // How bots sign in to Claude (main/factory/claudeApiKey.ts): the saved API
+  // key's status (never the key), saving and removing it, and the connection
+  // check; main window only.
+  FACTORY_CLAUDE_AUTH_STATUS: 'factory:claudeAuth:status',
+  FACTORY_CLAUDE_KEY_SET: 'factory:claudeAuth:setKey',
+  FACTORY_CLAUDE_KEY_REMOVE: 'factory:claudeAuth:removeKey',
+  FACTORY_CLAUDE_KEY_CHECK: 'factory:claudeAuth:check',
   TRACK_RECORD_CHANGED: 'trackRecord:changed',
   // The Fleet approvals tab's Plan card (shared/planApproval.ts): Claude's
   // ExitPlanMode dialogs, answered from the main window only.
@@ -765,6 +772,12 @@ export const IPC = {
   FIRST_RUN_REOPEN: 'first-run:reopen',
   FIRST_RUN_REGISTER_MCP: 'first-run:register-mcp',
   FIRST_RUN_START_SAMPLE_TASK: 'first-run:start-sample-task',
+  /** Agent-ready step: installed / version / signed in, per agent (spawns probes). */
+  FIRST_RUN_AGENT_STATUS: 'first-run:agent-status',
+  /** Agent-ready step: the bundled install line and the sign-in line for one agent. */
+  FIRST_RUN_AGENT_PLAN: 'first-run:agent-plan',
+  /** Agent-ready step: remember (or forget) a typed path for an agent wmux did not find. */
+  FIRST_RUN_AGENT_SET_PATH: 'first-run:agent-set-path',
   // First-run wizard event channels (renderer-side `on()` listeners)
   FIRST_RUN_SAMPLE_TASK_READY: 'first-run:sample-task-ready',
   FIRST_RUN_SAMPLE_TASK_TIMEOUT: 'first-run:sample-task-timeout',

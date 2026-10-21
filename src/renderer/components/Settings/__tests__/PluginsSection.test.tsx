@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import PluginsSection from '../PluginsSection';
 import { en } from '../../../i18n/locales/en';
-import type { InstalledUiPlugin } from '../../../../shared/pluginManagement';
+import { UI_PLUGIN_CATALOG, type InstalledUiPlugin } from '../../../../shared/pluginManagement';
 
 vi.mock('../../../hooks/useT', () => ({ useT: () => (key: keyof typeof en) => en[key] ?? key }));
 vi.mock('../../Connectors/ConnectorsPage', () => ({ default: ({ selectedView }: { selectedView: string }) => <div data-connectors-view={selectedView} /> }));
@@ -12,8 +12,8 @@ vi.mock('../../Connectors/ConnectorsPage', () => ({ default: ({ selectedView }: 
 let root: Root;
 let host: HTMLDivElement;
 afterEach(() => { act(() => root?.unmount()); host?.remove(); vi.unstubAllGlobals(); });
-function button(text: string) {
-  const result = [...host.querySelectorAll('button')].find((item) => item.textContent === text);
+function button(text: string, scope: ParentNode = host) {
+  const result = [...scope.querySelectorAll('button')].find((item) => item.textContent === text);
   if (!result) throw new Error(`Missing ${text}`);
   return result;
 }
@@ -36,7 +36,7 @@ it('installs without auto-approval and exposes the same view to connectors', asy
   const { api, requestApproval } = await mount([]);
   await act(async () => button('Discover').click());
   expect(host.querySelector('[data-connectors-view="discover"]')).not.toBeNull();
-  await act(async () => button('Install').click());
+  await act(async () => button('Install', host.querySelector('[data-catalog-entry="agent-state-page"]')!).click());
   expect(api.install).toHaveBeenCalledExactlyOnceWith('agent-state-page');
   expect(requestApproval).not.toHaveBeenCalled();
   expect(host.querySelector('[data-connectors-view="mine"]')).not.toBeNull();
@@ -61,4 +61,21 @@ it('does not offer file deletion for a manual installation', async () => {
   await act(async () => button('Disable').click());
   expect(api.setEnabled).toHaveBeenCalledExactlyOnceWith('agent-state-page', false);
   expect(api.remove).not.toHaveBeenCalled();
+});
+
+it('lists each catalog entry under its own name, hint and publisher', async () => {
+  await mount([{ ...plugin, name: 'office' }]);
+  expect(host.textContent).toContain('office · 1 · bluemas · MIT');
+  await act(async () => button('Discover').click());
+  expect(host.textContent).toContain(en['plugins.settings.agentStatusHint']);
+  expect(host.textContent).toContain(en['plugins.settings.officeHint']);
+  expect(host.textContent).toContain('bluemas · MIT · 1.0.0');
+  expect(host.textContent).toContain('wmux · MIT · 1.0.0');
+});
+
+it('gives every catalog entry an English title and hint', () => {
+  for (const entry of UI_PLUGIN_CATALOG) {
+    expect(en[entry.titleKey]).toBeTruthy();
+    expect(en[entry.hintKey]).toBeTruthy();
+  }
 });

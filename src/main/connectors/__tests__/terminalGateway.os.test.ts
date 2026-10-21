@@ -7,7 +7,7 @@ import { createTerminalGateway } from '../terminalGateway';
 import type { Connector } from '../../../shared/botConnector';
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const clean of cleanups.splice(0).reverse()) await clean(); });
-async function fixture(ttlMs?: number) {
+async function fixture(ttlMs?: number, access?: { authorize: () => Promise<void>; headers?: () => Promise<Record<string, string>> }) {
   const calls: string[] = []; const headers: string[] = [];
   const server = createServer(async (req, res) => {
     if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
@@ -28,7 +28,7 @@ async function fixture(ttlMs?: number) {
   const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
   let revision = 0;
   let connector: Connector | undefined = { id: 'con-12345678', name: 'test-service', transport: 'http', remote: { url: endpoint, headers: {} }, secrets: [], tools: { mode: 'listed', allowed: ['read'] }, scope: { kind: 'bots', botIds: [] }, offFor: [], enabled: true, createdAt: 1, updatedAt: 1 };
-  const gateway = await createTerminalGateway({ ttlMs, getConnector: () => connector, headers: async () => ({ Authorization: 'Bearer upstream-secret' }), authorizationRevision: () => revision });
+  const gateway = await createTerminalGateway({ ttlMs, getConnector: () => connector, headers: access?.headers ?? (async () => ({ Authorization: 'Bearer upstream-secret' })), authorizationRevision: () => revision, authorize: access?.authorize ?? (async () => undefined) });
   cleanups.push(gateway.close);
   const client = new Client({ name: 'test-cli', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(new URL(gateway.url), { requestInit: { headers: { Authorization: `Bearer ${gateway.token}` } }, reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 100, maxReconnectionDelay: 100, reconnectionDelayGrowFactor: 1 } }));
@@ -73,4 +73,15 @@ it('does not accept another terminal session bearer even for the same connection
   expect(first.gateway.token).not.toBe(second.gateway.token);
   expect((await fetch(first.gateway.url, { method: 'POST', headers: { Authorization: `Bearer ${second.gateway.token}` }, body: '{}' })).status).toBe(403);
   expect(first.calls).toEqual([]);
+});
+
+it('checks session authorization before forwarding and again after credential refresh', async () => {
+  let permitted = true;
+  const f = await fixture(undefined, {
+    authorize: async () => { if (!permitted) throw new Error('Access revoked'); },
+    headers: async () => { permitted = false; return { Authorization: 'Bearer never-forward' }; },
+  });
+  await expect(f.client.listTools()).rejects.toThrow();
+  expect(f.headers).toEqual([]);
+  expect(f.calls).toEqual([]);
 });

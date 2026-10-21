@@ -21,3 +21,27 @@ describe('withAccountQuota on a fan-out worker line', () => {
     expect(line.startsWith(`${MODEL_ENV_MARKER}echo "wmux: codex was not started`)).toBe(true);
   });
 });
+
+describe('withAccountQuota and agent-setup panes', () => {
+  it('leaves an ignoreAccountBinding launch alone: no rotation, no hold', async () => {
+    const prepareLaunch = vi.fn();
+    const options = { initialCommand: "'/home/u/.local/bin/claude'", workspaceId: 'ws-1', ignoreAccountBinding: true };
+    expect(await withAccountQuota(options, { prepareLaunch })).toBe(options);
+    expect(prepareLaunch).not.toHaveBeenCalled();
+  });
+
+  it('every other spawn is unchanged: the same line without the flag (or with false) still rotates', async () => {
+    const decision: RotationDecision = { kind: 'switch', accountId: 'b', env: { CLAUDE_CONFIG_DIR: '/acc/b' } } as RotationDecision;
+    for (const flag of [undefined, false]) {
+      const prepareLaunch = vi.fn(async () => decision);
+      const options: QuotaLaunchOptions = {
+        initialCommand: "'/home/u/.local/bin/claude'",
+        workspaceId: 'ws-1',
+        ...(flag === undefined ? {} : { ignoreAccountBinding: flag }),
+      };
+      const out = await withAccountQuota(options, { prepareLaunch, platform: 'darwin' });
+      expect(prepareLaunch).toHaveBeenCalledWith('claude', 'ws-1');
+      expect(out?.env).toEqual({ CLAUDE_CONFIG_DIR: '/acc/b' });
+    }
+  });
+});
