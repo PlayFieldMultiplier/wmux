@@ -271,11 +271,6 @@ export async function saveWorkspacePrepSettings(
   if (Object.keys(fanout).length > 0) doc.fanout = fanout;
   else delete doc.fanout;
 
-  // Nothing left to declare: an explicit "copy nothing into bot and fan-out
-  // workspaces" keeps the file a valid wmux.json (an empty one is not).
-  if (normalizeWmuxProjectConfig(doc) === undefined) {
-    doc.fanout = { copyIntoAutomated: false };
-  }
   // The result must read back as exactly what was asked for.
   const check = normalizeWmuxProjectConfig(doc);
   if (!check || (check.fanout?.invalidFields?.length ?? 0) > 0) return { ok: false, error: 'invalid-input' };
@@ -298,7 +293,9 @@ export async function saveWorkspacePrepSettings(
   if (!after.found || after.contentHash !== contentHash || !after.root) return { ok: false, error: 'changed' };
   const root = after.root;
   // The unattended reboot consent was given for the layout, which this save
-  // does not touch: it carries over only from bytes that were trusted.
+  // does not touch: it carries over only from bytes that were trusted. This
+  // is the one deliberate exception to setDecision's "pass the checkbox
+  // every time" rule: the changed bytes are fanout keys, never the layout.
   const unattended = trustedNow(found.state, liveHash) && liveHash !== undefined ? await deps.unattendedFor(root, liveHash) : false;
   try {
     await deps.setTrusted(root, contentHash, unattended);

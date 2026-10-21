@@ -55,7 +55,8 @@ type Load = { state: 'loading' } | { state: 'error' } | { state: 'ready'; view: 
  *  family when copying was never configured. */
 export function initialCopySelection(view: WorkspacePrepSettingsView): string[] {
   if (!view.copyUnset) return view.settings.copy;
-  return view.candidates.filter(isDefaultCopyCandidate);
+  // No more than wmux.json accepts.
+  return view.candidates.filter(isDefaultCopyCandidate).slice(0, PROJECT_FANOUT_MAX_COPY);
 }
 
 export default function WorkspacePrepDialog() {
@@ -77,8 +78,13 @@ export default function WorkspacePrepDialog() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Each opening's read is its own: a result for an earlier opening is
+  // dropped, and a cwd that moves mid-read does not cancel this one.
+  const opening = useRef(0);
+
   // A new opening starts from a clean slate (no previous project's view).
   useEffect(() => {
+    opening.current += 1;
     loadedFor.current = null;
     setLoad({ state: 'loading' });
   }, [wsId]);
@@ -86,12 +92,13 @@ export default function WorkspacePrepDialog() {
   useEffect(() => {
     if (!wsId || !cwd || loadedFor.current !== null) return;
     loadedFor.current = cwd;
-    let live = true;
+    const mine = opening.current;
+    const live = () => opening.current === mine;
     setLoad({ state: 'loading' });
     setSaveError(null);
     window.electronAPI.projectConfig.prepGet(cwd).then(
       (view) => {
-        if (!live) return;
+        if (!live()) return;
         setLoad({ state: 'ready', view });
         setCopy(initialCopySelection(view));
         setSetup(view.settings.setup);
@@ -99,9 +106,8 @@ export default function WorkspacePrepDialog() {
         setCopyIntoAutomated(view.settings.copyIntoAutomated);
         setAdvanced(view.settings.portRange !== '' || view.settings.copyIntoAutomated);
       },
-      () => { if (live) setLoad({ state: 'error' }); },
+      () => { if (live()) setLoad({ state: 'error' }); },
     );
-    return () => { live = false; };
   }, [wsId, cwd]);
 
   const view = load.state === 'ready' ? load.view : undefined;
