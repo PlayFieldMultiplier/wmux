@@ -39,26 +39,100 @@ describe('createWorkTaskReconciler', () => {
     ];
     const reconcile = createWorkTaskReconciler({
       candidateOwners: () => ['ws-parent', 'ws-parent', 'ws-other'],
-      listTasks: async (owner) => {
+      // #2372: one batched call per pass, the owners deduped. 'ws-other'
+      // fails closed on its own.
+      missionList: async (p) => {
         calls += 1;
-        if (owner === 'ws-other') throw new Error('daemon down');
-        return { ok: true, tasks };
+        expect(p).toEqual({ verifiedWorkspaceIds: ['ws-parent', 'ws-other'] });
+        return {
+          ok: true,
+          results: [
+            { verifiedWorkspaceId: 'ws-parent', ok: true, tasks },
+            { verifiedWorkspaceId: 'ws-other', ok: false, error: { code: 'NOT_AUTHORIZED', message: 'x' } },
+          ],
+        };
       },
       now: () => clock,
       minIntervalMs: 1_000,
     });
     await reconcile();
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
     expect(ledger.get('wtask-1')?.status).toBe('cancelled');
     expect(ledger.get('wtask-3')?.status).toBe('working');
     expect(ledger.get('wtask-3')?.ownerWorkspaceId).toBe('ws-parent');
     expect(ledger.get('wtask-4')).toBeNull();
     expect(getMissionChannelId('wtask-3')).toBe('ch-3');
     await reconcile();
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
     clock = 2_000;
     await reconcile();
-    expect(calls).toBe(4);
+    expect(calls).toBe(2);
+  });
+
+  it('one pass over 107 owners is one task.mission.list call (#2372)', async () => {
+    const owners = Array.from({ length: 107 }, (_, i) => `ws-${i}`);
+    const calls: Array<Record<string, unknown>> = [];
+    const reconcile = createWorkTaskReconciler({
+      candidateOwners: () => owners,
+      missionList: async (p) => {
+        calls.push(p);
+        const ids = p.verifiedWorkspaceIds as string[];
+        return {
+          ok: true,
+          results: ids.map((id) => ({
+            verifiedWorkspaceId: id,
+            ok: true,
+            tasks: [{ id: `wtask-${id}`, title: id, status: 'open', owner: { verifiedWorkspaceId: id }, paneGroupId: `task-${id}` }],
+          })),
+        };
+      },
+    });
+    await reconcile();
+    expect(calls).toHaveLength(1);
+    for (const id of owners) expect(ledger.get(`wtask-${id}`)?.ownerWorkspaceId).toBe(id);
+  });
+
+  it('a listing that throws (no daemon client) skips the pass and leaves the ledger as it was', async () => {
+    const before = ledger.list();
+    let calls = 0;
+    const reconcile = createWorkTaskReconciler({
+      candidateOwners: () => ['ws-parent', 'ws-other'],
+      missionList: async () => {
+        calls += 1;
+        throw new Error('DaemonClient not connected');
+      },
+    });
+    await expect(reconcile()).resolves.toBeUndefined();
+    // One failed batch, not one failed call per owner.
+    expect(calls).toBe(1);
+    expect(ledger.list()).toEqual(before);
+    expect(ledger.get('wtask-1')?.status).toBe('working');
+  });
+
+  it('on a daemon without the batch, falls back to one call per owner', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const reconcile = createWorkTaskReconciler({
+      candidateOwners: () => ['ws-parent', 'ws-other'],
+      // A pre-#2372 daemon reads only verifiedWorkspaceId.
+      missionList: async (p) => {
+        calls.push(p);
+        const id = typeof p.verifiedWorkspaceId === 'string' ? p.verifiedWorkspaceId : '';
+        if (!id) return { ok: false, error: { code: 'NOT_AUTHORIZED', message: 'verifiedWorkspaceId is required' } };
+        return {
+          ok: true,
+          tasks: id === 'ws-parent'
+            ? [{ id: 'wtask-old', title: 'old', status: 'open', owner: { verifiedWorkspaceId: id }, paneGroupId: 'ws-old' }]
+            : [],
+        };
+      },
+    });
+    await reconcile();
+    expect(calls).toEqual([
+      { verifiedWorkspaceIds: ['ws-parent', 'ws-other'] },
+      { verifiedWorkspaceId: 'ws-parent' },
+      { verifiedWorkspaceId: 'ws-other' },
+    ]);
+    expect(ledger.get('wtask-old')?.status).toBe('working');
   });
 
   it('a mirrored row carries the lineage stamp\'s origin, and the fan-out\'s own register replaces it (#2393)', async () => {
@@ -68,7 +142,7 @@ describe('createWorkTaskReconciler', () => {
     ];
     const reconcile = createWorkTaskReconciler({
       candidateOwners: () => ['ws-parent'],
-      listTasks: async () => ({ ok: true, tasks }),
+      missionList: async () => ({ ok: true, results: [{ verifiedWorkspaceId: 'ws-parent', ok: true, tasks }] }),
       originOf: (ws) => (ws === 'ws-bot' ? { kind: 'bot', botId: 'bot-a' } : null),
     });
     await reconcile();

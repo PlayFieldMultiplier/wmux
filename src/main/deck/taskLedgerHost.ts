@@ -8,6 +8,7 @@
 import { getWmuxDir } from '../../daemon/config';
 import { TaskLedger, type LedgerTransition } from '../../daemon/ledger/TaskLedger';
 import { redactStoredSecretsDeep } from '../factory/secretRedaction';
+import { listMissionsByOwner, type MissionListCall } from '../../shared/missionListBatch';
 
 let ledger: TaskLedger | null = null;
 
@@ -87,8 +88,10 @@ export interface WorkTaskProjectionLike {
 export interface WorkTaskReconcilerPorts {
   /** Workspaces that may own tasks (every workspace the mirror knows). */
   candidateOwners: () => string[];
-  /** `task.mission.list` for one owner — the daemon's owner-scoped read. */
-  listTasks: (ownerWorkspaceId: string) => Promise<unknown>;
+  /** One `task.mission.list` call to the daemon, with the params given. A
+   *  pass names every candidate owner in one batched call (#2372), falling
+   *  back to one call per owner on a daemon that predates the batch. */
+  missionList: MissionListCall;
   ledger?: TaskLedger;
   /** Who started the task in `taskWorkspaceId`, from its lineage stamp, or
    *  null. A mirrored row carries it as its dispatch origin, so a recovered
@@ -161,13 +164,10 @@ export function createWorkTaskReconciler(ports: WorkTaskReconcilerPorts): () => 
     inFlight = (async () => {
       lastRun = now();
       const owners = [...new Set(ports.candidateOwners())];
+      const replies = await listMissionsByOwner(ports.missionList, owners);
       for (const owner of owners) {
-        let tasks: WorkTaskProjectionLike[];
-        try {
-          tasks = projectTasks(await ports.listTasks(owner));
-        } catch {
-          continue;
-        }
+        if (!replies.has(owner)) continue;
+        const tasks = projectTasks(replies.get(owner));
         for (const t of tasks) {
           if (t.status === 'closed') {
             if (l.get(t.id)) await l.closeTask(t.id);

@@ -61,13 +61,15 @@ export function closedOwnersNeedingRecords(
   return [...out];
 }
 
-/** 현재 워크스페이스 id 전부에 대해 미션을 refetch(각 owner-scoped 조회). */
+/** Refetch the missions of every current workspace (plus the closed owners
+ *  still needed) in one batched `task.mission.list` (#2372): one RPC per pass,
+ *  not one per workspace. */
 async function refreshAllParents(): Promise<void> {
   const state = useStore.getState();
   const ids = state.workspaces.map((w) => w.id);
   const closed = closedOwnersNeedingRecords(state, closedOwnerAttempts);
   for (const owner of closed) closedOwnerAttempts.set(owner, (closedOwnerAttempts.get(owner) ?? 0) + 1);
-  await Promise.all([...ids, ...closed].map((id) => state.refreshMissions(id)));
+  await state.refreshMissionsForOwners([...ids, ...closed]);
 }
 
 /** #1481 — lineage + audit first (they name closed owners), then the ledger;
@@ -92,8 +94,9 @@ export interface MissionRefresher {
 }
 
 /**
- * #2349 — at most one full pass at a time. A full pass is one
- * `task.mission.list` per workspace (~90 RPCs on a large window), and every
+ * #2349 — at most one full pass at a time. A full pass was one
+ * `task.mission.list` per workspace (~90 RPCs on a large window; #2372 made
+ * it one batched call), and every
  * workspace a fan-out adds or removes used to start another one while the
  * last was still running: an 8-task fan-out stacked about four passes into
  * the same second, ~370 calls against the daemon's 200/s global budget, and

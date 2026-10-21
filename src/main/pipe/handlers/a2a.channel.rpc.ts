@@ -54,6 +54,7 @@ import { isHostedCaller, hostedBindingOf } from '../../../shared/rpc';
 import type { DaemonClient } from '../../DaemonClient';
 import { HUMAN_WORKSPACE_ID } from '../../../shared/channels';
 import { resolvePtyOwnerWorkspace } from '../../workspace/ptyOwnership';
+import { MISSION_LIST_BATCH_NOT_ALLOWED } from '../../../shared/missionListBatch';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -110,6 +111,28 @@ export function registerA2aChannelRpc(
      */
     ownerScoped = false,
   ): Promise<unknown> => {
+    // #2372 — the batched `task.mission.list` (`verifiedWorkspaceIds`) reads
+    // many owners at once, so it is the operator's alone: the renderer bridge
+    // is the one caller that may read across workspaces. The stamps below pin
+    // only the single `verifiedWorkspaceId`, so a pane agent, a commander or a
+    // plugin passing the array would otherwise name any owners it liked.
+    // Refused before any identity is resolved, with its own code so a caller
+    // never reads it as a daemon without the batch (NOT_AUTHORIZED).
+    if (
+      params &&
+      typeof params === 'object' &&
+      (params as Record<string, unknown>).verifiedWorkspaceIds !== undefined &&
+      !ctx?.operator
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: MISSION_LIST_BATCH_NOT_ALLOWED,
+          message: `${method}: verifiedWorkspaceIds (several owners at once) is for the operator only`,
+        },
+      };
+    }
+
     const dc = getDaemonClient();
     if (!dc) throw new Error('DaemonClient not connected');
 

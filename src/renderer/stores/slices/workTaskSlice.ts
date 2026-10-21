@@ -22,6 +22,7 @@ import type { StateCreator } from 'zustand';
 import type { StoreState } from '../index';
 import type { WorkTask } from '../../../shared/workTask';
 import { unwrapRpc } from '../../utils/unwrapRpc';
+import { listMissionsByOwner } from '../../../shared/missionListBatch';
 import { unpinNestedTasks } from '../../utils/sidebarLayout';
 import { provenanceFromAudit, sameProvenance, type FanoutAuditLike, type FanoutProvenance } from '../../utils/fanoutProvenance';
 import { sameFanoutOrigin, sanitizeFanoutOrigin, type FanoutOrigin } from '../../../shared/fanoutOrigin';
@@ -38,6 +39,15 @@ function readMissionRpc(): MissionRpcBridge | undefined {
 
 function isOkObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && (v as { ok?: unknown }).ok === true;
+}
+
+/** One owner's `task.mission.list` reply (transport envelope removed) into
+ *  the cache. A refused or malformed reply leaves that owner's cache as is. */
+function applyMissionListReply(get: () => StoreState, parentWorkspaceId: string, reply: unknown): void {
+  if (!isOkObject(reply)) return;
+  const rawTasks = (reply as { tasks?: unknown }).tasks;
+  if (!Array.isArray(rawTasks)) return;
+  get().setMissions(parentWorkspaceId, rawTasks as WorkTask[]);
 }
 
 /**
@@ -158,6 +168,9 @@ export interface WorkTaskSlice {
   setMissions: (parentWorkspaceId: string, tasks: WorkTask[]) => void;
   /** 브리지 경유로 `task.mission.list`를 당겨 setMissions에 투영(best-effort). */
   refreshMissions: (parentWorkspaceId: string) => Promise<void>;
+  /** #2372 — refreshMissions for many parents in one batched `task.mission.list`
+   *  (falls back to one call per parent on a daemon without the batch). */
+  refreshMissionsForOwners: (parentWorkspaceIds: readonly string[]) => Promise<void>;
   /** 한 부모의 캐시를 제거(워크스페이스 닫힘 등) 후 역인덱스 재구성. */
   clearMissionsFor: (parentWorkspaceId: string) => void;
   /** paneGroupId로 미션 조회(사이드바/FleetCard 매칭). */
@@ -348,11 +361,17 @@ export const createWorkTaskSlice: StateCreator<
       // 데몬 미연결/일시 파이프 실패 — 다음 트리거가 재시도.
       return;
     }
-    const env = unwrapRpc(res);
-    if (!isOkObject(env)) return;
-    const rawTasks = (env as { tasks?: unknown }).tasks;
-    if (!Array.isArray(rawTasks)) return;
-    get().setMissions(parentWorkspaceId, rawTasks as WorkTask[]);
+    applyMissionListReply(get, parentWorkspaceId, unwrapRpc(res));
+  },
+
+  refreshMissionsForOwners: async (parentWorkspaceIds) => {
+    const bridge = readMissionRpc();
+    if (!bridge) return; // Same as refreshMissions: the next trigger heals it.
+    const replies = await listMissionsByOwner(
+      async (params) => unwrapRpc(await bridge.list(params)),
+      parentWorkspaceIds,
+    );
+    for (const [owner, reply] of replies) applyMissionListReply(get, owner, reply);
   },
 
   getMissionForPaneGroup: (paneGroupId) => {
