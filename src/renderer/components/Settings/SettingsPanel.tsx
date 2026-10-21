@@ -13,7 +13,7 @@ import { selectWorkspaceMuteRows } from '../../stores/selectors/workspaceProject
 import { LOCALE_OPTIONS, type Locale } from '../../i18n';
 import { useT } from '../../hooks/useT';
 import { useIpc } from '../../hooks/useIpc';
-import { THEME_OPTIONS, THEME_STYLES, type ThemeStyle, XTERM_PALETTE_OPTIONS, XTERM_PALETTES, builtinToCustom, DEFAULT_CUSTOM_THEME, deriveBuiltinPalette, deriveFullPalette, tokenAttrs, type BuiltinThemeId, type ThemeId, type XtermPaletteId, type UIThemeTokenKey, type TokenRole, type FullCssPalette } from '../../themes';
+import { THEME_OPTIONS, THEME_STYLES, type ThemeStyle, XTERM_PALETTE_OPTIONS, XTERM_PALETTES, builtinToCustom, DEFAULT_CUSTOM_THEME, PRE_CONTRAST_LIFT_TEXT, deriveBuiltinPalette, deriveFullPalette, tokenAttrs, type BuiltinThemeId, type ThemeId, type XtermPaletteId, type UIThemeTokenKey, type TokenRole, type FullCssPalette } from '../../themes';
 import {
   TAILWIND_PALETTE,
   TAILWIND_SHADES,
@@ -2824,14 +2824,19 @@ const TOKEN_INSPECT_ROLE: Record<UITokenSpec['key'], TokenRole> = {
  * Detect which built-in preset a CustomThemeColors most closely came from, by
  * exact-matching the 10 UI tokens. Returns null when it matches none (fully
  * hand-tuned). Used to label the header and as the per-token "overridden" base.
+ * A copy saved before a preset's text tokens were lifted for contrast
+ * (PRE_CONTRAST_LIFT_TEXT) still matches that preset.
  */
 export function detectBasePreset(colors: CustomThemeColors): BuiltinThemeId | null {
   for (const { value } of BASE_ON_OPTIONS) {
-    const preset = builtinToCustom(value);
-    const same = UI_TOKEN_GROUPS.every((g) =>
-      g.tokens.every(({ key }) => colors[key].toUpperCase() === preset[key].toUpperCase()),
-    );
-    if (same) return value;
+    const current = builtinToCustom(value);
+    const legacy = PRE_CONTRAST_LIFT_TEXT[value];
+    for (const preset of legacy ? [current, { ...current, ...legacy }] : [current]) {
+      const same = UI_TOKEN_GROUPS.every((g) =>
+        g.tokens.every(({ key }) => colors[key].toUpperCase() === preset[key].toUpperCase()),
+      );
+      if (same) return value;
+    }
   }
   return null;
 }

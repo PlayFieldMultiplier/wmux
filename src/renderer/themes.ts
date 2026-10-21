@@ -336,6 +336,22 @@ export const UI_THEME_TOKENS: Record<BuiltinThemeId, UIThemeTokens> = {
   },
 };
 
+// The text tokens these themes shipped with before the 2026-10-21 contrast
+// lift. A custom theme saved as an unmodified copy of one of them (including
+// the old DEFAULT_CUSTOM_THEME, Catppuccin) still reads as based on it.
+export const PRE_CONTRAST_LIFT_TEXT: Partial<Record<BuiltinThemeId, Pick<UIThemeTokens, 'textSub' | 'textMuted'>>> = {
+  paper: { textSub: '#3F3F48', textMuted: '#8A8A96' },
+  mono: { textSub: '#85868B', textMuted: '#626167' },
+  'mono-light': { textSub: '#7E7E7E', textMuted: '#9C9C9C' },
+  amber: { textSub: '#A5A29C', textMuted: '#66645F' },
+  'catppuccin-mocha': { textSub: '#BAC2DE', textMuted: '#585B70' },
+  monochrome: { textSub: '#B0B0B0', textMuted: '#404040' },
+  'stars-and-stripes': { textSub: '#A0B0C8', textMuted: '#3A5070' },
+  'red-dynasty': { textSub: '#C0A898', textMuted: '#5A3A30' },
+  nightowl: { textSub: '#9A9080', textMuted: '#5A5340' },
+  void: { textSub: '#909090', textMuted: '#333333' },
+};
+
 // ─── Attention orange (needs you) ───────────────────────────────────────────
 //
 // The one colour that means "an agent is waiting on you" (owner decision
@@ -630,12 +646,12 @@ export function deriveFullPalette(tokens: UIThemeTokens): FullCssPalette {
 export const BUILTIN_CSS_OVERRIDES: Partial<Record<BuiltinThemeId, Partial<FullCssPalette>>> = {
   amber: { bgOverlay: '#28282D', textSubtle: '#85827B' },
   'catppuccin-mocha': { bgOverlay: '#45475A', textSubtle: '#9399B2', textSub2: '#A6ADC8', accentCursor: '#F5E0DC' },
-  monochrome: { bgOverlay: '#2A2A2A', textSub2: '#888888', accentCursor: '#FFFFFF' },
+  monochrome: { bgOverlay: '#2A2A2A', textSub2: '#909090', accentCursor: '#FFFFFF' },
   'stars-and-stripes': { bgOverlay: '#2A3E5A', textSub2: '#8090A8', accentCursor: '#E89B4A' }, // 2-accent: orange-gold alive, distinct from pale-gold warning (accent stays blue = nav)
   'red-dynasty': { bgOverlay: '#4A2A2A', textSub2: '#A08878' },
   nightowl: { bgOverlay: '#38332A', textSub2: '#938976' },
   'gruvbox-dark-hard': { bgOverlay: '#504945', textSubtle: '#928374', textSub2: '#A89984' },
-  void: { bgOverlay: '#141414', textSub2: '#797979', accentCursor: '#FFFFFF' },
+  void: { bgOverlay: '#141414', textSub2: '#808080', accentCursor: '#FFFFFF' },
   hinomaru: { bgOverlay: '#D4CFC6', textSubtle: '#5C5651' },
   taegeuk: { textSubtle: '#4F4F62', textSub2: '#2A2A40', accentCursor: '#B87500' }, // 2-accent: rich gold alive, distinct from dark-gold warning (accent stays navy = nav)
 };

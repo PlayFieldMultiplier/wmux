@@ -98,6 +98,14 @@ describe('detectBasePreset', () => {
     }
   });
 
+  it('still matches a copy saved before the preset\'s text was lifted for contrast', () => {
+    // The old DEFAULT_CUSTOM_THEME was Catppuccin with muted #585B70.
+    expect(detectBasePreset({ ...builtinToCustom('catppuccin-mocha'), textMuted: '#585B70' })).toBe('catppuccin-mocha');
+    expect(detectBasePreset({ ...builtinToCustom('mono-light'), textSub: '#7E7E7E', textMuted: '#9C9C9C' })).toBe('mono-light');
+    // Mixing an old value with a current one is a hand-tuned theme.
+    expect(detectBasePreset({ ...builtinToCustom('mono-light'), textMuted: '#9C9C9C' })).toBeNull();
+  });
+
   it('returns null for hand-tuned colors that match no built-in', () => {
     const tweaked = { ...builtinToCustom('catppuccin-mocha'), accent: '#123456' };
     expect(detectBasePreset(tweaked)).toBeNull();
