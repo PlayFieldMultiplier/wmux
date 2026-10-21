@@ -1,0 +1,383 @@
+diff --git a/node_modules/node-pty/lib/windowsConoutConnection.js b/node_modules/node-pty/lib/windowsConoutConnection.js
+index 66da02a..a7e1fb0 100644
+--- a/node_modules/node-pty/lib/windowsConoutConnection.js
++++ b/node_modules/node-pty/lib/windowsConoutConnection.js
+@@ -2,42 +2,6 @@
+ /**
+  * Copyright (c) 2020, Microsoft Corporation (MIT License).
+  */
+-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+-    return new (P || (P = Promise))(function (resolve, reject) {
+-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+-        step((generator = generator.apply(thisArg, _arguments || [])).next());
+-    });
+-};
+-var __generator = (this && this.__generator) || function (thisArg, body) {
+-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+-    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+-    function verb(n) { return function (v) { return step([n, v]); }; }
+-    function step(op) {
+-        if (f) throw new TypeError("Generator is already executing.");
+-        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+-            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+-            if (y = 0, t) op = [op[0] & 2, t.value];
+-            switch (op[0]) {
+-                case 0: case 1: t = op; break;
+-                case 4: _.label++; return { value: op[1], done: false };
+-                case 5: _.label++; y = op[1]; op = [0]; continue;
+-                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+-                default:
+-                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+-                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+-                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+-                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+-                    if (t[2]) _.ops.pop();
+-                    _.trys.pop(); continue;
+-            }
+-            op = body.call(thisArg, _);
+-        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+-        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+-    }
+-};
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.ConoutConnection = void 0;
+ var worker_threads_1 = require("worker_threads");
+@@ -50,40 +14,128 @@ var eventEmitter2_1 = require("./eventEmitter2");
+  * the timer has started.
+  */
+ var FLUSH_DATA_INTERVAL = 1000;
++/**
++ * wmux patch (#2398): one conout drain worker for every pty in the process,
++ * instead of a worker per pty. Each worker is a whole V8 isolate (about 12 MB
++ * private on Windows), so a process with 120 ptys held 1.4 GB in idle drain
++ * workers. The worker only pipes each pty's conout pipe to a local pipe, which
++ * is asynchronous I/O, so one thread serves them all. Every pty keeps its own
++ * pair of sockets, so its data stays in order and `pipe` keeps per-pty
++ * backpressure. The worker exits when its last connection closes.
++ */
++var sharedWorker;
++var nextConnectionId = 1;
++var connections = new Map();
++function acquireWorker() {
++    if (sharedWorker) {
++        return sharedWorker;
++    }
++    var scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');
++    var worker = new worker_threads_1.Worker((0, path_1.join)(scriptPath, 'worker/conoutSocketWorker.js'));
++    sharedWorker = worker;
++    worker.on('message', function (message) {
++        var connection = message && connections.get(message.id);
++        if (!connection) {
++            return;
++        }
++        switch (message.type) {
++            case 1 /* ConoutWorkerMessage.READY */:
++                connection._ready();
++                return;
++            case 2 /* ConoutWorkerMessage.ERROR */:
++                // The worker has already closed this drain. A drain that fails
++                // before it is ready fails its pty's connection; either way the
++                // connection is gone, and the worker ends with its last one.
++                connection._fail(new Error(message.error));
++                releaseConnection(message.id);
++                return;
++            case 3 /* ConoutWorkerMessage.CLOSED */:
++                // The pty's conout pipe has ended and all of it reached the
++                // pty's output socket. After a shell exits by itself on the
++                // ConPTY DLL path nothing disposes the connection, so this is
++                // where it is let go.
++                releaseConnection(message.id);
++                return;
++            default:
++                console.warn('Unexpected ConoutWorkerMessage', message);
++        }
++    });
++    // An error is always followed by the worker's exit, which reports both.
++    var crashError;
++    worker.on('error', function (error) {
++        if (sharedWorker !== worker) {
++            return;
++        }
++        crashError = error;
++        connections.forEach(function (connection) { return connection._fail(error); });
++    });
++    worker.on('exit', function (code) {
++        if (sharedWorker !== worker) {
++            return;
++        }
++        sharedWorker = undefined;
++        // A worker that dies with connections still open takes their drains
++        // with it, and its conout clients cannot be attached again. Each one
++        // is dropped here, so the next pty starts a fresh worker and a late
++        // dispose() finds nothing to close. One still connecting fails its
++        // pty; a ready one has nothing left to tell (its agent no longer
++        // listens for errors): its output socket closed with the worker, and
++        // that ends its pty.
++        var open = Array.from(connections.values());
++        connections.clear();
++        if (open.length > 0) {
++            // It ends the output of every pty it drained at once, each with
++            // an exit that has no code, so say why in one place.
++            var message = "Conout worker exited unexpectedly (code ".concat(code, "), ending the output of ").concat(open.length, " pty connection(s)");
++            if (crashError) {
++                console.error(message, crashError);
++            }
++            else {
++                console.error(message);
++            }
++        }
++        open.forEach(function (connection) { return connection._fail(new Error("Conout worker exited before connecting (code ".concat(code, ")"))); });
++    });
++    return worker;
++}
++function releaseConnection(id) {
++    if (!connections.delete(id)) {
++        return;
++    }
++    var worker = sharedWorker;
++    if (!worker) {
++        return;
++    }
++    worker.postMessage({ type: 'close', id: id });
++    if (connections.size === 0) {
++        sharedWorker = undefined;
++        void worker.terminate();
++    }
++}
++/**
++ * Connects to and manages the lifecycle of the conout socket. This socket must be drained on
++ * another thread in order to avoid deadlocks where Conpty waits for the out socket to drain
++ * when `ClosePseudoConsole` is called. This happens when data is being written to the terminal when
++ * the pty is closed.
++ *
++ * See also:
++ * - https://github.com/microsoft/node-pty/issues/375
++ * - https://github.com/microsoft/vscode/issues/76548
++ * - https://github.com/microsoft/terminal/issues/1810
++ * - https://docs.microsoft.com/en-us/windows/console/closepseudoconsole
++ */
+ var ConoutConnection = /** @class */ (function () {
+     function ConoutConnection(_conoutPipeName, _useConptyDll) {
+-        var _this = this;
+         this._conoutPipeName = _conoutPipeName;
+         this._useConptyDll = _useConptyDll;
+         this._isDisposed = false;
+         this._isReady = false;
+         this._onReady = new eventEmitter2_1.EventEmitter2();
+         this._onError = new eventEmitter2_1.EventEmitter2();
+-        var workerData = {
+-            conoutPipeName: _conoutPipeName
+-        };
+-        var scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');
+-        this._worker = new worker_threads_1.Worker((0, path_1.join)(scriptPath, 'worker/conoutSocketWorker.js'), { workerData: workerData });
+-        this._worker.on('message', function (message) {
+-            switch (message) {
+-                case 1 /* ConoutWorkerMessage.READY */:
+-                    _this._isReady = true;
+-                    _this._onReady.fire();
+-                    return;
+-                default:
+-                    console.warn('Unexpected ConoutWorkerMessage', message);
+-            }
+-        });
+-        this._worker.on('error', function (error) {
+-            if (!_this._isDisposed && !_this._isReady) {
+-                _this._onError.fire(error);
+-            }
+-        });
+-        this._worker.on('exit', function (code) {
+-            if (!_this._isDisposed && !_this._isReady) {
+-                _this._onError.fire(new Error("Conout worker exited before connecting (code ".concat(code, ")")));
+-            }
+-        });
++        this._id = nextConnectionId++;
++        var worker = acquireWorker();
++        connections.set(this._id, this);
++        worker.postMessage({ type: 'open', id: this._id, conoutPipeName: _conoutPipeName });
+     }
+     Object.defineProperty(ConoutConnection.prototype, "onReady", {
+         get: function () { return this._onReady.event; },
+@@ -95,6 +147,15 @@ var ConoutConnection = /** @class */ (function () {
+         enumerable: false,
+         configurable: true
+     });
++    ConoutConnection.prototype._ready = function () {
++        this._isReady = true;
++        this._onReady.fire();
++    };
++    ConoutConnection.prototype._fail = function (error) {
++        if (!this._isDisposed && !this._isReady) {
++            this._onError.fire(error);
++        }
++    };
+     ConoutConnection.prototype.dispose = function () {
+         if (!this._useConptyDll && this._isDisposed) {
+             return;
+@@ -114,18 +175,9 @@ var ConoutConnection = /** @class */ (function () {
+         this._drainTimeout = setTimeout(function () { return _this._destroySocket(); }, FLUSH_DATA_INTERVAL);
+     };
+     ConoutConnection.prototype._destroySocket = function () {
+-        return __awaiter(this, void 0, void 0, function () {
+-            return __generator(this, function (_a) {
+-                switch (_a.label) {
+-                    case 0: return [4 /*yield*/, this._worker.terminate()];
+-                    case 1:
+-                        _a.sent();
+-                        return [2 /*return*/];
+-                }
+-            });
+-        });
++        releaseConnection(this._id);
+     };
+     return ConoutConnection;
+ }());
+ exports.ConoutConnection = ConoutConnection;
+-//# sourceMappingURL=windowsConoutConnection.js.map
+\ No newline at end of file
++//# sourceMappingURL=windowsConoutConnection.js.map
+diff --git a/node_modules/node-pty/lib/worker/conoutSocketWorker.js b/node_modules/node-pty/lib/worker/conoutSocketWorker.js
+index 92e16da..cf0b8da 100644
+--- a/node_modules/node-pty/lib/worker/conoutSocketWorker.js
++++ b/node_modules/node-pty/lib/worker/conoutSocketWorker.js
+@@ -6,17 +6,127 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ var worker_threads_1 = require("worker_threads");
+ var net_1 = require("net");
+ var conout_1 = require("../shared/conout");
+-var conoutPipeName = worker_threads_1.workerData.conoutPipeName;
+-var conoutSocket = new net_1.Socket();
+-conoutSocket.setEncoding('utf8');
+-conoutSocket.connect(conoutPipeName, function () {
+-    var server = (0, net_1.createServer)(function (workerSocket) {
++if (!worker_threads_1.parentPort) {
++    throw new Error('worker_threads parentPort is null');
++}
++var parentPort = worker_threads_1.parentPort;
++/**
++ * wmux patch (#2398): one worker drains the conout pipe of every pty in the
++ * process. The parent opens a drain per pty and closes it when the pty is
++ * disposed; each drain is the original worker's work, a conout socket piped to
++ * the local server the pty's output socket connects to. A failing drain is
++ * closed on its own, so one pty's pipe error never stops the others.
++ */
++var drains = new Map();
++function closeDrain(id) {
++    var drain = drains.get(id);
++    if (!drain) {
++        return;
++    }
++    drains.delete(id);
++    drain.conoutSocket.destroy();
++    drain.server.close();
++    drain.clients.forEach(function (client) { return client.destroy(); });
++}
++function failDrain(id, error) {
++    closeDrain(id);
++    // Told before or after READY: the parent releases the connection.
++    parentPort.postMessage({ type: 2 /* ConoutWorkerMessage.ERROR */, id: id, error: String(error && error.message || error) });
++}
++/**
++ * The conout pipe has ended and every client has taken all of it: nothing can
++ * flow through this drain again. On the ConPTY DLL path nothing else closes it
++ * after the shell exits by itself, so the drain says so and the parent
++ * releases the connection.
++ */
++function finishDrain(id) {
++    closeDrain(id);
++    parentPort.postMessage({ type: 3 /* ConoutWorkerMessage.CLOSED */, id: id });
++}
++function openDrain(id, conoutPipeName) {
++    var conoutSocket = new net_1.Socket();
++    var drain = { conoutSocket: conoutSocket, server: undefined, clients: new Set(), connected: false, ended: false };
++    drain.server = (0, net_1.createServer)(function (workerSocket) {
++        drain.clients.add(workerSocket);
++        drain.connected = true;
++        workerSocket.on('error', function () { return workerSocket.destroy(); });
+         conoutSocket.pipe(workerSocket);
++        // Added after pipe()'s own 'close' listener, which unpipes and so
++        // pauses the conout socket.
++        workerSocket.on('close', function () {
++            drain.clients.delete(workerSocket);
++            if (drains.get(id) !== drain || drain.clients.size > 0) {
++                return;
++            }
++            if (drain.ended) {
++                finishDrain(id);
++                return;
++            }
++            // Nobody reads this pty's output any more, but ConPTY must still be
++            // able to write it: a conout pipe left full blocks the console, and
++            // ClosePseudoConsole with it (node-pty#375). Drain it to nowhere.
++            conoutSocket.resume();
++        });
++    });
++    drains.set(id, drain);
++    var fail = function (error) {
++        if (drains.get(id) !== drain) {
++            return;
++        }
++        failDrain(id, error);
++    };
++    conoutSocket.on('error', fail);
++    drain.server.on('error', fail);
++    // 'end' comes once everything read from the pipe has been handed to the
++    // clients; pipe() ends them after it, so they finish what they hold first.
++    conoutSocket.on('end', function () {
++        if (drains.get(id) !== drain) {
++            return;
++        }
++        drain.ended = true;
++        // Ended before any client connected: one may still come and take
++        // what the pipe left, so the drain stays. On the ConPTY DLL path a
++        // pty killed before READY never connects one (kill() disposes only
++        // on output data), so its drain is held until shutdown. That leak is
++        // known and accepted: one drain, where upstream held a whole worker.
++        if (drain.connected && drain.clients.size === 0) {
++            finishDrain(id);
++        }
+     });
+-    server.listen((0, conout_1.getWorkerPipeName)(conoutPipeName));
+-    if (!worker_threads_1.parentPort) {
+-        throw new Error('worker_threads parentPort is null');
++    // Raw bytes: the pty's output socket decodes them, so this one thread does
++    // not decode and re-encode every pty's output.
++    conoutSocket.connect(conoutPipeName, function () {
++        // Outside the message handler's try/catch: a throw here would end the
++        // worker and every pty's drain with it. It fails this drain only.
++        try {
++            drain.server.listen((0, conout_1.getWorkerPipeName)(conoutPipeName), function () {
++                if (drains.get(id) !== drain) {
++                    return;
++                }
++                parentPort.postMessage({ type: 1 /* ConoutWorkerMessage.READY */, id: id });
++            });
++        }
++        catch (error) {
++            fail(error);
++        }
++    });
++}
++parentPort.on('message', function (message) {
++    var id = message && message.id;
++    try {
++        switch (message && message.type) {
++            case 'open':
++                openDrain(id, message.conoutPipeName);
++                return;
++            case 'close':
++                closeDrain(id);
++                return;
++        }
++    }
++    catch (error) {
++        // A throw out of this handler would end the worker, and with it the
++        // drain of every pty in the process. It fails this message's drain only.
++        failDrain(id, error);
+     }
+-    worker_threads_1.parentPort.postMessage(1 /* ConoutWorkerMessage.READY */);
+ });
+-//# sourceMappingURL=conoutSocketWorker.js.map
+\ No newline at end of file
++//# sourceMappingURL=conoutSocketWorker.js.map
