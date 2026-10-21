@@ -398,6 +398,8 @@ describe('cross-host delivery, end to end', () => {
       { kind: 'file', file: { mimeType: 'image/png', uri: pathToFileURL(received).href }, metadata: expect.objectContaining({ sha256: staged.images[0].sha256, width: 12, height: 7 }) },
     ]);
     expect(fs.readFileSync(received).equals(fs.readFileSync(staged.images[0].path))).toBe(true);
+    // Main hands B's renderer B's own file, to end the paste with.
+    expect(taskSends(b)[0]['remoteImages']).toEqual([{ sha256: staged.images[0].sha256, mediaType: 'image/png', path: received }]);
     // The upload was claimed: nothing left in B's staging.
     expect(fs.readdirSync(path.join(b.dir, 'a2a', 'blobs-in', a.hostId))).toEqual([]);
 

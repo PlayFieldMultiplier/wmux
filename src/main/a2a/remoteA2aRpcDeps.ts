@@ -1,4 +1,4 @@
-import { A2A_REMOTE_RPC, type A2aRemoteTarget } from '../../shared/a2aRemoteDelivery';
+import { A2A_REMOTE_RPC, type A2aRemoteTarget, type A2aStagedImage } from '../../shared/a2aRemoteDelivery';
 import type { A2aLinkRecordV1 } from '../../shared/a2aRemote';
 import type { A2aRemoteHostStatus } from '../../shared/rpc';
 import type { A2aRemotePeerHint, RemoteA2aRpcDeps } from '../pipe/handlers/a2a.rpc';
@@ -21,11 +21,13 @@ interface ExposedSeen { panes: number; brain: boolean; at: number }
 export function daemonRemoteA2aRpcDeps(
   getDaemonClient: () => DaemonRpc | null,
 ): RemoteA2aRpcDeps {
-  const op = async (method: string, params: object): Promise<{ ok: true; taskId: string } | { ok: false; error: string }> => {
+  const op = async (method: string, params: object): Promise<{ ok: true; taskId: string; note?: string } | { ok: false; error: string }> => {
     const dc = getDaemonClient();
     if (!dc) return { ok: false, error: 'unavailable' };
     const res = await dc.rpc(method, { ...params });
-    if (isRecord(res) && res.ok === true && typeof res.taskId === 'string') return { ok: true, taskId: res.taskId };
+    if (isRecord(res) && res.ok === true && typeof res.taskId === 'string') {
+      return { ok: true, taskId: res.taskId, ...(typeof res.note === 'string' ? { note: res.note } : {}) };
+    }
     return { ok: false, error: isRecord(res) && typeof res.error === 'string' ? res.error : 'unavailable' };
   };
   // Asking a joined PC what it shows goes over the network, so a2a.discover
@@ -65,6 +67,13 @@ export function daemonRemoteA2aRpcDeps(
     reply: (input) => op(A2A_REMOTE_RPC.reply, input),
     state: (input) => op(A2A_REMOTE_RPC.state, input),
     read: async (input) => getDaemonClient()?.rpc(A2A_REMOTE_RPC.read, { ...input }),
+    stageImages: async (input) => {
+      const dc = getDaemonClient();
+      if (!dc) return { ok: false, error: 'unavailable: the wmux daemon is not connected' };
+      const res = await dc.rpc(A2A_REMOTE_RPC.stageImages, { ...input });
+      if (isRecord(res) && res.ok === true && Array.isArray(res.images)) return { ok: true, images: res.images as A2aStagedImage[] };
+      return { ok: false, error: isRecord(res) && typeof res.error === 'string' ? res.error : 'unavailable' };
+    },
     listPeers: async (workspaceId, panesOf) => {
       const dc = getDaemonClient();
       return dc ? listPeerHints(dc, workspaceId, (hostId) => exposedOf(dc, hostId), panesOf) : [];

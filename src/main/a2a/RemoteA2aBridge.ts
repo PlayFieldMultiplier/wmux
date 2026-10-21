@@ -5,6 +5,7 @@ import {
   A2A_REMOTE_RPC,
   BRAIN_UNAVAILABLE,
   canonicalPcName,
+  deliveredImagesOf,
   isBrainRemoteTask,
   localSideOf,
   type A2aRemoteDeliveryResult,
@@ -377,12 +378,15 @@ export class RemoteA2aBridge {
 
   private taskParams(task: Task, marker: A2aRemoteTaskState, resnapshot: boolean): Record<string, unknown> {
     const first = task.history[0]?.parts.find((p) => p.kind === 'text');
+    const images = deliveredImagesOf(task.history[0]?.parts);
     return {
       workspaceId: task.metadata.to.workspaceId,
       to: task.metadata.to.workspaceId,
       ...(task.metadata.to.paneId ? { paneId: task.metadata.to.paneId } : {}),
       title: task.metadata.title,
       message: first && first.kind === 'text' ? first.text : '',
+      // This PC's own files (or why not): the renderer ends the paste with them.
+      ...(images.length > 0 ? { remoteImages: images } : {}),
       presetTaskId: task.id,
       remoteFrom: { workspaceId: task.metadata.from.workspaceId, name: task.metadata.from.name },
       // The contract marker only: local bookkeeping stays in the daemon.

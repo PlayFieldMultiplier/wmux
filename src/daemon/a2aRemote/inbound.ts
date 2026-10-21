@@ -284,7 +284,8 @@ async function messageParts(
       parts.push({
         kind: 'file',
         file: { mimeType: ref.mediaType, uri: pathToFileURL(got.path).href },
-        metadata: { ...meta, width: got.info.width, height: got.info.height },
+        // `path` is how the receiving agent is told where it is (the paste and a2a_task_query).
+        metadata: { ...meta, width: got.info.width, height: got.info.height, path: got.path },
       });
     } else {
       images.pullAttempts.delete(pullKey(peer.hostId, env, ref));

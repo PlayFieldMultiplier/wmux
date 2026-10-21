@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { deliveredImagesOf, imageFooter, parseDeliveredImages, withImageFooter } from '../a2aRemoteDelivery';
 import { moaRemoteTasks } from '../a2aRemoteDelivery';
 import { summarizeTask } from '../a2aTaskQueryView';
 import {
@@ -210,5 +211,30 @@ describe('parseA2aRemoteImageRefs', () => {
     expect(parseA2aRemoteImageRefs([{ ...ref(1), mediaType: 'image/gif' }])).toBeNull();
     expect(parseA2aRemoteImageRefs([{ ...ref(1), sha256: 'A'.repeat(64) }])).toBeNull();
     expect(parseA2aRemoteImageRefs([{ ...ref(1), bytes: 0 }])).toBeNull();
+  });
+});
+
+describe('image footer of a delivered message', () => {
+  const sha = (c: string): string => c.repeat(64);
+
+  it('lists the receiver\'s paths quoted, then what did not arrive', () => {
+    const images = deliveredImagesOf([
+      { kind: 'text', text: 'hi' },
+      { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: sha('a'), path: "/u/it's.png" } },
+      { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: sha('b'), path: 'C:\\Users\\me\\b.png' } },
+      { kind: 'file', file: { mimeType: 'image/jpeg' }, metadata: { sha256: sha('c'), notReceived: 'full' } },
+      { kind: 'file', file: { name: 'no-hash' } },
+    ]);
+    expect(images).toHaveLength(3);
+    expect(withImageFooter('hi', images)).toBe(
+      "hi\n\n[wmux] 2 images attached, saved on this PC (read them by path):\n'/u/it'\\''s.png'\n\"C:\\Users\\me\\b.png\"\n[wmux] 1 image could not be received",
+    );
+    expect(imageFooter([])).toBe('');
+    expect(withImageFooter('just text', [])).toBe('just text');
+  });
+
+  it('takes only well-formed entries from a param', () => {
+    expect(parseDeliveredImages([{ sha256: sha('a'), path: '/x.png' }, { sha256: 'nope', path: '/y.png' }, null, 'x'])).toEqual([{ sha256: sha('a'), path: '/x.png' }]);
+    expect(parseDeliveredImages({})).toEqual([]);
   });
 });

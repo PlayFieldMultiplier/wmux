@@ -9,7 +9,7 @@
 // Pure module: no node:* imports (the renderer imports it).
 
 import { A2A_BRAIN_ALIAS, isRemoteTaskId, type A2aEndpointKind, type A2aRemoteReceipt, type A2aRemoteTaskMarkerV1, type HostId } from './a2aRemote';
-import { isTaskState, type Task, type TaskState } from './types';
+import { isTaskState, type Part, type Task, type TaskState } from './types';
 
 /**
  * Daemon RPC method names for the delivery layer. Registered in the daemon's
@@ -333,4 +333,97 @@ export function moaRemoteTasks(summaries: readonly unknown[]): MoaRemoteTask[] {
   }
   // ISO-8601 sorts as text.
   return out.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')).slice(0, MOA_REMOTE_TASKS_MAX);
+}
+
+// ─── Images a delivered message carries (`images.1`, and same-PC sends) ─────
+
+/**
+ * One image of a delivered message: the receiver's own file (`path`, made on
+ * this PC, never taken from a peer), or why it is not here.
+ */
+export interface A2aDeliveredImage {
+  sha256: string;
+  mediaType?: string;
+  path?: string;
+  notReceived?: string;
+}
+
+/** The images of a message's parts: its file parts with a hash, in order. */
+export function deliveredImagesOf(parts: readonly Part[] | undefined): A2aDeliveredImage[] {
+  const out: A2aDeliveredImage[] = [];
+  for (const p of parts ?? []) {
+    if (!p || p.kind !== 'file' || typeof p.metadata?.['sha256'] !== 'string') continue;
+    const sha256 = p.metadata['sha256'];
+    const mediaType = typeof p.file?.mimeType === 'string' ? { mediaType: p.file.mimeType } : {};
+    const path = p.metadata['path'];
+    const missing = p.metadata['notReceived'];
+    if (typeof path === 'string' && path) out.push({ sha256, ...mediaType, path });
+    else out.push({ sha256, ...mediaType, notReceived: typeof missing === 'string' ? missing : 'missing' });
+  }
+  return out;
+}
+
+/** The ledger file parts for delivered images (what `deliveredImagesOf` reads back). */
+export function deliveredImageParts(images: readonly A2aDeliveredImage[]): Part[] {
+  return images.map((i) => ({
+    kind: 'file' as const,
+    file: i.mediaType ? { mimeType: i.mediaType } : {},
+    metadata: { sha256: i.sha256, ...(i.path ? { path: i.path } : { notReceived: i.notReceived ?? 'missing' }) },
+  }));
+}
+
+/** A `remoteImages` / `attachments` param main handed the renderer: well-formed entries only. */
+export function parseDeliveredImages(v: unknown): A2aDeliveredImage[] {
+  if (!Array.isArray(v)) return [];
+  const out: A2aDeliveredImage[] = [];
+  for (const raw of v.slice(0, 4)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(r.sha256)) continue;
+    const mediaType = typeof r.mediaType === 'string' ? { mediaType: r.mediaType } : {};
+    if (typeof r.path === 'string' && r.path) out.push({ sha256: r.sha256, ...mediaType, path: r.path });
+    else out.push({ sha256: r.sha256, ...mediaType, notReceived: typeof r.notReceived === 'string' ? r.notReceived : 'missing' });
+  }
+  return out;
+}
+
+/** What a one-line nudge adds for a message with images (the paths are in a2a_task_query). */
+export function imagesNudgeSuffix(images: readonly A2aDeliveredImage[]): string {
+  return images.length > 0 ? ` — ${countImages(images.length)} attached` : '';
+}
+
+/** "1 image" / "3 images". */
+export function countImages(n: number): string {
+  return n === 1 ? '1 image' : `${n} images`;
+}
+
+/**
+ * The lines a pasted message ends with, so the receiving agent can read its
+ * images by path: one path per line (the pane's own spelling of it via
+ * `panePath`), then how many could not be received. Empty when there are
+ * none. Every path is quoted: a pane that takes one line folds the newlines
+ * into `␤`, and the quotes still say where each path ends.
+ */
+export function imageFooter(images: readonly A2aDeliveredImage[], panePath: (path: string) => string = (p) => p): string {
+  const here = images.filter((i) => i.path);
+  const lost = images.length - here.length;
+  const lines: string[] = [];
+  if (here.length > 0) {
+    lines.push(`[wmux] ${countImages(here.length)} attached, saved on this PC (read ${here.length === 1 ? 'it' : 'them'} by path):`);
+    for (const i of here) lines.push(quotePath(panePath(i.path as string)));
+  }
+  if (lost > 0) lines.push(`[wmux] ${countImages(lost)} could not be received`);
+  return lines.join('\n');
+}
+
+/** A POSIX path in single quotes, a Windows one in double quotes (which it cannot contain). */
+function quotePath(p: string): string {
+  return p.startsWith('/') ? `'${p.replace(/'/g, `'\\''`)}'` : `"${p}"`;
+}
+
+/** `text` with its image footer, if any. */
+export function withImageFooter(text: string, images: readonly A2aDeliveredImage[], panePath?: (path: string) => string): string {
+  const footer = imageFooter(images, panePath);
+  if (!footer) return text;
+  return text ? `${text}\n\n${footer}` : footer;
 }

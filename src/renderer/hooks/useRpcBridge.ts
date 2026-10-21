@@ -63,7 +63,23 @@ import { paneAddressOfPty, paneHasOtherOpenA2aTask } from './a2aFreshContext';
 import { publishA2aTask } from '../events/publisher';
 import { isReceiverPaneGone } from '../../shared/a2aOrphanedTask';
 import { isRemoteTaskId, type A2aRemoteTaskMarkerV1 } from '../../shared/a2aRemote';
-import { A2A_REMOTE_NOTIFY_METHOD, isRemoteWorkspaceId, localSideOf, remoteWorkspaceId, sanitizeRemoteText, type A2aRemoteDeliveryResult, type A2aRemoteHeldReason, type A2aRemoteTaskState } from '../../shared/a2aRemoteDelivery';
+import {
+  A2A_REMOTE_NOTIFY_METHOD,
+  deliveredImageParts,
+  deliveredImagesOf,
+  imagesNudgeSuffix,
+  isRemoteWorkspaceId,
+  localSideOf,
+  parseDeliveredImages,
+  remoteWorkspaceId,
+  sanitizeRemoteText,
+  withImageFooter,
+  type A2aDeliveredImage,
+  type A2aRemoteDeliveryResult,
+  type A2aRemoteHeldReason,
+  type A2aRemoteTaskState,
+} from '../../shared/a2aRemoteDelivery';
+import { imagePathForPane } from '../../shared/imagePaste';
 import { resolvePaneAddress, activePaneTerminalPty, activePaneTerminalUnstarted, resolveUnaddressedDelivery, paneHasDetectedAgent, describeAmbiguousDelivery, wsMetadataMayStandIn, NO_AGENT_PANE_HINT, NO_TARGET_PTY_HINT, decideSameWsSend, decideReplyDelivery, REPLY_SUPPRESS_HINTS, submitReceiptFields, countRoundTrips, maxSideMessages, REPLY_ROUND_CAP, isTerminalPtyInLeaves, resolveSelfPaneIdentity, resolveSenderPaneAddress, resolvePaneRole, findLeafPanes, detectedAgentTuiSlug, type PaneAddress } from './a2aAddressing';
 import { resolveWorkspaceTarget } from './workspaceTargeting';
 import { destroyRemoteSessions, destroySurfaceRemoteSession, destroyWorkspaceRemoteSessions } from '../utils/remoteSessionTeardown';
@@ -854,6 +870,29 @@ export function nudgeTitlePreview(title: string): string {
 // arrived; `title` is passed only when the pane is re-checked as a live agent
 // at write time. An untitled task gets no preview at all: the body is never a
 // stand-in for the title. The full id lets the receiver fetch the task directly.
+/**
+ * A path as the shell of pane `ptyId` reads it: a WSL pane on Windows gets the
+ * `/mnt/<drive>/...` spelling of a Windows path. Unknown pane: unchanged.
+ */
+function panePathFor(ptyId: string | null | undefined): (path: string) => string {
+  let shell: string | undefined;
+  if (ptyId) {
+    for (const ws of useStore.getState().workspaces) {
+      for (const leaf of getWorkspaceLeafPanes(ws)) {
+        const surface = leaf.surfaces.find((su) => su.ptyId === ptyId);
+        if (surface) shell = surface.shell;
+      }
+    }
+  }
+  const platform = typeof window !== 'undefined' ? window.electronAPI?.platform : undefined;
+  return (path) => imagePathForPane(path, { platform, shellPath: shell });
+}
+
+/** A pasted body with the images' footer, in the spelling of the pane it goes to. */
+function bodyWithImages(text: string, images: readonly A2aDeliveredImage[]): (ptyId: string) => string {
+  return (ptyId) => withImageFooter(text, images, panePathFor(ptyId));
+}
+
 export function buildA2aNudge(taskId: string, senderName: string, kind: 'new' | 'reply', title?: string): string {
   const id8 = taskId.replace(/^task[-_]?/, '').slice(0, 8);
   const what = kind === 'new' ? 'new A2A task' : 'reply on A2A task';
@@ -992,8 +1031,9 @@ async function handleRemoteTaskSend(params: RpcParams): Promise<A2aRemoteDeliver
     if (stored.delivered === true) return { ok: true, delivered: true, duplicate: true };
   } else {
     const rawMessage = typeof params.message === 'string' ? params.message : '';
+    const images = parseDeliveredImages(params.remoteImages);
     let message: string;
-    try { message = validateMessage(sanitizeRemoteText(rawMessage)); } catch (e) {
+    try { message = rawMessage || images.length === 0 ? validateMessage(sanitizeRemoteText(rawMessage)) : ''; } catch (e) {
       return { error: `a2a.task.send: ${e instanceof Error ? e.message : 'invalid'}` };
     }
     const toWsId = typeof params.to === 'string' ? params.to : '';
@@ -1009,7 +1049,7 @@ async function handleRemoteTaskSend(params: RpcParams): Promise<A2aRemoteDeliver
       title,
       from: { workspaceId: from.workspaceId, name: from.name },
       to: { workspaceId: target.id, name: target.name, paneId: addr.paneId, surfaceId: addr.surfaceId, ptyId: addr.ptyId },
-      history: [{ kind: 'message', messageId: marker.messageId, role: 'user', parts: [{ kind: 'text', text: message }] }],
+      history: [{ kind: 'message', messageId: marker.messageId, role: 'user', parts: [...(message ? [{ kind: 'text' as const, text: message }] : []), ...deliveredImageParts(images)] }],
       artifacts: [],
       remote: { ...marker, delivered: false },
     });
@@ -1031,6 +1071,8 @@ async function handleRemoteTaskSend(params: RpcParams): Promise<A2aRemoteDeliver
   const senderName = sanitizeRemoteText(t.metadata.from.name);
   const firstPart = t.history[0]?.parts.find((p) => p.kind === 'text');
   const body = sanitizeRemoteText(firstPart && firstPart.kind === 'text' ? firstPart.text : '');
+  // This PC's own image files (main reads them off the daemon ledger), ending the paste.
+  const images = deliveredImagesOf(t.history[0]?.parts);
   const liveMeta = deliveryLiveMeta(store.surfaceAgent, pty, target.ws.metadata);
   // Always the gated delivery: wait for the person to stop typing, re-check
   // the agent before the paste and the Enter, never past main's deadline.
@@ -1041,8 +1083,8 @@ async function handleRemoteTaskSend(params: RpcParams): Promise<A2aRemoteDeliver
     ...(typeof params.deliveryDeadlineAt === 'number' ? { deadlineAt: params.deliveryDeadlineAt } : {}),
   };
   const result = await writeRemoteDelivery({ ...t.metadata.to }, target, () => (isLiveTuiAgent(liveMeta)
-    ? deliverPtyNudge(target.ws, (p) => buildA2aNudge(taskId, senderName, 'new', a2aFormatOptionsFor(p).multiline ? t.metadata.title : undefined), pty, false, gated)
-    : deliverPtyNotification(target.ws, senderName, body, pty, false, gated)));
+    ? deliverPtyNudge(target.ws, (p) => buildA2aNudge(taskId, senderName, 'new', a2aFormatOptionsFor(p).multiline ? t.metadata.title : undefined) + imagesNudgeSuffix(images), pty, false, gated)
+    : deliverPtyNotification(target.ws, senderName, bodyWithImages(body, images)(pty), pty, false, gated)));
   if (result.ok === true && result.delivered) useStore.getState().markRemoteTaskDelivered(taskId);
   return result;
 }
@@ -1080,12 +1122,13 @@ async function handleRemoteNotify(params: RpcParams): Promise<A2aRemoteDeliveryR
   const msg = task.history.find((h) => h.messageId === messageId);
   const part = msg?.parts.find((p) => p.kind === 'text');
   const text = sanitizeRemoteText(part && part.kind === 'text' ? part.text : '');
-  if (!text) return { error: `${A2A_REMOTE_NOTIFY_METHOD}: the reply has no text` };
+  const images = deliveredImagesOf(msg?.parts);
+  if (!text && images.length === 0) return { error: `${A2A_REMOTE_NOTIFY_METHOD}: the reply has no text` };
   const senderName = sanitizeRemoteText(task.metadata[side === 'from' ? 'to' : 'from'].name);
   const liveMeta = deliveryLiveMeta(useStore.getState().surfaceAgent, target.pty, target.ws.metadata);
   return writeRemoteDelivery({ ...anchor, ptyId: target.pty }, target, () => (isLiveTuiAgent(liveMeta)
-    ? deliverPtyNudge(target.ws, buildA2aNudge(task.id, senderName, 'reply'), target.pty, false)
-    : deliverPtyNotification(target.ws, senderName, text, target.pty, false)));
+    ? deliverPtyNudge(target.ws, buildA2aNudge(task.id, senderName, 'reply') + imagesNudgeSuffix(images), target.pty, false)
+    : deliverPtyNotification(target.ws, senderName, bodyWithImages(text, images)(target.pty), target.pty, false)));
 }
 
 // ---------------------------------------------------------------------------
@@ -3136,6 +3179,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         metadata: { mimeType: typeof params.dataMimeType === 'string' ? params.dataMimeType : 'application/json' },
       });
     }
+    // Images: main's checked copies on this PC (never the caller's own paths).
+    const images = parseDeliveredImages(params.attachments);
+    parts.push(...deliveredImageParts(images));
 
     if (taskId && executeRequested) {
       return { error: 'a2a.task.send: execute is only supported for new tasks' };
@@ -3329,13 +3375,13 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
               mode = 'no-agent-pane';
             } else if (decision.sameWs) {
               // Same-ws sibling: pointer-only nudge (no full-body injection).
-              write = await deliverPtyNudge(targetWs, buildA2aNudge(taskId, senderName, 'reply'), replyPty, operator);
+              write = await deliverPtyNudge(targetWs, buildA2aNudge(taskId, senderName, 'reply') + imagesNudgeSuffix(images), replyPty, operator);
             } else {
               const liveMeta = deliveryLiveMeta(store.surfaceAgent, replyPty, targetWs.metadata);
               if (!silentExplicit && isLiveTuiAgent(liveMeta)) {
-                write = await deliverPtyNudge(targetWs, buildA2aNudge(taskId, senderName, 'reply'), replyPty, operator);
+                write = await deliverPtyNudge(targetWs, buildA2aNudge(taskId, senderName, 'reply') + imagesNudgeSuffix(images), replyPty, operator);
               } else {
-                write = await deliverPtyNotification(targetWs, senderName, message, replyPty, operator);
+                write = await deliverPtyNotification(targetWs, senderName, withImageFooter(message, images, panePathFor(replyPty)), replyPty, operator);
                 mode = 'notification';
               }
             }
@@ -3623,9 +3669,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       } else if (!silentExplicit && isLiveTuiAgent(liveMeta)) {
         // #1680 — this branch is the task boundary: the pane's role may ask
         // for a fresh conversation before the task lands (both modes).
-        write = await deliverPtyNudge(target, (pty) => buildA2aNudge(newTaskId, fromName, 'new', a2aFormatOptionsFor(pty).multiline ? title : undefined), explicitPty, operator, { taskId: newTaskId, ...gated });
+        write = await deliverPtyNudge(target, (pty) => buildA2aNudge(newTaskId, fromName, 'new', a2aFormatOptionsFor(pty).multiline ? title : undefined) + imagesNudgeSuffix(images), explicitPty, operator, { taskId: newTaskId, ...gated });
       } else {
-        write = await deliverPtyNotification(target, fromName, message, explicitPty, operator, { taskId: newTaskId, ...gated });
+        write = await deliverPtyNotification(target, fromName, withImageFooter(message, images, panePathFor(explicitPty)), explicitPty, operator, { taskId: newTaskId, ...gated });
         mode = 'notification';
       }
       const wrotePty = write.ptyId;

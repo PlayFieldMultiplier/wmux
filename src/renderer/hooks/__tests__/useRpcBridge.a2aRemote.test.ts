@@ -180,6 +180,22 @@ describe('local sends keep their behaviour', () => {
     expect(r.taskId).not.toBe(RT);
     expect(r.taskId).toMatch(/^task-/);
   });
+
+  it('a local send with main\'s staged images stores them and ends the paste with their paths', async () => {
+    useStore.setState({
+      workspaces: [target(), { id: 'ws-sender', name: 'Sender', rootPane: leaf('pane-s', 'pty-s'), activePaneId: 'pane-s' } as Workspace],
+    });
+    useStore.getState().setSurfaceAgent(PINNED_PTY, 'Claude Code', 'complete', 'claude');
+    const staged = { path: '/Users/me/.wmux/uploads/a2a/local/d.png', sha256: 'd'.repeat(64), mediaType: 'image/png', bytes: 9, width: 1, height: 1, name: 'd.png' };
+    const r = (await handleRpcMethod('a2a.task.send', {
+      workspaceId: 'ws-sender', to: 'ws-target', paneId: 'pane-pinned', message: BODY, attachments: [staged],
+    })) as Result;
+    expect(r.ok).toBe(true);
+    expect(useStore.getState().getTask(r.taskId!)!.history[0].parts).toContainEqual(
+      { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: staged.sha256, path: staged.path } },
+    );
+    expect(gate.mock.calls.at(-1)?.[1]).toContain("'/Users/me/.wmux/uploads/a2a/local/d.png'");
+  });
 });
 
 // A reply / state the peer sent into a remote task (main's bridge, a2a.remote.notify).
@@ -257,5 +273,50 @@ describe('remote reply and state delivery', () => {
   it('refuses an item the task does not owe', async () => {
     expect((await notify(outboundTask(), 'nope')).error).toBeDefined();
     expect((await notify({ ...outboundTask(), id: 'task-1' }, 'r1')).error).toBeDefined();
+  });
+
+  it('an image-only reply is pasted as its footer: the receiver\'s own paths, then what did not arrive', async () => {
+    useStore.getState().setSurfaceAgent(PINNED_PTY, 'Claude Code', 'complete', 'claude');
+    const task = outboundTask({ inbox: [{ messageId: 'r1', kind: 'reply', delivered: false }] });
+    task.history[1] = {
+      kind: 'message',
+      messageId: 'r1',
+      role: 'agent',
+      parts: [
+        { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: 'a'.repeat(64), path: '/Users/me/.wmux/uploads/a2a/h/a.png' } },
+        { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: 'b'.repeat(64), notReceived: 'missing' } },
+      ],
+    };
+    expect(await notify(task, 'r1')).toMatchObject({ delivered: true });
+    const pasted = gate.mock.calls[0][1] as string;
+    // One-line pane: the newlines fold into the envelope's line marker, the quotes still bound the path.
+    expect(pasted).toContain("[wmux] 1 image attached, saved on this PC (read it by path):\u2424'/Users/me/.wmux/uploads/a2a/h/a.png'\u2424");
+    expect(pasted).toContain('[wmux] 1 image could not be received');
+  });
+});
+
+describe('images on a delivered task', () => {
+  const IMG = { sha256: 'c'.repeat(64), mediaType: 'image/png', path: 'C:\\Users\\me\\.wmux\\uploads\\a2a\\h\\c.png' };
+
+  it('a live agent\'s pointer says images came; the task keeps them as file parts', async () => {
+    expect(await send({ remoteImages: [IMG] })).toMatchObject({ delivered: true });
+    expect(gate.mock.calls[0][1]).toMatch(/1 image attached$/);
+    expect(useStore.getState().getTask(RT)!.history[0].parts).toEqual([
+      { kind: 'text', text: BODY },
+      { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: IMG.sha256, path: IMG.path } },
+    ]);
+  });
+
+  it('a pasted body names each image the way the pane reads it (a WSL pane on Windows: /mnt/c)', async () => {
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.platform = 'win32';
+    const wsl = target();
+    const pinned = (wsl.rootPane as PaneBranch).children[1] as PaneLeaf;
+    pinned.surfaces[0] = { ...pinned.surfaces[0], shell: 'C:\\Windows\\System32\\wsl.exe' };
+    useStore.setState({ workspaces: [wsl] });
+    useStore.getState().setSurfaceAgent(PINNED_PTY, 'Claude Code', 'complete', 'claude');
+    expect(await send({ remoteImages: [IMG] })).toMatchObject({ delivered: true });
+    const pasted = gate.mock.calls[0][1] as string;
+    expect(pasted).toContain(BODY);
+    expect(pasted).toContain("'/mnt/c/Users/me/.wmux/uploads/a2a/h/c.png'");
   });
 });
