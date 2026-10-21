@@ -460,6 +460,63 @@ describe('a2a.channel.rpc — mutating routing (capability a2a.channel.send)', (
     });
   });
 
+  // #2372 — the batched read names many owners at once. The stamps in
+  // forward() pin only the single verifiedWorkspaceId, so the array must be
+  // the operator's alone or a pane agent could list any owner's missions.
+  describe('the batched task.mission.list (verifiedWorkspaceIds) is operator-only', () => {
+    it('forwards the operator\'s batch to the daemon as sent', async () => {
+      const daemon = makeFakeDaemon((method, p) => {
+        expect(method).toBe('task.mission.list');
+        expect(p).toEqual({ verifiedWorkspaceIds: ['ws-a', 'ws-b'] });
+        return { ok: true, results: [] };
+      });
+      const router = setupHandlerRouter(daemon);
+      const res = await router.dispatch(
+        { id: 'mb-1', method: 'task.mission.list', params: { verifiedWorkspaceIds: ['ws-a', 'ws-b'] } },
+        { operator: true },
+      );
+      expect(res.ok && (res.result as { ok: boolean }).ok).toBe(true);
+    });
+
+    it.each([
+      ['a pane agent with a resolvable senderPtyId', { senderPtyId: 'pty-S' }, undefined],
+      ['a wire caller with no senderPtyId', {}, undefined],
+      ['the plugin host (first-party, not the operator)', {}, { firstParty: true, hostedWorkspace: 'ws-plugin' }],
+    ] as const)('refuses %s and never asks the daemon', async (_label, extra, opts) => {
+      const daemon = makeFakeDaemon(() => ({ ok: true, results: [] }));
+      const router = setupHandlerRouter(daemon);
+      const rpcSpy = (daemon as unknown as { rpc: ReturnType<typeof vi.fn> }).rpc;
+      const res = await router.dispatch(
+        { id: 'mb-2', method: 'task.mission.list', params: { ...extra, verifiedWorkspaceIds: ['ws-victim'] } },
+        opts as never,
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        const r = res.result as { ok: boolean; error?: { code: string } };
+        expect(r.ok).toBe(false);
+        expect(r.error?.code).toBe('NOT_AUTHORIZED');
+      }
+      expect(rpcSpy).not.toHaveBeenCalled();
+    });
+
+    it('refuses a workspace-bound commander', async () => {
+      const daemon = makeFakeDaemon(() => ({ ok: true, results: [] }));
+      const router = setupHandlerRouter(daemon);
+      const rpcSpy = (daemon as unknown as { rpc: ReturnType<typeof vi.fn> }).rpc;
+      const token = mintCommanderToken(SENDER_WS);
+      try {
+        const res = await router.dispatch({
+          id: 'mb-3', method: 'task.mission.list', commanderToken: token,
+          params: { verifiedWorkspaceIds: [SENDER_WS, 'ws-victim'] },
+        });
+        expect(res.ok && (res.result as { ok: boolean }).ok).toBe(false);
+        expect(rpcSpy).not.toHaveBeenCalled();
+      } finally {
+        revokeCommanderToken(token);
+      }
+    });
+  });
+
   it('treats missing params as {} so the daemon gets a valid envelope', async () => {
     // The handler is `(params) => daemonClient.rpc(method, params ?? {})` —
     // a caller omitting `params` still hits the daemon with a valid object,

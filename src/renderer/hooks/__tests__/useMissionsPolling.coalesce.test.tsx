@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// #2349 — the missions refresh runs at most one full pass (one
-// task.mission.list per workspace) at a time, and a burst of workspace-set
+// #2349 — the missions refresh runs at most one full pass (one batched
+// task.mission.list for every workspace, #2372) at a time, and a burst of workspace-set
 // changes (a fan-out adding its task workspaces one by one) collapses into one
 // debounced pass instead of a pass per change stacked on top of each other.
 
@@ -10,15 +10,13 @@ import * as React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 const mocks = vi.hoisted(() => ({
-  // Every refreshMissions call of the pass in flight waits on this gate, so a
-  // pass lasts until the test lets it finish (a pass in production takes as
-  // long as ~90 daemon round-trips).
+  // The missions read of the pass in flight waits on this gate, so a pass
+  // lasts until the test lets it finish.
   gate: null as null | { promise: Promise<void>; open: () => void },
   inFlight: 0,
   maxInFlight: 0,
   passes: 0,
-  // task.mission.list reads waiting at once: two passes overlapping would
-  // hold more of them than there are workspaces.
+  // Missions reads waiting at once: two passes overlapping would hold two.
   pendingReads: 0,
   maxPendingReads: 0,
 }));
@@ -44,7 +42,7 @@ vi.mock('../../stores', async () => {
       mocks.inFlight += 1;
       mocks.maxInFlight = Math.max(mocks.maxInFlight, mocks.inFlight);
     }),
-    refreshMissions: vi.fn(async () => {
+    refreshMissionsForOwners: vi.fn(async (_ids: string[]) => {
       mocks.pendingReads += 1;
       mocks.maxPendingReads = Math.max(mocks.maxPendingReads, mocks.pendingReads);
       await mocks.gate?.promise;
@@ -62,7 +60,7 @@ import { useMissionsPolling, MISSION_REFRESH_DEBOUNCE_MS } from '../useMissionsP
 
 /** The mocked store above, typed as what it is rather than the app's store. */
 const useStore = realUseStore as unknown as {
-  getState: () => { workspaces: Array<{ id: string }>; refreshMissions: ReturnType<typeof vi.fn> };
+  getState: () => { workspaces: Array<{ id: string }>; refreshMissionsForOwners: ReturnType<typeof vi.fn> };
   setState: (partial: { workspaces: Array<{ id: string }> }) => void;
 };
 
@@ -134,18 +132,18 @@ describe('useMissionsPolling — refresh coalescing (#2349)', () => {
     expect(mocks.passes).toBe(1);
 
     await finishPass();
-    // Exactly one rerun after it, covering every new workspace.
+    // Exactly one rerun after it, covering every new workspace in one read.
     expect(mocks.passes).toBe(2);
-    const refresh = useStore.getState().refreshMissions;
-    const lastPassIds = refresh.mock.calls.slice(-9).map((c) => c[0]);
-    expect(lastPassIds).toEqual(['ws-0', 'ws-1', 'ws-2', 'ws-3', 'ws-4', 'ws-5', 'ws-6', 'ws-7', 'ws-8']);
+    const refresh = useStore.getState().refreshMissionsForOwners;
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh.mock.calls.at(-1)?.[0]).toEqual(['ws-0', 'ws-1', 'ws-2', 'ws-3', 'ws-4', 'ws-5', 'ws-6', 'ws-7', 'ws-8']);
     await finishPass();
     await React.act(async () => {
       vi.advanceTimersByTime(MISSION_REFRESH_DEBOUNCE_MS * 4);
     });
     expect(mocks.passes).toBe(2);
     expect(mocks.maxInFlight).toBe(1);
-    expect(mocks.maxPendingReads).toBeLessThanOrEqual(9);
+    expect(mocks.maxPendingReads).toBe(1);
   });
 
   it('keeps the 15 s poll, and a poll that lands during a pass waits for it', async () => {
@@ -154,7 +152,7 @@ describe('useMissionsPolling — refresh coalescing (#2349)', () => {
     });
     await finishPass();
     expect(mocks.passes).toBe(1);
-    const refresh = useStore.getState().refreshMissions;
+    const refresh = useStore.getState().refreshMissionsForOwners;
     const before = refresh.mock.calls.length;
 
     // The poll is ledger-only (no provenance read): count its missions reads.
@@ -179,8 +177,10 @@ describe('useMissionsPolling — refresh coalescing (#2349)', () => {
     });
     expect(refresh.mock.calls.length).toBe(duringPass);
     await finishPass();
-    expect(refresh.mock.calls.length).toBe(duringPass + 2);
+    // The poll's one pass, over both workspaces in one read.
+    expect(refresh.mock.calls.length).toBe(duringPass + 1);
+    expect(refresh.mock.calls.at(-1)?.[0]).toEqual(['ws-0', 'ws-new']);
     expect(mocks.maxInFlight).toBe(1);
-    expect(mocks.maxPendingReads).toBeLessThanOrEqual(2);
+    expect(mocks.maxPendingReads).toBe(1);
   });
 });

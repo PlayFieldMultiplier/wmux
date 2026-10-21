@@ -215,6 +215,22 @@ export function registerA2aChannelRpc(
       }
     }
 
+    // #2372 — the batched `task.mission.list` (`verifiedWorkspaceIds`) reads
+    // many owners at once, so it is the operator's alone: the renderer bridge
+    // is the one caller that may read across workspaces. The stamps below pin
+    // only the single `verifiedWorkspaceId`, so a pane agent, a commander or a
+    // plugin passing the array would otherwise name any owners it liked. The
+    // daemon refuses a batch carrying a senderPtyId for direct pipe clients.
+    if (base.verifiedWorkspaceIds !== undefined && !ctx?.operator) {
+      return {
+        ok: false,
+        error: {
+          code: 'NOT_AUTHORIZED',
+          message: `${method}: verifiedWorkspaceIds (several owners at once) is for the operator only`,
+        },
+      };
+    }
+
     if (ws) {
       // Verified caller: stamp the server-resolved workspace over ANY
       // client-supplied verifiedWorkspaceId (strip the forgeable copy).

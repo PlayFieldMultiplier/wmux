@@ -71,13 +71,14 @@ export function registerDeckHandler(getWindow: GetWindow, opts: RegisterDeckHand
 
   // Lane F: the ledger mirrors WorkTask (the identity source) on demand —
   // every workspace the mirror knows is a candidate owner, listed through the
-  // daemon's owner-scoped `task.mission.list`. Throttled inside.
+  // daemon's owner-scoped `task.mission.list` (all of them in one batched
+  // call, #2372). Throttled inside.
   const reconcileTaskLedger = createWorkTaskReconciler({
     candidateOwners: () => (getWorkspaceMirror().getEntries() ?? []).map((e) => e.id),
-    listTasks: async (owner) => {
+    missionList: async (params) => {
       const client = opts.getDaemonClient?.() ?? null;
-      if (!client) return null;
-      return client.rpc('task.mission.list', { verifiedWorkspaceId: owner });
+      if (!client) throw new Error('DaemonClient not connected');
+      return client.rpc('task.mission.list', params);
     },
     originOf: (taskWorkspaceId) => getFanOutGuards().lineageFor([taskWorkspaceId])[taskWorkspaceId]?.origin ?? null,
   });

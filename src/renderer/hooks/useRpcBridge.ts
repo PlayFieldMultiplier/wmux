@@ -617,9 +617,13 @@ export function useRpcBridge(): void {
     // caller-supplied verifiedWorkspaceId (process-boundary trust; see the
     // header of src/main/pipe/handlers/a2a.channel.rpc.ts). No mission mutation
     // ever rides this bridge (materialization is FanOutService's internal path).
+    // `verifiedWorkspaceIds` is the batched read (#2372, shared/missionListBatch.ts):
+    // main's router takes it from the operator alone, which this bridge is.
     (window as unknown as {
       __wmuxMissionRpc: {
-        list: (params: { verifiedWorkspaceId: string }) => Promise<RpcResult>;
+        list: (
+          params: { verifiedWorkspaceId: string } | { verifiedWorkspaceIds: string[] },
+        ) => Promise<RpcResult>;
         close: (params: {
           taskId: string;
           verifiedWorkspaceId: string;

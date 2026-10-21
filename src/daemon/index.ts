@@ -128,6 +128,7 @@ import { DEFAULT_COMPANY_ID, CHANNELS_EPOCH } from '../shared/channels';
 import { A2aTaskService } from './a2a/A2aTaskService';
 import { parsePublicCreateTask } from './a2a/publicCreateParams';
 import { WorkTaskService } from './worktask/WorkTaskService';
+import { listMissionsBatch } from './worktask/missionListBatch';
 import { isTaskState, type AgentStatus, type Task } from '../shared/types';
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
@@ -6623,6 +6624,12 @@ function registerRpcHandlers(
   pipeServer.onRpc('task.mission.list', async (rawParams) => {
     if (!workTaskService) {
       return { ok: false, error: { code: 'NOT_AVAILABLE', message: 'task.mission.list: mission log unavailable' } };
+    }
+    // Batched form (#2372): many owners in one call, checked before the
+    // caller stamp so a pane caller cannot batch (missionListBatch.ts).
+    if (rawParams['verifiedWorkspaceIds'] !== undefined) {
+      const service = workTaskService;
+      return listMissionsBatch(rawParams, (owner) => service.listMissions(owner));
     }
     const stamped = stampCaller(rawParams, { kind: 'none' });
     if (!stamped.ok) return stamped;

@@ -145,6 +145,84 @@ describe('workTaskSlice', () => {
       expect(listFn).not.toHaveBeenCalled();
     });
   });
+
+  // #2372 — one missions pass is one batched task.mission.list, not one per
+  // workspace, and leaves the cache exactly as N single reads did.
+  describe('refreshMissionsForOwners (batched)', () => {
+    afterEach(() => {
+      delete (globalThis as { window?: unknown }).window;
+    });
+
+    const owners = Array.from({ length: 107 }, (_, i) => `parent-${i}`);
+    const tasksOf = (owner: string): WorkTask[] =>
+      owner.endsWith('7')
+        ? [mission({ id: `wtask-${owner}`, title: owner, paneGroupId: `child-${owner}`, owner: { principalId: 'p', verifiedWorkspaceId: owner } as WorkTask['owner'] })]
+        : [];
+    /** The daemon's reply, wrapped in the rpc.invoke envelope. */
+    const single = (id: string) => ({ ok: true, result: { ok: true, verifiedWorkspaceId: id, tasks: tasksOf(id) } });
+
+    it('one call for every owner, and the same cache as one refreshMissions per owner', async () => {
+      const batchFn = vi.fn(async (p: Record<string, unknown>) => ({
+        ok: true,
+        result: {
+          ok: true,
+          results: (p.verifiedWorkspaceIds as string[]).map((id) => ({ verifiedWorkspaceId: id, ok: true, tasks: tasksOf(id) })),
+        },
+      }));
+      (globalThis as { window?: unknown }).window = { __wmuxMissionRpc: { list: batchFn } };
+      await store.getState().refreshMissionsForOwners(owners);
+      expect(batchFn).toHaveBeenCalledTimes(1);
+      expect(batchFn).toHaveBeenCalledWith({ verifiedWorkspaceIds: owners });
+
+      const reference = createTestStore();
+      const singleFn = vi.fn(async (p: Record<string, unknown>) => single(p.verifiedWorkspaceId as string));
+      (globalThis as { window?: unknown }).window = { __wmuxMissionRpc: { list: singleFn } };
+      await Promise.all(owners.map((id) => reference.getState().refreshMissions(id)));
+      expect(singleFn).toHaveBeenCalledTimes(owners.length);
+
+      expect(store.getState().missionsByWorkspace).toEqual(reference.getState().missionsByWorkspace);
+      expect(store.getState().missionByPaneGroup).toEqual(reference.getState().missionByPaneGroup);
+      expect(Object.keys(store.getState().missionsByWorkspace)).toHaveLength(owners.length);
+    });
+
+    it('a daemon without the batch: falls back to one call per owner, same cache', async () => {
+      const listFn = vi.fn(async (p: Record<string, unknown>) =>
+        typeof p.verifiedWorkspaceId === 'string'
+          ? single(p.verifiedWorkspaceId)
+          : { ok: true, result: { ok: false, error: { code: 'NOT_AUTHORIZED', message: 'verifiedWorkspaceId is required' } } },
+      );
+      (globalThis as { window?: unknown }).window = { __wmuxMissionRpc: { list: listFn } };
+      await store.getState().refreshMissionsForOwners(['parent-7', 'parent-8']);
+      expect(listFn.mock.calls.map((c) => c[0])).toEqual([
+        { verifiedWorkspaceIds: ['parent-7', 'parent-8'] },
+        { verifiedWorkspaceId: 'parent-7' },
+        { verifiedWorkspaceId: 'parent-8' },
+      ]);
+      expect(store.getState().getMissionForPaneGroup('child-parent-7')?.id).toBe('wtask-parent-7');
+      expect(store.getState().missionsByWorkspace['parent-8']).toEqual([]);
+    });
+
+    it('an owner refused inside the batch keeps its cache; the others update', async () => {
+      store.getState().setMissions('parent-1', [mission({ id: 'wtask-keep', title: 'keep', paneGroupId: 'child-keep' })]);
+      (globalThis as { window?: unknown }).window = {
+        __wmuxMissionRpc: {
+          list: vi.fn().mockResolvedValue({
+            ok: true,
+            result: {
+              ok: true,
+              results: [
+                { verifiedWorkspaceId: 'parent-1', ok: false, error: { code: 'NOT_AUTHORIZED', message: 'x' } },
+                { verifiedWorkspaceId: 'parent-7', ok: true, tasks: tasksOf('parent-7') },
+              ],
+            },
+          }),
+        },
+      };
+      await store.getState().refreshMissionsForOwners(['parent-1', 'parent-7']);
+      expect(store.getState().getMissionForPaneGroup('child-keep')?.id).toBe('wtask-keep');
+      expect(store.getState().getMissionForPaneGroup('child-parent-7')?.id).toBe('wtask-parent-7');
+    });
+  });
 });
 
 describe('workspace-lifetime binding — closeMissionForRemovedWorkspace', () => {
