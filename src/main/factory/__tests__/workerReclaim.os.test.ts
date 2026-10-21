@@ -871,6 +871,47 @@ describe('a research task (scratch folder, no worktree)', () => {
   });
 });
 
+describe('worker lifecycle cards stay out of the conversation that started the task', () => {
+  const GROUP = 'group:grp-0000abcd';
+  const DM = `dm:${BOT}`;
+  for (const origin of [GROUP, DM]) {
+    it(`a task started from ${origin.split(':')[0]}: its done and resumed cards land in task:<id>`, async () => {
+      const store = ReclaimedWorkers.at(dir);
+      const entry = row('completed', { dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default', threadId: origin } });
+      const { ports, note } = reclaimPorts(store, [session()]);
+      const rec = await reclaimWorker(ports, entry, 'completed');
+      expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.doneResumable' });
+      expect(note.mock.calls[0][1]).toBe(`task:${entry.id}`);
+      // The record keeps the task's thread for its other uses.
+      expect(rec?.threadId).toBe(origin);
+      const resumed = vi.fn();
+      await resumeWorker({ store, listSessions: async () => [session({ agentProcessAlive: false })], typeLine: () => true, now: () => 9_000, note: resumed }, entry.id, { kind: 'owner' });
+      expect(resumed.mock.calls[0][4]).toMatchObject({ code: 'worker.resumed' });
+      expect(resumed.mock.calls[0][1]).toBe(`task:${entry.id}`);
+      await settled(store);
+    });
+  }
+
+  it('a task started from a PR thread keeps its cards there', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const pr = 'pr:github.com/acme/app#12';
+    const entry = row('completed', { dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default', threadId: pr } });
+    const { ports, note } = reclaimPorts(store, [session()]);
+    await reclaimWorker(ports, entry, 'completed');
+    expect(note.mock.calls[0][1]).toBe(pr);
+  });
+
+  it('a reported task paused in a group: its paused card lands in task:<id>', async () => {
+    const store = ReclaimedWorkers.at(dir);
+    const entry = row('review_requested', { dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default', threadId: GROUP } });
+    const { ports, note } = reclaimPorts(store, [session()], { row: () => entry, turnEnded: () => true });
+    await reclaimWorker(ports, entry, 'reported');
+    expect(note.mock.calls[0][4]).toMatchObject({ code: 'worker.pausedResumable' });
+    expect(note.mock.calls[0][1]).toBe(`task:${entry.id}`);
+    await settled(store);
+  });
+});
+
 describe('resumeWorker', () => {
   async function reclaimed(): Promise<ReclaimedWorkers> {
     const store = ReclaimedWorkers.at(dir);
