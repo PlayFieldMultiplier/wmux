@@ -432,7 +432,8 @@ export const FANOUT_COPY_BLOCKED_WARNING =
 
 /** What a person could have changed in a worktree: its HEAD, every tracked
  *  or untracked change, the ignored files and folders present (a `.env`
- *  written by hand; a folder the setup filled is one entry), and the size and
+ *  written by hand; a folder the setup filled is one entry, so a file added
+ *  inside it later is not seen), and the size and
  *  time of each copied config file (ignored, so git does not see an edit to
  *  one). Null when git cannot say. */
 async function worktreeChanges(dir: string, copiedFiles: string[] = []): Promise<string | null> {
