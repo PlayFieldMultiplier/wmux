@@ -1313,6 +1313,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.FACTORY_BOT_SET_AVATAR, { botId, avatar }) as Promise<import('../shared/botCreate').FactoryBotAvatarSetResult>,
     suggestBotRepo: (workspaceId: string) =>
       ipcRenderer.invoke(IPC.FACTORY_BOT_SUGGEST_REPO, { workspaceId }) as Promise<import('../shared/botCreate').FactoryBotRepoSuggestion>,
+    clearRemovedBot: (botId: string) =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_CLEAR_REMOVED, { botId }) as Promise<import('../shared/botCreate').FactoryBotClearRemovedResult>,
     getSettings: () => ipcRenderer.invoke(IPC.FACTORY_SETTINGS_GET) as Promise<import('../shared/factorySettings').FactorySettings>,
     setSettings: (patch: Partial<import('../shared/factorySettings').FactorySettings>) =>
       ipcRenderer.invoke(IPC.FACTORY_SETTINGS_SET, patch) as Promise<import('../shared/factorySettings').FactorySettings | null>,

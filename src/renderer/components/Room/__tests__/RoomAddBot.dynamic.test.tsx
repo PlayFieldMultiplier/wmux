@@ -286,21 +286,54 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: '/src/picked' });
   });
 
-  it('another workspace asks again and drops the folder picked for the first', async () => {
-    const { port, suggestRepo } = formPort([], async (ws) => (ws === WS
+  it('the folder follows the chosen workspace until the owner picks one, which then stays', async () => {
+    const { port, suggestRepo, create } = formPort([], async (ws) => (ws === WS
       ? { ok: false, code: 'no_folder' }
       : { ok: true, repoKey: 'github.com/acme/api', root: '/r/api', displayRoot: '/r/api', inherited: false }));
     await renderForm(port, []);
-    await act(async () => q<HTMLButtonElement>('factory-add-bot-folder')!.click());
-    expect(q('factory-add-bot-path')!.textContent).toBe('/src/picked');
     const ws = q<HTMLSelectElement>('factory-add-bot-workspace')!;
-    await act(async () => {
-      ws.value = 'ws-b';
+    const choose = async (id: string) => act(async () => {
+      ws.value = id;
       ws.dispatchEvent(new Event('change', { bubbles: true }));
     });
+    // Nothing picked: another workspace fills its own folder in.
+    expect(q('factory-add-bot-repo')).toBeNull();
+    await choose('ws-b');
     expect(suggestRepo).toHaveBeenLastCalledWith('ws-b');
-    expect(q('factory-add-bot-path')).toBeNull();
     expect(q('factory-add-bot-repo')!.textContent).toBe('acme/api·/r/api');
+    // Picked by hand: the folder stays the owner's whatever workspace follows.
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-folder')!.click());
+    expect(q('factory-add-bot-path')!.textContent).toBe('/src/picked');
+    await choose(WS);
+    expect(suggestRepo).toHaveBeenLastCalledWith(WS);
+    expect(q('factory-add-bot-path')!.textContent).toBe('/src/picked');
+    await typeInto('factory-add-bot-name', 'Dev');
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: '/src/picked' });
+  });
+
+  it('None is the owner\'s too: it survives a switch, and A→B→A without a hand edit follows each workspace', async () => {
+    const sug = (root: string): FactoryBotRepoSuggestion => ({ ok: true, repoKey: `github.com/acme/${root}`, root: `/r/${root}`, displayRoot: `/r/${root}`, inherited: false });
+    const { port, create } = formPort([], async (ws) => sug(ws === WS ? 'app' : 'api'));
+    await renderForm(port, []);
+    const ws = q<HTMLSelectElement>('factory-add-bot-workspace')!;
+    const choose = async (id: string) => act(async () => {
+      ws.value = id;
+      ws.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(q('factory-add-bot-repo')!.textContent).toBe('acme/app·/r/app');
+    await choose('ws-b');
+    expect(q('factory-add-bot-repo')!.textContent).toBe('acme/api·/r/api');
+    await choose(WS);
+    expect(q('factory-add-bot-repo')!.textContent).toBe('acme/app·/r/app');
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-repo-none')!.click());
+    expect(q('factory-add-bot-no-repo')).not.toBeNull();
+    await choose('ws-b');
+    expect(q('factory-add-bot-no-repo')).not.toBeNull();
+    expect(q('factory-add-bot-repo')).toBeNull();
+    await typeInto('factory-add-bot-name', 'Dev');
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: 'ws-b', name: 'Dev' });
   });
 
   it('asks again when the workspace\'s folder changes', async () => {
@@ -409,11 +442,36 @@ describe('Add team', () => {
     expect(onDone).toHaveBeenCalledWith(lead, [lead]);
   });
 
-  it('is not offered in a workspace that already has a coordinator; with the bots off it asks first', async () => {
-    const withLead = [row('bot-00000001', { template: 'coordinator', role: 'moa' })];
-    const { port } = teamPort(withLead);
-    await render(createElement(AddBotForm, { port, t, rows: withLead, workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone: () => undefined }));
+  it('fills a partial team in: only the missing roles, a taken name numbered; a whole team is not offered', async () => {
+    const lead = row('bot-00000001', { template: 'coordinator', role: 'moa', name: 'Boss' });
+    const withLead = [lead, row('bot-00000002', { template: 'custom', name: 'botsPage.teamName.developer' })];
+    const { port, createTeam } = teamPort(withLead);
+    const made = row('bot-0000000b', { template: 'developer', name: 'botsPage.teamName.developer 2' }).bot;
+    createTeam.mockResolvedValueOnce({ ok: true, bots: [made], skipped: ['coordinator'] });
+    const onDone = vi.fn();
+    await render(createElement(AddBotForm, { port, t, rows: withLead, workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone, mode: 'team' }));
+    expect(q('factory-add-team-plan')!.textContent).toContain('settings.factory.addTeamMissing');
+    expect(q('factory-add-bot-name')).toBeNull();
+    await act(async () => q<HTMLButtonElement>('factory-add-team')!.click());
+    expect(createTeam).toHaveBeenCalledWith({
+      workspaceId: WS,
+      // All five named (a role gone meanwhile still has one); main uses the missing ones'.
+      names: {
+        coordinator: 'botsPage.teamName.coordinator', researcher: 'botsPage.teamName.researcher', developer: 'botsPage.teamName.developer 2',
+        issue: 'botsPage.teamName.issue', reviewer: 'botsPage.teamName.reviewer',
+      },
+    });
+    // No lead was made (none greets); the team, its lead first, goes along.
+    expect(onDone).toHaveBeenCalledWith(undefined, [lead.bot, made]);
+    const whole = (['coordinator', 'researcher', 'developer', 'issue', 'reviewer'] as const).map((tpl, i) => row(`bot-0000001${i}`, { template: tpl }));
+    await render(createElement(AddBotForm, { port, t, rows: whole, workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone: () => undefined, mode: 'team' }));
+    expect(q('factory-add-team-plan')!.textContent).toBe('settings.factory.addTeamWhole');
+    expect(q<HTMLButtonElement>('factory-add-team')!.disabled).toBe(true);
+    await render(createElement(AddBotForm, { port, t, rows: whole, workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone: () => undefined }));
     expect(q('factory-add-team')).toBeNull();
+  });
+
+  it('with the bots off it asks first', async () => {
     const off = teamPort([]);
     const turnOn = vi.fn(async () => 'on' as const);
     await render(createElement(AddBotForm, { port: off.port, t, rows: [], workspaces: [{ id: WS, name: 'App' }], defaultWorkspaceId: WS, onDone: () => undefined, botsOff: true, turnOn }));

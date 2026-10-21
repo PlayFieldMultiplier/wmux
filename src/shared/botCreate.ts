@@ -19,7 +19,7 @@
 // avatar channels answer the main window only; the pipe's bot.* methods
 // never take or return a picture.
 
-import type { BotProfile, BotRole, BotTemplate } from './bot';
+import { botTemplate, type BotProfile, type BotRole, type BotTemplate } from './bot';
 
 export interface FactoryBotCreateRequest {
   workspaceId: string;
@@ -59,24 +59,43 @@ export type FactoryBotCreateResult =
  *  first (it is then the room's oldest coordinator, its lead). */
 export const TEAM_TEMPLATES: readonly BotTemplate[] = ['coordinator', 'researcher', 'developer', 'issue', 'reviewer'];
 
-/** IPC.FACTORY_BOT_CREATE_TEAM: the five bots of a team in one workspace,
+/** IPC.FACTORY_BOT_CREATE_TEAM: the team's missing bots in one workspace,
  *  on one repository (as "Add bot" resolves it), named by the renderer (in
- *  the owner's language). Refused, before any bot is made, when a name is
- *  not one the store keeps or is taken (twice in the team, or by a bot of
- *  the workspace), or when the workspace already has an enabled
- *  coordinator. All five are made or none. Only the coordinator greets the
- *  owner. */
+ *  the owner's language). A team template one of the workspace's enabled
+ *  bots already has is skipped (teamTemplatesPresent), so it fills a partial
+ *  team in. Refused, before any bot is made, when a name to use is not one the
+ *  store keeps or is taken (twice in the team, or by a bot of the
+ *  workspace). The missing ones are all made or none. Only a coordinator
+ *  made here greets the owner. */
 export interface FactoryBotCreateTeamRequest {
   workspaceId: string;
-  /** One name per team template. */
+  /** One name per team template (only the missing ones' are used; the
+   *  renderer sends all five, so a role gone meanwhile still has one). */
   names: Record<string, string>;
   /** As FactoryBotCreateRequest.repoFolder. */
   repoFolder?: string;
 }
 
 export type FactoryBotCreateTeamResult =
-  | { ok: true; bots: BotProfile[] }
-  | { ok: false; code: FactoryBotCreateCode | 'has_lead' | 'name_taken'; message: string };
+  /** `bots`: the ones made, in TEAM_TEMPLATES order (none when the team was
+   *  whole); `skipped`: the templates the workspace already had. */
+  | { ok: true; bots: BotProfile[]; skipped?: BotTemplate[] }
+  | { ok: false; code: FactoryBotCreateCode | 'name_taken'; message: string };
+
+/** The team templates some enabled bot of a workspace already has (by its
+ *  template, a legacy profile's from its role), in TEAM_TEMPLATES order. A
+ *  bot that is off does not fill its role (it would not answer). Main and
+ *  the renderer read the same rule. Pure. */
+export function teamTemplatesPresent(bots: readonly Pick<BotProfile, 'role' | 'template' | 'enabled'>[]): BotTemplate[] {
+  return TEAM_TEMPLATES.filter((tpl) => bots.some((b) => b.enabled && botTemplate(b) === tpl));
+}
+
+/** IPC.FACTORY_BOT_CLEAR_REMOVED: take a deleted bot's 1:1 out of the Bots
+ *  page's Archive (main window only). Its messages stay in the room and its
+ *  tombstone keeps its name on them; the conversation is no longer listed. */
+export type FactoryBotClearRemovedResult =
+  | { ok: true }
+  | { ok: false; code: 'operator_only' | 'not_started' | 'invalid_argument' | 'not_found'; message: string };
 
 /** @deprecated legacy Add-bot rule (the HQ Moa took no repository); the
  *  repository is optional for every bot. */

@@ -367,6 +367,22 @@ describe('BotStore', () => {
     expect(t.listRemoved().map((r) => [r.name, r.hue])).toEqual([['Developer', IDENTITY_SPREAD[0]], ['Other', IDENTITY_SPREAD[1]]]);
   });
 
+  it('clearRemoved: the tombstone stays (its name for its cards), marked out of the Archive, across a relaunch', async () => {
+    const s = newStore();
+    const a = s.create({ workspaceId: 'ws-1', name: 'Gone' });
+    if (!a.ok) throw new Error('create');
+    expect(s.clearRemoved(a.bot.id)).toBe(false);
+    s.remove(a.bot.id);
+    clock += 5;
+    expect(s.clearRemoved(a.bot.id)).toBe(true);
+    expect(s.clearRemoved('bot-unknown')).toBe(false);
+    expect(s.listRemoved()).toEqual([expect.objectContaining({ id: a.bot.id, name: 'Gone', clearedAt: clock })]);
+    await s.flush();
+    const t = newStore();
+    t.load();
+    expect(t.listRemoved()).toEqual([expect.objectContaining({ id: a.bot.id, name: 'Gone', clearedAt: clock })]);
+  });
+
   it('identity slots: kept across a relaunch after a delete, a new bot takes the freed slot, rooms count apart', async () => {
     const s = newStore();
     const made = ['A', 'B', 'C'].map((name) => {

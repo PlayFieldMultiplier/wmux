@@ -6,9 +6,12 @@
 // bot that waits on the owner) and the selected conversation as a chat on
 // the right (BotsChat). The list holds each bot's 1:1 and the group chats
 // the owner made (owner decision 2026-10-15: no workspace has a room by
-// itself), by latest activity; nothing is pinned. Add team makes the bots
-// only, then offers "Make a group chat with this team". On a narrow sheet
-// the list comes first and a conversation opens over it with a back button.
+// itself), by latest activity; nothing is pinned. A deleted bot's kept 1:1
+// sits under Archive, folded, at the list's foot (owner decision
+// 2026-10-21). Add team ("+" › Add team) makes the bots a workspace's team
+// is missing, then offers "Make a group chat with this team". On a narrow
+// sheet the list comes first and a conversation opens over it with a back
+// button.
 //
 // The page covers the whole sheet, the room dock included: the conversation
 // is the page here. Everything shown is derived from the room, bot and
@@ -29,7 +32,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { selectWorkspaceIdName } from '../../stores/selectors/workspaceProjections';
-import { isTimelineLoaded, refreshRoomStatus, type RoomsApi } from '../../hooks/useRoomSync';
+import { isTimelineLoaded, loadRoomActors, refreshRoomStatus, type RoomsApi } from '../../hooks/useRoomSync';
 import { dmThreadId, type RoomCard, type ThreadId } from '../../../shared/room';
 import { timelineKey } from '../../stores/slices/roomSlice';
 import { FOCUS_RING } from '../focusRing';
@@ -39,7 +42,7 @@ import Popover from '../ui/Popover';
 import { getFactoryBotPort, getFactorySettingsPort, type FactoryBotPort, type FactoryBotRow, type FactorySettingsPort } from '../Room/factoryPorts';
 import Dialog, { DialogBody, DialogHeader } from '../ui/Dialog';
 import Input from '../ui/Input';
-import { AddBotForm, AddBotRepoRow, addBotBlockedReason, pickFolderDialog, teamNames, useAddBotRepo } from '../Settings/FactoryTab';
+import { AddBotForm, AddBotRepoRow, addBotBlockedReason, pickFolderDialog, teamNames, teamPlan, useAddBotRepo } from '../Settings/FactoryTab';
 import { TEAM_TEMPLATES } from '../../../shared/botCreate';
 import { PresenceDot, botPresence } from '../Room/BotChips';
 import { actorLabel, formatCardTime } from '../Room/roomFormat';
@@ -53,7 +56,7 @@ import { showWorkspaces } from '../../utils/showWorkspaces';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine'
 import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';
-import { BOT_NAME_MAX, normalizeBotName, type BotProfile } from '../../../shared/bot';
+import { BOT_NAME_MAX, isCoordinatorBot, normalizeBotName, type BotProfile } from '../../../shared/bot';
 import { listedWorkspaces } from '../../stores/slices/moaSlice';
 import { allRoomCards, botConversationId, conversationCards, groupConversationId, groupViewCards, roomCardsByWorkspace, type Conversation } from './botsModel';
 import BotsGroupDialog, { type GroupDialogStart } from './BotsGroupDialog';
@@ -224,10 +227,12 @@ function openClaudeInstallPage(): void {
  *  Bots › First run). The page is reached with the bots on; Start adds the
  *  bot to the current workspace (turning the bots on first only if they went
  *  off meanwhile). */
-function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine, onStarted, onTeam }: {
+function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine, onStarted, onTeam, rows = [] }: {
   t: T;
   workspace: { id: string; name: string } | null;
   botPort: FactoryBotPort;
+  /** The bots main lists (none enabled here): Add team names around them. */
+  rows?: readonly FactoryBotRow[];
   settings: FactorySettingsPort;
   /** The plan consent, asked when turning the bots on needs it. */
   confirmOn: () => Promise<boolean>;
@@ -253,6 +258,7 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
   // same readiness as Start, and its lead's chat opens.
   const teamable = !busy && !!workspace && !!botPort.createTeam && !engineText && !engineUnanswered;
   const names = teamNames(t);
+  const plan = teamPlan(rows, workspace?.id ?? '', t);
 
   const start = async () => {
     if (!startable || !typed || !workspace) return;
@@ -283,12 +289,15 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
         if (r === 'declined') return;
         if (r !== 'on') { setError(t('settings.factory.notStarted')); return; }
       }
-      const r = await botPort.createTeam({ workspaceId: workspace.id, names, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
-      if (r.ok) {
+      const r = await botPort.createTeam({ workspaceId: workspace.id, names: plan.names, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
+      if (!r.ok) setError(r.message || t('settings.factory.addTeamFailed'));
+      else if (r.bots.length === 0) setError(t('settings.factory.addTeamWhole'));
+      else {
         onTeam(r.bots);
-        onStarted(r.bots[0]);
+        // Only a lead made here greets: its chat opens, starting.
+        const lead = r.bots.find((b) => isCoordinatorBot(b));
+        if (lead) onStarted(lead);
       }
-      else setError(r.message || t('settings.factory.addTeamFailed'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -455,8 +464,8 @@ function HeaderMenu({ t, onStopAll, onGuests }: { t: T; onStopAll: (() => void) 
   );
 }
 
-/** "+": Add bot or New group chat. */
-function AddMenu({ t, onAddBot, onNewGroup }: { t: T; onAddBot: () => void; onNewGroup: (() => void) | null }) {
+/** "+": Add bot, Add team or New group chat. */
+function AddMenu({ t, onAddBot, onAddTeam, onNewGroup }: { t: T; onAddBot: () => void; onAddTeam: (() => void) | null; onNewGroup: (() => void) | null }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -493,6 +502,11 @@ function AddMenu({ t, onAddBot, onNewGroup }: { t: T; onAddBot: () => void; onNe
           <button type="button" role="menuitem" data-bots-add-bot autoFocus className={item} onClick={() => { setOpen(false); onAddBot(); }}>
             {t('botsPage.addBot')}
           </button>
+          {onAddTeam && (
+            <button type="button" role="menuitem" data-bots-add-team className={item} onClick={() => { setOpen(false); onAddTeam(); }}>
+              {t('settings.factory.addTeam')}
+            </button>
+          )}
           {onNewGroup && (
             <button type="button" role="menuitem" data-bots-new-group className={item} onClick={() => { setOpen(false); onNewGroup(); }}>
               {t('botsPage.group.new')}
@@ -502,6 +516,34 @@ function AddMenu({ t, onAddBot, onNewGroup }: { t: T; onAddBot: () => void; onNe
       )}
     </span>
   );
+}
+
+/** The list's foot: Archive, the deleted bots' kept 1:1s, folded until
+ *  toggled (or one of them is open). */
+function ArchiveToggle({ t, count, expanded, onToggle }: { t: T; count: number; expanded: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      data-bots-archive-toggle
+      aria-expanded={expanded}
+      aria-controls="bots-archive"
+      onClick={onToggle}
+      className={`wmux-bots-archive-toggle ${FOCUS_RING}`}
+    >
+      <span className="min-w-0 flex-1 truncate text-left">{t('botsPage.archive.title')}</span>
+      <span className="tabular-nums">{count}</span>
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: expanded ? 'rotate(180deg)' : undefined }}><polyline points="2,3.5 5,6.5 8,3.5" /></svg>
+    </button>
+  );
+}
+
+/** Split the list's rows: the live conversations, and the Archive (each
+ *  deleted bot's kept 1:1). Pure. */
+export function splitArchive<R extends { c: Conversation }>(rows: readonly R[]): { live: R[]; archived: R[] } {
+  const live: R[] = [];
+  const archived: R[] = [];
+  for (const r of rows) (r.c.kind === 'bot' && r.c.removed ? archived : live).push(r);
+  return { live, archived };
 }
 
 /** After Add team: one line under the list header offering a group chat
@@ -593,6 +635,10 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   }), [model.conversations, nameOf, t, locale, bots, actors, seenAt, everyCard, cardsByWs, roomThreads]);
   const q = query.trim().toLowerCase();
   const shown = q ? rows.filter((r) => r.title.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)) : rows;
+  const { live: shownLive, archived: shownArchived } = splitArchive(shown);
+  // Archive's fold: folded until toggled, and open while searching or while
+  // one of its chats is open (DESIGN.md › Bots › Archive), toggled or not.
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const [threadAsk, setThreadAsk] = useState<{ conversationId: string; workspaceId: string; threadId: ThreadId; nonce: number } | null>(null);
   const select = (id: string) => {
@@ -674,7 +720,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
 
   // "+": the Settings add form in a dialog here (a build without the create
   // port opens the settings page instead). The bot it adds is selected.
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<false | 'bot' | 'team'>(false);
   // A bot belongs to one of the owner's workspaces: never a bot worker's or
   // another computer's (the sidebar's own list).
   const botOwners = useStore(selectBotTaskOwners);
@@ -687,11 +733,13 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const currentWorkspace = addWorkspaces.find((w) => w.id === activeWorkspaceId) ?? addWorkspaces[0] ?? null;
   const [addTo, setAddTo] = useState<string | null>(null);
-  const openAdd = (workspaceId: string | null) => {
+  const openAdd = (workspaceId: string | null, mode: 'bot' | 'team' = 'bot') => {
     setAddTo(workspaceId);
-    setAdding(true);
+    setAdding(mode);
   };
   const startAdd = onAddBot ?? (canCreate ? () => openAdd(selected?.c.workspaceId ?? null) : openFactorySettings);
+  // "+" › Add team: the same form with only the workspace and repository.
+  const startTeam = botPort.createTeam && !onAddBot ? () => openAdd(selected?.c.workspaceId ?? null, 'team') : null;
   // Stop all: the header menu, then an inline confirm under the header.
   const stopPort = useMemo(() => stop ?? botsStopPort(port), [stop, port]);
   const settingsPort = settings ?? getFactorySettingsPort();
@@ -741,6 +789,18 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
     setAdding(false);
     if (team) onTeam(team);
     if (bot) started(bot);
+    // A team whose lead was there already: no one greets; its lead opens.
+    else if (team && team.length > 0) select(botConversationId(team[0].id));
+  };
+
+  // Archive › Remove: the deleted bot's 1:1 leaves the list for good (its
+  // messages stay in the room, and its name on what it wrote elsewhere).
+  const clearArchived = (botId: string) => async (): Promise<string | null> => {
+    if (!botPort.clearRemoved) return null;
+    const r = await botPort.clearRemoved(botId);
+    if (!r.ok) return r.message;
+    await loadRoomActors();
+    return null;
   };
 
   let body: React.ReactNode = null;
@@ -759,11 +819,60 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
         engine={enginePort}
         onStarted={started}
         onTeam={onTeam}
+        rows={bots}
       />
     );
   } else if (status && (listed || bots.length > 0 || !!pending)) {
     // (Before the bot list is read, nothing: an empty list is not "no bot".)
     const paused = !on;
+    const archiveShown = archiveOpen || !!q || shownArchived.some((a) => a.c.id === selected?.c.id);
+    const renderEntry = (r: (typeof rows)[number]) => {
+      const tree = r.c.kind === 'bot' ? r.c.tree : [];
+      const botId = r.c.kind === 'bot' ? r.c.row.bot.id : '';
+      const isSelected = selected?.c.id === r.c.id || (!!starting && r.c.id === pendingId);
+      const open = tree.length > 0 && (unfolded[r.c.id] ?? isSelected);
+      const treeId = `bots-tree-${r.c.id}`;
+      // The open conversation is one group: its row and its workers in
+      // one rounded fill, as the Sidebar draws the selected workspace
+      // and its tasks.
+      return (
+        <div key={r.c.id} data-bots-entry={r.c.id} className={`wmux-bots-entry ${isSelected ? 'is-open' : ''}`}>
+          <div className={`wmux-bots-row-wrap ${tree.length > 0 ? 'has-toggle' : ''}`}>
+            <ConversationRow
+              c={r.c}
+              title={r.title}
+              preview={r.preview}
+              selected={isSelected}
+              t={t}
+              now={now}
+              unread={r.unread}
+              onSelect={() => openRow(r.c)}
+              toggleRoom={tree.length > 0}
+            />
+            {tree.length > 0 && (
+              <TreeToggle
+                count={tree.length}
+                expanded={open}
+                controls={treeId}
+                name={r.title}
+                t={t}
+                onToggle={() => setUnfolded((cur) => ({ ...cur, [r.c.id]: !open }))}
+              />
+            )}
+          </div>
+          {open && (
+            <BotsWorkerTree
+              id={treeId}
+              rows={tree}
+              name={r.title}
+              shownId={isSelected && panel?.conversationId === r.c.id ? panel.workspaceId : null}
+              t={t}
+              onOpen={(workspaceId) => openWorker(botId, workspaceId)}
+            />
+          )}
+        </div>
+      );
+    };
     body = (
       <>
         {paused && <PausedBanner t={t} settings={settingsPort} confirmOn={confirmOn} />}
@@ -793,7 +902,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
                 onGuests={guestsPort.available ? () => setGuestsOpen(true) : null}
               />
             )}
-            <AddMenu t={t} onAddBot={startAdd} onNewGroup={newGroup} />
+            <AddMenu t={t} onAddBot={startAdd} onAddTeam={startTeam} onNewGroup={newGroup} />
           </div>
           {teamMade && newGroup && (
             <TeamNotice
@@ -840,53 +949,13 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
           <div className="wmux-bots-rows">
             {shown.length === 0 && rows.length > 0 && <p className="px-4 py-3 text-[12px] text-[var(--text-muted)]">{t('botsPage.noMatch')}</p>}
             {rows.length === 0 && !starting && <p data-bots-empty className="px-4 py-3 text-[12px] text-[var(--text-muted)]">{t('botsPage.noConversations')}</p>}
-            {shown.map((r) => {
-              const tree = r.c.kind === 'bot' ? r.c.tree : [];
-              const botId = r.c.kind === 'bot' ? r.c.row.bot.id : '';
-              const isSelected = selected?.c.id === r.c.id || (!!starting && r.c.id === pendingId);
-              const open = tree.length > 0 && (unfolded[r.c.id] ?? isSelected);
-              const treeId = `bots-tree-${r.c.id}`;
-              // The open conversation is one group: its row and its workers in
-              // one rounded fill, as the Sidebar draws the selected workspace
-              // and its tasks.
-              return (
-                <div key={r.c.id} data-bots-entry={r.c.id} className={`wmux-bots-entry ${isSelected ? 'is-open' : ''}`}>
-                  <div className={`wmux-bots-row-wrap ${tree.length > 0 ? 'has-toggle' : ''}`}>
-                    <ConversationRow
-                      c={r.c}
-                      title={r.title}
-                      preview={r.preview}
-                      selected={isSelected}
-                      t={t}
-                      now={now}
-                      unread={r.unread}
-                      onSelect={() => openRow(r.c)}
-                      toggleRoom={tree.length > 0}
-                    />
-                    {tree.length > 0 && (
-                      <TreeToggle
-                        count={tree.length}
-                        expanded={open}
-                        controls={treeId}
-                        name={r.title}
-                        t={t}
-                        onToggle={() => setUnfolded((cur) => ({ ...cur, [r.c.id]: !open }))}
-                      />
-                    )}
-                  </div>
-                  {open && (
-                    <BotsWorkerTree
-                      id={treeId}
-                      rows={tree}
-                      name={r.title}
-                      shownId={isSelected && panel?.conversationId === r.c.id ? panel.workspaceId : null}
-                      t={t}
-                      onOpen={(workspaceId) => openWorker(botId, workspaceId)}
-                    />
-                  )}
-                </div>
-              );
-            })}
+            {shownLive.map(renderEntry)}
+            {shownArchived.length > 0 && (
+              <>
+                <ArchiveToggle t={t} count={shownArchived.length} expanded={archiveShown} onToggle={() => setArchiveOpen((v) => !v)} />
+                {archiveShown && <div id="bots-archive" data-bots-archive>{shownArchived.map(renderEntry)}</div>}
+              </>
+            )}
           </div>
         </nav>
         {starting ? (
@@ -908,6 +977,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
             jobPort={botPort}
             resumePort={botPort}
             onOpenBot={(botId) => select(botConversationId(botId))}
+            {...(botPort.clearRemoved && selected.c.kind === 'bot' && selected.c.removed ? { onClearArchived: clearArchived(selected.c.row.bot.id) } : {})}
             {...(threadAsk && threadAsk.conversationId === selected.c.id ? { threadAsk } : {})}
             {...(shownGroup && groupsPort.available ? { onEditGroup: () => setGroupDialog({ kind: 'edit', group: shownGroup }) } : {})}
           />
@@ -924,9 +994,10 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
       {body}
       {adding && (
         <Dialog onClose={() => setAdding(false)} width={520} data-testid="bots-add-bot">
-          <DialogHeader title={t('settings.factory.addBot')} closeLabel={t('settings.close')} />
+          <DialogHeader title={t(adding === 'team' ? 'settings.factory.addTeam' : 'settings.factory.addBot')} closeLabel={t('settings.close')} />
           <DialogBody>
             <AddBotForm
+              mode={adding}
               onDone={finishAdd}
               workspaces={addWorkspaces}
               botsOff={!on}

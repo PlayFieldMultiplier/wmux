@@ -368,8 +368,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   popover, so a worker is reached without going back to the list.
 - **List:** the 16px title with Search, `⋯` (the page menu: Stop all
   bots, when main offers it) and `+` (a menu: Add bot — the Settings add
-  form in a dialog; the bot it adds is selected — and New group chat) as
-  28px icon buttons, in every state
+  form in a dialog; the bot it adds is selected — Add team — the same
+  dialog with only the workspace and the repository (Add team, below) — and
+  New group chat) as 28px icon buttons, in every state
   of the page; Search opens a filter field under the header (Escape closes
   and clears it). One row per conversation (8px 10px padding, inset 8px): a 32px avatar, the 13px/500 name
   with the newest message's time, and one 12px muted preview line (the
@@ -390,6 +391,16 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   (this session) carries a neutral count — a 16px `--selection-emphasis`
   pill — and its preview in `--text-sub`; when the row needs the owner the
   orange needs-you count shows instead.
+- **Archive (owner decision 2026-10-21):** a deleted bot whose 1:1 holds
+  messages is not a row among the live conversations: under them, at the
+  list's foot, one muted 11px fold — "Archive", its count and a chevron, no
+  fill or rule — holds those 1:1s, folded until toggled (open while
+  searching or while one of them is open), in the list's row look with the
+  name muted and "(removed)". One opens read-only (no composer or profile);
+  under its note sits **Remove from Archive**, a destructive secondary that
+  asks in place (InlineConfirm: the chat leaves the list for good, its
+  messages stay saved and what it wrote in group chats keeps its name).
+  The tombstone stays, marked, so its cards keep its name and face.
 - **Workers in the list (owner decision 2026-10-14):** a bot's workers nest
   under its row the way the Sidebar nests a workspace's fan-out tasks: an
   indented row each on a `--stroke` guide under the avatar — the Sidebar's
@@ -778,12 +789,18 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   what to do, with choices, in its 1:1 (the question main marks as the
   bot's greeting); no group shows it, and no group draws a "joined" line.
   A bot's `job_changed` card carries
-  Undo (secondary). **Add team** (a ghost button beside Cancel, while the
-  chosen workspace has no coordinator) adds five bots at once to that
-  workspace and repository — the lead (a coordinator) first, then research,
-  developer, issues and reviewer, named in the owner's language — with no
-  name field needed; only the lead greets, in its 1:1, and its chat opens.
-  Its tooltip names the five and says the owner talks to the lead. Add
+  Undo (secondary). **Add team** (`+` › Add team, the form with only the
+  workspace and the repository and Add team as its primary, or a ghost
+  button beside Cancel in Add bot, while the chosen workspace misses one
+  of the team's roles; owner decision 2026-10-21) adds the team's bots that
+  workspace does not have yet, at once, to that workspace and repository —
+  the lead (a coordinator) first, then research, developer, issues and
+  reviewer, named in the owner's language ("Developer 2" when a bot there
+  has the name) — with no name field needed. The form says in one line what
+  it adds and which roles are already there ("This workspace already has
+  the whole team." with Add team off); a toast names them after. Only a lead
+  made here greets, in its 1:1, and its chat opens; else the lead it had
+  opens. Its tooltip names the five and says the owner talks to the lead. Add
   team makes the bots only, never a group (owner decision 2026-10-15):
   then one notice under the list header, on the `--selection-subtle` fill,
   says the team was added (that line and its × on the first row) and offers

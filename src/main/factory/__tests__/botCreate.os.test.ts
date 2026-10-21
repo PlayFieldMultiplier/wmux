@@ -13,7 +13,7 @@ vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() 
 import { BotStore, botsFilePath } from '../botStore';
 import { botRepoFromFolder, createBotFromFolder, createTeamFromFolder, greetNewBot, homeShortPath, resolveBotRepo, suggestBotRepo, workspaceFolder, workspaceRepo } from '../botCreate';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../factorySettings';
-import { factoryBotCreateHandler, factoryBotCreateTeamHandler, factoryBotSuggestRepoHandler, factorySettingsSetHandler } from '../../ipc/handlers/factory.handler';
+import { factoryBotClearRemovedHandler, factoryBotCreateHandler, factoryBotCreateTeamHandler, factoryBotSuggestRepoHandler, factorySettingsSetHandler } from '../../ipc/handlers/factory.handler';
 import type { WorkspaceListEntry } from '../../../shared/workspaceMirror';
 import type { FactorySettingsStore } from '../factorySettings';
 import type { GitResult } from '../../git/git';
@@ -279,6 +279,13 @@ describe('suggestBotRepo', () => {
     expect(appGit).toHaveBeenCalledWith(['rev-parse', '--show-toplevel'], path.join(APP, 'src'));
   });
 
+  it('a workspace whose panes report no cwd: the folder the mirror records for it', async () => {
+    const r = await suggestBotRepo(store, 'ws-1', { ...base, git: appGit, entries: entries({ metadata: { cwd: APP } }), cwdOf: () => undefined });
+    expect(r).toEqual({ ok: true, repoKey: 'github.com/acme/app', root: APP, displayRoot: path.join('~', 'code', 'app'), inherited: false });
+    // A pane's own cwd still comes first.
+    expect(workspaceFolder('ws-1', entries({ metadata: { cwd: APP } })(), (p) => (p === 'pty-b' ? '/elsewhere' : undefined))).toBe('/elsewhere');
+  });
+
   it('a folder that is not a git checkout, or has no origin', async () => {
     const cwdOf = () => '/home/me/notes';
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git: fakeGit(fail, fail), entries: entries(), cwdOf })).toEqual({ ok: false, code: 'not_a_repo' });
@@ -292,6 +299,7 @@ describe('suggestBotRepo', () => {
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: () => null, cwdOf: cwd })).toEqual({ ok: false, code: 'no_folder' });
     expect(await suggestBotRepo(store, 'ws-9', { ...base, git, entries: entries(), cwdOf: cwd })).toEqual({ ok: false, code: 'no_folder' });
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries({ activePtyId: null, ptyIds: [] }), cwdOf: cwd })).toEqual({ ok: false, code: 'no_folder' });
+    expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries({ metadata: { cwd: 'relative' } }), cwdOf: () => undefined })).toEqual({ ok: false, code: 'no_folder' });
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries(), cwdOf: () => undefined })).toEqual({ ok: false, code: 'no_folder' });
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries(), cwdOf: () => 'relative' })).toEqual({ ok: false, code: 'no_folder' });
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries() })).toEqual({ ok: false, code: 'no_folder' });
@@ -437,19 +445,38 @@ describe('"Add team"', () => {
     expect(r.bots[0].createdAt).toBeLessThanOrEqual(Math.min(...r.bots.map((b) => b.createdAt)));
   });
 
-  it('refuses before making any bot: a workspace with a coordinator, a name taken or missing', async () => {
-    store.create({ workspaceId: 'ws-2', template: 'developer', name: '구현' });
+  it('refuses before making any bot: a name taken or missing', async () => {
+    store.create({ workspaceId: 'ws-2', template: 'custom', name: '구현' });
     expect(await createTeamFromFolder(store, { workspaceId: 'ws-2', names })).toMatchObject({ ok: false, code: 'name_taken' });
     expect(await createTeamFromFolder(store, { workspaceId: 'ws-3', names: { ...names, issue: '대장' } })).toMatchObject({ ok: false, code: 'name_taken' });
     expect(await createTeamFromFolder(store, { workspaceId: 'ws-3', names: { ...names, reviewer: ' ' } })).toMatchObject({ ok: false, code: 'invalid_argument' });
-    store.create({ workspaceId: 'ws-4', template: 'coordinator', name: 'Boss' });
-    expect(await createTeamFromFolder(store, { workspaceId: 'ws-4', names })).toMatchObject({ ok: false, code: 'has_lead' });
+    expect(store.list({ workspaceId: 'ws-2' })).toHaveLength(1);
     expect(store.list({ workspaceId: 'ws-3' })).toEqual([]);
-    expect(store.list({ workspaceId: 'ws-4' })).toHaveLength(1);
     // Without a folder the team takes the workspace's repository, when it has one.
     store.create({ workspaceId: 'ws-5', template: 'custom', name: 'Old', repo: { repoKey: 'github.com/acme/old', repoPath: '/src/old' } });
     const inherited = await createTeamFromFolder(store, { workspaceId: 'ws-5', names });
     expect(inherited.ok && inherited.bots.every((b) => b.repo?.repoKey === 'github.com/acme/old')).toBe(true);
+  });
+
+  it('fills a partial team in: only the missing templates, and a whole team makes nothing', async () => {
+    store.create({ workspaceId: 'ws-4', template: 'coordinator', name: 'Boss' });
+    store.create({ workspaceId: 'ws-4', template: 'developer', name: 'Dev' });
+    // The present templates' names are not needed (nor checked against the workspace's).
+    const r = await createTeamFromFolder(store, { workspaceId: 'ws-4', names: { ...names, coordinator: 'Boss', developer: '' } });
+    expect(r).toMatchObject({ ok: true, skipped: ['coordinator', 'developer'] });
+    expect(r.ok && r.bots.map((b) => [b.template, b.name])).toEqual([['researcher', '시장조사'], ['issue', '이슈처리'], ['reviewer', '리뷰어']]);
+    expect(store.list({ workspaceId: 'ws-4' })).toHaveLength(5);
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-4', names })).toEqual({ ok: true, bots: [], skipped: ['coordinator', 'researcher', 'developer', 'issue', 'reviewer'] });
+    expect(store.list({ workspaceId: 'ws-4' })).toHaveLength(5);
+  });
+
+  it('a bot that is off does not fill its role: a disabled lead gets a new one, named apart', async () => {
+    const off = store.create({ workspaceId: 'ws-6', template: 'coordinator', name: 'Boss' });
+    if (!off.ok) throw new Error('create');
+    store.update(off.bot.id, { enabled: false });
+    const r = await createTeamFromFolder(store, { workspaceId: 'ws-6', names: { ...names, coordinator: 'Boss 2' } });
+    expect(r.ok && r.bots.map((b) => b.template)).toEqual(['coordinator', 'researcher', 'developer', 'issue', 'reviewer']);
+    expect(r).not.toHaveProperty('skipped');
   });
 
   it('all five or none: a create refused midway takes back the ones made', async () => {
@@ -472,5 +499,31 @@ describe('"Add team"', () => {
     expect(r).toMatchObject({ ok: true });
     expect(greet).toHaveBeenCalledTimes(1);
     expect(greet.mock.calls[0][0]).toMatchObject({ template: 'coordinator', name: '대장' });
+    // A lead already there: the missing bots are made and none greets.
+    store.create({ workspaceId: 'ws-2', template: 'coordinator', name: 'Boss' });
+    expect(await handler({ sender: webContents, senderFrame: mainFrame }, { workspaceId: 'ws-2', names })).toMatchObject({ ok: true, skipped: ['coordinator'] });
+    expect(greet).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Archive: FACTORY_BOT_CLEAR_REMOVED', () => {
+  const mainFrame = { id: 'top' };
+  const webContents = { mainFrame };
+  const win = { isDestroyed: () => false, webContents } as unknown as Electron.BrowserWindow;
+
+  it('answers only the main window, checks the id, and marks a kept tombstone', () => {
+    const made = store.create({ workspaceId: 'ws-1', name: 'Gone' });
+    if (!made.ok) throw new Error('create');
+    store.remove(made.bot.id);
+    const handler = factoryBotClearRemovedHandler(() => win, () => store);
+    expect(handler({ sender: {}, senderFrame: mainFrame }, { botId: made.bot.id })).toMatchObject({ ok: false, code: 'operator_only' });
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, { botId: '../x' })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, null)).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, { botId: 'bot-0000ffff' })).toMatchObject({ ok: false, code: 'not_found' });
+    expect(factoryBotClearRemovedHandler(() => win, () => null)({ sender: webContents, senderFrame: mainFrame }, { botId: made.bot.id }))
+      .toMatchObject({ ok: false, code: 'not_started' });
+    expect(store.listRemoved()[0].clearedAt).toBeUndefined();
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, { botId: made.bot.id })).toEqual({ ok: true });
+    expect(store.listRemoved()[0].clearedAt).toEqual(expect.any(Number));
   });
 });

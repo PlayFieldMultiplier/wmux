@@ -34,7 +34,9 @@
 // A removed bot leaves a tombstone (`removed`, shared/bot.ts RemovedBot: its
 // id, name, role, picture and colour slot), so the cards it wrote keep its
 // name and face after a restart. A build without it drops the list on its
-// next write; bots.json stays version 1.
+// next write; bots.json stays version 1. A tombstone's `clearedAt` (its 1:1
+// taken out of the Bots page's Archive) is dropped by an older build on its
+// next write, so after a downgrade those 1:1s show in the Archive again.
 
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -282,6 +284,7 @@ export function parseRemovedBot(raw: unknown): RemovedBot | null {
     ...(avatar ? { avatar } : {}),
     ...(hue !== undefined ? { hue } : {}),
     removedAt: raw.removedAt as number,
+    ...(Number.isSafeInteger(raw.clearedAt) ? { clearedAt: raw.clearedAt as number } : {}),
   };
 }
 
@@ -802,6 +805,19 @@ export class BotStore implements BotDirectoryApi {
     });
     this.removed = this.removed.filter((r) => r.id !== botId);
     if (tomb) this.removed = [...this.removed, tomb].slice(-REMOVED_BOTS_MAX);
+    this.changed();
+    return true;
+  }
+
+  /** Take a removed bot's 1:1 out of the Archive (`clearedAt`); its
+   *  tombstone stays, so the cards it wrote keep its name. False when no
+   *  tombstone of that id is kept. */
+  clearRemoved(botId: string): boolean {
+    const tomb = this.removed.find((r) => r.id === botId);
+    if (!tomb) return false;
+    if (tomb.clearedAt !== undefined) return true;
+    const at = this.now();
+    this.removed = this.removed.map((r) => (r.id === botId ? { ...r, clearedAt: at } : r));
     this.changed();
     return true;
   }

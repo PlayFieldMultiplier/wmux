@@ -466,6 +466,9 @@ export const IPC = {
   FACTORY_BOT_SET_AVATAR: 'factory:bot:setAvatar',
   // "Add bot"'s repository for a workspace (shared/botCreate.ts); main window only.
   FACTORY_BOT_SUGGEST_REPO: 'factory:bot:suggestRepo',
+  // Take a deleted bot's 1:1 out of the Bots page's Archive
+  // (shared/botCreate.ts); main window only.
+  FACTORY_BOT_CLEAR_REMOVED: 'factory:bot:clearRemoved',
   // Stop the running work of every bot / of one bot (main/factory/
   // factoryStop.ts): turns, gates, workers; main window only.
   FACTORY_STOP_ALL: 'factory:stop:all',

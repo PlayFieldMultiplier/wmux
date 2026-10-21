@@ -180,9 +180,10 @@ export function previewThreadsToRead(
   return [...out];
 }
 
-/** The deleted bots the room's actors remember, with their workspace. Pure. */
+/** The deleted bots the room's actors remember, with their workspace, but
+ *  those the owner took out of the Archive. Pure. */
 export function removedBotRefs(actors: Readonly<Record<string, RoomActorEntry>>): RemovedBotRef[] {
-  return Object.entries(actors).flatMap(([id, a]) => (a.removed && a.workspaceId
+  return Object.entries(actors).flatMap(([id, a]) => (a.removed && !a.cleared && a.workspaceId
     ? [{ id, workspaceId: a.workspaceId, name: a.name, role: a.role, ...(a.avatar ? { avatar: a.avatar } : {}), ...(a.hue !== undefined ? { hue: a.hue } : {}) }]
     : []));
 }

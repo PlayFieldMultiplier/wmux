@@ -279,6 +279,9 @@ export interface RemovedBot {
    *  knew it (the Bots page does). */
   hue?: number;
   removedAt: number;
+  /** The owner removed its 1:1 from the Bots page's Archive: the chat is no
+   *  longer listed, and the tombstone stays so its cards keep its name. */
+  clearedAt?: number;
 }
 
 /** Edge of the stored avatar PNG, in pixels. */

@@ -1783,6 +1783,47 @@ function DeleteBot({ row, port, t }: { row: FactoryBotRow; port?: BotAdminPort; 
   );
 }
 
+/** A deleted bot's 1:1 in the Archive: Remove from Archive, after an inline
+ *  confirm that says what happens (the chat leaves the list for good; its
+ *  messages stay saved, and its name on what it wrote in group chats). */
+function ClearArchived({ name, t, onClear }: { name: string; t: T; onClear: () => Promise<string | null> }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const failed = await onClear();
+      if (failed !== null) setError(t('botsPage.archive.failed', { reason: failed }));
+    } catch (err) {
+      setError(t('botsPage.archive.failed', { reason: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mx-auto flex w-full max-w-[28rem] flex-col items-center gap-1.5 pb-3" data-bots-archive-clear>
+      {confirming ? (
+        <div className="w-full">
+          <InlineConfirm
+            text={t('botsPage.archive.confirm', { name })}
+            confirmLabel={t('botsPage.archive.remove')}
+            cancelLabel={t('room.hq.cancel')}
+            busy={busy}
+            onConfirm={() => void run()}
+            onCancel={() => setConfirming(false)}
+            testId="bots-archive-clear"
+          />
+        </div>
+      ) : (
+        <Button size="sm" variant="destructive" data-testid="bots-archive-clear" onClick={() => setConfirming(true)}>{t('botsPage.archive.remove')}</Button>
+      )}
+      {error && <p role="alert" className="text-[12px] text-[var(--accent-red)]">{error}</p>}
+    </div>
+  );
+}
+
 /** The bot's job in its profile: the text, and Edit when the bot port can
  *  update (saved as the owner; an empty job clears it). */
 function JobLine({ row, t, jobPort }: { row: FactoryBotRow; t: T; jobPort?: Pick<FactoryBotPort, 'update'> }) {
@@ -2138,7 +2179,7 @@ function HeadWorkers({ rows, name, shownId, t, onOpen }: {
   );
 }
 
-export function BotsChat({ conversation, roomCards, bots, title, workspaceName, t, onBack, api, now, readOnly: pausedView = false, stopPort = {}, jobPort, resumePort, onOpenBot, onEditGroup, threadAsk }: {
+export function BotsChat({ conversation, roomCards, bots, title, workspaceName, t, onBack, api, now, readOnly: pausedView = false, stopPort = {}, jobPort, resumePort, onOpenBot, onEditGroup, threadAsk, onClearArchived }: {
   conversation: Conversation;
   roomCards: readonly RoomCardData[];
   /** Every bot (names for senders and the addressee check). */
@@ -2167,6 +2208,9 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
   /** A thread to open beside the chat (a bot row led here to what it asks);
    *  a new nonce opens it again. */
   threadAsk?: { workspaceId: string; threadId: ThreadId; nonce: number };
+  /** A deleted bot's 1:1: takes it out of the Archive; a failure's reason,
+   *  or null (absent: no Remove from Archive). */
+  onClearArchived?: () => Promise<string | null>;
 }): React.ReactElement {
   // A deleted bot's 1:1 is read only: no composer, profile or answers.
   const removedBot = conversation.kind === 'bot' && conversation.removed === true;
@@ -2557,7 +2601,10 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
       <div className="wmux-bots-column wmux-bots-foot">
         <WorkingRail turns={turns} tasks={railTasks} t={t} now={now} readOnly={readOnly} resumePort={resumePort} shownId={shownId} onOpen={openWorker} />
         {removedBot ? (
-          <p data-bots-removed-note className="py-3 text-center text-[12px] text-[var(--text-muted)]">{t('botsPage.removedChat')}</p>
+          <>
+            <p data-bots-removed-note className="py-3 text-center text-[12px] text-[var(--text-muted)]">{t('botsPage.removedChat')}</p>
+            {onClearArchived && conversation.kind === 'bot' && <ClearArchived name={conversation.row.bot.name} t={t} onClear={onClearArchived} />}
+          </>
         ) : (
         <div className="wmux-bots-composer">
           <BotsComposer

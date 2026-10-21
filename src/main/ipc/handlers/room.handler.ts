@@ -79,8 +79,8 @@ export interface RoomIpcPorts {
 
 /** A bot as a card author. A removed one (`removed`) keeps its name, its
  *  picture, its colour slot and its workspace (where its 1:1 lives), from
- *  its tombstone. */
-export interface RoomActor { role: BotRole; name: string; removed?: true; avatar?: string; hue?: number; workspaceId?: string }
+ *  its tombstone; `cleared`: the owner took its 1:1 out of the Archive. */
+export interface RoomActor { role: BotRole; name: string; removed?: true; cleared?: true; avatar?: string; hue?: number; workspaceId?: string }
 
 /** A refused room call (the handlers' typed refusal). */
 export interface RoomRefusal { ok: false; code: string; message: string }
@@ -193,7 +193,7 @@ export function registerRoomIpcHandlers(getWindow: () => BrowserWindow | null, p
   ipcMain.handle(IPC.ROOM_ACTORS, wrapHandler(IPC.ROOM_ACTORS, operatorOnly((): { actors: Record<string, RoomActor> } => {
     const actors: Record<string, RoomActor> = {};
     for (const r of removedBots()) {
-      actors[r.id] = { role: r.role, name: r.name, removed: true, workspaceId: r.workspaceId, ...(r.avatar ? { avatar: r.avatar } : {}), ...(r.hue !== undefined ? { hue: r.hue } : {}) };
+      actors[r.id] = { role: r.role, name: r.name, removed: true, workspaceId: r.workspaceId, ...(r.clearedAt !== undefined ? { cleared: true } : {}), ...(r.avatar ? { avatar: r.avatar } : {}), ...(r.hue !== undefined ? { hue: r.hue } : {}) };
     }
     for (const b of bots()) actors[b.id] = { role: b.role, name: b.name };
     return { actors };
