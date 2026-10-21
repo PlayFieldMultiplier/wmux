@@ -1102,6 +1102,11 @@ export class RoomWriter {
 function threadLinked(cards: readonly RoomCard[], threadId: ThreadId, of: (t: unknown) => string | null): string | null {
   const own = of(threadId);
   if (own || threadId === GENERAL_THREAD || dmThreadBot(threadId) || groupThreadGroup(threadId)) return own;
+  // Only a thread wmux opened for one piece of work (`handoff:`) belongs to
+  // the 1:1 or group it was started from, as the room views read it
+  // (shared/botsWork.ts): a long-lived subject's thread (a PR's) a pointer
+  // card links is no conversation's.
+  if (!threadId.startsWith('handoff:')) return null;
   for (const c of cards) {
     if (c.actor.kind !== 'system') continue;
     if (c.threadId === threadId) {

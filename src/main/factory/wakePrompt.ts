@@ -10,6 +10,7 @@
 // any backtick run inside it, so it cannot close its own block.
 
 import { botTemplate, isCoordinatorBot, type BotProfile, type BotTemplate } from '../../shared/bot';
+import { botRepo } from '../../shared/repoKey';
 import { effectiveJob } from './roles/templates';
 import type { Fact } from '../../shared/facts';
 import { isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
@@ -55,7 +56,8 @@ export interface WakeRosterEntry {
   template?: BotTemplate;
   /** The job's first line, at most ROSTER_JOB_MAX characters. */
   job?: string;
-  /** The repository the bot works on (its repo key), when it has one. */
+  /** The repository the bot works on (its repo key, botRepo), when it
+   *  has one. */
   repo?: string;
 }
 
@@ -70,7 +72,7 @@ export function rosterEntry(b: Pick<BotProfile, 'id' | 'name' | 'role' | 'job' |
     name: b.name || b.role,
     template: botTemplate(b),
     ...(line ? { job: line.length > ROSTER_JOB_MAX ? `${line.slice(0, ROSTER_JOB_MAX - 1)}…` : line } : {}),
-    ...(b.repo?.repoKey ? { repo: b.repo.repoKey } : {}),
+    ...(botRepo(b) ? { repo: botRepo(b)!.repoKey } : {}),
   };
 }
 
@@ -523,13 +525,17 @@ export function buildWakePrompt(input: WakePromptInput): string {
   // A coordinator with no repository of its own: who in the workspace has
   // one (every bot of it, the group's or not), so repository work goes to
   // a bot that can do it instead of being refused.
-  if (isCoordinatorBot(profile) && !profile.repo?.repoKey) {
+  if (isCoordinatorBot(profile) && !botRepo(profile)) {
     const holders = (input.roster ?? []).filter((b) => b.repo);
     if (holders.length > 0) {
+      // pr_read and the other reads resolve to one bot's repository
+      // (factoryRead.rpc.ts workspaceRepo): named only when there is one.
+      const one = new Set(holders.map((b) => b.repo)).size === 1;
       lines.push(
         '',
         `You have no repository of your own; ${holders.map((b) => `${oneLineName(b.name)} (${b.botId}) works on ${b.repo}`).join(', ')}. `
-          + 'pr_read, issue_read and ci_read read that repository for you. Work on a pull request, an issue or the code — a review, a fix, a merge request — goes with handoff_send to a bot that has the repository.',
+          + (one ? 'pr_read, issue_read and ci_read read that repository for you. ' : '')
+          + 'Work on a pull request, an issue or the code — a review, a fix, a merge request — goes with handoff_send to a bot that has the repository.',
       );
     } else {
       lines.push(

@@ -97,6 +97,7 @@ import { fenceFor } from '../../shared/markdownFence';
 import { redactStoredSecrets } from './secretRedaction';
 import { normalizeRepoKey } from './repoWatch';
 import { isGitlabRepoKey } from '../github/hostLane';
+import { botRepo } from '../../shared/repoKey';
 import { laneRefusalCodes, laneRefusalLine } from './laneRefusalText';
 import { wakeReplyTo, type RoomWriter } from './roomWriter';
 import type { BotNoticeInput } from './botNotices';
@@ -610,9 +611,9 @@ export class ApprovalService {
       profile = null;
     }
     if (!profile || !profile.enabled || profile.workspaceId !== bot.workspaceId) return refuse('not_bot', 'this bot is not running in the factory');
-    const repoKey = normalizeRepoKey(profile.repo?.repoKey);
-    const repoPath = profile.repo?.repoPath ?? '';
-    if (!repoKey || !repoPath) return refuse('no_repo', 'this bot has no repository to act on: hand the request to a bot of this workspace that has the repository (handoff_send), which asks for it');
+    const repo = botRepo(profile);
+    if (!repo) return refuse('no_repo', 'this bot has no repository to act on: hand the request to a bot of this workspace that has the repository (handoff_send), which asks for it');
+    const { repoKey, repoPath } = repo;
 
     // One request per (bot, key): a retried turn gets the first one back.
     const clientRequestId = typeof raw.clientRequestId === 'string' ? raw.clientRequestId : this.nextOrdinal(bot.botId, wake);

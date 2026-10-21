@@ -1624,6 +1624,37 @@ describe('a room with a coordinator: the owner talks to it, and the work it disp
     expect(h.router.get(own.handoffId)?.askedIn).toBeUndefined();
   });
 
+  it('a pointer in a 1:1 or a group to a PR\'s thread leaves that thread no conversation\'s: no dmBotId or groupId on its summary', async () => {
+    for (const where of ['dm', 'group'] as const) {
+      const coordinator = bot('ws1', 'moa', { template: 'coordinator' });
+      const reviewer = bot('ws1', 'verifier');
+      const h = await harness([coordinator, reviewer]);
+      const GROUP = 'group:grp-0000c0de' as ThreadId;
+      h.ports.groups = { byThread: (ws, th) => (ws === 'ws1' && th === GROUP ? { id: 'grp-0000c0de', workspaceId: 'ws1', name: 'Ship', memberIds: [coordinator.id, reviewer.id], threadId: GROUP, createdAt: 1, updatedAt: 1 } : null) };
+      const asked = (where === 'dm' ? `dm:${coordinator.id}` : GROUP) as ThreadId;
+      const OPERATOR: RpcContext = { origin: 'local', operator: true, firstParty: true };
+      const posted = await handleRoomPost({ workspaceId: 'ws1', threadId: asked, title: 'Is PR #42 good to go?', ...(where === 'dm' ? { mentions: [coordinator.id] } : {}) }, OPERATOR, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir }) as { ok: true; card: { id: string } };
+      const PR = 'pr:github.com/acme/app#42' as ThreadId;
+      h.wake.thread = asked;
+      h.wake.id = { wakeId: `w-${where}`, attempt: 1, runId: `run-${posted.card.id}` } as Harness['wake']['id'];
+      const d = h.router.send(binding(coordinator), { kind: 'dispatch', toBotId: reviewer.id, title: 'Verify PR #42', body: '', threadId: PR });
+      if (!d.ok) throw new Error('dispatch failed');
+      expect(h.router.get(d.handoffId)?.askedIn, where).toBe(asked);
+      h.wake.thread = null;
+      h.wake.id = { wakeId: `w-gated-${where}`, attempt: 1, handoffId: d.handoffId, reasonKind: 'facts' } as Harness['wake']['id'];
+      expect(h.router.send(binding(reviewer), { kind: 'result', title: 'PR #42 passes', body: '' })).toMatchObject({ ok: true });
+      // The pointer shows where the owner asked, replying to the message.
+      const pointer = h.rooms.read('ws1', { threadId: asked }).cards.filter((c) => c.actor.kind === 'system' && c.refs?.threadId === PR);
+      expect(pointer, where).toEqual([expect.objectContaining({ title: 'Finished: Verify PR #42', replyTo: posted.card.id })]);
+      // The PR's thread stays the room's: it shows in General and takes
+      // the room's messages, as before.
+      const summary = h.rooms.threads('ws1').find((th) => th.threadId === PR);
+      expect(summary?.dmBotId, where).toBeUndefined();
+      expect(summary?.groupId, where).toBeUndefined();
+      for (const r of routers.splice(0)) r.dispose();
+    }
+  });
+
   it('an unpicked reply in a thread the group\'s work opened goes to the coordinator as lead and to the bot waiting there; it closes no question elsewhere', async () => {
     const coordinator = bot('ws1', 'moa', { template: 'coordinator' });
     const dev = bot('ws1', 'lead');

@@ -117,6 +117,13 @@ describe('buildWakePrompt — group rooms and routines', () => {
     const withHolder = buildWakePrompt({ item: wake, profile: lead, roster: [dev, scout] });
     expect(withHolder).toContain('You have no repository of your own; Dev (bot-00000002) works on github.com/acme/app. pr_read, issue_read and ci_read read that repository for you.');
     expect(withHolder).toContain('goes with handoff_send to a bot that has the repository.');
+    // Bots on two repositories: no claim about which one pr_read reads.
+    const other = rosterEntry({ id: 'bot-00000004', name: 'Ops', role: 'lead', template: 'developer', repo: { repoKey: 'github.com/acme/ops', repoPath: '/o' } });
+    const two = buildWakePrompt({ item: wake, profile: lead, roster: [dev, other] });
+    expect(two).toContain('Dev (bot-00000002) works on github.com/acme/app, Ops (bot-00000004) works on github.com/acme/ops.');
+    expect(two).not.toContain('read that repository for you');
+    // A repo key with no checkout folder is no repository (botRepo).
+    expect(rosterEntry({ id: 'bot-00000005', name: 'Half', role: 'lead', repo: { repoKey: 'github.com/acme/app', repoPath: '' } }).repo).toBeUndefined();
     const none = buildWakePrompt({ item: wake, profile: lead, roster: [scout] });
     expect(none).toContain('No bot in this workspace has a repository');
     expect(none).toContain('tell them so in one line and ask them to set a repository on a bot\'s profile');
