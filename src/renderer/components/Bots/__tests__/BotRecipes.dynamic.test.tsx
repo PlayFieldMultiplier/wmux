@@ -24,7 +24,7 @@ import type { FactoryBotCreateRequest } from '../../../../shared/botCreate';
 import { setFactoryBotPort, type FactoryBotPort } from '../../Room/factoryPorts';
 import type { BotConnectorPort } from '../../Room/botConnectors';
 import { AddBotForm } from '../../Settings/FactoryTab';
-import { BotRecipeChecklist, recipeJob } from '../BotRecipes';
+import { BotRecipeChecklist, recipeJob, signedInOf } from '../BotRecipes';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -123,16 +123,16 @@ describe('BotRecipeChecklist', () => {
     expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('signIn');
   });
 
-  it('reads a busy sign-in again, and without the sign-in bridge says sign in needed instead of checking', async () => {
+  it('reads a sign-in in flight again until it settles, and without the sign-in bridge says sign in needed instead of checking', async () => {
     vi.useFakeTimers();
     try {
       const c = connector('notion', { id: 'con-000000d1', enabled: true, scope: { kind: 'bots', botIds: [BOT] }, tools: { mode: 'listed', allowed: ['notion-search'] } });
-      const answers: ConnectorOAuthStatus[] = ['busy', 'authorized'];
+      const answers: ConnectorOAuthStatus[] = ['authorizing', 'authorized'];
       const oauthStatus = vi.fn(async () => ({ status: answers.shift() ?? 'authorized' }));
       const bot = { id: BOT, recipe: 'notionMeetingDigest', template: 'custom' as const, role: 'lead' as const };
       await act(async () => root.render(<BotRecipeChecklist bot={bot} t={t} port={connectorPort([c])} oauthStatus={oauthStatus} platform="darwin" />));
       expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('checking');
-      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
       expect(oauthStatus).toHaveBeenCalledTimes(2);
       expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('ready');
       act(() => root.unmount());
@@ -143,6 +143,29 @@ describe('BotRecipeChecklist', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('reads an expired access token as signed in: main refreshes it when a worker starts', async () => {
+    const c = connector('notion', { id: 'con-000000e1', enabled: true, scope: { kind: 'bots', botIds: [BOT] }, tools: { mode: 'listed', allowed: ['notion-search'] } });
+    const oauthStatus = vi.fn(async () => ({ status: 'expired' as ConnectorOAuthStatus }));
+    const bot = { id: BOT, recipe: 'notionMeetingDigest', template: 'custom' as const, role: 'lead' as const };
+    await act(async () => root.render(<BotRecipeChecklist bot={bot} t={t} port={connectorPort([c])} oauthStatus={oauthStatus} platform="darwin" />));
+    expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('ready');
+    expect(signedInOf('expired')).toBe(true);
+    expect(signedInOf('signed-out')).toBe(false);
+    expect(signedInOf('authorizing')).toBeUndefined();
+  });
+
+  it('a library that cannot be read reads as empty, never "Checking…" for good', async () => {
+    const bot = { id: BOT, recipe: 'notionMeetingDigest', template: 'custom' as const, role: 'lead' as const };
+    const refused = { ...connectorPort([]), list: async () => ({ ok: false, code: 'not_started', message: 'x' }) } as unknown as BotConnectorPort;
+    await act(async () => root.render(<BotRecipeChecklist bot={bot} t={t} port={refused} oauthStatus={vi.fn()} platform="darwin" />));
+    expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('signIn');
+    const rejected = { ...connectorPort([]), list: async () => { throw new Error('gone'); } } as unknown as BotConnectorPort;
+    act(() => root.unmount());
+    root = createRoot(host);
+    await act(async () => root.render(<BotRecipeChecklist bot={bot} t={t} port={rejected} oauthStatus={vi.fn()} platform="darwin" />));
+    expect(host.querySelector('[data-recipe-connector="notion"]')?.getAttribute('data-state')).toBe('signIn');
   });
 
   it('says macOS and Linux only on Windows, and nothing for a bot without a recipe or no longer of its template', async () => {

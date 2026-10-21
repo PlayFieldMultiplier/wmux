@@ -25,7 +25,7 @@
 import type { BotTemplate } from './bot';
 import type { Connector, ConnectorPresetId } from './botConnector';
 import { connectorsForBot } from './botConnector';
-import { CONNECTOR_SERVICES } from './connectorServices';
+import { CONNECTOR_SERVICES, isSignInService } from './connectorServices';
 
 /** A connection a recipe needs: a CONNECTOR_SERVICES id, or a preset id. */
 export type BotRecipeConnector = string;
@@ -117,14 +117,6 @@ export function connectorServes(id: BotRecipeConnector, c: Pick<Connector, 'tran
   return id in PRESET_NAMES && c.preset === id;
 }
 
-/** Whether a connection is signed in rather than keyed: a catalog endpoint
- *  over http with no keys and no credential header, the test main's gateway
- *  applies (main/connectors/workerGateway.ts isSignInService). Pure. */
-export function connectorSignsIn(c: Pick<Connector, 'transport' | 'remote' | 'secrets'>): boolean {
-  if (c.transport !== 'http' || !c.remote || c.secrets.length > 0) return false;
-  if (Object.keys(c.remote.headers).some((h) => /authorization|cookie/i.test(h))) return false;
-  return CONNECTOR_SERVICES.some((s) => s.url === c.remote!.url);
-}
 
 /** Where one of a recipe's connections stands for one bot, as its next step:
  *  platform    Windows: no connection reaches a bot's worker there yet.
@@ -170,7 +162,8 @@ export function recipeConnectorState(id: BotRecipeConnector, ctx: RecipeConnecto
   let best: Omit<RecipeConnectorRow, 'id' | 'name'> = { state: 'signIn' };
   for (const c of ctx.library) {
     if (!connectorServes(id, c)) continue;
-    const via = connectorSignsIn(c) ? 'signIn' as const : 'key' as const;
+    // Signed in, or keyed: the gateway's own test (isSignInService).
+    const via = isSignInService(c) ? 'signIn' as const : 'key' as const;
     const signed = via === 'signIn' ? ctx.signedIn(c.id) : (c.missingKeys ?? []).length === 0;
     let state: RecipeConnectorState;
     if (signed === false) state = 'signIn';

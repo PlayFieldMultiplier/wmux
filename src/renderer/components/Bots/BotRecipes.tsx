@@ -19,7 +19,6 @@ import {
   BOT_RECIPES,
   botRecipe,
   connectorServes,
-  connectorSignsIn,
   recipeChecklist,
   recipeConnectorName,
   recipeConnectorNeedsOwnClient,
@@ -27,7 +26,7 @@ import {
   type BotRecipe,
   type RecipeConnectorRow,
 } from '../../../shared/botRecipes';
-import { CONNECTOR_SERVICES } from '../../../shared/connectorServices';
+import { CONNECTOR_SERVICES, isSignInService } from '../../../shared/connectorServices';
 import { getBotConnectorPort, useBotConnectors, type BotConnectorPort } from '../Room/botConnectors';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
@@ -100,10 +99,13 @@ export function RecipePicker({ value, onChange, t, platform }: {
 }
 
 /** A sign-in status as the checklist reads it: signed in, not, or not
- *  known yet (busy: read again). Pure. */
+ *  known yet. 'expired' is signed in: only the access token lapsed, and
+ *  main refreshes it when a worker starts (the gateway decides by the stored
+ *  sign-in, not the token's age), as Plugins › Connectors shows it.
+ *  'authorizing' (a sign-in in flight) is not known yet: read again. Pure. */
 export function signedInOf(status: ConnectorOAuthStatus | undefined): boolean | undefined {
-  if (status === undefined || status === 'busy') return undefined;
-  return status === 'authorized';
+  if (status === undefined || status === 'authorizing') return undefined;
+  return status === 'authorized' || status === 'expired';
 }
 
 type OAuthAction = (action: 'status', id: string) => Promise<{ status: ConnectorOAuthStatus }>;
@@ -113,17 +115,18 @@ function oauthBridge(): OAuthAction | undefined {
   return api?.connectorOAuth?.action;
 }
 
-/** How long a busy sign-in waits before it is read again, and how often. */
-const BUSY_REREAD_MS = 1500;
-const BUSY_REREADS = 8;
+/** How long a sign-in in flight waits before it is read again, and how
+ *  often (the Connectors page polls its own every 2 s). */
+const AUTHORIZING_REREAD_MS = 2000;
+const AUTHORIZING_REREADS = 30;
 
 /** The sign-in status of each signed-in connection a recipe names, read
- *  again whenever one of them changes, and again while main answers busy
- *  (a refresh in flight). Without the sign-in bridge every one reads
+ *  again whenever one of them changes, and again while a sign-in is in
+ *  flight ('authorizing'). Without the sign-in bridge every one reads
  *  'unavailable': not signed in, never "checking" for good. */
 function useSignIns(r: BotRecipe, library: readonly ConnectorView[] | null, status: OAuthAction | undefined): Record<string, ConnectorOAuthStatus> {
   const services = useMemo(
-    () => (library ?? []).filter((c) => connectorSignsIn(c) && r.connectors.some((id) => connectorServes(id, c))),
+    () => (library ?? []).filter((c) => isSignInService(c) && r.connectors.some((id) => connectorServes(id, c))),
     [library, r],
   );
   const key = services.map((c) => `${c.id}:${c.updatedAt}`).join(',');
@@ -141,7 +144,7 @@ function useSignIns(r: BotRecipe, library: readonly ConnectorView[] | null, stat
     void Promise.all(services.map((c) => status('status', c.id).then((res) => res.status, () => 'unavailable' as const))).then((read) => {
       if (!live) return;
       setStatuses((cur) => ({ ...cur, ...Object.fromEntries(services.map((c, i) => [c.id, read[i]])) }));
-      if (read.includes('busy') && rereads < BUSY_REREADS) timer = window.setTimeout(() => setRereads((n) => n + 1), BUSY_REREAD_MS);
+      if (read.includes('authorizing') && rereads < AUTHORIZING_REREADS) timer = window.setTimeout(() => setRereads((n) => n + 1), AUTHORIZING_REREAD_MS);
     });
     return () => { live = false; if (timer !== undefined) window.clearTimeout(timer); };
     // `key` names the connections and their versions; `services` follows it.

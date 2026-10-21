@@ -59,8 +59,9 @@ export function useBotConnectors(p: BotConnectorPort = getBotConnectorPort()): {
   connectors: ConnectorView[];
   cannotStore: string | null;
   reload: () => void;
-  /** Whether a list has been read (an empty `connectors` before it is not
-   *  an empty library). */
+  /** Whether the list has been asked and answered, ok or not (an empty
+   *  `connectors` before it is not an empty library; after a refusal it
+   *  is). */
   loaded: boolean;
 } {
   const [connectors, setConnectors] = useState<ConnectorView[]>([]);
@@ -69,11 +70,11 @@ export function useBotConnectors(p: BotConnectorPort = getBotConnectorPort()): {
   const reload = useCallback(() => {
     if (!p.available) return;
     p.list().then((r) => {
+      setLoaded(true);
       if (!r?.ok) return;
       setConnectors(r.connectors);
       setCannotStore(r.cannotStore?.code ?? null);
-      setLoaded(true);
-    }, () => undefined);
+    }, () => setLoaded(true));
   }, [p]);
   useEffect(() => {
     reload();
