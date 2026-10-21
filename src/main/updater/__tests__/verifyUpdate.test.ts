@@ -8,6 +8,7 @@ import {
   artifactTempName,
   parseArtifactName,
   isVersionNewer,
+  parseFeedVersion,
 } from '../verifyUpdate';
 
 // NN2-T4 — the fail-closed verification core. The pre-fix updater launched an
@@ -197,11 +198,42 @@ describe('isVersionNewer', () => {
     expect(isVersionNewer('3.45.0+build.7', '3.44.0')).toBe(true);
   });
 
+  it('ranks a release above its own prereleases, and prereleases by semver precedence', () => {
+    // A staged X.Y.Z installer on an X.Y.Z-beta build is the newer version;
+    // reading past the suffix made the two equal and swept it on the 24 h floor.
+    expect(isVersionNewer('4.0.0', '4.0.0-beta.1')).toBe(true);
+    expect(isVersionNewer('4.0.0-beta.2', '4.0.0-beta.1')).toBe(true);
+    expect(isVersionNewer('4.0.0-beta.10', '4.0.0-beta.2')).toBe(true);
+    expect(isVersionNewer('4.0.0-rc.1', '4.0.0-beta.9')).toBe(true);
+    expect(isVersionNewer('4.0.0-beta.1.1', '4.0.0-beta.1')).toBe(true);
+    expect(isVersionNewer('4.0.0-beta', '4.0.0-1')).toBe(true); // numeric ranks below alphanumeric
+    expect(isVersionNewer('4.0.0-beta.1', '4.0.0-beta.2')).toBe(false);
+    expect(isVersionNewer('4.0.0-beta.1', '4.0.0-beta.1')).toBe(false);
+    expect(isVersionNewer('4.0.0+build.2', '4.0.0+build.1')).toBe(false); // build metadata is ignored
+  });
+
   it('answers false for anything it cannot read as three numbers', () => {
     // Conservative on purpose: the caller keeps "newer" artifacts around for
     // days, so an unreadable version must fall back to the ordinary sweep.
     expect(isVersionNewer('nightly', '3.44.0')).toBe(false);
     expect(isVersionNewer('3.45', '3.44.0')).toBe(false);
     expect(isVersionNewer('3.45.0', 'unknown')).toBe(false);
+  });
+});
+
+describe('parseFeedVersion', () => {
+  it('accepts a strict semver name with an optional leading v', () => {
+    expect(parseFeedVersion('4.8.1')).toBe('4.8.1');
+    expect(parseFeedVersion('v4.8.1')).toBe('v4.8.1');
+    expect(parseFeedVersion('v4.9.0-beta.1')).toBe('v4.9.0-beta.1');
+    expect(parseFeedVersion('4.9.0+build.7')).toBe('4.9.0+build.7');
+  });
+
+  it('rejects anything else', () => {
+    for (const name of ['', 'latest', '4.8', 'v4.8.1 ', ' 4.8.1', 'V 4.8.1', '04.8.1', '4.8.1-', '4.8.1/../x', 'wmux 4.8.1', 'vv4.8.1', `4.8.1-${'a'.repeat(80)}`]) {
+      expect(parseFeedVersion(name), name).toBeNull();
+    }
+    expect(parseFeedVersion(undefined)).toBeNull();
+    expect(parseFeedVersion(4)).toBeNull();
   });
 });

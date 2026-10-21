@@ -45,7 +45,11 @@ interface TempFile { body: Buffer; mtimeMs?: number; isFile?: boolean }
 
 /** Load AutoUpdater (win32) with a URL-routing net mock, fs mocked, window capture. */
 async function loadWin32(
-  { sha = GOOD_SHA, tempFiles = {} }: { sha?: string; tempFiles?: Record<string, TempFile> } = {},
+  {
+    sha = GOOD_SHA,
+    tempFiles = {},
+    appVersion = FAKE_VERSION,
+  }: { sha?: string; tempFiles?: Record<string, TempFile>; appVersion?: string } = {},
 ) {
   vi.resetModules();
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
@@ -195,7 +199,7 @@ async function loadWin32(
   const quit = vi.fn();
   vi.doMock('electron', () => ({
     autoUpdater: {},
-    app: { getVersion: () => FAKE_VERSION, getPath: () => '/tmp', quit, isPackaged: true },
+    app: { getVersion: () => appVersion, getPath: () => '/tmp', quit, isPackaged: true },
     ipcMain: {
       on: vi.fn(),
       handle: (ch: string, cb: (...a: unknown[]) => unknown) => { ipcHandlers.set(ch, cb); },
@@ -625,5 +629,22 @@ describe('AutoUpdater temp artifact reuse (win32)', () => {
     const swept = unlinkMock.mock.calls.map((c) => String(c[0]));
     expect(swept.some((p) => p.includes(alreadyInstalled))).toBe(true);
     expect(swept.some((p) => p.includes(pending))).toBe(false);
+  });
+
+  it('on a prerelease build, the sweep keeps the staged installer for the matching release', async () => {
+    // 9.9.10 is newer than 9.9.10-beta.1, so its installer is the pending one
+    // and is held on the 7-day floor rather than swept as if already installed.
+    const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    const release = `wmux-update-${NEW_VERSION}-1-wmux-${NEW_VERSION}.Setup.exe`;
+    const { AutoUpdater, unlinkMock, win } = await loadWin32({
+      appVersion: `${NEW_VERSION}-beta.1`,
+      tempFiles: { [release]: { body: INSTALLER_BODY, mtimeMs: threeDaysAgo } },
+    });
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+
+    updater.start();
+    await flush();
+
+    expect(unlinkMock.mock.calls.some((c) => String(c[0]).includes(release))).toBe(false);
   });
 });
