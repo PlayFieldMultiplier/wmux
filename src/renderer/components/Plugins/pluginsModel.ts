@@ -1,4 +1,4 @@
-import type { InstalledUiPlugin, UiPluginGlyph } from '../../../shared/pluginManagement';
+import { TERMINAL_CONTENT_CAPABILITIES, type InstalledUiPlugin, type UiPluginGlyph } from '../../../shared/pluginManagement';
 import type { TranslationKey } from '../../i18n/locales/en';
 
 /** Where a plugin stands, read from the inventory alone. */
@@ -129,14 +129,14 @@ export interface PluginPermissionLine {
 
 /**
  * "What it can do": one granted line per declared capability, then a muted
- * line saying the page cannot read terminal content when `terminal.read` is
- * not declared.
+ * line saying the page cannot read terminal content when it declares no
+ * capability that reaches it (TERMINAL_CONTENT_CAPABILITIES).
  */
 export function pluginPermissionLines(capabilities: readonly string[]): PluginPermissionLine[] {
   const lines = capabilities.map((capability): PluginPermissionLine => ({
     capability, labelKey: CAPABILITY_LABEL_KEYS[capability.split(':')[0]] ?? null, granted: true,
   }));
-  if (!capabilities.some((capability) => capability.split(':')[0] === 'terminal.read')) {
+  if (!capabilities.some((capability) => TERMINAL_CONTENT_CAPABILITIES.includes(capability.split(':')[0]))) {
     lines.push({ capability: 'terminal.read', labelKey: 'plugins.page.cap.noTerminal', granted: false });
   }
   return lines;

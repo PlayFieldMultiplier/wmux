@@ -247,9 +247,10 @@ navigates through it.
   Settings › Bots instead. Connectors have no rail item of their own: they
   are a row on the Plugins page, and the `connectors` route (deep links,
   commands) opens Plugins with that row selected — one redirect in the route
-  layer, not a second page. An approved UI plugin's rail page follows the
-  built-in ones under a short `--line` hairline, with its catalog glyph (a
-  package for a bundle installed by hand). Settings is a page too,
+  layer, not a second page. A UI plugin's rail page (any whose trust is not
+  denied) follows the built-in ones under a short `--line` hairline, with the
+  glyph its catalog entry names (a package for a bundle the catalog does not
+  name). Settings is a page too,
   opened from the rail's More menu or ⌘,.
 - **The rail's foot** holds one `⋯` **More** button (named "More",
   `aria-haspopup="menu"`). Its menu, beside the rail and level with the
@@ -1152,8 +1153,10 @@ a rebindable shortcut with no default key) or the `connectors` route.
   (publisher · licence · version; name · version for a bundle installed by
   hand), the description, then **What it can do**: one line per declared
   capability with a muted check, its plain-language label and the
-  capability in mono, and — when `terminal.read` is not declared — a muted
-  no-entry mark and "No access to terminal content".
+  capability in mono, and — when it declares nothing that reaches terminal
+  text (`terminal.read`, `pane.search`, `notifications.read`,
+  `computer.observe`) — a muted no-entry mark and "No access to terminal
+  content".
 - **Actions, one primary per state:** available → **Install** + README
   (opens the bundle's README on GitHub); installed but not approved →
   **Review permissions to open** + Uninstall; approved → **Open** + Disable

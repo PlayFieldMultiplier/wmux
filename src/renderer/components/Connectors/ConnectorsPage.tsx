@@ -25,7 +25,7 @@ import type { ConnectorDraft, ConnectorView } from '../../../shared/botConnector
  * See LICENSE.LibreChat and docs/design/connector-adoption.md for provenance.
  * Stored configuration is deliberately not presented as verified connectivity.
  */
-export default function ConnectorsPage({ port = getBotConnectorPort(), embedded = false, selectedView }: { port?: BotConnectorPort; embedded?: boolean; selectedView?: 'mine' | 'discover' }) {
+export default function ConnectorsPage({ port = getBotConnectorPort(), embedded = false, selectedView, headingLevel = 1 }: { port?: BotConnectorPort; embedded?: boolean; selectedView?: 'mine' | 'discover'; /** 2 inside a page that already has its h1. */ headingLevel?: 1 | 2 }) {
   const t = useT();
   const bots = useFactoryBots(null);
   const [localView, setView] = useState<'mine' | 'discover'>('mine');
@@ -84,7 +84,7 @@ export default function ConnectorsPage({ port = getBotConnectorPort(), embedded 
   return (
     <section className={embedded ? "flex flex-col gap-4 text-[var(--text-main)]" : "flex h-full min-h-0 flex-col gap-5 overflow-y-auto p-7 text-[var(--text-main)]"} aria-label={t('connectors.title')}>
       <header className="flex flex-wrap items-center justify-between gap-3">
-        {embedded ? <h2 className="text-[13px] font-normal text-[var(--text-sub)]">{t('connectors.title')}</h2> : <h1 className="text-[20px] font-semibold">{t('connectors.title')}</h1>}
+        {embedded ? <h2 className="text-[13px] font-normal text-[var(--text-sub)]">{t('connectors.title')}</h2> : headingLevel === 2 ? <h2 className="text-[20px] font-semibold">{t('connectors.title')}</h2> : <h1 className="text-[20px] font-semibold">{t('connectors.title')}</h1>}
         <Button disabled={!port.available || busy || loading || error} onClick={() => setDialog({})}>{t('connectors.add')}</Button>
       </header>
       <p className="text-[13px] text-[var(--text-sub)]">{t('connectors.quick.scope')}</p>

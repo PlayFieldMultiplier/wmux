@@ -8,6 +8,13 @@ export const PLUGIN_MANAGEMENT_IPC = {
   changed: 'plugins:changed',
 } as const;
 
+/**
+ * Capabilities that reach what terminal programs wrote: screen text, search
+ * over it, notifications carrying it, or screenshots. A plugin declaring none
+ * of them cannot read terminal content.
+ */
+export const TERMINAL_CONTENT_CAPABILITIES: readonly string[] = ['terminal.read', 'pane.search', 'notifications.read', 'computer.observe'];
+
 /** Glyphs a catalog entry may name for its rail item and Plugins page tile. */
 export type UiPluginGlyph = 'office' | 'pulse';
 

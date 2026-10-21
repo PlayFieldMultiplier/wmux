@@ -150,7 +150,7 @@ export default function PluginsPage() {
       {inventory.failures.map((failure) => <p key={failure.name} role="status" className="wmux-plugins-muted px-2 pt-3">{t('plugins.settings.loadFailed', { name: failure.name })}</p>)}
     </section>
     {connectorsSelected
-      ? <div className="wmux-plugins-connectors"><ConnectorsPage /></div>
+      ? <div className="wmux-plugins-connectors"><ConnectorsPage headingLevel={2} /></div>
       : <section className="wmux-plugins-detail" aria-label={t('plugins.page.detail')}>
         {failed && <div role="alert" className="wmux-plugins-alert"><span>{t('plugins.settings.failed')}</span><Button onClick={() => void reload()}>{t('connectors.retry')}</Button></div>}
         {selected

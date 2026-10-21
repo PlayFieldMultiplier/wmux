@@ -73,6 +73,10 @@ describe('pluginPermissionLines', () => {
     expect(pluginPermissionLines(['terminal.read:w1.*'])).toEqual([
       { capability: 'terminal.read:w1.*', labelKey: 'plugins.page.cap.terminalRead', granted: true },
     ]);
+    // Search over panes and notifications reach terminal text too.
+    for (const capability of ['pane.search', 'notifications.read', 'computer.observe']) {
+      expect(pluginPermissionLines([capability]).some((line) => !line.granted)).toBe(false);
+    }
     expect(pluginPermissionLines(['custom.thing'])[0]).toEqual({ capability: 'custom.thing', labelKey: null, granted: true });
   });
 });
