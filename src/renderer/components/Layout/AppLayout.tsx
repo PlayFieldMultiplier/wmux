@@ -89,7 +89,7 @@ import { FIRST_RUN_REOPEN_EVENT } from '../../../shared/firstRun';
 import { isFileDrag } from '../../../shared/dragDrop';
 import { terminalRegistry, watchColdFramePersistence } from '../../hooks/useTerminal';
 import { clearPersistedColdFrames, restoreColdFrames } from '../../terminal/coldFrame';
-import { holdsSuspendedSession, resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
+import { heldSuspendedIds, holdsSuspendedSession, resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
 import { isSurfaceShown } from '../../stores/selectors/surfaceShown';
 import { runWithProgressTimeout } from '../../hooks/reconcileProgressTimeout';
 import { createLateReconcileOnConnect } from '../../hooks/lateReconcileOnConnect';
@@ -1295,6 +1295,8 @@ export default function AppLayout() {
         // (#2398, see the end of the pass).
         const examinedPtyIds: string[] = [];
         const unsettledPtyIds = new Set<string>();
+        // #2398 — suspended sessions this pass holds instead of promoting.
+        const heldByPass: string[] = [];
         const collect = (workspaceId: string, pane: PaneLeaf, stashed: boolean) => {
           if (signal?.aborted) return;
           for (const surface of pane.surfaces) {
@@ -1377,6 +1379,7 @@ export default function AppLayout() {
               const shown = isSurfaceShown(useStore.getState(), candidate.workspaceId, candidate.surfaceId);
               if (holdsSuspendedSession({ shown, stashed: candidate.stashed })) {
                 console.log(`[lifecycle] reconcile HOLDING suspended ptyId=${candidate.ptyId} surface=${candidate.surfaceId} — pane hidden, promoted when first shown`);
+                heldByPass.push(candidate.ptyId);
                 continue;
               }
               // Try to promote this suspended session.
@@ -1493,6 +1496,14 @@ export default function AppLayout() {
             false,
             { markedAtOrBefore: markSeqAtStart },
           );
+          // #2398 — every suspended session a pane still holds stays in use,
+          // so the suspended TTL never prunes one whose pane is merely
+          // unopened. Best effort, as at reportViewerVisibility: a stale
+          // preload may not expose it.
+          const held = heldSuspendedIds(examinedPtyIds, listedPtys, heldByPass);
+          if (held.length > 0 && typeof window.electronAPI?.pty?.hold === 'function') {
+            void window.electronAPI.pty.hold(held).catch((err: unknown) => console.warn('[lifecycle] reconcile pty.hold failed', err));
+          }
         }
         console.log(`[AppLayout] Reconcile cycle #${reconcileCycleRef.current} complete (${absentCandidates.length} absent candidate(s))`);
       } finally {

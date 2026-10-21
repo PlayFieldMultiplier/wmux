@@ -352,7 +352,7 @@ const electronAPI = {
     // process name (e.g. "claude.exe").
     resources: (ptyIds: string[]) =>
       ipcRenderer.invoke(IPC.PANE_RESOURCES, ptyIds) as Promise<Record<string, { rss: number; image?: string }>>,
-    reconnect: (id: string, opts?: { promote?: boolean }) =>
+    reconnect: (id: string, opts: { promote: boolean }) =>
       // RCA A1 — `transient` distinguishes a recoverable failure (pipe not
       // writable yet, RPC threw during a handler-swap window) from a permanent
       // one (session genuinely dead). The renderer retries transient failures
@@ -360,9 +360,13 @@ const electronAPI = {
       // `cwdMissing` (#1305) rides the recoveryPending shape: the WSL directory
       // itself is gone, so Retry cannot succeed until it is restored and the
       // pane is offered a fresh start in the home directory instead.
-      // #2398 — `promote: false` (a hidden pane) attaches a live session but
-      // leaves a suspended one suspended, answered `deferred`.
+      // #2398 — `promote` is required: false (a hidden pane, a repaint) still
+      // attaches a live session but holds a suspended one, answered
+      // `deferred`; only true starts it.
       ipcRenderer.invoke(IPC.PTY_RECONNECT, id, opts) as Promise<{ success: boolean; id?: string; shell?: string; cols?: number; rows?: number; error?: string; code?: string; transient?: boolean; recoveryPending?: boolean; cwdMissing?: boolean; deferred?: boolean; resumeAgent?: string; resumeBinding?: ResumeBinding; recovery?: DeadPaneRecovery }>,
+    // #2398 — the suspended sessions panes hold without promoting (their
+    // panes are hidden or not mounted): the daemon keeps them from aging out.
+    hold: (ids: string[]) => ipcRenderer.invoke(IPC.PTY_HOLD, ids) as Promise<void>,
     // Fix B — on-demand promote of a cap-skipped suspended session.
     // #1305 — `fresh` promotes it in the home directory WITHOUT resuming the
     // recorded conversation: the way out when its own directory is gone.

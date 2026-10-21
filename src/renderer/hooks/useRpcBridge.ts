@@ -2697,10 +2697,14 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     const below = (n: number) => (n > 0 ? { rowsBelowCursor: n } : {});
 
     const terminal = terminalRegistry.get(ptyId);
+    // #2398 — a suspended session its hidden pane attached without promoting
+    // has no screen to read yet (not running, and not dead), and the read
+    // must not hydrate it: hydrating reattaches.
+    const deferredRead = !!store.ptyDeferredById?.[ptyId];
     // Internal attention probe: a settled current grid only. Never substitute
     // scrollback, a parked frame, or a best-effort hydration after a timeout.
     if (raw.approvalScreen === true) {
-      if (!terminal || typeof params.ptyId !== 'string') return null;
+      if (!terminal || typeof params.ptyId !== 'string' || deferredRead) return null;
       const { cols, rows } = terminal;
       const settled = await hydrateTerminalForRead(ptyId).catch(() => false);
       if (!settled || terminalRegistry.get(ptyId) !== terminal || terminal.cols !== cols || terminal.rows !== rows) return null;
@@ -2708,9 +2712,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       const screenRows = Array.from({ length: rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '');
       return { ptyId, approvalScreen: true, rows: screenRows, cols, rowCount: rows };
     }
-    // #2398 — a suspended session its hidden pane attached without promoting
-    // has no screen to read yet: not running, and not dead.
-    if (store.ptyDeferredById?.[ptyId]) return { ptyId, text: '', deferred: true };
+    if (deferredRead) return { ptyId, text: '', deferred: true };
     if (!terminal) {
       // Cold-park fallback (TASK-9): the pane's terminal is unmounted (parked).
       // Read its grid from the daemon ring instead of returning empty — an agent

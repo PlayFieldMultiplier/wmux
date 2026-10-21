@@ -1,6 +1,7 @@
 import { applyWmuxToolsToCommand, isWmuxToolsHint, locateWmuxMcpEntry } from '../../agents/toolSurfaceLaunch';
 import { codexConfigPath, codexHasWmuxServer } from '../../../shared/mcpRegistration';
 import { WSL_RPC_TIMEOUT_MS } from '../../../shared/wsl';
+import { suspendedReconnectAction } from '../../../shared/suspendedSession';
 import { app, ipcMain, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -1484,6 +1485,15 @@ export function registerPTYHandlers(
       return { success: false, error: res.error?.message ?? 'promote failed', cwdMissing: res.error?.code === 'CWD_MISSING' };
     }));
 
+    // #2398 — pty:hold: the suspended sessions the renderer's panes hold
+    // without promoting them. The daemon stamps each as in use so the
+    // suspended TTL does not prune a session whose pane is merely unopened.
+    ipcMain.removeHandler(IPC.PTY_HOLD);
+    ipcMain.handle(IPC.PTY_HOLD, wrapHandler(IPC.PTY_HOLD, async (_event: Electron.IpcMainInvokeEvent, ids: unknown) => {
+      const held = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
+      if (held.length > 0) await daemonClient.rpc('daemon.holdSession', { ids: held });
+    }));
+
     ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string, opts?: { promote?: boolean }) => {
       try {
         // #2398 — a cap-skipped session lives only in sessions.json, which
@@ -1502,6 +1512,8 @@ export function registerPTYHandlers(
           args?: string[];
           wslTarget?: WslTarget;
           resumeBinding?: ResumeBinding;
+          exec?: unknown;
+          supervision?: unknown;
         }>;
         if (!sessions.some(s => s.id === id)) {
           sessions = await daemonClient.rpc('daemon.listSessions', { includeSuspended: true }) as typeof sessions;
@@ -1522,11 +1534,19 @@ export function registerPTYHandlers(
         }
 
         if (session.state === 'suspended') {
-          // #2398 — a hidden pane attaches without promoting: its suspended
-          // session (cap-skipped, or a WSL placeholder) starts when the pane
-          // is first shown, which reattaches with promote. The id is kept.
-          if (opts?.promote === false) {
-            console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, pane hidden)`);
+          // #2398 — a suspended session (cap-skipped, or a WSL placeholder)
+          // is promoted only when the caller says so (a shown pane, a raw
+          // write, a resume on start) or when the daemon starts it in the
+          // background anyway (an exec unit or supervised session: the promote
+          // below joins that one, so its pane attaches once it runs instead of
+          // staying deferred). Otherwise it is held: the id is kept, the daemon
+          // keeps the record from aging out, and the pane's first show
+          // reattaches with promote.
+          if (suspendedReconnectAction(session, opts) === 'hold') {
+            console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, held)`);
+            void daemonClient.rpc('daemon.holdSession', { ids: [id] }).catch((err: unknown) => {
+              console.warn(`[lifecycle] daemon.holdSession ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
             // With the session's guarded resume binding (the daemon surfaces
             // it only while its transcript lives): the renderer promotes it at
             // boot after all when resume-on-start would bring that agent back.
@@ -1908,6 +1928,7 @@ export function registerPTYHandlers(
     ipcMain.removeHandler(IPC.PTY_CANCEL_CREATE);
     ipcMain.removeHandler(IPC.PTY_LIST);
     ipcMain.removeHandler(IPC.PTY_PROMOTE);
+    ipcMain.removeHandler(IPC.PTY_HOLD);
     ipcMain.removeHandler(IPC.PTY_RECONNECT);
     ipcMain.removeHandler(IPC.PTY_RESYNC);
     ipcMain.removeHandler(IPC.SUPERVISE_REARM);

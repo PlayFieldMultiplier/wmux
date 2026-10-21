@@ -64,7 +64,7 @@ describe('pty.handler PTY_PROMOTE — renderer→daemon hop', () => {
 
   it('carries the same code out of the reconnect path, where the banner is actually raised', () => {
     const start = source.indexOf("ipcMain.handle(IPC.PTY_RECONNECT");
-    const region = source.slice(start, start + 3500);
+    const region = source.slice(start, start + 5000);
     expect(region).toMatch(/recoveryPending: true[\s\S]*?cwdMissing: result\.error\?\.code === 'CWD_MISSING'/);
   });
 
@@ -231,15 +231,46 @@ describe('attach without promote (#2398)', () => {
   const handler = readSourceText(path.join(__dirname, '..', 'handlers', 'pty.handler.ts'));
   const daemon = readSourceText(path.join(srcRoot, 'daemon', 'index.ts'));
 
-  it('pty:reconnect answers a suspended session deferred, before any promote, when asked not to promote', () => {
+  it('pty:reconnect answers a suspended session deferred, before any promote, unless the action says promote', () => {
     const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
-    const region = handler.slice(start, start + 4000);
+    const region = handler.slice(start, start + 5000);
     expect(region).toMatch(/opts\?: \{ promote\?: boolean \}/);
-    const deferAt = region.indexOf('if (opts?.promote === false)');
+    const deferAt = region.indexOf("if (suspendedReconnectAction(session, opts) === 'hold')");
     const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
     expect(deferAt).toBeGreaterThan(region.indexOf("session.state === 'suspended'"));
     expect(deferAt).toBeLessThan(promoteAt);
     expect(region.slice(deferAt, promoteAt)).toMatch(/return \{\s*success: false,\s*deferred: true,/);
+  });
+
+  // Review item 2 — the reconnect asks the same predicate the daemon's boot
+  // promote uses, so an exec unit or supervised session the daemon starts in
+  // the background falls through to promoteSession (which joins that start)
+  // instead of leaving its pane deferred.
+  it('pty:reconnect reads exec and supervision, the fields recoversInBackground decides on', () => {
+    const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
+    const region = handler.slice(start, start + 2500);
+    expect(region).toMatch(/exec\?: unknown;\s*supervision\?: unknown;/);
+    expect(handler).toMatch(/import \{ suspendedReconnectAction \} from '\.\.\/\.\.\/\.\.\/shared\/suspendedSession';/);
+  });
+
+  // Review item 1 — a held session is in use: every hold tells the daemon,
+  // which renews it against the suspended TTL.
+  it('a held reconnect tells the daemon the session is held, and pty:hold forwards the renderer holds', () => {
+    const deferAt = handler.indexOf("if (suspendedReconnectAction(session, opts) === 'hold')");
+    expect(handler.slice(deferAt, deferAt + 700)).toMatch(/daemonClient\.rpc\('daemon\.holdSession', \{ ids: \[id\] \}\)/);
+    const holdAt = handler.indexOf('ipcMain.handle(IPC.PTY_HOLD');
+    expect(holdAt).toBeGreaterThan(0);
+    expect(handler.slice(holdAt, holdAt + 500)).toMatch(/daemonClient\.rpc\('daemon\.holdSession', \{ ids: held \}\)/);
+    expect((handler.match(/removeHandler\(IPC\.PTY_HOLD\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('daemon.holdSession stamps the pending recovery or disk-only record and saves', () => {
+    const start = daemon.indexOf("pipeServer.onRpc('daemon.holdSession'");
+    expect(start).toBeGreaterThan(0);
+    const region = daemon.slice(start, start + 800);
+    expect(region).toMatch(/sessionManager\.getPendingRecovery\(id\) \?\? diskOnlySessions\.find/);
+    expect(region).toMatch(/stampHeld\(record, now\)/);
+    expect(region).toMatch(/stateWriter\.saveDebounced\(buildState\(sessionManager\)\)/);
   });
 
   it('daemon.attachSession leaves a pending recovery pending with promote:false', () => {
@@ -265,8 +296,8 @@ describe('resume on start for a suspended session (#2398 §6-4 option B)', () =>
   const daemon = readSourceText(path.join(srcRoot, 'daemon', 'index.ts'));
 
   it('the deferred reconnect answer carries the session binding', () => {
-    const start = handler.indexOf('if (opts?.promote === false)');
-    const region = handler.slice(start, start + 900);
+    const start = handler.indexOf("if (suspendedReconnectAction(session, opts) === 'hold')");
+    const region = handler.slice(start, start + 1200);
     expect(region).toMatch(/deferred: true,[\s\S]*?resumeBinding: session\.resumeBinding/);
   });
 

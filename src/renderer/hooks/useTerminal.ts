@@ -629,6 +629,9 @@ const hydrateRegistry = new Map<string, () => Promise<boolean>>();
 /** Longest a read waits for a painted cold frame to be swapped out. */
 const COLD_FRAME_READ_WAIT_MS = 3000;
 export async function hydrateTerminalForRead(ptyId: string): Promise<boolean> {
+  // #2398 — a session left suspended while its pane is hidden has no screen
+  // to hydrate, and a read must never start it.
+  if (useStore.getState().ptyDeferredById?.[ptyId]) return false;
   const fn = hydrateRegistry.get(ptyId);
   return fn ? await fn() : false;
 }
@@ -1198,7 +1201,8 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // (dirty-raw-fallback via the flag) so doctor never double-counts.
       rpcSettled = true;
       st.viaRawFallback = true;
-      window.electronAPI.pty.reconnect(id).then((res) => {
+      // #2398 — a repaint never starts a session left suspended.
+      window.electronAPI.pty.reconnect(id, { promote: false }).then((res) => {
         if (!res?.success) abortResync(`reconnect-failed${res?.code ? `:${res.code}` : ''}`);
       }).catch((err: unknown) => {
         abortResync(`reconnect-error:${err instanceof Error ? err.message : String(err)}`);

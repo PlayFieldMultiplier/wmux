@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { holdsSuspendedSession, resolvePtyIdsToClear } from '../reconcileWithReQuery';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { heldSuspendedIds, holdsSuspendedSession, resolvePtyIdsToClear } from '../reconcileWithReQuery';
 
 // RCA A1/A9 partial-list reconcile guard. The bug: a single partial daemon
 // snapshot (mid-rehydrate) caused the reconcile to clear a live ptyId on the
@@ -78,5 +80,32 @@ describe('holdsSuspendedSession', () => {
   it('promotes a shown pane’s, and a stashed pane’s as before', () => {
     expect(holdsSuspendedSession({ shown: true, stashed: false })).toBe(false);
     expect(holdsSuspendedSession({ shown: false, stashed: true })).toBe(false);
+  });
+});
+
+// #2398 review item 1 — a suspended session a pane holds without promoting it
+// is in use: the reconcile tells the daemon, which keeps it from aging out
+// under the suspended TTL. That covers panes that never mount (a workspace
+// outside the multiview grid), whose reconnect never runs.
+describe('heldSuspendedIds', () => {
+  it('names every examined binding the daemon lists suspended, and every pass hold, once', () => {
+    const listed = [
+      { id: 'pty-live', state: 'detached' },
+      { id: 'pty-wsl', state: 'suspended' },
+      { id: 'pty-not-ours', state: 'suspended' },
+    ];
+    expect(heldSuspendedIds(['pty-live', 'pty-wsl'], listed, ['pty-cap', 'pty-wsl'])).toEqual(['pty-wsl', 'pty-cap']);
+    expect(heldSuspendedIds(['pty-live'], listed, [])).toEqual([]);
+  });
+
+  it('the startup reconcile sends them to the daemon once a pass completes', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', '..', 'components', 'Layout', 'AppLayout.tsx'), 'utf-8');
+    const holdAt = source.indexOf('reconcile HOLDING suspended ptyId');
+    expect(source.slice(holdAt, holdAt + 300)).toMatch(/heldByPass\.push\(candidate\.ptyId\);\s*continue;/);
+    const sendAt = source.indexOf('const held = heldSuspendedIds(examinedPtyIds, listedPtys, heldByPass);');
+    expect(sendAt).toBeGreaterThan(holdAt);
+    expect(source.slice(sendAt, sendAt + 300)).toMatch(/window\.electronAPI\.pty\.hold\(held\)/);
+    // Only after a pass that was not aborted.
+    expect(source.slice(source.lastIndexOf('if (!signal?.aborted) {', sendAt), sendAt)).toMatch(/setPtysUnconfirmed/);
   });
 });

@@ -164,6 +164,7 @@ import { installExitEvidence, noteExitReason, STATUS_CONTROL_C_EXIT } from './ex
 import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonSession, DaemonState } from './types';
 import { retireAdopted, withDiskOnlySessions } from './diskOnlySessions';
+import { stampHeld } from './heldSessions';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonDestroySessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
 import { gitDirMapperFor, gitWatchCwdFor } from './gitWatchCwd';
@@ -2930,6 +2931,22 @@ function registerRpcHandlers(
     next.sessions.push(...stateWriter.load().sessions.filter((s) => !liveIds.has(s.id)));
     stateWriter.saveImmediate(next);
   };
+
+  // #2398 — daemon.holdSession: a pane that attached without promoting (it is
+  // hidden) still holds this suspended session; keep it from aging out (see
+  // heldSessions.ts). Stamped on the record the next save writes; the save is
+  // debounced, so a boot that holds many panes writes once.
+  pipeServer.onRpc('daemon.holdSession', (params) => {
+    const ids = Array.isArray(params?.['ids']) ? (params['ids'] as unknown[]).filter((id): id is string => typeof id === 'string') : [];
+    const now = Date.now();
+    let stamped = 0;
+    for (const id of ids) {
+      const record = sessionManager.getPendingRecovery(id) ?? diskOnlySessions.find((s) => s.id === id);
+      if (stampHeld(record, now)) stamped++;
+    }
+    if (stamped > 0) stateWriter.saveDebounced(buildState(sessionManager));
+    return Promise.resolve({ ok: true, stamped });
+  });
 
   // daemon.attachSession
   pipeServer.onRpc('daemon.attachSession', async (params) => {

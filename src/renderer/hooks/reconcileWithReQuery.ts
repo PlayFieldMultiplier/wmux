@@ -111,3 +111,20 @@ export function holdsSuspendedSession(candidate: {
 }): boolean {
   return !candidate.shown && !candidate.stashed;
 }
+
+/**
+ * #2398 — the suspended sessions this pass found a pane still holding without
+ * promoting them: bound to a session the daemon lists suspended (a WSL
+ * placeholder), or one the pass held (holdsSuspendedSession). The reconcile
+ * tells the daemon (pty.hold), which keeps them from aging out under the
+ * suspended TTL: a pane nobody opened is unopened, not gone, mounted or not
+ * (a workspace outside the multiview grid never reconnects its panes).
+ */
+export function heldSuspendedIds(
+  examinedPtyIds: readonly string[],
+  listed: ReadonlyArray<{ id: string; state?: string }>,
+  heldByPass: readonly string[],
+): string[] {
+  const suspended = new Set(listed.filter((s) => s.state === 'suspended').map((s) => s.id));
+  return [...new Set([...examinedPtyIds.filter((id) => suspended.has(id)), ...heldByPass])];
+}

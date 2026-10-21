@@ -646,6 +646,30 @@ describe('StateWriter', () => {
     expect(writer.load().sessions.map((x) => x.id)).toContain('three-day-suspended');
   });
 
+  // #2398 — a suspended session a hidden pane holds (never promoted, so its
+  // lastActivity never moves) is in use: a recent hold keeps it, through a
+  // save and a load, while one nobody holds still ages out.
+  it('keeps a suspended session held within the TTL, whatever its lastActivity', () => {
+    const now = Date.now();
+    const HOUR = 60 * 60 * 1000;
+    const held = makeSession({
+      id: 'held-suspended',
+      state: 'suspended',
+      lastActivity: new Date(now - 30 * 24 * HOUR).toISOString(),
+      heldAt: new Date(now - 2 * HOUR).toISOString(),
+    });
+    const heldLongAgo = makeSession({
+      id: 'held-long-ago',
+      state: 'suspended',
+      lastActivity: new Date(now - 30 * 24 * HOUR).toISOString(),
+      heldAt: new Date(now - 8 * 24 * HOUR).toISOString(),
+    });
+    writer.saveImmediate(makeState([held, heldLongAgo]));
+    const loaded = writer.load().sessions;
+    expect(loaded.map((x) => x.id)).toEqual(['held-suspended']);
+    expect(loaded[0].heldAt).toBe(held.heldAt);
+  });
+
   it('rejects prototype pollution keys in JSON', () => {
     const filePath = path.join(tmpDir, 'sessions.json');
     const poisoned = JSON.stringify({

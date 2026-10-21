@@ -41,15 +41,8 @@ export function selectRecoverableSessions(
   };
 }
 
-/**
- * #2398 (owner decision §6-4) — whether a pending WSL recovery placeholder is
- * started in the background right after boot: only an exec unit or a
- * supervised session, which must run whether or not anyone looks at it. A
- * plain shell starts when its pane is first shown.
- */
-export function recoversInBackground(session: Pick<DaemonSession, 'exec' | 'supervision'>): boolean {
-  return !!session.exec || !!session.supervision;
-}
+// #2398 (owner decision §6-4) — shared with main's pty:reconnect.
+export { recoversInBackground } from '../shared/suspendedSession';
 
 /**
  * Stop the shells a previous daemon left running, a few sessions at a time.

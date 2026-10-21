@@ -134,6 +134,27 @@ describe('reattach of a hidden pane (#2398)', { timeout: 60_000 }, () => {
     expect(promoteFlags()).toEqual([false, true]);
     expect(useStore.getState().ptyDeferredById['p-written']).toBeUndefined();
   });
+
+  // Review item 6 — a read (pane.search, input.readScreen, an approval probe)
+  // hydrates a dirty pane through a resync reconnect, which asked for no
+  // promote flag and so promoted: reading a hidden pane started its session.
+  it('a read of a hidden suspended session neither hydrates nor reconnects it', async () => {
+    reconnect.mockImplementation(async (_id, opts) => (opts?.promote === false ? { success: false, deferred: true } : { success: true }));
+    setDaemonModeActive(true);
+    await render('p-read', false);
+    expect(useStore.getState().ptyDeferredById['p-read']).toBe(true);
+    const { hydrateTerminalForRead, terminalRegistry } = await import('../useTerminal');
+    const { markTerminalDirty } = await import('../../terminal/terminalOutputScheduler');
+    const terminal = terminalRegistry.get('p-read');
+    expect(terminal).toBeDefined();
+    markTerminalDirty(terminal as never);
+    let hydrated = true;
+    await act(async () => { hydrated = await hydrateTerminalForRead('p-read'); });
+    await settle();
+    expect(hydrated).toBe(false);
+    expect(promoteFlags()).toEqual([false]);
+    expect(useStore.getState().ptyDeferredById['p-read']).toBe(true);
+  });
 });
 
 // #2398 §6-4 option B: before #2398 every pane started at boot, so
