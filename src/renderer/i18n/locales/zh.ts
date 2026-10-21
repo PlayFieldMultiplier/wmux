@@ -2964,7 +2964,6 @@ export const zh = {
   'a2aLink.moaOnlyNote': "Moa 只与另一台电脑的 Moa 关联，已省略对方窗格。",
   'a2aLink.paneOnlyNote': "窗格只与窗格关联，因此那台电脑显示的其他项目已略去。",
   'settings.a2aExposureMoa': "公开本机的 Moa",
-  'settings.a2aExposureMoaDesc': "对方的 Moa 可请求与本机的 Moa 关联。",
   'settings.a2aExposureMoaOff': "本机的 Moa 已关闭。",
   'a2aLink.menu': "与另一台电脑上的窗格关联…",
   'a2aLink.title': "与另一台电脑上的窗格关联",

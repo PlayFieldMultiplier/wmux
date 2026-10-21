@@ -2448,7 +2448,6 @@ export const ko = {
   'a2aLink.moaOnlyNote': "Moa는 다른 PC의 Moa와만 연결됩니다. 그 PC의 판은 표시하지 않습니다.",
   'a2aLink.paneOnlyNote': "판은 판과만 연결되므로 그 PC가 보여 주는 다른 항목은 뺐습니다.",
   'settings.a2aExposureMoa': "이 PC의 Moa 공개",
-  'settings.a2aExposureMoaDesc': "그 PC의 Moa가 이 PC의 Moa에 연결을 요청할 수 있습니다.",
   'settings.a2aExposureMoaOff': "이 PC에서 Moa가 꺼져 있습니다.",
   'a2aLink.menu': "다른 PC의 판과 연결…",
   'a2aLink.title': "다른 PC의 판과 연결",

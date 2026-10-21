@@ -61,7 +61,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   useStore.setState({
-    appRoute: 'workspaces', readOnly: false, sidebarVisible: true, schedulesAvailable: false, moa: null,
+    appRoute: 'workspaces', readOnly: false, sidebarVisible: true, schedulesAvailable: false,
     a2aRemote: { links: [], offers: [], hosts: [], held: [], joined: [], peers: [], loaded: false },
   });
 });

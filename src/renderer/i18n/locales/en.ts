@@ -2975,7 +2975,6 @@ export const en = {
   'a2aLink.moaOnlyNote': "Moa links only with another PC's Moa; that PC's panes are left out.",
   'a2aLink.paneOnlyNote': "A pane links only with a pane, so anything else that PC shows is left out.",
   'settings.a2aExposureMoa': "Show this PC's Moa",
-  'settings.a2aExposureMoaDesc': "That PC's Moa may ask to link with this PC's Moa.",
   'settings.a2aExposureMoaOff': "Moa is off on this PC.",
   'a2aLink.menu': "Link with a pane on another PC…",
   'a2aLink.title': "Link with a pane on another PC",

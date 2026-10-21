@@ -57,7 +57,7 @@ import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { blocksStart, bridgeEnginePort, useEngineReadiness, type EnginePort } from './botsEngine'
 import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';
 import { BOT_NAME_MAX, isCoordinatorBot, normalizeBotName, type BotProfile } from '../../../shared/bot';
-import { listedWorkspaces } from '../../stores/slices/moaSlice';
+import { listedWorkspaces } from '../../../shared/pcRail';
 import { allRoomCards, botConversationId, conversationCards, groupConversationId, groupViewCards, roomCardsByWorkspace, type Conversation } from './botsModel';
 import BotsGroupDialog, { type GroupDialogStart } from './BotsGroupDialog';
 import { getBotGroupPort, type BotGroupPort } from '../Room/botGroups';

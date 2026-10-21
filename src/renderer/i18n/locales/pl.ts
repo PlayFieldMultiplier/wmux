@@ -2950,7 +2950,6 @@ export const pl = {
   'a2aLink.moaOnlyNote': "Moa łączy się tylko z Moa innego komputera; panele pominięto.",
   'a2aLink.paneOnlyNote': "Panel łączy się tylko z panelem, więc pozostałe pozycje tego komputera są pominięte.",
   'settings.a2aExposureMoa': "Pokaż Moa tego komputera",
-  'settings.a2aExposureMoaDesc': "Moa tamtego komputera może poprosić o połączenie z Moa tego komputera.",
   'settings.a2aExposureMoaOff': "Moa jest wyłączony na tym komputerze.",
   'a2aLink.menu': "Połącz z panelem na innym komputerze…",
   'a2aLink.title': "Połącz z panelem na innym komputerze",

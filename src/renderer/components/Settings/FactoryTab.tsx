@@ -54,7 +54,7 @@ import { BotConnectionsSection } from './BotConnectionsSection';
 import { ClaudeAuthSection, bridgeClaudeAuthPort, type ClaudeAuthPort } from './ClaudeAuthSection';
 import { InlineConfirm } from '../Bots/InlineConfirm';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
-import { listedWorkspaces } from '../../stores/slices/moaSlice';
+import { listedWorkspaces } from '../../../shared/pcRail';
 import { createBot, turnBotsOn, type TurnBotsOnResult } from '../Bots/botsAddBot';
 import { botsOnPatch, useBotsPlanConsent } from '../Bots/BotsPlanConsent';
 import { botsStopPort, toastStoppedWork } from '../Bots/botsStop';

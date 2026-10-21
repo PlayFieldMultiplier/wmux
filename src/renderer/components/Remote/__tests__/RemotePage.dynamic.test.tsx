@@ -105,7 +105,7 @@ beforeEach(() => {
     rootPane: { id: 'p1', type: 'leaf', ordinal: 1, metadata: { label: 'build' }, activeSurfaceId: 's1', surfaces: [{ id: 's1', ptyId: 'pty-1' }] },
   };
   useStore.setState({
-    remoteWorkspaces: [], workspaces: [ws as never], moa: null, appRoute: 'remote',
+    remoteWorkspaces: [], workspaces: [ws as never], appRoute: 'remote',
     a2aRemote: { links: [], offers: [], hosts: [], held: [], joined: [], peers: [], loaded: false },
   });
 });
