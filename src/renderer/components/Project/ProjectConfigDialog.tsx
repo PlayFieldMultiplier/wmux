@@ -211,7 +211,7 @@ export default function ProjectConfigDialog() {
           <section data-testid="project-prep-review">
             <div className="flex items-center gap-2 mb-2">
               <p className="ui-group-label flex-1 !mb-0">{t('project.prepHeading')}</p>
-              {isTrusted && (
+              {isTrusted && !prepNeedsReview && (
                 <Button
                   size="sm"
                   variant="secondary"

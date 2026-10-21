@@ -131,6 +131,15 @@ describe('save', () => {
     expect((await store.getState(link)).trust).toBe('trusted');
   });
 
+  it('saves a project with nothing left to prepare as a valid file', async () => {
+    await saveWorkspacePrepSettings(repo, settings(), undefined, deps);
+    const view = await readWorkspacePrepSettings(repo, deps);
+    const r = await saveWorkspacePrepSettings(repo, settings({ copy: [], setup: '' }), view.contentHash, deps);
+    expect(r.ok).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(repo, 'wmux.json'), 'utf8'))).toEqual({ version: 1, fanout: { copyIntoAutomated: false } });
+    expect((await store.getState(repo)).trust).toBe('trusted');
+  });
+
   it('rejects input that would not read back as asked', () => {
     expect(parseWorkspacePrepSettings(settings({ copy: ['../x'] }))).toBeUndefined();
     expect(parseWorkspacePrepSettings(settings({ portRange: '80-90' }))).toBeUndefined();

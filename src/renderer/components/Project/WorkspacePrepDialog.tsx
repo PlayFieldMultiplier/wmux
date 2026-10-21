@@ -77,9 +77,14 @@ export default function WorkspacePrepDialog() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // A new opening starts from a clean slate (no previous project's view).
   useEffect(() => {
-    if (!wsId) { loadedFor.current = null; return; }
-    if (!cwd || loadedFor.current !== null) return;
+    loadedFor.current = null;
+    setLoad({ state: 'loading' });
+  }, [wsId]);
+
+  useEffect(() => {
+    if (!wsId || !cwd || loadedFor.current !== null) return;
     loadedFor.current = cwd;
     let live = true;
     setLoad({ state: 'loading' });
@@ -104,8 +109,10 @@ export default function WorkspacePrepDialog() {
   // unticking one is possible and "not found" is visible here too.
   const rows = useMemo(() => {
     if (!view) return [];
-    const listed = new Set(view.candidates);
-    return [...view.candidates, ...view.settings.copy.filter((f) => !listed.has(f))];
+    // What the file already lists comes first, so a ticked row is never far
+    // down a long list.
+    const declared = view.settings.copy;
+    return [...declared, ...view.candidates.filter((f) => !declared.includes(f))];
   }, [view]);
 
   if (!wsId) return null;
@@ -145,7 +152,7 @@ export default function WorkspacePrepDialog() {
       <DialogBody>
         {!cwd && <p className="m-0 text-[13px] text-[var(--text-sub)]">{t('prep.noFolder')}</p>}
         {cwd && load.state === 'loading' && <p className="m-0 text-[13px] text-[var(--text-sub)]">{t('prep.loading')}</p>}
-        {cwd && load.state === 'error' && <p className="m-0 text-[13px] text-[var(--text-sub)]">{t('prep.saveError.write-failed')}</p>}
+        {cwd && load.state === 'error' && <p className="m-0 text-[13px] text-[var(--text-sub)]">{t('prep.loadError')}</p>}
         {view && (
           <>
             {blocked && (
@@ -242,7 +249,8 @@ export default function WorkspacePrepDialog() {
           </Button>
         ) : (
           view && !blocked && (
-            <Button size="md" variant="primary" onClick={() => { void save(); }} data-testid="prep-save">
+            // In flight it is not the primary (DESIGN: Dialogs & forms).
+            <Button size="md" variant={saving ? 'secondary' : 'primary'} onClick={() => { void save(); }} data-testid="prep-save">
               {t('prep.save')}
             </Button>
           )

@@ -113,6 +113,10 @@ export { maskInlineCredentials };
  * whatever the operator copied, which includes pairing links and tokens.
  */
 const NO_ARGS_SUMMARY_CHANNELS = new Set([
+  // New workspace setup: the setup command and the names of the config files
+  // a project copies stay out of the log.
+  'project-config:prep-get',
+  'project-config:prep-save',
   'clipboard:write',
   'clipboard:read',
   'clipboard:read-image',

@@ -247,6 +247,11 @@ export async function saveWorkspacePrepSettings(
   if (Object.keys(fanout).length > 0) doc.fanout = fanout;
   else delete doc.fanout;
 
+  // Nothing left to declare: an explicit "copy nothing into bot and fan-out
+  // workspaces" keeps the file a valid wmux.json (an empty one is not).
+  if (normalizeWmuxProjectConfig(doc) === undefined && Object.keys(doc).every((k) => k === 'version')) {
+    doc.fanout = { copyIntoAutomated: false };
+  }
   // The result must read back as exactly what was asked for.
   const check = normalizeWmuxProjectConfig(doc);
   if (!check || (check.fanout?.invalidFields?.length ?? 0) > 0) return { ok: false, error: 'invalid-input' };
@@ -265,10 +270,18 @@ export async function saveWorkspacePrepSettings(
   // symlinked spelling git's top resolves away), read back from the file
   // just written.
   const after = await deps.getState(cwd).catch((): ProjectConfigState => ({ found: false }));
-  const root = after.found && after.contentHash === contentHash && after.root ? after.root : found.state.root ?? found.dir;
+  // Something rewrote the file in between: approve nothing rather than guess.
+  if (!after.found || after.contentHash !== contentHash || !after.root) return { ok: false, error: 'changed' };
+  const root = after.root;
   // The unattended reboot consent was given for the layout, which this save
   // does not touch: it carries over only from bytes that were trusted.
   const unattended = trustedNow(found.state, liveHash) && liveHash !== undefined ? await deps.unattendedFor(root, liveHash) : false;
-  await deps.setTrusted(root, contentHash, unattended);
+  try {
+    await deps.setTrusted(root, contentHash, unattended);
+  } catch {
+    // The file is written but not approved: it reads as untrusted, so
+    // nothing in it runs; the dialog says the approval did not take.
+    return { ok: false, error: 'write-failed', detail: 'trust' };
+  }
   return { ok: true, contentHash };
 }
