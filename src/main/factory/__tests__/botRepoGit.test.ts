@@ -131,6 +131,32 @@ describe('gitDiff', () => {
     expect(diffs[1]).toEqual(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--submodule=short', RANGE, '--', '.', ':(exclude,literal).env']);
   });
 
+  it('a ref that moves between the name-status run and the patch run changes nothing', async () => {
+    const MOVED = 'f'.repeat(40);
+    let resolved = 0;
+    const calls: string[][] = [];
+    const run: GitRead = async (args) => {
+      calls.push(args);
+      const line = args.join(' ');
+      if (line.startsWith('rev-parse --verify --quiet origin/main^{commit}')) return { code: 0, stdout: resolved++ === 0 ? BASE : MOVED, stderr: '' };
+      if (line.startsWith(`rev-parse --verify --quiet ${SHA}^{commit}`)) return { code: 0, stdout: FULL, stderr: '' };
+      if (line.includes('--name-status')) {
+        // origin/main moves now: a second resolution would see MOVED.
+        resolved++;
+        return { code: 0, stdout: 'M\0a.md\0', stderr: '' };
+      }
+      return { code: 0, stdout: '+a\n', stderr: '' };
+    };
+    expect(await gitDiff(ROOT, { base: 'origin/main', head: SHA }, run)).toMatchObject({ ok: true });
+    const diffs = calls.filter((c) => c[0] === 'diff');
+    expect(diffs).toHaveLength(2);
+    for (const d of diffs) {
+      expect(d).toContain(`${BASE}...${FULL}`);
+      expect(d.join(' ')).not.toContain(MOVED);
+      expect(d.join(' ')).not.toContain('origin/main');
+    }
+  });
+
   it('paths are literal pathspecs', async () => {
     const { calls, run } = both([['diff', { stdout: 'M\0docs/a.md\0' }]]);
     await gitDiff(ROOT, { base: 'origin/main', head: SHA, paths: ['docs/*'] }, run);

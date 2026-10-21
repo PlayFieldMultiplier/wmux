@@ -170,6 +170,7 @@ function lanePrNode(pr, key) {
     headRefOid: pr.headSha,
     headRefName: pr.headRefName,
     baseRefName: pr.baseRefName ?? 'main',
+    baseRefOid: pr.baseRefOid ?? null,
     mergedAt: pr.mergedAt ?? null,
     mergeCommit: pr.mergeCommit ? { oid: pr.mergeCommit } : null,
     author: { login: pr.author },

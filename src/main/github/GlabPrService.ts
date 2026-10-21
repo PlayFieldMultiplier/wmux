@@ -222,7 +222,7 @@ export function glabProjectOfKey(key: string): { host: string; path: string } | 
  * labels, files and head pipeline belong to one moment. A retried job counts
  * by its latest run only.
  */
-export const GLAB_LANE_MR_QUERY = `query($fullPath: ID!, $iid: String!) { project(fullPath: $fullPath) { ciConfigPathOrDefault mergeRequest(iid: $iid) { iid title state draft sourceBranch targetBranch diffHeadSha sourceProjectId targetProjectId conflicts detailedMergeStatus mergedAt mergeCommitSha author { username } labels(first: 50) { pageInfo { hasNextPage } nodes { title } } diffStatsSummary { fileCount } diffStats { path } headPipeline { sha status mergeRequestEventType jobs(first: 100, retried: false) { pageInfo { hasNextPage } nodes { name status allowFailure webPath startedAt finishedAt stage { name } } } } } } }`;
+export const GLAB_LANE_MR_QUERY = `query($fullPath: ID!, $iid: String!) { project(fullPath: $fullPath) { ciConfigPathOrDefault mergeRequest(iid: $iid) { iid title state draft sourceBranch targetBranch diffHeadSha diffRefs { startSha } sourceProjectId targetProjectId conflicts detailedMergeStatus mergedAt mergeCommitSha author { username } labels(first: 50) { pageInfo { hasNextPage } nodes { title } } diffStatsSummary { fileCount } diffStats { path } headPipeline { sha status mergeRequestEventType jobs(first: 100, retried: false) { pageInfo { hasNextPage } nodes { name status allowFailure webPath startedAt finishedAt stage { name } } } } } } }`;
 
 /** The synthetic required check that fails while an MR changes which jobs
  *  run: the jobs are the MR head's own CI config, so a required job set is
@@ -354,6 +354,8 @@ export function mapGlabLaneFacts(raw: unknown, host: string): PrLaneFacts | null
     headRefOid: mr.diffHeadSha,
     headRefName: text(mr.sourceBranch),
     baseRefName: text(mr.targetBranch),
+    // The target branch's tip the MR's diff was taken against.
+    baseRefOid: text(rec(mr.diffRefs)?.startSha) || null,
     author: text(rec(mr.author)?.username) || null,
     ...glabMergeState(mr.detailedMergeStatus, mr.conflicts),
     ...(typeof mr.title === 'string' ? { title: mr.title } : {}),

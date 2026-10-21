@@ -348,22 +348,33 @@ describe('verifier-pass-at-head with botVerdictsOnly (evidence binding)', () => 
     expect(reasonOf(botCtx({ evidenceRows: rows(elsewhere) }))).toBe('evidence-mismatch');
   });
 
-  it('on: a reading-only PASS counts only while the PR\'s base branch is still where main read its gate', () => {
+  it('on: a reading-only PASS counts while the forge\'s base tip is where main read its gate, or declares no gate either', () => {
     const BASE = 'd'.repeat(40);
+    const NEW = 'e'.repeat(40);
     const reading = (over: Partial<NonNullable<PrVerdictRecord['evidence']>> = {}, rec: Partial<PrVerdictRecord> = {}) =>
       botVerdict({ evidence: { taskId: 'reading-only', gateHeadSha: head, reading: 'no-gate', baseRef: `origin/${facts.baseRefName}`, baseSha: BASE, ...over }, ...rec });
-    const at = (v: PrVerdictRecord, baseSha: string | null) => botCtx({ verdicts: [v], evidenceRows: new Map(), baseSha });
-    expect(evaluateMergeLane(facts, at(reading(), BASE)).ok).toBe(true);
-    expect(evaluateMergeLane(facts, at(reading(), BASE)).verifiedBy).not.toHaveProperty('taskId');
-    // The base moved, cannot be read, or the PR now targets another branch.
-    expect(reasonOf(at(reading(), 'e'.repeat(40)))).toBe('base-moved');
-    expect(reasonOf(at(reading(), null))).toBe('base-moved');
-    expect(reasonOf(at(reading({ baseRef: 'origin/release/2' }), BASE))).toBe('base-moved');
-    expect(reasonOf(at(reading({ baseSha: undefined }), BASE))).toBe('base-moved');
+    const on = (tip: string | null | undefined) => ({ ...facts, baseRefOid: tip });
+    const run = (v: PrVerdictRecord, tip: string | null | undefined, noGateBase: string | null = null) => {
+      const f = on(tip);
+      return evaluateMergeLane(f, ctx(f, { botVerdictsOnly: true, verdicts: [v], evidenceRows: new Map(), noGateBase }));
+    };
+    const why = (v: PrVerdictRecord, tip: string | null | undefined, noGateBase: string | null = null) =>
+      run(v, tip, noGateBase).failures.find((x) => x.predicate === 'verifier-pass-at-head')?.reason;
+    expect(run(reading(), BASE).ok).toBe(true);
+    expect(run(reading(), BASE).verifiedBy).not.toHaveProperty('taskId');
+    // The base tip moved: refused, unless main read the new tip and found no gate there either.
+    expect(why(reading(), NEW)).toBe('base-moved');
+    expect(run(reading(), NEW, NEW).ok).toBe(true);
+    expect(why(reading(), NEW, BASE)).toBe('base-moved');
+    // An unread tip, a retargeted PR, or no baseSha.
+    expect(why(reading(), null)).toBe('base-moved');
+    expect(why(reading(), undefined, null)).toBe('base-moved');
+    expect(why(reading({ baseRef: 'origin/release/2' }), BASE)).toBe('base-moved');
+    expect(why(reading({ baseSha: undefined }), BASE)).toBe('base-moved');
     // Bound to a bot and to the head; any other basis never counts.
-    expect(reasonOf(at(reading({}, { principal: { workspaceId: 'ws-verifier', ptyId: 'pty-1', agent: 'claude' } }), BASE))).toBe('evidence-mismatch');
-    expect(reasonOf(at(reading({ gateHeadSha: 'c'.repeat(40) }), BASE))).toBe('evidence-mismatch');
-    expect(reasonOf(at(reading({ reading: 'docs-only' as never }), BASE))).toBe('gate-required');
+    expect(why(reading({}, { principal: { workspaceId: 'ws-verifier', ptyId: 'pty-1', agent: 'claude' } }), BASE)).toBe('evidence-mismatch');
+    expect(why(reading({ gateHeadSha: 'c'.repeat(40) }), BASE)).toBe('evidence-mismatch');
+    expect(why(reading({ reading: 'docs-only' }), BASE)).toBe('gate-required');
   });
 
   it('on: a failing or killed gate refuses', () => {

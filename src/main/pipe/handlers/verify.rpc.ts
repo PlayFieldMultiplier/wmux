@@ -29,10 +29,12 @@
 // A bot may instead record a reading-only verdict (`evidence: {reading:
 // true}`): it read the change itself and started no worker. Main records it
 // only where no gate grades the change, found from its own reads, never from
-// the bot's word: the PR's base branch (`origin/<baseRefName>` in the
-// repository, resolved once to a commit) declares no gate at that commit
-// (TaskGateRunner.baseGate). The evidence names that ref and commit, and the
-// merge lane counts it only while the ref has not moved. A docs-only change
+// the bot's word: the PR's base branch declares no gate at its tip as the
+// forge reports it (facts.baseRefOid), read at that commit
+// (TaskGateRunner.baseGate) once `origin/<baseRefName>` in the repository is
+// that same commit (a stale local copy is refused: it may predate a gate).
+// The evidence names that ref and commit; the merge lane counts it while the
+// forge's base tip is still that commit, or declares no gate either. A docs-only change
 // in a repository with a gate is no exception: a docs file can be what the
 // gate checks. Anything else is refused `gate-required`: it needs a verify
 // worker. The guest checks are the same as for a task verdict.
@@ -198,6 +200,11 @@ export async function recordBotVerdict(
     if (!baseSha || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(baseSha)) {
       return { ok: false, code: 'gate-required', message: `${baseRef} is not in the repository, so its gate cannot be read: start a verify worker at the head` };
     }
+    // The local copy may lag the forge: a gate added on the base since the
+    // last fetch would go unread.
+    if (!facts.baseRefOid || baseSha !== facts.baseRefOid) {
+      return { ok: false, code: 'gate-required', message: `${baseRef} in the repository is not the base tip the pull request reports (${(facts.baseRefOid ?? 'unknown').slice(0, 12)}), so its gate cannot be read: start a verify worker at the head` };
+    }
     let gate: BaseGate;
     try {
       gate = await (ports.baseGate ?? repoBaseGate)(repoPath, baseSha);
@@ -221,7 +228,7 @@ export async function recordBotVerdict(
       return { ok: false, code: 'not-attributed', message: 'this bot changed while the verdict was being checked' };
     }
     // The lane's own check, on the same read: what is recorded can count.
-    const readingWhy = verdictEvidenceCheck(reading, new Map(), facts, baseSha);
+    const readingWhy = verdictEvidenceCheck(reading, new Map(), facts);
     if (readingWhy !== null) {
       return { ok: false, code: readingWhy === 'verdict-no-evidence' ? 'evidence-missing' : readingWhy, message: 'the merge lane would not count this reading-only verdict' };
     }

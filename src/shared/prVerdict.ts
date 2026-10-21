@@ -63,7 +63,9 @@ export interface PrVerdictPrincipal {
 export interface PrVerdictEvidence {
   taskId: string;
   gateHeadSha: string;
-  reading?: PrVerdictReadingBasis;
+  /** PrVerdictReadingBasis when this build wrote it; any other string is
+   *  read (records outlive builds) and never counts. */
+  reading?: string;
   baseRef?: string;
   baseSha?: string;
 }
@@ -175,9 +177,12 @@ export function isPrVerdictRecord(v: unknown): v is PrVerdictRecord {
       && (v.evidence === undefined || (isRecord(v.evidence)
         && isId(v.evidence.taskId)
         && typeof v.evidence.gateHeadSha === 'string' && COMMIT_SHA_RE.test(v.evidence.gateHeadSha)
-        && (v.evidence.reading === undefined || (v.evidence.reading === 'no-gate'
-          && typeof v.evidence.baseRef === 'string' && v.evidence.baseRef.length <= 250
-          && typeof v.evidence.baseSha === 'string' && COMMIT_SHA_RE.test(v.evidence.baseSha)))));
+        // Structural only: what a reading-only basis is worth is the merge
+        // lane's call (verdictEvidenceCheck), so a record another build wrote
+        // never makes the whole file unreadable.
+        && (v.evidence.reading === undefined || typeof v.evidence.reading === 'string')
+        && (v.evidence.baseRef === undefined || typeof v.evidence.baseRef === 'string')
+        && (v.evidence.baseSha === undefined || typeof v.evidence.baseSha === 'string')));
   return principalOk
     && typeof v.repoKey === 'string' && v.repoKey.length > 0
     && isPrNumber(v.prNumber)

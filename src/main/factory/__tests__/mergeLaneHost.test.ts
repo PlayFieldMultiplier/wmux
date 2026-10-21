@@ -167,20 +167,26 @@ describe('MergeLaneHost', () => {
     expect(await rig({ settings: { laneAutoMerge: true }, facts: { ...FACTS, author: 'stranger' }, ownerLogin: async () => null }).host.ruleCheck(req)).toContain('author-trusted:external-author');
   });
 
-  it('a reading-only PASS is checked against origin/<the PR base> read now, and only then', async () => {
+  it('a reading-only PASS taken at an older base tip: the gate is read again at the forge\'s tip, and only then', async () => {
     const BASE = 'd'.repeat(40);
+    const NEW = 'e'.repeat(40);
     const reading: PrVerdictRecord = { ...PASS, evidence: { taskId: 'reading-only', gateHeadSha: HEAD, reading: 'no-gate', baseRef: 'origin/main', baseSha: BASE } };
     const reads: Array<[string, string]> = [];
-    const at = (sha: string | null) => rig({ verdicts: [reading], originBranchSha: async (repo, branch) => { reads.push([repo, branch]); return sha; } });
+    const at = (tip: string, kind: 'none' | 'declared') => rig({
+      verdicts: [reading], facts: { ...FACTS, baseRefOid: tip },
+      baseGate: async (repo, sha) => { reads.push([repo, sha]); return kind === 'none' ? { kind: 'none' } : { kind: 'declared', command: 'npm test' }; },
+    });
     const settings = { ...DEFAULT_FACTORY_SETTINGS, enabled: true };
-    expect((await at(BASE).host.laneContext(KEY, '/repo', FACTS, [reading], [leadTask], settings)).baseSha).toBe(BASE);
-    expect(reads).toEqual([['/repo', 'main']]);
     const req = { repoKey: KEY, repoPath: '/repo', prNumber: 3, headSha: HEAD, tainted: false };
-    expect(await at('e'.repeat(40)).host.ruleCheck(req)).toBe('verifier-pass-at-head:base-moved');
-    // No reading-only verdict: the base is not read.
-    reads.length = 0;
-    expect((await at(BASE).host.laneContext(KEY, '/repo', FACTS, [PASS], [leadTask], settings)).baseSha).toBeNull();
+    // Unmoved: nothing is read again.
+    expect((await at(BASE, 'declared').host.laneContext(KEY, '/repo', { ...FACTS, baseRefOid: BASE }, [reading], [leadTask], settings)).noGateBase).toBeNull();
     expect(reads).toEqual([]);
+    // Moved, still no gate at the new tip: it counts.
+    expect((await at(NEW, 'none').host.laneContext(KEY, '/repo', { ...FACTS, baseRefOid: NEW }, [reading], [leadTask], settings)).noGateBase).toBe(NEW);
+    expect(reads).toEqual([['/repo', NEW]]);
+    expect(await at(NEW, 'none').host.ruleCheck(req)).toBeNull();
+    // Moved, and the new tip declares a gate: refused.
+    expect(await at(NEW, 'declared').host.ruleCheck(req)).toBe('verifier-pass-at-head:base-moved');
   });
 
   it('authorBots counts every bot whose worker has the head branch, on any repository', async () => {

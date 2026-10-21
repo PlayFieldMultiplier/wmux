@@ -311,8 +311,8 @@ describe('verify.recordVerdict — reading-only bot verdicts (no worker)', () =>
   const READ_INPUT = { ...INPUT, summary: 'read the change', evidence: { reading: true } };
   const MAIN = 'd'.repeat(40);
   const REL = 'e'.repeat(40);
-  const docs = { ...FACTS, baseRefName: 'main', files: ['docs/guide.html', 'README.md'], filesTruncated: false } as PrLaneFacts;
-  const code = { ...FACTS, baseRefName: 'main', files: ['src/app.py'], filesTruncated: false } as PrLaneFacts;
+  const docs = { ...FACTS, baseRefName: 'main', baseRefOid: MAIN, files: ['docs/guide.html', 'README.md'], filesTruncated: false } as PrLaneFacts;
+  const code = { ...FACTS, baseRefName: 'main', baseRefOid: MAIN, files: ['src/app.py'], filesTruncated: false } as PrLaneFacts;
   type BaseGate = NonNullable<NonNullable<VerifyRpcDeps['bot']>['baseGate']>;
   const refs = {
     'rev-parse --verify --quiet refs/remotes/origin/main^{commit}': MAIN,
@@ -344,13 +344,23 @@ describe('verify.recordVerdict — reading-only bot verdicts (no worker)', () =>
 
   it('the gate is read from the PR\'s own base branch: a PR into release/2 that declares a gate is refused while main has none', async () => {
     const baseGate = vi.fn<BaseGate>(async (_repo, at) => (at === REL ? { kind: 'declared', command: 'npm test' } : { kind: 'none' }));
-    const intoRelease = { ...code, baseRefName: 'release/2' } as PrLaneFacts;
+    const intoRelease = { ...code, baseRefName: 'release/2', baseRefOid: REL } as PrLaneFacts;
     const { call, record } = readingSetup(intoRelease, baseGate);
     expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required', message: expect.stringContaining('origin/release/2') });
     expect(baseGate).toHaveBeenCalledWith('/repo', REL);
     expect(record).not.toHaveBeenCalled();
     // The same PR into main records.
     expect(await readingSetup(code, baseGate).call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: true, record: { evidence: { baseRef: 'origin/main', baseSha: MAIN } } });
+  });
+
+  it('a stale local copy of the base is refused: a gate added on the forge since the last fetch would go unread', async () => {
+    const baseGate = vi.fn<BaseGate>(async () => ({ kind: 'none' }));
+    for (const baseRefOid of ['f'.repeat(40), null, undefined]) {
+      const { call, record } = readingSetup({ ...code, baseRefOid } as PrLaneFacts, baseGate);
+      expect(await call(READ_INPUT, BOT_CTX), String(baseRefOid)).toMatchObject({ ok: false, code: 'gate-required', message: expect.stringContaining('not the base tip') });
+      expect(record).not.toHaveBeenCalled();
+    }
+    expect(baseGate).not.toHaveBeenCalled();
   });
 
   it('an unknown gate, or a base branch not in the repository, is refused', async () => {

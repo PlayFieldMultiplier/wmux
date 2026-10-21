@@ -270,19 +270,6 @@ export function originBranchRef(branch: string): string | null {
     : null;
 }
 
-/** The commit `origin/<branch>` names in the repository now, or null. */
-export async function originBranchSha(run: Git, repoPath: string, branch: string): Promise<string | null> {
-  const ref = originBranchRef(branch);
-  if (!ref) return null;
-  try {
-    const r = await run(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], repoPath);
-    const sha = r.code === 0 ? r.stdout.trim() : '';
-    return /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha) ? sha : null;
-  } catch {
-    return null;
-  }
-}
-
 /** The gate a bot's repository declares at `baseRef` (a commit or ref; by
  *  default origin's default branch), from TaskGateRunner.baseGate on the
  *  shared runner, or unknown when the runner is not up or the branch cannot

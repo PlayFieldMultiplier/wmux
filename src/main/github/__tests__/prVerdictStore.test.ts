@@ -81,6 +81,31 @@ describe('PrVerdictStore', () => {
     await expect(store.list('github.com/o/r', 7)).rejects.toThrow('invalid verdict entry');
   });
 
+  it('an entry another build wrote is skipped on read and kept on write; one that could be a FAIL for the PR still refuses the read', async () => {
+    const store = new PrVerdictStore(dir);
+    const file = path.join(dir, 'pr-verdicts.json');
+    const odd = { ...rec({ verdict: 'pass' }), evidence: { taskId: 'reading-only', gateHeadSha: HEAD, reading: 7 } };
+    const otherFail = { ...rec({ verdict: 'fail' }), prNumber: 8, principal: 'garbled' };
+    fs.writeFileSync(file, JSON.stringify({ version: 2, verdicts: [rec({ verdict: 'pass', at: Date.now() }), odd, otherFail] }));
+    expect((await store.list('github.com/o/r', 7)).map((r) => r.verdict)).toEqual(['pass']);
+    await store.record(rec({ verdict: 'pass', at: Date.now() + 1 }));
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as { verdicts: unknown[] };
+    expect(saved.verdicts).toHaveLength(4);
+    expect(saved.verdicts).toEqual(expect.arrayContaining([odd, otherFail]));
+    // An unreadable entry that may be a FAIL on this PR blocks the read.
+    fs.writeFileSync(file, JSON.stringify({ version: 2, verdicts: [rec({ verdict: 'pass' }), { ...rec({ verdict: 'fail' }), principal: 'garbled' }] }));
+    await expect(store.list('github.com/o/r', 7)).rejects.toThrow('invalid verdict entry');
+    expect((await store.list('github.com/o/r', 9))).toEqual([]);
+  });
+
+  it('a reading-only record of any basis is read (the lane decides what it is worth)', async () => {
+    const store = new PrVerdictStore(dir);
+    const r1 = { ...rec({ verdict: 'pass', at: Date.now() }), version: 2 as const, principal: { workspaceId: 'ws-v', botId: 'bot-0a1b2c3d', agent: 'bot:verifier' },
+      evidence: { taskId: 'reading-only', gateHeadSha: HEAD, reading: 'docs-only' } };
+    fs.writeFileSync(path.join(dir, 'pr-verdicts.json'), JSON.stringify({ version: 2, verdicts: [r1] }));
+    expect(await store.list('github.com/o/r', 7)).toEqual([r1]);
+  });
+
   it('reads every time from disk (no cache)', async () => {
     const a = new PrVerdictStore(dir);
     const b = new PrVerdictStore(dir);

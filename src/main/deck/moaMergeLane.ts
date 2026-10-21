@@ -41,9 +41,11 @@
 //                    because the repository declares none: a gate recorded
 //                    as `no_gate_command` (the gate runner reads the base
 //                    itself), and a reading-only verdict main recorded for a
-//                    base branch it found declaring no gate, counted only
-//                    while that branch is still at the commit main read
-//                    (`baseSha`). Any other skip still refuses.
+//                    base branch it found declaring no gate at the forge's
+//                    base tip (`baseSha`). It counts while this read's
+//                    baseRefOid is that commit, or main found no gate at
+//                    the new tip too (`noGateBase`). Any other skip still
+//                    refuses.
 
 import type { LedgerGateResult } from '../../shared/ledger';
 import type { PrLaneFacts } from '../../shared/prReview';
@@ -118,9 +120,10 @@ export interface MergeLaneContext {
    *  not find is left out; null/absent when the rows could not be read, which
    *  under `botVerdictsOnly` refuses. */
   evidenceRows?: ReadonlyMap<string, LaneEvidenceRow> | null;
-  /** `origin/<the PR's base branch>` in the repository now, read by main for
-   *  a reading-only verdict (verdictEvidenceCheck); null when unreadable. */
-  baseSha?: string | null;
+  /** The PR's base tip (this read's baseRefOid) when main found no gate
+   *  declared there, read for a reading-only verdict taken at an older base
+   *  tip (verdictEvidenceCheck); null/absent otherwise. */
+  noGateBase?: string | null;
 }
 
 /** A verify task's ledger row as the lane needs it: who dispatched it, with
@@ -291,16 +294,17 @@ export function prBranchBoundToAsker(facts: PrLaneFacts, askerBranches: readonly
  * and exited 0 without being a skip, or was the `no_gate_command` record
  * (the repository declares no gate on its base, so there is nothing to run).
  * A reading-only verdict (evidence.reading `no-gate`) rests on no task:
- * main found no gate declared on the PR's base branch at `baseSha`. It
- * counts only while the PR still targets that branch (`facts`, this read)
- * and `origin/<base>` in the repository is still at `baseSha` (`baseSha`
- * argument, read by main now; null = unreadable). Null = counts.
+ * main found no gate declared on the PR's base branch at `baseSha`, the
+ * forge's base tip then. It counts only while the PR still targets that
+ * branch, and its base tip as this read (`facts`) gives it is `baseSha`, or
+ * is `noGateBase`: a newer tip main read the gate at and found none either.
+ * Null = counts.
  */
 export function verdictEvidenceCheck(
   r: PrVerdictRecord,
   rows: ReadonlyMap<string, LaneEvidenceRow>,
-  facts?: Pick<PrLaneFacts, 'baseRefName'>,
-  baseSha?: string | null,
+  facts?: Pick<PrLaneFacts, 'baseRefName' | 'baseRefOid'>,
+  noGateBase?: string | null,
 ): 'verdict-no-evidence' | 'evidence-mismatch' | 'gate-skipped' | 'gate-failed' | 'gate-required' | 'base-moved' | null {
   const ev = r.evidence;
   if (!ev) return 'verdict-no-evidence';
@@ -309,7 +313,9 @@ export function verdictEvidenceCheck(
     if (!botId || ev.gateHeadSha !== r.headSha) return 'evidence-mismatch';
     if (ev.reading !== 'no-gate') return 'gate-required';
     if (!facts || ev.baseRef !== `origin/${facts.baseRefName}`) return 'base-moved';
-    return !!ev.baseSha && typeof baseSha === 'string' && baseSha === ev.baseSha ? null : 'base-moved';
+    const tip = facts.baseRefOid;
+    if (!tip || !ev.baseSha) return 'base-moved';
+    return ev.baseSha === tip || noGateBase === tip ? null : 'base-moved';
   }
   const row = rows.get(ev.taskId);
   if (!row || row.taskId !== ev.taskId || !botId) return 'evidence-mismatch';
@@ -360,7 +366,7 @@ export function verifierPassAtHead(facts: PrLaneFacts, ctx: MergeLaneContext): {
   if (!rows) return { check: fail('evidence-unreadable') };
   let worst: number = EVIDENCE_REASON_RANK.length;
   for (const p of passes) {
-    const why = verdictEvidenceCheck(p, rows, facts, ctx.baseSha);
+    const why = verdictEvidenceCheck(p, rows, facts, ctx.noGateBase);
     if (why === null) {
       return {
         check: { ok: true },

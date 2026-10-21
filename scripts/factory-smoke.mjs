@@ -499,8 +499,10 @@ function ghEdit(ctx, a) {
         pr.headSha = git(['rev-parse', 'HEAD'], ctx.repo.seed);
         pr.headRefName ??= 'feature';
       }
-      // GitHub keeps every PR head at refs/pull/<n>/head.
+      // GitHub keeps every PR head at refs/pull/<n>/head, and reports the
+      // base branch's tip.
       git(['update-ref', `refs/pull/${pr.number}/head`, pr.headSha], ctx.repo.origin);
+      pr.baseRefOid ??= git(['rev-parse', `refs/heads/${pr.baseRefName}`], ctx.repo.origin);
       repo.prs.push(pr);
       ctx.saved[`pr${pr.number}Head`] = pr.headSha;
       ctx.saved[`pr${pr.number}Branch`] = pr.headRefName;
