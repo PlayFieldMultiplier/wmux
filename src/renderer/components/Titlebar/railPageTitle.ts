@@ -9,7 +9,7 @@ export const RAIL_PAGE_TITLE_KEYS: Partial<Record<AppRoute, TranslationKey>> = {
   schedules: 'schedules.title',
   remote: 'sidebar.remote',
   git: 'git.title',
-  connectors: 'connectors.title',
+  plugins: 'plugins.settings.title',
 };
 
 /** Whether the titlebar carries the workspace's name, task link and branch.

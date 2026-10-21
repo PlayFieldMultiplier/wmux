@@ -19,6 +19,13 @@ it('keeps every shipped catalog inventory aligned with its complete source bundl
     expect(forge).toContain(`'./examples/plugins/${entry.id}'`);
   }
 });
+it('keeps each catalog entry\'s capabilities and README link aligned with its shipped bundle', () => {
+  for (const entry of UI_PLUGIN_CATALOG) {
+    const manifest = JSON.parse(fs.readFileSync(path.resolve('examples/plugins', entry.id, 'manifest.json'), 'utf8')) as { capabilities: string[] };
+    expect([...entry.capabilities]).toEqual(manifest.capabilities);
+    expect(entry.readme).toBe(`https://github.com/openwong2kim/wmux/blob/main/examples/plugins/${entry.id}/README.md`);
+  }
+});
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-catalog-copy-')); roots.push(root);

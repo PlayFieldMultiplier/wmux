@@ -372,6 +372,36 @@ export function IconBrowser({ size = 14 }: { size?: number }) {
   );
 }
 
+/** Drawn on a 24 grid and scaled onto the shared 14 grid at the same stroke. */
+function Icon24({ children, size }: { children: React.ReactNode; size: number }) {
+  return <Icon size={size}><g transform="scale(0.58333)" strokeWidth="2.23">{children}</g></Icon>;
+}
+
+/** The Plugins rail page. */
+export function IconPuzzle({ size = 14 }: { size?: number }) {
+  return <Icon24 size={size}><path d="M10 4.5a2 2 0 1 1 4 0V6h3a1 1 0 0 1 1 1v3h-1.5a2 2 0 1 0 0 4H18v3a1 1 0 0 1-1 1h-3v-1.5a2 2 0 1 0-4 0V18H7a1 1 0 0 1-1-1v-3h1.5a2 2 0 1 0 0-4H6V7a1 1 0 0 1 1-1h3z" /></Icon24>;
+}
+
+/** The Office plugin (catalog glyph `office`). */
+export function IconOffice({ size = 14 }: { size?: number }) {
+  return <Icon24 size={size}><path d="M4 20V9l8-5 8 5v11" /><path d="M9 20v-5h6v5" /><path d="M8 11h.01M12 11h.01M16 11h.01" /></Icon24>;
+}
+
+/** The Agent status plugin (catalog glyph `pulse`). */
+export function IconPulse({ size = 14 }: { size?: number }) {
+  return <Icon24 size={size}><path d="M3 12h4l2.5-6 5 12 2.5-6h4" /></Icon24>;
+}
+
+/** A plugin without a glyph of its own: a package. */
+export function IconPackage({ size = 14 }: { size?: number }) {
+  return <Icon size={size}><path d="M7 1.5 12 4.25v5.5L7 12.5 2 9.75v-5.5z" /><path d="M2 4.25 7 7l5-2.75M7 7v5.5" /></Icon>;
+}
+
+/** MCP connectors: a plug. */
+export function IconPlug({ size = 14 }: { size?: number }) {
+  return <Icon size={size}><path d="M5 1v4m6-4v4M3 5h10v2a5 5 0 0 1-5 5v3M3 5v2a5 5 0 0 0 5 5" /></Icon>;
+}
+
 /** Git branch — two nodes on a trunk with a branch line. Opens the Git surface
  *  (worktrees + PRs) in the center pane. */
 export function IconGitBranch({ size = 14 }: { size?: number }) {

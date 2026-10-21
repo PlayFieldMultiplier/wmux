@@ -69,6 +69,7 @@
   background: var(--selection);
 }
 .wmux-nav-button[data-sidebar-nav="search"] { margin-bottom: 4px; }
+.wmux-nav-plugin-divider { display: block; flex: none; width: 24px; height: 1px; margin: 4px auto; background: var(--line); }
 .wmux-nav-icon { flex-shrink: 0; color: color-mix(in srgb, var(--text-main) 50%, transparent); }
 .wmux-nav-button:hover .wmux-nav-icon { color: color-mix(in srgb, var(--text-main) 70%, transparent); }
 .wmux-nav-button:is([aria-pressed="true"], [aria-current="page"]) .wmux-nav-icon { color: var(--text-main); }
@@ -1089,6 +1090,46 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 /* The Remote page's narrow rules (14px sides under a 640px sheet) ask the page
  * around it: a container never matches its own @container query. */
 .wmux-page[data-rail-page="remote"] { container-type: inline-size; }
+/* Plugins page (owner-approved 2026-10-21): a mantle list column beside one
+ * detail, told apart by tone alone (one boundary). Colour carries no state
+ * here: every word is neutral, the Signature tile is the text colour inverted. */
+.wmux-page[data-rail-page="plugins"] { container-type: inline-size; }
+.wmux-plugins { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.wmux-plugins-list { flex: none; width: 300px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 0 10px 16px; background: var(--bg-mantle); }
+.wmux-plugins-head { display: flex; align-items: center; height: 40px; padding: 0 6px; flex: none; }
+.wmux-plugins-title { margin: 0; font-size: var(--text-display-size); font-weight: var(--title-weight); color: var(--text-main); }
+.wmux-plugins-search { display: flex; align-items: center; gap: 8px; height: 30px; margin: 0 2px 6px; padding: 0 10px; flex: none; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-base); color: var(--text-muted); }
+.wmux-plugins-search:focus-within { border-color: var(--line-strong); box-shadow: 0 0 0 1px var(--accent); }
+.wmux-plugins-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font: inherit; font-size: 13px; color: var(--text-main); }
+.wmux-plugins-search input::placeholder { color: var(--text-muted); }
+.wmux-plugins-heading { margin: 0; padding: 14px 8px 6px; font-size: 11px; font-weight: 400; color: var(--text-muted); }
+.wmux-plugins-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 8px; margin-bottom: 2px; border-radius: 10px; text-align: left; color: var(--text-main); flex: none; }
+.wmux-plugins-row:hover { background: var(--hover-fill); }
+.wmux-plugins-row[aria-current="true"] { background: var(--selection); box-shadow: var(--select-ring); }
+.wmux-plugins-tile { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--selection); color: var(--text-sub); }
+.wmux-plugins-tile[data-signature="true"] { background: var(--text-main); color: var(--bg-base); }
+.wmux-plugins-row-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.wmux-plugins-row-name { font-size: 13px; font-weight: 500; }
+.wmux-plugins-row-tagline { font-size: 12px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wmux-plugins-row-state { flex: none; font-size: 11px; color: var(--text-muted); }
+.wmux-plugins-detail { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 28px 36px 40px; }
+.wmux-plugins-connectors { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.wmux-plugins-detail-body { max-width: 760px; display: flex; flex-direction: column; gap: 20px; }
+.wmux-plugins-detail-title { margin: 0; font-size: var(--text-display-size); font-weight: var(--title-weight); color: var(--text-main); }
+.wmux-plugins-description { margin: 0; max-width: 620px; font-size: 13px; line-height: 1.55; color: var(--text-main); }
+.wmux-plugins-perm { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text-main); }
+.wmux-plugins-perm-mark { display: inline-flex; flex: none; margin-top: 2px; color: var(--text-sub); }
+.wmux-plugins-perm[data-granted="false"] { color: var(--text-sub); }
+.wmux-plugins-perm[data-granted="false"] .wmux-plugins-perm-mark { color: var(--text-muted); }
+.wmux-plugins-perm-cap { margin-left: 8px; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--text-muted); }
+.wmux-plugins-muted { margin: 0; font-size: 12px; color: var(--text-muted); }
+.wmux-plugins-alert { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 13px; color: var(--text-sub); }
+/* A narrow sheet stacks the list over the detail. */
+@container (max-width: 640px) {
+  .wmux-plugins { flex-direction: column; overflow-y: auto; }
+  .wmux-plugins-list { width: auto; overflow: visible; }
+  .wmux-plugins-detail, .wmux-plugins-connectors { overflow: visible; padding-left: 14px; padding-right: 14px; }
+}
 /* The Git page sits beside the dock (Moa); a Git page drag held over the dock. */
 [data-channel-dock][data-handoff-over] { outline: 1px dashed var(--accent); outline-offset: -2px; }
 /* Fleet page: a head, the summary line, the list and the detail area. Amber

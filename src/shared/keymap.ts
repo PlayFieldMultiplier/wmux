@@ -65,7 +65,7 @@ export const SHORTCUT_ACTION_IDS = [
   // can put on a key of their choosing.
   'stashPane', 'movePaneLeft', 'movePaneRight', 'movePaneUp', 'movePaneDown',
   'multiTask', 'toggleToolbarPin', 'openWorktaskCleanup', 'showGitDiff',
-  'renameTab',
+  'renameTab', 'togglePluginsView',
 ] as const;
 
 export type ShortcutActionId = typeof SHORTCUT_ACTION_IDS[number];
@@ -252,6 +252,9 @@ export const UNBOUND_SHORTCUTS: readonly { action: ShortcutActionId; description
   { action: 'openWorktaskCleanup', descriptionKey: 'settings.sc.openWorktaskCleanup' },
   { action: 'showGitDiff', descriptionKey: 'settings.sc.showGitDiff' },
   { action: 'renameTab', descriptionKey: 'settings.sc.renameTab' },
+  // The Plugins page. No default key: Ctrl+Shift+P is where users move the
+  // command palette, and a default here would win over that override.
+  { action: 'togglePluginsView', descriptionKey: 'settings.sc.togglePluginsView' },
 ];
 
 /** The i18n key (and vars) naming `action` in shortcut lists. */

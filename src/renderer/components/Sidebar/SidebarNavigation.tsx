@@ -12,7 +12,7 @@ import { ownerFleetState } from './botTasks';
 import { selectScheduleNavSummary } from '../../stores/selectors/schedules';
 import { formatNextShort } from '../Schedules/format';
 import { useT } from '../../hooks/useT';
-import { Icon, IconClock, IconGitBranch, IconGrid, IconRemoteDevices, IconRobot, IconUsers } from '../icons';
+import { Icon, IconClock, IconGitBranch, IconGrid, IconPuzzle, IconRemoteDevices, IconRobot, IconUsers } from '../icons';
 import { useBots, useBotsSync } from '../Bots/useBots';
 import { selectGitRailSignal } from '../Git/gitSignal';
 import { selectRemoteNeedsYou } from '../../stores/slices/a2aRemoteSlice';
@@ -23,7 +23,8 @@ import { FOCUS_RING } from '../focusRing';
 export default function SidebarNavigation({ compact = false, home = false }: {
   compact?: boolean;
   /** The rail: pages only, each swapped into the sheet — Workspaces (home),
-   *  Bots (while the bots are on), Fleet, Schedules, Remote and Git. The command palette is not a
+   *  Bots (while the bots are on), Fleet, Schedules, Remote, Git and Plugins (which holds
+   *  the connectors since 2026-10-21). The command palette is not a
    *  page: ⌘K and the rail's More menu open it. */
   home?: boolean;
 }) {
@@ -125,9 +126,9 @@ export default function SidebarNavigation({ compact = false, home = false }: {
       icon: <IconGitBranch size={16} />,
       onClick: () => useStore.getState().setAppRoute('git'),
     }, {
-      id: 'connectors', label: t('connectors.title'), name: t('connectors.title'), active: route === 'connectors',
-      icon: <Icon size={16}><path d="M5 1v4m6-4v4M3 5h10v2a5 5 0 0 1-5 5v3M3 5v2a5 5 0 0 0 5 5" /></Icon>,
-      onClick: () => useStore.getState().setAppRoute('connectors'),
+      id: 'plugins', label: t('plugins.settings.title'), name: t('plugins.settings.title'), active: route === 'plugins',
+      icon: <IconPuzzle size={16} />,
+      onClick: () => useStore.getState().setAppRoute('plugins'),
     }] : []),
   ];
 

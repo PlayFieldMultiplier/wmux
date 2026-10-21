@@ -209,7 +209,7 @@ bar is a drag region; each interactive child opts out with `no-drag`.
   neither the workspace's name, its task link nor its branch. With the
   sidebar collapsed they return right of the segment: the name, the task
   link and the branch (the shortcut to Git). On a rail page (Bots, Git,
-  Fleet, Schedules, Remote) the title is the page's name, with no branch,
+  Fleet, Schedules, Remote, Plugins) the title is the page's name, with no branch,
   whatever the sidebar does. Settings follows the Workspaces rule.
 - **Centre: the drag region.** Nothing sits between the left segment and the
   right cluster; the whole gap drags the window. The command palette has no
@@ -242,9 +242,15 @@ commands, sidebar links, toast and notification jumps, schedule deep links —
 navigates through it.
 
 - **Pages, in order:** Workspaces (home: the sidebar and the panes)
-  · Bots · Fleet · Schedules · Remote · Git · Connectors. Bots is listed only while the
+  · Bots · Fleet · Schedules · Remote · Git · Plugins. Bots is listed only while the
   bots are on (Settings › Bots); off, its shortcut and palette command open
-  Settings › Bots instead. Settings is a page too,
+  Settings › Bots instead. Connectors have no rail item of their own: they
+  are a row on the Plugins page, and the `connectors` route (deep links,
+  commands) opens Plugins with that row selected — one redirect in the route
+  layer, not a second page. A UI plugin's rail page (any whose trust is not
+  denied) follows the built-in ones under a short `--line` hairline, with the
+  glyph its catalog entry names (a package for a bundle the catalog does not
+  name). Settings is a page too,
   opened from the rail's More menu or ⌘,.
 - **The rail's foot** holds one `⋯` **More** button (named "More",
   `aria-haspopup="menu"`). Its menu, beside the rail and level with the
@@ -1119,6 +1125,53 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   draft PR fails its checks or conflicts with its base (pushed PR status
   only, never a saved one); the button's name says why. Nothing at zero.
 
+### Plugins
+
+Owner-approved 2026-10-21. A catalog page in the sidebar's shape: a 300px
+`--bg-mantle` list column beside one detail, told apart by tone alone.
+Opened from the rail's puzzle-piece item, the command palette (Open Plugins,
+a rebindable shortcut with no default key) or the `connectors` route.
+
+- **List column:** the 16px title "Plugins", a search field (filters every
+  section by name and tagline; Escape clears it), then sections under 11px
+  muted headings, in order: **Signature** (catalog entries whose data flag
+  `signature` is set — today Office), **Catalog** (the other catalog
+  entries — today Agent status), **Installed** (every installed bundle that
+  is not in the catalog; drawn only when there is one) and **Connectors**
+  (one row, "MCP connectors", that shows the existing Connectors content in
+  the detail). A section with nothing in it is not drawn. A row is a 32px
+  tile with the entry's glyph (`--selection` fill; a Signature entry's tile
+  is the text colour inverted, still neutral), the name at 13px/500 over a
+  one-line 12px tagline, and a right-aligned 11px muted state: Not approved,
+  On, Off, or nothing while it is only available. The selected row is the
+  10px `--selection` pill (plus the look's `--select-ring`); the arrow keys,
+  Home and End walk the rows and select as they go. The selection is kept
+  while the page is away.
+- **Detail:** no preview for now (a real one would need the plugin's own
+  page; a mock-up of it would be fake data). The name at 16px/500 with a
+  neutral Signature badge for a signature entry, a 12px credit line
+  (publisher · licence · version; name · version for a bundle installed by
+  hand), the description, then **What it can do**: one line per declared
+  capability with a muted check, its plain-language label and the
+  capability in mono, and — when it declares nothing that reaches terminal
+  text (`terminal.read`, `pane.search`, `notifications.read`,
+  `computer.observe`) — a muted no-entry mark and "No access to terminal
+  content".
+- **Actions, one primary per state:** available → **Install** + README
+  (opens the bundle's README on GitHub); installed but not approved →
+  **Review permissions to open** + Uninstall; approved → **Open** + Disable
+  + Uninstall; disabled → **Enable** + Uninstall. Installing grants nothing:
+  only Review permissions asks main to show the approval dialog. Uninstall
+  asks in place (the hint, Cancel focused, then a red Uninstall), and is
+  offered only for a bundle the catalog installed; a bundle installed by
+  hand offers Disable instead and says its folder is removed by hand. Under
+  the actions, one muted note for the state ("Installing grants nothing. It
+  stays closed until you review its permissions." and so on). A bundle that
+  failed to load is listed as a muted line under the list.
+- **Settings › Plugins** keeps a single row, "Plugins moved to their own
+  page", with Open; nothing on it installs, approves or removes.
+- **Narrow sheet** (under 640px): the list stacks over the detail.
+
 ### Settings
 
 A page with the same tabs and rows as before (see "Settings" under
@@ -1171,6 +1224,12 @@ leaves the page.
   the current order (`Order: Manual`) and opens a three-item menu —
   Attention, Manual, Recent activity — the same setting as Settings ›
   Appearance › Sidebar.
+- **Agent not set up** (owner-approved 2026-10-21; built by #2535): while neither Claude
+  Code nor Codex is ready (installed and signed in), one muted row at the
+  sidebar's foot reads "Agent not set up · Set up" and reopens the setup
+  wizard. Neutral text with no fill and no attention orange (nothing waits on
+  an answer); the caution yellow is on its small glyph only. It is checked
+  once after startup and whenever the wizard checks again, never on a timer.
 - **Bot workers are not listed:** a fan-out task a factory bot dispatched
   (lineage origin `{kind:'bot'}`) is the bot's worker, shown on the Bots
   page only; the sidebar's task groups, the collapsed rail and the Ctrl+N
@@ -1489,7 +1548,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
   order: General · Appearance (theme, interface, sidebar, panes, terminal
   text, agent toolbar) · Terminal · Keyboard · Notifications. Group
   **Agents**: Claude Code · Accounts · Factory · Roles & fan-out ·
-  Token usage · Browser · Computer use. Group **Connections**: Plugins · Remote & phone · LAN. Then
+  Token usage · Browser · Computer use. Group **Connections**: Plugins (a link to the Plugins page) · Remote & phone · LAN. Then
   About. Each tab answers one question; a setting lives on exactly one tab
   and the search catalog (`settings/catalog.ts`) names that tab. Retired tab
   ids resolve through `resolveSettingsTab` (Orchestrator, Agents and Moa all
@@ -1664,6 +1723,8 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-20 | Owner decision: window glass on Windows 11 (acrylic). Windows 11 22H2+ gets the acrylic backdrop under the same Off / Soft / Clear setting, switched at runtime, with its own coverage numbers (light looks paint more so acrylic does not read grey) and a transparent caption-button strip; Windows 10, older Windows 11 builds and Linux stay opaque, and the setting says why there. Amends Window glass | A live prototype on Windows 11 showed acrylic blurring the desktop much like macOS vibrancy, staying on while unfocused, with clean caption buttons over a transparent strip; Mica read almost opaque. |
 | 2026-10-21 | Owner decision: a pane is linked across PCs by one share from the PC that accepts connections. On the receiving PC the share is a Needs you row of its own (no pane picker on the row; Accept… opens the link dialog with the other PC's pane fixed), counted with link requests, neutral apart from the one attention hairline and badge | Pairing, ticking the pane, a request from the other PC and an accept there took two machine switches; a share is the sharing PC's consent, and the receiver's Accept is its own. The dialog keeps "no pane picker on a request" for the row |
 | 2026-10-21 | The share starts from the pane's menu: **Share this pane with <PC>…** (or **with another PC…** when several joined this one), shown only while a PC has joined. Its dialog names what that PC will see (the pane, its agent, repo and folder), two direction boxes ticked by default, one muted line on what happens next, and Share as the one primary; a reason it cannot share (older wmux, not connected, already linked, already shared with Withdraw) is a muted line, never a colour. When the other PC accepts, a toast says so and the link row names its pane; Unlink hides the pane again unless it was shown before the share or the list was saved since | One action on the sharing PC replaces ticking the pane in Panes to show and accepting a request. The checklist stays for showing panes without a share, with a hint pointing at the menu |
+| 2026-10-21 | Owner decision: Plugins is a rail page (after Git) with a puzzle-piece glyph — a mantle catalog list (Signature, Catalog, Installed, Connectors) beside one detail with the permission list and one primary per state; Signature is a catalog data flag (Office today). Connectors lose their rail item and become the page's Connectors row; the `connectors` route redirects there. Settings › Plugins keeps only a link. Plugin rail items get their catalog glyph instead of the Workspaces one | One home for everything that extends wmux; the signature plugin is seen first; the rail drops an item |
+| 2026-10-21 | Owner decision: a muted "Agent not set up · Set up" row at the sidebar's foot while no agent is ready (built by #2535) | The user who chose Later in the setup wizard keeps one quiet way back to it |
 
 ### Desktop conversation view
 
