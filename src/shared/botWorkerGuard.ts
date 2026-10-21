@@ -448,8 +448,10 @@ export interface BotWorkerLaunchFiles {
   connectionKeys?: string[];
   /** `project`: the launch loads no user settings (`--setting-sources
    *  project`), its hooks come from its own settings file — an isolated
-   *  instance's worker, run on that build's hook bridge (#2231). */
-  settingSources?: 'project';
+   *  instance's worker, run on that build's hook bridge (#2231). `none`: it
+   *  loads no settings but its own file (`--setting-sources=`), a worker
+   *  with a signed-in connection. */
+  settingSources?: 'project' | 'none';
 }
 
 /** One bot worker session. `workspaceId` and `at` are the version-1 record
@@ -492,7 +494,7 @@ export function isWorkerLaunchFiles(raw: unknown, dir: string): raw is BotWorker
   const keys = r.connectionKeys === undefined
     || (Array.isArray(r.connectionKeys) && r.connectionKeys.length <= 32 && r.connectionKeys.every((k) => typeof k === 'string' && /^[A-Z_][A-Z0-9_]{0,63}$/.test(k)));
   return inside(r.settingsFile, 'worker-settings') && inside(r.mcpConfigFile, 'worker-mcp') && (r.level === 'core' || r.level === 'full') && keys
-    && (r.settingSources === undefined || r.settingSources === 'project');
+    && (r.settingSources === undefined || r.settingSources === 'project' || r.settingSources === 'none');
 }
 
 export function botWorkerSessionsPath(dir: string): string {

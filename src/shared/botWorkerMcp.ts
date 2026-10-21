@@ -83,7 +83,8 @@ export interface WorkerGatewayRoute {
  *  worker rules: the OS sandbox block for its commands (no network, no home
  *  folder, no credentials in their env; botExecSandbox.ts), no web tools, and
  *  one PreToolUse gate on every tool call (main/agents/workerToolGate.ts: an
- *  allowlist, the file tools confined to the task folder). */
+ *  allowlist by name: Bash, TodoWrite and the task's tools; no built-in file
+ *  tool). */
 export interface WorkerGatewaySettings {
   /** The gateway connections' names (server-level allow only: the gateway
    *  holds the owner's tool list). */
@@ -92,6 +93,8 @@ export interface WorkerGatewaySettings {
   sandbox: Record<string, unknown>;
   /** The gate's hook command (it refuses when it cannot run). */
   gateCommand: string;
+  /** The gate hook's timeout in seconds (a hook past it does not block). */
+  gateTimeout: number;
 }
 
 /** A WSL pane's `--mcp-config` document: this build's wmux server, run in
@@ -155,7 +158,7 @@ export function buildWorkerSettings(
 ): Record<string, unknown> {
   const allow: string[] = [];
   const deny: string[] = [...BOT_WORKER_DENY];
-  const hooks: Array<{ matcher: string; hooks: Array<{ type: 'command'; command: string }> }> = [];
+  const hooks: Array<{ matcher: string; hooks: Array<{ type: 'command'; command: string; timeout?: number }> }> = [];
   for (const c of connectors) {
     if (gateway?.names.includes(c.name)) {
       // The gateway lists and calls only the owner's picked tools.
@@ -177,7 +180,7 @@ export function buildWorkerSettings(
   if (gateway) {
     deny.push('WebFetch', 'WebSearch');
     // First: every call passes the gate, whatever else allows it.
-    hooks.unshift({ matcher: '.*', hooks: [{ type: 'command', command: gateway.gateCommand }] });
+    hooks.unshift({ matcher: '.*', hooks: [{ type: 'command', command: gateway.gateCommand, timeout: gateway.gateTimeout }] });
   }
   const byEvent: Record<string, unknown[]> = {};
   for (const [event, groups] of Object.entries(wmuxHooks ?? {})) byEvent[event] = groups.map((g) => ({ matcher: g.matcher, hooks: g.hooks.map((h) => ({ ...h })) }));
@@ -206,17 +209,19 @@ const SUBSTITUTION = /\$\(|`|<\(|>\(/;
  * `--`, any other settings, MCP config or strict flag, or a path that cannot
  * be quoted. Pure.
  */
-export function spliceWorkerLaunch(fullCommand: string, settingsPath: string, mcpPath: string, settingSources?: 'project'): string | null {
+export function spliceWorkerLaunch(fullCommand: string, settingsPath: string, mcpPath: string, settingSources?: 'project' | 'none'): string | null {
   const { marker, command } = splitModelEnvMarker(fullCommand);
   if (!isQuotable(settingsPath) || !isQuotable(mcpPath)) return null;
   const rest = stripPromptFileArgument(command);
-  const spliced = ` --settings="${settingsPath}" --mcp-config="${mcpPath}" --strict-mcp-config${settingSources ? ` --setting-sources=${settingSources}` : ''}`;
+  // `none`: an empty list, so claude loads no user, project or local settings.
+  const sources = settingSources === 'none' ? '' : settingSources;
+  const spliced = ` --settings="${settingsPath}" --mcp-config="${mcpPath}" --strict-mcp-config${settingSources ? ` --setting-sources=${sources}` : ''}`;
   // Our own flags, already spliced, hold paths (a Windows one has `\`).
   if (SUBSTITUTION.test(rest) || !isSingleCommand(rest) || argumentsMayExpand(rest.split(spliced).join(''))) return null;
   const tokens = tokenize(command);
   if (tokens.length === 0 || !isClaudeLauncher(tokens[0].value)) return null;
   if (tokens.some((t) => t.value === '--')) return null;
-  const ours = [`--settings=${settingsPath}`, `--mcp-config=${mcpPath}`, '--strict-mcp-config', ...(settingSources ? [`--setting-sources=${settingSources}`] : [])];
+  const ours = [`--settings=${settingsPath}`, `--mcp-config=${mcpPath}`, '--strict-mcp-config', ...(settingSources ? [`--setting-sources=${sources}`] : [])];
   const flagged = tokens.slice(1).filter((t) => /^--(settings|mcp-config|strict-mcp-config|setting-sources)(=|$)/.test(t.value));
   if (flagged.length > 0) {
     const same = flagged.length === ours.length && ours.every((w, i) => tokens[1 + i]?.value === w);

@@ -151,7 +151,7 @@ ${botWorkerAgentPromptNote(agent)}`
     : '';
   // A task with a signed-in connection (main/connectors/workerGateway.ts).
   const signedIn = gateway && connectors.length > 0
-    ? '- This task works only from its connections: web search and fetch are off, your commands run with no network, your file tools reach only this folder and its temp folder, and of the wmux tools only `ledger_update` answers. Report what you found with `ledger_update`.\n'
+    ? '- This task works only from its connections: web search and fetch are off, your commands run with no network, the file tools (Read, Write, Edit, Glob, Grep) are off, so read and write files with Bash (cat, grep, tee), which reaches only this folder and its temp folder, and of the wmux tools only `ledger_update` answers. Report what you found with `ledger_update`.\n'
     : '';
   return `
 - Your task: \`task_id\` **${taskId}**, \`expected_rev\` **1** right now (or leave \`task_id\` out: wmux reports on the task of your own workspace). Your mission channel: \`${channelId}\`.

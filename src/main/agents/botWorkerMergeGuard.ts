@@ -36,7 +36,6 @@ import {
   buildBotWorkerSettings,
   botWorkerSessionsPath,
   isClaudeLauncher,
-  isQuotable,
   namesClaude,
   readBotWorkerSessions,
   workerProjectSettingsRefusal,
@@ -57,7 +56,7 @@ import {
 import type { Connector } from '../../shared/botConnector';
 import { tokenize, type PermissionMode } from '../../shared/agentResume';
 import { splitModelEnvMarker } from '../../shared/workerLaunch';
-import { workerToolGateScript } from './workerToolGate';
+import { WORKER_GATE_TIMEOUT_S, workerToolGateCommand, workerToolGateScript } from './workerToolGate';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getConnectorStore } from '../factory/connectorStore';
 import { launchesCodex, namesCodex } from '../../shared/codexWorkerGuard';
@@ -405,9 +404,9 @@ export function taskGatewayNames(worker: { strict: boolean; spawns?: Array<{ gat
 export interface WorkerGatewayLaunch {
   routes: Readonly<Record<string, WorkerGatewayRoute>>;
   sandbox: Record<string, unknown>;
-  /** The folders the worker's file tools may use: its task folder, then its
-   *  temp folder (workerToolGate.ts). */
-  roots: readonly string[];
+  /** The runtime the tool gate runs on, by its absolute path (this
+   *  process's, as node; workerToolGate.ts). */
+  runtime: string;
   /** The claude binary the sandbox support was checked on: the launch line
    *  runs exactly it (absolute, no characters a shell would read). */
   claudeExe: string;
@@ -529,9 +528,10 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
   // (workerToolGate.ts), which refuses when it cannot run.
   let gatewaySettings: WorkerGatewaySettings | undefined;
   if (gateway) {
-    const gate = writeContentFile(path.join(factory, 'worker-hooks'), workerToolGateScript({ roots: gateway.roots, connections: Object.keys(gateway.routes) }), '.cjs');
-    if (!isQuotable(gate)) throw new Error('the tool gate\'s path cannot be quoted');
-    gatewaySettings = { names: Object.keys(gateway.routes), sandbox: gateway.sandbox, gateCommand: `node "${gate}" || exit 2` };
+    const gate = writeContentFile(path.join(factory, 'worker-hooks'), workerToolGateScript(Object.keys(gateway.routes)), '.cjs');
+    const gateCommand = workerToolGateCommand(gateway.runtime, gate);
+    if (!gateCommand) throw new Error('the tool gate\'s runtime or path cannot be quoted');
+    gatewaySettings = { names: Object.keys(gateway.routes), sandbox: gateway.sandbox, gateCommand, gateTimeout: WORKER_GATE_TIMEOUT_S };
   }
   const settings = `${JSON.stringify(buildWorkerSettings(connectors, ownBridge ? bridgeHookGroups(ownBridge) : undefined, gatewaySettings), null, 2)}\n`;
   return {
@@ -540,8 +540,9 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
     level,
     ...(connectionKeys.length > 0 ? { connectionKeys } : {}),
     // Its hooks are in its own file: the user's (which name the shared
-    // bridge) are not loaded.
-    ...(ownBridge ? { settingSources: 'project' as const } : {}),
+    // bridge) are not loaded. A worker with a signed-in connection loads no
+    // settings but that file: none from its folder either.
+    ...(gateway ? { settingSources: 'none' as const } : ownBridge ? { settingSources: 'project' as const } : {}),
   };
 }
 

@@ -287,8 +287,7 @@ async function openCreateGateway(botWorker: BotWorkerCreate | null, options: Pty
     for (const n of names) if (typeof n === 'string' && !(n in env)) env[n] = '';
     const tmpDir = options?.env?.TMPDIR;
     const sandbox = workerGatewaySandbox({ cwd, tmpDir, wmuxDir: getWmuxDir(), env });
-    const roots = [cwd, ...(tmpDir && path.isAbsolute(tmpDir) ? [tmpDir] : [])];
-    return { open, launch: { routes: open.routes, sandbox, roots, claudeExe } };
+    return { open, launch: { routes: open.routes, sandbox, runtime: process.execPath, claudeExe } };
   } catch (err) {
     open.close();
     throw err;
