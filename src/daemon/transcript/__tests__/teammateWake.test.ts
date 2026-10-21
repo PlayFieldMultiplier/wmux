@@ -51,6 +51,12 @@ describe('turnEndAt', () => {
     expect(turnEndAt({ status: 'complete', decision: 'pending', signal: { kind: 'agent.stop', ts: at } })).toBeUndefined();
     expect(turnEndAt({ status: 'running', signal: { kind: 'agent.user_prompt_submit', ts: at } })).toBeUndefined();
   });
+
+  it('ends an interrupted turn at the interrupt the mod stamps, not when its Stop was sent', () => {
+    const interruptedAt = ms('20:04:20.000');
+    const payload = { wmux_turn_reason: 'aborted', wmux_turn_ended_at: interruptedAt };
+    expect(turnEndAt({ status: 'complete', signal: { kind: 'agent.stop', ts: ms('20:04:21.300'), payload } })).toBe(interruptedAt);
+  });
 });
 
 describe('TeammateWakes — the live capture', () => {
@@ -130,6 +136,17 @@ describe('TeammateWakes — the live capture', () => {
     const fresh = rig();
     fresh.line(WAKE_1);
     expect(fresh.emit).not.toHaveBeenCalled();
+  });
+
+  it('keeps the newest turn end when an older one lands late', async () => {
+    const { emit, hook, line } = rig();
+    hook('agent.stop', '20:04:21.936');
+    // A held StopFailure of an earlier turn, applied after the newer Stop.
+    hook('agent.stop', '20:04:10.000');
+    line(WAKE_1);
+    await Promise.resolve();
+    // WAKE_1 (20:04:14.879) is older than the newest turn end: nothing opens.
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('leaves a pane that no longer reads the file, or that a dialog holds, alone', () => {

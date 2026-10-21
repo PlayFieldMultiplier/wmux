@@ -83,17 +83,21 @@ export function teammateWakeFromTranscriptLine(line: string): TeammateWake | nul
 export interface TurnEndEvent {
   status: string;
   decision?: string;
-  signal: { kind: string; ts: number };
+  signal: { kind: string; ts: number; payload?: Record<string, unknown> };
 }
 
 /**
  * When a broadcast agent event ended the pane's turn, the time its hook fired.
  * A Stop that still projects running (background agents left) ends nothing,
- * and neither does a vetoed or still pending delivery.
+ * and neither does a vetoed or still pending delivery. An interrupted turn's
+ * Stop (the Claude Code mod sends it a second or more after the interrupt)
+ * ends at the interrupt it stamps.
  */
 export function turnEndAt(data: TurnEndEvent): number | undefined {
   if (data.signal.kind !== 'agent.stop' && data.signal.kind !== 'agent.stop_failure') return undefined;
   if (data.status === 'running' || data.decision === 'veto' || data.decision === 'pending') return undefined;
+  const endedAt = data.signal.payload?.['wmux_turn_ended_at'];
+  if (data.signal.payload?.['wmux_turn_reason'] === 'aborted' && typeof endedAt === 'number' && Number.isFinite(endedAt)) return endedAt;
   return Number.isFinite(data.signal.ts) ? data.signal.ts : undefined;
 }
 
@@ -151,7 +155,8 @@ export class TeammateWakes {
   /** A turn end the daemon applied and broadcast (see turnEndAt); `at` is when its hook fired. */
   noteTurnEnd(sessionId: string, at: number): void {
     const s = this.pane(sessionId);
-    s.endAt = at;
+    // A held StopFailure can land after a later turn's Stop: keep the newest.
+    s.endAt = s.endAt === undefined ? at : Math.max(s.endAt, at);
     if (s.pending) this.defer(() => { if (this.panes.get(sessionId) === s) this.decide(sessionId, s); });
   }
 

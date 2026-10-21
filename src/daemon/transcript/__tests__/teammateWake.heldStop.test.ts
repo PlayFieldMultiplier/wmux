@@ -36,8 +36,8 @@ describe('TeammateWakes — a turn end the completion alarm holds', () => {
   let wakes: TeammateWakes;
   let order: string[];
 
-  const signal = (kind: AgentSignal['kind'], ts = Date.now()): AgentSignal =>
-    ({ kind, agent: 'claude', cwd: '/repo', ptyId: 'pty-a', payload: {}, ts });
+  const signal = (kind: AgentSignal['kind'], ts = Date.now(), payload: Record<string, unknown> = {}): AgentSignal =>
+    ({ kind, agent: 'claude', cwd: '/repo', ptyId: 'pty-a', payload, ts });
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -99,6 +99,47 @@ describe('TeammateWakes — a turn end the completion alarm holds', () => {
     ingest.handle(signal('agent.stop'));
     vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
     await flush();
+    expect(bridge.isTurnOpen()).toBe(false);
+  });
+
+  it('opens the woken turn after a StopFailure, which the alarm always holds', async () => {
+    ingest.handle(signal('agent.user_prompt_submit'));
+    vi.advanceTimersByTime(3_000);
+    ingest.handle(signal('agent.stop_failure', Date.now(), { error: 'rate_limit', last_assistant_message: 'API Error' }));
+    expect(order).not.toContain('error');
+    vi.advanceTimersByTime(15);
+    wakes.noteLine('pty-a', PATH, wakeLine('u-wake', Date.now()));
+    await flush();
+    expect(order).not.toContain('wake');
+
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    await flush();
+    expect(order.slice(-2)).toEqual(['error', 'wake']);
+    expect(bridge.isTurnOpen()).toBe(true);
+  });
+
+  it('opens nothing when a working cue rebuts the held Stop: the turn never ended', async () => {
+    ingest.handle(signal('agent.user_prompt_submit'));
+    vi.advanceTimersByTime(200);
+    ingest.handle(signal('agent.tool_started'));
+    vi.advanceTimersByTime(3_000);
+    ingest.handle(signal('agent.stop'));
+    vi.advanceTimersByTime(15);
+    wakes.noteLine('pty-a', PATH, wakeLine('u-wake', Date.now()));
+    // The lead works on inside the window: the Stop is rebutted and never lands.
+    vi.advanceTimersByTime(300);
+    ingest.handle(signal('agent.tool_started'));
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    await flush();
+    expect(order).not.toContain('complete');
+    expect(bridge.isTurnOpen()).toBe(true);
+
+    // That turn's real Stop drops the waiting entry, older than it.
+    vi.advanceTimersByTime(2_000);
+    ingest.handle(signal('agent.stop'));
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    await flush();
+    expect(order).not.toContain('wake');
     expect(bridge.isTurnOpen()).toBe(false);
   });
 });
