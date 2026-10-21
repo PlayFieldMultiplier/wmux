@@ -10,9 +10,8 @@
 // script, but the test observes an exit code instead of racing a background
 // process against afterEach teardown — an earlier detached version of this file
 // produced inverted, timing-dependent results that said nothing about the code.
-// Exit codes are the contract: 0 = installer launched, 2 = refused,
-// 5 = another waiter already owns this install root (#980), 7 = the installer
-// no longer matched its verified digest and was not run.
+// Exit codes are the contract; the full list is documented on
+// buildWaiterScript in installTeardown.ts.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -34,6 +33,7 @@ import {
   INSTALL_BLOCKED_BY_WINDOWS_PREFIX,
   INSTALL_BLOCKED_BY_WINDOWS_REASON,
   INSTALL_SETUP_CHANGED_REASON,
+  INSTALL_SETUP_UNREADABLE_REASON,
 } from '../../../shared/installAbortReasons';
 
 const onWindows = process.platform === 'win32';
@@ -365,6 +365,23 @@ describe.skipIf(!onWindows)('install waiter (real processes, real locks)', () =>
     expect(runWaiter(60_000).status).toBe(7);
     expect(fs.existsSync(setupStamp)).toBe(false);
     expect(fs.readFileSync(abortMarker, 'utf-8')).toContain(INSTALL_SETUP_CHANGED_REASON);
+  }, 120_000);
+
+  it('reports an installer it cannot open as unreadable, not as changed, and does not run it', async () => {
+    fs.writeFileSync(path.join(root, 'Update.exe'), 'x');
+    fs.writeFileSync(path.join(root, 'app-1.0.0', 'icudtl.dat'), 'x');
+    writeWaiter(plan([], 5_000));
+    // Another program holds the installer with no sharing: the waiter cannot
+    // open it to hash it.
+    const holder = lockHolder(fakeSetup, 120);
+    children.push(holder);
+    await heldBy(holder);
+
+    expect(runWaiter(60_000).status).toBe(8);
+    expect(fs.existsSync(setupStamp)).toBe(false);
+    const marker = fs.readFileSync(abortMarker, 'utf-8');
+    expect(marker).toContain(INSTALL_SETUP_UNREADABLE_REASON);
+    expect(marker).not.toContain(INSTALL_SETUP_CHANGED_REASON);
   }, 120_000);
 
   it('runs the installer when its bytes still match the verified digest', () => {

@@ -59,6 +59,7 @@ import { spawn, execFileSync, type ChildProcess } from 'child_process';
 import {
   INSTALL_BLOCKED_BY_WINDOWS_REASON,
   INSTALL_SETUP_CHANGED_REASON,
+  INSTALL_SETUP_UNREADABLE_REASON,
 } from '../../shared/installAbortReasons';
 import { classifyWmuxProcess } from '../squirrelTeardown';
 
@@ -606,6 +607,17 @@ export function buildScheduledTaskDeleteArgs(taskName: string): string[] {
  * The waiter script. Pure so its ordering guarantees are unit-testable — the
  * one property that matters is that Setup.exe is never started before both the
  * handle waits and the lock probe have passed.
+ *
+ * Exit codes (the one list; tests and diagnostics refer here):
+ *   0  the installer ran (or was still running at the verification deadline)
+ *   2  refused: the install root stayed locked
+ *   3  refused: a process under the install root would not exit
+ *   4  refused: the installer could not be started (missing, or Start-Process
+ *      failed, including a Windows application-control block)
+ *   5  yielded: another waiter already owns this install root (#980)
+ *   6  the installer exited but left an incomplete installation (#1046)
+ *   7  refused: the installer no longer matched its verified SHA-256
+ *   8  refused: the installer could not be opened or read to verify it
  */
 export function buildWaiterScript(plan: WaiterPlan, launchStampPath?: string): string | null {
   const paths = [plan.setupExePath, plan.installRoot, plan.abortMarkerPath, plan.readyMarkerPath];
@@ -918,7 +930,8 @@ export function buildWaiterScript(plan: WaiterPlan, launchStampPath?: string): s
     // after that, with the file in a user-writable temp dir. The file is held
     // open with read-only sharing from the hash until the process has
     // started, so nothing can rewrite it in between: the bytes that run are
-    // the bytes that were hashed. Unreadable reads as a mismatch.
+    // the bytes that were hashed. A file that cannot be opened or read is
+    // not run either, under its own reason: nothing says its bytes changed.
     `  $expectedSha = ${psQuote(plan.setupSha256.toLowerCase())}`,
     `  $setupHold = $null`,
     `  $actualSha = $null`,
@@ -926,6 +939,11 @@ export function buildWaiterScript(plan: WaiterPlan, launchStampPath?: string): s
     `    $setupHold = [System.IO.File]::Open($setup, 'Open', 'Read', 'Read')`,
     `    $actualSha = ([System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($setupHold)) -replace '-', '').ToLowerInvariant()`,
     `  } catch { }`,
+    `  if (-not $actualSha) {`,
+    `    if ($setupHold) { try { $setupHold.Close() } catch { } }`,
+    `    Write-InstallAbortMarker ${psQuote(INSTALL_SETUP_UNREADABLE_REASON)}`,
+    `    exit 8`,
+    `  }`,
     `  if ($actualSha -ne $expectedSha) {`,
     `    if ($setupHold) { try { $setupHold.Close() } catch { } }`,
     `    Write-InstallAbortMarker ${psQuote(INSTALL_SETUP_CHANGED_REASON)}`,

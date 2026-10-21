@@ -9,7 +9,13 @@ import {
   shouldReannounceAfterError,
   isSmartAppControlHold,
   truncateReason,
+  refusedInstallNotice,
 } from '../updateNoticePolicy';
+import {
+  INSTALL_BLOCKED_BY_WINDOWS_REASON,
+  INSTALL_SETUP_CHANGED_REASON,
+  INSTALL_SETUP_UNREADABLE_REASON,
+} from '../../../../shared/installAbortReasons';
 
 const WINDOW_MS = 30_000;
 const err = (over: Partial<Parameters<typeof shouldShowInstallError>[0]> = {}) => ({
@@ -87,5 +93,25 @@ describe('truncateReason', () => {
   it('leaves a reason exactly at the cap alone', () => {
     const exact = 'y'.repeat(200);
     expect(truncateReason(exact)).toBe(exact);
+  });
+});
+
+describe('refusedInstallNotice', () => {
+  it('gives the waiter refusals that have a sentence of their own that sentence', () => {
+    expect(refusedInstallNotice(INSTALL_BLOCKED_BY_WINDOWS_REASON)).toEqual({ key: 'update.refusedInstallBlocked' });
+    expect(refusedInstallNotice(INSTALL_SETUP_CHANGED_REASON)).toEqual({ key: 'update.refusedInstallChanged' });
+    expect(refusedInstallNotice(`${INSTALL_SETUP_UNREADABLE_REASON}
+`)).toEqual({ key: 'update.refusedInstallUnreadable' });
+  });
+
+  it('an unreadable installer is not reported as a changed one', () => {
+    expect(refusedInstallNotice(INSTALL_SETUP_UNREADABLE_REASON).key).not.toBe('update.refusedInstallChanged');
+  });
+
+  it('any other reason gets the generic notice with the reason as detail', () => {
+    expect(refusedInstallNotice('install-aborted: install root still locked')).toEqual({
+      key: 'update.refusedInstall',
+      vars: { detail: 'install-aborted: install root still locked' },
+    });
   });
 });

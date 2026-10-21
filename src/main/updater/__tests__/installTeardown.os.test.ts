@@ -35,6 +35,7 @@ import {
 import {
   INSTALL_BLOCKED_BY_WINDOWS_REASON,
   INSTALL_SETUP_CHANGED_REASON,
+  INSTALL_SETUP_UNREADABLE_REASON,
   isInstallBlockedByWindowsReason,
 } from '../../../shared/installAbortReasons';
 
@@ -147,6 +148,19 @@ describe('buildWaiterScript — ordering is the whole contract', () => {
     expect(release).toBeGreaterThan(start);
     // Opened for read with read-only sharing: no writer while it is held.
     expect(s).toContain("[System.IO.File]::Open($setup, 'Open', 'Read', 'Read')");
+  });
+
+  it('reports an installer it could not read apart from one whose bytes changed', () => {
+    const s = buildWaiterScript(PLAN) ?? '';
+    const unreadable = s.indexOf(`Write-InstallAbortMarker '${INSTALL_SETUP_UNREADABLE_REASON}'`);
+    const changed = s.indexOf(`Write-InstallAbortMarker '${INSTALL_SETUP_CHANGED_REASON}'`);
+    expect(unreadable).toBeGreaterThan(-1);
+    expect(changed).toBeGreaterThan(unreadable);
+    const noHash = s.indexOf('if (-not $actualSha) {');
+    expect(noHash).toBeGreaterThan(s.indexOf('ComputeHash($setupHold)'));
+    expect(noHash).toBeLessThan(unreadable);
+    expect(s.slice(unreadable, changed)).toContain('exit 8');
+    expect(s.slice(changed)).toContain('exit 7');
   });
 
   it('refuses to build without a well-formed installer digest', () => {
@@ -555,10 +569,11 @@ describe('buildWaiterScript — #1341 target-version stamp', () => {
     expect(s).toContain('function Write-InstallAbortMarker($reason) {');
     expect(s).not.toMatch(/Set-Content -LiteralPath \$marker -Value 'install-aborted/);
     const writes = (s.match(/Write-InstallAbortMarker /g) ?? []).length;
-    // interrupted sentinel + stuck handle + locked root + installer changed
-    // since verification + blocked-by-policy (#1525) + cannot-start +
-    // incomplete-install = 7 marker writes, all stamped.
-    expect(writes).toBe(7);
+    // interrupted sentinel + stuck handle + locked root + installer
+    // unreadable + installer changed since verification + blocked-by-policy
+    // (#1525) + cannot-start + incomplete-install = 8 marker writes, all
+    // stamped.
+    expect(writes).toBe(8);
   });
 
   it('omits the stamp when the caller cannot name the target, instead of failing the build', () => {
