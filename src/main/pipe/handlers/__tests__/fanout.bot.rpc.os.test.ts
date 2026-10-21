@@ -1276,7 +1276,7 @@ describe('a conversation that holds data from a signed-in task', () => {
     for (const args of [{ preset: 'repro' }, { preset: 'research' }, { preset: 'research', connectors: ['shared'] }]) {
       const e = errorOf(await ask(r, args));
       expect(e.code).toBe('FAILED_PRECONDITION');
-      expect(e.message).toMatch(/holds data from a signed-in task, so it can't start a task without its signed-in connections/);
+      expect(e.message).toMatch(/holds data from a signed-in task, so it can't start another task; reply to the owner in your 1:1 instead \(room_post with thread_id "dm:bot-/);
     }
     // A signed-in one is refused too: the conversation is tainted.
     expect(errorOf(await ask(r, { preset: 'research', connectors: ['notion'] })).message).toMatch(/conversation has taken in outside text/);

@@ -347,9 +347,9 @@ export function notifyBotRemoved(botId: string): void {
 
 const CLEAN_MARKS: ConversationMarks = { tainted: false, signedIn: false };
 const UNKNOWN_MARKS: ConversationMarks = { tainted: true, signedIn: true };
-/** A guest's conversation of its own: tainted, and never signed in (a
- *  guest-sourced wake starts no workers, so no signed-in task reports to
- *  it). */
+/** A guest's conversation of its own: tainted, and not signed in until a
+ *  wake run in it carries a signed-in task's fact (one of unknown
+ *  provenance can). */
 const GUEST_MARKS: ConversationMarks = { tainted: true, signedIn: false };
 
 /** A saved session's marks. A record from before a mark reads as marked
@@ -1197,8 +1197,10 @@ export class BotRuntime {
       }
       if (run) run.adapter = s.live.adapter;
       if (!s.live.ephemeral && this.wakeTainted(item)) markConversation(botId, 'tainted');
-      // What a signed-in task's worker read reaches this conversation now.
-      if (!s.live.ephemeral && this.wakeSignedIn(item)) markConversation(botId, 'signedIn');
+      // What a signed-in task's worker read reaches this conversation now,
+      // a guest's conversation of its own included (a wake of unknown
+      // provenance runs there; its marks are never saved).
+      if (this.wakeSignedIn(item)) markConversation(botId, 'signedIn');
       const photos = this.wakePhotos(profile, item);
       const result = await this.drive(s.live, this.prompt(profile, item) + photos.note, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
       // A failed turn that reached the model cost as much as a finished one.

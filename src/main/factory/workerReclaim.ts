@@ -1847,7 +1847,7 @@ async function resumeOnce(
     // What a signed-in task read stays in this conversation: no other
     // worker starts again from it.
     if (ports.gatewayTask?.(taskId) !== true && ports.senderSignedIn?.(by.botId) === true) {
-      return refuse('not_now', signedInRefusal('resume a worker of another task'));
+      return refuse('not_now', signedInRefusal('resume a worker of another task', by.botId));
     }
     if (text && (ports.taskTainted?.(taskId) ?? true) === false
       && ((ports.senderTainted?.(by.botId) ?? true) !== false || (ports.senderConversationTainted?.(by.botId) ?? true) !== false)) {

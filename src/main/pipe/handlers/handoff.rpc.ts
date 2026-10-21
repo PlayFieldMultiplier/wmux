@@ -53,7 +53,7 @@ export function handleHandoffSend(raw: unknown, ctx: RpcContext | undefined, dep
   if (caller.kind !== 'bot') return refusal('bot_only', 'handoff.send is sent by a bot; the owner writes in the room');
   // What a signed-in task read stays in this conversation: no other bot is
   // handed it.
-  if ((deps.signedIn ?? conversationSignedIn)(caller.bot.botId) !== false) return refusal('not_now', signedInRefusal('hand work to another bot'));
+  if ((deps.signedIn ?? conversationSignedIn)(caller.bot.botId) !== false) return refusal('not_now', signedInRefusal('hand work to another bot', caller.bot.botId));
   const router = deps.router();
   if (!router) return notStarted();
   return router.send(caller.bot, params(raw) as unknown as HandoffSendParams);

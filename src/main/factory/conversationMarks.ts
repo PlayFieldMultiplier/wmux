@@ -77,10 +77,10 @@ export function conversationTainted(botId: string): boolean {
   return marks.get(botId)?.tainted !== false;
 }
 
-/** What a bot is told when a conversation holding data from a signed-in
- *  task asks to move it somewhere: `what` names the refused act. */
-export function signedInRefusal(what: string): string {
-  return `this conversation holds data from a signed-in task, so it can't ${what}; reply to the owner in your 1:1 instead`;
+/** What bot `botId` is told when its conversation, holding data from a
+ *  signed-in task, asks to move it somewhere: `what` names the refused act. */
+export function signedInRefusal(what: string, botId: string): string {
+  return `this conversation holds data from a signed-in task, so it can't ${what}; reply to the owner in your 1:1 instead (room_post with thread_id "dm:${botId}")`;
 }
 
 /** What a bot is told when a tainted conversation asks to save work that

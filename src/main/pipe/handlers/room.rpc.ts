@@ -328,8 +328,8 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     // What a signed-in task read stays in this conversation: it is told to
     // the owner in the bot's own 1:1, and to no other bot.
     if ((deps.signedIn ?? conversationSignedIn)(bot.botId) !== false) {
-      if (threadId !== dmThreadId(bot.botId)) return refusal('not_now', signedInRefusal('post outside your 1:1 with the owner'));
-      if (mentions?.some((m) => m !== bot.botId)) return refusal('not_now', signedInRefusal('mention another bot'));
+      if (threadId !== dmThreadId(bot.botId)) return refusal('not_now', signedInRefusal('post outside your 1:1 with the owner', bot.botId));
+      if (mentions?.some((m) => m !== bot.botId)) return refusal('not_now', signedInRefusal('mention another bot', bot.botId));
     }
     const wake = runningWake(ports, bot.botId);
     // Decided now, before the file copy waits: the card keeps its wake's

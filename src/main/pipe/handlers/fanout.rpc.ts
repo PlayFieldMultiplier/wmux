@@ -1480,7 +1480,7 @@ export function registerFanOutRpc(
     // task (a code or research worker can carry it out); a signed-in one is
     // refused from it below (gatewayShapeRefusal: a tainted conversation).
     if (bot && gatewayConnectors.length === 0 && (deps.conversationSignedIn ?? conversationSignedIn)(bot.botId) !== false) {
-      return deny('FAILED_PRECONDITION', signedInRefusal('start a task without its signed-in connections'));
+      return deny('FAILED_PRECONDITION', signedInRefusal('start another task', bot.botId));
     }
 
     // ── Fields the renderer may state but a wire caller may not ──────────

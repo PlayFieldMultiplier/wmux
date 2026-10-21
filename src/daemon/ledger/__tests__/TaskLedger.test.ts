@@ -623,6 +623,16 @@ describe('TaskLedger — dispatch', () => {
     // It survives a reload.
     expect(open().get('wtask-h')?.dispatch?.handoffId).toBe('h-1');
   });
+
+  it('keeps which connections went through the signed-in gateway, only as a subset of its connections', async () => {
+    const ledger = open();
+    const origin = { kind: 'bot' as const, botId: 'bot-00000001', tainted: true };
+    await ledger.register({ id: 'wtask-g', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin, preset: 'research', connectors: ['notion'], gatewayConnectors: ['notion'] } });
+    await ledger.register({ id: 'wtask-y', taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin, connectors: ['notion'], gatewayConnectors: ['linear'] } });
+    expect(ledger.get('wtask-g')?.dispatch).toMatchObject({ connectors: ['notion'], gatewayConnectors: ['notion'] });
+    expect(ledger.get('wtask-y')?.dispatch).not.toHaveProperty('gatewayConnectors');
+    expect(open().get('wtask-g')?.dispatch?.gatewayConnectors).toEqual(['notion']);
+  });
 });
 
 describe('TaskLedger — non-code verifiedItemCount grade', () => {

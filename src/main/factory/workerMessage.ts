@@ -154,7 +154,7 @@ export async function deliverWorkerMessage(
     } catch {
       signedIn = true;
     }
-    if (signedIn) return refuse('not_now', signedInRefusal('write to a worker of another task'));
+    if (signedIn) return refuse('not_now', signedInRefusal('write to a worker of another task', botId));
   }
   if (origin.tainted === false) {
     let tainted = true;

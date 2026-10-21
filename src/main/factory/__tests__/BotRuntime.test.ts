@@ -1456,6 +1456,21 @@ describe('conversation marks and removal', () => {
     expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: true });
   });
 
+  it('a guest\'s conversation of its own (a wake of unknown provenance) is marked signed in by a signed-in task\'s fact too, and saves nothing', async () => {
+    setBotRuntimePorts({ wakeGuest: () => 'unknown', wakeTainted: () => true, wakeSignedIn: () => true });
+    const r = rig();
+    const id = createBot(r);
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, reason: { kind: 'facts', factIds: ['task.gated:wtask-gw@3'], trigger: { kind: 'task.done' } } }));
+    r.runtime.kick();
+    await settle();
+    // Mid-turn: the turn's own calls read it.
+    expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: true });
+    r.adapters[0].end([{ type: 'turn-end', sessionId: 'sess-g' }]);
+    await settle();
+    expect(r.sessions.get(id)).toBeNull();
+    expect(conversationMarks(id)).toBeNull();
+  });
+
   it('a sessions.json record from before the signed-in mark reads as signed in unless it is recorded clean', () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wp2-sessions-legacy-')), 'sessions.json');
     fs.writeFileSync(file, JSON.stringify({ version: BOT_SESSIONS_VERSION, sessions: {

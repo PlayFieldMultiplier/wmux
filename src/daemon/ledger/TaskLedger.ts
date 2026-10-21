@@ -282,6 +282,13 @@ function copyDispatch(d: LedgerDispatch): LedgerDispatch {
     ...(Array.isArray(d.connectors) && d.connectors.length > 0 && d.connectors.length <= 8 && d.connectors.every((n) => typeof n === 'string' && /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(n))
       ? { connectors: [...d.connectors] }
       : {}),
+    // Which of them went through main's signed-in gateway: a subset of the
+    // connections kept above. The task's later checks (its messages, its
+    // resume, its result's mark on the bot's conversation) read it here.
+    ...(Array.isArray(d.gatewayConnectors) && d.gatewayConnectors.length > 0 && Array.isArray(d.connectors)
+      && d.gatewayConnectors.every((n) => typeof n === 'string' && /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(n) && d.connectors!.includes(n))
+      ? { gatewayConnectors: [...d.gatewayConnectors] }
+      : {}),
     ...((() => { const c = sanitizeTaskCriteria(d.criteria); return c ? { criteria: c } : {}; })()),
     ...(d.reconciled === true ? { reconciled: true as const } : {}),
   };

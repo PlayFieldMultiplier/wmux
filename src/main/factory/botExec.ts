@@ -94,7 +94,7 @@ const SWITCHED_OFF = 'the owner switched this bot\'s commands off';
  *  signed-in task, or outside text, says so. */
 function unattendedReason(botId: string): string {
   const m = conversationMarks(botId);
-  if (m?.signedIn) return signedInRefusal('run commands or edit files');
+  if (m?.signedIn) return signedInRefusal('run commands or edit files', botId);
   if (m?.tainted) return 'this conversation has taken in outside text, so commands and file edits do not run in it';
   return UNATTENDED;
 }
