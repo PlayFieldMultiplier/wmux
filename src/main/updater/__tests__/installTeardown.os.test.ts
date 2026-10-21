@@ -16,6 +16,7 @@ import {
   selectInstallRootPids,
   selectOwnTreePids,
   parseProcessRows,
+  selectDaemonPids,
   buildWaiterScript,
   buildWaiterVbsLauncher,
   buildScheduledTaskCreateArgs,
@@ -283,20 +284,20 @@ describe('selectInstallRootPids', () => {
 describe('parseProcessRows', () => {
   it('parses the array form and the single-object form, carrying parentage', () => {
     expect(parseProcessRows('[{"ProcessId":1,"ParentProcessId":7,"ExecutablePath":"C:\\\\a.exe"}]')).toEqual([
-      { pid: 1, parentPid: 7, executablePath: 'C:\\a.exe' },
+      { pid: 1, parentPid: 7, executablePath: 'C:\\a.exe', commandLine: '' },
     ]);
     expect(parseProcessRows('{"ProcessId":2,"ParentProcessId":7,"ExecutablePath":"C:\\\\b.exe"}')).toEqual([
-      { pid: 2, parentPid: 7, executablePath: 'C:\\b.exe' },
+      { pid: 2, parentPid: 7, executablePath: 'C:\\b.exe', commandLine: '' },
     ]);
     // #980 — an absent or malformed parent reads as 0, which belongs to no
     // tree. Unreadable parentage can only make a process look FOREIGN, and a
     // foreign process is the one case it is safe to be wrong about: it gets
     // force-killed, which is what the old code did to everything anyway.
     expect(parseProcessRows('[{"ProcessId":3,"ExecutablePath":"C:\\\\c.exe"}]')).toEqual([
-      { pid: 3, parentPid: 0, executablePath: 'C:\\c.exe' },
+      { pid: 3, parentPid: 0, executablePath: 'C:\\c.exe', commandLine: '' },
     ]);
     expect(parseProcessRows('[{"ProcessId":4,"ParentProcessId":-1,"ExecutablePath":""}]')).toEqual([
-      { pid: 4, parentPid: 0, executablePath: '' },
+      { pid: 4, parentPid: 0, executablePath: '', commandLine: '' },
     ]);
   });
 
@@ -307,7 +308,31 @@ describe('parseProcessRows', () => {
     // A null ExecutablePath (access denied) still yields a row, with '' — which
     // selectInstallRootPids then filters out rather than treating as a match.
     expect(parseProcessRows('[{"ProcessId":9,"ParentProcessId":1,"ExecutablePath":null}]')).toEqual([
-      { pid: 9, parentPid: 1, executablePath: '' },
+      { pid: 9, parentPid: 1, executablePath: '', commandLine: '' },
+    ]);
+  });
+});
+
+describe('selectDaemonPids — the daemon by command line, not by pid file', () => {
+  const rows = [
+    { pid: 10, commandLine: '"C:\\wmux\\app-4.8.0\\wmux.exe"' },
+    { pid: 11, commandLine: '"C:\\wmux\\app-4.8.0\\wmux.exe" "C:\\wmux\\app-4.8.0\\resources\\app.asar\\.vite\\build\\daemon-bundle\\index.js"' },
+    { pid: 12, commandLine: '"C:\\wmux\\app-4.8.0\\wmux.exe" --type=renderer --daemon-bundle/index.js' },
+    { pid: 13, commandLine: '"C:\\wmux\\app-4.8.0\\wmux.exe" C:/wmux/daemon/index.js' },
+    { pid: 14, commandLine: '' },
+  ];
+
+  it('picks the daemon script layouts and nothing else', () => {
+    expect([...selectDaemonPids(rows, 10)].sort()).toEqual([11, 13]);
+  });
+
+  it('never classifies an unreadable command line as the daemon', () => {
+    expect(selectDaemonPids([{ pid: 14, commandLine: '' }], 1).size).toBe(0);
+  });
+
+  it('parseProcessRows carries the command line through', () => {
+    expect(parseProcessRows('[{"ProcessId":5,"ParentProcessId":1,"ExecutablePath":"C:\\\\w.exe","CommandLine":"w.exe daemon-bundle\\\\index.js"}]')).toEqual([
+      { pid: 5, parentPid: 1, executablePath: 'C:\\w.exe', commandLine: 'w.exe daemon-bundle\\index.js' },
     ]);
   });
 });

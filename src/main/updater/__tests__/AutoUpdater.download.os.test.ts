@@ -198,6 +198,7 @@ async function loadWin32(
     collectInstallRootProcesses: vi.fn((_root: string) => ({
       pids: [4242, 4243, 4244],
       ownTree: new Set([4244]),
+      daemonPids: new Set<number>(),
     })),
     terminatePids: vi.fn((pids: readonly number[]): number[] => [...pids]),
     spawnInstallWaiter: vi.fn((_plan: { setupExePath: string }): string | null =>

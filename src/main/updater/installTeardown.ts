@@ -57,6 +57,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn, execFileSync, type ChildProcess } from 'child_process';
 import { INSTALL_BLOCKED_BY_WINDOWS_REASON } from '../../shared/installAbortReasons';
+import { classifyWmuxProcess } from '../squirrelTeardown';
 
 /**
  * Marker the waiter writes when it refuses to launch, relative to userData.
@@ -303,6 +304,8 @@ export interface InstallRootProcess {
   /** 0 when the enumeration did not report one — treated as "not ours". */
   parentPid: number;
   executablePath: string;
+  /** '' when the enumeration did not report one (see selectDaemonPids). */
+  commandLine: string;
 }
 
 /** Parse `Get-CimInstance ... | ConvertTo-Json` rows. Tolerates the single-object form. */
@@ -334,9 +337,34 @@ export function parseProcessRows(stdout: string): InstallRootProcess[] {
       pid,
       parentPid,
       executablePath: typeof o.ExecutablePath === 'string' ? o.ExecutablePath : '',
+      commandLine: typeof o.CommandLine === 'string' ? o.CommandLine : '',
     });
   }
   return out;
+}
+
+/**
+ * The daemon's pids, identified by command line the same way
+ * squirrelTeardown's classifier does (the daemon script path in a
+ * `wmux.exe <script.js>` command line).
+ *
+ * The install path has to spare the daemon from every kill list: it is taken
+ * down by `daemon.shutdown`, which suspends its sessions and flushes their
+ * scrollback first, and a taskkill in the middle of that loses the scrollback.
+ * The pid file was the only way the updater knew which process that was, so
+ * an unreadable daemon.pid put the daemon on a kill list. The command line
+ * does not depend on that file. An unreadable command line ('') classifies as
+ * an app, never as the daemon.
+ */
+export function selectDaemonPids(
+  rows: ReadonlyArray<{ pid: number; commandLine: string }>,
+  ownPid: number,
+): Set<number> {
+  return new Set(
+    rows
+      .filter((r) => classifyWmuxProcess({ pid: r.pid, commandLine: r.commandLine }, ownPid) === 'daemon')
+      .map((r) => r.pid),
+  );
 }
 
 /**
@@ -959,11 +987,13 @@ export interface InstallRootSurvey {
   pids: number[];
   /** Of those, our own descendants. They exit with `app.quit()`. */
   ownTree: Set<number>;
+  /** Of those, the daemon, by command line. Never force-killed. */
+  daemonPids: Set<number>;
 }
 
 /** Enumerate, best-effort. win32-only; never throws into the update path. */
 export function collectInstallRootProcesses(installRoot: string): InstallRootSurvey {
-  const empty: InstallRootSurvey = { pids: [], ownTree: new Set() };
+  const empty: InstallRootSurvey = { pids: [], ownTree: new Set(), daemonPids: new Set() };
   if (process.platform !== 'win32') return empty;
   try {
     const systemRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -976,7 +1006,7 @@ export function collectInstallRootProcesses(installRoot: string): InstallRootSur
       powershell,
       [
         '-NoProfile', '-NonInteractive', '-Command',
-        `Get-CimInstance Win32_Process -Filter "Name='${exeName}'" -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,ExecutablePath | ConvertTo-Json -Compress`,
+        `Get-CimInstance Win32_Process -Filter "Name='${exeName}'" -ErrorAction SilentlyContinue | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress`,
       ],
       { encoding: 'utf-8', timeout: 10_000, windowsHide: true },
     );
@@ -988,7 +1018,10 @@ export function collectInstallRootProcesses(installRoot: string): InstallRootSur
     const ownTree = new Set(
       [...selectOwnTreePids(rows, process.pid)].filter((p) => under.has(p)),
     );
-    return { pids, ownTree };
+    const daemonPids = new Set(
+      [...selectDaemonPids(rows, process.pid)].filter((p) => under.has(p)),
+    );
+    return { pids, ownTree, daemonPids };
   } catch {
     return empty;
   }
@@ -1465,11 +1498,13 @@ export function spawnInstallWaiter(plan: WaiterPlan): string | null {
 /**
  * The daemon's pid, or null when it cannot be read.
  *
- * Only used to EXCLUDE it from the force-kill list — the daemon is taken down
- * gracefully so it can flush scrollback first. A null here therefore fails in
- * the safe direction on the install path (the daemon gets force-killed like
- * anything else, losing a flush but not the install), which is why this does
- * not reach for the launcher's verify-before-kill machinery.
+ * Only used to EXCLUDE it from the force-kill lists — the daemon is taken down
+ * gracefully so it can flush scrollback first. It is one of two sources: the
+ * install-root survey also identifies the daemon by command line
+ * (selectDaemonPids), so an unreadable pid file no longer puts the daemon on
+ * a kill list. Neither source can spare a process that is not the daemon,
+ * which is why this does not reach for the launcher's verify-before-kill
+ * machinery.
  */
 export function readDaemonPid(wmuxDir: string): number | null {
   try {

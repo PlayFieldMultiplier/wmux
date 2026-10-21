@@ -153,6 +153,7 @@ async function loadForPlatform(
     collectInstallRootProcesses: vi.fn((_root: string) => ({
       pids: [4242],
       ownTree: new Set<number>(),
+      daemonPids: new Set<number>(),
     })),
     terminatePids: vi.fn((pids: readonly number[]): number[] => [...pids]),
     spawnInstallWaiter: vi.fn((_plan: { setupExePath: string; pids: number[] }): string | null =>
@@ -557,6 +558,7 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
     loaded.teardown.collectInstallRootProcesses.mockReturnValue({
       pids: [4242, 4243, 4244, 4245],
       ownTree: new Set([4244, 4245]),
+      daemonPids: new Set<number>(),
     });
     const hooks = { ...quitHooks(), getDaemonPid: vi.fn(() => 4243 as number | null) };
     const { installHandler } = await downloadUpdateFor(loaded, hooks);
@@ -581,6 +583,7 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
     loaded.teardown.collectInstallRootProcesses.mockReturnValue({
       pids: [4242, 4243],
       ownTree: new Set<number>(),
+      daemonPids: new Set<number>(),
     });
     // The pid file was unreadable (quitHooks' getDaemonPid returns null).
     // Sparing a daemon we cannot identify would leave the root locked;
@@ -590,6 +593,31 @@ describe('AutoUpdater #502 — quit after launching the installer', () => {
     await installHandler();
 
     expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242, 4243]);
+  });
+
+  it('win32: a daemon found by command line is on neither kill list, even with no pid file', async () => {
+    const loaded = await loadForPlatform('win32', downloadRoutes);
+    // 4243 is the daemon, spawned by this main process (so it is in ownTree),
+    // and daemon.pid could not be read (quitHooks' getDaemonPid returns null).
+    // Without the command-line match it lands in forceKillEligiblePids and
+    // the waiter tree-kills it 5 s in, cutting its suspend and flush short.
+    loaded.teardown.collectInstallRootProcesses.mockReturnValue({
+      pids: [4242, 4243, 4244],
+      ownTree: new Set([4243, 4244]),
+      daemonPids: new Set([4243]),
+    });
+    const { installHandler } = await downloadUpdateFor(loaded);
+
+    await installHandler();
+
+    expect(loaded.teardown.terminatePids).toHaveBeenCalledWith([4242]);
+    const plan = loaded.teardown.spawnInstallWaiter.mock.calls[0]![0] as {
+      pids: number[];
+      forceKillEligiblePids: number[];
+    };
+    expect(plan.forceKillEligiblePids).toEqual([4244]);
+    // Still waited for: the installer may not start until it has exited.
+    expect(plan.pids).toContain(4243);
   });
 
   it('win32: a quit that never happens is reported and unlatched, not silent (#980)', async () => {

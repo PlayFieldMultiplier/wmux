@@ -203,10 +203,10 @@ export interface AutoUpdaterHooks {
    * electron-mocked unit tests at module load, and the updater has no other
    * reason to know where `~/.wmux` lives.
    *
-   * Used only to EXCLUDE the daemon from the force-kill list — it gets the
-   * graceful shutdown so it can flush scrollback. A null therefore fails safe:
-   * the daemon is force-killed like anything else, costing a flush but not the
-   * install.
+   * Used only to EXCLUDE the daemon from the force-kill lists — it gets the
+   * graceful shutdown so it can flush scrollback. Not the only source: the
+   * install-root survey also recognizes the daemon by its command line, so a
+   * null here no longer puts the daemon on a kill list.
    */
   getDaemonPid: () => number | null;
   /**
@@ -1163,14 +1163,17 @@ export class AutoUpdater {
     // wait list, so sparing them cannot let the installer start early.
     //
     // The daemon is spared for its own, older reason: the full-shutdown branch
-    // flushes its scrollback first. A null daemon pid still fails safe — it is
-    // force-killed like anything else foreign, costing a flush but not the
-    // install — unless it is one of our descendants, in which case app.quit()
-    // is already taking it down.
+    // stops it with daemon.shutdown, which suspends its sessions and flushes
+    // their scrollback first. It is recognized by its pid file OR by its
+    // command line (survey.daemonPids), and spared from BOTH kill lists. With
+    // the pid file alone, an unreadable daemon.pid put the daemon in
+    // forceKillEligiblePids (it is our child, so it is in ownTree) and the
+    // waiter tree-killed it 5 s in, cutting its suspend short.
     const survey = collectInstallRootProcesses(installRoot);
     const pids = survey.pids;
     const daemonPid = this.hooks.getDaemonPid();
-    const forceKillPids = pids.filter((p) => p !== daemonPid && !survey.ownTree.has(p));
+    const isDaemon = (p: number) => p === daemonPid || survey.daemonPids.has(p);
+    const forceKillPids = pids.filter((p) => !isDaemon(p) && !survey.ownTree.has(p));
     // #1084 — the OTHER half of survey.ownTree: pids we spare from the
     // immediate force-kill above because app.quit() is about to ask them to
     // exit on their own, but that is not the same as the daemon's exemption.
@@ -1180,7 +1183,7 @@ export class AutoUpdater {
     // real machine showed a bare "wmux" process stuck at 0% CPU well past
     // when app.quit() was called — the waiter should not sit out the full
     // INSTALL_LOCK_BUDGET_MS and refuse over it; it can just finish the job.
-    const forceKillEligiblePids = pids.filter((p) => p !== daemonPid && survey.ownTree.has(p));
+    const forceKillEligiblePids = pids.filter((p) => !isDaemon(p) && survey.ownTree.has(p));
 
     // ORDER MATTERS, and it is the reverse of the obvious one.
     //
@@ -1253,7 +1256,7 @@ export class AutoUpdater {
       `[AutoUpdater] install handoff: waiter=${waiterPath} watching ${pids.length} process(es) under ${installRoot}; ` +
       `force-killed ${killed.length}/${forceKillPids.length} foreign, ` +
       `${survey.ownTree.size} of our own left to app.quit(), ` +
-      `daemon pid ${daemonPid ?? 'unknown'} left to the graceful shutdown`,
+      `daemon pid ${pids.filter(isDaemon).join(',') || 'not found'} left to the graceful shutdown`,
     );
 
     // Sessions do NOT survive this install. The daemon holds the install root
