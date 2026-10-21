@@ -17,11 +17,13 @@ import type {
 import type {
   A2aExposureCandidate,
   A2aRemoteExposureGetResult,
+  A2aRemoteExposureSetResult,
   A2aRemoteExposureListResult,
   A2aRemoteHostsExposedResult,
   A2aRemoteLinkProposeParams,
   A2aRemoteLinkResult,
   A2aRemoteOfferAcceptParams,
+  A2aRemoteOfferCreateResult,
   A2aRemoteOfferResult,
   A2aRemoteOffersListResult,
   A2aRemoteLinksListResult,
@@ -669,8 +671,12 @@ export class DaemonClient extends EventEmitter {
     return (await this.rpc('a2a.remote.exposure.get', { hostId })) as A2aRemoteExposureGetResult;
   }
 
-  async a2aRemoteExposureSet(hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean): Promise<A2aRemoteExposureGetResult> {
-    return (await this.rpc('a2a.remote.exposure.set', { hostId, workspaceIds, paneIds, brain })) as A2aRemoteExposureGetResult;
+  async a2aRemoteExposureSet(
+    hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean, expected?: A2aRemoteExposureGetResult['exposure'],
+  ): Promise<A2aRemoteExposureSetResult> {
+    return (await this.rpc('a2a.remote.exposure.set', {
+      hostId, workspaceIds, paneIds, brain, ...(expected !== undefined ? { expected } : {}),
+    })) as A2aRemoteExposureSetResult;
   }
 
   /** Reaches the other PC over the pinned connection, hence 30s. */
@@ -698,6 +704,14 @@ export class DaemonClient extends EventEmitter {
   /** Accept / decline reach the PC that shared, hence 30s. */
   async a2aRemoteOfferAccept(params: A2aRemoteOfferAcceptParams): Promise<A2aRemoteOfferResult> {
     return (await this.rpc('a2a.remote.offers.accept', params as unknown as Record<string, unknown>, { timeoutMs: 30_000 })) as A2aRemoteOfferResult;
+  }
+
+  async a2aRemoteOfferCreate(params: { hostId: string; end: A2aExposureCandidate; allow: { outbound: boolean; inbound: boolean } }): Promise<A2aRemoteOfferCreateResult> {
+    return (await this.rpc('a2a.remote.offers.create', params as unknown as Record<string, unknown>)) as A2aRemoteOfferCreateResult;
+  }
+
+  async a2aRemoteOfferWithdraw(offerId: string): Promise<A2aRemoteOfferResult> {
+    return (await this.rpc('a2a.remote.offers.withdraw', { offerId })) as A2aRemoteOfferResult;
   }
 
   async a2aRemoteOfferDecline(offerId: string): Promise<A2aRemoteOfferResult> {

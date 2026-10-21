@@ -1692,6 +1692,14 @@ export type A2aRemoteOfferCreateResult =
   | { ok: true; offer: A2aLinkOfferRecordV1; existing?: true }
   | { ok: false; error: A2aRemoteOfferCreateError; message?: string };
 
+/** The renderer's share request (`IPC.A2A_REMOTE_OFFERS_CREATE`): main adds the pane's display fields. */
+export interface A2aRemoteOfferShareParams {
+  hostId: string;
+  workspaceId: string;
+  paneId: string;
+  allow: { outbound: boolean; inbound: boolean };
+}
+
 /** `a2a.remote.offers.accept`: this PC's pane to link the shared one with, and the directions (only narrower than offered). */
 export interface A2aRemoteOfferAcceptParams {
   offerId: string;
@@ -1731,8 +1739,9 @@ export interface A2aRemoteHostStatus {
   connectedAt?: string;
   lastError?: string;
   /**
-   * `server` role only: what that PC advertised on its latest stream
-   * (`A2A_FEATURES_HEADER`). Absent until it connects after this PC's wmux started.
+   * What that PC advertised on its latest stream to this one
+   * (`A2A_FEATURES_HEADER`), whichever role this row has. Absent until it
+   * connects after this PC's wmux started.
    */
   features?: string[];
 }
@@ -1770,6 +1779,11 @@ export interface A2aRemoteExposureListResult {
 /** `a2a.remote.exposure.get` — null when nothing is exposed to that PC. */
 export interface A2aRemoteExposureGetResult {
   exposure: A2aExposureV1 | null;
+}
+
+/** `a2a.remote.exposure.set`: `conflict` when the saved list was not the `expected` one (nothing written). */
+export interface A2aRemoteExposureSetResult extends A2aRemoteExposureGetResult {
+  conflict?: true;
 }
 
 /**

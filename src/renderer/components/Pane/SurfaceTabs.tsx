@@ -2,6 +2,7 @@ import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import type { AgentStatus, Surface, Workspace } from '../../../shared/types';
 import { useT } from '../../hooks/useT';
 import { useDaemonModeActive } from '../../hooks/useDaemonMode';
+import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../stores';
 import { surfaceAttentionStatus } from '../../stores/selectors/fleet';
 import {
@@ -20,6 +21,7 @@ import { IconSplitRight, IconSplitDown, IconBrowser, IconExternalLink, IconEyeOf
 import { isPrivateBrowserSurface } from '../../../shared/privateBrowser';
 import { LOCAL_PC_ID, isShadowWorkspaceId } from '../../../shared/pcRail';
 import A2aLinkDialog from '../Remote/A2aLinkDialog';
+import A2aShareDialog from '../Remote/A2aShareDialog';
 import { displayPath } from '../../utils/displayPath';
 import { workspaceColorHex } from '../../../shared/workspaceColors';
 import PaneActionsMenu, { PANE_ACTIONS_MENU_WIDTH, type PaneActionItem } from './PaneActionsMenu';
@@ -91,7 +93,7 @@ export const PANE_ACTIONS_CLUSTER_WIDTH = 142;
  *  host, so no split, no new pane and (by the `snap-` prefix) no layout snap. */
 // 'mute-notifications': a shadow pane's notifications come from the remote
 // host's own path, which never reads this pane's mute flag.
-const HIDDEN_ON_SHADOW: ReadonlySet<string> = new Set(['split-right', 'split-down', 'new-remote', 'split-right-remote', 'split-down-remote', 'mute-notifications']);
+const HIDDEN_ON_SHADOW: ReadonlySet<string> = new Set(['split-right', 'split-down', 'new-remote', 'split-right-remote', 'split-down-remote', 'mute-notifications', 'share-remote-pane']);
 
 /** Rendered width (px) of the COLLAPSED cluster: the ⋮ trigger alone, which
  *  opens the same actions as a vertical menu. Same outer box as the full
@@ -709,6 +711,10 @@ export default function SurfaceTabs({
   // Cross-PC pane link: only where the daemon's a2a.remote bridge exists.
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const canLinkRemote = !readOnly && !!window.electronAPI?.a2aRemote?.linksPropose;
+  // Share this pane with a PC that joined this one (offered only while one has).
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const sharePeers = useStore(useShallow((s) => s.a2aRemote.peers.filter((p) => !p.revokedAt).map((p) => p.name)));
+  const canShareRemote = !readOnly && !!window.electronAPI?.a2aRemote?.offersCreate && sharePeers.length > 0;
   // Per-pane Chrome profile (chrome backend only — the hook gates itself).
   const chromeProfile = usePaneChromeProfileMenu({
     paneId,
@@ -813,6 +819,12 @@ export default function SurfaceTabs({
     },
     ...continueAccount.mainItems,
     ...claudeRewindItems,
+    ...(canShareRemote ? [{
+      key: 'share-remote-pane',
+      label: sharePeers.length === 1 ? t('a2aShare.menuOne', { pc: sharePeers[0] }) : t('a2aShare.menu'),
+      icon: <IconComputer size={14} />,
+      onSelect: () => setShareDialogOpen(true),
+    }] : []),
     ...(canLinkRemote ? [{
       key: 'link-remote-pane',
       label: t('a2aLink.menu'),
@@ -862,7 +874,7 @@ export default function SurfaceTabs({
   ].filter((item) => !shadow || !(HIDDEN_ON_SHADOW.has(item.key) || item.key.startsWith('snap-'))), [
     t, onSplitHorizontal, onSplitVertical, onAddBrowser, newBrowserLabel, onAddPrivateBrowser, chromeProfile.mainItems, browserPolicy.mainItems, onAddRemote,
     onSplitHorizontalRemote, onSplitVerticalRemote, startPaneRename,
-    menuTabSurface, startRename, canLinkRemote, paneMuted, togglePaneMuted, continueAccount.mainItems, claudeRewindItems,
+    menuTabSurface, startRename, canLinkRemote, canShareRemote, sharePeers, paneMuted, togglePaneMuted, continueAccount.mainItems, claudeRewindItems,
     stashChord, stashDisabled, stashTooltip, stashThisPane, isZoomed, toggleZoom,
     layoutTemplates, shadow,
   ]);
@@ -1429,6 +1441,9 @@ export default function SurfaceTabs({
       )}
       {linkDialogOpen && (
         <A2aLinkDialog local={{ kind: 'pane', workspaceId: workspace.id, paneId }} onClose={() => setLinkDialogOpen(false)} />
+      )}
+      {shareDialogOpen && (
+        <A2aShareDialog workspaceId={workspace.id} paneId={paneId} onClose={() => setShareDialogOpen(false)} />
       )}
     </div>
   );

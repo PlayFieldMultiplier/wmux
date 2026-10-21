@@ -869,7 +869,10 @@ One page, Tailnet first, filling the sheet with 28px sides
     a PC says when the other PC was not told, and which side is left after a
     partial failure. Its live links
     sit nested under it (an elbow, `mine ↔ PC/theirs · direction`, or
-    "waiting for PC to accept" with Check; Unlink asks twice). Then the
+    "waiting for PC to accept" with Check; Unlink asks twice). A pane this
+    PC shared with it and not yet accepted sits there too (2026-10-21):
+    `mine → PC · shared, waiting for PC to accept` with Withdraw, neutral
+    (it waits on the other PC, so no hairline and no count). Then the
     workspace shares (remote hosts): Open unfolds that host's workspaces in
     place, each with its own Open; Pair again when its credential was
     refused. No path chip: Tailscale is the default, and the address that
@@ -1660,6 +1663,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-18 | Owner decision: photos in Bots messages, from the desktop composer and the phone. A muted picture button beside "+", staged chips and sent thumbnails in Chat view's 2026-09-25 grammar, the full photo in a dialog; no new colour or control style | The owner sends screenshots and photos to bots from the phone; the bot sees the photo itself in its turn, and the desktop draws what was sent the way Chat view already does |
 | 2026-10-20 | Owner decision: window glass on Windows 11 (acrylic). Windows 11 22H2+ gets the acrylic backdrop under the same Off / Soft / Clear setting, switched at runtime, with its own coverage numbers (light looks paint more so acrylic does not read grey) and a transparent caption-button strip; Windows 10, older Windows 11 builds and Linux stay opaque, and the setting says why there. Amends Window glass | A live prototype on Windows 11 showed acrylic blurring the desktop much like macOS vibrancy, staying on while unfocused, with clean caption buttons over a transparent strip; Mica read almost opaque. |
 | 2026-10-21 | Owner decision: a pane is linked across PCs by one share from the PC that accepts connections. On the receiving PC the share is a Needs you row of its own (no pane picker on the row; Accept… opens the link dialog with the other PC's pane fixed), counted with link requests, neutral apart from the one attention hairline and badge | Pairing, ticking the pane, a request from the other PC and an accept there took two machine switches; a share is the sharing PC's consent, and the receiver's Accept is its own. The dialog keeps "no pane picker on a request" for the row |
+| 2026-10-21 | The share starts from the pane's menu: **Share this pane with <PC>…** (or **with another PC…** when several joined this one), shown only while a PC has joined. Its dialog names what that PC will see (the pane, its agent, repo and folder), two direction boxes ticked by default, one muted line on what happens next, and Share as the one primary; a reason it cannot share (older wmux, not connected, already linked, already shared with Withdraw) is a muted line, never a colour. When the other PC accepts, a toast says so and the link row names its pane; Unlink hides the pane again unless it was shown before the share or the list was saved since | One action on the sharing PC replaces ticking the pane in Panes to show and accepting a request. The checklist stays for showing panes without a share, with a hint pointing at the menu |
 
 ### Desktop conversation view
 

@@ -151,6 +151,36 @@ export function A2aOfferRow(p: A2aOfferRowProps) {
   );
 }
 
+export interface A2aShareRowProps {
+  offer: A2aLinkOfferRecordV1;
+  pcName: string;
+  busy: boolean;
+  onWithdraw: () => void;
+  t: T;
+}
+
+/**
+ * One of this PC's panes shared with that PC, nested under it: it waits on
+ * the other PC, not on this one, so it is neutral (no hairline, no count).
+ */
+export function A2aShareRow(p: A2aShareRowProps) {
+  const { offer: o, t } = p;
+  return (
+    <li className="wmux-remote-link" data-offer-id={o.offerId} data-testid="a2a-share-row">
+      <span className="wmux-remote-link-ln" aria-hidden="true"><IconElbow size={16} /></span>
+      <span className="wmux-remote-link-what">
+        {`${o.end.workspaceName} / ${o.end.label ?? o.end.paneId ?? ''} → ${p.pcName} · ${t('a2aShare.waiting', { pc: p.pcName })}`}
+      </span>
+      {/* A claimed share is being turned into a link; it can no longer be withdrawn. */}
+      {o.state === 'open' && (
+        <span className="wmux-remote-acts">
+          <UiButton variant="ghost" size="sm" disabled={p.busy} onClick={p.onWithdraw} data-testid="a2a-share-row-withdraw">{t('a2aShare.withdraw')}</UiButton>
+        </span>
+      )}
+    </li>
+  );
+}
+
 export interface A2aLinkRowProps {
   link: A2aLinkRecordV1;
   pcName: string;

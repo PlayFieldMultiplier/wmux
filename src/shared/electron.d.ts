@@ -36,6 +36,7 @@ import type {
 } from './lanlink';
 import type {
   A2aRemoteExposureGetResult,
+  A2aRemoteExposureSetResult,
   A2aRemoteHeldListResult,
   A2aRemoteHeldRejectResult,
   A2aRemoteHeldRetryResult,
@@ -44,6 +45,8 @@ import type {
   A2aRemoteHostsExposedResult,
   A2aRemoteLinkEvent,
   A2aRemoteOfferAcceptParams,
+  A2aRemoteOfferCreateResult,
+  A2aRemoteOfferShareParams,
   A2aRemoteOfferEvent,
   A2aRemoteOfferResult,
   A2aRemoteOffersListResult,
@@ -239,7 +242,8 @@ declare global {
          * Always an explicit pane list per workspace; a workspace without one
          * exposes no pane. `brain`: this PC's Moa is visible to that PC.
          */
-        exposureSet: (hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean) => Promise<A2aRemoteExposureGetResult>;
+        /** `expected`: the list this save was computed from; a different saved list answers `conflict`. */
+        exposureSet: (hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean, expected?: A2aRemoteExposureGetResult['exposure']) => Promise<A2aRemoteExposureSetResult>;
         /** The panes a PC this PC joined shows to it. */
         hostsExposed: (hostId: string) => Promise<A2aRemoteHostsExposedResult>;
         linksList: () => Promise<A2aRemoteLinksListResult>;
@@ -255,6 +259,10 @@ declare global {
         offersAccept: (params: A2aRemoteOfferAcceptParams) => Promise<A2aRemoteOfferResult>;
         /** Decline a pane another PC shared; that PC is told. */
         offersDecline: (offerId: string) => Promise<A2aRemoteOfferResult>;
+        /** Share one of this PC's panes with a PC that joined this one. */
+        offersCreate: (params: A2aRemoteOfferShareParams) => Promise<A2aRemoteOfferCreateResult>;
+        /** Take back a share the other PC has not accepted yet. */
+        offersWithdraw: (offerId: string) => Promise<A2aRemoteOfferResult>;
         /** Daemon link and share offer nudges. Returns unsubscribe. */
         onLinkEvent: (callback: (event: A2aRemoteLinkEvent | A2aRemoteOfferEvent) => void) => () => void;
         /** Connection state of every paired PC. */

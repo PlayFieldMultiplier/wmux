@@ -64,6 +64,8 @@ describe('A2aExposurePublisher', () => {
     await pub.accept(snap([['w1', ['a']], [shadow, ['z']]]));
     expect(pub.hasPane('w1', 'a')).toBe(true);
     expect(pub.hasPane(shadow, 'z')).toBe(false);
+    expect(await pub.candidateFor(shadow, 'z')).toBeNull();
+    expect(await pub.candidateFor('w1', 'a')).toMatchObject({ workspaceId: 'w1', paneId: 'a' });
   });
 
   it('publishes nothing while nothing is exposed', async () => {

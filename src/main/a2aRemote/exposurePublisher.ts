@@ -159,6 +159,19 @@ export class A2aExposurePublisher {
     });
   }
 
+  /**
+   * One pane of the renderer's latest tree as the other PC would see it
+   * (names, agent, cwd, repo key), for a share; null when it is not open.
+   */
+  async candidateFor(workspaceId: string, paneId: string): Promise<A2aExposureCandidate | null> {
+    // Only this PC's own panes: a shadow workspace shows another PC's.
+    if (isShadowWorkspaceId(workspaceId)) return null;
+    const tree = this.raw ?? this.last;
+    const w = tree?.workspaces.find((x) => x.id === workspaceId);
+    const p = w?.panes.find((x) => x.paneId === paneId);
+    return w && p ? this.candidate(w, p) : null;
+  }
+
   /** Is `paneId` a pane of `workspaceId` in the renderer's latest tree (and this PC's own, not a shadow of another PC's)? */
   hasPane(workspaceId: string, paneId: string): boolean {
     if (isShadowWorkspaceId(workspaceId)) return false;
@@ -204,6 +217,24 @@ export class A2aExposurePublisher {
       }, A2A_BRAIN_GRACE_MS - waited);
     }
     return { ...rest, brain: kept };
+  }
+
+  private async candidate(
+    w: A2aRemotePaneSnapshot['workspaces'][number],
+    p: A2aRemotePaneSnapshot['workspaces'][number]['panes'][number],
+  ): Promise<A2aExposureCandidate> {
+    const gitRemote = p.cwd ? await this.deps.repoKey(p.cwd).catch(() => null) : null;
+    return {
+      kind: 'pane',
+      workspaceId: w.id,
+      workspaceName: w.name,
+      paneId: p.paneId,
+      ...(p.label ? { label: p.label } : {}),
+      ...(p.agent ? { agent: p.agent } : {}),
+      ...(p.cwd ? { cwd: p.cwd } : {}),
+      ...(gitRemote ? { gitRemote } : {}),
+      ...(p.gitBranch ? { gitBranch: p.gitBranch } : {}),
+    };
   }
 
   private enqueue(job: () => Promise<void>): Promise<void> {
@@ -269,20 +300,7 @@ export class A2aExposurePublisher {
     }
     for (const w of this.last.workspaces) {
       if (!exposed.has(w.id)) continue;
-      for (const p of w.panes) {
-        const gitRemote = p.cwd ? await this.deps.repoKey(p.cwd).catch(() => null) : null;
-        panes.push({
-          kind: 'pane',
-          workspaceId: w.id,
-          workspaceName: w.name,
-          paneId: p.paneId,
-          ...(p.label ? { label: p.label } : {}),
-          ...(p.agent ? { agent: p.agent } : {}),
-          ...(p.cwd ? { cwd: p.cwd } : {}),
-          ...(gitRemote ? { gitRemote } : {}),
-          ...(p.gitBranch ? { gitBranch: p.gitBranch } : {}),
-        });
-      }
+      for (const p of w.panes) panes.push(await this.candidate(w, p));
     }
     await client.a2aRemoteExposurePublish(panes, reconciled);
   }

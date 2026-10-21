@@ -42,6 +42,7 @@ export function A2aExposureChecklistView(p: A2aExposureChecklistViewProps) {
   return (
     <div className="flex flex-col gap-2" data-testid="a2a-exposure-checklist">
       <p className="wmux-a2a-note">{t('settings.a2aExposureDesc', { name: p.pcName })}</p>
+      <p className="wmux-a2a-note" data-testid="a2a-exposure-share-hint">{t('a2aShare.checklistHint')}</p>
       {/* Moa was removed, so this PC has none to show: the row stays only so
           an exposure an earlier version saved can still be unticked. */}
       {(p.moaAvailable || p.exposure.brain === true) && (
@@ -143,16 +144,32 @@ export function A2aExposureChecklist({ hostId, pcName, t }: { hostId: string; pc
     if (!api) return;
     setBusy(true); setFailed(false);
     queue.current = queue.current.then(async () => {
-      const next = op(latest.current);
-      try {
-        const r = await api.exposureSet(hostId, next.workspaceIds, next.paneIds, next.brain === true);
-        if (r?.exposure) {
-          latest.current = listsOf(r.exposure);
-          setExposure(latest.current);
+      // Each save names the list it was made from: when a share changed the
+      // list in between, the daemon writes nothing and the tick is made again
+      // on what is saved now.
+      for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
+        let read: A2aExposureV1 | null;
+        try {
+          read = (await api.exposureGet(hostId))?.exposure ?? null;
+        } catch {
+          setFailed(true);
+          return;
         }
-      } catch {
-        setFailed(true);
+        latest.current = read ? listsOf(read) : { workspaceIds: [], paneIds: {} };
+        const next = op(latest.current);
+        try {
+          const r = await api.exposureSet(hostId, next.workspaceIds, next.paneIds, next.brain === true, read);
+          if (r?.conflict) continue;
+          if (r?.exposure) {
+            latest.current = listsOf(r.exposure);
+            setExposure(latest.current);
+          }
+        } catch {
+          setFailed(true);
+        }
+        return;
       }
+      setFailed(true);
     }).finally(() => setBusy(false));
   }, [api, hostId]);
 
@@ -176,6 +193,9 @@ export function A2aExposureChecklist({ hostId, pcName, t }: { hostId: string; pc
     </>
   );
 }
+
+/** Saves tried before the tick is reported failed (each retry follows a share changing the list). */
+const SAVE_ATTEMPTS = 3;
 
 function listsOf(e: A2aExposureV1): ExposureLists {
   return { workspaceIds: e.workspaceIds, paneIds: e.paneIds ?? {}, ...(e.brain ? { brain: true } : {}) };

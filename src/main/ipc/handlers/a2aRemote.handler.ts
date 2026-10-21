@@ -2,11 +2,13 @@ import { BrowserWindow, ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
 import type {
+  A2aRemoteExposureGetResult,
   A2aRemoteHostStatus,
   A2aRemoteLinkEvent,
   A2aRemoteLinkProposeParams,
   A2aRemoteOfferAcceptParams,
   A2aRemoteOfferEvent,
+  A2aRemoteOfferShareParams,
 } from '../../../shared/rpc';
 import { wrapHandler } from '../wrapHandler';
 import type { DaemonClient } from '../../DaemonClient';
@@ -95,15 +97,17 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
     [IPC.A2A_REMOTE_EXPOSURE_GET, async (hostId) => (await client()).a2aRemoteExposureGet(str(hostId))],
     [
       IPC.A2A_REMOTE_EXPOSURE_SET,
-      async (hostId, workspaceIds, paneIds, brain) => {
+      async (hostId, workspaceIds, paneIds, brain, expected) => {
         const result = await (await clientNow()).a2aRemoteExposureSet(
           str(hostId),
           Array.isArray(workspaceIds) ? workspaceIds.filter((w): w is string => typeof w === 'string') : [],
           (paneIds ?? {}) as Record<string, string[]>,
           brain === true,
+          // The daemon compares it field by field; anything else means "no list saved".
+          expected === undefined ? undefined : (expected as A2aRemoteExposureGetResult['exposure']),
         );
         // A newly exposed workspace's panes must be listed before the other PC looks.
-        await publisher.republish();
+        if (!result.conflict) await publisher.republish();
         return result;
       },
     ],
@@ -127,6 +131,22 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
       },
     ],
     [IPC.A2A_REMOTE_OFFERS_DECLINE, async (offerId) => (await clientNow()).a2aRemoteOfferDecline(str(offerId))],
+    [
+      IPC.A2A_REMOTE_OFFERS_CREATE,
+      async (params) => {
+        const p = (params ?? {}) as A2aRemoteOfferShareParams;
+        const c = await clientNow();
+        // What the other PC sees comes from this PC's own tree, never from the renderer's words.
+        const end = await publisher.candidateFor(str(p.workspaceId), str(p.paneId));
+        if (!end) return { ok: false, error: 'bad-request', message: 'that pane is not open on this PC' };
+        const allow = { outbound: p.allow?.outbound === true, inbound: p.allow?.inbound === true };
+        const result = await c.a2aRemoteOfferCreate({ hostId: str(p.hostId), end, allow });
+        // The pane is listed to that PC too (GET /exposed) once the snapshot is republished.
+        if (result.ok) await publisher.republish();
+        return result;
+      },
+    ],
+    [IPC.A2A_REMOTE_OFFERS_WITHDRAW, async (offerId) => (await clientNow()).a2aRemoteOfferWithdraw(str(offerId))],
     [IPC.A2A_REMOTE_HOSTS_STATUS, async () => (await client()).rpc('a2a.remote.hosts.status', {})],
     [IPC.A2A_REMOTE_HELD_LIST, async () => (await client()).rpc(A2A_REMOTE_RPC.held, {})],
     [

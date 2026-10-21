@@ -87,3 +87,25 @@ describe('a2aRemote offer accept', () => {
     expect(client.a2aRemoteOfferAccept).toHaveBeenCalledWith(params);
   });
 });
+
+describe('a2aRemote share', () => {
+  it('shares only a pane open in this PC’s tree, described by main, then republishes', async () => {
+    const created: unknown[] = [];
+    const client = {
+      ...fakeClient(),
+      a2aRemoteOfferCreate: vi.fn(async (p: unknown) => { created.push(p); return { ok: true, offer: {} }; }),
+      a2aRemoteExposureList: vi.fn(async () => ({ exposures: [] })),
+      a2aRemoteExposurePublish: vi.fn(async () => ({ ok: true, count: 0 })),
+      a2aRemotePaneGone: vi.fn(async () => ({ ok: true })),
+    } as unknown as DaemonClient;
+    cleanups.push(registerA2aRemoteHandlers(client));
+    const ask = { hostId: 'h', workspaceId: 'w2', paneId: 'p9', allow: { outbound: true, inbound: false } };
+    await expect(invoke(IPC.A2A_REMOTE_OFFERS_CREATE, ask)).resolves.toMatchObject({ ok: false, error: 'bad-request' });
+    expect(client.a2aRemoteOfferCreate).not.toHaveBeenCalled();
+    await invoke(IPC.A2A_REMOTE_SNAPSHOT, { workspaces: [{ id: 'w2', name: 'API', panes: [{ paneId: 'p9', label: 'w1-1', agent: 'claude' }] }] });
+    const publishes = (client.a2aRemoteExposurePublish as ReturnType<typeof vi.fn>).mock.calls.length;
+    await expect(invoke(IPC.A2A_REMOTE_OFFERS_CREATE, { ...ask, label: 'forged' })).resolves.toMatchObject({ ok: true });
+    expect(created).toEqual([{ hostId: 'h', end: { kind: 'pane', workspaceId: 'w2', workspaceName: 'API', paneId: 'p9', label: 'w1-1', agent: 'claude' }, allow: { outbound: true, inbound: false } }]);
+    expect((client.a2aRemoteExposurePublish as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(publishes);
+  });
+});

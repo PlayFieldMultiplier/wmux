@@ -188,6 +188,12 @@ export function registerA2aLinkRpc(onRpc: (method: string, handler: RpcHandler) 
     if (params['brain'] !== undefined && typeof params['brain'] !== 'boolean') {
       throw new Error('a2a.remote.exposure.set: brain must be boolean');
     }
+    // Saved only over the list the caller read (when it says which): a share
+    // may have shown a pane since, and the caller then reads again.
+    if (params['expected'] !== undefined) {
+      const current = deps.exposures.get(hostId) ?? null;
+      if (exposureKey(current) !== exposureKey(params['expected'])) return { exposure: current, conflict: true };
+    }
     const exposure = deps.exposures.set(hostId, { workspaceIds, paneIds, brain: params['brain'] === true });
     // A human saved this list: shares to that PC owe nothing back, and a share it hides ends.
     // First, so the links broken below cannot pay an older put-back over the list just saved.
@@ -688,4 +694,19 @@ function transportFailure(err: unknown): CallFailure {
     default:
       return new CallFailure('failed', err.message, err.sent);
   }
+}
+
+/** One exposure list in a comparable form (`null`: none saved; an absent pane list: every pane). */
+function exposureKey(raw: unknown): string {
+  if (!isPlainObject(raw)) return 'none';
+  const ws = Array.isArray(raw['workspaceIds']) ? raw['workspaceIds'].filter((w): w is string => typeof w === 'string') : [];
+  const panes = isPlainObject(raw['paneIds']) ? raw['paneIds'] : undefined;
+  return JSON.stringify({
+    w: [...ws].sort(),
+    p: [...ws].sort().map((w) => {
+      const list = panes && Object.hasOwn(panes, w) ? panes[w] : undefined;
+      return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string').sort() : '*';
+    }),
+    b: raw['brain'] === true,
+  });
 }

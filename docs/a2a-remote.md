@@ -77,14 +77,43 @@ is the one that will accept connections, and PC A is the one that joins it.
    "Connected to *PC B's name*." PC B now appears on A under **PCs I
    connected to**, and PC A appears on B under **PCs connected to me**.
 
-4. **Choose what to show (PC B).** Before anything can be linked, the server
+4. **Share a pane (PC B), the quick way.** On PC B, open the pane's menu
+   (right-click the pane header, or click **⋮**) and choose **Share this
+   pane with *PC A*…** (**…with another PC…** when several PCs joined this
+   one). The dialog shows what PC A will see: this pane's name, agent,
+   repository and folder, and nothing else. Two boxes set the directions,
+   both ticked by default: ***PC A* may send work to this pane** and **This
+   pane may send work to *PC A***. Click **Share**.
+
+   PC A shows a notice, "Another PC shared a pane with this PC", whose
+   **Review** opens the **Remote** page. Its Needs you block has a card
+   naming PC B's pane (as PC B reports it), PC B's fingerprint prefix, the
+   directions offered and how long the share stays open. Click **Accept…**,
+   pick the pane on PC A to link it with (panes on the same repository come
+   first), untick a direction if you want fewer, and click **Accept**. The
+   link is active at once on both PCs, and PC B shows a notice and the new
+   link with PC A's pane; **Unlink** there ends it and hides the pane again
+   (unless it was shown before the share, or you saved **Panes to show** for
+   PC A since).
+
+   A share ends by itself after **1 hour** if PC A does not accept it, when
+   the pane is closed or moved, when you untick it in **Panes to show**, or
+   when either PC removes the pairing. Until it is accepted, PC B lists it
+   under PC A on the Remote page with **Withdraw**. PC A needs this version
+   of wmux too; if it runs an older one, the dialog says so and you can use
+   the steps below instead.
+
+   Sharing needs no Tailscale: it uses the same listener and connection as
+   the rest of this page.
+
+5. **Or choose what to show (PC B).** Without a share, the server first
    decides what the joiner may see. On PC B, under **PCs connected to me**,
    click **Panes to show** on PC A's row. Tick single panes, or a workspace's
    box to show every pane it has now (panes you open later are not added).
    Panes are named as their header shows them. Nothing is shown until you
    tick it.
 
-5. **Link two panes (PC A, then PC B).** On PC A, open the pane's menu
+6. **Link two panes (PC A, then PC B).** On PC A, open the pane's menu
    (right-click the pane header, or click **⋮**) and choose **Link with a
    pane on another PC…**. Pick PC B, then one of the panes it shows you.
    Each pane is listed as `<workspace> / <pane>` with its agent, git remote
@@ -107,7 +136,7 @@ is the one that will accept connections, and PC A is the one that joins it.
    PC B for its current state. Both PCs list their links on the Remote page
    with their state, and a live link has an **Unlink** button.
 
-6. **Send work.** Agents in the linked pane's workspace on PC A now see the
+7. **Send work.** Agents in the linked pane's workspace on PC A now see the
    remote pane in `a2a_discover` under an alias of the form
    `<PC>/<workspace>/<pane>`. The pane part is the pane's header name on
    PC B: its label if someone renamed it, otherwise its automatic name, for
@@ -306,7 +335,11 @@ hardening and will come later.
 - **What a link covers.** A link joins exactly one pane on each side, in the
   directions you allowed. A paired PC sees only the panes you showed it, can propose links only to those, and can
   send only over a link that a person on one PC proposed and a person on the
-  other accepted. The receiving PC decides which pane a message came from by
+  other accepted. A share counts as that first person's consent, for one
+  pane, one PC, at most the directions ticked, once, within an hour: the
+  other PC's accept turns into a link only if it names that pane and asks
+  for no more. The sharing PC does not see which pane the other PC picks
+  until the link exists; it then shows it at once, with Unlink. The receiving PC decides which pane a message came from by
   its own link record, never by what the sender claims.
 - **When a link ends by itself.** A link breaks when its pane is closed or
   moves to another workspace, when its workspace is closed or archived, when
@@ -340,7 +373,9 @@ hardening and will come later.
 
 ## Known limitations
 
-- Only the joiner can propose a link. The server accepts or declines it.
+- Only the joiner can propose a link. The server accepts or declines it, or
+  shares one of its panes, which the joiner then accepts. A share goes from
+  the PC that accepts connections to a PC that joined it, not the other way.
 - Links are created by people only; agents cannot propose one.
 - A pane links only with a pane.
 - No delivery without the app: a message reaches a pane only while
