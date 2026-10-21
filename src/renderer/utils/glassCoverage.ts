@@ -50,7 +50,7 @@ export const GLASS_MIN_CONTRAST = { main: 4.5, sub: 4.5, muted: 3 } as const;
  * survived the grey material; a legible frame paints far more than that
  * anyway.)
  */
-const WINDOWS_GLASS_FLOOR: Record<'dark' | 'light', Record<'soft' | 'clear', GlassCoverage>> = {
+export const WINDOWS_GLASS_FLOOR: Record<'dark' | 'light', Record<'soft' | 'clear', GlassCoverage>> = {
   dark: { soft: { frame: 30, sheet: 6 }, clear: { frame: 12, sheet: 5 } },
   light: { soft: { frame: 55, sheet: 10 }, clear: { frame: 35, sheet: 8 } },
 };

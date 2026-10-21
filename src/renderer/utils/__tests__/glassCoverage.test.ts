@@ -9,9 +9,11 @@ import { isLight, mixHex } from '../../tailwindPalette';
 import {
   GLASS_MAX_COVERAGE,
   GLASS_MIN_CONTRAST,
+  WINDOWS_GLASS_FLOOR,
   glassContrast,
   windowsGlassCoverage,
   worstBackdrop,
+  type GlassCoverage,
   type GlassTokens,
 } from '../glassCoverage';
 
@@ -32,50 +34,66 @@ function appearanceOf(id: BuiltinThemeId): 'dark' | 'light' {
   return isLight(deriveBuiltinPalette(id).bgBase) ? 'light' : 'dark';
 }
 
+// Invariants, not per-look outcomes: a token edit may move a look in or out of
+// glass, and these still hold.
+function meets(tokens: GlassTokens, appearance: 'dark' | 'light', coverage: GlassCoverage): boolean {
+  const c = glassContrast(tokens, worstBackdrop(appearance), coverage);
+  return c.main >= GLASS_MIN_CONTRAST.main && c.sub >= GLASS_MIN_CONTRAST.sub && c.muted >= GLASS_MIN_CONTRAST.muted;
+}
+
 describe('windowsGlassCoverage over every built-in look', () => {
   for (const id of THEMES) {
     for (const level of ['soft', 'clear'] as const) {
-      it(`${id} ${level}: legible over the worst backdrop in the frame and the sidebar, or opaque`, () => {
+      it(`${id} ${level}: glass is legible and minimal over the worst backdrop, or no coverage in range is`, () => {
         const appearance = appearanceOf(id);
-        const coverage = windowsGlassCoverage(tokensOf(id), appearance, level);
-        if (!coverage) return;
-        expect(coverage.frame).toBeLessThanOrEqual(GLASS_MAX_COVERAGE);
-        const c = glassContrast(tokensOf(id), worstBackdrop(appearance), coverage);
-        expect(c.main).toBeGreaterThanOrEqual(GLASS_MIN_CONTRAST.main);
-        expect(c.sub).toBeGreaterThanOrEqual(GLASS_MIN_CONTRAST.sub);
-        expect(c.muted).toBeGreaterThanOrEqual(GLASS_MIN_CONTRAST.muted);
+        const tokens = tokensOf(id);
+        const floor = WINDOWS_GLASS_FLOOR[appearance][level];
+        const coverage = windowsGlassCoverage(tokens, appearance, level);
+        if (coverage) {
+          expect(coverage.sheet).toBe(floor.sheet);
+          expect(coverage.frame).toBeGreaterThanOrEqual(floor.frame);
+          expect(coverage.frame).toBeLessThanOrEqual(GLASS_MAX_COVERAGE);
+          // Every target, in the frame and the sidebar.
+          const c = glassContrast(tokens, worstBackdrop(appearance), coverage);
+          expect(c.main).toBeGreaterThanOrEqual(GLASS_MIN_CONTRAST.main);
+          expect(c.sub).toBeGreaterThanOrEqual(GLASS_MIN_CONTRAST.sub);
+          expect(c.muted).toBeGreaterThanOrEqual(GLASS_MIN_CONTRAST.muted);
+          // The smallest such frame: one step less misses a target.
+          if (coverage.frame > floor.frame) {
+            expect(meets(tokens, appearance, { ...coverage, frame: coverage.frame - 1 })).toBe(false);
+          }
+        } else {
+          for (let frame = floor.frame; frame <= GLASS_MAX_COVERAGE; frame++) {
+            expect(meets(tokens, appearance, { frame, sheet: floor.sheet }), `${frame}%`).toBe(false);
+          }
+        }
       });
     }
   }
 
-  it('keeps glass on exactly these looks (a token edit that flips one shows up here)', () => {
-    const glassy = THEMES.filter((id) => windowsGlassCoverage(tokensOf(id), appearanceOf(id), 'soft'));
-    expect(glassy.sort()).toEqual(['amber-line', 'graphite', 'hinomaru', 'taegeuk', 'tint', 'zinc']);
-    for (const id of THEMES) {
-      expect(!!windowsGlassCoverage(tokensOf(id), appearanceOf(id), 'clear')).toBe(glassy.includes(id));
-    }
-  });
-
-  it('never goes below the level floor, and Soft never covers less than Clear', () => {
+  it('Soft never covers less than Clear', () => {
     for (const id of THEMES) {
       const soft = windowsGlassCoverage(tokensOf(id), appearanceOf(id), 'soft');
       const clear = windowsGlassCoverage(tokensOf(id), appearanceOf(id), 'clear');
       if (!soft || !clear) continue;
       expect(soft.frame).toBeGreaterThanOrEqual(clear.frame);
       expect(soft.sheet).toBeGreaterThanOrEqual(clear.sheet);
-      const floor = appearanceOf(id) === 'dark' ? { frame: 12, sheet: 5 } : { frame: 35, sheet: 8 };
-      expect(clear.frame).toBeGreaterThanOrEqual(floor.frame);
-      expect(clear.sheet).toBeGreaterThanOrEqual(floor.sheet);
     }
   });
+});
 
-  it('is the smallest legible frame: one step less is not legible', () => {
-    const coverage = windowsGlassCoverage(tokensOf('tint'), 'dark', 'soft');
-    if (!coverage) throw new Error('tint keeps glass on Windows');
-    const below = glassContrast(tokensOf('tint'), '#FFFFFF', { ...coverage, frame: coverage.frame - 1 });
-    expect(
-      below.main >= GLASS_MIN_CONTRAST.main && below.sub >= GLASS_MIN_CONTRAST.sub && below.muted >= GLASS_MIN_CONTRAST.muted,
-    ).toBe(false);
+describe('windowsGlassCoverage on fixed tokens', () => {
+  // The dark Tint look's colours as of 2026-10-21, pinned here so the
+  // numbers do not move with the theme tokens.
+  const fixed: GlassTokens = { frameBg: '#121015', mantle: '#18151C', textMain: '#F4F2F7', textSub: '#C2BDC9', textMuted: '#8A8492' };
+
+  it('raises the frame to the smallest legible value and keeps the sheet at its floor', () => {
+    expect(windowsGlassCoverage(fixed, 'dark', 'soft')).toEqual({ frame: 82, sheet: 6 });
+    expect(windowsGlassCoverage(fixed, 'dark', 'clear')).toEqual({ frame: 82, sheet: 5 });
+  });
+
+  it('measures the old fixed 30%/6% as illegible over a white window', () => {
+    expect(glassContrast(fixed, '#FFFFFF', { frame: 30, sheet: 6 }).sub).toBeLessThan(GLASS_MIN_CONTRAST.sub);
   });
 });
 
