@@ -858,6 +858,8 @@ export const ko = {
   'project.prepCopy': '이 체크아웃의 git-ignore 파일을 새 worktree로 복사',
   'project.prepCopyAutomated': '봇·팬아웃 워크스페이스에도 복사',
   'project.prepCopyHumanOnly': '직접 연 워크스페이스에만 복사',
+  'project.copyReviewNotice': '이 프로젝트는 wmux가 설정 파일 복사 항목을 보여주기 전에 승인되었습니다. 아래 파일은 승인하기 전까지 새 worktree로 복사되지 않습니다.',
+  'project.approveCopy': '복사 설정 승인',
   'palette.catWorkspace': '워크스페이스',
   'palette.catSurface': '서피스',
   'palette.catCommand': '커맨드',
@@ -3289,6 +3291,7 @@ export const ko = {
   'git.prepFailed': 'worktree는 만들었지만 준비 명령이 실패했습니다: {error}',
   'git.prepSkipped': 'worktree를 준비 없이 만들었습니다: wmux.json이 승인되지 않았습니다. 사이드바 배지에서 검토하세요.',
   'git.prepMalformed': 'worktree를 준비 없이 만들었습니다: 이 프로젝트 wmux.json의 준비 항목을 읽을 수 없습니다.',
+  'git.prepCopyReview': '설정 파일을 복사하지 않았습니다: 복사 설정을 검토해야 합니다. 사이드바 배지에서 wmux.json을 열어 승인하세요.',
   'git.newBranchPlaceholder': '새 브랜치 이름…',
   // Git 탭 — Pull Requests 섹션 (gh CLI).
   'git.pullRequests': 'Pull Requests',

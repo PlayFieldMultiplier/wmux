@@ -411,6 +411,9 @@ const DEPENDENCY_DONE_STATUSES: readonly string[] = ['review_requested', 'comple
 
 /** Said once per fan-out when the project lists config files but keeps them
  *  out of fan-out and bot worktrees (the default). */
+export const FANOUT_COPY_REVIEW_WARNING =
+  "the repository's config files (fanout.copy) were not copied: the copy settings need review (approve wmux.json again in its trust dialog)";
+
 export const FANOUT_COPY_BLOCKED_WARNING =
   "the repository's config files (fanout.copy) were not copied into these worktrees: copying into bot and fan-out workspaces is off for this project";
 
@@ -491,6 +494,9 @@ export interface FanOutResult {
    *  privileged/inverted bounds, or wider than the cap), so no task got a
    *  WMUX_TASK_PORT. Distinct from "no range declared", which reports nothing. */
   portRangeInvalid?: true;
+  /** The repository declares config files to copy, but its approval predates
+   *  the copy settings: nothing was copied until they are reviewed. */
+  copyNeedsReview?: true;
   /** T3 — conditions that did not stop the fan-out but the caller should know,
    *  e.g. the tasks branched from the local HEAD because origin's default
    *  branch could not be fetched. */
@@ -911,6 +917,7 @@ export class FanOutService {
 
     const warnings = base.warning ? [base.warning] : [];
     if (env.copyBlocked) warnings.push(FANOUT_COPY_BLOCKED_WARNING);
+    if (env.copyNeedsReview) warnings.push(FANOUT_COPY_REVIEW_WARNING);
     // A selected file that could not be copied is said, never silent: the
     // agent would otherwise start without it and nobody would know why.
     for (const t of tasks) {
@@ -921,6 +928,7 @@ export class FanOutService {
       ok: tasks.every((t) => t.ok || t.pending),
       tasks,
       ...(env.setupSkipped ? { setupSkipped: env.setupSkipped } : {}),
+      ...(env.copyNeedsReview ? { copyNeedsReview: true as const } : {}),
       ...(env.portRangeInvalid ? { portRangeInvalid: true as const } : {}),
     };
     // A dependent task is spawned like the first wave, except that its base
@@ -939,6 +947,7 @@ export class FanOutService {
         lateEnv.setupSkipped ? `task ${k + 1}: the repository's new workspace preparation did not run (${lateEnv.setupSkipped})` : undefined,
         lateEnv.portRangeInvalid ? `task ${k + 1}: the repository's fanout.portRange is invalid, so no WMUX_TASK_PORT was assigned` : undefined,
         lateEnv.copyBlocked ? `task ${k + 1}: ${FANOUT_COPY_BLOCKED_WARNING}` : undefined,
+        lateEnv.copyNeedsReview ? `task ${k + 1}: ${FANOUT_COPY_REVIEW_WARNING}` : undefined,
       ];
       for (const w of late) if (w) addWarning(result, w);
       let r: FanOutTaskResult | undefined;
@@ -1221,6 +1230,7 @@ export class FanOutService {
     setupCommand?: string;
     copy?: { files: string[]; projectRoot: string };
     copyBlocked?: true;
+    copyNeedsReview?: true;
     setupSkipped?: FanoutSetupSkipReason;
     portRangeInvalid?: true;
   }> {
@@ -1264,6 +1274,7 @@ export class FanOutService {
       ...(prep.setup !== undefined ? { setupCommand: prep.setup } : {}),
       ...(prep.copy.length > 0 && state.root ? { copy: { files: prep.copy, projectRoot: state.root } } : {}),
       ...(prep.copyBlocked ? { copyBlocked: true as const } : {}),
+      ...(prep.copySkipped ? { copyNeedsReview: true as const } : {}),
     };
   }
 

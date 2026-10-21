@@ -559,6 +559,8 @@ export function GitTab({
         pushToast({ level: 'warn', message: t('git.prepFailed', { error: prep.error ?? '' }) });
       } else if (prep?.status === 'skipped') {
         pushToast({ level: 'warn', message: t(prep.reason === 'malformed' ? 'git.prepMalformed' : 'git.prepSkipped') });
+      } else if (prep?.copySkipped) {
+        pushToast({ level: 'warn', message: t('git.prepCopyReview') });
       } else if (prep?.status === 'ready' && prep.copy.missing + prep.copy.refused > 0) {
         pushToast({ level: 'warn', message: t('git.prepGaps', { copied: prep.copy.copied, missing: prep.copy.missing, refused: prep.copy.refused }) });
       } else if (prep?.status === 'ready' && prep.copy.copied > 0) {

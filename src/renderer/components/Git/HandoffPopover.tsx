@@ -128,6 +128,8 @@ function HandoffPopoverBody({ open }: { open: GitHandoffOpen }): React.ReactElem
     // The new worktree's preparation is never silent.
     if (res.prep?.skipped) {
       pushToast({ level: 'warn', message: t(res.prep.skipped === 'malformed' ? 'git.prepMalformed' : 'git.prepSkipped') });
+    } else if (res.prep?.copyNeedsReview) {
+      pushToast({ level: 'warn', message: t('git.prepCopyReview') });
     } else if (res.prep && res.prep.missing + res.prep.refused > 0) {
       pushToast({ level: 'warn', message: t('git.prepGapsShort', { missing: res.prep.missing, refused: res.prep.refused }) });
     }

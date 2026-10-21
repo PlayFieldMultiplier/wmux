@@ -211,6 +211,12 @@ export interface ProjectConfigState {
    * permission mode on reboot ONLY when the user gave this explicit consent.
    */
   unattended?: boolean;
+  /**
+   * Set while `trust === 'trusted'`: false when the grant predates the copy
+   * settings (`fanout.copy`, `fanout.copyIntoAutomated`) and so does not
+   * cover them; their copying waits for a new approval.
+   */
+  copyReviewed?: boolean;
 }
 
 // ── Field validators ─────────────────────────────────────────────────────────

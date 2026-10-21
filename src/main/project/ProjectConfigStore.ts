@@ -60,6 +60,13 @@ export interface ProjectTrustRecord {
   unattended?: boolean;
   /** When the unattended consent was last set (audit; ms). */
   unattendedDecidedAt?: number;
+  /**
+   * The decision was made with the config-file copy settings (`fanout.copy`,
+   * `fanout.copyIntoAutomated`) on screen. A record written before those
+   * settings existed lacks it: the trust dialog never showed them, so such a
+   * record does not cover them (the rest of the file keeps its approval).
+   */
+  copyReviewed?: true;
 }
 
 export interface ProjectTrustDb {
@@ -103,6 +110,7 @@ function normalizeRecord(raw: unknown): ProjectTrustRecord | undefined {
   if (typeof r.contentHash !== 'string' || !/^[0-9a-f]{64}$/.test(r.contentHash)) return undefined;
   const decidedAt = typeof r.decidedAt === 'number' && Number.isFinite(r.decidedAt) ? r.decidedAt : 0;
   const rec: ProjectTrustRecord = { status: r.status, contentHash: r.contentHash, decidedAt };
+  if (r.copyReviewed === true) rec.copyReviewed = true;
   // Unattended consent only survives on a 'trusted' record and only as a strict
   // boolean true — a denied record or a garbage value can never grant it.
   if (r.status === 'trusted' && r.unattended === true) {
@@ -237,8 +245,13 @@ export class ProjectConfigStore {
     // trusted — a 'stale' record's consent was for old content, so the funnel
     // must not restore permissions against a file the user hasn't re-reviewed.
     const unattended = trust === 'trusted' && record?.unattended === true;
+    // Only meaningful while trusted: whether the grant covers the copy settings.
+    const copyReviewed = trust === 'trusted' ? record?.copyReviewed === true : undefined;
 
-    return { found: true, root, configPath, config: read.config, contentHash: read.contentHash, trust, unattended };
+    return {
+      found: true, root, configPath, config: read.config, contentHash: read.contentHash, trust, unattended,
+      ...(copyReviewed !== undefined ? { copyReviewed } : {}),
+    };
   }
 
   // ── Trust DB ───────────────────────────────────────────────────────────────
@@ -302,7 +315,8 @@ export class ProjectConfigStore {
       if (!exists && Object.keys(db.projects).length >= this.entryCap) {
         throw new Error('Project trust DB is full');
       }
-      const record: ProjectTrustRecord = { status, contentHash, decidedAt: now };
+      // The trust dialog shows the copy settings now, so every new decision covers them.
+      const record: ProjectTrustRecord = { status, contentHash, decidedAt: now, copyReviewed: true };
       if (status === 'trusted' && unattended === true) {
         record.unattended = true;
         record.unattendedDecidedAt = now;

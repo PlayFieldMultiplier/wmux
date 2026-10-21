@@ -36,6 +36,12 @@ describe('resolveWorkspacePrep', () => {
     expect(plan).toEqual({ copy: [], skipped: trust });
   });
 
+  it('a trust record from before copy settings existed does not cover them: no copy, a reason, the setup still runs', () => {
+    const legacy = { ...stateWith({ copy: ['.env'], copyIntoAutomated: true, setup: 'npm ci' }), copyReviewed: false };
+    expect(resolveWorkspacePrep(legacy, 'automated')).toEqual({ copy: [], copySkipped: 'needs-review', setup: 'npm ci' });
+    expect(resolveWorkspacePrep(legacy, 'human')).toEqual({ copy: [], copySkipped: 'needs-review', setup: 'npm ci' });
+  });
+
   it('skips everything when a declared part was rejected', () => {
     const plan = resolveWorkspacePrep(stateWith({ setup: 'npm ci', invalidFields: ['copy'] }), 'human');
     expect(plan).toEqual({ copy: [], skipped: 'malformed' });
@@ -123,6 +129,15 @@ describe('copyWorkspaceFiles and runWorkspacePrep (real git)', () => {
     expect(r.copy.copied).toBe(1);
     expect(progress.map((p) => p.phase)).toEqual(['copying', 'setup']);
     expect(progress[1]).toMatchObject({ setupStartedAt: 42, copy: { copied: 1 } });
+  });
+
+  it('reports copy settings that need review and copies nothing', async () => {
+    const wt5 = path.join(tmp, 'wt5');
+    g(repo, 'worktree', 'add', '-q', wt5, '-b', 'task5');
+    const legacy = { ...stateWith({ copy: ['.env'] }), copyReviewed: false };
+    const r = await runWorkspacePrep({ plan: resolveWorkspacePrep(legacy, 'human'), sourceRoot: repo, copyDestDir: wt5, worktreePath: wt5 });
+    expect(r).toMatchObject({ status: 'ready', copySkipped: 'needs-review', copy: { copied: 0 } });
+    expect(fs.existsSync(path.join(wt5, '.env'))).toBe(false);
   });
 
   it('reports a skipped plan without touching the worktree', async () => {

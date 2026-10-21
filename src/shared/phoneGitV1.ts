@@ -112,6 +112,8 @@ export interface PhoneWorktreePrep {
   refused: number;
   /** Selected files the worktree already had (a recovered worktree prepared again). */
   present: number;
+  /** Nothing was copied: the project's copy settings need a review on the desktop. */
+  copyNeedsReview?: true;
   reason?: 'untrusted' | 'stale' | 'denied' | 'malformed';
 }
 

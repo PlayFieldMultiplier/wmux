@@ -1127,6 +1127,8 @@ export const pl = {
   'project.prepCopy': 'Kopiuje te pliki ignorowane przez git z tego checkoutu do nowych worktree',
   'project.prepCopyAutomated': 'Także do obszarów botów i fan-outu',
   'project.prepCopyHumanOnly': 'Tylko do obszarów otwartych przez Ciebie',
+  'project.copyReviewNotice': 'Ten projekt zatwierdzono, zanim wmux pokazywał ustawienia kopiowania plików konfiguracyjnych. Wymienione niżej pliki nie są kopiowane do nowych worktree, dopóki ich nie zatwierdzisz.',
+  'project.approveCopy': 'Zatwierdź ustawienia kopiowania',
   'palette.catWorkspace': 'Obszar roboczy',
   'palette.catSurface': 'Powierzchnia',
   'palette.catCommand': 'Polecenie',
@@ -3897,6 +3899,7 @@ export const pl = {
   'git.prepFailed': 'Worktree utworzony, ale jego przygotowanie nie powiodło się: {error}',
   'git.prepSkipped': 'Worktree utworzony bez przygotowania: wmux.json nie jest zatwierdzony. Przejrzyj go z plakietki na pasku bocznym.',
   'git.prepMalformed': 'Worktree utworzony bez przygotowania: nie można odczytać sekcji przygotowania w wmux.json tego projektu.',
+  'git.prepCopyReview': 'Nie skopiowano plików konfiguracyjnych: ustawienia kopiowania wymagają przeglądu. Otwórz wmux.json z plakietki na pasku bocznym i zatwierdź je.',
   'git.newBranchPlaceholder': 'nazwa nowego brancha…',
   // Git tab — Pull Requests section (gh CLI).
   'git.pullRequests': 'Pull Requesty',

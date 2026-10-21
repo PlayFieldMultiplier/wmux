@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import {
   FanOutService,
   FANOUT_COPY_BLOCKED_WARNING,
+  FANOUT_COPY_REVIEW_WARNING,
   buildInitialCommand,
   workerLaunchCommand,
   firstRunStuckSummary,
@@ -1276,6 +1277,28 @@ describe('new workspace preparation on fan-out worktrees', () => {
     // Rolled back (the same branch name is started again from the issue).
     expect(worktrees.removeWorktree).toHaveBeenCalledTimes(1);
     expect(renderer.spawned).toHaveLength(0);
+  });
+
+  it('copies nothing under an approval that predates the copy settings, says why, and still runs the setup', async () => {
+    const { repo, worktrees } = realRepo();
+    const marker = path.join(metaRoot, 'setup-ran');
+    const hook = path.join(metaRoot, 'mark.js');
+    fs.writeFileSync(hook, `require('fs').writeFileSync(${JSON.stringify(marker)}, '1')`);
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: makeRendererFake().port,
+      worktrees,
+      project: makeProjectFake({
+        found: true, root: repo, trust: 'trusted', copyReviewed: false,
+        config: { version: 1, fanout: { copy: ['.env'], copyIntoAutomated: true, setup: `node ${JSON.stringify(hook)}` } },
+      }),
+    });
+    const res = await svc.start(baseReq({ repoPath: repo, titles: ['Task A'] }));
+    expect(res.ok).toBe(true);
+    expect(res.copyNeedsReview).toBe(true);
+    expect(res.warnings).toContain(FANOUT_COPY_REVIEW_WARNING);
+    expect(fs.existsSync(path.join(res.tasks[0].worktreePath!, '.env'))).toBe(false);
+    expect(fs.existsSync(marker)).toBe(true);
   });
 
   it('copies nothing from a config changed since approval', async () => {

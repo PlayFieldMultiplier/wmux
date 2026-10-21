@@ -312,7 +312,10 @@ export async function startHandoffWorktree(deps: HandoffDeps, raw: unknown): Pro
     const skipped = result.setupSkipped && result.setupSkipped !== 'none-declared' ? result.setupSkipped : undefined;
     const missing = task.configFiles?.missing ?? 0;
     const refused = task.configFiles?.refused ?? 0;
-    const prep = skipped || missing + refused > 0 ? { ...(skipped ? { skipped } : {}), missing, refused } : undefined;
+    const copyNeedsReview = result.copyNeedsReview === true;
+    const prep = skipped || copyNeedsReview || missing + refused > 0
+      ? { ...(skipped ? { skipped } : {}), ...(copyNeedsReview ? { copyNeedsReview: true as const } : {}), missing, refused }
+      : undefined;
     return { ok: true, linkId: link?.id ?? '', workspaceId: task.workspaceId, branch: task.branch ?? branch, ...(prep ? { prep } : {}) };
   });
 }

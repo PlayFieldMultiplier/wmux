@@ -94,6 +94,10 @@ export default function ProjectConfigDialog() {
   const prepSetup = project.config?.fanout?.setup;
   const prepCopy = project.config?.fanout?.copy ?? [];
   const prepCopyAutomated = project.config?.fanout?.copyIntoAutomated === true;
+  // Trusted before the copy settings existed: the grant never covered them,
+  // so they wait for this re-approval (the rest of the file stays approved).
+  const copyNeedsReview = isTrusted && project.copyReviewed === false
+    && (prepCopy.length > 0 || project.config?.fanout?.copyIntoAutomated !== undefined);
   const layout = project.config?.layout;
   const rows = layout ? layoutRows(layout) : [];
   // Leaves that would restore their captured permission mode on reboot — the
@@ -124,6 +128,15 @@ export default function ProjectConfigDialog() {
         closeLabel={t('project.close')}
       />
       <DialogBody>
+        {copyNeedsReview && (
+          <div className="ui-notice flex items-start gap-2.5 px-3.5 py-3 text-[13px] leading-5" data-testid="project-copy-review">
+            <span className="shrink-0 pt-[3px]" style={{ color: 'var(--accent-yellow)' }} aria-hidden="true">
+              <IconWarning size={14} />
+            </span>
+            <span className="text-[var(--text-main)]">{t('project.copyReviewNotice')}</span>
+          </div>
+        )}
+
         {notice && (
           <div className="ui-notice flex items-start gap-2.5 px-3.5 py-3 text-[13px] leading-5">
             <span className="shrink-0 pt-[3px]" style={{ color: noticeColor }} aria-hidden="true">
@@ -260,6 +273,16 @@ export default function ProjectConfigDialog() {
             <Button size="md" variant="secondary" onClick={close}>
               {t('project.close')}
             </Button>
+            {copyNeedsReview && (
+              <Button
+                size="md"
+                variant="primary"
+                // Same bytes, same unattended consent: only the copy settings are newly approved.
+                onClick={() => { void decideProjectTrust(wsId, 'trusted', project.unattended === true); close(); }}
+              >
+                {t('project.approveCopy')}
+              </Button>
+            )}
           </>
         ) : (
           <>
