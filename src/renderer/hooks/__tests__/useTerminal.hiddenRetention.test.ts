@@ -95,8 +95,9 @@ describe('Phase 3 PR-A — useTerminal hidden-pane retention wiring (source-leve
     const idx = src.indexOf('const startResync');
     expect(idx).toBeGreaterThan(0);
     const body = src.slice(idx, idx + 3600);
-    // #2398 — a repaint never starts a session left suspended.
-    expect(body).toMatch(/window\.electronAPI\.pty\.reconnect\(id, \{ promote: false \}\)/);
+    // #2398 — a repaint never starts a session left suspended, an exec or
+    // supervised unit included (join-only).
+    expect(body).toMatch(/window\.electronAPI\.pty\.reconnect\(id, \{ promote: false, joinOnly: true \}\)/);
     expect(body).not.toMatch(/clearSurfacePtyIdByPty|reconnectPtyWithRetry/);
     const abortIdx = src.indexOf('const abortResync');
     const abortBody = src.slice(abortIdx, abortIdx + 1600);

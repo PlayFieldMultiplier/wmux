@@ -22,7 +22,7 @@ vi.mock('@xterm/addon-webgl', () => ({
 }));
 
 type ReconnectAnswer = { success: boolean; promoted?: boolean; deferred?: boolean; recoveryPending?: boolean; transient?: boolean; error?: string; resumeAgent?: string; resumeBinding?: { agent: string; sessionId: string; cwd: string } };
-const reconnect = vi.fn<(id: string, opts?: { promote?: boolean }) => Promise<ReconnectAnswer>>(async () => ({ success: true }));
+const reconnect = vi.fn<(id: string, opts?: { promote?: boolean; joinOnly?: boolean }) => Promise<ReconnectAnswer>>(async () => ({ success: true }));
 const unsub = () => () => undefined;
 // The pane's own triggers, fired by hand: a supervised restart, its Retry.
 let restarted: ((payload: { ptyId: string; restartCount: number; exitCode: number | null }) => void) | null = null;
@@ -105,6 +105,7 @@ async function render(ptyId: string, surfaceShown: boolean, opts: { remount?: bo
 }
 
 const promoteFlags = () => reconnect.mock.calls.map(([, opts]) => opts?.promote);
+const joinOnlyFlags = () => reconnect.mock.calls.map(([, opts]) => opts?.joinOnly === true);
 
 describe('reattach of a hidden pane (#2398)', { timeout: 60_000 }, () => {
   it('a hidden live session still reattaches (without promote) and is not deferred', async () => {
@@ -454,6 +455,48 @@ describe('a stop key that joins the pane\'s own attempt (#2398)', { timeout: 60_
     await act(async () => { pending = attachForWrite('p-joined-live', false).then((a) => { answer = a; }); });
     await act(async () => { release(); await pending; });
     expect(answer).toBe('attached');
+  });
+});
+
+// Second-model P2-1: a stop key's own attempt asked promote:false, which main
+// answers by spawning an exec or supervised unit whose background start
+// failed or never covered it; the caller was then told nothing was running.
+describe('a stop key is join-only (#2398)', { timeout: 60_000 }, () => {
+  it("the key's own attempt asks join-only, and the pane's own attempts never do", async () => {
+    setDaemonModeActive(true);
+    await render('p-key-own', false);
+    reconnect.mockImplementation(async (_id, opts) => (opts?.joinOnly ? { success: false, deferred: true } : { success: true }));
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    await act(async () => { answer = await attachForWrite('p-key-own', false); });
+    expect(promoteFlags()).toEqual([false, false]);
+    expect(joinOnlyFlags()).toEqual([false, true]);
+    expect(answer).toBe('not-running');
+  });
+
+  // The pane's own trigger folded into the key's attempt: that attempt,
+  // join-only, left a unit the pane's own attempt would start suspended, so
+  // the pane's attempt runs after it.
+  it("a pane trigger folded into the key's attempt runs after it when the key found nothing running", async () => {
+    setDaemonModeActive(true);
+    await render('p-key-owed', false);
+    let release: () => void = () => undefined;
+    reconnect.mockImplementation(async (_id, opts) => {
+      if (!opts?.joinOnly) return { success: true };
+      await new Promise<void>((r) => { release = r; });
+      return { success: false, deferred: true };
+    });
+    const { attachForWrite } = await import('../useTerminal');
+    let answer: string | undefined;
+    let pending: Promise<void> = Promise.resolve();
+    await act(async () => { pending = attachForWrite('p-key-owed', false).then((a) => { answer = a; }); });
+    act(() => { restarted?.({ ptyId: 'p-key-owed', restartCount: 1, exitCode: 0 }); });
+    await act(async () => { release(); await pending; });
+    await settle();
+    expect(joinOnlyFlags()).toEqual([false, true, false]);
+    expect(promoteFlags()).toEqual([false, false, false]);
+    expect(answer).toBe('not-running');
+    expect(useStore.getState().ptyDeferredById['p-key-owed']).toBeUndefined();
   });
 });
 

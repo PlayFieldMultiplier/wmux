@@ -28,6 +28,14 @@ describe('suspended session reconnect action', () => {
     // A caller that asks starts it itself, unit or not.
     expect(suspendedReconnectAction({ exec: { command: 'npm run dev' } }, { promote: true })).toBe('promote');
   });
+
+  // Second-model P2-1: a stop key never starts a unit, it only joins a start
+  // in flight; a plain shell is held as before.
+  it("a join-only caller joins a unit's start without starting one", () => {
+    expect(suspendedReconnectAction({ exec: { command: 'npm run dev' } }, { promote: false, joinOnly: true })).toBe('join-only');
+    expect(suspendedReconnectAction({ supervision: { restart: 'always' } }, { promote: false, joinOnly: true })).toBe('join-only');
+    expect(suspendedReconnectAction({}, { promote: false, joinOnly: true })).toBe('hold');
+  });
 });
 
 // #2398 round 7 — whether a reconnect's promote started the session is read

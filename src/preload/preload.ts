@@ -355,7 +355,7 @@ const electronAPI = {
     // process name (e.g. "claude.exe").
     resources: (ptyIds: string[]) =>
       ipcRenderer.invoke(IPC.PANE_RESOURCES, ptyIds) as Promise<Record<string, { rss: number; image?: string }>>,
-    reconnect: (id: string, opts: { promote: boolean }) =>
+    reconnect: (id: string, opts: { promote: boolean; joinOnly?: boolean }) =>
       // RCA A1 — `transient` distinguishes a recoverable failure (pipe not
       // writable yet, RPC threw during a handler-swap window) from a permanent
       // one (session genuinely dead). The renderer retries transient failures
@@ -365,7 +365,9 @@ const electronAPI = {
       // pane is offered a fresh start in the home directory instead.
       // #2398 — `promote` is required: false (a hidden pane, a repaint) still
       // attaches a live session but holds a suspended one, answered
-      // `deferred`; only true starts it.
+      // `deferred`; only true starts it. `joinOnly` (a stop key, a repaint)
+      // also never starts the exec or supervised unit a promote:false
+      // reconnect otherwise starts: it joins only a start in flight.
       ipcRenderer.invoke(IPC.PTY_RECONNECT, id, opts) as Promise<{ success: boolean; id?: string; shell?: string; cols?: number; rows?: number; error?: string; code?: string; transient?: boolean; recoveryPending?: boolean; cwdMissing?: boolean; deferred?: boolean; promoted?: boolean; resumeAgent?: string; resumeBinding?: ResumeBinding; recovery?: DeadPaneRecovery }>,
     // #2398 — the suspended sessions panes hold without promoting (their
     // panes are hidden or not mounted): the daemon keeps them from aging out.

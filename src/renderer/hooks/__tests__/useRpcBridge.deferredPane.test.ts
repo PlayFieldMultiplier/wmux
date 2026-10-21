@@ -177,10 +177,8 @@ describe('a bound pane whose suspended session was left suspended', () => {
     expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-held', promote: false })).toEqual({ notRunning: true });
     reconnect.mockResolvedValueOnce({ success: false, code: 'session-dead', transient: false, error: 'Session not found or dead' });
     expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-gone', promote: false })).toEqual({ notRunning: true });
-    // An attach that started the session leaves the key nothing of its own to
-    // stop: a caller's promote, or (round 7) a promote:false reconnect of an
-    // exec unit whose background start failed or never covered it, which the
-    // daemon spawned for this call and main answers promoted.
+    // An attach that joined a caller's promote (a raw write that just started
+    // the session) leaves the key nothing of its own to stop.
     reconnect.mockResolvedValueOnce({ success: true, promoted: true });
     expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-started', promote: false })).toEqual({ notRunning: true });
     // Round 7: an exec or supervised unit the daemon recovers in the
@@ -188,7 +186,10 @@ describe('a bound pane whose suspended session was left suspended', () => {
     // not say it started it, so the stop key is delivered to the unit.
     reconnect.mockResolvedValueOnce({ success: true });
     expect(await handleRpcMethod('surface.ensurePty', { ptyId: 'pty-2398-unit', promote: false })).toEqual({ ptyId: 'pty-2398-unit' });
-    expect(reconnect.mock.calls.map(([, opts]) => opts)).toEqual([{ promote: false }, { promote: false }, { promote: false }, { promote: false }, { promote: false }]);
+    // Join-only, every one: an exec or supervised unit whose background start
+    // failed or never covered it is not spawned for the key (main answers
+    // it deferred, above).
+    expect(reconnect.mock.calls.map(([, opts]) => opts)).toEqual(Array(5).fill({ promote: false, joinOnly: true }));
     expect(create).not.toHaveBeenCalled();
   });
 

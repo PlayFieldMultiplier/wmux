@@ -673,10 +673,11 @@ let webglTokenSeq = 0;
 
 // RCA A1 — reconnect-with-retry policy lives in its own module so it can be
 // unit-tested without xterm/zustand/electron. Bound to the live deps here.
-function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecoveryError?: (message: string | null, info?: ReconnectSettleInfo) => void, promote = true): Promise<{ cols: number; rows: number } | null> {
+function reconnectPtyWithRetry(ptyId: string, isCurrent: () => boolean, onRecoveryError?: (message: string | null, info?: ReconnectSettleInfo) => void, promote = true, joinOnly = false): Promise<{ cols: number; rows: number } | null> {
   return reconnectPtyWithRetryImpl(ptyId, isCurrent, {
-    // #2398 — a hidden pane attaches without promoting a suspended session.
-    reconnect: (id) => window.electronAPI.pty.reconnect(id, { promote }),
+    // #2398 — a hidden pane attaches without promoting a suspended session;
+    // a stop key (joinOnly) does not even start an exec or supervised unit.
+    reconnect: (id) => window.electronAPI.pty.reconnect(id, joinOnly ? { promote, joinOnly } : { promote }),
     setDeferred: (id, deferred) => useStore.getState().setPtyDeferred?.(id, deferred),
     onRecoveryError,
     clearPtyId: (id, recovery) => useStore.getState().clearSurfacePtyIdByPty(id, recovery),
@@ -1206,8 +1207,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // (dirty-raw-fallback via the flag) so doctor never double-counts.
       rpcSettled = true;
       st.viaRawFallback = true;
-      // #2398 — a repaint never starts a session left suspended.
-      window.electronAPI.pty.reconnect(id, { promote: false }).then((res) => {
+      // #2398 — a repaint never starts a session left suspended, an exec or
+      // supervised unit included (join-only).
+      window.electronAPI.pty.reconnect(id, { promote: false, joinOnly: true }).then((res) => {
         if (!res?.success) abortResync(`reconnect-failed${res?.code ? `:${res.code}` : ''}`);
       }).catch((err: unknown) => {
         abortResync(`reconnect-error:${err instanceof Error ? err.message : String(err)}`);
@@ -3752,6 +3754,10 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // its settle owes them those rules (resume on start included).
     let stopKeyInFlight = false;
     let paneOwed = false;
+    // The last of those triggers: a stop key's attempt is join-only, so one
+    // that left the session suspended did not do what the pane's own attempt
+    // does for an exec or supervised unit (start it), and it runs after.
+    let owedReason = '';
     // What the stop key's own attempt found: suspended, or a recovery waiting
     // for its Retry. Read before anything its settle starts can attach.
     let stopKeyFoundNotRunning = false;
@@ -3784,7 +3790,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // which would replay its scrollback twice and tear down the new pipe.
         if (reason === 'manual-retry') return current?.then(() => (reconnectPendingRef.current ? reattach(reason) : undefined));
         if (reason === 'raw-write') return current?.then(() => (deferredAttachRef.current ? reattach(reason) : undefined));
-        if (stopKeyInFlight) paneOwed = true;
+        if (stopKeyInFlight) { paneOwed = true; owedReason = reason; }
         return undefined;
       }
       current = attach(reason);
@@ -3819,7 +3825,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
           slowRetry = setTimeout(() => { slowRetry = null; void reattach('rate-limit-retry'); }, 8000 + Math.random() * 4000);
         }
         onRecoveryErrorRef.current?.(message, info);
-      }, promote)
+      }, promote, stopKey)
         .then((stored) => {
           revealTiming(id, 'reattach-resolved');
           // #882 — the daemon starts every managed session at `viewerVisible:
@@ -3864,10 +3870,13 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // key's), while a hidden one is promoted only for a resume on start
         // its own folded-in trigger armed.
         .finally(() => {
+          const owed = stopKey && paneOwed && deferredAttachRef.current ? owedReason : '';
           stopKeyInFlight = false;
           paneOwed = false;
           if (disposed) { inFlight = false; return; }
           inFlight = false; reconnectInFlightRef.current = false;
+          // Unless the settle promotes it anyway (shown, or resume on start).
+          if (owed && ptyIdRef.current === id && !promoteRef.current && !resumeAtBoot) { void reattach(owed); return; }
           promoteIfDue();
         });
     };

@@ -59,6 +59,50 @@ describe('promoteOnce', () => {
     expect(promoteSession).toHaveBeenCalledTimes(2);
   });
 
+  // Second-model P2-1: a stop key's promote:false reconnect of an exec unit
+  // whose background start failed or never covered it spawned the unit, and
+  // the caller was told nothing was running to stop.
+  describe('join-only (a stop key)', () => {
+    it('with nothing in flight starts nothing and says so', async () => {
+      const { promoteSession } = controlled();
+      const promoteOnce = createPromoteOnce(promoteSession);
+      expect(await promoteOnce('s1', false, 'rpc', true)).toEqual({ ok: false, notInFlight: true });
+      expect(promoteSession).not.toHaveBeenCalled();
+    });
+
+    it('after a failed background start starts nothing', async () => {
+      const { promoteSession, settle } = controlled();
+      const promoteOnce = createPromoteOnce(promoteSession);
+      const background = promoteOnce('s1', false, 'background');
+      settle(0, { ok: false, error: { code: 'SPAWN_FAILED', message: 'distro down' } });
+      await background;
+      expect(await promoteOnce('s1', false, 'rpc', true)).toEqual({ ok: false, notInFlight: true });
+      expect(promoteSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('joins the boot background start in flight and is told so (the key is delivered)', async () => {
+      const { promoteSession, settle } = controlled();
+      const promoteOnce = createPromoteOnce(promoteSession);
+      const background = promoteOnce('s1', false, 'background');
+      const stopKey = promoteOnce('s1', false, 'rpc', true);
+      settle(0, { ok: true, alreadyActive: false });
+      await background;
+      expect(await stopKey).toEqual({ ok: true, alreadyActive: false, joined: true });
+      expect(promoteSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("joins another caller's promote unmarked: that caller started it", async () => {
+      const { promoteSession, settle } = controlled();
+      const promoteOnce = createPromoteOnce(promoteSession);
+      const rawWrite = promoteOnce('s1');
+      const stopKey = promoteOnce('s1', false, 'rpc', true);
+      settle(0, { ok: true, alreadyActive: false });
+      await rawWrite;
+      expect(await stopKey).toEqual({ ok: true, alreadyActive: false });
+      expect(promoteSession).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('a start-fresh queued behind an ordinary promote runs its own attempt', async () => {
     const { promoteSession, settle } = controlled();
     const promoteOnce = createPromoteOnce(promoteSession);

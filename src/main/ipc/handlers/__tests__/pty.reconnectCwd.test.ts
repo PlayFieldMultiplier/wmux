@@ -116,7 +116,7 @@ describe('PTY_RECONNECT promotes a cap-skipped session instead of declaring it d
 
   it('a suspended entry goes down the promote branch, before any attach', () => {
     const suspendedAt = RECONNECT.indexOf("if (session.state === 'suspended')");
-    const promoteAt = RECONNECT.indexOf("daemonClient.rpc('daemon.promoteSession', { id }", suspendedAt);
+    const promoteAt = RECONNECT.indexOf("daemonClient.rpc('daemon.promoteSession', { id", suspendedAt);
     const attachAt = RECONNECT.indexOf("daemon.attachSession', { id }");
     expect(suspendedAt).toBeGreaterThan(-1);
     expect(promoteAt).toBeGreaterThan(suspendedAt);

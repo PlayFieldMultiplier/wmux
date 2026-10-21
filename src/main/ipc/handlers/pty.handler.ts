@@ -1500,7 +1500,7 @@ export function registerPTYHandlers(
       if (held.length > 0) await daemonClient.rpc('daemon.holdSession', { ids: held });
     }));
 
-    ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string, opts?: { promote?: boolean }) => {
+    ipcMain.handle(IPC.PTY_RECONNECT, wrapHandler(IPC.PTY_RECONNECT, async (_event: Electron.IpcMainInvokeEvent, id: string, opts?: { promote?: boolean; joinOnly?: boolean }) => {
       // #2398 — whether this reconnect started the session (promoted a
       // suspended one) rather than attaching one that was running: a stop
       // key that joined it has nothing of its own to stop there. Carried on
@@ -1554,11 +1554,15 @@ export function registerPTYHandlers(
           // below joins that start when one is in flight, or spawns the unit
           // when none is, and `promoted` then reports it started; either way
           // its pane attaches once it runs instead of staying deferred).
+          // A join-only caller (a stop key, a repaint) only joins a start in
+          // flight: it never spawns the unit, and finding none is held.
           // Otherwise it is held: the id is kept, the daemon
           // keeps the record from aging out, and the pane's first show
           // reattaches with promote.
-          if (suspendedReconnectAction(session, opts) === 'hold') {
-            console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, held)`);
+          const action = suspendedReconnectAction(session, opts);
+          const suspended = session;
+          const held = (why: string) => {
+            console.log(`[lifecycle] pty.reconnect id=${id} result=deferred (suspended, ${why})`);
             void daemonClient.rpc('daemon.holdSession', { ids: [id] }).catch((err: unknown) => {
               console.warn(`[lifecycle] daemon.holdSession ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
             });
@@ -1568,12 +1572,14 @@ export function registerPTYHandlers(
             return {
               success: false,
               deferred: true,
-              ...(session.resumeAgent ? { resumeAgent: session.resumeAgent } : {}),
-              ...(session.resumeBinding ? { resumeBinding: session.resumeBinding } : {}),
+              ...(suspended.resumeAgent ? { resumeAgent: suspended.resumeAgent } : {}),
+              ...(suspended.resumeBinding ? { resumeBinding: suspended.resumeBinding } : {}),
             };
-          }
+          };
+          if (action === 'hold') return held('held');
           try {
-            const result = await daemonClient.rpc('daemon.promoteSession', { id }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; alreadyActive?: boolean; joined?: boolean; error?: { code?: string; message: string } };
+            const result = await daemonClient.rpc('daemon.promoteSession', { id, ...(action === 'join-only' ? { joinOnly: true } : {}) }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; alreadyActive?: boolean; joined?: boolean; notInFlight?: boolean; error?: { code?: string; message: string } };
+            if (result.notInFlight) return held('join-only, no start in flight');
             // #1305 — carry WHY it stayed pending, not just that it did. The
             // banner's Retry is the right and only offer for every other
             // failure; a missing directory additionally gets "start fresh".

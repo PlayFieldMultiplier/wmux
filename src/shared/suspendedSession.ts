@@ -36,14 +36,18 @@ export function promoteStartedSession(result: { ok: boolean; alreadyActive?: boo
  * background anyway (an exec unit or supervised session), so the call
  * promotes too: it joins that start when one is in flight, and spawns the
  * session itself when none is (the start failed, or never covered it),
- * which promoteStartedSession then reports as started; 'hold' — otherwise:
- * attached to nothing, kept in use, and answered `deferred`. A reconnect
- * that does not say (a repaint fallback, a read) never starts a session.
+ * which promoteStartedSession then reports as started; 'join-only' — the
+ * same unit, for a caller that must never start anything (a stop key,
+ * a repaint): it joins a start already in flight and otherwise is answered
+ * like 'hold'; 'hold' — otherwise: attached to nothing, kept in use, and
+ * answered `deferred`. A reconnect that does not say never starts a plain
+ * shell.
  */
 export function suspendedReconnectAction(
   session: { exec?: unknown; supervision?: unknown },
-  opts: { promote?: boolean } | undefined,
-): 'promote' | 'join' | 'hold' {
+  opts: { promote?: boolean; joinOnly?: boolean } | undefined,
+): 'promote' | 'join' | 'join-only' | 'hold' {
   if (opts?.promote === true) return 'promote';
-  return recoversInBackground(session) ? 'join' : 'hold';
+  if (!recoversInBackground(session)) return 'hold';
+  return opts?.joinOnly === true ? 'join-only' : 'join';
 }

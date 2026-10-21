@@ -157,12 +157,14 @@ export async function ensurePtyStarted(ptyId: string, promote = true): Promise<E
   const mounted = await attachForWrite(ptyId, promote);
   if (mounted === 'not-running') return { notRunning: true };
   if (mounted === 'attached') return { ptyId };
-  const res = await window.electronAPI.pty.reconnect(ptyId, { promote });
-  // Started by this reconnect (`promoted`: the daemon spawned it for this
-  // call, e.g. an exec or supervised unit whose background start failed or
-  // never covered it): nothing of the key's to stop, as on the mounted path.
-  // A unit whose background start this call only joined runs on its own and
-  // takes the key.
+  // A stop key is join-only: an exec or supervised unit whose background
+  // start failed or never covered it is not spawned for the key (answered
+  // deferred); one whose background start is in flight is joined, runs on
+  // its own and takes the key.
+  const res = await window.electronAPI.pty.reconnect(ptyId, promote ? { promote } : { promote, joinOnly: true });
+  // Started by the attempt this reconnect joined (`promoted`: another
+  // caller's promote, a raw write's say): nothing of the key's to stop, as
+  // on the mounted path.
   if (!promote && (res.deferred === true || res.code === 'session-dead' || res.promoted === true)) return { notRunning: true };
   if (!res.success) return { error: `the pane's session could not be attached: ${res.error ?? 'unknown error'}` };
   useStore.getState().setPtyDeferred(ptyId, false);
