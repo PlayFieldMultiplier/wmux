@@ -7,7 +7,7 @@ import { RpcRouter } from '../../RpcRouter';
 import { registerInputRpc } from '../input.rpc';
 import type { PTYManager } from '../../../pty/PTYManager';
 import { WSL_RPC_TIMEOUT_MS } from '../../../../shared/wsl';
-import { TERMINAL_START_BUDGET_MS, TERMINAL_WRITE_DELIVERY_BUDGET_MS, terminalStartWindowMs, terminalWriteClientTimeoutMs } from '../../../../shared/terminalWriteBudget';
+import { MCP_WRITE_DEADLINE_MS, TERMINAL_START_BUDGET_MS, TERMINAL_WRITE_DELIVERY_BUDGET_MS, terminalStartWindowMs, terminalWriteClientTimeoutMs } from '../../../../shared/terminalWriteBudget';
 import { mintCommanderToken, __resetCommanderTrustForTesting } from '../../../deck/commanderTrust';
 
 const { sendToRendererMock } = vi.hoisted(() => ({ sendToRendererMock: vi.fn() }));
@@ -288,6 +288,37 @@ describe('the start phase of a raw write has one budget (#2398)', () => {
     expect(res.ok).toBe(false);
     expect(JSON.stringify(res)).toContain('nothing was written');
     expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  // CodeRabbit: an MCP write's window is shorter than a WSL start can take.
+  // Main only stops waiting: it says the pane may still be starting and that
+  // nothing was written, cancels nothing, and the retry (which joins the
+  // renderer's one start per pane, useRpcBridge.deferredPane.test.ts) writes
+  // exactly once.
+  it('a start that outlasts the window answers still starting, nothing written; the retry writes once', async () => {
+    let started = false;
+    sendToRendererMock.mockImplementation((_w: unknown, method: string, params?: { ptyId?: string }, opts?: { timeoutError?: Error }) => {
+      if (method === 'input.readScreen') return Promise.resolve(params?.ptyId ? { ptyId: params.ptyId, text: '' } : DEFERRED_READ);
+      // The renderer's start runs past main's window the first time (main's
+      // own timer rejects with the error it passed), and is up by the retry.
+      if (method === 'surface.ensurePty') return started ? Promise.resolve({ ptyId: 'pty-started' }) : Promise.reject(opts?.timeoutError);
+      if (method === 'input.findOwnerWorkspace') return Promise.resolve({ workspaceId: 'ws-ext' });
+      return Promise.resolve(null);
+    });
+    const { router, writeMock } = setup();
+    const first = await router.dispatch({ id: '25', method: 'input.send', params: { text: 'echo once', workspaceId: 'ws-ext', clientTimeoutMs: MCP_WRITE_DEADLINE_MS } });
+    expect(first.ok).toBe(false);
+    const answer = JSON.stringify(first);
+    expect(answer).toContain('may still be starting');
+    expect(answer).toContain('nothing was written');
+    expect(answer).toContain('sending it again is safe');
+    expect(writeMock).not.toHaveBeenCalled();
+    // Main asked for one start and nothing else: no cancel.
+    expect(sendToRendererMock.mock.calls.map((c: unknown[]) => c[1]).filter((m: unknown) => m !== 'input.readScreen' && m !== 'input.findOwnerWorkspace')).toEqual(['surface.ensurePty']);
+    started = true;
+    const retry = await router.dispatch({ id: '26', method: 'input.send', params: { text: 'echo once', workspaceId: 'ws-ext', clientTimeoutMs: MCP_WRITE_DEADLINE_MS } });
+    expect(retry.ok).toBe(true);
+    expect(writeMock.mock.calls.filter(([, data]) => String(data).includes('echo once'))).toHaveLength(1);
   });
 });
 

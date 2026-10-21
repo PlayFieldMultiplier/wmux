@@ -644,12 +644,20 @@ export function startClock(windowMs: number, now: () => number = Date.now): Star
   return {
     left: (method) => {
       const left = startBy - now();
-      if (left <= 0) {
-        throw new Error(`${method}: the pane's terminal took longer to start than this write may wait — nothing was written; send it again`);
-      }
+      if (left <= 0) throw stillStarting(method);
       return left;
     },
   };
+}
+
+/**
+ * The answer once a write's start window is spent. Main only stops waiting:
+ * the start it asked for is not cancelled (the renderer's one start per pane
+ * goes on), so the caller's retry joins it, or finds the pane up, and writes
+ * once.
+ */
+export function stillStarting(method: string): Error {
+  return new Error(`${method}: the pane's terminal did not start within this write's wait and may still be starting — nothing was written. Its start goes on, so sending it again is safe: the retry waits for that start and writes once`);
 }
 
 /** The not-running answer to a stop key (ctrl+c, escape): nothing is started for it. */
@@ -664,7 +672,7 @@ function nothingToStop(method: string): Error {
  * could not write to.
  */
 async function startDeferredSurface(getWindow: GetWindow, method: string, surfaceId: string, workspaceId: string, clock: StartClock): Promise<string> {
-  const res = await sendToRenderer(getWindow, 'surface.ensurePty', { surfaceId, workspaceId }, { timeoutMs: clock.left(method) });
+  const res = await sendToRenderer(getWindow, 'surface.ensurePty', { surfaceId, workspaceId }, { timeoutMs: clock.left(method), timeoutError: stillStarting(method) });
   clock.left(method);
   if (res !== null && typeof res === 'object') {
     const r = res as Record<string, unknown>;
@@ -1316,7 +1324,7 @@ export function registerInputRpc(
     // detached after an app restart. A stop key (`promote: false`) attaches
     // that one and stops it; only a session the daemon reports suspended or
     // dead has nothing running to stop, and it is never started for the key.
-    const res = await sendToRenderer(getWindow, 'surface.ensurePty', { ptyId, promote }, { timeoutMs: clock.left(method) });
+    const res = await sendToRenderer(getWindow, 'surface.ensurePty', { ptyId, promote }, { timeoutMs: clock.left(method), timeoutError: stillStarting(method) });
     clock.left(method);
     if (res !== null && typeof res === 'object' && (res as Record<string, unknown>)['notRunning'] === true) {
       throw nothingToStop(method);

@@ -22,8 +22,8 @@ import { installBotTools, pinToolName } from './toolModules';
 import './botModules';
 import type { RpcMethod } from '../shared/rpc';
 import { EXECUTE_SEND_CLIENT_TIMEOUT_MS } from '../shared/executeApprovalBounds';
-import { NEW_TASK_SEND_CLIENT_TIMEOUT_MS, TERMINAL_SEND_NEW_TASK_TIMEOUT_MS } from '../shared/freshContext';
-import { terminalWriteClientTimeoutMs } from '../shared/terminalWriteBudget';
+import { NEW_TASK_SEND_CLIENT_TIMEOUT_MS } from '../shared/freshContext';
+import { MCP_WRITE_DEADLINE_MS } from '../shared/terminalWriteBudget';
 import {
   claimPinnedRoute,
   clearPinnedRoute,
@@ -1836,16 +1836,15 @@ server.tool(
     if (submit) base.submit = true;
     addCallerPtyId(base);
     // #2398 — the write may first start the pane's terminal: the deadline
-    // covers that start, then the delivery (terminalWriteBudget.ts). A new
-    // task may also wait out the pane's fresh-context step (#1680).
-    // Main is told the deadline (clientTimeoutMs) and never writes past it.
-    if (new_task) {
-      base.newTask = true;
-      base.clientTimeoutMs = terminalWriteClientTimeoutMs(TERMINAL_SEND_NEW_TASK_TIMEOUT_MS);
-      return callRpc('input.send', base, terminalWriteClientTimeoutMs(TERMINAL_SEND_NEW_TASK_TIMEOUT_MS));
-    }
-    base.clientTimeoutMs = terminalWriteClientTimeoutMs();
-    return callRpc('input.send', base, terminalWriteClientTimeoutMs());
+    // covers that start, then the delivery, inside the strictest MCP host's
+    // tool timeout (MCP_WRITE_DEADLINE_MS, terminalWriteBudget.ts). Main is
+    // told the deadline (clientTimeoutMs) and never writes past it; a start
+    // that outlasts it goes on, and a retry writes once. A new task's
+    // fresh-context step (#1680) comes out of main's start window instead
+    // (TERMINAL_SEND_NEW_TASK_TIMEOUT_MS of delivery).
+    base.clientTimeoutMs = MCP_WRITE_DEADLINE_MS;
+    if (new_task) base.newTask = true;
+    return callRpc('input.send', base, MCP_WRITE_DEADLINE_MS);
   },
 );
 
@@ -1867,8 +1866,8 @@ server.tool(
     if (senderPtyId) params.senderPtyId = senderPtyId;
     addCallerPtyId(params);
     // #2398 — see terminal_send: the start, then the delivery, and main told.
-    params.clientTimeoutMs = terminalWriteClientTimeoutMs();
-    const result = await callRpc('input.sendKey', params, terminalWriteClientTimeoutMs());
+    params.clientTimeoutMs = MCP_WRITE_DEADLINE_MS;
+    const result = await callRpc('input.sendKey', params, MCP_WRITE_DEADLINE_MS);
     // Say plainly what `ok` covers. The RPC confirms DELIVERY of a keystroke and
     // nothing more, but callers read a bare `{ok:true}` from an Enter press as
     // "submitted, the agent is running now" — orchestrators have reported panes
