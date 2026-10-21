@@ -52,6 +52,12 @@ describe('turnEndAt', () => {
     expect(turnEndAt({ status: 'running', signal: { kind: 'agent.user_prompt_submit', ts: at } })).toBeUndefined();
   });
 
+  it('ends a turn that died on an API error at its transcript entry, not when the stand-in was sent', () => {
+    const errorAt = ms('20:04:20.000');
+    const payload = { error: 'rate_limit', wmux_turn_reason: 'api_error', wmux_turn_ended_at: errorAt };
+    expect(turnEndAt({ status: 'error', signal: { kind: 'agent.stop_failure', ts: ms('20:04:26.500'), payload } })).toBe(errorAt);
+  });
+
   it('ends an interrupted turn at the interrupt the mod stamps, not when its Stop was sent', () => {
     const interruptedAt = ms('20:04:20.000');
     const payload = { wmux_turn_reason: 'aborted', wmux_turn_ended_at: interruptedAt };
@@ -136,6 +142,24 @@ describe('TeammateWakes — the live capture', () => {
     const fresh = rig();
     fresh.line(WAKE_1);
     expect(fresh.emit).not.toHaveBeenCalled();
+  });
+
+  it('opens each of two woken turns read before the turn end they follow was applied, in order', async () => {
+    const { emit, hook, line } = rig();
+    hook('agent.user_prompt_submit', '20:03:49.169');
+    // The alarm still holds turn N's Stop while woken turn 1 runs and ends,
+    // and turn 2's entry is read too.
+    line(WAKE_1);
+    line(WAKE_2);
+    hook('agent.stop', '20:03:57.365');
+    await Promise.resolve();
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenLastCalledWith('pty-1', ms('20:04:14.879'));
+    // Woken turn 1's own Stop lands: then turn 2 opens, and nothing closes it.
+    hook('agent.stop', '20:04:21.936');
+    await Promise.resolve();
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(emit).toHaveBeenLastCalledWith('pty-1', ms('20:04:21.951'));
   });
 
   it('keeps the newest turn end when an older one lands late', async () => {

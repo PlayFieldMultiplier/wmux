@@ -25,7 +25,10 @@
 //     nothing, and neither does one older than the last turn end.
 //   - The hook's own time, not its arrival. The next woken turn's entry is
 //     written milliseconds after the Stop fires, often before the daemon has
-//     ingested that Stop; the entry then waits for it.
+//     ingested that Stop; the entry then waits for it. Entries that wait
+//     queue in file order: a woken turn shorter than the alarm's window can
+//     end, and the next one's entry be read, before the first Stop lands.
+//     Each opens only after the turn end before it.
 //   - After that Stop is applied. A turn end is taken from the Stop the daemon
 //     broadcasts, not from the hook's arrival: the completion alarm can hold a
 //     Stop for its window (a turn that had working signals, every StopFailure),
@@ -44,6 +47,8 @@ const WAKE_PREFIX = 'Another Claude session sent a message:';
 const WAKE_TAG = '<teammate-message';
 /** Entry uuids remembered per pane; far more than one turn ever replays. */
 const SEEN_CAP = 256;
+/** Entries waiting per pane; a turn end lands within seconds, so a few at most. */
+const QUEUE_CAP = 16;
 
 export interface TeammateWake {
   /** The entry's uuid: one entry opens at most one turn. */
@@ -86,18 +91,23 @@ export interface TurnEndEvent {
   signal: { kind: string; ts: number; payload?: Record<string, unknown> };
 }
 
+/** Turn ends sent after the fact that stamp when the turn really ended. */
+const STAMPED_TURN_ENDS = new Set(['aborted', 'api_error']);
+
 /**
  * When a broadcast agent event ended the pane's turn, the time its hook fired.
  * A Stop that still projects running (background agents left) ends nothing,
- * and neither does a vetoed or still pending delivery. An interrupted turn's
- * Stop (the Claude Code mod sends it a second or more after the interrupt)
- * ends at the interrupt it stamps.
+ * and neither does a vetoed or still pending delivery. A turn end sent after
+ * the fact ends at the time it stamps: an interrupted turn's Stop (the Claude
+ * Code mod sends it a second or more after the interrupt), and the transcript's
+ * stand-in for a missing StopFailure (sent once its grace ran out).
  */
 export function turnEndAt(data: TurnEndEvent): number | undefined {
   if (data.signal.kind !== 'agent.stop' && data.signal.kind !== 'agent.stop_failure') return undefined;
   if (data.status === 'running' || data.decision === 'veto' || data.decision === 'pending') return undefined;
   const endedAt = data.signal.payload?.['wmux_turn_ended_at'];
-  if (data.signal.payload?.['wmux_turn_reason'] === 'aborted' && typeof endedAt === 'number' && Number.isFinite(endedAt)) return endedAt;
+  const reason = data.signal.payload?.['wmux_turn_reason'];
+  if (typeof reason === 'string' && STAMPED_TURN_ENDS.has(reason) && typeof endedAt === 'number' && Number.isFinite(endedAt)) return endedAt;
   return Number.isFinite(data.signal.ts) ? data.signal.ts : undefined;
 }
 
@@ -117,8 +127,8 @@ interface PaneState {
   endAt?: number;
   /** Newest turn start: a prompt hook, or a woken turn this module opened. */
   startAt?: number;
-  /** A wake entry read before the turn end it follows was ingested. */
-  pending?: TeammateWake & { path: string };
+  /** Wake entries read before the turn end each follows was applied, in file order. */
+  queue: Array<TeammateWake & { path: string }>;
   seen: Set<string>;
 }
 
@@ -134,7 +144,7 @@ export class TeammateWakes {
   private pane(sessionId: string): PaneState {
     let p = this.panes.get(sessionId);
     if (!p) {
-      p = { seen: new Set() };
+      p = { seen: new Set(), queue: [] };
       this.panes.set(sessionId, p);
     }
     return p;
@@ -148,7 +158,8 @@ export class TeammateWakes {
     if (p.seen.has(wake.uuid)) return;
     p.seen.add(wake.uuid);
     if (p.seen.size > SEEN_CAP) p.seen.delete(p.seen.values().next().value as string);
-    p.pending = { ...wake, path };
+    p.queue.push({ ...wake, path });
+    if (p.queue.length > QUEUE_CAP) p.queue.shift();
     this.decide(sessionId, p);
   }
 
@@ -157,7 +168,7 @@ export class TeammateWakes {
     const s = this.pane(sessionId);
     // A held StopFailure can land after a later turn's Stop: keep the newest.
     s.endAt = s.endAt === undefined ? at : Math.max(s.endAt, at);
-    if (s.pending) this.defer(() => { if (this.panes.get(sessionId) === s) this.decide(sessionId, s); });
+    if (s.queue.length > 0) this.defer(() => { if (this.panes.get(sessionId) === s) this.decide(sessionId, s); });
   }
 
   /** Every resolved hook signal for the session; `ts` is when the hook fired. Turn ends come through noteTurnEnd. */
@@ -167,13 +178,13 @@ export class TeammateWakes {
     if (kind === 'agent.user_prompt_submit') {
       const s = this.pane(sessionId);
       s.startAt = at;
-      // A prompt after the entry starts the turn itself.
-      if (s.pending && s.pending.at <= at) s.pending = undefined;
+      // A prompt after an entry starts the turn itself.
+      s.queue = s.queue.filter((w) => w.at > at);
     } else if (kind === 'agent.session_start' && p) {
       // A new session: the old one's turn boundaries say nothing about it.
       p.endAt = undefined;
       p.startAt = undefined;
-      p.pending = undefined;
+      p.queue = [];
     }
   }
 
@@ -183,15 +194,15 @@ export class TeammateWakes {
   }
 
   private decide(sessionId: string, p: PaneState): void {
-    const w = p.pending;
-    if (!w || p.endAt === undefined) return;
-    // The newest boundary is a start: the entry waits for the turn end it follows.
-    if (p.startAt !== undefined && p.startAt >= p.endAt) return;
-    p.pending = undefined;
-    // Written before the last turn end: that turn's own entry, already over.
-    if (w.at <= p.endAt) return;
-    if (!this.deps.isReader(sessionId, w.path) || !this.deps.mayOpen(sessionId, w.path)) return;
-    p.startAt = w.at;
-    this.deps.emit(sessionId, w.at);
+    for (let w = p.queue[0]; w && p.endAt !== undefined; w = p.queue[0]) {
+      // The newest boundary is a start: the entry waits for the turn end it follows.
+      if (p.startAt !== undefined && p.startAt >= p.endAt) return;
+      p.queue.shift();
+      // Written before the last turn end: that turn's own entry, already over.
+      if (w.at <= p.endAt) continue;
+      if (!this.deps.isReader(sessionId, w.path) || !this.deps.mayOpen(sessionId, w.path)) continue;
+      p.startAt = w.at;
+      this.deps.emit(sessionId, w.at);
+    }
   }
 }

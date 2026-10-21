@@ -24,6 +24,11 @@
 //   - Only a turn end. A later assistant or user entry before the grace runs
 //     out means the turn went on, so the entry was not its end. So does a new
 //     prompt hook (a retry), and an entry older than that prompt is ignored.
+//     An Agent Teams teammate's message is the exception: Claude Code starts
+//     the lead's next turn with it at once, so it confirms the error was the
+//     turn end, and what that turn writes is not the errored one going on.
+//     The stand-in then carries the entry's time (`wmux_turn_ended_at`), the
+//     boundary the woken turn's start is read against (teammateWake.ts).
 //   - Only the pane that still reads the file. Two panes bound to one
 //     transcript (a resumed session) read it one at a time; an entry the
 //     losing pane read before the handover is not its turn end.
@@ -32,6 +37,7 @@
 //     earlier turn, or one a new prompt has already moved past, closes nothing.
 
 import type { AgentSignal, AgentSlug } from '../../shared/hooks/signal-types';
+import { teammateWakeFromTranscriptLine } from './teammateWake';
 
 const PROMPT_ID = /"promptId":"([0-9a-f-]{8,64})"/;
 
@@ -114,6 +120,8 @@ interface Pending {
   end: ApiErrorTurnEnd;
   path: string;
   seenAt: number;
+  /** A teammate's message started the next turn: the error was this turn's end. */
+  nextTurnAt?: number;
 }
 
 export class ApiErrorTurnEnds {
@@ -142,8 +150,15 @@ export class ApiErrorTurnEnds {
     const end = apiErrorFromTranscriptLine(line);
     if (end && end.at < (this.promptAt.get(sessionId) ?? -Infinity)) return;
     const turnPrompt = this.lastPromptId.get(sessionId);
-    if (end) this.pending.set(sessionId, { end: turnPrompt ? { ...end, promptId: turnPrompt } : end, path, seenAt: this.now() });
-    else if (this.pending.has(sessionId) && isTurnProgress(line)) this.pending.delete(sessionId);
+    if (end) {
+      this.pending.set(sessionId, { end: turnPrompt ? { ...end, promptId: turnPrompt } : end, path, seenAt: this.now() });
+      return;
+    }
+    const p = this.pending.get(sessionId);
+    if (!p || p.nextTurnAt !== undefined || !isTurnProgress(line)) return;
+    const wake = teammateWakeFromTranscriptLine(line);
+    if (wake && wake.at >= p.end.at) p.nextTurnAt = wake.at;
+    else this.pending.delete(sessionId);
   }
 
   /** The watcher skipped lines of the pane's transcript. A pending error may
@@ -231,6 +246,13 @@ export function stopFailureSignal(
     ptyId,
     // Sent now: the turn it ends was already matched on the entry's own time.
     ts,
-    payload: { error: end.error, last_assistant_message: end.message, ...(end.promptId ? { prompt_id: end.promptId } : {}) },
+    payload: {
+      error: end.error,
+      last_assistant_message: end.message,
+      ...(end.promptId ? { prompt_id: end.promptId } : {}),
+      // Sent after the fact: when the turn really ended.
+      wmux_turn_reason: 'api_error',
+      wmux_turn_ended_at: end.at,
+    },
   };
 }

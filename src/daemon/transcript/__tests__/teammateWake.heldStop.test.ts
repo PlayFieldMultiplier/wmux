@@ -11,6 +11,7 @@ import { RingBuffer } from '../../RingBuffer';
 import { DEFAULT_ALARM_WINDOW_MS } from '../../../shared/hooks/CompletionAlarm';
 import type { AgentSignal } from '../../../shared/hooks/signal-types';
 import { TeammateWakes, turnEndAt } from '../teammateWake';
+import { ApiErrorTurnEnds, GRACE_MS, stopFailureSignal } from '../apiErrorTurnEnd';
 
 const PATH = '/home/u/.claude/projects/p/lead.jsonl';
 
@@ -141,5 +142,41 @@ describe('TeammateWakes — a turn end the completion alarm holds', () => {
     await flush();
     expect(order).not.toContain('wake');
     expect(bridge.isTurnOpen()).toBe(false);
+  });
+
+  it('opens the woken turn after a turn that died on an API error, on an install without the StopFailure hook', async () => {
+    // The daemon's API-error stand-in, reading the same tail and fed the same hooks.
+    const apiErrors = new ApiErrorTurnEnds({
+      isCurrentOpenTurn: (_id, at) => bridge.isTurnOpen() && bridge.turnAt(at)?.current === true,
+      isReader: () => true,
+      signalFor: (id, _path, end) => stopFailureSignal(id, { agent: 'claude', sessionId: 's', cwd: '/repo' }, end, Date.now()),
+      emit: (sig) => { ingest.handle(sig); },
+    });
+    const line = (l: string): void => {
+      apiErrors.noteLine('pty-a', PATH, l);
+      wakes.noteLine('pty-a', PATH, l);
+    };
+    ingest.handle(signal('agent.user_prompt_submit'));
+    apiErrors.noteHookSignal('pty-a', 'agent.user_prompt_submit', Date.now());
+    vi.advanceTimersByTime(2_000);
+    line(JSON.stringify({
+      type: 'assistant', uuid: 'e1', timestamp: new Date(Date.now()).toISOString(), isApiErrorMessage: true, error: 'rate_limit',
+      message: { role: 'assistant', content: [{ type: 'text', text: "You've hit your limit" }] },
+    }));
+    // The teammate's queued message starts the next turn at once, and it writes on.
+    vi.advanceTimersByTime(15);
+    line(wakeLine('u-wake', Date.now()));
+    vi.advanceTimersByTime(500);
+    line(JSON.stringify({ type: 'assistant', uuid: 'a2', timestamp: new Date(Date.now()).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'on it' }] } }));
+    await flush();
+    expect(order).not.toContain('wake');
+
+    // No StopFailure hook arrives; the stand-in is sent once its grace ran out.
+    vi.advanceTimersByTime(GRACE_MS);
+    apiErrors.settle();
+    vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+    await flush();
+    expect(order.slice(-2)).toEqual(['error', 'wake']);
+    expect(bridge.isTurnOpen()).toBe(true);
   });
 });
