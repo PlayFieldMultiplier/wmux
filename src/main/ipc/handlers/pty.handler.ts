@@ -1,7 +1,7 @@
 import { applyWmuxToolsToCommand, isWmuxToolsHint, locateWmuxMcpEntry } from '../../agents/toolSurfaceLaunch';
 import { codexConfigPath, codexHasWmuxServer } from '../../../shared/mcpRegistration';
 import { WSL_RPC_TIMEOUT_MS } from '../../../shared/wsl';
-import { suspendedReconnectAction } from '../../../shared/suspendedSession';
+import { promoteStartedSession, suspendedReconnectAction } from '../../../shared/suspendedSession';
 import { app, ipcMain, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -1571,16 +1571,16 @@ export function registerPTYHandlers(
             };
           }
           try {
-            const result = await daemonClient.rpc('daemon.promoteSession', { id }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; error?: { code?: string; message: string } };
+            const result = await daemonClient.rpc('daemon.promoteSession', { id }, { timeoutMs: WSL_RPC_TIMEOUT_MS }) as { ok: boolean; alreadyActive?: boolean; joined?: boolean; error?: { code?: string; message: string } };
             // #1305 — carry WHY it stayed pending, not just that it did. The
             // banner's Retry is the right and only offer for every other
             // failure; a missing directory additionally gets "start fresh".
             if (!result.ok) return { success: false, recoveryPending: true, error: result.error?.message || 'WSL recovery failed. Check the target and retry.', cwdMissing: result.error?.code === 'CWD_MISSING' };
-            // Only a promote this caller asked for started the session. A
-            // join of the daemon's own background start did not: that unit
-            // runs whatever the caller does, so a stop key to it is a real
-            // stop request and is delivered.
-            promoted = suspendedReconnectAction(session, opts) === 'promote';
+            // From what the daemon did, not why this call was made: a join of
+            // the daemon's own background start did not start the unit (a
+            // stop key to it is a real stop request and is delivered), but a
+            // 'join' that found nothing in flight spawned it here.
+            promoted = promoteStartedSession(result);
             const refreshed = await daemonClient.rpc('daemon.listSessions', {}) as typeof sessions;
             session = refreshed.find(s => s.id === id) ?? session;
           } catch (err) {

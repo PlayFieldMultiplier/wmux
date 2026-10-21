@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { recoversInBackground, suspendedReconnectAction } from '../suspendedSession';
+import { promoteStartedSession, recoversInBackground, suspendedReconnectAction } from '../suspendedSession';
 import { recoversInBackground as daemonRecoversInBackground } from '../../daemon/recoverySelector';
 
 // #2398 — one predicate decides which suspended sessions start on their own:
@@ -27,5 +27,21 @@ describe('suspended session reconnect action', () => {
     expect(suspendedReconnectAction({ supervision: { restart: 'always' } }, undefined)).toBe('join');
     // A caller that asks starts it itself, unit or not.
     expect(suspendedReconnectAction({ exec: { command: 'npm run dev' } }, { promote: true })).toBe('promote');
+  });
+});
+
+// #2398 round 7 — whether a reconnect's promote started the session is read
+// from the daemon's answer, never from the action label: a 'join' whose
+// background start failed or never covered the unit spawns it here.
+describe('promoteStartedSession', () => {
+  it('a fresh spawn started it; a join, an already running session or a failure did not', () => {
+    expect(promoteStartedSession({ ok: true, alreadyActive: false })).toBe(true);
+    expect(promoteStartedSession({ ok: true, alreadyActive: false, joined: true })).toBe(false);
+    expect(promoteStartedSession({ ok: true, alreadyActive: true })).toBe(false);
+    expect(promoteStartedSession({ ok: false })).toBe(false);
+  });
+
+  it('an older daemon that cannot say counts as started (a stop key is refused)', () => {
+    expect(promoteStartedSession({ ok: true })).toBe(true);
   });
 });

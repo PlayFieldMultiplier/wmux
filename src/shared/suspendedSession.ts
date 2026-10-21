@@ -23,6 +23,20 @@ export function recoversInBackground(session: { exec?: unknown; supervision?: un
  * `deferred`. A reconnect that does not say (a repaint fallback, a read)
  * never starts a session.
  */
+/**
+ * Whether a daemon.promoteSession call started the session itself (#2398):
+ * succeeded, the session was not already running, and the call did not join
+ * an attempt already in flight (another caller's, or the boot background
+ * start). Decided from what the daemon did, never from why the call was
+ * made: a 'join' finds nothing to join when the background start failed or
+ * never covered the session (past its cap), and then this call spawns it.
+ * A daemon from before `joined` existed cannot say, so its answer counts as
+ * started: a stop key is refused rather than land in a session just started.
+ */
+export function promoteStartedSession(result: { ok: boolean; alreadyActive?: boolean; joined?: boolean }): boolean {
+  return result.ok && result.alreadyActive !== true && result.joined !== true;
+}
+
 export function suspendedReconnectAction(
   session: { exec?: unknown; supervision?: unknown },
   opts: { promote?: boolean } | undefined,

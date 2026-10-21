@@ -58,7 +58,10 @@ export interface ReconnectResult {
 
 /** Why an attempt settled without a session pipe; absent once it attached (except `promoted`). */
 export interface ReconnectSettleInfo {
-  /** #2398 — attached, and this attempt started the session (it was suspended). */
+  /**
+   * #2398 — this attempt started the session (it was suspended): attached, or
+   * given up on after the start (rate limited, unconfirmed).
+   */
   promoted?: boolean;
   cwdMissing?: boolean;
   rateLimited?: boolean;
@@ -226,7 +229,7 @@ export async function reconnectPtyWithRetry(
     log('error', `[useTerminal] pty.reconnect ${ptyId} still rate limited after ${schedule.length} retries (${lastErr}) — keeping ptyId`);
     if (isCurrent()) {
       deps.setUnconfirmed?.(ptyId, true);
-      deps.onRecoveryError?.('wmux is busy and could not reattach this terminal yet.', { rateLimited: true });
+      deps.onRecoveryError?.('wmux is busy and could not reattach this terminal yet.', { rateLimited: true, ...(started ? { promoted: true } : {}) });
     }
     return null;
   }
@@ -237,7 +240,7 @@ export async function reconnectPtyWithRetry(
   log('error', `[useTerminal] pty.reconnect ${ptyId} still failing after ${RECONNECT_BACKOFFS_MS.length} retries (${lastErr}) — keeping ptyId unconfirmed`);
   if (isCurrent()) {
     deps.setUnconfirmed?.(ptyId, true);
-    deps.onRecoveryError?.('wmux could not reattach this terminal yet.', { unconfirmed: true });
+    deps.onRecoveryError?.('wmux could not reattach this terminal yet.', { unconfirmed: true, ...(started ? { promoted: true } : {}) });
   }
   return null;
 }

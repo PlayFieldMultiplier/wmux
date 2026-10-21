@@ -165,6 +165,7 @@ import { newerTimestamp } from './util/idleAnchor';
 import type { DaemonSession, DaemonState } from './types';
 import { retireAdopted, withDiskOnlySessions } from './diskOnlySessions';
 import { stampHeld } from './heldSessions';
+import { createPromoteOnce, type PromoteResult } from './promoteOnce';
 import type { DaemonEvent, DaemonCreateSessionParams, DaemonDestroySessionParams, DaemonSessionIdParams, DaemonResizeParams, DaemonSetResumeBindingParams } from '../shared/rpc';
 import { isWslDistroSpawnArgs } from '../shared/wslDistro';
 import { gitDirMapperFor, gitWatchCwdFor } from './gitWatchCwd';
@@ -3372,6 +3373,9 @@ function registerRpcHandlers(
 
     // Fix B: when includeSuspended is requested, append cap-skipped suspended
     // sessions from the persisted state that aren't already in the active set.
+    // #2398 — they carry no exec or supervision, so main's pty:reconnect holds
+    // them ('hold'), matching the boot background start, which never starts
+    // them either (it covers pending-recovery placeholders only).
     if (includeSuspended) {
       const activeIdSet = new Set(activeSessions.map((s: { id: string }) => s.id));
       const persistedState = stateWriter.load();
@@ -3404,10 +3408,7 @@ function registerRpcHandlers(
   // came back with its ptyId absent and reconcile destructively cleared it. This
   // lets the renderer spawn exactly the one session it still needs, keeping the
   // ptyId stable so scrollback restores from the daemon's ring buffer.
-  /** What a promote attempt answers — see `promoteSession`. */
-  type PromoteResult = { ok: boolean; alreadyActive?: boolean; error?: { code: string; message: string } };
-  const promotionInFlight = new Map<string, { operation: Promise<PromoteResult>; startFresh: boolean }>();
-  const promoteSession = async (rawParams: Record<string, unknown>) => {
+  const promoteSession = async (rawParams: Record<string, unknown>): Promise<PromoteResult> => {
     if (shuttingDown) return { ok: false, error: { code: 'SHUTTING_DOWN', message: 'Daemon is shutting down; retry after reconnect.' } };
     const params = (rawParams ?? {}) as Record<string, unknown>;
     const sessionId = typeof params['id'] === 'string' ? params['id'] : '';
@@ -3558,23 +3559,8 @@ function registerRpcHandlers(
       return { ok: false, error: { code: isWslCwdMissingError(err) ? 'CWD_MISSING' : 'SPAWN_FAILED', message: msg } };
     }
   };
-  const promoteOnce = (id: string, startFresh = false) => {
-    const existing = promotionInFlight.get(id);
-    // Same intent → one attempt, as before. A DIFFERENT intent must not be
-    // answered by the one already running: start-fresh exists because the
-    // ordinary promote fails, so handing back that promote's result would
-    // answer a question the user did not ask (#1305). Queue behind it instead —
-    // and if the one in flight happens to succeed, the idempotent
-    // already-active check makes the second a no-op.
-    if (existing && existing.startFresh === startFresh) return existing.operation;
-    const run = () => promoteSession({ id, fresh: startFresh });
-    const operation: Promise<PromoteResult> = (existing ? existing.operation.catch(() => undefined).then(run) : run())
-      .finally(() => {
-        if (promotionInFlight.get(id)?.operation === operation) promotionInFlight.delete(id);
-      });
-    promotionInFlight.set(id, { operation, startFresh });
-    return operation;
-  };
+  // #2398 — answers `joined` to a caller that joined an attempt in flight.
+  const promoteOnce = createPromoteOnce((p) => promoteSession(p));
   pipeServer.onRpc('daemon.promoteSession', (params) => {
     const id = String(params?.id ?? '');
     // Before the attempt, so an attempt that fails on a path with no save

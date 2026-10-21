@@ -319,6 +319,26 @@ describe('reconnectPtyWithRetry — an attach that started the session (#2398)',
     expect(onRecoveryError).toHaveBeenCalledWith(null, { promoted: true });
   });
 
+  // Round-7 P3: a give-up after the start (retries exhausted) still says
+  // this attempt started the session.
+  it('a give-up after a promote still says it promoted', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn()
+      .mockResolvedValueOnce({ success: false, transient: true, promoted: true, error: 'Session pipe not writable after reconnect' })
+      .mockResolvedValue({ success: false, transient: true, error: 'Session pipe not writable after reconnect' });
+    await reconnectPtyWithRetry('pty-promoted-gave-up', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenLastCalledWith('wmux could not reattach this terminal yet.', { unconfirmed: true, promoted: true });
+  });
+
+  it('a rate-limited give-up after a promote still says it promoted', async () => {
+    const onRecoveryError = vi.fn();
+    const reconnect = vi.fn()
+      .mockResolvedValueOnce({ success: false, transient: true, promoted: true, error: 'rate limit exceeded' })
+      .mockResolvedValue({ success: false, transient: true, error: 'rate limit exceeded' });
+    await reconnectPtyWithRetry('pty-promoted-busy', alwaysCurrent, { reconnect, clearPtyId: vi.fn(), onRecoveryError, sleep: noSleep, log: noLog });
+    expect(onRecoveryError).toHaveBeenLastCalledWith('wmux is busy and could not reattach this terminal yet.', { rateLimited: true, promoted: true });
+  });
+
   it('an attach of a running session settles as before', async () => {
     const onRecoveryError = vi.fn();
     const reconnect = vi.fn(async () => ({ success: true }));

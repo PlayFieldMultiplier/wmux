@@ -250,7 +250,7 @@ describe('attach without promote (#2398)', () => {
     const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
     const region = handler.slice(start, start + 2500);
     expect(region).toMatch(/exec\?: unknown;\s*supervision\?: unknown;/);
-    expect(handler).toMatch(/import \{ suspendedReconnectAction \} from '\.\.\/\.\.\/\.\.\/shared\/suspendedSession';/);
+    expect(handler).toMatch(/import \{ promoteStartedSession, suspendedReconnectAction \} from '\.\.\/\.\.\/\.\.\/shared\/suspendedSession';/);
   });
 
   // Review item 1 — a held session is in use: every hold tells the daemon,
@@ -270,9 +270,10 @@ describe('attach without promote (#2398)', () => {
     const start = handler.indexOf('ipcMain.handle(IPC.PTY_RECONNECT');
     const region = handler.slice(start, start + 9000);
     const promoteAt = region.indexOf("daemonClient.rpc('daemon.promoteSession'");
-    // Round 7: only this caller's promote counts, never a join of the
-    // daemon's background start of an exec or supervised unit.
-    expect(region.slice(promoteAt, promoteAt + 1200)).toMatch(/promoted = suspendedReconnectAction\(session, opts\) === 'promote';/);
+    // Round 7: from what the daemon did (promoteStartedSession, unit-tested
+    // in shared), never from the action label.
+    expect(region.slice(promoteAt, promoteAt + 1200)).toMatch(/promoted = promoteStartedSession\(result\);/);
+    expect(region).not.toMatch(/promoted = suspendedReconnectAction/);
     expect(handler).toMatch(/return \{ success: true, id: session\.id,[^\n]*\.\.\.startedHere\(\) \};/);
   });
 
