@@ -1,3 +1,6 @@
+// @wmux-lane unit
+// Pure functions over the theme tokens: "win32" appears only in a regex that
+// reads globals.css as text, so Windows cannot change the result.
 // Windows glass coverage is derived from each look's tokens so its text stays
 // legible over the worst backdrop (owner decision 2026-10-21). These run the
 // real built-in tokens through the same composite the page paints.
