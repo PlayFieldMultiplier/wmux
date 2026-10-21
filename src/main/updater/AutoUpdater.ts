@@ -46,6 +46,7 @@ import {
   waitForWaiterHeartbeat,
 } from './installTeardown';
 import { findInstallIntegrityGap } from './installIntegrity';
+import { requestRendererSessionSave } from '../quit/rendererSessionSave';
 import { assessSmartAppControlBlock } from './smartAppControl';
 
 const REPO = 'openwong2kim/wmux';
@@ -1007,12 +1008,13 @@ export class AutoUpdater {
     }
     this.isInstalling = true;
 
+    // Bounded like before-quit's save: a renderer that never answers would
+    // otherwise hold isInstalling forever, and every later Install would be
+    // refused as "already in progress".
     const win = this.getWindow();
     if (win && !win.isDestroyed() && !win.webContents.isCrashed()) {
       try {
-        await win.webContents.executeJavaScript(
-          `try { window.dispatchEvent(new Event('beforeunload')); } catch(e) {}`
-        );
+        await requestRendererSessionSave(win.webContents);
         await new Promise(resolve => setTimeout(resolve, 500));
         console.log('[AutoUpdater] Session save triggered before update install');
       } catch {

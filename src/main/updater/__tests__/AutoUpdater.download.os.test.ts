@@ -414,6 +414,25 @@ describe('AutoUpdater two-step flow (win32)', () => {
     expect(internals.oneShotInstall).toBe(false);
   });
 
+  it('a renderer that never answers the pre-install save does not hold the install', async () => {
+    // The save used to be awaited unbounded: a hung renderer left isInstalling
+    // set for good, and every later Install answered "already in progress".
+    const { AutoUpdater, ipcHandlers, quit, win, teardown } = await loadWin32();
+    win.webContents.executeJavaScript = vi.fn(() => new Promise<undefined>(() => { /* never answers */ }));
+    const updater = new AutoUpdater(() => win as never, quitHooks());
+    updater.start();
+    await backgroundCheck(updater);
+    await flush();
+
+    vi.useFakeTimers();
+    const install = ipcHandlers.get(IPC.UPDATE_INSTALL)!();
+    await vi.advanceTimersByTimeAsync(3_000 + 500);
+    await install;
+
+    expect(teardown.spawnInstallWaiter).toHaveBeenCalledTimes(1);
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
+
   it('a failed one-shot download does not restart the app (install intent cleared)', async () => {
     const BAD_SHA = 'a'.repeat(64);
     const { AutoUpdater, ipcHandlers, openPath, quit, win } = await loadWin32({ sha: BAD_SHA });

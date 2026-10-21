@@ -224,6 +224,7 @@ import * as autostart from './autostart';
 import * as cliShim from './cliShim';
 import * as shortcutHygiene from './shortcutHygiene';
 import { isFreshProfile, runPostInstallReconcile } from './postInstallReconcile';
+import { requestRendererSessionSave } from './quit/rendererSessionSave';
 import {
   refreshStatuslineScriptAtBoot,
   defaultPaths as defaultStatuslinePaths,
@@ -3018,13 +3019,6 @@ async function abortInstallQuit(): Promise<void> {
  */
 const QUIT_HARD_DEADLINE_MS = 20_000;
 
-/**
- * #980 — how long the renderer gets to run its beforeunload save. Short: the
- * save is a synchronous dispatch, so anything past this is a renderer that is
- * not going to answer at all.
- */
-const RENDERER_SAVE_TIMEOUT_MS = 3_000;
-
 /** How long the agent factory's modules get to dispose on quit. */
 const FACTORY_DISPOSE_TIMEOUT_MS = 3_000;
 
@@ -3108,14 +3102,7 @@ app.on('before-quit', async (e) => {
   // than the save itself needs buys nothing and risks everything.
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isCrashed()) {
     try {
-      await Promise.race([
-        mainWindow.webContents.executeJavaScript(
-          `try { window.dispatchEvent(new Event('beforeunload')); } catch(e) {}`
-        ),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('renderer session-save timed out')), RENDERER_SAVE_TIMEOUT_MS),
-        ),
-      ]);
+      await requestRendererSessionSave(mainWindow.webContents);
       await new Promise(resolve => setTimeout(resolve, 500));
     } catch {
       // Renderer unavailable, or too slow to answer — rely on last periodic save
