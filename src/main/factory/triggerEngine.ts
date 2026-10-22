@@ -33,7 +33,7 @@
 
 import path from 'node:path';
 import { isCoordinatorBot, type BotProfile, type BotTrigger } from '../../shared/bot';
-import type { Fact, FactDraft, FactFilter, FactKind } from '../../shared/facts';
+import { factAddressee, type Fact, type FactDraft, type FactFilter, type FactKind } from '../../shared/facts';
 import type { WakeItem, WakeReason } from '../../shared/wake';
 import { GENERAL_THREAD, type ThreadId } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
@@ -115,7 +115,6 @@ export function resolvePorts(): FactoryTriggerPorts | null {
 
 // ── Matching (pure) ────────────────────────────────────────────────────────
 
-const DIRECTED_KINDS: ReadonlySet<FactKind> = new Set(['handoff.received', 'handoff.refused', 'human.message', 'schedule.fired', 'bot.notice']);
 const HQ_WIDE_KINDS: ReadonlySet<FactKind> = new Set(['bot.budget_exhausted', 'bot.error', 'bot.refused', 'human.correction']);
 
 /** A routine's `schedule.fired` (routines.ts): its own wake is queued
@@ -130,7 +129,8 @@ export function botSeesFact(bot: Pick<BotProfile, 'id' | 'workspaceId' | 'role' 
   // The island first (guestWorkspaces.ts): before the directed and HQ-wide
   // rules, and in place of the fallthrough for a bot in a guest workspace.
   if (!factInIsland(bot.workspaceId, fact)) return false;
-  if (DIRECTED_KINDS.has(fact.kind) && fact.ref?.botId) return fact.ref.botId === bot.id;
+  const addressee = factAddressee(fact);
+  if (addressee !== null) return addressee === bot.id;
   if (isCoordinatorBot(bot) && HQ_WIDE_KINDS.has(fact.kind)) return true;
   if (fact.repoKey !== undefined) {
     const factRepo = normalizeRepoKey(fact.repoKey);

@@ -19,7 +19,7 @@ import { mintBotToken, revokeCommanderToken } from '../../../deck/commanderTrust
 import { __resetGuestWorkspacesForTesting, noteGuestRecordWorkspaces } from '../../../factory/guestWorkspaces';
 import { botSeesFact } from '../../../factory/triggerEngine';
 import { fireMorningReport } from '../../../factory/morningReport';
-import { RoomWriter } from '../../../factory/roomWriter';
+import { RoomWriter, writeFactCards } from '../../../factory/roomWriter';
 import { DEFAULT_BOT_BUDGETS, type BotBinding, type BotProfile } from '../../../../shared/bot';
 
 const LEAD: BotBinding = { workspaceId: 'ws-a', botId: 'bot-0000000a', role: 'lead' };
@@ -74,10 +74,37 @@ describe('fact.poll', () => {
     log.append(message(LEAD.botId, 'general'));
     const ids = (r: unknown) => (r as { facts: { seq: number }[] }).facts.map((f) => f.seq);
     const coordinator = (id: string) => id === MOA.botId;
-    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(DEV), () => null, coordinator, () => () => true))).toEqual([2]);
-    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA), () => null, coordinator, () => () => true))).toEqual([2]);
+    // Both are addressed to LEAD, so no other bot reads either (the General
+    // card itself stays readable through room_read).
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(DEV), () => null, coordinator, () => () => true))).toEqual([]);
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA), () => null, coordinator, () => () => true))).toEqual([]);
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(LEAD), () => null, coordinator, () => () => true))).toEqual([1, 2]);
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, OPERATOR))).toEqual([1, 2]);
+  });
+
+  it('a directed fact reaches only its bot: no other bot in its workspace and no Coordinator reads it; the operator does', async () => {
+    const DEV: BotBinding = { workspaceId: 'ws-a', botId: 'bot-0000000d', role: 'lead' };
+    const coordinator = (id: string) => id === MOA.botId;
+    const ids = (r: unknown) => (r as { facts: { kind: string }[] }).facts.map((f) => f.kind);
+    const kinds = ['handoff.received', 'handoff.refused', 'human.message', 'schedule.fired', 'bot.notice'] as const;
+    for (const [i, kind] of kinds.entries()) {
+      log.append({ kind, at: Date.now(), workspaceId: 'ws-a', ref: { botId: LEAD.botId, handoffId: `h-${i}`, messageId: `m-${i}`, scheduleId: `s-${i}` }, actor: { kind: 'system' }, payload: { title: `FOR LEAD ${i}` } } as FactDraft);
+    }
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(DEV), () => null, coordinator, () => () => true))).toEqual([]);
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA), () => null, coordinator, () => () => true))).toEqual([]);
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(LEAD), () => null, coordinator, () => () => true))).toEqual([...kinds]);
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, OPERATOR))).toEqual([...kinds]);
+  });
+
+  it('a handoff to a person or a workspace names no bot: its workspace still reads it, and a bot handoff\'s room card stays readable in its thread', async () => {
+    const DEV: BotBinding = { workspaceId: 'ws-a', botId: 'bot-0000000d', role: 'lead' };
+    const toWorkspace = log.append({ kind: 'handoff.received', at: Date.now(), workspaceId: 'ws-a', ref: { handoffId: 'h-ws' }, actor: { kind: 'bot', id: LEAD.botId }, payload: { handoffKind: 'dispatch', title: 'for the room', threadId: 'handoff:h-ws', toWorkspaceId: 'ws-a' } });
+    const toLead = log.append({ kind: 'handoff.received', at: Date.now(), workspaceId: 'ws-a', ref: { handoffId: 'h-lead', botId: LEAD.botId }, actor: { kind: 'system' }, payload: { handoffKind: 'dispatch', title: 'for the lead', threadId: 'handoff:h-lead', toWorkspaceId: 'ws-a' } });
+    const polled = await handleFactPoll(log, { sinceSeq: 0 }, bot(DEV), () => null, () => false, () => () => true) as { facts: { id: string }[] };
+    expect(polled.facts.map((f) => f.id)).toEqual([toWorkspace?.id]);
+    const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
+    if (toLead) writeFactCards(writer, toLead);
+    expect(writer.read('ws-a', { threadId: 'handoff:h-lead', dmReader: DEV.botId }).cards.map((c) => c.title).join(' ')).toContain('for the lead');
   });
 
   it('the morning report fact carries no 1:1 thread titles: no bot in its workspace, and no other Coordinator, reads one', async () => {
@@ -102,13 +129,15 @@ describe('fact.poll', () => {
     });
     expect(fired).toMatchObject({ ok: true });
     const coordinator = (id: string) => id === hq.id || id === other.id;
-    const readers: BotBinding[] = [{ workspaceId: 'ws-hq', botId: peer.id, role: 'lead' }, { workspaceId: 'ws-x', botId: other.id, role: 'moa' }, MOA];
-    for (const reader of readers) {
+    // The report is addressed to the Coordinator it is for: no other bot reads it.
+    for (const reader of [{ workspaceId: 'ws-hq', botId: peer.id, role: 'lead' }, { workspaceId: 'ws-x', botId: other.id, role: 'moa' }] as BotBinding[]) {
       const r = await handleFactPoll(log, { sinceSeq: 0 }, bot(reader), () => null, coordinator, () => () => true) as { facts: unknown[] };
-      const text = JSON.stringify(r.facts);
-      expect(text, reader.botId).toContain('a public thread');
-      expect(text, reader.botId).not.toContain('PRIVATE');
+      expect(r.facts, reader.botId).toEqual([]);
     }
+    const own = await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA), () => null, coordinator, () => () => true) as { facts: unknown[] };
+    const text = JSON.stringify(own.facts);
+    expect(text).toContain('a public thread');
+    expect(text).not.toContain('PRIVATE');
   });
 
   it('the island: the Coordinator reads no guest workspace\'s facts, a guest workspace\'s bot only its own; the operator all', async () => {
