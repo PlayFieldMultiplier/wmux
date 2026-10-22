@@ -397,10 +397,12 @@ describe('browser_wait fn on an unprotected pane', () => {
 
 describe('downloads no download tool asked for, on an unprotected pane', () => {
   function emitterPage() {
-    const listeners: Array<(d: unknown) => void> = [];
+    const listeners: Array<[string, (d: unknown) => void]> = [];
+    const of = (ev: string) => listeners.filter(([e]) => e === ev).map(([, l]) => l);
     return {
-      page: { on: (_e: string, l: (d: unknown) => void) => listeners.push(l) },
-      emit: (d: unknown) => listeners.forEach((l) => l(d)),
+      page: { on: (e: string, l: (d: unknown) => void) => listeners.push([e, l]) },
+      emit: (d: unknown) => of('download').forEach((l) => l(d)),
+      emit2: (ev: string, d: unknown) => of(ev).forEach((l) => l(d)),
       count: () => listeners.length,
     };
   }
@@ -443,11 +445,25 @@ describe('downloads no download tool asked for, on an unprotected pane', () => {
     expect(d.cancel).toHaveBeenCalled();
   });
 
+  it('a popup the page opens is armed too, once', async () => {
+    const parent = emitterPage();
+    const popup = emitterPage();
+    guardUnclaimedDownloads(parent.page as never);
+    parent.emit2('popup', popup.page);
+    parent.emit2('popup', popup.page);
+    expect(popup.count()).toBe(2); // its own download and popup listeners, once
+    const d = fakeDownload();
+    popup.emit(d);
+    await flush();
+    expect(d.cancel).toHaveBeenCalled();
+    expect(d.delete).toHaveBeenCalled();
+  });
+
   it('arming is idempotent', () => {
     const { page, count } = emitterPage();
     guardUnclaimedDownloads(page as never);
     guardUnclaimedDownloads(page as never);
-    expect(count()).toBe(1);
+    expect(count()).toBe(2); // one download and one popup listener
   });
 
   it('browser_download arms the guard and its own download wins the race', async () => {

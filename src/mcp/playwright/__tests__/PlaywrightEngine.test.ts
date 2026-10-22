@@ -2033,6 +2033,19 @@ describe('PlaywrightEngine live-Chrome attach (Phase 3)', () => {
   });
   const flush = () => new Promise((r) => setTimeout(r, 0));
 
+  it('isUnprotectedChrome asks main afresh and is false unless an unprotected Chrome pane is confirmed', async () => {
+    const engine = PlaywrightEngine.getInstance();
+    mockSendRpc.mockResolvedValueOnce({ workspaceBackend: 'chrome' });
+    await expect(engine.isUnprotectedChrome('ws-A')).resolves.toBe(true);
+    expect(mockSendRpc).toHaveBeenLastCalledWith('browser.cdp.info', { workspaceId: 'ws-A' });
+    mockSendRpc.mockResolvedValueOnce({ workspaceBackend: 'chrome', protected: true, policyEpoch: 3 });
+    await expect(engine.isUnprotectedChrome('ws-A')).resolves.toBe(false);
+    mockSendRpc.mockResolvedValueOnce({ workspaceBackend: 'builtin' });
+    await expect(engine.isUnprotectedChrome('ws-A')).resolves.toBe(false);
+    mockSendRpc.mockRejectedValueOnce(new Error('no main'));
+    await expect(engine.isUnprotectedChrome('ws-A')).resolves.toBe(false);
+  });
+
   it('unprotected: a click-started download before any download tool is cancelled and deleted', async () => {
     const { page, browser } = liveHarness('live-tab-7', 'https://mail.example/');
     const events = emitterOn(page);

@@ -898,6 +898,24 @@ export class PlaywrightEngine {
     return this.workspaceBackend;
   }
 
+  /**
+   * Whether `workspaceId`'s browser is an unprotected pane on the Chrome
+   * backend, asked of main afresh (one cdp.info, which also starts that
+   * Chrome). Such a pane opens a tab on about:blank and loads the URL through
+   * a handed-out Page, so the download guard is armed before the first
+   * navigation. False when it cannot be told: the caller then keeps main's own
+   * open path, which main refuses the same way when it cannot serve the call.
+   */
+  async isUnprotectedChrome(workspaceId: string): Promise<boolean> {
+    try {
+      const info = (await sendRpc('browser.cdp.info', { workspaceId })) as CdpInfoResponse;
+      this.cacheShellUrl(info);
+      return info.workspaceBackend === 'chrome' && info.protected !== true;
+    } catch {
+      return false;
+    }
+  }
+
   getWorkspaceBackend(): BrowserBackend | undefined {
     return this.workspaceBackend;
   }

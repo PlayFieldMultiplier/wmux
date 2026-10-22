@@ -17,15 +17,22 @@ const downloadClaims = new WeakMap<object, DownloadClaim[]>();
  * it triggers or awaits one; each claim lets exactly one download through,
  * and every other one is cancelled.
  *
- * Armed per page and idempotent. Playwright calls the `download` listeners in
- * the order they were added, so a claim registered before the tool's own
- * waitForEvent is always seen by this guard first.
+ * Armed per page and idempotent; popups the page opens are armed too.
+ * Playwright calls the `download` listeners in the order they were added, so
+ * a claim registered before the tool's own waitForEvent is always seen by
+ * this guard first.
  */
 export function guardUnclaimedDownloads(page: Page): void {
-  const target = page as unknown as { on?: (event: 'download', listener: (download: Download) => void) => unknown };
+  const target = page as unknown as {
+    on?: ((event: 'download', listener: (download: Download) => void) => unknown)
+      & ((event: 'popup', listener: (popup: Page) => void) => unknown);
+  };
   if (downloadClaims.has(page) || typeof target.on !== 'function') return;
   const claims: DownloadClaim[] = [];
   downloadClaims.set(page, claims);
+  // A popup is a page of its own, and one that renders before it downloads
+  // would otherwise never be armed. Same guard, armed once per page.
+  target.on('popup', (popup) => guardUnclaimedDownloads(popup));
   target.on('download', (download) => {
     const claim = claims.shift();
     if (claim) {
