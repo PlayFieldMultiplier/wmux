@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { A2A_REMOTE_IMAGE_LIMITS } from '../../shared/a2aRemote';
+import { dataSuffix } from '../../shared/constants';
 import { protectedPatternOf } from '../../main/factory/botRepoRead';
 import { isWin32UnsafeName, namesWin32Stream, strictlyInside } from '../../main/factory/roomFiles';
 
@@ -129,7 +130,8 @@ export function imageSourceMessage(reason: ImageSourceRefusal): string {
     case 'missing':
       return 'no such file';
     case 'outside':
-      return 'only files in your pane\'s project folder or in ~/.wmux/uploads/ can be attached; copy it there first';
+      // The uploads folder of this instance (getWmuxDir() carries the suffix).
+      return `only files in your pane's project folder or in ~/.wmux${dataSuffix()}/uploads/ can be attached; copy it there first`;
     case 'hidden':
       return 'a file in a hidden folder (or a hidden file) is never attached';
     case 'protected':

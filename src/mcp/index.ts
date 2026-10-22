@@ -64,6 +64,7 @@ import { registerFleetTriageTools } from './fleetTriage';
 import { registerAutomationTools } from './automation';
 import { registerReplTools } from './repl/tools';
 import { inputSchemaDeclaresMaxBytes, wrapHandlerWithResultCap } from './resultCap';
+import { dataSuffix } from '../shared/constants';
 import { AsyncLocalStorage } from 'async_hooks';
 import {
   classifyMcpParent,
@@ -396,6 +397,22 @@ const SEND_MESSAGE_SHAPE = {
       'The receiver gets its own copy and reads it by the path shown in the message. Works for a pane on another PC too; one whose wmux is older gets the text with a note instead.',
   ),
 };
+
+/**
+ * Whether an RPC reply is a refusal answered as a result rather than thrown.
+ * Many handlers return `{ error }` (or `{ ok: false, ... }`), which keeps the
+ * pipe envelope ok, so callRpc must flag it itself: an agent that checks only
+ * `isError` otherwise reads the refusal as success. Only the top level counts
+ * (a per-item `error` in a list is data), `ok: false` follows the tool modules'
+ * convention (git.ts, ledger.ts, ...), and an `error` next to any other `ok` is
+ * data.
+ */
+export function isErrorShapedResult(result: unknown): boolean {
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return false;
+  const r = result as Record<string, unknown>;
+  if (r.ok === false) return true;
+  return r.ok === undefined && typeof r.error === 'string' && r.error.length > 0;
+}
 
 export function createWmuxServer(ctx: WmuxServerCtx): McpServer {
 // Workspace identity.
@@ -966,7 +983,7 @@ async function callRpc(
   // it to learn which surface it got — without giving up the stale-route
   // handling every tool gets from this helper.
   onResult?: (result: unknown) => void,
-): Promise<{ content: { type: 'text'; text: string }[] }> {
+): Promise<{ content: { type: 'text'; text: string }[]; isError?: true }> {
   const pinnedRouteAtDispatch = getPinnedRoute();
   try {
     const result = timeoutMs === undefined
@@ -975,7 +992,7 @@ async function callRpc(
     if (isStaleIdentityResult(result)) invalidateStaleRoute(pinnedRouteAtDispatch);
     onResult?.(result);
     const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-    return { content: [{ type: 'text', text }] };
+    return { content: [{ type: 'text', text }], ...(isErrorShapedResult(result) ? { isError: true as const } : {}) };
   } catch (err) {
     if (isStaleIdentityResult(err instanceof Error ? err.message : String(err))) {
       invalidateStaleRoute(pinnedRouteAtDispatch);
@@ -1014,10 +1031,10 @@ function invalidateStaleRoute(pinnedRouteAtDispatch: PinnedRoute | null): void {
  * so the primary JSON payload stays machine-parseable.
  */
 function withNote(
-  result: { content: { type: 'text'; text: string }[] },
+  result: { content: { type: 'text'; text: string }[]; isError?: true },
   note: string,
-): { content: { type: 'text'; text: string }[] } {
-  return { content: [...result.content, { type: 'text', text: `NOTE: ${note}` }] };
+): { content: { type: 'text'; text: string }[]; isError?: true } {
+  return { ...result, content: [...result.content, { type: 'text', text: `NOTE: ${note}` }] };
 }
 
 /**
@@ -1879,7 +1896,8 @@ server.tool(
     // as working while they sat blocked on an unanswered question. There is no
     // reliable signal here to promote delivery into submission, so the honest
     // answer is to name the gap rather than imply a guarantee.
-    if (key.toLowerCase() === 'enter') {
+    // A refused key was not delivered, so it gets no delivery note.
+    if (key.toLowerCase() === 'enter' && !result.isError) {
       return withNote(
         result,
         'Enter was delivered. This does NOT confirm anything was submitted: if the pane was '
@@ -2255,7 +2273,7 @@ const sendMessageHandler = async ({ to, pane_id, surface_id, title, task_id, mes
     for (const given of images) {
       const hostPath = fromAgentPath(given);
       if (!hostPath) {
-        return { content: [{ type: 'text' as const, text: `send_message: images: ${JSON.stringify(given)} is not a file wmux can open (give an absolute path under /mnt/<drive>/, such as /mnt/c/Users/<you>/.wmux/uploads/)` }], isError: true };
+        return { content: [{ type: 'text' as const, text: `send_message: images: ${JSON.stringify(given)} is not a file wmux can open (give an absolute path under /mnt/<drive>/, such as /mnt/c/Users/<you>/.wmux${dataSuffix()}/uploads/)` }], isError: true };
       }
       hostPaths.push(hostPath);
     }
