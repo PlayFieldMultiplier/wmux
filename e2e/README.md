@@ -33,8 +33,8 @@ Code at a status at rest. It is a separate script, not a `node --test` file,
 because it drives an already packaged app.
 
 - **Isolated**: a unique `WMUX_DATA_SUFFIX` and a sandbox home under the temp
-  dir (`/tmp` on macOS, where the per-user temp dir is too long for the
-  daemon's Unix sockets) (`HOME` and `CODEX_HOME`; on Windows also `USERPROFILE`, `APPDATA`,
+  dir (`/tmp` on macOS, resolved to `/private/tmp` as the app logs it; the
+  per-user temp dir is too long for the daemon's Unix sockets) (`HOME` and `CODEX_HOME`; on Windows also `USERPROFILE`, `APPDATA`,
   `LOCALAPPDATA`), so the hooks install lands in the sandbox. Electron's
   userData goes into the sandbox too (`--user-data-dir`, through
   `control-wmux launch`).

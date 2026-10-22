@@ -29,6 +29,9 @@ import {
   parseUserDataLog,
   processStartQuery,
   purgeSuffixedData,
+  resolvedPath,
+  resolveUserDataRecord,
+  samePath,
   sameProcess,
   scrubEnv,
   signalProcess,
@@ -190,6 +193,60 @@ describe('Electron userData of a suffixed instance', () => {
     const line = `[Main] WMUX_DATA_SUFFIX="-verify-a" → userData="${ud}"`;
     expect(parseUserDataLog(['noise', line, 'more'].join('\n'))).toEqual({ suffix: '-verify-a', userData: ud });
     expect(parseUserDataLog('[Main] something else')).toBeNull();
+  });
+
+  describe('the userData field launch and doctor print (resolveUserDataRecord)', () => {
+    const roaming = W('C:', 'Users', 'u', 'AppData', 'Roaming');
+    const predicted = { path: W(roaming, 'wmux-verify-a'), existedBeforeLaunch: false };
+    const logLine = (ud) => `noise\n[Main] WMUX_DATA_SUFFIX="-verify-a" → userData="${ud}"\nmore`;
+
+    it('is the path the app logged, not the prediction', () => {
+      const actual = W('D:', 'elsewhere', 'wmux-verify-a');
+      const rec = resolveUserDataRecord({ recorded: predicted, logged: parseUserDataLog(logLine(actual)), platform: 'win32' });
+      expect(rec).toEqual({ path: actual, existedBeforeLaunch: null, predicted: predicted.path, source: 'logged' });
+    });
+
+    it('takes the logged spelling and keeps the pre-launch record when both name one dir', () => {
+      const logged = W(roaming.toUpperCase(), 'wmux-verify-a');
+      const rec = resolveUserDataRecord({ recorded: predicted, logged: parseUserDataLog(logLine(logged)), platform: 'win32' });
+      expect(rec).toEqual({ path: logged, existedBeforeLaunch: false, source: 'logged' });
+    });
+
+    it('falls back to the prediction, labelled predicted, only when the line is absent', () => {
+      expect(resolveUserDataRecord({ recorded: predicted, logged: parseUserDataLog('no such line'), platform: 'win32' }))
+        .toEqual({ ...predicted, source: 'predicted' });
+      expect(resolveUserDataRecord({ recorded: null, logged: null, platform: 'win32' })).toBeNull();
+    });
+  });
+});
+
+describe('samePath resolves links', () => {
+  let root;
+  let link;
+  afterEach(() => {
+    // The link itself first (rmdir/unlink), so cleanup never walks into its target.
+    if (link) {
+      if (process.platform === 'win32') fs.rmdirSync(link);
+      else fs.unlinkSync(link);
+    }
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+    root = null;
+    link = null;
+  });
+
+  it('matches a path through a linked tmp dir with its resolved form, existing or not yet', () => {
+    // Everything inside this test's own temp dir: `real` stands in for
+    // /private/tmp and `tmp` for the /tmp symlink (a junction on Windows).
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-samepath-'));
+    const real = path.join(root, 'real');
+    fs.mkdirSync(path.join(real, 'wmux-fr-x', 'electron-user-data-e2e'), { recursive: true });
+    link = path.join(root, 'tmp');
+    fs.symlinkSync(real, link, process.platform === 'win32' ? 'junction' : 'dir');
+    expect(samePath(path.join(link, 'wmux-fr-x', 'electron-user-data-e2e'), path.join(real, 'wmux-fr-x', 'electron-user-data-e2e'))).toBe(true);
+    // userData the app has not created yet: no realpath of its own.
+    expect(samePath(path.join(link, 'wmux-fr-x', 'not-yet', 'deeper'), path.join(real, 'wmux-fr-x', 'not-yet', 'deeper'))).toBe(true);
+    expect(samePath(path.join(link, 'wmux-fr-x', 'a'), path.join(real, 'wmux-fr-x', 'b'))).toBe(false);
+    expect(resolvedPath(path.join(link, 'wmux-fr-x', 'not-yet'))).toBe(path.join(fs.realpathSync.native(real), 'wmux-fr-x', 'not-yet'));
   });
 });
 
@@ -503,7 +560,13 @@ describe('ownedCdpPort', () => {
     // Logged, but the claim does not name us (yet): no port.
     fs.writeFileSync(path.join(dir, 'wmux-cdp-18831.lock'), '1');
     expect(ownedCdpPort(dir, 29944, 18831)).toBeNull();
-    // No log line yet: the claim lookup.
-    expect(ownedCdpPort(dir, 29944, null)).toBe(18801);
+  });
+
+  it('has no port until the app logs "CDP requested", even when a stale claim names the pid', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-cdp-owned-'));
+    fs.writeFileSync(path.join(dir, 'wmux-cdp-18801.lock'), '29944');
+    expect(findClaimedPort(dir, 29944)).toBe(18801);
+    expect(ownedCdpPort(dir, 29944, null)).toBeNull();
+    expect(ownedCdpPort(dir, 29944, parseCdpLog('[WinMux] starting').requested)).toBeNull();
   });
 });

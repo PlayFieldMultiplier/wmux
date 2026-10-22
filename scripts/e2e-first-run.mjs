@@ -508,6 +508,9 @@ async function scenario() {
   await step('launch', async () => {
     const r = await must(['launch', '--app', app, '--suffix', suffix, '--env-file', envFile, '--user-data-dir', userDataDirArg, '--timeout', '120000'], { timeoutMs: 150_000 });
     result.observed.cdpPort = r.cdpPort;
+    // The userData the app logged at boot; launch labels a fallback to its
+    // prediction 'predicted'.
+    result.observed.userData = { path: r.userData, source: r.userDataSource };
     result.evidenceDir = r.evidenceDir;
     await recordTree();
     return { pid: r.pid, cdpPort: r.cdpPort };
@@ -594,8 +597,8 @@ async function scenario() {
   await step('wizard finishes', async () => {
     const r = await cw(['wait-settle', '--testid', 'first-run-wizard', '--state', 'hidden', '--quiet', '0', '--timeout', '20000'], { timeoutMs: 45_000 });
     if (!r.ok) throw new StepError('the wizard stayed open after the sample task succeeded');
-    const marker = path.join(`${userDataDirArg}${suffix}`, '.first-run');
-    return { completionMarker: fs.existsSync(marker) ? marker : 'not found where expected (informational)' };
+    const marker = result.observed.userData?.path ? path.join(result.observed.userData.path, '.first-run') : null;
+    return { completionMarker: marker && fs.existsSync(marker) ? marker : 'not found where expected (informational)' };
   });
 
   await step('agent ran in the pane', async () => {

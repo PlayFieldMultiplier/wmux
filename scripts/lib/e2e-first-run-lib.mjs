@@ -4,6 +4,7 @@
 // scripts/__tests__/e2eFirstRun.test.mjs.
 //
 // No shebang: a vitest test imports this file.
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { collectProcessTree, parseCimDate } from '../perf-process-tree.mjs';
@@ -47,10 +48,16 @@ export const SANDBOX_PREFIX = 'wmux-fr-';
  * macOS's per-user temp dir (/var/folders/<2>/<28>/T) pushes them past the
  * 104-byte sun_path limit, so every pty:create fails with `listen EINVAL`.
  * The same choice e2e/lib.mjs makeSandbox and src/test-utils/isolateDataDir.ts
- * make.
+ * make. Resolved (/private/tmp): the app logs its userData through the
+ * resolved path, and a path the driver predicts must read the same.
+ * `realpath` is for tests; by default it resolves only on macOS itself.
  */
-export function sandboxBase(platform = process.platform, tmpdir = os.tmpdir()) {
-  return platform === 'darwin' ? '/tmp' : tmpdir;
+export function sandboxBase(
+  platform = process.platform,
+  tmpdir = os.tmpdir(),
+  realpath = (p) => (process.platform === platform ? fs.realpathSync.native(p) : p),
+) {
+  return platform === 'darwin' ? realpath('/tmp') : tmpdir;
 }
 
 /** The env key holding PATH, in whatever case this environment spells it. */

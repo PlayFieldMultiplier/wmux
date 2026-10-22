@@ -4,7 +4,7 @@ A fresh profile opens the "Welcome to wmux" wizard (Claude Code detection, MCP r
 
 ## Sub-features
 
-- `frw-show`: wizard opens on boot when `<userData>/.first-run` is missing.
+- `frw-show`: wizard opens on boot when `<userData>/.first-run` is missing (`<userData>` is the `userData` field `control-wmux doctor` prints).
 - `frw-status`: rows show Claude Code detected / MCP registered / hooks / statusline state (read-only probes).
 - `frw-dismiss`: "Skip for now", the Close button or Escape closes it and records completion.
 - `frw-reopen`: Settings › General › "Open setup wizard" reopens it in reopen mode (no auto-update row, sample task disabled).

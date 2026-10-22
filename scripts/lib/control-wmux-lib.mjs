@@ -85,12 +85,12 @@ export function findClaimedPort(dir, pid) {
  * The CDP port of the app `pid`: the port its own log says it requested, once
  * the claim for that port names the pid. Claims are never cleaned up, so a
  * stale one left by an earlier process whose pid the app now reuses names
- * the pid too; the log decides. Without that log line (yet), the claim that
- * names the pid.
+ * the pid too; only the log decides. Until the app has logged that line
+ * there is no port, and the caller keeps polling.
  */
 export function ownedCdpPort(dir, pid, requested) {
-  if (requested) return claimOwnedBy(dir, requested, pid) ? requested : null;
-  return findClaimedPort(dir, pid);
+  if (!requested) return null;
+  return claimOwnedBy(dir, requested, pid) ? requested : null;
 }
 
 /** Does the claim file for `port` still name `pid` as its owner? */
@@ -236,12 +236,62 @@ export function parseUserDataLog(text) {
   return m ? { suffix: m[1], userData: m[2] } : null;
 }
 
-/** The same path? Case-insensitive and separator-blind on Windows. */
+/**
+ * `p` with every link in it resolved (macOS /tmp -> /private/tmp, a Windows
+ * junction or 8.3 short name), also for a path that does not exist yet: the
+ * longest existing ancestor is resolved and the rest re-joined. Only on the
+ * platform this process runs on; a path for another platform comes back as
+ * given.
+ */
+export function resolvedPath(p, platform = process.platform) {
+  if (!p || platform !== process.platform) return p;
+  const pm = platform === 'win32' ? path.win32 : path.posix;
+  let head = pm.resolve(p);
+  const tail = [];
+  for (;;) {
+    try {
+      return pm.join(fs.realpathSync.native(head), ...tail);
+    } catch {
+      const parent = pm.dirname(head);
+      if (parent === head) return p;
+      tail.unshift(pm.basename(head));
+      head = parent;
+    }
+  }
+}
+
+/**
+ * The same path? Links are resolved on both sides (resolvedPath), so the
+ * `/private/tmp/…` macOS logs matches a predicted `/tmp/…`. Case-insensitive
+ * and separator-blind on Windows.
+ */
 export function samePath(a, b, platform = process.platform) {
   if (!a || !b) return false;
-  if (platform !== 'win32') return path.posix.normalize(a) === path.posix.normalize(b);
+  const ra = resolvedPath(a, platform);
+  const rb = resolvedPath(b, platform);
+  if (platform !== 'win32') return path.posix.normalize(ra) === path.posix.normalize(rb);
   const norm = (s) => path.win32.normalize(s).replace(/[\\/]+$/, '').toLowerCase();
-  return norm(a) === norm(b);
+  return norm(ra) === norm(rb);
+}
+
+/**
+ * The userData record `launch` keeps in state.json and `launch`/`doctor`
+ * print. `recorded` is the record taken before launch (`{ path,
+ * existedBeforeLaunch }` of the predicted path; null in a state from an older
+ * driver); `logged` is parseUserDataLog of the app's log (null when the line
+ * is absent).
+ *   - Logged: `path` is the logged path, `source` 'logged'. When it is the
+ *     predicted path the pre-launch record still holds; otherwise nobody saw
+ *     that path absent before launch, so `existedBeforeLaunch` is null.
+ *   - Not logged (an older build, or not yet): the prediction, `source`
+ *     'predicted'.
+ */
+export function resolveUserDataRecord({ recorded, logged, platform = process.platform }) {
+  if (!logged) return recorded ? { ...recorded, source: recorded.source ?? 'predicted' } : null;
+  if (recorded && samePath(logged.userData, recorded.path, platform)) {
+    return { ...recorded, path: logged.userData, source: 'logged' };
+  }
+  return { path: logged.userData, existedBeforeLaunch: null, predicted: recorded ? recorded.predicted ?? recorded.path : null, source: 'logged' };
 }
 
 /** Does anything (a file, a dir, a link, even a dangling one) sit at `p`? */

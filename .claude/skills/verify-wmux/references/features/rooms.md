@@ -24,7 +24,7 @@ The right dock is always a workspace's room: the room's bots as chips, its threa
 
 Preconditions:
 
-- Baseline state on a launched instance; note the suffix and read the active workspace id from `~/Library/Application Support/wmux<suffix>/session.json` (`activeWorkspaceId`).
+- Baseline state on a launched instance; note the suffix and read the active workspace id from `<userData>/session.json` (`activeWorkspaceId`), where `<userData>` is the `userData` field `control-wmux doctor` prints (the path the app logged; NOT VERIFIED unless `userDataSource` is `logged`).
 - `control-wmux stop` (data kept), then seed `~/.wmux<suffix>/`: `factory/settings.json` `{"version":1,"enabled":true,"hqWorkspaceId":null}` (or the workspace id for the HQ room); `factory/rooms/<ws>.jsonl`, one card per line (`version:1`, unique `id`, `seq` from 1, `workspaceId` = that workspace, `threadId` such as `general`, `pr:github.com/<owner>/<repo>#N`, `issue:…#N`, `task:<id>`, `plan:<id>`, `report:<id>`, `kind`, `at`, `actor`, `title`); for a question, a `question` card with `state:"open"` and `refs.decisionId`, plus that decision in `deck-decisions.json` (`{"<ws>":[{id, question, options, context, status:"pending", raisedAt, origin:"ask_person", threadId, handoffId}]}`). Then `control-wmux launch --suffix <same suffix>`.
 
 - **Gate, factory off.** On a profile without the seed: `control-wmux inspect --js "({toggle: !!document.querySelector('[data-testid=room-dock-toggle]'), off: !!document.querySelector('[data-testid=room-factory-off]')})"` returns both `true` with the dock open (click `room-dock-toggle` first if it is closed). Do not click `room-factory-turn-on` here: it starts the bot runtime.

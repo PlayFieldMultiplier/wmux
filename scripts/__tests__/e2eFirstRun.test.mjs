@@ -296,7 +296,11 @@ describe('macOS daemon sockets fit sun_path', () => {
   });
 
   it('keeps the sandbox off the long per-user temp dir on macOS only', () => {
-    expect(sandboxBase('darwin', '/var/folders/ab/cdefghijklmnopqrstuvwxyz0123/T')).toBe('/tmp');
+    const asIs = (p) => p;
+    expect(sandboxBase('darwin', '/var/folders/ab/cdefghijklmnopqrstuvwxyz0123/T', asIs)).toBe('/tmp');
+    // Resolved, so the sandbox paths the driver predicts read like the
+    // /private/tmp/… the app logs.
+    expect(sandboxBase('darwin', '/var/folders/ab/cdefghijklmnopqrstuvwxyz0123/T', (p) => (p === '/tmp' ? '/private/tmp' : p))).toBe('/private/tmp');
     expect(sandboxBase('linux', '/tmp')).toBe('/tmp');
     expect(sandboxBase('win32', path.win32.join('C:', 'Temp'))).toBe(path.win32.join('C:', 'Temp'));
   });
@@ -312,8 +316,8 @@ describe('macOS daemon sockets fit sun_path', () => {
     expect(idShape, 'pty.handler.ts no longer builds `daemon-<uuid prefix>` session ids; update this check').not.toBeNull();
     const sessionId = `daemon-${'f'.repeat(Number(idShape[1]))}`;
     // mkdtemp appends six characters. /tmp is a symlink to /private/tmp on
-    // macOS: count the resolved form, the longer one.
-    const home = path.posix.join('/private', sandboxBase('darwin'), `${SANDBOX_PREFIX}XXXXXX`);
+    // macOS, and sandboxBase returns the resolved form, the longer one.
+    const home = path.posix.join(sandboxBase('darwin', undefined, () => '/private/tmp'), `${SANDBOX_PREFIX}XXXXXX`);
     Object.defineProperty(process, 'platform', { ...realPlatform, value: 'darwin' });
     vi.stubEnv('HOME', home);
     // os.homedir() reads USERPROFILE on a Windows host; same value as HOME.

@@ -50,7 +50,7 @@ import {
   processListQuery,
   processStartQuery,
   purgeSuffixedData,
-  samePath,
+  resolveUserDataRecord,
   scrubEnv,
   signalProcess,
   stopRecordedApp,
@@ -425,7 +425,10 @@ async function cmdLaunch(opts, reconnectState = null) {
       lastErr = `CDP disabled (${disabled || 'app log says so'}); the UI cannot be driven`;
       break;
     }
-    state.cdpPort = ownedCdpPort(CLAIM_DIR, state.pid, log.requested) ?? state.cdpPort;
+    // Only the port the app logged; until that line lands, keep polling.
+    state.cdpPort = ownedCdpPort(CLAIM_DIR, state.pid, log.requested);
+    if (!log.requested) lastErr = 'waiting for the app to log "CDP requested on port N"';
+    else if (!state.cdpPort) lastErr = `the claim for logged port ${log.requested} does not name pid ${state.pid} (yet)`;
     if (state.cdpPort) {
       const targets = await httpJson(`http://127.0.0.1:${state.cdpPort}/json/list`);
       if (Array.isArray(targets) && targets.some(isMainWindowTarget)) {
@@ -440,16 +443,18 @@ async function cmdLaunch(opts, reconnectState = null) {
     }
     await sleep(500);
   }
-  // The app logs where its userData really is. If that is not the path whose
-  // pre-launch state was recorded, nobody saw that one absent: unknown.
-  const logged = parseUserDataLog(fs.readFileSync(logPath, 'utf8'));
-  if (state.userData && logged && !samePath(logged.userData, state.userData.path)) {
-    state.userData = { path: logged.userData, existedBeforeLaunch: null, predicted: state.userData.path };
-  }
+  // The app logs where its userData really is; that path, not the
+  // prediction, is what launch and doctor print and stop --purge removes.
+  state.userData = resolveUserDataRecord({ recorded: state.userData, logged: parseUserDataLog(fs.readFileSync(logPath, 'utf8')) });
   writeState(state);
   timeline(state, { cmd: 'launch', ready, cdpPort: state.cdpPort, userData: state.userData, note: ready ? 'ready' : lastErr });
   if (!ready) fail(`launch not ready: ${lastErr}. The process is still recorded; run \`doctor\`, then \`stop\`.`);
-  return { ok: true, runId, suffix, pid: state.pid, cdpPort: state.cdpPort, app, evidenceDir: dir, log: logPath };
+  return { ok: true, runId, suffix, pid: state.pid, cdpPort: state.cdpPort, app, ...userDataFields(state.userData), evidenceDir: dir, log: logPath };
+}
+
+/** `userData` (the path) and `userDataSource` ('logged' or 'predicted') for launch and doctor output. */
+function userDataFields(record) {
+  return { userData: record?.path ?? null, userDataSource: record ? record.source ?? 'predicted' : null };
 }
 
 function appVersion(app) {
@@ -474,8 +479,17 @@ async function cmdDoctor() {
   checks.pid = state.pid;
   checks.alive = pidAlive(state.pid);
   if (!checks.alive) problems.push(`wmux pid ${state.pid} is not running`);
-  const log = parseCdpLog(fs.existsSync(state.logPath) ? fs.readFileSync(state.logPath, 'utf8') : '');
+  const logText = fs.existsSync(state.logPath) ? fs.readFileSync(state.logPath, 'utf8') : '';
+  const log = parseCdpLog(logText);
   checks.cdpLog = log;
+  // A launch that gave up before the app logged its userData line recorded
+  // the prediction; take the logged path now, and keep it for stop --purge.
+  const userData = resolveUserDataRecord({ recorded: state.userData ?? null, logged: parseUserDataLog(logText) });
+  if (JSON.stringify(userData) !== JSON.stringify(state.userData ?? null)) {
+    state.userData = userData;
+    writeState(state);
+  }
+  if (userData?.source === 'predicted') problems.push('the app has not logged its userData line; `userData` is the predicted path');
   checks.cdpDisabled = cdpDisabledReason(state.suffix) || (log.disabled ? 'app log: CDP disabled' : null);
   if (checks.cdpDisabled) problems.push(`CDP disabled: ${checks.cdpDisabled}`);
   checks.cdpPort = state.cdpPort;
@@ -507,7 +521,7 @@ async function cmdDoctor() {
   }
   const consoleErrors = readConsole(state, { errors: true }).length;
   checks.consoleErrors = consoleErrors;
-  const result = { ok: problems.length === 0, healthy: problems.length === 0, problems, checks, evidenceDir: evidenceDir(state) };
+  const result = { ok: problems.length === 0, healthy: problems.length === 0, problems, ...userDataFields(userData), checks, evidenceDir: evidenceDir(state) };
   fs.writeFileSync(path.join(evidenceDir(state), 'doctor.json'), `${JSON.stringify(result, null, 2)}\n`);
   timeline(state, { cmd: 'doctor', healthy: result.healthy, problems });
   return result;

@@ -10,7 +10,7 @@ Settings is a full rail page (not a modal) with a searchable nav of 16 tabs grou
 - `settings-search`: "Search settings" with grouped results and an empty state.
 - `settings-theme`: Appearance › Theme radio cards (Tint, Paper, Mono, …).
 - `settings-language`: General › Language select (`en`, `ko`, `ja`, …).
-- `settings-persist`: values survive in `<userData>/session.json`.
+- `settings-persist`: values survive in `<userData>/session.json`, where `<userData>` is the `userData` field `control-wmux doctor` (or `launch`) prints.
 - `settings-terminal-engine`: Node/Rust selection, running-host read-back and restart guidance; requires a native-enabled build for Rust.
 
 ## How to get to it (user POV)
@@ -30,17 +30,21 @@ Preconditions:
 - **Close / reopen by keyboard.** `control-wmux press --key Escape`, then `control-wmux wait-settle --testid settings-page-title --state hidden`; `control-wmux press --key Meta+Comma` reopens it.
 - **Switch tab.** Run `control-wmux click --selector '[data-settings-tab="appearance"]'`. The tab gets `aria-current="page"` and the title reads "Appearance".
 - **Change theme.** Run `control-wmux click --role radio --name Paper`. `control-wmux inspect --js "document.documentElement.dataset.theme"` returns `"paper"` immediately.
-- **Persistence (second view).** The UI autosaves every 5 s, so poll the profile file with a bound instead of sleeping; this prints `paper` (anything else after 15 s is NOT VERIFIED):
+- **Persistence (second view).** The UI autosaves every 5 s, so poll the profile file with a bound instead of sleeping. The file is `<userData>/session.json`, with `<userData>` taken from `doctor`'s output, never a hard-coded path: the app logs where its userData really is, and a guessed path can hold a stale file from an earlier run. This prints `paper` (anything else after 15 s, or a `userDataSource` other than `logged`, is NOT VERIFIED):
 
   ```sh
-  python3 - <suffix> <<'PY'
-  import json, os, sys, time
-  f = os.path.expanduser(f"~/Library/Application Support/wmux{sys.argv[1]}/session.json")
+  python3 - <<'PY'
+  import json, os, subprocess, sys, time
+  d = json.loads(subprocess.run(["node", "scripts/control-wmux.mjs", "doctor"], capture_output=True, text=True).stdout)
+  if d.get("userDataSource") != "logged":
+      sys.exit(f"userData not logged by the app: {d.get('userData')} ({d.get('userDataSource')})")
+  f = os.path.join(d["userData"], "session.json")
   end, theme = time.time() + 15, None
   while time.time() < end:
-      theme = json.load(open(f)).get("theme")
-      if theme == "paper":
-          break
+      if os.path.exists(f):
+          theme = json.load(open(f)).get("theme")
+          if theme == "paper":
+              break
       time.sleep(0.5)
   print(theme)
   PY
