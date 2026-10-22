@@ -42,6 +42,7 @@ export type TailscaleExec = (
 
 export type TailscaleProblem =
   | 'not-installed'
+  | 'not-running'
   | 'not-logged-in'
   | 'needs-machine-auth'
   | 'stopped'
@@ -268,6 +269,12 @@ export function describeTailscaleProblem(
         '  • Install it from https://tailscale.com/download, then run `tailscale up`.',
         '  • On Windows the CLI ships with the desktop app; a fresh install may need',
         '    a new terminal before PATH picks it up.',
+      );
+      break;
+    case 'not-running':
+      push(
+        'Error: Tailscale is off: it is installed but not running.',
+        '  • Open the Tailscale app (or start the tailscaled service), then retry.',
       );
       break;
     case 'not-logged-in':
@@ -507,15 +514,232 @@ export async function removeTailscaleServe(opts: {
  * (owner-reported 2026-07-27; `getExecEnv()` covers the symlink case, the
  * bundle path covers a stock install).
  */
-export function tailscaleCandidates(): string[] {
-  if (process.platform === 'win32') {
-    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
-    return ['tailscale.exe', path.join(programFiles, 'Tailscale', 'tailscale.exe')];
+export function tailscaleCandidates(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (platform === 'win32') {
+    return ['tailscale.exe', ...windowsTailscaleDirs(env).map((dir) => path.win32.join(dir, 'tailscale.exe'))];
   }
-  if (process.platform === 'darwin') {
-    return ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale'];
+  if (platform === 'darwin') {
+    // A Homebrew or hand-made symlink is found as a bare `tailscale`, because
+    // `getExecEnv()` adds the Homebrew prefixes to PATH. The app bundle may
+    // also have been dragged into the per-user Applications folder.
+    const home = env['HOME'];
+    return [
+      'tailscale',
+      MAC_APP_CLI,
+      ...(home ? [path.posix.join(home, MAC_APP_CLI)] : []),
+    ];
   }
   return ['tailscale'];
+}
+
+const MAC_APP_CLI = '/Applications/Tailscale.app/Contents/MacOS/Tailscale';
+
+/**
+ * Where the Windows installer puts Tailscale. `ProgramW6432` is the 64-bit
+ * Program Files even from a 32-bit process, whose own `ProgramFiles` points
+ * at `Program Files (x86)`.
+ */
+function windowsTailscaleDirs(env: NodeJS.ProcessEnv): string[] {
+  const roots = [env['ProgramFiles'] || 'C:\\Program Files', env['ProgramW6432']].filter((r): r is string => !!r);
+  return [...new Set(roots)].map((root) => path.win32.join(root, 'Tailscale'));
+}
+
+/** The page the "download" action opens: Tailscale's official download page. */
+export const TAILSCALE_DOWNLOAD_URL = 'https://tailscale.com/download';
+
+/**
+ * How to bring the Tailscale app to the front, per platform, or null where
+ * there is no app to open (Linux runs the daemon only).
+ *
+ * Opening the app is the MOST a click on the checklist ever does: signing in,
+ * connecting and `tailscale up` stay the person's own act inside Tailscale.
+ * On Windows the candidates are absolute paths, so the caller launches the
+ * first one that exists and falls back to the download page.
+ */
+export function tailscaleAppLaunch(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): { cmd: string; args: string[] }[] | null {
+  if (platform === 'darwin') return [{ cmd: 'open', args: ['-a', 'Tailscale'] }];
+  if (platform === 'win32') {
+    return windowsTailscaleDirs(env).map((dir) => ({ cmd: path.win32.join(dir, 'tailscale-ipn.exe'), args: [] }));
+  }
+  return null;
+}
+
+// === connection checklist ===================================================
+//
+// The Remote page's four checks, read from ONE `tailscale status --json`:
+//
+//   installed ── the CLI ran at all                   fail → download page
+//   signed-in ── the daemon answered and has a login   fail → open Tailscale
+//   self      ── this PC is Running and online         fail → open Tailscale
+//   peer      ── the other PC or phone is online       fail → how to sign it in
+//
+// The first failure is the only one with an action; the checks after it are
+// `unchecked`, since they cannot be known (or acted on) until it is fixed.
+// Read-only like `diagnoseTailscale`: nothing here runs `up`, `login` or any
+// other command that changes Tailscale.
+
+export type TailscaleCheckId = 'installed' | 'signed-in' | 'self' | 'peer';
+export type TailscaleFix = 'download' | 'open-app' | 'sign-in' | 'peer-help';
+export type TailscaleCheckReason =
+  | 'not-installed'
+  | 'not-running'
+  | 'signed-out'
+  | 'unreadable'
+  | 'needs-approval'
+  | 'stopped'
+  | 'offline'
+  | 'no-peer'
+  | 'peer-offline';
+
+export interface TailscaleCheckItem {
+  id: TailscaleCheckId;
+  state: 'pass' | 'fail' | 'unchecked';
+  reason?: TailscaleCheckReason;
+  fix?: TailscaleFix;
+}
+
+export interface TailscaleChecklist {
+  /** Always the four items, in the order above. */
+  items: TailscaleCheckItem[];
+  ok: boolean;
+  /** This PC's tailnet name, when signed in. */
+  selfName?: string;
+  /** Other devices on the tailnet that are online now. */
+  peersOnline?: number;
+}
+
+const CHECK_IDS: readonly TailscaleCheckId[] = ['installed', 'signed-in', 'self', 'peer'];
+
+/**
+ * The four checks from what `tailscale status --json` returned (or how it
+ * failed). `peer` names the device to look for — its MagicDNS name, short
+ * host name or tailnet address; without one, any other online device passes.
+ */
+export function classifyTailscaleChecklist(
+  input: { stdout: string } | { error: unknown },
+  peer?: string,
+): TailscaleChecklist {
+  const items: TailscaleCheckItem[] = CHECK_IDS.map((id) => ({ id, state: 'unchecked' }));
+  const result = (extra: Omit<TailscaleChecklist, 'items' | 'ok'> = {}): TailscaleChecklist => ({
+    items,
+    ok: items.every((i) => i.state === 'pass'),
+    ...extra,
+  });
+  const passUntil = (n: number): void => {
+    for (let i = 0; i < n; i++) items[i] = { id: CHECK_IDS[i], state: 'pass' };
+  };
+  const fail = (n: number, reason: TailscaleCheckReason, fix: TailscaleFix, extra?: Omit<TailscaleChecklist, 'items' | 'ok'>) => {
+    passUntil(n);
+    items[n] = { id: CHECK_IDS[n], state: 'fail', reason, fix };
+    return result(extra);
+  };
+
+  if ('error' in input) {
+    const problem = classifyStatusError(input.error);
+    if (problem === 'not-installed') return fail(0, 'not-installed', 'download');
+    if (problem === 'not-logged-in') return fail(1, 'signed-out', 'sign-in');
+    if (problem === 'stopped') return fail(2, 'stopped', 'open-app');
+    return fail(1, problem === 'not-running' ? 'not-running' : 'unreadable', 'open-app');
+  }
+
+  let status: Record<string, unknown>;
+  try {
+    status = asRecord(JSON.parse(input.stdout));
+  } catch {
+    return fail(1, 'unreadable', 'open-app');
+  }
+  const state = typeof status['BackendState'] === 'string' ? status['BackendState'] : '';
+  if (!state) return fail(1, 'unreadable', 'open-app');
+  if (state === 'NeedsLogin' || state === 'NoState') return fail(1, 'signed-out', 'sign-in');
+
+  const self = asRecord(status['Self']);
+  const selfName = typeof self['HostName'] === 'string' && self['HostName'] ? self['HostName'] : undefined;
+  const named = selfName ? { selfName } : {};
+  if (state === 'NeedsMachineAuth') return fail(2, 'needs-approval', 'open-app', named);
+  if (state === 'Stopped') return fail(2, 'stopped', 'open-app', named);
+  // `Online` is absent from older clients; only an explicit false counts.
+  if (state !== 'Running' || self['Online'] === false) return fail(2, 'offline', 'open-app', named);
+
+  const peers = Object.values(asRecord(status['Peer'])).map(asRecord);
+  const peersOnline = peers.filter((p) => p['Online'] === true).length;
+  const extra = { ...named, peersOnline };
+  const target = normalizeTailnetName(peer ?? '');
+  if (target) {
+    const match = peers.find((p) => peerMatches(p, target));
+    if (!match) return fail(3, 'no-peer', 'peer-help', extra);
+    if (match['Online'] !== true) return fail(3, 'peer-offline', 'peer-help', extra);
+  } else if (peersOnline === 0) {
+    return fail(3, 'no-peer', 'peer-help', extra);
+  }
+  passUntil(4);
+  return result(extra);
+}
+
+function normalizeTailnetName(v: string): string {
+  return v.trim().replace(/\.$/, '').toLowerCase();
+}
+
+/** Is this `Peer` entry the device `target` names (MagicDNS name, its first label, host name, or a tailnet IP)? */
+function peerMatches(p: Record<string, unknown>, target: string): boolean {
+  const dns = normalizeTailnetName(typeof p['DNSName'] === 'string' ? p['DNSName'] : '');
+  const host = normalizeTailnetName(typeof p['HostName'] === 'string' ? p['HostName'] : '');
+  const ips = Array.isArray(p['TailscaleIPs']) ? p['TailscaleIPs'].filter((x): x is string => typeof x === 'string') : [];
+  return (
+    (dns !== '' && (dns === target || dns.split('.')[0] === target)) ||
+    (host !== '' && host === target) ||
+    ips.includes(target)
+  );
+}
+
+/**
+ * Run the checklist. One `tailscale status --json` and nothing else; an abort
+ * (the caller's deadline) reads as "could not read the status", which never
+ * blocks a connection on its own.
+ */
+export async function checkTailscale(opts: {
+  peer?: string;
+  exec?: TailscaleExec;
+  signal?: AbortSignal;
+}): Promise<TailscaleChecklist> {
+  const exec = opts.exec ?? (execFileAsync as unknown as TailscaleExec);
+  let stdout: string;
+  try {
+    stdout = (await runTailscale(exec, ['status', '--json'], opts.signal)).stdout;
+  } catch (err) {
+    return classifyTailscaleChecklist({ error: err }, opts.peer);
+  }
+  return classifyTailscaleChecklist({ stdout }, opts.peer);
+}
+
+/**
+ * Development seam (unpackaged builds only — the caller gates it): an exec
+ * that answers `tailscale status --json` from a fixture file instead of the
+ * real CLI, so a failed checklist can be shown on a machine whose Tailscale
+ * is fine without touching it. A missing file reads as "not installed", a
+ * file starting with `stderr:` as a failed status with that text. Every other
+ * command is refused, so a dev build pointed at a fixture can never write a
+ * serve configuration.
+ */
+export function fixtureTailscaleExec(file: string, readFile: (p: string) => Promise<string>): TailscaleExec {
+  return async (_cmd, args) => {
+    if (args.length !== 2 || args[0] !== 'status' || args[1] !== '--json') {
+      throw Object.assign(new Error('tailscale fixture: read-only, only `status --json` is answered'), { stderr: 'fixture: refused' });
+    }
+    let text: string;
+    try {
+      text = await readFile(file);
+    } catch {
+      throw Object.assign(new Error('spawn tailscale ENOENT'), { code: 'ENOENT' });
+    }
+    if (text.startsWith('stderr:')) throw Object.assign(new Error('Command failed'), { stderr: text.slice(7).trim() });
+    return { stdout: text, stderr: '' };
+  };
 }
 
 async function runTailscale(
@@ -572,6 +796,12 @@ export function classifyStatusError(err: unknown): TailscaleProblem {
   const text = errText(err);
   if (/logged out|needs ?login|not logged in|please run:? tailscale up/i.test(text)) return 'not-logged-in';
   if (/is stopped|tailscale is stopped/i.test(text)) return 'stopped';
+  // The CLI is there but its daemon does not answer: the app was quit, or the
+  // service is not started. Matched loosely, since the wording differs by
+  // platform and version; what they share is "could not reach tailscaled".
+  if (/failed to connect to (the )?local tailscale|is tailscale(d)? running|tailscaled.*(not running|connection refused)|connect: connection refused|no such file or directory.*tailscaled|cannot connect to .*tailscale/i.test(text)) {
+    return 'not-running';
+  }
   return 'status-unreadable';
 }
 

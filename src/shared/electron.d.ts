@@ -72,6 +72,9 @@ import type {
   WebGrantArgs,
   WebTerminalInfo,
   WebDiagnosis,
+  WebTailscaleChecklist,
+  WebTailscaleOpenResult,
+  WebTailscaleOpenTarget,
 } from './web';
 import type { BrowserHelpOutcome, BrowserHelpRequestInfo } from './browserHelp';
 import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshServiceResult, SshTunnelState } from './remoteHosts';
@@ -312,6 +315,15 @@ declare global {
          * older preload without it keeps the popover on the plain hub.
          */
         diagnose?: () => Promise<WebDiagnosis>;
+        /**
+         * The Remote page's Tailscale checklist: one read-only
+         * `tailscale status --json`, capped at a few seconds. `peer` (a
+         * MagicDNS name, host name or tailnet address) is the device the last
+         * check looks for; without it any other online device passes.
+         */
+        tailscaleCheck?: (peer?: string) => Promise<WebTailscaleChecklist>;
+        /** Open Tailscale's download page, or bring the Tailscale app forward. Only ever from a click. */
+        tailscaleOpen?: (target: WebTailscaleOpenTarget) => Promise<WebTailscaleOpenResult>;
         /**
          * Mint a fresh pairing code. Needed because a code is single-use and
          * expires, which would otherwise leave no way to pair another device

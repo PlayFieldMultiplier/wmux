@@ -7,6 +7,9 @@ import { PopoverSection } from '../ui/Popover';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import { pairReasonMessage } from '../Sidebar/AttachRemoteModal';
+import { TailscaleFixButton } from '../Remote/TailscaleChecklist';
+import { hostOfUrl, tailnetPrecheck } from '../Remote/tailnetCheck';
+import type { TailscaleFix } from '../../../shared/web';
 import { maskPairInput, parseRemotePairInput, type RemotePairInputError } from '../../../shared/remotePairInput';
 import type { RemoteHostPublic, RemoteHostStatus } from '../../../shared/remoteHosts';
 
@@ -82,6 +85,7 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
   const [pairedWith, setPairedWith] = useState<string | null>(null);
   const [pairing, setPairing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tailscaleFix, setTailscaleFix] = useState<TailscaleFix | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
@@ -160,6 +164,7 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
   const handleSubmit = useCallback(async () => {
     const remote = window.electronAPI?.remote;
     if (!remote || pairing) return;
+    setTailscaleFix(null);
     const parsed = parseRemotePairInput(input);
     if (parsed.kind === 'error') {
       setError(t(INPUT_ERROR[parsed.reason]));
@@ -181,6 +186,12 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
     setError(null);
     const replacing = repairTarget;
     try {
+      // An address on the tailnet with Tailscale not carrying it: say so now.
+      const held = await tailnetPrecheck(hostOfUrl(parsed.origin));
+      if (held) {
+        if (mounted.current) { setError(held.text); setTailscaleFix(held.fix ?? null); }
+        return;
+      }
       if (parsed.kind === 'pair') {
         const res = await remote.hostsPair(
           parsed.origin,
@@ -355,6 +366,11 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
               <p className="ui-row-error" role="alert">
                 {error}
               </p>
+            ) : null}
+            {error && tailscaleFix ? (
+              <div className="flex flex-wrap items-center gap-2" data-remote-hub-tailscale-fix>
+                <TailscaleFixButton fix={tailscaleFix} />
+              </div>
             ) : null}
           </div>
         ) : null}

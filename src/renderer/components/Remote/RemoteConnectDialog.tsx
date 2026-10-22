@@ -18,6 +18,9 @@ import { webComputerPairOrigin } from '../../../shared/web';
 import { maskPairInput, parseRemotePairInput } from '../../../shared/remotePairInput';
 import type { A2aRemoteStatus } from '../../../shared/rpc';
 import LanLinkPairPanel from './LanLinkPairPanel';
+import { TailscaleFixButton } from './TailscaleChecklist';
+import { tailnetPrecheck, tailnetTargetOf } from './tailnetCheck';
+import type { TailscaleFix } from '../../../shared/web';
 
 // ─── "Connect a PC…" on the Remote page ──────────────────────────────────────
 //
@@ -143,7 +146,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const [paste, setPaste] = useState('');
   const [masked, setMasked] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: 'muted' | 'danger'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: 'muted' | 'danger'; text: string; fix?: TailscaleFix } | null>(null);
   const [turnedOn, setTurnedOn] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -391,7 +394,12 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   }, [open, api, applyPairStatus]);
 
   /** Connect one pasted piece; the line it leaves for the message. */
-  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string; share?: boolean }> => {
+  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string; share?: boolean; fix?: TailscaleFix }> => {
+    // Every address this piece would try is on the tailnet: when Tailscale
+    // here cannot carry it (off, signed out, the other device not on it), say
+    // so now instead of letting the connect run into its timeout.
+    const held = await tailnetPrecheck(tailnetTargetOf(text));
+    if (held) return { ok: false, ...held };
     if (kindOf(text) === 'a2a') {
       const r = await invite.join(text);
       if (!r) return { ok: false, text: t('remote.pairFailed') };
@@ -432,6 +440,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
     const left: string[] = [];
     let host: string | null = null;
     let shared = false;
+    let fix: TailscaleFix | undefined;
     try {
       for (const part of parts) {
         const r = await connectOne(part);
@@ -440,6 +449,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         if (!r.ok) left.push(part);
         if (r.hostId) host = r.hostId;
         if (r.share) shared = true;
+        fix ??= r.fix;
       }
     } finally {
       if (mounted.current) setBusy(false);
@@ -451,7 +461,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       if (left.length === 0) setMasked(false);
     }
     if (host) setLinkHost(host);
-    setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n') });
+    setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n'), ...(fix ? { fix } : {}) });
   }, [paste, connectOne, t]);
 
   if (tab === null) return null;
@@ -620,6 +630,11 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
               <p className="wmux-a2a-note whitespace-pre-line" data-tone={message.tone === 'danger' ? 'danger' : undefined} role={message.tone === 'danger' ? 'alert' : 'status'} data-testid="remote-connect-message">
                 {message.text}
               </p>
+            )}
+            {message?.fix && (
+              <div className="flex flex-wrap items-center gap-2" data-testid="remote-connect-tailscale-fix">
+                <TailscaleFixButton fix={message.fix} />
+              </div>
             )}
           </div>
         )}

@@ -3,7 +3,8 @@ import { registerQuickCommandHandlers } from './handlers/quickCommand.handler';
 import { registerUsageLimitHandlers } from '../usageLimit/usageLimit.handler';
 import { registerContinueOnAccountHandler } from '../account/continueOnAccount.handler';
 import { registerWorkspaceSettle } from '../workspace/settle/workspaceSettleHost';
-import { ipcMain, nativeTheme, type BrowserWindow } from 'electron';
+import { app, ipcMain, nativeTheme, type BrowserWindow } from 'electron';
+import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import { PTYManager } from '../pty/PTYManager';
 import { PTYBridge } from '../pty/PTYBridge';
@@ -51,6 +52,7 @@ import { registerChatHandlers } from './handlers/chat.handler';
 import { registerChatV2Handlers } from './handlers/chatv2.handler';
 import { registerGuestBotHandlers } from './handlers/guestBots.handler';
 import { registerWebHandlers } from './handlers/web.handler';
+import { fixtureTailscaleExec } from '../../cli/tailscale';
 import { registerAutomationHandlers } from './handlers/automation.handler';
 import { registerAccountHandlers } from './handlers/account.handler';
 import { registerAccountRotationHandlers } from './handlers/accountRotation.handler';
@@ -267,7 +269,15 @@ export function registerAllHandlers(
   const cleanupChat = registerChatHandlers(daemonClient, getWindow);
   // Chat v2 — unconditional like chat: with no daemon every call answers `unavailable`.
   const cleanupChatV2 = registerChatV2Handlers(daemonClient, getWindow);
-  const cleanupWeb = registerWebHandlers(() => daemonClient ?? null);
+  // Development only: WMUX_DEV_TAILSCALE_STATUS names a JSON file that stands
+  // in for `tailscale status --json` (a missing file reads as "not installed"),
+  // so a checklist state can be shown without touching this machine's
+  // Tailscale. Ignored by a packaged build; the fixture refuses every write.
+  const devTailscaleStatus = app?.isPackaged === false ? process.env.WMUX_DEV_TAILSCALE_STATUS : undefined;
+  const cleanupWeb = registerWebHandlers(
+    () => daemonClient ?? null,
+    devTailscaleStatus ? fixtureTailscaleExec(devTailscaleStatus, (f) => readFile(f, 'utf8')) : undefined,
+  );
   // Guest bots (Bots page): unconditional like web, main window only.
   const cleanupGuestBots = registerGuestBotHandlers(() => daemonClient ?? null, getWindow);
   // Scheduled runs — unconditional like web: with no daemon the calls resolve

@@ -139,6 +139,9 @@ import type {
   WebGrantArgs,
   WebTerminalInfo,
   WebDiagnosis,
+  WebTailscaleChecklist,
+  WebTailscaleOpenResult,
+  WebTailscaleOpenTarget,
 } from '../shared/web';
 import { PC_RAIL_IPC } from '../shared/pcRail';
 import type {
@@ -2359,6 +2362,10 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.WEB_SET_GRANTS, args) as Promise<WebTerminalInfo>,
   stop: () => ipcRenderer.invoke(IPC.WEB_STOP) as Promise<WebTerminalInfo>,
   diagnose: () => ipcRenderer.invoke(IPC.WEB_DIAGNOSE) as Promise<WebDiagnosis>,
+  tailscaleCheck: (peer?: string) =>
+    ipcRenderer.invoke(IPC.WEB_TAILSCALE_CHECK, peer ? { peer } : {}) as Promise<WebTailscaleChecklist>,
+  tailscaleOpen: (target: WebTailscaleOpenTarget) =>
+    ipcRenderer.invoke(IPC.WEB_TAILSCALE_OPEN, target) as Promise<WebTailscaleOpenResult>,
   // Roster surface. Unlike the calls above these do NOT resolve a
   // WebTerminalInfo: the device roster is owned by the store, not by a running
   // server, so it answers even while the server is stopped.
