@@ -887,6 +887,19 @@ describe.skipIf(process.platform === 'win32')('the real executable backs the age
     real.arm('pane', 100);
     expect(await real.verifyOwnedRoot('pane', 100, 'opencode')).toBe(true);
   });
+
+  it('an exec pane\'s root is refused when the pane is re-armed while its image is read', async () => {
+    let release: ((image: string) => void) | undefined;
+    const t = imageTracker([entry(100, 1, 'opencode', 'opencode')],
+      () => new Promise<string | undefined>((resolve) => { release = resolve; }), 'darwin');
+    t.arm('pane', 100);
+    const verdict = t.verifyOwnedRoot('pane', 100, 'opencode');
+    await vi.waitFor(() => expect(release).toBeDefined(), { timeout: 5_000 });
+    t.disarm('pane');
+    t.arm('pane', 100);
+    release?.(`${HOME}/.opencode/bin/opencode`);
+    expect(await verdict).toBe(false);
+  });
 });
 
 describe('the executable image reader', () => {

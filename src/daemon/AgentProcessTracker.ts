@@ -1085,12 +1085,18 @@ export class AgentProcessTracker {
    * arbitrary PID or infer its executable from pane text. */
   async verifyOwnedRoot(sessionId: string, pid: number, expectedSlug: AgentSlug): Promise<boolean> {
     if (this.shellPids.get(sessionId) !== pid) return false;
+    // A disarm (even one re-armed with the same pid), or the tracked agent
+    // dying or being replaced, while the table or the image is read. A probe
+    // still in flight may have no state yet; that is not a change.
+    const gen = this.generation.get(sessionId) ?? 0;
+    const state = this.states.get(sessionId);
+    const unchanged = () => (this.generation.get(sessionId) ?? 0) === gen && this.shellPids.get(sessionId) === pid &&
+      (!state || (this.states.get(sessionId) === state && state.alive));
     try {
       const root = (await this.snapshot()).find(entry => entry.pid === pid);
-      return this.shellPids.get(sessionId) === pid && !!root &&
+      return unchanged() && !!root &&
         selectAgentProcess([{ ...root, ppid: -1 }], -1)?.slug === expectedSlug &&
-        await this.imageMatches(root, expectedSlug, this.states.get(sessionId)) &&
-        this.shellPids.get(sessionId) === pid;
+        await this.imageMatches(root, expectedSlug, state) && unchanged();
     } catch { return false; }
   }
 
