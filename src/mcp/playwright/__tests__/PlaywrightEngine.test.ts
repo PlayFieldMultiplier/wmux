@@ -51,6 +51,7 @@ import {
   EXTERNAL_BACKEND_UNSUPPORTED_MESSAGE,
 } from '../../../shared/browserBackend';
 import { __resetSurfaceRoutingForTesting } from '../surfaceRouting';
+import { claimNextDownload } from '../downloadGuard';
 import { createConnectionScope, runInConnectionScope } from '../../connectionScope';
 import { rememberProtection, resetProtectionMemoryForTests } from '../browserScope';
 
@@ -2010,6 +2011,76 @@ describe('PlaywrightEngine live-Chrome attach (Phase 3)', () => {
     const resolved = await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' });
     expect(resolved).toBe(page);
     expect(mockConnectOverCDP).toHaveBeenCalledWith('ws://127.0.0.1:9333/devtools/browser/abc');
+  });
+
+  // Unprotected pane: the engine arms the download guard the first time it
+  // hands the page out, so a download a click starts before any download tool
+  // has run is cancelled and deleted. A protected pane is never armed.
+  function emitterOn(page: { on: ReturnType<typeof vi.fn> }) {
+    const listeners = new Map<string, Array<(arg: unknown) => void>>();
+    page.on.mockImplementation((ev: string, fn: (arg: unknown) => void) => {
+      listeners.set(ev, [...(listeners.get(ev) ?? []), fn]);
+    });
+    return {
+      emit: (ev: string, arg: unknown) => (listeners.get(ev) ?? []).forEach((fn) => fn(arg)),
+      count: (ev: string) => (listeners.get(ev) ?? []).length,
+    };
+  }
+  const fakeDownload = () => ({
+    url: () => 'https://cdn.example/x.bin',
+    cancel: vi.fn(async () => undefined),
+    delete: vi.fn(async () => undefined),
+  });
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('unprotected: a click-started download before any download tool is cancelled and deleted', async () => {
+    const { page, browser } = liveHarness('live-tab-7', 'https://mail.example/');
+    const events = emitterOn(page);
+    mockConnectOverCDP.mockResolvedValue(browser);
+    mockLiveCdpInfo();
+
+    const engine = PlaywrightEngine.getInstance();
+    await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' });
+    await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' });
+    expect(events.count('download')).toBe(1); // armed once per page
+
+    const clicked = fakeDownload();
+    events.emit('download', clicked);
+    await flush();
+    expect(clicked.cancel).toHaveBeenCalled();
+    expect(clicked.delete).toHaveBeenCalled();
+
+    // A download tool's claim still wins: its download passes, the next does not.
+    claimNextDownload(page as never);
+    const claimed = fakeDownload();
+    const stray = fakeDownload();
+    events.emit('download', claimed);
+    events.emit('download', stray);
+    await flush();
+    expect(claimed.cancel).not.toHaveBeenCalled();
+    expect(stray.cancel).toHaveBeenCalled();
+  });
+
+  it('protected: the guard is never armed and a click-started download is left as before', async () => {
+    const { page, browser } = liveHarness('live-tab-7', 'https://mail.example/');
+    const events = emitterOn(page);
+    mockConnectOverCDP.mockResolvedValue(browser);
+    mockLiveCdpInfo();
+
+    const engine = PlaywrightEngine.getInstance();
+    const resolved = await engine.getPageForScope({
+      workspaceId: 'ws-A',
+      surfaceId: 'live-tab-7',
+      protection: { protected: true, epoch: 1, hosts: { mode: 'allowlist', allow: ['mail.example'], block: [] } },
+    } as never);
+    expect(resolved).toBe(page);
+    // The lifecycle mirror was attached (same door), the guard was not.
+    expect(events.count('framenavigated')).toBeGreaterThan(0);
+    expect(events.count('download')).toBe(0);
+    const clicked = fakeDownload();
+    events.emit('download', clicked);
+    await flush();
+    expect(clicked.cancel).not.toHaveBeenCalled();
   });
 
   it('a pinned surfaceId naming no live target still fails (no lenient fallback)', async () => {

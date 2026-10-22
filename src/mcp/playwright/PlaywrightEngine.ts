@@ -13,6 +13,7 @@ import {
   WorkspaceScopeUnresolvedError,
   WORKSPACE_SCOPE_UNRESOLVED_CODE,
   browserCallRefusal,
+  isProtectedScope,
   lastKnownProtection,
   rememberProtection,
   type BrowserTargetScope,
@@ -20,6 +21,7 @@ import {
 import { BrowserPolicyError, POLICY_DENIED_CODE } from '../../shared/browserPolicy';
 import { attachPageCapture } from './pageCapture';
 import { trackRequestBaseline } from './actionSettle';
+import { guardUnclaimedDownloads } from './downloadGuard';
 import {
   attachModalTracking,
   modalScopeKey,
@@ -788,7 +790,7 @@ export class PlaywrightEngine {
     // these tabs, so mirror navigations/closes engine-side (dogfood P1 — the
     // #1063 inline events went silent under 'chrome').
     if (page && this.workspaceBackend === 'chrome') {
-      this.attachLifecycleMirror(page, scope.workspaceId, scope.surfaceId);
+      this.attachLifecycleMirror(page, scope.workspaceId, scope.surfaceId, !isProtectedScope(scope));
     }
     // Console/network capture starts HERE — the first time a page is resolved
     // (open / navigate / attach) — not on the first browser_console call
@@ -918,7 +920,15 @@ export class PlaywrightEngine {
     this.localLifecycle.set(key, q);
   }
 
-  private attachLifecycleMirror(page: Page, workspaceId?: string, surfaceId?: string): void {
+  private attachLifecycleMirror(page: Page, workspaceId?: string, surfaceId?: string, unprotected = false): void {
+    // Unprotected pane: from the first time the page is handed out, a download
+    // no download tool claimed (a click, a key press or a navigation that
+    // started one) is cancelled and deleted. Idempotent per page; a download
+    // tool's claim still lets its own download through. A protected pane is
+    // never armed: its browser denies downloads, and main lets the approved
+    // one through. A change of protection reconnects, so a Page never carries
+    // the guard across it.
+    if (unprotected) guardUnclaimedDownloads(page);
     if (this.mirroredPages.has(page)) return;
     this.mirroredPages.add(page);
     const key = this.lifecycleKey(workspaceId, surfaceId);

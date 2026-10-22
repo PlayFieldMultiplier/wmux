@@ -40,7 +40,8 @@ vi.mock('../user-gesture', () => ({ evaluateWithGesture: vi.fn() }));
 
 import { registerInspectionTools } from '../tools/inspection';
 import { registerStateTools } from '../tools/state';
-import { claimNextDownload, guardUnclaimedDownloads, registerFileTools } from '../tools/file';
+import { registerFileTools } from '../tools/file';
+import { claimNextDownload, guardUnclaimedDownloads } from '../downloadGuard';
 import { registerWaitTools } from '../tools/wait';
 import { resetProtectionMemoryForTests } from '../automationLease';
 import { __resetSurfaceRoutingForTesting } from '../surfaceRouting';
