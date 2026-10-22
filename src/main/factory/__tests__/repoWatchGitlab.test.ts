@@ -157,6 +157,21 @@ describe('GitLab watch mapping', () => {
     expect(mapGitlabWatchAnswer({ data: { project: null } })).toBeNull();
   });
 
+  it('a draft MR and one from a fork read as GitHub\'s draft and cross-repository PRs do', () => {
+    const raw = answer({ open: [{ iid: 4, head: HEAD }, { iid: 5, head: HEAD2 }, { iid: 6, head: HEAD }] });
+    const [a, b, c] = raw.data.project.open.nodes as Array<Record<string, unknown>>;
+    Object.assign(a, { draft: true, title: 'Draft: MR 4' });
+    Object.assign(b, { sourceProjectId: 8 });
+    Object.assign(c, { sourceProjectId: null });
+    const m = mapGitlabWatchAnswer(raw);
+    expect(m?.snapshot.prs.map((p) => [p.number, p.isDraft, p.isCrossRepository])).toEqual([
+      [4, true, false],
+      [5, false, true],
+      // Unreadable project ids read as a fork, as GitHub's unreadable flag does.
+      [6, false, true],
+    ]);
+  });
+
   it('checks: the head pipeline with every job that may not fail passed; stale, truncated or running is pending', () => {
     expect(gitlabChecksOf({ sha: HEAD, status: 'SUCCESS', jobs: { pageInfo: { hasNextPage: false }, nodes: [{ status: 'SUCCESS', allowFailure: false }, { status: 'FAILED', allowFailure: true }] } }, HEAD)).toEqual({ checks: 'pass' });
     expect(gitlabChecksOf({ sha: HEAD, status: 'FAILED', jobs: { pageInfo: { hasNextPage: false }, nodes: [{ status: 'FAILED', allowFailure: false }] } }, HEAD)).toEqual({ checks: 'fail' });
