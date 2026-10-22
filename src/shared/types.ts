@@ -1719,6 +1719,13 @@ function expandIpv6NavigationAddress(address: string): string[] | null {
   ];
 }
 
+/** The dotted IPv4 address two expanded IPv6 groups carry. */
+function ipv4FromGroups(hiGroup: string, loGroup: string): string {
+  const hi = Number.parseInt(hiGroup, 16);
+  const lo = Number.parseInt(loGroup, 16);
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+}
+
 function validateIpv6NavigationAddress(
   address: string,
   options: NavigationPolicyOptions,
@@ -1741,12 +1748,31 @@ function validateIpv6NavigationAddress(
   const isIpv4Mapped = expanded.slice(0, 5).every((group) => group === '0000') && expanded[5] === 'ffff';
   const isIpv4Compatible = expanded.slice(0, 6).every((group) => group === '0000');
   if (isIpv4Mapped || isIpv4Compatible) {
-    const hi = Number.parseInt(expanded[6], 16);
-    const lo = Number.parseInt(expanded[7], 16);
-    const ipv4 = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+    const ipv4 = ipv4FromGroups(expanded[6], expanded[7]);
     const embeddedResult = validateIpv4NavigationAddress(ipv4, options);
     if (!embeddedResult.valid) {
       return { valid: false, reason: `Blocked IPv4-mapped/compatible IPv6: embedded ${ipv4} — ${embeddedResult.reason}` };
+    }
+  }
+
+  // Two more forms carry an IPv4 address a translator or relay delivers to:
+  // NAT64 (64:ff9b::/96, the address in the last 32 bits) and 6to4
+  // (2002::/16, the address in bits 16-47). Same rule: the embedded address
+  // gets the IPv4 verdict.
+  const isNat64 =
+    expanded[0] === '0064' && expanded[1] === 'ff9b' && expanded.slice(2, 6).every((group) => group === '0000');
+  if (isNat64) {
+    const ipv4 = ipv4FromGroups(expanded[6], expanded[7]);
+    const embeddedResult = validateIpv4NavigationAddress(ipv4, options);
+    if (!embeddedResult.valid) {
+      return { valid: false, reason: `Blocked NAT64 IPv6 (64:ff9b::/96): embedded ${ipv4} — ${embeddedResult.reason}` };
+    }
+  }
+  if (expanded[0] === '2002') {
+    const ipv4 = ipv4FromGroups(expanded[1], expanded[2]);
+    const embeddedResult = validateIpv4NavigationAddress(ipv4, options);
+    if (!embeddedResult.valid) {
+      return { valid: false, reason: `Blocked 6to4 IPv6 (2002::/16): embedded ${ipv4} — ${embeddedResult.reason}` };
     }
   }
 
@@ -1763,6 +1789,16 @@ function validateIpv6NavigationAddress(
       : {
           valid: false,
           reason: `Blocked private IPv6 address (fc00::/7) — ${ALLOW_PRIVATE_NETWORK_HINT}`,
+        };
+  }
+  // Deprecated site-local (fec0::/10): the older form of a private range, so
+  // it follows the same switch.
+  if ((firstGroup & 0xffc0) === 0xfec0) {
+    return options.allowPrivateNetwork
+      ? { valid: true }
+      : {
+          valid: false,
+          reason: `Blocked site-local IPv6 address (fec0::/10) — ${ALLOW_PRIVATE_NETWORK_HINT}`,
         };
   }
   if ((firstGroup & 0xffc0) === 0xfe80) {

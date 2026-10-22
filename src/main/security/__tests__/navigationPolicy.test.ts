@@ -127,6 +127,9 @@ describe('validateResolvedNavigationUrl', () => {
     ['192.168.50.1', 4],
     ['fd12:3456:789a::1', 6],
     ['fc00::7', 6],
+    ['fec0::1', 6],
+    ['64:ff9b::a00:1', 6],
+    ['2002:c0a8:101::1', 6],
   ] as const)('a hostname resolving to %s is blocked off and allowed on', async (address, family) => {
     lookupMock.mockResolvedValue([{ address, family }]);
     await expect(validateResolvedNavigationUrl('https://intranet.example', OFF)).resolves.toMatchObject({
@@ -144,6 +147,8 @@ describe('validateResolvedNavigationUrl', () => {
     ['::ffff:169.254.169.254', 6],
     ['fd00:ec2::254', 6],
     ['100.100.100.200', 4],
+    ['64:ff9b::a9fe:a9fe', 6],
+    ['2002:a9fe:a9fe::1', 6],
   ] as const)('a hostname resolving to %s stays blocked with the opt-in on', async (address, family) => {
     lookupMock.mockResolvedValue([{ address, family }]);
     await expect(validateResolvedNavigationUrl('https://sneaky.example', ON)).resolves.toMatchObject({

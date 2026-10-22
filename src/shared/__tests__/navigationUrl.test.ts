@@ -134,6 +134,49 @@ describe('validateNavigationUrl', () => {
       expect(validateNavigationUrl('http://100.100.100.201/', OFF)).toEqual({ valid: true });
     });
 
+    // NAT64 and 6to4 deliver to the IPv4 address they carry, so that address
+    // gets the IPv4 verdict, switch included.
+    it.each([
+      ['http://[64:ff9b::a00:1]/', '10.0.0.1'],
+      ['http://[64:ff9b::c0a8:101]/', '192.168.1.1'],
+      ['http://[2002:c0a8:0101::1]/', '192.168.1.1'],
+      ['http://[2002:0a00:0001::1]/', '10.0.0.1'],
+    ])('judges %s by its embedded %s: blocked off, allowed on', (url, ipv4) => {
+      const off = validateNavigationUrl(url, OFF);
+      expect(off.valid).toBe(false);
+      expect(off.reason).toContain(`embedded ${ipv4}`);
+      expect(off.reason).toContain(PRIVATE_HINT.slice(3));
+      expect(validateNavigationUrl(url, ON)).toEqual({ valid: true });
+    });
+
+    it.each([
+      ['http://[64:ff9b::a9fe:a9fe]/', /NAT64 IPv6 \(64:ff9b::\/96\): embedded 169\.254\.169\.254/],
+      ['http://[2002:a9fe:a9fe::1]/', /6to4 IPv6 \(2002::\/16\): embedded 169\.254\.169\.254/],
+      ['http://[64:ff9b::6464:64c8]/', /embedded 100\.100\.100\.200/],
+      ['http://[2002:7f00:0002::1]/', /embedded 127\.0\.0\.2/],
+    ])('blocks %s whatever the switch', (url, reason) => {
+      for (const options of [OFF, ON]) {
+        const result = validateNavigationUrl(url, options);
+        expect(result.valid).toBe(false);
+        expect(result.reason).toMatch(reason);
+        expect(result.reason).not.toContain('Settings');
+      }
+    });
+
+    it('lets a public NAT64 or 6to4 address through with the switch off', () => {
+      expect(validateNavigationUrl('http://[64:ff9b::808:808]/', OFF)).toEqual({ valid: true });
+      expect(validateNavigationUrl('http://[2002:0808:0808::1]/', OFF)).toEqual({ valid: true });
+    });
+
+    it('treats deprecated site-local fec0::/10 as private', () => {
+      expect(validateNavigationUrl('http://[fec0::1]/', OFF)).toEqual({
+        valid: false,
+        reason: `Blocked site-local IPv6 address (fec0::/10)${PRIVATE_HINT}`,
+      });
+      expect(validateNavigationUrl('http://[feff::1]/', OFF).valid).toBe(false);
+      expect(validateNavigationUrl('http://[fec0::1]/', ON)).toEqual({ valid: true });
+    });
+
     it('lets an IPv4-mapped private address through exactly as its IPv4 form', () => {
       expect(validateNavigationUrl('http://[::ffff:10.0.0.1]/', OFF).valid).toBe(false);
       expect(validateNavigationUrl('http://[::ffff:10.0.0.1]/', ON)).toEqual({ valid: true });
