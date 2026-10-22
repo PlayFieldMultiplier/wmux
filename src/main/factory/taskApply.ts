@@ -110,13 +110,18 @@ export const defaultRawGit = (args: string[], cwd: string, extra: Record<string,
   let size = 0;
   let err = '';
   let over = false;
+  let stopped = false;
   const child = spawn('git', args, { cwd, env: { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  const timer = setTimeout(() => child.kill(), timeoutMs);
+  const stop = () => {
+    stopped = true;
+    child.kill();
+  };
+  const timer = setTimeout(stop, timeoutMs);
   child.stdout.on('data', (d: Buffer) => {
     size += d.length;
     if (size > PATCH_MAX_BYTES) {
       over = true;
-      child.kill();
+      stop();
       return;
     }
     out.push(d);
@@ -129,12 +134,24 @@ export const defaultRawGit = (args: string[], cwd: string, extra: Record<string,
     // Git never ran: not one of its own answers (128, as git's fatal).
     resolve({ code: 128, stdout: Buffer.alloc(0), stderr: String(e) });
   });
-  child.on('close', (code, signal) => {
+  const settle = (code: number | null, signal: NodeJS.Signals | null) => {
     clearTimeout(timer);
     if (over) return resolve({ code: 1, stdout: Buffer.alloc(0), stderr: 'the patch is too large' });
     // A git stopped by a signal gave no answer: 128, never a 1 a caller reads
     // as one (merge-base's "not an ancestor").
     resolve({ code: signal || code === null ? 128 : code, stdout: Buffer.concat(out), stderr: signal ? `${err}git was stopped (${signal})` : err });
+  };
+  // A git this stopped is settled when it exits: a process it started (a
+  // shell alias, a hook) can hold the pipes open long after, and 'close'
+  // waits for every holder, so the timeout would last as long as that child.
+  child.on('exit', (code, signal) => {
+    if (!stopped) return;
+    child.stdout.destroy();
+    child.stderr.destroy();
+    settle(code, signal ?? 'SIGTERM');
+  });
+  child.on('close', (code, signal) => {
+    if (!stopped) settle(code, signal);
   });
   child.stdin.on('error', () => undefined);
   child.stdin.end(input ?? Buffer.alloc(0));
