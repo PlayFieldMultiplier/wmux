@@ -561,20 +561,22 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
 function CardReactions({ card, ctx, end }: { card: RoomCardData; ctx: RowCtx; end?: boolean }) {
   const { t } = ctx;
   if (!card.reactions?.length) return null;
-  const byEmoji = new Map<string, { names: string[]; picked: boolean }>();
+  // An acknowledgement and a picked reaction of the same emoji are two
+  // chips: an acknowledging bot only saw the card.
+  const byEmoji = new Map<string, { emoji: string; names: string[]; picked: boolean }>();
   for (const r of card.reactions) {
-    const entry = byEmoji.get(r.emoji) ?? { names: [], picked: false };
+    const key = `${r.emoji}:${r.ack ? 'ack' : 'pick'}`;
+    const entry = byEmoji.get(key) ?? { emoji: r.emoji, names: [], picked: !r.ack };
     entry.names.push(botFace(r.botId, ctx)?.name || r.botId);
-    if (!r.ack) entry.picked = true;
-    byEmoji.set(r.emoji, entry);
+    byEmoji.set(key, entry);
   }
   return (
     <div data-bots-reactions className={`mt-0.5 flex flex-wrap items-center gap-1 ${end ? 'justify-end' : ''}`}>
-      {[...byEmoji].map(([emoji, { names, picked }]) => {
+      {[...byEmoji].map(([key, { emoji, names, picked }]) => {
         const label = t(picked ? 'botsPage.chat.reacted' : 'botsPage.chat.sawThis', { names: names.join(', '), emoji });
         return (
           <span
-            key={emoji}
+            key={key}
             data-bots-reaction={emoji}
             role="img"
             aria-label={label}

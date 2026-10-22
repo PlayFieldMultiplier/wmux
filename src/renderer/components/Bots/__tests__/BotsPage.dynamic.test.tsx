@@ -848,14 +848,15 @@ describe('Bots page', () => {
       workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', title: 'PR 7 is merged', at: 500,
       reactions: [{ botId: LEAD, emoji: '❤️' }, { botId: VERIFIER, emoji: '👀', ack: true }],
     }));
-    cards.push(card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Closing the issue', at: 510, reactions: [{ botId: VERIFIER, emoji: '👍' }] }));
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Closing the issue', at: 510, reactions: [{ botId: VERIFIER, emoji: '👍' }, { botId: MOA, emoji: '👍', ack: true }] }));
     seedRooms();
     await render(<BotsPage />);
     act(() => q('[data-bots-row="group:grp-000000a1"]')!.click());
     const chips = (cardId: string) => [...container.querySelectorAll(`[data-room-card-id="${cardId}"] [data-bots-reaction]`)].map((el) => [el.getAttribute('data-bots-reaction'), el.getAttribute('aria-label')]);
     const owner = cards.at(-2)!.id;
     expect(chips(owner)).toEqual([['❤️', 'Lead reacted ❤️'], ['👀', 'Verifier saw this']]);
-    expect(chips(cards.at(-1)!.id)).toEqual([['👍', 'Verifier reacted 👍']]);
+    // The same emoji picked by one bot and left as another's acknowledgement: two chips.
+    expect(chips(cards.at(-1)!.id)).toEqual([['👍', 'Verifier reacted 👍'], ['👍', 'Moa saw this']]);
     // A card nobody reacted to has no row.
     expect(container.querySelectorAll('[data-bots-reactions]')).toHaveLength(2);
   });
