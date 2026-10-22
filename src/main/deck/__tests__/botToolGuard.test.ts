@@ -112,7 +112,8 @@ describe('BotToolGuard', () => {
     ['a permission not granted', 'Claude requested permissions to use mcp__wmux__room_post, but you haven\'t granted it yet.'],
     ['a permission rule', 'Permission to use mcp__wmux__room_post has been denied.'],
     ['the user rejecting it', 'The user doesn\'t want to proceed with this tool use. The tool use was rejected.'],
-    ['a hook\'s default block', 'Blocked by hook'],
+    ['a PreToolUse hook denial (JSON deny or exit 2)', 'PreToolUse:mcp__wmux__room_post hook error: posting is paused for this bot'],
+    ['a PreToolUse hook stopping execution', 'Execution stopped by PreToolUse hook'],
   ])('a wmux call Claude Code never sent (%s) does not count as reaching the tools', (_why, text) => {
     const g = new BotToolGuard(ALLOWED);
     step(g, 'room_post', {}, true, 'No such tool available: room_post');

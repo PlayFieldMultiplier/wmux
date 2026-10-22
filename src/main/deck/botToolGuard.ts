@@ -92,11 +92,11 @@ function isRefusal(content: unknown): boolean {
 
 /** Claude Code's own failures for a call it never sent to the MCP server: an
  *  unknown tool name, input that failed the tool's schema, and a permission
- *  denied by a rule, the user, or a hook's default reason. Any other error on
- *  a wmux tool came from the server (a refusal returned or thrown by main), so
- *  the name worked. A hook that denies with its own reason text cannot be
- *  told apart and counts as reached. */
-const NEVER_SENT = /No such tool available|InputValidationError|haven't granted it yet|doesn't want to proceed with this tool use|Permission to use .* has been denied|Permission for this action (?:was|has been) denied|Blocked by (?:PreToolUse )?hook/;
+ *  denied by a rule, the user, or a PreToolUse hook (every hook denial, a JSON
+ *  deny or exit 2, reaches the result as `PreToolUse:<tool> hook error:`).
+ *  Any other error on a wmux tool came from the server (a refusal returned or
+ *  thrown by main), so the name worked. */
+const NEVER_SENT = /No such tool available|InputValidationError|haven't granted it yet|doesn't want to proceed with this tool use|Permission to use .* has been denied|Permission for this action (?:was|has been) denied|PreToolUse:\S+ hook error:|Execution stopped by PreToolUse hook/;
 
 /** A tool name as the bot's prompts spell it (room_post, not mcp__wmux__room_post). */
 const shownName = (name: string): string => (name.startsWith(BOT_TOOL_PREFIX) ? name.slice(BOT_TOOL_PREFIX.length) : name);
