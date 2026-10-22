@@ -7,6 +7,20 @@ import { UiPluginManager } from '../UiPluginManager';
 import { ApprovalQueue } from '../../mcp/ApprovalQueue';
 import { PluginTrustStore } from '../../mcp/PluginTrustStore';
 
+/** Lets a test fail chosen directory renames; every other rename is real. */
+const renames = vi.hoisted(() => ({ fail: null as null | ((call: number) => boolean), calls: 0 }));
+vi.mock('node:fs', async (orig) => {
+  const real = (await orig()) as typeof import('node:fs');
+  return {
+    ...real,
+    renameSync: (from: import('node:fs').PathLike, to: import('node:fs').PathLike) => {
+      renames.calls += 1;
+      if (renames.fail?.(renames.calls)) throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      return real.renameSync(from, to);
+    },
+  };
+});
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function setup() {
@@ -194,5 +208,67 @@ describe('a catalog-installed bundle older than the shipped one', () => {
     expect(installed.capabilities).toEqual(OLD_CAPABILITIES);
     expect(fs.readFileSync(path.join(destination, 'office.js'), 'utf8')).toBe('/* the 1.0.0 page */');
     expect((await trust.get('office'))?.status).toBe('trusted');
+  });
+});
+
+describe('a refresh that is interrupted', () => {
+  /** A managed Office at 1.0.0, so startup refreshes it to the shipped bundle. */
+  function oldOffice(test: ReturnType<typeof setup>, folder: string) {
+    const destination = path.join(test.options.pluginsDir, folder);
+    fs.cpSync(path.join(test.options.catalogDir, 'office'), destination, { recursive: true });
+    const manifestPath = path.join(destination, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, version: '1.0.0' }));
+    fs.writeFileSync(path.join(destination, 'office.js'), '/* the 1.0.0 page */');
+    fs.writeFileSync(test.options.statePath, JSON.stringify({ version: 1, disabled: [], managed: ['office'] }));
+  }
+  const shippedVersion = () => (JSON.parse(fs.readFileSync(path.resolve('examples/plugins/office/manifest.json'), 'utf8')) as { version: string }).version;
+  const installedVersion = (test: ReturnType<typeof setup>) =>
+    (JSON.parse(fs.readFileSync(path.join(test.options.pluginsDir, 'office', 'manifest.json'), 'utf8')) as { version: string }).version;
+
+  it('keeps the old bundle when neither publishing nor putting it back works', async () => {
+    const test = setup();
+    oldOffice(test, 'office');
+    // 1: park the old bundle (works). 2: publish the new one (fails). 3: put the old one back (fails).
+    renames.calls = 0;
+    renames.fail = (call) => call === 2 || call === 3;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await test.manager.initialize();
+    } finally {
+      renames.fail = null;
+      warn.mockRestore();
+    }
+    const parked = fs.readdirSync(test.options.pluginsDir).filter((name) => name.startsWith('.retired@office@'));
+    expect(parked).toHaveLength(1);
+    expect(fs.readFileSync(path.join(test.options.pluginsDir, parked[0], 'office.js'), 'utf8')).toBe('/* the 1.0.0 page */');
+
+    // The next start puts it back and refreshes it, leaving nothing beside it.
+    const next = new UiPluginManager(test.options);
+    await next.initialize();
+    expect(installedVersion(test)).toBe(shippedVersion());
+    expect(fs.readdirSync(test.options.pluginsDir)).toEqual(['office']);
+  });
+
+  it('restores a bundle parked by a refresh that stopped between its renames', async () => {
+    const test = setup();
+    oldOffice(test, '.retired@office@0b5e4c1a-0000-4000-8000-000000000000');
+    await test.manager.initialize();
+    expect(installedVersion(test)).toBe(shippedVersion());
+    expect(test.loader.get('office')?.manifest.version).toBe(shippedVersion());
+    expect(fs.readdirSync(test.options.pluginsDir)).toEqual(['office']);
+  });
+
+  it('removes what interrupted installs, removals and refreshes left, and nothing else', async () => {
+    const test = setup();
+    const dir = test.options.pluginsDir;
+    for (const name of ['.install-abc', '.removed-1234', '.retired@office@5678', '.retired@agent-state-page@9']) {
+      fs.mkdirSync(path.join(dir, name), { recursive: true });
+      fs.writeFileSync(path.join(dir, name, 'manifest.json'), '{}');
+    }
+    fs.mkdirSync(path.join(dir, '.keep-me'));
+    fs.writeFileSync(path.join(dir, '.install-note'), 'a file, not a leftover folder');
+    await test.manager.initialize();
+    expect(fs.readdirSync(dir).sort()).toEqual(['.install-note', '.keep-me']);
   });
 });

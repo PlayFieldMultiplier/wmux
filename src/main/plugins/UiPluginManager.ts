@@ -12,6 +12,15 @@ import { compareSemver, parseSemver } from '../surfaces/safeWrite/versionRange';
 
 type SavedState = { version: 1; disabled: string[]; managed: string[] };
 
+/**
+ * Where a refresh parks the bundle it replaces until the new one is published:
+ * `.retired@<id>@<uuid>`. `@` cannot occur in a plugin name, so the id reads
+ * back unambiguously, and the leading dot keeps the loader from scanning it.
+ */
+const RETIRED_PREFIX = '.retired@';
+/** Leftovers of an interrupted install, removal or refresh. None is ever a live bundle. */
+const LEFTOVER_PREFIXES = ['.install-', '.removed-', RETIRED_PREFIX];
+
 /** Owner UI lifecycle for a finite catalog of shipped, original bundles. */
 export class UiPluginManager {
   private state: SavedState = { version: 1, disabled: [], managed: [] };
@@ -38,6 +47,7 @@ export class UiPluginManager {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+    this.recoverInterruptedWork();
     this.refreshManagedBundles();
     this.options.loader.setDisabled(this.state.disabled);
     await this.options.loader.loadAll();
@@ -62,6 +72,48 @@ export class UiPluginManager {
     }
   }
 
+  /**
+   * A refresh that stopped between its two renames left the managed bundle's
+   * folder missing and the old bundle parked: put it back, so the refresh
+   * that follows starts over from it. Then remove what interrupted installs,
+   * removals and refreshes left behind. Only real directories are touched; a
+   * link is left alone, so nothing behind it can be deleted.
+   */
+  private recoverInterruptedWork(): void {
+    if (!fs.existsSync(this.options.pluginsDir)) return;
+    let root: string;
+    let names: string[];
+    try {
+      root = this.root();
+      names = fs.readdirSync(root);
+    } catch (error) {
+      console.warn('[UiPluginManager] could not check for interrupted plugin updates:', error);
+      return;
+    }
+    const isDirectory = (name: string) => {
+      const stat = fs.lstatSync(path.join(root, name));
+      return stat.isDirectory() && !stat.isSymbolicLink();
+    };
+    for (const id of this.state.managed) {
+      const parked = names.find((name) => name.startsWith(RETIRED_PREFIX) && name.split('@')[1] === id);
+      if (!parked) continue;
+      try {
+        if (fs.existsSync(path.join(root, id)) || !isDirectory(parked)) continue;
+        fs.renameSync(path.join(root, parked), path.join(root, id));
+      } catch (error) {
+        console.warn(`[UiPluginManager] could not restore ${id}:`, error);
+      }
+    }
+    for (const name of fs.readdirSync(root)) {
+      if (!LEFTOVER_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+      try {
+        if (isDirectory(name)) fs.rmSync(path.join(root, name), { recursive: true, force: true });
+      } catch (error) {
+        console.warn(`[UiPluginManager] could not remove ${name}:`, error);
+      }
+    }
+  }
+
   private refreshBundle(entry: typeof UI_PLUGIN_CATALOG[number]): void {
     const root = this.root();
     const destination = path.join(root, entry.id);
@@ -77,19 +129,22 @@ export class UiPluginManager {
     // Not comparable (a corrupt or hand-edited manifest): leave it be.
     if (!installed || !shipped || compareSemver(shipped, installed) <= 0) return;
     const staging = fs.mkdtempSync(path.join(root, '.install-'));
-    const retired = path.join(root, `.removed-${randomUUID()}`);
+    const retired = path.join(root, `${RETIRED_PREFIX}${entry.id}@${randomUUID()}`);
     try {
       copyCatalogBundle(source, staging, entry.files);
       // Same publication as install: scans skip dot-prefixed directories, so a
       // load never sees a partial bundle.
       fs.renameSync(destination, retired);
       try { fs.renameSync(staging, destination); } catch (error) {
+        // Put the old bundle back. If that fails too, it stays parked, and the
+        // next start restores it (recoverInterruptedWork).
         fs.renameSync(retired, destination);
         throw error;
       }
+      // Only now is the parked copy no longer the only one.
+      fs.rmSync(retired, { recursive: true, force: true });
     } finally {
       fs.rmSync(staging, { recursive: true, force: true });
-      fs.rmSync(retired, { recursive: true, force: true });
     }
   }
 
