@@ -23,6 +23,9 @@ function wasmPath(): string {
 /** The OS's answer for the microphone, asking on macOS the first time. */
 export async function micAccess(platform: NodeJS.Platform = process.platform): Promise<DictationMicAccess> {
   if (platform !== 'darwin') return 'granted';
+  // Chromium's fake capture device (a test clip, scripts/control-wmux.mjs
+  // --fake-audio) never opens the microphone, so there is nothing to ask.
+  if (app.commandLine.hasSwitch('use-fake-device-for-media-stream')) return 'granted';
   const status = systemPreferences.getMediaAccessStatus('microphone');
   if (status === 'granted') return 'granted';
   if (status === 'not-determined') return (await systemPreferences.askForMediaAccess('microphone')) ? 'granted' : 'denied';

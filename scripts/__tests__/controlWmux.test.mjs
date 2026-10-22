@@ -396,6 +396,9 @@ describe('launch app arguments', () => {
       .toEqual(['--use-mock-keychain', '--user-data-dir=/tmp/s/electron-user-data']);
     expect(launchAppArgs({ platform: 'win32' })).toEqual([]);
     expect(launchAppArgs({ platform: 'win32', userDataDirArg: 'C:/s/u' })).toEqual(['--user-data-dir=C:/s/u']);
+    // A clip stands in for the microphone, played once.
+    expect(launchAppArgs({ platform: 'linux', fakeAudio: '/tmp/ko.wav' }))
+      .toEqual(['--use-fake-device-for-media-stream', '--use-file-for-fake-audio-capture=/tmp/ko.wav%noloop']);
   });
 
   it('picks the caller’s dir, else the first launch’s, else on macOS one inside ~/.wmux<suffix>', () => {
