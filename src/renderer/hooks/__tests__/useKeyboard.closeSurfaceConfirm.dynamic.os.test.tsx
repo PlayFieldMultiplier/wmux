@@ -143,6 +143,24 @@ describe('close-tab shortcut confirmation', () => {
     expect(document.querySelector('[data-close-tab-confirm]')?.textContent).toBe('Close tab');
   });
 
+  it('says a shell tab stops its shell and leaves programs in their own window running (#2555)', () => {
+    pressCloseTab();
+    const text = dialog()?.textContent ?? '';
+    expect(text).toContain('Its shell and the programs running in it will be stopped.');
+    expect(text).toContain('Programs it opened in their own window keep running.');
+  });
+
+  it('keeps the general wording for a tab with no shell', () => {
+    act(() => useStore.setState((st) => {
+      const pane = st.workspaces[0].rootPane;
+      if (pane.type === 'leaf') pane.surfaces.push({ id: 's-3', ptyId: '', title: 'page', shell: '', cwd: '/tmp', surfaceType: 'browser' });
+    }));
+    act(() => useStore.getState().requestCloseTab({ workspaceId: 'ws-c', paneId: 'p-c', surfaceId: 's-3' }));
+    const text = dialog()?.textContent ?? '';
+    expect(text).toContain('Anything running in it will be stopped.');
+    expect(text).not.toContain('Its shell');
+  });
+
   it('starts on Cancel and lets the keyboard reach Close', () => {
     pressCloseTab();
     const cancel = document.querySelector('[data-close-tab-cancel]');

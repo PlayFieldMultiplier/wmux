@@ -920,6 +920,7 @@ export const zh = {
   'settings.sc.newWorkspace': '新建工作区',
   'settings.sc.closeSurface': '关闭当前标签',
   'surface.closeConfirm': '关闭此标签？其中正在运行的内容将被终止。',
+  'surface.closeConfirmShell': '关闭此标签？其中的 shell 及在其中运行的程序将被终止。它在独立窗口中打开的程序会继续运行。',
   'settings.sc.closePane': '关闭分割面板',
   'settings.sc.searchTerminal': '在终端中搜索',
   'settings.sc.commandPalette': '命令面板',

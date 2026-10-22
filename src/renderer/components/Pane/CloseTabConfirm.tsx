@@ -46,6 +46,11 @@ function refocusActiveTerminal(): void {
 export default function CloseTabConfirm() {
   const t = useT();
   const target = useStore((s) => s.closeTabConfirm);
+  const hasShell = useStore((s) => {
+    const ws = target ? s.workspaces.find((w) => w.id === target.workspaceId) : undefined;
+    const pane = ws && target ? findLeaf(ws.rootPane, target.paneId) : null;
+    return Boolean(pane?.surfaces.find((surface) => surface.id === target?.surfaceId)?.ptyId);
+  });
   const tabTitle = useStore((s) => {
     const ws = target ? s.workspaces.find((w) => w.id === target.workspaceId) : undefined;
     const pane = ws && target ? findLeaf(ws.rootPane, target.paneId) : null;
@@ -66,7 +71,9 @@ export default function CloseTabConfirm() {
     <Dialog onClose={cancel} width={360} closeOnBackdrop data-testid="close-tab-confirm">
       <DialogHeader
         title={tabTitle ? t('surface.closeTabNamed', { name: tabTitle }) : t('surface.closeTab')}
-        description={t('surface.closeConfirm')}
+        // A tab with a shell says what ends with it: programs a shell started in
+        // their own window (or console, on Windows) outlive the tab (#2555).
+        description={t(hasShell ? 'surface.closeConfirmShell' : 'surface.closeConfirm')}
       />
       <DialogFooter>
         <Button variant="secondary" size="sm" onClick={cancel} data-close-tab-cancel>
