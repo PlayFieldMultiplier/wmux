@@ -66,24 +66,29 @@ function buildDaemonSource(dc: DaemonClient, ptyId: string): PtyDataSource {
     // The daemon logs each OSC 133 marker before it forwards the bytes, so
     // its prompt log holds every prompt this listener could have missed.
     async atPrompt() {
-      const res = await dc.readPromptEvents(ptyId, { limit: 8 });
-      return res.sessionFound && shellAtPrompt(res.events);
+      const res = await dc.rpc('daemon.readPromptEvents', { sessionId: ptyId, limit: 1 });
+      return shellAtEmptyPrompt(res as PromptRead | null);
     },
   };
 }
 
+interface PromptRead {
+  events?: Array<{ type: string }>;
+  emptyShellPrompt?: boolean;
+  sessionFound?: boolean;
+}
+
 /**
- * The newest decisive OSC 133 marker is a prompt (A/B): the shell drew one and
- * nothing has started since. A command (C) or a bare end (D, which bash prints
- * before its first A) is not; an empty log is unknown, so the runner waits.
+ * The newest OSC 133 marker ends a prompt (B) and the daemon vouches that the
+ * prompt is empty. A marker alone cannot tell a fresh prompt from a stale one
+ * under a shell that never reports command-start (bash 3.2, pwsh without
+ * PSReadLine); emptyShellPrompt is cleared by any input, so it also keeps the
+ * command off a line the user has begun typing (as terminalSession.ts reads it).
  */
-export function shellAtPrompt(events: ReadonlyArray<{ type: string }>): boolean {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const t = events[i].type;
-    if (t === 'prompt_start' || t === 'prompt_end') return true;
-    if (t === 'command_start' || t === 'command_end') return false;
-  }
-  return false;
+export function shellAtEmptyPrompt(res: PromptRead | null): boolean {
+  return res?.sessionFound === true
+    && res.events?.at(-1)?.type === 'prompt_end'
+    && res.emptyShellPrompt === true;
 }
 
 /**

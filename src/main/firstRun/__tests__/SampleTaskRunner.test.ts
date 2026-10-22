@@ -189,18 +189,82 @@ describe('SampleTaskRunner', () => {
     let promptSeen = false;
     stub.pushData('\x1b]133;A\x07');
     promptSeen = true;
+    // The state is read only once subscribed, or a prompt drawn between the
+    // read and the subscribe would be lost.
+    let subscribedWhenRead = false;
     const source: PtyDataSource = {
       onData: stub.onData,
       write: stub.write,
-      atPrompt: async () => promptSeen,
+      atPrompt: async () => {
+        subscribedWhenRead = stub.handlerCount() === 1;
+        return promptSeen;
+      },
     };
     const promise = runner.run(source, new AbortController().signal);
 
     await vi.advanceTimersByTimeAsync(OSC133_TIMEOUT_MS);
 
     expect(await promise).toEqual({ outcome: 'ok' });
+    expect(subscribedWhenRead).toBe(true);
     expect(stub.getWrites()).toEqual([SAMPLE_TASK_COMMAND + '\r']);
     expect(stub.handlerCount()).toBe(0);
+  });
+
+  it('writes once when a live prompt and the prompt state both report ready', async () => {
+    const stub = createStubSource();
+    const source: PtyDataSource = { onData: stub.onData, write: stub.write, atPrompt: async () => true };
+    const promise = runner.run(source, new AbortController().signal);
+
+    // The live 133;A lands before the state read resolves.
+    stub.pushData('\x1b]133;A\x07');
+
+    expect(await promise).toEqual({ outcome: 'ok' });
+    await Promise.resolve();
+    expect(stub.getWrites()).toEqual([SAMPLE_TASK_COMMAND + '\r']);
+  });
+
+  it('writes once on a live prompt end when its start went by before the subscribe', async () => {
+    const stub = createStubSource();
+    // zsh writes A from precmd and B with the prompt: A went by unseen, so the
+    // read finds A as the newest marker (no finished prompt yet) and says no.
+    stub.pushData('\x1b]133;A\x07');
+    let read = false;
+    const source: PtyDataSource = {
+      onData: stub.onData,
+      write: stub.write,
+      atPrompt: async () => { read = true; return false; },
+    };
+    const promise = runner.run(source, new AbortController().signal);
+    await Promise.resolve();
+    expect(read).toBe(true);
+    expect(stub.getWrites()).toEqual([]);
+
+    stub.pushData('user@host ~ % \x1b]133;B\x07');
+    stub.pushData('\x1b]133;B\x07');
+
+    expect(await promise).toEqual({ outcome: 'ok' });
+    expect(stub.getWrites()).toEqual([SAMPLE_TASK_COMMAND + '\r']);
+  });
+
+  it.each(['aborted', 'timeout'] as const)('writes nothing when the prompt state answers after the run %s', async (outcome) => {
+    vi.useFakeTimers();
+    const stub = createStubSource();
+    let answer: (ready: boolean) => void = () => undefined;
+    const source: PtyDataSource = {
+      onData: stub.onData,
+      write: stub.write,
+      atPrompt: () => new Promise<boolean>((resolve) => { answer = resolve; }),
+    };
+    const ctrl = new AbortController();
+    const promise = runner.run(source, ctrl.signal);
+
+    if (outcome === 'aborted') ctrl.abort();
+    else vi.advanceTimersByTime(OSC133_TIMEOUT_MS);
+    expect(await promise).toEqual({ outcome });
+
+    answer(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stub.getWrites()).toEqual([]);
   });
 
   // ── 9. Buffer cap smoke test ──────────────────────────────────

@@ -10,7 +10,7 @@
  *
  * Lifecycle:
  *   - `run(source, signal)` subscribes to `source.onData`, accumulates a
- *     bounded byte buffer, and scans for the strict OSC133 "A" sequence
+ *     bounded byte buffer, and scans for the strict OSC133 "A" or "B" sequence
  *     (BEL or ST terminator — see `OSC133_PROMPT_READY_PATTERNS`).
  *   - Then, once subscribed, asks `source.atPrompt()` whether the shell is
  *     already at a prompt: a pane mounted just before the run has usually
@@ -42,7 +42,7 @@ export interface PtyDataSource {
   /** Write data into the PTY. */
   write(data: string): void;
   /**
-   * Whether the shell has already drawn a prompt and started nothing since.
+   * Whether the shell is already at an empty prompt it drew before we listened.
    * Read after `onData` subscribed, so a prompt is either in this answer or
    * still to arrive as data. Absent when the transport keeps no such state.
    */

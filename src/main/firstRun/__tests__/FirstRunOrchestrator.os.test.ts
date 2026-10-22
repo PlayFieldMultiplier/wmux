@@ -109,7 +109,7 @@ function makeWindow(): MockWin {
 class MockDaemonClient extends EventEmitter {
   isConnected = true;
   writeToSession = vi.fn();
-  readPromptEvents = vi.fn();
+  rpc = vi.fn();
 }
 
 interface MockPtyBridge {
@@ -489,19 +489,24 @@ describe('FirstRunOrchestrator', () => {
     );
     await orch.startSampleTask('session-A');
     const source = capturedRuns[0].source as unknown as { atPrompt: () => Promise<boolean> };
-    const answer = (events: Array<{ type: string }>, sessionFound = true) => {
-      dc.readPromptEvents.mockResolvedValueOnce({ events, sessionFound });
+    const answer = (type: string | null, emptyShellPrompt = true, sessionFound = true) => {
+      dc.rpc.mockResolvedValueOnce({ events: type ? [{ type }] : [], emptyShellPrompt, sessionFound });
       return source.atPrompt();
     };
 
-    // Prompt drawn (bash prints D before its first A), nothing started since.
-    await expect(answer([{ type: 'command_end' }, { type: 'prompt_start' }, { type: 'prompt_end' }])).resolves.toBe(true);
-    expect(dc.readPromptEvents.mock.calls[0][0]).toBe('session-A');
-    // A command started after the prompt, or the first prompt is still to come.
-    await expect(answer([{ type: 'prompt_start' }, { type: 'command_start' }])).resolves.toBe(false);
-    await expect(answer([{ type: 'command_end' }])).resolves.toBe(false);
-    await expect(answer([])).resolves.toBe(false);
-    await expect(answer([{ type: 'prompt_start' }], false)).resolves.toBe(false);
+    // A drawn, empty prompt.
+    await expect(answer('prompt_end')).resolves.toBe(true);
+    expect(dc.rpc.mock.calls[0]).toEqual(['daemon.readPromptEvents', { sessionId: 'session-A', limit: 1 }]);
+    // A stale prompt the user typed into, or one a shell without command-start
+    // left behind under a program it is running.
+    await expect(answer('prompt_end', false)).resolves.toBe(false);
+    await expect(answer('prompt_start', false)).resolves.toBe(false);
+    // Still drawing, a command running or ended, no prompt yet, no session.
+    await expect(answer('prompt_start')).resolves.toBe(false);
+    await expect(answer('command_start')).resolves.toBe(false);
+    await expect(answer('command_end')).resolves.toBe(false);
+    await expect(answer(null)).resolves.toBe(false);
+    await expect(answer('prompt_end', true, false)).resolves.toBe(false);
   });
 
   // ── 10. startSampleTask — non-daemon mode + TIMEOUT event ───────────────────
