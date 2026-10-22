@@ -44,8 +44,23 @@ function pdfjsAssets(): Plugin {
   };
 }
 
+// onnxruntime-web's .wasm reaches the dictation worker as bytes from main
+// (it ships as an extra resource: main/dictation/dictation.handler.ts), so
+// the copy Vite emits for the runtime's own `new URL(…, import.meta.url)` is
+// never read. Leaving it out keeps 14 MB out of the bundle.
+function dropOrtWasm(): Plugin {
+  return {
+    name: 'wmux-drop-ort-wasm',
+    generateBundle(_options, bundle) {
+      for (const file of Object.keys(bundle)) {
+        if (/(^|\/)ort-wasm-simd-threaded[^/]*\.wasm$/.test(file)) delete bundle[file];
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), pdfjsAssets()],
+  plugins: [react(), pdfjsAssets(), dropOrtWasm()],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -53,6 +68,7 @@ export default defineConfig({
   // is an ES module worker: onnxruntime-web is ESM.
   worker: {
     format: 'es',
+    plugins: () => [dropOrtWasm()],
   },
   build: {
     // The renderer only ever runs inside this app's own Chromium (Electron 41 →
