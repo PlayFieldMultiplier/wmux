@@ -14,7 +14,7 @@ import { WakeQueue, wakeQueuePath } from '../wakeQueue';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../factorySettings';
 import { __resetBotHooksForTesting, onBotHook, type BotHookEvent } from '../botHooks';
 import { HOUR_MS } from '../budget';
-import { __resetConversationMarksForTesting, conversationMarks, markConversation } from '../conversationMarks';
+import { __resetConversationMarksForTesting, conversationMarks, conversationSignedIn, markConversation } from '../conversationMarks';
 import { expectWakeTaint } from '../wakeTaint';
 import { USAGE_LIMIT_RESUME_GRACE_MS, USAGE_LIMIT_UNKNOWN_HOLD_MS, parseUsageLimitReset } from '../../../shared/usageLimit';
 
@@ -1487,6 +1487,23 @@ describe('conversation marks and removal', () => {
     await settle(10);
     expect(again.adapters[0].started?.resumeSessionId).toBe('sess-1');
     expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: true });
+  });
+
+  it('a wake that cannot be told clean of a signed-in task\'s data runs as signed-in for that wake only; the conversation and its record are not marked', async () => {
+    setBotRuntimePorts({ wakeTainted: () => true, wakeSignedIn: () => 'unknown' });
+    const r = rig();
+    const id = createBot(r);
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, reason: { kind: 'facts', factIds: ['f-past-the-window'], trigger: { kind: 'pr.opened' } } }));
+    r.runtime.kick();
+    await settle();
+    // Mid-turn: the turn's own calls are refused as from a signed-in conversation.
+    expect(conversationSignedIn(id)).toBe(true);
+    expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: false });
+    expect(r.sessions.get(id)?.signedIn ?? false).toBe(false);
+    r.adapters[0].end([{ type: 'turn-end', sessionId: 'sess-u' }]);
+    await settle();
+    expect(r.sessions.get(id)).toMatchObject({ tainted: true, signedIn: false });
+    expect(conversationSignedIn(id)).toBe(false);
   });
 
   it('a guest\'s conversation of its own (a wake of unknown provenance) is marked signed in by a signed-in task\'s fact too, and saves nothing', async () => {

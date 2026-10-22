@@ -29,7 +29,9 @@
 // set for a guest's conversation of its own) and ends it when it ends the
 // session. A mark is only ever set, never cleared, until the conversation
 // starts afresh. A bot with no live conversation has no marks: a reader
-// treats that as unknown.
+// treats that as unknown. A wake that cannot be told clean of a signed-in
+// task's data is held as signed-in for that wake only (holdSignedInForWake):
+// readers see it, the saved record never does.
 
 export interface ConversationMarks {
   tainted: boolean;
@@ -37,6 +39,9 @@ export interface ConversationMarks {
 }
 
 const marks = new Map<string, ConversationMarks>();
+/** Bots whose running wake cannot be told clean of a signed-in task's data:
+ *  read as signed-in for that wake only, never saved (holdSignedInForWake). */
+const heldForWake = new Set<string>();
 let listener: ((botId: string, marks: ConversationMarks) => void) | null = null;
 
 /** A conversation starts (or is resumed) for `botId`. */
@@ -47,6 +52,20 @@ export function startConversation(botId: string, init: ConversationMarks): void 
 /** The bot's conversation ended. */
 export function endConversation(botId: string): void {
   marks.delete(botId);
+  heldForWake.delete(botId);
+}
+
+/** The bot's running wake may carry a signed-in task's data but cannot be
+ *  told (wakeTaint.ts wakeSignedIn 'unknown'): its conversation reads as
+ *  signed-in until the wake ends (releaseWakeHold). The saved marks, and
+ *  conversationMarks, do not change. */
+export function holdSignedInForWake(botId: string): void {
+  if (marks.has(botId)) heldForWake.add(botId);
+}
+
+/** The wake that held the mark ended. */
+export function releaseWakeHold(botId: string): void {
+  heldForWake.delete(botId);
 }
 
 /** Set one mark on the bot's live conversation (none: nothing to mark). A
@@ -73,13 +92,13 @@ export function conversationMarks(botId: string): ConversationMarks | null {
  *  a bot with no live conversation reads as yes (a bot's call runs inside
  *  its turn, which always has one). */
 export function conversationSignedIn(botId: string): boolean {
-  return marks.get(botId)?.signedIn !== false;
+  return heldForWake.has(botId) || marks.get(botId)?.signedIn !== false;
 }
 
 /** Whether the bot's live conversation has taken in outside text; a bot
  *  with no live conversation reads as yes. */
 export function conversationTainted(botId: string): boolean {
-  return marks.get(botId)?.tainted !== false;
+  return heldForWake.has(botId) || marks.get(botId)?.tainted !== false;
 }
 
 /** What bot `botId` is told when its conversation, holding data from a
@@ -100,5 +119,6 @@ export function setConversationMarkListener(fn: ((botId: string, marks: Conversa
 /** Test-only. */
 export function __resetConversationMarksForTesting(): void {
   marks.clear();
+  heldForWake.clear();
   listener = null;
 }

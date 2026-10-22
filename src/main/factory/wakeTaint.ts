@@ -373,9 +373,13 @@ export class WakeTaint {
    *  connection: its ledger row's `dispatch.gatewayConnectors`, which only a
    *  bot's fan-out through main's gateway writes (fanout.rpc.ts). Its
    *  result is what the worker read with the owner's sign-in. A task fact
-   *  whose row cannot be read, and a fact that cannot be found, count as
-   *  one. Only a `facts` wake carries task facts. */
-  wakeSignedIn(item: Pick<WakeItem, 'reason'>): boolean {
+   *  whose row cannot be read counts as one. A fact that cannot be found
+   *  (the log unreadable, or the fact past its window) and that names no
+   *  task is 'unknown': the wake runs as signed-in, but the mark is held for
+   *  that wake only (BotRuntime), so one unreadable read does not confine
+   *  the bot's conversation for good. Only a `facts` wake carries task
+   *  facts. */
+  wakeSignedIn(item: Pick<WakeItem, 'reason'>): boolean | 'unknown' {
     const reason = item.reason;
     if (reason.kind !== 'facts') return false;
     const ids = Array.isArray(reason.factIds) ? reason.factIds : [];
@@ -383,19 +387,24 @@ export class WakeTaint {
     try {
       found = this.ports.facts(ids);
     } catch {
-      return true;
+      found = [];
     }
     const byId = new Map(found.map((f) => [f.id, f]));
-    return ids.some((id) => {
+    let unknown = false;
+    for (const id of ids) {
       const f = byId.get(id);
       if (f) {
-        if (!TASK_FACT_KINDS.has(f.kind)) return false;
-        return !f.ref?.taskId || this.taskIdSignedIn(f.ref.taskId);
+        if (TASK_FACT_KINDS.has(f.kind) && (!f.ref?.taskId || this.taskIdSignedIn(f.ref.taskId))) return true;
+        continue;
       }
       const taskId = taskIdOfFactId(id);
-      if (taskId) return this.taskIdSignedIn(taskId);
-      return !/^workflow\.ready:wf-[a-f0-9]{24}@[1-9][0-9]*$/.test(id);
-    });
+      if (taskId) {
+        if (this.taskIdSignedIn(taskId)) return true;
+        continue;
+      }
+      if (!/^workflow\.ready:wf-[a-f0-9]{24}@[1-9][0-9]*$/.test(id)) unknown = true;
+    }
+    return unknown ? 'unknown' : false;
   }
 
   private taskIdSignedIn(taskId: string): boolean {

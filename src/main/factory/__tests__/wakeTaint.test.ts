@@ -295,11 +295,21 @@ describe('a wake carrying a signed-in task\'s fact', () => {
     expect(owner.wakeSignedIn(wake(facts(['task.done:wtask-own@1'])))).toBe(false);
   });
 
-  it('a task fact that cannot be told is signed in: its row gone or unreadable, a fact not found, the log unreadable', () => {
+  it('a task fact that cannot be told is signed in: its row gone or unreadable', () => {
     expect(make().wakeSignedIn(wake(facts(['task.done:wtask-gone@1'])))).toBe(true);
     expect(make({ taskRow: () => { throw new Error('x'); } }).wakeSignedIn(wake(facts(['task.done:wtask-gw@1'])))).toBe(true);
-    expect(make().wakeSignedIn(wake(facts(['f-missing'])))).toBe(true);
-    expect(make({ facts: () => { throw new Error('x'); } }).wakeSignedIn(wake(facts(['f-gw'])))).toBe(true);
+    // With the log unreadable, a fact id that names its task is still told by the task's row.
+    const plain = make({ facts: () => { throw new Error('x'); } }, [], [], [row('wtask-plain', true)]);
+    expect(plain.wakeSignedIn(wake(facts(['task.done:wtask-plain@1'])))).toBe(false);
+    expect(plain.wakeSignedIn(wake(facts(['task.done:wtask-gone@1'])))).toBe(true);
+  });
+
+  it('a fact that cannot be found and names no task is unknown, not signed in: the log unreadable, or the fact past its window', () => {
+    expect(make().wakeSignedIn(wake(facts(['f-missing'])))).toBe('unknown');
+    expect(make({ facts: () => { throw new Error('x'); } }).wakeSignedIn(wake(facts(['f-gw'])))).toBe('unknown');
+    // A known signed-in fact beside it still is one.
+    const t = make({}, [fact('f-gw', 'task.done', { taskId: 'wtask-gw' })], [], [gateway('wtask-gw')]);
+    expect(t.wakeSignedIn(wake(facts(['f-missing', 'f-gw'])))).toBe(true);
     // A workflow's ready wake names no task.
     expect(make().wakeSignedIn(wake(facts([`workflow.ready:wf-${'a'.repeat(24)}@1`])))).toBe(false);
   });

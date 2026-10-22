@@ -186,3 +186,18 @@ describe('factoryNotImplemented', () => {
     });
   });
 });
+
+describe('a bot\'s terminal reads', () => {
+  // input.readScreen refuses a signed-in task's pane (input.rpc.ts); a
+  // second terminal read on a bot's surface would read it past that check.
+  it('reach panes only through terminal_read → input.readScreen; terminal_read_events is on no bot surface', () => {
+    expect(BOT_TOOL_RPC.terminal_read).toEqual(['input.readScreen', 'deck.resolvePaneRoute']);
+    expect(Object.keys(BOT_TOOL_RPC)).not.toContain('terminal_read_events');
+    expect(Object.keys(COORDINATOR_READ_EXTENSION)).not.toContain('terminal.readEvents');
+    for (const surface of [SHARED_SURFACE, botSurfaceOf(), ...Object.values(ROLE_SURFACES)]) {
+      expect(surface.tools.has('terminal_read_events')).toBe(false);
+      expect(surface.rpc.has('terminal.readEvents')).toBe(false);
+      expect([...surface.rpc].filter((m) => m.startsWith('input.') || m.startsWith('terminal.'))).toEqual(['input.readScreen']);
+    }
+  });
+});
