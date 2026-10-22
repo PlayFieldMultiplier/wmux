@@ -9,6 +9,8 @@ import type { DictationModelState } from '../../shared/dictation';
 import { startRecording, type Recording } from './recorder';
 import { dictationLanguageFor } from './whisper';
 import type { WorkerReply, WorkerRequest } from './whisper.worker';
+// Vite's worker import; the resolver eslint uses does not know the suffix.
+// eslint-disable-next-line import/no-unresolved
 import WhisperWorker from './whisper.worker?worker';
 
 export type DictationPhase =

@@ -8,6 +8,8 @@
 // THIRD_PARTY_NOTICES. Pure apart from the `ort` sessions it is handed, so
 // it runs in a worker and under Node alike.
 
+// Types only: the package's names come through its `export *`.
+// eslint-disable-next-line import/namespace
 import type * as Ort from 'onnxruntime-web';
 
 type InferenceSession = Ort.InferenceSession;

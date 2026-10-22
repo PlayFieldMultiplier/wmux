@@ -3,6 +3,9 @@
 // runtime's .wasm as bytes (main reads them from the app's data and
 // resources), so it fetches nothing.
 
+// A subpath of the package's `exports`, which the resolver eslint uses does
+// not read.
+// eslint-disable-next-line import/no-unresolved
 import * as ort from 'onnxruntime-web/wasm';
 import { transcribe, WhisperTokenizer, type DictationLanguage, type WhisperSessions } from './whisper';
 import type { DictationAssets } from '../../shared/dictation';
