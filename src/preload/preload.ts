@@ -1080,6 +1080,11 @@ const electronAPI = {
       ipcRenderer.sendSync('browser:get-backend-sync'),
     setBackend: (backend: 'builtin' | 'external' | 'chrome') =>
       ipcRenderer.invoke('browser:set-backend', backend),
+    // Settings → Browser → Allow private network addresses. Main owns it; the
+    // set resolves to the value now in force.
+    getAllowPrivateNetwork: (): Promise<boolean> => ipcRenderer.invoke('browser:get-allow-private-network'),
+    setAllowPrivateNetwork: (allow: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('browser:set-allow-private-network', allow),
     // Phase 2.5 — chrome-backend profiles + workspace bindings.
     chromeProfiles: {
       list: (): Promise<{

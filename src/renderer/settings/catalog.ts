@@ -192,6 +192,7 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
 
   { id: 'browserbackend', tab: 'browser', labelKey: 'settings.browserBackend', descKey: 'settings.browserBackendDesc', synonyms: 'browser chrome chromium external builtin' },
   { id: 'browserlight', tab: 'browser', labelKey: 'settings.browserLightweight', descKey: 'settings.browserLightweightDesc', synonyms: 'browser throttle cpu lightweight' },
+  { id: 'browserprivatenet', tab: 'browser', labelKey: 'settings.browserPrivateNetwork', descKey: 'settings.browserPrivateNetworkDesc', synonyms: 'browser private network intranet lan local address 10 172 192.168 ssrf' },
   { id: 'sitememory', tab: 'browser', labelKey: 'settings.siteMemory', descKey: 'settings.siteMemoryDesc', synonyms: 'browser site memory domain replay failure remember' },
   { id: 'computeruse', tab: 'computer-use', labelKey: 'settings.computerUse', descKey: 'settings.computerUseDesc', synonyms: 'computer use desktop control apps screenshot click automation 컴퓨터 사용 데스크톱 조작' },
   { id: 'computerusehelper', tab: 'computer-use', labelKey: 'settings.computerUseHelper', descKey: 'settings.computerUseHelperDesc', synonyms: 'computer use helper native uia accessibility screen recording permissions reset access tcc 헬퍼 권한 화면 기록' },

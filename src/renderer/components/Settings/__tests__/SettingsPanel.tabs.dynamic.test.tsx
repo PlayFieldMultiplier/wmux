@@ -38,6 +38,10 @@ const MCP_STATUS = {
   }],
 };
 
+/** Main's side of Settings › Browser › Allow private network addresses: a
+ *  main-owned value, read and written over IPC, never through the store. */
+const mainPrivateNetwork = { value: false, sets: [] as boolean[] };
+
 /** Explicit answers for the bridges that decide what renders. */
 const EXPLICIT: Record<string, unknown> = {
   platform: 'darwin',
@@ -93,6 +97,14 @@ const EXPLICIT: Record<string, unknown> = {
   quickCommands: { list: resolved({ revision: 'r1', commands: [] }) },
   fanout: { getWorkerPermissionMode: resolved('auto'), getRequireApproval: resolved(false) },
   web: { deviceList: resolved({ devices: [] }) },
+  browser: {
+    getAllowPrivateNetwork: () => Promise.resolve(mainPrivateNetwork.value),
+    setAllowPrivateNetwork: (allow: boolean) => {
+      mainPrivateNetwork.sets.push(allow);
+      mainPrivateNetwork.value = allow;
+      return Promise.resolve(allow);
+    },
+  },
 };
 
 /** Anything not listed: a namespace whose calls resolve to nothing. */
@@ -219,6 +231,28 @@ describe('Settings tabs', () => {
   it('puts no catalog entry on a tab the nav does not list', () => {
     const tabs = new Set<string>(ALL_TABS);
     expect(SETTINGS_CATALOG.filter((e) => !tabs.has(e.tab)).map((e) => e.id)).toEqual([]);
+  });
+});
+
+describe('main-owned settings', () => {
+  it('browser › browserprivatenet shows the value main holds, writes it to main, and reads it back after a trip', async () => {
+    mainPrivateNetwork.value = true;
+    mainPrivateNetwork.sets = [];
+    await openTab('browser');
+    expect(row('browserprivatenet')?.textContent).toContain('Allow private network addresses');
+    const sw = rowSwitch('browserprivatenet');
+    expect(sw, 'browserprivatenet switch').not.toBeNull();
+    expect(sw!.getAttribute('aria-checked')).toBe('true');
+
+    await act(async () => { sw!.click(); });
+    await flush();
+    expect(mainPrivateNetwork.sets).toEqual([false]);
+    expect(rowSwitch('browserprivatenet')!.getAttribute('aria-checked')).toBe('false');
+
+    await openTab('about');
+    await openTab('browser');
+    expect(rowSwitch('browserprivatenet')!.getAttribute('aria-checked')).toBe('false');
+    mainPrivateNetwork.value = false;
   });
 });
 

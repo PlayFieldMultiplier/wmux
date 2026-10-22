@@ -2184,6 +2184,28 @@ function TabBrowser() {
   const browserBackend = useStore((s) => s.browserBackend);
   const setBrowserBackend = useStore((s) => s.setBrowserBackend);
   const browserBackendHydrated = useStore((s) => s.browserBackendHydrated);
+  // Main-side: main's navigation check and the MCP server's preflight both read
+  // it per navigation, so it is read and written over IPC, never through the
+  // renderer store.
+  const [allowPrivateNetwork, setAllowPrivateNetworkState] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI?.browser?.getAllowPrivateNetwork?.()
+      .then((v) => {
+        if (!cancelled && typeof v === 'boolean') setAllowPrivateNetworkState(v);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onAllowPrivateNetworkChange = (next: boolean) => {
+    window.electronAPI?.browser?.setAllowPrivateNetwork?.(next)
+      .then((stored) => setAllowPrivateNetworkState(stored))
+      .catch(() => undefined);
+  };
 
   return (
     <div className="settings-page">
@@ -2224,6 +2246,13 @@ function TabBrowser() {
             />
           </SettingRow>
         )}
+        <SettingRow id="browserprivatenet" label={t('settings.browserPrivateNetwork')} description={t('settings.browserPrivateNetworkDesc')}>
+          <Toggle
+            checked={allowPrivateNetwork}
+            onChange={onAllowPrivateNetworkChange}
+            label={t('settings.browserPrivateNetwork')}
+          />
+        </SettingRow>
       </SettingsSection>
       <SettingsSection title={t('settings.browserSectionKnowledge')}>
         <SettingRow id="sitememory" label={t('settings.siteMemory')} description={t('settings.siteMemoryDesc')}>

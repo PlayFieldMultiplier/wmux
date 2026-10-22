@@ -3257,6 +3257,8 @@ export const pl = {
   'settings.browserLightweightDesc': 'Ogranicz zużycie CPU przez wbudowane panele przeglądarki, które nie są widoczne (ukryte obszary robocze, oddalone panele, zminimalizowane okno). Automatyzacja (MCP/zrzuty ekranu) nadal działa pełną prędkością. Zmniejsza tylko CPU, nie pamięć.',
   'settings.browserDiscard': 'Odrzucaj ukryte przeglądarki (zwalnia pamięć)',
   'settings.browserDiscardDesc': 'Gdy panel przeglądarki pozostaje niewidoczny przez 5 minut, wyładuj go całkowicie, aby odzyskać pamięć. Strona wczytuje się ponownie po powrocie (pozycja przewijania i niezapisane dane formularza są tracone). Panele odtwarzające dźwięk nigdy nie są odrzucane; automatyzacja budzi odrzucony panel automatycznie.',
+  'settings.browserPrivateNetwork': 'Zezwalaj na adresy sieci prywatnej',
+  'settings.browserPrivateNetworkDesc': 'Pozwól przeglądarkom agentów otwierać adresy intranetowe: 10.x, 172.16–31.x, 192.168.x i fc00::/7. Metadane chmury (169.254.x), adresy link-local i aliasy pętli zwrotnej pozostają zablokowane. Działa od następnej nawigacji. Domyślnie wyłączone.',
   'settings.siteMemory': 'Pamięć witryn',
   'settings.siteMemoryDesc': 'Zapamiętuj, co poszło nie tak w danej witrynie — przerwane odtwarzanie, host, który się nie wczytał — i przypominaj o tym, gdy przeglądarka trafi tam następnym razem. Zapisywane per przestrzeń robocza, jeden plik na domenę, zapominane po 60 dniach bez powtórki. Wyłączenie zatrzymuje zarówno zapisywanie, jak i przypominanie; to, co już zapisano, nadal można usunąć.',
   'settings.browserSectionRuntime': 'Działanie przeglądarki',

@@ -1767,6 +1767,17 @@ ipcMain.handle('browser:set-backend', (event, value: unknown) => {
   void browserPolicyStore.bumpEpoch().catch((err) => console.warn('[browser-policy] epoch bump failed:', err));
   return { ok: true };
 });
+// Settings → Browser → Allow private network addresses. Main owns it because
+// main's navigation check and the MCP server's preflight (which asks main over
+// browser.navigationPolicy.get) both read it per navigation; the set returns
+// the value now in force.
+ipcMain.handle('browser:get-allow-private-network', (event) =>
+  isTrustedMainFrameSender(event, () => mainWindow) ? browserBackendStore.allowPrivateNetwork() : false);
+ipcMain.handle('browser:set-allow-private-network', (event, value: unknown) => {
+  if (!isTrustedMainFrameSender(event, () => mainWindow)) return browserBackendStore.allowPrivateNetwork();
+  if (typeof value === 'boolean') browserBackendStore.setAllowPrivateNetwork(value);
+  return browserBackendStore.allowPrivateNetwork();
+});
 // Phase 2.5 — chrome-backend profiles + workspace bindings (workspace card
 // menu). Validation lives in the store; IPC only shapes the payloads.
 ipcMain.handle('browser:chrome-profiles:list', (event) => isTrustedMainFrameSender(event, () => mainWindow) ? ({
