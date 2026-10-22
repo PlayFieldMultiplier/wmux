@@ -4974,6 +4974,8 @@ export const pl = {
   'schedules.runNow': "Uruchom teraz",
   'schedules.runNowStarted': "Uruchomiono.",
   'schedules.runNowSkipped': "Nie uruchomiono: {reason}.",
+  'schedules.endSessionHint': "Nie uruchomiono: poprzednie uruchomienie ({when}) się zakończyło, ale jego sesja {session} wciąż jest otwarta. Zakończyć tę sesję i uruchomić?",
+  'schedules.endSessionAndStart': "Zakończ sesję i uruchom",
   'schedules.create': "Utwórz",
   'schedules.moreOptions': "Więcej opcji",
   'schedules.namePlaceholder': "Nazwa — z pierwszej linii",

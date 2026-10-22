@@ -919,8 +919,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.AUTOMATION_GRANT, id, mode, allowedTools, ...(browserIdentity === undefined ? [] : [browserIdentity])) as Promise<
         import('../shared/automation').AutomationMutationResult
       >,
-    runNow: (id: string, kind: 'manual' | 'test') =>
-      ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, id, kind) as Promise<import('../shared/automation').AutomationRunNowResult>,
+    runNow: (id: string, kind: 'manual' | 'test', endSessionOf?: string) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, id, kind, ...(endSessionOf === undefined ? [] : [endSessionOf])) as Promise<import('../shared/automation').AutomationRunNowResult>,
     cancelRun: (runId: string) =>
       ipcRenderer.invoke(IPC.AUTOMATION_CANCEL_RUN, runId) as Promise<import('../shared/automation').AutomationOkResult>,
     // The UI locale id only; main owns the toast words.

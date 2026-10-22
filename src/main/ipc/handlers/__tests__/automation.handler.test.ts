@@ -91,6 +91,21 @@ describe('automation IPC handlers', () => {
     await expect(call(IPC.AUTOMATION_LIST)).resolves.toEqual({ automations: [], available: false });
   });
 
+  it('Run now forwards endSessionOf and returns the lingering session; a malformed one sends nothing (#2065)', async () => {
+    const lingeringSession = { runId: 'r-prev', ptyId: 'auto-r-prev', endedAt: 5 };
+    rpc.mockResolvedValue({ ok: true, run: { id: 'r2', state: 'skipped' }, lingeringSession });
+    await expect(call(IPC.AUTOMATION_RUN_NOW, 'a1', 'manual')).resolves.toEqual({ ok: true, run: { id: 'r2', state: 'skipped' }, lingeringSession });
+    expect(rpc).toHaveBeenLastCalledWith(AUTOMATION_RPC.runNow, { id: 'a1', kind: 'manual' });
+    await call(IPC.AUTOMATION_RUN_NOW, 'a1', 'manual', 'r-prev');
+    expect(rpc).toHaveBeenLastCalledWith(AUTOMATION_RPC.runNow, { id: 'a1', kind: 'manual', endSessionOf: 'r-prev' });
+    // A malformed lingering session from the daemon is dropped, not passed on.
+    rpc.mockResolvedValue({ ok: true, run: { id: 'r3' }, lingeringSession: { runId: 'r-prev', ptyId: 7 } });
+    await expect(call(IPC.AUTOMATION_RUN_NOW, 'a1', 'manual')).resolves.toEqual({ ok: true, run: { id: 'r3' } });
+    rpc.mockClear();
+    await expect(call(IPC.AUTOMATION_RUN_NOW, 'a1', 'manual', { evil: true })).resolves.toMatchObject({ ok: false });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it('passes enabled:false through to automation.create', async () => {
     rpc.mockResolvedValue({ ok: true, automation: { id: 'n1' } });
     const draft = { name: 'n', trigger: {}, action: {} };

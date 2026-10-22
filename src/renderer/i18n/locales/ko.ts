@@ -4528,6 +4528,8 @@ export const ko = {
   'schedules.runNow': "지금 실행",
   'schedules.runNowStarted': "실행을 시작했습니다.",
   'schedules.runNowSkipped': "시작하지 않았습니다: {reason}.",
+  'schedules.endSessionHint': "시작하지 않았습니다: 이전 실행({when})은 끝났지만 그 세션 {session}이(가) 아직 열려 있습니다. 그 세션을 끝내고 시작할까요?",
+  'schedules.endSessionAndStart': "세션 끝내고 시작",
   'schedules.create': "만들기",
   'schedules.moreOptions': "추가 옵션",
   'schedules.namePlaceholder': "이름 — 첫 줄에서 자동",
