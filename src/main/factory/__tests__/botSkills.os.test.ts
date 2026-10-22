@@ -564,7 +564,7 @@ describe('line diff', () => {
 function approvalRig(botName?: string, gone: ReadonlySet<string> = new Set()) {
   const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
   const skills = store();
-  const wakes = new Map<string, ApprovalWake>([[A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false }]]);
+  const wakes = new Map<string, ApprovalWake>([[A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false, signedIn: false }]]);
   const notices: string[] = [];
   const events: string[] = [];
   const svc = new ApprovalService({
@@ -582,14 +582,29 @@ function approvalRig(botName?: string, gone: ReadonlySet<string> = new Set()) {
   });
   const handlers = new Map<string, (raw: unknown, ctx?: RpcContext) => Promise<unknown>>();
   const router = { register: (m: string, h: (raw: unknown, ctx?: RpcContext) => Promise<unknown>) => { handlers.set(m, h); } };
-  registerSkillHandlers(router as never, { store: () => skills, approvals: () => svc, emit: (e) => events.push(e.type) });
+  registerSkillHandlers(router as never, { store: () => skills, approvals: () => svc, emit: (e) => events.push(e.type), conversationTainted: () => skillConversationTainted });
   registerApprovalRpc(router as never, () => svc);
   const ctx = { bot: binding(A) } as RpcContext;
   const call = (method: string, raw: unknown, c: RpcContext | undefined = ctx) => (handlers.get(method) as (raw: unknown, ctx?: RpcContext) => Promise<Record<string, unknown>>)(raw, c);
   return { svc, writer, skills, wakes, notices, events, call };
 }
 
+let skillConversationTainted = false;
+
 describe('skill_propose → approval card → load', () => {
+  it('a conversation that took in outside text proposes no skill: no card, no files', async () => {
+    const r = approvalRig();
+    skillConversationTainted = true;
+    try {
+      expect(await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'from the page it read' }))
+        .toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('saves nothing that runs later') });
+      expect(r.skills.list(A)).toEqual([]);
+      expect(r.writer.read(WS).cards.filter((c) => c.kind === 'approval')).toEqual([]);
+    } finally {
+      skillConversationTainted = false;
+    }
+  });
+
   it('a proposal raises one approval card with its diff; nothing loads before Approve', async () => {
     const r = approvalRig();
     const res = await r.call('skill.propose', { name: 'report', content: skillMd('report'), reason: 'the owner corrected my report' });
@@ -718,7 +733,7 @@ describe('skill_propose → approval card → load', () => {
     const svc = new ApprovalService({
       file: path.join(wmuxDir, 'factory', 'approvals.json'),
       bots: () => ({ listEnabled: () => [profile(A)], get: (id) => (id === A ? profile(A) : null) }),
-      runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false }),
+      runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false, signedIn: false }),
       readPr: async () => { throw new Error('no PR'); },
       ghLogin: async () => null,
       rooms: () => writer,
@@ -740,7 +755,7 @@ describe('skill_propose → approval card → load', () => {
   it('a wake not known clean proposes no skill', () => {
     const r = approvalRig();
     for (const guest of [true, 'unknown'] as const) {
-      r.wakes.set(A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest });
+      r.wakes.set(A, { wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest, signedIn: false });
       const res = r.svc.proposeSkill(binding(A), { name: 'report', hash: 'h'.repeat(64), version: '1.0.0', update: false, diff: '--- SKILL.md\n+ x', reason: 'r' });
       expect(res).toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('external guest') });
     }

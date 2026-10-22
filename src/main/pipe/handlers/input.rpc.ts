@@ -60,7 +60,8 @@ import {
 } from '../../workspace/ptyOwnership';
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
-import { reclaimedWorkerWorkspaces } from '../../factory/workerReclaim';
+import { reclaimedWorkerOfPane, reclaimedWorkerWorkspaces } from '../../factory/workerReclaim';
+import { taskSignedIn } from '../../factory/wakeTaint';
 import { hasRedactedSecrets, redactStoredSecrets } from '../../factory/secretRedaction';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { STOP_KEYS, nothingToStopMessage } from '../../../shared/stopKeys';
@@ -1136,6 +1137,9 @@ export interface InputRpcDeps {
   /** Injected in tests; the workspaces of a bot's reclaimed workers (ended
    *  tasks it started, factory/workerReclaim.ts), for its own reads. */
   reclaimedWorkerWorkspaces?: (botId: string, ownerWorkspaceId: string) => string[];
+  /** Injected in tests; the task of a reclaimed worker whose recorded pane
+   *  `ptyId` is, in the workspace it runs in (factory/workerReclaim.ts). */
+  reclaimedTaskOfPane?: (workspaceId: string, ptyId: string) => { taskId: string; botId: string } | null;
 }
 
 /** Budget for one daemon state read while a fresh-context step polls. */
@@ -1177,6 +1181,7 @@ export function registerInputRpc(
 } {
   const ledgerOf = deps.getLedger ?? getTaskLedger;
   const reclaimedOf = deps.reclaimedWorkerWorkspaces ?? ((botId: string, owner: string): string[] => reclaimedWorkerWorkspaces(botId, owner));
+  const reclaimedTaskOf = deps.reclaimedTaskOfPane ?? ((ws: string, ptyId: string) => reclaimedWorkerOfPane(ws, ptyId));
 
   /**
    * The fresh-context step for one new-task send (#1680), against the live
@@ -1334,6 +1339,29 @@ export function registerInputRpc(
     }
     if (!dc.isSessionPipeWritable(ptyId)) {
       throw new Error(`${method}: the pane's session "${ptyId}" could not be attached — nothing was written`);
+    }
+  };
+
+  /** Whether the task pane a bot reaches through its task lane belongs to a
+   *  task that used a signed-in connection (wakeTaint.ts taskSignedIn): the
+   *  task of that workspace, or the reclaimed worker's task whose recorded
+   *  pane it is (a resume may run in a new workspace). A pane whose task
+   *  row cannot be found counts as one. */
+  const botTaskPaneSignedIn = (bot: BotBinding, taskWorkspaceId: string, ptyId: string): boolean => {
+    try {
+      const ledger = ledgerOf();
+      const rows = [];
+      const own = ledger.findByTaskWorkspace(taskWorkspaceId);
+      if (own && own.dispatch?.origin.kind === 'bot' && own.dispatch.origin.botId === bot.botId) rows.push(own);
+      const reclaimed = reclaimedTaskOf(taskWorkspaceId, ptyId);
+      if (reclaimed && reclaimed.botId === bot.botId) {
+        const row = ledger.get(reclaimed.taskId);
+        if (!row) return true;
+        rows.push(row);
+      }
+      return rows.length === 0 || rows.some((row) => taskSignedIn(row));
+    } catch {
+      return true;
     }
   };
 
@@ -1794,6 +1822,12 @@ export function registerInputRpc(
       );
       if (access.lane !== 'task-owner') {
         return readScreenFor(getWindow, p, !!bot);
+      }
+      // What a signed-in task's worker shows is what it read with the
+      // owner's sign-in: no bot reads that pane. Its result reaches the bot
+      // that started it as the task's report, in its 1:1 (fanout.rpc.ts).
+      if (bot && botTaskPaneSignedIn(bot, access.taskWorkspaceId, p['ptyId'])) {
+        throw new Error('input.readScreen: the pane of a task that used a signed-in connection is not read by a bot; its result reaches you as the task\'s report');
       }
       // The renderer re-checks the pty against `workspaceId`, and the caller's
       // own workspace does not hold it — name the task workspace the lane

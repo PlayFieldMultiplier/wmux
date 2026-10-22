@@ -115,6 +115,17 @@ export interface Fact<K extends FactKind = FactKind> {
   payload: Record<string, unknown>;   // kind-specific, small (≤ FACT_LIMITS.PAYLOAD_MAX_BYTES)
 }
 
+/** The kinds that, with a `ref.botId`, are addressed to that one bot: a
+ *  delivery or refusal of a handoff, the owner's message to a bot, a
+ *  schedule's firing for a bot, a notice to a bot. Only that bot is woken by
+ *  one (triggerEngine.ts) or reads one (fact.poll). */
+export const DIRECTED_FACT_KINDS: ReadonlySet<FactKind> = new Set<FactKind>(['handoff.received', 'handoff.refused', 'human.message', 'schedule.fired', 'bot.notice']);
+
+/** The bot a fact is addressed to, or null when it is for its scope. Pure. */
+export function factAddressee(f: Pick<Fact, 'kind' | 'ref'>): string | null {
+  return DIRECTED_FACT_KINDS.has(f.kind) && typeof f.ref?.botId === 'string' && f.ref.botId ? f.ref.botId : null;
+}
+
 /** A fact before the log assigns id, seq and key. */
 export type FactDraft<K extends FactKind = FactKind> = Omit<Fact<K>, 'id' | 'seq' | 'dedupeKey'>;
 

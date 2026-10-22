@@ -597,7 +597,7 @@ describe('ask_person', () => {
     expect(h.wakes[0]).toMatchObject({ botId: lead.id, reason: { kind: 'handoff' }, threadId: 'pr:github.com/acme/app#5' });
     // The runtime runs that wake: its thread is the running wake's thread.
     h.wake.thread = h.wakes[0].threadId ?? null;
-    const posted = await handleRoomPost({ kind: 'status', title: 'Answer received' }, { bot: binding(lead) } as RpcContext, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir }) as { ok: boolean; card?: { threadId: string } };
+    const posted = await handleRoomPost({ kind: 'status', title: 'Answer received' }, { bot: binding(lead) } as RpcContext, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir, signedIn: () => false }) as { ok: boolean; card?: { threadId: string } };
     expect(posted).toMatchObject({ ok: true, card: { threadId: 'pr:github.com/acme/app#5' } });
   });
 
@@ -1007,7 +1007,7 @@ describe('messages and room mentions (group rooms)', () => {
     // A bot of another room answers in its own room, as before.
     expect(theirs).toMatchObject({ threadId: 'general' });
     // Woken there, the bot's answer lands in the 1:1 (its wake's thread).
-    const posted = await handleRoomPost({ kind: 'status', title: 'Checked' }, { bot: binding(b) } as RpcContext, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir }) as { ok: boolean; card?: { threadId: string } };
+    const posted = await handleRoomPost({ kind: 'status', title: 'Checked' }, { bot: binding(b) } as RpcContext, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir, signedIn: () => false }) as { ok: boolean; card?: { threadId: string } };
     expect(posted).toMatchObject({ ok: true, card: { threadId: dm } });
   });
 
@@ -1567,7 +1567,7 @@ describe('a room with a coordinator: the owner talks to it, and the work it disp
     const issue = bot('ws1', 'triage');
     const h = await harness([coordinator, reviewer, dev, issue]);
     const OPERATOR: RpcContext = { origin: 'local', operator: true, firstParty: true };
-    const posted = await handleRoomPost({ workspaceId: 'ws1', title: 'Review PR #5 please' }, OPERATOR, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir }) as { ok: true; card: { id: string } };
+    const posted = await handleRoomPost({ workspaceId: 'ws1', title: 'Review PR #5 please' }, OPERATOR, { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir, signedIn: () => false }) as { ok: true; card: { id: string } };
     expect(posted.ok).toBe(true);
     expect(h.wakes.map((w) => [w.botId, w.reason.kind === 'human' && w.reason.lead])).toEqual([[coordinator.id, true]]);
     // The coordinator's turn on it dispatches the review.
@@ -1802,7 +1802,7 @@ describe('a room with a coordinator: the owner talks to it, and the work it disp
     const GROUP = 'group:grp-0000abcd' as ThreadId;
     h.ports.groups = { byThread: (ws, th) => (ws === 'ws1' && th === GROUP ? { id: 'grp-0000abcd', workspaceId: 'ws1', name: 'Ship', memberIds: [coordinator.id, dev.id, rev.id], threadId: GROUP, createdAt: 1, updatedAt: 1 } : null) };
     const OPERATOR: RpcContext = { origin: 'local', operator: true, firstParty: true };
-    const deps = { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir };
+    const deps = { writer: () => h.rooms, ports: () => h.ports, wmuxDir: () => dir, signedIn: () => false };
     const asked = await handleRoomPost({ workspaceId: 'ws1', threadId: GROUP, title: 'Add a --version flag' }, OPERATOR, deps) as { ok: true; card: { id: string } };
     // The coordinator takes it in the group and opens the work's thread.
     h.wake.thread = GROUP;

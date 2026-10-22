@@ -298,7 +298,7 @@ function ThreadChip({ threadId, t, onPick, taskTitle, requestTitle }: { threadId
       data-bots-thread-chip={threadId}
       onClick={() => onPick(threadId)}
       title={ref ? t('botsPage.showThread', { thread: label }) : `${t('botsPage.showThread', { thread: label })} · ${threadRef(threadId, t)}`}
-      className={`inline-flex h-[20px] max-w-full items-center gap-1 px-1.5 rounded-[var(--chip-radius)] bg-[var(--selection)] ${ref ? 'font-mono' : ''} text-[11px] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] ${FOCUS_RING}`}
+      className={`inline-flex h-[20px] max-w-full items-center gap-1 px-1.5 rounded-[var(--chip-radius)] bg-[var(--selection)] ${ref ? 'font-mono' : ''} text-[11px] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)] ${FOCUS_RING}`}
     >
       {/^pr:/.test(threadId) && <RefIcon kind="pr" />}
       {/^issue:/.test(threadId) && <RefIcon kind="issue" />}
@@ -1756,7 +1756,7 @@ function RecipientsControl({ candidates, lead, picked, onToggle, t }: {
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className={`inline-flex h-[24px] max-w-full items-center gap-1 rounded-[var(--chip-radius)] px-2 text-[12px] ${names.length > 0 ? 'bg-[var(--selection-emphasis)] text-[var(--text-main)]' : 'text-[var(--text-sub)] hover:bg-[var(--hover-fill)]'} ${FOCUS_RING}`}
+        className={`inline-flex h-[24px] max-w-full items-center gap-1 rounded-[var(--chip-radius)] px-2 text-[12px] ${names.length > 0 ? 'bg-[var(--selection-emphasis)] [--text-muted:var(--text-sub)] text-[var(--text-main)]' : 'text-[var(--text-sub)] hover:bg-[var(--hover-fill)]'} ${FOCUS_RING}`}
       >
         <span className="min-w-0 truncate">{label}</span>
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="2.5,4 5,6.5 7.5,4" /></svg>

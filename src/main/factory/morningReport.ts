@@ -28,7 +28,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isCoordinatorBot, type BotProfile } from '../../shared/bot';
 import { FACT_LIMITS, type Fact, type FactDraft } from '../../shared/facts';
-import { GENERAL_THREAD, isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, dmThreadBot, isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
 import type { WakeReason } from '../../shared/wake';
 import type { FactLog, FactLogApi } from './factLog';
 import type { BotDirectoryApi } from './botStore';
@@ -175,7 +175,10 @@ export async function buildMorningData(ports: MorningPorts): Promise<MorningData
   const budget = new Set<string>();
   for (const f of facts) if (f.kind === 'bot.budget_exhausted' && f.ref?.botId) budget.add(f.ref.botId);
 
-  // Rooms of the workspaces that have bots.
+  // Rooms of the workspaces that have bots. A 1:1 with the owner counts as
+  // open, but its title (the owner's first words there) is never listed: the
+  // report is a fact, and a fact is read beyond its addressee.
+  const titled = (threadId: string): boolean => dmThreadBot(threadId) === null;
   const writer = ports.rooms();
   const workspaces = [...new Set(all.map((b) => b.workspaceId))].slice(0, L.WORKSPACES);
   const rooms: MorningData['rooms'] = [];
@@ -187,7 +190,7 @@ export async function buildMorningData(ports: MorningPorts): Promise<MorningData
         workspaceId: ws,
         openThreads: open.length,
         openQuestions: threads.reduce((n, t) => n + t.openQuestions, 0),
-        newest: [...open].sort((a, b) => b.lastSeq - a.lastSeq).slice(0, L.THREAD_TITLES)
+        newest: open.filter((t) => titled(t.threadId)).sort((a, b) => b.lastSeq - a.lastSeq).slice(0, L.THREAD_TITLES)
           .map((t) => ({ threadId: t.threadId, title: t.title.slice(0, 80) })),
       });
     } catch {
@@ -198,7 +201,7 @@ export async function buildMorningData(ports: MorningPorts): Promise<MorningData
   let gardener: MorningData['gardener'] = [];
   try {
     gardener = (ports.corrections?.() ?? []).slice(0, L.CORRECTION_GROUPS)
-      .map((g) => ({ key: g.key, count: g.factIds.length, factIds: g.factIds.slice(0, 5) }));
+      .map((g) => ({ key: g.key, count: g.count, factIds: g.factIds.slice(0, 5) }));
   } catch {
     gardener = [];
   }

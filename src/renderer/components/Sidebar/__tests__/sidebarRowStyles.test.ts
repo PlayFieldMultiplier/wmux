@@ -25,7 +25,7 @@ describe('needs you vs selection', () => {
     expect(needs).toContain('border-color: var(--attention-hairline, var(--attention))');
   });
   it('lifts a needs-you row on hover', () => {
-    expect(rule('.wmux-sidebar .sidebar-row.sidebar-row-needs:hover')).toContain('background: var(--selection-hover)');
+    expect(rule('.wmux-sidebar .sidebar-row.sidebar-row-needs:not(.sidebar-row-active):not(.sidebar-row-task):hover')).toContain('background: var(--selection-hover)');
   });
   it('keeps the selection fill and adds an accent ring when the selected row needs you', () => {
     const selected = rule('.wmux-sidebar .sidebar-row-active.sidebar-row-needs:hover');

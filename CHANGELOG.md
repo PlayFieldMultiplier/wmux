@@ -1,5 +1,301 @@
 ## [Unreleased]
 
+## [4.9.0] — 2026-10-22
+
+### Added
+
+- A bot's profile shows the commands it ran or was refused, a switch to turn its commands off, and an Always allow button that asks you to confirm before a bot may run a program; Settings › Bots can turn the command reviewer off (#2541)
+
+- **New workspace setup.** Choose which git-ignored config files every new
+  worktree of a project gets, and its setup command, from the app: "New
+  workspace setup…" in the command palette, or Edit setup in the wmux.json
+  dialog. The `.env` family is ticked by default, the setup command is
+  suggested from the lockfile, and copying into bot and fan-out workspaces
+  stays off unless you turn it on. Saving writes `wmux.json` and approves
+  exactly what was written; a file with commands you have not approved yet is
+  sent to review first. (#2544)
+
+- **A Preparing card for new worktrees.** A worktree you open (start from an
+  issue, Quick Launch, the Git page) is now prepared under a card at the top
+  of the sidebar that shows the copied files and how long the setup has run
+  against its 5-minute limit. If the setup fails, the card shows its last
+  output lines and offers Retry, Start anyway, or Discard. Discard removes the
+  worktree and the branch it made, and refuses if you changed anything in it.
+  Nothing starts and nothing is deleted without your answer. A failure, a
+  skipped setup or a missing file also shows a toast on any page. The first
+  worktree of a project with `.env` files and no copy settings offers to
+  choose files to copy. (#2545)
+
+- **Add a whole bot team in one step.** The Bots page's "+" menu now has Add team, which asks only for the workspace and its repository. It adds the lead, research, developer, issues and reviewer bots the workspace doesn't have yet. Before, a workspace that already had a lead couldn't use Add team at all, and a default name that was already taken stopped the whole team. Roles that are already there are named instead of added, a taken name gets a number ("Developer 2"), and only a lead made here greets you. (#2551)
+
+- **Archive for deleted bots.** A deleted bot's kept chat now goes under a folded Archive at the bottom of the Bots list instead of staying among your conversations. It still opens read-only, and Remove from Archive (asked in place) takes it off the list for good. Its messages stay saved, and what it wrote in group chats keeps its name. (#2551)
+
+- **Bots can read from the services you signed in to.** A bot's research worker can now use a connection you signed in to in Plugins › Connectors (Notion, Google, Slack and the rest). Before this, a signed-in connection reached only your own terminals. The worker reaches the service through wmux, which keeps your sign-in to itself and lets the worker use only the tools you picked for that connection, and only when the service marks each of them read-only. Such a task carries no other connection and has no web search, no network for its commands and no repository, and it works with files only through its commands, which reach only its task folder. A bot starts, messages or resumes it only from a turn, in a conversation, that has taken in no outside text (your own message, for example); you can always resume it yourself. If the sign-in changes or wmux restarts, the bot tells you, and the worker starts again in a new pane once you resume it. macOS and Linux only for now (#2552)
+
+- An HTML file a bot attaches now opens rendered in the Bots side panel, with Preview / Code to see its source, where before it showed only as code. An ```html block in a bot's message gets the same toggle (Code first). The page is drawn in a sandboxed frame: its scripts don't run, and it can't load anything from the network or reach the app (#2553)
+
+- **Bot recipes.** Add bot now has a Recipe select with fifteen ready-made
+  jobs. Each one reads a service you connect (Notion, Figma, Canva, Linear,
+  Atlassian, Asana, GitHub, Gmail, Google Calendar, Sheets, Drive or Slack)
+  and reports in the chat. Anything to send or change comes to you as a
+  draft. A recipe connects nothing by itself. The bot's profile lists each
+  service the recipe needs, what is still left to set up, and a link to
+  Plugins › Connectors. Before this, you wrote each bot's job from scratch
+  and worked out its connections yourself.
+
+- **Apply a bot's code changes to your own checkout.** A dev worker's
+  changes used to stay in its own worktree on its task branch, and getting
+  them into your folder meant a pull request and a merge, or typing git
+  commands by hand. A code task that reported or finished now has *Apply to
+  my checkout* on its card. It applies the task's changes to the bot's
+  repository folder as unstaged changes, including the files the task added
+  and removed, and keeps anything you pulled since the task started. A line
+  then names the files and tells you how to undo them with `git restore`.
+  Your branch, HEAD and staged changes are left alone. Nothing is written
+  when a file the task touched has uncommitted changes (they are listed),
+  when your copy of those files changed so the task's changes no longer
+  apply cleanly, when your checkout runs those files through a content
+  filter such as Git LFS, or when a merge or rebase is in progress.
+
+- **A quiet way to star wmux on GitHub.** After you have used wmux for a while (at least three days, and 20 agent sessions started in panes), one muted row at the foot of the sidebar reads "Enjoying wmux? · Star on GitHub". If the GitHub CLI (`gh`) is signed in, Star on GitHub stars the repository in one click and says thank you; otherwise it opens the repository page. Either way the row never comes back. Not now hides it for at least three days and doubles the number of sessions before it asks again. It never shows while "Agent not set up" does, and if `gh` already shows wmux as starred it never shows at all. Settings › About keeps a Star wmux on GitHub row for any time. Everything is counted on your machine; nothing is reported anywhere (#2565)
+
+- **Bots work on GitLab repositories.** A bot in a GitLab repository can now
+  read merge requests, issues and CI, give a verdict, and merge an approved
+  merge request through `glab`, the way it already did on GitHub through `gh`.
+  The merge is refused if the head moved since approval, the merge request is
+  not open, or its pipeline is not green on that head; a merge request that
+  changes CI configuration is never merged on its own pipeline's word. When
+  `glab` is missing or not signed in, you get one "Connect GitLab" card
+  instead of bots failing on every read. Before, bots in a GitLab repository
+  could not read or merge anything there.
+
+- **Bots can read commits in their repository.** A bot with a repository can now read a file at any commit (`git_show`) and see what a branch changed (`git_diff`). A reviewer can read a worker's commit as soon as it exists instead of waiting for a report. Both are read-only, protected files such as `.env` are never shown, and neither is available in a turn started by an outside guest's message.
+
+- **Agents can send images with their messages, to a pane on this PC or on another one.** `send_message` takes up to four PNG, JPEG or WebP files (5 MB each, 10 MB per message) from the pane's project folder or `~/.wmux/uploads/`. The receiving PC keeps its own copy in `~/.wmux/uploads/a2a/` for 7 days. The receiving agent's message ends with the path of each image, so it can open them. Metadata such as a photo's location is removed before an image leaves, and only real, still image files are accepted, whatever their name says (an animated image is refused). Cross-PC messages carried text only before. A PC whose wmux is older gets the text with a note that images were left out. (#2569, #2571, #2572)
+
+- **Bot triggers fire on GitLab repositories.** Bots watching a GitLab
+  repository now wake on merge requests opened, updated, labelled, merged or
+  closed, on pipelines turning green or red, and on new or labelled issues,
+  and an approved merge lane merges a GitLab merge request once its pipeline
+  is green. Before, the watch only read GitHub, so nothing fired for GitLab.
+  Trusted authors on GitLab are written `host/username`; a GitHub login in
+  the list no longer counts as a GitLab user of the same name.
+
+- **Bots open GitLab merge requests.** When a worker's task is done in a
+  GitLab repository, `task_pr` now pushes the branch and opens a merge
+  request with `glab`, returning the existing one instead of a duplicate.
+  The approval dialog names the host and project it will push to. Before,
+  `task_pr` only knew `gh` and you had to open the merge request yourself.
+
+- **Settings → Browser → Allow private network addresses.** Browser navigation can now reach intranet sites on private ranges (10.x, 172.16–31.x, 192.168.x and IPv6 fc00::/7) once you turn this on, with no restart and no environment variable. It is off by default. Link-local and cloud metadata addresses (169.254.x, fe80::), 0.0.0.0 and loopback other than 127.0.0.1 stay blocked either way. `WMUX_ALLOW_PRIVATE_NETWORK=1` still works as before.
+
+### Changed
+
+- **After a crash, programs started from a terminal close with it (Windows).** With the default Node terminal engine, if the background service crashes or is force-closed, the shells it ran and anything started from them now end with it instead of staying behind unseen and holding memory. The same goes for the helpers the service itself starts, such as chat agents and git commands. A normal quit or an update leaves programs you started on purpose (for example with `start`) running, as before, and the shared Codex background server, which detaches itself from wmux (as Codex 0.162 does), keeps running either way. (#2398)
+
+- **The Git page no longer waits for a worktree's setup.** The worktree is
+  created at once and its setup runs on its Preparing card. (#2545)
+
+- **Starting an issue whose branch is held by a kept worktree** now names that
+  worktree and how to remove it, instead of only "branch already exists".
+  (#2545)
+
+- **In a room or group chat with a coordinator, a message that names no bot
+  goes to the coordinator alone.** It hands the work to the bots that should
+  do it, and their results come back to it, so it tells you the outcome
+  without being asked. Pick bots to send a message to exactly those. The
+  composer shows "To: <lead>" so you can see who gets the message. A room or
+  group without a coordinator still reaches every bot. (#2557)
+
+- **Data a signed-in task read stays in the bot's own conversation.** Before, a bot whose conversation took in a signed-in task's result could pass it on in many ways: start another worker, write to one, hand work to another bot or mention it, post in General, edit files in its folder, or record a verdict.
+  - Now that conversation answers only you, in the bot's 1:1, and a reply the bot writes as plain text lands there too.
+  - In that conversation the bot starts no other task, writes to no other worker, hands nothing to another bot, and posts nowhere else.
+  - It also runs no commands or file edits there.
+  - Its questions, approval requests, and key or login requests to you land in its 1:1 too, and a login page it asks you to open is only the plain address of a host one of its connections uses.
+  - Each refusal tells the bot why, so it can tell you.
+
+- **A signed-in task reports in the bot's 1:1.** Its result card lands there even when you asked in General, and other bots no longer see its result in their fact reads. The worker's own words stay out of the task's fact and its end-of-task notice, and no bot reads such a task's terminal: its result reaches the bot only as the task's report.
+
+- **A bot's 1:1 with you is its own.** Other bots no longer read it, find it in a room search, see your messages in it through their fact reads, get its cards as the context of their own turns, or post cards in it.
+
+- **Owner messages in a bot's 1:1 stay out of other bots' prompts.** Another bot's wake no longer takes its language sample from them, and a correction made there reaches the Coordinator only as a pattern and a count.
+
+- **No standing instructions from a conversation that took in outside text.** A bot no longer saves a routine, a job, a workflow, a skill or a plan from such a conversation, even when you said yes to it there.
+
+- **Plain words on the cross-PC link screens.** A link with another PC's main bot used to say "Moa", a feature that is gone; it now says Coordinator (대장, Koordynator, 协调者), the name the Bots page uses for that role, and the link row shows `DESK/Coordinator` instead of `DESK/Moa`. The value you compare to check that a PC is the right one is now called a security code everywhere it appears (Settings › LAN, Remote › Details, link requests and the "changed" warnings) instead of fingerprint, certificate or identity, and the Settings title no longer says "(experimental)". (#2583)
+
+### Fixed
+
+- **Much less memory per terminal on Windows.** Each open terminal used to keep its own helper thread of about 12 MB in the background service just to read its output; all terminals now share one. With 120 terminals open the service drops from about 1.3 GB to about 140 MB, which leaves more room before Windows runs out of memory on a large restore. (#2398)
+
+- **A recovered pane starts clean.** After wmux recovered a pane from a restart, modes the old program had set could carry over into the new shell: an alternate screen that came back later, a scroll region that kept old output on screen, and mouse, paste or cursor settings. Recovery now resets them before the new shell starts. (#2543)
+
+- **A lead woken by a teammate's message shows as running.** In Claude Code Agent Teams, a lead turn that a teammate's message starts sends no prompt hook, so a pane whose lead only wrote text read finished for that whole turn, or only looked busy while a teammate was still working. wmux now reads the start of that turn from the lead's transcript: the pane shows running until the turn's own Stop. (#2546)
+
+- Opening a busy Bots page no longer logs a "possible EventEmitter memory leak" warning: all its views now share one listener for bot updates (#2549)
+
+- **A restored workspace you have not opened no longer starts its shells at
+  launch.** On a cold start with many restored workspaces, every blank pane of
+  every workspace started a shell at once, visible or not, which could run the
+  machine out of memory. A hidden workspace's blank pane now says "Starts when
+  opened" and starts its shell the first time you open it. A pane that
+  replaces a Claude Code or Codex session with "resume on start" turned on
+  still starts at launch. A session restored suspended (a plain WSL shell, or
+  one past the restore limit) in a workspace you have not opened likewise
+  starts when its pane is first shown; a supervised pane or exec unit (a dev
+  server) still starts at launch. Agents see such a pane as not started
+  (not as ended): reading it starts nothing, a message to it is stored for the
+  receiver to poll, and typing into it with `terminal_send` or `wmux send`
+  starts it first. A start that takes longer than the call can wait (50 s
+  for `terminal_send`, inside Codex's tool timeout) keeps going and answers
+  that nothing was written yet, so sending again is safe and types the text
+  once. `ctrl+c` or `escape` sent to it starts
+  nothing and answers that nothing is running. A suspended session is no
+  longer discarded after the 7-day suspended limit just because its pane was
+  never opened.
+
+- **Add bot keeps the folder you chose.** Changing the workspace in Add bot no longer clears a folder you picked by hand. Until you pick one, the repository follows the chosen workspace, and a workspace whose terminals haven't reported a folder yet now offers the folder it was last in, so you don't have to pick it again. (#2551)
+
+- Windows updates keep autostart and the Desktop shortcut the way you left them. Every update used to turn autostart back on and recreate a Desktop shortcut you had deleted.
+
+- A stalled or dropped update check no longer stops later checks. Before, one dropped connection meant wmux stopped looking for updates until it was restarted.
+
+- When a published update fails verification, Settings › Updates says so, and wmux waits for the release to change instead of downloading the same installer again every 30 minutes.
+
+- **With many workspaces open, background refreshes no longer briefly fail other terminal reads.** The sidebar's missions refresh and the task ledger's periodic check used to ask the background service once per workspace. With about 100 workspaces the two together sometimes went over the service's per-second limit, so another read that landed in the same second, such as the terminal list, was refused. Each refresh is now one request for every workspace. (#2372)
+
+- **Bots no longer answer with "nothing to add".** In a room without a
+  coordinator, a bot that has nothing of its own to say stays silent instead
+  of posting a card saying so. (#2557)
+
+- **The coordinator no longer repeats what the other bots just posted.** Its
+  report adds the decision and the next step, and it promises a follow-up
+  only for work it handed out. (#2557)
+
+- **A maximized Windows window keeps the sheet's rounded corner beside the
+  rail.** Every rail page (Git, Bots, Fleet, Remote, Plugins, Settings) used
+  to show a right angle at its top-left where macOS shows a curve, and the
+  rail met the sidebar with no edge. Now the corner beside the rail and the
+  titlebar stays rounded with its hairline, as in a windowed window (mirrored
+  with the sidebar on the right), while the corners on the screen's edges stay
+  square.
+
+- **The sheet's edge stays visible over window glass.** With glass on, the
+  frame shows the backdrop through it, and the sheet's fixed edge colour read
+  lighter than the frame over a tinted backdrop or vanished over a light one.
+  The edge is now a light ink of the text colour, so it keeps the same
+  contrast over any backdrop.
+
+- **A plugin you put in place yourself keeps its own rail icon.** A plugin folder placed by hand under the same name as a catalog plugin (for example `office`) showed that catalog plugin's icon on the rail, as if the catalog had installed it. Only a plugin the catalog installed now carries the catalog's icon; any other shows the package icon, as the Plugins page already did. (#2559)
+
+- **Worker pause, resume and end notices no longer flood a chat.** For a
+  task started from a bot's 1:1 or a group chat, each "Worker paused",
+  "Worker resumed" and "Worker done" notice used to land as its own line in
+  the conversation. They now fold into one card for the task, which shows
+  its state and keeps its Resume and Apply buttons.
+
+- **Keys work normally in a recovered pane after Claude Code.** On macOS and Linux, if a pane was running Claude Code when it was recovered, the new shell could receive every key as an escape sequence (`CSI u`), and a full-screen program opened later inherited the same encoding. Recovery now also resets the kitty keyboard mode and the application keypad before the new shell starts. (#2562)
+
+- **On Windows, sidebar and titlebar text stays readable with window glass on, whatever is behind wmux.** With a light window behind it, a dark theme's sidebar used to turn mid-grey and its secondary text became hard to read. The glass now paints as much of the theme's own colour as it takes to keep the text legible over any backdrop, and a theme that cannot stay legible over glass shows an opaque window on Windows instead.
+
+- **An old Moa hand-off card no longer blocks a workspace's decisions.** A
+  pending card left over from Moa kept that workspace's decision slot taken,
+  so no new question could be raised there. Such cards are now dropped when
+  wmux starts, and remote work that was held "for Moa" now waits for you
+  like any other held task; with no pane to deliver to, it offers only
+  Send back.
+
+- **Muted and secondary text is readable on every built-in theme.** On Paper, Mono, Mono Light, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Nightowl and Void, counts, labels and other dimmed text could fade into the sidebar and the page. It is now brighter (or darker on light themes) by just enough to stay readable on the theme's own sidebar, page, window frame and row hover, and each theme keeps its hue.
+
+- **A review bot reviews a pull request in a repository with no checks in seconds instead of an hour.** The reviewer used to start a verify worker for every pull request. That worker reinstalled dependencies and ran the whole test suite, and in a repository with no checks the merge lane then refused the result anyway.
+  - Now, when the pull request's base branch declares no checks, the reviewer reads the change itself and records its verdict with no worker.
+  - Before recording, wmux reads that branch's checks itself, at the base commit GitHub or GitLab reports.
+  - The merge lane counts the verdict while the base branch still declares no checks.
+  - A repository that does have checks still gets one verify worker, even for a docs-only change, since a docs file can be what the checks look at. That worker is told which checks will run, and for a docs-only change it reads the change instead of running tests of its own.
+
+- **On Windows, eight more themes show window glass.** Paper, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Gruvbox Dark Hard and Void stayed opaque with glass on, because their dimmed text could not stay readable over a bright or dark window behind wmux. While Windows glass shows, these themes draw dimmed text a shade stronger, just enough to stay readable over any backdrop. macOS and glass Off look exactly as before.
+
+- **Alt+Up/Down no longer stops on a bot's worker.** Cycling workspaces now follows the sidebar's list, so it skips the workers that are shown only on the Bots page. (#2575)
+
+- **The coordinator's report shows up where you asked.** When the
+  coordinator does your request in a pull request's thread, a "Finished"
+  line now appears in the chat you asked in, linking to that thread.
+  (#2576)
+
+- **A coordinator without a repository hands the work on.** A coordinator
+  with no repository of its own now hands pull request, issue and code work
+  to a bot that has the repository. If no bot in the workspace has one, it
+  says so and asks you to set one. (#2576)
+
+- **A review bot's no-checks verdict follows the base branch as it is now.** Since #2570, a review bot can record a verdict without a verify worker when the pull request's base branch declares no checks. That decision was tied to a base commit GitHub or GitLab reported, and that commit could lag the branch, so checks just added to the base could go unseen. wmux now reads the base branch's current commit from GitHub or GitLab, and refuses such a verdict when that commit can't be read. (#2577)
+
+- **Apply to my checkout keeps your line endings and reads mode changes.**
+  Files your repository's `info/attributes` or your global attributes file
+  give `eol=crlf` now keep CRLF when a bot's changes are applied, instead of
+  being refused or written with LF. A task that only makes a file
+  executable, or turns a file into a link, is applied instead of being
+  reported as already there. A task that changes a `.gitattributes` is
+  refused; merge its branch with git instead.
+
+- **A held fan-out with a signed-in connection starts when a worker slot frees.** Before, its retry was always refused.
+
+- **A task's record keeps which of its connections were signed in.** Before, the record dropped them, so none of the checks for signed-in tasks applied. A task the app recovers after a restart, from its pane's record, keeps them too.
+
+- **Bot turns wait until the app can tell whether a wake carries signed-in data.** Before, a turn that started too early could not be marked.
+
+- **A wake whose facts can no longer be read confines only its own turn.** The turn runs as if it held signed-in data, but the bot's conversation is not marked for good.
+
+- **Remote workspace pairing in Korean.** The pairing tab, its hint and every pairing error (expired code, wrong code, too many attempts, unreachable host and more) showed in English in the Korean app. They are now in Korean. (#2583)
+
+- **A work thread stays where it was opened after you follow up in it.**
+  When you asked for a follow-up inside a work thread and the bot did that
+  work in its 1:1 or a group chat, the "Finished" line in your thread made
+  the whole thread look like the 1:1's or the group's. It disappeared from
+  General, and in the group case your later messages there went to the
+  group instead of the coordinator. The thread now stays where it was
+  opened. (#2587)
+
+- **Agents can tell when a wmux tool refused them.** Many wmux tools answered
+  a refusal — an image `send_message` could not send, an approval that
+  pressed nothing, a bot memory or routine that was refused — as a normal
+  result, so an agent that only checks whether a call failed took it as
+  success. Those answers are now marked as errors, with the same text. In an
+  instance started with a data suffix, the image refusal also names that
+  instance's real uploads folder instead of `~/.wmux/uploads/`.
+
+- **Stopping a link to another PC no longer waits for an image upload to finish.** An upload in flight now ends with the link, and the message is sent again the next time the link starts. Before, stopping could hang for minutes behind a large image.
+
+- **An image that another PC was told it already had is no longer deleted just before it is picked up.** Uploads, received images and their cleanup now take turns, so two images arriving at once also stay within the per-PC storage limit.
+
+- **"Try sample task" runs the agent again on first run.** When the new
+  panes had already shown their prompt before the sample task started
+  listening, the wizard waited five seconds and then asked you to press
+  Enter instead of running the agent. It now checks whether the pane is
+  already at its prompt and starts right away.
+
+- **A Reviewer bot that cannot read its repository is no longer told to read the diff with a tool it does not have.** Reviewers on an engine other than Claude Code (SDK), or with no local checkout, now send every pull request head to a verify worker. Before, their instructions told them to read an ungated head's diff with the repository git reads, which only a Claude Code bot with a local checkout has.
+
+- **GitHub Enterprise on its own domain, and GitLab on a port or under a
+  sub-path, work with bots and the Git page.** wmux now tells GitHub from
+  GitLab by the hosts `gh` is signed in to and `glab` is configured for,
+  not by whether the host name contains "github", so a GitHub Enterprise
+  server on a custom domain is no longer treated as GitLab and its pull
+  requests are recorded. When both CLIs claim a host, or neither does, the
+  host-name rule still decides.
+  A GitLab server on a non-default port or under a sub-path is reached as
+  `glab` is configured for it. When a worker's task opens a GitLab merge
+  request, the toasts and buttons say MR instead of PR.
+
+- **Cross-host images: three rare races closed.** A re-pair that stops a session during its last image upload no longer lets that session post the message against the old pairing; the message is sent by the new session instead. When one image of a batch did not fit the local image folder, rolling back the batch could delete a copy another message had just been given; a batch is now stored all at once. And an upload the other PC confirmed it already had could be swept just before its message arrived; that confirmation now keeps the upload until the message claims it.
+
+- **Browser navigation now checks the IPv4 address carried inside NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) IPv6 addresses**, the same way it already checked `::ffff:` mapped ones. Before, such an address could reach a private or link-local IPv4 destination even with private network access off.
+
+- **New panes no longer stay blank after a long run with many sessions (#2585).** A new pane's first output could wait behind other panes' screen snapshots in the background service. While it waited the pane drew nothing and PowerShell stalled on its startup cursor query, although typing still reached the shell. A new pane's short first output now goes straight through.
+
+- **A new pane opened in the background no longer stays blank when you switch to it.** Its first output is kept and drawn on reveal instead of waiting for a full redraw from the background service.
+
+- **Fewer stalls when many panes are read at once.** Repeated reads of the same pane's screen (approvals, chat, automations, search) while the background service is busy now share one pass instead of queueing one each, and the redraws of many panes reattaching after a restart run at most four at a time.
+
 ## [4.8.0] — 2026-10-21
 
 ### Added

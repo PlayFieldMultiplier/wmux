@@ -3437,6 +3437,8 @@ export const en = {
   'settings.sc.newTerminalInPane': 'New terminal in this pane',
   'settings.sc.closeSurface': 'Close active tab',
   'surface.closeConfirm': 'Close this tab? Anything running in it will be stopped.',
+  'surface.closeConfirmShell': 'Close this tab? This ends its shell and the programs running in it. Programs started apart from the terminal — apps opened with open or start, tmux sessions, background services — may keep running.',
+  'surface.closeConfirmRemoteView': 'Close this tab? This only closes your view; the session keeps running on the other PC.',
   'settings.sc.closePane': 'Close split pane',
   'settings.sc.searchTerminal': 'Search in terminal',
   'settings.sc.commandPalette': 'Command palette',

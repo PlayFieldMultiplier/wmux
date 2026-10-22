@@ -141,4 +141,14 @@ describe('a resumed worker reports on its completed task', () => {
     const failed = { ...(ledger.get(TASK) as LedgerEntry), status: 'failed' as const };
     expect(endedTaskNotice(failed, { state: 'resumed', at: 1 }, { status: 'input_required' })).toBeNull();
   });
+
+  it('a signed-in task\'s worker\'s words after its end are not copied into the notice', () => {
+    const base = { ...(ledger.get(TASK) as LedgerEntry), status: 'completed' as const };
+    const signed = { ...base, dispatch: { origin: { kind: 'bot' as const, botId: BOT }, connectors: ['notion'], gatewayConnectors: ['notion'] } };
+    const notice = endedTaskNotice(signed, { state: 'resumed', at: 1 }, { status: 'review_requested', summary: 'the page says x' });
+    expect(notice).not.toBeNull();
+    expect(notice).not.toHaveProperty('detail');
+    expect(JSON.stringify(notice)).not.toContain('the page says x');
+    expect(endedTaskNotice(base, { state: 'resumed', at: 1 }, { status: 'review_requested', summary: 'the page says x' })).toMatchObject({ detail: 'the page says x' });
+  });
 });

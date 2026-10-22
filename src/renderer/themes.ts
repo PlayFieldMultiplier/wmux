@@ -242,7 +242,7 @@ export const UI_THEME_TOKENS: Record<BuiltinThemeId, UIThemeTokens> = {
   },
   paper: {
     bgBase: '#FFFFFF', bgSurface: '#ECECF0', bgMantle: '#F3F3F5',
-    textMain: '#17171C', textSub: '#3F3F48', textMuted: '#848491',
+    textMain: '#17171C', textSub: '#3F3F48', textMuted: '#81818F',
     accent: '#5B5BD6', accentSecondary: '#5B5BD6', success: '#16A34A', danger: '#DC2626', warning: '#C2700A',
   },
   'amber-line': {
@@ -263,12 +263,12 @@ export const UI_THEME_TOKENS: Record<BuiltinThemeId, UIThemeTokens> = {
   // text levels: bright primary, mid-grey secondary, dim tertiary.
   mono: {
     bgBase: '#1A171B', bgSurface: '#2A272C', bgMantle: '#171419',
-    textMain: '#E8E9ED', textSub: '#88898D', textMuted: '#6D6C72',
+    textMain: '#E8E9ED', textSub: '#949598', textMuted: '#76757B',
     accent: '#459BF7', accentSecondary: '#459BF7', success: '#34D399', danger: '#F87171', warning: '#FBBF24',
   },
   'mono-light': {
     bgBase: '#F7F7F7', bgSurface: '#EBEBEB', bgMantle: '#F7F7F7',
-    textMain: '#2E2E2E', textSub: '#6B6B6B', textMuted: '#888888',
+    textMain: '#2E2E2E', textSub: '#6A6A6A', textMuted: '#878787',
     accent: '#459BF7', accentSecondary: '#459BF7', success: '#059669', danger: '#DC2626', warning: '#B45309',
   },
   // The redesign default (designs/design-system-20260711/wmux-FINAL-amber.html).
@@ -282,44 +282,44 @@ export const UI_THEME_TOKENS: Record<BuiltinThemeId, UIThemeTokens> = {
   // makes the three regions read as one piece of chrome.
   amber: {
     bgBase: '#151517', bgSurface: '#202024', bgMantle: '#19191C',
-    textMain: '#EFEEEC', textSub: '#A5A29C', textMuted: '#706E68',
+    textMain: '#EFEEEC', textSub: '#A5A29C', textMuted: '#797771',
     accent: '#E8A33D', accentSecondary: '#6E9BC4', success: '#8FBF7F', danger: '#D96C6C', warning: '#E8A33D', // 2-accent (owner 2026-07-15): amber = alive/attention, steel-blue --accent-blue = navigation/interactive
   },
   'catppuccin-mocha': {
     bgBase: '#1E1E2E', bgSurface: '#313244', bgMantle: '#181825',
-    textMain: '#CDD6F4', textSub: '#BAC2DE', textMuted: '#6C708A', // Catppuccin Overlay0 lifted to 3:1 on the theme's own surfaces
+    textMain: '#CDD6F4', textSub: '#BAC2DE', textMuted: '#757993', // Catppuccin Overlay0 lifted to 3:1 on the theme's own surfaces
     accent: '#89B4FA', accentSecondary: '#89B4FA', success: '#A6E3A1', danger: '#F38BA8', warning: '#F9E2AF',
   },
   monochrome: {
     bgBase: '#080808', bgSurface: '#1A1A1A', bgMantle: '#050505',
-    textMain: '#E0E0E0', textSub: '#B0B0B0', textMuted: '#616161', // SSOT: matches shipped globals.css
+    textMain: '#E0E0E0', textSub: '#B0B0B0', textMuted: '#696969', // SSOT: matches shipped globals.css
     accent: '#A0A0A0', accentSecondary: '#A0A0A0', success: '#909090', danger: '#FF5555', warning: '#C0C0C0',
   },
   'stars-and-stripes': {
     bgBase: '#0C1428', bgSurface: '#1E2E4A', bgMantle: '#091020',
-    textMain: '#C8D6E8', textSub: '#A0B0C8', textMuted: '#4D6A94', // SSOT: matches shipped globals.css
+    textMain: '#C8D6E8', textSub: '#A0B0C8', textMuted: '#5372A0', // SSOT: matches shipped globals.css
     accent: '#5B8DEF', accentSecondary: '#5B8DEF', success: '#4EBF8B', danger: '#E8554E', warning: '#F2C85B',
   },
   'red-dynasty': {
     bgBase: '#1A0A0A', bgSurface: '#3A1A1A', bgMantle: '#140808',
-    textMain: '#E8D0C0', textSub: '#C0A898', textMuted: '#895849', // SSOT: matches shipped globals.css
+    textMain: '#E8D0C0', textSub: '#C0A898', textMuted: '#955F4F', // SSOT: matches shipped globals.css
     accent: '#E84040', accentSecondary: '#6AA0CC', success: '#5AAE6A', danger: '#E84040', warning: '#F2C744', // accentSecondary (--accent-blue) is a distinct blue for links, per shipped globals.css
   },
   nightowl: {
     bgBase: '#1E1B16', bgSurface: '#2E2A22', bgMantle: '#161310',
-    textMain: '#C8BFA8', textSub: '#9A9080', textMuted: '#766C54', // SSOT: matches shipped globals.css
+    textMain: '#C8BFA8', textSub: '#9B9181', textMuted: '#7F745A', // SSOT: matches shipped globals.css
     accent: '#C4A055', accentSecondary: '#7FA6C9', success: '#8AAA70', danger: '#CC6B5A', warning: '#C89060', // 2-accent: gold alive / cool-blue nav (--accent-blue)
   },
   'gruvbox-dark-hard': {
     // Gruvbox Dark, hard contrast. bg0_h is the pane surface, bg1 the raised
     // fill; orange is the alive/attention accent, aqua-blue the navigation one.
     bgBase: '#1D2021', bgSurface: '#3C3836', bgMantle: '#181A1B',
-    textMain: '#EBDBB2', textSub: '#BDAE93', textMuted: '#7C6F64',
+    textMain: '#EBDBB2', textSub: '#BDAE93', textMuted: '#87796D',
     accent: '#FE8019', accentSecondary: '#83A598', success: '#B8BB26', danger: '#FB4934', warning: '#FABD2F',
   },
   void: {
     bgBase: '#000000', bgSurface: '#0A0A0A', bgMantle: '#000000',
-    textMain: '#C0C0C0', textSub: '#909090', textMuted: '#5D5D5D', // SSOT: matches shipped globals.css
+    textMain: '#C0C0C0', textSub: '#909090', textMuted: '#616161', // SSOT: matches shipped globals.css
     accent: '#C0C0C0', accentSecondary: '#C0C0C0', success: '#909090', danger: '#FF4444', warning: '#A0A0A0',
   },
   hinomaru: {
@@ -336,20 +336,23 @@ export const UI_THEME_TOKENS: Record<BuiltinThemeId, UIThemeTokens> = {
   },
 };
 
-// The text tokens these themes shipped with before the 2026-10-21 contrast
-// lift. A custom theme saved as an unmodified copy of one of them (including
-// the old DEFAULT_CUSTOM_THEME, Catppuccin) still reads as based on it.
-export const PRE_CONTRAST_LIFT_TEXT: Partial<Record<BuiltinThemeId, Pick<UIThemeTokens, 'textSub' | 'textMuted'>>> = {
-  paper: { textSub: '#3F3F48', textMuted: '#8A8A96' },
-  mono: { textSub: '#85868B', textMuted: '#626167' },
-  'mono-light': { textSub: '#7E7E7E', textMuted: '#9C9C9C' },
-  amber: { textSub: '#A5A29C', textMuted: '#66645F' },
-  'catppuccin-mocha': { textSub: '#BAC2DE', textMuted: '#585B70' },
-  monochrome: { textSub: '#B0B0B0', textMuted: '#404040' },
-  'stars-and-stripes': { textSub: '#A0B0C8', textMuted: '#3A5070' },
-  'red-dynasty': { textSub: '#C0A898', textMuted: '#5A3A30' },
-  nightowl: { textSub: '#9A9080', textMuted: '#5A5340' },
-  void: { textSub: '#909090', textMuted: '#333333' },
+// The text tokens these themes shipped with before each contrast lift: the
+// values from before the 2026-10-21 lift, then 4.9.0's (the 2026-10-21 lift,
+// before the selected-row lift). A custom theme saved as an unmodified copy of
+// one of them (including an old DEFAULT_CUSTOM_THEME, Catppuccin) still reads
+// as based on it.
+export const PRE_CONTRAST_LIFT_TEXT: Partial<Record<BuiltinThemeId, ReadonlyArray<Pick<UIThemeTokens, 'textSub' | 'textMuted'>>>> = {
+  paper: [{ textSub: '#3F3F48', textMuted: '#8A8A96' }, { textSub: '#3F3F48', textMuted: '#848491' }],
+  mono: [{ textSub: '#85868B', textMuted: '#626167' }, { textSub: '#88898D', textMuted: '#6D6C72' }],
+  'mono-light': [{ textSub: '#7E7E7E', textMuted: '#9C9C9C' }, { textSub: '#6B6B6B', textMuted: '#888888' }],
+  amber: [{ textSub: '#A5A29C', textMuted: '#66645F' }, { textSub: '#A5A29C', textMuted: '#706E68' }],
+  'catppuccin-mocha': [{ textSub: '#BAC2DE', textMuted: '#585B70' }, { textSub: '#BAC2DE', textMuted: '#6C708A' }],
+  monochrome: [{ textSub: '#B0B0B0', textMuted: '#404040' }, { textSub: '#B0B0B0', textMuted: '#616161' }],
+  'stars-and-stripes': [{ textSub: '#A0B0C8', textMuted: '#3A5070' }, { textSub: '#A0B0C8', textMuted: '#4D6A94' }],
+  'red-dynasty': [{ textSub: '#C0A898', textMuted: '#5A3A30' }, { textSub: '#C0A898', textMuted: '#895849' }],
+  nightowl: [{ textSub: '#9A9080', textMuted: '#5A5340' }, { textSub: '#9A9080', textMuted: '#766C54' }],
+  'gruvbox-dark-hard': [{ textSub: '#BDAE93', textMuted: '#7C6F64' }],
+  void: [{ textSub: '#909090', textMuted: '#333333' }, { textSub: '#909090', textMuted: '#5D5D5D' }],
 };
 
 // ─── Windows glass muted text ───────────────────────────────────────────────
@@ -364,13 +367,10 @@ export const PRE_CONTRAST_LIFT_TEXT: Partial<Record<BuiltinThemeId, Pick<UITheme
 // carries it only under html[data-glass][data-platform="win32"], so macOS and
 // glass Off keep textMuted (locked by glassCoverage.test.ts).
 export const WINDOWS_GLASS_MUTED: Partial<Record<BuiltinThemeId, string>> = {
-  paper: '#767684',
-  amber: '#75736C',
-  'catppuccin-mocha': '#757993',
+  paper: '#767685',
   monochrome: '#6A6A6A',
-  'stars-and-stripes': '#5473A1',
-  'red-dynasty': '#956050',
-  'gruvbox-dark-hard': '#86786C',
+  'stars-and-stripes': '#5473A2',
+  'red-dynasty': '#96604F',
   void: '#666666',
 };
 
@@ -676,9 +676,9 @@ export const BUILTIN_CSS_OVERRIDES: Partial<Record<BuiltinThemeId, Partial<FullC
   amber: { bgOverlay: '#28282D', textSubtle: '#85827B' },
   'catppuccin-mocha': { bgOverlay: '#45475A', textSubtle: '#9399B2', textSub2: '#A6ADC8', accentCursor: '#F5E0DC' },
   monochrome: { bgOverlay: '#2A2A2A', textSub2: '#909090', accentCursor: '#FFFFFF' },
-  'stars-and-stripes': { bgOverlay: '#2A3E5A', textSub2: '#8090A8', accentCursor: '#E89B4A' }, // 2-accent: orange-gold alive, distinct from pale-gold warning (accent stays blue = nav)
+  'stars-and-stripes': { bgOverlay: '#2A3E5A', textSub2: '#8291A9', accentCursor: '#E89B4A' }, // 2-accent: orange-gold alive, distinct from pale-gold warning (accent stays blue = nav)
   'red-dynasty': { bgOverlay: '#4A2A2A', textSub2: '#A08878' },
-  nightowl: { bgOverlay: '#38332A', textSub2: '#938976' },
+  nightowl: { bgOverlay: '#38332A', textSub2: '#9B9280' },
   'gruvbox-dark-hard': { bgOverlay: '#504945', textSubtle: '#928374', textSub2: '#A89984' },
   void: { bgOverlay: '#141414', textSub2: '#808080', accentCursor: '#FFFFFF' },
   hinomaru: { bgOverlay: '#D4CFC6', textSubtle: '#5C5651' },

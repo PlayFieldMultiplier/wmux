@@ -24,7 +24,7 @@
 
 import type { WmuxEvent } from '../../shared/events';
 import type { Fact, FactDraft } from '../../shared/facts';
-import type { LedgerEntry, LedgerStatus } from '../../shared/ledger';
+import { taskSignedIn, type LedgerEntry, type LedgerStatus } from '../../shared/ledger';
 import type { LedgerTransition } from '../../daemon/ledger/TaskLedger';
 import type { PrVerdictRecord } from '../../shared/prVerdict';
 import type { MergeEffect } from '../../shared/moaDecision';
@@ -115,7 +115,10 @@ export function factFromLedgerTransition(t: LedgerTransition): FactDraft | null 
       status: t.to,
       from: t.from,
       by: t.by.kind,
-      ...(t.summary ?? e.summary ? { summary: cap(String(t.summary ?? e.summary), TEXT_CAP) } : {}),
+      // A signed-in task's summary is what its worker read with the owner's
+      // sign-in: it reaches its bot in that bot's own wake (the task's row),
+      // never a fact every reader of the log, or a card, could carry on.
+      ...((t.summary ?? e.summary) && !taskSignedIn(e) ? { summary: cap(String(t.summary ?? e.summary), TEXT_CAP) } : {}),
       ...(e.gate ? { gateExit: e.gate.exitCode, ...(e.gate.headSha ? { gateHeadSha: e.gate.headSha } : {}) } : {}),
       ...originThread(e),
     },

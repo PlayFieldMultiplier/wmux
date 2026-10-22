@@ -141,7 +141,7 @@ export function ApprovePendingChip({ ids, t, api }: { ids: readonly string[]; t:
       data-approve-ids={ids.join(' ')}
       disabled={busy}
       onClick={() => void approveAll()}
-      className={`h-[26px] self-start px-2.5 rounded-[var(--chip-radius)] bg-[var(--selection)] text-[12px] text-[var(--text-main)] hover:bg-[var(--selection-hover)] disabled:opacity-60 ${FOCUS_RING}`}
+      className={`h-[26px] self-start px-2.5 rounded-[var(--chip-radius)] bg-[var(--selection)] text-[12px] text-[var(--text-main)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)] disabled:opacity-60 ${FOCUS_RING}`}
     >
       {ids.length === 1 ? t('room.approval.chipOne') : t('room.approval.chip', { count: ids.length })}
     </button>

@@ -66,6 +66,25 @@ describe('ledger.update — bot scope', () => {
     expect(await guarded({ taskId: 't-mine', status: 'failed', expectedRev: 1 }, bot('bot-0000000a'))).toMatchObject({ ok: true });
   });
 
+  it('a conversation that holds data from a signed-in task writes no words on a task that read none; a bare status, and words on the signed-in task, stay allowed', async () => {
+    let signedIn = true;
+    const handlers = new Map<string, Handler>();
+    registerLedgerRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, () => null, { getLedger: () => ledger, guestWake: () => false, signedIn: () => signedIn });
+    const guarded = handlers.get('ledger.update') as Handler;
+    await ledger.register({ id: 't-signed', taskWorkspaceId: 'ws-t5', ownerWorkspaceId: 'ws-bot', title: 'read the page', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' }, preset: 'research', connectors: ['notion'], gatewayConnectors: ['notion'] } });
+    for (const words of [{ summary: 'Q3 revenue 4.2M' }, { evidence: { items: [] } }]) {
+      expect(await guarded({ taskId: 't-mine', status: 'failed', expectedRev: 1, ...words }, bot('bot-0000000a')))
+        .toMatchObject({ ok: false, error: { code: 'NOT_AUTHORIZED', message: expect.stringContaining('holds data from a signed-in task, so it can\'t write a summary on a task that used no signed-in connection') } });
+    }
+    expect(ledger.get('t-mine')?.summary).toBeUndefined();
+    expect(await guarded({ taskId: 't-signed', status: 'failed', expectedRev: 1, summary: 'Q3 revenue 4.2M' }, bot('bot-0000000a'))).toMatchObject({ ok: true });
+    expect(await guarded({ taskId: 't-mine', status: 'failed', expectedRev: 1 }, bot('bot-0000000a'))).toMatchObject({ ok: true });
+    // A clean conversation writes its words as before.
+    signedIn = false;
+    await ledger.register({ id: 't-clean', taskWorkspaceId: 'ws-t6', ownerWorkspaceId: 'ws-bot', title: 'clean', dispatch: { origin: { kind: 'bot', botId: 'bot-0000000a' } } });
+    expect(await guarded({ taskId: 't-clean', status: 'failed', expectedRev: 1, summary: 'done' }, bot('bot-0000000a'))).toMatchObject({ ok: true });
+  });
+
   /** ledger.update with the no-changes check answering `verdict`. */
   const guardedBy = (verdict: () => NoChangesVerdict | Promise<NoChangesVerdict>): Handler => {
     const handlers = new Map<string, Handler>();

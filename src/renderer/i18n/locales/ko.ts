@@ -2879,6 +2879,8 @@ export const ko = {
   'settings.sc.newWorkspace': '새 작업공간',
   'settings.sc.closeSurface': '현재 탭 닫기',
   'surface.closeConfirm': '이 탭을 닫을까요? 탭에서 실행 중인 작업은 종료됩니다.',
+  'surface.closeConfirmShell': '이 탭을 닫을까요? 탭의 셸과 그 안에서 실행 중인 프로그램이 종료됩니다. 터미널과 따로 실행된 프로그램(open·start로 연 앱, tmux 세션, 백그라운드 서비스)은 계속 실행될 수 있습니다.',
+  'surface.closeConfirmRemoteView': '이 탭을 닫을까요? 내 화면만 닫히고, 세션은 다른 PC에서 계속 실행됩니다.',
   'settings.sc.closePane': '분할된 창 닫기',
   'settings.sc.searchTerminal': '터미널에서 검색',
   'settings.sc.commandPalette': '명령 팔레트',

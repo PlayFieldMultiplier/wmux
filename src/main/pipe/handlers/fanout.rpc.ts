@@ -117,13 +117,13 @@ import {
 import { validateFanoutTaskGraph, type FanoutTaskGraph } from '../../../shared/fanoutTaskGraph';
 import { botTemplate, type BotBinding, type BotProfile } from '../../../shared/bot';
 import { SHARED_SURFACE } from '../../../shared/botSurface';
-import { WAKE_LIMITS, botFanoutIdempotencyKey, type HeldFanoutArgs, type WakeItem } from '../../../shared/wake';
+import { WAKE_LIMITS, botFanoutIdempotencyKey, type HeldFanoutArgs, type HeldWakeKind, type WakeItem } from '../../../shared/wake';
 import { getBotStore } from '../../factory/botStore';
 import { withBotWorkerAgent } from '../../../shared/botWorkerAgent';
 import { parseSecretNames, secretNamesRefusal } from '../../factory/secretGrants';
 import { getConnectorStore, isConnectionKey, type ConnectorStore } from '../../factory/connectorStore';
 import { gatewayConnectorsOf, gatewayReadyRefusal, gatewayShapeRefusal, workerGatewayOAuth, type GatewayOAuth } from '../../connectors/workerGateway';
-import { conversationMarks } from '../../factory/conversationMarks';
+import { conversationMarks, conversationSignedIn, conversationTainted, signedInRefusal } from '../../factory/conversationMarks';
 import { probeBotExecSupport } from '../../factory/botExecSandbox';
 import { checkConnector } from '../../connectors/checkConnector';
 import type { ConnectorCheckResult } from '../../../shared/connectorCheck';
@@ -139,7 +139,7 @@ import { repoBaseGate } from '../../factory/verifyPreset';
 
 /** The bot preset whose worker grades a PR head (botFanoutPresets.ts). */
 const VERIFY_PRESET = 'verify';
-import { GENERAL_THREAD, parseThreadId, prThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
+import { GENERAL_THREAD, dmThreadId, parseThreadId, prThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
 import { normalizeRepoKey } from '../../../shared/repoKey';
 import { isOriginPin } from '../../../shared/originPin';
 import { parseRemoteKey } from '../../github/PrProvider';
@@ -715,6 +715,9 @@ export interface FanOutRpcDeps {
   /** Whether the bot's live conversation has taken in outside text
    *  (default: conversationMarks.ts; no conversation counts as yes). */
   conversationTainted?: (botId: string) => boolean;
+  /** Whether the bot's live conversation holds data from a signed-in task
+   *  (default: conversationMarks.ts; no conversation counts as yes). */
+  conversationSignedIn?: (botId: string) => boolean;
   /** A signed-in connection's tool list from the service, with its token
    *  (default: checkConnector.ts). */
   gatewayListTools?: (c: Connector, headers: Record<string, string>) => Promise<ConnectorCheckResult>;
@@ -748,6 +751,10 @@ export interface FanOutBotPort {
   /** Whether that running wake carried outside text (factory/wakeTaint.ts);
    *  true when it cannot be told. Its tasks' dispatch carries the mark. */
   currentWakeTainted(botId: string): boolean;
+  /** The reason kind of the wake the bot is running now, or null; a held
+   *  fan-out's wake names the one that asked for it (when it was kept).
+   *  Absent: not known. */
+  currentWakeKind?(botId: string): HeldWakeKind | null;
   /** Whether wake `wakeId` is guest-sourced or of unknown provenance
    *  (factory/wakeTaint.ts guestOfWake). Such a wake starts no workers. */
   wakeGuestSourced(botId: string, wakeId: string): boolean;
@@ -791,6 +798,8 @@ export interface HeldFanoutRequest {
    *  this far, so false. */
   guest: boolean;
   handoffId?: string;
+  /** A signed-in request's asking wake kind (factory/heldFanouts.ts). */
+  wakeKind?: HeldWakeKind;
 }
 
 /** The fanout_start arguments a bot sent, as its tool names them (the RPC
@@ -891,6 +900,11 @@ function defaultBotPort(): FanOutBotPort | null {
     currentWakeId: (botId) => runtime.currentTurn(botId)?.wakeId ?? null,
     currentWakeThread: (botId) => runtime.currentTurn(botId)?.threadId ?? null,
     currentWakeTainted: (botId) => runningWakeTainted(botId),
+    currentWakeKind: (botId) => {
+      const item = currentWakeItem(botId);
+      if (!item || item.id !== runtime.currentTurn(botId)?.wakeId) return null;
+      return item.reason.kind === 'held_fanout' ? item.reason.wakeKind ?? null : item.reason.kind;
+    },
     wakeGuestSourced: (_botId, wakeId) => guestOfWake(wakeId) !== false,
     // The same wake as the turn's: a wake that ended between the two reads has no handoff.
     currentWakeHandoff: (botId) => {
@@ -1292,8 +1306,14 @@ export function registerFanOutRpc(
     // The thread its tasks' wakes and cards go to: the one the bot names,
     // else the PR its tasks check out, else the asking wake's.
     let botWakeThread: ThreadId | undefined;
-    // Whether that wake carried outside text: its tasks are marked tainted.
+    // Whether that wake, or the conversation it runs in, carried outside
+    // text: its tasks are marked tainted.
     let botWakeTainted = false;
+    // The wake's own mark, without its conversation's (a signed-in task's
+    // check reads the two apart, gatewayShapeRefusal).
+    let botWakeOwnTainted = false;
+    // The reason kind of that wake (a held fan-out's: the asking one's).
+    let botWakeKind: HeldWakeKind | null = null;
     // The handoff that wake delivers: its tasks' wakes answer it.
     let botWakeHandoff: string | undefined;
     // Where the bot was talking when it asked (general included): how its
@@ -1347,8 +1367,11 @@ export function registerFanOutRpc(
         if (refused) return deny('INVALID_ARGUMENT', `threadId: ${refused}`);
         botNamedThread = named;
       }
-      // A researcher's tasks read outside text whatever woke it.
-      botWakeTainted = botPort.currentWakeTainted(bot.botId) !== false || botTemplate(botProfile) === 'researcher' || workflow?.tainted === true;
+      // A researcher's tasks read outside text whatever woke it. Text an
+      // earlier wake brought into the conversation is still in it.
+      botWakeOwnTainted = botPort.currentWakeTainted(bot.botId) !== false || botTemplate(botProfile) === 'researcher' || workflow?.tainted === true;
+      botWakeTainted = botWakeOwnTainted || (deps.conversationTainted ?? conversationTainted)(bot.botId) !== false;
+      botWakeKind = botPort.currentWakeKind?.(bot.botId) ?? null;
       botWakeHandoff = botPort.currentWakeHandoff?.(bot.botId) ?? undefined;
       const ordinal = /^wake:.+:([1-9][0-9]*)$/.exec(callerKey)?.[1];
       if (!ordinal || Number(ordinal) > BOT_FANOUTS_PER_WAKE_MAX || callerKey !== botFanoutIdempotencyKey(wakeId, Number(ordinal))) {
@@ -1441,7 +1464,7 @@ export function registerFanOutRpc(
       const split = gatewayConnectorsOf(connectors, (deps.gatewayOAuth ?? workerGatewayOAuth)());
       if ('refusal' in split) return deny('FAILED_PRECONDITION', split.refusal);
       gatewayConnectors = split.gateway;
-      gatewayWakeTainted = botWakeTainted;
+      gatewayWakeTainted = botWakeOwnTainted;
       const keys = [...new Set(connectors.flatMap((c) => c.secrets.map((s) => s.secret)))];
       if (keys.length + (secretNames?.length ?? 0) + gatewayConnectors.length > BOT_SECRET_LIMITS.NAMES_PER_FANOUT) {
         return deny('INVALID_ARGUMENT', `a task carries at most ${BOT_SECRET_LIMITS.NAMES_PER_FANOUT} keys, its connections' (and one per signed-in connection) included`);
@@ -1452,6 +1475,17 @@ export function registerFanOutRpc(
       }
       // Its tools return outside text: the task counts as started from it.
       botWakeTainted = true;
+      // What its worker reads with the owner's sign-in is the bot's alone:
+      // the task's thread, where main writes its result card and wakes the
+      // bot with it (taskThreadOf), is the bot's own 1:1, whatever thread
+      // asked or was named.
+      if (gatewayConnectors.length > 0) botWakeThread = dmThreadId(bot.botId);
+    }
+    // A conversation that holds data from a signed-in task starts no other
+    // task (a code or research worker can carry it out); a signed-in one is
+    // refused from it below (gatewayShapeRefusal: a tainted conversation).
+    if (bot && gatewayConnectors.length === 0 && (deps.conversationSignedIn ?? conversationSignedIn)(bot.botId) !== false) {
+      return deny('FAILED_PRECONDITION', signedInRefusal('start another task', bot.botId));
     }
 
     // ── Fields the renderer may state but a wire caller may not ──────────
@@ -1650,12 +1684,17 @@ export function registerFanOutRpc(
       if (full) {
         // A workflow's durable intent owns its dispatch. A plain held retry
         // cannot carry that internal binding or its verified predecessor SHA.
+        // A signed-in request keeps the asking wake's own mark (its
+        // connections taint its tasks, not the wake): a held one forced
+        // tainted would be refused on its retry. It keeps the asking wake's
+        // kind with it.
         const held = botPort.workersFull(bot, full, workflow ? undefined : {
           args: heldFanoutArgs(params),
           threadId: botNoticeThread,
-          tainted: botWakeTainted,
+          tainted: gatewayConnectors.length > 0 ? gatewayWakeTainted : botWakeTainted,
           guest: false,
           ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
+          ...(gatewayConnectors.length > 0 && botWakeKind ? { wakeKind: botWakeKind } : {}),
         });
         const note = full.scope === 'bot'
           ? workersHeldNote(open.bot - bookedBot, bookedBot, getAgentSlots()?.waiting().filter((w) => w.botId === bot.botId).length ?? 0)
@@ -1687,7 +1726,7 @@ export function registerFanOutRpc(
     // pane that asked is certainly still there (see resolveCallerOrigin).
     const callerOrigin: FanoutOrigin | undefined = bot
       // A guest-sourced wake was refused above.
-      ? { kind: 'bot', botId: bot.botId, tainted: botWakeTainted, guest: false }
+      ? { kind: 'bot', botId: bot.botId, tainted: botWakeTainted, guest: false, ...(gatewayConnectors.length > 0 ? { gatewayConnectors: gatewayConnectors.map((c) => c.name) } : {}) }
       : commanderWorkspaceId
         ? { kind: 'orchestrator' }
         : await resolveCallerOrigin(getWindow, senderPtyId, callerWorkspaceId);

@@ -14,6 +14,7 @@ vi.mock('electron', () => ({
 }));
 
 import { RoomWriter } from '../../../factory/roomWriter';
+import { setConnectorStore, type ConnectorStore } from '../../../factory/connectorStore';
 import { SecretStore, type SecretCrypto } from '../../../factory/secretStore';
 import { __resetRedactedSecretsForTesting } from '../../../factory/secretRedaction';
 import {
@@ -61,7 +62,7 @@ beforeEach(() => {
   store = new SecretStore({ file: path.join(dir, 'secrets.json'), crypto });
   store.load();
   wakes = [];
-  deps = { store: () => store, writer: () => writer, guestWake: () => false, ports: () => ({ wakes: { enqueue: (w: WakeEnqueueInput) => { wakes.push(w); return null; } } }) };
+  deps = { store: () => store, writer: () => writer, guestWake: () => false, signedIn: () => false, ports: () => ({ wakes: { enqueue: (w: WakeEnqueueInput) => { wakes.push(w); return null; } } }) };
   __resetRedactedSecretsForTesting();
 });
 afterEach(() => {
@@ -82,6 +83,58 @@ describe('secret_request', () => {
       expect(handleLoginRequest({ service: 'github', why: 'push' }, botCtx, guest)).toMatchObject({ ok: false, code: 'not_now' });
     }
     expect(writer.read('ws-1', { guests: true }).cards).toEqual([]);
+  });
+
+  it('from a conversation that holds data from a signed-in task, a key or login card (the bot\'s label and words) lands only in its 1:1', () => {
+    const dm = dmThreadId(BOT.botId);
+    // The signed-in task's report wake runs in its task thread.
+    const signedIn = { ...deps, signedIn: () => true, ports: () => ({ currentWakeThread: () => 'task:t-signed' as never }) };
+    for (const threadId of ['general', 'task:t-signed']) {
+      expect(handleSecretRequest({ name: 'NPM_TOKEN', label: 'Q3 revenue 4.2M', why: 'w', threadId }, botCtx, signedIn))
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task, so it can\'t ask for a key outside your 1:1') });
+      expect(handleLoginRequest({ service: 'github', why: 'Q3 margin 12%', threadId }, botCtx, signedIn))
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('can\'t ask for a login outside your 1:1') });
+    }
+    expect(handleSecretRequest({ name: 'NPM_TOKEN', label: 'Q3 revenue 4.2M', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: true, threadId: dm });
+    expect(handleLoginRequest({ service: 'github', why: 'Q3 margin 12%' }, botCtx, signedIn)).toMatchObject({ ok: true, threadId: dm });
+    expect(handleLoginRequest({ service: 'claude', why: 'w', threadId: dm }, botCtx, signedIn)).toMatchObject({ ok: true, threadId: dm });
+    // The default reads the conversation's marks: none live is not known clean.
+    expect(handleSecretRequest({ name: 'OPENAI_API_KEY', label: 'l', why: 'w' }, botCtx, { ...signedIn, signedIn: undefined })).toMatchObject({ ok: true, threadId: dm });
+    expect(writer.read('ws-1', {}).cards.map((c) => c.threadId)).toEqual([dm, dm, dm, dm]);
+  });
+
+  it('no bot places a key or login card in another bot\'s 1:1; a signed-in conversation\'s login page is only the bare address of a host its connections use', () => {
+    const other = dmThreadId('bot-ffffffff');
+    expect(handleSecretRequest({ name: 'NPM_TOKEN', label: 'l', why: 'w', threadId: other }, botCtx, deps)).toMatchObject({ ok: false, code: 'invalid', message: expect.stringContaining('another bot\'s 1:1') });
+    expect(handleLoginRequest({ service: 'github', why: 'w', threadId: other }, botCtx, deps)).toMatchObject({ ok: false, code: 'invalid', message: expect.stringContaining('another bot\'s 1:1') });
+    const signedIn = { ...deps, signedIn: () => true, connectionHosts: () => ['login.example.com'] };
+    for (const url of ['https://login.example.com/?q=Q3-revenue', 'https://login.example.com/#Q3-revenue', 'https://login.example.com/Q3-revenue', 'https://q3-revenue.login.example.com/', 'https://elsewhere.example.net/']) {
+      expect(handleLoginRequest({ service: 'website', url, why: 'w' }, botCtx, signedIn), url)
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('bare address of one of your connections') });
+    }
+    expect(handleLoginRequest({ service: 'website', url: 'https://login.example.com/', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: true, threadId: dmThreadId(BOT.botId) });
+    expect(handleLoginRequest({ service: 'website', url: 'https://login.example.com/?next=/home', why: 'w' }, botCtx, deps)).toMatchObject({ ok: true });
+    expect(writer.read('ws-1', {}).cards).toHaveLength(2);
+  });
+
+  it('the hosts a signed-in login page may be on are read from the bot\'s own connections in the library', () => {
+    const remote = (id: string, name: string, url: string) => ({ id, name, transport: 'http', remote: { url, headers: {} }, secrets: [], tools: { mode: 'all' }, scope: { kind: 'all' }, offFor: [], enabled: true, createdAt: 0, updatedAt: 0 });
+    const forBot = vi.fn((botId: string) => (botId === BOT.botId ? [remote('con-0000000a', 'notion', 'https://mcp.notion.example/sse'), { ...remote('con-0000000b', 'local', 'x'), transport: 'stdio', remote: undefined, stdio: { command: '/bin/x', args: [], env: {} } }, remote('con-0000000c', 'bad', 'not a url')] : []));
+    setConnectorStore({ forBot } as unknown as ConnectorStore);
+    try {
+      const signedIn = { ...deps, signedIn: () => true };
+      expect(handleLoginRequest({ service: 'website', url: 'https://mcp.notion.example/', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: true });
+      expect(forBot).toHaveBeenCalledWith(BOT.botId);
+      expect(handleLoginRequest({ service: 'website', url: 'https://notion.example/', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: false, code: 'not_now' });
+      // No library: no host is known, so none is taken.
+      setConnectorStore(null);
+      expect(handleLoginRequest({ service: 'website', url: 'https://mcp.notion.example/', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: false, code: 'not_now' });
+      // A library that cannot be read takes none either.
+      setConnectorStore({ forBot: () => { throw new Error('unreadable'); } } as unknown as ConnectorStore);
+      expect(handleLoginRequest({ service: 'website', url: 'https://mcp.notion.example/', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: false, code: 'not_now' });
+    } finally {
+      setConnectorStore(null);
+    }
   });
 
   it('refuses a name that does not read as a credential, and a missing label or why', () => {

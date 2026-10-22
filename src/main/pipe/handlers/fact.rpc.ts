@@ -10,7 +10,9 @@
 //     facts of the repo its profile acts on (the bot directory, never a
 //     param) — merge.* and the repo watch's pr.* / issue.* / ci.*; a
 //     Coordinator-template bot (its live profile, COORDINATOR_READ_EXTENSION)
-//     and the operator read every fact.
+//     and the operator read every fact. No bot reads a fact of another
+//     bot's 1:1 with the owner (its payload's threadId), nor a fact
+//     addressed to another bot (shared/facts.ts factAddressee).
 //   fact.emit — the operator only. Bots never write facts directly.
 
 import path from 'node:path';
@@ -19,6 +21,7 @@ import type { FactoryRefusal } from '../../../shared/botSurface';
 import {
   FACT_LIMITS,
   FACT_RPC,
+  factAddressee,
   isFactKind,
   type Fact,
   type FactActor,
@@ -38,6 +41,7 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { onPrVerdictRecorded } from '../../github/prVerdictStore';
 import { factVisibleToBot } from '../../factory/wakeTaint';
 import { factInIsland } from '../../factory/guestWorkspaces';
+import { inAnotherBotsDm } from '../../../shared/room';
 
 const ID_MAX = 256;
 
@@ -69,6 +73,13 @@ export function botReadsEverywhere(botId: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** A fact of another bot's 1:1 with the owner than `botId`'s (the owner's
+ *  message there, a notice or a result card's fact in it): that bot's alone.
+ *  Pure. */
+export function ofAnothersDm(f: Pick<Fact, 'payload'>, botId: string): boolean {
+  return inAnotherBotsDm(f.payload?.threadId, botId);
 }
 
 export async function handleFactPoll(
@@ -107,7 +118,8 @@ export async function handleFactPoll(
     everything
     || (!!ownWorkspace && f.workspaceId === ownWorkspace)
     || (ownRepo !== null && f.repoKey !== undefined && normalizeRepoKey(f.repoKey) === ownRepo)
-  ) && (!ownWorkspace || factInIsland(ownWorkspace, f)) && (!kinds || kinds.has(f.kind)) && visible(f);
+  ) && (!ownWorkspace || factInIsland(ownWorkspace, f)) && (!kinds || kinds.has(f.kind)) && visible(f)
+    && (!ctx.bot || (!ofAnothersDm(f, ctx.bot.botId) && (factAddressee(f) ?? ctx.bot.botId) === ctx.bot.botId));
 
   let r = log.readWhere(since, match, limit);
   if (r.facts.length === 0 && blockMs > 0 && !ctx.signal?.aborted) {

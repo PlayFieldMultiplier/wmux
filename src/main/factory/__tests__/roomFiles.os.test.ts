@@ -264,6 +264,7 @@ function postSetup(roots: BotFileRoots = { roots: [repo()], base: repo() }) {
     wmuxDir: () => dir,
     files: () => store,
     fileRoots: async () => roots,
+    signedIn: () => false,
   };
   return { writer, deps, roomsDir };
 }

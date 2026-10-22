@@ -30,6 +30,8 @@ import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import { DEFAULT_BOT_BUDGETS, type BotProfile, type BotRole } from '../../../../shared/bot';
 import { emptyUsage } from '../../../factory/budget';
 import type { ThreadId } from '../../../../shared/room';
+import type { HeldWakeKind, WakeReason } from '../../../../shared/wake';
+import { WakeTaint } from '../../../factory/wakeTaint';
 import type { BotGroup } from '../../../../shared/botGroup';
 import { setFactoryRoomPorts } from '../../../factory/roomWriter';
 import { HeldFanouts, heldFanoutFingerprint, setHeldFanouts } from '../../../factory/heldFanouts';
@@ -78,6 +80,9 @@ interface Rig {
   setLiveTasks: (n: number) => void;
   setTainted: (t: boolean) => void;
   setGuestSourced: (g: boolean) => void;
+  /** The bot's conversation's marks (conversationMarks.ts): clean by default. */
+  setConversation: (m: { tainted: boolean; signedIn: boolean }) => void;
+  setWakeKind: (k: HeldWakeKind | null) => void;
   flush: () => Promise<void>;
   /** Repositories whose default branch was read, with how many fan-outs had started then. */
   defaultBranchReads: Array<{ root: string; startedBefore: number }>;
@@ -128,6 +133,8 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: {
   let liveTasks = 0;
   let tainted = false;
   let guestSourced = false;
+  let conversation = { tainted: false, signedIn: false };
+  let wakeKind: HeldWakeKind | null = null;
   const defaultBranchReads: Rig['defaultBranchReads'] = [];
   let defaultBranchNote: { name: string | null; recorded: boolean } = { name: 'develop', recorded: true };
   const p = profile(role, over);
@@ -154,6 +161,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: {
     currentWakeId: () => wake,
     currentWakeThread: () => thread as ThreadId | null,
     currentWakeTainted: () => tainted,
+    currentWakeKind: () => wakeKind,
     wakeGuestSourced: () => guestSourced,
     currentWakeHandoff: () => (wake ? 'h-dispatch' : null),
     openWorkers: (botId) => ({ bot: open.bot + booked(botId), factory: open.factory + booked(), botStarting: booked(botId), live: liveTasks + guards.reservedTasks().length }),
@@ -177,6 +185,8 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: {
     ...(opts.builtinPresets ? {} : { botPresets: () => opts.presets ?? PRESETS }),
     ...(opts.connectors ? { connectors: opts.connectors } : {}),
     ...(opts.platform ? { workerPlatform: opts.platform } : {}),
+    conversationTainted: () => conversation.tainted,
+    conversationSignedIn: () => conversation.signedIn,
     ...(opts.gateway ? { gatewayOAuth: opts.gateway.oauth, gatewaySandbox: opts.gateway.sandbox, conversationTainted: opts.gateway.conversationTainted } : {}),
     ...(opts.gateway?.listTools ? { gatewayListTools: opts.gateway.listTools } : {}),
     bot: () => port,
@@ -216,6 +226,12 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: {
     },
     setGuestSourced: (g) => {
       guestSourced = g;
+    },
+    setConversation: (m) => {
+      conversation = m;
+    },
+    setWakeKind: (k) => {
+      wakeKind = k;
     },
     flush: async () => {
       for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r));
@@ -364,6 +380,8 @@ describe('task.fanout.start — bot origin', () => {
       expect(await ask('research')).toMatchObject({ ok: true });
       await r.flush();
       expect(r.start.mock.calls[0][0] as FanOutRequest).toMatchObject({ gatewayConnectors: ['notion'] });
+      // The lineage stamp carries the names too, for a row mirrored from it.
+      expect((r.start.mock.calls[0][0] as FanOutRequest).caller).toMatchObject({ kind: 'bot', gatewayConnectors: ['notion'] });
       // The service's tool list was read with the owner's token, in main.
       expect(listHeaders[0]).toEqual({ Authorization: 'Bearer vendor-token' });
       // Never beside another connection.
@@ -1222,5 +1240,112 @@ describe('workersHeldNote', () => {
     expect(workersHeldNote(0, 1, 1)).toBe(': 1 is waiting for an agent slot, not started');
     expect(workersHeldNote(1, 2, 1)).toBe(': 1 of your workers is open, 1 is starting, 1 is waiting for an agent slot, not started');
     expect(workersHeldNote(0, 0, 0)).toBe('');
+  });
+});
+
+describe('a conversation that holds data from a signed-in task', () => {
+  /** A library with one signed-in connection (`notion`) and one plain one (`shared`). */
+  function signedInRig(): Rig {
+    const lib = new ConnectorStore(nodePath.join(fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wp2-signed-in-')), 'connectors.json'), { botIds: () => new Set([BOT_ID]) });
+    lib.load();
+    lib.save({ transport: 'http', remote: { url: 'https://x.dev/mcp', headers: {} }, secrets: [], tools: { mode: 'all', blocked: [] }, enabled: true, name: 'shared', scope: { kind: 'all' } });
+    const notion = lib.save({ transport: 'http', remote: { url: 'https://mcp.notion.example/mcp', headers: {} }, secrets: [], tools: { mode: 'listed', allowed: ['read_page'] }, enabled: true, name: 'notion', scope: { kind: 'all' } });
+    if (!notion.ok) throw new Error('not saved');
+    const oauth: GatewayOAuth = { hasRecord: (id) => id === notion.connector.id, accessToken: async () => 'vendor-token', revision: () => 0, awaitingConsent: () => false, onRevision: () => () => undefined };
+    return rig('lead', {}, {
+      builtinPresets: true, connectors: () => lib, platform: 'darwin',
+      gateway: {
+        oauth: () => oauth, sandbox: async () => ({ ok: true }), conversationTainted: () => conversation.tainted,
+        listTools: async () => ({ status: 'ready', toolCount: 1, toolNames: ['read_page'], readOnlyToolNames: ['read_page'], checkedAt: 1 }),
+      },
+    });
+  }
+  let conversation = { tainted: false, signedIn: false };
+  const setConversation = (r: Rig, m: { tainted: boolean; signedIn: boolean }): void => {
+    conversation = m;
+    r.setConversation(m);
+  };
+  let n = 0;
+  const ask = (r: Rig, args: Record<string, unknown>) => r.call({ idempotencyKey: `wake:w-1:${++n}`, titles: ['look'], prompt: 'look', ...args }, botCtx('lead'));
+  beforeEach(() => {
+    n = 0;
+    conversation = { tainted: false, signedIn: false };
+  });
+
+  it('starts no code or research task: either would carry what it read out', async () => {
+    const r = signedInRig();
+    setConversation(r, { tainted: true, signedIn: true });
+    for (const args of [{ preset: 'repro' }, { preset: 'research' }, { preset: 'research', connectors: ['shared'] }]) {
+      const e = errorOf(await ask(r, args));
+      expect(e.code).toBe('FAILED_PRECONDITION');
+      expect(e.message).toMatch(/holds data from a signed-in task, so it can't start another task; reply to the owner in your 1:1 instead \(room_post with thread_id "dm:bot-/);
+    }
+    // A signed-in one is refused too: the conversation is tainted.
+    expect(errorOf(await ask(r, { preset: 'research', connectors: ['notion'] })).message).toMatch(/conversation has taken in outside text/);
+    // Full slots hold nothing for it either: the refusal comes first.
+    r.setOpen({ bot: 3, factory: 3 });
+    expect(errorOf(await ask(r, { preset: 'repro' })).code).toBe('FAILED_PRECONDITION');
+    expect(r.start).not.toHaveBeenCalled();
+    expect(r.port.full).toEqual([]);
+  });
+
+  it('a signed-in task\'s thread is the bot\'s 1:1, whatever thread asked or was named: its result card and its wake land there', async () => {
+    const r = signedInRig();
+    r.setTainted(false);
+    const dm = `dm:${BOT_ID}`;
+    const PR = 'pr:github.com/o/r#4';
+    for (const [thread, named] of [['general', undefined], [PR, undefined], ['general', 'issue:github.com/o/r#7']] as const) {
+      r.setThread(thread);
+      expect(await ask(r, { preset: 'research', connectors: ['notion'], ...(named ? { threadId: named } : {}) })).toMatchObject({ ok: true });
+    }
+    // A plain research task from the same kind of wake keeps the asking thread.
+    r.setThread(PR);
+    expect(await ask(r, { preset: 'research' })).toMatchObject({ ok: true });
+    await r.flush();
+    expect((r.start.mock.calls as Array<[FanOutRequest]>).map(([req]) => req.threadId)).toEqual([dm, dm, dm, PR]);
+  });
+
+  it('a conversation that read a PR or an issue (tainted, not signed in) still starts code and research tasks, marked tainted', async () => {
+    const r = signedInRig();
+    r.setTainted(false);
+    setConversation(r, { tainted: true, signedIn: false });
+    expect(await ask(r, { preset: 'repro' })).toMatchObject({ ok: true });
+    expect(await ask(r, { preset: 'research' })).toMatchObject({ ok: true });
+    await r.flush();
+    expect(r.start).toHaveBeenCalledTimes(2);
+    // The conversation's mark counts as the wake's: both tasks are tainted.
+    for (const [req] of r.start.mock.calls as Array<[FanOutRequest]>) expect(req.caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: true, guest: false });
+  });
+
+  it('a clean wake in a clean conversation tags its code task clean', async () => {
+    const r = signedInRig();
+    r.setTainted(false);
+    expect(await ask(r, { preset: 'repro' })).toMatchObject({ ok: true });
+    await r.flush();
+    expect((r.start.mock.calls[0][0] as FanOutRequest).caller).toEqual({ kind: 'bot', botId: BOT_ID, tainted: false, guest: false });
+  });
+
+  it('a held signed-in fan-out keeps its asking wake\'s own mark and kind, so its retry runs; a held research one keeps its tainted retry', async () => {
+    const taint = new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake: () => null });
+    const r = signedInRig();
+    r.setOpen({ bot: 3, factory: 3 });
+    r.setTainted(false);
+    r.setWakeKind('human');
+    expect(errorOf(await ask(r, { preset: 'research', connectors: ['notion'] })).code).toBe('RESOURCE_EXHAUSTED');
+    const gateway = r.port.full[0].request!;
+    expect(gateway).toMatchObject({ args: { connectors: ['notion'], preset: 'research' }, tainted: false, wakeKind: 'human' });
+    expect(errorOf(await ask(r, { preset: 'research' })).code).toBe('RESOURCE_EXHAUSTED');
+    const research = r.port.full[1].request!;
+    expect(research.tainted).toBe(true);
+    expect(research).not.toHaveProperty('wakeKind');
+    // A slot frees: each retry runs in a held_fanout wake marked as it was held.
+    r.setOpen({ bot: 0, factory: 0 });
+    const held = (h: HeldFanoutRequest): WakeReason => ({ kind: 'held_fanout', heldId: 'h', heldAt: 1, titles: h.args.titles, args: h.args, tainted: h.tainted, ...(h.wakeKind ? { wakeKind: h.wakeKind } : {}) });
+    r.setTainted(taint.reasonTainted(held(gateway)));
+    expect(await ask(r, { preset: 'research', connectors: ['notion'] })).toMatchObject({ ok: true });
+    await r.flush();
+    // Its retry reports in the bot's 1:1 too.
+    expect(r.start.mock.calls[0][0] as FanOutRequest).toMatchObject({ gatewayConnectors: ['notion'], threadId: `dm:${BOT_ID}` });
+    expect(taint.reasonTainted(held(research))).toBe(true);
   });
 });

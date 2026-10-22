@@ -48,7 +48,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BOT_TAKES_NO_GUEST_WAKES, botEngineGatesTools, type BotBinding, type BotProfile, type BotQuota, type BotStatus, type BotStatusUsage } from '../../shared/bot';
 import type { Fact } from '../../shared/facts';
-import type { RoomCard, ThreadId } from '../../shared/room';
+import { inAnotherBotsDm, type RoomCard, type ThreadId } from '../../shared/room';
 import { WAKE_LIMITS, type WakeItem, type WakeReason } from '../../shared/wake';
 import type { BrainAdapter, BrainEvent, BrainImage } from '../deck/BrainAdapter';
 import { USAGE_LIMIT_UNKNOWN_HOLD_MS, findClaudeUsageLimitNotice, parseUsageLimitReset, usageLimitHoldEndsAt } from '../../shared/usageLimit';
@@ -77,7 +77,8 @@ import {
 } from './wakePrompt';
 import type { WakeQueue } from './wakeQueue';
 import { redactStoredSecrets } from './secretRedaction';
-import { conversationMarks, endConversation, markConversation, setConversationMarkListener, startConversation, type ConversationMarks } from './conversationMarks';
+import { wakeTaintExpected } from './wakeTaint';
+import { conversationMarks, endConversation, holdSignedInForWake, markConversation, releaseWakeHold, setConversationMarkListener, startConversation, type ConversationMarks } from './conversationMarks';
 
 // ── sessions.json ───────────────────────────────────────────────────────────
 
@@ -99,6 +100,10 @@ export interface BotSessionRecord {
    *  tainted. A record without it is of unknown history and resumes
    *  tainted. */
   tainted?: boolean;
+  /** The conversation's signed-in mark (conversationMarks.ts): a wake run
+   *  in it carried a signed-in task's fact. A record without it predates
+   *  signed-in tasks reaching a conversation, and reads as not signed in. */
+  signedIn?: boolean;
   updatedAt: number;
 }
 
@@ -138,6 +143,7 @@ export class BotSessionStore {
         ...(repoPath !== undefined ? { repoPath } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(typeof r.tainted === 'boolean' ? { tainted: r.tainted } : {}),
+        ...(typeof r.signedIn === 'boolean' ? { signedIn: r.signedIn } : {}),
         updatedAt: r.updatedAt as number,
       });
     }
@@ -275,7 +281,7 @@ export interface BotRuntimePorts {
   resolveHandoff?: (handoffId: string) => WakeHandoffSummary | null;
   /** The newest `n` cards of a room thread, oldest first, and whether older
    *  ones exist (the rooms module). */
-  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number, opts?: { guests?: boolean }) => { cards: RoomCard[]; truncated: boolean; hiddenGuestCards?: number } | null;
+  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number, opts?: { guests?: boolean; dmReader?: string }) => { cards: RoomCard[]; truncated: boolean; hiddenGuestCards?: number } | null;
   /** A wake's guest provenance (wakeTaint.ts wakeGuest). A guest-sourced
    *  wake sees guest cards and runs in a conversation of its own, and so
    *  does one whose provenance is unknown. Absent: a `guest` wake only. */
@@ -312,6 +318,11 @@ export interface BotRuntimePorts {
   /** Whether a wake was started from outside text (wakeTaint.ts
    *  wakeTainted). Absent: every wake counts as tainted. */
   wakeTainted?: (item: WakeItem) => boolean;
+  /** Whether a wake carried a fact of a task that used a signed-in
+   *  connection (wakeTaint.ts wakeSignedIn); 'unknown' when that cannot be
+   *  told. Absent: none did; that is only so where no taint tracker is part
+   *  of the app (taintReady). */
+  wakeSignedIn?: (item: WakeItem) => boolean | 'unknown';
 }
 
 /** Told when a bot is removed (its notes go, botMemory.ts). */
@@ -336,8 +347,21 @@ export function notifyBotRemoved(botId: string): void {
   }
 }
 
-const CLEAN_MARKS: ConversationMarks = { tainted: false };
-const UNKNOWN_MARKS: ConversationMarks = { tainted: true };
+const CLEAN_MARKS: ConversationMarks = { tainted: false, signedIn: false };
+const UNKNOWN_MARKS: ConversationMarks = { tainted: true, signedIn: true };
+/** A guest's conversation of its own: tainted, and not signed in until a
+ *  wake run in it carries a signed-in task's fact (one of unknown
+ *  provenance can). */
+const GUEST_MARKS: ConversationMarks = { tainted: true, signedIn: false };
+
+/** A saved session's marks. A record from before the taint mark reads as
+ *  tainted; one from before the signed-in mark as not signed in (no release
+ *  let a signed-in task report to a conversation before that mark was
+ *  saved). Pure. */
+export function savedMarks(rec: Pick<BotSessionRecord, 'tainted' | 'signedIn'>): ConversationMarks {
+  const tainted = rec.tainted ?? true;
+  return { tainted: tainted || rec.signedIn === true, signedIn: rec.signedIn ?? false };
+}
 
 /** Longest the runtime waits at launch for the modules its wake prompts
  *  read from; past it, a module that failed to start holds no bot. */
@@ -411,6 +435,12 @@ export function setBotRuntimePorts(next: BotRuntimePorts): void {
   };
 }
 
+/** Test-only: the ports as wired (refused outside the test runner). */
+export function __botRuntimePortsForTesting(): Readonly<BotRuntimePorts> {
+  if (!process.env.VITEST) throw new Error('__botRuntimePortsForTesting is test-only');
+  return ports;
+}
+
 /** Test-only. */
 export function __resetBotRuntimePortsForTesting(): void {
   ports = {};
@@ -434,6 +464,7 @@ export class BotRuntime {
   private heldTimer: unknown = null;
   private heldAt: number | null = null;
   private contextTimer: unknown = null;
+  private taintWarned = false;
   private contextWaitSince: number | null = null;
   private contextSeen = false;
   private disposed = false;
@@ -461,7 +492,7 @@ export class BotRuntime {
     const live = this.live.get(botId);
     const rec = this.deps.sessions.get(botId);
     if (!live || live.ephemeral || !rec) return;
-    this.deps.sessions.set(botId, { ...rec, tainted: m.tainted });
+    this.deps.sessions.set(botId, { ...rec, tainted: m.tainted, signedIn: m.signedIn });
   }
 
   // ── status ────────────────────────────────────────────────────────────────
@@ -759,6 +790,18 @@ export class BotRuntime {
     }
   }
 
+  /** Absent only where no taint tracker is part of the app (a runtime built
+   *  alone): where one is, no turn runs without it (pump, taintReady). */
+  private wakeSignedIn(item: WakeItem): boolean | 'unknown' {
+    if (!ports.wakeSignedIn) return false;
+    try {
+      const v = ports.wakeSignedIn(item);
+      return v === false ? false : v === 'unknown' ? 'unknown' : true;
+    } catch {
+      return 'unknown';
+    }
+  }
+
   private wakeGuest(item: WakeItem): boolean | 'unknown' {
     if (!ports.wakeGuest) return item.reason.kind === 'guest';
     try {
@@ -811,6 +854,7 @@ export class BotRuntime {
       return;
     }
     if (!this.contextReady()) return;
+    if (!this.taintReady()) return;
     const cap = settings.globalConcurrentBots;
     const now = this.now();
     this.sweepBudgetParks(now);
@@ -916,6 +960,25 @@ export class BotRuntime {
     if (ok) {
       this.contextSeen = true;
       return true;
+    }
+    if (this.contextTimer === null) {
+      this.contextTimer = this.setTimer(() => {
+        this.contextTimer = null;
+        this.kick();
+      }, CONTEXT_POLL_MS);
+    }
+    return false;
+  }
+
+  /** Whether the taint tracker marks wakes (its ports set), where one is
+   *  part of the app: a turn run without it would put a guessed mark on its
+   *  conversation and save it. Unlike contextReady it never gives up; while
+   *  not, a pass is retried shortly. */
+  private taintReady(): boolean {
+    if (!wakeTaintExpected() || (ports.wakeTainted && ports.wakeSignedIn)) return true;
+    if (!this.taintWarned) {
+      this.taintWarned = true;
+      console.warn('[factory] bot turns wait for the wake taint tracker');
     }
     if (this.contextTimer === null) {
       this.contextTimer = this.setTimer(() => {
@@ -1088,8 +1151,8 @@ export class BotRuntime {
     const live: LiveSession = { adapter: spawned.adapter, engineKey, attached: false, ...(opts.ephemeral ? { ephemeral: true } : {}) };
     this.live.set(profile.id, live);
     // A guest's conversation of its own counts as tainted; a resumed one
-    // carries its record's mark (none recorded: unknown).
-    startConversation(profile.id, opts.ephemeral ? UNKNOWN_MARKS : saved ? { tainted: saved.tainted ?? true } : CLEAN_MARKS);
+    // carries its record's marks (none recorded: unknown).
+    startConversation(profile.id, opts.ephemeral ? GUEST_MARKS : saved ? savedMarks(saved) : CLEAN_MARKS);
     return { ok: true, live };
   }
 
@@ -1104,11 +1167,13 @@ export class BotRuntime {
     try {
       if (item.threadId) {
         // Only a guest-sourced wake sees guest cards in its thread.
-        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS, { guests: this.wakeGuest(item) === true });
+        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS, { guests: this.wakeGuest(item) === true, dmReader: profile.id });
         if (tail) thread = { threadId: item.threadId, cards: tail.cards.slice(-WAKE_THREAD_TAIL_CARDS), truncated: tail.truncated, ...(tail.hiddenGuestCards ? { hiddenGuestCards: tail.hiddenGuestCards } : {}) };
       }
       if (r.kind === 'facts') {
-        facts = (this.deps.resolveFacts ?? ports.resolveFacts)?.(r.factIds) ?? [];
+        // What the owner said in another bot's 1:1 reaches no other bot's
+        // prompt, whichever path queued the wake (a trigger, the gardener).
+        facts = ((this.deps.resolveFacts ?? ports.resolveFacts)?.(r.factIds) ?? []).filter((f) => !inAnotherBotsDm(f.payload?.threadId, profile.id));
         const taskIds = r.factIds.map(taskIdOfFactId).filter((t): t is string => t !== null);
         if (taskIds.length > 0) tasks = this.deps.resolveTasks?.(taskIds) ?? [];
         const parentId = ports.taskHandoff?.(item);
@@ -1167,6 +1232,13 @@ export class BotRuntime {
       }
       if (run) run.adapter = s.live.adapter;
       if (!s.live.ephemeral && this.wakeTainted(item)) markConversation(botId, 'tainted');
+      // What a signed-in task's worker read reaches this conversation now,
+      // a guest's conversation of its own included (a wake of unknown
+      // provenance runs there; its marks are never saved). A wake that
+      // cannot be told runs as signed-in, held for this wake only.
+      const signedIn = this.wakeSignedIn(item);
+      if (signedIn === true) markConversation(botId, 'signedIn');
+      else if (signedIn === 'unknown') holdSignedInForWake(botId);
       const photos = this.wakePhotos(profile, item);
       const result = await this.drive(s.live, this.prompt(profile, item) + photos.note, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
       // A failed turn that reached the model cost as much as a finished one.
@@ -1183,7 +1255,7 @@ export class BotRuntime {
         if (sessionId && !s.live.ephemeral) {
           const accountId = s.live.adapter.conversationAccountId;
           const m = conversationMarks(botId) ?? UNKNOWN_MARKS;
-          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, model: modelPin(profile), tainted: m.tainted, updatedAt: this.now() });
+          this.deps.sessions.set(botId, { sessionId, ...(accountId !== undefined ? { accountId } : {}), repoPath: profile.repo?.repoPath ?? null, model: modelPin(profile), tainted: m.tainted, signedIn: m.signedIn, updatedAt: this.now() });
         }
         // A reply to the owner the bot wrote as plain text instead of a
         // room_post would reach nobody: it becomes the bot's card, while the
@@ -1218,6 +1290,7 @@ export class BotRuntime {
       if (run?.interrupted) outcome = 'interrupted';
       else errorMessage = String(err);
     } finally {
+      releaseWakeHold(botId);
       if (ephemeral && this.live.get(botId) === ephemeral) this.endSession(botId);
       this.settle(profile, item, outcome, errorMessage, run?.offSwitch === true);
     }

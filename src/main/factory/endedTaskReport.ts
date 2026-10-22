@@ -13,7 +13,7 @@
 // a worker retrying with another rev wakes the bot once. The row stays as it
 // is: reopening a final task would undo its gate, merge and cleanup.
 
-import type { LedgerEntry } from '../../shared/ledger';
+import { taskSignedIn, type LedgerEntry } from '../../shared/ledger';
 import { taskThreadOf } from '../../shared/room';
 import type { BotNoticeInput } from './botNotices';
 import type { ReclaimedWorker } from './workerReclaim';
@@ -33,7 +33,9 @@ const FINAL: ReadonlySet<string> = new Set(['completed', 'cancelled']);
 export function endedTaskNotice(entry: LedgerEntry, rec: Pick<ReclaimedWorker, 'state' | 'at'> | null, report: EndedTaskReport): BotNoticeInput | null {
   const botId = entry.dispatch?.origin.kind === 'bot' ? entry.dispatch.origin.botId : undefined;
   if (!botId || !FINAL.has(entry.status) || rec?.state !== 'resumed') return null;
-  const summary = report.summary?.trim();
+  // A signed-in task's worker's words are its bot's to read in that task's
+  // pane or report, not a notice's (one card, one fact in the log).
+  const summary = taskSignedIn(entry) ? undefined : report.summary?.trim();
   return {
     botId,
     workspaceId: entry.ownerWorkspaceId,
@@ -41,7 +43,7 @@ export function endedTaskNotice(entry: LedgerEntry, rec: Pick<ReclaimedWorker, '
     topic: 'worker.report_after_end',
     title: `Worker of "${entry.title}" reported after its task ended`,
     body: `The worker you resumed for task ${entry.id} ("${entry.title}") tried to record ${report.status}, but the task is ${entry.status}, so the ledger refused it and the task stays ${entry.status}. `
-      + (summary ? 'Its message is below.' : 'It sent no message.')
+      + (summary ? 'Its message is below.' : taskSignedIn(entry) && report.summary?.trim() ? 'Its message is not shown: the task used a signed-in connection.' : 'It sent no message.')
       + ' Read its pane or message it with worker_message to follow up, or start a new task.',
     ...(summary ? { detail: summary } : {}),
     threadId: taskThreadOf(entry),

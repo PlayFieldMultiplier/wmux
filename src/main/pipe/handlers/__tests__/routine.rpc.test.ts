@@ -12,6 +12,7 @@ import type { RpcContext } from '../../../../shared/rpc';
 import type { WakeItem } from '../../../../shared/wake';
 import { RoutineStore, routinesPath } from '../../../factory/routines';
 import { onBotLifecycle, registerRoutineHandlers, routineMinIntervalMs, turnOnOwnerWords } from '../routine.rpc';
+import { TAINTED_CONVERSATION_SAVES_NOTHING } from '../../../factory/conversationMarks';
 
 const A = 'bot-0000000a';
 const B = 'bot-0000000b';
@@ -37,7 +38,7 @@ function profile(id: string, extra: Partial<BotProfile> = {}): BotProfile {
   };
 }
 
-function rig(opts: { ownerWords?: boolean; guestWake?: boolean | 'unknown'; stop?: Parameters<typeof registerRoutineHandlers>[1]['stop'] } = {}) {
+function rig(opts: { ownerWords?: boolean; guestWake?: boolean | 'unknown'; conversationTainted?: boolean; stop?: Parameters<typeof registerRoutineHandlers>[1]['stop'] } = {}) {
   const store = new RoutineStore({
     file: routinesPath(dir),
     bots: () => ({ get: (id: string) => profile(id) }),
@@ -55,6 +56,7 @@ function rig(opts: { ownerWords?: boolean; guestWake?: boolean | 'unknown'; stop
     store: () => store,
     ownerWords: () => opts.ownerWords ?? true,
     guestWake: () => opts.guestWake ?? false,
+    conversationTainted: () => opts.conversationTainted ?? false,
     defaultKey: (botId) => {
       keys.push(botId);
       return `wake:w-${botId}:r1`;
@@ -109,6 +111,20 @@ describe('routine.set', () => {
     }
     opts.guestWake = false;
     expect(await r.call('routine.pause', { routineId: a.routine.id, paused: false }, asBot(A))).toMatchObject({ ok: true });
+  });
+
+  it('the owner\'s "yes" to its question, in a conversation that took in outside text, sets no routine', async () => {
+    // The bot asked (ask_person); the owner answered yes: a turn on the owner's words.
+    const yes = turnOnOwnerWords(A, {
+      wake: () => ({ id: 'w', reason: { kind: 'handoff', handoffId: 'h-yes' } }) as WakeItem,
+      handoff: (id) => ({ handoffId: id, kind: 'answer', from: 'o', title: '', body: 'yes', ownerWords: true }),
+    });
+    expect(yes).toBe(true);
+    const r = rig({ ownerWords: yes, conversationTainted: true });
+    expect(await r.call('routine.set', params, asBot(A))).toEqual({ ok: false, code: 'not_authorized', message: TAINTED_CONVERSATION_SAVES_NOTHING });
+    expect(r.store.list()).toEqual([]);
+    // The same answer in a clean conversation sets it.
+    expect(await rig({ ownerWords: yes }).call('routine.set', params, asBot(A))).toMatchObject({ ok: true });
   });
 
   it('turnOnOwnerWords: the owner\'s message or answer; a closed question, a mention, facts, a plain handoff or no turn are not', () => {

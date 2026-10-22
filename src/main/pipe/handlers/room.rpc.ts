@@ -14,12 +14,14 @@
 //                 else every bot of the room; in a group chat's thread, its
 //                 members or those it names). Addressing is a field, never
 //                 text: an `@name` in a card wakes nobody. Posts are
-//                 idempotent by clientPostId.
+//                 idempotent by clientPostId. A bot whose conversation holds
+//                 data from a signed-in task (conversationMarks.ts) posts
+//                 only in its own 1:1, and mentions no bot.
 //   room.read     a bot: its own room (a Coordinator-template bot, by its live
-//                 profile: any room); the operator: any room, and may record
-//                 its read position (markThroughSeq).
+//                 profile: any room), never another bot's 1:1; the operator:
+//                 any room, and may record its read position (markThroughSeq).
 //   room.search   a bot: its own room only (no Coordinator extension), never
-//                 a guest's cards; the operator: any room.
+//                 a guest's cards or another bot's 1:1; the operator: any room.
 //   room.threads  the operator.
 //   room.resolve  the operator: answers a question card (through its
 //                 decision, which the handoff router turns into the answer)
@@ -29,6 +31,7 @@
 import fs from 'node:fs';
 import { guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
+import { conversationSignedIn, signedInRefusal } from '../../factory/conversationMarks';
 import path from 'node:path';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { isBotRole, isCoordinatorBot } from '../../../shared/bot';
@@ -36,6 +39,8 @@ import { GUEST_TURN_SURFACE_REFUSAL, SHARED_SURFACE, type BotToolName, type Fact
 import {
   BOT_POSTABLE_CARD_KINDS,
   GENERAL_THREAD,
+  dmThreadBot,
+  dmThreadId,
   ROOM_EVENT,
   ROOM_LIMITS,
   ROOM_RPC,
@@ -147,6 +152,9 @@ export interface RoomHandlerDeps {
   /** The guest provenance of the bot's running wake. Default: wakeTaint.ts's
    *  tracker (guestOfRunningWake). */
   guestWake?: (botId: string) => GuestProvenance;
+  /** Whether the bot's live conversation holds data from a signed-in task
+   *  (none: yes). Default: conversationMarks.ts. */
+  signedIn?: (botId: string) => boolean;
 }
 
 /** Where a bot's `files` may come from, and what a relative path means. */
@@ -318,6 +326,12 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     const threadRefused = botThreadRefusal(ports, bot, pinned);
     if (threadRefused) return refusal('invalid', threadRefused);
     const threadId = pinned ?? wakeThread ?? GENERAL_THREAD;
+    // What a signed-in task read stays in this conversation: it is told to
+    // the owner in the bot's own 1:1, and to no other bot.
+    if ((deps.signedIn ?? conversationSignedIn)(bot.botId) !== false) {
+      if (threadId !== dmThreadId(bot.botId)) return refusal('not_now', signedInRefusal('post outside your 1:1 with the owner', bot.botId));
+      if (mentions?.some((m) => m !== bot.botId)) return refusal('not_now', signedInRefusal('mention another bot', bot.botId));
+    }
     const wake = runningWake(ports, bot.botId);
     // Decided now, before the file copy waits: the card keeps its wake's
     // provenance even if that wake ends meanwhile.
@@ -418,8 +432,9 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
 /** A bot's turn that ended with words but wrote no card of its own in its
  *  wake's thread since `since`: those words become its card there, through
  *  handleRoomPost as the bot (the same surface, thread, reply link and
- *  checks as a room_post). The first line is the title, the rest the body,
- *  capped as a card's. Call it while the wake still runs. */
+ *  checks as a room_post). A conversation that holds data from a signed-in
+ *  task answers in the bot's 1:1 instead. The first line is the title, the
+ *  rest the body, capped as a card's. Call it while the wake still runs. */
 export async function postTurnText(
   profile: Pick<BotProfile, 'id' | 'workspaceId' | 'role'>,
   item: Pick<WakeItem, 'id'>,
@@ -431,7 +446,10 @@ export async function postTurnText(
   // Processed whole, then shortened into a title and a body.
   const trimmed = capBody(redactStoredSecrets(text)).trim();
   if (!writer || !trimmed) return null;
-  const threadId = runningWakeThread(deps.ports(), profile.id) ?? GENERAL_THREAD;
+  // A conversation that holds data from a signed-in task answers in the
+  // bot's own 1:1, where the owner sees it (room.post refuses any other).
+  const signedIn = (deps.signedIn ?? conversationSignedIn)(profile.id) !== false;
+  const threadId = signedIn ? dmThreadId(profile.id) : runningWakeThread(deps.ports(), profile.id) ?? GENERAL_THREAD;
   // A card the bot wrote in this thread during the turn (a room_post, a
   // question, a handoff), or in an earlier attempt of the same wake (a
   // retried room_post returns that card), already answered: nothing more.
@@ -448,7 +466,7 @@ export async function postTurnText(
   // A first line longer than a title keeps the whole text in the body.
   const body = line.length > title.length ? trimmed : (nl < 0 ? '' : trimmed.slice(nl + 1).trim());
   return handleRoomPost(
-    { kind: 'status', title, ...(body ? { body } : {}), clientPostId: `wake:${item.id}:text` },
+    { kind: 'status', title, ...(body ? { body } : {}), ...(signedIn ? { threadId } : {}), clientPostId: `wake:${item.id}:text` },
     { origin: 'local', bot: { workspaceId: profile.workspaceId, botId: profile.id, role: profile.role } },
     deps,
   );
@@ -517,6 +535,11 @@ export function handleRoomRead(raw: unknown, ctx: RpcContext | undefined, deps: 
   if (typeof ws !== 'string') return ws;
   const threadId = p.threadId === undefined ? null : parseThreadId(p.threadId);
   if (p.threadId !== undefined && !threadId) return refusal('invalid', 'threadId is not a thread id');
+  // Another bot's 1:1 with the owner is theirs: a bot reads only its own.
+  if (caller.kind === 'bot' && threadId) {
+    const dmOf = dmThreadBot(threadId);
+    if (dmOf !== null && dmOf !== caller.bot.botId) return refusal('not_yours', 'another bot\'s 1:1 with the owner is read only by that bot');
+  }
   if (p.markThroughSeq !== undefined) {
     if (caller.kind !== 'operator') return refusal('operator_only', 'only the owner records a read position');
     if (!threadId || typeof p.markThroughSeq !== 'number') return refusal('invalid', 'markThroughSeq needs a threadId and a seq');
@@ -538,6 +561,7 @@ export function handleRoomRead(raw: unknown, ctx: RpcContext | undefined, deps: 
     ...(typeof p.sinceSeq === 'number' ? { sinceSeq: p.sinceSeq } : {}),
     ...(typeof p.limit === 'number' ? { limit: p.limit } : {}),
     guests,
+    ...(caller.kind === 'bot' ? { dmReader: caller.bot.botId } : {}),
   });
   const result: RoomReadResult = { ok: true, workspaceId: ws, threadId, ...page };
   return result;
@@ -569,6 +593,7 @@ export function handleRoomSearch(raw: unknown, ctx: RpcContext | undefined, deps
     ...(typeof p.limit === 'number' ? { limit: p.limit } : {}),
     // An external guest's cards: the owner's views only (see handleRoomRead).
     guests: caller.kind === 'operator',
+    ...(caller.kind === 'bot' ? { dmReader: caller.bot.botId } : {}),
   });
   const result: RoomSearchResult = { ok: true, workspaceId: ws, ...page };
   return result;

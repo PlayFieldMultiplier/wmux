@@ -656,7 +656,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
               data-template={tpl}
               aria-pressed={template === tpl}
               onClick={() => pickTemplate(tpl)}
-              className={`h-[24px] px-2 rounded-[var(--chip-radius)] text-[12px] ${template === tpl ? 'bg-[var(--selection-emphasis)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)]'} ${FOCUS_RING}`}
+              className={`h-[24px] px-2 rounded-[var(--chip-radius)] text-[12px] ${template === tpl ? 'bg-[var(--selection-emphasis)] [--text-muted:var(--text-sub)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]'} ${FOCUS_RING}`}
             >
               {templateLabel(tpl, t)}
             </button>
@@ -1012,7 +1012,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
                   onClick={() => settings && void patch({
                     morning: { ...settings.morning, weekdays: on ? settings.morning.weekdays.filter((x) => x !== d) : [...settings.morning.weekdays, d].sort((a, b) => a - b) },
                   })}
-                  className={`h-[26px] min-w-[34px] px-1.5 rounded-[var(--chip-radius)] text-[12px] disabled:opacity-40 ${on ? 'bg-[var(--selection-emphasis)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)]'} ${FOCUS_RING}`}
+                  className={`h-[26px] min-w-[34px] px-1.5 rounded-[var(--chip-radius)] text-[12px] disabled:opacity-40 ${on ? 'bg-[var(--selection-emphasis)] [--text-muted:var(--text-sub)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]'} ${FOCUS_RING}`}
                 >
                   {t(`settings.factory.weekday.${d}`)}
                 </button>

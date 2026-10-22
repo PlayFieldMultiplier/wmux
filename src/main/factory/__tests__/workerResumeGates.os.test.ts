@@ -47,7 +47,7 @@ afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 function ports(): WorkerResumePorts & { typeLine: ReturnType<typeof vi.fn> } {
   const typeLine = vi.fn(() => true);
-  return { store, listSessions: async () => [{ id: 'daemon-1', spawnCwd: dir, agentProcessAlive: false }], typeLine };
+  return { store, listSessions: async () => [{ id: 'daemon-1', spawnCwd: dir, agentProcessAlive: false }], typeLine, senderSignedIn: () => false };
 }
 
 describe('bot.resumeWorker', () => {

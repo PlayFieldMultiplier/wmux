@@ -93,7 +93,7 @@ function setup(bots: BotProfile[]) {
     currentWakeThread: () => wake.thread as never,
     currentWake: () => wake.id,
   };
-  const deps: RoomHandlerDeps = { writer: () => writer, ports: () => ports, wmuxDir: () => dir };
+  const deps: RoomHandlerDeps = { writer: () => writer, ports: () => ports, wmuxDir: () => dir, signedIn: () => false };
   return { writer, facts, wakes, wake, ports, deps };
 }
 
@@ -576,6 +576,20 @@ describe('a turn that ended with plain text: its words become the bot\'s card (r
     return { ...s, since, text, cards };
   }
 
+  it('a conversation that holds data from a signed-in task: the owner\'s message in General is answered in the bot\'s 1:1', async () => {
+    const dev = bot('ws1', 'maintainer');
+    const r = rig([dev], 'general' as ThreadId);
+    const res = await postTurnText(dev, { id: 'w-1' }, 'Here is the summary.\nThree pages, two owners.', r.since, { ...r.deps, signedIn: () => true }) as { ok: boolean };
+    expect(res.ok).toBe(true);
+    expect(r.cards()).toEqual([]);
+    expect(r.writer.read('ws1', { threadId: `dm:${dev.id}` as ThreadId }).cards).toEqual([expect.objectContaining({
+      kind: 'status', threadId: `dm:${dev.id}`, title: 'Here is the summary.', body: 'Three pages, two owners.', actor: { kind: 'bot', workspaceId: 'ws1', botId: dev.id },
+    })]);
+    // Handed over again, still one card.
+    await postTurnText(dev, { id: 'w-1' }, 'Here is the summary.', r.since, { ...r.deps, signedIn: () => true });
+    expect(r.writer.read('ws1', { threadId: `dm:${dev.id}` as ThreadId }).cards).toHaveLength(1);
+  });
+
   it('a 1:1: the words are one status card from the bot in its thread; the first line is the title', async () => {
     const dev = bot('ws1', 'maintainer');
     const r = rig([dev], `dm:${dev.id}` as ThreadId);
@@ -737,16 +751,16 @@ describe('a question a bot asks about an owner message answers it, raised now or
     const file = path.join(dir, 'factory', HANDOFFS_FILENAME);
     const router = new HandoffRouter({ file, decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
     await router.start();
-    const first = await handleAskPerson({ title: 'Ship now?' }, asBot(lead), { router: () => router }) as { ok: boolean; decisionId?: string };
+    const first = await handleAskPerson({ title: 'Ship now?' }, asBot(lead), { router: () => router, signedIn: () => false }) as { ok: boolean; decisionId?: string };
     // The thread holds the lead's open question: the verifier's waits.
-    const second = await handleAskPerson({ title: 'Run the slow suite first?' }, asBot(verifier), { router: () => router }) as { ok: boolean; status: string };
+    const second = await handleAskPerson({ title: 'Run the slow suite first?' }, asBot(verifier), { router: () => router, signedIn: () => false }) as { ok: boolean; status: string };
     expect([first.ok, !!first.decisionId, second.status]).toEqual([true, true, 'queued']);
     const questions = () => s.writer.read('ws1').cards.filter((c) => c.kind === 'question');
     expect(questions().map((c) => [c.title, c.replyTo])).toEqual([['Ship now?', m.id]]);
     // The lead's question closes; a new router (an app restart) raises the
     // queued one from its stored record.
     const q = questions()[0];
-    expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), { router: () => router })).toMatchObject({ ok: true });
+    expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), { router: () => router, signedIn: () => false })).toMatchObject({ ok: true });
     expect(questions()).toHaveLength(1);
     s.ports.currentWake = () => null;
     const restarted = new HandoffRouter({ file, decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
@@ -775,7 +789,7 @@ describe('one PR is one thread however the caller spells it', () => {
     expect(s.writer.summary('ws1', canonical).unread).toBe(0);
     // Handoffs and questions store the canonical thread too.
     const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
-    const deps = { router: () => router };
+    const deps = { router: () => router, signedIn: () => false };
     expect(handleHandoffSend({ kind: 'dispatch', toWorkspaceId: 'ws1', title: 'go', body: '', threadId: 'pr:Acme/App#12' }, asBot(moa), deps)).toMatchObject({ ok: true, threadId: canonical });
     const ask = await handleAskPerson({ title: 'order?', threadId: 'pr:Acme/App#12' }, asBot(lead), deps);
     expect(ask).toMatchObject({ ok: true, threadId: canonical });
@@ -784,9 +798,93 @@ describe('one PR is one thread however the caller spells it', () => {
     const q = s.writer.read('ws1').cards.find((c) => c.kind === 'question')!;
     expect(await handleQuestionClose({ cardId: q.id }, OPERATOR, deps)).toMatchObject({ ok: false, code: 'bot_only' });
     expect(await handleQuestionClose({ cardId: q.id }, asBot(moa), deps)).toMatchObject({ ok: false, code: 'not_found' });
-    expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), { router: () => null })).toMatchObject({ ok: false, code: 'not_started' });
+    expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), { router: () => null, signedIn: () => false })).toMatchObject({ ok: false, code: 'not_started' });
     expect(await handleQuestionClose({ cardId: q.id }, asBot(lead), deps)).toMatchObject({ ok: true });
     expect(loadThreadDecision('ws1', canonical, dir)).toBeNull();
+  });
+});
+
+describe('a bot whose conversation holds data from a signed-in task', () => {
+  it('posts only in its own 1:1, and mentions no bot there; with no live conversation it posts nowhere else either', async () => {
+    const lead = bot('ws1', 'lead');
+    const dev = bot('ws1', 'lead');
+    const s = setup([lead, dev]);
+    const signedIn = { ...s.deps, signedIn: () => true };
+    const dm = `dm:${lead.id}`;
+    s.wake.thread = dm;
+    s.wake.id = { wakeId: 'w-dm', attempt: 1 };
+    expect(await handleRoomPost({ kind: 'status', title: 'Here is the page summary' }, asBot(lead), signedIn)).toMatchObject({ ok: true, card: { threadId: dm } });
+    for (const threadId of ['general', 'issue:github.com/acme/app#7']) {
+      expect(await handleRoomPost({ kind: 'status', title: 'summary', threadId }, asBot(lead), signedIn))
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task, so it can\'t post outside your 1:1') });
+    }
+    // A wake in General posts nothing there.
+    s.wake.thread = 'general';
+    expect(await handleRoomPost({ kind: 'status', title: 'summary' }, asBot(lead), signedIn)).toMatchObject({ ok: false, code: 'not_now' });
+    s.wake.thread = dm;
+    expect(await handleRoomPost({ kind: 'status', title: 'over to you', mentions: [dev.id] }, asBot(lead), signedIn))
+      .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('mention another bot') });
+    // The default reads the conversation's marks: none live is not known clean.
+    expect(await handleRoomPost({ kind: 'status', title: 'summary', threadId: 'general' }, asBot(lead), { ...s.deps, signedIn: undefined })).toMatchObject({ ok: false, code: 'not_now' });
+    expect(s.writer.read('ws1').cards.map((c) => c.threadId)).toEqual([dm]);
+  });
+
+  it('another bot reads none of its 1:1, by thread or by search; it reads its own, and the owner reads both', async () => {
+    const a = bot('ws1', 'lead');
+    const b = bot('ws1', 'lead');
+    const s = setup([a, b]);
+    const dmA = `dm:${a.id}`;
+    s.wake.thread = dmA;
+    s.wake.id = { wakeId: 'w-a', attempt: 1 };
+    expect(await handleRoomPost({ kind: 'status', title: 'Page summary', body: 'quarterly figures' }, asBot(a), s.deps)).toMatchObject({ ok: true, card: { threadId: dmA } });
+    s.wake.thread = 'general';
+    s.wake.id = { wakeId: 'w-b', attempt: 1 };
+    expect(await handleRoomPost({ kind: 'status', title: 'General note', body: 'quarterly plan' }, asBot(b), s.deps)).toMatchObject({ ok: true });
+    // B: by thread refused, unthreaded and search leave A's 1:1 out.
+    expect(handleRoomRead({ threadId: dmA }, asBot(b), s.deps)).toMatchObject({ ok: false, code: 'not_yours' });
+    expect((handleRoomRead({}, asBot(b), s.deps) as { cards: Array<{ threadId: string }> }).cards.map((c) => c.threadId)).toEqual(['general']);
+    expect((handleRoomSearch({ query: 'quarterly' }, asBot(b), s.deps) as { hits: Array<{ threadId: string }> }).hits.map((h) => h.threadId)).toEqual(['general']);
+    // A reads its own.
+    expect((handleRoomRead({ threadId: dmA }, asBot(a), s.deps) as { cards: Array<{ title: string }> }).cards.map((c) => c.title)).toEqual(['Page summary']);
+    expect((handleRoomSearch({ query: 'quarterly' }, asBot(a), s.deps) as { hits: unknown[] }).hits).toHaveLength(2);
+    // The owner's views are unchanged.
+    expect((handleRoomRead({ workspaceId: 'ws1', threadId: dmA }, OPERATOR, s.deps) as { cards: unknown[] }).cards).toHaveLength(1);
+    expect((handleRoomSearch({ workspaceId: 'ws1', query: 'quarterly' }, OPERATOR, s.deps) as { hits: unknown[] }).hits).toHaveLength(2);
+  });
+
+  it('hands no work to another bot; it may still ask the owner', async () => {
+    const lead = bot('ws1', 'lead');
+    const dev = bot('ws1', 'lead');
+    const s = setup([lead, dev]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    const deps = { router: () => router, signedIn: () => true };
+    for (const kind of ['dispatch', 'result']) {
+      expect(handleHandoffSend({ kind, toBotId: dev.id, title: 'the notes', body: 'what it read' }, asBot(lead), deps))
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task, so it can\'t hand work to another bot') });
+    }
+    expect(router.list({})).toEqual([]);
+    expect(await handleAskPerson({ title: 'Save it as a routine?', threadId: `dm:${lead.id}` }, asBot(lead), deps)).toMatchObject({ ok: true });
+  });
+
+  it('asks the owner only in its own 1:1: a question aimed nowhere lands there, one aimed at General or a task thread is refused', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    const dm = `dm:${lead.id}`;
+    // The signed-in task's report wake runs in its task thread.
+    s.wake.thread = 'task:t-signed';
+    s.wake.id = { wakeId: 'w-report', attempt: 1 };
+    const signedIn = { router: () => router, signedIn: () => true };
+    for (const threadId of ['general', 'task:t-signed']) {
+      expect(await handleAskPerson({ title: 'Share the forecast?', body: 'Q3 revenue 4.2M', threadId }, asBot(lead), signedIn))
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task, so it can\'t ask a question outside your 1:1') });
+    }
+    expect(await handleAskPerson({ title: 'Share the forecast?', body: 'Q3 revenue 4.2M' }, asBot(lead), signedIn)).toMatchObject({ ok: true, threadId: dm });
+    // The default reads the conversation's marks: none live is not known clean.
+    s.wake.id = { wakeId: 'w-report-2', attempt: 1 };
+    expect(await handleAskPerson({ title: 'And the margin?', body: 'Q3 margin 12%' }, asBot(lead), { router: () => router })).toMatchObject({ ok: true, threadId: dm });
+    expect(s.writer.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.threadId)).toEqual([dm, dm]);
+    expect(router.list({}).map((h) => h.threadId)).toEqual([dm, dm]);
   });
 });
 
@@ -809,7 +907,7 @@ describe('a delegate woken in a thread its dispatch opened posts there', () => {
     // The coordinator, woken by the owner in its 1:1 or the group, dispatches.
     s.wake.thread = said;
     s.wake.id = { wakeId: 'w-lead', attempt: 1 };
-    const d = handleHandoffSend({ kind: 'dispatch', toBotId: dev.id, title: 'Write coord.txt', body: 'b' }, asBot(lead), { router: () => router }) as { ok: true; handoffId: string; threadId: string };
+    const d = handleHandoffSend({ kind: 'dispatch', toBotId: dev.id, title: 'Write coord.txt', body: 'b' }, asBot(lead), { router: () => router, signedIn: () => false }) as { ok: true; handoffId: string; threadId: string };
     expect(d).toMatchObject({ ok: true, threadId: `handoff:${d.handoffId}` });
     await router.idle();
     // The delegate runs the dispatch's wake, pinned to the opened thread.
@@ -998,7 +1096,7 @@ describe('room.resolve', () => {
     const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
     await router.start();
     setHandoffRouter(router);
-    const ask = await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:t9' }, asBot(lead), { router: () => router }) as { decisionId: string };
+    const ask = await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:t9' }, asBot(lead), { router: () => router, signedIn: () => false }) as { decisionId: string };
     const card = s.writer.read('ws1').cards.find((c) => c.kind === 'question')!;
     expect(await handleRoomResolve({ workspaceId: 'ws1', cardId: card.id, resolution: 'Yes' }, asBot(lead), s.deps)).toMatchObject({ ok: false, code: 'operator_only' });
     const r = await handleRoomResolve({ workspaceId: 'ws1', cardId: card.id, resolution: 'Yes' }, OPERATOR, s.deps);
@@ -1100,10 +1198,10 @@ describe('human.correction from the owner\'s answers', () => {
     const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
     await router.start();
     setHandoffRouter(router);
-    await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:a', options: ['Merge now', 'Wait'] }, asBot(lead), { router: () => router });
-    await handleAskPerson({ title: 'Ship?', body: '', threadId: 'task:b', options: ['Ship', 'Hold'] }, asBot(lead), { router: () => router });
-    await handleAskPerson({ title: 'Which?', body: '', threadId: 'task:d', options: ['A', 'B'] }, asBot(lead), { router: () => router });
-    await handleAskPerson({ title: 'Name?', body: '', threadId: 'task:c' }, asBot(lead), { router: () => router });
+    await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:a', options: ['Merge now', 'Wait'] }, asBot(lead), { router: () => router, signedIn: () => false });
+    await handleAskPerson({ title: 'Ship?', body: '', threadId: 'task:b', options: ['Ship', 'Hold'] }, asBot(lead), { router: () => router, signedIn: () => false });
+    await handleAskPerson({ title: 'Which?', body: '', threadId: 'task:d', options: ['A', 'B'] }, asBot(lead), { router: () => router, signedIn: () => false });
+    await handleAskPerson({ title: 'Name?', body: '', threadId: 'task:c' }, asBot(lead), { router: () => router, signedIn: () => false });
     const q = (thread: string) => s.writer.read('ws1').cards.find((c) => c.kind === 'question' && c.threadId === thread)!;
     await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:a').id, resolution: ' merge  NOW ' }, OPERATOR, s.deps);
     await handleRoomResolve({ workspaceId: 'ws1', cardId: q('task:b').id, resolution: 'Hold until Monday' }, OPERATOR, s.deps);
@@ -1126,11 +1224,11 @@ describe('human.correction from the owner\'s answers', () => {
     setHandoffRouter(router);
     // The greeting, asked in the bot's first (intro) wake.
     s.wake.id = { wakeId: 'w-intro', attempt: 1, reasonKind: 'intro' } as never;
-    await handleAskPerson({ title: 'Hi, I\'m Lead. What should I do?', body: '', threadId: `dm:${lead.id}`, options: ['Review PRs', 'Triage issues'] }, asBot(lead), { router: () => router });
+    await handleAskPerson({ title: 'Hi, I\'m Lead. What should I do?', body: '', threadId: `dm:${lead.id}`, options: ['Review PRs', 'Triage issues'] }, asBot(lead), { router: () => router, signedIn: () => false });
     s.wake.id = { wakeId: 'w-2', attempt: 1 };
-    await handleAskPerson({ title: 'Which branch?', body: '', threadId: 'task:a', options: ['main', 'Something else (tell me)'] }, asBot(lead), { router: () => router });
-    await handleAskPerson({ title: 'Where next?', body: 'Pick one, or tell me in your own words.', threadId: 'task:b', options: ['Docs', 'Tests'] }, asBot(lead), { router: () => router });
-    await handleAskPerson({ title: 'Ship?', body: '', threadId: 'task:c', options: ['Ship', 'Hold'] }, asBot(lead), { router: () => router });
+    await handleAskPerson({ title: 'Which branch?', body: '', threadId: 'task:a', options: ['main', 'Something else (tell me)'] }, asBot(lead), { router: () => router, signedIn: () => false });
+    await handleAskPerson({ title: 'Where next?', body: 'Pick one, or tell me in your own words.', threadId: 'task:b', options: ['Docs', 'Tests'] }, asBot(lead), { router: () => router, signedIn: () => false });
+    await handleAskPerson({ title: 'Ship?', body: '', threadId: 'task:c', options: ['Ship', 'Hold'] }, asBot(lead), { router: () => router, signedIn: () => false });
     const q = (thread: string) => s.writer.read('ws1').cards.find((c) => c.kind === 'question' && c.threadId === thread)!;
     expect(q(`dm:${lead.id}`).greeting).toBe(true);
     await handleRoomResolve({ workspaceId: 'ws1', cardId: q(`dm:${lead.id}`).id, resolution: 'lead this repo' }, OPERATOR, s.deps);
@@ -1167,8 +1265,8 @@ describe('human.correction from the owner\'s answers', () => {
     const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
     await router.start();
     setHandoffRouter(router);
-    const ask = await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:a', options: ['Merge now', 'Wait'] }, asBot(lead), { router: () => router }) as { handoffId: string };
-    expect(await handleHandoffAnswer({ handoffId: ask.handoffId, answer: 'Wait for CI' }, OPERATOR, { router: () => router })).toMatchObject({ ok: true });
+    const ask = await handleAskPerson({ title: 'Merge?', body: '', threadId: 'task:a', options: ['Merge now', 'Wait'] }, asBot(lead), { router: () => router, signedIn: () => false }) as { handoffId: string };
+    expect(await handleHandoffAnswer({ handoffId: ask.handoffId, answer: 'Wait for CI' }, OPERATOR, { router: () => router, signedIn: () => false })).toMatchObject({ ok: true });
     // 'Wait for CI' is none of the offered options.
     expect(corrections(s.facts)).toEqual([expect.objectContaining({ payload: expect.objectContaining({ category: 'question-override', note: 'Wait for CI' }) })]);
     router.dispose();
@@ -1180,7 +1278,7 @@ describe('handoff.* / ask.person auth', () => {
     const lead = bot('ws1', 'lead');
     const s = setup([lead]);
     const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
-    const deps = { router: () => router };
+    const deps = { router: () => router, signedIn: () => false };
     for (const ctx of [WIRE, undefined]) {
       expect(handleHandoffSend({ kind: 'result', title: 'x', body: '' }, ctx, deps)).toMatchObject({ code: 'not_bot' });
       expect(await handleAskPerson({ title: 'x' }, ctx, deps)).toMatchObject({ code: 'not_bot' });
@@ -1192,7 +1290,7 @@ describe('handoff.* / ask.person auth', () => {
     expect(await handleHandoffAnswer({ handoffId: 'h', answer: 'a' }, asBot(lead), deps)).toMatchObject({ code: 'operator_only' });
     expect(handleHandoffList({}, asBot(lead), deps)).toMatchObject({ code: 'operator_only' });
     expect(handleHandoffList({}, OPERATOR, deps)).toMatchObject({ ok: true, handoffs: [] });
-    expect(handleHandoffSend({ kind: 'result', title: 'x', body: '' }, asBot(lead), { router: () => null })).toMatchObject({ code: 'not_started' });
+    expect(handleHandoffSend({ kind: 'result', title: 'x', body: '' }, asBot(lead), { router: () => null, signedIn: () => false })).toMatchObject({ code: 'not_started' });
     // ask_person is on every role's surface.
     for (const role of ['lead', 'triage', 'verifier', 'maintainer', 'moa'] as BotRole[]) {
       const b = bot(`ws-${role}`, role);
@@ -1274,7 +1372,7 @@ describe('long room card text is shortened as the last step', () => {
     try {
       const { title, text } = across();
       const body = text.slice(title.length + 1);
-      const asked = await handleAskPerson({ title, body: 'c'.repeat(title.length + 1) + body }, asBot(lead), { router: () => router }) as { ok: boolean };
+      const asked = await handleAskPerson({ title, body: 'c'.repeat(title.length + 1) + body }, asBot(lead), { router: () => router, signedIn: () => false }) as { ok: boolean };
       expect(asked.ok).toBe(true);
       const [card] = s.writer.read('ws1').cards.filter((c) => c.kind === 'question');
       expect(card.title).toBe('a'.repeat(ROOM_TITLE_MAX - 20) + MARK + 'b'.repeat(10));

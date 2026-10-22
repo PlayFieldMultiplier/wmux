@@ -33,7 +33,7 @@ import { isGuestId, sanitizeGuestName } from '../../shared/guestBots';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { BOT_ID_RE, type BotTrigger } from '../../shared/bot';
-import { WAKE_LIMITS, wakeReasonDedupeKey, type WakeItem, type WakeReason, type WakeState } from '../../shared/wake';
+import { WAKE_LIMITS, isHeldWakeKind, wakeReasonDedupeKey, type WakeItem, type WakeReason, type WakeState } from '../../shared/wake';
 import { parseThreadId, type ThreadId } from '../../shared/room';
 import { emitBotHook } from './botHooks';
 import { sanitizeTriggers } from './botStore';
@@ -165,6 +165,7 @@ export function sanitizeWakeReason(raw: unknown): WakeReason | null {
         ...(args ? { args } : {}), ...(r.fingerprint !== undefined ? { fingerprint: r.fingerprint as string } : {}), tainted: r.tainted,
         ...(typeof r.guest === 'boolean' ? { guest: r.guest } : {}),
         ...(r.handoffId !== undefined ? { handoffId: r.handoffId as string } : {}),
+        ...(isHeldWakeKind(r.wakeKind) ? { wakeKind: r.wakeKind } : {}),
       };
     }
     default:
