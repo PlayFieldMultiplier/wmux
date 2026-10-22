@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DECODE_LIMITS, SAMPLE_RATE, WhisperTokenizer, endsInLoop, logMelSpectrogram } from '../whisper';
+import { DECODE_LIMITS, PREFERRED_LANGUAGE_MIN_SHARE, SAMPLE_RATE, WHISPER_TOKENS, WhisperTokenizer, chooseLanguage, dictationLanguageFor, endsInLoop, logMelSpectrogram } from '../whisper';
 
 const reference = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'whisper-reference.json'), 'utf8')) as {
   frames: number;
@@ -64,5 +64,30 @@ describe('endsInLoop', () => {
     expect(endsInLoop([1, 2, ...loop.slice(1)])).toBe(false);
     expect(endsInLoop([5, 5, 5])).toBe(DECODE_LIMITS.REPEATS <= 3);
     expect(endsInLoop([1, 2, 3, 4, 5, 6])).toBe(false);
+  });
+});
+
+describe('chooseLanguage', () => {
+  /** First-step logits where only the language tokens named have a say. */
+  const logits = (scores: Record<number, number>) => {
+    const out = new Float32Array(51865).fill(-50);
+    for (const [id, v] of Object.entries(scores)) out[Number(id)] = v;
+    return out;
+  };
+  const { ko, en } = WHISPER_TOKENS.LANG;
+
+  it('keeps the UI language while the model finds it plausible, and follows the speech otherwise', () => {
+    // Korean speech with an English UI: forcing English would translate it.
+    expect(chooseLanguage(logits({ [ko]: 5, [en]: 1 }), 'en')).toBe(ko);
+    // A close call goes to the UI language.
+    expect(chooseLanguage(logits({ [ko]: 1, [en]: 0.5 }), 'en')).toBe(en);
+    expect(chooseLanguage(logits({ [ko]: 1, [en]: 0.5 }), 'auto')).toBe(ko);
+    expect(PREFERRED_LANGUAGE_MIN_SHARE).toBeGreaterThan(0);
+  });
+
+  it('maps the UI language to Whisper\'s, and a language Whisper lacks to auto', () => {
+    expect(dictationLanguageFor('ko')).toBe('ko');
+    expect(dictationLanguageFor('zh-TW')).toBe('zh-TW');
+    expect(dictationLanguageFor('xx')).toBe('auto');
   });
 });

@@ -290,7 +290,7 @@ async function decodeWindow(ort: WhisperOrt, sessions: WhisperSessions, encoded:
   };
 
   let logits = await step([WHISPER_TOKENS.SOT]);
-  const lang = opts.language === 'auto' ? detectLanguage(logits) : WHISPER_TOKENS.LANG[opts.language];
+  const lang = chooseLanguage(logits, opts.language);
   logits = await step([lang, WHISPER_TOKENS.TRANSCRIBE, WHISPER_TOKENS.NO_TIMESTAMPS]);
   const suppress = new Set(opts.suppress);
   const out: number[] = [];
@@ -317,11 +317,21 @@ async function decodeWindow(ort: WhisperOrt, sessions: WhisperSessions, encoded:
   return out;
 }
 
-/** The language token the first step's logits rank highest. Pure. */
-export function detectLanguage(logits: ArrayLike<number>): number {
+/** A preferred language is kept while the model gives it at least this
+ *  share of its language guess: forcing a language the speech is not in
+ *  makes Whisper translate (Korean speech, English UI → English text). */
+export const PREFERRED_LANGUAGE_MIN_SHARE = 0.2;
+
+/** The language token to write in: the preferred (UI) language when the
+ *  model finds it plausible, else the language it hears. Pure. */
+export function chooseLanguage(logits: ArrayLike<number>, preferred: DictationLanguage | 'auto'): number {
   let best: number = WHISPER_TOKENS.LANG_FIRST;
   for (let id = WHISPER_TOKENS.LANG_FIRST; id <= WHISPER_TOKENS.LANG_LAST; id += 1) if (logits[id] > logits[best]) best = id;
-  return best;
+  if (preferred === 'auto') return best;
+  const want: number = WHISPER_TOKENS.LANG[preferred];
+  let sum = 0;
+  for (let id = WHISPER_TOKENS.LANG_FIRST; id <= WHISPER_TOKENS.LANG_LAST; id += 1) sum += Math.exp(logits[id] - logits[best]);
+  return Math.exp(logits[want] - logits[best]) / sum >= PREFERRED_LANGUAGE_MIN_SHARE ? want : best;
 }
 
 /** Drops the repeats of the loop `ids` ends on, keeping its first copy. */

@@ -229,8 +229,9 @@ export function launchAppArgs({ userDataDirArg = null, fakeAudio = null, platfor
   if (userDataDirArg) args.push(`--user-data-dir=${userDataDirArg}`);
   // Chromium's fake capture device plays a WAV file as the microphone, once:
   // dictation can be proven on a machine with no microphone, and the real
-  // one (and its OS prompt) is never touched.
-  if (fakeAudio) args.push('--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${fakeAudio}%noloop`);
+  // one (and its OS prompt) is never touched. The audio service's sandbox
+  // would refuse to read the file, so that one sandbox (only) is off.
+  if (fakeAudio) args.push('--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${fakeAudio}%noloop`, '--disable-features=AudioServiceSandbox');
   return args;
 }
 

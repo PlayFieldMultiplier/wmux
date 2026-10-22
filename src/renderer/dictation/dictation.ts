@@ -7,7 +7,7 @@ import { useSyncExternalStore } from 'react';
 import { getLocale } from '../i18n';
 import type { DictationModelState } from '../../shared/dictation';
 import { startRecording, type Recording } from './recorder';
-import { dictationLanguageFor } from './whisper';
+import { SAMPLE_RATE, dictationLanguageFor } from './whisper';
 import type { WorkerReply, WorkerRequest } from './whisper.worker';
 // Vite's worker import; the resolver eslint uses does not know the suffix.
 // eslint-disable-next-line import/no-unresolved
@@ -145,7 +145,11 @@ export async function stopDictation(): Promise<void> {
   set({ phase: 'transcribing', startedAt: null });
   try {
     const audio = await rec.stop();
+    const seconds = audio.length / SAMPLE_RATE;
+    const t0 = performance.now();
     const text = await transcribeInWorker(audio);
+    // How it went, never what was said.
+    console.log(`[wmux:dictation] ${seconds.toFixed(1)} s of audio → ${text.length} characters in ${Math.round(performance.now() - t0)} ms`);
     const to = deliver;
     deliver = null;
     set({ phase: 'idle', target: null });
