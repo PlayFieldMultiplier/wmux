@@ -98,6 +98,8 @@ import { RECONCILE_REQUEST_COALESCE_MS, setReconcileRequester } from '../../hook
 import { ptyLifecycle } from '../../hooks/ptyLifecycle';
 import ProjectConfigDialog from '../Project/ProjectConfigDialog';
 import WorkspacePrepDialog from '../Project/WorkspacePrepDialog';
+import { DictationHost } from '../Dictation/DictationHost';
+import { dictationAvailable } from '../Dictation/DictationButton';
 import AttachRemoteModal from '../Sidebar/AttachRemoteModal';
 import { probeProjectConfig, maybeAutoApplyProjectLayout, workspaceProbeCwd } from '../../utils/projectConfigProbe';
 import { serializeTerminalBuffer } from '../../utils/scrollbackDump';
@@ -2366,6 +2368,8 @@ export default function AppLayout() {
       <CloseTabConfirm />
       <ProjectConfigDialog />
       <WorkspacePrepDialog />
+      {/* Voice dictation: the model consent, Esc to cancel, failure toasts. */}
+      {dictationAvailable() && <ErrorBoundary name="DictationHost"><DictationHost /></ErrorBoundary>}
       {/* "Pair again" from a remote workspace whose host rejected us. Lives
           here because re-pairing removes that host's views. */}
       {remoteRepairHostId && (

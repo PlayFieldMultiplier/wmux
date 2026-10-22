@@ -3,7 +3,8 @@ import { CLAUDE_MODEL_OPTIONS, claudeModelLabel } from '../../../shared/claudeMo
 import type { ChatV2RunMode } from '../../../shared/chatv2/ipc';
 import { CHATV2_MAX_PROMPT_BYTES, utf8Bytes } from '../../../shared/chatv2/limits';
 import { CHAT_ATTACHMENT_LIMIT, validChatImagePath } from '../../../shared/transcript/chatAttachments';
-import { registerChatDropTarget, registerChatInsertTarget } from '../Chat/chatAttachments';
+import { registerChatDropTarget, registerChatInsertTarget, spliceAtCaret } from '../Chat/chatAttachments';
+import { DictationButton, dictationAvailable } from '../Dictation/DictationButton';
 import { getChatV2Bridge } from './bridge';
 import { S } from './strings';
 
@@ -90,6 +91,27 @@ export function Composer({ paneId, draftKey, chips, placeholder, disabled, runni
     focus: () => input.current?.focus(),
   }), [paneId, draftKey]);
 
+  // Dictated text goes in at the caret (over a selection), for the owner to
+  // edit; it is never sent by itself.
+  const pendingCaret = useRef<number | null>(null);
+  useEffect(() => {
+    const el = input.current;
+    if (pendingCaret.current === null || !el) return;
+    el.setSelectionRange(pendingCaret.current, pendingCaret.current);
+    pendingCaret.current = null;
+  }, [text]);
+  const insertDictation = (value: string) => {
+    const el = input.current;
+    const current = textRef.current;
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? start;
+    const next = spliceAtCaret(current.slice(0, start) + current.slice(end), start, value);
+    pendingCaret.current = next.caret;
+    textRef.current = next.text;
+    setText(next.text);
+    el?.focus();
+  };
+
   const tooLong = utf8Bytes(text) > CHATV2_MAX_PROMPT_BYTES;
   const canSend = !disabled && !running && !sending && (!!text.trim() || staged.length > 0) && !tooLong;
 
@@ -166,6 +188,9 @@ export function Composer({ paneId, draftKey, chips, placeholder, disabled, runni
         </div>
         <div className="wmux-chatv2-composer-actions">
           {extra}
+          {dictationAvailable() && (
+            <DictationButton target={`chat:${paneId}`} onText={insertDictation} disabled={disabled} className="wmux-chatv2-icon" />
+          )}
           {running && canStop ? (
             <button type="button" className="wmux-chatv2-btn" onClick={onStop}>{S.stop}</button>
           ) : (
