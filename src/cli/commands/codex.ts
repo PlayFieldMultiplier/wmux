@@ -13,7 +13,7 @@ export const CODEX_HANDOFF_FLAG = '--wmux-handoff';
 export const CODEX_RELEASE_FLAG = '--wmux-release';
 const LEASE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-interface CodexLaunch {
+export interface CodexLaunch {
   executable:string;
   codeHome:string;
   url:string;
@@ -33,7 +33,7 @@ async function prepareLaunch(args:string[]):Promise<CodexLaunch> {
     callerPid:process.pid,getParentPid:getParentPidDefault});
   if (!self.ptyId || !self.workspaceToken) throw new Error('Run wmux codex directly in a wmux terminal pane.');
   setWorkspaceToken(self.workspaceToken);
-  const codeHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(),'.codex'));
+  const codeHome = path.win32.resolve(process.env.CODEX_HOME || path.win32.join(os.homedir(),'.codex'));
   // Outlive main's 100s deadline and the runtime's lock/version/start/probe bounds.
   const response = await sendRequest('codex.relay.prepare',{codeHome},110_000);
   if (!response.ok) throw new Error(response.error);
@@ -57,10 +57,31 @@ function releaseLease(leaseId:string):Promise<unknown> {
   return sendRequest('codex.relay.close',{leaseId}).catch(()=>undefined);
 }
 
-/** One argument, always quoted (cmd leaves `&` and `^` inside quotes alone),
- * as the Microsoft C runtime reads it back. */
-export function quoteWindowsArg(value:string):string {
-  return `"${value.replace(/(\\*)"/g,'$1$1\\"').replace(/(\\+)$/,'$1$1')}"`;
+/** The managed binary through the install's own `current` link, relative to CODEX_HOME. */
+const MANAGED_EXE_LINK = 'packages\\app-server-daemon\\current\\bin\\codex.exe';
+/** What one line of the handoff may hold: printable ASCII, no quote. */
+const HANDOFF_SAFE = /^[\x20\x21\x23-\x7e]*$/;
+
+/**
+ * The handoff's lines for wmux.cmd's `for /f`. cmd decodes that pipe in the
+ * console's code page (949 on a Korean system), so a UTF-8 path read back
+ * through it is mangled. No path crosses it: the script launches Codex in its
+ * own CODEX_HOME and current directory, which it handed this CLI through the
+ * environment and the working directory. The binary is named relative to
+ * CODEX_HOME, inside the install that resolveCodexManagedExecutable checked.
+ */
+export function codexHandoffLines(launch:CodexLaunch):string[] {
+  const relative = path.win32.relative(launch.codeHome,launch.executable);
+  const inHome = relative !== '' && !relative.startsWith('..') && !path.win32.isAbsolute(relative) && HANDOFF_SAFE.test(relative);
+  return [
+    `WMUX_CODEX_EXE=${inHome ? relative : MANAGED_EXE_LINK}`,
+    `WMUX_CODEX_LAUNCH=--remote ${launch.url}`,
+    // The script passes its own directory as --cd when the user named none.
+    ...(launch.cd === undefined ? [] : ['WMUX_CODEX_CD=1']),
+    `codex=${launch.authToken}`,
+    // Last: the script launches only once it holds the lease to release.
+    `WMUX_CODEX_LEASE=${launch.leaseId}`,
+  ];
 }
 
 /**
@@ -75,20 +96,15 @@ export async function codexHandoff(raw:string|undefined, output:NodeJS.WriteStre
   if (typeof raw !== 'string' || /[\r\n]/.test(raw)) throw new Error('wmux.cmd passed no Codex arguments.');
   const tokens = tokenizeCommandLine(raw);
   if (tokens[0]?.toLowerCase() !== 'codex') throw new Error('wmux.cmd passed no Codex arguments.');
+  // The script resolves CODEX_HOME before this step: Codex gets the script's value, not one read back from here.
+  if (!process.env.CODEX_HOME) throw new Error('wmux.cmd passed no CODEX_HOME. Set CODEX_HOME and run wmux codex again.');
   const launch = await prepareLaunch(tokens.slice(1));
-  // Each value is one line of `set "NAME=value"`, and the paths sit inside quotes there.
-  if ([launch.executable,launch.codeHome,launch.cd ?? ''].some(value=>/[\r\n"]/.test(value))) {
+  const lines = codexHandoffLines(launch);
+  // The script quotes CODEX_HOME and its directory on the launch line.
+  if ([launch.codeHome,launch.cd ?? ''].some(value=>/[\r\n"]/.test(value)) || !lines.every(line=>HANDOFF_SAFE.test(line))) {
     await releaseLease(launch.leaseId);
     throw new Error('This Codex path cannot be passed through wmux.cmd.');
   }
-  const lines = [
-    `WMUX_CODEX_EXE=${launch.executable}`,
-    `WMUX_CODEX_LAUNCH=--remote ${launch.url}${launch.cd === undefined ? '' : ` --cd ${quoteWindowsArg(launch.cd)}`}`,
-    `WMUX_CODEX_HOME=${launch.codeHome}`,
-    `codex=${launch.authToken}`,
-    // Last: the script launches only once it holds the lease to release.
-    `WMUX_CODEX_LEASE=${launch.leaseId}`,
-  ];
   try {
     await new Promise<void>((resolve,reject)=>output.write(`${lines.join('\n')}\n`,error=>error ? reject(error) : resolve()));
   } catch (error) {

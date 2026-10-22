@@ -102,8 +102,15 @@ export function buildShimCmd(): string {
     'echo wmux: no app directory found in "%~dp0.." >&2',
     'exit /b 1',
     ':wmux_codex_app',
+    // Paths never come back through the handoff's `for /f`: cmd decodes that
+    // pipe in the console's code page, which mangles a non-ASCII path (a
+    // Korean user name under code page 949). The script settles CODEX_HOME
+    // here, the handoff and Codex both inherit it, and Codex's --cd is this
+    // script's own directory.
+    'if not defined CODEX_HOME if defined USERPROFILE set "CODEX_HOME=%USERPROFILE%\\.codex"',
+    'if defined CODEX_HOME for %%h in ("%CODEX_HOME%") do set "CODEX_HOME=%%~fh"',
     'set WMUX_CODEX_ARGS=%*',
-    'for %%v in (WMUX_CODEX_EXE WMUX_CODEX_LAUNCH WMUX_CODEX_LEASE WMUX_CODEX_HOME codex) do set "%%v="',
+    'for %%v in (WMUX_CODEX_EXE WMUX_CODEX_LAUNCH WMUX_CODEX_CD WMUX_CODEX_LEASE codex) do set "%%v="',
     'for /f "delims=" %%l in (\'^""%WMUX_APP%\\wmux.exe" "%WMUX_APP%\\resources\\cli-bundle\\index.js" codex --wmux-handoff^"\') do set "%%l"',
     'set "WMUX_CODEX_ARGS="',
     // The handoff printed its own error and holds no lease.
@@ -113,9 +120,12 @@ export function buildShimCmd(): string {
     // brings the lease back for the release.
     'setlocal',
     'set "ELECTRON_RUN_AS_NODE="',
-    'set "CODEX_HOME=%WMUX_CODEX_HOME%"',
+    // The C runtime reads `\"` as a quote: a directory ending in `\` (a drive root) doubles it.
+    'set "WMUX_CODEX_CDARG="',
+    'if defined WMUX_CODEX_CD set WMUX_CODEX_CDARG=--cd "%CD%"',
+    'if defined WMUX_CODEX_CD if "%CD:~-1%"=="\\" set WMUX_CODEX_CDARG=--cd "%CD%\\"',
     // cmd expands the whole line before any of its `set`s runs.
-    'set "WMUX_CODEX_EXE=" & set "WMUX_CODEX_LAUNCH=" & set "WMUX_CODEX_LEASE=" & set "WMUX_CODEX_HOME=" & set "WMUX_APP=" & "%WMUX_CODEX_EXE%" %WMUX_CODEX_LAUNCH% --remote-auth-token-env %*',
+    'set "WMUX_CODEX_EXE=" & set "WMUX_CODEX_LAUNCH=" & set "WMUX_CODEX_CD=" & set "WMUX_CODEX_CDARG=" & set "WMUX_CODEX_LEASE=" & set "WMUX_APP=" & "%CODEX_HOME%\\%WMUX_CODEX_EXE%" %WMUX_CODEX_LAUNCH% %WMUX_CODEX_CDARG% --remote-auth-token-env %*',
     'set "WMUX_CODEX_EXIT=%ERRORLEVEL%"',
     'endlocal & set "WMUX_CODEX_EXIT=%WMUX_CODEX_EXIT%"',
     'set "codex="',

@@ -23,9 +23,10 @@ vi.mock('../../../shared/codexManagedExecutable',()=>({
   resolveCodexManagedExecutable:vi.fn(()=>'C:\\Users\\u\\.codex\\packages\\app-server-daemon\\current\\bin\\codex.exe'),
 }));
 
-import {codexHandoff,codexRelease,handleCodex,quoteWindowsArg} from '../codex';
+import {codexHandoff,codexRelease,handleCodex} from '../codex';
 import {sendRequest} from '../../client';
 import {resolveSelfContext} from '../../identity';
+import {resolveCodexManagedExecutable} from '../../../shared/codexManagedExecutable';
 
 /** What wmux.cmd's `for /f` reads: a pipe, as a net.Socket. */
 function pipe():{stream:NodeJS.WriteStream; text:()=>string} {
@@ -41,10 +42,13 @@ describe('wmux codex through wmux.cmd',()=>{
     rpc.calls.length = 0;
     Object.defineProperty(process,'platform',{value:'win32'});
     vi.spyOn(process,'cwd').mockReturnValue('D:\\');
+    // wmux.cmd always settles CODEX_HOME before the handoff.
+    vi.stubEnv('CODEX_HOME','C:\\Users\\u\\.codex');
   });
   afterEach(()=>{
     Object.defineProperty(process,'platform',{value:platform});
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('hands the launch to the script\'s pipe, with the bearer in `codex` and the lease last',async()=>{
@@ -52,9 +56,9 @@ describe('wmux codex through wmux.cmd',()=>{
     await codexHandoff('codex resume "a b"',out.stream);
     const lines = out.text().trimEnd().split('\n');
     expect(lines).toEqual([
-      'WMUX_CODEX_EXE=C:\\Users\\u\\.codex\\packages\\app-server-daemon\\current\\bin\\codex.exe',
-      'WMUX_CODEX_LAUNCH=--remote ws://127.0.0.1:4567 --cd "D:\\\\"',
-      expect.stringMatching(/^WMUX_CODEX_HOME=/),
+      'WMUX_CODEX_EXE=packages\\app-server-daemon\\current\\bin\\codex.exe',
+      'WMUX_CODEX_LAUNCH=--remote ws://127.0.0.1:4567',
+      'WMUX_CODEX_CD=1',
       `codex=${'a'.repeat(64)}`,
       'WMUX_CODEX_LEASE=11111111-2222-3333-4444-555555555555',
     ]);
@@ -65,6 +69,36 @@ describe('wmux codex through wmux.cmd',()=>{
     const out = pipe();
     await codexHandoff('codex -C "D:\\work dir"',out.stream);
     expect(out.text()).toContain('WMUX_CODEX_LAUNCH=--remote ws://127.0.0.1:4567\n');
+    expect(out.text()).not.toContain('WMUX_CODEX_CD');
+  });
+
+  // cmd's for /f reads this pipe in the console's code page (949 on Korean Windows).
+  it('hands no path over the pipe: a Korean user name stays with the script',async()=>{
+    vi.stubEnv('CODEX_HOME','C:\\Users\\홍길동\\.codex');
+    vi.mocked(process.cwd).mockReturnValue('D:\\작업 폴더');
+    vi.mocked(resolveCodexManagedExecutable).mockReturnValueOnce('C:\\Users\\홍길동\\.codex\\packages\\app-server-daemon\\releases\\0.163.0-x86_64-pc-windows-msvc\\bin\\codex.exe');
+    const out = pipe();
+    await codexHandoff('codex',out.stream);
+    expect(out.text()).toMatch(/^[\x20-\x7e\n]*$/);
+    expect(out.text().split('\n').slice(0,3)).toEqual([
+      'WMUX_CODEX_EXE=packages\\app-server-daemon\\releases\\0.163.0-x86_64-pc-windows-msvc\\bin\\codex.exe',
+      'WMUX_CODEX_LAUNCH=--remote ws://127.0.0.1:4567',
+      'WMUX_CODEX_CD=1',
+    ]);
+    expect(rpc.calls[0]).toEqual({method:'codex.relay.prepare',params:{codeHome:'C:\\Users\\홍길동\\.codex'}});
+  });
+
+  it('names the binary through the install link when the install lives outside CODEX_HOME',async()=>{
+    vi.mocked(resolveCodexManagedExecutable).mockReturnValueOnce('E:\\codex-packages\\app-server-daemon\\releases\\1\\bin\\codex.exe');
+    const out = pipe();
+    await codexHandoff('codex',out.stream);
+    expect(out.text().split('\n')[0]).toBe('WMUX_CODEX_EXE=packages\\app-server-daemon\\current\\bin\\codex.exe');
+  });
+
+  it('reserves nothing without the CODEX_HOME the script settles',async()=>{
+    vi.stubEnv('CODEX_HOME','');
+    await expect(codexHandoff('codex',pipe().stream)).rejects.toThrow(/CODEX_HOME/);
+    expect(rpc.calls).toEqual([]);
   });
 
   it('never prints the bearer to a console or a file',async()=>{
@@ -111,11 +145,5 @@ describe('wmux codex through wmux.cmd',()=>{
       await expect(handleCodex([])).rejects.toThrow(/console/);
       expect(rpc.calls).toEqual([]);
     } finally {Object.defineProperty(process.stdin,'isTTY',{value:isTTY,configurable:true});}
-  });
-
-  it('quotes an argument the way the C runtime reads it back',()=>{
-    expect(quoteWindowsArg('D:\\')).toBe('"D:\\\\"');
-    expect(quoteWindowsArg('D:\\a b\\')).toBe('"D:\\a b\\\\"');
-    expect(quoteWindowsArg('D:\\a&b')).toBe('"D:\\a&b"');
   });
 });

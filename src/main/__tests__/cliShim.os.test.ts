@@ -11,6 +11,7 @@ import {
   PATH_EDIT_EXIT,
   shimIsCurrent,
 } from '../cliShim';
+import { codexHandoffLines } from '../../cli/commands/codex';
 
 describe('buildShimCmd', () => {
   it('discovers app-* dynamically, scopes ELECTRON_RUN_AS_NODE, and forwards args + exit code', () => {
@@ -44,7 +45,7 @@ describe('buildShimCmd', () => {
     const at = (line: string) => lines.indexOf(line);
     expect(at('if /i "%~1"=="codex" goto :wmux_codex')).toBeGreaterThan(-1);
     const handoff = at('for /f "delims=" %%l in (\'^""%WMUX_APP%\\wmux.exe" "%WMUX_APP%\\resources\\cli-bundle\\index.js" codex --wmux-handoff^"\') do set "%%l"');
-    const launch = at('set "WMUX_CODEX_EXE=" & set "WMUX_CODEX_LAUNCH=" & set "WMUX_CODEX_LEASE=" & set "WMUX_CODEX_HOME=" & set "WMUX_APP=" & "%WMUX_CODEX_EXE%" %WMUX_CODEX_LAUNCH% --remote-auth-token-env %*');
+    const launch = at('set "WMUX_CODEX_EXE=" & set "WMUX_CODEX_LAUNCH=" & set "WMUX_CODEX_CD=" & set "WMUX_CODEX_CDARG=" & set "WMUX_CODEX_LEASE=" & set "WMUX_APP=" & "%CODEX_HOME%\\%WMUX_CODEX_EXE%" %WMUX_CODEX_LAUNCH% %WMUX_CODEX_CDARG% --remote-auth-token-env %*');
     const release = at('"%WMUX_APP%\\wmux.exe" "%WMUX_APP%\\resources\\cli-bundle\\index.js" codex --wmux-release %WMUX_CODEX_LEASE%');
     expect(handoff).toBeGreaterThan(-1);
     expect(launch).toBeGreaterThan(handoff);
@@ -52,6 +53,9 @@ describe('buildShimCmd', () => {
     // No launch without a lease; Codex never sees ELECTRON_RUN_AS_NODE, and
     // nothing after Codex sees the bearer.
     expect(at('if not defined WMUX_CODEX_LEASE exit /b 1')).toBeGreaterThan(handoff);
+    // CODEX_HOME is settled before the handoff reads it, and no path comes back through its pipe.
+    expect(at('if defined CODEX_HOME for %%h in ("%CODEX_HOME%") do set "CODEX_HOME=%%~fh"')).toBeLessThan(handoff);
+    expect(at('set "CODEX_HOME=%WMUX_CODEX_HOME%"')).toBe(-1);
     expect(at('set "ELECTRON_RUN_AS_NODE="')).toBeLessThan(launch);
     // The launch details live in a nested setlocal that ends only after Codex.
     expect(at('setlocal')).toBeLessThan(launch);
@@ -63,15 +67,33 @@ describe('buildShimCmd', () => {
 });
 
 // Runs the generated script under a root whose path holds a space, `&` and
-// parentheses, with Node standing in for wmux.exe and Codex.
+// parentheses, with Node standing in for wmux.exe and Codex. The handoff's
+// lines are the real CLI's (codexHandoffLines); the stand-in only puts the
+// script for Node in front of Codex's arguments. CODEX_HOME and the working
+// directory hold Korean names, the case a Korean user name produces.
 describe.skipIf(process.platform !== 'win32')('wmux.cmd codex launch (live cmd.exe)', () => {
   let root = '';
   let log = '';
-  const run = (tail: string, extraEnv: Record<string, string> = {}): { status: number | null; events: Record<string, unknown>[] } => {
+  let home = '';
+  let exe = '';
+  let work = '';
+  const lease = '11111111-2222-3333-4444-555555555555';
+  type Run = { status: number | null; events: Record<string, unknown>[] };
+  /** One `wmux ...` in a cmd of its own (windowsHide: its own hidden console, so chcp changes nothing else). */
+  const run = (tail: string, opts: { cwd?: string; chcp?: number; env?: Record<string, string | undefined>; cd?: boolean } = {}): Run => {
     nodeFs.writeFileSync(log, '');
+    const cwd = opts.cwd ?? root;
+    nodeFs.writeFileSync(nodePath.join(root, 'handoff.txt'), `${codexHandoffLines({
+      executable: exe, codeHome: home, url: 'ws://127.0.0.1:1', authToken: 'b'.repeat(64), leaseId: lease,
+      ...(opts.cd === false ? {} : { cd: cwd }),
+    }).join('\n')}\n`);
     const shim = nodePath.join(root, 'bin', 'wmux.cmd');
-    const r = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim}" ${tail}"`], {
-      windowsVerbatimArguments: true, encoding: 'utf8', cwd: root, env: { ...process.env, codex: 'outer', WMUX_LOG: log, ...extraEnv },
+    const env: Record<string, string | undefined> = { ...process.env };
+    for (const key of Object.keys(env)) if (/^(codex_home|userprofile)$/i.test(key)) delete env[key];
+    Object.assign(env, { codex: 'outer', WMUX_LOG: log, CODEX_HOME: home, USERPROFILE: nodePath.dirname(home) }, opts.env);
+    const chcp = opts.chcp === undefined ? '' : `chcp ${opts.chcp} >nul & `;
+    const r = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${chcp}"${shim}" ${tail}"`], {
+      windowsVerbatimArguments: true, windowsHide: true, encoding: 'utf8', cwd, env,
     });
     const events = nodeFs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
     return { status: r.status, events };
@@ -79,55 +101,101 @@ describe.skipIf(process.platform !== 'win32')('wmux.cmd codex launch (live cmd.e
   beforeAll(() => {
     root = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'wmux shim (a&b) '));
     log = nodePath.join(root, 'log.jsonl');
+    home = nodePath.join(root, '홍길동', '.codex');
+    work = nodePath.join(root, '작업 폴더');
+    nodeFs.mkdirSync(work);
     const app = nodePath.join(root, 'app-1.0.0');
     nodeFs.mkdirSync(nodePath.join(app, 'resources', 'cli-bundle'), { recursive: true });
     nodeFs.mkdirSync(nodePath.join(root, 'bin'));
     nodeFs.writeFileSync(nodePath.join(root, 'bin', 'wmux.cmd'), buildShimCmd());
-    try { nodeFs.linkSync(process.execPath, nodePath.join(app, 'wmux.exe')); }
-    catch { nodeFs.copyFileSync(process.execPath, nodePath.join(app, 'wmux.exe')); }
+    const node = (to: string) => {
+      try { nodeFs.linkSync(process.execPath, to); } catch { nodeFs.copyFileSync(process.execPath, to); }
+    };
+    node(nodePath.join(app, 'wmux.exe'));
+    // Codex's managed binary, where the real handoff names it.
+    exe = nodePath.join(home, 'packages', 'app-server-daemon', 'releases', '0.0.0-test', 'bin', 'codex.exe');
+    nodeFs.mkdirSync(nodePath.dirname(exe), { recursive: true });
+    node(exe);
     const codex = nodePath.join(root, 'codex.js');
     nodeFs.writeFileSync(codex, [
       "const fs=require('fs');",
-      "fs.appendFileSync(process.env.WMUX_LOG,JSON.stringify({codex:process.argv.slice(2),bearer:process.env.codex,home:process.env.CODEX_HOME,node:process.env.ELECTRON_RUN_AS_NODE??null,launch:Object.keys(process.env).filter((k)=>/^WMUX_(CODEX_|APP$)/i.test(k))})+'\\n');",
+      "fs.appendFileSync(process.env.WMUX_LOG,JSON.stringify({codex:process.argv.slice(2),exe:process.execPath,cwd:process.cwd(),bearer:process.env.codex,home:process.env.CODEX_HOME,node:process.env.ELECTRON_RUN_AS_NODE??null,launch:Object.keys(process.env).filter((k)=>/^WMUX_(CODEX_|APP$)/i.test(k))})+'\\n');",
       'process.exitCode=7;',
     ].join('\n'));
     nodeFs.writeFileSync(nodePath.join(app, 'resources', 'cli-bundle', 'index.js'), [
-      "const fs=require('fs');",
-      "fs.appendFileSync(process.env.WMUX_LOG,JSON.stringify({cli:process.argv.slice(2),args:process.env.WMUX_CODEX_ARGS??null,bearer:process.env.codex??null})+'\\n');",
+      "const fs=require('fs'),path=require('path');",
+      "fs.appendFileSync(process.env.WMUX_LOG,JSON.stringify({cli:process.argv.slice(2),args:process.env.WMUX_CODEX_ARGS??null,bearer:process.env.codex??null,home:process.env.CODEX_HOME??null})+'\\n');",
       "if(process.argv[3]==='--wmux-handoff'&&process.env.WMUX_TEST_HANDOFF_FAIL){process.stderr.write('no lease');process.exit(1);}",
-      "if(process.argv[3]==='--wmux-handoff')process.stdout.write([",
-      "  'WMUX_CODEX_EXE='+process.execPath,",
-      `  'WMUX_CODEX_LAUNCH='+${JSON.stringify(JSON.stringify(codex))}+' --remote ws://127.0.0.1:1 --cd '+${JSON.stringify(`"${root}\\\\"`)},`,
-      "  'WMUX_CODEX_HOME=C:\\\\cx',",
-      "  'codex='+'b'.repeat(64),",
-      "  'WMUX_CODEX_LEASE=11111111-2222-3333-4444-555555555555',",
-      "].join('\\n')+'\\n');",
+      "if(process.argv[3]==='--wmux-handoff')process.stdout.write(fs.readFileSync(path.join(__dirname,'..','..','..','handoff.txt'),'utf8')",
+      `  .replace('WMUX_CODEX_LAUNCH=','WMUX_CODEX_LAUNCH='+${JSON.stringify(JSON.stringify(codex))}+' '));`,
     ].join('\n'));
+    // The control: the same `for /f` reading a UTF-8 path, as the handoff used to hand one over.
+    nodeFs.writeFileSync(nodePath.join(root, 'probe.js'), 'process.stdout.write("WMUX_PROBE="+process.env.WMUX_PROBE_IN+"\\n");');
+    nodeFs.writeFileSync(nodePath.join(root, 'probe.cmd'), [
+      '@echo off',
+      'set "ELECTRON_RUN_AS_NODE=1"',
+      'set "WMUX_PROBE="',
+      'for /f "delims=" %%l in (\'^""%~dp0app-1.0.0\\wmux.exe" "%~dp0probe.js"^"\') do set "%%l"',
+      '"%~dp0app-1.0.0\\wmux.exe" -e "require(\'fs\').appendFileSync(process.env.WMUX_LOG,JSON.stringify({probe:process.env.WMUX_PROBE})+\'\\n\')"',
+      '',
+    ].join('\r\n'));
   });
 
   afterAll(() => { if (root) nodeFs.rmSync(root, { recursive: true, force: true }); });
 
+  const codexEvent = (argv: string[], cwd: string) => ({
+    codex: ['--remote', 'ws://127.0.0.1:1', ...argv],
+    exe, cwd, home,
+    // Nothing that could close or reuse the lease reaches Codex or the tools it runs.
+    bearer: 'b'.repeat(64), node: null, launch: [],
+  });
+
   it('gives Codex exactly the arguments the plain path forwards, and the exit code back', () => {
     const tail = '"a b" "q&r" 50% "x^y" !z!';
     const plain = run(`status ${tail}`);
-    expect(plain.events).toEqual([{ cli: ['status', 'a b', 'q&r', '50%', 'x^y', '!z!'], args: null, bearer: 'outer' }]);
+    expect(plain.events).toEqual([{ cli: ['status', 'a b', 'q&r', '50%', 'x^y', '!z!'], args: null, bearer: 'outer', home }]);
     const codex = run(`codex ${tail}`);
     expect(codex.status).toBe(7);
     expect(codex.events).toEqual([
-      { cli: ['codex', '--wmux-handoff'], args: `codex ${tail}`, bearer: null },
-      {
-        codex: ['--remote', 'ws://127.0.0.1:1', '--cd', `${root}\\`, '--remote-auth-token-env', 'codex', 'a b', 'q&r', '50%', 'x^y', '!z!'],
-        // Nothing that could close or reuse the lease reaches Codex or the tools it runs.
-        bearer: 'b'.repeat(64), home: 'C:\\cx', node: null, launch: [],
-      },
-      { cli: ['codex', '--wmux-release', '11111111-2222-3333-4444-555555555555'], args: null, bearer: null },
+      { cli: ['codex', '--wmux-handoff'], args: `codex ${tail}`, bearer: null, home },
+      codexEvent(['--cd', root, '--remote-auth-token-env', 'codex', 'a b', 'q&r', '50%', 'x^y', '!z!'], root),
+      { cli: ['codex', '--wmux-release', lease], args: null, bearer: null, home },
     ]);
   });
 
+  it('gives Codex its non-ASCII CODEX_HOME, binary and directory exactly under code page 949', () => {
+    // The hazard is live in this console: a path read back through `for /f` is mangled.
+    nodeFs.writeFileSync(log, '');
+    spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"chcp 949 >nul & "${nodePath.join(root, 'probe.cmd')}""`], {
+      windowsVerbatimArguments: true, windowsHide: true, encoding: 'utf8', cwd: root, env: { ...process.env, WMUX_LOG: log, WMUX_PROBE_IN: home },
+    });
+    const [probe] = nodeFs.readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { probe?: string });
+    expect(typeof probe.probe).toBe('string');
+    expect(probe.probe).not.toBe(home);
+    // CODEX_HOME given, and CODEX_HOME derived from the user profile.
+    for (const env of [{}, { CODEX_HOME: undefined }]) {
+      const r = run('codex resume', { cwd: work, chcp: 949, env });
+      expect(r.status).toBe(7);
+      expect(r.events).toEqual([
+        { cli: ['codex', '--wmux-handoff'], args: 'codex resume', bearer: null, home },
+        codexEvent(['--cd', work, '--remote-auth-token-env', 'codex', 'resume'], work),
+        { cli: ['codex', '--wmux-release', lease], args: null, bearer: null, home },
+      ]);
+    }
+  });
+
+  it('passes a drive root as --cd intact, and no --cd once the user chose a directory', () => {
+    const drive = nodePath.parse(root).root;
+    const atRoot = run('codex', { cwd: drive });
+    expect(atRoot.events[1]).toEqual(codexEvent(['--cd', drive, '--remote-auth-token-env', 'codex'], drive));
+    const own = run('codex -C x', { cwd: work, cd: false });
+    expect(own.events[1]).toEqual(codexEvent(['--remote-auth-token-env', 'codex', '-C', 'x'], work));
+  });
+
   it('starts no Codex and releases nothing when the handoff fails', () => {
-    const failed = run('codex resume', { WMUX_TEST_HANDOFF_FAIL: '1' });
+    const failed = run('codex resume', { env: { WMUX_TEST_HANDOFF_FAIL: '1' } });
     expect(failed.status).toBe(1);
-    expect(failed.events).toEqual([{ cli: ['codex', '--wmux-handoff'], args: 'codex resume', bearer: null }]);
+    expect(failed.events).toEqual([{ cli: ['codex', '--wmux-handoff'], args: 'codex resume', bearer: null, home }]);
   });
 
   it('rewrites a shim an older build left behind', () => {
