@@ -28,6 +28,28 @@ export interface TemplateDefinition {
   wakes: readonly string[];
   /** What reading the repository is for (default REPO_READ_POWER). */
   repoRead?: string;
+  /** The default job and wakes for a bot whose session holds no repository
+   *  reads (botRepoReadRoot: another engine, or no local checkout), for a
+   *  template whose own lines name tools only a reading bot has. */
+  withoutRepoReads?: {
+    defaultJob: string;
+    wakes: readonly string[];
+    /** Tool lines that differ for such a bot (the rest are `powers`). */
+    powers?: Partial<Record<BotToolName, string>>;
+  };
+}
+
+/** The template's default job, wakes and tool lines for this bot: the ones
+ *  that rest on reading the repository only when its session holds those
+ *  reads (the same predicate gives the session Read, Grep, Glob and the git
+ *  reads). Pure. */
+export function templateTextsFor(
+  def: TemplateDefinition,
+  profile: Pick<BotProfile, 'engine' | 'repo'>,
+): { defaultJob: string; wakes: readonly string[]; powers: Partial<Record<BotToolName, string>> } {
+  const alt = def.withoutRepoReads;
+  if (botRepoReadRoot(profile) || !alt) return { defaultJob: def.defaultJob, wakes: def.wakes, powers: def.powers };
+  return { defaultJob: alt.defaultJob, wakes: alt.wakes, powers: { ...def.powers, ...alt.powers } };
 }
 
 /** How a bot settles a task the gate skipped because it made no commits
@@ -143,7 +165,8 @@ function bullet(lines: readonly string[]): string {
  *  says when it speaks of it (with only the id, a model names the workspace
  *  after the repository's folder). */
 export function renderBotPrompt(def: TemplateDefinition, profile: Pick<BotProfile, 'name' | 'job' | 'workspaceId' | 'repo' | 'engine'>, workspaceName?: string | null): string {
-  const powers = SHARED_SURFACE_TOOLS.map((tool) => `- ${tool}: ${def.powers[tool] ?? COMMON_POWERS[tool] ?? ''}`);
+  const texts = templateTextsFor(def, profile);
+  const powers = SHARED_SURFACE_TOOLS.map((tool) => `- ${tool}: ${texts.powers[tool] ?? COMMON_POWERS[tool] ?? ''}`);
   // The same predicate decides whether the bot's session holds the read tools.
   const readRoot = botRepoReadRoot(profile);
   if (readRoot) {
@@ -158,7 +181,7 @@ export function renderBotPrompt(def: TemplateDefinition, profile: Pick<BotProfil
     `You are ${profile.name}, ${where}${repo}`,
     '',
     'Your job:',
-    profile.job ?? def.defaultJob,
+    profile.job ?? texts.defaultJob,
     '',
     readRoot
       ? 'Your powers are your wmux tools and reading your repository; you answer questions, read code (Read, Grep, Glob) and read PR, issue and CI status (pr_read, issue_read, ci_read) yourself, in the turn. A worker (fanout_start) is for what those cannot do: changing code, or running commands, tests and builds, in its own worktree.'
@@ -169,7 +192,7 @@ export function renderBotPrompt(def: TemplateDefinition, profile: Pick<BotProfil
     bullet(def.outputs),
     '',
     'Your wakes:',
-    bullet([...COMMON_WAKES, ...def.wakes]),
+    bullet([...COMMON_WAKES, ...texts.wakes]),
     '',
     'Working with the owner and the other bots:',
     bullet(TEAM_CONVENTIONS),

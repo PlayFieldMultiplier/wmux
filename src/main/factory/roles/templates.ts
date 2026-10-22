@@ -3,7 +3,7 @@
 // module's ports.
 
 import { botTemplate, type BotProfile, type BotTemplate } from '../../../shared/bot';
-import type { TemplateDefinition } from './common';
+import { templateTextsFor, type TemplateDefinition } from './common';
 import { COORDINATOR_TEMPLATE } from './coordinator';
 import { DEVELOPER_TEMPLATE } from './developer';
 import { REVIEWER_TEMPLATE } from './reviewer';
@@ -28,7 +28,8 @@ export function templateDefinitionOf(profile: Pick<BotProfile, 'role' | 'templat
   return template === 'custom' && profile.role === 'maintainer' ? MAINTAINER_TEMPLATE : TEMPLATE_DEFINITIONS[template];
 }
 
-/** The job a bot does now: the owner's words, else its template's default. */
-export function effectiveJob(profile: Pick<BotProfile, 'role' | 'template' | 'job'>): string {
-  return profile.job ?? templateDefinitionOf(profile).defaultJob;
+/** The job a bot does now: the owner's words, else its template's default
+ *  (the one its session's tools can carry out). */
+export function effectiveJob(profile: Pick<BotProfile, 'role' | 'template' | 'job' | 'engine' | 'repo'>): string {
+  return profile.job ?? templateTextsFor(templateDefinitionOf(profile), profile).defaultJob;
 }

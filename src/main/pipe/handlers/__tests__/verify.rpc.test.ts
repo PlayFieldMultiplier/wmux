@@ -336,6 +336,17 @@ describe('verify.recordVerdict — reading-only bot verdicts (no worker)', () =>
     expect(baseGate).toHaveBeenCalledWith('/repo', MAIN);
   });
 
+  it('a reading-only FAIL is held to the same rule as a PASS: a base that declares a gate refuses it', async () => {
+    for (const gate of [{ kind: 'declared', command: 'npm test' }, { kind: 'unknown', detail: 'package.json unreadable' }] as const) {
+      const { call, record } = readingSetup(code, async () => gate);
+      expect(await call({ ...READ_INPUT, verdict: 'fail' }, BOT_CTX), gate.kind).toMatchObject({ ok: false, code: 'gate-required' });
+      expect(record).not.toHaveBeenCalled();
+    }
+    // With no gate on the base, a reading-only FAIL records like a PASS.
+    expect(await readingSetup(code, async () => ({ kind: 'none' })).call({ ...READ_INPUT, verdict: 'fail' }, BOT_CTX))
+      .toMatchObject({ ok: true, record: { verdict: 'fail', evidence: { reading: 'no-gate' } } });
+  });
+
   it('a docs-only change in a repository with a gate is refused: the gate may check docs too', async () => {
     const { call, record } = readingSetup(docs, async () => ({ kind: 'declared', command: 'bash scripts/verify.sh' }));
     expect(await call(READ_INPUT, BOT_CTX)).toMatchObject({ ok: false, code: 'gate-required', message: expect.stringContaining('docs-only change or not') });

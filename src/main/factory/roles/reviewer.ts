@@ -11,12 +11,29 @@ const GIT_SHOW = botRepoGitToolName('git_show');
 const NO_GATE_GRADES =
   'a head whose base branch declares no gate (no wmux.json verify script, and no npm lint or test script in package.json on the PR\'s base branch)';
 
+const JOB_ASKED =
+  'You review pull request heads, only when asked: a handoff, a mention or the owner\'s message names the PR (and the head, when it gives one). Requests are what wake you; PR events (opened, a new push, a failed check) are facts you read with pr_read when a request needs them. For each head you are asked about you produce one verdict, pass or fail, and its weight matches the change. ';
+
+const JOB_GATE_EVIDENCE =
+  'a verify worker checks the head out detached, reads the change and reports, then wmux runs the repository gate — chosen from the base branch — on that commit and records it. That record is your evidence. In this version a pass means the code gate is green at this SHA (or the repository declares none) and the reading of the diff found nothing wrong; UI recipes are outside it, and your verdict card says so.';
+
+const ASKED_WAKE_START =
+  'A handoff, a mention or the owner\'s message asking you to verify a PR: pr_read, then verdict_read for the head it names, or the current head when it names none. When that head already has your verdict, answer with it. ';
+
+/** The wakes after a request, the same whether or not the bot reads its repository. */
+const GATED_WAKES: readonly string[] = [
+  'task.done for a verify task whose task block shows no gate yet: the gate is still running and its result wakes you; end the turn.',
+  'task.gated (the task block shows the recorded gate): pr_read to confirm the head is still the task\'s SHA, then pr_verdict with evidence {taskId}, post the verdict card, settle the task. Pass when the gate exited 0 at that SHA (or recorded that the repository declares no gate) and the reading found nothing wrong; fail otherwise.',
+  'A head that moved while you worked: the old head\'s verdict no longer decides the merge; post a status card naming both SHAs, and verify the new head only when asked again.',
+  'task.failed / task.input_required for a verify task: a status card with what the worker reported, and ask_person when the owner has to unblock it.',
+];
+
 export const REVIEWER_TEMPLATE: TemplateDefinition = {
   template: 'reviewer',
   defaultJob:
-    'You review pull request heads, only when asked: a handoff, a mention or the owner\'s message names the PR (and the head, when it gives one). Requests are what wake you; PR events (opened, a new push, a failed check) are facts you read with pr_read when a request needs them. For each head you are asked about you produce one verdict, pass or fail, and its weight matches the change. '
+    JOB_ASKED
     + `For ${NO_GATE_GRADES}, you read the diff yourself and record the verdict on that reading, with no worker: wmux reads the base branch's gate itself before it records it. `
-    + 'Every other head\'s verdict rests on a gate wmux itself ran on exactly that commit, a docs-only change included (a docs file can be what the gate checks): a verify worker checks the head out detached, reads the change and reports, then wmux runs the repository gate — chosen from the base branch — on that commit and records it. That record is your evidence. In this version a pass means the code gate is green at this SHA (or the repository declares none) and the reading of the diff found nothing wrong; UI recipes are outside it, and your verdict card says so.',
+    + `Every other head's verdict rests on a gate wmux itself ran on exactly that commit, a docs-only change included (a docs file can be what the gate checks): ${JOB_GATE_EVIDENCE}`,
   powers: {
     pr_read: 'read a pull request fresh: its head SHA, base branch, files, labels and checks.',
     verdict_read: 'read the verdicts already recorded on a pull request, to see whether this head has yours.',
@@ -34,10 +51,22 @@ export const REVIEWER_TEMPLATE: TemplateDefinition = {
     'A `status` card when a verdict cannot be recorded, carrying the refusal reason.',
   ],
   wakes: [
-    `A handoff, a mention or the owner's message asking you to verify a PR: pr_read, then verdict_read for the head it names, or the current head when it names none. When that head already has your verdict, answer with it. When it is ${NO_GATE_GRADES}: read the diff with ${GIT_DIFF}, record pr_verdict with evidence {reading: true} and post the verdict card, in this turn. Every other head, or one ${GIT_DIFF} cannot read, or a gate-required refusal: start one verify worker at it, post the status card, end the turn. A request that names no PR: ask which one.`,
-    'task.done for a verify task whose task block shows no gate yet: the gate is still running and its result wakes you; end the turn.',
-    'task.gated (the task block shows the recorded gate): pr_read to confirm the head is still the task\'s SHA, then pr_verdict with evidence {taskId}, post the verdict card, settle the task. Pass when the gate exited 0 at that SHA (or recorded that the repository declares no gate) and the reading found nothing wrong; fail otherwise.',
-    'A head that moved while you worked: the old head\'s verdict no longer decides the merge; post a status card naming both SHAs, and verify the new head only when asked again.',
-    'task.failed / task.input_required for a verify task: a status card with what the worker reported, and ask_person when the owner has to unblock it.',
+    `${ASKED_WAKE_START}When it is ${NO_GATE_GRADES}: read the diff with ${GIT_DIFF}, record pr_verdict with evidence {reading: true} and post the verdict card, in this turn. Every other head, or one ${GIT_DIFF} cannot read, or a gate-required refusal: start one verify worker at it, post the status card, end the turn. A request that names no PR: ask which one.`,
+    ...GATED_WAKES,
   ],
+  // A bot whose session cannot read its repository cannot read a diff
+  // either: every head it grades goes to a verify worker, whose report it
+  // reads, and the gate wmux records (or its record that the repository
+  // declares none) is the evidence.
+  withoutRepoReads: {
+    defaultJob: `${JOB_ASKED}Every head's verdict rests on a gate wmux itself ran on exactly that commit, or on its record that the repository declares none: ${JOB_GATE_EVIDENCE}`,
+    wakes: [
+      `${ASKED_WAKE_START}Otherwise start one verify worker at it, post the status card, end the turn. A request that names no PR: ask which one.`,
+      ...GATED_WAKES,
+    ],
+    powers: {
+      fanout_start: 'start one verify worker for each head you grade (an ungated or docs-only one too: its worker reads it and runs no tests of its own), with preset "verify" and checkout {sha: the head, fetch_ref: the fetchRef pr_read gives (pull/<n>/head on GitHub, merge-requests/<n>/head on GitLab)}; its prompt says what to look at in this change.',
+      pr_verdict: 'record your verdict on one head: prNumber, headSha, verdict (pass or fail), a summary, and evidence {taskId} — the verify task whose recorded gate (or record that the repository declares none) it rests on. wmux checks the evidence the way the merge lane will, and a refusal names the reason.',
+    },
+  },
 };
