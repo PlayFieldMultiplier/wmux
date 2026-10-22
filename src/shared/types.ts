@@ -1568,10 +1568,12 @@ type UrlValidationResult = { valid: boolean; reason?: string };
  * (`NavigationPolicyOptions`), built only by `navigationPolicyOptions()`, and
  * never read or OR-ed at a call site.
  *
- * Link-local (169.254.0.0/16, fe80::/10), the null address and non-127.0.0.1
- * loopback stay blocked even with the opt-in: the SSRF hardening this policy
- * exists for is aimed at cloud metadata (169.254.169.254), which an intranet
- * user has no reason to reach through an agent.
+ * Link-local (169.254.0.0/16, fe80::/10), the null address, non-127.0.0.1
+ * loopback and the cloud instance metadata addresses that sit inside otherwise
+ * reachable ranges (fd00:ec2::/64 in fc00::/7, 100.100.100.200 in
+ * 100.64.0.0/10) stay blocked even with the opt-in: the SSRF hardening this
+ * policy exists for is aimed at instance metadata, which an intranet user has
+ * no reason to reach through an agent.
  */
 export const ALLOW_PRIVATE_NETWORK_ENV = 'WMUX_ALLOW_PRIVATE_NETWORK';
 
@@ -1641,6 +1643,13 @@ function validateIpv4NavigationAddress(
     return octets[1] === 0 && octets[2] === 0 && octets[3] === 1
       ? { valid: true }
       : { valid: false, reason: 'Blocked loopback address' };
+  }
+
+  // A cloud provider's instance metadata address. It sits in 100.64.0.0/10
+  // (shared address space: CGNAT, Tailscale), which stays reachable, so only
+  // this one address is refused.
+  if (octets[0] === 100 && octets[1] === 100 && octets[2] === 100 && octets[3] === 200) {
+    return { valid: false, reason: 'Blocked cloud instance metadata address (100.100.100.200)' };
   }
 
   // Block 10.0.0.0/8
@@ -1739,6 +1748,12 @@ function validateIpv6NavigationAddress(
     if (!embeddedResult.valid) {
       return { valid: false, reason: `Blocked IPv4-mapped/compatible IPv6: embedded ${ipv4} — ${embeddedResult.reason}` };
     }
+  }
+
+  // A cloud provider's IPv6 instance metadata range. It sits in fc00::/7, so it
+  // is refused here, before the private-network switch is consulted.
+  if (expanded[0] === 'fd00' && expanded[1] === '0ec2' && expanded[2] === '0000' && expanded[3] === '0000') {
+    return { valid: false, reason: 'Blocked cloud instance metadata address (fd00:ec2::/64)' };
   }
 
   const firstGroup = Number.parseInt(expanded[0], 16);

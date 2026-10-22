@@ -142,6 +142,8 @@ describe('validateResolvedNavigationUrl', () => {
     ['fe80::1', 6],
     ['::', 6],
     ['::ffff:169.254.169.254', 6],
+    ['fd00:ec2::254', 6],
+    ['100.100.100.200', 4],
   ] as const)('a hostname resolving to %s stays blocked with the opt-in on', async (address, family) => {
     lookupMock.mockResolvedValue([{ address, family }]);
     await expect(validateResolvedNavigationUrl('https://sneaky.example', ON)).resolves.toMatchObject({
@@ -154,6 +156,18 @@ describe('validateResolvedNavigationUrl', () => {
     // literal must never reach it, or it is refused as unresolved.
     lookupMock.mockRejectedValue(new Error('getaddrinfo ENOTFOUND'));
     await expect(validateResolvedNavigationUrl('http://[2606:4700:4700::1111]/', OFF)).resolves.toEqual({ valid: true });
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses cloud instance metadata literals with the opt-in on, before any DNS', async () => {
+    await expect(validateResolvedNavigationUrl('http://[fd00:ec2::254]/', ON)).resolves.toEqual({
+      valid: false,
+      reason: 'Blocked cloud instance metadata address (fd00:ec2::/64)',
+    });
+    await expect(validateResolvedNavigationUrl('http://100.100.100.200/', ON)).resolves.toEqual({
+      valid: false,
+      reason: 'Blocked cloud instance metadata address (100.100.100.200)',
+    });
     expect(lookupMock).not.toHaveBeenCalled();
   });
 

@@ -114,6 +114,26 @@ describe('validateNavigationUrl', () => {
       });
     });
 
+    it('still blocks cloud instance metadata addresses that sit inside reachable ranges', () => {
+      for (const options of [OFF, ON]) {
+        expect(validateNavigationUrl('http://[fd00:ec2::254]/', options)).toEqual({
+          valid: false,
+          reason: 'Blocked cloud instance metadata address (fd00:ec2::/64)',
+        });
+        expect(validateNavigationUrl('http://[fd00:ec2:0:0:ffff::1]/', options).valid).toBe(false);
+        expect(validateNavigationUrl('http://100.100.100.200/', options)).toEqual({
+          valid: false,
+          reason: 'Blocked cloud instance metadata address (100.100.100.200)',
+        });
+        expect(validateNavigationUrl('http://[::ffff:100.100.100.200]/', options).valid).toBe(false);
+      }
+      // Only those: the rest of fd00::/8 follows the switch, and the shared
+      // 100.64.0.0/10 range (CGNAT, Tailscale) stays reachable.
+      expect(validateNavigationUrl('http://[fd00:ec2:0:1::254]/', ON)).toEqual({ valid: true });
+      expect(validateNavigationUrl('http://100.79.1.2/', OFF)).toEqual({ valid: true });
+      expect(validateNavigationUrl('http://100.100.100.201/', OFF)).toEqual({ valid: true });
+    });
+
     it('lets an IPv4-mapped private address through exactly as its IPv4 form', () => {
       expect(validateNavigationUrl('http://[::ffff:10.0.0.1]/', OFF).valid).toBe(false);
       expect(validateNavigationUrl('http://[::ffff:10.0.0.1]/', ON)).toEqual({ valid: true });
