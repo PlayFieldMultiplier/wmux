@@ -34,7 +34,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { A2A_REMOTE_IMAGE_LIMITS, A2A_SHA256_RE, isHostId, type A2aRemoteImageMediaType, type A2aRemoteImageRef, type HostId } from '../../shared/a2aRemote';
+import { A2A_SHA256_RE, isHostId, type A2aRemoteImageMediaType, type A2aRemoteImageRef, type HostId } from '../../shared/a2aRemote';
 import { inspectA2aImage, type A2aImageInfo } from '../../shared/a2aImages';
 
 const DAY_MS = 24 * 3600_000;
@@ -210,8 +210,10 @@ export class A2aImageStore {
 
   /**
    * Whether `hostId`'s image is here already with these exact bytes, uploaded
-   * or received (a PUT then needs no body). A hit refreshes the file's time,
-   * so an upload a resend still needs is not the oldest one a full share drops.
+   * or received (a HEAD answers 200, a PUT needs no body). A hit refreshes the
+   * file's time: the joiner then sends the envelope instead of the bytes, so
+   * the upload must outlive the staging TTL and a full share's eviction until
+   * that envelope claims it.
    */
   async has(hostId: HostId, sha: string): Promise<boolean> {
     if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) return false;
@@ -224,22 +226,6 @@ export class A2aImageStore {
       }
       return false;
     });
-  }
-
-  /**
-   * Whether a file under `sha` is here for `hostId` (uploaded or received),
-   * by name and size only: no read, no hash, no time refreshed (a question
-   * is not a use). The bytes are checked when an envelope claims them.
-   */
-  async mayHave(hostId: HostId, sha: string): Promise<boolean> {
-    if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) return false;
-    const candidates = [path.join(this.stagingDir(hostId), sha), ...Object.values(EXT).map((ext) => path.join(this.root, hostId, `${sha}.${ext}`))];
-    for (const full of candidates) {
-      // eslint-disable-next-line no-await-in-loop -- at most four stats
-      const st = await lstatOrNull(full);
-      if (st?.isFile() && st.size > 0 && st.size <= A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES) return true;
-    }
-    return false;
   }
 
   /**

@@ -14,12 +14,12 @@ import { errMsg } from './storeFile';
  * The image routes of cross-host A2A (`images.1`), on the SERVER side. The
  * joiner dials either way, so it both pushes and pulls:
  *
- *   HEAD /api/a2a/blobs/:sha256 — whether a file under that hash is here
- *       already (uploaded or received): 200, else 404; 503 while the peer's
- *       upload slot is taken (the joiner then just uploads). By name and
- *       size only, never hashed and never refreshing a file's time: the
- *       bytes are checked when an envelope claims them, and a file that
- *       does not match is removed then, so the next attempt uploads again.
+ *   HEAD /api/a2a/blobs/:sha256 — whether that image is here already with
+ *       its exact bytes (uploaded or received): 200, else 404; 503 while the
+ *       peer's upload slot is taken (the joiner then just uploads). A 200
+ *       refreshes the file's time, as the PUT's check does: the joiner sends
+ *       the envelope instead of the bytes, so the upload must still be here
+ *       when that envelope claims it.
  *   PUT /api/a2a/blobs/:sha256 — the joiner uploads one image ahead of the
  *       envelope that names it. Raw bytes, at most one image's size (counted
  *       as they arrive, whatever Content-Length said), hash and image
@@ -43,7 +43,7 @@ const MAX_UPLOADS = 4;
 const DRAIN_MS = 30_000;
 
 export interface A2aImageRouteDeps {
-  store: Pick<A2aImageStore, 'has' | 'mayHave' | 'stage' | 'readOutgoing'>;
+  store: Pick<A2aImageStore, 'has' | 'stage' | 'readOutgoing'>;
   outbox: Pick<OutboxStore, 'pending'>;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   /** Test seam; defaults to `imageTransferBudgetMs`. */
@@ -67,7 +67,7 @@ export function registerImageRoutes(table: A2aRouteTable, deps: A2aImageRouteDep
     }
     res.once('close', release);
     try {
-      const held = A2A_SHA256_RE.test(sha) && (await deps.store.mayHave(peer.hostId, sha));
+      const held = A2A_SHA256_RE.test(sha) && (await deps.store.has(peer.hostId, sha));
       res.writeHead(held ? 200 : 404, { 'Cache-Control': 'no-store' });
       res.end();
     } finally {

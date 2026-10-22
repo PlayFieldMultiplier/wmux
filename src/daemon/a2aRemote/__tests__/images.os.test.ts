@@ -398,7 +398,6 @@ describe('blob routes', () => {
         await wait;
         return s.has(h, sha);
       },
-      mayHave: (h: string, sha: string) => s.mayHave(h, sha),
       stage: (h: string, sha: string, b: Buffer) => s.stage(h, sha, b),
       readOutgoing: async (sha: string) => {
         const wait = hold.read;
@@ -558,14 +557,19 @@ describe('blob routes', () => {
     slow.destroy();
   });
 
-  it('answers HEAD by name and size, without reading the file or refreshing its time', async () => {
+  it('keeps an upload HEAD answered for until its envelope claims it', async () => {
     const img = png(5, 5);
-    const stored = await s.storeReceived(HOST, refOf(img), img);
-    if (!stored.ok) throw new Error('not stored');
-    const old = new Date(Date.now() - 3 * 24 * 3600_000);
-    fs.utimesSync(stored.path, old, old);
+    await s.stage(HOST, sha256(img), img);
+    const staged = path.join(dir, 'a2a', 'blobs-in', HOST, sha256(img));
+    // Unclaimed for just under the staging TTL when the joiner asks about it.
+    const old = new Date(Date.now() - STAGING_TTL_MS + 60_000);
+    fs.utimesSync(staged, old, old);
+    // 200: the joiner will not upload it again, and posts the envelope next.
     expect((await send('HEAD', sha256(img))).status).toBe(200);
-    expect(Math.round(fs.statSync(stored.path).mtimeMs / 1000)).toBe(Math.round(old.getTime() / 1000));
+    // A sweep two minutes on, past the TTL of the time it had when asked.
+    await new A2aImageStore({ a2aDir: path.join(dir, 'a2a'), uploadsRoot: path.join(dir, 'uploads'), now: () => Date.now() + 120_000 }).sweep();
+    expect(fs.existsSync(staged)).toBe(true);
+    expect(await s.claim(HOST, refOf(img))).toMatchObject({ ok: true });
   });
 
   it('keeps the connection usable after draining a full upload it already holds', async () => {
