@@ -777,4 +777,25 @@ describe('cross-host completion, end to end', () => {
     const inbox = (a.tasks.getTask(taskId)!.metadata.remote as { inbox?: Array<{ kind: string; state?: string }> }).inbox ?? [];
     expect(inbox.filter((i) => i.kind === 'state').map((i) => i.state)).toEqual(['working', 'completed']);
   }, 20_000);
+
+  it('a completion whose report is mostly control characters still reaches A (no 413, A is not left working)', async () => {
+    const b = await makePc('PC-B');
+    const a = await makePc('PC-A');
+    const linkId = await linked(a, b);
+    const taskId = await sendTask(a, linkId, 'review it');
+    await until(() => (b.tasks.getTask(taskId)?.metadata.remote as { delivered?: boolean })?.delivered === true);
+    expect((await b.tasks.transition({ taskId, to: 'working', callerWorkspaceId: 'ws-b' })).ok).toBe(true);
+    expect(await b.rpc(A2A_REMOTE_RPC.state, { taskId, state: 'working' })).toMatchObject({ ok: true });
+    await until(() => a.tasks.getTask(taskId)?.status.state === 'working');
+    const item = (n: number) => ({ kind: 'inspection' as const, status: 'verified' as const, summary: `${n} ${'\u0001'.repeat(1000)}` });
+    expect((await b.tasks.transition({
+      taskId, to: 'completed', callerWorkspaceId: 'ws-b',
+      evidence: { summary: 'done', items: Array.from({ length: 10 }, (_, n) => item(n)) },
+      message: { kind: 'message', messageId: 'st-2', role: 'agent', parts: [{ kind: 'text', text: `report ${'\u001b'.repeat(10_000)} end` }] },
+    })).ok).toBe(true);
+    expect(await b.rpc(A2A_REMOTE_RPC.state, { taskId, state: 'completed' })).toMatchObject({ ok: true });
+    await until(() => a.tasks.getTask(taskId)?.status.state === 'completed');
+    expect(a.tasks.getTask(taskId)!.status.evidence?.summary).toBe('done');
+    await until(() => b.delivery.outbox.pending(a.hostId).length === 0);
+  }, 20_000);
 });

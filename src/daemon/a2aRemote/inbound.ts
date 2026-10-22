@@ -269,7 +269,10 @@ function sanitizeEvidence(ev: CompletionEvidence): CompletionEvidence {
     ...(typeof it.output === 'string' ? { output: clean(it.output) } : {}),
     ...('location' in it && typeof it.location === 'string' ? { location: clean(it.location) } : {}),
   }) as EvidenceItem);
-  return { summary: clean(ev.summary), items, ...(ev.files ? { files: ev.files } : {}) };
+  // A path is not rewritten: one with a C1 control, or a bidi or other format
+  // character that can make it read as another path, is left off.
+  const files = ev.files?.filter((f) => !/[\u0080-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/u.test(f));
+  return { summary: clean(ev.summary), items, ...(files ? { files } : {}) };
 }
 
 /**

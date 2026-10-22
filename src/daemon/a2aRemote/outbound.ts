@@ -6,6 +6,7 @@ import {
   A2A_REMOTE_BODY_MAX,
   A2A_REMOTE_IMAGE_LIMITS,
   A2A_REMOTE_PROTOCOL,
+  A2A_REMOTE_STATE_ENVELOPE_MAX,
   A2A_REMOTE_STATE_EVIDENCE_MAX,
   A2A_REMOTE_STATE_MESSAGE_MAX,
   isA2aRemoteImageMediaType,
@@ -19,6 +20,7 @@ import {
   isRemoteWorkspaceId,
   remoteAlias,
   remoteWorkspaceId,
+  sanitizeRemoteText,
   type A2aRemoteReplyInput,
   type A2aRemoteSendTaskInput,
   type A2aRemoteStateInput,
@@ -298,21 +300,7 @@ export async function syncRemoteTask(
     const state = task.status.state;
     if (SYNCED_STATES.has(state) && marker.stateSync !== state) {
       const summary = (opts.summary ?? statusSummary(task))?.slice(0, 2000);
-      // The report itself goes too: the status message and the evidence, which
-      // the sender's copy otherwise loses (only the summary used to travel).
-      const message = statusMessageText(task);
-      const evidence = stateEvidence(task);
-      deps.outbox.enqueue(
-        link.remote.hostId,
-        envelope(deps, link, stateMessageId(task), {
-          kind: 'state',
-          taskId: task.id,
-          state,
-          ...(summary ? { text: summary } : {}),
-          ...(message ? { message } : {}),
-          ...(evidence ? { evidence } : {}),
-        }),
-      );
+      deps.outbox.enqueue(link.remote.hostId, stateEnvelope(deps, link, task, summary));
       await deps.taskService.markRemote({ taskId: task.id, stateSync: state });
       queued += 1;
     }
@@ -322,11 +310,52 @@ export async function syncRemoteTask(
   return { ok: true, queued };
 }
 
-/** The status message's text, cut to A2A_REMOTE_STATE_MESSAGE_MAX bytes. */
+/**
+ * A task's state for the peer, with the report itself: the status message and
+ * the evidence, which the sender's copy otherwise loses (only the summary used
+ * to travel). The whole envelope stays within A2A_REMOTE_STATE_ENVELOPE_MAX as
+ * JSON: an escaped character can take six bytes there, so it is measured, not
+ * estimated. Over it, the message is cut, then evidence items are left off
+ * from the end, and at worst the plain state goes with its summary alone.
+ */
+function stateEnvelope(deps: StateDeps, link: A2aLinkRecordV1, task: Task, summary: string | undefined): A2aRemoteEnvelope {
+  let message = statusMessageText(task);
+  let evidence = stateEvidence(task);
+  const build = () => envelope(deps, link, stateMessageId(task), {
+    kind: 'state',
+    taskId: task.id,
+    state: task.status.state,
+    ...(summary ? { text: summary } : {}),
+    ...(message ? { message } : {}),
+    ...(evidence ? { evidence } : {}),
+  });
+  const fits = (e: A2aRemoteEnvelope) => Buffer.byteLength(JSON.stringify(e), 'utf8') <= A2A_REMOTE_STATE_ENVELOPE_MAX;
+  let env = build();
+  while (!fits(env) && message) {
+    const bytes = Buffer.byteLength(message, 'utf8');
+    message = bytes > 256 ? cutUtf8(message, Math.floor(bytes / 2)) : undefined;
+    env = build();
+  }
+  while (!fits(env) && evidence && evidence.items.length > 0) {
+    evidence = { ...evidence, items: evidence.items.slice(0, -1) };
+    env = build();
+  }
+  if (!fits(env)) {
+    message = undefined;
+    evidence = undefined;
+    env = build();
+  }
+  return env;
+}
+
+/**
+ * The status message's text as peer text (controls stripped, as the peer would
+ * strip them anyway), cut to A2A_REMOTE_STATE_MESSAGE_MAX bytes.
+ */
 function statusMessageText(task: Task): string | undefined {
-  const text = (task.status.message?.parts ?? [])
+  const text = sanitizeRemoteText((task.status.message?.parts ?? [])
     .flatMap((p) => (p.kind === 'text' ? [p.text] : []))
-    .join('\n');
+    .join('\n'));
   return text ? cutUtf8(text, A2A_REMOTE_STATE_MESSAGE_MAX) : undefined;
 }
 

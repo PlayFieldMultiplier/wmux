@@ -219,7 +219,11 @@ describe('acceptInbound — reply and state', () => {
     const raw = {
       ...env(linkId, { kind: 'state', taskId: id, state: 'completed', text: 'shipped' }),
       message: 'Report\u001b[2J body',
-      evidence: { summary: 'shipped', items: [{ kind: 'command', status: 'passed', command: 'npm test\u001b]0;x\u0007', summary: 'tests pass' }] },
+      evidence: {
+        summary: 'shipped',
+        items: [{ kind: 'command', status: 'passed', command: 'npm test\u001b]0;x\u0007', summary: 'tests pass' }],
+        files: ['src/a.ts', 'src/\u202eb.ts', 'src/\u009bc.ts', 'src/d\u200b.ts'],
+      },
       someFutureField: { any: 'thing' },
     };
     expect(await acceptInbound(raw as unknown as A2aRemoteEnvelope, peer, deps)).toMatchObject({ ok: true });
@@ -228,6 +232,8 @@ describe('acceptInbound — reply and state', () => {
     const text = status.message?.parts[0];
     expect((text?.kind === 'text' ? text.text : '').includes('\u001b')).toBe(false);
     expect(status.evidence?.items).toHaveLength(1);
+    // A path with a C1, bidi or zero-width character is left off, not rewritten.
+    expect(status.evidence?.files).toEqual(['src/a.ts']);
     expect(JSON.stringify(status.evidence)).not.toMatch(/\\u001b|\\u0007/);
   });
 

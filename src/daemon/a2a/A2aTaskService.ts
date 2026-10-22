@@ -39,7 +39,7 @@ import type {
   TaskState,
   WmuxTaskMetadata,
 } from '../../shared/types';
-import { validateTransition, VALID_TRANSITIONS, TERMINAL_STATES } from '../../shared/types';
+import { validateMessage, validateTransition, VALID_TRANSITIONS, TERMINAL_STATES } from '../../shared/types';
 import {
   isVerifiedItem,
   normalizeCompletionEvidenceWire,
@@ -90,6 +90,17 @@ function evidenceGateHint(code: string): string {
     default:
       return 'attach valid completion evidence and retry';
   }
+}
+
+/**
+ * The status message an `a2a.task.update` caller sent (a string on the wire),
+ * as the transition stores it; undefined when none was sent. Throws on an
+ * empty or over-long message, the same check main runs before it forwards one.
+ */
+export function statusMessageFromWire(raw: unknown, mintId: () => string): Message | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string') throw new Error('message must be a string');
+  return { kind: 'message', messageId: mintId(), role: 'agent', parts: [{ kind: 'text', text: validateMessage(raw) }] };
 }
 
 /** append + readAllRecords만 요구하는 최소 로그 인터페이스(AppendOnlyLog 만족). */

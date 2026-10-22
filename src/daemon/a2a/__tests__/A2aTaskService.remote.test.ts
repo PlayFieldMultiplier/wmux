@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
-import { A2aTaskService, REMOTE_STATE_IDS_MAX } from '../A2aTaskService';
+import { A2aTaskService, REMOTE_STATE_IDS_MAX, statusMessageFromWire } from '../A2aTaskService';
 import type { A2aRemoteTaskMarkerV1 } from '../../../shared/a2aRemote';
 import type { Message } from '../../../shared/types';
 
@@ -363,3 +363,19 @@ describe('peer state ids are bounded', () => {
   });
 });
 
+describe('statusMessageFromWire (a2a.task.update)', () => {
+  it('turns the wire string into the status message, checked like main checks it', () => {
+    expect(statusMessageFromWire(undefined, () => 'id')).toBeUndefined();
+    expect(statusMessageFromWire('  Done.  ', () => 'm-1')).toEqual({ kind: 'message', messageId: 'm-1', role: 'agent', parts: [{ kind: 'text', text: 'Done.' }] });
+    expect(() => statusMessageFromWire('   ', () => 'x')).toThrow();
+    expect(() => statusMessageFromWire('x'.repeat(10_001), () => 'x')).toThrow();
+    expect(() => statusMessageFromWire({ text: 'x' }, () => 'x')).toThrow();
+  });
+
+  it('the daemon\'s a2a.task.update hands the parsed message to the transition', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../index.ts'), 'utf8');
+    const handler = src.slice(src.indexOf("pipeServer.onRpc('a2a.task.update'"), src.indexOf("pipeServer.onRpc('a2a.task.cancel'"));
+    expect(handler).toMatch(/statusMessageFromWire\(p\.message, randomUUID\)/);
+    expect(handler).toMatch(/\.\.\.\(message \? \{ message \} : \{\}\)/);
+  });
+});

@@ -102,6 +102,18 @@ describe('a2a.task.update — a pane-identified caller commits to the daemon', (
     expect(paneList?.[2]).toEqual({ workspaceId: 'ws-b', includeStashed: true });
   });
 
+  it('forwards the status message to the daemon with the transition', async () => {
+    const calls: DaemonCall[] = [];
+    rendererWithPanes([{ id: 'pane-b', surfacePtyIds: ['pty-b'] }]);
+    const router = setup(pinnedTaskDaemon(calls));
+    await router.dispatch({
+      id: 'u1',
+      method: 'a2a.task.update',
+      params: { taskId: 't1', workspaceId: 'ws-b', status: 'working', senderPtyId: 'pty-b', message: 'On it.' },
+    });
+    expect(calls.find((c) => c.method === 'a2a.task.update')?.params.message).toBe('On it.');
+  });
+
   it('a sibling pane is refused by the daemon, not committed', async () => {
     const calls: DaemonCall[] = [];
     rendererWithPanes([

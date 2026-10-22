@@ -584,6 +584,13 @@ export const A2A_REMOTE_BODY_MAX = 32 * 1024;
  */
 export const A2A_REMOTE_STATE_MESSAGE_MAX = 16 * 1024;
 export const A2A_REMOTE_STATE_EVIDENCE_MAX = 32 * 1024;
+/**
+ * The whole 'state' envelope as JSON (bytes, UTF-8), escapes included: a
+ * margin under the receiver's request body limit (2 × A2A_REMOTE_BODY_MAX +
+ * 4 KiB). An envelope over it sheds its message, then evidence items, and
+ * at worst goes as the plain state with its summary.
+ */
+export const A2A_REMOTE_STATE_ENVELOPE_MAX = 2 * A2A_REMOTE_BODY_MAX;
 
 /**
  * One message in either direction. The idempotency key is (linkId, messageId):
