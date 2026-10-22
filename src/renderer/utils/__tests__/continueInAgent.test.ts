@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const openTerminalTab = vi.fn();
 vi.mock('../accountLogin', () => ({ openTerminalTab: (...a: unknown[]) => openTerminalTab(...a) }));
-const registry = vi.hoisted(() => new Map<string, { modes: { bracketedPasteMode: boolean }; focus: () => void }>());
+type FakeTerm = { modes: { bracketedPasteMode: boolean }; focus: () => void; screen: string[]; rows: number; buffer: unknown };
+const registry = vi.hoisted(() => new Map<string, FakeTerm>());
 vi.mock('../../hooks/useTerminal', () => ({ terminalRegistry: registry }));
 
 import { useStore } from '../../stores';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 import { HANDOFF_REQUEST_MAX, continueInAgent, continueInAgentText } from '../continueInAgent';
 import { everyAccountOutUntil } from '../../components/Pane/usageLimitPresentation';
 
@@ -22,8 +24,33 @@ beforeEach(() => {
   vi.stubGlobal('electronAPI', { pty: { write }, chat: { snapshot } });
   useStore.setState({ surfaceAgent: {}, toasts: [] } as never);
   registry.clear();
-  registry.set('pty-new', { modes: { bracketedPasteMode: true }, focus: () => undefined });
+  registry.set('pty-new', fakeTerm(['› Ask anything']));
 });
+
+/** An xterm whose visible screen is `screen` (mutable). */
+function fakeTerm(screen: string[]): FakeTerm {
+  const term: FakeTerm = {
+    modes: { bracketedPasteMode: true },
+    focus: () => undefined,
+    screen,
+    rows: 24,
+    buffer: { active: { baseY: 0, getLine: (y: number) => ({ translateToString: () => term.screen[y] ?? '' }) } },
+  };
+  return term;
+}
+
+/** codex-cli 0.157's folder-trust screen. */
+const CODEX_TRUST = ['Folder access', '', 'Trust this folder?', '/work/repo', '', '› 1. Trust and continue', '  2. Quit', '', 'Press enter to continue'];
+/** Claude Code 2.1.260's folder-trust screen. */
+const CLAUDE_TRUST = [
+  'Accessing workspace:', '/work/repo', '',
+  'Quick safety check: Is this a project you created or one you trust?',
+  "Claude Code'll be able to read, edit, and execute files here.", '',
+  '❯ 1. No, exit', '  2. Yes, I trust this folder', '',
+  'Enter to confirm · Esc to cancel',
+];
+/** Claude Code's first-run theme picker. */
+const CLAUDE_THEME = ['Choose the text style that looks best with your terminal', '', '❯ 1. Dark mode', '  2. Light mode', '', 'Enter to confirm'];
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -86,6 +113,52 @@ describe('continueInAgent', () => {
     setTimeout(() => { registry.get('pty-new')!.modes.bracketedPasteMode = true; }, 300);
     expect(await done).toBe(true);
     expect(write.mock.calls.map((c) => c[1]).join('').startsWith('\x1b[200~')).toBe(true);
+  });
+
+  it('Codex\'s trust screen with the pane reading idle and bracketed paste on gets no paste, and the owner is told', async () => {
+    snapshot.mockResolvedValue(null);
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    registry.get('pty-new')!.screen = CODEX_TRUST;
+    ready();
+    expect(await continueInAgent(req, 600)).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+    expect(useStore.getState().toasts.at(-1)?.message).toBe('Codex CLI did not show its prompt, so nothing was typed into it.');
+  });
+
+  it('pastes into Codex only once its real prompt replaces the trust screen', async () => {
+    snapshot.mockResolvedValue(null);
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    const term = registry.get('pty-new')!;
+    term.screen = CODEX_TRUST;
+    ready();
+    const done = continueInAgent(req, 5_000);
+    await deliberateSleep(400, 'a negative check: still nothing typed while the launch screen is up');
+    expect(write).not.toHaveBeenCalled();
+    term.screen = ['>_ OpenAI Codex (v0.157.0)', '', '› Ask Codex to do anything'];
+    expect(await done).toBe(true);
+    expect(write).toHaveBeenCalled();
+  });
+
+  it('Claude Code as the target: its trust and first-run screens get no paste; its prompt does', async () => {
+    const toClaude = { ...req, fromAgent: 'Codex CLI', agent: 'claude' as const };
+    snapshot.mockResolvedValue(null);
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    useStore.setState({ surfaceAgent: { 'pty-new': { name: 'Claude Code', status: 'idle', slug: 'claude' } } } as never);
+    const term = registry.get('pty-new')!;
+    for (const screen of [CLAUDE_TRUST, CLAUDE_THEME]) {
+      term.screen = screen;
+      expect(await continueInAgent(toClaude, 400)).toBe(false);
+      expect(write).not.toHaveBeenCalled();
+    }
+    expect(useStore.getState().toasts.at(-1)?.message).toBe('Claude Code did not show its prompt, so nothing was typed into it.');
+    term.screen = CLAUDE_THEME;
+    const done = continueInAgent(toClaude, 5_000);
+    await deliberateSleep(400, 'a negative check: still nothing typed while the launch screen is up');
+    expect(write).not.toHaveBeenCalled();
+    term.screen = ['╭───────────────────────────╮', '│ ✻ Welcome to Claude Code! │', '╰───────────────────────────╯', '', '❯ ', '', '? for shortcuts'];
+    expect(await done).toBe(true);
+    expect(openTerminalTab).toHaveBeenLastCalledWith(expect.objectContaining({ initialCommand: 'claude', title: 'Claude Code' }));
+    expect(write.mock.calls.map((c) => c[1]).join('')).toContain('Codex CLI stopped at its usage limit.');
   });
 
   it('a confirm or trust dialog is not the prompt', async () => {

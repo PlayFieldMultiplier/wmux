@@ -11,6 +11,7 @@ import { agentRow } from '../../shared/agentIdentity';
 import type { AgentId } from '../../shared/agentSetup';
 import type { AgentStatus } from '../../shared/types';
 import { USAGE_LIMIT_CONTINUE_PROMPT } from '../../shared/usageLimit';
+import { classifyLaunchScreen } from '../../shared/agentFirstRun';
 import { openTerminalTab } from './accountLogin';
 import { pastePtyChunked } from './clipboardChunk';
 
@@ -19,7 +20,7 @@ export const HANDOFF_REQUEST_MAX = 2000;
 /** How long the new agent has to show its prompt. */
 export const AGENT_READY_TIMEOUT_MS = 60_000;
 
-/** How often the wait re-reads the terminal's paste mode, which no store event reports. */
+/** How often the wait re-reads the terminal's paste mode and screen, which no store event reports. */
 const READY_POLL_MS = 250;
 
 /** Agent states with its prompt up and waiting for input. Not
@@ -59,13 +60,26 @@ function takesBracketedPaste(ptyId: string): boolean {
   return term?.modes?.bracketedPasteMode === true;
 }
 
-/** Resolves true once `ptyId` shows `agent` with its prompt up and its
- *  terminal takes a bracketed paste, false on timeout. The status arrives
- *  over metadata IPC and the paste mode over the pty stream, in no fixed order. */
+/** True when `ptyId`'s visible screen shows an agent launch screen: a trust
+ *  dialog, a first-run prompt or any other menu. Pane status can read such a
+ *  screen as idle, and the agent may turn bracketed paste on before drawing it. */
+function onLaunchScreen(ptyId: string): boolean {
+  const term = terminalRegistry.get(ptyId);
+  if (!term) return true;
+  const buf = term.buffer.active;
+  const rows: string[] = [];
+  for (let y = 0; y < term.rows; y++) rows.push(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '');
+  return classifyLaunchScreen(rows.join('\n')) !== null;
+}
+
+/** Resolves true once `ptyId` shows `agent` with its prompt up, no launch
+ *  screen, and a terminal that takes a bracketed paste; false on timeout. The
+ *  status arrives over metadata IPC and the screen over the pty stream, in no
+ *  fixed order. */
 function agentReady(ptyId: string, agent: AgentId, timeoutMs: number): Promise<boolean> {
   const ready = (): boolean => {
     const a = useStore.getState().surfaceAgent[ptyId];
-    return !!a && a.slug === agent && READY.includes(a.status) && takesBracketedPaste(ptyId);
+    return !!a && a.slug === agent && READY.includes(a.status) && takesBracketedPaste(ptyId) && !onLaunchScreen(ptyId);
   };
   if (ready()) return Promise.resolve(true);
   return new Promise((resolve) => {
@@ -118,7 +132,7 @@ async function handOff(req: Parameters<typeof continueInAgent>[0], timeoutMs: nu
   if (!tab) return false;
   const ready = await agentReady(tab.ptyId, req.agent, timeoutMs);
   const term = terminalRegistry.get(tab.ptyId);
-  if (!ready || !term || !takesBracketedPaste(tab.ptyId)) {
+  if (!ready || !term || !takesBracketedPaste(tab.ptyId) || onLaunchScreen(tab.ptyId)) {
     useStore.getState().pushToast({ level: 'warn', message: t('usageLimit.continueInAgentNotReady', { agent: name }) });
     return false;
   }
