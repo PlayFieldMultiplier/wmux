@@ -432,6 +432,14 @@ describe('runtime hooks', () => {
 });
 
 describe('lookups the runtime and rooms read', () => {
+  it('a wake of another bot run in a bot\'s 1:1 gets none of its cards; the bot\'s own wake, and the owner, get them', () => {
+    const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms') });
+    writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'status', actor: { kind: 'bot', workspaceId: 'ws-1', botId: 'bot-0000aaaa' }, title: 'the page summary' });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 5, { dmReader: 'bot-0000bbbb' })).toEqual({ cards: [], truncated: false, hiddenGuestCards: 0 });
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 5, { dmReader: 'bot-0000aaaa' })?.cards.map((c) => c.title)).toEqual(['the page summary']);
+    expect(threadTail(writer, 'ws-1', 'dm:bot-0000aaaa', 5)?.cards).toHaveLength(1);
+  });
+
   it('facts by id, and a thread tail with its truncated flag', () => {
     const a = log.append(taskDone('a'));
     log.append(taskDone('b'));

@@ -15,6 +15,7 @@ import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../factorySettin
 import { __resetBotHooksForTesting, onBotHook, type BotHookEvent } from '../botHooks';
 import { HOUR_MS } from '../budget';
 import { __resetConversationMarksForTesting, conversationMarks, markConversation } from '../conversationMarks';
+import { expectWakeTaint } from '../wakeTaint';
 import { USAGE_LIMIT_RESUME_GRACE_MS, USAGE_LIMIT_UNKNOWN_HOLD_MS, parseUsageLimitReset } from '../../../shared/usageLimit';
 
 /** A scripted engine session: each send waits for the test to end the turn. */
@@ -1352,6 +1353,17 @@ describe('external guests and the bot\'s conversation', () => {
     vi.restoreAllMocks();
   });
 
+  it('a wake\'s thread tail is read as the waking bot (another bot\'s 1:1 shows it nothing)', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const readers: Array<string | undefined> = [];
+    setBotRuntimePorts({ wakeGuest: () => false, readThreadTail: (_ws, _t, _n, opts) => { readers.push(opts?.dmReader); return { cards: [], truncated: false }; } });
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', priority: 1, threadId: 'dm:bot-0000ffff', reason: { kind: 'human', text: 'hi', source: 'desktop' } }));
+    r.runtime.kick();
+    await settle();
+    expect(readers).toEqual([id]);
+  });
+
   it('a wake of unknown provenance runs ephemeral too, and sees no guest card', async () => {
     const r = rig();
     const id = createBot(r);
@@ -1421,13 +1433,32 @@ describe('conversation marks and removal', () => {
     must(r.runtime.wake(old, { text: 'one' }));
     await settle(10);
     expect(r.adapters.at(-1)?.started?.resumeSessionId).toBe('sess-old');
-    // The record reads as not signed in; a wake with no taint port is not
-    // known clean of a signed-in task's fact either.
-    expect(conversationMarks(old)).toEqual({ tainted: true, signedIn: true });
+    // The record reads as not signed in; with no tracker in the app, no
+    // signed-in mark is guessed.
+    expect(conversationMarks(old)).toEqual({ tainted: true, signedIn: false });
     const fresh = createBot(r);
     must(r.runtime.wake(fresh, { text: 'one' }));
     await settle(10);
-    expect(conversationMarks(fresh)).toEqual({ tainted: true, signedIn: true });
+    expect(conversationMarks(fresh)).toEqual({ tainted: true, signedIn: false });
+  });
+
+  it('where the taint tracker is part of the app, no turn runs until it marks wakes; then the waiting wake runs', async () => {
+    expectWakeTaint(true);
+    try {
+      const r = rig({ mode: 'ok' });
+      const id = createBot(r);
+      must(r.runtime.wake(id, { text: 'one' }));
+      await settle(10);
+      expect(r.adapters).toHaveLength(0);
+      expect(r.sessions.get(id)).toBeNull();
+      setBotRuntimePorts({ wakeTainted: () => false, wakeSignedIn: () => false });
+      r.runtime.kick();
+      await settle(10);
+      expect(r.adapters).toHaveLength(1);
+      expect(r.sessions.get(id)).toMatchObject({ tainted: false, signedIn: false });
+    } finally {
+      expectWakeTaint(false);
+    }
   });
 
   it('a wake carrying a signed-in task\'s fact marks the conversation signed in, saved with its record; a resume carries it', async () => {

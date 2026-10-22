@@ -110,6 +110,17 @@ describe('factFromLedgerTransition', () => {
     expect(factFromLedgerTransition({ ...stop, by: { kind: 'worker', workspaceId: 'ws-task' } } as LedgerTransition)).toBeNull();
   });
 
+  it('a signed-in task\'s fact carries no summary (its worker\'s words stay with its bot); a plain task\'s does', () => {
+    const signed = { dispatch: { origin: { kind: 'bot' as const, botId: 'bot-lead1', tainted: true }, connectors: ['notion'], gatewayConnectors: ['notion'] } };
+    for (const [from, to] of [['working', 'review_requested'], ['working', 'input_required'], ['working', 'failed']] as const) {
+      const d = factFromLedgerTransition({ ...transition(from, to, { ...signed, summary: 'the page says x' }), summary: 'the page says x' });
+      expect(d?.payload, to).not.toHaveProperty('summary');
+      expect(d?.ref, to).toMatchObject({ botId: 'bot-lead1' });
+    }
+    const plain = factFromLedgerTransition({ ...transition('working', 'review_requested', { summary: 'done' }), summary: 'done' });
+    expect(plain?.payload).toMatchObject({ summary: 'done' });
+  });
+
   it('scopes to the owner workspace, keys on the task, and caps text', () => {
     const d = factFromLedgerTransition({
       ...transition('working', 'review_requested', {

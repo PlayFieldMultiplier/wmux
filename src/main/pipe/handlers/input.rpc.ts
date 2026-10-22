@@ -62,7 +62,6 @@ import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { reclaimedWorkerOfPane, reclaimedWorkerWorkspaces } from '../../factory/workerReclaim';
 import { taskSignedIn } from '../../factory/wakeTaint';
-import { markConversation } from '../../factory/conversationMarks';
 import { hasRedactedSecrets, redactStoredSecrets } from '../../factory/secretRedaction';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { STOP_KEYS, nothingToStopMessage } from '../../../shared/stopKeys';
@@ -1141,9 +1140,6 @@ export interface InputRpcDeps {
   /** Injected in tests; the task of a reclaimed worker whose recorded pane
    *  `ptyId` is, in the workspace it runs in (factory/workerReclaim.ts). */
   reclaimedTaskOfPane?: (workspaceId: string, ptyId: string) => { taskId: string; botId: string } | null;
-  /** Injected in tests; marks the bot's live conversation as holding data
-   *  from a signed-in task (factory/conversationMarks.ts). */
-  markSignedIn?: (botId: string) => void;
 }
 
 /** Budget for one daemon state read while a fresh-context step polls. */
@@ -1186,7 +1182,6 @@ export function registerInputRpc(
   const ledgerOf = deps.getLedger ?? getTaskLedger;
   const reclaimedOf = deps.reclaimedWorkerWorkspaces ?? ((botId: string, owner: string): string[] => reclaimedWorkerWorkspaces(botId, owner));
   const reclaimedTaskOf = deps.reclaimedTaskOfPane ?? ((ws: string, ptyId: string) => reclaimedWorkerOfPane(ws, ptyId));
-  const markSignedIn = deps.markSignedIn ?? ((botId: string) => markConversation(botId, 'signedIn'));
 
   /**
    * The fresh-context step for one new-task send (#1680), against the live
@@ -1829,10 +1824,11 @@ export function registerInputRpc(
         return readScreenFor(getWindow, p, !!bot);
       }
       // What a signed-in task's worker shows is what it read with the
-      // owner's sign-in: the reading conversation holds it from now on, as a
-      // wake carrying that task's result would (conversationMarks.ts), so
-      // its ways out are closed before the screen is read.
-      if (bot && botTaskPaneSignedIn(bot, access.taskWorkspaceId, p['ptyId'])) markSignedIn(bot.botId);
+      // owner's sign-in: no bot reads that pane. Its result reaches the bot
+      // that started it as the task's report, in its 1:1 (fanout.rpc.ts).
+      if (bot && botTaskPaneSignedIn(bot, access.taskWorkspaceId, p['ptyId'])) {
+        throw new Error('input.readScreen: the pane of a task that used a signed-in connection is not read by a bot; its result reaches you as the task\'s report');
+      }
       // The renderer re-checks the pty against `workspaceId`, and the caller's
       // own workspace does not hold it — name the task workspace the lane
       // resolved, never a caller-supplied one.

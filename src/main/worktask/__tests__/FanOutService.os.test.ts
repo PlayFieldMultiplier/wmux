@@ -29,6 +29,7 @@ import { FIRST_RUN_CLEAN_READS } from '../agentFirstRun';
 import type { FanOutDaemonPort, FanOutRendererPort } from '../FanOutService';
 import { TaskWorktreeManager, type TaskWorktreePlan } from '../TaskWorktreeManager';
 import type { ProjectConfigState } from '../../../shared/wmuxProjectConfig';
+import type { Connector } from '../../../shared/botConnector';
 import { clearFanoutPortReservationsForTest } from '../fanoutEnvironment';
 import { WorkspacePrepCards } from '../workspacePrepCards';
 import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
@@ -516,6 +517,15 @@ describe('each task\'s launch generation (#2393)', () => {
     const failing = new FanOutService({ daemon: makeDaemonFake().port, renderer: makeRendererFake({ spawnFailOn: () => true }).port, worktrees: makeWorktreesFake(), launches: slots });
     expect('error' in (await failing.spawnBotTaskPane(input))).toBe(true);
     expect(slots.launchOf('wtask-x')).toMatchObject({ gen: 3, state: 'released' });
+  });
+
+  it('a respawned signed-in task\'s new stamp keeps its gateway connections', async () => {
+    const slots = launches(metaRoot);
+    slots.beginLaunch({ taskId: 'wtask-g', origin: 'bot', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-ceo' });
+    const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: makeRendererFake().port, worktrees: makeWorktreesFake(), launches: slots });
+    const gmail = { id: 'con-0000000a', name: 'gmail', transport: 'http', remote: { url: 'https://mcp.example.com', headers: {} }, secrets: [], tools: { mode: 'all' }, scope: { kind: 'all' }, offFor: [], enabled: true, createdAt: 0, updatedAt: 0 } as unknown as Connector;
+    const r = await svc.spawnBotTaskPane({ ownerWorkspaceId: 'ws-ceo', botId: 'bot-0000000a', taskId: 'wtask-g', title: 'g', cwd: metaRoot, command: 'claude', workerPermissionMode: 'manual', tainted: true, connectors: [gmail], gatewayConnectors: ['gmail'] });
+    expect('workspaceId' in r && lineage.lineageFor([r.workspaceId])[r.workspaceId]?.origin).toMatchObject({ kind: 'bot', gatewayConnectors: ['gmail'] });
   });
 });
 

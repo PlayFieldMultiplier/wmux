@@ -22,9 +22,9 @@
 // outside the bot's own 1:1; the cards a bot addresses to the owner,
 // ask_person, approval_request, secret_request and login_request, land in
 // that 1:1 and are refused anywhere else it names; a ledger_update's words
-// on a task that used no signed-in connection). Besides a wake, a bot's
-// terminal_read of a signed-in task's pane sets the signed-in mark
-// (input.rpc.ts). The runtime starts a conversation's mark when it
+// on a task that used no signed-in connection). Only a wake sets the
+// signed-in mark: a bot never reads a signed-in task's pane (input.rpc.ts
+// refuses it). The runtime starts a conversation's mark when it
 // spawns one (clean when fresh, from the saved session record when resumed,
 // set for a guest's conversation of its own) and ends it when it ends the
 // session. A mark is only ever set, never cleared, until the conversation

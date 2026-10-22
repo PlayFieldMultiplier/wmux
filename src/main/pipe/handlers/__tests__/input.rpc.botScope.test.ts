@@ -47,7 +47,7 @@ const RECLAIMED: Record<string, { taskId: string; botId: string }> = {
   'pty-reclaimed-signed': { taskId: 't-signed-reopened', botId: BOT.botId },
 };
 
-function wire(markSignedIn: (botId: string) => void = () => undefined): RpcRouter {
+function wire(): RpcRouter {
   const ledger = {
     list: (f: { ownerWorkspaceId?: string; openOnly?: boolean } = {}) =>
       ENTRIES.filter((e) => (f.ownerWorkspaceId === undefined || e.ownerWorkspaceId === f.ownerWorkspaceId) && (!f.openOnly || e.status === 'working')),
@@ -61,7 +61,6 @@ function wire(markSignedIn: (botId: string) => void = () => undefined): RpcRoute
     // workspace, and another bot's.
     reclaimedWorkerWorkspaces: (botId, owner) => (owner !== 'ws-bot' ? [] : botId === BOT.botId ? ['ws-task-reopened', 'ws-task-signed-reopened'] : ['ws-task-other-reopened']),
     reclaimedTaskOfPane: (ws, ptyId) => (PANE_OWNERS[ptyId] === ws ? RECLAIMED[ptyId] ?? null : null),
-    markSignedIn,
   });
   return router;
 }
@@ -109,24 +108,16 @@ describe('input.readScreen — bot scope', () => {
     }
   });
 
-  it('reading the pane of a task that used a signed-in connection marks the reading conversation signed in, before the screen is read; a plain task\'s pane does not', async () => {
-    const marked: string[] = [];
-    const router = wire((botId) => {
-      // Marked before the renderer read the screen.
-      expect(sendToRendererMock.mock.calls.some((c) => c[1] === 'input.readScreen')).toBe(false);
-      marked.push(botId);
-    });
+  it('the pane of a task that used a signed-in connection is not read by a bot, open or reopened; a plain task\'s pane is', async () => {
+    const router = wire();
     for (const ptyId of ['pty-own', 'pty-mine', 'pty-reclaimed']) {
       expect(await asBot(router, { ptyId }), ptyId).toMatchObject({ ok: true, result: { text: 'SCREEN' } });
     }
-    expect(marked).toEqual([]);
-    sendToRendererMock.mockClear();
-    expect(await asBot(router, { ptyId: 'pty-signed' })).toMatchObject({ ok: true, result: { text: 'SCREEN', untrusted: true } });
-    expect(marked).toEqual([BOT.botId]);
-    sendToRendererMock.mockClear();
-    // An ended signed-in task's worker, reopened in a new workspace.
-    expect(await asBot(router, { ptyId: 'pty-reclaimed-signed' })).toMatchObject({ ok: true, result: { text: 'SCREEN', untrusted: true } });
-    expect(marked).toEqual([BOT.botId, BOT.botId]);
+    for (const ptyId of ['pty-signed', 'pty-reclaimed-signed']) {
+      sendToRendererMock.mockClear();
+      expect(await asBot(router, { ptyId }), ptyId).toMatchObject({ ok: false, error: expect.stringContaining('signed-in connection is not read by a bot') });
+      expect(sendToRendererMock.mock.calls.some((c) => c[1] === 'input.readScreen'), ptyId).toBe(false);
+    }
   });
 
   it('a named workspaceId is ignored: the read stays in the bot\'s own workspace', async () => {

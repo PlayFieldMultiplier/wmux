@@ -380,6 +380,8 @@ describe('task.fanout.start — bot origin', () => {
       expect(await ask('research')).toMatchObject({ ok: true });
       await r.flush();
       expect(r.start.mock.calls[0][0] as FanOutRequest).toMatchObject({ gatewayConnectors: ['notion'] });
+      // The lineage stamp carries the names too, for a row mirrored from it.
+      expect((r.start.mock.calls[0][0] as FanOutRequest).caller).toMatchObject({ kind: 'bot', gatewayConnectors: ['notion'] });
       // The service's tool list was read with the owner's token, in main.
       expect(listHeaders[0]).toEqual({ Authorization: 'Bearer vendor-token' });
       // Never beside another connection.

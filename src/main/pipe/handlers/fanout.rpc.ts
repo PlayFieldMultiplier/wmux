@@ -1726,7 +1726,7 @@ export function registerFanOutRpc(
     // pane that asked is certainly still there (see resolveCallerOrigin).
     const callerOrigin: FanoutOrigin | undefined = bot
       // A guest-sourced wake was refused above.
-      ? { kind: 'bot', botId: bot.botId, tainted: botWakeTainted, guest: false }
+      ? { kind: 'bot', botId: bot.botId, tainted: botWakeTainted, guest: false, ...(gatewayConnectors.length > 0 ? { gatewayConnectors: gatewayConnectors.map((c) => c.name) } : {}) }
       : commanderWorkspaceId
         ? { kind: 'orchestrator' }
         : await resolveCallerOrigin(getWindow, senderPtyId, callerWorkspaceId);

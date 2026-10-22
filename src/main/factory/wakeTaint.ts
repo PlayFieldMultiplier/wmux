@@ -65,7 +65,7 @@ import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomi
 import type { Fact, FactKind } from '../../shared/facts';
 import { botTemplate, type BotProfile } from '../../shared/bot';
 import type { Handoff } from '../../shared/handoff';
-import type { LedgerEntry } from '../../shared/ledger';
+import { taskSignedIn, type LedgerEntry } from '../../shared/ledger';
 import type { BotWorkflow } from '../../shared/botWorkflow';
 import type { WakeItem, WakeReason } from '../../shared/wake';
 import { taskIdOfFactId } from './wakePrompt';
@@ -630,11 +630,7 @@ export function taskTainted(row: Pick<LedgerEntry, 'dispatch'>): boolean {
   return origin.kind === 'bot' ? origin.tainted !== false : origin.tainted === true;
 }
 
-/** Whether a ledger row's task used a signed-in connection: a bot's task
- *  main started through its gateway (fanout.rpc.ts records the names). */
-export function taskSignedIn(row: Pick<LedgerEntry, 'dispatch'>): boolean {
-  return row.dispatch?.origin.kind === 'bot' && (row.dispatch.gatewayConnectors?.length ?? 0) > 0;
-}
+export { taskSignedIn };
 
 /** A ledger row's guest provenance: its dispatch's own mark, else false
  *  for a task main recorded clean and unknown for any other. */
@@ -651,6 +647,12 @@ let trackerExpected = false;
 
 export function expectWakeTaint(on = true): void {
   trackerExpected = on;
+}
+
+/** Whether the taint tracker is part of the app (wakeTaintModule.ts): no
+ *  bot turn runs until it marks wakes (BotRuntime.ts). */
+export function wakeTaintExpected(): boolean {
+  return trackerExpected;
 }
 
 let current: { taint: WakeTaint; runningWake: WakeTaintPorts['runningWake']; wakeItem: (wakeId: string) => WakeItem | null } | null = null;

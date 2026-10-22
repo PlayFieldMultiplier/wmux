@@ -63,6 +63,21 @@ describe('fact.poll', () => {
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA)))).toEqual([]);
   });
 
+  it('no bot reads the owner\'s words in another bot\'s 1:1; the bot they were for, and the operator, do', async () => {
+    const DEV: BotBinding = { workspaceId: 'ws-a', botId: 'bot-0000000d', role: 'lead' };
+    const message = (to: string, threadId: string): FactDraft => ({
+      kind: 'human.message', at: Date.now(), workspaceId: 'ws-a', ref: { botId: to, messageId: `c-${to}-${threadId}:${to}` }, actor: { kind: 'human' }, payload: { text: 'the figures', threadId },
+    });
+    log.append(message(LEAD.botId, `dm:${LEAD.botId}`));
+    log.append(message(LEAD.botId, 'general'));
+    const ids = (r: unknown) => (r as { facts: { seq: number }[] }).facts.map((f) => f.seq);
+    const coordinator = (id: string) => id === MOA.botId;
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(DEV), () => null, coordinator, () => () => true))).toEqual([2]);
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA), () => null, coordinator, () => () => true))).toEqual([2]);
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(LEAD), () => null, coordinator, () => () => true))).toEqual([1, 2]);
+    expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, OPERATOR))).toEqual([1, 2]);
+  });
+
   it('the island: the Coordinator reads no guest workspace\'s facts, a guest workspace\'s bot only its own; the operator all', async () => {
     noteGuestRecordWorkspaces(['ws-g']);
     try {

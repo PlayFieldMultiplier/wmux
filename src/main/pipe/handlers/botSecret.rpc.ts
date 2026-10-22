@@ -30,7 +30,7 @@ import {
   type BotSecretEntry,
   type LoginService,
 } from '../../../shared/botSecret';
-import { GENERAL_THREAD, dmThreadId, parseThreadId, type RoomCard, type ThreadId } from '../../../shared/room';
+import { GENERAL_THREAD, dmThreadBot, dmThreadId, parseThreadId, type RoomCard, type ThreadId } from '../../../shared/room';
 import type { RpcContext } from '../../../shared/rpc';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle, type FactoryRouter } from '../../factory/factoryHost';
 import {
@@ -120,6 +120,9 @@ function botCardPlace(
   const named = p.threadId === undefined ? undefined : parseThreadId(p.threadId);
   if (named === null) return refusal('invalid', 'threadId is not a thread id');
   if (namesOthersGroup(ports, bot, named)) return refusal('invalid', 'a bot posts in a group chat it is in');
+  // Another bot's 1:1 with the owner is that bot's: no card of this one there.
+  const dmOf = named === undefined ? null : dmThreadBot(named);
+  if (dmOf !== null && dmOf !== bot.botId) return refusal('invalid', 'another bot\'s 1:1 with the owner is not a thread you post in');
   if (p.clientRequestId !== undefined && !isClientId(p.clientRequestId)) return refusal('invalid', 'clientRequestId is not a valid key');
   const signedIn = (deps.signedIn ?? conversationSignedIn)(bot.botId) !== false;
   const dm = dmThreadId(bot.botId);
@@ -229,6 +232,11 @@ export function handleLoginRequest(raw: unknown, ctx: RpcContext | undefined, de
   if (service === 'website') {
     url = loginPageUrl(p.url);
     if (!url) return refusal('invalid', `url must be an https login page (at most ${URL_MAX} characters, no user name or password in it)`);
+    // The owner's browser opens it: from a conversation that holds data from
+    // a signed-in task, a query or fragment could carry it to the site.
+    if (/[?#]/.test(url) && (deps.signedIn ?? conversationSignedIn)(bot.botId) !== false) {
+      return refusal('not_now', signedInRefusal('ask for a login page with a query or fragment in its address', bot.botId));
+    }
   } else if (p.url !== undefined) {
     return refusal('invalid', 'url is for a website login only');
   }

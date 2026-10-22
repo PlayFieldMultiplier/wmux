@@ -102,6 +102,20 @@ describe('secret_request', () => {
     expect(writer.read('ws-1', {}).cards.map((c) => c.threadId)).toEqual([dm, dm, dm, dm]);
   });
 
+  it('no bot places a key or login card in another bot\'s 1:1; a signed-in conversation\'s login page has no query or fragment', () => {
+    const other = dmThreadId('bot-ffffffff');
+    expect(handleSecretRequest({ name: 'NPM_TOKEN', label: 'l', why: 'w', threadId: other }, botCtx, deps)).toMatchObject({ ok: false, code: 'invalid', message: expect.stringContaining('another bot\'s 1:1') });
+    expect(handleLoginRequest({ service: 'github', why: 'w', threadId: other }, botCtx, deps)).toMatchObject({ ok: false, code: 'invalid', message: expect.stringContaining('another bot\'s 1:1') });
+    const signedIn = { ...deps, signedIn: () => true };
+    for (const url of ['https://login.example.com/?q=Q3-revenue', 'https://login.example.com/#Q3-revenue']) {
+      expect(handleLoginRequest({ service: 'website', url, why: 'w' }, botCtx, signedIn), url)
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('query or fragment') });
+    }
+    expect(handleLoginRequest({ service: 'website', url: 'https://login.example.com/signin', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: true, threadId: dmThreadId(BOT.botId) });
+    expect(handleLoginRequest({ service: 'website', url: 'https://login.example.com/?next=/home', why: 'w' }, botCtx, deps)).toMatchObject({ ok: true });
+    expect(writer.read('ws-1', {}).cards).toHaveLength(2);
+  });
+
   it('refuses a name that does not read as a credential, and a missing label or why', () => {
     for (const name of ['MY_NAME', 'PATH', 'npm_token', 'WMUX_AUTH_TOKEN']) {
       expect(handleSecretRequest({ name, label: 'l', why: 'w' }, botCtx, deps)).toMatchObject({ ok: false, code: 'invalid_name' });

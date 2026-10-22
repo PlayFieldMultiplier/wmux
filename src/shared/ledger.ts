@@ -212,6 +212,14 @@ export interface LedgerDispatch {
  *  no code (main/worktask/botFanoutPresets.ts). */
 export const RESEARCH_PRESET = 'research';
 
+/** Whether a ledger row's task used a signed-in connection: a bot's task
+ *  main started through its gateway (fanout.rpc.ts records the names). What
+ *  its worker read is its bot's alone: its summary rides on no fact and no
+ *  shared card (factIngest.ts). Pure. */
+export function taskSignedIn(row: Pick<LedgerEntry, 'dispatch'>): boolean {
+  return row.dispatch?.origin.kind === 'bot' && (row.dispatch.gatewayConnectors?.length ?? 0) > 0;
+}
+
 /** Whether a row is a bot's research task: main wrote its dispatch with the
  *  research preset. Such a task changes no code, so there is no code gate to
  *  run; its report still records criteria/evidence (Not verified when missing)

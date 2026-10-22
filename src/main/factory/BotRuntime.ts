@@ -77,6 +77,7 @@ import {
 } from './wakePrompt';
 import type { WakeQueue } from './wakeQueue';
 import { redactStoredSecrets } from './secretRedaction';
+import { wakeTaintExpected } from './wakeTaint';
 import { conversationMarks, endConversation, markConversation, setConversationMarkListener, startConversation, type ConversationMarks } from './conversationMarks';
 
 // ── sessions.json ───────────────────────────────────────────────────────────
@@ -280,7 +281,7 @@ export interface BotRuntimePorts {
   resolveHandoff?: (handoffId: string) => WakeHandoffSummary | null;
   /** The newest `n` cards of a room thread, oldest first, and whether older
    *  ones exist (the rooms module). */
-  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number, opts?: { guests?: boolean }) => { cards: RoomCard[]; truncated: boolean; hiddenGuestCards?: number } | null;
+  readThreadTail?: (workspaceId: string, threadId: ThreadId, n: number, opts?: { guests?: boolean; dmReader?: string }) => { cards: RoomCard[]; truncated: boolean; hiddenGuestCards?: number } | null;
   /** A wake's guest provenance (wakeTaint.ts wakeGuest). A guest-sourced
    *  wake sees guest cards and runs in a conversation of its own, and so
    *  does one whose provenance is unknown. Absent: a `guest` wake only. */
@@ -318,8 +319,8 @@ export interface BotRuntimePorts {
    *  wakeTainted). Absent: every wake counts as tainted. */
   wakeTainted?: (item: WakeItem) => boolean;
   /** Whether a wake carried a fact of a task that used a signed-in
-   *  connection (wakeTaint.ts wakeSignedIn). Absent: one only when the
-   *  wake's taint cannot be told either (no wakeTainted). */
+   *  connection (wakeTaint.ts wakeSignedIn). Absent: none did; that is
+   *  only so where no taint tracker is part of the app (taintReady). */
   wakeSignedIn?: (item: WakeItem) => boolean;
 }
 
@@ -456,6 +457,7 @@ export class BotRuntime {
   private heldTimer: unknown = null;
   private heldAt: number | null = null;
   private contextTimer: unknown = null;
+  private taintWarned = false;
   private contextWaitSince: number | null = null;
   private contextSeen = false;
   private disposed = false;
@@ -781,8 +783,10 @@ export class BotRuntime {
     }
   }
 
+  /** Absent only where no taint tracker is part of the app (a runtime built
+   *  alone): where one is, no turn runs without it (pump, taintReady). */
   private wakeSignedIn(item: WakeItem): boolean {
-    if (!ports.wakeSignedIn) return !ports.wakeTainted;
+    if (!ports.wakeSignedIn) return false;
     try {
       return ports.wakeSignedIn(item) !== false;
     } catch {
@@ -842,6 +846,7 @@ export class BotRuntime {
       return;
     }
     if (!this.contextReady()) return;
+    if (!this.taintReady()) return;
     const cap = settings.globalConcurrentBots;
     const now = this.now();
     this.sweepBudgetParks(now);
@@ -947,6 +952,25 @@ export class BotRuntime {
     if (ok) {
       this.contextSeen = true;
       return true;
+    }
+    if (this.contextTimer === null) {
+      this.contextTimer = this.setTimer(() => {
+        this.contextTimer = null;
+        this.kick();
+      }, CONTEXT_POLL_MS);
+    }
+    return false;
+  }
+
+  /** Whether the taint tracker marks wakes (its ports set), where one is
+   *  part of the app: a turn run without it would put a guessed mark on its
+   *  conversation and save it. Unlike contextReady it never gives up; while
+   *  not, a pass is retried shortly. */
+  private taintReady(): boolean {
+    if (!wakeTaintExpected() || (ports.wakeTainted && ports.wakeSignedIn)) return true;
+    if (!this.taintWarned) {
+      this.taintWarned = true;
+      console.warn('[factory] bot turns wait for the wake taint tracker');
     }
     if (this.contextTimer === null) {
       this.contextTimer = this.setTimer(() => {
@@ -1135,7 +1159,7 @@ export class BotRuntime {
     try {
       if (item.threadId) {
         // Only a guest-sourced wake sees guest cards in its thread.
-        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS, { guests: this.wakeGuest(item) === true });
+        const tail = ports.readThreadTail?.(item.workspaceId, item.threadId, WAKE_THREAD_TAIL_CARDS, { guests: this.wakeGuest(item) === true, dmReader: profile.id });
         if (tail) thread = { threadId: item.threadId, cards: tail.cards.slice(-WAKE_THREAD_TAIL_CARDS), truncated: tail.truncated, ...(tail.hiddenGuestCards ? { hiddenGuestCards: tail.hiddenGuestCards } : {}) };
       }
       if (r.kind === 'facts') {
