@@ -115,6 +115,20 @@ describe('private-network setting in main', () => {
     });
   });
 
+  it('answers a caller holding a claim, and one whose claim is gone, the same', async () => {
+    store.setAllowPrivateNetwork(true);
+    // The pane MCP's lane: a claim on the workspace it names.
+    await expect(dispatch('browser.navigationPolicy.get', { workspaceId: 'ws-1' })).resolves.toEqual({
+      result: { allowPrivateNetwork: true },
+    });
+    // A claim main no longer knows (main restarted): the read resolves no
+    // identity, so it still answers rather than refusing the preflight.
+    const stale = await router.dispatch(
+      { id: '1', method: 'browser.navigationPolicy.get', params: {}, workspaceToken: 'claim-before-restart' } as never,
+    );
+    expect(stale).toMatchObject({ ok: true, result: { allowPrivateNetwork: true } });
+  });
+
   it('reports main\'s environment variable as on too (setting OR env)', async () => {
     process.env[ALLOW_PRIVATE_NETWORK_ENV] = '1';
     await expect(dispatch('browser.navigationPolicy.get')).resolves.toEqual({
