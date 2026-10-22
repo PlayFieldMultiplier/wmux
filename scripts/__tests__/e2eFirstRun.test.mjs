@@ -6,15 +6,18 @@
 // never process.platform), so the host OS cannot change a result.
 import { describe, expect, it } from 'vitest';
 import {
+  adoptDaemon,
   agentRanInPane,
   appEnvExtras,
   fakeAgentShims,
   mergeTrees,
   normalizeProcessRows,
   parseRunArgs,
+  removableLeftovers,
   runProcessTree,
   sandboxEnv,
   seededClaudeJson,
+  squirrelInstallRefusal,
   survivors,
   verdictLine,
   writesOutsideSandbox,
@@ -37,10 +40,13 @@ describe('parseRunArgs', () => {
 describe('sandboxEnv', () => {
   it('Windows: every profile root points into the sandbox and the fakes lead PATH', () => {
     const env = sandboxEnv(
-      { Path: 'C:\\Windows;C:\\Users\\me\\.local\\bin', USERPROFILE: 'C:\\Users\\me', HOMEDRIVE: 'C:', HOMEPATH: '\\Users\\me', APPDATA: 'C:\\Users\\me\\AppData\\Roaming', PATHEXT: '.COM;.EXE;.BAT;.CMD' },
+      { Path: 'C:\\Windows;C:\\Users\\me\\.local\\bin', USERPROFILE: 'C:\\Users\\me', HOMEDRIVE: 'C:', HOMEPATH: '\\Users\\me', APPDATA: 'C:\\Users\\me\\AppData\\Roaming', PATHEXT: '.COM;.EXE;.BAT;.CMD', codex_home: 'C:\\Users\\me\\.codex' },
       { home: 'C:\\T\\fr', fakeBin: 'C:\\T\\fr\\fake-bin', platform: 'win32' },
     );
     expect(env.USERPROFILE).toBe('C:\\T\\fr');
+    // The owner's Codex home never leaks through (one spelling, in the sandbox).
+    expect(env.CODEX_HOME).toBe('C:\\T\\fr\\.codex');
+    expect(env.codex_home).toBeUndefined();
     expect(env.HOME).toBe('C:\\T\\fr');
     expect(env.APPDATA).toBe('C:\\T\\fr\\AppData\\Roaming');
     expect(env.LOCALAPPDATA).toBe('C:\\T\\fr\\AppData\\Local');
@@ -55,10 +61,10 @@ describe('sandboxEnv', () => {
 
   it('POSIX: HOME is the sandbox and the XDG dirs derive from it', () => {
     const env = sandboxEnv(
-      { PATH: '/usr/bin', HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/.config' },
+      { PATH: '/usr/bin', HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/.config', CODEX_HOME: '/home/me/.codex' },
       { home: '/tmp/fr', fakeBin: '/tmp/fr/fake-bin', platform: 'linux' },
     );
-    expect(env).toEqual({ PATH: '/tmp/fr/fake-bin:/usr/bin', HOME: '/tmp/fr' });
+    expect(env).toEqual({ PATH: '/tmp/fr/fake-bin:/usr/bin', HOME: '/tmp/fr', CODEX_HOME: '/tmp/fr/.codex' });
   });
 });
 
@@ -141,13 +147,32 @@ describe('process bookkeeping', () => {
     expect(rows[1].CreationDate).toBe(Date.parse('Thu Oct 22 10:00:05 2026'));
   });
 
+  const app = { ProcessId: 10, CreationDate: 1000 };
+  const daemon = { ProcessId: 20, CreationDate: 2000 };
+
   it('records the app and daemon trees, never a stale-parent stranger', () => {
-    const tree = runProcessTree(win, [10, 20, null]);
+    const tree = runProcessTree(win, [app, daemon, null]);
     expect(tree.map((r) => r.ProcessId).sort()).toEqual([10, 11, 20, 21]);
   });
 
+  it('expands a root only while its pid still holds the recorded process', () => {
+    // The app died early and pid 10 now belongs to an unrelated program that
+    // started later, with children of its own: none of it is recorded.
+    const reused = normalizeProcessRows([
+      { ProcessId: 10, ParentProcessId: 1, Name: 'Photos.exe', CreationDate: '/Date(9000)/', CommandLine: 'Photos' },
+      { ProcessId: 12, ParentProcessId: 10, Name: 'Photos.Helper.exe', CreationDate: '/Date(9100)/', CommandLine: 'helper' },
+      { ProcessId: 20, ParentProcessId: 10, Name: 'wmux.exe', CreationDate: '/Date(2000)/', CommandLine: null },
+      { ProcessId: 21, ParentProcessId: 20, Name: 'powershell.exe', CreationDate: '/Date(2100)/', CommandLine: 'powershell' },
+    ], 'win32');
+    expect(runProcessTree(reused, [app])).toEqual([]);
+    // The daemon, still the recorded process, keeps its own tree.
+    expect(runProcessTree(reused, [app, daemon]).map((r) => r.ProcessId).sort()).toEqual([20, 21]);
+    // A bare pid is not an identity: nothing to expand.
+    expect(runProcessTree(win, [10, 20])).toEqual([]);
+  });
+
   it('a survivor is the same pid with the same creation time; a reused pid is not', () => {
-    const recorded = runProcessTree(win, [10, 20]);
+    const recorded = runProcessTree(win, [app, daemon]);
     const now = [
       { ProcessId: 21, CreationDate: 2100 }, // still ours
       { ProcessId: 11, CreationDate: 9999 }, // pid reused by someone else
@@ -156,8 +181,66 @@ describe('process bookkeeping', () => {
   });
 
   it('merges snapshots without duplicates', () => {
-    const a = runProcessTree(win, [10]);
-    expect(mergeTrees(a, a, runProcessTree(win, [20])).length).toBe(4);
+    const a = runProcessTree(win, [app]);
+    expect(mergeTrees(a, a, runProcessTree(win, [daemon])).length).toBe(4);
+  });
+});
+
+describe('adoptDaemon', () => {
+  const app = { ProcessId: 10, CreationDate: 1000 };
+  const rows = [
+    { ProcessId: 10, ParentProcessId: 1, Name: 'wmux.exe', CreationDate: 1000 },
+    { ProcessId: 20, ParentProcessId: 10, Name: 'wmux.exe', CreationDate: 2000 },
+    { ProcessId: 30, ParentProcessId: 7, Name: 'notepad.exe', CreationDate: 3000 },
+    { ProcessId: 40, ParentProcessId: 10, Name: 'old.exe', CreationDate: 500 },
+  ];
+
+  it('ties the daemon to the run when it was seen in the verified app tree', () => {
+    expect(adoptDaemon({ daemonPid: 20, rows: [rows[1]], app: null, recordedTree: [rows[1]] })).toEqual(rows[1]);
+  });
+
+  it('or when it is the recorded app’s child, created after it', () => {
+    expect(adoptDaemon({ daemonPid: 20, rows, app })).toEqual(rows[1]);
+    // After the app exits (Windows keeps the dead parent's pid on the child).
+    expect(adoptDaemon({ daemonPid: 20, rows: rows.slice(1), app })).toEqual(rows[1]);
+  });
+
+  it('never a stale pid file naming a stranger, an older process, or a child of a reused app pid', () => {
+    expect(adoptDaemon({ daemonPid: 30, rows, app })).toBeNull();
+    expect(adoptDaemon({ daemonPid: 40, rows, app })).toBeNull();
+    const reusedApp = [{ ProcessId: 10, ParentProcessId: 1, Name: 'Photos.exe', CreationDate: 1500 }, rows[1]];
+    expect(adoptDaemon({ daemonPid: 20, rows: reusedApp, app })).toBeNull();
+    expect(adoptDaemon({ daemonPid: 99, rows, app })).toBeNull();
+    expect(adoptDaemon({ daemonPid: null, rows, app })).toBeNull();
+  });
+
+  it('POSIX: a daemon whose own environment carries the run’s suffix (macOS launchd job)', () => {
+    expect(adoptDaemon({ daemonPid: 30, rows, app, envOwned: true })).toEqual(rows[2]);
+  });
+});
+
+describe('removableLeftovers', () => {
+  it('deletes only suffixed paths that appeared during the run', () => {
+    const pre = ['C:\\Users\\me\\.wmux-e2e-x'];
+    const now = ['C:\\Users\\me\\.wmux-e2e-x', 'C:\\Users\\me\\AppData\\Roaming\\wmux-e2e-x'];
+    expect(removableLeftovers(now, pre)).toEqual(['C:\\Users\\me\\AppData\\Roaming\\wmux-e2e-x']);
+    expect(removableLeftovers(now, [])).toEqual(now);
+    expect(removableLeftovers([], pre)).toEqual([]);
+  });
+});
+
+describe('squirrelInstallRefusal', () => {
+  const lad = 'C:\\Users\\me\\AppData\\Local';
+  it('refuses anything under the Squirrel install root, in any case', () => {
+    expect(squirrelInstallRefusal('C:\\Users\\me\\AppData\\Local\\wmux\\app-4.0.0\\wmux.exe', lad, 'win32')).toMatch(/installed wmux/);
+    expect(squirrelInstallRefusal('c:\\users\\ME\\appdata\\local\\WMUX\\wmux.exe', lad, 'win32')).toMatch(/installed wmux/);
+  });
+
+  it('accepts a packaged build elsewhere, a sibling folder, and other platforms', () => {
+    expect(squirrelInstallRefusal('D:\\wmux\\out\\wmux-win32-x64\\wmux.exe', lad, 'win32')).toBeNull();
+    expect(squirrelInstallRefusal('C:\\Users\\me\\AppData\\Local\\wmux-e2e\\wmux.exe', lad, 'win32')).toBeNull();
+    expect(squirrelInstallRefusal('/Applications/wmux.app/Contents/MacOS/wmux', '/x', 'darwin')).toBeNull();
+    expect(squirrelInstallRefusal('D:\\out\\wmux.exe', undefined, 'win32')).toBeNull();
   });
 });
 

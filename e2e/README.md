@@ -33,9 +33,13 @@ Code at a status at rest. It is a separate script, not a `node --test` file,
 because it drives an already packaged app.
 
 - **Isolated**: a unique `WMUX_DATA_SUFFIX` and a sandbox home under the temp
-  dir (`HOME`; on Windows also `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`), so
-  the hooks install lands in the sandbox. `WMUX_NO_PATH_REFRESH=1` keeps the
-  Windows registry PATH from putting real agents ahead of the fakes.
+  dir (`HOME` and `CODEX_HOME`; on Windows also `USERPROFILE`, `APPDATA`,
+  `LOCALAPPDATA`), so the hooks install lands in the sandbox.
+  `WMUX_NO_PATH_REFRESH=1` keeps the Windows registry PATH from putting real
+  agents ahead of the fakes. Preflight refuses a `--suffix` that already has
+  data or a named pipe, and an `--app` under the installed wmux
+  (`%LOCALAPPDATA%\wmux`), whose boot reconciles the real PATH, autostart and
+  shortcuts. On macOS an isolated instance never installs the CLI shim.
 - **MCP registration is seeded, not clicked**: agent configs are not
   per-suffix, so a suffixed instance never writes them, and the registrar uses
   Electron's own home (`app.getPath('home')`), which a sandboxed `HOME` does
@@ -49,10 +53,17 @@ because it drives an already packaged app.
 - **Driver**: every UI step goes through `scripts/control-wmux.mjs` with
   `data-testid` handles, with its state and evidence in the run's folder
   (`CONTROL_WMUX_DIR`).
-- **Teardown** runs on every exit: `control-wmux stop --purge`, then any
-  process from the app's or daemon's tree still alive (same pid and creation
-  time) is killed and fails the run, then the sandbox is deleted. Suffixed data
-  left outside the sandbox also fails the run.
+- **Teardown** runs on every exit. Its two roots are pinned as pid and
+  creation time: the app when control-wmux spawns it, the daemon when it is
+  first tied to the app (its child, or on POSIX a process whose environment
+  carries the run's suffix). A tree is expanded only from a root that still
+  matches, so a pid reused after an early exit is never recorded. Then
+  `control-wmux stop --purge`, only while the recorded app is alive; then any
+  recorded process still alive (same pid and creation time, re-checked right
+  before each kill) is killed and fails the run; then the sandbox is deleted.
+  Suffixed data outside the sandbox that appeared during the run is deleted
+  and fails the run; data that existed before is never touched.
+  `result.json` lists the pinned identities and every kill.
 - **Artifacts**: `e2e/artifacts/first-run/<time><suffix>/` (override with
   `--artifacts` or `WMUX_E2E_ARTIFACTS`): `result.json` (steps, timings,
   teardown check), `fake-agents.jsonl`, and under `evidence/` app.log plus,

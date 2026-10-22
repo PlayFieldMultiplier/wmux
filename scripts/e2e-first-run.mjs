@@ -23,10 +23,15 @@
 // (scripts/fixtures/fake-agents) come first on PATH: no real account,
 // network or token is used.
 //
-// Teardown runs on every exit path: `control-wmux stop --purge`, then a sweep
-// of every process the run's app and daemon started (matched by pid AND
-// creation time, so a reused pid is never touched), then the sandbox. A run
-// that leaves a process or suffixed data behind fails. On failure the
+// Teardown runs on every exit path: `control-wmux stop --purge` (only while
+// the recorded app is still alive), then a sweep of every process the run's
+// app and daemon started, then the sandbox. Both roots are pinned as pid AND
+// creation time (the app at spawn, the daemon when first tied to the app), a
+// tree is expanded only from a root that still matches, and every kill
+// re-checks pid and creation time, so a reused pid is never touched. Suffixed
+// data outside the sandbox is deleted only if it appeared during the run (a
+// suffix already in use is refused at preflight). A run that leaves a process
+// or suffixed data behind fails. On failure the
 // evidence is a screenshot, an ARIA snapshot, app.log, the daemon logs and the
 // fake agents' log, under e2e/artifacts/first-run/<run>/.
 //
@@ -39,19 +44,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   SETTLED_AGENT_STATUSES,
+  adoptDaemon,
   agentRanInPane,
   appEnvExtras,
   fakeAgentShims,
   mergeTrees,
   normalizeProcessRows,
   parseRunArgs,
+  removableLeftovers,
   runProcessTree,
   sandboxEnv,
   seededClaudeJson,
+  squirrelInstallRefusal,
   survivors,
   verdictLine,
   writesOutsideSandbox,
 } from './lib/e2e-first-run-lib.mjs';
+import { envHasSuffix } from './lib/control-wmux-lib.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = path.join(REPO_ROOT, 'scripts', 'control-wmux.mjs');
@@ -89,6 +98,9 @@ const envFile = path.join(runDir, 'app-env.json');
 const realHome = os.homedir();
 const realAppData = process.env.APPDATA;
 const realLocalAppData = process.env.LOCALAPPDATA;
+// Suffixed paths outside the sandbox that already exist before anything runs.
+// Preflight refuses to start over them; teardown never deletes them.
+const preExistingOutside = outsideSandboxPaths().filter((p) => fs.existsSync(p));
 
 const driverEnv = sandboxEnv(process.env, { home: sandbox, fakeBin });
 // The driver keeps its state and evidence in this run's folder.
@@ -191,23 +203,58 @@ function readPid(file) {
   }
 }
 
-function appPid() {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(runDir, '.run', 'state.json'), 'utf8')).pid ?? null;
-  } catch {
-    return null;
-  }
-}
-
 const daemonPidFile = path.join(sandbox, `.wmux${suffix}`, 'daemon.pid');
 let recordedTree = [];
+/**
+ * The two roots of everything this run started, each pinned once as pid AND
+ * creation time ({ ProcessId, CreationDate }): the app as control-wmux
+ * recorded it right after spawn, the daemon when it is first tied to the app
+ * (adoptDaemon). Only these, while still the same process, are ever expanded.
+ */
+const identities = { app: null, daemon: null };
+
+/** Pin the app's identity from control-wmux's state (written at spawn). */
+function pinApp() {
+  if (identities.app) return;
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(runDir, '.run', 'state.json'), 'utf8'));
+    if (Number.isInteger(state.pid) && state.pid > 0 && state.pidCreatedAt != null) {
+      identities.app = { ProcessId: state.pid, CreationDate: state.pidCreatedAt, Name: 'app' };
+    }
+  } catch { /* not launched yet */ }
+}
+
+/** The environment of a same-user process as text, or '' (POSIX only). */
+function processEnvText(pid) {
+  return new Promise((resolve) => {
+    if (process.platform === 'linux') {
+      fs.readFile(`/proc/${pid}/environ`, 'utf8', (err, text) => resolve(err ? '' : text));
+    } else if (process.platform === 'darwin') {
+      execFile('ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='], { timeout: 15_000 }, (err, stdout) => resolve(err ? '' : stdout));
+    } else resolve('');
+  });
+}
+
+/** Is the recorded app identity still the live process holding its pid? */
+function appAliveIn(rows) {
+  return !!identities.app && survivors([identities.app], rows).length === 1;
+}
 
 /** Add the app's and the daemon's current trees to the record. */
 async function recordTree() {
   const rows = await listProcesses();
   if (!rows) return;
-  const roots = [appPid(), readPid(daemonPidFile)].filter(Boolean);
-  recordedTree = mergeTrees(recordedTree, runProcessTree(rows, roots));
+  pinApp();
+  recordedTree = mergeTrees(recordedTree, runProcessTree(rows, [identities.app, identities.daemon]));
+  if (!identities.daemon) {
+    const daemonPid = readPid(daemonPidFile);
+    const envOwned = !WIN && daemonPid ? envHasSuffix(await processEnvText(daemonPid), suffix) : false;
+    const daemon = adoptDaemon({ daemonPid, rows, app: identities.app, recordedTree, envOwned });
+    if (daemon) {
+      identities.daemon = { ProcessId: daemon.ProcessId, CreationDate: daemon.CreationDate, Name: daemon.Name };
+      recordedTree = mergeTrees(recordedTree, runProcessTree(rows, [identities.daemon]));
+    }
+  }
 }
 
 function killPid(pid) {
@@ -223,7 +270,8 @@ function killPid(pid) {
 // ---------------------------------------------------------------- evidence
 async function saveFailureEvidence() {
   const saved = {};
-  if (appPid()) {
+  pinApp();
+  if (identities.app) {
     const shot = await cw(['screenshot', '--as', 'failure'], { timeoutMs: 30_000 });
     saved.screenshot = shot.ok ? shot.path : `unavailable: ${shot.reason || shot.error}`;
     const snap = await cw(['snapshot', '--as', 'failure'], { timeoutMs: 30_000 });
@@ -277,10 +325,24 @@ function suffixedPipes() {
 async function teardown() {
   const report = { problems: [] };
   await recordTree();
+  report.identities = { app: identities.app, daemon: identities.daemon };
   report.recordedProcesses = recordedTree.length;
   if (fs.existsSync(path.join(runDir, '.run', 'state.json'))) {
-    const stop = await cw(['stop', '--purge'], { timeoutMs: 90_000 });
-    report.stop = { ok: stop.ok, steps: stop.steps, leftover: stop.leftover, error: stop.error };
+    // `stop` signals the app by pid. Only while the recorded app is still
+    // that pid's process; otherwise straight to the identity-checked sweep.
+    const rows = await listProcesses();
+    if (rows && appAliveIn(rows)) {
+      const stop = await cw(['stop', '--purge'], { timeoutMs: 90_000 });
+      report.stop = { ok: stop.ok, steps: stop.steps, leftover: stop.leftover, error: stop.error };
+    } else {
+      report.stop = { skipped: rows ? 'the recorded app is no longer running (pid gone or reused)' : 'could not list processes' };
+    }
+  }
+  if (!identities.app && fs.existsSync(path.join(runDir, '.run', 'state.json'))) {
+    report.problems.push('the launched app has no recorded identity (pid + creation time); its processes could not be tracked');
+  }
+  if (identities.app && !identities.daemon) {
+    report.problems.push(`the daemon was never tied to this run (pid file ${readPid(daemonPidFile) ?? 'missing'}); its processes could not be tracked`);
   }
   // Anything of ours still alive after the driver's stop: wait a moment for
   // ordinary exits, then kill by pid + creation time, and count it as a leak.
@@ -306,6 +368,7 @@ async function teardown() {
     const rows = await listProcesses();
     const still = rows ? survivors(alive, rows) : alive;
     report.killedAfterStop = alive.length - still.length;
+    report.killed = alive.filter((r) => !still.includes(r)).map((r) => ({ pid: r.ProcessId, createdAt: r.CreationDate, name: r.Name }));
     if (still.length) report.problems.push(`could not kill ${still.map((r) => `${r.Name}#${r.ProcessId}`).join(', ')}`);
   }
   report.processesLeft = 0;
@@ -315,11 +378,12 @@ async function teardown() {
   }
 
   // Data: the sandbox goes entirely; nothing suffixed may exist outside it.
-  const outside = outsideSandboxPaths().filter((p) => fs.existsSync(p));
+  // Only what appeared during this run is deleted: a path that existed at
+  // preflight is someone else's, whatever its name.
+  const outside = removableLeftovers(outsideSandboxPaths().filter((p) => fs.existsSync(p)), preExistingOutside);
   if (outside.length) {
     report.problems.push(`suffixed data outside the sandbox: ${outside.join(', ')}`);
     for (const p of outside) {
-      // Ours by construction: the suffix is unique to this run.
       try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* reported above */ }
     }
   }
@@ -335,7 +399,7 @@ async function teardown() {
     }
     report.sandboxRemoved = !fs.existsSync(sandbox);
   }
-  report.suffixedDataLeft = outsideSandboxPaths().filter((p) => fs.existsSync(p));
+  report.suffixedDataLeft = removableLeftovers(outsideSandboxPaths().filter((p) => fs.existsSync(p)), preExistingOutside);
   // Agent configs and the MCP bundle are not per-suffix: a write to them
   // outside the sandbox would have touched the owner's real setup.
   if (result.evidenceDir) {
@@ -351,6 +415,15 @@ async function teardown() {
 async function scenario() {
   await step('preflight', async () => {
     if (!fs.existsSync(app)) throw new StepError(`app executable not found: ${app}`);
+    // Through junctions too: the real location decides.
+    const installed = squirrelInstallRefusal(app, realLocalAppData) || squirrelInstallRefusal(fs.realpathSync.native(app), realLocalAppData);
+    if (installed) throw new StepError(installed);
+    // The suffix must be new: data under it outside the sandbox, or a pipe
+    // (which no file check sees), belongs to something this run did not start.
+    const pipes = suffixedPipes();
+    if (preExistingOutside.length || pipes.length) {
+      throw new StepError(`suffix ${suffix} is already in use (${[...preExistingOutside, ...pipes.map((n) => `pipe ${n}`)].join(', ')}); pick another --suffix or none`);
+    }
     fs.mkdirSync(fakeBin, { recursive: true });
     for (const f of fakeAgentShims({ node: process.execPath, fixturesDir: FIXTURES })) {
       fs.writeFileSync(path.join(fakeBin, f.name), f.content, f.mode ? { mode: f.mode } : undefined);
@@ -381,6 +454,9 @@ async function scenario() {
 
   await step('wizard opens', async () => {
     await must(['wait-settle', '--testid', 'first-run-wizard', '--quiet', '0', '--timeout', '60000'], { timeoutMs: 90_000 });
+    // By now the app has started its daemon: tie it to the run while the app
+    // is alive, so a daemon that outlives an early app exit is still ours.
+    await recordTree();
   });
 
   await step('Claude card ready', async () => {

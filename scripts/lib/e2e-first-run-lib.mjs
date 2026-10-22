@@ -6,6 +6,7 @@
 // No shebang: a vitest test imports this file.
 import path from 'node:path';
 import { collectProcessTree, parseCimDate } from '../perf-process-tree.mjs';
+import { parseLstart } from './control-wmux-lib.mjs';
 
 /** Agent statuses that mean the agent is at rest at its prompt (shared/types AgentStatus). */
 export const SETTLED_AGENT_STATUSES = new Set(['idle', 'waiting', 'complete', 'awaiting_input']);
@@ -47,6 +48,9 @@ function keyOf(env, name) {
  *     finds (it skips `.cmd`; src/main/claude/resolveClaudeExecutable.ts).
  *   - POSIX: HOME is the sandbox, and the XDG base dirs go so they derive
  *     from it.
+ *   - Both: CODEX_HOME points into the sandbox. control-wmux's scrub keeps
+ *     it (it drops only WMUX_* and CLAUDE*), so an owner's CODEX_HOME would
+ *     otherwise lead the app to their real Codex config.
  */
 export function sandboxEnv(baseEnv, { home, fakeBin, platform = process.platform }) {
   const env = { ...baseEnv };
@@ -60,6 +64,7 @@ export function sandboxEnv(baseEnv, { home, fakeBin, platform = process.platform
     for (const k of Object.keys(env)) if (k.toUpperCase() === name) delete env[k];
   };
   set('HOME', home);
+  set('CODEX_HOME', p.join(home, '.codex'));
   if (win) {
     set('USERPROFILE', home);
     set('APPDATA', p.join(home, 'AppData', 'Roaming'));
@@ -187,12 +192,12 @@ export function normalizeProcessRows(raw, platform = process.platform) {
     // pid ppid Dow Mon DD HH:MM:SS YYYY args...
     const m = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
     if (!m) continue;
-    const started = Date.parse(m[3].replace(/\s+/g, ' '));
     rows.push({
       ProcessId: Number(m[1]),
       ParentProcessId: Number(m[2]),
       Name: path.posix.basename(m[4].split(' ')[0] || ''),
-      CreationDate: Number.isFinite(started) ? started : null,
+      // The same parser control-wmux records the app's creation time with.
+      CreationDate: parseLstart(m[3]),
       CommandLine: m[4],
     });
   }
@@ -204,10 +209,69 @@ export function normalizeProcessRows(raw, platform = process.platform) {
  * daemon is spawned detached, and its panes hang off it). Rows are kept with
  * their creation time, which is what makes a later kill safe against pid
  * reuse.
+ *
+ * `roots` are identities ({ ProcessId, CreationDate }) pinned when the run
+ * started each process, never bare pids: a root expands only while the
+ * process holding its pid is still the one recorded. After the app or daemon
+ * dies its pid can be reused, and expanding a bare pid would record the
+ * stranger and its whole subtree for the kill sweep. collectProcessTree checks
+ * creation time on every parent-to-child edge, but not on the root itself.
  */
 export function runProcessTree(rows, roots) {
-  const { pids } = collectProcessTree(rows, roots.filter((p) => Number.isInteger(p) && p > 0));
+  const live = survivors(roots.filter(Boolean), rows).map((r) => r.ProcessId);
+  const { pids } = collectProcessTree(rows, live);
   return rows.filter((r) => pids.has(r.ProcessId));
+}
+
+/**
+ * The daemon's identity (its row in `rows`), pinned the first time it can be
+ * tied to this run; null until then. `daemonPid` comes from the pid file in
+ * the sandbox, which only names a pid, so one of these must also hold:
+ *   - its pid AND creation time are already in `recordedTree`, the tree
+ *     expanded from the verified app (it was seen as the app's child);
+ *   - its parent pid is the recorded app's, it was created after the app,
+ *     and no other process holds the app's pid now (Windows keeps a dead
+ *     parent's pid on its children, so this still works after the app exits);
+ *   - `envOwned`: its own environment carries this run's suffix (POSIX: a
+ *     macOS daemon runs as a launchd job, never the app's child).
+ */
+export function adoptDaemon({ daemonPid, rows, app, recordedTree = [], envOwned = false }) {
+  if (!Number.isInteger(daemonPid) || daemonPid <= 0) return null;
+  const row = rows.find((r) => r.ProcessId === daemonPid);
+  if (!row || row.CreationDate == null) return null;
+  if (survivors(recordedTree, [row]).length === 1) return row;
+  if (app && app.CreationDate != null && row.ParentProcessId === app.ProcessId && row.CreationDate >= app.CreationDate) {
+    const holder = rows.find((r) => r.ProcessId === app.ProcessId);
+    if (!holder || holder.CreationDate === app.CreationDate) return row;
+  }
+  return envOwned ? row : null;
+}
+
+/**
+ * The suffixed paths outside the sandbox that teardown may delete: those that
+ * exist now and did NOT exist at preflight. A path that was already there is
+ * someone else's data (another run, or a hand-picked --suffix), never ours.
+ */
+export function removableLeftovers(existingNow, preExisting) {
+  const pre = new Set(preExisting);
+  return existingNow.filter((p) => !pre.has(p));
+}
+
+/**
+ * Refuse an `--app` inside the Squirrel install root (%LOCALAPPDATA%\wmux:
+ * Update.exe, the stub wmux.exe, app-X.Y.Z\wmux.exe). The installed app runs
+ * the post-install reconcile on boot, which can rewrite the user PATH, the
+ * autostart entry and shortcuts (src/main/postInstallReconcile.ts), whatever
+ * the data suffix. Case-insensitive, as Windows paths are.
+ */
+export function squirrelInstallRefusal(app, localAppData, platform = process.platform) {
+  if (platform !== 'win32' || !app || !localAppData) return null;
+  const root = path.win32.join(localAppData, 'wmux');
+  const rel = path.win32.relative(root, app);
+  if (rel && !rel.startsWith('..') && !path.win32.isAbsolute(rel)) {
+    return `refusing --app ${app}: it is the installed wmux (under ${root}), whose boot reconciles the real PATH, autostart and shortcuts; pass a packaged build such as out\\wmux-win32-x64\\wmux.exe`;
+  }
+  return null;
 }
 
 /** Merge tree snapshots taken at different moments, one row per pid+start. */
