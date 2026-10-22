@@ -1552,17 +1552,31 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
   /**
    * The ACTIVE dialog on the pane's screen, or null. Read a few times: the
    * PermissionRequest hook can land before the dialog is drawn.
+   *
+   * With no active dialog on any read, an ExitPlanMode dialog the parser does
+   * not read as active (its footer wrapped onto a third row, a status row
+   * drawn under it) is returned instead. The record built from it names
+   * ExitPlanMode and is never answerable, so typed keys stay locked: a record
+   * that names no tool would let a lone Enter land on the dialog's first row,
+   * which switches the session's permission mode.
    */
   private async readDialogForCreation(sessionId: string): Promise<DialogRead | null> {
     if (!this.deps.readPromptScreen) return null;
     const delay = this.deps.promptReadDelay
       ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms).unref?.(); }));
+    let shownPlan: DialogRead | null = null;
     for (let attempt = 1; attempt <= TERMINAL_PROMPT_CREATE_READS; attempt++) {
-      const read = await this.readActiveDialog(sessionId);
-      if (read) return read;
+      const readAt = this.now();
+      const screen = await this.readPromptScreenSafely(sessionId);
+      const read = screen ? this.parseActiveDialog(screen) : null;
+      if (read) return { ...read, readAt };
+      const plan = screen ? parsePlanPrompt(screen.rows, screen.cols ? { cols: screen.cols } : {}) : null;
+      if (screen && plan) {
+        shownPlan = { parsed: plan, mark: screen.mark, ...(screen.cols ? { cols: screen.cols } : {}), height: screen.rows.length, readAt };
+      }
       if (attempt < TERMINAL_PROMPT_CREATE_READS) await delay(TERMINAL_PROMPT_CREATE_READ_GAP_MS);
     }
-    return null;
+    return shownPlan;
   }
 
   /** One screen read, parsed. Outside the mutation chain: a render can take seconds. */
