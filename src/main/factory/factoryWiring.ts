@@ -56,7 +56,7 @@ import type { BotGroup } from '../../shared/botGroup';
 import type { RoomCard, ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
 import type { FactorySettings } from '../../shared/factorySettings';
-import { ROOM_LIMITS, dmThreadBot, dmThreadId, isGuestSourcedCard, parseThreadId, taskThreadOf } from '../../shared/room';
+import { ROOM_LIMITS, dmThreadBot, dmThreadId, inAnotherBotsDm, isGuestSourcedCard, parseThreadId, taskThreadOf } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { getFactLog, type FactLog } from './factLog';
 import { currentWakeItem, currentWakeThread, getWakeQueue } from './wakeQueue';
@@ -847,7 +847,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
 
   const contextPorts = (dmReader: string): WakeContextPorts => ({
     cards: (workspaceId, threadId, limit, sinceSeq) => wakeRoomCards(getRoomWriter(), workspaceId, threadId, limit, sinceSeq, dmReader),
-    findCard: (workspaceId, match) => getRoomWriter()?.find(workspaceId, match) ?? null,
+    findCard: (workspaceId, match) => getRoomWriter()?.find(workspaceId, (c) => !inAnotherBotsDm(c.threadId, dmReader) && match(c)) ?? null,
     approvals: (workspaceId) => getApprovalService()?.listForOperator(workspaceId) ?? [],
     botName: (botId) => getBotDirectory()?.get(botId)?.name || null,
     uiLocale: uiLocaleNow,

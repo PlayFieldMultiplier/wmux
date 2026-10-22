@@ -5,7 +5,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RpcContext } from '../../../../shared/rpc';
-import type { BotBinding } from '../../../../shared/bot';
 import { factDedupeKey, type FactDraft } from '../../../../shared/facts';
 
 vi.mock('../../../deck/taskLedgerHost', () => ({
@@ -19,6 +18,9 @@ import { RpcRouter } from '../../RpcRouter';
 import { mintBotToken, revokeCommanderToken } from '../../../deck/commanderTrust';
 import { __resetGuestWorkspacesForTesting, noteGuestRecordWorkspaces } from '../../../factory/guestWorkspaces';
 import { botSeesFact } from '../../../factory/triggerEngine';
+import { fireMorningReport } from '../../../factory/morningReport';
+import { RoomWriter } from '../../../factory/roomWriter';
+import { DEFAULT_BOT_BUDGETS, type BotBinding, type BotProfile } from '../../../../shared/bot';
 
 const LEAD: BotBinding = { workspaceId: 'ws-a', botId: 'bot-0000000a', role: 'lead' };
 const MOA: BotBinding = { workspaceId: 'ws-hq', botId: 'bot-0000000c', role: 'moa' };
@@ -76,6 +78,37 @@ describe('fact.poll', () => {
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(MOA), () => null, coordinator, () => () => true))).toEqual([2]);
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, bot(LEAD), () => null, coordinator, () => () => true))).toEqual([1, 2]);
     expect(ids(await handleFactPoll(log, { sinceSeq: 0 }, OPERATOR))).toEqual([1, 2]);
+  });
+
+  it('the morning report fact carries no 1:1 thread titles: no bot in its workspace, and no other Coordinator, reads one', async () => {
+    const profile = (id: string, workspaceId: string, template: 'coordinator' | 'developer', createdAt: number): BotProfile => ({
+      version: 1, id, workspaceId, role: template === 'coordinator' ? 'moa' : 'lead', template, name: id, engine: { kind: 'claude-sdk' }, triggers: [],
+      budget: { ...DEFAULT_BOT_BUDGETS.lead }, enabled: true, createdAt, updatedAt: 1,
+    });
+    const hq = profile(MOA.botId, 'ws-hq', 'coordinator', 1);
+    const peer = profile('bot-0000000e', 'ws-hq', 'developer', 2);
+    const other = profile('bot-0000000f', 'ws-x', 'coordinator', 3);
+    const all = [hq, peer, other];
+    const writer = new RoomWriter({ dir: path.join(dir, 'rooms') });
+    writer.append({ workspaceId: 'ws-hq', threadId: `dm:${hq.id}`, kind: 'human', actor: { kind: 'human' }, title: 'PRIVATE TO THE COORDINATOR' });
+    writer.append({ workspaceId: 'ws-hq', threadId: `dm:${peer.id}`, kind: 'human', actor: { kind: 'human' }, title: 'PRIVATE TO THE PEER' });
+    writer.append({ workspaceId: 'ws-hq', threadId: 'pr:github.com/o/a#1', kind: 'status', actor: { kind: 'system' }, title: 'a public thread' });
+    const fired = await fireMorningReport('morning', {
+      factLog: () => log,
+      bots: () => ({ listEnabled: () => all, get: (id: string) => all.find((b) => b.id === id) ?? null }) as never,
+      rooms: () => writer,
+      trust: async () => ({ ok: false, message: 'none' }) as never,
+      repoKeyOf: async () => null,
+    });
+    expect(fired).toMatchObject({ ok: true });
+    const coordinator = (id: string) => id === hq.id || id === other.id;
+    const readers: BotBinding[] = [{ workspaceId: 'ws-hq', botId: peer.id, role: 'lead' }, { workspaceId: 'ws-x', botId: other.id, role: 'moa' }, MOA];
+    for (const reader of readers) {
+      const r = await handleFactPoll(log, { sinceSeq: 0 }, bot(reader), () => null, coordinator, () => () => true) as { facts: unknown[] };
+      const text = JSON.stringify(r.facts);
+      expect(text, reader.botId).toContain('a public thread');
+      expect(text, reader.botId).not.toContain('PRIVATE');
+    }
   });
 
   it('the island: the Coordinator reads no guest workspace\'s facts, a guest workspace\'s bot only its own; the operator all', async () => {

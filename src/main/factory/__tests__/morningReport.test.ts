@@ -86,6 +86,18 @@ describe('morning report', () => {
     expect(JSON.parse(snap[0])).toMatchObject({ at: NOW, repoKey: 'github.com/o/a', totals: { merged: 9 } });
   });
 
+  it('a 1:1 with the owner counts as an open thread, but no 1:1 title is listed, the Coordinator\'s own included', async () => {
+    const r = rig();
+    r.writer.append({ workspaceId: 'ws-a', threadId: 'dm:bot-00000002', kind: 'human', actor: { kind: 'human' }, title: 'Q3 revenue is 4.2M' });
+    r.writer.append({ workspaceId: 'ws-a', threadId: 'pr:github.com/o/a#12', kind: 'status', actor: { kind: 'system' }, title: 'blocked on checks' });
+    r.writer.append({ workspaceId: 'ws-hq', threadId: 'dm:bot-00000001', kind: 'human', actor: { kind: 'human' }, title: 'plan the week' });
+    const d = await buildMorningData(r.ports);
+    expect(d.rooms.find((x) => x.workspaceId === 'ws-a')).toMatchObject({ openThreads: 2, newest: [{ threadId: 'pr:github.com/o/a#12', title: 'blocked on checks' }] });
+    expect(JSON.stringify(d)).not.toContain('Q3 revenue');
+    expect(d.rooms.find((x) => x.workspaceId === 'ws-hq')).toMatchObject({ openThreads: 1, newest: [] });
+    expect(JSON.stringify(d)).not.toContain('plan the week');
+  });
+
   it('fires ONE schedule.fired fact for the HQ workspace per schedule per day', async () => {
     const r = rig();
     const first = await fireMorningReport('morning', r.ports);
