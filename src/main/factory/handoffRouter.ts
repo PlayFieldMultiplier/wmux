@@ -333,6 +333,7 @@ export function parseHandoff(raw: unknown): Handoff | null {
     ...(h.relayStopTold === true ? { relayStopTold: true as const } : {}),
     ...(h.kind === 'dispatch' && h.opensThread === true ? { opensThread: true as const } : {}),
     ...(h.kind === 'dispatch' && h.opensThread === true ? storedOpenedIn(h.openedIn) : {}),
+    ...(h.kind === 'dispatch' && h.opensThread !== true ? storedAskedIn(h.askedIn) : {}),
     ...((h.kind === 'result' || h.kind === 'refusal') && h.pointed === true ? { pointed: true as const } : {}),
     createdAt: h.createdAt,
     updatedAt: h.updatedAt,
@@ -343,6 +344,12 @@ export function parseHandoff(raw: unknown): Handoff | null {
 function storedOpenedIn(raw: unknown): { openedIn?: ThreadId } {
   const t = parseThreadId(raw);
   return t && (dmThreadBot(t) || groupThreadGroup(t)) ? { openedIn: t } : {};
+}
+
+/** A stored `askedIn`: any room thread, or nothing. */
+function storedAskedIn(raw: unknown): { askedIn?: ThreadId } {
+  const t = parseThreadId(raw);
+  return t ? { askedIn: t } : {};
 }
 
 /** A stored `next`: distinct bot ids, at most MAX_RELAY, or nothing. */
@@ -888,6 +895,13 @@ export class HandoffRouter {
       draft.opensThread = true;
       if (ownDm || inGroup) draft.openedIn = saidIn;
     }
+    // Work on the owner's message sent into another subject's thread (the
+    // bot named a PR's): where the owner asked, as the message's own card
+    // says — the thread that gets the pointer to the work once it is done.
+    if (kind === 'dispatch' && !parent && draft.opensThread !== true && ownerRun && delegatesFromConversation(senderProfile)) {
+      const askedIn = this.ownerCardThread(sender.workspaceId, ownerRun);
+      if (askedIn && askedIn !== draft.threadId) draft.askedIn = askedIn;
+    }
 
     if (!surfaceAllows(sender, 'handoff_send')) return this.refuse(draft, 'surface', 'the bot surface has no handoff_send');
     if (spec.replyTo && !parent) return this.refuse(draft, 'no_addressee', `no handoff ${spec.replyTo} to reply to`);
@@ -1165,15 +1179,16 @@ export class HandoffRouter {
     if (how === 'finished' && (parent.next?.length ?? 0) > 0) return;
     const root = this.rootOf(parent);
     // Only a thread this router opened for a coordinator's work in General
-    // or its 1:1 (or a lead bot's, delegatesFromConversation).
-    if (root.kind !== 'dispatch' || root.from.kind !== 'bot' || root.opensThread !== true) return;
+    // or its 1:1 (or a lead bot's, delegatesFromConversation), or work on
+    // the owner's message sent into another thread (askedIn).
+    if (root.kind !== 'dispatch' || root.from.kind !== 'bot' || (root.opensThread !== true && !root.askedIn)) return;
     if (!delegatesFromConversation(safeGet(this.opts.ports().bots, root.from.botId))) return;
     const rooms = this.opts.rooms();
     const ws = root.from.workspaceId;
     if (!rooms) return;
     // A card written before its mark was (a stop between the two): only the
     // mark is repaired.
-    const saidIn = root.openedIn ?? GENERAL_THREAD;
+    const saidIn = root.opensThread === true ? root.openedIn ?? GENERAL_THREAD : root.askedIn ?? GENERAL_THREAD;
     const written = rooms.find(ws, (c) => c.threadId === saidIn && c.actor.kind === 'system' && c.refs?.handoffId === result.id && c.refs?.threadId === root.threadId);
     const ownerCardId = humanCardIdOfRun(root.runId);
     const ownerCard = ownerCardId ? rooms.get(ws, ownerCardId) : null;
@@ -1184,7 +1199,9 @@ export class HandoffRouter {
       actor: { kind: 'system' },
       title: `${how === 'stopped' ? 'Stopped' : 'Finished'}: ${root.payload.title}`,
       notice: { code: how === 'stopped' ? 'thread.stopped' : 'thread.finished', args: { title: root.payload.title } },
-      refs: { handoffId: result.id, threadId: root.threadId },
+      // Where the owner asked for work in a thread no conversation opened:
+      // marked, so the pointer does not tie that thread to this one.
+      refs: { handoffId: result.id, threadId: root.threadId, ...(root.opensThread !== true ? { pointer: 'askedIn' as const } : {}) },
       ...(this.guestOf(root) || this.guestOf(result) ? { origin: 'guest' as const } : {}),
     }, ownerCard && ownerCard.threadId === saidIn && ownerCard.kind === 'human' ? { replyTo: ownerCard.id } : undefined);
     // Written once per result: the mark is on the result itself.
@@ -1447,6 +1464,17 @@ export class HandoffRouter {
     if (fact) return;
     const rooms = this.opts.rooms();
     if (rooms) writeFactCards(rooms, { ...draft, id: `local-${kind}-${h.id}`, seq: 0, dedupeKey: '' }, ports.bots);
+  }
+
+  /** The thread of the owner's card a run answers (humanRunId), or null. */
+  private ownerCardThread(workspaceId: string, runId: string): ThreadId | null {
+    const cardId = humanCardIdOfRun(runId);
+    try {
+      const card = cardId ? this.opts.rooms()?.get(workspaceId, cardId) : null;
+      return card && card.kind === 'human' && card.actor.kind === 'human' ? card.threadId : null;
+    } catch {
+      return null;
+    }
   }
 
   /** The owner's card a thread-opening dispatch answers (in General, or

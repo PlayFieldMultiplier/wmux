@@ -1,0 +1,658 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "coordinator-report-where-asked",
+  "run": 1,
+  "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-3bc621c5",
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Coordinator",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "hue": 5,
+    "enabled": true,
+    "createdAt": 1792606876823,
+    "updatedAt": 1792606876823
+   },
+   {
+    "version": 1,
+    "id": "bot-cfb0dcb9",
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "role": "verifier",
+    "template": "reviewer",
+    "name": "Reviewer",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "workerAgent": {
+     "agent": "claude",
+     "model": "opus"
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/x"
+    },
+    "hue": 2,
+    "enabled": true,
+    "createdAt": 1792606876833,
+    "updatedAt": 1792606876833
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-3bc621c5",
+   "reviewer": "bot-cfb0dcb9"
+  },
+  "injected": [
+   {
+    "label": "ask",
+    "kind": "card",
+    "id": "c-mvifumjq05faff7dab",
+    "threadId": "general",
+    "at": 1792606876836
+   }
+  ],
+  "actions": [
+   {
+    "at": 1792606876836,
+    "do": "post",
+    "label": "ask",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mvifumjq05faff7dab",
+      "seq": 1,
+      "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1792606876838,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Is PR #42 good to go?",
+      "refs": {
+       "botId": "bot-3bc621c5",
+       "botIds": [
+        "bot-3bc621c5"
+       ]
+      },
+      "routed": {
+       "lead": "bot-3bc621c5"
+      }
+     },
+     "addressee": {
+      "botId": "bot-3bc621c5",
+      "role": "moa"
+     },
+     "wakeId": "w-mvifumjr-333dff69",
+     "addressees": [
+      {
+       "botId": "bot-3bc621c5",
+       "role": "moa",
+       "wakeId": "w-mvifumjr-333dff69"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1792606876845,
+    "do": "waitFor",
+    "label": "lead reported",
+    "ok": true,
+    "doneAt": 1792606887405
+   },
+   {
+    "at": 1792606887406,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1792606892440
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mvifumjq-99ca85d60e7f",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1792606876838,
+    "dedupeKey": "human.message:c-mvifumjq05faff7dab:bot-3bc621c5",
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "ref": {
+     "botId": "bot-3bc621c5",
+     "messageId": "c-mvifumjq05faff7dab:bot-3bc621c5"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Is PR #42 good to go?",
+     "cardId": "c-mvifumjq05faff7dab",
+     "threadId": "general",
+     "source": "desktop",
+     "lead": true
+    }
+   },
+   {
+    "id": "f-0mvifuqjx-5091672527ca",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1792606882029,
+    "dedupeKey": "handoff.received:h-mvifuqjt364fa7322357",
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "ref": {
+     "handoffId": "h-mvifuqjt364fa7322357",
+     "botId": "bot-cfb0dcb9"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-3bc621c5"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Verify PR #42",
+     "threadId": "pr:github.com/acme/app#42",
+     "runId": "run-c-mvifumjq05faff7dab",
+     "depth": 0,
+     "hopsInRun": 1,
+     "fromLabel": "Coordinator",
+     "toLabel": "Reviewer",
+     "fromWorkspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+     "toWorkspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb"
+    }
+   },
+   {
+    "id": "f-0mvifuuk5-6af45890fbdb",
+    "seq": 3,
+    "kind": "handoff.received",
+    "at": 1792606887221,
+    "dedupeKey": "handoff.received:h-mvifuuk1f48f42d0b81b",
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "ref": {
+     "handoffId": "h-mvifuuk1f48f42d0b81b",
+     "botId": "bot-3bc621c5"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-cfb0dcb9"
+    },
+    "payload": {
+     "handoffKind": "result",
+     "title": "PR #42 passes",
+     "threadId": "pr:github.com/acme/app#42",
+     "runId": "run-c-mvifumjq05faff7dab",
+     "depth": 1,
+     "hopsInRun": 2,
+     "fromLabel": "Reviewer",
+     "toLabel": "Coordinator",
+     "fromWorkspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+     "toWorkspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mvifumjr-333dff69",
+    "botId": "bot-3bc621c5",
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "reason": {
+     "kind": "human",
+     "text": "Is PR #42 good to go?",
+     "source": "desktop",
+     "clientMessageId": "c-mvifumjq05faff7dab",
+     "runId": "run-c-mvifumjq05faff7dab",
+     "lead": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1792606876839,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvifuqju-41fc00c5",
+    "botId": "bot-cfb0dcb9",
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mvifuqjt364fa7322357"
+    },
+    "threadId": "pr:github.com/acme/app#42",
+    "priority": 1,
+    "enqueuedAt": 1792606882026,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvifuuk2-94adfae9",
+    "botId": "bot-3bc621c5",
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mvifuuk1f48f42d0b81b"
+    },
+    "threadId": "pr:github.com/acme/app#42",
+    "priority": 1,
+    "enqueuedAt": 1792606887218,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mvifuqjt364fa7322357",
+    "runId": "run-c-mvifumjq05faff7dab",
+    "threadId": "pr:github.com/acme/app#42",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+     "botId": "bot-3bc621c5"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+     "botId": "bot-cfb0dcb9"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Verify PR #42",
+     "body": "Pass or fail at the head."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mvifumjr-333dff69:h1",
+    "guestSourced": false,
+    "createdAt": 1792606882025,
+    "updatedAt": 1792606882028,
+    "askedIn": "general"
+   },
+   {
+    "version": 1,
+    "id": "h-mvifuuk1f48f42d0b81b",
+    "runId": "run-c-mvifumjq05faff7dab",
+    "threadId": "pr:github.com/acme/app#42",
+    "depth": 1,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+     "botId": "bot-cfb0dcb9"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+     "botId": "bot-3bc621c5"
+    },
+    "kind": "result",
+    "replyTo": "h-mvifuqjt364fa7322357",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mvifuqjt364fa7322357"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "PR #42 passes",
+     "body": "The gate exited 0 at the head."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mvifuqju-41fc00c5:h1",
+    "guestSourced": false,
+    "createdAt": 1792606887218,
+    "updatedAt": 1792606887221,
+    "pointed": true
+   }
+  ],
+  "repoWatch": null,
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mvifumjq05faff7dab",
+    "seq": 1,
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1792606876838,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Is PR #42 good to go?",
+    "refs": {
+     "botId": "bot-3bc621c5",
+     "botIds": [
+      "bot-3bc621c5"
+     ]
+    },
+    "routed": {
+     "lead": "bot-3bc621c5"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mvifuqjx473564dbfb",
+    "seq": 2,
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "threadId": "pr:github.com/acme/app#42",
+    "kind": "fact",
+    "at": 1792606882029,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch \u2192 Reviewer: Verify PR #42",
+    "refs": {
+     "botId": "bot-cfb0dcb9",
+     "handoffId": "h-mvifuqjt364fa7322357",
+     "factId": "f-0mvifuqjx-5091672527ca"
+    },
+    "notice": {
+     "code": "handoff.sent",
+     "args": {
+      "hop": "dispatch",
+      "to": "Reviewer",
+      "title": "Verify PR #42"
+     }
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mvifuuk22a08da8303",
+    "seq": 3,
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "threadId": "general",
+    "kind": "fact",
+    "at": 1792606887218,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "Finished: Verify PR #42",
+    "refs": {
+     "handoffId": "h-mvifuuk1f48f42d0b81b",
+     "threadId": "pr:github.com/acme/app#42"
+    },
+    "notice": {
+     "code": "thread.finished",
+     "args": {
+      "title": "Verify PR #42"
+     }
+    },
+    "replyTo": "c-mvifumjq05faff7dab"
+   },
+   {
+    "version": 1,
+    "id": "c-mvifuuk4a496654239",
+    "seq": 4,
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "threadId": "pr:github.com/acme/app#42",
+    "kind": "report",
+    "at": 1792606887220,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+     "botId": "bot-3bc621c5"
+    },
+    "title": "PR #42 passed review",
+    "body": "Ready to merge once you approve.",
+    "clientPostId": "wake:w-mvifuuk2-94adfae9:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mvifuuk530a2f3b1f3",
+    "seq": 5,
+    "workspaceId": "ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb",
+    "threadId": "pr:github.com/acme/app#42",
+    "kind": "fact",
+    "at": 1792606887221,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "result \u2192 Coordinator: PR #42 passes",
+    "refs": {
+     "botId": "bot-3bc621c5",
+     "handoffId": "h-mvifuuk1f48f42d0b81b",
+     "factId": "f-0mvifuuk5-6af45890fbdb"
+    },
+    "notice": {
+     "code": "handoff.sent",
+     "args": {
+      "hop": "result",
+      "to": "Coordinator",
+      "title": "PR #42 passes"
+     }
+    }
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1792606882026,
+     "event": "tool",
+     "sessionId": "stub-a9cd2b6c6263",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mvifuqjt364fa7322357\",\n  \"status\": \"delivered\",\n  \"threadId\": \"pr:github.com/acme/app#42\",\n  \"to\": {\n    \"botId\": \"bot-cfb0dcb9\",\n    \"role\": \"verifier\",\n    \"workspaceId\": \"ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb\"\n  },\n  \"wakeId\": \"w-mvifuqju-41fc00c5\"\n}"
+    },
+    {
+     "at": 1792606887221,
+     "event": "tool",
+     "sessionId": "stub-a9cd2b6c6263",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mvifuuk4a496654239\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb\",\n    \"threadId\": \"pr:github.com/acme/app#42\",\n    \"kind\": \"report\",\n    \"at\": 1792606887220,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb\",\n      \"botId\": \"bot-3bc621c5\"\n    },\n    \"title\": \"PR #42 passed review\",\n    \"body\": \"Ready to merge once you approve.\",\n    \"clientPostId\": \"wake:w-mvifuuk2-94adfae9:1\"\n  }\n}"
+    }
+   ],
+   "reviewer": [
+    {
+     "at": 1792606887219,
+     "event": "tool",
+     "sessionId": "stub-451936801482",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mvifuuk1f48f42d0b81b\",\n  \"status\": \"delivered\",\n  \"threadId\": \"pr:github.com/acme/app#42\",\n  \"to\": {\n    \"botId\": \"bot-3bc621c5\",\n    \"role\": \"moa\",\n    \"workspaceId\": \"ws-ac5e369e-ccac-4bd2-8c53-82aa2247cfdb\"\n  },\n  \"wakeId\": \"w-mvifuuk2-94adfae9\"\n}"
+    }
+   ]
+  },
+  "workers": [],
+  "gh": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvals": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-21T18-21-14-verify-f9146953",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-21T18-21-14-verify-f9146953"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "main did not record where the owner asked",
+   "failing": [
+    "dispatch_in_pr_thread_asked_in_general"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "handoffs.0.askedIn"
+    }
+   ]
+  },
+  {
+   "why": "no pointer reached General",
+   "failing": [
+    "one_pointer_in_general",
+    "result_back_to_lead"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.2"
+    },
+    {
+     "op": "remove",
+     "path": "handoffs.1.pointed"
+    }
+   ]
+  },
+  {
+   "why": "the pointer does not reply to the owner's message",
+   "failing": [
+    "one_pointer_in_general"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.2.replyTo"
+    }
+   ]
+  },
+  {
+   "why": "the report landed in General instead of the PR thread",
+   "failing": [
+    "lead_reported_in_pr_thread"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "cards.3.threadId",
+     "value": "general"
+    }
+   ]
+  }
+ ]
+}

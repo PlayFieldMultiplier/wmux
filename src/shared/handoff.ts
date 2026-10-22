@@ -86,6 +86,12 @@ export interface Handoff {
    *  in; absent: General. The card pointing at the thread, and the owner's
    *  request it answers, are in that one. Main-written. */
   openedIn?: ThreadId;
+  /** dispatch that did not open its thread (the bot named another one, a
+   *  PR's or an issue's): the thread of the owner's message the work answers
+   *  (its run's card), when that is another thread. Main reads it from the
+   *  run at dispatch, never from the bot. The card pointing at the work's
+   *  thread lands there. Main-written. */
+  askedIn?: ThreadId;
   /** result / refusal: the card pointing at its thread (in General, or the
    *  1:1 or group it was opened from) is written. Main-written. */
   pointed?: true;

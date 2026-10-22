@@ -4344,7 +4344,11 @@ arrival order (`seq`, increasing; never sort by `at`).
   `actor: {kind:"system"}`, title `Finished: <title>` or `Stopped: <title>`,
   no body, `refs.threadId` (the work's thread, to open), `refs.handoffId`
   (the result it is about) and `replyTo` (the owner's `human` card that
-  asked, when that card is in `general`). One per result.
+  asked, when that card is in `general`). One per result. Work on the
+  owner's message that a coordinator sent into another subject's thread (a
+  PR's or an issue's) gets the same card in the thread the owner asked in,
+  `refs.threadId` naming that subject's thread (additive, 2026-10-22: no
+  field or route changed).
 
 Both routes are read-only and need `--allow-transcript` (card text is
 bot-authored), checked before anything else; no input grant. Every answer is

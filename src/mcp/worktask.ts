@@ -77,8 +77,8 @@ const CLOSE_REFUSAL: RefusalCopy = {
 const PR_REFUSAL: RefusalCopy = {
   nothing: 'No pull request was opened.',
   next: {
-    'gh-missing': 'the GitHub CLI (gh), which task_pr opens PRs with, is not installed on this machine; this is a human step (on a GitLab repository, the owner opens the MR)',
-    'gh-unauth': 'the GitHub CLI (gh), which task_pr opens PRs with, is not signed in; this is a human step (on a GitLab repository, the owner opens the MR)',
+    'gh-missing': 'the CLI task_pr opens it with (gh on GitHub, glab on GitLab) is not installed on this machine; this is a human step',
+    'gh-unauth': 'the CLI task_pr opens it with (gh on GitHub, glab on GitLab) is not signed in to the repository\'s host; this is a human step',
     dirty: "the worktree has uncommitted changes — they would not be in the PR; have the worker commit them",
     'no-origin': 'the repository has no origin remote; this is a human step',
   },
@@ -232,7 +232,7 @@ export function registerWorktaskTools(server: McpServer, deps: WorktaskToolDeps)
 
   server.tool(
     'task_pr',
-    'Push a task\'s branch and open its pull request with the GitHub CLI, returning { prUrl }. Refuses with a named reason when gh is missing or unauthenticated, when the worktree has uncommitted changes (they would not be in the PR), or when there is no origin remote. ' +
+    'Push a task\'s branch and open its pull request with the GitHub CLI, or its merge request with glab when origin is on GitLab, returning { prUrl } (on GitLab the MR page, plus mrIid: MR !n). Refuses with a named reason when the CLI is missing or unauthenticated (gh-missing / gh-unauth, for glab too), when the worktree has uncommitted changes (they would not be in the PR), or when there is no origin remote. ' +
       'Re-running after a partial failure converges on the existing PR rather than opening a second one.',
     {
       task_id: TASK_ID,

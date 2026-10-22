@@ -10,6 +10,7 @@
 // any backtick run inside it, so it cannot close its own block.
 
 import { botTemplate, isCoordinatorBot, type BotProfile, type BotTemplate } from '../../shared/bot';
+import { botRepo } from '../../shared/repoKey';
 import { effectiveJob } from './roles/templates';
 import type { Fact } from '../../shared/facts';
 import { isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
@@ -55,19 +56,24 @@ export interface WakeRosterEntry {
   template?: BotTemplate;
   /** The job's first line, at most ROSTER_JOB_MAX characters. */
   job?: string;
+  /** The repository the bot works on (its repo key, botRepo), when it
+   *  has one. */
+  repo?: string;
 }
 
 /** Longest job line a roster entry carries. */
 export const ROSTER_JOB_MAX = 80;
 
 /** A bot as the roster lists it. Pure. */
-export function rosterEntry(b: Pick<BotProfile, 'id' | 'name' | 'role' | 'job' | 'template'>): WakeRosterEntry {
+export function rosterEntry(b: Pick<BotProfile, 'id' | 'name' | 'role' | 'job' | 'template' | 'repo'>): WakeRosterEntry {
   const line = (b.job ?? '').split('\n').map((l) => l.trim()).find((l) => l.length > 0);
+  const repo = botRepo(b);
   return {
     botId: b.id,
     name: b.name || b.role,
     template: botTemplate(b),
     ...(line ? { job: line.length > ROSTER_JOB_MAX ? `${line.slice(0, ROSTER_JOB_MAX - 1)}…` : line } : {}),
+    ...(repo ? { repo: repo.repoKey } : {}),
   };
 }
 
@@ -517,6 +523,29 @@ export function buildWakePrompt(input: WakePromptInput): string {
     const jobs = roster.filter((b) => b.job).map((b) => `${oneLineName(b.name)}: ${b.job}`);
     if (jobs.length > 0) lines.push('What each of them does (their jobs as written):', fenceData(jobs.join('\n'), 'roster'));
   }
+  // A coordinator with no repository of its own: who in the workspace has
+  // one (every bot of it, the group's or not), so repository work goes to
+  // a bot that can do it instead of being refused.
+  if (isCoordinatorBot(profile) && !botRepo(profile)) {
+    const holders = (input.roster ?? []).filter((b) => b.repo);
+    if (holders.length > 0) {
+      // pr_read and the other reads resolve to one bot's repository
+      // (factoryRead.rpc.ts workspaceRepo): named only when there is one.
+      const one = new Set(holders.map((b) => b.repo)).size === 1;
+      lines.push(
+        '',
+        `You have no repository of your own; ${holders.map((b) => `${oneLineName(b.name)} (${b.botId}) works on ${b.repo}`).join(', ')}. `
+          + (one ? 'pr_read, issue_read and ci_read read that repository for you. ' : '')
+          + 'Work on a pull request, an issue or the code — a review, a fix, a merge request — goes with handoff_send to a bot that has the repository.',
+      );
+    } else {
+      lines.push(
+        '',
+        'No bot in this workspace has a repository, so nobody here can read or change a pull request, an issue or the code. '
+          + 'When the owner asks for such work, tell them so in one line and ask them to set a repository on a bot\'s profile; dispatch none of it.',
+      );
+    }
+  }
   const approvals = input.approvals ?? [];
   if (approvals.length > 0) {
     lines.push(
@@ -619,8 +648,12 @@ function ago(at: number, now: number): string {
   return `${Math.round(mins / 60)} h ago`;
 }
 
+/** `Name (template, repo host/owner/repo) = id`: the repository a bot works
+ *  on (a normalized key, botRepo) so the bot reading the roster can send
+ *  repository work to the bot that has that one. */
 function rosterLine(b: WakeRosterEntry): string {
-  return `${oneLineName(b.name)}${b.template ? ` (${b.template})` : ''} = ${b.botId}`;
+  const about = [b.template, b.repo ? `repo ${b.repo}` : undefined].filter(Boolean).join(', ');
+  return `${oneLineName(b.name)}${about ? ` (${about})` : ''} = ${b.botId}`;
 }
 
 function oneLineName(name: string): string {

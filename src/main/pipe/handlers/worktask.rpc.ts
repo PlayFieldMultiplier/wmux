@@ -66,6 +66,7 @@ import { workerGitPreflight } from '../../worktask/workerGit';
 import { hostCwdForPane } from '../../pty/wslCallerCwd';
 import { getExecEnv } from '../../../shared/execEnv';
 import { metaDirForWorktree } from '../../worktask/TaskWorktreeManager';
+import { parseRemoteKey } from '../../github/PrProvider';
 import type { TaskCloseService } from '../../worktask/TaskCloseService';
 import type { TaskPrService } from '../../worktask/TaskPrService';
 import type { TaskAdoptService } from '../../worktask/TaskAdoptService';
@@ -558,6 +559,14 @@ async function branchTip(exec: WorktaskExec, worktreePath: string | undefined): 
   return res.code === 0 ? res.stdout.trim() : '';
 }
 
+/** origin's push remote as `host/…/project` (the approval names it), `''`
+ *  when git could not answer or the URL names no project. */
+async function pushTarget(exec: WorktaskExec, worktreePath: string | undefined): Promise<string> {
+  if (!worktreePath) return '';
+  const res = await exec('git', ['remote', 'get-url', '--push', 'origin'], worktreePath);
+  return res.code === 0 ? parseRemoteKey(res.stdout) ?? '' : '';
+}
+
 /** The `%H\x1f%an\x1f%aI\x1f%s` lines `task.git.log` asks for. */
 export function parseGitLog(stdout: string): { hash: string; author: string; date: string; subject: string }[] {
   return stdout
@@ -862,11 +871,14 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
     // required to still be the tip afterwards; a moved branch is refused rather
     // than pushed, and the caller can ask again against what it can now see.
     const tipBefore = await branchTip(exec, task.worktreePath);
+    // Where it goes is part of what is approved: origin's push host/project,
+    // shown in the dialog and required to be unchanged afterwards too.
+    const targetBefore = await pushTarget(exec, task.worktreePath);
     const refused = await approve(
       'pr',
       workspaceId,
       task,
-      `push the branch ${task.branch} to its remote and open a pull request for it`,
+      `push the branch ${task.branch} to ${targetBefore || 'its remote'} and open a pull request for it`,
       { branchTip: tipBefore },
     );
     if (refused) return refused;
@@ -878,6 +890,14 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
           'so what was approved is not what would be pushed — read the new state and ask again',
       );
     }
+    const targetAfter = await pushTarget(exec, task.worktreePath);
+    if (targetBefore !== targetAfter) {
+      return deny(
+        'ABORTED',
+        `origin's push URL changed while the approval was on screen (${targetBefore || 'unknown'} → ${targetAfter || 'unknown'}), ` +
+          'so where it was approved to go is not where it would go — read the new state and ask again',
+      );
+    }
     const body = typeof params['body'] === 'string' ? params['body'] : undefined;
     return deps.pr.createPr({
       taskId: task.id,
@@ -886,6 +906,8 @@ export function registerWorktaskRpc(router: RpcRouter, deps: WorktaskRpcDeps): v
       branch: task.branch,
       title: task.title,
       ...(body !== undefined ? { body } : {}),
+      // The service re-reads it right before the push and refuses another.
+      pushTarget: targetBefore,
     });
   });
 

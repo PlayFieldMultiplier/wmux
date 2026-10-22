@@ -1,0 +1,473 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "coordinator-without-repo",
+  "run": 1,
+  "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+  "bots": [
+   {
+    "version": 1,
+    "id": "bot-fa763525",
+    "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+    "role": "moa",
+    "template": "coordinator",
+    "name": "Coordinator",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 1,
+     "maxWorkerHoursPerDay": 4,
+     "turnTimeoutMs": 600000
+    },
+    "hue": 5,
+    "enabled": true,
+    "createdAt": 1792606896103,
+    "updatedAt": 1792606896103
+   },
+   {
+    "version": 1,
+    "id": "bot-d6c3f098",
+    "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+    "role": "lead",
+    "template": "developer",
+    "name": "Developer",
+    "engine": {
+     "kind": "acp",
+     "command": "/home/owner/.local/node/bin/node",
+     "args": [
+      "/home/owner/Desktop/coding/wmux/wmux/scripts/acp-stub.mjs",
+      "--script",
+      "/tmp/x",
+      "--log",
+      "/tmp/x"
+     ]
+    },
+    "workerAgent": {
+     "agent": "claude",
+     "model": "opus"
+    },
+    "triggers": [],
+    "budget": {
+     "maxTurnsPerDay": 200,
+     "maxConcurrentWorkers": 3,
+     "maxWorkerHoursPerDay": 6,
+     "turnTimeoutMs": 600000
+    },
+    "repo": {
+     "repoKey": "github.com/acme/app",
+     "repoPath": "/tmp/x"
+    },
+    "hue": 2,
+    "enabled": true,
+    "createdAt": 1792606896107,
+    "updatedAt": 1792606896107
+   }
+  ],
+  "botKeys": {
+   "lead": "bot-fa763525",
+   "developer": "bot-d6c3f098"
+  },
+  "injected": [
+   {
+    "label": "ask",
+    "kind": "card",
+    "id": "c-mvifv1f154892719b5",
+    "threadId": "general",
+    "at": 1792606896108
+   }
+  ],
+  "actions": [
+   {
+    "at": 1792606896108,
+    "do": "post",
+    "label": "ask",
+    "result": {
+     "ok": true,
+     "card": {
+      "version": 1,
+      "id": "c-mvifv1f154892719b5",
+      "seq": 1,
+      "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+      "threadId": "general",
+      "kind": "human",
+      "at": 1792606896109,
+      "actor": {
+       "kind": "human"
+      },
+      "title": "Please get the failing test on PR #7 fixed.",
+      "refs": {
+       "botId": "bot-fa763525",
+       "botIds": [
+        "bot-fa763525"
+       ]
+      },
+      "routed": {
+       "lead": "bot-fa763525"
+      }
+     },
+     "addressee": {
+      "botId": "bot-fa763525",
+      "role": "moa"
+     },
+     "wakeId": "w-mvifv1f2-79953866",
+     "addressees": [
+      {
+       "botId": "bot-fa763525",
+       "role": "moa",
+       "wakeId": "w-mvifv1f2-79953866"
+      }
+     ]
+    }
+   },
+   {
+    "at": 1792606896115,
+    "do": "waitFor",
+    "label": "developer woken",
+    "ok": true,
+    "doneAt": 1792606906678
+   },
+   {
+    "at": 1792606906679,
+    "do": "waitFor",
+    "label": "quiet",
+    "ok": true,
+    "doneAt": 1792606911713
+   }
+  ],
+  "harnessErrors": [],
+  "facts": [
+   {
+    "id": "f-0mvifv1f1-524e566c710f",
+    "seq": 1,
+    "kind": "human.message",
+    "at": 1792606896109,
+    "dedupeKey": "human.message:c-mvifv1f154892719b5:bot-fa763525",
+    "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+    "ref": {
+     "botId": "bot-fa763525",
+     "messageId": "c-mvifv1f154892719b5:bot-fa763525"
+    },
+    "actor": {
+     "kind": "human"
+    },
+    "payload": {
+     "text": "Please get the failing test on PR #7 fixed.",
+     "cardId": "c-mvifv1f154892719b5",
+     "threadId": "general",
+     "source": "desktop",
+     "lead": true
+    }
+   },
+   {
+    "id": "f-0mvifv5fe-7a0b7e3e2fd1",
+    "seq": 2,
+    "kind": "handoff.received",
+    "at": 1792606901306,
+    "dedupeKey": "handoff.received:h-mvifv5fa5d9ebaacfe7c",
+    "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+    "ref": {
+     "handoffId": "h-mvifv5fa5d9ebaacfe7c",
+     "botId": "bot-d6c3f098"
+    },
+    "actor": {
+     "kind": "bot",
+     "id": "bot-fa763525"
+    },
+    "payload": {
+     "handoffKind": "dispatch",
+     "title": "Fix the failing test on PR #7",
+     "threadId": "handoff:h-mvifv5fa5d9ebaacfe7c",
+     "runId": "run-c-mvifv1f154892719b5",
+     "depth": 0,
+     "hopsInRun": 1,
+     "fromLabel": "Coordinator",
+     "toLabel": "Developer",
+     "fromWorkspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+     "toWorkspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+     "requestCardId": "c-mvifv1f154892719b5"
+    }
+   }
+  ],
+  "wakes": [
+   {
+    "id": "w-mvifv1f2-79953866",
+    "botId": "bot-fa763525",
+    "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+    "reason": {
+     "kind": "human",
+     "text": "Please get the failing test on PR #7 fixed.",
+     "source": "desktop",
+     "clientMessageId": "c-mvifv1f154892719b5",
+     "runId": "run-c-mvifv1f154892719b5",
+     "lead": true
+    },
+    "threadId": "general",
+    "priority": 0,
+    "enqueuedAt": 1792606896110,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvifv5fb-b0a4e0cc",
+    "botId": "bot-d6c3f098",
+    "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+    "reason": {
+     "kind": "handoff",
+     "handoffId": "h-mvifv5fa5d9ebaacfe7c"
+    },
+    "threadId": "handoff:h-mvifv5fa5d9ebaacfe7c",
+    "priority": 1,
+    "enqueuedAt": 1792606901303,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mvifv5fa5d9ebaacfe7c",
+    "runId": "run-c-mvifv1f154892719b5",
+    "threadId": "handoff:h-mvifv5fa5d9ebaacfe7c",
+    "depth": 0,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+     "botId": "bot-fa763525"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+     "botId": "bot-d6c3f098"
+    },
+    "kind": "dispatch",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Fix the failing test on PR #7",
+     "body": "Push the fix to the PR's branch."
+    },
+    "status": "delivered",
+    "clientHandoffId": "wake:w-mvifv1f2-79953866:h1",
+    "guestSourced": false,
+    "createdAt": 1792606901302,
+    "updatedAt": 1792606901306,
+    "opensThread": true
+   }
+  ],
+  "repoWatch": null,
+  "ledger": null,
+  "verdicts": null,
+  "effects": null,
+  "decisions": null,
+  "routines": null,
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mvifv1f154892719b5",
+    "seq": 1,
+    "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+    "threadId": "general",
+    "kind": "human",
+    "at": 1792606896109,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Please get the failing test on PR #7 fixed.",
+    "refs": {
+     "botId": "bot-fa763525",
+     "botIds": [
+      "bot-fa763525"
+     ]
+    },
+    "routed": {
+     "lead": "bot-fa763525"
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mvifv5fe7937c0c297",
+    "seq": 2,
+    "workspaceId": "ws-05923133-f65d-46b1-8076-420c58af9a4b",
+    "threadId": "handoff:h-mvifv5fa5d9ebaacfe7c",
+    "kind": "fact",
+    "at": 1792606901306,
+    "actor": {
+     "kind": "system"
+    },
+    "title": "dispatch \u2192 Developer: Fix the failing test on PR #7",
+    "refs": {
+     "botId": "bot-d6c3f098",
+     "handoffId": "h-mvifv5fa5d9ebaacfe7c",
+     "factId": "f-0mvifv5fe-7a0b7e3e2fd1",
+     "requestCardId": "c-mvifv1f154892719b5"
+    },
+    "notice": {
+     "code": "handoff.sent",
+     "args": {
+      "hop": "dispatch",
+      "to": "Developer",
+      "title": "Fix the failing test on PR #7"
+     }
+    }
+   }
+  ],
+  "stub": {
+   "lead": [
+    {
+     "at": 1792606901141,
+     "event": "prompt",
+     "sessionId": "stub-d8177b2c952e",
+     "text": "You have no repository of your own; Developer (bot-d6c3f098) works on github.com/acme/app. pr_read, issue_read and ci_read read that repository for you. Work on a pull request, an issue or the code \u2014 a review, a fix, a merge request \u2014 goes with handoff_send to a bot that has the repository.\n\nWrite to the owner in English, the language of their latest message: \u00abPlease get the failing test on PR #7 "
+    },
+    {
+     "at": 1792606901304,
+     "event": "tool",
+     "sessionId": "stub-d8177b2c952e",
+     "name": "handoff_send",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"handoffId\": \"h-mvifv5fa5d9ebaacfe7c\",\n  \"status\": \"delivered\",\n  \"threadId\": \"handoff:h-mvifv5fa5d9ebaacfe7c\",\n  \"to\": {\n    \"botId\": \"bot-d6c3f098\",\n    \"role\": \"lead\",\n    \"workspaceId\": \"ws-05923133-f65d-46b1-8076-420c58af9a4b\"\n  },\n  \"wakeId\": \"w-mvifv5fb-b0a4e0cc\"\n}"
+    }
+   ],
+   "developer": []
+  },
+  "workers": [],
+  "gh": [],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvals": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "records": [],
+  "timeouts": [],
+  "saved": {},
+  "launches": [
+   {
+    "ok": true,
+    "runId": "2026-10-21T18-21-34-verify-f916a230",
+    "evidenceDir": "/home/owner/Desktop/coding/wmux/wmux/.claude/skills/verify-wmux/evidence/2026-10-21T18-21-34-verify-f916a230"
+   }
+  ]
+ },
+ "fail": [
+  {
+   "why": "the wake did not name the bot that has the repository",
+   "failing": [
+    "wake_names_the_repo_holder"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "stub.lead.0.text",
+     "value": "No bot in this workspace has a repository, so nobody here can read"
+    }
+   ]
+  },
+  {
+   "why": "the dispatch was refused",
+   "failing": [
+    "handed_to_the_repo_holder"
+   ],
+   "mutate": [
+    {
+     "op": "set",
+     "path": "handoffs.0.status",
+     "value": "refused"
+    }
+   ]
+  }
+ ]
+}

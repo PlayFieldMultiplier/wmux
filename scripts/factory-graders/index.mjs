@@ -60,6 +60,8 @@ export const GRADERS = {
   'chat-stop-all': group.chatStopAll,
   'chain-survives-worker': handoffs.chainSurvivesWorker,
   'team-relay-owner-flow': handoffs.teamRelayOwnerFlow,
+  'coordinator-report-where-asked': handoffs.coordinatorReportWhereAsked,
+  'coordinator-without-repo': handoffs.coordinatorWithoutRepo,
   'team-relay-limit': handoffs.teamRelayLimit,
   'team-relay-owner-tags-researcher': handoffs.teamRelayOwnerTagsResearcher,
   'taint-relay-lane-refused': approvals.taintRelayLaneRefused,

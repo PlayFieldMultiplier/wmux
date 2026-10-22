@@ -1,0 +1,48 @@
+{
+  "name": "coordinator-without-repo",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A coordinator with no repository of its own and a developer that has the workspace's repository. The owner's message to the room wakes the coordinator alone; its wake names the developer as the bot that works on the repository, so it hands the pull request work on with handoff_send instead of refusing it. The developer's dispatch wake follows; nobody is told that no bot has a repository.",
+  "setup": {
+    "repo": true,
+    "bots": [
+      {
+        "key": "lead",
+        "template": "coordinator",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "to_bot_id": "{{bot.developer}}",
+                    "title": "Fix the failing test on PR #7",
+                    "body": "Push the fix to the PR's branch."
+                  }
+                }
+              ]
+            },
+            { "steps": [] }
+          ]
+        }
+      },
+      {
+        "key": "developer",
+        "template": "developer",
+        "repo": true,
+        "triggers": [],
+        "script": { "turns": [ { "steps": [ { "say": "on it" } ] } ] }
+      }
+    ]
+  },
+  "actions": [
+    { "do": "post", "label": "ask", "post": { "title": "Please get the failing test on PR #7 fixed." } },
+    { "do": "waitFor", "label": "developer woken", "cond": { "wakes": { "bot": "developer", "reason": "handoff", "state": "done" } }, "timeoutMs": 60000, "required": true },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 5000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes", "handoffs"], "lead": "lead", "developer": "developer", "repoKey": "github.com/acme/app" }
+}
