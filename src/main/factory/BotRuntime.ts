@@ -435,8 +435,9 @@ export function setBotRuntimePorts(next: BotRuntimePorts): void {
   };
 }
 
-/** Test-only: the ports as wired. */
+/** Test-only: the ports as wired (refused outside the test runner). */
 export function __botRuntimePortsForTesting(): Readonly<BotRuntimePorts> {
+  if (!process.env.VITEST) throw new Error('__botRuntimePortsForTesting is test-only');
   return ports;
 }
 
