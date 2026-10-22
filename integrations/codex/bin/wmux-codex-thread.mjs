@@ -24,9 +24,10 @@ const SELF_BASENAMES = ['wmux-codex-notify.mjs', 'wmux-codex-hooks-bridge.mjs'];
 // This program's own wrappers (a version-manager shim such as Volta's `node`
 // re-runs the same command line as a child) plus the Codex process above them.
 const MAX_ORIGIN_HOPS = 4;
-// One budget for the whole ancestor walk, well under the 1.5 s the hook
-// harmlessness gate allows a bridge over a no-op hook. A PowerShell start is
-// ~300 ms; a lookup that runs out is 'unknown' and retains pane delivery.
+// One budget for the whole ancestor walk: the bridges run inside Codex's turn
+// and the walk blocks them. On Windows one walk is one PowerShell start plus a
+// [wmi] read per hop, measured 400-480 ms warm and about 1 s with eight walks
+// at once (#2376). A walk that runs out reports 'timeout' (readAncestorLookup).
 const ORIGIN_LOOKUP_BUDGET_MS = 900;
 // Test-only override of that budget, so a suite about classification does not
 // depend on how fast a loaded CI runner starts PowerShell. Never set in use.
@@ -237,8 +238,17 @@ function ancestorChainWindows(startPid, timeout) {
     '$p=[int]$w.ParentProcessId };',
     'exit 0',
   ].join(' ');
-  const out = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script],
-    { encoding: 'utf8', timeout, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  try {
+    return parseWindowsChain(execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8', timeout, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }));
+  } catch (error) {
+    // What PowerShell printed before the deadline still counts, as on POSIX.
+    if (error?.code === 'ETIMEDOUT' && typeof error.stdout === 'string') error.chain = parseWindowsChain(error.stdout);
+    throw error;
+  }
+}
+
+function parseWindowsChain(out) {
   return out.split(/\r?\n/)
     .filter((line) => line.startsWith('L'))
     .map((line) => tokenizeCommandLine(line.slice(1)));
@@ -247,33 +257,54 @@ function ancestorChainWindows(startPid, timeout) {
 /**
  * The argv of this process's ancestors, nearest first, up to the first one
  * that is not a wrapper of this script — or the one argv the WSL launcher
- * handed over. Never throws: a failed lookup ends the chain, and an empty
- * chain classifies as 'unknown'. PID 1 is never read — a parent that already
+ * handed over — and why the walk stopped:
+ *   'complete'    it reached an ancestor that decides, or ran out of hops;
+ *   'unreadable'  an ancestor could not be read;
+ *   'timeout'     the budget ran out first (#2376).
+ * What was read still counts in every case. Never throws; an empty chain
+ * classifies as 'unknown'. PID 1 is never read — a parent that already
  * exited leaves this process re-parented to init, which is not who asked for
- * the notification.
+ * the notification. Exported for tests.
  */
-export function readAncestorChain(startPid = process.ppid) {
+export function readAncestorLookup(startPid = process.ppid) {
+  const budgetMs = originLookupBudgetMs();
+  const started = Date.now();
   const handed = process.env[HANDED_ARGV_ENV];
-  if (typeof handed === 'string' && handed.length > 0) return [parseHandedArgv(handed)];
-  const budget = originLookupBudgetMs();
-  const deadline = Date.now() + budget;
-  const chain = [];
-  try {
-    if (process.platform === 'win32') return ancestorChainWindows(startPid, budget);
-    let pid = startPid;
-    for (let hop = 0; hop < MAX_ORIGIN_HOPS && pid > 1; hop++) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      const entry = process.platform === 'linux' ? procEntryLinux(pid) : procEntryPs(pid, remaining);
-      if (!entry) break;
-      chain.push(entry.argv);
-      if (!entry.argv.some(isSelfToken)) break;
-      pid = entry.ppid;
-    }
-  } catch {
-    // An unreadable ancestor ends the walk; what was read still counts.
+  if (typeof handed === 'string' && handed.length > 0) {
+    return { chain: [parseHandedArgv(handed)], stop: 'complete', elapsedMs: 0, budgetMs };
   }
-  return chain;
+  const deadline = started + budgetMs;
+  const chain = [];
+  let stop = 'complete';
+  try {
+    if (process.platform === 'win32') {
+      chain.push(...ancestorChainWindows(startPid, budgetMs));
+    } else {
+      let pid = startPid;
+      for (let hop = 0; hop < MAX_ORIGIN_HOPS && pid > 1; hop++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) { stop = 'timeout'; break; }
+        const entry = process.platform === 'linux' ? procEntryLinux(pid) : procEntryPs(pid, remaining);
+        if (!entry) { stop = 'unreadable'; break; }
+        chain.push(entry.argv);
+        if (!entry.argv.some(isSelfToken)) break;
+        pid = entry.ppid;
+      }
+    }
+  } catch (error) {
+    if (error?.code === 'ETIMEDOUT') {
+      stop = 'timeout';
+      if (Array.isArray(error.chain)) chain.push(...error.chain);
+    } else {
+      stop = 'unreadable';
+    }
+  }
+  return { chain, stop, elapsedMs: Date.now() - started, budgetMs };
+}
+
+/** readAncestorLookup's chain alone. */
+export function readAncestorChain(startPid = process.ppid) {
+  return readAncestorLookup(startPid).chain;
 }
 
 // ----- Sub-agent threads (#1696) -------------------------------------------
@@ -617,6 +648,20 @@ export function notifierOrigin(env = process.env, readChain = readAncestorChain)
   return claimsPaneIdentity(env) ? classifyNotifierOrigin(readChain()) : 'unclaimed';
 }
 
+/**
+ * notifierOrigin plus the lookup behind it (undefined when none ran), so a
+ * bridge can say when the walk ran out of time instead of deciding silently.
+ * A walk that ran out before any ancestor decided is 'timeout', not
+ * 'unknown': the process tree was not read, rather than read and found to be
+ * no Codex (#2376).
+ */
+export function notifierOriginLookup(env = process.env, readLookup = readAncestorLookup) {
+  if (!claimsPaneIdentity(env)) return { origin: 'unclaimed' };
+  const lookup = readLookup();
+  const origin = classifyNotifierOrigin(lookup.chain);
+  return { origin: origin === 'unknown' && lookup.stop === 'timeout' ? 'timeout' : origin, lookup };
+}
+
 /** One bounded retry covers a turn finishing just ahead of relay persistence. */
 export async function resolveThreadOwner(id, env = process.env, {
   readOwner = readThreadOwner, delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
@@ -630,9 +675,19 @@ export async function resolveThreadOwner(id, env = process.env, {
 /** Direct and unknown pane processes retain their own identity. A positively
  * identified shared server must resolve ownership, even if it claims a pane.
  * With no identity to inspect, account ownership is the only possible route.
+ * When the origin lookup ran out of time ('timeout'), the thread's recorded
+ * owner is the best evidence left: it decides when there is one, and the
+ * environment's pane otherwise, as before (#2376). Nothing records an owner
+ * on a timeout.
  */
 export async function attributeThread(origin, thread, env = process.env, resolveOwner = resolveThreadOwner,
   confirmUnclaimed = () => classifyNotifierOrigin(readAncestorChain())) {
+  if (origin === 'timeout') {
+    const owner = await resolveOwner(thread?.rootId, env);
+    if (!owner) return nonEmptyStr(env.WMUX_PTY_ID) !== undefined;
+    applyThreadOwner(owner, env);
+    return true;
+  }
   if (origin !== 'shared-server' && nonEmptyStr(env.WMUX_PTY_ID)) return true;
   if (origin === 'process' || origin === 'unknown') return false;
   const owner = await resolveOwner(thread?.rootId, env);

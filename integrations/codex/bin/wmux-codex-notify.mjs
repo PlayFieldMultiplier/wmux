@@ -53,7 +53,7 @@ import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import {
-  inspectCodexThread, codexSessionsRoot, codexRolloutMissing, notifierOrigin, attributeThread,
+  inspectCodexThread, codexSessionsRoot, codexRolloutMissing, notifierOriginLookup, attributeThread,
 } from './wmux-codex-thread.mjs';
 
 // Hard cap on the RPC walk so we never stall a Codex turn. Only a stop whose
@@ -77,7 +77,10 @@ const AGENT_TURN_COMPLETE = 'agent-turn-complete';
 //   0.7.0 — an agent.stop carries `rolloutMissing`, this process's verdict on
 //           the thread's rollout, so the daemon can hold a title-thread stop
 //           it cannot check itself (#1765).
-const BRIDGE_VERSION = '0.7.0';
+//   0.8.0 — an origin lookup that ran out of its budget logs
+//           `origin-lookup-timeout` and goes to the thread's recorded owner
+//           when there is one, else to the pane as before (#2376).
+const BRIDGE_VERSION = '0.8.0';
 // A rollout can land just after the turn-complete notify; look again before
 // telling the daemon it is missing (#1765).
 const ROLLOUT_RECHECK_MS = [250, 500, 750];
@@ -415,7 +418,8 @@ async function main() {
   const cwd = nonEmptyStr(payload.cwd) ?? process.cwd();
   const transcriptPathClaimed = nonEmptyStr(payload.transcript_path);
 
-  const origin = notifierOrigin();
+  const { origin, lookup } = notifierOriginLookup();
+  if (lookup?.stop === 'timeout') logEvent('origin-lookup-timeout', { elapsedMs: lookup.elapsedMs, budgetMs: lookup.budgetMs });
 
   // #1696/#1697: a sub-agent thread reports as agent.subagent_stop with no
   // agentSessionId (see "Sub-agent threads" above) — never agent.stop under

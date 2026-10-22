@@ -87,14 +87,17 @@ import { createConnection } from 'node:net';
 import { randomUUID } from 'node:crypto';
 
 import {
-  inspectCodexThread, codexSessionsRoot, notifierOrigin, attributeThread, recordThreadOwner, invalidatePaneOwner,
+  inspectCodexThread, codexSessionsRoot, notifierOriginLookup, attributeThread, recordThreadOwner, invalidatePaneOwner,
 } from './wmux-codex-thread.mjs';
 
 const HOOK_TIMEOUT_MS = 2000; // hard cap so we never stall a Codex turn
 // Stamped on every codex-hooks.log line; bump on behavior changes.
 //   0.1.0 — initial: SessionStart + UserPromptSubmit + Stop, metadata-only.
 //   0.2.0 — PermissionRequest → agent.awaiting_input, measured 2026-09-07.
-const BRIDGE_VERSION = '0.2.0';
+//   0.3.0 — an origin lookup that ran out of its budget logs
+//           `origin-lookup-timeout` and goes to the thread's recorded owner
+//           when there is one, else to the pane as before (#2376).
+const BRIDGE_VERSION = '0.3.0';
 const CONNECT_RETRY_BACKOFFS_MS = [100, 250];
 const TRANSIENT_CONNECT_CODES = new Set([
   'EPERM', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EBUSY', 'EAGAIN',
@@ -532,7 +535,8 @@ async function main() {
   const thread = sessionIdClaimed
     ? inspectCodexThread(sessionIdClaimed, codexSessionsRoot(process.env))
     : { subagent: false, confirmed: false };
-  const origin = notifierOrigin();
+  const { origin, lookup } = notifierOriginLookup();
+  if (lookup?.stop === 'timeout') logEvent('origin-lookup-timeout', { event, elapsedMs: lookup.elapsedMs, budgetMs: lookup.budgetMs });
   if (origin === 'process' && event === 'SessionStart' && !thread.subagent) {
     invalidatePaneOwner();
     if (thread.confirmed) recordThreadOwner(sessionIdClaimed, process.env);
