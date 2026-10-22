@@ -801,13 +801,17 @@ describe('JoinerSession image uploads', () => {
     }));
   }
 
-  /** A session over `records`, posting through `bytes` (the image transfers); what it posted and refused. */
+  /**
+   * A session over `records`, with `bytes` (the image transfers, or any other
+   * client call) in place of the defaults; what it posted, refused and showed.
+   */
   function run(
     records: A2aOutboxRecordV1[],
-    bytes: Pick<SessionClient, 'putBytes' | 'headStatus'>,
-  ): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }>; warnings: string[]; session: JoinerSession } {
+    bytes: Partial<SessionClient>,
+  ): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }>; warnings: string[]; states: string[]; session: JoinerSession } {
     const posted: string[] = [];
     const warnings: string[] = [];
+    const states: string[] = [];
     const refused: Array<{ seq: number; code: string; detail?: string }> = [];
     const client: SessionClient = {
       requestJson: async (_m, p, body) => {
@@ -844,7 +848,7 @@ describe('JoinerSession image uploads', () => {
       accept: async () => ({ ok: true, duplicate: false }),
       onRefused: (rec, code, detail) => void refused.push({ seq: rec.seq, code, ...(detail ? { detail } : {}) }),
       reconcileLinks: async () => undefined,
-      onStatus: quiet,
+      onStatus: (s) => void states.push(s.state),
       images: { readOutgoing: async () => img },
       timing: { backoffMinMs: 5, backoffMaxMs: 20, livenessMs: 60_000 },
       client: () => client,
@@ -852,7 +856,26 @@ describe('JoinerSession image uploads', () => {
     });
     sessions.push(session);
     session.start();
-    return { posted, refused, warnings, session };
+    return { posted, refused, warnings, states, session };
+  }
+
+  /** An upload that never answers on its own: only an abort of its signal ends it. */
+  function hangingPut(): { putBytes: NonNullable<SessionClient['putBytes']>; puts: () => number; aborted: () => boolean } {
+    let puts = 0;
+    let aborted = false;
+    return {
+      putBytes: (_p, _b, _t, signal) => {
+        puts += 1;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(new PinnedClientError('aborted', 'aborted', { sent: true }));
+          }, { once: true });
+        });
+      },
+      puts: () => puts,
+      aborted: () => aborted,
+    };
   }
 
   it('gives up a message whose uploads keep timing out, and the next message still goes', async () => {
@@ -869,29 +892,85 @@ describe('JoinerSession image uploads', () => {
   });
 
   it('ends an upload in flight when the session stops, and sends nothing after it', async () => {
-    let puts = 0;
-    let aborted = false;
-    const { posted, refused, warnings, session } = run(replies(), {
-      putBytes: (_p, _b, _t, signal) => {
-        puts += 1;
-        // A transfer that never answers: only the session's stop ends it.
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener('abort', () => {
-            aborted = true;
-            reject(new PinnedClientError('aborted', 'aborted', { sent: true }));
-          }, { once: true });
-        });
-      },
-    });
-    await vi.waitFor(() => expect(puts).toBe(1), { timeout: 5_000 });
+    const records = replies();
+    const hang = hangingPut();
+    const { posted, refused, warnings, session } = run(records, { putBytes: hang.putBytes });
+    await vi.waitFor(() => expect(hang.puts()).toBe(1), { timeout: 5_000 });
     let stopped = false;
     void session.stop().then(() => (stopped = true));
-    await vi.waitFor(() => expect({ aborted, stopped }).toEqual({ aborted: true, stopped: true }), { timeout: 5_000 });
-    expect(puts).toBe(1);
+    await vi.waitFor(() => expect({ aborted: hang.aborted(), stopped }).toEqual({ aborted: true, stopped: true }), { timeout: 5_000 });
+    expect(hang.puts()).toBe(1);
     expect(posted).toEqual([]);
     // Stopped, not failed: the message is still owed, and no failed upload was counted.
     expect(refused).toEqual([]);
+    expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
     expect(warnings.filter((w) => w.includes('image upload'))).toEqual([]);
+
+    // The next session (after a re-pair, a restart) sends it: upload, then the message.
+    let puts = 0;
+    const next = run(records, {
+      putBytes: async () => {
+        puts += 1;
+        return { status: 200, json: { ok: true } };
+      },
+    });
+    await vi.waitFor(() => expect(next.posted).toEqual(['m1', 'm2']), { timeout: 10_000 });
+    expect(puts).toBe(1);
+    expect(next.refused).toEqual([]);
+  });
+
+  it('does not post a message whose last upload was answered after the session stopped', async () => {
+    const records = replies();
+    let answer!: (a: { status: number; json: unknown }) => void;
+    let puts = 0;
+    const posts: string[] = [];
+    const { refused, states, session } = run(records, {
+      putBytes: () => {
+        puts += 1;
+        // Answered by the test, whatever the signal says: the answer lands after the stop.
+        return new Promise((resolve) => (answer = resolve));
+      },
+      // The other PC was re-paired: a POST through this (old) session meets a certificate it does not pin.
+      requestJson: async (_m, p, body) => {
+        if (p === A2A_ROUTES.messages) {
+          posts.push((body as { messageId: string }).messageId);
+          throw new PinnedClientError('fingerprint-mismatch', 'not the pinned certificate', { sent: false });
+        }
+        return { status: 200, json: { ok: true } };
+      },
+    });
+    await vi.waitFor(() => expect(puts).toBe(1), { timeout: 5_000 });
+    const stopping = session.stop();
+    answer({ status: 200, json: { ok: true } });
+    await stopping;
+    expect(posts).toEqual([]);
+    expect(states).not.toContain('identity-changed');
+    expect(session.current().state).not.toBe('identity-changed');
+    // Still owed, not refused: the next session sends it.
+    expect(refused).toEqual([]);
+    expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
+  });
+
+  it('ends an upload in flight when the certificate is not the pinned one', async () => {
+    const records = replies();
+    const hang = hangingPut();
+    let mismatch!: () => void;
+    const pinFails = new Promise<void>((r) => (mismatch = r));
+    const { posted, refused, states } = run(records, {
+      putBytes: hang.putBytes,
+      openStream: async function* () {
+        yield { event: 'hello', data: { epoch: 'e', features: ['images.1'] } };
+        await pinFails;
+        throw new PinnedClientError('fingerprint-mismatch', 'not the pinned certificate', { sent: false });
+      },
+    });
+    await vi.waitFor(() => expect(hang.puts()).toBe(1), { timeout: 5_000 });
+    mismatch();
+    await vi.waitFor(() => expect(hang.aborted()).toBe(true), { timeout: 5_000 });
+    expect(states).toContain('identity-changed');
+    expect(posted).toEqual([]);
+    expect(refused).toEqual([]);
+    expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
   });
 
   it('asks first and does not upload an image the other PC already holds', async () => {

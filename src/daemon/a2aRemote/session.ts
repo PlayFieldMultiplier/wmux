@@ -337,6 +337,9 @@ export class JoinerSession {
       const uploaded = await this.uploadImages(client, rec);
       if (uploaded !== 'ok') return uploaded;
     }
+    // Stopped while the last upload was answered (a re-pair stops the old
+    // session): the envelope is not posted against the old pin. Still owed.
+    if (this.halt.signal.aborted) return 'stop';
     let answer: { status: number; json: unknown };
     try {
       answer = await client.requestJson('POST', A2A_ROUTES.messages, rec.envelope);
