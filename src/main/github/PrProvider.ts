@@ -6,6 +6,7 @@
 // 흔하므로 hostname 화이트리스트가 아니라 "github이 아니면 glab에게 물어본다"
 // — glab 미설치/그 호스트 미인증이면 fail-closed 안내로 강등).
 import { git } from '../git/git';
+import { configuredForge, forgeHosts } from '../../shared/forgeHosts';
 import type { PrSummary, PrComment, PrDetail } from '../../shared/prSurface';
 
 // wire 타입은 shared/prSurface.ts가 정본(렌더러와 공유). 여기서 재노출해
@@ -62,6 +63,15 @@ export function parseRemoteHost(url: string): string | null {
 export function isGithubHost(host: string): boolean {
   return host === 'github.com' || host.endsWith('.github.com') || host.endsWith('.ghe.com')
     || /(?:^|\.)github(?:\.|$)/.test(host) || (!host.includes('.') && host.includes('github'));
+}
+
+/** Whether gh, not glab, serves `host`: what the CLIs' own config says
+ *  (shared/forgeHosts.ts — GitHub Enterprise on its own domain is a host gh
+ *  is signed in to), else isGithubHost's name rule. Every gh-or-glab
+ *  routing decision goes through this. */
+export function isGithubForgeHost(host: string): boolean {
+  const forge = configuredForge(host, forgeHosts());
+  return forge ? forge === 'github' : isGithubHost(host);
 }
 
 /** repo의 origin hostname — remote 없으면 null. */

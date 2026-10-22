@@ -23,7 +23,7 @@
 // A missing glab or a definite sign-out answers `backoff`: the watch waits
 // REPO_WATCH_LIMITS.GITLAB_BACKOFF_MS before asking again.
 
-import { glabJobBucket, glabMergeState, mapGlabPipelineStatus } from '../github/GlabPrService';
+import { glabJobBucket, glabMergeState, glabProjectOfKey, mapGlabPipelineStatus } from '../github/GlabPrService';
 import type { PrReviewRead } from '../../shared/prReview';
 import { REPO_WATCH_LIMITS, type RepoWatchState, type WatchChecks, type WatchIssue, type WatchPr, type WatchSnapshot } from './repoWatch';
 
@@ -296,7 +296,8 @@ export async function readGitlabSnapshot(
   memo: ParentMemo,
 ): Promise<GitlabWatchRead> {
   memo.poll++;
-  const vars = { fullPath: repoKey.split('/').slice(1).join('/') };
+  // The project's full path as the API names it (a sub-path install's subfolder dropped).
+  const vars = { fullPath: glabProjectOfKey(repoKey)?.path ?? repoKey.split('/').slice(1).join('/') };
   let calls = 1;
   const fail = (r: Exclude<GitlabWatchAnswer, { ok: true }>): GitlabWatchRead => ({
     ok: false, message: r.message, calls, backoff: r.code === 'cli-missing' || r.code === 'unauthenticated',

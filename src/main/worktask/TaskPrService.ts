@@ -41,7 +41,8 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { WORKTASK_PR_URL_RE } from '../../shared/workTask';
+import { isGithubPullUrl } from '../../shared/workTask';
+import { forgeHosts } from '../../shared/forgeHosts';
 import { getExecEnv } from '../../shared/execEnv';
 import { parseRemoteKey } from '../github/PrProvider';
 import { isGitlabRepoKey } from '../github/hostLane';
@@ -317,7 +318,7 @@ export class TaskPrService {
         ['pr', 'create', ...(ghRepo ? ['-R', ghRepo] : []), '--head', branch, '--base', base, '--title', title, '--body', body],
         worktreePath,
       );
-      prUrl = extractPrUrl(stdout);
+      prUrl = extractPrUrl(stdout, forgeHosts().gh);
     } catch (createErr) {
       // 멱등 재진입(CX5+G4): 기존 PR을 조회해 URL 회수로 수렴.
       const recovered = await this.recoverExistingPr(worktreePath, branch, ghRepo);
@@ -327,7 +328,7 @@ export class TaskPrService {
       return { ok: false, reason: 'pr-failed', error: `gh pr create failed: ${errMsg(createErr)}` };
     }
 
-    if (!prUrl || !WORKTASK_PR_URL_RE.test(prUrl)) {
+    if (!prUrl || !isGithubPullUrl(prUrl, forgeHosts().gh)) {
       // 출력 파싱 실패 — 재진입 조회로 URL 회수 시도.
       const recovered = await this.recoverExistingPr(worktreePath, branch, ghRepo);
       if (recovered) {
@@ -479,7 +480,7 @@ export class TaskPrService {
         worktreePath,
       );
       const url = stdout.trim();
-      return url.length > 0 && WORKTASK_PR_URL_RE.test(url) ? url : null;
+      return url.length > 0 && isGithubPullUrl(url, forgeHosts().gh) ? url : null;
     } catch {
       return null;
     }
@@ -531,12 +532,13 @@ function errMsg(err: unknown): string {
   return String(err);
 }
 
-/** gh pr create stdout에서 PR URL 추출(마지막 github pull URL 라인). */
-function extractPrUrl(stdout: string): string {
+/** The PR URL in `gh pr create`'s stdout: the last pull request URL on
+ *  github.com or on a host gh is signed in to (GitHub Enterprise). */
+function extractPrUrl(stdout: string, githubHosts: ReadonlySet<string>): string {
   const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].match(/https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/);
-    if (m) return m[0];
+    const m = lines[i].match(/https:\/\/[\w.-]+(?::\d{1,5})?\/[^/\s]+\/[^/\s]+\/pull\/\d+/);
+    if (m && isGithubPullUrl(m[0], githubHosts)) return m[0];
   }
   return '';
 }

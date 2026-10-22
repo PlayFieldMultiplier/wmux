@@ -1,8 +1,20 @@
 // ─── TaskPrService — J3 §2 gh 4중 게이트 1클릭 PR ────────────────────────────
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { TaskPrService, type PrExec, type CreatePrInput } from '../TaskPrService';
 import { GlabPrService } from '../../github/GlabPrService';
+import type { ForgeHosts } from '../../../shared/forgeHosts';
+
+// The hosts gh and glab are set up for (shared/forgeHosts.ts): none unless a
+// test sets them, so the name rule routes as before.
+const forge = vi.hoisted(() => ({ hosts: { gh: new Set<string>(), glab: new Map() } as ForgeHosts }));
+vi.mock('../../../shared/forgeHosts', async (orig) => ({
+  ...(await orig<typeof import('../../../shared/forgeHosts')>()),
+  forgeHosts: () => forge.hosts,
+}));
+afterEach(() => {
+  forge.hosts = { gh: new Set(), glab: new Map() };
+});
 
 const VALID_PR = 'https://github.com/acme/widget/pull/42';
 
@@ -480,6 +492,37 @@ describe('task_pr: a host glab refuses goes on to gh', () => {
     const res = await svc.createPr(INPUT);
     expect(res.ok === false && res.reason).toBe('pr-failed');
     expect(res.ok === false && res.error).toContain('gh pr create failed');
+  });
+});
+
+describe('task_pr: GitHub Enterprise on its own domain, a host gh is signed in to', () => {
+  const GHE_PR = 'https://code.acme.example/acme/widget/pull/3';
+  const ghe = (prCreate: string, prList = '') => makeGlService((cmd, args) => {
+    const a = argStr(args);
+    if (cmd === 'git' && a === 'remote get-url --push origin') return { stdout: 'git@code.acme.example:acme/widget.git\n' };
+    if (isGh(cmd) && a.startsWith('pr create')) return { stdout: prCreate };
+    if (isGh(cmd) && a.startsWith('pr list')) return { stdout: prList };
+    return isGh(cmd) ? happyBehavior(cmd, args) : glHappy(cmd, args);
+  });
+
+  it('goes straight to gh and keeps the PR URL gh prints on that host', async () => {
+    forge.hosts = { gh: new Set(['code.acme.example']), glab: new Map() };
+    const { svc, calls, daemonCalls } = ghe(`Creating pull request\n${GHE_PR}`);
+    expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: GHE_PR });
+    expect(calls.some((c) => isGlab(c.cmd))).toBe(false);
+    expect(daemonCalls[0]?.params.prUrl).toBe(GHE_PR);
+  });
+
+  it('recovers an existing PR on that host', async () => {
+    forge.hosts = { gh: new Set(['code.acme.example']), glab: new Map() };
+    const { svc } = ghe('could not parse', GHE_PR);
+    expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: GHE_PR, recovered: true });
+  });
+
+  it('a PR URL on a host gh is not signed in to is still refused', async () => {
+    forge.hosts = { gh: new Set(['code.acme.example']), glab: new Map() };
+    const { svc } = ghe('https://evil.example.com/acme/widget/pull/3');
+    expect(await svc.createPr(INPUT)).toMatchObject({ ok: false, reason: 'pr-failed' });
   });
 });
 

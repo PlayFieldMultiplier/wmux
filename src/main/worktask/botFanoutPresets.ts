@@ -51,7 +51,7 @@ import { fanoutPresetKey } from '../../shared/fanoutPreset';
 import type { FanoutWorkerPermissionMode } from '../../shared/workerLaunch';
 import { FANOUT_MAX_TASKS } from '../../shared/workTask';
 import { normalizeRepoKey } from '../../shared/repoKey';
-import { isGithubHost } from '../github/PrProvider';
+import { isGithubForgeHost } from '../github/PrProvider';
 import { DOCS_ONLY_RULE } from '../../shared/docsChange';
 import type { BaseGate } from './TaskGateRunner';
 
@@ -134,7 +134,7 @@ const REVIEW_REQUEST: Readonly<Record<BotReviewHost, ReviewRequestLines>> = {
 export function botReviewHost(repoKey: string | undefined): BotReviewHost | undefined {
   const host = normalizeRepoKey(repoKey)?.split('/')[0];
   if (!host) return undefined;
-  return isGithubHost(host) ? 'github' : 'gitlab';
+  return isGithubForgeHost(host) ? 'github' : 'gitlab';
 }
 
 const review = (ctx: BotPresetPromptContext): ReviewRequestLines => REVIEW_REQUEST[ctx.reviewHost ?? 'github'];

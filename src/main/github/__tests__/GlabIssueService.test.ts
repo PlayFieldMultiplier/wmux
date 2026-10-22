@@ -40,7 +40,8 @@ function makeService(handler: (path: string) => unknown, nowRef = { t: 1_000_000
 
 describe('project path', () => {
   it('splits host from a nested group path; refuses a key with no project', () => {
-    expect(glabProjectOfKey(KEY)).toEqual({ host: 'gitlab.example.com', path: 'group/sub/proj' });
+    expect(glabProjectOfKey(KEY, { gh: new Set(), glab: new Map() }))
+      .toEqual({ host: 'gitlab.example.com', path: 'group/sub/proj', web: 'https://gitlab.example.com/group/sub/proj' });
     expect(glabProjectOfKey('gitlab.com/o')).toBeNull();
     expect(glabProjectOfKey('gitlab.com/o/../r')).toBeNull();
     expect(glabProjectOfKey('gitlab.com/o/r?x')).toBeNull();
