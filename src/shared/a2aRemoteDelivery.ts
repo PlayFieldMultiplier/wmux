@@ -239,6 +239,8 @@ export function isLegacyHeldReason(held: string): boolean {
 export interface A2aRemoteInboxItem {
   messageId: string;
   kind: 'reply' | 'state';
+  /** For a 'state' item: the state the peer moved the task to. */
+  state?: TaskState;
   delivered?: boolean;
   held?: A2aRemoteHeldReason;
   /** When it was first held (the 24 h hold TTL counts from here). */

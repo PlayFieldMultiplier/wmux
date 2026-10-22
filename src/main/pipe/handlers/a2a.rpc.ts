@@ -1297,6 +1297,9 @@ export function registerA2aRpc(
             : {}),
         ...(callerPane.kind === 'absent' && !trustedLane ? { requirePaneIdentity: true } : {}),
         ...(params.evidence !== undefined ? { evidence: params.evidence } : {}),
+        // The status message, checked above, so the daemon's copy keeps it too
+        // (and a task with another PC sends it back with the state).
+        ...(typeof params.message === 'string' ? { message: params.message } : {}),
         // §4 멱등(리뷰 codex): 파이프 호출자의 키를 데몬까지 전달한다 — 없으면 커밋 후
         // 응답 유실 재시도가 캐시 미스 → invalid transition(completed->completed)으로 변질.
         ...(typeof params.idempotencyKey === 'string' ? { idempotencyKey: params.idempotencyKey } : {}),
