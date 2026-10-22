@@ -69,3 +69,47 @@ describe('runSmallSnapshotJob', () => {
     await Promise.all(round);
   });
 });
+
+describe('enqueueSnapshotJob coalesceKey', () => {
+  it('a read of the same pane still waiting is joined, run once, and answers both callers', async () => {
+    const holder = deferred();
+    const held = enqueueSnapshotJob(() => holder.promise);
+    const runs: string[] = [];
+    const first = enqueueSnapshotJob(async () => { runs.push('first'); return 'screen A'; }, 'screen:A');
+    const second = enqueueSnapshotJob(async () => { runs.push('second'); return 'never'; }, 'screen:A');
+    // Another pane, another depth of the same pane, and an unkeyed job are not joined.
+    const otherPane = enqueueSnapshotJob(async () => { runs.push('other pane'); return 'screen B'; }, 'screen:B');
+    const otherDepth = enqueueSnapshotJob(async () => { runs.push('other depth'); return 'text A'; }, 'text:A:5000');
+    const unkeyed = enqueueSnapshotJob(async () => { runs.push('reflush A'); return 'reflushed'; });
+
+    holder.resolve();
+    await held;
+    expect(await Promise.all([first, second, otherPane, otherDepth, unkeyed]))
+      .toEqual(['screen A', 'screen A', 'screen B', 'text A', 'reflushed']);
+    expect(runs).toEqual(['first', 'other pane', 'other depth', 'reflush A']);
+  });
+
+  it('a read made after the queued one started runs again (it may have read already)', async () => {
+    const started = deferred();
+    const finish = deferred();
+    const runs: number[] = [];
+    const first = enqueueSnapshotJob(async () => { runs.push(1); started.resolve(); await finish.promise; return 1; }, 'screen:C');
+    await started.promise;
+    const second = enqueueSnapshotJob(async () => { runs.push(2); return 2; }, 'screen:C');
+    finish.resolve();
+    expect(await Promise.all([first, second])).toEqual([1, 2]);
+    expect(runs).toEqual([1, 2]);
+  });
+
+  it('a failed shared read fails every caller that joined it, and the queue goes on', async () => {
+    const holder = deferred();
+    const held = enqueueSnapshotJob(() => holder.promise);
+    const first = enqueueSnapshotJob(async () => { throw new Error('parse failed'); }, 'screen:D');
+    const second = enqueueSnapshotJob(async () => 'unused', 'screen:D');
+    holder.resolve();
+    await held;
+    await expect(first).rejects.toThrow('parse failed');
+    await expect(second).rejects.toThrow('parse failed');
+    expect(await enqueueSnapshotJob(async () => 'next', 'screen:D')).toBe('next');
+  });
+});
