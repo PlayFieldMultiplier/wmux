@@ -33,7 +33,8 @@ Code at a status at rest. It is a separate script, not a `node --test` file,
 because it drives an already packaged app.
 
 - **Isolated**: a unique `WMUX_DATA_SUFFIX` and a sandbox home under the temp
-  dir (`HOME` and `CODEX_HOME`; on Windows also `USERPROFILE`, `APPDATA`,
+  dir (`/tmp` on macOS, where the per-user temp dir is too long for the
+  daemon's Unix sockets) (`HOME` and `CODEX_HOME`; on Windows also `USERPROFILE`, `APPDATA`,
   `LOCALAPPDATA`), so the hooks install lands in the sandbox.
   `WMUX_NO_PATH_REFRESH=1` keeps the Windows registry PATH from putting real
   agents ahead of the fakes. Preflight refuses a `--suffix` that already has

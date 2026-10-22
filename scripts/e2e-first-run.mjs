@@ -53,6 +53,8 @@ import {
   parseRunArgs,
   removableLeftovers,
   runProcessTree,
+  SANDBOX_PREFIX,
+  sandboxBase,
   sandboxEnv,
   seededClaudeJson,
   squirrelInstallRefusal,
@@ -91,7 +93,7 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const artifactsRoot = path.resolve(args.artifacts || process.env.WMUX_E2E_ARTIFACTS || path.join(REPO_ROOT, 'e2e', 'artifacts', 'first-run'));
 const runDir = path.join(artifactsRoot, `${stamp}${suffix}`);
 fs.mkdirSync(runDir, { recursive: true });
-const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-fr-'));
+const sandbox = fs.mkdtempSync(path.join(sandboxBase(), SANDBOX_PREFIX));
 const fakeBin = path.join(sandbox, 'fake-bin');
 const fakeAgentLog = path.join(runDir, 'fake-agents.jsonl');
 const envFile = path.join(runDir, 'app-env.json');

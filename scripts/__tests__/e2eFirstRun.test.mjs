@@ -4,7 +4,18 @@
 // @wmux-lane unit
 // Every helper takes the platform as an argument ('win32' is a string here,
 // never process.platform), so the host OS cannot change a result.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  getDaemonSocketPath,
+  getLegacySessionSocketPath,
+  getMcpBrokerPipeName,
+  getPipeName,
+  getSessionSocketPath,
+} from '../../src/shared/constants';
+import { suffixRefusal } from '../lib/control-wmux-lib.mjs';
 import {
   adoptDaemon,
   agentRanInPane,
@@ -15,6 +26,8 @@ import {
   parseRunArgs,
   removableLeftovers,
   runProcessTree,
+  SANDBOX_PREFIX,
+  sandboxBase,
   sandboxEnv,
   seededClaudeJson,
   squirrelInstallRefusal,
@@ -261,5 +274,50 @@ describe('verdictLine', () => {
   it('is one line either way', () => {
     expect(verdictLine({ ok: true, seconds: 12.34 })).toBe('first-run e2e: PASS (12.3 s)');
     expect(verdictLine({ ok: false, step: 'Claude card ready', reason: 'never\nready', seconds: 3 })).toBe('first-run e2e: FAIL at Claude card ready: never ready (3.0 s)');
+  });
+});
+
+describe('macOS daemon sockets fit sun_path', () => {
+  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', realPlatform);
+    vi.unstubAllEnvs();
+  });
+
+  it('keeps the sandbox off the long per-user temp dir on macOS only', () => {
+    expect(sandboxBase('darwin', '/var/folders/ab/cdefghijklmnopqrstuvwxyz0123/T')).toBe('/tmp');
+    expect(sandboxBase('linux', '/tmp')).toBe('/tmp');
+    expect(sandboxBase('win32', path.win32.join('C:', 'Temp'))).toBe(path.win32.join('C:', 'Temp'));
+  });
+
+  it('the longest socket path the driver can produce stays within 103 bytes', () => {
+    // The longest suffix control-wmux accepts (the driver launches through it).
+    const suffix = `-a${'b'.repeat(39)}`;
+    expect(suffixRefusal(suffix)).toBeNull();
+    expect(suffixRefusal(`${suffix}c`)).not.toBeNull();
+    // The session id shape the app gives each pane (pty.handler.ts).
+    const handler = fs.readFileSync(path.join(REPO, 'src', 'main', 'ipc', 'handlers', 'pty.handler.ts'), 'utf8');
+    const idShape = /`daemon-\$\{crypto\.randomUUID\(\)\.slice\(0, (\d+)\)\}`/.exec(handler);
+    expect(idShape, 'pty.handler.ts no longer builds `daemon-<uuid prefix>` session ids; update this check').not.toBeNull();
+    const sessionId = `daemon-${'f'.repeat(Number(idShape[1]))}`;
+    // mkdtemp appends six characters. /tmp is a symlink to /private/tmp on
+    // macOS: count the resolved form, the longer one.
+    const home = path.posix.join('/private', sandboxBase('darwin'), `${SANDBOX_PREFIX}XXXXXX`);
+    Object.defineProperty(process, 'platform', { ...realPlatform, value: 'darwin' });
+    vi.stubEnv('HOME', home);
+    // os.homedir() reads USERPROFILE on a Windows host; same value as HOME.
+    vi.stubEnv('USERPROFILE', home);
+    vi.stubEnv('WMUX_DATA_SUFFIX', suffix);
+    const sockets = [
+      getSessionSocketPath(sessionId),
+      getDaemonSocketPath(),
+      getLegacySessionSocketPath(sessionId),
+      getPipeName(),
+      getMcpBrokerPipeName(),
+    ];
+    for (const s of sockets) expect(s.startsWith(home)).toBe(true);
+    const longest = Math.max(...sockets.map((s) => Buffer.byteLength(s)));
+    expect(longest).toBeLessThanOrEqual(103);
   });
 });

@@ -4,6 +4,7 @@
 // scripts/__tests__/e2eFirstRun.test.mjs.
 //
 // No shebang: a vitest test imports this file.
+import os from 'node:os';
 import path from 'node:path';
 import { collectProcessTree, parseCimDate } from '../perf-process-tree.mjs';
 import { parseLstart } from './control-wmux-lib.mjs';
@@ -30,6 +31,21 @@ export function parseRunArgs(argv) {
     else throw new Error(`unknown argument ${a}`);
   }
   return out;
+}
+
+/** The sandbox home is `mkdtemp(<sandboxBase>/<SANDBOX_PREFIX>)`. */
+export const SANDBOX_PREFIX = 'wmux-fr-';
+
+/**
+ * Where the sandbox home is made. macOS: /tmp, not os.tmpdir(). The daemon's
+ * Unix sockets live under the home (~/.wmux<suffix>/session-<id>.sock), and
+ * macOS's per-user temp dir (/var/folders/<2>/<28>/T) pushes them past the
+ * 104-byte sun_path limit, so every pty:create fails with `listen EINVAL`.
+ * The same choice e2e/lib.mjs makeSandbox and src/test-utils/isolateDataDir.ts
+ * make.
+ */
+export function sandboxBase(platform = process.platform, tmpdir = os.tmpdir()) {
+  return platform === 'darwin' ? '/tmp' : tmpdir;
 }
 
 /** The env key holding PATH, in whatever case this environment spells it. */
