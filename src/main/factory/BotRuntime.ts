@@ -435,6 +435,11 @@ export function setBotRuntimePorts(next: BotRuntimePorts): void {
   };
 }
 
+/** Test-only: the ports as wired. */
+export function __botRuntimePortsForTesting(): Readonly<BotRuntimePorts> {
+  return ports;
+}
+
 /** Test-only. */
 export function __resetBotRuntimePortsForTesting(): void {
   ports = {};
