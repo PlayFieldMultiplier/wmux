@@ -7,8 +7,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../../stores';
-import RemoteConnectDialog, { inviteCodeGroups } from '../RemoteConnectDialog';
-import { groupPin } from '../LanLinkPairPanel';
+import RemoteConnectDialog, { CONNECT_PAIR_POLL_MS, inviteCodeGroups } from '../RemoteConnectDialog';
+import LanLinkPairPanel, { groupPin } from '../LanLinkPairPanel';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -143,6 +143,55 @@ describe('Connect a PC › LAN', () => {
     await settle();
     expect(lanlink.pairCancel).toHaveBeenCalledTimes(1);
     expect((await readPairStatus()).active).toBe(false);
+  });
+
+  it('keeps counting down while its parent re-renders faster than once a second', async () => {
+    stub();
+    const Parent = ({ n }: { n: number }) => <div data-n={n}><LanLinkPairPanel onPaired={() => undefined} /></div>;
+    await act(async () => root.render(<Parent n={0} />));
+    await settle();
+    await act(async () => { q<HTMLButtonElement>('remote-connect-lan-begin')!.click(); });
+    await settle();
+    const seconds = () => Number(/(\d+)s/.exec(q('remote-connect-lan-countdown')?.textContent ?? '')?.[1]);
+    const start = seconds();
+    // A new onPaired every 300 ms, as a page whose store keeps changing passes it.
+    for (let i = 1; i <= 12; i++) {
+      await act(async () => { vi.advanceTimersByTime(300); root.render(<Parent n={i} />); });
+    }
+    await settle();
+    expect(start - seconds()).toBeGreaterThanOrEqual(3);
+    expect(lanlink.pairStatus.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('a PC redeeming the A2A invite does not end a LAN PIN that is still open', async () => {
+    stub();
+    const a2a = {
+      status: vi.fn(async () => ({ enabled: true, port: 45660, listening: true, hostId: 'me', name: 'MAC', fingerprint256: null, lastError: null })),
+      peersList: vi.fn(async () => ({ peers: [] as unknown[] })),
+      pairBegin: vi.fn(async () => ({ invite: 'wmux-a2a://desk:45660/K7M2QX9P#sha256=AA', expiresAt: Date.now() + 600_000, addresses: [], tailnet: [] })),
+      pairStatus: vi.fn(async () => ({ active: true, expiresAt: null, attemptsLeft: 3, lockedUntil: null })),
+      pairCancel: vi.fn(async () => ({ ok: true })),
+      exposureGet: vi.fn(async () => ({ exposure: null })),
+      exposureSet: vi.fn(),
+    };
+    vi.stubGlobal('electronAPI', { lanlink, a2aRemote: a2a });
+    await render('lan');
+    await act(async () => { q<HTMLButtonElement>('remote-connect-lan-begin')!.click(); });
+    await settle();
+    await act(async () => { tab('Invite this PC').click(); });
+    await settle();
+    a2a.pairStatus.mockResolvedValue({ active: false, expiresAt: null, attemptsLeft: 3, lockedUntil: null });
+    a2a.peersList.mockResolvedValue({ peers: [{ v: 1, peerId: 'p1', hostId: 'h1', name: 'DESK', createdAt: '' }] });
+    await act(async () => { vi.advanceTimersByTime(CONNECT_PAIR_POLL_MS); });
+    await settle();
+    expect(q('remote-connect-joined')).not.toBeNull();
+    expect(lanlink.pairCancel).not.toHaveBeenCalled();
+    expect((await readPairStatus()).active).toBe(true);
+    // Closing the dialog still ends it.
+    act(() => root.unmount());
+    root = createRoot(container);
+    await settle();
+    expect(lanlink.pairCancel).toHaveBeenCalledTimes(1);
   });
 
   it('leaves alone a pairing window it did not open', async () => {

@@ -458,6 +458,15 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const working = busy || invite.joinBusy;
   const remaining = invite.remainingSec;
 
+  // The LAN panel keeps its place in the body in both views below (second
+  // child of DialogBody, after the tabs or an empty slot), so a PC redeeming
+  // the invite does not unmount it and end a LAN PIN that is still open.
+  const lanPanel = lanShown ? (
+    <div hidden={tab !== 'lan' || joined !== null}>
+      <LanLinkPairPanel onPaired={onLanPaired} />
+    </div>
+  ) : null;
+
   if (joined) {
     return (
       <Dialog onClose={onClose} width={520} data-testid="remote-connect-joined">
@@ -467,6 +476,8 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
           closeLabel={t('remotePage.connect.close')}
         />
         <DialogBody>
+          {null}
+          {lanPanel}
           <A2aExposureChecklist hostId={joined.hostId} pcName={joined.name} t={t} />
         </DialogBody>
         <DialogFooter>
@@ -491,11 +502,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
           ]}
           data-testid="remote-connect-tabs"
         />
-        {lanShown && (
-          <div hidden={tab !== 'lan'}>
-            <LanLinkPairPanel onPaired={onLanPaired} />
-          </div>
-        )}
+        {lanPanel}
         {tab === 'lan' ? null : tab === 'invite' ? (
           <div className="wmux-remote-connect" data-testid="remote-connect-invite">
             <p className="wmux-remote-connect-note">{t('remotePage.connect.inviteDesc')}</p>

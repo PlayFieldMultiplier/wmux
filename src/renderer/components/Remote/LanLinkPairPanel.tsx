@@ -202,6 +202,10 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
   const minted = useRef(false);
   /** The panel went away (the dialog closed). */
   const disposed = useRef(false);
+  // The latest callback, read when a pairing lands: a parent that passes a new
+  // function every render must not restart the 1 s countdown below.
+  const onPairedRef = useRef(onPaired);
+  onPairedRef.current = onPaired;
 
   const refreshStatus = useCallback(async () => {
     if (!api?.status) { setAvailable(false); return; }
@@ -221,12 +225,12 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
     setFailCount(r.data.failCount);
     if (!r.data.active) {
       // Redeemed, expired or burned by wrong PINs: the window is gone.
-      if (minted.current) onPaired?.();
+      if (minted.current) onPairedRef.current?.();
       minted.current = false;
       setPin(null);
       setDeadline(null);
     }
-  }, [api, ipcInvoke, onPaired]);
+  }, [api, ipcInvoke]);
 
   useEffect(() => {
     void refreshStatus();
@@ -253,12 +257,16 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
   }, [now, deadline]);
 
   // Closing the dialog closes a window this panel left open.
-  useEffect(() => () => {
-    disposed.current = true;
-    if (minted.current) {
-      minted.current = false;
-      void window.electronAPI?.lanlink?.pairCancel?.().catch(() => undefined);
-    }
+  useEffect(() => {
+    // A remount (StrictMode re-runs effects) is alive again.
+    disposed.current = false;
+    return () => {
+      disposed.current = true;
+      if (minted.current) {
+        minted.current = false;
+        void window.electronAPI?.lanlink?.pairCancel?.().catch(() => undefined);
+      }
+    };
   }, []);
 
   const onBeginPair = useCallback(async () => {
@@ -303,9 +311,9 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
     if (r.ok) {
       setJoinPin('');
       setJoinedName(r.data.peerName);
-      onPaired?.();
+      onPairedRef.current?.();
     } else setError(t('settings.lanlinkPairError'));
-  }, [api, ipcInvoke, joinHost, joinPort, joinPin, onPaired, t]);
+  }, [api, ipcInvoke, joinHost, joinPort, joinPin, t]);
 
   const selfAddress = (() => {
     if (!nic || effectivePort == null) return null;
