@@ -3259,6 +3259,8 @@ export const pl = {
   'settings.browserDiscardDesc': 'Gdy panel przeglądarki pozostaje niewidoczny przez 5 minut, wyładuj go całkowicie, aby odzyskać pamięć. Strona wczytuje się ponownie po powrocie (pozycja przewijania i niezapisane dane formularza są tracone). Panele odtwarzające dźwięk nigdy nie są odrzucane; automatyzacja budzi odrzucony panel automatycznie.',
   'settings.browserPrivateNetwork': 'Zezwalaj na adresy sieci prywatnej',
   'settings.browserPrivateNetworkDesc': 'Pozwól przeglądarkom agentów otwierać adresy intranetowe: 10.x, 172.16–31.x, 192.168.x i fc00::/7. Metadane chmury (169.254.x), adresy link-local i aliasy pętli zwrotnej pozostają zablokowane. Działa od następnej nawigacji. Domyślnie wyłączone.',
+  'settings.browserPrivateNetworkOffUnsaved': 'Nie udało się tego zapisać. Dostęp do sieci prywatnej włączy się ponownie po ponownym uruchomieniu wmux.',
+  'settings.browserPrivateNetworkOnUnsaved': 'Nie udało się zapisać tego ustawienia, więc dostęp do sieci prywatnej pozostaje wyłączony.',
   'settings.siteMemory': 'Pamięć witryn',
   'settings.siteMemoryDesc': 'Zapamiętuj, co poszło nie tak w danej witrynie — przerwane odtwarzanie, host, który się nie wczytał — i przypominaj o tym, gdy przeglądarka trafi tam następnym razem. Zapisywane per przestrzeń robocza, jeden plik na domenę, zapominane po 60 dniach bez powtórki. Wyłączenie zatrzymuje zarówno zapisywanie, jak i przypominanie; to, co już zapisano, nadal można usunąć.',
   'settings.browserSectionRuntime': 'Działanie przeglądarki',

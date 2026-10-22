@@ -98,11 +98,19 @@ export class BrowserBackendStore {
     return this.privateNetwork;
   }
 
-  setAllowPrivateNetwork(allow: boolean): void {
+  /**
+   * Returns whether the change was saved. Unsaved, the in-memory value lands on
+   * the narrow side either way: an opt-out still applies for this session (and
+   * the caller must say it will not survive a restart), and an opt-in does not
+   * apply at all — access is never widened on a change the file does not hold.
+   */
+  setAllowPrivateNetwork(allow: boolean): boolean {
     this.privateNetwork = allow;
     // Same reason as set(): persist() writes the scope field too.
     this.liveWriteScope();
-    this.persist();
+    const saved = this.persist();
+    if (!saved && allow) this.privateNetwork = false;
+    return saved;
   }
 
   set(backend: BrowserBackend): void {
@@ -113,7 +121,8 @@ export class BrowserBackendStore {
     this.persist();
   }
 
-  private persist(): void {
+  /** Whether the write reached the file. */
+  private persist(): boolean {
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
       // Atomic write (tmp + rename): a crash mid-write must not leave a
@@ -134,10 +143,13 @@ export class BrowserBackendStore {
         'utf8',
       );
       renameSync(tmpPath, this.filePath);
+      return true;
     } catch (err) {
-      // In-memory value still applies for this session; persistence is
-      // best-effort but a failure must be visible in logs, not swallowed.
+      // The backend and scope keep their in-memory value for this session;
+      // setAllowPrivateNetwork decides for itself (see there). A failure must
+      // be visible in logs, not swallowed.
       console.error('[BrowserBackendStore] persist failed:', err);
+      return false;
     }
   }
 }

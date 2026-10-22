@@ -57,3 +57,19 @@ export interface ExternalOpenResult {
   opened: true;
   url: string;
 }
+
+/** IPC channels for Settings → Browser → Allow private network addresses. */
+export const BROWSER_PRIVATE_NETWORK_IPC = {
+  get: 'browser:get-allow-private-network',
+  set: 'browser:set-allow-private-network',
+} as const;
+
+/**
+ * What a write of the private-network switch did: the value now in force, and
+ * whether the file holds it. `saved: false` means a restart will not keep what
+ * the user just chose, so the Settings row has to say so.
+ */
+export interface AllowPrivateNetworkSetResult {
+  allow: boolean;
+  saved: boolean;
+}

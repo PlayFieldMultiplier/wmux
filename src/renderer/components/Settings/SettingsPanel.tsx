@@ -2188,6 +2188,11 @@ function TabBrowser() {
   // it per navigation, so it is read and written over IPC, never through the
   // renderer store.
   const [allowPrivateNetwork, setAllowPrivateNetworkState] = useState(false);
+  // Set when main could not save the last change: the row shows the value in
+  // force, and this says what a restart will do to it.
+  const [privateNetworkUnsaved, setPrivateNetworkUnsaved] = useState<
+    'settings.browserPrivateNetworkOffUnsaved' | 'settings.browserPrivateNetworkOnUnsaved' | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -2203,7 +2208,16 @@ function TabBrowser() {
 
   const onAllowPrivateNetworkChange = (next: boolean) => {
     window.electronAPI?.browser?.setAllowPrivateNetwork?.(next)
-      .then((stored) => setAllowPrivateNetworkState(stored))
+      .then(({ allow, saved }) => {
+        setAllowPrivateNetworkState(allow);
+        setPrivateNetworkUnsaved(
+          saved
+            ? null
+            : next
+              ? 'settings.browserPrivateNetworkOnUnsaved'
+              : 'settings.browserPrivateNetworkOffUnsaved',
+        );
+      })
       .catch(() => undefined);
   };
 
@@ -2253,6 +2267,11 @@ function TabBrowser() {
             label={t('settings.browserPrivateNetwork')}
           />
         </SettingRow>
+        {privateNetworkUnsaved && (
+          <SettingNote tone="danger" role="status" data-testid="browser-private-network-unsaved">
+            {t(privateNetworkUnsaved)}
+          </SettingNote>
+        )}
       </SettingsSection>
       <SettingsSection title={t('settings.browserSectionKnowledge')}>
         <SettingRow id="sitememory" label={t('settings.siteMemory')} description={t('settings.siteMemoryDesc')}>
