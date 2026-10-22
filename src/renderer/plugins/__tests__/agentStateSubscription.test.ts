@@ -99,7 +99,7 @@ describe('agent state subscription for every workspace', () => {
   });
   it('keeps running while no workspace is bound, and reads once one is', async () => {
     vi.useFakeTimers();
-    let bound: string | undefined;
+    let bound = undefined as string | undefined;
     const post = vi.fn();
     const read = vi.fn(async () => ({ ok: true, result: all }));
     const stop = subscribeAgentState({ scope: 'all', workspaceId: () => bound, post, read, isCurrent: () => true });
