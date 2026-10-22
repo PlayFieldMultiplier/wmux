@@ -5,13 +5,21 @@
 :root { color-scheme: light dark; font: 13px system-ui,sans-serif; background: Canvas; color: CanvasText; }
 body { margin: 0; }
 #scroll { position: relative; height: 100vh; overflow: auto; box-sizing: border-box; padding: 16px 20px 24px; }
-#room { position: relative; margin: 0 auto; }
+/* One office per workspace, stacked; a single office has no heading. */
+.office + .office { margin-top: 24px; }
+.office-name { margin: 0 auto 4px; font-size: 13px; font-weight: 600; text-align: center; }
+.office-current { font-weight: 400; opacity: .7; }
+.office-idle { margin: 0; text-align: center; font-size: 12px; opacity: .7; }
+.office-floor { position: relative; }
+.office-floor[hidden], .office-idle[hidden], .office-name[hidden] { display: none; }
+.room { position: relative; margin: 0 auto; }
 #notice { position: sticky; top: 0; left: 0; z-index: 200000; width: max-content; max-width: 100%; margin: 0 auto 8px;
   padding: 4px 10px; border-radius: 6px; background: Canvas; opacity: .85; }
 #notice[hidden] { display: none; }
-#empty { position: absolute; top: 45%; left: 50%; z-index: 200000; transform: translate(-50%, -50%); max-width: 320px;
+.empty { position: absolute; top: 45%; left: 50%; z-index: 200000; transform: translate(-50%, -50%); max-width: 320px;
   padding: 12px 16px; border-radius: 10px; background: Canvas; box-shadow: 0 4px 16px #0004; text-align: center; }
-#empty p { margin: 0; } #empty-hint { margin-top: 4px !important; opacity: .7; font-size: 12px; }
+.empty[hidden] { display: none; }
+.empty p { margin: 0; } .empty-hint { margin-top: 4px !important; opacity: .7; font-size: 12px; }
 
 /* Every sprite is drawn at 1x and scaled by a transform. */
 .sprite { position: absolute; display: block; background-repeat: no-repeat; image-rendering: pixelated;
@@ -54,10 +62,7 @@ body { margin: 0; }
 </style></head><body>
 <div id="scroll">
   <p id="notice" role="status"></p>
-  <div id="room" role="group" aria-label="Office">
-    <div id="room-props"></div><div id="stations"></div><div id="employees"></div>
-  </div>
-  <div id="empty" hidden><p id="empty-title"></p><p id="empty-hint"></p></div>
+  <div id="rooms"></div>
 </div>
 <script src="sprites.js"></script>
 <script src="layout.js"></script>

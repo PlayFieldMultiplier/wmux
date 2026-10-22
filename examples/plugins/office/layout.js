@@ -1,5 +1,6 @@
-// Pure layout for the Office page, no DOM: who the employees are (from an
-// agent.state snapshot), the room's size, the boss desk at the head of the
+// Pure layout for the Office page, no DOM: which rooms there are (one per
+// workspace when the host sends every workspace), who the employees are (from
+// an agent.state snapshot), the room's size, the boss desk at the head of the
 // room with a queue in front of it for employees who need you or have
 // finished, one desk per employee (kept while its owner queues or rests),
 // sofas for resting employees, and the room pieces to draw.
@@ -328,8 +329,34 @@
     return pick('queue', layout.queue, layout.queueFor[employee.id]);
   }
 
+  /**
+   * The rooms for an all-workspaces snapshot (`agent-state` with
+   * `allWorkspaces`), in the order the host sends them (the sidebar's). Every
+   * workspace gets a room; one with no agents is `collapsed` to a line, except
+   * the workspace the host is showing, which keeps its empty office.
+   */
+  function officeRooms(all, currentWorkspaceId) {
+    const rooms = [];
+    const seen = new Set();
+    for (const ws of (all && Array.isArray(all.workspaces) ? all.workspaces : [])) {
+      if (!ws || typeof ws.workspaceId !== 'string' || !ws.workspaceId || seen.has(ws.workspaceId)) continue;
+      seen.add(ws.workspaceId);
+      const employees = employeesFromSnapshot(ws);
+      const current = ws.workspaceId === currentWorkspaceId;
+      rooms.push({
+        workspaceId: ws.workspaceId,
+        name: typeof ws.name === 'string' && ws.name ? ws.name : ws.workspaceId,
+        current,
+        employees,
+        truncated: ws.truncated === true,
+        collapsed: employees.length === 0 && !current,
+      });
+    }
+    return rooms;
+  }
+
   root.OfficeLayout = {
     DESK_COLUMNS, BASE_DESK_ROWS, QUEUE_COLUMNS, BASE_SOFAS,
-    stackIndex, hashLook, employeesFromSnapshot, layoutOffice, spotFor,
+    stackIndex, hashLook, employeesFromSnapshot, layoutOffice, spotFor, officeRooms,
   };
 })(this);

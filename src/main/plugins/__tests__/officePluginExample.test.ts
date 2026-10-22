@@ -26,6 +26,9 @@ interface OfficeLayoutApi {
   employeesFromSnapshot(snapshot: { panes: Pane[] }): Employee[];
   layoutOffice(employees: Pick<Employee, 'id' | 'state'>[], prev?: Layout): Layout;
   spotFor(employee: Pick<Employee, 'id' | 'state'>, layout: Layout): { kind: string; key: string } | null;
+  officeRooms(all: unknown, currentWorkspaceId: string | null): {
+    workspaceId: string; name: string; current: boolean; employees: Employee[]; truncated: boolean; collapsed: boolean;
+  }[];
 }
 
 /** layout.js is a classic browser script; run it as the page would. */
@@ -54,7 +57,7 @@ describe('office example bundle', () => {
 
     expect(loader.listFailures()).toEqual([]);
     const manifest = loader.get('office')?.manifest;
-    expect(manifest?.capabilities).toEqual(['ui.rail-page', 'agent.state.read', 'pane.read']);
+    expect(manifest?.capabilities).toEqual(['ui.rail-page', 'agent.state.read', 'agent.state.read.all', 'pane.read']);
     expect(manifest?.contributes.railPage).toEqual({ title: 'Office', entry: 'index.html', agentStateEvents: true });
 
     const html = fs.readFileSync(path.join(BUNDLE, 'index.html'), 'utf8');
@@ -144,5 +147,37 @@ describe('office layout', () => {
     expect(second.loungeFor.b).toBe(first.loungeFor.b);
     expect(second.loungeFor.c).toBe(first.loungeFor.c);
     expect(second.loungeFor.d).toBe(first.loungeFor.a);
+  });
+});
+
+describe('office rooms, one per workspace', () => {
+  const agent = (paneId: string, surfaceId: string, state = 'working') =>
+    ({ paneId, label: paneId, state, stashed: false, surfaces: [{ surfaceId, agentName: 'Codex' }] });
+  const all = { truncated: false, workspaces: [
+    { workspaceId: 'w1', name: 'alpha', truncated: false, panes: [agent('p1', 's1'), agent('p2', 's2', 'needsYou')] },
+    { workspaceId: 'w2', name: 'beta', truncated: false, panes: [] },
+    { workspaceId: 'w3', name: 'gamma', truncated: true, panes: [agent('p3', 's3', 'resting')] },
+    { workspaceId: 'w4', name: '', truncated: false, panes: [] },
+  ] };
+
+  it('makes a room per workspace in host order, each with its own employees', () => {
+    const rooms = office.officeRooms(all, 'w4');
+    expect(rooms.map((r) => [r.workspaceId, r.name, r.current, r.truncated])).toEqual([
+      ['w1', 'alpha', false, false], ['w2', 'beta', false, false], ['w3', 'gamma', false, true], ['w4', 'w4', true, false],
+    ]);
+    expect(rooms.map((r) => r.employees.map((e) => [e.id, e.paneId, e.state]))).toEqual([
+      [['s1', 'p1', 'working'], ['s2', 'p2', 'needsYou']], [], [['s3', 'p3', 'resting']], [],
+    ]);
+  });
+
+  it('collapses a workspace without agents to a line, except the one the host shows', () => {
+    expect(office.officeRooms(all, 'w2').map((r) => r.collapsed)).toEqual([false, false, false, true]);
+    expect(office.officeRooms(all, 'w1').map((r) => r.collapsed)).toEqual([false, true, false, true]);
+  });
+
+  it('skips malformed and repeated workspaces instead of drawing them', () => {
+    const rooms = office.officeRooms({ workspaces: [null, { name: 'x' }, all.workspaces[0], { ...all.workspaces[0], name: 'dup' }] }, null);
+    expect(rooms.map((r) => r.name)).toEqual(['alpha']);
+    expect(office.officeRooms(undefined, null)).toEqual([]);
   });
 });

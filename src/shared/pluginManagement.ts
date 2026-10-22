@@ -46,7 +46,7 @@ export const UI_PLUGIN_CATALOG = [{
   taglineKey: 'plugins.page.officeTagline',
   signature: true,
   glyph: 'office',
-  capabilities: ['ui.rail-page', 'agent.state.read', 'pane.read'],
+  capabilities: ['ui.rail-page', 'agent.state.read', 'agent.state.read.all', 'pane.read'],
   readme: 'https://github.com/openwong2kim/wmux/blob/main/examples/plugins/office/README.md',
   publisher: 'bluemas',
   license: 'MIT',

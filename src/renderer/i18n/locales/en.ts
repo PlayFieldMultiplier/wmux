@@ -28,7 +28,7 @@ export const en = {
   "plugins.settings.agentStatus": "Agent status",
   "plugins.settings.agentStatusHint": "See agent status in the current workspace and jump to a pane. No terminal content access.",
   "plugins.settings.office": "Office",
-  "plugins.settings.officeHint": "See the current workspace's agents as employees in a pixel-art office and jump to a pane. No terminal content access.",
+  "plugins.settings.officeHint": "See every workspace's agents as employees in a pixel-art office, one room per workspace, and jump to a pane. No terminal content access.",
   "plugins.settings.install": "Install",
   "plugins.settings.loadFailed": "{name} could not be loaded. Check its manifest and bundle files.",
   'plugins.settings.moved': "Plugins moved to their own page.",
