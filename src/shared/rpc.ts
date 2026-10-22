@@ -355,6 +355,23 @@ export type RpcResponse =
   | { id: string; ok: true; result: unknown }
   | { id: string; ok: false; error: string; rejection?: RpcRejection; retryable?: boolean };
 
+/**
+ * Whether an RPC reply is a refusal answered as a result rather than thrown.
+ * Many handlers return `{ error }` (or `{ ok: false, ... }`), which keeps the
+ * pipe envelope ok, so the MCP server's callRpc (src/mcp/index.ts) flags it
+ * itself: an agent that checks only `isError` otherwise reads the refusal as
+ * success. The bot tool guard (main/deck/botToolGuard.ts) reads it the same way. Only the top level counts
+ * (a per-item `error` in a list is data), `ok: false` follows the tool modules'
+ * convention (git.ts, ledger.ts, ...), and an `error` next to any other `ok` is
+ * data.
+ */
+export function isErrorShapedResult(result: unknown): boolean {
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return false;
+  const r = result as Record<string, unknown>;
+  if (r.ok === false) return true;
+  return r.ok === undefined && typeof r.error === 'string' && r.error.length > 0;
+}
+
 // Structured rejection surfaced by the Phase 2.2 permission enforcer.
 //
 // Defined here as a standalone exported type so the enforcer module (pure,

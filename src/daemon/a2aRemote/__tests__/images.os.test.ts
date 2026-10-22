@@ -16,7 +16,7 @@ import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { remoteTaskId } from '../ids';
 import { registerImageRoutes } from '../imageRoutes';
-import { imageRoots, readImageSource } from '../imageSource';
+import { imageRoots, imageSourceMessage, readImageSource } from '../imageSource';
 import { A2aImageStore, A2A_IMAGE_RETAIN_MS, LOCAL_FOLDER, RECEIVED_HOST_MAX_FILES, STAGING_PEER_MAX_BYTES, STAGING_TTL_MS, sha256 } from '../imageStore';
 import { acceptInbound, PULL_MAX_ATTEMPTS, type ImagePull, type InboundDeps } from '../inbound';
 import { LinkStore } from '../linkStore';
@@ -141,6 +141,17 @@ describe('imageRoots / readImageSource', () => {
     const roots = [proj];
     expect(await readImageSource(path.join(proj, 'link.png'), roots)).toEqual({ ok: false, reason: 'outside' });
     expect(await readImageSource(path.join(proj, 'hard.png'), roots)).toEqual({ ok: false, reason: 'links' });
+  });
+
+  it('names the uploads folder of this instance in the "outside" refusal', () => {
+    vi.stubEnv('WMUX_DATA_SUFFIX', '-dogm');
+    try {
+      expect(imageSourceMessage('outside')).toContain('~/.wmux-dogm/uploads/');
+      vi.stubEnv('WMUX_DATA_SUFFIX', '');
+      expect(imageSourceMessage('outside')).toContain('~/.wmux/uploads/');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

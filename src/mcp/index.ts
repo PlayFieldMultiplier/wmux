@@ -20,7 +20,7 @@ import { SHARED_SURFACE } from '../shared/botSurface';
 import { installBotTools, pinToolName } from './toolModules';
 // The factory's bot tool modules register themselves on import.
 import './botModules';
-import type { RpcMethod } from '../shared/rpc';
+import { isErrorShapedResult, type RpcMethod } from '../shared/rpc';
 import { EXECUTE_SEND_CLIENT_TIMEOUT_MS } from '../shared/executeApprovalBounds';
 import { NEW_TASK_SEND_CLIENT_TIMEOUT_MS } from '../shared/freshContext';
 import { MCP_WRITE_DEADLINE_MS } from '../shared/terminalWriteBudget';
@@ -64,6 +64,7 @@ import { registerFleetTriageTools } from './fleetTriage';
 import { registerAutomationTools } from './automation';
 import { registerReplTools } from './repl/tools';
 import { inputSchemaDeclaresMaxBytes, wrapHandlerWithResultCap } from './resultCap';
+import { dataSuffix } from '../shared/constants';
 import { AsyncLocalStorage } from 'async_hooks';
 import {
   classifyMcpParent,
@@ -396,6 +397,20 @@ const SEND_MESSAGE_SHAPE = {
       'The receiver gets its own copy and reads it by the path shown in the message. Works for a pane on another PC too; one whose wmux is older gets the text with a note instead.',
   ),
 };
+
+/**
+ * Append an advisory line to a tool result.
+ *
+ * Used where a bare success would be read as a stronger guarantee than the RPC
+ * actually makes — delivery vs. effect. The note rides as its own content block
+ * so the primary JSON payload stays machine-parseable.
+ */
+export function withNote(
+  result: { content: { type: 'text'; text: string }[]; isError?: true },
+  note: string,
+): { content: { type: 'text'; text: string }[]; isError?: true } {
+  return { ...result, content: [...result.content, { type: 'text', text: `NOTE: ${note}` }] };
+}
 
 export function createWmuxServer(ctx: WmuxServerCtx): McpServer {
 // Workspace identity.
@@ -966,7 +981,7 @@ async function callRpc(
   // it to learn which surface it got — without giving up the stale-route
   // handling every tool gets from this helper.
   onResult?: (result: unknown) => void,
-): Promise<{ content: { type: 'text'; text: string }[] }> {
+): Promise<{ content: { type: 'text'; text: string }[]; isError?: true }> {
   const pinnedRouteAtDispatch = getPinnedRoute();
   try {
     const result = timeoutMs === undefined
@@ -975,7 +990,7 @@ async function callRpc(
     if (isStaleIdentityResult(result)) invalidateStaleRoute(pinnedRouteAtDispatch);
     onResult?.(result);
     const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-    return { content: [{ type: 'text', text }] };
+    return { content: [{ type: 'text', text }], ...(isErrorShapedResult(result) ? { isError: true as const } : {}) };
   } catch (err) {
     if (isStaleIdentityResult(err instanceof Error ? err.message : String(err))) {
       invalidateStaleRoute(pinnedRouteAtDispatch);
@@ -1004,20 +1019,6 @@ function invalidateStaleRoute(pinnedRouteAtDispatch: PinnedRoute | null): void {
   // fresh token — the same recovery path a closed workspace already takes.
   setWorkspaceToken(undefined);
   syncCallerPtyId();
-}
-
-/**
- * Append an advisory line to a tool result.
- *
- * Used where a bare success would be read as a stronger guarantee than the RPC
- * actually makes — delivery vs. effect. The note rides as its own content block
- * so the primary JSON payload stays machine-parseable.
- */
-function withNote(
-  result: { content: { type: 'text'; text: string }[] },
-  note: string,
-): { content: { type: 'text'; text: string }[] } {
-  return { content: [...result.content, { type: 'text', text: `NOTE: ${note}` }] };
 }
 
 /**
@@ -1879,7 +1880,8 @@ server.tool(
     // as working while they sat blocked on an unanswered question. There is no
     // reliable signal here to promote delivery into submission, so the honest
     // answer is to name the gap rather than imply a guarantee.
-    if (key.toLowerCase() === 'enter') {
+    // A refused key was not delivered, so it gets no delivery note.
+    if (key.toLowerCase() === 'enter' && !result.isError) {
       return withNote(
         result,
         'Enter was delivered. This does NOT confirm anything was submitted: if the pane was '
@@ -2155,8 +2157,9 @@ server.tool(
       try {
         const parsed: unknown = JSON.parse(text);
         // Leave error payloads untouched — appending elapsedMs would mutate the
-        // error object shape callers match on.
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !('error' in parsed)) {
+        // error object shape callers match on, and rebuilding would drop the
+        // isError callRpc set on one (an `{ ok: false }` with no `error` key).
+        if (!res.isError && parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !('error' in parsed)) {
           return {
             content: [{
               type: 'text' as const,
@@ -2255,7 +2258,7 @@ const sendMessageHandler = async ({ to, pane_id, surface_id, title, task_id, mes
     for (const given of images) {
       const hostPath = fromAgentPath(given);
       if (!hostPath) {
-        return { content: [{ type: 'text' as const, text: `send_message: images: ${JSON.stringify(given)} is not a file wmux can open (give an absolute path under /mnt/<drive>/, such as /mnt/c/Users/<you>/.wmux/uploads/)` }], isError: true };
+        return { content: [{ type: 'text' as const, text: `send_message: images: ${JSON.stringify(given)} is not a file wmux can open (give an absolute path under /mnt/<drive>/, such as /mnt/c/Users/<you>/.wmux${dataSuffix()}/uploads/)` }], isError: true };
       }
       hostPaths.push(hostPath);
     }
