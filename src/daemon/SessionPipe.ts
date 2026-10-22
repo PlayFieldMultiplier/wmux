@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { getSessionSocketPath } from '../shared/constants';
+import { ATTACH_SNAPSHOT_MIN_BYTES } from '../shared/terminal/attachSnapshot';
 import type { RingBuffer, ReplayGeometry } from './RingBuffer';
 import type { OutputModeTracker } from './util/outputModeTracker';
 import { readRingTailWithModesAndGeometry, readRingWithModesAndGeometry } from './sessionTextReplay';
-import { enqueueSnapshotJob, generateSnapshotUnqueued, MAX_SCROLLBACK } from './HeadlessSnapshot';
+import { enqueueSnapshotJob, generateSnapshotUnqueued, runSmallSnapshotJob, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import {
   createSessionPipeMarkers,
   type SessionPipeMarkers,
@@ -18,12 +19,12 @@ import {
 export { createSessionPipeMarkers };
 
 /**
- * TASK-10: initial-attach flushes at or above this size go through the
- * daemon-side HeadlessSnapshot instead of shipping raw bytes. Below it the
- * renderer parses the raw replay faster than a snapshot round would cost.
- * (The resync/reflush path has its own caller-side policy — see reflush.)
+ * TASK-10: initial-attach flushes at or above ATTACH_SNAPSHOT_MIN_BYTES go
+ * through the daemon-side HeadlessSnapshot instead of shipping raw bytes (see
+ * its definition). The resync/reflush path has its own caller-side policy —
+ * see reflush.
  */
-export const ATTACH_SNAPSHOT_MIN_BYTES = 256 * 1024;
+export { ATTACH_SNAPSHOT_MIN_BYTES };
 /** The attach snapshot's second try parses only this much of the ring's
  *  newest output (see flushRingBuffer). Small enough to finish well inside
  *  the budget on a busy daemon, large enough to hold many full redraws of an
@@ -247,10 +248,18 @@ export class SessionPipe {
     // flush-done marker the client gets no live output (writeToClient gates
     // on `flushed`) while its input already flows, so a queue held by other
     // panes' snapshots left new panes blank and unable to answer the shell's
-    // cursor queries. Overlapping parses are each under
-    // ATTACH_SNAPSHOT_MIN_BYTES, far from the history copies the slot bounds.
+    // cursor queries.
+    //
+    // That bounds each parse's input, not its memory: every headless terminal
+    // is built with MAX_SCROLLBACK rows, and after a daemon restart every pane
+    // reattaches at once. So a small-ring parse takes the separate small gate
+    // (runSmallSnapshotJob), which waits only behind other small parses, never
+    // behind the queue. A ring with no size change ships raw and takes neither.
     if (this.getDims && this.ringBuffer.size >= ATTACH_SNAPSHOT_MIN_BYTES) {
       return enqueueSnapshotJob(() => this.flushRingBufferInSlot(socket));
+    }
+    if (this.getDims && this.ringBuffer.hasGeometryChanges) {
+      return runSmallSnapshotJob(() => this.flushRingBufferInSlot(socket));
     }
     return this.flushRingBufferInSlot(socket);
   }
@@ -279,7 +288,8 @@ export class SessionPipe {
     if (dims && (buffered.length >= ATTACH_SNAPSHOT_MIN_BYTES || otherSize)) {
       // Reuses the resync path's HeadlessSnapshot (alt-screen/margins/
       // partial-tail fail-open ladder, DECSET modes tail), inside the global
-      // concurrency-1 slot for a large ring only. No live tee here: unlike
+      // concurrency-1 slot for a large ring and the small-ring gate for a
+      // small one (see flushRingBuffer). No live tee here: unlike
       // reflush there is no bridge handle at this layer, so bytes arriving
       // DURING the parse are recovered by re-reading the ring afterwards —
       // writeToClient gates on `flushed`, so nothing reaches the socket in

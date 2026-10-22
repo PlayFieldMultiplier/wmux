@@ -224,17 +224,23 @@ describe('SessionPipe initial-attach snapshot (TASK-10)', () => {
     const gate = enqueueSnapshotJob(() => new Promise<void>((resolve) => { release = resolve; }));
     await waitFor(() => typeof release === 'function');
     // A new pane's ring at its renderer's reattach: the ConPTY preamble,
-    // written at the size estimated at create, then the first fit's resize.
+    // written at the size estimated at create, then the first fit's resize
+    // and the shell's banner at the fitted size.
     const ring = new RingBuffer(1024 * 1024);
     ring.noteGeometry(80, ROWS);
     ring.write(Buffer.from('\x1b[1t\x1b[?1004h\x1b[?9001h'));
     ring.noteGeometry(COLS, ROWS);
+    ring.write(Buffer.from('Windows PowerShell\r\n'));
     expect(ring.hasGeometryChanges).toBe(true);
     try {
       const pipe = await startPipe(uniqueSessionId('fresh-resized'), ring, () => ({ cols: COLS, rows: ROWS }));
       const client = await connectClient(pipe.getPipeName(), TOKEN);
       clients.push(client);
       await waitFor(() => client.wire().includes(FLUSH_DONE_MARKER), 5_000);
+      // The replay before the marker paints the banner.
+      const replay = replaySegment(client.wire());
+      expect(replay).not.toBeNull();
+      expect((await screenOf(replay!, COLS, ROWS))[0]).toBe('Windows PowerShell');
       // The shell's prompt, written after the flush, reaches the client.
       pipe.writeToClient(Buffer.from('PS C:\\> '));
       await waitFor(() => client.wire().toString('utf8').endsWith('PS C:\\> '));

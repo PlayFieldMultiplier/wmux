@@ -83,7 +83,7 @@ import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import type { WebTlsConfig } from '../shared/web';
-import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, capTextRowsToFrameBudget, MAX_SCROLLBACK, type TextSnapshotOutcome } from './HeadlessSnapshot';
+import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, capTextRowsToFrameBudget, MAX_SCROLLBACK, type TextSnapshotOutcome } from './HeadlessSnapshot';
 import { readSessionTextReplay } from './sessionTextReplay';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
@@ -641,7 +641,9 @@ function syncGateAfter<A extends unknown[], R>(fn: (...args: A) => Promise<R>): 
  * A plain-text parse of a session's ring on the shared concurrency-1 snapshot
  * queue. The ring is copied only when the job's turn comes, so a job waiting
  * behind attach snapshots pins no ring copy; the session is looked up then
- * too, so a pane closed meanwhile reads as gone.
+ * too, so a pane closed meanwhile reads as gone. A read of the same pane
+ * and depth still waiting joins the queued one (enqueueSnapshotJob's
+ * coalesceKey).
  */
 function queuedTextSnapshot(sessionManager: DaemonSessionManager, sessionId: string, scrollback: number): Promise<TextSnapshotOutcome | null> {
   return enqueueSnapshotJob(async () => {
@@ -655,7 +657,27 @@ function queuedTextSnapshot(sessionManager: DaemonSessionManager, sessionId: str
       rows: managed.meta.rows ?? 24,
       scrollback,
     });
-  });
+  }, `text:${sessionId}:${scrollback}`);
+}
+
+/**
+ * The visible grid of a pane (no scrollback), for the approval check, the chat
+ * bridge and automation. Read in the slot like queuedTextSnapshot, so the
+ * pollers that call this many times while the queue is busy share one parse
+ * per pane instead of each queueing a whole-ring parse of its own.
+ */
+function queuedScreenText(sessionManager: DaemonSessionManager, sessionId: string, undimmed = false): Promise<TextSnapshotOutcome | null> {
+  return enqueueSnapshotJob(async () => {
+    const managed = sessionManager.getSession(sessionId);
+    if (!managed) return null;
+    return generateTextSnapshotUnqueued({
+      cols: managed.meta.cols ?? 80,
+      rows: managed.meta.rows ?? 24,
+      scrollback: 0,
+      initial: readSessionTextReplay(managed.ringBuffer, managed.bridge.outputModes),
+      ...(undimmed ? { undimmed: true } : {}),
+    });
+  }, `screen:${sessionId}:${undimmed ? 'undimmed' : 'plain'}`);
 }
 
 /**
@@ -728,15 +750,8 @@ function createApprovalRegistry(sessionManager: DaemonSessionManager): ApprovalR
       return adapters[native.adapter]?.(native, reply) ?? 'unavailable';
     },
     readScreenTail: async (sessionId) => {
-      const managed = sessionManager.getSession(sessionId);
-      if (!managed) return null;
-      const outcome = await generateTextSnapshot({
-        cols: managed.meta.cols ?? 80,
-        rows: managed.meta.rows ?? 24,
-        scrollback: 0,
-        initial: readSessionTextReplay(managed.ringBuffer, managed.bridge.outputModes),
-      });
-      if (!outcome.ok) return null;
+      const outcome = await queuedScreenText(sessionManager, sessionId);
+      if (!outcome?.ok) return null;
       return outcome.rows.map((r) => r.text);
     },
     writeToSession: (sessionId, data) => {
@@ -4654,17 +4669,9 @@ function registerRpcHandlers(
       },
     } : null,
     readScreen: async (id) => {
-      const managed = sessionManager.getSession(id);
-      if (!managed) return null;
-      const outcome = await generateTextSnapshot({
-        cols: managed.meta.cols ?? 80,
-        rows: managed.meta.rows ?? 24,
-        scrollback: 0,
-        initial: readSessionTextReplay(managed.ringBuffer, managed.bridge.outputModes),
-        // The composer check tells a dimmed suggested prompt from typed input.
-        undimmed: true,
-      });
-      return outcome.ok
+      // The composer check tells a dimmed suggested prompt from typed input.
+      const outcome = await queuedScreenText(sessionManager, id, true);
+      return outcome?.ok
         ? Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) })
         : null;
     },
@@ -5679,15 +5686,8 @@ function registerRpcHandlers(
     isAttached: (id) => sessionManager.getSession(id)?.meta.state === 'attached',
     destroySession: async (id) => { await destroySessionRpc({ id }); },
     readScreen: async (id) => {
-      const managed = sessionManager.getSession(id);
-      if (!managed) return '';
-      const outcome = await generateTextSnapshot({
-        cols: managed.meta.cols ?? 80,
-        rows: managed.meta.rows ?? 24,
-        scrollback: 0,
-        initial: readSessionTextReplay(managed.ringBuffer, managed.bridge.outputModes),
-      });
-      return outcome.ok ? outcome.rows.map((r) => r.text).join('\n') : '';
+      const outcome = await queuedScreenText(sessionManager, id);
+      return outcome?.ok ? outcome.rows.map((r) => r.text).join('\n') : '';
     },
     sendKey: async (id, sequence) => {
       const managed = liveManaged(id);

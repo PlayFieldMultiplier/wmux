@@ -131,13 +131,66 @@ let queueTail: Promise<unknown> = Promise.resolve();
  * suppress its pane's live output for the whole queue wait (N×budget under
  * concurrent reveals) and blow past the renderer's resync timeout — the
  * suppression window must equal the work window, not the wait window.
+ *
+ * `coalesceKey`: a request whose key matches a job still WAITING for the slot
+ * joins that job instead of queueing a second one, and gets its result. Only
+ * for a job that reads its input when its turn comes (a pane's ring, looked
+ * up by id inside the job): its answer is then at least as fresh as the
+ * joining request, so running it once answers both. A job that has started
+ * is never joined, since it may have read already. Without this, a pane read
+ * by pollers (approvals, chat, automation) while the queue is busy piles up
+ * one whole-ring parse per poll, and everything queued behind them waits.
  */
-export function enqueueSnapshotJob<T>(job: () => Promise<T>): Promise<T> {
-  const run = queueTail.then(job);
+const waitingByKey = new Map<string, Promise<unknown>>();
+
+export function enqueueSnapshotJob<T>(job: () => Promise<T>, coalesceKey?: string): Promise<T> {
+  if (coalesceKey !== undefined) {
+    const waiting = waitingByKey.get(coalesceKey);
+    if (waiting) return waiting as Promise<T>;
+  }
+  const run: Promise<T> = queueTail.then(() => {
+    // Its turn: from here a new request for the key queues afresh.
+    if (coalesceKey !== undefined && waitingByKey.get(coalesceKey) === run) waitingByKey.delete(coalesceKey);
+    return job();
+  });
+  if (coalesceKey !== undefined) waitingByKey.set(coalesceKey, run);
   // The queue must survive a rejected job (a defensive catch keeps one bug
   // from wedging all snapshots).
   queueTail = run.catch(() => undefined);
   return run;
+}
+
+/**
+ * Parses of a small ring that skip the queue above (a new pane's attach
+ * flush, #2585) run at most this many at once. Their input is small, but each
+ * headless terminal is built with the caller's scrollback (MAX_SCROLLBACK for
+ * an attach), so a reattach of every pane after a daemon restart would
+ * otherwise build one per pane at the same time.
+ */
+export const SMALL_SNAPSHOT_CONCURRENCY = 4;
+let smallSnapshotsRunning = 0;
+const smallSnapshotWaiters: Array<() => void> = [];
+
+/**
+ * Run `job` under the small-ring gate. Independent of the queue above: a job
+ * here never waits behind another pane's large snapshot, only behind other
+ * small ones.
+ */
+export async function runSmallSnapshotJob<T>(job: () => Promise<T>): Promise<T> {
+  if (smallSnapshotsRunning < SMALL_SNAPSHOT_CONCURRENCY) {
+    smallSnapshotsRunning++;
+  } else {
+    // A finishing job hands its place straight to the oldest waiter, so the
+    // count stays put and no newcomer can slip in between.
+    await new Promise<void>((resolve) => smallSnapshotWaiters.push(resolve));
+  }
+  try {
+    return await job();
+  } finally {
+    const next = smallSnapshotWaiters.shift();
+    if (next) next();
+    else smallSnapshotsRunning--;
+  }
 }
 
 export function generateSnapshot(req: SnapshotRequest): Promise<SnapshotOutcome> {
@@ -331,8 +384,9 @@ async function generateXtermTextInner(req: SnapshotRequest): Promise<TextSnapsho
 
 /**
  * Non-queued variant for callers that already hold the slot via
- * enqueueSnapshotJob (SessionPipe.reflush). Calling this without the slot
- * forfeits the memory/event-loop serialization the queue exists for.
+ * enqueueSnapshotJob (SessionPipe.reflush) or, for a small ring, the
+ * runSmallSnapshotJob gate. Calling this without either forfeits the
+ * memory/event-loop bound they exist for.
  */
 export function generateSnapshotUnqueued(req: SnapshotRequest): Promise<SnapshotOutcome> {
   return generateInner(req);
