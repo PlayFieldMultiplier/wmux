@@ -1,7 +1,13 @@
 {
   "codexVersion": "0.157.1",
   "source": "codex app-server generate-ts --experimental (ClientRequest / ClientNotification)",
+  "reviewedAdditions": {
+    "0.163.0": [
+      "account/bedrock/checkGovCloudRequirements"
+    ]
+  },
   "requests": [
+    "account/bedrock/checkGovCloudRequirements",
     "account/bedrock/discover",
     "account/bedrock/setup",
     "account/gatewayOAuth/cancel",

@@ -35,6 +35,16 @@ function upgrade(relay:Relay, headers:Record<string,string>, origin?:string):Pro
   });
 }
 
+/** An open connection carrying `headers`, the way a TUI holds one. */
+function open(relay:Relay, headers:Record<string,string>):Promise<WebSocket> {
+  return new Promise((resolve,reject)=>{
+    const socket = new WebSocket(`${relay.url}/`,{headers});
+    socket.once('open',()=>resolve(socket));
+    socket.once('unexpected-response',(_req,res)=>{res.resume();socket.terminate();reject(new Error(`HTTP ${res.statusCode}`));});
+    socket.once('error',reject);
+  });
+}
+
 describe.runIf(process.platform === 'win32')('Codex TUI relay upgrade checks on Windows',()=>{
   let home:string;
   let server:WebSocketServer;
@@ -65,6 +75,51 @@ describe.runIf(process.platform === 'win32')('Codex TUI relay upgrade checks on 
       expect(relay.retired()).toBe(false);
       expect(await upgrade(relay,bearer)).toBe(101);
     } finally {await relay.close();}
+  });
+
+  // A Codex TUI opens a new app-server connection after its startup resume
+  // picker closed the first one (#2612): the same launch must get back in.
+  it('takes the same TUI\'s next connection once its previous one ended, one at a time',async()=>{
+    const relay = await createCodexTuiRelay({codeHome:home});
+    const bearer = {authorization:`Bearer ${relay.authToken}`};
+    try {
+      const first = await open(relay,bearer);
+      // While a connection is live, nothing else gets in, the bearer included.
+      expect(await upgrade(relay,bearer)).toBe(403);
+      expect(await upgrade(relay,{authorization:`Bearer ${'0'.repeat(64)}`})).toBe(403);
+      first.close();
+      await vi.waitFor(()=>expect(relay.disconnected()).toBe(true),{timeout:10_000});
+      expect(relay.retired()).toBe(false);
+      // Between connections a wrong bearer or an Origin is still refused.
+      expect(await upgrade(relay,{authorization:`Bearer ${'0'.repeat(64)}`})).toBe(403);
+      expect(await upgrade(relay,bearer,'http://127.0.0.1')).toBe(403);
+      const second = await open(relay,bearer);
+      // Live again once its server link opens.
+      await vi.waitFor(()=>expect(relay.disconnected()).toBe(false),{timeout:10_000});
+      expect(await upgrade(relay,bearer)).toBe(403);
+      second.close();
+      await vi.waitFor(()=>expect(relay.disconnected()).toBe(true),{timeout:10_000});
+      await relay.close();
+      expect(await upgrade(relay,bearer)).not.toBe(101);
+    } finally {await relay.close();}
+  });
+
+  it('closes a relay whose TUI does not come back within the claim window',async()=>{
+    let left:()=>void = ()=> { /* replaced below */ };
+    const gone = new Promise<void>(resolve=>{left = resolve;});
+    // Without vi.waitFor, which advances fake timers while it polls.
+    const relay:Relay = await createCodexTuiRelay({codeHome:home,onStateChange:()=>{if (relay?.disconnected()) left();}});
+    try {
+      const first = await open(relay,{authorization:`Bearer ${relay.authToken}`});
+      await vi.waitFor(()=>expect(relay.linked()).toBe(true),{timeout:10_000});
+      vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
+      first.close();
+      await gone;
+      vi.advanceTimersByTime(29_999);
+      expect(relay.retired()).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(relay.retired()).toBe(true);
+    } finally {vi.useRealTimers();await relay.close();}
   });
 
   it('closes a relay no TUI claimed within its claim window',async()=>{

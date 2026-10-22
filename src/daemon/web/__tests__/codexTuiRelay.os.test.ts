@@ -124,7 +124,7 @@ describe.skipIf(process.platform === 'win32')('pane-owned Codex Unix relay',()=>
       client.terminate();
     } finally { await f.cleanup(); }
   });
-  it('uses private permissions, rejects another client, and retires on disconnect without stopping upstream',async()=>{
+  it('uses private permissions, rejects another client, and closes without stopping upstream',async()=>{
     const f=await fixture();
     try {
       const socketPath=f.relay.url.slice('unix://'.length);
@@ -868,10 +868,12 @@ describe.skipIf(process.platform === 'win32')('Codex relay reconnect after a los
       expect(f.relay.activeTurn(threadId)).toBe('turn-new');
       await expect(f.relay.interrupt(threadId,'turn-new',2000)).resolves.toBeDefined();
       expect(upstream).toContain('turn/interrupt');
-      // Linked again: no other claim, and the TUI leaving retires the relay.
+      // Linked again: no other claim while the TUI is connected.
       await expect(f.connect()).rejects.toThrow();
+      // The TUI leaving keeps the endpoint for its next connection; nothing is live meanwhile.
       back.terminate();await closed(back);
-      await vi.waitFor(()=>expect(f.relay.retired()).toBe(true), { timeout: 10_000 });
+      await vi.waitFor(()=>expect(f.relay.disconnected()).toBe(true), { timeout: 10_000 });
+      expect(f.relay.retired()).toBe(false);
     } finally {await f.cleanup();}
   });
   it('a dropped link to a server that lived on keeps its running turn, and reports no server loss',async()=>{
