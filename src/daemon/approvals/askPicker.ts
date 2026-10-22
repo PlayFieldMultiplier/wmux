@@ -203,7 +203,30 @@ export function readsAsCheckbox(text: string): boolean {
  */
 export function sameQuestionText(screen: string, form: string): boolean {
   const text = compact(screen);
-  return text.length > 0 && text === compact(form);
+  return text.length > 0 && drawnFrom(text, compact(form));
+}
+
+/** At most one lost character per this many of the form's (and at least one). */
+const DRAWN_LOSS_PER = 24;
+
+/**
+ * `screen` is `form` as the daemon's read of the grid draws it: the same text,
+ * or the text with a few characters lost, never one changed or added. Claude
+ * Code repaints by cell diff and skips a cell that already holds the right
+ * character. When that cell was written before the oldest byte the pane's ring
+ * still holds (a long session wraps the ring), the replayed grid shows it
+ * blank: a ` | ` drawn where a status line's `|` had been read as ` `, and the
+ * picker was refused as changed. Both texts are compacted.
+ */
+function drawnFrom(screen: string, form: string): boolean {
+  if (screen === form) return true;
+  const drawn = [...screen];
+  const asked = [...form];
+  const lost = asked.length - drawn.length;
+  if (drawn.length === 0 || lost <= 0 || lost > Math.max(1, Math.floor(asked.length / DRAWN_LOSS_PER))) return false;
+  let j = 0;
+  for (const ch of asked) if (j < drawn.length && drawn[j] === ch) j++;
+  return j === drawn.length;
 }
 
 function parseTabBar(row: string): AskPickerTabs | null {
@@ -587,7 +610,7 @@ function sameOption(row: AskPickerRow, option: AskFormQuestion['options'][number
   const label = compact(option.label);
   const description = compact(option.description ?? '');
   for (let k = 1; k <= rows.length; k++) {
-    if (rows.slice(0, k).join('') === label) return rows.slice(k).join('') === description;
+    if (drawnFrom(rows.slice(0, k).join(''), label) && drawnFrom(rows.slice(k).join(''), description)) return true;
   }
   return false;
 }
@@ -613,7 +636,7 @@ export function answerLabels(question: AskFormQuestion, answer: AskAnswer): stri
 function tabsMatch(screen: AskPickerTabs, questions: readonly AskFormQuestion[]): boolean {
   if (screen.topCut) return questions.length === 1 && questions[0]!.multiSelect !== true;
   return screen.tabs.length === questions.length
-    && screen.tabs.every((tab, j) => tab.label === normalize(questions[j]!.header ?? ''))
+    && screen.tabs.every((tab, j) => drawnFrom(compact(tab.label), compact(questions[j]!.header ?? '')))
     && (questions.length > 1
       ? screen.submitTab
       // One question: a multi-select draws the Submit tab (measured on 2.1.288);
