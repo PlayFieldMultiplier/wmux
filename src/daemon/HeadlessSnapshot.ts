@@ -140,6 +140,39 @@ export function enqueueSnapshotJob<T>(job: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/**
+ * Parses of a small ring that skip the queue above (a new pane's attach
+ * flush, #2585) run at most this many at once. Their input is small, but each
+ * headless terminal is built with the caller's scrollback (MAX_SCROLLBACK for
+ * an attach), so a reattach of every pane after a daemon restart would
+ * otherwise build one per pane at the same time.
+ */
+export const SMALL_SNAPSHOT_CONCURRENCY = 4;
+let smallSnapshotsRunning = 0;
+const smallSnapshotWaiters: Array<() => void> = [];
+
+/**
+ * Run `job` under the small-ring gate. Independent of the queue above: a job
+ * here never waits behind another pane's large snapshot, only behind other
+ * small ones.
+ */
+export async function runSmallSnapshotJob<T>(job: () => Promise<T>): Promise<T> {
+  if (smallSnapshotsRunning < SMALL_SNAPSHOT_CONCURRENCY) {
+    smallSnapshotsRunning++;
+  } else {
+    // A finishing job hands its place straight to the oldest waiter, so the
+    // count stays put and no newcomer can slip in between.
+    await new Promise<void>((resolve) => smallSnapshotWaiters.push(resolve));
+  }
+  try {
+    return await job();
+  } finally {
+    const next = smallSnapshotWaiters.shift();
+    if (next) next();
+    else smallSnapshotsRunning--;
+  }
+}
+
 export function generateSnapshot(req: SnapshotRequest): Promise<SnapshotOutcome> {
   return enqueueSnapshotJob(() => generateInner(req));
 }
@@ -331,8 +364,9 @@ async function generateXtermTextInner(req: SnapshotRequest): Promise<TextSnapsho
 
 /**
  * Non-queued variant for callers that already hold the slot via
- * enqueueSnapshotJob (SessionPipe.reflush). Calling this without the slot
- * forfeits the memory/event-loop serialization the queue exists for.
+ * enqueueSnapshotJob (SessionPipe.reflush) or, for a small ring, the
+ * runSmallSnapshotJob gate. Calling this without either forfeits the
+ * memory/event-loop bound they exist for.
  */
 export function generateSnapshotUnqueued(req: SnapshotRequest): Promise<SnapshotOutcome> {
   return generateInner(req);
