@@ -98,11 +98,17 @@ export async function toggleDictation(target: string, onText: DictationDeliver):
     set({ phase: model.state === 'downloading' ? 'downloading' : 'consent', target });
     return;
   }
-  if ((await api().micAccess()) !== 'granted') return fail('mic-denied');
   deliver = onText;
   set({ phase: 'loading', target });
+  // The engine starts while the OS answers for the microphone.
+  const engine = ensureWorker();
+  engine.catch(() => undefined);
   try {
-    await ensureWorker();
+    if ((await api().micAccess()) !== 'granted') {
+      deliver = null;
+      return fail('mic-denied');
+    }
+    await engine;
     recording = await startRecording(() => void stopDictation());
   } catch (err) {
     deliver = null;
@@ -118,6 +124,9 @@ export async function acceptModelDownload(): Promise<void> {
   const model = await api().download();
   set({ model, phase: 'idle', target: null });
   if (model.state === 'failed') set({ error: model.message });
+  // The owner is about to dictate: warm the engine (it rests again after
+  // IDLE_ENGINE_MS unused).
+  if (model.state === 'ready') ensureWorker().catch((err: unknown) => console.warn(`[wmux:dictation] the speech engine did not start: ${String(err)}`));
 }
 
 export function declineModelDownload(): void {
@@ -166,6 +175,7 @@ export function clearDictationError(): void {
 function ensureWorker(): Promise<void> {
   if (workerReady) return workerReady;
   workerReady = (async () => {
+    const started = performance.now();
     const res = await api().assets();
     if (!res.ok) {
       set({ model: res.state });
@@ -189,6 +199,8 @@ function ensureWorker(): Promise<void> {
       w.postMessage(init, [assets.encoder.buffer, assets.decoder.buffer, assets.wasm.buffer] as Transferable[]);
     });
     worker = w;
+    console.log(`[wmux:dictation] speech engine ready in ${Math.round(performance.now() - started)} ms`);
+    restIdleEngine();
   })();
   workerReady.catch(() => {
     workerReady = null;
@@ -201,17 +213,25 @@ async function transcribeInWorker(audio: Float32Array): Promise<string> {
   const w = worker;
   if (!w) throw new Error('the speech engine is not running');
   if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = null;
   const id = nextId++;
   const text = await new Promise<string>((resolve, reject) => {
     pending.set(id, { resolve, reject });
     const req: WorkerRequest = { type: 'transcribe', id, audio, language: dictationLanguageFor(getLocale()) };
     w.postMessage(req, [audio.buffer]);
   });
-  // The engine holds the model in memory: let it go when dictation rests.
+  restIdleEngine();
+  return text.trim();
+}
+
+/** The engine holds the model in memory: let it go when dictation rests. */
+function restIdleEngine(): void {
+  if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
+    if (state.phase === 'loading' || state.phase === 'recording' || state.phase === 'transcribing') return restIdleEngine();
     worker?.terminate();
     worker = null;
     workerReady = null;
+    idleTimer = null;
   }, IDLE_ENGINE_MS);
-  return text.trim();
 }
