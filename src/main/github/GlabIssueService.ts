@@ -17,7 +17,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { IssueComment, IssueDetail, IssueDetailResult, IssueFilter, IssueSummary } from '../../shared/issueSurface';
 import { capBody } from './GhPrService';
-import { GLAB_ENV, glabProjectOfKey } from './GlabPrService';
+import { glabHostTarget, glabProjectOfKey } from './GlabPrService';
 import { ISSUE_LIST_LIMIT } from './GhIssueService';
 
 const execFileAsync = promisify(execFile);
@@ -157,10 +157,11 @@ export class GlabIssueService {
   ) {}
 
   private async glab(host: string, apiPath: string, cwd: string): Promise<unknown> {
-    const { stdout } = await this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', ['api', '--hostname', host, apiPath], {
+    const target = glabHostTarget(host);
+    const { stdout } = await this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', ['api', ...target.args, apiPath], {
       cwd,
       timeout: GLAB_TIMEOUT_MS,
-      env: GLAB_ENV,
+      env: target.env,
       windowsHide: true,
       maxBuffer: GLAB_MAX_BUFFER,
     });

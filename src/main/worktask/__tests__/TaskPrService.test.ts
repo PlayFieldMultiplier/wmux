@@ -1,8 +1,20 @@
 // ─── TaskPrService — J3 §2 gh 4중 게이트 1클릭 PR ────────────────────────────
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { TaskPrService, type PrExec, type CreatePrInput } from '../TaskPrService';
 import { GlabPrService } from '../../github/GlabPrService';
+import type { ForgeHosts } from '../../../shared/forgeHosts';
+
+// The hosts gh and glab are set up for (shared/forgeHosts.ts): none unless a
+// test sets them, so the name rule routes as before.
+const forge = vi.hoisted(() => ({ hosts: { gh: new Set<string>(), glab: new Map() } as ForgeHosts }));
+vi.mock('../../../shared/forgeHosts', async (orig) => ({
+  ...(await orig<typeof import('../../../shared/forgeHosts')>()),
+  forgeHosts: () => forge.hosts,
+}));
+afterEach(() => {
+  forge.hosts = { gh: new Set(), glab: new Map() };
+});
 
 const VALID_PR = 'https://github.com/acme/widget/pull/42';
 
@@ -480,6 +492,71 @@ describe('task_pr: a host glab refuses goes on to gh', () => {
     const res = await svc.createPr(INPUT);
     expect(res.ok === false && res.reason).toBe('pr-failed');
     expect(res.ok === false && res.error).toContain('gh pr create failed');
+  });
+});
+
+describe('task_pr: GitHub Enterprise on its own domain, a host gh is signed in to', () => {
+  const GHE_PR = 'https://code.acme.example/acme/widget/pull/3';
+  const ghe = (prCreate: string, prList = '') => makeGlService((cmd, args) => {
+    const a = argStr(args);
+    if (cmd === 'git' && a === 'remote get-url --push origin') return { stdout: 'git@code.acme.example:acme/widget.git\n' };
+    if (isGh(cmd) && a.startsWith('pr create')) return { stdout: prCreate };
+    if (isGh(cmd) && a.startsWith('pr list')) return { stdout: prList };
+    return isGh(cmd) ? happyBehavior(cmd, args) : glHappy(cmd, args);
+  });
+
+  it('goes straight to gh and keeps the PR URL gh prints on that host', async () => {
+    forge.hosts = { gh: new Set(['code.acme.example']), glab: new Map() };
+    const { svc, calls, daemonCalls } = ghe(`Creating pull request\n${GHE_PR}`);
+    expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: GHE_PR });
+    expect(calls.some((c) => isGlab(c.cmd))).toBe(false);
+    expect(daemonCalls[0]?.params.prUrl).toBe(GHE_PR);
+    // Main's finding goes with it: the daemon does not read gh's config itself.
+    expect(daemonCalls[0]?.params.prUrlGithubHost).toBe('code.acme.example');
+  });
+
+  it('names the host as the daemon reads it, an explicit :443 kept', async () => {
+    const at443 = 'https://code.acme.example:443/acme/widget/pull/3';
+    forge.hosts = { gh: new Set(['code.acme.example', 'code.acme.example:443']), glab: new Map() };
+    const { svc, daemonCalls } = ghe(`Creating pull request\n${at443}`);
+    expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: at443 });
+    expect(daemonCalls[0]?.params.prUrlGithubHost).toBe('code.acme.example:443');
+  });
+
+  it('a github.com PR or a GitLab MR names no Enterprise host to the daemon', async () => {
+    const gh = makeService(makeExec(happyBehavior).exec);
+    expect(await gh.svc.createPr(INPUT)).toMatchObject({ ok: true });
+    expect(gh.daemonCalls[0]?.params).not.toHaveProperty('prUrlGithubHost');
+    const gl = makeGlService(glHappy);
+    expect(await gl.svc.createPr(INPUT)).toMatchObject({ ok: true, mrIid: 7 });
+    expect(gl.daemonCalls[0]?.params).not.toHaveProperty('prUrlGithubHost');
+  });
+
+  it('recovers an existing PR on that host', async () => {
+    forge.hosts = { gh: new Set(['code.acme.example']), glab: new Map() };
+    const { svc } = ghe('could not parse', GHE_PR);
+    expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: GHE_PR, recovered: true });
+  });
+
+  it('a PR URL on a host gh is not signed in to is still refused', async () => {
+    forge.hosts = { gh: new Set(['code.acme.example']), glab: new Map() };
+    const { svc } = ghe('https://evil.example.com/acme/widget/pull/3');
+    expect(await svc.createPr(INPUT)).toMatchObject({ ok: false, reason: 'pr-failed' });
+  });
+});
+
+describe('task_pr: the glab sign-in hint', () => {
+  it('names glab\'s host:port entry, so following it does not add a plain entry on 443', async () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com:8443', { name: 'gitlab.example.com:8443', subfolder: '' }]]) };
+    const { svc, calls } = makeGlService((cmd, args) => {
+      // The port entry reaches glab through GITLAB_HOST: no --hostname.
+      if (isGlab(cmd) && args[0] === 'api' && args[1] === 'user') return { throw: 'glab: 401 Unauthorized (HTTP 401)' };
+      return glHappy(cmd, args);
+    });
+    const res = await svc.createPr(INPUT);
+    expect(res.ok === false && res.reason).toBe('gh-unauth');
+    expect(res.ok === false && res.error).toContain('glab auth login --hostname gitlab.example.com:8443');
+    expect(calls.some((c) => c.cmd === 'git' && c.args[0] === 'push')).toBe(false);
   });
 });
 

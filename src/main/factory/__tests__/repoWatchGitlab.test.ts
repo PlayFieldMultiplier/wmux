@@ -12,6 +12,14 @@ import {
   type GitlabWatchPorts,
 } from '../repoWatchGitlab';
 import { factDedupeKey, type FactDraft } from '../../../shared/facts';
+import type { ForgeHosts } from '../../../shared/forgeHosts';
+
+// glab's host entries (shared/forgeHosts.ts): none unless a test sets them.
+const forge = vi.hoisted(() => ({ hosts: { gh: new Set<string>(), glab: new Map() } as ForgeHosts }));
+vi.mock('../../../shared/forgeHosts', async (orig) => ({
+  ...(await orig<typeof import('../../../shared/forgeHosts')>()),
+  forgeHosts: () => forge.hosts,
+}));
 import type { BotProfile } from '../../../shared/bot';
 
 const KEY = 'gitlab.example.com/group/sub/app';
@@ -155,6 +163,42 @@ describe('GitLab watch mapping', () => {
     expect(m?.snapshot.recent).toEqual({ 1: 'CLOSED', 2: 'MERGED' });
     expect(m?.snapshot.issues.map((i) => [i.number, i.labels])).toEqual([[9, ['bug']]]);
     expect(mapGitlabWatchAnswer({ data: { project: null } })).toBeNull();
+  });
+
+  it('a draft MR and one from a fork read as GitHub\'s draft and cross-repository PRs do', () => {
+    const raw = answer({ open: [{ iid: 4, head: HEAD }, { iid: 5, head: HEAD2 }, { iid: 6, head: HEAD }] });
+    const [a, b, c] = raw.data.project.open.nodes as Array<Record<string, unknown>>;
+    Object.assign(a, { draft: true, title: 'Draft: MR 4' });
+    Object.assign(b, { sourceProjectId: 8 });
+    Object.assign(c, { sourceProjectId: null });
+    const m = mapGitlabWatchAnswer(raw);
+    expect(m?.snapshot.prs.map((p) => [p.number, p.isDraft, p.isCrossRepository])).toEqual([
+      [4, true, false],
+      [5, false, true],
+      // Unreadable project ids read as a fork, as GitHub's unreadable flag does.
+      [6, false, true],
+    ]);
+  });
+
+  it('asks for the key\'s path as the project under a subfolder install: never stripped again', async () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com', { name: 'gitlab.example.com', subfolder: 'gitlab' }]]) };
+    try {
+      const asked: string[] = [];
+      const read = gitlabWatchReader({
+        graphql: async (_repoPath, _repoKey, _query, vars) => {
+          asked.push(vars.fullPath);
+          return { ok: true, value: answer({ open: [] }) };
+        },
+        commitParents: async () => [],
+      });
+      // The https clone's key already lost the subfolder (parseRemoteKey) ...
+      await read('/repo', 'gitlab.example.com/platform/api', undefined);
+      // ... and an ssh clone of a project in a real group named `gitlab` keeps it.
+      await read('/repo', 'gitlab.example.com/gitlab/platform/api', undefined);
+      expect(asked).toEqual(['platform/api', 'gitlab/platform/api']);
+    } finally {
+      forge.hosts = { gh: new Set(), glab: new Map() };
+    }
   });
 
   it('checks: the head pipeline with every job that may not fail passed; stale, truncated or running is pending', () => {

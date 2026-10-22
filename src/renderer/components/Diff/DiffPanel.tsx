@@ -17,6 +17,7 @@ import { HUMAN_WORKSPACE_ID, CHANNEL_MENTIONS_MAX } from '../../../shared/channe
 import { commentAnchor, numberHunkLines, type DiffLine } from '../../../shared/prReview';
 import { sanitizeRemoteText } from '../../../shared/a2aRemoteDelivery';
 import { findLeaf } from '../../../shared/paneUtils';
+import { isMergeRequestUrl } from '../../../shared/workTask';
 import { useStore } from '../../stores';
 import { keepFolderAction, keptFolderMessage } from '../WorkTask/closeKeepFolder';
 import { useT } from '../../hooks/useT';
@@ -68,6 +69,8 @@ interface TaskMeta {
   status: 'open' | 'closed';
   /** A detached task is closed but keeps its worktree — its diff is still live. */
   detached: boolean;
+  /** The task's PR (or GitLab MR) page, once it has one: the PR verbs say MR for an MR. */
+  prUrl?: string;
 }
 
 /** Which file a line comment points into: the new file (added or unchanged
@@ -342,6 +345,7 @@ async function resolveTaskMeta(taskId: string, verifiedWorkspaceId: string): Pro
         branch?: string;
         missionChannelId?: string;
         detachedAt?: number;
+        prUrl?: string;
       }>;
     };
     const task = res?.tasks?.find((t) => t.id === taskId);
@@ -372,6 +376,7 @@ async function resolveTaskMeta(taskId: string, verifiedWorkspaceId: string): Pro
       channelArchived,
       status: task.status === 'closed' ? 'closed' : 'open',
       detached: typeof task.detachedAt === 'number',
+      ...(typeof task.prUrl === 'string' ? { prUrl: task.prUrl } : {}),
     };
   } catch {
     return null;
@@ -1035,7 +1040,7 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
     const branchHint = meta?.branch ? `\n${t('diff.branchLine', { branch: meta.branch })}` : '';
     if (
       !window.confirm(
-        t('diff.prConfirm', { branchHint }),
+        t(isMergeRequestUrl(meta?.prUrl) ? 'diff.mrConfirm' : 'diff.prConfirm', { branchHint }),
       )
     ) {
       return;
@@ -1044,12 +1049,15 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
     try {
       const res = await api.workTask.createPr(taskId, verifiedWorkspaceId);
       if (res.ok) {
+        // GitLab answers with a merge request: say MR.
+        const mr = res.mrIid !== undefined || isMergeRequestUrl(res.prUrl);
+        setMeta((m) => (m ? { ...m, prUrl: res.prUrl } : m));
         pushToast({
           level: res.commitPending ? 'warn' : 'info',
           message: res.recovered
-            ? t('diff.prRecovered', { url: res.prUrl ?? '' })
-            : t('diff.prCreated', { url: res.prUrl ?? '' }) + (res.commitPending ? t('diff.prUrlPending') : ''),
-          action: { label: t('diff.openPr'), onClick: () => window.open(res.prUrl, '_blank') },
+            ? t(mr ? 'diff.mrRecovered' : 'diff.prRecovered', { url: res.prUrl ?? '' })
+            : t(mr ? 'diff.mrCreated' : 'diff.prCreated', { url: res.prUrl ?? '' }) + (res.commitPending ? t('diff.prUrlPending') : ''),
+          action: { label: t(mr ? 'diff.openMr' : 'diff.openPr'), onClick: () => window.open(res.prUrl, '_blank') },
         });
       } else if (res.reason === 'gh-missing' || res.reason === 'gh-unauth') {
         pushToast({ level: 'warn', message: `${res.error}${res.browseFallback ? ` — ${res.browseFallback}` : ''}` });
@@ -1065,6 +1073,8 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
     }
   }, [lifecycleBusy, taskId, verifiedWorkspaceId, meta, pushToast, t]);
 
+  // A task whose PR is a GitLab merge request says MR on its PR verbs.
+  const prIsMr = isMergeRequestUrl(meta?.prUrl);
   const activeFile = selectedFile ? filesByPath.get(selectedFile) : null;
 
   // 파일 트리에 보일 경로 목록 — 파싱된 files + numstat에만 있는 경로(untracked
@@ -1233,9 +1243,9 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
               className={`px-2 py-0.5 text-[10px] text-[var(--text-sub)] hover:text-[var(--text-main)] ${BTN_RAISED} disabled:opacity-40`}
               onClick={() => void handleCreatePr()}
               disabled={lifecycleBusy !== null}
-              title={t('diff.prTitle')}
+              title={t(prIsMr ? 'diff.mrTitle' : 'diff.prTitle')}
             >
-              {lifecycleBusy === 'pr' ? t('diff.prBusy') : 'PR'}
+              {lifecycleBusy === 'pr' ? t(prIsMr ? 'diff.mrBusy' : 'diff.prBusy') : t(prIsMr ? 'diff.mrButton' : 'diff.prButton')}
             </button>
             <button
               className={`px-2 py-0.5 text-[10px] ${BTN_DANGER_TINTED} disabled:opacity-40`}

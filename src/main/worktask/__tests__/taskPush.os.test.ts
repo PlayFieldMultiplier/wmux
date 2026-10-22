@@ -16,7 +16,8 @@ import { normalizeRepoKey } from '../../../shared/repoKey';
 import { readRepoDefaultBranchByKey } from '../../agents/botWorkerDefaultBranch';
 import { fakeSshUrl, writeFakeSsh } from '../../../test-utils/fakeSsh';
 import { originPinMatches } from '../../../shared/originPin';
-import { fetchTaskRefs } from '../taskFetch';
+import { fetchTaskRefs, readTaskRemoteHead } from '../taskFetch';
+import { clearForgeHostsCache } from '../../../shared/forgeHosts';
 import { resolveBotRepo } from '../../factory/botCreate';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
@@ -259,6 +260,34 @@ describe.skipIf(process.platform === 'win32')('task.push and task.fetch: the rec
     // Another spelling of the same address the same rule rewrites the same way.
     git(repo, 'remote', 'set-url', 'origin', 'https://git.corp.example/acme/App');
     expect(await fetchTaskRefs({ ...input(), expectedRepoKey: 'git.corp.example/acme/app', expectedOriginPin })).toMatchObject({ ok: true });
+  });
+
+  it('a key stored before glab\'s subfolder entry existed still matches once it does: push, fetch and the gate\'s read', async () => {
+    // GitLab under https://gitlab.example.com/gitlab/; the owner's global rule sends it over ssh.
+    const sub = path.join(root, 'srv', 'gitlab', 'acme', 'app.git');
+    fs.mkdirSync(path.dirname(sub), { recursive: true });
+    execFileSync('git', ['clone', '-q', '--bare', bare, sub]);
+    git(repo, 'remote', 'add', 'origin', 'https://gitlab.example.com/gitlab/acme/app.git');
+    globalConfig(`[url "${fakeSshUrl(path.join(root, 'srv'))}/"]\n\tinsteadOf = https://gitlab.example.com/\n`);
+    const stored = 'gitlab.example.com/gitlab/acme/app';
+    const glabDir = path.join(root, 'glab');
+    fs.mkdirSync(glabDir);
+    fs.writeFileSync(path.join(glabDir, 'config.yml'), 'hosts:\n    gitlab.example.com:\n        subfolder: gitlab\n');
+    vi.stubEnv('GLAB_CONFIG_DIR', glabDir);
+    clearForgeHostsCache();
+    try {
+      // The key built now differs from the stored one ...
+      expect(originUrlRepoKey('https://gitlab.example.com/gitlab/acme/app.git')).toBe('gitlab.example.com/acme/app');
+      // ... and the stored one still names this origin.
+      expect(await pushTask({ ...input(), expectedRepoKey: stored })).toMatchObject({ ok: true });
+      expect(await fetchTaskRefs({ ...input(), expectedRepoKey: stored })).toMatchObject({ ok: true });
+      expect(await readTaskRemoteHead({ ...input(), expectedRepoKey: stored })).toEqual({ ok: true, sha: git(work, 'rev-parse', 'HEAD') });
+      // Another repository is still refused.
+      expect(await pushTask({ ...input(), expectedRepoKey: 'gitlab.example.com/gitlab/acme/other' })).toMatchObject({ ok: false, reason: 'remote-refused' });
+    } finally {
+      vi.unstubAllEnvs();
+      clearForgeHostsCache();
+    }
   });
 
   it('a row with no pin is pinned at its first use, then held to it: a port change is refused and nothing reaches the other server', async () => {

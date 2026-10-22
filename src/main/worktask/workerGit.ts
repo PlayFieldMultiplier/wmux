@@ -16,6 +16,7 @@
 import path from 'node:path';
 import { git, type GitResult } from '../git/git';
 import { isOriginPin } from '../../shared/originPin';
+import { dropGlabSubfolder, forgeHosts, type ForgeHosts } from '../../shared/forgeHosts';
 
 /** Runs git with `args` in the worktree; never throws. */
 export type WorkerGitRun = (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
@@ -114,8 +115,10 @@ const MAX_REPO_PATH_SEGMENTS = 21;
  *  for a GitLab subgroup (lowercased; a port and an ssh user are allowed and
  *  not part of the key; a trailing `.git` or `/` is dropped), or null for any
  *  other form (a path, file://, ext::, a query, credentials in the URL).
- *  Self-hosted hosts are keyed by their own name. Pure. */
-export function originUrlRepoKey(url: string): string | null {
+ *  Self-hosted hosts are keyed by their own name. An https address drops a
+ *  GitLab sub-path install's subfolder as PrProvider.parseRemoteKey does, so
+ *  the two keys agree. Pure but for that config read. */
+export function originUrlRepoKey(url: string, hosts: ForgeHosts = forgeHosts()): string | null {
   const seg = '[A-Za-z0-9_.-]+';
   const repoPath = `(${seg}(?:/${seg})+)`;
   const forms = [
@@ -131,7 +134,8 @@ export function originUrlRepoKey(url: string): string | null {
     parts[parts.length - 1] = parts[parts.length - 1].replace(/\.git$/i, '');
     if (parts.length > MAX_REPO_PATH_SEGMENTS) return null;
     if ([m[1], ...parts].some((p) => !p || p === '.' || p === '..' || p.startsWith('-'))) return null;
-    return `${m[1]}/${parts.join('/')}`.toLowerCase();
+    const kept = re === forms[0] ? dropGlabSubfolder(m[1].toLowerCase(), parts, hosts) : parts;
+    return `${m[1]}/${kept.join('/')}`.toLowerCase();
   }
   return null;
 }

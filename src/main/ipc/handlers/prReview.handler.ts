@@ -8,7 +8,7 @@ import { ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
 import { resolveAccessiblePath } from './fs.handler';
-import { detectRemote, isGithubHost } from '../../github/PrProvider';
+import { detectRemote, isGithubForgeHost } from '../../github/PrProvider';
 import { prUrlParts } from '../../../shared/prDragRef';
 import { ghPrReviewService, type GhPrReviewService } from '../../github/GhPrReviewService';
 import {
@@ -46,7 +46,7 @@ async function githubPr(repoPath: unknown, prUrl: unknown): Promise<{ cwd: strin
   const cwd = await resolveAccessiblePath(repoPath);
   if (!cwd) return { error: 'repoPath required' };
   const remote = await detectRemote(cwd);
-  if (!remote || !isGithubHost(remote.host) || !remote.key) return { error: 'not a GitHub repository' };
+  if (!remote || !isGithubForgeHost(remote.host) || !remote.key) return { error: 'not a GitHub repository' };
   const number = prNumberOn(remote.key, prUrl);
   if (number === null) return { error: `this pull request is not on ${remote.key}; refusing to act on it from here` };
   return { cwd, key: remote.key, number };

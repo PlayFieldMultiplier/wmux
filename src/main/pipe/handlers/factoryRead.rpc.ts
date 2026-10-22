@@ -41,7 +41,7 @@ import type { RoomWriter } from '../../factory/roomWriter';
 import { DAY_MS, type TrustReadResult } from '../../factory/trustMetrics';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
 import { crossesGuestBoundary } from '../../factory/guestWorkspaces';
-import { isGithubHost, type PrGate } from '../../github/PrProvider';
+import { isGithubForgeHost, type PrGate } from '../../github/PrProvider';
 import { botReviewHost } from '../../worktask/botFanoutPresets';
 
 // ── Limits ─────────────────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ export function createHostSetupGate(ports: HostSetupGatePorts): (scope: RepoScop
   const asked = new Set<string>();
   return async (scope) => {
     const host = scope.repoKey.split('/')[0] ?? '';
-    if (!host || isGithubHost(host)) return null;
+    if (!host || isGithubForgeHost(host)) return null;
     let gate: HostGate;
     try {
       gate = await ports.gate(scope.repoPath, host);

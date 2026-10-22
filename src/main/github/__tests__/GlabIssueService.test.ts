@@ -1,9 +1,20 @@
 // GlabIssueService: the project named on every read, the REST list path per
 // filter, the mapping, and the list/detail caches (exec mocked, as in
 // GhIssueService.test).
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { GlabIssueService, glabIssueListPath, glabProjectOfKey, mapGlabIssue, mapGlabIssueDetail } from '../GlabIssueService';
 import type { IssueFilter } from '../../../shared/issueSurface';
+import type { ForgeHosts } from '../../../shared/forgeHosts';
+
+// glab's host entries (shared/forgeHosts.ts): none unless a test sets them.
+const forge = vi.hoisted(() => ({ hosts: { gh: new Set<string>(), glab: new Map() } as ForgeHosts }));
+vi.mock('../../../shared/forgeHosts', async (orig) => ({
+  ...(await orig<typeof import('../../../shared/forgeHosts')>()),
+  forgeHosts: () => forge.hosts,
+}));
+afterEach(() => {
+  forge.hosts = { gh: new Set(), glab: new Map() };
+});
 
 const KEY = 'gitlab.example.com/group/sub/proj';
 const PROJECT = 'projects/group%2Fsub%2Fproj/issues';
@@ -40,7 +51,8 @@ function makeService(handler: (path: string) => unknown, nowRef = { t: 1_000_000
 
 describe('project path', () => {
   it('splits host from a nested group path; refuses a key with no project', () => {
-    expect(glabProjectOfKey(KEY)).toEqual({ host: 'gitlab.example.com', path: 'group/sub/proj' });
+    expect(glabProjectOfKey(KEY, { gh: new Set(), glab: new Map() }))
+      .toEqual({ host: 'gitlab.example.com', path: 'group/sub/proj', web: 'https://gitlab.example.com/group/sub/proj' });
     expect(glabProjectOfKey('gitlab.com/o')).toBeNull();
     expect(glabProjectOfKey('gitlab.com/o/../r')).toBeNull();
     expect(glabProjectOfKey('gitlab.com/o/r?x')).toBeNull();
@@ -145,5 +157,23 @@ describe('service', () => {
     release();
     expect(await older).toMatchObject({ ok: true, detail: { title: 'old' } });
     expect(calls).toHaveLength(4);
+  });
+});
+
+describe('a GitLab on a port (glab\'s host:port entry)', () => {
+  it('reaches glab through GITLAB_HOST, with no --hostname (glab api refuses a port there)', async () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com:8443', { name: 'gitlab.example.com:8443', subfolder: '' }]]) };
+    const seen: Array<{ args: string[]; host: string | undefined }> = [];
+    const exec = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+      seen.push({ args, host: opts.env.GITLAB_HOST });
+      return { stdout: JSON.stringify([ISSUE]) };
+    });
+    const svc = new GlabIssueService(() => 1_000_000, exec as never);
+    const list = await svc.listIssues('/repo', { kind: 'all' }, KEY);
+    expect(list.ok).toBe(true);
+    expect(seen[0].host).toBe('gitlab.example.com:8443');
+    expect(seen[0].args[0]).toBe('api');
+    expect(seen[0].args).not.toContain('--hostname');
+    expect(seen[0].args[1].startsWith(PROJECT)).toBe(true);
   });
 });

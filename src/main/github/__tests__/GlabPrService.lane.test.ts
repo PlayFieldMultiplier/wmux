@@ -1,7 +1,8 @@
 // GlabPrService's factory half: the lane read of one merge request (mapped to
 // PrLaneFacts), the default-branch CI read, the login, and the squash merge
 // with its head checks (exec mocked, as in GlabPrService.test).
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import type { ForgeHosts } from '../../../shared/forgeHosts';
 import { requiredChecksGreen } from '../../deck/moaMergeLane';
 import { reconcileMergeEffect } from '../../deck/moaEffectStore';
 import {
@@ -15,9 +16,21 @@ import {
   glabMergeFailure,
   glabMergeState,
   glabSquashSubject,
+  glabMrRef,
+  glabProjectOfKey,
   mapGlabCiRollup,
   mapGlabLaneFacts,
 } from '../GlabPrService';
+
+// glab's host entries (shared/forgeHosts.ts): none unless a test sets them.
+const forge = vi.hoisted(() => ({ hosts: { gh: new Set<string>(), glab: new Map() } as ForgeHosts }));
+vi.mock('../../../shared/forgeHosts', async (orig) => ({
+  ...(await orig<typeof import('../../../shared/forgeHosts')>()),
+  forgeHosts: () => forge.hosts,
+}));
+afterEach(() => {
+  forge.hosts = { gh: new Set(), glab: new Map() };
+});
 
 const KEY = 'gitlab.example.com/group/sub/proj';
 const HEAD = 'a'.repeat(40);
@@ -404,5 +417,83 @@ describe('glabApiSignedOut', () => {
     expect(glabApiSignedOut(fail('Post "https://gitlab.example.com/api/v4/projects/team-401%2Fproj/merge_requests": EOF'))).toBe(false);
     expect(glabApiSignedOut(fail('dial tcp: i/o timeout', 'Command failed: glab api -f title=401 Unauthorized'))).toBe(false);
     expect(glabApiSignedOut(fail('glab: 403 Forbidden (HTTP 403)'))).toBe(false);
+  });
+});
+
+describe('GitLab on a port or under a sub-path (glab\'s host entry)', () => {
+  const entries = (...list: Array<[string, string]>): ForgeHosts => ({
+    gh: new Set(),
+    glab: new Map(list.map(([name, subfolder]) => [name, { name, subfolder }])),
+  });
+  const withEnv = (handler: Handler) => {
+    const calls: Array<{ args: string[]; host: string | undefined }> = [];
+    const exec = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+      calls.push({ args, host: opts.env.GITLAB_HOST });
+      return { stdout: JSON.stringify(handler(args)) };
+    });
+    return { svc: new GlabPrService(() => 1000, exec as never), calls };
+  };
+  const graphqlCall = (args: string[]) => args.includes('graphql');
+
+  it('a host:port entry reaches glab as GITLAB_HOST, never as --hostname (glab api refuses a port there)', async () => {
+    forge.hosts = entries(['gitlab.example.com:8443', '']);
+    const { svc, calls } = withEnv((args) => (graphqlCall(args) ? mrAnswer() : { state: 'merged' }));
+    expect(await svc.merge('/repo', KEY, 7, { expectHead: HEAD, subject: '', body: '' }))
+      .toEqual({ ok: true, url: 'https://gitlab.example.com:8443/group/sub/proj/-/merge_requests/7' });
+    expect(calls[0].args.slice(0, 2)).toEqual(['api', 'graphql']);
+    expect(calls.every((c) => c.host === 'gitlab.example.com:8443' && !c.args.includes('--hostname'))).toBe(true);
+  });
+
+  it('auth status names the host:port entry as glab wrote it', async () => {
+    forge.hosts = entries(['gitlab.example.com:8443', '']);
+    const { svc, calls } = makeService(() => ({}));
+    expect(await svc.connection('/repo', 'gitlab.example.com')).toEqual({ ok: true });
+    expect(calls[1]).toEqual(['auth', 'status', '--hostname', 'gitlab.example.com:8443']);
+  });
+
+  it('a plain entry keeps --hostname, and two port entries for one host choose neither', async () => {
+    forge.hosts = entries(['gitlab.example.com', '']);
+    const plain = withEnv(() => ({ username: 'alice' }));
+    await plain.svc.currentLogin('/repo', KEY);
+    expect(plain.calls[0]).toEqual({ args: ['api', '--hostname', 'gitlab.example.com', 'user'], host: undefined });
+    forge.hosts = entries(['gitlab.example.com:8443', ''], ['gitlab.example.com:9443', '']);
+    const two = withEnv(() => ({ username: 'alice' }));
+    await two.svc.currentLogin('/repo', KEY);
+    expect(two.calls[0].args.slice(0, 3)).toEqual(['api', '--hostname', 'gitlab.example.com']);
+  });
+
+  it('a subfolder entry: the key\'s path is the project (the https remote lost the subfolder), the page keeps it', async () => {
+    forge.hosts = entries(['gitlab.example.com', 'gitlab']);
+    const key = 'gitlab.example.com/group/proj';
+    const { svc, calls } = withEnv((args) => (graphqlCall(args) ? mrAnswer() : { state: 'merged' }));
+    expect(await svc.merge('/repo', key, 7, { expectHead: HEAD, subject: '', body: '' }))
+      .toEqual({ ok: true, url: 'https://gitlab.example.com/gitlab/group/proj/-/merge_requests/7' });
+    expect(calls[0].args).toContain('fullPath=group/proj');
+    expect(calls[1].args).toContain('projects/group%2Fproj/merge_requests/7/merge');
+  });
+
+  it('glabProjectOfKey never strips: a group named like the subfolder (an ssh clone) stays the project\'s', () => {
+    const hosts = entries(['gitlab.example.com', 'gitlab']);
+    // `git@gitlab.example.com:gitlab/platform/api.git`: `gitlab` is a real group.
+    expect(glabProjectOfKey('gitlab.example.com/gitlab/platform/api', hosts))
+      .toEqual({ host: 'gitlab.example.com', path: 'gitlab/platform/api', web: 'https://gitlab.example.com/gitlab/gitlab/platform/api' });
+    expect(glabProjectOfKey('gitlab.example.com/group/proj', entries(['gitlab.example.com:8443', ''])))
+      .toEqual({ host: 'gitlab.example.com', path: 'group/proj', web: 'https://gitlab.example.com:8443/group/proj' });
+  });
+
+  it('an api_host port is kept on the MR links: the merge\'s, and the fallback when web_url is missing', async () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com', { name: 'gitlab.example.com', subfolder: '', apiHost: 'gitlab.example.com:8443' }]]) };
+    const { svc } = withEnv((args) => (graphqlCall(args) ? mrAnswer() : { state: 'merged' }));
+    expect(await svc.merge('/repo', KEY, 7, { expectHead: HEAD, subject: '', body: '' }))
+      .toEqual({ ok: true, url: 'https://gitlab.example.com:8443/group/sub/proj/-/merge_requests/7' });
+    expect(glabMrRef({ iid: 7 }, glabProjectOfKey(KEY)!)).toEqual({ iid: 7, url: 'https://gitlab.example.com:8443/group/sub/proj/-/merge_requests/7' });
+  });
+
+  it('the sign-in hint names the host:port entry, so following it does not add a plain entry on 443', async () => {
+    forge.hosts = entries(['gitlab.example.com:8443', '']);
+    const { svc } = makeService((args) => (args[0] === 'auth' ? Object.assign(new Error('exit 1'), { stderr: 'x gitlab.example.com:8443 has not been authenticated with glab' }) : {}));
+    expect(await svc.connection('/repo', 'gitlab.example.com')).toMatchObject({
+      ok: false, reason: 'unauthenticated', message: expect.stringContaining('glab auth login --hostname gitlab.example.com:8443'),
+    });
   });
 });

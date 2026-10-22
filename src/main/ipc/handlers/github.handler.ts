@@ -8,7 +8,7 @@ import { ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
 import { resolveAccessiblePath } from './fs.handler';
-import { detectRemote, isGithubHost } from '../../github/PrProvider';
+import { detectRemote, isGithubForgeHost } from '../../github/PrProvider';
 import type { PrSummary, PrDetail, PrProvider } from '../../github/PrProvider';
 import { ghPrService } from '../../github/GhPrService';
 import { glabPrService } from '../../github/GlabPrService';
@@ -32,7 +32,7 @@ export type GithubPrDetailResult =
 
 /** hostname → provider. github.com 계열은 gh, 그 외 전부 glab 경로. */
 function providerFor(host: string): PrProvider {
-  return isGithubHost(host) ? ghPrService : glabPrService;
+  return isGithubForgeHost(host) ? ghPrService : glabPrService;
 }
 
 async function prList(repoPath: string, force: boolean): Promise<GithubPrListResult> {
@@ -46,7 +46,7 @@ async function prList(repoPath: string, force: boolean): Promise<GithubPrListRes
       ok: false,
       code: gate.reason === 'cli-missing' ? 'cli-missing' : 'unauthenticated',
       message: gate.message,
-      provider: isGithubHost(host) ? 'github' : 'gitlab',
+      provider: isGithubForgeHost(host) ? 'github' : 'gitlab',
     };
   }
   // Keyed by the remote, so two clones of one repo share one fetch and cache.
@@ -66,7 +66,7 @@ async function issueList(repoPath: string, filter: IssueFilter, force: boolean):
   const remote = await detectRemote(repoPath, force);
   if (!remote) return { ok: false, code: 'no-remote', message: 'no origin remote' };
   // Every other host is GitLab, through glab and the PR list's glab gate.
-  if (!isGithubHost(remote.host)) {
+  if (!isGithubForgeHost(remote.host)) {
     const glabGate = await glabPrService.gate(repoPath, remote.host, force);
     if (!glabGate.ok) {
       return { ok: false, code: glabGate.reason === 'cli-missing' ? 'cli-missing' : 'unauthenticated', message: glabGate.message, provider: 'gitlab' };
@@ -90,7 +90,7 @@ async function issueList(repoPath: string, filter: IssueFilter, force: boolean):
 /** A GitHub repo's remote, gated by gh being installed and signed in; null otherwise. */
 async function githubRemote(repoPath: string): Promise<{ host: string; key: string } | null> {
   const remote = await detectRemote(repoPath);
-  if (!remote?.key || !isGithubHost(remote.host)) return null;
+  if (!remote?.key || !isGithubForgeHost(remote.host)) return null;
   const gate = await ghPrService.gate(repoPath, remote.host);
   return gate.ok ? { host: remote.host, key: remote.key } : null;
 }
@@ -194,7 +194,7 @@ export function registerGithubHandlers(): () => void {
         if (!remote) return { ok: false, code: 'error', message: 'no origin remote' };
         if (!remote.key) return { ok: false, code: 'error', message: 'origin has no owner/repo path' };
         const since = typeof updatedAt === 'string' ? updatedAt : '';
-        return isGithubHost(remote.host)
+        return isGithubForgeHost(remote.host)
           ? ghIssueService.issueDetail(safeRepo, number, since, remote.key)
           : glabIssueService.issueDetail(safeRepo, number, since, remote.key);
       },

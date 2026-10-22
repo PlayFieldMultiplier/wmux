@@ -321,4 +321,42 @@ describe('DiffPanel — adopt and close lifecycle (#1461)', () => {
     expect(buttonByText(c, 'Close')).toBeUndefined();
     expect(read).toHaveBeenCalledTimes(1);
   });
+
+  // task_pr on GitLab opens a merge request: the toast says MR, on GitHub PR.
+  it('the create-PR toast says MR for a GitLab merge request and PR for a GitHub pull request', async () => {
+    const createPr = vi.fn();
+    (window as unknown as { electronAPI: { workTask: Record<string, unknown> } }).electronAPI.workTask = { close, createPr };
+    const c = render();
+    await flush();
+    const pr = 'https://github.com/o/r/pull/9';
+    createPr.mockResolvedValueOnce({ ok: true, prUrl: pr });
+    click(buttonByText(c, 'PR')!);
+    await flush();
+    let toast = useStore.getState().toasts.at(-1);
+    expect(toast?.message).toBe(`PR created: ${pr}`);
+    expect(toast?.action?.label).toBe('Open PR');
+
+    const mr = 'https://gitlab.example.com/group/proj/-/merge_requests/7';
+    createPr.mockResolvedValueOnce({ ok: true, prUrl: mr, mrIid: 7, recovered: true });
+    click(buttonByText(c, 'PR')!);
+    await flush();
+    toast = useStore.getState().toasts.at(-1);
+    expect(toast?.message).toBe(`Recovered existing MR: ${mr}`);
+    expect(toast?.action?.label).toBe('Open MR');
+    // The task now has an MR: its button says so.
+    expect(buttonByText(c, 'MR')).toBeDefined();
+  });
+
+  it('a task whose PR is a GitLab merge request says MR on the button, its title and its confirm', async () => {
+    taskRow = { prUrl: 'https://gitlab.example.com/group/proj/-/merge_requests/7' };
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const c = render();
+    await flush();
+    const btn = buttonByText(c, 'MR');
+    expect(btn).toBeDefined();
+    expect(buttonByText(c, 'PR')).toBeUndefined();
+    expect(btn!.title).toBe('push + create MR (glab gate · idempotent re-entry)');
+    click(btn!);
+    expect(confirm.mock.calls.at(-1)?.[0]).toContain('create a merge request');
+  });
 });

@@ -1,9 +1,21 @@
 // GhPrService — gh JSON 매핑·게이트·TTL·updatedAt 상세캐시 (exec 목킹,
 // PrStatusCache 테스트 스타일). + PrProvider의 remote 호스트 분류.
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { GhPrService, mapGhListItem, mapGhDetail, authorTypesFromGraphql } from '../GhPrService';
-import { parseRemoteHost, parseRemoteKey, isGithubHost } from '../PrProvider';
+import { parseRemoteHost, parseRemoteKey, isGithubHost, isGithubForgeHost } from '../PrProvider';
+import { isGitlabRepoKey } from '../hostLane';
 import { PR_COMMENT_BODY_CAP } from '../../../shared/prSurface';
+import type { ForgeHosts } from '../../../shared/forgeHosts';
+
+// The hosts gh and glab are set up for (shared/forgeHosts.ts): none unless a test sets them.
+const forge = vi.hoisted(() => ({ hosts: { gh: new Set<string>(), glab: new Map() } as ForgeHosts }));
+vi.mock('../../../shared/forgeHosts', async (orig) => ({
+  ...(await orig<typeof import('../../../shared/forgeHosts')>()),
+  forgeHosts: () => forge.hosts,
+}));
+afterEach(() => {
+  forge.hosts = { gh: new Set(), glab: new Map() };
+});
 
 type ExecCall = { cmd: string; args: string[] };
 
@@ -364,6 +376,44 @@ describe('parseRemoteKey', () => {
   it('is null without an owner/repo path', () => {
     expect(parseRemoteKey('')).toBeNull();
     expect(parseRemoteKey('https://github.com/')).toBeNull();
+  });
+  it('drops a port (an ssh port is the transport\'s, never the API\'s) and keeps a sub-path', () => {
+    for (const url of [
+      'https://gitlab.example.com:8443/g/p.git',
+      'https://user@gitlab.example.com:8443/g/p.git',
+      'ssh://git@gitlab.example.com:2222/g/p.git',
+      'git@gitlab.example.com:g/p.git',
+    ]) expect(parseRemoteKey(url), url).toBe('gitlab.example.com/g/p');
+    // No subfolder entry for the host: the path is kept as written.
+    expect(parseRemoteKey('https://gitlab.example.com/gitlab/g/p.git')).toBe('gitlab.example.com/gitlab/g/p');
+  });
+  it('drops glab\'s subfolder from an https remote only: an ssh remote\'s `gitlab` group is the project\'s', () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com', { name: 'gitlab.example.com', subfolder: 'gitlab' }]]) };
+    // GitLab served at https://gitlab.example.com/gitlab/: the https clone of platform/api.
+    expect(parseRemoteKey('https://gitlab.example.com/gitlab/platform/api.git')).toBe('gitlab.example.com/platform/api');
+    expect(parseRemoteKey('https://gitlab.example.com:8443/gitlab/platform/api.git')).toBe('gitlab.example.com/platform/api');
+    // An ssh clone of the project gitlab/platform/api, a real group named `gitlab`.
+    expect(parseRemoteKey('git@gitlab.example.com:gitlab/platform/api.git')).toBe('gitlab.example.com/gitlab/platform/api');
+    expect(parseRemoteKey('ssh://git@gitlab.example.com:2222/gitlab/platform/api.git')).toBe('gitlab.example.com/gitlab/platform/api');
+  });
+});
+
+describe('isGithubForgeHost — the CLIs\' config first, then the name rule', () => {
+  it('GitHub Enterprise on its own domain is GitHub once gh is signed in to it', () => {
+    expect(isGithubForgeHost('code.acme.example')).toBe(false);
+    expect(isGitlabRepoKey('code.acme.example/acme/widget')).toBe(true);
+    forge.hosts = { gh: new Set(['code.acme.example']), glab: new Map() };
+    expect(isGithubForgeHost('code.acme.example')).toBe(true);
+    expect(isGitlabRepoKey('code.acme.example/acme/widget')).toBe(false);
+  });
+
+  it('a host glab is set up for is GitLab, whatever its name; a host in both lists falls back to the name rule', () => {
+    const entry = (name: string) => [name, { name, subfolder: '' }] as const;
+    forge.hosts = { gh: new Set(), glab: new Map([entry('github.acme.com')]) };
+    expect(isGithubForgeHost('github.acme.com')).toBe(false);
+    forge.hosts = { gh: new Set(['github.acme.com']), glab: new Map([entry('github.acme.com')]) };
+    expect(isGithubForgeHost('github.acme.com')).toBe(true);
+    expect(isGithubForgeHost('gitlab.example.com')).toBe(false);
   });
 });
 
