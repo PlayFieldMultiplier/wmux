@@ -22,7 +22,9 @@ export interface GlassTokens {
   frameBg: string;
   mantle: string;
   textMain: string;
+  textSub2: string;
   textSub: string;
+  textSubtle: string;
   textMuted: string;
 }
 
@@ -40,8 +42,14 @@ export interface GlassCoverage {
  */
 export const GLASS_MAX_COVERAGE = 90;
 
-/** WCAG contrast each text level keeps against the frame and the sidebar. */
-export const GLASS_MIN_CONTRAST = { main: 4.5, sub: 4.5, muted: 3 } as const;
+/** WCAG contrast each text level keeps against the frame and the sidebar: the
+ *  floors every tier keeps on the opaque surfaces (themeTextContrast). */
+export const GLASS_MIN_CONTRAST = { main: 4.5, sub2: 4.5, sub: 4.5, subtle: 3, muted: 3 } as const;
+
+type GlassTier = keyof typeof GLASS_MIN_CONTRAST;
+const TIER_TOKEN: Record<GlassTier, keyof GlassTokens> = {
+  main: 'textMain', sub2: 'textSub2', sub: 'textSub', subtle: 'textSubtle', muted: 'textMuted',
+};
 
 /**
  * Each level's floor: the fixed numbers Windows glass shipped with before the
@@ -76,15 +84,17 @@ export function glassContrast(
   tokens: GlassTokens,
   backdrop: string,
   coverage: GlassCoverage,
-): { main: number; sub: number; muted: number } {
+): Record<GlassTier, number> {
   const { frame, sidebar } = glassComposite(tokens, backdrop, coverage);
   const min = (text: string) => Math.min(getContrastRatio(text, frame), getContrastRatio(text, sidebar));
-  return { main: min(tokens.textMain), sub: min(tokens.textSub), muted: min(tokens.textMuted) };
+  const out = {} as Record<GlassTier, number>;
+  for (const tier of Object.keys(TIER_TOKEN) as GlassTier[]) out[tier] = min(tokens[TIER_TOKEN[tier]]);
+  return out;
 }
 
 function legible(tokens: GlassTokens, backdrop: string, coverage: GlassCoverage): boolean {
   const c = glassContrast(tokens, backdrop, coverage);
-  return c.main >= GLASS_MIN_CONTRAST.main && c.sub >= GLASS_MIN_CONTRAST.sub && c.muted >= GLASS_MIN_CONTRAST.muted;
+  return (Object.keys(GLASS_MIN_CONTRAST) as GlassTier[]).every((tier) => c[tier] >= GLASS_MIN_CONTRAST[tier]);
 }
 
 /**

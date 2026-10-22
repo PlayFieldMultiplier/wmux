@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { installWindowGlass } from '../windowGlass';
+import { mixHex } from '../../tailwindPalette';
 
 // Windows: the renderer gate follows the preload's build number, and the
 // level reaches main so it can switch the acrylic material at runtime.
@@ -18,9 +19,8 @@ const TAEGEUK = {
   '--bg-base': '#FFFFFF', '--frame-bg': '#F1F1F3', '--bg-mantle': '#EEEEF2',
   '--text-main': '#1A1A2E', '--text-sub': '#3a3a50', '--text-muted': '#6A6A7A',
 };
-// Paper's opaque tokens: its opaque muted misses 3:1 over a black window at
-// the 90% cap, so only its glass-only muted (WINDOWS_GLASS_MUTED) lets it
-// show glass.
+// Paper's tokens: its muted misses 3:1 over a black window at the 90% cap.
+// Glass draws the look's own text (as on macOS), so Paper is opaque here.
 const PAPER = {
   '--bg-base': '#FFFFFF', '--frame-bg': '#ECECEF', '--bg-mantle': '#F3F3F5',
   '--text-main': '#17171C', '--text-sub': '#3F3F48', '--text-muted': '#848491',
@@ -35,8 +35,14 @@ const MURKY = {
 // observer behind to fight the next test's over the inline coverage.
 const installed: Array<() => void> = [];
 
+// The in-between tiers derived as deriveFullPalette does, unless a fixture sets them.
 function paint(tokens: Record<string, string>): void {
-  for (const [name, value] of Object.entries(tokens)) document.documentElement.style.setProperty(name, value);
+  const all = {
+    '--text-sub2': mixHex(tokens['--text-main'], tokens['--text-sub'], 0.5),
+    '--text-subtle': mixHex(tokens['--text-sub'], tokens['--text-muted'], 0.5),
+    ...tokens,
+  };
+  for (const [name, value] of Object.entries(all)) document.documentElement.style.setProperty(name, value);
 }
 
 const heardLevels: string[] = [];
@@ -145,16 +151,8 @@ describe('installWindowGlass coverage on Windows', () => {
     stop();
   });
 
-  it('judges a look by its glass-only muted text, so Paper shows glass', () => {
+  it('judges a look by the text it paints, with no Windows-only muted, so Paper stays opaque', () => {
     document.documentElement.setAttribute('data-theme', 'paper');
-    const stop = mount('soft', PAPER, 26200, false);
-    expect(document.documentElement.getAttribute('data-glass')).toBe('light');
-    expect(inline('--glass-frame')).toBe('90%');
-    expect(setGlass).toHaveBeenLastCalledWith(expect.objectContaining({ level: 'soft' }));
-    stop();
-  });
-
-  it('keeps the same tokens opaque for a look with no glass-only muted', () => {
     const stop = mount('soft', PAPER, 26200, false);
     expect(document.documentElement.hasAttribute('data-glass')).toBe(false);
     expect(setGlass).toHaveBeenLastCalledWith(expect.objectContaining({ level: 'off' }));
