@@ -344,13 +344,16 @@ export class JoinerSession {
     try {
       answer = await client.requestJson('POST', A2A_ROUTES.messages, rec.envelope);
     } catch (err) {
-      if (err instanceof PinnedClientError && err.code === 'fingerprint-mismatch') {
-        this.identityChanged(err.message);
-        return 'stop';
-      }
       if (err instanceof PinnedClientError && err.sent) {
         // It may have landed: resend the same envelope later (deduped there).
         this.tryOutbox(() => this.deps.outbox.markOutcomeUnknown(hostId, rec.seq));
+      }
+      // Stopped while the POST was out: its error, a pin mismatch included,
+      // is the old session's and says nothing about the peer. Still owed.
+      if (this.halt.signal.aborted) return 'stop';
+      if (err instanceof PinnedClientError && err.code === 'fingerprint-mismatch') {
+        this.identityChanged(err.message);
+        return 'stop';
       }
       return 'retry';
     }

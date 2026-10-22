@@ -357,6 +357,79 @@ describe('A2aImageStore', () => {
     }
   });
 
+  it('reads what open messages name when its turn comes, not when it was queued', async () => {
+    const s = store();
+    const x = png(3, 3, 4, 21);
+    const first = await putOne(s, x);
+    if (!first.ok) throw new Error('first local copy not kept');
+    const local = path.dirname(first.path);
+    // Fill the folder; the copy of `x` is the oldest, so it is the first to make room.
+    for (let i = 0; i < RECEIVED_HOST_MAX_FILES - 1; i += 1) fs.writeFileSync(path.join(local, `${crypto.randomBytes(32).toString('hex')}.png`), 'x');
+    const anHourAgo = new Date(Date.now() - 3600_000);
+    fs.utimesSync(first.path, anHourAgo, anHourAgo);
+    // An upload holds the queue, so the local staging below waits its turn.
+    const writeFile = fs.promises.writeFile;
+    let reach!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => (reach = r));
+    const released = new Promise<void>((r) => (release = r));
+    let held = false;
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof writeFile>) => {
+      if (!held) {
+        held = true;
+        reach();
+        await released;
+      }
+      return writeFile(...args);
+    });
+    try {
+      const staged = s.stage(HOST, sha256(png(5, 5)), png(5, 5));
+      await reached;
+      // A fresh set per call: only a read made when the staging runs sees `x`.
+      const open = new Set<string>();
+      const putting = s.putLocal([{ bytes: png(4, 4, 4, 22), info: { mediaType: 'image/png', width: 4, height: 4 } }], () => new Set(open));
+      // A message naming `x` opens after the staging was queued, before it runs.
+      open.add(sha256(x));
+      release();
+      await staged;
+      expect((await putting).ok).toBe(true);
+      expect(fs.existsSync(first.path)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('takes back the copies a local staging wrote when a later step throws', async () => {
+    const s = store();
+    const a = png(3, 3, 4, 31);
+    const b = png(4, 4, 4, 32);
+    const local = path.join(dir, 'uploads', 'a2a', LOCAL_FOLDER);
+    // The first image is not there yet, so it is written (two looks: putLocal's and keepReceived's); looking for the second one throws.
+    const copyOfA = path.join(local, `${sha256(a)}.png`);
+    let finds = 0;
+    let aWritten = false;
+    const find = vi.spyOn(s as unknown as { findReceived: () => Promise<null> }, 'findReceived').mockImplementation(async () => {
+      finds += 1;
+      if (finds === 3) {
+        aWritten = fs.existsSync(copyOfA);
+        throw new Error('EIO');
+      }
+      return null;
+    });
+    try {
+      await expect(
+        s.putLocal([
+          { bytes: a, info: { mediaType: 'image/png', width: 3, height: 3 } },
+          { bytes: b, info: { mediaType: 'image/png', width: 4, height: 4 } },
+        ], () => new Set()),
+      ).rejects.toThrow('EIO');
+    } finally {
+      find.mockRestore();
+    }
+    expect(aWritten).toBe(true);
+    expect(fs.existsSync(copyOfA)).toBe(false);
+  });
+
   it('runs the next write after one that failed', async () => {
     const s = store();
     const a = png(3, 3);
@@ -952,6 +1025,30 @@ describe('JoinerSession image uploads', () => {
     answer({ status: 200, json: { ok: true } });
     await stopping;
     expect(posts).toEqual([]);
+    expect(states).not.toContain('identity-changed');
+    expect(session.current().state).not.toBe('identity-changed');
+    // Still owed, not refused: the next session sends it.
+    expect(refused).toEqual([]);
+    expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
+  });
+
+  it('does not report a changed identity for a message whose POST failed after the session stopped', async () => {
+    const records = replies();
+    let fail!: () => void;
+    let posts = 0;
+    const { refused, states, session } = run(records, {
+      putBytes: async () => ({ status: 200, json: { ok: true } }),
+      // The other PC was re-paired while the POST was out: it fails on a certificate this (old) session does not pin.
+      requestJson: (_m, p) => {
+        if (p !== A2A_ROUTES.messages) return Promise.resolve({ status: 200, json: { ok: true } });
+        posts += 1;
+        return new Promise((_resolve, reject) => (fail = () => reject(new PinnedClientError('fingerprint-mismatch', 'not the pinned certificate', { sent: false }))));
+      },
+    });
+    await vi.waitFor(() => expect(posts).toBe(1), { timeout: 5_000 });
+    const stopping = session.stop();
+    fail();
+    await stopping;
     expect(states).not.toContain('identity-changed');
     expect(session.current().state).not.toBe('identity-changed');
     // Still owed, not refused: the next session sends it.

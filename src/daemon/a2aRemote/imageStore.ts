@@ -167,22 +167,31 @@ export class A2aImageStore {
       let open: ReadonlySet<string> | undefined;
       const kept: Array<{ path: string; info: A2aImageInfo }> = [];
       const created: string[] = [];
-      for (const { bytes, ref } of batch) {
-        // eslint-disable-next-line no-await-in-loop -- a handful of small writes, in order
-        let stored = await this.findReceived(LOCAL_FOLDER, ref);
-        if (!stored) {
-          // eslint-disable-next-line no-await-in-loop -- as above
-          await this.evictLocal(bytes.length, (sha) => own.has(sha) || (open ??= inUse()).has(sha));
-          // eslint-disable-next-line no-await-in-loop -- as above
-          stored = await this.keepReceived(LOCAL_FOLDER, ref, bytes);
-          if (stored.ok) created.push(stored.path);
+      const takeBack = async (): Promise<void> => {
+        // eslint-disable-next-line no-await-in-loop -- the few this call wrote
+        for (const full of created) await unlinkQuiet(full);
+      };
+      try {
+        for (const { bytes, ref } of batch) {
+          // eslint-disable-next-line no-await-in-loop -- a handful of small writes, in order
+          let stored = await this.findReceived(LOCAL_FOLDER, ref);
+          if (!stored) {
+            // eslint-disable-next-line no-await-in-loop -- as above
+            await this.evictLocal(bytes.length, (sha) => own.has(sha) || (open ??= inUse()).has(sha));
+            // eslint-disable-next-line no-await-in-loop -- as above
+            stored = await this.keepReceived(LOCAL_FOLDER, ref, bytes);
+            if (stored.ok) created.push(stored.path);
+          }
+          if (!stored.ok) {
+            await takeBack();
+            return { ok: false, reason: stored.reason };
+          }
+          kept.push({ path: stored.path, info: stored.info });
         }
-        if (!stored.ok) {
-          // eslint-disable-next-line no-await-in-loop -- the few this call wrote
-          for (const full of created) await unlinkQuiet(full);
-          return { ok: false, reason: stored.reason };
-        }
-        kept.push({ path: stored.path, info: stored.info });
+      } catch (err) {
+        // A throw part way leaves no copy this call wrote that nothing owns.
+        await takeBack();
+        throw err;
       }
       return { ok: true, images: kept };
     });
