@@ -327,6 +327,8 @@ export class JoinerSession {
 
   private async send(client: SessionClient, rec: A2aOutboxRecordV1): Promise<'next' | 'retry' | 'stop'> {
     const { hostId } = this.deps;
+    // This send's own stop: a start() after a stop() gives the session a new one.
+    const halt = this.halt.signal;
     try {
       this.deps.outbox.markSent(hostId, rec.seq);
     } catch (err) {
@@ -337,17 +339,23 @@ export class JoinerSession {
       const uploaded = await this.uploadImages(client, rec);
       if (uploaded !== 'ok') return uploaded;
     }
+    // Stopped while the last upload was answered (a re-pair stops the old
+    // session): the envelope is not posted against the old pin. Still owed.
+    if (halt.aborted) return 'stop';
     let answer: { status: number; json: unknown };
     try {
       answer = await client.requestJson('POST', A2A_ROUTES.messages, rec.envelope);
     } catch (err) {
-      if (err instanceof PinnedClientError && err.code === 'fingerprint-mismatch') {
-        this.identityChanged(err.message);
-        return 'stop';
-      }
       if (err instanceof PinnedClientError && err.sent) {
         // It may have landed: resend the same envelope later (deduped there).
         this.tryOutbox(() => this.deps.outbox.markOutcomeUnknown(hostId, rec.seq));
+      }
+      // Stopped while the POST was out: its error, a pin mismatch included,
+      // is the old session's and says nothing about the peer. Still owed.
+      if (halt.aborted) return 'stop';
+      if (err instanceof PinnedClientError && err.code === 'fingerprint-mismatch') {
+        this.identityChanged(err.message);
+        return 'stop';
       }
       return 'retry';
     }

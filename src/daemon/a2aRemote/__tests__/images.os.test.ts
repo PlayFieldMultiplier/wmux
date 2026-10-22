@@ -157,6 +157,11 @@ describe('imageRoots / readImageSource', () => {
 
 describe('A2aImageStore', () => {
   const store = (now = Date.now): A2aImageStore => new A2aImageStore({ a2aDir: path.join(dir, 'a2a'), uploadsRoot: path.join(dir, 'uploads'), now });
+  /** One image into the local folder: its path, or not kept. */
+  const putOne = async (s: A2aImageStore, bytes: Buffer, inUse: ReadonlySet<string> = new Set()): Promise<{ ok: true; path: string } | { ok: false }> => {
+    const got = await s.putLocal([{ bytes, info: { mediaType: 'image/png', width: 3, height: 3 } }], () => inUse);
+    return got.ok ? { ok: true, path: got.images[0].path } : { ok: false };
+  };
 
   it('claims an upload into the received folder under the receiver\'s own name, once', async () => {
     const s = store();
@@ -227,15 +232,15 @@ describe('A2aImageStore', () => {
   it('makes room in the local folder from its oldest copies nothing open names', async () => {
     const s = store();
     const kept = png(3, 3, 4, 255);
-    const keptAt = await s.putLocal(kept, { mediaType: 'image/png', width: 3, height: 3 }, () => false);
+    const keptAt = await putOne(s, kept);
     if (!keptAt.ok) throw new Error('first local copy not kept');
     const anHourAgo = new Date(Date.now() - 3600_000);
     fs.utimesSync(keptAt.path, anHourAgo, anHourAgo);
-    const inUse = (sha: string): boolean => sha === sha256(kept);
+    const inUse = new Set([sha256(kept)]);
     for (let i = 0; i < 101; i += 1) {
       const img = png(3, 3, 4 + i, i);
       // eslint-disable-next-line no-await-in-loop -- in order, oldest first
-      const got = await s.putLocal(img, { mediaType: 'image/png', width: 3, height: 3 }, inUse);
+      const got = await putOne(s, img, inUse);
       expect(got.ok).toBe(true);
     }
     const names = fs.readdirSync(path.join(dir, 'uploads', 'a2a', 'local'));
@@ -337,9 +342,8 @@ describe('A2aImageStore', () => {
 
   it('never evicts a local copy another send just found or wrote', async () => {
     const s = store();
-    const info = { mediaType: 'image/png', width: 3, height: 3 } as const;
     const a = png(3, 3, 4, 7);
-    const first = await s.putLocal(a, info, () => false);
+    const first = await putOne(s, a);
     if (!first.ok) throw new Error('first local copy not kept');
     const local = path.dirname(first.path);
     // Fill the folder; the copy of `a` is the oldest, so it is the first to make room.
@@ -349,10 +353,10 @@ describe('A2aImageStore', () => {
     const gate = holdUnlink(first.path);
     try {
       // Another send needs room and is about to remove the copy of `a`...
-      const other = s.putLocal(png(4, 4, 4, 8), info, () => false);
+      const other = putOne(s, png(4, 4, 4, 8));
       await gate.reached;
       // ...while a send of `a` itself is handed that copy's path.
-      const again = s.putLocal(a, info, () => false);
+      const again = putOne(s, a);
       await settledOrQueued(again);
       gate.release();
       expect((await other).ok).toBe(true);
@@ -362,6 +366,79 @@ describe('A2aImageStore', () => {
     } finally {
       gate.restore();
     }
+  });
+
+  it('reads what open messages name when its turn comes, not when it was queued', async () => {
+    const s = store();
+    const x = png(3, 3, 4, 21);
+    const first = await putOne(s, x);
+    if (!first.ok) throw new Error('first local copy not kept');
+    const local = path.dirname(first.path);
+    // Fill the folder; the copy of `x` is the oldest, so it is the first to make room.
+    for (let i = 0; i < RECEIVED_HOST_MAX_FILES - 1; i += 1) fs.writeFileSync(path.join(local, `${crypto.randomBytes(32).toString('hex')}.png`), 'x');
+    const anHourAgo = new Date(Date.now() - 3600_000);
+    fs.utimesSync(first.path, anHourAgo, anHourAgo);
+    // An upload holds the queue, so the local staging below waits its turn.
+    const writeFile = fs.promises.writeFile;
+    let reach!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => (reach = r));
+    const released = new Promise<void>((r) => (release = r));
+    let held = false;
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof writeFile>) => {
+      if (!held) {
+        held = true;
+        reach();
+        await released;
+      }
+      return writeFile(...args);
+    });
+    try {
+      const staged = s.stage(HOST, sha256(png(5, 5)), png(5, 5));
+      await reached;
+      // A fresh set per call: only a read made when the staging runs sees `x`.
+      const open = new Set<string>();
+      const putting = s.putLocal([{ bytes: png(4, 4, 4, 22), info: { mediaType: 'image/png', width: 4, height: 4 } }], () => new Set(open));
+      // A message naming `x` opens after the staging was queued, before it runs.
+      open.add(sha256(x));
+      release();
+      await staged;
+      expect((await putting).ok).toBe(true);
+      expect(fs.existsSync(first.path)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('takes back the copies a local staging wrote when a later step throws', async () => {
+    const s = store();
+    const a = png(3, 3, 4, 31);
+    const b = png(4, 4, 4, 32);
+    const local = path.join(dir, 'uploads', 'a2a', LOCAL_FOLDER);
+    // The first image is not there yet, so it is written (two looks: putLocal's and keepReceived's); looking for the second one throws.
+    const copyOfA = path.join(local, `${sha256(a)}.png`);
+    let finds = 0;
+    let aWritten = false;
+    const find = vi.spyOn(s as unknown as { findReceived: () => Promise<null> }, 'findReceived').mockImplementation(async () => {
+      finds += 1;
+      if (finds === 3) {
+        aWritten = fs.existsSync(copyOfA);
+        throw new Error('EIO');
+      }
+      return null;
+    });
+    try {
+      await expect(
+        s.putLocal([
+          { bytes: a, info: { mediaType: 'image/png', width: 3, height: 3 } },
+          { bytes: b, info: { mediaType: 'image/png', width: 4, height: 4 } },
+        ], () => new Set()),
+      ).rejects.toThrow('EIO');
+    } finally {
+      find.mockRestore();
+    }
+    expect(aWritten).toBe(true);
+    expect(fs.existsSync(copyOfA)).toBe(false);
   });
 
   it('runs the next write after one that failed', async () => {
@@ -409,7 +486,6 @@ describe('blob routes', () => {
         await wait;
         return s.has(h, sha);
       },
-      mayHave: (h: string, sha: string) => s.mayHave(h, sha),
       stage: (h: string, sha: string, b: Buffer) => s.stage(h, sha, b),
       readOutgoing: async (sha: string) => {
         const wait = hold.read;
@@ -569,14 +645,19 @@ describe('blob routes', () => {
     slow.destroy();
   });
 
-  it('answers HEAD by name and size, without reading the file or refreshing its time', async () => {
+  it('keeps an upload HEAD answered for until its envelope claims it', async () => {
     const img = png(5, 5);
-    const stored = await s.storeReceived(HOST, refOf(img), img);
-    if (!stored.ok) throw new Error('not stored');
-    const old = new Date(Date.now() - 3 * 24 * 3600_000);
-    fs.utimesSync(stored.path, old, old);
+    await s.stage(HOST, sha256(img), img);
+    const staged = path.join(dir, 'a2a', 'blobs-in', HOST, sha256(img));
+    // Unclaimed for just under the staging TTL when the joiner asks about it.
+    const old = new Date(Date.now() - STAGING_TTL_MS + 60_000);
+    fs.utimesSync(staged, old, old);
+    // 200: the joiner will not upload it again, and posts the envelope next.
     expect((await send('HEAD', sha256(img))).status).toBe(200);
-    expect(Math.round(fs.statSync(stored.path).mtimeMs / 1000)).toBe(Math.round(old.getTime() / 1000));
+    // A sweep two minutes on, past the TTL of the time it had when asked.
+    await new A2aImageStore({ a2aDir: path.join(dir, 'a2a'), uploadsRoot: path.join(dir, 'uploads'), now: () => Date.now() + 120_000 }).sweep();
+    expect(fs.existsSync(staged)).toBe(true);
+    expect(await s.claim(HOST, refOf(img))).toMatchObject({ ok: true });
   });
 
   it('keeps the connection usable after draining a full upload it already holds', async () => {
@@ -812,13 +893,17 @@ describe('JoinerSession image uploads', () => {
     }));
   }
 
-  /** A session over `records`, posting through `bytes` (the image transfers); what it posted and refused. */
+  /**
+   * A session over `records`, with `bytes` (the image transfers, or any other
+   * client call) in place of the defaults; what it posted, refused and showed.
+   */
   function run(
     records: A2aOutboxRecordV1[],
-    bytes: Pick<SessionClient, 'putBytes' | 'headStatus'>,
-  ): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }>; warnings: string[]; session: JoinerSession } {
+    bytes: Partial<SessionClient>,
+  ): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }>; warnings: string[]; states: string[]; session: JoinerSession } {
     const posted: string[] = [];
     const warnings: string[] = [];
+    const states: string[] = [];
     const refused: Array<{ seq: number; code: string; detail?: string }> = [];
     const client: SessionClient = {
       requestJson: async (_m, p, body) => {
@@ -855,7 +940,7 @@ describe('JoinerSession image uploads', () => {
       accept: async () => ({ ok: true, duplicate: false }),
       onRefused: (rec, code, detail) => void refused.push({ seq: rec.seq, code, ...(detail ? { detail } : {}) }),
       reconcileLinks: async () => undefined,
-      onStatus: quiet,
+      onStatus: (s) => void states.push(s.state),
       images: { readOutgoing: async () => img },
       timing: { backoffMinMs: 5, backoffMaxMs: 20, livenessMs: 60_000 },
       client: () => client,
@@ -863,7 +948,26 @@ describe('JoinerSession image uploads', () => {
     });
     sessions.push(session);
     session.start();
-    return { posted, refused, warnings, session };
+    return { posted, refused, warnings, states, session };
+  }
+
+  /** An upload that never answers on its own: only an abort of its signal ends it. */
+  function hangingPut(): { putBytes: NonNullable<SessionClient['putBytes']>; puts: () => number; aborted: () => boolean } {
+    let puts = 0;
+    let aborted = false;
+    return {
+      putBytes: (_p, _b, _t, signal) => {
+        puts += 1;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(new PinnedClientError('aborted', 'aborted', { sent: true }));
+          }, { once: true });
+        });
+      },
+      puts: () => puts,
+      aborted: () => aborted,
+    };
   }
 
   it('gives up a message whose uploads keep timing out, and the next message still goes', async () => {
@@ -880,29 +984,149 @@ describe('JoinerSession image uploads', () => {
   });
 
   it('ends an upload in flight when the session stops, and sends nothing after it', async () => {
-    let puts = 0;
-    let aborted = false;
-    const { posted, refused, warnings, session } = run(replies(), {
-      putBytes: (_p, _b, _t, signal) => {
-        puts += 1;
-        // A transfer that never answers: only the session's stop ends it.
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener('abort', () => {
-            aborted = true;
-            reject(new PinnedClientError('aborted', 'aborted', { sent: true }));
-          }, { once: true });
-        });
-      },
-    });
-    await vi.waitFor(() => expect(puts).toBe(1), { timeout: 5_000 });
+    const records = replies();
+    const hang = hangingPut();
+    const { posted, refused, warnings, session } = run(records, { putBytes: hang.putBytes });
+    await vi.waitFor(() => expect(hang.puts()).toBe(1), { timeout: 5_000 });
     let stopped = false;
     void session.stop().then(() => (stopped = true));
-    await vi.waitFor(() => expect({ aborted, stopped }).toEqual({ aborted: true, stopped: true }), { timeout: 5_000 });
-    expect(puts).toBe(1);
+    await vi.waitFor(() => expect({ aborted: hang.aborted(), stopped }).toEqual({ aborted: true, stopped: true }), { timeout: 5_000 });
+    expect(hang.puts()).toBe(1);
     expect(posted).toEqual([]);
     // Stopped, not failed: the message is still owed, and no failed upload was counted.
     expect(refused).toEqual([]);
+    expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
     expect(warnings.filter((w) => w.includes('image upload'))).toEqual([]);
+
+    // The next session (after a re-pair, a restart) sends it: upload, then the message.
+    let puts = 0;
+    const next = run(records, {
+      putBytes: async () => {
+        puts += 1;
+        return { status: 200, json: { ok: true } };
+      },
+    });
+    await vi.waitFor(() => expect(next.posted).toEqual(['m1', 'm2']), { timeout: 10_000 });
+    expect(puts).toBe(1);
+    expect(next.refused).toEqual([]);
+  });
+
+  it('does not post a message whose last upload was answered after the session stopped', async () => {
+    const records = replies();
+    let answer!: (a: { status: number; json: unknown }) => void;
+    let puts = 0;
+    const posts: string[] = [];
+    const { refused, states, session } = run(records, {
+      putBytes: () => {
+        puts += 1;
+        // Answered by the test, whatever the signal says: the answer lands after the stop.
+        return new Promise((resolve) => (answer = resolve));
+      },
+      // The other PC was re-paired: a POST through this (old) session meets a certificate it does not pin.
+      requestJson: async (_m, p, body) => {
+        if (p === A2A_ROUTES.messages) {
+          posts.push((body as { messageId: string }).messageId);
+          throw new PinnedClientError('fingerprint-mismatch', 'not the pinned certificate', { sent: false });
+        }
+        return { status: 200, json: { ok: true } };
+      },
+    });
+    await vi.waitFor(() => expect(puts).toBe(1), { timeout: 5_000 });
+    const stopping = session.stop();
+    answer({ status: 200, json: { ok: true } });
+    await stopping;
+    expect(posts).toEqual([]);
+    expect(states).not.toContain('identity-changed');
+    expect(session.current().state).not.toBe('identity-changed');
+    // Still owed, not refused: the next session sends it.
+    expect(refused).toEqual([]);
+    expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
+  });
+
+  it('does not post from a send whose session was stopped, even when it is started again before that send ends', async () => {
+    const records = replies();
+    const events: string[] = [];
+    let answerFirst!: (a: { status: number; json: unknown }) => void;
+    // Started again before the stop settles, the session runs the stopped stream loop too; ending
+    // every stream when the test is done lets the final stop end both.
+    let endStreams!: () => void;
+    const ended = new Promise<void>((r) => (endStreams = r));
+    const { session } = run(records, {
+      openStream: async function* (_p, { signal }) {
+        yield { event: 'hello', data: { epoch: 'e', features: ['images.1'] } };
+        await Promise.race([ended, new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }))]);
+      },
+      putBytes: () => {
+        events.push('put');
+        // The first upload is answered by the test, after the restart; later ones at once.
+        if (events.filter((e) => e === 'put').length === 1) return new Promise((resolve) => (answerFirst = resolve));
+        return Promise.resolve({ status: 200, json: { ok: true } });
+      },
+      requestJson: async (_m, p, body) => {
+        if (p === A2A_ROUTES.messages) events.push(`post:${(body as { messageId: string }).messageId}`);
+        return { status: 200, json: { ok: true, duplicate: false } };
+      },
+    });
+    await vi.waitFor(() => expect(events).toEqual(['put']), { timeout: 5_000 });
+    // Stopped and started again at once: the restart gets a new stop signal.
+    const stopping = session.stop();
+    session.start();
+    answerFirst({ status: 200, json: { ok: true } });
+    try {
+      // The stopped send posts nothing: the restarted session uploads again, then posts.
+      await vi.waitFor(() => expect(events).toContain('post:m2'), { timeout: 10_000 });
+      expect(events.slice(0, 3)).toEqual(['put', 'put', 'post:m1']);
+    } finally {
+      endStreams();
+      await session.stop();
+      await stopping;
+    }
+  });
+
+  it('does not report a changed identity for a message whose POST failed after the session stopped', async () => {
+    const records = replies();
+    let fail!: () => void;
+    let posts = 0;
+    const { refused, states, session } = run(records, {
+      putBytes: async () => ({ status: 200, json: { ok: true } }),
+      // The other PC was re-paired while the POST was out: it fails on a certificate this (old) session does not pin.
+      requestJson: (_m, p) => {
+        if (p !== A2A_ROUTES.messages) return Promise.resolve({ status: 200, json: { ok: true } });
+        posts += 1;
+        return new Promise((_resolve, reject) => (fail = () => reject(new PinnedClientError('fingerprint-mismatch', 'not the pinned certificate', { sent: false }))));
+      },
+    });
+    await vi.waitFor(() => expect(posts).toBe(1), { timeout: 5_000 });
+    const stopping = session.stop();
+    fail();
+    await stopping;
+    expect(states).not.toContain('identity-changed');
+    expect(session.current().state).not.toBe('identity-changed');
+    // Still owed, not refused: the next session sends it.
+    expect(refused).toEqual([]);
+    expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
+  });
+
+  it('ends an upload in flight when the certificate is not the pinned one', async () => {
+    const records = replies();
+    const hang = hangingPut();
+    let mismatch!: () => void;
+    const pinFails = new Promise<void>((r) => (mismatch = r));
+    const { posted, refused, states } = run(records, {
+      putBytes: hang.putBytes,
+      openStream: async function* () {
+        yield { event: 'hello', data: { epoch: 'e', features: ['images.1'] } };
+        await pinFails;
+        throw new PinnedClientError('fingerprint-mismatch', 'not the pinned certificate', { sent: false });
+      },
+    });
+    await vi.waitFor(() => expect(hang.puts()).toBe(1), { timeout: 5_000 });
+    mismatch();
+    await vi.waitFor(() => expect(hang.aborted()).toBe(true), { timeout: 5_000 });
+    expect(states).toContain('identity-changed');
+    expect(posted).toEqual([]);
+    expect(refused).toEqual([]);
+    expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
   });
 
   it('asks first and does not upload an image the other PC already holds', async () => {

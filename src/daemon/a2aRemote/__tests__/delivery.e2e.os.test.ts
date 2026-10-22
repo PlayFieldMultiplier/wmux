@@ -333,6 +333,47 @@ describe('cross-host delivery, end to end', () => {
     expect(fs.readdirSync(path.join(a.dir, 'uploads', 'a2a', 'local'))).toHaveLength(100);
   });
 
+  it('a staging that fails takes back only its own copies, never one another staging was handed', async () => {
+    const a = await makePc('PC-A', { images: true });
+    const shots = path.join(a.dir, 'uploads', 'shots');
+    fs.mkdirSync(shots, { recursive: true });
+    const x = pngBytes(3, 3, 1);
+    const y = pngBytes(4, 4, 2);
+    fs.writeFileSync(path.join(shots, 'x.png'), x);
+    fs.writeFileSync(path.join(shots, 'y.png'), y);
+    const ySha = crypto.createHash('sha256').update(y).digest('hex');
+    // The write of `y` waits for the test, then fails (the disk is full): the first staging fails after it kept `x`.
+    let reach!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => (reach = r));
+    const released = new Promise<void>((r) => (release = r));
+    const writeFile = fs.promises.writeFile;
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      if (path.basename(String(file)).startsWith(`.${ySha}.`)) {
+        reach();
+        await released;
+        throw new Error('ENOSPC: no space left on device');
+      }
+      return writeFile(file, data, options);
+    });
+    type Staged = { ok: boolean; images?: Array<{ path: string }> };
+    try {
+      const first = a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(shots, 'x.png'), path.join(shots, 'y.png')] }) as Promise<Staged>;
+      await reached;
+      // Another agent stages `x` alone while the first is still at work.
+      const second = a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(shots, 'x.png')] }) as Promise<Staged>;
+      await deliberateSleep(200, 'the second staging reaches the image store while the first is held');
+      release();
+      expect(await first).toMatchObject({ ok: false });
+      const got = await second;
+      expect(got.ok).toBe(true);
+      // What the second agent was handed is there for its receiver to read.
+      expect(fs.existsSync(got.images![0].path)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('each PC learns what the other takes, in both roles, and still knows it after a restart', async () => {
     // B can keep images (an uploads folder); A advertises offers only.
     const b = await makePc('PC-B', { images: true });

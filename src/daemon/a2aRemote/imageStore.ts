@@ -34,7 +34,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { A2A_REMOTE_IMAGE_LIMITS, A2A_SHA256_RE, isHostId, type A2aRemoteImageMediaType, type A2aRemoteImageRef, type HostId } from '../../shared/a2aRemote';
+import { A2A_SHA256_RE, isHostId, type A2aRemoteImageMediaType, type A2aRemoteImageRef, type HostId } from '../../shared/a2aRemote';
 import { inspectA2aImage, type A2aImageInfo } from '../../shared/a2aImages';
 
 const DAY_MS = 24 * 3600_000;
@@ -59,7 +59,7 @@ const EXT: Record<A2aRemoteImageMediaType, string> = { 'image/png': 'png', 'imag
 
 export type ImageNotReceived = 'missing' | 'invalid' | 'full';
 
-export type StoredImage = { ok: true; path: string; info: A2aImageInfo; created?: true } | { ok: false; reason: ImageNotReceived };
+export type StoredImage = { ok: true; path: string; info: A2aImageInfo } | { ok: false; reason: ImageNotReceived };
 
 export interface A2aImageStoreOptions {
   /** `<wmuxDir>/a2a` */
@@ -146,33 +146,54 @@ export class A2aImageStore {
   }
 
   /**
-   * Keep an image an agent sent to a pane on this PC; its path is what the
-   * receiver reads. This folder is this PC's own, so when it is full its
-   * oldest files that nothing still open refers to (`inUse`) make room.
+   * Keep the images an agent sent to a pane on this PC, all or none; their
+   * paths are what the receiver reads. This folder is this PC's own, so when
+   * it is full its oldest files make room: never one of these, nor one that
+   * something open refers to (`inUse`, read when room is first needed).
+   *
+   * The whole batch is one turn of the queue. When a later image does not
+   * fit, the copies this call wrote go again, and no other call can have
+   * been handed one of them in between: a concurrent call for the same image
+   * runs wholly before (this call then finds that copy and leaves it) or
+   * wholly after (it writes its own).
    */
-  async putLocal(bytes: Buffer, info: A2aImageInfo, inUse: (sha: string) => boolean): Promise<StoredImage> {
-    const ref: A2aRemoteImageRef = { sha256: sha256(bytes), mediaType: info.mediaType, bytes: bytes.length };
-    // One at a time with every other write and sweep there: a copy another
-    // call just found or wrote is never evicted under it.
+  async putLocal(
+    images: ReadonlyArray<{ bytes: Buffer; info: A2aImageInfo }>,
+    inUse: () => ReadonlySet<string>,
+  ): Promise<{ ok: true; images: Array<{ path: string; info: A2aImageInfo }> } | { ok: false; reason: ImageNotReceived }> {
+    const batch = images.map(({ bytes, info }) => ({ bytes, ref: { sha256: sha256(bytes), mediaType: info.mediaType, bytes: bytes.length } as A2aRemoteImageRef }));
+    const own = new Set(batch.map((b) => b.ref.sha256));
     return this.incoming(async () => {
-      const existing = await this.findReceived(LOCAL_FOLDER, ref);
-      if (existing) return existing;
-      await this.evictLocal(bytes.length, inUse);
-      const stored = await this.keepReceived(LOCAL_FOLDER, ref, bytes);
-      return stored.ok ? { ...stored, created: true } : stored;
-    });
-  }
-
-  /** Remove the local copy of `sha` (whatever its type), one this PC just wrote; whether one was there. */
-  async discardLocal(sha: string): Promise<boolean> {
-    if (!A2A_SHA256_RE.test(sha)) return false;
-    return this.incoming(async () => {
-      let removed = false;
-      for (const ext of Object.values(EXT)) {
-        // eslint-disable-next-line no-await-in-loop -- three names at most
-        if (await unlinkQuiet(path.join(this.root, LOCAL_FOLDER, `${sha}.${ext}`))) removed = true;
+      let open: ReadonlySet<string> | undefined;
+      const kept: Array<{ path: string; info: A2aImageInfo }> = [];
+      const created: string[] = [];
+      const takeBack = async (): Promise<void> => {
+        // eslint-disable-next-line no-await-in-loop -- the few this call wrote
+        for (const full of created) await unlinkQuiet(full);
+      };
+      try {
+        for (const { bytes, ref } of batch) {
+          // eslint-disable-next-line no-await-in-loop -- a handful of small writes, in order
+          let stored = await this.findReceived(LOCAL_FOLDER, ref);
+          if (!stored) {
+            // eslint-disable-next-line no-await-in-loop -- as above
+            await this.evictLocal(bytes.length, (sha) => own.has(sha) || (open ??= inUse()).has(sha));
+            // eslint-disable-next-line no-await-in-loop -- as above
+            stored = await this.keepReceived(LOCAL_FOLDER, ref, bytes);
+            if (stored.ok) created.push(stored.path);
+          }
+          if (!stored.ok) {
+            await takeBack();
+            return { ok: false, reason: stored.reason };
+          }
+          kept.push({ path: stored.path, info: stored.info });
+        }
+      } catch (err) {
+        // A throw part way leaves no copy this call wrote that nothing owns.
+        await takeBack();
+        throw err;
       }
-      return removed;
+      return { ok: true, images: kept };
     });
   }
 
@@ -210,8 +231,10 @@ export class A2aImageStore {
 
   /**
    * Whether `hostId`'s image is here already with these exact bytes, uploaded
-   * or received (a PUT then needs no body). A hit refreshes the file's time,
-   * so an upload a resend still needs is not the oldest one a full share drops.
+   * or received (a HEAD answers 200, a PUT needs no body). A hit refreshes the
+   * file's time: the joiner then sends the envelope instead of the bytes, so
+   * the upload must outlive the staging TTL and a full share's eviction until
+   * that envelope claims it.
    */
   async has(hostId: HostId, sha: string): Promise<boolean> {
     if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) return false;
@@ -224,22 +247,6 @@ export class A2aImageStore {
       }
       return false;
     });
-  }
-
-  /**
-   * Whether a file under `sha` is here for `hostId` (uploaded or received),
-   * by name and size only: no read, no hash, no time refreshed (a question
-   * is not a use). The bytes are checked when an envelope claims them.
-   */
-  async mayHave(hostId: HostId, sha: string): Promise<boolean> {
-    if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) return false;
-    const candidates = [path.join(this.stagingDir(hostId), sha), ...Object.values(EXT).map((ext) => path.join(this.root, hostId, `${sha}.${ext}`))];
-    for (const full of candidates) {
-      // eslint-disable-next-line no-await-in-loop -- at most four stats
-      const st = await lstatOrNull(full);
-      if (st?.isFile() && st.size > 0 && st.size <= A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES) return true;
-    }
-    return false;
   }
 
   /**
