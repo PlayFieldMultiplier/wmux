@@ -180,6 +180,21 @@ describe('close-tab shortcut confirmation', () => {
     expect(text).not.toContain('This ends its shell');
   });
 
+  it('treats a duplicated remote tab with no session as a plain tab, not a view', () => {
+    addSurface({ id: 's-6', ptyId: '', title: 'remote', shell: '', cwd: '', surfaceType: 'remote-terminal', remoteHostId: 'h-1' });
+    const text = dialog()?.textContent ?? '';
+    expect(text).toContain('Anything running in it will be stopped.');
+    expect(text).not.toContain('the session keeps running on the other PC');
+  });
+
+  it('claims nothing stops when closing a placeholder slot', () => {
+    addSurface({ id: 's-7', ptyId: '', title: 'Open in desktop', shell: '', cwd: '', surfaceType: 'placeholder' });
+    const text = dialog()?.textContent ?? '';
+    expect(text).toContain('Close Open in desktop');
+    expect(text).not.toContain('will be stopped');
+    expect(text).not.toContain('This ends its shell');
+  });
+
   it('starts on Cancel and lets the keyboard reach Close', () => {
     pressCloseTab();
     const cancel = document.querySelector('[data-close-tab-cancel]');
