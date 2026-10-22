@@ -135,7 +135,7 @@ afterAll(() => {
 
 afterEach(async () => {
   for (const c of clients.splice(0)) c.socket.destroy();
-  for (const p of pipes.splice(0)) await p.stop().catch(() => {});
+  for (const p of pipes.splice(0)) await p.stop().catch(() => { /* already stopped */ });
 });
 
 async function startPipe(
@@ -217,6 +217,31 @@ describe('SessionPipe initial-attach snapshot (TASK-10)', () => {
       await enqueueSnapshotJob(async () => undefined);
     }
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it('a new pane resized by its first fit flushes and goes live while the slot is held (#2585)', async () => {
+    let release!: () => void;
+    const gate = enqueueSnapshotJob(() => new Promise<void>((resolve) => { release = resolve; }));
+    await waitFor(() => typeof release === 'function');
+    // A new pane's ring at its renderer's reattach: the ConPTY preamble,
+    // written at the size estimated at create, then the first fit's resize.
+    const ring = new RingBuffer(1024 * 1024);
+    ring.noteGeometry(80, ROWS);
+    ring.write(Buffer.from('\x1b[1t\x1b[?1004h\x1b[?9001h'));
+    ring.noteGeometry(COLS, ROWS);
+    expect(ring.hasGeometryChanges).toBe(true);
+    try {
+      const pipe = await startPipe(uniqueSessionId('fresh-resized'), ring, () => ({ cols: COLS, rows: ROWS }));
+      const client = await connectClient(pipe.getPipeName(), TOKEN);
+      clients.push(client);
+      await waitFor(() => client.wire().includes(FLUSH_DONE_MARKER), 5_000);
+      // The shell's prompt, written after the flush, reaches the client.
+      pipe.writeToClient(Buffer.from('PS C:\\> '));
+      await waitFor(() => client.wire().toString('utf8').endsWith('PS C:\\> '));
+    } finally {
+      release();
+      await gate;
+    }
   });
 
   it('large buffer + dims → compact snapshot with screen parity, then FLUSH_DONE', async () => {

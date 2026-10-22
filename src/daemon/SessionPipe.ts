@@ -237,9 +237,19 @@ export class SessionPipe {
 
   private async flushRingBuffer(socket: net.Socket): Promise<void> {
     // Waiting attaches retain only the ring, not a second full history copy.
-    // Keep small raw replays off the queue so interactive shells do not wait
-    // behind another pane's snapshot. Re-read dimensions inside the slot.
-    if (this.getDims && (this.ringBuffer.size >= ATTACH_SNAPSHOT_MIN_BYTES || this.ringBuffer.hasGeometryChanges)) {
+    // Keep small rings off the queue so interactive shells do not wait behind
+    // another pane's snapshot. Re-read dimensions inside the slot.
+    //
+    // #2585: a small ring with a size change in it is still parsed at its
+    // written sizes (below), but here, not in the slot. Every new pane is
+    // that ring: its preamble is written at the size estimated at create, and
+    // the first fit resizes it before the renderer's reattach. Until the
+    // flush-done marker the client gets no live output (writeToClient gates
+    // on `flushed`) while its input already flows, so a queue held by other
+    // panes' snapshots left new panes blank and unable to answer the shell's
+    // cursor queries. Overlapping parses are each under
+    // ATTACH_SNAPSHOT_MIN_BYTES, far from the history copies the slot bounds.
+    if (this.getDims && this.ringBuffer.size >= ATTACH_SNAPSHOT_MIN_BYTES) {
       return enqueueSnapshotJob(() => this.flushRingBufferInSlot(socket));
     }
     return this.flushRingBufferInSlot(socket);
@@ -267,12 +277,13 @@ export class SessionPipe {
     // however small it is.
     const otherSize = !!geometry?.changes.length;
     if (dims && (buffered.length >= ATTACH_SNAPSHOT_MIN_BYTES || otherSize)) {
-      // Reuses the resync path's HeadlessSnapshot (global concurrency-1
-      // queue, alt-screen/margins/partial-tail fail-open ladder, DECSET
-      // modes tail). No live tee here: unlike reflush there is no bridge
-      // handle at this layer, so bytes arriving DURING the parse are
-      // recovered by re-reading the ring afterwards — writeToClient gates
-      // on `flushed`, so nothing reaches the socket in between.
+      // Reuses the resync path's HeadlessSnapshot (alt-screen/margins/
+      // partial-tail fail-open ladder, DECSET modes tail), inside the global
+      // concurrency-1 slot for a large ring only. No live tee here: unlike
+      // reflush there is no bridge handle at this layer, so bytes arriving
+      // DURING the parse are recovered by re-reading the ring afterwards —
+      // writeToClient gates on `flushed`, so nothing reaches the socket in
+      // between.
       let base = writtenBefore;
       let outcome = await generateSnapshotUnqueued({
         cols: dims.cols,
