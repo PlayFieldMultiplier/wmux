@@ -19,6 +19,7 @@ import {
   launchdJobsFor,
   launchEnv,
   launchUserDataDirArg,
+  ownedCdpPort,
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
@@ -486,5 +487,23 @@ describe('launchdJobsFor', () => {
       { label: 'com.wmux.daemon-verify-a.2', pid: 4321 },
     ]);
     expect(launchdJobsFor(list, '')).toEqual([]);
+  });
+});
+
+describe('ownedCdpPort', () => {
+  let dir;
+  afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); dir = null; });
+
+  it('trusts the port the app logged over a stale claim that names a reused pid', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-cdp-owned-'));
+    // An earlier process with the same pid left 18801 behind; the app took 18830.
+    fs.writeFileSync(path.join(dir, 'wmux-cdp-18801.lock'), '29944');
+    fs.writeFileSync(path.join(dir, 'wmux-cdp-18830.lock'), '29944');
+    expect(ownedCdpPort(dir, 29944, 18830)).toBe(18830);
+    // Logged, but the claim does not name us (yet): no port.
+    fs.writeFileSync(path.join(dir, 'wmux-cdp-18831.lock'), '1');
+    expect(ownedCdpPort(dir, 29944, 18831)).toBeNull();
+    // No log line yet: the claim lookup.
+    expect(ownedCdpPort(dir, 29944, null)).toBe(18801);
   });
 });

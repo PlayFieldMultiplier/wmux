@@ -35,11 +35,11 @@ import {
   darwinEnvPart,
   electronUserDataDir,
   envHasSuffix,
-  findClaimedPort,
   launchAppArgs,
   launchdJobsFor,
   launchEnv,
   launchUserDataDirArg,
+  ownedCdpPort,
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
@@ -425,7 +425,7 @@ async function cmdLaunch(opts, reconnectState = null) {
       lastErr = `CDP disabled (${disabled || 'app log says so'}); the UI cannot be driven`;
       break;
     }
-    state.cdpPort = findClaimedPort(CLAIM_DIR, state.pid) ?? state.cdpPort;
+    state.cdpPort = ownedCdpPort(CLAIM_DIR, state.pid, log.requested) ?? state.cdpPort;
     if (state.cdpPort) {
       const targets = await httpJson(`http://127.0.0.1:${state.cdpPort}/json/list`);
       if (Array.isArray(targets) && targets.some(isMainWindowTarget)) {

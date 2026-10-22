@@ -81,6 +81,18 @@ export function findClaimedPort(dir, pid) {
   return null;
 }
 
+/**
+ * The CDP port of the app `pid`: the port its own log says it requested, once
+ * the claim for that port names the pid. Claims are never cleaned up, so a
+ * stale one left by an earlier process whose pid the app now reuses names
+ * the pid too; the log decides. Without that log line (yet), the claim that
+ * names the pid.
+ */
+export function ownedCdpPort(dir, pid, requested) {
+  if (requested) return claimOwnedBy(dir, requested, pid) ? requested : null;
+  return findClaimedPort(dir, pid);
+}
+
 /** Does the claim file for `port` still name `pid` as its owner? */
 export function claimOwnedBy(dir, port, pid) {
   try {
