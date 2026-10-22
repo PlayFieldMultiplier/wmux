@@ -1281,7 +1281,9 @@ describe('room-wide owner messages, wake context and turn ends', () => {
     }
     // Every owner message and mention is offered; a routine is not.
     expect(ended.map(([c]) => c)).toEqual(['cp-group', 'cp-general', 'c-mention-group']);
-    // The group's card took its turn; the General message posts its text as before.
+    // The group's card took its turn; the General message's text goes to
+    // postTurnText as before, which takes the marker out of the card
+    // (groupProtocol.test.ts).
     expect(posted).toEqual(['[[react:👍]] human']);
   });
 

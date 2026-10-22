@@ -4234,8 +4234,9 @@ arrival order (`seq`, increasing; never sort by `at`).
   earlier card, and a workspace whose room the owner had written in reads
   on as a group chat in `general`. Additive: no field, route or answer
   changed; a client that draws threads generically shows it like any other.
-- `sinceSeq` — cards with a larger `seq`. Omitted: the newest page. Read
-  forward from `0` for the whole history.
+- `sinceSeq` — cards with a larger `seq`, and cards changed since (see
+  **Changed cards** below). Omitted: the newest page. Read forward from `0`
+  for the whole history.
 - `limit` — 1–100, default 50.
 
 ```json
@@ -4325,6 +4326,26 @@ arrival order (`seq`, increasing; never sort by `at`).
   stale, so read the thread again after a resume.
 - `state` — `open` or `resolved` on `question`, `proposal` and `plan` cards.
   `closes: true` — the card records the end of its thread's subject.
+- `reactions` — in a group chat only: `[{botId, emoji, ack?: true}]`, at most
+  one per bot and 16 in all. `emoji` is one of ❤️ 👍 👎 😂 ‼️ ❓ 👀 ✅ 🙌.
+  - Without `ack`: a bot woken for this card reacted instead of replying.
+  - With `ack: true`: the bot stayed silent, and wmux left the reaction to
+    show that it saw the card.
+  - Name the bot from `GET /api/bots`.
+  - A reaction is display only, with nothing to answer.
+  - A bot's later reaction replaces its earlier one on the same card.
+  - Additive (2026-10-23): no route, answer or `protocolVersion` changed.
+- **Changed cards.** When a bot reacts to a card, the card keeps its `id` and
+  `seq`, and the change takes the next room seq.
+  - A forward read (`sinceSeq`) after that change brings the card back with
+    its new `reactions`, even when its `seq` is older than `sinceSeq`.
+  - Replace the card you hold by `id`, and keep it in its place by `seq`.
+    Never add a second row for an `id` you already show.
+  - A forward page still lists its cards in increasing `seq`. It can hold an
+    older card among new ones, and `nextSinceSeq` can be larger than the last
+    card's `seq`: pass it back as it is.
+  - Only reactions move a card this way. A question's `state` change shows
+    only on a newest-page read, as before.
 - `replyTo` — the id of a card of the same thread this one answers. A card a
   bot writes while it handles an owner message (its turn started from a
   `human` card) carries that `human` card's id, unless the bot named another

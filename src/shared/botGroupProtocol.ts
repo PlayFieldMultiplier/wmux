@@ -34,9 +34,11 @@ export const REACTIONS_PER_CARD_MAX = 16;
  * Round caps. 8 lines lets every bot of a three- or four-bot group answer
  * and follow up once; 2 per bot is an answer and one follow-up; 4 waves is
  * ask → answer → follow-up → close. All sit below the handoff caps
- * (HANDOFF_LIMITS MAX_DEPTH 6, MAX_PER_RUN 32), which still hold.
+ * (HANDOFF_LIMITS MAX_DEPTH 6, MAX_PER_RUN 32), which still hold. A round
+ * also ends after QUIET_MS with no card in the thread: a loop posts within
+ * minutes, and an owner message that aged out of memory never reopens one.
  */
-export const GROUP_ROUND_LIMITS = { LINES: 8, LINES_PER_BOT: 2, MENTION_WAVES: 4 } as const;
+export const GROUP_ROUND_LIMITS = { LINES: 8, LINES_PER_BOT: 2, MENTION_WAVES: 4, QUIET_MS: 30 * 60_000 } as const;
 
 /** One bot's reaction on a card. `ack`: main left it for a bot that stayed
  *  silent (not the bot's own pick). */

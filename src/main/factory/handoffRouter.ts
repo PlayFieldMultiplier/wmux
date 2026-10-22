@@ -131,11 +131,11 @@ import {
   type RoomWriter,
 } from './roomWriter';
 
-/** Whether a thread is a live group chat's (its own, or General for a
- *  group made from the room). */
-function inGroupChat(ports: Partial<FactoryRoomPorts>, workspaceId: string, threadId: ThreadId): boolean {
+/** Whether a bot talks in a live group chat's thread (its own, or General
+ *  for a group made from the room) as one of the group's bots. */
+function inGroupChat(ports: Partial<FactoryRoomPorts>, workspaceId: string, threadId: ThreadId, botId: string): boolean {
   try {
-    return !!ports.groups?.byThread(workspaceId, threadId);
+    return ports.groups?.byThread(workspaceId, threadId)?.memberIds.includes(botId) === true;
   } catch {
     return false;
   }
@@ -949,7 +949,7 @@ export class HandoffRouter {
     }
     // A group chat's bots mentioning each other go MENTION_WAVES deep
     // (shared/botGroupProtocol.ts): an A↔B loop ends there.
-    if (depth > GROUP_ROUND_LIMITS.MENTION_WAVES && spec.clientHandoffId?.startsWith('mention:') === true && inGroupChat(ports, sender.workspaceId, draft.threadId)) {
+    if (depth > GROUP_ROUND_LIMITS.MENTION_WAVES && spec.clientHandoffId?.startsWith('mention:') === true && inGroupChat(ports, sender.workspaceId, draft.threadId, sender.botId)) {
       return this.refuse(draft, 'max_depth', `bots in a group chat mention each other at most ${GROUP_ROUND_LIMITS.MENTION_WAVES} deep; this mention is ${depth} deep`);
     }
     // The first hops of an owner's run (the bots it woke answering each

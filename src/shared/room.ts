@@ -254,6 +254,20 @@ export interface RoomCard {
    *  reaction wakes no bot and starts nothing. Never set by a room.post
    *  param. */
   reactions?: CardReaction[];
+  /** Main-written: the room seq the card's latest reaction took (a seq no
+   *  card has), so a reader that polls by sinceSeq sees the change
+   *  (RoomWriter.read `changes`). The card keeps its own seq and place. */
+  changedSeq?: number;
+  /** Main-written, bot cards only: posted in a group chat's thread by one
+   *  of its bots in a turn on the owner's message or another bot's mention
+   *  there. These cards make up the group's round (GROUP_ROUND_LIMITS). */
+  groupTurn?: true;
+}
+
+/** Where a card stands for a reader polling by sinceSeq with `changes`: its
+ *  seq, or the seq its latest change took. Pure. */
+export function roomCardMark(card: Pick<RoomCard, 'seq' | 'changedSeq'>): number {
+  return Math.max(card.seq, card.changedSeq ?? 0);
 }
 
 /** Whether a card is an external guest's words or a bot's card from a turn

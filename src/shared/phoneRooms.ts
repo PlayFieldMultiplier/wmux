@@ -425,20 +425,23 @@ const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
 
 /**
  * The largest page under the reply budget. A forward page (`sinceSeq`) keeps
- * its oldest cards and says `hasMore` with `nextSinceSeq` at the last one
- * kept; the newest page (no `sinceSeq`) keeps its newest cards. At least one
- * card always stays: one card is far under the budget.
+ * its earliest cards by `markOf` (default: seq; the room's change mark when
+ * the page brings back changed cards) and says `hasMore` with `nextSinceSeq`
+ * at the last one kept; the newest page (no `sinceSeq`) keeps its newest
+ * cards. At least one card always stays: one card is far under the budget.
  */
-export function fitPhoneRoomPage(reply: PhoneRoomCardsReply, forward: boolean, budget: number = PHONE_ROOM_LIMITS.replyBytes): PhoneRoomCardsReply {
+export function fitPhoneRoomPage(reply: PhoneRoomCardsReply, forward: boolean, budget: number = PHONE_ROOM_LIMITS.replyBytes, markOf: (card: PhoneRoomCard) => number = (card) => card.seq): PhoneRoomCardsReply {
   if (bytes(reply) <= budget || reply.cards.length <= 1) return reply;
   const envelope = bytes({ ...reply, cards: [] });
   const sizes = reply.cards.map((c) => bytes(c) + 1);
   let total = envelope;
   let keep = 0;
   if (forward) {
-    while (keep < sizes.length && total + sizes[keep] <= budget) total += sizes[keep++];
-    const cards = reply.cards.slice(0, Math.max(1, keep));
-    return { ...reply, cards, nextSinceSeq: cards[cards.length - 1].seq, hasMore: true };
+    const order = reply.cards.map((_, i) => i).sort((a, b) => markOf(reply.cards[a]) - markOf(reply.cards[b]));
+    while (keep < order.length && total + sizes[order[keep]] <= budget) total += sizes[order[keep++]];
+    const kept = order.slice(0, Math.max(1, keep));
+    const cards = [...kept].sort((a, b) => a - b).map((i) => reply.cards[i]);
+    return { ...reply, cards, nextSinceSeq: markOf(reply.cards[kept[kept.length - 1]]), hasMore: true };
   }
   while (keep < sizes.length && total + sizes[sizes.length - 1 - keep] <= budget) total += sizes[sizes.length - 1 - keep++];
   return { ...reply, cards: reply.cards.slice(sizes.length - Math.max(1, keep)) };

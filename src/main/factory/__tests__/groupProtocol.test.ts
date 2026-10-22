@@ -4,7 +4,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotBinding, BotProfile, BotRole } from '../../../shared/bot';
 import { factDedupeKey, type Fact, type FactDraft } from '../../../shared/facts';
 import type { RoomCard, ThreadId } from '../../../shared/room';
@@ -13,7 +13,7 @@ import type { WakeItem, WakeReason } from '../../../shared/wake';
 import { GROUP_ROUND_LIMITS, REACTION_EMOJI, SILENT_ACK_EMOJI, sanitizeReactions, silentAckEmoji, splitReaction } from '../../../shared/botGroupProtocol';
 import { HANDOFFS_FILENAME, HandoffRouter, deckDecisionPort, setHandoffRouter } from '../handoffRouter';
 import { RoomWriter, parseCardLine, type FactoryRoomPorts, type RunningWake } from '../roomWriter';
-import { endGroupTurn, handleRoomPost, type RoomHandlerDeps } from '../../pipe/handlers/room.rpc';
+import { endGroupTurn, handleRoomPost, postTurnText, type RoomHandlerDeps } from '../../pipe/handlers/room.rpc';
 
 const GROUP = 'group:grp-0000aaaa' as ThreadId;
 const OPERATOR: RpcContext = { origin: 'local', operator: true, firstParty: true };
@@ -27,6 +27,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   setHandoffRouter(null);
   for (const r of routers.splice(0)) r.dispose();
   fs.rmSync(dir, { recursive: true, force: true });
@@ -212,6 +213,52 @@ describe('a group turn that ends silent or with a reaction', () => {
     expect(r.card(general.card.id)?.reactions).toBeUndefined();
   });
 
+  it('turn words posted outside a group chat carry no reaction marker', async () => {
+    const a = bot('lead');
+    const r = await rig([a], [a]);
+    const res = await postTurnText(a, { id: 'w-dm' }, '[[react:👍]] Shipped it\nAll green. [[silent]]', 0, r.deps) as { ok: true; card: RoomCard };
+    expect(res.card.threadId).toBe('general');
+    expect([res.card.title, res.card.body]).toEqual(['Shipped it', 'All green.']);
+  });
+
+  it('a reaction reaches a reader polling by sinceSeq; the card keeps its seq and place', async () => {
+    const a = bot('lead');
+    const b = bot('triage');
+    const r = await rig([a, b], [a, b]);
+    const first = await r.owner('First');
+    const second = await r.owner('Second');
+    const since = second.seq;
+    expect(r.writer.read('ws1', { threadId: GROUP, sinceSeq: since, changes: true }).cards).toEqual([]);
+    const wakeA = r.wakes.find((w) => w.botId === a.id && w.reason.kind === 'human' && w.reason.clientMessageId === first.id)!;
+    await r.turn(wakeA, () => endGroupTurn(a, wakeA, '[[react:❤️]]', Date.now() - 1, r.deps));
+    const page = r.writer.read('ws1', { threadId: GROUP, sinceSeq: since, changes: true });
+    expect(page.cards.map((c) => [c.id, c.seq, c.reactions])).toEqual([[first.id, first.seq, [{ botId: a.id, emoji: '❤️' }]]]);
+    expect(page.nextSinceSeq).toBeGreaterThan(since);
+    // Without `changes` a forward read is as before, and the room keeps its order.
+    expect(r.writer.read('ws1', { threadId: GROUP, sinceSeq: since }).cards).toEqual([]);
+    expect(r.groupCards().map((c) => c.id)).toEqual([first.id, second.id]);
+    // The next card takes a seq past the change, also after a reload.
+    const reloaded = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms'), log: () => undefined });
+    const third = reloaded.post({ workspaceId: 'ws1', threadId: GROUP, kind: 'human', actor: { kind: 'human' }, title: 'Third' });
+    expect(third.ok && third.card.seq).toBeGreaterThan(page.nextSinceSeq);
+    expect(reloaded.read('ws1', { threadId: GROUP, sinceSeq: page.nextSinceSeq, changes: true }).cards.map((c) => c.title)).toEqual(['Third']);
+  });
+
+  it('a forward page with changes holds the earliest changes, in seq order', async () => {
+    const a = bot('lead');
+    const r = await rig([a], [a]);
+    const cards = [];
+    for (const title of ['one', 'two', 'three']) cards.push(await r.owner(title));
+    r.writer.react('ws1', cards[2].id, { botId: a.id, emoji: '👍' });
+    r.writer.react('ws1', cards[0].id, { botId: a.id, emoji: '👍' });
+    const p1 = r.writer.read('ws1', { threadId: GROUP, sinceSeq: cards[2].seq, changes: true, limit: 1 });
+    expect([p1.cards.map((c) => c.title), p1.hasMore]).toEqual([['three'], true]);
+    const p2 = r.writer.read('ws1', { threadId: GROUP, sinceSeq: p1.nextSinceSeq, changes: true, limit: 1 });
+    expect([p2.cards.map((c) => c.title), p2.hasMore]).toEqual([['one'], false]);
+    const both = r.writer.read('ws1', { threadId: GROUP, sinceSeq: cards[2].seq, changes: true });
+    expect(both.cards.map((c) => c.title)).toEqual(['one', 'three']);
+  });
+
   it('a reaction wakes nobody and writes no fact', async () => {
     const a = bot('lead');
     const b = bot('triage');
@@ -289,6 +336,68 @@ describe('the round caps end a bot-to-bot mention loop', () => {
     await r.owner('Next round');
     const w = r.wakes.filter((x) => x.botId === members[4].id).at(-1)!;
     expect(await r.turn(w, () => handleRoomPost({ kind: 'opinion', title: 'fresh' }, asBot(members[4]), r.deps))).toMatchObject({ ok: true });
+  });
+
+  it('a coordinator still answers once its members filled the round', async () => {
+    const lead = bot('lead', { template: 'coordinator' });
+    const members = Array.from({ length: 4 }, () => bot('triage'));
+    const r = await rig([lead, ...members], [lead, ...members]);
+    await handleRoomPost({ workspaceId: 'ws1', threadId: GROUP, title: 'Ideas, everyone', mentions: members.map((m) => m.id) }, OPERATOR, r.deps);
+    for (const m of members) {
+      const w = r.wakes.find((x) => x.botId === m.id)!;
+      for (const n of [0, 1]) expect(await r.turn(w, () => handleRoomPost({ kind: 'opinion', title: `idea ${n}`, clientPostId: `p-${m.id}-${n}` }, asBot(m), r.deps))).toMatchObject({ ok: true });
+    }
+    const late = r.wakes.find((x) => x.botId === members[0].id)!;
+    expect(await r.turn(late, () => handleRoomPost({ kind: 'opinion', title: 'one more' }, asBot(members[0]), r.deps))).toMatchObject({ ok: false, code: 'not_now' });
+    const mention = { id: 'w-lead', botId: lead.id, workspaceId: 'ws1', reason: { kind: 'mention', cardId: 'c-x', handoffId: 'h-x', fromBotId: members[0].id } as WakeReason, priority: 1 } as WakeItem;
+    expect(await r.turn(mention, () => handleRoomPost({ kind: 'status', title: 'Summing up' }, asBot(lead), r.deps))).toMatchObject({ ok: true });
+  });
+
+  it('work a bot reports back on is no line of the round', async () => {
+    const a = bot('triage');
+    const b = bot('verifier');
+    const r = await rig([a, b], [a, b]);
+    await r.owner('Check PR 12');
+    const handoffWake = { id: 'w-h', botId: a.id, workspaceId: 'ws1', reason: { kind: 'handoff', handoffId: 'h-x' } as WakeReason, priority: 1 } as WakeItem;
+    for (let i = 0; i < GROUP_ROUND_LIMITS.LINES_PER_BOT + 1; i += 1) {
+      await r.turn(handoffWake, () => handleRoomPost({ kind: 'status', title: `report ${i}`, threadId: GROUP, clientPostId: `rep-${i}` }, asBot(a), r.deps));
+    }
+    const w = r.wakes.find((x) => x.botId === a.id && x.reason.kind === 'human')!;
+    expect(await r.turn(w, () => handleRoomPost({ kind: 'opinion', title: 'Looks fine to me' }, asBot(a), r.deps))).toMatchObject({ ok: true });
+  });
+
+  it('a round with no owner message left in memory ends after a quiet spell', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const a = bot('triage');
+    const b = bot('verifier');
+    const r = await rig([a, b], [a, b]);
+    await r.owner('Talk it through');
+    const w = r.wakes.find((x) => x.botId === a.id)!;
+    for (const n of [0, 1]) await r.turn(w, () => handleRoomPost({ kind: 'opinion', title: `point ${n}`, clientPostId: `q-${n}` }, asBot(a), r.deps));
+    expect(await r.turn(w, () => handleRoomPost({ kind: 'opinion', title: 'point 2' }, asBot(a), r.deps))).toMatchObject({ ok: false, code: 'not_now' });
+    vi.setSystemTime(Date.now() + GROUP_ROUND_LIMITS.QUIET_MS + 1);
+    const mention = { id: 'w-m', botId: a.id, workspaceId: 'ws1', reason: { kind: 'mention', cardId: 'c-x', handoffId: 'h-y', fromBotId: b.id } as WakeReason, priority: 1 } as WakeItem;
+    expect(await r.turn(mention, () => handleRoomPost({ kind: 'opinion', title: 'Back to it' }, asBot(a), r.deps))).toMatchObject({ ok: true });
+  });
+
+  it('bots outside the group mentioning each other there are held by the handoff caps only', async () => {
+    const a = bot('lead');
+    const b = bot('triage');
+    const c = bot('verifier');
+    const r = await rig([a, b, c], []);
+    const order = [a, b, c];
+    const msg = await r.owner('Plan it');
+    let item: WakeItem | undefined = { id: 'w-0', botId: a.id, workspaceId: 'ws1', reason: { kind: 'human', text: 'Plan it', source: 'desktop', runId: 'run-x', room: true, clientMessageId: msg.id } as WakeReason, priority: 1 } as WakeItem;
+    const oks: boolean[] = [];
+    for (let i = 0; item && i < 8; i += 1) {
+      const me = order.find((x) => x.id === item!.botId)!;
+      const to = order[(order.indexOf(me) + 1) % 3];
+      const res = await r.turn(item, () => handleRoomPost({ kind: 'opinion', title: `${me.name} to ${to.name}`, threadId: GROUP, mentions: [to.id] }, asBot(me), r.deps)) as { ok: boolean; mentions?: Array<{ ok: boolean }> };
+      oks.push(res.ok && res.mentions?.[0]?.ok === true);
+      if (!oks.at(-1)) break;
+      item = r.wakes.filter((x) => x.reason.kind === 'mention').at(-1);
+    }
+    expect(oks.slice(0, GROUP_ROUND_LIMITS.MENTION_WAVES + 1).every(Boolean)).toBe(true);
   });
 
   it('a coordinator, a turn that is not a conversation, and a thread outside the group are not capped', async () => {

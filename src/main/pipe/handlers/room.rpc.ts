@@ -352,6 +352,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     // answering each other stop. A repeat of a posted card is no new line.
     const roundFull = prior ? null : groupRoundRefusal(writer, ports, bot, threadId);
     if (roundFull) return refusal('not_now', roundFull);
+    const groupTurn = !prior && inGroupRound(ports, bot, threadId);
     let copied: { files: RoomFile[]; store: RoomFileStore } | null = null;
     if (Array.isArray(filePaths) && filePaths.length > 0 && !prior) {
       // Files come from the repository or a worker's folder: not in a wake
@@ -374,6 +375,7 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
       ...(clientPostId ? { clientPostId } : {}),
       ...(copied ? { files: copied.files } : {}),
       origin: fromGuest ? 'guest' as const : 'clean' as const,
+      ...(groupTurn ? { groupTurn: true as const } : {}),
     });
     // Copies no card took (a refused post, or one that found its card) go.
     if (copied) {
@@ -450,8 +452,9 @@ export async function postTurnText(
   deps: RoomHandlerDeps,
 ): Promise<unknown> {
   const writer = deps.writer();
-  // Processed whole, then shortened into a title and a body.
-  const trimmed = capBody(redactStoredSecrets(text)).trim();
+  // Processed whole, then shortened into a title and a body. A reaction
+  // marker is protocol, never words: a card here carries none.
+  const trimmed = capBody(redactStoredSecrets(splitReaction(text).text)).trim();
   if (!writer || !trimmed) return null;
   // A conversation that holds data from a signed-in task answers in the
   // bot's own 1:1, where the owner sees it (room.post refuses any other).
@@ -479,42 +482,40 @@ export async function postTurnText(
   );
 }
 
-/** Why a bot's post in a group chat's thread is past its round, or null:
- *  a post from a turn on the owner's message or another bot's mention
- *  there, once the bots' cards since the owner's last message there reach
- *  GROUP_ROUND_LIMITS.LINES, or the poster's own reach LINES_PER_BOT. A
- *  coordinator leads the group: its cards neither count nor are refused
- *  (its relays have their own caps). Pure over the room. */
-export function groupRoundRefusal(writer: RoomWriter, ports: Partial<FactoryRoomPorts>, bot: BotBinding, threadId: ThreadId): string | null {
+/** Whether a bot's post in a thread is a line of a group chat's round
+ *  (RoomCard.groupTurn): the poster is one of the group's bots, in a turn
+ *  on the owner's message or another bot's mention there. A coordinator
+ *  leads the group: its posts are no lines (its relays have their own
+ *  caps), and neither is work a bot reports back on. */
+export function inGroupRound(ports: Partial<FactoryRoomPorts>, bot: BotBinding, threadId: ThreadId): boolean {
   const kind = runningWake(ports, bot.botId)?.reasonKind;
-  if (kind !== 'human' && kind !== 'mention') return null;
-  let group: ReturnType<NonNullable<FactoryRoomPorts['groups']>['byThread']> = null;
+  if (kind !== 'human' && kind !== 'mention') return false;
   try {
-    group = ports.groups?.byThread(bot.workspaceId, threadId) ?? null;
+    if (!ports.groups?.byThread(bot.workspaceId, threadId)?.memberIds.includes(bot.botId)) return false;
+    return !isCoordinatorBot(ports.bots?.get(bot.botId) ?? null);
   } catch {
-    group = null;
+    return false;
   }
-  if (!group) return null;
-  const leads = new Map<string, boolean>();
-  const leadsGroup = (botId: string): boolean => {
-    let lead = leads.get(botId);
-    if (lead === undefined) {
-      try {
-        lead = isCoordinatorBot(ports.bots?.get(botId) ?? null);
-      } catch {
-        lead = false;
-      }
-      leads.set(botId, lead);
-    }
-    return lead;
-  };
+}
+
+/** Why a bot's post in a group chat's thread is past its round, or null:
+ *  a line of the round (inGroupRound), once the round's lines since the
+ *  owner's last message there reach GROUP_ROUND_LIMITS.LINES, or the
+ *  poster's own reach LINES_PER_BOT. The round's caps are those of
+ *  shared/botGroupProtocol.ts (see its header). Pure over the room. */
+export function groupRoundRefusal(writer: RoomWriter, ports: Partial<FactoryRoomPorts>, bot: BotBinding, threadId: ThreadId): string | null {
+  if (!inGroupRound(ports, bot, threadId)) return null;
   let lines = 0;
   let own = 0;
-  // A scan, newest first, that stops at the owner's last message there.
+  let after = Date.now();
+  // A scan, newest first, that stops at the owner's last message there, or
+  // at a quiet gap (GROUP_ROUND_LIMITS.QUIET_MS) before the next card.
   writer.find(bot.workspaceId, (c) => {
     if (c.threadId !== threadId) return false;
+    if (after - c.at > GROUP_ROUND_LIMITS.QUIET_MS) return true;
+    after = c.at;
     if (c.kind === 'human' && c.actor.kind === 'human') return true;
-    if (c.actor.kind === 'bot' && !leadsGroup(c.actor.botId)) {
+    if (c.groupTurn === true && c.actor.kind === 'bot') {
       lines += 1;
       if (c.actor.botId === bot.botId) own += 1;
     }

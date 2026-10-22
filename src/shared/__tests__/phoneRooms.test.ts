@@ -202,6 +202,20 @@ describe('fitPhoneRoomPage', () => {
     expect(out.nextSinceSeq).toBe(40);
   });
 
+  it('a forward page of changed cards keeps the earliest changes, in seq order, and says hasMore at the last kept change', () => {
+    // Card 1 changed last (mark 100); the others are new cards.
+    const marks = (c: { seq: number }) => (c.seq === 1 ? 100 : c.seq);
+    const out = fitPhoneRoomPage(page(40), true, PHONE_ROOM_LIMITS.replyBytes, marks);
+    expect(out.cards.map((c) => c.seq)).not.toContain(1);
+    expect(out.cards[0].seq).toBe(2);
+    expect(out.nextSinceSeq).toBe(out.cards[out.cards.length - 1].seq);
+    const changedFirst = (c: { seq: number }) => (c.seq === 40 ? 0.5 : c.seq);
+    const out2 = fitPhoneRoomPage(page(40), true, PHONE_ROOM_LIMITS.replyBytes, changedFirst);
+    expect(out2.cards.at(-1)?.seq).toBe(40);
+    expect(out2.cards.map((c) => c.seq)).toEqual([...out2.cards.map((c) => c.seq)].sort((a, b) => a - b));
+    expect(out2.nextSinceSeq).toBe(out2.cards.at(-2)?.seq);
+  });
+
   it('a page that fits is unchanged', () => {
     const small = page(2);
     expect(fitPhoneRoomPage(small, true)).toBe(small);

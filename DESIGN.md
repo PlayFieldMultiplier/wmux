@@ -475,9 +475,10 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   In a group chat a bot woken by the owner's message or another bot's
   mention may react instead of speaking, and one that stays silent leaves
   an acknowledgement (shared/botGroupProtocol.ts). These sit under the card
-  they answer as one row of 20px chips: one chip per emoji, with
-  `--selection` fill, 11px `--text-sub` text, and a tabular count when more than one bot
-  chose that emoji. The chip's label names who reacted ("Lead reacted ❤️")
+  they answer as one row of 20px chips: one chip per emoji and kind (a
+  picked reaction and an acknowledgement of the same emoji are two chips),
+  with `--selection` fill, 11px `--text-sub` text, and a tabular count when
+  more than one bot left that chip. The chip's label names who reacted ("Lead reacted ❤️")
   or, for acknowledgements, who saw it ("Verifier saw this"). The emoji are
   the bots' content, like an emoji in a message, so the no-emoji rule for
   chrome does not apply. No colour, and nothing to click: a reaction is
