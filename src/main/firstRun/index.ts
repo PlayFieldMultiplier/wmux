@@ -93,10 +93,9 @@ export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): ()
         if (!payload || typeof payload.ptyId !== 'string' || payload.ptyId.length === 0) {
           throw new Error('FIRST_RUN_START_SAMPLE_TASK: missing or invalid ptyId');
         }
-        // Fire-and-forget — the runner outcome is reported via the
-        // FIRST_RUN_SAMPLE_TASK_READY / TIMEOUT event channels rather than
-        // the invoke return value, so the renderer can keep the wizard
-        // responsive while the 5s OSC133 handshake plays out.
+        // The invoke awaits the runner, but success and the fallback are
+        // reported on the FIRST_RUN_SAMPLE_TASK_READY / TIMEOUT event
+        // channels, which the wizard subscribed to before it called this.
         //
         // I6 fix: if startSampleTask itself throws (e.g. PTYBridge gone,
         // daemon disconnect mid-flight), the wizard would otherwise hang in

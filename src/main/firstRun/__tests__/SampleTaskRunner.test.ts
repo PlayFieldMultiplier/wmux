@@ -333,6 +333,33 @@ describe('SampleTaskRunner — a write that answers whether it was delivered', (
       vi.useRealTimers();
     }
   });
+
+  it('the write gets the run\'s signal: Skip during the write is aborted, and the signal tells the write to stop', async () => {
+    let handler: ((chunk: string) => void) | null = null;
+    let seen: AbortSignal | undefined;
+    const source: PtyDataSource = {
+      onData(h) { handler = h; return () => { handler = null; }; },
+      write(_data, signal) { seen = signal; return new Promise<boolean>(() => { /* still trying */ }); },
+    };
+    const ctrl = new AbortController();
+    const run = new SampleTaskRunner().run(source, ctrl.signal);
+    handler!('\x1b]133;A\x07');
+    expect(seen).toBe(ctrl.signal);
+    ctrl.abort();
+    expect(await run).toEqual({ outcome: 'aborted' });
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it('a write whose answer is unknown takes the timeout\'s path, neither ok nor undelivered', async () => {
+    let handler: ((chunk: string) => void) | null = null;
+    const source: PtyDataSource = {
+      onData(h) { handler = h; return () => { handler = null; }; },
+      write() { return Promise.resolve('unknown' as const); },
+    };
+    const run = new SampleTaskRunner().run(source, new AbortController().signal);
+    handler!('\x1b]133;B\x07');
+    expect(await run).toEqual({ outcome: 'timeout' });
+  });
 });
 
 describe('SAMPLE_TASK_COMMAND (#452)', () => {

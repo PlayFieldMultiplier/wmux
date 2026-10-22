@@ -42,9 +42,11 @@ export interface PtyDataSource {
   /**
    * Write data into the PTY. A promise answers whether the bytes reached the
    * shell (a daemon session's conditional write); `false` is never reported
-   * as a sample task that ran.
+   * as a sample task that ran, and `'unknown'` (the write's answer was lost
+   * and the pane could not be read again) never as a failure. `signal` is
+   * the run's: once it aborts, nothing more is written.
    */
-  write(data: string): void | Promise<boolean>;
+  write(data: string, signal?: AbortSignal): void | Promise<boolean | 'unknown'>;
   /**
    * Whether the shell is already at an empty prompt it drew before we listened.
    * Read after `onData` subscribed, so a prompt is either in this answer or
@@ -118,9 +120,9 @@ export class SampleTaskRunner {
           clearTimeout(timer);
           timer = null;
         }
-        let delivery: void | Promise<boolean>;
+        let delivery: void | Promise<boolean | 'unknown'>;
         try {
-          delivery = source.write(SAMPLE_TASK_COMMAND + '\r');
+          delivery = source.write(SAMPLE_TASK_COMMAND + '\r', signal);
         } catch {
           finish('undelivered');
           return;
@@ -129,8 +131,10 @@ export class SampleTaskRunner {
           finish('ok');
           return;
         }
+        // 'unknown' takes the handshake timeout's path: the wizard offers
+        // "Press Enter to continue", neither success nor an error.
         delivery.then(
-          (written) => finish(written ? 'ok' : 'undelivered'),
+          (written) => finish(written === 'unknown' ? 'timeout' : written ? 'ok' : 'undelivered'),
           () => finish('undelivered'),
         );
       };
