@@ -281,6 +281,11 @@ function isGlab(cmd: string): boolean {
   return cmd === 'glab' || cmd === 'glab.exe';
 }
 
+/** ssh as task_pr spawns it: `ssh.exe` on win32, `ssh` elsewhere. */
+function isSsh(cmd: string): boolean {
+  return cmd === 'ssh' || cmd === 'ssh.exe';
+}
+
 /** glab api args after `api --hostname <host>`. */
 function apiArgs(args: string[]): string[] {
   return args[0] === 'api' && args[1] === '--hostname' ? args.slice(3) : [];
@@ -422,7 +427,7 @@ describe('task_pr: a host glab refuses goes on to gh', () => {
       if (cmd === 'git' && argStr(args) === 'remote get-url --push origin') return { stdout: `${origin}\n` };
       if (isGlab(cmd) && args[0] === '--version') return { throw: 'spawn glab ENOENT' };
       // The ssh config maps the alias `work` to github.com.
-      if (cmd === 'ssh' && argStr(args) === '-G work') return { stdout: 'user git\nhostname github.com\nport 22\n' };
+      if (isSsh(cmd) && argStr(args) === '-G work') return { stdout: 'user git\nhostname github.com\nport 22\n' };
       if (isGh(cmd)) return gh(cmd, args) ?? happyBehavior(cmd, args);
       return glHappy(cmd, args);
     });
