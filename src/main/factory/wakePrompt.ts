@@ -141,7 +141,7 @@ function groupTurnMoves(coordinator: boolean): string {
   return 'In a group chat a turn has three moves. Speak: post a short card that adds what the others have not said. '
     + `React: when one emoji says everything, end the turn with only [[react:👍]] (one of ${REACTION_EMOJI.join(' ')}); it shows as your reaction on the card you were woken for. `
     + 'Stay silent: end the turn without posting, and wmux leaves an acknowledgement on that card for you. Silence is normal: most messages do not need every bot.'
-    + (coordinator ? '' : ` A round, from the owner's message to the next one, holds at most ${GROUP_ROUND_LIMITS.LINES} bot cards and ${GROUP_ROUND_LIMITS.LINES_PER_BOT} of yours, and bots mention each other at most ${GROUP_ROUND_LIMITS.MENTION_WAVES} deep: past that a post is refused, so end the turn.`);
+    + (coordinator ? '' : ` A round, from the owner's message to the next one, holds at most ${GROUP_ROUND_LIMITS.LINES} bot cards and ${GROUP_ROUND_LIMITS.LINES_PER_BOT} of yours: past that your post is refused, so end the turn. Bots mention each other at most ${GROUP_ROUND_LIMITS.MENTION_WAVES} deep: a deeper mention is refused and wakes nobody, but your card is still posted.`);
 }
 
 /** The group chat a wake runs in, as its prompt names it. */
