@@ -985,8 +985,10 @@ Settings › LAN keeps only the listener switches. Top to bottom:
     the row; the status, and a ⋯ menu named after it
     (Link panes…, Link Moa…, What this PC can see…, Remove; portalled so the
     list's clip never cuts it, Escape on its button closes it first). Removing
-    a PC says when the other PC was not told, and which side is left after a
-    partial failure. Its live links
+    a PC drops both pairings this PC holds for it (the one it joined and the
+    one that joined it); there is no one-sided removal. It says when the
+    other PC was not told, and which side is left after a partial failure.
+    Its live links
     sit nested under it (an elbow, `mine ↔ PC/theirs · direction`, or
     "waiting for PC to accept" with Check; Unlink asks twice). A pane this
     PC shared with it and not yet accepted sits there too (2026-10-21):
