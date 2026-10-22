@@ -113,7 +113,7 @@ import { registerA2aLinkRpc } from './a2aRemote/linkRpc';
 import { A2aOffers } from './a2aRemote/offers';
 import { OfferStore } from './a2aRemote/offerStore';
 import { A2aRemoteDelivery, shareOfferFeatures } from './a2aRemote/delivery';
-import { A2A_FEATURE_LINK_OFFER, isRemoteTaskId } from '../shared/a2aRemote';
+import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, isRemoteTaskId } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
 import { AppendOnlyLog } from './eventlog/AppendOnlyLog';
@@ -9397,8 +9397,15 @@ async function main(): Promise<void> {
         broadcast: (event) => pipeServer.broadcast(event),
         refreshLink: (linkId) => (refresh ? refresh({ linkId }) : Promise.resolve(null)),
         offers: a2aOffersRef,
-        // This build shows and accepts share offers: tell the servers it joins.
-        features: [A2A_FEATURE_LINK_OFFER],
+        // This build shows and accepts share offers, and takes images on
+        // messages: tell the servers it joins, and the joiners in its hello.
+        features: [A2A_FEATURE_LINK_OFFER, A2A_FEATURE_IMAGES],
+        uploadsRoot: path.join(wmuxDir, 'uploads'),
+        // A live terminal of the sender's workspace (stamped at spawn by main), else none.
+        spawnCwdOf: (ptyId, workspaceId) => {
+          const meta = sessionManager.listLiveSessions().find((m) => m.id === ptyId);
+          return workspaceId && meta?.env?.[ENV_KEYS.WORKSPACE_ID] === workspaceId ? meta.spawnCwd : undefined;
+        },
         log: a2aLog,
       });
       a2aDelivery.registerRoutes(a2aRoutes);

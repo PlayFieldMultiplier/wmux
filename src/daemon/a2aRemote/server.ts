@@ -5,6 +5,7 @@ import type net from 'node:net';
 import os from 'node:os';
 import {
   A2A_REMOTE_BODY_MAX,
+  A2A_REMOTE_IMAGE_LIMITS,
   A2A_REMOTE_PROTOCOL,
   A2A_ROUTES,
   INVITE_ALT_MAX,
@@ -436,7 +437,7 @@ export class A2aServer {
     if (!isA2aRoute(p)) return refuse(404, 'bad-request', { message: 'not found' });
 
     const length = Number(req.headers['content-length'] ?? 0);
-    if (Number.isFinite(length) && length > A2A_REQUEST_BODY_MAX) return refuseTooLarge(req, res);
+    if (Number.isFinite(length) && length > requestBodyMax(req.method, p)) return refuseTooLarge(req, res);
 
     // The one route that takes no credential: it is how a joiner gets one.
     if (p === A2A_ROUTES.pair) {
@@ -628,6 +629,44 @@ function closeServer(server: https.Server): Promise<void> {
   return new Promise((resolve) => {
     server.close(() => resolve());
     server.closeAllConnections();
+  });
+}
+
+/**
+ * The largest body a request may declare, by route: one image for an image
+ * upload (`PUT /api/a2a/blobs/:sha256`, which counts what actually arrives
+ * too), `A2A_REQUEST_BODY_MAX` for everything else.
+ */
+export function requestBodyMax(method: string | undefined, pathname: string): number {
+  return method === 'PUT' && pathname.startsWith(`${A2A_ROUTES.blobs}/`) ? A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES : A2A_REQUEST_BODY_MAX;
+}
+
+/**
+ * Read a raw body of at most `max` bytes, counted as it arrives (a chunked
+ * body declares no length). Over the cap is `'too-large'`: reading stops and
+ * the caller answers and drops the connection.
+ */
+export function readBodyBytes(req: http.IncomingMessage, max: number): Promise<Buffer | 'too-large'> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const onData = (chunk: Buffer): void => {
+      size += chunk.length;
+      if (size > max) {
+        req.off('data', onData);
+        req.pause();
+        resolve('too-large');
+        return;
+      }
+      chunks.push(chunk);
+    };
+    req.on('data', onData);
+    req.on('end', () => {
+      if (size <= max) resolve(Buffer.concat(chunks));
+    });
+    req.on('error', (err) => {
+      if (size <= max) reject(err);
+    });
   });
 }
 

@@ -42,7 +42,7 @@ export interface PinnedClientOptions {
   credential?: string;
   /** Budget per address for TCP connect + TLS handshake. */
   connectTimeoutMs: number;
-  /** Budget from request start to a complete JSON answer (requestJson) or to response headers (openStream). */
+  /** Budget from request start to a complete JSON answer (requestJson) or to response headers (openStream); the byte transfers take their own. */
   requestTimeoutMs: number;
   /**
    * Called with the address that completed a handshake, only AFTER its
@@ -157,22 +157,64 @@ export class PinnedTlsClient {
   async requestJson(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }> {
     // Serialize before dialling: a body that cannot be encoded fails with nothing opened.
     const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8');
-    const { socket, address } = await this.connect();
+    const { status, body: answer } = await this.request(method, path, payload, { contentType: 'application/json', accept: 'application/json' });
+    return { status, json: parseJsonOrNull(answer.toString('utf8')) };
+  }
+
+  /**
+   * Upload raw bytes (`PUT`), answered in JSON like `requestJson`. The whole
+   * exchange gets `timeoutMs` instead of the request budget: a body of
+   * megabytes takes longer than a JSON message.
+   */
+  async putBytes(path: string, body: Buffer, timeoutMs: number): Promise<{ status: number; json: unknown }> {
+    const { status, body: answer } = await this.request('PUT', path, body, { contentType: 'application/octet-stream', accept: 'application/json', timeoutMs });
+    return { status, json: parseJsonOrNull(answer.toString('utf8')) };
+  }
+
+  /** The status of a `HEAD` (no body), within `timeoutMs`. */
+  async headStatus(path: string, timeoutMs: number): Promise<number> {
+    const { status } = await this.request('HEAD', path, undefined, { accept: 'application/json', timeoutMs });
+    return status;
+  }
+
+  /**
+   * Download raw bytes (`GET`): at most `maxBytes`, within `timeoutMs`,
+   * abandoned when `signal` aborts. A status other than 200 throws `http`
+   * (with the JSON answer, if any).
+   */
+  async getBytes(path: string, opts: { maxBytes: number; timeoutMs: number; signal?: AbortSignal }): Promise<Buffer> {
+    const { status, body } = await this.request('GET', path, undefined, { accept: 'application/octet-stream', ...opts });
+    if (status !== 200) {
+      throw new PinnedClientError('http', `HTTP ${status}`, { sent: true, status, json: parseJsonOrNull(body.toString('utf8')) });
+    }
+    return body;
+  }
+
+  private async request(
+    method: string,
+    path: string,
+    payload: Buffer | undefined,
+    opts: { contentType?: string; accept: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal },
+  ): Promise<{ status: number; body: Buffer }> {
+    if (opts.signal?.aborted) throw new PinnedClientError('aborted', 'aborted', { sent: false });
+    const { socket, address } = await this.connect(opts.signal);
     try {
-      return await this.exchangeJson(socket, address, method, path, payload);
+      return await this.exchange(socket, address, method, path, payload, opts);
     } finally {
       // Covers a synchronous throw from http.request (e.g. an invalid header) too.
       socket.destroy();
     }
   }
 
-  private exchangeJson(
+  private exchange(
     socket: tls.TLSSocket,
     address: string,
     method: string,
     path: string,
     payload: Buffer | undefined,
-  ): Promise<{ status: number; json: unknown }> {
+    opts: { contentType?: string; accept: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal },
+  ): Promise<{ status: number; body: Buffer }> {
+    const budget = opts.timeoutMs ?? this.opts.requestTimeoutMs;
     return new Promise((resolve, reject) => {
       let settled = false;
       const req = http.request({
@@ -181,24 +223,27 @@ export class PinnedTlsClient {
         host: address,
         port: this.opts.port,
         headers: this.headers({
-          Accept: 'application/json',
-          ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': String(payload.length) } : {}),
+          Accept: opts.accept,
+          ...(payload ? { 'Content-Type': opts.contentType ?? 'application/json', 'Content-Length': String(payload.length) } : {}),
         }),
         createConnection: () => socket,
       });
-      const finish = (outcome: PinnedClientError | { status: number; json: unknown }): void => {
+      const finish = (outcome: PinnedClientError | { status: number; body: Buffer }): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         detach();
+        opts.signal?.removeEventListener('abort', onAbort);
         req.destroy();
         socket.destroy();
         if (outcome instanceof PinnedClientError) reject(outcome);
         else resolve(outcome);
       };
+      const onAbort = (): void => finish(new PinnedClientError('aborted', 'aborted', { sent: true }));
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
       const timer = setTimeout(
-        () => finish(new PinnedClientError('timeout', `no answer within ${this.opts.requestTimeoutMs}ms`, { sent: true })),
-        this.opts.requestTimeoutMs,
+        () => finish(new PinnedClientError('timeout', `no answer within ${budget}ms`, { sent: true })),
+        budget,
       );
       const detach = watchSocket(socket, (err) =>
         finish(new PinnedClientError('network', errMsg(err), { sent: true })),
@@ -207,8 +252,8 @@ export class PinnedTlsClient {
       req.on('response', (res) => {
         // From here the response stream owns failure reporting (readCapped).
         detach();
-        readCapped(res).then(
-          (text) => finish({ status: res.statusCode ?? 0, json: parseJsonOrNull(text) }),
+        readCappedBytes(res, undefined, opts.maxBytes ?? MAX_BODY_BYTES).then(
+          (body) => finish({ status: res.statusCode ?? 0, body }),
           (err: unknown) => finish(asSentError(err)),
         );
       });
@@ -513,11 +558,15 @@ function lineTooLong(): PinnedClientError {
  * destroyed — and the read rejected — once the budget runs out.
  */
 function readCapped(res: http.IncomingMessage, timeoutMs?: number): Promise<string> {
+  return readCappedBytes(res, timeoutMs, MAX_BODY_BYTES).then((b) => b.toString('utf8'));
+}
+
+function readCappedBytes(res: http.IncomingMessage, timeoutMs: number | undefined, max: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
-    const settle = (err: Error | null, text?: string): void => {
+    const settle = (err: Error | null, body?: Buffer): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
@@ -525,7 +574,7 @@ function readCapped(res: http.IncomingMessage, timeoutMs?: number): Promise<stri
         res.destroy();
         reject(err);
       } else {
-        resolve(text ?? '');
+        resolve(body ?? Buffer.alloc(0));
       }
     };
     const timer =
@@ -537,13 +586,13 @@ function readCapped(res: http.IncomingMessage, timeoutMs?: number): Promise<stri
           );
     res.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > max) {
         settle(new PinnedClientError('protocol', 'response body exceeds the size cap', { sent: true }));
         return;
       }
       chunks.push(chunk);
     });
-    res.on('end', () => settle(null, Buffer.concat(chunks).toString('utf8')));
+    res.on('end', () => settle(null, Buffer.concat(chunks)));
     res.on('error', (err) => settle(err));
     res.on('aborted', () => settle(new Error('response aborted')));
     // 'close' after 'end' is a no-op; 'close' without 'end' is a truncated body.

@@ -2,9 +2,11 @@
 // its own stores, task ledger, delivery layer and a real A2aServer on loopback
 // TLS. main is played by RemoteA2aBridge over the daemon RPCs; the renderer is
 // a fake that records what it was handed.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { A2A_ROUTES, formatPeerCredential, type A2aLinkRecordV1 } from '../../../shared/a2aRemote';
 import { A2A_REMOTE_NOTIFY_METHOD, A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
@@ -37,6 +39,21 @@ const FAST = { connectMs: 5_000, requestMs: 10_000 };
 const TIMING = { backoffMinMs: 30, backoffMaxMs: 150, livenessMs: 10_000, connectMs: 5_000, requestMs: 10_000 };
 
 type Rpc = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+
+/** A structurally valid PNG (nothing decodes it on the way). */
+function pngBytes(w: number, h: number, seed: number): Buffer {
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    return Buffer.concat([len, Buffer.from(type, 'latin1'), data, Buffer.alloc(4)]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', Buffer.alloc(8, seed)), chunk('IEND', Buffer.alloc(0))]);
+}
 
 interface Pc {
   name: string;
@@ -74,7 +91,7 @@ type ClientHook = (opts: PinnedClientOptions) => SessionClient;
 
 async function makePc(
   name: string,
-  opts: { dir?: string; port?: number; client?: ClientHook; render?: (method: string) => Promise<unknown>; features?: string[] } = {},
+  opts: { dir?: string; port?: number; client?: ClientHook; render?: (method: string) => Promise<unknown>; features?: string[]; images?: boolean } = {},
 ): Promise<Pc> {
   const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-deliv-'));
   if (!opts.dir) dirs.push(dir);
@@ -139,6 +156,9 @@ async function makePc(
     syncMs: 50,
     ...(opts.client ? { client: opts.client } : {}),
     ...(opts.features ? { features: opts.features } : {}),
+    ...(opts.images ? { uploadsRoot: path.join(dir, 'uploads'), features: ['link-offer.1', 'images.1'] } : {}),
+    // One terminal, `pty-a`, of workspace `ws-a`, spawned in `<dir>/proj`.
+    spawnCwdOf: (ptyId: string, workspaceId: string) => (ptyId === 'pty-a' && workspaceId === 'ws-a' ? path.join(dir, 'proj') : undefined),
   });
   const realAccept = delivery.accept.bind(delivery);
   delivery.accept = (env, peer) => {
@@ -295,13 +315,14 @@ describe('cross-host delivery, end to end', () => {
   });
 
   it('each PC learns what the other takes, in both roles, and still knows it after a restart', async () => {
-    const b = await makePc('PC-B', { features: ['images.1', 'link-offer.1'] });
+    // B can keep images (an uploads folder); A advertises offers only.
+    const b = await makePc('PC-B', { images: true });
     const a = await makePc('PC-A', { features: ['link-offer.1'] });
     await pair(a, b);
     // A joined B: B's stream hello tells A; A's stream header tells B.
     await until(() => a.delivery.liveFeatures(b.hostId)?.has('images.1') === true);
     await until(() => b.delivery.liveFeatures(a.hostId)?.has('link-offer.1') === true);
-    expect(a.delivery.status()).toMatchObject([{ hostId: b.hostId, role: 'joiner', features: ['images.1', 'link-offer.1'] }]);
+    expect(a.delivery.status()).toMatchObject([{ hostId: b.hostId, role: 'joiner', features: ['link-offer.1', 'images.1'] }]);
     expect(b.delivery.peerFeatures(a.hostId)?.has('images.1')).toBe(false);
     // A new daemon on A, before B's stream is back: the last seen answer.
     const restarted = new A2aRemoteDelivery({
@@ -316,6 +337,118 @@ describe('cross-host delivery, end to end', () => {
     });
     expect(restarted.liveFeatures(b.hostId)).toBeUndefined();
     expect([...(restarted.peerFeatures(b.hostId) ?? [])].sort()).toEqual(['images.1', 'link-offer.1']);
+  });
+
+  it('images both ways: A stages and sends (uploaded to B), B replies with one (A fetches it)', async () => {
+    const b = await makePc('PC-B', { images: true });
+    const a = await makePc('PC-A', { images: true });
+    const linkId = await linked(a, b);
+    await until(() => a.delivery.liveFeatures(b.hostId)?.has('images.1') === true && b.delivery.liveFeatures(a.hostId)?.has('images.1') === true);
+
+    // A's agent stages a screenshot from the uploads folder (no verified pane: uploads only).
+    const shotDir = path.join(a.dir, 'uploads', 'shots');
+    fs.mkdirSync(shotDir, { recursive: true });
+    const shot = pngBytes(12, 7, 1);
+    fs.writeFileSync(path.join(shotDir, 'login.png'), shot);
+    const staged = (await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(shotDir, 'login.png')] })) as {
+      ok: boolean;
+      images: Array<{ path: string; sha256: string; width: number; height: number }>;
+    };
+    expect(staged).toMatchObject({ ok: true, images: [{ width: 12, height: 7 }] });
+    expect(staged.images[0].path).toBe(path.join(a.dir, 'uploads', 'a2a', 'local', `${staged.images[0].sha256}.png`));
+    // The pane's own folder, but only for a terminal of the sender's workspace.
+    fs.mkdirSync(path.join(a.dir, 'proj'));
+    fs.writeFileSync(path.join(a.dir, 'proj', 'ui.png'), shot);
+    expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-a' })).toMatchObject({ ok: true });
+    expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-other' })).toMatchObject({ ok: false });
+    // Outside the allowed folders: refused with a reason the agent can act on.
+    fs.writeFileSync(path.join(a.dir, 'elsewhere.png'), shot);
+    expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'elsewhere.png')] })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('copy it there first'),
+    });
+
+    const sent = (await a.rpc(A2A_REMOTE_RPC.sendTask, {
+      linkId,
+      from: { workspaceId: 'ws-a', name: 'Web', paneId: 'pane-a' },
+      title: 'look',
+      text: 'see the login page',
+      images: [staged.images[0].path],
+    })) as { ok: boolean; taskId: string };
+    expect(sent.ok).toBe(true);
+    await until(() => taskSends(b).length === 1);
+    const onB = b.tasks.getTask(sent.taskId)!.history[0].parts;
+    const received = path.join(b.dir, 'uploads', 'a2a', a.hostId, `${staged.images[0].sha256}.png`);
+    expect(onB).toEqual([
+      { kind: 'text', text: 'see the login page' },
+      { kind: 'file', file: { mimeType: 'image/png', uri: pathToFileURL(received).href }, metadata: expect.objectContaining({ sha256: staged.images[0].sha256, width: 12, height: 7 }) },
+    ]);
+    expect(fs.readFileSync(received).equals(fs.readFileSync(staged.images[0].path))).toBe(true);
+    // The upload was claimed: nothing left in B's staging.
+    expect(fs.readdirSync(path.join(b.dir, 'a2a', 'blobs-in', a.hostId))).toEqual([]);
+
+    // B answers with an image of its own: it travels on B's stream and A fetches it.
+    const reply = pngBytes(3, 5, 2);
+    fs.mkdirSync(path.join(b.dir, 'uploads', 'out'), { recursive: true });
+    fs.writeFileSync(path.join(b.dir, 'uploads', 'out', 'fixed.png'), reply);
+    expect(await b.rpc(A2A_REMOTE_RPC.reply, { taskId: sent.taskId, workspaceId: 'ws-b', text: '', images: [path.join(b.dir, 'uploads', 'out', 'fixed.png')] })).toMatchObject({ ok: true });
+    await until(() => (a.tasks.getTask(sent.taskId)?.history.length ?? 0) === 2);
+    const onA = a.tasks.getTask(sent.taskId)!.history[1].parts;
+    expect(onA).toHaveLength(1);
+    const uri = (onA[0] as { file: { uri: string } }).file.uri;
+    expect(uri.startsWith(pathToFileURL(path.join(a.dir, 'uploads', 'a2a', b.hostId)).href)).toBe(true);
+    expect(fs.readFileSync(new URL(uri)).length).toBe(reply.length);
+    await until(() => a.delivery.outbox.pending(b.hostId).length === 0 && b.delivery.outbox.pending(a.hostId).length === 0);
+  });
+
+  it('to a PC whose wmux does not take images, the text goes with a note; restarted, a PC still knows its joiner takes them', async () => {
+    let b = await makePc('PC-B', { images: true });
+    const a = await makePc('PC-A', { images: true });
+    const linkId = await linked(a, b);
+    await until(() => b.delivery.liveFeatures(a.hostId)?.has('images.1') === true);
+    const bDir = b.dir;
+    const bPort = b.port;
+    const img = pngBytes(4, 4, 3);
+    fs.mkdirSync(path.join(bDir, 'uploads', 'out'), { recursive: true });
+    fs.writeFileSync(path.join(bDir, 'uploads', 'out', 'x.png'), img);
+
+    // A goes away, then B restarts: nothing live, but B saw A take images before.
+    pcs.splice(pcs.indexOf(a), 1);
+    await a.stop();
+    pcs.splice(pcs.indexOf(b), 1);
+    await b.stop();
+    b = await makePc('PC-B', { dir: bDir, port: bPort, images: true });
+    expect(b.delivery.liveFeatures(a.hostId)).toBeUndefined();
+    const queued = (await b.rpc(A2A_REMOTE_RPC.sendTask, {
+      linkId, from: { workspaceId: 'ws-b', name: 'Backend', paneId: 'pane-b' }, title: 'x', text: 'for later', images: [path.join(bDir, 'uploads', 'out', 'x.png')],
+    })) as { ok: boolean };
+    expect(queued.ok).toBe(true);
+    expect(b.delivery.outbox.pending(a.hostId).find((r) => r.envelope.kind === 'task')?.envelope.images).toEqual([
+      { sha256: crypto.createHash('sha256').update(img).digest('hex'), mediaType: 'image/png', bytes: img.length },
+    ]);
+  });
+
+  it('a PC with no image store does not advertise images.1, even when told to', async () => {
+    const b = await makePc('PC-B', { features: ['link-offer.1', 'images.1'] });
+    const a = await makePc('PC-A', { images: true });
+    await pair(a, b);
+    await until(() => a.delivery.liveFeatures(b.hostId) !== undefined);
+    expect([...(a.delivery.liveFeatures(b.hostId) ?? [])]).toEqual(['link-offer.1']);
+  });
+
+  it('an older PC (no images.1) gets the text with a note instead of refs it would drop', async () => {
+    const b = await makePc('PC-B', { features: ['link-offer.1'] });
+    const a = await makePc('PC-A', { images: true });
+    const linkId = await linked(a, b);
+    await until(() => a.delivery.liveFeatures(b.hostId) !== undefined);
+    fs.mkdirSync(path.join(a.dir, 'uploads', 'out'), { recursive: true });
+    fs.writeFileSync(path.join(a.dir, 'uploads', 'out', 'x.png'), pngBytes(2, 2, 4));
+    const res = (await a.rpc(A2A_REMOTE_RPC.sendTask, {
+      linkId, from: { workspaceId: 'ws-a', name: 'Web', paneId: 'pane-a' }, title: 'x', text: 'hello', images: [path.join(a.dir, 'uploads', 'out', 'x.png')],
+    })) as { ok: boolean; note?: string };
+    expect(res).toMatchObject({ ok: true, note: expect.stringContaining('does not take images') });
+    await until(() => taskSends(b).length === 1);
+    expect(taskSends(b)[0]['message']).toBe("hello\n\n[1 image omitted: the receiving PC's wmux does not take images]");
   });
 
   it('roaming: a session that gets through at a later address dials it first from then on', async () => {
