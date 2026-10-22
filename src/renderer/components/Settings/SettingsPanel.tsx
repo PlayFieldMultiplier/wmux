@@ -2886,13 +2886,14 @@ const TOKEN_INSPECT_ROLE: Record<UITokenSpec['key'], TokenRole> = {
  * exact-matching the 10 UI tokens. Returns null when it matches none (fully
  * hand-tuned). Used to label the header and as the per-token "overridden" base.
  * A copy saved before a preset's text tokens were lifted for contrast
- * (PRE_CONTRAST_LIFT_TEXT) still matches that preset, as its legacy variant.
+ * (PRE_CONTRAST_LIFT_TEXT, any earlier release) still matches that preset, as
+ * its legacy variant.
  */
 export function detectBaseMatch(colors: CustomThemeColors): { preset: BuiltinThemeId; colors: CustomThemeColors } | null {
   for (const { value } of BASE_ON_OPTIONS) {
     const current = builtinToCustom(value);
-    const legacy = PRE_CONTRAST_LIFT_TEXT[value];
-    for (const preset of legacy ? [current, { ...current, ...legacy }] : [current]) {
+    const legacy = PRE_CONTRAST_LIFT_TEXT[value] ?? [];
+    for (const preset of [current, ...legacy.map((old) => ({ ...current, ...old }))]) {
       const same = UI_TOKEN_GROUPS.every((g) =>
         g.tokens.every(({ key }) => colors[key].toUpperCase() === preset[key].toUpperCase()),
       );

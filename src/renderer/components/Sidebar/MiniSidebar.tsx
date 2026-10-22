@@ -365,7 +365,7 @@ export default function MiniSidebar({ rail = false, collapsed = true }: { rail?:
                 {label}
                 {unreadCount > 0 && (
                   <span
-                    className="absolute -top-0.5 -right-0.5 bg-[var(--selection-emphasis)] text-[var(--text-main)] text-[10px] font-semibold tabular-nums rounded-full min-w-[14px] h-3.5 flex items-center justify-center px-0.5 leading-none ring-1 ring-[var(--border-soft)]"
+                    className="absolute -top-0.5 -right-0.5 bg-[var(--selection-emphasis)] [--text-muted:var(--text-sub)] text-[var(--text-main)] text-[10px] font-semibold tabular-nums rounded-full min-w-[14px] h-3.5 flex items-center justify-center px-0.5 leading-none ring-1 ring-[var(--border-soft)]"
                     title={t('sidebar.unreadCount', { count: unreadCount })}
                     {...tokenAttrs('bgSurface', 'bg')}
                     {...tokenAttrs('textMain', 'text')}

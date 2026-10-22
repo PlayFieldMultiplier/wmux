@@ -249,7 +249,7 @@ export default function PaneActionsMenu({ anchor, triggerRef, items, onClose, fo
             // unavailable. Same call the cluster's stash button makes.
             aria-disabled={item.disabled || undefined}
             title={item.title}
-            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left rounded-md transition-colors hover:bg-[var(--selection-hover)] ${
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left rounded-md transition-colors hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)] ${
               item.disabled ? 'opacity-40' : ''
             }`}
             style={{ color: item.active ? 'var(--accent-blue)' : 'var(--text-main)' }}
