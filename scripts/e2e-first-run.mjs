@@ -530,7 +530,7 @@ async function scenario() {
   });
 
   await step('Claude card ready', async () => {
-    const sel = '[data-testid="first-run-agent-claude"][data-status="ok"]';
+    const sel = '[data-testid="first-run-agent-claude"][data-status="red-proof-never-matches"]';
     const r = await cw(['wait-settle', '--selector', sel, '--quiet', '0', '--timeout', '90000'], { timeoutMs: 120_000 });
     const card = await read(`(() => { const el = document.querySelector('[data-testid="first-run-agent-claude"]'); return el ? { status: el.dataset.status, text: el.textContent } : null; })()`);
     result.observed.claudeCard = card;
