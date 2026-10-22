@@ -6,7 +6,7 @@ Run `wmux codex` in a PowerShell terminal pane to start a conversation bound to
 that pane, or `wmux codex resume` to use Codex's resume picker. Other TUI options
 are forwarded to the account's installed managed Codex binary. This path requires
 Codex with `app-server proxy`, `--remote` and `--remote-auth-token-env` (verified
-with 0.162.1), and a matching wmux app/daemon/CLI build.
+with 0.162.1 and 0.163.0), and a matching wmux app/daemon/CLI build.
 
 The launcher obtains a pane claim from main's process-tree walk. The daemon
 reserves that pane's existing relay, exposes an authenticated loopback WebSocket,
@@ -15,6 +15,24 @@ confirmed start/resume/fork response writes the existing thread-owner index befo
 the TUI receives it. MCP resolves each `_meta.threadId` against that index and a
 live pane anchor; the shared server's inherited starter-pane environment does not
 choose the sender. The launcher closes only its own lease when the TUI exits.
+
+The `wmux.cmd` script starts Codex itself, from the pane's console: `wmux.exe`
+runs the CLI as a GUI-subsystem program with no console to hand a TUI. The CLI
+reserves the lease and passes the launch to the script through a pipe
+(`codex --wmux-handoff`, never to a terminal or a file); the script then runs
+Codex with your arguments as typed and releases the lease
+(`codex --wmux-release`). Codex, and the tools it runs, see the link's bearer
+but not the lease or the rest of the launch. A release that fails says so. A
+lease that is not released (that, or an interrupted script, where cmd may ask
+"Terminate batch job (Y/N)?") ends with the pane or when the link has had no
+Codex connection for 30 seconds. An older `wmux.cmd` is rewritten at the
+next start of the app.
+
+Codex opens more than one connection over a session: its startup resume picker
+uses one, and the conversation opens the next. The relay takes the same launch's
+next connection once the previous one has ended, one at a time. A second
+connection while one is open, such as the picker that `/resume` opens inside a
+running session, is refused.
 
 This does not restart the shared Codex server or intercept plain `codex` commands.
 Existing sessions must exit normally and be resumed with `wmux codex resume` to

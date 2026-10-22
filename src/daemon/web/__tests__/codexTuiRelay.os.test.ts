@@ -124,7 +124,7 @@ describe.skipIf(process.platform === 'win32')('pane-owned Codex Unix relay',()=>
       client.terminate();
     } finally { await f.cleanup(); }
   });
-  it('uses private permissions, rejects another client, and retires on disconnect without stopping upstream',async()=>{
+  it('uses private permissions, rejects another client, and closes without stopping upstream',async()=>{
     const f=await fixture();
     try {
       const socketPath=f.relay.url.slice('unix://'.length);
@@ -150,6 +150,30 @@ describe.skipIf(process.platform === 'win32')('pane-owned Codex Unix relay',()=>
       expect(f.server.listening).toBe(true);
       await expect(access(socketPath)).rejects.toThrow();
     } finally {await f.cleanup();}
+  });
+  it('keeps the endpoint for the TUI\'s next connection, and removes it 30 s after the TUI left',async()=>{
+    // Without vi.waitFor, which advances fake timers while it polls.
+    let left:()=>void=()=>{ /* replaced below */ };
+    const gone=new Promise<void>(resolve=>{left=resolve;});
+    const made:{relay?:Awaited<ReturnType<typeof createCodexTuiRelay>>}={};
+    const f=await fixture({onStateChange:()=>{if(made.relay?.disconnected())left();}});
+    made.relay=f.relay;
+    const socketPath=f.relay.url.slice('unix://'.length);
+    try {
+      const client=await f.connect();await select(client,1);
+      vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
+      client.close();
+      await gone;
+      vi.advanceTimersByTime(29_999);
+      expect(f.relay.retired()).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(f.relay.retired()).toBe(true);
+      vi.useRealTimers();
+      // close() is idempotent: this waits for the one the bound started.
+      await f.relay.close();
+      await expect(access(socketPath)).rejects.toThrow();
+      await expect(access(path.dirname(socketPath))).rejects.toThrow();
+    } finally {vi.useRealTimers();await f.cleanup();}
   });
   it('rejects browser origins without consuming the endpoint and closes malformed JSON',async()=>{
     const f=await fixture();
@@ -868,10 +892,12 @@ describe.skipIf(process.platform === 'win32')('Codex relay reconnect after a los
       expect(f.relay.activeTurn(threadId)).toBe('turn-new');
       await expect(f.relay.interrupt(threadId,'turn-new',2000)).resolves.toBeDefined();
       expect(upstream).toContain('turn/interrupt');
-      // Linked again: no other claim, and the TUI leaving retires the relay.
+      // Linked again: no other claim while the TUI is connected.
       await expect(f.connect()).rejects.toThrow();
+      // The TUI leaving keeps the endpoint for its next connection; nothing is live meanwhile.
       back.terminate();await closed(back);
-      await vi.waitFor(()=>expect(f.relay.retired()).toBe(true), { timeout: 10_000 });
+      await vi.waitFor(()=>expect(f.relay.disconnected()).toBe(true), { timeout: 10_000 });
+      expect(f.relay.retired()).toBe(false);
     } finally {await f.cleanup();}
   });
   it('a dropped link to a server that lived on keeps its running turn, and reports no server loss',async()=>{
