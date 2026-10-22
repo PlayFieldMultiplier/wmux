@@ -78,8 +78,8 @@ export const DEFAULT_SESSION_TIMING: SessionTiming = {
 export interface SessionClient {
   requestJson(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }>;
   openStream(path: string, opts: { signal: AbortSignal; lastEventId?: string; features?: readonly string[] }): AsyncGenerator<PinnedSseEvent, void, undefined>;
-  putBytes?(path: string, body: Buffer, timeoutMs: number): Promise<{ status: number; json: unknown }>;
-  headStatus?(path: string, timeoutMs: number): Promise<number>;
+  putBytes?(path: string, body: Buffer, timeoutMs: number, signal?: AbortSignal): Promise<{ status: number; json: unknown }>;
+  headStatus?(path: string, timeoutMs: number, signal?: AbortSignal): Promise<number>;
   getBytes?(path: string, opts: { maxBytes: number; timeoutMs: number; signal?: AbortSignal }): Promise<Buffer>;
 }
 
@@ -132,6 +132,8 @@ export class JoinerSession {
   private status: A2aRemoteHostStatus;
   private running = false;
   private abort: AbortController | null = null;
+  /** Aborted by stop() (and a pin mismatch): ends the pump's image transfers, so none runs on after a stop. */
+  private halt = new AbortController();
   private lastEventId: string | undefined;
   private streamBackoff = 0;
   private pumpBackoff = 0;
@@ -170,6 +172,7 @@ export class JoinerSession {
   start(): void {
     if (this.running) return;
     this.running = true;
+    if (this.halt.signal.aborted) this.halt = new AbortController();
     this.loop = this.streamLoop();
     this.reconcileTimer = setInterval(() => void this.reconcile(), RECONCILE_EVERY_MS);
     this.reconcileTimer.unref?.();
@@ -180,6 +183,7 @@ export class JoinerSession {
   async stop(): Promise<void> {
     this.running = false;
     this.abort?.abort();
+    this.halt.abort();
     this.wakeStream?.();
     if (this.pumpTimer) clearTimeout(this.pumpTimer);
     if (this.reconcileTimer) clearInterval(this.reconcileTimer);
@@ -386,22 +390,26 @@ export class JoinerSession {
   private async uploadImages(client: SessionClient, rec: A2aOutboxRecordV1): Promise<'ok' | 'next' | 'retry' | 'stop'> {
     const images = rec.envelope.images ?? [];
     if (!client.putBytes || !this.deps.images) return this.giveUpImages(rec, 'this PC cannot upload images');
+    const signal = this.halt.signal;
     for (const ref of images) {
+      if (signal.aborted) return 'stop';
       // eslint-disable-next-line no-await-in-loop -- one upload at a time to one host
       const bytes = await this.deps.images.readOutgoing(ref.sha256);
       if (!bytes) return this.giveUpImages(rec, "this PC's copy of an image is gone");
       let answer: { status: number; json: unknown };
       try {
         // eslint-disable-next-line no-await-in-loop -- one question at a time to one host
-        const held = client.headStatus ? await client.headStatus(`${A2A_ROUTES.blobs}/${ref.sha256}`, this.timing.requestMs) : 404;
+        const held = client.headStatus ? await client.headStatus(`${A2A_ROUTES.blobs}/${ref.sha256}`, this.timing.requestMs, signal) : 404;
         if (held === 200) continue;
         if (held === 401) {
           this.setState('disconnected', 'unauthorized');
           return 'retry';
         }
         // eslint-disable-next-line no-await-in-loop -- one upload at a time to one host
-        answer = await client.putBytes(`${A2A_ROUTES.blobs}/${ref.sha256}`, bytes, imageTransferBudgetMs(bytes.length));
+        answer = await client.putBytes(`${A2A_ROUTES.blobs}/${ref.sha256}`, bytes, imageTransferBudgetMs(bytes.length), signal);
       } catch (err) {
+        // This PC stopped the session: not a failed upload, and nothing more is sent.
+        if (signal.aborted) return 'stop';
         if (err instanceof PinnedClientError && err.code === 'fingerprint-mismatch') {
           this.identityChanged(err.message);
           return 'stop';
@@ -539,6 +547,7 @@ export class JoinerSession {
     this.setState('identity-changed', 'fingerprint-mismatch');
     this.running = false;
     this.abort?.abort();
+    this.halt.abort();
     if (this.pumpTimer) clearTimeout(this.pumpTimer);
     this.pumpTimer = null;
   }

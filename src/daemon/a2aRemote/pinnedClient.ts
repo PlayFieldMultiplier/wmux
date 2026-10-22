@@ -164,16 +164,21 @@ export class PinnedTlsClient {
   /**
    * Upload raw bytes (`PUT`), answered in JSON like `requestJson`. The whole
    * exchange gets `timeoutMs` instead of the request budget: a body of
-   * megabytes takes longer than a JSON message.
+   * megabytes takes longer than a JSON message. Abandoned when `signal` aborts.
    */
-  async putBytes(path: string, body: Buffer, timeoutMs: number): Promise<{ status: number; json: unknown }> {
-    const { status, body: answer } = await this.request('PUT', path, body, { contentType: 'application/octet-stream', accept: 'application/json', timeoutMs });
+  async putBytes(path: string, body: Buffer, timeoutMs: number, signal?: AbortSignal): Promise<{ status: number; json: unknown }> {
+    const { status, body: answer } = await this.request('PUT', path, body, {
+      contentType: 'application/octet-stream',
+      accept: 'application/json',
+      timeoutMs,
+      ...(signal ? { signal } : {}),
+    });
     return { status, json: parseJsonOrNull(answer.toString('utf8')) };
   }
 
-  /** The status of a `HEAD` (no body), within `timeoutMs`. */
-  async headStatus(path: string, timeoutMs: number): Promise<number> {
-    const { status } = await this.request('HEAD', path, undefined, { accept: 'application/json', timeoutMs });
+  /** The status of a `HEAD` (no body), within `timeoutMs`, abandoned when `signal` aborts. */
+  async headStatus(path: string, timeoutMs: number, signal?: AbortSignal): Promise<number> {
+    const { status } = await this.request('HEAD', path, undefined, { accept: 'application/json', timeoutMs, ...(signal ? { signal } : {}) });
     return status;
   }
 
