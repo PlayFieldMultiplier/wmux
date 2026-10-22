@@ -53,6 +53,12 @@ because it drives an already packaged app.
   first on PATH (`claude.cmd` + `claude.js` on Windows, a shell script
   elsewhere). They answer `--version` (9.9.9) and the sign-in status probes as
   signed in; the scenario fails if the ready card shows any other version.
+  A sandbox `~/.zprofile` puts the fakes back in front after macOS's
+  `/etc/zprofile` (path_helper) reorders PATH in the `zsh -l` pane. Before
+  "Try sample task", the run asks the active pane, through the packaged CLI,
+  which `claude` its shell resolves (`command -v`, or `Get-Command` in
+  PowerShell) and stops unless it is the fake: a real Claude Code would spend
+  the owner's account.
 - **Driver**: every UI step goes through `scripts/control-wmux.mjs` with
   `data-testid` handles, with its state and evidence in the run's folder
   (`CONTROL_WMUX_DIR`).

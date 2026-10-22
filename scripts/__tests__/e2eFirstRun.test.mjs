@@ -24,12 +24,15 @@ import {
   killSurvivors,
   mergeTrees,
   normalizeProcessRows,
+  paneProbeCommand,
+  paneProbeRefusal,
   parseRunArgs,
   removableLeftovers,
   runProcessTree,
   SANDBOX_PREFIX,
   sandboxBase,
   sandboxEnv,
+  sandboxShellProfiles,
   seededClaudeJson,
   squirrelInstallRefusal,
   survivors,
@@ -369,5 +372,44 @@ describe('killSurvivors', () => {
     });
     expect(seen).toEqual([{ pid: 10, createdAt: 100 }, { pid: 11, createdAt: 110 }]);
     expect(out).toEqual([{ pid: 10, result: 'killed' }, { pid: 11, result: 'mismatch' }]);
+  });
+});
+
+describe('the pane runs the fake claude (P2-2)', () => {
+  it('a sandbox ~/.zprofile puts the fakes back ahead of path_helper, POSIX only', () => {
+    expect(sandboxShellProfiles('/tmp/wmux-fr-x/fake-bin', 'darwin')).toEqual([
+      { name: '.zprofile', content: 'export PATH="/tmp/wmux-fr-x/fake-bin:$PATH"\n' },
+    ]);
+    expect(sandboxShellProfiles('C:/s/fake-bin', 'win32')).toEqual([]);
+  });
+
+  it('sandboxEnv drops an inherited ZDOTDIR, so zsh reads the sandbox dotfiles', () => {
+    const env = sandboxEnv({ PATH: '/bin', ZDOTDIR: '/Users/owner/.config/zsh' }, { home: '/tmp/s', fakeBin: '/tmp/s/fake-bin', platform: 'darwin' });
+    expect(env.ZDOTDIR).toBeUndefined();
+  });
+
+  it('asks the shell which claude it would run', () => {
+    expect(paneProbeCommand('/tmp/s/claude-probe.txt', 'darwin')).toBe("{ command -v claude || echo NOT-FOUND; } > '/tmp/s/claude-probe.txt' 2>&1");
+    expect(paneProbeCommand('C:\\s\\claude-probe.txt', 'win32')).toContain("Get-Command claude");
+    expect(paneProbeCommand('C:\\s\\claude-probe.txt', 'win32')).toContain("-LiteralPath 'C:\\s\\claude-probe.txt'");
+    expect(() => paneProbeCommand("/tmp/it's", 'linux')).toThrow(/quote/);
+  });
+
+  it('accepts only the fake, and refuses a real install, an alias or nothing', () => {
+    const fake = '/tmp/wmux-fr-x/fake-bin';
+    expect(paneProbeRefusal('/tmp/wmux-fr-x/fake-bin/claude\n', fake, 'darwin')).toBeNull();
+    expect(paneProbeRefusal('/usr/local/bin/claude\n', fake, 'darwin')).toMatch(/not the fake.*real Claude Code/);
+    expect(paneProbeRefusal('claude: aliased to /opt/homebrew/bin/claude\n', fake, 'darwin')).toMatch(/not the fake/);
+    expect(paneProbeRefusal('NOT-FOUND\n', fake, 'linux')).toMatch(/not the fake/);
+    expect(paneProbeRefusal('', fake, 'linux')).toMatch(/nothing/);
+  });
+
+  it('Windows: an Application under the fake dir, BOM and case aside', () => {
+    const fake = path.win32.join('C:', 'Temp', 'wmux-fr-x', 'fake-bin');
+    const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`Application|${path.win32.join(fake.toUpperCase(), 'claude.cmd')}\r\n`)]);
+    expect(paneProbeRefusal(bom, fake, 'win32')).toBeNull();
+    expect(paneProbeRefusal(`Application|${path.win32.join('C:', 'Users', 'u', '.local', 'bin', 'claude.exe')}`, fake, 'win32')).toMatch(/real Claude Code/);
+    expect(paneProbeRefusal('Alias|', fake, 'win32')).toMatch(/a Alias/);
+    expect(paneProbeRefusal('|', fake, 'win32')).toMatch(/not found/);
   });
 });

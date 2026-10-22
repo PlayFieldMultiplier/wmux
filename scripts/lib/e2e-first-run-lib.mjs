@@ -98,6 +98,9 @@ export function sandboxEnv(baseEnv, { home, fakeBin, platform = process.platform
     set('PATHEXT', exts.join(';'));
   } else {
     for (const k of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME']) drop(k);
+    // zsh reads its dotfiles from ZDOTDIR when set (wmux's stubs then source
+    // the user's from there): the sandbox home's, never the owner's.
+    drop('ZDOTDIR');
   }
   const pathKey = keyOf(env, 'PATH');
   const current = env[pathKey];
@@ -338,6 +341,52 @@ export async function killSurvivors(alive, { platform = process.platform, listRo
     }
   }
   return out;
+}
+
+/**
+ * Dotfiles for the sandbox home. macOS panes start as `zsh -l -i`, and the
+ * login file /etc/zprofile runs path_helper, which moves /usr/local/bin and
+ * /opt/homebrew/bin ahead of the fakes: a real `claude` there would run the
+ * sample task with the owner's account. ~/.zprofile runs after it (wmux's
+ * stub sources the user's) and puts the fakes back in front.
+ */
+export function sandboxShellProfiles(fakeBin, platform = process.platform) {
+  if (platform === 'win32') return [];
+  return [{ name: '.zprofile', content: `export PATH="${fakeBin}:$PATH"\n` }];
+}
+
+/**
+ * The line typed into a pane to learn which `claude` its shell would run,
+ * written to `file`. Windows panes run PowerShell (pwsh 7, else 5.1); an
+ * alias or function shows up as its CommandType, never as a path.
+ */
+export function paneProbeCommand(file, platform = process.platform) {
+  if (String(file).includes("'")) throw new Error(`probe path must not contain a quote: ${file}`);
+  if (platform === 'win32') {
+    return `$c = Get-Command claude -ErrorAction SilentlyContinue | Select-Object -First 1; "$($c.CommandType)|$($c.Source)" | Set-Content -Encoding UTF8 -LiteralPath '${file}'`;
+  }
+  return `{ command -v claude || echo NOT-FOUND; } > '${file}' 2>&1`;
+}
+
+/**
+ * null when the probe says the pane's `claude` is the fake in `fakeBin`,
+ * otherwise why the run must not go on. `raw` is the probe file's bytes.
+ */
+export function paneProbeRefusal(raw, fakeBin, platform = process.platform) {
+  const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw ?? '');
+  const line = text.replace(/^\uFEFF/, '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
+  let resolved = line;
+  if (platform === 'win32') {
+    const [type, source] = line.split('|');
+    if (type !== 'Application') return `the pane's claude is ${type ? `a ${type}` : 'not found'} (${line || 'empty probe'}), not the fake in ${fakeBin}`;
+    resolved = source ?? '';
+  }
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  if (!resolved || !p.isAbsolute(resolved)) return `the pane's claude resolves to "${line || 'nothing'}", not the fake in ${fakeBin}`;
+  const same = platform === 'win32'
+    ? p.dirname(resolved).toLowerCase() === p.normalize(fakeBin).toLowerCase()
+    : p.dirname(resolved) === p.normalize(fakeBin);
+  return same ? null : `the pane's claude is ${resolved}, not the fake in ${fakeBin}; a real Claude Code would run the sample task`;
 }
 
 /** The one-line verdict the scenario prints last. */

@@ -51,19 +51,31 @@ import {
   killSurvivors,
   mergeTrees,
   normalizeProcessRows,
+  paneProbeCommand,
+  paneProbeRefusal,
   parseRunArgs,
   removableLeftovers,
   runProcessTree,
   SANDBOX_PREFIX,
   sandboxBase,
   sandboxEnv,
+  sandboxShellProfiles,
   seededClaudeJson,
   squirrelInstallRefusal,
   survivors,
   verdictLine,
   writesOutsideSandbox,
 } from './lib/e2e-first-run-lib.mjs';
-import { darwinEnvPart, envHasSuffix, launchdJobsFor, linkInTree, parseKillResults, windowsKillQuery } from './lib/control-wmux-lib.mjs';
+import {
+  darwinEnvPart,
+  envHasSuffix,
+  launchdJobsFor,
+  linkInTree,
+  packagedCliBundle,
+  parseKillResults,
+  scrubEnv,
+  windowsKillQuery,
+} from './lib/control-wmux-lib.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = path.join(REPO_ROOT, 'scripts', 'control-wmux.mjs');
@@ -166,6 +178,17 @@ async function read(js) {
 }
 
 const exists = (testid) => read(`!!document.querySelector('[data-testid="${testid}"]')`);
+
+/** The packaged wmux CLI, against this run's instance only (its suffix, the sandbox home). */
+function wmuxCli(cliArgs, timeoutMs = 30_000) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [packagedCliBundle(app), ...cliArgs], {
+      env: scrubEnv(driverEnv, suffix),
+      timeout: timeoutMs,
+      windowsHide: true,
+    }, (err, stdout, stderr) => resolve({ ok: !err, out: `${stdout}${stderr}`.trim().slice(0, 500) }));
+  });
+}
 
 async function step(name, fn) {
   const started = Date.now();
@@ -468,6 +491,7 @@ async function scenario() {
     // MCP registration is the one first-run step a suffixed instance cannot
     // do (agent configs are not per-suffix), so the profile starts with it.
     fs.writeFileSync(path.join(sandbox, '.claude.json'), JSON.stringify(seededClaudeJson(sandbox), null, 2));
+    for (const f of sandboxShellProfiles(fakeBin)) fs.writeFileSync(path.join(sandbox, f.name), f.content);
     // The wizard installs Claude's hooks into the sandbox's ~/.claude, and
     // the fake Claude fires them from there.
     fs.writeFileSync(envFile, JSON.stringify(appEnvExtras({
@@ -528,6 +552,25 @@ async function scenario() {
       return { clicked: true };
     }
     return { clicked: false, installed: await exists('first-run-wizard-hooks-installed') };
+  });
+
+  await step('pane runs the fake claude', async () => {
+    // "Try sample task" types `claude ...` into a pane. Before it may, prove
+    // that the pane's shell resolves `claude` to the fake: a login shell's
+    // profile can put a real install first, which would spend the owner's
+    // account. Asked in the active pane, through the run's own CLI.
+    const probe = path.join(sandbox, 'claude-probe.txt');
+    const sent = await wmuxCli(['send', '--active', '--submit', paneProbeCommand(probe)]);
+    if (!sent.ok) throw new StepError(`could not ask a pane which claude it runs: ${sent.out}`);
+    const deadline = Date.now() + 30_000;
+    while (!fs.existsSync(probe) && Date.now() < deadline) await sleep(250);
+    await sleep(250);
+    if (!fs.existsSync(probe)) throw new StepError('the pane never answered which claude it runs; refusing to start the sample task');
+    const raw = fs.readFileSync(probe);
+    const refusal = paneProbeRefusal(raw, fakeBin);
+    result.observed.paneClaude = raw.toString('utf8').replace(/^\uFEFF/, '').trim();
+    if (refusal) throw new StepError(`refusing to start the sample task: ${refusal}`);
+    return { resolved: result.observed.paneClaude };
   });
 
   await step('sample task runs the agent in a pane', async () => {
