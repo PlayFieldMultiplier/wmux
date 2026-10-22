@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DECODE_LIMITS, PREFERRED_LANGUAGE_MIN_SHARE, SAMPLE_RATE, WHISPER_TOKENS, WhisperTokenizer, chooseLanguage, dictationLanguageFor, endsInLoop, logMelSpectrogram } from '../whisper';
+import { DECODE_LIMITS, PREFERRED_LANGUAGE_MIN_SHARE, SAMPLE_RATE, WHISPER_TOKENS, WhisperTokenizer, chooseLanguage, dictationLanguageFor, endsInLoop, logMelSpectrogram, noSpeechProbability } from '../whisper';
 
 const reference = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'whisper-reference.json'), 'utf8')) as {
   frames: number;
@@ -58,12 +58,27 @@ describe('WhisperTokenizer', () => {
 });
 
 describe('endsInLoop', () => {
-  it('sees an n-gram repeated REPEATS times in a row, and nothing short of it', () => {
-    const loop = Array.from({ length: DECODE_LIMITS.REPEATS }, () => [7, 8, 9]).flat();
+  it('a stuck n-gram is a loop; a word said a few times, or a long number, is speech', () => {
+    const loop = Array.from({ length: DECODE_LIMITS.REPEATS_MIN }, () => [7, 8, 9]).flat();
     expect(endsInLoop([1, 2, ...loop])).toBe(true);
     expect(endsInLoop([1, 2, ...loop.slice(1)])).toBe(false);
-    expect(endsInLoop([5, 5, 5])).toBe(DECODE_LIMITS.REPEATS <= 3);
+    // "네 네 네": one token three times, and "1,000,000,000": ",000" three times.
+    expect(endsInLoop([5, 5, 5])).toBe(false);
+    expect(endsInLoop([16, 11, 1360, 11, 1360, 11, 1360])).toBe(false);
+    // One token needs LOOP_TOKENS_MIN copies.
+    expect(endsInLoop(Array(DECODE_LIMITS.LOOP_TOKENS_MIN - 1).fill(5))).toBe(false);
+    expect(endsInLoop(Array(DECODE_LIMITS.LOOP_TOKENS_MIN).fill(5))).toBe(true);
     expect(endsInLoop([1, 2, 3, 4, 5, 6])).toBe(false);
+  });
+});
+
+describe('noSpeechProbability', () => {
+  it('reads the <|nospeech|> share of the first step\'s logits', () => {
+    const logits = new Float32Array(51865).fill(-20);
+    logits[WHISPER_TOKENS.NO_SPEECH] = 10;
+    expect(noSpeechProbability(logits)).toBeGreaterThan(DECODE_LIMITS.NO_SPEECH_MAX);
+    logits[WHISPER_TOKENS.LANG.ko] = 12;
+    expect(noSpeechProbability(logits)).toBeLessThan(DECODE_LIMITS.NO_SPEECH_MAX);
   });
 });
 

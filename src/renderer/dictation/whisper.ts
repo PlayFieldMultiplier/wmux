@@ -29,6 +29,7 @@ export const WHISPER_TOKENS = {
   SOT: 50258,
   TRANSCRIBE: 50359,
   NO_TIMESTAMPS: 50363,
+  NO_SPEECH: 50362,
   /** Whisper's language tokens run from English to Sundanese. */
   LANG_FIRST: 50259,
   LANG_LAST: 50357,
@@ -52,9 +53,15 @@ export function dictationLanguageFor(locale: string): DictationLanguage | 'auto'
 export const DECODE_LIMITS = {
   /** Tokens one window may produce: a 30 s window of fast speech is ~150. */
   MAX_TOKENS: 224,
-  /** A run of the same n-gram this many times in a row is a loop. */
-  REPEATS: 3,
+  /** A loop is the same n-gram at least REPEATS_MIN times in a row, and
+   *  at least LOOP_TOKENS_MIN tokens long: speech repeats a word a few times
+   *  ("네 네 네", "1,000,000,000"), a stuck decoder keeps going. */
+  REPEATS_MIN: 4,
+  LOOP_TOKENS_MIN: 8,
   NGRAM_MAX: 8,
+  /** Above this `<|nospeech|>` probability (the first step's) a window is
+   *  noise, which Whisper otherwise writes as "Thank you." */
+  NO_SPEECH_MAX: 0.6,
   /** Below this RMS a window is silence: Whisper invents words for it. */
   SILENCE_RMS: 0.002,
 } as const;
@@ -242,17 +249,35 @@ export interface TranscribeOptions {
   beginSuppress: readonly number[];
 }
 
-/** Whether the newest tokens repeat one n-gram DECODE_LIMITS.REPEATS times
- *  in a row: Whisper's failure mode on noise. Pure. */
-export function endsInLoop(ids: readonly number[]): boolean {
+/** How many times an n-gram must repeat in a row to be a loop. */
+function loopRepeats(n: number): number {
+  return Math.max(DECODE_LIMITS.REPEATS_MIN, Math.ceil(DECODE_LIMITS.LOOP_TOKENS_MIN / n));
+}
+
+/** The n of the loop the newest tokens end on, or 0: Whisper's failure mode
+ *  on noise is one n-gram over and over. Pure. */
+function loopLength(ids: readonly number[]): number {
   for (let n = 1; n <= DECODE_LIMITS.NGRAM_MAX; n += 1) {
-    const span = n * DECODE_LIMITS.REPEATS;
-    if (ids.length < span) break;
+    const span = n * loopRepeats(n);
+    if (ids.length < span) continue;
     let loop = true;
     for (let i = ids.length - span; i < ids.length - n && loop; i += 1) loop = ids[i] === ids[i + n];
-    if (loop) return true;
+    if (loop) return n;
   }
-  return false;
+  return 0;
+}
+
+export function endsInLoop(ids: readonly number[]): boolean {
+  return loopLength(ids) > 0;
+}
+
+/** The `<|nospeech|>` probability in a step's logits. Pure. */
+export function noSpeechProbability(logits: ArrayLike<number>): number {
+  let max = -Infinity;
+  for (let i = 0; i < logits.length; i += 1) if (logits[i] > max) max = logits[i];
+  let sum = 0;
+  for (let i = 0; i < logits.length; i += 1) sum += Math.exp(logits[i] - max);
+  return Math.exp(logits[WHISPER_TOKENS.NO_SPEECH] - max) / sum;
 }
 
 /** The ids of one window's text, without the loop a repeat ended on. Stops
@@ -290,6 +315,7 @@ async function decodeWindow(ort: WhisperOrt, sessions: WhisperSessions, encoded:
   };
 
   let logits = await step([WHISPER_TOKENS.SOT]);
+  if (noSpeechProbability(logits) > DECODE_LIMITS.NO_SPEECH_MAX) return [];
   const lang = chooseLanguage(logits, opts.language);
   logits = await step([lang, WHISPER_TOKENS.TRANSCRIBE, WHISPER_TOKENS.NO_TIMESTAMPS]);
   const suppress = new Set(opts.suppress);
@@ -336,16 +362,8 @@ export function chooseLanguage(logits: ArrayLike<number>, preferred: DictationLa
 
 /** Drops the repeats of the loop `ids` ends on, keeping its first copy. */
 function trimLoop(ids: number[]): void {
-  for (let n = 1; n <= DECODE_LIMITS.NGRAM_MAX; n += 1) {
-    const span = n * DECODE_LIMITS.REPEATS;
-    if (ids.length < span) break;
-    let loop = true;
-    for (let i = ids.length - span; i < ids.length - n && loop; i += 1) loop = ids[i] === ids[i + n];
-    if (loop) {
-      ids.length -= span - n;
-      return;
-    }
-  }
+  const n = loopLength(ids);
+  if (n > 0) ids.length -= n * (loopRepeats(n) - 1);
 }
 
 function rms(audio: Float32Array): number {
