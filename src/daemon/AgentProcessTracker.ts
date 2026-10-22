@@ -458,10 +458,16 @@ export function isVerifiedPassiveHelper(
  * read — never argv[0], which the process sets itself. darwin: the first `txt`
  * name lsof reports; linux: `/proc/<pid>/exe`. Absolute lsof path, no PATH trust.
  */
-export async function readExecutableImage(pid: number): Promise<string | undefined> {
+export async function readExecutableImage(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+  readlink: (file: string) => string = fs.readlinkSync,
+): Promise<string | undefined> {
   try {
-    if (process.platform === 'linux') return fs.realpathSync(`/proc/${pid}/exe`);
-    if (process.platform !== 'darwin') return undefined;
+    // The kernel's link already names the resolved file. A binary replaced
+    // while it runs (an in-place update) reads `<path> (deleted)`.
+    if (platform === 'linux') return readlink(`/proc/${pid}/exe`).replace(/ \(deleted\)$/, '');
+    if (platform !== 'darwin') return undefined;
     const { stdout } = await execFileAsync('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'],
       { encoding: 'utf-8', timeout: 5_000 });
     const lines = (stdout as string).split('\n');
@@ -479,30 +485,64 @@ const EXTRA_AGENT_PACKAGES: Partial<Record<AgentSlug, readonly string[]>> = {
   codex: ['@openai/codex'],
   opencode: ['opencode-ai'],
   copilot: ['@github/copilot'],
+  openclaude: ['@gitlawb/openclaude'],
 };
 const AGENT_PACKAGES: ReadonlyMap<AgentSlug, ReadonlySet<string>> = new Map(
   AGENT_ROWS.map((row) => [row.slug, new Set([...(row.process?.packages ?? []), ...(EXTRA_AGENT_PACKAGES[row.slug] ?? [])])] as const),
 );
 
-/** Native agents whose installer names each binary by its version, under the
- *  user's home (`~/.local/share/claude/versions/2.1.307`). */
-const NATIVE_VERSION_DIRS: ReadonlyMap<AgentSlug, string> = new Map([['claude', '.local/share/claude/versions']]);
+/** Python packages a python-hosted agent ships in (`site-packages/aider`). */
+const PYTHON_PACKAGES: Partial<Record<AgentSlug, string>> = { aider: 'aider' };
+
+/** Native agents whose installer names each binary by its version, in a
+ *  directory under the user's home (`~/.local/share/claude/versions/2.1.307`,
+ *  `~/.grok/downloads/grok-1.0.52-macos-aarch64`). */
+const NATIVE_INSTALL_DIRS: ReadonlyMap<AgentSlug, { dir: string; name: RegExp }> = new Map([
+  ['claude', { dir: '.local/share/claude/versions', name: /^\d+\.\d+\.\d+/ }],
+  ['grok', { dir: '.grok/downloads', name: /^grok-\d+\.\d+\.\d+-(?:macos|linux)-(?:aarch64|arm64|x86_64|x64)$/ }],
+]);
 
 /** A release binary named for its target (`codex-aarch64-apple-darwin`). */
 const NATIVE_TARGET_SUFFIX = /-(?:aarch64|x86_64)-(?:apple-darwin|unknown-linux-(?:gnu|musl))$/;
 
 /**
+ * Whether the real path of a python agent's script lies inside its package:
+ * a file under `site-packages/<pkg>/`, or a console script in an
+ * environment's `bin/` whose `lib/pythonX.Y/site-packages` holds the package
+ * (a venv, pipx or uv tool, a Homebrew libexec, a user prefix).
+ */
+function inPythonPackage(real: string, slug: AgentSlug): boolean {
+  const pkg = PYTHON_PACKAGES[slug];
+  if (!pkg) return false;
+  const segs = real.split('/');
+  const at = segs.lastIndexOf('site-packages');
+  if (at !== -1 && segs[at + 1] === pkg && at + 2 < segs.length) return true;
+  const form = lookupForm(path.posix.basename(real));
+  if ((AGENT_SLUG_SET.has(form) ? form : ALIAS_TO_SLUG.get(form)) !== slug) return false;
+  const bin = path.posix.dirname(real);
+  if (path.posix.basename(bin) !== 'bin') return false;
+  const lib = path.posix.join(path.posix.dirname(bin), 'lib');
+  try {
+    return fs.readdirSync(lib).some((dir) => /^python\d*(?:\.\d+)?$/.test(dir) &&
+      fs.statSync(path.posix.join(lib, dir, 'site-packages', pkg), { throwIfNoEntry: false })?.isDirectory() === true);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether the executable the kernel reports for `entry` (`image`, from
  * readExecutableImage) really is the `slug` agent the process's own argv
- * claims (darwin, linux). argv is self-reported (`exec -a claude sleep`), so:
+ * claims (darwin, linux). argv is self-reported, so:
  *   - a native agent's image must itself be that agent: its file name is the
  *     agent's executable (`claude`, `kiro-cli`, `codex-aarch64-apple-darwin`),
  *     or it is a version binary in that agent's install directory;
  *   - a runtime-hosted agent's image must be a runtime (`node`, `python3.12`),
  *     and the real path of its absolute script argument must lie inside one
- *     of that agent's npm packages (`…/node_modules/@anthropic-ai/claude-code/cli.js`).
+ *     of that agent's packages (`…/node_modules/@anthropic-ai/claude-code/cli.js`,
+ *     `…/site-packages/aider/`).
  * Anything else, or an unreadable image, is not that agent. A copied binary or
- * package still passes. Pure apart from `realpath` — exported for tests.
+ * package still passes. Reads the file system — exported for tests.
  */
 export function isAgentImage(
   entry: ProcessTreeEntry,
@@ -515,9 +555,16 @@ export function isAgentImage(
   if (!RUNTIME_STEMS.has(imageStem(entry.name))) {
     const stem = imageStem(image).replace(NATIVE_TARGET_SUFFIX, '');
     if ((AGENT_SLUG_SET.has(stem) ? stem : NATIVE_STEM_TO_SLUG.get(stem)) === slug) return true;
-    const versions = NATIVE_VERSION_DIRS.get(slug);
-    return !!versions && path.posix.dirname(image) === path.posix.join(userHome, versions) &&
-      /^\d+\.\d+\.\d+/.test(path.posix.basename(image));
+    const install = NATIVE_INSTALL_DIRS.get(slug);
+    if (!install || !install.name.test(path.posix.basename(image))) return false;
+    // The image path is resolved, so compare against the resolved home too.
+    const homes = [userHome];
+    try {
+      homes.push(realpath(userHome));
+    } catch {
+      // Home unreadable: the plain path only.
+    }
+    return homes.some((home) => path.posix.dirname(image) === path.posix.join(home, install.dir));
   }
   const runtime = imageStem(image).replace(/^nodejs$/, 'node').replace(/^(python3)\.\d+$/, '$1');
   if (!RUNTIME_STEMS.has(runtime)) return false;
@@ -530,6 +577,7 @@ export function isAgentImage(
   } catch {
     return false;
   }
+  if (runtime.startsWith('python')) return inPythonPackage(real, slug);
   // The innermost package owns the file.
   const segs = real.split('/');
   const at = segs.lastIndexOf('node_modules');
@@ -663,8 +711,11 @@ export class AgentProcessTracker {
     const key = `${slug}\0${entry.name}\0${entry.cmdline ?? ''}`;
     const cache = state?.pid === entry.pid ? state : undefined;
     if (cache?.image?.key === key) return cache.image.ok;
-    const ok = isAgentImage(entry, slug, await this.readImage(entry.pid).catch(() => undefined), this.userHome);
-    if (cache) cache.image = { key, ok };
+    const image = await this.readImage(entry.pid).catch(() => undefined);
+    const ok = isAgentImage(entry, slug, image, this.userHome);
+    // A failed read (a timeout, a permission error) is not a verdict: the
+    // next check reads again.
+    if (cache && image !== undefined) cache.image = { key, ok };
     return ok;
   }
 
