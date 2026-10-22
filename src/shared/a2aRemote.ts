@@ -105,6 +105,20 @@ export const A2A_FEATURE_LINK_OFFER = 'link-offer.1';
  * an omitted-images note instead: an older receiver would drop the refs unseen.
  */
 export const A2A_FEATURE_IMAGES = 'images.1';
+/**
+ * Stream liveness both ways. A joiner with it acks its stream cursor every
+ * `A2A_STREAM_PING_MS` while the stream is up (to a server whose hello lists
+ * it); a server whose joiner advertised it ends that stream after
+ * `A2A_STREAM_SILENCE_MS` with no request from the joiner. Without it a joiner
+ * that vanished without closing its socket (sleep, Wi-Fi off) stayed
+ * "connected" on the server until TCP gave up, which takes minutes.
+ */
+export const A2A_FEATURE_STREAM_PING = 'stream-ping.1';
+export const A2A_STREAM_PING_MS = 15_000;
+/** No sign of the other end for this long ends a stream, on either side. */
+export const A2A_STREAM_SILENCE_MS = 40_000;
+/** The joiner's first stream redial waits this long; each next one doubles it. */
+export const A2A_REDIAL_BACKOFF_MIN_MS = 1_000;
 const FEATURE_RE = /^[a-z0-9][a-z0-9.-]{0,31}$/;
 const FEATURES_MAX = 16;
 

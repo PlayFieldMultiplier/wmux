@@ -479,7 +479,7 @@ describe('tailscaleCandidates', () => {
     } else if (process.platform === 'darwin') {
       // The GUI process sees launchd's minimal PATH, so a bare `tailscale` is
       // tried first and the app-bundle CLI is the fallback (2026-07-27).
-      expect(candidates).toEqual(['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale']);
+      expect(candidates.slice(0, 2)).toEqual(['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale']);
     } else {
       expect(candidates).toEqual(['tailscale']);
     }

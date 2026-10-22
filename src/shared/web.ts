@@ -12,7 +12,9 @@
  * the security warning wording; the GUI reuses the wording, shortened.
  */
 
-import type { TailscaleProblem } from '../cli/tailscale';
+import type { TailscaleChecklist, TailscaleProblem } from '../cli/tailscale';
+
+export type { TailscaleChecklist, TailscaleCheckItem, TailscaleCheckReason, TailscaleFix } from '../cli/tailscale';
 
 /** Default listen port shared with the CLI (`wmux web`) and the daemon. */
 export const WEB_DEFAULT_PORT = 7681;
@@ -163,6 +165,18 @@ export interface WebDiagnosis {
     | { ok: false; problem: TailscaleProblem; lines: string[] };
   web: WebTerminalInfo;
 }
+
+/** What the checklist's buttons may ask main to open. */
+export type WebTailscaleOpenTarget = 'download' | 'app';
+
+/** `opened` is what actually opened: `download` when no Tailscale app was found to bring forward. */
+export interface WebTailscaleOpenResult {
+  ok: boolean;
+  opened: WebTailscaleOpenTarget | null;
+}
+
+/** `WEB_TAILSCALE_CHECK`'s answer (re-exported so the renderer imports types only). */
+export type WebTailscaleChecklist = TailscaleChecklist;
 
 /**
  * Why a pairing attempt would be refused.

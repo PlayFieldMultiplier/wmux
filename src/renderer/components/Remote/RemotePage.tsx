@@ -32,6 +32,7 @@ import SshHostCheckDialog from './SshHostCheckDialog';
 import { sshNeedsIdentityCheck, sshNeedsPerson, type SshTunnelState } from '../../../shared/remoteHosts';
 import { pcRailHostState } from '../../../shared/pcRail';
 import RemoteRowMenu, { type RemoteRowMenuItem } from './RemoteRowMenu';
+import TailscaleChecklist from './TailscaleChecklist';
 
 /** How often the page re-reads the roster, the hosts and the server state. */
 export const REMOTE_PAGE_POLL_MS = 10_000;
@@ -730,6 +731,7 @@ export default function RemotePage() {
             <span className={`wmux-remote-chev${details ? ' is-open' : ''}`} aria-hidden="true"><IconChevron size={12} /></span>
           </button>
         </div>
+        <TailscaleChecklist />
         {details && (
           <dl className="wmux-remote-machine-detail" id="remote-machine-detail">
             {serverOn && address && (

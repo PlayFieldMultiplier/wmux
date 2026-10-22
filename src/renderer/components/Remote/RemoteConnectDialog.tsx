@@ -16,8 +16,12 @@ import { pairReasonMessage } from '../Sidebar/AttachRemoteModal';
 import { pendingPairFlow, uniqueDeviceName, webComputerLink } from '../StatusBar/WebToggle';
 import { webComputerPairOrigin } from '../../../shared/web';
 import { maskPairInput, parseRemotePairInput } from '../../../shared/remotePairInput';
+import { HOST_UNREACHABLE_ERROR } from '../../../shared/remoteHosts';
 import type { A2aRemoteStatus } from '../../../shared/rpc';
 import LanLinkPairPanel from './LanLinkPairPanel';
+import { TailscaleFixButton } from './TailscaleChecklist';
+import { tailnetPrecheck, tailnetTargetOf, withTailnetNote, type TailnetNotice } from './tailnetCheck';
+import type { TailscaleFix } from '../../../shared/web';
 
 // ─── "Connect a PC…" on the Remote page ──────────────────────────────────────
 //
@@ -47,6 +51,14 @@ export const CONNECT_PAIR_POLL_MS = 2_000;
 export const CONNECT_REDEEM_GRACE_TICKS = 3;
 
 const A2A_INVITE_RE = /^wmux-a2a:\/\//i;
+
+/** Join failures that mean the other PC was never reached. */
+const JOIN_UNREACHABLE: ReadonlySet<string> = new Set(['connect-refused', 'timeout', 'not-found', 'failed']);
+
+/** A failed connect's line, with the Tailscale reason added when there is one. */
+function noteUnreachable(line: string, note: TailnetNotice | null): { ok: false; text: string; fix?: TailscaleFix } {
+  return { ok: false, text: withTailnetNote(line, note), ...(note?.fix ? { fix: note.fix } : {}) };
+}
 
 function kindOf(value: string): 'a2a' | 'link' | null {
   if (A2A_INVITE_RE.test(value)) return 'a2a';
@@ -143,7 +155,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const [paste, setPaste] = useState('');
   const [masked, setMasked] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: 'muted' | 'danger'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: 'muted' | 'danger'; text: string; fix?: TailscaleFix } | null>(null);
   const [turnedOn, setTurnedOn] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -391,7 +403,14 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   }, [open, api, applyPairStatus]);
 
   /** Connect one pasted piece; the line it leaves for the message. */
-  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string; share?: boolean }> => {
+  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string; share?: boolean; fix?: TailscaleFix }> => {
+    // Every address this piece would try is in the tailnet range: when
+    // Tailscale here cannot carry it (off, signed out, the other device not
+    // on it), say so now instead of letting the connect run into its timeout,
+    // or, for an address Tailscale may not own, say it if the connect fails.
+    const tailnet = await tailnetPrecheck(tailnetTargetOf(text));
+    if (tailnet.held) return { ok: false, ...tailnet.held };
+    const unreachable = (line: string): { ok: false; text: string; fix?: TailscaleFix } => noteUnreachable(line, tailnet.ifUnreachable);
     if (kindOf(text) === 'a2a') {
       const r = await invite.join(text);
       if (!r) return { ok: false, text: t('remote.pairFailed') };
@@ -401,7 +420,8 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       }
       const retry = r.retryAfterSec != null && r.retryAfterSec > 0
         ? ` ${t('settings.a2aRemoteJoinRetryIn', { time: formatRemaining(r.retryAfterSec) })}` : '';
-      return { ok: false, text: `${t(`settings.a2aRemoteJoinError.${r.error}`)}${retry}` };
+      const line = `${t(`settings.a2aRemoteJoinError.${r.error}`)}${retry}`;
+      return JOIN_UNREACHABLE.has(r.error) ? unreachable(line) : { ok: false, text: line };
     }
     const parsed = parseRemotePairInput(text);
     if (parsed.kind === 'error') return { ok: false, text: t(INPUT_ERROR[parsed.reason]) };
@@ -412,7 +432,11 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         ? await remote.hostsPair(parsed.origin, parsed.code)
         : await remote.hostsAdd(parsed.url);
       if (res.ok) return { ok: true, text: t('remotePage.connect.hostAdded', { name: res.host.label }), share: true };
-      return { ok: false, text: 'reason' in res ? pairReasonMessage(t, res.reason, res.attemptsLeft) : res.error };
+      if ('reason' in res) {
+        const line = pairReasonMessage(t, res.reason, res.attemptsLeft);
+        return res.reason === 'unreachable' ? unreachable(line) : { ok: false, text: line };
+      }
+      return res.error === HOST_UNREACHABLE_ERROR ? unreachable(res.error) : { ok: false, text: res.error };
     } catch {
       return { ok: false, text: t('remote.pairFailed') };
     }
@@ -432,6 +456,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
     const left: string[] = [];
     let host: string | null = null;
     let shared = false;
+    let fix: TailscaleFix | undefined;
     try {
       for (const part of parts) {
         const r = await connectOne(part);
@@ -440,6 +465,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         if (!r.ok) left.push(part);
         if (r.hostId) host = r.hostId;
         if (r.share) shared = true;
+        fix ??= r.fix;
       }
     } finally {
       if (mounted.current) setBusy(false);
@@ -451,7 +477,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       if (left.length === 0) setMasked(false);
     }
     if (host) setLinkHost(host);
-    setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n') });
+    setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n'), ...(fix ? { fix } : {}) });
   }, [paste, connectOne, t]);
 
   if (tab === null) return null;
@@ -620,6 +646,11 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
               <p className="wmux-a2a-note whitespace-pre-line" data-tone={message.tone === 'danger' ? 'danger' : undefined} role={message.tone === 'danger' ? 'alert' : 'status'} data-testid="remote-connect-message">
                 {message.text}
               </p>
+            )}
+            {message?.fix && (
+              <div className="flex flex-wrap items-center gap-2" data-testid="remote-connect-tailscale-fix">
+                <TailscaleFixButton fix={message.fix} />
+              </div>
             )}
           </div>
         )}
