@@ -1562,6 +1562,14 @@ always neutral (the fill ladder).
   idle = no mark. Selection is never painted as a status. The collapsed
   rail draws the same marks (`StatusMarkView`), never text glyphs, and names
   each workspace `name, status` for assistive tech.
+- **Usage-limit chip and card** (owner handoff 2026-10-22).
+  - **The chip.** A pane held at its provider's usage limit shows one chip in its tab strip's flow, never a new row, so the terminal does not shrink: a muted clock, "Limit" and "resets 3:16 PM · 2h 4m", then Resume once the reset has passed, and ×. The clock wears `--accent` only while the pane will resume on its own, since that is when the system acts. Clicking the chip opens the usage-limit card.
+  - **The card.** It is a padded popover anchored to the chip and placed with `placePopover`, and it closes on Escape, an outside click or a resize. It opens by itself once per limit, and only for the pane in front. It holds:
+    - Resume automatically when it reopens: a switch, on by default.
+    - Continue on another account: shown only with 2+ accounts. One ghost button per account, then the opt-in "Always switch automatically" checkbox, which is the vendor's switch-by-quota setting.
+    - Continue in another agent: shown only for agents that are installed and signed in. It opens that agent in a new tab of the same pane and types a handoff note without sending it.
+    - When every account is out, one line with the earliest time one reopens.
+  - **Colour.** None beyond the armed clock.
 - **Needs you is the attention orange everywhere** — the sidebar ring, hairline,
   labels and counts, the collapsed rail's mark, the rail badge and dot,
   Fleet's Needs you chip, section dot and row word, and the titlebar count —
