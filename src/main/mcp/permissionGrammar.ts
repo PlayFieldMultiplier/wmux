@@ -86,6 +86,10 @@ const KNOWN_CAPABILITIES = new Set<string>([
   // enforcement stays with the regular method capabilities above.
   'ui.rail-page',
   'agent.state.read',
+  // The same agent-state projection for every local workspace, not just the
+  // one the host binds the plugin to. Its own grant so an approval of
+  // `agent.state.read` never widens to the other workspaces.
+  'agent.state.read.all',
   'ui.sidebar',
   'ui.statusbar',
   'ui.pane-decoration',
@@ -142,7 +146,7 @@ export function globToRegex(glob: string): RegExp {
  * against. A scoped grant for one would read as narrower than it is, so the
  * grammar refuses it rather than letting it pass as unrestricted.
  */
-const UNSCOPABLE_CAPABILITIES: ReadonlySet<string> = new Set(['automation.read', 'automation.write', 'agent.state.read', 'ui.rail-page']);
+const UNSCOPABLE_CAPABILITIES: ReadonlySet<string> = new Set(['automation.read', 'automation.write', 'agent.state.read', 'agent.state.read.all', 'ui.rail-page']);
 
 export function parsePermission(spec: unknown): PermissionParseResult {
   if (typeof spec !== 'string') {

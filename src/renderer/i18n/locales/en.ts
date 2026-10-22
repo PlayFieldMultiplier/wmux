@@ -172,6 +172,7 @@ export const en = {
   'plugins.page.cap.sidebar': "Add a panel to the sidebar",
   'plugins.page.cap.statusbar': "Add an item to the status bar",
   'plugins.page.cap.agentState': "Read agent names, pane labels and status",
+  'plugins.page.cap.agentStateAll': "Read agent names, pane labels and status in every workspace",
   'plugins.page.cap.paneRead': "Read pane details and focus a pane",
   'plugins.page.cap.terminalRead': "Read terminal content",
   'plugins.page.cap.noTerminal': "No access to terminal content",

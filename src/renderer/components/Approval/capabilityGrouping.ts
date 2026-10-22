@@ -35,6 +35,7 @@ const GROUP_RENDER_ORDER: RiskClass[] = [
   'browser',
   'a2a',
   'agent-state',
+  'agent-state-all',
   'metadata',
   'events',
   'pane-lifecycle',

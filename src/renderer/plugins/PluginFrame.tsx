@@ -10,6 +10,7 @@ import {
   type BridgeResponse,
 } from '../../shared/pluginHost';
 import { registerFrame } from './pluginFrameRegistry';
+import { findPane } from '../../shared/paneUtils';
 
 // Cadence for the host-side events.poll forwarding loop (see below). The
 // poll is an in-process ring read in main — cheap enough for 1 Hz per
@@ -57,6 +58,7 @@ export default function PluginFrame({
   entry,
   forwardEvents = false,
   agentStateEvents = false,
+  agentStateScope = 'workspace',
   railPage = false,
   className,
 }: {
@@ -64,6 +66,8 @@ export default function PluginFrame({
   entry: string;
   forwardEvents?: boolean;
   agentStateEvents?: boolean;
+  /** 'all': the page is approved for agent.state.read.all (main re-checks). */
+  agentStateScope?: 'workspace' | 'all';
   railPage?: boolean;
   className?: string;
 }) {
@@ -74,6 +78,10 @@ export default function PluginFrame({
   const frameName = `wmux-plugin-frame:${pluginName}:${frameId}`;
   const frameRef = useRef<HTMLIFrameElement>(null);
   const portRef = useRef<MessagePort | null>(null);
+  // Read by the bridge's response path; a ref so the bridge effect keeps
+  // depending only on what identifies the frame (see the note above).
+  const agentStateScopeRef = useRef(agentStateScope);
+  agentStateScopeRef.current = agentStateScope;
   // Monotonic across retirement and handoff, even when React batches both.
   // Readiness comes from portRef; generations must never repeat on reload.
   const [bridgeEpoch, setBridgeEpoch] = useState(0);
@@ -164,9 +172,14 @@ export default function PluginFrame({
             if (resp && resp.ok === true) {
               respondOn(port, { v: PLUGIN_BRIDGE_VERSION, id: req.id, kind: 'response', result: resp.result });
               const state = useStore.getState();
+              // An all-workspaces page may have switched the workspace itself
+              // (to the focused pane's). Then the pane's owner, not the
+              // unchanged workspace, is what says the focus landed.
+              const landed = (scopeEpochRef.current === requestEpoch && state.activeWorkspaceId === requestWorkspace)
+                || (agentStateScopeRef.current === 'all' && typeof req.params?.id === 'string'
+                  && state.workspaces.some((w) => w.id === state.activeWorkspaceId && findPane(w.rootPane, req.params?.id as string) !== null));
               if (railPage && req.method === 'pane.focus' && portRef.current === port && !disposed
-                && scopeEpochRef.current === requestEpoch
-                && state.activeWorkspaceId === requestWorkspace && state.appRoute === `plugin:${pluginName}`
+                && landed && state.appRoute === `plugin:${pluginName}`
                 && (resp.result as { ok?: boolean } | null)?.ok === true) state.setAppRoute('workspaces');
 
             } else {
@@ -278,7 +291,7 @@ export default function PluginFrame({
 
   useEffect(() => {
     const port = portRef.current;
-    if (!agentStateEvents || !railPage || bridgeEpoch === 0 || !port) return;
+    if (!agentStateEvents || agentStateScope === 'all' || !railPage || bridgeEpoch === 0 || !port) return;
     return subscribeAgentState({
       workspaceId: activeWorkspaceId,
       read: () => window.electronAPI.plugins.rpc(pluginName, 'agent.state', {}, activeWorkspaceId),
@@ -286,7 +299,22 @@ export default function PluginFrame({
       isCurrent: () => scopeEpochRef.current === scopeEpoch && portRef.current === port && useStore.getState().activeWorkspaceId === activeWorkspaceId
         && useStore.getState().appRoute === `plugin:${pluginName}`,
     });
-  }, [pluginName, agentStateEvents, railPage, activeWorkspaceId, bridgeEpoch, scopeEpoch]);
+  }, [pluginName, agentStateEvents, agentStateScope, railPage, activeWorkspaceId, bridgeEpoch, scopeEpoch]);
+
+  // Every local workspace in one stream. It does not restart on a workspace
+  // switch (that would wipe the page between two identical answers); the
+  // binding is read at each call instead, and main checks the grant each time.
+  useEffect(() => {
+    const port = portRef.current;
+    if (!agentStateEvents || agentStateScope !== 'all' || !railPage || bridgeEpoch === 0 || !port) return;
+    return subscribeAgentState({
+      scope: 'all',
+      workspaceId: () => useStore.getState().activeWorkspaceId ?? undefined,
+      read: () => window.electronAPI.plugins.rpc(pluginName, 'agent.state.all', {}, useStore.getState().activeWorkspaceId),
+      post: (event) => { try { port.postMessage(event); } catch { /* closed during teardown */ } },
+      isCurrent: () => portRef.current === port && useStore.getState().appRoute === `plugin:${pluginName}`,
+    });
+  }, [pluginName, agentStateEvents, agentStateScope, railPage, bridgeEpoch]);
 
   if (blocked) return <div role="status" className="p-4 text-[13px] text-[var(--text-sub)]">{t('plugins.page.frameUnavailable')}</div>;
   return (

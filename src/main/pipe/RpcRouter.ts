@@ -7,7 +7,7 @@ import type {
   RpcResponse,
 } from '../../shared/rpc';
 import { RetryableRpcError } from './RetryableRpcError';
-import { sanitizeClientDisplayName } from '../../shared/rpc';
+import { hostedBindingOf, isHostedCaller, sanitizeClientDisplayName } from '../../shared/rpc';
 import { check as enforcerCheck } from '../mcp/PermissionEnforcer';
 import { METHOD_CAPABILITY, isAlwaysEnforcedMethod, type RequiredCapability } from '../mcp/methodCapabilityMap';
 import { isLocalExternalWireContext } from '../mcp/rpcProvenance';
@@ -644,6 +644,13 @@ export class RpcRouter {
       }
       outcome = enforcerCheck({ method: 'fleet.triage', params: effectiveParams, ctx, trust, trustLookupFailed });
     }
+    // A bound UI plugin approved for agent.state.read.all may focus a pane in
+    // any local workspace (pane.rpc.ts). Decided here, from the trust record
+    // this dispatch just read, by the same check agent.state.all itself gets.
+    if (outcome.kind === 'allow' && request.method === 'pane.focus' && isHostedCaller(ctx) && hostedBindingOf(ctx)
+      && enforcerCheck({ method: 'agent.state.all', params: {}, ctx, trust, trustLookupFailed }).kind === 'allow') {
+      ctx.hostedAllWorkspaces = true;
+    }
     if (outcome.kind !== 'allow' && this.shadowSink) {
       try {
         this.shadowSink({
@@ -711,12 +718,12 @@ export class RpcRouter {
     try {
       const result = await handler(effectiveParams, ctx);
       // A plugin read must not return data after its trust changed mid-flight.
-      if (request.method === 'agent.state') {
+      if (request.method === 'agent.state' || request.method === 'agent.state.all') {
         const current = ctx.clientName && this.trustLookup ? await this.trustLookup(ctx.clientName) : undefined;
         if (effectiveParams.includeActivity === true && !current?.declaredCapabilities?.includes('terminal.read')) {
           return { id: request.id, ok: false, error: 'Activity permission changed' };
         }
-        const methods: RpcMethod[] = effectiveParams.includeActivity === true ? ['agent.state', 'fleet.triage'] : ['agent.state'];
+        const methods: RpcMethod[] = effectiveParams.includeActivity === true ? [request.method, 'fleet.triage'] : [request.method];
         for (const method of methods) {
           const check = enforcerCheck({ method, params: effectiveParams, ctx, trust: current });
           if (check.kind !== 'allow') return { id: request.id, ok: false, error: 'Agent state permission changed' };

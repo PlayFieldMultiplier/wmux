@@ -172,6 +172,7 @@ export const pl = {
   'plugins.page.cap.sidebar': "Dodaje panel do paska bocznego",
   'plugins.page.cap.statusbar': "Dodaje element do paska stanu",
   'plugins.page.cap.agentState': "Odczytuje nazwy agentów, etykiety paneli i stan",
+  'plugins.page.cap.agentStateAll': "Odczytuje nazwy agentów, etykiety paneli i stan we wszystkich obszarach roboczych",
   'plugins.page.cap.paneRead': "Odczytuje szczegóły paneli i przełącza na panel",
   'plugins.page.cap.terminalRead': "Odczytuje zawartość terminala",
   'plugins.page.cap.noTerminal': "Brak dostępu do zawartości terminala",

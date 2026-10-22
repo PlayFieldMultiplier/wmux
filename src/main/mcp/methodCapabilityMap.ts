@@ -77,6 +77,7 @@ export type RiskClass =
   | 'ui'               // plugin host UI contribution points (B-1)
   | 'notifications'    // terminal desktop-notification text (OSC 9/777/99)
   | 'agent-state'
+  | 'agent-state-all'  // the agent-state projection for every local workspace
   | 'internal';        // wmux.internal — never surfaced
 
 /**
@@ -115,7 +116,7 @@ export function resolveRequiredCapability(
  * and injects input into them, so an unapproved named client must never reach
  * it just because a build (or `mcp.mode: "shadow"`) runs the enforcer advisory.
  */
-const ALWAYS_ENFORCED_RISK_CLASSES: ReadonlySet<RiskClass> = new Set<RiskClass>(['computer', 'agent-state']);
+const ALWAYS_ENFORCED_RISK_CLASSES: ReadonlySet<RiskClass> = new Set<RiskClass>(['computer', 'agent-state', 'agent-state-all']);
 
 /** Whether a non-allow verdict on `method` is refused even in shadow mode. */
 export function isAlwaysEnforcedMethod(method: string): boolean {
@@ -208,6 +209,9 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   // for every pane, so it is terminal content, not a pane listing: a
   // third-party plugin needs the same grant input.readScreen does.
   'agent.state': { capability: 'agent.state.read', riskClass: 'agent-state' },
+  // The same projection for every local workspace. A separate grant: an
+  // `agent.state.read` approval stays bound to the host's workspace.
+  'agent.state.all': { capability: 'agent.state.read.all', riskClass: 'agent-state-all' },
   'fleet.triage': { capability: 'terminal.read', riskClass: 'terminal-content' },
   'pane.focus':  { capability: 'pane.read', riskClass: 'pane-lifecycle' },
   'pane.split':  { capability: 'pane.create', riskClass: 'pane-lifecycle' },
@@ -787,6 +791,7 @@ export const CAPABILITY_RISK_CLASS: Record<string, RiskClass> = {
   // renders real copy instead of fallback text.
   'ui.rail-page':       'ui',
   'agent.state.read':   'agent-state',
+  'agent.state.read.all': 'agent-state-all',
   'ui.sidebar':         'ui',
   'ui.statusbar':       'ui',
   'ui.pane-decoration': 'ui',
@@ -879,6 +884,7 @@ export const CAPABILITY_EFFECT: Record<string, 'read' | 'write'> = {
   // completeness test covers the whole vocabulary.
   'ui.rail-page':       'read',
   'agent.state.read':   'read',
+  'agent.state.read.all': 'read',
   'ui.sidebar':         'read',
   'ui.statusbar':       'read',
   'ui.pane-decoration': 'read',
@@ -915,6 +921,11 @@ export const RISK_CLASS_COPY: Record<RiskClass, RiskClassCopy> = {
     severity: 'caution',
     summary: 'Can read agent status in the current workspace',
     detail: 'Includes agent names, your pane labels and whether agents need attention. Labels may contain information you entered. Terminal content and activity require a separate terminal.read permission.',
+  },
+  'agent-state-all': {
+    severity: 'caution',
+    summary: 'Can read agent status in every workspace',
+    detail: 'The same agent names, pane labels and attention state, plus each workspace\'s name, for all local workspaces instead of only the current one. With pane.read it can also take you to an agent\'s pane in another workspace. Remote PCs are not included.',
   },
   'terminal-content': {
     severity: 'critical',

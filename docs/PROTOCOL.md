@@ -532,6 +532,8 @@ This document evolves alongside the implementation. Changes that affect the wire
 
 `agent.state` is available only through a bound UI-plugin host, with an
 `agent.state.read` grant. `includeActivity:true` additionally requires
-unrestricted `terminal.read`. It does not expose an external MCP/pipe method.
+unrestricted `terminal.read`. `agent.state.all` returns the same projection for
+every local workspace and requires its own `agent.state.read.all` grant.
+Neither exposes an external MCP/pipe method.
 The v1 bridge adds an optional `agent-state` replacement-snapshot envelope for
 opted-in rail pages. [Contract](api/ui-plugin-pages.md).

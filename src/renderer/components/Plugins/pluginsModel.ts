@@ -115,6 +115,7 @@ const CAPABILITY_LABEL_KEYS: Record<string, TranslationKey> = {
   'ui.sidebar': 'plugins.page.cap.sidebar',
   'ui.statusbar': 'plugins.page.cap.statusbar',
   'agent.state.read': 'plugins.page.cap.agentState',
+  'agent.state.read.all': 'plugins.page.cap.agentStateAll',
   'pane.read': 'plugins.page.cap.paneRead',
   'terminal.read': 'plugins.page.cap.terminalRead',
 };

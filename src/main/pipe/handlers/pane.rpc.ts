@@ -1,6 +1,6 @@
 import { isHostedCaller, hostedBindingOf } from '../../../shared/rpc';
 import { RetryableRpcError } from '../RetryableRpcError';
-import { parsePluginAgentSnapshot } from '../../../shared/pluginAgentState';
+import { parsePluginAgentSnapshot, parsePluginAllAgentSnapshot } from '../../../shared/pluginAgentState';
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import type { DaemonClient } from '../../DaemonClient';
@@ -309,6 +309,26 @@ export function registerPaneRpc(
     return parsePluginAgentSnapshot(raw, workspaceId, params.includeActivity === true);
   });
 
+  /**
+   * agent.state.all — the agent.state projection for every local workspace,
+   * for a bound UI plugin granted `agent.state.read.all` (RpcRouter checks the
+   * grant on every call, before and after this handler). No activity: that
+   * would need terminal.read for every workspace, and no caller needs it.
+   */
+  router.register('agent.state.all', async (params, ctx) => {
+    if (!isHostedCaller(ctx) || !hostedBindingOf(ctx)) throw new Error('Agent state requires a bound UI plugin');
+    if (params.includeActivity !== undefined) throw new Error('Activity is not available for all workspaces');
+    const raw = await sendToRenderer(getWindow, 'agent.state.all', {}, {
+      timeoutError: new RetryableRpcError('Agent state responder is not ready; retry the request'),
+    });
+    const failure = raw as { error?: unknown; retryable?: unknown } | null;
+    if (failure && typeof failure.error === 'string') {
+      if (failure.retryable === true) throw new RetryableRpcError(failure.error);
+      throw new Error(failure.error);
+    }
+    return parsePluginAllAgentSnapshot(raw);
+  });
+
   router.register('fleet.triage', async (params) => {
     // A malformed scope must not widen to the whole fleet: the renderer reads
     // a non-string workspaceId as "none given".
@@ -368,6 +388,13 @@ export function registerPaneRpc(
     }
     const confinement = paneConfinement('pane.focus', ctx);
     if ('reject' in confinement) return Promise.reject(confinement.reject);
+    // A bound UI plugin whose approval covers every workspace (RpcRouter sets
+    // hostedAllWorkspaces from the current trust record, never the request)
+    // may take the user to a pane in another local workspace. Focus only:
+    // close, stash and unstash stay confined. A commander is never widened.
+    if (ctx?.hostedAllWorkspaces === true && !ctx.commanderWorkspace && hostedBindingOf(ctx)) {
+      return sendToRenderer(getWindow, 'pane.focus', { id: params['id'], revealWorkspace: true });
+    }
     return sendToRenderer(getWindow, 'pane.focus', {
       id: params['id'],
       ...(confinement.confine ? { confineWorkspaceId: confinement.confine } : {}),

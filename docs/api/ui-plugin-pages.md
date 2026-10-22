@@ -37,6 +37,32 @@ terminals are excluded. Responses are bounded to 512 panes, 32 surfaces per
 pane, 512 Unicode characters per display string and 1 MiB total. Omission due
 to those limits sets `truncated:true`.
 
+## Every workspace
+
+`agent.state.all()` is the same projection for every local workspace. It
+requires its own grant, `agent.state.read.all`, which a plugin declares in
+addition to `agent.state.read`; approving `agent.state.read` alone never widens
+to other workspaces, and the approval prompt lists the new grant as its own
+row. The grant takes no path glob, is required even in shadow enforcement mode,
+and is checked on every read and again after it, so a revoked or denied plugin
+gets nothing more from the next read. Only a bound hosted UI plugin may call
+it, and it takes no params (`includeActivity` is refused: activity is never
+part of it).
+
+Response: `{workspaces, truncated}`. Each workspace is `{workspaceId, name,
+panes, truncated}`, in sidebar order, with panes exactly as in a single
+snapshot. `name` is the workspace's display name, clipped like every other
+string. Every local workspace is listed, including one with no agents; Bots
+workspaces and remote PCs are not. A workspace created or closed after the page
+opened is in, or out of, the next read. Responses are bounded to 128
+workspaces and 1 MiB in total; omitting whole workspaces sets the top-level
+`truncated`, omitting panes sets that workspace's.
+
+With this grant and `pane.read`, `pane.focus({id})` may name a pane in any
+local workspace the response lists: the host switches to that workspace and
+focuses the pane. Close, stash and unstash stay confined to the bound
+workspace.
+
 ## Snapshot events
 
 The opted-in rail frame receives an immediate read, then reads at most once
@@ -46,6 +72,12 @@ per second with one request in flight. Only changed snapshots are emitted:
 {v:1, id:null, kind:"agent-state", epoch, revision, workspaceId,
  status:"ready", snapshot}
 ```
+
+A page whose plugin declares an approved `agent.state.read.all` receives
+`allWorkspaces` (the `agent.state.all` response) instead of `snapshot`, and
+`workspaceId` is the workspace the host is showing. That stream reads
+`agent.state.all` and does not restart on a workspace switch; a switch alone
+emits a new revision with the new `workspaceId`.
 
 `reset` and `unavailable` statuses carry no snapshot. Consumers must discard
 old data on either. Epoch changes with the port or workspace; revision is
@@ -66,7 +98,8 @@ port, including after an internal page navigation. The host dispatches the v1
 `event.ports[0]`. This initialization event is synthetic; do not require
 `event.isTrusted`. If a page cannot initialize, reopen it to retry.
 
-`pane.focus({id})` uses its existing `pane.read` gate and workspace confinement.
+`pane.focus({id})` uses its existing `pane.read` gate and workspace confinement
+(widened by `agent.state.read.all` as described above).
 After a successful focus from the current rail page, the host returns to
 Workspaces. Responses from an earlier page/workspace lifetime do not navigate.
 The example performs this on a button click; approved plugin code can initiate

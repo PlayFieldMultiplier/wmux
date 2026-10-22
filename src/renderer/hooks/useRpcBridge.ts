@@ -1,4 +1,5 @@
-import { pluginAgentSnapshot } from '../plugins/pluginAgentSnapshot';
+import { pluginAgentSnapshot, pluginAllAgentSnapshot } from '../plugins/pluginAgentSnapshot';
+import { activatePaneTarget } from './useNotificationListener';
 import { isPhoneWorkspaceId, PHONE_WORKSPACE_REQUEST_LIMIT } from '../../shared/phoneWorkspaceRequests';
 import { useEffect } from 'react';
 import { useStore } from '../stores';
@@ -2051,6 +2052,11 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     return pluginAgentSnapshot(store, params.workspaceId, params.includeActivity === true);
   }
 
+  if (method === 'agent.state.all') {
+    // Every local workspace by design; takes no workspace or activity param.
+    return pluginAllAgentSnapshot(store);
+  }
+
   if (method === 'fleet.triage') {
     // The Fleet overlay's own board (selectFleetBoard), so an agent is told
     // exactly what the human sees. The whole fleet unless a workspaceId narrows
@@ -2193,6 +2199,20 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     const confine = readConfineWorkspaceId(params);
     if (confine && ownerWs.id !== confine) {
       return { error: `pane.focus: pane ${paneId} is outside the calling workspace` };
+    }
+    // `revealWorkspace` is stamped by MAIN, only for a UI plugin approved for
+    // agent.state.read.all (never caller-supplied): it may take the user to a
+    // pane in another local workspace, through the same jump Fleet uses. Only
+    // the workspaces that grant's snapshot covers: no bot worker, no remote PC.
+    // Every other caller stays non-yank (focusPaneSurface below).
+    if (params.revealWorkspace === true) {
+      if (isShadowWorkspaceId(ownerWs.id) || !ownerFleetState(store).workspaces.some((w) => w.id === ownerWs.id)) {
+        return { error: `pane.focus: pane ${paneId} is outside the calling workspace` };
+      }
+      const leaf = findPaneById(ownerWs.rootPane, paneId);
+      if (!leaf || leaf.type !== 'leaf') return { error: `pane.focus: pane ${paneId} is not a focusable leaf` };
+      activatePaneTarget(() => useStore.getState(), { workspaceId: ownerWs.id, paneId, surfaceId: leaf.activeSurfaceId });
+      return { ok: true };
     }
     const ok = store.focusPaneSurface(ownerWs.id, paneId);
     if (!ok) return { error: `pane.focus: pane ${paneId} is not a focusable leaf` };

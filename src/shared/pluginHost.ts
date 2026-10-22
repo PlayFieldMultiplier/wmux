@@ -13,7 +13,7 @@
 // docs/internal/fable-window-schema-freeze.md §4. Changes are additive-only;
 // consumers ignore unknown fields and unknown envelope kinds.
 
-import type { PluginAgentSnapshot } from './pluginAgentState';
+import type { PluginAgentSnapshot, PluginAllAgentSnapshot } from './pluginAgentState';
 import type { WmuxEvent } from './events';
 
 /** Owner-window IPC for validating and retiring sandboxed frame bridges. */
@@ -82,6 +82,12 @@ export interface BridgeAgentState {
   workspaceId: string | null;
   status: 'reset' | 'ready' | 'unavailable';
   snapshot?: PluginAgentSnapshot;
+  /**
+   * Additive: set INSTEAD of `snapshot` for a page approved for
+   * `agent.state.read.all` — every local workspace. `workspaceId` above stays
+   * the workspace the host is showing.
+   */
+  allWorkspaces?: PluginAllAgentSnapshot;
 }
 export type BridgeEnvelope = BridgeRequest | BridgeResponse | BridgeEvent | BridgeCommand | BridgeAgentState;
 

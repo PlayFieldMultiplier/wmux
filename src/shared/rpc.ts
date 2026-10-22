@@ -295,6 +295,15 @@ export interface RpcContext {
    */
   hostedWorkspace?: string | null;
   /**
+   * A hosted caller whose CURRENT trust record passes the `agent.state.all`
+   * check (an approved, unrestricted `agent.state.read.all`). Written only by
+   * RpcRouter, after its own trust lookup and only for a bound hosted caller;
+   * never from request JSON. Read by `pane.focus`, which then lets that plugin
+   * take the user to a pane in another local workspace instead of confining it
+   * to `hostedWorkspace`. Every other pane-addressed method stays confined.
+   */
+  hostedAllWorkspaces?: true;
+  /**
    * #922 PR-B — the workspace this caller CLAIMED, as resolved server-side from
    * the `workspaceToken` envelope field. Written only by `RpcRouter` from the
    * claim registry (`workspaceClaimTrust.ts`); a request envelope can supply
@@ -433,6 +442,8 @@ export type RpcMethod =
   | 'pane.resolveName'
   // The Fleet attention board (needs you / running / idle) as data.
   | 'agent.state'
+  // The same hosted-plugin projection, for every local workspace.
+  | 'agent.state.all'
   | 'fleet.triage'
   | 'pane.focus'
   | 'pane.split'
@@ -794,6 +805,7 @@ export const ALL_RPC_METHODS = [
   'pane.list',
   'pane.resolveName',
   'agent.state',
+  'agent.state.all',
   'fleet.triage',
   'pane.focus',
   'pane.split',

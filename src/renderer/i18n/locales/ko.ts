@@ -172,6 +172,7 @@ export const ko = {
   'plugins.page.cap.sidebar': "사이드바에 패널 추가",
   'plugins.page.cap.statusbar': "상태 표시줄에 항목 추가",
   'plugins.page.cap.agentState': "에이전트 이름, 판 이름표와 상태 읽기",
+  'plugins.page.cap.agentStateAll': "모든 워크스페이스의 에이전트 이름, 판 이름표와 상태 읽기",
   'plugins.page.cap.paneRead': "판 세부 정보 읽기와 판으로 이동",
   'plugins.page.cap.terminalRead': "터미널 내용 읽기",
   'plugins.page.cap.noTerminal': "터미널 내용에 접근하지 않음",

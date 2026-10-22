@@ -80,3 +80,12 @@ describe('pluginPermissionLines', () => {
     expect(pluginPermissionLines(['custom.thing'])[0]).toEqual({ capability: 'custom.thing', labelKey: null, granted: true });
   });
 });
+
+describe('pluginPermissionLines: every-workspace agent state', () => {
+  it('names agent.state.read.all on its own line, apart from agent.state.read', () => {
+    expect(pluginPermissionLines(['ui.rail-page', 'agent.state.read', 'agent.state.read.all', 'pane.read']).slice(1, 3)).toEqual([
+      { capability: 'agent.state.read', labelKey: 'plugins.page.cap.agentState', granted: true },
+      { capability: 'agent.state.read.all', labelKey: 'plugins.page.cap.agentStateAll', granted: true },
+    ]);
+  });
+});

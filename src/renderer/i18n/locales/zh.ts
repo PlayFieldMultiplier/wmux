@@ -172,6 +172,7 @@ export const zh = {
   'plugins.page.cap.sidebar': "在边栏添加面板",
   'plugins.page.cap.statusbar': "在状态栏添加项目",
   'plugins.page.cap.agentState': "读取智能体名称、窗格标签和状态",
+  'plugins.page.cap.agentStateAll': "读取所有工作区的智能体名称、窗格标签和状态",
   'plugins.page.cap.paneRead': "读取窗格详情并切换到窗格",
   'plugins.page.cap.terminalRead': "读取终端内容",
   'plugins.page.cap.noTerminal': "无法访问终端内容",

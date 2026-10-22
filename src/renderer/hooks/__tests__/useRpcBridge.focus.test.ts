@@ -85,6 +85,17 @@ describe('useRpcBridge — focus-path workspace scoping (#236 follow-up)', () =>
       // focusPaneSurface returns false for a branch/missing id → surfaced as error.
       expect(b).toMatch(/if \(!ok\) return \{ error:/);
     });
+
+    it('switches workspace only for the main-stamped revealWorkspace, through the Fleet jump, within the owner\'s local workspaces', () => {
+      const b = block();
+      const reveal = b.match(/if \(params\.revealWorkspace === true\) \{[\s\S]*?\n {4}\}/)?.[0] ?? '';
+      expect(reveal).toMatch(/activatePaneTarget\(\(\) => useStore\.getState\(\), \{ workspaceId: ownerWs\.id, paneId, surfaceId: leaf\.activeSurfaceId \}\)/);
+      expect(reveal).toMatch(/isShadowWorkspaceId\(ownerWs\.id\) \|\| !ownerFleetState\(store\)\.workspaces\.some/);
+      // The confinement check still runs first, and no other path yanks.
+      expect(b.indexOf('readConfineWorkspaceId(params)')).toBeLessThan(b.indexOf('params.revealWorkspace === true'));
+      expect(b.match(/activatePaneTarget\(/g)).toHaveLength(1);
+      expect(b.match(/setActiveWorkspace/g)).toBeNull();
+    });
   });
 
   describe('surface.focus', () => {
