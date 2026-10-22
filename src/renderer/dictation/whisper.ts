@@ -1,9 +1,12 @@
 // Whisper speech-to-text on onnxruntime-web, without a model framework: the
 // log-mel features, a greedy decode over the merged decoder with its KV
-// cache, and the byte-level BPE decode. Written for wmux against the model
-// card's numbers (onnx-community/whisper-base: 80 mel bins, n_fft 400, hop
-// 160, 30 s windows; 6 decoder layers, 8 heads of 64). Pure apart from the
-// `ort` sessions it is handed, so it runs in a worker and under Node alike.
+// cache, and the byte-level BPE decode. The approach mirrors OpenAI Whisper
+// (https://github.com/openai/whisper, MIT, Copyright (c) 2022 OpenAI), and
+// was reimplemented here against the model card's numbers
+// (onnx-community/whisper-base: 80 mel bins, n_fft 400, hop 160, 30 s
+// windows; 6 decoder layers, 8 heads of 64); no code was copied. See
+// THIRD_PARTY_NOTICES. Pure apart from the `ort` sessions it is handed, so
+// it runs in a worker and under Node alike.
 
 import type * as Ort from 'onnxruntime-web';
 

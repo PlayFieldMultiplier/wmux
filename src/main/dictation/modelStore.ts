@@ -14,7 +14,6 @@ import {
   DICTATION_MODEL_BYTES,
   dictationModelUrl,
   type DictationAssets,
-  type DictationModelFile,
   type DictationModelState,
 } from '../../shared/dictation';
 
@@ -26,17 +25,29 @@ export interface ModelStoreOptions {
   /** onnxruntime-web's .wasm as this build ships it. */
   wasmPath: () => string;
   onState?: (state: DictationModelState) => void;
+  /** The files to fetch (tests pass small ones). */
+  files?: readonly ModelFile[];
 }
 
 const PROGRESS_MS = 250;
+
+interface ModelFile {
+  path: string;
+  size: number;
+  sha256: string;
+}
 
 export class DictationModelStore {
   private state: DictationModelState;
   private running: AbortController | null = null;
   /** Files whose hash was checked since this process started. */
   private readonly verified = new Set<string>();
+  private readonly files: readonly ModelFile[];
+  private readonly total: number;
 
   constructor(private readonly opts: ModelStoreOptions) {
+    this.files = opts.files ?? DICTATION_MODEL.files;
+    this.total = opts.files ? opts.files.reduce((sum, f) => sum + f.size, 0) : DICTATION_MODEL_BYTES;
     this.state = this.complete() ? { state: 'ready' } : { state: 'absent' };
   }
 
@@ -55,7 +66,7 @@ export class DictationModelStore {
 
   /** Every file is in place at its size (its hash is checked on load). */
   private complete(): boolean {
-    return DICTATION_MODEL.files.every((f) => {
+    return this.files.every((f) => {
       try {
         return fs.statSync(path.join(this.dir(), f.path)).size === f.size;
       } catch {
@@ -75,14 +86,14 @@ export class DictationModelStore {
     const abort = new AbortController();
     this.running = abort;
     try {
-      let received = DICTATION_MODEL.files.reduce((sum, f) => sum + (this.present(f) ? f.size : 0), 0);
-      this.set({ state: 'downloading', received, total: DICTATION_MODEL_BYTES });
-      for (const file of DICTATION_MODEL.files) {
+      let received = this.files.reduce((sum, f) => sum + (this.present(f) ? f.size : 0), 0);
+      this.set({ state: 'downloading', received, total: this.total });
+      for (const file of this.files) {
         if (this.present(file)) continue;
         const base = received;
         await this.fetchFile(file, abort.signal, (bytes) => {
           received = base + bytes;
-          this.set({ state: 'downloading', received, total: DICTATION_MODEL_BYTES });
+          this.set({ state: 'downloading', received, total: this.total });
         });
         received = base + file.size;
       }
@@ -106,7 +117,7 @@ export class DictationModelStore {
     });
   }
 
-  private present(file: DictationModelFile): boolean {
+  private present(file: ModelFile): boolean {
     try {
       return fs.statSync(path.join(this.dir(), file.path)).size === file.size;
     } catch {
@@ -114,10 +125,11 @@ export class DictationModelStore {
     }
   }
 
-  private async fetchFile(file: DictationModelFile, signal: AbortSignal, progress: (bytes: number) => void): Promise<void> {
+  private async fetchFile(file: ModelFile, signal: AbortSignal, progress: (bytes: number) => void): Promise<void> {
     const target = path.join(this.dir(), file.path);
     const part = `${target}.part`;
     fs.mkdirSync(path.dirname(target), { recursive: true });
+    signal.throwIfAborted();
     const res = await this.opts.fetch(dictationModelUrl(file), { signal });
     if (!res.ok || !res.body) throw new Error(`${file.path}: HTTP ${res.status}`);
     const hash = createHash('sha256');
@@ -129,6 +141,7 @@ export class DictationModelStore {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        signal.throwIfAborted();
         bytes += value.byteLength;
         if (bytes > file.size) throw new Error(`${file.path}: larger than ${file.size} bytes`);
         hash.update(value);
@@ -158,7 +171,7 @@ export class DictationModelStore {
    *  A file that changed on disk is deleted and the model reads absent. */
   loadAssets(): DictationAssets | null {
     if (!this.complete()) return null;
-    const read = (file: DictationModelFile): Buffer | null => {
+    const read = (file: ModelFile): Buffer | null => {
       const full = path.join(this.dir(), file.path);
       const data = fs.readFileSync(full);
       if (!this.verified.has(file.path)) {
@@ -170,7 +183,7 @@ export class DictationModelStore {
       }
       return data;
     };
-    const byPath = (p: string) => DICTATION_MODEL.files.find((f) => f.path === p) as DictationModelFile;
+    const byPath = (p: string) => this.files.find((f) => f.path === p) as ModelFile;
     const encoder = read(byPath('onnx/encoder_model_quantized.onnx'));
     const decoder = read(byPath('onnx/decoder_model_merged_quantized.onnx'));
     const tokenizer = read(byPath('tokenizer.json'));

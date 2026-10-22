@@ -29,7 +29,7 @@ export type DictationModelFile = (typeof DICTATION_MODEL.files)[number];
 export const DICTATION_MODEL_BYTES = DICTATION_MODEL.files.reduce((sum, f) => sum + f.size, 0);
 
 /** Where a model file is downloaded from. */
-export function dictationModelUrl(file: Pick<DictationModelFile, 'path'>): string {
+export function dictationModelUrl(file: { path: string }): string {
   return `https://${DICTATION_MODEL.host}/${DICTATION_MODEL.repo}/resolve/${DICTATION_MODEL.revision}/${file.path}`;
 }
 
