@@ -396,17 +396,25 @@ describe('one invite for A2A and the workspaces', () => {
 });
 
 describe('a connection over the tailnet fails fast', () => {
-  const checklist = (reason: 'not-running' | 'unreadable') => ({
-    items: [
-      { id: 'installed', state: 'pass' },
-      { id: 'signed-in', state: 'fail', reason, fix: 'open-app' },
-      { id: 'self', state: 'unchecked' },
-      { id: 'peer', state: 'unchecked' },
-    ],
+  const checklist = (reason: 'not-running' | 'unreadable' | 'not-installed') => ({
+    items: reason === 'not-installed'
+      ? [
+        { id: 'installed', state: 'fail', reason, fix: 'download' },
+        { id: 'signed-in', state: 'unchecked' },
+        { id: 'self', state: 'unchecked' },
+        { id: 'peer', state: 'unchecked' },
+      ]
+      : [
+        { id: 'installed', state: 'pass' },
+        { id: 'signed-in', state: 'fail', reason, fix: 'open-app' },
+        { id: 'self', state: 'unchecked' },
+        { id: 'peer', state: 'unchecked' },
+      ],
     ok: false,
   });
-  async function connectWith(reason: 'not-running' | 'unreadable') {
-    stub(LINK, false);
+  async function connectWith(reason: 'not-running' | 'unreadable' | 'not-installed', link = LINK, pair?: unknown) {
+    stub(link, false);
+    if (pair) remote.hostsPair.mockResolvedValue(pair);
     const web = {
       tailscaleCheck: vi.fn(async () => checklist(reason)),
       tailscaleOpen: vi.fn(async () => ({ ok: true, opened: 'app' })),
@@ -435,5 +443,20 @@ describe('a connection over the tailnet fails fast', () => {
     expect(web.tailscaleCheck).toHaveBeenCalled();
     expect(remote.hostsPair).toHaveBeenCalledWith('https://office.ts.net', 'ABCD2345');
     expect(q('remote-connect-tailscale-fix')).toBeNull();
+  });
+
+  it('a 100.64/10 address Tailscale may not own (another overlay) is still tried, and the reason is added only when it is not reached', async () => {
+    const link = 'https://100.92.4.7:7681/pair#wmux-desktop-code=ABCD2345';
+    let web = await connectWith('not-installed', link);
+    expect(web.tailscaleCheck).toHaveBeenCalledWith('100.92.4.7');
+    expect(remote.hostsPair).toHaveBeenCalledWith('https://100.92.4.7:7681', 'ABCD2345');
+    expect(q('remote-connect-message')?.textContent).not.toMatch(/Tailscale/);
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    web = await connectWith('not-installed', link, { ok: false, reason: 'unreachable' });
+    expect(web.tailscaleCheck).toHaveBeenCalledWith('100.92.4.7');
+    expect(remote.hostsPair).toHaveBeenCalled();
+    expect(q('remote-connect-message')?.textContent).toMatch(/Tailscale isn.t installed/);
   });
 });

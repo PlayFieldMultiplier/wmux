@@ -9,7 +9,6 @@ import { useStore } from '../../stores';
 import {
   A2A_DROP_GRACE_MS,
   ConnectionDropWatch,
-  SHARE_DROP_GRACE_MS,
   useConnectionDropNotice,
 } from '../useConnectionDropNotice';
 import type { A2aRemoteHostStatus } from '../../../shared/rpc';
@@ -72,10 +71,12 @@ function a2a(state: A2aRemoteHostStatus['state'], address = '100.101.12.4') {
     loaded: true,
   });
 }
-function share(status: 'reachable' | 'unreachable') {
+/** A share host's poll result; `failedTicks` counts the failed polls in a row. */
+function share(status: 'reachable' | 'unreachable', failedTicks = 0) {
   useStore.setState({
     remoteWorkspaces: [{ key: `${SHARE}:w`, hostId: SHARE, hostLabel: 'office', workspaceId: 'w', name: 'api', panes: [] } as never],
     pcRailHostStatus: { [SHARE]: status },
+    pcRailFeeds: { [SHARE]: { workspaces: [], fetchedAt: null, ...(failedTicks ? { failedTicks } : {}) } as never },
   });
 }
 const toasts = () => useStore.getState().toasts;
@@ -92,7 +93,7 @@ beforeEach(() => {
     web: { tailscaleCheck, tailscaleOpen },
     remote: { hostsList: vi.fn(async () => [{ id: SHARE, label: 'office', origin: 'https://office.tail1.ts.net:7681', addedAt: 1 }]) },
   });
-  useStore.setState({ toasts: [], remoteWorkspaces: [], pcRailHostStatus: {}, pcRailHosts: [] });
+  useStore.setState({ toasts: [], remoteWorkspaces: [], pcRailHostStatus: {}, pcRailHosts: [], pcRailFeeds: {} });
   useStore.getState().setA2aRemote({ hosts: [], links: [], joined: [], loaded: false });
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -163,17 +164,38 @@ describe('useConnectionDropNotice', () => {
     expect(toasts()).toHaveLength(0);
   });
 
-  it('a workspace share: one failed poll healed by the 20 s retry is a blip; staying down past 25 s is reported', async () => {
+  it('does not blame Tailscale for a tailnet-range address Tailscale does not list', async () => {
+    tailscaleCheck.mockImplementation(async () => ({
+      items: [
+        { id: 'installed', state: 'pass' },
+        { id: 'signed-in', state: 'pass' },
+        { id: 'self', state: 'pass' },
+        { id: 'peer', state: 'fail', reason: 'no-peer', fix: 'peer-help' },
+      ],
+      ok: false,
+    }));
+    a2a('connected', '100.92.4.7');
+    await mount();
+    await act(async () => { a2a('disconnected', '100.92.4.7'); });
+    await advance(A2A_DROP_GRACE_MS + 2_000);
+    expect(toasts()).toHaveLength(1);
+    expect(toasts()[0].message).not.toMatch(/tailnet|Tailscale/);
+  });
+
+  it('a workspace share: one failed poll (even a minute-long one after an error answer) is a blip; a second in a row is reported', async () => {
     share('reachable');
     await mount();
-    await act(async () => { share('unreachable'); });
-    await advance(20_000);
+    await act(async () => { share('unreachable', 1); });
+    await advance(60_000);
     await act(async () => { share('reachable'); });
     await advance(60_000);
     expect(toasts()).toHaveLength(0);
 
-    await act(async () => { share('unreachable'); });
-    await advance(SHARE_DROP_GRACE_MS + 2_000);
+    await act(async () => { share('unreachable', 1); });
+    await advance(20_000);
+    expect(toasts()).toHaveLength(0);
+    await act(async () => { share('unreachable', 2); });
+    await advance(2_000);
     expect(toasts()).toHaveLength(1);
     expect(toasts()[0].message).toMatch(/office/);
     expect(tailscaleCheck).toHaveBeenCalledWith('office.tail1.ts.net');

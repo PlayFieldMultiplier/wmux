@@ -4693,7 +4693,7 @@ export const ko = {
   'tailscale.ready': "준비됨 · 다른 기기 {count}대 온라인",
   'tailscale.readyOne': "준비됨 · 다른 기기 1대 온라인",
   'tailscale.check.installed': "Tailscale 설치됨",
-  'tailscale.check.signed-in': "로그인됨",
+  'tailscale.check.signed-in': "실행 중이고 로그인됨",
   'tailscale.check.self': "이 PC가 tailnet에 있음",
   'tailscale.check.peer': "다른 PC나 휴대폰이 보임",
   'tailscale.state.pass': "통과",

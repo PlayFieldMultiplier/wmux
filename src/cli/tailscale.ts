@@ -710,7 +710,9 @@ export async function checkTailscale(opts: {
   const exec = opts.exec ?? (execFileAsync as unknown as TailscaleExec);
   let stdout: string;
   try {
-    stdout = (await runTailscale(exec, ['status', '--json'], opts.signal)).stdout;
+    // A CLI whose own daemon is not running (a Homebrew `tailscale` beside a
+    // working app) says nothing about the app's: ask the next one.
+    stdout = (await runTailscale(exec, ['status', '--json'], opts.signal, (err) => classifyStatusError(err) === 'not-running')).stdout;
   } catch (err) {
     return classifyTailscaleChecklist({ error: err }, opts.peer);
   }
@@ -746,8 +748,12 @@ async function runTailscale(
   exec: TailscaleExec,
   args: string[],
   signal?: AbortSignal,
+  /** A real failure that is still worth asking the next candidate about. */
+  tryNextOn?: (err: unknown) => boolean,
 ): Promise<{ stdout: string; stderr: string }> {
   let lastErr: unknown = new Error('tailscale not found');
+  /** The first real failure, which is what to report when no later candidate does better. */
+  let firstReal: unknown = null;
   for (const bin of tailscaleCandidates()) {
     try {
       return await exec(bin, args, {
@@ -759,12 +765,16 @@ async function runTailscale(
       });
     } catch (err) {
       // Only a missing binary is worth trying the next candidate for; a real
-      // failure (bad flags, not logged in) must surface as itself.
-      if (!isEnoent(err)) throw err;
+      // failure (bad flags, not logged in) must surface as itself, unless the
+      // caller says this one is worth another candidate.
+      if (!isEnoent(err)) {
+        if (!tryNextOn?.(err) || signal?.aborted) throw err;
+        firstReal ??= err;
+      }
       lastErr = err;
     }
   }
-  throw lastErr;
+  throw firstReal ?? lastErr;
 }
 
 function isEnoent(err: unknown): boolean {

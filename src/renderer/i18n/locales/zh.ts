@@ -4290,7 +4290,7 @@ export const zh = {
   'tailscale.ready': "就绪 · {count} 台其他设备在线",
   'tailscale.readyOne': "就绪 · 1 台其他设备在线",
   'tailscale.check.installed': "已安装 Tailscale",
-  'tailscale.check.signed-in': "已登录",
+  'tailscale.check.signed-in': "已运行并登录",
   'tailscale.check.self': "本机已在 tailnet 上",
   'tailscale.check.peer': "可以看到你的另一台电脑或手机",
   'tailscale.state.pass': "通过",

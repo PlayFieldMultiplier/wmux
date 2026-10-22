@@ -114,10 +114,11 @@ describe('which connections a failed check holds back', () => {
   it('the pre-connect check every pairing form runs: LAN hosts are never checked, a tailnet host with Tailscale off is held', async () => {
     const check = vi.fn(async () => list(1, 'not-running', 'open-app'));
     vi.stubGlobal('electronAPI', { web: { tailscaleCheck: check } });
-    expect(await tailnetPrecheck('192.168.0.12')).toBeNull();
-    expect(await tailnetPrecheck(null)).toBeNull();
+    const nothing = { held: null, ifUnreachable: null };
+    expect(await tailnetPrecheck('192.168.0.12')).toEqual(nothing);
+    expect(await tailnetPrecheck(null)).toEqual(nothing);
     expect(check).not.toHaveBeenCalled();
-    const held = await tailnetPrecheck('office.tail1.ts.net');
+    const { held } = await tailnetPrecheck('office.tail1.ts.net');
     expect(check).toHaveBeenCalledWith('office.tail1.ts.net');
     expect(held).toMatchObject({ fix: 'open-app' });
     expect(held?.text).toMatch(/Tailscale is off/);

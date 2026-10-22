@@ -13,9 +13,9 @@ import { FOCUS_RING } from '../focusRing';
 import { IconCheck, IconPlus, IconX } from '../icons';
 import RemoteRepairNotice from '../Remote/RemoteRepairNotice';
 import { TailscaleFixButton } from '../Remote/TailscaleChecklist';
-import { hostOfUrl, tailnetPrecheck } from '../Remote/tailnetCheck';
+import { hostOfUrl, tailnetPrecheck, withTailnetNote } from '../Remote/tailnetCheck';
 import type { TailscaleFix } from '../../../shared/web';
-import { remoteAttachmentKey } from '../../../shared/remoteHosts';
+import { HOST_UNREACHABLE_ERROR, remoteAttachmentKey } from '../../../shared/remoteHosts';
 import type { PairFailureReason, RemoteHostPublic, RemoteWorkspaceSummary } from '../../../shared/remoteHosts';
 
 type AddHostMode = 'pair' | 'url';
@@ -198,11 +198,12 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
     setAddError(null);
     setTailscaleFix(null);
     try {
-      // An address on the tailnet with Tailscale not carrying it: say so now.
-      const held = await tailnetPrecheck(hostOfUrl(addUrl.trim()));
-      if (held) {
-        setAddError(held.text);
-        setTailscaleFix(held.fix ?? null);
+      // An address surely on the tailnet with Tailscale not carrying it: say
+      // so now. One Tailscale may not own: say it only if the PC is not reached.
+      const tailnet = await tailnetPrecheck(hostOfUrl(addUrl.trim()));
+      if (tailnet.held) {
+        setAddError(tailnet.held.text);
+        setTailscaleFix(tailnet.held.fix ?? null);
         return;
       }
       const res = await remote.hostsAdd(addUrl.trim(), addLabel.trim() || undefined);
@@ -212,7 +213,9 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
         await refreshHosts();
         autoSelect(res.host.id);
       } else {
-        setAddError(res.error);
+        const note = res.error === HOST_UNREACHABLE_ERROR ? tailnet.ifUnreachable : null;
+        setAddError(withTailnetNote(res.error, note));
+        setTailscaleFix(note?.fix ?? null);
       }
     } catch {
       // An IPC rejection (not the {ok:false} error-result path) must still
@@ -235,10 +238,10 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
     const replacing = repairTarget;
     setTailscaleFix(null);
     try {
-      const held = await tailnetPrecheck(hostOfUrl(pairOrigin.trim()));
-      if (held) {
-        setPairError(held.text);
-        setTailscaleFix(held.fix ?? null);
+      const tailnet = await tailnetPrecheck(hostOfUrl(pairOrigin.trim()));
+      if (tailnet.held) {
+        setPairError(tailnet.held.text);
+        setTailscaleFix(tailnet.held.fix ?? null);
         return;
       }
       const res = await remote.hostsPair(
@@ -260,7 +263,9 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
           autoSelect(res.host.id);
         }
       } else {
-        setPairError(pairReasonMessage(t, res.reason, res.attemptsLeft));
+        const note = res.reason === 'unreachable' ? tailnet.ifUnreachable : null;
+        setPairError(withTailnetNote(pairReasonMessage(t, res.reason, res.attemptsLeft), note));
+        setTailscaleFix(note?.fix ?? null);
       }
     } catch {
       // An IPC rejection (not the {ok:false} error-result path) must still

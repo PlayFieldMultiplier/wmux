@@ -8,10 +8,10 @@ import Button from '../ui/Button';
 import Input from '../ui/Input';
 import { pairReasonMessage } from '../Sidebar/AttachRemoteModal';
 import { TailscaleFixButton } from '../Remote/TailscaleChecklist';
-import { hostOfUrl, tailnetPrecheck } from '../Remote/tailnetCheck';
+import { hostOfUrl, tailnetPrecheck, withTailnetNote, type TailnetNotice } from '../Remote/tailnetCheck';
 import type { TailscaleFix } from '../../../shared/web';
 import { maskPairInput, parseRemotePairInput, type RemotePairInputError } from '../../../shared/remotePairInput';
-import type { RemoteHostPublic, RemoteHostStatus } from '../../../shared/remoteHosts';
+import { HOST_UNREACHABLE_ERROR, type RemoteHostPublic, type RemoteHostStatus } from '../../../shared/remoteHosts';
 
 /**
  * The Remote hub's "Other computers": this machine → the hosts it has paired
@@ -186,12 +186,17 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
     setError(null);
     const replacing = repairTarget;
     try {
-      // An address on the tailnet with Tailscale not carrying it: say so now.
-      const held = await tailnetPrecheck(hostOfUrl(parsed.origin));
-      if (held) {
-        if (mounted.current) { setError(held.text); setTailscaleFix(held.fix ?? null); }
+      // An address surely on the tailnet with Tailscale not carrying it: say
+      // so now. One Tailscale may not own: say it only if the PC is not reached.
+      const tailnet = await tailnetPrecheck(hostOfUrl(parsed.origin));
+      if (tailnet.held) {
+        if (mounted.current) { setError(tailnet.held.text); setTailscaleFix(tailnet.held.fix ?? null); }
         return;
       }
+      const unreachable = (line: string, note: TailnetNotice | null = tailnet.ifUnreachable): void => {
+        setError(withTailnetNote(line, note));
+        setTailscaleFix(note?.fix ?? null);
+      };
       if (parsed.kind === 'pair') {
         const res = await remote.hostsPair(
           parsed.origin,
@@ -201,7 +206,7 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
         );
         if (!mounted.current) return;
         if (!res.ok) {
-          setError(pairReasonMessage(t, res.reason, res.attemptsLeft));
+          unreachable(pairReasonMessage(t, res.reason, res.attemptsLeft), res.reason === 'unreachable' ? tailnet.ifUnreachable : null);
           return;
         }
         if (replacing) setRemoteHostAuthRejected(res.host.id, false);
@@ -209,7 +214,7 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
         const res = await remote.hostsAdd(parsed.url);
         if (!mounted.current) return;
         if (!res.ok) {
-          setError(res.error);
+          unreachable(res.error, res.error === HOST_UNREACHABLE_ERROR ? tailnet.ifUnreachable : null);
           return;
         }
       }

@@ -8,15 +8,31 @@ import { t } from '../../i18n';
 //
 // The checks themselves run in main (`web.tailscaleCheck`, one read-only
 // `tailscale status --json`); this module only decides what a connection does
-// with the answer. A connection is held back only when its address is on the
-// tailnet AND a check failed for a reason a person can fix. "Could not read
-// the status" (or a missing bridge) never blocks: the connection then tries
-// exactly as it did before.
+// with the answer. A connection is held back only when its address is surely
+// a Tailscale one AND a check failed for a reason a person can fix:
+//
+//   *.ts.net name             always Tailscale's
+//   100.64.0.0/10 address     Tailscale's only when its status lists it as a
+//                             peer. Other overlays (and some LANs) use the
+//                             same range, so any other such address is tried,
+//                             and the Tailscale reason is added only if the
+//                             connection then cannot reach the other PC.
+//
+// "Could not read the status", this PC being offline from Tailscale's control
+// server (known peers still work), or a missing bridge never block: the
+// connection then tries exactly as it did before.
 
-/** A MagicDNS name or a tailnet (100.64.0.0/10) address. */
+const normalizeHost = (host: string): string => host.trim().replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+
+/** A MagicDNS name or an address in the tailnet range (100.64.0.0/10), which other overlays share. */
 export function isTailnetHost(host: string): boolean {
-  const h = host.trim().replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+  const h = normalizeHost(host);
   return isTailnetIpv4(h) || h.endsWith('.ts.net');
+}
+
+/** A MagicDNS name: only Tailscale hands these out. */
+export function isTailnetName(host: string): boolean {
+  return normalizeHost(host).endsWith('.ts.net');
 }
 
 /** The host of an origin or URL, or '' when it does not parse. */
@@ -52,12 +68,49 @@ export function failedCheck(list: TailscaleChecklist | null): TailscaleCheckItem
 }
 
 /**
- * The failure that should stop a connection before it starts: any failed
- * check except an unreadable status, which says nothing either way.
+ * The failure that can explain a connection not getting through: any failed
+ * check except an unreadable status, which says nothing either way, and this
+ * PC being offline from Tailscale's control server, which still carries
+ * traffic to the peers it knows.
  */
 export function blockingFailure(list: TailscaleChecklist | null): TailscaleCheckItem | null {
   const item = failedCheck(list);
-  return item && item.reason !== 'unreadable' ? item : null;
+  return item && item.reason !== 'unreadable' && item.reason !== 'offline' ? item : null;
+}
+
+export interface TailnetNotice {
+  text: string;
+  fix?: TailscaleFix;
+}
+
+export interface TailnetVerdict {
+  /** Stop before connecting: the address is surely Tailscale's and Tailscale cannot carry it. */
+  held: TailnetNotice | null;
+  /** Add to the error when the connection then cannot reach the other PC. */
+  ifUnreachable: TailnetNotice | null;
+}
+
+const NOTHING: TailnetVerdict = { held: null, ifUnreachable: null };
+
+/** What Tailscale's state means for a connection to `host` (see the table at the top). */
+export function judgeTailnet(host: string, list: TailscaleChecklist | null): TailnetVerdict {
+  const failed = blockingFailure(list);
+  if (!failed || !isTailnetHost(host)) return NOTHING;
+  const named = isTailnetName(host);
+  // The status found no device with this address: not a Tailscale one.
+  if (!named && failed.reason === 'no-peer') return NOTHING;
+  const note: TailnetNotice = { text: describeTailnetFailure(failed, host), ...(failed.fix ? { fix: failed.fix } : {}) };
+  // A peer-offline match means the status itself lists the address.
+  const sure = named || failed.reason === 'peer-offline';
+  return {
+    held: sure ? { ...note, text: `${note.text} ${t('tailscale.notTried')}` } : null,
+    ifUnreachable: note,
+  };
+}
+
+/** `text` with the Tailscale reason after it, when there is one. */
+export function withTailnetNote(text: string, note: TailnetNotice | null): string {
+  return note ? `${text} ${note.text}` : text;
 }
 
 /**
@@ -87,17 +140,13 @@ export function fixForProblem(problem: TailscaleProblem | string | undefined): T
 }
 
 /**
- * The pre-connect check every entry point runs on a tailnet host: null to go
- * ahead, else the sentence to show at once and the one button that fixes it.
+ * The pre-connect check every entry point runs on a tailnet-range host: what
+ * to show at once instead of connecting, and what to add if the connection
+ * then fails to reach the other PC. One status read; none for other hosts.
  */
-export async function tailnetPrecheck(host: string | null): Promise<{ text: string; fix?: TailscaleFix } | null> {
-  if (!host || !isTailnetHost(host)) return null;
-  const blocked = blockingFailure(await readTailscale(host));
-  if (!blocked) return null;
-  return {
-    text: `${describeTailnetFailure(blocked, host)} ${t('tailscale.notTried')}`,
-    ...(blocked.fix ? { fix: blocked.fix } : {}),
-  };
+export async function tailnetPrecheck(host: string | null): Promise<TailnetVerdict> {
+  if (!host || !isTailnetHost(host)) return NOTHING;
+  return judgeTailnet(host, await readTailscale(host));
 }
 
 /** Ask main for the checklist; null when the bridge is missing or the call failed. */

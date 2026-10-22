@@ -5179,7 +5179,7 @@ export const en = {
   'tailscale.ready': "Ready · {count} other devices online",
   'tailscale.readyOne': "Ready · 1 other device online",
   'tailscale.check.installed': "Tailscale installed",
-  'tailscale.check.signed-in': "Signed in",
+  'tailscale.check.signed-in': "Running and signed in",
   'tailscale.check.self': "This PC on the tailnet",
   'tailscale.check.peer': "Your other PC or phone visible",
   'tailscale.state.pass': "passed",

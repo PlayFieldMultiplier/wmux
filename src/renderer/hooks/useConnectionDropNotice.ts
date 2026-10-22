@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { useStore, type StoreState } from '../stores';
 import { t } from '../i18n';
 import type { TailscaleChecklist } from '../../shared/web';
-import { blockingFailure, describeTailnetFailure, hostOfUrl, isTailnetHost, readTailscale } from '../components/Remote/tailnetCheck';
+import { A2A_REDIAL_BACKOFF_MIN_MS } from '../../shared/a2aRemote';
+import { blockingFailure, describeTailnetFailure, hostOfUrl, isTailnetHost, judgeTailnet, readTailscale } from '../components/Remote/tailnetCheck';
 
 // ─── Drop notice ─────────────────────────────────────────────────────────────
 //
@@ -17,22 +18,29 @@ import { blockingFailure, describeTailnetFailure, hostOfUrl, isTailnetHost, read
 //
 // A drop is reported only once it has lasted its source's grace window:
 //
-//   A2A stream  12 s  A closed stream is seen at once and a silent one after
-//                     the daemon's 45 s liveness; the joiner redials after
-//                     1, 2, 4 and 8 s, so a blip is back inside 12 s, and the
-//                     slowest real drop is reported by 45 + 12 = 57 s.
-//   share       25 s  The host poll runs every 10 s with a 10 s request
-//                     timeout, and retries a failure 20 s later. 25 s lets
-//                     that one retry heal a blip; the slowest real drop is
-//                     seen at 20 s and reported by 45 s.
+//   A2A stream  16 s  A closed stream is seen at once and a silent one after
+//                     40 s with no sign of the other end, on either side (the
+//                     server side needs a joiner that pings, `stream-ping.1`).
+//                     The joiner redials 1, 3, 7 and 15 s after a drop, so a
+//                     blip is back by the fourth redial plus a second to
+//                     connect, and the slowest real drop is reported by
+//                     40 + 16 = 56 s.
+//   share       2 failed polls in a row, no further wait. The host poll
+//                     runs every 10 s with a 10 s request timeout and retries
+//                     a failure 20 s later (60 s after an error answer, which
+//                     came from a host that is up). One failure is a blip;
+//                     the second is reported at once, by 50 s for a host that
+//                     stopped answering right after a good poll.
 //
 // The Tailscale check that says WHY starts at the drop (one read-only status
 // read, nothing on the steady state), so its answer is in by the time the
 // grace ends. Tailscale is named only when the connection's own address is on
 // the tailnet; otherwise the toast just says the PC was lost.
 
-export const A2A_DROP_GRACE_MS = 12_000;
-export const SHARE_DROP_GRACE_MS = 25_000;
+/** The time the first four stream redials take, plus a second for the last one to connect. */
+export const A2A_DROP_GRACE_MS = A2A_REDIAL_BACKOFF_MIN_MS * (1 + 2 + 4 + 8) + 1_000;
+/** Failed polls in a row before a workspace share counts as down. */
+export const SHARE_DROP_FAILED_POLLS = 2;
 /** How often the drops are swept, besides on every change of the state they come from. */
 export const DROP_SWEEP_MS = 2_000;
 
@@ -113,7 +121,7 @@ export interface ConnectionInUse {
   shareHostId?: string;
 }
 
-export type DropSource = Pick<StoreState, 'a2aRemote' | 'remoteWorkspaces' | 'pcRailHostStatus' | 'pcRailHosts'>;
+export type DropSource = Pick<StoreState, 'a2aRemote' | 'remoteWorkspaces' | 'pcRailHostStatus' | 'pcRailHosts' | 'pcRailFeeds'>;
 
 /** The connections a drop of which is worth a notice, with their state now. */
 export function connectionsInUse(s: DropSource): ConnectionInUse[] {
@@ -132,12 +140,15 @@ export function connectionsInUse(s: DropSource): ConnectionInUse[] {
   const shareIds = [...new Set(s.remoteWorkspaces.map((w) => w.hostId))];
   for (const hostId of shareIds) {
     const status = s.pcRailHostStatus[hostId];
+    // One failed poll says nothing yet (an error answer even came from a host
+    // that is up): no answer either way until a second one in a row.
+    const down = status === 'unreachable' && (s.pcRailFeeds[hostId]?.failedTicks ?? 0) >= SHARE_DROP_FAILED_POLLS;
     out.push({
       key: `share:${hostId}`,
       name: s.pcRailHosts.find((h) => h.id === hostId)?.label
         ?? s.remoteWorkspaces.find((w) => w.hostId === hostId)?.hostLabel
         ?? hostId.slice(0, 6),
-      up: status === 'reachable' || status === 'connected' ? true : status === 'unreachable' ? false : null,
+      up: status === 'reachable' || status === 'connected' ? true : down ? false : null,
       tailnetHost: null,
       shareHostId: hostId,
     });
@@ -145,14 +156,23 @@ export function connectionsInUse(s: DropSource): ConnectionInUse[] {
   return out;
 }
 
+/**
+ * The Tailscale failure behind a drop, when Tailscale can be the reason: the
+ * same rule as a failed connect (`judgeTailnet`), so an address in the
+ * tailnet range that Tailscale does not own is never blamed on it.
+ */
+export function dropCause(check: TailscaleChecklist | null, tailnetHost: string | null) {
+  return tailnetHost && judgeTailnet(tailnetHost, check).ifUnreachable ? blockingFailure(check) : null;
+}
+
 /** The toast for a drop, from what the Tailscale check found (null: not over the tailnet, or no answer). */
 export function dropToastText(name: string, check: TailscaleChecklist | null, tailnetHost: string | null): string {
-  const failed = blockingFailure(check);
-  if (!failed || !tailnetHost) return t('tailscale.drop.lost', { name });
+  const failed = dropCause(check, tailnetHost);
+  if (!failed) return t('tailscale.drop.lost', { name });
   return t('tailscale.drop.lostBecause', { name, reason: describeTailnetFailure(failed, name) });
 }
 
-const graceOf = (key: string): number => (key.startsWith('share:') ? SHARE_DROP_GRACE_MS : A2A_DROP_GRACE_MS);
+const graceOf = (key: string): number => (key.startsWith('share:') ? 0 : A2A_DROP_GRACE_MS);
 
 /** Mounted once in AppLayout: watches the A2A and workspace-share connections for real drops. */
 export function useConnectionDropNotice(): void {
@@ -187,7 +207,7 @@ export function useConnectionDropNotice(): void {
       const found = await (checks.get(key) ?? Promise.resolve({ check: null, host: null }));
       // Came back (or stopped being used) while the check ran: nothing to say.
       if (!watch.isReported(key) || toasts.has(key)) return;
-      const failed = found.host ? blockingFailure(found.check) : null;
+      const failed = dropCause(found.check, found.host);
       const openApp = failed?.fix === 'open-app' || failed?.fix === 'sign-in';
       const id = useStore.getState().pushToast({
         level: 'warn',
@@ -221,7 +241,8 @@ export function useConnectionDropNotice(): void {
     let last: DropSource = useStore.getState();
     const off = useStore.subscribe((s) => {
       if (s.a2aRemote === last.a2aRemote && s.remoteWorkspaces === last.remoteWorkspaces
-        && s.pcRailHostStatus === last.pcRailHostStatus && s.pcRailHosts === last.pcRailHosts) return;
+        && s.pcRailHostStatus === last.pcRailHostStatus && s.pcRailHosts === last.pcRailHosts
+        && s.pcRailFeeds === last.pcRailFeeds) return;
       last = s;
       evaluate();
     });

@@ -119,6 +119,38 @@ describe('nothing runs `tailscale up` or an installer', () => {
   });
 });
 
+describe('checkTailscale reads', () => {
+  it('a 5 s abort reads as an unreadable status (which never holds a connection back)', async () => {
+    const abort = new AbortController();
+    const exec: TailscaleExec = (_cmd, _args, opts) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR' })), { once: true });
+    });
+    const pending = checkTailscale({ exec, signal: abort.signal });
+    abort.abort();
+    expect(failed(await pending)).toMatchObject({ id: 'signed-in', reason: 'unreadable' });
+  });
+
+  it.skipIf(tailscaleCandidates().length < 2)('a CLI whose own daemon is not running hands over to the next one (the app bundle)', async () => {
+    const asked: string[] = [];
+    const exec: TailscaleExec = async (cmd) => {
+      asked.push(cmd);
+      if (asked.length === 1) throw err({ stderr: 'failed to connect to local tailscaled; is Tailscale running?' });
+      return { stdout: status(), stderr: '' };
+    };
+    expect((await checkTailscale({ exec })).ok).toBe(true);
+    expect(asked).toEqual(tailscaleCandidates().slice(0, 2));
+  });
+
+  it('every candidate not running or missing still reads as not running, not as not installed', async () => {
+    let n = 0;
+    const exec: TailscaleExec = async () => {
+      n += 1;
+      throw n === 1 ? err({ stderr: 'failed to connect to local tailscaled; is Tailscale running?' }) : err({ code: 'ENOENT' });
+    };
+    expect(failed(await checkTailscale({ exec }))).toMatchObject({ reason: 'not-running' });
+  });
+});
+
 describe('platform paths', () => {
   it('Windows: the PATH name, then Program Files (and the 64-bit one from a 32-bit process)', () => {
     expect(tailscaleCandidates('win32', { ProgramFiles: 'C:\\Program Files' })).toEqual([
