@@ -109,6 +109,7 @@ function makeWindow(): MockWin {
 class MockDaemonClient extends EventEmitter {
   isConnected = true;
   writeToSession = vi.fn();
+  rpc = vi.fn();
 }
 
 interface MockPtyBridge {
@@ -473,6 +474,39 @@ describe('FirstRunOrchestrator', () => {
 
     // The runner already resolved 'ok' on the next tick → READY fired.
     expect(win.webContents.send).toHaveBeenCalledWith(IPC.FIRST_RUN_SAMPLE_TASK_READY);
+  });
+
+  // ── 9b. startSampleTask — daemon mode reads the pane's current prompt ──────
+  it('startSampleTask in daemon mode answers atPrompt from the daemon prompt log', async () => {
+    const dc = new MockDaemonClient();
+    const orch = new FirstRunOrchestrator(
+      makePtyManager() as never,
+      makePtyBridge() as never,
+      () => dc as never,
+      makeMcpRegistrar() as never,
+      () => 'token',
+      () => makeWindow() as never,
+    );
+    await orch.startSampleTask('session-A');
+    const source = capturedRuns[0].source as unknown as { atPrompt: () => Promise<boolean> };
+    const answer = (type: string | null, emptyShellPrompt = true, sessionFound = true) => {
+      dc.rpc.mockResolvedValueOnce({ events: type ? [{ type }] : [], emptyShellPrompt, sessionFound });
+      return source.atPrompt();
+    };
+
+    // A drawn, empty prompt.
+    await expect(answer('prompt_end')).resolves.toBe(true);
+    expect(dc.rpc.mock.calls[0]).toEqual(['daemon.readPromptEvents', { sessionId: 'session-A', limit: 1 }]);
+    // A stale prompt the user typed into, or one a shell without command-start
+    // left behind under a program it is running.
+    await expect(answer('prompt_end', false)).resolves.toBe(false);
+    await expect(answer('prompt_start', false)).resolves.toBe(false);
+    // Still drawing, a command running or ended, no prompt yet, no session.
+    await expect(answer('prompt_start')).resolves.toBe(false);
+    await expect(answer('command_start')).resolves.toBe(false);
+    await expect(answer('command_end')).resolves.toBe(false);
+    await expect(answer(null)).resolves.toBe(false);
+    await expect(answer('prompt_end', true, false)).resolves.toBe(false);
   });
 
   // ── 10. startSampleTask — non-daemon mode + TIMEOUT event ───────────────────

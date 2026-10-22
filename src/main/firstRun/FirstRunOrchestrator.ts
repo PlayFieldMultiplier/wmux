@@ -63,7 +63,32 @@ function buildDaemonSource(dc: DaemonClient, ptyId: string): PtyDataSource {
       return () => { dc.removeListener('session:data', listener); handlerRef = NOOP; };
     },
     write(data) { dc.writeToSession(ptyId, sanitizePtyText(data)); },
+    // The daemon logs each OSC 133 marker before it forwards the bytes, so
+    // its prompt log holds every prompt this listener could have missed.
+    async atPrompt() {
+      const res = await dc.rpc('daemon.readPromptEvents', { sessionId: ptyId, limit: 1 });
+      return shellAtEmptyPrompt(res as PromptRead | null);
+    },
   };
+}
+
+interface PromptRead {
+  events?: Array<{ type: string }>;
+  emptyShellPrompt?: boolean;
+  sessionFound?: boolean;
+}
+
+/**
+ * The newest OSC 133 marker ends a prompt (B) and the daemon vouches that the
+ * prompt is empty. A marker alone cannot tell a fresh prompt from a stale one
+ * under a shell that never reports command-start (bash 3.2, pwsh without
+ * PSReadLine); emptyShellPrompt is cleared by any input, so it also keeps the
+ * command off a line the user has begun typing (as terminalSession.ts reads it).
+ */
+export function shellAtEmptyPrompt(res: PromptRead | null): boolean {
+  return res?.sessionFound === true
+    && res.events?.at(-1)?.type === 'prompt_end'
+    && res.emptyShellPrompt === true;
 }
 
 /**

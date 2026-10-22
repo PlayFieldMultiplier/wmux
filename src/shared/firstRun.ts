@@ -87,7 +87,10 @@ export const SAMPLE_TASK_COMMAND =
 export const OSC133_TIMEOUT_MS = 5000;
 
 /**
- * OSC133 "A" (prompt-ready) sequence patterns to scan in raw PTY byte streams.
+ * OSC133 "A" (prompt start) and "B" (prompt end) sequence patterns to scan in
+ * raw PTY byte streams. Either means the shell is drawing its prompt. B counts
+ * too because zsh can write A (precmd) and B (the prompt) separately: an A
+ * that went by before the runner subscribed is followed by a live B only.
  *
  * Two terminator forms exist in the wild:
  *   - BEL terminator: ESC ] 1 3 3 ; A BEL  →  '\x1b]133;A\x07'
@@ -99,7 +102,7 @@ export const OSC133_TIMEOUT_MS = 5000;
 // eslint-disable-next-line no-control-regex -- intentional: must match real OSC133 control bytes
 export const OSC133_PROMPT_READY_PATTERNS: readonly RegExp[] = [
   // eslint-disable-next-line no-control-regex
-  /\x1b\]133;A\x07/,
+  /\x1b\]133;[AB]\x07/,
   // eslint-disable-next-line no-control-regex
-  /\x1b\]133;A\x1b\\/,
+  /\x1b\]133;[AB]\x1b\\/,
 ];
