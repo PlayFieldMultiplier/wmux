@@ -67,6 +67,17 @@ describe('theme text contrast', () => {
     }
   });
 
+  // The --selection-emphasis fill (20% / 14%: an open chip, a pressed or
+  // active button) follows the same rule as the hover fill.
+  it.each(ids)('%s: muted text drawn as sub reads at 3:1 on the --selection-emphasis fill', (id) => {
+    const p = deriveBuiltinPalette(id);
+    const pct = isLight(p.bgBase) ? 0.14 : 0.2;
+    for (const [name, bg] of [['base', p.bgBase], ['mantle', p.bgMantle]] as const) {
+      const fill = mixHex(bg, p.textMain, pct);
+      expect(getContrastRatio(p.textSub, fill), `${id} textSub ${p.textSub} on --selection-emphasis over ${name} ${fill}`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   // The tiers stay a ladder: lifting muted must not leave subtle at or below it,
   // nor subtle at or above sub2.
   it.each(ids)('%s: on the sheet, contrast rises from muted to subtle to sub and sub2', (id) => {
@@ -104,6 +115,25 @@ describe('the --selection-hover fill draws muted text as subtle', () => {
     expect(uses.length).toBeGreaterThan(0);
     for (const [f, near] of uses) {
       expect(near, f).toContain('hover:[--text-muted:var(--text-subtle)]');
+    }
+  });
+
+  // The --selection-emphasis fill is stronger still: muted text draws as sub there.
+  it('every CSS rule with a --selection-emphasis background sets --text-muted to sub', () => {
+    const rules = sources.filter(([f]) => f.endsWith('.css')).flatMap(([f, css]) =>
+      [...css.matchAll(/([^{}]*)\{([^{}]*background:\s*var\(--selection-emphasis\)[^{}]*)\}/g)].map((m) => [f, m[1].trim(), m[2]] as const));
+    expect(rules.length).toBeGreaterThan(0);
+    for (const [f, selector, body] of rules) {
+      expect(body, `${f}: ${selector}`).toMatch(/--text-muted:\s*var\(--text-sub\)/);
+    }
+  });
+
+  it('every bg-[var(--selection-emphasis)] class also sets --text-muted to sub', () => {
+    const uses = sources.filter(([f]) => f.endsWith('.tsx')).flatMap(([f, src]) =>
+      [...src.matchAll(/bg-\[var\(--selection-emphasis\)\]/g)].map((m) => [f, src.slice(m.index, m.index + 80)] as const));
+    expect(uses.length).toBeGreaterThan(0);
+    for (const [f, near] of uses) {
+      expect(near, f).toContain('[--text-muted:var(--text-sub)]');
     }
   });
 });

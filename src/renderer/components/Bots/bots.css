@@ -72,7 +72,7 @@
   color: var(--text-sub);
 }
 .wmux-bots-icon-button:hover { background: var(--hover-fill); color: var(--text-main); }
-.wmux-bots-icon-button.is-open { background: var(--selection-emphasis); color: var(--text-main); }
+.wmux-bots-icon-button.is-open { background: var(--selection-emphasis); --text-muted: var(--text-sub); color: var(--text-main); }
 
 .wmux-bots-rows {
   flex: 1;
@@ -187,7 +187,7 @@
   height: 16px;
   padding: 0 4px;
   border-radius: 9999px;
-  background: var(--selection-emphasis);
+  background: var(--selection-emphasis); --text-muted: var(--text-sub);
   color: var(--text-main);
   font-size: 10px;
   font-weight: 600;
@@ -769,7 +769,7 @@
   font-size: 12px;
 }
 .wmux-bots-file-chip:hover { background: var(--selection-hover); --text-muted: var(--text-subtle); }
-.wmux-bots-file-chip.is-open { background: var(--selection-emphasis); }
+.wmux-bots-file-chip.is-open { background: var(--selection-emphasis); --text-muted: var(--text-sub); }
 .wmux-bots-file-glyph { display: inline-flex; flex-shrink: 0; color: var(--text-muted); }
 .wmux-bots-file-name { min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wmux-bots-file-size { flex-shrink: 0; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }

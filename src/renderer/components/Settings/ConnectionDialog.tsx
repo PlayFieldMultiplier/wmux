@@ -192,7 +192,7 @@ export function ConnectionDialog({ t, bots, editing, initialDraft, presetBotId, 
                   data-connection-preset={p.id}
                   aria-pressed={form.presetId === p.id}
                   onClick={() => pickPreset(p.id)}
-                  className={`h-[26px] px-2.5 rounded-[var(--chip-radius)] text-[12px] ${form.presetId === p.id ? 'bg-[var(--selection-emphasis)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]'} ${FOCUS_RING}`}
+                  className={`h-[26px] px-2.5 rounded-[var(--chip-radius)] text-[12px] ${form.presetId === p.id ? 'bg-[var(--selection-emphasis)] [--text-muted:var(--text-sub)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]'} ${FOCUS_RING}`}
                 >
                   {p.label}
                 </button>

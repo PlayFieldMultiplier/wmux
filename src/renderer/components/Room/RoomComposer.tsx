@@ -257,7 +257,7 @@ export function MentionChips({ candidates, bots, picked, onToggle, t, testId }: 
             data-bot-id={r.bot.id}
             aria-pressed={on}
             onClick={() => onToggle(r.bot.id)}
-            className={`h-[24px] max-w-[160px] truncate px-2 rounded-[var(--chip-radius)] text-[12px] ${on ? 'bg-[var(--selection-emphasis)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]'} ${FOCUS_RING}`}
+            className={`h-[24px] max-w-[160px] truncate px-2 rounded-[var(--chip-radius)] text-[12px] ${on ? 'bg-[var(--selection-emphasis)] [--text-muted:var(--text-sub)] text-[var(--text-main)]' : 'bg-[var(--selection)] text-[var(--text-sub)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]'} ${FOCUS_RING}`}
           >
             @{r.bot.name}
           </button>

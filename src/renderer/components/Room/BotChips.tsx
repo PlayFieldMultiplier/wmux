@@ -202,7 +202,7 @@ function BotChip({ row, port, t, onResult, secondary }: {
         title={row.status?.lastError ? `${name} — ${row.status.lastError.message}` : name}
         onClick={toggle}
         onKeyDown={(e) => { if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); } }}
-        className={`h-[26px] max-w-full inline-flex items-center gap-1.5 pl-[5px] pr-2 rounded-[var(--chip-radius)] text-[12px] text-[var(--text-main)] ${open ? 'bg-[var(--selection-emphasis)]' : 'bg-[var(--selection)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]'} ${FOCUS_RING}`}
+        className={`h-[26px] max-w-full inline-flex items-center gap-1.5 pl-[5px] pr-2 rounded-[var(--chip-radius)] text-[12px] text-[var(--text-main)] ${open ? 'bg-[var(--selection-emphasis)] [--text-muted:var(--text-sub)]' : 'bg-[var(--selection)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]'} ${FOCUS_RING}`}
       >
         <BotAvatar bot={row.bot} size={16} t={t} />
         <span data-bot-name className="min-w-0 truncate">{row.bot.name}</span>
