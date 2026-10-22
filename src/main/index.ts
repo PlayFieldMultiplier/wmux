@@ -1051,9 +1051,9 @@ localCompletionAlarm = new CompletionAlarm({
   onConfirmed: (_pane, _slug, _cls, resume) => resume(),
 });
 
-registerWorkspaceRpc(rpcRouter, () => mainWindow);
-registerSurfaceRpc(rpcRouter, () => mainWindow);
-registerPaneRpc(rpcRouter, () => mainWindow, {}, () => daemonClient);
+registerWorkspaceRpc(rpcRouter, () => mainWindow, { agentControl: browserAgentControl });
+registerSurfaceRpc(rpcRouter, () => mainWindow, browserAgentControl);
+registerPaneRpc(rpcRouter, () => mainWindow, { agentControl: browserAgentControl }, () => daemonClient);
 const inputRpc = registerInputRpc(
   rpcRouter,
   ptyManager,
