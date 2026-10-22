@@ -22,7 +22,7 @@ import { randomUUID } from 'crypto';
 import { installCompatHooks, resolveCompatHookPaths } from '../../../src/shared/hooks/compatHookInstall';
 import { compatHookShellCommand } from '../../../src/shared/hooks/hookFlavours';
 // The Kiro agent config builder is the source of the Kiro command line.
-import { buildKiroAgentConfig } from '../../kiro/agent/wmuxAgent.mjs';
+import { buildKiroAgentConfig, isWindowsBarePath } from '../../kiro/agent/wmuxAgent.mjs';
 import { rustCmdCSpawn, rustWindowsQuoteArg } from './rustWindowsSpawn';
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -43,8 +43,9 @@ const BASH = isWin
   ].find((p): p is string => !!p && fs.existsSync(p)) ?? null
   : (fs.existsSync('/bin/bash') ? '/bin/bash' : null);
 const have = (p: string | null): p is string => !!p && fs.existsSync(p);
-// The Windows Kiro layouts live under the temp dir and must be space-free (#1917).
-const WINDOWS_TMP_HAS_SPACE = isWin && /\s/.test(os.tmpdir());
+// The Windows Kiro layouts live under the temp dir, so it must be a path the
+// builder accepts bare (#1917).
+const WINDOWS_TMP_NOT_BARE = isWin && !isWindowsBarePath(os.tmpdir());
 
 interface Received { method: string; params: Record<string, unknown>; clientName?: string }
 
@@ -171,7 +172,7 @@ describe('shell form under every host shell', () => {
   }, 60_000);
 });
 
-describe.skipIf(WINDOWS_TMP_HAS_SPACE)('kiro through the shared bridge, installed layout', () => {
+describe.skipIf(WINDOWS_TMP_NOT_BARE)('kiro through the shared bridge, installed layout', () => {
   // The Kiro entry point copied NEXT TO the shared bridge, as the Kiro README
   // tells an operator to place them, and run with the exact command line the
   // Kiro agent config builder writes.
@@ -236,7 +237,7 @@ describe.skipIf(WINDOWS_TMP_HAS_SPACE)('kiro through the shared bridge, installe
   }, 60_000);
 });
 
-describe.skipIf(!have(CMD) || WINDOWS_TMP_HAS_SPACE)('kiro under its own Windows hook spawn (cmd /C, Rust quoting)', () => {
+describe.skipIf(!have(CMD) || WINDOWS_TMP_NOT_BARE)('kiro under its own Windows hook spawn (cmd /C, Rust quoting)', () => {
   // Kiro's predecessor runs a hook on Windows as `cmd /C <command>`, the
   // command being ONE argument quoted by Rust std (see rustWindowsSpawn.ts).
   // Rust wraps it in quotes (it holds a space) and escapes every inner `"` as

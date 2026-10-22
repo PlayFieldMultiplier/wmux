@@ -97,6 +97,8 @@ describe('buildKiroAgentConfig', () => {
     expect(commandFor('C:\\Users\\someone\\.wmux\\hooks\\b.mjs', 'win32')).toBe('node C:/Users/someone/.wmux/hooks/b.mjs');
     expect(commandFor('C:/wmux-hooks/b.mjs', 'win32')).toBe('node C:/wmux-hooks/b.mjs');
     expect(commandFor('C:\\Users\\RUNNER~1\\x_y.z+1\\b.mjs', 'win32')).toBe('node C:/Users/RUNNER~1/x_y.z+1/b.mjs');
+    // Rooted on the current drive: absolute enough to name one file.
+    expect(commandFor('/bridge.mjs', 'win32')).toBe('node /bridge.mjs');
   });
 
   it('accepts letters in any script on Windows', () => {
@@ -120,6 +122,11 @@ describe('buildKiroAgentConfig', () => {
       'C:\\a^b\\b.mjs',
       'C:\\a!b\\b.mjs',
       '',
+      // Not absolute: each would resolve against the hook's working folder.
+      'hooks\\b.mjs',
+      'C:b.mjs',
+      '~/b.mjs',
+      '-r/b.mjs',
     ]) {
       expect(() => buildKiroAgentConfig(bad, HOME, { platform: 'win32' }), JSON.stringify(bad))
         .toThrow(/no spaces[\s\S]*C:\/wmux-hooks\//);
