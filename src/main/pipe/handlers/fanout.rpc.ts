@@ -134,6 +134,11 @@ import { BOT_SECRET_LIMITS } from '../../../shared/botSecret';
 import { botCwd, getBotRuntime } from '../../factory/BotRuntime';
 import { getWmuxDir } from '../../../daemon/config';
 import { RESEARCH_PRESET } from '../../../shared/ledger';
+import type { BaseGate } from '../../worktask/TaskGateRunner';
+import { repoBaseGate } from '../../factory/verifyPreset';
+
+/** The bot preset whose worker grades a PR head (botFanoutPresets.ts). */
+const VERIFY_PRESET = 'verify';
 import { GENERAL_THREAD, parseThreadId, prThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
 import { normalizeRepoKey } from '../../../shared/repoKey';
 import { isOriginPin } from '../../../shared/originPin';
@@ -148,7 +153,7 @@ import { getHandoffRouter } from '../../factory/handoffRouter';
 import { emitBotHook } from '../../factory/botHooks';
 import { checkWorkerHours, recordWorkerStart, workerSlotsFull, type BotUsage, type WorkerSlotsFull } from '../../factory/budget';
 import { getHeldFanouts, heldFanoutReserved, heldFanoutStarted, heldWakeIsFor } from '../../factory/heldFanouts';
-import { botFanoutPreset, botFanoutPresetList, botPresetCheckoutRefusal, composeBotWorkerPrompt } from '../../worktask/botFanoutPresets';
+import { botFanoutPreset, botFanoutPresetList, botPresetCheckoutRefusal, botReviewHost, composeBotWorkerPrompt } from '../../worktask/botFanoutPresets';
 import { getFactLog } from '../../factory/factLog';
 import { currentWakeItem, dropQueuedHeldFanoutWakes, getWakeQueue } from '../../factory/wakeQueue';
 import { isWakeStoppedByOwner } from '../../factory/factoryStop';
@@ -694,6 +699,9 @@ export interface FanOutRpcDeps {
   /** A bot's repository: read its default branch for the workers' push
    *  rules (agents/botWorkerDefaultBranch). Injected in tests. */
   botDefaultBranch?: (repoRoot: string) => Promise<DefaultBranchNote>;
+  /** The gate a bot's repository declares on its base, for a verify
+   *  worker's prompt (default: factory/verifyPreset.ts repoBaseGate). */
+  botBaseGate?: (repoPath: string) => Promise<BaseGate>;
   /** The connection library (default: the running one). */
   connectors?: () => ConnectorStore | null;
   /** The platform workers run on (default: this process's). */
@@ -923,13 +931,17 @@ function defaultBotPort(): FanOutBotPort | null {
   };
 }
 
-/** `checkout` from the wire, validated (40-hex sha; fetchRef only `pull/<n>/head`). */
-function parseCheckout(raw: unknown): { sha: string; detached: true; fetchRef?: string } | { error: string } {
+/** `checkout` from the wire, validated: a 40-hex sha, and a fetchRef only
+ *  the review head ref of the bot's repository host — `pull/<n>/head` on
+ *  GitHub (or no known host), `merge-requests/<n>/head` on GitLab. */
+export function parseCheckout(raw: unknown, repoKey?: string): { sha: string; detached: true; fetchRef?: string } | { error: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'checkout must be {sha, fetchRef?}' };
   const r = raw as Record<string, unknown>;
   if (typeof r['sha'] !== 'string' || !/^[0-9a-f]{40}$/.test(r['sha'])) return { error: 'checkout.sha must be a 40-hex commit id' };
-  if (r['fetchRef'] !== undefined && (typeof r['fetchRef'] !== 'string' || !/^pull\/[1-9][0-9]{0,8}\/head$/.test(r['fetchRef']))) {
-    return { error: 'checkout.fetchRef must be pull/<number>/head' };
+  const gitlab = botReviewHost(repoKey) === 'gitlab';
+  const headRef = gitlab ? /^merge-requests\/[1-9][0-9]{0,8}\/head$/ : /^pull\/[1-9][0-9]{0,8}\/head$/;
+  if (r['fetchRef'] !== undefined && (typeof r['fetchRef'] !== 'string' || !headRef.test(r['fetchRef']))) {
+    return { error: gitlab ? 'checkout.fetchRef must be merge-requests/<number>/head on this GitLab repository' : 'checkout.fetchRef must be pull/<number>/head' };
   }
   return { sha: r['sha'], detached: true, ...(typeof r['fetchRef'] === 'string' ? { fetchRef: r['fetchRef'] } : {}) };
 }
@@ -1186,11 +1198,21 @@ export function registerFanOutRpc(
       || service.statusOf(key).state !== 'unknown'
       || pending.has(key)
       || terminal.has(key);
+    // A bot's verify worker is told the gate its repository declares on its
+    // base (botFanoutPresets.ts VERIFY_PROMPT): read here too, for the same
+    // reason. Not read in time: the prompt says wmux could not tell.
+    let verifyGate: BaseGate | undefined;
+    const readVerifyGate = async (): Promise<void> => {
+      if (typeof params['preset'] !== 'string' || fanoutPresetKey(params['preset']) !== fanoutPresetKey(VERIFY_PRESET)) return;
+      const repoPath = bot ? (deps.bot ?? defaultBotPort)()?.profile(bot.botId)?.repo?.repoPath : undefined;
+      if (repoPath) verifyGate = await (deps.botBaseGate ?? repoBaseGate)(repoPath);
+    };
     if (!keyKnown) {
       try {
         await Promise.all([
           bot ? withinMs((deps.bot ?? defaultBotPort)()?.refreshLiveness?.(), LIVENESS_WAIT_MS) : undefined,
           refreshDormantTaskWorkspaces(LIVENESS_WAIT_MS),
+          bot ? withinMs(readVerifyGate(), LIVENESS_WAIT_MS) : undefined,
         ]);
       } catch {
         /* the caps count what is known */
@@ -1339,7 +1361,7 @@ export function registerFanOutRpc(
     let checkout: { sha: string; detached: true; fetchRef?: string } | undefined;
     if (params['checkout'] !== undefined) {
       if (!bot) return deny('INVALID_ARGUMENT', 'task.fanout.start accepts checkout only from a factory bot');
-      const c = parseCheckout(params['checkout']);
+      const c = parseCheckout(params['checkout'], botProfile?.repo?.repoKey);
       if ('error' in c) return deny('INVALID_ARGUMENT', c.error);
       checkout = c;
     }
@@ -1348,7 +1370,7 @@ export function registerFanOutRpc(
       // The PR a task checks out is its subject, unless the wake is a
       // conversation (a handoff's, a 1:1, a group chat) the flow stays in.
       const inConversation = /^(handoff|dm|group):/.test(botWakeThread ?? '');
-      const checkoutPr = /^pull\/([1-9][0-9]*)\/head$/.exec(checkout?.fetchRef ?? '')?.[1];
+      const checkoutPr = /^(?:pull|merge-requests)\/([1-9][0-9]*)\/head$/.exec(checkout?.fetchRef ?? '')?.[1];
       const pr = inConversation ? undefined : checkoutPr;
       const repoKey = botProfile?.repo?.repoKey;
       const prThread = pr && repoKey ? parseThreadId(prThreadId(repoKey, Number(pr))) ?? undefined : undefined;
@@ -1564,7 +1586,7 @@ export function registerFanOutRpc(
       if (checkoutRefusal) return deny('INVALID_ARGUMENT', checkoutRefusal);
       // The preset's worker prompt goes ahead of the bot's own, and every
       // task's effective prompt must still fit the cap.
-      const composed = composeBotWorkerPrompt(botPresetName, sharedPrompt, checkout, botProfile?.repo?.repoKey);
+      const composed = composeBotWorkerPrompt(botPresetName, sharedPrompt, checkout, botProfile?.repo?.repoKey, botPresetName === VERIFY_PRESET ? verifyGate : undefined);
       const tooLong = parsed.taskPrompts.some((own) =>
         Buffer.byteLength(own ? `${composed}\n\n${own}` : composed, 'utf8') > FANOUT_PROMPT_MAX_BYTES);
       if (tooLong) return deny('INVALID_ARGUMENT', `a task prompt with the ${botPresetName} preset's worker prompt exceeds ${FANOUT_PROMPT_MAX_BYTES} bytes`);

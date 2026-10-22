@@ -96,6 +96,29 @@ describe('trigger matching', () => {
     expect(matchingTrigger(v, fact('ci.failed', { repoKey: KEY, payload: { author: 'mallory' } }), trust)).toBeNull();
   });
 
+  it('authorTrusted on a GitLab repo: a GitLab account named like a trusted GitHub login is not trusted', () => {
+    const GL = 'gitlab.example.com/group/app';
+    const triage = bot('bot-00000001', 'triage', { repo: { repoKey: GL, repoPath: '/repo' } });
+    const issue = (author: string) => fact('issue.opened', { repoKey: GL, ref: { issue: 1 }, payload: { author } });
+    const glTrust: FactoryTrustApi = {
+      trustedAuthors: () => ['Alice', 'gitlab.example.com/Carol', 'other.example.com/dave'],
+      ownerLogin: () => 'owner',
+      ownerLoginOn: (host) => (host === 'gitlab.example.com' ? 'me-on-gitlab' : null),
+    };
+    // A plain entry and the GitHub owner login are GitHub names.
+    expect(matchingTrigger(triage, issue('alice'), glTrust)).toBeNull();
+    expect(matchingTrigger(triage, issue('owner'), glTrust)).toBeNull();
+    // The owner's login on this host, and a `host/username` entry of this host.
+    expect(matchingTrigger(triage, issue('ME-on-gitlab'), glTrust)?.kind).toBe('issue.opened');
+    expect(matchingTrigger(triage, issue('carol'), glTrust)?.kind).toBe('issue.opened');
+    expect(matchingTrigger(triage, issue('dave'), glTrust)).toBeNull();
+    // No readable login on the host: the owner is not trusted.
+    expect(matchingTrigger(triage, issue('me-on-gitlab'), { ...glTrust, ownerLoginOn: () => null })).toBeNull();
+    expect(matchingTrigger(triage, issue('me-on-gitlab'), trust)).toBeNull();
+    // GitHub is unchanged: a plain entry still matches there.
+    expect(matchingTrigger(bot('bot-00000002', 'triage'), fact('issue.opened', { repoKey: KEY, ref: { issue: 1 }, payload: { author: 'alice' } }), glTrust)?.kind).toBe('issue.opened');
+  });
+
   it('botIdNot: a bot never triggers on its own verdict (explicit id, or self)', () => {
     const v = bot('bot-00000001', 'verifier', { triggers: [{ kind: 'verdict.recorded', filter: { botIdNot: 'self' } }] });
     const verdict = (botId: string) => fact('verdict.recorded', { repoKey: KEY, ref: { pr: 1, headSha: 'h', botId } });
@@ -293,6 +316,29 @@ describe('module seam', () => {
     expect(mod.running.watch?.watching()).toEqual([KEY]);
     await mod.dispose();
     expect(mod.running).toEqual({ engine: null, watch: null });
+  });
+
+  it('a GitLab repo is watched through the glab port, never the gh one', async () => {
+    const GL = 'gitlab.example.com/group/app';
+    const graphql = vi.fn(async () => ({ ok: false as const, code: 'error' as const, message: 'offline' }));
+    const gitlab = {
+      graphql: vi.fn(async () => ({ ok: false as const, code: 'error' as const, message: 'offline' })),
+      commitParents: vi.fn(async () => []),
+    };
+    setFactoryTriggerPorts(() => ({
+      factLog: { append: () => null, subscribe: () => () => undefined, readSince: () => ({ facts: [], cursor: null }) },
+      wakes: { enqueue: () => null },
+      bots: { listEnabled: () => [bot('bot-00000001', 'verifier', { repo: { repoKey: GL, repoPath: '/repo' } })], get: () => null },
+      graphql,
+      gitlab,
+    }));
+    const mod = createTriggerModule({ wmuxDir: () => dir });
+    await mod.start();
+    expect(mod.running.watch?.watching()).toEqual([GL]);
+    await vi.waitFor(() => expect(gitlab.graphql).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(gitlab.graphql.mock.calls[0]).toMatchObject(['/repo', GL, expect.any(String), { fullPath: 'group/app' }]);
+    expect(graphql).not.toHaveBeenCalled();
+    await mod.dispose();
   });
 });
 

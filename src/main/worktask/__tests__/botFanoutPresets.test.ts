@@ -107,3 +107,29 @@ describe('bot fan-out presets', () => {
     expect(composeBotWorkerPrompt('repro', '')).toContain('open a DRAFT pull request (`gh pr create --draft --head <your branch>`)');
   });
 });
+
+describe('the verify worker is told what the base gate is', () => {
+  const prompt = (gate?: Parameters<typeof composeBotWorkerPrompt>[4]) => composeBotWorkerPrompt('verify', '', { sha: SHA, detached: true }, 'github.com/o/r', gate);
+
+  it('no gate on the base: read and report, no install', () => {
+    const p = prompt({ kind: 'none' });
+    expect(p).toMatch(/declares no gate on its base[\s\S]*Install nothing and run no test suite/);
+    expect(p).not.toMatch(/npm ci/);
+  });
+
+  it('a declared gate is named, with the install it needs', () => {
+    const p = prompt({ kind: 'declared', command: 'npm run lint + npm test' });
+    expect(p).toContain('wmux runs `npm run lint + npm test` on this commit');
+    expect(p).toMatch(/npm ci/);
+  });
+
+  it('wherever a gate runs after the report, the worker installs what it needs, docs-only or not', () => {
+    // main sends a worker only for a head its gate grades: a gate that finds
+    // no node_modules is skipped (deps_missing) and nothing can pass.
+    for (const p of [prompt(), prompt({ kind: 'declared', command: 'npm test' })]) {
+      expect(p).toMatch(/install the dependencies that gate needs \(for a Node project, a real `npm ci`\), whatever the change is/);
+      expect(p).toMatch(/the change is docs-only: read it and run no test suite yourself/);
+    }
+    expect(prompt()).toContain('wmux could not tell which one ahead of time');
+  });
+});

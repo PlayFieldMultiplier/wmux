@@ -6,7 +6,10 @@
 // one plain sentence per cause, never the raw code.
 // The card is written here in main, so the desktop room, the Bots page and
 // the phone's room view read the same text. A code this table does not know
-// is shown as the code.
+// is shown as the code. A sentence names the PR's host ({host}): GitLab for a
+// GitLab repo key, GitHub otherwise.
+
+import { isGitlabRepoKey } from '../github/hostLane';
 
 /** Sentences by `predicate:reason` (where a reason means different things
  *  under different predicates) and by bare reason. */
@@ -15,12 +18,12 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'head-moved': 'The PR\'s head moved after it was checked',
   // An approval whose bot was deleted (approvals.ts authorizeEffect).
   'bot-removed': 'The bot that asked for it was deleted',
-  'checks-not-on-head': 'The checks GitHub reported are not for this head',
-  'checks-truncated': 'GitHub listed too many checks to read them all',
+  'checks-not-on-head': 'The checks {host} reported are not for this head',
+  'checks-truncated': '{host} listed too many checks to read them all',
   'no-required-checks': 'The repository has no required checks',
   'required-check-pending': 'A required check is still running',
-  'files-truncated': 'GitHub listed too many changed files to read them all',
-  'no-files': 'GitHub listed no changed files',
+  'files-truncated': '{host} listed too many changed files to read them all',
+  'no-files': '{host} listed no changed files',
   'not-release-pr:package-manifest': 'It changes package.json or package-lock.json',
   'dependency-patch': 'It changes dependency patches',
   'build-config': 'It changes the build configuration',
@@ -37,12 +40,12 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'lint-config': 'It changes the lint configuration the gate runs',
   'ts-config': 'It changes a TypeScript configuration the gate runs',
   'windows-path': 'It touches Windows-specific files, which need a check on Windows',
-  'labels-truncated': 'GitHub listed too many labels to read them all',
+  'labels-truncated': '{host} listed too many labels to read them all',
   'needs-windows-verify': 'It is labelled needs-windows-verify',
-  'no-author': 'GitHub did not report who authored it',
+  'no-author': '{host} did not report who authored it',
   'external-author': 'The author isn\'t trusted',
   'cross-repository': 'It comes from a fork',
-  'no-head-branch': 'GitHub did not report its branch',
+  'no-head-branch': '{host} did not report its branch',
   'branch-not-bound': 'Its branch is not a bot task\'s branch',
   'verdicts-unreadable': 'The verdicts could not be read',
   'author-unknown': 'Who worked on it could not be determined',
@@ -53,6 +56,8 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'evidence-unreadable': 'The verify tasks\' records could not be read',
   'gate-failed': 'The verify gate failed',
   'gate-skipped': 'The verify gate was skipped, so nothing ran',
+  'gate-required': 'The PASS rests on reading alone, but the base branch has a gate',
+  'base-moved': 'The PASS rests on reading alone, and the base branch moved since its gate was read',
   'evidence-mismatch': 'The PASS is not backed by a matching verify task',
   'verdict-no-evidence': 'The PASS names no verify task',
   // The lane host.
@@ -67,31 +72,30 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'factory-disabled': 'The factory is off',
   'lane-paused': 'Lane auto-merge is off',
   'lane-daily-cap': 'Today\'s lane merge limit is reached',
-  'identity-unknown': 'The GitHub login could not be read',
-  'identity-changed': 'The GitHub login changed since the check',
-  'pr-mismatch': 'GitHub answered for a different PR',
+  'identity-unknown': 'The {host} login could not be read',
+  'identity-changed': 'The {host} login changed since the check',
+  'pr-mismatch': '{host} answered for a different PR',
   'behind-updated': 'The branch was behind; it was updated and needs fresh checks',
-  invalid: 'GitHub refused the merge request',
+  invalid: '{host} refused the merge request',
 };
 
 /** Sentences for code families with a variable tail. */
 const PREFIX_SENTENCES: ReadonlyArray<readonly [string, string]> = [
   ['required-check-', 'A required check did not pass'],
   ['behind-update-', 'The branch is behind and could not be updated'],
-  ['blocked-', 'GitHub blocked the merge'],
+  ['blocked-', '{host} blocked the merge'],
 ];
 
 const CODE = /^[a-z0-9-]+(?::[a-z0-9-]+)?$/;
 
-/** The owner sentence for one code, or null when it is not known. Pure. */
-export function laneRefusalSentence(code: string): string | null {
+/** The owner sentence for one code on the repo `repoKey` (GitHub when
+ *  absent), or null when it is not known. Pure. */
+export function laneRefusalSentence(code: string, repoKey?: string): string | null {
   const cut = code.indexOf(':');
   const reason = cut >= 0 ? code.slice(cut + 1) : code;
   const own = (k: string): string | undefined => (Object.hasOwn(SENTENCES, k) ? SENTENCES[k] : undefined);
-  const known = own(code) ?? own(reason);
-  if (known) return known;
-  const prefixed = PREFIX_SENTENCES.find(([p]) => reason.startsWith(p));
-  return prefixed ? prefixed[1] : null;
+  const known = own(code) ?? own(reason) ?? PREFIX_SENTENCES.find(([p]) => reason.startsWith(p))?.[1];
+  return known ? known.replace('{host}', repoKey && isGitlabRepoKey(repoKey) ? 'GitLab' : 'GitHub') : null;
 }
 
 /** The raw codes of a refusal reason, in order. A part that is `code: prose`
@@ -117,17 +121,17 @@ export const UNKNOWN_REFUSAL_SENTENCE = 'Another merge check did not pass';
  *  the owner's words only — no raw code (two predicates with the same cause
  *  share a bullet; every unknown code shares UNKNOWN_REFUSAL_SENTENCE).
  *  Empty for an empty reason. Pure. */
-export function formatLaneRefusal(reason: string): string {
-  return ownerSentences(reason).map((sentence) => `- ${sentence}`).join('\n');
+export function formatLaneRefusal(reason: string, repoKey?: string): string {
+  return ownerSentences(reason, repoKey).map((sentence) => `- ${sentence}`).join('\n');
 }
 
 /** The distinct owner sentences of a reason, in order: a known code's
  *  sentence, UNKNOWN_REFUSAL_SENTENCE for any other code, prose (already
  *  words, not a code) on one line as it is. Pure. */
-function ownerSentences(reason: string): string[] {
+function ownerSentences(reason: string, repoKey?: string): string[] {
   const out: string[] = [];
   for (const code of laneRefusalCodes(reason)) {
-    const sentence = laneRefusalSentence(code) ?? (CODE.test(code) ? UNKNOWN_REFUSAL_SENTENCE : code.replace(/[\r\n]+/g, ' ').trim());
+    const sentence = laneRefusalSentence(code, repoKey) ?? (CODE.test(code) ? UNKNOWN_REFUSAL_SENTENCE : code.replace(/[\r\n]+/g, ' ').trim());
     if (sentence && !out.includes(sentence)) out.push(sentence);
   }
   return out;
@@ -136,6 +140,6 @@ function ownerSentences(reason: string): string[] {
 /** One line in the owner's words for a refusal reason (an approval's
  *  `refusal`, a rule's skip): the sentences joined, never a raw code; text
  *  that is not a code list is kept as it is. Empty for an empty reason. Pure. */
-export function laneRefusalLine(reason: string): string {
-  return ownerSentences(reason).join('; ');
+export function laneRefusalLine(reason: string, repoKey?: string): string {
+  return ownerSentences(reason, repoKey).join('; ');
 }

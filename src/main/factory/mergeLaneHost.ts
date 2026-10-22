@@ -45,7 +45,7 @@ import type { FactorySettings } from '../../shared/factorySettings';
 import type { LedgerEntry } from '../../shared/ledger';
 import type { MergeEffect } from '../../shared/moaDecision';
 import { laneEffectId } from '../../shared/moaDecision';
-import type { PrLaneFacts, PrWriteResult } from '../../shared/prReview';
+import type { PrLaneFacts } from '../../shared/prReview';
 import type { PrVerdictRecord } from '../../shared/prVerdict';
 import { prThreadId } from '../../shared/room';
 import { LANE_PREDICATES, evaluateMergeLane, type LaneEvidenceRow, type MergeLaneContext } from '../deck/moaMergeLane';
@@ -54,12 +54,15 @@ import type { MoaEffectStore } from '../deck/moaEffectStore';
 import { factFromMergeEffect } from './factIngest';
 import { formatLaneRefusal } from './laneRefusalText';
 import { normalizeRepoKey } from './repoWatch';
+import { trustedAuthorsOn } from '../github/hostLane';
 import { taskTainted } from './wakeTaint';
 import type { ApprovalMergeHost, StoredApproval } from './approvals';
 import type { BotDirectoryApi } from './triggerEngine';
 import type { RoomWriter } from './roomWriter';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle } from './factoryHost';
 import { guestSide } from './guestWorkspaces';
+import { repoBaseGate } from './verifyPreset';
+import type { BaseGate } from '../worktask/TaskGateRunner';
 
 /** The facts that can complete a PR's case. */
 export const LANE_FACT_KINDS: ReadonlySet<Fact['kind']> = new Set(['verdict.recorded', 'ci.green', 'pr.head_moved', 'pr.labelled']);
@@ -96,6 +99,10 @@ export interface LaneHostPorts {
   ownerLogin: (host: string, repoPath: string) => Promise<string | null>;
   /** The gh login a merge would go out as now, or null. */
   currentLogin: (repo: { key: string; path: string }) => Promise<string | null>;
+  /** The gate the repository declares at a commit, read again when a
+   *  reading-only verdict's base tip has moved since it was recorded.
+   *  Absent: not read (such a verdict does not count). */
+  baseGate?: (repoPath: string, at: string) => Promise<BaseGate>;
   effects: Pick<MoaEffectStore, 'enqueueLane' | 'get'>;
   /** The gh login each lane effect was evaluated under, kept across
    *  restarts (default: memory only). */
@@ -341,10 +348,11 @@ export class MergeLaneHost {
   ): Promise<Omit<MergeLaneContext, 'expectHead'>> {
     // The owner's own login is trusted only for a head a bot task of this
     // factory produced (not a repro worker's); every other author must be
-    // in the settings' list. An unreadable login trusts nobody extra.
+    // in the settings' list (on a GitLab repo, its `host/username` entries
+    // only: trustedAuthorsOn). An unreadable login trusts nobody extra.
     const botMade = tasks.some((t) => t.dispatch?.origin?.kind === 'bot') && !tasks.some((t) => t.dispatch?.preset === 'repro');
     const owner = botMade ? await this.ports.ownerLogin(host(repoKey), repoPath).catch(() => null) : null;
-    const trustedAuthors = [...new Set([...settings.trustedAuthors, ...(owner ? [owner] : [])].map((a) => a.toLowerCase()))];
+    const trustedAuthors = [...new Set([...trustedAuthorsOn(repoKey, settings.trustedAuthors), ...(owner ? [owner] : [])].map((a) => a.toLowerCase()))];
     let authorWorkspaces: string[] | null = null;
     try {
       authorWorkspaces = await this.ports.authorWorkspaces(repoPath, facts.headRefName, tasks);
@@ -371,6 +379,15 @@ export class MergeLaneHost {
     } catch {
       evidenceRows = null;
     }
+    // A reading-only verdict taken at an older base tip still counts when
+    // the base's new tip declares no gate either: read it there once.
+    const tip = facts.baseRefOid ?? null;
+    const moved = !!tip && (verdicts ?? []).some((v) => v.evidence?.reading !== undefined && v.evidence.baseSha !== tip);
+    let noGateBase: string | null = null;
+    if (moved && tip && this.ports.baseGate) {
+      const gate = await this.ports.baseGate(repoPath, tip).catch(() => null);
+      if (gate?.kind === 'none') noGateBase = tip;
+    }
     return {
       trustedAuthors,
       // Bound when a bot task's branch is the head branch.
@@ -384,6 +401,7 @@ export class MergeLaneHost {
       // whatever the switch reads by the time the executor gets here.
       botVerdictsOnly: true,
       evidenceRows,
+      noGateBase,
     };
   }
 
@@ -527,7 +545,7 @@ export class MergeLaneHost {
       this.card(bots, repoKey, prNumber, `lane-refused:${repoKey}#${prNumber}:${headSha}:${tag}`, {
         kind: 'refusal',
         title: `Merge refused for #${prNumber} at ${sha7(headSha)}`,
-        body: formatLaneRefusal(reason.slice(0, 500)).slice(0, 2000),
+        body: formatLaneRefusal(reason.slice(0, 500), repoKey).slice(0, 2000),
       });
     };
     if (!held) {
@@ -638,7 +656,7 @@ export function laneMergesToday(rows: readonly MergeEffect[], now: number): numb
 
 /** The production ports (imported lazily: main-only singletons). */
 async function productionHost(deps: FactoryHostDeps): Promise<{ host: MergeLaneHost; executor: MoaMergeExecutor; subscribe: (fn: (f: Fact) => void) => () => void; recent: () => Fact[] } | null> {
-  const [{ getFactLog }, { getBotDirectory }, { getFactorySettings }, { getRoomWriter }, { getTaskLedger }, { getPrVerdictStore }, laneGh, { ghPrReviewService }, { ghIssueService }, { getApprovalService }, { getBotRuntime }] = await Promise.all([
+  const [{ getFactLog }, { getBotDirectory }, { getFactorySettings }, { getRoomWriter }, { getTaskLedger }, { getPrVerdictStore }, laneGh, hostLane, { getApprovalService }, { getBotRuntime }] = await Promise.all([
     import('./factLog'),
     import('./botStore'),
     import('./factorySettings'),
@@ -646,8 +664,7 @@ async function productionHost(deps: FactoryHostDeps): Promise<{ host: MergeLaneH
     import('../deck/taskLedgerHost'),
     import('../github/prVerdictStore'),
     import('./laneGh'),
-    import('../github/GhPrReviewService'),
-    import('../github/GhIssueService'),
+    import('../github/hostLane'),
     import('./approvals'),
     import('./BotRuntime'),
   ]);
@@ -701,7 +718,7 @@ async function productionHost(deps: FactoryHostDeps): Promise<{ host: MergeLaneH
         return approvals ? approvals.identityEffect(e) : 'approval-not-running';
       },
     },
-    updateBranch: (e): Promise<PrWriteResult> => ghPrReviewService.updateBranch(e.repoPath, e.repoKey, e.prNumber, e.expectHead),
+    updateBranch: laneGh.updateBranchEffect,
     identity: (e) => (laneHost as MergeLaneHost).identity(e),
     emit: (e) => {
       laneHost?.onEffect(e);
@@ -731,10 +748,11 @@ async function productionHost(deps: FactoryHostDeps): Promise<{ host: MergeLaneH
     laneMergesToday: () => laneMergesToday(effects.list(), Date.now()),
     ledgerRow: (id) => ledger.get(id),
     authorWorkspaces: (repoPath, headRefName, tasks) => laneGh.prAuthorWorkspaces(deps.getDaemonClient, { workspaceId: tasks[0]?.taskWorkspaceId ?? '' }, repoPath, headRefName),
-    // Read per evaluation (GhIssueService keeps it per host), so a bot
-    // added after start, or a gh login that changed, is seen.
-    ownerLogin: (h, cwd) => ghIssueService.signedInLogin(h, cwd),
+    // Read per evaluation, by host (gh or glab), so a bot added after start,
+    // or a login that changed, is seen.
+    ownerLogin: (h, cwd) => hostLane.signedInLogin(h, cwd),
     currentLogin: laneGh.currentGhLogin,
+    baseGate: (repoPath, at) => repoBaseGate(repoPath, at),
     effects,
     logins: fileLaneLogins(path.join(wmuxDir, 'factory', LANE_LOGINS_FILENAME)),
     run: (id) => executor.run(id),

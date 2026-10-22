@@ -330,9 +330,51 @@ describe('verifier-pass-at-head with botVerdictsOnly (evidence binding)', () => 
   });
 
   it('on: a skipped gate is not a pass, even with exit 0', () => {
-    const skipped = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: head } });
+    const skipped = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_changes', headSha: head } });
     expect(reasonOf(botCtx({ evidenceRows: rows(skipped) }))).toBe('gate-skipped');
     expect(verdictEvidenceCheck(botVerdict(), rows(skipped))).toBe('gate-skipped');
+    // The head dropped the gate its base declares: recorded as a failed `none`.
+    const dropped = row({ gate: { exitCode: 1, tail: '', at: 1, command: 'none', recordedBy: 'system', headSha: head } });
+    expect(verdictEvidenceCheck(botVerdict(), rows(dropped))).toBe('gate-skipped');
+    const noGateRed = row({ gate: { exitCode: 1, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: head } });
+    expect(verdictEvidenceCheck(botVerdict(), rows(noGateRed))).toBe('gate-skipped');
+  });
+
+  it('on: the no_gate_command record (no gate declared on the base) counts as the gate', () => {
+    const noGate = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: head } });
+    expect(evaluateMergeLane(facts, botCtx({ evidenceRows: rows(noGate) })).ok).toBe(true);
+    // Still bound to the head it ran on.
+    const elsewhere = row({ gate: { exitCode: 0, tail: '', at: 1, command: 'none', recordedBy: 'system', skipped: 'no_gate_command', headSha: 'c'.repeat(40) } });
+    expect(reasonOf(botCtx({ evidenceRows: rows(elsewhere) }))).toBe('evidence-mismatch');
+  });
+
+  it('on: a reading-only PASS counts while the forge\'s base tip is where main read its gate, or declares no gate either', () => {
+    const BASE = 'd'.repeat(40);
+    const NEW = 'e'.repeat(40);
+    const reading = (over: Partial<NonNullable<PrVerdictRecord['evidence']>> = {}, rec: Partial<PrVerdictRecord> = {}) =>
+      botVerdict({ evidence: { taskId: 'reading-only', gateHeadSha: head, reading: 'no-gate', baseRef: `origin/${facts.baseRefName}`, baseSha: BASE, ...over }, ...rec });
+    const on = (tip: string | null | undefined) => ({ ...facts, baseRefOid: tip });
+    const run = (v: PrVerdictRecord, tip: string | null | undefined, noGateBase: string | null = null) => {
+      const f = on(tip);
+      return evaluateMergeLane(f, ctx(f, { botVerdictsOnly: true, verdicts: [v], evidenceRows: new Map(), noGateBase }));
+    };
+    const why = (v: PrVerdictRecord, tip: string | null | undefined, noGateBase: string | null = null) =>
+      run(v, tip, noGateBase).failures.find((x) => x.predicate === 'verifier-pass-at-head')?.reason;
+    expect(run(reading(), BASE).ok).toBe(true);
+    expect(run(reading(), BASE).verifiedBy).not.toHaveProperty('taskId');
+    // The base tip moved: refused, unless main read the new tip and found no gate there either.
+    expect(why(reading(), NEW)).toBe('base-moved');
+    expect(run(reading(), NEW, NEW).ok).toBe(true);
+    expect(why(reading(), NEW, BASE)).toBe('base-moved');
+    // An unread tip, a retargeted PR, or no baseSha.
+    expect(why(reading(), null)).toBe('base-moved');
+    expect(why(reading(), undefined, null)).toBe('base-moved');
+    expect(why(reading({ baseRef: 'origin/release/2' }), BASE)).toBe('base-moved');
+    expect(why(reading({ baseSha: undefined }), BASE)).toBe('base-moved');
+    // Bound to a bot and to the head; any other basis never counts.
+    expect(why(reading({}, { principal: { workspaceId: 'ws-verifier', ptyId: 'pty-1', agent: 'claude' } }), BASE)).toBe('evidence-mismatch');
+    expect(why(reading({ gateHeadSha: 'c'.repeat(40) }), BASE)).toBe('evidence-mismatch');
+    expect(why(reading({ reading: 'docs-only' }), BASE)).toBe('gate-required');
   });
 
   it('on: a failing or killed gate refuses', () => {

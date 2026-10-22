@@ -135,9 +135,15 @@ reads as a second, differently tinted panel.
   corners) with a 1px `--sheet-edge` hairline along the curve, and that
   line is the one seam. With the sidebar hidden the pane column drops both,
   leaving the sheet's own edge as the only boundary.
-- **Native fullscreen** (any platform) and **maximized on Windows** (whose
-  maximized windows have square corners): the sheet drops its margins and
+- **Native fullscreen** (any platform): the sheet drops its margins and
   radius. The rail stays.
+- **Maximized on Windows** (whose maximized windows have square corners): the
+  sheet drops its margins and the corners on the screen's edges are square.
+  The one corner beside the rail and the titlebar meets the frame, not the
+  screen, so it keeps `--sheet-radius`, with the hairline and the faint
+  shadow along the top and the rail side, as in a windowed window (mirrored
+  when the sidebar is docked right). Every rail page and the Workspaces page
+  show the same corner: the sheet clips them all.
 - **Terminal geometry is untouched** by the frame: margin changes, a sidebar
   collapse, maximize and fullscreen each refit the terminals once, never per
   frame.
@@ -152,6 +158,10 @@ reads as a second, differently tinted panel.
   `--glass-frame` of `--frame-bg` over the material and the sheet adds
   `--glass-sheet` of the mantle under the sidebar; the panes and every
   terminal stay opaque, so the hero never changes with the wallpaper. The
+  sheet's edge is then an ink of the text colour (10%), not the opaque
+  `--sheet-edge`: over a translucent frame an opaque hairline reads lighter
+  than the frame on a dark or tinted backdrop and vanishes on a light one,
+  while the ink keeps the same step over any backdrop. The
   user picks Off, Soft (default) or Clear in Settings › Appearance ›
   Interface. Coverage of the sidebar, frame and sheet stacked: dark themes
   about 29% Soft / 14% Clear; strongly hued themes (Stars & Stripes, Red
@@ -170,7 +180,12 @@ reads as a second, differently tinted panel.
   range stops at 90% (`GLASS_MAX_COVERAGE`), above which the glass no longer
   reads as glass: a theme that needs more, or whose muted text misses 3:1
   even opaque, is opaque on Windows as if glass were Off (material none, a
-  solid caption strip), while the setting keeps the user's level. Nothing is
+  solid caption strip), while the setting keeps the user's level. A theme
+  whose opaque `--text-muted` misses 3:1 at the cap may carry a glass-only
+  muted value (`WINDOWS_GLASS_MUTED`): the opaque one moved by lightness only,
+  the least step that lets the gate pass on Soft and Clear. The gate judges
+  that value, and it paints only under `html[data-glass][data-platform="win32"]`,
+  so macOS and glass Off keep the opaque token. Apart from that nothing is
   pinned per theme, so a token change moves a theme in or out of glass on its
   own. Where the legibility minimum sits above both floors, Soft and Clear
   get the same frame coverage. The level the window last showed is saved
@@ -448,7 +463,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   opens. A group's name pill opens the same dialog to rename it, change its
   bots, or Delete group (asked in place: its messages stay saved, the row
   goes). A group with nothing said yet reads "Write the first message:
-  every bot here answers and introduces itself." Nobody greets first in a
+  every bot here answers and introduces itself.", or, in a group with a
+  coordinator, "Write the first message: it goes to <lead>, who leads this
+  group and hands the work on." Nobody greets first in a
   group and no "joined" line is drawn: each bot the owner's first message
   reaches introduces itself in its answer (its wake asks it to; no canned
   card), and a bot's greeting stays in its 1:1. A room the owner had
@@ -588,6 +605,27 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   profile?", "Change this in your profile?" or "Remove this from your
   profile?", the exact entry fenced, replace showing Now and Becomes),
   approved on the card only, as a skill is.
+- **Recipes (2026-10-21):** Add bot has a Recipe row above "Start from": a
+  native Select (None, then the recipes in three groups — sign in with one
+  click, an access token, your own OAuth client). A recipe sets the Custom
+  template and prefills the job by the chips' rule (it replaces only its
+  own prefill); a chip pressed after it clears it. Under it one muted line:
+  what it does, which services it reads, "needs your own OAuth client"
+  where it does, "macOS and Linux only" on Windows, and that nothing is
+  connected by it. It grants nothing. A bot made from one has a Recipe row
+  in its profile, above its connections: the recipe's name in the main
+  text, then one line per service it needs — the name (main text once
+  ready, muted otherwise) and its state as a muted text button (Checking…
+  until the library and its sign-in are read, Sign in needed or Token
+  needed, Not given to this bot, Tools not picked, Ready to try — "· with a
+  key" for a keyed connection — or macOS and Linux only) that opens
+  Plugins › Connectors — then, while one has a step left, one muted hint,
+  and once one is ready, one muted line saying wmux checks again when a
+  worker starts (read-only tools, the command sandbox) and the bot says in
+  the chat why if not. No colour: a state is words. No recipe offers a
+  schedule while a signed-in task can run only once per bot conversation.
+  The first-run panel offers the same form under its repository line, as
+  the muted text button "Start from a recipe…".
 - **Commands (2026-10-21):** under Memory, only where the bot runs
   commands at all (a Claude SDK bot, the OS sandbox present, a new enough
   Claude Code), a Commands row: first "Let this bot run commands" with a
@@ -768,13 +806,16 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   owner's sent card shows them as thumbnails above its words (none for a
   photo-only message) and a click opens one fitted in a dialog. A 1:1
   message is addressed to that bot alone. A group's message goes to every
-  bot of the group (they may answer each other; a coordinator is a bot like
-  any other, its job saying it leads — owner decision 2026-10-15) unless
-  bots are picked: the **recipients control** right above the pill, a 24px
-  chip "To: everyone ▾" ("받는 봇: 모두 ▾"; "To: <names>" in the
-  `--selection-emphasis` fill once some are picked) that opens a checkbox
-  per bot of the group (the "+" menu's popover place) with one muted line:
-  none ticked goes to everyone, and the picks reset after each send. An `@`
+  bot of the group (they may answer each other) — or, in a group with a
+  coordinator that is on and not paused, to that coordinator (and to any
+  bot waiting on the owner's answer in that thread), which hands the work
+  on (owner decision 2026-10-21) — unless bots are picked: the **recipients control**
+  right above the pill, a 24px chip "To: everyone ▾" ("받는 봇: 모두 ▾";
+  "To: <lead> ▾" in a group with a coordinator, without a fill since it is
+  the default; "To: <names>" in the `--selection-emphasis` fill once some
+  are picked) that opens a checkbox per bot of the group (the "+" menu's
+  popover place) with one muted line: none ticked goes to everyone (to the
+  lead, in a group with one), and the picks reset after each send. An `@`
   and a group bot's name anywhere in the message ticks that bot too, and an
   `@` naming no bot of the group is plain text (owner decision
   2026-10-15). A reply in a thread the group started goes to the picked
@@ -1294,6 +1335,26 @@ leaves the page.
   wizard. Neutral text with no fill and no attention orange (nothing waits on
   an answer); the caution yellow is on its small glyph only. It is checked
   once after startup and whenever the wizard checks again, never on a timer.
+- **Star on GitHub** (owner-approved 2026-10-21): the one place wmux asks for
+  a star, in the same slot at the sidebar's foot (bottom left) and the same
+  muted row: a small outline star in the text's tone, "Enjoying wmux?", a
+  text button **Star on GitHub** and a trailing ghost × ("Not now"). Neutral
+  text, no fill, no attention orange, no accent; only its two buttons take
+  the hover fill and the focus ring. Below "Agent not set up" in priority:
+  it waits until the agent check has run and found an agent ready, so the
+  two never show together, and like that row it has no form in the
+  collapsed rail. It shows only after real use, all of it local state (no
+  telemetry): three days after wmux first ran it, and once 20 new agent
+  sessions have started in panes since (counted from the agents' own
+  session-start hook: a resume, a restored pane or a bot's worker does not
+  count). × doubles the number, counts from zero again and keeps the row
+  away for three days. Star uses the user's own signed-in gh (one PUT;
+  then "Starred — thank you" for a moment and the row is gone for good);
+  without gh, or if that fails, it opens the repository page and is gone
+  for good too. Right before its first showing in an app session, a
+  signed-in gh is asked once whether wmux is already starred; yes ends it
+  unseen. **Settings › About › Links** keeps a permanent "Star wmux on
+  GitHub" row with the same action.
 - **Bot workers are not listed:** a fan-out task a factory bot dispatched
   (lineage origin `{kind:'bot'}`) is the bot's worker, shown on the Bots
   page only; the sidebar's task groups, the collapsed rail and the Ctrl+N
@@ -1791,6 +1852,11 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-21 | Owner decision: Plugins is a rail page (after Git) with a puzzle-piece glyph — a mantle catalog list (Signature, Catalog, Installed, Connectors) beside one detail with the permission list and one primary per state; Signature is a catalog data flag (Office today). Connectors lose their rail item and become the page's Connectors row; the `connectors` route redirects there. Settings › Plugins keeps only a link. Plugin rail items get their catalog glyph instead of the Workspaces one | One home for everything that extends wmux; the signature plugin is seen first; the rail drops an item |
 | 2026-10-21 | Owner decision: a muted "Agent not set up · Set up" row at the sidebar's foot while no agent is ready (shipped in #2535) | The user who chose Later in the setup wizard keeps one quiet way back to it |
 | 2026-10-21 | A bot's HTML file and an `html` block in the Bots chat get **Preview / Code** (a compact segmented control), not the preview tab's View source | The preview tab is a page opened to be read, so the source is a detour behind one button. Here the two views are peers in one place: a page opens as Preview, a chat block as Code, and one control switches either way |
+| 2026-10-21 | Owner decision: Windows keeps the sheet's frame-side corner rounded. Maximized, the corner beside the rail and the titlebar keeps `--sheet-radius` with the hairline on the top and rail side; only the corners on the screen's edges are square. Under window glass the sheet's edge is a 10% text ink, not the opaque `--sheet-edge` | Maximized Windows rail pages showed a right angle where macOS and the terminal view show a curve, and the rail met the sidebar with no hairline. Over translucent acrylic the opaque hairline read lighter than the frame on tinted backdrops and vanished on light ones (measured on Windows 11, Paper) |
+| 2026-10-21 | Owner decision: every theme's muted text (`--text-muted`, `--text-subtle`) reads at ≥3:1 and secondary text (`--text-sub`, `--text-sub2`) at ≥4.5:1 on its own surfaces: the sheet, the sidebar column, the frame and rail, and the row hover over the sheet and the column. Paper, Mono, Mono Light, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Nightowl and Void were lifted by HSL lightness only, the least that clears every surface; their hue and saturation stay. Where a hand-pinned `--text-subtle` would have sunk below the lifted muted, it now derives from muted and sub like every other theme (Catppuccin takes Overlay2). `themeTextContrast.test.ts` pins the floors | Muted text on ten built-in themes fell under 3:1 even on the theme's own opaque sidebar (Void 1.66, Catppuccin 2.60), so labels, counts and metadata were hard to read |
+| 2026-10-21 | Orchestrator decision (owner direction, recommended option): in a room or group chat with an enabled coordinator, an owner message that names no bot goes to that coordinator alone, which hands the work on; a message that picks bots goes to exactly those, and a room or group without a coordinator still reaches every bot. The recipients chip reads "To: <lead> ▾" (no fill: it is the default) and its muted line and the empty group's line name the lead. Amends Group chats and Composer; reverses, for a group with a coordinator, the 2026-10-15 group chat row's "the coordinator-only routing of an untagged room message is gone" | Woken together, every bot answered one message (four answers, some saying they had nothing to add), the coordinator restated what the others had just posted, and the work it promised to report never came back to it because it had not dispatched it. The chip names the lead, so the owner can see who gets the message, which was the reason the earlier routing was dropped |
+| 2026-10-21 | Owner decision: a muted "Enjoying wmux? · Star on GitHub ×" row at the sidebar's foot, below "Agent not set up" in priority, plus a permanent Star row in Settings › About. It shows three days after first run and after 20 new agent sessions; each "Not now" doubles that number, restarts the count and adds a three-day cooldown (modelled on Orca and Superset). The star is one click through the user's own gh, else the repository page; no telemetry | Stars are how other developers find wmux, but a prompt that nags costs more than it earns. Asking only after real use, backing off on every no, and never asking again once starred keeps it to a few asks per user; gh makes the yes a single click without a new sign-in, and the counting stays on the machine |
+| 2026-10-22 | Owner decision: Windows glass gives muted text a glass-only value. On Paper, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Gruvbox Dark Hard and Void, `--text-muted` under `html[data-glass][data-platform="win32"]` is the opaque token moved by lightness only, the least step that passes the coverage gate; the gate judges that value, and the worst-backdrop model is unchanged. macOS and glass Off keep the opaque token. Mono, Mono Light and Nightowl stay opaque on Windows (their `--text-sub` misses 4.5:1 at the cap) | After the opaque contrast lift, eleven themes were still opaque on Windows because muted text sized for the opaque sidebar missed 3:1 over the worst backdrop even at 90% coverage |
 
 ### Desktop conversation view
 

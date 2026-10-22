@@ -178,19 +178,23 @@ function git(args, cwd, env = {}) {
 
 const GIT_ID = ['-c', 'user.name=factory-smoke', '-c', 'user.email=factory-smoke@example.invalid'];
 
-/** A bare "GitHub" repo plus the bot's clone of it over the ssh stand-in. */
+/** A bare "GitHub" repo plus the bot's clone of it over the ssh stand-in.
+ *  `setup.repo: {gate: false}`: a repository that declares no gate (no
+ *  package.json, as a Python project's checkout would be to wmux). */
 function makeRepo(ctx) {
   const origin = path.join(ctx.tmp, 'origin.git');
   const seed = path.join(ctx.tmp, 'seed');
   const work = path.join(ctx.tmp, 'app');
   git(['init', '-q', '--bare', '-b', 'main', origin], ctx.tmp);
   git(['init', '-q', '-b', 'main', seed], ctx.tmp);
-  fs.writeFileSync(path.join(seed, 'package.json'), `${JSON.stringify({
-    name: 'factory-smoke-app',
-    version: '1.0.0',
-    private: true,
-    scripts: { lint: 'node -e "process.exit(0)"', test: 'node -e "process.exit(0)"' },
-  }, null, 2)}\n`);
+  if (ctx.sc.setup?.repo?.gate !== false) {
+    fs.writeFileSync(path.join(seed, 'package.json'), `${JSON.stringify({
+      name: 'factory-smoke-app',
+      version: '1.0.0',
+      private: true,
+      scripts: { lint: 'node -e "process.exit(0)"', test: 'node -e "process.exit(0)"' },
+    }, null, 2)}\n`);
+  }
   fs.writeFileSync(path.join(seed, 'README.md'), '# factory smoke scratch repo\n');
   fs.writeFileSync(path.join(seed, '.gitignore'), 'node_modules/\n');
   git(['add', '-A'], seed);
@@ -262,12 +266,14 @@ function prepare(ctx) {
     'unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN',
     `export FACTORY_E2E_GH_STATE="${ctx.ghState}"`,
     `export FACTORY_E2E_GH_LOG="${ctx.ghLog}"`,
+    ...(ctx.repo ? [`export FACTORY_E2E_GH_ORIGIN="${ctx.repo.origin}"`] : []),
     `export FACTORY_E2E_WORKER_LOG="${ctx.workerLog}"`,
     `export FACTORY_E2E_MCP_BUNDLE="${MCP_BUNDLE}"`,
     `export FACTORY_E2E_NODE="${NODE}"`,
     `export FACTORY_E2E_WORKER_DELAY_MS="${Number(worker.delayMs ?? 1500)}"`,
     `export FACTORY_E2E_WORKER_STATUS="${worker.status ?? 'review_requested'}"`,
     `export FACTORY_E2E_WORKER_COMMIT="${worker.commit ? '1' : '0'}"`,
+    `export FACTORY_E2E_WORKER_FILE_EXT="${/^[a-z0-9]{1,8}$/.test(String(worker.fileExt ?? '')) ? worker.fileExt : 'txt'}"`,
     // A scenario's test knobs (main honours them only on an isolated instance).
     ...Object.entries(sc.setup?.env ?? {})
       .filter(([k, v]) => /^WMUX_TEST_[A-Z0-9_]+$/.test(k) && /^[A-Za-z0-9_.:-]{0,200}$/.test(String(v)))
@@ -485,12 +491,20 @@ function ghEdit(ctx, a) {
         if (!b) throw new HarnessError(`no origin branch under ${a.fromBranch}`);
         pr.headRefName = b.name;
         pr.headSha = b.sha;
+        // `filesFromBranch`: the PR lists the branch's own changes, as
+        // GitHub does.
+        if (a.filesFromBranch === true) {
+          pr.files = git(['diff', '--name-only', '--no-renames', `main...${b.sha}`], ctx.repo.origin).split('\n').filter(Boolean);
+        }
       } else if (!pr.headSha) {
         pr.headSha = git(['rev-parse', 'HEAD'], ctx.repo.seed);
         pr.headRefName ??= 'feature';
       }
-      // GitHub keeps every PR head at refs/pull/<n>/head.
+      // GitHub keeps every PR head at refs/pull/<n>/head. The fake reads the
+      // base tip live (fake-gh.mjs baseTip); the one at this point is saved
+      // for the graders.
       git(['update-ref', `refs/pull/${pr.number}/head`, pr.headSha], ctx.repo.origin);
+      ctx.saved[`pr${pr.number}Base`] = git(['rev-parse', `refs/heads/${pr.baseRefName}`], ctx.repo.origin);
       repo.prs.push(pr);
       ctx.saved[`pr${pr.number}Head`] = pr.headSha;
       ctx.saved[`pr${pr.number}Branch`] = pr.headRefName;

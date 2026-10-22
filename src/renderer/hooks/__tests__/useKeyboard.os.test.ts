@@ -271,6 +271,26 @@ describe('createPrefixActions — workspace actions', () => {
     expect(state.setActiveWorkspace).toHaveBeenCalledWith('w2');
   });
 
+  // A bot's worker is on the Bots page only, so Alt+Up/Down skips it like the
+  // sidebar and the digits do.
+  it('next/prevWorkspace skip a bot worker and leave one to the listed workspaces', () => {
+    const ws = [
+      { id: 'w1', rootPane: makeLeaf('p1', []), activePaneId: 'p1' },
+      { id: 'bot-task', rootPane: makeLeaf('pb', []), activePaneId: 'pb' },
+      { id: 'w2', rootPane: makeLeaf('p2', []), activePaneId: 'p2' },
+    ];
+    const fanoutOrigin = { 'bot-task': { kind: 'bot', botId: 'bot-1' } };
+    const next = makeMockDeps({ workspaces: ws, activeWorkspaceId: 'w1', fanoutOrigin } as never);
+    createPrefixActions(next.deps).nextWorkspace();
+    expect(next.state.setActiveWorkspace).toHaveBeenCalledWith('w2');
+    const prev = makeMockDeps({ workspaces: ws, activeWorkspaceId: 'w2', fanoutOrigin } as never);
+    createPrefixActions(prev.deps).prevWorkspace();
+    expect(prev.state.setActiveWorkspace).toHaveBeenCalledWith('w1');
+    const fromWorker = makeMockDeps({ workspaces: ws, activeWorkspaceId: 'bot-task', fanoutOrigin } as never);
+    createPrefixActions(fromWorker.deps).nextWorkspace();
+    expect(fromWorker.state.setActiveWorkspace).toHaveBeenCalledWith('w1');
+  });
+
   it('next/prevWorkspace are no-ops when only one workspace exists', () => {
     const { deps, state } = makeMockDeps({
       workspaces: [{ id: 'w1', rootPane: makeLeaf('p1', []), activePaneId: 'p1' }],

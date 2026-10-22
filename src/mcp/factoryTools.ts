@@ -13,7 +13,7 @@ import { PR_VERDICT_RPC, PR_VERDICT_SUMMARY_MAX } from '../shared/prVerdict';
 import { ROOM_LIMITS } from '../shared/room';
 import { registerToolModule } from './toolModules';
 
-/** pr_verdict reads the PR from GitHub before recording. */
+/** pr_verdict reads the PR from its host before recording. */
 const PR_VERDICT_TIMEOUT_MS = 30_000;
 /** Trust metrics read the git log of the repository. */
 const TRUST_TIMEOUT_MS = 30_000;
@@ -36,7 +36,7 @@ registerToolModule({
 
     host.tool(
       'pr_read',
-      'Read one pull request of your workspace\'s repository, fresh from GitHub: state, head SHA and branch, base, author, labels, changed files (first 100) and checks with which are required.',
+      'Read one pull request of your workspace\'s repository, fresh from its host (on GitLab a merge request: pr_number is its iid, checks are its head pipeline\'s jobs): state, head SHA and branch, base, author, labels, changed files (first 100) and checks with which are required.',
       { pr_number: PR_NUMBER, workspace_id: WORKSPACE },
       async ({ pr_number, workspace_id }) => call(FACTORY_READ_RPC.prRead, { prNumber: pr_number, workspaceId: workspace_id }),
     );
@@ -69,17 +69,24 @@ registerToolModule({
     host.tool(
       'pr_verdict',
       'Record your verdict on one PR head. evidence.task_id is the verify task (preset "verify", detached at head_sha) whose gate wmux recorded at that SHA: '
-        + 'a pass needs that gate green; a fail may rest on a red one. wmux re-reads the PR head and checks the task the way the merge lane will; '
-        + 'a refusal names the reason (head-mismatch, evidence-mismatch, gate-skipped, gate-failed, ...).',
+        + 'a pass needs that gate green; a fail may rest on a red one. evidence.reading=true records your own reading instead, only when the PR\'s base branch '
+        + 'declares no gate (a docs-only change in a repository with a gate still needs a verify task). wmux re-reads the PR head and checks the evidence the way the merge lane will; '
+        + 'a refusal names the reason (head-mismatch, evidence-mismatch, gate-skipped, gate-failed, gate-required, ...).',
       {
         pr_number: PR_NUMBER,
         head_sha: z.string().regex(/^[0-9a-f]{40}$/).describe('The full head SHA you verified.'),
         verdict: z.enum(['pass', 'fail']),
         summary: z.string().min(1).max(PR_VERDICT_SUMMARY_MAX).describe('What the gate and the reading showed.'),
-        evidence: z.object({ task_id: z.string().min(1).max(200) }).strict(),
+        evidence: z.union([
+          z.object({ task_id: z.string().min(1).max(200) }).strict(),
+          z.object({ reading: z.literal(true) }).strict(),
+        ]),
       },
       async ({ pr_number, head_sha, verdict, summary, evidence }) =>
-        call(PR_VERDICT_RPC, { prNumber: pr_number, headSha: head_sha, verdict, summary, evidence: { taskId: evidence.task_id } }, PR_VERDICT_TIMEOUT_MS),
+        call(PR_VERDICT_RPC, {
+          prNumber: pr_number, headSha: head_sha, verdict, summary,
+          evidence: 'task_id' in evidence ? { taskId: evidence.task_id } : { reading: true },
+        }, PR_VERDICT_TIMEOUT_MS),
     );
 
     host.tool(
