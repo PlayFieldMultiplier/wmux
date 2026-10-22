@@ -1342,7 +1342,8 @@ describe('a conversation that holds data from a signed-in task', () => {
     r.setTainted(taint.reasonTainted(held(gateway)));
     expect(await ask(r, { preset: 'research', connectors: ['notion'] })).toMatchObject({ ok: true });
     await r.flush();
-    expect(r.start.mock.calls[0][0] as FanOutRequest).toMatchObject({ gatewayConnectors: ['notion'] });
+    // Its retry reports in the bot's 1:1 too.
+    expect(r.start.mock.calls[0][0] as FanOutRequest).toMatchObject({ gatewayConnectors: ['notion'], threadId: `dm:${BOT_ID}` });
     expect(taint.reasonTainted(held(research))).toBe(true);
   });
 });
