@@ -525,6 +525,11 @@ function WorkspaceAgentRoster({ workspaceId, pulsingPaneId, taskIds, renderTask,
                   style={pulsingPaneId === row.paneId ? { transition: 'background-color 150ms ease-out' } : undefined}
                   title={rowAriaLabel}
                   aria-label={rowAriaLabel}
+                  // Stable handles for UI automation (scripts/e2e-first-run.mjs):
+                  // which agent the row is, and the status its mark shows.
+                  data-testid="sidebar-agent-row"
+                  data-agent-slug={row.slug}
+                  data-agent-status={exited ? 'exited' : row.status}
                   onClick={(event) => {
                     event.stopPropagation();
                     if (openSurface) {

@@ -36,7 +36,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Proof and skip reporting
 
 - Capture the user action and the resulting state, not only the final screen: a `snapshot` of the changed region right after the action, and a `screenshot` when the claim is visual.
-- Mutation proof includes a second, read-only view: an `inspect` read-back, a reopened panel, or the persisted file (`~/Library/Application Support/wmux<suffix>/session.json` on macOS for UI settings, `~/.wmux<suffix>/` for daemon state).
+- Mutation proof includes a second, read-only view: an `inspect` read-back, a reopened panel, or the persisted file (`<userData>/session.json` for UI settings, where `<userData>` is the `userData` field `control-wmux doctor` or `launch` prints, never a hard-coded profile path; `~/.wmux<suffix>/` for daemon state).
 - Every artifact lands in `.claude/skills/verify-wmux/evidence/<run-id>/`; cite the paths and the feature ID (for example `settings-theme`) in the verdict.
 - When the screen is locked or the window hidden, `screenshot` may return `unavailable` or `suspectBlank`; say so and rely on the ARIA snapshot plus read-back.
 - Report an unreachable path with the attempted command and the unmet precondition (`verified-unreachable: pc-switch, needs a paired second PC`).

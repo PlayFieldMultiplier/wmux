@@ -9,7 +9,7 @@
 // command except `launch` refuses to run without it, so the driver can only
 // ever touch the instance it launched itself — never the owner's real wmux.
 //
-//   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms]
+//   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms] [--env-file vars.json] [--user-data-dir dir]
 //   node scripts/control-wmux.mjs doctor
 //   node scripts/control-wmux.mjs snapshot [--testid ID | --selector CSS | --role R --name N] [--as label]
 //   node scripts/control-wmux.mjs screenshot [--as label]
@@ -30,21 +30,45 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  appIdentityHolds,
   claimOwnedBy,
+  darwinEnvPart,
+  electronUserDataDir,
   envHasSuffix,
-  findClaimedPort,
+  launchAppArgs,
+  launchdJobsFor,
+  launchEnv,
+  launchUserDataDirArg,
+  ownedCdpPort,
+  packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
+  parseKillResults,
+  parseProcessStart,
+  parseUserDataLog,
+  pathPresent,
+  processListQuery,
+  processStartQuery,
+  purgeSuffixedData,
+  resolveUserDataRecord,
   scrubEnv,
+  signalProcess,
+  stopRecordedApp,
   suffixRefusal,
   suffixedPaths,
+  windowsKillQuery,
 } from './lib/control-wmux-lib.mjs';
+import { normalizeProcessRows, runProcessTree, survivors } from './lib/e2e-first-run-lib.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_DIR = path.join(REPO_ROOT, '.claude', 'skills', 'verify-wmux');
-const RUN_DIR = path.join(SKILL_DIR, '.run');
+// CONTROL_WMUX_DIR moves the run state and evidence out of the skill folder,
+// so a harness (scripts/e2e-first-run.mjs) keeps its own instance record and
+// artifacts and never collides with a verify-wmux session in the same checkout.
+const CONTROL_DIR = process.env.CONTROL_WMUX_DIR ? path.resolve(process.env.CONTROL_WMUX_DIR) : SKILL_DIR;
+const RUN_DIR = path.join(CONTROL_DIR, '.run');
 const STATE_FILE = path.join(RUN_DIR, 'state.json');
-const EVIDENCE_ROOT = path.join(SKILL_DIR, 'evidence');
+const EVIDENCE_ROOT = path.join(CONTROL_DIR, 'evidence');
 const CLAIM_DIR = path.join(os.homedir(), '.cache', 'wmux-cdp');
 const DEFAULT_APP = '/Applications/wmux.app/Contents/MacOS/wmux';
 
@@ -94,6 +118,68 @@ function pidAlive(pid) {
   } catch (err) {
     return err.code === 'EPERM';
   }
+}
+
+/** A live process's creation time (epoch ms), or null when it is gone or unreadable. */
+function processStartedAt(pid) {
+  const q = processStartQuery(pid);
+  if (!q) return null;
+  const r = spawnSync(q.file, q.args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 30_000,
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  return r.status === 0 ? parseProcessStart(r.stdout, pid) : null;
+}
+
+/** Every process as identity rows ({ ProcessId, ParentProcessId, CreationDate, … }), or null. */
+function listProcessRows() {
+  const q = processListQuery();
+  const r = spawnSync(q.file, q.args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 60_000,
+    maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (r.status !== 0) return null;
+  try {
+    return normalizeProcessRows(process.platform === 'win32' ? JSON.parse(r.stdout) : r.stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** The recorded processes still alive after up to `ms`; [] once all are gone. */
+async function waitTreeGone(tree, ms) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const rows = listProcessRows();
+    const left = rows ? survivors(tree, rows) : tree;
+    if (left.length === 0 || Date.now() >= end) return left;
+    await sleep(500);
+  }
+}
+
+/**
+ * Is the app this state recorded (pid + creation time, taken right after
+ * spawn) still the process holding that pid? The only test that lets `stop`
+ * or `restart` signal it: a pid alone may have been reused by anything.
+ */
+function recordedAppAlive(state) {
+  return appIdentityHolds(state, { pidAlive, startedAt: processStartedAt });
+}
+
+/**
+ * Windows: terminate { pid, createdAt } targets through handles pinned to
+ * their recorded creation time (windowsKillQuery). Returns { [pid]: result }.
+ */
+function killByIdentity(targets) {
+  const q = windowsKillQuery(targets);
+  if (!q) return {};
+  const r = spawnSync(q.file, q.args, { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+  return r.status === 0 ? parseKillResults(r.stdout) : {};
 }
 
 function readPidFile(file) {
@@ -255,7 +341,8 @@ async function cdpScreenshot(page, timeoutMs = 8000) {
 // ---------------------------------------------------------------- commands
 async function cmdLaunch(opts, reconnectState = null) {
   const existing = readState();
-  if (existing && pidAlive(existing.pid)) {
+  // A state without a recorded creation time (older driver) stays conservative.
+  if (existing && (existing.pidCreatedAt == null ? pidAlive(existing.pid) : recordedAppAlive(existing))) {
     fail(`an instance launched by this driver is still running (pid ${existing.pid}, suffix ${existing.suffix}); run \`stop\` first`);
   }
   const suffix = String(opts.suffix || `-verify-${crypto.randomBytes(3).toString('hex')}`);
@@ -274,19 +361,56 @@ async function cmdLaunch(opts, reconnectState = null) {
   }
   const preExisting = reconnectState?.preExisting ?? suffixedPaths(home, suffix).filter((p) => fs.existsSync(p));
 
+  // `restart` relaunches with the variables the first launch was given.
+  const envFile = opts['env-file'] ? path.resolve(String(opts['env-file'])) : reconnectState?.envFile ?? null;
+  let extraEnv = {};
+  if (envFile) {
+    try {
+      extraEnv = JSON.parse(fs.readFileSync(envFile, 'utf8'));
+    } catch (err) {
+      fail(`--env-file ${envFile} is not readable JSON: ${err.message}`);
+    }
+  }
+  const built = launchEnv(process.env, suffix, extraEnv);
+  if (built.refusal) fail(built.refusal);
+  const env = built.env;
+
+  // Electron's userData, snapshotted like the paths above so `stop --purge`
+  // removes it only if this run created it. A relaunch keeps the first
+  // launch's record; a relaunch of a state without one stays unknown.
+  const userDataDirArg = launchUserDataDirArg({
+    explicit: opts['user-data-dir'] ? path.resolve(String(opts['user-data-dir'])) : null,
+    previous: reconnectState ? reconnectState.userDataDirArg ?? null : undefined,
+    home,
+    suffix,
+  });
+  const userDataPath = electronUserDataDir({ suffix, env, home, userDataDirArg });
+  const userData = reconnectState
+    ? reconnectState.userData ?? null
+    : { path: userDataPath, existedBeforeLaunch: pathPresent(userDataPath) };
+
   const runId = `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}${suffix}`;
-  const state = { runId, suffix, app, pid: null, cdpPort: null, startedAt: new Date().toISOString(), preExisting };
+  const state = { runId, suffix, app, pid: null, cdpPort: null, startedAt: new Date().toISOString(), preExisting, userData, userDataDirArg };
   const dir = evidenceDir(state);
   const logPath = path.join(dir, 'app.log');
   const logFd = fs.openSync(logPath, 'a');
-  const env = scrubEnv(process.env, suffix);
   // Renderer console -> stderr -> app.log, so `console` can read history.
   env.ELECTRON_ENABLE_LOGGING = '1';
-  const child = spawn(app, [], { env, detached: true, stdio: ['ignore', logFd, logFd] });
-  child.unref();
+  const child = spawn(app, launchAppArgs({ userDataDirArg }), { env, detached: true, stdio: ['ignore', logFd, logFd] });
   fs.closeSync(logFd);
   state.pid = child.pid;
+  // The app's identity is its pid AND its creation time, read while we still
+  // hold the spawn handle: `stop` and `restart` signal state.pid only while
+  // both still match. Without it a reused pid would be indistinguishable.
+  state.pidCreatedAt = processStartedAt(child.pid);
+  if (state.pidCreatedAt == null) {
+    // Through our own handle, which cannot point at a reused pid.
+    child.kill();
+    fail(`could not read the launched app's creation time (pid ${child.pid}); stopped it through its spawn handle. See ${logPath}`);
+  }
+  child.unref();
   state.logPath = logPath;
+  if (envFile) state.envFile = envFile;
   writeState(state);
   timeline(state, { cmd: 'launch', app, suffix, pid: child.pid });
 
@@ -301,7 +425,10 @@ async function cmdLaunch(opts, reconnectState = null) {
       lastErr = `CDP disabled (${disabled || 'app log says so'}); the UI cannot be driven`;
       break;
     }
-    state.cdpPort = findClaimedPort(CLAIM_DIR, state.pid) ?? state.cdpPort;
+    // Only the port the app logged; until that line lands, keep polling.
+    state.cdpPort = ownedCdpPort(CLAIM_DIR, state.pid, log.requested);
+    if (!log.requested) lastErr = 'waiting for the app to log "CDP requested on port N"';
+    else if (!state.cdpPort) lastErr = `the claim for logged port ${log.requested} does not name pid ${state.pid} (yet)`;
     if (state.cdpPort) {
       const targets = await httpJson(`http://127.0.0.1:${state.cdpPort}/json/list`);
       if (Array.isArray(targets) && targets.some(isMainWindowTarget)) {
@@ -316,10 +443,18 @@ async function cmdLaunch(opts, reconnectState = null) {
     }
     await sleep(500);
   }
+  // The app logs where its userData really is; that path, not the
+  // prediction, is what launch and doctor print and stop --purge removes.
+  state.userData = resolveUserDataRecord({ recorded: state.userData, logged: parseUserDataLog(fs.readFileSync(logPath, 'utf8')) });
   writeState(state);
-  timeline(state, { cmd: 'launch', ready, cdpPort: state.cdpPort, note: ready ? 'ready' : lastErr });
+  timeline(state, { cmd: 'launch', ready, cdpPort: state.cdpPort, userData: state.userData, note: ready ? 'ready' : lastErr });
   if (!ready) fail(`launch not ready: ${lastErr}. The process is still recorded; run \`doctor\`, then \`stop\`.`);
-  return { ok: true, runId, suffix, pid: state.pid, cdpPort: state.cdpPort, app, evidenceDir: dir, log: logPath };
+  return { ok: true, runId, suffix, pid: state.pid, cdpPort: state.cdpPort, app, ...userDataFields(state.userData), evidenceDir: dir, log: logPath };
+}
+
+/** `userData` (the path) and `userDataSource` ('logged' or 'predicted') for launch and doctor output. */
+function userDataFields(record) {
+  return { userData: record?.path ?? null, userDataSource: record ? record.source ?? 'predicted' : null };
 }
 
 function appVersion(app) {
@@ -344,8 +479,17 @@ async function cmdDoctor() {
   checks.pid = state.pid;
   checks.alive = pidAlive(state.pid);
   if (!checks.alive) problems.push(`wmux pid ${state.pid} is not running`);
-  const log = parseCdpLog(fs.existsSync(state.logPath) ? fs.readFileSync(state.logPath, 'utf8') : '');
+  const logText = fs.existsSync(state.logPath) ? fs.readFileSync(state.logPath, 'utf8') : '';
+  const log = parseCdpLog(logText);
   checks.cdpLog = log;
+  // A launch that gave up before the app logged its userData line recorded
+  // the prediction; take the logged path now, and keep it for stop --purge.
+  const userData = resolveUserDataRecord({ recorded: state.userData ?? null, logged: parseUserDataLog(logText) });
+  if (JSON.stringify(userData) !== JSON.stringify(state.userData ?? null)) {
+    state.userData = userData;
+    writeState(state);
+  }
+  if (userData?.source === 'predicted') problems.push('the app has not logged its userData line; `userData` is the predicted path');
   checks.cdpDisabled = cdpDisabledReason(state.suffix) || (log.disabled ? 'app log: CDP disabled' : null);
   if (checks.cdpDisabled) problems.push(`CDP disabled: ${checks.cdpDisabled}`);
   checks.cdpPort = state.cdpPort;
@@ -377,7 +521,7 @@ async function cmdDoctor() {
   }
   const consoleErrors = readConsole(state, { errors: true }).length;
   checks.consoleErrors = consoleErrors;
-  const result = { ok: problems.length === 0, healthy: problems.length === 0, problems, checks, evidenceDir: evidenceDir(state) };
+  const result = { ok: problems.length === 0, healthy: problems.length === 0, problems, ...userDataFields(userData), checks, evidenceDir: evidenceDir(state) };
   fs.writeFileSync(path.join(evidenceDir(state), 'doctor.json'), `${JSON.stringify(result, null, 2)}\n`);
   timeline(state, { cmd: 'doctor', healthy: result.healthy, problems });
   return result;
@@ -548,22 +692,15 @@ async function cmdConsole(opts) {
 }
 
 function daemonCli(app) {
-  const m = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(app);
   const candidates = [
-    m ? path.join(m[1], 'Contents', 'Resources', 'cli-bundle', 'index.js') : null,
+    packagedCliBundle(app),
     path.join(REPO_ROOT, 'dist', 'cli-bundle', 'index.js'),
-  ].filter(Boolean);
+  ];
   return candidates.find((p) => fs.existsSync(p)) ?? null;
 }
 
-/** process.kill that treats "already gone" (ESRCH) as success. */
-function signal(pid, sig) {
-  try {
-    process.kill(pid, sig);
-  } catch (err) {
-    if (err.code !== 'ESRCH') throw err;
-  }
-}
+/** process.kill reporting 'gone' / 'denied' instead of throwing (signalProcess). */
+const signal = (pid, sig) => signalProcess(pid, sig);
 
 /** The environment of a same-user process as text, or '' when unreadable. */
 function processEnvText(pid) {
@@ -571,9 +708,11 @@ function processEnvText(pid) {
     try { return fs.readFileSync(`/proc/${pid}/environ`, 'utf8'); } catch { return ''; }
   }
   if (process.platform === 'darwin') {
-    // `ps -E` appends the environment of processes owned by the same user.
-    const r = spawnSync('ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
-    return r.status === 0 ? r.stdout : '';
+    // `ps -E` appends the environment of processes owned by the same user to
+    // the command line; keep only what follows the command line.
+    const withEnv = spawnSync('ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+    const argsOnly = spawnSync('ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+    return withEnv.status === 0 && argsOnly.status === 0 ? darwinEnvPart(withEnv.stdout, argsOnly.stdout) : '';
   }
   return '';
 }
@@ -590,8 +729,13 @@ async function cmdRestart(opts) {
   if (!daemonPid || !pidAlive(daemonPid) || !envHasSuffix(processEnvText(daemonPid), state.suffix)) {
     fail('restart needs a live daemon owned by the recorded isolated instance');
   }
-  // Use the same graceful detach as stop, but deliberately retain the daemon.
-  signal(state.pid, 'SIGTERM');
+  if (!recordedAppAlive(state)) fail(`the recorded app (pid ${state.pid}) is gone or its pid now belongs to another process; run stop then launch`);
+  // Use the same detach as stop, but deliberately retain the daemon. Windows:
+  // through a handle pinned to the recorded creation time, never a bare pid.
+  if (process.platform === 'win32') {
+    const result = killByIdentity([{ pid: state.pid, createdAt: state.pidCreatedAt }])[state.pid];
+    if (result !== 'killed') fail(`app pid ${state.pid} not terminated (${result || 'no result'})`);
+  } else if (signal(state.pid, 'SIGTERM') === 'denied') fail(`not permitted to signal pid ${state.pid}`);
   if (!(await waitDead(state.pid, 10_000))) fail('app did not exit; run doctor then stop');
   timeline(state, { cmd: 'restart', previousPid: state.pid, retainedDaemonPid: daemonPid });
   const result = await cmdLaunch({ app: state.app, suffix: state.suffix, timeout: opts.timeout }, state);
@@ -604,15 +748,17 @@ async function cmdStop(opts) {
   const steps = [];
   const env = scrubEnv(process.env, state.suffix);
 
-  // 1. The app: only the pid we spawned. SIGTERM detaches it from its daemon.
-  if (pidAlive(state.pid)) {
-    signal(state.pid, 'SIGTERM');
-    if (!(await waitDead(state.pid, 10_000))) {
-      signal(state.pid, 'SIGKILL');
-      await waitDead(state.pid, 3000);
-      steps.push(`app pid ${state.pid}: SIGKILL after SIGTERM timeout`);
-    } else steps.push(`app pid ${state.pid}: exited on SIGTERM`);
-  } else steps.push(`app pid ${state.pid}: already gone`);
+  // The app's own process tree, expanded only from its pinned identity (pid
+  // AND creation time) and taken while the app still runs: its renderer, GPU,
+  // network and storage services hold files in userData until they exit,
+  // which is after the app itself.
+  const appRows = state.pidCreatedAt != null && pidAlive(state.pid) ? listProcessRows() : null;
+  const appTree = appRows ? runProcessTree(appRows, [{ ProcessId: state.pid, CreationDate: state.pidCreatedAt }]) : [];
+
+  // 1. The app: only the process we spawned, by pid AND creation time. If the
+  // app died, its pid may already belong to someone else: never signal it.
+  // Ending it detaches it from its daemon.
+  steps.push(await stopRecordedApp(state, { pidAlive, startedAt: processStartedAt, signal, waitDead, killByIdentity }));
 
   // 2. The daemon our instance spawned (a normal quit only detaches from it).
   // Ask it to shut down over its own suffixed socket; fall back to the pid in
@@ -629,51 +775,70 @@ async function cmdStop(opts) {
       // A stale pid file can name a reused pid: only signal a process whose own
       // environment carries this run's suffix.
       if (envHasSuffix(processEnvText(daemonPid), state.suffix)) {
-        signal(daemonPid, 'SIGTERM');
-        steps.push(`daemon pid ${daemonPid}: SIGTERM (identity verified by WMUX_DATA_SUFFIX)`);
-        await waitDead(daemonPid, 5000);
+        if (signal(daemonPid, 'SIGTERM') === 'denied') steps.push(`daemon pid ${daemonPid}: not permitted to signal, skipped`);
+        else {
+          steps.push(`daemon pid ${daemonPid}: SIGTERM (identity verified by WMUX_DATA_SUFFIX)`);
+          await waitDead(daemonPid, 5000);
+        }
       } else steps.push(`daemon pid ${daemonPid}: still running, identity not verified, not signalled`);
     } else steps.push(`daemon pid ${daemonPid}: stopped`);
   } else steps.push('daemon: not running');
 
   // 3. launchd jobs labelled for our suffix that are no longer running.
   if (process.platform === 'darwin') {
-    const base = `com.wmux.daemon${state.suffix}.`;
     const list = spawnSync('launchctl', ['list'], { encoding: 'utf8' });
-    for (const line of (list.stdout || '').split('\n')) {
-      const [pidCol, , label] = line.trim().split(/\s+/);
-      if (label?.startsWith(base) && pidCol === '-') {
-        spawnSync('launchctl', ['bootout', `gui/${process.getuid()}/${label}`]);
-        steps.push(`launchd job ${label}: booted out`);
-      }
+    for (const { label, pid } of launchdJobsFor(list.stdout, state.suffix)) {
+      if (pid !== null) continue;
+      spawnSync('launchctl', ['bootout', `gui/${process.getuid()}/${label}`]);
+      steps.push(`launchd job ${label}: booted out`);
     }
+  }
+
+  // 3b. Wait for the app's tree (the daemon and its panes too, on Windows)
+  // to be gone: purging while a child still holds a file fails with EPERM.
+  let treeLeft = [];
+  if (appTree.length) {
+    treeLeft = await waitTreeGone(appTree, 15_000);
+    steps.push(treeLeft.length
+      ? `app process tree: ${treeLeft.length} of ${appTree.length} still running after 15 s (${treeLeft.map((r) => `${r.Name}#${r.ProcessId}`).join(', ')}), not killed`
+      : `app process tree: all ${appTree.length} process(es) exited`);
   }
 
   // 4. Optional: remove the suffixed data this run created (never evidence,
   // never a path that existed before launch).
-  const removed = [];
+  let removed = [];
+  let purgeSkipped = [];
   if (opts.purge) {
-    const pre = new Set(state.preExisting || []);
-    for (const p of suffixedPaths(home, state.suffix)) {
-      if (pre.has(p) || !fs.existsSync(p)) continue;
-      if (!path.basename(p).includes(state.suffix)) continue;
-      fs.rmSync(p, { recursive: true, force: true });
-      removed.push(p);
-    }
+    ({ removed, skipped: purgeSkipped } = purgeSuffixedData({
+      suffix: state.suffix,
+      paths: suffixedPaths(home, state.suffix),
+      preExisting: state.preExisting || [],
+      userData: state.userData,
+      // Reported only: a state without the record is never purged by guess.
+      legacyUserDataPath: electronUserDataDir({ suffix: state.suffix, env: process.env, home }),
+    }));
   }
+  const userDataLeft = state.userData?.path && pathPresent(state.userData.path) ? [state.userData.path] : [];
 
-  const leftover = [state.pid, readPidFile(daemonPidFile) ?? daemonPid].filter((p) => p && pidAlive(p));
-  timeline(state, { cmd: 'stop', steps, removed, leftover });
+  const leftover = [...new Set([
+    recordedAppAlive(state) ? state.pid : null,
+    ...[readPidFile(daemonPidFile) ?? daemonPid].filter((p) => p && pidAlive(p)),
+    ...treeLeft.map((r) => r.ProcessId),
+  ].filter(Boolean))];
+  timeline(state, { cmd: 'stop', steps, removed, purgeSkipped, leftover });
   const evidence = evidenceDir(state);
   fs.renameSync(STATE_FILE, path.join(RUN_DIR, `stopped-${state.runId}.json`));
   return {
     ok: leftover.length === 0,
     steps,
     removed,
+    ...(opts.purge ? { purgeSkipped } : {}),
     leftover,
     evidenceDir: evidence,
     evidence: fs.readdirSync(evidence),
-    ...(opts.purge ? {} : { dataLeftInPlace: suffixedPaths(home, state.suffix).filter((p) => fs.existsSync(p)) }),
+    ...(opts.purge ? {} : {
+      dataLeftInPlace: [...new Set([...suffixedPaths(home, state.suffix).filter((p) => fs.existsSync(p)), ...userDataLeft])],
+    }),
   };
 }
 

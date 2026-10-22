@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { checkUserDataIsolation, claimPortableDataNotice, shouldUsePortableData } from '../dataIsolation';
+import { checkUserDataIsolation, claimPortableDataNotice, mayInstallDarwinCliShim, shouldUsePortableData } from '../dataIsolation';
 
 const PROD = 'C:\\Users\\x\\AppData\\Roaming\\wmux';
 
@@ -87,5 +87,18 @@ describe('claimPortableDataNotice (one-time notice for a forced portable copy)',
     expect(claimPortableDataNotice(true, marker)).toBe(true);
     expect(claimPortableDataNotice(true, marker)).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('mayInstallDarwinCliShim (the suffix-blind /usr/local/bin/wmux)', () => {
+  it('only the production instance (no suffix) installs or repairs the shim', () => {
+    expect(mayInstallDarwinCliShim({})).toBe(true);
+    expect(mayInstallDarwinCliShim({ WMUX_DATA_SUFFIX: '' })).toBe(true);
+  });
+
+  it('never an isolated instance: portable, a test run, a verification run', () => {
+    expect(mayInstallDarwinCliShim({ WMUX_DATA_SUFFIX: '-portable' })).toBe(false);
+    expect(mayInstallDarwinCliShim({ WMUX_DATA_SUFFIX: '-e2e-first-run-abc123' })).toBe(false);
+    expect(mayInstallDarwinCliShim({ WMUX_DATA_SUFFIX: '-verify-x' })).toBe(false);
   });
 });

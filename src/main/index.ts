@@ -52,7 +52,7 @@ import { markBoot, emitBootSummary } from './util/bootTrace';
 import * as path from 'path';
 import * as os from 'os';
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor } from 'electron';
-import { checkUserDataIsolation, claimPortableDataNotice, PORTABLE_DATA_SUFFIX, shouldUsePortableData } from './dataIsolation';
+import { checkUserDataIsolation, claimPortableDataNotice, mayInstallDarwinCliShim, PORTABLE_DATA_SUFFIX, shouldUsePortableData } from './dataIsolation';
 import { createWindow, loadMainRenderer } from './window/createWindow';
 import { attachDesktopPresenceReporter, reportDesktopPresence } from './window/desktopPresence';
 import { PTYManager } from './pty/PTYManager';
@@ -1929,8 +1929,9 @@ app.on('ready', async () => {
   // 안 가리키면"(DMG/ZIP 임시 경로에서 첫 설치 후 볼륨 제거·앱 이동으로 죽은
   // 링크가 됨, issue #505) 복구를 위해 재실행한다. 부팅 경로를 막지 않게 지연
   // 실행, 전체 best-effort.
-  // A portable copy must not repoint the installed app's shim at itself.
-  if (process.platform === 'darwin' && app.isPackaged && process.env.WMUX_DATA_SUFFIX !== PORTABLE_DATA_SUFFIX) {
+  // No isolated instance (portable copy, test run) may repoint the installed
+  // app's shim at itself: see mayInstallDarwinCliShim.
+  if (process.platform === 'darwin' && app.isPackaged && mayInstallDarwinCliShim(process.env)) {
     const shimTimer = setTimeout(() => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires -- Preserve deferred CLI-shim module loading.
