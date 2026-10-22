@@ -11,9 +11,10 @@
 import { ensureSecretHook, secretHooks } from '../../git/secretHookHost';
 import { ipcMain } from 'electron';
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
-import { isNonLocalPath, resolveAccessiblePath } from './fs.handler';
+import { isNonLocalPath, isSensitivePath, resolveAccessiblePath } from './fs.handler';
 import { mergeStatus, repoLockKeyFor, withRepoLock } from './worktree.handler';
 import { shipActions, type ShipActionResult, type ShipExpect, type ShipStatus, type ShipStatusResult } from '../../git/shipActions';
 import { shipBlock, type ShipAction, type ShipInput } from '../../../shared/gitShip';
@@ -71,9 +72,10 @@ export async function checkWrite(cwd: string, action: ShipAction, expect: ShipEx
 }
 
 /** The refusal for a repo path that does not resolve: its folder is gone, or
- *  it is not one wmux may use. A non-local path is never looked up on disk. */
+ *  it is not one wmux may use. Only a path wmux may use is looked up on disk,
+ *  so every other path gets the same answer whether it exists or not. */
 function unresolved(repoPath: string): { ok: false; error: string; reason?: 'missing-folder' } {
-  if (isNonLocalPath(repoPath) || existsSync(repoPath)) return { ok: false, error: 'repoPath required' };
+  if (isNonLocalPath(repoPath) || isSensitivePath(path.resolve(repoPath)) || existsSync(repoPath)) return { ok: false, error: 'repoPath required' };
   return { ok: false, error: 'the folder is not there any more', reason: 'missing-folder' };
 }
 

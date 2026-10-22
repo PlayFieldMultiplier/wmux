@@ -90,6 +90,27 @@ describe('classifyShipFailure (real git output)', () => {
     expect(classifyShipFailure('commit', SAMPLES.sshPassphrase)).toBe('signing');
   });
 
+  it('names Windows signer failures only alongside the failed commit write', () => {
+    // Git for Windows with OpenSSH: ssh-keygen missing from its configured path, and a key file Windows lets others read.
+    const cannotSpawn = 'error: cannot spawn C:/Program Files/OpenSSH/ssh-keygen.exe: No such file or directory\n\nfatal: failed to write commit object';
+    const unprotected = [
+      'error: @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
+      '@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @',
+      '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
+      "Permissions for 'C:\\Users\\me\\.ssh\\id_ed25519' are too open.",
+      'It is required that your private key files are NOT accessible by others.',
+      'This private key will be ignored.',
+      'No private key found for "C:\\Users\\me\\.ssh\\id_ed25519"?',
+      '',
+      'fatal: failed to write commit object',
+    ].join('\n');
+    expect(classifyShipFailure('commit', cannotSpawn)).toBe('signing');
+    expect(classifyShipFailure('commit', unprotected)).toBe('signing');
+    // The same words from a hook, with the commit not refused for them, name nothing.
+    expect(classifyShipFailure('commit', 'error: cannot spawn C:/Program Files/OpenSSH/ssh-keygen.exe: No such file or directory')).toBeNull();
+    expect(classifyShipFailure('commit', 'WARNING: UNPROTECTED PRIVATE KEY FILE!\nNo private key found for "x"')).toBeNull();
+  });
+
   it('leaves anything else unnamed', () => {
     // Any hook says "pre-receive hook declined"; a full disk also fails to write the commit object.
     expect(classifyShipFailure('push', ' ! [remote rejected] HEAD -> main (pre-receive hook declined)')).toBeNull();
@@ -132,13 +153,58 @@ describe('commit once without signing', () => {
     expect(calls.some((c) => c.args[0] === 'config' && !c.args.includes('--get'))).toBe(false);
   });
 
-  it('a commit killed on the timeout with signing on is a signing failure', async () => {
-    const { svc } = fake((args) => {
-      if (args[0] === 'commit') return Object.assign(new Error('git commit failed (timed out)'), { killed: true, stderr: '' });
+  it('a commit that timed out with no signer words is a timeout, not signing (a slow hook takes as long)', async () => {
+    const { svc, calls } = fake((args) => {
+      if (args[0] === 'commit') return Object.assign(new Error('git commit timed out and was stopped'), { killed: true, timedOut: true, stderr: 'running the pre-commit checks…\n' });
       if (args[0] === 'config' && args.includes('commit.gpgsign')) return 'true\n';
       return '';
     });
+    const res = await svc.commit('/repo', 'msg', EXPECT);
+    expect(res).toMatchObject({ ok: false, reason: 'timeout' });
+    // Whether signing is on says nothing about what took the time.
+    expect(calls.some((c) => c.args.includes('commit.gpgsign'))).toBe(false);
+  });
+
+  it('a commit that timed out after the signer spoke is signing', async () => {
+    const { svc } = fake((args) => {
+      if (args[0] === 'commit') return Object.assign(new Error('git commit timed out and was stopped'), { killed: true, timedOut: true, stderr: 'gpg: signing failed: Timeout\n' });
+      return '';
+    });
     expect(await svc.commit('/repo', 'msg', EXPECT)).toMatchObject({ ok: false, reason: 'signing' });
+  });
+
+  it('output stopped for size is not a timeout', async () => {
+    const { svc } = fake((args) => {
+      if (args[0] === 'commit') return Object.assign(new Error('git commit printed too much and was stopped'), { killed: true, timedOut: false, stderr: 'x' });
+      return '';
+    });
+    const res = await svc.commit('/repo', 'msg', EXPECT);
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.reason).toBeUndefined();
+  });
+
+  it('git runs with untranslated messages but the user\'s own locale otherwise', async () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const run = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+      envs.push(opts.env);
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: `${HEAD}\n` };
+      if (args[0] === 'symbolic-ref') return { stdout: 'feat/x\n' };
+      return { stdout: '' };
+    });
+    const before = process.env.LC_ALL;
+    process.env.LC_ALL = 'ko_KR.UTF-8';
+    try {
+      const svc = new ShipActions(run as never, async () => null, () => undefined, () => 1, () => true, () => async () => true);
+      await svc.commit('/repo', 'msg', EXPECT);
+    } finally {
+      if (before === undefined) delete process.env.LC_ALL;
+      else process.env.LC_ALL = before;
+    }
+    expect(envs.length).toBeGreaterThan(0);
+    for (const env of envs) {
+      expect(env.LANGUAGE).toBe('C');
+      expect(env.LC_MESSAGES).toBe('C');
+    }
   });
 });
 
@@ -155,6 +221,24 @@ describe('auth failures name the forge from the remote', () => {
 });
 
 describe('spawnRun: no terminal to wait on', () => {
+  // Every platform: a timeout settles the run even while a grandchild holds
+  // its pipes, and that grandchild dies with the tree.
+  it('a timeout ends the run and the whole tree, a pipe-holding grandchild included', async () => {
+    const script = [
+      "const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit' });",
+      'process.stdout.write(String(c.pid) + "\\n");',
+      'setTimeout(() => {}, 30000);',
+    ].join(' ');
+    const t0 = Date.now();
+    const err = await spawnRun(process.execPath, ['-e', script], { cwd: os.tmpdir(), env: process.env, timeout: 1_000 }).catch((e) => e);
+    // Settled by its own timeout path (the grandchild would hold the pipes for 30 s).
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(err).toMatchObject({ killed: true, timedOut: true });
+    const pid = Number(String(err.stdout).trim());
+    expect(pid).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
+  }, 15_000);
+
   it.skipIf(!posix)('stdin is empty, the child leads its own group, GPG_TTY is dropped', async () => {
     const script = 'read x; echo "read=$?"; echo "pgid=$(ps -o pgid= -p $$ | tr -d " ")"; echo "pid=$$"; echo "tty=${GPG_TTY:-none}"';
     const t0 = Date.now();
@@ -321,6 +405,15 @@ describe('the IPC handler', () => {
     expect(await handlerFor(IPC.GIT_SHIP_COMMIT)({}, gone, 'msg', EXPECT)).toMatchObject({ ok: false, reason: 'missing-folder' });
     expect(await handlerFor(IPC.GIT_SHIP_PUSH)({}, gone, EXPECT)).toMatchObject({ ok: false, reason: 'missing-folder' });
  
+    // A path wmux refuses gets one answer, whether or not it exists.
+    const home = mkdtempSync(path.join(os.tmpdir(), 'wmux-shipfail-home-'));
+    dirs.push(home);
+    mkdirSync(path.join(home, '.ssh', 'there'), { recursive: true });
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const there = await handlerFor(IPC.GIT_SHIP_STATUS)({}, path.join(home, '.ssh', 'there'));
+    const absent = await handlerFor(IPC.GIT_SHIP_STATUS)({}, path.join(home, '.ssh', 'absent'));
+    expect(there).toEqual({ ok: false, error: 'repoPath required' });
+    expect(absent).toEqual(there);
     // A network path is never looked up on disk, so it is never called missing.
     expect(await handlerFor(IPC.GIT_SHIP_STATUS)({}, '\\\\server\\share\\repo')).toEqual({ ok: false, error: 'repoPath required' });
   });

@@ -3775,6 +3775,7 @@ export const zh = {
   'git.ship.fail.auth.action': "重新登录",
   'git.ship.fail.missing-folder': "找不到工作文件夹。是否已移动？",
   'git.ship.fail.missing-folder.action': "重新选择文件夹",
+  'git.ship.fail.timeout': "Git 耗时过长，已被停止。请重试；如果反复出现，请在终端中执行同一步骤，查看它在等待什么。",
   'git.ship.fail.details': "Git 输出",
   // Git page — hand-off to agents, thin branch bar.
   'git.handoff.label': '交给代理',

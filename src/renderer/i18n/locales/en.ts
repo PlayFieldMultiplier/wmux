@@ -4382,6 +4382,7 @@ export const en = {
   'git.ship.fail.auth.action': "Sign in again",
   'git.ship.fail.missing-folder': "Can't find the working folder. Did you move it?",
   'git.ship.fail.missing-folder.action': "Choose the folder again",
+  'git.ship.fail.timeout': "Git took too long, so it was stopped. Try again; if it keeps happening, run the same step in the terminal to see where it waits.",
   'git.ship.fail.details': "Git output",
   // Git page — hand-off to agents, thin branch bar.
   'git.handoff.label': 'Hand off to an agent',

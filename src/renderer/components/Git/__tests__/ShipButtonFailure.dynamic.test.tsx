@@ -95,6 +95,14 @@ describe('ShipButton failures', () => {
     expect(document.querySelector('[data-testid="git-ship-commit"]')).toBeNull();
   });
 
+  it('timeout: its own plain line, and no unsigned retry', async () => {
+    bridge.shipCommit.mockResolvedValueOnce({ ok: false, error: 'git commit timed out and was stopped', reason: 'timeout' });
+    await commit('m');
+    expect(failure()?.dataset.gitShipFailure).toBe('timeout');
+    expect(failure()?.textContent).toContain('Git took too long, so it was stopped.');
+    expect(fix('Commit once without signing')).toBeNull();
+  });
+
   it('signing: "How to set it up" unfolds the help in place', async () => {
     bridge.shipCommit.mockResolvedValueOnce({ ok: false, error: 'x', reason: 'signing' });
     await commit('m');

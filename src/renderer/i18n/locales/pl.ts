@@ -4357,6 +4357,7 @@ export const pl = {
   'git.ship.fail.auth.action': "Zaloguj się ponownie",
   'git.ship.fail.missing-folder': "Nie można znaleźć folderu roboczego. Czy został przeniesiony?",
   'git.ship.fail.missing-folder.action': "Wybierz folder ponownie",
+  'git.ship.fail.timeout': "Git działał zbyt długo, więc został zatrzymany. Spróbuj ponownie; jeśli to się powtarza, wykonaj ten sam krok w terminalu, aby zobaczyć, na czym czeka.",
   'git.ship.fail.details': "Wyjście Git",
   // Git page — hand-off to agents, thin branch bar.
   'git.handoff.label': 'Przekaż agentowi',

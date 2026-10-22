@@ -3762,6 +3762,7 @@ export const ko = {
   'git.ship.fail.auth.action': "다시 로그인",
   'git.ship.fail.missing-folder': "작업 폴더를 찾을 수 없습니다. 폴더를 옮기셨나요?",
   'git.ship.fail.missing-folder.action': "폴더 다시 선택",
+  'git.ship.fail.timeout': "Git이 너무 오래 걸려 중단했습니다. 다시 시도하고, 계속 그러면 터미널에서 같은 단계를 실행해 어디서 멈추는지 확인하세요.",
   'git.ship.fail.details': "Git 출력",
   // Git page — hand-off to agents, thin branch bar.
   'git.handoff.label': '에이전트에게 넘기기',

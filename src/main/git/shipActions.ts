@@ -66,7 +66,9 @@ export type ShipFailureReason =
   /** The remote refused the key or the sign-in. */
   | 'auth'
   /** The repository's folder is not there any more. */
-  | 'missing-folder';
+  | 'missing-folder'
+  /** The step ran out of time and was stopped, with nothing that names why. */
+  | 'timeout';
 
 export type ShipStatusResult = { ok: true; status: ShipStatus } | { ok: false; error: string; reason?: 'missing-folder' };
 export type ShipActionResult =
@@ -140,61 +142,94 @@ type Run = (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.Proces
 
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
-/** Runs `cmd` with no terminal to ask on: stdin is /dev/null and, off
- *  Windows, the child leads a new session (no controlling TTY), and GPG_TTY is
- *  dropped. A signer or ssh that wants a passphrase typed (pinentry-curses,
- *  ssh-keygen reading /dev/tty or stdin) then fails at once with its own
- *  message, instead of waiting out the timeout on a prompt nobody can see.
- *  gpg-agent (a cached passphrase, a GUI pinentry) and ssh-agent are reached
- *  through their sockets and keep working. A timeout kills the whole process
- *  group, signer included. Rejects like execFile: an Error carrying `code`,
- *  `signal`, `killed`, `stdout` and `stderr`. */
+/** Runs `cmd` with no terminal to ask on: stdin is the null device, the child
+ *  is detached (a new session off Windows, so no controlling TTY; on Windows
+ *  no console), and GPG_TTY is dropped. A signer or ssh that wants a
+ *  passphrase typed (pinentry-curses, ssh-keygen reading the terminal or
+ *  stdin) then fails at once with its own message, instead of waiting out the
+ *  timeout on a prompt nobody can see. gpg-agent (a cached passphrase, a GUI
+ *  pinentry) and ssh-agent are reached through their sockets / pipes and keep
+ *  working. A timeout (or too much output) kills the whole tree: the process
+ *  group off Windows, `taskkill /T` on Windows; then the run stops reading
+ *  and settles itself, so a process that slipped the kill and still holds the
+ *  pipes cannot keep it open. Rejects like execFile: an Error carrying
+ *  `code`, `signal`, `killed`, `stdout` and `stderr`, plus `timedOut` when
+ *  the timeout stopped it. */
 export const spawnRun: Run = (cmd, args, opts) => new Promise((resolve, reject) => {
-  const posix = process.platform !== 'win32';
+  const win = process.platform === 'win32';
   const env = { ...opts.env };
   delete env.GPG_TTY;
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(cmd, args, { cwd: opts.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: posix, windowsHide: true });
+    child = spawn(cmd, args, { cwd: opts.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true, windowsHide: true });
   } catch (err) {
     reject(err);
     return;
   }
   let stdout = '';
   let stderr = '';
-  let killed = false;
+  let stopped: 'timeout' | 'output' | null = null;
   let settled = false;
-  const kill = () => {
-    if (killed) return;
-    killed = true;
-    try {
-      if (posix && child.pid) process.kill(-child.pid, 'SIGKILL');
-      else child.kill('SIGKILL');
-    } catch {
-      child.kill('SIGKILL');
-    }
+  const settle = (fn: () => void) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    fn();
   };
-  const timer = setTimeout(kill, opts.timeout);
+  const stoppedError = () => Object.assign(
+    new Error(`${cmd} ${args.join(' ')} ${stopped === 'timeout' ? 'timed out' : 'printed too much'} and was stopped`),
+    { code: null, signal: 'SIGKILL', killed: true, timedOut: stopped === 'timeout', stdout, stderr },
+  );
+  /** Kills the child and everything it started; resolves once that is done. */
+  const killTree = (): Promise<void> => {
+    const pid = child.pid;
+    if (!pid) return Promise.resolve();
+    if (!win) {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+      return Promise.resolve();
+    }
+    return new Promise((done) => {
+      const taskkill = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
+      const cap = setTimeout(done, 5_000);
+      const finish = () => { clearTimeout(cap); done(); };
+      try {
+        const tk = spawn(taskkill, ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        tk.on('exit', finish);
+        tk.on('error', () => { child.kill('SIGKILL'); finish(); });
+      } catch {
+        child.kill('SIGKILL');
+        finish();
+      }
+    });
+  };
+  const stop = (why: 'timeout' | 'output') => {
+    if (stopped || settled) return;
+    stopped = why;
+    void killTree().then(() => {
+      // Something that outlived the kill may still hold the pipes: stop reading.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      settle(() => reject(stoppedError()));
+    });
+  };
+  const timer = setTimeout(() => stop('timeout'), opts.timeout);
   const take = (to: 'out' | 'err') => (chunk: string) => {
     if (to === 'out') stdout += chunk;
     else stderr += chunk;
-    if (stdout.length + stderr.length > MAX_OUTPUT) kill();
+    if (stdout.length + stderr.length > MAX_OUTPUT) stop('output');
   };
   child.stdout?.setEncoding('utf8').on('data', take('out'));
   child.stderr?.setEncoding('utf8').on('data', take('err'));
-  child.on('error', (err) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    reject(Object.assign(err, { stdout, stderr }));
-  });
-  child.on('close', (code, signal) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    if (code === 0 && !killed) resolve({ stdout });
-    else reject(Object.assign(new Error(`${cmd} ${args.join(' ')} failed${killed ? ' (timed out)' : ''}`), { code, signal, killed, stdout, stderr }));
-  });
+  child.on('error', (err) => settle(() => reject(Object.assign(err, { stdout, stderr }))));
+  child.on('close', (code, signal) => settle(() => {
+    if (stopped) reject(stoppedError());
+    else if (code === 0) resolve({ stdout });
+    else reject(Object.assign(new Error(`${cmd} ${args.join(' ')} failed`), { code, signal, killed: false, stdout, stderr }));
+  }));
 });
 
 /** git's own words for a failure: its stderr, else the error's message. */
@@ -204,14 +239,17 @@ function failure(err: unknown): string {
 }
 
 const SIGNING = /failed to sign the data|Couldn't load public key|user\.signingkey needs to be set|incorrect passphrase supplied|Enter passphrase for|Load key "|signing failed|No secret key|gpg: skipped "/i;
+/** Signer words that only mean signing when the commit object failed to be written with them. */
+const SIGNER_WITH_FAILED_WRITE = /cannot spawn [^\n]*ssh-keygen|UNPROTECTED PRIVATE KEY FILE|No private key found for/i;
+const FAILED_WRITE = /failed to write commit object/;
 const PROTECTED = /\bGH006\b|protected branch|Changes must be made through a pull request|can only be modified through pull requests|\bTF402455\b/i;
 const REMOTE_AHEAD = /\[rejected\][^\n]*\((?:fetch first|non-fast-forward)\)|Updates were rejected because the (?:remote contains work|tip of your current branch is behind)/;
 const AUTH = /Permission denied \(publickey|Permission denied, please try again|Authentication failed for|could not read (?:Username|Password) for|Permission to \S+ denied to|HTTP Basic: Access denied|The requested URL returned error: 40[13]|gh auth login|HTTP 401/i;
 
 /** Which of the causes the UI words itself `output` (a failed command's
  *  stderr) shows, for `action`; null for anything else. Pure. */
-export function classifyShipFailure(action: 'commit' | 'push' | 'createPr', output: string): Exclude<ShipFailureReason, 'missing-folder'> | null {
-  if (action === 'commit') return SIGNING.test(output) ? 'signing' : null;
+export function classifyShipFailure(action: 'commit' | 'push' | 'createPr', output: string): Exclude<ShipFailureReason, 'missing-folder' | 'timeout'> | null {
+  if (action === 'commit') return SIGNING.test(output) || (SIGNER_WITH_FAILED_WRITE.test(output) && FAILED_WRITE.test(output)) ? 'signing' : null;
   if (action === 'push') {
     if (PROTECTED.test(output)) return 'protected';
     if (REMOTE_AHEAD.test(output)) return 'remote-ahead';
@@ -251,8 +289,10 @@ export class ShipActions {
     private gitLines: (cwd: string, env?: NodeJS.ProcessEnv) => GitLines = spawnGitLines,
   ) {}
 
+  /** git with its messages untranslated (LANGUAGE / LC_MESSAGES only: paths
+   *  and encodings keep the user's locale), so its output can be classified. */
   private git(args: string[], cwd: string, timeout = 30_000, extraEnv: NodeJS.ProcessEnv = {}): Promise<{ stdout: string }> {
-    return this.run('git', args, { cwd, env: { ...getExecEnv(), ...extraEnv }, timeout });
+    return this.run('git', args, { cwd, env: { ...getExecEnv(), LANGUAGE: 'C', LC_MESSAGES: 'C', ...extraEnv }, timeout });
   }
 
   /** origin/HEAD, else the remote's HEAD as ls-remote reports it (cached), else null. */
@@ -320,7 +360,8 @@ export class ShipActions {
       if (existsSync(real)) copyFileSync(real, copy);
       return await work({ GIT_INDEX_FILE: copy });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      // Retries ride out a file a just-killed process (Windows) still had open.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 
@@ -340,13 +381,10 @@ export class ShipActions {
     if (err instanceof Moved) return { ok: false, error: err.message };
     const error = failure(err);
     if (folderGone(err, cwd, this.exists)) return { ok: false, error, reason: 'missing-folder' };
-    let reason = classifyShipFailure(action, error);
-    // A signer that outlived the timeout leaves no words; with signing on, it was the signer.
-    if (!reason && action === 'commit' && (err as { killed?: boolean })?.killed) {
-      const signing = await this.git(['config', '--type=bool', '--get', 'commit.gpgsign'], cwd).then(({ stdout }) => stdout.trim(), () => '');
-      if (signing === 'true') reason = 'signing';
-    }
-    if (!reason) return { ok: false, error };
+    // A cause is named only from what the failing command said; a timeout
+    // with nothing that names one is just a timeout (a slow hook takes as long).
+    const reason = classifyShipFailure(action, (err as { stderr?: string })?.stderr ?? '');
+    if (!reason) return (err as { timedOut?: boolean })?.timedOut ? { ok: false, error, reason: 'timeout' } : { ok: false, error };
     if (reason !== 'auth') return { ok: false, error, reason };
     if (action === 'createPr') return { ok: false, error, reason, forge: 'github' };
     const url = remote ? await this.git(['remote', 'get-url', remote], cwd).then(({ stdout }) => stdout.trim(), () => '') : '';
