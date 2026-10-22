@@ -107,4 +107,47 @@ describe('BrowserBackendStore (#517)', () => {
       });
     });
   });
+
+  // Settings → Browser → Allow private network addresses. It widens what an
+  // agent may reach, so only a literal true opts in.
+  describe('allowPrivateNetwork', () => {
+    it('defaults to off with no file', () => {
+      expect(new BrowserBackendStore(dir).allowPrivateNetwork()).toBe(false);
+    });
+
+    it('reads only a literal true as on', () => {
+      for (const value of [true, 'true', 1, 'yes', null]) {
+        writeFileSync(join(dir, 'browser-backend.json'), JSON.stringify({ backend: 'builtin', allowPrivateNetwork: value }));
+        expect(new BrowserBackendStore(dir).allowPrivateNetwork(), JSON.stringify(value)).toBe(value === true);
+      }
+    });
+
+    it('takes effect at once and persists across a restart', () => {
+      const store = new BrowserBackendStore(dir);
+      store.setAllowPrivateNetwork(true);
+      expect(store.allowPrivateNetwork()).toBe(true);
+      expect(new BrowserBackendStore(dir).allowPrivateNetwork()).toBe(true);
+      expect(JSON.parse(readFileSync(join(dir, 'browser-backend.json'), 'utf8'))).toEqual({
+        backend: 'builtin',
+        allowPrivateNetwork: true,
+      });
+
+      store.setAllowPrivateNetwork(false);
+      expect(store.allowPrivateNetwork()).toBe(false);
+      expect(new BrowserBackendStore(dir).allowPrivateNetwork()).toBe(false);
+      // Off is the default, so the key is gone again.
+      expect(JSON.parse(readFileSync(join(dir, 'browser-backend.json'), 'utf8'))).toEqual({ backend: 'builtin' });
+    });
+
+    it('survives the other settings in the same file being written', () => {
+      const store = new BrowserBackendStore(dir);
+      store.setAllowPrivateNetwork(true);
+      store.set('chrome');
+      store.setLiveWriteScope('all');
+      const reloaded = new BrowserBackendStore(dir);
+      expect(reloaded.allowPrivateNetwork()).toBe(true);
+      expect(reloaded.get()).toBe('chrome');
+      expect(reloaded.liveWriteScope()).toBe('all');
+    });
+  });
 });

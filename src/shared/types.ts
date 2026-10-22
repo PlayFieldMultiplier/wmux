@@ -1559,10 +1559,14 @@ type UrlValidationResult = { valid: boolean; reason?: string };
  * The one opt-in that widens the navigation policy: RFC1918 private ranges
  * (10/8, 172.16/12, 192.168/16 and their IPv6 ULA analogue fc00::/7).
  *
+ * Two switches turn it on: the Settings toggle (Settings → Browser, owned and
+ * persisted by wmux main) and this environment variable. Either is enough.
+ *
  * #1359: every entry point that loads a URL — browser_navigate, browser_tabs
  * new, browser_open, replay — must reach the same verdict for the same URL, so
- * the switch is read here, inside the single policy function, and never
- * duplicated at a call site.
+ * the policy stays one function. The switch is an INPUT to it
+ * (`NavigationPolicyOptions`), built only by `navigationPolicyOptions()`, and
+ * never read or OR-ed at a call site.
  *
  * Link-local (169.254.0.0/16, fe80::/10), the null address and non-127.0.0.1
  * loopback stay blocked even with the opt-in: the SSRF hardening this policy
@@ -1573,21 +1577,37 @@ export const ALLOW_PRIVATE_NETWORK_ENV = 'WMUX_ALLOW_PRIVATE_NETWORK';
 
 /**
  * How a caller turns the private ranges on. Appended to every block reason the
- * opt-in would lift, so a refusal carries its own remedy.
- *
- * Both processes are named because they both run this check: the MCP server
- * (preflight, in the agent's process) and wmux main (after DNS resolution).
+ * opt-in would lift, so a refusal carries its own remedy. The setting comes
+ * first: it is the switch a user can reach, and it takes effect on the next
+ * navigation without a restart.
  */
 const ALLOW_PRIVATE_NETWORK_HINT =
-  `set ${ALLOW_PRIVATE_NETWORK_ENV}=1 in the environment that launches wmux and the agent to allow private ranges`;
+  'to allow private ranges, turn on Settings → Browser → Allow private network addresses ' +
+  `(or set ${ALLOW_PRIVATE_NETWORK_ENV}=1 in the environment that launches wmux)`;
 
-function privateNetworkAllowed(): boolean {
+/** The inputs the navigation policy takes. Build with `navigationPolicyOptions`. */
+export interface NavigationPolicyOptions {
+  /** RFC1918 and fc00::/7 are reachable. */
+  readonly allowPrivateNetwork: boolean;
+}
+
+function privateNetworkEnvAllowed(): boolean {
   // `process` is absent in the renderer bundle; an absent switch means off.
   const value =
     typeof process !== 'undefined' ? process.env?.[ALLOW_PRIVATE_NETWORK_ENV] : undefined;
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+/**
+ * The ONE place the opt-in is decided: the Settings toggle OR the environment
+ * variable. `settingOn` is the toggle as the caller's process knows it — main
+ * reads its own store; the MCP server asks main, and passes `false` when main
+ * cannot answer, which leaves the environment variable as the only switch.
+ */
+export function navigationPolicyOptions(settingOn: boolean): NavigationPolicyOptions {
+  return { allowPrivateNetwork: settingOn || privateNetworkEnvAllowed() };
 }
 
 function blockedPrivate(range: string): UrlValidationResult {
@@ -1609,7 +1629,10 @@ function parseIpv4Octets(address: string): number[] | null {
   return octets;
 }
 
-function validateIpv4NavigationAddress(address: string): UrlValidationResult {
+function validateIpv4NavigationAddress(
+  address: string,
+  options: NavigationPolicyOptions,
+): UrlValidationResult {
   const octets = parseIpv4Octets(address);
   if (!octets) return { valid: false, reason: `Invalid IPv4 address: ${address}` };
 
@@ -1622,17 +1645,17 @@ function validateIpv4NavigationAddress(address: string): UrlValidationResult {
 
   // Block 10.0.0.0/8
   if (octets[0] === 10) {
-    return privateNetworkAllowed() ? { valid: true } : blockedPrivate('10.0.0.0/8');
+    return options.allowPrivateNetwork ? { valid: true } : blockedPrivate('10.0.0.0/8');
   }
 
   // Block 172.16.0.0/12 (172.16.x.x – 172.31.x.x)
   if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) {
-    return privateNetworkAllowed() ? { valid: true } : blockedPrivate('172.16.0.0/12');
+    return options.allowPrivateNetwork ? { valid: true } : blockedPrivate('172.16.0.0/12');
   }
 
   // Block 192.168.0.0/16
   if (octets[0] === 192 && octets[1] === 168) {
-    return privateNetworkAllowed() ? { valid: true } : blockedPrivate('192.168.0.0/16');
+    return options.allowPrivateNetwork ? { valid: true } : blockedPrivate('192.168.0.0/16');
   }
 
   // Block 169.254.0.0/16 (link-local, includes cloud metadata 169.254.169.254)
@@ -1687,7 +1710,10 @@ function expandIpv6NavigationAddress(address: string): string[] | null {
   ];
 }
 
-function validateIpv6NavigationAddress(address: string): UrlValidationResult {
+function validateIpv6NavigationAddress(
+  address: string,
+  options: NavigationPolicyOptions,
+): UrlValidationResult {
   const expanded = expandIpv6NavigationAddress(address);
   if (!expanded) return { valid: false, reason: `Invalid IPv6 address: ${address}` };
 
@@ -1709,7 +1735,7 @@ function validateIpv6NavigationAddress(address: string): UrlValidationResult {
     const hi = Number.parseInt(expanded[6], 16);
     const lo = Number.parseInt(expanded[7], 16);
     const ipv4 = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
-    const embeddedResult = validateIpv4NavigationAddress(ipv4);
+    const embeddedResult = validateIpv4NavigationAddress(ipv4, options);
     if (!embeddedResult.valid) {
       return { valid: false, reason: `Blocked IPv4-mapped/compatible IPv6: embedded ${ipv4} — ${embeddedResult.reason}` };
     }
@@ -1717,7 +1743,7 @@ function validateIpv6NavigationAddress(address: string): UrlValidationResult {
 
   const firstGroup = Number.parseInt(expanded[0], 16);
   if ((firstGroup & 0xfe00) === 0xfc00) {
-    return privateNetworkAllowed()
+    return options.allowPrivateNetwork
       ? { valid: true }
       : {
           valid: false,
@@ -1737,10 +1763,13 @@ function validateIpv6NavigationAddress(address: string): UrlValidationResult {
  * address a hostname resolved to (#1359: it used to carry its own copy of
  * these ranges, which had drifted from this one).
  */
-export function validateNavigationAddress(address: string): UrlValidationResult {
+export function validateNavigationAddress(
+  address: string,
+  options: NavigationPolicyOptions,
+): UrlValidationResult {
   return address.includes(':')
-    ? validateIpv6NavigationAddress(address)
-    : validateIpv4NavigationAddress(address);
+    ? validateIpv6NavigationAddress(address, options)
+    : validateIpv4NavigationAddress(address, options);
 }
 
 /**
@@ -1751,7 +1780,10 @@ export function validateNavigationAddress(address: string): UrlValidationResult 
  * checks are enforced separately in the main process at the actual navigation
  * boundary.
  */
-export function validateNavigationUrl(url: string): UrlValidationResult {
+export function validateNavigationUrl(
+  url: string,
+  options: NavigationPolicyOptions,
+): UrlValidationResult {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -1779,12 +1811,12 @@ export function validateNavigationUrl(url: string): UrlValidationResult {
   }
 
   if (hostname.includes(':')) {
-    return validateIpv6NavigationAddress(hostname);
+    return validateIpv6NavigationAddress(hostname, options);
   }
 
   // Check for IPv4 addresses
   if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) {
-    return validateIpv4NavigationAddress(hostname);
+    return validateIpv4NavigationAddress(hostname, options);
   }
 
   return { valid: true };

@@ -3,7 +3,7 @@ import { generateSnapshot, listRefEntries, resolveRef, StaleRefError } from '../
 import { waitForIsolated } from '../playwright/isolated-eval';
 import { countSmartNamedPopulation } from '../playwright/dom-intelligence';
 import { describeToolError } from '../playwright/toolError';
-import { validateNavigationUrl } from '../../shared/types';
+import { validateNavigationUrl, type NavigationPolicyOptions } from '../../shared/types';
 import {
   applyVariables,
   describeAxis,
@@ -418,6 +418,7 @@ async function runStep(
   page: Page,
   step: TraceStep,
   args: Record<string, string | number | boolean>,
+  readNavigationPolicy: () => Promise<NavigationPolicyOptions>,
 ): Promise<StepOutcome> {
   if (step.tool === 'browser_navigate') {
     // The cache file is ordinary JSON in the user's home directory and a
@@ -427,7 +428,7 @@ async function runStep(
     // agent-supplied URL, plus a userinfo strip, so a hand-edited trace cannot
     // reach a target the live tool would have refused.
     const stripped = stripUrlUserinfo(String(args.url ?? ''));
-    const check = validateNavigationUrl(stripped.url);
+    const check = validateNavigationUrl(stripped.url, await readNavigationPolicy());
     if (!check.valid) return { error: `the recorded URL is not navigable: ${check.reason}` };
     await page.goto(stripped.url, { waitUntil: 'domcontentloaded' });
     return { detail: `navigated to ${page.url()}` };
@@ -670,6 +671,9 @@ export async function replayTrace(
   page: Page,
   trace: TraceRecord,
   variables: Record<string, string> | undefined,
+  // The live navigation policy's inputs, read only when a step navigates —
+  // the same read browser_navigate makes, so the gate below is its gate.
+  readNavigationPolicy: () => Promise<NavigationPolicyOptions>,
 ): Promise<ReplayResult> {
   const warnings: string[] = [];
   const steps: StepReport[] = [];
@@ -734,7 +738,7 @@ export async function replayTrace(
     let outcome: StepOutcome;
     const navigation = watchNavigation(page);
     try {
-      outcome = await runStep(page, step, substituted.args);
+      outcome = await runStep(page, step, substituted.args, readNavigationPolicy);
     } catch (error) {
       outcome = { error: describeToolError(error) };
     }

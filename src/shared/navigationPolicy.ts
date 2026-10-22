@@ -1,6 +1,10 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { validateNavigationAddress, validateNavigationUrl } from './types';
+import {
+  validateNavigationAddress,
+  validateNavigationUrl,
+  type NavigationPolicyOptions,
+} from './types';
 
 /**
  * The resolving half of the ONE navigation URL policy (#1359).
@@ -90,16 +94,19 @@ async function lookupWithTimeout(
   }
 }
 
-function validateResolvedAddress(address: string): ValidationResult {
+function validateResolvedAddress(address: string, options: NavigationPolicyOptions): ValidationResult {
   // One policy, one copy: the ranges live in shared/types next to the literal
   // check, so a resolved 172.16.0.1 and a typed 172.16.0.1 cannot disagree.
   const family = isIP(address);
-  if (family === 4 || family === 6) return validateNavigationAddress(address);
+  if (family === 4 || family === 6) return validateNavigationAddress(address, options);
   return { valid: false, reason: `Resolved non-IP address: ${address}` };
 }
 
-export async function validateResolvedNavigationUrl(url: string): Promise<ValidationResult> {
-  const basic = validateNavigationUrl(url);
+export async function validateResolvedNavigationUrl(
+  url: string,
+  options: NavigationPolicyOptions,
+): Promise<ValidationResult> {
+  const basic = validateNavigationUrl(url, options);
   if (!basic.valid) return basic;
 
   let parsed: URL;
@@ -109,13 +116,19 @@ export async function validateResolvedNavigationUrl(url: string): Promise<Valida
     return { valid: false, reason: 'Invalid URL' };
   }
 
-  const hostname = parsed.hostname;
+  // WHATWG URL keeps an IPv6 literal bracketed ("[fd00::1]"), and isIP() does
+  // not recognise that form: left as is, an IPv6 literal the literal check had
+  // just judged went on to a DNS lookup of the bracketed string, whose answer
+  // depends on whether the platform's resolver accepts brackets at all.
+  const hostname = parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']')
+    ? parsed.hostname.slice(1, -1)
+    : parsed.hostname;
   if (hostname === 'localhost') {
     return { valid: true };
   }
 
   if (isIP(hostname)) {
-    return validateResolvedAddress(hostname);
+    return validateResolvedAddress(hostname, options);
   }
 
   // Bounded: see DNS_LOOKUP_TIMEOUT_MS. The guard must fail with its own
@@ -135,7 +148,7 @@ export async function validateResolvedNavigationUrl(url: string): Promise<Valida
   }
 
   for (const { address } of addresses) {
-    const resolved = validateResolvedAddress(address);
+    const resolved = validateResolvedAddress(address, options);
     if (!resolved.valid) {
       return { valid: false, reason: `Blocked resolved address ${address}: ${resolved.reason}` };
     }

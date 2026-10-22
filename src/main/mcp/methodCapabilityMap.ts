@@ -387,6 +387,9 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   // Site guide pointers: read-only, answers with titles and paths of local
   // notes that match a page.
   'browser.siteGuides.match':  { capability: 'browser.read',  riskClass: 'browser' },
+  // The navigation policy's private-network switch: one app-wide boolean that
+  // a navigating caller's own preflight needs.
+  'browser.navigationPolicy.get': { capability: 'browser.read', riskClass: 'browser' },
 
   // Lease methods pin a guest at full speed (or strip that exemption from a
   // real automation op), i.e. they mutate the app's resource policy — a

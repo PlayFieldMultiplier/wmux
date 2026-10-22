@@ -4,6 +4,9 @@ import {
   validateResolvedNavigationUrl,
 } from '../navigationPolicy';
 import { TIMEOUT_MS as CLI_RPC_TIMEOUT_MS } from '../../../cli/client';
+import type { NavigationPolicyOptions } from '../../../shared/types';
+
+const OFF: NavigationPolicyOptions = { allowPrivateNetwork: false };
 
 const { lookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn() }));
 vi.mock('node:dns/promises', () => ({ lookup: lookupMock }));
@@ -29,7 +32,7 @@ describe('navigation DNS guard is bounded (#756)', () => {
     // the bug. Not a stub of the timeout logic; that runs for real.
     lookupMock.mockImplementation(() => new Promise(() => { /* never settles */ }));
 
-    const pending = validateResolvedNavigationUrl('https://never-answers.example');
+    const pending = validateResolvedNavigationUrl('https://never-answers.example', OFF);
     let settled = false;
     void pending.then(() => { settled = true; });
 
@@ -48,7 +51,7 @@ describe('navigation DNS guard is bounded (#756)', () => {
   it('reports a resolver failure as a DNS failure, not a transport failure', async () => {
     lookupMock.mockRejectedValue(new Error('getaddrinfo ENOTFOUND nope.example'));
 
-    const result = await validateResolvedNavigationUrl('https://nope.example');
+    const result = await validateResolvedNavigationUrl('https://nope.example', OFF);
 
     expect(result.valid).toBe(false);
     expect(result.reason).toContain('Failed to resolve hostname');
@@ -59,7 +62,7 @@ describe('navigation DNS guard is bounded (#756)', () => {
     vi.useFakeTimers();
     lookupMock.mockImplementation(() => new Promise(() => { /* never settles */ }));
 
-    const pending = validateResolvedNavigationUrl('https://unverifiable.example');
+    const pending = validateResolvedNavigationUrl('https://unverifiable.example', OFF);
     await vi.advanceTimersByTimeAsync(DNS_LOOKUP_TIMEOUT_MS + 1);
 
     // Fail CLOSED: an unverified host is refused, never allowed through on the
@@ -70,7 +73,7 @@ describe('navigation DNS guard is bounded (#756)', () => {
   it('leaves a fast lookup completely unaffected', async () => {
     lookupMock.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
 
-    await expect(validateResolvedNavigationUrl('https://fast.example'))
+    await expect(validateResolvedNavigationUrl('https://fast.example', OFF))
       .resolves.toEqual({ valid: true });
   });
 

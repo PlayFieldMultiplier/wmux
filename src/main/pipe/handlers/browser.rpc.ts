@@ -103,6 +103,7 @@ import { PRIVATE_BROWSER_PARTITION } from '../../../shared/privateBrowser';
 import { WebviewCdpManager } from '../../browser-session/WebviewCdpManager';
 import { BrowserCaptureManager } from '../../browser-session/BrowserCaptureManager';
 import { validateResolvedNavigationUrl } from '../../security/navigationPolicy';
+import { navigationPolicyOptions, type NavigationPolicyOptions } from '../../../shared/types';
 import { parseKeyPress } from './cdpKeys';
 import {
   BROWSER_TABS_ACTIONS,
@@ -158,7 +159,13 @@ export interface BrowserPolicyWiring {
 export type CallerBrowserProtection = (method: string, ctx: RpcContext | undefined) => Promise<string | null>;
 
 /** Token-addressed lease bookkeeping: no caller scope, nothing to decide. */
-const PROTECTED_GATE_EXEMPT: ReadonlySet<string> = new Set(['browser.lease.renew', 'browser.lease.release']);
+const PROTECTED_GATE_EXEMPT: ReadonlySet<string> = new Set([
+  'browser.lease.renew',
+  'browser.lease.release',
+  // An app-wide setting the MCP preflight reads before it knows any pane; no
+  // page is reached and nothing is pane-specific.
+  'browser.navigationPolicy.get',
+]);
 
 /**
  * Methods a protected pane may not call at all, with the reason. Agent-authored
@@ -286,8 +293,8 @@ function navigationRefusal(reason: Exclude<NavigationVerdict, { allowed: true }>
   return "that host is not on this pane's allowed list";
 }
 
-async function validateUrl(url: string, method: string): Promise<void> {
-  const result = await validateResolvedNavigationUrl(url);
+async function validateUrl(url: string, method: string, policy: NavigationPolicyOptions): Promise<void> {
+  const result = await validateResolvedNavigationUrl(url, policy);
   if (!result.valid) {
     throw new Error(`${method}: ${result.reason}`);
   }
@@ -1278,6 +1285,11 @@ export function registerBrowserRpc(
    *  the default, which is the narrow grant. */
   const liveWriteScopeSetting = () => backendStore?.liveWriteScope?.() ?? DEFAULT_LIVE_WRITE_SCOPE;
 
+  /** The navigation policy's inputs, read per call like the scope above, so a
+   *  Settings toggle reaches the very next navigation. Same optional-method
+   *  posture: a store that predates the setting means the default, off. */
+  const navigationPolicy = () => navigationPolicyOptions(backendStore?.allowPrivateNetwork?.() === true);
+
   /**
    * The write-scope policy in force for this caller, or null when there is none
    * to apply: a non-chrome backend, a dedicated Chrome (where every addressable
@@ -1520,7 +1532,7 @@ export function registerBrowserRpc(
   };
 
   const delegateExternal = async (url: string, method: string): Promise<ExternalOpenResult> => {
-    await validateUrl(url, method);
+    await validateUrl(url, method, navigationPolicy());
     await shell.openExternal(url);
     return { backend: 'external', opened: true, url };
   };
@@ -2505,7 +2517,7 @@ export function registerBrowserRpc(
       if (action === 'new') {
         if (url) {
           try {
-            await validateUrl(url, 'browser.tabs');
+            await validateUrl(url, 'browser.tabs', navigationPolicy());
           } catch (error) {
             return browserTabsError(
               'BROWSER_TAB_URL_BLOCKED',
@@ -2703,7 +2715,7 @@ export function registerBrowserRpc(
       // URL validation failure is a URL_BLOCKED error; a failed OS launch is a
       // CREATE_FAILED — the two must not share a code (agents branch on it).
       try {
-        await validateUrl(url, 'browser.tabs');
+        await validateUrl(url, 'browser.tabs', navigationPolicy());
       } catch (error) {
         return browserTabsError(
           'BROWSER_TAB_URL_BLOCKED',
@@ -2727,7 +2739,7 @@ export function registerBrowserRpc(
 
     if (action === 'new' && url !== undefined) {
       try {
-        await validateUrl(url, 'browser.tabs');
+        await validateUrl(url, 'browser.tabs', navigationPolicy());
       } catch (error) {
         return browserTabsError(
           'BROWSER_TAB_URL_BLOCKED',
@@ -2830,7 +2842,7 @@ export function registerBrowserRpc(
       // 'external', about:blank is a valid open here (auto-open path). Always a
       // NEW tab, so there is no reuse question to answer on this backend.
       const { client: launcher, callerPtyId } = await resolveChromeClient('browser.open', ctx, workspaceId);
-      if (url) await validateUrl(url, 'browser.open');
+      if (url) await validateUrl(url, 'browser.open', navigationPolicy());
       const opened = await launcher.openTab(url ?? 'about:blank', workspaceId);
       if (openerKey) surfaceOpeners.note(opened.surfaceId, openerKey, callerPtyId);
       // The launcher's stable surfaceId keeps the engine's auto-open→pin
@@ -2850,7 +2862,7 @@ export function registerBrowserRpc(
       }
       return delegateExternal(url, 'browser.open');
     }
-    if (url) await validateUrl(url, 'browser.open');
+    if (url) await validateUrl(url, 'browser.open', navigationPolicy());
     // Builtin reuse, re-decided now that main knows who opened what.
     //
     // The renderer reuses the workspace's FIRST browser surface in pane-tree
@@ -3150,7 +3162,7 @@ export function registerBrowserRpc(
   };
   registerLeased('browser.navigate', async (params, scope) => {
     const navUrl = requireNavigateUrl(params);
-    await validateUrl(navUrl, 'browser.navigate');
+    await validateUrl(navUrl, 'browser.navigate', navigationPolicy());
     const surfaceId = typeof params['surfaceId'] === 'string' ? params['surfaceId'] : undefined;
 
     // Try CDP direct navigation first
@@ -3213,7 +3225,7 @@ export function registerBrowserRpc(
       );
     }
     const navUrl = requireNavigateUrl(params);
-    await validateUrl(navUrl, 'browser.navigate');
+    await validateUrl(navUrl, 'browser.navigate', navigationPolicy());
     // Owner = the caller-verified scope, never a body-supplied workspaceId
     // (#810 scope-coverage guard).
     const opened = await (await chrome()).client.openTab(navUrl, scope);
@@ -3408,6 +3420,18 @@ export function registerBrowserRpc(
       port,
     };
   });
+
+  /**
+   * browser.navigationPolicy.get
+   * The navigation policy's switch as main decides it (the Settings toggle or
+   * main's environment variable). The MCP server runs the same policy as a
+   * preflight in the agent's process, which can see neither, so it asks here
+   * on every navigation — one answer for one URL (#1359), and a toggle reaches
+   * the next navigation on both sides. Nothing to scope: it is app-wide.
+   */
+  router.register('browser.navigationPolicy.get', async () => ({
+    allowPrivateNetwork: navigationPolicy().allowPrivateNetwork,
+  }));
 
   /**
    * browser.session.list

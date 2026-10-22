@@ -26,6 +26,11 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
  */
 const COMMITTED = '\n\neffect_state: committed';
 
+/** Every RPC but the navigation policy read, which each navigation makes first. */
+function callsBeyondPolicyRead(): unknown[][] {
+  return mockSendRpc.mock.calls.filter(([method]) => method !== 'browser.navigationPolicy.get');
+}
+
 function collectTools(deps: BrowserToolDeps): Map<string, ToolHandler> {
   const tools = new Map<string, ToolHandler>();
   const server = {
@@ -176,7 +181,7 @@ describe('browser navigation MCP workspace contract', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Workspace identity unknown.');
-    expect(mockSendRpc).not.toHaveBeenCalled();
+    expect(callsBeyondPolicyRead()).toEqual([]);
   });
 
   it('lists through the workspace-exact RPC and returns JSON without the internal ok flag', async () => {
@@ -304,13 +309,13 @@ describe('browser navigation MCP workspace contract', () => {
     });
   });
 
-  it('rejects unsafe new URLs before identity resolution or RPC', async () => {
+  it('rejects unsafe new URLs before identity resolution or any browser RPC', async () => {
     const result = await browserTabs({ action: 'new', url: 'file:///etc/passwd' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('[BROWSER_TAB_URL_BLOCKED]');
     expect(resolveWorkspaceId).not.toHaveBeenCalled();
-    expect(mockSendRpc).not.toHaveBeenCalled();
+    expect(callsBeyondPolicyRead()).toEqual([]);
   });
 
   // #1359 — one URL, one verdict.
@@ -358,8 +363,61 @@ describe('browser navigation MCP workspace contract', () => {
     ])('tells the caller how to allow %s, in both tools', async (url) => {
       const result = await verdicts(url);
 
-      expect(result.tabsText).toContain('WMUX_ALLOW_PRIVATE_NETWORK=1');
-      expect(result.navigateText).toContain('WMUX_ALLOW_PRIVATE_NETWORK=1');
+      for (const text of [result.tabsText, result.navigateText]) {
+        expect(text).toContain('turn on Settings → Browser → Allow private network addresses');
+        expect(text).toContain('WMUX_ALLOW_PRIVATE_NETWORK=1');
+      }
+    });
+
+    // The switch is main's: both tools ask main for it on every call, so they
+    // agree with each other, with main, and with the last toggle.
+    it.each([
+      'http://10.0.0.1/',
+      'http://172.16.0.1/',
+      'http://192.168.1.1/',
+      'http://[fd00::1]/',
+    ])('lets %s through both tools while main reports the setting on', async (url) => {
+      let settingOn = true;
+      mockSendRpc.mockImplementation(
+        leasedRouter([], (method) => {
+          if (method === 'browser.navigationPolicy.get') return { allowPrivateNetwork: settingOn };
+          return method === 'browser.evaluate' ? { value: url } : undefined;
+        }),
+      );
+
+      const tabs = await browserTabs({ action: 'new', url });
+      expect(tabs.content[0].text).not.toContain('BROWSER_TAB_URL_BLOCKED');
+      const navigate = await browserNavigate({ url, surfaceId: 'surface-a' });
+      expect(navigate.isError, navigate.content[0].text).toBeUndefined();
+      expect(mockSendRpc).toHaveBeenCalledWith('browser.navigate', expect.objectContaining({ url }));
+
+      // Toggled off in Settings: the very next call of each tool is refused.
+      settingOn = false;
+      const tabsAfter = await browserTabs({ action: 'new', url });
+      expect(tabsAfter.content[0].text).toContain('BROWSER_TAB_URL_BLOCKED');
+      const navigateAfter = await browserNavigate({ url, surfaceId: 'surface-a' });
+      expect(navigateAfter.isError).toBe(true);
+      expect(navigateAfter.content[0].text).toContain('URL blocked:');
+    });
+
+    it('never lifts link-local, metadata, null or loopback aliases, even with the setting on', async () => {
+      mockSendRpc.mockImplementation(
+        leasedRouter([], (method) =>
+          method === 'browser.navigationPolicy.get' ? { allowPrivateNetwork: true } : undefined,
+        ),
+      );
+      for (const url of [
+        'http://169.254.169.254/',
+        'http://[fe80::1]/',
+        'http://0.0.0.0/',
+        'http://127.0.0.2/',
+        'http://[::ffff:169.254.169.254]/',
+      ]) {
+        const tabs = await browserTabs({ action: 'new', url });
+        expect(tabs.content[0].text, url).toContain('BROWSER_TAB_URL_BLOCKED');
+        const navigate = await browserNavigate({ url, surfaceId: 'surface-a' });
+        expect(navigate.content[0].text, url).toContain('URL blocked:');
+      }
     });
   });
 

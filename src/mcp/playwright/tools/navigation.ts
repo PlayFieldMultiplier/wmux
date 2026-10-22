@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { validateNavigationUrl } from '../../../shared/types';
 import { validateResolvedNavigationUrl } from '../../../shared/navigationPolicy';
+import { readNavigationPolicy } from '../navigationPolicy';
 import { sendRpc } from '../../wmux-client';
 import { PlaywrightEngine } from '../PlaywrightEngine';
 import {
@@ -280,7 +281,9 @@ export function registerNavigationTools(server: McpServer, deps: BrowserToolDeps
       // protected pane it carries the policy epoch main checks the record by.
       let leasedScope: BrowserTargetScope | undefined;
       try {
-        const urlCheck = validateNavigationUrl(url);
+        // One read per navigation, shared by both halves of the policy below.
+        const policy = await readNavigationPolicy();
+        const urlCheck = validateNavigationUrl(url, policy);
         if (!urlCheck.valid) {
           return withEffectTrailer(
             {
@@ -326,7 +329,7 @@ export function registerNavigationTools(server: McpServer, deps: BrowserToolDeps
               // Only a POSITIVE block refuses here: a host that does not
               // resolve is left to the browser, which names the failure better
               // than this guard can (and there is nothing to reach anyway).
-              const resolvedCheck = await validateResolvedNavigationUrl(url);
+              const resolvedCheck = await validateResolvedNavigationUrl(url, policy);
               if (!resolvedCheck.valid && !resolvedCheck.unresolved) {
                 throw taggedFailure('invalid_params', `URL blocked: ${resolvedCheck.reason}`);
               }
@@ -603,7 +606,7 @@ export function registerNavigationTools(server: McpServer, deps: BrowserToolDeps
           );
         }
         if (resolvedAction === 'new' && url !== undefined) {
-          const urlCheck = validateNavigationUrl(url);
+          const urlCheck = validateNavigationUrl(url, await readNavigationPolicy());
           if (!urlCheck.valid) {
             return tabsToolError(
               browserTabsError(

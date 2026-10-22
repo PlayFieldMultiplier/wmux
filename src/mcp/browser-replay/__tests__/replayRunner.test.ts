@@ -46,6 +46,10 @@ vi.mock('../../playwright/dom-intelligence', () => ({
 }));
 
 import { replayBlockedReason, replayTrace } from '../replayRunner';
+import type { NavigationPolicyOptions } from '../../../shared/types';
+
+// The private-network switch off, as main answers it by default.
+const policyOff = async (): Promise<NavigationPolicyOptions> => ({ allowPrivateNetwork: false });
 import { refMapShapeHash, type TraceRecord, type TraceStep } from '../../../shared/browserReplay/actionTrace';
 
 const clicks: string[] = [];
@@ -162,7 +166,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const mod = await import('../../playwright/snapshot');
     vi.spyOn(mod, 'resolveRef').mockResolvedValue(handle);
 
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['sign-in']);
     expect(JSON.stringify(result)).not.toContain('Sign in" [ref=');
@@ -175,13 +179,13 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const mod = await import('../../playwright/snapshot');
     const spy = vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('sign-in'));
 
-    await replayTrace(page, trace([refStep()]), undefined);
+    await replayTrace(page, trace([refStep()]), undefined, policyOff);
     expect(spy).toHaveBeenCalledWith(page, '904', { strictCount: true });
   });
 
   it('stops at the step whose element is gone and says which and why', async () => {
     refEntries = [];
-    const result = await replayTrace(page, trace([refStep(), refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep(), refStep()]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.failedStep).toBe(1);
     expect(result.steps[0].detail).toContain('no button "Sign in" on the page any more');
@@ -193,7 +197,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const missing = refStep({
       axis: { kind: 'ref', role: 'button', name: 'Delete', sameNameIndex: 0, sameNameTotal: 1, frameKey: '' },
     });
-    const result = await replayTrace(page, trace([refStep(), missing]), undefined);
+    const result = await replayTrace(page, trace([refStep(), missing]), undefined, policyOff);
     expect(result.failedStep).toBe(2);
     expect(result.steps[0].ok).toBe(true);
   });
@@ -210,7 +214,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const mod = await import('../../playwright/snapshot');
     vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('decoy'));
 
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.failedStep).toBe(1);
     expect(result.steps[0].detail).toContain('can no longer be identified');
@@ -231,7 +235,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const step = refStep({
       axis: { kind: 'ref', role: 'button', name: 'Sign in', sameNameIndex: 0, sameNameTotal: 2, frameKey: '' },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(clicks).toEqual(['first-sign-in']);
@@ -246,7 +250,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const mod = await import('../../playwright/snapshot');
     vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('log-in'));
 
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.failedStep).toBe(1);
     expect(result.steps[0].detail).toContain('no button "Sign in" on the page any more');
@@ -270,7 +274,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const displaced = refStep({
       axis: { kind: 'ref', role: 'button', name: 'Delete', sameNameIndex: 1, sameNameTotal: 2, frameKey: '' },
     });
-    const result = await replayTrace(page, trace([displaced]), undefined);
+    const result = await replayTrace(page, trace([displaced]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.failedStep).toBe(1);
     expect(result.steps[0].detail).toContain('can no longer be identified');
@@ -287,7 +291,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const step = refStep({
       axis: { kind: 'ref', role: 'button', name: 'Delete', sameNameIndex: 1, sameNameTotal: 2, frameKey: '' },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['second-delete']);
   });
@@ -302,7 +306,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const step = refStep({
       axis: { kind: 'ref', role: 'button', name: 'Sign in', sameNameIndex: 2, sameNameTotal: 3, frameKey: '' },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('the recording had 3');
     expect(result.steps[0].detail).toContain('were removed');
@@ -318,7 +322,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
       .spyOn(mod, 'resolveRef')
       .mockRejectedValue(new StaleRefError('ref=1 is stale — the page now has 2 button element(s) named "Sign in"'));
 
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
     expect(spy).toHaveBeenCalledWith(page, '1', { strictCount: true });
     expect(result.ok).toBe(false);
     expect(result.failedStep).toBe(1);
@@ -347,7 +351,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     const step = refStep({
       axis: { kind: 'ref', role: 'button', name: '', sameNameIndex: 0, sameNameTotal: 4, frameKey: '' },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.inconclusive).toBe(true);
     expect(clicks).toEqual([]);
@@ -357,7 +361,7 @@ describe('replayTrace — resolution on the 4-tuple axis', () => {
     refEntries = [
       { role: 'button', name: 'Sign in', sameNameIndex: 0, sameNameTotal: 1, frameKey: 'f1', ref: 1 },
     ];
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
     expect(result.ok).toBe(false);
   });
 });
@@ -386,7 +390,7 @@ describe('replayTrace — the context verifier (#1182)', () => {
         frameKey: '', context: 'region "Express checkout"',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.failedStep).toBe(1);
     expect(result.steps[0].detail).toContain('region "Express checkout"');
@@ -409,7 +413,7 @@ describe('replayTrace — the context verifier (#1182)', () => {
         frameKey: '', context: 'row "Alice"',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('sits at position 2');
     // Never followed to its new index — that would be resolving by position.
@@ -434,7 +438,7 @@ describe('replayTrace — the context verifier (#1182)', () => {
         frameKey: '', context: 'row "Alice"',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['alice-delete']);
     // #1179 removed the step-level warning channel along with the "replay
@@ -459,7 +463,7 @@ describe('replayTrace — the context verifier (#1182)', () => {
         frameKey: '', context: 'row "Alice"',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['second-delete']);
   });
@@ -476,7 +480,7 @@ describe('replayTrace — the context verifier (#1182)', () => {
         frameKey: '', context: 'region "Express checkout"',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['sign-in']);
   });
@@ -489,7 +493,7 @@ describe('replayTrace — the context verifier (#1182)', () => {
     ];
     const mod = await import('../../playwright/snapshot');
     vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('sign-in'));
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['sign-in']);
   });
@@ -522,7 +526,7 @@ describe('replayTrace — the own-attribute verifier', () => {
         frameKey: '', context: 'region "Checkout"', own: 'data-testid=submit-primary',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     // It MOVED, so the run stops rather than following it to index 1 — which
     // is the same refusal the context verifier makes, one signal deeper.
     expect(result.ok).toBe(false);
@@ -557,7 +561,7 @@ describe('replayTrace — the own-attribute verifier', () => {
         frameKey: '', context: 'region "Checkout"', own: 'data-testid=submit-primary',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['primary']);
   });
@@ -582,7 +586,7 @@ describe('replayTrace — the own-attribute verifier', () => {
         frameKey: '', context: 'region "Checkout"', own: 'data-testid=submit-primary',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('data-testid=submit-primary');
     expect(clicks).toEqual([]);
@@ -610,7 +614,7 @@ describe('replayTrace — the own-attribute verifier', () => {
         frameKey: '', context: 'row "Alice"',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['second-delete']);
   });
@@ -635,7 +639,7 @@ describe('replayTrace — the own-attribute verifier', () => {
         frameKey: '', own: 'id=delete-alice',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['first-delete']);
   });
@@ -658,7 +662,7 @@ describe('replayTrace — the own-attribute verifier', () => {
         frameKey: '', context: 'row "Alice"', own: 'id=delete-alice',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['alice-delete']);
   });
@@ -687,7 +691,7 @@ describe('replayTrace — provenance, so the count compares like with like', () 
         frameKey: '', via: 'smart',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['delete']);
     // Asked the lane that minted the number, not a second guess at it.
@@ -710,7 +714,7 @@ describe('replayTrace — provenance, so the count compares like with like', () 
         frameKey: '', via: 'smart',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.inconclusive).toBe(true);
     expect(result.steps[0].detail).toContain('element(s) with that role and name');
@@ -742,7 +746,7 @@ describe('replayTrace — provenance, so the count compares like with like', () 
         frameKey: '', via: 'smart',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.inconclusive).toBe(true);
     expect(clicks).toEqual([]);
@@ -770,7 +774,7 @@ describe('replayTrace — provenance, so the count compares like with like', () 
         frameKey: '', via: 'smart',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['field:fill=hunter2']);
   });
@@ -787,7 +791,7 @@ describe('replayTrace — provenance, so the count compares like with like', () 
         frameKey: '', via: 'smart',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(clicks).toEqual([]);
   });
@@ -806,7 +810,7 @@ describe('replayTrace — provenance, so the count compares like with like', () 
         kind: 'ref', role: 'button', name: 'Delete', sameNameIndex: 0, sameNameTotal: 3, frameKey: '',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(smartCountCalls).toEqual([]);
   });
@@ -825,7 +829,7 @@ describe('replayTrace — provenance, so the count compares like with like', () 
         frameKey: '', via: 'smart',
       },
     });
-    const result = await replayTrace(page, trace([step]), undefined);
+    const result = await replayTrace(page, trace([step]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('none at position 3');
     expect(clicks).toEqual([]);
@@ -836,7 +840,7 @@ describe('replayTrace — flow control', () => {
   it('warns on a changed page shape but still runs', async () => {
     const mod = await import('../../playwright/snapshot');
     vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('a'));
-    const result = await replayTrace(page, trace([refStep()], 'a-different-shape'), undefined);
+    const result = await replayTrace(page, trace([refStep()], 'a-different-shape'), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(result.warnings.join(' ')).toContain('page shape differs');
   });
@@ -847,7 +851,7 @@ describe('replayTrace — flow control', () => {
     // replay of a page that had not changed at all (dogfood D1).
     const mod = await import('../../playwright/snapshot');
     vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('a'));
-    const result = await replayTrace(page, trace([refStep()], ''), undefined);
+    const result = await replayTrace(page, trace([refStep()], ''), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual([]);
   });
@@ -876,7 +880,7 @@ describe('replayTrace — flow control', () => {
       axis: { kind: 'none' },
       args: { url: 'https://example.com/app' },
     };
-    const result = await replayTrace(page, trace([nav, refStep()], recorded), undefined);
+    const result = await replayTrace(page, trace([nav, refStep()], recorded), undefined, policyOff);
 
     expect(result.ok).toBe(true);
     // The destination matched the recording, so a correct measurement is silent.
@@ -893,7 +897,7 @@ describe('replayTrace — flow control', () => {
       axis: { kind: 'none' },
       args: { url: 'https://example.com/app' },
     };
-    const result = await replayTrace(page, trace([nav, refStep()], ''), undefined);
+    const result = await replayTrace(page, trace([nav, refStep()], ''), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.failedStep).toBe(2);
     expect(result.steps[1].detail).toContain('no button "Sign in" on the page any more');
@@ -907,7 +911,7 @@ describe('replayTrace — flow control', () => {
       axis: { kind: 'none' },
       args: { url: 'https://example.com/next' },
     };
-    const result = await replayTrace(page, trace([refStep(), nav, refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep(), nav, refStep()]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(result.stoppedEarly).toContain('step 2 navigates away');
     expect(result.steps).toHaveLength(1);
@@ -919,7 +923,7 @@ describe('replayTrace — flow control', () => {
       axis: { kind: 'none' },
       args: { url: 'https://example.com/start' },
     };
-    const result = await replayTrace(page, trace([nav]), undefined);
+    const result = await replayTrace(page, trace([nav]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(goneTo).toEqual(['https://example.com/start']);
   });
@@ -932,10 +936,34 @@ describe('replayTrace — flow control', () => {
       axis: { kind: 'none' },
       args: { url: 'javascript:alert(1)' },
     };
-    const result = await replayTrace(page, trace([nav]), undefined);
+    const result = await replayTrace(page, trace([nav]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('not navigable');
     expect(goneTo).toEqual([]);
+  });
+
+  it('judges a recorded private address by the live switch, read when the step navigates', async () => {
+    const nav: TraceStep = {
+      tool: 'browser_navigate',
+      axis: { kind: 'none' },
+      args: { url: 'http://10.0.0.5/app' },
+    };
+    const off = await replayTrace(page, trace([nav]), undefined, policyOff);
+    expect(off.ok).toBe(false);
+    expect(off.steps[0].detail).toContain('Settings → Browser → Allow private network addresses');
+    expect(goneTo).toEqual([]);
+
+    const reads = vi.fn(async (): Promise<NavigationPolicyOptions> => ({ allowPrivateNetwork: true }));
+    const on = await replayTrace(page, trace([nav]), undefined, reads);
+    expect(on.ok).toBe(true);
+    expect(goneTo).toEqual(['http://10.0.0.5/app']);
+    expect(reads).toHaveBeenCalledTimes(1);
+  });
+
+  it('never reads the navigation policy for a flow that does not navigate', async () => {
+    const reads = vi.fn(policyOff);
+    await replayTrace(page, trace([refStep()]), undefined, reads);
+    expect(reads).not.toHaveBeenCalled();
   });
 
   it('strips userinfo out of a recorded URL before navigating to it', async () => {
@@ -944,7 +972,7 @@ describe('replayTrace — flow control', () => {
       axis: { kind: 'none' },
       args: { url: 'https://alice:hunter2@example.com/app' },
     };
-    await replayTrace(page, trace([nav]), undefined);
+    await replayTrace(page, trace([nav]), undefined, policyOff);
     expect(goneTo).toHaveLength(1);
     expect(goneTo[0]).not.toContain('hunter2');
   });
@@ -955,14 +983,14 @@ describe('replayTrace — flow control', () => {
       axis: { kind: 'none' },
       args: { url: '{{target}}' },
     };
-    const result = await replayTrace(page, trace([nav]), { target: 'javascript:alert(1)' });
+    const result = await replayTrace(page, trace([nav]), { target: 'javascript:alert(1)' }, policyOff);
     expect(result.ok).toBe(false);
     expect(goneTo).toEqual([]);
   });
 
   it('stops on a placeholder the caller did not supply', async () => {
     const typing = refStep({ tool: 'browser_type', args: { text: '{{email}}' } });
-    const result = await replayTrace(page, trace([typing]), {});
+    const result = await replayTrace(page, trace([typing]), {}, policyOff);
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('missing variable(s): email');
   });
@@ -971,7 +999,7 @@ describe('replayTrace — flow control', () => {
     const mod = await import('../../playwright/snapshot');
     vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('field'));
     const typing = refStep({ tool: 'browser_type', args: { text: '{{email}}' } });
-    const result = await replayTrace(page, trace([typing]), { email: 'a@b.c' });
+    const result = await replayTrace(page, trace([typing]), { email: 'a@b.c' }, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['field:fill=a@b.c']);
   });
@@ -986,7 +1014,7 @@ describe('replayTrace — flow control', () => {
       tool: 'browser_type',
       args: { text: 'one\ntwo', newline: 'enter' },
     });
-    const result = await replayTrace(page, trace([typing]), undefined);
+    const result = await replayTrace(page, trace([typing]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(clicks).toEqual(['caption:fill=one']);
     expect(pressed).toEqual(['Enter', 'insert:two']);
@@ -994,14 +1022,14 @@ describe('replayTrace — flow control', () => {
 
   it('presses a key without needing an element', async () => {
     const key: TraceStep = { tool: 'browser_press_key', axis: { kind: 'none' }, args: { key: 'Enter' } };
-    const result = await replayTrace(page, trace([key]), undefined);
+    const result = await replayTrace(page, trace([key]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(pressed).toEqual(['Enter']);
   });
 
   it('refuses a css axis that no longer matches exactly one element', async () => {
     const cssStep = refStep({ axis: { kind: 'css', selector: '#go' } });
-    const result = await replayTrace(page, trace([cssStep]), undefined);
+    const result = await replayTrace(page, trace([cssStep]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('matched 0 elements');
   });
@@ -1011,7 +1039,7 @@ describe('replayTrace — flow control', () => {
     vi.spyOn(mod, 'resolveRef').mockResolvedValue({
       click: async () => { throw new Error('element is not visible'); },
     } as never);
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('not visible');
   });
@@ -1019,7 +1047,7 @@ describe('replayTrace — flow control', () => {
 
 describe('settling after a step (#1193)', () => {
   it('does not wait after a step that did not navigate', async () => {
-    const result = await replayTrace(page, trace([refStep(), refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep(), refStep()]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(waits).toEqual([]);
     expect(navListeners.size).toBe(0);
@@ -1049,7 +1077,7 @@ describe('settling after a step (#1193)', () => {
       return resolved.has(ref) ? ({ click: async () => undefined } as never) : null;
     });
 
-    const result = await replayTrace(page, trace([clickSignIn, clickClosed]), undefined);
+    const result = await replayTrace(page, trace([clickSignIn, clickClosed]), undefined, policyOff);
 
     expect(result.steps.map((s) => s.ok)).toEqual([true, true]);
     expect(waits).toEqual(['load:domcontentloaded']);
@@ -1065,7 +1093,7 @@ describe('settling after a step (#1193)', () => {
     const waitUrl: TraceStep = { tool: 'browser_wait', axis: { kind: 'none' }, args: { urlGlob: '**/pulls**' } };
     const waitIdle: TraceStep = { tool: 'browser_wait', axis: { kind: 'none' }, args: {} };
 
-    const result = await replayTrace(page, trace([waitText, waitUrl, waitIdle]), undefined);
+    const result = await replayTrace(page, trace([waitText, waitUrl, waitIdle]), undefined, policyOff);
 
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => s.detail)).toEqual([
@@ -1082,7 +1110,7 @@ describe('settling after a step (#1193)', () => {
     const huge: TraceStep = { tool: 'browser_wait', axis: { kind: 'none' }, args: { urlGlob: '**/y', timeout: 1e9 } };
     const timeouts: number[] = [];
     const waitForURL = async (_url: string, opts: { timeout: number }) => { timeouts.push(opts.timeout); };
-    const result = await replayTrace({ ...(page as object), waitForURL } as never, trace([forever, huge]), undefined);
+    const result = await replayTrace({ ...(page as object), waitForURL } as never, trace([forever, huge]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(timeouts).toEqual([30000, 60000]);
   });
@@ -1101,7 +1129,7 @@ describe('navigation watch (#1193)', () => {
       }
       return resolved.has(ref) ? ({ click: async () => undefined } as never) : null;
     });
-    const result = await replayTrace(page, trace([refStep(), refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep(), refStep()]), undefined, policyOff);
     expect(result.ok).toBe(true);
     expect(waits).toEqual(['load:domcontentloaded']);
     // A settle ran: at least two reads after the pre-flight one.
@@ -1115,7 +1143,7 @@ describe('the mutating tools’ effect trailer does not reach a replay', () => {
     const mod = await import('../../playwright/snapshot');
     vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('sign-in'));
 
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
 
     // The runner drives Playwright itself: it never calls browser_click, so the
     // `effect_state:` lines the live tools now append cannot end up in a step
@@ -1129,7 +1157,7 @@ describe('the mutating tools’ effect trailer does not reach a replay', () => {
   it('reports a step that could not be resolved in its own words', async () => {
     refEntries = [];
 
-    const result = await replayTrace(page, trace([refStep()]), undefined);
+    const result = await replayTrace(page, trace([refStep()]), undefined, policyOff);
 
     expect(result.ok).toBe(false);
     expect(result.steps[0].detail).toContain('no button "Sign in" on the page any more');
