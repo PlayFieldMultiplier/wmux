@@ -69,7 +69,8 @@ export function dmStartedThreads(cards: readonly RoomCard[], threads: ThreadsByW
       out.set(threadKeyOf({ workspaceId: c.workspaceId, threadId: linked }), inDm);
       continue;
     }
-    if (!c.threadId.startsWith('handoff:')) continue;
+    // Nor does one in the work's thread: it links where a follow-up asked there was sent.
+    if (!c.threadId.startsWith('handoff:') || c.refs?.pointer === 'askedIn') continue;
     const request = c.refs?.requestCardId ? byId.get(c.refs.requestCardId) : undefined;
     const owner = dmThreadBot(linked) ?? (request && request.workspaceId === c.workspaceId ? dmThreadBot(request.threadId) : null);
     if (owner) out.set(threadKeyOf(c), owner);
@@ -98,7 +99,7 @@ export function groupStartedThreads(cards: readonly RoomCard[], threads: Threads
       out.set(threadKeyOf({ workspaceId: c.workspaceId, threadId: linked }), inGroup);
       continue;
     }
-    if (!c.threadId.startsWith('handoff:')) continue;
+    if (!c.threadId.startsWith('handoff:') || c.refs?.pointer === 'askedIn') continue;
     const request = c.refs?.requestCardId ? byId.get(c.refs.requestCardId) : undefined;
     const owner = groupThreadGroup(linked) ? linked as ThreadId
       : request && request.workspaceId === c.workspaceId && groupThreadGroup(request.threadId) ? request.threadId : null;

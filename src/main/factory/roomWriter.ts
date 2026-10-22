@@ -1109,12 +1109,14 @@ function threadLinked(cards: readonly RoomCard[], threadId: ThreadId, of: (t: un
   // links stays the room's, and so does a thread another conversation
   // opened that the owner followed up on from here (an askedIn pointer). A
   // card in the thread itself that links the conversation (an opening hop,
-  // a task's lifecycle card) still ties it.
+  // a task's lifecycle card) still ties it; an askedIn pointer there does not.
   const pointed = threadId.startsWith('handoff:');
   for (const c of cards) {
     if (c.actor.kind !== 'system') continue;
     if (c.threadId === threadId) {
-      const linked = of(c.refs?.threadId);
+      // An askedIn pointer here links where a follow-up asked in this
+      // thread was sent (a 1:1, a group), not who opened this thread.
+      const linked = c.refs?.pointer === 'askedIn' ? null : of(c.refs?.threadId);
       if (linked) return linked;
     } else if (pointed && c.refs?.threadId === threadId && c.refs.pointer !== 'askedIn') {
       const from = of(c.threadId);
