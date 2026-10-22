@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromAgentPath, toAgentPath, win32AliasedName, wslMountRoot, wslPathToHost } from '../wslPaths';
+import { fromAgentPath, toAgentFileParts, toAgentPath, win32AliasedName, wslMountRoot, wslPathToHost } from '../wslPaths';
 
 const wsl = (mount?: string): NodeJS.ProcessEnv => ({
   WMUX_WSL_DISTRO: 'Ubuntu',
@@ -45,6 +45,32 @@ describe('toAgentPath', () => {
     expect(toAgentPath('/tmp/x.png', env)).toBe('/tmp/x.png');
     expect(toAgentPath('(pending)', env)).toBe('(pending)');
     expect(toAgentPath('C:relative', env)).toBe('C:relative');
+  });
+});
+
+describe('toAgentFileParts', () => {
+  const reply = (): { task: { history: Array<{ parts: Array<Record<string, unknown>> }> } } => ({
+    task: { history: [{ parts: [
+      { kind: 'text', text: 'C:\\Users\\me\\not-a-path' },
+      { kind: 'file', file: { mimeType: 'image/png', uri: 'file:///C:/Users/me/.wmux/uploads/a2a/h/ab.png' }, metadata: { sha256: 'ab', path: 'C:\\Users\\me\\.wmux\\uploads\\a2a\\h\\ab.png' } },
+      { kind: 'file', file: { mimeType: 'image/png' }, metadata: { sha256: 'cd', notReceived: 'missing' } },
+    ] }] },
+  });
+
+  it('gives a WSL caller the received copies under the drive mount', () => {
+    const r = reply();
+    toAgentFileParts(r, wsl('/mnt/c/'));
+    const [text, got, missing] = r.task.history[0].parts;
+    expect(text.text).toBe('C:\\Users\\me\\not-a-path');
+    expect(got.metadata).toMatchObject({ path: '/mnt/c/Users/me/.wmux/uploads/a2a/h/ab.png' });
+    expect(got.file).toMatchObject({ uri: 'file:///mnt/c/Users/me/.wmux/uploads/a2a/h/ab.png' });
+    expect(missing).toEqual(reply().task.history[0].parts[2]);
+  });
+
+  it('leaves the reply untouched for a non-WSL caller', () => {
+    const r = reply();
+    toAgentFileParts(r, {});
+    expect(r).toEqual(reply());
   });
 });
 

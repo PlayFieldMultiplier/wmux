@@ -35,7 +35,7 @@ import {
 import type { OwningAnchor } from '../../pty/serverSidePidWalk';
 import { recordSentTask, recordTaskState, reopenedState, stateOfTask, workLinkFromSentTask } from '../../workLink/a2aProducer';
 import { noteTrackReply } from '../../deck/trackRecordFeed';
-import { A2A_BRAIN_ALIAS, isRemoteTaskId } from '../../../shared/a2aRemote';
+import { A2A_BRAIN_ALIAS, A2A_REMOTE_IMAGE_LIMITS, isRemoteTaskId } from '../../../shared/a2aRemote';
 import {
   isRemoteWorkspaceId,
   remoteWorkspaceId,
@@ -43,6 +43,7 @@ import {
   type A2aRemoteSendTaskInput,
   type A2aRemoteStateInput,
   type A2aRemoteTarget,
+  type A2aStagedImage,
 } from '../../../shared/a2aRemoteDelivery';
 
 /** The daemon connection a resolve's pid-map entries were confirmed against (null: no daemon). */
@@ -85,6 +86,10 @@ const INTERNAL_RENDERER_FIELDS = [
   // renderer directly (never through this router).
   'remoteFrom',
   'remoteMarker',
+  // Images: main's checked copies (local sends) and the daemon's received
+  // files (remote ones). From the wire they would put any path in a prompt.
+  'attachments',
+  'remoteImages',
 ] as const;
 
 /**
@@ -260,7 +265,8 @@ function withDeadline<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
  *  scan so a hung Win32_Process query can't sink the legacy fallback response. */
 const RPC_SNAPSHOT_DEADLINE_MS = 8000;
 
-type RemoteOpResult = { ok: true; taskId: string } | { ok: false; error: string };
+/** `note`: what the sender should know (images omitted for an older peer). */
+type RemoteOpResult = { ok: true; taskId: string; note?: string } | { ok: false; error: string };
 
 /**
  * Cross-host A2A hooks into this handler set. Each is a daemon RPC in the
@@ -277,6 +283,11 @@ export interface RemoteA2aRpcDeps {
   state: (input: A2aRemoteStateInput) => Promise<RemoteOpResult>;
   /** The receiver of an inbound remote task read it: the sender gets a `read` receipt. */
   read?: (input: { taskId: string; workspaceId: string }) => Promise<unknown>;
+  /**
+   * Check and keep an agent's images for a pane on this PC (`a2a.attachments.stage`):
+   * from `ptyId`'s folders when main verified that pane, else `~/.wmux/uploads` only.
+   */
+  stageImages?: (input: { paths: string[]; ptyId?: string; workspaceId?: string }) => Promise<{ ok: true; images: A2aStagedImage[] } | { ok: false; error: string }>;
   /**
    * Paired PCs with no active link in the workspace (every workspace when
    * omitted). `panesOf` counts a local workspace's panes, from discover's own list.
@@ -319,6 +330,21 @@ function paneCounter(agents: unknown[]): (workspaceId: string) => number {
 export const PEER_HINTS_DEADLINE_MS = 2_000;
 
 const REMOTE_QUEUED = { stored: true, notified: false, queued: true, reason: 'queued_for_remote_host' } as const;
+
+const IMAGES_MAX = A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE;
+
+/**
+ * `images` of a send: undefined when absent, null when not a list of 1-4
+ * absolute paths. A Windows device path (`\\?\`, `\\.\`) is never one; a
+ * share path is left to the daemon, which takes it only on a share a root is on.
+ */
+function imagePathsOf(v: unknown): string[] | undefined | null {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v) || v.length === 0 || v.length > IMAGES_MAX) return null;
+  const isAbs = (p: string): boolean => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\');
+  const device = (p: string): boolean => /^[\\/]{2}[?.][\\/]/.test(p);
+  return v.every((p) => typeof p === 'string' && p.length > 0 && p.length <= 4096 && isAbs(p) && !device(p)) ? (v as string[]) : null;
+}
 const REMOTE_STATES: ReadonlySet<string> = new Set(['working', 'input-required', 'completed', 'failed', 'canceled']);
 
 export function registerA2aRpc(
@@ -373,6 +399,8 @@ export function registerA2aRpc(
     try { message = validateMessage(typeof params.message === 'string' ? params.message : ''); } catch (e) {
       return { error: `a2a.task.send: ${e instanceof Error ? e.message : 'invalid'}` };
     }
+    const images = imagePathsOf(params.images);
+    if (images === null) return { error: `a2a.task.send: images must be a list of up to ${IMAGES_MAX} absolute paths` };
     if (ctx?.commanderWorkspace) {
       // A brain sends only on a brain link of its own workspace: Moa to
       // another PC's Moa. The sender is the token-verified commander binding,
@@ -394,6 +422,7 @@ export function registerA2aRpc(
         from: { workspaceId: hq, name: A2A_BRAIN_ALIAS },
         title: typeof params.title === 'string' ? params.title : '',
         text: message,
+        ...(images ? { images } : {}),
       }).catch((err: unknown): RemoteOpResult => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
       if (!res.ok) return { error: `a2a.task.send: remote send refused (${res.error})` };
       return {
@@ -403,6 +432,7 @@ export function registerA2aRpc(
         delivery: REMOTE_QUEUED,
         // What Moa reads right after sending: the wait is not the operator's decision.
         next: 'You are woken when the other Moa replies or completes it; a2a_task_query shows remoteReceipt delivered/read once it arrives. Do not raise a decision card about waiting: end your turn.',
+        ...(res.note ? { note: res.note } : {}),
       };
     }
     const workspaceId = typeof params.workspaceId === 'string' ? params.workspaceId : '';
@@ -420,9 +450,10 @@ export function registerA2aRpc(
       from: { workspaceId, name: workspaceId, paneId: caller.paneId, ptyId: params.senderPtyId as string },
       title: typeof params.title === 'string' ? params.title : '',
       text: message,
+      ...(images ? { images } : {}),
     }).catch((err: unknown): RemoteOpResult => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
     if (!res.ok) return { error: `a2a.task.send: remote send refused (${res.error})` };
-    return { ok: true, taskId: res.taskId, remote: true, delivery: REMOTE_QUEUED };
+    return { ok: true, taskId: res.taskId, remote: true, delivery: REMOTE_QUEUED, ...(res.note ? { note: res.note } : {}) };
   }
 
   /** A reply on a remote task: stored in the ledger and queued for the peer. */
@@ -431,14 +462,54 @@ export function registerA2aRpc(
     try { message = validateMessage(typeof params.message === 'string' ? params.message : ''); } catch (e) {
       return { error: `${method}: ${e instanceof Error ? e.message : 'invalid'}` };
     }
+    const images = imagePathsOf(params.images);
+    if (images === null) return { error: `${method}: images must be a list of up to ${IMAGES_MAX} absolute paths` };
+    const workspaceId = ctx?.commanderWorkspace ?? (typeof params.workspaceId === 'string' ? params.workspaceId : '');
+    // Whose folders the images may come from: the caller's pane, once verified
+    // here (a brain has none, and gets the uploads folder only).
+    const ptyId = images && !ctx?.commanderWorkspace ? await verifiedCallerPty(workspaceId, params.senderPtyId) : undefined;
     const res = await remote!.reply({
       taskId,
       // A brain answers as its token-verified workspace (Moa: the HQ).
-      workspaceId: ctx?.commanderWorkspace ?? (typeof params.workspaceId === 'string' ? params.workspaceId : ''),
+      workspaceId,
       text: message,
+      ...(images ? { images } : {}),
+      ...(ptyId ? { ptyId } : {}),
     }).catch((err: unknown): RemoteOpResult => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
     if (!res.ok) return { error: `${method}: remote reply refused (${res.error})` };
-    return { ok: true, taskId, remote: true, delivery: REMOTE_QUEUED };
+    return { ok: true, taskId, remote: true, delivery: REMOTE_QUEUED, ...(res.note ? { note: res.note } : {}) };
+  }
+
+  /** The caller's pty when it is a terminal of the caller's own workspace, else undefined. */
+  async function verifiedCallerPty(workspaceId: string, senderPtyId: unknown): Promise<string | undefined> {
+    if (typeof senderPtyId !== 'string' || !senderPtyId || !workspaceId) return undefined;
+    const caller = await resolveCallerPane(getWindow, workspaceId, senderPtyId);
+    return caller.kind === 'resolved' ? senderPtyId : undefined;
+  }
+
+  /**
+   * A local send's images, checked and kept by the daemon in
+   * `~/.wmux/uploads/a2a/local` (the receiver reads those copies), as the
+   * renderer's `attachments`. Never taken from the wire.
+   *
+   * Refused before anything is copied when the send cannot carry them: a
+   * background (`execute`) task is handed only the text, and a message with
+   * no text is refused by the renderer. A commander brain owns no pane, so its
+   * images come from the uploads folder only, as on the remote reply path.
+   */
+  async function stageLocalImages(params: Record<string, unknown>, ctx: RpcContext | undefined): Promise<{ attachments?: A2aStagedImage[] } | { error: string }> {
+    const images = imagePathsOf(params.images);
+    if (images === null) return { error: `a2a.task.send: images must be a list of up to ${IMAGES_MAX} absolute paths` };
+    if (!images) return {};
+    if (params.execute === true) return { error: 'a2a.task.send: images cannot go with execute (the background task is given the text only)' };
+    if (typeof params.message !== 'string' || !params.message.trim()) return { error: 'a2a.task.send: a message with images needs text too' };
+    if (!remote?.stageImages) return { error: 'a2a.task.send: images need the wmux daemon, which is not connected' };
+    const workspaceId = typeof params.workspaceId === 'string' ? params.workspaceId : '';
+    const ptyId = ctx?.commanderWorkspace ? undefined : await verifiedCallerPty(workspaceId, params.senderPtyId);
+    const staged = await remote.stageImages({ paths: images, ...(ptyId ? { ptyId, workspaceId } : {}) })
+      .catch((err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }));
+    if (!staged.ok) return { error: `a2a.task.send: ${staged.error}` };
+    return { attachments: staged.images };
   }
 
   /** After the ledger committed a state on a remote task, tell the peer. Best effort. */
@@ -1187,6 +1258,12 @@ export function registerA2aRpc(
     const marked = refuseHandoffMarker('a2a.task.update', rawParams.message, ctx);
     if (marked) return marked;
     const params = withOperatorOrigin(rawParams, ctx);
+    // Only a reply on a remote task (replyRemote below) carries images; every
+    // other path here hands the renderer the text only.
+    if (params.images !== undefined && params.images !== null
+      && !(typeof params.status !== 'string' && typeof params.message === 'string' && remote && isRemoteTaskId(params.taskId))) {
+      return { error: 'a2a.task.update: images go only with a message (no status) on a task with another PC; on this PC, reply with a2a.task.send' };
+    }
     // A brain moves a remote task as its token-verified workspace (Moa: the
     // HQ), never a wire value: the state also goes to the other PC.
     if (ctx?.commanderWorkspace && remote && isRemoteTaskId(params.taskId)) params.workspaceId = ctx.commanderWorkspace;
@@ -1305,6 +1382,13 @@ export function registerA2aRpc(
     // `workspaceId` on the wire would carry its privilege into someone else's.
     let sendParams: Record<string, unknown> = withOperatorOrigin(params, ctx);
     delete sendParams.commanderWorkspaceId;
+    // Images reach the renderer only as main's checked copies (`attachments`).
+    delete sendParams.images;
+    const staged = await stageLocalImages(params, ctx);
+    if ('error' in staged) return { error: staged.error };
+    if (staged.attachments) sendParams.attachments = staged.attachments;
+    // A send the renderer then refuses leaves its copies in the local folder,
+    // which makes room from copies nothing open names (the daemon's eviction).
     // A main-registered delivery check (deliveryGuards.ts), kept only on the
     // operator lane. It can only add a refusal, never skip a check.
     if (ctx?.operator === true && typeof params.deliveryGuardKey === 'string' && params.gatedDelivery === true) {

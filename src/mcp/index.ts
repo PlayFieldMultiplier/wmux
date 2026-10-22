@@ -80,6 +80,7 @@ import {
 import { getBotMcpServerInstructions, getWmuxMcpServerInstructions, resolveMcpServerVersion } from './serverMetadata';
 import { unlistToolsFromListing } from './listFilter';
 import { UNLISTED_TOOLS_SET } from '../shared/unlistedTools';
+import { fromAgentPath, toAgentFileParts } from './wslPaths';
 import type { RegisterWmuxToolsOptions, WmuxToolProfile } from './toolCatalog';
 
 /**
@@ -390,6 +391,10 @@ const SEND_MESSAGE_SHAPE = {
   silent: z.boolean().optional().describe('Skip the PTY paste on the receiver; the task is still persisted and pollable via a2a_task_query. Use it to avoid injecting into a running TUI agent\'s prompt. Omitted, live TUI agents get a one-line nudge, not a full paste.'),
   data: z.record(z.string(), z.unknown()).optional().describe('Optional structured data (JSON)'),
   data_mime_type: z.string().optional().describe('MIME type for data (default: application/json)'),
+  images: z.array(z.string()).min(1).max(4).optional().describe(
+    'Up to 4 PNG, JPEG or WebP files (5 MB each, 10 MB in all) to attach, by absolute path: from your pane\'s project folder or the wmux uploads folder only (~/.wmux/uploads/ on the PC running wmux; from WSL, under /mnt/<drive>/), so copy a screenshot there first. ' +
+      'The receiver gets its own copy and reads it by the path shown in the message. Works for a pane on another PC too; one whose wmux is older gets the text with a note instead.',
+  ),
 };
 
 export function createWmuxServer(ctx: WmuxServerCtx): McpServer {
@@ -2166,9 +2171,9 @@ server.tool(
 );
 
 // 3. send_message — Primary tool for inter-workspace communication
-const sendMessageHandler = async ({ to, pane_id, surface_id, title, task_id, message, execute, silent, data, data_mime_type }: {
+const sendMessageHandler = async ({ to, pane_id, surface_id, title, task_id, message, execute, silent, data, data_mime_type, images }: {
   to?: string; pane_id?: string; surface_id?: string; title?: string; task_id?: string; message: string; execute?: boolean; silent?: boolean;
-  data?: Record<string, unknown>; data_mime_type?: string;
+  data?: Record<string, unknown>; data_mime_type?: string; images?: string[];
 }) => {
   const wsId = await requireWorkspaceId();
   // Pane names: `to: "#w1-2"` names the pane AND its workspace; a name in
@@ -2244,6 +2249,18 @@ const sendMessageHandler = async ({ to, pane_id, surface_id, title, task_id, mes
     params.data = data;
     params.dataMimeType = data_mime_type || 'application/json';
   }
+  if (images && images.length > 0) {
+    // A WSL agent names Linux paths; wmux opens them from Windows.
+    const hostPaths: string[] = [];
+    for (const given of images) {
+      const hostPath = fromAgentPath(given);
+      if (!hostPath) {
+        return { content: [{ type: 'text' as const, text: `send_message: images: ${JSON.stringify(given)} is not a file wmux can open (give an absolute path under /mnt/<drive>/, such as /mnt/c/Users/<you>/.wmux/uploads/)` }], isError: true };
+      }
+      hostPaths.push(hostPath);
+    }
+    params.images = hostPaths;
+  }
   // A new execute send waits on a person (#1462): outwait main, so the agent
   // reads the verdict instead of timing out and retrying into a second prompt.
   // A new task's delivery may first wait out the target pane's fresh-context
@@ -2281,10 +2298,12 @@ server.tool(
     const wsId = await requireWorkspaceId();
     // view: 'page' has main (and each task source) page and summarize, so a
     // list never carries full histories over any hop.
+    // A received image's path is this PC's: a WSL agent is given it under
+    // the drive mount (rewritten before callRpc renders the reply).
     return callRpc('a2a.task.query', {
       workspaceId: wsId, status, role, updatedSince: updated_since,
       view: 'page', taskId: task_id, messageId: message_id, limit, cursor,
-    });
+    }, undefined, (result) => toAgentFileParts(result));
   },
 );
 

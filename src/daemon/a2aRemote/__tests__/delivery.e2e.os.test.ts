@@ -314,6 +314,25 @@ describe('cross-host delivery, end to end', () => {
     expect(b.delivery.status()).toMatchObject([{ hostId: a.hostId, role: 'server', state: 'connected' }]);
   });
 
+  it('a copy staged for a send that was then refused stays until the local folder needs the room', async () => {
+    const a = await makePc('PC-A', { images: true });
+    const shots = path.join(a.dir, 'uploads', 'shots');
+    fs.mkdirSync(shots, { recursive: true });
+    const stage = async (seed: number): Promise<string> => {
+      fs.writeFileSync(path.join(shots, `s${seed}.png`), pngBytes(3, 3, seed));
+      const res = (await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(shots, `s${seed}.png`)] })) as { ok: boolean; images: Array<{ path: string }> };
+      expect(res.ok).toBe(true);
+      return res.images[0].path;
+    };
+    // Its send was refused: no task names it, and it is still there.
+    const refused = await stage(1000);
+    expect(fs.existsSync(refused)).toBe(true);
+    // eslint-disable-next-line no-await-in-loop -- in order, so the first is the oldest
+    for (let i = 0; i < 100; i += 1) await stage(i);
+    expect(fs.existsSync(refused)).toBe(false);
+    expect(fs.readdirSync(path.join(a.dir, 'uploads', 'a2a', 'local'))).toHaveLength(100);
+  });
+
   it('each PC learns what the other takes, in both roles, and still knows it after a restart', async () => {
     // B can keep images (an uploads folder); A advertises offers only.
     const b = await makePc('PC-B', { images: true });
@@ -358,7 +377,7 @@ describe('cross-host delivery, end to end', () => {
     expect(staged.images[0].path).toBe(path.join(a.dir, 'uploads', 'a2a', 'local', `${staged.images[0].sha256}.png`));
     // The pane's own folder, but only for a terminal of the sender's workspace.
     fs.mkdirSync(path.join(a.dir, 'proj'));
-    fs.writeFileSync(path.join(a.dir, 'proj', 'ui.png'), shot);
+    fs.writeFileSync(path.join(a.dir, 'proj', 'ui.png'), pngBytes(12, 7, 2));
     expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-a' })).toMatchObject({ ok: true });
     expect(await a.rpc(A2A_REMOTE_RPC.stageImages, { paths: [path.join(a.dir, 'proj', 'ui.png')], ptyId: 'pty-a', workspaceId: 'ws-other' })).toMatchObject({ ok: false });
     // Outside the allowed folders: refused with a reason the agent can act on.
@@ -384,6 +403,8 @@ describe('cross-host delivery, end to end', () => {
       { kind: 'file', file: { mimeType: 'image/png', uri: pathToFileURL(received).href }, metadata: expect.objectContaining({ sha256: staged.images[0].sha256, width: 12, height: 7 }) },
     ]);
     expect(fs.readFileSync(received).equals(fs.readFileSync(staged.images[0].path))).toBe(true);
+    // Main hands B's renderer B's own file, to end the paste with.
+    expect(taskSends(b)[0]['remoteImages']).toEqual([{ sha256: staged.images[0].sha256, mediaType: 'image/png', path: received }]);
     // The upload was claimed: nothing left in B's staging.
     expect(fs.readdirSync(path.join(b.dir, 'a2a', 'blobs-in', a.hostId))).toEqual([]);
 

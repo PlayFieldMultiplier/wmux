@@ -72,6 +72,10 @@ beforeEach(() => {
     reply: vi.fn(async (i: { taskId: string }) => ({ ok: true, taskId: i.taskId })),
     state: vi.fn(async (i: { taskId: string }) => ({ ok: true, taskId: i.taskId })),
     read: vi.fn(async () => ({ ok: true })),
+    stageImages: vi.fn(async (i: { paths: string[] }) => ({
+      ok: true,
+      images: i.paths.map((_p, n) => ({ path: `/home/u/.wmux/uploads/a2a/local/${String(n).repeat(64)}.png`, sha256: String(n).repeat(64), mediaType: 'image/png', bytes: 10, width: 1, height: 1, name: 'x.png' })),
+    })),
     listPeers: vi.fn(async () => []),
   };
   sendToRendererMock.mockImplementation(async (_w: unknown, method: string) => {
@@ -79,6 +83,72 @@ beforeEach(() => {
     if (method === 'a2a.discover') return { agents: [{ name: 'Local', metadata: { workspaceId: 'ws-a' } }] };
     if (method === 'a2a.task.query') return { workspaceId: 'ws-b', tasks: [{ id: RT, status: { state: 'working' }, history: ['renderer'], metadata: { updatedAt: '0' } }] };
     return { ok: true, taskId: 'task-local' };
+  });
+});
+
+describe('a2a.task.send — images', () => {
+  it('a remote send carries the paths and the sender pty; the daemon note comes back', async () => {
+    remote.sendTask.mockResolvedValue({ ok: true, taskId: RT, note: 'omitted for an older PC' });
+    const res = await call(setup(), 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: ALIAS, message: 'see', images: ['/p/shot.png'] });
+    expect(res).toMatchObject({ ok: true, remote: true, note: 'omitted for an older PC' });
+    expect(remote.sendTask).toHaveBeenCalledWith(expect.objectContaining({ images: ['/p/shot.png'], from: expect.objectContaining({ ptyId: 'pty-a' }) }));
+  });
+
+  it('a remote reply passes the pty only when it is the caller\'s own terminal', async () => {
+    const router = setup();
+    await call(router, 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-a', taskId: RT, message: 'here', images: ['/p/a.png'] });
+    expect(remote.reply).toHaveBeenLastCalledWith({ taskId: RT, workspaceId: 'ws-a', text: 'here', images: ['/p/a.png'], ptyId: 'pty-a' });
+    await call(router, 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-elsewhere', taskId: RT, message: 'here', images: ['/p/a.png'] });
+    expect(remote.reply).toHaveBeenLastCalledWith({ taskId: RT, workspaceId: 'ws-a', text: 'here', images: ['/p/a.png'] });
+  });
+
+  it('a local send stages the images and hands the renderer the copies, never wire paths', async () => {
+    await call(setup(), 'a2a.task.send', {
+      workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-b', message: 'look', images: ['/p/a.png'],
+      attachments: [{ path: '/etc/passwd', sha256: 'f'.repeat(64) }], remoteImages: [{ path: '/etc/shadow', sha256: 'e'.repeat(64) }],
+    });
+    expect(remote.stageImages).toHaveBeenCalledWith({ paths: ['/p/a.png'], ptyId: 'pty-a', workspaceId: 'ws-a' });
+    const [sent] = rendererCalls('a2a.task.send');
+    expect(sent.attachments).toEqual([expect.objectContaining({ path: `/home/u/.wmux/uploads/a2a/local/${'0'.repeat(64)}.png` })]);
+    expect(sent.remoteImages).toBeUndefined();
+    expect(sent.images).toBeUndefined();
+  });
+
+  it('refuses malformed images and a staging refusal, and a wire attachments field alone stages nothing', async () => {
+    const router = setup();
+    expect((await call(router, 'a2a.task.send', { workspaceId: 'ws-a', to: 'ws-b', message: 'x', images: ['relative.png'] })).error).toMatch(/absolute paths/);
+    remote.stageImages.mockResolvedValueOnce({ ok: false, error: 'bad-request: images[0] "/p/x.png": no such file' });
+    expect((await call(router, 'a2a.task.send', { workspaceId: 'ws-a', to: 'ws-b', message: 'x', images: ['/p/x.png'] })).error).toMatch(/no such file/);
+    await call(router, 'a2a.task.send', { workspaceId: 'ws-a', to: 'ws-b', message: 'x', attachments: [{ path: '/etc/passwd', sha256: 'f'.repeat(64) }] });
+    expect(rendererCalls('a2a.task.send').at(-1)?.attachments).toBeUndefined();
+  });
+
+  it('a send that cannot carry the images is refused before anything is copied', async () => {
+    const router = setup();
+    const exec = await call(router, 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-b', message: 'run', execute: true, images: ['/p/a.png'] });
+    expect(exec.error).toMatch(/cannot go with execute/);
+    const empty = await call(router, 'a2a.task.send', { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-b', message: '  ', images: ['/p/a.png'] });
+    expect(empty.error).toMatch(/needs text/);
+    const update = await call(router, 'a2a.task.update', { workspaceId: 'ws-a', taskId: 'task-local', message: 'x', images: ['/p/a.png'] });
+    expect(update.error).toMatch(/images go only with/);
+    expect(remote.stageImages).not.toHaveBeenCalled();
+    expect(rendererCalls('a2a.task.send')).toEqual([]);
+    expect(rendererCalls('a2a.task.update')).toEqual([]);
+  });
+
+  it('refuses a Windows device path before anything is read', async () => {
+    const res = await call(setup(), 'a2a.task.send', { workspaceId: 'ws-a', to: 'ws-b', message: 'x', images: ['\\\\?\\C:\\x.png'] });
+    expect(res.error).toMatch(/absolute paths/);
+    expect(remote.stageImages).not.toHaveBeenCalled();
+  });
+
+  it('a commander brain owns no pane: its local send stages from the uploads folder only', async () => {
+    const res = await setup().dispatch({
+      id: 'b', method: 'a2a.task.send', commanderToken: mintCommanderToken('ws-hq'),
+      params: { workspaceId: 'ws-a', senderPtyId: 'pty-a', to: 'ws-b', message: 'look', images: ['/p/a.png'] },
+    });
+    expect((res as { result: Record<string, unknown> }).result).toMatchObject({ ok: true });
+    expect(remote.stageImages).toHaveBeenCalledWith({ paths: ['/p/a.png'] });
   });
 });
 
@@ -165,6 +235,13 @@ describe('a2a.task.send — Moa to another PC\'s Moa (brain link)', () => {
     expect(remote.sendTask).toHaveBeenCalledWith({ linkId: LINK, from: { workspaceId: 'ws-hq', name: 'Moa' }, title: 'T', text: 'check the build' });
     expect(String(res.next)).toContain('Do not raise a decision card about waiting');
     expect(rendererCalls('a2a.task.send')).toEqual([]);
+  });
+
+  it('Moa is told when its images were left out for an older PC', async () => {
+    remote.listTargets.mockResolvedValue([brainTarget]);
+    remote.sendTask.mockResolvedValueOnce({ ok: true, taskId: RT, note: 'The other PC\'s wmux does not take images' });
+    const res = await brainCall(setup(), { to: BRAIN_ALIAS, message: 'see', images: ['/u/a.png'] }, asBrain('ws-hq'));
+    expect(res).toMatchObject({ ok: true, note: 'The other PC\'s wmux does not take images' });
   });
 
   it('another workspace\'s brain, or a pane caller, cannot send on the brain link', async () => {

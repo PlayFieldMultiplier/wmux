@@ -3,6 +3,7 @@ import {
   A2A_REMOTE_INBOUND_EVENT,
   A2A_REMOTE_NOTIFY_METHOD,
   A2A_REMOTE_RPC,
+  deliveredImagesOf,
   localSideOf,
   type A2aRemoteDeliveryResult,
   type A2aRemoteHeldReason,
@@ -308,12 +309,15 @@ export class RemoteA2aBridge {
 
   private taskParams(task: Task, marker: A2aRemoteTaskState, resnapshot: boolean): Record<string, unknown> {
     const first = task.history[0]?.parts.find((p) => p.kind === 'text');
+    const images = deliveredImagesOf(task.history[0]?.parts);
     return {
       workspaceId: task.metadata.to.workspaceId,
       to: task.metadata.to.workspaceId,
       ...(task.metadata.to.paneId ? { paneId: task.metadata.to.paneId } : {}),
       title: task.metadata.title,
       message: first && first.kind === 'text' ? first.text : '',
+      // This PC's own files (or why not): the renderer ends the paste with them.
+      ...(images.length > 0 ? { remoteImages: images } : {}),
       presetTaskId: task.id,
       remoteFrom: { workspaceId: task.metadata.from.workspaceId, name: task.metadata.from.name },
       // The contract marker only: local bookkeeping stays in the daemon.

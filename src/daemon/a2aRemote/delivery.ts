@@ -491,10 +491,17 @@ export class A2aRemoteDelivery {
       // A full folder makes room from copies nothing open names (never this message's own).
       const inUse = this.openImages();
       for (const r of read.images) inUse.add(r.sha256);
+      // All or none: a copy this call wrote goes again when a later one fails.
+      const created: string[] = [];
       for (const r of read.images) {
         // eslint-disable-next-line no-await-in-loop -- a handful of small writes
         const stored = await store.putLocal(r.bytes, r.info, (sha) => inUse.has(sha));
-        if (!stored.ok) return { ok: false, error: 'unavailable: the image folder is full; try again later' };
+        if (!stored.ok) {
+          // eslint-disable-next-line no-await-in-loop -- at most three unlinks
+          for (const sha of created) await store.discardLocal(sha);
+          return { ok: false, error: 'unavailable: the image folder is full; try again later' };
+        }
+        if (stored.created) created.push(r.sha256);
         out.push({ path: stored.path, sha256: r.sha256, mediaType: r.info.mediaType, bytes: r.bytes.length, width: r.info.width, height: r.info.height, name: r.name });
       }
       return { ok: true, images: out };

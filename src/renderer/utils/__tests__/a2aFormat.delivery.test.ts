@@ -97,6 +97,13 @@ describe('deliverPtyNotification (send / reply / task update)', () => {
     await deliverPtyNotification(TARGET, 'Sender', BODY);
     expectMultiline(pasted());
   });
+
+  it('a body built per pane is built for the pane the fallback picked', async () => {
+    const built: string[] = [];
+    expect(await deliverPtyNotification(TARGET, 'Sender', (ptyId) => { built.push(ptyId); return `for ${ptyId}`; })).toEqual({ ptyId: PTY });
+    expect(built).toEqual([PTY]);
+    expect(pasted()).toContain(`for ${PTY}`);
+  });
 });
 
 describe('a2a.broadcast', () => {
