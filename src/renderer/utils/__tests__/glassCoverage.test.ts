@@ -83,6 +83,43 @@ describe('windowsGlassCoverage over every built-in look', () => {
     }
   }
 
+  // The outcome per look, pinned so a token edit that moves a look in or out
+  // of glass shows up here, along with the list DESIGN.md and the changelog
+  // give. null: opaque on Windows. Otherwise [frame, Soft sheet, Clear sheet].
+  const EXPECTED: Record<BuiltinThemeId, [number, number, number] | null> = {
+    tint: [82, 6, 5],
+    zinc: [84, 6, 5],
+    graphite: [85, 6, 5],
+    paper: null,
+    'amber-line': [82, 6, 5],
+    mono: [90, 6, 5],
+    'mono-light': null,
+    amber: [88, 6, 5],
+    'catppuccin-mocha': [90, 6, 5],
+    monochrome: null,
+    'stars-and-stripes': null,
+    'red-dynasty': null,
+    nightowl: null,
+    'gruvbox-dark-hard': [90, 6, 5],
+    void: null,
+    hinomaru: [80, 10, 8],
+    taegeuk: [81, 10, 8],
+  };
+
+  it('pins each look: these seven are opaque on Windows, the rest keep their coverage', () => {
+    expect(Object.keys(EXPECTED).sort()).toEqual([...THEMES].sort());
+    for (const id of THEMES) {
+      const want = EXPECTED[id];
+      for (const [level, sheet] of [['soft', want?.[1]], ['clear', want?.[2]]] as const) {
+        const got = windowsGlassCoverage(tokensOf(id), appearanceOf(id), level);
+        expect(got, `${id} ${level}`).toEqual(want ? { frame: want[0], sheet } : null);
+      }
+    }
+    expect(THEMES.filter((id) => EXPECTED[id] === null)).toEqual(
+      ['paper', 'mono-light', 'monochrome', 'stars-and-stripes', 'red-dynasty', 'nightowl', 'void'],
+    );
+  });
+
   it('Soft never covers less than Clear', () => {
     for (const id of THEMES) {
       const soft = windowsGlassCoverage(tokensOf(id), appearanceOf(id), 'soft');
