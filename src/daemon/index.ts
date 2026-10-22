@@ -247,6 +247,7 @@ import { chatAgentStatus, confirmedStopAt, transcriptTurnEnd } from './transcrip
 import { DaemonPTYBridge } from './DaemonPTYBridge';
 import { createCodexSharedRuntime, runCodexDaemon } from './transcript/codexSharedRuntime';
 import { validChatAttachments } from '../shared/transcript/chatAttachments';
+import { agentStatesFor } from '../shared/agentStateBatch';
 import { ChatSessionService } from './chat/ChatSessionService';
 import { createChatV2Host } from './chat/v2/host';
 import { registerChatV2Rpc } from './chat/v2/rpc';
@@ -5395,8 +5396,11 @@ function registerRpcHandlers(
       ? agentProcessTracker.idleShellState(original.meta.pid, original.meta.env, true, { fresh: true })
       : 'error');
   });
-  pipeServer.onRpc('daemon.getAgentState', async (params) => {
-    const id = typeof params['id'] === 'string' ? params['id'] : '';
+  // #2372 — `ids` reads several panes in one call (see agentStateBatch.ts).
+  pipeServer.onRpc('daemon.getAgentState', async (params) => (params['ids'] !== undefined
+    ? agentStatesFor(params['ids'], agentStateFor)
+    : agentStateFor(typeof params['id'] === 'string' ? params['id'] : '')));
+  function agentStateFor(id: string) {
     const state = readDaemonAgentState(id);
     const bridge = sessionManager.getSession(id)?.bridge;
     if (!bridge) return state;
@@ -5424,7 +5428,7 @@ function registerRpcHandlers(
       // since its agent started), so its idle window runs from that end.
       settledAgoMs: bridge.settledAgoMs(),
     };
-  });
+  }
   // #1594 — what main's terminal_send needs to paste into a session: the agent
   // and DECSET 2004 from the live output stream. A hidden pane's renderer xterm
   // may not have seen the bytes that set or cleared the mode; this stream has.
