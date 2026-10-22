@@ -1,9 +1,10 @@
 /**
- * Cross-PC A2A Settings section. Node env, no DOM: the pure `A2aRemoteView`
- * renders through renderToStaticMarkup (LanLinkSection.test.tsx pattern) and
- * its callbacks are invoked directly. Container wiring is covered by tsc.
+ * Cross-PC A2A listener in Settings › LAN. Node env, no DOM: the pure
+ * `A2aRemoteView` renders through renderToStaticMarkup (LanLinkSection.test.tsx
+ * pattern). Inviting, joining and the paired PCs moved to the Remote page
+ * (2026-10-22); this section keeps only the listener.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { A2aRemoteView, fingerprintPrefix, formatRemaining, type A2aRemoteViewProps } from '../A2aRemoteSection';
@@ -21,14 +22,8 @@ function props(over: Partial<A2aRemoteViewProps> = {}): A2aRemoteViewProps {
       enabled: true, port: 45660, listening: true, hostId: '11111111-1111-4111-8111-111111111111',
       name: 'DESK-PC', fingerprint256: FP, lastError: null,
     },
-    platform: 'darwin', fingerprintCopied: false, onCopyFingerprint: () => undefined, lockedSec: null,
+    platform: 'darwin', fingerprintCopied: false, onCopyFingerprint: () => undefined,
     busy: false, onToggleEnabled: () => undefined, portDraft: '45660', onPortDraft: () => undefined, onPortCommit: () => undefined,
-    invite: null, inviteAddresses: [], inviteTailnet: [], remainingSec: null, copied: false,
-    onCreateInvite: () => undefined, onCopyInvite: () => undefined, onCancelInvite: () => undefined,
-    joinInput: '', onJoinInput: () => undefined, onJoin: () => undefined, joinBusy: false, joinOutcome: null,
-    hosts: [], peers: [], confirming: null, removed: null,
-    onAsk: () => undefined, onConfirm: () => undefined, onCancelConfirm: () => undefined,
-    exposureOpen: null, onToggleExposure: () => undefined,
     error: null, t: tStub,
     ...over,
   };
@@ -47,127 +42,40 @@ describe('A2aRemoteView', () => {
     expect(html).toContain('settings.a2aRemoteListening(45660)');
   });
 
-  it('has no primary button (the LAN tab spends it on LanLink)', () => {
-    const html = render(props({ invite: 'wmux-a2a://desk:45660/ABCDEFGH#sha256=x', remainingSec: 75 }));
+  it('keeps only the listener: no invite, join or list of PCs (they live on the Remote page)', () => {
+    const html = render(props());
+    expect(html).toContain('settings.a2aRemoteEnable');
+    expect(html).toContain('settings.a2aRemotePort');
+    for (const gone of ['settings.a2aRemoteInviteButton', 'settings.a2aRemoteJoin', 'settings.a2aRemoteHosts', 'settings.a2aRemotePeers']) {
+      expect(html).not.toContain(gone);
+    }
     expect(html).not.toContain('ui-btn-primary');
   });
 
-  it('the invite button is disabled while not listening, with the reason shown', () => {
-    const html = render(props({ status: { ...props().status, listening: false, lastError: 'EADDRINUSE' } }));
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>settings\.a2aRemoteInviteButton</);
-    expect(html).toContain('settings.a2aRemoteNotListening(EADDRINUSE)');
-    expect(html).toContain('settings.a2aRemoteInviteNeedsListener');
+  it('says why it does not listen, and a failed port change while the old port keeps serving', () => {
+    expect(render(props({ status: { ...props().status, listening: false, lastError: 'EADDRINUSE' } })))
+      .toContain('settings.a2aRemoteNotListening(EADDRINUSE)');
+    expect(render(props({ status: { ...props().status, lastError: 'EADDRINUSE' } })))
+      .toContain('settings.a2aRemotePortFailed(EADDRINUSE,45660)');
   });
 
-  it('an open invite shows the string, copy, countdown and cancel', () => {
-    const invite = 'wmux-a2a://desk:45660/ABCDEFGH#sha256=x';
-    const html = render(props({ invite, remainingSec: 75 }));
-    expect(html).toContain(invite);
-    expect(html).toContain('settings.a2aRemoteInviteCopy');
-    expect(html).toContain('settings.a2aRemoteInviteExpires(1:15)');
-    expect(html).toContain('settings.a2aRemoteInviteCancel');
-  });
-
-  it('maps every join error to its own message key, all present in en', () => {
-    const codes: A2aRemoteJoinError[] = [
-      'invite-invalid', 'self', 'fingerprint-mismatch', 'connect-refused', 'timeout', 'not-found',
-      'code-expired', 'code-invalid', 'already-paired', 'rate-limited', 'protocol', 'failed',
-    ];
-    for (const error of codes) {
-      const html = render(props({ joinOutcome: { ok: false, error } }));
-      expect(html).toContain(`settings.a2aRemoteJoinError.${error}`);
-      expect(en).toHaveProperty([`settings.a2aRemoteJoinError.${error}`]);
-    }
-    // The identity-changed case tells the user to get a new invite.
-    expect(en['settings.a2aRemoteJoinError.fingerprint-mismatch']).toMatch(/new invite/);
-  });
-
-  it('disconnecting a peer takes a confirm step', () => {
-    const peer = { v: 1 as const, peerId: 'p1', hostId: '22222222-2222-4222-8222-222222222222', name: 'LAPTOP', createdAt: '2026-10-07T00:00:00.000Z' };
-    const onAsk = vi.fn();
-    const first = render(props({ peers: [peer], onAsk }));
-    expect(first).toContain('LAPTOP');
-    expect(first).toContain('ui-btn-danger-tinted');
-    expect(first).not.toContain('settings.a2aRemoteKeep');
-
-    const onConfirm = vi.fn();
-    const asking = render(props({ peers: [peer], confirming: { kind: 'peer', id: 'p1' }, onConfirm }));
-    expect(asking).toContain('settings.a2aRemoteKeep');
-    expect(asking).toContain('ui-btn-danger');
-  });
-
-  it('opens a PC\'s "panes to show" checklist in place', () => {
-    const peer = { v: 1 as const, peerId: 'p1', hostId: '22222222-2222-4222-8222-222222222222', name: 'LAPTOP', createdAt: '2026-10-07T00:00:00.000Z' };
-    const closed = render(props({ peers: [peer], renderExposure: () => 'CHECKLIST' }));
-    expect(closed).toContain('settings.a2aExposureButton');
-    expect(closed).not.toContain('CHECKLIST');
-    const open = render(props({ peers: [peer], exposureOpen: peer.hostId, renderExposure: (id, name) => `CHECKLIST ${id} ${name}` }));
-    expect(open).toContain(`CHECKLIST ${peer.hostId} LAPTOP`);
-  });
-
-  it('lists joined hosts with their address', () => {
-    const host = {
-      v: 1 as const, hostId: '33333333-3333-4333-8333-333333333333', name: 'BUILD-BOX', addresses: ['build-box', '10.0.0.9'],
-      port: 45660, fingerprint256: FP, peerId: '44444444-4444-4444-8444-444444444444', createdAt: '2026-10-07T00:00:00.000Z',
-    };
-    const html = render(props({ hosts: [host] }));
-    expect(html).toContain('BUILD-BOX');
-    expect(html).toContain('build-box:45660');
-  });
-});
-
-describe('A2aRemoteView — addresses and outcomes', () => {
-  it('lists the addresses the open invite offers', () => {
-    const html = render(props({
-      invite: 'wmux-a2a://desk:45660/ABCDEFGH#sha256=x&alt=10.0.0.5',
-      inviteAddresses: ['desk', '10.0.0.5'],
-      remainingSec: 30,
-    }));
-    expect(html).toContain('settings.a2aRemoteInviteAddresses(desk, 10.0.0.5)');
-  });
-
-  it('labels only the addresses the daemon flagged as tailnet, not every 100.64/10 one', () => {
-    const html = render(props({
-      invite: 'wmux-a2a://desk:45660/ABCDEFGH#sha256=x&alt=10.0.0.5,100.64.0.2,100.100.0.7',
-      // 100.100.0.7: CGNAT on some other virtual adapter, offered but not a tailnet address.
-      inviteAddresses: ['desk', '10.0.0.5', '100.64.0.2', '100.100.0.7'],
-      inviteTailnet: ['100.64.0.2'],
-      remainingSec: 30,
-    }));
-    expect(html).toContain(
-      'settings.a2aRemoteInviteAddresses(desk, 10.0.0.5, settings.a2aRemoteInviteTailnetAddress(100.64.0.2), 100.100.0.7)',
-    );
-  });
-
-  it('says whether a removed PC was told', () => {
-    expect(render(props({ removed: { name: 'BOX', remoteRevoked: true } }))).toContain('settings.a2aRemoteRemovedBoth(BOX)');
-    expect(render(props({ removed: { name: 'BOX', remoteRevoked: false } }))).toContain('settings.a2aRemoteRemovedLocalOnly(BOX)');
-  });
-
-  it('a failed port change shows the error while the old port keeps serving', () => {
-    const html = render(props({ status: { ...props().status, lastError: 'EADDRINUSE' } }));
-    expect(html).toContain('settings.a2aRemotePortFailed(EADDRINUSE,45660)');
-  });
-});
-
-describe('A2aRemoteView — platform, lockout and retry', () => {
   it('words the port hint for the platform', () => {
     expect(render(props({ platform: 'darwin' }))).toContain('settings.a2aRemotePortDesc.darwin');
     expect(render(props({ platform: 'win32' }))).toContain('settings.a2aRemotePortDesc.win32');
     for (const p of ['darwin', 'win32', 'linux']) expect(en).toHaveProperty([`settings.a2aRemotePortDesc.${p}`]);
     expect(en['settings.a2aRemotePortDesc.darwin']).not.toMatch(/Windows/);
   });
+});
 
-  it('says when a PC is locked out instead of only showing attempts left', () => {
-    expect(render(props())).not.toContain('settings.a2aRemoteInviteLocked');
-    const html = render(props({ invite: 'wmux-a2a://desk:45660/ABCDEFGH#sha256=x', remainingSec: 500, lockedSec: 8 }));
-    expect(html).toContain('settings.a2aRemoteInviteLocked(0:08)');
-  });
-
-  it('a rate-limited join says when to retry', () => {
-    const html = render(props({ joinOutcome: { ok: false, error: 'rate-limited', retryAfterSec: 30 } }));
-    expect(html).toContain('settings.a2aRemoteJoinError.rate-limited');
-    expect(html).toContain('settings.a2aRemoteJoinRetryIn(0:30)');
+describe('join error messages (used by Connect a PC)', () => {
+  it('has an English message for every join error', () => {
+    const codes: A2aRemoteJoinError[] = [
+      'invite-invalid', 'self', 'fingerprint-mismatch', 'connect-refused', 'timeout', 'not-found',
+      'code-expired', 'code-invalid', 'already-paired', 'rate-limited', 'protocol', 'failed',
+    ];
+    for (const error of codes) expect(en).toHaveProperty([`settings.a2aRemoteJoinError.${error}`]);
+    // The identity-changed case tells the user to get a new invite.
+    expect(en['settings.a2aRemoteJoinError.fingerprint-mismatch']).toMatch(/new invite/);
   });
 });
 

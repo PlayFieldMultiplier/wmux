@@ -1,33 +1,21 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { A2aPeerRecordV1, A2aRemoteHostRecordV1 } from '../../../shared/a2aRemote';
-import type { A2aRemoteJoinError, A2aRemoteStatus } from '../../../shared/rpc';
-import { useA2aInvite } from '../../hooks/useA2aInvite';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { A2aRemoteStatus } from '../../../shared/rpc';
 import { useT } from '../../hooks/useT';
 import { useIpc } from '../../hooks/useIpc';
 import UiButton from '../ui/Button';
 import Switch from '../ui/Switch';
 import Input from '../ui/Input';
 import { SettingsSection, SettingRow, SettingNote } from './SettingsLayout';
-import { A2aExposureChecklist } from './A2aExposureChecklist';
 
-// ─── Cross-PC A2A (experimental) ─────────────────────────────────────────────
+// ─── Cross-PC A2A listener ───────────────────────────────────────────────────
 //
-// Settings → LAN. The daemon is the source of truth (`a2a.remote.*` over the
-// control pipe); this section reads it on mount, polls lightly while open and
-// writes through configure / invite / join / remove / revoke. The VIEW is pure
-// (props only) so it renders under renderToStaticMarkup in a node test.
-//
-// The LAN tab already spends its one primary button on LanLink's "Generate
-// PIN", so every action here is secondary (DESIGN.md: one primary per tab).
+// Settings › LAN keeps only the listener: on/off, its port, this PC's
+// security code and whether it listens. Inviting, joining, the paired PCs and
+// what each may see live on the Remote page (2026-10-22). The daemon is the
+// source of truth (`a2a.remote.*`); the VIEW is pure (props only) so it
+// renders under renderToStaticMarkup in a node test.
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
-
-export type A2aRemoteConfirm = { kind: 'host' | 'peer'; id: string } | null;
-export type A2aRemoteJoinOutcome =
-  | { ok: true; name: string }
-  /** `retryAfterSec`: for a rate-limited try, seconds until the other PC accepts another. */
-  | { ok: false; error: A2aRemoteJoinError; retryAfterSec?: number }
-  | null;
 
 export type A2aRemotePlatform = 'darwin' | 'win32' | 'linux';
 
@@ -46,44 +34,11 @@ export interface A2aRemoteViewProps {
   platform: A2aRemotePlatform;
   fingerprintCopied: boolean;
   onCopyFingerprint: () => void;
-  /** Seconds some PC stays locked out of pairing after repeated failures; null when none is. */
-  lockedSec: number | null;
   busy: boolean;
   onToggleEnabled: (v: boolean) => void;
   portDraft: string;
   onPortDraft: (v: string) => void;
   onPortCommit: () => void;
-  // invite (this PC)
-  invite: string | null;
-  /** The addresses the open invite offers, in the order the other PC tries them. */
-  inviteAddresses: string[];
-  /** Those of `inviteAddresses` that are this PC's tailnet addresses (labelled "(Tailscale)"). */
-  inviteTailnet: string[];
-  remainingSec: number | null;
-  copied: boolean;
-  onCreateInvite: () => void;
-  onCopyInvite: () => void;
-  onCancelInvite: () => void;
-  // join (another PC)
-  joinInput: string;
-  onJoinInput: (v: string) => void;
-  onJoin: () => void;
-  joinBusy: boolean;
-  joinOutcome: A2aRemoteJoinOutcome;
-  // lists
-  hosts: A2aRemoteHostRecordV1[];
-  peers: A2aPeerRecordV1[];
-  confirming: A2aRemoteConfirm;
-  /** Outcome of the last "Remove" of a PC this PC joined. */
-  removed: { name: string; remoteRevoked: boolean } | null;
-  onAsk: (c: Exclude<A2aRemoteConfirm, null>) => void;
-  onConfirm: (c: Exclude<A2aRemoteConfirm, null>) => void;
-  onCancelConfirm: () => void;
-  /** The PC whose "panes to show" checklist is open (by hostId). */
-  exposureOpen: string | null;
-  onToggleExposure: (hostId: string) => void;
-  /** Renders that checklist; a slot so this view stays pure. */
-  renderExposure?: (hostId: string, name: string) => ReactNode;
   error: string | null;
   t: T;
 }
@@ -95,195 +50,55 @@ export function formatRemaining(sec: number): string {
 }
 
 export function A2aRemoteView(props: A2aRemoteViewProps) {
-  const {
-    status, platform, fingerprintCopied, onCopyFingerprint, lockedSec, busy, onToggleEnabled, portDraft, onPortDraft, onPortCommit,
-    invite, inviteAddresses, inviteTailnet, remainingSec, copied, onCreateInvite, onCopyInvite, onCancelInvite,
-    joinInput, onJoinInput, onJoin, joinBusy, joinOutcome,
-    hosts, peers, confirming, removed, onAsk, onConfirm, onCancelConfirm, exposureOpen, onToggleExposure, renderExposure, error, t,
-  } = props;
-
-  const confirmRow = (kind: 'host' | 'peer', id: string, label: string) =>
-    confirming?.kind === kind && confirming.id === id ? (
-      <div className="flex items-center gap-2 shrink-0">
-        <UiButton variant="ghost" size="md" onClick={onCancelConfirm}>{t('settings.a2aRemoteKeep')}</UiButton>
-        <UiButton variant="danger" size="md" onClick={() => onConfirm({ kind, id })}>{label}</UiButton>
-      </div>
-    ) : (
-      <UiButton variant="destructive" size="md" className="shrink-0" onClick={() => onAsk({ kind, id })}>
-        {label}
-      </UiButton>
-    );
-
+  const { status, platform, fingerprintCopied, onCopyFingerprint, busy, onToggleEnabled, portDraft, onPortDraft, onPortCommit, error, t } = props;
   return (
-    <>
-      <SettingsSection title={t('settings.a2aRemote')} description={t('settings.a2aRemoteSeparate')} data-testid="a2a-remote-section">
-        <SettingRow label={t('settings.a2aRemoteEnable')} description={t('settings.a2aRemoteEnableDesc')}>
-          <Switch
-            checked={status.enabled}
-            onCheckedChange={onToggleEnabled}
-            aria-label={t('settings.a2aRemoteEnable')}
-            disabled={busy}
-          />
-        </SettingRow>
-        <SettingRow label={t('settings.a2aRemotePort')} description={t(`settings.a2aRemotePortDesc.${platform}`)}>
-          <Input
-            type="number"
-            aria-label={t('settings.a2aRemotePort')}
-            value={portDraft}
-            min={1024}
-            max={65535}
-            disabled={busy}
-            onChange={(e) => onPortDraft(e.target.value)}
-            onBlur={onPortCommit}
-            onKeyDown={(e) => { if (e.key === 'Enter') onPortCommit(); }}
-            className="settings-input tabular-nums text-center"
-            style={{ width: 96 }}
-          />
-        </SettingRow>
-        <SettingRow label={t('settings.a2aRemoteThisPc')} description={status.name}>
-          <div className="flex items-center gap-2">
-            <span data-testid="a2a-remote-fingerprint" className="ui-code" title={status.fingerprint256 ?? undefined}>
-              {status.fingerprint256 ? fingerprintPrefix(status.fingerprint256) : '—'}
-            </span>
-            {status.fingerprint256 && (
-              <UiButton variant="secondary" size="md" onClick={onCopyFingerprint} aria-label={t('settings.a2aRemoteFingerprintCopy')}>
-                {fingerprintCopied ? t('settings.a2aRemoteInviteCopied') : t('settings.a2aRemoteInviteCopy')}
-              </UiButton>
-            )}
-          </div>
-        </SettingRow>
-        {status.enabled && (
-          <SettingNote data-testid="a2a-remote-listening" tone={status.listening && !status.lastError ? 'muted' : 'warning'}>
-            {!status.listening
-              ? t('settings.a2aRemoteNotListening', { error: status.lastError ?? '—' })
-              : status.lastError
-                ? t('settings.a2aRemotePortFailed', { error: status.lastError, port: status.port })
-                : t('settings.a2aRemoteListening', { port: status.port })}
-          </SettingNote>
-        )}
-
-        <SettingRow label={t('settings.a2aRemoteInvite')} description={t('settings.a2aRemoteInviteDesc')} layout="stacked">
-          {invite ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span data-testid="a2a-remote-invite" className="ui-code break-all select-all">{invite}</span>
-              <UiButton variant="secondary" size="md" onClick={onCopyInvite}>
-                {copied ? t('settings.a2aRemoteInviteCopied') : t('settings.a2aRemoteInviteCopy')}
-              </UiButton>
-              <span className="ui-field-description tabular-nums">
-                {remainingSec != null && remainingSec > 0
-                  ? t('settings.a2aRemoteInviteExpires', { time: formatRemaining(remainingSec) })
-                  : t('settings.a2aRemoteInviteExpired')}
-              </span>
-              <UiButton variant="ghost" size="md" onClick={onCancelInvite}>{t('settings.a2aRemoteInviteCancel')}</UiButton>
-            </div>
-          ) : (
-            <UiButton variant="secondary" size="md" onClick={onCreateInvite} disabled={!status.listening}>
-              {t('settings.a2aRemoteInviteButton')}
+    <SettingsSection title={t('settings.a2aRemote')} description={t('settings.a2aRemoteSeparate')} data-testid="a2a-remote-section">
+      <SettingRow label={t('settings.a2aRemoteEnable')} description={t('settings.a2aRemoteEnableDesc')}>
+        <Switch
+          checked={status.enabled}
+          onCheckedChange={onToggleEnabled}
+          aria-label={t('settings.a2aRemoteEnable')}
+          disabled={busy}
+        />
+      </SettingRow>
+      <SettingRow label={t('settings.a2aRemotePort')} description={t(`settings.a2aRemotePortDesc.${platform}`)}>
+        <Input
+          type="number"
+          aria-label={t('settings.a2aRemotePort')}
+          value={portDraft}
+          min={1024}
+          max={65535}
+          disabled={busy}
+          onChange={(e) => onPortDraft(e.target.value)}
+          onBlur={onPortCommit}
+          onKeyDown={(e) => { if (e.key === 'Enter') onPortCommit(); }}
+          className="settings-input tabular-nums text-center"
+          style={{ width: 96 }}
+        />
+      </SettingRow>
+      <SettingRow label={t('settings.a2aRemoteThisPc')} description={status.name}>
+        <div className="flex items-center gap-2">
+          <span data-testid="a2a-remote-fingerprint" className="ui-code" title={status.fingerprint256 ?? undefined}>
+            {status.fingerprint256 ? fingerprintPrefix(status.fingerprint256) : '—'}
+          </span>
+          {status.fingerprint256 && (
+            <UiButton variant="secondary" size="md" onClick={onCopyFingerprint} aria-label={t('settings.a2aRemoteFingerprintCopy')}>
+              {fingerprintCopied ? t('settings.a2aRemoteInviteCopied') : t('settings.a2aRemoteInviteCopy')}
             </UiButton>
           )}
-        </SettingRow>
-        {invite && inviteAddresses.length > 0 && (
-          <SettingNote data-testid="a2a-remote-invite-addresses">
-            {t('settings.a2aRemoteInviteAddresses', {
-              addresses: inviteAddresses
-                .map((a) => (inviteTailnet.includes(a) ? t('settings.a2aRemoteInviteTailnetAddress', { address: a }) : a))
-                .join(', '),
-            })}
-          </SettingNote>
-        )}
-        {!status.listening && !invite && (
-          <SettingNote>{t('settings.a2aRemoteInviteNeedsListener')}</SettingNote>
-        )}
-        {lockedSec != null && lockedSec > 0 && (
-          <SettingNote data-testid="a2a-remote-invite-locked" tone="warning">
-            {t('settings.a2aRemoteInviteLocked', { time: formatRemaining(lockedSec) })}
-          </SettingNote>
-        )}
-
-        <SettingRow label={t('settings.a2aRemoteJoin')} description={t('settings.a2aRemoteJoinDesc')} layout="stacked">
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              type="text"
-              value={joinInput}
-              placeholder="wmux-a2a://…"
-              aria-label={t('settings.a2aRemoteJoin')}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              onChange={(e) => onJoinInput(e.target.value)}
-              className="settings-input font-mono"
-              style={{ flex: '1 1 260px', minWidth: 0 }}
-            />
-            <UiButton variant="secondary" size="md" onClick={onJoin} disabled={joinBusy || !joinInput.trim()}>
-              {joinBusy ? t('settings.a2aRemoteJoinBusy') : t('settings.a2aRemoteJoinButton')}
-            </UiButton>
-          </div>
-        </SettingRow>
-        {joinOutcome && (
-          <SettingNote data-testid="a2a-remote-join-outcome" tone={joinOutcome.ok ? 'muted' : 'danger'}>
-            {joinOutcome.ok
-              ? t('settings.a2aRemoteJoinOk', { name: joinOutcome.name })
-              : t(`settings.a2aRemoteJoinError.${joinOutcome.error}`)}
-            {!joinOutcome.ok && joinOutcome.retryAfterSec != null && joinOutcome.retryAfterSec > 0 && (
-              <> {t('settings.a2aRemoteJoinRetryIn', { time: formatRemaining(joinOutcome.retryAfterSec) })}</>
-            )}
-          </SettingNote>
-        )}
-        {error && <SettingNote tone="danger">{error}</SettingNote>}
-      </SettingsSection>
-
-      <SettingsSection title={t('settings.a2aRemoteHosts')}>
-        {removed && (
-          <SettingNote data-testid="a2a-remote-removed" tone={removed.remoteRevoked ? 'muted' : 'warning'}>
-            {t(removed.remoteRevoked ? 'settings.a2aRemoteRemovedBoth' : 'settings.a2aRemoteRemovedLocalOnly', { name: removed.name })}
-          </SettingNote>
-        )}
-        {hosts.length === 0 ? (
-          <SettingNote>{t('settings.a2aRemoteListEmpty')}</SettingNote>
-        ) : (
-          <div className="contents" data-testid="a2a-remote-hosts">
-            {hosts.map((h) => (
-              <div key={h.hostId} className="settings-row ui-row" style={{ flexDirection: 'row' }}>
-                <span className="ui-field-label truncate">{h.name}</span>
-                <span className="ui-code truncate">{`${h.addresses[0] ?? ''}:${h.port}`}</span>
-                <div className="flex-1" />
-                {confirmRow('host', h.hostId, t('settings.a2aRemoteHostRemove'))}
-              </div>
-            ))}
-          </div>
-        )}
-      </SettingsSection>
-
-      <SettingsSection title={t('settings.a2aRemotePeers')}>
-        {peers.length === 0 ? (
-          <SettingNote>{t('settings.a2aRemoteListEmpty')}</SettingNote>
-        ) : (
-          <div className="contents" data-testid="a2a-remote-peers">
-            {peers.map((p) => (
-              <div key={p.peerId} className="contents">
-                <div className="settings-row ui-row" style={{ flexDirection: 'row' }}>
-                  <span className="ui-field-label truncate">{p.name}</span>
-                  <div className="flex-1" />
-                  <UiButton
-                    variant="ghost"
-                    size="md"
-                    className="shrink-0"
-                    aria-expanded={exposureOpen === p.hostId}
-                    onClick={() => onToggleExposure(p.hostId)}
-                  >
-                    {t('settings.a2aExposureButton')}
-                  </UiButton>
-                  {confirmRow('peer', p.peerId, t('settings.a2aRemotePeerRevoke'))}
-                </div>
-                {exposureOpen === p.hostId && renderExposure && (
-                  <div className="settings-row ui-row" data-testid="a2a-remote-exposure">{renderExposure(p.hostId, p.name)}</div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </SettingsSection>
-    </>
+        </div>
+      </SettingRow>
+      {status.enabled && (
+        <SettingNote data-testid="a2a-remote-listening" tone={status.listening && !status.lastError ? 'muted' : 'warning'}>
+          {!status.listening
+            ? t('settings.a2aRemoteNotListening', { error: status.lastError ?? '—' })
+            : status.lastError
+              ? t('settings.a2aRemotePortFailed', { error: status.lastError, port: status.port })
+              : t('settings.a2aRemoteListening', { port: status.port })}
+        </SettingNote>
+      )}
+      {error && <SettingNote tone="danger">{error}</SettingNote>}
+    </SettingsSection>
   );
 }
 
@@ -296,15 +111,7 @@ export function A2aRemoteSection() {
   const [unavailable, setUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [portDraft, setPortDraft] = useState('');
-  const invite = useA2aInvite();
-  const { applyPairStatus, forget: forgetInvite } = invite;
-  const [removed, setRemoved] = useState<{ name: string; remoteRevoked: boolean } | null>(null);
-  const [joinInput, setJoinInput] = useState('');
   const [fingerprintCopied, setFingerprintCopied] = useState(false);
-  const [hosts, setHosts] = useState<A2aRemoteHostRecordV1[]>([]);
-  const [peers, setPeers] = useState<A2aPeerRecordV1[]>([]);
-  const [confirming, setConfirming] = useState<A2aRemoteConfirm>(null);
-  const [exposureOpen, setExposureOpen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // The port last shown, so a poll does not overwrite a port being typed.
@@ -324,16 +131,7 @@ export function A2aRemoteSection() {
     if (!r.ok || typeof r.data?.port !== 'number') { setUnavailable(true); return; }
     setUnavailable(false);
     applyStatus(r.data);
-    const [h, p, pair] = await Promise.all([
-      ipcInvoke(() => api.hostsList()),
-      ipcInvoke(() => api.peersList()),
-      ipcInvoke(() => api.pairStatus()),
-    ]);
-    if (h.ok && Array.isArray(h.data?.hosts)) setHosts(h.data.hosts);
-    if (p.ok && Array.isArray(p.data?.peers)) setPeers(p.data.peers.filter((x) => x.revokedAt === undefined));
-    // The invite was redeemed, cancelled or burned on the daemon side.
-    if (pair.ok) applyPairStatus(pair.data);
-  }, [api, ipcInvoke, applyStatus, applyPairStatus]);
+  }, [api, ipcInvoke, applyStatus]);
 
   useEffect(() => {
     void refresh();
@@ -341,14 +139,10 @@ export function A2aRemoteSection() {
       window.electronAPI as unknown as { daemon?: { onConnected?: (cb: () => void) => () => void } }
     ).daemon;
     const off = daemonApi?.onConnected?.(() => void refresh());
-    // Light poll while the LAN tab is open: a PC that joins this one shows up without a refresh.
+    // Light poll while the LAN tab is open: the Remote page can turn the listener on.
     const poll = setInterval(() => void refresh(), 3000);
     return () => { off?.(); clearInterval(poll); };
   }, [refresh]);
-
-  useEffect(() => {
-    if (invite.failed) setError(t('settings.a2aRemoteActionFailed'));
-  }, [invite.failed, t]);
 
   const configure = useCallback(async (patch: { enabled?: boolean; port?: number }) => {
     if (!api) return;
@@ -360,9 +154,7 @@ export function A2aRemoteSection() {
     } finally {
       setBusy(false);
     }
-    // A stop or rebind drops the open invite daemon-side.
-    forgetInvite();
-  }, [api, ipcInvoke, applyStatus, t, forgetInvite]);
+  }, [api, ipcInvoke, applyStatus, t]);
 
   const onPortCommit = useCallback(() => {
     if (!status) return;
@@ -370,14 +162,6 @@ export function A2aRemoteSection() {
     if (!Number.isInteger(n) || n < 1024 || n > 65535) { setPortDraft(String(status.port)); return; }
     if (n !== status.port) void configure({ port: n });
   }, [status, portDraft, configure]);
-
-  const onJoin = useCallback(async () => {
-    const r = await invite.join(joinInput);
-    if (r?.ok) {
-      setJoinInput('');
-      void refresh();
-    }
-  }, [invite, joinInput, refresh]);
 
   const onCopyFingerprint = useCallback(async () => {
     if (!status?.fingerprint256) return;
@@ -389,22 +173,6 @@ export function A2aRemoteSection() {
       setError(t('settings.a2aRemoteActionFailed'));
     }
   }, [status, t]);
-
-  const onConfirm = useCallback(async (c: Exclude<A2aRemoteConfirm, null>) => {
-    if (!api) return;
-    setConfirming(null);
-    setRemoved(null);
-    if (c.kind === 'host') {
-      const name = hosts.find((h) => h.hostId === c.id)?.name ?? '';
-      const r = await ipcInvoke(() => api.hostsRemove(c.id));
-      if (r.ok && r.data?.ok) setRemoved({ name, remoteRevoked: r.data.remoteRevoked === true });
-      else setError(t('settings.a2aRemoteActionFailed'));
-    } else {
-      const r = await ipcInvoke(() => api.peersRevoke(c.id));
-      if (!r.ok) setError(t('settings.a2aRemoteActionFailed'));
-    }
-    void refresh();
-  }, [api, ipcInvoke, refresh, t, hosts]);
 
   if (unavailable) {
     return (
@@ -429,35 +197,11 @@ export function A2aRemoteSection() {
       platform={platform}
       fingerprintCopied={fingerprintCopied}
       onCopyFingerprint={() => void onCopyFingerprint()}
-      lockedSec={invite.lockedSec}
       busy={busy}
       onToggleEnabled={(v) => void configure({ enabled: v })}
       portDraft={portDraft}
       onPortDraft={setPortDraft}
       onPortCommit={onPortCommit}
-      invite={invite.invite}
-      inviteAddresses={invite.addresses}
-      inviteTailnet={invite.tailnet}
-      remainingSec={invite.remainingSec}
-      copied={invite.copied}
-      onCreateInvite={() => { setError(null); void invite.create(); }}
-      onCopyInvite={() => void invite.copy()}
-      onCancelInvite={() => void invite.cancel()}
-      joinInput={joinInput}
-      onJoinInput={setJoinInput}
-      onJoin={() => void onJoin()}
-      joinBusy={invite.joinBusy}
-      joinOutcome={invite.joinOutcome}
-      hosts={hosts}
-      peers={peers}
-      confirming={confirming}
-      removed={removed}
-      onAsk={setConfirming}
-      onConfirm={(c) => void onConfirm(c)}
-      onCancelConfirm={() => setConfirming(null)}
-      exposureOpen={exposureOpen}
-      onToggleExposure={(hostId) => setExposureOpen((cur) => (cur === hostId ? null : hostId))}
-      renderExposure={(hostId, name) => <A2aExposureChecklist hostId={hostId} pcName={name} t={t} />}
       error={error}
       t={t}
     />
