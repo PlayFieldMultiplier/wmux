@@ -195,3 +195,84 @@ describe('SessionPipe replays lead with the output-mode preamble (#1843)', () =>
     expect(await modesAfter(replay)).toEqual({ buffer: 'normal', mouse: 'none', paste: false, focus: false });
   }, 60_000);
 });
+
+/**
+ * Codex on Windows, as the bundled OpenConsole relays it (#2190): ConPTY's own
+ * `?1004h`, Codex's alt screen and bracketed paste, then the console app's
+ * mouse input announced as ONE `?1003;1006h`.
+ */
+const WINDOWS_CODEX_STARTUP = `\x1b[?1004h${ALT_ON}\x1b[?2004h\x1b[?1003;1006h`;
+
+function windowsCodexSession(minBytes: number): Session {
+  const s = session();
+  s.write(WINDOWS_CODEX_STARTUP);
+  for (let i = 0; s.ring.totalBytesWritten < minBytes; i++) s.write(codexFrame(i));
+  return s;
+}
+
+/**
+ * Mouse tracking and its report encoding after parsing `replay`. The encoding
+ * is read back with DECRQM (`CSI ? 1006 $ p`), the terminal's own answer. It
+ * decides whether a wheel reaches the app at all: without SGR, xterm sends
+ * mouse reports through onBinary, which the renderer does not forward.
+ */
+async function mouseAfter(replay: Buffer): Promise<{ mouse: string; sgr: boolean }> {
+  const term = new Terminal({ cols: COLS, rows: ROWS, scrollback: 1000, allowProposedApi: true });
+  try {
+    await new Promise<void>((resolve) => term.write(replay, resolve));
+    let answer = '';
+    const sub = term.onData((d) => { answer += d; });
+    await new Promise<void>((resolve) => term.write('\x1b[?1006$p', resolve));
+    sub.dispose();
+    // DECRPM: `CSI ? 1006 ; 1 $ y` is set, `; 2 $ y` is reset.
+    return { mouse: term.modes.mouseTrackingMode, sgr: answer.includes('\x1b[?1006;1$y') };
+  } finally {
+    term.dispose();
+  }
+}
+
+describe('a Windows Codex pane keeps SGR mouse reports across a reattach (#1843)', () => {
+  it('attach after 9 MB of output (the arm aged out of the ring)', async () => {
+    const s = windowsCodexSession(9 * 1024 * 1024);
+    expect(s.ring.readAll().includes('\x1b[?1003;1006h')).toBe(false);
+
+    const { wire } = await attach(s);
+    const replay = between(wire(), null, MARKERS.flushDone);
+
+    expect(await mouseAfter(replay)).toEqual({ mouse: 'any', sgr: true });
+  }, 60_000);
+
+  it('re-flush after 9 MB of output', async () => {
+    const s = windowsCodexSession(9 * 1024 * 1024);
+    const { pipe, wire } = await attach(s);
+    const before = wire().length;
+
+    await pipe.reflush({ bridge: new EventEmitter(), cols: COLS, rows: ROWS, generate: generateSnapshotUnqueued });
+    await waitFor(() => wire().subarray(before).includes(MARKERS.flushDone), 30_000);
+    const replay = between(wire().subarray(before), MARKERS.resyncBegin, MARKERS.flushDone);
+
+    expect(await mouseAfter(replay)).toEqual({ mouse: 'any', sgr: true });
+  }, 60_000);
+
+  it('attach snapshot while the ring still holds the combined arm', async () => {
+    const s = windowsCodexSession(ATTACH_SNAPSHOT_MIN_BYTES * 2);
+    expect(s.ring.readAll().includes('\x1b[?1003;1006h')).toBe(true);
+
+    const { wire } = await attach(s);
+    const replay = between(wire(), null, MARKERS.flushDone);
+
+    expect(await mouseAfter(replay)).toEqual({ mouse: 'any', sgr: true });
+  }, 30_000);
+
+  it('re-flush snapshot while the ring still holds the combined arm', async () => {
+    const s = windowsCodexSession(ATTACH_SNAPSHOT_MIN_BYTES * 2);
+    const { pipe, wire } = await attach(s);
+    const before = wire().length;
+
+    await pipe.reflush({ bridge: new EventEmitter(), cols: COLS, rows: ROWS, generate: generateSnapshotUnqueued });
+    await waitFor(() => wire().subarray(before).includes(MARKERS.flushDone), 30_000);
+    const replay = between(wire().subarray(before), MARKERS.resyncBegin, MARKERS.flushDone);
+
+    expect(await mouseAfter(replay)).toEqual({ mouse: 'any', sgr: true });
+  }, 30_000);
+});
