@@ -152,22 +152,28 @@ export class A2aImageStore {
    */
   async putLocal(bytes: Buffer, info: A2aImageInfo, inUse: (sha: string) => boolean): Promise<StoredImage> {
     const ref: A2aRemoteImageRef = { sha256: sha256(bytes), mediaType: info.mediaType, bytes: bytes.length };
-    const existing = await this.received(LOCAL_FOLDER, ref);
-    if (existing) return existing;
-    await this.evictLocal(bytes.length, inUse);
-    const stored = await this.storeReceived(LOCAL_FOLDER, ref, bytes);
-    return stored.ok ? { ...stored, created: true } : stored;
+    // One at a time with every other write and sweep there: a copy another
+    // call just found or wrote is never evicted under it.
+    return this.incoming(async () => {
+      const existing = await this.findReceived(LOCAL_FOLDER, ref);
+      if (existing) return existing;
+      await this.evictLocal(bytes.length, inUse);
+      const stored = await this.keepReceived(LOCAL_FOLDER, ref, bytes);
+      return stored.ok ? { ...stored, created: true } : stored;
+    });
   }
 
   /** Remove the local copy of `sha` (whatever its type), one this PC just wrote; whether one was there. */
   async discardLocal(sha: string): Promise<boolean> {
     if (!A2A_SHA256_RE.test(sha)) return false;
-    let removed = false;
-    for (const ext of Object.values(EXT)) {
-      // eslint-disable-next-line no-await-in-loop -- three names at most
-      if (await unlinkQuiet(path.join(this.root, LOCAL_FOLDER, `${sha}.${ext}`))) removed = true;
-    }
-    return removed;
+    return this.incoming(async () => {
+      let removed = false;
+      for (const ext of Object.values(EXT)) {
+        // eslint-disable-next-line no-await-in-loop -- three names at most
+        if (await unlinkQuiet(path.join(this.root, LOCAL_FOLDER, `${sha}.${ext}`))) removed = true;
+      }
+      return removed;
+    });
   }
 
   /**
@@ -210,11 +216,14 @@ export class A2aImageStore {
   async has(hostId: HostId, sha: string): Promise<boolean> {
     if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) return false;
     const candidates = [path.join(this.stagingDir(hostId), sha), ...Object.values(EXT).map((ext) => path.join(this.root, hostId, `${sha}.${ext}`))];
-    for (const full of candidates) {
-      // eslint-disable-next-line no-await-in-loop -- at most four small checks
-      if (await this.holds(full, sha)) return true;
-    }
-    return false;
+    // In line with the sweeps: a file whose time this refreshes is not then swept from an older listing.
+    return this.incoming(async () => {
+      for (const full of candidates) {
+        // eslint-disable-next-line no-await-in-loop -- at most four small checks
+        if (await this.holds(full, sha)) return true;
+      }
+      return false;
+    });
   }
 
   /**
@@ -241,31 +250,40 @@ export class A2aImageStore {
   async stage(hostId: HostId, sha: string, bytes: Buffer): Promise<void> {
     if (!isHostId(hostId) || !A2A_SHA256_RE.test(sha)) throw new Error('a2a images: bad staging key');
     const dir = this.stagingDir(hostId);
-    const held = (await listFiles(dir)).filter((f) => BLOB_RE.test(f.name)).sort((a, b) => a.st.mtimeMs - b.st.mtimeMs);
-    let total = held.reduce((n, f) => n + f.st.size, 0);
-    for (const f of held) {
-      if (total + bytes.length <= STAGING_PEER_MAX_BYTES) break;
-      if (await unlinkQuiet(f.full)) total -= f.st.size;
-    }
-    await this.writeOnce(dir, sha, bytes);
+    // The share is measured and made room in with no other upload landing in between.
+    await this.incoming(async () => {
+      const held = (await listFiles(dir)).filter((f) => BLOB_RE.test(f.name)).sort((a, b) => a.st.mtimeMs - b.st.mtimeMs);
+      let total = held.reduce((n, f) => n + f.st.size, 0);
+      for (const f of held) {
+        if (total + bytes.length <= STAGING_PEER_MAX_BYTES) break;
+        if (await unlinkQuiet(f.full)) total -= f.st.size;
+      }
+      await this.writeOnce(dir, sha, bytes);
+    });
   }
 
   /** An envelope from `hostId` passed the link checks: move its upload into the received folder. */
   async claim(hostId: HostId, ref: A2aRemoteImageRef): Promise<StoredImage> {
-    const existing = await this.received(hostId, ref);
-    if (existing) return existing;
-    const staged = path.join(this.stagingDir(hostId), ref.sha256);
-    const bytes = await readRegular(staged);
-    if (!bytes) return { ok: false, reason: 'missing' };
-    const stored = await this.storeReceived(hostId, ref, bytes);
-    if (stored.ok || stored.reason === 'invalid') await unlinkQuiet(staged);
-    return stored;
+    // Checked before any path is built: a name that is not a host id never reaches the file system.
+    if (!isHostId(hostId) || !A2A_SHA256_RE.test(ref.sha256)) return { ok: false, reason: 'invalid' };
+    return this.incoming(async () => {
+      const existing = await this.findReceived(hostId, ref);
+      if (existing) return existing;
+      const staged = path.join(this.stagingDir(hostId), ref.sha256);
+      const bytes = await readRegular(staged);
+      if (!bytes) return { ok: false, reason: 'missing' };
+      const stored = await this.keepReceived(hostId, ref, bytes);
+      if (stored.ok || stored.reason === 'invalid') await unlinkQuiet(staged);
+      return stored;
+    });
   }
 
   /** The envelope naming these uploads was refused for good: they will never be claimed. */
   async discardStaged(hostId: HostId, refs: readonly A2aRemoteImageRef[]): Promise<void> {
     if (!isHostId(hostId)) return;
-    for (const ref of refs) if (A2A_SHA256_RE.test(ref.sha256)) await unlinkQuiet(path.join(this.stagingDir(hostId), ref.sha256));
+    await this.incoming(async () => {
+      for (const ref of refs) if (A2A_SHA256_RE.test(ref.sha256)) await unlinkQuiet(path.join(this.stagingDir(hostId), ref.sha256));
+    });
   }
 
   // --- receiver -------------------------------------------------------------
@@ -277,6 +295,17 @@ export class A2aImageStore {
    * for content it no longer holds.
    */
   async received(folder: string, ref: A2aRemoteImageRef): Promise<StoredImage | null> {
+    return this.incoming(() => this.findReceived(folder, ref));
+  }
+
+  /** Check and keep received bytes under the receiver's own name. */
+  async storeReceived(folder: string, ref: A2aRemoteImageRef, bytes: Buffer): Promise<StoredImage> {
+    return this.incoming(() => this.keepReceived(folder, ref, bytes));
+  }
+
+  // The two above, run inside `incoming` (they never queue again).
+
+  private async findReceived(folder: string, ref: A2aRemoteImageRef): Promise<StoredImage | null> {
     if (!this.validFolder(folder) || !A2A_SHA256_RE.test(ref.sha256)) return null;
     const full = path.join(this.root, folder, `${ref.sha256}.${EXT[ref.mediaType]}`);
     const bytes = await readRegular(full);
@@ -291,12 +320,11 @@ export class A2aImageStore {
     return { ok: true, path: full, info };
   }
 
-  /** Check and keep received bytes under the receiver's own name. */
-  async storeReceived(folder: string, ref: A2aRemoteImageRef, bytes: Buffer): Promise<StoredImage> {
+  private async keepReceived(folder: string, ref: A2aRemoteImageRef, bytes: Buffer): Promise<StoredImage> {
     if (!this.validFolder(folder)) return { ok: false, reason: 'invalid' };
     const info = checkImageBytes(ref, bytes);
     if (!info) return { ok: false, reason: 'invalid' };
-    const existing = await this.received(folder, ref);
+    const existing = await this.findReceived(folder, ref);
     if (existing) return existing;
     await this.sweepReceived();
     const hostHeld = await measure(path.join(this.root, folder));
@@ -322,13 +350,17 @@ export class A2aImageStore {
 
   /** Drop received images past the retention, stale temp files and unclaimed uploads. */
   async sweep(): Promise<void> {
-    await this.sweepReceived();
-    const cutoff = this.now() - STAGING_TTL_MS;
-    for (const host of await listDirs(path.join(this.opts.a2aDir, 'blobs-in'))) {
-      for (const f of await listFiles(host)) {
-        if ((BLOB_RE.test(f.name) || TEMP_RE.test(f.name)) && f.st.mtimeMs < cutoff) await unlinkQuiet(f.full);
+    // One at a time with the writes and time refreshes there: an upload a
+    // resend just refreshed (`has`) is not dropped from an older listing.
+    await this.incoming(async () => {
+      await this.sweepReceived();
+      const cutoff = this.now() - STAGING_TTL_MS;
+      for (const host of await listDirs(path.join(this.opts.a2aDir, 'blobs-in'))) {
+        for (const f of await listFiles(host)) {
+          if ((BLOB_RE.test(f.name) || TEMP_RE.test(f.name)) && f.st.mtimeMs < cutoff) await unlinkQuiet(f.full);
+        }
       }
-    }
+    });
   }
 
   private async sweepReceived(): Promise<void> {
@@ -352,14 +384,14 @@ export class A2aImageStore {
 
   // --- internals ------------------------------------------------------------
 
-  private outgoingQueue: Promise<unknown> = Promise.resolve();
-
-  /** Run `fn` after every earlier sender-copy write or sweep has settled. */
-  private outgoing<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.outgoingQueue.then(fn, fn);
-    this.outgoingQueue = run.catch(() => undefined);
-    return run;
-  }
+  /** Sender copies: every write and sweep there, one at a time. */
+  private readonly outgoing = serial();
+  /**
+   * The received and staging folders: every write, time refresh, eviction
+   * and sweep there, one at a time. Only file work runs inside, never a
+   * transfer, and nothing inside queues again.
+   */
+  private readonly incoming = serial();
 
   private outgoingDir(): string {
     return path.join(this.opts.a2aDir, 'blobs');
@@ -404,6 +436,16 @@ export class A2aImageStore {
       throw err;
     }
   }
+}
+
+/** Run each `fn` after every earlier one has settled; one that fails does not stop the ones after it. */
+function serial(): <T>(fn: () => Promise<T>) => Promise<T> {
+  let queue: Promise<unknown> = Promise.resolve();
+  return <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = queue.then(fn, fn);
+    queue = run.catch(() => undefined);
+    return run;
+  };
 }
 
 // --- fs helpers ---------------------------------------------------------------

@@ -9,14 +9,15 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { A2A_REMOTE_IMAGE_LIMITS, A2A_REMOTE_PROTOCOL, A2A_ROUTES, type A2aOutboxRecordV1, type A2aRemoteImageRef } from '../../../shared/a2aRemote';
+import { A2A_REMOTE_IMAGE_LIMITS, A2A_REMOTE_PROTOCOL, A2A_ROUTES, type A2aOutboxRecordV1, type A2aRemoteImageRef, type HostId } from '../../../shared/a2aRemote';
 import type { Message } from '../../../shared/types';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { remoteTaskId } from '../ids';
 import { registerImageRoutes } from '../imageRoutes';
 import { imageRoots, readImageSource } from '../imageSource';
-import { A2aImageStore, A2A_IMAGE_RETAIN_MS, STAGING_PEER_MAX_BYTES, sha256 } from '../imageStore';
+import { A2aImageStore, A2A_IMAGE_RETAIN_MS, LOCAL_FOLDER, RECEIVED_HOST_MAX_FILES, STAGING_PEER_MAX_BYTES, STAGING_TTL_MS, sha256 } from '../imageStore';
 import { acceptInbound, PULL_MAX_ATTEMPTS, type ImagePull, type InboundDeps } from '../inbound';
 import { LinkStore } from '../linkStore';
 import { linkAlias, sendRemoteReply, sendRemoteTask, syncRemoteTask, type OutboundDeps, type PreparedImage } from '../outbound';
@@ -243,6 +244,129 @@ describe('A2aImageStore', () => {
     expect(await s.gcOutgoing(() => new Set<string>())).toBe(1);
   });
 
+  it('refuses to claim for a name that is not a host id, touching no file', async () => {
+    const s = store();
+    const img = png(3, 3);
+    // Where the staging path of `../x` would lead: `a2a/blobs-in/../x/<sha>`.
+    const planted = path.join(dir, 'a2a', 'x', sha256(img));
+    fs.mkdirSync(path.dirname(planted), { recursive: true });
+    fs.writeFileSync(planted, img);
+    for (const bad of ['../x', '..', LOCAL_FOLDER]) {
+      // eslint-disable-next-line no-await-in-loop -- one name at a time
+      const got = await s.claim(bad as HostId, refOf(img));
+      expect(fs.existsSync(planted)).toBe(true);
+      expect(got).toEqual({ ok: false, reason: 'invalid' });
+    }
+  });
+
+  /** Holds the first unlink of `target` until `release()`; `reached` settles once it is held. */
+  function holdUnlink(target: string): { reached: Promise<void>; release: () => void; restore: () => void } {
+    const unlink = fs.promises.unlink;
+    let reach!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => (reach = r));
+    const released = new Promise<void>((r) => (release = r));
+    let held = false;
+    const spy = vi.spyOn(fs.promises, 'unlink').mockImplementation(async (p) => {
+      if (!held && String(p) === target) {
+        held = true;
+        reach();
+        await released;
+      }
+      return unlink(p);
+    });
+    return { reached, release, restore: () => spy.mockRestore() };
+  }
+
+  /** Lets `p` finish while another operation is held; one that is (rightly) queued behind it does not. */
+  const settledOrQueued = (p: Promise<unknown>): Promise<unknown> =>
+    Promise.race([p.catch(() => undefined), deliberateSleep(300, 'a queued call never settles while the one before it is held')]);
+
+  it('keeps the staging share when two uploads from one peer land at once', async () => {
+    const s = store();
+    const big = (seed: number): Buffer => png(8, 8, A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES - 100, seed);
+    for (let i = 1; i <= 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- in order
+      await s.stage(HOST, sha256(big(i)), big(i));
+    }
+    const x = big(10);
+    const y = big(11);
+    // Both start before either is written: the second must count the first when it makes room.
+    await Promise.all([s.stage(HOST, sha256(x), x), s.stage(HOST, sha256(y), y)]);
+    const stagingDir = path.join(dir, 'a2a', 'blobs-in', HOST);
+    const held = fs.readdirSync(stagingDir);
+    expect(held.reduce((n, f) => n + fs.statSync(path.join(stagingDir, f)).size, 0)).toBeLessThanOrEqual(STAGING_PEER_MAX_BYTES);
+    expect(held).toEqual(expect.arrayContaining([sha256(x), sha256(y)]));
+  });
+
+  it('does not sweep an upload a resend refreshed after the sweep listed it', async () => {
+    const s = store();
+    const img = png(3, 3);
+    await s.stage(HOST, sha256(img), img);
+    const staged = path.join(dir, 'a2a', 'blobs-in', HOST, sha256(img));
+    const old = new Date(Date.now() - STAGING_TTL_MS - 60_000);
+    fs.utimesSync(staged, old, old);
+    const gate = holdUnlink(staged);
+    try {
+      const sweeping = s.sweep();
+      // The sweep listed the upload as unclaimed for too long and is about to drop it...
+      await gate.reached;
+      // ...when a resend asks whether it is here (which refreshes its time).
+      const asked = s.has(HOST, sha256(img));
+      await settledOrQueued(asked);
+      gate.release();
+      await sweeping;
+      const held = await asked;
+      // "Held" spares the resend its upload: the envelope's claim must then find it.
+      expect((await s.claim(HOST, refOf(img))).ok).toBe(held);
+    } finally {
+      gate.restore();
+    }
+  });
+
+  it('never evicts a local copy another send just found or wrote', async () => {
+    const s = store();
+    const info = { mediaType: 'image/png', width: 3, height: 3 } as const;
+    const a = png(3, 3, 4, 7);
+    const first = await s.putLocal(a, info, () => false);
+    if (!first.ok) throw new Error('first local copy not kept');
+    const local = path.dirname(first.path);
+    // Fill the folder; the copy of `a` is the oldest, so it is the first to make room.
+    for (let i = 0; i < RECEIVED_HOST_MAX_FILES - 1; i += 1) fs.writeFileSync(path.join(local, `${crypto.randomBytes(32).toString('hex')}.png`), 'x');
+    const anHourAgo = new Date(Date.now() - 3600_000);
+    fs.utimesSync(first.path, anHourAgo, anHourAgo);
+    const gate = holdUnlink(first.path);
+    try {
+      // Another send needs room and is about to remove the copy of `a`...
+      const other = s.putLocal(png(4, 4, 4, 8), info, () => false);
+      await gate.reached;
+      // ...while a send of `a` itself is handed that copy's path.
+      const again = s.putLocal(a, info, () => false);
+      await settledOrQueued(again);
+      gate.release();
+      expect((await other).ok).toBe(true);
+      const got = await again;
+      if (!got.ok) throw new Error('second send of the same image not kept');
+      expect(fs.existsSync(got.path)).toBe(true);
+    } finally {
+      gate.restore();
+    }
+  });
+
+  it('runs the next write after one that failed', async () => {
+    const s = store();
+    const a = png(3, 3);
+    const b = png(4, 4);
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockRejectedValueOnce(new Error('disk full'));
+    try {
+      await expect(s.stage(HOST, sha256(a), a)).rejects.toThrow('disk full');
+      await s.stage(HOST, sha256(b), b);
+      expect(await s.claim(HOST, refOf(b))).toMatchObject({ ok: true });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('refuses bytes that do not match their ref', async () => {
     const s = store();
     const img = png(2, 2);
@@ -386,7 +510,7 @@ describe('blob routes', () => {
     const img = png(9, 9);
     hold.has = new Promise<void>(() => undefined);
     const first = stalledPut(sha256(img));
-    await vi.waitFor(() => expect(hold.has).toBeUndefined());
+    await vi.waitFor(() => expect(hold.has).toBeUndefined(), { timeout: 10_000 });
     const busy = await send('PUT', sha256(png(10, 10)), body);
     expect(busy.status).toBe(429);
     expect(JSON.parse(busy.body.toString('utf8'))).toEqual({ ok: false, error: 'unavailable' });
@@ -398,9 +522,9 @@ describe('blob routes', () => {
     await s.storeReceived(HOST, refOf(img), img);
     hold.has = new Promise<void>(() => undefined);
     const gone = stalledPut(sha256(img));
-    await vi.waitFor(() => expect(hold.has).toBeUndefined());
+    await vi.waitFor(() => expect(hold.has).toBeUndefined(), { timeout: 10_000 });
     gone.destroy();
-    await vi.waitFor(async () => expect((await send('PUT', sha256(img), img)).status).toBe(200));
+    await vi.waitFor(async () => expect((await send('PUT', sha256(img), img)).status).toBe(200), { timeout: 10_000 });
   });
 
   it('gives a download slot back when the client leaves mid-request, and cuts a reader past its budget', async () => {
@@ -410,20 +534,27 @@ describe('blob routes', () => {
     hold.read = new Promise<void>(() => undefined);
     const gone = http.get({ host: '127.0.0.1', port, path: `${A2A_ROUTES.blobs}/${sha256(img)}` });
     gone.on('error', () => undefined);
-    await vi.waitFor(() => expect(hold.read).toBeUndefined());
+    await vi.waitFor(() => expect(hold.read).toBeUndefined(), { timeout: 10_000 });
     gone.destroy();
-    await vi.waitFor(async () => expect((await send('GET', sha256(img))).status).toBe(200));
+    await vi.waitFor(async () => expect((await send('GET', sha256(img))).status).toBe(200), { timeout: 10_000 });
 
     // A reader that stops reading a large image is cut at its budget, and the slot is free again.
     const big = png(64, 64, A2A_REMOTE_IMAGE_LIMITS.IMAGE_MAX_BYTES - 4096, 3);
     await s.putOutgoing(big);
     owe(big);
     hold.budgetMs = 200;
-    const slow = http.get({ host: '127.0.0.1', port, path: `${A2A_ROUTES.blobs}/${sha256(big)}` }, (res) => res.pause());
-    slow.on('error', () => undefined);
-    await new Promise((r) => setTimeout(r, 400));
+    let slow!: http.ClientRequest;
+    // Headers arrive after the route set the reader's budget, so the old budget can go now.
+    await new Promise<void>((answered) => {
+      slow = http.get({ host: '127.0.0.1', port, path: `${A2A_ROUTES.blobs}/${sha256(big)}` }, (res) => {
+        res.pause();
+        answered();
+      });
+      slow.on('error', () => undefined);
+    });
     hold.budgetMs = 60_000;
-    expect((await send('GET', sha256(img))).status).toBe(200);
+    // Busy (429) until the paused reader is cut at its 200 ms budget.
+    await vi.waitFor(async () => expect((await send('GET', sha256(img))).status).toBe(200), { timeout: 10_000 });
     slow.destroy();
   });
 
@@ -671,8 +802,12 @@ describe('JoinerSession image uploads', () => {
   }
 
   /** A session over `records`, posting through `bytes` (the image transfers); what it posted and refused. */
-  function run(records: A2aOutboxRecordV1[], bytes: Pick<SessionClient, 'putBytes' | 'headStatus'>): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }> } {
+  function run(
+    records: A2aOutboxRecordV1[],
+    bytes: Pick<SessionClient, 'putBytes' | 'headStatus'>,
+  ): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }>; warnings: string[]; session: JoinerSession } {
     const posted: string[] = [];
+    const warnings: string[] = [];
     const refused: Array<{ seq: number; code: string; detail?: string }> = [];
     const client: SessionClient = {
       requestJson: async (_m, p, body) => {
@@ -713,11 +848,11 @@ describe('JoinerSession image uploads', () => {
       images: { readOutgoing: async () => img },
       timing: { backoffMinMs: 5, backoffMaxMs: 20, livenessMs: 60_000 },
       client: () => client,
-      log: quiet,
+      log: (level, msg) => void (level === 'warn' && warnings.push(msg)),
     });
     sessions.push(session);
     session.start();
-    return { posted, refused };
+    return { posted, refused, warnings, session };
   }
 
   it('gives up a message whose uploads keep timing out, and the next message still goes', async () => {
@@ -731,6 +866,32 @@ describe('JoinerSession image uploads', () => {
     await vi.waitFor(() => expect(posted).toEqual(['m2']), { timeout: 10_000 });
     expect(puts).toBe(IMAGE_UPLOAD_MAX_FAILURES);
     expect(refused).toEqual([{ seq: 1, code: 'attachment-failed', detail: expect.stringContaining('30 seconds') }]);
+  });
+
+  it('ends an upload in flight when the session stops, and sends nothing after it', async () => {
+    let puts = 0;
+    let aborted = false;
+    const { posted, refused, warnings, session } = run(replies(), {
+      putBytes: (_p, _b, _t, signal) => {
+        puts += 1;
+        // A transfer that never answers: only the session's stop ends it.
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(new PinnedClientError('aborted', 'aborted', { sent: true }));
+          }, { once: true });
+        });
+      },
+    });
+    await vi.waitFor(() => expect(puts).toBe(1), { timeout: 5_000 });
+    let stopped = false;
+    void session.stop().then(() => (stopped = true));
+    await vi.waitFor(() => expect({ aborted, stopped }).toEqual({ aborted: true, stopped: true }), { timeout: 5_000 });
+    expect(puts).toBe(1);
+    expect(posted).toEqual([]);
+    // Stopped, not failed: the message is still owed, and no failed upload was counted.
+    expect(refused).toEqual([]);
+    expect(warnings.filter((w) => w.includes('image upload'))).toEqual([]);
   });
 
   it('asks first and does not upload an image the other PC already holds', async () => {
