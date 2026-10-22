@@ -3,8 +3,15 @@ import {
   type Automation,
   type AutomationRun,
 } from '../../../shared/automation';
+import type { SleepWindow } from '../../../shared/sleepPrevention';
 
-type SchedulesState = { automations: Automation[]; automationRuns: AutomationRun[] };
+type SchedulesState = {
+  automations: Automation[];
+  automationRuns: AutomationRun[];
+  /** The last stretch the system slept through, and whether its notice was answered. */
+  sleepWindow?: SleepWindow | null;
+  sleepNoticeDismissed?: boolean;
+};
 
 /** Newest first: a run's own start, else the occurrence it was scheduled for. */
 export function runTime(run: AutomationRun): number {
@@ -38,8 +45,40 @@ export interface ScheduleNavSummary {
   nextRunAt: number | null;
 }
 
+export interface MissedWhileAsleep {
+  /** Occurrences skipped as missed while the system slept. */
+  count: number;
+  /** The schedules they belong to, each once, in the order first missed. */
+  automationIds: string[];
+}
+
+const NONE_MISSED: MissedWhileAsleep = { count: 0, automationIds: [] };
+
 /**
- * The sidebar's Schedules row. "Needs" is runs awaiting a response only — a
+ * Scheduled runs the daemon recorded as missed because the system was asleep
+ * at their time: skipped with reason `missed` (not `daemon_down`, which is
+ * wmux being closed), scheduled inside the last sleep window, on a schedule
+ * that still exists. Read from the run history the daemon keeps, never
+ * recomputed: the daemon records them on its first tick after the wake, so
+ * this is a selector rather than a count taken at resume. Nothing once the
+ * notice was answered.
+ */
+export function selectMissedWhileAsleep(state: SchedulesState): MissedWhileAsleep {
+  const window = state.sleepWindow;
+  if (!window || state.sleepNoticeDismissed) return NONE_MISSED;
+  const known = new Set(state.automations.map((a) => a.id));
+  const missed = state.automationRuns
+    .filter((run) => run.state === 'skipped' && run.reason === 'missed' && run.trigger === 'scheduled'
+      && known.has(run.automationId)
+      && run.scheduledFor >= window.suspendedAt && run.scheduledFor <= window.resumedAt)
+    .sort((a, b) => a.scheduledFor - b.scheduledFor);
+  if (missed.length === 0) return NONE_MISSED;
+  return { count: missed.length, automationIds: [...new Set(missed.map((run) => run.automationId))] };
+}
+
+/**
+ * The sidebar's Schedules row. "Needs" is runs awaiting a response, plus one
+ * for an unanswered missed-while-asleep notice — a
  * failure is not waiting on anyone, and keeping it amber for days would spend
  * the attention budget on history. Failures count separately: every enabled
  * schedule whose LATEST run failed (no ack exists, so it clears on the next
@@ -51,6 +90,7 @@ export function selectScheduleNavSummary(state: SchedulesState): ScheduleNavSumm
   for (const run of state.automationRuns) {
     if (run.state === 'awaiting' && known.has(run.automationId)) needs += 1;
   }
+  if (selectMissedWhileAsleep(state).count > 0) needs += 1;
   const latest = latestRunByAutomation(state.automationRuns);
   let failed = 0;
   let nextRunAt: number | null = null;

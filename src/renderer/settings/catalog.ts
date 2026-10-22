@@ -104,6 +104,7 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
   { id: 'checkupdate', tab: 'general', labelKey: 'settings.checkUpdate', synonyms: 'update now latest release' },
   { id: 'secretguard', tab: 'general', labelKey: 'settings.secretGuard', descKey: 'settings.secretGuardDesc', synonyms: 'git secret password key token env commit push pr 비밀번호 키' },
   { id: 'startup', tab: 'general', labelKey: 'settings.startup', synonyms: 'autostart boot login launch 시작' },
+  { id: 'sleepprevention', tab: 'general', labelKey: 'settings.sleepPrevention', descKey: 'settings.sleepPreventionDesc', synonyms: 'sleep awake suspend standby power caffeine 절전 잠자기 대기 uśpienie czuwanie 睡眠 休眠' },
   { id: 'tutorial', tab: 'general', labelKey: 'settings.restartTutorial', descKey: 'settings.restartTutorialDesc', synonyms: 'onboarding tour help 튜토리얼' },
   { id: 'firstrun', tab: 'general', labelKey: 'settings.firstRunSetup', descKey: 'settings.firstRunSetupDesc', synonyms: 'first run setup doctor diagnose' },
   { id: 'reset', tab: 'general', labelKey: 'settings.reset', synonyms: 'factory default wipe 초기화' },

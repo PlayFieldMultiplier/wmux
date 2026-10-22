@@ -12,6 +12,7 @@ import type { StateCreator } from 'zustand';
 import type { StoreState } from '../index';
 import type { Automation, AutomationRun } from '../../../shared/automation';
 import type { AutomationPush } from '../../../main/automation/AutomationBridge';
+import type { SleepWindow } from '../../../shared/sleepPrevention';
 import { t } from '../../i18n';
 import { applyAppRoute, leaveAppRoute } from './uiSlice';
 
@@ -32,6 +33,13 @@ export interface SchedulesSlice {
   schedulesViewOpen: boolean;
   /** Automation shown in the detail pane of the Schedules view. */
   schedulesSelectedId: string | null;
+  /** The last stretch the system slept through (main's powerMonitor), for selectMissedWhileAsleep. */
+  sleepWindow: SleepWindow | null;
+  /** The missed-while-asleep notice for `sleepWindow` was answered (Run now or Skip). */
+  sleepNoticeDismissed: boolean;
+  /** A newer sleep replaces the last one and its notice. */
+  recordSleepWindow: (window: SleepWindow) => void;
+  dismissSleepNotice: () => void;
   setAutomationSnapshot: (automations: Automation[], runs: AutomationRun[]) => void;
   applyAutomationPush: (push: AutomationPush) => void;
   refreshSchedules: () => Promise<void>;
@@ -61,6 +69,17 @@ export const createSchedulesSlice: StateCreator<
   schedulesError: false,
   schedulesViewOpen: false,
   schedulesSelectedId: null,
+  sleepWindow: null,
+  sleepNoticeDismissed: false,
+
+  recordSleepWindow: (window) => set((state) => {
+    state.sleepWindow = { suspendedAt: window.suspendedAt, resumedAt: window.resumedAt };
+    state.sleepNoticeDismissed = false;
+  }),
+
+  dismissSleepNotice: () => set((state) => {
+    state.sleepNoticeDismissed = true;
+  }),
 
   setAutomationSnapshot: (automations, runs) => set((state) => {
     state.automations = automations;

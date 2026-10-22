@@ -11,6 +11,7 @@ import { describeTrigger, formatWhen, runStateLabel } from './format';
 import ScheduleDetail from './ScheduleDetail';
 import ScheduleEditor from './ScheduleEditor';
 import { BotRoutinesSection } from './BotRoutines';
+import { MissedWhileAsleepNotice } from './MissedWhileAsleepNotice';
 import { SCHEDULE_TEMPLATES, emptyForm, formFromTemplate, type ScheduleForm, type ScheduleTemplate } from './scheduleModel';
 import { useAccounts } from './useAccounts';
 import { workspaceProbeCwd } from '../../utils/projectConfigProbe';
@@ -118,6 +119,7 @@ export default function SchedulesView() {
             onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.preventDefault(); setQuery(''); } }}
           />
         )}
+        <MissedWhileAsleepNotice />
         <button
           type="button"
           className={`wmux-schedules-row wmux-schedules-new ${FOCUS_RING}`}

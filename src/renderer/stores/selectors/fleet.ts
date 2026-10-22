@@ -3,6 +3,7 @@ import { getLeafPanes, getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { stashedPaneLiveness } from '../../../shared/paneStash';
 import { isBrainPtyId } from '../../../shared/constants';
 import { remoteAgentKey } from '../../../shared/remoteHosts';
+import { isShadowWorkspaceId } from '../../../shared/pcRail';
 import type { AttachedRemoteWorkspace } from '../slices/remoteWorkspacesSlice';
 import type { StoreState } from '../index';
 import { flattenAgentText } from '../../../shared/assistantPreview';
@@ -1435,6 +1436,20 @@ export function selectFleetSectionCounts(state: FleetBoardState): FleetSectionCo
       && sameKeys(hook, memo.hook) && sameKeys(unverifiable, memo.unverifiable)) {
     return memo.out;
   }
+  const out = countFleetSections(state, hook, unverifiable);
+  // Keep the previous object when nothing changed, so a shallow subscriber
+  // never re-renders on an equal count.
+  const kept = memo && memo.out.needsYou === out.needsYou && memo.out.running === out.running ? memo.out : out;
+  sectionCountsMemo = { inputs, hook, unverifiable, out: kept };
+  return kept;
+}
+
+/** The per-row section rule of `fleetRow`, counted only. */
+function countFleetSections(
+  state: FleetBoardState,
+  hook: Record<string, boolean>,
+  unverifiable: Record<string, number>,
+): FleetSectionCounts {
   const out: FleetSectionCounts = { needsYou: 0, running: 0 };
   for (const pane of fleetBoardPanes(state, hook, unverifiable)) {
     const target = fleetTargetPtyId(pane);
@@ -1443,11 +1458,41 @@ export function selectFleetSectionCounts(state: FleetBoardState): FleetSectionCo
     if (section === 'needsYou') out.needsYou++;
     else if (section === 'running') out.running++;
   }
-  // Keep the previous object when nothing changed, so a shallow subscriber
-  // never re-renders on an equal count.
-  const kept = memo && memo.out.needsYou === out.needsYou && memo.out.running === out.running ? memo.out : out;
-  sectionCountsMemo = { inputs, hook, unverifiable, out: kept };
-  return kept;
+  return out;
+}
+
+// Its own slot: sharing selectFleetSectionCounts' would make the sidebar and
+// this app-level subscriber evict each other on every store change.
+let localWorkingMemo: { inputs: unknown[]; hook: Record<string, boolean>; unverifiable: Record<string, number>; out: boolean } | undefined;
+
+/**
+ * Whether any agent on THIS computer is working: a row in Fleet's Running
+ * section. Keeps the computer awake (main/power/sleepPrevention.ts). Same rows
+ * and section rule as the board, with two differences that follow from the
+ * question: another computer's agents do not count (shadow workspaces and
+ * attached remote hosts are left out), and bot workers do (Fleet's counts
+ * leave them to their bot, but they are work this computer is doing).
+ */
+export function selectLocalAgentsWorking(state: FleetBoardState): boolean {
+  const workspaces = state.workspaces.some((w) => isShadowWorkspaceId(w.id))
+    ? state.workspaces.filter((w) => !isShadowWorkspaceId(w.id))
+    : state.workspaces;
+  const local: FleetBoardState = { ...state, workspaces, remoteWorkspaces: undefined };
+  const hook = state.hookRunningByPtyId ?? selectHookRunningByPtyId(local);
+  const unverifiable = state.unverifiablePaneMinutes ?? selectUnverifiablePaneMinutes(local);
+  const inputs = [
+    state.workspaces, state.surfaceAgentStatus, state.surfaceActivity, state.paneLabel,
+    state.supervisionByPtyId, state.surfaceAgent, state.surfacePendingQuestion, state.surfaceActivityAt,
+    state.surfaceTurnOpenAt, state.commandRunningByPtyId, state.agentAliveByPtyId, state.usageLimitWaiting,
+  ];
+  const memo = localWorkingMemo;
+  if (memo && inputs.every((value, i) => Object.is(value, memo.inputs[i]))
+      && sameKeys(hook, memo.hook) && sameKeys(unverifiable, memo.unverifiable)) {
+    return memo.out;
+  }
+  const out = countFleetSections(local, hook, unverifiable).running > 0;
+  localWorkingMemo = { inputs, hook, unverifiable, out };
+  return out;
 }
 
 /**

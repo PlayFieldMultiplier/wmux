@@ -55,6 +55,7 @@ import { app, BrowserWindow, dialog, ipcMain, powerMonitor } from 'electron';
 import { checkUserDataIsolation, claimPortableDataNotice, mayInstallDarwinCliShim, PORTABLE_DATA_SUFFIX, shouldUsePortableData } from './dataIsolation';
 import { createWindow, loadMainRenderer } from './window/createWindow';
 import { attachDesktopPresenceReporter, reportDesktopPresence } from './window/desktopPresence';
+import { installSleepPrevention } from './power/installSleepPrevention';
 import { PTYManager } from './pty/PTYManager';
 import { PTYBridge } from './pty/PTYBridge';
 import { createLocalApprovalScreenReader } from './pty/localApprovalScreen';
@@ -600,6 +601,7 @@ terminalCoreSelection();
 markBoot('construction-start');
 const ptyManager = new PTYManager();
 let mainWindow: BrowserWindow | null = null;
+let sleepPrevention: ReturnType<typeof installSleepPrevention> | null = null;
 // Forward-declared: PTYBridge captures this binding by reference and reads it
 // at runtime (after the actual HookSignalRouter is constructed further down
 // in this file). Lets the detector tee call `recordDetector` on emit without
@@ -973,6 +975,8 @@ let crashCount = 0;
 function attachWindowRecovery(win: BrowserWindow): void {
   win.webContents.on('render-process-gone', (_event, details) => {
     console.error('[Main] Renderer crashed:', details.reason, details.exitCode);
+    // Its last "agents working" verdict has nobody left to withdraw it.
+    sleepPrevention?.controller.rendererGone();
     if (details.reason === 'clean-exit') return;
     const now = Date.now();
     if (now - lastCrashTime < 5000) {
@@ -1925,6 +1929,10 @@ app.on('ready', async () => {
   initLogSink();
   logLine('info', 'main', 'app.on(ready) fired');
   console.log('[Main] App ready, creating window...');
+
+  // Keep the computer awake (Settings › General). Before any window exists, so
+  // the renderer's first mode and working-verdict sends have a listener.
+  sleepPrevention = installSleepPrevention(() => mainWindow);
 
   // #818: own the accelerator table before any window can exist. Skipping this
   // left Electron's default menu in charge, and on macOS its NSMenu key
@@ -3142,6 +3150,9 @@ app.on('before-quit', async (e) => {
   // Broker dies with the app: shims exit and hosts mark the server down,
   // same visible behavior as the old per-agent child dying with wmux.
   mcpBrokerSupervisor.stop();
+
+  // Let the computer sleep again once wmux is gone.
+  sleepPrevention?.dispose();
 
   // Quick launch: give the global chord back and drop the composer window.
   try {

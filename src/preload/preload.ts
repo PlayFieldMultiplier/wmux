@@ -17,6 +17,7 @@ import { CHATV2_IPC, type ChatV2BridgeApi, type ChatV2EventsPush, type ChatV2Res
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { START_POLARITY_STORAGE_KEY, resolveStartPolarity, startPaintCss } from '../shared/windowStartPaint';
 import { IPC } from '../shared/constants';
+import type { SleepPreventionMode, SleepWindow } from '../shared/sleepPrevention';
 import { ROOM_EVENT } from '../shared/room';
 import { BOT_EVENT } from '../shared/bot';
 import { BOT_APPROVAL_IPC } from '../shared/botApproval';
@@ -553,6 +554,17 @@ const electronAPI = {
     /** Windows: the system asks for reduced motion (Animation effects off).
      *  False elsewhere, where the media query already says it. */
     getReducedMotion: () => ipcRenderer.invoke(IPC.SYSTEM_REDUCED_MOTION) as Promise<boolean>,
+  },
+  // Keep the computer awake (main/power/sleepPrevention.ts).
+  power: {
+    setSleepMode: (mode: SleepPreventionMode) => ipcRenderer.send(IPC.POWER_SLEEP_MODE, mode),
+    setAgentsWorking: (working: boolean) => ipcRenderer.send(IPC.POWER_AGENTS_WORKING, working),
+    /** The system slept and woke: the stretch it slept through. Returns the unsubscribe. */
+    onSlept: (callback: (window: SleepWindow) => void) => {
+      const listener = (_event: unknown, window: SleepWindow) => callback(window);
+      ipcRenderer.on(IPC.POWER_SLEPT, listener);
+      return () => { ipcRenderer.removeListener(IPC.POWER_SLEPT, listener); };
+    },
   },
   settings: {
     getTerminalCore: () => ipcRenderer.invoke(IPC.TERMINAL_CORE_SETTINGS_GET) as Promise<TerminalCoreSettings>,

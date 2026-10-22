@@ -25,6 +25,7 @@ import type { WorkspaceColorId } from './workspaceColors';
 import type { AgentSlug } from './events';
 import type { OrchestratorRoleBindings } from './orchestratorRole';
 import type { PcRailPersisted } from './pcRail';
+import type { SleepPreventionMode } from './sleepPrevention';
 import type { StarPromptState } from './starPrompt';
 import type { AgentSignalKind } from './hooks/signal-types';
 import type { DeadPaneRecovery } from './ptyRecovery';
@@ -1072,6 +1073,8 @@ export interface SessionData {
   autoUpdateEnabled?: boolean;
   /** Settings › General: refuse commits, pushes and PRs that carry passwords or keys. Absent = on. */
   secretGuardEnabled?: boolean;
+  /** Settings › General: when wmux keeps the computer awake. Absent = 'working'. */
+  sleepPreventionMode?: SleepPreventionMode;
   customThemeColors?: CustomThemeColors;
   /** PC rail: the selected computer, the last workspace per computer, muted hosts. Never a shadow id. */
   pcRail?: PcRailPersisted;
