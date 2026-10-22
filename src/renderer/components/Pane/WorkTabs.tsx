@@ -7,6 +7,7 @@ import { IconLock } from '../icons';
 import { isPrivateBrowserSurface } from '../../../shared/privateBrowser';
 import { useStore } from '../../stores';
 import { RENAME_ACTIVE_TAB_EVENT } from '../../utils/commandActions';
+import { BrowserAgentTabMark } from '../Browser/BrowserAgentControls';
 
 /**
  * The work area's tab strip (DESIGN.md "Pane: terminals and work area"): the
@@ -150,6 +151,7 @@ export default function WorkTabs({
               onClick={() => onSelect(s.id)}
               onDoubleClick={readOnly ? undefined : () => startRename(s)}
             >
+              {s.surfaceType === 'browser' && <BrowserAgentTabMark surfaceId={s.id} />}
               {isPrivateBrowserSurface(s) && (
                 <span className="shrink-0" role="img" aria-label={t('browser.privateTab')}>
                   <IconLock size={12} />

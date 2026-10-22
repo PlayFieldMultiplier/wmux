@@ -31,6 +31,8 @@ import {
   openSurfaceForConnection,
   resolveDefaultSurface,
 } from './surfaceRouting';
+// Cycle-safe: automationLease reaches this module only inside function bodies.
+import { currentBrowserOpSignal } from './automationLease';
 
 export { WORKSPACE_SCOPE_UNRESOLVED_CODE } from './browserScope';
 
@@ -572,6 +574,10 @@ export class PlaywrightEngine {
   }
 
   async ensureConnected(workspaceId?: string): Promise<void> {
+    // The user stopped this op's tab (automationLease): no connection is made
+    // or reused for it, so a body that outlived its refusal cannot act again.
+    const opSignal = currentBrowserOpSignal();
+    opSignal?.throwIfAborted();
     const reusable =
       this.browser?.isConnected() === true &&
       (workspaceId === undefined || this.connectedWorkspaceId === undefined || this.connectedWorkspaceId === workspaceId);
@@ -648,6 +654,7 @@ export class PlaywrightEngine {
         return;
       } catch (err) {
         if (err instanceof CdpAttachInfoUnavailableError) throw err;
+        opSignal?.throwIfAborted();
         // A refusal, like the one above: retrying cannot change main's answer.
         const refusal = browserCallRefusal(err);
         if (refusal) throw refusal;
@@ -662,6 +669,7 @@ export class PlaywrightEngine {
         );
         if (attempt < MAX_CONNECT_RETRIES) {
           await sleep(RETRY_DELAY_MS);
+          opSignal?.throwIfAborted();
         }
       }
     }
@@ -717,6 +725,8 @@ export class PlaywrightEngine {
     workspaceId?: string,
     knownNoSurface?: boolean,
   ): Promise<Page | null> {
+    // A stopped op resolves no page at all (see ensureConnected).
+    currentBrowserOpSignal()?.throwIfAborted();
     // Resolve the selection context (which workspace/surface this call targets)
     // BEFORE consulting any shared state, so the lock, fast-fail latch, and
     // auto-open latch are all scoped to THIS caller's workspace and can never
@@ -1113,7 +1123,9 @@ export class PlaywrightEngine {
     // proven even when a legacy main cannot tag its subsequent cdp.info entry.
     let surfaceProvenByAutoOpen = false;
 
+    const opSignal = currentBrowserOpSignal();
     for (let attempt = 1; attempt <= PAGE_FIND_RETRIES; attempt++) {
+      opSignal?.throwIfAborted();
       try {
         // Strategies 1-3 locate an EXISTING page. When the caller's workspace
         // is known to own no surface (#554), every one of them can only return
@@ -1237,12 +1249,16 @@ export class PlaywrightEngine {
         if (attempt < PAGE_FIND_RETRIES) {
           console.error(`[PlaywrightEngine] No page found, reconnecting... (${attempt}/${PAGE_FIND_RETRIES})`);
           await sleep(PAGE_FIND_DELAY_MS);
+          opSignal?.throwIfAborted();
           await this.disconnect();
           await this.ensureConnected(ctx.workspaceId);
         }
       } catch (err) {
         if (isWorkspaceScopeUnresolvedError(err)) throw err;
         if (err instanceof CdpAttachInfoUnavailableError) throw err;
+        // Stopped by the user: the failure in hand is the dropped connection,
+        // and the retry below would reconnect to the tab they stopped.
+        opSignal?.throwIfAborted();
         if (browserCallRefusal(err)) throw browserCallRefusal(err);
         console.error(
           `[PlaywrightEngine] getPage attempt ${attempt} failed:`,
@@ -1250,6 +1266,7 @@ export class PlaywrightEngine {
         );
         if (attempt < PAGE_FIND_RETRIES) {
           await sleep(PAGE_FIND_DELAY_MS);
+          opSignal?.throwIfAborted();
           await this.disconnect();
           await this.ensureConnected(ctx.workspaceId);
         }

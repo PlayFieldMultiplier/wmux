@@ -690,6 +690,8 @@ export default function BrowserPanel({ surfaceId, workspaceId, initialUrl, parti
         isActive={isActive}
         isPrivate={isPrivate}
         inspecting={inspecting}
+        surfaceId={surfaceId}
+        agentStatusHidden={!!helpRequest}
         onNavigate={handleNavigate}
         onBack={handleBack}
         onForward={handleForward}

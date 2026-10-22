@@ -164,6 +164,9 @@ import { createBorrowApprovalRequester } from './browser-session/liveBorrowAppro
 import { DangerousActionConsent } from './browser-session/dangerousActionConsent';
 import { registerBrowserConsentRpc } from './pipe/handlers/browserConsent.rpc';
 import { registerBrowserConsentGrantsIpc } from './ipc/handlers/browserConsentGrants.handler';
+import { registerBrowserAgentControlIpc } from './ipc/handlers/browserAgentControl.handler';
+import { BrowserAgentControl } from './browser-session/BrowserAgentControl';
+import { BROWSER_AGENT_CONTROL_IPC } from '../shared/browserAgentControl';
 import type { BorrowApprovalRequester } from '../shared/liveWriteScope';
 import { resolveEnforcementMode } from './mcp/enforcementMode';
 import { setConfiguredFirstPartyClients } from './mcp/firstParty';
@@ -739,6 +742,21 @@ const mcpRegistrar = new McpRegistrar();
 const mcpBrokerSupervisor = new BrokerSupervisor();
 const webviewCdpManager = new WebviewCdpManager(0);
 webviewCdpManager.setCdpFailureReason(cdpEnabled ? 'CDP ownership verification pending' : 'CDP disabled by configuration');
+// "Agent is driving" marker + Stop / Take over for in-app browser tabs. Activity
+// is the surface's automation lease count; Stop and Take over end the leases in
+// flight (their holders learn why on the next renew) and stop a navigation.
+const browserAgentControl = new BrowserAgentControl({
+  emit: (state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(BROWSER_AGENT_CONTROL_IPC.changed, state);
+    }
+  },
+  cancelInFlight: (surfaceId, error) => {
+    webviewCdpManager.revokeRpcLeases(surfaceId, error);
+    webviewCdpManager.stopLoading(surfaceId);
+  },
+});
+webviewCdpManager.setLeaseObserver((surfaceId, leases) => browserAgentControl.noteLeases(surfaceId, leases));
 
 // Daemon client — initialized on app ready, used if daemon is available
 let daemonClient: DaemonClient | null = null;
@@ -1204,6 +1222,7 @@ const browserHelpRequests = registerBrowserRpc(
       computerCallerProtection = check;
     },
   },
+  browserAgentControl,
 );
 // browser_request_help — the renderer's Done / Cancel. Mirrors
 // PERMISSION_PROMPT_RESOLVE: a shape-validated invoke, and the AUTHORITATIVE
@@ -1683,6 +1702,14 @@ registerBrowserConsentRpc(rpcRouter, {
     workspaceName: (workspaceId) => getWorkspaceMirror().getEntries()?.find((e) => e.id === workspaceId)?.name,
     log: (line) => console.warn(line),
   }),
+});
+registerBrowserAgentControlIpc(ipcMain, {
+  getWindow: () => mainWindow,
+  control: browserAgentControl,
+  live: {
+    list: (workspaceId) => chromeRegistry.listLiveBorrows(workspaceId),
+    returnTab: (workspaceId, surfaceId) => chromeRegistry.returnLiveBorrow(workspaceId, surfaceId),
+  },
 });
 registerBrowserConsentGrantsIpc(ipcMain, {
   getWindow: () => mainWindow,

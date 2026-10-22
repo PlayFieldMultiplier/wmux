@@ -30,6 +30,12 @@ import { BOT_GROUP_IPC } from '../shared/botGroup';
 import type { PaneLabelRejection } from '../shared/paneLabelRules';
 import { CHROME_PANE_IPC, type ChromePaneBindings } from '../shared/chromePaneBinding';
 import {
+  BROWSER_AGENT_CONTROL_IPC,
+  type BrowserAgentControlIntent,
+  type BrowserAgentControlState,
+  type LentLiveTab,
+} from '../shared/browserAgentControl';
+import {
   BROWSER_POLICY_IPC,
   type BrowserPolicyReadResult,
   type BrowserPolicyWritePayload,
@@ -1134,6 +1140,26 @@ const electronAPI = {
       const listener = (_e: Electron.IpcRendererEvent, surfaceId: string) => callback(surfaceId);
       ipcRenderer.on('browser:wake', listener);
       return () => { ipcRenderer.removeListener('browser:wake', listener); };
+    },
+    // "Agent is driving" marker + Stop / Take over (src/shared/browserAgentControl.ts).
+    // Main owns the state; the renderer reads it and sends the user's intents.
+    agentControl: {
+      list: (): Promise<BrowserAgentControlState[]> => ipcRenderer.invoke(BROWSER_AGENT_CONTROL_IPC.list),
+      intent: (
+        surfaceId: string,
+        intent: BrowserAgentControlIntent,
+      ): Promise<{ ok: boolean; changed?: boolean; state?: BrowserAgentControlState; error?: string }> =>
+        ipcRenderer.invoke(BROWSER_AGENT_CONTROL_IPC.intent, { surfaceId, intent }),
+      onChanged: (callback: (state: BrowserAgentControlState) => void) => {
+        const listener = (_e: Electron.IpcRendererEvent, state: BrowserAgentControlState) => callback(state);
+        ipcRenderer.on(BROWSER_AGENT_CONTROL_IPC.changed, listener);
+        return () => { ipcRenderer.removeListener(BROWSER_AGENT_CONTROL_IPC.changed, listener); };
+      },
+      // Live Chrome: the user's own tabs lent to a workspace, and Return to me.
+      lentTabs: (workspaceId: string): Promise<{ ok: boolean; tabs?: LentLiveTab[]; error?: string }> =>
+        ipcRenderer.invoke(BROWSER_AGENT_CONTROL_IPC.lentTabs, { workspaceId }),
+      returnTab: (workspaceId: string, surfaceId: string): Promise<{ ok: boolean; returned?: boolean; error?: string }> =>
+        ipcRenderer.invoke(BROWSER_AGENT_CONTROL_IPC.returnTab, { workspaceId, surfaceId }),
     },
   },
   fs: {

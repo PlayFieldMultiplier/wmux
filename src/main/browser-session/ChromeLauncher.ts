@@ -9,6 +9,7 @@ import { BlockedHostLog } from './BlockedHostLog';
 import type { HostMatcher } from '../../shared/browserHostPolicy';
 import type { BlockedHost } from '../../shared/browserPolicy';
 import type { LiveTabOwner } from '../../shared/liveWriteScope';
+import type { LentLiveTab } from '../../shared/browserAgentControl';
 
 // ---------------------------------------------------------------------------
 // 'chrome' backend (Phase 2): launch the user's installed Chrome with a
@@ -1998,6 +1999,24 @@ export class ChromeLauncherRegistry {
    */
   clearLiveBorrows(workspaceId: string): void {
     this.live?.writeScope.clearBorrows(workspaceId);
+  }
+
+  /**
+   * The user's own Chrome tabs currently lent to one workspace's agents, for
+   * the Return to me control. Empty when no live client was ever created; a
+   * lent tab Chrome has since closed is pruned on the way.
+   */
+  async listLiveBorrows(workspaceId: string): Promise<LentLiveTab[]> {
+    if (!this.live) return [];
+    const targets = await this.live.cdpInfoTargets(workspaceId);
+    return targets
+      .filter((t) => t.owner === 'borrowed')
+      .map((t) => ({ surfaceId: t.surfaceId, title: t.title, url: t.url }));
+  }
+
+  /** Hand one lent tab back to the user (the existing returnBorrow). */
+  returnLiveBorrow(workspaceId: string, surfaceId: string): boolean {
+    return this.live?.writeScope.returnBorrow(surfaceId, workspaceId) ?? false;
   }
 
   /** An install quit was called off (abortInstallQuit): profiles may launch again. */
