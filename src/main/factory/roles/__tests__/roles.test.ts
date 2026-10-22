@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { BOT_ROLES, BOT_TEMPLATES, DEFAULT_BOT_BUDGETS, TEMPLATE_LEGACY_ROLE, type BotProfile, type BotRole, type BotTemplate } from '../../../../shared/bot';
 import { BOT_TOOL_RPC, SHARED_SURFACE } from '../../../../shared/botSurface';
 import { TEMPLATE_DEFINITIONS, rolePrompt, templateDefinitionOf } from '../index';
+import { effectiveJob } from '../templates';
 import { NO_CHANGES_SETTLE, renderBotPrompt } from '../common';
 import { BOT_FANOUT_PRESETS } from '../../../worktask/botFanoutPresets';
 
@@ -143,6 +144,29 @@ describe('bot prompts (job, powers and outputs)', () => {
     expect(prompt).toMatch(/a docs-only change included \(a docs file can be what the gate checks\)/);
     expect(prompt).toMatch(/fanout_start: start one verify worker, for a head a gate grades \(a docs-only one too/);
     expect(prompt).toMatch(/pr_verdict: .*evidence \{reading: true\} for a head whose base branch declares no gate/);
+  });
+
+  it('a reviewer whose session holds no repository reads is never told to use the git reads: every head goes to a verify worker', () => {
+    const unread = [
+      profile('reviewer', { repo: undefined }),
+      profile('reviewer', { engine: { kind: 'acp', command: 'hermes', args: [] } }),
+      profile('reviewer', { engine: { kind: 'claude-pty' } }),
+    ];
+    for (const p of unread) {
+      const prompt = rolePrompt(p);
+      expect(prompt, p.engine.kind).not.toMatch(/git_diff|git_show/);
+      expect(prompt).not.toMatch(/you read the diff yourself/);
+      const wake = prompt.split('\n').find((l) => l.startsWith('- A handoff, a mention or the owner\'s message asking you to verify a PR')) ?? '';
+      expect(wake).toMatch(/When that head already has your verdict, answer with it\. Otherwise start one verify worker at it, post the status card, end the turn\./);
+      // The job the wake prompt restates is the same one.
+      expect(effectiveJob(p)).not.toMatch(/you read the diff yourself/);
+      expect(effectiveJob(p)).toMatch(/or on its record that the repository declares none/);
+    }
+    // A reviewer that reads its repository keeps its own reading of an ungated head.
+    expect(rolePrompt(profile('reviewer'))).toContain('read the diff with mcp__wmux_repo__git_diff');
+    expect(effectiveJob(profile('reviewer'))).toMatch(/you read the diff yourself/);
+    // A job the owner wrote is kept as written either way.
+    expect(effectiveJob(profile('reviewer', { repo: undefined, job: 'Review PRs.' }))).toBe('Review PRs.');
   });
 
   it('each template words its own work', () => {
