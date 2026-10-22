@@ -40,6 +40,7 @@ import { stripReplayQuerySequences } from '../shared/replayQuerySanitizer';
 import { createSessionPipeMarkers } from '../daemon/sessionPipeMarkers';
 import { SessionPipeStreamScanner } from './daemon/sessionPipeStreamScanner';
 import { DAEMON_RPC_TIMEOUT_MS } from '../shared/timeouts';
+import { AGENT_STATE_BATCH_MAX } from '../shared/agentStateBatch';
 import { DAEMON_CONTROL_LINE_MAX_CHARS } from '../shared/daemonControlLine';
 import { sanitizeTitle } from './pty/titleDetect';
 import {
@@ -175,6 +176,8 @@ export class DaemonClient extends EventEmitter {
   // cannot resurrect itself and subscribe on behalf of a connection that is
   // already gone.
   private eventHandshakeGeneration = 0;
+  /** #2372 — default-timeout agent reads asked for in this turn, by pane id. */
+  private agentStateQueue: Map<string, Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }>> | null = null;
 
   /**
    * Subscribe to pushed events again on the live connection. The daemon drops
@@ -724,12 +727,60 @@ export class DaemonClient extends EventEmitter {
   }
 
   /**
+   * #2372 — one pane's raw `daemon.getAgentState` reply. Reads asked for in
+   * the same turn go to the daemon as one call with `ids`, so a burst of
+   * per-pane reads (the resync after a resubscribe, the renderer's name reads
+   * at startup) costs one RPC instead of one per pane. A lone read stays a
+   * single-id call. A daemon that answers a batch without `states` (older
+   * than #2372) is read one pane at a time.
+   */
+  private readAgentStateRaw(sessionId: string): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (!this.agentStateQueue) {
+        this.agentStateQueue = new Map();
+        setImmediate(() => void this.flushAgentStateQueue());
+      }
+      const waiters = this.agentStateQueue.get(sessionId) ?? [];
+      waiters.push({ resolve, reject });
+      this.agentStateQueue.set(sessionId, waiters);
+    });
+  }
+
+  private async flushAgentStateQueue(): Promise<void> {
+    const queue = this.agentStateQueue;
+    this.agentStateQueue = null;
+    if (!queue) return;
+    const settle = (id: string, read: Promise<unknown>) => read.then(
+      (v) => { for (const w of queue.get(id) ?? []) w.resolve(v); },
+      (err) => { for (const w of queue.get(id) ?? []) w.reject(err); },
+    );
+    const single = (id: string) => settle(id, this.rpc('daemon.getAgentState', { id }));
+    const ids = [...queue.keys()];
+    if (ids.length === 1) return single(ids[0]);
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += AGENT_STATE_BATCH_MAX) chunks.push(ids.slice(i, i + AGENT_STATE_BATCH_MAX));
+    await Promise.all(chunks.map(async (chunk) => {
+      let states: Record<string, unknown> | undefined;
+      try {
+        const res = (await this.rpc('daemon.getAgentState', { ids: chunk })) as { states?: unknown } | null;
+        if (res && typeof res.states === 'object' && res.states !== null) states = res.states as Record<string, unknown>;
+      } catch (err) {
+        for (const id of chunk) void settle(id, Promise.reject(err));
+        return;
+      }
+      await Promise.all(chunk.map((id) => (states && id in states ? settle(id, Promise.resolve(states[id])) : single(id))));
+    }));
+  }
+
+  /**
    * daemon AgentDetector가 gate로 확정한 에이전트 표시명을 조회한다(없으면 null).
    * renderer detection pull의 권위 소스 — session:agent emit 전파 race를 우회한다.
    */
   async getAgentName(sessionId: string): Promise<string | null> {
     try {
-      const result = await this.rpc('daemon.getAgentName', { id: sessionId });
+      // Its agentName is the same daemon read (readDaemonAgentState) that
+      // daemon.getAgentName answers, so a burst of name reads batches too.
+      const result = await this.readAgentStateRaw(sessionId);
       const name = (result as { agentName?: unknown })?.agentName;
       return typeof name === 'string' && name ? name : null;
     } catch {
@@ -772,7 +823,7 @@ export class DaemonClient extends EventEmitter {
     try {
       const result = await (opts.timeoutMs !== undefined
         ? this.rpc('daemon.getAgentState', { id: sessionId }, { timeoutMs: opts.timeoutMs })
-        : this.rpc('daemon.getAgentState', { id: sessionId })) as {
+        : this.readAgentStateRaw(sessionId)) as {
         agentName?: unknown;
         agentVerified?: unknown;
         agentStatus?: unknown;
