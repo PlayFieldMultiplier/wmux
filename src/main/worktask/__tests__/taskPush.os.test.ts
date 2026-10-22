@@ -85,6 +85,16 @@ describe('pushTaskBranch', () => {
     expect((await pushTask(input(), defaultGit, { ...FILE_OK, secretGuard: () => false })).ok).toBe(true);
   });
 
+  it('reads a patch larger than any output buffer whole: a large clean commit is pushed', async () => {
+    // 73 MB of added lines, more than the 64 MiB a buffered read held.
+    const line = `${'x'.repeat(59)}\n`;
+    fs.writeFileSync(path.join(work, 'big.txt'), line.repeat(1_200_000));
+    git(work, 'add', '.');
+    git(work, 'commit', '-qm', 'big');
+    const r = await pushTaskBranch(input());
+    expect(r).toMatchObject({ ok: true, head: git(work, 'rev-parse', 'HEAD') });
+  }, 120_000);
+
   it('never force-pushes: a rewritten branch is rejected and the remote keeps its tip', async () => {
     expect((await pushTaskBranch(input())).ok).toBe(true);
     const before = git(origin, 'rev-parse', 'refs/heads/wtask/one');
@@ -552,7 +562,8 @@ describe('task.push: GitLab remotes', () => {
     fs.writeFileSync(path.join(tmp, 'worktrees', 'one', 'HEAD'), `${'a'.repeat(40)}\n`);
     const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', gitCommonDir: tmp, gitWorktreeDir: path.join(tmp, 'worktrees', 'one'), relayRoot: path.join(tmp, 'relay'), taskId: 'wtask-1', repoDefaultBranch };
     try {
-      expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake)).toMatchObject({ ok: true });
+      // The secret check's streamed git, faked too: no commits to read.
+      expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake, { lines: async () => true })).toMatchObject({ ok: true });
       // The remote's own HEAD is read whatever GitHub and origin/HEAD say, and
       // refused; so is origin/HEAD's branch.
       expect(calls.some((a) => a.includes('ls-remote'))).toBe(true);

@@ -69,7 +69,7 @@ import {
 } from '../../shared/taskGitRelay';
 import { readWorkerFile } from '../../shared/readWorkerFile';
 import { originUrlRepoKey, urlNamedRemoteRefusal, workerGitEnv, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal, type GitConfigEntry } from './workerGit';
-import { bufferedGitLines, scanCommits, secretRefusal, type GitLines } from '../git/secretScan';
+import { scanCommits, secretRefusal, spawnLines, type GitLines } from '../git/secretScan';
 import { secretGuardEnabled } from '../git/secretGuardSetting';
 import type { SecretFinding } from '../../shared/secretGuard';
 
@@ -81,10 +81,7 @@ type GitOut = { code: number; stdout: string; stderr: string };
 
 /** Runs git in `cwd` with `env` added; resolves with the exit code and
  *  output, never throws. */
-export type TaskPushGit = (args: string[], cwd: string, env?: Record<string, string>, opts?: { timeoutMs?: number; maxBufferBytes?: number }) => Promise<GitOut>;
-
-/** Output a secret scan's read may hold: every commit's patch at once. */
-const SCAN_MAX_BUFFER = 64 * 1024 * 1024;
+export type TaskPushGit = (args: string[], cwd: string, env?: Record<string, string>, opts?: { timeoutMs?: number }) => Promise<GitOut>;
 
 /** Where main's git finds the task's repository: main's records only. */
 export interface TaskGitRepoInput {
@@ -154,12 +151,16 @@ export type TaskPushResult =
   /** The same check, and the same words, as the Git page's push (`secretRefusal`). */
   | { ok: false; reason: 'secrets'; error: string; secrets?: SecretFinding[]; secretScanFailed?: true };
 
-export async function defaultGit(args: string[], cwd: string, extra?: Record<string, string>, opts?: { timeoutMs?: number; maxBufferBytes?: number }): Promise<GitOut> {
-  const env = { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra };
+/** The env of main's own git on a task: `extra` over the worker git env. */
+function hostGitEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
+  return { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra };
+}
+
+export async function defaultGit(args: string[], cwd: string, extra?: Record<string, string>, opts?: { timeoutMs?: number }): Promise<GitOut> {
+  const env = hostGitEnv(extra);
   try {
     const timeout = Math.max(1, Math.min(opts?.timeoutMs ?? TASK_PUSH_TIMEOUT_MS, TASK_PUSH_TIMEOUT_MS));
-    const maxBuffer = Math.min(opts?.maxBufferBytes ?? 1024 * 1024, SCAN_MAX_BUFFER);
-    const { stdout, stderr } = await execFileP('git', args, { cwd, env, timeout, windowsHide: true, maxBuffer });
+    const { stdout, stderr } = await execFileP('git', args, { cwd, env, timeout, windowsHide: true, maxBuffer: 1024 * 1024 });
     return { code: 0, stdout: String(stdout), stderr: String(stderr) };
   } catch (err) {
     const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: string };
@@ -224,11 +225,10 @@ export function taskGitDirTarget(dir: string, platform: NodeJS.Platform = proces
 
 /** Runs `file` with `args`; resolves with the exit code and output, never
  *  throws. */
-export type TaskPushExec = (file: string, args: string[], env: NodeJS.ProcessEnv, opts?: { maxBufferBytes?: number }) => Promise<GitOut>;
+export type TaskPushExec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<GitOut>;
 
-async function defaultWslExec(file: string, args: string[], env: NodeJS.ProcessEnv, run?: { maxBufferBytes?: number }): Promise<GitOut> {
-  const maxBuffer = Math.min(run?.maxBufferBytes ?? 1024 * 1024, SCAN_MAX_BUFFER);
-  const opts = { cwd: os.homedir(), env, timeout: TASK_PUSH_TIMEOUT_MS, windowsHide: true, maxBuffer, encoding: 'buffer' as const };
+async function defaultWslExec(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<GitOut> {
+  const opts = { cwd: os.homedir(), env, timeout: TASK_PUSH_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024, encoding: 'buffer' as const };
   try {
     const { stdout, stderr } = await execFileP(file, args, opts);
     return { code: 0, stdout: stdout.toString('utf8'), stderr: decodeWslOutput(stderr) };
@@ -281,6 +281,9 @@ export interface TaskPushDeps {
   toWslPath?: (windowsPath: string) => string | Promise<string | null> | null;
   /** Settings › General's password and key check (default: its live value). */
   secretGuard?: () => boolean;
+  /** Runs git (or wsl.exe) for the secret check, its stdout streamed line
+   *  by line; default: spawnLines. */
+  lines?: typeof spawnLines;
 }
 
 /** `ls-remote --symref` output → the remote HEAD's branch, or null. Pure. */
@@ -295,7 +298,8 @@ export interface TaskGitRepo {
   entries: GitConfigEntry[];
   /** A read on the recorded repository (`--git-dir`, no object or ref write). */
   local: (args: string[]) => Promise<GitOut>;
-  /** `local` for the secret scan: the same git, with room for a whole patch. */
+  /** `local` for the secret scan, its output streamed: a patch of any size is
+   *  read whole, within the Git page's time limit. */
   scanLines: GitLines;
   /** The commit the worktree's HEAD names: its HEAD file in the recorded
    *  worktree git dir, read strictly (parseTaskHead), a branch resolved in
@@ -516,6 +520,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   const target = taskGitDirTarget(input.gitCommonDir, platform);
   if (target.kind === 'refused') return fail(target.error);
   const wslExec = deps.wslExec ?? defaultWslExec;
+  const lines = deps.lines ?? spawnLines;
   const safe = workerGitSafeArgs(target.kind === 'wsl' ? '/dev/null' : path.resolve(input.noHooksDir));
   // The stable cwd for host git: never discovered from, always overridden by
   // --git-dir or GIT_DIR.
@@ -523,14 +528,16 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
 
   // run(args, env): git on the right target, env added. Called only through
   // exec below, so every call runs with taskGitEnv.
-  type RunOpts = { maxBufferBytes?: number };
-  let run: (args: string[], env: Record<string, string>, opts?: RunOpts) => Promise<GitOut>;
+  let run: (args: string[], env: Record<string, string>) => Promise<GitOut>;
+  // The same git and env as `run`, its stdout streamed (the secret scan).
+  let stream: (args: string[], env: Record<string, string>, onLine: (line: string) => void) => Promise<boolean>;
   let common: string; // the recorded common git dir, in the serving git's spelling
   let toLinux: ((winPath: string) => Promise<string | null>) | null = null;
   if (target.kind === 'wsl') {
     common = target.gitDir;
     const wslExe = wslExePath(process.env.SystemRoot);
-    run = (args, env, opts) => wslExec(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'git', ...args], wslEnv(env), opts);
+    run = (args, env) => wslExec(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'git', ...args], wslEnv(env));
+    stream = (args, env, onLine) => lines(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'git', ...args], { cwd: os.homedir(), env: wslEnv(env) }, onLine);
     toLinux = deps.toWslPath
       ? async (p) => deps.toWslPath!(p)
       : async (p) => {
@@ -544,9 +551,10 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
     const same = real !== null && (platform === 'win32' ? real.toLowerCase() === input.gitCommonDir.toLowerCase() : real === input.gitCommonDir);
     if (!same) return fail(`the task's repository ${input.gitCommonDir} no longer resolves to itself`);
     common = input.gitCommonDir;
-    run = (args, env, opts) => git(args, hostCwd, env, opts);
+    run = (args, env) => git(args, hostCwd, env);
+    stream = (args, env, onLine) => lines('git', args, { cwd: hostCwd, env: hostGitEnv(env) }, onLine);
   }
-  const exec = (args: string[], env: Record<string, string>, opts?: RunOpts) => run(args, taskGitEnv(env), opts);
+  const exec = (args: string[], env: Record<string, string>) => run(args, taskGitEnv(env));
 
   // The capability check: every call sets GIT_NO_LAZY_FETCH, so git must
   // honour it. A version known to is taken as is; any other is checked once
@@ -606,7 +614,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   }
 
   const local = (args: string[]) => exec([`--git-dir=${common}`, ...safe, ...args], { GIT_COMMON_DIR: common });
-  const scanLines = bufferedGitLines((args) => exec([`--git-dir=${common}`, ...safe, ...args], { GIT_COMMON_DIR: common }, { maxBufferBytes: SCAN_MAX_BUFFER }));
+  const scanLines: GitLines = (args, onLine) => stream([`--git-dir=${common}`, ...safe, ...args], taskGitEnv({ GIT_COMMON_DIR: common }), onLine);
   const pre = await workerGitPreflight(local);
   if (!pre.ok) return { ok: false, reason: 'config-refused', error: pre.error };
   const own = (key: string) => pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && e.key === key)?.value;

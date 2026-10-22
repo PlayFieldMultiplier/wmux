@@ -24,8 +24,17 @@ const SCAN_TIMEOUT_MS = 5 * 60_000;
 
 /** A GitLines that spawns git in `cwd` and streams its output (no size cap). */
 export function spawnGitLines(cwd: string, env: NodeJS.ProcessEnv = {}): GitLines {
-  return (args, onLine) => new Promise((resolve) => {
-    const child = spawn('git', args, { cwd, env: { ...getExecEnv(), ...env }, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  return (args, onLine) => spawnLines('git', args, { cwd, env: { ...getExecEnv(), ...env } }, onLine);
+}
+
+/**
+ * Runs `file` with `args` and exactly `env`, handing each stdout line to
+ * onLine as spawnGitLines does (no size cap, killed after SCAN_TIMEOUT_MS);
+ * true when it exited 0.
+ */
+export function spawnLines(file: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }, onLine: (line: string) => void): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(file, args, { cwd: opts.cwd, env: opts.env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     const timer = setTimeout(() => child.kill(), SCAN_TIMEOUT_MS);
     let pending: string[] = [];
     child.stdout.setEncoding('utf8');
@@ -90,18 +99,6 @@ export function secretRefusal(scan: SecretScanResult, action: string): SecretRef
   if (!scan.ok) return { error: describeScanFailure(action), secretScanFailed: true };
   if (scan.findings.length) return { error: describeSecretFindings(scan.findings, action), secrets: scan.findings };
   return null;
-}
-
-/** A GitLines over a runner that answers with the whole output at once. */
-export function bufferedGitLines(run: (args: string[]) => Promise<{ code: number; stdout: string }>): GitLines {
-  return async (args, onLine) => {
-    const out = await run(args);
-    if (out.code !== 0) return false;
-    const lines = out.stdout.split('\n');
-    if (lines[lines.length - 1] === '') lines.pop();
-    for (const line of lines) onLine(line);
-    return true;
-  };
 }
 
 /** rev-list arguments for the commits a PR from `head` shows against `base`
