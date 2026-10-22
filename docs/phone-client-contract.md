@@ -495,7 +495,8 @@ mistake the browser client made and shipped.
 
 It is **409 `{"error":"terminal-prompt-active","effect":"none"}`** while the pane
 shows the agent's own permission dialog as an answerable pending
-`terminal_prompt` record (one that carries a `promptFingerprint`), except for a
+`terminal_prompt` record (one that carries a `promptFingerprint`, or any
+ExitPlanMode record), except for a
 lone Esc or a lone Ctrl-C — see
 [`terminal_prompt`](#terminal_prompt--the-agents-own-permission-dialog).
 
@@ -1438,7 +1439,11 @@ answered only through `POST /api/approvals/<id>` above, or at the computer. An
 informational record (no `promptFingerprint`: the dialog could not be bound to
 its tool call) does not refuse input: no route can answer it, so typed keys are
 the only way to answer it away from the computer. It still raises the pane's
-attention and its card. The one exception is the cancel direction: a body
+attention and its card, and when the dialog names its tool its `summary` is
+the command the screen shows, not the one the hook named.
+An ExitPlanMode record (`toolName: "ExitPlanMode"`) refuses input with or
+without a `promptFingerprint`: its first row, under the cursor, switches the
+session's permission mode. The one exception is the cancel direction: a body
 that is exactly one Esc (`\x1b`) or exactly one Ctrl-C (`\x03`) is written as
 usual. Esc followed by anything else (an arrow key, Enter) is refused. The check
 runs when the request body completes, immediately before the write, so a dialog

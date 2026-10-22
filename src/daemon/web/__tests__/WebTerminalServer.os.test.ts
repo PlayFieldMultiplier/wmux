@@ -5287,6 +5287,26 @@ describe('WebTerminalServer', () => {
         expect(write.mock.calls).toEqual([['1'], ['\r'], ['2\r'], ['1'], ['\r'], ['2\r']]);
       });
 
+      // A plan record is left unanswerable on purpose (a bypass-permissions
+      // row, the stepwise channel off, unbound, cut), and the row under the
+      // cursor switches the permission mode: keys stay refused.
+      it('still refuses typed keys on an ExitPlanMode record without a fingerprint', async () => {
+        const info = await startRW();
+        const phone = await pairDevice('Keys on a plan card', true);
+        approvalRecords.push(tp({
+          toolName: 'ExitPlanMode', summary: 'Plan', question: undefined, reason: undefined, choices: undefined, promptFingerprint: undefined,
+        }));
+        for (const token of [phone.token, info.token as string]) {
+          for (const body of ['\r', '1', '2\r']) {
+            const res = await typeInto(token, body);
+            expect(res.status, JSON.stringify(body)).toBe(409);
+            expect(await res.json()).toEqual({ error: 'terminal-prompt-active', effect: 'none' });
+          }
+        }
+        expect((await typeInto(phone.token, '\x1b')).status).toBe(204);
+        expect(write.mock.calls).toEqual([['\x1b']]);
+      });
+
       it('lets a lone Esc or a lone Ctrl-C through', async () => {
         const info = await startRW();
         approvalRecords.push(tp());

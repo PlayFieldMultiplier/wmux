@@ -864,7 +864,7 @@ const BOX_TOOLS: ReadonlyArray<{ firstRow: RegExp; tool: string }> = [
 
 /** A title whose dialog may box its call without a gutter (see boxedCommand). */
 function titleBoxesCommand(title: string): boolean {
-  return title === GENERIC_TITLE || toolFromDialogTitle(title) !== undefined;
+  return toolTitle(title) === GENERIC_TITLE || toolFromDialogTitle(title) !== undefined;
 }
 
 /**
@@ -874,7 +874,7 @@ function titleBoxesCommand(title: string): boolean {
  */
 export function toolOfDialog(parsed: Pick<ParsedTerminalPrompt, 'title' | 'commandRows'>): string | undefined {
   const byTitle = toolFromDialogTitle(parsed.title);
-  if (byTitle !== undefined || parsed.title !== GENERIC_TITLE) return byTitle;
+  if (byTitle !== undefined || parsed.title === undefined || toolTitle(parsed.title) !== GENERIC_TITLE) return byTitle;
   const first = parsed.commandRows[0] ?? '';
   return BOX_TOOLS.find((b) => b.firstRow.test(first))?.tool;
 }

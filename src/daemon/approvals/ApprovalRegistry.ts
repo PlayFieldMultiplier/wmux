@@ -1634,11 +1634,6 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     const detail = binding?.name === 'WebSearch' ? webSearch : binding?.input[binding.name === 'WebFetch' ? 'prompt' : 'description'];
     const description = typeof detail === 'string' && detail ? detail : undefined;
     const toolName = binding?.name ?? note.toolName ?? (parsed ? toolOfDialog(parsed) : undefined);
-    // The call's own input is the source of the summary; the screen only when
-    // there is no call to read it from. A WebSearch domain filter shows next to its query.
-    const summary = boundRecordText(command && webSearch ? `${command} (${webSearch})` : command, TERMINAL_PROMPT_SUMMARY_MAX)
-      ?? (parsed ? boundRecordText(parsed.commandText, TERMINAL_PROMPT_SUMMARY_MAX) : undefined)
-      ?? note.summary;
     // The summary is capped for display; the binding takes the WHOLE command.
     // A call that asked to run outside the sandbox: only that one may bind a
     // dialog titled `(unsandboxed)` (dialogMatchesToolCall).
@@ -1672,6 +1667,18 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     );
     const answer = bound ? terminalPromptAnswerability(parsed) : null;
     const answerable = !!answer?.answerable;
+    // The bound call's own input is the source of the summary. A WebSearch
+    // domain filter shows next to its query. Unbound, the card must show what
+    // the screen shows: typed keys answer that screen, and the call the note
+    // names may be another one (a second subagent's). The screen's rows are
+    // read as a command only when the dialog names its tool; the note's input
+    // and summary are the fallbacks.
+    const callSummary = boundRecordText(command && webSearch ? `${command} (${webSearch})` : command, TERMINAL_PROMPT_SUMMARY_MAX);
+    const screenSummary = parsed ? boundRecordText(parsed.commandText, TERMINAL_PROMPT_SUMMARY_MAX) : undefined;
+    const summary = (bound || !parsed || toolOfDialog(parsed) === undefined
+      ? callSummary ?? screenSummary
+      : screenSummary ?? callSummary)
+      ?? note.summary;
     // The phone card shows no title: a dialog that runs the call outside the
     // sandbox is flagged critical, so the approver gets the louder treatment
     // the terminal's "(unsandboxed)" title gives the person at the desk.

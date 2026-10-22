@@ -23,6 +23,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { ApprovalRegistry, TERMINAL_PROMPT_MIN_ANSWER_AGE_MS } from '../ApprovalRegistry';
 import { TERMINAL_PROMPT_WEB_ANSWER, type ApprovalRequest } from '../types';
+import type { PendingToolUse } from '../../transcript/pendingToolUse';
 import {
   dialogMatchesToolCall,
   parseTerminalPrompt,
@@ -132,6 +133,11 @@ describe('the subagent suffix on a title', () => {
     expect(toolFromDialogTitle(title)).toBeUndefined();
   });
 
+  it('the generic title with the suffix still names its tool by the box (unmeasured shape)', () => {
+    expect(toolOfDialog({ title: 'Tool use · from the general-purpose agent', commandRows: ['Web Search("wmux")'] })).toBe('WebSearch');
+    expect(toolOfDialog({ title: 'Tool use · from the general-purpose agent', commandRows: ['something else'] })).toBeUndefined();
+  });
+
   it('an unsandboxed subagent dialog binds only a call that asked to run unsandboxed', () => {
     const rows = WHOLE.screen.map((row) => (row === ` ${TITLE}` ? ' Bash command (unsandboxed) · from the general-purpose agent' : row));
     const parsed = parse(rows);
@@ -162,7 +168,7 @@ afterEach(() => {
   }
 });
 
-function makeRegistry(screen: readonly string[]) {
+function makeRegistry(screen: readonly string[], opts: { pending?: PendingToolUse | null } = {}) {
   const writes: string[] = [];
   const clock = { now: 10_000 };
   const mark = { bytes: 1, keyInputRevision: 3, incarnation: 'inc-1' };
@@ -175,7 +181,7 @@ function makeRegistry(screen: readonly string[]) {
     promptScreenMark: () => mark,
     // Measured: the lead's transcript has no unanswered tool_use (the
     // subagent runs in the background), so the record binds by the hook.
-    pendingToolUse: () => null,
+    pendingToolUse: () => opts.pending ?? null,
     agentSessionId: () => SESSION,
     promptReadDelay: async () => undefined,
     now: () => clock.now,
@@ -259,5 +265,42 @@ describe('a subagent\'s safety-check record', () => {
       terminalPromptAnswer: TERMINAL_PROMPT_WEB_ANSWER,
     })).toMatchObject({ ok: false });
     expect(h.writes).toEqual([]);
+  });
+});
+
+describe('a subagent dialog the screen cannot tie to one call', () => {
+  /** What the card must show when unbound: the screen's command, not a call's. */
+  const SCREEN_SUMMARY = /^S=\/private\/tmp\/claude-502\/.*grep -ih · "error/;
+  const expectInformational = (record: ApprovalRequest): void => {
+    expect(record).toMatchObject({ kind: 'terminal_prompt', toolName: 'Bash' });
+    expect(record).not.toHaveProperty('question');
+    expect(record).not.toHaveProperty('choices');
+    expect(record).not.toHaveProperty('promptFingerprint');
+  };
+
+  it('two subagents asking for the same command at once: informational, neither call is picked', async () => {
+    const h = makeRegistry(WHOLE.screen);
+    await Promise.all([
+      h.registry.noteTerminalPrompt({ sessionId: 'pty-a', agent: 'claude', ...HOOK }),
+      h.registry.noteTerminalPrompt({ sessionId: 'pty-a', agent: 'claude', ...HOOK }),
+    ]);
+    const pending = h.registry.list().pending;
+    expect(pending).toHaveLength(1);
+    expectInformational(pending[0]!);
+    expect(pending[0]!.summary).toMatch(SCREEN_SUMMARY);
+  });
+
+  it('the lead\'s own Bash call pending beside the subagent\'s: informational, the card shows the screen', async () => {
+    const lead: PendingToolUse = { id: 'toolu_lead', name: 'Bash', input: { command: 'git status', description: 'Show status' }, unanswered: 1 };
+    const record = await create(makeRegistry(WHOLE.screen, { pending: lead }));
+    expectInformational(record);
+    expect(record.summary).toMatch(SCREEN_SUMMARY);
+    expect(record.summary).not.toContain('git status');
+  });
+
+  it('a hook for another command: the card shows the screen\'s command, not the hook\'s', async () => {
+    const record = await create(makeRegistry(WHOLE.screen), { toolInput: { command: 'git status' } });
+    expectInformational(record);
+    expect(record.summary).toMatch(SCREEN_SUMMARY);
   });
 });

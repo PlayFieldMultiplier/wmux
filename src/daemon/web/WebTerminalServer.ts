@@ -7582,9 +7582,13 @@ export class WebTerminalServer {
     // `promptFingerprint`, also while a pressed answer is waiting) takes the
     // keys away. An informational record cannot be answered from any phone,
     // so refusing keys there left the dialog answerable at the computer only.
+    // An ExitPlanMode dialog always does: its first row, where the cursor
+    // starts, switches the session's permission mode (auto mode, bypass), and
+    // a plan record is left unanswerable on purpose (a bypass row, stepwise
+    // off), so a lone Enter must not answer it either.
     return approvals.list().pending.some(
       (r) => r.kind === 'terminal_prompt' && r.sessionId === sessionId && !isNativeDecision(r)
-        && !!r.promptFingerprint,
+        && (!!r.promptFingerprint || r.toolName === 'ExitPlanMode'),
     );
   }
 
