@@ -60,6 +60,7 @@ import type { BotGroup } from '../../shared/botGroup';
 import { parseRoomAttachments } from '../../shared/roomAttachments';
 import { parseRoomFiles } from './roomFiles';
 import { guestSide } from './guestWorkspaces';
+import { REACTIONS_PER_CARD_MAX, isReactionEmoji, sanitizeReactions, type CardReaction } from '../../shared/botGroupProtocol';
 
 export const ROOMS_DIRNAME = 'rooms';
 
@@ -543,6 +544,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
   const guest = c.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(c.guest) : undefined;
   // A guest card that does not say whose it is is not a card of this room.
   if (c.kind === 'guest' && !guest) return null;
+  const reactions = sanitizeReactions(c.reactions, (id) => BOT_ID_RE.test(id));
   return {
     version: 1,
     id: c.id,
@@ -567,6 +569,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(files ? { files } : {}),
     ...(guest ? { guest } : {}),
     ...(c.origin === 'guest' ? { origin: 'guest' as const } : {}),
+    ...(reactions ? { reactions } : {}),
   };
 }
 
@@ -963,6 +966,28 @@ export class RoomWriter {
     const cur = state?.byId.get(id);
     if (!state || !cur || cur.state === next) return null;
     const card: RoomCard = { ...cur, state: next };
+    if (!this.writeLine(workspaceId, state, card)) return null;
+    state.byId.set(id, card);
+    const idx = state.cards.findIndex((c) => c.id === id);
+    if (idx >= 0) state.cards[idx] = card;
+    this.afterWrite(workspaceId, state);
+    this.push(workspaceId, card);
+    return card;
+  }
+
+  /** A bot's reaction on a card (same id and seq), replacing its earlier
+   *  one there. Null when there is no such card, the reaction is not a
+   *  palette emoji, the card already has it, or the card holds
+   *  REACTIONS_PER_CARD_MAX other bots' reactions. */
+  react(workspaceId: string, id: string, reaction: CardReaction): RoomCard | null {
+    const state = this.room(workspaceId);
+    const cur = state?.byId.get(id);
+    if (!state || !cur || !BOT_ID_RE.test(reaction.botId) || !isReactionEmoji(reaction.emoji)) return null;
+    const others = (cur.reactions ?? []).filter((r) => r.botId !== reaction.botId);
+    const mine = cur.reactions?.find((r) => r.botId === reaction.botId);
+    if (mine && mine.emoji === reaction.emoji && mine.ack === reaction.ack) return null;
+    if (others.length >= REACTIONS_PER_CARD_MAX) return null;
+    const card: RoomCard = { ...cur, reactions: [...others, { botId: reaction.botId, emoji: reaction.emoji, ...(reaction.ack ? { ack: true as const } : {}) }] };
     if (!this.writeLine(workspaceId, state, card)) return null;
     state.byId.set(id, card);
     const idx = state.cards.findIndex((c) => c.id === id);

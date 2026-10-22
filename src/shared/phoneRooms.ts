@@ -15,6 +15,7 @@
 // PHONE_ROOM_LIMITS.replyBytes.
 
 import { BOT_ID_RE } from './bot';
+import { sanitizeReactions, type CardReaction } from './botGroupProtocol';
 import { APPROVAL_ID_RE } from './botApproval';
 import { isBotSecretName } from './botSecret';
 import { parseThreadId, ROOM_LIMITS, type CardKind, type RoomCard, type ThreadId, type ThreadStatus, type ThreadSummary } from './room';
@@ -133,6 +134,11 @@ export interface PhoneRoomCard {
   /** An owner (`human`) card only: the photos sent with it, drawn from
    *  `GET /api/rooms/:workspaceId/attachments/:id`. */
   attachments?: PhoneRoomAttachment[];
+  /** In a group chat: the bots' reactions to this card, one per bot
+   *  (shared/botGroupProtocol.ts). `ack`: wmux left it for a bot that
+   *  stayed silent. A reaction rewrites its card at the same seq, as a
+   *  question's resolution does. */
+  reactions?: CardReaction[];
 }
 
 /** A photo as the phone sees it: no upload name, no path. */
@@ -305,6 +311,7 @@ export function parsePhoneRoomCard(value: unknown): PhoneRoomCard | null {
   const approvalAction = kind === 'approval' && typeof value.approvalAction === 'string' && APPROVAL_ACTION_RE.test(value.approvalAction) ? value.approvalAction : undefined;
   const attachments = kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(value.attachments, { keepUpload: false }) : undefined;
   const resumable = value.resumable === true && !!notice && RESUMABLE_NOTICE_CODES.has(notice.code) && !!refs?.taskId;
+  const reactions = sanitizeReactions(value.reactions, (botId) => BOT_ID_RE.test(botId));
   return {
     id, seq, threadId, kind, at, actor, title,
     ...(text !== undefined ? { body: text } : {}),
@@ -318,6 +325,7 @@ export function parsePhoneRoomCard(value: unknown): PhoneRoomCard | null {
     ...(approvalAction ? { approvalAction } : {}),
     ...(resumable ? { resumable: true as const } : {}),
     ...(attachments ? { attachments } : {}),
+    ...(reactions ? { reactions } : {}),
   };
 }
 

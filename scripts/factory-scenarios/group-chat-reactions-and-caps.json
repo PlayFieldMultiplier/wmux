@@ -1,0 +1,190 @@
+{
+  "name": "group-chat-reactions-and-caps",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "A group chat of two bots with no coordinator. To the owner's untagged greeting, alpha ends its turn with only [[react:❤️]] and beta ends it silent: the greeting card carries alpha's ❤️ and beta's acknowledgement, and neither posts a card. Then the owner asks alpha to plan with beta, and the two answer each other by mention forever: each posts twice, alpha's third post is refused (two cards per bot per round), so the loop ends, and alpha's refused turn leaves its acknowledgement on beta's last card. No reaction wakes a bot.",
+  "setup": {
+    "bots": [
+      {
+        "key": "alpha",
+        "template": "developer",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "say": "[[react:❤️]]"
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Alpha to beta",
+                    "body": "Alpha to beta.",
+                    "mentions": [
+                      "{{bot.beta}}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Alpha again",
+                    "body": "Alpha again.",
+                    "mentions": [
+                      "{{bot.beta}}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Alpha a third time",
+                    "body": "Alpha a third time.",
+                    "mentions": [
+                      "{{bot.beta}}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "beta",
+        "template": "issue",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": []
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "opinion",
+                    "title": "Beta to alpha",
+                    "body": "Beta to alpha.",
+                    "mentions": [
+                      "{{bot.alpha}}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    {
+      "do": "api",
+      "label": "make the group",
+      "fn": "factory.groups.create",
+      "args": [
+        {
+          "workspaceId": "{{ws}}",
+          "name": "Pair",
+          "memberIds": [
+            "{{bot.alpha}}",
+            "{{bot.beta}}"
+          ]
+        }
+      ],
+      "record": true,
+      "save": {
+        "groupThread": "group.threadId"
+      }
+    },
+    {
+      "do": "post",
+      "label": "greeting",
+      "post": {
+        "threadId": "{{saved.groupThread}}",
+        "title": "Morning, both",
+        "body": "Nothing to do yet."
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "alpha reacted",
+      "cond": {
+        "wakes": {
+          "bot": "alpha",
+          "reason": "human",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "waitFor",
+      "label": "beta stayed silent",
+      "cond": {
+        "wakes": {
+          "bot": "beta",
+          "reason": "human",
+          "state": "done"
+        }
+      },
+      "timeoutMs": 60000,
+      "required": true
+    },
+    {
+      "do": "post",
+      "label": "plan",
+      "post": {
+        "threadId": "{{saved.groupThread}}",
+        "title": "Plan the release",
+        "body": "Alpha, work it out with beta.",
+        "mentions": [
+          "{{bot.alpha}}"
+        ]
+      }
+    },
+    {
+      "do": "waitFor",
+      "label": "quiet",
+      "cond": {
+        "idle": true,
+        "quietMs": 6000
+      },
+      "timeoutMs": 120000
+    }
+  ],
+  "expect": {
+    "requires": [
+      "facts",
+      "cards",
+      "bots",
+      "wakes",
+      "handoffs"
+    ],
+    "greeting": "greeting",
+    "plan": "plan",
+    "reactor": "alpha",
+    "silent": "beta",
+    "linesPerBot": 2
+  }
+}

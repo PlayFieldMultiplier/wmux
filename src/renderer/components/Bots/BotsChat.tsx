@@ -510,6 +510,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
               {renderBrainMarkdown((card.body?.trim() ? card.body : card.title).trim(), ctx.markdown)}
             </div>
           )}
+          <CardReactions card={card} ctx={ctx} end />
           {chips}
           {thread && thread.replies > 0 && <ThreadSummaryLine thread={thread} ctx={ctx} />}
         </div>
@@ -546,9 +547,45 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
         {/* Its files sit under the bubble, outside it (a chip's fill never
             sits on the bubble's). */}
         {ctx.onOpenFile && <CardFiles card={card} t={t} shownId={ctx.shownFileId} onOpen={ctx.onOpenFile} />}
+        <CardReactions card={card} ctx={ctx} />
         {chips}
         {thread && thread.replies > 0 && <ThreadSummaryLine thread={thread} ctx={ctx} />}
       </div>
+    </div>
+  );
+}
+
+/** The bots' reactions on a card in a group chat, one chip per emoji
+ *  with its count; the chip names who reacted, and says "saw this" for
+ *  the acknowledgements wmux left for bots that stayed silent. */
+function CardReactions({ card, ctx, end }: { card: RoomCardData; ctx: RowCtx; end?: boolean }) {
+  const { t } = ctx;
+  if (!card.reactions?.length) return null;
+  const byEmoji = new Map<string, { names: string[]; picked: boolean }>();
+  for (const r of card.reactions) {
+    const entry = byEmoji.get(r.emoji) ?? { names: [], picked: false };
+    entry.names.push(botFace(r.botId, ctx)?.name || r.botId);
+    if (!r.ack) entry.picked = true;
+    byEmoji.set(r.emoji, entry);
+  }
+  return (
+    <div data-bots-reactions className={`mt-0.5 flex flex-wrap items-center gap-1 ${end ? 'justify-end' : ''}`}>
+      {[...byEmoji].map(([emoji, { names, picked }]) => {
+        const label = t(picked ? 'botsPage.chat.reacted' : 'botsPage.chat.sawThis', { names: names.join(', '), emoji });
+        return (
+          <span
+            key={emoji}
+            data-bots-reaction={emoji}
+            role="img"
+            aria-label={label}
+            title={label}
+            className="inline-flex h-[20px] items-center gap-1 px-1.5 rounded-[var(--chip-radius)] bg-[var(--selection)] text-[11px] tabular-nums text-[var(--text-sub)]"
+          >
+            <span aria-hidden>{emoji}</span>
+            {names.length > 1 && <span aria-hidden>{names.length}</span>}
+          </span>
+        );
+      })}
     </div>
   );
 }

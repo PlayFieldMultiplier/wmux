@@ -11,6 +11,7 @@
 
 import { botTemplate, isCoordinatorBot, type BotProfile, type BotTemplate } from '../../shared/bot';
 import { botRepo } from '../../shared/repoKey';
+import { GROUP_ROUND_LIMITS, REACTION_EMOJI } from '../../shared/botGroupProtocol';
 import { effectiveJob } from './roles/templates';
 import type { Fact } from '../../shared/facts';
 import { isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
@@ -132,6 +133,15 @@ export interface WakePromptInput {
   group?: WakeGroup | null;
   /** Now (epoch ms), for "N min ago". Default Date.now(). */
   now?: number;
+}
+
+/** A group chat turn's three moves (shared/botGroupProtocol.ts), and the
+ *  round caps for a bot that is not the group's coordinator. */
+function groupTurnMoves(coordinator: boolean): string {
+  return 'In a group chat a turn has three moves. Speak: post a short card that adds what the others have not said. '
+    + `React: when one emoji says everything, end the turn with only [[react:👍]] (one of ${REACTION_EMOJI.join(' ')}), or put it before your words; it shows as your reaction on the card you were woken for. `
+    + 'Stay silent: end the turn without posting, and wmux leaves an acknowledgement on that card for you. Silence is normal: most messages do not need every bot.'
+    + (coordinator ? '' : ` A round, from the owner's message to the next one, holds at most ${GROUP_ROUND_LIMITS.LINES} bot cards and ${GROUP_ROUND_LIMITS.LINES_PER_BOT} of yours, and bots mention each other at most ${GROUP_ROUND_LIMITS.MENTION_WAVES} deep: past that a post is refused, so end the turn.`);
 }
 
 /** The group chat a wake runs in, as its prompt names it. */
@@ -340,6 +350,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
   const group = input.group ?? null;
   if (group) {
     lines.push('', `This thread is the owner's group chat${group.name ? ` "${oneLineName(group.name)}"` : ''}; you are one of its bots.`);
+    if (r.kind === 'human' || r.kind === 'mention') lines.push(groupTurnMoves(isCoordinatorBot(profile)));
   }
   switch (r.kind) {
     case 'human':

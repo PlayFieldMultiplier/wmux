@@ -14,6 +14,7 @@ import type { RoomAttachment } from './roomAttachments';
 import type { RoomFile } from './roomFiles';
 import { normalizeRepoKey } from './repoKey';
 import { BOT_ID_RE } from './bot';
+import type { CardReaction } from './botGroupProtocol';
 
 export type ThreadId =
   | `pr:${string}#${number}`
@@ -247,6 +248,12 @@ export interface RoomCard {
    *  card, a thread's Finished card, a fact's card, the owner's resolution
    *  of such a card). Read like a `guest` card (isGuestSourcedCard). */
   origin?: 'guest';
+  /** Main-written, in a group chat: the bots' reactions to this card, one
+   *  per bot (shared/botGroupProtocol.ts). A bot woken for this card that
+   *  ended its turn with a reaction, or silent (`ack`). UI data only: a
+   *  reaction wakes no bot and starts nothing. Never set by a room.post
+   *  param. */
+  reactions?: CardReaction[];
 }
 
 /** Whether a card is an external guest's words or a bot's card from a turn

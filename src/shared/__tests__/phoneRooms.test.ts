@@ -37,6 +37,17 @@ describe('phone room cards', () => {
     expect(phoneRoomCard(card(8, { attachments: [photo] }), () => null)).not.toHaveProperty('attachments');
   });
 
+  it("carries a group card's reactions, palette only and one per bot; a card without any has none", () => {
+    const out = phoneRoomCard(card(10, {
+      kind: 'human', actor: { kind: 'human' },
+      reactions: [{ botId: 'bot-1111bbbb', emoji: '❤️' }, { botId: 'bot-2222cccc', emoji: '👀', ack: true }],
+    }), () => null);
+    expect(out?.reactions).toEqual([{ botId: 'bot-1111bbbb', emoji: '❤️' }, { botId: 'bot-2222cccc', emoji: '👀', ack: true }]);
+    expect(parsePhoneRoomCard(out)).toEqual(out);
+    expect(parsePhoneRoomCard({ ...out, reactions: [{ botId: 'bot-1111bbbb', emoji: '🦄' }] })).not.toHaveProperty('reactions');
+    expect(phoneRoomCard(card(11), () => null)).not.toHaveProperty('reactions');
+  });
+
   it("leaves a bot card's files off the phone wire for now", () => {
     const files = [{ id: 'b'.repeat(32), name: 'report.md', mediaType: 'text/markdown', bytes: 12 }];
     const out = phoneRoomCard(card(9, { files }), () => ({ role: 'lead', name: 'Lead' }));

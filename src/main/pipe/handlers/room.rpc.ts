@@ -55,9 +55,11 @@ import {
   type RoomSearchParams,
   type RoomSearchResult,
   type RoomThreadsParams,
+  type ThreadId,
 } from '../../../shared/room';
 import type { RpcContext } from '../../../shared/rpc';
 import type { WakeItem } from '../../../shared/wake';
+import { GROUP_ROUND_LIMITS, silentAckEmoji, splitReaction } from '../../../shared/botGroupProtocol';
 import { resolveThreadDecision } from '../../deck/deckDecisionStore';
 import { botCwd, setBotRuntimePorts } from '../../factory/BotRuntime';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle, type FactoryRouter } from '../../factory/factoryHost';
@@ -345,6 +347,11 @@ export async function handleRoomPost(raw: unknown, ctx: RpcContext | undefined, 
     // Files are copied once per post: a repeat whose card is up keeps that
     // card's files and reads nothing (the task folder may be gone by then).
     const prior = clientPostId ? writer.find(bot.workspaceId, (c) => c.clientPostId === clientPostId, { guests: true }) : null;
+    // A group chat's round (shared/botGroupProtocol.ts): what follows the
+    // owner's message there holds a few bot cards, so bots that keep
+    // answering each other stop. A repeat of a posted card is no new line.
+    const roundFull = prior ? null : groupRoundRefusal(writer, ports, bot, threadId);
+    if (roundFull) return refusal('not_now', roundFull);
     let copied: { files: RoomFile[]; store: RoomFileStore } | null = null;
     if (Array.isArray(filePaths) && filePaths.length > 0 && !prior) {
       // Files come from the repository or a worker's folder: not in a wake
@@ -470,6 +477,101 @@ export async function postTurnText(
     { origin: 'local', bot: { workspaceId: profile.workspaceId, botId: profile.id, role: profile.role } },
     deps,
   );
+}
+
+/** Why a bot's post in a group chat's thread is past its round, or null:
+ *  a post from a turn on the owner's message or another bot's mention
+ *  there, once the bots' cards since the owner's last message there reach
+ *  GROUP_ROUND_LIMITS.LINES, or the poster's own reach LINES_PER_BOT. A
+ *  coordinator leads the group: its cards neither count nor are refused
+ *  (its relays have their own caps). Pure over the room. */
+export function groupRoundRefusal(writer: RoomWriter, ports: Partial<FactoryRoomPorts>, bot: BotBinding, threadId: ThreadId): string | null {
+  const kind = runningWake(ports, bot.botId)?.reasonKind;
+  if (kind !== 'human' && kind !== 'mention') return null;
+  let group: ReturnType<NonNullable<FactoryRoomPorts['groups']>['byThread']> = null;
+  try {
+    group = ports.groups?.byThread(bot.workspaceId, threadId) ?? null;
+  } catch {
+    group = null;
+  }
+  if (!group) return null;
+  const leads = new Map<string, boolean>();
+  const leadsGroup = (botId: string): boolean => {
+    let lead = leads.get(botId);
+    if (lead === undefined) {
+      try {
+        lead = isCoordinatorBot(ports.bots?.get(botId) ?? null);
+      } catch {
+        lead = false;
+      }
+      leads.set(botId, lead);
+    }
+    return lead;
+  };
+  let lines = 0;
+  let own = 0;
+  // A scan, newest first, that stops at the owner's last message there.
+  writer.find(bot.workspaceId, (c) => {
+    if (c.threadId !== threadId) return false;
+    if (c.kind === 'human' && c.actor.kind === 'human') return true;
+    if (c.actor.kind === 'bot' && !leadsGroup(c.actor.botId)) {
+      lines += 1;
+      if (c.actor.botId === bot.botId) own += 1;
+    }
+    return false;
+  }, { guests: true });
+  if (lines >= GROUP_ROUND_LIMITS.LINES) {
+    return `this group chat's round is full: its bots have posted ${GROUP_ROUND_LIMITS.LINES} cards since the owner's last message here. End the turn; the owner's next message opens a new round.`;
+  }
+  if (own >= GROUP_ROUND_LIMITS.LINES_PER_BOT) {
+    return `you have posted ${GROUP_ROUND_LIMITS.LINES_PER_BOT} cards in this group chat since the owner's last message here. End the turn and leave the rest to the others.`;
+  }
+  return null;
+}
+
+/** A bot's turn on a group chat's card ended (the owner's message there,
+ *  or another bot's mention there): a `[[react:…]]` in its closing text is
+ *  its reaction on that card, and the words left are posted as postTurnText
+ *  posts them (an owner message addressed to it). A turn that leaves no
+ *  card of the bot's in that thread leaves its acknowledgement there
+ *  instead (shared/botGroupProtocol.ts). A reaction is UI data on the card:
+ *  it writes no fact and wakes no bot. A conversation that holds signed-in
+ *  data or an outside guest's words passes no pick of its own on: it only
+ *  acknowledges. False when the wake is about no group chat's card; the
+ *  caller then goes on as before. Call it while the wake still runs. */
+export async function endGroupTurn(
+  profile: Pick<BotProfile, 'id' | 'workspaceId' | 'role'>,
+  item: Pick<WakeItem, 'id' | 'reason'>,
+  text: string,
+  since: number,
+  deps: RoomHandlerDeps,
+): Promise<boolean> {
+  const r = item.reason;
+  const cardId = r.kind === 'human' ? r.clientMessageId : r.kind === 'mention' ? r.cardId : undefined;
+  const writer = deps.writer();
+  const card = cardId && writer ? writer.get(profile.workspaceId, cardId) : null;
+  if (!writer || !card) return false;
+  let group: ReturnType<NonNullable<FactoryRoomPorts['groups']>['byThread']> = null;
+  try {
+    group = deps.ports().groups?.byThread(profile.workspaceId, card.threadId) ?? null;
+  } catch {
+    group = null;
+  }
+  if (!group?.memberIds.includes(profile.id)) return false;
+  const { emoji, text: words } = splitReaction(text);
+  // Words a room-wide wake ends on are a note to itself (BotRuntime.ts).
+  if (r.kind === 'human' && r.roomWide !== true && words) await postTurnText(profile, item, words, since, deps);
+  const ownPick = (deps.signedIn ?? conversationSignedIn)(profile.id) === false && !isGuestSourcedTurn(profile.id);
+  if (emoji && ownPick) {
+    writer.react(profile.workspaceId, card.id, { botId: profile.id, emoji });
+    return true;
+  }
+  const attemptKey = `wake:${item.id}:`;
+  const spoke = writer.find(profile.workspaceId, (c) => c.threadId === card.threadId
+    && c.actor.kind === 'bot' && c.actor.botId === profile.id
+    && (c.at > since || c.clientPostId?.startsWith(attemptKey) === true), { guests: true });
+  if (!spoke) writer.react(profile.workspaceId, card.id, { botId: profile.id, emoji: silentAckEmoji(profile.id, card.id), ack: true });
+  return true;
 }
 
 /** A bot card's mentions split into the bots that wake (existing, enabled,
@@ -720,6 +822,7 @@ export function createRoomModule(
       getRoomFileStore()?.sweep();
       setBotRuntimePorts({
         postTurnText: (profile, item, text, since) => postTurnText(profile, item, text, since, { writer: getRoomWriter, ports: resolve, wmuxDir: deps.wmuxDir }),
+        endGroupTurn: (profile, item, text, since) => endGroupTurn(profile, item, text, since, { writer: getRoomWriter, ports: resolve, wmuxDir: deps.wmuxDir }),
       });
       const ports = resolve();
       if (ports.factLog) {

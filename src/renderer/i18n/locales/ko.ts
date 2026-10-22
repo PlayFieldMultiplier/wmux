@@ -4839,6 +4839,8 @@ export const ko = {
   'botsPage.chat.replies': "답글 {count}개 · 마지막 {time}",
   'botsPage.chat.repliesOne': "답글 1개 · 마지막 {time}",
   'botsPage.chat.inThread': "스레드에서",
+  'botsPage.chat.reacted': "{names}: {emoji} 반응",
+  'botsPage.chat.sawThis': "{names}이(가) 확인함",
   'botsPage.work.handedTo': "{name}에게 맡김",
   'botsPage.work.working': "작업 중",
   'botsPage.work.review': "검토 대기",
