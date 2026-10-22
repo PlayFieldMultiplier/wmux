@@ -89,17 +89,19 @@ interface PcRow {
 type Confirm = { kind: 'entry' | 'pc' | 'link'; id: string } | null;
 
 /**
- * How many of this PC's panes an exposure lets that PC see. A workspace
- * listed without a pane list shows every pane it has now.
+ * How many of this PC's panes an exposure lets that PC see now: a listed pane
+ * that has since closed does not count, and a workspace listed without a pane
+ * list shows every pane it has.
  */
-export function exposedPaneCount(exposure: A2aExposureV1 | null | undefined, workspaces: readonly Workspace[]): number {
+export function exposedPaneCount(exposure: A2aExposureV1 | null, workspaces: readonly Workspace[]): number {
   if (!exposure) return 0;
   let n = 0;
   for (const wsId of exposure.workspaceIds) {
-    const listed = exposure.paneIds?.[wsId];
-    if (listed) { n += listed.length; continue; }
     const ws = workspaces.find((w) => w.id === wsId);
-    if (ws) n += getWorkspaceLeafPanes(ws).length;
+    if (!ws) continue;
+    const live = getWorkspaceLeafPanes(ws).map((p) => p.id);
+    const listed = exposure.paneIds?.[wsId];
+    n += listed ? listed.filter((id) => live.includes(id)).length : live.length;
   }
   return n;
 }
@@ -131,7 +133,11 @@ export default function RemotePage() {
   const [devicesError, setDevicesError] = useState(false);
   const [hosts, setHosts] = useState<RemoteHostPublic[] | null>(null);
   const [peers, setPeers] = useState<LanLinkPeerSummary[] | null>(null);
-  /** What this PC lets each PC that joined it see, by hostId (the last good read). */
+  /**
+   * What this PC lets each PC that joined it see, by hostId: the last good
+   * read (null: nothing listed). A PC never read yet has no key, and its row
+   * claims nothing rather than "nothing".
+   */
   const [exposures, setExposures] = useState<Record<string, A2aExposureV1 | null>>({});
   const [connect, setConnect] = useState<{ tab?: ConnectTab } | null>(null);
   const [addSsh, setAddSsh] = useState(false);
@@ -185,8 +191,11 @@ export default function RemotePage() {
       if (mounted.current) {
         setExposures((prev) => {
           const next: Record<string, A2aExposureV1 | null> = {};
-          // A failed read keeps the last value; a PC no longer paired drops out.
-          for (const [id, e] of got) next[id] = e === undefined ? prev[id] ?? null : e;
+          // A failed read keeps the last value (or none); a PC no longer paired drops out.
+          for (const [id, e] of got) {
+            if (e !== undefined) next[id] = e;
+            else if (id in prev) next[id] = prev[id];
+          }
           return next;
         });
       }
@@ -495,7 +504,7 @@ export default function RemotePage() {
             one is kept for starting new agents, so adding it later does not
             reshape the row. */}
         <span className="wmux-remote-perm" data-remote-perm>
-          <span className="wmux-remote-perm-slot" data-perm-slot="see">{pc.peerId ? seeLabel(exposedPaneCount(exposures[pc.hostId], workspaces)) : ''}</span>
+          <span className="wmux-remote-perm-slot" data-perm-slot="see">{pc.peerId && pc.hostId in exposures ? seeLabel(exposedPaneCount(exposures[pc.hostId], workspaces)) : ''}</span>
           <span className="wmux-remote-perm-slot" data-perm-slot="agents" />
         </span>
         {statusCell(pc.word, pc.word === 'connected', pc.lastSeenAt)}

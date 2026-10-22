@@ -165,6 +165,17 @@ describe('Remote page connections', () => {
     expect($(`[data-remote-pc="${PEER}"] [data-perm-slot="see"]`)?.textContent).toBe('Can see nothing here');
   });
 
+  it('counts only listed panes that still exist, and claims nothing while the exposure could not be read', async () => {
+    stub({ peers: [peer()], exposure: { [PEER]: { v: 1, hostId: PEER, workspaceIds: ['w1'], paneIds: { w1: ['p1', 'p-closed'] }, updatedAt: '' } } });
+    await render();
+    expect($(`[data-remote-pc="${PEER}"] [data-perm-slot="see"]`)?.textContent).toBe('Can see 1 pane here');
+    act(() => root.unmount());
+    root = createRoot(container);
+    api.a2aRemote.exposureGet.mockImplementation(async () => { throw new Error('daemon away'); });
+    await render();
+    expect($(`[data-remote-pc="${PEER}"] [data-perm-slot="see"]`)?.textContent).toBe('');
+  });
+
   it('keeps an A2A PC and a LAN peer with the same name as two rows, and removing one leaves the other', async () => {
     const state = stub({ peers: [peer({ name: 'DESK' })], lanPeers: [lanPeer({ peerName: 'DESK' })] });
     await render();

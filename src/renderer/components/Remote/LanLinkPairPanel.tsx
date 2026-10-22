@@ -200,6 +200,8 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
   const [error, setError] = useState<string | null>(null);
   /** The window this panel opened and has not seen close. */
   const minted = useRef(false);
+  /** The panel went away (the dialog closed). */
+  const disposed = useRef(false);
 
   const refreshStatus = useCallback(async () => {
     if (!api?.status) { setAvailable(false); return; }
@@ -252,6 +254,7 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
 
   // Closing the dialog closes a window this panel left open.
   useEffect(() => () => {
+    disposed.current = true;
     if (minted.current) {
       minted.current = false;
       void window.electronAPI?.lanlink?.pairCancel?.().catch(() => undefined);
@@ -264,6 +267,11 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
     setError(null);
     setFailCount(0);
     const r = await ipcInvoke(() => api.pairBegin());
+    // Closed while the window was opening: nobody will see this PIN, so close it.
+    if (disposed.current) {
+      if (r.ok) void api.pairCancel?.().catch(() => undefined);
+      return;
+    }
     setPairBusy(false);
     if (!r.ok) { setError(t('settings.lanlinkPairError')); return; }
     minted.current = true;

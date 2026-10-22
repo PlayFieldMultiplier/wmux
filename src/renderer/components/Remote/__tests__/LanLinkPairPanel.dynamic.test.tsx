@@ -130,6 +130,21 @@ describe('Connect a PC › LAN', () => {
     expect((await readPairStatus()).active).toBe(false);
   });
 
+  it('closes a window that finished opening after the dialog closed', async () => {
+    stub();
+    let resolve: (v: { pin: string; expiresInMs: number }) => void = () => undefined;
+    lanlink.pairBegin.mockImplementation(() => new Promise((r) => { resolve = (v) => { pairActive = true; r(v); }; }));
+    await render('lan');
+    await act(async () => { q<HTMLButtonElement>('remote-connect-lan-begin')!.click(); });
+    act(() => root.unmount());
+    root = createRoot(container);
+    expect(lanlink.pairCancel).not.toHaveBeenCalled();
+    await act(async () => { resolve({ pin: '482913', expiresInMs: 120_000 }); });
+    await settle();
+    expect(lanlink.pairCancel).toHaveBeenCalledTimes(1);
+    expect((await readPairStatus()).active).toBe(false);
+  });
+
   it('leaves alone a pairing window it did not open', async () => {
     stub();
     await render('lan');
