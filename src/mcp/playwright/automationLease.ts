@@ -170,6 +170,110 @@ export async function assertCodeToolAllowed(deps: BrowserToolDeps, tool: string)
 // Renew well inside main's 30s RPC-lease TTL so a long-running tool op
 // (browser_wait_for, slow page interactions) never lapses mid-flight.
 const RENEW_INTERVAL_MS = 10_000;
+// A renew parks on main for up to this long (main caps it the same), so the
+// user's Stop / Take over reaches the op at once instead of at the next poll.
+const LEASE_WATCH_MS = 8_000;
+// The parked renew's client timeout: the park plus room for the reply.
+const LEASE_WATCH_RPC_TIMEOUT_MS = LEASE_WATCH_MS + 4_000;
+// The watch starts this long into the op: most actions are over sooner and so
+// cost no extra RPC, and a Stop pressed earlier is still heard by then (main
+// keeps the revocation for the parked renew to read).
+const LEASE_WATCH_START_MS = 500;
+
+// ---------------------------------------------------------------------------
+// Stop / Take over (src/shared/browserAgentControl.ts).
+//
+// The user can end an agent's action on an in-app tab from the pane. Main
+// revokes the op's lease and answers the parked renew with the refusal; the op
+// then fails with it at once, and the Playwright connection is dropped so the
+// action stops inside the page too (a click still waiting for its element
+// would otherwise land after the user said stop). The connection is per agent
+// process and is re-made by the next call, so the cost of dropping it is one
+// reconnect — and any other action this same agent had in flight fails with
+// it, which is the honest outcome of "stop" as well.
+// ---------------------------------------------------------------------------
+
+interface CancelSignal {
+  /** Rejects with the user's refusal; never resolves. */
+  readonly promise: Promise<never>;
+  fire(error: Error): void;
+}
+
+function cancelSignal(): CancelSignal {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<never>((_resolve, rej) => {
+    reject = rej;
+  });
+  // Unobserved whenever the op finishes first.
+  promise.catch(() => undefined);
+  return { promise, fire: (error) => reject(error) };
+}
+
+/**
+ * Keep a held lease renewed, and call `onRevoked` with main's refusal if the
+ * user stops or takes over the tab while it is held. Returns the stop handle.
+ *
+ * A main that predates the parked renew answers at once without `watched`; the
+ * loop then paces itself at RENEW_INTERVAL_MS, exactly the old renew timer.
+ */
+function watchLease(token: string, onRevoked: (error: Error) => void): () => void {
+  let stopped = false;
+  let wake: (() => void) | null = null;
+  let pause: ReturnType<typeof setTimeout> | undefined;
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => {
+      wake = resolve;
+      pause = setTimeout(resolve, ms);
+      (pause as { unref?: () => void }).unref?.();
+    });
+  void (async () => {
+    await sleep(LEASE_WATCH_START_MS);
+    while (!stopped) {
+      const started = Date.now();
+      try {
+        const params = { token, waitMs: LEASE_WATCH_MS };
+        const res = (await sendRpc('browser.lease.renew', params, LEASE_WATCH_RPC_TIMEOUT_MS)) as {
+          ok?: boolean;
+          watched?: boolean;
+        } | null;
+        if (stopped || res?.ok === false) return;
+        if (res?.watched === true) continue;
+        await sleep(Math.max(0, RENEW_INTERVAL_MS - (Date.now() - started)));
+      } catch (err) {
+        if (stopped) return;
+        const refusal = browserCallRefusal(err);
+        if (refusal) {
+          onRevoked(refusal);
+          return;
+        }
+        /* best-effort — TTL expiry in main is the backstop */
+        await sleep(RENEW_INTERVAL_MS);
+      }
+    }
+  })();
+  return () => {
+    stopped = true;
+    if (pause) clearTimeout(pause);
+    wake?.();
+  };
+}
+
+/**
+ * The op's result, or the user's refusal the moment they stop it — in which
+ * case the agent's Playwright connection is dropped so the abandoned action
+ * stops in the page as well.
+ */
+function untilCancelled<T>(work: Promise<T>, cancel: CancelSignal): Promise<T> {
+  return Promise.race([
+    work,
+    cancel.promise.catch((error: unknown) => {
+      // The abandoned op now fails on its own; that failure is expected.
+      work.catch(() => undefined);
+      void PlaywrightEngine.getInstance().disconnect().catch(() => undefined);
+      throw error;
+    }),
+  ]);
+}
 
 // ---------------------------------------------------------------------------
 // Inline lifecycle events: the lifecycle ring (navigations / loads / closes)
@@ -559,6 +663,10 @@ export async function withAutomationLease<T>(
     // target exists, holding it for the remainder of the op.
     let lateToken: string | null = null;
     let done = false;
+    const lateCancel = cancelSignal();
+    // Held in an object: set from a callback, which TS's narrowing of a
+    // `let` initialised to null cannot see.
+    const lateWatch: { stop: (() => void) | null } = { stop: null };
     const lateTimer = setInterval(() => {
       if (done || lateToken) return;
       sendScopedBrowserRpc<{ token: string | null }>('browser.lease.acquire', scope, { authorize: true })
@@ -593,6 +701,7 @@ export async function withAutomationLease<T>(
             return;
           }
           lateToken = tok;
+          lateWatch.stop = watchLease(tok, lateCancel.fire);
         })
         .catch((err) => {
           // A refusal is final; anything else keeps trying until the op ends.
@@ -601,13 +710,9 @@ export async function withAutomationLease<T>(
         });
     }, 2_000);
     (lateTimer as { unref?: () => void }).unref?.();
-    const lateRenew = setInterval(() => {
-      if (lateToken) sendRpc('browser.lease.renew', { token: lateToken }).catch(() => {});
-    }, RENEW_INTERVAL_MS);
-    (lateRenew as { unref?: () => void }).unref?.();
     const lateEvents = await drainLifecycleEvents(scope);
     try {
-      const result = prependModalNotes(await fn(scope), scope);
+      const result = prependModalNotes(await untilCancelled(fn(scope), lateCancel), scope);
       if (revoked) throw revoked;
       // Post-drain runs in the return expression, i.e. still inside this
       // finally's lease bracket — browser.lifecycle.get is a leased RPC and
@@ -624,7 +729,7 @@ export async function withAutomationLease<T>(
     } finally {
       done = true;
       clearInterval(lateTimer);
-      clearInterval(lateRenew);
+      lateWatch.stop?.();
       if (lateToken) {
         sendRpc('browser.lease.release', { token: lateToken }).catch(() => {});
       }
@@ -632,17 +737,12 @@ export async function withAutomationLease<T>(
   }
 
   const heldToken = token;
-  const renewTimer = setInterval(() => {
-    sendRpc('browser.lease.renew', { token: heldToken }).catch(() => {
-      /* best-effort — TTL expiry in main is the backstop */
-    });
-  }, RENEW_INTERVAL_MS);
-  // Do not keep the MCP process alive just to renew a lease.
-  (renewTimer as { unref?: () => void }).unref?.();
+  const cancel = cancelSignal();
+  const stopWatch = watchLease(heldToken, cancel.fire);
 
   const events = await drainLifecycleEvents(scope);
   try {
-    const result = prependModalNotes(await fn(scope), scope);
+    const result = prependModalNotes(await untilCancelled(fn(scope), cancel), scope);
     // Post-drain still inside the lease bracket (see the late-acquire branch).
     const postEvents = await drainLifecycleEventsPost(scope);
     const withEvents = prependBrowserEvents(
@@ -651,7 +751,7 @@ export async function withAutomationLease<T>(
     );
     return prependReplayHints(withEvents, [...events, ...postEvents], scope);
   } finally {
-    clearInterval(renewTimer);
+    stopWatch();
     sendRpc('browser.lease.release', { token: heldToken }).catch(() => {
       /* TTL expiry cleans up */
     });

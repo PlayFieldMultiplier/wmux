@@ -19,6 +19,7 @@ import { FOCUS_RING } from '../focusRing';
 import { HIT_TARGET_24 } from '../hitArea';
 import { IconSplitRight, IconSplitDown, IconBrowser, IconExternalLink, IconEyeOff, IconPencil, IconGrid, IconComputer, IconLock, IconBellOff, IconBell } from '../icons';
 import { isPrivateBrowserSurface } from '../../../shared/privateBrowser';
+import { BrowserAgentTabMark } from '../Browser/BrowserAgentControls';
 import { LOCAL_PC_ID, isShadowWorkspaceId } from '../../../shared/pcRail';
 import A2aLinkDialog from '../Remote/A2aLinkDialog';
 import A2aShareDialog from '../Remote/A2aShareDialog';
@@ -1124,6 +1125,7 @@ export default function SurfaceTabs({
           {s.surfaceType === 'remote-terminal' && (
             <RemoteSurfaceGlyph label={t('surface.remoteTerminal')} />
           )}
+          {s.surfaceType === 'browser' && <BrowserAgentTabMark surfaceId={s.id} />}
           {/* Private browser tab: the same padlock a private channel carries. */}
           {isPrivateBrowserSurface(s) && (
             <span className="shrink-0" role="img" aria-label={t('browser.privateTab')} data-private-browser-tab>

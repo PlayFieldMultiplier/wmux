@@ -137,6 +137,7 @@ import {
 import type { EnforcementMode } from '../../mcp/enforcementMode';
 import { isFirstPartyClient } from '../../mcp/firstParty';
 import { isLocalExternalWireContext } from '../../mcp/rpcProvenance';
+import type { BrowserAgentControl } from '../../browser-session/BrowserAgentControl';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -884,6 +885,9 @@ const HELP_EVALUATE_TIMEOUT_MS = 2_000;
 const HELP_REVEAL_TIMEOUT_MS = 2_000;
 // Bound for the capturePage fallback — it can hang on exactly the same guests.
 const CAPTURE_PAGE_TIMEOUT_MS = 1_500;
+/** Longest a browser.lease.renew may park on its lease (`waitMs`), well inside
+ *  the lease TTL so the parked call is itself the renewal. */
+const LEASE_WATCH_MAX_MS = 8_000;
 
 /**
  * Caller-facing text for a refused scope decision.
@@ -975,6 +979,11 @@ export function registerBrowserRpc(
   // below opened the request on. A store hung off module scope could not see
   // `getWindow` or the CDP manager, and a second instance would answer for
   // requests it never created.
+  //
+  // Agent control of in-app browser tabs (Stop / Take over in the pane). Asked
+  // before an agent action takes its lease on a resolved surface; absent means
+  // every tab is under agent control, as before.
+  agentControl?: Pick<BrowserAgentControl, 'refusal'>,
 ): HelpRequests {
   const getActivePartition = (): string => profileManager.getActiveProfile().partition;
 
@@ -1752,6 +1761,10 @@ export function registerBrowserRpc(
       // discarded). In EXTERNAL mode the default lookup is blocked entirely —
       // see resolveTargetSurface.
       const resolved = await resolveTargetSurface(surfaceId, scope);
+      // The user paused or took over this tab: refuse before the lease, so the
+      // refused call never lights the "agent is driving" marker either.
+      const userHold = resolved ? agentControl?.refusal(resolved, method) : null;
+      if (userHold) throw userHold;
       if (!resolved) {
         if (backend() === 'external') {
           if (externalFallback) return externalFallback(params);
@@ -2408,6 +2421,8 @@ export function registerBrowserRpc(
         : { protected: false };
       if (!surfaceId) return { token: null, policy };
       const resolvedForAuth = await resolveTargetSurface(surfaceId, scope);
+      const userHold = resolvedForAuth ? agentControl?.refusal(resolvedForAuth, 'browser.lease.acquire') : null;
+      if (userHold) throw userHold;
       return { token: resolvedForAuth ? webviewCdpManager.acquireRpcLease(resolvedForAuth) : null, policy };
     }
     // Wake a discarded guest so out-of-process (Playwright) automation gets a
@@ -2416,11 +2431,29 @@ export function registerBrowserRpc(
     // the default lookup (see resolveTargetSurface).
     const resolved = await resolveTargetSurface(surfaceId, scope);
     if (!resolved) return { token: null };
+    const userHold = agentControl?.refusal(resolved, 'browser.lease.acquire');
+    if (userHold) throw userHold;
     return { token: webviewCdpManager.acquireRpcLease(resolved) };
   });
+  // `waitMs` parks the call until the lease is revoked or released (at most
+  // LEASE_WATCH_MAX_MS), so the holder hears about a Stop at once instead of
+  // polling. The reply says `watched: true` when it waited; a holder that does
+  // not see it is talking to a main that ignores waitMs and paces itself.
   router.register('browser.lease.renew', async (params) => {
     const token = typeof params['token'] === 'string' ? params['token'] : '';
-    return { ok: webviewCdpManager.renewRpcLease(token) };
+    const waitMs = typeof params['waitMs'] === 'number' && Number.isFinite(params['waitMs'])
+      ? Math.min(Math.max(0, params['waitMs']), LEASE_WATCH_MAX_MS)
+      : 0;
+    const userEnded = () => {
+      const revoked = webviewCdpManager.rpcLeaseRevocation(token);
+      if (revoked) throw new Error(`browser.lease.renew: ${revoked.message}`);
+    };
+    userEnded();
+    const ok = webviewCdpManager.renewRpcLease(token);
+    if (!ok || waitMs === 0) return { ok };
+    await webviewCdpManager.watchRpcLease(token, waitMs);
+    userEnded();
+    return { ok: webviewCdpManager.renewRpcLease(token), watched: true };
   });
   router.register('browser.lease.release', async (params) => {
     const token = typeof params['token'] === 'string' ? params['token'] : '';
