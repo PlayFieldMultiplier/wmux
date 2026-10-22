@@ -306,6 +306,32 @@ describe('remote reply and state delivery', () => {
     expect(useStore.getState().getTask(RT)!.status.state).toBe('completed');
   });
 
+  it('a peer completing or failing our task leaves a one-line pointer in the sending pane', async () => {
+    const done = outboundTask({ state: 'completed', inbox: [{ messageId: 's2', kind: 'state', state: 'completed', delivered: false }] });
+    expect(await notify(done, 's2')).toEqual({ ok: true, delivered: true, ptyId: PINNED_PTY });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(gate.mock.calls[0][0]).toBe(PINNED_PTY);
+    expect(gate.mock.calls[0][1]).toMatch(/A2A task completed: .* from pc-b\/ws-b\/codex — a2a_task_query task_id:rt-/);
+    expect(gate.mock.calls[0][1]).not.toMatch(/\n/);
+    gate.mockClear();
+    const failed = outboundTask({ state: 'failed', inbox: [{ messageId: 's3', kind: 'state', state: 'failed', delivered: false }] });
+    expect(await notify(failed, 's3')).toMatchObject({ ok: true, delivered: true });
+    expect(gate.mock.calls[0][1]).toMatch(/A2A task failed:/);
+  });
+
+  it('only the ending item announces it: an earlier working item handed over late writes nothing', async () => {
+    const task = outboundTask({ state: 'completed', inbox: [{ messageId: 's1', kind: 'state', state: 'working', delivered: false }] });
+    expect(await notify(task, 's1')).toEqual({ ok: true, delivered: true });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it('the end pointer waits like a reply when the sending pane is gone', async () => {
+    useStore.setState({ workspaces: [target(PINNED_PTY, false)] });
+    const done = outboundTask({ state: 'completed', inbox: [{ messageId: 's2', kind: 'state', state: 'completed', delivered: false }] });
+    expect(await notify(done, 's2')).toEqual({ ok: true, delivered: false, held: 'pane-missing' });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
   it('refuses an item the task does not owe', async () => {
     expect((await notify(outboundTask(), 'nope')).error).toBeDefined();
     expect((await notify({ ...outboundTask(), id: 'task-1' }, 'r1')).error).toBeDefined();

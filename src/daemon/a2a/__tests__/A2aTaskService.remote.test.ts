@@ -184,7 +184,7 @@ describe('A2aTaskService — remote.mark and listRemotePending', () => {
     const inbox = () => (svc.getTask('rt-out')?.metadata.remote as { inbox?: unknown[] }).inbox;
     expect(inbox()).toEqual([
       { messageId: 'r-1', kind: 'reply', delivered: false },
-      { messageId: 's-1', kind: 'state', delivered: false },
+      { messageId: 's-1', kind: 'state', state: 'working', delivered: false },
     ]);
     expect(svc.listRemotePending().map((t) => t.id)).toEqual(['rt-out']);
 
@@ -198,7 +198,7 @@ describe('A2aTaskService — remote.mark and listRemotePending', () => {
     restored.restoreFromLog();
     expect((restored.getTask('rt-out')?.metadata.remote as { inbox?: unknown[] }).inbox).toEqual([
       { messageId: 'r-1', kind: 'reply', delivered: false, held: 'occupant-changed', heldAt: expect.any(String) },
-      { messageId: 's-1', kind: 'state', delivered: true },
+      { messageId: 's-1', kind: 'state', state: 'working', delivered: true },
     ]);
     // Delivering it later (a person retried) records the new occupant on our side.
     await restored.markRemote({ taskId: 'rt-out', messageId: 'r-1', delivered: true, ptyId: 'pty-new' });
@@ -263,6 +263,47 @@ describe('A2aTaskService — remote messages and states', () => {
       .toMatchObject({ ok: true, duplicate: true });
     expect(await restored.applyRemoteState({ taskId: 'rt-out', linkId: LINK, messageId: 's2', to: 'failed' }))
       .toMatchObject({ ok: false, conflict: true });
+  });
+
+  it('a peer completion with its message and evidence is kept on our copy, graded like a local one', async () => {
+    const log = newLog();
+    const svc = newService(log);
+    await outbound(svc);
+    await svc.applyRemoteState({ taskId: 'rt-out', linkId: LINK, messageId: 's1', to: 'working' });
+    const evidence = {
+      summary: 'merged',
+      items: [
+        { kind: 'command' as const, status: 'passed' as const, command: 'npm test', summary: 'tests pass' },
+        { kind: 'inspection' as const, status: 'unverified' as const, summary: 'read the diff' },
+      ],
+    };
+    const done = await svc.applyRemoteState({
+      taskId: 'rt-out', linkId: LINK, messageId: 's2', to: 'completed', summary: 'merged', message: 'Full report.', evidence,
+    });
+    expect(done.ok).toBe(true);
+    const task = svc.getTask('rt-out')!;
+    expect(task.status.evidence).toEqual(evidence);
+    expect(task.status.message?.parts).toEqual([{ kind: 'text', text: 'Full report.' }]);
+    const last = log.readAllRecords().filter((r) => r.domain === 'a2a').at(-1)!;
+    expect(last.payload).toMatchObject({ forced: 'remote_state', verifiedItemCount: 1 });
+    expect(task.metadata.remote).toMatchObject({ inbox: [{ messageId: 's1', state: 'working' }, { messageId: 's2', state: 'completed' }] });
+
+    // Replay rebuilds the same copy.
+    const restored = newService(log);
+    restored.restoreFromLog();
+    expect(restored.getTask('rt-out')?.status.evidence).toEqual(evidence);
+    expect(restored.getTask('rt-out')?.status.message?.parts).toEqual([{ kind: 'text', text: 'Full report.' }]);
+  });
+
+  it('peer evidence that fails the local completion gate leaves the summary alone', async () => {
+    const svc = newService(newLog());
+    await outbound(svc);
+    await svc.applyRemoteState({ taskId: 'rt-out', linkId: LINK, messageId: 's1', to: 'working' });
+    // A command item needs a command: the gate refuses it, so the item is not stored.
+    const badItem = { kind: 'command' as const, status: 'passed' as const, command: ' ', summary: 'claimed' };
+    await svc.applyRemoteState({ taskId: 'rt-out', linkId: LINK, messageId: 's2', to: 'completed', summary: 'merged', evidence: { summary: 'merged', items: [badItem] } });
+    expect(svc.getTask('rt-out')?.status.evidence).toEqual({ summary: 'merged', items: [] });
+    expect(svc.getTask('rt-out')?.status.state).toBe('completed');
   });
 
   it('the peer as sender cannot move an inbound task, but can cancel it', async () => {

@@ -16,7 +16,8 @@ import {
   type HostId,
 } from '../../shared/a2aRemote';
 import { A2A_REMOTE_INBOUND_EVENT, remoteWorkspaceId, sanitizeRemoteMessage, type A2aRemoteInboundEvent } from '../../shared/a2aRemoteDelivery';
-import { isTaskState, type Message, type Part } from '../../shared/types';
+import { normalizeCompletionEvidenceWire } from '../../shared/completionEvidence';
+import { isTaskState, type CompletionEvidence, type EvidenceItem, type Message, type Part } from '../../shared/types';
 import type { A2aImageStore, ImageNotReceived } from './imageStore';
 import type { A2aTaskService } from '../a2a/A2aTaskService';
 import { remoteTaskId } from './ids';
@@ -83,8 +84,12 @@ export async function acceptInbound(
   if ('error' in parsed) return fail(parsed.error);
   // Peer text is pasted into a terminal later: control characters and escape
   // sequences go here, before anything is stored (and again before the write).
-  const env: A2aRemoteEnvelope =
-    typeof parsed.envelope.text === 'string' ? { ...parsed.envelope, text: sanitizeRemoteMessage(parsed.envelope.text) } : parsed.envelope;
+  const env: A2aRemoteEnvelope = {
+    ...parsed.envelope,
+    ...(typeof parsed.envelope.text === 'string' ? { text: sanitizeRemoteMessage(parsed.envelope.text) } : {}),
+    ...(typeof parsed.envelope.message === 'string' ? { message: sanitizeRemoteMessage(parsed.envelope.message) } : {}),
+    ...(parsed.envelope.evidence ? { evidence: sanitizeEvidence(parsed.envelope.evidence) } : {}),
+  };
   // A message with images may have no text (an image-only reply).
   if ((env.kind === 'task' || env.kind === 'reply') && !env.text && !env.images) return fail('bad-request');
 
@@ -164,6 +169,8 @@ export async function acceptInbound(
     messageId: env.messageId,
     to: env.state as NonNullable<A2aRemoteEnvelope['state']>,
     ...(env.text ? { summary: env.text } : {}),
+    ...(env.message ? { message: env.message } : {}),
+    ...(env.evidence ? { evidence: env.evidence } : {}),
   });
   if (!res.ok) return fail(stateErrorCode(res), res.error);
   return { ok: true, taskId, duplicate: res.duplicate };
@@ -240,7 +247,29 @@ function parseEnvelope(raw: unknown): Parsed {
   const envelope = { ...raw } as unknown as A2aRemoteEnvelope;
   if (images) envelope.images = images;
   else delete envelope.images;
+  // A state's message and evidence are optional extras: one that is malformed
+  // or too large is left off and the state still applies, as from an older peer.
+  const message = raw['message'];
+  if (kind !== 'state' || typeof message !== 'string' || !message || Buffer.byteLength(message, 'utf8') > A2A_REMOTE_BODY_MAX) {
+    delete envelope.message;
+  }
+  const evidence = kind === 'state' ? normalizeCompletionEvidenceWire(raw['evidence']) : null;
+  if (evidence) envelope.evidence = evidence;
+  else delete envelope.evidence;
   return { envelope };
+}
+
+/** Peer evidence is shown and stored like peer text: its strings are sanitized the same way. */
+function sanitizeEvidence(ev: CompletionEvidence): CompletionEvidence {
+  const clean = (v: string) => sanitizeRemoteMessage(v);
+  const items = ev.items.map((it): EvidenceItem => ({
+    ...it,
+    summary: clean(it.summary),
+    ...('command' in it && typeof it.command === 'string' ? { command: clean(it.command) } : {}),
+    ...(typeof it.output === 'string' ? { output: clean(it.output) } : {}),
+    ...('location' in it && typeof it.location === 'string' ? { location: clean(it.location) } : {}),
+  }) as EvidenceItem);
+  return { summary: clean(ev.summary), items, ...(ev.files ? { files: ev.files } : {}) };
 }
 
 /**
