@@ -476,6 +476,27 @@ describe('where and how git apply runs', () => {
     expect(await applyTaskToCheckout(ports({ gitRaw: failing }), TASK)).toMatchObject({ ok: false, code: 'git_failed' });
   });
 
+  it('a stopped git is settled when its tree is gone, though an orphan it left still holds the pipes', async () => {
+    // `( … &)` orphans the first sleep at once, so no tree walk from git reaches
+    // it; it keeps git's pipes open for 20 s (in `/`, never the test's folder).
+    // The second sleep keeps git running until the 300 ms stop.
+    const start = Date.now();
+    const stopped = await defaultRawGit(['-c', 'alias.orphan=!(cd / && sleep 20 &); sleep 20', 'orphan'], dir, {}, undefined, 300);
+    expect(stopped.code).toBe(128);
+    expect(stopped.stderr).toMatch(/stopped/);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
+  it('a git that exited before the stop is settled by the stop, without waiting on pipes an orphan holds', async () => {
+    // git exits at once; its orphaned child holds the pipes for 20 s, so
+    // 'close' is late, and the 300 ms timer fires between 'exit' and 'close'.
+    const start = Date.now();
+    const late = await defaultRawGit(['-c', 'alias.bg=!(cd / && sleep 20 &)', 'bg'], dir, {}, undefined, 300);
+    expect(late.code).toBe(128);
+    expect(late.stderr).toMatch(/stopped/);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
   it('stopping a git stops what it started too: a shell alias\'s child does not outlive the stop', async () => {
     // The alias's child writes a marker after 3 s; stopped at 200 ms, it must never get there.
     const marker = path.join(dir, 'outlived.txt');

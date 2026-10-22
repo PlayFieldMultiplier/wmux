@@ -111,15 +111,36 @@ export const defaultRawGit = (args: string[], cwd: string, extra: Record<string,
   let size = 0;
   let err = '';
   let over = false;
-  // Set once this side stops git: the stop of its whole process tree.
-  let stopped: Promise<void> | null = null;
+  let settled = false;
+  // How git ended, once it has ('exit'); its pipes may stay open after.
+  let exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  // Set once this side stops a running git: the stop of its whole process tree.
+  let stopping: Promise<void> | null = null;
   const child = spawn('git', args, { cwd, env: { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  // The whole tree: a process git started (a shell alias, a hook, a helper)
-  // outlives a kill of git alone, and on Windows it keeps running with the
-  // checkout as its working folder.
+  const settle = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    child.stdout.destroy();
+    child.stderr.destroy();
+    if (over) return resolve({ code: 1, stdout: Buffer.alloc(0), stderr: 'the patch is too large' });
+    // A git stopped by a signal gave no answer: 128, never a 1 a caller reads
+    // as one (merge-base's "not an ancestor").
+    resolve({ code: signal || code === null ? 128 : code, stdout: Buffer.concat(out), stderr: signal ? `${err}git was stopped (${signal})` : err });
+  };
+  // Stop git and what it started (a shell alias, a hook, a helper): that
+  // outlives a kill of git alone, and on Windows keeps running with the
+  // checkout as its working folder. A git that has already exited is not
+  // killed (its pid may belong to another process by now); the answer is
+  // settled at once instead of waiting on pipes a child of it still holds.
   const stop = () => {
-    if (stopped) return;
-    stopped = child.pid ? killProcessTree(child.pid).catch(() => undefined) : Promise.resolve();
+    if (settled || stopping) return;
+    if (exited) return settle(exited.code, 'SIGTERM');
+    // The tree first (on Windows it is walked from the live root), then git
+    // itself, in case the tree kill failed or timed out.
+    stopping = (child.pid ? killProcessTree(child.pid).catch(() => undefined) : Promise.resolve()).then(() => {
+      if (!exited) child.kill();
+    });
   };
   const timer = setTimeout(stop, timeoutMs);
   child.stdout.on('data', (d: Buffer) => {
@@ -135,28 +156,23 @@ export const defaultRawGit = (args: string[], cwd: string, extra: Record<string,
     if (err.length < 64 * 1024) err += d.toString('utf8');
   });
   child.on('error', (e) => {
+    if (settled) return;
+    settled = true;
     clearTimeout(timer);
     // Git never ran: not one of its own answers (128, as git's fatal).
     resolve({ code: 128, stdout: Buffer.alloc(0), stderr: String(e) });
   });
-  const settle = (code: number | null, signal: NodeJS.Signals | null) => {
-    clearTimeout(timer);
-    if (over) return resolve({ code: 1, stdout: Buffer.alloc(0), stderr: 'the patch is too large' });
-    // A git stopped by a signal gave no answer: 128, never a 1 a caller reads
-    // as one (merge-base's "not an ancestor").
-    resolve({ code: signal || code === null ? 128 : code, stdout: Buffer.concat(out), stderr: signal ? `${err}git was stopped (${signal})` : err });
-  };
   // A git this stopped is settled once it and its tree are gone, not on
   // 'close': that waits for every holder of the pipes, so a child that
   // outlived the stop would stretch the timeout to its own length.
   child.on('exit', (code, signal) => {
-    if (!stopped) return;
-    child.stdout.destroy();
-    child.stderr.destroy();
-    void stopped.then(() => settle(code, signal ?? 'SIGTERM'));
+    exited = { code, signal };
+    if (stopping) void stopping.then(() => settle(code, signal ?? 'SIGTERM'));
   });
+  // Every pipe closed: git's whole answer, unless something settled first.
   child.on('close', (code, signal) => {
-    if (!stopped) settle(code, signal);
+    if (stopping) void stopping.then(() => settle(code, signal ?? 'SIGTERM'));
+    else settle(code, signal);
   });
   child.stdin.on('error', () => undefined);
   child.stdin.end(input ?? Buffer.alloc(0));
