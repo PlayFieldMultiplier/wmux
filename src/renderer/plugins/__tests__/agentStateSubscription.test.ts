@@ -97,6 +97,25 @@ describe('agent state subscription for every workspace', () => {
     expect(post.mock.calls[2][0]).toMatchObject({ status: 'ready', workspaceId: 'w2', epoch: post.mock.calls[1][0].epoch });
     stop();
   });
+  it('keeps running while no workspace is bound, and reads once one is', async () => {
+    vi.useFakeTimers();
+    let bound = undefined as string | undefined;
+    const post = vi.fn();
+    const read = vi.fn(async () => ({ ok: true, result: all }));
+    const stop = subscribeAgentState({ scope: 'all', workspaceId: () => bound, post, read, isCurrent: () => true });
+    await vi.advanceTimersByTimeAsync(3000);
+    // An unbound read would be refused by main, so none is made.
+    expect(read).not.toHaveBeenCalled();
+    expect(post.mock.calls.map(([e]) => e.status)).toEqual(['reset']);
+    bound = 'w1';
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls.map(([e]) => e.status)).toEqual(['reset', 'ready']);
+    expect(post.mock.calls[1][0]).toMatchObject({ workspaceId: 'w1', allWorkspaces: all });
+    stop();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
   it('ends with unavailable when a read is refused (a revoked grant)', async () => {
     vi.useFakeTimers();
     const post = vi.fn();

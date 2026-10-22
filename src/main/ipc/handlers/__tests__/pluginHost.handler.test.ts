@@ -93,6 +93,29 @@ describe('plugins:rpc host workspace binding', () => {
       .rejects.toThrow(/host workspace/i);
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it('marks a request from a rail page, and only that, as the host said', async () => {
+    const rpc = setup();
+
+    await rpc({}, 'demo', 'pane.focus', { id: 'p2' }, 'ws-host', true);
+    await rpc({}, 'demo', 'pane.focus', { id: 'p2', hostedRailPage: true }, 'ws-host', false);
+    await rpc({}, 'demo', 'pane.focus', { id: 'p2' }, 'ws-host');
+
+    const opts = (dispatch.mock.calls as DispatchArgs[]).map(([, o]) => o);
+    expect(opts[0]).toEqual({ firstParty: true, hostedWorkspace: 'ws-host', hostedRailPage: true, isCurrent: expect.any(Function) });
+    // A sidebar or status-bar frame (false or omitted) carries no marker, and a
+    // plugin naming one in its params does not make one.
+    expect(opts[1]).toEqual({ firstParty: true, hostedWorkspace: 'ws-host', isCurrent: expect.any(Function) });
+    expect(opts[2]).toEqual({ firstParty: true, hostedWorkspace: 'ws-host', isCurrent: expect.any(Function) });
+  });
+
+  it('refuses a non-boolean host frame marker instead of coercing it', async () => {
+    const rpc = setup();
+
+    await expect(rpc({}, 'demo', 'pane.focus', { id: 'p2' }, 'ws-host', 'rail-page'))
+      .rejects.toThrow(/host frame/i);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });
 
 describe('plugins:list', () => {

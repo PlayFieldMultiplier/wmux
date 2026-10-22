@@ -131,8 +131,11 @@ describe('agent.state.all: a separate grant for every workspace', () => {
 });
 
 describe('pane.focus from a plugin granted every workspace', () => {
-  const focus = (router: RpcRouter, params: Record<string, unknown>, hostedWorkspace: string | null = 'w1') =>
-    router.dispatch({ id: 'f', method: 'pane.focus', clientName: 'demo', params }, { firstParty: true, hostedWorkspace });
+  // The host marks a request from the plugin's rail page; sidebar panels and
+  // status-bar widgets (always mounted) leave the marker out.
+  const focus = (router: RpcRouter, params: Record<string, unknown>, hostedWorkspace: string | null = 'w1', railPage = true) =>
+    router.dispatch({ id: 'f', method: 'pane.focus', clientName: 'demo', params },
+      railPage ? { firstParty: true, hostedWorkspace, hostedRailPage: true } : { firstParty: true, hostedWorkspace });
   beforeEach(() => { read.mockResolvedValue({ ok: true }); });
 
   it('stays confined to the bound workspace without the grant', async () => {
@@ -143,6 +146,31 @@ describe('pane.focus from a plugin granted every workspace', () => {
   it('may take the user to another workspace with the grant', async () => {
     await focus(setup(['agent.state.read', 'agent.state.read.all', 'pane.read']).router, { id: 'p2' });
     expect(read).toHaveBeenCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', revealWorkspace: true });
+  });
+
+  it('keeps a sidebar or status-bar frame confined, grant or not', async () => {
+    const { router } = setup(['agent.state.read', 'agent.state.read.all', 'pane.read']);
+    await focus(router, { id: 'p2' }, 'w1', false);
+    expect(read).toHaveBeenLastCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', confineWorkspaceId: 'w1' });
+    // The same plugin's rail page is widened.
+    await focus(router, { id: 'p2' });
+    expect(read).toHaveBeenLastCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', revealWorkspace: true });
+  });
+
+  it('refuses the rail-page marker from anything but a hosted dispatch', async () => {
+    const { router } = setup(['agent.state.read.all', 'pane.read']);
+    const forged = { firstParty: true, hostedRailPage: true } as unknown as Parameters<RpcRouter['dispatch']>[1];
+    expect(await router.dispatch({ id: 'f', method: 'pane.focus', clientName: 'demo', params: { id: 'p2' } }, forged))
+      .toMatchObject({ ok: false, error: 'Invalid RPC dispatch provenance' });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('keeps a plugin granted every workspace but not pane.read confined, even in shadow mode', async () => {
+    // Shadow mode (the router default) still runs the handler for a refused
+    // call; the widening needs the call itself allowed, so it stays confined.
+    await focus(setup(['agent.state.read', 'agent.state.read.all']).router, { id: 'p2' });
+    expect(read).toHaveBeenLastCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', confineWorkspaceId: 'w1' });
+    expect(read).not.toHaveBeenCalledWith(expect.any(Function), 'pane.focus', expect.objectContaining({ revealWorkspace: true }));
   });
 
   it('never takes the flag from the plugin, and never widens an unapproved or unbound plugin', async () => {

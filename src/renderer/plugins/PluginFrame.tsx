@@ -160,8 +160,10 @@ export default function PluginFrame({
           // request, never inside it, so main can tell what this plugin IS
           // from what it ASKED for. Read at request time on purpose — making
           // it a dependency of this effect would tear the port down on every
-          // workspace switch, which is exactly what #928 fixed.
-          .rpc(pluginName, req.method, req.params, useStore.getState().activeWorkspaceId)
+          // workspace switch, which is exactly what #928 fixed. `railPage` is
+          // this component's own prop (which kind of frame it mounted), so an
+          // always-mounted sidebar or status-bar frame never reads as a page.
+          .rpc(pluginName, req.method, req.params, useStore.getState().activeWorkspaceId, railPage)
           .then((raw) => {
             if (req.method === 'agent.state' && (disposed || portRef.current !== port
               || scopeEpochRef.current !== requestEpoch || useStore.getState().activeWorkspaceId !== requestWorkspace)) {

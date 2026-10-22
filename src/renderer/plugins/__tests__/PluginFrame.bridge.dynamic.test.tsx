@@ -155,13 +155,13 @@ describe('PluginFrame — bridge lifetime across a workspace switch', () => {
     port.start();
 
     await settledOrTimedOut(request(port, 'before', 'browser.navigate'));
-    expect(rpc).toHaveBeenLastCalledWith('demo', 'browser.navigate', {}, 'ws-1');
+    expect(rpc).toHaveBeenLastCalledWith('demo', 'browser.navigate', {}, 'ws-1', false);
 
     await act(async () => { useStore.setState({ activeWorkspaceId: 'ws-2' }); });
 
     // Same port, no reload, no re-render of the bridge — only the store moved.
     await settledOrTimedOut(request(port, 'after', 'browser.navigate'));
-    expect(rpc).toHaveBeenLastCalledWith('demo', 'browser.navigate', {}, 'ws-2');
+    expect(rpc).toHaveBeenLastCalledWith('demo', 'browser.navigate', {}, 'ws-2', false);
   });
 
   // A response belongs to the document that ASKED. The reload window is what
@@ -497,5 +497,22 @@ it('stays on the page when a single-workspace page\'s focus raced a workspace sw
   port.postMessage({ v: PLUGIN_BRIDGE_VERSION, id: 'jump', kind: 'request', method: 'pane.focus', params: { id: 'p2' } });
   await act(async () => { await answered; });
   expect(useStore.getState().appRoute).toBe('plugin:demo');
+  port.close();
+});
+
+// The host says which kind of frame asked, from the frame it mounted: only a
+// rail page may be widened to another workspace by main (pane.focus).
+it.each([
+  ['a rail page', true],
+  ['a sidebar panel or status-bar widget', false],
+])('marks requests from %s accordingly', async (_kind, railPage) => {
+  act(() => root.render(<PluginFrame pluginName="demo" entry="index.html" railPage={railPage} />));
+  const frame = container.querySelector('iframe')!;
+  const post = vi.fn();
+  Object.defineProperty(frame, 'contentWindow', { configurable: true, value: { postMessage: post } });
+  await act(async () => { frame.dispatchEvent(new Event('load')); });
+  const port = pluginPort(post); port.start();
+  await settledOrTimedOut(request(port, 'focus', 'pane.focus'));
+  expect(rpc).toHaveBeenLastCalledWith('demo', 'pane.focus', {}, 'ws-1', railPage);
   port.close();
 });

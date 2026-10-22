@@ -51,6 +51,7 @@ export function registerPluginHostHandlers(
     method: unknown,
     params: unknown,
     hostWorkspaceId: unknown,
+    hostRailPage: unknown,
   ): Promise<RpcResponse> => {
     if (typeof pluginName !== 'string' || typeof method !== 'string'
       || method.length === 0 || method.length > MAX_METHOD_LEN) {
@@ -66,6 +67,12 @@ export function registerPluginHostHandlers(
     // forwarded as an explicit `null` rather than as an omission.
     if (hostWorkspaceId !== undefined && typeof hostWorkspaceId !== 'string') {
       throw new Error('Invalid plugin RPC host workspace');
+    }
+    // Set by the host component when the asking frame is a rail page, from the
+    // kind of frame it mounted, never from the plugin's envelope. Absent means
+    // an always-mounted frame (sidebar panel, status bar): the narrower lane.
+    if (hostRailPage !== undefined && typeof hostRailPage !== 'boolean') {
+      throw new Error('Invalid plugin RPC host frame');
     }
     const loader = getLoader();
     const plugin = loader?.get(pluginName);
@@ -103,6 +110,7 @@ export function registerPluginHostHandlers(
       hostedWorkspace: typeof hostWorkspaceId === 'string' && hostWorkspaceId.trim().length > 0
         ? hostWorkspaceId.trim()
         : null,
+      ...(hostRailPage === true && { hostedRailPage: true as const }),
     });
   }));
 

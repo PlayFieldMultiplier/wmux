@@ -46,7 +46,7 @@ it('lists Signature before Catalog, then Connectors, from the catalog data', asy
   // The first row opens selected, with its Signature chip and credit.
   expect(row('office').getAttribute('aria-current')).toBe('true');
   expect(host.querySelector('[data-plugin-signature-chip]')).not.toBeNull();
-  expect(host.textContent).toContain('bluemas · MIT · 1.0.0');
+  expect(host.textContent).toContain('bluemas · MIT · 1.1.0');
   expect(host.textContent).toContain(en['plugins.page.cap.noTerminal']);
   expect(host.querySelector('[data-installed-section]')).toBeNull();
 });
