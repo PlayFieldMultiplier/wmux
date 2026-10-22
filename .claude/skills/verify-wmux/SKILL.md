@@ -26,7 +26,10 @@ Everything runs through one driver, `scripts/control-wmux.mjs` (Node 22+, uses t
 node scripts/control-wmux.mjs launch                       # /Applications/wmux.app, suffix -verify-<random>
 node scripts/control-wmux.mjs launch --app <path/to/wmux>  # any other packaged build's executable
 node scripts/control-wmux.mjs launch --suffix -verify-mytest --timeout 90000
+node scripts/control-wmux.mjs launch --app <exe> --env-file vars.json   # extra env, applied after the scrub below
 ```
+
+`--env-file` takes a JSON object of string values, set on the app after the scrub (so a `WMUX_*` knob such as `WMUX_NO_PATH_REFRESH` survives it); it may not set `WMUX_DATA_SUFFIX`. `restart` reuses it. `CONTROL_WMUX_DIR=<dir>` moves the run state and evidence from this skill's folder to `<dir>/.run` and `<dir>/evidence`, so a harness such as `scripts/e2e-first-run.mjs` keeps its own record.
 
 What it does: spawns the app executable directly (its PID is recorded) with `WMUX_DATA_SUFFIX=<suffix>`, which isolates the socket, MCP socket, auth token, TCP port file, data dir `~/.wmux<suffix>/`, the daemon and Electron `userData` (`src/shared/constants.ts` `dataSuffix()`, `src/main/index.ts` appInit). The launching environment is scrubbed of `WMUX_*` pane identity and `CLAUDE*` session variables first, because an agent usually runs inside the owner's wmux. `ELECTRON_ENABLE_LOGGING=1` sends the renderer console into `app.log`.
 

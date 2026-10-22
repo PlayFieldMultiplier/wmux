@@ -22,6 +22,45 @@ or vitest.
   login keychain, so the first safeStorage call would block the app's main
   thread on a keychain dialog (forever on a locked screen).
 
+## First run from a packaged build
+
+`npm run e2e:first-run -- --app <packaged wmux executable>` (for example
+`out/wmux-win32-x64/wmux.exe` after `npm run package`) checks the path a new
+user takes: a fresh profile opens the welcome wizard, the "Agent ready" card
+shows Claude Code ready, the wizard installs the hooks, "Try sample task"
+starts the agent in a pane and the wizard closes, and the sidebar lists Claude
+Code at a status at rest. It is a separate script, not a `node --test` file,
+because it drives an already packaged app.
+
+- **Isolated**: a unique `WMUX_DATA_SUFFIX` and a sandbox home under the temp
+  dir (`HOME`; on Windows also `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`), so
+  the hooks install lands in the sandbox. `WMUX_NO_PATH_REFRESH=1` keeps the
+  Windows registry PATH from putting real agents ahead of the fakes.
+- **MCP registration is seeded, not clicked**: agent configs are not
+  per-suffix, so a suffixed instance never writes them, and the registrar uses
+  Electron's own home (`app.getPath('home')`), which a sandboxed `HOME` does
+  not move. The sandbox starts with a `~/.claude.json` holding the wmux entry;
+  never set `WMUX_MCP_REGISTER_EXTERNAL=1` here. The run fails if app.log
+  shows a registrar write outside the sandbox.
+- **No model**: `scripts/fixtures/fake-agents/claude.mjs` and `codex.mjs` come
+  first on PATH (`claude.cmd` + `claude.js` on Windows, a shell script
+  elsewhere). They answer `--version` (9.9.9) and the sign-in status probes as
+  signed in; the scenario fails if the ready card shows any other version.
+- **Driver**: every UI step goes through `scripts/control-wmux.mjs` with
+  `data-testid` handles, with its state and evidence in the run's folder
+  (`CONTROL_WMUX_DIR`).
+- **Teardown** runs on every exit: `control-wmux stop --purge`, then any
+  process from the app's or daemon's tree still alive (same pid and creation
+  time) is killed and fails the run, then the sandbox is deleted. Suffixed data
+  left outside the sandbox also fails the run.
+- **Artifacts**: `e2e/artifacts/first-run/<time><suffix>/` (override with
+  `--artifacts` or `WMUX_E2E_ARTIFACTS`): `result.json` (steps, timings,
+  teardown check), `fake-agents.jsonl`, and under `evidence/` app.log plus,
+  on failure, a screenshot, an ARIA snapshot, doctor.json and the daemon logs.
+  `--keep` keeps the sandbox home.
+- Exit 0 on pass; otherwise 1 and one line,
+  `first-run e2e: FAIL at <step>: <reason>`.
+
 ## Scenarios
 
 - `fanout-cost.e2e.test.mjs` — the fan-out cost baseline (PRD E0 R0-2). An

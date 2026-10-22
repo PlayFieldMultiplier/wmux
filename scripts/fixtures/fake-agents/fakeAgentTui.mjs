@@ -63,6 +63,8 @@ export function makeLogger(agent) {
  *   promptGlyph      composer prompt glyph (`❯`, `›`)
  *   footer           rows drawn under the composer
  *   freshCommands    composer lines that start a new conversation
+ *   initialPrompt    submitted as the first turn right after start (the
+ *                    `claude "<prompt>"` launch form), or undefined
  *   fullScreen       draw on the alternate screen with the composer pinned to
  *                    the bottom row block (Codex); inline otherwise (Claude)
  *   onSessionStart(source)          a conversation started
@@ -358,4 +360,5 @@ export function runFakeTui(spec) {
   log('start', { argv: process.argv.slice(1), cwd: process.cwd(), tty: !!process.stdin.isTTY });
   startConversation('startup');
   render();
+  if (spec.initialPrompt) submit(spec.initialPrompt);
 }

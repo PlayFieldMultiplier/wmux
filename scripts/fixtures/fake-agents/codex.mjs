@@ -16,7 +16,11 @@
 //     waits for on Codex (#1610);
 //   - any other line is a turn (FAKE_TURN_MS, or N s for `work N`) ending in
 //     `● done: … (context: K earlier prompts …)`;
-//   - `/exit`, Ctrl+D on an empty composer, or Ctrl+C twice exits.
+//   - `/exit`, Ctrl+D on an empty composer, or Ctrl+C twice exits;
+//   - `codex "<prompt>"` runs that prompt as the first turn;
+//   - `--version` and `login status` answer without the TUI, so the first-run
+//     "Agent ready" card reads it as installed and signed in
+//     (fakeAgentCli.mjs; FAKE_CODEX_SIGNED_OUT=1 reports signed out).
 //
 // Hooks, ONLY when pointed at explicitly (never from the home directory):
 //   FAKE_CODEX_HOOKS_BRIDGE   path to wmux-codex-hooks-bridge.mjs; run with the
@@ -39,8 +43,10 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { envFlag, makeLogger, runFakeTui } from './fakeAgentTui.mjs';
+import { answerProbe, parseFakeAgentArgs } from './fakeAgentCli.mjs';
 
 const log = makeLogger('codex');
+const cli = parseFakeAgentArgs('codex', process.argv.slice(2));
 const HOOKS_OFF = envFlag('FAKE_NO_HOOKS');
 const BRIDGE = HOOKS_OFF ? undefined : process.env.FAKE_CODEX_HOOKS_BRIDGE;
 const NOTIFY = HOOKS_OFF ? undefined : process.env.FAKE_CODEX_NOTIFY;
@@ -99,8 +105,9 @@ const banner = () => {
   ];
 };
 
-runFakeTui({
+if (!answerProbe('codex', cli, log)) runFakeTui({
   agent: 'codex',
+  initialPrompt: cli.prompt,
   header: banner,
   promptGlyph: '›',
   // Codex runs full-screen (mode 1049 in the 0.157.1 capture), composer at

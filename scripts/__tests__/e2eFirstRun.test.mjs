@@ -1,0 +1,182 @@
+// The rules that keep the first-run e2e scenario (scripts/e2e-first-run.mjs)
+// isolated and its teardown exact: the sandbox env, the fake-agent shims, and
+// the pid + creation-time bookkeeping that decides what it may kill.
+// @wmux-lane unit
+// Every helper takes the platform as an argument ('win32' is a string here,
+// never process.platform), so the host OS cannot change a result.
+import { describe, expect, it } from 'vitest';
+import {
+  agentRanInPane,
+  appEnvExtras,
+  fakeAgentShims,
+  mergeTrees,
+  normalizeProcessRows,
+  parseRunArgs,
+  runProcessTree,
+  sandboxEnv,
+  seededClaudeJson,
+  survivors,
+  verdictLine,
+  writesOutsideSandbox,
+} from '../lib/e2e-first-run-lib.mjs';
+
+describe('parseRunArgs', () => {
+  it('reads the app, keep, artifacts and suffix options', () => {
+    expect(parseRunArgs(['--app', 'C:/out/wmux.exe', '--keep', '--artifacts', 'a', '--suffix', '-e2e-x'])).toEqual({
+      app: 'C:/out/wmux.exe', keep: true, artifacts: 'a', suffix: '-e2e-x',
+    });
+  });
+
+  it('rejects an unknown argument or a missing value', () => {
+    expect(() => parseRunArgs(['--nope'])).toThrow(/unknown argument/);
+    expect(() => parseRunArgs(['--app'])).toThrow(/needs a value/);
+    expect(() => parseRunArgs(['--app', '--keep'])).toThrow(/needs a value/);
+  });
+});
+
+describe('sandboxEnv', () => {
+  it('Windows: every profile root points into the sandbox and the fakes lead PATH', () => {
+    const env = sandboxEnv(
+      { Path: 'C:\\Windows;C:\\Users\\me\\.local\\bin', USERPROFILE: 'C:\\Users\\me', HOMEDRIVE: 'C:', HOMEPATH: '\\Users\\me', APPDATA: 'C:\\Users\\me\\AppData\\Roaming', PATHEXT: '.COM;.EXE;.BAT;.CMD' },
+      { home: 'C:\\T\\fr', fakeBin: 'C:\\T\\fr\\fake-bin', platform: 'win32' },
+    );
+    expect(env.USERPROFILE).toBe('C:\\T\\fr');
+    expect(env.HOME).toBe('C:\\T\\fr');
+    expect(env.APPDATA).toBe('C:\\T\\fr\\AppData\\Roaming');
+    expect(env.LOCALAPPDATA).toBe('C:\\T\\fr\\AppData\\Local');
+    expect(env.HOMEDRIVE).toBeUndefined();
+    expect(env.HOMEPATH).toBeUndefined();
+    // Same key spelling kept, fakes first.
+    expect(env.Path).toBe('C:\\T\\fr\\fake-bin;C:\\Windows;C:\\Users\\me\\.local\\bin');
+    expect(env.PATH).toBeUndefined();
+    // The resolver only sees claude.js when .JS is a PATHEXT entry.
+    expect(env.PATHEXT).toBe('.COM;.EXE;.BAT;.CMD;.JS');
+  });
+
+  it('POSIX: HOME is the sandbox and the XDG dirs derive from it', () => {
+    const env = sandboxEnv(
+      { PATH: '/usr/bin', HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/.config' },
+      { home: '/tmp/fr', fakeBin: '/tmp/fr/fake-bin', platform: 'linux' },
+    );
+    expect(env).toEqual({ PATH: '/tmp/fr/fake-bin:/usr/bin', HOME: '/tmp/fr' });
+  });
+});
+
+describe('appEnvExtras', () => {
+  it('turns off the registry PATH refresh and never opts into external MCP registration', () => {
+    const env = appEnvExtras({ fakeAgentLog: '/a/log.jsonl', claudeHooksFile: '/s/.claude/settings.json' });
+    expect(env.WMUX_NO_PATH_REFRESH).toBe('1');
+    // External registration writes under Electron's real home, not the sandbox.
+    expect(env).not.toHaveProperty('WMUX_MCP_REGISTER_EXTERNAL');
+    expect(env.FAKE_AGENT_LOG).toBe('/a/log.jsonl');
+    expect(env.FAKE_CLAUDE_HOOKS).toBe('/s/.claude/settings.json');
+    expect(env).not.toHaveProperty('WMUX_DATA_SUFFIX');
+  });
+});
+
+describe('MCP registration stays in the sandbox', () => {
+  it('seeds the wmux MCP entry the wizard reads', () => {
+    expect(seededClaudeJson('/tmp/fr', 'linux')).toEqual({ mcpServers: { wmux: { command: 'node', args: ['/tmp/fr/.wmux/mcp/index.js'] } } });
+  });
+
+  it('flags a registrar write outside the sandbox home, case- and slash-insensitively', () => {
+    const log = [
+      '[McpRegistrar] Claude Code: wrote wmux → C:\\Users\\me\\.claude.json',
+      '[McpRegistrar] MCP bundle synced to stable path → C:\\Users\\me\\.wmux\\mcp\\index.js',
+      '[McpRegistrar] Registered wmux MCP → c:/temp/wmux-fr-x/.wmux/mcp/index.js',
+      '[McpRegistrar] WMUX_DATA_SUFFIX=-e2e-x — skipping external agent config registration',
+    ].join('\r\n');
+    const out = writesOutsideSandbox(log, 'C:\\Temp\\wmux-fr-x');
+    expect(out).toHaveLength(2);
+    expect(out[0]).toContain('.claude.json');
+    expect(writesOutsideSandbox('', 'C:\\Temp')).toEqual([]);
+  });
+});
+
+describe('fakeAgentShims', () => {
+  it('Windows: a .cmd for shells and a .js for wmux’s resolver, both running the fixture by full path', () => {
+    const files = fakeAgentShims({ node: 'C:\\node\\node.exe', fixturesDir: 'D:\\repo dir\\fake-agents', platform: 'win32' });
+    expect(files.map((f) => f.name)).toEqual(['claude.cmd', 'claude.js', 'codex.cmd', 'codex.js']);
+    expect(files[0].content).toBe('@echo off\r\n"C:\\node\\node.exe" "D:\\repo dir\\fake-agents\\claude.mjs" %*\r\n');
+    expect(files[1].content).toContain('import("file:///D:/repo%20dir/fake-agents/claude.mjs")');
+  });
+
+  it('POSIX: one executable script per agent', () => {
+    const files = fakeAgentShims({ node: '/usr/bin/node', fixturesDir: '/repo/fake-agents', platform: 'linux' });
+    expect(files).toEqual([
+      { name: 'claude', content: '#!/bin/sh\nexec "/usr/bin/node" "/repo/fake-agents/claude.mjs" "$@"\n', mode: 0o755 },
+      { name: 'codex', content: '#!/bin/sh\nexec "/usr/bin/node" "/repo/fake-agents/codex.mjs" "$@"\n', mode: 0o755 },
+    ]);
+  });
+
+  it('refuses a path a shim could not quote safely', () => {
+    expect(() => fakeAgentShims({ node: 'C:\\a"b\\node.exe', fixturesDir: 'D:\\f', platform: 'win32' })).toThrow(/not usable/);
+    expect(() => fakeAgentShims({ node: 'C:\\%TEMP%\\node.exe', fixturesDir: 'D:\\f', platform: 'win32' })).toThrow(/not usable/);
+  });
+});
+
+describe('process bookkeeping', () => {
+  const win = normalizeProcessRows([
+    { ProcessId: 10, ParentProcessId: 1, Name: 'wmux.exe', CreationDate: '/Date(1000)/', CommandLine: 'wmux.exe' },
+    { ProcessId: 11, ParentProcessId: 10, Name: 'wmux.exe', CreationDate: '/Date(1100)/', CommandLine: 'wmux.exe --type=gpu-process' },
+    { ProcessId: 20, ParentProcessId: 10, Name: 'wmux.exe', CreationDate: '/Date(2000)/', CommandLine: null },
+    { ProcessId: 21, ParentProcessId: 20, Name: 'powershell.exe', CreationDate: '/Date(2100)/', CommandLine: 'powershell' },
+    // A stale parent pid: created BEFORE pid 20 existed, so not its child.
+    { ProcessId: 30, ParentProcessId: 20, Name: 'notepad.exe', CreationDate: '/Date(500)/', CommandLine: 'notepad' },
+    { ProcessId: 40, ParentProcessId: 1, Name: 'explorer.exe', CreationDate: '/Date(100)/', CommandLine: 'explorer' },
+  ], 'win32');
+
+  it('normalises CIM rows (ConvertTo-Json dates, single-object output)', () => {
+    expect(win[0]).toEqual({ ProcessId: 10, ParentProcessId: 1, Name: 'wmux.exe', CreationDate: 1000, CommandLine: 'wmux.exe' });
+    expect(normalizeProcessRows({ ProcessId: 5, ParentProcessId: 1, Name: 'x', CreationDate: '/Date(7)/' }, 'win32')).toHaveLength(1);
+  });
+
+  it('parses ps lstart output', () => {
+    const rows = normalizeProcessRows(
+      '    1     0 Thu Oct 22 10:00:00 2026 /sbin/init\n  432     1 Thu Oct 22 10:00:05 2026 /usr/bin/node /x/claude.mjs hi there\nbad line\n',
+      'linux',
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({ ProcessId: 432, ParentProcessId: 1, Name: 'node', CommandLine: '/usr/bin/node /x/claude.mjs hi there' });
+    expect(rows[1].CreationDate).toBe(Date.parse('Thu Oct 22 10:00:05 2026'));
+  });
+
+  it('records the app and daemon trees, never a stale-parent stranger', () => {
+    const tree = runProcessTree(win, [10, 20, null]);
+    expect(tree.map((r) => r.ProcessId).sort()).toEqual([10, 11, 20, 21]);
+  });
+
+  it('a survivor is the same pid with the same creation time; a reused pid is not', () => {
+    const recorded = runProcessTree(win, [10, 20]);
+    const now = [
+      { ProcessId: 21, CreationDate: 2100 }, // still ours
+      { ProcessId: 11, CreationDate: 9999 }, // pid reused by someone else
+    ];
+    expect(survivors(recorded, now).map((r) => r.ProcessId)).toEqual([21]);
+  });
+
+  it('merges snapshots without duplicates', () => {
+    const a = runProcessTree(win, [10]);
+    expect(mergeTrees(a, a, runProcessTree(win, [20])).length).toBe(4);
+  });
+});
+
+describe('agentRanInPane', () => {
+  it('needs a tty start and then a prompt from the same agent', () => {
+    const log = [
+      JSON.stringify({ agent: 'claude', event: 'probe', kind: 'version' }),
+      JSON.stringify({ agent: 'claude', event: 'start', tty: true }),
+      JSON.stringify({ agent: 'claude', event: 'prompt', text: 'Use the wmux browser_open tool' }),
+    ].join('\n');
+    expect(agentRanInPane(log)).toEqual({ started: true, prompted: true });
+    expect(agentRanInPane(JSON.stringify({ agent: 'claude', event: 'start', tty: false }))).toEqual({ started: false, prompted: false });
+    expect(agentRanInPane(`not json\n${JSON.stringify({ agent: 'codex', event: 'start', tty: true })}`)).toEqual({ started: false, prompted: false });
+  });
+});
+
+describe('verdictLine', () => {
+  it('is one line either way', () => {
+    expect(verdictLine({ ok: true, seconds: 12.34 })).toBe('first-run e2e: PASS (12.3 s)');
+    expect(verdictLine({ ok: false, step: 'Claude card ready', reason: 'never\nready', seconds: 3 })).toBe('first-run e2e: FAIL at Claude card ready: never ready (3.0 s)');
+  });
+});

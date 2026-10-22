@@ -18,7 +18,12 @@
 //   - any other line is a turn: UserPromptSubmit, FAKE_TURN_MS (or N s for
 //     `work N`), then `● done: … (context: K earlier prompts …)` and Stop. K is
 //     how a dogfood run sees whether the conversation was cleared;
-//   - `/exit`, Ctrl+D on an empty composer, or Ctrl+C twice exits.
+//   - `/exit`, Ctrl+D on an empty composer, or Ctrl+C twice exits;
+//   - `claude "<prompt>"` runs that prompt as the first turn, as Claude Code
+//     does;
+//   - `--version` and `auth status --json` answer without the TUI, so the
+//     first-run "Agent ready" card reads it as installed and signed in
+//     (fakeAgentCli.mjs; FAKE_CLAUDE_SIGNED_OUT=1 reports signed out).
 //
 // Hooks run ONLY when pointed at explicitly — never from the home directory or
 // CLAUDE_CONFIG_DIR (wmux sets that for account panes, which would make it the
@@ -38,8 +43,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { envFlag, makeLogger, runFakeTui } from './fakeAgentTui.mjs';
+import { answerProbe, parseFakeAgentArgs } from './fakeAgentCli.mjs';
 
 const log = makeLogger('claude');
+const cli = parseFakeAgentArgs('claude', process.argv.slice(2));
 
 function hooksFile() {
   return process.env.FAKE_CLAUDE_HOOKS || undefined;
@@ -58,7 +65,8 @@ function loadHooks() {
   }
 }
 
-const { file: HOOKS_FILE, hooks: HOOKS } = loadHooks();
+// A `--version` / `auth status` probe runs no hooks, so it reads none.
+const { file: HOOKS_FILE, hooks: HOOKS } = cli.kind === 'tui' ? loadHooks() : { file: undefined, hooks: {} };
 const PLUGIN_ROOT =
   process.env.FAKE_CLAUDE_PLUGIN_ROOT ??
   process.env.CLAUDE_PLUGIN_ROOT ??
@@ -105,8 +113,9 @@ function fireHook(event, conversation, extra = {}) {
   }
 }
 
-runFakeTui({
+if (!answerProbe('claude', cli, log)) runFakeTui({
   agent: 'claude',
+  initialPrompt: cli.prompt,
   title: '✳ Claude Code',
   header: () => [
     ' ▐▛███▜▌   Claude Code v9.9.9',

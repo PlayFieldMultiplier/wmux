@@ -9,7 +9,7 @@
 // command except `launch` refuses to run without it, so the driver can only
 // ever touch the instance it launched itself — never the owner's real wmux.
 //
-//   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms]
+//   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms] [--env-file vars.json]
 //   node scripts/control-wmux.mjs doctor
 //   node scripts/control-wmux.mjs snapshot [--testid ID | --selector CSS | --role R --name N] [--as label]
 //   node scripts/control-wmux.mjs screenshot [--as label]
@@ -33,6 +33,8 @@ import {
   claimOwnedBy,
   envHasSuffix,
   findClaimedPort,
+  launchEnv,
+  packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
   scrubEnv,
@@ -42,9 +44,13 @@ import {
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_DIR = path.join(REPO_ROOT, '.claude', 'skills', 'verify-wmux');
-const RUN_DIR = path.join(SKILL_DIR, '.run');
+// CONTROL_WMUX_DIR moves the run state and evidence out of the skill folder,
+// so a harness (scripts/e2e-first-run.mjs) keeps its own instance record and
+// artifacts and never collides with a verify-wmux session in the same checkout.
+const CONTROL_DIR = process.env.CONTROL_WMUX_DIR ? path.resolve(process.env.CONTROL_WMUX_DIR) : SKILL_DIR;
+const RUN_DIR = path.join(CONTROL_DIR, '.run');
 const STATE_FILE = path.join(RUN_DIR, 'state.json');
-const EVIDENCE_ROOT = path.join(SKILL_DIR, 'evidence');
+const EVIDENCE_ROOT = path.join(CONTROL_DIR, 'evidence');
 const CLAIM_DIR = path.join(os.homedir(), '.cache', 'wmux-cdp');
 const DEFAULT_APP = '/Applications/wmux.app/Contents/MacOS/wmux';
 
@@ -278,8 +284,20 @@ async function cmdLaunch(opts, reconnectState = null) {
   const state = { runId, suffix, app, pid: null, cdpPort: null, startedAt: new Date().toISOString(), preExisting };
   const dir = evidenceDir(state);
   const logPath = path.join(dir, 'app.log');
+  // `restart` relaunches with the variables the first launch was given.
+  const envFile = opts['env-file'] ? path.resolve(String(opts['env-file'])) : reconnectState?.envFile ?? null;
+  let extraEnv = {};
+  if (envFile) {
+    try {
+      extraEnv = JSON.parse(fs.readFileSync(envFile, 'utf8'));
+    } catch (err) {
+      fail(`--env-file ${envFile} is not readable JSON: ${err.message}`);
+    }
+  }
+  const built = launchEnv(process.env, suffix, extraEnv);
+  if (built.refusal) fail(built.refusal);
   const logFd = fs.openSync(logPath, 'a');
-  const env = scrubEnv(process.env, suffix);
+  const env = built.env;
   // Renderer console -> stderr -> app.log, so `console` can read history.
   env.ELECTRON_ENABLE_LOGGING = '1';
   const child = spawn(app, [], { env, detached: true, stdio: ['ignore', logFd, logFd] });
@@ -287,6 +305,7 @@ async function cmdLaunch(opts, reconnectState = null) {
   fs.closeSync(logFd);
   state.pid = child.pid;
   state.logPath = logPath;
+  if (envFile) state.envFile = envFile;
   writeState(state);
   timeline(state, { cmd: 'launch', app, suffix, pid: child.pid });
 
@@ -548,11 +567,10 @@ async function cmdConsole(opts) {
 }
 
 function daemonCli(app) {
-  const m = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(app);
   const candidates = [
-    m ? path.join(m[1], 'Contents', 'Resources', 'cli-bundle', 'index.js') : null,
+    packagedCliBundle(app),
     path.join(REPO_ROOT, 'dist', 'cli-bundle', 'index.js'),
-  ].filter(Boolean);
+  ];
   return candidates.find((p) => fs.existsSync(p)) ?? null;
 }
 

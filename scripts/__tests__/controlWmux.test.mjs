@@ -1,6 +1,9 @@
 // The rules that keep the verify-wmux driver (scripts/control-wmux.mjs) off the
 // owner's real wmux: which suffixes it may launch, which CDP port is "ours",
 // and which inherited identity it must not pass to the launched instance.
+// @wmux-lane unit
+// packagedCliBundle takes the platform as an argument ('win32' is a string
+// here); nothing in this file reads the host OS.
 import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,6 +12,8 @@ import {
   claimOwnedBy,
   envHasSuffix,
   findClaimedPort,
+  launchEnv,
+  packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
   scrubEnv,
@@ -57,6 +62,31 @@ describe('scrubEnv', () => {
   it('drops the parent pane identity and Claude session, then sets our suffix', () => {
     const env = scrubEnv({ PATH: '/bin', WMUX_PTY_ID: 'p', WMUX_DATA_SUFFIX: '', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' }, '-verify-a');
     expect(env).toEqual({ PATH: '/bin', WMUX_DATA_SUFFIX: '-verify-a' });
+  });
+});
+
+describe('launchEnv', () => {
+  it('applies --env-file variables after the scrub, one spelling per name', () => {
+    const { env } = launchEnv(
+      { Path: 'C:\\Windows', WMUX_NO_PATH_REFRESH: '0', CLAUDECODE: '1' },
+      '-verify-a',
+      { PATH: 'C:\\fake;C:\\Windows', WMUX_NO_PATH_REFRESH: '1' },
+    );
+    expect(env).toEqual({ PATH: 'C:\\fake;C:\\Windows', WMUX_NO_PATH_REFRESH: '1', WMUX_DATA_SUFFIX: '-verify-a' });
+  });
+
+  it('never lets the file pick the suffix, and wants string values', () => {
+    expect(launchEnv({}, '-verify-a', { wmux_data_suffix: '' }).refusal).toMatch(/--suffix/);
+    expect(launchEnv({}, '-verify-a', { X: 1 }).refusal).toMatch(/must be a string/);
+    expect(launchEnv({}, '-verify-a', ['x']).refusal).toMatch(/JSON object/);
+  });
+});
+
+describe('packagedCliBundle', () => {
+  it('finds the CLI bundle in each platform’s packaged layout', () => {
+    expect(packagedCliBundle('/Applications/wmux.app/Contents/MacOS/wmux', 'darwin')).toBe('/Applications/wmux.app/Contents/Resources/cli-bundle/index.js');
+    expect(packagedCliBundle('C:\\out\\wmux-win32-x64\\wmux.exe', 'win32')).toBe('C:\\out\\wmux-win32-x64\\resources\\cli-bundle\\index.js');
+    expect(packagedCliBundle('/x/out/wmux-linux-x64/wmux', 'linux')).toBe('/x/out/wmux-linux-x64/resources/cli-bundle/index.js');
   });
 });
 

@@ -106,6 +106,44 @@ export function scrubEnv(env, suffix) {
   return out;
 }
 
+/**
+ * `launch --env-file`: variables a harness sets on purpose (for example
+ * WMUX_NO_PATH_REFRESH, or a sandbox HOME), applied AFTER the scrub so a
+ * WMUX_* knob survives it. The suffix is only ever the one `--suffix` chose.
+ * Returns { env } or { refusal }.
+ */
+export function launchEnv(baseEnv, suffix, extra = {}) {
+  if (extra === null || typeof extra !== 'object' || Array.isArray(extra)) {
+    return { refusal: '--env-file must hold a JSON object of string values' };
+  }
+  const env = scrubEnv(baseEnv, suffix);
+  for (const [key, value] of Object.entries(extra)) {
+    if (key.toUpperCase() === 'WMUX_DATA_SUFFIX') {
+      return { refusal: '--env-file may not set WMUX_DATA_SUFFIX; pass --suffix' };
+    }
+    if (typeof value !== 'string') return { refusal: `--env-file value for ${key} must be a string` };
+    // One spelling per name: Windows env names are case-insensitive, and a
+    // second `Path` next to `PATH` would be picked nondeterministically.
+    for (const existing of Object.keys(env)) {
+      if (existing.toUpperCase() === key.toUpperCase()) delete env[existing];
+    }
+    env[key] = value;
+  }
+  return { env };
+}
+
+/**
+ * Where a packaged build keeps the wmux CLI bundle (forge extraResource
+ * `./dist/cli-bundle`): Contents/Resources on macOS, resources/ next to the
+ * executable on Windows and Linux.
+ */
+export function packagedCliBundle(app, platform = process.platform) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const mac = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(app);
+  if (mac) return p.join(mac[1], 'Contents', 'Resources', 'cli-bundle', 'index.js');
+  return p.join(p.dirname(app), 'resources', 'cli-bundle', 'index.js');
+}
+
 /** Paths a suffixed instance writes under the user's home (src/shared/constants.ts). */
 export function suffixedPaths(home, suffix, platform = process.platform) {
   const paths = [
