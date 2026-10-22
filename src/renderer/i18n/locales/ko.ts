@@ -28,7 +28,7 @@ export const ko = {
   "plugins.settings.agentStatus": "에이전트 상태",
   "plugins.settings.agentStatusHint": "현재 워크스페이스의 에이전트 상태를 확인하고 패널로 이동합니다. 터미널 내용에는 접근하지 않습니다.",
   "plugins.settings.office": "오피스",
-  "plugins.settings.officeHint": "모든 워크스페이스의 에이전트를 워크스페이스마다 한 방씩 픽셀 아트 사무실의 직원으로 보고 패널로 이동합니다. 터미널 내용에는 접근하지 않습니다.",
+  "plugins.settings.officeHint": "모든 워크스페이스의 에이전트를 픽셀 아트 사무실 한 곳의 직원으로 보고 패널로 이동합니다. 터미널 내용에는 접근하지 않습니다.",
   "plugins.settings.install": "설치",
   "plugins.settings.loadFailed": "{name}을 불러오지 못했습니다. 매니페스트와 번들 파일을 확인하세요.",
   'plugins.settings.moved': "플러그인이 별도 페이지로 옮겨졌습니다.",

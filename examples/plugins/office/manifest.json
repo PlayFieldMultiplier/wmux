@@ -1,7 +1,7 @@
 {
   "name": "office",
   "version": "1.0.0",
-  "description": "Your agents as employees in a pixel-art office, one room per workspace. Reads workspace names, agent names, labels and status. pane.read additionally permits pane metadata (including cwd) and focus. No terminal content permission.",
+  "description": "Every workspace's agents as employees in one pixel-art office. Reads workspace names, agent names, labels and status. pane.read additionally permits pane metadata (including cwd) and focus. No terminal content permission.",
   "capabilities": ["ui.rail-page", "agent.state.read", "agent.state.read.all", "pane.read"],
   "activationEvents": [],
   "contributes": {

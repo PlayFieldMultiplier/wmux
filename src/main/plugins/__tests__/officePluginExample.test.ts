@@ -26,9 +26,7 @@ interface OfficeLayoutApi {
   employeesFromSnapshot(snapshot: { panes: Pane[] }): Employee[];
   layoutOffice(employees: Pick<Employee, 'id' | 'state'>[], prev?: Layout): Layout;
   spotFor(employee: Pick<Employee, 'id' | 'state'>, layout: Layout): { kind: string; key: string } | null;
-  officeRooms(all: unknown, currentWorkspaceId: string | null): {
-    workspaceId: string; name: string; current: boolean; employees: Employee[]; truncated: boolean; collapsed: boolean;
-  }[];
+  employeesFromAll(all: unknown): (Employee & { workspace: string })[];
 }
 
 /** layout.js is a classic browser script; run it as the page would. */
@@ -163,34 +161,33 @@ describe('office layout', () => {
   });
 });
 
-describe('office rooms, one per workspace', () => {
-  const agent = (paneId: string, surfaceId: string, state = 'working') =>
-    ({ paneId, label: paneId, state, stashed: false, surfaces: [{ surfaceId, agentName: 'Codex' }] });
+describe('office, every workspace in one room', () => {
+  const agent = (paneId: string, surfaceId: string, state = 'working', label = paneId) =>
+    ({ paneId, label, state, stashed: false, surfaces: [{ surfaceId, agentName: 'Codex' }] });
   const all = { truncated: false, workspaces: [
     { workspaceId: 'w1', name: 'alpha', truncated: false, panes: [agent('p1', 's1'), agent('p2', 's2', 'needsYou')] },
     { workspaceId: 'w2', name: 'beta', truncated: false, panes: [] },
-    { workspaceId: 'w3', name: 'gamma', truncated: true, panes: [agent('p3', 's3', 'resting')] },
-    { workspaceId: 'w4', name: '', truncated: false, panes: [] },
+    { workspaceId: 'w3', name: '', truncated: true, panes: [agent('p3', 's3', 'resting')] },
   ] };
 
-  it('makes a room per workspace in host order, each with its own employees', () => {
-    const rooms = office.officeRooms(all, 'w4');
-    expect(rooms.map((r) => [r.workspaceId, r.name, r.current, r.truncated])).toEqual([
-      ['w1', 'alpha', false, false], ['w2', 'beta', false, false], ['w3', 'gamma', false, true], ['w4', 'w4', true, false],
-    ]);
-    expect(rooms.map((r) => r.employees.map((e) => [e.id, e.paneId, e.state]))).toEqual([
-      [['s1', 'p1', 'working'], ['s2', 'p2', 'needsYou']], [], [['s3', 'p3', 'resting']], [],
+  it("lists every workspace's employees in host order, each with its workspace", () => {
+    expect(office.employeesFromAll(all).map((e) => [e.id, e.paneId, e.state, e.workspace])).toEqual([
+      ['s1', 'p1', 'working', 'alpha'], ['s2', 'p2', 'needsYou', 'alpha'], ['s3', 'p3', 'resting', 'w3'],
     ]);
   });
 
-  it('collapses a workspace without agents to a line, except the one the host shows', () => {
-    expect(office.officeRooms(all, 'w2').map((r) => r.collapsed)).toEqual([false, false, false, true]);
-    expect(office.officeRooms(all, 'w1').map((r) => r.collapsed)).toEqual([false, true, false, true]);
+  it('tells colliding labels apart by workspace first, then agent, then number', () => {
+    const same = (id: string, ws: string, label: string) => ({ workspaceId: id, name: ws, truncated: false, panes: [agent(`p-${id}`, `s-${id}`, 'working', label)] });
+    const labels = office.employeesFromAll({ workspaces: [same('a', 'alpha', 'build'), same('b', 'beta', 'build'), same('c', 'gamma', 'tests')] }).map((e) => e.label);
+    expect(labels).toEqual(['build · alpha', 'build · beta', 'tests']);
+    const twin = { workspaceId: 'd', name: 'alpha', truncated: false, panes: [agent('p-d', 's-d', 'working', 'build')] };
+    const twins = office.employeesFromAll({ workspaces: [same('a', 'alpha', 'build'), twin] }).map((e) => e.label);
+    expect(twins).toEqual(['build · alpha · Codex · 1', 'build · alpha · Codex · 2']);
   });
 
-  it('skips malformed and repeated workspaces instead of drawing them', () => {
-    const rooms = office.officeRooms({ workspaces: [null, { name: 'x' }, all.workspaces[0], { ...all.workspaces[0], name: 'dup' }] }, null);
-    expect(rooms.map((r) => r.name)).toEqual(['alpha']);
-    expect(office.officeRooms(undefined, null)).toEqual([]);
+  it('skips malformed and repeated workspaces instead of seating them twice', () => {
+    const list = office.employeesFromAll({ workspaces: [null, { name: 'x' }, all.workspaces[0], { ...all.workspaces[0], name: 'dup' }] });
+    expect(list.map((e) => e.id)).toEqual(['s1', 's2']);
+    expect(office.employeesFromAll(undefined)).toEqual([]);
   });
 });

@@ -1,21 +1,22 @@
 # Office rail page
 
 A UI plugin that draws your agents as employees in an isometric pixel-art
-office, one room per workspace. It uses only the rail-page API: `agent-state`
-snapshots of every local workspace and `pane.focus`. It is a plain static
-bundle with no build step and no runtime dependencies; the page, its scripts and its two
-sprite sheets are all in this directory. The example follows the repository's
-MIT license.
+office: every local workspace's agents in one room, sized to fit the page. It
+uses only the rail-page API: `agent-state` snapshots of every local workspace
+and `pane.focus`. It is a plain static bundle with no build step and no
+runtime dependencies; the page, its scripts and its two sprite sheets are all
+in this directory. The example follows the repository's MIT license.
 
 What the snapshot drives:
 
-- One room per local workspace, in the sidebar's order, under the workspace's
-  name; the workspace on screen is marked `current`. A workspace without
-  agents is a one-line "No local agents", except the current one, which keeps
-  its (empty) office. Remote PCs are not shown.
+- One room for every local workspace, so everyone who needs you queues at the
+  one boss desk. Remote PCs are not shown.
+- The whole room is in view without scrolling: it is scaled to the page and
+  shrinks as rows of desks are added. Names and bubbles shrink with it down to
+  80% of their size, no further.
 - One employee per pane surface that runs an agent. Its name tag is the pane's
-  `label`; where two would read the same, the agent's name is added (hover or
-  focus an employee to see the agent).
+  `label`; where two would read the same, the workspace's name is added, then
+  the agent's (hover or focus an employee to see both).
 - `working`: at its own desk, typing.
 - `needsYou`: walks to the queue in front of the boss desk and raises a hand,
   under a red "! Needs you" bubble.
@@ -27,8 +28,8 @@ What the snapshot drives:
   Workspaces. Stashed panes are shown but not focusable, as in the Agent status
   example.
 
-Everyone keeps their desk, sofa and place in the queue while the page is open
-(each room remembers its own), and an employee walks only when its spot
+Everyone keeps their desk, sofa and place in the queue while the page is open,
+whichever workspace is on screen, and an employee walks only when its spot
 changes. Walking and the typing and resting loops stop under the system's
 reduced-motion setting. The iframe has an opaque origin and no storage, so
 leaving the page forgets the seating, and the app's own reduced-motion
@@ -49,8 +50,7 @@ capabilities.
 
 If the host sends only the workspace it shows (a plain `snapshot` instead of
 `allWorkspaces`, which is what a host does for a plugin that is not granted
-`agent.state.read.all`), the page falls back to a single room for that
-workspace, without a heading.
+`agent.state.read.all`), the page shows that workspace's agents only.
 
 Permissions:
 
@@ -85,8 +85,8 @@ what each agent is doing without that. Other gaps, discussed in
 | --- | --- |
 | `manifest.json` | Name, permissions and the rail page. |
 | `index.html` | Page markup and styles; loads the three scripts. |
-| `office.js` | Bridge handling and drawing (one room per workspace: DOM sprites, names, bubbles). |
-| `layout.js` | Pure layout: rooms per workspace, employees from a snapshot, desks, queue, sofas, room. |
+| `office.js` | Bridge handling and drawing (the floor and walls on one canvas; DOM sprites, names, bubbles), scaled to fit the page. |
+| `layout.js` | Pure layout: employees from one workspace or every workspace, desks, queue, sofas, room. |
 | `sprites.js` | Sprite rectangles in the two sheets. |
 | `characters.png`, `furniture.png` | The art. |
 
