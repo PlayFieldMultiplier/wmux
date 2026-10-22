@@ -54,8 +54,14 @@ export function linkDirection(allow: A2aLinkRecordV1['allow']): 'both' | 'send' 
   return 'none';
 }
 
-/** `<PC>/<workspace>/<pane>`, or `<PC>/Moa` for a Moa end — the remote end's alias. */
-export function remoteAlias(pcName: string, remote: A2aLinkRecordV1['remote']): string {
+/**
+ * The remote end as a link row shows it: `<PC>/<workspace>/<pane>`, or
+ * `<PC>/<brainName>` for a brain end. The wire alias `<PC>/Moa`
+ * (A2A_BRAIN_ALIAS) stays for other PCs and older builds, but Moa is gone and
+ * its role is the Coordinator now, so the caller passes the word to show.
+ */
+export function remoteAlias(pcName: string, remote: A2aLinkRecordV1['remote'], brainName: string): string {
+  if (remote.kind === 'brain') return `${pcName}/${brainName}`;
   return a2aEndpointAlias(pcName, remote);
 }
 

@@ -938,8 +938,8 @@ One page, Tailnet first, filling the sheet with 28px sides
   the QR survives sharing turning on.
   Details unfolds in place: the phone
   address without its token (copy), whether input is allowed, Share & pair,
-  the A2A port and the full fingerprint (plain mono values; the fingerprint
-  wraps anywhere, copy). Connecting another computer by A2A starts from
+  the A2A port and the full security code (the certificate fingerprint;
+  plain mono values; the code wraps anywhere, copy). Connecting another computer by A2A starts from
   Connect a PC…; as a workspace share it starts from Connect a PC… or from
   Share & pair's **Connect another computer**, which mints the pairing link
   and copies it in one click. Connect a PC's invite tab carries **Also let
@@ -953,18 +953,18 @@ One page, Tailnet first, filling the sheet with 28px sides
   hairlines. Rows: a link request (one sentence naming both ends — "DESK
   wants to link its Web/claude with this PC's api / build. Once accepted they
   send each other work and read the results." — its age, that the pane names
-  are the other PC's report, the other PC's fingerprint prefix when known,
+  are the other PC's report, the other PC's security code prefix when known,
   same repo or the repo-mismatch warning, the direction; Decline, Accept);
   held remote work (the quoted task, why it is held; Send back, Deliver to
-  the pane now — never re-routed on its own; a hold for Moa clears by itself,
+  the pane now — never re-routed on its own; a hold for the Coordinator clears by itself,
   so it is a quiet muted line under the block, not a row and not counted);
-  a PC whose certificate changed
+  a PC whose security code changed
   (how many links removing it ends; Remove asking twice, Pair again…, which
   opens Connect a PC on Paste when this PC joined that one and on Invite when
   it joined this one). There is no pane picker on a request: the request
   already names this PC's pane. A **pane another PC shared** is its own row
   (2026-10-21): one sentence naming that PC's pane as its report, its age,
-  the other PC's fingerprint prefix, its agent and repo, the directions it
+  the other PC's security code prefix, its agent and repo, the directions it
   offers and how long it stays open (an hour); Decline, **Accept…**. The row
   has no pane picker either: Accept… opens the link dialog with that PC and
   its pane fixed, this PC's pane picked there (the focused pane first), and
@@ -1019,7 +1019,7 @@ One page, Tailnet first, filling the sheet with 28px sides
   offers this PC's pane with the focused one preselected.
 - **Orange budget:** one event, two marks at most — the Needs you block's
   hairline and the Remote rail item's number badge (link requests + held
-  work + PCs whose certificate changed, the same count from one store
+  work + PCs whose security code changed, the same count from one store
   slice, cleared while the daemon is away). Link request toasts offer Review
   only: the repo a request names is the other PC's claim. The summary line, headings and activity stay neutral. The page's
   one primary is the first Accept, else (empty page) Connect a PC….

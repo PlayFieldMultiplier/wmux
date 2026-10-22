@@ -62,9 +62,10 @@ describe('rankExposedPanes', () => {
   });
 
   it('builds the <PC>/<workspace>/<pane> alias', () => {
-    expect(remoteAlias('DESK', { hostId: HOST, kind: 'pane', workspaceId: 'w', paneId: 'p', workspaceName: 'API', label: 'w1-1' })).toBe('DESK/API/w1-1');
-    expect(remoteAlias('DESK', { hostId: HOST, kind: 'pane', workspaceId: 'w', paneId: 'p' })).toBe('DESK/w/p');
-    expect(remoteAlias('DESK', { hostId: HOST, kind: 'brain', workspaceId: 'hq' })).toBe('DESK/Moa');
+    expect(remoteAlias('DESK', { hostId: HOST, kind: 'pane', workspaceId: 'w', paneId: 'p', workspaceName: 'API', label: 'w1-1' }, 'Coordinator')).toBe('DESK/API/w1-1');
+    expect(remoteAlias('DESK', { hostId: HOST, kind: 'pane', workspaceId: 'w', paneId: 'p' }, 'Coordinator')).toBe('DESK/w/p');
+    // A brain end shows the word it is given, never the wire alias "Moa".
+    expect(remoteAlias('DESK', { hostId: HOST, kind: 'brain', workspaceId: 'hq' }, 'Coordinator')).toBe('DESK/Coordinator');
   });
 });
 
@@ -358,6 +359,15 @@ describe('A2aLinkRow', () => {
     const body = render(inList(createElement(A2aLinkRow, rowProps({ confirming: true, onUnlink }))));
     act(() => (body.querySelector('[data-testid="a2a-link-row"] .ui-btn-danger') as HTMLButtonElement).click());
     expect(onUnlink).toHaveBeenCalledOnce();
+  });
+
+  it('names a brain end by the Coordinator role, not the wire alias Moa', () => {
+    const body = render(inList(createElement(A2aLinkRow, rowProps({
+      link: link({ state: 'active', local: { kind: 'brain', workspaceId: 'hq' }, remote: { hostId: HOST, kind: 'brain', workspaceId: 'rhq' } }),
+    }))));
+    const what = body.querySelector('[data-testid="a2a-link-row"] .wmux-remote-link-what')?.textContent ?? '';
+    expect(what).toContain('a2aLink.thisMoa ↔ DESK/room.role.moa');
+    expect(what).not.toMatch(/\bMoa\b/);
   });
 });
 
