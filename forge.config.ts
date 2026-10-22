@@ -241,6 +241,11 @@ const config: ForgeConfig = {
       unpack: '**/node_modules/node-pty/**',
     },
     icon: './assets/icon',
+    // macOS asks for the microphone with this text the first time the owner
+    // dictates (main/dictation/dictation.handler.ts micAccess).
+    extendInfo: {
+      NSMicrophoneUsageDescription: 'wmux uses the microphone only while you dictate. The audio is turned into text on this computer and never stored.',
+    },
     ignore: (file) => {
       if (!file) return false;
       if (file === '/mcps' || file.startsWith('/mcps/')) return true;
@@ -259,7 +264,9 @@ const config: ForgeConfig = {
     // targets the user's own claude install via pathToClaudeCodeExecutable).
     // ./dist/daemon-web ships as a sibling of daemon-bundle so the detached
     // daemon resolves terminal.html at `__dirname/../daemon-web` (wmux web).
-    extraResource: [...(shipsTerminalCore ? [TERMINAL_CORE_STAGE] : []), './dist/mcp-bundle', './dist/daemon-bundle', './dist/daemon-web', './dist/cli-bundle', './node_modules/@anthropic-ai/claude-agent-sdk', './examples/plugins/agent-state-page', './examples/plugins/office', './assets/icon.ico', './assets/icon.icns', './assets/icon.png', './assets/trayTemplate.png', './assets/trayTemplate@2x.png', './LICENSE', './THIRD_PARTY_NOTICES', './src/main/pty/shell-hooks', ...(shipsComputerUseMac ? [COMPUTER_USE_MAC_STAGE] : []), ...(shipsComputerUseWin ? [COMPUTER_USE_WIN_STAGE] : []), ...(shipsServerManifest ? [SERVER_MANIFEST_STAGE] : [])],
+    // onnxruntime-web's .wasm is voice dictation's engine; main hands its
+    // bytes to the renderer (main/dictation/dictation.handler.ts).
+    extraResource: [...(shipsTerminalCore ? [TERMINAL_CORE_STAGE] : []), './node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm', './dist/mcp-bundle', './dist/daemon-bundle', './dist/daemon-web', './dist/cli-bundle', './node_modules/@anthropic-ai/claude-agent-sdk', './examples/plugins/agent-state-page', './examples/plugins/office', './assets/icon.ico', './assets/icon.icns', './assets/icon.png', './assets/trayTemplate.png', './assets/trayTemplate@2x.png', './LICENSE', './THIRD_PARTY_NOTICES', './src/main/pty/shell-hooks', ...(shipsComputerUseMac ? [COMPUTER_USE_MAC_STAGE] : []), ...(shipsComputerUseWin ? [COMPUTER_USE_WIN_STAGE] : []), ...(shipsServerManifest ? [SERVER_MANIFEST_STAGE] : [])],
     // macOS 서명/노타라이즈는 packagerConfig가 아니라 postPackage hook 끝에서
     // 수행한다(signMacAppIfConfigured 주석 참고). 여기서 서명하면 postPackage의
     // node-pty 복사가 서명을 깨뜨리기 때문이다.

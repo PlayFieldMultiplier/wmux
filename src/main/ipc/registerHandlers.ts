@@ -1,6 +1,7 @@
 import { registerTerminalCoreHandlers } from './handlers/terminalCore.handler';
 import { registerQuickCommandHandlers } from './handlers/quickCommand.handler';
 import { registerUsageLimitHandlers } from '../usageLimit/usageLimit.handler';
+import { registerDictationHandlers } from '../dictation/dictation.handler';
 import { registerContinueOnAccountHandler } from '../account/continueOnAccount.handler';
 import { registerWorkspaceSettle } from '../workspace/settle/workspaceSettleHost';
 import { ipcMain, nativeTheme, type BrowserWindow } from 'electron';
@@ -195,6 +196,7 @@ export function registerAllHandlers(
 ): () => void {
   const cleanupPty = registerPTYHandlers(ptyManager, ptyBridge, daemonClient, getWindow, { daemonMayReturn: options.daemonMayReturn });
   const cleanupUsageLimit = registerUsageLimitHandlers(daemonClient, getWindow);
+  const cleanupDictation = registerDictationHandlers(getWindow);
   const cleanupContinueOnAccount = registerContinueOnAccountHandler(daemonClient);
   const cleanupWorkspaceSettle = registerWorkspaceSettle(getWindow, { daemonClient, ptyManager });
   // session/scrollback handlers: installed elsewhere (module-load in
@@ -578,6 +580,7 @@ export function registerAllHandlers(
   return () => {
     cleanupPty();
     cleanupUsageLimit();
+    cleanupDictation();
     cleanupContinueOnAccount();
     cleanupWorkspaceSettle();
     // cleanupSession deliberately omitted — session/scrollback handlers

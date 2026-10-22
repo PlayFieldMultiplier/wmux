@@ -49,6 +49,11 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  // Voice dictation's speech engine (renderer/dictation/whisper.worker.ts)
+  // is an ES module worker: onnxruntime-web is ESM.
+  worker: {
+    format: 'es',
+  },
   build: {
     // The renderer only ever runs inside this app's own Chromium (Electron 41 →
     // Chrome 146), so Vite's default `modules` target (es2020) buys nothing and
