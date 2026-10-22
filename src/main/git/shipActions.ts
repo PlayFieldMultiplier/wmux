@@ -13,8 +13,8 @@
 // common causes it was (signing, a protected branch, a remote that moved on,
 // a refused key or sign-in, a working folder that is gone); the UI words it
 // and offers the one next step (renderer/components/Git/ShipButton.tsx).
-import { describeScanFailure, describeSecretFindings, type SecretFinding } from '../../shared/secretGuard';
-import { reviewRange, scanCommits, scanDiff, spawnGitLines, type GitLines, type SecretScanResult } from './secretScan';
+import type { SecretFinding } from '../../shared/secretGuard';
+import { reviewRange, scanCommits, scanDiff, secretRefusal, spawnGitLines, type GitLines, type SecretScanResult } from './secretScan';
 import { secretGuardEnabled } from './secretGuardSetting';
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
@@ -315,9 +315,8 @@ export class ShipActions {
   /** A refusal when the secret check found secret files or key-shaped values,
    *  or could not run (fail closed); null when the change is clean. */
   private secretRefusal(scan: SecretScanResult, action: string): ShipActionResult | null {
-    if (!scan.ok) return { ok: false, error: describeScanFailure(action), secretScanFailed: true };
-    if (scan.findings.length) return { ok: false, error: describeSecretFindings(scan.findings, action), secrets: scan.findings };
-    return null;
+    const refused = secretRefusal(scan, action);
+    return refused ? { ok: false, ...refused } : null;
   }
 
   /** A merge or cherry-pick in progress in the worktree at `cwd`. */

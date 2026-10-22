@@ -74,6 +74,17 @@ describe('pushTaskBranch', () => {
     expect(() => git(work, 'config', '--get', 'branch.wtask/one.remote')).toThrow();
   });
 
+  it('runs the Git page\'s push check: a commit carrying a key is refused with its words and nothing is pushed; off in Settings, it goes', async () => {
+    fs.writeFileSync(path.join(work, 'deploy.pem'), '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n');
+    git(work, 'add', '.');
+    git(work, 'commit', '-qm', 'key');
+    const r = await pushTaskBranch(input());
+    expect(r).toMatchObject({ ok: false, reason: 'secrets', error: expect.stringContaining('deploy.pem'), secrets: [expect.objectContaining({ path: 'deploy.pem' })] });
+    expect(() => git(origin, 'rev-parse', '--verify', '-q', 'refs/heads/wtask/one')).toThrow();
+    // The same Settings toggle as the Git page.
+    expect((await pushTask(input(), defaultGit, { ...FILE_OK, secretGuard: () => false })).ok).toBe(true);
+  });
+
   it('never force-pushes: a rewritten branch is rejected and the remote keeps its tip', async () => {
     expect((await pushTaskBranch(input())).ok).toBe(true);
     const before = git(origin, 'rev-parse', 'refs/heads/wtask/one');

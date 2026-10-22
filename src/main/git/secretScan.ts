@@ -12,7 +12,7 @@
 // caller refuses the action.
 import { spawn } from 'node:child_process';
 import { getExecEnv } from '../../shared/execEnv';
-import { PatchScanner, parseNameStatusZ, type SecretFinding } from '../../shared/secretGuard';
+import { PatchScanner, describeScanFailure, describeSecretFindings, parseNameStatusZ, type SecretFinding } from '../../shared/secretGuard';
 
 /** Runs git with these args, handing each stdout line (split on \n only) to
  *  onLine; true when git exited 0. */
@@ -80,6 +80,28 @@ export async function scanCommits(run: GitLines, revs: string[]): Promise<Secret
     if (await run(log(merges, NAMES), (l) => names.push(l))) return scan(run, names, log(merges, PATCH));
   }
   return { ok: false };
+}
+
+/** Why a scan stops the action, as the Git page words it; null to go ahead.
+ *  `action` completes "so it was not …" ('pushed', 'sent in a pull request'). */
+export type SecretRefusal = { error: string; secrets: SecretFinding[] } | { error: string; secretScanFailed: true };
+
+export function secretRefusal(scan: SecretScanResult, action: string): SecretRefusal | null {
+  if (!scan.ok) return { error: describeScanFailure(action), secretScanFailed: true };
+  if (scan.findings.length) return { error: describeSecretFindings(scan.findings, action), secrets: scan.findings };
+  return null;
+}
+
+/** A GitLines over a runner that answers with the whole output at once. */
+export function bufferedGitLines(run: (args: string[]) => Promise<{ code: number; stdout: string }>): GitLines {
+  return async (args, onLine) => {
+    const out = await run(args);
+    if (out.code !== 0) return false;
+    const lines = out.stdout.split('\n');
+    if (lines[lines.length - 1] === '') lines.pop();
+    for (const line of lines) onLine(line);
+    return true;
+  };
 }
 
 /** rev-list arguments for the commits a PR from `head` shows against `base`

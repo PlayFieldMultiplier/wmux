@@ -47,6 +47,9 @@ import { getExecEnv } from '../../shared/execEnv';
 import { parseRemoteKey } from '../github/PrProvider';
 import { isGitlabRepoKey } from '../github/hostLane';
 import { GLAB_ENV, glabLoginHint, glabPrService, type GlabPrService } from '../github/GlabPrService';
+import { scanCommits, secretRefusal, spawnGitLines, type GitLines } from '../git/secretScan';
+import { secretGuardEnabled } from '../git/secretGuardSetting';
+import type { SecretFinding } from '../../shared/secretGuard';
 
 const execFileAsync = promisify(execFile);
 
@@ -81,6 +84,10 @@ export interface TaskPrServiceOptions {
   cache?: PrCachePort;
   exec?: PrExec;
   glab?: PrGlabPort;
+  /** git for the pre-push secret check, in `cwd` (default: spawned, streamed). */
+  scanGit?: (cwd: string) => GitLines;
+  /** Settings › General's password and key check (default: its live value). */
+  secretGuard?: () => boolean;
 }
 
 export interface CreatePrInput {
@@ -111,8 +118,11 @@ export type CreatePrResult =
     }
   | {
       ok: false;
-      reason: 'gh-missing' | 'gh-unauth' | 'dirty' | 'no-origin' | 'push-failed' | 'pr-failed' | 'error';
+      reason: 'gh-missing' | 'gh-unauth' | 'dirty' | 'no-origin' | 'push-failed' | 'pr-failed' | 'secrets' | 'error';
       error: string;
+      /** `secrets`: the Git page's push check refused (secretRefusal). */
+      secrets?: SecretFinding[];
+      secretScanFailed?: true;
       /** 브라우저 폴백 안내(gh 부재·미인증 시). */
       browseFallback?: string;
     };
@@ -122,12 +132,23 @@ export class TaskPrService {
   private readonly cache: PrCachePort | undefined;
   private readonly exec: PrExec;
   private readonly glab: PrGlabPort;
+  private readonly scanGit: (cwd: string) => GitLines;
+  private readonly secretGuard: () => boolean;
 
   constructor(opts: TaskPrServiceOptions) {
     this.daemon = opts.daemon;
     this.cache = opts.cache;
     this.exec = opts.exec ?? (execFileAsync as unknown as PrExec);
     this.glab = opts.glab ?? glabPrService;
+    this.scanGit = opts.scanGit ?? ((cwd) => spawnGitLines(cwd));
+    this.secretGuard = opts.secretGuard ?? secretGuardEnabled;
+  }
+
+  /** The Git page's push check on the branch's commits origin lacks; null to go ahead. */
+  private async secretsRefusal(worktreePath: string, branch: string): Promise<CreatePrResult | null> {
+    if (!this.secretGuard()) return null;
+    const refused = secretRefusal(await scanCommits(this.scanGit(worktreePath), [`refs/heads/${branch}`, '--not', '--remotes=origin']), 'pushed');
+    return refused ? { ok: false, reason: 'secrets', ...refused } : null;
   }
 
   private gh(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
@@ -289,6 +310,8 @@ export class TaskPrService {
     // 옵션으로 오인되는 표면 차단). 이미 존재(fast-forward)면 무해 통과.
     const movedBeforePush = await this.pushTargetMoved(worktreePath, target);
     if (movedBeforePush) return movedBeforePush;
+    const secrets = await this.secretsRefusal(worktreePath, branch);
+    if (secrets) return secrets;
     try {
       await this.git(['push', '-u', 'origin', '--', branch], worktreePath);
     } catch (err) {
@@ -441,6 +464,8 @@ export class TaskPrService {
     // ── ③ push — the gh path's push (origin was read above).
     const movedBeforePush = await this.pushTargetMoved(worktreePath, target);
     if (movedBeforePush) return movedBeforePush;
+    const secrets = await this.secretsRefusal(worktreePath, branch);
+    if (secrets) return secrets;
     try {
       await this.git(['push', '-u', 'origin', '--', branch], worktreePath);
     } catch (err) {

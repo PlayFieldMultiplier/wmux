@@ -1,7 +1,12 @@
 // ─── TaskPrService — J3 §2 gh 4중 게이트 1클릭 PR ────────────────────────────
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { TaskPrService, type PrExec, type CreatePrInput } from '../TaskPrService';
+import { spawnGitLines, type GitLines } from '../../git/secretScan';
 import { GlabPrService } from '../../github/GlabPrService';
 import type { ForgeHosts } from '../../../shared/forgeHosts';
 
@@ -73,7 +78,10 @@ function happyBehavior(cmd: string, args: string[]): { stdout: string } | { thro
   return { stdout: '' };
 }
 
-function makeService(exec: PrExec, opts?: { daemonOk?: boolean }) {
+/** The pre-push secret check's git: no commits to read (a clean change). */
+const cleanScan = (): GitLines => async () => true;
+
+function makeService(exec: PrExec, opts?: { daemonOk?: boolean; scanGit?: (cwd: string) => GitLines }) {
   const daemonCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
   const daemon = {
     rpc: vi.fn(async (method: string, params: Record<string, unknown>) => {
@@ -82,7 +90,7 @@ function makeService(exec: PrExec, opts?: { daemonOk?: boolean }) {
     }),
   };
   const invalidate = vi.fn();
-  const svc = new TaskPrService({ daemon, cache: { invalidate }, exec });
+  const svc = new TaskPrService({ daemon, cache: { invalidate }, exec, scanGit: opts?.scanGit ?? cleanScan });
   return { svc, daemon, daemonCalls, invalidate };
 }
 
@@ -317,7 +325,7 @@ function makeGlService(behavior: (cmd: string, args: string[]) => { stdout: stri
     }),
   };
   const glab = new GlabPrService(Date.now, exec);
-  const svc = new TaskPrService({ daemon, cache: { invalidate: vi.fn() }, exec, glab });
+  const svc = new TaskPrService({ daemon, cache: { invalidate: vi.fn() }, exec, glab, scanGit: cleanScan });
   const posts = () => calls.filter((c) => isGlab(c.cmd) && apiArgs(c.args)[0] === '-X');
   return { svc, calls, daemonCalls, posts };
 }
@@ -653,5 +661,45 @@ describe('task_pr: the push goes where it was approved to', () => {
     const { svc, calls } = makeGlService(glHappy);
     expect(await svc.createPr({ ...INPUT, pushTarget: 'gitlab.example.com/group/sub/proj' })).toEqual({ ok: true, prUrl: GL_MR, mrIid: 7 });
     expect(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'push')).toHaveLength(1);
+  });
+});
+
+describe('the Git page\'s push check runs before the task PR push', () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd, encoding: 'utf8' }).trim();
+  let root: string;
+  afterEach(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
+
+  /** A real worktree whose task branch adds `file` on top of what origin has. */
+  function repoWith(file: string, text: string): string {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-taskpr-secrets-')));
+    const origin = path.join(root, 'origin.git');
+    const repo = path.join(root, 'repo');
+    execFileSync('git', ['init', '-q', '--bare', origin]);
+    execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'init');
+    git(repo, 'remote', 'add', 'origin', origin);
+    git(repo, 'push', '-q', 'origin', 'main');
+    git(repo, 'checkout', '-q', '-b', INPUT.branch);
+    fs.writeFileSync(path.join(repo, file), text);
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'work');
+    return repo;
+  }
+
+  it('a branch carrying a key is refused with the Git page\'s words and never pushed; a clean one is pushed', async () => {
+    const keyed = repoWith('deploy.pem', '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n');
+    let run = makeExec(happyBehavior);
+    let res = await makeService(run.exec, { scanGit: (cwd) => spawnGitLines(cwd) }).svc.createPr({ ...INPUT, worktreePath: keyed });
+    expect(res).toMatchObject({ ok: false, reason: 'secrets', error: expect.stringContaining('deploy.pem'), secrets: [expect.objectContaining({ path: 'deploy.pem' })] });
+    expect(run.calls.some((c) => c.cmd === 'git' && c.args[0] === 'push')).toBe(false);
+
+    fs.rmSync(root, { recursive: true, force: true });
+    const clean = repoWith('b.txt', 'b\n');
+    run = makeExec(happyBehavior);
+    res = await makeService(run.exec, { scanGit: (cwd) => spawnGitLines(cwd) }).svc.createPr({ ...INPUT, worktreePath: clean });
+    expect(res.ok).toBe(true);
+    expect(run.calls.some((c) => c.cmd === 'git' && c.args[0] === 'push')).toBe(true);
   });
 });
