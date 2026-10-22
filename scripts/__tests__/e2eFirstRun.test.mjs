@@ -49,6 +49,12 @@ describe('parseRunArgs', () => {
     expect(() => parseRunArgs(['--app'])).toThrow(/needs a value/);
     expect(() => parseRunArgs(['--app', '--keep'])).toThrow(/needs a value/);
   });
+
+  it('refuses a suffix control-wmux would refuse, before any path is built from it', () => {
+    expect(() => parseRunArgs(['--suffix', '/../../x'])).toThrow(/--suffix: .*must look like/);
+    expect(() => parseRunArgs(['--suffix', '-dev'])).toThrow(/reserved/);
+    expect(parseRunArgs(['--suffix', '-verify-fr1']).suffix).toBe('-verify-fr1');
+  });
 });
 
 describe('sandboxEnv', () => {

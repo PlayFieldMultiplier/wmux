@@ -348,6 +348,38 @@ export function envHasSuffix(envText, suffix) {
 }
 
 /**
+ * macOS: the environment part of `ps -E -ww -o command=`, which prints the
+ * command line and then the environment. `argsOnly` is the same process's
+ * `ps -ww -o command=`; stripping it keeps a `WMUX_DATA_SUFFIX=...` that only
+ * appears in the arguments from passing for the process's environment.
+ * '' when the two do not line up (the process changed or is gone).
+ */
+export function darwinEnvPart(withEnv, argsOnly) {
+  const full = String(withEnv ?? '').replace(/\n+$/, '');
+  const args = String(argsOnly ?? '').replace(/\n+$/, '');
+  if (!args || !full.startsWith(args)) return '';
+  return full.slice(args.length);
+}
+
+/**
+ * `launchctl list` rows whose label belongs to this suffix's daemon jobs
+ * (`com.wmux.daemon<suffix>.<n>`): [{ label, pid }], pid null for a job that
+ * is loaded but not running.
+ */
+export function launchdJobsFor(listText, suffix) {
+  if (!suffix) return [];
+  const base = `com.wmux.daemon${suffix}.`;
+  const jobs = [];
+  for (const line of String(listText ?? '').split('\n')) {
+    const [pidCol, , label] = line.trim().split(/\s+/);
+    if (!label?.startsWith(base)) continue;
+    const pid = /^\d+$/.test(pidCol ?? '') ? Number(pidCol) : null;
+    jobs.push({ label, pid });
+  }
+  return jobs;
+}
+
+/**
  * `ps -o lstart=` text (LC_ALL=C, e.g. `Thu Oct 22 10:00:05 2026`) as epoch
  * ms, or null. One parser for every caller, so a creation time recorded by one
  * script compares equal to the same process read by another.

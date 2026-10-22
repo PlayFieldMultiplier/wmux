@@ -11,10 +11,12 @@ import path from 'node:path';
 import {
   appIdentityHolds,
   claimOwnedBy,
+  darwinEnvPart,
   electronUserDataDir,
   envHasSuffix,
   findClaimedPort,
   launchAppArgs,
+  launchdJobsFor,
   launchEnv,
   launchUserDataDirArg,
   packagedCliBundle,
@@ -451,5 +453,38 @@ describe('stop: ending the recorded app', () => {
     const reused = deps({ kills: { 700: 'mismatch' } });
     expect(await stopRecordedApp(state, reused, 'win32')).toMatch(/now another process/);
     expect(reused.calls.filter((c) => typeof c === 'string')).toEqual([]);
+  });
+});
+
+describe('darwinEnvPart (ps -E)', () => {
+  it('matches the environment only, never an argument that looks like it', () => {
+    const args = '/usr/bin/node daemon.js WMUX_DATA_SUFFIX=-verify-a';
+    const withEnv = `${args} HOME=/Users/u PATH=/bin\n`;
+    const env = darwinEnvPart(withEnv, `${args}\n`);
+    expect(env).toBe(' HOME=/Users/u PATH=/bin');
+    expect(envHasSuffix(env, '-verify-a')).toBe(false);
+    expect(envHasSuffix(darwinEnvPart(`${args} WMUX_DATA_SUFFIX=-verify-a HOME=/x`, args), '-verify-a')).toBe(true);
+  });
+
+  it('gives nothing when the two listings do not line up', () => {
+    expect(darwinEnvPart('other WMUX_DATA_SUFFIX=-verify-a', 'node daemon.js')).toBe('');
+    expect(darwinEnvPart('node WMUX_DATA_SUFFIX=-verify-a', '')).toBe('');
+  });
+});
+
+describe('launchdJobsFor', () => {
+  it('lists only this suffix’s daemon jobs, with their pid when running', () => {
+    const list = [
+      'PID\tStatus\tLabel',
+      '-\t0\tcom.wmux.daemon-verify-a.1',
+      '4321\t0\tcom.wmux.daemon-verify-a.2',
+      '-\t0\tcom.wmux.daemon-verify-ab.1',
+      '-\t0\tcom.wmux.daemon.1',
+    ].join('\n');
+    expect(launchdJobsFor(list, '-verify-a')).toEqual([
+      { label: 'com.wmux.daemon-verify-a.1', pid: null },
+      { label: 'com.wmux.daemon-verify-a.2', pid: 4321 },
+    ]);
+    expect(launchdJobsFor(list, '')).toEqual([]);
   });
 });

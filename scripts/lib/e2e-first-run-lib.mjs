@@ -7,7 +7,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { collectProcessTree, parseCimDate } from '../perf-process-tree.mjs';
-import { parseLstart } from './control-wmux-lib.mjs';
+import { parseLstart, suffixRefusal } from './control-wmux-lib.mjs';
 
 /** Agent statuses that mean the agent is at rest at its prompt (shared/types AgentStatus). */
 export const SETTLED_AGENT_STATUSES = new Set(['idle', 'waiting', 'complete', 'awaiting_input']);
@@ -25,7 +25,12 @@ export function parseRunArgs(argv) {
     };
     if (a === '--app') out.app = next();
     else if (a === '--artifacts') out.artifacts = next();
-    else if (a === '--suffix') out.suffix = next();
+    else if (a === '--suffix') {
+      // The suffix becomes part of paths the run creates and deletes.
+      out.suffix = next();
+      const refusal = suffixRefusal(out.suffix);
+      if (refusal) throw new Error(`--suffix: ${refusal}`);
+    }
     else if (a === '--keep') out.keep = true;
     else if (a === '--help' || a === '-h') out.help = true;
     else throw new Error(`unknown argument ${a}`);

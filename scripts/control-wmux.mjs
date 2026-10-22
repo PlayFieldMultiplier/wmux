@@ -32,10 +32,12 @@ import { fileURLToPath } from 'node:url';
 import {
   appIdentityHolds,
   claimOwnedBy,
+  darwinEnvPart,
   electronUserDataDir,
   envHasSuffix,
   findClaimedPort,
   launchAppArgs,
+  launchdJobsFor,
   launchEnv,
   launchUserDataDirArg,
   packagedCliBundle,
@@ -692,9 +694,11 @@ function processEnvText(pid) {
     try { return fs.readFileSync(`/proc/${pid}/environ`, 'utf8'); } catch { return ''; }
   }
   if (process.platform === 'darwin') {
-    // `ps -E` appends the environment of processes owned by the same user.
-    const r = spawnSync('ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
-    return r.status === 0 ? r.stdout : '';
+    // `ps -E` appends the environment of processes owned by the same user to
+    // the command line; keep only what follows the command line.
+    const withEnv = spawnSync('ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+    const argsOnly = spawnSync('ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+    return withEnv.status === 0 && argsOnly.status === 0 ? darwinEnvPart(withEnv.stdout, argsOnly.stdout) : '';
   }
   return '';
 }
@@ -768,14 +772,11 @@ async function cmdStop(opts) {
 
   // 3. launchd jobs labelled for our suffix that are no longer running.
   if (process.platform === 'darwin') {
-    const base = `com.wmux.daemon${state.suffix}.`;
     const list = spawnSync('launchctl', ['list'], { encoding: 'utf8' });
-    for (const line of (list.stdout || '').split('\n')) {
-      const [pidCol, , label] = line.trim().split(/\s+/);
-      if (label?.startsWith(base) && pidCol === '-') {
-        spawnSync('launchctl', ['bootout', `gui/${process.getuid()}/${label}`]);
-        steps.push(`launchd job ${label}: booted out`);
-      }
+    for (const { label, pid } of launchdJobsFor(list.stdout, state.suffix)) {
+      if (pid !== null) continue;
+      spawnSync('launchctl', ['bootout', `gui/${process.getuid()}/${label}`]);
+      steps.push(`launchd job ${label}: booted out`);
     }
   }
 

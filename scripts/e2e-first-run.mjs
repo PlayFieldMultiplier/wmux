@@ -63,7 +63,7 @@ import {
   verdictLine,
   writesOutsideSandbox,
 } from './lib/e2e-first-run-lib.mjs';
-import { envHasSuffix, linkInTree, parseKillResults, windowsKillQuery } from './lib/control-wmux-lib.mjs';
+import { darwinEnvPart, envHasSuffix, launchdJobsFor, linkInTree, parseKillResults, windowsKillQuery } from './lib/control-wmux-lib.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = path.join(REPO_ROOT, 'scripts', 'control-wmux.mjs');
@@ -236,7 +236,14 @@ function processEnvText(pid) {
     if (process.platform === 'linux') {
       fs.readFile(`/proc/${pid}/environ`, 'utf8', (err, text) => resolve(err ? '' : text));
     } else if (process.platform === 'darwin') {
-      execFile('ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='], { timeout: 15_000 }, (err, stdout) => resolve(err ? '' : stdout));
+      // `ps -E` prints the command line, then the environment: keep only the
+      // environment, so an argument cannot pass for it.
+      execFile('ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='], { timeout: 15_000 }, (err, withEnv) => {
+        if (err) return resolve('');
+        execFile('ps', ['-ww', '-p', String(pid), '-o', 'command='], { timeout: 15_000 }, (err2, argsOnly) => {
+          resolve(err2 ? '' : darwinEnvPart(withEnv, argsOnly));
+        });
+      });
     } else resolve('');
   });
 }
@@ -377,6 +384,23 @@ async function teardown() {
     report.killedAfterStop = alive.length - still.length;
     report.killed = alive.filter((r) => !still.includes(r)).map((r) => ({ pid: r.ProcessId, createdAt: r.CreationDate, name: r.Name }));
     if (still.length) report.problems.push(`could not kill ${still.map((r) => `${r.Name}#${r.ProcessId}`).join(', ')}`);
+  }
+  // macOS: a launchd job labelled for this run's suffix that outlived the
+  // sweep. A finished one is booted out; a running one is a leak.
+  if (process.platform === 'darwin') {
+    const list = await new Promise((resolve) => {
+      execFile('launchctl', ['list'], { timeout: 15_000 }, (err, stdout) => resolve(err ? '' : stdout));
+    });
+    for (const job of launchdJobsFor(list, suffix)) {
+      if (job.pid !== null) {
+        report.problems.push(`launchd job ${job.label} still running (pid ${job.pid}), left in place`);
+        continue;
+      }
+      await new Promise((resolve) => {
+        execFile('launchctl', ['bootout', `gui/${process.getuid()}/${job.label}`], { timeout: 15_000 }, () => resolve());
+      });
+      (report.launchdBootedOut ??= []).push(job.label);
+    }
   }
   report.processesLeft = 0;
   {

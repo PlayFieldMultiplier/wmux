@@ -64,7 +64,9 @@ because it drives an already packaged app.
   `control-wmux stop --purge`, only while the recorded app is alive; then any
   recorded process still alive (same pid and creation time, re-checked right
   before each kill; on Windows checked and killed through one pinned process
-  handle, never a bare pid) is killed and fails the run; then the sandbox is deleted.
+  handle, never a bare pid) is killed and fails the run; on macOS a finished
+  launchd job labelled for the suffix is booted out (a running one fails the
+  run); then the sandbox is deleted.
   Suffixed data outside the sandbox that appeared during the run is deleted
   and fails the run; data that existed before is never touched.
   `result.json` lists the pinned identities and every kill.
