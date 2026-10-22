@@ -134,7 +134,7 @@ import {
   askDeclinedOnScreen,
   askOtherMaxWidth,
   askPickerOnScreen,
-  askPickerUntouched,
+  askPickerUntouchedRead,
   askScreenShape,
   askConfirmBaseline,
   askReviewOf,
@@ -520,7 +520,7 @@ export interface ApprovalRegistryDeps {
    */
   readPromptScreen?: (
     sessionId: string,
-  ) => Promise<{ rows: readonly string[]; mark: PromptScreenMark; cols?: number } | null>;
+  ) => Promise<{ rows: readonly string[]; mark: PromptScreenMark; cols?: number; unknown?: readonly string[] } | null>;
   /**
    * `terminal_prompt` — the latest `tool_use` in the pane's own transcript
    * that has no `tool_result` yet, or null. A record is answerable only when
@@ -3363,7 +3363,8 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       return { ok: false, reason: 'prompt-changed', request: copyRequest(record) };
     }
     const picker = parseAskPicker(first.rows);
-    if (!askPickerUntouched(picker, questions)) {
+    const untouched = askPickerUntouchedRead(picker, questions, first.unknown, answers);
+    if (untouched !== 'meets') {
       const hint = askPickerOnScreen(first.rows);
       // Nothing of the question on screen, and no picker either: it was
       // answered or dismissed at the terminal. Same outcome as a v1 answer.
@@ -3376,7 +3377,9 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
         audit(gone.ok ? 'ok' : gone.reason);
         return gone;
       }
-      const outcome = picker ? 'picker-differs' : hint ? 'picker-unreadable' : 'no-picker';
+      // `unknown`: the picker matches, but the label of an option the answer
+      // chooses holds a cell the read could not see.
+      const outcome = picker && untouched === 'differs' ? 'picker-differs' : picker || hint ? 'picker-unreadable' : 'no-picker';
       audit(`prompt-changed:${outcome}`);
       if (!picker) {
         // What the read saw, as shapes only, so the next refusal of a picker
@@ -3399,7 +3402,9 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
   }
 
   /** One screen read with the pane's state at that instant, or null. Outside the chain. */
-  private async readQuestionScreen(sessionId: string): Promise<{ rows: readonly string[]; mark: PromptScreenMark; cols?: number } | null> {
+  private async readQuestionScreen(
+    sessionId: string,
+  ): Promise<{ rows: readonly string[]; mark: PromptScreenMark; cols?: number; unknown?: readonly string[] } | null> {
     try {
       return (await this.deps.readPromptScreen?.(sessionId)) ?? null;
     } catch (err) {
@@ -3567,9 +3572,9 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
         const picker = parseAskPicker(screen.rows);
         const wantsReview = step.expect.view === 'review' || step.expect.view === 'review-or-closed';
         if (step.expect.view === 'review-or-closed') {
-          if (askScreenMeets(picker, { view: 'review' }, questions, answers)) return screen;
+          if (askScreenMeets(picker, { view: 'review' }, questions, answers, screen.unknown)) return screen;
           if (answersConfirmed(screen.rows, baseline, questions, answers)) return { closed: true };
-        } else if (askScreenMeets(picker, step.expect, questions, answers)) {
+        } else if (askScreenMeets(picker, step.expect, questions, answers, screen.unknown)) {
           return screen;
         }
         if (wantsReview && askReviewOf(picker, questions)) {
@@ -3684,7 +3689,7 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
         // Output since the read: read again (and prove again, for the first key).
         if (at === 0) {
           const again = await this.readQuestionScreen(sessionId);
-          if (!again || !askPickerUntouched(parseAskPicker(again.rows), questions)) return unwritten('retry');
+          if (!again || askPickerUntouchedRead(parseAskPicker(again.rows), questions, again.unknown, answers) !== 'meets') return unwritten('retry');
           read = again;
         }
         if (this.now() > deadline) return at > 0 ? stop(changed(), 'deadline') : unwritten('deadline');

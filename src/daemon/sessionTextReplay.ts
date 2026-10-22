@@ -101,3 +101,38 @@ export function readRingTailWithModesAndGeometry(
     writtenAt,
   };
 }
+
+/** A cell no byte of a replay wrote (see withUnknownCells). Private use: no TUI draws it. */
+export const UNKNOWN_CELL = '';
+
+/**
+ * A replay that starts mid-session (the ring has dropped its oldest bytes),
+ * with every cell of its first grid set to UNKNOWN_CELL before the ring's
+ * bytes, so a cell none of them writes reads as unknown rather than blank.
+ * A TUI that repaints by cell diff (Claude Code) skips a cell that already
+ * holds the right character, and when that cell was written before the ring's
+ * oldest byte no replay of the ring can know it. Erases and scrolls write real
+ * blanks, so only cells never written stay unknown. The fill goes after the
+ * mode preamble (which may enter the alternate screen), at the size the first
+ * stretch was written at. A replay from the session's first byte is returned
+ * as it is.
+ */
+export function withUnknownCells(
+  read: { raw: Buffer; replay: Buffer; geometry: ReplayGeometry | undefined; writtenAt: number },
+  size: { cols: number; rows: number },
+): { replay: Buffer; geometry: ReplayGeometry | undefined; marked: boolean } {
+  if (read.writtenAt <= read.raw.length) return { replay: read.replay, geometry: read.geometry, marked: false };
+  const { cols, rows } = read.geometry?.start ?? size;
+  let text = '\x1b[0m';
+  for (let row = 1; row <= rows; row++) text += `\x1b[${row};1H${UNKNOWN_CELL.repeat(cols)}`;
+  const fill = Buffer.from(`${text}\x1b[H`, 'utf8');
+  const lead = read.replay.subarray(0, read.replay.length - read.raw.length);
+  return {
+    replay: Buffer.concat([lead, fill, read.raw]),
+    geometry: read.geometry && {
+      start: read.geometry.start,
+      changes: read.geometry.changes.map((c) => ({ ...c, offset: c.offset + fill.length })),
+    },
+    marked: true,
+  };
+}
