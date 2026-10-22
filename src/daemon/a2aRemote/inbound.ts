@@ -54,6 +54,8 @@ export interface InboundDeps {
   offers?: { applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse | Promise<A2aRemoteDeliverResponse> };
   /** Images on task / reply envelopes (`images.1`); absent, refs are ignored and only the text is taken. */
   images?: InboundImages;
+  /** Where a refusal's detail goes: this PC's log. The peer gets the code alone. */
+  log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
 export interface InboundImages {
@@ -75,7 +77,28 @@ export const PULL_MAX_ATTEMPTS = 3;
 
 const BROKEN: ReadonlySet<string> = new Set(['pane-closed', 'pane-moved', 'workspace-gone', 'exposure-revoked']);
 
+/**
+ * Apply one envelope from an authenticated peer. A refusal answers with its
+ * code only (`A2aRemoteErrorCode`): the detail behind it (a store error, a
+ * check's own words) is logged here and never sent to the peer.
+ */
 export async function acceptInbound(
+  raw: unknown,
+  peer: { hostId: HostId; pull?: ImagePull },
+  deps: InboundDeps,
+): Promise<A2aRemoteDeliverResponse> {
+  let answer: A2aRemoteDeliverResponse;
+  try {
+    answer = await applyInbound(raw, peer, deps);
+  } catch (err) {
+    answer = { ok: false, error: 'unavailable', message: err instanceof Error ? err.message : String(err) };
+  }
+  if (answer.ok || answer.message === undefined) return answer;
+  deps.log?.('warn', `[a2a-remote] message from ${peer.hostId} refused (${answer.error}): ${answer.message}`);
+  return { ok: false, error: answer.error };
+}
+
+async function applyInbound(
   raw: unknown,
   peer: { hostId: HostId; pull?: ImagePull },
   deps: InboundDeps,
