@@ -31,17 +31,25 @@ export interface TemplateDefinition {
   /** The default job and wakes for a bot whose session holds no repository
    *  reads (botRepoReadRoot: another engine, or no local checkout), for a
    *  template whose own lines name tools only a reading bot has. */
-  withoutRepoReads?: { defaultJob: string; wakes: readonly string[] };
+  withoutRepoReads?: {
+    defaultJob: string;
+    wakes: readonly string[];
+    /** Tool lines that differ for such a bot (the rest are `powers`). */
+    powers?: Partial<Record<BotToolName, string>>;
+  };
 }
 
-/** The template's default job and wakes for this bot: the ones that name the
- *  repository read tools only when its session holds them (the same
- *  predicate gives the session Read, Grep, Glob and the git reads). Pure. */
+/** The template's default job, wakes and tool lines for this bot: the ones
+ *  that rest on reading the repository only when its session holds those
+ *  reads (the same predicate gives the session Read, Grep, Glob and the git
+ *  reads). Pure. */
 export function templateTextsFor(
   def: TemplateDefinition,
   profile: Pick<BotProfile, 'engine' | 'repo'>,
-): { defaultJob: string; wakes: readonly string[] } {
-  return botRepoReadRoot(profile) || !def.withoutRepoReads ? { defaultJob: def.defaultJob, wakes: def.wakes } : def.withoutRepoReads;
+): { defaultJob: string; wakes: readonly string[]; powers: Partial<Record<BotToolName, string>> } {
+  const alt = def.withoutRepoReads;
+  if (botRepoReadRoot(profile) || !alt) return { defaultJob: def.defaultJob, wakes: def.wakes, powers: def.powers };
+  return { defaultJob: alt.defaultJob, wakes: alt.wakes, powers: { ...def.powers, ...alt.powers } };
 }
 
 /** How a bot settles a task the gate skipped because it made no commits
@@ -157,10 +165,10 @@ function bullet(lines: readonly string[]): string {
  *  says when it speaks of it (with only the id, a model names the workspace
  *  after the repository's folder). */
 export function renderBotPrompt(def: TemplateDefinition, profile: Pick<BotProfile, 'name' | 'job' | 'workspaceId' | 'repo' | 'engine'>, workspaceName?: string | null): string {
-  const powers = SHARED_SURFACE_TOOLS.map((tool) => `- ${tool}: ${def.powers[tool] ?? COMMON_POWERS[tool] ?? ''}`);
+  const texts = templateTextsFor(def, profile);
+  const powers = SHARED_SURFACE_TOOLS.map((tool) => `- ${tool}: ${texts.powers[tool] ?? COMMON_POWERS[tool] ?? ''}`);
   // The same predicate decides whether the bot's session holds the read tools.
   const readRoot = botRepoReadRoot(profile);
-  const texts = templateTextsFor(def, profile);
   if (readRoot) {
     powers.push(`- Read, Grep, Glob: read the files of your repository at ${readRoot} (the local checkout as it stands) ${def.repoRead ?? REPO_READ_POWER}`);
   }

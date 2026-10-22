@@ -64,5 +64,9 @@ export const REVIEWER_TEMPLATE: TemplateDefinition = {
       `${ASKED_WAKE_START}Otherwise start one verify worker at it, post the status card, end the turn. A request that names no PR: ask which one.`,
       ...GATED_WAKES,
     ],
+    powers: {
+      fanout_start: 'start one verify worker for each head you grade (an ungated or docs-only one too: its worker reads it and runs no tests of its own), with preset "verify" and checkout {sha: the head, fetch_ref: the fetchRef pr_read gives (pull/<n>/head on GitHub, merge-requests/<n>/head on GitLab)}; its prompt says what to look at in this change.',
+      pr_verdict: 'record your verdict on one head: prNumber, headSha, verdict (pass or fail), a summary, and evidence {taskId} — the verify task whose recorded gate (or record that the repository declares none) it rests on. wmux checks the evidence the way the merge lane will, and a refusal names the reason.',
+    },
   },
 };

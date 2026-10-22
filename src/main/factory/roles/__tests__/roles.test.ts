@@ -155,7 +155,10 @@ describe('bot prompts (job, powers and outputs)', () => {
     for (const p of unread) {
       const prompt = rolePrompt(p);
       expect(prompt, p.engine.kind).not.toMatch(/git_diff|git_show/);
-      expect(prompt).not.toMatch(/you read the diff yourself/);
+      // No line offers it a verdict on its own reading: not the job, not a wake, not a tool.
+      expect(prompt).not.toMatch(/you read the diff yourself|which you read yourself|reading: true/);
+      expect(prompt).toMatch(/pr_verdict: .*evidence \{taskId\}/);
+      expect(prompt).toMatch(/fanout_start: start one verify worker for each head you grade/);
       const wake = prompt.split('\n').find((l) => l.startsWith('- A handoff, a mention or the owner\'s message asking you to verify a PR')) ?? '';
       expect(wake).toMatch(/When that head already has your verdict, answer with it\. Otherwise start one verify worker at it, post the status card, end the turn\./);
       // The job the wake prompt restates is the same one.
@@ -164,6 +167,7 @@ describe('bot prompts (job, powers and outputs)', () => {
     }
     // A reviewer that reads its repository keeps its own reading of an ungated head.
     expect(rolePrompt(profile('reviewer'))).toContain('read the diff with mcp__wmux_repo__git_diff');
+    expect(rolePrompt(profile('reviewer'))).toMatch(/pr_verdict: .*evidence \{reading: true\} for a head whose base branch declares no gate, which you read yourself/);
     expect(effectiveJob(profile('reviewer'))).toMatch(/you read the diff yourself/);
     // A job the owner wrote is kept as written either way.
     expect(effectiveJob(profile('reviewer', { repo: undefined, job: 'Review PRs.' }))).toBe('Review PRs.');
