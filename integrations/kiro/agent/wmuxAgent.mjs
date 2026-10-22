@@ -41,6 +41,43 @@ export const KIRO_AGENT_MANAGED_MARKER = 'wmux-managed: kiro-lifecycle-agent';
  *  backstop that cannot hold a turn for ten seconds if the bridge wedges. */
 export const KIRO_HOOK_TIMEOUT_MS = 2500;
 
+/**
+ * What a bridge path may hold on Windows, where it goes into the hook line
+ * unquoted: letters and marks in any script, digits, separators and `_ . - ~ +`.
+ * Everything else is either whitespace or means something to cmd, PowerShell or
+ * a POSIX shell (Git Bash) when it stands bare.
+ */
+const WINDOWS_BARE_PATH = /^[\p{L}\p{M}\p{N}_.\-~+:/\\]+$/u;
+
+/**
+ * The hook command line for the bridge at `bridgeScript`.
+ *
+ * POSIX: `node "<path>"`. Kiro runs a hook there with `bash -c`, which honours
+ * the quotes, so a path with a space works.
+ *
+ * Windows: `node C:/path/to/wmux-kiro-bridge.mjs`, unquoted, forward slashes
+ * (#1917). Kiro's open-source predecessor runs a hook as
+ * `Command::new("cmd").arg("/C").arg(command)`: Rust escapes every `"` in the
+ * command as `\"`, cmd /C strips only the outer pair it added, and node reads
+ * `\"` as a literal quote, so a quoted path reaches node with its quotes and
+ * fails for EVERY path. No quoting survives that, so the path must be safe to
+ * stand bare: a path with a space or a shell character is refused. Forward
+ * slashes keep the same line working when Git Bash, PowerShell or cmd run it
+ * verbatim.
+ */
+export function kiroHookCommand(bridgeScript, platform = process.platform) {
+  if (platform !== 'win32') return `node "${bridgeScript}"`;
+  if (!WINDOWS_BARE_PATH.test(bridgeScript)) {
+    throw new Error(
+      `wmux Kiro hook: the bridge path ${JSON.stringify(bridgeScript)} has a space or a shell character. `
+      + 'On Windows, Kiro runs hook commands through cmd /C in a way that cannot pass a quoted path, '
+      + 'so the path is written unquoted and must have no spaces. '
+      + 'Put the hook files in a folder such as C:/wmux-hooks/.',
+    );
+  }
+  return `node ${bridgeScript.replaceAll('\\', '/')}`;
+}
+
 /** Fields this agent intends to differ on. Everything else must match the
  *  built-in — that is what the equivalence check enforces. */
 export const INTENDED_DIFFERENCES = ['name', 'description', 'prompt', 'hooks'];
@@ -61,10 +98,10 @@ export function buildKiroAgentConfig(
   // drops a resource path it cannot resolve without saying so — the same
   // silent loss of skills and steering this file exists to prevent. Callers
   // that need the other separator still pass it explicitly (the equivalence
-  // check does).
-  { sep = process.platform === 'win32' ? '\\' : '/' } = {},
+  // check does). `platform` picks the hook command form (kiroHookCommand).
+  { platform = process.platform, sep = platform === 'win32' ? '\\' : '/' } = {},
 ) {
-  const command = `node "${bridgeScript}"`;
+  const command = kiroHookCommand(bridgeScript, platform);
   const hook = [{ command, timeout_ms: KIRO_HOOK_TIMEOUT_MS }];
   const kiroHome = `${home}${sep}.kiro`;
   return {

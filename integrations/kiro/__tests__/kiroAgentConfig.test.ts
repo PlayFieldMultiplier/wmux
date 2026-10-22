@@ -77,10 +77,53 @@ describe('buildKiroAgentConfig', () => {
     }
   });
 
-  it('quotes the bridge path so a space in it survives', () => {
-    const hooks = buildKiroAgentConfig('C:\\Program Files\\wmux\\b.mjs', HOME).hooks as
+  const commandFor = (bridge: string, platform: string) => {
+    const hooks = buildKiroAgentConfig(bridge, HOME, { platform }).hooks as
       Record<string, Array<{ command: string }>>;
-    expect(hooks.stop[0].command).toBe('node "C:\\Program Files\\wmux\\b.mjs"');
+    expect(hooks.agentSpawn[0].command).toBe(hooks.stop[0].command);
+    return hooks.stop[0].command;
+  };
+
+  it('quotes the bridge path on POSIX so a space in it survives', () => {
+    expect(commandFor('/Users/some one/.wmux/hooks/b.mjs', 'darwin')).toBe('node "/Users/some one/.wmux/hooks/b.mjs"');
+    expect(commandFor('/home/someone/.wmux/hooks/b.mjs', 'linux')).toBe('node "/home/someone/.wmux/hooks/b.mjs"');
+  });
+
+  // #1917: Kiro runs a Windows hook through `cmd /C` with Rust's argument
+  // quoting, which delivers any quote in the line to node as a literal one.
+  // The Windows line is therefore unquoted, with forward slashes, which every
+  // shell that might run it verbatim also reads the same way.
+  it('writes the Windows bridge path unquoted, with forward slashes', () => {
+    expect(commandFor('C:\\Users\\someone\\.wmux\\hooks\\b.mjs', 'win32')).toBe('node C:/Users/someone/.wmux/hooks/b.mjs');
+    expect(commandFor('C:/wmux-hooks/b.mjs', 'win32')).toBe('node C:/wmux-hooks/b.mjs');
+    expect(commandFor('C:\\Users\\RUNNER~1\\x_y.z+1\\b.mjs', 'win32')).toBe('node C:/Users/RUNNER~1/x_y.z+1/b.mjs');
+  });
+
+  it('accepts letters in any script on Windows', () => {
+    expect(commandFor('C:\\Users\\김철수\\.wmux\\hooks\\b.mjs', 'win32')).toBe('node C:/Users/김철수/.wmux/hooks/b.mjs');
+    expect(commandFor('C:\\Users\\Zoë\\Привет\\b.mjs', 'win32')).toBe('node C:/Users/Zoë/Привет/b.mjs');
+  });
+
+  it('refuses a Windows path no unquoted form can carry, and names a way out', () => {
+    for (const bad of [
+      'C:\\Program Files\\wmux\\b.mjs',
+      'C:\\Users\\some\tone\\b.mjs',
+      'C:\\Users\\some　one\\b.mjs', // ideographic space
+      'C:\\a"b\\b.mjs',
+      "C:\\Users\\O'Brien\\b.mjs",
+      'C:\\a&b\\b.mjs',
+      'C:\\a(1)\\b.mjs',
+      'C:\\100%\\b.mjs',
+      'C:\\a$b\\b.mjs',
+      'C:\\a;b\\b.mjs',
+      'C:\\a,b\\b.mjs',
+      'C:\\a^b\\b.mjs',
+      'C:\\a!b\\b.mjs',
+      '',
+    ]) {
+      expect(() => buildKiroAgentConfig(bad, HOME, { platform: 'win32' }), JSON.stringify(bad))
+        .toThrow(/no spaces[\s\S]*C:\/wmux-hooks\//);
+    }
   });
 
   it('declares exactly the fields it means to differ on', () => {

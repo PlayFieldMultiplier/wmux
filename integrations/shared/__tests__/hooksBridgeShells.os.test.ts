@@ -43,6 +43,8 @@ const BASH = isWin
   ].find((p): p is string => !!p && fs.existsSync(p)) ?? null
   : (fs.existsSync('/bin/bash') ? '/bin/bash' : null);
 const have = (p: string | null): p is string => !!p && fs.existsSync(p);
+// The Windows Kiro layouts live under the temp dir and must be space-free (#1917).
+const WINDOWS_TMP_HAS_SPACE = isWin && /\s/.test(os.tmpdir());
 
 interface Received { method: string; params: Record<string, unknown>; clientName?: string }
 
@@ -169,19 +171,29 @@ describe('shell form under every host shell', () => {
   }, 60_000);
 });
 
-describe('kiro through the shared bridge, installed layout', () => {
+describe.skipIf(WINDOWS_TMP_HAS_SPACE)('kiro through the shared bridge, installed layout', () => {
   // The Kiro entry point copied NEXT TO the shared bridge, as the Kiro README
   // tells an operator to place them, and run with the exact command line the
   // Kiro agent config builder writes.
+  //
+  // POSIX keeps a quoted path, so the folder there has a space. Windows takes
+  // an unquoted one (#1917) and refuses a space, so the folder there is
+  // space-free and non-ASCII instead.
   let command: string;
+  let windowsRoot: string | undefined;
   beforeAll(() => {
-    const dir = path.join(home, 'kiro hooks');
+    if (isWin) windowsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-kiro-layout-'));
+    const dir = windowsRoot ? path.join(windowsRoot, 'kiro-한글') : path.join(home, 'kiro hooks');
     fs.mkdirSync(dir, { recursive: true });
     fs.copyFileSync(path.join(REPO_ROOT, 'integrations', 'kiro', 'bin', 'wmux-kiro-bridge.mjs'), path.join(dir, 'wmux-kiro-bridge.mjs'));
     fs.copyFileSync(path.join(REPO_ROOT, 'integrations', 'shared', 'bin', 'wmux-hooks-bridge.mjs'), path.join(dir, 'wmux-hooks-bridge.mjs'));
     const config = buildKiroAgentConfig(path.join(dir, 'wmux-kiro-bridge.mjs'), home);
     command = config.hooks.stop[0].command;
-    expect(command.startsWith('node "')).toBe(true);
+    if (isWin) expect(command).toMatch(/^node [^"]*kiro-한글\/wmux-kiro-bridge\.mjs$/);
+    else expect(command).toMatch(/^node ".* hooks\/wmux-kiro-bridge\.mjs"$/);
+  });
+  afterAll(() => {
+    if (windowsRoot) fs.rmSync(windowsRoot, { recursive: true, force: true });
   });
 
   const stop = () => ({ hook_event_name: 'stop', cwd: home, assistant_response: 'SECRET' });
@@ -206,6 +218,12 @@ describe('kiro through the shared bridge, installed layout', () => {
     expect(signalFor('kiro-cmd')?.params).toMatchObject({ kind: 'agent.stop', agent: 'kiro' });
   }, 60_000);
 
+  it.skipIf(isWin || !fs.existsSync('/bin/sh'))('POSIX sh (sh -c), the quoted path with a space', async () => {
+    const result = await run('/bin/sh', ['-c', command], 'kiro-sh', stop());
+    expect(result).toMatchObject({ code: 0, stdout: '' });
+    expect(signalFor('kiro-sh')?.params).toMatchObject({ kind: 'agent.stop', agent: 'kiro' });
+  }, 60_000);
+
   // Copied without the shared bridge beside it (the pre-move README habit):
   // no signal, but still the bridge contract — exit 0, nothing on stdout.
   it('still exits 0 silently when copied alone', async () => {
@@ -218,7 +236,7 @@ describe('kiro through the shared bridge, installed layout', () => {
   }, 60_000);
 });
 
-describe.skipIf(!have(CMD) || /\s/.test(os.tmpdir()))('kiro under its own Windows hook spawn (cmd /C, Rust quoting)', () => {
+describe.skipIf(!have(CMD) || WINDOWS_TMP_HAS_SPACE)('kiro under its own Windows hook spawn (cmd /C, Rust quoting)', () => {
   // Kiro's predecessor runs a hook on Windows as `cmd /C <command>`, the
   // command being ONE argument quoted by Rust std (see rustWindowsSpawn.ts).
   // Rust wraps it in quotes (it holds a space) and escapes every inner `"` as
@@ -226,6 +244,7 @@ describe.skipIf(!have(CMD) || /\s/.test(os.tmpdir()))('kiro under its own Window
   // reads `\"` as a literal quote. So a quoted path reaches node WITH its
   // quotes, and no quoting can protect a space. The verbatim-shell cases above
   // cannot see this, since they hand the command to the shell unchanged.
+  // The builder's Windows line is therefore unquoted (kiroHookCommand).
   //
   // The layout dirs must be space-free, as no command form survives a space
   // here (hence the skip for a temp dir with one). One of them is non-ASCII.
@@ -251,8 +270,9 @@ describe.skipIf(!have(CMD) || /\s/.test(os.tmpdir()))('kiro under its own Window
     return run(CMD as string, args, ptyId, stop(), { verbatim: true, argv0 });
   };
 
-  it('the replay reproduces it: a quoted path reaches node with its quotes (#1917)', async () => {
-    // The form the Kiro README documented. It fails with no space in the path.
+  it('a quoted path reaches node with its quotes (#1917)', async () => {
+    // The form the Kiro README used to document, and the builder used to
+    // write. It fails even with no space in the path.
     const command = `node "${scripts.plain}"`;
     expect(rustWindowsQuoteArg(command)).toBe(`"node \\"${scripts.plain}\\""`);
     const result = await runAsKiro(command, 'kiro-rust-quoted');
@@ -263,18 +283,10 @@ describe.skipIf(!have(CMD) || /\s/.test(os.tmpdir()))('kiro under its own Window
   }, 60_000);
 
   for (const name of ['plain', 'kiro-한글']) {
-    it(`an unquoted forward-slash path survives it (${name})`, async () => {
-      const ptyId = `kiro-rust-bare-${name}`;
-      const result = await runAsKiro(`node ${scripts[name].replaceAll('\\', '/')}`, ptyId);
-      expect(result).toMatchObject({ code: 0, stdout: '' });
-      expect(signalFor(ptyId)?.params).toMatchObject({ kind: 'agent.stop', agent: 'kiro', ptyId });
-    }, 60_000);
-
-    // Red until the #1917 fix changes the command the builder writes; flip to
-    // `it` with it.
-    it.fails(`the command the Kiro config builder writes survives it (${name})`, async () => {
+    it(`the command the Kiro config builder writes survives it (${name})`, async () => {
       const ptyId = `kiro-rust-builder-${name}`;
       const command = buildKiroAgentConfig(scripts[name], home).hooks.stop[0].command;
+      expect(command).not.toContain('"');
       const result = await runAsKiro(command, ptyId);
       expect(result).toMatchObject({ code: 0, stdout: '' });
       expect(signalFor(ptyId)?.params).toMatchObject({ kind: 'agent.stop', agent: 'kiro', ptyId });
