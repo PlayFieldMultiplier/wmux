@@ -1,4 +1,5 @@
 import { TERMINAL_CONTENT_CAPABILITIES, type InstalledUiPlugin, type UiPluginGlyph } from '../../../shared/pluginManagement';
+import type { PluginPreviewId } from '../../assets/media';
 import type { TranslationKey } from '../../i18n/locales/en';
 
 /** Where a plugin stands, read from the inventory alone. */
@@ -13,6 +14,8 @@ export interface PluginCatalogItem {
   taglineKey: TranslationKey;
   signature: boolean;
   glyph: UiPluginGlyph;
+  /** A real capture of the entry's own rail page, shown in the detail. */
+  preview?: PluginPreviewId;
   capabilities: readonly string[];
   readme: string;
   publisher: string;

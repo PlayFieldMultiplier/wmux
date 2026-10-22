@@ -161,6 +161,7 @@ export const pl = {
   'plugins.page.connectorsTagline': "Narzędzia dla botów i agentów",
   'plugins.page.officeTagline': "Twoi agenci jako pracownicy w biurze w stylu pixel art",
   'plugins.page.agentStatusTagline': "Wszyscy agenci w tym obszarze roboczym w jednym miejscu",
+  'plugins.page.previewAlt': "Podgląd wtyczki {name}",
   'plugins.page.stateOn': "Wł.",
   'plugins.page.stateOff': "Wył.",
   'plugins.page.noteAvailable': "Instalacja nie przyznaje żadnych uprawnień. Wtyczka pozostaje zamknięta, dopóki nie przejrzysz jej uprawnień.",

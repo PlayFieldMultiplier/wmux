@@ -161,6 +161,7 @@ export const en = {
   'plugins.page.connectorsTagline': "Tools for bots and agents",
   'plugins.page.officeTagline': "Your agents as employees in a pixel-art office",
   'plugins.page.agentStatusTagline': "Every agent in this workspace at a glance",
+  'plugins.page.previewAlt': "{name} plugin preview",
   'plugins.page.stateOn': "On",
   'plugins.page.stateOff': "Off",
   'plugins.page.noteAvailable': "Installing grants nothing. It stays closed until you review its permissions.",

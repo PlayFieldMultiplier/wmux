@@ -161,6 +161,7 @@ export const zh = {
   'plugins.page.connectorsTagline': "供机器人和智能体使用的工具",
   'plugins.page.officeTagline': "把你的智能体变成像素风办公室里的员工",
   'plugins.page.agentStatusTagline': "一览此工作区的所有智能体",
+  'plugins.page.previewAlt': "{name} 插件预览",
   'plugins.page.stateOn': "开",
   'plugins.page.stateOff': "关",
   'plugins.page.noteAvailable': "安装不会授予任何权限。在你审查其权限之前，它保持关闭。",

@@ -161,6 +161,7 @@ export const ko = {
   'plugins.page.connectorsTagline': "봇과 에이전트를 위한 도구",
   'plugins.page.officeTagline': "픽셀 아트 사무실의 직원이 된 에이전트",
   'plugins.page.agentStatusTagline': "이 워크스페이스의 모든 에이전트를 한눈에",
+  'plugins.page.previewAlt': "{name} 플러그인 미리보기",
   'plugins.page.stateOn': "켜짐",
   'plugins.page.stateOff': "꺼짐",
   'plugins.page.noteAvailable': "설치만으로는 아무 권한도 주지 않습니다. 권한을 검토하기 전까지 열리지 않습니다.",
