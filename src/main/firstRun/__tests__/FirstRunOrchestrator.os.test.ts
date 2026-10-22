@@ -84,7 +84,7 @@ vi.mock('../SampleTaskRunner', () => ({
   },
 }));
 
-import { FirstRunOrchestrator } from '../FirstRunOrchestrator';
+import { FirstRunOrchestrator, SAMPLE_WRITE_ATTEMPTS } from '../FirstRunOrchestrator';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -463,11 +463,16 @@ describe('FirstRunOrchestrator', () => {
     dc.emit('session:data', { sessionId: 'session-A', data: Buffer.from('hello', 'utf8') });
     expect(received).toEqual(['hello']);
 
-    // Write goes through writeToSession with sanitized text.
-    source.write('cmd\r');
-    expect(dc.writeToSession).toHaveBeenCalledTimes(1);
-    expect(dc.writeToSession.mock.calls[0][0]).toBe('session-A');
-    expect(typeof dc.writeToSession.mock.calls[0][1]).toBe('string');
+    // The write goes through the daemon's conditional write, never the pipe.
+    dc.rpc.mockResolvedValueOnce({ events: [{ type: 'prompt_end', byteOffset: 9 }], eventCount: 2, totalBytesWritten: 9, keyInputRevision: 0, incarnationId: 'inc-1', emptyShellPrompt: true, sessionFound: true });
+    dc.rpc.mockResolvedValueOnce({ written: true });
+    await expect(source.write('cmd\r')).resolves.toBe(true);
+    expect(dc.writeToSession).not.toHaveBeenCalled();
+    expect(dc.rpc.mock.calls[1]).toEqual(['daemon.writeIfUnchanged', {
+      sessionId: 'session-A',
+      data: 'cmd\r',
+      expect: { keyInputRevision: 0, incarnationId: 'inc-1', requireEmptyShellPrompt: true, outputBytes: 9, markerCount: 2, lastPromptMarker: { type: 'prompt_end', byteOffset: 9 } },
+    }]);
 
     unsubscribe();
     expect(dc.listenerCount('session:data')).toBe(0);
@@ -507,6 +512,65 @@ describe('FirstRunOrchestrator', () => {
     await expect(answer('command_end')).resolves.toBe(false);
     await expect(answer(null)).resolves.toBe(false);
     await expect(answer('prompt_end', true, false)).resolves.toBe(false);
+  });
+
+  // ── 9c. the sample command's delivery is checked, not assumed ──────────────
+  it('a daemon write the pane refuses is read and tried again; one that never lands is undelivered, and nothing is written over a used prompt', async () => {
+    try {
+      const dc = new MockDaemonClient();
+      const orch = new FirstRunOrchestrator(
+        makePtyManager() as never,
+        makePtyBridge() as never,
+        () => dc as never,
+        makeMcpRegistrar() as never,
+        () => 'token',
+        () => makeWindow() as never,
+      );
+      await orch.startSampleTask('session-A');
+      vi.useFakeTimers();
+      const source = capturedRuns[0].source as unknown as { write: (d: string) => Promise<boolean> };
+      const atPrompt = (bytes: number) => ({ events: [{ type: 'prompt_end', byteOffset: bytes }], eventCount: 1, totalBytesWritten: bytes, keyInputRevision: 0, emptyShellPrompt: true, sessionFound: true });
+      // The grid's resize redrew the prompt between the read and the write:
+      // refused, read again, written.
+      dc.rpc
+        .mockResolvedValueOnce(atPrompt(10)).mockResolvedValueOnce({ written: false })
+        .mockResolvedValueOnce(atPrompt(40)).mockResolvedValueOnce({ written: true });
+      const delivered = source.write('cmd\r');
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(delivered).resolves.toBe(true);
+      expect(dc.rpc.mock.calls.filter((c) => c[0] === 'daemon.writeIfUnchanged').map((c) => (c[1] as { expect: { outputBytes: number } }).expect.outputBytes)).toEqual([10, 40]);
+      // Refused every time: undelivered after a bounded number of tries.
+      dc.rpc.mockReset();
+      dc.rpc.mockImplementation(async (method: string) => (method === 'daemon.readPromptEvents' ? atPrompt(10) : { written: false }));
+      const never = source.write('cmd\r');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(never).resolves.toBe(false);
+      expect(dc.rpc.mock.calls.filter((c) => c[0] === 'daemon.writeIfUnchanged')).toHaveLength(SAMPLE_WRITE_ATTEMPTS);
+      // A prompt someone typed into: nothing is written.
+      dc.rpc.mockReset();
+      dc.rpc.mockResolvedValueOnce({ ...atPrompt(10), emptyShellPrompt: false });
+      await expect(source.write('cmd\r')).resolves.toBe(false);
+      expect(dc.rpc.mock.calls.map((c) => c[0])).toEqual(['daemon.readPromptEvents']);
+      expect(dc.writeToSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('an undelivered sample task sends neither READY nor TIMEOUT, and says so to its caller', async () => {
+    runnerOutcomes.push('undelivered');
+    const win = makeWindow();
+    const orch = new FirstRunOrchestrator(
+      makePtyManager() as never,
+      makePtyBridge() as never,
+      () => new MockDaemonClient() as never,
+      makeMcpRegistrar() as never,
+      () => 'token',
+      () => win as never,
+    );
+    await expect(orch.startSampleTask('session-A')).resolves.toBe('undelivered');
+    expect(win.webContents.send).not.toHaveBeenCalledWith(IPC.FIRST_RUN_SAMPLE_TASK_READY);
+    expect(win.webContents.send).not.toHaveBeenCalledWith(IPC.FIRST_RUN_SAMPLE_TASK_TIMEOUT);
   });
 
   // ── 10. startSampleTask — non-daemon mode + TIMEOUT event ───────────────────

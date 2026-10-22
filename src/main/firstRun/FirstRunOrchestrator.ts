@@ -27,6 +27,7 @@ import { externalRegistrationSkipReason } from '../../shared/mcpTargets';
 import type {
   FirstRunCheckResult,
   RegisterMcpResult,
+  SampleTaskOutcome,
 } from '../../shared/firstRun';
 import { AGENT_IDS, type AgentId, type AgentSetupStatus } from '../../shared/agentSetup';
 import {
@@ -62,7 +63,40 @@ function buildDaemonSource(dc: DaemonClient, ptyId: string): PtyDataSource {
       dc.on('session:data', listener);
       return () => { dc.removeListener('session:data', listener); handlerRef = NOOP; };
     },
-    write(data) { dc.writeToSession(ptyId, sanitizePtyText(data)); },
+    // Through the daemon's control channel, not the pane's session pipe: the
+    // pane's own attach replaces that pipe (pty:reconnect, forceFresh) just
+    // after the pane is created, and a write in between was dropped while
+    // the wizard reported success. daemon.writeIfUnchanged compares the pane
+    // with a fresh read and writes in one step, and answers whether it wrote.
+    // Second layer: output that lands between the read and the write (the
+    // grid's resize redraws the prompt) refuses it, so it is read and tried
+    // again, a bounded number of times. The compare makes a retry safe: a
+    // line already typed has moved the pane, so it is never typed twice.
+    async write(data) {
+      const line = sanitizePtyText(data);
+      for (let attempt = 0; attempt < SAMPLE_WRITE_ATTEMPTS; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, SAMPLE_WRITE_RETRY_MS));
+        const read = await dc.rpc('daemon.readPromptEvents', { sessionId: ptyId, limit: 1 }) as PromptRead | null;
+        // Not an empty prompt any more (typed into, or a command running):
+        // nothing is written over it.
+        if (!read || !shellAtEmptyPrompt(read)) return false;
+        const last = read.events?.at(-1);
+        const res = await dc.rpc('daemon.writeIfUnchanged', {
+          sessionId: ptyId,
+          data: line,
+          expect: {
+            ...(typeof read.keyInputRevision === 'number' ? { keyInputRevision: read.keyInputRevision } : {}),
+            ...(typeof read.incarnationId === 'string' && read.incarnationId ? { incarnationId: read.incarnationId } : {}),
+            requireEmptyShellPrompt: true,
+            outputBytes: read.totalBytesWritten ?? 0,
+            markerCount: read.eventCount ?? read.events?.length ?? 0,
+            lastPromptMarker: last && typeof last.byteOffset === 'number' ? { type: last.type, byteOffset: last.byteOffset } : null,
+          },
+        }) as { written?: boolean } | null;
+        if (res?.written === true) return true;
+      }
+      return false;
+    },
     // The daemon logs each OSC 133 marker before it forwards the bytes, so
     // its prompt log holds every prompt this listener could have missed.
     async atPrompt() {
@@ -72,8 +106,16 @@ function buildDaemonSource(dc: DaemonClient, ptyId: string): PtyDataSource {
   };
 }
 
+/** Tries of the sample command's conditional write (see buildDaemonSource). */
+export const SAMPLE_WRITE_ATTEMPTS = 10;
+export const SAMPLE_WRITE_RETRY_MS = 150;
+
 interface PromptRead {
-  events?: Array<{ type: string }>;
+  events?: Array<{ type: string; byteOffset?: number }>;
+  eventCount?: number;
+  totalBytesWritten?: number;
+  keyInputRevision?: number;
+  incarnationId?: string;
   emptyShellPrompt?: boolean;
   sessionFound?: boolean;
 }
@@ -352,7 +394,7 @@ export class FirstRunOrchestrator {
     win.webContents.send(IPC.FIRST_RUN_SAMPLE_TASK_TIMEOUT);
   }
 
-  async startSampleTask(ptyId: string): Promise<void> {
+  async startSampleTask(ptyId: string): Promise<SampleTaskOutcome> {
     // Single-flight: cancel any prior runner before starting a new one.
     this.activeAbort?.abort();
     const ctrl = new AbortController();
@@ -369,10 +411,12 @@ export class FirstRunOrchestrator {
     if (this.activeAbort === ctrl) this.activeAbort = null;
 
     const win = this.getWindow();
-    if (!win || win.isDestroyed()) return;
+    if (!win || win.isDestroyed()) return outcome;
     if (outcome === 'ok') win.webContents.send(IPC.FIRST_RUN_SAMPLE_TASK_READY);
     else if (outcome === 'timeout') win.webContents.send(IPC.FIRST_RUN_SAMPLE_TASK_TIMEOUT);
     // 'aborted' → no event; dismiss/restart already handled the UX.
+    // 'undelivered' → no event; the start invoke rejects (firstRun/index.ts).
+    return outcome;
   }
 
   // ── private ────────────────────────────────────────────────────────────────

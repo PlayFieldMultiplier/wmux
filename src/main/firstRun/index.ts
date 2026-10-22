@@ -103,10 +103,18 @@ export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): ()
         // 'awaiting-prompt' forever because it relies on the READY/TIMEOUT
         // event channels for resolution. Surface failures as a TIMEOUT
         // event so the wizard's fallback "Press Enter" UI engages.
-        orchestrator.startSampleTask(payload.ptyId).catch((err: unknown) => {
+        //
+        // A command that never reached the pane is the one outcome the invoke
+        // answers itself: it rejects, so the wizard shows an error instead of
+        // success or "press Enter" over an empty prompt.
+        const outcome = await orchestrator.startSampleTask(payload.ptyId).catch((err: unknown) => {
           console.error('[firstRun] startSampleTask failed:', err);
           orchestrator.emitSampleTaskTimeout();
+          return 'timeout' as const;
         });
+        if (outcome === 'undelivered') {
+          throw new Error('FIRST_RUN_START_SAMPLE_TASK: the sample command did not reach the pane');
+        }
       },
     ),
   );
