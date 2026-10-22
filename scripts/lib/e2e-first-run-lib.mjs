@@ -158,11 +158,13 @@ export function seededClaudeJson(home, platform = process.platform) {
  */
 export function writesOutsideSandbox(appLog, sandboxHome) {
   const norm = (v) => v.replace(/\\/g, '/').toLowerCase();
-  const home = norm(sandboxHome);
+  const home = norm(sandboxHome).replace(/\/+$/, '');
+  // The home itself or below it; a sibling such as `<home>-other` is outside.
+  const inside = (p) => p === home || p.startsWith(`${home}/`);
   const out = [];
   for (const line of String(appLog ?? '').split(/\r?\n/)) {
     const m = /\[McpRegistrar\] (?:.*: wrote \S+|MCP bundle synced to stable path|Registered wmux MCP) → (.+)$/.exec(line);
-    if (m && !norm(m[1].trim()).startsWith(home)) out.push(line.trim());
+    if (m && !inside(norm(m[1].trim()))) out.push(line.trim());
   }
   return out;
 }
@@ -299,7 +301,9 @@ export function squirrelInstallRefusal(app, localAppData, platform = process.pla
   if (platform !== 'win32' || !app || !localAppData) return null;
   const root = path.win32.join(localAppData, 'wmux');
   const rel = path.win32.relative(root, app);
-  if (rel && !rel.startsWith('..') && !path.win32.isAbsolute(rel)) {
+  // Outside is `..` or a `..\` step up; a child folder named `..x` is inside.
+  const outside = rel === '..' || rel.startsWith('..\\') || rel.startsWith('../') || path.win32.isAbsolute(rel);
+  if (rel && !outside) {
     return `refusing --app ${app}: it is the installed wmux (under ${root}), whose boot reconciles the real PATH, autostart and shortcuts; pass a packaged build such as out\\wmux-win32-x64\\wmux.exe`;
   }
   return null;
@@ -402,6 +406,19 @@ export function verdictLine({ ok, step, reason, seconds }) {
   return ok
     ? `first-run e2e: PASS${took}`
     : `first-run e2e: FAIL at ${step}: ${String(reason).replace(/\s+/g, ' ').trim()}${took}`;
+}
+
+/** Exit codes of a run cut short by a signal (128 + the signal number). */
+export const INTERRUPT_EXIT_CODES = Object.freeze({ SIGINT: 130, SIGTERM: 143 });
+
+/**
+ * `fn` run at most once however many callers ask, all sharing its promise:
+ * the main flow and the signal handlers get one teardown, and an interrupt
+ * during teardown waits for it instead of starting a second one.
+ */
+export function onceAsync(fn) {
+  let promise = null;
+  return () => (promise ??= Promise.resolve().then(fn));
 }
 
 /** Did the fake agent run inside a pane (a tty) and get the sample task's prompt? */

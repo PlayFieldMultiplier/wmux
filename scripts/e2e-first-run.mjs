@@ -48,9 +48,11 @@ import {
   agentRanInPane,
   appEnvExtras,
   fakeAgentShims,
+  INTERRUPT_EXIT_CODES,
   killSurvivors,
   mergeTrees,
   normalizeProcessRows,
+  onceAsync,
   paneProbeCommand,
   paneProbeRefusal,
   parseRunArgs,
@@ -647,6 +649,27 @@ async function scenario() {
   });
 }
 
+// Ctrl+C or a SIGTERM still tears down: otherwise the app, its daemon, the
+// sandbox and the suffixed data stay behind. The main flow and the handlers
+// share one teardown; a second Ctrl+C (the handler is `once`) exits at once.
+const runTeardown = onceAsync(teardown);
+for (const [signal, exitCode] of Object.entries(INTERRUPT_EXIT_CODES)) {
+  process.once(signal, () => {
+    log(`${signal}: tearing down before exit (press Ctrl+C again to exit without it)`);
+    runTeardown()
+      .then((report) => report, (err) => ({ problems: [`teardown threw: ${err?.stack || err}`] }))
+      .then((report) => {
+        result.teardown = report;
+        result.ok = false;
+        result.failure = { step: 'interrupted', reason: `${signal} during the run; teardown ${report?.problems?.length ? `problems: ${report.problems.join('; ')}` : 'clean'}` };
+        result.seconds = (Date.now() - t0) / 1000;
+        try { fs.writeFileSync(path.join(runDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`); } catch { /* best effort */ }
+        console.log(verdictLine({ ok: false, step: result.failure.step, reason: result.failure.reason, seconds: result.seconds }));
+      })
+      .finally(() => process.exit(exitCode));
+  });
+}
+
 let failure = null;
 try {
   await scenario();
@@ -661,7 +684,7 @@ try {
 
 let teardownReport;
 try {
-  teardownReport = await teardown();
+  teardownReport = await runTeardown();
 } catch (err) {
   teardownReport = { problems: [`teardown threw: ${err?.stack || err}`] };
 }

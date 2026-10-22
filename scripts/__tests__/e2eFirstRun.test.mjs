@@ -21,9 +21,11 @@ import {
   agentRanInPane,
   appEnvExtras,
   fakeAgentShims,
+  INTERRUPT_EXIT_CODES,
   killSurvivors,
   mergeTrees,
   normalizeProcessRows,
+  onceAsync,
   paneProbeCommand,
   paneProbeRefusal,
   parseRunArgs,
@@ -119,6 +121,18 @@ describe('MCP registration stays in the sandbox', () => {
     expect(out).toHaveLength(2);
     expect(out[0]).toContain('.claude.json');
     expect(writesOutsideSandbox('', 'C:\\Temp')).toEqual([]);
+  });
+
+  it('treats a sibling dir that shares the sandbox prefix as outside', () => {
+    const log = [
+      '[McpRegistrar] Registered wmux MCP → C:\\Temp\\wmux-fr-abc123-other\\.wmux\\mcp\\index.js',
+      '[McpRegistrar] Registered wmux MCP → C:\\Temp\\wmux-fr-abc123\\.wmux\\mcp\\index.js',
+      '[McpRegistrar] Registered wmux MCP → /tmp/wmux-fr-abc123other/.wmux/mcp/index.js',
+    ].join('\n');
+    const out = writesOutsideSandbox(log, 'C:\\Temp\\wmux-fr-abc123\\');
+    expect(out).toHaveLength(2);
+    expect(out[0]).toContain('wmux-fr-abc123-other');
+    expect(writesOutsideSandbox(log.split('\n')[2], '/tmp/wmux-fr-abc123')).toHaveLength(1);
   });
 });
 
@@ -259,6 +273,11 @@ describe('squirrelInstallRefusal', () => {
     expect(squirrelInstallRefusal('c:\\users\\ME\\appdata\\local\\WMUX\\wmux.exe', lad, 'win32')).toMatch(/installed wmux/);
   });
 
+  it('refuses a child folder whose name starts with two dots', () => {
+    expect(squirrelInstallRefusal('C:\\Users\\me\\AppData\\Local\\wmux\\..x\\wmux.exe', lad, 'win32')).toMatch(/installed wmux/);
+    expect(squirrelInstallRefusal('C:\\Users\\me\\AppData\\Local\\wmux\\..\\wmux-other\\wmux.exe', lad, 'win32')).toBeNull();
+  });
+
   it('accepts a packaged build elsewhere, a sibling folder, and other platforms', () => {
     expect(squirrelInstallRefusal('D:\\wmux\\out\\wmux-win32-x64\\wmux.exe', lad, 'win32')).toBeNull();
     expect(squirrelInstallRefusal('C:\\Users\\me\\AppData\\Local\\wmux-e2e\\wmux.exe', lad, 'win32')).toBeNull();
@@ -277,6 +296,37 @@ describe('agentRanInPane', () => {
     expect(agentRanInPane(log)).toEqual({ started: true, prompted: true });
     expect(agentRanInPane(JSON.stringify({ agent: 'claude', event: 'start', tty: false }))).toEqual({ started: false, prompted: false });
     expect(agentRanInPane(`not json\n${JSON.stringify({ agent: 'codex', event: 'start', tty: true })}`)).toEqual({ started: false, prompted: false });
+  });
+});
+
+describe('teardown on Ctrl+C / SIGTERM', () => {
+  it('runs one teardown however many callers ask, sharing its result', async () => {
+    let calls = 0;
+    const run = onceAsync(async () => { calls++; return { problems: [] }; });
+    const [a, b] = await Promise.all([run(), run()]);
+    expect(await run()).toBe(a);
+    expect(b).toBe(a);
+    expect(calls).toBe(1);
+  });
+
+  it('shares a failed teardown too, never retrying it', async () => {
+    let calls = 0;
+    const run = onceAsync(() => { calls++; throw new Error('boom'); });
+    await expect(run()).rejects.toThrow('boom');
+    await expect(run()).rejects.toThrow('boom');
+    expect(calls).toBe(1);
+  });
+
+  it('exits 130 on SIGINT and 143 on SIGTERM', () => {
+    expect(INTERRUPT_EXIT_CODES).toEqual({ SIGINT: 130, SIGTERM: 143 });
+  });
+
+  it('the driver tears down through the shared runner from the main flow and both signals', () => {
+    const src = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'e2e-first-run.mjs'), 'utf8');
+    expect(src).toMatch(/const runTeardown = onceAsync\(teardown\);/);
+    expect(src).toMatch(/for \(const \[signal, exitCode\] of Object\.entries\(INTERRUPT_EXIT_CODES\)\) \{\s*process\.once\(signal,/);
+    expect(src).toMatch(/await runTeardown\(\)/);
+    expect(src).not.toMatch(/await teardown\(\)/);
   });
 });
 
