@@ -3353,6 +3353,7 @@ export const zh = {
   'firstRunWizard.alreadyCompleted': '已于 {date} 完成',
   'firstRunWizard.fallbackPressEnter': '按回车继续',
   'firstRunWizard.fallbackButton': '继续',
+  'firstRunWizard.sampleTaskFailed': '无法在终端中启动示例任务。',
   'firstRunWizard.statuslineHeading': 'Claude Code 状态栏（推荐）',
   'firstRunWizard.statuslineDescription': '在 Claude Code 输入框下方显示模型、上下文用量和速率限制。你自有的状态栏（如果有）永不被覆盖。',
   'firstRunWizard.statuslineEnableButton': '启用状态栏',

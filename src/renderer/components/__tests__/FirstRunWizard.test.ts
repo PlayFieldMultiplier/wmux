@@ -338,6 +338,21 @@ describe('SampleTaskBlock (renderToStaticMarkup)', () => {
     );
     expect(html).toContain('first-run-wizard-sample-success');
   });
+
+  it('a failed sample task shows its own message, not the MCP step\'s', () => {
+    const html = renderToStaticMarkup(
+      createElement(SampleTaskBlock, {
+        uiState: 'ready',
+        sampleState: 'error',
+        completedAt: undefined,
+        onTry: noop,
+        onFallbackContinue: noop,
+      }),
+    );
+    expect(html).toContain('first-run-wizard-sample-error');
+    expect(html).toContain('The sample task could not start in the terminal.');
+    expect(html).not.toContain('Registration failed.');
+  });
 });
 
 // ─── electronAPI.firstRun integration shape ───────────────────────────────────

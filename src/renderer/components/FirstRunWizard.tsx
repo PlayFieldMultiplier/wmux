@@ -1152,7 +1152,7 @@ export function SampleTaskBlock({
   if (sampleState === 'error') {
     return frame(
       'first-run-wizard-sample-error',
-      <SetupRow status="error" title={t('firstRunWizard.error.UNKNOWN.problem')} />,
+      <SetupRow status="error" title={t('firstRunWizard.sampleTaskFailed')} />,
     );
   }
 
