@@ -81,6 +81,7 @@ const PR_REFUSAL: RefusalCopy = {
     'gh-unauth': 'the CLI task_pr opens it with (gh on GitHub, glab on GitLab) is not signed in to the repository\'s host; this is a human step',
     dirty: "the worktree has uncommitted changes — they would not be in the PR; have the worker commit them",
     'no-origin': 'the repository has no origin remote; this is a human step',
+    secrets: 'the branch carries a password or key (the same check as the Git page; see `error` and `secrets`); have the worker take it out of the commits, then call task_pr again',
   },
   fallback: 'read `reason` and `error` below, fix that, then call task_pr again',
 };

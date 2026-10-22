@@ -7006,6 +7006,8 @@ sheet. No stored token for that login → 424 `gh-auth-missing`;
 | 409 | `not-a-git-repo` | the session is not in a repository |
 | 500 | `git-operation-failed` | git could not answer; retry later |
 | 501 | `not-implemented` | this daemon does not serve the action yet (its key is absent) |
+| 409 | `secrets-found` (+ the first finding: `secretPath`, `secretWhat` (`file` \| `value`), `secretKind`, `secretLine?`; and `secretCount`; never the value) | the commits carry a password or key; take it out on the desktop and push again |
+| 500 | `secret-scan-failed` | the password and key check could not read the commits, so nothing was pushed; retry, or push from the desktop |
 | 409 | `squash-disabled`, `protected-target`, `remote-branch-exists`, `remote-unsupported`, `not-pushed`, `pr-exists` (+ `number`), `no-commits-ahead`, `detached-head`, `git-operation-in-progress`, `merge-in-flight`, `identity-changed`, `request-id-reused` | show; usually re-preview |
 | 424 | `gh-auth-missing`, `remote-forbidden` (+ `login`) | fix on the desktop |
 | 428 | `confirm-required` | new preview |
