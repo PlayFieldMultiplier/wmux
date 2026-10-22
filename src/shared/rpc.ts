@@ -297,8 +297,10 @@ export interface RpcContext {
   /**
    * A hosted caller whose CURRENT trust record passes the `agent.state.all`
    * check (an approved, unrestricted `agent.state.read.all`). Written only by
-   * RpcRouter, after its own trust lookup and only for a bound hosted caller;
-   * never from request JSON. Read by `pane.focus`, which then lets that plugin
+   * RpcRouter, after its own trust lookup and only for a bound hosted caller
+   * whose request came from the plugin's rail page (the host's
+   * `hostedRailPage` dispatch option; an always-mounted sidebar or status-bar
+   * frame is never widened); never from request JSON. Read by `pane.focus`, which then lets that plugin
    * take the user to a pane in another local workspace instead of confining it
    * to `hostedWorkspace`. Every other pane-addressed method stays confined.
    */

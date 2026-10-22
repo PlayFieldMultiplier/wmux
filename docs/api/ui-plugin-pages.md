@@ -58,10 +58,12 @@ opened is in, or out of, the next read. Responses are bounded to 128
 workspaces and 1 MiB in total; omitting whole workspaces sets the top-level
 `truncated`, omitting panes sets that workspace's.
 
-With this grant and `pane.read`, `pane.focus({id})` may name a pane in any
-local workspace the response lists: the host switches to that workspace and
-focuses the pane. Close, stash and unstash stay confined to the bound
-workspace.
+With this grant and `pane.read`, `pane.focus({id})` from the plugin's rail page
+may name a pane in any local workspace the response lists: the host switches to
+that workspace and focuses the pane. The same call from the plugin's sidebar
+panel or status-bar widget, which stay mounted while the user is elsewhere,
+stays confined to the bound workspace. Close, stash and unstash stay confined
+to the bound workspace.
 
 ## Snapshot events
 
