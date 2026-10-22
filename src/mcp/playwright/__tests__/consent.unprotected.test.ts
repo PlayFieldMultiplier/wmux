@@ -6,10 +6,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // A refusal (denied, timed out, nobody to ask) runs nothing. Calls that skip
 // no check never ask.
 
-const { mockSendRpc, getPage, isolated, resolveRef } = vi.hoisted(() => ({
+const { mockSendRpc, getPage, isolated, waitIsolated, resolveRef } = vi.hoisted(() => ({
   mockSendRpc: vi.fn(),
   getPage: vi.fn(),
-  isolated: vi.fn(async () => 'ran'),
+  isolated: vi.fn(async (): Promise<unknown> => 'ran'),
+  waitIsolated: vi.fn(async () => undefined),
   resolveRef: vi.fn(),
 }));
 
@@ -34,12 +35,13 @@ vi.mock('../snapshot', () => ({
   generateScopedSnapshot: vi.fn(),
   markDomRefsActive: vi.fn(),
 }));
-vi.mock('../isolated-eval', () => ({ evaluateIsolated: isolated, waitForIsolated: vi.fn() }));
+vi.mock('../isolated-eval', () => ({ evaluateIsolated: isolated, waitForIsolated: waitIsolated }));
 vi.mock('../user-gesture', () => ({ evaluateWithGesture: vi.fn() }));
 
 import { registerInspectionTools } from '../tools/inspection';
 import { registerStateTools } from '../tools/state';
-import { registerFileTools } from '../tools/file';
+import { claimNextDownload, guardUnclaimedDownloads, registerFileTools } from '../tools/file';
+import { registerWaitTools } from '../tools/wait';
 import { resetProtectionMemoryForTests } from '../automationLease';
 import { __resetSurfaceRoutingForTesting } from '../surfaceRouting';
 
@@ -52,6 +54,11 @@ const deps = { resolveWorkspaceId: vi.fn(async () => 'ws-test') } as never;
 registerInspectionTools(server, deps);
 registerStateTools(server, deps);
 registerFileTools(server, deps);
+registerWaitTools(
+  { registerTool: (name: string, _c: unknown, h: ToolHandler) => tools.set(name, h) } as never,
+  deps,
+  { profile: 'full', context: { principal: { kind: 'unattributed' } } } as never,
+);
 const tool = (name: string) => tools.get(name) as ToolHandler;
 const text = (r: ToolResult) => r.content.map((c) => c.text).join('\n');
 
@@ -220,12 +227,33 @@ describe('browser_storage on an unprotected pane', () => {
   const evaluate = isolated;
   beforeEach(() => getPage.mockResolvedValue({ url: () => 'https://mail.naver.com/inbox' }));
 
-  it('a sensitive page with the flag asks first, then reads', async () => {
+  it('a sensitive page with the flag asks first, then reads, checking the host in the same evaluation', async () => {
     allow();
+    isolated.mockResolvedValueOnce({ href: 'https://mail.naver.com/inbox', value: { k: 'SECRETV' } });
     const out = await tool('browser_storage')({ type: 'local', action: 'get', allowSensitiveDomains: true, surfaceId: 's1' });
     expect(out.isError).toBeUndefined();
     expect(consentCalls()[0][1]).toMatchObject({ action: 'sensitive', hosts: ['mail.naver.com'], unprotected: true });
     expect(evaluate).toHaveBeenCalled();
+    expect(text(out)).toContain('SECRETV');
+    expect(text(out)).not.toContain('href');
+  });
+
+  it('a read that lands on another site than the approved one returns nothing', async () => {
+    allow();
+    isolated.mockResolvedValueOnce({ href: 'https://other.test/', value: { k: 'SECRETV' } });
+    const out = await tool('browser_storage')({ type: 'local', action: 'get', allowSensitiveDomains: true, surfaceId: 's1' });
+    expect(out.isError).toBe(true);
+    expect(text(out)).toMatch(/^policy_denied: .*moved to another site/);
+    expect(text(out)).not.toContain('SECRETV');
+  });
+
+  it('with the flag, a page address that cannot be read is refused, not read as safe', async () => {
+    getPage.mockResolvedValue({ url: () => '' });
+    allow();
+    const out = await tool('browser_storage')({ type: 'local', action: 'get', allowSensitiveDomains: true, surfaceId: 's1' });
+    expect(out.isError).toBe(true);
+    expect(text(out)).toMatch(/^policy_denied: .*could not be read/);
+    expect(evaluate).not.toHaveBeenCalled();
   });
 
   it('a refusal reads nothing', async () => {
@@ -306,11 +334,145 @@ describe('downloads on an unprotected pane', () => {
     expect(download.path).not.toHaveBeenCalled();
   });
 
+  it('browser_wait_for_download with a filename mismatch cancels and deletes the file', async () => {
+    allow();
+    const out = await tool('browser_wait_for_download')({ filename: 'other.csv', surfaceId: 's1' });
+    expect(out.isError).toBe(true);
+    expect(text(out)).toContain('filename mismatch');
+    expect(download.cancel).toHaveBeenCalled();
+    expect(download.delete).toHaveBeenCalled();
+    expect(consentCalls()).toHaveLength(0);
+  });
+
   it('browser_wait_for_download with consent reports the file', async () => {
     allow();
     const out = await tool('browser_wait_for_download')({ surfaceId: 's1' });
     expect(out.isError).toBeUndefined();
     expect(consentCalls()[0][1]).toMatchObject({ action: 'download', detail: 'report.csv', unprotected: true });
     expect(JSON.parse(text(out))).toMatchObject({ suggestedFilename: 'report.csv' });
+  });
+});
+
+describe('browser_wait fn on an unprotected pane', () => {
+  beforeEach(() => getPage.mockResolvedValue({ url: () => 'http://a.test/x', waitForURL: vi.fn(async () => undefined) }));
+
+  it('a predicate that trips no pattern runs without asking', async () => {
+    allow();
+    const out = await tool('browser_wait')({ fn: '() => window.ready', surfaceId: 's1' });
+    expect(out.isError).toBeUndefined();
+    expect(consentCalls()).toHaveLength(0);
+    expect(waitIsolated).toHaveBeenCalledTimes(1);
+  });
+
+  it('a blocked pattern asks the operator first, then polls', async () => {
+    allow();
+    const out = await tool('browser_wait')({ fn: '() => document.cookie.length > 0', surfaceId: 's1' });
+    expect(out.isError).toBeUndefined();
+    expect(consentCalls()).toHaveLength(1);
+    expect(consentCalls()[0][1]).toMatchObject({
+      action: 'evaluate',
+      url: 'http://a.test/x',
+      detail: '() => document.cookie.length > 0',
+      unprotected: true,
+    });
+    expect(waitIsolated).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(REFUSALS)('without consent the predicate never runs: %s', async (message) => {
+    refuse(message);
+    const out = await tool('browser_wait')({ fn: '() => document.cookie.length > 0', surfaceId: 's1' });
+    expect(out.isError).toBe(true);
+    expect(text(out)).toMatch(/^policy_denied:/);
+    expect(waitIsolated).not.toHaveBeenCalled();
+  });
+
+  it('a fn next to a url is never evaluated, so nobody is asked', async () => {
+    allow();
+    const out = await tool('browser_wait')({ url: '**/x', fn: '() => document.cookie', surfaceId: 's1' });
+    expect(out.isError).toBeUndefined();
+    expect(consentCalls()).toHaveLength(0);
+  });
+});
+
+describe('downloads no download tool asked for, on an unprotected pane', () => {
+  function emitterPage() {
+    const listeners: Array<(d: unknown) => void> = [];
+    return {
+      page: { on: (_e: string, l: (d: unknown) => void) => listeners.push(l) },
+      emit: (d: unknown) => listeners.forEach((l) => l(d)),
+      count: () => listeners.length,
+    };
+  }
+  function fakeDownload() {
+    return { url: () => 'https://cdn.test/x.bin', cancel: vi.fn(async () => undefined), delete: vi.fn(async () => undefined) };
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('an unclaimed download (a click, a key press, a navigation) is cancelled and deleted', async () => {
+    const { page, emit } = emitterPage();
+    guardUnclaimedDownloads(page as never);
+    const d = fakeDownload();
+    emit(d);
+    await flush();
+    expect(d.cancel).toHaveBeenCalled();
+    expect(d.delete).toHaveBeenCalled();
+  });
+
+  it('a claim lets exactly one download through; the next is cancelled', async () => {
+    const { page, emit } = emitterPage();
+    guardUnclaimedDownloads(page as never);
+    claimNextDownload(page as never);
+    const first = fakeDownload();
+    const second = fakeDownload();
+    emit(first);
+    emit(second);
+    await flush();
+    expect(first.cancel).not.toHaveBeenCalled();
+    expect(second.cancel).toHaveBeenCalled();
+  });
+
+  it('a released claim (no download arrived) lets nothing through later', async () => {
+    const { page, emit } = emitterPage();
+    guardUnclaimedDownloads(page as never);
+    const release = claimNextDownload(page as never);
+    release();
+    const d = fakeDownload();
+    emit(d);
+    await flush();
+    expect(d.cancel).toHaveBeenCalled();
+  });
+
+  it('arming is idempotent', () => {
+    const { page, count } = emitterPage();
+    guardUnclaimedDownloads(page as never);
+    guardUnclaimedDownloads(page as never);
+    expect(count()).toBe(1);
+  });
+
+  it('browser_download arms the guard and its own download wins the race', async () => {
+    const { page: emitter, emit } = emitterPage();
+    const own = { ...fakeDownload(), suggestedFilename: () => 'x.bin', path: vi.fn(async () => '/tmp/a'), saveAs: vi.fn() };
+    const page = {
+      ...emitter,
+      url: () => 'https://app.test/',
+      // The browser emits to every listener in the order they were added: the
+      // guard first, then the tool's own wait.
+      waitForEvent: vi.fn(() => new Promise((resolve) => setTimeout(() => {
+        emit(own);
+        resolve(own);
+      }, 0))),
+    };
+    getPage.mockResolvedValue(page);
+    resolveRef.mockResolvedValue({ click: vi.fn(async () => undefined) });
+    allow();
+    const out = await tool('browser_download')({ ref: 'e1', surfaceId: 's1' });
+    expect(out.isError).toBeUndefined();
+    expect(own.cancel).not.toHaveBeenCalled();
+    // A later download nobody asked for is cancelled.
+    const stray = fakeDownload();
+    emit(stray);
+    await flush();
+    expect(stray.cancel).toHaveBeenCalled();
+    expect(stray.delete).toHaveBeenCalled();
   });
 });

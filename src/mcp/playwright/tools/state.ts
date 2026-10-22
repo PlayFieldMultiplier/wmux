@@ -552,37 +552,57 @@ export function registerStateTools(server: McpServer, deps: BrowserToolDeps): vo
                   `Pass allowSensitiveDomains:true to ask the user to allow it.`,
                 );
               }
-            } else if (allowSensitiveDomains && !isProtectedScope(scope)) {
+            }
+            // Set when the operator was asked: the host they approved, which
+            // the read itself must still be on.
+            let approvedHost: string | null | undefined;
+            if (allowSensitiveDomains && !isProtectedScope(scope)) {
               const pageUrl = await currentUrl(page, scope);
+              // An address that cannot be read cannot be checked: refused,
+              // never read as "not sensitive".
+              if (!pageUrl) {
+                throw bypassRefusal('browser_storage', 'the page address could not be read to check it against the sensitive-domain list');
+              }
               const sensitive = matchSensitiveDomain(pageUrl);
               if (sensitive) {
                 await consentToSensitiveBypass(scope, 'browser_storage', [sensitive]);
-                // Right before dispatch: still that site.
-                if (consentHostOf(await currentUrl(page, scope)) !== consentHostOf(pageUrl)) {
-                  throw bypassRefusal('browser_storage', 'the page moved to another site while the operator was being asked');
-                }
+                approvedHost = consentHostOf(pageUrl);
               }
             }
-            const result = await evalFunctionOrRpc(
+            const read = await evalFunctionOrRpc(
               page,
-              ([sName, sKey]: [string, string | undefined]) => {
+              ([sName, sKey, withHref]: [string, string | undefined, boolean]) => {
                 const storage = (window as any)[sName] as Storage;
+                let value: string | null | Record<string, string>;
                 if (sKey) {
-                  return storage.getItem(sKey);
-                }
-                // Return all entries
-                const entries: Record<string, string> = {};
-                for (let i = 0; i < storage.length; i++) {
-                  const k = storage.key(i);
-                  if (k !== null) {
-                    entries[k] = storage.getItem(k) ?? '';
+                  value = storage.getItem(sKey);
+                } else {
+                  // Return all entries
+                  const entries: Record<string, string> = {};
+                  for (let i = 0; i < storage.length; i++) {
+                    const k = storage.key(i);
+                    if (k !== null) {
+                      entries[k] = storage.getItem(k) ?? '';
+                    }
                   }
+                  value = entries;
                 }
-                return entries;
+                // The page's address, read in the same evaluation as the
+                // storage, when the operator's approval names a site.
+                return withHref ? { href: location.href, value } : value;
               },
-              [storageName, key] as [string, string | undefined],
+              [storageName, key, approvedHost !== undefined] as [string, string | undefined, boolean],
               scope,
             );
+            let result = read;
+            if (approvedHost !== undefined) {
+              const r = read as { href?: unknown; value?: unknown } | null;
+              const href = r && typeof r.href === 'string' ? r.href : '';
+              if (consentHostOf(href) !== approvedHost) {
+                throw bypassRefusal('browser_storage', 'the page moved to another site while the operator was being asked');
+              }
+              result = r?.value as typeof read;
+            }
 
             const text =
               typeof result === 'string' ? result : JSON.stringify(result, null, 2);

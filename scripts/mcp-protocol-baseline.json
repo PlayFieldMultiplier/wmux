@@ -3,7 +3,7 @@
   "profiles": {
     "full": {
       "maxListBytes": 80000,
-      "wireResultSha256": "4b9a6287cc9dcbed3ac7ab89ee06789339f36ea240b1ea8daf54615ea0bd1fdb",
+      "wireResultSha256": "d9e89fb27f0bf86f84e9eb70247c5b4b23ee5d69b7cdd88f1310bdedf8bbf513",
       "instructionSha256": "6e09a08a7038bb08f49484e3a98020ef6a35efebbebc39d33f9a514b71e7c7c1",
       "toolNames": [
         "browser_open",
