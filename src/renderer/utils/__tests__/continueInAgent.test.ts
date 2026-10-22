@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const openTerminalTab = vi.fn();
 vi.mock('../accountLogin', () => ({ openTerminalTab: (...a: unknown[]) => openTerminalTab(...a) }));
-vi.mock('../../hooks/useTerminal', () => ({ terminalRegistry: new Map([['pty-new', { modes: { bracketedPasteMode: true }, focus: () => undefined }]]) }));
+const registry = vi.hoisted(() => new Map<string, { modes: { bracketedPasteMode: boolean }; focus: () => void }>());
+vi.mock('../../hooks/useTerminal', () => ({ terminalRegistry: registry }));
 
 import { useStore } from '../../stores';
 import { HANDOFF_REQUEST_MAX, continueInAgent, continueInAgentText } from '../continueInAgent';
@@ -20,6 +21,8 @@ beforeEach(() => {
   vi.stubGlobal('window', globalThis);
   vi.stubGlobal('electronAPI', { pty: { write }, chat: { snapshot } });
   useStore.setState({ surfaceAgent: {}, toasts: [] } as never);
+  registry.clear();
+  registry.set('pty-new', { modes: { bracketedPasteMode: true }, focus: () => undefined });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -56,6 +59,64 @@ describe('continueInAgent', () => {
     expect(typed.startsWith('\x1b[200~')).toBe(true);
     expect(typed.endsWith('\x1b[201~')).toBe(true);
     expect(typed).not.toMatch(/\r$/);
+  });
+
+  const ready = () => useStore.setState({ surfaceAgent: { 'pty-new': { name: 'codex', status: 'idle', slug: 'codex' } } } as never);
+
+  it('a terminal not taking a bracketed paste gets nothing typed, even with the prompt up', async () => {
+    snapshot.mockResolvedValue({ events: [{ kind: 'user_text', text: 'line one\nline two' }] });
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    ready();
+    registry.get('pty-new')!.modes.bracketedPasteMode = false;
+    expect(await continueInAgent(req, 600)).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+    // No terminal at all: the same.
+    registry.clear();
+    expect(await continueInAgent(req, 20)).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+    expect(useStore.getState().toasts.at(-1)?.message).toBe('Codex CLI did not show its prompt, so nothing was typed into it.');
+  });
+
+  it('waits for the terminal to turn bracketed paste on after the prompt is up', async () => {
+    snapshot.mockResolvedValue(null);
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    ready();
+    registry.get('pty-new')!.modes.bracketedPasteMode = false;
+    const done = continueInAgent(req, 5_000);
+    setTimeout(() => { registry.get('pty-new')!.modes.bracketedPasteMode = true; }, 300);
+    expect(await done).toBe(true);
+    expect(write.mock.calls.map((c) => c[1]).join('').startsWith('\x1b[200~')).toBe(true);
+  });
+
+  it('a confirm or trust dialog is not the prompt', async () => {
+    snapshot.mockResolvedValue(null);
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    useStore.setState({ surfaceAgent: { 'pty-new': { name: 'codex', status: 'awaiting_input', slug: 'codex' } } } as never);
+    expect(await continueInAgent(req, 20)).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('a second click while one handoff waits opens no second tab', async () => {
+    snapshot.mockResolvedValue(null);
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    const first = continueInAgent(req, 5_000);
+    expect(await continueInAgent(req, 5_000)).toBe(false);
+    ready();
+    expect(await first).toBe(true);
+    expect(openTerminalTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('quotes the owner\'s request, not wmux\'s own continue message', async () => {
+    snapshot.mockResolvedValue({ events: [
+      { kind: 'user_text', text: 'fix the login bug' },
+      { kind: 'user_text', text: 'Continue from where you left off.' },
+    ] });
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    ready();
+    expect(await continueInAgent(req)).toBe(true);
+    const typed = write.mock.calls.map((c) => c[1]).join('');
+    expect(typed).toContain('fix the login bug');
+    expect(typed).not.toContain('Continue from where you left off.');
   });
 
   it('an agent that never shows its prompt gets nothing typed, and the owner is told', async () => {

@@ -7,7 +7,8 @@
 // agent), Resume once the reset passed, and a dismiss ×. Compact (narrow
 // pane) = glyph + countdown. Muted at rest; only the armed state is warm,
 // because it means the system will act on its own. The card opens by itself
-// once per limit when the pane is the one in front.
+// once per limit when the pane is the one in front, for a limit hit since the
+// app started (a restart does not reopen it).
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
@@ -35,6 +36,9 @@ const TEXT_BTN = `ui-icon-btn ${FOCUS_RING} h-6 px-1.5 shrink-0 text-[11px] lead
 
 /** Limits whose card already opened by itself (`ptyId:detectedAt`). */
 const autoOpened = new Set<string>();
+/** A limit detected before this renderer started does not open its card by
+ *  itself: an earlier run already did, or it was hit while wmux was closed. */
+const STARTED_AT = Date.now();
 
 export default function UsageLimitChip({ ptyId, compact, readOnly = false, workspaceId, paneId, cwd }: {
   ptyId: string | undefined;
@@ -57,7 +61,7 @@ export default function UsageLimitChip({ ptyId, compact, readOnly = false, works
   const canOpenCard = !readOnly && !!workspaceId && !!paneId;
   const inFront = useStore((s) => !!paneId && s.activeWorkspaceId === workspaceId
     && s.workspaces.find((w) => w.id === workspaceId)?.activePaneId === paneId);
-  const limitKey = limit && ptyId ? `${ptyId}:${limit.detectedAt}` : null;
+  const limitKey = limit && ptyId && limit.detectedAt >= STARTED_AT ? `${ptyId}:${limit.detectedAt}` : null;
   useEffect(() => {
     if (!limitKey || !canOpenCard || !inFront || autoOpened.has(limitKey) || !cardBtnRef.current) return;
     autoOpened.add(limitKey);

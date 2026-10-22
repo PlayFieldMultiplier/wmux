@@ -14,7 +14,7 @@ import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { getLocale } from '../../i18n';
 import { updateUsageLimit } from '../../hooks/useUsageLimitBridge';
-import { refreshAgentStatus, useAgentSetup } from '../../utils/agentSetupRuns';
+import { getAgentSetupState, refreshAgentStatus, useAgentSetup } from '../../utils/agentSetupRuns';
 import { continueInAgent } from '../../utils/continueInAgent';
 import { agentRow } from '../../../shared/agentIdentity';
 import { formatResetClock } from '../../../shared/usageLimit';
@@ -48,7 +48,8 @@ export default function UsageLimitCard({ ptyId, workspaceId, paneId, cwd, now, a
   const cardRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(240);
 
-  useEffect(() => { void refreshAgentStatus(); }, []);
+  // Probed once; later opens reuse what that found.
+  useEffect(() => { if (!getAgentSetupState().statuses) void refreshAgentStatus(); }, []);
   // Measured after each render, so placePopover can flip it above the chip.
   useLayoutEffect(() => {
     const h = cardRef.current?.offsetHeight;
@@ -57,8 +58,13 @@ export default function UsageLimitCard({ ptyId, workspaceId, paneId, cwd, now, a
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
+      // Focus elsewhere (the terminal under a card that opened by itself):
+      // close, and let the Esc reach it too.
+      const target = e.target as Node;
+      if (cardRef.current?.contains(target) || triggerRef?.current?.contains(target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
       onClose();
     };
     const onDown = (e: MouseEvent) => {
@@ -160,7 +166,8 @@ export default function UsageLimitCard({ ptyId, workspaceId, paneId, cwd, now, a
                   className="justify-start"
                   title={t('usageLimit.continueInAgentHint')}
                   onClick={() => {
-                    void continueInAgent({ heldPtyId: ptyId, fromAgent, agent: s.agent, workspaceId, paneId, ...(cwd ? { cwd } : {}) });
+                    void continueInAgent({ heldPtyId: ptyId, fromAgent, agent: s.agent, workspaceId, paneId, ...(cwd ? { cwd } : {}) })
+                      .catch((err: unknown) => { console.warn('[usageLimit] continue in agent failed', err); });
                     onClose();
                   }}
                   data-usage-limit-card-agent={s.agent}

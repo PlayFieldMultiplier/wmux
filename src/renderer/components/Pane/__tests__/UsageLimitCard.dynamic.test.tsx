@@ -10,6 +10,7 @@ vi.mock('../../../utils/continueInAgent', () => ({ continueInAgent: vi.fn(async 
 
 import { useStore } from '../../../stores';
 import { setDaemonModeActive, resetDaemonModeForTests } from '../../../daemon/daemonMode';
+import { resetAgentSetupForTests } from '../../../utils/agentSetupRuns';
 import { continueInAgent } from '../../../utils/continueInAgent';
 import UsageLimitChip from '../UsageLimitChip';
 
@@ -18,9 +19,10 @@ import UsageLimitChip from '../UsageLimitChip';
 const HOUR = 3_600_000;
 let container: HTMLDivElement;
 let root: Root;
-let detectedAt = 1_000;
+let detectedAt = Date.now();
 const update = vi.fn(async () => ({ ok: true }));
 const rotationSet = vi.fn(async () => ({ ok: true }));
+const agentStatus = vi.fn();
 
 function stubApi(opts: { accounts?: number; codex?: 'ready' | 'login-needed'; rotation?: { claude: boolean; rows?: unknown[] } } = {}) {
   const accounts = Array.from({ length: opts.accounts ?? 2 }, (_, i) => ({ id: `acc-${i}`, name: `Account ${i}`, vendor: 'claude', status: { loggedIn: true } }));
@@ -31,7 +33,7 @@ function stubApi(opts: { accounts?: number; codex?: 'ready' | 'login-needed'; ro
       get: vi.fn(async () => ({ settings: { claude: opts.rotation?.claude ?? false, codex: false }, rows: opts.rotation?.rows ?? [] })),
       set: rotationSet,
     },
-    firstRun: { agentStatus: vi.fn(async () => [{ agent: 'claude', readiness: 'ready' }, { agent: 'codex', readiness: opts.codex ?? 'ready' }]) },
+    firstRun: { agentStatus: agentStatus.mockImplementation(async () => [{ agent: 'claude', readiness: 'ready' }, { agent: 'codex', readiness: opts.codex ?? 'ready' }]) },
   });
 }
 
@@ -59,6 +61,8 @@ beforeEach(() => {
   update.mockClear();
   rotationSet.mockClear();
   vi.mocked(continueInAgent).mockClear();
+  agentStatus.mockReset();
+  resetAgentSetupForTests();
   setDaemonModeActive(true);
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -130,6 +134,7 @@ describe('usage-limit card', () => {
     act(() => root.unmount());
     root = createRoot(container);
     stubApi({ codex: 'ready' });
+    resetAgentSetupForTests();
     hold();
     await render();
     // Never the agent that is out.
@@ -137,6 +142,53 @@ describe('usage-limit card', () => {
     await act(async () => q('[data-usage-limit-card-agent="codex"]')!.click());
     expect(continueInAgent).toHaveBeenCalledWith({ heldPtyId: 'pty-1', fromAgent: 'Claude Code', agent: 'codex', workspaceId: 'ws-1', paneId: 'pane-1', cwd: '/repo' });
     expect(card()).toBeNull();
+  });
+
+  it('a limit hit before the app started does not open the card by itself', async () => {
+    stubApi();
+    hold({ detectedAt: 1_000 });
+    await render(true);
+    expect(card()).toBeNull();
+  });
+
+  it('Esc with the terminal focused closes the card and still reaches the terminal', async () => {
+    stubApi();
+    hold();
+    await render();
+    expect(card()).not.toBeNull();
+    const term = document.createElement('textarea');
+    document.body.appendChild(term);
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    const reached = vi.fn();
+    term.addEventListener('keydown', reached);
+    await act(async () => { term.dispatchEvent(esc); });
+    expect(card()).toBeNull();
+    expect(reached).toHaveBeenCalled();
+    expect(esc.defaultPrevented).toBe(false);
+    term.remove();
+  });
+
+  it('probes the installed agents once, not on every open', async () => {
+    stubApi();
+    hold();
+    await render();
+    expect(agentStatus).toHaveBeenCalledTimes(1);
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+    await act(async () => q('[data-usage-limit-action="card"]')!.click());
+    expect(card()).not.toBeNull();
+    expect(agentStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed handoff is caught, not left as an unhandled rejection', async () => {
+    stubApi();
+    hold();
+    await render();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.mocked(continueInAgent).mockRejectedValueOnce(new Error('pty gone'));
+    await act(async () => q('[data-usage-limit-card-agent="codex"]')!.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(warn).toHaveBeenCalledWith('[usageLimit] continue in agent failed', expect.any(Error));
+    warn.mockRestore();
   });
 
   it('every account out: says when the first one reopens', async () => {
