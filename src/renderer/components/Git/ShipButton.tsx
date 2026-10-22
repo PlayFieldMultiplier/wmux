@@ -206,14 +206,16 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
         <span className="wmux-git-ship-reason" data-git-ship-reason title={statusError.error}>
           {t(gone ? 'git.ship.fail.missing-folder' : 'git.ship.statusFailed')}
         </span>
-        {gone && (
+        {/* A folder that is gone: its one next step takes the button's place. */}
+        {gone ? (
           <button type="button" className={`wmux-git-button ${FOCUS_RING}`} onClick={() => void chooseFolderAgain()} data-git-ship-fix="missing-folder">
             {t('git.ship.fail.missing-folder.action')}
           </button>
+        ) : (
+          <button type="button" className={`wmux-git-primary ${FOCUS_RING}`} disabled data-git-ship-primary title={statusError.error}>
+            {t('git.ship.commit')}
+          </button>
         )}
-        <button type="button" className={`wmux-git-primary ${FOCUS_RING}`} disabled data-git-ship-primary title={statusError.error}>
-          {t('git.ship.commit')}
-        </button>
       </div>
     );
   }
