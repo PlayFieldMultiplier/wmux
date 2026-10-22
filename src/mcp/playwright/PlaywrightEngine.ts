@@ -443,7 +443,16 @@ export class PlaywrightEngine {
     await this.disconnect();
     // B0: first real use — initialize playwright-core's module graph now.
     const { chromium } = loadPlaywright();
-    this.browser = await this.connectOverCdp(chromium, endpoint, isPort ? cdpPortOrWsEndpoint : null);
+    const browser = await this.connectOverCdp(chromium, endpoint, isPort ? cdpPortOrWsEndpoint : null);
+    // The user may have stopped this op while the attach was in flight; the
+    // Stop's disconnect ran before there was a browser to drop. Do not keep
+    // a connection the stopped op would go on to drive.
+    const opSignal = currentBrowserOpSignal();
+    if (opSignal?.aborted) {
+      await browser.close().catch(() => { /* already gone */ });
+      opSignal.throwIfAborted();
+    }
+    this.browser = browser;
     // cdpPort stays null on ws connections: findViaJsonEndpoint (HTTP /json)
     // has no surface to talk to there and is gated on this.cdpPort.
     this.cdpPort = isPort ? cdpPortOrWsEndpoint : null;
@@ -755,12 +764,21 @@ export class PlaywrightEngine {
 
     // Serialize concurrent calls for the SAME context (prevents duplicate
     // auto-open); a different context gets its own promise, never this one's.
+    // Either way the page comes back after an await, during which the user
+    // may have stopped this op: a stopped op gets the refusal, not the page —
+    // also when it joined another call's discovery.
     const inflight = this.getPageLocks.get(ctx.key);
-    if (inflight) return inflight;
+    if (inflight) {
+      const joined = await inflight;
+      currentBrowserOpSignal()?.throwIfAborted();
+      return joined;
+    }
     const p = this._getPageImpl(ctx);
     this.getPageLocks.set(ctx.key, p);
     try {
-      return await p;
+      const page = await p;
+      currentBrowserOpSignal()?.throwIfAborted();
+      return page;
     } finally {
       this.getPageLocks.delete(ctx.key);
     }

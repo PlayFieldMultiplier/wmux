@@ -1,10 +1,58 @@
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import { sendToRenderer } from './_bridge';
+import type { BrowserAgentControl } from '../../browser-session/BrowserAgentControl';
 
 type GetWindow = () => BrowserWindow | null;
 
-export function registerSurfaceRpc(router: RpcRouter, getWindow: GetWindow): void {
+/** What a teardown needs from main's per-tab agent control (Stop / Take over). */
+export type AgentControlHolds = Pick<BrowserAgentControl, 'list' | 'refusal'>;
+
+/**
+ * The refusal for a teardown that would close a browser tab the user paused or
+ * took over, or null. The renderer owns which tabs live where, so it is asked —
+ * but only while some tab is held, which is rare; otherwise nothing is sent.
+ * `pick` narrows the workspace's surfaces to the ones the teardown closes.
+ * An answer that cannot be read refuses: a teardown is not undone.
+ */
+export async function heldBrowserSurfaceRefusal(
+  getWindow: GetWindow,
+  control: AgentControlHolds | undefined,
+  method: string,
+  workspaceIds: ReadonlyArray<string | undefined>,
+  pick: (surface: { id: string; paneId?: string }) => boolean,
+): Promise<Error | null> {
+  if (!control) return null;
+  const held = new Set(control.list().filter((s) => s.mode !== 'agent').map((s) => s.surfaceId));
+  if (held.size === 0) return null;
+  for (const workspaceId of workspaceIds) {
+    const surfaces = await sendToRenderer(getWindow, 'surface.list', {
+      ...(workspaceId && { workspaceId }),
+      includeStashed: true,
+    }).catch(() => null);
+    if (!Array.isArray(surfaces)) {
+      return new Error(
+        `${method}: wmux could not check whether this closes a browser tab the user paused or took over, ` +
+          'so nothing was closed. Retry once.',
+      );
+    }
+    for (const s of surfaces as Array<{ id?: unknown; paneId?: unknown; surfaceType?: unknown }>) {
+      if (s.surfaceType !== 'browser' || typeof s.id !== 'string' || !held.has(s.id)) continue;
+      if (!pick({ id: s.id, ...(typeof s.paneId === 'string' && { paneId: s.paneId }) })) continue;
+      const refusal = control.refusal(s.id, method);
+      if (refusal) return refusal;
+    }
+  }
+  return null;
+}
+
+export function registerSurfaceRpc(
+  router: RpcRouter,
+  getWindow: GetWindow,
+  // Stop / Take over on a browser tab: closing that tab is refused like any
+  // other agent action on it. Absent means no tab is ever held.
+  agentControl?: AgentControlHolds,
+): void {
   /**
    * surface.list — returns surfaces of a workspace.
    * params: { workspaceId? } — omitted ⇒ active workspace.
@@ -70,6 +118,8 @@ export function registerSurfaceRpc(router: RpcRouter, getWindow: GetWindow): voi
     if (typeof params['id'] !== 'string') {
       return Promise.reject(new Error('surface.close: missing required param "id"'));
     }
+    const userHold = agentControl?.refusal(params['id'], 'surface.close');
+    if (userHold) return Promise.reject(userHold);
     return sendToRenderer(getWindow, 'surface.close', { id: params['id'] });
   });
 }
