@@ -750,6 +750,7 @@ function createApprovalRegistry(sessionManager: DaemonSessionManager): ApprovalR
         rows: frame.rows,
         mark: { bytes: frame.mark, keyInputRevision, incarnation },
         ...(typeof cols === 'number' ? { cols } : {}),
+        ...(frame.unknown ? { unknown: frame.unknown } : {}),
       };
     },
     // The pane's own Claude transcript (the projector's containment-checked
