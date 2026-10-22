@@ -10,6 +10,7 @@ import { keepFolderAction, keptFolderMessage, workspaceBusy } from '../WorkTask/
 import { useT } from '../../hooks/useT';
 import { cachedReviewSummary, loadReviewSummary, type ReviewChangeSummary } from './reviewSummary';
 import type { PrStatus } from '../../../shared/types';
+import { isMergeRequestUrl } from '../../../shared/workTask';
 import type { TranslationKey } from '../../i18n/locales/en';
 import type { ReviewQueueEntry } from '../../stores/selectors/reviewQueue';
 import { selectWorkspaceAgentRoster } from '../../stores/selectors/workspaceAgentRoster';
@@ -181,12 +182,14 @@ export async function createReviewTaskPr(entry: ReviewQueueEntry, t: Translate):
   try {
     const res = await window.electronAPI.workTask.createPr(entry.taskId, entry.ownerWorkspaceId);
     if (res.ok) {
+      // GitLab answers with a merge request: say MR.
+      const mr = res.mrIid !== undefined || isMergeRequestUrl(res.prUrl);
       push({
         level: res.commitPending ? 'warn' : 'info',
         message: res.recovered
-          ? t('diff.prRecovered', { url: res.prUrl ?? '' })
-          : t('diff.prCreated', { url: res.prUrl ?? '' }) + (res.commitPending ? t('diff.prUrlPending') : ''),
-        action: { label: t('diff.openPr'), onClick: () => window.open(res.prUrl, '_blank') },
+          ? t(mr ? 'diff.mrRecovered' : 'diff.prRecovered', { url: res.prUrl ?? '' })
+          : t(mr ? 'diff.mrCreated' : 'diff.prCreated', { url: res.prUrl ?? '' }) + (res.commitPending ? t('diff.prUrlPending') : ''),
+        action: { label: t(mr ? 'diff.openMr' : 'diff.openPr'), onClick: () => window.open(res.prUrl, '_blank') },
       });
     } else if (res.reason === 'gh-missing' || res.reason === 'gh-unauth') {
       push({ level: 'warn', message: `${res.error}${res.browseFallback ? ` — ${res.browseFallback}` : ''}` });
@@ -265,7 +268,7 @@ function FleetReviewRow({ entry, focused, now, onFocus, onOpenDiff, onJump, onEd
   const busyText = busy === 'close' ? t('fleet.review.closing') : busy === 'pr' ? t('fleet.review.creatingPr') : undefined;
   const prText = entry.pr
     ? t('fleet.review.prState', { number: entry.pr.number, state: t(PR_STATE_KEY[entry.pr.state]) })
-    : prUrl ? t('fleet.review.prLinked') : undefined;
+    : prUrl ? t(isMergeRequestUrl(prUrl) ? 'fleet.review.mrLinked' : 'fleet.review.prLinked') : undefined;
   const label = [entry.title, t('fleet.review.statusLabel'), requester.includesOwner ? undefined : owner, requester.text, entry.branch,
     changeText && summary && summary.files > 0 ? `${changeText}, +${summary.additions} −${summary.deletions}` : changeText,
     prText, busyText, entry.outputDir && !entry.branch ? t('fleet.review.openFolder') : t('fleet.review.openDiff')].filter(Boolean).join(', ');
@@ -277,7 +280,7 @@ function FleetReviewRow({ entry, focused, now, onFocus, onOpenDiff, onJump, onEd
     { key: 'diff', label: outputOnly ? t('fleet.review.openFolder') : t('fleet.review.openDiff'), shortcut: 'D', icon: <IconReview size={12} />, onSelect: () => onOpenDiff(entry) },
     ...(outputOnly ? [] : [{
       key: 'pr',
-      label: prUrl ? t('diff.openPr') : t('fleet.review.createPr'),
+      label: prUrl ? t(isMergeRequestUrl(prUrl) ? 'diff.openMr' : 'diff.openPr') : t('fleet.review.createPr'),
       shortcut: 'P',
       icon: <IconExternalLink size={12} />,
       disabled: busy !== undefined,
