@@ -46,6 +46,7 @@ import { errMsg, isPlainObject } from './storeFile';
  */
 
 export const STREAM_HEARTBEAT_MS = 15_000;
+const ACK_WARN_EVERY_MS = 60_000;
 
 export interface A2aStreamHubDeps {
   outbox: Pick<OutboxStore, 'epoch' | 'pending' | 'ack'>;
@@ -121,6 +122,8 @@ export class A2aStreamHub {
    * replaces it (a peer that went back to an older build advertises less).
    */
   private readonly features = new Map<HostId, ReadonlySet<string>>();
+  /** When each peer's failed ack was last logged. */
+  private readonly ackWarnAt = new Map<HostId, number>();
 
   constructor(deps: A2aStreamHubDeps) {
     this.deps = deps;
@@ -154,7 +157,12 @@ export class A2aStreamHub {
       try {
         acked = this.deps.outbox.ack(peer.hostId, { epoch: cursor['epoch'], seq: cursor['seq'] });
       } catch (err) {
-        this.deps.log('warn', `[a2a-remote] ack from ${peer.hostId} not stored: ${errMsg(err)}`);
+        // A pinging joiner acks every 15 s: one line a minute is enough.
+        const now = Date.now();
+        if (now - (this.ackWarnAt.get(peer.hostId) ?? 0) >= ACK_WARN_EVERY_MS) {
+          this.ackWarnAt.set(peer.hostId, now);
+          this.deps.log('warn', `[a2a-remote] ack from ${peer.hostId} not stored: ${errMsg(err)}`);
+        }
         return sendJson(res, 503, { ok: false, error: 'unavailable' });
       }
       sendJson(res, 200, { ok: true, acked });

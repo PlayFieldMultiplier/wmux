@@ -15,8 +15,10 @@ import { t } from '../../i18n';
 //   100.64.0.0/10 address     Tailscale's only when its status lists it as a
 //                             peer. Other overlays (and some LANs) use the
 //                             same range, so any other such address is tried,
-//                             and the Tailscale reason is added only if the
-//                             connection then cannot reach the other PC.
+//                             and, when Tailscale is installed here, its
+//                             reason is added only if the connection then
+//                             cannot reach the other PC. A drop is blamed on
+//                             Tailscale only for a name or a listed peer.
 //
 // "Could not read the status", this PC being offline from Tailscale's control
 // server (known peers still work), or a missing bridge never block: the
@@ -97,8 +99,10 @@ export function judgeTailnet(host: string, list: TailscaleChecklist | null): Tai
   const failed = blockingFailure(list);
   if (!failed || !isTailnetHost(host)) return NOTHING;
   const named = isTailnetName(host);
-  // The status found no device with this address: not a Tailscale one.
-  if (!named && failed.reason === 'no-peer') return NOTHING;
+  // The status found no device with this address, or there is no Tailscale
+  // here at all: nothing says the address is Tailscale's, so neither is the
+  // blame (and Download is never offered for another overlay's address).
+  if (!named && (failed.reason === 'no-peer' || failed.reason === 'not-installed')) return NOTHING;
   const note: TailnetNotice = { text: describeTailnetFailure(failed, host), ...(failed.fix ? { fix: failed.fix } : {}) };
   // A peer-offline match means the status itself lists the address.
   const sure = named || failed.reason === 'peer-offline';

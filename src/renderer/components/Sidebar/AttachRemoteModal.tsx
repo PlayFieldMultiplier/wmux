@@ -468,7 +468,13 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
           <div className="flex flex-col gap-2">
             <SegmentedControl<AddHostMode>
               value={addMode}
-              onValueChange={setAddMode}
+              onValueChange={(mode) => {
+                // Each form's error (and its Tailscale button) belongs to that form alone.
+                setAddMode(mode);
+                setAddError(null);
+                setPairError(null);
+                setTailscaleFix(null);
+              }}
               ariaLabel={t('remote.addHost')}
               className="w-full [&>button]:flex-1 [&>button]:px-2 [&>button]:whitespace-nowrap [&>button]:text-[12px]"
               options={[

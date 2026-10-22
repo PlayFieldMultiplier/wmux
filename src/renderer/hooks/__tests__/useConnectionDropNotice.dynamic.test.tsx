@@ -122,10 +122,10 @@ describe('useConnectionDropNotice', () => {
   });
 
   it('a real A2A drop is reported once its grace has passed, naming Tailscale, and goes away on recovery', async () => {
-    a2a('connected');
+    a2a('connected', 'desk.tail1.ts.net');
     await mount();
-    await act(async () => { a2a('connecting'); });
-    expect(tailscaleCheck).toHaveBeenCalledWith('100.101.12.4');
+    await act(async () => { a2a('connecting', 'desk.tail1.ts.net'); });
+    expect(tailscaleCheck).toHaveBeenCalledWith('desk.tail1.ts.net');
     await advance(A2A_DROP_GRACE_MS - 2_000);
     expect(toasts()).toHaveLength(0);
     await advance(4_000);
@@ -138,8 +138,18 @@ describe('useConnectionDropNotice', () => {
     expect(tailscaleOpen).toHaveBeenCalledWith('app');
     await advance(60_000);
     expect(toasts()).toHaveLength(1);
-    await act(async () => { a2a('connected'); });
+    await act(async () => { a2a('connected', 'desk.tail1.ts.net'); });
     expect(toasts()).toHaveLength(0);
+  });
+
+  it('a drop at a tailnet-range address Tailscale does not list is not blamed on Tailscale, even with Tailscale off', async () => {
+    a2a('connected', '100.92.4.7');
+    await mount();
+    await act(async () => { a2a('disconnected', '100.92.4.7'); });
+    await advance(A2A_DROP_GRACE_MS + 2_000);
+    expect(toasts()).toHaveLength(1);
+    expect(toasts()[0].message).not.toMatch(/Tailscale/);
+    expect(toasts()[0].action?.label).not.toMatch(/Open Tailscale/);
   });
 
   it('does not blame Tailscale for a PC reached over the LAN', async () => {

@@ -25,11 +25,14 @@ describe('judgeTailnet', () => {
     expect(judgeTailnet('100.101.12.4', failing('peer-offline')).held).not.toBeNull();
   });
 
-  it('another 100.64/10 address is tried: the reason waits for a failed connect, and a no-peer answer clears Tailscale entirely', () => {
-    const notInstalled = judgeTailnet('100.92.4.7', failing('not-installed'));
-    expect(notInstalled.held).toBeNull();
-    expect(notInstalled.ifUnreachable?.text).toMatch(/installed/);
+  it('another 100.64/10 address is tried: the reason waits for a failed connect; no-peer or no Tailscale at all clears it entirely', () => {
+    const off = judgeTailnet('100.92.4.7', failing('not-running'));
+    expect(off.held).toBeNull();
+    expect(off.ifUnreachable?.text).toMatch(/off/);
     expect(judgeTailnet('100.92.4.7', failing('no-peer'))).toEqual({ held: null, ifUnreachable: null });
+    // Never "Download Tailscale" for an address another overlay may own.
+    expect(judgeTailnet('100.92.4.7', failing('not-installed'))).toEqual({ held: null, ifUnreachable: null });
+    expect(judgeTailnet('desk.tail1.ts.net', failing('not-installed')).held?.fix).toBe('open-app');
   });
 
   it('an unreadable status (the 5 s abort) and this PC offline from the control server never block', () => {

@@ -289,6 +289,7 @@ export function PhoneWizardView(p: PhoneWizardViewProps) {
             <>
               <p className="ui-note">{t('web.wizardTailscaleWarn')}</p>
               <Lines lines={p.diagnosis.tailscale.lines} onOpenLink={p.onOpenLink} />
+              <TailscaleProblemFix problem={p.diagnosis.tailscale.problem} testId="wizard-shared" />
             </>
           ) : null}
           {p.errorLines.length > 0 ? <Lines lines={p.errorLines} onOpenLink={p.onOpenLink} /> : null}

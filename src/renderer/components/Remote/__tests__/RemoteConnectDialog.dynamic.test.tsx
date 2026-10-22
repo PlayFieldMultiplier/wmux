@@ -445,18 +445,25 @@ describe('a connection over the tailnet fails fast', () => {
     expect(q('remote-connect-tailscale-fix')).toBeNull();
   });
 
-  it('a 100.64/10 address Tailscale may not own (another overlay) is still tried, and the reason is added only when it is not reached', async () => {
+  it('a 100.64/10 address Tailscale may not own (another overlay) is still tried; with no Tailscale here it is never blamed', async () => {
     const link = 'https://100.92.4.7:7681/pair#wmux-desktop-code=ABCD2345';
-    let web = await connectWith('not-installed', link);
+    const web = await connectWith('not-installed', link, { ok: false, reason: 'unreachable' });
     expect(web.tailscaleCheck).toHaveBeenCalledWith('100.92.4.7');
+    expect(remote.hostsPair).toHaveBeenCalledWith('https://100.92.4.7:7681', 'ABCD2345');
+    expect(q('remote-connect-message')?.textContent).not.toMatch(/Tailscale/);
+    expect(q('remote-connect-tailscale-fix')).toBeNull();
+  });
+
+  it('the same address with Tailscale installed but off: tried, and the reason is added only when it is not reached', async () => {
+    const link = 'https://100.92.4.7:7681/pair#wmux-desktop-code=ABCD2345';
+    let web = await connectWith('not-running', link);
     expect(remote.hostsPair).toHaveBeenCalledWith('https://100.92.4.7:7681', 'ABCD2345');
     expect(q('remote-connect-message')?.textContent).not.toMatch(/Tailscale/);
 
     act(() => root.unmount());
     root = createRoot(container);
-    web = await connectWith('not-installed', link, { ok: false, reason: 'unreachable' });
+    web = await connectWith('not-running', link, { ok: false, reason: 'unreachable' });
     expect(web.tailscaleCheck).toHaveBeenCalledWith('100.92.4.7');
-    expect(remote.hostsPair).toHaveBeenCalled();
-    expect(q('remote-connect-message')?.textContent).toMatch(/Tailscale isn.t installed/);
+    expect(q('remote-connect-message')?.textContent).toMatch(/Tailscale is off/);
   });
 });

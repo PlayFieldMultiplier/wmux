@@ -265,12 +265,12 @@ export function parseRemoteAttachmentKey(
   return { hostId: key.slice(0, sep), workspaceId: key.slice(sep + 1) };
 }
 
-/** Machine-readable reason for a REMOTE_HOSTS_PAIR failure — i18n happens
- *  renderer-side (AttachRemoteModal maps each reason to a translated
- *  string), so main never returns a human-facing message here. */
 /** `remote:hosts:add`'s error when the host did not answer at all (the renderer adds the Tailscale reason to it). */
 export const HOST_UNREACHABLE_ERROR = 'could not reach that host';
 
+/** Machine-readable reason for a REMOTE_HOSTS_PAIR failure — i18n happens
+ *  renderer-side (AttachRemoteModal maps each reason to a translated
+ *  string), so main never returns a human-facing message here. */
 export type PairFailureReason =
   | 'invalid-origin'
   | 'already-registered'

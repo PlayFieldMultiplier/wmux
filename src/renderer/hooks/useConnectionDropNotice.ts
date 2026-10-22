@@ -157,12 +157,13 @@ export function connectionsInUse(s: DropSource): ConnectionInUse[] {
 }
 
 /**
- * The Tailscale failure behind a drop, when Tailscale can be the reason: the
- * same rule as a failed connect (`judgeTailnet`), so an address in the
- * tailnet range that Tailscale does not own is never blamed on it.
+ * The Tailscale failure behind a drop, only when the address is surely
+ * Tailscale's (a `*.ts.net` name or a peer its status lists: `judgeTailnet`'s
+ * `held`), so an address in the tailnet range that Tailscale may not own is
+ * never blamed on it.
  */
 export function dropCause(check: TailscaleChecklist | null, tailnetHost: string | null) {
-  return tailnetHost && judgeTailnet(tailnetHost, check).ifUnreachable ? blockingFailure(check) : null;
+  return tailnetHost && judgeTailnet(tailnetHost, check).held ? blockingFailure(check) : null;
 }
 
 /** The toast for a drop, from what the Tailscale check found (null: not over the tailnet, or no answer). */
