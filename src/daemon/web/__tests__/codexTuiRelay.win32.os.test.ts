@@ -6,6 +6,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import net from 'node:net';
 import {createCodexTuiRelay,type CodexRelayPolicy} from '../codexTuiRelay';
 import {windowsCodexSocketIdentity} from '../codexAccountSocket';
+import {deliberateSleep} from '../../../test-utils/waitFor';
 
 // A Windows test of the relay's upgrade checks. Only there does the relay
 // listen on loopback TCP behind a per-launch bearer. The account server is
@@ -165,6 +166,25 @@ describe.runIf(process.platform === 'win32')('Codex TUI relay upgrade checks on 
       // The owner moves this relay to a new incarnation: nothing pinned to the old connection matches.
       expect(linkLost).toHaveBeenCalledOnce();
       expect(relay.retired()).toBe(false);
+    } finally {await relay.close();}
+  });
+
+  it('a TUI dropped by a closing relay is not waited for',async()=>{
+    let changes = 0;
+    const linkLost = vi.fn();
+    const relay = await createCodexTuiRelay({codeHome:home,onStateChange:()=>{changes++;},onLinkLost:linkLost});
+    try {
+      const tui = await open(relay,{authorization:`Bearer ${relay.authToken}`});
+      await vi.waitFor(()=>expect(relay.linked()).toBe(true),{timeout:10_000});
+      const gone = new Promise<void>(resolve=>tui.once('close',()=>resolve()));
+      await relay.close();
+      const announced = changes;
+      await gone;
+      await deliberateSleep(100, 'a negative check: nothing else arrives after the TUI closed');
+      // close() announced the retirement once; the TUI's close afterwards adds nothing.
+      expect(changes).toBe(announced);
+      expect(linkLost).not.toHaveBeenCalled();
+      expect(relay.disconnected()).toBe(false);
     } finally {await relay.close();}
   });
 

@@ -600,6 +600,8 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
       // A TUI that gave up on a reconnect attempt before the server came back
       // leaves the endpoint for its next attempt.
       if (rejoining && !linked) { drop(false);return; }
+      // The relay closed first (its owner, or a refusal): nothing waits for a next connection.
+      if (retired) { endConnection();return; }
       // The relay stays for the TUI's next connection; the lease or the pane closes it.
       drop(false);
       left = true;
