@@ -219,6 +219,7 @@ const WORKSPACE_LEVEL_BROWSER_METHODS: ReadonlySet<string> = new Set<string>([
   'browser.siteMemory.record',
   'browser.siteMemory.forget',
   'browser.siteGuides.match',
+  'browser.navigationPolicy.get',
   'browser.session.start',
   'browser.session.stop',
   'browser.session.status',

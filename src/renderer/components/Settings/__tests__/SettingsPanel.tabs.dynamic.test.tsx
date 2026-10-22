@@ -38,6 +38,10 @@ const MCP_STATUS = {
   }],
 };
 
+/** Main's side of Settings › Browser › Allow private network addresses: a
+ *  main-owned value, read and written over IPC, never through the store. */
+const mainPrivateNetwork = { value: false, sets: [] as boolean[], saves: true, envForced: false };
+
 /** Explicit answers for the bridges that decide what renders. */
 const EXPLICIT: Record<string, unknown> = {
   platform: 'darwin',
@@ -93,6 +97,16 @@ const EXPLICIT: Record<string, unknown> = {
   quickCommands: { list: resolved({ revision: 'r1', commands: [] }) },
   fanout: { getWorkerPermissionMode: resolved('auto'), getRequireApproval: resolved(false) },
   web: { deviceList: resolved({ devices: [] }) },
+  browser: {
+    getAllowPrivateNetwork: () =>
+      Promise.resolve({ allow: mainPrivateNetwork.value, envForced: mainPrivateNetwork.envForced }),
+    // Main's rule: an unsaved opt-out still applies, an unsaved opt-in does not.
+    setAllowPrivateNetwork: (allow: boolean) => {
+      mainPrivateNetwork.sets.push(allow);
+      mainPrivateNetwork.value = allow && mainPrivateNetwork.saves;
+      return Promise.resolve({ allow: mainPrivateNetwork.value, saved: mainPrivateNetwork.saves });
+    },
+  },
 };
 
 /** Anything not listed: a namespace whose calls resolve to nothing. */
@@ -219,6 +233,83 @@ describe('Settings tabs', () => {
   it('puts no catalog entry on a tab the nav does not list', () => {
     const tabs = new Set<string>(ALL_TABS);
     expect(SETTINGS_CATALOG.filter((e) => !tabs.has(e.tab)).map((e) => e.id)).toEqual([]);
+  });
+});
+
+describe('main-owned settings', () => {
+  it('browser › browserprivatenet shows the value main holds, writes it to main, and reads it back after a trip', async () => {
+    mainPrivateNetwork.value = true;
+    mainPrivateNetwork.sets = [];
+    await openTab('browser');
+    expect(row('browserprivatenet')?.textContent).toContain('Allow private network addresses');
+    const sw = rowSwitch('browserprivatenet');
+    expect(sw, 'browserprivatenet switch').not.toBeNull();
+    expect(sw!.getAttribute('aria-checked')).toBe('true');
+
+    await act(async () => { sw!.click(); });
+    await flush();
+    expect(mainPrivateNetwork.sets).toEqual([false]);
+    expect(rowSwitch('browserprivatenet')!.getAttribute('aria-checked')).toBe('false');
+
+    await openTab('about');
+    await openTab('browser');
+    expect(rowSwitch('browserprivatenet')!.getAttribute('aria-checked')).toBe('false');
+    expect(container.querySelector('[data-testid="browser-private-network-unsaved"]')).toBeNull();
+    mainPrivateNetwork.value = false;
+  });
+
+  it('browser › browserprivatenet is on and locked, with the reason, while the environment variable forces it', async () => {
+    mainPrivateNetwork.value = false;
+    mainPrivateNetwork.envForced = true;
+    mainPrivateNetwork.sets = [];
+    try {
+      await openTab('browser');
+      const sw = rowSwitch('browserprivatenet')!;
+      expect(sw.getAttribute('aria-checked')).toBe('true');
+      expect(sw.disabled).toBe(true);
+      expect(row('browserprivatenet')?.textContent).toContain(
+        'On because WMUX_ALLOW_PRIVATE_NETWORK is set in the environment that launched wmux.',
+      );
+      await act(async () => { sw.click(); });
+      await flush();
+      // Nothing is written: the stored setting stays what it was.
+      expect(mainPrivateNetwork.sets).toEqual([]);
+    } finally {
+      mainPrivateNetwork.envForced = false;
+    }
+  });
+
+  it('browser › browserprivatenet shows the value in force and says so when main could not save', async () => {
+    mainPrivateNetwork.value = true;
+    mainPrivateNetwork.saves = false;
+    try {
+      await openTab('browser');
+      const note = () => container.querySelector('[data-testid="browser-private-network-unsaved"]');
+
+      // Off, unsaved: off now, back on after a restart.
+      await act(async () => { rowSwitch('browserprivatenet')!.click(); });
+      await flush();
+      expect(rowSwitch('browserprivatenet')!.getAttribute('aria-checked')).toBe('false');
+      expect(note()?.textContent).toBe(
+        "Couldn't save this. Private network access will turn back on after wmux restarts.",
+      );
+
+      // On, unsaved: stays off.
+      await act(async () => { rowSwitch('browserprivatenet')!.click(); });
+      await flush();
+      expect(rowSwitch('browserprivatenet')!.getAttribute('aria-checked')).toBe('false');
+      expect(note()?.textContent).toBe("Couldn't save this setting, so private network access stays off.");
+
+      // Saved again: the note goes.
+      mainPrivateNetwork.saves = true;
+      await act(async () => { rowSwitch('browserprivatenet')!.click(); });
+      await flush();
+      expect(rowSwitch('browserprivatenet')!.getAttribute('aria-checked')).toBe('true');
+      expect(note()).toBeNull();
+    } finally {
+      mainPrivateNetwork.saves = true;
+      mainPrivateNetwork.value = false;
+    }
   });
 });
 

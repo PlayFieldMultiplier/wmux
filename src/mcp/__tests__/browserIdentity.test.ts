@@ -227,6 +227,41 @@ describe('browser tools — a claim that is gone after a wmux restart', () => {
     expect(res.isError).toBeFalsy();
     expect(browserCalls('browser.close')).toHaveLength(1);
   });
+
+  // A navigation's first RPC is the navigation-policy read, which main answers
+  // for any caller, dead claim or not. The retry is decided by the call's first
+  // browser RPC, so that read must not count, or a navigation after a restart
+  // reached the agent as the refusal.
+  it('retries a navigation whose first scoped RPC was refused, past the policy read', async () => {
+    const walk = walkMinting(['claim-before-restart', 'claim-after-restart']);
+    mockSendRpc.mockImplementation(async (method: string) => {
+      if (method === 'a2a.resolve.identity') return walk();
+      if (method === 'browser.navigationPolicy.get') {
+        // What the real sendRpc does with every browser.* answer.
+        const reply = { allowPrivateNetwork: false };
+        noteBrowserOutcome(method, reply, false);
+        return reply;
+      }
+      if (method.startsWith('browser.')) {
+        if (getWorkspaceToken() === 'claim-before-restart') {
+          const refusal = GONE.replace('browser.close', method);
+          noteBrowserOutcome(method, refusal, true);
+          throw new Error(refusal);
+        }
+        const reply = method === 'browser.lease.acquire' ? { token: 'lease-1' } : { ok: true };
+        noteBrowserOutcome(method, reply, false);
+        return reply;
+      }
+      throw new Error(`rpc-down: ${method}`);
+    });
+    const client = await connect();
+
+    const res = await callTool(client, 'browser_navigate', { url: 'https://example.com/', surfaceId: 'surface-a' });
+
+    expect(res.text).not.toMatch(/the workspace you claimed is gone/);
+    expect(getWorkspaceToken()).toBe('claim-after-restart');
+    expect(browserCalls('browser.navigate')).toHaveLength(1);
+  });
 });
 
 describe('browser tools — a caller outside every pane (scheduled run)', () => {

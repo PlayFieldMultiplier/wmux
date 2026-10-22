@@ -171,9 +171,17 @@ export function runWithStaleIdentityHandler<T>(handler: StaleIdentityHandler, fn
   return staleIdentitySource.run(handler, fn);
 }
 
+/**
+ * Browser reads main answers the same for every caller, without resolving an
+ * identity. Their outcome says nothing about the caller's claim, so they are
+ * never what a stale-identity handler judges — in particular never the "first
+ * browser RPC" that decides a retry (the policy read opens every navigation).
+ */
+const IDENTITY_FREE_BROWSER_METHODS: ReadonlySet<string> = new Set(['browser.navigationPolicy.get']);
+
 /** Hand a browser RPC's outcome to the current stale-identity handler (exported for tests). */
 export function noteBrowserOutcome(method: string, outcome: unknown, failed: boolean): void {
-  if (!method.startsWith('browser.')) return;
+  if (!method.startsWith('browser.') || IDENTITY_FREE_BROWSER_METHODS.has(method)) return;
   const handler = staleIdentitySource.getStore();
   if (!handler) return;
   try {

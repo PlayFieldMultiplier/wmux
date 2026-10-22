@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BrowserBackendStore } from '../BrowserBackendStore';
@@ -105,6 +105,80 @@ describe('BrowserBackendStore (#517)', () => {
       expect(JSON.parse(readFileSync(join(dir, 'browser-backend.json'), 'utf8'))).toEqual({
         backend: 'external',
       });
+    });
+  });
+
+  // Settings → Browser → Allow private network addresses. It widens what an
+  // agent may reach, so only a literal true opts in.
+  describe('allowPrivateNetwork', () => {
+    it('defaults to off with no file', () => {
+      expect(new BrowserBackendStore(dir).allowPrivateNetwork()).toBe(false);
+    });
+
+    it('reads only a literal true as on', () => {
+      for (const value of [true, 'true', 1, 'yes', null]) {
+        writeFileSync(join(dir, 'browser-backend.json'), JSON.stringify({ backend: 'builtin', allowPrivateNetwork: value }));
+        expect(new BrowserBackendStore(dir).allowPrivateNetwork(), JSON.stringify(value)).toBe(value === true);
+      }
+    });
+
+    it('takes effect at once and persists across a restart', () => {
+      const store = new BrowserBackendStore(dir);
+      store.setAllowPrivateNetwork(true);
+      expect(store.allowPrivateNetwork()).toBe(true);
+      expect(new BrowserBackendStore(dir).allowPrivateNetwork()).toBe(true);
+      expect(JSON.parse(readFileSync(join(dir, 'browser-backend.json'), 'utf8'))).toEqual({
+        backend: 'builtin',
+        allowPrivateNetwork: true,
+      });
+
+      store.setAllowPrivateNetwork(false);
+      expect(store.allowPrivateNetwork()).toBe(false);
+      expect(new BrowserBackendStore(dir).allowPrivateNetwork()).toBe(false);
+      // Off is the default, so the key is gone again.
+      expect(JSON.parse(readFileSync(join(dir, 'browser-backend.json'), 'utf8'))).toEqual({ backend: 'builtin' });
+    });
+
+    // A directory where the temp file goes makes every write fail, the way a
+    // full disk or a locked file would.
+    function breakWrites(): void {
+      mkdirSync(join(dir, 'browser-backend.json.tmp'));
+    }
+
+    it('reports a failed write; turning off still applies for this session', () => {
+      const store = new BrowserBackendStore(dir);
+      expect(store.setAllowPrivateNetwork(true)).toBe(true);
+      breakWrites();
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      expect(store.setAllowPrivateNetwork(false)).toBe(false);
+      expect(store.allowPrivateNetwork()).toBe(false);
+      expect(errors).toHaveBeenCalledWith('[BrowserBackendStore] persist failed:', expect.anything());
+      // The file still says on: a restart would bring it back, which is why
+      // the caller has to be told.
+      expect(new BrowserBackendStore(dir).allowPrivateNetwork()).toBe(true);
+      errors.mockRestore();
+    });
+
+    it('reports a failed write; turning on does not apply at all', () => {
+      const store = new BrowserBackendStore(dir);
+      breakWrites();
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      expect(store.setAllowPrivateNetwork(true)).toBe(false);
+      expect(store.allowPrivateNetwork()).toBe(false);
+      errors.mockRestore();
+    });
+
+    it('survives the other settings in the same file being written', () => {
+      const store = new BrowserBackendStore(dir);
+      store.setAllowPrivateNetwork(true);
+      store.set('chrome');
+      store.setLiveWriteScope('all');
+      const reloaded = new BrowserBackendStore(dir);
+      expect(reloaded.allowPrivateNetwork()).toBe(true);
+      expect(reloaded.get()).toBe('chrome');
+      expect(reloaded.liveWriteScope()).toBe('all');
     });
   });
 });

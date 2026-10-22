@@ -3,10 +3,10 @@
 import { describe, it, expect } from 'vitest';
 import { SETTINGS_CATALOG, SETTINGS_NAV_GROUPS } from '../catalog';
 
-const BROWSER_IDS = ['browserbackend', 'browserlight', 'sitememory', 'siteguides'];
+const BROWSER_IDS = ['browserbackend', 'browserlight', 'browserprivatenet', 'sitememory', 'siteguides'];
 
 describe('settings catalog — Browser tab', () => {
-  it('maps the four browser settings to the browser tab', () => {
+  it('maps the five browser settings to the browser tab', () => {
     for (const id of BROWSER_IDS) {
       expect(SETTINGS_CATALOG.find((e) => e.id === id)?.tab, id).toBe('browser');
     }

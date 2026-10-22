@@ -273,6 +273,10 @@ export const FIRST_PARTY_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
   'browser.siteMemory.forget',
   // Site guide pointers, registered for the same packaged-build reason.
   'browser.siteGuides.match',
+  // The navigation policy's switch, read by every navigating tool's preflight.
+  // Missing here, a packaged build refuses the read and the preflight falls
+  // back to the environment variable alone, disagreeing with main.
+  'browser.navigationPolicy.get',
   // browser_request_help. Same packaged-build reason as the two stores above:
   // absent from this list, every call would be refused as an unconfirmed plugin
   // in a packaged build while every dev build (enforcement off) looked fine —

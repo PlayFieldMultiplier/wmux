@@ -4,6 +4,11 @@ import { CONNECTOR_TERMINAL_IPC, type ConnectorTerminalResult, type ConnectorTer
 import { CONNECTOR_OAUTH_IPC, type ConnectorOAuthAction, type ConnectorOAuthClient, type ConnectorOAuthResult } from '../shared/connectorOAuth';
 import { CONNECTOR_CATALOG_IPC, type ConnectorCatalogResult } from '../shared/connectorCatalog';
 import { CONNECTOR_CHECK_IPC, type ConnectorCheckResult } from '../shared/connectorCheck';
+import {
+  BROWSER_PRIVATE_NETWORK_IPC,
+  type AllowPrivateNetworkSetResult,
+  type AllowPrivateNetworkState,
+} from '../shared/browserBackend';
 import { WORKFLOW_OWNER_IPC } from '../shared/botWorkflow';
 import type { TerminalCoreSettings, TerminalEngine } from '../shared/terminalCoreSettings';
 import { CHAT_IPC } from '../shared/transcript/chatIpc';
@@ -1080,6 +1085,11 @@ const electronAPI = {
       ipcRenderer.sendSync('browser:get-backend-sync'),
     setBackend: (backend: 'builtin' | 'external' | 'chrome') =>
       ipcRenderer.invoke('browser:set-backend', backend),
+    // Settings → Browser → Allow private network addresses. Main owns it; the
+    // set resolves to the value now in force and whether the file kept it.
+    getAllowPrivateNetwork: (): Promise<AllowPrivateNetworkState> => ipcRenderer.invoke(BROWSER_PRIVATE_NETWORK_IPC.get),
+    setAllowPrivateNetwork: (allow: boolean): Promise<AllowPrivateNetworkSetResult> =>
+      ipcRenderer.invoke(BROWSER_PRIVATE_NETWORK_IPC.set, allow),
     // Phase 2.5 — chrome-backend profiles + workspace bindings.
     chromeProfiles: {
       list: (): Promise<{

@@ -32,6 +32,7 @@ import {
   type PromotedRecord,
 } from '../../shared/browserReplay/promotedSkill';
 import { requireBrowserTargetScope } from '../playwright/browserScope';
+import { readNavigationPolicy } from '../playwright/navigationPolicy';
 import { domainFromUrl } from '../../shared/browserMemory/siteMemory';
 import { ringFor, ringScopeKey } from './actionRing';
 import { replayBlockedReason, replayTrace, type ReplayResult } from './replayRunner';
@@ -566,7 +567,7 @@ export function createReplayToolCatalog(deps: BrowserToolDeps) {
       );
     }
 
-    const result = await replayTrace(page, trace, variables);
+    const result = await replayTrace(page, trace, variables, readNavigationPolicy);
     await sendScopedBrowserRpc('browser.actionCache.stats', scope, completionParams(scope, {
       name,
       ok: result.ok,

@@ -2184,6 +2184,47 @@ function TabBrowser() {
   const browserBackend = useStore((s) => s.browserBackend);
   const setBrowserBackend = useStore((s) => s.setBrowserBackend);
   const browserBackendHydrated = useStore((s) => s.browserBackendHydrated);
+  // Main-side: main's navigation check and the MCP server's preflight both read
+  // it per navigation, so it is read and written over IPC, never through the
+  // renderer store.
+  const [allowPrivateNetwork, setAllowPrivateNetworkState] = useState(false);
+  // WMUX_ALLOW_PRIVATE_NETWORK in main's environment: the ranges are open
+  // whatever the stored setting says, so the row shows on, locked, and why.
+  const [privateNetworkEnvForced, setPrivateNetworkEnvForced] = useState(false);
+  // Set when main could not save the last change: the row shows the value in
+  // force, and this says what a restart will do to it.
+  const [privateNetworkUnsaved, setPrivateNetworkUnsaved] = useState<
+    'settings.browserPrivateNetworkOffUnsaved' | 'settings.browserPrivateNetworkOnUnsaved' | null
+  >(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI?.browser?.getAllowPrivateNetwork?.()
+      .then((v) => {
+        if (cancelled || !v || typeof v.allow !== 'boolean') return;
+        setAllowPrivateNetworkState(v.allow);
+        setPrivateNetworkEnvForced(v.envForced === true);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onAllowPrivateNetworkChange = (next: boolean) => {
+    window.electronAPI?.browser?.setAllowPrivateNetwork?.(next)
+      .then(({ allow, saved }) => {
+        setAllowPrivateNetworkState(allow);
+        setPrivateNetworkUnsaved(
+          saved
+            ? null
+            : next
+              ? 'settings.browserPrivateNetworkOnUnsaved'
+              : 'settings.browserPrivateNetworkOffUnsaved',
+        );
+      })
+      .catch(() => undefined);
+  };
 
   return (
     <div className="settings-page">
@@ -2223,6 +2264,25 @@ function TabBrowser() {
               label={t('settings.browserDiscard')}
             />
           </SettingRow>
+        )}
+        <SettingRow
+          id="browserprivatenet"
+          label={t('settings.browserPrivateNetwork')}
+          // Forced on: the reason replaces the description, as the glass row
+          // does for a setting the system decides.
+          description={t(privateNetworkEnvForced ? 'settings.browserPrivateNetworkEnvForced' : 'settings.browserPrivateNetworkDesc')}
+        >
+          <Toggle
+            checked={allowPrivateNetwork || privateNetworkEnvForced}
+            onChange={onAllowPrivateNetworkChange}
+            label={t('settings.browserPrivateNetwork')}
+            disabled={privateNetworkEnvForced}
+          />
+        </SettingRow>
+        {privateNetworkUnsaved && (
+          <SettingNote tone="danger" role="status" data-testid="browser-private-network-unsaved">
+            {t(privateNetworkUnsaved)}
+          </SettingNote>
         )}
       </SettingsSection>
       <SettingsSection title={t('settings.browserSectionKnowledge')}>

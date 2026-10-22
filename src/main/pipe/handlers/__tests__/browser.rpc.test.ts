@@ -1505,7 +1505,7 @@ describe('registerBrowserRpc — browser.open / browser.close scoping (#922 PR-C
       },
     });
 
-    expect(validateResolvedNavigationUrlMock).toHaveBeenCalledWith('https://example.com/');
+    expect(validateResolvedNavigationUrlMock).toHaveBeenCalledWith('https://example.com/', { allowPrivateNetwork: false });
     expect(sendToRendererMock).toHaveBeenCalledWith(expect.any(Function), 'browser.tabs', {
       action: 'new',
       workspaceId: 'ws-caller',

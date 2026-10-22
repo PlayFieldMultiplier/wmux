@@ -12,7 +12,9 @@ import {
 } from '../../shared/liveWriteScope';
 
 /**
- * Main-owned persistence for the browser backend setting (#517).
+ * Main-owned persistence for the browser backend setting (#517), and the
+ * other browser settings main decides on (the live write scope, the
+ * private-network opt-in).
  *
  * Main is the authority on purpose: the consumer is the RPC layer in the main
  * process, and an RPC call can arrive before the renderer has booted. Reading
@@ -32,18 +34,31 @@ export class BrowserBackendStore {
    * browser should cost an edit to this file rather than one click.
    */
   private liveScope: LiveWriteScope = DEFAULT_LIVE_WRITE_SCOPE;
+  /**
+   * Settings → Browser → Allow private network addresses: whether agent
+   * navigation may reach RFC1918 and fc00::/7 (the navigation policy in
+   * shared/types). Main is the only writer (the Settings IPC), so the
+   * in-memory value is the one in force: a toggle reaches the very next
+   * navigation, here and — over browser.navigationPolicy.get — in the MCP
+   * server's preflight.
+   */
+  private privateNetwork = false;
 
   constructor(userDataDir: string) {
     this.filePath = join(userDataDir, 'browser-backend.json');
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.filePath, 'utf8'));
-      const record = parsed as { backend?: unknown; liveWriteScope?: unknown } | null;
+      const record = parsed as
+        | { backend?: unknown; liveWriteScope?: unknown; allowPrivateNetwork?: unknown }
+        | null;
       const value = record?.backend;
       if (isBrowserBackend(value)) this.backend = value;
       // Same fail-safe direction as the backend: anything unrecognized leaves
       // the DEFAULT in place, and the default here is the narrow grant.
       const scope = record?.liveWriteScope;
       if (isLiveWriteScope(scope)) this.liveScope = scope;
+      // Only a literal true opts in: it widens what an agent may reach.
+      this.privateNetwork = record?.allowPrivateNetwork === true;
       // Unknown/corrupt content falls through to the builtin default — the
       // safe direction: worst case a pane spawns, never a broken toolset.
     } catch {
@@ -79,6 +94,25 @@ export class BrowserBackendStore {
     this.persist();
   }
 
+  allowPrivateNetwork(): boolean {
+    return this.privateNetwork;
+  }
+
+  /**
+   * Returns whether the change was saved. Unsaved, the in-memory value lands on
+   * the narrow side either way: an opt-out still applies for this session (and
+   * the caller must say it will not survive a restart), and an opt-in does not
+   * apply at all — access is never widened on a change the file does not hold.
+   */
+  setAllowPrivateNetwork(allow: boolean): boolean {
+    this.privateNetwork = allow;
+    // Same reason as set(): persist() writes the scope field too.
+    this.liveWriteScope();
+    const saved = this.persist();
+    if (!saved && allow) this.privateNetwork = false;
+    return saved;
+  }
+
   set(backend: BrowserBackend): void {
     this.backend = backend;
     // persist() writes the scope field too, so pick up an operator's file edit
@@ -87,29 +121,35 @@ export class BrowserBackendStore {
     this.persist();
   }
 
-  private persist(): void {
+  /** Whether the write reached the file. */
+  private persist(): boolean {
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
       // Atomic write (tmp + rename): a crash mid-write must not leave a
       // truncated file that silently rolls an 'external' user back to builtin
       // on the next boot.
       const tmpPath = `${this.filePath}.tmp`;
-      // The scope field is written only once it differs from the default, so a
-      // file this app has never been asked to scope keeps exactly the shape it
-      // had — nothing downstream has to learn a key that carries no decision.
+      // The scope and private-network fields are written only once they differ
+      // from their defaults, so a file this app has never been asked to scope
+      // keeps exactly the shape it had — nothing downstream has to learn a key
+      // that carries no decision.
       writeFileSync(
         tmpPath,
         JSON.stringify({
           backend: this.backend,
           ...(this.liveScope !== DEFAULT_LIVE_WRITE_SCOPE && { liveWriteScope: this.liveScope }),
+          ...(this.privateNetwork && { allowPrivateNetwork: true }),
         }),
         'utf8',
       );
       renameSync(tmpPath, this.filePath);
+      return true;
     } catch (err) {
-      // In-memory value still applies for this session; persistence is
-      // best-effort but a failure must be visible in logs, not swallowed.
+      // The backend and scope keep their in-memory value for this session;
+      // setAllowPrivateNetwork decides for itself (see there). A failure must
+      // be visible in logs, not swallowed.
       console.error('[BrowserBackendStore] persist failed:', err);
+      return false;
     }
   }
 }
