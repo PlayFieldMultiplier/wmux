@@ -469,9 +469,14 @@ export function registerPaneRpc(
     // Closing the pane closes its browser tabs: refuse when any of them is one
     // the user paused or took over. Pane ids are global, so the pane's own
     // workspace is looked up, and every workspace is asked when it is unknown.
+    // A confined caller is checked in its own workspace only: a pane anywhere
+    // else gets the renderer's "outside the calling workspace" refusal, and a
+    // hold there must not tell the caller that pane exists.
     const mirror = getWorkspaceMirror();
     const owner = mirror.getPaneWorkspaces()?.get(paneId);
-    const workspaces = owner ? [owner] : (mirror.getEntries() ?? []).map((e) => e.id);
+    const workspaces = confinement.confine
+      ? [confinement.confine]
+      : owner ? [owner] : (mirror.getEntries() ?? []).map((e) => e.id);
     const userHold = await heldBrowserSurfaceRefusal(
       getWindow,
       opts.agentControl,

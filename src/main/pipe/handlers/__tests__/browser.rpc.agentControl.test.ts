@@ -18,7 +18,10 @@ vi.mock('electron', () => ({
 vi.mock('../../../security/navigationPolicy', () => ({
   validateResolvedNavigationUrl: vi.fn(async () => ({ valid: true })),
 }));
-const { sendToRendererMock } = vi.hoisted(() => ({ sendToRendererMock: vi.fn(async () => ({ ok: true })) }));
+const { sendToRendererMock } = vi.hoisted(() => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- each case stubs its own argument shape
+  sendToRendererMock: vi.fn(async (..._args: any[]): Promise<unknown> => ({ ok: true })),
+}));
 vi.mock('../_bridge', () => ({
   sendToRenderer: sendToRendererMock,
 }));

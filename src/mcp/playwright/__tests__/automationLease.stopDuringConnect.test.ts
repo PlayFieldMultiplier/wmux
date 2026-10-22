@@ -38,7 +38,7 @@ function fakeBrowser(targetsDelayMs = 0) {
     }),
     detach: vi.fn(async () => undefined),
   };
-  const page = { url: () => 'https://guest.test/', click, context: () => context };
+  const page = { url: () => 'https://guest.test/', click, context: () => context, on: vi.fn(), off: vi.fn(), once: vi.fn() };
   const context = { pages: () => [page], newCDPSession: vi.fn(async () => session) };
   const browser = {
     isConnected: () => true,
@@ -143,6 +143,55 @@ describe('Stop while the first CDP attach is in flight', () => {
 
     expect(clickedInBody).toBe(false);
     expect(click).not.toHaveBeenCalled();
+  });
+
+  it('an op that joined another\'s page discovery and was stopped does not get the page', async () => {
+    const renewsByToken = new Map<string, (e: Error) => void>();
+    let acquires = 0;
+    mockSendRpc.mockImplementation((method: string, params: { token?: string }) => {
+      if (method === 'browser.lease.acquire') return Promise.resolve({ token: `lease-${++acquires}` });
+      if (method === 'browser.lease.renew') {
+        return new Promise((_r, reject) => renewsByToken.set(params.token ?? '', reject));
+      }
+      if (method === 'browser.lifecycle.get') return Promise.resolve({ entries: [] });
+      if (method === 'browser.cdp.info') {
+        return Promise.resolve({
+          cdpPort: 18800,
+          targetsScoped: true,
+          targets: [{ surfaceId: 'surface-1', targetId: 't1', workspaceId: 'ws-test' }],
+        });
+      }
+      return Promise.resolve({});
+    });
+    // Slow discovery, so B joins A's while it is still running.
+    const { browser, click } = fakeBrowser(700);
+    mockConnectOverCDP.mockResolvedValue(browser);
+    // Stop drops the connection, which would also end A's discovery. Kept
+    // alive here so A resolves its page: what is under test is that B, which
+    // joined A's discovery and was stopped meanwhile, is not handed that page.
+    const engine = PlaywrightEngine.getInstance();
+    const disconnect = vi.spyOn(engine, 'disconnect').mockResolvedValue(undefined);
+
+    const body = (who: string) => async (scope: Parameters<typeof engine.getPageForScope>[0]) => {
+      const page = await engine.getPageForScope(scope);
+      await (page as unknown as { click: (s: string) => Promise<void> } | null)?.click(`#${who}`);
+      return who;
+    };
+    const opA = withAutomationLease(deps, 'surface-1', body('a'));
+    await vi.advanceTimersByTimeAsync(100);
+    const opB = withAutomationLease(deps, 'surface-1', body('b'));
+    const settledB = opB.then(() => 'resolved', (err: Error) => err);
+
+    await vi.advanceTimersByTimeAsync(550); // B's watch is parked by now
+    expect(renewsByToken.has('lease-2')).toBe(true);
+    renewsByToken.get('lease-2')!(new Error('browser.lease.renew: BROWSER_AGENT_PAUSED: the user stopped this action and paused agent control of this tab.'));
+    const errB = await settledB;
+    expect((errB as Error & { code?: string }).code).toBe(AGENT_PAUSED_CODE);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(opA).resolves.toBe('a');
+    expect(click.mock.calls).toEqual([['#a']]);
+    disconnect.mockRestore();
   });
 });
 

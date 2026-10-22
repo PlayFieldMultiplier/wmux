@@ -93,4 +93,28 @@ describe('surface_close / pane_close on a tab the user holds', () => {
     if (!unread.ok) expect(unread.error).toContain('could not check whether this closes a browser tab');
     expect(closes()).toEqual([]);
   });
+
+  it('a confined caller closing another workspace\'s pane gets the confinement refusal, not a hold that says the pane exists', async () => {
+    const control = new BrowserAgentControl({ emit: () => undefined, cancelInFlight: () => undefined });
+    const handlers = new Map<string, (params: Record<string, unknown>, ctx?: unknown) => Promise<unknown>>();
+    registerPaneRpc(
+      { register: (method: string, fn: never) => handlers.set(method, fn) } as never,
+      (() => null) as () => BrowserWindow | null,
+      { agentControl: control },
+    );
+    paneWorkspaces.set('pane-2', 'ws-b'); // the pane lives in ws-b, with a held tab
+    control.apply('tab-2', 'takeOver');
+    sendToRendererMock.mockImplementation(async (_w: unknown, method: string, params: { workspaceId?: string }) =>
+      method === 'surface.list'
+        ? (params.workspaceId === 'ws-b' ? SURFACES : [])
+        : { error: 'pane.close: pane pane-2 is outside the calling workspace' });
+
+    // Confined to ws-a (a validated commander binding).
+    const res = await handlers.get('pane.close')!({ id: 'pane-2' }, { commanderWorkspace: 'ws-a' });
+    expect(res).toEqual({ error: 'pane.close: pane pane-2 is outside the calling workspace' });
+    expect(sendToRendererMock).toHaveBeenCalledWith(expect.anything(), 'surface.list', { workspaceId: 'ws-a', includeStashed: true });
+    expect(sendToRendererMock).not.toHaveBeenCalledWith(expect.anything(), 'surface.list', { workspaceId: 'ws-b', includeStashed: true });
+    expect(sendToRendererMock).toHaveBeenCalledWith(expect.anything(), 'pane.close', { id: 'pane-2', confineWorkspaceId: 'ws-a' });
+  });
 });
+

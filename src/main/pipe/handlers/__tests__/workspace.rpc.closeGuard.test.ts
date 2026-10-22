@@ -53,3 +53,38 @@ describe('workspace.close — the caller’s own workspace', () => {
     expect(sendToRendererMock).toHaveBeenLastCalledWith(expect.anything(), 'workspace.close', { id: 'ws-hq' });
   });
 });
+
+describe('workspace.close — a browser tab the user holds', () => {
+  function setupHeld(held: string[]): RpcRouter {
+    const router = new RpcRouter();
+    registerWorkspaceRpc(router, () => fakeWindow, {
+      resolveCallerWorkspace: async () => null,
+      agentControl: {
+        list: () => held.map((surfaceId) => ({ surfaceId, active: false, mode: 'user' as const })),
+        refusal: (surfaceId: string, method: string) =>
+          held.includes(surfaceId) ? new Error(`${method}: BROWSER_USER_IN_CONTROL: the user took over this tab`) : null,
+      },
+    });
+    return router;
+  }
+
+  it('is refused, force or not, when the workspace holds a tab the user took over', async () => {
+    sendToRendererMock.mockImplementation(async (_w: unknown, method: string) =>
+      method === 'surface.list' ? [{ id: 'tab-1', paneId: 'p1', surfaceType: 'browser' }] : { ok: true });
+    for (const force of [false, true]) {
+      const res = await setupHeld(['tab-1']).dispatch({ id: `h-${force}`, method: 'workspace.close', params: { id: 'ws-x', force } });
+      expect(res.ok).toBe(false);
+      expect(JSON.stringify(res)).toContain('workspace.close: BROWSER_USER_IN_CONTROL');
+    }
+    expect(sendToRendererMock).toHaveBeenCalledWith(expect.anything(), 'surface.list', { workspaceId: 'ws-x', includeStashed: true });
+    expect(sendToRendererMock).not.toHaveBeenCalledWith(expect.anything(), 'workspace.close', expect.anything());
+  });
+
+  it('closes when the held tab is in another workspace', async () => {
+    sendToRendererMock.mockImplementation(async (_w: unknown, method: string) =>
+      method === 'surface.list' ? [{ id: 'tab-9', paneId: 'p1', surfaceType: 'browser' }] : { ok: true });
+    const res = await setupHeld(['tab-1']).dispatch({ id: 'h2', method: 'workspace.close', params: { id: 'ws-x' } });
+    expect(res.ok).toBe(true);
+    expect(sendToRendererMock).toHaveBeenLastCalledWith(expect.anything(), 'workspace.close', { id: 'ws-x' });
+  });
+});
