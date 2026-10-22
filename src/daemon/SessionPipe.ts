@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { getSessionSocketPath } from '../shared/constants';
+import { ATTACH_SNAPSHOT_MIN_BYTES } from '../shared/terminal/attachSnapshot';
 import type { RingBuffer, ReplayGeometry } from './RingBuffer';
 import type { OutputModeTracker } from './util/outputModeTracker';
 import { readRingTailWithModesAndGeometry, readRingWithModesAndGeometry } from './sessionTextReplay';
@@ -18,12 +19,12 @@ import {
 export { createSessionPipeMarkers };
 
 /**
- * TASK-10: initial-attach flushes at or above this size go through the
- * daemon-side HeadlessSnapshot instead of shipping raw bytes. Below it the
- * renderer parses the raw replay faster than a snapshot round would cost.
- * (The resync/reflush path has its own caller-side policy — see reflush.)
+ * TASK-10: initial-attach flushes at or above ATTACH_SNAPSHOT_MIN_BYTES go
+ * through the daemon-side HeadlessSnapshot instead of shipping raw bytes (see
+ * its definition). The resync/reflush path has its own caller-side policy —
+ * see reflush.
  */
-export const ATTACH_SNAPSHOT_MIN_BYTES = 256 * 1024;
+export { ATTACH_SNAPSHOT_MIN_BYTES };
 /** The attach snapshot's second try parses only this much of the ring's
  *  newest output (see flushRingBuffer). Small enough to finish well inside
  *  the budget on a busy daemon, large enough to hold many full redraws of an

@@ -66,6 +66,7 @@ import { awaitParseBarrier } from '../terminal/parseBarrier';
 import { STALE_REPLAY_INPUT_MODE_RESETS, STALE_REPLAY_ALIVE_SHELL_RESETS, STALE_REPLAY_DISPLAY_RESETS, staleReplayResetLevel } from '../../shared/terminal/staleReplayModeReset';
 import { installShellPromptModeReset, shellPromptModeResetFor } from '../../shared/terminal/shellPromptModeReset';
 import { holdNewXtermReplies } from '../../shared/terminal/replyParity';
+import { ATTACH_SNAPSHOT_MIN_BYTES } from '../../shared/terminal/attachSnapshot';
 import { paneForegroundProbe } from '../terminal/paneForegroundProbe';
 import { attachAltScreenWheel, PAGE_SCROLL_AGENTS } from '../terminal/altScreenWheel';
 import { RestingCursorGuard } from '../terminal/restingCursor';
@@ -2886,14 +2887,17 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // after the sequences they cancel. Gating on the daemon (not the
     // renderer's resumeHint slice) avoids the boot race where the flush
     // completes before AppLayout has hydrated the hint.
-    const resetStaleReplayModes = (recoveredBytes: number) => {
+    // `write` defaults to xterm itself. A replay still retained in the output
+    // scheduler (a hidden pane's first flush, below) has not reached xterm,
+    // so its resets must queue behind it instead.
+    const resetStaleReplayModes = (recoveredBytes: number, write: (data: string) => void = (data) => terminal.write(data)) => {
       if (recoveredBytes <= 0) return;
       void window.electronAPI.pty.list().then((sessions) => {
         if (terminalRef.current !== terminal) return;
         const level = staleReplayResetLevel(sessions.find((s) => s.id === ptyId));
         if (level === 'none') return;
-        terminal.write(level === 'full' ? STALE_REPLAY_INPUT_MODE_RESETS : STALE_REPLAY_ALIVE_SHELL_RESETS);
-        terminal.write(STALE_REPLAY_DISPLAY_RESETS);
+        write(level === 'full' ? STALE_REPLAY_INPUT_MODE_RESETS : STALE_REPLAY_ALIVE_SHELL_RESETS);
+        write(STALE_REPLAY_DISPLAY_RESETS);
       }).catch(() => { /* best-effort — a transient list failure just skips the reset */ });
     };
     // Cold-park reveal: the swap from a painted cold frame to the daemon
@@ -3393,6 +3397,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // .txt cache.
       removeFlushListener = ptyFlushDispatcher.register(ptyId, (recoveredBytes) => {
         if (terminalRef.current !== terminal) return;
+        // This mount's xterm holds nothing yet: a fresh mount (an adopted one
+        // carries its screen) whose first attach this is.
+        const firstReplayOnEmptyScreen = !adopted && !attachSettled;
         revealTiming(ptyId, 'flush-complete', `recoveredBytes=${recoveredBytes} swap=${warmSwap.phase}`);
         revealTimingT0.delete(ptyId);
         deferredColdFrame = null; // the attach is settled: too late for a cosmetic frame
@@ -3403,6 +3410,23 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         writeSwapBytes(warmSwap.onFlush(recoveredBytes));
         // Phase 3 deferral — see the scrollback-branch handler above.
         if (!isVisibleRef.current && hiddenRetentionActive()) {
+          // A small first replay stays retained. Marking it dirty would
+          // discard it and the live output after it, and the reveal would wait
+          // for a resync in the daemon's snapshot queue, blank and not
+          // answering the shell's cursor queries meanwhile: every new pane
+          // split or fanned out into a background workspace (#2585). On an
+          // empty screen the reveal's catch-up flush parses exactly what a
+          // visible mount would have. A replay onto a screen that already
+          // shows something (a reattach) still goes dirty, since appending it
+          // would repeat that content; so does a large one, the boot flood
+          // retention exists to keep out of the renderer.
+          if (firstReplayOnEmptyScreen && recoveredBytes < ATTACH_SNAPSHOT_MIN_BYTES) {
+            resetStaleReplayModes(recoveredBytes, (data) => writeTerminalOutput(terminal, data, {
+              foreground: isVisibleRef.current,
+              retainWhenHidden: hiddenRetentionActive(),
+            }));
+            return;
+          }
           if (recoveredBytes > 0) markTerminalDirty(terminal);
           return;
         }

@@ -18,6 +18,8 @@ import { setDaemonModeActive } from '../../daemon/daemonMode';
 import { useStore } from '../../stores';
 import { __coldFrameKeys, __resetColdFrames, COLD_FRAME_STORAGE_KEY, rememberColdFrame } from '../../terminal/coldFrame';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { ATTACH_SNAPSHOT_MIN_BYTES } from '../../../shared/terminal/attachSnapshot';
+import { isTerminalDirty } from '../../terminal/terminalOutputScheduler';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -144,10 +146,11 @@ describe('useTerminal cold frame of a pane mounted hidden', { timeout: 60_000 },
     rememberColdFrame('p-dirty', cold);
     layoutSize = 0;
     const setVisible = await mount('p-dirty', false);
-    // Retained while hidden, then discarded at the flush marker (dirty).
+    // Retained while hidden, then discarded at the flush marker (dirty): a
+    // replay this large is not kept for the reveal.
     act(() => {
       emitData!('p-dirty', 'replayed screen', true);
-      emitFlush!('p-dirty', 15);
+      emitFlush!('p-dirty', ATTACH_SNAPSHOT_MIN_BYTES);
     });
     await settle();
     expect(row(0)).toBe('');
@@ -164,6 +167,66 @@ describe('useTerminal cold frame of a pane mounted hidden', { timeout: 60_000 },
     });
     await settle();
     expect(row(0)).toBe('real screen');
+  });
+
+  it('a new pane mounted hidden keeps its small first replay, and its reveal paints it without a resync (#2585)', async () => {
+    layoutSize = 0;
+    const setVisible = await mount('p-new', false);
+    // The attach flush of a new pane (its preamble and banner), then the
+    // shell's first live output.
+    act(() => {
+      emitData!('p-new', 'Windows PowerShell\r\n', true);
+      emitFlush!('p-new', 20);
+      emitData!('p-new', 'PS C:\\> ', false);
+    });
+    await settle();
+    // Retained, not parsed, while hidden; and not marked dirty.
+    expect(row(0)).toBe('');
+    expect(isTerminalDirty(termRef!.current!)).toBe(false);
+
+    await setVisible(true);
+    expect(resync).not.toHaveBeenCalled();
+    expect(row(0)).toBe('Windows PowerShell');
+    expect(row(1)).toBe('PS C:\\> ');
+  });
+
+  it('the stale-mode resets of a kept replay land after it, not before', async () => {
+    // A shell at its prompt: the mouse modes a replay re-arms are reset.
+    const list = window.electronAPI.pty.list as unknown as ReturnType<typeof vi.fn>;
+    list.mockResolvedValueOnce([{ id: 'p-modes', commandRunning: false }]);
+    layoutSize = 0;
+    const setVisible = await mount('p-modes', false);
+    act(() => {
+      emitData!('p-modes', '\x1b[?1003hagent screen', true);
+      emitFlush!('p-modes', 20);
+    });
+    await settle();
+    expect(list).toHaveBeenCalled();
+
+    await setVisible(true);
+    expect(row(0)).toBe('agent screen');
+    expect(termRef!.current!.modes.mouseTrackingMode).toBe('none');
+  });
+
+  it('a replay onto a hidden pane that already settled an attach still goes dirty', async () => {
+    layoutSize = 0;
+    const setVisible = await mount('p-reattach', false);
+    act(() => {
+      emitData!('p-reattach', 'first attach', true);
+      emitFlush!('p-reattach', 12);
+    });
+    await settle();
+    expect(isTerminalDirty(termRef!.current!)).toBe(false);
+    // A daemon reconnect replays the ring again onto the same mount.
+    act(() => {
+      emitData!('p-reattach', 'first attach', true);
+      emitFlush!('p-reattach', 12);
+    });
+    await settle();
+    expect(isTerminalDirty(termRef!.current!)).toBe(true);
+
+    await setVisible(true);
+    expect(resync).toHaveBeenCalledWith('p-reattach', expect.anything());
   });
 
   it('a hidden pane whose attach settled with nothing replayed is not painted', async () => {
