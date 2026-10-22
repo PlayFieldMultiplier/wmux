@@ -2767,6 +2767,7 @@ export const ko = {
   'settings.browserDiscardDesc': '브라우저 패널이 5분 동안 보이지 않으면 완전히 내려 메모리를 회수합니다. 돌아오면 페이지가 다시 로드됩니다(스크롤 위치와 저장하지 않은 입력은 사라집니다). 오디오 재생 중인 패널은 내리지 않으며, 자동화는 내려간 패널을 자동으로 깨웁니다.',
   'settings.browserPrivateNetwork': '사설 네트워크 주소 허용',
   'settings.browserPrivateNetworkDesc': '에이전트 브라우저가 인트라넷 주소(10.x, 172.16–31.x, 192.168.x, fc00::/7)를 열 수 있게 합니다. 클라우드 메타데이터(169.254.x), 링크 로컬, 루프백 별칭은 계속 차단됩니다. 다음 이동부터 적용됩니다. 기본값은 꺼짐입니다.',
+  'settings.browserPrivateNetworkEnvForced': 'wmux를 실행한 환경에 WMUX_ALLOW_PRIVATE_NETWORK가 설정되어 있어 켜져 있습니다.',
   'settings.browserPrivateNetworkOffUnsaved': '저장하지 못했습니다. wmux를 다시 시작하면 사설 네트워크 접근이 다시 켜집니다.',
   'settings.browserPrivateNetworkOnUnsaved': '이 설정을 저장하지 못해 사설 네트워크 접근은 계속 꺼져 있습니다.',
   'settings.siteMemory': '사이트별 기억',

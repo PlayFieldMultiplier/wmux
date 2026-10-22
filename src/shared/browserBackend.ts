@@ -65,6 +65,16 @@ export const BROWSER_PRIVATE_NETWORK_IPC = {
 } as const;
 
 /**
+ * What a read of the private-network switch answers: the stored setting, and
+ * whether main's environment variable turns the private ranges on regardless
+ * (the Settings row then shows the switch on and locked, and never writes).
+ */
+export interface AllowPrivateNetworkState {
+  allow: boolean;
+  envForced: boolean;
+}
+
+/**
  * What a write of the private-network switch did: the value now in force, and
  * whether the file holds it. `saved: false` means a restart will not keep what
  * the user just chose, so the Settings row has to say so.

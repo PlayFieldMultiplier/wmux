@@ -3285,6 +3285,7 @@ export const en = {
   'settings.browserDiscardDesc': 'After a browser pane stays invisible for 5 minutes, unload it entirely to reclaim its memory. The page reloads when you return (scroll position and unsaved form input are lost). Panes playing audio are never discarded; automation wakes a discarded pane automatically.',
   'settings.browserPrivateNetwork': 'Allow private network addresses',
   'settings.browserPrivateNetworkDesc': 'Let agent browsers open intranet addresses: 10.x, 172.16–31.x, 192.168.x and fc00::/7. Cloud metadata (169.254.x), link-local and loopback aliases stay blocked. Takes effect on the next navigation. Off by default.',
+  'settings.browserPrivateNetworkEnvForced': 'On because WMUX_ALLOW_PRIVATE_NETWORK is set in the environment that launched wmux.',
   'settings.browserPrivateNetworkOffUnsaved': 'Couldn\'t save this. Private network access will turn back on after wmux restarts.',
   'settings.browserPrivateNetworkOnUnsaved': 'Couldn\'t save this setting, so private network access stays off.',
   'settings.siteMemory': 'Per-site memory',

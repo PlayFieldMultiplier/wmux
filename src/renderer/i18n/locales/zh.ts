@@ -3202,6 +3202,7 @@ export const zh = {
   'settings.browserDiscardDesc': '浏览器面板保持不可见 5 分钟后，将其整体卸载以回收内存。返回时页面会重新加载（滚动位置和未保存的表单输入会丢失）。播放音频的面板永不被丢弃；自动化会自动唤醒被丢弃的面板。',
   'settings.browserPrivateNetwork': '允许私有网络地址',
   'settings.browserPrivateNetworkDesc': '允许智能体浏览器打开内网地址：10.x、172.16–31.x、192.168.x 和 fc00::/7。云元数据（169.254.x）、链路本地地址和环回别名仍会被阻止。从下一次导航起生效。默认关闭。',
+  'settings.browserPrivateNetworkEnvForced': '已开启，因为启动 wmux 的环境中设置了 WMUX_ALLOW_PRIVATE_NETWORK。',
   'settings.browserPrivateNetworkOffUnsaved': '无法保存此更改。wmux 重启后，私有网络访问将重新开启。',
   'settings.browserPrivateNetworkOnUnsaved': '无法保存此设置，因此私有网络访问保持关闭。',
   'settings.siteMemory': '站点记忆',

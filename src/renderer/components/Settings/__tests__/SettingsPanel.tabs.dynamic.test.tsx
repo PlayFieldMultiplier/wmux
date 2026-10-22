@@ -40,7 +40,7 @@ const MCP_STATUS = {
 
 /** Main's side of Settings › Browser › Allow private network addresses: a
  *  main-owned value, read and written over IPC, never through the store. */
-const mainPrivateNetwork = { value: false, sets: [] as boolean[], saves: true };
+const mainPrivateNetwork = { value: false, sets: [] as boolean[], saves: true, envForced: false };
 
 /** Explicit answers for the bridges that decide what renders. */
 const EXPLICIT: Record<string, unknown> = {
@@ -98,7 +98,8 @@ const EXPLICIT: Record<string, unknown> = {
   fanout: { getWorkerPermissionMode: resolved('auto'), getRequireApproval: resolved(false) },
   web: { deviceList: resolved({ devices: [] }) },
   browser: {
-    getAllowPrivateNetwork: () => Promise.resolve(mainPrivateNetwork.value),
+    getAllowPrivateNetwork: () =>
+      Promise.resolve({ allow: mainPrivateNetwork.value, envForced: mainPrivateNetwork.envForced }),
     // Main's rule: an unsaved opt-out still applies, an unsaved opt-in does not.
     setAllowPrivateNetwork: (allow: boolean) => {
       mainPrivateNetwork.sets.push(allow);
@@ -255,6 +256,27 @@ describe('main-owned settings', () => {
     expect(rowSwitch('browserprivatenet')!.getAttribute('aria-checked')).toBe('false');
     expect(container.querySelector('[data-testid="browser-private-network-unsaved"]')).toBeNull();
     mainPrivateNetwork.value = false;
+  });
+
+  it('browser › browserprivatenet is on and locked, with the reason, while the environment variable forces it', async () => {
+    mainPrivateNetwork.value = false;
+    mainPrivateNetwork.envForced = true;
+    mainPrivateNetwork.sets = [];
+    try {
+      await openTab('browser');
+      const sw = rowSwitch('browserprivatenet')!;
+      expect(sw.getAttribute('aria-checked')).toBe('true');
+      expect(sw.disabled).toBe(true);
+      expect(row('browserprivatenet')?.textContent).toContain(
+        'On because WMUX_ALLOW_PRIVATE_NETWORK is set in the environment that launched wmux.',
+      );
+      await act(async () => { sw.click(); });
+      await flush();
+      // Nothing is written: the stored setting stays what it was.
+      expect(mainPrivateNetwork.sets).toEqual([]);
+    } finally {
+      mainPrivateNetwork.envForced = false;
+    }
   });
 
   it('browser › browserprivatenet shows the value in force and says so when main could not save', async () => {

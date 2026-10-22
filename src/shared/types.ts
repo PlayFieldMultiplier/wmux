@@ -1593,7 +1593,8 @@ export interface NavigationPolicyOptions {
   readonly allowPrivateNetwork: boolean;
 }
 
-function privateNetworkEnvAllowed(): boolean {
+/** Whether this process's environment turns the private ranges on. */
+export function privateNetworkEnvAllowed(): boolean {
   // `process` is absent in the renderer bundle; an absent switch means off.
   const value =
     typeof process !== 'undefined' ? process.env?.[ALLOW_PRIVATE_NETWORK_ENV] : undefined;

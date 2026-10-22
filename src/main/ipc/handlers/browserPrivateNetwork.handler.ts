@@ -2,7 +2,9 @@ import type { IpcMain, IpcMainInvokeEvent } from 'electron';
 import {
   BROWSER_PRIVATE_NETWORK_IPC,
   type AllowPrivateNetworkSetResult,
+  type AllowPrivateNetworkState,
 } from '../../../shared/browserBackend';
+import { privateNetworkEnvAllowed } from '../../../shared/types';
 import type { BrowserBackendStore } from '../../browser-session/BrowserBackendStore';
 import { isTrustedMainFrameSender } from './browserPolicy.handler';
 
@@ -24,8 +26,12 @@ export function registerBrowserPrivateNetworkIpc(
     store: Pick<BrowserBackendStore, 'allowPrivateNetwork' | 'setAllowPrivateNetwork'>;
   },
 ): void {
-  ipcMain.handle(BROWSER_PRIVATE_NETWORK_IPC.get, (event: IpcMainInvokeEvent): boolean =>
-    isTrustedMainFrameSender(event, deps.getWindow) ? deps.store.allowPrivateNetwork() : false);
+  // envForced is main's environment variable, read per call and kept apart
+  // from the stored setting: it is never written to the file.
+  ipcMain.handle(BROWSER_PRIVATE_NETWORK_IPC.get, (event: IpcMainInvokeEvent): AllowPrivateNetworkState =>
+    isTrustedMainFrameSender(event, deps.getWindow)
+      ? { allow: deps.store.allowPrivateNetwork(), envForced: privateNetworkEnvAllowed() }
+      : { allow: false, envForced: false });
   ipcMain.handle(
     BROWSER_PRIVATE_NETWORK_IPC.set,
     (event: IpcMainInvokeEvent, value: unknown): AllowPrivateNetworkSetResult => {

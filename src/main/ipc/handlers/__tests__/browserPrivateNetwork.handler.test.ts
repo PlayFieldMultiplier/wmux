@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { BROWSER_PRIVATE_NETWORK_IPC } from '../../../../shared/browserBackend';
 import { registerBrowserPrivateNetworkIpc } from '../browserPrivateNetwork.handler';
+import { ALLOW_PRIVATE_NETWORK_ENV } from '../../../../shared/types';
 
 function fakeWindow() {
   const mainFrame = { id: 'main-frame' };
@@ -38,10 +39,21 @@ function setup(initial = false) {
 }
 
 describe('browser private-network IPC', () => {
-  it('get answers the value in force, to the wmux window only', () => {
+  afterEach(() => {
+    delete process.env[ALLOW_PRIVATE_NETWORK_ENV];
+  });
+
+  it('get answers the stored setting, to the wmux window only', () => {
     const { handlers, trusted, untrusted } = setup(true);
-    expect(handlers.get(BROWSER_PRIVATE_NETWORK_IPC.get)!(trusted)).toBe(true);
-    expect(handlers.get(BROWSER_PRIVATE_NETWORK_IPC.get)!(untrusted)).toBe(false);
+    expect(handlers.get(BROWSER_PRIVATE_NETWORK_IPC.get)!(trusted)).toEqual({ allow: true, envForced: false });
+    expect(handlers.get(BROWSER_PRIVATE_NETWORK_IPC.get)!(untrusted)).toEqual({ allow: false, envForced: false });
+  });
+
+  it('get says when the environment variable in main turns the ranges on, without touching the setting', () => {
+    process.env[ALLOW_PRIVATE_NETWORK_ENV] = '1';
+    const { handlers, store, trusted } = setup(false);
+    expect(handlers.get(BROWSER_PRIVATE_NETWORK_IPC.get)!(trusted)).toEqual({ allow: false, envForced: true });
+    expect(store.setAllowPrivateNetwork).not.toHaveBeenCalled();
   });
 
   it('set answers the value in force and that it was saved', () => {
