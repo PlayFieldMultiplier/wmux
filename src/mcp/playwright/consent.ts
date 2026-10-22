@@ -8,7 +8,12 @@
 // call (policy_denied / needs_consent) and is rethrown as such.
 //
 // The agent's own flags (allowDangerous, allowSensitiveDomains) never stand in
-// for this on a protected pane. Unprotected panes never reach this file.
+// for this on a protected pane.
+//
+// An unprotected pane asks the same way (`unprotected: true`), only when its
+// agent passes one of those flags to skip a check that would otherwise block
+// the call, or keeps a download. Without the operator's yes the call is
+// refused and nothing runs; normal calls never ask.
 import type { Page } from 'playwright-core';
 import { sendRpc } from '../wmux-client';
 import { canonicalHost } from '../../shared/browserHostPolicy';
@@ -18,7 +23,7 @@ import {
   POLICY_DENIED_CODE,
   type BrowserConsentAction,
 } from '../../shared/browserPolicy';
-import { browserCallRefusal, type BrowserTargetScope } from './browserScope';
+import { browserCallRefusal, sendScopedBrowserRpc, type BrowserTargetScope } from './browserScope';
 
 /** How much of an expression the operator can read (main caps it again). */
 const SCRIPT_DETAIL_CHARS = 4_000;
@@ -28,13 +33,21 @@ export interface ConsentGranted {
   epoch: number;
 }
 
-function refusalOf(err: unknown, tool: string): Error {
+function refusalOf(err: unknown, tool: string, unprotected = false): Error {
   return (
     browserCallRefusal(err)
     ?? new BrowserPolicyError(
       POLICY_DENIED_CODE,
-      `${tool} needs the operator's consent on a protected pane, and wmux could not ask (${err instanceof Error ? err.message : String(err)}). Do not retry unchanged.`,
+      `${tool} needs the operator's consent ${unprotected ? 'to skip this safety check' : 'on a protected pane'}, and wmux could not ask (${err instanceof Error ? err.message : String(err)}). Do not retry unchanged.`,
     )
+  );
+}
+
+/** A final refusal for a skipped safety check on an unprotected pane. */
+export function bypassRefusal(tool: string, why: string): BrowserPolicyError {
+  return new BrowserPolicyError(
+    POLICY_DENIED_CODE,
+    `${tool}: ${why}. Skipping this safety check needs the operator's consent; do not retry unchanged.`,
   );
 }
 
@@ -47,6 +60,17 @@ export function consentHostOf(urlOrDomain: string): string | null {
     return canonicalHost(parsed.hostname);
   } catch {
     return canonicalHost(urlOrDomain.trim().replace(/^\.+/, '').toLowerCase());
+  }
+}
+
+/** The URL the call's page is on: the Playwright page's, else main's (RPC lane). */
+export async function scopedPageUrl(page: Page | null, scope: BrowserTargetScope): Promise<string> {
+  if (page) return page.url();
+  try {
+    const r = await sendScopedBrowserRpc<{ value: unknown }>('browser.evaluate', scope, { expression: 'location.href' });
+    return typeof r.value === 'string' ? r.value : '';
+  } catch {
+    return '';
   }
 }
 
@@ -71,6 +95,8 @@ export async function requestBrowserConsent(
     /** download only: the tab's target id (its main frame id). */
     targetId?: string;
     startTimeoutMs?: number;
+    /** The pane is unprotected: the agent asked to skip a check (or keep a download). */
+    unprotected?: true;
   },
 ): Promise<ConsentGranted> {
   let res: unknown;
@@ -86,18 +112,19 @@ export async function requestBrowserConsent(
         ...(req.detail && { detail: req.detail }),
         ...(req.targetId && { targetId: req.targetId }),
         ...(req.startTimeoutMs !== undefined && { startTimeoutMs: req.startTimeoutMs }),
+        ...(req.unprotected && { unprotected: true }),
       },
       // Longer than main's own deadline: main's answer, never the transport,
       // ends the wait.
       BROWSER_CONSENT_RPC_TIMEOUT_MS,
     );
   } catch (err) {
-    throw refusalOf(err, tool);
+    throw refusalOf(err, tool, req.unprotected === true);
   }
   const r = res as { ok?: unknown; operationId?: unknown; epoch?: unknown } | null;
   // Only an explicit, well-formed yes is a yes.
   if (!r || r.ok !== true || typeof r.operationId !== 'string' || typeof r.epoch !== 'number') {
-    throw refusalOf(new Error('unexpected consent answer'), tool);
+    throw refusalOf(new Error('unexpected consent answer'), tool, req.unprotected === true);
   }
   return { operationId: r.operationId, epoch: r.epoch };
 }

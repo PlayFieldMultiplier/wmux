@@ -167,7 +167,9 @@ describe('getPageForScope write intent on Live Chrome', () => {
     expect(priv.liveWriteScope).toBeUndefined();
 
     await expect(engine.getPageForScope(SCOPE, { intent: 'write' })).resolves.toBe(page);
-    expect(mockSendRpc).not.toHaveBeenCalled();
+    // No write gate; the one question asked is the download guard's "does the
+    // workspace hold this tab?" (unprotected Chrome, a write).
+    expect(mockSendRpc.mock.calls.map(([m]) => m)).toEqual(['browser.cdp.info']);
   });
 
   it('refuses when ownership cannot be PROVEN: the page will not report its target', async () => {

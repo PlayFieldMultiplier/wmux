@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { PlaywrightEngine } from '../PlaywrightEngine';
 import { withAutomationLease } from '../automationLease';
 import { isProtectedScope, protectedRefusal } from '../protectedPane';
-import { codePreview, consentHostOf, requestBrowserConsent } from '../consent';
+import { bypassRefusal, codePreview, consentHostOf, requestBrowserConsent, scopedPageUrl } from '../consent';
 import {
   DOM_LISTING_PROBE_HOVER_NOTE,
   DOM_LISTING_Q_NOTE,
@@ -172,7 +172,7 @@ const BROWSER_EVALUATE_SHAPE = {
   allowDangerous: z
     .boolean()
     .optional()
-    .describe('Run a blocked pattern anyway. Default false; trusted input only.'),
+    .describe('Ask the user to run a blocked pattern. Default false; trusted input only.'),
   mainWorld: z
     .boolean()
     .optional()
@@ -918,7 +918,7 @@ export function registerInspectionTools(server: McpServer, deps: BrowserToolDeps
   // -----------------------------------------------------------------------
   server.tool(
     'browser_evaluate',
-    'Evaluate a JavaScript expression in the page. Patterns that enable prompt-injection exfiltration (fetch, XHR, cookies, storage, eval, Function) are BLOCKED unless allowDangerous:true. Blocking is a case-sensitive whole-word text scan that reads strings and comments too: the call forms (fetch/eval/require/import) need a "(" next, whitespace allowed — retrieval, evaluateScore(), prefetch() and myFetch() all pass, while both window.fetch(url) and fetch (url) are blocked — while the rest (localStorage, WebSocket, document.cookie) match the bare word anywhere, even in a comment. Strings return verbatim, everything else as JSON (DOM nodes/Map/functions become {}); a returned Promise is awaited, top-level await is a SyntaxError. On the Chrome backend it runs in an isolated world that shares the DOM but not the page\'s JS globals; pass mainWorld:true to read those.',
+    'Evaluate a JavaScript expression in the page. Patterns that enable prompt-injection exfiltration (fetch, XHR, cookies, storage, eval, Function) are BLOCKED unless allowDangerous:true and the user allows it. Blocking is a case-sensitive whole-word text scan that reads strings and comments too: the call forms (fetch/eval/require/import) need a "(" next, whitespace allowed — retrieval, evaluateScore(), prefetch() and myFetch() all pass, while both window.fetch(url) and fetch (url) are blocked — while the rest (localStorage, WebSocket, document.cookie) match the bare word anywhere, even in a comment. Strings return verbatim, everything else as JSON (DOM nodes/Map/functions become {}); a returned Promise is awaited, top-level await is a SyntaxError. On the Chrome backend it runs in an isolated world that shares the DOM but not the page\'s JS globals; pass mainWorld:true to read those.',
     BROWSER_EVALUATE_SHAPE,
     async ({ expression, allowDangerous, mainWorld, surfaceId }) => withAutomationLease(deps, surfaceId, async (scope) => {
       try {
@@ -926,7 +926,7 @@ export function registerInspectionTools(server: McpServer, deps: BrowserToolDeps
         if (warnings.length > 0 && !allowDangerous) {
           const blockedMsg =
             `browser_evaluate blocked: expression contains dangerous patterns (${warnings.join(', ')}). ` +
-            `Pass allowDangerous:true to execute anyway.`;
+            `Pass allowDangerous:true to ask the user to allow it.`;
           return {
             content: [{ type: 'text' as const, text: blockedMsg }],
             isError: true,
@@ -934,6 +934,25 @@ export function registerInspectionTools(server: McpServer, deps: BrowserToolDeps
         }
         if (warnings.length > 0) {
           console.warn(`[browser_evaluate] allowDangerous override for: ${warnings.join(', ')}`);
+        }
+
+        // Unprotected pane: allowDangerous only asks. The operator answers for
+        // this script before it runs; a refusal, a timeout or nobody to ask
+        // runs nothing. A script that trips no pattern never asks.
+        let bypassPage: Page | null | undefined;
+        if (warnings.length > 0 && !isProtectedScope(scope)) {
+          bypassPage = await engine.getPageForScope(scope, { intent: 'write' }).catch(allowScopedRpcFallback);
+          const approvedUrl = await scopedPageUrl(bypassPage, scope);
+          await requestBrowserConsent(scope, 'browser_evaluate', {
+            action: 'evaluate',
+            url: approvedUrl,
+            detail: codePreview(expression),
+            unprotected: true,
+          });
+          // Right before dispatch: still the site the operator approved.
+          if (consentHostOf(await scopedPageUrl(bypassPage, scope)) !== consentHostOf(approvedUrl)) {
+            throw bypassRefusal('browser_evaluate', 'the page moved to another site while the operator was being asked');
+          }
         }
 
         // Protected pane: the operator answers for every page script, whatever
@@ -967,7 +986,8 @@ export function registerInspectionTools(server: McpServer, deps: BrowserToolDeps
         // arbitrary JS in a page is the broadest one there is, and on Live Chrome
         // this lane is the only one that can reach a Chrome tab at all (main's
         // browser.evaluate drives builtin webviews).
-        const page = protectedPage ?? await engine.getPageForScope(scope, { intent: 'write' }).catch(allowScopedRpcFallback);
+        const page = protectedPage
+          ?? (bypassPage !== undefined ? bypassPage : await engine.getPageForScope(scope, { intent: 'write' }).catch(allowScopedRpcFallback));
         if (page) {
           // Isolated world by default: the page can neither see the script nor
           // hand it doctored built-ins. mainWorld:true opts back into the

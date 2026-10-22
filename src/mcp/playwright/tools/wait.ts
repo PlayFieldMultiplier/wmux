@@ -8,6 +8,8 @@ import { rpcEvaluator } from '../page-eval';
 import { waitForIsolated } from '../isolated-eval';
 import { allowScopedRpcFallback, type BrowserToolDeps } from '../browserScope';
 import { describeToolError } from '../toolError';
+import { bypassRefusal, codePreview, consentHostOf, requestBrowserConsent, scopedPageUrl } from '../consent';
+import { browserPolicyRefusalCode } from '../../../shared/browserPolicy';
 import { recordAction } from '../../browser-replay/actionRing';
 import {
   defineWmuxTool,
@@ -39,7 +41,7 @@ const BROWSER_WAIT_SHAPE = {
   fn: z
     .string()
     .optional()
-    .describe('JS predicate body; waits until it returns truthy.'),
+    .describe('JS predicate body; waits until it returns truthy. One that browser_evaluate would block asks the user first.'),
   timeout: z
     .number()
     .optional()
@@ -187,6 +189,24 @@ export function createWaitToolCatalog(deps: BrowserToolDeps) {
 
       try {
         const page = await engine.getPageForScope(scope).catch(allowScopedRpcFallback);
+
+        // Unprotected pane: a fn predicate that trips the dangerous-pattern
+        // scan runs only with the operator's consent, as browser_evaluate's
+        // allowDangerous does. Asked only when fn is the condition that will be
+        // evaluated (url, selector and text take priority over it).
+        if (fn && !url && !selector && !text && detectDangerousPatterns(fn).length > 0) {
+          const approvedUrl = await scopedPageUrl(page, scope);
+          await requestBrowserConsent(scope, 'browser_wait', {
+            action: 'evaluate',
+            url: approvedUrl,
+            detail: codePreview(fn),
+            unprotected: true,
+          });
+          // Right before the first poll: still the site the operator approved.
+          if (consentHostOf(await scopedPageUrl(page, scope)) !== consentHostOf(approvedUrl)) {
+            throw bypassRefusal('browser_wait', 'the page moved to another site while the operator was being asked');
+          }
+        }
 
         // Packaged RPC fallback (#114): no Playwright Page, so poll the condition
         // over the CDP channel until it holds or the timeout elapses.
@@ -374,8 +394,9 @@ export function createWaitToolCatalog(deps: BrowserToolDeps) {
         };
       } catch (error) {
         const message = describeToolError(error);
-        // Provide clear timeout messaging
-        if (message.includes('Timeout') || message.includes('timeout')) {
+        // Provide clear timeout messaging. A consent refusal is reported as
+        // itself, never as a wait timeout.
+        if (browserPolicyRefusalCode(error) === null && (message.includes('Timeout') || message.includes('timeout'))) {
           const condition = url
             ? `URL "${url}"`
             : selector && text

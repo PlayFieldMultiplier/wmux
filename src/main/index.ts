@@ -1698,6 +1698,7 @@ registerBrowserConsentRpc(rpcRouter, {
   consent: new DangerousActionConsent({
     store: browserPolicyStore,
     queue: () => approvalQueue,
+    canAsk: () => !!mainWindow && !mainWindow.isDestroyed(),
     runOwnership: (ptyId) => automationBridge.runOwnership(ptyId),
     workspaceName: (workspaceId) => getWorkspaceMirror().getEntries()?.find((e) => e.id === workspaceId)?.name,
     log: (line) => console.warn(line),

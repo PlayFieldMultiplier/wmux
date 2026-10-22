@@ -81,6 +81,21 @@ describe('browser-action prompt', () => {
     expect(details?.querySelector('summary')?.textContent).toContain('Show the whole script');
   });
 
+  it('an unprotected pane: names the host and file, offers no "Always", and says nothing of protection', () => {
+    act(() => useStore.setState({
+      mcpPrompts: {
+        p1: { ...PROMPT, browserAction: { ...PROMPT.browserAction, host: 'cdn.test', detail: 'report.csv', unprotected: true as const } },
+      },
+      mcpPromptOrder: ['p1'],
+    } as never));
+    expect(container.textContent).toContain('Download a file from cdn.test?');
+    expect(container.textContent).toContain('report.csv');
+    expect(container.textContent).not.toContain('is protected');
+    expect(button('Always on this pane')).toBeUndefined();
+    act(() => button('Allow once')!.click());
+    expect(resolveMock).toHaveBeenCalledWith('p1', true);
+  });
+
   it('is critical in the inbox, so a stray Enter cannot approve it', () => {
     const items = selectApprovalInbox(useStore.getState() as never);
     expect(items[0]).toMatchObject({ source: 'mcp', kind: 'browser-action', isCritical: true, browserAction: PROMPT.browserAction });
