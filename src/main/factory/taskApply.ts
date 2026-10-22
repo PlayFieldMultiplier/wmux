@@ -31,24 +31,41 @@
 //     and `info/attributes` between any check and the write. So `git apply`
 //     runs against a private, empty git dir of main's (with the checkout as
 //     its work tree), no system or global config, and only the owner's line
-//     ending settings (`core.autocrlf`, `core.eol`, `core.safecrlf`) passed
-//     in: no filter driver is defined there, so none can run. A touched path
+//     ending settings (`core.autocrlf`, `core.eol`, `core.safecrlf`,
+//     `core.attributesFile`) passed in: no filter driver is defined there, so
+//     none can run. The repository's `info/attributes` is copied in for its
+//     line endings (attributes run nothing without a driver). A touched path
 //     the checkout gives a filter (Git LFS) is refused (`filtered`): what it
-//     holds is not the file itself.
+//     holds is not the file itself; so is a task that changes a
+//     `.gitattributes`.
+//   - that private git dir lives under main's own folder (`<wmux>/factory`,
+//     0700), never the shared temp folder a sandboxed worker can write, and
+//     the patch reaches git apply on stdin, never as a file.
+//   - every read past the refs runs in that private git dir too: the
+//     repository's objects borrowed through `objects/info/alternates`, its
+//     index copied in. So no git main runs on the task's repository can be
+//     made to fetch a missing object (no promisor remote exists there; every
+//     call also sets GIT_NO_LAZY_FETCH), re-hash a file through a filter, or
+//     trust a commit-graph; the shared repository is read only for its
+//     config and refs. The paths the checks covered are the patch's own
+//     (read back from it), so an object swapped between the two reads is
+//     refused.
 //
 // git runs with a fixed argv, no shell, its git dir and work tree named
 // explicitly (a `core.worktree` in the shared config cannot move the
 // writes), no fsmonitor, hooks from an empty folder, and literal pathspecs.
 
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import type { LedgerEntry } from '../../shared/ledger';
 import type { FactoryTaskApplyRefusal, FactoryTaskApplyResult } from '../../shared/botTask';
-import { isPlainTaskBranchName } from '../../shared/taskGitRelay';
-import { defaultGit, taskGitDirTarget, type TaskPushGit } from '../worktask/taskPush';
+import { isPlainTaskBranchName, taskGitEnv } from '../../shared/taskGitRelay';
+import { getExecEnv } from '../../shared/execEnv';
+import { defaultGit, taskGitDirTarget, TASK_PUSH_TIMEOUT_MS, type TaskPushGit } from '../worktask/taskPush';
 import { recordedTaskGitCommonDir } from '../worktask/taskGitCommonDir';
-import { workerGitPreflight, workerGitSafeArgs, type GitConfigEntry } from '../worktask/workerGit';
+import { workerGitEnv, workerGitPreflight, workerGitSafeArgs, type GitConfigEntry } from '../worktask/workerGit';
+import { killProcessTree } from '../../daemon/automation/treeKill';
 
 /** The most files one Apply writes. */
 export const TASK_APPLY_MAX_FILES = 1000;
@@ -69,10 +86,97 @@ export interface TaskApplyPorts {
   taskBranch: (entry: LedgerEntry) => Promise<string | null>;
   /** An empty folder for `core.hooksPath`. */
   noHooksDir: string;
+  /** Main's own folder for an Apply's private git dir
+   *  (`<wmux>/factory/apply`), never the shared temp folder. */
+  scratchDir: string;
   /** Test seam (default: taskPush's git, no shell). */
   git?: TaskPushGit;
+  /** Test seam: git with raw output and `input` on stdin (the patch's
+   *  making and its applies). */
+  gitRaw?: TaskApplyRawGit;
   platform?: NodeJS.Platform;
 }
+
+/** Runs git with `env` added and `input` on stdin; resolves with the exit
+ *  code, raw stdout and stderr, never throws. */
+export type TaskApplyRawGit = (args: string[], cwd: string, env: Record<string, string>, input?: Buffer) => Promise<{ code: number; stdout: Buffer; stderr: string }>;
+
+/** The most a patch may be. */
+const PATCH_MAX_BYTES = 256 * 1024 * 1024;
+
+/** Main's git, as taskPush's (no shell, a clean env), with raw output and
+ *  stdin. */
+export const defaultRawGit = (args: string[], cwd: string, extra: Record<string, string>, input?: Buffer, timeoutMs: number = TASK_PUSH_TIMEOUT_MS): Promise<{ code: number; stdout: Buffer; stderr: string }> => new Promise((resolve) => {
+  const out: Buffer[] = [];
+  let size = 0;
+  let err = '';
+  let over = false;
+  let settled = false;
+  // How git ended, once it has ('exit'); its pipes may stay open after.
+  let exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  // Set once this side stops a running git: the stop of its whole process tree.
+  let stopping: Promise<void> | null = null;
+  const child = spawn('git', args, { cwd, env: { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const settle = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    child.stdout.destroy();
+    child.stderr.destroy();
+    if (over) return resolve({ code: 1, stdout: Buffer.alloc(0), stderr: 'the patch is too large' });
+    // A git stopped by a signal gave no answer: 128, never a 1 a caller reads
+    // as one (merge-base's "not an ancestor").
+    resolve({ code: signal || code === null ? 128 : code, stdout: Buffer.concat(out), stderr: signal ? `${err}git was stopped (${signal})` : err });
+  };
+  // Stop git and what it started (a shell alias, a hook, a helper): that
+  // outlives a kill of git alone, and on Windows keeps running with the
+  // checkout as its working folder. A git that has already exited is not
+  // killed (its pid may belong to another process by now); the answer is
+  // settled at once instead of waiting on pipes a child of it still holds.
+  const stop = () => {
+    if (settled || stopping) return;
+    if (exited) return settle(exited.code, 'SIGTERM');
+    // The tree first (on Windows it is walked from the live root), then git
+    // itself, in case the tree kill failed or timed out.
+    stopping = (child.pid ? killProcessTree(child.pid).catch(() => undefined) : Promise.resolve()).then(() => {
+      if (!exited) child.kill();
+    });
+  };
+  const timer = setTimeout(stop, timeoutMs);
+  child.stdout.on('data', (d: Buffer) => {
+    size += d.length;
+    if (size > PATCH_MAX_BYTES) {
+      over = true;
+      stop();
+      return;
+    }
+    out.push(d);
+  });
+  child.stderr.on('data', (d: Buffer) => {
+    if (err.length < 64 * 1024) err += d.toString('utf8');
+  });
+  child.on('error', (e) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    // Git never ran: not one of its own answers (128, as git's fatal).
+    resolve({ code: 128, stdout: Buffer.alloc(0), stderr: String(e) });
+  });
+  // A git this stopped is settled once it and its tree are gone, not on
+  // 'close': that waits for every holder of the pipes, so a child that
+  // outlived the stop would stretch the timeout to its own length.
+  child.on('exit', (code, signal) => {
+    exited = { code, signal };
+    if (stopping) void stopping.then(() => settle(code, signal ?? 'SIGTERM'));
+  });
+  // Every pipe closed: git's whole answer, unless something settled first.
+  child.on('close', (code, signal) => {
+    if (stopping) void stopping.then(() => settle(code, signal ?? 'SIGTERM'));
+    else settle(code, signal);
+  });
+  child.stdin.on('error', () => undefined);
+  child.stdin.end(input ?? Buffer.alloc(0));
+});
 
 let shared: TaskApplyPorts | null = null;
 export function setTaskApplyPorts(p: TaskApplyPorts | null): void {
@@ -102,30 +206,18 @@ function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
 }
 
 /** One `git diff --raw -z` entry. */
-export interface RawChange { status: string; srcMode: string; dstMode: string; path: string }
+export interface RawChange { status: string; srcMode: string; dstMode: string; path: string; srcOid?: string; dstOid?: string }
 
 /** `git diff --raw -z --no-renames` output → its entries. Pure. */
 export function parseRawDiff(stdout: string): RawChange[] {
   const parts = stdout.split('\0');
   const out: RawChange[] = [];
   for (let i = 0; i + 1 < parts.length; i += 2) {
-    const m = /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ ([A-Z])\d*$/.exec(parts[i]);
+    const m = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])\d*$/.exec(parts[i]);
     if (!m) break;
-    out.push({ srcMode: m[1], dstMode: m[2], status: m[3], path: parts[i + 1] });
+    out.push({ srcMode: m[1], dstMode: m[2], srcOid: m[3], dstOid: m[4], status: m[5], path: parts[i + 1] });
   }
   return out;
-}
-
-/** `git status --porcelain=v1 -z --no-renames` output → its paths. Pure. */
-export function parseStatusPaths(stdout: string): string[] {
-  return stdout.split('\0').filter((r) => r.length > 3).map((r) => r.slice(3));
-}
-
-/** Whether a dirty path in the checkout touches a path the task changed:
- *  the same path, or one inside the other (a folder). Pure. */
-function touches(dirty: string, changed: string): boolean {
-  const d = dirty.replace(/\/$/, '');
-  return d === changed || changed.startsWith(`${d}/`) || d.startsWith(`${changed}/`);
 }
 
 /** `git check-attr -z filter` output → the paths it gives a filter driver
@@ -149,7 +241,63 @@ export function lineEndingArgs(entries: readonly GitConfigEntry[]): string[] {
     const hits = entries.filter((e) => e.key === key);
     if (hits.length > 0) out.push('-c', `${key}=${hits[hits.length - 1].value}`);
   }
+  // The owner's own attributes file (system or global), never one the
+  // repository's config names.
+  const attrs = entries.filter((e) => e.key === 'core.attributesfile' && (e.scope === 'system' || e.scope === 'global'));
+  if (attrs.length > 0) out.push('-c', `core.attributesFile=${attrs[attrs.length - 1].value}`);
   return out;
+}
+
+/** The repository's object format, from its own config only (a sha256
+ *  repository says so in `extensions.objectformat`). Pure. */
+export function repoObjectFormat(entries: readonly GitConfigEntry[]): string {
+  const own = entries.filter((e) => (e.scope === 'local' || e.scope === 'worktree') && e.key === 'extensions.objectformat');
+  return own.length > 0 ? own[own.length - 1].value.toLowerCase() : 'sha1';
+}
+
+/** Whether the checkout already carries each file mode of the task (a
+ *  reverse check of a patch passes whatever the modes are): the executable
+ *  bit only where git tracks it (`fileMode`), a link only where the checkout
+ *  makes links (`symlinks`). */
+export function modesApplied(top: string, changes: readonly RawChange[], opts: { fileMode: boolean; symlinks: boolean }): boolean {
+  for (const c of changes) {
+    if (c.status === 'D') continue;
+    if (c.status === 'M' && c.srcMode === c.dstMode) continue;
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(path.join(top, c.path));
+    } catch {
+      return false;
+    }
+    const link = c.dstMode === '120000';
+    if (opts.symlinks && link !== st.isSymbolicLink()) return false;
+    if (opts.fileMode && !link && st.isFile() && ((st.mode & 0o111) !== 0) !== (c.dstMode === '100755')) return false;
+  }
+  return true;
+}
+
+/** Whether every change only flips a file's executable bit (the same
+ *  content). Pure. */
+export function onlyExecBitChanges(changes: readonly RawChange[]): boolean {
+  const regular = (m: string) => m === '100644' || m === '100755';
+  return changes.length > 0 && changes.every((c) => c.status === 'M' && c.srcMode !== c.dstMode && regular(c.srcMode) && regular(c.dstMode) && !!c.srcOid && c.srcOid === c.dstOid);
+}
+
+/** A boolean git setting as the scopes leave it (`fallback` when unset). Pure. */
+function configBool(entries: readonly GitConfigEntry[], key: string, fallback: boolean): boolean {
+  const hits = entries.filter((e) => e.key === key);
+  if (hits.length === 0) return fallback;
+  return !/^(?:false|no|off|0)$/i.test(hits[hits.length - 1].value.trim());
+}
+
+/** The paths `git apply --numstat -z` reads from a patch. Pure. */
+export function patchPaths(stdout: string): string[] {
+  return stdout.split('\0').filter(Boolean).map((r) => r.split('\t').slice(2).join('\t'));
+}
+
+/** A gitlink (submodule) anywhere in a patch's headers. Pure. */
+export function patchHasGitlink(patch: Buffer): boolean {
+  return /^(?:new file mode|deleted file mode|old mode|new mode) 160000$|^index [0-9a-f]+\.\.[0-9a-f]+ 160000$/m.test(patch.toString('latin1'));
 }
 
 /** A `git apply` failure that means the checkout no longer matches the
@@ -206,6 +354,61 @@ function chunks(paths: readonly string[], maxChars = 8000, maxCount = 200): stri
   return out;
 }
 
+/** A regular file's bytes, at most `max` (no link followed, never a FIFO
+ *  or a device), or null when it is not one. */
+function readRegularFile(p: string, max: number): Buffer | null {
+  return readRegularFileStat(p, max)?.bytes ?? null;
+}
+
+/** readRegularFile with the file's stat, taken on the same open file. */
+function readRegularFileStat(p: string, max: number): { bytes: Buffer; stat: fs.Stats } | null {
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+  let fd: number;
+  try {
+    fd = fs.openSync(p, flags);
+  } catch {
+    return null;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > max) return null;
+    const buf = Buffer.alloc(st.size);
+    let got = 0;
+    while (got < buf.length) {
+      const n = fs.readSync(fd, buf, got, buf.length - got, got);
+      if (n === 0) break;
+      got += n;
+    }
+    return { bytes: buf.subarray(0, got), stat: st };
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** The most of a copied index. */
+const INDEX_MAX_BYTES = 512 * 1024 * 1024;
+
+/** Folders of Apply's own that a crash left (older than an hour), removed. */
+function sweepScratch(dir: string, now = Date.now()): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith('apply-')) continue;
+    const p = path.join(dir, name);
+    try {
+      if (now - fs.lstatSync(p).mtimeMs > 60 * 60_000) fs.rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    } catch {
+      /* best effort */
+    }
+  }
+}
+
 /** Whether anything is at `p` (a dangling link counts). */
 function present(p: string): boolean {
   try {
@@ -251,8 +454,9 @@ export async function applyTaskToCheckout(ports: TaskApplyPorts, taskId: string)
 
 async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, top: string, recorded: string, platform: NodeJS.Platform): Promise<FactoryTaskApplyResult> {
   const git = ports.git ?? defaultGit;
+  const noLazy = taskGitEnv();
   const safe = [...workerGitSafeArgs(path.resolve(ports.noHooksDir)), '-c', 'submodule.recurse=false', '--literal-pathspecs'];
-  const plain = (args: string[]) => git(args, top);
+  const plain = (args: string[]) => git(args, top, noLazy);
   // The checkout's own git dir and its top, as git reads them from the folder.
   const gitDirOut = await plain(['rev-parse', '--absolute-git-dir']);
   const gitDir = gitDirOut.code === 0 ? realOrNull(gitDirOut.stdout.trim()) : null;
@@ -266,77 +470,181 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
   if (!common || !samePath(common, recordedReal, platform)) {
     return refuse('other_repo', `The bot's repository folder ${top} is not the repository the task worked in.`);
   }
-  // Every later call names the git dir and the work tree itself.
-  const run = (args: string[]) => git([`--git-dir=${gitDir}`, `--work-tree=${top}`, ...safe, ...args], top);
+  // The shared repository is read for its config and refs only, naming its
+  // git dir and work tree itself.
+  const run = (args: string[]) => git([`--git-dir=${gitDir}`, `--work-tree=${top}`, ...safe, ...args], top, noLazy);
   const pre = await workerGitPreflight(run, 'read');
   if (!pre.ok) return refuse('config_refused', pre.error);
+  const promisor = pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && (e.key === 'extensions.partialclone' || /^remote\..+\.promisor$/.test(e.key)));
+  if (promisor) return refuse('config_refused', `The repository is a partial clone (${promisor.key}); merge the task branch with git.`);
   const busy = IN_PROGRESS.find((f) => present(path.join(gitDir, f)));
   if (busy) return refuse('merge_in_progress', 'Your checkout is in the middle of a merge, rebase, cherry-pick or revert. Finish or abort it first.');
 
-  // The head: the task branch main recorded, in the checkout's refs; it
-  // must hold work past the base, and descend from it.
+  // The head: the task branch main recorded, read as a ref (no object).
   const branch = await ports.taskBranch(entry);
   if (!branch || !isPlainTaskBranchName(branch)) return refuse('no_branch', 'wmux has no record of the task\'s branch.');
-  const headOut = await run(['rev-parse', '--verify', '--quiet', '--end-of-options', `refs/heads/${branch}^{commit}`]);
+  const headOut = await run(['rev-parse', '--verify', '--quiet', '--end-of-options', `refs/heads/${branch}`]);
   const head = headOut.stdout.trim();
   if (headOut.code !== 0 || !SHA_RE.test(head)) return refuse('no_branch', `The task branch ${branch} is not in your checkout's repository.`);
   if (head === base) return refuse('no_changes', 'The task made no commits.');
-  const lineage = await run(['merge-base', '--is-ancestor', base, head]);
-  if (lineage.code !== 0) return refuse('foreign_head', `The task branch ${branch} does not start from the commit the task started from.`);
+  // The checkout's own HEAD, for its staged changes (none: no commit yet).
+  const checkoutHeadOut = await run(['rev-parse', '--verify', '--quiet', '--end-of-options', 'HEAD']);
+  const checkoutHead = checkoutHeadOut.code === 0 && SHA_RE.test(checkoutHeadOut.stdout.trim()) ? checkoutHeadOut.stdout.trim() : null;
 
-  // Plumbing: no diff setting of the owner's (renames, prefixes, relative
-  // paths) changes what it reports.
-  const diff = await run(['diff-tree', '-r', '-z', '--no-renames', '--no-abbrev', base, head]);
-  if (diff.code !== 0) return refuse('git_failed', `git diff-tree failed: ${diff.stderr.trim().slice(0, 300)}`);
-  const changes = parseRawDiff(diff.stdout);
-  if (changes.length === 0) return refuse('no_changes', 'The task changed no files.');
-  if (changes.length > TASK_APPLY_MAX_FILES) return refuse('too_many', `The task changed ${changes.length} files, more than Apply writes (${TASK_APPLY_MAX_FILES}); merge its branch with git.`);
-  const sub = changes.find((c) => c.srcMode === '160000' || c.dstMode === '160000');
-  if (sub) return refuse('submodule', `The task changes the submodule ${sub.path}; merge its branch with git.`);
-  const touched = changes.map((c) => c.path);
-  const created = changes.filter((c) => c.status === 'A').map((c) => c.path);
-
-  // A path the checkout runs through a content filter (Git LFS) holds
-  // something other than the file: not applied here.
-  const filtered: string[] = [];
-  for (const batch of chunks(touched)) {
-    const ca = await run(['check-attr', '-z', 'filter', '--', ...batch]);
-    if (ca.code !== 0) return refuse('git_failed', `git check-attr failed: ${ca.stderr.trim().slice(0, 300)}`);
-    filtered.push(...filteredPaths(ca.stdout));
-  }
-  if (filtered.length > 0) return refuse('filtered', 'The task changes files your checkout runs through a content filter (such as Git LFS); merge its branch with git.', filtered);
-
-  const objectFormat = pre.entries.filter((e) => e.key === 'extensions.objectformat').pop()?.value.toLowerCase() ?? 'sha1';
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-apply-'));
+  const objectFormat = repoObjectFormat(pre.entries);
+  const raw = ports.gitRaw ?? defaultRawGit;
+  sweepScratch(ports.scratchDir);
+  // Main's own folder, not the shared temp folder.
+  fs.mkdirSync(ports.scratchDir, { recursive: true, mode: 0o700 });
+  const tmp = fs.mkdtempSync(path.join(ports.scratchDir, 'apply-'));
   try {
-    // The task's patch, by plumbing.
-    const patch = path.join(tmp, 'task.patch');
-    const made = await run(['diff-tree', '-r', '-p', '--binary', '--full-index', '--no-renames', `--output=${patch}`, base, head]);
-    if (made.code !== 0) return refuse('git_failed', `git diff-tree failed: ${made.stderr.trim().slice(0, 300)}`);
-    // git apply against main's own empty git dir: none of the repository's
-    // config or attributes files, and no system or global config.
+    fs.chmodSync(tmp, 0o700);
+    // Main's own empty git dir: none of the repository's config, no system
+    // or global config, the repository's objects borrowed (alternates), its
+    // index and info/attributes copied in (attributes run nothing without a
+    // driver, and none is defined here).
     const privateDir = path.join(tmp, 'git');
     const emptyConfig = path.join(tmp, 'empty-config');
-    fs.writeFileSync(emptyConfig, '');
-    const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyConfig };
+    fs.writeFileSync(emptyConfig, '', { mode: 0o600 });
+    const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyConfig, GIT_DEFAULT_HASH: objectFormat, LC_ALL: 'C', ...noLazy };
     const init = await git(privateGitInitArgs(objectFormat, privateDir), tmp, env);
     if (init.code !== 0) return refuse('git_failed', `git init failed: ${init.stderr.trim().slice(0, 300)}`);
+    fs.mkdirSync(path.join(privateDir, 'objects', 'info'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(privateDir, 'objects', 'info', 'alternates'), `${path.join(common, 'objects')}\n`, { mode: 0o600 });
+    // A shallow repository's boundary commits (object ids only): without
+    // them its oldest parents read as missing commits.
+    const shallow = readRegularFile(path.join(common, 'shallow'), 64 * 1024 * 1024);
+    if (shallow !== null) fs.writeFileSync(path.join(privateDir, 'shallow'), shallow, { mode: 0o600 });
+    const attributes = readRegularFile(path.join(common, 'info', 'attributes'), 1024 * 1024);
+    if (attributes !== null) {
+      fs.mkdirSync(path.join(privateDir, 'info'), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(privateDir, 'info', 'attributes'), attributes, { mode: 0o600 });
+    }
+    if (present(path.join(gitDir, 'index'))) {
+      const index = readRegularFileStat(path.join(gitDir, 'index'), INDEX_MAX_BYTES);
+      if (index === null) return refuse('git_failed', 'Your checkout\'s index could not be read.');
+      fs.writeFileSync(path.join(privateDir, 'index'), index.bytes, { mode: 0o600 });
+      // Its own times kept (those of the very file read): git judges a
+      // racily clean entry against them.
+      try {
+        fs.utimesSync(path.join(privateDir, 'index'), index.stat.atime, index.stat.mtime);
+      } catch {
+        return refuse('git_failed', 'Your checkout\'s index could not be read.');
+      }
+      // A split index names its shared part by file.
+      for (const name of fs.readdirSync(gitDir).filter((n) => /^sharedindex\.[0-9a-f]+$/.test(n))) {
+        const part = readRegularFile(path.join(gitDir, name), INDEX_MAX_BYTES);
+        if (part !== null) fs.writeFileSync(path.join(privateDir, name), part, { mode: 0o600 });
+      }
+    }
     const eol = lineEndingArgs(pre.entries);
-    const apply = (extra: string[]) => git([`--git-dir=${privateDir}`, `--work-tree=${top}`, ...safe, ...eol, 'apply', '--whitespace=nowarn', ...extra, patch], top, env);
+    const priv = (args: string[], input?: Buffer) => raw([`--git-dir=${privateDir}`, `--work-tree=${top}`, ...safe, '-c', 'core.commitGraph=false', '-c', 'core.multiPackIndex=false', ...eol, ...args], top, env, input);
+    const text = async (args: string[]) => {
+      const r = await priv(args);
+      return { code: r.code, stdout: r.stdout.toString('utf8'), stderr: r.stderr };
+    };
     const said = (r: { stderr: string }) => r.stderr.split(tmp).join('').trim().slice(0, 300);
+    /** Whether a tracked file's content in the work tree is its index blob
+     *  (a regular file, hashed with the checkout's line endings). */
+    const sameAsIndex = async (p: string): Promise<boolean> => {
+      const staged = await text(['ls-files', '-s', '-z', '--', p]);
+      const m = /^(\d{6}) ([0-9a-f]+) 0\t/.exec(staged.stdout);
+      if (staged.code !== 0 || !m || m[1] === '120000') return false;
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(path.join(top, p));
+      } catch {
+        return false;
+      }
+      if (!st.isFile()) return false;
+      const hashed = await text(['hash-object', `--path=${p}`, '--', path.join(top, p)]);
+      return hashed.code === 0 && hashed.stdout.trim() === m[2];
+    };
+
+    // The head is a commit of the task: it descends from the base.
+    const kind = await text(['cat-file', '-t', head]);
+    if (kind.code !== 0 || kind.stdout.trim() !== 'commit') return refuse('no_branch', `The task branch ${branch} does not name a commit.`);
+    // Exit 1: not an ancestor; anything else is git failing to tell.
+    const lineage = await text(['merge-base', '--is-ancestor', base, head]);
+    if (lineage.code === 1) return refuse('foreign_head', `The task branch ${branch} does not start from the commit the task started from.`);
+    if (lineage.code !== 0) return refuse('git_failed', `git merge-base failed: ${said(lineage)}`);
+
+    // Plumbing: no diff setting of the owner's changes what it reports.
+    const diff = await text(['diff-tree', '-r', '-z', '--no-renames', '--no-abbrev', base, head]);
+    if (diff.code !== 0) return refuse('git_failed', `git diff-tree failed: ${said(diff)}`);
+    const changes = parseRawDiff(diff.stdout);
+    if (changes.length === 0) return refuse('no_changes', 'The task changed no files.');
+    if (changes.length > TASK_APPLY_MAX_FILES) return refuse('too_many', `The task changed ${changes.length} files, more than Apply writes (${TASK_APPLY_MAX_FILES}); merge its branch with git.`);
+    const sub = changes.find((c) => c.srcMode === '160000' || c.dstMode === '160000');
+    if (sub) return refuse('submodule', `The task changes the submodule ${sub.path}; merge its branch with git.`);
+    const touched = changes.map((c) => c.path);
+    const created = changes.filter((c) => c.status === 'A').map((c) => c.path);
+
+    // A path the checkout runs through a content filter (Git LFS) holds
+    // something other than the file, and a changed .gitattributes changes
+    // how every other path is written: neither is applied here.
+    const filtered: string[] = touched.filter((p) => path.posix.basename(p).toLowerCase() === '.gitattributes');
+    for (const batch of chunks(touched)) {
+      const ca = await text(['check-attr', '-z', 'filter', '--', ...batch]);
+      if (ca.code !== 0) return refuse('git_failed', `git check-attr failed: ${said(ca)}`);
+      for (const p of filteredPaths(ca.stdout)) if (!filtered.includes(p)) filtered.push(p);
+    }
+    if (filtered.length > 0) return refuse('filtered', 'The task changes files your checkout runs through a content filter (such as Git LFS), or its attributes; merge its branch with git.', filtered);
+
+    // The task's patch, by plumbing, kept in memory; the paths checked above
+    // must be exactly the patch's own.
+    const made = await priv(['diff-tree', '-r', '-p', '--binary', '--full-index', '--no-renames', base, head]);
+    if (made.code !== 0) return refuse('git_failed', `git diff-tree failed: ${said(made)}`);
+    const patch = made.stdout;
+    const numstat = await priv(['apply', '--numstat', '-z'], patch);
+    if (numstat.code !== 0) return refuse('git_failed', `git apply --numstat failed: ${said(numstat)}`);
+    const inPatch = patchPaths(numstat.stdout.toString('utf8'));
+    // A type change (a file made a link) is a deletion and a creation of one
+    // path in a patch: the paths compare as sets.
+    const patchSet = new Set(inPatch);
+    if (patchSet.size !== new Set(touched).size || [...patchSet].some((p) => !touched.includes(p)) || patchHasGitlink(patch)) {
+      return refuse('git_failed', 'The task\'s history changed while it was read; try again.');
+    }
+    const apply = (extra: string[]) => priv(['apply', '--whitespace=nowarn', ...extra], patch);
 
     // Already in the checkout (a second Apply, or the task merged and
-    // pulled): say so before anything else.
-    if ((await apply(['--check', '--reverse'])).code === 0) return refuse('no_changes', 'Your checkout already has the task\'s changes.');
-
-    // Anything uncommitted at those paths stops it (untracked and ignored
-    // too), and so does an untracked file where a new file's folder goes.
-    const dirty: string[] = [];
-    for (const batch of chunks([...touched, ...blockedParents(top, created)])) {
-      const st = await run(['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all', '--ignored=matching', '--', ...batch]);
-      if (st.code !== 0) return refuse('git_failed', `git status failed: ${st.stderr.trim().slice(0, 300)}`);
-      for (const p of parseStatusPaths(st.stdout)) if (touched.some((c) => touches(p, c)) && !dirty.includes(p)) dirty.push(p);
+    // pulled): say so before anything else. A reverse check passes
+    // whatever the modes are, so they are read from the files.
+    const modes = { fileMode: configBool(pre.entries, 'core.filemode', platform !== 'win32'), symlinks: configBool(pre.entries, 'core.symlinks', platform !== 'win32') };
+    // A task that only makes files executable has nothing to write where git
+    // does not track the bit (Windows' default).
+    if (!modes.fileMode && onlyExecBitChanges(changes)) return refuse('no_changes', 'Nothing to write: this checkout does not track the executable bit.');
+    if ((await apply(['--check', '--reverse'])).code === 0 && modesApplied(top, changes, modes)) {
+      return refuse('no_changes', 'Your checkout already has the task\'s changes.');
     }
+
+    // Anything uncommitted at those paths stops it: staged (the index
+    // against HEAD), changed in the work tree (against the index), or there
+    // but not tracked (untracked or ignored), and an untracked file where a
+    // new file's folder goes.
+    const dirty: string[] = [];
+    const add = (p: string) => {
+      if (!dirty.includes(p)) dirty.push(p);
+    };
+    const tracked = new Set<string>();
+    for (const batch of chunks(touched)) {
+      const staged = checkoutHead ? await text(['diff-index', '--cached', '-z', '--name-only', checkoutHead, '--', ...batch]) : await text(['ls-files', '-z', '--', ...batch]);
+      if (staged.code !== 0) return refuse('git_failed', `git diff-index failed: ${said(staged)}`);
+      for (const p of staged.stdout.split('\0')) if (p) add(p);
+      // Stat-dirty entries are named too; each is hashed here (where no
+      // filter exists, the touched paths only) and counts when its content
+      // differs from the index.
+      const changed = await text(['diff-files', '-z', '--name-only', '--', ...batch]);
+      if (changed.code !== 0) return refuse('git_failed', `git diff-files failed: ${said(changed)}`);
+      for (const p of changed.stdout.split('\0')) if (p && !(await sameAsIndex(p))) add(p);
+    }
+    const looked = [...touched, ...blockedParents(top, created)];
+    for (const batch of chunks(looked)) {
+      const ls = await text(['ls-files', '-z', '--', ...batch]);
+      if (ls.code !== 0) return refuse('git_failed', `git ls-files failed: ${said(ls)}`);
+      for (const p of ls.stdout.split('\0')) if (p) tracked.add(p);
+    }
+    for (const p of looked) if (!tracked.has(p) && present(path.join(top, p))) add(p);
     if (dirty.length > 0) return refuse('dirty', `Your checkout has uncommitted changes in ${dirty.length === 1 ? 'a file' : 'files'} the task changed.`, dirty);
 
     const check = await apply(['--check']);
@@ -346,13 +654,19 @@ async function apply(ports: TaskApplyPorts, entry: LedgerEntry, base: string, to
     }
     const r = await apply([]);
     if (r.code !== 0) return refuse('git_failed', `git apply failed: ${said(r)}`);
+    return {
+      ok: true,
+      changed: changes.filter((c) => c.status !== 'A' && c.status !== 'D').map((c) => c.path),
+      created,
+      removed: changes.filter((c) => c.status === 'D').map((c) => c.path),
+    };
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    // A cleanup that fails leaves a folder under main's own (swept on a
+    // later Apply); it never turns an apply that landed into an error.
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    } catch {
+      /* best effort */
+    }
   }
-  return {
-    ok: true,
-    changed: changes.filter((c) => c.status !== 'A' && c.status !== 'D').map((c) => c.path),
-    created,
-    removed: changes.filter((c) => c.status === 'D').map((c) => c.path),
-  };
 }

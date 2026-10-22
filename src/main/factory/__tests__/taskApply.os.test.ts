@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
-import { applyTaskToCheckout, filteredPaths, isDivergedApply, lineEndingArgs, parseRawDiff, privateGitInitArgs, type TaskApplyPorts } from '../taskApply';
+import { deliberateSleep } from '../../../test-utils/waitFor';
+import { applyTaskToCheckout, defaultRawGit, filteredPaths, isDivergedApply, lineEndingArgs, modesApplied, parseRawDiff, patchHasGitlink, patchPaths, privateGitInitArgs, repoObjectFormat, type TaskApplyPorts, type TaskApplyRawGit } from '../taskApply';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd(), getPath: () => '/tmp' }, dialog: {}, ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, nativeImage: {} }));
 
@@ -50,6 +51,7 @@ function ports(over: Partial<TaskApplyPorts> = {}): TaskApplyPorts {
     botRepoPath: () => repo,
     taskBranch: async () => BRANCH,
     noHooksDir: path.join(dir, 'no-hooks'),
+    scratchDir: path.join(dir, 'wmux', 'factory', 'apply'),
     ...over,
   };
 }
@@ -210,8 +212,7 @@ describe('content filters', () => {
     // A live worker writes the shared git dir between the checks and the
     // write; simulated by a git wrapper right before the apply.
     const marker = path.join(dir, 'pwned').replace(/\\/g, '/');
-    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
-    const racing: NonNullable<TaskApplyPorts['git']> = async (args, cwd, env, opts) => {
+    const racing: TaskApplyRawGit = async (args, cwd, env, input) => {
       if (args.includes('apply') && !args.includes('--check')) {
         fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
         fs.writeFileSync(path.join(repo, '.git', 'info', 'attributes'), '*.txt filter=evil\nm.txt filter=x=y\n');
@@ -221,9 +222,9 @@ describe('content filters', () => {
         execFileSync('git', ['config', 'filter.evil.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
         execFileSync('git', ['config', 'filter.x=y.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
       }
-      return realGit(args, cwd, env, opts);
+      return defaultRawGit(args, cwd, env, input);
     };
-    const r = await applyTaskToCheckout(ports({ git: racing }), TASK);
+    const r = await applyTaskToCheckout(ports({ gitRaw: racing }), TASK);
     expect(r).toMatchObject({ ok: true });
     expect(fs.existsSync(marker)).toBe(false);
     expect(fs.readFileSync(path.join(repo, 'new/n.txt'), 'utf8')).toBe('new\n');
@@ -236,6 +237,296 @@ describe('content filters', () => {
     git(repo, 'commit', '-qm', 'lfs');
     expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'filtered', paths: ['new/n.txt'] });
     expect(fs.existsSync(path.join(repo, 'new/n.txt'))).toBe(false);
+  });
+});
+
+describe('where and how git apply runs', () => {
+  it('its private git dir is under main\'s own folder (0700), the patch comes on stdin, and git speaks C', async () => {
+    const seen: Array<{ gitDir: string; mode: number; input: number; lc?: string; args: string[] }> = [];
+    const spy: TaskApplyRawGit = async (args, cwd, env, input) => {
+      const gd = args.find((a) => a.startsWith('--git-dir='))?.slice(10) ?? '';
+      if (args.includes('apply')) seen.push({ gitDir: gd, mode: fs.statSync(path.dirname(gd)).mode & 0o777, input: input?.length ?? 0, lc: env.LC_ALL, args });
+      return defaultRawGit(args, cwd, env, input);
+    };
+    const scratch = path.join(dir, 'wmux', 'factory', 'apply');
+    expect(await applyTaskToCheckout(ports({ gitRaw: spy }), TASK)).toMatchObject({ ok: true });
+    expect(seen.length).toBeGreaterThan(0);
+    for (const call of seen) {
+      expect(path.relative(scratch, call.gitDir).startsWith('..')).toBe(false);
+      if (process.platform !== 'win32') expect(call.mode).toBe(0o700);
+      expect(call.input).toBeGreaterThan(0);
+      expect(call.lc).toBe('C');
+      // No patch file named on the command line.
+      expect(call.args.some((a) => a.endsWith('.patch'))).toBe(false);
+    }
+    // Nothing is left behind.
+    expect(fs.readdirSync(scratch)).toEqual([]);
+  });
+
+  it('the owner\'s line endings in the repository\'s info/attributes still hold for the task\'s files', async () => {
+    write(wt, 'run.bat', 'echo hi\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-qm', 'bat');
+    fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.git', 'info', 'attributes'), '*.bat text eol=crlf\n');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(repo, 'run.bat'), 'utf8')).toBe('echo hi\r\n');
+  });
+
+  it.skipIf(process.platform === 'win32')('a task that only makes a file executable is applied, not taken for already applied', async () => {
+    git(wt, 'reset', '-q', '--hard', base);
+    fs.chmodSync(path.join(wt, 'b.txt'), 0o755);
+    git(wt, 'add', 'b.txt');
+    git(wt, 'commit', '-qm', 'chmod');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true, changed: ['b.txt'] });
+    expect(fs.statSync(path.join(repo, 'b.txt')).mode & 0o111).not.toBe(0);
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'no_changes' });
+  });
+
+  it('a task that only makes a file executable, in a checkout that does not track the bit, says there is nothing to write', async () => {
+    git(repo, 'config', 'core.filemode', 'false');
+    git(wt, 'reset', '-q', '--hard', base);
+    // The bit set in the task's commit itself, whatever the platform.
+    git(wt, 'update-index', '--chmod=+x', 'b.txt');
+    git(wt, 'commit', '-qm', 'chmod');
+    expect(await applyTaskToCheckout(ports(), TASK)).toEqual({ ok: false, code: 'no_changes', message: 'Nothing to write: this checkout does not track the executable bit.' });
+  });
+
+  it('refuses a task that changes a .gitattributes', async () => {
+    write(wt, 'sub/.gitattributes', '*.txt text\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-qm', 'attrs');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'filtered', paths: ['sub/.gitattributes'] });
+  });
+
+  it('a cleanup that fails does not turn a landed apply into an error', async () => {
+    const rm = vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => { throw new Error('busy'); });
+    try {
+      expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true });
+    } finally {
+      rm.mockRestore();
+    }
+  });
+
+  it('applies in a sha256 repository', async () => {
+    const r2 = path.join(dir, 'r256');
+    const w2 = path.join(dir, 'w256');
+    fs.mkdirSync(r2);
+    try {
+      git(r2, 'init', '-q', '-b', 'main', '--object-format=sha256');
+    } catch {
+      return; // this git has no sha256
+    }
+    git(r2, 'config', 'core.autocrlf', 'false');
+    write(r2, 'a.txt', 'a\n');
+    git(r2, 'add', '.');
+    git(r2, 'commit', '-qm', 'base');
+    const b2 = git(r2, 'rev-parse', 'HEAD');
+    git(r2, 'worktree', 'add', '-q', '-b', BRANCH, w2);
+    write(w2, 'a.txt', 'a from the task\n');
+    git(w2, 'commit', '-qam', 'task');
+    const p2 = ports({
+      row: () => row({ dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default', baseOid: b2, gitCommonDir: fs.realpathSync.native(path.join(r2, '.git')) } }),
+      botRepoPath: () => r2,
+    });
+    expect(await applyTaskToCheckout(p2, TASK)).toMatchObject({ ok: true, changed: ['a.txt'] });
+    expect(fs.readFileSync(path.join(r2, 'a.txt'), 'utf8')).toBe('a from the task\n');
+  });
+
+  it('a filter the shared config gains after the check never runs when the dirty check re-hashes a file', async () => {
+    const marker = path.join(dir, 'pwned-clean').replace(/\\/g, '/');
+    const attrs = path.join(dir, 'attrs2');
+    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
+    // The last read of the shared repository (its HEAD): from here on, a
+    // worker's config and attributes would apply to anything main ran there.
+    const racing: NonNullable<TaskApplyPorts['git']> = async (args, cwd, env, opts) => {
+      const r = await realGit(args, cwd, env, opts);
+      if (args.includes('HEAD') && args.includes('rev-parse')) {
+        fs.writeFileSync(attrs, '* filter=evil\n');
+        execFileSync('git', ['config', 'core.attributesFile', attrs], { cwd: repo });
+        execFileSync('git', ['config', 'filter.evil.clean', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
+        // Stat data that no longer matches the index: git re-hashes the file.
+        const later = new Date(Date.now() + 5_000);
+        fs.utimesSync(path.join(repo, 'a.txt'), later, later);
+      }
+      return r;
+    };
+    expect(await applyTaskToCheckout(ports({ git: racing }), TASK)).toMatchObject({ ok: true });
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('attributes planted in the shared info/attributes before the copy name a driver that does not exist there: refused, nothing runs', async () => {
+    const marker = path.join(dir, 'pwned-planted').replace(/\\/g, '/');
+    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
+    const racing: NonNullable<TaskApplyPorts['git']> = async (args, cwd, env, opts) => {
+      const r = await realGit(args, cwd, env, opts);
+      if (args.includes('HEAD') && args.includes('rev-parse')) {
+        fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
+        fs.writeFileSync(path.join(repo, '.git', 'info', 'attributes'), '* filter=evil\n');
+        execFileSync('git', ['config', 'filter.evil.clean', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
+        execFileSync('git', ['config', 'filter.evil.smudge', `sh -c 'touch ${marker}; cat'`], { cwd: repo });
+      }
+      return r;
+    };
+    expect(await applyTaskToCheckout(ports({ git: racing }), TASK)).toMatchObject({ ok: false, code: 'filtered' });
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('applies a task that turns a file into a link', async () => {
+    git(wt, 'reset', '-q', '--hard', base);
+    fs.rmSync(path.join(wt, 'b.txt'));
+    fs.symlinkSync('a.txt', path.join(wt, 'b.txt'));
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-qm', 'link');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true, changed: ['b.txt'] });
+    expect(fs.lstatSync(path.join(repo, 'b.txt')).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(path.join(repo, 'b.txt'))).toBe('a.txt');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'no_changes' });
+  });
+
+  it('refuses a partial clone: git would fetch a missing object from its promisor remote', async () => {
+    git(repo, 'config', 'remote.origin.promisor', 'true');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'config_refused' });
+  });
+
+  it('refuses a .gitattributes in any letter case', async () => {
+    write(wt, 'sub/.GitAttributes', '*.txt text\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-qm', 'attrs');
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: false, code: 'filtered', paths: ['sub/.GitAttributes'] });
+  });
+
+  it.skipIf(process.platform === 'win32')('a FIFO in place of info/attributes neither hangs Apply nor is read', async () => {
+    fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
+    execFileSync('mkfifo', [path.join(repo, '.git', 'info', 'attributes')]);
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true });
+  });
+
+  it('removes a folder a crashed Apply left behind', async () => {
+    const scratch = path.join(dir, 'wmux', 'factory', 'apply');
+    const left = path.join(scratch, 'apply-left');
+    fs.mkdirSync(left, { recursive: true });
+    const old = new Date(Date.now() - 2 * 60 * 60_000);
+    fs.utimesSync(left, old, old);
+    expect(await applyTaskToCheckout(ports(), TASK)).toMatchObject({ ok: true });
+    expect(fs.existsSync(left)).toBe(false);
+  });
+
+  it('git reads a large stdin to its end, or stops early, without an error escaping', async () => {
+    const r = await defaultRawGit(['version'], dir, {}, Buffer.alloc(8 * 1024 * 1024, 0x61));
+    expect(r.code).toBe(0);
+    expect(r.stdout.toString('utf8')).toMatch(/^git version/);
+  });
+
+  it('applies in a shallow (depth 1) checkout', async () => {
+    write(repo, 'a.txt', 'a, second commit\n');
+    git(repo, 'commit', '-qam', 'second');
+    const sh = path.join(dir, 'shallow');
+    git(dir, 'clone', '-q', '--depth', '1', `file://${repo.replace(/\\/g, '/')}`, sh);
+    git(sh, 'config', 'core.autocrlf', 'false');
+    expect(fs.existsSync(path.join(sh, '.git', 'shallow'))).toBe(true);
+    const shBase = git(sh, 'rev-parse', 'HEAD');
+    const shWt = path.join(dir, 'shallow-wt');
+    git(sh, 'worktree', 'add', '-q', '-b', BRANCH, shWt);
+    write(shWt, 'new.txt', 'new in a shallow task\n');
+    git(shWt, 'add', '-A');
+    git(shWt, 'commit', '-qm', 'task');
+    const p2 = ports({
+      row: () => row({ dispatch: { origin: { kind: 'bot', botId: BOT }, preset: 'default', baseOid: shBase, gitCommonDir: fs.realpathSync.native(path.join(sh, '.git')) } }),
+      botRepoPath: () => sh,
+    });
+    expect(await applyTaskToCheckout(p2, TASK)).toMatchObject({ ok: true, created: ['new.txt'] });
+    expect(fs.readFileSync(path.join(sh, 'new.txt'), 'utf8')).toBe('new in a shallow task\n');
+  });
+
+  it('git\'s own GIT_DEFAULT_HASH in the owner\'s environment does not change the private git dir of a sha1 repository', async () => {
+    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
+    // The owner's environment says sha256; what main sets wins.
+    const ownerEnv = { GIT_DEFAULT_HASH: 'sha256' };
+    const p2 = ports({
+      git: (args, cwd, env, opts) => realGit(args, cwd, { ...ownerEnv, ...env }, opts),
+      gitRaw: (args, cwd, env, input) => defaultRawGit(args, cwd, { ...ownerEnv, ...env }, input),
+    });
+    expect(await applyTaskToCheckout(p2, TASK)).toMatchObject({ ok: true });
+  });
+
+  it('the owner\'s global attributes file holds for the task\'s files', async () => {
+    const attrs = path.join(dir, 'owner-attributes');
+    fs.writeFileSync(attrs, '*.txt eol=crlf\n');
+    const globalConfig = path.join(dir, 'owner-gitconfig');
+    fs.writeFileSync(globalConfig, `[core]\n\tattributesFile = ${attrs.replace(/\\/g, '/')}\n`);
+    const realGit: NonNullable<TaskApplyPorts['git']> = (await import('../../worktask/taskPush')).defaultGit;
+    // The owner's global config; the private git dir's own empty one wins there.
+    const ownerEnv = { GIT_CONFIG_GLOBAL: globalConfig };
+    const p2 = ports({
+      git: (args, cwd, env, opts) => realGit(args, cwd, { ...ownerEnv, ...env }, opts),
+      gitRaw: (args, cwd, env, input) => defaultRawGit(args, cwd, { ...ownerEnv, ...env }, input),
+    });
+    expect(await applyTaskToCheckout(p2, TASK)).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(repo, 'new/n.txt'), 'utf8')).toBe('new\r\n');
+  });
+
+  it('a git stopped by a signal, or one that never started, is no answer: merge-base reports git_failed, not foreign_head', async () => {
+    const stopped = await defaultRawGit(['-c', 'alias.hang=!sleep 30', 'hang'], dir, {}, undefined, 200);
+    expect(stopped.code).toBe(128);
+    expect(stopped.stderr).toMatch(/stopped/);
+    const missing = await defaultRawGit(['version'], path.join(dir, 'no-such-folder'), {});
+    expect(missing.code).toBe(128);
+    const failing: TaskApplyRawGit = async (args, cwd, env, input) => (args.includes('merge-base') ? { code: 128, stdout: Buffer.alloc(0), stderr: 'git was stopped (SIGTERM)' } : defaultRawGit(args, cwd, env, input));
+    expect(await applyTaskToCheckout(ports({ gitRaw: failing }), TASK)).toMatchObject({ ok: false, code: 'git_failed' });
+  });
+
+  it('a stopped git is settled when its tree is gone, though an orphan it left still holds the pipes', async () => {
+    // `( … &)` orphans the first sleep at once, so no tree walk from git reaches
+    // it; it keeps git's pipes open for 20 s (in `/`, never the test's folder).
+    // The second sleep keeps git running until the 300 ms stop.
+    const start = Date.now();
+    const stopped = await defaultRawGit(['-c', 'alias.orphan=!(cd / && sleep 20 &); sleep 20', 'orphan'], dir, {}, undefined, 300);
+    expect(stopped.code).toBe(128);
+    expect(stopped.stderr).toMatch(/stopped/);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
+  it('a git that exited before the stop is settled by the stop, without waiting on pipes an orphan holds', async () => {
+    // git exits at once; its orphaned child holds the pipes for 20 s, so
+    // 'close' is late, and the 300 ms timer fires between 'exit' and 'close'.
+    const start = Date.now();
+    const late = await defaultRawGit(['-c', 'alias.bg=!(cd / && sleep 20 &)', 'bg'], dir, {}, undefined, 300);
+    expect(late.code).toBe(128);
+    expect(late.stderr).toMatch(/stopped/);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
+  it('stopping a git stops what it started too: a shell alias\'s child does not outlive the stop', async () => {
+    // The alias's child writes a marker after 3 s; stopped at 200 ms, it must never get there.
+    const marker = path.join(dir, 'outlived.txt');
+    const stopped = await defaultRawGit(['-c', `alias.slow=!sleep 3 && echo late > '${marker.replace(/\\/g, '/')}'`, 'slow'], dir, {}, undefined, 200);
+    expect(stopped.code).toBe(128);
+    await deliberateSleep(4000, 'a negative check: the alias child, had it survived, writes its marker at 3 s');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('a git apply --numstat that fails is reported as it is, not as a changed history', async () => {
+    const failing: TaskApplyRawGit = async (args, cwd, env, input) => (args.includes('--numstat') ? { code: 128, stdout: Buffer.alloc(0), stderr: 'fatal: something else' } : defaultRawGit(args, cwd, env, input));
+    expect(await applyTaskToCheckout(ports({ gitRaw: failing }), TASK)).toEqual({ ok: false, code: 'git_failed', message: 'git apply --numstat failed: fatal: something else' });
+    // A real mismatch still says so.
+    const other: TaskApplyRawGit = async (args, cwd, env, input) => (args.includes('--numstat') ? { code: 0, stdout: Buffer.from('1\t0\tsomewhere/else.txt\0'), stderr: '' } : defaultRawGit(args, cwd, env, input));
+    expect(await applyTaskToCheckout(ports({ gitRaw: other }), TASK)).toMatchObject({ ok: false, code: 'git_failed', message: 'The task\'s history changed while it was read; try again.' });
+  });
+
+  it('an index whose times cannot be kept is refused without naming main\'s folder', async () => {
+    const utimes = vi.spyOn(fs, 'utimesSync').mockImplementationOnce(() => { throw new Error(`EPERM: ${path.join(dir, 'wmux', 'factory', 'apply')}`); });
+    try {
+      const r = await applyTaskToCheckout(ports(), TASK);
+      expect(r).toEqual({ ok: false, code: 'git_failed', message: 'Your checkout\'s index could not be read.' });
+    } finally {
+      utimes.mockRestore();
+    }
+  });
+
+  it('reads the object format from the repository\'s own config only', () => {
+    expect(repoObjectFormat([{ scope: 'global', key: 'extensions.objectformat', value: 'sha256' }])).toBe('sha1');
+    expect(repoObjectFormat([{ scope: 'local', key: 'extensions.objectformat', value: 'SHA256' }])).toBe('sha256');
   });
 });
 
@@ -290,6 +581,31 @@ describe('the patch and the owner\'s settings', () => {
       { scope: 'local', key: 'filter.evil.smudge', value: 'x' },
       { scope: 'global', key: 'core.eol', value: 'lf' },
     ])).toEqual(['-c', 'core.autocrlf=true', '-c', 'core.eol=lf']);
+    // The owner's own attributes file, never one the repository names.
+    expect(lineEndingArgs([
+      { scope: 'system', key: 'core.autocrlf', value: 'true' },
+      { scope: 'global', key: 'core.attributesfile', value: '~/.gitattributes' },
+      { scope: 'local', key: 'core.attributesfile', value: '/tmp/evil' },
+    ])).toEqual(['-c', 'core.autocrlf=true', '-c', 'core.attributesFile=~/.gitattributes']);
+  });
+});
+
+describe('the patch read back', () => {
+  it('reads the paths git apply --numstat -z names, and finds a gitlink in its headers', () => {
+    expect(patchPaths('1\t1\ta.txt\0-\t-\tbin/x.png\0' + '2\t0\tdir/with\ttab.txt\0')).toEqual(['a.txt', 'bin/x.png', 'dir/with\ttab.txt']);
+    expect(patchHasGitlink(Buffer.from('diff --git a/s b/s\nnew file mode 160000\nindex 0000000..abc\n'))).toBe(true);
+    expect(patchHasGitlink(Buffer.from('diff --git a/s b/s\nindex abc..def 160000\n'))).toBe(true);
+    expect(patchHasGitlink(Buffer.from('diff --git a/a b/a\nindex abc..def 100644\n+160000\n'))).toBe(false);
+  });
+
+  it('reads modes only where the checkout keeps them', () => {
+    const exec = [{ status: 'A', srcMode: '000000', dstMode: '100755', path: 'b.txt' }];
+    // b.txt in the fixture is not executable.
+    expect(modesApplied(repo, exec, { fileMode: true, symlinks: true })).toBe(false);
+    expect(modesApplied(repo, exec, { fileMode: false, symlinks: true })).toBe(true);
+    const link = [{ status: 'T', srcMode: '100644', dstMode: '120000', path: 'b.txt' }];
+    expect(modesApplied(repo, link, { fileMode: true, symlinks: true })).toBe(false);
+    expect(modesApplied(repo, link, { fileMode: true, symlinks: false })).toBe(true);
   });
 });
 
@@ -297,8 +613,8 @@ describe('parseRawDiff', () => {
   it('reads each entry\'s modes, status and path', () => {
     const z = ':100644 100644 aaaa bbbb M\0a b.txt\0:000000 160000 0000 cccc A\0sub\0';
     expect(parseRawDiff(z)).toEqual([
-      { srcMode: '100644', dstMode: '100644', status: 'M', path: 'a b.txt' },
-      { srcMode: '000000', dstMode: '160000', status: 'A', path: 'sub' },
+      { srcMode: '100644', dstMode: '100644', srcOid: 'aaaa', dstOid: 'bbbb', status: 'M', path: 'a b.txt' },
+      { srcMode: '000000', dstMode: '160000', srcOid: '0000', dstOid: 'cccc', status: 'A', path: 'sub' },
     ]);
   });
 });
