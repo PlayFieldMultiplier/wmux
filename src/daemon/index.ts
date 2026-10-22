@@ -83,12 +83,11 @@ import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import type { WebTlsConfig } from '../shared/web';
-import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, capTextRowsToFrameBudget, MAX_SCROLLBACK, type TextSnapshotOutcome } from './HeadlessSnapshot';
-import { readSessionTextReplay } from './sessionTextReplay';
+import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
+import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen } from './AwaitingScreenVerifier';
-import { snapshotRingTextUnqueued } from './nativeRingSnapshot';
 import { screenShowsAgentDialog, screenShowsActiveDialog, screenShowsPermissionDialog } from './transcript/chatScreenGate';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { readPendingToolUse } from './transcript/pendingToolUse';
@@ -635,49 +634,6 @@ function syncGateAfter<A extends unknown[], R>(fn: (...args: A) => Promise<R>): 
       gateFlag?.sync();
     }
   };
-}
-
-/**
- * A plain-text parse of a session's ring on the shared concurrency-1 snapshot
- * queue. The ring is copied only when the job's turn comes, so a job waiting
- * behind attach snapshots pins no ring copy; the session is looked up then
- * too, so a pane closed meanwhile reads as gone. A read of the same pane
- * and depth still waiting joins the queued one (enqueueSnapshotJob's
- * coalesceKey).
- */
-function queuedTextSnapshot(sessionManager: DaemonSessionManager, sessionId: string, scrollback: number): Promise<TextSnapshotOutcome | null> {
-  return enqueueSnapshotJob(async () => {
-    const managed = sessionManager.getSession(sessionId);
-    if (!managed) return null;
-    return snapshotRingTextUnqueued(managed.ringBuffer, managed.bridge.outputModes, {
-      // Dims backstop parity with the attach flush (?? 80 / ?? 24): a recovered
-      // session may not have real dims yet, and a 0-wide headless terminal would
-      // fail soft instead of reading.
-      cols: managed.meta.cols ?? 80,
-      rows: managed.meta.rows ?? 24,
-      scrollback,
-    });
-  }, `text:${sessionId}:${scrollback}`);
-}
-
-/**
- * The visible grid of a pane (no scrollback), for the approval check, the chat
- * bridge and automation. Read in the slot like queuedTextSnapshot, so the
- * pollers that call this many times while the queue is busy share one parse
- * per pane instead of each queueing a whole-ring parse of its own.
- */
-function queuedScreenText(sessionManager: DaemonSessionManager, sessionId: string, undimmed = false): Promise<TextSnapshotOutcome | null> {
-  return enqueueSnapshotJob(async () => {
-    const managed = sessionManager.getSession(sessionId);
-    if (!managed) return null;
-    return generateTextSnapshotUnqueued({
-      cols: managed.meta.cols ?? 80,
-      rows: managed.meta.rows ?? 24,
-      scrollback: 0,
-      initial: readSessionTextReplay(managed.ringBuffer, managed.bridge.outputModes),
-      ...(undimmed ? { undimmed: true } : {}),
-    });
-  }, `screen:${sessionId}:${undimmed ? 'undimmed' : 'plain'}`);
 }
 
 /**
