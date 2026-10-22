@@ -12,6 +12,14 @@ import {
   type GitlabWatchPorts,
 } from '../repoWatchGitlab';
 import { factDedupeKey, type FactDraft } from '../../../shared/facts';
+import type { ForgeHosts } from '../../../shared/forgeHosts';
+
+// glab's host entries (shared/forgeHosts.ts): none unless a test sets them.
+const forge = vi.hoisted(() => ({ hosts: { gh: new Set<string>(), glab: new Map() } as ForgeHosts }));
+vi.mock('../../../shared/forgeHosts', async (orig) => ({
+  ...(await orig<typeof import('../../../shared/forgeHosts')>()),
+  forgeHosts: () => forge.hosts,
+}));
 import type { BotProfile } from '../../../shared/bot';
 
 const KEY = 'gitlab.example.com/group/sub/app';
@@ -170,6 +178,27 @@ describe('GitLab watch mapping', () => {
       // Unreadable project ids read as a fork, as GitHub's unreadable flag does.
       [6, false, true],
     ]);
+  });
+
+  it('asks for the key\'s path as the project under a subfolder install: never stripped again', async () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com', { name: 'gitlab.example.com', subfolder: 'gitlab' }]]) };
+    try {
+      const asked: string[] = [];
+      const read = gitlabWatchReader({
+        graphql: async (_repoPath, _repoKey, _query, vars) => {
+          asked.push(vars.fullPath);
+          return { ok: true, value: answer({ open: [] }) };
+        },
+        commitParents: async () => [],
+      });
+      // The https clone's key already lost the subfolder (parseRemoteKey) ...
+      await read('/repo', 'gitlab.example.com/platform/api', undefined);
+      // ... and an ssh clone of a project in a real group named `gitlab` keeps it.
+      await read('/repo', 'gitlab.example.com/gitlab/platform/api', undefined);
+      expect(asked).toEqual(['platform/api', 'gitlab/platform/api']);
+    } finally {
+      forge.hosts = { gh: new Set(), glab: new Map() };
+    }
   });
 
   it('checks: the head pipeline with every job that may not fail passed; stale, truncated or running is pending', () => {

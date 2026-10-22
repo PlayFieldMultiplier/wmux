@@ -384,8 +384,17 @@ describe('parseRemoteKey', () => {
       'ssh://git@gitlab.example.com:2222/g/p.git',
       'git@gitlab.example.com:g/p.git',
     ]) expect(parseRemoteKey(url), url).toBe('gitlab.example.com/g/p');
-    // glab's subfolder entry drops it for the API (GlabPrService glabProjectOfKey).
+    // No subfolder entry for the host: the path is kept as written.
     expect(parseRemoteKey('https://gitlab.example.com/gitlab/g/p.git')).toBe('gitlab.example.com/gitlab/g/p');
+  });
+  it('drops glab\'s subfolder from an https remote only: an ssh remote\'s `gitlab` group is the project\'s', () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com', { name: 'gitlab.example.com', subfolder: 'gitlab' }]]) };
+    // GitLab served at https://gitlab.example.com/gitlab/: the https clone of platform/api.
+    expect(parseRemoteKey('https://gitlab.example.com/gitlab/platform/api.git')).toBe('gitlab.example.com/platform/api');
+    expect(parseRemoteKey('https://gitlab.example.com:8443/gitlab/platform/api.git')).toBe('gitlab.example.com/platform/api');
+    // An ssh clone of the project gitlab/platform/api, a real group named `gitlab`.
+    expect(parseRemoteKey('git@gitlab.example.com:gitlab/platform/api.git')).toBe('gitlab.example.com/gitlab/platform/api');
+    expect(parseRemoteKey('ssh://git@gitlab.example.com:2222/gitlab/platform/api.git')).toBe('gitlab.example.com/gitlab/platform/api');
   });
 });
 

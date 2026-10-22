@@ -387,7 +387,12 @@ export function registerA2aChannelRpc(
   // #113 same-machine 신원 위조 ceiling 하에서 owner-워크스페이스 에이전트가 자기
   // 태스크를 선점 물질화하는 것은 수용 잔여(단, 물질화 단조 게이트가 이중 물질화는
   // 차단하므로 피해는 자기 태스크 1회 선점에 한정된다).
-  router.register('task.mission.update', (p, ctx) => forward('task.mission.update', p, true, ctx));
+  // prUrlGithubHost is main's own finding (TaskPrService, from gh's config),
+  // never a caller's: dropped here.
+  router.register('task.mission.update', (p, ctx) => {
+    const { prUrlGithubHost: _dropped, ...rest } = (p ?? {}) as Record<string, unknown>;
+    return forward('task.mission.update', rest, true, ctx);
+  });
 
   // NOTE: a2a.channel.archive and a2a.channel.kick are intentionally NOT registered
   // here. BOTH are HUMANS-ONLY actions (product decision): archiving tears a channel

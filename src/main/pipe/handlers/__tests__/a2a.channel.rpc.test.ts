@@ -162,6 +162,25 @@ describe('workspace-bound commander channel identity', () => {
   });
 });
 
+describe('task.mission.update — the Enterprise host is main\'s finding, never a caller\'s', () => {
+  it('drops prUrlGithubHost before forwarding, and keeps the rest', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const daemon = makeFakeDaemon((_method, params) => {
+      calls.push(params as Record<string, unknown>);
+      return { ok: true };
+    });
+    const router = setupHandlerRouter(daemon);
+    const response = await router.dispatch({
+      id: 'u1', method: 'task.mission.update',
+      params: { senderPtyId: 'pty-1', taskId: 't1', prUrl: 'https://evil.example.com/a/b/pull/1', prUrlGithubHost: 'evil.example.com' },
+    });
+    expect(response.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ taskId: 't1', prUrl: 'https://evil.example.com/a/b/pull/1' });
+    expect(calls[0]).not.toHaveProperty('prUrlGithubHost');
+  });
+});
+
 // =========================================================================
 // 1. Routing — read methods dispatch to channel.<method> on the daemon
 // =========================================================================

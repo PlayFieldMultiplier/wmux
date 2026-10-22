@@ -914,6 +914,25 @@ describe('J3 §2 prUrl — 비단조·closed 단독 허용·형식 검증', () =
     expect(svc.getTask(taskId)?.prUrl).toBeUndefined();
   });
 
+  it('a GitHub Enterprise PR page counts only on the host main named, and keeps the shape checks', async () => {
+    const { svc, taskId } = await started();
+    const ghe = 'https://code.acme.example/acme/repo/pull/3';
+    expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: ghe })).ok).toBe(false);
+    expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: ghe, prUrlGithubHost: 'other.example.com' })).ok).toBe(false);
+    for (const bad of [
+      'http://code.acme.example/acme/repo/pull/3',
+      'https://user@code.acme.example/acme/repo/pull/3',
+      'https://code.acme.example/acme/repo/pull/3?x=1',
+      'https://code.acme.example/acme/repo/pull/3#c',
+      `https://code.acme.example/acme/${'r'.repeat(2100)}/pull/3`,
+    ]) {
+      expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: bad, prUrlGithubHost: 'code.acme.example' })).ok, bad.slice(0, 80)).toBe(false);
+    }
+    expect(svc.getTask(taskId)?.prUrl).toBeUndefined();
+    expect((await svc.updateMission({ taskId, verifiedWorkspaceId: 'ws-owner', prUrl: ghe, prUrlGithubHost: 'Code.Acme.Example' })).ok).toBe(true);
+    expect(svc.getTask(taskId)?.prUrl).toBe(ghe);
+  });
+
   it('accepts a GitLab merge request page, and refuses other GitLab-looking URLs', async () => {
     const { svc, taskId } = await started();
     const mr = 'https://gitlab.example.com/group/sub/proj/-/merge_requests/7';

@@ -321,4 +321,27 @@ describe('DiffPanel — adopt and close lifecycle (#1461)', () => {
     expect(buttonByText(c, 'Close')).toBeUndefined();
     expect(read).toHaveBeenCalledTimes(1);
   });
+
+  // task_pr on GitLab opens a merge request: the toast says MR, on GitHub PR.
+  it('the create-PR toast says MR for a GitLab merge request and PR for a GitHub pull request', async () => {
+    const createPr = vi.fn();
+    (window as unknown as { electronAPI: { workTask: Record<string, unknown> } }).electronAPI.workTask = { close, createPr };
+    const c = render();
+    await flush();
+    const mr = 'https://gitlab.example.com/group/proj/-/merge_requests/7';
+    createPr.mockResolvedValueOnce({ ok: true, prUrl: mr, mrIid: 7 });
+    click(buttonByText(c, 'PR')!);
+    await flush();
+    let toast = useStore.getState().toasts.at(-1);
+    expect(toast?.message).toBe(`MR created: ${mr}`);
+    expect(toast?.action?.label).toBe('Open MR');
+
+    const pr = 'https://github.com/o/r/pull/9';
+    createPr.mockResolvedValueOnce({ ok: true, prUrl: pr });
+    click(buttonByText(c, 'PR')!);
+    await flush();
+    toast = useStore.getState().toasts.at(-1);
+    expect(toast?.message).toBe(`PR created: ${pr}`);
+    expect(toast?.action?.label).toBe('Open PR');
+  });
 });

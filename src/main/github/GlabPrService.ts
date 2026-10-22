@@ -217,22 +217,27 @@ const CI_JOBS = 50;
  *  page (`https://host[:port]/[subfolder/]path`). */
 export interface GlabProject { host: string; path: string; web: string }
 
-/** The GitLab project of a remote key, or null. glab's entry for the host
- *  (shared/forgeHosts.ts) supplies what the key cannot: the port of a
- *  `host:port` entry for the page, and the `subfolder` of GitLab served
- *  under a sub-path, which an https remote's path starts with but the
- *  project's full path does not (an ssh remote's path never has it). */
+/** The GitLab project of a remote key, or null. The key's path is the
+ *  project's (an https remote's sub-path was dropped when the key was built,
+ *  PrProvider.parseRemoteKey). glab's entry for the host
+ *  (shared/forgeHosts.ts) supplies what the key cannot, for the page: the
+ *  port of a `host:port` entry and the `subfolder` of GitLab served under a
+ *  sub-path. */
 export function glabProjectOfKey(key: string, hosts: ForgeHosts = forgeHosts()): GlabProject | null {
   const parts = key.split('/');
   if (parts.length < 3 || parts.some((p) => !/^[\w.-]+$/.test(p) || p === '.' || p === '..')) return null;
   const host = parts[0];
   const entry = glabEntryFor(host, hosts);
-  const sub = entry?.subfolder ? entry.subfolder.toLowerCase().split('/') : [];
-  let rest = parts.slice(1);
-  if (sub.length > 0 && rest.length - sub.length >= 2 && sub.every((s, i) => rest[i] === s)) rest = rest.slice(sub.length);
-  const path = rest.join('/');
+  const path = parts.slice(1).join('/');
   const origin = entry?.name.includes(':') ? entry.name : host;
   return { host, path, web: `https://${origin}/${entry?.subfolder ? `${entry.subfolder}/` : ''}${path}` };
+}
+
+/** The command that signs glab in to `host`, naming glab's own entry for it
+ *  (`host:port` when that is how it was set up): a plain `--hostname host`
+ *  would add a second entry that glabEntryFor then prefers, on port 443. */
+export function glabLoginHint(host: string, hosts: ForgeHosts = forgeHosts()): string {
+  return `glab auth login --hostname ${glabEntryFor(host, hosts)?.name ?? host}`;
 }
 
 /** How a glab command names `host`: `--hostname host`, or GITLAB_HOST for a
@@ -631,7 +636,7 @@ export class GlabPrService implements PrProvider {
       return {
         ok: false,
         reason: 'unauthenticated',
-        message: `GitLab CLI is not authenticated for ${host} — run \`glab auth login --hostname ${host}\``,
+        message: `GitLab CLI is not authenticated for ${host} — run \`${glabLoginHint(host)}\``,
       };
     }
     return { ok: true };
@@ -828,7 +833,7 @@ export class GlabPrService implements PrProvider {
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { ok: false, code: 'cli-missing', message: 'GitLab CLI (glab) is not installed' };
       if (host && glabApiSignedOut(err)) {
-        return { ok: false, code: 'unauthenticated', message: `GitLab CLI is not authenticated for ${host} — run \`glab auth login --hostname ${host}\`` };
+        return { ok: false, code: 'unauthenticated', message: `GitLab CLI is not authenticated for ${host} — run \`${glabLoginHint(host)}\`` };
       }
       return { ok: false, code: 'error', message: glabErrorText(err) };
     }

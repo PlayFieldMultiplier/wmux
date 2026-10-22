@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { isOriginPin, namesNonDefaultPort, normalizeOriginPin, originPinMatches, parseOriginAddress } from '../originPin';
 import { originUrlRepoKey } from '../../main/worktask/workerGit';
+import { parseRemoteKey } from '../../main/github/PrProvider';
+import type { ForgeHosts } from '../forgeHosts';
 
 describe('origin addresses', () => {
   it('reads the scheme and host in any case, an https port as 443 when unwritten, an ssh port only as written; the path case, the ssh user and the form are kept', () => {
@@ -81,5 +83,20 @@ describe('originPinMatches', () => {
   it('never matches an address that is not plain', () => {
     expect(originPinMatches('https://github.com/acme/app', 'file:///github.com/acme/app')).toBe(false);
     expect(originPinMatches('not a pin', 'https://github.com/acme/app')).toBe(false);
+  });
+});
+
+describe('a GitLab served under a sub-path (glab\'s subfolder entry)', () => {
+  const hosts: ForgeHosts = { gh: new Set(), glab: new Map([['gitlab.example.com', { name: 'gitlab.example.com', subfolder: 'gitlab' }]]) };
+
+  it('the https address loses the subfolder and the ssh one keeps its group; task_push and the bot key agree', () => {
+    for (const [url, want] of [
+      ['https://gitlab.example.com/gitlab/platform/api.git', 'gitlab.example.com/platform/api'],
+      ['git@gitlab.example.com:gitlab/platform/api.git', 'gitlab.example.com/gitlab/platform/api'],
+      ['ssh://git@gitlab.example.com:2222/gitlab/platform/api.git', 'gitlab.example.com/gitlab/platform/api'],
+    ]) {
+      expect(originUrlRepoKey(url, hosts), url).toBe(want);
+      expect(parseRemoteKey(url, hosts), url).toBe(want);
+    }
   });
 });

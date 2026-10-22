@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { configuredForge, glabEntryFor, parseGhHosts, parseGlabHosts, type ForgeHosts } from '../forgeHosts';
+import os from 'node:os';
+import path from 'node:path';
+import { configuredForge, dropGlabSubfolder, glabConfigPath, glabEntryFor, parseGhHosts, parseGlabHosts, type ForgeHosts } from '../forgeHosts';
 import { isGithubPullUrl, isMergeRequestUrl, isWorktaskPrUrl } from '../workTask';
 
 const GH_HOSTS = `github.com:
@@ -54,6 +56,33 @@ describe('glabEntryFor', () => {
     expect(glabEntryFor('gitlab.example.com', hosts)?.name).toBe('gitlab.example.com:8443');
     expect(glabEntryFor('two.example.com', hosts)).toBeNull();
     expect(glabEntryFor('code.acme.example', hosts)).toBeNull();
+  });
+});
+
+describe('dropGlabSubfolder', () => {
+  const hosts = hostsOf('', 'hosts:\n    gitlab.example.com:\n        subfolder: apps/gitlab\n');
+
+  it('drops a leading subfolder with a project left after it, in any case; anything else stays', () => {
+    expect(dropGlabSubfolder('gitlab.example.com', ['Apps', 'GitLab', 'group', 'proj'], hosts)).toEqual(['group', 'proj']);
+    expect(dropGlabSubfolder('gitlab.example.com', ['apps', 'gitlab', 'proj'], hosts)).toEqual(['apps', 'gitlab', 'proj']);
+    expect(dropGlabSubfolder('gitlab.example.com', ['group', 'proj'], hosts)).toEqual(['group', 'proj']);
+    expect(dropGlabSubfolder('other.example.com', ['apps', 'gitlab', 'group', 'proj'], hosts)).toEqual(['apps', 'gitlab', 'group', 'proj']);
+  });
+});
+
+describe('glabConfigPath — the one file glab reads, in its order', () => {
+  const home = os.homedir();
+  const legacy = path.join(home, '.config', 'glab-cli', 'config.yml');
+  const none = () => false;
+
+  it('GLAB_CONFIG_DIR, then an existing legacy file, then XDG_CONFIG_HOME, then the platform dir', () => {
+    expect(glabConfigPath({ GLAB_CONFIG_DIR: '/g', XDG_CONFIG_HOME: '/x' }, () => true)).toBe(path.join('/g', 'config.yml'));
+    expect(glabConfigPath({ XDG_CONFIG_HOME: '/x' }, (f) => f === legacy)).toBe(legacy);
+    // XDG is glab's choice even before its file exists: no fall-through to another file.
+    expect(glabConfigPath({ XDG_CONFIG_HOME: '/x' }, none)).toBe(path.join('/x', 'glab-cli', 'config.yml'));
+    const platform = glabConfigPath({ APPDATA: '/appdata' }, none);
+    if (process.platform === 'darwin') expect(platform).toBe(path.join(home, 'Library', 'Application Support', 'glab-cli', 'config.yml'));
+    else expect([legacy, path.join('/appdata', 'glab-cli', 'config.yml')]).toContain(platform);
   });
 });
 

@@ -389,6 +389,29 @@ describe('FleetView — Ready to review', () => {
     expect(open).toHaveBeenCalledWith('https://github.com/o/r/pull/9', '_blank');
     open.mockRestore();
   });
+
+  it('a GitLab merge request reads as MR: the create toast, the linked state and the Open verb', async () => {
+    const mr = 'https://gitlab.example.com/group/proj/-/merge_requests/7';
+    createPr.mockResolvedValueOnce({ ok: true, prUrl: mr, mrIid: 7 });
+    mount();
+    await settle();
+    const row = reviewRow('ws-t1')!;
+    act(() => { row.focus(); });
+    key(row, 'p');
+    await act(async () => { container.querySelector<HTMLButtonElement>('[data-fleet-review-confirm="pr"]')!.click(); });
+    await settle();
+    const toast = useStore.getState().toasts.at(-1);
+    expect(toast?.message).toBe(`MR created: ${mr}`);
+    expect(toast?.action?.label).toBe('Open MR');
+
+    act(() => {
+      useStore.setState({ missionByPaneGroup: { 'ws-t1': mission('t1', { prUrl: mr }), 'ws-t2': mission('t2') } });
+    });
+    await settle();
+    const again = reviewRow('ws-t1')!;
+    expect(again.textContent).toContain('MR linked');
+    expect(again.textContent).not.toContain('PR linked');
+  });
 });
 
 describe('FleetView — Ready to review, review fixes', () => {

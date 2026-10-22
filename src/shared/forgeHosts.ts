@@ -85,23 +85,24 @@ function ghHostsPath(): string {
   return path.join(os.homedir(), '.config', 'gh', 'hosts.yml');
 }
 
-/** glab's config.yml candidates, first wins per host: GLAB_CONFIG_DIR alone
- *  when set; else XDG_CONFIG_HOME, the legacy ~/.config, then the platform's
- *  user config dir (where current glab writes it on macOS and Windows). */
-function glabConfigPaths(): string[] {
-  const env = process.env;
-  if (env.GLAB_CONFIG_DIR) return [path.join(env.GLAB_CONFIG_DIR, 'config.yml')];
-  const dirs = [
-    ...(env.XDG_CONFIG_HOME ? [path.join(env.XDG_CONFIG_HOME, 'glab-cli')] : []),
-    path.join(os.homedir(), '.config', 'glab-cli'),
-    ...(process.platform === 'darwin' ? [path.join(os.homedir(), 'Library', 'Application Support', 'glab-cli')] : []),
-    ...(process.platform === 'win32' && env.APPDATA ? [path.join(env.APPDATA, 'glab-cli')] : []),
-  ];
-  return [...new Set(dirs)].map((d) => path.join(d, 'config.yml'));
+/** glab's config.yml: the one file glab itself reads (glab 1.108, probed):
+ *  GLAB_CONFIG_DIR when set; else the legacy ~/.config/glab-cli when its
+ *  config.yml exists; else XDG_CONFIG_HOME/glab-cli when that is set (used
+ *  even before the file exists); else the platform's user config dir
+ *  (~/Library/Application Support on macOS, %APPDATA% on Windows). */
+export function glabConfigPath(env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = fs.existsSync): string {
+  if (env.GLAB_CONFIG_DIR) return path.join(env.GLAB_CONFIG_DIR, 'config.yml');
+  const legacy = path.join(os.homedir(), '.config', 'glab-cli', 'config.yml');
+  if (exists(legacy)) return legacy;
+  if (env.XDG_CONFIG_HOME) return path.join(env.XDG_CONFIG_HOME, 'glab-cli', 'config.yml');
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'glab-cli', 'config.yml');
+  if (process.platform === 'win32' && env.APPDATA) return path.join(env.APPDATA, 'glab-cli', 'config.yml');
+  return legacy;
 }
 
 interface FileEntry<T> { checkedAt: number; stamp: string; value: T }
 const files = new Map<string, FileEntry<unknown>>();
+let glabPath: { at: number; file: string } | null = null;
 
 /** The parsed file at `file`, re-parsed only when its mtime or size moved;
  *  `empty` when it is missing or unreadable. */
@@ -134,18 +135,16 @@ function cachedRead<T>(file: string, now: number, parseText: (text: string) => T
 /** The hosts gh and glab are set up for now (cached; see the header). */
 export function forgeHosts(now: number = Date.now()): ForgeHosts {
   const gh = cachedRead(ghHostsPath(), now, parseGhHosts, new Set<string>());
-  const glab = new Map<string, GlabHostEntry>();
-  for (const file of glabConfigPaths()) {
-    for (const [k, v] of cachedRead(file, now, parseGlabHosts, new Map<string, GlabHostEntry>())) {
-      if (!glab.has(k)) glab.set(k, v);
-    }
-  }
+  // Which file glab reads is re-decided at the same pace as a file is re-checked.
+  if (!glabPath || now - glabPath.at >= CHECK_MS) glabPath = { at: now, file: glabConfigPath() };
+  const glab = cachedRead(glabPath.file, now, parseGlabHosts, new Map<string, GlabHostEntry>());
   return { gh, glab };
 }
 
 /** Test seam. */
 export function clearForgeHostsCache(): void {
   files.clear();
+  glabPath = null;
 }
 
 /** glab's entry for a remote's (port-less) host: the entry named exactly so,
@@ -157,6 +156,18 @@ export function glabEntryFor(host: string, hosts: ForgeHosts): GlabHostEntry | n
   if (exact) return exact;
   const ported = [...hosts.glab.values()].filter((e) => e.name.startsWith(`${h}:`));
   return ported.length === 1 ? ported[0] : null;
+}
+
+/** An http(s) remote's path segments without the `subfolder` of glab's
+ *  entry for its host: GitLab served under a sub-path has the https remote
+ *  `https://host/sub/group/proj` for the project `group/proj`, and its ssh
+ *  remote (`git@host:group/proj`) never carries `sub` — so only an http(s)
+ *  remote's path is passed here. Kept whole when what would follow is not at
+ *  least group/project. Pure. */
+export function dropGlabSubfolder(host: string, parts: readonly string[], hosts: ForgeHosts): string[] {
+  const sub = glabEntryFor(host, hosts)?.subfolder.toLowerCase().split('/').filter(Boolean) ?? [];
+  const matches = sub.length > 0 && parts.length - sub.length >= 2 && sub.every((s, i) => parts[i]?.toLowerCase() === s);
+  return matches ? parts.slice(sub.length) : [...parts];
 }
 
 /** The forge a host's CLI config names: gh signed in to it and glab not set

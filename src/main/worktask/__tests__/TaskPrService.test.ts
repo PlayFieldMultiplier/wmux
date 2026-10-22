@@ -511,6 +511,17 @@ describe('task_pr: GitHub Enterprise on its own domain, a host gh is signed in t
     expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: GHE_PR });
     expect(calls.some((c) => isGlab(c.cmd))).toBe(false);
     expect(daemonCalls[0]?.params.prUrl).toBe(GHE_PR);
+    // Main's finding goes with it: the daemon does not read gh's config itself.
+    expect(daemonCalls[0]?.params.prUrlGithubHost).toBe('code.acme.example');
+  });
+
+  it('a github.com PR or a GitLab MR names no Enterprise host to the daemon', async () => {
+    const gh = makeService(makeExec(happyBehavior).exec);
+    expect(await gh.svc.createPr(INPUT)).toMatchObject({ ok: true });
+    expect(gh.daemonCalls[0]?.params).not.toHaveProperty('prUrlGithubHost');
+    const gl = makeGlService(glHappy);
+    expect(await gl.svc.createPr(INPUT)).toMatchObject({ ok: true, mrIid: 7 });
+    expect(gl.daemonCalls[0]?.params).not.toHaveProperty('prUrlGithubHost');
   });
 
   it('recovers an existing PR on that host', async () => {
@@ -523,6 +534,21 @@ describe('task_pr: GitHub Enterprise on its own domain, a host gh is signed in t
     forge.hosts = { gh: new Set(['code.acme.example']), glab: new Map() };
     const { svc } = ghe('https://evil.example.com/acme/widget/pull/3');
     expect(await svc.createPr(INPUT)).toMatchObject({ ok: false, reason: 'pr-failed' });
+  });
+});
+
+describe('task_pr: the glab sign-in hint', () => {
+  it('names glab\'s host:port entry, so following it does not add a plain entry on 443', async () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com:8443', { name: 'gitlab.example.com:8443', subfolder: '' }]]) };
+    const { svc, calls } = makeGlService((cmd, args) => {
+      // The port entry reaches glab through GITLAB_HOST: no --hostname.
+      if (isGlab(cmd) && args[0] === 'api' && args[1] === 'user') return { throw: 'glab: 401 Unauthorized (HTTP 401)' };
+      return glHappy(cmd, args);
+    });
+    const res = await svc.createPr(INPUT);
+    expect(res.ok === false && res.reason).toBe('gh-unauth');
+    expect(res.ok === false && res.error).toContain('glab auth login --hostname gitlab.example.com:8443');
+    expect(calls.some((c) => c.cmd === 'git' && c.args[0] === 'push')).toBe(false);
   });
 });
 

@@ -6,7 +6,7 @@
 // 흔하므로 hostname 화이트리스트가 아니라 "github이 아니면 glab에게 물어본다"
 // — glab 미설치/그 호스트 미인증이면 fail-closed 안내로 강등).
 import { git } from '../git/git';
-import { configuredForge, forgeHosts } from '../../shared/forgeHosts';
+import { configuredForge, dropGlabSubfolder, forgeHosts, type ForgeHosts } from '../../shared/forgeHosts';
 import type { PrSummary, PrComment, PrDetail } from '../../shared/prSurface';
 
 // wire 타입은 shared/prSurface.ts가 정본(렌더러와 공유). 여기서 재노출해
@@ -84,9 +84,12 @@ export async function detectRemoteHost(repoPath: string): Promise<string | null>
 /**
  * A remote's identity, `host/owner/repo` lowercased, from its URL (https,
  * scp-style or ssh; a trailing `.git` dropped). Two clones of one repo get the
- * same key. null when the URL has no owner/repo path. Pure.
+ * same key. null when the URL has no owner/repo path. An http(s) URL of a
+ * GitLab served under a sub-path loses the subfolder glab's config names for
+ * its host (shared/forgeHosts.ts dropGlabSubfolder), so the key's path is the
+ * project's, as an ssh clone of it spells it. Pure but for that config read.
  */
-export function parseRemoteKey(url: string): string | null {
+export function parseRemoteKey(url: string, hosts: ForgeHosts = forgeHosts()): string | null {
   const host = parseRemoteHost(url);
   if (!host) return null;
   const path = url.trim()
@@ -96,7 +99,8 @@ export function parseRemoteKey(url: string): string | null {
     .replace(/\/+$/, '');
   const parts = path.split('/').filter(Boolean);
   if (parts.length < 2) return null;
-  return `${host}/${parts.join('/')}`.toLowerCase();
+  const kept = /^https?:\/\//i.test(url.trim()) ? dropGlabSubfolder(host, parts, hosts) : parts;
+  return `${host}/${kept.join('/')}`.toLowerCase();
 }
 
 export interface RemoteIdentity { host: string; key: string | null }

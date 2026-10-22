@@ -39,7 +39,6 @@ import {
   normalizeWorktreePath,
   taskIdFromMissionTopic,
 } from '../../shared/workTask';
-import { forgeHosts } from '../../shared/forgeHosts';
 import type {
   WorkTask,
   WorkTaskClosePayload,
@@ -153,6 +152,12 @@ export interface UpdateMissionInput {
   paneGroupId?: string;
   /** J3 §2: 비단조 mutable(PR 재생성 갱신 허용) — closed 태스크에도 단독 갱신 가능. */
   prUrl?: string;
+  /** The GitHub Enterprise host main found gh signed in to when it accepted
+   *  `prUrl` (TaskPrService): a pull request page on that host is a GitHub
+   *  PR here too. Main decides it, as gh's config is main's to read (the
+   *  daemon's environment may name another one); the agent-facing route
+   *  drops it (a2a.channel.rpc.ts). */
+  prUrlGithubHost?: string;
   /** worktree:false fan-out output folder. Write-once, like the J1 fields. */
   outputDir?: string;
 }
@@ -586,12 +591,13 @@ export class WorkTaskService {
       // prUrl format gate (J3 §2, review G5): a GitHub PR URL or a GitLab merge
       // request page only, length-capped (isWorktaskPrUrl). prUrl is
       // non-monotonic, with no write-once guard, so its format is the only
-      // wire defence. A PR page off github.com counts only on a host gh is
-      // signed in to (GitHub Enterprise; shared/forgeHosts.ts).
-      if (input.prUrl !== undefined && !isWorktaskPrUrl(input.prUrl, forgeHosts().gh)) {
+      // wire defence. A PR page off github.com counts only on the GitHub
+      // Enterprise host main named (prUrlGithubHost); its shape is checked here.
+      const gheHost = typeof input.prUrlGithubHost === 'string' ? input.prUrlGithubHost.toLowerCase() : '';
+      if (input.prUrl !== undefined && !isWorktaskPrUrl(input.prUrl, gheHost ? new Set([gheHost]) : undefined)) {
         return {
           ok: false,
-          error: `task.mission.update: prUrl must match https://github.com/{owner}/{repo}/pull/{n} (or that page on a GitHub Enterprise host gh is signed in to) or https://{host}/{project}/-/merge_requests/{n} (at most ${WORKTASK_PR_URL_MAX} characters)`,
+          error: `task.mission.update: prUrl must match https://github.com/{owner}/{repo}/pull/{n} (or that page on the GitHub Enterprise host main named) or https://{host}/{project}/-/merge_requests/{n} (at most ${WORKTASK_PR_URL_MAX} characters)`,
         };
       }
 

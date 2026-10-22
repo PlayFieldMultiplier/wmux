@@ -461,9 +461,9 @@ describe('GitLab on a port or under a sub-path (glab\'s host entry)', () => {
     expect(two.calls[0].args.slice(0, 3)).toEqual(['api', '--hostname', 'gitlab.example.com']);
   });
 
-  it('a subfolder entry: the https remote\'s path loses it for the API and keeps it on the page', async () => {
+  it('a subfolder entry: the key\'s path is the project (the https remote lost the subfolder), the page keeps it', async () => {
     forge.hosts = entries(['gitlab.example.com', 'gitlab']);
-    const key = 'gitlab.example.com/gitlab/group/proj';
+    const key = 'gitlab.example.com/group/proj';
     const { svc, calls } = withEnv((args) => (graphqlCall(args) ? mrAnswer() : { state: 'merged' }));
     expect(await svc.merge('/repo', key, 7, { expectHead: HEAD, subject: '', body: '' }))
       .toEqual({ ok: true, url: 'https://gitlab.example.com/gitlab/group/proj/-/merge_requests/7' });
@@ -471,15 +471,20 @@ describe('GitLab on a port or under a sub-path (glab\'s host entry)', () => {
     expect(calls[1].args).toContain('projects/group%2Fproj/merge_requests/7/merge');
   });
 
-  it('glabProjectOfKey: the subfolder is dropped only as a leading prefix with a project left after it', () => {
-    const hosts = entries(['gitlab.example.com', 'apps/gitlab']);
-    expect(glabProjectOfKey('gitlab.example.com/apps/gitlab/group/proj', hosts))
-      .toEqual({ host: 'gitlab.example.com', path: 'group/proj', web: 'https://gitlab.example.com/apps/gitlab/group/proj' });
-    // An ssh remote's path never carries it.
-    expect(glabProjectOfKey('gitlab.example.com/group/proj', hosts)?.path).toBe('group/proj');
-    // Too short to be subfolder + group + project: kept as written.
-    expect(glabProjectOfKey('gitlab.example.com/apps/gitlab/proj', hosts)?.path).toBe('apps/gitlab/proj');
-    // No entry: the key's path as is.
-    expect(glabProjectOfKey('gitlab.example.com/gitlab/group/proj', entries())?.path).toBe('gitlab/group/proj');
+  it('glabProjectOfKey never strips: a group named like the subfolder (an ssh clone) stays the project\'s', () => {
+    const hosts = entries(['gitlab.example.com', 'gitlab']);
+    // `git@gitlab.example.com:gitlab/platform/api.git`: `gitlab` is a real group.
+    expect(glabProjectOfKey('gitlab.example.com/gitlab/platform/api', hosts))
+      .toEqual({ host: 'gitlab.example.com', path: 'gitlab/platform/api', web: 'https://gitlab.example.com/gitlab/gitlab/platform/api' });
+    expect(glabProjectOfKey('gitlab.example.com/group/proj', entries(['gitlab.example.com:8443', ''])))
+      .toEqual({ host: 'gitlab.example.com', path: 'group/proj', web: 'https://gitlab.example.com:8443/group/proj' });
+  });
+
+  it('the sign-in hint names the host:port entry, so following it does not add a plain entry on 443', async () => {
+    forge.hosts = entries(['gitlab.example.com:8443', '']);
+    const { svc } = makeService((args) => (args[0] === 'auth' ? Object.assign(new Error('exit 1'), { stderr: 'x gitlab.example.com:8443 has not been authenticated with glab' }) : {}));
+    expect(await svc.connection('/repo', 'gitlab.example.com')).toMatchObject({
+      ok: false, reason: 'unauthenticated', message: expect.stringContaining('glab auth login --hostname gitlab.example.com:8443'),
+    });
   });
 });

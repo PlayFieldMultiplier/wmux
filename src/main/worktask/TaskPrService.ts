@@ -41,12 +41,12 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { isGithubPullUrl } from '../../shared/workTask';
+import { WORKTASK_PR_URL_RE, isGithubPullUrl } from '../../shared/workTask';
 import { forgeHosts } from '../../shared/forgeHosts';
 import { getExecEnv } from '../../shared/execEnv';
 import { parseRemoteKey } from '../github/PrProvider';
 import { isGitlabRepoKey } from '../github/hostLane';
-import { GLAB_ENV, glabPrService, type GlabPrService } from '../github/GlabPrService';
+import { GLAB_ENV, glabLoginHint, glabPrService, type GlabPrService } from '../github/GlabPrService';
 
 const execFileAsync = promisify(execFile);
 
@@ -408,7 +408,7 @@ export class TaskPrService {
       return {
         ok: false,
         reason: 'gh-unauth',
-        error: `GitLab CLI is not signed in to ${host} — run \`glab auth login --hostname ${host}\` and try again.`,
+        error: `GitLab CLI is not signed in to ${host} — run \`${glabLoginHint(host)}\` and try again.`,
         browseFallback: `Or open the merge request for the branch ${branch} in GitLab in the browser`,
       };
     }
@@ -466,7 +466,7 @@ export class TaskPrService {
       return {
         ok: false,
         reason: 'gh-unauth',
-        error: `GitLab CLI is not signed in to ${host} — run \`glab auth login --hostname ${host}\` and try again.`,
+        error: `GitLab CLI is not signed in to ${host} — run \`${glabLoginHint(host)}\` and try again.`,
       };
     }
     return { ok: false, reason: 'pr-failed', error: `Opening the merge request failed: ${created.message}` };
@@ -498,10 +498,14 @@ export class TaskPrService {
   ): Promise<CreatePrResult> {
     let commitPending = false;
     try {
+      // A PR page off github.com was accepted on a host gh is signed in to
+      // (isGithubPullUrl); the daemon takes that host from here.
+      const gheHost = mrIid === undefined && !WORKTASK_PR_URL_RE.test(prUrl) ? new URL(prUrl).host.toLowerCase() : '';
       const res = (await this.daemon.rpc('task.mission.update', {
         taskId,
         verifiedWorkspaceId,
         prUrl,
+        ...(gheHost ? { prUrlGithubHost: gheHost } : {}),
       })) as { ok?: boolean };
       if (!res || res.ok !== true) commitPending = true;
     } catch {
