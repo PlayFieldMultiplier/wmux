@@ -131,8 +131,10 @@ type RepoState = { repo: ResolvedRepo | null; conclusive: boolean };
  *   stat     → 'dir' | 'file' | 'other', 'missing' (ENOENT, ENOTDIR), 'error'
  *   read     → the file's text, or null when it cannot be read
  *   realpath → the physical path, or null when it cannot be resolved
+ *   open     → 'opened' once the directory could be opened (what fs.watch
+ *              does to its target), or null. Never asked by the walk.
  */
-export interface Probe { op: 'stat' | 'read' | 'realpath'; path: string }
+export interface Probe { op: 'stat' | 'read' | 'realpath' | 'open'; path: string }
 export type ProbeAnswer = 'dir' | 'file' | 'other' | 'missing' | 'error' | string | null;
 export type ProbeIo = (probe: Probe) => Promise<ProbeAnswer>;
 type Walk = Generator<Probe, RepoState, ProbeAnswer>;
@@ -204,6 +206,7 @@ function answerSync(probe: Probe): ProbeAnswer {
   try {
     if (probe.op === 'read') return fs.readFileSync(probe.path, 'utf8');
     if (probe.op === 'realpath') return fs.realpathSync.native(probe.path);
+    if (probe.op === 'open') { fs.opendirSync(probe.path).closeSync(); return 'opened'; }
     return statKind(fs.statSync(probe.path));
   } catch (err) {
     return probe.op === 'stat' ? statFailure(err) : null;
@@ -214,6 +217,7 @@ async function answerAsync(probe: Probe): Promise<ProbeAnswer> {
   try {
     if (probe.op === 'read') return await fs.promises.readFile(probe.path, 'utf8');
     if (probe.op === 'realpath') return await fs.promises.realpath(probe.path);
+    if (probe.op === 'open') { await (await fs.promises.opendir(probe.path)).close(); return 'opened'; }
     return statKind(await fs.promises.stat(probe.path));
   } catch (err) {
     return probe.op === 'stat' ? statFailure(err) : null;
@@ -235,6 +239,26 @@ function statFailure(err: unknown): ProbeAnswer {
  */
 export const defaultReaders: ProbeReaderFactory = (share) =>
   share ? new ChildProbeReader() : new InProcessProbeReader(answerAsync);
+
+/**
+ * How long the host-path reader process stays up with nothing to read. A
+ * watched pane needs a read only on a cd or a HEAD change, so the process is
+ * let go between them and started again on the next read.
+ */
+export const HOST_READER_IDLE_MS = 30_000;
+
+/**
+ * Readers for a watcher that never touches a pane's paths on its own thread
+ * (`offLoop`): every path, a host drive included, is read in a reader
+ * process. On macOS an open() under a privacy-protected folder (Desktop,
+ * Documents, Downloads, iCloud, removable volumes) waits on the system's
+ * consent check, with no deadline, for whatever process is responsible for
+ * the caller. An in-process async read stuck there would hold one of
+ * libuv's four fs threads for good; a reader process is killed at its
+ * deadline instead.
+ */
+const offLoopReaders: ProbeReaderFactory = (share) =>
+  share ? new ChildProbeReader() : new ChildProbeReader(undefined, undefined, HOST_READER_IDLE_MS);
 
 /** The distro whose share `p` is on, lower-cased; '' for any other path. */
 function shareOf(p: string): string {
@@ -363,11 +387,20 @@ interface RemoteTarget {
  * resolved asynchronously and polled every REMOTE_POLL_MS, its reads done by
  * a reader process per distro (shareReader.ts), so a wedged distro holds up
  * only its own panes and never this process's fs threads.
+ *
+ * With `offLoop` (the daemon) no path a pane chose is read or watched on this
+ * thread before a reader process has opened it: every cwd is resolved the
+ * share's way, and fs.watch is armed only on a target the reader just opened
+ * (an open() can block with no deadline, see offLoopReaders; fs.watch opens
+ * its target synchronously). A target the reader could not open in time is
+ * polled like a share, and reads as unknown until a round answers.
  */
 export class GitContextWatcher extends EventEmitter {
   private sessions = new Map<string, SessionWatch>();
   private readonly watchFactory: GitWatchFactory;
   private readonly isRemote: (cwd: string) => boolean;
+  /** Never read or watch a pane's path on this thread (see the class doc). */
+  private readonly offLoop: boolean;
   private readonly makeReader: ProbeReaderFactory;
   /** One reader per share in use ('' for host paths); closed once unused. */
   private readonly readers = new Map<string, ProbeReader>();
@@ -391,22 +424,25 @@ export class GitContextWatcher extends EventEmitter {
    *   watcher arms `fs.watch` exactly as before.
    * @param remote Test seam only: which cwds take the WSL-share path, and
    *   what reads them: `readers` per share, or `io` answering in this process.
+   *   `offLoop` is not a test seam: the daemon sets it (see the class doc).
    */
   constructor(
     watchFactory: GitWatchFactory = defaultWatchFactory,
-    remote: { isRemote?: (cwd: string) => boolean; io?: ProbeIo; readers?: ProbeReaderFactory } = {},
+    remote: { isRemote?: (cwd: string) => boolean; io?: ProbeIo; readers?: ProbeReaderFactory; offLoop?: boolean } = {},
   ) {
     super();
     this.watchFactory = watchFactory;
     this.isRemote = remote.isRemote ?? ((cwd) => WSL_SHARE.test(cwd));
+    this.offLoop = remote.offLoop === true;
     const io = remote.io;
-    this.makeReader = remote.readers ?? (io ? () => new InProcessProbeReader(io) : defaultReaders);
+    this.makeReader = remote.readers
+      ?? (io ? () => new InProcessProbeReader(io) : this.offLoop ? offLoopReaders : defaultReaders);
   }
 
   /** @param mapGitDir See GitDirMapper; kept for every later re-resolve. */
   update(sessionId: string, cwd: string, mapGitDir?: GitDirMapper): void {
     this.generations.set(sessionId, ++this.lastGeneration);
-    if (this.isRemote(cwd)) {
+    if (this.offLoop || this.isRemote(cwd)) {
       this.updateRemote(sessionId, cwd, mapGitDir);
       return;
     }
@@ -480,6 +516,13 @@ export class GitContextWatcher extends EventEmitter {
           // applied with the branch unknown, and its poll reads HEAD.
           try { head = await readGitContextAsync(state.repo, io); } catch { /* unknown */ }
         }
+        // offLoop, off any share: fs.watch opens its target on this thread,
+        // so it may only be armed where the reader has just opened it.
+        let watchable = false;
+        if (!failed && this.offLoop && !this.isRemote(wanted.cwd) && !(state.repo && this.isRemote(state.repo.gitDir))) {
+          const target = state.repo ? state.repo.gitDir : wanted.cwd;
+          try { watchable = (await io({ op: 'open', path: target })) === 'opened'; } catch { /* poll instead */ }
+        }
         // Superseded or removed meanwhile: go on with the latest, if any.
         if (!live()) continue;
         this.dropPending(sessionId);
@@ -501,7 +544,7 @@ export class GitContextWatcher extends EventEmitter {
           if (current.repo) current.rewalk = true;
           return;
         }
-        this.apply(sessionId, wanted.cwd, wanted.mapGitDir, state, 'remote', head);
+        this.apply(sessionId, wanted.cwd, wanted.mapGitDir, state, watchable ? 'watched' : 'remote', head);
         return;
       }
     } finally {
@@ -515,7 +558,7 @@ export class GitContextWatcher extends EventEmitter {
   }
 
   /** Through the share's own reader, so one wedged distro holds up only its panes. */
-  private probe(probe: Probe, signal: AbortSignal): Promise<ProbeAnswer> {
+  private probe(probe: Probe, signal?: AbortSignal): Promise<ProbeAnswer> {
     const share = shareOf(probe.path);
     let reader = this.readers.get(share);
     if (!reader) this.readers.set(share, reader = this.makeReader(share));
@@ -553,15 +596,17 @@ export class GitContextWatcher extends EventEmitter {
 
   /**
    * Make `state` the session's watch and emit its answer. `mode`: 'local'
-   * arms fs.watch, 'remote' a poll, 'timeout' nothing (the late answer
-   * replaces it). `head` is HEAD already read for a remote repo.
+   * arms fs.watch, 'watched' fs.watch on a target a reader has opened, with
+   * every read done by the readers (offLoop), 'remote' a poll, 'timeout'
+   * nothing (the late answer replaces it). `head` is HEAD already read for a
+   * repo resolved by the readers.
    */
   private apply(
     sessionId: string,
     cwd: string,
     mapGitDir: GitDirMapper | undefined,
     { repo, conclusive }: RepoState,
-    mode: 'local' | 'remote' | 'timeout',
+    mode: 'local' | 'watched' | 'remote' | 'timeout',
     head?: GitContext,
   ): void {
     const existing = this.sessions.get(sessionId);
@@ -593,6 +638,17 @@ export class GitContextWatcher extends EventEmitter {
       // A `.git` (or bare `HEAD`) created between the walk and the watch going
       // live raised no event: look once more before calling the cwd absent.
       if (!repo && watch.watcher && watch.conclusive && hasGitEntry(cwd)) watch.conclusive = false;
+    } else if (mode === 'watched') {
+      this.arm(sessionId, watch);
+      if (!watch.watcher) {
+        watch.watcher = this.poll(sessionId, watch);
+      } else if (!repo && watch.conclusive) {
+        // As for 'local', but the look goes through the reader, and the
+        // answer waits for it.
+        void this.recheckAbsent(sessionId, watch);
+        this.pruneReaders();
+        return;
+      }
     } else if (mode === 'remote') {
       watch.watcher = this.poll(sessionId, watch);
     }
@@ -701,7 +757,9 @@ export class GitContextWatcher extends EventEmitter {
             this.update(sessionId, watch.cwd, watch.mapGitDir);
             return;
           }
-          this.readAndEmit(sessionId, watch);
+          // A watch armed for offLoop reads HEAD through the reader too.
+          if (watch.remote) void this.refreshHead(sessionId, watch);
+          else this.readAndEmit(sessionId, watch);
         }, REREAD_DEBOUNCE_MS);
         watch.debounce.unref?.();
       });
@@ -717,6 +775,34 @@ export class GitContextWatcher extends EventEmitter {
       // Watch target unreadable — degrade to "value at update time" only.
       watch.watcher = null;
     }
+  }
+
+  /** A HEAD event on a 'watched' repo: read HEAD through the reader, then emit. */
+  private async refreshHead(sessionId: string, watch: SessionWatch): Promise<void> {
+    if (!watch.repo) return;
+    let head: GitContext | undefined;
+    try { head = await readGitContextAsync(watch.repo, (probe) => this.probe(probe)); } catch { /* unknown */ }
+    // Torn down, or replaced by a newer watch, meanwhile.
+    if (this.sessions.get(sessionId) !== watch || !watch.watcher) return;
+    watch.stalled = head === undefined;
+    this.readAndEmit(sessionId, watch, head);
+  }
+
+  /**
+   * A 'watched' cwd outside any repo: a `.git` (or bare `HEAD`) created
+   * between the walk and the watch going live raised no event, so look once
+   * more, through the reader, before calling the cwd absent. Emits either way.
+   */
+  private async recheckAbsent(sessionId: string, watch: SessionWatch): Promise<void> {
+    let seen = true;
+    try {
+      const gitEntry = await this.probe({ op: 'stat', path: path.join(watch.cwd, '.git') });
+      const headEntry = await this.probe({ op: 'stat', path: path.join(watch.cwd, 'HEAD') });
+      seen = gitEntry !== 'missing' || headEntry !== 'missing';
+    } catch { /* cannot tell: not known absent */ }
+    if (this.sessions.get(sessionId) !== watch) return;
+    if (seen) watch.conclusive = false;
+    this.readAndEmit(sessionId, watch);
   }
 
   /**

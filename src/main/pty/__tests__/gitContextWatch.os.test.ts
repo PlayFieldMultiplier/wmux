@@ -18,7 +18,7 @@ import {
   type GitWatchFactory,
   type GitWatchListener,
 } from '../gitContextWatch';
-import { InProcessProbeReader, type ProbeReader } from '../shareReader';
+import { ChildProbeReader, InProcessProbeReader, SHARE_READER_SOURCE, type ProbeReader } from '../shareReader';
 import { watchTarget } from '../../../shared/watchTarget';
 import { shortPathOf } from '../../../test-utils/shortPath';
 
@@ -1273,6 +1273,21 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     expect(w.readerShares).toEqual([]);
   });
 
+  it('offLoop (the daemon) keeps a share cwd on the poll: fs.watch is never armed there', async () => {
+    // Regression guard for the offLoop path, which arms fs.watch on host
+    // paths its reader opened: a share must stay polled however it answers.
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const openingIo: ProbeIo = (probe) => (probe.op === 'open' ? Promise.resolve('opened') : localIo(probe));
+    const w = new GitContextWatcher(fake.factory, { isRemote: () => true, io: openingIo, offLoop: true });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    w.update('s1', root);
+    await settle();
+    expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
+    expect(fake.arms).toHaveLength(0);
+  });
+
   it('1,000 cds behind a stuck probe walk only the last one', async () => {
     const io = holdableIo();
     const watcher = makeRemoteWatcher(io.io);
@@ -1290,5 +1305,121 @@ describe('GitContextWatcher on a WSL share (#2407)', () => {
     // The stuck probe, then the last cwd's own walk and HEAD read: `.git` is a
     // directory there, so two probes.
     expect(io.probes).toBe(1 + 2);
+  });
+});
+
+describe('GitContextWatcher offLoop (the daemon)', () => {
+  /** Answers probes with fs.promises only, so a sync fs call can only come from the watcher. */
+  const asyncIo: ProbeIo = async ({ op, path: p }) => {
+    try {
+      if (op === 'read') return await fs.promises.readFile(p, 'utf8');
+      if (op === 'realpath') return await fs.promises.realpath(p);
+      if (op === 'open') { await (await fs.promises.opendir(p)).close(); return 'opened'; }
+      const st = await fs.promises.stat(p);
+      return st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other';
+    } catch (err) {
+      if (op !== 'stat') return null;
+      const code = (err as NodeJS.ErrnoException).code;
+      return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'error';
+    }
+  };
+
+  let fake: ReturnType<typeof fakeWatchFactory>;
+  let events: Array<{ sessionId: string; branch: string | null; isWorktree: boolean; absent?: true }>;
+
+  beforeEach(() => {
+    fake = fakeWatchFactory();
+    events = [];
+  });
+
+  function makeWatcher(readers: () => ProbeReader): GitContextWatcher {
+    const w = new GitContextWatcher(fake.factory, { readers, offLoop: true });
+    watchers.push(w);
+    w.on('git', (e) => events.push(e));
+    return w;
+  }
+
+  async function waitFor(check: () => boolean, ms = 5_000): Promise<void> {
+    const until = Date.now() + ms;
+    while (!check() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  /** The sync fs calls the watcher could make on a pane's path, counted while `run` runs. */
+  function syncFsCalls(run: () => void): number {
+    const spies = [
+      vi.spyOn(fs, 'readFileSync'),
+      vi.spyOn(fs, 'statSync'),
+      vi.spyOn(fs, 'opendirSync'),
+      vi.spyOn(fs.realpathSync, 'native'),
+    ];
+    try {
+      run();
+      return spies.reduce((n, spy) => n + spy.mock.calls.length, 0);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  }
+
+  it('a reader that never answers does not block the loop: a timer fires, and the cwd reads unknown', async () => {
+    // A reader process stuck in open() (macOS waiting on its privacy check
+    // for a folder under ~/Desktop) is what froze the daemon's loop.
+    const stuck = SHARE_READER_SOURCE.replace('answer(req.op, req.path).then(', 'continue;\n    answer(req.op, req.path).then(');
+    const reader = new ChildProbeReader(300, stuck);
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const w = makeWatcher(() => reader);
+    let ticks = 0;
+    const tick = setInterval(() => { ticks++; }, 10);
+    try {
+      expect(syncFsCalls(() => w.update('s1', root))).toBe(0);
+      expect(events).toEqual([]);
+      await waitFor(() => events.length > 0);
+    } finally {
+      clearInterval(tick);
+    }
+    expect(ticks).toBeGreaterThan(5);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false }]);
+    expect(reader.kills).toBeGreaterThanOrEqual(1);
+    expect(fake.arms).toHaveLength(0);
+  }, 15_000);
+
+  it('arms fs.watch only once the reader has opened the target, and polls one it cannot open', async () => {
+    const root = tmp();
+    const gate: { release?: () => void } = {};
+    const holdingOpen: ProbeIo = (probe) => probe.op === 'open'
+      ? new Promise((resolve) => { gate.release = () => resolve(asyncIo(probe)); })
+      : asyncIo(probe);
+    const w = makeWatcher(() => new InProcessProbeReader(holdingOpen));
+    w.update('s1', root);
+    await waitFor(() => gate.release !== undefined);
+    expect(fake.arms).toHaveLength(0); // the walk is done, the open is not
+    expect(events).toEqual([]);
+    gate.release?.();
+    await waitFor(() => events.length > 0);
+    expect(fake.arms.map((a) => a.target)).toEqual([watchTarget(root)]);
+    expect(events).toEqual([{ sessionId: 's1', branch: null, isWorktree: false, absent: true }]);
+
+    const other = tmp();
+    const refusing: ProbeIo = (probe) => (probe.op === 'open' ? Promise.resolve(null) : asyncIo(probe));
+    const w2 = makeWatcher(() => new InProcessProbeReader(refusing));
+    w2.update('s2', other);
+    await waitFor(() => events.some((e) => e.sessionId === 's2'));
+    expect(fake.arms).toHaveLength(1); // still only the first one: s2 is polled
+    expect(events.at(-1)).toEqual({ sessionId: 's2', branch: null, isWorktree: false, absent: true });
+  });
+
+  it('an existing repo still gets its branch, and a HEAD switch is read through the reader', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const w = makeWatcher(() => new InProcessProbeReader(asyncIo));
+    expect(syncFsCalls(() => w.update('s1', root))).toBe(0);
+    await waitFor(() => events.length > 0);
+    expect(events).toEqual([{ sessionId: 's1', branch: 'main', isWorktree: false }]);
+    expect(fake.arms.map((a) => a.target)).toEqual([watchTarget(path.join(root, '.git'))]);
+
+    fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/feature\n');
+    expect(syncFsCalls(() => fake.last().listener('rename', 'HEAD'))).toBe(0);
+    await waitFor(() => events.length > 1);
+    expect(events.at(-1)).toEqual({ sessionId: 's1', branch: 'feature', isWorktree: false });
   });
 });
