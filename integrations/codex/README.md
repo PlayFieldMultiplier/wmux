@@ -313,6 +313,12 @@ A confirmed per-pane process (including a stdio app-server) always uses its own
 pane environment, ignoring older registry records. Without a pane id it is
 dropped, including a direct launch outside wmux. An uninspectable parent with
 a pane id retains the legacy environment fallback, including permission hooks.
+The ancestor lookup has a 900 ms budget: on Windows it starts PowerShell,
+about 0.4 s alone and about 1 s with eight lookups at once (#2376). A lookup
+that runs out before any ancestor decided logs `origin-lookup-timeout` in the
+bridge's log and is not read as an uninspectable parent: the thread's recorded
+owner receives the signal when there is one, and the pane environment
+otherwise. A timed-out `SessionStart` never records ownership.
 Hooks skip ancestor lookup when no identity is inherited; using an existing
 owner in that case requires confirming a clean shared-server parent first. On WSL the launcher supplies the Linux parent's argv through
 `WMUX_CODEX_NOTIFIER_ARGV`, and the same rules apply. This routing does not

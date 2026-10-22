@@ -19,6 +19,12 @@ import { deliberateSleep } from '../../../src/test-utils/waitFor';
 // and read as the lead turn ending.
 
 const BRIDGE = path.join(__dirname, '..', 'bin', 'wmux-codex-notify.mjs');
+// The bridge walks its ancestors (PowerShell on Windows) before it routes, and
+// a walk past its 900 ms budget logs `origin-lookup-timeout` (#2376), which a
+// loaded runner reached. These tests are about sub-agent routing, so the walk
+// gets room to finish whatever the load, as in codexNotifyOrigin.os.test.ts.
+const ORIGIN_LOOKUP_BUDGET_MS = process.platform === 'win32' ? 45_000 : 10_000;
+const SPAWN_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 20_000;
 
 // 2026-09-30 07:52:21.000Z, the shape of a real Codex UUIDv7 thread id.
 const BASE_MS = Date.UTC(2026, 8, 30, 7, 52, 21);
@@ -232,7 +238,7 @@ describe('codexRolloutMissing', () => {
 });
 
 // End to end: the bridge as Codex runs it, against a fake wmux main pipe.
-describe('wmux-codex-notify with a sub-agent thread', () => {
+describe('wmux-codex-notify with a sub-agent thread', { timeout: SPAWN_TEST_TIMEOUT_MS }, () => {
   let dir: string;
   let home: string;
   let codexHome: string;
@@ -287,6 +293,7 @@ describe('wmux-codex-notify with a sub-agent thread', () => {
       WMUX_PTY_ID: 'pty-1',
       WMUX_WORKSPACE_ID: 'ws-1',
       WMUX_SURFACE_ID: 'surface-1',
+      WMUX_CODEX_ORIGIN_LOOKUP_BUDGET_MS: String(ORIGIN_LOOKUP_BUDGET_MS),
     }, extraEnv);
     const proc = spawn(process.execPath, [BRIDGE, payload], { cwd: dir, env, stdio: 'ignore' });
     return new Promise((resolve) => proc.on('exit', (code) => resolve(code)));
