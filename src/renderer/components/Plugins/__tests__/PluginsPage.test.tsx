@@ -165,12 +165,14 @@ it('shows a catalog entry\'s preview in a reserved 16:10 box, named for the plug
   expect(box?.className).toBe('wmux-plugins-preview');
   const image = box?.querySelector('img');
   expect(image?.getAttribute('alt')).toBe('Office plugin preview');
-  expect(image?.getAttribute('src')).toBeTruthy();
+  expect(image?.getAttribute('src')).toMatch(/plugin-office.*\.webp/);
   // Width and height reserve the box before decode; decoding stays lazy.
   expect([image?.getAttribute('width'), image?.getAttribute('height')]).toEqual(['1280', '800']);
   expect([image?.getAttribute('loading'), image?.getAttribute('decoding')]).toEqual(['lazy', 'async']);
   await act(async () => row('agent-state-page').click());
-  expect(host.querySelector('[data-plugin-preview="agent-state-page"] img')?.getAttribute('alt')).toBe('Agent status plugin preview');
+  const agentImage = host.querySelector('[data-plugin-preview="agent-state-page"] img');
+  expect(agentImage?.getAttribute('alt')).toBe('Agent status plugin preview');
+  expect(agentImage?.getAttribute('src')).toMatch(/plugin-agent-state-page.*\.webp/);
 });
 
 it('shows no preview for a bundle installed by hand', async () => {
