@@ -178,7 +178,32 @@ describe('SampleTaskRunner', () => {
     expect(source.getWrites()).toEqual([SAMPLE_TASK_COMMAND + '\r']);
   });
 
-  // ── 8. Buffer cap smoke test ──────────────────────────────────
+  // ── 8. Prompt drawn before the run subscribed ─────────────────
+
+  it('resolves ok when the shell drew its prompt before the run subscribed', async () => {
+    vi.useFakeTimers();
+    const stub = createStubSource();
+    // A freshly mounted pane draws its prompt within milliseconds, before the
+    // wizard's IPC reaches main: no handler is listening yet, and that 133;A
+    // never comes again. Only the transport's prompt state still knows.
+    let promptSeen = false;
+    stub.pushData('\x1b]133;A\x07');
+    promptSeen = true;
+    const source: PtyDataSource = {
+      onData: stub.onData,
+      write: stub.write,
+      atPrompt: async () => promptSeen,
+    };
+    const promise = runner.run(source, new AbortController().signal);
+
+    await vi.advanceTimersByTimeAsync(OSC133_TIMEOUT_MS);
+
+    expect(await promise).toEqual({ outcome: 'ok' });
+    expect(stub.getWrites()).toEqual([SAMPLE_TASK_COMMAND + '\r']);
+    expect(stub.handlerCount()).toBe(0);
+  });
+
+  // ── 9. Buffer cap smoke test ──────────────────────────────────
 
   it('caps the scan buffer and still times out on 100KB of garbage', async () => {
     vi.useFakeTimers();

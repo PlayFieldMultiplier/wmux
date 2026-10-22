@@ -109,6 +109,7 @@ function makeWindow(): MockWin {
 class MockDaemonClient extends EventEmitter {
   isConnected = true;
   writeToSession = vi.fn();
+  readPromptEvents = vi.fn();
 }
 
 interface MockPtyBridge {
@@ -473,6 +474,34 @@ describe('FirstRunOrchestrator', () => {
 
     // The runner already resolved 'ok' on the next tick → READY fired.
     expect(win.webContents.send).toHaveBeenCalledWith(IPC.FIRST_RUN_SAMPLE_TASK_READY);
+  });
+
+  // ── 9b. startSampleTask — daemon mode reads the pane's current prompt ──────
+  it('startSampleTask in daemon mode answers atPrompt from the daemon prompt log', async () => {
+    const dc = new MockDaemonClient();
+    const orch = new FirstRunOrchestrator(
+      makePtyManager() as never,
+      makePtyBridge() as never,
+      () => dc as never,
+      makeMcpRegistrar() as never,
+      () => 'token',
+      () => makeWindow() as never,
+    );
+    await orch.startSampleTask('session-A');
+    const source = capturedRuns[0].source as unknown as { atPrompt: () => Promise<boolean> };
+    const answer = (events: Array<{ type: string }>, sessionFound = true) => {
+      dc.readPromptEvents.mockResolvedValueOnce({ events, sessionFound });
+      return source.atPrompt();
+    };
+
+    // Prompt drawn (bash prints D before its first A), nothing started since.
+    await expect(answer([{ type: 'command_end' }, { type: 'prompt_start' }, { type: 'prompt_end' }])).resolves.toBe(true);
+    expect(dc.readPromptEvents.mock.calls[0][0]).toBe('session-A');
+    // A command started after the prompt, or the first prompt is still to come.
+    await expect(answer([{ type: 'prompt_start' }, { type: 'command_start' }])).resolves.toBe(false);
+    await expect(answer([{ type: 'command_end' }])).resolves.toBe(false);
+    await expect(answer([])).resolves.toBe(false);
+    await expect(answer([{ type: 'prompt_start' }], false)).resolves.toBe(false);
   });
 
   // ── 10. startSampleTask — non-daemon mode + TIMEOUT event ───────────────────

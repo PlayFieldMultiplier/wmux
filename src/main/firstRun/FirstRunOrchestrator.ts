@@ -63,7 +63,27 @@ function buildDaemonSource(dc: DaemonClient, ptyId: string): PtyDataSource {
       return () => { dc.removeListener('session:data', listener); handlerRef = NOOP; };
     },
     write(data) { dc.writeToSession(ptyId, sanitizePtyText(data)); },
+    // The daemon logs each OSC 133 marker before it forwards the bytes, so
+    // its prompt log holds every prompt this listener could have missed.
+    async atPrompt() {
+      const res = await dc.readPromptEvents(ptyId, { limit: 8 });
+      return res.sessionFound && shellAtPrompt(res.events);
+    },
   };
+}
+
+/**
+ * The newest decisive OSC 133 marker is a prompt (A/B): the shell drew one and
+ * nothing has started since. A command (C) or a bare end (D, which bash prints
+ * before its first A) is not; an empty log is unknown, so the runner waits.
+ */
+export function shellAtPrompt(events: ReadonlyArray<{ type: string }>): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const t = events[i].type;
+    if (t === 'prompt_start' || t === 'prompt_end') return true;
+    if (t === 'command_start' || t === 'command_end') return false;
+  }
+  return false;
 }
 
 /**

@@ -12,6 +12,9 @@
  *   - `run(source, signal)` subscribes to `source.onData`, accumulates a
  *     bounded byte buffer, and scans for the strict OSC133 "A" sequence
  *     (BEL or ST terminator — see `OSC133_PROMPT_READY_PATTERNS`).
+ *   - Then, once subscribed, asks `source.atPrompt()` whether the shell is
+ *     already at a prompt: a pane mounted just before the run has usually
+ *     drawn its prompt already, and that `133;A` will never arrive again.
  *   - On match: writes the command, disposes, resolves `{ outcome: 'ok' }`.
  *   - On `OSC133_TIMEOUT_MS` elapsed: disposes, resolves `{ outcome: 'timeout' }`.
  *   - On `signal` aborted (either at call time or mid-flight): disposes,
@@ -38,6 +41,12 @@ export interface PtyDataSource {
   onData(handler: (chunk: string) => void): () => void;
   /** Write data into the PTY. */
   write(data: string): void;
+  /**
+   * Whether the shell has already drawn a prompt and started nothing since.
+   * Read after `onData` subscribed, so a prompt is either in this answer or
+   * still to arrive as data. Absent when the transport keeps no such state.
+   */
+  atPrompt?(): Promise<boolean>;
 }
 
 /** Hard cap on the accumulated scan buffer (64 KiB). */
@@ -95,6 +104,16 @@ export class SampleTaskRunner {
         return;
       }
 
+      const inject = (): void => {
+        try {
+          source.write(SAMPLE_TASK_COMMAND + '\r');
+        } catch {
+          /* best-effort: write failures still report 'ok' to caller —
+           * the renderer-side fallback handles "Press Enter" UX */
+        }
+        finish('ok');
+      };
+
       const onChunk = (chunk: string): void => {
         if (disposed) return;
         buffer += chunk;
@@ -105,13 +124,7 @@ export class SampleTaskRunner {
         }
         for (const pattern of OSC133_PROMPT_READY_PATTERNS) {
           if (pattern.test(buffer)) {
-            try {
-              source.write(SAMPLE_TASK_COMMAND + '\r');
-            } catch {
-              /* best-effort: write failures still report 'ok' to caller —
-               * the renderer-side fallback handles "Press Enter" UX */
-            }
-            finish('ok');
+            inject();
             return;
           }
         }
@@ -135,6 +148,16 @@ export class SampleTaskRunner {
       timer = setTimeout(() => {
         finish('timeout');
       }, OSC133_TIMEOUT_MS);
+
+      // The prompt may have been drawn before we subscribed. Read the shell's
+      // current state only now, so nothing falls between that read and the
+      // live data; a live match that wins first makes this a no-op.
+      if (source.atPrompt) {
+        source.atPrompt().then(
+          (ready) => { if (ready && !disposed) inject(); },
+          () => { /* unknown: keep waiting on live data */ },
+        );
+      }
     });
   }
 }
