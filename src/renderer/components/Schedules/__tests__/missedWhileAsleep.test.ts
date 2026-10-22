@@ -32,6 +32,12 @@ describe('runs missed while asleep', () => {
     expect(selectMissedWhileAsleep(state)).toEqual({ count: 3, automationIds: ['a1', 'a2'] });
   });
 
+  it('returns the same object while the answer holds', () => {
+    const automationRuns = [missed('m1', 'a1', 20_000)];
+    const first = selectMissedWhileAsleep({ automations, automationRuns, sleepWindow: SLEEP });
+    expect(selectMissedWhileAsleep({ automations: [...automations], automationRuns: [...automationRuns], sleepWindow: SLEEP })).toBe(first);
+  });
+
   it('is nothing without a sleep window, or once the notice was answered', () => {
     const automationRuns = [missed('m1', 'a1', 20_000)];
     expect(selectMissedWhileAsleep({ automations, automationRuns }).count).toBe(0);

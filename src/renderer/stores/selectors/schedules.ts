@@ -53,6 +53,7 @@ export interface MissedWhileAsleep {
 }
 
 const NONE_MISSED: MissedWhileAsleep = { count: 0, automationIds: [] };
+let lastMissed: MissedWhileAsleep = NONE_MISSED;
 
 /**
  * Scheduled runs the daemon recorded as missed because the system was asleep
@@ -73,7 +74,16 @@ export function selectMissedWhileAsleep(state: SchedulesState): MissedWhileAslee
       && run.scheduledFor >= window.suspendedAt && run.scheduledFor <= window.resumedAt)
     .sort((a, b) => a.scheduledFor - b.scheduledFor);
   if (missed.length === 0) return NONE_MISSED;
-  return { count: missed.length, automationIds: [...new Set(missed.map((run) => run.automationId))] };
+  const automationIds = [...new Set(missed.map((run) => run.automationId))];
+  // The same object while the answer holds: the notice subscribes to this and
+  // the store changes on every output chunk.
+  const last = lastMissed;
+  if (last.count === missed.length && last.automationIds.length === automationIds.length
+      && last.automationIds.every((id, i) => id === automationIds[i])) {
+    return last;
+  }
+  lastMissed = { count: missed.length, automationIds };
+  return lastMissed;
 }
 
 /**
