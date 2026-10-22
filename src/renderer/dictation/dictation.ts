@@ -7,7 +7,7 @@ import { useSyncExternalStore } from 'react';
 import { getLocale } from '../i18n';
 import type { DictationModelState } from '../../shared/dictation';
 import { startRecording, type Recording } from './recorder';
-import { SAMPLE_RATE, dictationLanguageFor } from './whisper';
+import { SAMPLE_RATE, WINDOW_SAMPLES, dictationLanguageFor } from './whisper';
 import type { WorkerReply, WorkerRequest } from './whisper.worker';
 // Vite's worker import; the resolver eslint uses does not know the suffix.
 // eslint-disable-next-line import/no-unresolved
@@ -39,6 +39,9 @@ export interface DictationState {
 export type DictationDeliver = (text: string) => void;
 
 const IDLE_ENGINE_MS = 5 * 60_000;
+/** How long one transcription may take: a slow CPU runs a 30 s window in
+ *  well under this, and a hung engine is let go rather than waited on. */
+export const TRANSCRIBE_DEADLINE = { BASE_MS: 30_000, PER_WINDOW_MS: 30_000 } as const;
 
 let state: DictationState = { phase: 'idle', target: null, model: { state: 'absent' }, startedAt: null, error: null };
 const listeners = new Set<() => void>();
@@ -50,6 +53,10 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let nextId = 1;
 const pending = new Map<number, { resolve: (text: string) => void; reject: (err: Error) => void }>();
 let modelWatch: (() => void) | null = null;
+/** Moves on every start and cancel: a start whose awaits outlive a cancel
+ *  (Esc, the composer going away, another start) finds it moved and undoes
+ *  what it got, a just-opened recording included. */
+let generation = 0;
 
 function set(patch: Partial<DictationState>): void {
   state = { ...state, ...patch };
@@ -91,30 +98,46 @@ export async function toggleDictation(target: string, onText: DictationDeliver):
   watchModel();
   if (state.phase === 'recording' && state.target === target) return stopDictation();
   if (state.phase !== 'idle') return;
-  set({ error: null });
-  const model = await api().status();
-  set({ model });
-  if (model.state !== 'ready') {
-    set({ phase: model.state === 'downloading' ? 'downloading' : 'consent', target });
-    return;
-  }
-  deliver = onText;
-  set({ phase: 'loading', target });
-  // The engine starts while the OS answers for the microphone.
-  const engine = ensureWorker();
-  engine.catch(() => undefined);
+  // Taken at once, so a second click or key finds it busy, and Esc or the
+  // composer going away can cancel it while the awaits below run.
+  const gen = ++generation;
+  const stale = () => gen !== generation;
+  set({ phase: 'loading', target, error: null });
   try {
-    if ((await api().micAccess()) !== 'granted') {
-      deliver = null;
-      return fail('mic-denied');
+    const model = await api().status();
+    if (stale()) return;
+    set({ model });
+    if (model.state !== 'ready') {
+      set({ phase: model.state === 'downloading' ? 'downloading' : 'consent' });
+      return;
     }
+    // The engine starts while the OS answers for the microphone.
+    const engine = ensureWorker();
+    engine.catch(() => undefined);
+    const access = await api().micAccess();
+    if (stale()) return;
+    if (access !== 'granted') return fail('mic-denied');
     await engine;
-    recording = await startRecording(() => void stopDictation());
+    if (stale()) return;
+    const rec = await startRecording(() => void stopDictation());
+    if (stale()) {
+      rec.cancel();
+      return;
+    }
+    recording = rec;
+    deliver = onText;
   } catch (err) {
-    deliver = null;
-    return fail(err instanceof Error ? err.message : String(err));
+    if (stale()) return;
+    return fail(micError(err) ?? (err instanceof Error ? err.message : String(err)));
   }
   set({ phase: 'recording', startedAt: Date.now() });
+}
+
+/** `mic-denied` for the browser's refusals of the microphone (Windows and
+ *  Linux say so through getUserMedia, not through the OS ask). */
+export function micError(err: unknown): 'mic-denied' | null {
+  const name = err instanceof Error || (typeof err === 'object' && err !== null && 'name' in err) ? String((err as { name: unknown }).name) : '';
+  return ['NotAllowedError', 'NotFoundError', 'NotReadableError', 'SecurityError'].includes(name) ? 'mic-denied' : null;
 }
 
 /** The owner agreed to the download in the consent: fetch the model. */
@@ -142,6 +165,7 @@ export async function stopDictation(): Promise<void> {
   if (state.phase !== 'recording' || !recording) return;
   const rec = recording;
   recording = null;
+  const gen = generation;
   set({ phase: 'transcribing', startedAt: null });
   try {
     const audio = await rec.stop();
@@ -150,26 +174,43 @@ export async function stopDictation(): Promise<void> {
     const text = await transcribeInWorker(audio);
     // How it went, never what was said.
     console.log(`[wmux:dictation] ${seconds.toFixed(1)} s of audio → ${text.length} characters in ${Math.round(performance.now() - t0)} ms`);
+    if (gen !== generation) return;
     const to = deliver;
     deliver = null;
     set({ phase: 'idle', target: null });
     if (text && to) to(text);
   } catch (err) {
+    if (gen !== generation) return;
     deliver = null;
     fail(err instanceof Error ? err.message : String(err));
   }
 }
 
-/** Drops the recording; nothing is written. */
+/** Drops the recording, or the transcription under way; nothing is
+ *  written. */
 export function cancelDictation(): void {
-  if (state.phase === 'recording' || state.phase === 'loading') {
+  if (state.phase === 'recording' || state.phase === 'loading' || state.phase === 'transcribing') {
+    generation += 1;
     recording?.cancel();
     recording = null;
     deliver = null;
+    // A transcription cannot be called back: the engine goes with it.
+    if (state.phase === 'transcribing') stopEngine(new Error('cancelled'));
     set({ phase: 'idle', target: null, startedAt: null });
   } else if (state.phase === 'consent') {
     declineModelDownload();
   }
+}
+
+/** Ends the engine; every transcription waiting on it fails with `err`. */
+function stopEngine(err: Error): void {
+  worker?.terminate();
+  worker = null;
+  workerReady = null;
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = null;
+  for (const p of pending.values()) p.reject(err);
+  pending.clear();
 }
 
 export function clearDictationError(): void {
@@ -186,6 +227,7 @@ function ensureWorker(): Promise<void> {
       throw new Error(res.state.state === 'failed' ? res.state.message : 'the speech model is not on this computer');
     }
     const w = new WhisperWorker();
+    let ready = false;
     await new Promise<void>((resolve, reject) => {
       w.onmessage = (e: MessageEvent<WorkerReply>) => {
         const reply = e.data;
@@ -197,11 +239,18 @@ function ensureWorker(): Promise<void> {
         if (reply.type === 'text') p.resolve(reply.text);
         else p.reject(new Error(reply.message));
       };
-      w.onerror = (e) => reject(new Error(e.message || 'the speech engine stopped'));
+      // Before it is ready a crash fails the start; after, it fails what is
+      // waiting and the next dictation starts a new engine.
+      w.onerror = (e) => {
+        const err = new Error(e.message || 'the speech engine stopped');
+        if (!ready) return reject(err);
+        if (worker === w) stopEngine(err);
+      };
       const { assets } = res;
       const init: WorkerRequest = { type: 'init', assets };
       w.postMessage(init, [assets.encoder.buffer, assets.decoder.buffer, assets.wasm.buffer] as Transferable[]);
     });
+    ready = true;
     worker = w;
     console.log(`[wmux:dictation] speech engine ready in ${Math.round(performance.now() - started)} ms`);
     restIdleEngine();
@@ -219,10 +268,18 @@ async function transcribeInWorker(audio: Float32Array): Promise<string> {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
   const id = nextId++;
+  const windows = Math.max(1, Math.ceil(audio.length / WINDOW_SAMPLES));
+  const deadlineMs = TRANSCRIBE_DEADLINE.BASE_MS + TRANSCRIBE_DEADLINE.PER_WINDOW_MS * windows;
+  let deadline: ReturnType<typeof setTimeout> | null = null;
   const text = await new Promise<string>((resolve, reject) => {
     pending.set(id, { resolve, reject });
+    deadline = setTimeout(() => {
+      if (worker === w) stopEngine(new Error('the speech engine took too long'));
+    }, deadlineMs);
     const req: WorkerRequest = { type: 'transcribe', id, audio, language: dictationLanguageFor(getLocale()) };
     w.postMessage(req, [audio.buffer]);
+  }).finally(() => {
+    if (deadline) clearTimeout(deadline);
   });
   restIdleEngine();
   return text.trim();

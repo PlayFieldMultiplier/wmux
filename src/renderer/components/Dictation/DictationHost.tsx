@@ -6,8 +6,8 @@ import { DictationConsent } from './DictationConsent';
 
 /**
  * Dictation's app-wide parts, mounted once: the model consent, Esc to cancel
- * a recording wherever focus is (before the key reaches a terminal or a
- * composer), and a toast for each failure.
+ * a recording or its transcription wherever focus is (before the key reaches
+ * a terminal or a composer), and a toast for each failure.
  */
 export function DictationHost() {
   const { error } = useDictation();
@@ -23,7 +23,7 @@ export function DictationHost() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.isComposing) return;
       const { phase } = getDictationState();
-      if (phase !== 'recording' && phase !== 'loading') return;
+      if (phase !== 'recording' && phase !== 'loading' && phase !== 'transcribing') return;
       e.preventDefault();
       e.stopImmediatePropagation();
       cancelDictation();

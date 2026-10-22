@@ -8,7 +8,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Composer } from '../../ChatV2/Composer';
-import { resetDictationMock, setDictation, toggleDictation } from './dictationMock';
+import { cancelDictation, resetDictationMock, setDictation, toggleDictation } from './dictationMock';
 
 vi.mock('../../../dictation/dictation', () => import('./dictationMock'));
 
@@ -85,6 +85,13 @@ describe('Chat view composer mic', () => {
     });
     expect(box().value).toBe('fix the flaky test');
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('a composer that goes away while its dictation starts cancels it', () => {
+    renderComposer();
+    act(() => setDictation({ phase: 'loading', target: 'chat:pane-1' }));
+    act(() => root.render(<></>));
+    expect(cancelDictation).toHaveBeenCalledTimes(1);
   });
 
   it('is unavailable while another input dictates', () => {
