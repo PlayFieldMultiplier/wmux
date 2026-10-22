@@ -732,8 +732,10 @@ export function askScreenMeets(
 
 /**
  * askScreenMeets, and `unknown` when the screen meets `expect` only with an
- * unknown cell in the label of an option the answer chooses on this question:
- * a key is never sent for a choice the read could not see whole.
+ * unknown cell in the label of an option the answer chooses on this question,
+ * or with a question that, read through its unknown cells, is another
+ * question of the form too: a key is never sent for a choice, or on a
+ * question, the read could not see whole.
  */
 function askScreenRead(
   screen: AskPickerScreen | null,
@@ -760,7 +762,11 @@ function askScreenRead(
   if (!question) return no;
   const at = unknown ? questionAt.get(screen) : undefined;
   const drawnQuestion = at && at.rows.map((r) => (at.gutter ? (unknown![r] ?? '').replace(/^(\s*)│ ?/, '$1') : unknown![r] ?? '')).join('');
-  if (!sameQuestionText(screen.question, question.text) && !(drawnQuestion && drawnMatches(drawnQuestion, question.text))) return no;
+  const shows = (text: string) => sameQuestionText(screen.question, text) || (!!drawnQuestion && drawnMatches(drawnQuestion, text));
+  if (!shows(question.text)) return no;
+  // Read through unknown cells, the question must read as no other question
+  // of the form: `Approve` and two unseen cells is `Approve?` and `Approved?`.
+  if (!sameQuestionText(screen.question, question.text) && questions.some((q, j) => j !== expect.q && shows(q.text))) return 'unknown';
   if (!screen.tabs.every((tab, j) => j === expect.q || tab.answered === j < expect.q)) return no;
   if (screen.multiSelect !== question.multiSelect) return no;
   if (question.multiSelect ? !screen.submitRow : !!screen.submitRow) return no;

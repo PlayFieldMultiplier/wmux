@@ -17,7 +17,7 @@ import { UNKNOWN_CELL, withUnknownCells } from '../../sessionTextReplay';
 import { ApprovalRegistry, TERMINAL_PROMPT_MIN_ANSWER_AGE_MS } from '../ApprovalRegistry';
 import { DECISION_V2_WEB_ANSWER } from '../types';
 import { claudeQuestionsForm, extractAskUserQuestion } from '../askUserQuestion';
-import { askPickerUntouchedRead, parseAskPicker } from '../askPicker';
+import { askPickerUntouchedRead, askScreenMeets, parseAskPicker } from '../askPicker';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'terminal-prompts', 'claude-2.1.308', 'claude-ask-ring-cut-01-pipe-lost-100x30-2.1.308.json');
 const fixture = JSON.parse(fs.readFileSync(FIXTURE, 'utf8')) as { cols: number; rows: number; replayBase64: string };
@@ -98,6 +98,40 @@ describe('a pane read from a ring that dropped its oldest bytes', () => {
     expect(askPickerUntouchedRead(picker, questionsOf(QUESTION), unknown, [{ keys: ['1'] }])).toBe('unknown');
     // Choosing the other option, the label it sends a key for is whole.
     expect(askPickerUntouchedRead(picker, questionsOf(QUESTION), unknown, [{ keys: ['2'] }])).toBe('meets');
+  });
+});
+
+describe('a question read through unknown cells', () => {
+  // Two questions that differ only at the end, with the same header and options.
+  const form = claudeQuestionsForm({
+    hook_event_name: 'PreToolUse',
+    tool_name: 'AskUserQuestion',
+    tool_input: {
+      questions: ['Approve?', 'Approved?'].map((question) => ({
+        question, header: 'Deploy', multiSelect: false, options: [{ label: 'Yes' }, { label: 'No' }],
+      })),
+    },
+  })!.questions!;
+  const RULE = '─'.repeat(60);
+  const screen = (bar: string, question: string) => [
+    RULE, bar, '', question, '', '❯ 1. Yes', '  2. No', '  3. Type something.', RULE, '  4. Chat about this', '',
+    'Enter to select · Tab/Arrow keys to navigate · Esc to cancel',
+  ];
+  const UNTOUCHED = '←  ☐ Deploy  ☐ Deploy  ✔ Submit  →';
+  const plain = (rows: string[]) => rows.map((r) => r.split(UNKNOWN_CELL).join(' ').replace(/ +$/, ''));
+
+  it('is the question only when it reads as no other question of the form', () => {
+    // Seen whole, `Approve?` is the first question and never the second.
+    const whole = screen(UNTOUCHED, 'Approve?');
+    expect(askPickerUntouchedRead(parseAskPicker(whole), form, undefined, [])).toBe('meets');
+    const second = screen('←  ☒ Deploy  ☐ Deploy  ✔ Submit  →', 'Approve?');
+    expect(askScreenMeets(parseAskPicker(second), { view: 'question', q: 1, cursor: '1', checked: [], other: null }, form, [])).toBe(false);
+    // Two unseen cells after `Approve` could be `?` or `d?`: no key is sent.
+    const unknown = screen(UNTOUCHED, `Approve${UNKNOWN_CELL}${UNKNOWN_CELL}`);
+    expect(askPickerUntouchedRead(parseAskPicker(plain(unknown)), form, unknown, [])).toBe('unknown');
+    // With one unseen cell only `Approve?` fits.
+    const one = screen(UNTOUCHED, `Approve${UNKNOWN_CELL}`);
+    expect(askPickerUntouchedRead(parseAskPicker(plain(one)), form, one, [])).toBe('meets');
   });
 });
 
