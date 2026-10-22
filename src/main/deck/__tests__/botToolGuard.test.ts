@@ -54,20 +54,36 @@ describe('BotToolGuard', () => {
       .toBe('Stopped: room_post was called 3 times in a row with the same input and the same result.');
   });
 
-  it('stops a wmux refusal repeated without is_error', () => {
+  it('stops a wmux refusal repeated three times', () => {
     const g = new BotToolGuard(ALLOWED);
     const input = { thread_id: 'not-a-thread', text: 'hi' };
-    // The MCP server's envelope: the RPC reply, pretty-printed, as one text block.
+    // The MCP server's envelope: the RPC reply, pretty-printed, as one text
+    // block, marked isError by callRpc.
     const refusal = [{ type: 'text', text: JSON.stringify({ ok: false, code: 'invalid', message: 'no such thread' }, null, 2) }];
-    expect(step(g, 'mcp__wmux__room_post', input, false, refusal)).toBeNull();
-    expect(step(g, 'mcp__wmux__room_post', input, false, refusal)).toBeNull();
-    expect(step(g, 'mcp__wmux__room_post', input, false, refusal)).toMatch(/^Stopped: room_post was called 3 times/);
+    expect(step(g, 'mcp__wmux__room_post', input, true, refusal)).toBeNull();
+    expect(step(g, 'mcp__wmux__room_post', input, true, refusal)).toBeNull();
+    expect(step(g, 'mcp__wmux__room_post', input, true, refusal)).toMatch(/^Stopped: room_post was called 3 times/);
+  });
+
+  it('stops a wmux refusal repeated without is_error (an older MCP server)', () => {
+    const g = new BotToolGuard(ALLOWED);
+    const refusal = [{ type: 'text', text: JSON.stringify({ error: 'room_post: no such thread' }, null, 2) }];
+    expect(step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, false, refusal)).toBeNull();
+    expect(step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, false, refusal)).toBeNull();
+    expect(step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, false, refusal)).toMatch(/^Stopped: room_post was called 3 times/);
   });
 
   it('a refused real wmux call after a bare-name slip is not a naming failure', () => {
     const g = new BotToolGuard(ALLOWED);
     step(g, 'room_post', {}, true, 'No such tool available: room_post');
-    step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, false, [{ type: 'text', text: '{"ok":false,"code":"invalid"}' }]);
+    step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, true, [{ type: 'text', text: '{"ok":false,"code":"invalid"}' }]);
+    expect(g.verdict()).toBeNull();
+  });
+
+  it('a bare { error } refusal also counts as reaching the wmux tools', () => {
+    const g = new BotToolGuard(ALLOWED);
+    step(g, 'room_post', {}, true, 'No such tool available: room_post');
+    step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, true, [{ type: 'text', text: '{"error":"room_post: refused"}' }]);
     expect(g.verdict()).toBeNull();
   });
 

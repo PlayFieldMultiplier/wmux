@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+// The SDK's subpath exports resolve under vitest but not under the import plugin.
+// eslint-disable-next-line import/no-unresolved
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+// eslint-disable-next-line import/no-unresolved
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 /**
@@ -19,15 +22,17 @@ vi.mock('../wmux-client', async (importOriginal) => {
   return { ...actual, sendRpc: mockSendRpc };
 });
 
-import { createWmuxServer, isErrorShapedResult } from '../index';
+import { createWmuxServer, withNote } from '../index';
+import { isErrorShapedResult } from '../../shared/rpc';
 
-async function connectClient() {
+async function connectClient(bot?: { botRole: string; token: string }) {
   const server = createWmuxServer({
     envWorkspaceHint: '',
     envPtyHint: '',
-    commanderToken: undefined,
+    commanderToken: bot?.token,
     commanderMode: false,
     coreMode: false,
+    ...(bot && { botRole: bot.botRole }),
     callerPid: process.pid,
     callerPpid: null,
   });
@@ -41,12 +46,12 @@ async function callTool(
   client: Client,
   name: string,
   args: Record<string, unknown>,
-): Promise<{ isError?: boolean; text: string }> {
+): Promise<{ isError?: boolean; text: string; blocks: number }> {
   const result = await client.callTool({ name, arguments: args }) as {
     isError?: boolean;
     content: { type: 'text'; text: string }[];
   };
-  return { isError: result.isError, text: result.content[0]?.text ?? '' };
+  return { isError: result.isError, text: result.content[0]?.text ?? '', blocks: result.content.length };
 }
 
 /** Answer the identity walk with a verified hit and `method` with `reply`. */
@@ -140,6 +145,67 @@ describe('send_message WSL image hint', () => {
       const res = await callTool(client, 'send_message', { to: 'ws-other', message: 'look', images: ['/home/me/shot.png'] });
       expect(res.isError).toBe(true);
       expect(res.text).toContain('/mnt/c/Users/<you>/.wmux-dogm/uploads/');
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe('results callRpc hands on keep the flag', () => {
+  beforeEach(() => {
+    mockSendRpc.mockReset();
+  });
+
+  it('withNote keeps isError and appends its note', () => {
+    const noted = withNote({ content: [{ type: 'text', text: '{"error":"x"}' }], isError: true }, 'careful');
+    expect(noted.isError).toBe(true);
+    expect(noted.content.map((c) => c.text)).toEqual(['{"error":"x"}', 'NOTE: careful']);
+    expect(withNote({ content: [{ type: 'text', text: '{}' }] }, 'n').isError).toBeUndefined();
+  });
+
+  it('a refused terminal_send_key Enter is isError with no delivery note; a delivered one gets the note', async () => {
+    const { client, close } = await connectClient();
+    try {
+      answer('input.sendKey', { error: 'input.sendKey: refused' });
+      const refused = await callTool(client, 'terminal_send_key', { key: 'Enter' });
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toBe(JSON.stringify({ error: 'input.sendKey: refused' }, null, 2));
+      expect(refused.blocks).toBe(1);
+
+      answer('input.sendKey', { ok: true });
+      const delivered = await callTool(client, 'terminal_send_key', { key: 'Enter' });
+      expect(delivered.isError).toBeFalsy();
+      expect(delivered.blocks).toBe(2);
+    } finally {
+      await close();
+    }
+  });
+
+  it('a bot-lane tool (the deps.callRpc spread) carries isError', async () => {
+    const refusal = { ok: false, code: 'not_authorized', message: 'only a bot sets its job' };
+    answer('bot.setJob', refusal);
+    const { client, close } = await connectClient({ botRole: 'lead', token: 'tok' });
+    try {
+      const res = await callTool(client, 'job_set', { job: 'Fix issues.' });
+      expect(res.isError).toBe(true);
+      expect(res.text).toBe(JSON.stringify(refusal, null, 2));
+    } finally {
+      await close();
+    }
+  });
+
+  it('a2a_discover keeps a refusal untouched and flagged, and stamps elapsedMs only on a success', async () => {
+    const { client, close } = await connectClient();
+    try {
+      answer('a2a.discover', { error: 'a2a.discover: refused' });
+      const refused = await callTool(client, 'a2a_discover', {});
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toBe(JSON.stringify({ error: 'a2a.discover: refused' }, null, 2));
+
+      answer('a2a.discover', { agents: [] });
+      const found = await callTool(client, 'a2a_discover', {});
+      expect(found.isError).toBeFalsy();
+      expect(JSON.parse(found.text)).toMatchObject({ agents: [], elapsedMs: expect.any(Number) });
     } finally {
       await close();
     }

@@ -26,6 +26,7 @@
 
 import { createHash } from 'node:crypto';
 import type { RawSdkMessage } from './BrainAdapter';
+import { isErrorShapedResult } from '../../shared/rpc';
 
 export const BOT_TOOL_PREFIX = 'mcp__wmux__';
 
@@ -66,16 +67,17 @@ function canonicalJson(value: unknown): string {
 
 const hashOf = (text: string): string => createHash('sha256').update(text).digest('hex');
 
-/** A wmux tool's refusal: main answered `{ ok: false, … }`. The MCP server
- *  returns it as the first text block of an ordinary result (callRpc in
- *  src/mcp/index.ts sets no isError), so the SDK frame does not say it failed. */
+/** A wmux tool's refusal: main answered `{ ok: false, … }` or a bare
+ *  `{ error }` (isErrorShapedResult). The MCP server returns the reply as the
+ *  first text block, marked isError by callRpc in src/mcp/index.ts (an older
+ *  server left it unmarked). Either way main was reached: the name worked. */
 function isRefusal(content: unknown): boolean {
   const first = Array.isArray(content) ? (content as RawBlock[]).find((c) => c?.type === 'text') : undefined;
   const text = typeof content === 'string' ? content : first?.text;
   if (typeof text !== 'string' || !text.trimStart().startsWith('{')) return false;
   try {
     const parsed: unknown = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null && (parsed as { ok?: unknown }).ok === false;
+    return isErrorShapedResult(parsed);
   } catch {
     return false;
   }
@@ -129,13 +131,13 @@ export class BotToolGuard {
         if (call === undefined) continue;
         const { name } = call;
         // A refusal counts as a failed call here only. It still counts as
-        // reaching the wmux tools below: the name worked, so verdict() must
-        // not report it as a naming slip.
+        // reaching the wmux tools below, is_error or not: the name worked, so
+        // verdict() must not report it as a naming slip.
         const failed = b.is_error === true || (name.startsWith(BOT_TOOL_PREFIX) && isRefusal(b.content));
         const loop = this.onOutcome({ name, key: hashOf(`${name}\0${call.input}\0${failed}\0${canonicalJson(b.content)}`), failed });
         if (loop) return loop;
         if (name.startsWith(BOT_TOOL_PREFIX)) {
-          if (b.is_error !== true) this.wmuxOk += 1;
+          if (b.is_error !== true || isRefusal(b.content)) this.wmuxOk += 1;
         } else if (this.isBareWmuxName(name)) {
           this.unknown.push(name);
         }

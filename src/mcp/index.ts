@@ -20,7 +20,7 @@ import { SHARED_SURFACE } from '../shared/botSurface';
 import { installBotTools, pinToolName } from './toolModules';
 // The factory's bot tool modules register themselves on import.
 import './botModules';
-import type { RpcMethod } from '../shared/rpc';
+import { isErrorShapedResult, type RpcMethod } from '../shared/rpc';
 import { EXECUTE_SEND_CLIENT_TIMEOUT_MS } from '../shared/executeApprovalBounds';
 import { NEW_TASK_SEND_CLIENT_TIMEOUT_MS } from '../shared/freshContext';
 import { MCP_WRITE_DEADLINE_MS } from '../shared/terminalWriteBudget';
@@ -399,19 +399,17 @@ const SEND_MESSAGE_SHAPE = {
 };
 
 /**
- * Whether an RPC reply is a refusal answered as a result rather than thrown.
- * Many handlers return `{ error }` (or `{ ok: false, ... }`), which keeps the
- * pipe envelope ok, so callRpc must flag it itself: an agent that checks only
- * `isError` otherwise reads the refusal as success. Only the top level counts
- * (a per-item `error` in a list is data), `ok: false` follows the tool modules'
- * convention (git.ts, ledger.ts, ...), and an `error` next to any other `ok` is
- * data.
+ * Append an advisory line to a tool result.
+ *
+ * Used where a bare success would be read as a stronger guarantee than the RPC
+ * actually makes — delivery vs. effect. The note rides as its own content block
+ * so the primary JSON payload stays machine-parseable.
  */
-export function isErrorShapedResult(result: unknown): boolean {
-  if (result === null || typeof result !== 'object' || Array.isArray(result)) return false;
-  const r = result as Record<string, unknown>;
-  if (r.ok === false) return true;
-  return r.ok === undefined && typeof r.error === 'string' && r.error.length > 0;
+export function withNote(
+  result: { content: { type: 'text'; text: string }[]; isError?: true },
+  note: string,
+): { content: { type: 'text'; text: string }[]; isError?: true } {
+  return { ...result, content: [...result.content, { type: 'text', text: `NOTE: ${note}` }] };
 }
 
 export function createWmuxServer(ctx: WmuxServerCtx): McpServer {
@@ -1021,20 +1019,6 @@ function invalidateStaleRoute(pinnedRouteAtDispatch: PinnedRoute | null): void {
   // fresh token — the same recovery path a closed workspace already takes.
   setWorkspaceToken(undefined);
   syncCallerPtyId();
-}
-
-/**
- * Append an advisory line to a tool result.
- *
- * Used where a bare success would be read as a stronger guarantee than the RPC
- * actually makes — delivery vs. effect. The note rides as its own content block
- * so the primary JSON payload stays machine-parseable.
- */
-function withNote(
-  result: { content: { type: 'text'; text: string }[]; isError?: true },
-  note: string,
-): { content: { type: 'text'; text: string }[]; isError?: true } {
-  return { ...result, content: [...result.content, { type: 'text', text: `NOTE: ${note}` }] };
 }
 
 /**
