@@ -2980,7 +2980,7 @@ export const pl = {
   'a2aLink.ended.exposure-revoked': "Ten komputer przestał pokazywać panel",
   'a2aLink.moaTitle': "Połącz Koordynatora tego komputera z Koordynatorem innego",
   'a2aLink.moaDescription': "Gdy tamten komputer zaakceptuje, obaj Koordynatorzy mogą przekazywać sobie pracę. Koordynator łączy się tylko z Koordynatorem.",
-  'a2aLink.moaSection': "Koordynator na tym komputerze",
+  'a2aLink.moaSection': "Koordynator na tamtym komputerze",
   'a2aLink.moaOf': "Koordynator komputera {pc}",
   'a2aLink.thisMoa': "Koordynator tego komputera",
   'a2aLink.noMoaExposed': "Tamten komputer nie udostępnia swojego Koordynatora. Poproś o zaznaczenie w Ustawienia › LAN.",
