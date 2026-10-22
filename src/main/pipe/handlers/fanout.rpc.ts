@@ -139,7 +139,7 @@ import { repoBaseGate } from '../../factory/verifyPreset';
 
 /** The bot preset whose worker grades a PR head (botFanoutPresets.ts). */
 const VERIFY_PRESET = 'verify';
-import { GENERAL_THREAD, parseThreadId, prThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
+import { GENERAL_THREAD, dmThreadId, parseThreadId, prThreadId, taskOriginThread, type ThreadId } from '../../../shared/room';
 import { normalizeRepoKey } from '../../../shared/repoKey';
 import { isOriginPin } from '../../../shared/originPin';
 import { parseRemoteKey } from '../../github/PrProvider';
@@ -1475,6 +1475,11 @@ export function registerFanOutRpc(
       }
       // Its tools return outside text: the task counts as started from it.
       botWakeTainted = true;
+      // What its worker reads with the owner's sign-in is the bot's alone:
+      // the task's thread, where main writes its result card and wakes the
+      // bot with it (taskThreadOf), is the bot's own 1:1, whatever thread
+      // asked or was named.
+      if (gatewayConnectors.length > 0) botWakeThread = dmThreadId(bot.botId);
     }
     // A conversation that holds data from a signed-in task starts no other
     // task (a code or research worker can carry it out); a signed-in one is

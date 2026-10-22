@@ -435,6 +435,33 @@ describe('guest provenance', () => {
     }
   });
 
+  it('a bot\'s fact reads show a signed-in task\'s facts, and notices about it, only to the bot that started it, in any wake', () => {
+    const origin = { kind: 'bot', botId: 'bot-a', tainted: false, guest: false };
+    const signed = { id: 't-s', dispatch: { origin, gatewayConnectors: ['notion'] } } as unknown as LedgerEntry;
+    const plain = { id: 't-p', dispatch: { origin } } as unknown as LedgerEntry;
+    const facts = [
+      { ...fact('f-s', 'task.done', { taskId: 't-s', botId: 'bot-a' }), payload: { summary: 'Q3 revenue 4.2M' } },
+      { ...fact('f-n', 'bot.notice', { taskId: 't-s', botId: 'bot-a' }), payload: { detail: 'Q3 revenue 4.2M', guest: false } },
+      fact('f-p', 'task.done', { taskId: 't-p', botId: 'bot-a' }),
+      // A notice about a task whose row is gone: the bot it names only.
+      { ...fact('f-gone', 'bot.notice', { taskId: 't-gone', botId: 'bot-a' }), payload: { guest: false } },
+      fact('f-pr', 'pr.opened'),
+    ];
+    let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
+    const t = make({ runningWake: () => running, bot: () => ({ role: 'lead', template: 'developer', workspaceId: 'ws' }) }, facts, [], [signed, plain]);
+    setWakeTaint(t, () => running);
+    const seen = (botId: string) => facts.filter(factVisibleToBot(botId)).map((f) => f.id);
+    try {
+      expect(seen('bot-a')).toEqual(['f-s', 'f-n', 'f-p', 'f-gone', 'f-pr']);
+      expect(seen('bot-b')).toEqual(['f-p', 'f-pr']);
+      // A guest-sourced wake reads every fact of its island, but not these.
+      running = { item: wake(guestReason), startedAt: 1 };
+      expect(seen('bot-b')).toEqual(['f-p', 'f-pr']);
+    } finally {
+      setWakeTaint(null);
+    }
+  });
+
   it('the room\'s turn probe: a guest or unknown wake, or none running, is not known clean; untracked reads fail closed only where a tracker is expected', () => {
     let running: { item: WakeItem; startedAt: number } | null = { item: wake({ kind: 'human', text: 'hi', source: 'desktop' }), startedAt: 1 };
     const t = make({ runningWake: () => running });

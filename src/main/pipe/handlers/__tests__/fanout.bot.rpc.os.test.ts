@@ -1287,6 +1287,22 @@ describe('a conversation that holds data from a signed-in task', () => {
     expect(r.port.full).toEqual([]);
   });
 
+  it('a signed-in task\'s thread is the bot\'s 1:1, whatever thread asked or was named: its result card and its wake land there', async () => {
+    const r = signedInRig();
+    r.setTainted(false);
+    const dm = `dm:${BOT_ID}`;
+    const PR = 'pr:github.com/o/r#4';
+    for (const [thread, named] of [['general', undefined], [PR, undefined], ['general', 'issue:github.com/o/r#7']] as const) {
+      r.setThread(thread);
+      expect(await ask(r, { preset: 'research', connectors: ['notion'], ...(named ? { threadId: named } : {}) })).toMatchObject({ ok: true });
+    }
+    // A plain research task from the same kind of wake keeps the asking thread.
+    r.setThread(PR);
+    expect(await ask(r, { preset: 'research' })).toMatchObject({ ok: true });
+    await r.flush();
+    expect((r.start.mock.calls as Array<[FanOutRequest]>).map(([req]) => req.threadId)).toEqual([dm, dm, dm, PR]);
+  });
+
   it('a conversation that read a PR or an issue (tainted, not signed in) still starts code and research tasks, marked tainted', async () => {
     const r = signedInRig();
     r.setTainted(false);

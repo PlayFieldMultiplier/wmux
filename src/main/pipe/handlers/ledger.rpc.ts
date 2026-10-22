@@ -22,7 +22,8 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { LEDGER_SUMMARY_MAX_BYTES, truncateHead, type TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { reportOnEndedTask } from '../../factory/endedTaskReport';
 import type { NoChangesVerdict } from '../../factory/noChangesCheck';
-import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, taskSignedIn, type GuestProvenance } from '../../factory/wakeTaint';
+import { conversationSignedIn, signedInRefusal } from '../../factory/conversationMarks';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -38,6 +39,9 @@ export interface LedgerRpcDeps {
   /** The guest provenance of a bot's running wake (wakeTaint.ts); default
    *  the running tracker. */
   guestWake?: (botId: string) => GuestProvenance;
+  /** Whether a bot's live conversation holds data from a signed-in task
+   *  (none: yes). Default: conversationMarks.ts. */
+  signedIn?: (botId: string) => boolean;
 }
 
 function deny(code: string, message: string): { ok: false; error: { code: string; message: string } } {
@@ -144,6 +148,15 @@ export function registerLedgerRpc(router: RpcRouter, getWindow: GetWindow, deps:
       // A task's facts are as clean as its dispatch: no wake that is not
       // known clean writes its status or summary.
       if (guestWake(ctx.bot.botId) !== false) return deny('NOT_AUTHORIZED', `ledger.update: ${GUEST_TURN_STARTS_NO_WORKERS}`);
+      // What a signed-in task read stays in the bot's 1:1: a conversation
+      // holding it writes no words on a task that read none (its summary
+      // rides on the task's fact and on its card, in the task's thread). A
+      // bare status, or words on the signed-in task itself, whose thread is
+      // that 1:1, stay allowed.
+      if ((text(params.summary) || params.evidence !== undefined) && !taskSignedIn(row)
+        && (deps.signedIn ?? conversationSignedIn)(ctx.bot.botId) !== false) {
+        return deny('NOT_AUTHORIZED', `ledger.update: ${signedInRefusal('write a summary on a task that used no signed-in connection', ctx.bot.botId)}`);
+      }
     }
     // A no-changes skip vouches for nothing the worker did after it: the
     // completion asks the same check again (its HEAD, main's push record and

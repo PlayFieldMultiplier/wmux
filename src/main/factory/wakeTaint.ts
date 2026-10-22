@@ -408,6 +408,26 @@ export class WakeTaint {
     return !row || taskSignedIn(row);
   }
 
+  /** Whether fact `f` is about a task that used a signed-in connection and
+   *  that bot `botId` did not start: what that task's worker read is its
+   *  own bot's alone (the worker's summary rides on the task's facts, and a
+   *  notice about the task may carry the worker's words). The task's bot is
+   *  its row's dispatch origin; a task whose row cannot be read is the bot
+   *  the fact names, else no bot's. */
+  signedInTaskOfAnother(f: Pick<Fact, 'ref'>, botId: string): boolean {
+    const taskId = f.ref?.taskId;
+    if (!taskId) return false;
+    let row: LedgerEntry | null;
+    try {
+      row = this.ports.taskRow(taskId);
+    } catch {
+      row = null;
+    }
+    if (!row) return f.ref?.botId !== botId;
+    const origin = row.dispatch?.origin;
+    return taskSignedIn(row) && !(origin?.kind === 'bot' && origin.botId === botId);
+  }
+
   /** A task's dispatch mark; an unknown task is tainted. */
   private taskIdTainted(taskId: string): boolean {
     let row: LedgerEntry | null;
@@ -678,7 +698,9 @@ export function guestOfRunningWake(botId: string): GuestProvenance {
 
 /** Which facts a bot's own reads (fact.poll) show: every fact in a
  *  guest-sourced wake; in any other, only facts known clean of a guest's
- *  words (WakeTaint.factGuest). Read again for each read. */
+ *  words (WakeTaint.factGuest). In either, none about a signed-in task
+ *  another bot started (WakeTaint.signedInTaskOfAnother). Read again for
+ *  each read. */
 export function factVisibleToBot(botId: string): (f: Fact) => boolean {
   const c = current;
   // No tracker where one is expected (its module not started, or failed):
@@ -688,10 +710,20 @@ export function factVisibleToBot(botId: string): (f: Fact) => boolean {
   // boundary, whatever its wake (a bot that cannot be found sees none).
   const ws = c.taint.botWorkspace(botId);
   const island = (f: Fact): boolean => ws !== null && factInIsland(ws, f);
-  if (guestOfRunningWake(botId) === true) return island;
+  // What a signed-in task's worker read reaches only the bot that started it.
+  const mine = (f: Fact): boolean => !c.taint.signedInTaskOfAnother(f, botId);
+  if (guestOfRunningWake(botId) === true) {
+    return (f) => {
+      try {
+        return island(f) && mine(f);
+      } catch {
+        return false;
+      }
+    };
+  }
   return (f) => {
     try {
-      return island(f) && c.taint.factGuest(f) === false;
+      return island(f) && mine(f) && c.taint.factGuest(f) === false;
     } catch {
       return false;
     }
