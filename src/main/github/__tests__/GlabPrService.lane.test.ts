@@ -16,6 +16,7 @@ import {
   glabMergeFailure,
   glabMergeState,
   glabSquashSubject,
+  glabMrRef,
   glabProjectOfKey,
   mapGlabCiRollup,
   mapGlabLaneFacts,
@@ -478,6 +479,14 @@ describe('GitLab on a port or under a sub-path (glab\'s host entry)', () => {
       .toEqual({ host: 'gitlab.example.com', path: 'gitlab/platform/api', web: 'https://gitlab.example.com/gitlab/gitlab/platform/api' });
     expect(glabProjectOfKey('gitlab.example.com/group/proj', entries(['gitlab.example.com:8443', ''])))
       .toEqual({ host: 'gitlab.example.com', path: 'group/proj', web: 'https://gitlab.example.com:8443/group/proj' });
+  });
+
+  it('an api_host port is kept on the MR links: the merge\'s, and the fallback when web_url is missing', async () => {
+    forge.hosts = { gh: new Set(), glab: new Map([['gitlab.example.com', { name: 'gitlab.example.com', subfolder: '', apiHost: 'gitlab.example.com:8443' }]]) };
+    const { svc } = withEnv((args) => (graphqlCall(args) ? mrAnswer() : { state: 'merged' }));
+    expect(await svc.merge('/repo', KEY, 7, { expectHead: HEAD, subject: '', body: '' }))
+      .toEqual({ ok: true, url: 'https://gitlab.example.com:8443/group/sub/proj/-/merge_requests/7' });
+    expect(glabMrRef({ iid: 7 }, glabProjectOfKey(KEY)!)).toEqual({ iid: 7, url: 'https://gitlab.example.com:8443/group/sub/proj/-/merge_requests/7' });
   });
 
   it('the sign-in hint names the host:port entry, so following it does not add a plain entry on 443', async () => {

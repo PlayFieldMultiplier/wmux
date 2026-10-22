@@ -79,6 +79,21 @@ describe('sameRepoKey', () => {
   });
 });
 
+describe('a port only gh or glab\'s api_host names', () => {
+  it('a gh host with a port counts for the remote\'s port-less host when it is the only one', () => {
+    const one = hostsOf('code.example:8443:\n    user: alice\n', '');
+    expect(configuredForge('code.example', one)).toBe('github');
+    const two = hostsOf('code.example:8443:\n    user: a\ncode.example:9443:\n    user: b\n', '');
+    expect(configuredForge('code.example', two)).toBeNull();
+  });
+
+  it('keeps an api_host that names a port, and nothing else of it', () => {
+    const glab = parseGlabHosts('hosts:\n    gitlab.example.com:\n        api_host: GitLab.Example.com:8443\n    plain.example.com:\n        api_host: plain.example.com\n');
+    expect(glab.get('gitlab.example.com')).toEqual({ name: 'gitlab.example.com', subfolder: '', apiHost: 'gitlab.example.com:8443' });
+    expect(glab.get('plain.example.com')).toEqual({ name: 'plain.example.com', subfolder: '' });
+  });
+});
+
 describe('configuredForge', () => {
   it('gh only → github, glab only → gitlab, neither or both → no signal', () => {
     const hosts = hostsOf(GH_HOSTS, GLAB_CONFIG);

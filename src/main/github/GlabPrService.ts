@@ -229,7 +229,8 @@ export function glabProjectOfKey(key: string, hosts: ForgeHosts = forgeHosts()):
   const host = parts[0];
   const entry = glabEntryFor(host, hosts);
   const path = parts.slice(1).join('/');
-  const origin = entry?.name.includes(':') ? entry.name : host;
+  // The page's port: a `host:port` entry's, else an `api_host` on this host's.
+  const origin = entry?.name.includes(':') ? entry.name : entry?.apiHost?.startsWith(`${host}:`) ? entry.apiHost : host;
   return { host, path, web: `https://${origin}/${entry?.subfolder ? `${entry.subfolder}/` : ''}${path}` };
 }
 

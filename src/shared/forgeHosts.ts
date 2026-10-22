@@ -12,7 +12,7 @@
 // (`host:8443`, as `glab auth login --hostname host:8443` writes it) and a
 // `subfolder` for GitLab served under a sub-path (`https://host/gitlab/`).
 //
-// Only host names and `subfolder` are kept; the files also hold tokens, so
+// Only host names, `subfolder` and a ported `api_host` are kept; the files also hold tokens, so
 // nothing read here is ever logged or echoed. Reads are synchronous and
 // cached (a stat at most every CHECK_MS, a parse only when the file
 // changed), so callers on hot paths stay cheap. Any read or parse failure is
@@ -28,6 +28,8 @@ export interface GlabHostEntry {
   name: string;
   /** The sub-path GitLab is served under, slashes trimmed; '' at the root. */
   subfolder: string;
+  /** `api_host` when it names a port (`host:8443`), lowercased; absent otherwise. */
+  apiHost?: string;
 }
 
 export interface ForgeHosts {
@@ -71,7 +73,13 @@ export function parseGlabHosts(text: string): Map<string, GlabHostEntry> {
     if (!HOST_RE.test(name)) continue;
     const raw = rec(value)?.subfolder;
     const subfolder = typeof raw === 'string' ? raw.trim().replace(/^\/+|\/+$/g, '') : '';
-    out.set(name, { name, subfolder: /^[\w.-]+(?:\/[\w.-]+)*$/.test(subfolder) ? subfolder : '' });
+    const api = rec(value)?.api_host;
+    const apiHost = typeof api === 'string' ? api.trim().toLowerCase() : '';
+    out.set(name, {
+      name,
+      subfolder: /^[\w.-]+(?:\/[\w.-]+)*$/.test(subfolder) ? subfolder : '',
+      ...(HOST_RE.test(apiHost) && apiHost.includes(':') ? { apiHost } : {}),
+    });
   }
   return out;
 }
@@ -196,7 +204,9 @@ export function sameRepoKey(a: string, b: string, hosts: ForgeHosts = forgeHosts
  *  (the caller's name rule decides). Pure. */
 export function configuredForge(host: string, hosts: ForgeHosts): 'github' | 'gitlab' | null {
   const h = host.toLowerCase();
-  const gh = hosts.gh.has(h);
+  // A remote's host is port-less; gh lists a ported host as `host:port`
+  // (taken when it is the only one, as glabEntryFor does).
+  const gh = hosts.gh.has(h) || [...hosts.gh].filter((g) => g.startsWith(`${h}:`)).length === 1;
   const glab = glabEntryFor(h, hosts) !== null;
   return gh === glab ? null : gh ? 'github' : 'gitlab';
 }
