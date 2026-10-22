@@ -1243,6 +1243,8 @@ export default function SurfaceTabs({
         compact={usageLimitCompact}
         readOnly={readOnly}
         workspaceId={workspace.id}
+        paneId={paneId}
+        cwd={surfaces.find((sf) => sf.id === activeSurfaceId)?.cwd}
       />
       {supervision && (
         <span

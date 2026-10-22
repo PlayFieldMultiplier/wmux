@@ -2,10 +2,12 @@
 //
 // Pane-header chip for a pane held at its provider's usage limit. Lives in the
 // tab strip's flow (no new row, so the terminal never shrinks): clock glyph +
-// "Limit" + "resets 3:16 PM · 2h 4m", a Resume-at-reset toggle, Resume once the
-// reset passed, and a dismiss ×. Compact (narrow pane) = glyph + countdown.
-// Muted at rest; only the armed "Resuming at reset" label is warm, because it
-// means the system will act on its own.
+// "Limit" + "resets 3:16 PM · 2h 4m" as the button that opens the usage-limit
+// card (UsageLimitCard: resume automatically, another account, another
+// agent), Resume once the reset passed, and a dismiss ×. Compact (narrow
+// pane) = glyph + countdown. Muted at rest; only the armed state is warm,
+// because it means the system will act on its own. The card opens by itself
+// once per limit when the pane is the one in front.
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
@@ -14,8 +16,8 @@ import { updateUsageLimit } from '../../hooks/useUsageLimitBridge';
 import { IconClock, IconX } from '../icons';
 import { FOCUS_RING } from '../focusRing';
 import { usageLimitStatusText, usageLimitView } from './usageLimitPresentation';
-import PaneActionsMenu from './PaneActionsMenu';
 import { usePaneContinueOnAccount } from './usePaneContinueOnAccount';
+import UsageLimitCard from './UsageLimitCard';
 
 /** Re-render every 30s while `active`, so countdowns stay current. */
 export function useUsageLimitNow(active: boolean): number {
@@ -31,7 +33,18 @@ export function useUsageLimitNow(active: boolean): number {
 
 const TEXT_BTN = `ui-icon-btn ${FOCUS_RING} h-6 px-1.5 shrink-0 text-[11px] leading-none whitespace-nowrap`;
 
-export default function UsageLimitChip({ ptyId, compact, readOnly = false, workspaceId }: { ptyId: string | undefined; compact: boolean; readOnly?: boolean; workspaceId?: string }) {
+/** Limits whose card already opened by itself (`ptyId:detectedAt`). */
+const autoOpened = new Set<string>();
+
+export default function UsageLimitChip({ ptyId, compact, readOnly = false, workspaceId, paneId, cwd }: {
+  ptyId: string | undefined;
+  compact: boolean;
+  readOnly?: boolean;
+  workspaceId?: string;
+  /** The pane the chip is in: "Continue in another agent" opens its tab here. */
+  paneId?: string;
+  cwd?: string;
+}) {
   const t = useT();
   const limit = useStore((s) => (ptyId ? s.usageLimits[ptyId] : undefined));
   const now = useUsageLimitNow(!!limit);
@@ -39,13 +52,35 @@ export default function UsageLimitChip({ ptyId, compact, readOnly = false, works
   const continueAccount = usePaneContinueOnAccount({ ptyId, allowed: !!limit && !readOnly, workspaceId });
   const reloadContinueAccount = continueAccount.reload;
   useEffect(() => { reloadContinueAccount(); }, [reloadContinueAccount]);
-  const continueBtnRef = useRef<HTMLButtonElement>(null);
-  const [continueAnchor, setContinueAnchor] = useState<{ top: number; left: number; right: number; bottom: number } | null>(null);
+  const cardBtnRef = useRef<HTMLButtonElement>(null);
+  const [cardAnchor, setCardAnchor] = useState<{ top: number; left: number; right: number; bottom: number } | null>(null);
+  const canOpenCard = !readOnly && !!workspaceId && !!paneId;
+  const inFront = useStore((s) => !!paneId && s.activeWorkspaceId === workspaceId
+    && s.workspaces.find((w) => w.id === workspaceId)?.activePaneId === paneId);
+  const limitKey = limit && ptyId ? `${ptyId}:${limit.detectedAt}` : null;
+  useEffect(() => {
+    if (!limitKey || !canOpenCard || !inFront || autoOpened.has(limitKey) || !cardBtnRef.current) return;
+    autoOpened.add(limitKey);
+    setCardAnchor(cardBtnRef.current.getBoundingClientRect());
+  }, [limitKey, canOpenCard, inFront]);
   if (!limit || !ptyId) return null;
 
   const view = usageLimitView(limit, now, getLocale());
   const status = usageLimitStatusText(view, t);
   const title = [t('usageLimit.title'), status, limit.message].filter(Boolean).join('\n');
+  const label = (
+    <>
+      <span className="shrink-0 flex" aria-hidden="true" style={view.armed ? { color: 'var(--accent)' } : undefined}><IconClock size={12} /></span>
+      {compact ? (
+        <span className="shrink-0 tabular-nums" aria-hidden="true">{view.duration ?? t('usageLimit.label')}</span>
+      ) : (
+        <>
+          <span className="shrink-0 text-[var(--text-sub)]" aria-hidden="true">{t('usageLimit.label')}</span>
+          <span className="truncate tabular-nums" aria-hidden="true">{status}</span>
+        </>
+      )}
+    </>
+  );
 
   return (
     <span
@@ -54,29 +89,25 @@ export default function UsageLimitChip({ ptyId, compact, readOnly = false, works
       className="shrink min-w-0 overflow-hidden flex items-center gap-0.5 text-[11px] text-[var(--text-muted)] select-none"
       onClick={(e) => e.stopPropagation()}
     >
-      <span className="flex items-center gap-1 min-w-0 px-1" title={title} aria-label={title} role="img">
-        <span className="shrink-0 flex" aria-hidden="true"><IconClock size={12} /></span>
-        {compact ? (
-          <span className="shrink-0 tabular-nums" aria-hidden="true">{view.duration ?? t('usageLimit.label')}</span>
-        ) : (
-          <>
-            <span className="shrink-0 text-[var(--text-sub)]" aria-hidden="true">{t('usageLimit.label')}</span>
-            <span className="truncate tabular-nums" aria-hidden="true">{status}</span>
-          </>
-        )}
-      </span>
-      {!compact && view.canArm && (
+      {canOpenCard ? (
         <button
+          ref={cardBtnRef}
           type="button"
-          className={TEXT_BTN}
-          aria-pressed={view.armed}
-          style={view.armed ? { color: 'var(--accent)' } : undefined}
-          title={view.armed ? t('usageLimit.cancelResumeTitle') : t('usageLimit.resumeAtResetTitle')}
-          onClick={() => { void updateUsageLimit(ptyId, { autoResume: !view.armed }); }}
-          data-usage-limit-action="arm"
+          className={`${FOCUS_RING} flex items-center gap-1 min-w-0 px-1 h-6 rounded-[var(--chip-radius)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)]`}
+          title={title}
+          aria-label={`${t('usageLimit.openCard')}: ${title}`}
+          aria-haspopup="dialog"
+          aria-expanded={!!cardAnchor}
+          onClick={(e) => {
+            if (cardAnchor) { setCardAnchor(null); return; }
+            setCardAnchor(e.currentTarget.getBoundingClientRect());
+          }}
+          data-usage-limit-action="card"
         >
-          {view.armed ? t('usageLimit.resumingAtReset') : t('usageLimit.resumeAtReset')}
+          {label}
         </button>
+      ) : (
+        <span className="flex items-center gap-1 min-w-0 px-1" title={title} aria-label={title} role="img">{label}</span>
       )}
       {!compact && view.canResumeNow && (
         <button
@@ -89,29 +120,17 @@ export default function UsageLimitChip({ ptyId, compact, readOnly = false, works
           {t('usageLimit.resume')}
         </button>
       )}
-      {!compact && continueAccount.enabled && (
-        <button
-          ref={continueBtnRef}
-          type="button"
-          className={TEXT_BTN}
-          title={t('usageLimit.continueOnTitle')}
-          aria-haspopup="menu"
-          aria-expanded={!!continueAnchor}
-          onClick={(e) => {
-            if (continueAnchor) { setContinueAnchor(null); return; }
-            setContinueAnchor(e.currentTarget.getBoundingClientRect());
-          }}
-          data-usage-limit-action="continue-on"
-        >
-          {t('usageLimit.continueOn')}
-        </button>
-      )}
-      {continueAnchor && (
-        <PaneActionsMenu
-          anchor={continueAnchor}
-          triggerRef={continueBtnRef}
-          items={continueAccount.subItems}
-          onClose={() => setContinueAnchor(null)}
+      {cardAnchor && canOpenCard && (
+        <UsageLimitCard
+          ptyId={ptyId}
+          workspaceId={workspaceId}
+          paneId={paneId}
+          {...(cwd ? { cwd } : {})}
+          now={now}
+          accountItems={continueAccount.enabled ? continueAccount.subItems : []}
+          anchor={cardAnchor}
+          triggerRef={cardBtnRef}
+          onClose={() => setCardAnchor(null)}
         />
       )}
       {!compact && (

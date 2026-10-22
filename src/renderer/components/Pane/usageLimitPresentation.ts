@@ -2,6 +2,7 @@
 // chip and the Fleet row so the two never word the same limit differently.
 import { formatResetClock, formatResetDuration, type PaneUsageLimit } from '../../../shared/usageLimit';
 import type { TranslationKey } from '../../i18n/locales/en';
+import { chooseByQuota, type QuotaVerdict } from '../../../shared/accountQuota';
 
 export type UsageLimitPhase = 'waiting' | 'unknown' | 'reset';
 
@@ -46,4 +47,23 @@ export function usageLimitFleetDetail(view: UsageLimitView, t: Translate): strin
   if (view.phase === 'reset') return t('usageLimit.fleetDetailReset');
   if (view.phase === 'unknown') return t('usageLimit.fleetDetailUnknown');
   return t('usageLimit.fleetDetail', { clock: view.clock ?? '', duration: view.duration ?? '' });
+}
+
+/**
+ * When every registered account of `vendor` is out of quota: the epoch ms
+ * the first one reopens, or null when none says when. Undefined while any
+ * account still has quota, or with no readings (switch-by-quota reads quota
+ * only while it is on). Pure.
+ */
+export function everyAccountOutUntil(
+  rows: readonly { accountId: string; vendor: string; verdict: QuotaVerdict }[],
+  vendor: string,
+  now: number,
+): number | null | undefined {
+  const own = rows.filter((r) => r.vendor === vendor);
+  if (own.length === 0) return undefined;
+  const choice = chooseByQuota(own.map((r) => ({ id: r.accountId, verdict: r.verdict, current: false })));
+  if (choice.kind !== 'hold') return undefined;
+  if (choice.availableAtMs === null) return null;
+  return choice.availableAtMs > now ? choice.availableAtMs : undefined;
 }
