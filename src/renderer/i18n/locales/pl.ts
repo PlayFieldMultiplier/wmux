@@ -4348,6 +4348,7 @@ export const pl = {
   'git.ship.fail.signing.helpText': "Git podpisuje każdy commit kluczem gpg lub ssh z user.signingkey, bo commit.gpgsign jest włączone. Sprawdź, czy klucz istnieje i czy hasło można podać bez terminala: hasło w pamięci podręcznej, graficzny pinentry dla gpg-agent albo klucz załadowany do ssh-agent. Aby zobaczyć własny błąd narzędzia podpisującego, uruchom raz git commit -S w terminalu.",
   'git.ship.fail.protected': "Ta gałąź jest chroniona, więc nie można do niej wypychać bezpośrednio.",
   'git.ship.fail.protected.action': "Utwórz PR",
+  'git.ship.fail.protected.next': "W terminalu utwórz nową gałąź dla tych commitów, wypchnij ją, a potem utwórz PR.",
   'git.ship.fail.remote-ahead': "Zdalne repozytorium ma nowe zmiany. Najpierw je pobierz, potem wypchnij.",
   'git.ship.fail.remote-ahead.action': "Pobierz w terminalu",
   'git.ship.fail.auth': "Zdalne repozytorium odrzuciło klucz lub logowanie.",

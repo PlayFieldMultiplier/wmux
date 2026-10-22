@@ -103,16 +103,30 @@ describe('ShipButton failures', () => {
     expect(document.querySelector('[data-git-ship-signing-help]')?.textContent).toContain('commit.gpgsign');
   });
 
-  it('protected: Create a PR is the existing step, disabled with its reason while the commits are unpushed', async () => {
+  it('protected, PR step blocked: no dead Create a PR; the possible next step and the terminal', async () => {
     await pushFails({ ok: false, error: 'remote: GH006: Protected branch update failed', reason: 'protected' });
     expect(failure()?.textContent).toContain("This branch is protected, so you can't push to it directly.");
-    const b = fix('Create a PR');
-    expect(b.disabled).toBe(true);
-    expect(b.title).toBe('Push the new commits first');
+    expect(fix('Create a PR')).toBeNull();
+    expect(document.querySelector('[data-git-ship-next]')?.textContent).toBe('Make a new branch for these commits in the terminal, push it, then create a PR.');
+    act(() => fix('Go to terminal').click());
+    expect(show).toHaveBeenCalledTimes(1);
     // Git's own output stays one click away, folded.
     const raw = document.querySelector('[data-git-ship-raw]') as HTMLDetailsElement;
     expect(raw.open).toBe(false);
     expect(raw.textContent).toContain('GH006');
+  });
+
+  it('protected, PR step open (the commits reached the remote meanwhile): Create a PR opens the PR dialog', async () => {
+    await pushFails({ ok: false, error: 'GH006', reason: 'protected' });
+    // A re-read finds nothing ahead any more, so Create PR can run.
+    status = { ...base };
+    act(() => root.render(createElement(ShipButton, { repoPath: '/r', mergeActive: false, refreshKey: 1 })));
+    await flush();
+    expect(document.querySelector('[data-git-ship-next]')).toBeNull();
+    expect(fix('Go to terminal')).toBeNull();
+    act(() => fix('Create a PR').click());
+    await flush();
+    expect(document.querySelector('[data-testid="git-ship-createPr"]')).not.toBeNull();
   });
 
   it('remote ahead: the button opens the terminal to pull', async () => {

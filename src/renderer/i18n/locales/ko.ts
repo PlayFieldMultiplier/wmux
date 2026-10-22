@@ -3753,6 +3753,7 @@ export const ko = {
   'git.ship.fail.signing.helpText': "commit.gpgsign이 켜져 있어 Git이 user.signingkey의 gpg 또는 ssh 키로 커밋마다 서명합니다. 키가 있는지, 그리고 터미널 없이 암호를 받을 수 있는지 확인하세요: 캐시된 암호, gpg-agent의 그래픽 pinentry, 또는 ssh-agent에 올린 키. 서명 도구의 오류를 직접 보려면 터미널에서 git commit -S를 한 번 실행하세요.",
   'git.ship.fail.protected': "보호된 브랜치라 직접 푸시할 수 없습니다.",
   'git.ship.fail.protected.action': "PR 만들기",
+  'git.ship.fail.protected.next': "터미널에서 이 커밋들로 새 브랜치를 만들어 푸시한 뒤 PR을 만드세요.",
   'git.ship.fail.remote-ahead': "원격에 새 변경이 있습니다. 먼저 받아온 뒤 푸시하세요.",
   'git.ship.fail.remote-ahead.action': "터미널에서 pull",
   'git.ship.fail.auth': "원격이 키나 로그인을 거부했습니다.",

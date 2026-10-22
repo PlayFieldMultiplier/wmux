@@ -102,7 +102,11 @@ function ShipFailure({ action, res, t, onUnsignedCommit, onCreatePr, createPrBlo
       </>
     );
   } else if (reason === 'protected') {
-    actions = button(t('git.ship.fail.protected.action'), onCreatePr, { disabled: !!createPrBlocked, title: createPrBlocked ?? undefined });
+    // Create a PR only when that step can run; otherwise the step that can:
+    // a new branch for these commits, made in the terminal.
+    actions = createPrBlocked
+      ? button(t('git.goTerminal'), () => showWorkspaces(useStore.getState()))
+      : button(t('git.ship.fail.protected.action'), onCreatePr);
   } else if (reason === 'remote-ahead') {
     actions = button(t('git.ship.fail.remote-ahead.action'), () => showWorkspaces(useStore.getState()));
   } else if (reason === 'auth') {
@@ -116,6 +120,9 @@ function ShipFailure({ action, res, t, onUnsignedCommit, onCreatePr, createPrBlo
   return (
     <div className="mt-2" role="alert" data-git-ship-failure={reason ?? (res.secrets?.length || res.secretScanFailed ? 'secrets' : 'other')}>
       <p className="wmux-git-ship-error" style={{ marginTop: 0 }}>{line}</p>
+      {reason === 'protected' && createPrBlocked && (
+        <p className="mt-1 text-[12px] text-[var(--text-muted)]" data-git-ship-next>{t('git.ship.fail.protected.next')}</p>
+      )}
       {actions && <div className="mt-2 flex flex-wrap gap-2">{actions}</div>}
       {help && <p className="mt-2 text-[12px] text-[var(--text-muted)]" data-git-ship-signing-help>{t('git.ship.fail.signing.helpText')}</p>}
       {raw && (

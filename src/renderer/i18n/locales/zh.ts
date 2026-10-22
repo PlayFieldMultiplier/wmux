@@ -3766,6 +3766,7 @@ export const zh = {
   'git.ship.fail.signing.helpText': "commit.gpgsign 已开启，Git 会用 user.signingkey 中的 gpg 或 ssh 密钥为每次提交签名。请确认该密钥存在，并且无需终端即可提供密码：已缓存的密码、gpg-agent 的图形 pinentry，或已加载到 ssh-agent 的密钥。要查看签名工具自己的错误，请在终端中运行一次 git commit -S。",
   'git.ship.fail.protected': "此分支受保护，无法直接推送。",
   'git.ship.fail.protected.action': "创建 PR",
+  'git.ship.fail.protected.next': "请在终端中为这些提交新建分支并推送，然后再创建 PR。",
   'git.ship.fail.remote-ahead': "远程有新的更改。请先拉取，再推送。",
   'git.ship.fail.remote-ahead.action': "在终端中拉取",
   'git.ship.fail.auth': "远程拒绝了密钥或登录。",

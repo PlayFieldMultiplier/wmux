@@ -4373,6 +4373,7 @@ export const en = {
   'git.ship.fail.signing.helpText': "Git signs each commit with the gpg or ssh key in user.signingkey because commit.gpgsign is on. Check that the key exists and that its passphrase can be given without a terminal: a cached passphrase, a graphical pinentry for gpg-agent, or the key loaded in ssh-agent. To see the signer's own error, run git commit -S once in a terminal.",
   'git.ship.fail.protected': "This branch is protected, so you can't push to it directly.",
   'git.ship.fail.protected.action': "Create a PR",
+  'git.ship.fail.protected.next': "Make a new branch for these commits in the terminal, push it, then create a PR.",
   'git.ship.fail.remote-ahead': "The remote has new changes. Pull them first, then push.",
   'git.ship.fail.remote-ahead.action': "Pull in the terminal",
   'git.ship.fail.auth': "The remote refused the key or sign-in.",
