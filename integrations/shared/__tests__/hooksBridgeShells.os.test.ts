@@ -286,10 +286,10 @@ describe.skipIf(!have(CMD) || WINDOWS_TMP_HAS_SPACE)('kiro under its own Windows
     it(`the command the Kiro config builder writes survives it (${name})`, async () => {
       const ptyId = `kiro-rust-builder-${name}`;
       const command = buildKiroAgentConfig(scripts[name], home).hooks.stop[0].command;
-      expect(command).not.toContain('"');
       const result = await runAsKiro(command, ptyId);
       expect(result).toMatchObject({ code: 0, stdout: '' });
       expect(signalFor(ptyId)?.params).toMatchObject({ kind: 'agent.stop', agent: 'kiro', ptyId });
+      expect(command).not.toContain('"');
     }, 60_000);
   }
 });
