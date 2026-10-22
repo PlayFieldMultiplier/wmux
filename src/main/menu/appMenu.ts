@@ -44,7 +44,7 @@ import { quitAndStopSessions, type QuitAndStopCallbacks } from '../quit/quitAndS
  * `appMenu.template.os.test.ts` fails when package.json's major drifts from this.
  * Re-probe with `npx electron scripts/probe-menu-role-accelerators.js`.
  */
-export const PROBED_ELECTRON_MAJOR = 41;
+export const PROBED_ELECTRON_MAJOR = 42;
 
 /**
  * Accelerators Electron attaches to a role when the template does not spell one
@@ -58,7 +58,7 @@ export const PROBED_ELECTRON_MAJOR = 41;
  * the roles that genuinely differ. Not hand-copied from Electron's source —
  * read out of the running Electron 41 build by the probe script above, which is
  * how `quit` was caught: it has NO accelerator on Windows (Alt+F4 is the OS
- * gesture), only on Linux.
+ * gesture), only on Linux. Re-probed on Electron 42.11.3 (win32): no change.
  */
 type RoleAccelerator = { all?: string; darwin?: string; win32?: string; linux?: string };
 
