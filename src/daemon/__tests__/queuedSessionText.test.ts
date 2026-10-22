@@ -4,7 +4,7 @@
 // identity: a supervised restart re-creates a dead pane under the same id. A
 // read must answer for the session it was asked about, never for the one that
 // took its id while it waited.
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { RingBuffer } from '../RingBuffer';
 import { enqueueSnapshotJob, type TextSnapshotOutcome } from '../HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot, type TextReadSession, type TextReadSessions } from '../queuedSessionText';
@@ -15,9 +15,10 @@ function session(text: string): TextReadSession {
   return { meta: { cols: 80, rows: 24 }, ringBuffer, bridge: { outputModes: null } };
 }
 
-function sessionTable(): TextReadSessions & { map: Map<string, TextReadSession> } {
+function sessionTable(): TextReadSessions & { map: Map<string, TextReadSession>; lookups: number } {
   const map = new Map<string, TextReadSession>();
-  return { map, getSession: (id) => map.get(id) };
+  const table = { map, lookups: 0, getSession: (id: string) => { table.lookups++; return map.get(id); } };
+  return table;
 }
 
 /** Another pane's snapshot holds the queue until `release`. */
@@ -78,7 +79,6 @@ describe('queued screen reads', () => {
     const sessions = sessionTable();
     const pane = session('live pane screen');
     sessions.map.set('pane-a', pane);
-    const readAll = vi.spyOn(pane.ringBuffer, 'readAll');
     const queue = holdQueue();
     const first = queuedScreenText(sessions, 'pane-a');
     const second = queuedScreenText(sessions, 'pane-a');
@@ -86,12 +86,14 @@ describe('queued screen reads', () => {
     const secondText = queuedTextSnapshot(sessions, 'pane-a', 100);
     expect(second).toBe(first);
     expect(secondText).toBe(firstText);
+    const lookupsBeforeTurn = sessions.lookups;
     queue.release();
     await queue.done;
 
     expect(lines(await first)).toEqual(['live pane screen']);
     expect(lines(await firstText)).toEqual(['live pane screen']);
-    // One ring read per kind of read (screen, text), not one per caller.
-    expect(readAll).toHaveBeenCalledTimes(2);
+    // One job ran per kind of read (screen, text), not one per caller: each
+    // job looks its session up once at its turn.
+    expect(sessions.lookups - lookupsBeforeTurn).toBe(2);
   });
 });
