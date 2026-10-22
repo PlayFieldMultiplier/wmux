@@ -53,7 +53,7 @@ function rig(over: Partial<MorningPorts> = {}) {
     rooms: () => writer,
     trust,
     repoKeyOf: async (p) => (p === '/repo/a' ? 'github.com/o/a' : null),
-    corrections: () => [{ key: 'lead:missing-test', factIds: ['f1', 'f2', 'f3'], workspaceIds: ['ws-a'], notes: [] }],
+    corrections: () => [{ key: 'lead:missing-test', count: 3, factIds: ['f1', 'f2', 'f3'], workspaceIds: ['ws-a'], notes: [] }],
     factoryDir: path.join(dir, 'factory'),
     now: () => NOW,
     ...over,

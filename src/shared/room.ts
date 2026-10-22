@@ -70,6 +70,14 @@ export function dmThreadBot(threadId: unknown): string | null {
   return BOT_ID_RE.test(botId) ? botId : null;
 }
 
+/** Whether `threadId` is another bot's 1:1 with the owner than `botId`'s:
+ *  what the owner says there reaches no other bot (its room reads, its
+ *  facts, its wake prompts). */
+export function inAnotherBotsDm(threadId: unknown, botId: string): boolean {
+  const owner = dmThreadBot(threadId);
+  return owner !== null && owner !== botId;
+}
+
 /** A group chat's own thread (an owner-made group; a group migrated from
  *  a workspace room keeps `general`, shared/botGroup.ts). */
 export function groupThreadId(groupId: string): ThreadId {

@@ -198,7 +198,7 @@ export async function buildMorningData(ports: MorningPorts): Promise<MorningData
   let gardener: MorningData['gardener'] = [];
   try {
     gardener = (ports.corrections?.() ?? []).slice(0, L.CORRECTION_GROUPS)
-      .map((g) => ({ key: g.key, count: g.factIds.length, factIds: g.factIds.slice(0, 5) }));
+      .map((g) => ({ key: g.key, count: g.count, factIds: g.factIds.slice(0, 5) }));
   } catch {
     gardener = [];
   }

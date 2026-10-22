@@ -40,7 +40,7 @@ import { decideBotCommand, type BotCommandRule } from './botCommandAllow';
 import { BOT_COMMAND_REVIEWER_LIMITS, reviewerRefusal, type BotCommandReviewer, type ReviewCode, type ReviewFolder, type ReviewOutcome } from './botCommandReviewer';
 import { checkBotFolderPath, type BotFolderDeps } from './botFolderPath';
 import { redactStoredSecrets } from './secretRedaction';
-import { conversationMarks, signedInRefusal } from './conversationMarks';
+import { conversationMarks, conversationSignedIn, conversationTainted, signedInRefusal } from './conversationMarks';
 
 /** The built-in tools a bot that runs commands holds besides Read. */
 export const BOT_EXEC_TOOLS: readonly string[] = ['Bash', 'Write', 'Edit'];
@@ -93,9 +93,10 @@ const SWITCHED_OFF = 'the owner switched this bot\'s commands off';
 /** Why an unattended call is refused: a conversation that holds data from a
  *  signed-in task, or outside text, says so. */
 function unattendedReason(botId: string): string {
-  const m = conversationMarks(botId);
-  if (m?.signedIn) return signedInRefusal('run commands or edit files', botId);
-  if (m?.tainted) return 'this conversation has taken in outside text, so commands and file edits do not run in it';
+  // A live conversation's marks, the mark held for its running wake included.
+  const live = conversationMarks(botId) !== null;
+  if (live && conversationSignedIn(botId)) return signedInRefusal('run commands or edit files', botId);
+  if (live && conversationTainted(botId)) return 'this conversation has taken in outside text, so commands and file edits do not run in it';
   return UNATTENDED;
 }
 

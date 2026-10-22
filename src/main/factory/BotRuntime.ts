@@ -48,7 +48,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BOT_TAKES_NO_GUEST_WAKES, botEngineGatesTools, type BotBinding, type BotProfile, type BotQuota, type BotStatus, type BotStatusUsage } from '../../shared/bot';
 import type { Fact } from '../../shared/facts';
-import type { RoomCard, ThreadId } from '../../shared/room';
+import { inAnotherBotsDm, type RoomCard, type ThreadId } from '../../shared/room';
 import { WAKE_LIMITS, type WakeItem, type WakeReason } from '../../shared/wake';
 import type { BrainAdapter, BrainEvent, BrainImage } from '../deck/BrainAdapter';
 import { USAGE_LIMIT_UNKNOWN_HOLD_MS, findClaudeUsageLimitNotice, parseUsageLimitReset, usageLimitHoldEndsAt } from '../../shared/usageLimit';
@@ -1165,7 +1165,9 @@ export class BotRuntime {
         if (tail) thread = { threadId: item.threadId, cards: tail.cards.slice(-WAKE_THREAD_TAIL_CARDS), truncated: tail.truncated, ...(tail.hiddenGuestCards ? { hiddenGuestCards: tail.hiddenGuestCards } : {}) };
       }
       if (r.kind === 'facts') {
-        facts = (this.deps.resolveFacts ?? ports.resolveFacts)?.(r.factIds) ?? [];
+        // What the owner said in another bot's 1:1 reaches no other bot's
+        // prompt, whichever path queued the wake (a trigger, the gardener).
+        facts = ((this.deps.resolveFacts ?? ports.resolveFacts)?.(r.factIds) ?? []).filter((f) => !inAnotherBotsDm(f.payload?.threadId, profile.id));
         const taskIds = r.factIds.map(taskIdOfFactId).filter((t): t is string => t !== null);
         if (taskIds.length > 0) tasks = this.deps.resolveTasks?.(taskIds) ?? [];
         const parentId = ports.taskHandoff?.(item);

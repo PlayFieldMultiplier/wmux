@@ -28,12 +28,12 @@ const ALL = [MOA, LEAD, MAINT_A, MAINT_HQ];
 const directory = (bots: BotProfile[] = ALL) => ({ listEnabled: () => bots.filter((b) => b.enabled), get: (id: string) => bots.find((b) => b.id === id) ?? null });
 
 let n = 0;
-function correction(over: { category?: string; botId?: string; note?: string; at?: number } = {}): FactDraft {
+function correction(over: { category?: string; botId?: string; note?: string; at?: number; threadId?: string } = {}): FactDraft {
   n += 1;
   return {
     kind: 'human.correction', at: over.at ?? NOW - 1000, workspaceId: 'ws-a', actor: { kind: 'human' },
     ref: { botId: over.botId ?? LEAD.id, messageId: `m-${n}` },
-    payload: { ...(over.category ? { category: over.category } : {}), ...(over.note ? { note: over.note } : {}) },
+    payload: { ...(over.category ? { category: over.category } : {}), ...(over.note ? { note: over.note } : {}), ...(over.threadId ? { threadId: over.threadId } : {}) },
   };
 }
 
@@ -62,7 +62,7 @@ describe('gardener grouping', () => {
     const facts = [1, 2, 3].map((i) => ({ id: `f${i}`, seq: i, dedupeKey: `k${i}`, ...correction({ category: 'scope-creep', note: `n${i}` }) }) as Fact)
       .concat([{ id: 'x', seq: 9, dedupeKey: 'x', ...correction({ category: 'other' }) } as Fact]);
     expect(correctionGroups(facts, directory())).toEqual([
-      { key: 'lead:scope-creep', factIds: ['f1', 'f2', 'f3'], workspaceIds: ['ws-a'], notes: ['n1', 'n2', 'n3'] },
+      { key: 'lead:scope-creep', count: 3, factIds: ['f1', 'f2', 'f3'], workspaceIds: ['ws-a'], notes: ['n1', 'n2', 'n3'] },
     ]);
   });
 });
@@ -84,6 +84,22 @@ describe('gardener wakes', () => {
     expect(call.reason.factIds).toHaveLength(3);
     r.log.append(correction({ category: 'missing-test' }));
     expect(r.wake).toHaveBeenCalledTimes(1);
+  });
+
+  it('corrections made in another bot\'s 1:1 count toward the pattern, but the Coordinator\'s wake carries the pattern, never their words', () => {
+    const r = rig();
+    r.g.start();
+    const dm = `dm:${LEAD.id}`;
+    r.log.append(correction({ category: 'question-override', threadId: dm, note: 'OWNER WORDS ONE' }));
+    r.log.append(correction({ category: 'question-override', threadId: dm, note: 'OWNER WORDS TWO' }));
+    const general = r.log.append(correction({ category: 'question-override', note: 'said in general' }));
+    expect(r.wake).toHaveBeenCalledTimes(1);
+    const call = r.wake.mock.calls[0][0];
+    expect(call.reason.factIds).toEqual([general?.id]);
+    expect(r.note).toHaveBeenCalledWith('ws-hq', call.threadId, 'Correction pattern lead:question-override', expect.stringContaining('3 corrections'));
+    expect(JSON.stringify(r.note.mock.calls)).not.toContain('OWNER WORDS');
+    const [group] = r.g.groups();
+    expect(group).toMatchObject({ key: 'lead:question-override', count: 3, factIds: [general?.id], notes: ['said in general'] });
   });
 
   it('a proposal survives a restart: the same pattern is not proposed again', async () => {

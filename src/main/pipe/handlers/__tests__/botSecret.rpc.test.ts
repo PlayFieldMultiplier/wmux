@@ -106,12 +106,12 @@ describe('secret_request', () => {
     const other = dmThreadId('bot-ffffffff');
     expect(handleSecretRequest({ name: 'NPM_TOKEN', label: 'l', why: 'w', threadId: other }, botCtx, deps)).toMatchObject({ ok: false, code: 'invalid', message: expect.stringContaining('another bot\'s 1:1') });
     expect(handleLoginRequest({ service: 'github', why: 'w', threadId: other }, botCtx, deps)).toMatchObject({ ok: false, code: 'invalid', message: expect.stringContaining('another bot\'s 1:1') });
-    const signedIn = { ...deps, signedIn: () => true };
-    for (const url of ['https://login.example.com/?q=Q3-revenue', 'https://login.example.com/#Q3-revenue']) {
+    const signedIn = { ...deps, signedIn: () => true, connectionHosts: () => ['login.example.com'] };
+    for (const url of ['https://login.example.com/?q=Q3-revenue', 'https://login.example.com/#Q3-revenue', 'https://login.example.com/Q3-revenue', 'https://q3-revenue.login.example.com/', 'https://elsewhere.example.net/']) {
       expect(handleLoginRequest({ service: 'website', url, why: 'w' }, botCtx, signedIn), url)
-        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('query or fragment') });
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('bare address of one of your connections') });
     }
-    expect(handleLoginRequest({ service: 'website', url: 'https://login.example.com/signin', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: true, threadId: dmThreadId(BOT.botId) });
+    expect(handleLoginRequest({ service: 'website', url: 'https://login.example.com/', why: 'w' }, botCtx, signedIn)).toMatchObject({ ok: true, threadId: dmThreadId(BOT.botId) });
     expect(handleLoginRequest({ service: 'website', url: 'https://login.example.com/?next=/home', why: 'w' }, botCtx, deps)).toMatchObject({ ok: true });
     expect(writer.read('ws-1', {}).cards).toHaveLength(2);
   });

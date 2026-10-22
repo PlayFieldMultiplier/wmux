@@ -324,6 +324,12 @@ export function resolveFactsWhere(log: unknown, match: (f: Fact) => boolean, lim
   }
 }
 
+/** The room cards a wake's context reads, as bot `dmReader` sees them:
+ *  another bot's 1:1 cards are left out. */
+export function wakeRoomCards(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId | null, limit: number, sinceSeq: number | undefined, dmReader: string): RoomCard[] {
+  return writer?.read(workspaceId, { ...(threadId ? { threadId } : {}), limit, ...(sinceSeq !== undefined ? { sinceSeq } : {}), dmReader }).cards ?? [];
+}
+
 /** The newest `n` cards of a thread, oldest first, and whether older ones exist. */
 export function threadTail(writer: RoomWriter | null, workspaceId: string, threadId: ThreadId, n: number, opts: { guests?: boolean; dmReader?: string } = {}): { cards: RoomCard[]; truncated: boolean; hiddenGuestCards: number } | null {
   if (!writer) return null;
@@ -804,10 +810,8 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
   });
   setFactoryRoomPorts(roomPorts);
 
-  const contextPorts = (): WakeContextPorts => ({
-    cards: (workspaceId, threadId, limit, sinceSeq) => getRoomWriter()?.read(workspaceId, {
-      ...(threadId ? { threadId } : {}), limit, ...(sinceSeq !== undefined ? { sinceSeq } : {}),
-    }).cards ?? [],
+  const contextPorts = (dmReader: string): WakeContextPorts => ({
+    cards: (workspaceId, threadId, limit, sinceSeq) => wakeRoomCards(getRoomWriter(), workspaceId, threadId, limit, sinceSeq, dmReader),
     findCard: (workspaceId, match) => getRoomWriter()?.find(workspaceId, match) ?? null,
     approvals: (workspaceId) => getApprovalService()?.listForOperator(workspaceId) ?? [],
     botName: (botId) => getBotDirectory()?.get(botId)?.name || null,
@@ -820,7 +824,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     taskHandoff: (item) => taskWakeHandoff(item.reason, (id) => getTaskLedger().get(id)),
     readThreadTail: (workspaceId, threadId, n, opts) => threadTail(getRoomWriter(), workspaceId, threadId, n, opts),
     wakeGuest: (item) => getWakeTaint()?.wakeGuest(item) ?? 'unknown',
-    wakeContext: (profile, item) => wakeContext(contextPorts(), profile, item),
+    wakeContext: (profile, item) => wakeContext(contextPorts(profile.id), profile, item),
     wakeImages: (profile, item) => wakeImagesOf(getRoomWriter(), getRoomAttachmentStore(), profile, item),
     onTurnDone: (profile, item) => getHandoffRouter()?.closeAnsweredInChat(profile.id, item),
     // The runtime starts before these modules (modules.ts): a wake restored

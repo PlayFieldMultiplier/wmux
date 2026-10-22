@@ -32,6 +32,7 @@ import {
   stopTaskWorker,
   taskWakeHandoff,
   threadTail,
+  wakeRoomCards,
   WorkerStopPendingError,
   wakeImagesOf,
 } from '../factoryWiring';
@@ -432,6 +433,15 @@ describe('runtime hooks', () => {
 });
 
 describe('lookups the runtime and rooms read', () => {
+  it('a wake\'s context reads the room as the waking bot: another bot\'s 1:1 is left out', () => {
+    const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms') });
+    writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'human', actor: { kind: 'human' }, title: 'only for A' });
+    writer.append({ workspaceId: 'ws-1', threadId: 'general', kind: 'human', actor: { kind: 'human' }, title: 'for everyone' });
+    expect(wakeRoomCards(writer, 'ws-1', null, 200, undefined, 'bot-0000bbbb').map((c) => c.title)).toEqual(['for everyone']);
+    expect(wakeRoomCards(writer, 'ws-1', 'dm:bot-0000aaaa', 200, undefined, 'bot-0000bbbb')).toEqual([]);
+    expect(wakeRoomCards(writer, 'ws-1', null, 200, undefined, 'bot-0000aaaa').map((c) => c.title)).toEqual(['only for A', 'for everyone']);
+  });
+
   it('a wake of another bot run in a bot\'s 1:1 gets none of its cards; the bot\'s own wake, and the owner, get them', () => {
     const writer = new RoomWriter({ dir: path.join(dir, 'factory', 'rooms') });
     writer.append({ workspaceId: 'ws-1', threadId: 'dm:bot-0000aaaa', kind: 'status', actor: { kind: 'bot', workspaceId: 'ws-1', botId: 'bot-0000aaaa' }, title: 'the page summary' });

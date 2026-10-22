@@ -965,6 +965,17 @@ describe('BotRuntime', () => {
     expect(r.adapters[0].prompts[0]).toContain('PR TITLE');
   });
 
+  it('a facts wake shows no fact from another bot\'s 1:1 with the owner (a Coordinator\'s correction trigger, the gardener), and its own 1:1\'s facts still', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const correction = (fid: string, threadId: string, note: string) => ({ id: fid, seq: 1, kind: 'human.correction' as const, at: 0, dedupeKey: fid, ref: { botId: 'bot-0000aaaa' }, payload: { category: 'question-override', threadId, note } });
+    setBotRuntimePorts({ resolveFacts: () => [correction('f-a', 'dm:bot-0000aaaa', 'THE OWNER SAID THIS TO A'), correction('f-own', `dm:${id}`, 'SAID TO THIS BOT')] });
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['f-a', 'f-own'], trigger: { kind: 'human.correction' } }, priority: 2 });
+    await settle();
+    expect(r.adapters[0].prompts[0]).not.toContain('THE OWNER SAID THIS TO A');
+    expect(r.adapters[0].prompts[0]).toContain('SAID TO THIS BOT');
+  });
+
   it('a threaded wake carries the last cards of its thread through the readThreadTail port', async () => {
     const r = rig();
     const id = createBot(r);

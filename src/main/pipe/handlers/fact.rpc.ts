@@ -39,7 +39,7 @@ import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { onPrVerdictRecorded } from '../../github/prVerdictStore';
 import { factVisibleToBot } from '../../factory/wakeTaint';
 import { factInIsland } from '../../factory/guestWorkspaces';
-import { dmThreadBot } from '../../../shared/room';
+import { inAnotherBotsDm } from '../../../shared/room';
 
 const ID_MAX = 256;
 
@@ -77,8 +77,7 @@ export function botReadsEverywhere(botId: string): boolean {
  *  message there, a notice or a result card's fact in it): that bot's alone.
  *  Pure. */
 export function ofAnothersDm(f: Pick<Fact, 'payload'>, botId: string): boolean {
-  const dmOf = dmThreadBot(f.payload?.threadId);
-  return dmOf !== null && dmOf !== botId;
+  return inAnotherBotsDm(f.payload?.threadId, botId);
 }
 
 export async function handleFactPoll(

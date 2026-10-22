@@ -91,6 +91,23 @@ export interface SecretHandlerDeps {
   /** Whether the bot's live conversation holds data from a signed-in task
    *  (none: yes). Default: conversationMarks.ts. */
   signedIn?: (botId: string) => boolean;
+  /** The hosts of the bot's own connections (their addresses). Default:
+   *  the connection library. */
+  connectionHosts?: (botId: string) => readonly string[];
+}
+
+function botConnectionHosts(botId: string): string[] {
+  try {
+    return (getConnectorStore()?.forBot(botId) ?? []).flatMap((c) => {
+      try {
+        return c.remote?.url ? [new URL(c.remote.url).hostname] : [];
+      } catch {
+        return [];
+      }
+    });
+  } catch {
+    return [];
+  }
 }
 
 /** A guest-sourced wake (or one of unknown provenance) asks the owner for
@@ -233,9 +250,14 @@ export function handleLoginRequest(raw: unknown, ctx: RpcContext | undefined, de
     url = loginPageUrl(p.url);
     if (!url) return refusal('invalid', `url must be an https login page (at most ${URL_MAX} characters, no user name or password in it)`);
     // The owner's browser opens it: from a conversation that holds data from
-    // a signed-in task, a query or fragment could carry it to the site.
-    if (/[?#]/.test(url) && (deps.signedIn ?? conversationSignedIn)(bot.botId) !== false) {
-      return refusal('not_now', signedInRefusal('ask for a login page with a query or fragment in its address', bot.botId));
+    // a signed-in task, only the bare address of a host one of the bot's
+    // connections uses (no path, query or fragment, no other host).
+    if ((deps.signedIn ?? conversationSignedIn)(bot.botId) !== false) {
+      const u = new URL(url);
+      const hosts = (deps.connectionHosts ?? botConnectionHosts)(bot.botId);
+      if (u.pathname !== '/' || u.search || u.hash || !hosts.includes(u.hostname)) {
+        return refusal('not_now', signedInRefusal('ask for a login page other than the bare address of one of your connections\' hosts', bot.botId));
+      }
     }
   } else if (p.url !== undefined) {
     return refusal('invalid', 'url is for a website login only');

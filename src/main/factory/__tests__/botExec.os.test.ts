@@ -19,7 +19,7 @@ import {
   probeBotExecSupport,
 } from '../botExecSandbox';
 import { WakeTaint, runningWakeAttended, setWakeTaint } from '../wakeTaint';
-import { __resetConversationMarksForTesting, markConversation, startConversation } from '../conversationMarks';
+import { __resetConversationMarksForTesting, holdSignedInForWake, markConversation, releaseWakeHold, startConversation } from '../conversationMarks';
 import type { WakeItem, WakeReason } from '../../../shared/wake';
 import { ALL_RPC_METHODS } from '../../../shared/rpc';
 
@@ -411,6 +411,11 @@ describe('the attended rule and the decision on each tool', () => {
     }
     startConversation('bot-1', { tainted: true, signedIn: false });
     expect(evaluateBotExecTool('Write', { file_path: 'a.md', content: 'x' }, ctx())).toMatchObject({ ok: false, layer: 'attended', reason: expect.stringContaining('outside text') });
+    // A wake that cannot be told clean holds the signed-in mark: the refusal says so.
+    startConversation('bot-1', { tainted: false, signedIn: false });
+    holdSignedInForWake('bot-1');
+    expect(evaluateBotExecTool('Bash', { command: 'ls' }, ctx())).toMatchObject({ ok: false, layer: 'attended', reason: expect.stringContaining('holds data from a signed-in task') });
+    releaseWakeHold('bot-1');
     __resetConversationMarksForTesting();
     expect(runningWakeAttended('bot-1')).toBe(false);
   });
