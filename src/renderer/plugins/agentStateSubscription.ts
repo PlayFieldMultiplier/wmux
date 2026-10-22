@@ -31,7 +31,15 @@ export function subscribeAgentState(options: {
   };
   const poll = async () => {
     const workspaceId = boundWorkspace();
-    if (!live() || !workspaceId) return;
+    if (!live()) return;
+    if (!workspaceId) {
+      // A workspace stream is restarted by its owner on every switch, so an
+      // unbound one simply ends. The 'all' stream is never restarted: with no
+      // workspace bound for now it skips this read (main would refuse an
+      // unbound caller) and keeps its own cadence until one is bound again.
+      if (all) timer = setTimeout(() => { void poll(); }, 1000);
+      return;
+    }
     try {
       const raw = await options.read() as { ok?: boolean; result?: unknown; retryable?: boolean } | null;
       if (!live()) return;
