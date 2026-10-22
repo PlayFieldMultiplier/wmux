@@ -84,6 +84,41 @@ describe('ScheduleDetail output snapshot', () => {
     expect(toasts.find((x) => x.message.startsWith('Not started'))?.level).toBe('warn');
   });
 
+  it('Run now refused by a lingering session offers to end it, Cancel focused and doing nothing (#2065)', async () => {
+    const skipped = run({ id: 'r7', state: 'skipped', reason: 'overlap', detail: 'previous_session_open', trigger: 'manual' });
+    const lingeringSession = { runId: 'r-prev', ptyId: 'auto-r-prev', startedAt: Date.now() };
+    const runNow = vi.fn(async () => ({ ok: true, run: skipped, lingeringSession }));
+    vi.stubGlobal('electronAPI', { automation: { snapshot, runNow, list: vi.fn(async () => ({ automations: [], available: true })), runs: vi.fn(async () => ({ runs: [] })) } });
+    useStore.setState({ toasts: [] });
+    await act(async () => root.render(<ScheduleDetail automation={automation()} accounts={[]} onEdit={vi.fn()} />));
+    expect(container.querySelector('[data-schedule-end-session]')).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-schedule-test-run]')!.click());
+    const offer = container.querySelector('[data-schedule-end-session="r-prev"]')!;
+    expect(offer.textContent).toContain('auto-r-prev');
+    expect(offer.textContent).toContain('Not started');
+    const cancel = container.querySelector<HTMLButtonElement>('[data-schedule-end-session-cancel]')!;
+    expect(document.activeElement).toBe(cancel);
+    expect(container.querySelector('[data-schedule-end-session-confirm]')!.textContent).toBe('End session and start');
+    await act(async () => cancel.click());
+    expect(container.querySelector('[data-schedule-end-session]')).toBeNull();
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirming the offer asks to end that run\'s session and start (#2065)', async () => {
+    const skipped = run({ id: 'r8', state: 'skipped', reason: 'overlap', detail: 'previous_session_open', trigger: 'manual' });
+    const runNow = vi.fn()
+      .mockResolvedValueOnce({ ok: true, run: skipped, lingeringSession: { runId: 'r-prev', ptyId: 'auto-r-prev', startedAt: Date.now() } })
+      .mockResolvedValueOnce({ ok: true, run: run({ id: 'r9', state: 'launching', trigger: 'manual' }) });
+    vi.stubGlobal('electronAPI', { automation: { snapshot, runNow, list: vi.fn(async () => ({ automations: [], available: true })), runs: vi.fn(async () => ({ runs: [] })) } });
+    useStore.setState({ toasts: [] });
+    await act(async () => root.render(<ScheduleDetail automation={automation()} accounts={[]} onEdit={vi.fn()} />));
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-schedule-test-run]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-schedule-end-session-confirm]')!.click());
+    expect(runNow).toHaveBeenLastCalledWith('a1', 'manual', 'r-prev');
+    expect(container.querySelector('[data-schedule-end-session]')).toBeNull();
+    expect(useStore.getState().toasts.map((x) => x.message)).toEqual(['Run started.']);
+  });
+
   it('Run now that launched still says it started', async () => {
     const runNow = vi.fn(async () => ({ ok: true, run: run({ id: 'r6', state: 'launching', trigger: 'manual' }) }));
     vi.stubGlobal('electronAPI', { automation: { snapshot, runNow, list: vi.fn(async () => ({ automations: [], available: true })), runs: vi.fn(async () => ({ runs: [] })) } });

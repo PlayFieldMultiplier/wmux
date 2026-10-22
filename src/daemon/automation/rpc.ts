@@ -82,7 +82,7 @@ export function registerAutomationRpc(
   gated(AUTOMATION_RPC.setEnabled, (p) => engine.setEnabled(p['id'], p['enabled']));
   gated(AUTOMATION_RPC.grant, (p) =>
     engine.grant(p['id'], p['mode'], p['allowedTools'], p['expectedRevision'], p['browserIdentity']));
-  gated(AUTOMATION_RPC.runNow, (p) => engine.runNow(p['id'], p['kind']));
+  gated(AUTOMATION_RPC.runNow, (p) => engine.runNow(p['id'], p['kind'], p['endSessionOf']));
   gated(AUTOMATION_RPC.cancelRun, (p) => engine.cancelRun(p['runId']));
   gated(AUTOMATION_RPC.propose, (p) => engine.propose(p['draft']));
   gated(AUTOMATION_RPC.ackAttention, (p) => engine.ackAttention(p['ids']));

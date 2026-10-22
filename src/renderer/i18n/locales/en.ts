@@ -5002,6 +5002,8 @@ export const en = {
   'schedules.runNow': "Run now",
   'schedules.runNowStarted': "Run started.",
   'schedules.runNowSkipped': "Not started: {reason}.",
+  'schedules.endSessionHint': "Not started: the previous run ({when}) finished, but its session {session} is still open. End that session and start?",
+  'schedules.endSessionAndStart': "End session and start",
   'schedules.create': "Create",
   'schedules.moreOptions': "More options",
   'schedules.namePlaceholder': "Name — from the first line",

@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { AUTOMATION_DEFAULTS, type Automation, type AutomationRun } from '../../../shared/automation';
+import { AUTOMATION_DEFAULTS, type Automation, type AutomationLingeringSession, type AutomationRun } from '../../../shared/automation';
 import { isLiveRun, isPermissionReset, sortRunsNewestFirst } from '../../stores/selectors/schedules';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import Switch from '../ui/Switch';
 import Dialog, { DialogFooter, DialogHeader } from '../ui/Dialog';
+import { renderSentence } from '../../i18n/renderSentence';
 import {
   accountLabel, agentLabel, describeTrigger, folderName, formatDuration, formatWhen, resumeCommand, runStateLabel,
   GRANT_DECLINED,
@@ -56,6 +57,8 @@ export default function ScheduleDetail({ automation: a, accounts, onEdit, onDisc
   // may show the signed-in account, and this view ends up in screen captures.
   const [outputRunId, setOutputRunId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // #2065: Run now refused only by a finished run's still-open session.
+  const [endOffer, setEndOffer] = useState<AutomationLingeringSession | null>(null);
   const [busy, setBusy] = useState(false);
   const api = window.electronAPI?.automation;
 
@@ -71,6 +74,20 @@ export default function ScheduleDetail({ automation: a, accounts, onEdit, onDisc
       void useStore.getState().refreshSchedules();
     }
   };
+
+  const runNow = (endSessionOf?: string) => void act(async (x) => {
+    const r = endSessionOf ? await x.runNow(a.id, 'manual', endSessionOf) : await x.runNow(a.id, 'manual');
+    setEndOffer(r.ok && r.run.state === 'skipped' && r.lingeringSession ? r.lingeringSession : null);
+    // #2065: a Run now the overlap rule skipped is not a started run.
+    if (r.ok && r.run.state === 'skipped') {
+      if (!r.lingeringSession) {
+        useStore.getState().pushToast({ level: 'warn', message: t('schedules.runNowSkipped', { reason: runReasonLabel(r.run, t) }) });
+      }
+    } else if (r.ok) {
+      useStore.getState().pushToast({ level: 'info', message: t('schedules.runNowStarted') });
+    }
+    return r;
+  });
 
   const policy = t('schedules.policy', {
     hours: Math.round(a.trigger.graceMinutes / 60 * 10) / 10,
@@ -106,16 +123,7 @@ export default function ScheduleDetail({ automation: a, accounts, onEdit, onDisc
             variant="secondary"
             size="sm"
             disabled={busy || !api}
-            onClick={() => void act(async (x) => {
-              const r = await x.runNow(a.id, 'manual');
-              // #2065: a Run now the overlap rule skipped is not a started run.
-              if (r.ok && r.run.state === 'skipped') {
-                useStore.getState().pushToast({ level: 'warn', message: t('schedules.runNowSkipped', { reason: runReasonLabel(r.run, t) }) });
-              } else if (r.ok) {
-                useStore.getState().pushToast({ level: 'info', message: t('schedules.runNowStarted') });
-              }
-              return r;
-            })}
+            onClick={() => runNow()}
             data-schedule-test-run
           >
             {t('schedules.runNow')}
@@ -132,6 +140,24 @@ export default function ScheduleDetail({ automation: a, accounts, onEdit, onDisc
           </Button>
         )}
       </header>
+
+      {/* Ends only that one session, then starts; Cancel is focused (the Plugins page's Uninstall confirm). */}
+      {endOffer && (
+        <div className="flex flex-wrap items-center gap-2" data-schedule-end-session={endOffer.runId}>
+          <span className="text-[12px] text-[var(--text-sub)]">
+            {renderSentence(t('schedules.endSessionHint'), {
+              when: formatWhen(endOffer.startedAt),
+              session: <code className="ui-code">{endOffer.ptyId}</code>,
+            })}
+          </span>
+          <Button size="sm" autoFocus onClick={() => setEndOffer(null)} data-schedule-end-session-cancel>
+            {t('schedules.cancel')}
+          </Button>
+          <Button size="sm" variant="danger" disabled={busy || !api} onClick={() => runNow(endOffer.runId)} data-schedule-end-session-confirm>
+            {t('schedules.endSessionAndStart')}
+          </Button>
+        </div>
+      )}
 
       <p className="ui-note" data-schedule-facts>
         <code className="ui-code">{folderName(a.action.cwd)}</code>

@@ -778,6 +778,89 @@ describe('AutomationEngine — attached finished runs', () => {
   });
 });
 
+describe('AutomationEngine — ending a lingering session from Run now (#2065)', () => {
+  const finish = (h: Harness, runId: string) =>
+    h.engine.onAgentEvent(`auto-${runId}`, { kind: 'agent.stop', status: 'complete', decision: 'emit' });
+
+  it('offers to end only a finished run\'s lingering session, never a live or ambiguous run\'s', async () => {
+    const h = harness();
+    const run = await startedRun(h);
+    // Live: a plain overlap, no offer.
+    const whileLive = await h.engine.runNow(run.automationId, 'manual');
+    expect(whileLive.ok && whileLive.run).toMatchObject({ state: 'skipped', reason: 'overlap' });
+    expect(whileLive.ok && whileLive.lingeringSession).toBeUndefined();
+    // Finished, its session lingering: the offer names that session.
+    await finish(h, run.id);
+    const lingering = await h.engine.runNow(run.automationId, 'manual');
+    expect(lingering.ok && lingering.run).toMatchObject({ state: 'skipped', detail: 'previous_session_open' });
+    expect(lingering.ok && lingering.lingeringSession).toEqual({ runId: run.id, ptyId: `auto-${run.id}`, startedAt: run.startedAt });
+    expect(h.destroyed).toEqual([]);
+
+    // Ambiguous (agent gone, PTY up): not on the linger timer, no offer.
+    const other = harness();
+    const amb = await startedRun(other);
+    other.engine.onAgentProcessExit(`auto-${amb.id}`);
+    other.clock.t += 31_000;
+    await other.engine.monitorOnce();
+    const ambiguous = await other.engine.runNow(amb.automationId, 'manual');
+    expect(ambiguous.ok && ambiguous.lingeringSession).toBeUndefined();
+  });
+
+  it('a scheduled occurrence is still skipped as overlap and ends no session', async () => {
+    const h = harness();
+    const run = await startedRun(h);
+    await finish(h, run.id);
+    h.engine.tick(new Date(2026, 8, 29, 8, 31).getTime());
+    await settle();
+    const scheduled = h.engine.listRuns().find((r) => r.trigger === 'scheduled');
+    expect(scheduled).toMatchObject({ state: 'skipped', reason: 'overlap', detail: 'previous_session_open' });
+    expect(h.created).toHaveLength(1);
+    expect(h.killed).toEqual([]);
+    expect(h.destroyed).toEqual([]);
+    // Only an explicit Run now gets the offer; asking for it still ends nothing.
+    const manual = await h.engine.runNow(run.automationId, 'manual');
+    expect(manual.ok && manual.lingeringSession?.runId).toBe(run.id);
+    expect(h.destroyed).toEqual([]);
+  });
+
+  it('confirming ends exactly that session, then starts the run; another schedule\'s lingering session is untouched', async () => {
+    const h = harness();
+    await h.engine.start({ timers: false });
+    const a = await h.engine.create(draft());
+    const b = await h.engine.create(draft({ name: 'Other' }));
+    if (!a.ok || !b.ok) throw new Error();
+    const ra = await h.engine.runNow(a.automation.id, 'manual');
+    const rb = await h.engine.runNow(b.automation.id, 'manual');
+    if (!ra.ok || !rb.ok) throw new Error();
+    await settleLaunch(h);
+    await finish(h, ra.run.id);
+    await finish(h, rb.run.id);
+    // A run id that is not the blocker ends nothing.
+    const wrong = await h.engine.runNow(a.automation.id, 'manual', rb.run.id);
+    expect(wrong.ok && wrong.run.state).toBe('skipped');
+    expect(h.destroyed).toEqual([]);
+    const res = await h.engine.runNow(a.automation.id, 'manual', ra.run.id);
+    expect(res.ok && res.run).toMatchObject({ state: 'launching', trigger: 'manual' });
+    expect(res.ok && res.lingeringSession).toBeUndefined();
+    expect(h.killed).toEqual([4242]);
+    expect(h.destroyed).toEqual([`auto-${ra.run.id}`]);
+    expect(h.engine.listRuns().find((r) => r.id === ra.run.id)).toMatchObject({ state: 'completed', hasSnapshot: true });
+    await settleLaunch(h);
+    expect(h.created).toHaveLength(3);
+    expect(h.engine.ownsPane(`auto-${rb.run.id}`)).toBe(true);
+  });
+
+  it('confirming never ends a live run\'s session', async () => {
+    const h = harness();
+    const run = await startedRun(h);
+    const res = await h.engine.runNow(run.automationId, 'manual', run.id);
+    expect(res.ok && res.run).toMatchObject({ state: 'skipped', reason: 'overlap' });
+    expect(h.killed).toEqual([]);
+    expect(h.destroyed).toEqual([]);
+    expect(h.engine.listRuns().find((r) => r.id === run.id)?.state).toBe('running');
+  });
+});
+
 describe('AutomationEngine — browser identity', () => {
   const identity = (boundRevision: number, over: Record<string, unknown> = {}) => ({
     workspaceId: 'ws-1',

@@ -350,15 +350,23 @@ export interface AutomationGrantParams {
   browserIdentity?: AutomationBrowserIdentity | null;
 }
 /** `test` runs once without enabling the schedule. */
-export interface AutomationRunNowParams { id: string; kind: 'manual' | 'test' }
+export interface AutomationRunNowParams {
+  id: string;
+  kind: 'manual' | 'test';
+  /** End this finished run's lingering session first (#2065); only while it alone blocks the run. */
+  endSessionOf?: string;
+}
 export interface AutomationCancelRunParams { runId: string }
 /** MCP draft path: always stored disabled, proposed, approval mode. */
 export interface AutomationProposeParams { draft: AutomationDraft }
 
 export interface AutomationAckAttentionParams { ids: string[] }
 
+/** A finished run whose session is still open and alone kept a Run now from starting (#2065). */
+export interface AutomationLingeringSession { runId: string; ptyId: string; startedAt: number }
+
 export type AutomationRunNowResult =
-  | { ok: true; run: AutomationRun }
+  | { ok: true; run: AutomationRun; lingeringSession?: AutomationLingeringSession }
   | { ok: false; error: string };
 
 export type AutomationOkResult = { ok: true } | { ok: false; error: string };
