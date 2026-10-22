@@ -45,6 +45,10 @@ jobs:
       - name: Rust interpreter and grid unit tests
         run: cargo test --manifest-path core/wmux-term/Cargo.toml --no-default-features --locked
       - run: npm run test:terminal-core -- --report=native-terminal-report.json
+      # Electron 42 dropped its postinstall download: `npm ci` leaves no binary
+      # under node_modules/electron/dist, so fetch it before `npx electron`.
+      - name: Install the Electron binary
+        run: npx install-electron
       - name: Electron main load and PTY
         if: runner.os != 'Linux'
         run: npx electron core/wmux-term/spike/native-transport-electron.cjs

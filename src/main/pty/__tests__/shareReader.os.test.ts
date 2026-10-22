@@ -168,9 +168,15 @@ describe('ChildProbeReader', () => {
   }, 20_000);
 
   it('the reader script runs under Electron\'s node too (the daemon\'s and main\'s runtime)', async () => {
+    // Since Electron 42, `require('electron')` downloads a missing binary.
+    // Look up the installed one without that side effect and skip when there
+    // is none (CI installs it with `npx install-electron`).
     let electron: string;
-    try { electron = createRequire(__filename)('electron') as unknown as string; } catch { return; }
-    if (typeof electron !== 'string' || !fs.existsSync(electron)) return;
+    try {
+      const dir = path.dirname(createRequire(__filename).resolve('electron/package.json'));
+      electron = path.join(dir, 'dist', fs.readFileSync(path.join(dir, 'path.txt'), 'utf8').trim());
+    } catch { return; }
+    if (!fs.existsSync(electron)) return;
     const dir = tmp();
     const child = spawn(electron, ['-e', SHARE_READER_SOURCE], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true,

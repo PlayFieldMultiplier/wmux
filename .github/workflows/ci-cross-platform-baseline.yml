@@ -128,6 +128,12 @@ jobs:
       - name: Install dependencies (cross-platform)
         run: npm ci
 
+      # Electron 42 no longer downloads its binary on install; `npm test`
+      # runs the integration lane, which has a real-Electron leg
+      # (shareReader.os.test.ts).
+      - name: Install the Electron binary
+        run: npx install-electron
+
       # No type check here. Type errors do not depend on the OS, and the one
       # disk-dependent case, an import whose casing differs from the file, is
       # checked by scripts/typecheck.mjs against the disk itself. Running it on

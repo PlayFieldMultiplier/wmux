@@ -323,6 +323,14 @@ jobs:
         if: steps.node-modules.outputs.cache-hit != 'true'
         run: npm ci
 
+      # Electron 42 no longer downloads its binary on install, and the
+      # node_modules cache this job shares with the unit lane may hold a tree
+      # without one. The integration lane has a real-Electron leg
+      # (shareReader.os.test.ts), so fetch it every run; it is a no-op when
+      # the binary is already there.
+      - name: Install the Electron binary
+        run: npx install-electron
+
       - name: Test (integration lane, shard ${{ matrix.shard }}/2)
         run: npm run test:integration -- --shard=${{ matrix.shard }}/2
 
