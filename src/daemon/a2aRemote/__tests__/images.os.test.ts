@@ -805,8 +805,9 @@ describe('JoinerSession image uploads', () => {
   function run(
     records: A2aOutboxRecordV1[],
     bytes: Pick<SessionClient, 'putBytes' | 'headStatus'>,
-  ): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }>; session: JoinerSession } {
+  ): { posted: string[]; refused: Array<{ seq: number; code: string; detail?: string }>; warnings: string[]; session: JoinerSession } {
     const posted: string[] = [];
+    const warnings: string[] = [];
     const refused: Array<{ seq: number; code: string; detail?: string }> = [];
     const client: SessionClient = {
       requestJson: async (_m, p, body) => {
@@ -847,11 +848,11 @@ describe('JoinerSession image uploads', () => {
       images: { readOutgoing: async () => img },
       timing: { backoffMinMs: 5, backoffMaxMs: 20, livenessMs: 60_000 },
       client: () => client,
-      log: quiet,
+      log: (level, msg) => void (level === 'warn' && warnings.push(msg)),
     });
     sessions.push(session);
     session.start();
-    return { posted, refused, session };
+    return { posted, refused, warnings, session };
   }
 
   it('gives up a message whose uploads keep timing out, and the next message still goes', async () => {
@@ -870,7 +871,7 @@ describe('JoinerSession image uploads', () => {
   it('ends an upload in flight when the session stops, and sends nothing after it', async () => {
     let puts = 0;
     let aborted = false;
-    const { posted, refused, session } = run(replies(), {
+    const { posted, refused, warnings, session } = run(replies(), {
       putBytes: (_p, _b, _t, signal) => {
         puts += 1;
         // A transfer that never answers: only the session's stop ends it.
@@ -888,8 +889,9 @@ describe('JoinerSession image uploads', () => {
     await vi.waitFor(() => expect({ aborted, stopped }).toEqual({ aborted: true, stopped: true }), { timeout: 5_000 });
     expect(puts).toBe(1);
     expect(posted).toEqual([]);
-    // Stopped, not failed: the message is still owed.
+    // Stopped, not failed: the message is still owed, and no failed upload was counted.
     expect(refused).toEqual([]);
+    expect(warnings.filter((w) => w.includes('image upload'))).toEqual([]);
   });
 
   it('asks first and does not upload an image the other PC already holds', async () => {
