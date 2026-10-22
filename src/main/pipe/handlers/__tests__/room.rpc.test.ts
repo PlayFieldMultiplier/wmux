@@ -865,6 +865,27 @@ describe('a bot whose conversation holds data from a signed-in task', () => {
     expect(router.list({})).toEqual([]);
     expect(await handleAskPerson({ title: 'Save it as a routine?', threadId: `dm:${lead.id}` }, asBot(lead), deps)).toMatchObject({ ok: true });
   });
+
+  it('asks the owner only in its own 1:1: a question aimed nowhere lands there, one aimed at General or a task thread is refused', async () => {
+    const lead = bot('ws1', 'lead');
+    const s = setup([lead]);
+    const router = new HandoffRouter({ file: path.join(dir, 'factory', HANDOFFS_FILENAME), decisions: deckDecisionPort(dir), ports: () => s.ports, rooms: () => s.writer, log: () => undefined });
+    const dm = `dm:${lead.id}`;
+    // The signed-in task's report wake runs in its task thread.
+    s.wake.thread = 'task:t-signed';
+    s.wake.id = { wakeId: 'w-report', attempt: 1 };
+    const signedIn = { router: () => router, signedIn: () => true };
+    for (const threadId of ['general', 'task:t-signed']) {
+      expect(await handleAskPerson({ title: 'Share the forecast?', body: 'Q3 revenue 4.2M', threadId }, asBot(lead), signedIn))
+        .toMatchObject({ ok: false, code: 'not_now', message: expect.stringContaining('holds data from a signed-in task, so it can\'t ask a question outside your 1:1') });
+    }
+    expect(await handleAskPerson({ title: 'Share the forecast?', body: 'Q3 revenue 4.2M' }, asBot(lead), signedIn)).toMatchObject({ ok: true, threadId: dm });
+    // The default reads the conversation's marks: none live is not known clean.
+    s.wake.id = { wakeId: 'w-report-2', attempt: 1 };
+    expect(await handleAskPerson({ title: 'And the margin?', body: 'Q3 margin 12%' }, asBot(lead), { router: () => router })).toMatchObject({ ok: true, threadId: dm });
+    expect(s.writer.read('ws1').cards.filter((c) => c.kind === 'question').map((c) => c.threadId)).toEqual([dm, dm]);
+    expect(router.list({}).map((h) => h.threadId)).toEqual([dm, dm]);
+  });
 });
 
 describe('a delegate woken in a thread its dispatch opened posts there', () => {

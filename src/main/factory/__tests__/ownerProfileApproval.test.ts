@@ -43,7 +43,7 @@ function rig() {
   const svc = new ApprovalService({
     file: path.join(dir, 'factory', 'approvals.json'),
     bots: () => ({ listEnabled: () => [profile], get: (id) => (id === A ? profile : null) }),
-    runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false, ownerWords: true }),
+    runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false, signedIn: false, ownerWords: true }),
     readPr: async () => { throw new Error('no PR'); },
     ghLogin: async () => null,
     rooms: () => writer,

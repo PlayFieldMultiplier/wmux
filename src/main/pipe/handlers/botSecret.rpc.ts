@@ -5,7 +5,9 @@
 // Who may call what (the handler is the gate):
 //   botSecret.request  a bot: posts a `secret_request` card in its own room
 //                      (refs.secretName, open) — the name and the bot's
-//                      words, never a value.
+//                      words, never a value. From a conversation that holds
+//                      data from a signed-in task, in the bot's own 1:1
+//                      only (conversationMarks.ts); so is a login card.
 //   botSecret.list     a bot or the operator: names and use, never values.
 //   botLogin.request   a bot: posts a `login_request` card (refs.label = the
 //                      service; refs.url = a website's https login page).
@@ -50,6 +52,7 @@ import { setSecretGrantSource } from '../../factory/secretGrants';
 import { isMainWindowSender } from '../../ipc/mainWindowSender';
 import { getConnectorStore, isConnectionKey } from '../../factory/connectorStore';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { conversationSignedIn, signedInRefusal } from '../../factory/conversationMarks';
 
 export const SECRETS_FILENAME = 'secrets.json';
 const URL_MAX = 500;
@@ -85,6 +88,9 @@ export interface SecretHandlerDeps {
   isConnectionKey?: (name: string) => boolean;
   /** The guest provenance of the bot's running wake. Default: wakeTaint.ts. */
   guestWake?: (botId: string) => GuestProvenance;
+  /** Whether the bot's live conversation holds data from a signed-in task
+   *  (none: yes). Default: conversationMarks.ts. */
+  signedIn?: (botId: string) => boolean;
 }
 
 /** A guest-sourced wake (or one of unknown provenance) asks the owner for
@@ -99,18 +105,26 @@ function notStarted(): FactoryRefusal<'not_started'> {
 }
 
 /** The thread, idempotency key and default parent (the owner message the
- *  running wake answers: wakeReplyTo) of a card a bot's call posts. */
+ *  running wake answers: wakeReplyTo) of a card a bot's call posts. From a
+ *  conversation that holds data from a signed-in task the card (the bot's
+ *  label and words) goes to the bot's own 1:1, where no other bot reads it:
+ *  one aimed at another thread is refused, as a room_post there is. */
 function botCardPlace(
   p: Record<string, unknown>,
   ports: Partial<FactoryRoomPorts>,
   bot: BotBinding,
   writer: Pick<RoomWriter, 'get'>,
-): { threadId: ThreadId; clientPostId?: string; replyTo?: string } | FactoryRefusal<'invalid'> {
+  deps: Pick<SecretHandlerDeps, 'signedIn'>,
+  what: string,
+): { threadId: ThreadId; clientPostId?: string; replyTo?: string } | FactoryRefusal<'invalid' | 'not_now'> {
   const named = p.threadId === undefined ? undefined : parseThreadId(p.threadId);
   if (named === null) return refusal('invalid', 'threadId is not a thread id');
   if (namesOthersGroup(ports, bot, named)) return refusal('invalid', 'a bot posts in a group chat it is in');
   if (p.clientRequestId !== undefined && !isClientId(p.clientRequestId)) return refusal('invalid', 'clientRequestId is not a valid key');
-  const threadId = named ?? runningWakeThread(ports, bot.botId) ?? GENERAL_THREAD;
+  const signedIn = (deps.signedIn ?? conversationSignedIn)(bot.botId) !== false;
+  const dm = dmThreadId(bot.botId);
+  if (signedIn && named !== undefined && named !== dm) return refusal('not_now', signedInRefusal(`${what} outside your 1:1`, bot.botId));
+  const threadId = signedIn ? dm : named ?? runningWakeThread(ports, bot.botId) ?? GENERAL_THREAD;
   const wake = runningWake(ports, bot.botId);
   const clientPostId = (p.clientRequestId as string | undefined) ?? wakeOrdinals.next(wake, 'post');
   const replyTo = wakeReplyTo(writer, wake, bot.workspaceId, threadId);
@@ -139,7 +153,7 @@ export function handleSecretRequest(raw: unknown, ctx: RpcContext | undefined, d
     return refusal('invalid', `why is required (at most ${BOT_SECRET_LIMITS.WHY_MAX} characters)`);
   }
   const ports = deps.ports();
-  const place = botCardPlace(p, ports, bot, writer);
+  const place = botCardPlace(p, ports, bot, writer, deps, 'ask for a key');
   if ('ok' in place) return place;
   const r = writer.post({
     workspaceId: bot.workspaceId,
@@ -222,7 +236,7 @@ export function handleLoginRequest(raw: unknown, ctx: RpcContext | undefined, de
     return refusal('invalid', `why is required (at most ${BOT_SECRET_LIMITS.WHY_MAX} characters)`);
   }
   const ports = deps.ports();
-  const place = botCardPlace(p, ports, bot, writer);
+  const place = botCardPlace(p, ports, bot, writer, deps, 'ask for a login');
   if ('ok' in place) return place;
   const r = writer.post({
     workspaceId: bot.workspaceId,

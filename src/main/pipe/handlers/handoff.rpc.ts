@@ -6,7 +6,10 @@
 //   handoff.send    a bot (the sender is its binding, never a param), not
 //                   from a conversation that holds data from a signed-in
 //                   task (conversationMarks.ts).
-//   ask.person      a bot; every role holds it.
+//   ask.person      a bot; every role holds it. From a conversation that
+//                   holds data from a signed-in task, the question is
+//                   asked in the bot's own 1:1 (one aimed at any other
+//                   thread is refused).
 //   handoff.answer  the operator.
 //   handoff.list    the operator.
 //   bot.questionClose  a bot, for its own open question only.
@@ -19,6 +22,7 @@ import { BOT_RPC } from '../../../shared/bot';
 import type { FactoryRefusal } from '../../../shared/botSurface';
 import { ASK_PERSON_RPC, HANDOFF_RPC, type AskPersonParams, type HandoffListParams, type HandoffSendParams } from '../../../shared/handoff';
 import type { RpcContext } from '../../../shared/rpc';
+import { dmThreadId, parseThreadId } from '../../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle, type FactoryRouter } from '../../factory/factoryHost';
 import {
   HANDOFFS_FILENAME,
@@ -63,9 +67,19 @@ export async function handleAskPerson(raw: unknown, ctx: RpcContext | undefined,
   const caller = factoryCaller(ctx);
   if ('ok' in caller) return caller;
   if (caller.kind !== 'bot') return refusal('bot_only', 'ask.person is asked by a bot');
+  const p = { ...params(raw) };
+  // What a signed-in task read stays in this conversation: the question's
+  // card (the bot's title and body) lands in the bot's own 1:1, where no
+  // other bot reads it. One aimed at another thread is refused, as a
+  // room_post there is; one aimed nowhere is asked in the 1:1.
+  if ((deps.signedIn ?? conversationSignedIn)(caller.bot.botId) !== false) {
+    const dm = dmThreadId(caller.bot.botId);
+    if (p.threadId !== undefined && parseThreadId(p.threadId) !== dm) return refusal('not_now', signedInRefusal('ask a question outside your 1:1', caller.bot.botId));
+    p.threadId = dm;
+  }
   const router = deps.router();
   if (!router) return notStarted();
-  return router.askPerson(caller.bot, params(raw) as unknown as AskPersonParams);
+  return router.askPerson(caller.bot, p as unknown as AskPersonParams);
 }
 
 export async function handleHandoffAnswer(raw: unknown, ctx: RpcContext | undefined, deps: HandoffHandlerDeps): Promise<unknown> {

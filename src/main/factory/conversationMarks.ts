@@ -19,7 +19,11 @@
 // bot's commands and file edits (wakeTaint.ts runningWakeAttended), and the
 // ways out of a signed-in one (signedInRefusal: fan-outs, worker messages
 // and resumes but to its signed-in tasks, handoffs, mentions, and posts
-// outside the bot's own 1:1). The runtime starts a conversation's mark when it
+// outside the bot's own 1:1; the cards a bot addresses to the owner,
+// ask_person, approval_request, secret_request and login_request, land in
+// that 1:1 and are refused anywhere else it names). Besides a wake, a bot's
+// terminal_read of a signed-in task's pane sets the signed-in mark
+// (input.rpc.ts). The runtime starts a conversation's mark when it
 // spawns one (clean when fresh, from the saved session record when resumed,
 // set for a guest's conversation of its own) and ends it when it ends the
 // session. A mark is only ever set, never cleared, until the conversation

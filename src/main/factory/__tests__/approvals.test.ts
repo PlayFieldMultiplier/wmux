@@ -70,7 +70,7 @@ function rig(over: Partial<ApprovalPorts> = {}) {
     file: path.join(dir, 'factory', 'approvals.json'),
     bots: () => ({ listEnabled: () => [DEV, OTHER], get: (id) => [DEV, OTHER].find((b) => b.id === id) ?? null }),
     // Clean of guests unless a test says otherwise.
-    runningWake: (id) => { const w = state.wakes.get(id); return w ? { guest: false, ...w } : null; },
+    runningWake: (id) => { const w = state.wakes.get(id); return w ? { guest: false, signedIn: false, ...w } : null; },
     readPr: async (_p, _k, n) => {
       const h = state.heads.get(n);
       if (!h) throw new Error('no such PR');
@@ -211,6 +211,23 @@ describe('approval requests (bot side)', () => {
     expect(req.threadId).toBe(`pr:${KEY}#2`);
     // Already in its subject's thread: no link to itself.
     expect(answering.writer.get(WS, req.cardId as string)?.refs?.threadId).toBeUndefined();
+  });
+
+  it('from a conversation that holds data from a signed-in task, the request card (with the reason) lands in the 1:1, wherever the owner talked and the wake runs', async () => {
+    const lead = bot('bot-0000abcd');
+    const dm = `dm:${lead.id}`;
+    const bots = () => ({ listEnabled: () => [lead], get: (id: string) => (id === lead.id ? lead : null) });
+    // The owner talked in General, the signed-in task's report wake runs in
+    // its task thread: neither is read by the bot alone.
+    const r = rig({ bots, conversationThread: () => 'general' as never });
+    r.state.wakes.set(lead.id, { wakeId: 'w-1', attempt: 1, threadId: 'task:t-1' as never, tainted: true, ownerWords: true, signedIn: true });
+    const req = await r.ask(lead, { action: 'merge', prNumber: 1, reason: 'The Q3 forecast says ship' });
+    expect(req.threadId).toBe(dm);
+    expect(r.writer.get(WS, req.cardId as string)).toMatchObject({ kind: 'approval', threadId: dm });
+    expect(r.writer.read(WS).cards.filter((c) => c.body?.includes('Q3 forecast')).map((c) => c.threadId)).toEqual([dm]);
+    // A wake that cannot say counts as signed in.
+    const unknown = rig({ bots, runningWake: () => ({ wakeId: 'w-2', attempt: 1, threadId: 'general' as never, tainted: true, guest: false }) });
+    expect(await unknown.ask(lead, { action: 'merge', prNumber: 1, reason: 'x' })).toMatchObject({ threadId: dm });
   });
 
   it('a turn in the bot\'s own 1:1 (its task\'s work, asked for there) asks there, though the owner spoke in the room since', async () => {
