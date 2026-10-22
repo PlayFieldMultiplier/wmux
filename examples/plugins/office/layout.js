@@ -1,8 +1,9 @@
 // Pure layout for the Office page, no DOM: who the employees are (from an
-// agent.state snapshot), the room's size, the boss desk at the head of the
-// room with a queue in front of it for employees who need you or have
-// finished, one desk per employee (kept while its owner queues or rests),
-// sofas for resting employees, and the room pieces to draw.
+// agent.state snapshot, or every workspace's in one room), the room's size,
+// the boss desk at the head of the room with a queue in front of it for
+// employees who need you or have finished, one desk per employee (kept while
+// its owner queues or rests), sofas for resting employees, and the room
+// pieces to draw.
 //
 // World units follow the art: one floor tile is 16x16 units, `a` runs
 // down-right along the right (back) wall, `b` down-left along the left wall,
@@ -92,6 +93,30 @@
    * same, the agent's name is added; where that still collides, a number.
    */
   function employeesFromSnapshot(snapshot) {
+    const out = collectEmployees(snapshot, undefined);
+    distinguish(out, [(e) => `${e.label} · ${e.agent}`, (e, k) => `${e.label} · ${k}`]);
+    return out;
+  }
+
+  /**
+   * Every workspace's employees in one office (`agent-state` with
+   * `allWorkspaces`), in the host's (sidebar) order. Each also carries its
+   * workspace's name; where two would read the same, that name is added
+   * first, then the agent's, then a number.
+   */
+  function employeesFromAll(all) {
+    const out = [];
+    const seen = new Set();
+    for (const ws of (all && Array.isArray(all.workspaces) ? all.workspaces : [])) {
+      if (!ws || typeof ws.workspaceId !== 'string' || !ws.workspaceId || seen.has(ws.workspaceId)) continue;
+      seen.add(ws.workspaceId);
+      out.push(...collectEmployees(ws, typeof ws.name === 'string' && ws.name ? ws.name : ws.workspaceId));
+    }
+    distinguish(out, [(e) => `${e.label} · ${e.workspace}`, (e) => `${e.label} · ${e.agent}`, (e, k) => `${e.label} · ${k}`]);
+    return out;
+  }
+
+  function collectEmployees(snapshot, workspace) {
     const out = [];
     for (const pane of (snapshot && Array.isArray(snapshot.panes) ? snapshot.panes : [])) {
       if (!pane || !STATES.includes(pane.state) || !Array.isArray(pane.surfaces)) continue;
@@ -102,12 +127,18 @@
           paneId: pane.paneId,
           label: String(pane.label || surface.agentName),
           agent: String(surface.agentName),
+          ...(workspace === undefined ? {} : { workspace }),
           state: pane.state,
           stashed: pane.stashed === true,
           look: hashLook(surface.surfaceId),
         });
       }
     }
+    return out;
+  }
+
+  /** Each step relabels only the employees whose labels still collide. */
+  function distinguish(out, steps) {
     const step = (make) => {
       const counts = new Map();
       for (const e of out) counts.set(e.label, (counts.get(e.label) || 0) + 1);
@@ -120,9 +151,7 @@
       }
       for (const e of out) if (e.next !== undefined) { e.label = e.next; delete e.next; }
     };
-    step((e) => `${e.label} · ${e.agent}`);
-    step((e, k) => `${e.label} · ${k}`);
-    return out;
+    for (const make of steps) step(make);
   }
 
   /** Each employee keeps its previous desk; newcomers take the first free one. */
@@ -330,6 +359,6 @@
 
   root.OfficeLayout = {
     DESK_COLUMNS, BASE_DESK_ROWS, QUEUE_COLUMNS, BASE_SOFAS,
-    stackIndex, hashLook, employeesFromSnapshot, layoutOffice, spotFor,
+    stackIndex, hashLook, employeesFromSnapshot, employeesFromAll, layoutOffice, spotFor,
   };
 })(this);

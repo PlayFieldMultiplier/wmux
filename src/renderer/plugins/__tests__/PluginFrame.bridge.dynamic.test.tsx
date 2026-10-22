@@ -155,13 +155,13 @@ describe('PluginFrame — bridge lifetime across a workspace switch', () => {
     port.start();
 
     await settledOrTimedOut(request(port, 'before', 'browser.navigate'));
-    expect(rpc).toHaveBeenLastCalledWith('demo', 'browser.navigate', {}, 'ws-1');
+    expect(rpc).toHaveBeenLastCalledWith('demo', 'browser.navigate', {}, 'ws-1', false);
 
     await act(async () => { useStore.setState({ activeWorkspaceId: 'ws-2' }); });
 
     // Same port, no reload, no re-render of the bridge — only the store moved.
     await settledOrTimedOut(request(port, 'after', 'browser.navigate'));
-    expect(rpc).toHaveBeenLastCalledWith('demo', 'browser.navigate', {}, 'ws-2');
+    expect(rpc).toHaveBeenLastCalledWith('demo', 'browser.navigate', {}, 'ws-2', false);
   });
 
   // A response belongs to the document that ASKED. The reload window is what
@@ -428,4 +428,91 @@ it('restarts agent-state streaming after a batched reload handshake', async () =
   await vi.waitFor(() => expect(received[1]).toContainEqual(expect.objectContaining({ kind: 'agent-state', status: 'ready' })), { timeout: 5000 });
   expect(rpc).toHaveBeenCalledWith('demo', 'agent.state', {}, 'ws-1');
   for (const call of post.mock.calls) (call[2] as MessagePort[])[0].close();
+});
+
+it('streams every workspace to an all-workspaces page without restarting on a switch', async () => {
+  useStore.setState({ appRoute: 'plugin:demo' });
+  const all = { truncated: false, workspaces: [{ workspaceId: 'ws-1', name: 'one', truncated: false, panes: [] }] };
+  rpc.mockResolvedValue({ ok: true, result: all });
+  await act(async () => root.render(<PluginFrame pluginName="demo" entry="index.html" railPage agentStateEvents agentStateScope="all" />));
+  const frame = container.querySelector('iframe')!;
+  const events: Array<{ kind?: string; status?: string; workspaceId?: string; epoch?: string; allWorkspaces?: unknown; snapshot?: unknown }> = [];
+  const post = vi.fn((_message, _origin, ports: MessagePort[]) => {
+    ports[0].onmessage = (event) => events.push(event.data);
+    ports[0].start();
+  });
+  Object.defineProperty(frame, 'contentWindow', { configurable: true, value: { postMessage: post } });
+  await act(async () => { frame.dispatchEvent(new Event('load')); });
+  await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ status: 'ready', workspaceId: 'ws-1', allWorkspaces: all })), { timeout: 5000 });
+  expect(rpc).toHaveBeenCalledWith('demo', 'agent.state.all', {}, 'ws-1');
+  expect(rpc).not.toHaveBeenCalledWith('demo', 'agent.state', expect.anything(), expect.anything());
+  expect(events.some((e) => 'snapshot' in e)).toBe(false);
+  const epoch = events.find((e) => e.status === 'ready')!.epoch;
+  await act(async () => { useStore.setState({ activeWorkspaceId: 'ws-2' }); });
+  await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ status: 'ready', workspaceId: 'ws-2', epoch })), { timeout: 5000 });
+  // One stream: the switch did not reset it, and later reads carry the new binding.
+  expect(events.filter((e) => e.status === 'reset')).toHaveLength(1);
+  expect(rpc).toHaveBeenCalledWith('demo', 'agent.state.all', {}, 'ws-2');
+  for (const call of post.mock.calls) (call[2] as MessagePort[])[0].close();
+});
+
+it('returns to Workspaces after an all-workspaces page focused a pane in another workspace', async () => {
+  const leaf = (id: string) => ({ id, type: 'leaf' as const, surfaces: [], activeSurfaceId: '' });
+  useStore.setState({ appRoute: 'plugin:demo', workspaces: [
+    { id: 'ws-1', name: 'one', rootPane: leaf('p1'), activePaneId: 'p1' },
+    { id: 'ws-2', name: 'two', rootPane: leaf('p2'), activePaneId: 'p2' },
+  ] as never });
+  // The host's answer to the focus: it switched to the pane's workspace.
+  rpc.mockImplementation(async (_plugin: string, method: string) => {
+    if (method === 'pane.focus') { useStore.setState({ activeWorkspaceId: 'ws-2' }); return { ok: true, result: { ok: true } }; }
+    return { ok: true, result: { truncated: false, workspaces: [] } };
+  });
+  act(() => root.render(<PluginFrame pluginName="demo" entry="index.html" railPage agentStateScope="all" />));
+  const frame = container.querySelector('iframe')!;
+  const post = vi.fn();
+  Object.defineProperty(frame, 'contentWindow', { configurable: true, value: { postMessage: post } });
+  await act(async () => { frame.dispatchEvent(new Event('load')); });
+  const port = pluginPort(post); port.start();
+  const answered = new Promise((resolve) => { port.onmessage = (e) => { if (e.data?.id === 'jump') resolve(e.data); }; });
+  port.postMessage({ v: PLUGIN_BRIDGE_VERSION, id: 'jump', kind: 'request', method: 'pane.focus', params: { id: 'p2' } });
+  await act(async () => { await answered; });
+  expect(useStore.getState().appRoute).toBe('workspaces');
+  port.close();
+});
+
+it('stays on the page when a single-workspace page\'s focus raced a workspace switch', async () => {
+  const leaf = (id: string) => ({ id, type: 'leaf' as const, surfaces: [], activeSurfaceId: '' });
+  useStore.setState({ appRoute: 'plugin:demo', workspaces: [
+    { id: 'ws-1', name: 'one', rootPane: leaf('p1'), activePaneId: 'p1' },
+    { id: 'ws-2', name: 'two', rootPane: leaf('p2'), activePaneId: 'p2' },
+  ] as never });
+  rpc.mockImplementation(async () => { useStore.setState({ activeWorkspaceId: 'ws-2' }); return { ok: true, result: { ok: true } }; });
+  act(() => root.render(<PluginFrame pluginName="demo" entry="index.html" railPage />));
+  const frame = container.querySelector('iframe')!;
+  const post = vi.fn();
+  Object.defineProperty(frame, 'contentWindow', { configurable: true, value: { postMessage: post } });
+  await act(async () => { frame.dispatchEvent(new Event('load')); });
+  const port = pluginPort(post); port.start();
+  const answered = new Promise((resolve) => { port.onmessage = (e) => { if (e.data?.id === 'jump') resolve(e.data); }; });
+  port.postMessage({ v: PLUGIN_BRIDGE_VERSION, id: 'jump', kind: 'request', method: 'pane.focus', params: { id: 'p2' } });
+  await act(async () => { await answered; });
+  expect(useStore.getState().appRoute).toBe('plugin:demo');
+  port.close();
+});
+
+// The host says which kind of frame asked, from the frame it mounted: only a
+// rail page may be widened to another workspace by main (pane.focus).
+it.each([
+  ['a rail page', true],
+  ['a sidebar panel or status-bar widget', false],
+])('marks requests from %s accordingly', async (_kind, railPage) => {
+  act(() => root.render(<PluginFrame pluginName="demo" entry="index.html" railPage={railPage} />));
+  const frame = container.querySelector('iframe')!;
+  const post = vi.fn();
+  Object.defineProperty(frame, 'contentWindow', { configurable: true, value: { postMessage: post } });
+  await act(async () => { frame.dispatchEvent(new Event('load')); });
+  const port = pluginPort(post); port.start();
+  await settledOrTimedOut(request(port, 'focus', 'pane.focus'));
+  expect(rpc).toHaveBeenLastCalledWith('demo', 'pane.focus', {}, 'ws-1', railPage);
+  port.close();
 });

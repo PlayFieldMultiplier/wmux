@@ -1702,14 +1702,16 @@ const electronAPI = {
     // `hostWorkspaceId` is the workspace the HOST is showing (#922) — a
     // mandatory position with a nullable value, so a future call site cannot
     // silently omit the binding, while a host that genuinely has no workspace
-    // yet can still say so.
+    // yet can still say so. `hostRailPage`: the asking frame is a rail page
+    // (the host knows which kind of frame it mounted); omitted for the others.
     rpc: (
       pluginName: string,
       method: string,
       params: Record<string, unknown> | undefined,
       hostWorkspaceId: string | undefined,
+      hostRailPage?: boolean,
     ) =>
-      ipcRenderer.invoke(IPC.PLUGINS_RPC, pluginName, method, params, hostWorkspaceId) as Promise<unknown>,
+      ipcRenderer.invoke(IPC.PLUGINS_RPC, pluginName, method, params, hostWorkspaceId, hostRailPage) as Promise<unknown>,
     requestApproval: (pluginName: string) =>
       ipcRenderer.invoke(IPC.PLUGINS_REQUEST_APPROVAL, pluginName) as Promise<{ approved: boolean }>,
     onPaneDecoration: (callback: (decoration: {

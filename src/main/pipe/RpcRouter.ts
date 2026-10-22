@@ -7,7 +7,7 @@ import type {
   RpcResponse,
 } from '../../shared/rpc';
 import { RetryableRpcError } from './RetryableRpcError';
-import { sanitizeClientDisplayName } from '../../shared/rpc';
+import { hostedBindingOf, isHostedCaller, sanitizeClientDisplayName } from '../../shared/rpc';
 import { check as enforcerCheck } from '../mcp/PermissionEnforcer';
 import { METHOD_CAPABILITY, isAlwaysEnforcedMethod, type RequiredCapability } from '../mcp/methodCapabilityMap';
 import { isLocalExternalWireContext } from '../mcp/rpcProvenance';
@@ -125,11 +125,17 @@ const IDENTITY_OWN_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
  * key when there is no workspace would erase the one fact a scoping handler
  * needs — that this is a hosted caller — and leave it indistinguishable from a
  * caller free to name its own workspace.
+ *
+ * `hostedRailPage` rides beside it, on the same variant and for the same
+ * reason: the host component sets it when the frame that asked is a rail page
+ * (mounted only while the user has that page open), never from anything the
+ * plugin sent. Always-mounted frames (sidebar panel, status bar) leave it out.
+ * Only the cross-workspace `pane.focus` widening reads it.
  */
 type RpcDispatchOptions = (
-  | { operator: true; firstParty?: never; externalWire?: never; hostedWorkspace?: never }
-  | { firstParty: true; operator?: never; externalWire?: never; hostedWorkspace?: string | null }
-  | { externalWire: true; operator?: never; firstParty?: never; hostedWorkspace?: never }
+  | { operator: true; firstParty?: never; externalWire?: never; hostedWorkspace?: never; hostedRailPage?: never }
+  | { firstParty: true; operator?: never; externalWire?: never; hostedWorkspace?: string | null; hostedRailPage?: true }
+  | { externalWire: true; operator?: never; firstParty?: never; hostedWorkspace?: never; hostedRailPage?: never }
 ) & {
   /**
    * Cancellation for handlers that WAIT (see RpcContext.signal). Supplied by
@@ -316,7 +322,8 @@ export class RpcRouter {
     // the same way — loudly, before any handler runs — rather than being
     // dropped into a context that then looks merely unscoped.
     const hostedDispatch = opts !== undefined && 'hostedWorkspace' in opts;
-    if (hostedDispatch && !inProcessFirstParty) {
+    const railPageMarked = opts !== undefined && 'hostedRailPage' in opts && opts.hostedRailPage !== undefined;
+    if ((hostedDispatch && !inProcessFirstParty) || (railPageMarked && !hostedDispatch)) {
       return {
         id: request.id,
         ok: false,
@@ -644,6 +651,16 @@ export class RpcRouter {
       }
       outcome = enforcerCheck({ method: 'fleet.triage', params: effectiveParams, ctx, trust, trustLookupFailed });
     }
+    // A bound UI plugin approved for agent.state.read.all may focus a pane in
+    // any local workspace (pane.rpc.ts). Decided here, from the trust record
+    // this dispatch just read, by the same check agent.state.all itself gets.
+    // Only from its rail page, which the user has open: a sidebar or status-bar
+    // frame is always mounted and could take the screen with no gesture.
+    if (outcome.kind === 'allow' && request.method === 'pane.focus' && isHostedCaller(ctx) && hostedBindingOf(ctx)
+      && opts?.hostedRailPage === true
+      && enforcerCheck({ method: 'agent.state.all', params: {}, ctx, trust, trustLookupFailed }).kind === 'allow') {
+      ctx.hostedAllWorkspaces = true;
+    }
     if (outcome.kind !== 'allow' && this.shadowSink) {
       try {
         this.shadowSink({
@@ -711,12 +728,12 @@ export class RpcRouter {
     try {
       const result = await handler(effectiveParams, ctx);
       // A plugin read must not return data after its trust changed mid-flight.
-      if (request.method === 'agent.state') {
+      if (request.method === 'agent.state' || request.method === 'agent.state.all') {
         const current = ctx.clientName && this.trustLookup ? await this.trustLookup(ctx.clientName) : undefined;
         if (effectiveParams.includeActivity === true && !current?.declaredCapabilities?.includes('terminal.read')) {
           return { id: request.id, ok: false, error: 'Activity permission changed' };
         }
-        const methods: RpcMethod[] = effectiveParams.includeActivity === true ? ['agent.state', 'fleet.triage'] : ['agent.state'];
+        const methods: RpcMethod[] = effectiveParams.includeActivity === true ? [request.method, 'fleet.triage'] : [request.method];
         for (const method of methods) {
           const check = enforcerCheck({ method, params: effectiveParams, ctx, trust: current });
           if (check.kind !== 'allow') return { id: request.id, ok: false, error: 'Agent state permission changed' };

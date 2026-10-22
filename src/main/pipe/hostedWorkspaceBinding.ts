@@ -300,6 +300,12 @@ export function hostedRefusalMessage(
  *              `none`, which is unconfined: that is the fail-open PR1 closed,
  *              and here it would mean closing another workspace's pane (a PTY
  *              dispose — a running session destroyed) rather than being told no.
+ *
+ * One widening, for `pane.focus` only: a bound plugin's rail page, whose
+ * plugin's current approval covers `agent.state.read.all`
+ * (`RpcContext.hostedAllWorkspaces`, written by RpcRouter), may take the user
+ * to a pane in another local workspace. Its sidebar and status-bar frames stay
+ * confined, and so do close, stash and unstash. See `pane.rpc.ts`.
  */
 export type HostedConfinement =
   | { kind: 'none' }

@@ -8,6 +8,7 @@ import type { ApprovalQueue } from '../mcp/ApprovalQueue';
 import type { PluginTrustStore } from '../mcp/PluginTrustStore';
 import type { PluginHostLoader } from './PluginHostLoader';
 import { copyCatalogBundle } from './copyCatalogBundle';
+import { compareSemver, parseSemver } from '../surfaces/safeWrite/versionRange';
 
 type SavedState = { version: 1; disabled: string[]; managed: string[] };
 
@@ -37,8 +38,59 @@ export class UiPluginManager {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+    this.refreshManagedBundles();
     this.options.loader.setDisabled(this.state.disabled);
     await this.options.loader.loadAll();
+  }
+
+  /**
+   * A catalog-installed bundle older than the one this build ships is replaced
+   * by the shipped one before the first load. Only bundles in the install
+   * ledger are refreshed; one placed by hand is never touched. Approval is not
+   * handled here: the load that follows registers the new declaration, and a
+   * wider one drops an approved plugin back to unconfirmed (applyDeclaration),
+   * so the owner is asked again. A refresh that fails keeps the old bundle.
+   */
+  private refreshManagedBundles(): void {
+    for (const entry of UI_PLUGIN_CATALOG) {
+      if (!this.state.managed.includes(entry.id)) continue;
+      try {
+        this.refreshBundle(entry);
+      } catch (error) {
+        console.warn(`[UiPluginManager] could not update ${entry.id}:`, error);
+      }
+    }
+  }
+
+  private refreshBundle(entry: typeof UI_PLUGIN_CATALOG[number]): void {
+    const root = this.root();
+    const destination = path.join(root, entry.id);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(destination); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+    const source = path.join(this.options.catalogDir, entry.id);
+    const installed = parseSemver(manifestVersion(path.join(destination, 'manifest.json')));
+    const shipped = parseSemver(manifestVersion(path.join(source, 'manifest.json')));
+    // Not comparable (a corrupt or hand-edited manifest): leave it be.
+    if (!installed || !shipped || compareSemver(shipped, installed) <= 0) return;
+    const staging = fs.mkdtempSync(path.join(root, '.install-'));
+    const retired = path.join(root, `.removed-${randomUUID()}`);
+    try {
+      copyCatalogBundle(source, staging, entry.files);
+      // Same publication as install: scans skip dot-prefixed directories, so a
+      // load never sees a partial bundle.
+      fs.renameSync(destination, retired);
+      try { fs.renameSync(staging, destination); } catch (error) {
+        fs.renameSync(retired, destination);
+        throw error;
+      }
+    } finally {
+      fs.rmSync(staging, { recursive: true, force: true });
+      fs.rmSync(retired, { recursive: true, force: true });
+    }
   }
 
   private serialize<T>(action: () => Promise<T>): Promise<T> {
@@ -184,5 +236,15 @@ export class UiPluginManager {
         this.notify(id);
       } finally { fs.rmSync(retired, { recursive: true, force: true }); }
     });
+  }
+}
+
+/** A bundle manifest's `version`, or undefined when it cannot be read. */
+function manifestVersion(file: string): string | undefined {
+  try {
+    const version = (JSON.parse(fs.readFileSync(file, 'utf8')) as { version?: unknown }).version;
+    return typeof version === 'string' ? version : undefined;
+  } catch {
+    return undefined;
   }
 }

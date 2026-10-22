@@ -1,9 +1,11 @@
 // The Office page: the plugin bridge, and the room drawn as layered DOM
-// sprites with names and bubbles as DOM text. Needs sprites.js and layout.js.
+// sprites with names and bubbles as DOM text, scaled to fit the page. With
+// agent.state.read.all every local workspace's agents share the one room.
+// Needs sprites.js and layout.js.
 'use strict';
 (function () {
   const { furniture: FURNITURE, looks: LOOKS, poses: POSES, frame: FRAME, genericLook, station: STATION, boss: BOSS } = self.OfficeSprites;
-  const { layoutOffice, employeesFromSnapshot, spotFor, stackIndex } = self.OfficeLayout;
+  const { layoutOffice, employeesFromSnapshot, employeesFromAll, spotFor, stackIndex } = self.OfficeLayout;
 
   /** Every user-facing string, in one place. */
   const STRINGS = {
@@ -12,6 +14,7 @@
     unavailable: 'Agent state unavailable. Reopen this page to retry.',
     truncated: 'Some agents were omitted by the size limit.',
     empty: 'No local agents in this workspace',
+    emptyAll: 'No local agents in any workspace',
     emptyHint: 'Start Claude Code or Codex in a pane and it takes a desk here.',
     focusFailed: 'Could not open that pane.',
     room: (count) => `Office, ${count} ${count === 1 ? 'agent' : 'agents'}`,
@@ -21,11 +24,13 @@
     done: 'Done',
     state: { working: 'Working', needsYou: 'Needs you', finished: 'Finished', resting: 'Resting' },
     stashed: 'stashed',
-    employee: (e, state) => `${e.label}, ${e.agent}: ${state}${e.stashed ? ` (${STRINGS.stashed})` : ''}`,
+    employee: (e, state) => `${e.label}, ${e.agent}${e.workspace ? ` in ${e.workspace}` : ''}: ${state}${e.stashed ? ` (${STRINGS.stashed})` : ''}`,
   };
 
   /** Display scale: the art is drawn at 1x and meant to be seen at 2x. */
   const SCALE = 2;
+  /** Names and bubbles shrink with the room down to this share of their size, no further. */
+  const MIN_TEXT = 0.8;
   /** Status bubbles sit above every sprite and name, and stack by depth among themselves. */
   const LABEL_Z = 110000;
   const STATUS_BUBBLE_Z = 110001;
@@ -34,14 +39,29 @@
   /** A walk between spots; keep in step with the transition in index.html. */
   const WALK_MS = 900;
   const SHEETS = { characters: 'characters.png', furniture: 'furniture.png' };
+  /** Room pieces below this z-index (floor, rugs, walls) lie under every object and person. */
+  const OBJECT_Z = stackIndex(0, 0);
 
+  const page = document.querySelector('#page');
+  const stage = document.querySelector('#stage');
   const room = document.querySelector('#room');
   const roomLayer = document.querySelector('#room-props');
+  /**
+   * The floor, rugs and walls as one bitmap. Drawn as separate sprites, their
+   * edges are resampled one by one at the fitted (fractional) scale and show
+   * hairline seams; one canvas is scaled as a whole.
+   */
+  const backdrop = document.createElement('canvas');
+  backdrop.className = 'backdrop';
+  backdrop.setAttribute('aria-hidden', 'true');
+  const furnitureSheet = new Image();
+  furnitureSheet.addEventListener('load', () => paintBackdrop());
+  furnitureSheet.src = SHEETS.furniture;
   const stationLayer = document.querySelector('#stations');
   const employeeLayer = document.querySelector('#employees');
   const notice = document.querySelector('#notice');
   const empty = document.querySelector('#empty');
-  document.querySelector('#empty-title').textContent = STRINGS.empty;
+  const emptyTitle = document.querySelector('#empty-title');
   document.querySelector('#empty-hint').textContent = STRINGS.emptyHint;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -52,6 +72,8 @@
   let epoch = null;
   let revision = 0;
   let employees = [];
+  /** True while the host sends every workspace (agent.state.read.all is granted). */
+  let everyWorkspace = false;
   /** The last layout: desks, sofas and queue places continue from it. */
   let layout;
   let roomKey = '';
@@ -91,6 +113,24 @@
     return own[employee.look % own.length];
   }
 
+  /**
+   * The whole room in view without scrolling: scaled to the page's free area,
+   * which grows the room on a large page and shrinks it as rows are added.
+   */
+  function fit() {
+    const box = getComputedStyle(page);
+    const width = page.clientWidth - parseFloat(box.paddingLeft) - parseFloat(box.paddingRight);
+    const height = page.clientHeight - parseFloat(box.paddingTop) - parseFloat(box.paddingBottom);
+    const w = layout.width * SCALE;
+    const h = layout.height * SCALE;
+    const scale = width > 0 && height > 0 ? Math.min(width / w, height / h) : 1;
+    stage.style.width = `${w * scale}px`;
+    stage.style.height = `${h * scale}px`;
+    room.style.setProperty('--fit', String(scale));
+    // Undoes part of the room's scale on names and bubbles, so they stay readable.
+    room.style.setProperty('--text', String(Math.min(1, Math.max(MIN_TEXT, scale)) / scale));
+  }
+
   /** Floor, walls, decor and the boss desk: redrawn only when the room changes size. */
   function drawRoom() {
     const key = `${layout.width}x${layout.height}:${layout.props.length}`;
@@ -98,7 +138,9 @@
     roomKey = key;
     room.style.width = `${layout.width * SCALE}px`;
     room.style.height = `${layout.height * SCALE}px`;
-    const parts = layout.props.map((p) => {
+    fit();
+    paintBackdrop();
+    const parts = layout.props.filter((p) => p.zIndex >= OBJECT_Z).map((p) => {
       const rect = FURNITURE[p.key];
       return sprite('furniture', rect, p.x - rect.anchorX, p.y - rect.anchorY, p.zIndex);
     });
@@ -120,7 +162,26 @@
     plate.style.top = `${(y + BOSS.seatY - BOSS.deskY - BOSS_PLATE_RISE) * SCALE}px`;
     plate.style.zIndex = String(LABEL_Z);
     parts.push(plate);
-    roomLayer.replaceChildren(...parts);
+    roomLayer.replaceChildren(backdrop, ...parts);
+  }
+
+  /** The flat pieces in z-index order, ties in layout order (as the DOM stacked them). */
+  function paintBackdrop() {
+    backdrop.width = layout.width;
+    backdrop.height = layout.height;
+    backdrop.style.width = `${layout.width * SCALE}px`;
+    backdrop.style.height = `${layout.height * SCALE}px`;
+    const ctx = backdrop.getContext('2d');
+    if (!ctx || !furnitureSheet.complete || !furnitureSheet.naturalWidth) return;
+    ctx.imageSmoothingEnabled = false;
+    layout.props
+      .map((p, i) => ({ p, i }))
+      .filter(({ p }) => p.zIndex < OBJECT_Z)
+      .sort((x, y) => x.p.zIndex - y.p.zIndex || x.i - y.i)
+      .forEach(({ p }) => {
+        const r = FURNITURE[p.key];
+        ctx.drawImage(furnitureSheet, r.x, r.y, r.w, r.h, p.x - r.anchorX, p.y - r.anchorY, r.w, r.h);
+      });
   }
 
   /**
@@ -245,7 +306,7 @@
     tag.style.top = `${(STATION.seatY + 2) * SCALE}px`;
     tag.style.zIndex = String(LABEL_Z);
     name.textContent = e.label;
-    agent.textContent = ` · ${e.agent}`;
+    agent.textContent = e.workspace ? ` · ${e.workspace} · ${e.agent}` : ` · ${e.agent}`;
 
     const status = e.state === 'needsYou' ? 'alert' : e.state === 'finished' ? 'done' : '';
     bubble.hidden = !status;
@@ -273,8 +334,9 @@
     employeeLayer.replaceChildren();
   }
 
-  function show(snapshot) {
-    employees = employeesFromSnapshot(snapshot);
+  /** `next` is one workspace's employees, or every workspace's. */
+  function show(next, truncated) {
+    employees = next;
     layout = layoutOffice(employees, layout);
     const present = new Set(employees.map((e) => e.id));
     for (const [id, parts] of drawn) {
@@ -286,9 +348,10 @@
     }
     draw();
     room.setAttribute('aria-label', STRINGS.room(employees.length));
+    emptyTitle.textContent = everyWorkspace ? STRINGS.emptyAll : STRINGS.empty;
     empty.hidden = employees.length > 0;
-    notice.textContent = snapshot.truncated ? STRINGS.truncated : '';
-    notice.hidden = !snapshot.truncated;
+    notice.textContent = truncated ? STRINGS.truncated : '';
+    notice.hidden = !truncated;
   }
 
   /** Reset and unavailable carry no snapshot: drop everything, including the remembered layout. */
@@ -310,7 +373,13 @@
     const id = String(++serial);
     parts.root.disabled = true;
     pending.set(id, employeeId);
+    // With every workspace in the room the host switches to the pane's
+    // workspace; otherwise it focuses panes in the one it shows only.
     port.postMessage({ v: 1, id, kind: 'request', method: 'pane.focus', params: { id: e.paneId } });
+  }
+
+  function truncatedAll(all) {
+    return all.truncated === true || (Array.isArray(all.workspaces) && all.workspaces.some((ws) => ws && ws.truncated === true));
   }
 
   function onAgentState(data) {
@@ -318,7 +387,9 @@
     if (data.epoch === epoch && data.revision <= revision) return;
     epoch = data.epoch;
     revision = data.revision;
-    if (data.status === 'ready' && data.snapshot) show(data.snapshot);
+    everyWorkspace = data.status === 'ready' && Boolean(data.allWorkspaces);
+    if (everyWorkspace) show(employeesFromAll(data.allWorkspaces), truncatedAll(data.allWorkspaces));
+    else if (data.status === 'ready' && data.snapshot) show(employeesFromSnapshot(data.snapshot), data.snapshot.truncated === true);
     else clear(data.status === 'reset' ? STRINGS.loading : STRINGS.unavailable);
   }
 
@@ -350,6 +421,7 @@
     port.start();
   });
 
+  window.addEventListener('resize', fit);
   layout = layoutOffice([]);
   draw();
   notice.textContent = STRINGS.connecting;

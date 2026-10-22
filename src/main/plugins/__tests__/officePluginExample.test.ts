@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { PluginHostLoader } from '../PluginHostLoader';
-import type { PluginTrustStore } from '../../mcp/PluginTrustStore';
+import { PluginTrustStore } from '../../mcp/PluginTrustStore';
 
 const BUNDLE = path.resolve('examples/plugins/office');
 
@@ -26,6 +26,7 @@ interface OfficeLayoutApi {
   employeesFromSnapshot(snapshot: { panes: Pane[] }): Employee[];
   layoutOffice(employees: Pick<Employee, 'id' | 'state'>[], prev?: Layout): Layout;
   spotFor(employee: Pick<Employee, 'id' | 'state'>, layout: Layout): { kind: string; key: string } | null;
+  employeesFromAll(all: unknown): (Employee & { workspace: string })[];
 }
 
 /** layout.js is a classic browser script; run it as the page would. */
@@ -54,7 +55,7 @@ describe('office example bundle', () => {
 
     expect(loader.listFailures()).toEqual([]);
     const manifest = loader.get('office')?.manifest;
-    expect(manifest?.capabilities).toEqual(['ui.rail-page', 'agent.state.read', 'pane.read']);
+    expect(manifest?.capabilities).toEqual(['ui.rail-page', 'agent.state.read', 'agent.state.read.all', 'pane.read']);
     expect(manifest?.contributes.railPage).toEqual({ title: 'Office', entry: 'index.html', agentStateEvents: true });
 
     const html = fs.readFileSync(path.join(BUNDLE, 'index.html'), 'utf8');
@@ -63,6 +64,19 @@ describe('office example bundle', () => {
     for (const file of [...scripts, 'characters.png', 'furniture.png', 'README.md', 'LICENSE']) {
       expect(loader.resolveBundlePath('office', file), file).not.toBeNull();
     }
+  });
+
+  it('asks again when an Office approved for one workspace is updated to every workspace', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-office-upgrade-'));
+    roots.push(root);
+    fs.cpSync(BUNDLE, path.join(root, 'plugins', 'office'), { recursive: true });
+    const trust = new PluginTrustStore(path.join(root, 'plugin-trust.json'));
+    await trust.setUserDecision('office', 'trusted', ['ui.rail-page', 'agent.state.read', 'pane.read']);
+    await new PluginHostLoader(trust, path.join(root, 'plugins')).loadAll();
+    const record = await trust.get('office');
+    expect(record?.declaredCapabilities).toContain('agent.state.read.all');
+    // The wider declaration is not covered by the old approval.
+    expect(record?.status).toBe('unconfirmed');
   });
 });
 
@@ -144,5 +158,36 @@ describe('office layout', () => {
     expect(second.loungeFor.b).toBe(first.loungeFor.b);
     expect(second.loungeFor.c).toBe(first.loungeFor.c);
     expect(second.loungeFor.d).toBe(first.loungeFor.a);
+  });
+});
+
+describe('office, every workspace in one room', () => {
+  const agent = (paneId: string, surfaceId: string, state = 'working', label = paneId) =>
+    ({ paneId, label, state, stashed: false, surfaces: [{ surfaceId, agentName: 'Codex' }] });
+  const all = { truncated: false, workspaces: [
+    { workspaceId: 'w1', name: 'alpha', truncated: false, panes: [agent('p1', 's1'), agent('p2', 's2', 'needsYou')] },
+    { workspaceId: 'w2', name: 'beta', truncated: false, panes: [] },
+    { workspaceId: 'w3', name: '', truncated: true, panes: [agent('p3', 's3', 'resting')] },
+  ] };
+
+  it("lists every workspace's employees in host order, each with its workspace", () => {
+    expect(office.employeesFromAll(all).map((e) => [e.id, e.paneId, e.state, e.workspace])).toEqual([
+      ['s1', 'p1', 'working', 'alpha'], ['s2', 'p2', 'needsYou', 'alpha'], ['s3', 'p3', 'resting', 'w3'],
+    ]);
+  });
+
+  it('tells colliding labels apart by workspace first, then agent, then number', () => {
+    const same = (id: string, ws: string, label: string) => ({ workspaceId: id, name: ws, truncated: false, panes: [agent(`p-${id}`, `s-${id}`, 'working', label)] });
+    const labels = office.employeesFromAll({ workspaces: [same('a', 'alpha', 'build'), same('b', 'beta', 'build'), same('c', 'gamma', 'tests')] }).map((e) => e.label);
+    expect(labels).toEqual(['build · alpha', 'build · beta', 'tests']);
+    const twin = { workspaceId: 'd', name: 'alpha', truncated: false, panes: [agent('p-d', 's-d', 'working', 'build')] };
+    const twins = office.employeesFromAll({ workspaces: [same('a', 'alpha', 'build'), twin] }).map((e) => e.label);
+    expect(twins).toEqual(['build · alpha · Codex · 1', 'build · alpha · Codex · 2']);
+  });
+
+  it('skips malformed and repeated workspaces instead of seating them twice', () => {
+    const list = office.employeesFromAll({ workspaces: [null, { name: 'x' }, all.workspaces[0], { ...all.workspaces[0], name: 'dup' }] });
+    expect(list.map((e) => e.id)).toEqual(['s1', 's2']);
+    expect(office.employeesFromAll(undefined)).toEqual([]);
   });
 });

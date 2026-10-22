@@ -72,3 +72,67 @@ describe('agent state subscription lifetime', () => {
     stop();
   });
 });
+
+describe('agent state subscription for every workspace', () => {
+  const all = { truncated: false, workspaces: [
+    { workspaceId: 'w1', name: 'alpha', truncated: false, panes: [] },
+    { workspaceId: 'w2', name: 'beta', truncated: false, panes: [] },
+  ] };
+  it('posts allWorkspaces, never snapshot, and follows the bound workspace without restarting', async () => {
+    vi.useFakeTimers();
+    let bound = 'w1';
+    const post = vi.fn();
+    const read = vi.fn(async () => ({ ok: true, result: all }));
+    const stop = subscribeAgentState({ scope: 'all', workspaceId: () => bound, post, read, isCurrent: () => true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(post.mock.calls.map(([e]) => e.status)).toEqual(['reset', 'ready']);
+    expect(post.mock.calls[1][0]).toMatchObject({ workspaceId: 'w1', allWorkspaces: all });
+    expect(post.mock.calls[1][0]).not.toHaveProperty('snapshot');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(post).toHaveBeenCalledTimes(2);
+    // A switch alone is a new revision of the same stream, not a reset.
+    bound = 'w2';
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(post).toHaveBeenCalledTimes(3);
+    expect(post.mock.calls[2][0]).toMatchObject({ status: 'ready', workspaceId: 'w2', epoch: post.mock.calls[1][0].epoch });
+    stop();
+  });
+  it('keeps running while no workspace is bound, and reads once one is', async () => {
+    vi.useFakeTimers();
+    let bound = undefined as string | undefined;
+    const post = vi.fn();
+    const read = vi.fn(async () => ({ ok: true, result: all }));
+    const stop = subscribeAgentState({ scope: 'all', workspaceId: () => bound, post, read, isCurrent: () => true });
+    await vi.advanceTimersByTimeAsync(3000);
+    // An unbound read would be refused by main, so none is made.
+    expect(read).not.toHaveBeenCalled();
+    expect(post.mock.calls.map(([e]) => e.status)).toEqual(['reset']);
+    bound = 'w1';
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls.map(([e]) => e.status)).toEqual(['reset', 'ready']);
+    expect(post.mock.calls[1][0]).toMatchObject({ workspaceId: 'w1', allWorkspaces: all });
+    stop();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+  it('ends with unavailable when a read is refused (a revoked grant)', async () => {
+    vi.useFakeTimers();
+    const post = vi.fn();
+    const read = vi.fn().mockResolvedValueOnce({ ok: true, result: all }).mockResolvedValue({ ok: false });
+    const stop = subscribeAgentState({ scope: 'all', workspaceId: () => 'w1', post, read, isCurrent: () => true });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(post.mock.calls.map(([e]) => e.status)).toEqual(['reset', 'ready', 'unavailable']);
+    expect(read).toHaveBeenCalledTimes(2);
+    stop();
+  });
+  it('rejects a single-workspace answer on the all-workspaces stream', async () => {
+    vi.useFakeTimers();
+    const post = vi.fn();
+    const read = vi.fn(async () => ({ ok: true, result: snapshot }));
+    const stop = subscribeAgentState({ scope: 'all', workspaceId: () => 'w1', post, read, isCurrent: () => true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(post.mock.calls.map(([e]) => e.status)).toEqual(['reset', 'unavailable']);
+    stop();
+  });
+});

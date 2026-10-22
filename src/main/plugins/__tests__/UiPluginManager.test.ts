@@ -1,11 +1,11 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { PluginHostLoader } from '../PluginHostLoader';
 import { UiPluginManager } from '../UiPluginManager';
 import { ApprovalQueue } from '../../mcp/ApprovalQueue';
-import type { PluginTrustStore } from '../../mcp/PluginTrustStore';
+import { PluginTrustStore } from '../../mcp/PluginTrustStore';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -142,4 +142,57 @@ it('can remove a managed bundle even when its manifest is corrupt', async () => 
   expect((await test.manager.inventory()).plugins[0]).toMatchObject({ managed: true, invalid: true });
   await test.manager.remove('agent-state-page');
   expect((await test.manager.inventory()).plugins).toEqual([]);
+});
+
+describe('a catalog-installed bundle older than the shipped one', () => {
+  const OLD_CAPABILITIES = ['ui.rail-page', 'agent.state.read', 'pane.read'];
+  const shipped = () => JSON.parse(fs.readFileSync(path.resolve('examples/plugins/office/manifest.json'), 'utf8')) as { version: string; capabilities: string[] };
+
+  /**
+   * Startup over a data dir holding an Office installed before the update:
+   * its manifest is the 1.0.0 one, approved for exactly that declaration.
+   */
+  async function startWith(options: { managed: boolean; version?: string }) {
+    const test = setup();
+    const destination = path.join(test.options.pluginsDir, 'office');
+    fs.cpSync(path.join(test.options.catalogDir, 'office'), destination, { recursive: true });
+    const manifestPath = path.join(destination, 'manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...shipped(), version: options.version ?? '1.0.0', capabilities: OLD_CAPABILITIES }));
+    fs.writeFileSync(path.join(destination, 'office.js'), '/* the 1.0.0 page */');
+    fs.writeFileSync(test.options.statePath, JSON.stringify({ version: 1, disabled: [], managed: options.managed ? ['office'] : [] }));
+    const trust = new PluginTrustStore(path.join(test.root, 'plugin-trust.json'));
+    await trust.setUserDecision('office', 'trusted', OLD_CAPABILITIES);
+    const loader = new PluginHostLoader(trust, test.options.pluginsDir);
+    const manager = new UiPluginManager({ ...test.options, loader, trust });
+    await manager.initialize();
+    const installed = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { version: string; capabilities: string[] };
+    return { test, manager, loader, trust, destination, installed };
+  }
+
+  it('is replaced by the shipped bundle at startup, and its wider permissions are asked for again', async () => {
+    const { manager, loader, trust, destination, installed } = await startWith({ managed: true });
+    expect(installed).toMatchObject({ version: shipped().version, capabilities: shipped().capabilities });
+    expect(installed.capabilities).toContain('agent.state.read.all');
+    expect(fs.readFileSync(path.join(destination, 'office.js'))).toEqual(fs.readFileSync(path.resolve('examples/plugins/office/office.js')));
+    // The approval covered the 1.0.0 declaration only.
+    expect(await trust.get('office')).toMatchObject({ status: 'unconfirmed', declaredCapabilities: shipped().capabilities });
+    expect(loader.get('office')?.manifest.version).toBe(shipped().version);
+    expect((await manager.inventory()).plugins.find((plugin) => plugin.name === 'office')).toMatchObject({ managed: true, enabled: true, trustStatus: 'unconfirmed' });
+    // Nothing half-published is left beside it.
+    expect(fs.readdirSync(path.dirname(destination))).toEqual(['office']);
+  });
+
+  it('never touches a bundle placed by hand', async () => {
+    const { trust, destination, installed } = await startWith({ managed: false });
+    expect(installed).toMatchObject({ version: '1.0.0', capabilities: OLD_CAPABILITIES });
+    expect(fs.readFileSync(path.join(destination, 'office.js'), 'utf8')).toBe('/* the 1.0.0 page */');
+    expect((await trust.get('office'))?.status).toBe('trusted');
+  });
+
+  it.each(['shipped', '9.0.0', 'not-a-version'])('leaves an installed copy at version %s alone', async (version) => {
+    const { trust, destination, installed } = await startWith({ managed: true, version: version === 'shipped' ? shipped().version : version });
+    expect(installed.capabilities).toEqual(OLD_CAPABILITIES);
+    expect(fs.readFileSync(path.join(destination, 'office.js'), 'utf8')).toBe('/* the 1.0.0 page */');
+    expect((await trust.get('office'))?.status).toBe('trusted');
+  });
 });

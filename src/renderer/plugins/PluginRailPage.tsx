@@ -43,7 +43,8 @@ export default function PluginRailPage({ name }: { name: string }) {
       <h1 className="text-[14px] font-medium text-[var(--text-main)]">{page.title}</h1>
       <span className="text-[11px] text-[var(--text-muted)]">{t('plugins.page.extension')}</span>
     </header>
-    {plugin.trustStatus === 'trusted' ? <PluginFrame key={`${name}:${plugin.version}:${page.entry}`} pluginName={name} entry={page.entry} railPage agentStateEvents={page.agentStateEvents && plugin.capabilities.includes('agent.state.read')} className="min-h-0 flex-1" /> : (
+    {plugin.trustStatus === 'trusted' ? <PluginFrame key={`${name}:${plugin.version}:${page.entry}`} pluginName={name} entry={page.entry} railPage agentStateEvents={page.agentStateEvents && plugin.capabilities.includes('agent.state.read')}
+      agentStateScope={plugin.capabilities.includes('agent.state.read.all') ? 'all' : 'workspace'} className="min-h-0 flex-1" /> : (
       <div className="px-5 py-3 text-[12px] text-[var(--text-sub)]">
         <button type="button" className={`underline ${FOCUS_RING}`} disabled={busy} onClick={() => {
           setBusy(true); setFailed(false);

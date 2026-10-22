@@ -67,3 +67,127 @@ describe('agent.state permission and scope boundary', () => {
     expect(await call()).toMatchObject({ ok: true, result: snapshot });
   });
 });
+
+const all = {
+  truncated: false,
+  workspaces: [
+    { workspaceId: 'w1', name: 'alpha', truncated: false, panes: [] },
+    { workspaceId: 'w2', name: 'beta', truncated: false, panes: [{ paneId: 'p2', label: 'api', state: 'needsYou', stashed: false, surfaces: [{ surfaceId: 's2', agentName: 'Codex' }] }] },
+  ],
+};
+
+describe('agent.state.all: a separate grant for every workspace', () => {
+  const callAll = (router: RpcRouter, params: Record<string, unknown> = {}, hostedWorkspace: string | null = 'w1') =>
+    router.dispatch({ id: 'a', method: 'agent.state.all', clientName: 'demo', params }, { firstParty: true, hostedWorkspace });
+
+  it('gives a plugin without the grant one workspace, and one with it every workspace', async () => {
+    const without = setup(['agent.state.read']);
+    expect(await callAll(without.router)).toMatchObject({ ok: false });
+    expect(read).not.toHaveBeenCalled();
+    // The single-workspace read is exactly today's, grant or not.
+    expect(await without.call({ workspaceId: 'w2' })).toMatchObject({ ok: true, result: snapshot });
+    expect(read).toHaveBeenLastCalledWith(expect.any(Function), 'agent.state', { workspaceId: 'w1', includeActivity: false }, { timeoutError: expect.any(Error) });
+
+    read.mockReset();
+    read.mockResolvedValue({ ...all, private: 'x' });
+    const granted = setup(['agent.state.read', 'agent.state.read.all']);
+    expect(await callAll(granted.router)).toMatchObject({ ok: true, result: all });
+    expect(read).toHaveBeenCalledWith(expect.any(Function), 'agent.state.all', {}, { timeoutError: expect.any(Error) });
+  });
+
+  it.each(['unconfirmed', 'denied'] as const)('refuses a %s plugin even in shadow mode', async (status) => {
+    expect(await callAll(setup(['agent.state.read.all'], status).router)).toMatchObject({ ok: false });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('refuses a scoped grant, unbound hosts, external callers and activity', async () => {
+    expect(await callAll(setup(['agent.state.read.all:w1']).router)).toMatchObject({ ok: false });
+    const { router } = setup(['agent.state.read.all', 'terminal.read']);
+    expect(await callAll(router, {}, null)).toMatchObject({ ok: false });
+    expect(await router.dispatch({ id: 'x', method: 'agent.state.all', clientName: 'demo', params: {} })).toMatchObject({ ok: false });
+    expect(await callAll(router, { includeActivity: true })).toMatchObject({ ok: false });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('checks the grant again after the renderer answers, on every read', async () => {
+    const { router, trust } = setup(['agent.state.read', 'agent.state.read.all']);
+    read.mockResolvedValue(all);
+    expect(await callAll(router)).toMatchObject({ ok: true });
+    // Revoked while a read is in flight: that answer is not delivered.
+    read.mockImplementation(async () => { trust.declaredCapabilities = ['agent.state.read']; return all; });
+    expect(await callAll(router)).toMatchObject({ ok: false, error: 'Agent state permission changed' });
+    // And the next read is refused before the renderer is asked.
+    read.mockClear();
+    expect(await callAll(router)).toMatchObject({ ok: false });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('answers each read from the renderer, so a workspace created or closed since is in or out', async () => {
+    const { router } = setup(['agent.state.read.all']);
+    read.mockResolvedValueOnce(all).mockResolvedValueOnce({ ...all, workspaces: [all.workspaces[1]] });
+    expect(((await callAll(router)) as { result: typeof all }).result.workspaces.map((w) => w.workspaceId)).toEqual(['w1', 'w2']);
+    expect(((await callAll(router)) as { result: typeof all }).result.workspaces.map((w) => w.workspaceId)).toEqual(['w2']);
+  });
+});
+
+describe('pane.focus from a plugin granted every workspace', () => {
+  // The host marks a request from the plugin's rail page; sidebar panels and
+  // status-bar widgets (always mounted) leave the marker out.
+  const focus = (router: RpcRouter, params: Record<string, unknown>, hostedWorkspace: string | null = 'w1', railPage = true) =>
+    router.dispatch({ id: 'f', method: 'pane.focus', clientName: 'demo', params },
+      railPage ? { firstParty: true, hostedWorkspace, hostedRailPage: true } : { firstParty: true, hostedWorkspace });
+  beforeEach(() => { read.mockResolvedValue({ ok: true }); });
+
+  it('stays confined to the bound workspace without the grant', async () => {
+    await focus(setup(['agent.state.read', 'pane.read']).router, { id: 'p2' });
+    expect(read).toHaveBeenCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', confineWorkspaceId: 'w1' });
+  });
+
+  it('may take the user to another workspace with the grant', async () => {
+    await focus(setup(['agent.state.read', 'agent.state.read.all', 'pane.read']).router, { id: 'p2' });
+    expect(read).toHaveBeenCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', revealWorkspace: true });
+  });
+
+  it('keeps a sidebar or status-bar frame confined, grant or not', async () => {
+    const { router } = setup(['agent.state.read', 'agent.state.read.all', 'pane.read']);
+    await focus(router, { id: 'p2' }, 'w1', false);
+    expect(read).toHaveBeenLastCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', confineWorkspaceId: 'w1' });
+    // The same plugin's rail page is widened.
+    await focus(router, { id: 'p2' });
+    expect(read).toHaveBeenLastCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', revealWorkspace: true });
+  });
+
+  it('refuses the rail-page marker from anything but a hosted dispatch', async () => {
+    const { router } = setup(['agent.state.read.all', 'pane.read']);
+    const forged = { firstParty: true, hostedRailPage: true } as unknown as Parameters<RpcRouter['dispatch']>[1];
+    expect(await router.dispatch({ id: 'f', method: 'pane.focus', clientName: 'demo', params: { id: 'p2' } }, forged))
+      .toMatchObject({ ok: false, error: 'Invalid RPC dispatch provenance' });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('keeps a plugin granted every workspace but not pane.read confined, even in shadow mode', async () => {
+    // Shadow mode (the router default) still runs the handler for a refused
+    // call; the widening needs the call itself allowed, so it stays confined.
+    await focus(setup(['agent.state.read', 'agent.state.read.all']).router, { id: 'p2' });
+    expect(read).toHaveBeenLastCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', confineWorkspaceId: 'w1' });
+    expect(read).not.toHaveBeenCalledWith(expect.any(Function), 'pane.focus', expect.objectContaining({ revealWorkspace: true }));
+  });
+
+  it('never takes the flag from the plugin, and never widens an unapproved or unbound plugin', async () => {
+    await focus(setup(['agent.state.read', 'pane.read']).router, { id: 'p2', revealWorkspace: true });
+    expect(read).toHaveBeenLastCalledWith(expect.any(Function), 'pane.focus', { id: 'p2', confineWorkspaceId: 'w1' });
+    await focus(setup(['agent.state.read.all', 'pane.read'], 'unconfirmed').router, { id: 'p2' });
+    expect(read).not.toHaveBeenCalledWith(expect.any(Function), 'pane.focus', expect.objectContaining({ revealWorkspace: true }));
+    read.mockClear();
+    expect(await focus(setup(['agent.state.read.all', 'pane.read']).router, { id: 'p2' }, null)).toMatchObject({ ok: false });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('keeps close, stash and unstash confined with the grant', async () => {
+    const { router } = setup(['agent.state.read.all', 'pane.read', 'pane.create', 'pane.write']);
+    for (const method of ['pane.close', 'pane.stash', 'pane.unstash'] as const) {
+      await router.dispatch({ id: method, method, clientName: 'demo', params: { id: 'p2' } }, { firstParty: true, hostedWorkspace: 'w1' });
+      expect(read).toHaveBeenLastCalledWith(expect.any(Function), method, { id: 'p2', confineWorkspaceId: 'w1' });
+    }
+  });
+});

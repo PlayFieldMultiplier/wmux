@@ -511,3 +511,4 @@ access to the caller's binding.
 | Method | Params | Tier | Notes |
 |---|---|---|---|
 | `agent.state` | `workspaceId?`, `includeActivity?` | experimental | Hosted UI plugins only, bound to the host workspace. Requires `agent.state.read`; activity also requires unrestricted `terminal.read`. See [UI plugin pages](ui-plugin-pages.md). |
+| `agent.state.all` | — | experimental | Hosted UI plugins only. The same projection for every local workspace, with each workspace's id and name; no activity. Requires `agent.state.read.all`. See [UI plugin pages](ui-plugin-pages.md#every-workspace). |

@@ -180,3 +180,22 @@ it('shows every grantable permission, including rail and agent-state grants', as
   expect(html).toContain('agent.state.read');
   expect(html).toContain('pane.read');
 });
+
+it('lists agent.state.read.all as its own row, apart from the current-workspace grant', () => {
+  const groups = groupCapabilities(['ui.rail-page', 'agent.state.read', 'agent.state.read.all', 'pane.read']);
+  const current = groups.find((g) => g.capabilities.some((c) => c.capability === 'agent.state.read'));
+  const every = groups.find((g) => g.capabilities.some((c) => c.capability === 'agent.state.read.all'));
+  expect(current?.riskClass).toBe('agent-state');
+  expect(current?.capabilities.map((c) => c.raw)).toEqual(['agent.state.read']);
+  expect(every?.riskClass).toBe('agent-state-all');
+  expect(every?.capabilities.map((c) => c.raw)).toEqual(['agent.state.read.all']);
+  expect(every?.copy.summary).toMatch(/every workspace/);
+  // Right after the current-workspace row, so the two read as a pair.
+  expect(groups.indexOf(every!)).toBe(groups.indexOf(current!) + 1);
+  const html = renderToStaticMarkup(createElement(PermissionApprovalDialogView, defaultProps({
+    declaredCapabilities: ['ui.rail-page', 'agent.state.read', 'agent.state.read.all', 'pane.read'],
+  })));
+  expect(html).toContain(every!.copy.summary);
+  expect(html).toContain(current!.copy.summary);
+  expect(html.match(/data-severity=/g)).toHaveLength(4);
+});

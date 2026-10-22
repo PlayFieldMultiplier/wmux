@@ -167,7 +167,7 @@ describe('permissionGrammar.parsePermissionList', () => {
 });
 
 describe('UI plugin permissions without path scopes', () => {
-  it.each(['agent.state.read', 'ui.rail-page'])('rejects a scoped %s declaration', (capability) => {
+  it.each(['agent.state.read', 'agent.state.read.all', 'ui.rail-page'])('rejects a scoped %s declaration', (capability) => {
     expect(parsePermission(`${capability}:never.matches`).ok).toBe(false);
     expect(parsePermission(capability).ok).toBe(true);
   });
