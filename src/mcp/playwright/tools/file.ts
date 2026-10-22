@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Page } from 'playwright-core';
+import type { Download, Page } from 'playwright-core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { PlaywrightEngine } from '../PlaywrightEngine';
@@ -15,7 +15,11 @@ import {
   releaseConsent,
   requestBrowserConsent,
 } from '../consent';
-import { BROWSER_CONSENT_DOWNLOAD_FINISH_MS, BROWSER_CONSENT_DOWNLOAD_START_MAX_MS } from '../../../shared/browserPolicy';
+import {
+  BROWSER_CONSENT_DOWNLOAD_FINISH_MS,
+  BROWSER_CONSENT_DOWNLOAD_START_MAX_MS,
+  browserPolicyRefusalCode,
+} from '../../../shared/browserPolicy';
 import type { BrowserToolDeps } from '../browserScope';
 import { resolveRef } from '../snapshot';
 import { describeToolError } from '../toolError';
@@ -353,6 +357,45 @@ async function consentedDownload(
     releaseConsent(scope, operationId);
     throw err;
   }
+}
+
+/**
+ * Unprotected pane: the download has begun (the browser writes it to its own
+ * temporary file) and the operator is asked about it, by host and file name,
+ * before the tool hands it over. A refusal, a timeout or nobody to ask cancels
+ * and deletes it. There is no standing grant on an unprotected pane, so every
+ * download is asked about.
+ */
+async function consentToUnprotectedDownload(
+  scope: Parameters<typeof requestBrowserConsent>[0],
+  tool: string,
+  page: Page,
+  download: Download,
+): Promise<void> {
+  try {
+    await requestBrowserConsent(scope, tool, {
+      action: 'download',
+      url: downloadSourceUrl(download.url(), page.url()),
+      detail: download.suggestedFilename(),
+      unprotected: true,
+    });
+  } catch (err) {
+    await download.cancel().catch(() => undefined);
+    await download.delete().catch(() => undefined);
+    throw err;
+  }
+}
+
+/** The http(s) URL a download is named by: its own, a blob's origin, else the page's. */
+function downloadSourceUrl(url: string, pageUrl: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;
+    if (parsed.protocol === 'blob:' && parsed.origin !== 'null') return parsed.origin;
+  } catch {
+    // Not a URL: the page it came from names it.
+  }
+  return pageUrl;
 }
 
 /** Budget for each half of the restore. Bounded so a failed download does not
@@ -742,7 +785,7 @@ export function registerFileTools(server: McpServer, deps: BrowserToolDeps): voi
   // -----------------------------------------------------------------------
   server.tool(
     'browser_download',
-    'Click an element by ref and capture the resulting download. Returns the saved path plus the name and URL the browser had for it. timeout bounds the wait for the download to START, not to finish — a download that begins in time then runs for minutes still completes (measured: a 60s transfer succeeds under the 30s default). If the click navigates instead of downloading, which is what Chrome does with a cross-origin "download" link, the tab is put back where it was and the error says so.' + EFFECT_TRAILER_NOTE,
+    'Click an element by ref and capture the resulting download. Returns the saved path plus the name and URL the browser had for it. timeout bounds the wait for the download to START, not to finish — a download that begins in time then runs for minutes still completes (measured: a 60s transfer succeeds under the 30s default). If the click navigates instead of downloading, which is what Chrome does with a cross-origin "download" link, the tab is put back where it was and the error says so. The user may be asked to allow the download.' + EFFECT_TRAILER_NOTE,
     BROWSER_DOWNLOAD_SHAPE,
     async ({ ref, filename, timeout, surfaceId }) => leasedMutation(deps, surfaceId, async (scope, effect) => {
       // Captured before the click so a stray navigation has somewhere to go
@@ -806,6 +849,7 @@ export function registerFileTools(server: McpServer, deps: BrowserToolDeps): voi
           page.waitForEvent('download', { timeout: timeout ?? DOWNLOAD_START_TIMEOUT_MS }),
           el.click(),
         ]);
+        await consentToUnprotectedDownload(scope, 'browser_download', page, download);
 
         let filePath: string;
         if (filename) {
@@ -876,7 +920,7 @@ export function registerFileTools(server: McpServer, deps: BrowserToolDeps): voi
   // -----------------------------------------------------------------------
   server.tool(
     'browser_wait_for_download',
-    'Wait for a download event, optionally matching a filename.',
+    'Wait for a download event, optionally matching a filename. The user may be asked to allow it.',
     BROWSER_WAIT_FOR_DOWNLOAD_SHAPE,
     async ({ filename, timeout, surfaceId }) => withAutomationLease(deps, surfaceId, async (scope) => {
       const resolvedTimeout = timeout ?? 30000;
@@ -934,6 +978,7 @@ export function registerFileTools(server: McpServer, deps: BrowserToolDeps): voi
           };
         }
 
+        await consentToUnprotectedDownload(scope, 'browser_wait_for_download', page, download);
         const downloadPath = await download.path();
 
         return {
@@ -954,7 +999,8 @@ export function registerFileTools(server: McpServer, deps: BrowserToolDeps): voi
         };
       } catch (error) {
         const message = describeToolError(error);
-        if (message.includes('Timeout') || message.includes('timeout')) {
+        // A consent refusal is reported as itself, never as a download timeout.
+        if (browserPolicyRefusalCode(error) === null && (message.includes('Timeout') || message.includes('timeout'))) {
           return {
             content: [
               {

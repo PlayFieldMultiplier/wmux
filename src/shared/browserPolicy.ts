@@ -92,6 +92,15 @@ export function policyDeniedMessage(method: string, why: string): string {
 }
 
 /**
+ * The same refusal for an unprotected pane, where the agent asked to skip a
+ * safety check (allowDangerous / allowSensitiveDomains) or to download a file
+ * and the operator did not allow it.
+ */
+export function bypassDeniedMessage(method: string, why: string): string {
+  return `${method}: ${POLICY_DENIED_CODE}: ${why}. Skipping this safety check needs the operator's consent; do not retry unchanged.`;
+}
+
+/**
  * The refusal code an error carries, or null. The code must be the message
  * PREFIX, optionally after one `<rpc.method>: ` segment — never a substring
  * elsewhere, so a page title quoted in some other error cannot forge it.

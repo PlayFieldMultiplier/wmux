@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Protected panes on the MCP lane: page scripts, downloads and sensitive-site
 // cookies ask main first. The agent's allowDangerous / allowSensitiveDomains
-// never stand in for the operator there; an unprotected pane never asks.
+// never stand in for the operator there; an unprotected pane asks only when a
+// check is skipped (consent.unprotected.test.ts).
 
 const { mockSendRpc, getPage, isolated, resolveRef } = vi.hoisted(() => ({
   mockSendRpc: vi.fn(),

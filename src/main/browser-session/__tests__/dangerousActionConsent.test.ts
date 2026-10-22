@@ -265,6 +265,91 @@ describe('DangerousActionConsent', () => {
   });
 });
 
+describe('DangerousActionConsent on an unprotected pane (a skipped safety check)', () => {
+  // pane-2 has no policy entry: no site list, no standing grants.
+  const OPEN = { mode: 'off' as const, allow: [], block: [] };
+  const loose = (over: Partial<ConsentCaller> = {}): ConsentCaller =>
+    ({ workspaceId: WS, paneId: 'pane-2', profileId: '', epoch: 0, hosts: OPEN, ptyId: 'pty-2', unprotected: true, ...over });
+  const revalidateLoose = async () => loose();
+
+  it('asks through the same prompt, marked unprotected; approve once runs it, deny refuses it', async () => {
+    const consent = makeConsent();
+    const first = consent.authorize(loose(), { action: 'download', hosts: ['cdn.test'], detail: 'report.csv' }, { revalidate: revalidateLoose });
+    await flush();
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({
+      kind: 'browser-action',
+      deadlineAt: expect.any(Number),
+      browserAction: { paneId: 'pane-2', action: 'download', host: 'cdn.test', detail: 'report.csv', unprotected: true },
+    });
+    await queue.resolvePrompt(opened[0].promptId, true);
+    await expect(first).resolves.toMatchObject({ via: 'once' });
+
+    const second = consent.authorize(loose(), { action: 'evaluate', hosts: ['any.test'] }, { revalidate: revalidateLoose });
+    await flush();
+    await queue.resolvePrompt(opened[1].promptId, false);
+    await expect(second).rejects.toMatchObject({
+      code: 'policy_denied',
+      message: expect.stringMatching(/policy_denied: the operator denied it\. Skipping this safety check needs the operator's consent/),
+    });
+  });
+
+  it('"Always" is a once there: nothing is written, the next call asks again', async () => {
+    const consent = makeConsent();
+    const before = store.epoch();
+    const pending = consent.authorize(loose(), { action: 'download', hosts: ['cdn.test'] }, { revalidate: revalidateLoose });
+    await flush();
+    await queue.resolvePrompt(opened[0].promptId, true, { remember: true });
+    await expect(pending).resolves.toMatchObject({ via: 'once' });
+    expect(store.epoch()).toBe(before);
+    void consent.authorize(loose(), { action: 'download', hosts: ['cdn.test'] }, { revalidate: revalidateLoose }).catch(() => undefined);
+    await flush();
+    expect(opened).toHaveLength(2);
+  });
+
+  it('a timeout denies', async () => {
+    const pending = makeConsent({ deadlineMs: 10 }).authorize(loose(), { action: 'evaluate', hosts: ['a.test'] }, { revalidate: revalidateLoose });
+    await expect(pending).rejects.toMatchObject({ code: 'policy_denied', message: expect.stringContaining('did not answer in time') });
+    expect(queue.inflightCount()).toBe(0);
+  });
+
+  it('no window to show the prompt: refused at once, nothing queued', async () => {
+    const pending = makeConsent({ canAsk: () => false }).authorize(loose(), { action: 'evaluate', hosts: ['a.test'] }, { revalidate: revalidateLoose });
+    await expect(pending).rejects.toMatchObject({ code: 'policy_denied', message: expect.stringContaining('nobody can be asked') });
+    expect(opened).toHaveLength(0);
+  });
+
+  it('no queue: refused', async () => {
+    await expect(
+      makeConsent({ queue: () => null }).authorize(loose(), { action: 'evaluate', hosts: ['a.test'] }, { revalidate: revalidateLoose }),
+    ).rejects.toMatchObject({ code: 'policy_denied' });
+  });
+
+  it('an unattended run gets needs_consent with nothing queued', async () => {
+    ownership = 'owned';
+    await expect(
+      makeConsent().authorize(loose(), { action: 'sensitive', hosts: ['mail.google.com'] }, { revalidate: revalidateLoose }),
+    ).rejects.toMatchObject({ code: 'needs_consent' });
+    expect(opened).toHaveLength(0);
+  });
+
+  it('a pane that became protected under the prompt voids the answer', async () => {
+    const pending = makeConsent().authorize(loose(), { action: 'evaluate', hosts: ['a.test'] }, {
+      revalidate: async () => loose({ unprotected: undefined }),
+    });
+    await flush();
+    await queue.resolvePrompt(opened[0].promptId, true);
+    await expect(pending).rejects.toMatchObject({ code: 'policy_denied' });
+  });
+
+  it('a protected pane is unchanged: canAsk is not consulted and its grant still answers silently', async () => {
+    await store.setGrants(PANE, { workspaceId: WS, profileId: PROFILE }, () => ({ download: true }), store.epoch());
+    const decision = await makeConsent({ canAsk: () => false }).authorize(caller(), { action: 'download', hosts: ['a.test'] }, { revalidate });
+    expect(decision.via).toBe('grant');
+    expect(opened).toHaveLength(0);
+  });
+});
+
 describe('openDownloadPass', () => {
   function fakeGuard() {
     const sent: Array<[string, Record<string, unknown>]> = [];

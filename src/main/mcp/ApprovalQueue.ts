@@ -36,7 +36,8 @@ import type { PluginTrustStore } from './PluginTrustStore';
  * 'computer-app' asks whether one agent may see and drive one desktop app for
  * this run (src/main/computer/computerConsent.ts); not persisted either.
  * 'browser-action' asks whether an agent may run one dangerous action (page
- * script, download, sensitive-site cookies) on a protected browser pane
+ * script, download, sensitive-site cookies) on a protected browser pane, or
+ * skip a safety check (or download) on an unprotected one
  * (src/main/browser-session/dangerousActionConsent.ts). The queue persists
  * nothing for it; its answer may carry `remember`, which the consent service
  * turns into the pane's standing grant after re-validating it.
@@ -54,6 +55,12 @@ export interface BrowserActionPromptInfo {
   host: string;
   /** A short, already-sanitized description of the operation. */
   detail?: string;
+  /**
+   * The pane is not protected: the agent asked to skip a safety check (or to
+   * download). There is no standing grant to remember, so the dialog offers
+   * no "Always on this pane".
+   */
+  unprotected?: true;
 }
 
 /**
