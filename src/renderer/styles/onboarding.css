@@ -83,6 +83,41 @@
   line-height: 20px;
   color: var(--text-sub);
 }
+/* A step with choices: the description leads them, each choice is its name
+   (main text) over what it is for (sub text), and a link closes the copy. */
+.onboarding-description:has(+ .onboarding-items) { margin-bottom: 8px; }
+.onboarding-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 18px;
+}
+.onboarding-item dt { font-weight: 500; color: var(--text-main); }
+.onboarding-item dd { margin: 0; color: var(--text-sub); }
+.onboarding-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+.onboarding-link {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--accent-blue);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.onboarding-link:hover { text-decoration: underline; }
 .onboarding-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .onboarding-actions-end { display: flex; gap: 8px; }
 /* Ghost Skip sits flush with the copy's left edge. */

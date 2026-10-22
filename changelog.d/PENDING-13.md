@@ -1,0 +1,3 @@
+### Changed
+
+- The onboarding tour's browser step now says what each browser is for: Built-in for the apps and docs your agents open inside wmux, Chrome with its own profile for sites where you stay signed in, and External for links in your usual browser. It points at the pane's browser button and links to Settings › Browser.
