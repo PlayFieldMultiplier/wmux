@@ -1252,6 +1252,41 @@ describe('room-wide owner messages, wake context and turn ends', () => {
     expect(posted).toEqual(['cp-room', 'cp-lead']);
   });
 
+  it('a turn on an owner message or a mention goes to endGroupTurn first; a group chat\'s card takes it, anything else posts as before', async () => {
+    const r = rig();
+    const posted: string[] = [];
+    const ended: Array<[string, string]> = [];
+    const groupCards = new Set(['cp-group', 'c-mention-group']);
+    setBotRuntimePorts({
+      postTurnText: (_p, _i, text) => { posted.push(text); },
+      endGroupTurn: async (_p, item, text) => {
+        const cardId = item.reason.kind === 'human' ? item.reason.clientMessageId ?? '' : item.reason.kind === 'mention' ? item.reason.cardId : '';
+        ended.push([cardId, text]);
+        return groupCards.has(cardId);
+      },
+    });
+    const id = createBot(r, 'lead');
+    const reasons = [
+      { kind: 'human', text: 'In the group', source: 'desktop', runId: 'run-c-1', room: true, clientMessageId: 'cp-group' },
+      { kind: 'human', text: 'In General', source: 'desktop', runId: 'run-c-2', room: true, clientMessageId: 'cp-general' },
+      { kind: 'mention', cardId: 'c-mention-group', handoffId: 'h-1', fromBotId: 'bot-00000099' },
+      { kind: 'routine', routineId: 'rt-1', dueAt: clock },
+    ] as const;
+    for (const reason of reasons) {
+      must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: reason as never, priority: 0, threadId: 'general' }));
+      r.runtime.kick();
+      await settle();
+      r.adapters[0].end([{ type: 'text-delta', text: `[[react:👍]] ${reason.kind}` }, { type: 'turn-end', sessionId: 'sess-1' }]);
+      await settle();
+    }
+    // Every owner message and mention is offered; a routine is not.
+    expect(ended.map(([c]) => c)).toEqual(['cp-group', 'cp-general', 'c-mention-group']);
+    // The group's card took its turn; the General message's text goes to
+    // postTurnText as before, which takes the marker out of the card
+    // (groupProtocol.test.ts).
+    expect(posted).toEqual(['[[react:👍]] human']);
+  });
+
   it('an interrupted turn posts nothing, nor does a post that throws fail the turn', async () => {
     const r = rig();
     const posted: string[] = [];

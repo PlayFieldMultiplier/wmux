@@ -5401,6 +5401,8 @@ export const en = {
   'botsPage.chat.replies': "{count} replies · last {time}",
   'botsPage.chat.repliesOne': "1 reply · last {time}",
   'botsPage.chat.inThread': "in thread",
+  'botsPage.chat.reacted': "{names} reacted {emoji}",
+  'botsPage.chat.sawThis': "{names} saw this",
   'botsPage.work.handedTo': "Handed to {name}",
   'botsPage.work.working': "Working",
   'botsPage.work.review': "Waiting for review",

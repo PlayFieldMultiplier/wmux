@@ -67,6 +67,7 @@ export const GRADERS = {
   'taint-relay-lane-refused': approvals.taintRelayLaneRefused,
   'group-chat-wakes-its-members': group.groupChatWakesItsMembers,
   'group-chat-coordinator-takes-it': group.groupChatCoordinatorTakesIt,
+  'group-chat-reactions-and-caps': group.groupChatReactionsAndCaps,
   'taint-research-lane-refused': approvals.taintLaneRefused,
   'connector-worker-launch': connectors.connectorWorkerLaunch,
   'connector-off-for-bot-refused': connectors.connectorOffForBotRefused,

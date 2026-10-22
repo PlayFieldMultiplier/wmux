@@ -213,3 +213,38 @@ export function chatStopAll(snap, expect) {
   out.push(criterion('no_prompt_after_stop', Object.keys(snap.stub ?? {}).every((k) => stubEvents(snap, k, 'prompt').length === 2), Object.entries(snap.stub ?? {}).map(([k, l]) => `${k}:${arr(l).filter((e) => e.event === 'prompt').length}`).join(', ')));
   return out;
 }
+
+/** group-chat-reactions-and-caps: in a group chat a reaction-only turn is
+ *  a reaction on the card it answered, a silent turn an acknowledgement,
+ *  neither a card; two bots that answer each other by mention stop at two
+ *  posts each, the refused turn acknowledging the card it was woken for;
+ *  no reaction wakes a bot. */
+export function groupChatReactionsAndCaps(snap, expect) {
+  const made = arr(snap.records).find((r) => r.label === 'make the group')?.result ?? null;
+  const thread = made?.ok ? made.group?.threadId : null;
+  const greeting = injected(snap, expect.greeting);
+  const plan = injected(snap, expect.plan);
+  const reactor = botId(snap, expect.reactor);
+  const silent = botId(snap, expect.silent);
+  const greetingCard = arr(snap.cards).find((c) => c.id === greeting?.id) ?? null;
+  const reactions = arr(greetingCard?.reactions);
+  const inGroup = (key) => botCards(snap, key).filter((c) => c.threadId === thread);
+  const planCard = arr(snap.cards).find((c) => c.id === plan?.id) ?? null;
+  const after = (key) => inGroup(key).filter((c) => planCard && c.seq > planCard.seq);
+  const refused = stubTools(snap, expect.reactor, 'room_post').map((t) => parseToolText(t.text)).filter((r) => r && r.ok === false);
+  const beforePlan = (key) => inGroup(key).filter((c) => !planCard || c.seq < planCard.seq);
+  const lastBeta = after(expect.silent).at(-1) ?? null;
+  const mentionWakes = arr(snap.wakes).filter((w) => w.reason?.kind === 'mention');
+  return [
+    criterion('group_made', !!thread && /^group:grp-[0-9a-f]{8}$/.test(thread), JSON.stringify(made ?? null).slice(0, 200)),
+    criterion('reaction_on_greeting', reactions.some((r) => r.botId === reactor && r.emoji === '❤️' && r.ack === undefined), JSON.stringify(reactions)),
+    criterion('silence_acknowledged', reactions.filter((r) => r.botId === silent).length === 1 && reactions.some((r) => r.botId === silent && r.ack === true && ['👍', '👀', '✅', '🙌'].includes(r.emoji)), JSON.stringify(reactions)),
+    criterion('no_card_for_greeting', beforePlan(expect.reactor).length === 0 && beforePlan(expect.silent).length === 0, `${beforePlan(expect.reactor).length}/${beforePlan(expect.silent).length} card(s)`),
+    criterion('no_marker_in_cards', !arr(snap.cards).some((c) => /\[\[(react|silent)/.test(`${c.title}\n${c.body ?? ''}`)), 'markers'),
+    criterion('two_posts_each', after(expect.reactor).length === expect.linesPerBot && after(expect.silent).length === expect.linesPerBot,
+      `${after(expect.reactor).length}/${after(expect.silent).length}`),
+    criterion('third_post_refused', refused.length >= 1 && refused.every((r) => r.code === 'not_now'), JSON.stringify(refused).slice(0, 300)),
+    criterion('refused_turn_acknowledges', !!lastBeta && arr(lastBeta.reactions).some((r) => r.botId === reactor && r.ack === true), JSON.stringify(lastBeta?.reactions ?? null)),
+    criterion('mentions_bounded', mentionWakes.length === 2 * expect.linesPerBot, `${mentionWakes.length} mention wake(s)`),
+  ];
+}

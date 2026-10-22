@@ -507,6 +507,22 @@ const BORROWED_SOURCES = [
       'src/mcp/playwright/__tests__/egoCorpus; each file names the case it came\n' +
       'from. Test code only; nothing from it ships in wmux.',
   },
+  {
+    name: 'Open-Hermes-Bot',
+    license: 'MIT License',
+    repo: 'https://github.com/AZERDSQ131/Open-Hermes-Bot',
+    copyright: 'Copyright (c) 2026 Jules Yzerd',
+    what:
+      'Bot group chat protocol, adapted from its source at commit\n' +
+      '4966058c50e75fd221cd3dc6536b99e89bcc2f07:\n' +
+      '- src/group.ts: the acknowledgement a silent member leaves, stable per\n' +
+      '  member and message (silentReaction and its neutral emoji set), and the\n' +
+      '  round caps (lines per round, lines per member, mention waves).\n' +
+      '- src/reactions.ts: the `[[react:...]]` marker that turns a reply into a\n' +
+      '  tapback, its small emoji palette, and the marker parsing.\n' +
+      'wmux files: src/shared/botGroupProtocol.ts (each adapted file carries a\n' +
+      'header naming its source). Its avatars and other assets are not taken.',
+  },
 ];
 lines.push('ADAPTED SOURCES AND IMPLEMENTATION TECHNIQUES');
 lines.push('');

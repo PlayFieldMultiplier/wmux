@@ -180,6 +180,17 @@ describe('the phone wire — work cards and approval actions over a real room', 
     expect(handleGuestCards({ ...read, threadId: 'task:t1' }, p, () => true)).toEqual({ invalid: true });
   });
 
+  it('a phone polling by sinceSeq gets a card again once a bot reacted to it', () => {
+    const { writer, reply } = room();
+    const read = (sinceSeq: number) => handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', threadId: DM, sinceSeq, limit: 50 }, botsPorts(writer)) as PhoneRoomCardsReply;
+    const caughtUp = read(0).nextSinceSeq;
+    expect(read(caughtUp).cards).toEqual([]);
+    writer.react('ws-1', reply.id, { botId: DEV.id, emoji: '👍' });
+    const page = read(caughtUp);
+    expect(page.cards.map((c) => [c.id, c.seq, c.reactions])).toEqual([[reply.id, reply.seq, [{ botId: DEV.id, emoji: '👍' }]]]);
+    expect(read(page.nextSinceSeq).cards).toEqual([]);
+  });
+
   it('serves an approval card its action and a system card its published notice', () => {
     const { writer, approval } = room();
     const page = handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', threadId: DM, limit: 50 }, botsPorts(writer)) as PhoneRoomCardsReply;

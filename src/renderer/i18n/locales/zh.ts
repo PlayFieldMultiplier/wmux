@@ -4512,6 +4512,8 @@ export const zh = {
   'botsPage.chat.replies': "{count} 条回复 · 最后 {time}",
   'botsPage.chat.repliesOne': "1 条回复 · 最后 {time}",
   'botsPage.chat.inThread': "在话题中",
+  'botsPage.chat.reacted': "{names} 回应了 {emoji}",
+  'botsPage.chat.sawThis': "{names} 已读",
   'botsPage.work.handedTo': "已交给 {name}",
   'botsPage.work.working': "进行中",
   'botsPage.work.review': "等待审查",
