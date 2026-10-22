@@ -6,6 +6,7 @@ import { useModalLayer } from '../ui/modalLayer';
 import { MEDIA_CLIPS } from '../../assets/media';
 import { ONBOARDING_STEPS, resolveStepTarget } from './steps';
 import { useStore } from '../../stores';
+import { FOCUS_RING } from '../focusRing';
 import type { OnboardingStep } from './steps';
 import type { TooltipPlacement } from './OnboardingHighlight';
 import { t } from '../../i18n';
@@ -91,6 +92,7 @@ export default function OnboardingOverlay({
   const focusedStepRef = useRef<string | null>(null);
   const titleId = useId();
   const descriptionId = useId();
+  const itemsId = useId();
   const attachLayer = useModalLayer({ onEscape: onComplete });
 
   if (!step) return null;
@@ -99,6 +101,7 @@ export default function OnboardingOverlay({
   const isLast = currentIndex === availableSteps.length - 1;
   const stepLabel = `${currentIndex + 1} / ${availableSteps.length}`;
   const clip = step.media ? MEDIA_CLIPS[step.media] : null;
+  const settingsLink = step.settingsLink;
   const focusNext = (el: HTMLButtonElement | null) => {
     if (el && focusedStepRef.current !== step.id) {
       focusedStepRef.current = step.id;
@@ -139,7 +142,7 @@ export default function OnboardingOverlay({
             aria-modal="true"
             tabIndex={-1}
             aria-labelledby={titleId}
-            aria-describedby={descriptionId}
+            aria-describedby={step.items ? `${descriptionId} ${itemsId}` : descriptionId}
             onClick={(e) => e.stopPropagation()}
             data-placement={placement}
             data-testid="onboarding-card"
@@ -171,6 +174,32 @@ export default function OnboardingOverlay({
             <p id={descriptionId} className="onboarding-description">
               {t(step.descriptionKey)}
             </p>
+
+            {step.items && (
+              <dl id={itemsId} className="onboarding-items" data-testid="onboarding-items">
+                {step.items.map((item) => (
+                  <div key={item.termKey} className="onboarding-item">
+                    <dt>{t(item.termKey)}</dt>
+                    <dd>{t(item.textKey)}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            {step.noteKey && <p className="onboarding-note">{t(step.noteKey)}</p>}
+            {settingsLink && (
+              <button
+                type="button"
+                className={`onboarding-link ${FOCUS_RING}`}
+                onClick={() => {
+                  // End the tour first: its backdrop would cover Settings.
+                  onComplete();
+                  useStore.getState().openSettingsTab(settingsLink.tab);
+                }}
+                data-testid="onboarding-settings-link"
+              >
+                {t(settingsLink.labelKey)}
+              </button>
+            )}
 
             {/* Navigation: Skip (ghost) · Back (raised) · Next (the one primary) */}
             <div className="onboarding-actions">

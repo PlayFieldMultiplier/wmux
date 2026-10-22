@@ -19,6 +19,12 @@ describe('ONBOARDING_STEPS i18n coverage (#452)', () => {
     for (const step of ONBOARDING_STEPS) {
       if (!(step.titleKey in en)) missing.push(step.titleKey);
       if (!(step.descriptionKey in en)) missing.push(step.descriptionKey);
+      for (const item of step.items ?? []) {
+        if (!(item.termKey in en)) missing.push(item.termKey);
+        if (!(item.textKey in en)) missing.push(item.textKey);
+      }
+      if (step.noteKey && !(step.noteKey in en)) missing.push(step.noteKey);
+      if (step.settingsLink && !(step.settingsLink.labelKey in en)) missing.push(step.settingsLink.labelKey);
     }
     expect(missing).toEqual([]);
   });
