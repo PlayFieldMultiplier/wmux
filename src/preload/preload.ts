@@ -1248,6 +1248,18 @@ const electronAPI = {
       return () => { ipcRenderer.removeListener(IPC.GH_LOGIN_EVENT, listener); };
     },
   },
+  // "Star on GitHub" (sidebar foot row, Settings › About). checkStarred asks
+  // gh only when it is signed in; star uses gh or opens the repository page.
+  starPrompt: {
+    checkStarred: () => ipcRenderer.invoke(IPC.STAR_PROMPT_CHECK_STARRED) as Promise<import('../shared/starPrompt').StarredCheck>,
+    star: () => ipcRenderer.invoke(IPC.STAR_PROMPT_STAR) as Promise<import('../shared/starPrompt').StarActionResult>,
+    drainSessions: () => ipcRenderer.invoke(IPC.STAR_PROMPT_DRAIN_SESSIONS) as Promise<number>,
+    onAgentSession: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on(IPC.STAR_PROMPT_AGENT_SESSION, listener);
+      return () => { ipcRenderer.removeListener(IPC.STAR_PROMPT_AGENT_SESSION, listener); };
+    },
+  },
   // Agent factory rooms (main/ipc/handlers/room.handler.ts): the owner's
   // reads, posts and answers; onEvent carries every card main writes.
   rooms: {
@@ -1346,6 +1358,9 @@ const electronAPI = {
     // The owner resumes the stopped worker of an ended bot task.
     resumeWorker: (taskId: string) =>
       ipcRenderer.invoke(IPC.FACTORY_WORKER_RESUME, { taskId }) as Promise<import('../main/factory/workerReclaim').WorkerResumeResult>,
+    // The owner applies a bot task's changes to the bot's repository folder, unstaged.
+    applyTask: (taskId: string) =>
+      ipcRenderer.invoke(IPC.FACTORY_TASK_APPLY, { taskId }) as Promise<import('../shared/botTask').FactoryTaskApplyResult>,
     // Can the default bot engine (Claude) run here? Checked without a model turn.
     factoryEngineReadiness: () =>
       ipcRenderer.invoke(IPC.FACTORY_ENGINE_READINESS) as Promise<import('../shared/factoryEngine').FactoryEngineReadiness>,

@@ -20,6 +20,10 @@
 // breaker: a rate-limited poll is retried when the breaker reopens, not
 // sooner. A repo no enabled bot watches any more is dropped with its state,
 // so watching it again starts from a new baseline.
+//
+// A GitLab repo key (hostLane.ts) is read with glab instead
+// (repoWatchGitlab.ts) into the same snapshot, diffed and emitted the same
+// way; a missing glab or a sign-out waits GITLAB_BACKOFF_MS before the next read.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,6 +35,8 @@ import type { FactDraft } from '../../shared/facts';
 import type { BotProfile } from '../../shared/bot';
 import type { BotDirectoryApi, FactLogApi } from './triggerEngine';
 import { guestSide } from './guestWorkspaces';
+import { isGitlabRepoKey } from '../github/hostLane';
+import type { GitlabWatchReader } from './repoWatchGitlab';
 
 export const REPO_WATCH_FILENAME = 'repo-watch.json';
 
@@ -45,6 +51,8 @@ export const REPO_WATCH_LIMITS = {
   /** Issues kept in the state when the open-issue read was not complete. */
   MAX_KEPT_ISSUES: 2000,
   TITLE_MAX: 200,
+  /** The wait after a missing glab or a GitLab sign-out. */
+  GITLAB_BACKOFF_MS: 5 * 60_000,
 } as const;
 
 /** The method name a watch_cap refusal carries (`bot.refused` keys need one). */
@@ -60,6 +68,9 @@ export interface WatchedPrState {
   labelsTruncated?: boolean;
   state: string;
   author: string | null;
+  /** GitLab: the merged-results pipeline the baseline saw on this head, its
+   *  verdict not yet confirmed (repoWatchGitlab.ts). */
+  unconfirmedSha?: string;
 }
 
 export interface WatchedIssueState {
@@ -138,6 +149,11 @@ export interface WatchPr {
   labels: string[];
   labelsTruncated: boolean;
   checks: WatchChecks;
+  /** GitLab: see WatchedPrState.unconfirmedSha. */
+  unconfirmedSha?: string;
+  /** GitLab: `checks` was already the verdict at the baseline, confirmed
+   *  only now: recorded without a ci fact. */
+  checksHeld?: boolean;
 }
 
 export interface WatchIssue {
@@ -152,6 +168,9 @@ export interface WatchIssue {
 export interface WatchSnapshot {
   prs: WatchPr[];
   prTotal: number;
+  /** The open PRs alone, when prTotal counts others too (GitLab's locked
+   *  MRs): the MAX_OPEN_PRS cap counts these. */
+  openTotal?: number;
   /** Closed / merged PRs, newest update first: number → 'CLOSED' | 'MERGED'. */
   recent: Record<string, string>;
   issues: WatchIssue[];
@@ -313,6 +332,7 @@ function prStateOf(pr: WatchPr): WatchedPrState {
   return {
     headSha: pr.headSha, checks: pr.checks, labels: pr.labels, state: pr.state, author: pr.author,
     ...(pr.labelsTruncated ? { labelsTruncated: true } : {}),
+    ...(pr.unconfirmedSha ? { unconfirmedSha: pr.unconfirmedSha } : {}),
   };
 }
 
@@ -328,7 +348,7 @@ export interface RepoDiff {
  * baseline: the snapshot is recorded and nothing is emitted. Pure.
  */
 export function diffRepo(prev: RepoWatchState | undefined, snap: WatchSnapshot, repoKey: string, now: number): RepoDiff {
-  const capped = snap.prTotal > REPO_WATCH_LIMITS.MAX_OPEN_PRS;
+  const capped = (snap.openTotal ?? snap.prTotal) > REPO_WATCH_LIMITS.MAX_OPEN_PRS;
   const prsComplete = !capped && snap.prs.length >= snap.prTotal;
   const issuesComplete = snap.issues.length >= snap.issueTotal;
   const next: RepoWatchState = {
@@ -367,7 +387,7 @@ export function diffRepo(prev: RepoWatchState | undefined, snap: WatchSnapshot, 
       // red when first seen still yields its ci fact.
       checksBefore = 'pending';
     } else {
-      checksBefore = was.checks;
+      checksBefore = pr.checksHeld ? pr.checks : was.checks;
     }
     // A label list cut short on either side cannot tell an added label from
     // one that was not read before.
@@ -459,6 +479,8 @@ export interface RepoWatchPorts {
   facts: Pick<FactLogApi, 'append'>;
   bots: Pick<BotDirectoryApi, 'listEnabled'>;
   graphql: WatchGraphql;
+  /** The read of a GitLab repo key; missing = a GitLab repo is not read. */
+  gitlab?: GitlabWatchReader;
   /** `<wmuxDir>/factory/repo-watch.json` */
   stateFile: string;
   /** factory settings `enabled`; false = nothing is watched (and the state
@@ -500,7 +522,8 @@ function isPrState(v: unknown): v is WatchedPrState {
     && (v.checks === 'pass' || v.checks === 'fail' || v.checks === 'pending')
     && isLabels(v.labels) && typeof v.state === 'string'
     && (v.author === null || typeof v.author === 'string')
-    && (v.labelsTruncated === undefined || typeof v.labelsTruncated === 'boolean');
+    && (v.labelsTruncated === undefined || typeof v.labelsTruncated === 'boolean')
+    && (v.unconfirmedSha === undefined || (typeof v.unconfirmedSha === 'string' && v.unconfirmedSha.length > 0));
 }
 
 function isIssueState(v: unknown): v is WatchedIssueState {
@@ -522,6 +545,8 @@ export class RepoWatch {
   private repos: Record<string, RepoWatchState> = {};
   private loops = new Map<string, Loop>();
   private overCapNoted = new Set<string>();
+  /** GitLab repos backing off after a missing glab or a sign-out (noted once). */
+  private gitlabBlocked = new Set<string>();
   private reconcileTimer: unknown = null;
   private writes: Promise<void> = Promise.resolve();
   private started = false;
@@ -608,6 +633,7 @@ export class RepoWatch {
       if (keys.has(key)) continue;
       this.stopLoop(loop);
       this.loops.delete(key);
+      this.gitlabBlocked.delete(key);
     }
     for (const key of Object.keys(this.repos)) {
       if (!keys.has(key)) {
@@ -676,6 +702,9 @@ export class RepoWatch {
 
   private async poll(loop: Loop): Promise<PollOutcome> {
     const { repoKey, repoPath } = loop.repo;
+    // Every host that is not GitHub's goes to glab, as in the rest of the
+    // factory (hostLane.ts), a GitHub Enterprise server on its own domain too.
+    if (isGitlabRepoKey(repoKey)) return this.pollGitlab(loop);
     const parts = splitRepoKey(repoKey);
     const outcome: PollOutcome = { ok: false, calls: 0, emitted: 0, baseline: false, cost: null };
     if (!parts) return { ...outcome, error: 'not a GitHub repo key' };
@@ -702,9 +731,42 @@ export class RepoWatch {
       this.log(`poll of ${repoKey} failed`, err);
       return { ...outcome, error: err instanceof Error ? err.message : String(err) };
     }
+    return this.settle(loop, first.snapshot, outcome);
+  }
+
+  /** A poll of a GitLab repo (repoWatchGitlab.ts). A missing glab or a
+   *  sign-out is noted once and asked again after GITLAB_BACKOFF_MS. */
+  private async pollGitlab(loop: Loop): Promise<PollOutcome> {
+    const { repoKey, repoPath } = loop.repo;
+    const outcome: PollOutcome = { ok: false, calls: 0, emitted: 0, baseline: false, cost: null };
+    if (!this.ports.gitlab) return { ...outcome, error: 'GitLab repos are not read' };
+    let read: Awaited<ReturnType<GitlabWatchReader>>;
+    try {
+      read = await this.ports.gitlab(repoPath, repoKey, this.repos[repoKey]);
+    } catch (err) {
+      this.log(`poll of ${repoKey} failed`, err);
+      return { ...outcome, error: err instanceof Error ? err.message : String(err) };
+    }
+    outcome.calls = read.calls;
+    if (!read.ok) {
+      if (!read.backoff) return { ...outcome, error: read.message };
+      if (!this.gitlabBlocked.has(repoKey)) {
+        this.gitlabBlocked.add(repoKey);
+        this.log(`${repoKey} not read: ${read.message}`);
+      }
+      return { ...outcome, retryAt: this.now() + REPO_WATCH_LIMITS.GITLAB_BACKOFF_MS, error: read.message };
+    }
+    this.gitlabBlocked.delete(repoKey);
+    return this.settle(loop, read.snapshot, outcome);
+  }
+
+  /** Diff a poll's snapshot against the saved state, append its facts, and
+   *  save the new state once they all landed. */
+  private settle(loop: Loop, snapshot: WatchSnapshot, outcome: PollOutcome): PollOutcome {
+    const { repoKey } = loop.repo;
     if (loop.stopped || this.disposed) return outcome;
     const prev = this.repos[repoKey];
-    const diff = diffRepo(prev, first.snapshot, repoKey, this.now());
+    const diff = diffRepo(prev, snapshot, repoKey, this.now());
     outcome.baseline = !prev;
     let failed = 0;
     for (const draft of diff.drafts) {
@@ -713,7 +775,7 @@ export class RepoWatch {
       else if (r === 'error') failed++;
     }
     if (diff.capRising) {
-      const r = this.refuse(loop.repo, { reason: 'open_prs', limit: REPO_WATCH_LIMITS.MAX_OPEN_PRS, openPrs: first.snapshot.prTotal });
+      const r = this.refuse(loop.repo, { reason: 'open_prs', limit: REPO_WATCH_LIMITS.MAX_OPEN_PRS, openPrs: snapshot.openTotal ?? snapshot.prTotal });
       outcome.emitted += r.appended;
       failed += r.failed;
     }

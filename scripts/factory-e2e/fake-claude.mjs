@@ -38,6 +38,8 @@ const NODE = process.env.FACTORY_E2E_NODE || process.execPath;
 const DELAY_MS = Number(process.env.FACTORY_E2E_WORKER_DELAY_MS ?? 1500);
 const STATUS = process.env.FACTORY_E2E_WORKER_STATUS || 'review_requested';
 const COMMIT = process.env.FACTORY_E2E_WORKER_COMMIT === '1';
+/** The extension of the file a committing worker adds (`txt` by default). */
+const FILE_EXT = /^[a-z0-9]{1,8}$/.test(process.env.FACTORY_E2E_WORKER_FILE_EXT ?? '') ? process.env.FACTORY_E2E_WORKER_FILE_EXT : 'txt';
 const LINGER_MS = Number(process.env.FACTORY_E2E_WORKER_LINGER_MS ?? 15 * 60_000);
 
 function log(event, data = {}) {
@@ -149,7 +151,7 @@ async function main() {
     // A verify worker grades a detached PR head: it never commits there.
     const verifyWorker = process.argv.slice(2).some((a) => a.includes('# Verify worker'));
     if (COMMIT && !verifyWorker) {
-      fs.writeFileSync(path.join(process.cwd(), `worker-${id}.txt`), `${id}\n`);
+      fs.writeFileSync(path.join(process.cwd(), `worker-${id}.${FILE_EXT}`), `${id}\n`);
       const add = git(['add', '-A']);
       const commit = git(['-c', 'user.name=fake-worker', '-c', 'user.email=fake-worker@example.invalid', 'commit', '-q', '-m', `worker ${id}`]);
       const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).out;

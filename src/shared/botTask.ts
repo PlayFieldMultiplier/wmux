@@ -92,6 +92,21 @@ export type FactoryTaskFolderCleanResult =
   | { ok: true; removed: number; keptDirty: number; busy: number; failed: number; notRemoved?: Array<{ path: string; reason: string }> }
   | { ok: false; code: string; message: string };
 
+/** Why the owner's Apply to my checkout (main/factory/taskApply.ts) did not
+ *  write anything. */
+export type FactoryTaskApplyRefusal =
+  | 'operator_only' | 'invalid_argument' | 'not_started'
+  | 'unknown_task' | 'not_ready' | 'no_repo' | 'other_repo' | 'no_base' | 'no_branch' | 'foreign_head' | 'no_changes'
+  | 'merge_in_progress' | 'dirty' | 'diverged' | 'filtered' | 'config_refused' | 'submodule' | 'too_many' | 'busy' | 'git_failed';
+
+/** What Apply to my checkout did: the task's changes written into the bot's
+ *  repository folder, unstaged — the `changed`, `created` and `removed`
+ *  paths — or why nothing was written (`paths`: the uncommitted ones on
+ *  `dirty`, the filtered ones on `filtered`). */
+export type FactoryTaskApplyResult =
+  | { ok: true; changed: string[]; created: string[]; removed: string[] }
+  | { ok: false; code: FactoryTaskApplyRefusal; message: string; paths?: string[] };
+
 /** Longest BotTaskView.summary. */
 export const BOT_TASK_SUMMARY_MAX = 300;
 

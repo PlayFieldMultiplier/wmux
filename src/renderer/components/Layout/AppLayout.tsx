@@ -68,6 +68,7 @@ import { useApprovalInboxBridge } from '../../hooks/useApprovalInboxBridge';
 import { useBrowserHelpBridge } from '../../hooks/useBrowserHelpBridge';
 import { useUsageLimitBridge } from '../../hooks/useUsageLimitBridge';
 import { useWorkspaceSettleBridge } from '../../hooks/useWorkspaceSettleBridge';
+import { useStarPromptSessionBridge } from '../../utils/starPrompt';
 import { useRemoteInboxBridge } from '../../hooks/useRemoteInboxBridge';
 import { useRemoteAttachmentsLifecycle } from '../../hooks/useRemoteAttachmentsLifecycle';
 import PcRailFeeds from '../PcRail/PcRailFeeds';
@@ -513,6 +514,7 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     // workspaceSlice.loadSession (T5) reads these back, defaulting to false.
     firstRunCompleted: state.firstRunCompleted,
     cheatSheetDismissed: state.cheatSheetDismissed,
+    starPrompt: state.starPrompt,
     floatingPanePtyId: state.floatingPanePtyId ?? undefined,
     prefixConfig: state.prefixConfig,
     // Persist user-created layout templates + recent commands so they survive
@@ -1084,6 +1086,9 @@ export default function AppLayout() {
   // (the ref intentionally stays false then — see the save guards below).
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [sessionLoadFailed, setSessionLoadFailed] = useState(false);
+  // New agent sessions counted by main, toward the sidebar's star row. Taken
+  // only once the saved session is restored, so loadSession cannot drop them.
+  useStarPromptSessionBridge(sessionLoaded);
   // Fix 0: monotonic startup generation counter. Each mount-effect run
   // bumps it; the startup catch only applies its fallback if its own
   // gen still matches the current ref. Prevents a stale startup from

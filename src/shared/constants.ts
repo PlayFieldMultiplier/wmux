@@ -484,6 +484,9 @@ export const IPC = {
   // The owner resumes the stopped worker of an ended bot task
   // (main/factory/workerReclaim.ts); main window only.
   FACTORY_WORKER_RESUME: 'factory:worker:resume',
+  // The owner applies a bot task's changes to the bot's repository folder,
+  // unstaged (main/factory/taskApply.ts); main window only.
+  FACTORY_TASK_APPLY: 'factory:task:apply',
   // Whether the default bot engine (Claude) can run here, checked without a
   // model turn, and the Claude sign-in (shared/factoryEngine.ts); main window only.
   FACTORY_ENGINE_READINESS: 'factory:engine:readiness',
@@ -523,6 +526,13 @@ export const IPC = {
   GH_LOGIN_START: 'ghLogin:start',
   GH_LOGIN_CANCEL: 'ghLogin:cancel',
   GH_LOGIN_EVENT: 'ghLogin:event',
+  // "Star on GitHub" (sidebar foot row, Settings › About): gh's star check and
+  // action, the poke for each new agent session counted toward the row, and
+  // the drain that hands the renderer the count since its last call
+  STAR_PROMPT_CHECK_STARRED: 'starPrompt:checkStarred',
+  STAR_PROMPT_STAR: 'starPrompt:star',
+  STAR_PROMPT_AGENT_SESSION: 'starPrompt:agentSession',
+  STAR_PROMPT_DRAIN_SESSIONS: 'starPrompt:drainSessions',
   // Agent factory rooms (main/ipc/handlers/room.handler.ts), the operator's
   // side of room.* (shared/room.ts); card pushes ride ROOM_EVENT.
   ROOM_STATUS: 'room:status',

@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CardKind, RoomCard } from '../../../../shared/room';
 import { setLocale, t as i18nT } from '../../../i18n';
-import { actorLabel, cardResumeTaskId, kindLabel, formatCardTime, formatNoticeTime, noticeText, onceText, ownerCardText, requestTitles, routineCardBody, threadLabel, withoutInternalIds, withoutReasonCodes, withoutRoleTags } from '../roomFormat';
+import { actorLabel, cardApplyTaskId, cardResumeTaskId, kindLabel, formatCardTime, formatNoticeTime, noticeText, onceText, ownerCardText, requestTitles, routineCardBody, threadLabel, withoutInternalIds, withoutReasonCodes, withoutRoleTags } from '../roomFormat';
 
 const t = (key: string) => key;
 const system = { kind: 'system' as const };
@@ -370,6 +370,19 @@ describe('factory system cards in the reader\'s language (RoomCard.notice)', () 
     expect(cardResumeTaskId(card({ notice: { code: 'worker.pausedResumable' } }), () => true)).toBeNull();
     expect(cardResumeTaskId(card({ notice: { code: 'worker.paused' }, refs: { taskId: 'wtask-a' } }), () => true)).toBeNull();
     expect(cardResumeTaskId(card({ actor: bot, notice: { code: 'worker.doneResumable' }, refs: { taskId: 'wtask-a' } }), () => true)).toBeNull();
+  });
+});
+
+describe('cardApplyTaskId', () => {
+  const end = (code: string, over: Partial<RoomCard> = {}): RoomCard => ({ version: 1, id: 'c', seq: 1, workspaceId: 'w1', threadId: 'group:grp-0000abcd', kind: 'fact', title: '', actor: system, at: 1, notice: { code }, refs: { taskId: 'wtask-a' }, ...over } as RoomCard);
+  it('a task\'s reported or done card offers Apply while its task can be applied', () => {
+    expect(cardApplyTaskId(end('task.reported'), (id) => id === 'wtask-a')).toBe('wtask-a');
+    expect(cardApplyTaskId(end('task.done'), () => true)).toBe('wtask-a');
+    expect(cardApplyTaskId(end('task.reported'), () => false)).toBeNull();
+    // A failed task's card, a worker's card or a bot's own card: none.
+    expect(cardApplyTaskId(end('task.failed'), () => true)).toBeNull();
+    expect(cardApplyTaskId(end('worker.doneResumable'), () => true)).toBeNull();
+    expect(cardApplyTaskId(end('task.done', { actor: bot }), () => true)).toBeNull();
   });
 });
 

@@ -940,7 +940,17 @@ describe('Bots page', () => {
     expect(shown('[data-bots-thread-panel]')).toEqual(['c4', 'c5']);
     expect(shown('[data-bots-messages]')).toHaveLength(5);
     // Its composer posts into the thread.
-    expect(q<HTMLTextAreaElement>('[data-bots-thread-panel] [data-testid="bots-composer-input"]')?.placeholder).toBe('Reply in thread');
+    const reply = q<HTMLTextAreaElement>('[data-bots-thread-panel] [data-testid="bots-composer-input"]')!;
+    expect(reply.placeholder).toBe('Reply in thread');
+    // With no bot picked the reply names none: main settles who gets it (the
+    // coordinator as lead, any bot waiting there, else every bot).
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(reply, 'Looks good');
+      reply.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { q('[data-bots-thread-panel] [data-testid="bots-composer-send"]')!.click(); });
+    expect(posted.at(-1)).toMatchObject({ workspaceId: 'w1', threadId: 'pr:github.com/acme/api#1', title: 'Looks good' });
+    expect(posted.at(-1)?.mentions).toBeUndefined();
     act(() => q('[data-bots-thread-close]')!.click());
     expect(q('[data-bots-thread-panel]')).toBeNull();
   });
@@ -1132,6 +1142,28 @@ describe('Bots page', () => {
     await act(async () => { q('[data-testid="bots-composer-send"]')!.click(); });
     expect(posted[2]).toMatchObject({ workspaceId: 'w1', mentions: [VERIFIER] });
     expect(to()).toBe('To: everyone');
+  });
+
+  it('in a group with a coordinator an unpicked message goes to it alone: "To: <lead>", and the hint says so', async () => {
+    bots = bots.map((r) => (r.bot.id === LEAD ? { ...r, bot: { ...r.bot, template: 'coordinator' as const } } : r));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="group:grp-000000a1"]')!.click());
+    const button = q('[data-bots-recipients]')!;
+    expect(button.textContent).toBe('To: Lead');
+    // The default, not a pick: no selection fill.
+    expect(button.className).not.toContain('selection-emphasis');
+    act(() => button.click());
+    expect(q('[data-bots-recipients-list]')!.textContent).toContain('None ticked: it goes to Lead, who leads and hands the work on.');
+    // Main routes the unaddressed message to the coordinator.
+    const input = q<HTMLTextAreaElement>('[data-testid="bots-composer-input"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, 'Status?');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { q('[data-testid="bots-composer-send"]')!.click(); });
+    expect(posted[0]).toMatchObject({ workspaceId: 'w1', threadId: 'general', title: 'Status?' });
+    expect(posted[0].mentions).toBeUndefined();
   });
 
   it('a group chat the owner made shows only its thread and the work started there; its messages post to that thread', async () => {
@@ -1642,6 +1674,39 @@ describe('Bots page', () => {
     expect(line.textContent).toContain('Worker paused (resumable)');
     await act(async () => { (line.querySelector('[data-bots-card-resume]') as HTMLButtonElement).click(); });
     expect(resumeWorker).toHaveBeenCalledWith(taskId);
+  });
+
+  it('a task started from a 1:1 folds its worker cards into one work card that offers Apply to my checkout', async () => {
+    const taskId = 'wtask-appl-00000001';
+    const dm = `dm:${LEAD}` as const;
+    cards.push(
+      card({ workspaceId: 'w1', threadId: `task:${taskId}`, actor: { kind: 'system' }, kind: 'fact', title: 'Worker paused (resumable): Add a flag', refs: { taskId, threadId: dm }, notice: { code: 'worker.pausedResumable', args: { title: 'Add a flag' } }, at: 600 }),
+      card({ workspaceId: 'w1', threadId: `task:${taskId}`, actor: { kind: 'system' }, kind: 'fact', title: 'Worker resumed: Add a flag', refs: { taskId, threadId: dm }, notice: { code: 'worker.resumed', args: { title: 'Add a flag', by: 'owner', where: 'newPane' } }, at: 700 }),
+      // The task's end stays in the 1:1 itself.
+      card({ workspaceId: 'w1', threadId: dm, actor: { kind: 'system' }, kind: 'fact', title: 'Task reported · in review: Add a flag', refs: { taskId }, notice: { code: 'task.reported', args: { title: 'Add a flag' } }, at: 800 }),
+    );
+    seedRooms();
+    act(() => useStore.setState({ roomThreads: { hq: [], w1: [{ threadId: `task:${taskId}`, title: 'Worker paused', lastAt: 700, lastSeq: 99, cardCount: 2, openQuestions: 0, lastKind: 'fact', status: 'open', unread: null, firstAt: 600, dmBotId: LEAD }] } } as never));
+    bots[1] = { ...bots[1], tasks: [{
+      taskId, taskWorkspaceId: 't1', ownerWorkspaceId: 'w1', botId: LEAD, title: 'Add a flag',
+      status: 'review_requested' as const, stage: 'coded' as const, updatedAt: Date.now(),
+    }] };
+    const applyTask = vi.fn(async () => ({ ok: true as const, changed: ['a.txt'], created: [], removed: [] }));
+    setFactoryBotPort({ ...port, applyTask });
+    await render(<BotsPage />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    const work = q(`[data-bots-work="task:${taskId}"]`)!;
+    expect(work.querySelector('[data-bots-work-title]')?.textContent).toBe('Add a flag');
+    // Its cards are its steps, not lines in the conversation.
+    expect([...document.querySelectorAll('[data-bots-bubble="system"]')].some((l) => l.textContent?.includes('Worker paused'))).toBe(false);
+    // Apply is on the work card only, not again on the task's end line.
+    const ended = [...document.querySelectorAll('[data-bots-bubble="system"]')].find((l) => l.textContent?.includes('Task reported'))!;
+    expect(ended).toBeTruthy();
+    expect(ended.querySelector('[data-bots-card-apply]')).toBeNull();
+    expect(document.querySelectorAll('[data-bots-card-apply]')).toHaveLength(1);
+    await act(async () => { (work.querySelector('[data-bots-card-apply]') as HTMLButtonElement).click(); });
+    expect(applyTask).toHaveBeenCalledWith(taskId);
+    expect(work.querySelector('[data-bots-apply-result="ok"]')?.textContent).toContain('a.txt');
   });
 
   it('a cleared open task whose folder was kept for uncommitted changes says so in the rail, with no Resume when its worker cannot resume', async () => {

@@ -142,11 +142,14 @@ const DEAD_PANES_FIRST_PASS_MS = 20_000;
 /** One read of a pane's key input from the daemon waits this long. */
 const KEY_INPUT_READ_TIMEOUT_MS = 5_000;
 
-function note(workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string): void {
+/** A worker card; `link`: the conversation it links (refs.threadId), which
+ *  makes its task thread that conversation's work (taskLifecycleLinkOf). */
+function note(workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string, link?: ThreadId): void {
+  const refs = { ...(taskId ? { taskId } : {}), ...(link ? { threadId: link } : {}) };
   getRoomWriter()?.append({
     workspaceId, threadId, kind: 'fact', actor: { kind: 'system' }, title, body,
     ...(notice ? { notice } : {}),
-    ...(taskId ? { refs: { taskId } } : {}),
+    ...(Object.keys(refs).length > 0 ? { refs } : {}),
   });
 }
 

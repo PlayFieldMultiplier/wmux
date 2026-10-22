@@ -80,7 +80,8 @@ import { postGuestMessage, setGuestPostHandler } from './guestMessage';
 import { humanCardIdOfRun, postHumanMessage } from './humanMessage';
 import { phoneBot } from './phoneBot';
 import { redactStoredSecrets } from './secretRedaction';
-import { ghIssueService, splitRepoKey } from '../github/GhIssueService';
+import { splitRepoKey } from '../github/GhIssueService';
+import { isGitlabRepoKey } from '../github/hostLane';
 import { MORNING_SCHEDULE_FILENAME, MORNING_SCHEDULE_ID, MorningSchedule, localDay } from './morningSchedule';
 import { fireMorningReport } from './morningReport';
 import { VERDICTED_TASKS_FILENAME, VerdictedTasks, installVerifyTaskClose, setVerdictedTasks } from './verdictedTasks';
@@ -92,7 +93,8 @@ import { git } from '../git/git';
 import { getSharedTaskGateRunner } from '../worktask/TaskGateRunner';
 import { TREE_DESTROY_TIMEOUT_MS, destroyedTreeOf, isPidAlive, sessionsStartedIn, stopSessionsInDir } from '../worktask/stopSessionsInDir';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
-import { originDefaultRef, taskFolderFromMissions, worktreeFromMissions } from './verifyPreset';
+import { originDefaultRef, taskFolderFromMissions, taskMissionFromMissions, worktreeFromMissions } from './verifyPreset';
+import { setTaskApplyPorts } from './taskApply';
 import { completeCheckedTask, completeMergedTask, completeResearchTask, gateCardNoted, installTaskGate, recordNoChangesGate, worktreeHeadMerged } from './taskGate';
 import { liveNoChangesCheck } from './noChangesCheck';
 import { TaskBranchCache, setBotTaskSources } from './botTasks';
@@ -233,22 +235,52 @@ export function routedFactLog(
 const OWNER_LOGIN_REFRESH_MS = 10 * 60_000;
 
 /** The host and a working directory for `gh` from the bots' repos
- *  (github.com and the home dir when no bot names one). */
+ *  (github.com and the home dir when no bot names one). A GitLab repo is
+ *  skipped: its login is not a GitHub one (gitlabLoginTargets). */
 export function ownerLoginTarget(bots: readonly Pick<BotProfile, 'repo'>[]): { host: string; cwd: string } {
   for (const b of bots) {
     const key = normalizeRepoKey(b.repo?.repoKey);
-    const parts = key ? splitRepoKey(key) : null;
+    const parts = key && !isGitlabRepoKey(key) ? splitRepoKey(key) : null;
     if (parts && b.repo?.repoPath) return { host: parts.host, cwd: b.repo.repoPath };
   }
   return { host: 'github.com', cwd: os.homedir() };
 }
 
+/** Each GitLab host of the bots' repos, with a working directory for glab
+ *  (the first bot's repo on it). */
+export function gitlabLoginTargets(bots: readonly Pick<BotProfile, 'repo'>[]): Array<{ host: string; cwd: string }> {
+  const out = new Map<string, string>();
+  for (const b of bots) {
+    const key = normalizeRepoKey(b.repo?.repoKey);
+    if (!key || !isGitlabRepoKey(key) || !b.repo?.repoPath) continue;
+    const host = key.split('/')[0];
+    if (!out.has(host)) out.set(host, b.repo.repoPath);
+  }
+  return [...out].map(([host, cwd]) => ({ host, cwd }));
+}
+
+/** Refresh the owner's glab login on each GitLab host: a definite sign-out
+ *  forgets the host's login, any other failure keeps the last one read. */
+export async function refreshGitlabLogins(
+  targets: ReadonlyArray<{ host: string; cwd: string }>,
+  logins: Map<string, string>,
+  read: (host: string, cwd: string) => Promise<{ login: string } | { signedOut: true } | null>,
+): Promise<void> {
+  for (const { host, cwd } of targets) {
+    const r = await read(host, cwd).catch(() => null);
+    if (r && 'login' in r) logins.set(host, r.login);
+    else if (r) logins.delete(host);
+  }
+}
+
 /** Who counts as a trusted author: the settings' logins, plus the owner's gh
- *  login unless the Verifier is off for the owner's own PRs. */
-export function factoryTrust(settings: () => FactorySettings, ownerLogin: () => string | null): FactoryTrustApi {
+ *  login (glab's on a GitLab host) unless the Verifier is off for the
+ *  owner's own PRs. */
+export function factoryTrust(settings: () => FactorySettings, ownerLogin: () => string | null, ownerLoginOn: (host: string) => string | null = () => null): FactoryTrustApi {
   return {
     trustedAuthors: () => settings().trustedAuthors,
     ownerLogin: () => (settings().verifierOnOwnerPrs === false ? null : ownerLogin()),
+    ownerLoginOn: (host) => (settings().verifierOnOwnerPrs === false ? null : ownerLoginOn(host)),
   };
 }
 
@@ -750,6 +782,8 @@ function uiLocaleNow(): string {
 export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Partial<Pick<FactoryHostDeps, 'getDaemonClient' | 'getMainWindow' | 'fanOutService'>>): FactoryModuleHandle {
   const settings = (): FactorySettings => getFactorySettings();
   let ownerLogin: string | null = null;
+  /** The owner's glab login per GitLab host, refreshed with ownerLogin. */
+  const gitlabLogins = new Map<string, string>();
   let loginTimer: NodeJS.Timeout | null = null;
   let disposed = false;
   // A worker lifecycle host comes (below, on start): its holder set ends the
@@ -763,8 +797,11 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       bots = [];
     }
     const { host, cwd } = ownerLoginTarget(bots);
-    const login = await ghIssueService.signedInLogin(host, cwd).catch(() => null);
+    const { signedInLogin } = await import('../github/hostLane');
+    const login = await signedInLogin(host, cwd).catch(() => null);
     if (login) ownerLogin = login;
+    const { glabPrService } = await import('../github/GlabPrService');
+    await refreshGitlabLogins(gitlabLoginTargets(bots), gitlabLogins, (h, c) => glabPrService.loginOrSignOut(h, c));
   };
 
   const cursor = new TriggerCursor(path.join(deps.wmuxDir(), 'factory', TRIGGER_CURSOR_FILENAME));
@@ -776,7 +813,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
     return routed.view;
   };
   const bots = (): BotDirectoryApi | undefined => getBotDirectory() ?? undefined;
-  const trust = factoryTrust(settings, () => ownerLogin);
+  const trust = factoryTrust(settings, () => ownerLogin, (host) => gitlabLogins.get(host) ?? null);
 
   setFactoryTriggerPorts(() => ({
     factLog: triggerLog(),
@@ -947,19 +984,20 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
           },
           complete: (taskId) => completeCheckedTask(ledger, taskId),
           completeResearch: (taskId) => completeResearchTask(ledger, taskId),
-          // A merged PR from a reported task's branch ends that task: GitHub's
-          // list is the evidence (the repo watch's gh runner and breaker); a
-          // pr.merged fact only checks again sooner.
+          // A merged PR from a reported task's branch ends that task: the
+          // host's list is the evidence (gh's runner and breaker on GitHub,
+          // glab on GitLab: hostLane.ts); a pr.merged fact only checks again
+          // sooner.
           onFact: (fn) => getFactLog()?.subscribe(fn) ?? (() => undefined),
           prsOfBranch: async (repoKey, branch, base) => {
-            const { ghPrReviewService } = await import('../github/GhPrReviewService');
-            const r = await ghPrReviewService.mergedOfBranch(deps.wmuxDir(), repoKey, branch, base);
+            const { mergedOfBranch } = await import('../github/hostLane');
+            const r = await mergedOfBranch(deps.wmuxDir(), repoKey, branch, base);
             if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
             return r.value;
           },
           defaultBranchOf: async (repoKey) => {
-            const { ghPrReviewService } = await import('../github/GhPrReviewService');
-            const r = await ghPrReviewService.defaultBranch(deps.wmuxDir(), repoKey);
+            const { defaultBranch } = await import('../github/hostLane');
+            const r = await defaultBranch(deps.wmuxDir(), repoKey);
             if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
             return r.value;
           },
@@ -1051,6 +1089,14 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
         },
       };
       setFactoryStopPorts(stopPorts);
+      // The owner's Apply to my checkout: a bot task's changes, unstaged, in
+      // the bot's repository folder (taskApply.ts).
+      setTaskApplyPorts({
+        row: (taskId) => ledger.get(taskId),
+        botRepoPath: (botId) => getBotDirectory()?.get(botId)?.repo?.repoPath,
+        taskBranch: async (entry) => (await taskMissionFromMissions(daemonRpc(daemon), entry))?.branch ?? null,
+        noHooksDir: path.join(deps.wmuxDir(), 'factory', 'no-hooks'),
+      });
       offTasks.push(installLateStopSweep({ ...stopPorts, onTransition: (fn) => ledger.onTransition(fn) }));
       offTasks.push(ledger.onTransition((t) => {
         if (t.entry.dispatch?.origin.kind === 'bot') pushBotsChanged();
@@ -1076,6 +1122,7 @@ export function createFactoryWiring(deps: Pick<FactoryHostDeps, 'wmuxDir'> & Par
       }
       setBotTaskSources(null);
       setFactoryStopPorts(null);
+      setTaskApplyPorts(null);
       offVerdicts?.();
       setVerdictedTasks(null);
       morning.dispose();

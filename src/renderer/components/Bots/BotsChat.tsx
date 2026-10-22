@@ -46,8 +46,10 @@
 // Sending: a 1:1 message is a post in the bot's 1:1 thread (`dm:<botId>`) of
 // its workspace's room that mentions that one bot (main wakes it alone, in
 // that thread). A group chat's message is a post in its thread that goes to
-// every bot of the group — main wakes each — unless bots are picked: the
-// recipients control above the box ("To: everyone ▾", a checkbox per bot),
+// every bot of the group — main wakes each — or, in a group with a
+// coordinator, to that coordinator alone, unless bots are picked: the
+// recipients control above the box ("To: everyone ▾" or "To: <lead> ▾", a
+// checkbox per bot),
 // or an `@Name` of a group bot anywhere in the text (resolved here at send;
 // main reads only the field). The picks reset after each send. Typing `@`
 // in a group suggests its bots.
@@ -73,8 +75,8 @@ import { CardAnswers, useWorkspaceNames } from '../Room/CardAnswers';
 import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
 import { PresenceDot, botActionsFor, botPresence } from '../Room/BotChips';
-import { deliveryLine, deliveryTaken, photoPostParams, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
-import { actorLabel, botKindLabel, cardResumeTaskId, cardTone, isRefThread, kindLabel, onceText, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
+import { deliveryLine, deliveryTaken, photoPostParams, roomLead, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
+import { actorLabel, botKindLabel, cardApplyTaskId, cardResumeTaskId, cardTone, isRefThread, kindLabel, onceText, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
 import { BOT_JOB_MAX, botTemplate, delegatesFromConversation, normalizeBotJob, type BotPresence, type BotProfile as BotProfileData } from '../../../shared/bot';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel, type BotWorkerAgentOption } from '../../../shared/botWorkerAgent';
 import { pickFolderDialog, templateJob } from '../Settings/FactoryTab';
@@ -85,9 +87,10 @@ import BotsWorkerTree, { TaskVerification, treeRowLabel } from './BotsWorkerTree
 import { loadWholeThread } from './useBots';
 import { loadRoomActors } from '../../hooks/useRoomSync';
 import { useShallow } from 'zustand/react/shallow';
-import type { BotTaskView } from '../../../shared/botTask';
+import type { BotTaskView, FactoryTaskApplyResult } from '../../../shared/botTask';
 import { botCanDo } from './botsProfile';
 import { BotConnections } from './BotConnections';
+import { BotRecipeChecklist } from './BotRecipes';
 import { BotSkills } from './BotSkills';
 import { BotMemory } from './BotMemory';
 import { BotCommands } from './BotCommands';
@@ -368,6 +371,11 @@ interface RowCtx {
    *  (absent: none, as while the bots are off): whether the task's worker
    *  is resumable now, and the resume. */
   resume?: { resumable: (taskId: string) => boolean; run: (taskId: string) => Promise<void> };
+  /** Apply to my checkout on a code task's end card (absent: none, as while
+   *  the bots are off): whether the task can be applied, and the Apply.
+   *  `folded`: the tasks a work card in this conversation stands for; their
+   *  Apply is on that card only. */
+  apply?: { applicable: (taskId: string) => boolean; run: (taskId: string) => Promise<FactoryTaskApplyResult>; folded?: ReadonlySet<string> };
   /** What a work card reads (absent: no work cards): which cards wait on
    *  the owner, the bots' tasks, and the pull request a task opened. */
   work?: { waits: (card: RoomCardData) => boolean; tasks: readonly BotTaskView[]; prUrl: (taskId: string) => string | null };
@@ -561,9 +569,16 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
   const { work, delegatorId, continuation, runEnd } = item;
   const { t } = ctx;
   const opts = ctx.work;
+  // A task's own thread (its worker's cards, linked from the conversation
+  // that started it) is named by the task's title.
+  const { requestTitle, taskTitle } = ctx;
+  const titleOf = useCallback(
+    (th: ThreadId) => requestTitle(th) ?? (th.startsWith('task:') ? taskTitle(th.slice(5)) : null),
+    [requestTitle, taskTitle],
+  );
   const view = useMemo(
-    () => workView(work, { delegatorId, waits: opts?.waits ?? (() => false), tasks: opts?.tasks, requestTitle: ctx.requestTitle, prUrl: opts?.prUrl }),
-    [work, delegatorId, opts, ctx.requestTitle],
+    () => workView(work, { delegatorId, waits: opts?.waits ?? (() => false), tasks: opts?.tasks, requestTitle: titleOf, prUrl: opts?.prUrl }),
+    [work, delegatorId, opts, titleOf],
   );
   const party = (botId: string) => ({ kind: 'bot' as const, workspaceId: work.workspaceId, botId });
   const face = delegatorId ? botFace(delegatorId, ctx) : null;
@@ -573,6 +588,13 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
     return c.actor.kind === 'human' ? `${t('room.actor.you')}: ${title}` : title;
   };
   const refChip = view.refUrl ? ctx.markdown.linkChip?.(view.refUrl, null) : null;
+  // The newest folded card offering Resume, and the newest task of the work
+  // that can be applied to the checkout (its end card may stand in the
+  // conversation itself, outside the fold): their buttons stay on the card.
+  const { apply, resume } = ctx;
+  const newest = (of: (c: RoomCardData) => string | null): string | null => [...work.all].reverse().map(of).find((id) => id !== null) ?? null;
+  const applyId = apply ? newest((c) => (c.refs?.taskId && apply.applicable(c.refs.taskId) ? c.refs.taskId : null)) : null;
+  const resumeId = resume ? newest((c) => cardResumeTaskId(c, resume.resumable)) : null;
   return (
     <div
       className={`wmux-bots-msg${continuation ? ' is-continuation' : ''}`}
@@ -596,6 +618,9 @@ function WorkRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 'wo
           textOf={textOf}
           refChip={refChip}
           onOpenThread={() => ctx.onThread(work.workspaceId, work.threadId)}
+          {...((applyId && apply) || (resumeId && resume) ? {
+            action: <WorkActions t={t} {...(applyId && apply ? { apply: () => apply.run(applyId) } : {})} {...(resumeId && resume ? { resume: () => resume.run(resumeId) } : {})} />,
+          } : {})}
         />
       </div>
     </div>
@@ -619,13 +644,19 @@ function SystemGroup({ cards, thread, ctx }: { cards: RoomCardData[]; thread?: T
   const hide = summary ? thread!.threadId : ctx.hideThread;
   const resume = ctx.resume;
   const resumeOf = (c: RoomCardData): string | null => (resume ? cardResumeTaskId(c, resume.resumable) : null);
-  // A run holding a card with a Resume shows its lines, so the button shows.
-  if (cards.length === 1 || open || cards.some((c) => resumeOf(c) !== null)) {
+  const apply = ctx.apply;
+  const applyOf = (c: RoomCardData): string | null => {
+    const id = apply ? cardApplyTaskId(c, apply.applicable) : null;
+    return id && !apply?.folded?.has(id) ? id : null;
+  };
+  // A run holding a card with a Resume or an Apply shows its lines, so the button shows.
+  if (cards.length === 1 || open || cards.some((c) => resumeOf(c) !== null || applyOf(c) !== null)) {
     return (
       <div data-bots-system-group={cards.length > 1 ? cards.length : undefined}>
         {cards.map((c) => {
           const taskId = resumeOf(c);
-          return <SystemLine key={c.id} card={c} t={t} onThread={onThread} now={ctx.now} botNames={ctx.botNames} taskTitle={ctx.taskTitle} requestTitle={ctx.requestTitle} hideThread={hide} onResume={taskId && resume ? () => resume.run(taskId) : undefined} />;
+          const applyId = applyOf(c);
+          return <SystemLine key={c.id} card={c} t={t} onThread={onThread} now={ctx.now} botNames={ctx.botNames} taskTitle={ctx.taskTitle} requestTitle={ctx.requestTitle} hideThread={hide} onResume={taskId && resume ? () => resume.run(taskId) : undefined} onApply={applyId && apply ? () => apply.run(applyId) : undefined} />;
         })}
         {summary}
         {open && (
@@ -1119,9 +1150,10 @@ function BotsThreadPanel({ conversation, cards, workspaceId, threadId, ctx: pare
  *  result, a task's end, an error), as a centred line with its body folded
  *  to two lines under Show more (by height: a markdown list does not
  *  line-clamp). */
-function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestTitle, hideThread, onResume }: { card: RoomCardData; t: T; onThread: (id: ThreadId) => void; now?: number; botNames?: readonly string[]; taskTitle?: TaskTitleOf; requestTitle?: RequestTitleOf; hideThread?: ThreadId; onResume?: () => Promise<void> }) {
+function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestTitle, hideThread, onResume, onApply }: { card: RoomCardData; t: T; onThread: (id: ThreadId) => void; now?: number; botNames?: readonly string[]; taskTitle?: TaskTitleOf; requestTitle?: RequestTitleOf; hideThread?: ThreadId; onResume?: () => Promise<void>; onApply?: () => Promise<FactoryTaskApplyResult> }) {
   const [expanded, setExpanded] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [applied, setApplied] = useState<FactoryTaskApplyResult | null>(null);
   const { title, body } = ownerCardText(card, botNames, undefined, t);
   const foldable = body.length > SYSTEM_FOLD_CHARS || body.includes('\n');
   const word = card.kind === 'refusal' || card.kind === 'budget' ? kindLabel(card.kind, t) : null;
@@ -1142,8 +1174,9 @@ function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestT
             {renderBrainMarkdown(body, { links: true, richCode: true, strictEmphasis: true })}
           </div>
         )}
-        {(foldable || chip || onResume) && (
+        {(foldable || chip || onResume || onApply) && (
           <div className={`mt-0.5 flex items-center ${align} gap-2`}>
+            {onApply && <ApplyButton run={onApply} t={t} onResult={setApplied} />}
             {onResume && (
               <Button
                 size="sm"
@@ -1166,7 +1199,98 @@ function SystemLine({ card, t, onThread, now, botNames = [], taskTitle, requestT
             {chip && <ThreadChip threadId={card.threadId} t={t} onPick={onThread} taskTitle={taskTitle} requestTitle={requestTitle} />}
           </div>
         )}
+        {applied && <ApplyResultLine result={applied} t={t} />}
       </div>
+    </div>
+  );
+}
+
+/** Apply to my checkout: a secondary button that writes the task's changes
+ *  into the bot's repository folder, unstaged (main/factory/taskApply.ts);
+ *  its outcome goes to `onResult`. */
+function ApplyButton({ run, t, onResult }: { run: () => Promise<FactoryTaskApplyResult>; t: T; onResult: (r: FactoryTaskApplyResult) => void }) {
+  const [applying, setApplying] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      data-bots-card-apply
+      disabled={applying}
+      onClick={() => {
+        setApplying(true);
+        void run()
+          .then(onResult, (err: unknown) => onResult({ ok: false, code: 'git_failed', message: String(err) }))
+          .finally(() => setApplying(false));
+      }}
+    >
+      {t('botsPage.apply.action')}
+    </Button>
+  );
+}
+
+/** At most this many paths are named in an Apply's result line. */
+const APPLY_NAMED_MAX = 6;
+
+/** Paths as one list in the reader's language: the first few, then "and N more". */
+function applyPathList(paths: readonly string[], t: T): string {
+  const named = paths.slice(0, APPLY_NAMED_MAX).join(', ');
+  return paths.length > APPLY_NAMED_MAX ? `${named} ${t('botsPage.apply.more', { count: paths.length - APPLY_NAMED_MAX })}` : named;
+}
+
+/** An Apply's outcome in the reader's language: the files written and how
+ *  to undo them, or why nothing was written. Pure. */
+export function applyResultText(r: FactoryTaskApplyResult, t: T): string {
+  if (r.ok) {
+    const files = [
+      ...r.changed,
+      ...r.created.map((path) => t('botsPage.apply.fileNew', { path })),
+      ...r.removed.map((path) => t('botsPage.apply.fileRemoved', { path })),
+    ];
+    return `${t('botsPage.apply.done', { files: applyPathList(files, t) })} ${t(r.created.length > 0 ? 'botsPage.apply.undoNew' : 'botsPage.apply.undo')}`;
+  }
+  switch (r.code) {
+    case 'dirty': return t('botsPage.apply.dirty', { files: applyPathList(r.paths ?? [], t) });
+    case 'merge_in_progress': return t('botsPage.apply.mergeInProgress');
+    case 'diverged': return t('botsPage.apply.diverged');
+    case 'filtered': return t('botsPage.apply.filtered', { files: applyPathList(r.paths ?? [], t) });
+    case 'no_repo': return t('botsPage.apply.noRepo');
+    default: return t('botsPage.apply.refused', { message: r.message });
+  }
+}
+
+/** A work card's Resume and Apply, and the Apply's outcome under them. */
+function WorkActions({ apply, resume, t }: { apply?: () => Promise<FactoryTaskApplyResult>; resume?: () => Promise<void>; t: T }) {
+  const [applied, setApplied] = useState<FactoryTaskApplyResult | null>(null);
+  const [resuming, setResuming] = useState(false);
+  return (
+    <div className="mt-1.5 flex flex-col items-start gap-0.5" data-bots-work-actions>
+      <div className="flex items-center gap-2">
+        {resume && (
+          <Button
+            size="sm"
+            variant="secondary"
+            data-bots-card-resume
+            disabled={resuming}
+            onClick={() => {
+              setResuming(true);
+              void resume().finally(() => setResuming(false));
+            }}
+          >
+            {t('botsPage.worker.resume')}
+          </Button>
+        )}
+        {apply && <ApplyButton run={apply} t={t} onResult={setApplied} />}
+      </div>
+      {applied && <ApplyResultLine result={applied} t={t} />}
+    </div>
+  );
+}
+
+/** The line under an Apply: what it wrote (muted), or why it did not (red). */
+function ApplyResultLine({ result, t }: { result: FactoryTaskApplyResult; t: T }) {
+  return (
+    <div data-bots-apply-result={result.ok ? 'ok' : result.code} role="status" className={`mt-0.5 text-left text-[12px] leading-relaxed break-words ${result.ok ? 'text-[var(--text-sub)]' : 'text-[var(--accent-red)]'}`}>
+      {applyResultText(result, t)}
     </div>
   );
 }
@@ -1240,6 +1364,9 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
   const picks = useMentionPicks(bots, workspaceId);
   // A group's bots that can take a message (oldest first).
   const roomCandidates = useMemo(() => (conversation.kind === 'room' ? conversation.bots.filter((r) => r.bot.enabled) : []), [conversation]);
+  // The group's coordinator, which an unpicked message goes to alone (main's
+  // rule, humanMessage.ts).
+  const lead = useMemo(() => roomLead(roomCandidates), [roomCandidates]);
   // A group message goes to the bots picked and every group bot named by an
   // `@Name` anywhere in the text (main reads the field, never the text).
   const typed = useMemo(() => textMentions(text, roomCandidates, bots.filter((r) => r.bot.enabled)), [text, roomCandidates, bots]);
@@ -1247,13 +1374,11 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     () => (conversation.kind === 'bot' ? [conversation.row.bot.id] : [...new Set([...picks.picked, ...typed])].filter((id) => roomCandidates.some((r) => r.bot.id === id))),
     [conversation, picks.picked, typed, roomCandidates],
   );
-  // Nobody picked: the group's own thread goes to every bot of it (main's
-  // rule); a thread it started names them all, since main reads a thread
-  // other than the group's as the workspace's.
-  const mentions: string[] = useMemo(
-    () => (conversation.kind === 'room' && picked.length === 0 && threadId !== conversation.threadId ? roomCandidates.map((r) => r.bot.id) : picked),
-    [conversation, picked, threadId, roomCandidates],
-  );
+  // Nobody picked: no mentions, in the group's own thread or one it
+  // started. Main settles who gets it (humanMessage.ts): the group's
+  // coordinator with any bot waiting on the owner in that thread, else
+  // every bot of the group.
+  const mentions: string[] = picked;
   // A group with no bot on takes no message (main would read a thread's
   // unaddressed reply as the whole workspace's).
   const refusal = readOnly ? t('botsPage.pausedComposer')
@@ -1509,7 +1634,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
         </Popover>
       )}
       {conversation.kind === 'room' && !refusal && (
-        <RecipientsControl candidates={roomCandidates} picked={picked} onToggle={picks.toggle} t={t} />
+        <RecipientsControl candidates={roomCandidates} lead={lead} picked={picked} onToggle={picks.toggle} t={t} />
       )}
       {photos.length > 0 && (
         <div data-bots-composer-photos>
@@ -1599,11 +1724,13 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
   );
 }
 
-/** Whom a group message goes to, above the box: "To: everyone ▾", or the
- *  bots picked; it opens a checkbox per bot of the group. A typed `@Name`
- *  shows checked too. The picks reset after each send. */
-function RecipientsControl({ candidates, picked, onToggle, t }: {
+/** Whom a group message goes to, above the box: "To: everyone ▾" ("To:
+ *  <lead> ▾" in a group with a coordinator), or the bots picked; it opens a
+ *  checkbox per bot of the group. A typed `@Name` shows checked too. The
+ *  picks reset after each send. */
+function RecipientsControl({ candidates, lead, picked, onToggle, t }: {
   candidates: readonly FactoryBotRow[];
+  lead: FactoryBotRow | null;
   picked: readonly string[];
   onToggle: (botId: string) => void;
   t: T;
@@ -1618,7 +1745,8 @@ function RecipientsControl({ candidates, picked, onToggle, t }: {
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
   const names = candidates.filter((r) => picked.includes(r.bot.id)).map((r) => r.bot.name);
-  const label = names.length === 0 ? t('botsPage.group.toEveryone') : t('botsPage.group.toSome', { names: names.join(', ') });
+  const label = names.length > 0 ? t('botsPage.group.toSome', { names: names.join(', ') })
+    : lead ? t('botsPage.group.toSome', { names: lead.bot.name }) : t('botsPage.group.toEveryone');
   return (
     <div ref={wrapRef} className="relative flex min-w-0 items-center">
       <button
@@ -1647,7 +1775,7 @@ function RecipientsControl({ candidates, picked, onToggle, t }: {
             buttonRef.current?.focus();
           }}
         >
-          <p className="px-3 pb-1 pt-2 text-[11px] text-[var(--text-muted)]">{t('botsPage.group.recipientsHint')}</p>
+          <p className="px-3 pb-1 pt-2 text-[11px] text-[var(--text-muted)]">{lead ? t('botsPage.group.recipientsHintLead', { name: lead.bot.name }) : t('botsPage.group.recipientsHint')}</p>
           {candidates.map((r, i) => (
             <label key={r.bot.id} className="ui-section-row w-full cursor-pointer text-left text-[13px]">
               <input
@@ -1666,6 +1794,12 @@ function RecipientsControl({ candidates, picked, onToggle, t }: {
       )}
     </div>
   );
+}
+
+/** What an empty group chat says: who its first message goes to. */
+function emptyGroupLine(bots: readonly FactoryBotRow[], t: T): string {
+  const lead = roomLead(bots);
+  return lead ? t('botsPage.group.emptyLead', { name: lead.bot.name }) : t('botsPage.group.empty');
 }
 
 function ProfileLine({ label, value }: { label: string; value: React.ReactNode }) {
@@ -2064,7 +2198,8 @@ function ProfileState({ row, t }: { row: FactoryBotRow; t: T }) {
  *  workspace, repo, the model it thinks on, what its workers run on and
  *  their model, on/off, what it used today of each limit (and what stops
  *  it, with Resume when parked), its routines
- *  (read-only), its connections, then what it can do (the shared powers,
+ *  (read-only), the recipe it was added from and what its connections still
+ *  need, its connections, then what it can do (the shared powers,
  *  read-only), whom it reports to, its workers now, and Pause and Stop. */
 function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPort }: { row: FactoryBotRow; workers: readonly BotWorker[]; workspaceName: string; t: T; stopPort: BotsStopPort; jobPort?: Pick<FactoryBotPort, 'update' | 'workerAgents'>; adminPort?: BotAdminPort }) {
   const routines = (useBotRoutines()?.routines ?? []).filter((r) => r.botId === row.bot.id);
@@ -2094,6 +2229,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
           </ul>
         </div>
       )}
+      <BotRecipeChecklist bot={row.bot} t={t} />
       <BotConnections row={row} t={t} />
       <BotSkills row={row} t={t} />
       <BotMemory row={row} t={t} />
@@ -2198,8 +2334,9 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
    *  card's Undo (absent: neither); its act and remove: the profile's
    *  Resume and Delete bot. */
   jobPort?: Pick<FactoryBotPort, 'update' | 'workerAgents'> & BotAdminPort;
-  /** The bot port's resumeWorker: a done worker's Resume (absent: none). */
-  resumePort?: Pick<FactoryBotPort, 'resumeWorker'>;
+  /** The bot port's resumeWorker: a done worker's Resume (absent: none);
+   *  its applyTask: a code task's Apply to my checkout (absent: none). */
+  resumePort?: Pick<FactoryBotPort, 'resumeWorker' | 'applyTask'>;
   /** Opens a bot's 1:1 (absent: no link). */
   onOpenBot?: (botId: string) => void;
   /** A group chat's pill: rename it, change its bots or delete it (absent:
@@ -2526,7 +2663,19 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
     resumable: (taskId) => taskRows.some((row) => (row.tasks ?? []).some((task) => task.taskId === taskId && task.worker === 'resumable')),
     run: resumeShown,
   }), [readOnly, resumePort, taskRows, resumeShown]);
-  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown, ...(conversation.kind === 'bot' ? { selfBot: conversation.row.bot.id } : {}), ...(cardResume ? { resume: cardResume } : {}), work: workCtx, onOpenFile, shownFileId: openFile?.file.id ?? null };
+  // Apply to my checkout on a code task's end card: any bot's task (a
+  // coordinator's 1:1 shows the end of work another bot did), reported or
+  // done, with commits, of a bot with a repository folder.
+  const applyTask = resumePort?.applyTask;
+  // The tasks this conversation's work cards stand for.
+  const foldedTasks = useMemo(() => new Set([...work.values()].flatMap((w) => w.all.map((c) => c.refs?.taskId).filter((id): id is string => !!id))), [work]);
+  const cardApply = useMemo((): RowCtx['apply'] => (readOnly || !applyTask ? undefined : {
+    applicable: (taskId) => bots.some((row) => !!row.bot.repo?.repoPath && (row.tasks ?? []).some((task) => task.taskId === taskId
+      && (task.status === 'review_requested' || task.status === 'completed') && !task.verification && task.gate?.skipped !== 'no_changes')),
+    run: applyTask,
+    folded: foldedTasks,
+  }), [readOnly, applyTask, bots, foldedTasks]);
+  const ctx: RowCtx = { t, bots, actors, api, now, readOnly, jobPort: readOnly ? undefined : jobPort, nameOf, botNames, taskTitle, requestTitle, idLabels, sent, started, onThread, onOpenBot, markdown, ...(conversation.kind === 'bot' ? { selfBot: conversation.row.bot.id } : {}), ...(cardResume ? { resume: cardResume } : {}), ...(cardApply ? { apply: cardApply } : {}), work: workCtx, onOpenFile, shownFileId: openFile?.file.id ?? null };
   // The open thread is read whole, from its first card (the cached room
   // timeline holds only its newest page), and shown from every card read
   // for the room — not only this conversation's.
@@ -2587,7 +2736,7 @@ export function BotsChat({ conversation, roomCards, bots, title, workspaceName, 
               <ChatIntro row={conversation.row} t={t} readOnly={readOnly} onPick={(text) => setPrefill({ text, nonce: Date.now() })} />
             )}
             {empty && conversation.kind === 'room' && (
-              <p data-bots-empty-chat className="py-8 text-center text-[12px] text-[var(--text-muted)]">{t('botsPage.group.empty')}</p>
+              <p data-bots-empty-chat className="py-8 text-center text-[12px] text-[var(--text-muted)]">{emptyGroupLine(conversation.bots, t)}</p>
             )}
             <TimelineView items={shownItems} ctx={ctx} group={group} onCancelWorkflow={flows.cancel} />
           </div>

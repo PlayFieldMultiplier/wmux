@@ -113,6 +113,25 @@ export function taskThreadOf(entry: { id: string; dispatch?: { threadId?: string
   return taskOriginThread(entry.dispatch?.threadId) ?? (`task:${entry.id}` as ThreadId);
 }
 
+/** The thread of a task worker's lifecycle cards (paused, resumed, done,
+ *  slot freed): the task's own `task:<id>` when the task was started from a
+ *  1:1 or a group chat — that conversation reads the task's result, not its
+ *  worker's comings and goings — else the task's thread (taskThreadOf: a PR,
+ *  issue or handoff thread, or `task:<id>` already). `dispatch.threadId` may
+ *  also be a thread taskThreadOf already gave (a reclaim record's). */
+export function taskLifecycleThreadOf(entry: { id: string; dispatch?: { threadId?: string } }): ThreadId {
+  return taskLifecycleLinkOf(entry) ? (`task:${entry.id}` as ThreadId) : taskThreadOf(entry);
+}
+
+/** The 1:1 or group chat a task's lifecycle cards were moved out of
+ *  (taskLifecycleThreadOf), or undefined. The cards link it
+ *  (`refs.threadId`), so the task's own thread reads as work that
+ *  conversation started: one folded work card there (shared/botsWork.ts). */
+export function taskLifecycleLinkOf(entry: { id: string; dispatch?: { threadId?: string } }): ThreadId | undefined {
+  const thread = taskThreadOf(entry);
+  return dmThreadBot(thread) || groupThreadGroup(thread) ? thread : undefined;
+}
+
 export type CardKind =
   | 'fact'            // system-written from a Fact (compact)
   | 'dispatch' | 'status' | 'triage' | 'verdict' | 'report' | 'plan' | 'proposal' | 'opinion'   // bot outputs (typed)
@@ -194,6 +213,16 @@ export interface RoomCard {
   /** Main-written, `human` cards only: the photos the owner sent with the
    *  message (shared/roomAttachments.ts). Never set by a room.post param. */
   attachments?: RoomAttachment[];
+  /** Main-written, `human` cards only: present when the message named no
+   *  bot (main/factory/humanMessage.ts). `lead`: the room's coordinator it
+   *  went to; absent, it went to every bot of a room without one.
+   *  `waiting`: the bots that were waiting on the owner in its thread (an
+   *  open question or approval request of theirs since the owner last
+   *  spoke there), woken as addressed. `answerer`, with no lead: the bot
+   *  that answers a greeting or a question to everyone (the first addressee
+   *  that takes turns). A retry of its clientPostId wakes the missing
+   *  addressees the same way. Never set by a room.post param. */
+  routed?: { lead?: string; waiting?: string[]; answerer?: string };
   /** Main-written, bot cards only: the files the bot attached with
    *  room_post `files`, as stored copies (shared/roomFiles.ts). */
   files?: RoomFile[];

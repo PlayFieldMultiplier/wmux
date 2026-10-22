@@ -33,6 +33,8 @@ import { resolveBackgroundLaunch, type BackgroundLaunch } from '../account/backg
 import { mintBotToken, mintCommanderToken, revokeCommanderToken } from './commanderTrust';
 import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenHandoff';
 import { BOT_REPO_READ_TOOLS, botRepoReadDenyRules, evaluateBotRepoRead, grepOutputNamesProtected } from '../factory/botRepoRead';
+import { BOT_REPO_GIT_PROMPT, BOT_REPO_GIT_SERVER, isBotRepoGitTool } from '../factory/botRepoGit';
+import { createBotRepoGitServer } from '../factory/botRepoGitServer';
 import { redactStoredSecretsDeep } from '../factory/secretRedaction';
 import { guestGateProvenance, runningWakeAttended } from '../factory/wakeTaint';
 import { BOT_EXEC_TOOLS, botExecSwitchedOff, evaluateBotExecTool, logBotExecDecision, reviewUnlistedCommand, type BotExecDecision } from '../factory/botExec';
@@ -1133,6 +1135,7 @@ export class ClaudeSdkAdapter implements BrainAdapter {
     const naming = botToolNamingRule(this.allowedTools);
     if (naming && typeof options.systemPrompt === 'string') options.systemPrompt = `${options.systemPrompt}\n\n${naming}`;
     if (this._turnExec && typeof options.systemPrompt === 'string') options.systemPrompt = `${options.systemPrompt}\n\n${BOT_EXEC_PROMPT}`;
+    if (bot.repoRoot && this.mcpBundlePath && typeof options.systemPrompt === 'string') options.systemPrompt = `${options.systemPrompt}\n\n${BOT_REPO_GIT_PROMPT}`;
     if (bot.repoRoot || this._turnExec) this.applyBuiltinTools(options, bot.repoRoot, this._turnExec);
     if (this._turnExec) this.applySandbox(options);
     this.applyGuestToolGate(options);
@@ -1155,6 +1158,11 @@ export class ClaudeSdkAdapter implements BrainAdapter {
           ...(this._turnAuth.mode === 'apiKey' ? { ANTHROPIC_API_KEY: '' } : {}),
         },
       },
+      // The repository's commits (factory/botRepoGit.ts): git_show and
+      // git_diff in the same root as Read, Grep and Glob, run by main.
+      ...(bot.repoRoot
+        ? { [BOT_REPO_GIT_SERVER]: createBotRepoGitServer(bot.repoRoot, () => (guestGateProvenance(bot.binding.botId) !== false ? GUEST_TURN_SURFACE_REFUSAL : null)) }
+        : {}),
     };
   }
 
@@ -1226,6 +1234,8 @@ export class ClaudeSdkAdapter implements BrainAdapter {
       // The sandbox's own request to let a command reach a host. Its deny
       // list already refuses every domain; this answer is the second lock.
       if (toolName === 'SandboxNetworkAccess') return { ok: false, reason: 'bot commands have no network access' };
+      // The repository's git reads: their handler validates every argument.
+      if (root && isBotRepoGitTool(toolName)) return { ok: true, input };
       if (!granted.includes(toolName)) return { ok: false, reason: `${toolName} is not a tool this bot holds` };
       if (exec && BOT_EXEC_TOOLS.includes(toolName)) {
         let d: BotExecDecision;

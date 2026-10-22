@@ -61,6 +61,18 @@ describe('mapLaneFacts', () => {
     expect(f?.checks.find((c) => c.name === 'CodeRabbit')).toMatchObject({ bucket: 'pass', isRequired: false });
   });
 
+  it('the base tip is the base branch\'s commit now (baseRef.target.oid), not the PR\'s synced baseRefOid; missing, it is null', () => {
+    expect(LANE_PR_QUERY).toContain('baseRef { target { oid } }');
+    expect(LANE_PR_QUERY).not.toMatch(/\bbaseRefOid\b/);
+    const TIP = 'd'.repeat(40);
+    const { raw, pr } = readPr('lane-pr1858.json');
+    (pr as unknown as Record<string, unknown>).baseRefOid = 'e'.repeat(40);
+    (pr as unknown as Record<string, unknown>).baseRef = { target: { oid: TIP } };
+    expect(mapLaneFacts(raw)?.baseRefOid).toBe(TIP);
+    (pr as unknown as Record<string, unknown>).baseRef = null;
+    expect(mapLaneFacts(raw)?.baseRefOid).toBeNull();
+  });
+
   it('reads isRequired per node and fails closed on counts', () => {
     const { raw, pr } = readPr('lane-pr1858.json');
     const rollup = pr.commits.nodes[0].commit.statusCheckRollup;

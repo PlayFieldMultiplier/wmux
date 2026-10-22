@@ -38,8 +38,10 @@ import type { WakeItem, WakeReason } from '../../shared/wake';
 import { GENERAL_THREAD, type ThreadId } from '../../shared/room';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
 import { REPO_WATCH_FILENAME, RepoWatch, normalizeRepoKey, type WatchGraphql } from './repoWatch';
+import { gitlabWatchReader, type GitlabWatchPorts } from './repoWatchGitlab';
 import { factThreadId } from './roomWriter';
 import { factInIsland } from './guestWorkspaces';
+import { isGitlabRepoKey, trustedAuthorsOn } from '../github/hostLane';
 
 // ── Ports (shapes of design §14; the real ones are wired by the factory host) ─
 
@@ -72,6 +74,8 @@ export interface FactoryTrustApi {
   trustedAuthors(): string[];
   /** The signed-in owner's login, or null when unknown. */
   ownerLogin(): string | null;
+  /** The owner's login on a GitLab host, or null when unknown (missing: none). */
+  ownerLoginOn?(host: string): string | null;
 }
 
 export interface FactoryTriggerPorts {
@@ -84,6 +88,8 @@ export interface FactoryTriggerPorts {
   factoryEnabled?: () => boolean;
   /** The gh read of the repo watch; default GhPrReviewService.watchGraphql. */
   graphql?: WatchGraphql;
+  /** The glab reads of the repo watch on a GitLab repo; default GlabPrService. */
+  gitlab?: GitlabWatchPorts;
 }
 
 type PortsResolver = () => Partial<FactoryTriggerPorts> | null;
@@ -138,14 +144,22 @@ function lower(xs: readonly unknown[]): string[] {
   return xs.filter((x): x is string => typeof x === 'string' && x.length > 0).map((x) => x.toLowerCase());
 }
 
-/** Whether payload.author is trusted. Unknown author or no trust source → no. */
+/** Whether payload.author is trusted. Unknown author or no trust source → no.
+ *  On a GitLab repo the author is a GitLab username: only `host/username`
+ *  entries of that host and the owner's login on that host match it. */
 export function authorIsTrusted(fact: Fact, trust: FactoryTrustApi | undefined): boolean {
   const author = fact.payload?.author;
   if (!trust || typeof author !== 'string' || !author) return false;
   let trusted: string[];
   try {
-    const owner = trust.ownerLogin();
-    trusted = lower([...trust.trustedAuthors(), ...(owner ? [owner] : [])]);
+    const key = normalizeRepoKey(fact.repoKey);
+    if (key && isGitlabRepoKey(key)) {
+      const owner = trust.ownerLoginOn?.(key.split('/')[0]) ?? null;
+      trusted = [...trustedAuthorsOn(key, trust.trustedAuthors()), ...lower(owner ? [owner] : [])];
+    } else {
+      const owner = trust.ownerLogin();
+      trusted = lower([...trust.trustedAuthors(), ...(owner ? [owner] : [])]);
+    }
   } catch {
     return false;
   }
@@ -271,6 +285,15 @@ async function defaultGraphql(): Promise<WatchGraphql> {
   return (repoPath, key, query, vars) => ghPrReviewService.watchGraphql(repoPath, key, query, vars);
 }
 
+/** The default glab reads, imported lazily as the gh one is. */
+async function defaultGitlab(): Promise<GitlabWatchPorts> {
+  const { glabPrService } = await import('../github/GlabPrService');
+  return {
+    graphql: (repoPath, key, query, vars) => glabPrService.watchGraphql(repoPath, key, query, vars),
+    commitParents: (repoPath, key, sha) => glabPrService.commitParentsOf(repoPath, key, sha),
+  };
+}
+
 export function createTriggerModule(deps: Pick<FactoryHostDeps, 'wmuxDir'>, resolve: () => FactoryTriggerPorts | null = resolvePorts) {
   let engine: TriggerEngine | null = null;
   let watch: RepoWatch | null = null;
@@ -284,6 +307,7 @@ export function createTriggerModule(deps: Pick<FactoryHostDeps, 'wmuxDir'>, reso
         return;
       }
       const graphql = ports.graphql ?? (await defaultGraphql());
+      const gitlab = ports.gitlab ?? (await defaultGitlab());
       if (disposed) return;
       engine = new TriggerEngine(ports);
       engine.start();
@@ -291,6 +315,7 @@ export function createTriggerModule(deps: Pick<FactoryHostDeps, 'wmuxDir'>, reso
         facts: ports.factLog,
         bots: ports.bots,
         graphql,
+        gitlab: gitlabWatchReader(gitlab),
         stateFile: path.join(deps.wmuxDir(), 'factory', REPO_WATCH_FILENAME),
         ...(ports.factoryEnabled ? { enabled: ports.factoryEnabled } : {}),
       });

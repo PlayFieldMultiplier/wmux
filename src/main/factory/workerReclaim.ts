@@ -63,7 +63,7 @@ import { holderInputsChanged } from './holderInputs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isResearchDispatch, type LedgerEntry } from '../../shared/ledger';
-import { taskThreadOf, type CardNotice, type ThreadId } from '../../shared/room';
+import { taskLifecycleLinkOf, taskLifecycleThreadOf, taskThreadOf, type CardNotice, type ThreadId } from '../../shared/room';
 import { isPlausibleResumeSessionId, normalizeResumeCwd, permissionFlagFor, type PermissionMode } from '../../shared/agentResume';
 import { sessionHostDir, sessionsStartedIn } from '../worktask/stopSessionsInDir';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
@@ -148,6 +148,19 @@ export interface ReclaimedWorker {
  *  so cards for several tasks that ended together can be told apart. Pure. */
 export function lifecycleCardTask(title: string | undefined, taskId: string): string {
   return title?.trim() || fanoutTaskShortId(taskId);
+}
+
+/** The thread of a reclaimed worker's lifecycle cards (taskLifecycleThreadOf
+ *  over the task thread recorded at the reclaim, so a record written before
+ *  this rule moves its cards too). Pure. */
+function recLifecycleThread(rec: Pick<ReclaimedWorker, 'taskId' | 'threadId'>): ThreadId {
+  return taskLifecycleThreadOf({ id: rec.taskId, dispatch: { threadId: rec.threadId } });
+}
+
+/** The conversation a reclaimed worker's lifecycle cards link
+ *  (taskLifecycleLinkOf), or undefined. Pure. */
+function recLifecycleLink(rec: Pick<ReclaimedWorker, 'taskId' | 'threadId'>): ThreadId | undefined {
+  return taskLifecycleLinkOf({ id: rec.taskId, dispatch: { threadId: rec.threadId } });
 }
 
 /** The workspace a reclaimed worker's pane lives in. Pure. */
@@ -454,7 +467,7 @@ export interface WorkerReclaimPorts {
    *  as its worker (a WSL pane too, isTaskOwnWorkerPane). Absent: every pane
    *  started in the task folder counts. */
   sessionRecordOf?: WorkerSessionRecordOf;
-  note?: (workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string) => void;
+  note?: (workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string, link?: ThreadId) => void;
   /** The Bots page re-reads (BOT_EVENT). */
   changed?: () => void;
   now?: () => number;
@@ -1189,9 +1202,9 @@ export async function reclaimWorker(
       try {
         const task = lifecycleCardTask(entry.title, entry.id);
         ports.note(
-          entry.ownerWorkspaceId, taskThreadOf(entry), `Worker stop unconfirmed: ${task}`,
+          entry.ownerWorkspaceId, taskLifecycleThreadOf(entry), `Worker stop unconfirmed: ${task}`,
           'wmux could not stop the worker or confirm its exit. Its slot is still in use. Open its terminal to check it and stop it if needed.',
-          { code: 'worker.stopUnconfirmed', args: { title: task } }, entry.id,
+          { code: 'worker.stopUnconfirmed', args: { title: task } }, entry.id, taskLifecycleLinkOf(entry),
         );
         await ports.store.put({ ...(ports.store.get(entry.id) ?? rec), stopUnconfirmed: true });
       } catch (err) {
@@ -1239,13 +1252,13 @@ export async function reclaimWorker(
       } else if (ended === 'reported') {
         ports.note?.(
           entry.ownerWorkspaceId,
-          taskThreadOf(entry),
+          taskLifecycleThreadOf(entry),
           `${resumable ? 'Worker paused (resumable)' : 'Worker paused'}: ${task}`,
           resumable
             ? `The task is reported for review and its worker sat idle: its Claude stopped to free memory and its agent slot. The task stays open for review and its pane stays; the ${keptText}, and Resume continues the same conversation.`
             : 'The task is reported for review and its worker sat idle: its Claude stopped to free memory and its agent slot. The task stays open for review and its pane stays; the worktree is kept, but no conversation was recorded to resume.',
           { code: resumable ? 'worker.pausedResumable' : 'worker.paused', args: { title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
-          entry.id,
+          entry.id, taskLifecycleLinkOf(entry),
         );
       } else {
         // The stop's cause is the task's end, whoever ended it (the bot's
@@ -1254,13 +1267,13 @@ export async function reclaimWorker(
         // not this one's.
         ports.note?.(
           entry.ownerWorkspaceId,
-          taskThreadOf(entry),
+          taskLifecycleThreadOf(entry),
           `${resumable ? 'Worker done (resumable)' : 'Worker done'}: ${task}`,
           resumable
             ? `Task ${ended}: its Claude stopped because the task ended. ${pane} The ${keptText}; Resume continues the same conversation.`
             : `Task ${ended}: its Claude stopped because the task ended. ${pane} The worktree is kept; no conversation was recorded to resume.`,
           { code: resumable ? 'worker.doneResumable' : 'worker.done', args: { status: ended, title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
-          entry.id,
+          entry.id, taskLifecycleLinkOf(entry),
         );
       }
     } catch {
@@ -1287,13 +1300,13 @@ function noteOpenPause(ports: Pick<WorkerReclaimPorts, 'note' | 'noticeBot'>, en
   try {
     ports.note?.(
       entry.ownerWorkspaceId,
-      taskThreadOf(entry),
+      taskLifecycleThreadOf(entry),
       `${resumable ? 'Worker paused (resumable)' : 'Worker paused'}: ${task}`,
       resumable
         ? `The task is still open and its worker sat idle for hours without reporting: its Claude stopped to free memory and its agent slot. The task stays as it is and its pane stays; the ${keptText}, and Resume continues the same conversation.`
         : 'The task is still open and its worker sat idle for hours without reporting: its Claude stopped to free memory and its agent slot. The task stays as it is and its pane stays; the worktree is kept, but no conversation was recorded to resume.',
       { code: resumable ? 'worker.openIdlePausedResumable' : 'worker.openIdlePaused', args: { title: task, ...(resumable && research ? { kind: 'research' } : {}) } },
-      entry.id,
+      entry.id, taskLifecycleLinkOf(entry),
     );
   } catch {
     /* the card is best effort */
@@ -1382,11 +1395,11 @@ async function noteStopResolved(ports: WorkerReclaimPorts, rec: ReclaimedWorker 
   const task = lifecycleCardTask(rec.title, rec.taskId);
   try {
     ports.note(
-      rec.ownerWorkspaceId, rec.threadId, `${resumable ? 'Worker slot freed (resumable)' : 'Worker slot freed'}: ${task}`,
+      rec.ownerWorkspaceId, recLifecycleThread(rec), `${resumable ? 'Worker slot freed (resumable)' : 'Worker slot freed'}: ${task}`,
       resumable
         ? `The worker has stopped; its slot is free. The ${research ? 'task folder' : 'worktree'} and the conversation are kept, and Resume continues the same conversation.`
         : 'The worker has stopped; its slot is free.',
-      { code: resumable ? 'worker.stopResolvedResumable' : 'worker.stopResolved', args: { title: task, ...(research ? { kind: 'research' } : {}) } }, rec.taskId,
+      { code: resumable ? 'worker.stopResolvedResumable' : 'worker.stopResolved', args: { title: task, ...(research ? { kind: 'research' } : {}) } }, rec.taskId, recLifecycleLink(rec),
     );
     await ports.store.put({ ...rec, stopResolved: true });
   } catch (err) {
@@ -1646,7 +1659,7 @@ export interface WorkerResumePorts {
   /** The resumed worker uses the task's folder again (taskFolderCleanup.ts
    *  forgetKeptFolder: a folder a stop kept is no longer only kept). */
   folderResumed?: (taskId: string) => void;
-  note?:(workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string) => void;
+  note?:(workspaceId: string, threadId: ThreadId, title: string, body: string, notice?: CardNotice, taskId?: string, link?: ThreadId) => void;
   changed?: () => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -2044,7 +2057,7 @@ async function launched(
   onLaunched?.();
   try {
     const task = lifecycleCardTask(rec.title, rec.taskId);
-    ports.note?.(rec.ownerWorkspaceId, rec.threadId, `Worker resumed: ${task}`, `${by.kind === 'owner' ? 'The owner' : 'The bot'} resumed the same conversation ${where === 'folder' ? 'in the task folder' : 'in a new pane in the task worktree'}.`, { code: 'worker.resumed', args: { by: by.kind, where, title: task } }, rec.taskId);
+    ports.note?.(rec.ownerWorkspaceId, recLifecycleThread(rec), `Worker resumed: ${task}`, `${by.kind === 'owner' ? 'The owner' : 'The bot'} resumed the same conversation ${where === 'folder' ? 'in the task folder' : 'in a new pane in the task worktree'}.`, { code: 'worker.resumed', args: { by: by.kind, where, title: task } }, rec.taskId, recLifecycleLink(rec));
   } catch {
     /* best effort */
   }
@@ -2237,11 +2250,11 @@ export function createResumedIdleSweep(ports: ResumedIdlePorts): ResumedIdleSwee
     try {
       ports.note?.(
         rec.ownerWorkspaceId,
-        rec.threadId,
+        recLifecycleThread(rec),
         `Worker paused (resumable): ${task}`,
         `The resumed worker sat idle after its turn: its Claude stopped again to free memory and its agent slot. The ${research ? 'task folder' : 'worktree'} and the conversation are kept; Resume continues the same conversation.`,
         { code: 'worker.idlePausedResumable', args: { title: task, ...(research ? { kind: 'research' } : {}) } },
-        rec.taskId,
+        rec.taskId, recLifecycleLink(rec),
       );
     } catch {
       /* the card is best effort */

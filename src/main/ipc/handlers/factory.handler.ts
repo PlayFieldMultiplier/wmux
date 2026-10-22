@@ -9,7 +9,9 @@
 // other bot writes. So does FACTORY_BOT_SUGGEST_REPO, which reads a
 // workspace's folder, and so do the owner's stops (FACTORY_STOP_ALL,
 // FACTORY_STOP_BOT: factory/factoryStop.ts), and the owner's resume of a
-// stopped worker (FACTORY_WORKER_RESUME: factory/workerReclaim.ts).
+// stopped worker (FACTORY_WORKER_RESUME: factory/workerReclaim.ts), and the
+// owner's Apply of a bot task's changes to the bot's repository folder
+// (FACTORY_TASK_APPLY: factory/taskApply.ts).
 // A bot row carries the bot's tasks with their stage (factory/botTasks.ts).
 import fs from 'node:fs';
 import { dialog, ipcMain, nativeImage, type BrowserWindow, type OpenDialogOptions } from 'electron';
@@ -32,7 +34,8 @@ import type {
 import { getWorkspaceMirror } from '../../workspace/WorkspaceMirror';
 import { BOT_AVATAR_EXTENSIONS, pickBotAvatar, type BotAvatarPickerDeps } from '../../factory/botAvatar';
 import { isMainWindowSender } from '../mainWindowSender';
-import type { BotTaskView, FactoryTaskFolderCleanResult, FactoryTaskFolderUsage } from '../../../shared/botTask';
+import type { BotTaskView, FactoryTaskApplyResult, FactoryTaskFolderCleanResult, FactoryTaskFolderUsage } from '../../../shared/botTask';
+import { applyTaskToCheckout, getTaskApplyPorts, type TaskApplyPorts } from '../../factory/taskApply';
 import { cleanTaskFolders, getTaskFolderPorts, taskFolderUsage } from '../../factory/taskFolderCleanup';
 import { botTaskViews, getBotTaskSources, type BotTaskSources } from '../../factory/botTasks';
 import { getFactoryStopPorts, stopFactoryTask, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
@@ -138,6 +141,23 @@ export function factoryWorkerResumeHandler(
     const raw = req && typeof req === 'object' && !Array.isArray(req) ? (req as { taskId?: unknown }).taskId : undefined;
     if (typeof raw !== 'string' || !TASK_ID_RE.test(raw)) return { ok: false, code: 'invalid_argument', message: 'taskId must be a task id' };
     return ownerResumeWorker(raw, ports, slots);
+  };
+}
+
+/** FACTORY_TASK_APPLY's body: the sender check, the task id, then the
+ *  owner's Apply (taskApply.ts), which reads everything else from main's
+ *  records. */
+export function factoryTaskApplyHandler(
+  getWindow: () => BrowserWindow | null,
+  ports: () => TaskApplyPorts | null = getTaskApplyPorts,
+): (e: { sender?: unknown; senderFrame?: unknown }, req?: unknown) => Promise<FactoryTaskApplyResult> {
+  return async (e, req) => {
+    if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'operator_only', message: 'only the main window may apply a task' };
+    const raw = req && typeof req === 'object' && !Array.isArray(req) ? (req as { taskId?: unknown }).taskId : undefined;
+    if (typeof raw !== 'string' || !TASK_ID_RE.test(raw)) return { ok: false, code: 'invalid_argument', message: 'taskId must be a task id' };
+    const p = ports();
+    if (!p) return { ok: false, code: 'not_started', message: 'The factory is not running.' };
+    return applyTaskToCheckout(p, raw);
   };
 }
 
@@ -501,6 +521,7 @@ export function registerFactoryHandlers(
     IPC.FACTORY_STOP_BOT,
     IPC.FACTORY_STOP_TASK,
     IPC.FACTORY_WORKER_RESUME,
+    IPC.FACTORY_TASK_APPLY,
     IPC.FACTORY_ENGINE_READINESS,
     IPC.FACTORY_ENGINE_LOGIN,
     IPC.FACTORY_WORKER_AGENTS,
@@ -554,6 +575,8 @@ export function registerFactoryHandlers(
   ipcMain.handle(IPC.FACTORY_STOP_TASK, wrapHandler(IPC.FACTORY_STOP_TASK, factoryStopHandler(getWindow, 'task')));
 
   ipcMain.handle(IPC.FACTORY_WORKER_RESUME, wrapHandler(IPC.FACTORY_WORKER_RESUME, factoryWorkerResumeHandler(getWindow)));
+
+  ipcMain.handle(IPC.FACTORY_TASK_APPLY, wrapHandler(IPC.FACTORY_TASK_APPLY, factoryTaskApplyHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_ENGINE_READINESS, wrapHandler(IPC.FACTORY_ENGINE_READINESS, factoryEngineReadinessHandler(getWindow)));
 

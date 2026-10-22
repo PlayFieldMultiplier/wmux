@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { BOT_APPROVAL_RPC, BOT_REQUESTABLE_ACTIONS, type ApprovalAction, type ApprovalState } from '../shared/botApproval';
 import { registerToolModule } from './toolModules';
 
-/** A merge request reads the PR and the gh login from GitHub first. */
+/** A merge request reads the PR (or GitLab MR) and the gh or glab login from its host first. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
 const NUMBER = z.number().int().positive();

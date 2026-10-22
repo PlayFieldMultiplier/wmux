@@ -212,6 +212,16 @@ export function cardResumeTaskId(card: Pick<RoomCard, 'actor' | 'notice' | 'refs
   return taskId && resumable(taskId) ? taskId : null;
 }
 
+/** The task a system card offers Apply to my checkout for: a task's end
+ *  card (reported for review, or done) whose task can be applied now
+ *  (`applicable`: a code task of a bot with a repository folder). Null
+ *  otherwise. Pure. */
+export function cardApplyTaskId(card: Pick<RoomCard, 'actor' | 'notice' | 'refs'>, applicable: (taskId: string) => boolean): string | null {
+  if (card.actor.kind !== 'system' || (card.notice?.code !== 'task.reported' && card.notice?.code !== 'task.done')) return null;
+  const taskId = card.refs?.taskId;
+  return taskId && applicable(taskId) ? taskId : null;
+}
+
 const NOTICE_WORDS: Readonly<Record<string, ReadonlySet<string>>> = {
   status: new Set(['completed', 'cancelled', 'failed']),
   by: new Set(['owner', 'bot']),
