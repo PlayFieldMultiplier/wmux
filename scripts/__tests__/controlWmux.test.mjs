@@ -4,7 +4,7 @@
 // @wmux-lane unit
 // packagedCliBundle takes the platform as an argument ('win32' is a string
 // here); nothing in this file reads the host OS.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -280,6 +280,36 @@ describe('stop --purge (purgeSuffixedData)', () => {
     expect(r.removed).toEqual([]);
     expect(r.skipped[0].reason).toMatch(/unknown/);
     expect(fs.existsSync(ud)).toBe(true);
+  });
+
+  it('reports a path it could not remove and carries on with the rest', () => {
+    const home = setup();
+    const a = path.join(home, `.wmux${suffix}`);
+    const b = path.join(home, `.wmux${suffix}-auth-token`);
+    fs.mkdirSync(a);
+    fs.writeFileSync(b, 't');
+    const real = fs.rmSync;
+    const spy = vi.spyOn(fs, 'rmSync').mockImplementation((p, o) => {
+      if (p === a) throw Object.assign(new Error('busy'), { code: 'EPERM' });
+      return real(p, o);
+    });
+    try {
+      const r = purgeSuffixedData({ suffix, paths: [a, b], userData: null });
+      expect(r.removed).toEqual([b]);
+      expect(r.skipped).toEqual([{ path: a, reason: expect.stringMatching(/could not remove \(EPERM\)/) }]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('skips userData already removed with the ~/.wmux<suffix> that held it', () => {
+    const home = setup();
+    const data = path.join(home, `.wmux${suffix}`);
+    const ud = path.join(data, `electron-user-data${suffix}`);
+    fs.mkdirSync(ud, { recursive: true });
+    const r = purgeSuffixedData({ suffix, paths: [data], userData: { path: ud, existedBeforeLaunch: false } });
+    expect(r.removed).toEqual([data]);
+    expect(r.skipped).toEqual([]);
   });
 
   it('keeps a pre-existing suffixed path and never touches a name without the suffix', () => {

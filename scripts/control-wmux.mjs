@@ -43,6 +43,7 @@ import {
   parseProcessStart,
   parseUserDataLog,
   pathPresent,
+  processListQuery,
   processStartQuery,
   purgeSuffixedData,
   sameProcess,
@@ -51,6 +52,7 @@ import {
   suffixRefusal,
   suffixedPaths,
 } from './lib/control-wmux-lib.mjs';
+import { normalizeProcessRows, runProcessTree, survivors } from './lib/e2e-first-run-lib.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_DIR = path.join(REPO_ROOT, '.claude', 'skills', 'verify-wmux');
@@ -123,6 +125,35 @@ function processStartedAt(pid) {
     env: { ...process.env, LC_ALL: 'C' },
   });
   return r.status === 0 ? parseProcessStart(r.stdout, pid) : null;
+}
+
+/** Every process as identity rows ({ ProcessId, ParentProcessId, CreationDate, … }), or null. */
+function listProcessRows() {
+  const q = processListQuery();
+  const r = spawnSync(q.file, q.args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 60_000,
+    maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (r.status !== 0) return null;
+  try {
+    return normalizeProcessRows(process.platform === 'win32' ? JSON.parse(r.stdout) : r.stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** The recorded processes still alive after up to `ms`; [] once all are gone. */
+async function waitTreeGone(tree, ms) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const rows = listProcessRows();
+    const left = rows ? survivors(tree, rows) : tree;
+    if (left.length === 0 || Date.now() >= end) return left;
+    await sleep(500);
+  }
 }
 
 /**
@@ -694,6 +725,13 @@ async function cmdStop(opts) {
   const steps = [];
   const env = scrubEnv(process.env, state.suffix);
 
+  // The app's own process tree, expanded only from its pinned identity (pid
+  // AND creation time) and taken while the app still runs: its renderer, GPU,
+  // network and storage services hold files in userData until they exit,
+  // which is after the app itself.
+  const appRows = state.pidCreatedAt != null && pidAlive(state.pid) ? listProcessRows() : null;
+  const appTree = appRows ? runProcessTree(appRows, [{ ProcessId: state.pid, CreationDate: state.pidCreatedAt }]) : [];
+
   // 1. The app: only the process we spawned, by pid AND creation time. If the
   // app died, its pid may already belong to someone else: never signal it.
   // SIGTERM detaches it from its daemon.
@@ -749,6 +787,16 @@ async function cmdStop(opts) {
     }
   }
 
+  // 3b. Wait for the app's tree (the daemon and its panes too, on Windows)
+  // to be gone: purging while a child still holds a file fails with EPERM.
+  let treeLeft = [];
+  if (appTree.length) {
+    treeLeft = await waitTreeGone(appTree, 15_000);
+    steps.push(treeLeft.length
+      ? `app process tree: ${treeLeft.length} of ${appTree.length} still running after 15 s (${treeLeft.map((r) => `${r.Name}#${r.ProcessId}`).join(', ')}), not killed`
+      : `app process tree: all ${appTree.length} process(es) exited`);
+  }
+
   // 4. Optional: remove the suffixed data this run created (never evidence,
   // never a path that existed before launch).
   let removed = [];
@@ -765,10 +813,11 @@ async function cmdStop(opts) {
   }
   const userDataLeft = state.userData?.path && pathPresent(state.userData.path) ? [state.userData.path] : [];
 
-  const leftover = [
+  const leftover = [...new Set([
     recordedAppAlive(state) ? state.pid : null,
     ...[readPidFile(daemonPidFile) ?? daemonPid].filter((p) => p && pidAlive(p)),
-  ].filter(Boolean);
+    ...treeLeft.map((r) => r.ProcessId),
+  ].filter(Boolean))];
   timeline(state, { cmd: 'stop', steps, removed, purgeSkipped, leftover });
   const evidence = evidenceDir(state);
   fs.renameSync(STATE_FILE, path.join(RUN_DIR, `stopped-${state.runId}.json`));

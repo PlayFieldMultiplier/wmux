@@ -314,8 +314,13 @@ export function purgeSuffixedData({ suffix, paths, preExisting = [], userData, l
       skipped.push({ path: p, reason: `holds a symlink, junction or unreadable dir (${link}); never followed, left in place` });
       continue;
     }
-    fs.rmSync(p, { recursive: true, force: true });
-    removed.push(p);
+    try {
+      fs.rmSync(p, { recursive: true, force: true });
+      removed.push(p);
+    } catch (err) {
+      // A file still held open: report it, never abort the rest of `stop`.
+      skipped.push({ path: p, reason: `could not remove (${err.code || err.message}); part of it may be gone` });
+    }
   }
   return { removed, skipped };
 }
@@ -384,6 +389,23 @@ export function parseProcessStart(stdout, pid, platform = process.platform) {
     return parseCimDate(row.CreationDate);
   }
   return parseLstart(text.split('\n')[0]);
+}
+
+/**
+ * The command that lists every process with its parent and creation time, for
+ * the e2e-first-run-lib normalizeProcessRows shape: CIM through
+ * `ConvertTo-Json` on Windows (the same CreationDate pipeline as
+ * processStartQuery), `ps` with lstart elsewhere (run it with LC_ALL=C).
+ */
+export function processListQuery(platform = process.platform) {
+  if (platform === 'win32') {
+    return {
+      file: 'powershell.exe',
+      args: ['-NoProfile', '-NonInteractive', '-Command',
+        'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CreationDate,CommandLine | ConvertTo-Json -Compress'],
+    };
+  }
+  return { file: 'ps', args: ['-A', '-o', 'pid=,ppid=,lstart=,args='] };
 }
 
 /**
