@@ -18,8 +18,9 @@ vi.mock('electron', () => ({
 vi.mock('../../../security/navigationPolicy', () => ({
   validateResolvedNavigationUrl: vi.fn(async () => ({ valid: true })),
 }));
+const { sendToRendererMock } = vi.hoisted(() => ({ sendToRendererMock: vi.fn(async () => ({ ok: true })) }));
 vi.mock('../_bridge', () => ({
-  sendToRenderer: vi.fn(async () => ({ ok: true })),
+  sendToRenderer: sendToRendererMock,
 }));
 
 const SURFACE = {
@@ -29,8 +30,9 @@ const SURFACE = {
 
 function setup() {
   const revoked = new Map<string, Error>();
+  let registered = true;
   const cdp = {
-    getTarget: vi.fn((surfaceId?: string) => (!surfaceId || surfaceId === SURFACE.surfaceId ? SURFACE : null)),
+    getTarget: vi.fn((surfaceId?: string) => (registered && (!surfaceId || surfaceId === SURFACE.surfaceId) ? SURFACE : null)),
     waitForTarget: vi.fn(async () => SURFACE),
     ensureAwake: vi.fn(async () => null),
     listTargets: vi.fn(() => [SURFACE]),
@@ -43,6 +45,7 @@ function setup() {
     releaseRpcLease: vi.fn(() => true),
     rpcLeaseRevocation: vi.fn((token: string) => revoked.get(token)),
     watchRpcLease: vi.fn(async () => undefined),
+    isDiscarded: vi.fn(() => false),
   };
   const control = new BrowserAgentControl({
     emit: () => undefined,
@@ -63,7 +66,8 @@ function setup() {
     undefined,
     control,
   );
-  return { router, cdp, control };
+  const cleanup = cdp.setCaptureCleanup.mock.calls[0]?.[0] as ((wcId: number) => void) | undefined;
+  return { router, cdp, control, cleanup, unregister: () => { registered = false; } };
 }
 
 const acquire = (router: RpcRouter, authorize: boolean) =>
@@ -74,7 +78,10 @@ const acquire = (router: RpcRouter, authorize: boolean) =>
   });
 
 describe('browser RPC — the user paused or took over the tab', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
 
   it('refuses the MCP lane\'s lease while paused, with the stable code, and leases again after Resume', async () => {
     const { router, cdp, control } = setup();
@@ -136,5 +143,102 @@ describe('browser RPC — the user paused or took over the tab', () => {
 
     const plain = await router.dispatch({ id: 'p', method: 'browser.lease.renew', params: { token: 'lease-x' } });
     if (plain.ok) expect(plain.result).toEqual({ ok: true });
+  });
+
+  it('refuses to close a taken-over tab, by name or as the workspace\'s browser tab', async () => {
+    const { router, control } = setup();
+    control.apply(SURFACE.surfaceId, 'takeOver');
+
+    for (const params of [
+      { surfaceId: SURFACE.surfaceId, workspaceId: 'ws-a' },
+      { workspaceId: 'ws-a' },
+    ]) {
+      const res = await router.dispatch({ id: 'c', method: 'browser.close', params });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toContain('browser.close: BROWSER_USER_IN_CONTROL');
+    }
+    const tabs = await router.dispatch({
+      id: 't', method: 'browser.tabs', params: { action: 'close', surfaceId: SURFACE.surfaceId, workspaceId: 'ws-a' },
+    });
+    // A tabs error the tool shows as is, not a throw it would relabel.
+    expect(tabs.ok).toBe(true);
+    if (tabs.ok) {
+      expect(tabs.result).toMatchObject({ ok: false, error: { code: 'BROWSER_TABS_SCOPE_REFUSED' } });
+      expect(JSON.stringify(tabs.result)).toContain('browser_tabs close: BROWSER_USER_IN_CONTROL');
+    }
+    expect(sendToRendererMock).not.toHaveBeenCalled();
+
+    control.apply(SURFACE.surfaceId, 'handBack');
+    const after = await router.dispatch({ id: 'c2', method: 'browser.close', params: { surfaceId: SURFACE.surfaceId, workspaceId: 'ws-a' } });
+    expect(after.ok).toBe(true);
+    expect(sendToRendererMock).toHaveBeenCalledWith(expect.anything(), 'browser.close', expect.objectContaining({ surfaceId: SURFACE.surfaceId }));
+  });
+
+  it('does not hand out the CDP target of a paused tab, named or by default', async () => {
+    const { router, control } = setup();
+    control.apply(SURFACE.surfaceId, 'stop');
+    for (const params of [{ surfaceId: SURFACE.surfaceId, workspaceId: 'ws-a' }, { workspaceId: 'ws-a' }]) {
+      const res = await router.dispatch({ id: 'g', method: 'browser.cdp.target', params });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toContain('browser.cdp.target: BROWSER_AGENT_PAUSED');
+    }
+    control.apply(SURFACE.surfaceId, 'resume');
+    const res = await router.dispatch({ id: 'g2', method: 'browser.cdp.target', params: { surfaceId: SURFACE.surfaceId, workspaceId: 'ws-a' } });
+    if (res.ok) expect(res.result).toEqual({ targetId: SURFACE.targetId, surfaceId: SURFACE.surfaceId });
+    else throw new Error(res.error);
+  });
+
+  it('refuses a named paused tab before waking it, so a discarded tab is not reloaded', async () => {
+    const { router, cdp, control, unregister } = setup();
+    unregister(); // discarded: no live target until a wake
+    control.apply(SURFACE.surfaceId, 'stop');
+    const res = await acquire(router, true);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('BROWSER_AGENT_PAUSED');
+    expect(cdp.ensureAwake).not.toHaveBeenCalled();
+  });
+
+  it('a parked renew whose caller hung up ends without a final renew', async () => {
+    const { router, cdp } = setup();
+    let release!: () => void;
+    cdp.watchRpcLease.mockImplementation(() => new Promise<undefined>((r) => { release = () => r(undefined); }));
+    const hangUp = new AbortController();
+    const pending = router.dispatch(
+      { id: 'w2', method: 'browser.lease.renew', params: { token: 'lease-x', waitMs: 8_000 } },
+      { operator: true, signal: hangUp.signal },
+    );
+    await vi.waitFor(() => expect(cdp.watchRpcLease).toHaveBeenCalled(), { timeout: 5_000 });
+    hangUp.abort();
+    await pending;
+    release();
+    // Only the renewal that started the park: the lease lapses at its TTL.
+    expect(cdp.renewRpcLease).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a tab\'s hold once its guest is gone for good, but not on a remount', async () => {
+    vi.useFakeTimers();
+    const { control, cleanup, unregister, cdp } = setup();
+    control.apply(SURFACE.surfaceId, 'takeOver');
+    // A remount: the guest goes and comes back within the grace.
+    cleanup?.(SURFACE.webContentsId);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(control.get(SURFACE.surfaceId).mode).toBe('user');
+
+    // A discard keeps it: the tab is asleep, not closed.
+    cdp.isDiscarded.mockReturnValueOnce(true);
+    cleanup?.(SURFACE.webContentsId);
+    unregister();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(control.get(SURFACE.surfaceId).mode).toBe('user');
+  });
+
+  it('a closed tab\'s hold is dropped after the grace', async () => {
+    vi.useFakeTimers();
+    const { control, cleanup, unregister } = setup();
+    control.apply(SURFACE.surfaceId, 'takeOver');
+    cleanup?.(SURFACE.webContentsId);
+    unregister();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(control.get(SURFACE.surfaceId).mode).toBe('agent');
   });
 });

@@ -1,4 +1,5 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { sendRpc } from '../wmux-client';
 import {
   browserCallRefusal,
@@ -196,6 +197,8 @@ const LEASE_WATCH_START_MS = 500;
 interface CancelSignal {
   /** Rejects with the user's refusal; never resolves. */
   readonly promise: Promise<never>;
+  /** Aborted with the same refusal: the op's own code reads it (see below). */
+  readonly signal: AbortSignal;
   fire(error: Error): void;
 }
 
@@ -206,7 +209,29 @@ function cancelSignal(): CancelSignal {
   });
   // Unobserved whenever the op finishes first.
   promise.catch(() => undefined);
-  return { promise, fire: (error) => reject(error) };
+  const controller = new AbortController();
+  return {
+    promise,
+    signal: controller.signal,
+    fire: (error) => {
+      if (controller.signal.aborted) return;
+      controller.abort(error);
+      reject(error);
+    },
+  };
+}
+
+// The stopped op's body keeps running after the refusal is returned (nothing
+// can preempt it), and dropping its connection only makes its next page call
+// fail — which page discovery would answer by reconnecting and carrying on. So
+// the op's signal travels with its async context, and page discovery
+// (PlaywrightEngine getPage / ensureConnected) treats an aborted one as final.
+const opSignals = new AsyncLocalStorage<AbortSignal>();
+
+/** The signal of the browser op the caller runs inside, if any. Aborted, with
+ *  the user's refusal as its reason, once the user stops or takes over the tab. */
+export function currentBrowserOpSignal(): AbortSignal | undefined {
+  return opSignals.getStore();
 }
 
 /**
@@ -263,7 +288,8 @@ function watchLease(token: string, onRevoked: (error: Error) => void): () => voi
  * case the agent's Playwright connection is dropped so the abandoned action
  * stops in the page as well.
  */
-function untilCancelled<T>(work: Promise<T>, cancel: CancelSignal): Promise<T> {
+function untilCancelled<T>(run: () => Promise<T>, cancel: CancelSignal): Promise<T> {
+  const work = opSignals.run(cancel.signal, run);
   return Promise.race([
     work,
     cancel.promise.catch((error: unknown) => {
@@ -705,14 +731,19 @@ export async function withAutomationLease<T>(
         })
         .catch((err) => {
           // A refusal is final; anything else keeps trying until the op ends.
+          // It also ends the op now rather than when its body finishes: a tab
+          // the user stopped must not keep being driven until then.
           const refusal = browserCallRefusal(err);
-          if (refusal) revoked = refusal;
+          if (refusal) {
+            revoked = refusal;
+            if (!done) lateCancel.fire(refusal);
+          }
         });
     }, 2_000);
     (lateTimer as { unref?: () => void }).unref?.();
     const lateEvents = await drainLifecycleEvents(scope);
     try {
-      const result = prependModalNotes(await untilCancelled(fn(scope), lateCancel), scope);
+      const result = prependModalNotes(await untilCancelled(() => fn(scope), lateCancel), scope);
       if (revoked) throw revoked;
       // Post-drain runs in the return expression, i.e. still inside this
       // finally's lease bracket — browser.lifecycle.get is a leased RPC and
@@ -742,7 +773,7 @@ export async function withAutomationLease<T>(
 
   const events = await drainLifecycleEvents(scope);
   try {
-    const result = prependModalNotes(await untilCancelled(fn(scope), cancel), scope);
+    const result = prependModalNotes(await untilCancelled(() => fn(scope), cancel), scope);
     // Post-drain still inside the lease bracket (see the late-acquire branch).
     const postEvents = await drainLifecycleEventsPost(scope);
     const withEvents = prependBrowserEvents(

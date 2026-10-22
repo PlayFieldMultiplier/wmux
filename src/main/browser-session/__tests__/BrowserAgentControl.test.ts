@@ -132,4 +132,18 @@ describe('BrowserAgentControl activity marker', () => {
       { surfaceId: 's2', active: false, mode: 'paused' },
     ]);
   });
+
+  it('forget drops a closed tab\'s hold and marker, and says so once', () => {
+    const { control, emitted } = setup(1_000);
+    control.noteLeases('s1', 1);
+    control.apply('s1', 'takeOver');
+    emitted.length = 0;
+    control.forget('s1');
+    expect(control.get('s1')).toEqual({ surfaceId: 's1', active: false, mode: 'agent' });
+    expect(control.list()).toEqual([]);
+    expect(emitted).toEqual([{ surfaceId: 's1', active: false, mode: 'agent' }]);
+    control.forget('s1');
+    expect(emitted).toHaveLength(1);
+  });
 });
+

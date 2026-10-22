@@ -39,6 +39,9 @@ export interface BrowserAgentControlDeps {
  * Activity is not guessed: `noteLeases` is fed the automation lease count for
  * the surface, which every agent browser action holds while it runs (the MCP
  * lane's browser.lease.* and main's own leased browser.* handlers).
+ *
+ * Memory only: an app restart puts every tab back under agent control, a
+ * taken-over one included. A closed tab's entry is dropped by `forget`.
  */
 export class BrowserAgentControl {
   private readonly modes = new Map<string, Exclude<BrowserAgentControlMode, 'agent'>>();
@@ -113,6 +116,17 @@ export class BrowserAgentControl {
     if (code) this.deps.cancelInFlight(surfaceId, new Error(agentControlCancelMessage(code)));
     this.emit(surfaceId);
     return { changed: true, state: this.get(surfaceId) };
+  }
+
+  /** The tab is gone for good: drop its entry, telling the renderer if it had one. */
+  forget(surfaceId: string): void {
+    const timer = this.offTimers.get(surfaceId);
+    if (timer) clearTimeout(timer);
+    this.offTimers.delete(surfaceId);
+    this.leased.delete(surfaceId);
+    const wasActive = this.active.delete(surfaceId);
+    const wasHeld = this.modes.delete(surfaceId);
+    if (wasActive || wasHeld) this.emit(surfaceId);
   }
 
   private emit(surfaceId: string): void {

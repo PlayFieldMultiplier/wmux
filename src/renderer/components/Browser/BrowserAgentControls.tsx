@@ -4,10 +4,24 @@ import { StatusMarkView } from '../Sidebar/AgentMarks';
 import Button from '../ui/Button';
 
 /**
+ * Tabs an agent has acted on in this window's lifetime. Agents work in steps
+ * with think time between them, and main's activity marker goes out a moment
+ * after each step; Take over stays on offer through those gaps so the user can
+ * take the tab back between two steps, not only during one.
+ */
+const touchedSurfaces = new Set<string>();
+
+/** Test seam. */
+export function resetTouchedSurfacesForTests(): void {
+  touchedSurfaces.clear();
+}
+
+/**
  * The browser pane's agent controls, in the toolbar row so they never move the
  * page: showing them must not resize the guest while an agent is acting on it.
  *
  *   agent, acting   ● Agent is using this tab   [Stop] [Take over]
+ *   agent, between steps (acted on earlier)      [Take over]
  *   paused          Agent paused                [Resume] [Take over]
  *   user            You have this tab           [Hand back]
  *
@@ -28,9 +42,16 @@ export function BrowserAgentStatus({
   hidden?: boolean;
 }) {
   const t = useT();
-  const state = useBrowserAgentControl(surfaceId);
+  const live = useBrowserAgentControl(surfaceId);
+  // Any non-idle state means an agent has been at this tab. Idempotent, so
+  // safe in render: the set only ever gains this id.
+  if (live) touchedSurfaces.add(surfaceId);
+  const state = live ?? (touchedSurfaces.has(surfaceId) ? { surfaceId, active: false, mode: 'agent' as const } : undefined);
   if (!state || (hidden && state.mode === 'agent')) return null;
   const { mode, active } = state;
+  // Between an agent's steps only Take over is offered: no running mark, no
+  // words and no Stop, since nothing is running to stop.
+  const between = mode === 'agent' && !active;
   const label =
     mode === 'paused' ? t('browser.agent.paused')
       : mode === 'user' ? t('browser.agent.userControl')
@@ -39,14 +60,14 @@ export function BrowserAgentStatus({
     <div
       role="group"
       aria-label={t('browser.agent.controlsLabel')}
-      data-browser-agent-control={mode}
+      data-browser-agent-control={between ? 'idle' : mode}
       data-active={active ? 'true' : undefined}
       className="flex items-center gap-1.5 shrink-0 min-w-0"
       // The panel root hands every click to the webview; a button here keeps it.
       onClick={(e) => e.stopPropagation()}
     >
-      {mode === 'agent' && <StatusMarkView status="running" label={compact ? label : undefined} />}
-      {!compact && (
+      {mode === 'agent' && active && <StatusMarkView status="running" label={compact ? label : undefined} />}
+      {!compact && !between && (
         <span
           data-browser-agent-label
           className="truncate"
@@ -56,7 +77,7 @@ export function BrowserAgentStatus({
           {label}
         </span>
       )}
-      {mode === 'agent' && (
+      {mode === 'agent' && active && (
         <Button
           size="sm"
           data-browser-agent-stop

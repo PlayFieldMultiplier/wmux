@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
-import { BrowserAgentStatus, BrowserAgentTabMark } from '../BrowserAgentControls';
+import { BrowserAgentStatus, BrowserAgentTabMark, resetTouchedSurfacesForTests } from '../BrowserAgentControls';
 import { resetBrowserAgentControlForTests } from '../../../hooks/useBrowserAgentControl';
 import type { BrowserAgentControlState } from '../../../../shared/browserAgentControl';
 
@@ -48,6 +48,7 @@ function click(el: Element) {
 
 beforeEach(() => {
   resetBrowserAgentControlForTests();
+  resetTouchedSurfacesForTests();
   push = null;
   list.mockClear();
   intent.mockClear();
@@ -87,6 +88,30 @@ describe('BrowserAgentStatus', () => {
     // Another tab's activity is not this one's.
     send({ surfaceId: 'tab-2', active: true, mode: 'agent' });
     send({ surfaceId: 'tab-1', active: false, mode: 'agent' });
+    // Between two steps: the mark, the words and Stop go; Take over stays.
+    const idle = c.querySelector('[data-browser-agent-control="idle"]')!;
+    expect(idle.querySelector('[data-status-mark]')).toBeNull();
+    expect(c.querySelector('[data-browser-agent-label]')).toBeNull();
+    expect(c.querySelector('[data-browser-agent-stop]')).toBeNull();
+    expect(c.querySelector('[data-browser-agent-take-over]')).not.toBeNull();
+  });
+
+  it('offers Take over between an agent\'s steps, and it sends takeOver', async () => {
+    const c = render(<BrowserAgentStatus surfaceId="tab-1" compact={false} />);
+    await flush();
+    send({ surfaceId: 'tab-1', active: true, mode: 'agent' });
+    send({ surfaceId: 'tab-1', active: false, mode: 'agent' });
+
+    click(c.querySelector('[data-browser-agent-take-over]')!);
+    await flush();
+    expect(intent).toHaveBeenCalledWith('tab-1', 'takeOver');
+    expect(c.querySelector('[data-browser-agent-hand-back]')).not.toBeNull();
+  });
+
+  it('a tab no agent has touched shows nothing', async () => {
+    const c = render(<BrowserAgentStatus surfaceId="tab-9" compact={false} />);
+    await flush();
+    send({ surfaceId: 'tab-1', active: true, mode: 'agent' });
     expect(c.querySelector('[data-browser-agent-control]')).toBeNull();
   });
 
@@ -121,7 +146,8 @@ describe('BrowserAgentStatus', () => {
     click(handBack);
     await flush();
     expect(intent).toHaveBeenLastCalledWith('tab-1', 'handBack');
-    expect(c.querySelector('[data-browser-agent-control]')).toBeNull();
+    // Back under the agent, idle: Take over stays on offer.
+    expect(c.querySelector('[data-browser-agent-control="idle"]')).not.toBeNull();
   });
 
   it('hydrates from main on mount, and steps aside for an open help request only while the agent has the tab', async () => {

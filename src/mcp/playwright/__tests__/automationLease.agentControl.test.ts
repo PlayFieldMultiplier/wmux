@@ -105,4 +105,26 @@ describe('withAutomationLease — the user stops the tab mid-action', () => {
     expect(renews).toHaveLength(3);
     expect(renews[0][1]).toEqual({ token: 'lease-1', waitMs: 8_000 });
   });
+
+  it('a refusal on the late acquire ends the op at once, not when its body finishes', async () => {
+    let acquires = 0;
+    mockSendRpc.mockImplementation((method: string) => {
+      if (method === 'browser.lease.acquire') {
+        acquires += 1;
+        // No target yet on the first ask; by the late ask the user has stopped the tab.
+        return acquires === 1
+          ? Promise.resolve({ token: null })
+          : Promise.reject(new Error('browser.lease.acquire: BROWSER_AGENT_PAUSED: the user paused agent control of this tab, so nothing was done.'));
+      }
+      return Promise.resolve({});
+    });
+    const body = vi.fn(() => new Promise<string>(() => undefined));
+
+    const settled = withAutomationLease(deps, 'surface-1', body).then(() => 'resolved', (err: Error) => err);
+    await vi.advanceTimersByTimeAsync(2_100);
+    const err = await settled;
+    expect((err as Error & { code?: string }).code).toBe(AGENT_PAUSED_CODE);
+    expect(mockDisconnect).toHaveBeenCalledTimes(1);
+  });
 });
+
