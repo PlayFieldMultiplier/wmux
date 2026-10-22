@@ -419,3 +419,149 @@ export function sameProcess(recorded, current) {
   if (recorded.createdAt == null || current.createdAt == null) return false;
   return recorded.pid === current.pid && recorded.createdAt === current.createdAt;
 }
+
+/**
+ * Windows: terminate recorded processes only through a handle that pins the
+ * process whose creation time matched. Node's process.kill (SIGTERM or
+ * SIGKILL) and taskkill both act on a bare pid, so a pid reused between the
+ * identity check and the kill would hit the stranger. One PowerShell call:
+ *   1. GetProcessById + `.Handle` opens and caches a handle per pid; while it
+ *      is open Windows cannot hand that pid to another process;
+ *   2. one CIM query then reads CreationDate for those pids, through the same
+ *      `ConvertTo-Json` pipeline the identities were recorded with
+ *      (processStartQuery, processListQuery), so the milliseconds agree;
+ *   3. Kill() on the cached handle, only where pid AND creation time match.
+ * Results per pid: killed | mismatch (another process holds it) | gone | denied.
+ * `targets` are { pid, createdAt } with createdAt in epoch ms.
+ */
+export function windowsKillQuery(targets) {
+  const list = (targets || [])
+    .filter((t) => Number.isInteger(t?.pid) && t.pid > 0 && Number.isFinite(t?.createdAt))
+    .map((t) => ({ pid: t.pid, createdAt: Math.trunc(t.createdAt) }));
+  if (list.length === 0) return null;
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    // PowerShell 5.1 emits a JSON array as ONE object; the inner pipeline unrolls it.
+    `$targets = @(('${JSON.stringify(list)}' | ConvertFrom-Json) | ForEach-Object { $_ })`,
+    '$handles = @{}',
+    '$res = @{}',
+    'foreach ($t in $targets) {',
+    '  $id = [int]$t.pid',
+    '  try {',
+    '    $p = [System.Diagnostics.Process]::GetProcessById($id)',
+    '    $null = $p.Handle',
+    '    $handles[$id] = $p',
+    "  } catch [System.ArgumentException] { $res[$id] = 'gone' }",
+    "  catch { $res[$id] = 'denied' }",
+    '}',
+    '$created = @{}',
+    'if ($handles.Count -gt 0) {',
+    "  $filter = (@($handles.Keys) | ForEach-Object { 'ProcessId=' + $_ }) -join ' OR '",
+    '  foreach ($row in @(Get-CimInstance Win32_Process -Filter $filter)) {',
+    '    $json = $row | Select-Object CreationDate | ConvertTo-Json -Compress',
+    "    if ($json -match 'Date\\((\\d+)\\)') { $created[[int]$row.ProcessId] = [long]$Matches[1] }",
+    '  }',
+    '}',
+    'foreach ($t in $targets) {',
+    '  $id = [int]$t.pid',
+    '  if ($res.ContainsKey($id)) { continue }',
+    '  $p = $handles[$id]',
+    '  try {',
+    "    if ($p.HasExited -or -not $created.ContainsKey($id)) { $res[$id] = 'gone' }",
+    "    elseif ($created[$id] -ne [long]$t.createdAt) { $res[$id] = 'mismatch' }",
+    "    else { $p.Kill(); $res[$id] = 'killed' }",
+    '  } catch {',
+    "    try { if ($p.HasExited) { $res[$id] = 'gone' } else { $res[$id] = 'denied' } } catch { $res[$id] = 'denied' }",
+    '  }',
+    '}',
+    'foreach ($p in $handles.Values) { $p.Dispose() }',
+    '$out = @($targets | ForEach-Object { [pscustomobject]@{ pid = [int]$_.pid; result = [string]$res[[int]$_.pid] } })',
+    'ConvertTo-Json -Compress -InputObject $out',
+  ].join('\n');
+  return {
+    file: 'powershell.exe',
+    args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    script,
+  };
+}
+
+/** windowsKillQuery output as { [pid]: result }; {} when unusable. */
+export function parseKillResults(stdout) {
+  let rows;
+  try {
+    rows = JSON.parse(String(stdout ?? '').trim());
+  } catch {
+    return {};
+  }
+  if (!Array.isArray(rows)) rows = rows ? [rows] : [];
+  const out = {};
+  for (const r of rows) {
+    if (Number.isInteger(r?.pid) && typeof r.result === 'string') out[r.pid] = r.result;
+  }
+  return out;
+}
+
+/**
+ * process.kill that reports instead of throwing for the two expected misses:
+ * 'gone' (ESRCH) and 'denied' (EPERM: the process is alive but not ours to
+ * signal). Anything else is a bug and throws.
+ */
+export function signalProcess(pid, sig, kill = process.kill.bind(process)) {
+  try {
+    kill(pid, sig);
+    return 'sent';
+  } catch (err) {
+    if (err.code === 'ESRCH') return 'gone';
+    if (err.code === 'EPERM') return 'denied';
+    throw err;
+  }
+}
+
+/**
+ * Is the app a state recorded (pid + creation time read right after spawn)
+ * still the process holding that pid? The only test that lets `stop` or
+ * `restart` signal it: a pid alone may have been reused by anything.
+ */
+export function appIdentityHolds(state, { pidAlive, startedAt }) {
+  if (!state?.pid || state.pidCreatedAt == null || !pidAlive(state.pid)) return false;
+  return sameProcess({ pid: state.pid, createdAt: state.pidCreatedAt }, { pid: state.pid, createdAt: startedAt(state.pid) });
+}
+
+/**
+ * `stop`, step 1: end the app `launch` spawned, never another process that
+ * holds its pid now. Returns the step line.
+ *   - Windows: through windowsKillQuery's pinned handle (Node's SIGTERM is a
+ *     TerminateProcess on a bare pid there, so it is no gentler anyway).
+ *   - POSIX: SIGTERM while the identity holds; after 10 s, re-check the
+ *     identity, then SIGKILL. A pid that is not ours to signal is skipped.
+ * deps: pidAlive, startedAt, signal(pid, sig) -> sent|gone|denied,
+ * waitDead(pid, ms) -> bool, killByIdentity([{ pid, createdAt }]) -> { [pid]: result }.
+ */
+export async function stopRecordedApp(state, deps, platform = process.platform) {
+  const { pidAlive, signal, waitDead, killByIdentity } = deps;
+  const pid = state.pid;
+  if (!pidAlive(pid)) return `app pid ${pid}: already gone`;
+  if (state.pidCreatedAt == null) return `app pid ${pid}: no creation time recorded, identity not verified, not signalled`;
+  if (platform === 'win32') {
+    const result = (await killByIdentity([{ pid, createdAt: state.pidCreatedAt }]))[pid];
+    if (result === 'killed') {
+      await waitDead(pid, 10_000);
+      return `app pid ${pid}: terminated through a handle pinned to its recorded creation time`;
+    }
+    if (result === 'mismatch') return `app pid ${pid}: now another process (creation time differs), not signalled`;
+    if (result === 'gone') return `app pid ${pid}: already gone`;
+    return `app pid ${pid}: not terminated (${result || 'no result'}), skipped`;
+  }
+  if (!appIdentityHolds(state, deps)) return `app pid ${pid}: now another process (creation time differs), not signalled`;
+  const sent = signal(pid, 'SIGTERM');
+  if (sent === 'denied') return `app pid ${pid}: not permitted to signal, skipped`;
+  if (sent === 'gone') return `app pid ${pid}: already gone`;
+  if (await waitDead(pid, 10_000)) return `app pid ${pid}: exited on SIGTERM`;
+  // Re-check identity before the hard kill: 10 s is long enough to matter.
+  if (appIdentityHolds(state, deps) && signal(pid, 'SIGKILL') === 'sent') {
+    await waitDead(pid, 3000);
+    return `app pid ${pid}: SIGKILL after SIGTERM timeout`;
+  }
+  return `app pid ${pid}: SIGTERM timed out; identity or permission lost, not killed`;
+}

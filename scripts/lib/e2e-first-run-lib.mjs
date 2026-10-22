@@ -306,6 +306,35 @@ export function survivors(recorded, nowRows) {
   return recorded.filter((r) => r.CreationDate != null && live.has(`${r.ProcessId}@${r.CreationDate}`));
 }
 
+/**
+ * Teardown's last resort: kill the recorded processes still alive after
+ * `stop`, never a stranger that holds a reused pid.
+ *   - Windows: one windowsKillQuery call for all of them; each is killed
+ *     through a handle pinned to its recorded creation time (taskkill or
+ *     process.kill would act on a bare pid after the check).
+ *   - POSIX: re-list right before each kill and kill only a process with the
+ *     same pid AND creation time; the best a pid-addressed kill allows.
+ * deps: listRows() -> rows | null, killPosix(pid), killWindows(targets) -> { [pid]: result }.
+ * Returns [{ pid, result }].
+ */
+export async function killSurvivors(alive, { platform = process.platform, listRows, killPosix, killWindows }) {
+  if (platform === 'win32') {
+    const res = await killWindows(alive.map((r) => ({ pid: r.ProcessId, createdAt: r.CreationDate })));
+    return alive.map((r) => ({ pid: r.ProcessId, result: res[r.ProcessId] ?? 'no result' }));
+  }
+  const out = [];
+  for (const r of alive) {
+    const rows = await listRows();
+    if (rows && survivors([r], rows).length === 1) {
+      await killPosix(r.ProcessId);
+      out.push({ pid: r.ProcessId, result: 'killed' });
+    } else {
+      out.push({ pid: r.ProcessId, result: rows ? 'gone' : 'not listed, not killed' });
+    }
+  }
+  return out;
+}
+
 /** The one-line verdict the scenario prints last. */
 export function verdictLine({ ok, step, reason, seconds }) {
   const took = Number.isFinite(seconds) ? ` (${seconds.toFixed(1)} s)` : '';

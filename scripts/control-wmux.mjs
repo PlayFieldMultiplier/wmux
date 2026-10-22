@@ -30,6 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  appIdentityHolds,
   claimOwnedBy,
   electronUserDataDir,
   envHasSuffix,
@@ -40,17 +41,20 @@ import {
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
+  parseKillResults,
   parseProcessStart,
   parseUserDataLog,
   pathPresent,
   processListQuery,
   processStartQuery,
   purgeSuffixedData,
-  sameProcess,
   samePath,
   scrubEnv,
+  signalProcess,
+  stopRecordedApp,
   suffixRefusal,
   suffixedPaths,
+  windowsKillQuery,
 } from './lib/control-wmux-lib.mjs';
 import { normalizeProcessRows, runProcessTree, survivors } from './lib/e2e-first-run-lib.mjs';
 
@@ -162,8 +166,18 @@ async function waitTreeGone(tree, ms) {
  * or `restart` signal it: a pid alone may have been reused by anything.
  */
 function recordedAppAlive(state) {
-  if (!state?.pid || state.pidCreatedAt == null || !pidAlive(state.pid)) return false;
-  return sameProcess({ pid: state.pid, createdAt: state.pidCreatedAt }, { pid: state.pid, createdAt: processStartedAt(state.pid) });
+  return appIdentityHolds(state, { pidAlive, startedAt: processStartedAt });
+}
+
+/**
+ * Windows: terminate { pid, createdAt } targets through handles pinned to
+ * their recorded creation time (windowsKillQuery). Returns { [pid]: result }.
+ */
+function killByIdentity(targets) {
+  const q = windowsKillQuery(targets);
+  if (!q) return {};
+  const r = spawnSync(q.file, q.args, { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+  return r.status === 0 ? parseKillResults(r.stdout) : {};
 }
 
 function readPidFile(file) {
@@ -669,21 +683,8 @@ function daemonCli(app) {
   return candidates.find((p) => fs.existsSync(p)) ?? null;
 }
 
-/**
- * process.kill that reports instead of throwing for the two expected misses:
- * 'gone' (ESRCH) and 'denied' (EPERM: pidAlive says alive, but the process is
- * not ours to signal). Callers record a skip; `stop` must not abort on one.
- */
-function signal(pid, sig) {
-  try {
-    process.kill(pid, sig);
-    return 'sent';
-  } catch (err) {
-    if (err.code === 'ESRCH') return 'gone';
-    if (err.code === 'EPERM') return 'denied';
-    throw err;
-  }
-}
+/** process.kill reporting 'gone' / 'denied' instead of throwing (signalProcess). */
+const signal = (pid, sig) => signalProcess(pid, sig);
 
 /** The environment of a same-user process as text, or '' when unreadable. */
 function processEnvText(pid) {
@@ -711,8 +712,12 @@ async function cmdRestart(opts) {
     fail('restart needs a live daemon owned by the recorded isolated instance');
   }
   if (!recordedAppAlive(state)) fail(`the recorded app (pid ${state.pid}) is gone or its pid now belongs to another process; run stop then launch`);
-  // Use the same graceful detach as stop, but deliberately retain the daemon.
-  if (signal(state.pid, 'SIGTERM') === 'denied') fail(`not permitted to signal pid ${state.pid}`);
+  // Use the same detach as stop, but deliberately retain the daemon. Windows:
+  // through a handle pinned to the recorded creation time, never a bare pid.
+  if (process.platform === 'win32') {
+    const result = killByIdentity([{ pid: state.pid, createdAt: state.pidCreatedAt }])[state.pid];
+    if (result !== 'killed') fail(`app pid ${state.pid} not terminated (${result || 'no result'})`);
+  } else if (signal(state.pid, 'SIGTERM') === 'denied') fail(`not permitted to signal pid ${state.pid}`);
   if (!(await waitDead(state.pid, 10_000))) fail('app did not exit; run doctor then stop');
   timeline(state, { cmd: 'restart', previousPid: state.pid, retainedDaemonPid: daemonPid });
   const result = await cmdLaunch({ app: state.app, suffix: state.suffix, timeout: opts.timeout }, state);
@@ -734,21 +739,8 @@ async function cmdStop(opts) {
 
   // 1. The app: only the process we spawned, by pid AND creation time. If the
   // app died, its pid may already belong to someone else: never signal it.
-  // SIGTERM detaches it from its daemon.
-  if (!pidAlive(state.pid)) steps.push(`app pid ${state.pid}: already gone`);
-  else if (state.pidCreatedAt == null) steps.push(`app pid ${state.pid}: no creation time recorded, identity not verified, not signalled`);
-  else if (!recordedAppAlive(state)) steps.push(`app pid ${state.pid}: now another process (creation time differs), not signalled`);
-  else {
-    const sent = signal(state.pid, 'SIGTERM');
-    if (sent === 'denied') steps.push(`app pid ${state.pid}: not permitted to signal, skipped`);
-    else if (!(await waitDead(state.pid, 10_000))) {
-      // Re-check identity before the hard kill: 10 s is long enough to matter.
-      if (recordedAppAlive(state) && signal(state.pid, 'SIGKILL') === 'sent') {
-        await waitDead(state.pid, 3000);
-        steps.push(`app pid ${state.pid}: SIGKILL after SIGTERM timeout`);
-      } else steps.push(`app pid ${state.pid}: SIGTERM timed out; identity or permission lost, not killed`);
-    } else steps.push(`app pid ${state.pid}: exited on SIGTERM`);
-  }
+  // Ending it detaches it from its daemon.
+  steps.push(await stopRecordedApp(state, { pidAlive, startedAt: processStartedAt, signal, waitDead, killByIdentity }));
 
   // 2. The daemon our instance spawned (a normal quit only detaches from it).
   // Ask it to shut down over its own suffixed socket; fall back to the pid in

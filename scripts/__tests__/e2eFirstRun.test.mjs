@@ -21,6 +21,7 @@ import {
   agentRanInPane,
   appEnvExtras,
   fakeAgentShims,
+  killSurvivors,
   mergeTrees,
   normalizeProcessRows,
   parseRunArgs,
@@ -319,5 +320,48 @@ describe('macOS daemon sockets fit sun_path', () => {
     for (const s of sockets) expect(s.startsWith(home)).toBe(true);
     const longest = Math.max(...sockets.map((s) => Buffer.byteLength(s)));
     expect(longest).toBeLessThanOrEqual(103);
+  });
+});
+
+describe('killSurvivors', () => {
+  const a = { ProcessId: 10, CreationDate: 100, Name: 'a' };
+  const b = { ProcessId: 11, CreationDate: 110, Name: 'b' };
+
+  it('POSIX: re-lists before each kill and spares a pid that changed hands', async () => {
+    const killed = [];
+    let listed = 0;
+    const tables = [
+      [a, b],
+      // By the second kill, pid 11 belongs to someone else.
+      [{ ...b, CreationDate: 999 }],
+    ];
+    const out = await killSurvivors([a, b], {
+      platform: 'linux',
+      listRows: async () => tables[listed++],
+      killPosix: async (pid) => { killed.push(pid); },
+      killWindows: async () => { throw new Error('not on POSIX'); },
+    });
+    expect(killed).toEqual([10]);
+    expect(listed).toBe(2);
+    expect(out).toEqual([{ pid: 10, result: 'killed' }, { pid: 11, result: 'gone' }]);
+  });
+
+  it('POSIX: kills nothing when the table cannot be read', async () => {
+    const killed = [];
+    const out = await killSurvivors([a], { platform: 'darwin', listRows: async () => null, killPosix: (pid) => killed.push(pid), killWindows: null });
+    expect(killed).toEqual([]);
+    expect(out[0].result).toMatch(/not killed/);
+  });
+
+  it('Windows: one pinned-handle call with every recorded creation time', async () => {
+    let seen = null;
+    const out = await killSurvivors([a, b], {
+      platform: 'win32',
+      listRows: async () => { throw new Error('the handle call checks identity itself'); },
+      killPosix: () => { throw new Error('never a bare-pid kill'); },
+      killWindows: async (targets) => { seen = targets; return { 10: 'killed', 11: 'mismatch' }; },
+    });
+    expect(seen).toEqual([{ pid: 10, createdAt: 100 }, { pid: 11, createdAt: 110 }]);
+    expect(out).toEqual([{ pid: 10, result: 'killed' }, { pid: 11, result: 'mismatch' }]);
   });
 });

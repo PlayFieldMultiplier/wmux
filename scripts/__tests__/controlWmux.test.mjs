@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  appIdentityHolds,
   claimOwnedBy,
   electronUserDataDir,
   envHasSuffix,
@@ -19,6 +20,7 @@ import {
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
+  parseKillResults,
   parseLstart,
   parseProcessStart,
   parseUserDataLog,
@@ -26,7 +28,10 @@ import {
   purgeSuffixedData,
   sameProcess,
   scrubEnv,
+  signalProcess,
+  stopRecordedApp,
   suffixRefusal,
+  windowsKillQuery,
 } from '../lib/control-wmux-lib.mjs';
 
 describe('suffixRefusal', () => {
@@ -341,5 +346,110 @@ describe('launch app arguments', () => {
     expect(launchUserDataDirArg({ ...base, platform: 'darwin' })).toBe('/Users/u/.wmux-verify-a/electron-user-data');
     expect(launchUserDataDirArg({ ...base, platform: 'linux' })).toBeNull();
     expect(launchUserDataDirArg({ ...base, platform: 'win32' })).toBeNull();
+  });
+});
+
+describe('Windows kill through a pinned handle (windowsKillQuery)', () => {
+  it('builds nothing without a pid and a creation time', () => {
+    expect(windowsKillQuery([])).toBeNull();
+    expect(windowsKillQuery([{ pid: 12, createdAt: null }, { pid: 0, createdAt: 5 }])).toBeNull();
+  });
+
+  it('opens each handle before reading creation times, and kills only on a match', () => {
+    const q = windowsKillQuery([{ pid: 4242, createdAt: 1792639189428 }]);
+    expect(q.file).toBe('powershell.exe');
+    const decoded = Buffer.from(q.args[q.args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
+    expect(decoded).toBe(q.script);
+    expect(q.script).toContain('"pid":4242,"createdAt":1792639189428');
+    const handle = q.script.indexOf('$null = $p.Handle');
+    const cim = q.script.indexOf('Get-CimInstance Win32_Process -Filter');
+    const compare = q.script.indexOf("$created[$id] -ne [long]$t.createdAt");
+    const kill = q.script.indexOf('$p.Kill()');
+    expect(handle).toBeGreaterThan(-1);
+    expect(handle).toBeLessThan(cim);
+    expect(cim).toBeLessThan(compare);
+    expect(compare).toBeLessThan(kill);
+    // The creation time goes through the same ConvertTo-Json pipeline as the recorded identity.
+    expect(q.script).toContain('Select-Object CreationDate | ConvertTo-Json -Compress');
+    expect(q.script).not.toMatch(/taskkill|Stop-Process/);
+  });
+
+  it('reads per-pid results, one row or many', () => {
+    expect(parseKillResults('[{"pid":1,"result":"killed"},{"pid":2,"result":"mismatch"}]')).toEqual({ 1: 'killed', 2: 'mismatch' });
+    expect(parseKillResults('{"pid":3,"result":"gone"}')).toEqual({ 3: 'gone' });
+    expect(parseKillResults('not json')).toEqual({});
+  });
+});
+
+describe('signalProcess', () => {
+  const throwing = (code) => () => { throw Object.assign(new Error(code), { code }); };
+  it('reports EPERM as denied and ESRCH as gone, and throws anything else', () => {
+    expect(signalProcess(5, 'SIGTERM', () => true)).toBe('sent');
+    expect(signalProcess(5, 'SIGTERM', throwing('EPERM'))).toBe('denied');
+    expect(signalProcess(5, 'SIGTERM', throwing('ESRCH'))).toBe('gone');
+    expect(() => signalProcess(5, 'SIGTERM', throwing('EINVAL'))).toThrow(/EINVAL/);
+  });
+});
+
+describe('stop: ending the recorded app', () => {
+  const state = { pid: 700, pidCreatedAt: 1000 };
+  /** Fake process table: what startedAt sees, call by call. */
+  const deps = ({ alive = true, starts = [1000], term = 'sent', dies = false, kills = {} } = {}) => {
+    const calls = [];
+    let i = 0;
+    return {
+      calls,
+      pidAlive: () => alive,
+      startedAt: () => starts[Math.min(i++, starts.length - 1)],
+      signal: (pid, sig) => { calls.push(sig); return sig === 'SIGTERM' ? term : 'sent'; },
+      waitDead: async () => dies,
+      killByIdentity: async (targets) => { calls.push(['handle', targets]); return kills; },
+    };
+  };
+
+  it('identity: only the same pid with the same creation time', () => {
+    expect(appIdentityHolds(state, deps())).toBe(true);
+    expect(appIdentityHolds(state, deps({ starts: [999] }))).toBe(false);
+    expect(appIdentityHolds(state, deps({ alive: false }))).toBe(false);
+    expect(appIdentityHolds({ pid: 700, pidCreatedAt: null }, deps())).toBe(false);
+  });
+
+  it('never signals a pid now held by another process', async () => {
+    const d = deps({ starts: [1234] });
+    expect(await stopRecordedApp(state, d, 'linux')).toMatch(/now another process/);
+    expect(d.calls).toEqual([]);
+  });
+
+  it('never signals without a recorded creation time', async () => {
+    const d = deps();
+    expect(await stopRecordedApp({ pid: 700, pidCreatedAt: null }, d, 'darwin')).toMatch(/no creation time recorded/);
+    expect(d.calls).toEqual([]);
+  });
+
+  it('skips a process it may not signal (EPERM)', async () => {
+    const d = deps({ term: 'denied' });
+    expect(await stopRecordedApp(state, d, 'linux')).toMatch(/not permitted to signal/);
+    expect(d.calls).toEqual(['SIGTERM']);
+  });
+
+  it('re-checks the identity before SIGKILL, and skips it when the pid changed hands', async () => {
+    const d = deps({ starts: [1000, 1001] });
+    expect(await stopRecordedApp(state, d, 'linux')).toMatch(/identity or permission lost, not killed/);
+    expect(d.calls).toEqual(['SIGTERM']);
+  });
+
+  it('SIGKILLs after the SIGTERM timeout only while the identity still holds', async () => {
+    const d = deps({ starts: [1000, 1000] });
+    expect(await stopRecordedApp(state, d, 'darwin')).toMatch(/SIGKILL after SIGTERM timeout/);
+    expect(d.calls).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('Windows: one pinned-handle kill, never a signal on the bare pid', async () => {
+    const killed = deps({ kills: { 700: 'killed' } });
+    expect(await stopRecordedApp(state, killed, 'win32')).toMatch(/handle pinned to its recorded creation time/);
+    expect(killed.calls).toEqual([['handle', [{ pid: 700, createdAt: 1000 }]]]);
+    const reused = deps({ kills: { 700: 'mismatch' } });
+    expect(await stopRecordedApp(state, reused, 'win32')).toMatch(/now another process/);
+    expect(reused.calls.filter((c) => typeof c === 'string')).toEqual([]);
   });
 });

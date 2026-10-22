@@ -48,6 +48,7 @@ import {
   agentRanInPane,
   appEnvExtras,
   fakeAgentShims,
+  killSurvivors,
   mergeTrees,
   normalizeProcessRows,
   parseRunArgs,
@@ -62,7 +63,7 @@ import {
   verdictLine,
   writesOutsideSandbox,
 } from './lib/e2e-first-run-lib.mjs';
-import { envHasSuffix, linkInTree } from './lib/control-wmux-lib.mjs';
+import { envHasSuffix, linkInTree, parseKillResults, windowsKillQuery } from './lib/control-wmux-lib.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = path.join(REPO_ROOT, 'scripts', 'control-wmux.mjs');
@@ -262,14 +263,17 @@ async function recordTree() {
   }
 }
 
-function killPid(pid) {
-  if (WIN) {
-    return new Promise((resolve) => {
-      execFile('taskkill.exe', ['/F', '/PID', String(pid)], { windowsHide: true, timeout: 15_000 }, () => resolve());
-    });
-  }
+/** Windows: kill { pid, createdAt } targets through handles pinned to their creation time. */
+function killWindows(targets) {
+  const q = windowsKillQuery(targets);
+  if (!q) return Promise.resolve({});
+  return new Promise((resolve) => {
+    execFile(q.file, q.args, { windowsHide: true, timeout: 60_000 }, (err, stdout) => resolve(err ? {} : parseKillResults(stdout)));
+  });
+}
+
+function killPosix(pid) {
   try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
-  return Promise.resolve();
 }
 
 // ---------------------------------------------------------------- evidence
@@ -365,11 +369,9 @@ async function teardown() {
   if (alive.length > 0) {
     report.leakedProcesses = alive.map((r) => ({ pid: r.ProcessId, name: r.Name, cmd: (r.CommandLine || '').slice(0, 200) }));
     report.problems.push(`teardown left ${alive.length} process(es): ${alive.map((r) => `${r.Name}#${r.ProcessId}`).join(', ')}`);
-    for (const r of alive) {
-      // Re-check identity right before each kill: same pid AND creation time.
-      const rows = await listProcesses();
-      if (rows && survivors([r], rows).length === 1) await killPid(r.ProcessId);
-    }
+    // Same pid AND creation time, checked right before each kill (on Windows
+    // through a handle that pins the process it checked).
+    report.killResults = await killSurvivors(alive, { listRows: listProcesses, killPosix, killWindows });
     const rows = await listProcesses();
     const still = rows ? survivors(alive, rows) : alive;
     report.killedAfterStop = alive.length - still.length;
