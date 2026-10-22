@@ -11,15 +11,21 @@ import { SessionPipe, createSessionPipeMarkers } from '../SessionPipe';
 import { RingBuffer } from '../RingBuffer';
 import { waitFor, deliberateSleep } from '../../test-utils/waitFor';
 // The mock below is hoisted above this import: these are the real functions.
-import { enqueueSnapshotJob, SMALL_SNAPSHOT_CONCURRENCY } from '../HeadlessSnapshot';
+import { enqueueSnapshotJob, runSmallSnapshotJob, SMALL_SNAPSHOT_CONCURRENCY } from '../HeadlessSnapshot';
+import { ATTACH_SNAPSHOT_MIN_BYTES } from '../../shared/terminal/attachSnapshot';
 
 // Count the attach parses SessionPipe runs, and hold each one until the test
-// lets it go, so overlapping parses are observable.
-const parses = vi.hoisted(() => ({ running: 0, peak: 0, started: 0, release: null as Promise<void> | null }));
+// lets it go, so overlapping parses are observable. Count the small-gate
+// entries too, so a flush parked at the gate is observable.
+const parses = vi.hoisted(() => ({ running: 0, peak: 0, started: 0, gateEntries: 0, release: null as Promise<void> | null }));
 vi.mock('../HeadlessSnapshot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../HeadlessSnapshot')>();
   return {
     ...actual,
+    runSmallSnapshotJob: <T>(job: () => Promise<T>): Promise<T> => {
+      parses.gateEntries++;
+      return actual.runSmallSnapshotJob(job);
+    },
     generateSnapshotUnqueued: async (req: Parameters<typeof actual.generateSnapshotUnqueued>[0]) => {
       parses.running++;
       parses.started++;
@@ -66,6 +72,10 @@ afterAll(() => {
 });
 
 afterEach(async () => {
+  parses.running = 0;
+  parses.peak = 0;
+  parses.started = 0;
+  parses.gateEntries = 0;
   for (const c of clients.splice(0)) c.socket.destroy();
   for (const p of pipes.splice(0)) await p.stop().catch(() => { /* already stopped */ });
 });
@@ -111,6 +121,50 @@ describe('SessionPipe small-ring attach parses', () => {
       parses.release = null;
       releaseParses?.();
       releaseQueue();
+      await queueHolder;
+    }
+  });
+
+  it('a ring that grows past the bar while it waits for the gate is parsed in the queue', async () => {
+    const deferred = () => {
+      let resolve!: () => void;
+      const promise = new Promise<void>((r) => { resolve = r; });
+      return { promise, resolve };
+    };
+    // Another pane's large snapshot holds the queue; other small parses fill the gate.
+    const queue = deferred();
+    const queueHolder = enqueueSnapshotJob(() => queue.promise);
+    const gate = deferred();
+    const gateHolders = Array.from({ length: SMALL_SNAPSHOT_CONCURRENCY }, () => runSmallSnapshotJob(() => gate.promise));
+    try {
+      const id = `smallgate-grow-${crypto.randomUUID().slice(0, 8)}`;
+      const ring = newPaneRing(0);
+      const pipe = new SessionPipe(id, ring, TOKEN, () => ({ cols: COLS, rows: ROWS }));
+      if (socketDir) vi.spyOn(pipe, 'getPipeName').mockReturnValue(path.join(socketDir, `${id}.sock`));
+      pipes.push(pipe);
+      await pipe.start();
+      const client = await connectClient(pipe.getPipeName());
+      clients.push(client);
+      // The flush checked the (small) size and parked at the gate.
+      await waitFor(() => parses.gateEntries === SMALL_SNAPSHOT_CONCURRENCY + 1, 5_000);
+
+      // Output lands meanwhile: the ring is no longer small.
+      const line = Buffer.from(`${'x'.repeat(COLS - 2)}
+`);
+      while (ring.size < ATTACH_SNAPSHOT_MIN_BYTES + 64 * 1024) ring.write(line);
+
+      gate.resolve();
+      await Promise.all(gateHolders);
+      await deliberateSleep(150, 'an absence: no parse starts while the queue is held');
+      expect(parses.started).toBe(0);
+      expect(client.wire().includes(FLUSH_DONE_MARKER)).toBe(false);
+
+      queue.resolve();
+      await waitFor(() => client.wire().includes(FLUSH_DONE_MARKER), 15_000);
+      expect(parses.started).toBe(1);
+    } finally {
+      gate.resolve();
+      queue.resolve();
       await queueHolder;
     }
   });

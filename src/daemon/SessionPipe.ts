@@ -259,7 +259,16 @@ export class SessionPipe {
       return enqueueSnapshotJob(() => this.flushRingBufferInSlot(socket));
     }
     if (this.getDims && this.ringBuffer.hasGeometryChanges) {
-      return runSmallSnapshotJob(() => this.flushRingBufferInSlot(socket));
+      // The size above was read before the gate wait. A ring that grew past
+      // the bar meanwhile is no longer small: leave the gate and take the
+      // queue, without holding a gate place while waiting there.
+      const grown = await runSmallSnapshotJob(async () => {
+        if (this.ringBuffer.size >= ATTACH_SNAPSHOT_MIN_BYTES) return true;
+        await this.flushRingBufferInSlot(socket);
+        return false;
+      });
+      if (grown) return enqueueSnapshotJob(() => this.flushRingBufferInSlot(socket));
+      return;
     }
     return this.flushRingBufferInSlot(socket);
   }
