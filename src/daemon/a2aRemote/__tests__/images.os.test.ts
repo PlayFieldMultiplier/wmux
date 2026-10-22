@@ -1032,6 +1032,46 @@ describe('JoinerSession image uploads', () => {
     expect(records.find((r) => r.state === 'pending')?.seq).toBe(1);
   });
 
+  it('does not post from a send whose session was stopped, even when it is started again before that send ends', async () => {
+    const records = replies();
+    const events: string[] = [];
+    let answerFirst!: (a: { status: number; json: unknown }) => void;
+    // Started again before the stop settles, the session runs the stopped stream loop too; ending
+    // every stream when the test is done lets the final stop end both.
+    let endStreams!: () => void;
+    const ended = new Promise<void>((r) => (endStreams = r));
+    const { session } = run(records, {
+      openStream: async function* (_p, { signal }) {
+        yield { event: 'hello', data: { epoch: 'e', features: ['images.1'] } };
+        await Promise.race([ended, new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }))]);
+      },
+      putBytes: () => {
+        events.push('put');
+        // The first upload is answered by the test, after the restart; later ones at once.
+        if (events.filter((e) => e === 'put').length === 1) return new Promise((resolve) => (answerFirst = resolve));
+        return Promise.resolve({ status: 200, json: { ok: true } });
+      },
+      requestJson: async (_m, p, body) => {
+        if (p === A2A_ROUTES.messages) events.push(`post:${(body as { messageId: string }).messageId}`);
+        return { status: 200, json: { ok: true, duplicate: false } };
+      },
+    });
+    await vi.waitFor(() => expect(events).toEqual(['put']), { timeout: 5_000 });
+    // Stopped and started again at once: the restart gets a new stop signal.
+    const stopping = session.stop();
+    session.start();
+    answerFirst({ status: 200, json: { ok: true } });
+    try {
+      // The stopped send posts nothing: the restarted session uploads again, then posts.
+      await vi.waitFor(() => expect(events).toContain('post:m2'), { timeout: 10_000 });
+      expect(events.slice(0, 3)).toEqual(['put', 'put', 'post:m1']);
+    } finally {
+      endStreams();
+      await session.stop();
+      await stopping;
+    }
+  });
+
   it('does not report a changed identity for a message whose POST failed after the session stopped', async () => {
     const records = replies();
     let fail!: () => void;
