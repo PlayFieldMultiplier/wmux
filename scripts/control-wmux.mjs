@@ -31,6 +31,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   claimOwnedBy,
+  electronUserDataDir,
   envHasSuffix,
   findClaimedPort,
   launchEnv,
@@ -38,8 +39,12 @@ import {
   parseCdpLog,
   parseConsoleLine,
   parseProcessStart,
+  parseUserDataLog,
+  pathPresent,
   processStartQuery,
+  purgeSuffixedData,
   sameProcess,
+  samePath,
   scrubEnv,
   suffixRefusal,
   suffixedPaths,
@@ -307,10 +312,6 @@ async function cmdLaunch(opts, reconnectState = null) {
   }
   const preExisting = reconnectState?.preExisting ?? suffixedPaths(home, suffix).filter((p) => fs.existsSync(p));
 
-  const runId = `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}${suffix}`;
-  const state = { runId, suffix, app, pid: null, cdpPort: null, startedAt: new Date().toISOString(), preExisting };
-  const dir = evidenceDir(state);
-  const logPath = path.join(dir, 'app.log');
   // `restart` relaunches with the variables the first launch was given.
   const envFile = opts['env-file'] ? path.resolve(String(opts['env-file'])) : reconnectState?.envFile ?? null;
   let extraEnv = {};
@@ -323,8 +324,21 @@ async function cmdLaunch(opts, reconnectState = null) {
   }
   const built = launchEnv(process.env, suffix, extraEnv);
   if (built.refusal) fail(built.refusal);
-  const logFd = fs.openSync(logPath, 'a');
   const env = built.env;
+
+  // Electron's userData, snapshotted like the paths above so `stop --purge`
+  // removes it only if this run created it. A relaunch keeps the first
+  // launch's record; a relaunch of a state without one stays unknown.
+  const userDataPath = electronUserDataDir({ suffix, env, home });
+  const userData = reconnectState
+    ? reconnectState.userData ?? null
+    : { path: userDataPath, existedBeforeLaunch: pathPresent(userDataPath) };
+
+  const runId = `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}${suffix}`;
+  const state = { runId, suffix, app, pid: null, cdpPort: null, startedAt: new Date().toISOString(), preExisting, userData };
+  const dir = evidenceDir(state);
+  const logPath = path.join(dir, 'app.log');
+  const logFd = fs.openSync(logPath, 'a');
   // Renderer console -> stderr -> app.log, so `console` can read history.
   env.ELECTRON_ENABLE_LOGGING = '1';
   const child = spawn(app, [], { env, detached: true, stdio: ['ignore', logFd, logFd] });
@@ -371,8 +385,14 @@ async function cmdLaunch(opts, reconnectState = null) {
     }
     await sleep(500);
   }
+  // The app logs where its userData really is. If that is not the path whose
+  // pre-launch state was recorded, nobody saw that one absent: unknown.
+  const logged = parseUserDataLog(fs.readFileSync(logPath, 'utf8'));
+  if (state.userData && logged && !samePath(logged.userData, state.userData.path)) {
+    state.userData = { path: logged.userData, existedBeforeLaunch: null, predicted: state.userData.path };
+  }
   writeState(state);
-  timeline(state, { cmd: 'launch', ready, cdpPort: state.cdpPort, note: ready ? 'ready' : lastErr });
+  timeline(state, { cmd: 'launch', ready, cdpPort: state.cdpPort, userData: state.userData, note: ready ? 'ready' : lastErr });
   if (!ready) fail(`launch not ready: ${lastErr}. The process is still recorded; run \`doctor\`, then \`stop\`.`);
   return { ok: true, runId, suffix, pid: state.pid, cdpPort: state.cdpPort, app, evidenceDir: dir, log: logPath };
 }
@@ -723,32 +743,38 @@ async function cmdStop(opts) {
 
   // 4. Optional: remove the suffixed data this run created (never evidence,
   // never a path that existed before launch).
-  const removed = [];
+  let removed = [];
+  let purgeSkipped = [];
   if (opts.purge) {
-    const pre = new Set(state.preExisting || []);
-    for (const p of suffixedPaths(home, state.suffix)) {
-      if (pre.has(p) || !fs.existsSync(p)) continue;
-      if (!path.basename(p).includes(state.suffix)) continue;
-      fs.rmSync(p, { recursive: true, force: true });
-      removed.push(p);
-    }
+    ({ removed, skipped: purgeSkipped } = purgeSuffixedData({
+      suffix: state.suffix,
+      paths: suffixedPaths(home, state.suffix),
+      preExisting: state.preExisting || [],
+      userData: state.userData,
+      // Reported only: a state without the record is never purged by guess.
+      legacyUserDataPath: electronUserDataDir({ suffix: state.suffix, env: process.env, home }),
+    }));
   }
+  const userDataLeft = state.userData?.path && pathPresent(state.userData.path) ? [state.userData.path] : [];
 
   const leftover = [
     recordedAppAlive(state) ? state.pid : null,
     ...[readPidFile(daemonPidFile) ?? daemonPid].filter((p) => p && pidAlive(p)),
   ].filter(Boolean);
-  timeline(state, { cmd: 'stop', steps, removed, leftover });
+  timeline(state, { cmd: 'stop', steps, removed, purgeSkipped, leftover });
   const evidence = evidenceDir(state);
   fs.renameSync(STATE_FILE, path.join(RUN_DIR, `stopped-${state.runId}.json`));
   return {
     ok: leftover.length === 0,
     steps,
     removed,
+    ...(opts.purge ? { purgeSkipped } : {}),
     leftover,
     evidenceDir: evidence,
     evidence: fs.readdirSync(evidence),
-    ...(opts.purge ? {} : { dataLeftInPlace: suffixedPaths(home, state.suffix).filter((p) => fs.existsSync(p)) }),
+    ...(opts.purge ? {} : {
+      dataLeftInPlace: [...new Set([...suffixedPaths(home, state.suffix).filter((p) => fs.existsSync(p)), ...userDataLeft])],
+    }),
   };
 }
 

@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   claimOwnedBy,
+  electronUserDataDir,
   envHasSuffix,
   findClaimedPort,
   launchEnv,
@@ -18,7 +19,9 @@ import {
   parseConsoleLine,
   parseLstart,
   parseProcessStart,
+  parseUserDataLog,
   processStartQuery,
+  purgeSuffixedData,
   sameProcess,
   scrubEnv,
   suffixRefusal,
@@ -148,5 +151,143 @@ describe('envHasSuffix', () => {
     expect(envHasSuffix('HOME=/x\0WMUX_DATA_SUFFIX=-verify-a\0', '-verify-a')).toBe(true);
     expect(envHasSuffix('WMUX_DATA_SUFFIX=-verify-ab PATH=/bin', '-verify-a')).toBe(false);
     expect(envHasSuffix('PATH=/bin', '-verify-a')).toBe(false);
+  });
+});
+
+describe('Electron userData of a suffixed instance', () => {
+  const W = path.win32.join;
+  it('derives the per-platform default the way appInit and the CLI do', () => {
+    const roaming = W('C:', 'Users', 'u', 'AppData', 'Roaming');
+    expect(electronUserDataDir({ suffix: '-verify-a', env: { AppData: roaming }, home: W('C:', 'Users', 'u'), platform: 'win32' }))
+      .toBe(W(roaming, 'wmux-verify-a'));
+    expect(electronUserDataDir({ suffix: '-verify-a', env: {}, home: W('C:', 'Users', 'u'), platform: 'win32' }))
+      .toBe(W(roaming, 'wmux-verify-a'));
+    expect(electronUserDataDir({ suffix: '-verify-a', env: { HOME: '/Users/u' }, home: '/ignored', platform: 'darwin' }))
+      .toBe('/Users/u/Library/Application Support/wmux-verify-a');
+    expect(electronUserDataDir({ suffix: '-verify-a', env: { HOME: '/home/u' }, home: '/ignored', platform: 'linux' }))
+      .toBe('/home/u/.config/wmux-verify-a');
+    expect(electronUserDataDir({ suffix: '-verify-a', env: { HOME: '/home/u', XDG_CONFIG_HOME: '/cfg' }, home: '/home/u', platform: 'linux' }))
+      .toBe('/cfg/wmux-verify-a');
+  });
+
+  it('appends the suffix to a --user-data-dir, as setPath does to whatever getPath returned', () => {
+    expect(electronUserDataDir({ suffix: '-verify-a', home: '/h', platform: 'darwin', userDataDirArg: '/h/.wmux-verify-a/electron-user-data' }))
+      .toBe('/h/.wmux-verify-a/electron-user-data-verify-a');
+  });
+
+  it('reads the path the app logs at boot', () => {
+    const ud = W('C:', 'Users', 'u', 'AppData', 'Roaming', 'wmux-verify-a');
+    const line = `[Main] WMUX_DATA_SUFFIX="-verify-a" → userData="${ud}"`;
+    expect(parseUserDataLog(['noise', line, 'more'].join('\n'))).toEqual({ suffix: '-verify-a', userData: ud });
+    expect(parseUserDataLog('[Main] something else')).toBeNull();
+  });
+});
+
+describe('stop --purge (purgeSuffixedData)', () => {
+  const suffix = '-verify-p1';
+  let root;
+  afterEach(() => {
+    // Links first, by unlink/rmdir only, so cleanup never walks into a target.
+    if (root) {
+      for (const name of fs.readdirSync(root)) {
+        const p = path.join(root, name);
+        if (fs.lstatSync(p).isSymbolicLink()) removeDirLink(p);
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    root = null;
+  });
+  const setup = () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-purge-'));
+    const home = path.join(root, 'home');
+    fs.mkdirSync(home);
+    return home;
+  };
+  /** A directory link: a junction on Windows (no admin needed), a symlink elsewhere. */
+  const dirLink = (target, link) => fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  /** Remove the link itself, never what it points at. */
+  const removeDirLink = (link) => (process.platform === 'win32' ? fs.rmdirSync(link) : fs.unlinkSync(link));
+
+  it('purges userData this run created', () => {
+    const home = setup();
+    const ud = path.join(root, `wmux${suffix}`);
+    fs.mkdirSync(path.join(ud, 'Local Storage'), { recursive: true });
+    fs.writeFileSync(path.join(ud, 'session.json'), '{}');
+    const r = purgeSuffixedData({ suffix, paths: [path.join(home, `.wmux${suffix}`)], userData: { path: ud, existedBeforeLaunch: false } });
+    expect(r.removed).toEqual([ud]);
+    expect(fs.existsSync(ud)).toBe(false);
+  });
+
+  it('keeps userData that existed before launch', () => {
+    const home = setup();
+    const ud = path.join(root, `wmux${suffix}`);
+    fs.mkdirSync(ud);
+    const r = purgeSuffixedData({ suffix, paths: [path.join(home, `.wmux${suffix}`)], userData: { path: ud, existedBeforeLaunch: true } });
+    expect(r.removed).toEqual([]);
+    expect(r.skipped).toEqual([{ path: ud, reason: 'userData existed before launch' }]);
+    expect(fs.existsSync(ud)).toBe(true);
+  });
+
+  it('never deletes a userData that is a junction or symlink, nor its target', () => {
+    const home = setup();
+    const target = path.join(root, 'someone-elses');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'keep.txt'), 'x');
+    const ud = path.join(root, `wmux${suffix}`);
+    dirLink(target, ud);
+    const r = purgeSuffixedData({ suffix, paths: [path.join(home, `.wmux${suffix}`)], userData: { path: ud, existedBeforeLaunch: false } });
+    expect(r.removed).toEqual([]);
+    expect(r.skipped[0].path).toBe(ud);
+    expect(r.skipped[0].reason).toMatch(/symlink, junction/);
+    expect(fs.lstatSync(ud).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(path.join(target, 'keep.txt'), 'utf8')).toBe('x');
+  });
+
+  it('leaves a created dir in place when a link sits inside it', () => {
+    const home = setup();
+    const target = path.join(root, 'someone-elses');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'keep.txt'), 'x');
+    const data = path.join(home, `.wmux${suffix}`);
+    fs.mkdirSync(data);
+    dirLink(target, path.join(data, 'linked'));
+    const r = purgeSuffixedData({ suffix, paths: [data], userData: null });
+    expect(r.removed).toEqual([]);
+    expect(r.skipped[0].reason).toMatch(/linked/);
+    expect(fs.readFileSync(path.join(target, 'keep.txt'), 'utf8')).toBe('x');
+    removeDirLink(path.join(data, 'linked'));
+  });
+
+  it('skips userData when the state has no record (older driver), and reports it', () => {
+    const home = setup();
+    const ud = path.join(root, `wmux${suffix}`);
+    fs.mkdirSync(ud);
+    const data = path.join(home, `.wmux${suffix}`);
+    fs.mkdirSync(data);
+    const r = purgeSuffixedData({ suffix, paths: [data], preExisting: [], userData: undefined, legacyUserDataPath: ud });
+    expect(r.removed).toEqual([data]);
+    expect(r.skipped).toEqual([{ path: ud, reason: expect.stringMatching(/no pre-launch record/) }]);
+    expect(fs.existsSync(ud)).toBe(true);
+  });
+
+  it('skips userData whose pre-launch state is unknown', () => {
+    setup();
+    const ud = path.join(root, `wmux${suffix}`);
+    fs.mkdirSync(ud);
+    const r = purgeSuffixedData({ suffix, paths: [], userData: { path: ud, existedBeforeLaunch: null } });
+    expect(r.removed).toEqual([]);
+    expect(r.skipped[0].reason).toMatch(/unknown/);
+    expect(fs.existsSync(ud)).toBe(true);
+  });
+
+  it('keeps a pre-existing suffixed path and never touches a name without the suffix', () => {
+    const home = setup();
+    const kept = path.join(home, `.wmux${suffix}`);
+    const other = path.join(home, 'not-ours');
+    fs.mkdirSync(kept);
+    fs.mkdirSync(other);
+    const r = purgeSuffixedData({ suffix, paths: [kept, other], preExisting: [kept], userData: null });
+    expect(r.removed).toEqual([]);
+    expect(fs.existsSync(kept) && fs.existsSync(other)).toBe(true);
   });
 });

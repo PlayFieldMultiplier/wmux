@@ -60,7 +60,7 @@ import {
   verdictLine,
   writesOutsideSandbox,
 } from './lib/e2e-first-run-lib.mjs';
-import { envHasSuffix } from './lib/control-wmux-lib.mjs';
+import { envHasSuffix, linkInTree } from './lib/control-wmux-lib.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONTROL = path.join(REPO_ROOT, 'scripts', 'control-wmux.mjs');
@@ -384,6 +384,12 @@ async function teardown() {
   if (outside.length) {
     report.problems.push(`suffixed data outside the sandbox: ${outside.join(', ')}`);
     for (const p of outside) {
+      // A symlink or junction is never followed: its target is not ours.
+      const link = linkInTree(p);
+      if (link) {
+        report.problems.push(`left in place, holds a symlink or junction: ${link}`);
+        continue;
+      }
       try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* reported above */ }
     }
   }

@@ -165,6 +165,132 @@ export function suffixedPaths(home, suffix, platform = process.platform) {
   return paths;
 }
 
+/** An env value by name, in whatever case this environment spells it. */
+function envValue(env, name) {
+  const key = Object.keys(env ?? {}).find((k) => k.toUpperCase() === name);
+  return key === undefined ? undefined : env[key];
+}
+
+/**
+ * Where a suffixed instance's Electron userData lands: appInit in
+ * src/main/index.ts does `app.setPath('userData', app.getPath('userData') +
+ * suffix)`, and getPath('userData') is `<appData>/<productName "wmux">`, or
+ * the `--user-data-dir` switch when the app was given one. appData mirrors
+ * src/cli/commands/role.ts defaultSessionPath: %APPDATA% on Windows,
+ * ~/Library/Application Support on macOS, $XDG_CONFIG_HOME or ~/.config on
+ * Linux. A prediction: `launch` checks it against the line the app logs.
+ */
+export function electronUserDataDir({ suffix, env = {}, home, platform = process.platform, userDataDirArg = null }) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  if (userDataDirArg) return `${userDataDirArg}${suffix}`;
+  if (platform === 'win32') {
+    return p.join(envValue(env, 'APPDATA') || p.join(home, 'AppData', 'Roaming'), `wmux${suffix}`);
+  }
+  const posixHome = envValue(env, 'HOME') || home;
+  if (platform === 'darwin') return p.join(posixHome, 'Library', 'Application Support', `wmux${suffix}`);
+  return p.join(envValue(env, 'XDG_CONFIG_HOME') || p.join(posixHome, '.config'), `wmux${suffix}`);
+}
+
+/** The userData path the app itself logged at boot (src/main/index.ts appInit), or null. */
+export function parseUserDataLog(text) {
+  const m = /\[Main\] WMUX_DATA_SUFFIX="([^"]*)" .{1,8}? userData="([^"]+)"/.exec(String(text ?? ''));
+  return m ? { suffix: m[1], userData: m[2] } : null;
+}
+
+/** The same path? Case-insensitive and separator-blind on Windows. */
+export function samePath(a, b, platform = process.platform) {
+  if (!a || !b) return false;
+  if (platform !== 'win32') return path.posix.normalize(a) === path.posix.normalize(b);
+  const norm = (s) => path.win32.normalize(s).replace(/[\\/]+$/, '').toLowerCase();
+  return norm(a) === norm(b);
+}
+
+/** Does anything (a file, a dir, a link, even a dangling one) sit at `p`? */
+export function pathPresent(p) {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The first symlink or junction at or under `p`, or null. lstat never
+ * follows one, and Node reports a Windows junction as a symbolic link, so a
+ * tree that holds either is found without ever entering the link's target.
+ */
+export function linkInTree(p) {
+  let st;
+  try {
+    st = fs.lstatSync(p);
+  } catch {
+    return null;
+  }
+  if (st.isSymbolicLink()) return p;
+  if (!st.isDirectory()) return null;
+  let names;
+  try {
+    names = fs.readdirSync(p);
+  } catch {
+    // Unreadable: nobody can say what it holds.
+    return p;
+  }
+  for (const name of names) {
+    const hit = linkInTree(path.join(p, name));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * `stop --purge`: delete the suffixed data this run created, nothing else.
+ *   - `paths` (suffixedPaths) go only when they are absent from `preExisting`,
+ *     the existence snapshot `launch` took before starting the app;
+ *   - `userData` is launch's record `{ path, existedBeforeLaunch }`: it goes
+ *     only when `existedBeforeLaunch === false`. No record (a state written
+ *     before the record existed) or an unknown pre-launch state is skipped and
+ *     reported: never delete what nobody saw absent before launch;
+ *   - a path whose name does not carry the suffix is never touched;
+ *   - a symlink or junction, at the path or anywhere under it, leaves the
+ *     whole path in place: it is never followed, so its target cannot be hit.
+ * Returns { removed, skipped: [{ path, reason }] }.
+ */
+export function purgeSuffixedData({ suffix, paths, preExisting = [], userData, legacyUserDataPath = null, platform = process.platform }) {
+  const removed = [];
+  const skipped = [];
+  const pre = new Set(preExisting);
+  const candidates = [];
+  for (const p of paths) {
+    if (!pathPresent(p)) continue;
+    if (pre.has(p)) skipped.push({ path: p, reason: 'existed before launch' });
+    else candidates.push(p);
+  }
+  if (!userData) {
+    if (legacyUserDataPath && pathPresent(legacyUserDataPath) && !paths.some((p) => samePath(p, legacyUserDataPath, platform))) {
+      skipped.push({ path: legacyUserDataPath, reason: 'userData: the run state has no pre-launch record (written by an older control-wmux); left in place' });
+    }
+  } else if (userData.path && !paths.some((p) => samePath(p, userData.path, platform)) && pathPresent(userData.path)) {
+    if (userData.existedBeforeLaunch === false) candidates.push(userData.path);
+    else if (userData.existedBeforeLaunch === true) skipped.push({ path: userData.path, reason: 'userData existed before launch' });
+    else skipped.push({ path: userData.path, reason: 'userData: pre-launch state unknown (the app logged another path than predicted); left in place' });
+  }
+  for (const p of candidates) {
+    if (!path.basename(p).includes(suffix)) {
+      skipped.push({ path: p, reason: `name does not carry the suffix ${suffix}` });
+      continue;
+    }
+    const link = linkInTree(p);
+    if (link) {
+      skipped.push({ path: p, reason: `holds a symlink, junction or unreadable dir (${link}); never followed, left in place` });
+      continue;
+    }
+    fs.rmSync(p, { recursive: true, force: true });
+    removed.push(p);
+  }
+  return { removed, skipped };
+}
+
 /**
  * One renderer console line as Chromium logs it with ELECTRON_ENABLE_LOGGING=1:
  *   [pid:mmdd/hhmmss.us:INFO:CONSOLE:26] "message", source: file:///…/main_window-x.js (26)
