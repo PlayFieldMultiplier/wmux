@@ -10,8 +10,9 @@ import { pl } from '../locales/pl';
  * The cross-PC link screens (Settings › LAN pairing, the link dialog, the
  * Remote page's link rows and Needs you block) and the remote-workspace
  * pairing errors ship in every locale that carries them (ko, zh, pl), with
- * the English placeholders. ko once had 1 of the 13 `remote.pair*` keys, so a
- * Korean user saw English exactly when pairing failed.
+ * the English placeholders. ko once had only `remote.pairAgain` of the 14
+ * `remote.pair*` keys, so a Korean user saw English exactly when pairing
+ * failed.
  *
  * Scoped by prefix, not to every key: ko and zh still miss several hundred
  * keys elsewhere (an accepted gap, see plLocaleCoverage.test.ts), which a
