@@ -199,6 +199,13 @@ async function create(h: ReturnType<typeof makeRegistry>, note: Partial<typeof H
 }
 
 describe('a subagent\'s safety-check record', () => {
+  it('never binds to the lead\'s own pending call, even one with the same command', async () => {
+    // The lead's transcript has an unanswered Bash call with the subagent's input.
+    const record = await create(makeRegistry(WHOLE.screen, { pending: { id: 'toolu_lead', name: 'Bash', input: { command: COMMAND } } }));
+    expect(record.promptFingerprint).toBeUndefined();
+    expect(record.choices).toBeUndefined();
+  });
+
   it.each([
     ['one-row warning', WHOLE.screen],
     ['two-row warning', TWO_ROW_WARNING],

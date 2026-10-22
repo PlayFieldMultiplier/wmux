@@ -70,6 +70,7 @@ import {
   parsePlanPrompt,
   parseTerminalPrompt,
   terminalPromptAnswerability,
+  titleFromSubagent,
   titleSaysUnsandboxed,
   toolOfDialog,
   webSearchDetail,
@@ -1571,9 +1572,8 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       const read = screen ? this.parseActiveDialog(screen) : null;
       if (read) return { ...read, readAt };
       const plan = screen ? parsePlanPrompt(screen.rows, screen.cols ? { cols: screen.cols } : {}) : null;
-      if (screen && plan) {
-        shownPlan = { parsed: plan, mark: screen.mark, ...(screen.cols ? { cols: screen.cols } : {}), height: screen.rows.length, readAt };
-      }
+      // A later read that shows no plan: it is gone. An unreadable one tells nothing.
+      if (screen) shownPlan = plan ? { parsed: plan, mark: screen.mark, ...(screen.cols ? { cols: screen.cols } : {}), height: screen.rows.length, readAt } : null;
       if (attempt < TERMINAL_PROMPT_CREATE_READS) await delay(TERMINAL_PROMPT_CREATE_READ_GAP_MS);
     }
     return shownPlan;
@@ -1663,7 +1663,10 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       // needs that evidence and the call to be provably the only one pending:
       // an unanswered tool_use is also what a RUNNING tool looks like, and its
       // output can print a question, options and a footer under its tail.
-      ? ((this.permissionEvidence.get(note.sessionId) ?? []).length === 0 || this.evidenceAgrees(note.sessionId, binding))
+      // The transcript is the lead's: a subagent's dialog never binds to its
+      // call, however alike the two calls are.
+      ? !titleFromSubagent(parsed.title)
+        && ((this.permissionEvidence.get(note.sessionId) ?? []).length === 0 || this.evidenceAgrees(note.sessionId, binding))
         && (parsed.topRuleFound
           ? dialogMatchesToolCall(parsed, call)
           : binding.unanswered === 1

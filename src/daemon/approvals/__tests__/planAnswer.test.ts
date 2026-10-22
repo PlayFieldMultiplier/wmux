@@ -237,6 +237,18 @@ describe('the ExitPlanMode record', () => {
     expect(record!.form).toBeUndefined();
   });
 
+  it('names no plan once a later read shows the plan gone', async () => {
+    const h = makeRegistry();
+    const footer = INITIAL.findIndex((r) => r.includes('ctrl+g to edit'));
+    h.pane.rows = [...INITIAL.slice(0, footer), '   ctrl+g to edit in Vim ·', '   ~/.claude/plans/plan-create-a-file-', '   kind-octopus.md', ...INITIAL.slice(footer + 1)];
+    h.pane.pending = null;
+    // The first read shows the plan; every later one shows the shell again.
+    h.afterDelay.fn = () => { h.pane.rows = ['● Done.', '', '> ']; };
+    await h.registry.noteTerminalPrompt({ sessionId: 'pty-a', agent: 'claude', workspaceId: 'ws-1', source: 'detector' });
+    const [record] = h.registry.list().pending;
+    expect(record?.toolName).not.toBe('ExitPlanMode');
+  });
+
   it('offers no form with the stepwise channel off, or for a call that is not ExitPlanMode', async () => {
     const off = makeRegistry({ phoneDecisions: () => ({ native: true, stepwise: false }) });
     expect((await create(off)).form).toBeUndefined();

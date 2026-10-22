@@ -838,6 +838,11 @@ const SUBAGENT_SUFFIX = / · from the \S.* agent$/;
 /** The title as it names the tool: without a subagent's suffix. */
 const toolTitle = (title: string): string => title.replace(SUBAGENT_SUFFIX, '');
 
+/** A subagent's call raised the dialog (its title carries the suffix). */
+export function titleFromSubagent(title: string | undefined): boolean {
+  return !!title && SUBAGENT_SUFFIX.test(title);
+}
+
 /** "Bash command" → "Bash", "Fetch" → "WebFetch": the tool a permission dialog's title names. */
 export function toolFromDialogTitle(title: string | undefined): string | undefined {
   if (!title) return undefined;
