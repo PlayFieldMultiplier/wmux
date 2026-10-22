@@ -11,7 +11,8 @@
 //     param) — merge.* and the repo watch's pr.* / issue.* / ci.*; a
 //     Coordinator-template bot (its live profile, COORDINATOR_READ_EXTENSION)
 //     and the operator read every fact. No bot reads a fact of another
-//     bot's 1:1 with the owner (its payload's threadId).
+//     bot's 1:1 with the owner (its payload's threadId), nor a fact
+//     addressed to another bot (shared/facts.ts factAddressee).
 //   fact.emit — the operator only. Bots never write facts directly.
 
 import path from 'node:path';
@@ -20,6 +21,7 @@ import type { FactoryRefusal } from '../../../shared/botSurface';
 import {
   FACT_LIMITS,
   FACT_RPC,
+  factAddressee,
   isFactKind,
   type Fact,
   type FactActor,
@@ -117,7 +119,7 @@ export async function handleFactPoll(
     || (!!ownWorkspace && f.workspaceId === ownWorkspace)
     || (ownRepo !== null && f.repoKey !== undefined && normalizeRepoKey(f.repoKey) === ownRepo)
   ) && (!ownWorkspace || factInIsland(ownWorkspace, f)) && (!kinds || kinds.has(f.kind)) && visible(f)
-    && (!ctx.bot || !ofAnothersDm(f, ctx.bot.botId));
+    && (!ctx.bot || (!ofAnothersDm(f, ctx.bot.botId) && (factAddressee(f) ?? ctx.bot.botId) === ctx.bot.botId));
 
   let r = log.readWhere(since, match, limit);
   if (r.facts.length === 0 && blockMs > 0 && !ctx.signal?.aborted) {
