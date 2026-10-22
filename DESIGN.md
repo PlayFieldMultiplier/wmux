@@ -1252,11 +1252,17 @@ a rebindable shortcut with no default key) or the `connectors` route.
   10px `--selection` pill (plus the look's `--select-ring`); the arrow keys,
   Home and End walk the rows and select as they go. The selection is kept
   while the page is away.
-- **Detail:** no preview for now (a real one would need the plugin's own
-  page; a mock-up of it would be fake data). The name at 16px/500 with a
+- **Detail:** the name at 16px/500 with a
   neutral Signature badge for a signature entry, a 12px credit line
   (publisher · licence · version; name · version for a bundle installed by
-  hand), the description, then **What it can do**: one line per declared
+  hand), then the **preview** (owner-approved 2026-10-22): each catalog
+  entry ships one real capture of its own rail page in the light theme
+  (taken on an isolated instance with fake agents; never a mock-up), a
+  webp renderer asset. It sits on the detail background in a reserved
+  16:10 box up to 620px wide, with one `--line` hairline and the 10px card
+  radius — no fill, shadow or glass — decodes lazily, and its alt text
+  names the plugin ("Office plugin preview"). A bundle installed by hand
+  has no preview. Then the description, then **What it can do**: one line per declared
   capability with a muted check, its plain-language label and the
   capability in mono, and — when it declares nothing that reaches terminal
   text (`terminal.read`, `pane.search`, `notifications.read`,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { UI_PLUGIN_CATALOG, type UiPluginInventory } from '../../../shared/pluginManagement';
+import { PLUGIN_PREVIEWS } from '../../assets/media';
 import { useT } from '../../hooks/useT';
 import { refreshPlugins } from '../../plugins/usePlugins';
 import { PluginGlyph } from '../../plugins/pluginGlyph';
@@ -210,6 +211,11 @@ function PluginDetail({ row, busy, known, removing, onRemoving, mutate }: {
       </div>
       <span className="text-[12px] text-[var(--text-sub)]">{credit}</span>
     </div>
+    {/* A catalog entry's real capture; the 16:10 box is reserved before decode. */}
+    {entry?.preview && <div className="wmux-plugins-preview" data-plugin-preview={entry.preview}>
+      <img src={PLUGIN_PREVIEWS[entry.preview]} alt={t('plugins.page.previewAlt', { name: rowName(row, t) })}
+        width={1280} height={800} loading="lazy" decoding="async" />
+    </div>}
     {description && <p className="wmux-plugins-description">{description}</p>}
     <div className="flex flex-col gap-2">
       <h3 className="text-[12px] font-medium text-[var(--text-main)]">{t('plugins.page.whatItCanDo')}</h3>

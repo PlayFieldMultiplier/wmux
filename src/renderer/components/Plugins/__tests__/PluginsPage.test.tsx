@@ -7,7 +7,10 @@ import { en } from '../../../i18n/locales/en';
 import { useStore } from '../../../stores';
 import type { InstalledUiPlugin } from '../../../../shared/pluginManagement';
 
-vi.mock('../../../hooks/useT', () => ({ useT: () => (key: keyof typeof en) => en[key] ?? key }));
+vi.mock('../../../hooks/useT', () => ({
+  useT: () => (key: keyof typeof en, params?: Record<string, string>) =>
+    (en[key] ?? key).replace(/\{(\w+)\}/g, (match, name: string) => params?.[name] ?? match),
+}));
 vi.mock('../../Connectors/ConnectorsPage', () => ({ default: () => <div data-connectors-page /> }));
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
@@ -154,4 +157,25 @@ it('filters rows by the search field', async () => {
   });
   const rows = [...host.querySelectorAll('[data-plugin-row]')].map((item) => item.getAttribute('data-plugin-row'));
   expect(rows).toEqual(['agent-state-page']);
+});
+
+it('shows a catalog entry\'s preview in a reserved 16:10 box, named for the plugin', async () => {
+  await mount([]);
+  const box = host.querySelector('[data-plugin-preview="office"]');
+  expect(box?.className).toBe('wmux-plugins-preview');
+  const image = box?.querySelector('img');
+  expect(image?.getAttribute('alt')).toBe('Office plugin preview');
+  expect(image?.getAttribute('src')).toBeTruthy();
+  // Width and height reserve the box before decode; decoding stays lazy.
+  expect([image?.getAttribute('width'), image?.getAttribute('height')]).toEqual(['1280', '800']);
+  expect([image?.getAttribute('loading'), image?.getAttribute('decoding')]).toEqual(['lazy', 'async']);
+  await act(async () => row('agent-state-page').click());
+  expect(host.querySelector('[data-plugin-preview="agent-state-page"] img')?.getAttribute('alt')).toBe('Agent status plugin preview');
+});
+
+it('shows no preview for a bundle installed by hand', async () => {
+  await mount([{ ...office, name: 'hand-made', managed: false, contributes: { railPage: { title: 'Hand made', entry: 'index.html' } } }]);
+  await act(async () => row('hand-made').click());
+  expect(host.querySelector('[data-plugin-detail="hand-made"]')).not.toBeNull();
+  expect(host.querySelector('[data-plugin-preview]')).toBeNull();
 });
