@@ -827,16 +827,27 @@ const TITLED_TOOLS: ReadonlyMap<string, string> = new Map([
  */
 const COMMAND_TITLE = /^(\w[\w-]*) command( \(unsandboxed\))?$/i;
 
+/**
+ * What Claude Code (measured on 2.1.306) appends to the title of a dialog that
+ * a subagent's call raised: "Bash command · from the general-purpose agent".
+ * It says who asked, not which tool, so it is read off before the title is
+ * matched. It stays in the parsed title and in the fingerprint.
+ */
+const SUBAGENT_SUFFIX = / · from the \S.* agent$/;
+
+/** The title as it names the tool: without a subagent's suffix. */
+const toolTitle = (title: string): string => title.replace(SUBAGENT_SUFFIX, '');
+
 /** "Bash command" → "Bash", "Fetch" → "WebFetch": the tool a permission dialog's title names. */
 export function toolFromDialogTitle(title: string | undefined): string | undefined {
   if (!title) return undefined;
-  const m = COMMAND_TITLE.exec(title);
-  return m ? m[1] : TITLED_TOOLS.get(title);
+  const m = COMMAND_TITLE.exec(toolTitle(title));
+  return m ? m[1] : TITLED_TOOLS.get(toolTitle(title));
 }
 
 /** The title says Claude runs this call outside its sandbox ("Bash command (unsandboxed)"). */
 export function titleSaysUnsandboxed(title: string | undefined): boolean {
-  return !!title && COMMAND_TITLE.exec(title)?.[2] !== undefined;
+  return !!title && COMMAND_TITLE.exec(toolTitle(title))?.[2] !== undefined;
 }
 
 /**

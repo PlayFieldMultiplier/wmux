@@ -5255,10 +5255,10 @@ describe('WebTerminalServer', () => {
       const typeInto = (token: string, body: string, headers: Record<string, string> = {}) =>
         fetch(`${base()}/api/input?session=s1`, { method: 'POST', headers: { ...bearer(token), ...headers }, body });
 
-      it('refuses a typed answer, whether or not the record is answerable', async () => {
+      it('refuses a typed answer while the record is answerable, or answered and waiting', async () => {
         const info = await startRW();
         const phone = await pairDevice('Reply from a notification', true);
-        for (const record of [tp(), tp({ choices: undefined, promptFingerprint: undefined })]) {
+        for (const record of [tp(), tp({ pressedAt: 1, selectedChoiceKey: '1' })]) {
           approvalRecords.splice(0, approvalRecords.length, record);
           for (const token of [phone.token, info.token as string]) {
             for (const body of ['1\r', '1', '\r', '\x1b\r', '\x1b[B', '\x1b[200~1\r\x1b[201~']) {
@@ -5269,6 +5269,22 @@ describe('WebTerminalServer', () => {
           }
         }
         expect(write).not.toHaveBeenCalled();
+      });
+
+      // An informational record (the dialog did not bind: no question, no
+      // choices, no fingerprint) cannot be answered from any phone. It keeps
+      // the attention signal, but must not take the keys away too, or the
+      // dialog is answerable at the computer only.
+      it('lets digits and Enter through to the pty while the record is not answerable', async () => {
+        const info = await startRW();
+        const phone = await pairDevice('Keys on an informational card', true);
+        approvalRecords.push(tp({ question: undefined, reason: undefined, choices: undefined, promptFingerprint: undefined }));
+        for (const token of [phone.token, info.token as string]) {
+          for (const body of ['1', '\r', '2\r']) {
+            expect((await typeInto(token, body)).status, JSON.stringify(body)).toBe(204);
+          }
+        }
+        expect(write.mock.calls).toEqual([['1'], ['\r'], ['2\r'], ['1'], ['\r'], ['2\r']]);
       });
 
       it('lets a lone Esc or a lone Ctrl-C through', async () => {

@@ -494,8 +494,9 @@ Check `/api/config` and hide the keyboard rather than letting a user type into a
 mistake the browser client made and shipped.
 
 It is **409 `{"error":"terminal-prompt-active","effect":"none"}`** while the pane
-shows the agent's own permission dialog (a pending `terminal_prompt` record),
-except for a lone Esc or a lone Ctrl-C — see
+shows the agent's own permission dialog as an answerable pending
+`terminal_prompt` record (one that carries a `promptFingerprint`), except for a
+lone Esc or a lone Ctrl-C — see
 [`terminal_prompt`](#terminal_prompt--the-agents-own-permission-dialog).
 
 Phone scrolling has two ownership modes. A terminal's normal buffer is local
@@ -1428,12 +1429,16 @@ Every refusal writes nothing and carries `effect: "none"`:
 | 404 | `{error:"not-found"}` | Unknown id, or (device) the brain's pane |
 | 501 | `{error:"answer-in-terminal"}` | No `terminal-prompt-decline` in `X-Wmux-Client-Caps` |
 
-**Typing cannot answer it.** While the pane has a pending `terminal_prompt`
-record (answerable or not, answered-and-waiting included), `POST /api/input` to
-that pane is refused with 409 `{"error":"terminal-prompt-active","effect":"none"}`
-and nothing is written — a digit, Enter, a paste, a notification "Reply", any
-key sequence. The dialog is answered only through `POST /api/approvals/<id>`
-above, or at the computer. The one exception is the cancel direction: a body
+**Typing cannot answer it.** While the pane has a pending answerable
+`terminal_prompt` record (it carries a `promptFingerprint`; answered-and-waiting
+included), `POST /api/input` to that pane is refused with 409
+`{"error":"terminal-prompt-active","effect":"none"}` and nothing is written — a
+digit, Enter, a paste, a notification "Reply", any key sequence. That dialog is
+answered only through `POST /api/approvals/<id>` above, or at the computer. An
+informational record (no `promptFingerprint`: the dialog could not be bound to
+its tool call) does not refuse input: no route can answer it, so typed keys are
+the only way to answer it away from the computer. It still raises the pane's
+attention and its card. The one exception is the cancel direction: a body
 that is exactly one Esc (`\x1b`) or exactly one Ctrl-C (`\x03`) is written as
 usual. Esc followed by anything else (an arrow key, Enter) is refused. The check
 runs when the request body completes, immediately before the write, so a dialog
