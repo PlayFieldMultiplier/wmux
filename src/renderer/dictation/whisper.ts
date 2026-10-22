@@ -217,7 +217,7 @@ export class WhisperTokenizer {
         if (b !== undefined) bytes.push(b);
       }
     }
-    return new TextDecoder('utf-8').decode(new Uint8Array(bytes)).replace(/�+$/u, '');
+    return new TextDecoder('utf-8').decode(new Uint8Array(bytes)).replace(/\uFFFD+$/u, '');
   }
 }
 
