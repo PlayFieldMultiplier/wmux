@@ -62,6 +62,7 @@ import { mergeWslEnv } from '../../shared/wsl';
 import { decodeWslOutput, isValidWslDistroName } from '../../shared/wslDistro';
 import { BOT_WORKER_FALLBACK_DEFAULT_BRANCHES, isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
+import { sameRepoKey } from '../../shared/forgeHosts';
 import { namesNonDefaultPort, originPinMatches, parseOriginAddress } from '../../shared/originPin';
 import {
   RELAY_GIT_DEFAULT_PROTOCOLS, gitVersionRefusal, lazyFetchProbeRefusal, parseRawGitConfigList, parseTaskHead, relayGitConfigArgs, taskGitEnv, transportConfigReplay,
@@ -751,7 +752,7 @@ export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = de
   const key = originUrlRepoKey(origin.url);
   if (input.expectedRepoKey !== undefined) {
     const expected = normalizeRepoKey(input.expectedRepoKey);
-    if (!expected || !key || key !== expected) {
+    if (!expected || !key || !sameRepoKey(key, expected)) {
       return { ok: false, reason: 'remote-refused', error: `origin is not ${input.expectedRepoKey} (a plain https or ssh address of it)` };
     }
   }

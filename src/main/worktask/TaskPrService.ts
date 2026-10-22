@@ -41,7 +41,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { WORKTASK_PR_URL_RE, isGithubPullUrl } from '../../shared/workTask';
+import { WORKTASK_PR_URL_RE, githubPullUrlHost, isGithubPullUrl } from '../../shared/workTask';
 import { forgeHosts } from '../../shared/forgeHosts';
 import { getExecEnv } from '../../shared/execEnv';
 import { parseRemoteKey } from '../github/PrProvider';
@@ -500,7 +500,7 @@ export class TaskPrService {
     try {
       // A PR page off github.com was accepted on a host gh is signed in to
       // (isGithubPullUrl); the daemon takes that host from here.
-      const gheHost = mrIid === undefined && !WORKTASK_PR_URL_RE.test(prUrl) ? new URL(prUrl).host.toLowerCase() : '';
+      const gheHost = mrIid === undefined && !WORKTASK_PR_URL_RE.test(prUrl) ? githubPullUrlHost(prUrl) ?? '' : '';
       const res = (await this.daemon.rpc('task.mission.update', {
         taskId,
         verifiedWorkspaceId,

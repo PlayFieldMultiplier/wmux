@@ -195,8 +195,14 @@ const GITHUB_PULL_URL_RE = /^https:\/\/([\w.-]+(?::\d{1,5})?)\/[\w.-]+\/[\w.-]+\
  *  shared/forgeHosts.ts). Pure. */
 export function isGithubPullUrl(url: string, githubHosts: ReadonlySet<string> = new Set()): boolean {
   if (WORKTASK_PR_URL_RE.test(url)) return true;
-  const host = GITHUB_PULL_URL_RE.exec(url)?.[1]?.toLowerCase();
-  return host !== undefined && githubHosts.has(host);
+  const host = githubPullUrlHost(url);
+  return host !== null && githubHosts.has(host);
+}
+
+/** The host of a pull request page as isGithubPullUrl reads it (lowercased,
+ *  a written port kept, `:443` too), or null when it is not one. Pure. */
+export function githubPullUrlHost(url: string): string | null {
+  return GITHUB_PULL_URL_RE.exec(url)?.[1]?.toLowerCase() ?? null;
 }
 
 /** A prUrl the daemon may store: a GitHub PR (github.com, or a host in

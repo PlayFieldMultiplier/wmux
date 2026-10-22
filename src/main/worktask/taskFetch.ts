@@ -26,6 +26,7 @@
 import { fetchCommandFor, shellQuote } from '../../shared/taskGitRelay';
 import { isDenyableBranchName } from '../../shared/botWorkerGuard';
 import { normalizeRepoKey } from '../../shared/repoKey';
+import { sameRepoKey } from '../../shared/forgeHosts';
 import { defaultGit, openTaskGitRepo, originPinUrl, parseLsRemoteHead, type TaskGitRepo, type TaskGitRepoInput, type TaskOriginPinInput, type TaskPushDeps, type TaskPushGit } from './taskPush';
 import { originUrlRepoKey, urlNamedRemoteRefusal, workerOriginRefusal, type GitConfigEntry } from './workerGit';
 
@@ -109,7 +110,7 @@ async function openTaskRemote(
   const key = originUrlRepoKey(origin.url);
   if (input.expectedRepoKey !== undefined) {
     const expected = normalizeRepoKey(input.expectedRepoKey);
-    if (!expected || !key || key !== expected) {
+    if (!expected || !key || !sameRepoKey(key, expected)) {
       return { ok: false, reason: 'remote-refused', error: `origin is not ${input.expectedRepoKey} (a plain https or ssh address of it)` };
     }
   }

@@ -33,6 +33,7 @@ import { TEAM_TEMPLATES, teamTemplatesPresent, type FactoryBotCreateResult, type
 import { BOTS_MAX } from './botStore';
 import type { WakeItem } from '../../shared/wake';
 import { normalizeRepoKey } from '../../shared/repoKey';
+import { sameRepoKey } from '../../shared/forgeHosts';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { dmThreadId } from '../../shared/room';
 import { git as runGit, type GitResult } from '../git/git';
@@ -131,7 +132,7 @@ export async function createBotFromFolder(
     if (!resolved.ok) return resolved;
     // Read after the await: a bot added meanwhile counts.
     const current = workspaceRepo(store, r.workspaceId);
-    if (current && current.repoKey !== resolved.repo.repoKey) {
+    if (current && !sameRepoKey(current.repoKey, resolved.repo.repoKey)) {
       return {
         ok: false,
         code: 'repo_mismatch',
@@ -173,14 +174,15 @@ export async function botRepoFromFolder(
   // Read after the await: a bot changed meanwhile counts.
   const others = store.list({ workspaceId: bot.workspaceId }).filter((b) => b.id !== botId && b.repo).sort((a, b) => a.createdAt - b.createdAt);
   const current = others[0]?.repo;
-  if (current && current.repoKey !== resolved.repo.repoKey) {
+  if (current && !sameRepoKey(current.repoKey, resolved.repo.repoKey)) {
     return {
       ok: false,
       code: 'repo_mismatch',
       message: `This workspace's other bots work on ${current.repoKey} (${current.repoPath}); ${resolved.repo.repoPath} is ${resolved.repo.repoKey}. A workspace works on one repository.`,
     };
   }
-  return resolved;
+  // The same repository spelled as the workspace's bots stored it.
+  return current ? { ...resolved, repo: { ...resolved.repo, repoKey: current.repoKey } } : resolved;
 }
 
 /** "Add team": the team bots the workspace is missing, coordinator first,
@@ -234,7 +236,7 @@ export async function createTeamFromFolder(
     if (!resolved.ok) return resolved;
     // Read after the await: a bot added meanwhile counts.
     const current = workspaceRepo(store, workspaceId);
-    if (current && current.repoKey !== resolved.repo.repoKey) {
+    if (current && !sameRepoKey(current.repoKey, resolved.repo.repoKey)) {
       return { ok: false, code: 'repo_mismatch', message: `This workspace's bots work on ${current.repoKey}; ${resolved.repo.repoPath} is ${resolved.repo.repoKey}. A workspace works on one repository.` };
     }
     repo = current ?? resolved.repo;

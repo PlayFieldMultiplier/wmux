@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import os from 'node:os';
-import path from 'node:path';
-import { configuredForge, dropGlabSubfolder, glabConfigPath, glabEntryFor, parseGhHosts, parseGlabHosts, type ForgeHosts } from '../forgeHosts';
+import { configuredForge, dropGlabSubfolder, sameRepoKey, glabEntryFor, parseGhHosts, parseGlabHosts, type ForgeHosts } from '../forgeHosts';
 import { isGithubPullUrl, isMergeRequestUrl, isWorktaskPrUrl } from '../workTask';
 
 const GH_HOSTS = `github.com:
@@ -70,19 +68,14 @@ describe('dropGlabSubfolder', () => {
   });
 });
 
-describe('glabConfigPath — the one file glab reads, in its order', () => {
-  const home = os.homedir();
-  const legacy = path.join(home, '.config', 'glab-cli', 'config.yml');
-  const none = () => false;
-
-  it('GLAB_CONFIG_DIR, then an existing legacy file, then XDG_CONFIG_HOME, then the platform dir', () => {
-    expect(glabConfigPath({ GLAB_CONFIG_DIR: '/g', XDG_CONFIG_HOME: '/x' }, () => true)).toBe(path.join('/g', 'config.yml'));
-    expect(glabConfigPath({ XDG_CONFIG_HOME: '/x' }, (f) => f === legacy)).toBe(legacy);
-    // XDG is glab's choice even before its file exists: no fall-through to another file.
-    expect(glabConfigPath({ XDG_CONFIG_HOME: '/x' }, none)).toBe(path.join('/x', 'glab-cli', 'config.yml'));
-    const platform = glabConfigPath({ APPDATA: '/appdata' }, none);
-    if (process.platform === 'darwin') expect(platform).toBe(path.join(home, 'Library', 'Application Support', 'glab-cli', 'config.yml'));
-    else expect([legacy, path.join('/appdata', 'glab-cli', 'config.yml')]).toContain(platform);
+describe('sameRepoKey', () => {
+  it('a key stored with the https sub-path still names the repository once glab\'s subfolder entry exists', () => {
+    const none = hostsOf('', '');
+    const sub = hostsOf('', 'hosts:\n    gitlab.example.com:\n        subfolder: gitlab\n');
+    expect(sameRepoKey('gitlab.example.com/gitlab/acme/app', 'gitlab.example.com/acme/app', none)).toBe(false);
+    expect(sameRepoKey('gitlab.example.com/gitlab/acme/app', 'gitlab.example.com/acme/app', sub)).toBe(true);
+    expect(sameRepoKey('gitlab.example.com/acme/app', 'gitlab.example.com/acme/app', none)).toBe(true);
+    expect(sameRepoKey('gitlab.example.com/gitlab/acme/app', 'gitlab.example.com/acme/other', sub)).toBe(false);
   });
 });
 

@@ -85,18 +85,24 @@ function ghHostsPath(): string {
   return path.join(os.homedir(), '.config', 'gh', 'hosts.yml');
 }
 
-/** glab's config.yml: the one file glab itself reads (glab 1.108, probed):
- *  GLAB_CONFIG_DIR when set; else the legacy ~/.config/glab-cli when its
- *  config.yml exists; else XDG_CONFIG_HOME/glab-cli when that is set (used
- *  even before the file exists); else the platform's user config dir
- *  (~/Library/Application Support on macOS, %APPDATA% on Windows). */
-export function glabConfigPath(env: NodeJS.ProcessEnv = process.env, exists: (file: string) => boolean = fs.existsSync): string {
+/** glab's config.yml: the one file glab itself reads, in the order of its
+ *  ConfigDir (internal/config/config_file.go): GLAB_CONFIG_DIR when set;
+ *  else the legacy <home>/.config/glab-cli when its config.yml exists; else
+ *  XDG_CONFIG_HOME/glab-cli when that is set (used even before the file
+ *  exists); else the platform's ConfigHome as adrg/xdg has it:
+ *  %LOCALAPPDATA% on Windows (never the roaming %APPDATA%),
+ *  ~/Library/Application Support on macOS, ~/.config elsewhere. */
+export function glabConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (file: string) => boolean = fs.existsSync,
+  platform: NodeJS.Platform = process.platform,
+): string {
   if (env.GLAB_CONFIG_DIR) return path.join(env.GLAB_CONFIG_DIR, 'config.yml');
   const legacy = path.join(os.homedir(), '.config', 'glab-cli', 'config.yml');
   if (exists(legacy)) return legacy;
   if (env.XDG_CONFIG_HOME) return path.join(env.XDG_CONFIG_HOME, 'glab-cli', 'config.yml');
-  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'glab-cli', 'config.yml');
-  if (process.platform === 'win32' && env.APPDATA) return path.join(env.APPDATA, 'glab-cli', 'config.yml');
+  if (platform === 'win32') return path.join(env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'glab-cli', 'config.yml');
+  if (platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'glab-cli', 'config.yml');
   return legacy;
 }
 
@@ -168,6 +174,21 @@ export function dropGlabSubfolder(host: string, parts: readonly string[], hosts:
   const sub = glabEntryFor(host, hosts)?.subfolder.toLowerCase().split('/').filter(Boolean) ?? [];
   const matches = sub.length > 0 && parts.length - sub.length >= 2 && sub.every((s, i) => parts[i]?.toLowerCase() === s);
   return matches ? parts.slice(sub.length) : [...parts];
+}
+
+/** Whether two repo keys (normalized) name one repository, compared with
+ *  glab's subfolder for the host dropped from both: a key stored before
+ *  that `subfolder` entry existed still spells an https remote's sub-path
+ *  (`host/sub/group/proj`), while the key built from the same remote now
+ *  does not. Every compare of a stored key with one read now goes through
+ *  this; stored keys are never rewritten. */
+export function sameRepoKey(a: string, b: string, hosts: ForgeHosts = forgeHosts()): boolean {
+  if (a === b) return true;
+  const bare = (key: string): string => {
+    const [host, ...parts] = key.toLowerCase().split('/');
+    return [host, ...dropGlabSubfolder(host, parts, hosts)].join('/');
+  };
+  return bare(a) === bare(b);
 }
 
 /** The forge a host's CLI config names: gh signed in to it and glab not set

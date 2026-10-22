@@ -515,6 +515,14 @@ describe('task_pr: GitHub Enterprise on its own domain, a host gh is signed in t
     expect(daemonCalls[0]?.params.prUrlGithubHost).toBe('code.acme.example');
   });
 
+  it('names the host as the daemon reads it, an explicit :443 kept', async () => {
+    const at443 = 'https://code.acme.example:443/acme/widget/pull/3';
+    forge.hosts = { gh: new Set(['code.acme.example', 'code.acme.example:443']), glab: new Map() };
+    const { svc, daemonCalls } = ghe(`Creating pull request\n${at443}`);
+    expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: at443 });
+    expect(daemonCalls[0]?.params.prUrlGithubHost).toBe('code.acme.example:443');
+  });
+
   it('a github.com PR or a GitLab MR names no Enterprise host to the daemon', async () => {
     const gh = makeService(makeExec(happyBehavior).exec);
     expect(await gh.svc.createPr(INPUT)).toMatchObject({ ok: true });
