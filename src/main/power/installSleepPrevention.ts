@@ -1,5 +1,6 @@
 import { ipcMain, powerMonitor, powerSaveBlocker, type BrowserWindow } from 'electron';
 import { IPC } from '../../shared/constants';
+import { isMainWindowSender } from '../ipc/mainWindowSender';
 import { SleepPrevention } from './sleepPrevention';
 
 /**
@@ -21,8 +22,13 @@ export function installSleepPrevention(getWindow: () => BrowserWindow | null): {
   });
   ipcMain.removeAllListeners(IPC.POWER_SLEEP_MODE);
   ipcMain.removeAllListeners(IPC.POWER_AGENTS_WORKING);
-  ipcMain.on(IPC.POWER_SLEEP_MODE, (_event, mode: unknown) => controller.setMode(mode));
-  ipcMain.on(IPC.POWER_AGENTS_WORKING, (_event, working: unknown) => controller.setAgentsWorking(working === true));
+  // Only the main window's renderer reports these, as with other operator IPC.
+  ipcMain.on(IPC.POWER_SLEEP_MODE, (event, mode: unknown) => {
+    if (isMainWindowSender(event, getWindow())) controller.setMode(mode);
+  });
+  ipcMain.on(IPC.POWER_AGENTS_WORKING, (event, working: unknown) => {
+    if (isMainWindowSender(event, getWindow())) controller.setAgentsWorking(working === true);
+  });
   return {
     controller,
     dispose: () => {

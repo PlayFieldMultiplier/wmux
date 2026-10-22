@@ -2,8 +2,9 @@
 //
 // One Electron power-save blocker, `prevent-app-suspension`: the system does
 // not sleep, the display still may. It is held while the mode says so —
-// 'always', or 'working' while any local agent is working — and released the
-// moment that stops being true. The renderer supplies both inputs: the mode it
+// 'always', or 'working' while any local agent is working — and released when
+// that stops being true: RELEASE_GRACE_MS after the last agent stops, at once
+// when the mode turns it off. The renderer supplies both inputs: the mode it
 // persists, and the working verdict it reads from Fleet's status model
 // (selectLocalAgentsWorking), so no second detector decides what "working" is.
 //
@@ -40,10 +41,19 @@ export interface SleepPreventionDeps {
   onSlept?: (window: SleepWindow) => void;
 }
 
+/**
+ * How long the blocker outlives the last working agent ('working' mode). A bot
+ * or an orchestrator handing off between turns leaves seconds with nothing
+ * running, and after hours unattended the idle timer has long expired: the
+ * computer would sleep inside that gap.
+ */
+export const RELEASE_GRACE_MS = 75_000;
+
 export class SleepPrevention {
   private mode: SleepPreventionMode = DEFAULT_SLEEP_PREVENTION_MODE;
   private agentsWorking = false;
   private blockerId: number | null = null;
+  private releaseTimer: ReturnType<typeof setTimeout> | null = null;
   private suspendedAt: number | null = null;
   private readonly onSuspend = (): void => { this.suspendedAt = this.now(); };
   private readonly onResume = (): void => {
@@ -83,7 +93,8 @@ export class SleepPrevention {
    * new renderer sends its own verdict when it loads.
    */
   rendererGone(): void {
-    this.setAgentsWorking(false);
+    this.agentsWorking = false;
+    if (this.mode !== 'always') this.release();
   }
 
   dispose(): void {
@@ -99,15 +110,30 @@ export class SleepPrevention {
   private apply(): void {
     const hold = this.mode === 'always' || (this.mode === 'working' && this.agentsWorking);
     if (hold) {
+      this.cancelRelease();
       if (this.blockerId !== null && this.deps.blocker.isStarted(this.blockerId)) return;
       this.blockerId = this.deps.blocker.start('prevent-app-suspension');
       this.deps.log?.(`[power] sleep blocker on id=${this.blockerId} mode=${this.mode}`);
+    } else if (this.mode === 'working' && this.blockerId !== null) {
+      // The agents stopped: let go after the grace, unless one starts first.
+      if (this.releaseTimer) return;
+      this.releaseTimer = setTimeout(() => {
+        this.releaseTimer = null;
+        this.release();
+      }, RELEASE_GRACE_MS);
+      this.releaseTimer.unref?.();
     } else {
       this.release();
     }
   }
 
+  private cancelRelease(): void {
+    if (this.releaseTimer) clearTimeout(this.releaseTimer);
+    this.releaseTimer = null;
+  }
+
   private release(): void {
+    this.cancelRelease();
     if (this.blockerId === null) return;
     const id = this.blockerId;
     this.blockerId = null;

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import { useStore } from '../../index';
-import { selectFleetBoard, selectFleetSectionCounts, selectLocalAgentsWorking } from '../fleet';
+import { QUIET_TURN_OUTPUT_MS, selectFleetBoard, selectFleetSectionCounts, selectLocalAgentsWorking } from '../fleet';
 import { ownerFleetState } from '../../../components/Sidebar/botTasks';
 import { formatShadowWorkspaceId } from '../../../../shared/pcRail';
 import { seedFleetTriageStore } from '../../../utils/__tests__/fleetTriageFixture';
@@ -76,6 +76,24 @@ describe('selectLocalAgentsWorking (keeps the computer awake)', () => {
       surfaceAgent: { 'pty-1': { name: 'Claude Code', status: 'waiting' }, 'pty-3': { name: 'Claude Code', status: 'idle' } },
       surfaceTurnOpenAt: {},
     });
+    expect(selectLocalAgentsWorking(useStore.getState())).toBe(false);
+  });
+
+  it('keeps a turn with no hook for 30 min working while its agent is alive and printing', () => {
+    const now = Date.now();
+    // pty-3's turn opened 30 s before `now`; the clock is past the 30 min mark.
+    const clock = now + 31 * 60_000;
+    seedFleetTriageStore(now, { agentClockMs: clock, surfaceOutputAt: {} });
+    expect(selectFleetBoard(useStore.getState(), { now: clock, sortMode: 'attention' }).panes
+      .find((p) => p.ptyId === 'pty-3')?.unverifiable).toBe(true);
+    expect(selectFleetSectionCounts(useStore.getState()).running).toBe(0);
+    // No output either: a wedged agent does not keep the computer awake.
+    expect(selectLocalAgentsWorking(useStore.getState())).toBe(false);
+
+    // A quiet tool call: the spinner still repaints.
+    useStore.setState({ surfaceOutputAt: { 'pty-3': clock - 30_000 } });
+    expect(selectLocalAgentsWorking(useStore.getState())).toBe(true);
+    useStore.setState({ agentClockMs: clock - 30_000 + QUIET_TURN_OUTPUT_MS + 1 });
     expect(selectLocalAgentsWorking(useStore.getState())).toBe(false);
   });
 });

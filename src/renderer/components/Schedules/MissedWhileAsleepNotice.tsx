@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
@@ -15,25 +14,21 @@ import { runMissedNow } from './missedWhileAsleep';
 export function MissedWhileAsleepNotice() {
   const t = useT();
   const missed = useStore(useShallow(selectMissedWhileAsleep));
-  const [busy, setBusy] = useState(false);
   if (missed.count === 0) return null;
 
   const runNow = async () => {
     const api = window.electronAPI?.automation;
     if (!api) return;
-    setBusy(true);
-    try {
-      const outcome = await runMissedNow(missed.automationIds, api);
-      const store = useStore.getState();
-      if (outcome.started > 0) store.pushToast({ level: 'info', message: t('schedules.runNowStarted') });
-      for (const run of outcome.skipped) {
-        store.pushToast({ level: 'warn', message: t('schedules.runNowSkipped', { reason: run.reason ? t(`schedules.reason.${run.reason}`) : '' }) });
-      }
-      if (outcome.failed > 0) store.pushToast({ level: 'warn', message: t('schedules.missedRunNowFailed', { count: outcome.failed }) });
-      store.dismissSleepNotice();
-    } finally {
-      setBusy(false);
+    // Answered before the runs start: the notice is gone at once, so no second
+    // click (this view left and opened again meanwhile) starts them twice.
+    useStore.getState().dismissSleepNotice();
+    const outcome = await runMissedNow(missed.automationIds, api);
+    const store = useStore.getState();
+    if (outcome.started > 0) store.pushToast({ level: 'info', message: t('schedules.runNowStarted') });
+    for (const run of outcome.skipped) {
+      store.pushToast({ level: 'warn', message: t('schedules.runNowSkipped', { reason: run.reason ? t(`schedules.reason.${run.reason}`) : '' }) });
     }
+    if (outcome.failed > 0) store.pushToast({ level: 'warn', message: t('schedules.missedRunNowFailed', { count: outcome.failed }) });
   };
 
   return (
@@ -43,10 +38,10 @@ export function MissedWhileAsleepNotice() {
       </p>
       <p className="ui-row-detail">{t('schedules.missedAsleepDetail')}</p>
       <div className="wmux-schedules-missed-actions">
-        <Button variant="secondary" size="sm" disabled={busy} onClick={() => void runNow()} data-schedules-missed-run>
+        <Button variant="secondary" size="sm" onClick={() => void runNow()} data-schedules-missed-run>
           {t('schedules.runNow')}
         </Button>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => useStore.getState().dismissSleepNotice()} data-schedules-missed-skip>
+        <Button variant="ghost" size="sm" onClick={() => useStore.getState().dismissSleepNotice()} data-schedules-missed-skip>
           {t('schedules.missedSkip')}
         </Button>
       </div>

@@ -1463,36 +1463,53 @@ function countFleetSections(
 
 // Its own slot: sharing selectFleetSectionCounts' would make the sidebar and
 // this app-level subscriber evict each other on every store change.
-let localWorkingMemo: { inputs: unknown[]; hook: Record<string, boolean>; unverifiable: Record<string, number>; out: boolean } | undefined;
+let localWorkingMemo: {
+  inputs: unknown[]; hook: Record<string, boolean>; unverifiable: Record<string, number>;
+  running: boolean; quietPtyIds: string[];
+} | undefined;
+
+/** How recent a quiet turn's terminal output must be to keep it working.
+ *  useTerminal stamps surfaceOutputAt at most every 30 s. */
+export const QUIET_TURN_OUTPUT_MS = 120_000;
 
 /**
  * Whether any agent on THIS computer is working: a row in Fleet's Running
  * section. Keeps the computer awake (main/power/sleepPrevention.ts). Same rows
- * and section rule as the board, with two differences that follow from the
+ * and section rule as the board, with three differences that follow from the
  * question: another computer's agents do not count (shadow workspaces and
- * attached remote hosts are left out), and bot workers do (Fleet's counts
- * leave them to their bot, but they are work this computer is doing).
+ * attached remote hosts are left out), bot workers do (Fleet's counts leave
+ * them to their bot, but they are work this computer is doing), and so does
+ * a turn Fleet marks unconfirmed (no hook for 30 min, agent not known dead)
+ * while its terminal still prints: a long quiet tool call keeps repainting
+ * its spinner, a wedged agent does not.
  */
 export function selectLocalAgentsWorking(state: FleetBoardState): boolean {
-  const workspaces = state.workspaces.some((w) => isShadowWorkspaceId(w.id))
-    ? state.workspaces.filter((w) => !isShadowWorkspaceId(w.id))
-    : state.workspaces;
-  const local: FleetBoardState = { ...state, workspaces, remoteWorkspaces: undefined };
-  const hook = state.hookRunningByPtyId ?? selectHookRunningByPtyId(local);
-  const unverifiable = state.unverifiablePaneMinutes ?? selectUnverifiablePaneMinutes(local);
+  // From `state`, not a local copy: the roll-up is cached on the state object.
+  // Shadow and remote keys never match a local row, so they are harmless here.
+  const hook = state.hookRunningByPtyId ?? selectHookRunningByPtyId(state);
+  const unverifiable = state.unverifiablePaneMinutes ?? selectUnverifiablePaneMinutes(state);
   const inputs = [
     state.workspaces, state.surfaceAgentStatus, state.surfaceActivity, state.paneLabel,
     state.supervisionByPtyId, state.surfaceAgent, state.surfacePendingQuestion, state.surfaceActivityAt,
     state.surfaceTurnOpenAt, state.commandRunningByPtyId, state.agentAliveByPtyId, state.usageLimitWaiting,
   ];
-  const memo = localWorkingMemo;
-  if (memo && inputs.every((value, i) => Object.is(value, memo.inputs[i]))
-      && sameKeys(hook, memo.hook) && sameKeys(unverifiable, memo.unverifiable)) {
-    return memo.out;
+  const last = localWorkingMemo;
+  let memo = last && inputs.every((value, i) => Object.is(value, last.inputs[i]))
+    && sameKeys(hook, last.hook) && sameKeys(unverifiable, last.unverifiable) ? last : undefined;
+  if (!memo) {
+    const workspaces = state.workspaces.some((w) => isShadowWorkspaceId(w.id))
+      ? state.workspaces.filter((w) => !isShadowWorkspaceId(w.id))
+      : state.workspaces;
+    const local: FleetBoardState = { ...state, workspaces, remoteWorkspaces: undefined };
+    const quietPtyIds = fleetBoardPanes(local, hook, unverifiable)
+      .filter((pane) => pane.unverifiable && pane.ptyId)
+      .map((pane) => pane.ptyId);
+    memo = { inputs, hook, unverifiable, running: countFleetSections(local, hook, unverifiable).running > 0, quietPtyIds };
+    localWorkingMemo = memo;
   }
-  const out = countFleetSections(local, hook, unverifiable).running > 0;
-  localWorkingMemo = { inputs, hook, unverifiable, out };
-  return out;
+  if (memo.running) return true;
+  const clock = state.agentClockMs ?? Date.now();
+  return memo.quietPtyIds.some((ptyId) => clock - (state.surfaceOutputAt?.[ptyId] ?? -Infinity) <= QUIET_TURN_OUTPUT_MS);
 }
 
 /**

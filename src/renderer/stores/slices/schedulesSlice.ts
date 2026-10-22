@@ -37,7 +37,7 @@ export interface SchedulesSlice {
   sleepWindow: SleepWindow | null;
   /** The missed-while-asleep notice for `sleepWindow` was answered (Run now or Skip). */
   sleepNoticeDismissed: boolean;
-  /** A newer sleep replaces the last one and its notice. */
+  /** A newer sleep: while the last one's notice is unanswered, the window grows to cover both. */
   recordSleepWindow: (window: SleepWindow) => void;
   dismissSleepNotice: () => void;
   setAutomationSnapshot: (automations: Automation[], runs: AutomationRun[]) => void;
@@ -73,7 +73,10 @@ export const createSchedulesSlice: StateCreator<
   sleepNoticeDismissed: false,
 
   recordSleepWindow: (window) => set((state) => {
-    state.sleepWindow = { suspendedAt: window.suspendedAt, resumedAt: window.resumedAt };
+    // An unanswered notice keeps its earlier misses: a short second sleep
+    // before the Schedules view was opened must not drop the overnight ones.
+    const earlier = state.sleepWindow && !state.sleepNoticeDismissed ? state.sleepWindow.suspendedAt : window.suspendedAt;
+    state.sleepWindow = { suspendedAt: Math.min(earlier, window.suspendedAt), resumedAt: window.resumedAt };
     state.sleepNoticeDismissed = false;
   }),
 

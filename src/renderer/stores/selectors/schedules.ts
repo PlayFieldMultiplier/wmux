@@ -3,6 +3,7 @@ import {
   type Automation,
   type AutomationRun,
 } from '../../../shared/automation';
+import { AUTOMATION_TICK_MS } from '../../../shared/automationSchedule';
 import type { SleepWindow } from '../../../shared/sleepPrevention';
 
 type SchedulesState = {
@@ -63,15 +64,29 @@ let lastMissed: MissedWhileAsleep = NONE_MISSED;
  * recomputed: the daemon records them on its first tick after the wake, so
  * this is a selector rather than a count taken at resume. Nothing once the
  * notice was answered.
+ *
+ * The window opens one scheduler tick before the suspend: a time between the
+ * daemon's last tick and the suspend was missed too. A schedule whose
+ * catch-up already ran after the wake (planDue fires the newest occurrence
+ * still within grace and records the older ones missed) is left out: Run now
+ * would run it a second time.
  */
 export function selectMissedWhileAsleep(state: SchedulesState): MissedWhileAsleep {
   const window = state.sleepWindow;
   if (!window || state.sleepNoticeDismissed) return NONE_MISSED;
   const known = new Set(state.automations.map((a) => a.id));
-  const missed = state.automationRuns
+  const from = window.suspendedAt - AUTOMATION_TICK_MS;
+  const inWindow = state.automationRuns
     .filter((run) => run.state === 'skipped' && run.reason === 'missed' && run.trigger === 'scheduled'
       && known.has(run.automationId)
-      && run.scheduledFor >= window.suspendedAt && run.scheduledFor <= window.resumedAt)
+      && run.scheduledFor >= from && run.scheduledFor <= window.resumedAt);
+  const newestMissed = new Map<string, number>();
+  for (const run of inWindow) newestMissed.set(run.automationId, Math.max(newestMissed.get(run.automationId) ?? 0, run.scheduledFor));
+  const caughtUp = new Set(state.automationRuns
+    .filter((run) => run.trigger === 'scheduled' && run.state !== 'skipped' && run.scheduledFor > (newestMissed.get(run.automationId) ?? Infinity))
+    .map((run) => run.automationId));
+  const missed = inWindow
+    .filter((run) => !caughtUp.has(run.automationId))
     .sort((a, b) => a.scheduledFor - b.scheduledFor);
   if (missed.length === 0) return NONE_MISSED;
   const automationIds = [...new Set(missed.map((run) => run.automationId))];

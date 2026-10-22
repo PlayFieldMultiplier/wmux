@@ -4,7 +4,7 @@
 // under win32 and darwin, the two platforms wmux ships the setting on.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { SleepPrevention, type PowerSaveBlockerLike } from '../sleepPrevention';
+import { RELEASE_GRACE_MS, SleepPrevention, type PowerSaveBlockerLike } from '../sleepPrevention';
 
 function fakeBlocker() {
   const started = new Set<number>();
@@ -32,6 +32,7 @@ describe.each(['win32', 'darwin'] as const)('SleepPrevention on %s', (platform) 
   let sp: SleepPrevention;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     Object.defineProperty(process, 'platform', { value: platform, configurable: true });
     blocker = fakeBlocker();
     power = new EventEmitter();
@@ -42,6 +43,7 @@ describe.each(['win32', 'darwin'] as const)('SleepPrevention on %s', (platform) 
 
   afterEach(() => {
     sp.dispose();
+    vi.useRealTimers();
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });
 
@@ -56,9 +58,24 @@ describe.each(['win32', 'darwin'] as const)('SleepPrevention on %s', (platform) 
     expect(blocker.start).toHaveBeenCalledTimes(1);
 
     sp.setAgentsWorking(false);
+    // Held through the grace a hand-off between turns needs, then let go.
+    vi.advanceTimersByTime(RELEASE_GRACE_MS - 1);
+    expect(sp.heldId).toBe(id);
+    vi.advanceTimersByTime(1);
     expect(blocker.stop).toHaveBeenCalledWith(id);
     expect(sp.heldId).toBeNull();
     expect(blocker.started.size).toBe(0);
+  });
+
+  it('an agent that starts within the grace keeps the same blocker', () => {
+    sp.setAgentsWorking(true);
+    const id = sp.heldId;
+    sp.setAgentsWorking(false);
+    vi.advanceTimersByTime(RELEASE_GRACE_MS / 2);
+    sp.setAgentsWorking(true);
+    vi.advanceTimersByTime(RELEASE_GRACE_MS * 2);
+    expect(sp.heldId).toBe(id);
+    expect(blocker.start).toHaveBeenCalledTimes(1);
   });
 
   it('"always" holds with no agent working; "off" never holds', () => {

@@ -21,7 +21,8 @@ describe('runs missed while asleep', () => {
         missed('m1', 'a1', 20_000),
         missed('m2', 'a2', 30_000),
         missed('m3', 'a1', 40_000),
-        missed('before', 'a1', 5_000), // before the sleep began
+        missed('just-before', 'a2', -10_000), // after the daemon's last tick before the suspend
+        missed('before', 'a1', -25_000), // more than a tick before the sleep began
         missed('after', 'a2', 150_000), // after the wake
         run({ id: 'down', automationId: 'a2', scheduledFor: 50_000, state: 'skipped', reason: 'daemon_down' }),
         run({ id: 'overlap', automationId: 'a2', scheduledFor: 50_000, state: 'skipped', reason: 'overlap' }),
@@ -29,7 +30,20 @@ describe('runs missed while asleep', () => {
       ],
       sleepWindow: SLEEP,
     };
-    expect(selectMissedWhileAsleep(state)).toEqual({ count: 3, automationIds: ['a1', 'a2'] });
+    expect(selectMissedWhileAsleep(state)).toEqual({ count: 4, automationIds: ['a2', 'a1'] });
+  });
+
+  it('leaves out a schedule whose catch-up already ran after the wake', () => {
+    const automationRuns = [
+      missed('m1', 'a1', 20_000),
+      missed('m2', 'a1', 40_000),
+      // planDue fired the newest occurrence; Run now would run it again.
+      run({ id: 'caught-up', automationId: 'a1', scheduledFor: 90_000, state: 'completed' }),
+      missed('m3', 'a2', 30_000),
+      // A manual run is not a catch-up.
+      run({ id: 'manual', automationId: 'a2', trigger: 'manual', scheduledFor: 95_000, state: 'completed' }),
+    ];
+    expect(selectMissedWhileAsleep({ automations, automationRuns, sleepWindow: SLEEP })).toEqual({ count: 1, automationIds: ['a2'] });
   });
 
   it('returns the same object while the answer holds', () => {
@@ -60,6 +74,13 @@ describe('runs missed while asleep', () => {
     useStore.setState({ automationRuns: [...useStore.getState().automationRuns, missed('m2', 'a2', 220_000)] });
     useStore.getState().recordSleepWindow({ suspendedAt: 200_000, resumedAt: 300_000 });
     expect(selectMissedWhileAsleep(useStore.getState())).toEqual({ count: 1, automationIds: ['a2'] });
+  });
+
+  it('a second sleep before the notice is answered widens the window', () => {
+    useStore.setState({ automations, automationRuns: [missed('m1', 'a1', 20_000), missed('m2', 'a2', 220_000)], sleepWindow: null, sleepNoticeDismissed: false });
+    useStore.getState().recordSleepWindow(SLEEP);
+    useStore.getState().recordSleepWindow({ suspendedAt: 200_000, resumedAt: 300_000 });
+    expect(selectMissedWhileAsleep(useStore.getState())).toEqual({ count: 2, automationIds: ['a1', 'a2'] });
   });
 
   it('Run now starts each affected schedule once, and reports what did not start', async () => {
