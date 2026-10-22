@@ -74,7 +74,7 @@ import {
 import { freshContextGrammarFor, launchGrammarFor } from '../../../shared/agentLaunchOptions';
 import { ModelCombobox } from './ModelCombobox';
 import { MULTIVIEW_ARRANGEMENTS } from '../../utils/multiviewGrid';
-import type { NicInfo, LanLinkNic, LanLinkStatus, LanLinkPeerSummary } from '../../../shared/lanlink';
+import type { NicInfo, LanLinkNic, LanLinkStatus } from '../../../shared/lanlink';
 import type { FirstRunCheckResult } from '../../../shared/firstRun';
 import { FIRST_RUN_REOPEN_EVENT } from '../../../shared/firstRun';
 import { ClaudeIntegrationSection } from './ClaudeIntegrationSection';
@@ -1226,346 +1226,22 @@ function LanLinkSection() {
   );
 }
 
-// ─── LanLink pairing (PR-5) ─────────────────────────────────────────────────
+// ─── LAN › Connections ───────────────────────────────────────────────────────
 //
-// Sibling to LanLinkView/LanLinkSection (PR-3, left untouched). Adds the pairing
-// surface: mint a PIN + countdown, join a remote machine, list/revoke peers. ALL
-// state lives in the CONTAINER (LanLinkPairingSection); the VIEW is pure (props
-// only) so it is node-env testable via renderToStaticMarkup. The PIN displayed is
-// the human 6-digit pairing PIN (never crypto material), and peer messages are
-// never surfaced here — outbound control only.
+// Pairing, the paired PCs and what each may see live on the Remote page
+// (2026-10-22). Settings › LAN keeps the listener switches above and this one
+// way there; `lanpair` (search) lands on it.
 
-export interface LanLinkPairingViewProps {
-  enabled: boolean;
-  /** This machine's host:port for a peer's Join form (null until a NIC resolves). */
-  selfAddress: string | null;
-  // pair this machine
-  pin: string | null;
-  countdownSec: number | null;
-  failCount: number;
-  pairBusy: boolean;
-  onBeginPair: () => void;
-  onCancelPair: () => void;
-  // join a machine
-  joinHost: string;
-  joinPort: number;
-  joinPin: string;
-  onJoinHost: (v: string) => void;
-  onJoinPort: (v: number) => void;
-  onJoinPin: (v: string) => void;
-  onJoin: () => void;
-  joinBusy: boolean;
-  // peers
-  peers: LanLinkPeerSummary[];
-  confirmingRevoke: string | null;
-  onAskRevoke: (uuid: string) => void;
-  onConfirmRevoke: (uuid: string) => void;
-  onCancelRevoke: () => void;
-  // shared
-  error: string | null;
-  t: (key: string, vars?: Record<string, string | number>) => string;
-}
-
-export function LanLinkPairingView(props: LanLinkPairingViewProps) {
-  const {
-    enabled, selfAddress, pin, countdownSec, failCount, pairBusy, onBeginPair, onCancelPair,
-    joinHost, joinPort, joinPin, onJoinHost, onJoinPort, onJoinPin, onJoin, joinBusy,
-    peers, confirmingRevoke, onAskRevoke, onConfirmRevoke, onCancelRevoke, error, t,
-  } = props;
-
-  // Pairing is only meaningful when LanLink is enabled (a PIN minted while the
-  // listener is off can't be completed). Show an explanatory hint instead of an
-  // actionable-but-dead form.
-  if (!enabled) {
-    return (
-      <SettingsSection id="lanpair" title={t('settings.lanlinkPair')} data-testid="lanlink-pairing-section">
-        <SettingNote>{t('settings.lanlinkPairDisabled')}</SettingNote>
-      </SettingsSection>
-    );
-  }
-
-  return (
-    <>
-      <SettingsSection id="lanpair" title={t('settings.lanlinkPair')} data-testid="lanlink-pairing-section">
-        {/* Pair this machine: mint a PIN + live countdown. Starting a pairing
-            window is what unblocks a second machine, so it is the tab's one
-            primary; Join is secondary. */}
-        <SettingRow label={t('settings.lanlinkPairStart')} description={t('settings.lanlinkPairStartDesc')}>
-          {pin ? (
-            <div className="flex items-center gap-3">
-              <span data-testid="lanlink-pair-pin" className="settings-kbd tracking-widest" style={{ fontSize: 13, minHeight: 28 }}>
-                {pin}
-              </span>
-              <span className="ui-field-description tabular-nums">
-                {countdownSec != null && countdownSec > 0
-                  ? t('settings.lanlinkPairCountdown', { seconds: countdownSec })
-                  : t('settings.lanlinkPairExpired')}
-              </span>
-              <Button variant="secondary" onClick={onCancelPair}>{t('settings.lanlinkPairCancel')}</Button>
-            </div>
-          ) : (
-            <Button variant="primary" onClick={onBeginPair} disabled={pairBusy}>
-              {t('settings.lanlinkPairStartButton')}
-            </Button>
-          )}
-        </SettingRow>
-        {pin && selfAddress && (
-          <SettingNote data-testid="lanlink-pair-self" className="font-mono">
-            {t('settings.lanlinkPairSelfAddress', { address: selfAddress })}
-          </SettingNote>
-        )}
-        {failCount > 0 && (
-          <SettingNote tone="warning">
-            {t('settings.lanlinkPairFailCount', { count: failCount })}
-          </SettingNote>
-        )}
-
-        {/* Join a machine: enter a remote host/port/PIN. Join inputs commit on
-            EVERY keystroke (not commit-on-blur like SettingPathInput) so clicking
-            Join with focus still in a field submits the current value, not a
-            stale empty draft (codex P2). */}
-        <SettingRow label={t('settings.lanlinkPairJoin')} description={t('settings.lanlinkPairJoinDesc')} layout="stacked">
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              type="text"
-              value={joinHost}
-              placeholder={t('settings.lanlinkPairJoinHostPlaceholder')}
-              aria-label={t('settings.lanlinkPairJoinHost')}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              onChange={(e) => onJoinHost(e.target.value)}
-              className="settings-input font-mono"
-              style={{ width: 200 }}
-            />
-            <SettingNumberInput value={joinPort} onChange={onJoinPort} min={1} max={65535} label={t('settings.lanlinkPairJoinPort')} />
-            <Input
-              type="text"
-              value={joinPin}
-              placeholder={t('settings.lanlinkPairJoinPinPlaceholder')}
-              aria-label={t('settings.lanlinkPairJoinPin')}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              onChange={(e) => onJoinPin(e.target.value)}
-              className="settings-input font-mono"
-              style={{ width: 120 }}
-            />
-            <Button variant="secondary" onClick={onJoin} disabled={joinBusy}>
-              {t('settings.lanlinkPairJoinButton')}
-            </Button>
-          </div>
-        </SettingRow>
-        {error && <SettingNote data-testid="lanlink-pair-error" tone="danger">{error}</SettingNote>}
-      </SettingsSection>
-
-      {/* Paired peers + live revoke. */}
-      <SettingsSection title={t('settings.lanlinkPeers')}>
-        {peers.length === 0 ? (
-          <SettingNote>{t('settings.lanlinkPeersEmpty')}</SettingNote>
-        ) : (
-          <div className="contents" data-testid="lanlink-peers">
-            {peers.map((p) => (
-              <div key={p.peerUuid} className="settings-row ui-row" style={{ flexDirection: 'row' }}>
-                <Badge>{t('settings.lanlinkPeerBadge')}</Badge>
-                <span className="ui-field-label truncate">{p.peerName}</span>
-                {p.burned && (
-                  <Badge tone="danger">{t('settings.lanlinkPeerBurned')}</Badge>
-                )}
-                <div className="flex-1" />
-                {confirmingRevoke === p.peerUuid ? (
-                  <div className="flex items-center gap-2 shrink-0">
-                    <Button variant="ghost" onClick={onCancelRevoke}>{t('settings.close')}</Button>
-                    <UiButton variant="danger" size="md" onClick={() => onConfirmRevoke(p.peerUuid)}>{t('settings.lanlinkPeerRevoke')}</UiButton>
-                  </div>
-                ) : (
-                  <Button variant="destructive" className="shrink-0" onClick={() => onAskRevoke(p.peerUuid)}>
-                    {t('settings.lanlinkPeerRevoke')}
-                  </Button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </SettingsSection>
-    </>
-  );
-}
-
-function LanLinkPairingSection() {
+function LanConnectionsLink() {
   const t = useT();
-  const { invoke: ipcInvoke } = useIpc({ silent: ['NOT_FOUND', 'UNKNOWN', 'DAEMON_DISCONNECTED'] });
-  const api = window.electronAPI?.lanlink;
-
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [nic, setNic] = useState<LanLinkNic | null>(null);
-  const [effectivePort, setEffectivePort] = useState<number | null>(null);
-  const [nics, setNics] = useState<NicInfo[]>([]);
-  const [unavailable, setUnavailable] = useState(false);
-  const [pin, setPin] = useState<string | null>(null);
-  const [deadline, setDeadline] = useState<number | null>(null);
-  const [failCount, setFailCount] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
-  const [peers, setPeers] = useState<LanLinkPeerSummary[]>([]);
-  const [joinHost, setJoinHost] = useState('');
-  const [joinPort, setJoinPort] = useState(0);
-  const [joinPin, setJoinPin] = useState('');
-  const [confirmingRevoke, setConfirmingRevoke] = useState<string | null>(null);
-  const [pairBusy, setPairBusy] = useState(false);
-  const [joinBusy, setJoinBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refreshPeers = useCallback(async () => {
-    if (!api?.peersList) return;
-    const r = await ipcInvoke(() => api.peersList());
-    if (r.ok) setPeers(r.data.peers);
-  }, [api, ipcInvoke]);
-
-  const refreshStatus = useCallback(async () => {
-    if (!api?.status) { setUnavailable(true); return; }
-    const r = await ipcInvoke(() => api.status());
-    if (r.ok) {
-      setEnabled(r.data.enabled); setNic(r.data.nic);
-      setEffectivePort(r.data.effectivePort); setNics(r.data.nics);
-      setUnavailable(false);
-    } else setUnavailable(true);
-  }, [api, ipcInvoke]);
-
-  const refreshPairStatus = useCallback(async () => {
-    if (!api?.pairStatus) return;
-    const r = await ipcInvoke(() => api.pairStatus());
-    if (r.ok) {
-      setFailCount(r.data.failCount);
-      if (!r.data.active) { setPin(null); setDeadline(null); }
-    }
-  }, [api, ipcInvoke]);
-
-  // Mount probe + daemon-reconnect re-probe + a light 3s poll WHILE the Settings tab
-  // is open (this section is mounted only when the LanLink tab is active). The poll
-  // keeps enabled/nic in sync with a toggle in the sibling LanLinkSection AND surfaces
-  // an inbound peer (another machine joining our PIN, persisted daemon-side) without a
-  // manual refresh (codex P2 / CodeRabbit). Both RPCs are read-only.
-  useEffect(() => {
-    void refreshStatus();
-    void refreshPeers();
-    const daemonApi = (
-      window.electronAPI as unknown as { daemon?: { onConnected?: (cb: () => void) => () => void } }
-    ).daemon;
-    const off = daemonApi?.onConnected?.(() => { void refreshStatus(); void refreshPeers(); });
-    const poll = setInterval(() => { void refreshStatus(); void refreshPeers(); }, 3000);
-    return () => { off?.(); clearInterval(poll); };
-  }, [refreshStatus, refreshPeers]);
-
-  // Countdown + pairStatus poll ONLY while a pairing window is open (perf: no idle
-  // interval). Cleared on unmount / window close.
-  useEffect(() => {
-    if (!pin || deadline == null) return;
-    const tick = setInterval(() => {
-      setNow(Date.now());
-      void refreshPairStatus();
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [pin, deadline, refreshPairStatus]);
-
-  // Auto-clear an expired PIN so the UI doesn't show a stale code.
-  useEffect(() => {
-    if (deadline != null && now >= deadline) { setPin(null); setDeadline(null); }
-  }, [now, deadline]);
-
-  const onBeginPair = useCallback(async () => {
-    if (!api?.pairBegin) return;
-    setPairBusy(true); setError(null);
-    setFailCount(0); // a fresh window starts at 0 — don't show the prior window's count
-    const r = await ipcInvoke(() => api.pairBegin());
-    setPairBusy(false);
-    if (r.ok) {
-      setPin(r.data.pin);
-      // expiresInMs is number|null. A null deadline would stall the countdown AND the
-      // auto-clear effects (both guard on deadline != null), so treat null as
-      // already-expired rather than a non-expiring PIN (Claude P2).
-      setDeadline(r.data.expiresInMs != null ? Date.now() + r.data.expiresInMs : Date.now());
-      setNow(Date.now());
-    }
-  }, [api, ipcInvoke]);
-
-  const onCancelPair = useCallback(async () => {
-    if (!api?.pairCancel) return;
-    const r = await ipcInvoke(() => api.pairCancel());
-    // Only hide the PIN if the daemon actually closed the window. On a failed cancel
-    // the window may still be active — hiding it would mislead the user into thinking
-    // it was canceled (codex P2). Also clear the stale fail-count warning, since the
-    // poll stops once the PIN is gone (codex P3).
-    if (r.ok) { setPin(null); setDeadline(null); setFailCount(0); }
-  }, [api, ipcInvoke]);
-
-  const onJoin = useCallback(async () => {
-    if (!api?.pairJoin) return;
-    if (!joinHost || joinPort < 1 || joinPort > 65535 || !joinPin) {
-      setError(t('settings.lanlinkPairError'));
-      return;
-    }
-    setJoinBusy(true); setError(null);
-    const r = await ipcInvoke(() => api.pairJoin({ host: joinHost, port: joinPort, pin: joinPin }));
-    setJoinBusy(false);
-    if (r.ok) { setJoinPin(''); void refreshPeers(); }
-    else setError(t('settings.lanlinkPairError'));
-  }, [api, ipcInvoke, joinHost, joinPort, joinPin, refreshPeers, t]);
-
-  const onConfirmRevoke = useCallback(async (uuid: string) => {
-    if (!api?.peersRemove) return;
-    setConfirmingRevoke(null);
-    // {ok:true} is unconditional daemon-side, so trust the refreshed list — not the
-    // ack — to confirm the peer actually went away.
-    await ipcInvoke(() => api.peersRemove(uuid));
-    void refreshPeers();
-  }, [api, ipcInvoke, refreshPeers]);
-
-  if (unavailable) {
-    return (
-      <SettingsSection id="lanpair" title={t('settings.lanlinkPair')}>
-        <SettingNote>{t('settings.lanlinkUnavailable')}</SettingNote>
-      </SettingsSection>
-    );
-  }
-
-  // This machine's reachable address for a peer to enter on their "Join" form: the
-  // selected NIC's IP + the daemon's effective listen port. Shown next to the PIN so
-  // the peer knows the full host:port, not just the code (codex#5).
-  const selfAddress = (() => {
-    if (!nic || effectivePort == null) return null;
-    const match = nics.find((n) => n.name === nic.name && n.mac === nic.mac);
-    const ip = match?.addresses[0];
-    return ip ? `${ip}:${effectivePort}` : null;
-  })();
-
-  const countdownSec = deadline != null ? Math.max(0, Math.ceil((deadline - now) / 1000)) : null;
-
   return (
-    <LanLinkPairingView
-      enabled={enabled === true && nic !== null}
-      selfAddress={selfAddress}
-      pin={pin}
-      countdownSec={countdownSec}
-      failCount={failCount}
-      pairBusy={pairBusy}
-      onBeginPair={() => void onBeginPair()}
-      onCancelPair={() => void onCancelPair()}
-      joinHost={joinHost}
-      joinPort={joinPort}
-      joinPin={joinPin}
-      onJoinHost={setJoinHost}
-      onJoinPort={setJoinPort}
-      onJoinPin={setJoinPin}
-      onJoin={() => void onJoin()}
-      joinBusy={joinBusy}
-      peers={peers}
-      confirmingRevoke={confirmingRevoke}
-      onAskRevoke={setConfirmingRevoke}
-      onConfirmRevoke={(uuid) => void onConfirmRevoke(uuid)}
-      onCancelRevoke={() => setConfirmingRevoke(null)}
-      error={error}
-      t={t}
-    />
+    <SettingsSection id="lanpair" title={t('settings.lanlinkConnections')} data-testid="lanlink-connections-link">
+      <SettingRow label={t('settings.lanlinkConnectionsManage')} description={t('settings.lanlinkConnectionsDesc')}>
+        <UiButton variant="secondary" size="md" onClick={() => useStore.getState().setAppRoute('remote')} data-testid="lanlink-open-remote">
+          {t('settings.lanlinkConnectionsOpen')}
+        </UiButton>
+      </SettingRow>
+    </SettingsSection>
   );
 }
 
@@ -5741,7 +5417,7 @@ export default function SettingsPanel({ initialTab }: { initialTab?: string }) {
                     {activeTab === 'computer-use'       && <TabComputerUse />}
                     {activeTab === 'plugins'            && <PluginsSection />}
                     {activeTab === 'remote'             && <TabRemote />}
-                    {activeTab === 'lanlink'            && <><LanLinkSection /><LanLinkPairingSection /><A2aRemoteSection /></>}
+                    {activeTab === 'lanlink'            && <><LanConnectionsLink /><LanLinkSection /><A2aRemoteSection /></>}
                     {activeTab === 'about'              && <TabAbout />}
                   </div>
                 </>

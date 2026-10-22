@@ -14,7 +14,9 @@ import type { WebDeviceSummary, WebTerminalInfo } from '../../../shared/web';
 import type { RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary } from '../../../shared/remoteHosts';
 import { remoteAttachmentKey } from '../../../shared/remoteHosts';
 import type { LanLinkPeerSummary } from '../../../shared/lanlink';
-import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
+import type { A2aExposureV1, A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
+import type { Workspace } from '../../../shared/types';
+import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import type { A2aRemoteHostStatus, A2aRemoteStatus } from '../../../shared/rpc';
 import { buildRemoteEntries, paneNamesByPty, serverReach, type RemoteEntry, type ServerReach } from './remoteEntries';
 import { selectRemoteInbox } from '../../stores/selectors/remoteInbox';
@@ -87,6 +89,24 @@ interface PcRow {
 type Confirm = { kind: 'entry' | 'pc' | 'link'; id: string } | null;
 
 /**
+ * How many of this PC's panes an exposure lets that PC see now: a listed pane
+ * that has since closed does not count, and a workspace listed without a pane
+ * list shows every pane it has.
+ */
+export function exposedPaneCount(exposure: A2aExposureV1 | null, workspaces: readonly Workspace[]): number {
+  if (!exposure) return 0;
+  let n = 0;
+  for (const wsId of exposure.workspaceIds) {
+    const ws = workspaces.find((w) => w.id === wsId);
+    if (!ws) continue;
+    const live = getWorkspaceLeafPanes(ws).map((p) => p.id);
+    const listed = exposure.paneIds?.[wsId];
+    n += listed ? listed.filter((id) => live.includes(id)).length : live.length;
+  }
+  return n;
+}
+
+/**
  * The Remote rail page: this PC's state on one line, what needs a person
  * (link requests, held work, a PC whose certificate changed), then one list
  * of every other PC with its links, the phones and what each is viewing, and
@@ -113,6 +133,12 @@ export default function RemotePage() {
   const [devicesError, setDevicesError] = useState(false);
   const [hosts, setHosts] = useState<RemoteHostPublic[] | null>(null);
   const [peers, setPeers] = useState<LanLinkPeerSummary[] | null>(null);
+  /**
+   * What this PC lets each PC that joined it see, by hostId: the last good
+   * read (null: nothing listed). A PC never read yet has no key, and its row
+   * claims nothing rather than "nothing".
+   */
+  const [exposures, setExposures] = useState<Record<string, A2aExposureV1 | null>>({});
   const [connect, setConnect] = useState<{ tab?: ConnectTab } | null>(null);
   const [addSsh, setAddSsh] = useState(false);
   const [checkSsh, setCheckSsh] = useState<{ id: string; label: string } | null>(null);
@@ -157,6 +183,23 @@ export default function RemotePage() {
     if (api?.remote?.sshStates) reads.push(api.remote.sshStates().then((v) => { if (mounted.current) setSshStates(v); }, () => undefined));
     if (api?.lanlink?.peersList) reads.push(api.lanlink.peersList().then((v) => { if (mounted.current) setPeers(v.peers); }, () => undefined));
     await Promise.all(reads);
+    // A PC that joined this one sees only what this PC lists for it.
+    const exposureGet = api?.a2aRemote?.exposureGet;
+    if (exposureGet) {
+      const hostIds = [...new Set(useStore.getState().a2aRemote.peers.map((x) => x.hostId))];
+      const got = await Promise.all(hostIds.map(async (id) => [id, await exposureGet(id).then((r) => r?.exposure ?? null, () => undefined)] as const));
+      if (mounted.current) {
+        setExposures((prev) => {
+          const next: Record<string, A2aExposureV1 | null> = {};
+          // A failed read keeps the last value (or none); a PC no longer paired drops out.
+          for (const [id, e] of got) {
+            if (e !== undefined) next[id] = e;
+            else if (id in prev) next[id] = prev[id];
+          }
+          return next;
+        });
+      }
+    }
     if (mounted.current) setNow(Date.now());
   }, []);
   useEffect(() => {
@@ -210,7 +253,9 @@ export default function RemotePage() {
       return {
         hostId,
         name: st?.name || joined?.name || peer?.name || hostId.slice(0, 6),
-        word: st ? A2A_STATUS[st.state] : 'waiting',
+        // No stream status (a PC that joined this one and has not connected
+        // since wmux started): offline, with when it was last seen.
+        word: st ? A2A_STATUS[st.state] : 'disconnected',
         pending: st?.pending ?? 0,
         lastSeenAt: Number.isFinite(seenAt) ? seenAt : null,
         address: joined?.addresses[0] ?? null,
@@ -429,6 +474,8 @@ export default function RemotePage() {
     )
   );
 
+  const seeLabel = (count: number) => (count === 0 ? t('remotePage.perm.seesNone') : count === 1 ? t('remotePage.perm.seesOne') : t('remotePage.perm.sees', { count }));
+
   // Rows of the one list, by group.
   const pcRows: ReactNode[] = pcs.flatMap((pc) => {
     const key = `pc:${pc.hostId}`;
@@ -452,6 +499,13 @@ export default function RemotePage() {
           {pc.address && <span className="ui-code">{pc.address}</span>}
           {pc.address && meta ? ' · ' : ''}
           {meta}
+        </span>
+        {/* What this PC allows that PC. One slot per permission; the empty
+            one is kept for starting new agents, so adding it later does not
+            reshape the row. */}
+        <span className="wmux-remote-perm" data-remote-perm>
+          <span className="wmux-remote-perm-slot" data-perm-slot="see">{pc.peerId && pc.hostId in exposures ? seeLabel(exposedPaneCount(exposures[pc.hostId], workspaces)) : ''}</span>
+          <span className="wmux-remote-perm-slot" data-perm-slot="agents" />
         </span>
         {statusCell(pc.word, pc.word === 'connected', pc.lastSeenAt)}
         <span className="wmux-remote-acts">
@@ -581,7 +635,11 @@ export default function RemotePage() {
       <span className="wmux-remote-ic" aria-hidden="true"><IconMessage size={16} /></span>
       <span className="wmux-remote-nm"><span className="truncate">{p.name}</span></span>
       <span className="wmux-remote-meta">
-        {[t('remotePage.messagesOnly'), p.lastSeenAt !== null ? t('remotePage.lastSeenAgo', { time: timeAgo(p.lastSeenAt, now) }) : ''].filter(Boolean).join(' · ')}
+        {[
+          t('remotePage.messagesOnly'),
+          p.status === 'blocked' ? t('remotePage.peerRevoked') : '',
+          p.lastSeenAt !== null ? t('remotePage.lastSeenAgo', { time: timeAgo(p.lastSeenAt, now) }) : '',
+        ].filter(Boolean).join(' · ')}
       </span>
       {statusCell(p.status === 'blocked' ? 'disconnected' : 'waiting', false, null)}
       <span className="wmux-remote-acts">
@@ -825,6 +883,7 @@ export default function RemotePage() {
           onClose={() => { setConnect(null); void refresh(); }}
           onLinkPane={(hostId) => { setConnect(null); setLinkDialog({ hostId }); }}
           onAddOverSsh={() => { setConnect(null); setAddSsh(true); }}
+          onLanPaired={() => { void refresh(); }}
         />
       )}
       {addSsh && <AddSshPcDialog onClose={() => { setAddSsh(false); void refresh(); }} />}
@@ -839,13 +898,13 @@ export default function RemotePage() {
         <A2aLinkDialog offer={offerDialog} onClose={() => { setOfferDialog(null); void refresh(); }} />
       )}
       {exposure && (
-        <Dialog onClose={() => setExposure(null)} width={520} data-testid="remote-exposure">
+        <Dialog onClose={() => { setExposure(null); void refresh(); }} width={520} data-testid="remote-exposure">
           <DialogHeader title={t('remotePage.exposureTitle', { name: exposure.name })} closeLabel={t('remotePage.connect.close')} />
           <DialogBody>
             <A2aExposureChecklist hostId={exposure.hostId} pcName={exposure.name} t={t} />
           </DialogBody>
           <DialogFooter>
-            <Button variant="secondary" size="md" onClick={() => setExposure(null)}>{t('remotePage.connect.done')}</Button>
+            <Button variant="secondary" size="md" onClick={() => { setExposure(null); void refresh(); }}>{t('remotePage.connect.done')}</Button>
           </DialogFooter>
         </Dialog>
       )}
