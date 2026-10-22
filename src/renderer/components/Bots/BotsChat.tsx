@@ -61,7 +61,8 @@ import Select from '../ui/Select';
 import Popover from '../ui/Popover';
 import { IconFanOut, IconImage, IconPlus } from '../icons';
 import { ChatAttachmentChips } from '../Chat/ChatAttachmentViews';
-import type { ChatAttachment } from '../Chat/chatAttachments';
+import { spliceAtCaret, type ChatAttachment } from '../Chat/chatAttachments';
+import { DictationButton, dictationAvailable } from '../Dictation/DictationButton';
 import { CardPhotos, ROOM_PHOTO_LIMIT, isRoomPhotoPath, photoOnlyCard, registerBotsDropTarget } from './BotsPhotos';
 import BotsFilePanel, { CardFiles, type OpenRoomFile } from './BotsFiles';
 import { renderBrainMarkdown, type MarkdownOptions } from '../shared/BrainMarkdown';
@@ -1504,6 +1505,21 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     inputRef.current?.focus();
   };
   const listId = `bots-mention-list-${workspaceId}-${threadId}`;
+  // Dictated text goes in at the caret (over a selection), for the owner to
+  // edit; it is never sent by itself.
+  const insertDictation = (value: string) => {
+    const el = inputRef.current;
+    const current = textNow.current;
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? start;
+    const next = spliceAtCaret(current.slice(0, start) + current.slice(end), start, value);
+    pendingCaret.current = next.caret;
+    textNow.current = next.text;
+    setText(next.text);
+    setCaret(next.caret);
+    if (conversation.kind === 'room') picks.onText(next.text);
+    el?.focus();
+  };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Never while the IME composes (a Korean syllable is still being built).
@@ -1701,6 +1717,9 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
           onPaste={(e) => void pastePhoto(e)}
           className="wmux-bots-composer-input text-[14px]"
         />
+        {dictationAvailable() && (
+          <DictationButton target={`bots:${workspaceId}:${threadId}`} onText={insertDictation} disabled={!!refusal} className="wmux-bots-composer-plus" />
+        )}
         <button
           type="submit"
           data-testid="bots-composer-send"

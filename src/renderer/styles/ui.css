@@ -3094,3 +3094,36 @@ button.wmux-a2a-row:hover { background: var(--hover-fill); }
   );
   background-size: 16px 16px;
 }
+
+/* Voice dictation. The composer's mic takes the host's icon button and reads
+ * pressed (--selection-emphasis, never colour) while it records; the dot is
+ * the one coloured mark (a live state, the accent, never the error red). The
+ * pane chip floats in a corner over the terminal and takes no layout row. */
+.wmux-dictation-btn[data-state="recording"],
+.wmux-dictation-btn[data-state="recording"]:hover:not(:disabled) { background: var(--selection-emphasis); --text-muted: var(--text-sub); color: var(--text-main); }
+.wmux-dictation-btn[data-state="busy"]:disabled { opacity: 1; cursor: progress; }
+.wmux-dictation-clock { display: inline-flex; align-self: center; align-items: center; gap: 5px; flex-shrink: 0; font-size: 11px; line-height: 16px; color: var(--text-sub); font-variant-numeric: tabular-nums; }
+.wmux-dictation-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 9999px; background: var(--accent); }
+.wmux-dictation-spin { width: 12px; height: 12px; flex-shrink: 0; border-radius: 9999px; border: 1.5px solid var(--text-muted); border-top-color: transparent; }
+.wmux-dictation-chip {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 15;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-main);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.wmux-dictation-hint { color: var(--text-muted); }
+.wmux-dictation-progress { height: 4px; border-radius: 9999px; background: var(--selection); overflow: hidden; }
+.wmux-dictation-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--text-sub); transition: width var(--motion-feedback, 120ms) ease-out; }

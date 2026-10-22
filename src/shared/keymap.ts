@@ -60,7 +60,7 @@ export const SHORTCUT_ACTION_IDS = [
   'toggleSidebar', 'toggleFileTree', 'openSettings', 'toggleFleetView', 'toggleCompanyView', 'toggleBotsView',
   'clearMultiview', 'openBrowser', 'openPrivateBrowser', 'addBookmark', 'toggleMessageFeed',
   'zoomIn', 'zoomOut', 'zoomReset',
-  'mentionAgent',
+  'mentionAgent', 'dictatePane',
   // Unbound by default (UNBOUND_SHORTCUTS): command-palette commands a user
   // can put on a key of their choosing.
   'stashPane', 'movePaneLeft', 'movePaneRight', 'movePaneUp', 'movePaneDown',
@@ -223,6 +223,11 @@ export const WMUX_KEYMAP: readonly KeymapEntry[] = [
     action: 'mentionAgent', combo: 'Ctrl+Shift+2', platformCombo: { win32: 'F2', linux: 'F2' },
     descriptionKey: 'settings.sc.mentionAgent',
   },
+
+  // Voice dictation into the focused pane, as a bracketed paste with no
+  // Enter: one press starts, the next stops and transcribes (Esc cancels).
+  // ⌘⇧S on macOS. Not Ctrl+Shift+Space, quick launch's global hotkey.
+  { action: 'dictatePane', combo: 'Ctrl+Shift+S', descriptionKey: 'settings.sc.dictatePane' },
 
   // The default prefix trigger. Configured in Settings → Prefix mode.
   { action: 'prefix', combo: 'Ctrl+B', literalCtrl: true, descriptionKey: null },
