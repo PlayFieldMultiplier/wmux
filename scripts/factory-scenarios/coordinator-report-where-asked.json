@@ -1,0 +1,75 @@
+{
+  "name": "coordinator-report-where-asked",
+  "layer": "regression",
+  "runs": 1,
+  "model": "stub",
+  "description": "The owner asks in General without naming a bot; the coordinator alone is woken and sends the review into the PR's thread (thread_id names it, so wmux opens no thread of its own). Main records on the dispatch the thread the owner asked in, from the run's own card (askedIn: general). The reviewer's result wakes the coordinator in the PR's thread, where it reports, and General gets one Finished pointer to that thread, replying to the owner's message.",
+  "setup": {
+    "repo": true,
+    "bots": [
+      {
+        "key": "lead",
+        "template": "coordinator",
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "dispatch",
+                    "to_bot_id": "{{bot.reviewer}}",
+                    "title": "Verify PR #42",
+                    "body": "Pass or fail at the head.",
+                    "thread_id": "pr:github.com/acme/app#42"
+                  }
+                }
+              ]
+            },
+            {
+              "steps": [
+                {
+                  "tool": "room_post",
+                  "args": {
+                    "kind": "report",
+                    "title": "PR #42 passed review",
+                    "body": "Ready to merge once you approve."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "key": "reviewer",
+        "template": "reviewer",
+        "repo": true,
+        "triggers": [],
+        "script": {
+          "turns": [
+            {
+              "steps": [
+                {
+                  "tool": "handoff_send",
+                  "args": {
+                    "kind": "result",
+                    "title": "PR #42 passes",
+                    "body": "The gate exited 0 at the head."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "actions": [
+    { "do": "post", "label": "ask", "post": { "title": "Is PR #42 good to go?" } },
+    { "do": "waitFor", "label": "lead reported", "cond": { "wakes": { "bot": "lead", "reason": "handoff", "state": "done" } }, "timeoutMs": 90000, "required": true },
+    { "do": "waitFor", "label": "quiet", "cond": { "idle": true, "quietMs": 5000 }, "timeoutMs": 30000 }
+  ],
+  "expect": { "requires": ["facts", "cards", "bots", "wakes", "handoffs"], "message": "ask", "lead": "lead", "reviewer": "reviewer", "thread": "pr:github.com/acme/app#42" }
+}

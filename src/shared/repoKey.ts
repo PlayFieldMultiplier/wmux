@@ -24,3 +24,12 @@ export function normalizeRepoKey(key: unknown): string | null {
   if (k.length > REPO_KEY_MAX || parts.length < 3 || parts.length > REPO_KEY_MAX_PARTS || parts.some((p) => !p || !SEGMENT_RE.test(p))) return null;
   return k;
 }
+
+/** The repository a bot acts on: its profile's key, normalized, and its
+ *  checkout's folder; null when either is missing (approvals and the wake
+ *  prompt read a bot's repository through this one test). Pure. */
+export function botRepo(profile: { repo?: { repoKey?: unknown; repoPath?: unknown } } | null | undefined): { repoKey: string; repoPath: string } | null {
+  const repoKey = normalizeRepoKey(profile?.repo?.repoKey);
+  const repoPath = profile?.repo?.repoPath;
+  return repoKey && typeof repoPath === 'string' && repoPath ? { repoKey, repoPath } : null;
+}

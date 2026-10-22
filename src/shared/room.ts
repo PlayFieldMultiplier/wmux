@@ -188,6 +188,11 @@ export interface RoomCard {
     requestCardId?: string;
     /** `secret_request` card: the env name asked for (never a value). */
     secretName?: string;
+    /** Main-written, on a Finished / Stopped pointer card written where the
+     *  owner asked for work that ran in a thread no conversation opened
+     *  (Handoff.askedIn): the pointer links that thread without tying it to
+     *  the conversation it sits in. */
+    pointer?: 'askedIn';
   };
   /** question / proposal / plan */
   state?: 'open' | 'resolved';

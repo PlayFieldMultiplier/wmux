@@ -28,6 +28,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { isCoordinatorBot, type BotBinding, type BotProfile } from '../../../shared/bot';
+import { botRepo } from '../../../shared/repoKey';
 import { FACTORY_READ_RPC, PLAN_RPC, botSurfaceRefusal, type BotToolName, type FactoryRefusal } from '../../../shared/botSurface';
 import type { RpcContext } from '../../../shared/rpc';
 import type { PrLaneFacts, PrReviewRead } from '../../../shared/prReview';
@@ -144,10 +145,11 @@ function enabledBots(bots: BotDirectoryApi | null): BotProfile[] {
   }
 }
 
-/** The repo a workspace's bots act on: the oldest enabled bot there with one. */
+/** The repo a workspace's bots act on: the oldest enabled bot there with one
+ *  (botRepo: a repo key and a checkout folder, as the wake prompt counts it). */
 export function workspaceRepo(bots: BotDirectoryApi | null, workspaceId: string): { repoPath: string } | null {
   const withRepo = enabledBots(bots)
-    .filter((b) => b.workspaceId === workspaceId && b.repo?.repoPath)
+    .filter((b) => b.workspaceId === workspaceId && botRepo(b))
     .sort((a, b) => a.createdAt - b.createdAt);
   const repoPath = withRepo[0]?.repo?.repoPath;
   return repoPath ? { repoPath } : null;
@@ -173,9 +175,8 @@ export async function repoScope(
       return refusal('cross_workspace', 'a bot reads its own workspace\'s repository; another workspace is a Coordinator\'s read');
     }
     workspaceId = (asked as string | undefined) ?? own.workspaceId;
-    repoPath = workspaceId === own.workspaceId && own.repo?.repoPath
-      ? own.repo.repoPath
-      : workspaceRepo(bots, workspaceId)?.repoPath ?? null;
+    const ownRepo = workspaceId === own.workspaceId ? botRepo(own) : null;
+    repoPath = ownRepo ? ownRepo.repoPath : workspaceRepo(bots, workspaceId)?.repoPath ?? null;
   } else {
     if (typeof asked !== 'string') return refusal('invalid', 'workspaceId is required');
     workspaceId = asked;

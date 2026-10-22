@@ -225,7 +225,12 @@ describe('approval requests (bot side)', () => {
     r.state.wakes.delete(DEV.id);
     expect(await r.svc.request(binding(DEV), { action: 'merge', prNumber: 1, reason: 'x' })).toMatchObject({ ok: false, code: 'not_running' });
     const noRepo = rig({ bots: () => ({ listEnabled: () => [], get: () => bot('bot-0000dev1', { repo: undefined }) }) });
-    expect(await noRepo.svc.request(binding(DEV), { action: 'merge', prNumber: 1, reason: 'x' })).toMatchObject({ ok: false, code: 'no_repo' });
+    // No bot of the workspace has one: the owner sets it.
+    expect(await noRepo.svc.request(binding(DEV), { action: 'merge', prNumber: 1, reason: 'x' })).toMatchObject({ ok: false, code: 'no_repo', message: expect.stringContaining('ask them to set a repository on a bot\'s profile') });
+    // Another bot of the workspace has one: hand the request to it.
+    const noOwn = bot('bot-0000dev1', { repo: undefined });
+    const withHolder = rig({ bots: () => ({ listEnabled: () => [noOwn, OTHER], get: (id) => [noOwn, OTHER].find((b) => b.id === id) ?? null }) });
+    expect(await withHolder.svc.request(binding(DEV), { action: 'merge', prNumber: 1, reason: 'x' })).toMatchObject({ ok: false, code: 'no_repo', message: expect.stringContaining('hand the request to a bot of this workspace that has the repository') });
     const r2 = rig();
     expect(await r2.svc.request(binding(DEV), { action: 'merge', prNumber: 7, reason: 'x' })).toMatchObject({ ok: false, code: 'read_failed' });
     r2.state.login = null;

@@ -97,6 +97,7 @@ import { fenceFor } from '../../shared/markdownFence';
 import { redactStoredSecrets } from './secretRedaction';
 import { normalizeRepoKey } from './repoWatch';
 import { isGitlabRepoKey } from '../github/hostLane';
+import { botRepo } from '../../shared/repoKey';
 import { laneRefusalCodes, laneRefusalLine } from './laneRefusalText';
 import { wakeReplyTo, type RoomWriter } from './roomWriter';
 import type { BotNoticeInput } from './botNotices';
@@ -610,9 +611,21 @@ export class ApprovalService {
       profile = null;
     }
     if (!profile || !profile.enabled || profile.workspaceId !== bot.workspaceId) return refuse('not_bot', 'this bot is not running in the factory');
-    const repoKey = normalizeRepoKey(profile.repo?.repoKey);
-    const repoPath = profile.repo?.repoPath ?? '';
-    if (!repoKey || !repoPath) return refuse('no_repo', 'this bot has no repository to act on');
+    const repo = botRepo(profile);
+    if (!repo) {
+      // What the bot can do instead: a bot of its workspace with a
+      // repository asks for it; with none, only the owner can set one.
+      let holder = false;
+      try {
+        holder = (this.ports.bots()?.listEnabled() ?? []).some((b) => b.enabled && b.workspaceId === bot.workspaceId && b.id !== bot.botId && !!botRepo(b));
+      } catch {
+        holder = false;
+      }
+      return refuse('no_repo', holder
+        ? 'this bot has no repository to act on: hand the request to a bot of this workspace that has the repository (handoff_send), which asks for it'
+        : 'this bot has no repository to act on, and no bot of this workspace has one: tell the owner in one line and ask them to set a repository on a bot\'s profile');
+    }
+    const { repoKey, repoPath } = repo;
 
     // One request per (bot, key): a retried turn gets the first one back.
     const clientRequestId = typeof raw.clientRequestId === 'string' ? raw.clientRequestId : this.nextOrdinal(bot.botId, wake);
