@@ -146,6 +146,11 @@ describe('imageRoots / readImageSource', () => {
 
 describe('A2aImageStore', () => {
   const store = (now = Date.now): A2aImageStore => new A2aImageStore({ a2aDir: path.join(dir, 'a2a'), uploadsRoot: path.join(dir, 'uploads'), now });
+  /** One image into the local folder: its path, or not kept. */
+  const putOne = async (s: A2aImageStore, bytes: Buffer, inUse: ReadonlySet<string> = new Set()): Promise<{ ok: true; path: string } | { ok: false }> => {
+    const got = await s.putLocal([{ bytes, info: { mediaType: 'image/png', width: 3, height: 3 } }], () => inUse);
+    return got.ok ? { ok: true, path: got.images[0].path } : { ok: false };
+  };
 
   it('claims an upload into the received folder under the receiver\'s own name, once', async () => {
     const s = store();
@@ -216,15 +221,15 @@ describe('A2aImageStore', () => {
   it('makes room in the local folder from its oldest copies nothing open names', async () => {
     const s = store();
     const kept = png(3, 3, 4, 255);
-    const keptAt = await s.putLocal(kept, { mediaType: 'image/png', width: 3, height: 3 }, () => false);
+    const keptAt = await putOne(s, kept);
     if (!keptAt.ok) throw new Error('first local copy not kept');
     const anHourAgo = new Date(Date.now() - 3600_000);
     fs.utimesSync(keptAt.path, anHourAgo, anHourAgo);
-    const inUse = (sha: string): boolean => sha === sha256(kept);
+    const inUse = new Set([sha256(kept)]);
     for (let i = 0; i < 101; i += 1) {
       const img = png(3, 3, 4 + i, i);
       // eslint-disable-next-line no-await-in-loop -- in order, oldest first
-      const got = await s.putLocal(img, { mediaType: 'image/png', width: 3, height: 3 }, inUse);
+      const got = await putOne(s, img, inUse);
       expect(got.ok).toBe(true);
     }
     const names = fs.readdirSync(path.join(dir, 'uploads', 'a2a', 'local'));
@@ -326,9 +331,8 @@ describe('A2aImageStore', () => {
 
   it('never evicts a local copy another send just found or wrote', async () => {
     const s = store();
-    const info = { mediaType: 'image/png', width: 3, height: 3 } as const;
     const a = png(3, 3, 4, 7);
-    const first = await s.putLocal(a, info, () => false);
+    const first = await putOne(s, a);
     if (!first.ok) throw new Error('first local copy not kept');
     const local = path.dirname(first.path);
     // Fill the folder; the copy of `a` is the oldest, so it is the first to make room.
@@ -338,10 +342,10 @@ describe('A2aImageStore', () => {
     const gate = holdUnlink(first.path);
     try {
       // Another send needs room and is about to remove the copy of `a`...
-      const other = s.putLocal(png(4, 4, 4, 8), info, () => false);
+      const other = putOne(s, png(4, 4, 4, 8));
       await gate.reached;
       // ...while a send of `a` itself is handed that copy's path.
-      const again = s.putLocal(a, info, () => false);
+      const again = putOne(s, a);
       await settledOrQueued(again);
       gate.release();
       expect((await other).ok).toBe(true);

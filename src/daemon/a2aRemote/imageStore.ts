@@ -59,7 +59,7 @@ const EXT: Record<A2aRemoteImageMediaType, string> = { 'image/png': 'png', 'imag
 
 export type ImageNotReceived = 'missing' | 'invalid' | 'full';
 
-export type StoredImage = { ok: true; path: string; info: A2aImageInfo; created?: true } | { ok: false; reason: ImageNotReceived };
+export type StoredImage = { ok: true; path: string; info: A2aImageInfo } | { ok: false; reason: ImageNotReceived };
 
 export interface A2aImageStoreOptions {
   /** `<wmuxDir>/a2a` */
@@ -146,33 +146,45 @@ export class A2aImageStore {
   }
 
   /**
-   * Keep an image an agent sent to a pane on this PC; its path is what the
-   * receiver reads. This folder is this PC's own, so when it is full its
-   * oldest files that nothing still open refers to (`inUse`) make room.
+   * Keep the images an agent sent to a pane on this PC, all or none; their
+   * paths are what the receiver reads. This folder is this PC's own, so when
+   * it is full its oldest files make room: never one of these, nor one that
+   * something open refers to (`inUse`, read when room is first needed).
+   *
+   * The whole batch is one turn of the queue. When a later image does not
+   * fit, the copies this call wrote go again, and no other call can have
+   * been handed one of them in between: a concurrent call for the same image
+   * runs wholly before (this call then finds that copy and leaves it) or
+   * wholly after (it writes its own).
    */
-  async putLocal(bytes: Buffer, info: A2aImageInfo, inUse: (sha: string) => boolean): Promise<StoredImage> {
-    const ref: A2aRemoteImageRef = { sha256: sha256(bytes), mediaType: info.mediaType, bytes: bytes.length };
-    // One at a time with every other write and sweep there: a copy another
-    // call just found or wrote is never evicted under it.
+  async putLocal(
+    images: ReadonlyArray<{ bytes: Buffer; info: A2aImageInfo }>,
+    inUse: () => ReadonlySet<string>,
+  ): Promise<{ ok: true; images: Array<{ path: string; info: A2aImageInfo }> } | { ok: false; reason: ImageNotReceived }> {
+    const batch = images.map(({ bytes, info }) => ({ bytes, ref: { sha256: sha256(bytes), mediaType: info.mediaType, bytes: bytes.length } as A2aRemoteImageRef }));
+    const own = new Set(batch.map((b) => b.ref.sha256));
     return this.incoming(async () => {
-      const existing = await this.findReceived(LOCAL_FOLDER, ref);
-      if (existing) return existing;
-      await this.evictLocal(bytes.length, inUse);
-      const stored = await this.keepReceived(LOCAL_FOLDER, ref, bytes);
-      return stored.ok ? { ...stored, created: true } : stored;
-    });
-  }
-
-  /** Remove the local copy of `sha` (whatever its type), one this PC just wrote; whether one was there. */
-  async discardLocal(sha: string): Promise<boolean> {
-    if (!A2A_SHA256_RE.test(sha)) return false;
-    return this.incoming(async () => {
-      let removed = false;
-      for (const ext of Object.values(EXT)) {
-        // eslint-disable-next-line no-await-in-loop -- three names at most
-        if (await unlinkQuiet(path.join(this.root, LOCAL_FOLDER, `${sha}.${ext}`))) removed = true;
+      let open: ReadonlySet<string> | undefined;
+      const kept: Array<{ path: string; info: A2aImageInfo }> = [];
+      const created: string[] = [];
+      for (const { bytes, ref } of batch) {
+        // eslint-disable-next-line no-await-in-loop -- a handful of small writes, in order
+        let stored = await this.findReceived(LOCAL_FOLDER, ref);
+        if (!stored) {
+          // eslint-disable-next-line no-await-in-loop -- as above
+          await this.evictLocal(bytes.length, (sha) => own.has(sha) || (open ??= inUse()).has(sha));
+          // eslint-disable-next-line no-await-in-loop -- as above
+          stored = await this.keepReceived(LOCAL_FOLDER, ref, bytes);
+          if (stored.ok) created.push(stored.path);
+        }
+        if (!stored.ok) {
+          // eslint-disable-next-line no-await-in-loop -- the few this call wrote
+          for (const full of created) await unlinkQuiet(full);
+          return { ok: false, reason: stored.reason };
+        }
+        kept.push({ path: stored.path, info: stored.info });
       }
-      return removed;
+      return { ok: true, images: kept };
     });
   }
 
