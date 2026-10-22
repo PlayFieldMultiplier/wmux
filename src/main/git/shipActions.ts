@@ -143,7 +143,8 @@ type Run = (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.Proces
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
 /**
- * Env for a git call that can run a signer (commit): an ssh-keygen that wants
+ * Env for a git call that can run a signer (commit, and push, which signs
+ * with push.gpgSign): an ssh-keygen that wants
  * a passphrase asks through SSH_ASKPASS, never a terminal, and an askpass
  * that fails (or cannot start) gives it none, so it fails at once with
  * "incorrect passphrase supplied". Detaching is not enough on Windows: Git
@@ -153,6 +154,8 @@ const MAX_OUTPUT = 4 * 1024 * 1024;
  * one) is kept and now always used; otherwise it is `false`, found on PATH
  * (Git for Windows ships one). gpg needs nothing: its pinentry runs from
  * gpg-agent, not on this console, and GPG_TTY is dropped by spawnRun.
+ * On a push over ssh it also covers ssh's own passphrase or host-key
+ * question: that fails at once too, as the auth error it is.
  */
 export function signerAskEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { SSH_ASKPASS_REQUIRE: 'force', SSH_ASKPASS: base.SSH_ASKPASS || 'false' };
@@ -465,7 +468,7 @@ export class ShipActions {
         const refused = this.secretRefusal(await scanCommits(this.gitLines(cwd), [expect.head, '--not', `--remotes=${remote}`]), 'pushed');
         if (refused) return refused;
       }
-      await this.git(['push', remote, `${expect.head}:${merge}`], cwd, 120_000, { GIT_TERMINAL_PROMPT: '0' });
+      await this.git(['push', remote, `${expect.head}:${merge}`], cwd, 120_000, { GIT_TERMINAL_PROMPT: '0', ...signerAskEnv(getExecEnv()) });
       return { ok: true };
     } catch (err) {
       return this.failed('push', cwd, err, remote && remote !== '.' ? remote : undefined);
