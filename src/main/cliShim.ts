@@ -108,12 +108,17 @@ export function buildShimCmd(): string {
     'set "WMUX_CODEX_ARGS="',
     // The handoff printed its own error and holds no lease.
     'if not defined WMUX_CODEX_LEASE exit /b 1',
+    // Codex, and every process it starts, gets the bearer and nothing else of
+    // the launch: a nested setlocal holds the rest back, and its endlocal
+    // brings the lease back for the release.
+    'setlocal',
     'set "ELECTRON_RUN_AS_NODE="',
     'set "CODEX_HOME=%WMUX_CODEX_HOME%"',
-    '"%WMUX_CODEX_EXE%" %WMUX_CODEX_LAUNCH% --remote-auth-token-env %*',
+    // cmd expands the whole line before any of its `set`s runs.
+    'set "WMUX_CODEX_EXE=" & set "WMUX_CODEX_LAUNCH=" & set "WMUX_CODEX_LEASE=" & set "WMUX_CODEX_HOME=" & set "WMUX_APP=" & "%WMUX_CODEX_EXE%" %WMUX_CODEX_LAUNCH% --remote-auth-token-env %*',
     'set "WMUX_CODEX_EXIT=%ERRORLEVEL%"',
+    'endlocal & set "WMUX_CODEX_EXIT=%WMUX_CODEX_EXIT%"',
     'set "codex="',
-    'set "ELECTRON_RUN_AS_NODE=1"',
     '"%WMUX_APP%\\wmux.exe" "%WMUX_APP%\\resources\\cli-bundle\\index.js" codex --wmux-release %WMUX_CODEX_LEASE%',
     'endlocal & exit /b %WMUX_CODEX_EXIT%',
     '',
@@ -363,6 +368,15 @@ export async function installCliShimAsync(execPath: string): Promise<void> {
     if (binDir) await runPathEditAsync(binDir, 'add');
   } catch (err) {
     console.warn('[cliShim] shim install failed (non-fatal):', err);
+  }
+}
+
+/** `<binDir>\wmux.cmd` is the script this build writes (a shim from an older build is not). */
+export function shimIsCurrent(binDir: string): boolean {
+  try {
+    return fs.readFileSync(path.join(binDir, 'wmux.cmd'), 'utf8') === buildShimCmd();
+  } catch {
+    return false;
   }
 }
 

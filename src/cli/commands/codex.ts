@@ -102,9 +102,14 @@ export async function codexRelease(leaseId:string|undefined):Promise<void> {
   if (typeof leaseId !== 'string' || !LEASE_ID.test(leaseId)) throw new Error('Invalid Codex pane lease.');
   const self = await resolveSelfContext({sendRequest,env:process.env,ppid:process.ppid,
     callerPid:process.pid,getParentPid:getParentPidDefault});
-  if (!self.workspaceToken) return;
-  setWorkspaceToken(self.workspaceToken);
-  await releaseLease(leaseId);
+  let released = false;
+  if (self.workspaceToken) {
+    setWorkspaceToken(self.workspaceToken);
+    const response = await sendRequest('codex.relay.close',{leaseId}).catch(()=>undefined) as {ok?:unknown} | undefined;
+    released = response?.ok === true;
+  }
+  // Codex has exited either way; the link it leaves behind is bounded on its own.
+  if (!released) process.stderr.write('wmux: could not close this pane\'s Codex link; it closes within 30 seconds or with the pane.\n');
 }
 
 /** Foreground native TUI. The child gets a per-launch bearer; neither its value

@@ -27,7 +27,7 @@ function probe(over: Partial<ReconcileProbe> = {}): ReconcileProbe {
   return {
     firstRun: false,
     freshInstall: false,
-    shimExists: true,
+    shimCurrent: true,
     binOnPath: true,
     autostartTarget: CUR,
     autostartTargetExists: true,
@@ -44,8 +44,8 @@ describe('planPostInstallReconcile', () => {
   });
 
   it('reinstalls a missing CLI shim on any boot', () => {
-    expect(planPostInstallReconcile(probe({ shimExists: false })).installCliShim).toBe(true);
-    expect(planPostInstallReconcile(probe({ shimExists: false, firstRun: true })).installCliShim).toBe(true);
+    expect(planPostInstallReconcile(probe({ shimCurrent: false })).installCliShim).toBe(true);
+    expect(planPostInstallReconcile(probe({ shimCurrent: false, firstRun: true })).installCliShim).toBe(true);
   });
 
   it('redoes the PATH edit when the shim exists but bin is not on PATH', () => {

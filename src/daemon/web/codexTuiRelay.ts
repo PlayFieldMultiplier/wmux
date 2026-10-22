@@ -236,7 +236,15 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
     }
     claimed = true;
     if (unclaimedTimer) clearTimeout(unclaimedTimer);
-    wss.handleUpgrade(request,socket,head,client=>wss.emit('connection',client));
+    // An upgrade the WebSocket layer aborts (a malformed handshake) never
+    // becomes a connection: give the claim back, and the wait it cleared.
+    let upgraded = false;
+    socket.once('close',()=>{
+      if (upgraded || retired) return;
+      claimed = false;
+      if (!loss && (authToken || left)) armUnclaimed();
+    });
+    wss.handleUpgrade(request,socket,head,client=>{upgraded = true;wss.emit('connection',client);});
   });
   wss.on('connection',client=>{
     sockets.add(client);

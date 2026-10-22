@@ -151,6 +151,30 @@ describe.skipIf(process.platform === 'win32')('pane-owned Codex Unix relay',()=>
       await expect(access(socketPath)).rejects.toThrow();
     } finally {await f.cleanup();}
   });
+  it('keeps the endpoint for the TUI\'s next connection, and removes it 30 s after the TUI left',async()=>{
+    // Without vi.waitFor, which advances fake timers while it polls.
+    let left:()=>void=()=>{ /* replaced below */ };
+    const gone=new Promise<void>(resolve=>{left=resolve;});
+    const made:{relay?:Awaited<ReturnType<typeof createCodexTuiRelay>>}={};
+    const f=await fixture({onStateChange:()=>{if(made.relay?.disconnected())left();}});
+    made.relay=f.relay;
+    const socketPath=f.relay.url.slice('unix://'.length);
+    try {
+      const client=await f.connect();await select(client,1);
+      vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
+      client.close();
+      await gone;
+      vi.advanceTimersByTime(29_999);
+      expect(f.relay.retired()).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(f.relay.retired()).toBe(true);
+      vi.useRealTimers();
+      // close() is idempotent: this waits for the one the bound started.
+      await f.relay.close();
+      await expect(access(socketPath)).rejects.toThrow();
+      await expect(access(path.dirname(socketPath))).rejects.toThrow();
+    } finally {vi.useRealTimers();await f.cleanup();}
+  });
   it('rejects browser origins without consuming the endpoint and closes malformed JSON',async()=>{
     const f=await fixture();
     try {

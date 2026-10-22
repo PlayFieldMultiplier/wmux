@@ -51,8 +51,8 @@ export interface ReconcileProbe {
   firstRun: boolean;
   /** Nobody had used wmux on this profile when this boot started (installProfile.isExistingProfile). */
   freshInstall: boolean;
-  /** `<root>\bin\wmux.cmd` exists. */
-  shimExists: boolean;
+  /** `<root>\bin\wmux.cmd` exists and is the script this build writes. */
+  shimCurrent: boolean;
   /** `<root>\bin` is on this process's PATH (the hook can stop between writing the shim and editing PATH). */
   binOnPath: boolean;
   /** Target of the Run value, or null when there is no value. */
@@ -87,7 +87,7 @@ export function planPostInstallReconcile(probe: ReconcileProbe): ReconcilePlan {
     if (!probe.startMenuShortcutExists) shortcuts.push('StartMenu');
   }
 
-  return { installCliShim: !probe.shimExists || !probe.binOnPath, autostart: autostartAction, shortcuts };
+  return { installCliShim: !probe.shimCurrent || !probe.binOnPath, autostart: autostartAction, shortcuts };
 }
 
 /**
@@ -188,7 +188,7 @@ export async function runPostInstallReconcile(opts: ReconcileOptions): Promise<R
     const plan = planPostInstallReconcile({
       firstRun: opts.firstRun,
       freshInstall: opts.freshInstall,
-      shimExists: fs.existsSync(path.join(root, 'bin', 'wmux.cmd')),
+      shimCurrent: cliShim.shimIsCurrent(path.join(root, 'bin')),
       binOnPath: isOnPath(path.join(root, 'bin'), process.env.PATH ?? process.env.Path),
       autostartTarget: target,
       autostartTargetExists: target !== null && autostartTargetAlive(target, root),

@@ -21,9 +21,12 @@ runs the CLI as a GUI-subsystem program with no console to hand a TUI. The CLI
 reserves the lease and passes the launch to the script through a pipe
 (`codex --wmux-handoff`, never to a terminal or a file); the script then runs
 Codex with your arguments as typed and releases the lease
-(`codex --wmux-release`). If the script is interrupted before the release, the
-lease ends with the pane or when the link has had no Codex connection for 30
-seconds, and cmd may ask "Terminate batch job (Y/N)?".
+(`codex --wmux-release`). Codex, and the tools it runs, see the link's bearer
+but not the lease or the rest of the launch. A release that fails says so. A
+lease that is not released (that, or an interrupted script, where cmd may ask
+"Terminate batch job (Y/N)?") ends with the pane or when the link has had no
+Codex connection for 30 seconds. An older `wmux.cmd` is rewritten at the
+next start of the app.
 
 Codex opens more than one connection over a session: its startup resume picker
 uses one, and the conversation opens the next. The relay takes the same launch's

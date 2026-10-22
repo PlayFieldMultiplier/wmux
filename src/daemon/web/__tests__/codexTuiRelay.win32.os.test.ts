@@ -3,7 +3,9 @@ import path from 'node:path';
 import {mkdtemp,rm} from 'node:fs/promises';
 import WebSocket,{WebSocketServer} from 'ws';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
-import {createCodexTuiRelay} from '../codexTuiRelay';
+import net from 'node:net';
+import {createCodexTuiRelay,type CodexRelayPolicy} from '../codexTuiRelay';
+import {windowsCodexSocketIdentity} from '../codexAccountSocket';
 
 // A Windows test of the relay's upgrade checks. Only there does the relay
 // listen on loopback TCP behind a per-launch bearer. The account server is
@@ -54,6 +56,7 @@ describe.runIf(process.platform === 'win32')('Codex TUI relay upgrade checks on 
     await new Promise<void>(resolve=>server.once('listening',()=>resolve()));
     const address = server.address();
     upstream.url = address && typeof address !== 'string' ? `ws://127.0.0.1:${address.port}` : '';
+    vi.mocked(windowsCodexSocketIdentity).mockResolvedValue('1:1');
   });
   afterEach(async()=>{
     vi.useRealTimers();
@@ -120,6 +123,71 @@ describe.runIf(process.platform === 'win32')('Codex TUI relay upgrade checks on 
       vi.advanceTimersByTime(1);
       expect(relay.retired()).toBe(true);
     } finally {vi.useRealTimers();await relay.close();}
+  });
+
+  it('gives the claim back when the WebSocket layer aborts an authenticated upgrade',async()=>{
+    const relay = await createCodexTuiRelay({codeHome:home});
+    const bearer = {authorization:`Bearer ${relay.authToken}`};
+    try {
+      const port = Number(new URL(relay.url).port);
+      const raw = net.connect(port,'127.0.0.1');
+      const reply = new Promise<string>(resolve=>{let text='';raw.on('data',bytes=>{text += bytes.toString();});raw.once('close',()=>resolve(text));});
+      // An unsupported WebSocket version: ws refuses the handshake itself.
+      raw.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nAuthorization: Bearer ${relay.authToken}\r\nSec-WebSocket-Version: 99\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`);
+      expect(await reply).toMatch(/^HTTP\/1\.1 400 /);
+      // Not stuck as claimed: the TUI's own connection still gets in.
+      const tui = await vi.waitFor(()=>open(relay,bearer),{timeout:10_000});
+      tui.close();
+    } finally {await relay.close();}
+  });
+
+  it('a TUI leaving ends that connection\'s phone decisions and pinned references',async()=>{
+    const owned = '22222222-89ab-4cde-8123-456789abcdef';
+    const pending:string[] = [];
+    const settled:{requestId:string;reason:string}[] = [];
+    const policy:CodexRelayPolicy = {paneId:'pty-a',identity:()=>({}),serverProven:()=>true,
+      owner:(threadId)=>threadId === owned ? {paneId:'pty-a',live:true} : undefined,recordOwner:()=>{ /* not exercised */ },
+      decisionPending:(requestId)=>{pending.push(requestId);},
+      decisionSettled:(requestId,_threadId,reason)=>{settled.push({requestId,reason});}};
+    const linkLost = vi.fn();
+    const relay = await createCodexTuiRelay({codeHome:home,policy,onLinkLost:linkLost});
+    try {
+      const tui = await open(relay,{authorization:`Bearer ${relay.authToken}`});
+      await vi.waitFor(()=>expect(relay.linked()).toBe(true),{timeout:10_000});
+      const delivered = new Promise<void>(resolve=>tui.once('message',()=>resolve()));
+      for (const link of server.clients) link.send(JSON.stringify({method:'item/commandExecution/requestApproval',id:5,
+        params:{threadId:owned,turnId:'turn-1',itemId:'call_5',availableDecisions:['accept','cancel'],command:'ls'}}));
+      await delivered;
+      expect(pending).toEqual(['5']);
+      tui.close();
+      await vi.waitFor(()=>expect(relay.disconnected()).toBe(true),{timeout:10_000});
+      expect(settled).toEqual([{requestId:'5',reason:'pane-gone'}]);
+      // The owner moves this relay to a new incarnation: nothing pinned to the old connection matches.
+      expect(linkLost).toHaveBeenCalledOnce();
+      expect(relay.retired()).toBe(false);
+    } finally {await relay.close();}
+  });
+
+  it('a TUI coming back on another account socket ends the old server\'s turns',async()=>{
+    const serverLost = vi.fn();
+    const relay = await createCodexTuiRelay({codeHome:home,onServerLost:serverLost});
+    const bearer = {authorization:`Bearer ${relay.authToken}`};
+    const cycle = async()=>{
+      const tui = await open(relay,bearer);
+      await vi.waitFor(()=>expect(relay.disconnected()).toBe(false),{timeout:10_000});
+      tui.close();
+      await vi.waitFor(()=>expect(relay.disconnected()).toBe(true),{timeout:10_000});
+    };
+    try {
+      await cycle();
+      // Back on the same socket: the server lived on.
+      await cycle();
+      expect(serverLost).not.toHaveBeenCalled();
+      // A restarted server binds a new socket.
+      vi.mocked(windowsCodexSocketIdentity).mockResolvedValue('2:2');
+      await cycle();
+      expect(serverLost).toHaveBeenCalledOnce();
+    } finally {await relay.close();}
   });
 
   it('closes a relay no TUI claimed within its claim window',async()=>{

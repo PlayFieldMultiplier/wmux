@@ -24,6 +24,8 @@ vi.mock('../../../shared/codexManagedExecutable',()=>({
 }));
 
 import {codexHandoff,codexRelease,handleCodex,quoteWindowsArg} from '../codex';
+import {sendRequest} from '../../client';
+import {resolveSelfContext} from '../../identity';
 
 /** What wmux.cmd's `for /f` reads: a pipe, as a net.Socket. */
 function pipe():{stream:NodeJS.WriteStream; text:()=>string} {
@@ -85,6 +87,21 @@ describe('wmux codex through wmux.cmd',()=>{
     expect(rpc.calls).toEqual([{method:'codex.relay.close',params:{leaseId:'11111111-2222-3333-4444-555555555555'}}]);
     await expect(codexRelease('../x')).rejects.toThrow();
     expect(rpc.calls).toHaveLength(1);
+  });
+
+  it('says so when it cannot release the lease',async()=>{
+    const stderr = vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
+    vi.mocked(resolveSelfContext).mockResolvedValueOnce({ptyId:'pty-1'} as Awaited<ReturnType<typeof resolveSelfContext>>);
+    await codexRelease('11111111-2222-3333-4444-555555555555');
+    expect(rpc.calls).toEqual([]);
+    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/could not close this pane's Codex link/));
+    stderr.mockClear();
+    vi.mocked(sendRequest).mockResolvedValueOnce({ok:false,error:'down'} as Awaited<ReturnType<typeof sendRequest>>);
+    await codexRelease('11111111-2222-3333-4444-555555555555');
+    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/could not close/));
+    stderr.mockClear();
+    await codexRelease('11111111-2222-3333-4444-555555555555');
+    expect(stderr).not.toHaveBeenCalled();
   });
 
   it('refuses to start Codex from a host with no console, before reserving a lease',async()=>{
