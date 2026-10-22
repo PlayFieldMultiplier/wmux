@@ -33,9 +33,12 @@ export function localEndName(l: A2aLinkRecordV1, names: LocalNames, t: T): strin
   return `${n.workspace} / ${n.pane}`;
 }
 
-/** The other end, without the PC's name (the row already says it). */
-function theirEnd(l: A2aLinkRecordV1): string {
-  if (l.remote.kind === 'brain') return 'Moa';
+/**
+ * The other end, without the PC's name (the row already says it). A brain end
+ * is named by the role that replaced Moa, the Coordinator.
+ */
+function theirEnd(l: A2aLinkRecordV1, t: T): string {
+  if (l.remote.kind === 'brain') return t('room.role.moa');
   return `${l.remote.workspaceName ?? l.remote.workspaceId}/${l.remote.label ?? l.remote.paneId ?? ''}`;
 }
 
@@ -73,7 +76,7 @@ export function A2aLinkRequestRow(p: A2aLinkRequestRowProps) {
         <span className="wmux-remote-req-text">
           {moa
             ? t('remotePage.needs.moaSentence', { pc: p.pcName })
-            : t('remotePage.needs.linkSentence', { pc: p.pcName, theirs: theirEnd(l), mine })}
+            : t('remotePage.needs.linkSentence', { pc: p.pcName, theirs: theirEnd(l, t), mine })}
         </span>
         <span className="wmux-remote-req-ev">
           <span data-testid="a2a-link-reported">{t('remotePage.needs.reported', { pc: p.pcName })}</span>
@@ -206,7 +209,7 @@ export function A2aLinkRow(p: A2aLinkRowProps) {
     <li className="wmux-remote-link" data-link-id={l.linkId} data-state={word} data-testid="a2a-link-row">
       <span className="wmux-remote-link-ln" aria-hidden="true"><IconElbow size={16} /></span>
       <span className="wmux-remote-link-what">
-        {`${localEndName(l, p.names, t)} ↔ ${remoteAlias(p.pcName, l.remote)} · `}
+        {`${localEndName(l, p.names, t)} ↔ ${remoteAlias(p.pcName, l.remote, t('room.role.moa'))} · `}
         {word === 'pending' ? t('remotePage.linkWaiting', { pc: p.pcName }) : t(DIRECTION_KEY[linkDirection(l.allow)])}
       </span>
       <span className="wmux-remote-acts">
