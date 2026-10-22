@@ -1264,8 +1264,8 @@ const electronAPI = {
     secretHookSet: (on: boolean) =>
       ipcRenderer.invoke(IPC.GIT_SECRET_HOOK_SET, on) as Promise<{ autoInstall: boolean; failed: string[] }>,
     // Each write names the branch + HEAD it was asked for; main refuses if either moved.
-    shipCommit: (repoPath: string, message: string, expect: import('../main/git/shipActions').ShipExpect) =>
-      ipcRenderer.invoke(IPC.GIT_SHIP_COMMIT, repoPath, message, expect) as Promise<import('../main/git/shipActions').ShipActionResult>,
+    shipCommit: (repoPath: string, message: string, expect: import('../main/git/shipActions').ShipExpect, opts?: import('../main/git/shipActions').ShipCommitOptions) =>
+      ipcRenderer.invoke(IPC.GIT_SHIP_COMMIT, repoPath, message, expect, opts) as Promise<import('../main/git/shipActions').ShipActionResult>,
     shipPush: (repoPath: string, expect: import('../main/git/shipActions').ShipExpect) =>
       ipcRenderer.invoke(IPC.GIT_SHIP_PUSH, repoPath, expect) as Promise<import('../main/git/shipActions').ShipActionResult>,
     shipCreatePr: (repoPath: string, title: string, expect: import('../main/git/shipActions').ShipExpect) =>

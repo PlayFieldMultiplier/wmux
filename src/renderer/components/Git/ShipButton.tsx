@@ -5,7 +5,14 @@
 // for a title (gh fills the body from the commits). Each write carries the
 // branch and HEAD the user saw (when the dialog opened or the step started);
 // main re-checks the step and refuses if either moved.
+//
+// A failed step says what went wrong in plain words when main named the
+// cause (signing, a protected branch, new commits on the remote, a refused
+// key or sign-in, a folder that is gone), with the one button that moves
+// on from it; anything else is a short line over git's output, folded.
 import { secretRefusalText } from './secretRefusal';
+import { GH_LOGIN_COMMAND, openGithubLoginTab } from './connectGithub';
+import { showWorkspaces } from '../../utils/showWorkspaces';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useT } from '../../hooks/useT';
 import { useStore } from '../../stores';
@@ -13,12 +20,12 @@ import { FOCUS_RING } from '../focusRing';
 import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
 import Popover from '../ui/Popover';
 import { Icon } from '../icons';
-import { shipState, type ShipAction, type ShipInput } from '../../../shared/gitShip';
-import type { ShipActionResult, ShipExpect, ShipStatusResult } from '../../../main/git/shipActions';
+import { shipBlock, shipState, type ShipAction, type ShipInput } from '../../../shared/gitShip';
+import type { ShipActionResult, ShipCommitOptions, ShipExpect, ShipStatusResult } from '../../../main/git/shipActions';
 
 interface ShipBridge {
   shipStatus: (repoPath: string) => Promise<ShipStatusResult>;
-  shipCommit: (repoPath: string, message: string, expect: ShipExpect) => Promise<ShipActionResult>;
+  shipCommit: (repoPath: string, message: string, expect: ShipExpect, opts?: ShipCommitOptions) => Promise<ShipActionResult>;
   shipPush: (repoPath: string, expect: ShipExpect) => Promise<ShipActionResult>;
   shipCreatePr: (repoPath: string, title: string, expect: ShipExpect) => Promise<ShipActionResult>;
 }
@@ -38,6 +45,89 @@ const LABEL: Record<ShipAction, string> = {
   openPr: 'git.ship.openPr',
 };
 
+type Failed = Extract<ShipActionResult, { ok: false }>;
+type T = ReturnType<typeof useT>;
+
+/** The existing "open a folder" flow (the new-workspace folder picker): the
+ *  Git page follows the active workspace, so it lands on the folder picked. */
+async function chooseFolderAgain(): Promise<void> {
+  const folders = await window.electronAPI?.dialog?.pickFolder?.();
+  const folder = folders?.[0];
+  if (!folder) return;
+  const state = useStore.getState();
+  state.addWorkspace(folder.split(/[/\\]/).filter(Boolean).pop() || 'Workspace', { startupCwd: folder });
+  showWorkspaces(useStore.getState());
+}
+
+/** One failure: the plain words, the one next step, git's own output folded. */
+function ShipFailure({ action, res, t, onUnsignedCommit, onCreatePr, createPrBlocked, busy }: {
+  action: ShipAction;
+  res: Failed;
+  t: T;
+  /** Commit once without signing (the open commit dialog's message). */
+  onUnsignedCommit?: () => void;
+  onCreatePr: () => void;
+  /** Why Create PR cannot run now, or null. */
+  createPrBlocked: string | null;
+  busy: boolean;
+}): React.ReactElement {
+  const [help, setHelp] = useState(false);
+  const pushToast = useStore((s) => s.pushToast);
+  const reason = res.secretScanFailed || res.secrets?.length ? null : res.reason ?? null;
+  const line = res.secretScanFailed
+    ? t('git.secret.scanFailed')
+    : res.secrets?.length
+      ? secretRefusalText(res.secrets, t)
+      : reason === 'auth' && res.forge
+        ? t(`git.ship.fail.auth.${res.forge}`)
+        : reason
+          ? t(`git.ship.fail.${reason}`)
+          : `${t(`git.ship.failed.${action}`)}.`;
+  const button = (label: string, onClick: () => void, extra: { disabled?: boolean; title?: string } = {}) => (
+    <button type="button" className={`wmux-git-button ${FOCUS_RING}`} onClick={onClick} disabled={busy || extra.disabled} title={extra.title} data-git-ship-fix={label}>
+      {label}
+    </button>
+  );
+  const signIn = async () => {
+    const ok = await openGithubLoginTab(t('git.connect.tabTitle'));
+    // No tab could run it: say the command to run instead.
+    if (!ok) pushToast({ level: 'info', message: GH_LOGIN_COMMAND });
+  };
+  let actions: React.ReactNode = null;
+  if (reason === 'signing') {
+    actions = (
+      <>
+        {onUnsignedCommit && button(t('git.ship.fail.signing.once'), onUnsignedCommit)}
+        {button(t('git.ship.fail.signing.help'), () => setHelp((v) => !v))}
+      </>
+    );
+  } else if (reason === 'protected') {
+    actions = button(t('git.ship.fail.protected.action'), onCreatePr, { disabled: !!createPrBlocked, title: createPrBlocked ?? undefined });
+  } else if (reason === 'remote-ahead') {
+    actions = button(t('git.ship.fail.remote-ahead.action'), () => showWorkspaces(useStore.getState()));
+  } else if (reason === 'auth') {
+    actions = res.forge === 'github'
+      ? button(t('git.ship.fail.auth.action'), () => void signIn())
+      : button(t('git.goTerminal'), () => showWorkspaces(useStore.getState()));
+  } else if (reason === 'missing-folder') {
+    actions = button(t('git.ship.fail.missing-folder.action'), () => void chooseFolderAgain());
+  }
+  const raw = !res.secrets?.length && !res.secretScanFailed && reason !== 'missing-folder' ? res.error.trim() : '';
+  return (
+    <div className="mt-2" role="alert" data-git-ship-failure={reason ?? (res.secrets?.length || res.secretScanFailed ? 'secrets' : 'other')}>
+      <p className="wmux-git-ship-error" style={{ marginTop: 0 }}>{line}</p>
+      {actions && <div className="mt-2 flex flex-wrap gap-2">{actions}</div>}
+      {help && <p className="mt-2 text-[12px] text-[var(--text-muted)]" data-git-ship-signing-help>{t('git.ship.fail.signing.helpText')}</p>}
+      {raw && (
+        <details className="mt-2 text-[11px] text-[var(--text-muted)]" data-git-ship-raw>
+          <summary className="cursor-pointer select-none">{t('git.ship.fail.details')}</summary>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono">{raw}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = '', onShipped }: {
   /** The current worktree. */
   repoPath: string;
@@ -49,10 +139,9 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
   onShipped?: () => void;
 }): React.ReactElement | null {
   const t = useT();
-  const pushToast = useStore((s) => s.pushToast);
   const [status, setStatus] = useState<Extract<ShipStatusResult, { ok: true }>['status'] | null>(null);
   // The last status read failed (the button stays, disabled, with this reason).
-  const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<Extract<ShipStatusResult, { ok: false }> | null>(null);
   // The branch + HEAD the open dialog acts on, captured when it opened.
   const [pinned, setPinned] = useState<ShipExpect | null>(null);
   // The repo answers belong to: a late answer for another repo is dropped.
@@ -62,7 +151,8 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<'commit' | 'createPr' | null>(null);
   const [text, setText] = useState('');
-  const [dialogError, setDialogError] = useState<string | null>(null);
+  // The last write's failure: shown in the open dialog, else under the button.
+  const [failure, setFailure] = useState<{ action: ShipAction; res: Failed } | null>(null);
   const req = useRef(0);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -78,7 +168,7 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
       setStatusError(null);
     } else {
       setStatus(null);
-      setStatusError(res.error);
+      setStatusError(res);
     }
   }, [repoPath]);
   // Another repo starts blank; a re-read of the same one replaces the status
@@ -92,26 +182,36 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
     return () => { req.current++; };
   }, [read, refreshKey, changeKey]);
 
-  // The menu closes on an outside click or Escape.
+  // The menu (and a failure shown under the button) closes on an outside click or Escape.
+  const floatingFailure = failure !== null && dialog === null;
   useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
+    if (!menuOpen && !floatingFailure) return;
+    const close = () => { setMenuOpen(false); if (floatingFailure) setFailure(null); };
+    const onDown = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) close(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [menuOpen]);
+  }, [menuOpen, floatingFailure]);
 
   if (!status) {
     // The step cannot be read: a disabled button that says why, not nothing.
     if (!statusError) return null;
+    const gone = statusError.reason === 'missing-folder';
     return (
       <div className="wmux-git-ship" data-git-ship="unknown">
-        <span className="wmux-git-ship-reason" data-git-ship-reason title={statusError}>{t('git.ship.statusFailed')}</span>
-        <button type="button" className={`wmux-git-primary ${FOCUS_RING}`} disabled data-git-ship-primary title={statusError}>
+        <span className="wmux-git-ship-reason" data-git-ship-reason title={statusError.error}>
+          {t(gone ? 'git.ship.fail.missing-folder' : 'git.ship.statusFailed')}
+        </span>
+        {gone && (
+          <button type="button" className={`wmux-git-button ${FOCUS_RING}`} onClick={() => void chooseFolderAgain()} data-git-ship-fix="missing-folder">
+            {t('git.ship.fail.missing-folder.action')}
+          </button>
+        )}
+        <button type="button" className={`wmux-git-primary ${FOCUS_RING}`} disabled data-git-ship-primary title={statusError.error}>
           {t('git.ship.commit')}
         </button>
       </div>
@@ -138,11 +238,10 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
     if (repoRef.current !== repo) return;
     setBusy(null);
     if (!res.ok) {
-      const why = res.secretScanFailed ? t('git.secret.scanFailed') : res.secrets?.length ? secretRefusalText(res.secrets, t) : res.error;
-      if (dialog) setDialogError(why);
-      else pushToast({ level: 'warn', message: `${t(`git.ship.failed.${action}`)}: ${why}` });
+      setFailure({ action, res });
       return;
     }
+    setFailure(null);
     setDialog(null);
     if (action === 'createPr' && res.url) window.open(res.url, '_blank');
     await read();
@@ -151,6 +250,7 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
 
   const run = async (action: ShipAction) => {
     setMenuOpen(false);
+    setFailure(null);
     const bridge = getShipBridge();
     if (!bridge || busy) return;
     if (action === 'openPr') {
@@ -160,7 +260,6 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
     if (!pinNow) return;
     if (action === 'commit' || action === 'createPr') {
       setText(action === 'commit' ? '' : status.headSubject);
-      setDialogError(null);
       setPinned(pinNow);
       setDialog(action);
       return;
@@ -170,14 +269,15 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
     await finish('push', await bridge.shipPush(repo, pinNow), repo);
   };
 
-  const submit = async () => {
+  /** `opts` only from the signing failure's "without signing" click. */
+  const submit = async (opts?: ShipCommitOptions) => {
     const bridge = getShipBridge();
     if (!bridge || !dialog || !pinned || busy || !text.trim()) return;
-    setDialogError(null);
+    setFailure(null);
     setBusy(dialog);
     const repo = repoPath;
     const res = dialog === 'commit'
-      ? await bridge.shipCommit(repo, text, pinned)
+      ? await (opts ? bridge.shipCommit(repo, text, pinned, opts) : bridge.shipCommit(repo, text, pinned))
       : await bridge.shipCreatePr(repo, text, pinned);
     await finish(dialog, res, repo);
   };
@@ -186,6 +286,18 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
   const reason = primary.blocked ? t(`git.ship.blocked.${primary.blocked}`) : '';
   // Open PR stays one click away while the next step is something else.
   const openPrBeside = !!status.pr && primary.action !== 'openPr';
+  const createPrBlock = shipBlock('createPr', input);
+  const failureEl = (inDialog: boolean) => failure && (
+    <ShipFailure
+      action={failure.action}
+      res={failure.res}
+      t={t}
+      busy={busy !== null}
+      onUnsignedCommit={inDialog && dialog === 'commit' ? () => void submit({ noSign: true }) : undefined}
+      onCreatePr={() => { setDialog(null); void run('createPr'); }}
+      createPrBlocked={createPrBlock ? t(`git.ship.blocked.${createPrBlock}`) : null}
+    />
+  );
 
   return (
     <div className="wmux-git-ship" data-git-ship={primary.action} ref={menuRef}>
@@ -222,6 +334,11 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
           </button>
         )}
       </div>
+      {floatingFailure && !menuOpen && (
+        <Popover padded className="wmux-git-ship-menu" style={{ width: 360 }} data-testid="git-ship-failure">
+          {failureEl(false)}
+        </Popover>
+      )}
       {menuOpen && (
         <Popover role="menu" className="wmux-git-ship-menu" data-testid="git-ship-menu">
           {menu.map((a) => (
@@ -232,7 +349,7 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
         </Popover>
       )}
       {dialog && (
-        <Dialog onClose={() => { if (!busy) setDialog(null); }} width={460} data-testid={`git-ship-${dialog}`}>
+        <Dialog onClose={() => { if (!busy) { setDialog(null); setFailure(null); } }} width={460} data-testid={`git-ship-${dialog}`}>
           <DialogHeader
             title={t(dialog === 'commit' ? 'git.ship.commitTitle' : 'git.ship.createPrTitle')}
             description={dialog === 'commit'
@@ -266,10 +383,10 @@ export function ShipButton({ repoPath, mergeActive, refreshKey = 0, changeKey = 
                 data-git-ship-text
               />
             )}
-            {dialogError && <p className="wmux-git-ship-error" role="alert">{dialogError}</p>}
+            {failureEl(true)}
           </DialogBody>
           <DialogFooter>
-            <button type="button" className={`wmux-git-button ${FOCUS_RING}`} disabled={busy !== null} onClick={() => setDialog(null)}>
+            <button type="button" className={`wmux-git-button ${FOCUS_RING}`} disabled={busy !== null} onClick={() => { setDialog(null); setFailure(null); }}>
               {t('git.ship.cancel')}
             </button>
             <button

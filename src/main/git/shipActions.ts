@@ -8,20 +8,24 @@
 // refspec, so push.default / remote.*.push cannot publish other branches.
 // Each write is pinned to the branch and HEAD the user saw: it is refused if
 // either moved, checked again right before the write.
+//
+// A failed write carries a `reason` when git's output says which of the
+// common causes it was (signing, a protected branch, a remote that moved on,
+// a refused key or sign-in, a working folder that is gone); the UI words it
+// and offers the one next step (renderer/components/Git/ShipButton.tsx).
 import { describeScanFailure, describeSecretFindings, type SecretFinding } from '../../shared/secretGuard';
 import { reviewRange, scanCommits, scanDiff, spawnGitLines, type GitLines, type SecretScanResult } from './secretScan';
 import { secretGuardEnabled } from './secretGuardSetting';
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { getExecEnv } from '../../shared/execEnv';
+import { configuredForge, forgeHosts } from '../../shared/forgeHosts';
 import { ghIssueEnv } from '../github/GhIssueService';
+import { isGithubForgeHost, parseRemoteHost } from '../github/PrProvider';
 import { prStatusCache } from '../metadata/PrStatusCache';
 import type { PrStatus } from '../../shared/types';
-
-const execFileAsync = promisify(execFile);
 
 export interface ShipStatus {
   /** null when detached. */
@@ -51,12 +55,42 @@ export interface ShipExpect {
   head: string;
 }
 
-export type ShipStatusResult = { ok: true; status: ShipStatus } | { ok: false; error: string };
+/** A failure the UI can put in plain words, with one next step. */
+export type ShipFailureReason =
+  /** gpg / ssh commit signing failed (including a signer that wanted a passphrase typed). */
+  | 'signing'
+  /** The remote refuses direct pushes to this branch. */
+  | 'protected'
+  /** The remote branch has commits this one lacks. */
+  | 'remote-ahead'
+  /** The remote refused the key or the sign-in. */
+  | 'auth'
+  /** The repository's folder is not there any more. */
+  | 'missing-folder';
+
+export type ShipStatusResult = { ok: true; status: ShipStatus } | { ok: false; error: string; reason?: 'missing-folder' };
 export type ShipActionResult =
   | { ok: true; url?: string }
-  /** `secrets`: refused because the change carries secret files or key-shaped
-   *  values (shared/secretGuard.ts); the UI words it from these. */
-  | { ok: false; error: string; secrets?: SecretFinding[]; secretScanFailed?: true };
+  /** `error`: git's own output (trimmed), shown collapsed under the plain words.
+   *  `secrets`: refused because the change carries secret files or key-shaped
+   *  values (shared/secretGuard.ts); the UI words it from these. `reason`:
+   *  one of the causes the UI words itself; `forge` names the remote's host
+   *  kind for an `auth` failure, when known. */
+  | {
+    ok: false;
+    error: string;
+    secrets?: SecretFinding[];
+    secretScanFailed?: true;
+    reason?: ShipFailureReason;
+    forge?: 'github' | 'gitlab';
+  };
+
+/** Options for one commit. */
+export interface ShipCommitOptions {
+  /** Commit this once without signing (`-c commit.gpgsign=false` on this one
+   *  git call); the user's git config is left as it is. */
+  noSign?: boolean;
+}
 
 /** Longest commit message / PR title accepted. */
 export const SHIP_TEXT_MAX = 10_000;
@@ -104,21 +138,111 @@ export function parseSymrefHead(raw: string): string | null {
 
 type Run = (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }) => Promise<{ stdout: string }>;
 
-const defaultRun: Run = (cmd, args, opts) =>
-  execFileAsync(cmd, args, { ...opts, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+const MAX_OUTPUT = 4 * 1024 * 1024;
 
+/** Runs `cmd` with no terminal to ask on: stdin is /dev/null and, off
+ *  Windows, the child leads a new session (no controlling TTY), and GPG_TTY is
+ *  dropped. A signer or ssh that wants a passphrase typed (pinentry-curses,
+ *  ssh-keygen reading /dev/tty or stdin) then fails at once with its own
+ *  message, instead of waiting out the timeout on a prompt nobody can see.
+ *  gpg-agent (a cached passphrase, a GUI pinentry) and ssh-agent are reached
+ *  through their sockets and keep working. A timeout kills the whole process
+ *  group, signer included. Rejects like execFile: an Error carrying `code`,
+ *  `signal`, `killed`, `stdout` and `stderr`. */
+export const spawnRun: Run = (cmd, args, opts) => new Promise((resolve, reject) => {
+  const posix = process.platform !== 'win32';
+  const env = { ...opts.env };
+  delete env.GPG_TTY;
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(cmd, args, { cwd: opts.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: posix, windowsHide: true });
+  } catch (err) {
+    reject(err);
+    return;
+  }
+  let stdout = '';
+  let stderr = '';
+  let killed = false;
+  let settled = false;
+  const kill = () => {
+    if (killed) return;
+    killed = true;
+    try {
+      if (posix && child.pid) process.kill(-child.pid, 'SIGKILL');
+      else child.kill('SIGKILL');
+    } catch {
+      child.kill('SIGKILL');
+    }
+  };
+  const timer = setTimeout(kill, opts.timeout);
+  const take = (to: 'out' | 'err') => (chunk: string) => {
+    if (to === 'out') stdout += chunk;
+    else stderr += chunk;
+    if (stdout.length + stderr.length > MAX_OUTPUT) kill();
+  };
+  child.stdout?.setEncoding('utf8').on('data', take('out'));
+  child.stderr?.setEncoding('utf8').on('data', take('err'));
+  child.on('error', (err) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    reject(Object.assign(err, { stdout, stderr }));
+  });
+  child.on('close', (code, signal) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    if (code === 0 && !killed) resolve({ stdout });
+    else reject(Object.assign(new Error(`${cmd} ${args.join(' ')} failed${killed ? ' (timed out)' : ''}`), { code, signal, killed, stdout, stderr }));
+  });
+});
+
+/** git's own words for a failure: its stderr, else the error's message. */
 function failure(err: unknown): string {
   const e = err as { stderr?: string; message?: string };
-  return (e?.stderr || e?.message || String(err)).trim().slice(0, 500);
+  return (e?.stderr || e?.message || String(err)).trim().slice(0, 2000);
+}
+
+const SIGNING = /failed to sign the data|Couldn't load public key|user\.signingkey needs to be set|incorrect passphrase supplied|Enter passphrase for|Load key "|signing failed|No secret key|gpg: skipped "/i;
+const PROTECTED = /\bGH006\b|protected branch|Changes must be made through a pull request|can only be modified through pull requests|\bTF402455\b/i;
+const REMOTE_AHEAD = /\[rejected\][^\n]*\((?:fetch first|non-fast-forward)\)|Updates were rejected because the (?:remote contains work|tip of your current branch is behind)/;
+const AUTH = /Permission denied \(publickey|Permission denied, please try again|Authentication failed for|could not read (?:Username|Password) for|Permission to \S+ denied to|HTTP Basic: Access denied|The requested URL returned error: 40[13]|gh auth login|HTTP 401/i;
+
+/** Which of the causes the UI words itself `output` (a failed command's
+ *  stderr) shows, for `action`; null for anything else. Pure. */
+export function classifyShipFailure(action: 'commit' | 'push' | 'createPr', output: string): Exclude<ShipFailureReason, 'missing-folder'> | null {
+  if (action === 'commit') return SIGNING.test(output) ? 'signing' : null;
+  if (action === 'push') {
+    if (PROTECTED.test(output)) return 'protected';
+    if (REMOTE_AHEAD.test(output)) return 'remote-ahead';
+  }
+  return AUTH.test(output) ? 'auth' : null;
+}
+
+/** github / gitlab from a remote URL's host, when it is known to be one. */
+function forgeOfUrl(url: string): 'github' | 'gitlab' | undefined {
+  const host = parseRemoteHost(url);
+  if (!host) return undefined;
+  if (isGithubForgeHost(host)) return 'github';
+  return configuredForge(host, forgeHosts()) === 'gitlab' || host.includes('gitlab') ? 'gitlab' : undefined;
 }
 
 class Moved extends Error {}
+
+/** A spawn that failed because `cwd` is gone. Node answers ENOENT for a
+ *  missing cwd as for a missing binary, so the disk is asked. */
+function folderGone(err: unknown, cwd: string, exists: (p: string) => boolean): boolean {
+  return (err as { code?: unknown })?.code === 'ENOENT' && !exists(cwd);
+}
+
+/** A git / gh failure in the ship result's shape. */
+type Failed = Extract<ShipActionResult, { ok: false }>;
 
 export class ShipActions {
   private defaultBranches = new Map<string, { value: string | null; at: number }>();
 
   constructor(
-    private run: Run = defaultRun,
+    private run: Run = spawnRun,
     private prOf: (cwd: string, branch: string) => Promise<PrStatus | null> = (cwd, branch) => prStatusCache.get(cwd, branch),
     private forgetPr: (cwd: string, branch: string) => void = (cwd, branch) => prStatusCache.invalidate(cwd, branch),
     private now: () => number = Date.now,
@@ -171,7 +295,7 @@ export class ShipActions {
     try {
       parsed = parseStatusV2((await this.git(['status', '--porcelain=v2', '--branch'], cwd)).stdout);
     } catch (err) {
-      return { ok: false, error: failure(err) };
+      return folderGone(err, cwd, this.exists) ? { ok: false, error: failure(err), reason: 'missing-folder' } : { ok: false, error: failure(err) };
     }
     const [inProgress, defaultBranch, headSubject, pr] = await Promise.all([
       this.inProgress(cwd),
@@ -202,18 +326,42 @@ export class ShipActions {
 
   /** Throws Moved unless the worktree is still on `expect`'s branch at its HEAD. */
   private async verify(cwd: string, expect: ShipExpect): Promise<void> {
+    // A folder that is gone is said as such, not as a moved branch.
+    const gone = (err: unknown) => { if (folderGone(err, cwd, this.exists)) throw err; return ''; };
     const [head, branch] = await Promise.all([
-      this.git(['rev-parse', 'HEAD'], cwd).then(({ stdout }) => stdout.trim()).catch(() => ''),
+      this.git(['rev-parse', 'HEAD'], cwd).then(({ stdout }) => stdout.trim()).catch(gone),
       this.git(['symbolic-ref', '-q', '--short', 'HEAD'], cwd).then(({ stdout }) => stdout.trim()).catch(() => ''),
     ]);
     if (head !== expect.head || branch !== expect.branch) throw new Moved('the branch changed since this was opened; check again');
   }
 
-  /** Stage every change (tracked and untracked) and commit it on `expect`. */
-  async commit(cwd: string, message: string, expect: ShipExpect): Promise<ShipActionResult> {
+  /** `err` as a failed result: plain-worded when it is one of the known causes. */
+  private async failed(action: 'commit' | 'push' | 'createPr', cwd: string, err: unknown, remote?: string): Promise<Failed> {
+    if (err instanceof Moved) return { ok: false, error: err.message };
+    const error = failure(err);
+    if (folderGone(err, cwd, this.exists)) return { ok: false, error, reason: 'missing-folder' };
+    let reason = classifyShipFailure(action, error);
+    // A signer that outlived the timeout leaves no words; with signing on, it was the signer.
+    if (!reason && action === 'commit' && (err as { killed?: boolean })?.killed) {
+      const signing = await this.git(['config', '--type=bool', '--get', 'commit.gpgsign'], cwd).then(({ stdout }) => stdout.trim(), () => '');
+      if (signing === 'true') reason = 'signing';
+    }
+    if (!reason) return { ok: false, error };
+    if (reason !== 'auth') return { ok: false, error, reason };
+    if (action === 'createPr') return { ok: false, error, reason, forge: 'github' };
+    const url = remote ? await this.git(['remote', 'get-url', remote], cwd).then(({ stdout }) => stdout.trim(), () => '') : '';
+    const forge = url ? forgeOfUrl(url) : undefined;
+    return { ok: false, error, reason, ...(forge ? { forge } : {}) };
+  }
+
+  /** Stage every change (tracked and untracked) and commit it on `expect`.
+   *  `opts.noSign` turns signing off for this one commit only. */
+  async commit(cwd: string, message: string, expect: ShipExpect, opts: ShipCommitOptions = {}): Promise<ShipActionResult> {
     const msg = message.trim();
     if (!msg) return { ok: false, error: 'a commit message is required' };
     if (msg.length > SHIP_TEXT_MAX) return { ok: false, error: 'the commit message is too long' };
+    // `-c` on this invocation only: the user's git config is never written.
+    const commitArgs = [...(opts.noSign ? ['-c', 'commit.gpgsign=false'] : []), 'commit', '-m', msg];
     try {
       await this.verify(cwd, expect);
       if (secretGuardEnabled()) {
@@ -225,7 +373,7 @@ export class ShipActions {
           const refused = this.secretRefusal(await scanDiff(this.gitLines(cwd, env), ['--cached']), 'committed');
           if (refused) return refused;
           await this.verify(cwd, expect);
-          await this.git(['commit', '-m', msg], cwd, 60_000, env);
+          await this.git(commitArgs, cwd, 60_000, env);
           // The real index catches up with the commit, as `add -A` + `commit` leaves it.
           try {
             await this.git(['reset', '-q'], cwd);
@@ -237,19 +385,24 @@ export class ShipActions {
       }
       await this.git(['add', '-A'], cwd);
       await this.verify(cwd, expect);
-      await this.git(['commit', '-m', msg], cwd, 60_000);
+      await this.git(commitArgs, cwd, 60_000);
       return { ok: true };
     } catch (err) {
-      return { ok: false, error: err instanceof Moved ? err.message : failure(err) };
+      return this.failed('commit', cwd, err);
     }
   }
 
   /** Push exactly `expect.head` to the branch's upstream branch on its remote;
    *  never prompts for credentials. */
   async push(cwd: string, expect: ShipExpect): Promise<ShipActionResult> {
+    let remote = '';
     try {
-      const cfg = (key: string) => this.git(['config', '--get', key], cwd).then(({ stdout }) => stdout.trim()).catch(() => '');
-      const [remote, merge] = await Promise.all([cfg(`branch.${expect.branch}.remote`), cfg(`branch.${expect.branch}.merge`)]);
+      const cfg = (key: string) => this.git(['config', '--get', key], cwd).then(({ stdout }) => stdout.trim()).catch((err) => {
+        if (folderGone(err, cwd, this.exists)) throw err;
+        return '';
+      });
+      const [rem, merge] = await Promise.all([cfg(`branch.${expect.branch}.remote`), cfg(`branch.${expect.branch}.merge`)]);
+      remote = rem;
       if (!remote || remote === '.' || !merge.startsWith('refs/heads/')) return { ok: false, error: 'the branch has no upstream branch on a remote' };
       await this.verify(cwd, expect);
       if (secretGuardEnabled()) {
@@ -260,7 +413,7 @@ export class ShipActions {
       await this.git(['push', remote, `${expect.head}:${merge}`], cwd, 120_000, { GIT_TERMINAL_PROMPT: '0' });
       return { ok: true };
     } catch (err) {
-      return { ok: false, error: err instanceof Moved ? err.message : failure(err) };
+      return this.failed('push', cwd, err, remote && remote !== '.' ? remote : undefined);
     }
   }
 
@@ -292,7 +445,7 @@ export class ShipActions {
       const url = stdout.split('\n').map((l) => l.trim()).find((l) => /^https:\/\//.test(l));
       return { ok: true, ...(url ? { url } : {}) };
     } catch (err) {
-      return { ok: false, error: err instanceof Moved ? err.message : failure(err) };
+      return this.failed('createPr', cwd, err);
     }
   }
 }
