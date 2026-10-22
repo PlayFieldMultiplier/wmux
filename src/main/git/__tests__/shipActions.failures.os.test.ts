@@ -320,6 +320,9 @@ describe('the IPC handler', () => {
     expect(await handlerFor(IPC.GIT_SHIP_STATUS)({}, gone)).toMatchObject({ ok: false, reason: 'missing-folder' });
     expect(await handlerFor(IPC.GIT_SHIP_COMMIT)({}, gone, 'msg', EXPECT)).toMatchObject({ ok: false, reason: 'missing-folder' });
     expect(await handlerFor(IPC.GIT_SHIP_PUSH)({}, gone, EXPECT)).toMatchObject({ ok: false, reason: 'missing-folder' });
+ 
+    // A network path is never looked up on disk, so it is never called missing.
+    expect(await handlerFor(IPC.GIT_SHIP_STATUS)({}, '\\\\server\\share\\repo')).toEqual({ ok: false, error: 'repoPath required' });
   });
 
   it('commits unsigned only when that call says noSign: true', async () => {

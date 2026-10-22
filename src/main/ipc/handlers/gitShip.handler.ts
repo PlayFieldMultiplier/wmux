@@ -13,7 +13,7 @@ import { ipcMain } from 'electron';
 import { existsSync } from 'node:fs';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
-import { resolveAccessiblePath } from './fs.handler';
+import { isNonLocalPath, resolveAccessiblePath } from './fs.handler';
 import { mergeStatus, repoLockKeyFor, withRepoLock } from './worktree.handler';
 import { shipActions, type ShipActionResult, type ShipExpect, type ShipStatus, type ShipStatusResult } from '../../git/shipActions';
 import { shipBlock, type ShipAction, type ShipInput } from '../../../shared/gitShip';
@@ -70,9 +70,11 @@ export async function checkWrite(cwd: string, action: ShipAction, expect: ShipEx
   return { ok: true, status: st };
 }
 
-/** The refusal for a repo path that does not resolve: its folder is gone, or it is not one wmux may use. */
+/** The refusal for a repo path that does not resolve: its folder is gone, or
+ *  it is not one wmux may use. A non-local path is never looked up on disk. */
 function unresolved(repoPath: string): { ok: false; error: string; reason?: 'missing-folder' } {
-  return existsSync(repoPath) ? { ok: false, error: 'repoPath required' } : { ok: false, error: 'the folder is not there any more', reason: 'missing-folder' };
+  if (isNonLocalPath(repoPath) || existsSync(repoPath)) return { ok: false, error: 'repoPath required' };
+  return { ok: false, error: 'the folder is not there any more', reason: 'missing-folder' };
 }
 
 async function guarded(
