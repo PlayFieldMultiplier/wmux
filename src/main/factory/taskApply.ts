@@ -65,6 +65,7 @@ import { getExecEnv } from '../../shared/execEnv';
 import { defaultGit, taskGitDirTarget, TASK_PUSH_TIMEOUT_MS, type TaskPushGit } from '../worktask/taskPush';
 import { recordedTaskGitCommonDir } from '../worktask/taskGitCommonDir';
 import { workerGitEnv, workerGitPreflight, workerGitSafeArgs, type GitConfigEntry } from '../worktask/workerGit';
+import { killProcessTree } from '../../daemon/automation/treeKill';
 
 /** The most files one Apply writes. */
 export const TASK_APPLY_MAX_FILES = 1000;
@@ -110,11 +111,15 @@ export const defaultRawGit = (args: string[], cwd: string, extra: Record<string,
   let size = 0;
   let err = '';
   let over = false;
-  let stopped = false;
+  // Set once this side stops git: the stop of its whole process tree.
+  let stopped: Promise<void> | null = null;
   const child = spawn('git', args, { cwd, env: { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  // The whole tree: a process git started (a shell alias, a hook, a helper)
+  // outlives a kill of git alone, and on Windows it keeps running with the
+  // checkout as its working folder.
   const stop = () => {
-    stopped = true;
-    child.kill();
+    if (stopped) return;
+    stopped = child.pid ? killProcessTree(child.pid).catch(() => undefined) : Promise.resolve();
   };
   const timer = setTimeout(stop, timeoutMs);
   child.stdout.on('data', (d: Buffer) => {
@@ -141,14 +146,14 @@ export const defaultRawGit = (args: string[], cwd: string, extra: Record<string,
     // as one (merge-base's "not an ancestor").
     resolve({ code: signal || code === null ? 128 : code, stdout: Buffer.concat(out), stderr: signal ? `${err}git was stopped (${signal})` : err });
   };
-  // A git this stopped is settled when it exits: a process it started (a
-  // shell alias, a hook) can hold the pipes open long after, and 'close'
-  // waits for every holder, so the timeout would last as long as that child.
+  // A git this stopped is settled once it and its tree are gone, not on
+  // 'close': that waits for every holder of the pipes, so a child that
+  // outlived the stop would stretch the timeout to its own length.
   child.on('exit', (code, signal) => {
     if (!stopped) return;
     child.stdout.destroy();
     child.stderr.destroy();
-    settle(code, signal ?? 'SIGTERM');
+    void stopped.then(() => settle(code, signal ?? 'SIGTERM'));
   });
   child.on('close', (code, signal) => {
     if (!stopped) settle(code, signal);

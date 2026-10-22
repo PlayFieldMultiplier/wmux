@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 import { applyTaskToCheckout, defaultRawGit, filteredPaths, isDivergedApply, lineEndingArgs, modesApplied, parseRawDiff, patchHasGitlink, patchPaths, privateGitInitArgs, repoObjectFormat, type TaskApplyPorts, type TaskApplyRawGit } from '../taskApply';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd(), getPath: () => '/tmp' }, dialog: {}, ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, nativeImage: {} }));
@@ -473,6 +474,15 @@ describe('where and how git apply runs', () => {
     expect(missing.code).toBe(128);
     const failing: TaskApplyRawGit = async (args, cwd, env, input) => (args.includes('merge-base') ? { code: 128, stdout: Buffer.alloc(0), stderr: 'git was stopped (SIGTERM)' } : defaultRawGit(args, cwd, env, input));
     expect(await applyTaskToCheckout(ports({ gitRaw: failing }), TASK)).toMatchObject({ ok: false, code: 'git_failed' });
+  });
+
+  it('stopping a git stops what it started too: a shell alias\'s child does not outlive the stop', async () => {
+    // The alias's child writes a marker after 3 s; stopped at 200 ms, it must never get there.
+    const marker = path.join(dir, 'outlived.txt');
+    const stopped = await defaultRawGit(['-c', `alias.slow=!sleep 3 && echo late > '${marker.replace(/\\/g, '/')}'`, 'slow'], dir, {}, undefined, 200);
+    expect(stopped.code).toBe(128);
+    await deliberateSleep(4000, 'a negative check: the alias child, had it survived, writes its marker at 3 s');
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it('a git apply --numstat that fails is reported as it is, not as a changed history', async () => {
