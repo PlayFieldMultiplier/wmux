@@ -47,12 +47,18 @@ export default function CloseTabConfirm() {
   const t = useT();
   const target = useStore((s) => s.closeTabConfirm);
   // What closing ends: a shell (a local PTY, or a remote session this desktop
-  // minted), only a view of a remote session someone else owns, or neither.
-  const closeKind = useStore((s): 'shell' | 'remoteView' | 'other' => {
+  // minted), only a view of a remote session someone else owns, a local
+  // placeholder slot (nothing runs in it), or none of these.
+  const closeKind = useStore((s): 'shell' | 'remoteView' | 'placeholder' | 'other' => {
     const ws = target ? s.workspaces.find((w) => w.id === target.workspaceId) : undefined;
     const pane = ws && target ? findLeaf(ws.rootPane, target.paneId) : null;
     const surface = pane?.surfaces.find((sf) => sf.id === target?.surfaceId);
-    if (surface?.surfaceType === 'remote-terminal') return surface.remoteOwned ? 'shell' : 'remoteView';
+    if (surface?.surfaceType === 'placeholder') return 'placeholder';
+    if (surface?.surfaceType === 'remote-terminal') {
+      // A duplicated workspace's clone has no session id, so it views nothing.
+      if (!surface.remoteSessionId) return 'other';
+      return surface.remoteOwned ? 'shell' : 'remoteView';
+    }
     return surface?.ptyId ? 'shell' : 'other';
   });
   const tabTitle = useStore((s) => {
@@ -77,7 +83,7 @@ export default function CloseTabConfirm() {
         title={tabTitle ? t('surface.closeTabNamed', { name: tabTitle }) : t('surface.closeTab')}
         // Closing a shell tab ends the shell and the programs attached to it;
         // programs started apart from the terminal may outlive it (#2555).
-        description={t(closeKind === 'shell' ? 'surface.closeConfirmShell' : closeKind === 'remoteView' ? 'surface.closeConfirmRemoteView' : 'surface.closeConfirm')}
+        description={closeKind === 'placeholder' ? undefined : t(closeKind === 'shell' ? 'surface.closeConfirmShell' : closeKind === 'remoteView' ? 'surface.closeConfirmRemoteView' : 'surface.closeConfirm')}
       />
       <DialogFooter>
         <Button variant="secondary" size="sm" onClick={cancel} data-close-tab-cancel>
