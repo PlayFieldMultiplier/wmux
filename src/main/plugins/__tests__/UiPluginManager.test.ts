@@ -271,4 +271,20 @@ describe('a refresh that is interrupted', () => {
     await test.manager.initialize();
     expect(fs.readdirSync(dir).sort()).toEqual(['.install-note', '.keep-me']);
   });
+
+  it('never follows a link named like a leftover', async () => {
+    const test = setup();
+    const outside = path.join(test.root, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'must survive');
+    fs.mkdirSync(test.options.pluginsDir, { recursive: true });
+    // A directory junction on Windows (no privilege needed), a directory symlink elsewhere.
+    fs.symlinkSync(outside, path.join(test.options.pluginsDir, '.install-link'), 'junction');
+    fs.symlinkSync(outside, path.join(test.options.pluginsDir, '.retired@office@link'), 'junction');
+    fs.writeFileSync(test.options.statePath, JSON.stringify({ version: 1, disabled: [], managed: ['office'] }));
+    await test.manager.initialize();
+    expect(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8')).toBe('must survive');
+    // Neither link is removed or restored as the office bundle.
+    expect(fs.readdirSync(test.options.pluginsDir).sort()).toEqual(['.install-link', '.retired@office@link']);
+  });
 });
