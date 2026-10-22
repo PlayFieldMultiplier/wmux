@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { PluginHostLoader } from '../PluginHostLoader';
-import type { PluginTrustStore } from '../../mcp/PluginTrustStore';
+import { PluginTrustStore } from '../../mcp/PluginTrustStore';
 
 const BUNDLE = path.resolve('examples/plugins/office');
 
@@ -66,6 +66,19 @@ describe('office example bundle', () => {
     for (const file of [...scripts, 'characters.png', 'furniture.png', 'README.md', 'LICENSE']) {
       expect(loader.resolveBundlePath('office', file), file).not.toBeNull();
     }
+  });
+
+  it('asks again when an Office approved for one workspace is updated to every workspace', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-office-upgrade-'));
+    roots.push(root);
+    fs.cpSync(BUNDLE, path.join(root, 'plugins', 'office'), { recursive: true });
+    const trust = new PluginTrustStore(path.join(root, 'plugin-trust.json'));
+    await trust.setUserDecision('office', 'trusted', ['ui.rail-page', 'agent.state.read', 'pane.read']);
+    await new PluginHostLoader(trust, path.join(root, 'plugins')).loadAll();
+    const record = await trust.get('office');
+    expect(record?.declaredCapabilities).toContain('agent.state.read.all');
+    // The wider declaration is not covered by the old approval.
+    expect(record?.status).toBe('unconfirmed');
   });
 });
 
