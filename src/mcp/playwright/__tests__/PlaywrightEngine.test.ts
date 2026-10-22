@@ -1987,7 +1987,7 @@ describe('PlaywrightEngine live-Chrome attach (Phase 3)', () => {
     return { page, browser };
   }
 
-  function mockLiveCdpInfo() {
+  function mockLiveCdpInfo(targets: unknown[] = []) {
     mockSendRpc.mockImplementation((method: string) => {
       if (method === 'browser.cdp.info') {
         return Promise.resolve({
@@ -1995,7 +1995,7 @@ describe('PlaywrightEngine live-Chrome attach (Phase 3)', () => {
           targetsScoped: true,
           workspaceBackend: 'chrome',
           // Live seeds only wmux-opened tabs; the pinned tab pre-exists.
-          targets: [],
+          targets,
         });
       }
       return Promise.resolve({});
@@ -2042,19 +2042,23 @@ describe('PlaywrightEngine live-Chrome attach (Phase 3)', () => {
     await expect(engine.isUnprotectedChrome('ws-A')).resolves.toBe(false);
     mockSendRpc.mockResolvedValueOnce({ workspaceBackend: 'builtin' });
     await expect(engine.isUnprotectedChrome('ws-A')).resolves.toBe(false);
-    mockSendRpc.mockRejectedValueOnce(new Error('no main'));
+    // Only main's non-Chrome branch answers this: a confirmed non-Chrome pane.
+    mockSendRpc.mockRejectedValueOnce(new Error('CDP remote debugging is unavailable: disabled.'));
     await expect(engine.isUnprotectedChrome('ws-A')).resolves.toBe(false);
+    // Anything else is unknown, never "not Chrome".
+    mockSendRpc.mockRejectedValueOnce(new Error('no main'));
+    await expect(engine.isUnprotectedChrome('ws-A')).rejects.toThrow(/could not tell whether this pane's browser is protected/);
   });
 
-  it('unprotected: a click-started download before any download tool is cancelled and deleted', async () => {
+  it.each(['agent', 'borrowed'])('unprotected, a tab the workspace holds (%s): a click-started download before any download tool is cancelled and deleted', async (owner) => {
     const { page, browser } = liveHarness('live-tab-7', 'https://mail.example/');
     const events = emitterOn(page);
     mockConnectOverCDP.mockResolvedValue(browser);
-    mockLiveCdpInfo();
+    mockLiveCdpInfo([{ surfaceId: 'live-tab-7', targetId: 'live-tab-7', owner }]);
 
     const engine = PlaywrightEngine.getInstance();
-    await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' });
-    await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' });
+    await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' }, { intent: 'write' });
+    await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' }, { intent: 'write' });
     expect(events.count('download')).toBe(1); // armed once per page
 
     const clicked = fakeDownload();
@@ -2074,18 +2078,44 @@ describe('PlaywrightEngine live-Chrome attach (Phase 3)', () => {
     expect(stray.cancel).toHaveBeenCalled();
   });
 
+  it('unprotected, a user-owned tab: neither a read nor a write arms the guard, and a user download goes through', async () => {
+    const { page, browser } = liveHarness('live-tab-7', 'https://mail.example/');
+    const events = emitterOn(page);
+    mockConnectOverCDP.mockResolvedValue(browser);
+    mockLiveCdpInfo(); // the user's own tab: absent from the workspace's rows
+
+    const engine = PlaywrightEngine.getInstance();
+    await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' });
+    await engine.getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' }, { intent: 'write' });
+    expect(events.count('download')).toBe(0);
+    const userDownload = fakeDownload();
+    events.emit('download', userDownload);
+    await flush();
+    expect(userDownload.cancel).not.toHaveBeenCalled();
+  });
+
+  it('unprotected, a held tab the agent only read: not armed', async () => {
+    const { page, browser } = liveHarness('live-tab-7', 'https://mail.example/');
+    const events = emitterOn(page);
+    mockConnectOverCDP.mockResolvedValue(browser);
+    mockLiveCdpInfo([{ surfaceId: 'live-tab-7', targetId: 'live-tab-7', owner: 'agent' }]);
+
+    await PlaywrightEngine.getInstance().getPageForScope({ workspaceId: 'ws-A', surfaceId: 'live-tab-7' });
+    expect(events.count('download')).toBe(0);
+  });
+
   it('protected: the guard is never armed and a click-started download is left as before', async () => {
     const { page, browser } = liveHarness('live-tab-7', 'https://mail.example/');
     const events = emitterOn(page);
     mockConnectOverCDP.mockResolvedValue(browser);
-    mockLiveCdpInfo();
+    mockLiveCdpInfo([{ surfaceId: 'live-tab-7', targetId: 'live-tab-7', owner: 'agent' }]);
 
     const engine = PlaywrightEngine.getInstance();
     const resolved = await engine.getPageForScope({
       workspaceId: 'ws-A',
       surfaceId: 'live-tab-7',
       protection: { protected: true, epoch: 1, hosts: { mode: 'allowlist', allow: ['mail.example'], block: [] } },
-    } as never);
+    } as never, { intent: 'write' });
     expect(resolved).toBe(page);
     // The lifecycle mirror was attached (same door), the guard was not.
     expect(events.count('framenavigated')).toBeGreaterThan(0);

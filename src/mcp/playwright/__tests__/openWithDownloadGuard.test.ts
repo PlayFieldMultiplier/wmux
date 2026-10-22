@@ -156,6 +156,23 @@ describe('browser_open as the first browser call', () => {
     expect(load).toMatchObject({ ok: false, error: expect.stringContaining('Download is starting') });
   });
 
+  it('a protection probe that fails refuses the URL load: nothing opens unguarded', async () => {
+    isUnprotectedChrome.mockRejectedValue(new Error("wmux could not tell whether this pane's browser is protected (no main)"));
+    const { calls, open } = openStandIn();
+    await expect(
+      openWithDownloadGuard(deps, 'browser_open', 'ws-1', DOWNLOAD_URL, open, (r) => r.surfaceId),
+    ).rejects.toThrow(/browser_open: the URL was not opened: .*could not tell/);
+    expect(calls).toEqual([]);
+  });
+
+  it('browser_tabs new: a protection probe that fails refuses too', async () => {
+    isUnprotectedChrome.mockRejectedValue(new Error('no main'));
+    const out = await tools.get('browser_tabs')!({ action: 'new', url: DOWNLOAD_URL });
+    expect(out.isError).toBe(true);
+    expect(text(out)).toContain('browser_tabs: the URL was not opened');
+    expect(mockSendRpc.mock.calls.find(([m]) => m === 'browser.tabs')).toBeUndefined();
+  });
+
   it('a URL the policy blocks opens nothing', async () => {
     isUnprotectedChrome.mockResolvedValue(true);
     const { calls, open } = openStandIn();

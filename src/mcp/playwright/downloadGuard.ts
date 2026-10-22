@@ -50,6 +50,11 @@ export function guardUnclaimedDownloads(page: Page): void {
   });
 }
 
+/** Whether the guard is already armed on `page`. */
+export function isDownloadGuardArmed(page: Page): boolean {
+  return downloadClaims.has(page);
+}
+
 /**
  * Claim the next download of a guarded page for a download tool. The returned
  * release withdraws the claim when no download arrived; it is a no-op once the

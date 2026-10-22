@@ -21,7 +21,7 @@ import {
 import { BrowserPolicyError, POLICY_DENIED_CODE } from '../../shared/browserPolicy';
 import { attachPageCapture } from './pageCapture';
 import { trackRequestBaseline } from './actionSettle';
-import { guardUnclaimedDownloads } from './downloadGuard';
+import { guardUnclaimedDownloads, isDownloadGuardArmed } from './downloadGuard';
 import {
   attachModalTracking,
   modalScopeKey,
@@ -790,7 +790,20 @@ export class PlaywrightEngine {
     // these tabs, so mirror navigations/closes engine-side (dogfood P1 — the
     // #1063 inline events went silent under 'chrome').
     if (page && this.workspaceBackend === 'chrome') {
-      this.attachLifecycleMirror(page, scope.workspaceId, scope.surfaceId, !isProtectedScope(scope));
+      this.attachLifecycleMirror(page, scope.workspaceId, scope.surfaceId);
+    }
+    // Unprotected pane: a tab the agent drives (a write) and holds — opened
+    // for this workspace or lent by the user — gets the download guard: a
+    // download no download tool claimed is cancelled and deleted. Never a tab
+    // the agent only read, and never a user's own tab, whose downloads are the
+    // user's. A protected pane is never armed: its browser denies downloads,
+    // and main lets the approved one through. Asked once per page.
+    if (
+      page && this.workspaceBackend === 'chrome' && opts.intent === 'write'
+      && !isProtectedScope(scope) && !isDownloadGuardArmed(page)
+      && (await this.agentHoldsTab(page, scope.workspaceId))
+    ) {
+      guardUnclaimedDownloads(page);
     }
     // Console/network capture starts HERE — the first time a page is resolved
     // (open / navigate / attach) — not on the first browser_console call
@@ -864,6 +877,24 @@ export class PlaywrightEngine {
     throw new AgentWindowScopeError(label, targetId);
   }
 
+  /**
+   * Whether main lists this tab as one the workspace holds: wmux opened it
+   * for the workspace, or the user lent it (live rows carry owner 'agent' /
+   * 'borrowed'; a dedicated Chrome lists only the tabs wmux opened). A user's
+   * own tab is absent or 'user'. False when it cannot be told.
+   */
+  private async agentHoldsTab(page: Page, workspaceId: string): Promise<boolean> {
+    const targetId = await this.targetIdOf(page);
+    if (!targetId) return false;
+    try {
+      const info = (await sendRpc('browser.cdp.info', { workspaceId })) as CdpInfoResponse;
+      const row = info.targets?.find((t) => t.targetId === targetId || t.surfaceId === targetId);
+      return !!row && row.owner !== 'user';
+    } catch {
+      return false;
+    }
+  }
+
   /** A Page's CDP target id, over a throwaway session (client-side Pages expose
    *  none). null when the page is gone or will not answer. */
   private async targetIdOf(page: Page): Promise<string | null> {
@@ -903,17 +934,22 @@ export class PlaywrightEngine {
    * backend, asked of main afresh (one cdp.info, which also starts that
    * Chrome). Such a pane opens a tab on about:blank and loads the URL through
    * a handed-out Page, so the download guard is armed before the first
-   * navigation. False when it cannot be told: the caller then keeps main's own
-   * open path, which main refuses the same way when it cannot serve the call.
+   * navigation. Throws when it cannot be told, so the caller refuses rather
+   * than opening the URL unguarded — except main's "CDP remote debugging is
+   * unavailable", which only its non-Chrome branch answers (Chrome is checked
+   * first), so it is a confirmed non-Chrome pane.
    */
   async isUnprotectedChrome(workspaceId: string): Promise<boolean> {
+    let info: CdpInfoResponse;
     try {
-      const info = (await sendRpc('browser.cdp.info', { workspaceId })) as CdpInfoResponse;
-      this.cacheShellUrl(info);
-      return info.workspaceBackend === 'chrome' && info.protected !== true;
-    } catch {
-      return false;
+      info = (await sendRpc('browser.cdp.info', { workspaceId })) as CdpInfoResponse;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/CDP remote debugging is unavailable/.test(message)) return false;
+      throw new Error(`wmux could not tell whether this pane's browser is protected (${message})`);
     }
+    this.cacheShellUrl(info);
+    return info.workspaceBackend === 'chrome' && info.protected !== true;
   }
 
   getWorkspaceBackend(): BrowserBackend | undefined {
@@ -938,15 +974,7 @@ export class PlaywrightEngine {
     this.localLifecycle.set(key, q);
   }
 
-  private attachLifecycleMirror(page: Page, workspaceId?: string, surfaceId?: string, unprotected = false): void {
-    // Unprotected pane: from the first time the page is handed out, a download
-    // no download tool claimed (a click, a key press or a navigation that
-    // started one) is cancelled and deleted. Idempotent per page; a download
-    // tool's claim still lets its own download through. A protected pane is
-    // never armed: its browser denies downloads, and main lets the approved
-    // one through. A change of protection reconnects, so a Page never carries
-    // the guard across it.
-    if (unprotected) guardUnclaimedDownloads(page);
+  private attachLifecycleMirror(page: Page, workspaceId?: string, surfaceId?: string): void {
     if (this.mirroredPages.has(page)) return;
     this.mirroredPages.add(page);
     const key = this.lifecycleKey(workspaceId, surfaceId);

@@ -292,9 +292,18 @@ export async function openWithDownloadGuard<R>(
   surfaceOf: (result: R) => string | undefined,
 ): Promise<{ result: R; load?: GuardedLoad }> {
   const engine = PlaywrightEngine.getInstance();
-  if (!url || !(await engine.isUnprotectedChrome(workspaceId))) {
-    return { result: await open(url) };
+  if (!url) return { result: await open(url) };
+  let guarded: boolean;
+  try {
+    guarded = await engine.isUnprotectedChrome(workspaceId);
+  } catch (err) {
+    // Unknown is not "not Chrome": refused rather than opened unguarded.
+    throw taggedFailure(
+      'unknown_error',
+      `${tool}: the URL was not opened: ${describeToolError(err)}. Retry, or open without a url.`,
+    );
   }
+  if (!guarded) return { result: await open(url) };
   const policy = await readNavigationPolicy();
   const check = validateNavigationUrl(url, policy);
   if (!check.valid) throw taggedFailure('invalid_params', `URL blocked: ${check.reason}`);
@@ -780,10 +789,13 @@ export function registerNavigationTools(server: McpServer, deps: BrowserToolDeps
             browserTabsError('BROWSER_TABS_SCOPE_REFUSED', message),
           );
         }
+        // openWithDownloadGuard's refusal says why the URL was not opened.
         return tabsToolError(
           browserTabsError(
             'BROWSER_TABS_UNAVAILABLE',
-            'Workspace-scoped browser tabs are temporarily unavailable.',
+            message.includes('the URL was not opened')
+              ? message
+              : 'Workspace-scoped browser tabs are temporarily unavailable.',
           ),
         );
       }
