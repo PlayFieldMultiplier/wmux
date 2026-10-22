@@ -352,7 +352,9 @@ describe('MoaPromptSync — the record follows main\'s dialog', () => {
     await flush();
     const records = pending(h);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ sessionId: SID, kind: 'terminal_prompt', summary: 'rm -rf dist' });
+    // Unbound, the card shows the screen's rows: B's command and the
+    // description drawn under it.
+    expect(records[0]).toMatchObject({ sessionId: SID, kind: 'terminal_prompt', summary: 'rm -rf dist · Remove the build cache' });
     expect(h.events.filter((e) => e.type === 'create')).toHaveLength(1);
     // Not asserted: B's card comes out unanswerable here (fail-closed). A's
     // PermissionRequest evidence outlives A, which never became a record, so

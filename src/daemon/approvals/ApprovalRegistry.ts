@@ -70,6 +70,7 @@ import {
   parsePlanPrompt,
   parseTerminalPrompt,
   terminalPromptAnswerability,
+  titleFromSubagent,
   titleSaysUnsandboxed,
   toolOfDialog,
   webSearchDetail,
@@ -1552,17 +1553,30 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
   /**
    * The ACTIVE dialog on the pane's screen, or null. Read a few times: the
    * PermissionRequest hook can land before the dialog is drawn.
+   *
+   * With no active dialog on any read, an ExitPlanMode dialog the parser does
+   * not read as active (its footer wrapped onto a third row, a status row
+   * drawn under it) is returned instead. The record built from it names
+   * ExitPlanMode and is never answerable, so typed keys stay locked: a record
+   * that names no tool would let a lone Enter land on the dialog's first row,
+   * which switches the session's permission mode.
    */
   private async readDialogForCreation(sessionId: string): Promise<DialogRead | null> {
     if (!this.deps.readPromptScreen) return null;
     const delay = this.deps.promptReadDelay
       ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms).unref?.(); }));
+    let shownPlan: DialogRead | null = null;
     for (let attempt = 1; attempt <= TERMINAL_PROMPT_CREATE_READS; attempt++) {
-      const read = await this.readActiveDialog(sessionId);
-      if (read) return read;
+      const readAt = this.now();
+      const screen = await this.readPromptScreenSafely(sessionId);
+      const read = screen ? this.parseActiveDialog(screen) : null;
+      if (read) return { ...read, readAt };
+      const plan = screen ? parsePlanPrompt(screen.rows, screen.cols ? { cols: screen.cols } : {}) : null;
+      // A later read that shows no plan: it is gone. An unreadable one tells nothing.
+      if (screen) shownPlan = plan ? { parsed: plan, mark: screen.mark, ...(screen.cols ? { cols: screen.cols } : {}), height: screen.rows.length, readAt } : null;
       if (attempt < TERMINAL_PROMPT_CREATE_READS) await delay(TERMINAL_PROMPT_CREATE_READ_GAP_MS);
     }
-    return null;
+    return shownPlan;
   }
 
   /** One screen read, parsed. Outside the mutation chain: a render can take seconds. */
@@ -1634,11 +1648,6 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     const detail = binding?.name === 'WebSearch' ? webSearch : binding?.input[binding.name === 'WebFetch' ? 'prompt' : 'description'];
     const description = typeof detail === 'string' && detail ? detail : undefined;
     const toolName = binding?.name ?? note.toolName ?? (parsed ? toolOfDialog(parsed) : undefined);
-    // The call's own input is the source of the summary; the screen only when
-    // there is no call to read it from. A WebSearch domain filter shows next to its query.
-    const summary = boundRecordText(command && webSearch ? `${command} (${webSearch})` : command, TERMINAL_PROMPT_SUMMARY_MAX)
-      ?? (parsed ? boundRecordText(parsed.commandText, TERMINAL_PROMPT_SUMMARY_MAX) : undefined)
-      ?? note.summary;
     // The summary is capped for display; the binding takes the WHOLE command.
     // A call that asked to run outside the sandbox: only that one may bind a
     // dialog titled `(unsandboxed)` (dialogMatchesToolCall).
@@ -1654,7 +1663,10 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
       // needs that evidence and the call to be provably the only one pending:
       // an unanswered tool_use is also what a RUNNING tool looks like, and its
       // output can print a question, options and a footer under its tail.
-      ? ((this.permissionEvidence.get(note.sessionId) ?? []).length === 0 || this.evidenceAgrees(note.sessionId, binding))
+      // The transcript is the lead's: a subagent's dialog never binds to its
+      // call, however alike the two calls are.
+      ? !titleFromSubagent(parsed.title)
+        && ((this.permissionEvidence.get(note.sessionId) ?? []).length === 0 || this.evidenceAgrees(note.sessionId, binding))
         && (parsed.topRuleFound
           ? dialogMatchesToolCall(parsed, call)
           : binding.unanswered === 1
@@ -1672,6 +1684,18 @@ export class ApprovalRegistry implements ApprovalRegistryApi, ApprovalHookSink {
     );
     const answer = bound ? terminalPromptAnswerability(parsed) : null;
     const answerable = !!answer?.answerable;
+    // The bound call's own input is the source of the summary. A WebSearch
+    // domain filter shows next to its query. Unbound, the card must show what
+    // the screen shows: typed keys answer that screen, and the call the note
+    // names may be another one (a second subagent's). The screen's rows are
+    // read as a command only when the dialog names its tool; the note's input
+    // and summary are the fallbacks.
+    const callSummary = boundRecordText(command && webSearch ? `${command} (${webSearch})` : command, TERMINAL_PROMPT_SUMMARY_MAX);
+    const screenSummary = parsed ? boundRecordText(parsed.commandText, TERMINAL_PROMPT_SUMMARY_MAX) : undefined;
+    const summary = (bound || !parsed || toolOfDialog(parsed) === undefined
+      ? callSummary ?? screenSummary
+      : screenSummary ?? callSummary)
+      ?? note.summary;
     // The phone card shows no title: a dialog that runs the call outside the
     // sandbox is flagged critical, so the approver gets the louder treatment
     // the terminal's "(unsandboxed)" title gives the person at the desk.
