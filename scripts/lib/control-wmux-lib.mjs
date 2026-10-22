@@ -5,6 +5,7 @@
 // tested without launching anything. See scripts/__tests__/controlWmux.test.mjs.
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseCimDate } from '../perf-process-tree.mjs';
 
 /**
  * Suffixes the driver must never launch or attach to:
@@ -121,6 +122,12 @@ export function launchEnv(baseEnv, suffix, extra = {}) {
     if (key.toUpperCase() === 'WMUX_DATA_SUFFIX') {
       return { refusal: '--env-file may not set WMUX_DATA_SUFFIX; pass --suffix' };
     }
+    // MCP registration writes the agents' real configs under Electron's own
+    // home, which a sandboxed HOME does not move: an isolated instance must
+    // never opt into it.
+    if (key.toUpperCase() === 'WMUX_MCP_REGISTER_EXTERNAL') {
+      return { refusal: '--env-file may not set WMUX_MCP_REGISTER_EXTERNAL (it writes the real ~/.claude.json and agent configs)' };
+    }
     if (typeof value !== 'string') return { refusal: `--env-file value for ${key} must be a string` };
     // One spelling per name: Windows env names are case-insensitive, and a
     // second `Path` next to `PATH` would be picked nondeterministically.
@@ -178,4 +185,60 @@ export function envHasSuffix(envText, suffix) {
   if (!suffix) return false;
   const escaped = suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(^|[\\s\\0])WMUX_DATA_SUFFIX=${escaped}($|[\\s\\0])`).test(String(envText ?? ''));
+}
+
+/**
+ * `ps -o lstart=` text (LC_ALL=C, e.g. `Thu Oct 22 10:00:05 2026`) as epoch
+ * ms, or null. One parser for every caller, so a creation time recorded by one
+ * script compares equal to the same process read by another.
+ */
+export function parseLstart(text) {
+  const t = Date.parse(String(text ?? '').trim().replace(/\s+/g, ' '));
+  return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * The command that reads one process's creation time. Its output goes through
+ * parseProcessStart.
+ *   - Windows: Win32_Process.CreationDate through `ConvertTo-Json`, the same
+ *     shape (and the same parseCimDate) as a whole-table listing, so the two
+ *     agree to the millisecond.
+ *   - POSIX: `ps -o lstart=` (second precision), run with LC_ALL=C.
+ */
+export function processStartQuery(pid, platform = process.platform) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (platform === 'win32') {
+    return {
+      file: 'powershell.exe',
+      args: ['-NoProfile', '-NonInteractive', '-Command',
+        `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object ProcessId,CreationDate | ConvertTo-Json -Compress`],
+    };
+  }
+  return { file: 'ps', args: ['-o', 'lstart=', '-p', String(pid)] };
+}
+
+/** A processStartQuery result as epoch ms; null when the process is gone or the output is unusable. */
+export function parseProcessStart(stdout, pid, platform = process.platform) {
+  const text = String(stdout ?? '').trim();
+  if (!text) return null;
+  if (platform === 'win32') {
+    let row;
+    try { row = JSON.parse(text); } catch { return null; }
+    if (Array.isArray(row)) row = row[0];
+    if (!row || Number(row.ProcessId) !== pid) return null;
+    return parseCimDate(row.CreationDate);
+  }
+  return parseLstart(text.split('\n')[0]);
+}
+
+/**
+ * Is the recorded process (pid + creation time captured right after spawn)
+ * the one holding that pid now? A missing creation time never matches:
+ * without it the driver cannot tell its own process from a reused pid.
+ */
+export function sameProcess(recorded, current) {
+  if (!recorded || !current) return false;
+  if (!Number.isInteger(recorded.pid) || recorded.pid <= 0) return false;
+  if (recorded.createdAt == null || current.createdAt == null) return false;
+  return recorded.pid === current.pid && recorded.createdAt === current.createdAt;
 }

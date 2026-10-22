@@ -37,6 +37,9 @@ import {
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
+  parseProcessStart,
+  processStartQuery,
+  sameProcess,
   scrubEnv,
   suffixRefusal,
   suffixedPaths,
@@ -100,6 +103,29 @@ function pidAlive(pid) {
   } catch (err) {
     return err.code === 'EPERM';
   }
+}
+
+/** A live process's creation time (epoch ms), or null when it is gone or unreadable. */
+function processStartedAt(pid) {
+  const q = processStartQuery(pid);
+  if (!q) return null;
+  const r = spawnSync(q.file, q.args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 30_000,
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  return r.status === 0 ? parseProcessStart(r.stdout, pid) : null;
+}
+
+/**
+ * Is the app this state recorded (pid + creation time, taken right after
+ * spawn) still the process holding that pid? The only test that lets `stop`
+ * or `restart` signal it: a pid alone may have been reused by anything.
+ */
+function recordedAppAlive(state) {
+  if (!state?.pid || state.pidCreatedAt == null || !pidAlive(state.pid)) return false;
+  return sameProcess({ pid: state.pid, createdAt: state.pidCreatedAt }, { pid: state.pid, createdAt: processStartedAt(state.pid) });
 }
 
 function readPidFile(file) {
@@ -261,7 +287,8 @@ async function cdpScreenshot(page, timeoutMs = 8000) {
 // ---------------------------------------------------------------- commands
 async function cmdLaunch(opts, reconnectState = null) {
   const existing = readState();
-  if (existing && pidAlive(existing.pid)) {
+  // A state without a recorded creation time (older driver) stays conservative.
+  if (existing && (existing.pidCreatedAt == null ? pidAlive(existing.pid) : recordedAppAlive(existing))) {
     fail(`an instance launched by this driver is still running (pid ${existing.pid}, suffix ${existing.suffix}); run \`stop\` first`);
   }
   const suffix = String(opts.suffix || `-verify-${crypto.randomBytes(3).toString('hex')}`);
@@ -301,9 +328,18 @@ async function cmdLaunch(opts, reconnectState = null) {
   // Renderer console -> stderr -> app.log, so `console` can read history.
   env.ELECTRON_ENABLE_LOGGING = '1';
   const child = spawn(app, [], { env, detached: true, stdio: ['ignore', logFd, logFd] });
-  child.unref();
   fs.closeSync(logFd);
   state.pid = child.pid;
+  // The app's identity is its pid AND its creation time, read while we still
+  // hold the spawn handle: `stop` and `restart` signal state.pid only while
+  // both still match. Without it a reused pid would be indistinguishable.
+  state.pidCreatedAt = processStartedAt(child.pid);
+  if (state.pidCreatedAt == null) {
+    // Through our own handle, which cannot point at a reused pid.
+    child.kill();
+    fail(`could not read the launched app's creation time (pid ${child.pid}); stopped it through its spawn handle. See ${logPath}`);
+  }
+  child.unref();
   state.logPath = logPath;
   if (envFile) state.envFile = envFile;
   writeState(state);
@@ -574,12 +610,19 @@ function daemonCli(app) {
   return candidates.find((p) => fs.existsSync(p)) ?? null;
 }
 
-/** process.kill that treats "already gone" (ESRCH) as success. */
+/**
+ * process.kill that reports instead of throwing for the two expected misses:
+ * 'gone' (ESRCH) and 'denied' (EPERM: pidAlive says alive, but the process is
+ * not ours to signal). Callers record a skip; `stop` must not abort on one.
+ */
 function signal(pid, sig) {
   try {
     process.kill(pid, sig);
+    return 'sent';
   } catch (err) {
-    if (err.code !== 'ESRCH') throw err;
+    if (err.code === 'ESRCH') return 'gone';
+    if (err.code === 'EPERM') return 'denied';
+    throw err;
   }
 }
 
@@ -608,8 +651,9 @@ async function cmdRestart(opts) {
   if (!daemonPid || !pidAlive(daemonPid) || !envHasSuffix(processEnvText(daemonPid), state.suffix)) {
     fail('restart needs a live daemon owned by the recorded isolated instance');
   }
+  if (!recordedAppAlive(state)) fail(`the recorded app (pid ${state.pid}) is gone or its pid now belongs to another process; run stop then launch`);
   // Use the same graceful detach as stop, but deliberately retain the daemon.
-  signal(state.pid, 'SIGTERM');
+  if (signal(state.pid, 'SIGTERM') === 'denied') fail(`not permitted to signal pid ${state.pid}`);
   if (!(await waitDead(state.pid, 10_000))) fail('app did not exit; run doctor then stop');
   timeline(state, { cmd: 'restart', previousPid: state.pid, retainedDaemonPid: daemonPid });
   const result = await cmdLaunch({ app: state.app, suffix: state.suffix, timeout: opts.timeout }, state);
@@ -622,15 +666,23 @@ async function cmdStop(opts) {
   const steps = [];
   const env = scrubEnv(process.env, state.suffix);
 
-  // 1. The app: only the pid we spawned. SIGTERM detaches it from its daemon.
-  if (pidAlive(state.pid)) {
-    signal(state.pid, 'SIGTERM');
-    if (!(await waitDead(state.pid, 10_000))) {
-      signal(state.pid, 'SIGKILL');
-      await waitDead(state.pid, 3000);
-      steps.push(`app pid ${state.pid}: SIGKILL after SIGTERM timeout`);
+  // 1. The app: only the process we spawned, by pid AND creation time. If the
+  // app died, its pid may already belong to someone else: never signal it.
+  // SIGTERM detaches it from its daemon.
+  if (!pidAlive(state.pid)) steps.push(`app pid ${state.pid}: already gone`);
+  else if (state.pidCreatedAt == null) steps.push(`app pid ${state.pid}: no creation time recorded, identity not verified, not signalled`);
+  else if (!recordedAppAlive(state)) steps.push(`app pid ${state.pid}: now another process (creation time differs), not signalled`);
+  else {
+    const sent = signal(state.pid, 'SIGTERM');
+    if (sent === 'denied') steps.push(`app pid ${state.pid}: not permitted to signal, skipped`);
+    else if (!(await waitDead(state.pid, 10_000))) {
+      // Re-check identity before the hard kill: 10 s is long enough to matter.
+      if (recordedAppAlive(state) && signal(state.pid, 'SIGKILL') === 'sent') {
+        await waitDead(state.pid, 3000);
+        steps.push(`app pid ${state.pid}: SIGKILL after SIGTERM timeout`);
+      } else steps.push(`app pid ${state.pid}: SIGTERM timed out; identity or permission lost, not killed`);
     } else steps.push(`app pid ${state.pid}: exited on SIGTERM`);
-  } else steps.push(`app pid ${state.pid}: already gone`);
+  }
 
   // 2. The daemon our instance spawned (a normal quit only detaches from it).
   // Ask it to shut down over its own suffixed socket; fall back to the pid in
@@ -647,9 +699,11 @@ async function cmdStop(opts) {
       // A stale pid file can name a reused pid: only signal a process whose own
       // environment carries this run's suffix.
       if (envHasSuffix(processEnvText(daemonPid), state.suffix)) {
-        signal(daemonPid, 'SIGTERM');
-        steps.push(`daemon pid ${daemonPid}: SIGTERM (identity verified by WMUX_DATA_SUFFIX)`);
-        await waitDead(daemonPid, 5000);
+        if (signal(daemonPid, 'SIGTERM') === 'denied') steps.push(`daemon pid ${daemonPid}: not permitted to signal, skipped`);
+        else {
+          steps.push(`daemon pid ${daemonPid}: SIGTERM (identity verified by WMUX_DATA_SUFFIX)`);
+          await waitDead(daemonPid, 5000);
+        }
       } else steps.push(`daemon pid ${daemonPid}: still running, identity not verified, not signalled`);
     } else steps.push(`daemon pid ${daemonPid}: stopped`);
   } else steps.push('daemon: not running');
@@ -680,7 +734,10 @@ async function cmdStop(opts) {
     }
   }
 
-  const leftover = [state.pid, readPidFile(daemonPidFile) ?? daemonPid].filter((p) => p && pidAlive(p));
+  const leftover = [
+    recordedAppAlive(state) ? state.pid : null,
+    ...[readPidFile(daemonPidFile) ?? daemonPid].filter((p) => p && pidAlive(p)),
+  ].filter(Boolean);
   timeline(state, { cmd: 'stop', steps, removed, leftover });
   const evidence = evidenceDir(state);
   fs.renameSync(STATE_FILE, path.join(RUN_DIR, `stopped-${state.runId}.json`));

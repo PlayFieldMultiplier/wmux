@@ -16,6 +16,10 @@ import {
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
+  parseLstart,
+  parseProcessStart,
+  processStartQuery,
+  sameProcess,
   scrubEnv,
   suffixRefusal,
 } from '../lib/control-wmux-lib.mjs';
@@ -79,6 +83,45 @@ describe('launchEnv', () => {
     expect(launchEnv({}, '-verify-a', { wmux_data_suffix: '' }).refusal).toMatch(/--suffix/);
     expect(launchEnv({}, '-verify-a', { X: 1 }).refusal).toMatch(/must be a string/);
     expect(launchEnv({}, '-verify-a', ['x']).refusal).toMatch(/JSON object/);
+  });
+
+  it('refuses WMUX_MCP_REGISTER_EXTERNAL in any spelling: it writes the real agent configs', () => {
+    expect(launchEnv({}, '-verify-a', { WMUX_MCP_REGISTER_EXTERNAL: '1' }).refusal).toMatch(/WMUX_MCP_REGISTER_EXTERNAL/);
+    expect(launchEnv({}, '-verify-a', { wmux_mcp_register_external: '0' }).refusal).toMatch(/WMUX_MCP_REGISTER_EXTERNAL/);
+    // Inherited, it never reaches the instance either: the scrub drops WMUX_*.
+    expect(launchEnv({ WMUX_MCP_REGISTER_EXTERNAL: '1' }, '-verify-a', {}).env).toEqual({ WMUX_DATA_SUFFIX: '-verify-a' });
+  });
+});
+
+describe('process identity (pid + creation time)', () => {
+  it('reads one CIM row the way a whole-table listing does', () => {
+    expect(processStartQuery(1234, 'win32').args.at(-1)).toContain('ProcessId=1234');
+    expect(parseProcessStart('{"ProcessId":1234,"CreationDate":"\\/Date(1784777530054)\\/"}', 1234, 'win32')).toBe(1784777530054);
+    // Another pid's row, no row (process gone), or garbage: unknown.
+    expect(parseProcessStart('{"ProcessId":99,"CreationDate":"\\/Date(1)\\/"}', 1234, 'win32')).toBeNull();
+    expect(parseProcessStart('', 1234, 'win32')).toBeNull();
+    expect(parseProcessStart('nope', 1234, 'win32')).toBeNull();
+  });
+
+  it('reads ps lstart on POSIX', () => {
+    expect(processStartQuery(42, 'darwin')).toEqual({ file: 'ps', args: ['-o', 'lstart=', '-p', '42'] });
+    expect(parseProcessStart('Thu Oct 22 10:00:05 2026\n', 42, 'linux')).toBe(parseLstart('Thu  Oct 22 10:00:05 2026'));
+    expect(parseProcessStart('', 42, 'linux')).toBeNull();
+  });
+
+  it('never builds a query for a non-pid', () => {
+    expect(processStartQuery(0, 'win32')).toBeNull();
+    expect(processStartQuery('1; Remove-Item x', 'win32')).toBeNull();
+  });
+
+  it('matches only the same pid with the same creation time', () => {
+    const recorded = { pid: 10, createdAt: 1000 };
+    expect(sameProcess(recorded, { pid: 10, createdAt: 1000 })).toBe(true);
+    // The pid was reused by a process that started later.
+    expect(sameProcess(recorded, { pid: 10, createdAt: 5000 })).toBe(false);
+    // Gone (no creation time readable), or never recorded: no match.
+    expect(sameProcess(recorded, { pid: 10, createdAt: null })).toBe(false);
+    expect(sameProcess({ pid: 10, createdAt: undefined }, { pid: 10, createdAt: 1000 })).toBe(false);
   });
 });
 

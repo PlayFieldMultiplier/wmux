@@ -29,7 +29,7 @@ node scripts/control-wmux.mjs launch --suffix -verify-mytest --timeout 90000
 node scripts/control-wmux.mjs launch --app <exe> --env-file vars.json   # extra env, applied after the scrub below
 ```
 
-`--env-file` takes a JSON object of string values, set on the app after the scrub (so a `WMUX_*` knob such as `WMUX_NO_PATH_REFRESH` survives it); it may not set `WMUX_DATA_SUFFIX`. `restart` reuses it. `CONTROL_WMUX_DIR=<dir>` moves the run state and evidence from this skill's folder to `<dir>/.run` and `<dir>/evidence`, so a harness such as `scripts/e2e-first-run.mjs` keeps its own record.
+`--env-file` takes a JSON object of string values, set on the app after the scrub (so a `WMUX_*` knob such as `WMUX_NO_PATH_REFRESH` survives it); it may not set `WMUX_DATA_SUFFIX` or `WMUX_MCP_REGISTER_EXTERNAL` (MCP registration writes the real agent configs). `restart` reuses it. `CONTROL_WMUX_DIR=<dir>` moves the run state and evidence from this skill's folder to `<dir>/.run` and `<dir>/evidence`, so a harness such as `scripts/e2e-first-run.mjs` keeps its own record.
 
 What it does: spawns the app executable directly (its PID is recorded) with `WMUX_DATA_SUFFIX=<suffix>`, which isolates the socket, MCP socket, auth token, TCP port file, data dir `~/.wmux<suffix>/`, the daemon and Electron `userData` (`src/shared/constants.ts` `dataSuffix()`, `src/main/index.ts` appInit). The launching environment is scrubbed of `WMUX_*` pane identity and `CLAUDE*` session variables first, because an agent usually runs inside the owner's wmux. `ELECTRON_ENABLE_LOGGING=1` sends the renderer console into `app.log`.
 
@@ -110,7 +110,7 @@ node scripts/control-wmux.mjs stop          # app + its daemon; data dir kept fo
 node scripts/control-wmux.mjs stop --purge  # also delete the suffixed data this run created
 ```
 
-`stop` SIGTERMs the launched app PID (SIGKILL after 10 s), then stops the daemon that instance spawned (a normal quit only detaches from it): first `wmux daemon stop` over the instance's own suffixed socket, then, only if still alive, SIGTERM to the PID in `~/.wmux<suffix>/daemon.pid`. It boots out finished launchd jobs labelled `com.wmux.daemon<suffix>.*` (macOS). `--purge` removes only suffixed paths that did not exist before `launch`. Never `pkill`, `killall`, or kill by name. Evidence is never removed; `stop` lists what survived. Run `stop` after every attempt, failed ones included; the state moves to `.run/stopped-<run-id>.json`.
+`stop` SIGTERMs the launched app PID (SIGKILL after 10 s), but only while that PID still has the creation time `launch` recorded in `state.json` (`pidCreatedAt`); a PID that died and was reused, a state without a creation time, or a process it is not permitted to signal is reported in `steps` and left alone. Then it stops the daemon that instance spawned (a normal quit only detaches from it): first `wmux daemon stop` over the instance's own suffixed socket, then, only if still alive, SIGTERM to the PID in `~/.wmux<suffix>/daemon.pid`. It boots out finished launchd jobs labelled `com.wmux.daemon<suffix>.*` (macOS). `--purge` removes only suffixed paths that did not exist before `launch`. Never `pkill`, `killall`, or kill by name. Evidence is never removed; `stop` lists what survived. Run `stop` after every attempt, failed ones included; the state moves to `.run/stopped-<run-id>.json`.
 
 ## Record the verdict (verifying a PR)
 
