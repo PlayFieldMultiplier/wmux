@@ -36,7 +36,18 @@ describe('AppLayout startup reconcile failure (#2398)', () => {
   });
 
   it('daemon mode is the one this startup chose, not the live flag a disconnect flips', () => {
-    expect(startupRegion()).toMatch(/setDaemonModeActive\(daemonReady\.connected\);\s*daemonModeAtStartup = daemonReady\.connected;/);
+    expect(startupRegion()).toMatch(/setDaemonModeActive,\s*\}\);\s*daemonModeAtStartup = daemonConnected;/);
+  });
+
+  it('every startup, a first launch included, waits for main\'s daemon decision before anything returns and the gate opens', () => {
+    const region = startupRegion();
+    const decisionAt = region.indexOf('await loadSessionThenDaemonDecision({');
+    expect(decisionAt).toBeGreaterThanOrEqual(0);
+    // Nothing in the startup returns (and so opens the gate in finally)
+    // before the decision is in.
+    expect(region.slice(0, decisionAt)).not.toMatch(/\breturn\b/);
+    const firstReturn = region.indexOf('return;', decisionAt);
+    expect(region.slice(decisionAt, firstReturn + 'return;'.length)).toMatch(/if \(!saved\) return;$/m);
   });
 
   it('opens the gate, then reruns the reconcile after the aborted pass settles', () => {
