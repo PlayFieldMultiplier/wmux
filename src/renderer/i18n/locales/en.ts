@@ -3929,7 +3929,7 @@ export const en = {
     "Reads your usage from Anthropic's usage endpoint every 15 minutes with your Claude Code login (the OAuth token in local storage). It only reads usage — no model request is sent and no quota is spent. Token is never written back, never logged, only sent to api.anthropic.com.",
   'claudeIntegration.usage.enableLabel': 'Show 5h / 7d utilization in status bar',
   'claudeIntegration.usageLimit.autoResume': 'Continue after a usage limit resets',
-  'claudeIntegration.usageLimit.autoResumeDesc': 'Send a short continue message to a paused agent once its limit resets. Off by default; each pane can override it.',
+  'claudeIntegration.usageLimit.autoResumeDesc': 'Send a short continue message to a paused agent once its limit resets. On by default; each pane can override it.',
   'claudeIntegration.resumeOnStart': 'Resume Claude Code and Codex panes automatically on start',
   'claudeIntegration.resumeOnStartDesc': 'After a restart, type the resume line into panes that were running Claude Code or Codex instead of waiting for the Resume pill. Off by default.',
   'usageLimit.waiting': 'Waiting',

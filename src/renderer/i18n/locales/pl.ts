@@ -3904,7 +3904,7 @@ export const pl = {
     'Co 15 minut odczytuje Twoje zużycie z punktu końcowego zużycia Anthropic, używając Twojego logowania Claude Code (token OAuth z lokalnej pamięci). Tylko odczytuje zużycie — nie wysyła żadnego żądania do modelu i nie zużywa limitu. Token nigdy nie jest zapisywany z powrotem ani logowany, jest wysyłany wyłącznie do api.anthropic.com.',
   'claudeIntegration.usage.enableLabel': 'Pokaż wykorzystanie 5h / 7d na pasku stanu',
   'claudeIntegration.usageLimit.autoResume': 'Kontynuuj po odnowieniu limitu użycia',
-  'claudeIntegration.usageLimit.autoResumeDesc': 'Wyślij krótką wiadomość „kontynuuj” do wstrzymanego agenta, gdy jego limit się odnowi. Domyślnie wyłączone; każdy panel może to zmienić.',
+  'claudeIntegration.usageLimit.autoResumeDesc': 'Wyślij krótką wiadomość „kontynuuj” do wstrzymanego agenta, gdy jego limit się odnowi. Domyślnie włączone; każdy panel może to zmienić.',
   'claudeIntegration.resumeOnStart': 'Automatycznie wznawiaj panele Claude Code i Codex przy starcie',
   'claudeIntegration.resumeOnStartDesc': 'Po restarcie wpisz polecenie wznowienia w panelach, w których działał Claude Code lub Codex, zamiast czekać na przycisk Wznów. Domyślnie wyłączone.',
   'usageLimit.waiting': 'Oczekiwanie',

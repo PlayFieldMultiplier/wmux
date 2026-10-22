@@ -3317,7 +3317,7 @@ export const ko = {
     '15분마다 Claude Code 로그인(로컬에 저장된 OAuth 토큰)으로 Anthropic 사용량 엔드포인트에서 사용량을 읽어 옵니다. 사용량 조회만 하므로 모델 요청을 보내지 않고 quota도 차감되지 않습니다. 토큰은 디스크에 다시 쓰지 않고, 로그에 남기지 않으며, api.anthropic.com으로만 전송됩니다.',
   'claudeIntegration.usage.enableLabel': '상태 표시줄에 5h / 7d 사용률 표기',
   'claudeIntegration.usageLimit.autoResume': '사용량 한도가 풀리면 이어서 진행',
-  'claudeIntegration.usageLimit.autoResumeDesc': '한도에 걸려 멈춘 에이전트에게 한도가 풀리는 즉시 짧은 이어가기 메시지를 보냅니다. 기본값은 꺼짐이며, 판마다 따로 바꿀 수 있습니다.',
+  'claudeIntegration.usageLimit.autoResumeDesc': '한도에 걸려 멈춘 에이전트에게 한도가 풀리는 즉시 짧은 이어가기 메시지를 보냅니다. 기본값은 켜짐이며, 판마다 따로 바꿀 수 있습니다.',
   'claudeIntegration.resumeOnStart': '시작 시 Claude Code·Codex 판 자동으로 이어가기',
   'claudeIntegration.resumeOnStartDesc': '재시작 후 Claude Code나 Codex를 실행하던 판에 Resume 버튼을 누르지 않아도 이어가기 명령을 입력합니다. 기본값은 꺼짐입니다.',
   'usageLimit.waiting': '대기 중',
