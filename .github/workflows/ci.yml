@@ -359,3 +359,65 @@ jobs:
           name: test-report-retries-integration-${{ matrix.shard }}
           path: test-results/retries-*.json
           if-no-files-found: ignore
+
+  # A new user's first run, end to end, on a packaged app (#2584): the wizard,
+  # the agent card, the sample task typing into a pane, and the sidebar
+  # (scripts/e2e-first-run.mjs). The agents are the repo's fakes, so no account
+  # or network is used. First the package is checked for those fakes
+  # (scripts/check-release-bundle.mjs): the release installers come from the
+  # same packaging config.
+  first-run-e2e:
+    name: first-run e2e (${{ matrix.os }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ${{ matrix.os }}
+    # The cap only stops a hang.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            app: out/wmux-darwin-arm64/wmux.app/Contents/MacOS/wmux
+          - os: windows-latest
+            app: out/wmux-win32-x64/wmux.exe
+    steps:
+      # Same pins and toolchain as validate; see the comments there.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        id: node
+        with:
+          node-version: '>=24.21.0 <25'
+          cache: npm
+
+      - name: Use npm 11
+        run: npm install -g npm@11
+
+      # See the checks job for the key.
+      - name: Restore node_modules
+        id: node-modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json', 'patches/**', 'scripts/fix-node-pty.js', 'scripts/apply-patches.mjs') }}
+
+      - name: Install dependencies
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Package
+        run: npm run package
+
+      - name: Release bundle has no fake agent
+        run: node scripts/check-release-bundle.mjs out
+
+      - name: First-run scenario
+        run: npm run e2e:first-run -- --app ${{ matrix.app }}
+
+      - name: Upload first-run evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: first-run-e2e-${{ matrix.os }}
+          path: e2e/artifacts/first-run/
+          if-no-files-found: ignore
