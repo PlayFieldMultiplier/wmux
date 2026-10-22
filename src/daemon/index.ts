@@ -7706,7 +7706,11 @@ function wireContextWatchers(
   sessionManager: DaemonSessionManager,
   pipeServer: DaemonPipeServer,
 ): () => void {
-  const gitWatcher = new GitContextWatcher();
+  // offLoop: a pane's cwd is read and watched only after a reader process
+  // opened it. On macOS the daemon is its own responsible process for the
+  // privacy check, and an open() under ~/Desktop it has no grant for blocked
+  // this loop until main force-respawned the daemon (health pings failing).
+  const gitWatcher = new GitContextWatcher(undefined, { offLoop: true });
   const portWatcher = new PortWatcher(() =>
     sessionManager.listLiveSessions().map((s) => ({ sessionId: s.id, pid: s.pid })),
   );

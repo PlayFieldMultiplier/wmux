@@ -78,6 +78,27 @@ describe('ChildProbeReader', () => {
     expect(r.outstanding).toBe(0);
   }, 20_000);
 
+  it('answers open for a directory it can open, null otherwise', async () => {
+    const dir = tmp();
+    const r = reader();
+    expect(await r.read({ op: 'open', path: dir })).toBe('opened');
+    expect(await r.read({ op: 'open', path: path.join(dir, 'nope') })).toBeNull();
+  }, 20_000);
+
+  it('with idleMs, lets its process go when idle and starts a new one on the next read', async () => {
+    const dir = tmp();
+    const r = new ChildProbeReader(10_000, SHARE_READER_SOURCE, 200);
+    readers.push(r);
+    expect(await r.read({ op: 'stat', path: dir })).toBe('dir');
+    const first = r.pid as number;
+    expect(first).toBeTypeOf('number');
+    expect(await gone(first)).toBe(true);
+    expect(r.pid).toBeUndefined();
+    expect(r.kills).toBe(0); // let go, not killed for a missed deadline
+    expect(await r.read({ op: 'stat', path: dir })).toBe('dir');
+    expect(r.starts).toBe(2);
+  }, 20_000);
+
   it('kills a reader whose read misses the deadline and starts a new one on the next read', async () => {
     const r = reader(500, HANGING_SOURCE);
     const dir = tmp();
