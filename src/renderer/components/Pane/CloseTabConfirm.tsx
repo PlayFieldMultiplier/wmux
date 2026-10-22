@@ -46,10 +46,14 @@ function refocusActiveTerminal(): void {
 export default function CloseTabConfirm() {
   const t = useT();
   const target = useStore((s) => s.closeTabConfirm);
-  const hasShell = useStore((s) => {
+  // What closing ends: a shell (a local PTY, or a remote session this desktop
+  // minted), only a view of a remote session someone else owns, or neither.
+  const closeKind = useStore((s): 'shell' | 'remoteView' | 'other' => {
     const ws = target ? s.workspaces.find((w) => w.id === target.workspaceId) : undefined;
     const pane = ws && target ? findLeaf(ws.rootPane, target.paneId) : null;
-    return Boolean(pane?.surfaces.find((surface) => surface.id === target?.surfaceId)?.ptyId);
+    const surface = pane?.surfaces.find((sf) => sf.id === target?.surfaceId);
+    if (surface?.surfaceType === 'remote-terminal') return surface.remoteOwned ? 'shell' : 'remoteView';
+    return surface?.ptyId ? 'shell' : 'other';
   });
   const tabTitle = useStore((s) => {
     const ws = target ? s.workspaces.find((w) => w.id === target.workspaceId) : undefined;
@@ -71,9 +75,9 @@ export default function CloseTabConfirm() {
     <Dialog onClose={cancel} width={360} closeOnBackdrop data-testid="close-tab-confirm">
       <DialogHeader
         title={tabTitle ? t('surface.closeTabNamed', { name: tabTitle }) : t('surface.closeTab')}
-        // A tab with a shell says what ends with it: programs a shell started in
-        // their own window (or console, on Windows) outlive the tab (#2555).
-        description={t(hasShell ? 'surface.closeConfirmShell' : 'surface.closeConfirm')}
+        // Closing a shell tab ends the shell and the programs attached to it;
+        // programs started apart from the terminal may outlive it (#2555).
+        description={t(closeKind === 'shell' ? 'surface.closeConfirmShell' : closeKind === 'remoteView' ? 'surface.closeConfirmRemoteView' : 'surface.closeConfirm')}
       />
       <DialogFooter>
         <Button variant="secondary" size="sm" onClick={cancel} data-close-tab-cancel>
