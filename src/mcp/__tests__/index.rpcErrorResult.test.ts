@@ -202,6 +202,11 @@ describe('results callRpc hands on keep the flag', () => {
       expect(refused.isError).toBe(true);
       expect(refused.text).toBe(JSON.stringify({ error: 'a2a.discover: refused' }, null, 2));
 
+      answer('a2a.discover', { ok: false, code: 'not_started' });
+      const noErrorKey = await callTool(client, 'a2a_discover', {});
+      expect(noErrorKey.isError).toBe(true);
+      expect(noErrorKey.text).toBe(JSON.stringify({ ok: false, code: 'not_started' }, null, 2));
+
       answer('a2a.discover', { agents: [] });
       const found = await callTool(client, 'a2a_discover', {});
       expect(found.isError).toBeFalsy();

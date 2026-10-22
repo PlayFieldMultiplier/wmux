@@ -67,13 +67,20 @@ function canonicalJson(value: unknown): string {
 
 const hashOf = (text: string): string => createHash('sha256').update(text).digest('hex');
 
+/** A tool result's text: Claude Code sends a plain string; the SDK may also
+ *  carry a list of blocks, of which the first text block counts. */
+function resultText(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  const first = Array.isArray(content) ? (content as RawBlock[]).find((c) => c?.type === 'text') : undefined;
+  return first?.text;
+}
+
 /** A wmux tool's refusal: main answered `{ ok: false, … }` or a bare
  *  `{ error }` (isErrorShapedResult). The MCP server returns the reply as the
  *  first text block, marked isError by callRpc in src/mcp/index.ts (an older
- *  server left it unmarked). Either way main was reached: the name worked. */
+ *  server left it unmarked). */
 function isRefusal(content: unknown): boolean {
-  const first = Array.isArray(content) ? (content as RawBlock[]).find((c) => c?.type === 'text') : undefined;
-  const text = typeof content === 'string' ? content : first?.text;
+  const text = resultText(content);
   if (typeof text !== 'string' || !text.trimStart().startsWith('{')) return false;
   try {
     const parsed: unknown = JSON.parse(text);
@@ -82,6 +89,14 @@ function isRefusal(content: unknown): boolean {
     return false;
   }
 }
+
+/** Claude Code's own failures for a call it never sent to the MCP server: an
+ *  unknown tool name, input that failed the tool's schema, and a permission
+ *  denied by a rule, the user, or a hook's default reason. Any other error on
+ *  a wmux tool came from the server (a refusal returned or thrown by main), so
+ *  the name worked. A hook that denies with its own reason text cannot be
+ *  told apart and counts as reached. */
+const NEVER_SENT = /No such tool available|InputValidationError|haven't granted it yet|doesn't want to proceed with this tool use|Permission to use .* has been denied|Permission for this action (?:was|has been) denied|Blocked by (?:PreToolUse )?hook/;
 
 /** A tool name as the bot's prompts spell it (room_post, not mcp__wmux__room_post). */
 const shownName = (name: string): string => (name.startsWith(BOT_TOOL_PREFIX) ? name.slice(BOT_TOOL_PREFIX.length) : name);
@@ -130,14 +145,15 @@ export class BotToolGuard {
         const call = this.started.get(b.tool_use_id);
         if (call === undefined) continue;
         const { name } = call;
-        // A refusal counts as a failed call here only. It still counts as
-        // reaching the wmux tools below, is_error or not: the name worked, so
-        // verdict() must not report it as a naming slip.
+        // A refusal counts as a failed call here only. Any wmux result the
+        // server produced, a refusal (returned or thrown) included, counts as
+        // reaching the wmux tools below: the name worked, so verdict() must
+        // not report it as a naming slip.
         const failed = b.is_error === true || (name.startsWith(BOT_TOOL_PREFIX) && isRefusal(b.content));
         const loop = this.onOutcome({ name, key: hashOf(`${name}\0${call.input}\0${failed}\0${canonicalJson(b.content)}`), failed });
         if (loop) return loop;
         if (name.startsWith(BOT_TOOL_PREFIX)) {
-          if (b.is_error !== true || isRefusal(b.content)) this.wmuxOk += 1;
+          if (b.is_error !== true || !NEVER_SENT.test(resultText(b.content) ?? '')) this.wmuxOk += 1;
         } else if (this.isBareWmuxName(name)) {
           this.unknown.push(name);
         }

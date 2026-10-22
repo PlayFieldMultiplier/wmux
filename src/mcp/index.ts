@@ -2157,8 +2157,9 @@ server.tool(
       try {
         const parsed: unknown = JSON.parse(text);
         // Leave error payloads untouched — appending elapsedMs would mutate the
-        // error object shape callers match on.
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !('error' in parsed)) {
+        // error object shape callers match on, and rebuilding would drop the
+        // isError callRpc set on one (an `{ ok: false }` with no `error` key).
+        if (!res.isError && parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !('error' in parsed)) {
           return {
             content: [{
               type: 'text' as const,

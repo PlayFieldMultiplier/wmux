@@ -87,6 +87,39 @@ describe('BotToolGuard', () => {
     expect(g.verdict()).toBeNull();
   });
 
+  it('takes a refusal sent as a plain string, the form Claude Code sends', () => {
+    const g = new BotToolGuard(ALLOWED);
+    const refusal = JSON.stringify({ ok: false, code: 'invalid', message: 'no such thread' }, null, 2);
+    expect(step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, false, refusal)).toBeNull();
+    expect(step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, false, refusal)).toBeNull();
+    expect(step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, false, refusal)).toMatch(/^Stopped: room_post was called 3 times/);
+    const slipped = new BotToolGuard(ALLOWED);
+    step(slipped, 'room_post', {}, true, 'No such tool available: room_post');
+    step(slipped, 'mcp__wmux__room_post', { thread_id: 'x' }, true, '{"error":"room_post: refused"}');
+    expect(slipped.verdict()).toBeNull();
+  });
+
+  it('a refusal main threw (plain error text) after a bare-name slip is not a naming failure', () => {
+    const g = new BotToolGuard(ALLOWED);
+    step(g, 'room_post', {}, true, 'No such tool available: room_post');
+    step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, true, 'method room.post is not on the bot surface');
+    expect(g.verdict()).toBeNull();
+  });
+
+  it.each([
+    ['an unknown tool', '<tool_use_error>Error: No such tool available: mcp__wmux__room_post</tool_use_error>'],
+    ['input that failed the schema', '<tool_use_error>InputValidationError: [{"path":["text"],"message":"Required"}]</tool_use_error>'],
+    ['a permission not granted', 'Claude requested permissions to use mcp__wmux__room_post, but you haven\'t granted it yet.'],
+    ['a permission rule', 'Permission to use mcp__wmux__room_post has been denied.'],
+    ['the user rejecting it', 'The user doesn\'t want to proceed with this tool use. The tool use was rejected.'],
+    ['a hook\'s default block', 'Blocked by hook'],
+  ])('a wmux call Claude Code never sent (%s) does not count as reaching the tools', (_why, text) => {
+    const g = new BotToolGuard(ALLOWED);
+    step(g, 'room_post', {}, true, 'No such tool available: room_post');
+    step(g, 'mcp__wmux__room_post', { thread_id: 'x' }, true, text);
+    expect(g.verdict()).toMatch(/called room_post/);
+  });
+
   it('input key order does not make a call different', () => {
     const g = new BotToolGuard(ALLOWED);
     step(g, 'Read', { file_path: '/a', limit: 5 }, true, [{ type: 'text', text: 'ENOENT' }]);

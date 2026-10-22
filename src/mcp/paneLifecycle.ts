@@ -56,7 +56,7 @@ export interface PaneLifecycleDeps {
   callRpc: (
     method: RpcMethod,
     params?: Record<string, unknown>,
-  ) => Promise<{ content: { type: 'text'; text: string }[] }>;
+  ) => Promise<{ content: { type: 'text'; text: string }[]; isError?: true }>;
   /** Fail-soft caller-own-workspace resolver for the CREATE family
    *  (= resolveScopedReadWorkspaceId): returns the caller's verified workspace
    *  id, or '' on a true identity miss (never throws — a create degrades to

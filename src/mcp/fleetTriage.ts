@@ -28,7 +28,7 @@ export interface FleetTriageDeps {
   callRpc: (
     method: RpcMethod,
     params?: Record<string, unknown>,
-  ) => Promise<{ content: { type: 'text'; text: string }[] }>;
+  ) => Promise<{ content: { type: 'text'; text: string }[]; isError?: true }>;
 }
 
 const FLEET_TRIAGE_SHAPE = {
