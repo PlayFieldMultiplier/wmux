@@ -106,6 +106,16 @@ describe('detectBasePreset', () => {
     expect(detectBasePreset({ ...builtinToCustom('mono-light'), textMuted: '#9C9C9C' })).toBeNull();
   });
 
+  it('still matches a copy saved on 4.9.0, between the two contrast lifts', () => {
+    // 4.9.0's DEFAULT_CUSTOM_THEME was Catppuccin with muted #6C708A.
+    expect(detectBasePreset({ ...builtinToCustom('catppuccin-mocha'), textMuted: '#6C708A' })).toBe('catppuccin-mocha');
+    expect(detectBasePreset({ ...builtinToCustom('mono'), textSub: '#88898D', textMuted: '#6D6C72' })).toBe('mono');
+    expect(detectBasePreset({ ...builtinToCustom('nightowl'), textSub: '#9A9080', textMuted: '#766C54' })).toBe('nightowl');
+    expect(baseColorsFor({ ...builtinToCustom('void'), textMuted: '#5D5D5D' }, 'void').textMuted).toBe('#5D5D5D');
+    // One release's sub with another's muted is still hand-tuned.
+    expect(detectBasePreset({ ...builtinToCustom('mono'), textSub: '#85868B', textMuted: '#6D6C72' })).toBeNull();
+  });
+
   it('diffs an untouched legacy copy against the variant it matched, so no token reads as overridden', () => {
     const copy = { ...builtinToCustom('catppuccin-mocha'), textMuted: '#585B70' };
     const base = baseColorsFor(copy, 'catppuccin-mocha');

@@ -336,21 +336,23 @@ export const UI_THEME_TOKENS: Record<BuiltinThemeId, UIThemeTokens> = {
   },
 };
 
-// The text tokens these themes shipped with before the 2026-10-21 contrast
-// lift. A custom theme saved as an unmodified copy of one of them (including
-// the old DEFAULT_CUSTOM_THEME, Catppuccin) still reads as based on it.
-export const PRE_CONTRAST_LIFT_TEXT: Partial<Record<BuiltinThemeId, Pick<UIThemeTokens, 'textSub' | 'textMuted'>>> = {
-  paper: { textSub: '#3F3F48', textMuted: '#8A8A96' },
-  mono: { textSub: '#85868B', textMuted: '#626167' },
-  'mono-light': { textSub: '#7E7E7E', textMuted: '#9C9C9C' },
-  amber: { textSub: '#A5A29C', textMuted: '#66645F' },
-  'catppuccin-mocha': { textSub: '#BAC2DE', textMuted: '#585B70' },
-  monochrome: { textSub: '#B0B0B0', textMuted: '#404040' },
-  'stars-and-stripes': { textSub: '#A0B0C8', textMuted: '#3A5070' },
-  'red-dynasty': { textSub: '#C0A898', textMuted: '#5A3A30' },
-  nightowl: { textSub: '#9A9080', textMuted: '#5A5340' },
-  'gruvbox-dark-hard': { textSub: '#BDAE93', textMuted: '#7C6F64' },
-  void: { textSub: '#909090', textMuted: '#333333' },
+// The text tokens these themes shipped with before each contrast lift: the
+// values from before the 2026-10-21 lift, then 4.9.0's (the 2026-10-21 lift,
+// before the selected-row lift). A custom theme saved as an unmodified copy of
+// one of them (including an old DEFAULT_CUSTOM_THEME, Catppuccin) still reads
+// as based on it.
+export const PRE_CONTRAST_LIFT_TEXT: Partial<Record<BuiltinThemeId, ReadonlyArray<Pick<UIThemeTokens, 'textSub' | 'textMuted'>>>> = {
+  paper: [{ textSub: '#3F3F48', textMuted: '#8A8A96' }, { textSub: '#3F3F48', textMuted: '#848491' }],
+  mono: [{ textSub: '#85868B', textMuted: '#626167' }, { textSub: '#88898D', textMuted: '#6D6C72' }],
+  'mono-light': [{ textSub: '#7E7E7E', textMuted: '#9C9C9C' }, { textSub: '#6B6B6B', textMuted: '#888888' }],
+  amber: [{ textSub: '#A5A29C', textMuted: '#66645F' }, { textSub: '#A5A29C', textMuted: '#706E68' }],
+  'catppuccin-mocha': [{ textSub: '#BAC2DE', textMuted: '#585B70' }, { textSub: '#BAC2DE', textMuted: '#6C708A' }],
+  monochrome: [{ textSub: '#B0B0B0', textMuted: '#404040' }, { textSub: '#B0B0B0', textMuted: '#616161' }],
+  'stars-and-stripes': [{ textSub: '#A0B0C8', textMuted: '#3A5070' }, { textSub: '#A0B0C8', textMuted: '#4D6A94' }],
+  'red-dynasty': [{ textSub: '#C0A898', textMuted: '#5A3A30' }, { textSub: '#C0A898', textMuted: '#895849' }],
+  nightowl: [{ textSub: '#9A9080', textMuted: '#5A5340' }, { textSub: '#9A9080', textMuted: '#766C54' }],
+  'gruvbox-dark-hard': [{ textSub: '#BDAE93', textMuted: '#7C6F64' }],
+  void: [{ textSub: '#909090', textMuted: '#333333' }, { textSub: '#909090', textMuted: '#5D5D5D' }],
 };
 
 // ─── Windows glass muted text ───────────────────────────────────────────────

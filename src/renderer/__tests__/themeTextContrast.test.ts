@@ -102,7 +102,7 @@ describe('the --selection-hover fill draws muted text as subtle', () => {
 
   it('every CSS rule with a --selection-hover background sets --text-muted to subtle', () => {
     const rules = sources.filter(([f]) => f.endsWith('.css')).flatMap(([f, css]) =>
-      [...css.matchAll(/([^{}]*)\{([^{}]*background:\s*var\(--selection-hover\)[^{}]*)\}/g)].map((m) => [f, m[1].trim(), m[2]] as const));
+      [...css.matchAll(/([^{}]*)\{([^{}]*background(?:-color)?:\s*var\(--selection-hover\)[^{}]*)\}/g)].map((m) => [f, m[1].trim(), m[2]] as const));
     expect(rules.length).toBeGreaterThan(0);
     for (const [f, selector, body] of rules) {
       expect(body, `${f}: ${selector}`).toMatch(/--text-muted:\s*var\(--text-subtle\)/);
@@ -121,7 +121,7 @@ describe('the --selection-hover fill draws muted text as subtle', () => {
   // The --selection-emphasis fill is stronger still: muted text draws as sub there.
   it('every CSS rule with a --selection-emphasis background sets --text-muted to sub', () => {
     const rules = sources.filter(([f]) => f.endsWith('.css')).flatMap(([f, css]) =>
-      [...css.matchAll(/([^{}]*)\{([^{}]*background:\s*var\(--selection-emphasis\)[^{}]*)\}/g)].map((m) => [f, m[1].trim(), m[2]] as const));
+      [...css.matchAll(/([^{}]*)\{([^{}]*background(?:-color)?:\s*var\(--selection-emphasis\)[^{}]*)\}/g)].map((m) => [f, m[1].trim(), m[2]] as const));
     expect(rules.length).toBeGreaterThan(0);
     for (const [f, selector, body] of rules) {
       expect(body, `${f}: ${selector}`).toMatch(/--text-muted:\s*var\(--text-sub\)/);

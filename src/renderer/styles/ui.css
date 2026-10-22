@@ -201,7 +201,9 @@
   color: var(--text-main);
   box-shadow: none;
 }
-.wmux-sidebar .sidebar-row.sidebar-row-needs:hover {
+/* Not on a selected or nested row: the rules below repaint those fills, so
+ * muted text there keeps its own tier. */
+.wmux-sidebar .sidebar-row.sidebar-row-needs:not(.sidebar-row-active):not(.sidebar-row-task):hover {
   background: var(--selection-hover); --text-muted: var(--text-subtle);
 }
 .wmux-sidebar .sidebar-row-active.sidebar-row-needs,
